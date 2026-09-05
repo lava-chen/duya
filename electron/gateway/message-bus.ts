@@ -1066,6 +1066,7 @@ export function getOrBuildInitConfig(): GatewayInitConfig {
   const channels = (getConfigStore().getByPath('channels') ?? {}) as {
     auto_start?: boolean;
     workspace?: string;
+    profile_routes?: unknown;
   };
   const autoStart = channels.auto_start === true;
   const workspace = channels.workspace ?? '';
@@ -1088,6 +1089,10 @@ export function getOrBuildInitConfig(): GatewayInitConfig {
     autoStart,
     proxyConfig,
     workingDirectory,
+    // Profile routes: (platform, chatId, threadId) → bot profile. Persisted
+    // in ConfigStore under `channels.profile_routes`; the gateway resolves
+    // them per inbound message and carries `options.profile` to the worker.
+    profileRoutes: channels.profile_routes ?? [],
   };
 
   console.log('[STARTUP] getOrBuildInitConfig:', JSON.stringify({ platforms: platforms.map(p => ({ platform: p.platform, enabled: p.enabled, hasCredentials: !!Object.keys(p.credentials).length })), autoStart, workingDirectory }));

@@ -19,6 +19,7 @@ import { TokenBudgetManager } from './tokenBudget.js'
 import { computeContextEstimate, type ContextEstimateMessage } from '@duya/ai'
 import { logger } from '../utils/logger.js'
 import { SessionMemoryCompactStrategy } from './strategies/index.js'
+import { BackgroundPrefire } from './BackgroundPrefire.js'
 import { PostCompactReinjector, type ReinjectorConfig, type SkillContextEntry } from './PostCompactReinjector.js'
 import type { FileChangeRecord as SessionMemoryFileChangeRecord } from './strategies/SessionMemoryCompactStrategy.js'
 import { fitCompactedToBudget, validateCompactedHistory } from './historySanitize.js'
@@ -108,6 +109,13 @@ export interface CompactionManagerConfig {
   enableReinjection?: boolean
   reinjectionConfig?: Partial<ReinjectorConfig>
   keepRecentTokens?: number
+  /**
+   * Background prefire (Plan 495 G1): fraction of the compaction threshold
+   * at which the passive pass1 summarization starts. Default 0.75; `0`
+   * disables. Results are consumed as the next compaction's
+   * `previousSummary` seed when the message prefix is still valid.
+   */
+  prefireStartFraction?: number
 }
 
 export type CompactionManagerEvent =
@@ -136,6 +144,8 @@ export class CompactionManager {
   private reinjector?: PostCompactReinjector
   private memoryFlush?: (summary: string) => Promise<void>
   private suppression = new Suppression()
+  /** Background pass1 summarization state (Plan 495 G1). */
+  private prefire: BackgroundPrefire
 
   /** Last prompt volume reported by the provider (authoritative anchor). */
   private observedPromptTokens?: number
@@ -146,6 +156,7 @@ export class CompactionManager {
       systemPromptTokens: config.systemPromptTokens ?? 8000,
       reservedTokens: config.reserveTokens ?? 16_384,
     })
+    this.prefire = new BackgroundPrefire({ prefireStartFraction: config.prefireStartFraction })
     if (config.enableReinjection) {
       this.reinjector = new PostCompactReinjector(config.reinjectionConfig)
     }
@@ -198,9 +209,26 @@ export class CompactionManager {
     return this.budget.maxTokens
   }
 
+  /**
+   * Rewrite the compaction budget to a new context window. Called on
+   * runtime model switches (DuyaAgent streamChat drift detection) so a move
+   * to a larger-window model (e.g. 200k → 1M) raises the threshold instead
+   * of staying pinned at the original window.
+   *
+   * Non-positive values are ignored (guards the constructor default path).
+   * systemPromptTokens / reservedTokens from the original config are
+   * preserved across the rebuild. A real budget change also clears 'size'
+   * suppression — a window change is exactly the budget change it waits for.
+   */
   updateMaxTokens(maxTokens: number): void {
-    // No-op — maxTokens is now immutable in TokenBudgetManager.
-    // The model-switch path should recreate CompactionManager with the new limit.
+    if (!Number.isFinite(maxTokens) || maxTokens <= 0) return;
+    if (maxTokens === this.budget.maxTokens) return;
+    this.budget = new TokenBudgetManager({
+      maxTokens,
+      systemPromptTokens: this.config.systemPromptTokens ?? 8000,
+      reservedTokens: this.config.reserveTokens ?? 16_384,
+    });
+    this.suppression.clearOnBudgetChange();
   }
 
   /**
@@ -238,6 +266,51 @@ export class CompactionManager {
     this.reinjector?.cacheSkillContext(skills)
   }
 
+  /**
+   * Kick the background pass1 summarization when usage approaches the
+   * compaction threshold (Plan 495 G1). Called by the agent loop at the
+   * proactive checkpoint with the current projected messages. Best-effort:
+   * never throws and never blocks the turn.
+   */
+  maybeStartPrefire(messages: readonly Message[]): void {
+    if (!this.summarizer) return
+    try {
+      const usedTokens = this.contextSize(messages)
+      const threshold = this.budget.maxTokens - this.budget.reservedTokens
+      this.prefire.maybeStart(usedTokens, threshold, messages, (msgs) =>
+        this.runPrefirePass([...msgs]),
+      )
+    } catch {
+      // Prefire is opportunistic — any projection failure just skips it.
+    }
+  }
+
+  /** True when a completed pass1 result is available and prefix-valid. */
+  hasFreshPrefire(messages: readonly Message[]): boolean {
+    return this.prefire.hasFresh(messages)
+  }
+
+  /**
+   * Consume the fresh pass1 text as the active compaction's iterative-update
+   * seed (grok pass2 semantics). Clears the prefire state either way.
+   */
+  async takePrefireSummary(messages: readonly Message[]): Promise<string | undefined> {
+    try {
+      return await this.prefire.takeFresh(messages)
+    } catch {
+      this.prefire.clear()
+      return undefined
+    }
+  }
+
+  private async runPrefirePass(messages: Message[]): Promise<string> {
+    const strategy = new SessionMemoryCompactStrategy({
+      keepRecentTokens: this.config.keepRecentTokens,
+    })
+    strategy.setSummarizer(this.summarizer!)
+    return await strategy.summarizeConversation(messages)
+  }
+
   cacheToolState(toolName: string, status: 'active' | 'completed' | 'error', output?: string): void {
     this.reinjector?.cacheToolState(toolName, { status, lastOutput: output })
   }
@@ -266,6 +339,7 @@ export class CompactionManager {
     this.reinjector?.clearCache()
     this.lastCompactionAt = undefined
     this.observedPromptTokens = undefined
+    this.prefire.clear()
   }
 
   // ─── Compact ────────────────────────────────────────────────────────────────
@@ -375,6 +449,9 @@ export class CompactionManager {
 
       this.onCompactionSuccess()
       this.clearObservedPromptTokens()
+      // The rewrite invalidates any prefire fingerprint — drop it so the
+      // next cycle starts clean (Plan 495 G1 lifecycle).
+      this.prefire.clear()
 
       const result: EnhancedCompactionResult = {
         ...baseResult,

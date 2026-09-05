@@ -324,6 +324,8 @@ const zh: Record<TranslationKey, string> = {
   // Context-compaction record row: collapsed verb plus a compacted-count
   // tail; the expanded card shows the summary text verbatim.
   'streaming.toolAction.compact.collapsed': '已对上下文进行压缩',
+  'streaming.toolAction.compact.inProgress': '正在压缩上下文…',
+  'streaming.toolAction.compact.failed': '上下文压缩失败',
   'streaming.toolAction.compact.messagesCompacted.one': '{count} 条消息',
   'streaming.toolAction.compact.messagesCompacted.other': '{count} 条消息',
 
@@ -331,15 +333,20 @@ const zh: Record<TranslationKey, string> = {
   'permission.deny': '拒绝',
   'permission.allowOnce': '允许一次',
   'permission.allowForSession': '本次会话允许',
+  'permission.approvalRequired': '需要授权',
+  'permission.toolFallback': '工具',
   'permission.alwaysAllow': '始终允许',
   'connectorAuth.title': '重新授权已连接的应用',
   'connectorAuth.body': '{provider} 连接授权已过期，调用 {tool} 需要重新授权后才能继续。',
   'connectorAuth.reauthorize': '去重新授权',
   'connectorAuth.connecting': '正在打开浏览器…',
-  'connectorAuth.retrying': '已连接 — 正在重试…',
   'connectorAuth.dismiss': '关闭',
   'connectorAuth.connectFailed': '重新授权失败',
   'connectorAuth.apiUnavailable': 'App Connection API 不可用',
+  // Plan 498: real card states + resume turn message.
+  'connectorAuth.connected': '{provider} 已重新授权，正在恢复…',
+  'connectorAuth.retry': '重试',
+  'connectorAuth.resumeMessage': '已重新授权 {provider}，请用相同参数重试刚才失败的 `{tool}` 调用。',
   'permission.denyAll': '全部拒绝',
   'permission.permissionRequired': '需要权限',
   'permission.collapse': '收起',
@@ -1087,6 +1094,10 @@ const zh: Record<TranslationKey, string> = {
   'panel.terminal': '终端',
   'panel.browser': '浏览器',
   'panel.office': 'Office',
+  'panel.botSettings': 'Bot 设置',
+  'panel.botSettings.loading': '正在加载 Bot…',
+  'panel.botSettings.notFound': '找不到该 Bot,可能已被删除。',
+  'panel.botSettings.missing': '未选择 Bot。请打开 Bot 聊天并点击顶部栏。',
   'panel.closePanel': '关闭面板',
   'panel.resizeHandle': '调整面板宽度。使用方向键微调，Home/End 到最小/最大，回车重置。',
   'panel.openPanel': '打开侧栏',
@@ -1243,6 +1254,10 @@ const zh: Record<TranslationKey, string> = {
 
   // Plan 483 — bot 联系人与创建对话框
   'bot.contactBusy': '工作中',
+  // Plan 483 P1.4 (2026-09-05)：bot 侧栏条目右侧的活动状态标签。
+  // `queued` 与 grok-bot / rakazo 行为对齐，提示用户提交的追问正在
+  // 等待当前活跃 run 抵达安全检查点后再执行。
+  'bot.contactStatus.queued': '已排队',
   'bot.create.title': '创建 Bot',
   'bot.create.close': '关闭',
   'bot.create.templates': '模板',
@@ -1250,6 +1265,9 @@ const zh: Record<TranslationKey, string> = {
   'bot.create.namePlaceholder': '给 bot 起个名字',
   'bot.create.description': '描述',
   'bot.create.descriptionPlaceholder': '这个 bot 负责什么？',
+  'bot.create.model': '模型',
+  'bot.create.modelDefault': '全局默认',
+  'bot.create.modelUnavailable': '暂无可用模型，请先配置 Provider',
   'bot.create.avatar': '形象',
   'bot.create.cancel': '取消',
   'bot.create.create': '创建',
@@ -1268,6 +1286,7 @@ const zh: Record<TranslationKey, string> = {
   'bot.actions.options': 'Bot 选项',
   'bot.actions.deleteConfirm': '删除 Bot "{{name}}"？其对话会保留。',
   'bot.actions.showHidden': '显示已隐藏的 Bot（{{count}}）',
+  'bot.actions.hideFromList': '收起已隐藏 Bot',
   'bot.actions.noHidden': '没有隐藏的 Bot',
   'bot.pinnedLabel': '置顶',
   'bot.hiddenLabel': '已隐藏',
@@ -1291,8 +1310,12 @@ const zh: Record<TranslationKey, string> = {
   'bot.chat.working': '工作中…',
   'bot.chat.placeholder': '给这个 bot 发消息',
   'bot.chat.placeholderUnbound': '这个 bot 还没有常驻会话',
+  'bot.chat.attach': '附件',
+  'bot.chat.removeAttachment': '移除附件',
   'bot.chat.send': '发送',
   'bot.chat.stop': '停止',
+  'bot.ask.cardTitle': '提问 · {count}',
+  'bot.ask.recommended': '推荐',
 
   'sidebar.section.newSection': '新建分区',
   'sidebar.section.addToSection': '添加到分区',

@@ -11,6 +11,7 @@ import { MessageInput } from './MessageInput';
 import { GoalStatusChip } from './GoalStatusChip';
 import { PermissionPrompt } from './PermissionPrompt';
 import { ConnectorAuthRequiredCard } from './ConnectorAuthRequiredCard';
+import { getAppConnectionAPI } from '@/lib/app-connection-ipc';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useNextStepSuggestions } from '@/hooks/useNextStepSuggestions';
 import { dispatchPrefillChatInput } from '@/lib/prefill-chat-input-event';
@@ -28,7 +29,7 @@ import { useStreamingTools } from '@/hooks/useStreamingTools';
 import { useStreamingError } from '@/hooks/useStreamingError';
 import { useConversationStore } from '@/stores/conversation-store';
 import { useContextUsageStore } from '@/stores/context-usage-store';
-import { useCompactionStore, selectCompactionForSession } from '@/stores/compaction-store';
+import { useCompactionStore } from '@/stores/compaction-store';
 import { useMailboxStore } from '@/stores/mailbox-store';
 import { useBusyMessageModeValue } from '@/stores/busy-message-mode-store';
 import { useShallow } from 'zustand/react/shallow';
@@ -190,11 +191,6 @@ export function ChatView({
   }, [saveSettings, settings.defaultThinkingEffort]);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [isCompacting, setIsCompacting] = useState(false);
-  // Live auto-compaction phase pushed by the worker (auto compaction only).
-  // Manual /compact still drives a local 'compacting' state via setIsCompacting.
-  // The 'done'/'error' divider comes from this store so it persists across both
-  // auto and manual paths through the same UI surface.
-  const compactionState = useCompactionStore(selectCompactionForSession(sessionId));
   const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
   const [gitBaseline, setGitBaseline] = useState<UseGitStatusResult | null>(null);
   // Tracks whether a baseline has been captured for the current round.
@@ -748,23 +744,32 @@ export function ChatView({
   // surfaces as a discrete event so we can prompt them with a re-auth
   // button without polluting the chat error stream.
   const [pendingAuthRequest, setPendingAuthRequest] = useState<{ provider?: string; connectionId?: string; toolName?: string } | null>(null);
+  // Plan 498: ref mirror so the main-process `app-connection:connected`
+  // broadcast (async, fires outside React state) can match the pending
+  // elicitation without a stale-closure subscribe.
+  const pendingAuthRequestRef = useRef(pendingAuthRequest);
+  useEffect(() => {
+    pendingAuthRequestRef.current = pendingAuthRequest;
+  }, [pendingAuthRequest]);
+  // Plan 498: provider whose (re-)authorization main confirmed — flips the
+  // card to its real "connected" state. Cleared when a new elicitation
+  // arrives so a stale completion can't auto-resolve a future card.
+  const [authCompletedFor, setAuthCompletedFor] = useState<string | null>(null);
+  // Plan 498: dedup guard — the card's own connect promise and the main
+  // broadcast can both report the same completion; only one resume turn
+  // may be sent. Re-armed whenever a new elicitation arrives. Declared
+  // here; consumed by retryAfterAuth (defined after handleSend below).
+  const resumeTriggeredRef = useRef<string | null>(null);
   useEffect(() => {
     if (!sessionId) return;
     const unsubscribe = subscribeToConnectorAuthRequired(sessionId, (data) => {
+      resumeTriggeredRef.current = null;
+      setAuthCompletedFor(null);
       setPendingAuthRequest(data);
     });
     return () => unsubscribe();
   }, [sessionId]);
   const dismissAuthRequest = useCallback(() => {
-    setPendingAuthRequest(null);
-    clearConnectorAuthRequired(sessionId);
-  }, [sessionId]);
-  // Auto-retry hook (Phase B3): after a successful re-authorization, the
-  // card passes back through here so a placeholder user turn can prompt
-  // the model to re-issue the failed call. The exact mechanism (mailbox
-  // nudge vs. synthetic stream) is left as a future iteration; for now
-  // we just clear the card and let the next user message trigger work.
-  const retryAfterAuth = useCallback(() => {
     setPendingAuthRequest(null);
     clearConnectorAuthRequired(sessionId);
   }, [sessionId]);
@@ -980,6 +985,44 @@ export function ChatView({
     },
     [agentProfileId, isStreaming, onSendMessage, parseModelName, sendMailbox, sessionId, sessionModel, effort, conductorEnabled, permissionMode, busyMessageMode, activeThread?.workingDirectory]
   );
+
+  // Plan 498 auto-retry (Plan 450 B3): after a successful re-authorization
+  // the card hands back through here. Clear the pending state and send a
+  // localized resume message so the model re-issues the failed call with
+  // the same arguments — it still has the original call in its context.
+  // If a stream is active, handleSend routes the message through the
+  // mailbox automatically (queued/followup), so mid-run completions are
+  // safe. The card's own connect and the main broadcast both funnel here;
+  // resumeTriggeredRef keeps it to one resume per elicitation.
+  const retryAfterAuth = useCallback(() => {
+    const request = pendingAuthRequestRef.current;
+    setPendingAuthRequest(null);
+    setAuthCompletedFor(null);
+    clearConnectorAuthRequired(sessionId);
+    if (!request?.provider || resumeTriggeredRef.current === request.provider) {
+      return;
+    }
+    resumeTriggeredRef.current = request.provider;
+    void handleSend(
+      t('connectorAuth.resumeMessage', {
+        provider: request.provider,
+        tool: request.toolName ?? '',
+      }),
+    );
+  }, [sessionId, handleSend, t]);
+  // Plan 498: main-process completion broadcast — covers a re-authorization
+  // completed from the settings page (or racing the card's own connect).
+  // The card flips to "connected" and calls retryAfterAuth itself.
+  useEffect(() => {
+    if (!sessionId) return;
+    const api = getAppConnectionAPI();
+    if (!api) return;
+    return api.onConnected((data) => {
+      const request = pendingAuthRequestRef.current;
+      if (!request || request.provider !== data.provider) return;
+      setAuthCompletedFor(data.provider);
+    });
+  }, [sessionId]);
 
   // Toggle conductor mode for the current session. On enable, resolve the
   // canvas ID with the following priority (per project requirement:
@@ -1503,7 +1546,6 @@ export function ChatView({
               onScrollStateChange={handleScrollStateChange}
               sessionId={sessionId}
               onEditSend={handleEditSend}
-              compactionStatus={compactionState.phase}
               nextStepSuggestions={nextStepSuggestions}
               onNextStepSelect={handleNextStepSelect}
             />
@@ -1541,6 +1583,7 @@ export function ChatView({
             {pendingAuthRequest && (
               <ConnectorAuthRequiredCard
                 request={pendingAuthRequest}
+                authCompleted={authCompletedFor !== null && authCompletedFor === pendingAuthRequest.provider}
                 onDismiss={dismissAuthRequest}
                 onRetry={retryAfterAuth}
                 resolveProviderLabel={(id) => id}

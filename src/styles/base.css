@@ -1,0 +1,921 @@
+/*
+ * base.css — extracted from src/styles/globals.css (domain split).
+ * Do not edit the ordering of rules within this file; the entry file
+ * imports domain files in cascade order.
+ */
+/* Copernicus Serif Font Family - Only load used weights (400, 700) */
+@font-face {
+  font-family: 'Copernicus';
+  src: url('/fonts/copernicus/Copernicus-Medium.woff') format('woff');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Copernicus';
+  src: url('/fonts/copernicus/Copernicus-Bold.woff') format('woff');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Windsor Bold Font for App Title */
+@font-face {
+  font-family: 'Windsor';
+  src: url('/fonts/windsor/Windsor-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Fira Mono Font for Code */
+@font-face {
+  font-family: 'Fira Mono';
+  src: url('/fonts/google-sans-code-v17-latin-regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Styrene Font - Primary UI Font (Latin only; CJK falls through to
+   Microsoft YaHei / PingFang SC so the sidebar items use the same CJK
+   face the right pane already does). */
+@font-face {
+  font-family: 'Styrene';
+  src: url('/fonts/Styrene.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-024F, U+0300-036F, U+2000-206F, U+20A0-20CF, U+2122, U+2190-21FF, U+2200-22FF;
+}
+
+@font-face {
+  font-family: 'Styrene';
+  src: url('/fonts/Styrene.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-024F, U+0300-036F, U+2000-206F, U+20A0-20CF, U+2122, U+2190-21FF, U+2200-22FF;
+}
+
+@font-face {
+  font-family: 'Styrene';
+  src: url('/fonts/Styrene.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-024F, U+0300-036F, U+2000-206F, U+20A0-20CF, U+2122, U+2190-21FF, U+2200-22FF;
+}
+
+@font-face {
+  font-family: 'Styrene';
+  src: url('/fonts/Styrene.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-024F, U+0300-036F, U+2000-206F, U+20A0-20CF, U+2122, U+2190-21FF, U+2200-22FF;
+}
+
+/* Shimmer animation for loading states */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.shimmer-text {
+  background: linear-gradient(
+    90deg,
+    var(--muted) 0%,
+    var(--text) 25%,
+    var(--muted) 50%,
+    var(--text) 75%,
+    var(--muted) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+:root {
+  --bg-canvas: #fefdfb;
+  --bg-accent-1: transparent;
+  --bg-accent-2: transparent;
+  --shell-bg: #fefdfb;
+  /* Soft pastel aurora — replaces the previous solid warm cream.
+     Gives the sidebar (and app-shell) a translucent, dreamy feel
+     without backdrop-blur (no frosted glass — just soft color blending). */
+  --sidebar-bg: linear-gradient(
+    135deg,
+    #fde0d2 0%,
+    #fef3ea 30%,
+    #eaf1ed 65%,
+    #d4eae2 100%
+  );
+  --main-bg: #ffffff;
+  /* Glass overlays used when the window has a native backdrop (Mica /
+     macOS vibrancy). Content surfaces keep a high-opacity white so text
+     stays crisp; chrome (sidebar/titlebar) is more transparent so the
+     wallpaper tint reads through. */
+  --glass-main: rgba(255, 255, 255, 0.66);
+  --glass-chrome: rgba(254, 250, 246, 0.38);
+  /* Glass edge stroke: top-lit gradient drawn in the border-box layer.
+     Bright at the top edge (light catching the pane), fading down. */
+  --glass-edge: linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.12));
+  --surface: rgba(0, 0, 0, 0.03);
+  --surface-solid: #f7f7f7;
+  --surface-hover: rgba(0, 0, 0, 0.06);
+  --text: #1a1a1a;
+  --foreground: #1a1a1a;
+  --muted: #6b6b6b;
+  --border: rgba(0, 0, 0, 0.06);
+  /* --border-color: legacy alias consumed by the chat input surface
+   * (MessageInput.tsx uses `inset 0 0 0 1px var(--border-color)` as its
+   * border). Kept identical to --border so the composer edge matches
+   * every other bordered component (cards, headers, inputs). */
+  --border-color: var(--border);
+  /* --composer-bg: chat input surface background. Light theme is pure
+   * white (matches --main-bg) so the composer blends into the canvas;
+   * dark theme keeps the original translucent --surface. */
+  --composer-bg: #ffffff;
+  /* Border scale — the ONLY three border colors. Rules:
+   * --border       default edge (cards, headers, inputs)
+   * --border-weak  muted dividers (status bars, in-list separators)
+   * --border-strong interactive emphasis (hover/active edges)
+   * Never hard-code rgba/hex border colors or ad-hoc color-mix. */
+  --border-weak: color-mix(in srgb, var(--border) 60%, transparent);
+  --border-strong: color-mix(in srgb, var(--text) 22%, var(--border));
+  --border-width: 1px;
+  --grid-dot: rgba(0, 0, 0, 0.06);
+  --accent: #7c3aed;
+  --accent-soft: rgba(124, 58, 237, 0.2);
+  --accent-shadow: rgba(124, 58, 237, 0.42);
+  --chip: rgba(0, 0, 0, 0.03);
+  --shell-shadow: none;
+  --send-btn: #b892ff;
+  --send-btn-hover: #a87eef;
+  --success: #22c55e;
+  --success-soft: rgba(34, 197, 94, 0.2);
+  --warning: #f59e0b;
+  --warning-soft: rgba(245, 158, 11, 0.2);
+  --error: #ef4444;
+  --error-soft: rgba(239, 68, 68, 0.1);
+
+  /* Conductor Apple-native visual system */
+  --canvas-bg: #ffffff;
+  --panel-bg: rgba(255, 255, 255, 0.72);
+  --panel-bg-solid: #ffffff;
+  --element-bg: #ffffff;
+  --text-primary: #1d1d1f;
+  --text-secondary: #86868b;
+  --text-tertiary: #aeaeb2;
+  --conductor-accent: #007aff;
+  --conductor-accent-soft: rgba(0, 122, 255, 0.12);
+  --conductor-accent-shadow: rgba(0, 122, 255, 0.2);
+  --conductor-grid-dot: rgba(0, 0, 0, 0.04);
+  --conductor-border: rgba(0, 0, 0, 0.08);
+  --conductor-border-strong: rgba(0, 0, 0, 0.12);
+  --shadow-resting: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.06);
+  --shadow-hovering: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
+  --shadow-elevated: 0 12px 32px rgba(0, 0, 0, 0.12), 0 4px 8px rgba(0, 0, 0, 0.06);
+  --shadow-focusing: 0 0 0 2px var(--conductor-accent), 0 4px 16px rgba(0, 122, 255, 0.2);
+  --motion-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --motion-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+  --motion-duration-micro: 150ms;
+  --motion-duration-small: 250ms;
+  --motion-duration-large: 400ms;
+  --radius-element: 12px;
+  --radius-frame: 14px;
+  --radius-panel: 18px;
+  --radius-popover: 14px;
+  --radius-button: 10px;
+  --radius-button-compact: 8px;
+
+  /* Slash command menu — light theme tokens (Codex-style flat gray) */
+  --command-menu-bg: #ffffff;
+  --command-menu-border: #e5e5e5;
+  --command-menu-selected: #f1f1f1;
+  --command-menu-muted: #6b6b6b;
+  --command-menu-shadow: 0 6px 18px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.06);
+  --canvas-tool-accent: #9d3bea;
+  --canvas-tool-accent-shadow: rgba(157, 59, 234, 0.22);
+
+  /* Unified page framework — shared by canvas / automation / gateway /
+   * extensions main-window views. One source of truth for max-width,
+   * section spacing and the typography scale so every page renders the
+   * same title / subtitle / body / caption sizes. */
+  --page-max-width: 1200px;
+  --page-gap: 1.5rem;
+  --page-pad-y: 2.5rem;
+  --page-pad-x: 2rem;
+  --page-title-size: 1.75rem;        /* 28px */
+  --page-title-weight: 700;
+  --page-subtitle-size: 0.875rem;    /* 14px */
+  --page-card-title-size: 0.9375rem; /* 15px */
+  --page-body-size: 0.875rem;        /* 14px */
+  --page-caption-size: 0.75rem;      /* 12px */
+
+  /* Scrollbar tokens (design declaration only — no consumption rules;
+   * scrollbars follow browser defaults for now, matching Grokbot). */
+  --duya-scrollbar-vertical-size: 14px;
+  --duya-scrollbar-horizontal-size: 12px;
+  --duya-scrollbar-thumb-bg: color-mix(in srgb, var(--text) 22%, transparent);
+  --duya-scrollbar-thumb-hover-bg: color-mix(in srgb, var(--text) 32%, transparent);
+  --duya-scrollbar-thumb-active-bg: color-mix(in srgb, var(--text) 40%, transparent);
+  --duya-scrollbar-shadow: none;
+}
+
+:root[data-theme="dark"] {
+  --bg-canvas: #1e1e1e;
+  --bg-accent-1: transparent;
+  --bg-accent-2: transparent;
+  --shell-bg: #1e1e1e;
+  /* Soft pastel aurora (dark) — warm brown fading to dark teal. */
+  --sidebar-bg: linear-gradient(
+    135deg,
+    #2a1f1c 0%,
+    #1e1a18 50%,
+    #182022 100%
+  );
+  --main-bg: #1e1e1e;
+  /* Glass overlays (dark): see the light-theme twins above. */
+  --glass-main: rgba(30, 30, 30, 0.66);
+  --glass-chrome: rgba(37, 37, 37, 0.38);
+  /* Dark twin: lower alphas so the stroke reads as edge light, not a frame. */
+  --glass-edge: linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.04));
+  --surface: rgba(255, 255, 255, 0.06);
+  --surface-solid: #2c2c2c;
+  --surface-hover: rgba(255, 255, 255, 0.1);
+  --text: #ffffff;
+  --foreground: #ffffff;
+  --muted: #8a8a8a;
+  --border: rgba(255, 255, 255, 0.08);
+  /* --border-color: dark-theme counterpart, identical to --border */
+  --border-color: var(--border);
+  /* --composer-bg: dark theme keeps the original translucent surface */
+  --composer-bg: var(--surface);
+  --grid-dot: rgba(255, 255, 255, 0.08);
+  --accent: #a78bfa;
+  --accent-soft: rgba(167, 139, 250, 0.24);
+  --accent-shadow: rgba(167, 139, 250, 0.5);
+  --chip: rgba(255, 255, 255, 0.06);
+  --shell-shadow: none;
+  --send-btn: #b892ff;
+  --send-btn-hover: #a87eef;
+  --success: #22c55e;
+  --success-soft: rgba(34, 197, 94, 0.2);
+  --warning: #f59e0b;
+  --warning-soft: rgba(245, 158, 11, 0.2);
+  --error: #ef4444;
+  --error-soft: rgba(239, 68, 68, 0.1);
+
+  /* Conductor Apple-native visual system (dark) */
+  --canvas-bg: #1c1c1e;
+  --panel-bg: rgba(28, 28, 30, 0.72);
+  --panel-bg-solid: #2c2c2e;
+  --element-bg: #2c2c2e;
+  --text-primary: #ffffff;
+  --text-secondary: #98989d;
+  --text-tertiary: #636366;
+  --conductor-accent: #0a84ff;
+  --conductor-accent-soft: rgba(10, 132, 255, 0.2);
+  --conductor-accent-shadow: rgba(10, 132, 255, 0.3);
+  --conductor-grid-dot: rgba(255, 255, 255, 0.035);
+  --conductor-border: rgba(255, 255, 255, 0.1);
+  --conductor-border-strong: rgba(255, 255, 255, 0.16);
+  --shadow-resting: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-hovering: 0 4px 12px rgba(0, 0, 0, 0.4), 0 2px 4px rgba(0, 0, 0, 0.3);
+  --shadow-elevated: 0 12px 32px rgba(0, 0, 0, 0.5), 0 4px 8px rgba(0, 0, 0, 0.4);
+  --shadow-focusing: 0 0 0 2px var(--conductor-accent), 0 4px 16px rgba(10, 132, 255, 0.3);
+
+  /* Slash command menu — dark theme tokens (Codex-style flat gray) */
+  --command-menu-bg: #2b2b2b;
+  --command-menu-border: #3a3a3a;
+  --command-menu-selected: #3a3a3a;
+  --command-menu-muted: #8a8a8a;
+  --command-menu-shadow: 0 6px 18px rgba(0, 0, 0, 0.32), 0 1px 4px rgba(0, 0, 0, 0.18);
+  --canvas-tool-accent: #ad63f5;
+  --canvas-tool-accent-shadow: rgba(173, 99, 245, 0.28);
+
+  /* Scrollbar tokens (dark theme override) */
+  --duya-scrollbar-thumb-bg: rgba(255, 255, 255, 0.18);
+  --duya-scrollbar-thumb-hover-bg: rgba(255, 255, 255, 0.32);
+  --duya-scrollbar-thumb-active-bg: rgba(255, 255, 255, 0.40);
+  --duya-scrollbar-shadow: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Global scrollbar styles - auto-hide when not hovering */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  transition: background-color 0.2s ease;
+}
+
+/* Show scrollbar thumb on container hover */
+:ho
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
+/* Firefox scrollbar */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+html:hover {
+  scrollbar-color: var(--border) transparent;
+}
+
+/* Dark mode scrollbar adjustments */
+[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+
+[data-theme="dark"] :hover::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+/* Slash command menu row hover — fallback for keyboards that miss mouseenter.
+   !important needed so the rule beats inline backgroundColor:'transparent'
+   used by sub-view rows (thinking/style/mcp) when not active. */
+.command-menu-row:hover {
+  background-color: var(--command-menu-selected) !important;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+}
+
+body {
+  background-color: var(--bg-canvas);
+  background-image:
+    radial-gradient(circle at 8% 10%, var(--bg-accent-1), transparent 46%),
+    radial-gradient(circle at 86% 0%, var(--bg-accent-2), transparent 44%);
+  color: var(--text);
+  font-family: 'Styrene', "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  /* No -webkit-font-smoothing override on purpose: on Windows it disables
+     ClearType and makes the CJK fallback fonts (YaHei / PingFang) look
+     "sticky" with hard vertical strokes. The platform default (subpixel
+     / ClearType on Windows, grayscale on macOS) gives the cleanest result
+     for the same font stack. */
+}
+
+/* Message font styles - Styrene as primary font */
+.message-content,
+.message-content p,
+.message-content li {
+  font-family: 'Styrene', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+/* Font family override: switch to OS default UI fonts when data-font="system".
+   When unset or "duya", the body/.message-content rules above (Styrene) apply. */
+html[data-font="system"] body,
+html[data-font="system"] .message-content,
+html[data-font="system"] .message-content p,
+html[data-font="system"] .message-content li {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+/* Serif font (Copernicus) when data-message-font is set to serif */
+[data-message-font="serif"] .message-content,
+[data-message-font="serif"] .message-content p,
+[data-message-font="serif"] .message-content li {
+  font-family: 'Copernicus', "Noto Serif CJK SC", "Source Han Serif SC", "PingFang SC", "Microsoft YaHei", Georgia, 'Times New Roman', serif;
+}
+
+/* Message content base styles for better readability */
+.message-content {
+  font-size: 15px;
+  line-height: 1.5; /* 更紧凑、现代的行高 */
+  letter-spacing: 0;
+}
+
+.message-content p {
+  margin-bottom: 0.375rem;
+}
+
+.message-content ul,
+.message-content ol {
+  margin-bottom: 0.5rem;
+  padding-left: 1.25rem;
+}
+
+.message-content li {
+  margin-bottom: 0.125rem;
+  line-height: 1.5;
+}
+
+/* === 代码块深度优化 (匹配 Claude 风格) === */
+
+/* Remove backticks from inline code added by @tailwindcss/typography */
+.prose code::before,
+.prose code::after {
+  content: none !important;
+}
+
+/* Override @tailwindcss/typography hr spacing */
+.prose hr,
+.prose-sm hr {
+  margin-top: 0.75rem !important;
+  margin-bottom: 0.75rem !important;
+}
+
+/* Override @tailwindcss/typography table spacing */
+.prose table,
+.prose-sm table {
+  margin-top: 0.25rem !important;
+  margin-bottom: 0.25rem !important;
+}
+
+/* Override @tailwindcss/typography inline code background for light theme only */
+.prose code,
+.prose-sm code,
+.prose :not(pre) > code {
+  background-color: #f0f0f0 !important;
+  border: 1px solid var(--border) !important;
+}
+
+/* Allow long inline code (paths, identifiers) to wrap inside the message
+ * column instead of overflowing. Block code (inside <pre>) keeps its
+ * horizontal scroll behaviour via the .code-block-wrapper rule below. */
+.message-content :not(pre) > code,
+.prose :not(pre) > code,
+.prose-sm :not(pre) > code {
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+  max-width: 100%;
+}
+
+/* Inside markdown tables, keep inline code on one line so narrow columns
+ * don't force each character onto its own line. Tables scroll horizontally
+ * via overflow-x-auto when content is wide. */
+.message-content td code,
+.message-content th code,
+.prose td code,
+.prose th code,
+.prose-sm td code,
+.prose-sm th code {
+  white-space: nowrap !important;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+}
+
+/* Markdown tables should read as a compact data sheet: clear row rhythm,
+ * natural column sizing, and a single visual unit for local file links. */
+.markdown-table-scroll {
+  margin: 0.75rem 0;
+  overflow-x: auto;
+}
+
+.markdown-table {
+  width: 100%;
+  min-width: 100%;
+  border-collapse: collapse;
+  border-spacing: 0;
+  color: var(--text);
+  font-size: 15px;
+  text-align: left;
+}
+
+.markdown-table__heading,
+.markdown-table__cell {
+  padding: 0.7rem 0.9rem;
+  vertical-align: top;
+}
+
+.markdown-table__heading {
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 28%, transparent);
+  color: var(--text);
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.markdown-table__cell {
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
+}
+
+.markdown-table tr:last-child .markdown-table__cell {
+  border-bottom: 0;
+}
+
+.markdown-file-link {
+  /* `inline-block` keeps the link as a single atomic inline box so
+   * the icon / favicon at the front and the trailing text can't be
+   * pulled onto separate lines by the line-breaking algorithm — the
+   * whole link either fits on the current line or moves to the next.
+   * `max-width: 100%` caps the link at the parent's content width so
+   * a long file path / URL doesn't overflow the chat column, and
+   * `word-break: break-all` + `overflow-wrap: anywhere` let the
+   * browser break inside the otherwise-unbroken path / URL. Net
+   * effect: long links wrap onto multiple lines INSIDE the link
+   * pill, while the icon stays anchored at the top-left of the link
+   * (never alone on its own line). */
+  display: inline-block;
+  max-width: 100%;
+  /* Match the inline `<code>` font stack used by MarkdownRenderer so a
+   * filename like `network.py` renders in the same monospace face the
+   * user sees elsewhere for code identifiers. Body text remains in
+   * Styrene / system-ui — only the link itself switches. */
+  font-family: 'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* 14px (vs body's 15px) keeps the link visually compact next to
+   * proportional body text without dwarfing it. */
+  font-size: 14px;
+  /* Semibold so file names stand out from the surrounding regular-weight
+   * body text without becoming visually heavy. The baseline stays put
+   * because the parent is `inline-block` (no flex centering), so the
+   * glyph metric shift from 400 → 600 stays inside the line box. */
+  font-weight: 600;
+  line-height: inherit;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #0ea5e9; /* sky-500: lighter than the previous blue-600, less saturated */
+  cursor: pointer;
+  /* No underline by default; dotted underline appears on hover so a
+   * chat message reads as plain prose unless the user explicitly
+   * points at a link. */
+  text-decoration: none;
+  transition: color 150ms ease, text-decoration-color 150ms ease;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  /* vertical-align:baseline lines up the link's text baseline with
+   * the surrounding paragraph instead of being lifted by a
+   * flex-centered icon (the previous `inline-flex; align-items:
+   * center` placed the icon mid-line and visually raised the pill). */
+  vertical-align: baseline;
+}
+
+/* === Terminal banner shown above the partial streaming view when
+   the stream ended abnormally (interrupted / errored). The transient
+   view stays mounted so the user can read the last partial text;
+   this banner explains why it stopped and why nothing more is coming. */
+.terminal-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 9999px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+  max-width: 100%;
+}
+
+.terminal-banner-aborted {
+  background: rgba(245, 158, 11, 0.1);
+  color: #d97706;
+}
+
+.terminal-banner-error {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+  border-radius: 0.5rem;
+  white-space: normal;
+  word-break: break-word;
+}
+
+html[data-theme="dark"] .terminal-banner-aborted {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+}
+
+html[data-theme="dark"] .terminal-banner-error {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+}
+
+.markdown-file-link:hover {
+  color: #0284c7; /* sky-600 */
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: currentColor;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.22em;
+}
+
+.markdown-file-link:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid rgb(14 165 233 / 0.55);
+  outline-offset: 2px;
+}
+
+.markdown-file-link > svg {
+  /* The icon is now an inline-block (the parent is no longer a flex
+  container) and is visually anchored to the text baseline via a small
+  negative vertical-align. This keeps the icon from sitting mid-line
+  the way `align-items: center` used to push it, which made the link
+  look visibly higher than surrounding body text. */
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  vertical-align: -1px;
+  margin-right: 0.2rem;
+  margin-left: 0;
+  opacity: 0.7;
+  flex: none;
+  order: 0;
+}
+
+.markdown-file-link__name {
+  /* Inherits `word-break: break-all` + `overflow-wrap: anywhere` from
+   * the parent `.markdown-file-link`. Removing the previous
+   * `white-space: nowrap` is what lets a long file path break across
+   * multiple lines when the chat column is narrow. `min-width: 0`
+   * lets a flex / grid ancestor shrink the span instead of forcing
+   * the path onto one overflowing line. */
+  min-width: 0;
+}
+
+/* External web links: the favicon is an inline-block at the front of
+ * the link (matching the visual order of the file-type icon on local
+ * file pills), aligned to the text baseline.
+ *
+ * Sizing uses `em` (rather than a fixed px) so the favicon scales with
+ * the surrounding text size, and the absolute height stays at or
+ * below the text x-height (≈ 0.73em for 15px / 1.5 paragraph text).
+ * Per CSS 2.1 § 10.8, an inline replaced element whose top extends
+ * past the line box's ascent forces the whole line box to grow — that
+ * growth is what was showing up as enlarged line gaps above and below
+ * any line that contained a favicon. Keeping the icon ≤ 0.7em keeps
+ * the icon fully inside the existing line box.
+ *
+ * `vertical-align: -0.15em` drops the replaced element just below the
+ * text baseline so the icon's visual center sits on the x-height
+ * instead of looking like it floats above the line. Because the
+ * favicon only renders when an icon resolves, no placeholder space
+ * is left when it is unavailable. */
+.markdown-link-external__favicon {
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  /* Drop the favicon slightly below the text baseline so its visual
+   * center sits on the x-height rather than the baseline. */
+  vertical-align: -0.15em;
+  /* The override `!important` below beats the @tailwindcss/typography
+   * `.prose :where(img)` rule that ships with `margin: 2em 0` (and
+   * `1.71em 0` for `.prose-sm`). Without it, the link anchor's inline
+   * img ends up with 30 px gaps above and below, which makes the
+   * favicon visually wrap onto its own line and inflates the line
+   * height of every paragraph that contains an external link. */
+  margin: 0 0.2rem 0 0 !important;
+  object-fit: contain;
+  border-radius: 2px;
+}
+
+[data-theme="dark"] .markdown-file-link {
+  color: #7dd3fc; /* sky-300 */
+}
+
+[data-theme="dark"] .markdown-file-link:hover {
+  color: #bae6fd; /* sky-200 */
+}
+
+/* Keep dark theme inline code background as before */
+[data-theme="dark"] .prose code,
+[data-theme="dark"] .prose-sm code,
+[data-theme="dark"] .prose :not(pre) > code {
+  background-color: #252525 !important;
+  border: 1px solid var(--border) !important;
+}
+
+/* Inline code inside code blocks should match code block background */
+[data-theme="dark"] .code-block-wrapper .prose code,
+[data-theme="dark"] .code-block-wrapper .prose-sm code,
+[data-theme="dark"] .code-block-wrapper pre code {
+  background-color: transparent !important;
+  border: none !important;
+}
+
+.code-block-wrapper .prose code,
+.code-block-wrapper .prose-sm code,
+.code-block-wrapper pre code {
+  background-color: transparent !important;
+  border: none !important;
+}
+
+/* 放大代码块文字 */
+.code-block-wrapper pre,
+.code-block-wrapper code {
+  font-size: 14px !important;
+  line-height: 1.5;
+}
+
+/* Code block pre uses browser default scrollbar. */
+
+/* Extra large text sizes beyond Tailwind's text-9xl */
+.text-10xl {
+  font-size: 2rem;
+  line-height: 1;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.chat-message-navigator {
+  position: sticky;
+  top: 150px;
+  z-index: 18;
+  width: 28px;
+  height: 0;
+  margin-left: 6px;
+  overflow: visible;
+}
+
+.chat-message-navigator-rail {
+  display: none;
+}
+
+.chat-message-navigator-dot {
+  position: relative;
+  display: block;
+  width: 28px;
+  height: 8px;
+  margin: 3px 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0.46;
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.chat-message-navigator-dot:hover,
+.chat-message-navigator-dot.active {
+  opacity: 1;
+}
+
+.chat-message-navigator-dot.active {
+  transform: translateX(1px);
+}
+
+.chat-message-navigator-mark {
+  position: absolute;
+  left: 5px;
+  top: 3px;
+  width: 12px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+  transition: width 150ms ease, background 150ms ease;
+}
+
+.chat-message-navigator-dot:hover .chat-message-navigator-mark,
+.chat-message-navigator-dot.active .chat-message-navigator-mark {
+  width: 16px;
+  background: color-mix(in srgb, var(--text) 72%, transparent);
+}
+
+.chat-message-navigator-card {
+  position: absolute;
+  left: 34px;
+  top: 50%;
+  width: min(320px, 44vw);
+  transform: translateY(-50%) translateX(-6px) scale(0.985);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, #fff 4%, transparent), transparent 46%),
+    color-mix(in srgb, var(--surface-solid) 92%, #222);
+  color: var(--text);
+  box-shadow:
+    0 14px 34px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 color-mix(in srgb, #fff 6%, transparent);
+  text-align: left;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 150ms ease,
+    transform 150ms ease,
+    visibility 150ms ease;
+}
+
+:root[data-theme="dark"] .chat-message-navigator-card {
+  border-color: rgba(255, 255, 255, 0.09);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 48%),
+    #2f2f2f;
+}
+
+.chat-message-navigator-dot:hover .chat-message-navigator-card,
+.chat-message-navigator-dot:focus-visible .chat-message-navigator-card {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(-50%) translateX(0) scale(1);
+}
+
+.chat-message-navigator-title,
+.chat-message-navigator-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+}
+
+.chat-message-navigator-title {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.42;
+  -webkit-line-clamp: 2;
+}
+
+.chat-message-navigator-text {
+  color: color-mix(in srgb, var(--muted) 88%, var(--text));
+  font-size: 12px;
+  line-height: 1.42;
+  -webkit-line-clamp: 2;
+}
+
+.chat-message-navigator-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 3px;
+}
+
+.chat-message-navigator-file {
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--surface-hover) 88%, transparent);
+  color: color-mix(in srgb, var(--muted) 72%, var(--text));
+  font-family: 'Fira Mono', monospace;
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.chat-message-navigator-file-more {
+  max-width: none;
+  color: color-mix(in srgb, var(--text) 78%, var(--muted));
+}
+
+@media (max-width: 1120px) {
+  .chat-message-navigator {
+    display: none;
+  }
+}
+
+.app-shell-root {
+  height: 100vh;
+  padding: 0;
+  overflow: hidden;
+}
+
+.app-shell {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--sidebar-bg);
+}
+
+.app-body {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+  min-height: 0;
+  position: relative;
+}

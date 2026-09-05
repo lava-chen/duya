@@ -30,6 +30,9 @@ export {
 export {
   buildAgentInboundWakePrompt,
   buildAgentMessagingSystemPrompt,
+  type AgentDirectoryEntry,
+  type AgentGroupSummary,
+  type AgentMessagingPromptOptions,
 } from "./wake-prompt.js";
 
 export {

@@ -1,0 +1,284 @@
+/*
+ * sidebar-sections.css — extracted from src/styles/globals.css (domain split).
+ * Do not edit the ordering of rules within this file; the entry file
+ * imports domain files in cascade order.
+ */
+/* ============================================================
+   Plan 471 — Sidebar section abstraction
+   ============================================================
+   Each top-level sidebar group (项目 / 定时任务 / 网关 / 唤醒 / 置顶 /
+   未分组 / user sections) renders through `.sidebar-section-item`.
+   The header is a button — click it to expand/collapse the body.
+   Sub-styling for individual kinds (`data-section-kind`) tweaks the
+   leading icon tint and left padding without affecting children. */
+
+.sidebar-section-item {
+  /* Plan 471 v6: match the row geometry of `.thread-item` (margin 0,
+     same header padding) so a section header and a session row have the
+     same height and footprint — no visual "jump" between a section title
+     and its child sessions. */
+  margin: 0;
+  border-radius: 0;
+}
+.sidebar-section-item.sidebar-section-soft {
+  /* The "项目" default section uses a slightly dimmer label so it
+     visually defers to user-created sections above it. */
+  opacity: 0.95;
+}
+.sidebar-section-item .sidebar-section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.88rem;
+  font-weight: 400;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+  border-radius: 0.35rem;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.sidebar-section-item .sidebar-section-header:hover {
+  background: var(--surface-hover);
+}
+/* Plan 471 v10: "项目" and "定时任务" keep a flat resting look — no
+   hover background wash (user feedback). The chevron + trailing buttons
+   still fade in on hover; only the header's background highlight is
+   suppressed so these two system sections read as static titles. */
+.sidebar-section-item[data-section-id="__system__:project"] .sidebar-section-header:hover,
+.sidebar-section-item[data-section-id="__system__:cron"] .sidebar-section-header:hover {
+  background: transparent;
+}
+.sidebar-section-item .sidebar-section-header:focus-visible {
+  outline: 2px solid var(--focus, var(--accent));
+  outline-offset: 2px;
+}
+.sidebar-section-item .sidebar-section-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  /* Plan 471 v9: the toggle chevron appears only on hover (Codex-like),
+     same as the trailing "⋯ +". The header text itself always shows;
+     the chevron is a hover affordance, not resting decoration.
+     Fixed width keeps the label from shifting when the chevron fades
+     in/out — every section (cron, gateway, wakeup, project, user…)
+     renders the same header geometry so the chevron lands in exactly
+     the same spot relative to the name. */
+  width: 14px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.sidebar-section-item .sidebar-section-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+}
+.sidebar-section-item .sidebar-section-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+  /* Keep the caret glued to the label ("项目 >"), not pushed to the
+     far right. The trailing slot right-aligns via margin-left:auto. */
+}
+.sidebar-section-item .sidebar-section-count {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--muted);
+  background: var(--surface-2, var(--surface));
+  border-radius: 999px;
+  padding: 0.05rem 0.4rem;
+  margin-left: 0.25rem;
+}
+.sidebar-section-item .sidebar-section-trailing {
+  margin-left: auto;
+  padding-left: 0.25rem;
+  padding-right: 0.25rem;
+  display: inline-flex;
+  align-items: center;
+  /* Plan 471 v4: trailing "⋯ +" only on hover, matching Codex's
+     minimal-when-resting, expand-on-hover header style. The transition
+     keeps it smooth when the cursor enters / leaves the row. */
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.sidebar-section-item .sidebar-section-header:hover .sidebar-section-caret,
+.sidebar-section-item .sidebar-section-caret:focus-visible {
+  opacity: 1;
+}
+.sidebar-section-item .sidebar-section-header:hover .sidebar-section-trailing,
+.sidebar-section-item .sidebar-section-trailing:focus-within {
+  /* Stay visible while the user is interacting with the trailing
+     buttons themselves. The popup menu lives inside the trailing slot,
+     and CSS `:hover` covers it transitively (mouse over a descendant =
+     hover on the ancestor). */
+  opacity: 1;
+}
+.sidebar-section-item .sidebar-section-body {
+  /* Children (ProjectGroupItem / ThreadListItem) manage their own
+     padding; we only provide a small drop-shadow cue when open. */
+  padding: 0;
+}
+
+/* Kind-specific tints. Tuned to the codebase's existing icon palette. */
+.sidebar-section-kind-user {
+  --section-accent: var(--accent, #4f8fff);
+}
+.sidebar-section-kind-user .sidebar-section-name {
+  /* A subtle accent on the label distinguishes a user-created section
+     from system groups without altering the header's height — the
+     previous border-left + padding compensation shifted the caret
+     baseline relative to session rows. */
+  color: var(--section-accent);
+}
+.sidebar-section-kind-cron .sidebar-section-icon,
+.sidebar-section-kind-gateway .sidebar-section-icon,
+.sidebar-section-kind-wakeup .sidebar-section-icon,
+.sidebar-section-kind-pinned .sidebar-section-icon,
+.sidebar-section-kind-project .sidebar-section-icon {
+  color: var(--muted);
+}
+
+/* Section menu trigger button (used inside the trailing slot of user
+   sections — reserved for future rename / delete actions). */
+.sidebar-section-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  background: transparent;
+  border-radius: 0.25rem;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.sidebar-section-menu-trigger:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* ============================================================
+   Project right-click menu — section submenu additions
+   ============================================================ */
+
+.project-dropdown-section-row {
+  position: relative;
+  display: block;
+}
+.project-dropdown-item-with-caret {
+  /* Same look as a normal project-dropdown-item; the small `>` chevron
+     on the right hints to the user that a submenu is available. */
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 0.4rem;
+}
+.project-dropdown-submenu {
+  position: absolute;
+  top: -4px;
+  /* Plan 471 v4: pop to the right by default; JS flips to `right: 100%`
+     when the parent menu is too close to the viewport's right edge so
+     the submenu never gets clipped by the screen border. */
+  left: 100%;
+  min-width: 180px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.25rem;
+  margin-left: 0.25rem;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+  z-index: 50;
+}
+/* When the parent menu sits in the right gutter, the submenu needs to
+   render on the left side of the parent instead. The chevron icon
+   inside the trigger row should also flip so the user sees the visual
+   cue pointing toward the submenu (it now opens to the left). */
+.project-dropdown-submenu-flip-left {
+  left: auto;
+  right: 100%;
+  margin-left: 0;
+  margin-right: 0.25rem;
+}
+.project-dropdown-item-checkable {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+}
+.project-dropdown-item-checkable.is-current {
+  /* The currently assigned section gets a subtle accent dot/bg so the
+     user can see at a glance where the project lives. */
+  background: var(--surface-hover);
+  color: var(--accent, var(--text));
+  font-weight: 600;
+}
+.project-dropdown-item-checkable.is-current::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent, currentColor);
+  margin-right: 2px;
+}
+
+/* "View all N more" link inside a section body (e.g. cron section when
+   it has hidden runs beyond CRON_SIDEBAR_VISIBLE). Sized smaller than
+   thread items so it doesn't look like another session. */
+.sidebar-section-view-all {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0.25rem 0.75rem;
+  margin: 0.15rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.78rem;
+  cursor: pointer;
+  border-radius: 0.35rem;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.sidebar-section-view-all:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.sidebar-section-view-all:focus-visible {
+  outline: 2px solid var(--focus, var(--accent));
+  outline-offset: 2px;
+}
+
+/* "Create the first bot" CTA inside the empty Bots section (plan 483 P1.2).
+   Distinct from the plain "view all" row so the primary action stands out. */
+.sidebar-section-create {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.35rem 0.75rem;
+  margin: 0.15rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 0.35rem;
+  transition: background-color 0.15s ease;
+}
+.sidebar-section-create:hover {
+  background: var(--surface-hover);
+}
+.sidebar-section-create:focus-visible {
+  outline: 2px solid var(--focus, var(--accent));
+  outline-offset: 2px;
+}

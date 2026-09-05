@@ -1,17 +1,19 @@
 /**
  * packages/agent/src/cli/commands/channel.ts
  *
- * `duya channel` — gateway IM channel control plane.
+ * `duya channel` — gateway IM channel control plane + per-bot bindings.
  *
- * Read-only surface:
+ * Read surface:
  *   list       — discovered channels (id / platform / name / guild / type / bound)
  *   info       — single channel + binding details
  *   platforms  — configured IM platforms (telegram / qq / feishu)
  *   status     — ChannelStatus snapshot (connected / lastError / streaming)
+ *   bindings   — per-bot channel bindings (agents/<id>/channels/, plan 488)
  *
- * No write ops. Channel management is the gateway's responsibility —
- * see `electron/gateway/channel-directory.ts` and the gateway's
- * `bridge:platform_state` event flow.
+ * Write surface (488 P2.3):
+ *   send       — push a message to a channel via the gateway
+ *   connect    — bind a platform/chat to a bot (gateway profile route)
+ *   disconnect — unbind a platform (optionally agent- and chat-scoped)
  *
  * Data source: `electron/cli/handlers/channels.ts` → `GET /v1/channels`,
  * `GET /v1/channels/:id`, `GET /v1/platforms`, `GET /v1/platforms/:p/status`.
@@ -314,16 +316,123 @@ export interface ChannelDisconnectResultDTO {
   error?: string;
 }
 
-async function disconnectChannel(
+/** Per-bot channel binding = a gateway profile route ((platform[, chatId]) → bot). */
+export interface AgentChannelBindingDTO {
+  name?: string;
+  platform: string;
+  profile: string;
+  chatId?: string;
+  threadId?: string;
+  enabled?: boolean;
+}
+
+export interface AgentChannelListResultDTO {
+  agentId: string;
+  channels: AgentChannelBindingDTO[];
+}
+
+export interface AgentChannelConnectResultDTO {
+  ok: boolean;
+  agentId: string;
+  platform: string;
+  chatId?: string;
+  error?: string;
+}
+
+function renderBindingsText(result: AgentChannelListResultDTO): string {
+  const channels = result.channels;
+  if (channels.length === 0) return `(no channels bound to agent ${result.agentId})`;
+  const lines = [`${result.agentId}: ${channels.length} channel${channels.length !== 1 ? 's' : ''} bound`];
+  for (const c of channels) {
+    const target = c.chatId ? `${c.platform}#${c.chatId}` : `${c.platform} (all chats)`;
+    lines.push(`  ${target.padEnd(32)} profile=${c.profile}${c.enabled === false ? '  [disabled]' : ''}`);
+  }
+  return lines.join('\n');
+}
+
+async function listAgentChannels(
   format: OutputFormat,
-  platform: string,
+  agentId: string,
 ): Promise<ExitCode> {
-  if (!platform) {
-    process.stderr.write('usage: duya channel disconnect --platform <platform>\n');
+  if (!agentId) {
+    process.stderr.write('usage: duya channel bindings --agent <agentId>\n');
     return 64;
   }
   try {
     const client = await CliApiClient.connect();
+    const result = await client.get<AgentChannelListResultDTO>(
+      `/v1/agents/${encodeURIComponent(agentId)}/channels`,
+    );
+    process.stdout.write(
+      format === 'json' ? renderJson(result) + '\n' : renderBindingsText(result) + '\n',
+    );
+    return 0;
+  } catch (err) {
+    return reportError(err);
+  }
+}
+
+async function connectAgentChannel(
+  format: OutputFormat,
+  agentId: string,
+  platform: string,
+  chatId?: string,
+  label?: string,
+): Promise<ExitCode> {
+  if (!agentId || !platform) {
+    process.stderr.write(
+      'usage: duya channel connect --agent <agentId> --platform <p> [--chat <chatId>] [--label <name>]\n' +
+        'omit --chat to bind the whole platform; the platform must already be configured in Channel settings\n',
+    );
+    return 64;
+  }
+  try {
+    const client = await CliApiClient.connect();
+    const result = await client.post<AgentChannelConnectResultDTO>(
+      `/v1/agents/${encodeURIComponent(agentId)}/channels/connect`,
+      { platform, ...(chatId ? { chatId } : {}), ...(label ? { label } : {}) },
+    );
+    if (format === 'json') {
+      process.stdout.write(renderJson(result) + '\n');
+    } else if (result.ok) {
+      process.stdout.write(
+        `Bound ${result.platform}${result.chatId ? `#${result.chatId}` : ' (all chats)'} to agent ${result.agentId}\n`,
+      );
+    } else {
+      process.stderr.write(`Connect failed: ${result.error ?? 'unknown error'}\n`);
+    }
+    return result.ok ? 0 : 1;
+  } catch (err) {
+    return reportError(err);
+  }
+}
+
+async function disconnectChannel(
+  format: OutputFormat,
+  platform: string,
+  agentId?: string,
+  chatId?: string,
+): Promise<ExitCode> {
+  if (!platform) {
+    process.stderr.write('usage: duya channel disconnect --platform <platform> [--agent <agentId>] [--chat <chatId>]\n');
+    return 64;
+  }
+  try {
+    const client = await CliApiClient.connect();
+    if (agentId) {
+      const result = await client.post<AgentChannelConnectResultDTO>(
+        `/v1/agents/${encodeURIComponent(agentId)}/channels/disconnect`,
+        { platform, ...(chatId ? { chatId } : {}) },
+      );
+      if (format === 'json') {
+        process.stdout.write(renderJson(result) + '\n');
+      } else if (result.ok) {
+        process.stdout.write(`Disconnected ${result.platform}${result.chatId ? `#${result.chatId}` : ''} from agent ${result.agentId}\n`);
+      } else {
+        process.stderr.write(`Disconnect failed: ${result.error ?? 'unknown error'}\n`);
+      }
+      return result.ok ? 0 : 1;
+    }
     const result = await client.post<ChannelDisconnectResultDTO>('/v1/channels/disconnect', {
       platform,
     });
@@ -379,10 +488,31 @@ export const runChannelCommand = {
     if (!text) text = typeof ctx.options.text === 'string' ? ctx.options.text : '';
     return sendChannel(ctx.format, channelId, text, platform, chatId, filePath);
   },
-  // 488 P2.3: channel disconnect
+  // 488 P2.3: channel disconnect (agent-scoped = profile-route unbind)
   disconnect: (ctx: CliSubcommandContext): Promise<ExitCode> => {
     const platform =
       typeof ctx.options.platform === 'string' ? ctx.options.platform : undefined;
-    return disconnectChannel(ctx.format, platform ?? '');
+    const agentId =
+      typeof ctx.options.agent === 'string' ? ctx.options.agent : undefined;
+    const chatId =
+      typeof ctx.options.chat === 'string' ? ctx.options.chat : undefined;
+    return disconnectChannel(ctx.format, platform ?? '', agentId, chatId);
+  },
+  // 488 P2.3: per-bot channel bindings (list/bind via gateway profile routes)
+  bindings: (ctx: CliSubcommandContext): Promise<ExitCode> => {
+    const agentId =
+      typeof ctx.options.agent === 'string' ? ctx.options.agent : undefined;
+    return listAgentChannels(ctx.format, agentId ?? '');
+  },
+  connect: (ctx: CliSubcommandContext): Promise<ExitCode> => {
+    const agentId =
+      typeof ctx.options.agent === 'string' ? ctx.options.agent : undefined;
+    const platform =
+      typeof ctx.options.platform === 'string' ? ctx.options.platform : undefined;
+    const chatId =
+      typeof ctx.options.chat === 'string' ? ctx.options.chat : undefined;
+    const label =
+      typeof ctx.options.label === 'string' ? ctx.options.label : undefined;
+    return connectAgentChannel(ctx.format, agentId ?? '', platform ?? '', chatId, label);
   },
 };

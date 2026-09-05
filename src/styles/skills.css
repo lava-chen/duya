@@ -1,0 +1,810 @@
+/*
+ * skills.css — extracted from src/styles/globals.css (domain split).
+ * Do not edit the ordering of rules within this file; the entry file
+ * imports domain files in cascade order.
+ */
+/* ========================================
+   Reference Attachment Card (Plan 220 + Plan 472 unified visual)
+   ========================================
+   Plan 220 originally drew pasted-text / terminal-ref / browser-ref /
+   file-tree-ref cards as a 160×80+ rounded-3xl long chip on a row below
+   image cards. Plan 472 collapses every attachment kind (file, image,
+   pasted-text, terminal-ref, browser-ref, file-tree-ref) into the same
+   104×104 rounded-2xl square box so they wrap on a single row. The
+   `.pasted-content-attachment` and `.message-pasted-content-item`
+   selectors are kept as aliases so the legacy fallback render path in
+   MessageItem.tsx (decoded history without the unified bar) inherits
+   the same square shape — visual unity wins over class churn. */
+
+.reference-attachment-card,
+.pasted-content-attachment,
+.message-pasted-content-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 104px;
+  height: 104px;
+  flex: 0 0 auto;
+  padding: 0.5rem 0.625rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  /* rounded-2xl = 1rem, matches FileAttachmentCard */
+  border-radius: 1rem;
+  overflow: hidden;
+  transition: border-color 0.16s ease, background 0.16s ease,
+    transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+.reference-attachment-card:hover,
+.pasted-content-attachment:hover,
+.message-pasted-content-item:hover {
+  border-color: var(--accent-soft);
+  background: var(--surface-hover);
+}
+
+.reference-attachment-card-clickable {
+  cursor: pointer;
+}
+
+.reference-attachment-card-clickable:hover {
+  border-color: var(--accent-soft);
+  background: var(--surface-hover);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+  transform: translateY(-1px);
+}
+
+/* Small dark pill in the top-right corner. The two remove buttons share
+   one rule set so the hover-reveal animation is identical across all
+   square reference cards. */
+.reference-attachment-remove,
+.pasted-content-remove {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  width: 1.1rem;
+  height: 1.1rem;
+  padding: 0;
+  border: 0;
+  border-radius: 9999px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 10;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.reference-attachment-card:hover .reference-attachment-remove,
+.pasted-content-attachment:hover .pasted-content-remove,
+.reference-attachment-remove:focus-visible,
+.pasted-content-remove:focus-visible {
+  opacity: 1;
+}
+
+.reference-attachment-remove:hover,
+.pasted-content-remove:hover {
+  background: rgba(0, 0, 0, 0.72);
+}
+
+.reference-attachment-preview,
+.pasted-content-preview,
+.message-pasted-content-preview {
+  flex: 1;
+  font-size: 0.72rem;
+  line-height: 1.3;
+  color: var(--text);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+  opacity: 0.88;
+  /* leave a slot for the corner X — it's hidden until the card hovers
+     but the slot keeps the text from clobbering it when it appears */
+  padding-right: 1rem;
+  padding-bottom: 0.25rem;
+}
+
+.reference-attachment-label,
+.pasted-content-label,
+.message-pasted-content-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 0.18rem 0.42rem;
+  border-radius: 9999px;
+  background: var(--chip);
+  color: var(--muted);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1;
+}
+
+.reference-attachment-label svg,
+.pasted-content-label svg,
+.message-pasted-content-label svg {
+  flex: 0 0 auto;
+}
+
+.browser-screenshot-attachment-card {
+  position: relative;
+  width: 112px;
+  height: 112px;
+  flex: 0 0 auto;
+  display: block;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 1.25rem;
+  background: var(--surface);
+  color: var(--foreground);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.browser-screenshot-attachment-card:hover {
+  border-color: var(--accent-soft);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+  transform: translateY(-1px);
+}
+
+.browser-screenshot-attachment-image {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.browser-screenshot-attachment-shade {
+  position: absolute;
+  inset: auto 0 0;
+  height: 58%;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.22) 32%,
+    rgba(0, 0, 0, 0.74) 100%
+  );
+}
+
+.browser-screenshot-attachment-meta {
+  position: absolute;
+  left: 0.625rem;
+  right: 0.625rem;
+  bottom: 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+  pointer-events: none;
+}
+
+.browser-screenshot-attachment-title {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 650;
+  line-height: 1.15;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+.browser-screenshot-attachment-label {
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.18rem 0.42rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.44);
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.browser-screenshot-attachment-label svg {
+  flex: 0 0 auto;
+}
+
+.browser-screenshot-attachment-label-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-screenshot-attachment-remove {
+  position: absolute;
+  z-index: 2;
+  top: 0.42rem;
+  right: 0.42rem;
+  width: 1.25rem;
+  height: 1.25rem;
+  border: 0;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.52);
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.14s ease, background 0.14s ease;
+}
+
+.browser-screenshot-attachment-card:hover .browser-screenshot-attachment-remove,
+.browser-screenshot-attachment-remove:focus-visible {
+  opacity: 1;
+}
+
+.browser-screenshot-attachment-remove:hover {
+  background: rgba(0, 0, 0, 0.74);
+}
+
+/* ========================================
+   Skills Page Styles
+   ======================================== */
+
+.skills-page {
+  overflow-y: auto;
+  max-height: 100%;
+}
+
+/* Skills Section Wrapper - adds breathing room */
+.skills-section-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  padding: 0;
+}
+
+/* Skills Path Section */
+.skills-path-section {
+  padding: 1rem 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Skills Header */
+.skills-header {
+  text-align: center;
+  padding: 0.5rem 0 1rem;
+}
+
+.skills-title {
+  font-size: 1.75rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 0.5rem;
+  letter-spacing: -0.02em;
+}
+
+.skills-subtitle {
+  font-size: 0.9rem;
+  color: var(--muted);
+  margin: 0 0 1.5rem;
+}
+
+.skills-search-wrapper {
+  max-width: 400px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.skills-search-input {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 0.625rem 1rem 0.625rem 2.5rem;
+  font-size: 0.875rem;
+  color: var(--text);
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.skills-search-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.skills-search-input::placeholder {
+  color: var(--muted);
+}
+
+/* Skills List Section */
+.skills-list-section {
+  padding: 0;
+}
+
+/* Tool Result Image Preview Cards
+ *
+ * Used inside ToolActionsGroup rows for browser_screenshot and
+ * vision_analyze results. Reuses the visual language of
+ * `.browser-screenshot-attachment-card` (square image, gradient
+ * shade, kind chip) but tightens the size for inline use inside a
+ * tool card and removes the X button (input-mode only) since tool
+ * results are read-only.
+ */
+.tool-image-preview {
+  position: relative;
+  width: 112px;
+  height: 112px;
+  flex: 0 0 auto;
+  display: block;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 1.25rem;
+  background: var(--surface);
+  color: var(--foreground);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.tool-image-preview:hover {
+  border-color: var(--accent-soft);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+  transform: translateY(-1px);
+}
+
+.tool-image-preview-img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.tool-image-preview-shade {
+  position: absolute;
+  inset: auto 0 0;
+  height: 58%;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.22) 32%,
+    rgba(0, 0, 0, 0.74) 100%
+  );
+}
+
+.tool-image-preview-meta {
+  position: absolute;
+  left: 0.625rem;
+  right: 0.625rem;
+  bottom: 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+  pointer-events: none;
+}
+
+.tool-image-preview-title {
+  overflow: hidden;
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 650;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+.tool-image-preview-label {
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.18rem 0.42rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.44);
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.tool-image-preview-label svg {
+  flex: 0 0 auto;
+}
+
+.tool-image-preview-label-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-image-preview-snippet {
+  margin-top: 0.5rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-image-preview-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+  color: var(--muted-foreground);
+}
+
+/* Attachment Preview Modal — sidebar variant.
+ *
+ * Two-pane layout: image on the left, text panel on the right.
+ * Used by VisionToolRow so the user can see both the analyzed image
+ * and the question + analysis text side by side.
+ */
+.attachment-preview-sidebar-modal {
+  display: flex;
+  flex-direction: row;
+  width: min(92vw, 1200px);
+  height: min(90vh, 860px);
+  max-width: calc(100vw - 3rem);
+  max-height: calc(100vh - 3rem);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.attachment-preview-sidebar-image {
+  flex: 1 1 60%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.32);
+  padding: 1rem;
+  overflow: auto;
+}
+
+.attachment-preview-sidebar-image img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 0.5rem;
+}
+
+.attachment-preview-sidebar-text {
+  flex: 1 1 40%;
+  min-width: 280px;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.attachment-preview-sidebar-header {
+  padding: 0.875rem 1rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.attachment-preview-sidebar-title {
+  font-size: 0.85rem;
+  font-weight: 650;
+  color: var(--foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-preview-sidebar-subtitle {
+  font-size: 0.7rem;
+  color: var(--muted-foreground);
+}
+
+.attachment-preview-sidebar-section {
+  padding: 0.625rem 1rem 0.25rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.attachment-preview-sidebar-question {
+  margin: 0 1rem 0.5rem;
+  padding: 0.5rem 0.625rem;
+  border-radius: 0.5rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--foreground);
+}
+
+.attachment-preview-sidebar-body {
+  flex: 1 1 auto;
+  padding: 0.25rem 1rem 1rem;
+  overflow: auto;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: var(--foreground);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+/* Skills Categories */
+.skills-categories {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.skills-category {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.skills-category-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+  margin: 0;
+}
+
+/* Skills Grid - improved spacing */
+.skills-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.5rem;
+}
+
+@media (max-width: 640px) {
+  .skills-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Skill Card Item - cleaner design like the reference */
+.skill-card-item {
+  border: 1px solid transparent;
+  border-radius: 0.625rem;
+  padding: 0.75rem;
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.skill-card-item:hover {
+  background: var(--surface);
+}
+
+/* Skill Card Check Icon */
+.skill-card-check {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* Skill Modal Overlay */
+.skill-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Skill Modal */
+.skill-modal {
+  display: flex;
+  flex-direction: column;
+  width: 560px;
+  max-width: calc(100vw - 2rem);
+  max-height: calc(100vh - 4rem);
+  border-radius: 1rem;
+  background: var(--main-bg);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  animation: slideUp 0.25s ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Skill Modal Header */
+.skill-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+/* Skill Modal Content */
+.skill-modal-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem;
+}
+
+/* Skill Modal Metadata Item */
+.skill-modal-metadata-item {
+  background: var(--surface);
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+}
+
+/* Skill markdown content styles */
+.skill-markdown {
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.skill-markdown h1 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 1rem 0 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.skill-markdown h2 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0.875rem 0 0.625rem;
+  color: var(--text);
+}
+
+.skill-markdown h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0.75rem 0 0.5rem;
+  color: var(--text);
+}
+
+.skill-markdown p {
+  margin-bottom: 0.75rem;
+  line-height: 1.6;
+}
+
+.skill-markdown ul,
+.skill-markdown ol {
+  margin-bottom: 0.75rem;
+  padding-left: 1.25rem;
+}
+
+.skill-markdown li {
+  margin-bottom: 0.375rem;
+}
+
+.skill-markdown code {
+  font-family: 'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  background: var(--surface);
+}
+
+.skill-markdown pre {
+  background: var(--surface);
+  padding: 1rem;
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  margin: 0.75rem 0;
+}
+
+.skill-markdown pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.skill-markdown blockquote {
+  border-left: 3px solid var(--accent);
+  padding-left: 1rem;
+  margin: 0.75rem 0;
+  color: var(--muted);
+}
+
+.skill-markdown hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1rem 0;
+}
+
+.skill-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+}
+
+.skill-markdown th,
+.skill-markdown td {
+  padding: 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.skill-markdown th {
+  font-weight: 600;
+  background: var(--surface);
+}
+
+@keyframes fadeInSlideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

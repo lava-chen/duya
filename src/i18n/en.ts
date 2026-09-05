@@ -332,6 +332,8 @@ const en = {
   // Context-compaction record row: collapsed verb plus a compacted-count
   // tail; the expanded card shows the summary text verbatim.
   'streaming.toolAction.compact.collapsed': 'Context compacted',
+  'streaming.toolAction.compact.inProgress': 'Compacting context...',
+  'streaming.toolAction.compact.failed': 'Context compaction failed',
   'streaming.toolAction.compact.messagesCompacted.one': '{count} message',
   'streaming.toolAction.compact.messagesCompacted.other': '{count} messages',
 
@@ -339,15 +341,20 @@ const en = {
   'permission.deny': 'Deny',
   'permission.allowOnce': 'Allow Once',
   'permission.allowForSession': 'Allow for Session',
+  'permission.approvalRequired': 'Approval needed',
+  'permission.toolFallback': 'tool',
   'permission.alwaysAllow': 'Always Allow',
   'connectorAuth.title': 'Re-authorize connected app',
   'connectorAuth.body': 'The {provider} connection expired and the `{tool}` call needs re-authorization to continue.',
   'connectorAuth.reauthorize': 'Re-authorize',
   'connectorAuth.connecting': 'Opening browser…',
-  'connectorAuth.retrying': 'Connected — retrying…',
   'connectorAuth.dismiss': 'Dismiss',
   'connectorAuth.connectFailed': 'Re-authorization failed',
   'connectorAuth.apiUnavailable': 'App Connection API not available',
+  // Plan 498: real card states + resume turn message.
+  'connectorAuth.connected': '{provider} re-authorized. Resuming…',
+  'connectorAuth.retry': 'Retry',
+  'connectorAuth.resumeMessage': 'Re-authorized {provider}. Please re-issue the failed `{tool}` call with the same arguments.',
   'permission.denyAll': 'Deny All',
   'permission.permissionRequired': 'Permission Required',
   'permission.collapse': 'Collapse',
@@ -1098,6 +1105,10 @@ const en = {
   'panel.terminal': 'Terminal',
   'panel.browser': 'Browser',
   'panel.office': 'Office',
+  'panel.botSettings': 'Bot Settings',
+  'panel.botSettings.loading': 'Loading bot…',
+  'panel.botSettings.notFound': 'Bot not found. It may have been deleted.',
+  'panel.botSettings.missing': 'No bot selected. Open a bot chat and click its header.',
   'panel.closePanel': 'Close Panel',
   'panel.resizeHandle': 'Resize panel width. Use arrow keys to adjust, Home/End for min/max, Enter to reset.',
   'panel.openPanel': 'Open Side Panel',
@@ -1254,6 +1265,11 @@ const en = {
 
   // Plan 483 — bot contact row + create-bot dialog
   'bot.contactBusy': 'Working',
+  // Plan 483 P1.4 (2026-09-05): activity status pill in the trailing
+  // slot of the bot sidebar row. `queued` mirrors grok-bot / rakazo's
+  // behavior of surfacing the mailbox queue depth so users know their
+  // follow-up is waiting behind an active run.
+  'bot.contactStatus.queued': 'Queued',
   'bot.create.title': 'Create Bot',
   'bot.create.close': 'Close',
   'bot.create.templates': 'Templates',
@@ -1261,6 +1277,9 @@ const en = {
   'bot.create.namePlaceholder': 'Give your bot a name',
   'bot.create.description': 'Description',
   'bot.create.descriptionPlaceholder': 'What should this bot do?',
+  'bot.create.model': 'Model',
+  'bot.create.modelDefault': 'Use global default',
+  'bot.create.modelUnavailable': 'No models available. Add a provider first.',
   'bot.create.avatar': 'Character',
   'bot.create.cancel': 'Cancel',
   'bot.create.create': 'Create',
@@ -1279,6 +1298,7 @@ const en = {
   'bot.actions.options': 'Bot options',
   'bot.actions.deleteConfirm': 'Delete bot "{{name}}"? Its conversations are kept.',
   'bot.actions.showHidden': 'Show hidden bots ({{count}})',
+  'bot.actions.hideFromList': 'Hide hidden bot list',
   'bot.actions.noHidden': 'No hidden bots',
   'bot.pinnedLabel': 'Pinned',
   'bot.hiddenLabel': 'Hidden',
@@ -1302,8 +1322,12 @@ const en = {
   'bot.chat.working': 'Working…',
   'bot.chat.placeholder': 'Send a message to this bot',
   'bot.chat.placeholderUnbound': 'This bot has no persistent session yet',
+  'bot.chat.attach': 'Attach',
+  'bot.chat.removeAttachment': 'Remove attachment',
   'bot.chat.send': 'Send',
   'bot.chat.stop': 'Stop',
+  'bot.ask.cardTitle': 'Question · {count}',
+  'bot.ask.recommended': 'Recommended',
   'sidebar.section.newSection': 'New section',
   'sidebar.section.addToSection': 'Add to section',
   'sidebar.section.moveToSection': 'Move to section',

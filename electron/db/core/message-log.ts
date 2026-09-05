@@ -38,8 +38,11 @@ import {
   type RebaseEvent,
   type RolloutEvent,
   type RolloutProcessEvent,
+  type RotationEvent,
 } from './rollout-events';
 import { repairInterruptedToolCalls } from './message-repair';
+import { BOT_SESSION_ID_PREFIX, parseAgentIdFromBotSession } from '../../wake/bot-session-id';
+import { getBotSessionLogPath } from '../../config/agent-paths';
 
 const logger = getLogger();
 
@@ -49,7 +52,7 @@ const logger = getLogger();
 export type RolloutLine = MessageEntry | CompactionEntry | RolloutEvent;
 
 export type MessageEventKind = AgentMessage['role'];
-export type EventKind = MessageEventKind | 'compaction' | 'reasoning' | 'tool_call' | 'turn_started' | 'system_context' | 'rebase';
+export type EventKind = MessageEventKind | 'compaction' | 'reasoning' | 'tool_call' | 'turn_started' | 'system_context' | 'rebase' | 'rotation';
 
 export interface NewEvent {
   /** Deterministic id (= entry.id). Never randomUUID(). */
@@ -117,6 +120,60 @@ export class MessageLog {
         `);
       },
     },
+    {
+      // Plan 493 (Phase A): bots own sessions by `agent_id`. Pre-existing
+      // rows get NULL (human sessions — never owned by a bot); new bot
+      // sessions stamp `agent_id = '<botId>'` on first append. Idempotent —
+      // uses PRAGMA table_info like the legacy chat_sessions column bump
+      // migration, so re-running this migration on an already-bumped DB is
+      // a no-op. Runs after SessionStore.create_sessions (id=2) so the
+      // sessions table exists; skips branches when a table is absent (test
+      // fixtures may create the tables AFTER running MessageLog.migrations).
+      id: 13,
+      name: 'add_agent_id_to_sessions',
+      up: (db) => {
+        // message_index.generation — Phase B aligns message_index.generation
+        // with chat_sessions.generation. Detect via sqlite_master and bail
+        // gracefully when the table is not present yet.
+        const indexExists = db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='message_index'",
+          )
+          .get();
+        if (indexExists) {
+          const indexInfo = db
+            .prepare('PRAGMA table_info(message_index)')
+            .all() as Array<{ name: string }>;
+          const indexCols = new Set(indexInfo.map((c) => c.name));
+          if (!indexCols.has('generation')) {
+            db.exec(
+              'ALTER TABLE message_index ADD COLUMN generation INTEGER NOT NULL DEFAULT 0',
+            );
+          }
+        }
+
+        // sessions.agent_id — same idempotent guard. SessionStore.migrations
+        // owns the table in production; if it has not been created yet, the
+        // second pass (after SessionStore.migrations) will run this branch.
+        const sessionsExists = db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'",
+          )
+          .get();
+        if (!sessionsExists) return;
+
+        const tableInfo = db
+          .prepare('PRAGMA table_info(sessions)')
+          .all() as Array<{ name: string }>;
+        const cols = new Set(tableInfo.map((c) => c.name));
+        if (!cols.has('agent_id')) {
+          db.exec('ALTER TABLE sessions ADD COLUMN agent_id TEXT DEFAULT NULL');
+        }
+        db.exec(
+          'CREATE INDEX IF NOT EXISTS idx_sessions_agent_id ON sessions(agent_id) WHERE agent_id IS NOT NULL',
+        );
+      },
+    },
   ];
 
   private readonly db: SqliteDatabase;
@@ -176,12 +233,20 @@ export class MessageLog {
       const payloads = freshEvents.map((ev) => ev.payload);
       const lineMeta = this.appendLines(absolutePath, payloads);
 
-      // Single transaction: INSERT OR IGNORE index rows.
+      // Single transaction: INSERT OR IGNORE index rows. Plan 493 (Phase B):
+      // also stamp `generation` — for bot sessions this is the rotation
+      // counter (0, 1, 2, …); for shared-tree sessions it stays 0. New rows
+      // inherit the current generation from the most recent rotation event
+      // for the session, or 0 if no rotation has happened. The COALESCE in
+      // the seq allocator still produces monotonic seqs across rotations
+      // because rotation creates a fresh active file but reuses the same
+      // message_index row space.
+      const generation = this.getCurrentGeneration(sessionId);
       const insert = this.db.prepare(`
         INSERT OR IGNORE INTO message_index
-          (id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len)
+          (id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len, generation)
         VALUES
-          (?, ?, COALESCE((SELECT MAX(seq) FROM message_index WHERE session_id = ?), 0) + 1, ?, ?, ?, ?, ?)
+          (?, ?, COALESCE((SELECT MAX(seq) FROM message_index WHERE session_id = ?), 0) + 1, ?, ?, ?, ?, ?, ?)
       `);
       const txn = this.db.transaction(() => {
         for (let i = 0; i < freshEvents.length; i++) {
@@ -196,6 +261,7 @@ export class MessageLog {
             ev.createdAt,
             meta.fileOffset,
             meta.byteLen,
+            generation,
           );
         }
       });
@@ -203,10 +269,33 @@ export class MessageLog {
     }
   }
 
-  /** List all events for a session, ordered by seq. Payload is raw JSON. */
-  listBySession(sessionId: string): StoredEvent[] {
+  /**
+   * List all events for a session, ordered by seq. Payload is raw JSON.
+   *
+   * Plan 489 P0.3: `options.source` narrows the projection to message
+   * entries whose `entry.source` is in the allowlist (e.g.
+   * `['send_message', 'user']` for the bot-direct transcript). Message
+   * entries WITHOUT a source (legacy rows) are dropped when a filter is
+   * active — pre-P0.1 data stays bot-direct hidden. Non-message entries
+   * (compaction / rebase / rotation audit rows) bypass the filter.
+   */
+  listBySession(
+    sessionId: string,
+    options?: { source?: readonly string[] },
+  ): StoredEvent[] {
     let relativePath = this.getRolloutPath(sessionId);
     if (!relativePath) return [];
+
+    // Plan 493 (Phase B): bot sessions have a multi-file layout
+    // (`active.jsonl` + `archive-<g>.jsonl`). Each `file_offset/byte_len`
+    // pair in message_index references a SPECIFIC file, so we must look
+    // up the file by generation, not by the single rollout_path column.
+    // Non-bot sessions keep the legacy single-file resolution below.
+    const botAgentId = parseAgentIdFromBotSession(sessionId);
+    if (botAgentId) {
+      return this.listBySessionMultiFile(sessionId, botAgentId, options);
+    }
+
     let absolutePath = this.resolvePathOnDisk(relativePath);
 
     // The DB-recorded rollout file may be missing on disk for two reasons we
@@ -298,7 +387,7 @@ export class MessageLog {
 
     const projected = repairInterruptedToolCalls(applyRebases(timelineRows));
 
-    return projected.map((projectedRow) => {
+    return this.applySourceFilter(projected, options?.source).map((projectedRow) => {
       const entry = projectedRow.entry;
       const meta = metaById.get(entry.id ?? '');
       return {
@@ -314,6 +403,184 @@ export class MessageLog {
   }
 
   /**
+   * Plan 493 (Phase B): list events for a bot session that may span
+   * multiple rollout files (`active.jsonl` + `archive-<g>.jsonl`).
+   *
+   * `message_index` rows carry `file_offset/byte_len` into the SPECIFIC
+   * file that owns the line. We resolve the right file per row from the
+   * row's `generation` column: generation `g` lives in
+   * `archive-<g>.jsonl` if it exists, else `active.jsonl` (which is the
+   * current generation, no rotation yet, or the file we just opened).
+   *
+   * Output ordering is `(generation ASC, seq ASC)` — generations never
+   * overlap and seq is monotonic within a generation. After reading we
+   * pipeline through `applyRebases` so a compaction rebase emitted
+   * mid-rotation still folds superseded messages.
+   */
+  private listBySessionMultiFile(
+    sessionId: string,
+    agentId: string,
+    options?: { source?: readonly string[] },
+  ): StoredEvent[] {
+    const botSessionsDir = path.join(
+      this.rootDir,
+      'agents',
+      agentId,
+      'sessions',
+    );
+    const activeAbs = path.join(botSessionsDir, 'active.jsonl');
+    const activeExists = fs.existsSync(activeAbs);
+
+    const rows = this.db
+      .prepare(
+        'SELECT id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len, generation FROM message_index WHERE session_id = ? ORDER BY generation ASC, seq ASC',
+      )
+      .all(sessionId) as Array<{
+        id: string;
+        session_id: string;
+        seq: number;
+        turn_id: string | null;
+        kind: string;
+        created_at: number;
+        file_offset: number;
+        byte_len: number;
+        generation: number;
+      }>;
+
+    if (rows.length === 0) return [];
+
+    // Resolve each row's source file based on its generation. Rotated
+    // generations live in `archive-<g>.jsonl`; the highest generation
+    // (the open active one) lives in `active.jsonl`. We assume that for
+    // every generation `g` that has at least one row, the corresponding
+    // file exists. Missing files are logged at WARN and the rows are
+    // skipped — the projection layer never DELETEs so a future
+    // operator-level recovery (recreate the file from backup) restores
+    // visibility without a re-index.
+    const fileByGeneration = new Map<number, string>();
+    const resolveFile = (generation: number): string | null => {
+      const cached = fileByGeneration.get(generation);
+      if (cached) return cached;
+      // Active file holds the highest generation that has rows; lower
+      // generations must live in archive-<g>.jsonl.
+      const archiveAbs = path.join(
+        botSessionsDir,
+        `archive-${generation}.jsonl`,
+      );
+      if (fs.existsSync(archiveAbs)) {
+        fileByGeneration.set(generation, archiveAbs);
+        return archiveAbs;
+      }
+      // The active file is a fallback for the highest generation only —
+      // it is the file that the highest-generation rows were just written
+      // to. Older generations that lack an archive would indicate a
+      // half-completed rotation; we surface them as warnings below.
+      if (activeExists) {
+        const maxGen = rows.reduce(
+          (max, r) => (r.generation > max ? r.generation : max),
+          0,
+        );
+        if (generation === maxGen) {
+          fileByGeneration.set(generation, activeAbs);
+          return activeAbs;
+        }
+      }
+      return null;
+    };
+
+    const timelineRows: TimelineEntryRow[] = [];
+    const metaById = new Map<string, { turnId: string | null; createdAt: number }>();
+    for (const row of rows) {
+      const filePath = resolveFile(row.generation);
+      if (!filePath) {
+        logger.warn(
+          'Bot session archive missing; row skipped',
+          { sessionId, generation: row.generation, seq: row.seq },
+          LogComponent.DB,
+        );
+        continue;
+      }
+      let entry: RolloutLine;
+      try {
+        entry = JSON.parse(
+          this.readRange(filePath, row.file_offset, row.byte_len),
+        ) as RolloutLine;
+      } catch {
+        logger.warn(
+          'Unparseable rollout line skipped in projection',
+          { sessionId, generation: row.generation, seq: row.seq },
+          LogComponent.DB,
+        );
+        continue;
+      }
+      metaById.set(entry.id ?? '', {
+        turnId: row.turn_id,
+        createdAt: row.created_at,
+      });
+      timelineRows.push({ entry, seq: row.seq });
+    }
+
+    // Rotation events are internal audit markers — they live in
+    // message_index for crash-recovery purposes but they are not
+    // user-visible. Strip them BEFORE applyRebases so a reader does
+    // not see a rotation marker between two adjacent turns. Rebase
+    // events are KEPT so applyRebases can supersede earlier messages
+    // and emit the compacted survivors; applyRebases itself drops the
+    // rebase row from the projection (it emits its newMessages instead).
+    const filtered = timelineRows.filter(
+      (r) => r.entry.type !== 'rotation',
+    );
+
+    const projected = repairInterruptedToolCalls(applyRebases(filtered));
+
+    // applyRebases preserves the rebase rows in its output so audit
+    // consumers (timeline()) can still see them. listBySession is the
+    // LLM-visible projection — rebase rows are not user-visible, so
+    // strip them at the boundary. We do this AFTER repair because the
+    // repair pass needs to see the rebase event's `turnId` indirectly
+    // via the timeline order; in practice repair only touches
+    // message-kind rows, so stripping rebase here is safe.
+    return this.applySourceFilter(projected, options?.source)
+      .filter((r) => r.entry.type !== 'rebase')
+      .map((projectedRow) => {
+        const entry = projectedRow.entry;
+        const meta = metaById.get(entry.id ?? '');
+        return {
+          id: entry.id ?? `seq:${projectedRow.seq}`,
+          sessionId,
+          seq: projectedRow.seq,
+          turnId: meta?.turnId ?? null,
+          kind: deriveKind(entry),
+          payload: JSON.stringify(entry),
+          createdAt: rolloutLineTimestamp(entry) || meta?.createdAt || 0,
+        };
+      });
+  }
+
+  /**
+   * Plan 489 P0.3: bot-direct source allowlist filter. Drops message-kind
+   * entries whose `entry.source` is missing or outside the allowlist;
+   * compaction / rebase / rotation audit entries bypass (they carry no
+   * user-visible bubble and the IPC adapter maps them to null / drops them).
+   * Undefined allowlist → no filtering (all rows).
+   */
+  private applySourceFilter(
+    rows: TimelineEntryRow[],
+    allowlist?: readonly string[],
+  ): TimelineEntryRow[] {
+    if (!allowlist) return rows;
+    const allowed = new Set(allowlist);
+    return rows.filter((r) => {
+      if (r.entry.type !== 'message') return true;
+      // Source lives on the MessageEntry (IPC write path) or on the
+      // AgentMessage itself (worker journal path / direct fixtures).
+      const entry = r.entry as { source?: string; message?: { source?: string } };
+      const source = entry.source ?? entry.message?.source;
+      return source !== undefined && allowed.has(source);
+    });
+  }
+
+  /**
    * Project the full timeline for a session by reading the entire rollout file.
    * Seq is assigned as the 1-based line number. Assumes `scan()` has reconciled
    * any orphan lines (no duplicates / partial tail).
@@ -324,8 +591,19 @@ export class MessageLog {
    * legacy `project()` consumers (subagent message rebuild, etc.) expect
    * the raw projection — apply rebases at the boundary where the consumer
    * is known to be rebased-aware.
+   *
+   * Plan 493 (Phase B): for bot sessions, reads all archive segments
+   * (`archive-<g>.jsonl` for g in 0..maxGen) followed by `active.jsonl`,
+   * concatenating their contents in generation order. The returned seq
+   * values remain monotonic across files so applyRebases still produces
+   * a sensible projection.
    */
   project(sessionId: string): TimelineEntryRow[] {
+    const botAgentId = parseAgentIdFromBotSession(sessionId);
+    if (botAgentId) {
+      return this.projectBotMultiFile(botAgentId);
+    }
+
     const relativePath = this.getRolloutPath(sessionId);
     if (!relativePath) return [];
     const absolutePath = this.resolvePathOnDisk(relativePath);
@@ -339,6 +617,53 @@ export class MessageLog {
         result.push({ entry, seq: i + 1 });
       } catch {
         // Skip unparseable lines (crash-damaged tail).
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Plan 493 (Phase B): bot session projection that reads every archive
+   * segment + the active file. Seq is assigned as a monotonic counter
+   * across all files in generation order; applyRebases operates on this
+   * flat seq axis.
+   */
+  private projectBotMultiFile(agentId: string): TimelineEntryRow[] {
+    const botSessionsDir = path.join(
+      this.rootDir,
+      'agents',
+      agentId,
+      'sessions',
+    );
+    if (!fs.existsSync(botSessionsDir)) return [];
+
+    // Enumerate archive files in generation order (0, 1, 2, ...). We
+    // probe a bounded range (0..50) — beyond 50 rotations a single bot
+    // session is a pathological case worth operator intervention. Real
+    // production bots rotate every few hundred turns; 50 archives is a
+    // generous safety margin.
+    const files: string[] = [];
+    for (let g = 0; g <= 50; g++) {
+      const archiveAbs = path.join(botSessionsDir, `archive-${g}.jsonl`);
+      if (fs.existsSync(archiveAbs)) files.push(archiveAbs);
+      else break; // archives are dense starting at 0 — first gap means end of history
+    }
+    const activeAbs = path.join(botSessionsDir, 'active.jsonl');
+    if (fs.existsSync(activeAbs)) files.push(activeAbs);
+
+    const result: TimelineEntryRow[] = [];
+    let seq = 0;
+    for (const file of files) {
+      const lines = this.readAll(file);
+      for (const line of lines) {
+        if (line.length === 0) continue;
+        try {
+          const entry = JSON.parse(line) as RolloutLine;
+          seq += 1;
+          result.push({ entry, seq });
+        } catch {
+          // Skip unparseable lines (crash-damaged tail).
+        }
       }
     }
     return result;
@@ -575,6 +900,149 @@ export class MessageLog {
   }
 
   /**
+   * Plan 493 (Phase B): rotate a bot session's active JSONL into an
+   * archive segment and start a fresh active JSONL with an incremented
+   * `generation` value. Idempotent on crash: a partial rotation
+   * (archive renamed, new active not yet created) is detected by the
+   * `active.jsonl exists?` check in step 1.
+   *
+   * Sequence:
+   *   1. Resolve the current `active.jsonl` path. If it does not exist,
+   *      this is a no-op (the bot session has never written a message).
+   *   2. Compute `prevGeneration = getCurrentGeneration(sessionId)`.
+   *   3. Move `active.jsonl` to `archive-<prevGeneration>.jsonl`. A
+   *      collision at the destination means an earlier crash recovery
+   *      left an orphan archive; the move fails loudly rather than
+   *      silently overwriting.
+   *   4. Write a `rotation` event as the FIRST line of the new
+   *      `active.jsonl`. The event is the audit marker that bridges
+   *      the archive and the new active segment.
+   *   5. Bump `chat_sessions.generation` so external readers see the
+   *      new value.
+   *
+   * Returns the new generation number. Returns 0 when there was
+   * nothing to rotate (no active file yet) or for non-bot sessions
+   * (rotation is a bot-only mechanism — human sessions keep their
+   * dated file tree).
+   */
+  rotateArchive(
+    sessionId: string,
+    reason: 'compaction' | 'manual' = 'compaction',
+    createdAt: number = Date.now(),
+  ): number {
+    const agentId = parseAgentIdFromBotSession(sessionId);
+    if (!agentId) {
+      // Non-bot sessions do not rotate. Shared-tree path produces a
+      // new file every day already; rotating would create dangling
+      // archive segments with no clear consumption path.
+      return 0;
+    }
+
+    // Step 1: ensure the bot's sessions dir + active.jsonl exist.
+    const activePath = getBotSessionLogPath(agentId, this.rootDir);
+    if (!fs.existsSync(activePath)) {
+      return 0;
+    }
+
+    // Step 2: compute prev generation.
+    const prevGeneration = this.getCurrentGeneration(sessionId);
+
+    // Step 3: rename active -> archive-<prevGeneration>.
+    const archiveRel = path.join(
+      'agents',
+      agentId,
+      'sessions',
+      `archive-${prevGeneration}.jsonl`,
+    );
+    const archiveAbs = path.join(this.rootDir, archiveRel);
+    if (fs.existsSync(archiveAbs)) {
+      throw new Error(
+        `rotateArchive: archive file already exists at ${archiveAbs} — refuse to overwrite. ` +
+          `sessionId=${sessionId} prevGeneration=${prevGeneration}`,
+      );
+    }
+    fs.mkdirSync(path.dirname(archiveAbs), { recursive: true });
+    fs.renameSync(activePath, archiveAbs);
+
+    // Step 4: invalidate the path cache. The next getOrCreateRolloutPath
+    // call will re-resolve and ensure the new active.jsonl exists.
+    this.pathCache.delete(sessionId);
+
+    // Step 5: write the rotation event into the new active file.
+    const newGeneration = prevGeneration + 1;
+
+    // Capture the highest seq BEFORE the rotation insert so the audit
+    // event can record how many rows the archive contained.
+    const maxBefore = this.db
+      .prepare(
+        'SELECT COALESCE(MAX(seq), 0) AS m FROM message_index WHERE session_id = ?',
+      )
+      .get(sessionId) as { m: number };
+
+    const event: RotationEvent = {
+      type: 'rotation',
+      id: `rotation:${sessionId}:${newGeneration}:${createdAt}`,
+      archiveFile: archiveRel,
+      newGeneration,
+      reason,
+      seqBeforeRotation: maxBefore.m,
+      createdAt,
+    };
+
+    // Ensure the new active file exists (resolvePath + ensureFile), then
+    // append the rotation event line. The append goes through the file
+    // helper directly (NOT appendBatch) so we can stamp `generation`
+    // explicitly with the new value — appendBatch would call
+    // getCurrentGeneration which is still prevGeneration at this point.
+    const txn = this.db.transaction(() => {
+      this.getOrCreateRolloutPath(sessionId, createdAt);
+      const activePathNow = this.resolvePathOnDisk(
+        this.getRolloutPath(sessionId)!,
+      );
+      const lineMeta = this.appendLines(activePathNow, [event]);
+
+      // Insert the message_index row for the rotation event with the
+      // new generation stamped explicitly.
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO message_index
+             (id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len, generation)
+           VALUES
+             (?, ?, COALESCE((SELECT MAX(seq) FROM message_index WHERE session_id = ?), 0) + 1, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          event.id,
+          sessionId,
+          sessionId,
+          null,
+          'rotation',
+          createdAt,
+          lineMeta[0].fileOffset,
+          lineMeta[0].byteLen,
+          newGeneration,
+        );
+
+      // Bump chat_sessions.generation so external readers see the new
+      // value. The column was added in schema.ts ensureChatSessionsColumns;
+      // old DBs may not have it yet, so wrap in try/catch.
+      try {
+        this.db
+          .prepare('UPDATE chat_sessions SET generation = ? WHERE id = ?')
+          .run(newGeneration, sessionId);
+      } catch (err) {
+        logger.warn(
+          'rotateArchive: chat_sessions.generation bump failed (column missing?)',
+          { sessionId, newGeneration, error: err instanceof Error ? err.message : String(err) },
+          LogComponent.DB,
+        );
+      }
+    });
+    txn();
+
+    return newGeneration;
+  }
+
+  /**
    * Rewrite a session's rollout file and index with a new event sequence.
    * @deprecated plan 441 — production paths use `appendRebase` instead. This
    * method is kept for test rollback paths and emergency recovery. Will be
@@ -668,12 +1136,32 @@ export class MessageLog {
 
   /**
    * Resolve the rollout file relative path for a session.
-   * Layout: `sessions/<YYYY>/<MM>/<DD>/rollout-<stamp>-<sessionId>.jsonl`,
+   *
+   * Plan 493 (Phase A): bot persistent sessions (`bot:<agentId>`) write
+   * to `<agentDir>/sessions/active.jsonl` so a bot's history travels with
+   * the bot directory and is purged atomically when the bot is deleted
+   * (490+493). Non-bot (human/cron) sessions keep the canonical dated
+   * layout `sessions/<YYYY>/<MM>/<DD>/rollout-<stamp>-<sessionId>.jsonl`,
    * where `<stamp>` is the session's `createdAt` as an ISO timestamp with
    * `:` and `.` replaced by `-` (e.g. `2026-08-06T12-00-00-000Z`). Uses UTC
    * for consistent date bucketing across timezones.
+   *
+   * Bot sessions are NOT date-bucketed — a single bot directory owns one
+   * active JSONL, rotated on compaction (Phase B). The `createdAt`
+   * parameter is preserved in the signature so callers don't branch, but
+   * it is unused for the bot path.
    */
   private resolvePath(sessionId: string, createdAt: number): string {
+    if (sessionId.startsWith(BOT_SESSION_ID_PREFIX)) {
+      const agentId = parseAgentIdFromBotSession(sessionId);
+      if (agentId) {
+        // Return the ABSOLUTE path here — bot sessions live under the
+        // agent dir and skip the `rootDir` join inside resolvePathOnDisk.
+        // resolvePathOnDisk distinguishes bot-vs-shared by inspecting for
+        // an absolute path.
+        return getBotSessionLogPath(agentId, this.rootDir);
+      }
+    }
     const date = new Date(createdAt);
     const yyyy = String(date.getUTCFullYear()).padStart(4, '0');
     const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
@@ -748,8 +1236,15 @@ export class MessageLog {
    * migrated to the canonical location. `rootDir` is the Codex-style
    * `~/.duya` (see `resolveRolloutRoot`), so the canonical tree is
    * `~/.duya/sessions/<YYYY>/<MM>/<DD>/...`.
+   *
+   * Plan 493 (Phase A): when `relativePath` is absolute (the bot path
+   * returned by `resolvePath` for `bot:<agentId>` sessions) it is returned
+   * verbatim — those files live under the agent directory, not under
+   * `<rootDir>/sessions/`. The legacy-doubled-tree fallback only applies to
+   * relative paths.
    */
   private resolvePathOnDisk(relativePath: string): string {
+    if (path.isAbsolute(relativePath)) return relativePath;
     const canonical = path.join(this.rootDir, relativePath);
     if (fs.existsSync(canonical)) return canonical;
     const legacy = path.join(this.rootDir, 'sessions', relativePath);
@@ -784,6 +1279,31 @@ export class MessageLog {
     );
   }
 
+  /**
+   * Current generation for a session (Plan 493, Phase B). Returns the
+   * `generation` value to stamp on new message_index rows. Defaults to 0
+   * for non-bot sessions or before any rotation has happened for a bot
+   * session.
+   *
+   * Reads from the message_index row with the highest seq — the rotation
+   * event itself uses kind='rotation' and is written to message_index just
+   * like any other row (only the read path skips it). After a rotation the
+   * highest-seq row has the new generation; before any rotation the row
+   * carries generation=0 (the migration id=13 default).
+   */
+  private getCurrentGeneration(sessionId: string): number {
+    try {
+      const row = this.db
+        .prepare(
+          'SELECT generation FROM message_index WHERE session_id = ? ORDER BY seq DESC LIMIT 1',
+        )
+        .get(sessionId) as { generation: number } | undefined;
+      return row?.generation ?? 0;
+    } catch {
+      return 0;
+    }
+  }
+
   /** Get the cached rollout path, or resolve + write back + cache on first access. */
   private getOrCreateRolloutPath(sessionId: string, createdAt: number): string {
     const desired = this.resolvePath(sessionId, createdAt);
@@ -795,14 +1315,35 @@ export class MessageLog {
     }
     if (existing) return existing;
 
-    const absolutePath = path.join(this.rootDir, desired);
+    const absolutePath = this.resolvePathOnDisk(desired);
     this.ensureFile(absolutePath);
 
     // Write back to sessions table (only if not already set — races are safe).
+    // Plan 493 (Phase A): bot sessions also stamp `agent_type = 'bot'` and
+    // `agent_id = '<botId>'` on first append so a soft-deleted bot can find
+    // every session that belonged to it without an extra join table. The
+    // columns are added in migration id=13 (493 schema bump); old rows that
+    // pre-date the column get `agent_id = NULL` which `agent_type = 'bot'`
+    // queries filter out (only bot sessions are owned by a bot).
+    const botAgentId = parseAgentIdFromBotSession(sessionId);
+    const botSet = botAgentId
+      ? ', agent_type = COALESCE(agent_type, ?), agent_id = COALESCE(agent_id, ?)'
+      : '';
     try {
-      this.db
-        .prepare('UPDATE sessions SET rollout_path = ? WHERE id = ? AND rollout_path IS NULL')
-        .run(desired, sessionId);
+      const stmt = botAgentId
+        ? this.db.prepare(
+            'UPDATE sessions SET rollout_path = ?' +
+              botSet +
+              ' WHERE id = ? AND rollout_path IS NULL',
+          )
+        : this.db.prepare(
+            'UPDATE sessions SET rollout_path = ? WHERE id = ? AND rollout_path IS NULL',
+          );
+      if (botAgentId) {
+        stmt.run(desired, 'bot', botAgentId, sessionId);
+      } else {
+        stmt.run(desired, sessionId);
+      }
     } catch (err) {
       // Don't swallow silently in production — see S3 in the compaction bug
       // investigation. The catch was hiding real UPDATE failures (disk

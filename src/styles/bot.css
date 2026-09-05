@@ -1,0 +1,1981 @@
+/*
+ * bot.css — Bot Direct Chat UI (plan 483 P2.1 + P2.1b style alignment).
+ * Telegram-style 1:1 transcript; fills the same main column the
+ * workspace ChatView occupies; full-pane transcript with 22px row
+ * gaps; bubbles hug content.
+ *
+ * P2.1c (2026-09-05): bubble geometry aligned with rakazo's Shell
+ * transcript (apps/web/src/pages/Shell.tsx): 20px radius, 15.5px type
+ * at 1.45–1.5 leading, 12x18px padding, content-hugging width capped
+ * at 70% (user) / 74% (assistant) of the pane — no px cap.
+ *
+ * P2.1b (2026-09-04): visual alignment with the user-provided grok
+ * screenshot + grok-bot 0.18 recovered workspace CSS:
+ *   - bubbles: symmetric 18px radius (no tail corners), assistant =
+ *     elevated surface, user = high-contrast ivory (dark) / ink (light)
+ *   - composer: grok prompt-shell structure (field on top, actions row
+ *     below, circular contrast send button)
+ *   - header: centered identity, no divider
+ *   - all hardcoded lime colors replaced with theme tokens
+ *
+ * Bot-scoped custom properties (defined here, consumed below). Both
+ * themes must keep readable contrast for bubbles, composer and menus.
+ */
+
+.bot-chat-view {
+  /* High-contrast pair: user bubble + send button share it. Dark theme
+     inverts to ivory-on-ink; light theme to ink-on-ivory. */
+  --bot-contrast-bg: #242424;
+  --bot-contrast-fg: #fafafa;
+  /* Assistant bubble: subtle elevation over --main-bg. */
+  --bot-bubble-assistant-bg: var(--surface-solid);
+  --bot-bubble-assistant-fg: var(--text);
+  /* Composer shell + hover surfaces. */
+  --bot-shell-bg: color-mix(in srgb, var(--text) 4%, var(--main-bg));
+  --bot-shell-border: var(--border);
+  /* Elevated popover / menu surface (hover toolbar, context menu). */
+  --bot-popover-bg: var(--surface-solid);
+  --bot-popover-border: var(--border);
+  --bot-popover-fg: var(--text);
+  --bot-popover-fg-muted: var(--muted);
+  --bot-popover-hover-bg: var(--surface-hover);
+  /* Code blocks inside bubbles. */
+  --bot-code-bg: color-mix(in srgb, var(--text) 6%, var(--main-bg));
+  --bot-code-border: var(--border-weak);
+  --bot-code-fg: var(--text);
+
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  background: var(--main-bg);
+  color: var(--text);
+}
+
+:root[data-theme='dark'] .bot-chat-view {
+  --bot-contrast-bg: #ecece8;
+  --bot-contrast-fg: #242424;
+}
+
+.bot-chat-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-shrink: 0;
+  /* Fixed 48px bar — exact same metrics as the session ChatView header
+     (workspace.css .chat-header): 48px, 22px side padding, --border
+     divider. Fixed height (not min-height) so no child (avatar, working
+     pill) can ever inflate the bar. */
+  height: 48px;
+  padding: 0 22px;
+  border-bottom: 1px solid var(--border);
+  background: var(--main-bg);
+}
+
+.bot-chat-header__avatar {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.bot-chat-header__identity {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+  /* rakazo header pattern: the whole identity block is one button.
+     Negative margins keep the 22px header padding visually intact. */
+  padding: 4px 8px;
+  margin: 0 -8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.bot-chat-header__identity:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.bot-chat-header__identity:disabled {
+  cursor: default;
+}
+
+.bot-chat-header__identity:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.bot-chat-header__name {
+  /* Match the session header title scale (13px / 600). */
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.bot-chat-header__subtitle {
+  /* Match the session header project label (12px / --text-muted). */
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Working indicator — in-flow pill pinned right via margin-left:auto.
+   Reads as part of the header row (breathing dot + label) instead of
+   bare text absolutely floating over the pane edge. */
+.bot-chat-header__working {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.bot-chat-header__working::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: bot-working-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes bot-working-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Scroll wrapper — hosts the transcript plus the bottom fade overlay and
+   the jump-to-latest button (their containing block). Takes the flex slot
+   the transcript used to hold directly under .bot-chat-view. */
+.bot-chat-transcript-wrap {
+  position: relative;
+  /* Contain every z-index inside (rows, fade, jump button) so they
+     cannot leak into sibling panels, and so the fade/button can sit
+     above the hover-lifted row (z-index: 20) within this context. */
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.bot-chat-transcript {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  /* Reserve the scrollbar gutter even when content fits: without it,
+     the classic Windows scrollbar appears/disappears as messages
+     stream in and the content box width jumps (~17px), which visibly
+     shifts every right-aligned user bubble against the pane edge. */
+  scrollbar-gutter: stable;
+  padding: 1.25rem 1.25rem 0;
+}
+
+.bot-chat-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  height: 100%;
+  min-height: 240px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.bot-chat-empty__name {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.bot-chat-empty__desc {
+  font-size: 0.85rem;
+  color: var(--muted);
+  max-width: 420px;
+}
+
+/* Transcript rows follow the full pane width (screenshot standard
+   2026-09-05: bubbles stretch with the pane). The width cap lives on
+   the OUTERMOST box only — the .bot-chat-row__stack wrapper when
+   present, the bare bubble otherwise — never on both: nested
+   percentage caps multiply (74% × 74% ≈ 55%), which wrapped bubbles
+   prematurely and kept long content from filling the pane. */
+.bot-chat-transcript > * {
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
+}
+
+/* Date separator (grok sand-transcript-time-separator). */
+.bot-chat-date-separator {
+  margin-top: 22px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 0.7rem;
+  user-select: none;
+}
+
+.bot-chat-row {
+  display: flex;
+  align-items: flex-end;
+  /* rakazo pt-9 (2026-09-05): the 36px top padding IS the inter-message
+     rhythm AND the landing lane for the previous row's hanging hover
+     overlay — the overlay never covers the previous row. */
+  position: relative;
+  padding-top: 36px;
+}
+
+/* rakazo hover:z-20 — the hovered row lifts above its neighbours. */
+.bot-chat-row:hover {
+  z-index: 20;
+}
+
+/* Hover bridge — extends the row's hover zone 30px below its box so the
+   hanging overlay stays reachable: the row's border box ends at the
+   bubble's bottom edge, so without this the pointer leaves the row the
+   moment it moves toward the bar and the bar (pointer-events: none once
+   unhovered) fades before it can be clicked. Paints above the next row
+   only while this row is hovered (z-index: 20 above); pointer-events
+   gated to hover so the idle bridge never intercepts clicks or hover. */
+.bot-chat-row::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 30px;
+  pointer-events: none;
+}
+
+.bot-chat-row:hover::after {
+  pointer-events: auto;
+}
+
+.bot-chat-row--user {
+  justify-content: flex-end;
+}
+
+.bot-chat-row--assistant {
+  justify-content: flex-start;
+}
+
+/* Bubble — symmetric 20px radius (P2.1c, rakazo-aligned; was 18px grok).
+   The bubble NEVER re-caps width in percentages — the role cap lives on
+   the outermost box (.bot-chat-row__stack when present, the bare bubble
+   otherwise); max-width: 100% here only lets it fill its wrapper. */
+.bot-chat-bubble {
+  /* Content-hugging comes from width: fit-content on the wrapper; the
+     role cap sits one level up (see .bot-chat-row__stack). */
+  max-width: 100%;
+  padding: 12px 18px;
+  border-radius: 20px;
+  font-size: 15.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  box-sizing: border-box;
+}
+
+.bot-chat-row--assistant .bot-chat-bubble {
+  background: var(--bot-bubble-assistant-bg);
+  color: var(--bot-bubble-assistant-fg);
+  /* Subtle light outline per screenshot standard (assistant bubble
+     carries a faint border over the dark surface). */
+  border: 1px solid var(--border);
+}
+
+.bot-chat-row--user .bot-chat-bubble {
+  background: var(--bot-contrast-bg);
+  color: var(--bot-contrast-fg);
+  max-width: 70%;
+  line-height: 1.45;
+}
+
+/* Slim status rows for tool_use / thinking / hook messages. Kept on the
+   same rakazo 36px top rhythm as bubble rows. */
+.bot-chat-status-row {
+  display: flex;
+  justify-content: flex-start;
+  padding-top: 36px;
+}
+
+.bot-chat-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--border-weak);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+/* Typing indicator — assistant-bubble styled pill (grok
+   sand-message-typing: elevated fill + matching outline, small dots). */
+.bot-chat-typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-top: 22px;
+  padding: 12px 18px;
+  border-radius: 20px;
+  background: var(--bot-bubble-assistant-bg);
+  border: 1px solid var(--border);
+  width: fit-content;
+}
+
+/* The transcript column rule (`> * { width: 100% }`) stretches direct
+   children; keep the typing pill compact. */
+.bot-chat-transcript > .bot-chat-typing {
+  width: fit-content;
+}
+
+.bot-chat-typing span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: bot-typing-bounce 1.2s ease-in-out infinite;
+}
+
+.bot-chat-typing span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.bot-chat-typing span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes bot-typing-bounce {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+/* Composer — rakazo-style single-row pill (P2.1c): attach circles left of
+   the field, model selector + send right of it, attachment chips wrapped
+   onto their own row inside the pill when present. Achieved purely in CSS
+   (flex order + display: contents) — the JSX DOM is untouched. */
+.bot-chat-composer {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+  padding: 0.5rem 1.25rem 0.9rem;
+  background: var(--main-bg);
+}
+
+.bot-chat-composer__shell {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px 8px 12px;
+  background: var(--bot-shell-bg);
+  border: 1px solid var(--bot-shell-border);
+  border-radius: 999px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  /* Anchors the reused SlashCommandPopover (absolute bottom-full) and the
+     ModelProviderSelector flyout to the composer shell. */
+  position: relative;
+}
+
+/* Actions row: the wrapper is layout-transparent (display: contents) so its
+   two groups become direct flex items of the pill row — rakazo single-row
+   order: attach circles (left) → field (center) → model + send (right).
+   Every component inside stays in the DOM unchanged. */
+.bot-chat-composer__actions {
+  display: contents;
+}
+
+/* Left group (plus button + quick attach) / right group (model selector +
+   send). The right group stays on one row when narrow by letting the model
+   selector shrink; the selector's own trigger truncates long model names. */
+.bot-chat-composer__actions-left,
+.bot-chat-composer__actions-right {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+  overflow: visible;
+}
+
+.bot-chat-composer__actions-left {
+  order: 1;
+}
+
+.bot-chat-composer__actions-right {
+  order: 3;
+  flex-shrink: 1;
+  justify-content: flex-end;
+}
+
+/* Attachment chips row — own line at the top of the pill when present. */
+.bot-chat-composer__chips {
+  order: 0;
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0 4px;
+}
+
+.bot-chat-composer__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  max-width: 200px;
+  padding: 0.15rem 0.45rem;
+  border-radius: 8px;
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 0.72rem;
+}
+
+.bot-chat-composer__chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bot-chat-composer__chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 50%;
+}
+
+.bot-chat-composer__chip-remove:hover {
+  color: var(--text);
+}
+
+.bot-chat-composer__hint {
+  font-size: 0.72rem;
+  color: var(--muted);
+  user-select: none;
+  padding-left: 4px;
+}
+
+/* Wrapper for the mirror + textarea — flex-grows between the button
+   groups; the wrapper only anchors the invisible mirror. */
+.bot-chat-composer__input-area {
+  order: 2;
+  flex: 1 1 auto;
+  position: relative;
+  min-width: 0;
+}
+
+/* Invisible mirror div — same font/padding as textarea, measures scrollHeight
+   for the auto-resize trick. */
+.bot-chat-composer__mirror {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  pointer-events: none;
+  visibility: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 15.5px;
+  line-height: 24px;
+  padding: 2px 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.bot-chat-composer__input {
+  box-sizing: border-box;
+  width: 100%;
+  height: auto;
+  min-height: 28px;
+  max-height: 120px;
+  resize: none;
+  overflow: hidden;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 15.5px;
+  line-height: 24px;
+  padding: 2px 0;
+}
+
+.bot-chat-composer__input::placeholder {
+  color: var(--muted);
+}
+
+/* Send / stop — circular contrast button (was grok sand-prompt-send),
+   right of the field. */
+.bot-chat-composer__send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--bot-contrast-bg);
+  color: var(--bot-contrast-fg);
+  cursor: pointer;
+  transition: background-color 0.15s ease, opacity 0.15s ease;
+}
+
+.bot-chat-composer__send:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.bot-chat-composer__send:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.bot-chat-composer__send--stop {
+  background: var(--error);
+  color: #ffffff;
+}
+
+.bot-chat-composer__send--stop:hover {
+  filter: brightness(1.08);
+}
+
+.sub-agent-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0.4rem 0.5rem;
+  margin: 0.25rem 0.5rem;
+  border-radius: 0.35rem;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  align-self: flex-start;
+}
+
+.sub-agent-back-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* ============================================================================
+   Bot bubble markdown host — assistant text renders through the shared
+   MarkdownRenderer (the session-chat-view renderer); these rules only
+   adapt its output to the bubble chrome.
+   ========================================================================== */
+
+/* The bubble itself is pre-wrap for plain user text; markdown output must
+   wrap normally or the source newlines between block elements render as
+   extra blank lines. */
+.bot-bubble-markdown {
+  white-space: normal;
+}
+
+/* Trim the outer margins so the bubble padding stays symmetric. */
+.bot-bubble-markdown > :first-child {
+  margin-top: 0;
+}
+
+.bot-bubble-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+/* ============================================================================
+   BotCodeBlock — code block with syntax highlighting + copy button
+   ========================================================================== */
+
+.bot-code-block {
+  background: var(--bot-code-bg);
+  border: 1px solid var(--bot-code-border);
+  border-radius: 10px;
+  overflow: hidden;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.bot-code-block__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: var(--bot-popover-bg);
+  border-bottom: 1px solid var(--bot-code-border);
+}
+
+.bot-code-block__lang {
+  font-size: 0.72rem;
+  color: var(--bot-popover-fg-muted);
+  text-transform: lowercase;
+}
+
+.bot-code-block__copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 0.7rem;
+  color: var(--bot-popover-fg-muted);
+  background: transparent;
+  border: 1px solid var(--bot-popover-border);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.12s, background-color 0.12s, border-color 0.12s;
+}
+
+.bot-code-block__copy:hover {
+  color: var(--bot-popover-fg);
+  background: var(--bot-popover-hover-bg);
+  border-color: var(--accent);
+}
+
+.bot-code-block__scroll {
+  overflow-x: auto;
+  padding: 10px 14px;
+}
+
+.bot-code-block__pre {
+  margin: 0;
+  color: var(--bot-code-fg);
+  white-space: pre;
+}
+
+.bot-code-block__pre code {
+  font-family: inherit;
+}
+
+/* Syntax token colors */
+.tok-keyword  { color: #c9c3ee; }
+.tok-string    { color: #b8d994; }
+.tok-comment   { color: #6a7a62; font-style: italic; }
+.tok-number    { color: #e8b98a; }
+.tok-line      { display: block; }
+
+/* ============================================================================
+   BotMessageHoverBar — rakazo-aligned hover overlay
+   (MessageHoverMetadata + MessageHoverActions, apps/web Shell.tsx):
+   time label + rounded neutral pill, pinned to the row's reserved 36px
+   top lane. The whole ROW is the hover target (group/message parity).
+   ========================================================================== */
+
+/* Bubble + corner badge column; the flex item that owns the role cap.
+   position: relative anchors the thumbs-up badge to the bubble's corner.
+   Assistant cap 74% (rakazo): wide enough for long content, never
+   edge-to-edge — fit-content keeps short messages hugging. */
+.bot-chat-row__stack {
+  display: block;
+  position: relative;
+  width: fit-content;
+  max-width: 74%;
+}
+
+/* Role caps: user 70% / assistant 74% (rakazo). The cap lives ONLY
+   here for stack-wrapped rows — never duplicated on the bubble
+   itself (nested percentage caps multiply). */
+.bot-chat-row--user .bot-chat-row__stack {
+  max-width: 70%;
+}
+
+/* A wrapped bubble fills its wrapper — the role percentage must not
+   re-resolve against it (70% of 70% = 49%). Source order after the
+   bare-bubble role fallback wins the specificity tie, while unwrapped
+   rows keep their cap. */
+.bot-chat-row__stack .bot-chat-bubble {
+  max-width: 100%;
+}
+
+/* Hover overlay — hangs below the row's bottom corner, landing in the
+   next row's 36px padding lane (2026-09-05: bottom-left for assistant
+   rows; user rows mirror to bottom-right, tracking the bubble side).
+   rakazo z-10 + opacity/pointer-events group-hover parity. */
+.bot-message-hover-metadata {
+  position: absolute;
+  left: 0;
+  bottom: -30px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 6px; /* rakazo gap-1.5 */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+/* User rows mirror the overlay to the bubble's (right) side. */
+.bot-chat-row--user .bot-message-hover-metadata {
+  left: auto;
+  right: 0;
+}
+
+/* rakazo group-hover/message — row hover (or keyboard focus inside the
+   overlay) fades the bar in and enables its pointer events. */
+.bot-chat-row:hover .bot-message-hover-metadata,
+.bot-message-hover-metadata:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* rakazo text-muted-foreground time label. */
+.bot-message-hover-metadata__time {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+/* Action pill — bare icon row, no chrome (2026-09-05: drop the rakazo
+   bg-accent pill background and shadow-sm; the buttons stand alone and
+   the color shift on hover is the only feedback). */
+.bot-message-hover-pill {
+  display: flex;
+  align-items: center;
+  gap: 2px; /* rakazo gap-0.5 */
+}
+
+/* rakazo `h-7 w-7 rounded-full text-foreground/75` buttons — hover only
+   lifts the color to full foreground (the rakazo pill has no darker
+   hover surface; the color shift IS the feedback). */
+.bot-message-hover-pill__btn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--bot-popover-fg-muted);
+  cursor: pointer;
+}
+
+.bot-message-hover-pill__btn:hover,
+.bot-message-hover-pill__btn:focus-visible {
+  color: var(--bot-popover-fg);
+}
+
+/* Active reaction — rakazo text-warning. */
+.bot-message-hover-pill__btn--active {
+  color: var(--warning);
+}
+
+/* Persisted thumbs-up badge pinned to the bubble's bottom corner
+   (2026-09-05: bottom-right on assistant rows, mirrored to bottom-left
+   on user rows; the stack is fit-content, so the inset tracks the
+   bubble's edge). Fixed-size circle with an OPAQUE surface (--surface
+   is translucent and would show the content underneath). */
+.bot-chat-thumbs-badge {
+  position: absolute;
+  right: 8px;
+  bottom: -12px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface-solid);
+  cursor: pointer;
+}
+
+/* User rows mirror the badge to the bubble's bottom-left corner. */
+.bot-chat-row--user .bot-chat-thumbs-badge {
+  right: auto;
+  left: 8px;
+}
+
+/* ============================================================================
+   BotBubbleRow — message row: avatar + bubble + hover actions
+   ========================================================================== */
+
+/* ============================================================================
+   BotToolCallRow — expandable tool call accordion
+   Inspired by grok-bot TranscriptToolCallRow / sand-outline-item
+   ========================================================================== */
+
+.bot-tool-row {
+  margin-top: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-weak);
+  background: var(--surface);
+  overflow: hidden;
+  font-size: 0.8rem;
+}
+
+.bot-tool-row__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  transition: background-color 0.1s;
+}
+
+.bot-tool-row__toggle:hover {
+  background: var(--surface-hover);
+}
+
+.bot-tool-row__icon {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.bot-tool-icon--pending,
+.bot-tool-icon--running {
+  color: var(--muted);
+  animation: bot-icon-spin 1s linear infinite;
+}
+
+.bot-tool-icon--done    { color: var(--accent); }
+.bot-tool-icon--failed  { color: var(--error); }
+.bot-tool-icon--aborted { color: var(--muted); }
+
+@keyframes bot-icon-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.bot-tool-row__name {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 0.78rem;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.bot-tool-row__preview {
+  flex: 1;
+  color: var(--muted);
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.bot-tool-row__chevron {
+  flex-shrink: 0;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.bot-tool-row__chevron--open {
+  transform: rotate(90deg);
+}
+
+/* Expanded detail section */
+.bot-tool-row__detail {
+  padding: 8px 12px 12px;
+  border-top: 1px solid var(--border-weak);
+}
+
+.bot-tool-row__detail-section + .bot-tool-row__detail-section {
+  margin-top: 10px;
+}
+
+.bot-tool-row__detail-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.bot-tool-row__detail-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.bot-tool-row__copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px;
+  font-size: 0.68rem;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border-weak);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+
+.bot-tool-row__copy-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.bot-tool-row__result-badge {
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.bot-tool-row__result-badge--done {
+  background: var(--bot-popover-hover-bg);
+  color: var(--accent);
+}
+.bot-tool-row__result-badge--failed { background: var(--bot-popover-hover-bg); color: var(--error); }
+
+.bot-tool-row__detail-pre {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--bot-code-bg);
+  border-radius: 6px;
+  color: var(--bot-code-fg);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+/* ============================================================================
+   BotThinkingRow — expandable AI thinking / reasoning accordion
+   Inspired by grok-bot TranscriptThinkingRow / sand-outline-item
+   ========================================================================== */
+
+.bot-thinking-row {
+  margin-top: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-weak);
+  background: var(--surface);
+  overflow: hidden;
+  font-size: 0.8rem;
+}
+
+.bot-thinking-row__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  transition: background-color 0.1s;
+}
+
+.bot-thinking-row__toggle:hover {
+  background: var(--surface-hover);
+}
+
+.bot-thinking-row__icon {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.bot-thinking-row__label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.bot-thinking-row__preview {
+  flex: 1;
+  color: var(--muted);
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.bot-thinking-row__chevron {
+  flex-shrink: 0;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.bot-thinking-row__chevron--open {
+  transform: rotate(90deg);
+}
+
+.bot-thinking-row__detail {
+  padding: 8px 12px 12px;
+  border-top: 1px solid var(--border-weak);
+}
+
+.bot-thinking-row__detail-pre {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--bot-code-bg);
+  border-radius: 6px;
+  color: var(--bot-code-fg);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-y: auto;
+  max-height: 300px;
+}
+
+/* Plan 491 P0.1: message delivery phase states */
+.bot-chat-bubble--sending {
+  opacity: 0.7;
+}
+
+.bot-chat-bubble--failed {
+  border-left: 3px solid var(--color-error, #ef4444);
+}
+
+.bot-chat-bubble--queued {
+  opacity: 0.8;
+  font-style: italic;
+}
+
+.bot-chat-bubble__sending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  color: var(--text-muted, #9ca3af);
+}
+
+.bot-chat-bubble__spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-muted, #e5e7eb);
+  border-top-color: var(--accent, #3b82f6);
+  border-radius: 50%;
+  animation: bot-chat-bubble__spin 0.8s linear infinite;
+}
+
+@keyframes bot-chat-bubble__spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.bot-chat-bubble__sending-text {
+  font-size: 12px;
+}
+
+/* Plan 491 P0.3: BotTypingIndicator different session phase states */
+.bot-chat-typing--thinking,
+.bot-chat-typing--tool,
+.bot-chat-typing--waiting,
+.bot-chat-typing--error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+}
+
+.bot-chat-typing--thinking {
+  background: var(--bg-surface-elevated, #f3f4f6);
+  color: var(--text-muted, #6b7280);
+}
+
+.bot-chat-typing--tool {
+  background: var(--accent-bg, rgba(59, 130, 246, 0.1));
+  color: var(--accent, #3b82f6);
+}
+
+.bot-chat-typing--waiting {
+  background: var(--bg-warning, rgba(245, 158, 11, 0.1));
+  color: var(--warning, #f59e0b);
+}
+
+.bot-chat-typing--error {
+  background: var(--bg-error, rgba(239, 68, 68, 0.1));
+  color: var(--error, #ef4444);
+}
+
+.bot-chat-typing__text {
+  font-size: 12px;
+}
+
+.bot-chat-typing__thinking-dots {
+  animation: bot-chat-typing__pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes bot-chat-typing__pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+/* Bottom fade (2026-09-05): dissolves the scroll boundary while scrolled
+   up instead of hard-cutting the next message at the edge. Sibling of the
+   scroll container — pinned to the visible bottom edge, never scrolls,
+   never intercepts pointers. */
+.bot-chat-scroll-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 56px;
+  /* Above every row incl. the hover-lifted one (.bot-chat-row:hover
+     z-index: 20) — the boundary dissolve must also veil a hovered
+     bubble at the edge, not get punched through by it. */
+  z-index: 30;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--main-bg));
+  animation: bot-chat-scroll-fade__in 0.2s ease-out;
+}
+
+@keyframes bot-chat-scroll-fade__in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Jump-to-latest — plain circular button with a chevron-down (2026-09-05
+   restyle: capsule + label replaced by a 36px circle on the popover
+   surface, floating just above the bottom fade). */
+.bot-chat-jump-to-latest {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  background: var(--bot-popover-bg);
+  color: var(--bot-popover-fg-muted);
+  border: 1px solid var(--bot-popover-border);
+  border-radius: 50%;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  /* Above the fade (z-30) so the gradient never washes the button out. */
+  z-index: 31;
+  animation: bot-chat-jump-to-latest__fadeIn 0.2s ease-out;
+}
+
+.bot-chat-jump-to-latest:hover,
+.bot-chat-jump-to-latest:focus-visible {
+  background: var(--bot-popover-hover-bg);
+  color: var(--bot-popover-fg);
+}
+
+@keyframes bot-chat-jump-to-latest__fadeIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+/* Plan 491 P0.4: overflow-anchor for scroll anchoring */
+.bot-chat-transcript {
+  overflow-anchor: auto;
+}
+
+/* Plan 491 P2.2: BotNoticeCard — inline notice for failure/compact/mode switch */
+.bot-notice-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  margin: 8px 0;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.4;
+  max-width: 100%;
+}
+
+.bot-notice-card--error {
+  background: var(--bg-error, rgba(239, 68, 68, 0.08));
+  color: var(--error, #ef4444);
+  border-left: 3px solid var(--error, #ef4444);
+}
+
+.bot-notice-card--compact {
+  background: var(--bg-surface-elevated, #f3f4f6);
+  color: var(--text-muted, #6b7280);
+  border-left: 3px solid var(--border, #e5e7eb);
+}
+
+.bot-notice-card--mode-switch {
+  background: var(--accent-bg, rgba(59, 130, 246, 0.08));
+  color: var(--accent, #3b82f6);
+  border-left: 3px solid var(--accent, #3b82f6);
+}
+
+.bot-notice-card__icon {
+  font-size: 16px;
+  flex-shrink: 0;
+  line-height: 1.4;
+}
+
+.bot-notice-card__content {
+  flex: 1;
+  min-width: 0;
+}
+
+.bot-notice-card__message {
+  font-weight: 500;
+}
+
+.bot-notice-card__details {
+  font-size: 12px;
+  opacity: 0.8;
+  margin-top: 2px;
+}
+
+.bot-notice-card__time {
+  font-size: 11px;
+  opacity: 0.6;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.bot-notice-card__action {
+  padding: 4px 10px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+  opacity: 0.8;
+  transition: opacity 0.15s;
+}
+
+.bot-notice-card__action:hover {
+  opacity: 1;
+}
+
+/* Plan 491 P2.3: session phase indicator for bot messages */
+.bot-chat-bubble--phase-thinking {
+  border-left: 3px solid var(--thinking, #8b5cf6);
+}
+
+.bot-chat-bubble--phase-tool {
+  border-left: 3px solid var(--accent, #3b82f6);
+}
+
+.bot-chat-bubble--phase-streaming {
+  border-left: 3px solid var(--streaming, #22c55e);
+}
+
+.bot-chat-bubble--phase-waiting_approval {
+  border-left: 3px solid var(--warning, #f59e0b);
+}
+
+.bot-chat-bubble--phase-error {
+  border-left: 3px solid var(--error, #ef4444);
+}
+
+/* Phase badge in bubble corner */
+.bot-chat-bubble--phase-thinking::before {
+  content: '...';
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  font-size: 10px;
+  color: var(--thinking, #8b5cf6);
+}
+
+/* Plan 491 P2.4: UnreadDivider — marks boundary between read and unread messages */
+.unread-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  margin: 8px 0;
+}
+
+.unread-divider__line {
+  flex: 1;
+  height: 1px;
+  background: var(--border, #e5e7eb);
+}
+
+.unread-divider__content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.unread-divider__text {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent, #3b82f6);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.unread-divider__action {
+  font-size: 11px;
+  padding: 3px 8px;
+  border: 1px solid var(--accent, #3b82f6);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent, #3b82f6);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.unread-divider__action:hover {
+  background: var(--accent, #3b82f6);
+  color: white;
+}
+
+/* ─── Plan 489 P2.2: BotSendCard — minimal cards for SendMessage kinds ───
+   Cards render INSIDE .bot-chat-bubble--assistant, so they inherit the
+   assistant bubble surface/border; only inner elements are styled here. */
+
+.bot-send-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Attachment chip — clickable file/link pill. */
+.bot-send-card__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bot-bubble-assistant-fg) 8%, transparent);
+  color: var(--bot-bubble-assistant-fg);
+  text-decoration: none;
+  font-size: 0.82rem;
+  border: 1px solid color-mix(in srgb, var(--bot-bubble-assistant-fg) 15%, transparent);
+}
+
+.bot-send-card__chip:hover {
+  border-color: var(--accent);
+}
+
+.bot-send-card__chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bot-send-card__chip-icon {
+  flex-shrink: 0;
+}
+
+/* Widget — prompt + option pills (click sends the option as a user turn). */
+.bot-send-card__widget {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bot-send-card__widget-prompt {
+  font-weight: 600;
+}
+
+.bot-send-card__widget-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.bot-send-card__option {
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--bot-bubble-assistant-fg) 25%, transparent);
+  background: transparent;
+  color: var(--bot-bubble-assistant-fg);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.bot-send-card__option:hover {
+  background: color-mix(in srgb, var(--bot-bubble-assistant-fg) 12%, transparent);
+  border-color: var(--accent);
+}
+
+/* Cursor-agent run badge. */
+.bot-send-card__badge-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bot-send-card__badge {
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+}
+
+.bot-send-card__bcid {
+  font-size: 0.72rem;
+  opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Secret-request descriptor — minimal: no input flow yet (P2.2 follow-up). */
+.bot-send-card__secret {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px dashed color-mix(in srgb, var(--bot-bubble-assistant-fg) 30%, transparent);
+}
+
+.bot-send-card__secret-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bot-send-card__secret-path {
+  font-size: 0.75rem;
+  opacity: 0.7;
+  font-family: monospace;
+}
+
+.bot-send-card__secret-hint {
+  font-size: 0.72rem;
+  opacity: 0.55;
+}
+
+/* Image strip for the text kind with re-attached images. */
+.bot-send-card__images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.bot-send-card__image {
+  max-width: min(280px, 100%);
+  max-height: 220px;
+  border-radius: 10px;
+  object-fit: cover;
+  border: 1px solid color-mix(in srgb, var(--bot-bubble-assistant-fg) 15%, transparent);
+}
+
+/* ─── Plan 494: BotAskCard / BotPermissionCard — in-chat question and
+   approval cards (rakazo AskCard/ChoiceCard visual language: 20px card,
+   letter-badge option rows, header pill, answered state). Cards live in
+   assistant-side rows like SendCardRow, so they carry their own surface
+   instead of the bubble chrome. */
+
+.bot-ask-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(420px, 88%);
+  padding: 14px 16px;
+  box-sizing: border-box;
+  border-radius: 20px;
+  background: var(--bot-bubble-assistant-bg);
+  color: var(--bot-bubble-assistant-fg);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+/* Mode pill — accent-tinted "Question · N" tag at the card top. */
+.bot-ask-card__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.bot-ask-card__pill--answered {
+  background: color-mix(in srgb, #22c55e 15%, transparent);
+  color: #22c55e;
+}
+
+/* One question block: header row + option list. */
+.bot-ask-card__question {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bot-ask-card__question-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bot-ask-card__tag {
+  width: fit-content;
+  padding: 1px 8px;
+  border-radius: 6px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--bot-bubble-assistant-fg) 8%, transparent);
+  color: color-mix(in srgb, var(--bot-bubble-assistant-fg) 75%, transparent);
+}
+
+.bot-ask-card__question-text {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+/* Option rows — full-width buttons with a letter badge. */
+.bot-ask-card__options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bot-ask-card__option-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bot-ask-card__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--bot-bubble-assistant-fg) 14%, transparent);
+  background: transparent;
+  color: inherit;
+  font-size: 0.84rem;
+  line-height: 1.35;
+  cursor: pointer;
+  text-align: start;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.bot-ask-card__option:hover {
+  background: color-mix(in srgb, var(--bot-bubble-assistant-fg) 7%, transparent);
+  border-color: color-mix(in srgb, var(--bot-bubble-assistant-fg) 24%, transparent);
+}
+
+.bot-ask-card__option.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.bot-ask-card__option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Letter badge — small rounded square (rakazo ChoiceCard). */
+.bot-ask-card__letter {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--bot-bubble-assistant-fg) 10%, transparent);
+  color: color-mix(in srgb, var(--bot-bubble-assistant-fg) 80%, transparent);
+}
+
+.bot-ask-card__option.selected .bot-ask-card__letter {
+  background: var(--accent);
+  color: #fff;
+}
+
+.bot-ask-card__option-label {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.bot-ask-card__recommended {
+  margin-inline-start: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+}
+
+/* Selection mark — radio/check dot on the row end. */
+.bot-ask-card__mark {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--bot-bubble-assistant-fg) 30%, transparent);
+  color: transparent;
+}
+
+.bot-ask-card__mark.selected {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+/* Info button + expandable description. */
+.bot-ask-card__info {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: color-mix(in srgb, var(--bot-bubble-assistant-fg) 55%, transparent);
+  cursor: pointer;
+}
+
+.bot-ask-card__info:hover {
+  color: var(--accent);
+}
+
+.bot-ask-card__description {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px dashed color-mix(in srgb, var(--bot-bubble-assistant-fg) 18%, transparent);
+  font-size: 0.76rem;
+  line-height: 1.45;
+  opacity: 0.85;
+}
+
+/* Free-text feedback row (textarea variant of an option row). */
+.bot-ask-card__feedback {
+  border-style: dashed;
+  align-items: flex-start;
+}
+
+.bot-ask-card__feedback-input {
+  flex: 1;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.84rem;
+  resize: vertical;
+  min-height: 2.4em;
+}
+
+.bot-ask-card__feedback-input:focus {
+  outline: none;
+}
+
+/* Footer actions — dismiss left, submit right. */
+.bot-ask-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.bot-ask-card__dismiss,
+.bot-ask-card__submit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--bot-bubble-assistant-fg) 18%, transparent);
+  background: transparent;
+  color: var(--bot-bubble-assistant-fg);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.bot-ask-card__dismiss:hover {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.bot-ask-card__submit {
+  border-color: transparent;
+  background: var(--accent);
+  color: #fff;
+}
+
+.bot-ask-card__submit:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.bot-ask-card__submit:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Answered state — muted static card (plan 494 in-memory trace). */
+.bot-ask-card--answered {
+  width: min(380px, 84%);
+  box-shadow: none;
+  opacity: 0.9;
+}
+
+.bot-ask-card__answered-answer {
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, #22c55e 10%, transparent);
+  border: 1px solid color-mix(in srgb, #22c55e 25%, transparent);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+/* ─── Plan 494: BotPermissionCard — compact generic tool approval. ─── */
+
+.bot-permission-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(420px, 88%);
+  padding: 12px 16px;
+  box-sizing: border-box;
+  border-radius: 20px;
+  background: var(--bot-bubble-assistant-bg);
+  color: var(--bot-bubble-assistant-fg);
+  border: 1px solid var(--border);
+}
+
+.bot-permission-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.bot-permission-card__tool {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.bot-permission-card__pill {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--warning, #f59e0b) 15%, transparent);
+  color: var(--warning, #f59e0b);
+}
+
+.bot-permission-card__summary {
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bot-bubble-assistant-fg) 6%, transparent);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  opacity: 0.8;
+}
+
+.bot-permission-card__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.bot-permission-card__btn {
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--bot-bubble-assistant-fg) 20%, transparent);
+  background: transparent;
+  color: var(--bot-bubble-assistant-fg);
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.bot-permission-card__btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.bot-permission-card__btn--danger:hover {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.bot-permission-card__btn--primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+}
+
+.bot-permission-card__btn--primary:hover {
+  color: #fff;
+  filter: brightness(1.08);
+}
+
+/* ---------------------------------------------------------------------------
+ * Bot settings panel (P2.1c) — right-panel page opened from the bot chat
+ * header. The PanelHeader owns the tab chrome; this only pads the form.
+ * ------------------------------------------------------------------------- */
+.bot-settings-panel {
+  height: 100%;
+  overflow-y: auto;
+  padding: 1rem 1.25rem 1.25rem;
+  background: var(--main-bg);
+}
+
+.bot-settings-panel--notice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---------------------------------------------------------------------------
+ * Plan 477 P4.4 — bot→bot DM marker cards in the bot-direct transcript.
+ * Compact collaboration chip: arrow + peer name + intent tag; supports both
+ * light and dark themes via the shared CSS variables.
+ * ------------------------------------------------------------------------- */
+.bot-chat-dm-marker {
+  max-width: 78%;
+  margin: 0.35rem auto;
+  padding: 0.4rem 0.65rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.bot-chat-dm-marker--sent {
+  border-style: dashed;
+  opacity: 0.92;
+}
+
+.bot-chat-dm-marker--received {
+  border-left: 3px solid var(--accent);
+}
+
+.bot-chat-dm-marker__head {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.2rem;
+}
+
+.bot-chat-dm-marker__arrow {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.bot-chat-dm-marker__peer {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.bot-chat-dm-marker__intent {
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.bot-chat-dm-marker__priority {
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.68rem;
+}
+
+.bot-chat-dm-marker__body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}

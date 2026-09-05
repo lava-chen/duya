@@ -40,13 +40,27 @@ import { NewThreadDropdown } from "./sidebar/NewThreadDropdown";
 import { ProjectGroupItem } from "./sidebar/ProjectGroupItem";
 import { ThreadListItem } from "./sidebar/ThreadListItem";
 import { SidebarSectionItem, type SectionKind } from "./sidebar/SidebarSectionItem";
-import { bucketThreadsByKind, SYSTEM_SECTIONS } from "./sidebar/section-system";
+import {
+  bucketThreadsByKind,
+  SYSTEM_SECTIONS,
+  SESSION_KIND_PREFIXES,
+} from "./sidebar/section-system";
 import { useSidebarSectionsStore } from "@/stores/sidebar-sections-store";
 import { useTranslation } from "@/hooks/useTranslation";
 import { Button } from "@/components/ui/Button";
 import { useSettings } from "@/hooks/useSettings";
 import { useOptionalPanel } from "@/hooks/usePanel";
 import { CreateProjectDialog } from "@/components/ui/CreateProjectDialog";
+import { useBotContacts } from "./sidebar/use-bot-contacts";
+import { BotContactListItem } from "./sidebar/BotContactListItem";
+import {
+  resolveBotOpenThreadId,
+  deriveBotPlaceholderThreadId,
+  type BotContact,
+} from "./sidebar/bot-contacts";
+import { CreateBotDialog } from "./CreateBotDialog";
+import { EditBotDialog } from "./EditBotDialog";
+import { deleteConfigAgent } from "@/lib/agent-profile-ipc";
 
 type ThemeMode = "light" | "dark";
 
@@ -120,6 +134,20 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     // Plan 471 v7: replaced the old `isNameProjectDialogOpen` + name-only
     // dialog with `CreateProjectDialog` (project name + optional folder).
     const [isCreateProjectDialogOpen, setIsCreateProjectDialogOpen] = useState(false);
+    // Plan 483: grok-style bot management sidebar
+    const [isCreateBotDialogOpen, setIsCreateBotDialogOpen] = useState(false);
+    const [editBotContact, setEditBotContact] = useState<BotContact | null>(null);
+    const [showHiddenBots, setShowHiddenBots] = useState(false);
+    const {
+      pinned: pinnedBots,
+      unpinned: unpinnedBots,
+      hidden: hiddenBots,
+      allContacts: botContacts,
+      reload: reloadBots,
+      togglePin,
+      hide,
+      unhide,
+    } = useBotContacts();
     // Plan 471 v8: in "在一个列表中" (singleList) mode the flat session
     // list reveals incrementally (20 at a time — user preference, bigger
     // batch than the 5-per-project-group because it spans ALL projects
@@ -312,6 +340,60 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         setActiveThread(thread.id);
       }
     }, [createThread, setCurrentView, setActiveThread]);
+
+    // Plan 483 P1.2: opening a bot contact activates the bot's bound
+    // persistent session (falling back to the `bot:<agentId>` placeholder
+    // while no binding exists yet). The chat surface resolves its mode by
+    // the thread id prefix.
+    const handleOpenBot = useCallback(
+      (contact: BotContact) => {
+        const threadId = resolveBotOpenThreadId(contact, threads);
+        if (!threadId) return;
+        setActiveThread(threadId);
+        setCurrentView("chat");
+      },
+      [threads, setActiveThread, setCurrentView],
+    );
+
+    // Plan 491 P2.5: open a bot by agent id without needing the current
+    // BotContact snapshot. Used by the post-create fast-path so we do
+    // not have to wait for `botContacts` to be re-fetched into the
+    // parent's render closure before navigating. Reads `threads` and
+    // the contacts store via `getState()` to bypass stale closures.
+    const handleOpenBotById = useCallback(
+      (agentId: string) => {
+        const liveThreads = useConversationStore.getState().threads;
+        const prefix = `${SESSION_KIND_PREFIXES.bot}${agentId}:`;
+        const bound = liveThreads.find((t) => t.id.startsWith(prefix));
+        const threadId = bound?.id ?? deriveBotPlaceholderThreadId(agentId);
+        setActiveThread(threadId);
+        setCurrentView("chat");
+      },
+      [setActiveThread, setCurrentView],
+    );
+
+    // Plan 483 P2: open the edit dialog for a bot. The dialog writes the
+    // runtime identity (profile.json); on save we reload the contacts.
+    const handleEditBot = useCallback((contact: BotContact) => {
+      setEditBotContact(contact);
+    }, []);
+
+    // Plan 483 P2: delete a bot from config (bound sessions and profile
+    // history are left intact so a same-id re-create reconnects them).
+    const handleDeleteBot = useCallback(
+      async (contact: BotContact) => {
+        if (!window.confirm(t("bot.actions.deleteConfirm", { name: contact.name }))) {
+          return;
+        }
+        try {
+          await deleteConfigAgent(contact.agentId);
+          await reloadBots();
+        } catch (err) {
+          console.error("[AppSidebar] Failed to delete bot:", err);
+        }
+      },
+      [reloadBots, t],
+    );
 
     /**
      * Plan 471 v7: single submit path for the create-project dialog.
@@ -680,6 +762,68 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
               the header. The "项目" section also gets trailing action
               buttons (collapse-all / sort / new project) via ProjectActions.
           */}
+          {/* Plan 483: bot sidebar - grok-style bot management */}
+          {botContacts.length > 0 ? (
+            <SidebarSectionItem
+              id="__system__:bots"
+              name={t("sidebar.section.bots")}
+              kind="bot"
+              collapsed={collapsedSystemSections.has("__system__:bots")}
+              onToggleCollapsed={() => toggleSystemSectionCollapsed("__system__:bots")}
+              tone="bold"
+              trailing={
+                <BotSectionActions
+                  hiddenCount={hiddenBots.length}
+                  showHidden={showHiddenBots}
+                  onToggleHidden={() => setShowHiddenBots((prev) => !prev)}
+                  onCreateBot={() => setIsCreateBotDialogOpen(true)}
+                />
+              }
+            >
+              {pinnedBots.length > 0 && (
+                <div className="sidebar-section-group">
+                  <div className="sidebar-section-group-header">{t("sidebar.section.pinned")}</div>
+                  {pinnedBots.map((contact) => (
+                    <BotContactListItem
+                      key={contact.agentId}
+                      contact={contact}
+                      isActive={resolveBotOpenThreadId(contact, threads) === activeThreadId}
+                      onOpen={handleOpenBot}
+                      onTogglePin={(id, pinned) => togglePin(id, pinned)}
+                      onEdit={handleEditBot}
+                      onDelete={handleDeleteBot}
+                      onHide={(c) => hide(c.agentId)}
+                    />
+                  ))}
+                </div>
+              )}
+              {unpinnedBots.length > 0 && (
+                <div className="sidebar-section-group">
+                  {unpinnedBots.map((contact) => (
+                    <BotContactListItem
+                      key={contact.agentId}
+                      contact={contact}
+                      isActive={resolveBotOpenThreadId(contact, threads) === activeThreadId}
+                      onOpen={handleOpenBot}
+                      onTogglePin={(id, pinned) => togglePin(id, pinned)}
+                      onEdit={handleEditBot}
+                      onDelete={handleDeleteBot}
+                      onHide={(c) => hide(c.agentId)}
+                    />
+                  ))}
+                </div>
+              )}
+            </SidebarSectionItem>
+          ) : (
+            <button
+              className="sidebar-section-create"
+              onClick={() => setIsCreateBotDialogOpen(true)}
+            >
+              <PlusIcon size={14} />
+              <span>{t("bot.create.title")}</span>
+            </button>
+          )}
+
           {sidebarStructure.map((section) => {
             const isUser = section.kind === 'user';
             // Plan 471 v5: items are already discriminated at the data
@@ -901,6 +1045,32 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           onCancel={() => setIsCreateProjectDialogOpen(false)}
           onConfirm={handleCreateProjectConfirm}
         />
+        <CreateBotDialog
+          isOpen={isCreateBotDialogOpen}
+          onCancel={() => setIsCreateBotDialogOpen(false)}
+          existingIds={botContacts.map((c) => c.agentId)}
+          onCreated={(agentId) => {
+            // Plan 491 P2.5: navigate to the new bot's empty chat shell
+            // immediately after creation. The await on reloadBots
+            // refreshes the contact list for subsequent renders (it is
+            // NOT a gate for navigation — handleOpenBotById reads the
+            // latest threads from the store directly), but we navigate
+            // first so the user does not see a flash of "still on the
+            // previous view" while the network round-trip completes.
+            handleOpenBotById(agentId);
+            setIsCreateBotDialogOpen(false);
+            void reloadBots();
+          }}
+        />
+        <EditBotDialog
+          isOpen={editBotContact !== null}
+          contact={editBotContact}
+          onCancel={() => setEditBotContact(null)}
+          onSaved={(agentId) => {
+            setEditBotContact(null);
+            void reloadBots();
+          }}
+        />
       </aside>
     );
   }
@@ -1031,6 +1201,64 @@ function ProjectSectionActions({
             >
               {projectSortBy === 'manual' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />}
               <span>{t('project.manualSort')}</span>
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Plan 483: bot section trailing actions (grok-style)
+function BotSectionActions({
+  hiddenCount,
+  showHidden,
+  onToggleHidden,
+  onCreateBot,
+}: {
+  hiddenCount: number;
+  showHidden: boolean;
+  onToggleHidden: () => void;
+  onCreateBot: () => void;
+}) {
+  const { t } = useTranslation();
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const menuPosition = { top: '100%', right: 0 };
+
+  return (
+    <div className="relative flex items-center gap-1" ref={menuRef}>
+      <button
+        type="button"
+        className="sidebar-section-action"
+        onClick={onCreateBot}
+        title={t('bot.create.title')}
+        aria-label={t('bot.create.title')}
+      >
+        <PlusIcon size={14} />
+      </button>
+      <button
+        type="button"
+        className="sidebar-section-action"
+        onClick={() => setIsMenuOpen((prev) => !prev)}
+        title={t('common.more')}
+        aria-expanded={isMenuOpen}
+      >
+        <DotsThreeIcon size={16} />
+      </button>
+      {isMenuOpen && (
+        <div className="sidebar-project-menu" style={menuPosition}>
+          <div className="sidebar-project-menu-section">
+            <button
+              type="button"
+              className="sidebar-project-menu-item"
+              onClick={() => {
+                setIsMenuOpen(false);
+                onToggleHidden();
+              }}
+            >
+              {showHidden ? t('bot.actions.hideFromList') : t('bot.actions.showHidden')}
             </button>
           </div>
         </div>

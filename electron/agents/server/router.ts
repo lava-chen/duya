@@ -12,6 +12,7 @@ import { Logger } from './logger';
 import { toLLMProvider, type ApiProvider } from '../../config/provider-types';
 import { calculateMaxConcurrentWorkers, getWorkerMemoryThreshold } from './worker-limits';
 import { acquireChatLock, releaseChatLock } from './chat-runtime-lock';
+import { parseAgentIdFromBotSession } from '../../wake/bot-session-id';
 
 /**
  * Detect whether the project has a `.duya/references/` directory.
@@ -420,6 +421,38 @@ async function handlePostChat(
       // `wakeless-*` session *and* pollute the user's session list with
       // throwaway rows. So we skip the check for wakeless turns.
       const isWakeless = parsed.options?.wakeless === true;
+
+      // Plan 477 P3.1 / 491 P1.2 — bot-direct send pipeline. A bot's
+      // persistent session (`bot:<agentId>`, 2-part id per the landed 477
+      // binding convention) has NO row until its first wake / chat: the
+      // renderer opens a placeholder thread and never runs createThread, so
+      // the legacy session:get check 404s here. Lazily materialize the row
+      // (same canonical shape as agent-dm-dispatcher's wake-created rows,
+      // idempotent get-or-create) and force the profile to resolve from the
+      // bot binding — the chat path must not depend on request-carried
+      // agentProfileId for bot sessions (plan 477 audit point 3).
+      const botAgentId = parseAgentIdFromBotSession(sessionId);
+      if (botAgentId && !isWakeless) {
+        const ensured = (await deps.dbRequest('session:ensureBot', {
+          sessionId,
+        })) as { ok?: boolean; reason?: string } | undefined;
+        if (!ensured?.ok) {
+          httpLogger.warn('Chat rejected: bot session could not be ensured', {
+            sessionId,
+            reason: ensured?.reason,
+          });
+          revertStreamingLock();
+          sendJson(res, 404, {
+            error: `Bot session not available: ${sessionId}`,
+          });
+          return;
+        }
+        parsed.options = {
+          ...(parsed.options ?? {}),
+          agentProfileId: botAgentId,
+        };
+      }
+
       if (!isWakeless) {
         const dbSession = await deps.dbRequest('session:get', { id: sessionId });
         if (!dbSession) {
@@ -549,6 +582,14 @@ async function handlePostChat(
             sessionManager.setExitInfo(sessionId, code || 0, signal || undefined);
           }
         });
+      }
+
+      // Plan 477 P3.1: a bot's persistent session is expected to receive
+      // repeated wake / user chats, so its worker is exempted from idle
+      // reaping (worker-limits honors keepAlive, same as background-task
+      // workers). Idempotent — a no-op when the flag is already set.
+      if (botAgentId) {
+        workerManager.setKeepAlive(sessionId, true);
       }
 
       // Reject early if provider config is missing or incomplete so the

@@ -116,6 +116,7 @@ import { toolInvokeTool } from '../tool/ToolInvokeTool/ToolInvokeTool.js';
 import { createToolInvokeDispatcherFromRegistry } from '../tool/ToolInvokeTool/dispatcherFromRegistry.js';
 import {
   recordUndeclaredCall,
+  evaluateCatalogVisibilityGuard,
 } from '../tool/visibility-guard.js';
 
 // Plan 453 Task C: contextual-user-fragment injection channel.
@@ -877,16 +878,20 @@ export class duyaAgent {
     // the model at tool_schema 鈫?tool_invoke (搂8.3 gray-scale ladder).
     let declaredToolsForRequest = new Set<string>();
     const exposureConfig = readToolExposureConfig();
-    const guardEnabled = exposureConfig.exposure === 'catalog';
-    const guardEnforce = guardEnabled && exposureConfig.catalogGuard === 'enforce';
     const guardedCanUseTool: typeof canUseTool = async (toolName, toolInput) => {
-      if (guardEnabled && !declaredToolsForRequest.has(toolName)) {
+      const decision = evaluateCatalogVisibilityGuard({
+        exposure: exposureConfig.exposure,
+        catalogGuard: exposureConfig.catalogGuard,
+        declaredTools: declaredToolsForRequest,
+        toolName,
+      });
+      if (decision.undeclared) {
         recordUndeclaredCall(toolName);
-        if (guardEnforce) {
+        if (decision.reject) {
           return {
             allowed: false,
             behavior: 'deny' as const,
-            message: `Tool \`${toolName}\` is not in this request's tool list (catalog exposure). Read its schema with \`tool_schema\` first, then invoke it via \`tool_invoke\`. Direct calls to undeclared tools are rejected.`,
+            message: decision.message!,
           };
         }
       }
@@ -1125,6 +1130,22 @@ export class duyaAgent {
         hardNudgeAt: deadLoopHardNudgeAt,
       },
       toolIntentNudgeMax: options?.toolIntentNudgeMax ?? 2,
+      // grok SendMessageReminderMiddleware port: only runs whose toolset
+      // actually exposes SendMessage (bot sessions) can go "silently"
+      // invisible, so only those get the silence / early-result nudges.
+      sendMessageReminder: {
+        enabled: tools.some((t) => t.name === 'SendMessage'),
+      },
+      // Plan 496: full delivery enforcement (grok ensureUserReply port) —
+      // reply reminder on turn start + turn-end delivery vetoes. Same bot
+      // gate; silence-allowed runs (wake / cron / effort:'off' /
+      // backgroundTaskResume — the same markers the router treats as
+      // non-user turns) keep grok's isSilenceAllowed exemption.
+      sendMessageDelivery: {
+        enabled: tools.some((t) => t.name === 'SendMessage'),
+        silenceAllowed:
+          options?.effort === 'off' || options?.backgroundTaskResume === true,
+      },
       disabled: options?.disabledLoopHooks,
     })) {
       loopHooks.register(registration);

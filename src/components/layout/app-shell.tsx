@@ -22,6 +22,9 @@ interface AppShellProps {
 const MIN_SIDEBAR_WIDTH = 200;
 const MAX_SIDEBAR_WIDTH = 400;
 const DEFAULT_SIDEBAR_WIDTH = 260;
+// Invisible edge resizer: drag starts only within this many px of the
+// sidebar's right edge. No dedicated strip element, no layout footprint.
+const RESIZER_EDGE_PX = 4;
 
 function AppShellInner({ children }: AppShellProps) {
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -41,6 +44,35 @@ function AppShellInner({ children }: AppShellProps) {
     startXRef.current = e.clientX;
     startWidthRef.current = sidebarWidth;
   }, [sidebarWidth]);
+
+  // Starts a resize only when the press lands on the sidebar's right edge.
+  const handleBodyMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      const el = sidebarRef.current;
+      if (!el) return;
+      const edge = el.getBoundingClientRect().right;
+      if (Math.abs(e.clientX - edge) > RESIZER_EDGE_PX) return;
+      handleMouseDown(e);
+    },
+    [handleMouseDown]
+  );
+
+  // Cursor affordance for the invisible edge zone (no visual footprint).
+  const handleBodyMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      if (isResizing) return;
+      const el = sidebarRef.current;
+      if (!el) return;
+      const edge = el.getBoundingClientRect().right;
+      document.body.style.cursor =
+        Math.abs(e.clientX - edge) <= RESIZER_EDGE_PX ? "col-resize" : "";
+    },
+    [isResizing]
+  );
+
+  const handleBodyMouseLeave = useCallback(() => {
+    if (!isResizing) document.body.style.cursor = "";
+  }, [isResizing]);
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
     if (!isResizing) return;
@@ -118,7 +150,7 @@ function AppShellInner({ children }: AppShellProps) {
       className="app-shell-root"
       data-conductor-open={isConductorOpen ? "true" : undefined}
       data-panel-expanded={workspaceExpanded ? "true" : undefined}
-      style={{ "--app-sidebar-width": `${sidebarWidth + 4}px` } as CSSProperties}
+      style={{ "--app-sidebar-width": `${sidebarWidth}px` } as CSSProperties}
     >
       {showOnboarding && (
         <Suspense fallback={null}>
@@ -133,11 +165,13 @@ function AppShellInner({ children }: AppShellProps) {
       )}
       <div className="app-shell">
         <TitleBar sidebarWidth={sidebarWidth} />
-        <div className="app-body">
+        <div
+          className="app-body"
+          onMouseDown={handleBodyMouseDown}
+          onMouseMove={handleBodyMouseMove}
+          onMouseLeave={handleBodyMouseLeave}
+        >
           <AppSidebar ref={sidebarRef} style={{ width: sidebarWidth, minWidth: sidebarWidth, maxWidth: sidebarWidth }} />
-          <div className="sidebar-resizer" onMouseDown={handleMouseDown}>
-            <div className="sidebar-resizer-handle" />
-          </div>
           <div className="app-workspace-row">
             <div className="app-main-wrapper">
               <div className="app-main">

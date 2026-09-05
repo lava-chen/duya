@@ -344,6 +344,13 @@ export interface Message {
   sub_agent_id?: string;
   /** File attachments (name, type, url, size, text, imageChunks, etc.) */
   attachments?: unknown[];
+  /**
+   * Message origin classifier (plan 489 P0.1): who produced this message.
+   * Canonical values live in `@duya/agent/message` (`MessageSource`); kept
+   * as `string` here so @duya/ai stays dependency-free. Inferred at the
+   * IPC boundary when absent.
+   */
+  source?: string;
   /** User-facing rendering content. */
   displayContent?: string | MessageContent[];
   /** True if this message is a compact boundary marker */

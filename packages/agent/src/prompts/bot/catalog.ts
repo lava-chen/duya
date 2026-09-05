@@ -28,9 +28,10 @@
  *                        binding waits on 405/476 cron schema
  *   channels           — ✅ REAL (P2.4): channel-list from
  *                        agents/<id>/channels/ via readAgentChannelSnapshots
- *   botRoster          — ✅ REAL (P2.3, static part): other [agents.<id>]
- *                        entries via readConfigAgents (loader.ts);
- *                        DM rules text waits on 477 tool names
+ *   botRoster          — ✅ REAL (492 P1.2): inter-agent messaging contract
+ *                        (buildAgentMessagingSystemPrompt) + other
+ *                        [agents.<id>] entries via readConfigAgents
+ *                        (loader.ts); group rooms render via 478
  *   mcp                — capability catalog already tail-appended in
  *                        DuyaAgent; server-declared instructions need an MCP
  *                        client collection step
@@ -66,8 +67,8 @@ export const BOT_IDENTITY_SECTION: BotSectionDef = {
 export const BOT_COMMS_RULES_SECTION: BotSectionDef = {
   name: 'botCommsRules',
   description:
-    'Messaging rules: async send_to_agent delivery, no ack ping-pong, no user wake, quiet-work silence (P2.2; tool names 477).',
-  budgetChars: 1200,
+    'Messaging rules: user voice (SendMessage cadence, ack≠delivery) + wakes/quiet-work silence (inter-agent contract lives in botRoster since 492 P1).',
+  budgetChars: 2000,
   compute: renderBotCommsRules,
 }
 
@@ -105,8 +106,9 @@ export const BOT_CHANNELS_SECTION: BotSectionDef = {
 
 export const BOT_ROSTER_SECTION: BotSectionDef = {
   name: 'botRoster',
-  description: 'Other bots + groups + inter-agent messaging rules (static roster now; DM rules 477).',
-  budgetChars: 2000,
+  description:
+    'Inter-agent messaging contract (async, judgment, privacy relay, fan-out, capability) + teammate directory (492 P1.2; group rooms via 478).',
+  budgetChars: 8000,
   compute: renderBotRoster,
 }
 

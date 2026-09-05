@@ -36,6 +36,14 @@ export interface DurableToolIds {
    * trailing-text fallback may omit it.
    */
   finalAssistantText?: string;
+  /**
+   * Number of `isCompactSummary` messages already persisted. Each finished
+   * compaction is durably recorded as such a message, so once a compaction's
+   * 'done'/'error' streaming event is represented by a durable row, the live
+   * `compact` action should not render a second copy. Optional for backward
+   * compatibility — omitted (or 0) means "no compact cleanup".
+   */
+  compactedCount?: number;
 }
 
 /**
@@ -49,8 +57,10 @@ export function extractDurableToolIds(messages: readonly Message[]): DurableTool
   const toolResultIds = new Set<string>();
   let finalAssistantText = '';
   let sawAssistant = false;
+  let compactedCount = 0;
 
   for (const msg of messages) {
+    if (msg.isCompactSummary) compactedCount += 1;
     if (msg.role === 'assistant' && Array.isArray(msg.content)) {
       const textParts: string[] = [];
       for (const block of msg.content) {
@@ -88,7 +98,7 @@ export function extractDurableToolIds(messages: readonly Message[]): DurableTool
   // text — keeps `finalAssistantText === ''` honest for the comparison.
   if (!sawAssistant) finalAssistantText = '';
 
-  return { toolUseIds, toolResultIds, finalAssistantText };
+  return { toolUseIds, toolResultIds, finalAssistantText, compactedCount };
 }
 
 /**
@@ -104,6 +114,7 @@ export function subtractDurableStreamingEvents(
     durable.toolUseIds.size === 0
     && durable.toolResultIds.size === 0
     && !durable.finalAssistantText
+    && (durable.compactedCount ?? 0) === 0
   ) {
     return events as StreamingEvent[];
   }
@@ -118,15 +129,19 @@ export function subtractDurableStreamingEvents(
     }
   }
 
-  const hasStrayDurableToolEvent = events.some((e, i) => {
+  const hasToolWork = durable.toolUseIds.size > 0 || durable.toolResultIds.size > 0;
+  const hasStrayDurableToolEvent = hasToolWork && events.some((e, i) => {
     if (i <= cut) return false;
     if (e.type === 'tool_use') return durable.toolUseIds.has(e.toolUse.id);
     if (e.type === 'tool_result') return durable.toolResultIds.has(e.toolResult.tool_use_id);
     return false;
   });
 
-  if (cut < 0 && !hasStrayDurableToolEvent) {
-    return events as StreamingEvent[];
+  const compactedCount = durable.compactedCount ?? 0;
+  // Only the compacted-count cleanup applies (no durable tool rows / text):
+  // skip straight to compact subtraction without the tool-prefix cut.
+  if (cut < 0 && !hasStrayDurableToolEvent && !durable.finalAssistantText) {
+    return removeCoveredCompactEvents(events, compactedCount);
   }
 
   const out: StreamingEvent[] = [];
@@ -144,10 +159,38 @@ export function subtractDurableStreamingEvents(
   if (durable.finalAssistantText) {
     const trailingText = concatTrailingText(out);
     if (trailingText.length > 0 && trailingText === durable.finalAssistantText) {
-      return out.filter((e) => e.type !== 'text');
+      return removeCoveredCompactEvents(out.filter((e) => e.type !== 'text'), compactedCount);
     }
   }
 
+  return removeCoveredCompactEvents(out, compactedCount);
+}
+
+/**
+ * Drop `compact` events already represented by durable `isCompactSummary`
+ * rows. Each finished compaction persists exactly one summary message, so up
+ * to `compactedCount` of the 'done'/'error' compact events can be removed.
+ * A still-running 'compacting' event is never a finished durable record, so
+ * it is always kept — the durable row appears only once 'done' lands.
+ */
+function removeCoveredCompactEvents(
+  events: readonly StreamingEvent[],
+  compactedCount: number,
+): StreamingEvent[] {
+  if (compactedCount <= 0) return events as StreamingEvent[];
+  const out: StreamingEvent[] = [];
+  let removed = 0;
+  for (const e of events) {
+    if (
+      removed < compactedCount
+      && e.type === 'compact'
+      && (e.phase === 'done' || e.phase === 'error')
+    ) {
+      removed += 1;
+      continue;
+    }
+    out.push(e);
+  }
   return out;
 }
 

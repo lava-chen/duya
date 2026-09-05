@@ -1,4 +1,5 @@
 import type { Message, MessageContent, TokenUsage } from '../types.js';
+import type { MessageSource } from './message-source.js';
 
 export type AgentMessageContent = string | MessageContent[];
 
@@ -20,6 +21,7 @@ export type RuntimeContextSource =
   | 'dead_loop_nudge'
   | 'premature_stop'
   | 'tool_intent'
+  | 'send_message_reminder'
   | 'custom';
 
 /**
@@ -123,6 +125,13 @@ export interface MessageEntry {
   parentId: string | null;
   createdAt: number;
   message: AgentMessage;
+  /**
+   * Message origin classifier (plan 489 P0.1). Written by the IPC adapter
+   * (`inferMessageSource`) or supplied explicitly by the producer
+   * (SendMessageTool → 'send_message'). Persisted in the rollout payload so
+   * projection queries can filter bot-direct visible rows at the data layer.
+   */
+  source?: MessageSource;
 }
 
 export interface CompactionEntry {
@@ -250,6 +259,7 @@ export const STARTS_PROMPT_TURN: Record<RuntimeContextSource, boolean> = {
   dead_loop_nudge: false,
   premature_stop: false,
   tool_intent: false,
+  send_message_reminder: false,
   custom: false,
 };
 

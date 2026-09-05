@@ -43,7 +43,7 @@ export interface BotContact {
   /** Role subtitle (profile.json only; not seeded from config). */
   title: string;
   description: string;
-  model: string;
+  model?: string;
   /** Grok-style avatar character tokens (empty → fallback initial circle). */
   avatarShape?: string;
   avatarColor?: string;
@@ -181,14 +181,32 @@ export function deriveBotAvatarLabel(name: string): string {
 }
 
 /**
+ * 6 lowercase hex chars from the Web Crypto API — always legal in a bot id.
+ * A random suffix replaces the old `bot-2` numeric increment: the "next free
+ * slot" was predictable and collidable with deleted bots' stale on-disk
+ * trees (or hand-edited config ids). The main process re-checks
+ * authoritatively at create time (allocateBotId) — this renderer-side check
+ * is best-effort UX only.
+ */
+function randomBotIdSuffix(): string {
+  const bytes = new Uint8Array(3);
+  globalThis.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
  * Derive a legal bot id (`BOT_ID_PATTERN`: kebab-case, max 63 chars) from
- * a display name. Non-ASCII names (e.g. Chinese) collapse to `bot`;
- * collisions get `-2`, `-3`, … suffixes. Mirrors grok: ids are never
- * user-authored.
+ * a display name. Meaningful ASCII slugs stay bare when free and get a
+ * random `-<6 hex>` suffix on collision. Non-ASCII names (e.g. Chinese)
+ * collapse to the generic `bot` base which ALWAYS carries a random suffix —
+ * a bare `bot` would be shared by every Chinese bot generation across
+ * delete/recreate cycles. Mirrors grok: ids are never user-authored.
+ * `makeSuffix` is injectable for deterministic tests.
  */
 export function deriveBotIdFromName(
   name: string,
   existingIds: Iterable<string>,
+  makeSuffix: () => string = randomBotIdSuffix,
 ): string {
   const slug = name
     .trim()
@@ -198,15 +216,25 @@ export function deriveBotIdFromName(
   // Non-ASCII names (e.g. Chinese) collapse to nothing; a lone digit or
   // 1-char remnant is too meaningless to serve as an identity — fall
   // back to the generic `bot` base in both cases.
-  const base = slug.length >= 2 && !slug.startsWith('-') ? slug : 'bot';
+  const fellBackToGeneric = !(slug.length >= 2 && !slug.startsWith('-'));
+  const base = fellBackToGeneric ? 'bot' : slug;
   const finalBase = /^[a-z0-9][a-z0-9-]*$/.test(base)
     ? base.slice(0, 48).replace(/-+$/g, '') || 'bot'
     : 'bot';
   const taken = new Set(existingIds);
-  let id = finalBase;
-  let n = 2;
-  while (taken.has(id)) {
-    id = `${finalBase}-${n++}`;
-  }
-  return id;
+  const nextSuffixed = (): string => {
+    let id = `${finalBase}-${makeSuffix()}`;
+    while (taken.has(id)) {
+      id = `${finalBase}-${makeSuffix()}`;
+    }
+    return id;
+  };
+  // Generic-fallback ids are never bare: every Chinese-named bot gets its
+  // own distinguishable directory, and delete/recreate cycles never reuse
+  // the same id across generations. The main process re-checks
+  // authoritatively at create time (allocateBotId) — this renderer-side
+  // check is best-effort UX only.
+  if (fellBackToGeneric) return nextSuffixed();
+  if (!taken.has(finalBase)) return finalBase;
+  return nextSuffixed();
 }

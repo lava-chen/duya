@@ -88,6 +88,29 @@ Renderer → Agent Server (HTTP POST) → Worker Process → LLM
 
 For high-frequency data: tool execution, tool streaming, config sync.
 
+## App Connections (Connectors)
+
+Unified AppConnector registry (Plan 455): first-party providers, plugin `.app.json`
+declarations (`mcp-remote` / `rest` bindings), and custom connectors, resolved by
+`electron/services/app-connections/app-connector.ts`. Tokens live in the main
+process (encrypted vault) and never cross IPC.
+
+Auth elicitation loop (Plan 450 Phase B + Plan 498):
+
+1. Connector invoke fails with `connector_auth_required` → worker emits
+   `chat:connector_auth_required` → agent server SSE → renderer auth card.
+2. Tool result tells the model to end its turn and wait (no retry, no links).
+3. `appConnection:connect` (card button or Settings) completes the OAuth
+   loopback → main broadcasts `app-connection:connected` to all windows.
+4. Card flips to its real connected state and ChatView sends a localized
+   resume message (mailbox-queued if a stream is active) so the model re-issues
+   the failed call; per-provider dedup keeps it to one resume.
+
+The system prompt carries a persistent "Apps (Connectors)" section
+(`packages/agent/src/mentions/index.ts` — connected-app catalog plus the
+help-the-user-connect guidance: prefer connectors over browser workarounds,
+name missing services, never paste authorization URLs).
+
 ## Database
 
 ### Location

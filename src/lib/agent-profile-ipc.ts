@@ -77,7 +77,26 @@ export async function listCustomAgents(): Promise<Record<string, CustomAgentConf
   return window.electronAPI.configAgents.list() as Promise<Record<string, CustomAgentConfig>>;
 }
 
-/** Input shape for create/update config agent (mirrors electron CustomAgentConfig). */
+/** One bot in the sidebar Bots section (mirrors electron `BotListItem` in electron/config/agents.ts). */
+export interface BotListItem {
+  id: string;
+  /** Display identity — profile name wins, else config name, else the id. */
+  name: string;
+  /** Role subtitle (profile.json only). */
+  title: string;
+  description: string;
+  model?: string;
+  workspace?: string;
+  avatarShape?: string;
+  avatarColor?: string;
+}
+
+/** Merge config + profile.json for bot agents (Plan 483 grok-style bot management). */
+export async function listBots(): Promise<BotListItem[]> {
+  return window.electronAPI.configAgents.listBots() as Promise<BotListItem[]>;
+}
+
+/** Input shape for create/update config agent (mirrors electron AgentUpsertInput). */
 export type AgentUpsertInput = {
   name: string;
   description?: string;
@@ -86,10 +105,21 @@ export type AgentUpsertInput = {
   agents_md?: string;
   tools?: { profile?: string; allow?: string[]; deny?: string[] };
   plugins?: string[];
+  /** grok-style avatar tokens, seeded into `agents/<id>/profile.json` on first creation. */
+  avatarShape?: string;
+  avatarColor?: string;
 };
 
-export async function createConfigAgent(id: string, input: AgentUpsertInput): Promise<void> {
-  await window.electronAPI.configAgents.create(id, input);
+export interface CreateConfigAgentResult {
+  /** Actual id after main-process collision allocation (may differ from the requested id). */
+  id: string;
+}
+
+export async function createConfigAgent(id: string, input: AgentUpsertInput): Promise<CreateConfigAgentResult> {
+  const result = (await window.electronAPI.configAgents.create(id, input)) as { id?: string } | null;
+  // Fall back to the requested id when talking to an older main build that
+  // has not picked up the createConfigAgentUnique return shape yet.
+  return { id: result?.id ?? id };
 }
 export async function updateConfigAgent(id: string, input: AgentUpsertInput): Promise<void> {
   await window.electronAPI.configAgents.update(id, input);
@@ -138,4 +168,19 @@ export async function deleteAgentProfile(id: string): Promise<boolean> {
 
 export async function setSessionAgentProfile(sessionId: string, agentProfileId: string | null): Promise<void> {
   return window.electronAPI.thread.update(sessionId, { agent_profile_id: agentProfileId }) as Promise<void>;
+}
+
+/** Plan 483 P2: update a bot's display identity from the sidebar edit dialog.
+ *  Writes to `agents/<id>/profile.json` via the `config:agents:updateBotProfile` IPC.
+ */
+export interface BotIdentityUpdateInput {
+  name?: string;
+  title?: string;
+  description?: string;
+  avatarShape?: string;
+  avatarColor?: string;
+}
+
+export async function updateBotIdentity(id: string, input: BotIdentityUpdateInput): Promise<void> {
+  await window.electronAPI.configAgents.updateBotProfile(id, input as unknown as Record<string, unknown>);
 }

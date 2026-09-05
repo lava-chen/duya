@@ -11,7 +11,9 @@
  *   - avatar character: shape × color (8 × 11, defaults blob/blue)
  *
  * The id is derived from the name (`deriveBotIdFromName`), never
- * user-authored. Submission goes through `config:agents:create`, which
+ * user-authored; the main process re-allocates a collision-free id against
+ * disk + tombstones and returns the ACTUAL id, which `onCreated` receives.
+ * Submission goes through `config:agents:create`, which
  * seeds the 485 identity layer (profile.json with avatar tokens).
  */
 
@@ -21,6 +23,10 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { useTranslation } from "@/hooks/useTranslation";
 import { createConfigAgent } from "@/lib/agent-profile-ipc";
+import { listProvidersIPC } from "@/lib/ipc-client";
+import { buildBotModelGroups } from "@/lib/bot-model-options";
+import type { ProviderModelGroup } from "@/components/chat/ModelProviderSelector";
+import { BotModelField } from "./BotModelField";
 import type { TranslationKey } from "@/i18n";
 import {
   BOT_AVATAR_COLORS,
@@ -64,6 +70,9 @@ export function CreateBotDialog({ isOpen, onCancel, onCreated, existingIds }: Cr
   const [description, setDescription] = useState("");
   const [shape, setShape] = useState<BotAvatarShape>("blob");
   const [color, setColor] = useState("blue");
+  const [model, setModel] = useState("");
+  const [modelGroups, setModelGroups] = useState<ProviderModelGroup[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement | null>(null);
@@ -74,9 +83,16 @@ export function CreateBotDialog({ isOpen, onCancel, onCreated, existingIds }: Cr
       setDescription("");
       setShape("blob");
       setColor("blue");
+      setModel("");
       setSubmitting(false);
       setError(null);
       setTimeout(() => nameRef.current?.focus(), 80);
+      // Load model options (best-effort; failure must not block creation).
+      setModelsLoading(true);
+      listProvidersIPC()
+        .then((providers) => setModelGroups(buildBotModelGroups(providers)))
+        .catch(() => setModelGroups([]))
+        .finally(() => setModelsLoading(false));
     }
   }, [isOpen]);
 
@@ -106,13 +122,14 @@ export function CreateBotDialog({ isOpen, onCancel, onCreated, existingIds }: Cr
     setError(null);
     try {
       const id = deriveBotIdFromName(name, existingIds);
-      await createConfigAgent(id, {
+      const { id: createdId } = await createConfigAgent(id, {
         name: name.trim(),
         description: description.trim() || undefined,
+        model: model.trim() || undefined,
         avatarShape: shape,
         avatarColor: color,
       });
-      onCreated(id);
+      onCreated(createdId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setSubmitting(false);
@@ -202,6 +219,13 @@ export function CreateBotDialog({ isOpen, onCancel, onCreated, existingIds }: Cr
             border: "1px solid var(--border)",
             color: "var(--text)",
           }}
+        />
+
+        <BotModelField
+          value={model}
+          groups={modelGroups}
+          loading={modelsLoading}
+          onChange={setModel}
         />
 
         <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>

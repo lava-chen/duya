@@ -9,6 +9,7 @@
 
 import type { FileAttachment } from '@/types/message'
 import type { ContentBlock } from '@/types/message'
+import type { SendMessageCardMeta } from '@/types/message'
 import type { MemoryEntry } from '@/types'
 import type { UsageSummary } from '@/types/usage'
 
@@ -66,6 +67,10 @@ export interface Message {
   createdAt: number
   /** User-facing prompt (with pasted-content markers) for user messages. */
   displayContent?: string | ContentBlock[]
+  /** Plan 491 P1.2: Source of the message for bot-direct filtering. */
+  source?: string | null;
+  /** Plan 489 P2.2: SendMessage card payload (parsed from send_message_meta). */
+  sendMessageMeta?: SendMessageCardMeta | null;
 }
 
 export interface Provider {
@@ -189,6 +194,13 @@ interface DbMessage {
   created_at: number
   /** User-facing prompt (with pasted-content markers) for user messages. */
   display_content: string | null
+  /**
+   * Plan 489 P0.1: message origin classifier. Null for legacy rows written
+   * before the classifier existed.
+   */
+  source?: string | null
+  /** Plan 489 P2.2: SendMessage card payload (JSON), from metadata.sendMessage. */
+  send_message_meta?: string | null
 }
 
 // Backend returns camelCase (via maskProvider in agent-communicator.ts)
@@ -314,6 +326,16 @@ function dbMessageToMessage(db: DbMessage): Message {
     subAgentId: db.sub_agent_id,
     attachments,
     createdAt: db.created_at,
+    source: db.source ?? null,
+    sendMessageMeta: db.send_message_meta
+      ? (() => {
+          try {
+            return JSON.parse(db.send_message_meta) as SendMessageCardMeta;
+          } catch {
+            return null;
+          }
+        })()
+      : null,
     // Surface the user-facing prompt (with pasted-content markers).
     // Falls back to `content` for legacy rows that pre-date the
     // `display_content` column — those rows had the prompt stored in
@@ -489,6 +511,26 @@ export async function replaceMessagesIPC(
 export async function getMessagesBySessionIPC(sessionId: string): Promise<Message[]> {
   const dbMessages = await window.electronAPI!.message!.getBySession(sessionId) as DbMessage[]
   return dbMessages.map(dbMessageToMessage)
+}
+
+/**
+ * Plan 489 P0.3: fetch the bot-direct transcript. The main process applies
+ * the source allowlist (`['send_message', 'user']`) inside MessageLog, so
+ * only user-typed and SendMessage rows are ever returned.
+ */
+export async function getBotDirectTranscriptIPC(
+  sessionId: string
+): Promise<{ messages: Message[] }> {
+  const electronAPI = window.electronAPI as unknown as {
+    message?: { botDirectGetTranscript?: (id: string) => Promise<unknown> }
+  }
+  if (!electronAPI.message?.botDirectGetTranscript) {
+    // IPC not wired (jsdom test runner, web build) — the hook bails out
+    // on the same guard, so an empty result keeps the contract observable.
+    return { messages: [] }
+  }
+  const dbMessages = (await electronAPI.message.botDirectGetTranscript(sessionId)) as DbMessage[]
+  return { messages: dbMessages.map(dbMessageToMessage) }
 }
 
 export async function truncateMessagesAfterIPC(

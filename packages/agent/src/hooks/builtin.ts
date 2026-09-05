@@ -6,8 +6,9 @@
  * streamChat locals they replace.
  *
  * Ordering contract (PreFinalize priorities): premature-stop (10) →
- * tool-intent (20) → todo-gate (30). The bus short-circuits at the first
- * veto, preserving the fixed decision order the loop had before extraction.
+ * tool-intent (20) → send-message-delivery (25) → todo-gate (30). The bus
+ * short-circuits at the first veto, preserving the fixed decision order the
+ * loop had before extraction.
  */
 
 import type { LoopHookRegistration } from './loop.js';
@@ -17,9 +18,16 @@ import { goalModeTracker } from '../modes/goal/goal-tracker.js';
 import { matchedToolIntent, toolIntentNudge } from '../agent/tool-intent-detector.js';
 import { getDatabaseTaskStore, type Task } from '../session/task-store.js';
 import { logger } from '../utils/logger.js';
+import { createSendMessageReminderHook, type SendMessageReminderOptions } from './send-message-reminder.js';
+import {
+  createSendMessageDeliveryHook,
+  createSendMessageReplyReminderHook,
+  type SendMessageDeliveryOptions,
+} from './send-message-delivery.js';
 
 export const PREMATURE_STOP_PRIORITY = 10;
 export const TOOL_INTENT_PRIORITY = 20;
+export const SEND_MESSAGE_DELIVERY_PRIORITY = 25;
 export const TODO_GATE_PRIORITY = 30;
 
 export interface BuiltinLoopHookOptions {
@@ -38,6 +46,22 @@ export interface BuiltinLoopHookOptions {
   isGoalActive?: () => boolean;
   /** Overridable for tests; defaults to the database task store. */
   listTasks?: (sessionId: string) => Promise<Task[]>;
+  /**
+   * SendMessage reminder (grok SendMessageReminderMiddleware port): silence
+   * + early-result nudges injected at PreTurn when a bot works without
+   * messaging. Registered only when `enabled` — bot runs gate this on the
+   * SendMessage tool being present in the run's toolset.
+   */
+  sendMessageReminder?: SendMessageReminderOptions;
+  /**
+   * SendMessage delivery enforcement (grok `ensureUserReply` port, plan
+   * 496): reply reminder on user-turn start (PreTurn) + turn-end delivery
+   * vetoes (PreFinalize, priority 25). Registered only when `enabled` and
+   * `silenceAllowed` is false — user-facing bot runs gate both on the
+   * SendMessage tool being present; wake/automation/background-resume runs
+   * keep the quiet exemption.
+   */
+  sendMessageDelivery?: SendMessageDeliveryOptions;
 }
 
 /** Whether a goal is currently active (self-driving) on the tracker. */
@@ -221,6 +245,19 @@ export function createBuiltinLoopHooks(options: BuiltinLoopHookOptions): LoopHoo
   ];
   if (options.todoGateEnabled) {
     hooks.push(todoGateHook({ listTasks }));
+  }
+  // SendMessage silence/early-result nudges (grok port): bot runs only.
+  if (options.sendMessageReminder?.enabled) {
+    hooks.push(createSendMessageReminderHook(options.sendMessageReminder));
+  }
+  // SendMessage delivery enforcement (grok ensureUserReply port): reply
+  // reminder on turn start + delivery vetoes before finalize. Only
+  // user-facing bot runs — silence-allowed runs are never registered.
+  if (options.sendMessageDelivery?.enabled) {
+    hooks.push(
+      createSendMessageReplyReminderHook(options.sendMessageDelivery),
+      createSendMessageDeliveryHook(options.sendMessageDelivery),
+    );
   }
   // Disabled policies are never registered — an unregistered hook cannot fire.
   return hooks.filter((h) => !disabled.has(h.id));
