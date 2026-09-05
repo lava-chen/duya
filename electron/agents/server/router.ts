@@ -450,6 +450,10 @@ async function handlePostChat(
         parsed.options = {
           ...(parsed.options ?? {}),
           agentProfileId: botAgentId,
+          // Plan 498: bot sessions pause on permission ask — the request is
+          // persisted as a durable approval card and the turn ends with a
+          // neutral tool result; the decision resumes the run later.
+          permissionSurface: 'bot',
         };
       }
 

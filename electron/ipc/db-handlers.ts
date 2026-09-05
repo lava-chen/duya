@@ -63,6 +63,20 @@ import { getCoreStores } from '../db/core-connection';
 import { storeConnectorCredential } from '../channels/agent-session-channels';
 import { restoreFilesForEvents } from '../services/file-snapshot-restore';
 import { resolvePermissionProfile } from '../db/permission-resolver';
+import {
+  consumeToolApprovalById,
+  getToolApproval,
+  listToolApprovalsBySession,
+  resolveToolApproval,
+} from '../db/toolApprovalState';
+import {
+  broadcastToolApprovalUpdate,
+  resolveApprovalCard,
+  syncApprovalCard,
+  type ToolApprovalDecisionInput,
+} from '../db/tool-approval-resolver';
+import { enqueueWakeItemForSession } from '../wake/wake-dispatcher';
+import type { WakeItem } from '../../packages/agent/src/wake/types';
 import { CapabilityDao } from '../services/providers/capability-dao';
 import {
   SidebarSectionsStore,
@@ -992,7 +1006,80 @@ export function registerDbHandlers(): void {
     }
 
     const resolved = permissions.get(id);
+    // Plan 498: keep any durable approval card in sync with the interactive
+    // fast path — the worker executes right away via its in-memory promise,
+    // so the card must transition and its one-shot ledger entry must burn.
+    if (status === 'allow' || status === 'deny') {
+      syncApprovalCard(
+        {
+          resolve: (approvalId, decision) => {
+            const db = getDatabase();
+            if (!db) return undefined;
+            return resolveToolApproval(db, approvalId, decision);
+          },
+          markConsumed: (approvalId) => {
+            const db = getDatabase();
+            if (!db) return undefined;
+            return consumeToolApprovalById(db, approvalId);
+          },
+          enqueueContinuation: () => {
+            // Fast path: the worker is executing now — never queue a replay.
+          },
+          broadcast: broadcastToolApprovalUpdate,
+        },
+        id,
+        status as ToolApprovalDecisionInput,
+      );
+    }
     return resolved ? corePermissionToIpcRow(resolved) : undefined;
+  });
+
+  // ==================== Tool approval cards (plan 498) ====================
+
+  ipcMain.handle('db:toolApproval:listBySession', (_event, sessionId: string) => {
+    const db = getDatabase();
+    if (!db) return [];
+    return listToolApprovalsBySession(db, sessionId);
+  });
+
+  ipcMain.handle('db:toolApproval:get', (_event, id: string) => {
+    const db = getDatabase();
+    if (!db) return undefined;
+    return getToolApproval(db, id);
+  });
+
+  ipcMain.handle('db:toolApproval:resolve', (_event, id: string, decision: string) => {
+    const db = getDatabase();
+    if (!db) return { ok: false, reason: 'db_unavailable' };
+    if (decision !== 'allow' && decision !== 'always' && decision !== 'deny') {
+      return { ok: false, reason: 'invalid_decision' };
+    }
+    return resolveApprovalCard(
+      {
+        resolve: (approvalId, d) => resolveToolApproval(db, approvalId, d),
+        enqueueContinuation: (row, d) => {
+          const item: WakeItem = {
+            id: `approval:${row.id}`,
+            source: 'approval.resume',
+            lane: 'agent',
+            agentId: row.session_id,
+            enqueuedAtMs: Date.now(),
+            payload: {
+              kind: 'approval',
+              approvalId: row.id,
+              toolName: row.tool_name,
+              decision: d,
+              text: '',
+            },
+          };
+          const outcome = enqueueWakeItemForSession(row.session_id, item);
+          dbLogger.info('Tool approval continuation enqueued', { approvalId: row.id, sessionId: row.session_id, decision: d, outcome }, LogComponent.DB);
+        },
+        broadcast: broadcastToolApprovalUpdate,
+      },
+      id,
+      decision,
+    );
   });
 
   // ==================== Search Handlers (core store thin forward) ====================
