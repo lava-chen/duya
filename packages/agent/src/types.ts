@@ -304,9 +304,27 @@ export interface ChatOptions {
   messages?: Message[];
   /**
    * Callback for requesting user permission.
-   * Returns a Promise that resolves with 'allow' or 'deny'.
+   * Returns a Promise that resolves with 'allow', 'deny', or 'paused'
+   * (plan 498: the request was persisted as an approval card and the turn
+   * must end with a neutral tool result instead of blocking).
    */
-  requestPermission?: (request: PermissionRequestEvent) => Promise<'allow' | 'deny'>;
+  requestPermission?: (request: PermissionRequestEvent) => Promise<'allow' | 'deny' | 'paused'>;
+  /**
+   * Plan 498: one-shot approval ledger. Called at the top of `canUseTool`;
+   * when it returns true the pending tool call was pre-approved through a
+   * persisted approval card (approved → consumed CAS) and must run without
+   * further permission checks.
+   */
+  consumeApprovedEffect?: (
+    toolName: string,
+    toolInput?: Record<string, unknown>,
+  ) => Promise<boolean>;
+  /**
+   * Plan 498: tool names granted via "Always allow this tool" on a persisted
+   * approval card. Scoped per bot/session by the caller; applied verbatim
+   * (tool-level allow) for the turns of this run.
+   */
+  approvedAlwaysAllowTools?: string[];
   /** Agent profile ID to use for this chat turn */
   agentProfileId?: string | null;
   /**
@@ -578,9 +596,17 @@ export interface ToolUseContext {
   pushApiMetricsEntry?: (ttftMs: number) => void;
   /**
    * Called when a tool requires user permission.
-   * Returns a Promise that resolves with 'allow' or 'deny'.
+   * Returns a Promise that resolves with 'allow', 'deny', or 'paused'
+   * (plan 498 — persisted approval card; see ChatOptions.requestPermission).
    */
-  requestPermission?: (request: PermissionRequestEvent) => Promise<'allow' | 'deny'>;
+  requestPermission?: (request: PermissionRequestEvent) => Promise<'allow' | 'deny' | 'paused'>;
+  /** Plan 498: one-shot approval ledger consume (see ChatOptions). */
+  consumeApprovedEffect?: (
+    toolName: string,
+    toolInput?: Record<string, unknown>,
+  ) => Promise<boolean>;
+  /** Plan 498: "Always allow this tool" grants for this run (see ChatOptions). */
+  approvedAlwaysAllowTools?: string[];
   /**
    * Called by the Agent tool to report sub-agent execution progress in real-time.
    * This allows the UI to show what the sub-agent is doing while it runs.

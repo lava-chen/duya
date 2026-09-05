@@ -64,6 +64,8 @@ import {
   useMessageThumbsUp,
 } from "./BotMessageHoverBar";
 import { BotSendCard } from "./BotSendCard";
+import { BotToolApprovalCard, type ToolApprovalStatus } from "./bot/BotToolApprovalCard";
+import type { TranslationKey } from "@/i18n";
 // Plan 494: bot-direct renders its own permission/ask cards — ChatView
 // (and its PermissionPrompt sheet) is not mounted in this mode.
 import { usePermissions } from "@/hooks/usePermissions";
@@ -166,7 +168,9 @@ function isSendCardMessage(message: Message): boolean {
     type === 'attachment' ||
     type === 'widget' ||
     type === 'cursor-agent' ||
-    type === 'secret-request'
+    type === 'secret-request' ||
+    // Plan 498: durable tool-approval card.
+    type === 'tool-approval'
   ) {
     return true;
   }
@@ -177,11 +181,18 @@ function isSendCardMessage(message: Message): boolean {
 function SendCardRow({
   message,
   onOptionClick,
+  approvalStatus,
+  onApprovalResolve,
+  t,
 }: {
   message: Message;
   onOptionClick?: (option: string) => void;
+  approvalStatus?: ToolApprovalStatus;
+  onApprovalResolve?: (id: string, decision: 'allow' | 'always' | 'deny') => void;
+  t: (key: TranslationKey, params?: Record<string, string | number>) => string;
 }) {
   const [thumbsUp, toggleThumbsUp] = useMessageThumbsUp(message.id);
+  const approval = message.sendMessageMeta?.approval;
   return (
     <div className="bot-chat-row bot-chat-row--assistant" data-role="assistant">
       <BotMessageHoverBar
@@ -193,7 +204,16 @@ function SendCardRow({
       />
       <div className="bot-chat-row__stack">
         <div className="bot-chat-bubble bot-chat-bubble--assistant bot-chat-bubble--card">
-          <BotSendCard message={message} onOptionClick={onOptionClick} />
+          {message.msgType === 'tool-approval' && approval ? (
+            <BotToolApprovalCard
+              approval={approval}
+              status={approvalStatus ?? 'pending'}
+              onResolve={onApprovalResolve}
+              t={t}
+            />
+          ) : (
+            <BotSendCard message={message} onOptionClick={onOptionClick} />
+          )}
         </div>
         {thumbsUp && <BotThumbsBadge onRemove={toggleThumbsUp} />}
       </div>
@@ -341,6 +361,44 @@ export function BotDirectChatView({
     return subscribeToPermissions(sessionId, handlePermissionRequest);
   }, [sessionId, handlePermissionRequest]);
 
+  // Plan 498: durable tool-approval card states, hydrated from the approval
+  // side table and kept live via the `tool-approval:updated` broadcast (the
+  // resolver IPC fires it for every window after a CAS transition).
+  const [approvalStatuses, setApprovalStatuses] = useState<Record<string, ToolApprovalStatus>>({});
+  useEffect(() => {
+    let disposed = false;
+    setApprovalStatuses({});
+    const api = window.electronAPI;
+    void api?.toolApproval
+      .listBySession(sessionId)
+      .then((rows) => {
+        if (disposed) return;
+        const next: Record<string, ToolApprovalStatus> = {};
+        for (const row of rows as Array<{ id: string; status: ToolApprovalStatus }>) {
+          next[row.id] = row.status;
+        }
+        setApprovalStatuses(next);
+      })
+      .catch(() => {
+        // Hydration is best-effort — cards fall back to the pending look.
+      });
+    const unsubscribe = api?.toolApproval.onUpdated((data) => {
+      if (data.sessionId !== sessionId) return;
+      setApprovalStatuses((prev) => ({ ...prev, [data.id]: data.status as ToolApprovalStatus }));
+    });
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  }, [sessionId]);
+
+  const handleApprovalResolve = useCallback(
+    (id: string, decision: 'allow' | 'always' | 'deny') => {
+      void window.electronAPI?.toolApproval.resolve(id, decision);
+    },
+    [],
+  );
+
   // Answered asks stay visible as static cards for the session (the
   // tool_use rows behind them are source-filtered out of the transcript).
   // In-memory only; cleared on session switch. Persistence is a 489 P2.5
@@ -444,6 +502,13 @@ export function BotDirectChatView({
           key={row.message.id}
           message={row.message}
           onOptionClick={(option) => onSend({ text: option })}
+          approvalStatus={
+            row.message.sendMessageMeta?.approval
+              ? approvalStatuses[row.message.sendMessageMeta.approval.approvalId]
+              : undefined
+          }
+          onApprovalResolve={handleApprovalResolve}
+          t={t}
         />
       ) : row.isDmMarker && row.message.agentDmMeta ? (
         <AgentDmMarker

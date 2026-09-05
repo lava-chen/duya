@@ -11,7 +11,9 @@ export type MsgType =
   | 'attachment'
   | 'widget'
   | 'cursor-agent'
-  | 'secret-request';
+  | 'secret-request'
+  // Plan 498: durable tool-approval card.
+  | 'tool-approval';
 
 /** Plan 489 P2.2: SendMessageTool card payload (round-trips via message
  *  metadata.sendMessage → rollout → MessageRow.send_message_meta). */
@@ -27,6 +29,13 @@ export interface SendMessageCardMeta {
   bcId?: string;
   /** secret-request descriptor (value never persisted). */
   secret?: { label: string; connector: string; field: string };
+  /** Plan 498: durable tool-approval card payload (msg_type 'tool-approval'). */
+  approval?: {
+    approvalId: string;
+    toolName: string;
+    toolInput?: Record<string, unknown>;
+    mode?: string;
+  };
 }
 
 export interface ContentBlock {

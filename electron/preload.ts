@@ -365,6 +365,22 @@ export interface PermissionAPI {
   resolve: (id: string, status: string, extra?: Record<string, unknown>) => Promise<unknown>
 }
 
+/** Plan 498: durable tool-approval cards. */
+export interface ToolApprovalUpdateEvent {
+  id: string
+  messageId: string
+  sessionId: string
+  status: string
+  decision: string | null
+}
+
+export interface ToolApprovalAPI {
+  listBySession: (sessionId: string) => Promise<unknown[]>
+  get: (id: string) => Promise<unknown>
+  resolve: (id: string, decision: 'allow' | 'always' | 'deny') => Promise<unknown>
+  onUpdated: (callback: (data: ToolApprovalUpdateEvent) => void) => () => void
+}
+
 export interface ProjectAPI {
   getGroups: () => Promise<unknown[]>
 }
@@ -1190,6 +1206,7 @@ export interface ElectronAPI {
   provider: ProviderAPI
   outputStyle: OutputStyleAPI
   permission: PermissionAPI
+  toolApproval: ToolApprovalAPI
   project: ProjectAPI
   lock: LockAPI
   net: NetAPI
@@ -2076,6 +2093,30 @@ const electronAPI: ElectronAPI = {
     get: (id: string) => ipcRenderer.invoke('db:permission:get', id),
     resolve: (id: string, status: string, extra?: Record<string, unknown>) =>
       ipcRenderer.invoke('db:permission:resolve', id, status, extra),
+  },
+  // Plan 498: durable tool-approval cards (bot DM + crash fallback).
+  toolApproval: {
+    listBySession: (sessionId: string) =>
+      ipcRenderer.invoke('db:toolApproval:listBySession', sessionId),
+    get: (id: string) => ipcRenderer.invoke('db:toolApproval:get', id),
+    resolve: (id: string, decision: 'allow' | 'always' | 'deny') =>
+      ipcRenderer.invoke('db:toolApproval:resolve', id, decision),
+    onUpdated: (
+      callback: (data: {
+        id: string;
+        messageId: string;
+        sessionId: string;
+        status: string;
+        decision: string | null;
+      }) => void,
+    ) => {
+      const listener = (
+        _event: unknown,
+        data: { id: string; messageId: string; sessionId: string; status: string; decision: string | null },
+      ) => callback(data);
+      ipcRenderer.on('tool-approval:updated', listener);
+      return () => ipcRenderer.removeListener('tool-approval:updated', listener);
+    },
   },
   project: {
     getGroups: () => ipcRenderer.invoke('db:project:getGroups'),

@@ -232,6 +232,13 @@ export class duyaAgent {
    */
   private hostToolPermission?: LocalToolPermission;
   private hasPermissionsToUseTool: ReturnType<typeof createHasPermissionsToUseTool>;
+  // Plan 498: per-turn approval-ledger consume callback + "Always allow this
+  // tool" grants (persisted approval cards). Set from streamChat options.
+  private _consumeApprovedEffect?: (
+    toolName: string,
+    toolInput?: Record<string, unknown>,
+  ) => Promise<boolean>;
+  private _turnAlwaysAllowTools: Set<string> = new Set();
   private alwaysAllowRules: ToolPermissionRulesBySource = {};
   private alwaysDenyRules: ToolPermissionRulesBySource = {};
   private alwaysAskRules: ToolPermissionRulesBySource = {};
@@ -657,6 +664,9 @@ export class duyaAgent {
     // Plan 486: reset the fork-turn marker every streamChat call (see the
     // field doc for semantics).
     this.forkTurn = null;
+    // Plan 498: per-turn approval-ledger consume + always-allow grants.
+    this._consumeApprovedEffect = options?.consumeApprovedEffect;
+    this._turnAlwaysAllowTools = new Set(options?.approvedAlwaysAllowTools ?? []);
     logger.info(`[Agent] streamChat started, sessionId=${this.sessionId}, model=${this._model}, provider=${this.provider}, turnId=${this.currentTurnId ?? 'null'}`);
 
     // Plan 426 follow-up: configured [hooks] events dispatched outside the
@@ -3368,6 +3378,22 @@ export class duyaAgent {
       toolInput?: Record<string, unknown>,
     ) => {
       try {
+        // Plan 498 one-shot approval ledger: a persisted approval card that
+        // was granted ('approved') and not yet consumed authorizes exactly
+        // this (toolName, toolInput) pair. Consume is a CAS — a replay can
+        // never double-execute an approval.
+        if (this._consumeApprovedEffect) {
+          const preApproved = await this._consumeApprovedEffect(toolName, toolInput);
+          if (preApproved) {
+            return { allowed: true, behavior: 'allow' as const };
+          }
+        }
+        // Plan 498: "Always allow this tool" grants from persisted approval
+        // cards (per bot/session scope, seeded by the worker per turn).
+        if (this._turnAlwaysAllowTools.has(toolName)) {
+          return { allowed: true, behavior: 'allow' as const };
+        }
+
         // Plan-mode exact-path gating: when a plan tracker is active, write
         // tools are only allowed when they target the session plan file.
         // `'allow'`/`'deny'` are authoritative; `null` falls through to the
