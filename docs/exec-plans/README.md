@@ -147,14 +147,15 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [480-appended-tool-schema-catalog](./active/480-appended-tool-schema-catalog.md) | 追加式 Tool Schema 目录：tools 数组恒定 + stable sorting catalog 侧信道 | P1 | Planning |
 | [481-bot-toolset-unified-foundation](./active/481-bot-toolset-unified-foundation.md) | 工具集统一建档：update_state / SendToAgent / PostToRoom / tool_schema / tool_invoke | P0 | Planning |
 | [482-external-agent-invocation](./active/482-external-agent-invocation.md) | 调用外部 agent（Claude Code / Codex） | P1 | Planning |
-| [483-multi-bot-chat-ui](./active/483-multi-bot-chat-ui.md) | 多 Bot 聊天 UI：侧栏 Bots 分组 + 类 Telegram 联系人聊天 + Bot 资料卡 | P1 | Planning |
+| [483-multi-bot-chat-ui](./active/483-multi-bot-chat-ui.md) | 多 Bot 聊天 UI：侧栏 Bots 分组 + 类 Telegram 联系人聊天 + Bot 资料卡 | P1 | Phase 1 基础 ✅（2026-09-03）＋ P2.1（聊天壳）✅；P0 roaster / P2/P3 移交 489 |
 | [484-bot-reliability-ack-and-resume](./active/484-bot-reliability-ack-and-resume.md) | 可靠性兜底：ack 义务投递确认 + run 级中断续跑/升级恢复 | P0 | Planning |
 | [485-bot-storage-layout](./active/485-bot-storage-layout.md) | 存储布局：config.toml 声明层 + agents/<id>/ 身份目录 + profile.json | P0 | Phase 1-2 ✅ |
 | [486-message-threads](./active/486-message-threads.md) | 消息 thread/fork 分支层：replyToId + branched + thread 聚合读 | P1 | Planning |
 | [487-host-persistent-tool-permission](./active/487-host-persistent-tool-permission.md) | Host 持久化工具权限 | P1 | Planning |
 | [488-bot-channel-integration](./active/488-bot-channel-integration.md) | Bot Channel 接入：外部消息平台绑定（Discord/Slack）+ `[inbound]` 唤醒 + 出站发送 | P1 | Planning |
+| [489-bot-chat-dataflow-and-complete-cards](./active/489-bot-chat-dataflow-and-complete-cards.md) | bot 聊天数据流硬保证（SendMessage-only 数据层隔离）+ 全部卡片落地：P0.1/P0.3 数据层 source 投影 ✅、P2.2 最小卡族 ✅（SendMessage 5 kind 可读卡）；P0.2 侧表 / 完整交互卡族 / room 卡 / P2.5-P3 待做 | P0 | P0.1/P0.3/P2.2 最小版 ✅（2026-09-05）；其余待做 |
 | [490-bot-toolset-turn-tool-alignment](./active/490-bot-toolset-turn-tool-alignment.md) | Bot 工具集对齐 Grok TurnToolFactories:CreateAgent / UpdateAgent / ReactToMessage / UpdateTodos / WebSearch / CopyToBox 等接入(对比 grok-bot `turn-toolset.ts` 逐工厂建档) | P0 | Planning |
-| [491-bot-chat-messaging-feel](./active/491-bot-chat-messaging-feel.md) | Bot 聊天"发消息感"体感对齐：消息相位机（sending/sent/failed/queued）+ 流式渲染节流（rAF 合帧/memo）+ 会话状态机（thinking/tool/streaming 驱动 typing）+ seq 游标补发衔接 489 P0.3 + 发送路径解耦（483 P2.5）+ 状态/内容双切片 | P0 | Planning |
+| [491-bot-chat-messaging-feel](./active/491-bot-chat-messaging-feel.md) | Bot 聊天"发消息感"体感对齐：消息相位机（sending/sent/failed/queued）+ 流式渲染节流（rAF 合帧/memo）+ 会话状态机（thinking/tool/streaming 驱动 typing）+ seq 游标补发衔接 489 P0.3 + 发送路径解耦（483 P2.5）+ 状态/内容双切片 | P0 | P1.1 发送路径解耦 ✅（2026-09-05）；P0.x 相位/节流/状态机待做 |
 | [492-bot-to-bot-grok-parity](./active/492-bot-to-bot-grok-parity.md) | Bot 间交互 grok 全面对齐：契约层接线（buildAgentMessagingSystemPrompt 死代码激活）+ priority DM 抢占闭环（decidePreemption/DmPreemptionTracker 接线 + redrive）+ 透明性（bot-direct 视图可见 agent DM）+ CreateAgent/UpdateAgent + 478 群聊增补修正 | P0 | Planning |
 
 ### CLI / Cron
@@ -206,7 +207,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [65-recap-feature](./active/65-recap-feature.md) | Session Recap — auto show session summary on return | P1 | Planning |
 | [37-subagent-nested-session](./active/37-subagent-nested-session.md) | SubAgent nested-session sidebar display | P1 | Planning |
 | [472-unified-attachment-card-visual](./active/472-unified-attachment-card-visual.md) | Pasted / ref cards merge with image cards in one row; align to 104×104 rounded-2xl square | P2 | In progress |
-| [483-multi-bot-chat-ui](./active/483-multi-bot-chat-ui.md) | 多 Bot 聊天 UI：侧栏 Bots 分组（Telegram 式联系人）+ 类 Telegram 聊天视图 + Bot 资料/设置（bot 系列 473-486 之 UI 面） | P1 | Phase 1 基础 ✅（2026-09-03）；Phase 0/2/3 待做 |
+| [483-multi-bot-chat-ui](./active/483-multi-bot-chat-ui.md) | 多 Bot 聊天 UI：侧栏 Bots 分组（Telegram 式联系人）+ 类 Telegram 聊天视图 + Bot 资料/设置（bot 系列 473-486 之 UI 面） | P1 | Phase 1 基础 ✅（2026-09-03）＋ P2.1 聊天壳 ✅；P0/P2.2-P3 移交 489（数据流+卡族） |
 
 ### Infrastructure & Research
 
