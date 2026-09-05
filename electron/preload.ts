@@ -610,6 +610,14 @@ export interface AgentProfileAPI {
   delete: (id: string) => Promise<boolean>
 }
 
+/** Per-bot channel bindings (plan 488). Credentials are write-only. */
+export interface BotChannelsAPI {
+  manifests: () => Promise<{ manifests: Array<Record<string, unknown>> }>
+  list: (agentId: string) => Promise<{ channels?: Array<{ platform: string; label: string; status: 'configured' }>; error?: string }>
+  connect: (agentId: string, input: { platform: string; label?: string; credential: string }) => Promise<{ ok: boolean; platform?: string; error?: string }>
+  disconnect: (agentId: string, platform: string) => Promise<{ ok: boolean; platform?: string; error?: string }>
+}
+
 export interface ConfigAgentsAPI {
   list: () => Promise<Record<string, unknown>>;
   listBots: () => Promise<unknown>;
@@ -618,6 +626,9 @@ export interface ConfigAgentsAPI {
   update: (id: string, input: Record<string, unknown>) => Promise<unknown>;
   delete: (id: string) => Promise<boolean>;
   updateBotProfile: (id: string, input: Record<string, unknown>) => Promise<unknown>;
+  /** Opens the file dialog in the main process; null when the user canceled. */
+  uploadBotAvatar: (id: string) => Promise<{ avatarImage: string; avatarVersion: number; avatarUrl?: string } | null>;
+  clearBotAvatar: (id: string) => Promise<{ avatarImage: string; avatarVersion: number }>;
 }
 
 export interface HookRow {
@@ -1196,6 +1207,7 @@ export interface ElectronAPI {
   browserBackend: BrowserBackendAPI
   parser: DocumentParserAPI
   agentProfile: AgentProfileAPI
+  botChannels: BotChannelsAPI
   configAgents: ConfigAgentsAPI
   hooks: HooksAPI
   plugin: PluginAPI
@@ -2227,6 +2239,14 @@ const electronAPI: ElectronAPI = {
     update: (id: string, data: Record<string, unknown>) => ipcRenderer.invoke('db:agentProfile:update', id, data),
     delete: (id: string) => ipcRenderer.invoke('db:agentProfile:delete', id),
   },
+  botChannels: {
+    manifests: () => ipcRenderer.invoke('botChannels:manifests'),
+    list: (agentId: string) => ipcRenderer.invoke('botChannels:list', agentId),
+    connect: (agentId: string, input: { platform: string; label?: string; credential: string }) =>
+      ipcRenderer.invoke('botChannels:connect', agentId, input),
+    disconnect: (agentId: string, platform: string) =>
+      ipcRenderer.invoke('botChannels:disconnect', agentId, platform),
+  },
   configAgents: {
     list: () => ipcRenderer.invoke('config:agents:list'),
     listBots: () => ipcRenderer.invoke('config:agents:listBots'),
@@ -2234,6 +2254,8 @@ const electronAPI: ElectronAPI = {
     update: (id: string, input: Record<string, unknown>) => ipcRenderer.invoke('config:agents:update', id, input),
     delete: (id: string) => ipcRenderer.invoke('config:agents:delete', id),
     updateBotProfile: (id: string, input: Record<string, unknown>) => ipcRenderer.invoke('config:agents:updateBotProfile', id, input),
+    uploadBotAvatar: (id: string) => ipcRenderer.invoke('config:agents:uploadBotAvatar', id),
+    clearBotAvatar: (id: string) => ipcRenderer.invoke('config:agents:clearBotAvatar', id),
   },
   hooks: {
     overview: () => ipcRenderer.invoke('hooks:overview'),

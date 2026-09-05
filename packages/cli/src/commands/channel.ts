@@ -1,17 +1,19 @@
 /**
  * packages/agent/src/cli/commands/channel.ts
  *
- * `duya channel` — gateway IM channel control plane.
+ * `duya channel` — gateway IM channel control plane + per-bot bindings.
  *
- * Read-only surface:
+ * Read surface:
  *   list       — discovered channels (id / platform / name / guild / type / bound)
  *   info       — single channel + binding details
  *   platforms  — configured IM platforms (telegram / qq / feishu)
  *   status     — ChannelStatus snapshot (connected / lastError / streaming)
+ *   bindings   — per-bot channel bindings (agents/<id>/channels/, plan 488)
  *
- * No write ops. Channel management is the gateway's responsibility —
- * see `electron/gateway/channel-directory.ts` and the gateway's
- * `bridge:platform_state` event flow.
+ * Write surface (488 P2.3):
+ *   send       — push a message to a channel via the gateway
+ *   connect    — bind a platform to a bot (credential via env/stdin only)
+ *   disconnect — unbind a platform (optionally agent-scoped)
  *
  * Data source: `electron/cli/handlers/channels.ts` → `GET /v1/channels`,
  * `GET /v1/channels/:id`, `GET /v1/platforms`, `GET /v1/platforms/:p/status`.
@@ -314,16 +316,148 @@ export interface ChannelDisconnectResultDTO {
   error?: string;
 }
 
-async function disconnectChannel(
+/** Per-bot channel binding (plan 488 — agent-scoped channel store). */
+export interface AgentChannelBindingDTO {
+  platform: string;
+  label: string;
+  status: 'configured';
+  displayName: string;
+}
+
+export interface AgentChannelListResultDTO {
+  agentId: string;
+  channels: AgentChannelBindingDTO[];
+}
+
+export interface AgentChannelConnectResultDTO {
+  ok: boolean;
+  agentId: string;
+  platform: string;
+  label?: string;
+  error?: string;
+}
+
+function renderBindingsText(result: AgentChannelListResultDTO): string {
+  const channels = result.channels;
+  if (channels.length === 0) return `(no channels bound to agent ${result.agentId})`;
+  const lines = [`${result.agentId}: ${channels.length} channel${channels.length !== 1 ? 's' : ''} bound`];
+  for (const c of channels) {
+    lines.push(`  ${c.platform.padEnd(12)} ${c.label}  (${c.status})`);
+  }
+  return lines.join('\n');
+}
+
+async function listAgentChannels(
   format: OutputFormat,
-  platform: string,
+  agentId: string,
 ): Promise<ExitCode> {
-  if (!platform) {
-    process.stderr.write('usage: duya channel disconnect --platform <platform>\n');
+  if (!agentId) {
+    process.stderr.write('usage: duya channel bindings --agent <agentId>\n');
     return 64;
   }
   try {
     const client = await CliApiClient.connect();
+    const result = await client.get<AgentChannelListResultDTO>(
+      `/v1/agents/${encodeURIComponent(agentId)}/channels`,
+    );
+    process.stdout.write(
+      format === 'json' ? renderJson(result) + '\n' : renderBindingsText(result) + '\n',
+    );
+    return 0;
+  } catch (err) {
+    return reportError(err);
+  }
+}
+
+/**
+ * Read the channel credential from the environment or stdin.
+ * Credentials are never accepted as command-line arguments (argv leaks via
+ * process listings and shell history).
+ */
+async function readCredential(tokenEnv?: string, fromStdin?: boolean): Promise<string> {
+  if (fromStdin) {
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) {
+      chunks.push(chunk as Buffer);
+    }
+    return Buffer.concat(chunks).toString('utf-8').trim();
+  }
+  const envName = tokenEnv || 'DUYA_CHANNEL_TOKEN';
+  return (process.env[envName] ?? '').trim();
+}
+
+async function connectAgentChannel(
+  format: OutputFormat,
+  agentId: string,
+  platform: string,
+  label?: string,
+  tokenEnv?: string,
+  fromStdin?: boolean,
+): Promise<ExitCode> {
+  if (!agentId || !platform) {
+    process.stderr.write(
+      'usage: duya channel connect --agent <agentId> --platform <p> [--label <label>] [--token-env <VAR> | --stdin]\n' +
+        'credential source: DUYA_CHANNEL_TOKEN env var (default), --token-env <VAR>, or --stdin\n',
+    );
+    return 64;
+  }
+  let credential = '';
+  try {
+    credential = await readCredential(tokenEnv, fromStdin);
+  } catch (err) {
+    process.stderr.write(`Failed to read credential: ${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  }
+  if (!credential) {
+    process.stderr.write(
+      'No credential provided. Set DUYA_CHANNEL_TOKEN (or --token-env <VAR> / --stdin); never pass tokens as CLI args.\n',
+    );
+    return 1;
+  }
+  try {
+    const client = await CliApiClient.connect();
+    const result = await client.post<AgentChannelConnectResultDTO>(
+      `/v1/agents/${encodeURIComponent(agentId)}/channels/connect`,
+      { platform, credential, ...(label ? { label } : {}) },
+    );
+    if (format === 'json') {
+      process.stdout.write(renderJson(result) + '\n');
+    } else if (result.ok) {
+      process.stdout.write(`Connected ${result.platform} to agent ${result.agentId} (label: ${result.label ?? '-'})\n`);
+    } else {
+      process.stderr.write(`Connect failed: ${result.error ?? 'unknown error'}\n`);
+    }
+    return result.ok ? 0 : 1;
+  } catch (err) {
+    return reportError(err);
+  }
+}
+
+async function disconnectChannel(
+  format: OutputFormat,
+  platform: string,
+  agentId?: string,
+): Promise<ExitCode> {
+  if (!platform) {
+    process.stderr.write('usage: duya channel disconnect --platform <platform> [--agent <agentId>]\n');
+    return 64;
+  }
+  try {
+    const client = await CliApiClient.connect();
+    if (agentId) {
+      const result = await client.post<AgentChannelConnectResultDTO>(
+        `/v1/agents/${encodeURIComponent(agentId)}/channels/disconnect`,
+        { platform },
+      );
+      if (format === 'json') {
+        process.stdout.write(renderJson(result) + '\n');
+      } else if (result.ok) {
+        process.stdout.write(`Disconnected ${result.platform} from agent ${result.agentId}\n`);
+      } else {
+        process.stderr.write(`Disconnect failed: ${result.error ?? 'unknown error'}\n`);
+      }
+      return result.ok ? 0 : 1;
+    }
     const result = await client.post<ChannelDisconnectResultDTO>('/v1/channels/disconnect', {
       platform,
     });
@@ -383,6 +517,26 @@ export const runChannelCommand = {
   disconnect: (ctx: CliSubcommandContext): Promise<ExitCode> => {
     const platform =
       typeof ctx.options.platform === 'string' ? ctx.options.platform : undefined;
-    return disconnectChannel(ctx.format, platform ?? '');
+    const agentId =
+      typeof ctx.options.agent === 'string' ? ctx.options.agent : undefined;
+    return disconnectChannel(ctx.format, platform ?? '', agentId);
+  },
+  // 488 P2.3: per-bot channel bindings (list/connect)
+  bindings: (ctx: CliSubcommandContext): Promise<ExitCode> => {
+    const agentId =
+      typeof ctx.options.agent === 'string' ? ctx.options.agent : undefined;
+    return listAgentChannels(ctx.format, agentId ?? '');
+  },
+  connect: (ctx: CliSubcommandContext): Promise<ExitCode> => {
+    const agentId =
+      typeof ctx.options.agent === 'string' ? ctx.options.agent : undefined;
+    const platform =
+      typeof ctx.options.platform === 'string' ? ctx.options.platform : undefined;
+    const label =
+      typeof ctx.options.label === 'string' ? ctx.options.label : undefined;
+    const tokenEnv =
+      typeof ctx.options['token-env'] === 'string' ? ctx.options['token-env'] : undefined;
+    const fromStdin = ctx.options.stdin === true;
+    return connectAgentChannel(ctx.format, agentId ?? '', platform ?? '', label, tokenEnv, fromStdin);
   },
 };
