@@ -90,6 +90,12 @@ export interface MessageRow {
    * (see `DEFAULT_MESSAGE_SOURCE` backfill note in @duya/agent/message).
    */
   source?: MessageSource | null;
+  /**
+   * Plan 489 P2.2: SendMessageTool card payload (attachment url/alt, widget
+   * options, cursor-agent bcId, secret-request descriptor, text images),
+   * JSON-serialized from message metadata.sendMessage. Null for plain rows.
+   */
+  send_message_meta?: string | null;
 }
 
 // ─── Content serialization (ported from old db-handlers.ts) ───
@@ -359,7 +365,17 @@ interface IpcMessageDTO {
  * replyToId/branched fork markers so a branched message stays durable and
  * `getThread` can be served after a reload.
  */
-const PERSISTED_METADATA_KEYS = ['preImageSha', 'filePath', 'fileSnapshots', 'threadMeta'] as const;
+const PERSISTED_METADATA_KEYS = [
+  'preImageSha',
+  'filePath',
+  'fileSnapshots',
+  'threadMeta',
+  // Plan 489 P2.2: SendMessageTool card payloads (attachment url/alt,
+  // widget options, cursor-agent bcId, secret-request descriptor, text
+  // images) ride under this single namespaced key so bot-direct cards
+  // survive reload.
+  'sendMessage',
+] as const;
 
 /**
  * Construct a NewEvent from an IPC message DTO.
@@ -625,6 +641,10 @@ function messageToIpcRow(
     reply_to_id: threadMeta?.replyToId ?? null,
     branched: threadMeta?.branched === true ? true : null,
     source: rowSource,
+    send_message_meta:
+      metadata?.sendMessage != null
+        ? JSON.stringify(metadata.sendMessage)
+        : null,
   };
 }
 

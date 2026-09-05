@@ -107,6 +107,33 @@ describe('useBotDirectTranscript', () => {
     expect(result.current.error).toBeNull();
   });
 
+  it('discards non-visible sources from the initial fetch', async () => {
+    mocks.botDirectGetTranscript.mockResolvedValueOnce({
+      messages: [
+        // Visible — survives the fetch-time filter.
+        { id: 'v1', role: 'assistant', content: 'reply', timestamp: 1, source: 'send_message' },
+        // Hidden — must never surface even if the server sends it.
+        { id: 'h1', role: 'assistant', content: '', msgType: 'tool_use', source: 'tool_use', toolName: 'Read' },
+        { id: 'h2', role: 'assistant', content: 'plan', msgType: 'thinking', source: 'thinking' },
+        { id: 'h3', role: 'system', content: 'sys', source: 'system' },
+        { id: 'h4', role: 'assistant', content: 'scratch', source: 'scratchpad' },
+      ],
+      parsedDocuments: [],
+    });
+    setElectronApi({
+      message: { botDirectGetTranscript: mocks.botDirectGetTranscript },
+    });
+    const { result } = renderHook(() =>
+      useBotDirectTranscript('bot:test1:abc'),
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0].id).toBe('v1');
+  });
+
   it('captures errors from the IPC into result.error', async () => {
     mocks.botDirectGetTranscript.mockRejectedValueOnce(new Error('boom'));
     setElectronApi({

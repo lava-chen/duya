@@ -283,6 +283,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
         subAgentId: m.subAgentId ?? undefined,
         attachments: m.attachments ?? undefined,
         source: m.source ?? undefined,
+        sendMessageMeta: m.sendMessageMeta ?? undefined,
       }));
 
       // Add each message to the store

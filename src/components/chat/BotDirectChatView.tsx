@@ -23,14 +23,17 @@
  *   - composer disabled until plan 477 binds a persistent session
  *
  * Out of scope here (later P2 items): tool/thinking collapse (P2.3),
- * cards (P2.2), send pipeline rewiring (P2.5 / plans 476+481) — onSend
- * rides the workspace handleSendMessage path. Plan 489 P0.3 (wired
- * 2026-09-05): the transcript now comes from the source-filtered
- * `useBotDirectTranscript` projection (send_message | user); the
- * messages prop only contributes in-flight optimistic user bubbles.
+ * send pipeline rewiring (P2.5 / plans 476+481) — onSend rides the
+ * bot-direct path. Plan 489 P0.3 (wired 2026-09-05): the transcript
+ * comes from the source-filtered `useBotDirectTranscript` projection
+ * (send_message | user); the messages prop only contributes in-flight
+ * optimistic user bubbles. Plan 489 P2.2 (minimal, 2026-09-05):
+ * SendMessage attachment / widget / cursor-agent / secret-request kinds
+ * render as minimal cards (BotSendCard); full interactive card family
+ * (secret input flow, cursor-agent live status) is still pending.
  */
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BotComposer, type BotComposerSendPayload } from "./BotComposer";
 import { BotBubbleRow } from "./BotBubbleRow";
 import { BotToolCallRow } from "./BotToolCallRow";
@@ -43,7 +46,14 @@ import { useBotContacts } from "@/components/layout/sidebar/use-bot-contacts";
 import { BotCharacterAvatar } from "@/components/layout/sidebar/BotCharacterAvatar";
 import { resolveBotAgentId } from "./bot/chat-mode";
 import { useBotDirectTranscript } from "./bot/use-bot-direct-transcript";
+import {
+  loadBotModelPreference,
+  saveBotModelPreference,
+  type BotModelPreference,
+} from "./bot/model-preference";
 import { mergeInFlightOptimisticMessages } from "@/stores/conversation-store";
+import { BotMessageAction } from "./BotMessageAction";
+import { BotSendCard } from "./BotSendCard";
 
 export interface BotDirectChatViewProps {
   sessionId: string;
@@ -120,6 +130,46 @@ function StatusRow({ message }: { message: Message }) {
   return null;
 }
 
+/**
+ * Plan 489 P2.2 — SendMessage kinds that render as minimal cards instead
+ * of plain bubbles. Card rows live INSIDE the assistant bubble chrome so
+ * grouping/colors stay consistent; widget options click-send via onSend.
+ */
+function isSendCardMessage(message: Message): boolean {
+  if (message.role !== "assistant") return false;
+  const type = message.msgType;
+  if (
+    type === 'attachment' ||
+    type === 'widget' ||
+    type === 'cursor-agent' ||
+    type === 'secret-request'
+  ) {
+    return true;
+  }
+  // Plain text with re-attached images renders text + image strip.
+  return type === 'text' && !!message.sendMessageMeta?.images?.length;
+}
+
+function SendCardRow({
+  message,
+  onOptionClick,
+}: {
+  message: Message;
+  onOptionClick?: (option: string) => void;
+}) {
+  return (
+    <div className="bot-chat-row bot-chat-row--assistant" data-role="assistant">
+      <BotMessageAction
+        textToCopy={typeof message.content === 'string' ? message.content : undefined}
+      >
+        <div className="bot-chat-bubble bot-chat-bubble--assistant bot-chat-bubble--card">
+          <BotSendCard message={message} onOptionClick={onOptionClick} />
+        </div>
+      </BotMessageAction>
+    </div>
+  );
+}
+
 export function BotDirectChatView({
   sessionId,
   messages: messagesProp,
@@ -159,6 +209,29 @@ export function BotDirectChatView({
     [contacts, agentId],
   );
 
+  // Persisted per-bot model/effort preference (localStorage). Loaded on mount /
+  // session switch; every pick is written back so the choice survives reloads.
+  const [modelPref, setModelPref] = useState<BotModelPreference | null>(null);
+  useEffect(() => {
+    setModelPref(loadBotModelPreference(sessionId));
+  }, [sessionId]);
+
+  const handleBotModelChange = useCallback((model: string, providerId?: string) => {
+    setModelPref((prev) => {
+      const next = { model, providerId, effort: prev?.effort };
+      saveBotModelPreference(sessionId, next);
+      return { ...next, updatedAt: Date.now() };
+    });
+  }, [sessionId]);
+
+  const handleBotEffortChange = useCallback((effort: string | undefined) => {
+    setModelPref((prev) => {
+      const next = { model: prev?.model ?? '', providerId: prev?.providerId, effort };
+      saveBotModelPreference(sessionId, next);
+      return { ...next, updatedAt: Date.now() };
+    });
+  }, [sessionId]);
+
   const botName = contact?.name ?? agentId ?? sessionId;
   const subtitle = contact?.title || contact?.description || "";
   // Plan 491 P1.2 / 477 P3.1: the persistent bot session is now lazily
@@ -184,7 +257,11 @@ export function BotDirectChatView({
         const text = textFromContent(
           message.role === "user" ? (message.displayContent ?? message.content) : message.content,
         );
-        if (!text.trim()) continue;
+        // A caption-less image message (text kind + sendMessageMeta.images)
+        // still renders — as a card with just the image strip.
+        const hasCardImages =
+          message.role === 'assistant' && !!message.sendMessageMeta?.images?.length;
+        if (!text.trim() && !hasCardImages) continue;
         result.push({
           message,
           role: message.role,
@@ -262,7 +339,13 @@ export function BotDirectChatView({
             const showSeparator =
               previous == null ||
               dayKeyOf(previous.message.timestamp) !== dayKeyOf(row.message.timestamp);
-            const element = row.text ? (
+            const element = isSendCardMessage(row.message) ? (
+              <SendCardRow
+                key={row.message.id}
+                message={row.message}
+                onOptionClick={(option) => onSend({ text: option })}
+              />
+            ) : row.text ? (
               <BotBubbleRow
                 key={row.message.id}
                 role={row.role}
@@ -303,11 +386,17 @@ export function BotDirectChatView({
       </div>
 
       <BotComposer
+        key={sessionId}
         botId={sessionId}
         disabled={!canSendToBot}
         busy={busy}
         onSend={onSend}
         onStop={onStop}
+        initialModel={modelPref?.model}
+        initialProviderId={modelPref?.providerId}
+        initialEffort={modelPref?.effort}
+        onModelChange={handleBotModelChange}
+        onEffortChange={handleBotEffortChange}
         placeholder={
           canSendToBot
             ? t("bot.chat.placeholder")

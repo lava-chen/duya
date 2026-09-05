@@ -70,6 +70,7 @@ function ipcMessageToUiMessage(m: IpcMessage): Message {
     subAgentId: m.subAgentId ?? undefined,
     attachments: m.attachments ?? undefined,
     source: m.source ?? null,
+    sendMessageMeta: m.sendMessageMeta ?? null,
   };
 }
 
@@ -107,7 +108,13 @@ export function useBotDirectTranscript(
     setError(null);
     try {
       const result = await getBotDirectTranscriptIPC(sessionId);
-      setMessages(result.messages.map(ipcMessageToUiMessage));
+      // Defense in depth: even if the server ever returned a non-visible
+      // source, drop it here so the renderer surface is source-safe too.
+      setMessages(
+        result.messages
+          .map(ipcMessageToUiMessage)
+          .filter((m) => isBotDirectVisible(m.source)),
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);

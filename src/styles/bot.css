@@ -1342,3 +1342,142 @@
   background: var(--accent, #3b82f6);
   color: white;
 }
+
+/* ─── Plan 489 P2.2: BotSendCard — minimal cards for SendMessage kinds ───
+   Cards render INSIDE .bot-chat-bubble--assistant, so they inherit the
+   assistant bubble surface/border; only inner elements are styled here. */
+
+.bot-send-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Attachment chip — clickable file/link pill. */
+.bot-send-card__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bot-bubble-assistant-fg) 8%, transparent);
+  color: var(--bot-bubble-assistant-fg);
+  text-decoration: none;
+  font-size: 0.82rem;
+  border: 1px solid color-mix(in srgb, var(--bot-bubble-assistant-fg) 15%, transparent);
+}
+
+.bot-send-card__chip:hover {
+  border-color: var(--accent);
+}
+
+.bot-send-card__chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bot-send-card__chip-icon {
+  flex-shrink: 0;
+}
+
+/* Widget — prompt + option pills (click sends the option as a user turn). */
+.bot-send-card__widget {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bot-send-card__widget-prompt {
+  font-weight: 600;
+}
+
+.bot-send-card__widget-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.bot-send-card__option {
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--bot-bubble-assistant-fg) 25%, transparent);
+  background: transparent;
+  color: var(--bot-bubble-assistant-fg);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.bot-send-card__option:hover {
+  background: color-mix(in srgb, var(--bot-bubble-assistant-fg) 12%, transparent);
+  border-color: var(--accent);
+}
+
+/* Cursor-agent run badge. */
+.bot-send-card__badge-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bot-send-card__badge {
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+}
+
+.bot-send-card__bcid {
+  font-size: 0.72rem;
+  opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Secret-request descriptor — minimal: no input flow yet (P2.2 follow-up). */
+.bot-send-card__secret {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px dashed color-mix(in srgb, var(--bot-bubble-assistant-fg) 30%, transparent);
+}
+
+.bot-send-card__secret-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bot-send-card__secret-path {
+  font-size: 0.75rem;
+  opacity: 0.7;
+  font-family: monospace;
+}
+
+.bot-send-card__secret-hint {
+  font-size: 0.72rem;
+  opacity: 0.55;
+}
+
+/* Image strip for the text kind with re-attached images. */
+.bot-send-card__images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.bot-send-card__image {
+  max-width: min(280px, 100%);
+  max-height: 220px;
+  border-radius: 10px;
+  object-fit: cover;
+  border: 1px solid color-mix(in srgb, var(--bot-bubble-assistant-fg) 15%, transparent);
+}
