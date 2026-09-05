@@ -26,7 +26,7 @@ import type { Migration, SqliteDatabase } from './database';
 
 // ─── Inline types ───
 
-export type MailboxKind = 'queued' | 'followup' | 'background_notification';
+export type MailboxKind = 'queued' | 'followup' | 'background_notification' | 'agent_dm';
 export type MailboxStatus = 'pending' | 'observed' | 'applied' | 'cancelled';
 export type MailboxApplyMode =
   | 'promote_to_user_message'
@@ -197,10 +197,11 @@ const KIND_PRIORITY: Record<MailboxKind, number> = {
   followup: 10,
   background_notification: 50,
   queued: 100,
+  agent_dm: 100,
 };
 
 export class Mailbox {
-  /** Migration id=4: create mailbox_items table + claim index + client_msg_id index. */
+  /** Migrations: id=4 creates mailbox_items; id=15 admits the agent_dm kind (plan 477). */
   static readonly migrations: Migration[] = [
     {
       id: 4,
@@ -249,6 +250,94 @@ export class Mailbox {
         `);
       },
     },
+    {
+      id: 15,
+      name: 'mailbox_items_agent_dm_kind',
+      up: (db) => {
+        // Plan 477 P1.2 follow-up: admit kind='agent_dm' rows (agent-to-agent
+        // DMs written by SendToAgentTool). SQLite cannot ALTER a CHECK
+        // constraint, so rebuild the table. Idempotent: a table whose SQL
+        // already admits 'agent_dm' is left untouched; rows are copied
+        // column-by-column via PRAGMA table_info so the rebuild survives
+        // column drift.
+        const sql = (
+          db.prepare(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='mailbox_items'",
+          ).get() as { sql?: string } | undefined
+        )?.sql;
+        if (!sql) return;
+        if (sql.includes("'agent_dm'")) return;
+
+        const tableInfo = db.prepare('PRAGMA table_info(mailbox_items)').all() as Array<{
+          name: string;
+        }>;
+        const rebuildColumns = [
+          'id', 'session_id', 'kind', 'status', 'priority', 'content',
+          'attachments', 'source', 'client_msg_id', 'submitted_run_id',
+          'claim_token', 'claim_expires_at', 'claim_attempts',
+          'last_claim_error', 'observed_at', 'observed_at_checkpoint',
+          'observed_by_run_id', 'apply_mode', 'applied_at',
+          'applied_at_checkpoint', 'applied_summary', 'resulting_event_id',
+          'edit_locked_at', 'cancelled_at', 'cancelled_by', 'cancel_reason',
+          'meta', 'created_at',
+        ];
+        const copyColumns = tableInfo
+          .map((col) => col.name)
+          .filter((name) => rebuildColumns.includes(name));
+        const quoted = copyColumns.map((n) => `"${n}"`).join(', ');
+
+        db.exec(`
+          ALTER TABLE mailbox_items RENAME TO mailbox_items_old;
+
+          CREATE TABLE mailbox_items (
+            id                     TEXT PRIMARY KEY,
+            session_id             TEXT NOT NULL,
+            kind                   TEXT NOT NULL
+              CHECK (kind IN ('queued','followup','background_notification','agent_dm')),
+            status                 TEXT NOT NULL
+              CHECK (status IN ('pending','observed','applied','cancelled')),
+            priority               INTEGER NOT NULL DEFAULT 100,
+            content                TEXT NOT NULL,
+            attachments            TEXT,
+            source                 TEXT NOT NULL DEFAULT 'ui',
+            client_msg_id          TEXT,
+            submitted_run_id       TEXT NOT NULL,
+            claim_token            TEXT,
+            claim_expires_at       INTEGER,
+            claim_attempts         INTEGER NOT NULL DEFAULT 0,
+            last_claim_error       TEXT,
+            observed_at            INTEGER,
+            observed_at_checkpoint TEXT,
+            observed_by_run_id     TEXT,
+            apply_mode             TEXT,
+            applied_at             INTEGER,
+            applied_at_checkpoint  TEXT,
+            applied_summary        TEXT,
+            resulting_event_id     TEXT,
+            edit_locked_at         INTEGER,
+            cancelled_at           INTEGER,
+            cancelled_by           TEXT,
+            cancel_reason          TEXT,
+            meta                   TEXT NOT NULL DEFAULT '{}',
+            created_at             INTEGER NOT NULL
+          );
+
+          INSERT INTO mailbox_items (${quoted})
+            SELECT ${quoted} FROM mailbox_items_old;
+
+          DROP TABLE mailbox_items_old;
+
+          CREATE INDEX idx_mailbox_claim_ready
+            ON mailbox_items(session_id, status, priority, created_at)
+            WHERE status = 'pending'
+               OR (observed_at IS NOT NULL AND claim_expires_at IS NOT NULL);
+
+          CREATE UNIQUE INDEX uq_mailbox_client_msg
+            ON mailbox_items(session_id, client_msg_id)
+            WHERE client_msg_id IS NOT NULL;
+        `);
+      },
+    },
   ];
 
   private readonly db: SqliteDatabase;
@@ -276,6 +365,17 @@ export class Mailbox {
   }
 
   // ─── Enqueue ───
+
+  /**
+   * Look up a row by (session, clientMsgId). Used by the agent-DM dispatcher
+   * (plan 477 P4.2) to resolve the hop depth of a message being replied to.
+   */
+  getByClientMsgId(sessionId: string, clientMsgId: string): MailboxItem | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM mailbox_items WHERE session_id = ? AND client_msg_id = ?')
+      .get(sessionId, clientMsgId) as MailboxRow | undefined;
+    return row ? rowToItem(row) : undefined;
+  }
 
   /**
    * Insert a pending row. If `clientMsgId` matches an existing row for the

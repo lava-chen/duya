@@ -56,6 +56,7 @@ import { generateSessionTitle } from '../session/title-generator.js';
 import { getSteeringConfig } from '../hooks/config.js';
 import { classifyError, APIErrorType, computeContextEstimate, normalizePromptTokens } from '@duya/ai';
 import type { PromptProfile } from '../prompts/modes/types.js';
+import { isBotAgentProfile } from '../prompts/index.js';
 // Plan 312: type-only import for the App Connection tool descriptor.
 import type { AppConnectionToolDescriptor } from '../tool/AppConnectionTool/index.js';
 import { getCachedAppConnectionDescriptors } from '../tool/AppConnectionTool/index.js';
@@ -225,6 +226,12 @@ interface ChatStartMessage {
      * burning the whole run budget. Optional; absent = no per-request cap.
      */
     llmRequestTimeoutMs?: number;
+    /**
+     * Plan 497: wake runs (cron / background notification / agent DM) persist
+     * their prompt user row with source 'system' — model context, never
+     * bot-direct chat (the dispatcher's agent_dm marker is the visible row).
+     */
+    wakeRun?: boolean;
   };
 }
 
@@ -777,12 +784,49 @@ function memoryTierIpcRequest<T = unknown>(
   });
 }
 
+// Plan 481 amendment: identity subactions (profile.set / avatar.*) route
+// over their own channel so the main process can bind them to the session's
+// bot identity (the calling bot may only edit ITS OWN profile.json).
+function botIdentityIpcRequest<T = unknown>(
+  _channel: string,
+  payload: unknown,
+  options?: { timeout?: number }
+): Promise<{ success: boolean; data?: T; error?: { code: string; message: string } }> {
+  return new Promise((resolve, reject) => {
+    const requestId = crypto.randomUUID();
+    const timeout = options?.timeout || 15000;
+
+    const timeoutHandle = setTimeout(() => {
+      if (pendingIpcRequests.has(requestId)) {
+        pendingIpcRequests.delete(requestId);
+        resolve({ success: false, error: { code: 'TIMEOUT', message: `bot-identity IPC request timeout after ${timeout}ms` } });
+      }
+    }, timeout);
+
+    pendingIpcRequests.set(requestId, {
+      resolve: (v) => resolve(v as { success: boolean; data?: T; error?: { code: string; message: string } }),
+      reject: (e) => reject(e),
+      timeoutHandle,
+    });
+
+    const outerPayload = payload as { subaction?: string; payload?: unknown; sessionId?: string } | undefined;
+    sendToMain({
+      type: 'bot-identity:rpc',
+      requestId,
+      subaction: outerPayload?.subaction,
+      payload: outerPayload?.payload,
+      sessionId: outerPayload?.sessionId,
+    });
+  });
+}
+
 /**
  * Unified tool IPC dispatcher: routes based on the `channel` argument.
  * - `'conductor:executor:rpc'` → conductorIpcRequest (canvas tools)
  * - `'appConnection:invoke'`    → appConnectionIpcRequest (connector tools)
  * - `'computer-use:execute'`    → computerUseIpcRequest (plan 454)
  * - `'memory-tier:rpc'`         → memoryTierIpcRequest (plan 481)
+ * - `'bot-identity:rpc'`        → botIdentityIpcRequest (plan 481 amendment)
  *
  * Plan 312: always injected into the ToolUseContext so App Connection
  * tools work without conductor mode being active.
@@ -806,6 +850,9 @@ function toolIpcRequest<T = unknown>(
   }
   if (channel === 'memory-tier:rpc') {
     return memoryTierIpcRequest<T>(channel, payload, options);
+  }
+  if (channel === 'bot-identity:rpc') {
+    return botIdentityIpcRequest<T>(channel, payload, options);
   }
   return conductorIpcRequest<T>(channel, payload, options);
 }
@@ -2591,6 +2638,9 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       conductorIpc: { sendToMain, ipcRequest: toolIpcRequest },
       backgroundTaskResume: msg.options?.backgroundTaskResume,
       llmRequestTimeoutMs: msg.options?.llmRequestTimeoutMs,
+      // Plan 497: wake runs (cron/background notification/agent DM) persist
+      // their prompt user row source 'system' — model context, not chat.
+      wakeRun: msg.options?.wakeRun === true,
       todoGate: { enabled: steering.todoGateEnabled },
       antiDeadLoop: { ...steering.antiDeadLoop },
       toolIntentNudgeMax: steering.toolIntentNudgeMax,
@@ -2951,7 +3001,13 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     const assistantMessageCount = agentMessages.filter((m: Message) => m.role === 'assistant').length;
     // Only generate if: (1) never generated before, AND (2) in first 3 rounds, AND (3) at least 1 complete round
     // After round 3, title is locked and never updated
-    const shouldGenerate = !hasGeneratedTitle
+    // Bot-pipeline agents never surface a session title in the UI (bot
+    // persistent sessions are `bot:<agentId>`, gateway channels reply inline),
+    // so the LLM title call would be pure token burn. Skip entirely.
+    const isBotPipeline = msg.sessionId.startsWith('bot:')
+      || isBotAgentProfile(agent.getLastAppliedAgentProfile());
+    const shouldGenerate = !isBotPipeline
+      && !hasGeneratedTitle
       && userMessageCount >= 1
       && userMessageCount <= 3
       && assistantMessageCount >= 1;
@@ -4110,6 +4166,30 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             }
           } else {
             warn('[Agent-Process] No pending memory-tier IPC request found for requestId:', requestId);
+          }
+          break;
+        }
+        // Plan 481 amendment: bot-identity bridge response (profile.set / avatar.*).
+        case 'bot-identity:rpc:response': {
+          const { requestId, success, data, error } = msg as unknown as {
+            requestId: string;
+            success: boolean;
+            data?: unknown;
+            error?: { code: string; message: string };
+          };
+          const pending = pendingIpcRequests.get(requestId);
+          if (pending) {
+            if (pending.timeoutHandle) {
+              clearTimeout(pending.timeoutHandle);
+            }
+            pendingIpcRequests.delete(requestId);
+            if (success) {
+              pending.resolve({ success: true, data });
+            } else {
+              pending.resolve({ success: false, error: error || { code: 'UNKNOWN', message: 'Unknown error' } });
+            }
+          } else {
+            warn('[Agent-Process] No pending bot-identity IPC request found for requestId:', requestId);
           }
           break;
         }

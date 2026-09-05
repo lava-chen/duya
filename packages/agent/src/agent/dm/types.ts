@@ -10,6 +10,33 @@ import { createHash } from "node:crypto";
 export const AGENT_INBOUND_WAKE_CUE = "[agent]";
 export const AGENT_MESSAGE_MAX_TEXT_LENGTH = 8_000;
 
+/**
+ * Intent taxonomy (plan 477 P4.1, mirrors rakazo's message_bot intents).
+ * Drives the wake prompt's action text and the auto-return behavior:
+ *   - request/question → the receiver's final response is auto-returned
+ *   - result           → the delivery of a prior request's outcome
+ *   - status/fyi       → informational; silence is acceptable
+ */
+export type AgentDmIntent = "request" | "result" | "question" | "status" | "fyi";
+export const AGENT_DM_INTENTS: readonly AgentDmIntent[] = [
+  "request",
+  "result",
+  "question",
+  "status",
+  "fyi",
+] as const;
+
+/**
+ * Maximum hop depth for bot→bot DM chains (plan 477 P4.2). A message born
+ * from human context is hop 0; each bot→bot reply increments it. Enforced
+ * at dispatch (main-side), so models cannot forge a lower value.
+ */
+export const AGENT_DM_MAX_HOPS = 6;
+
+export function isAgentDmIntent(value: unknown): value is AgentDmIntent {
+  return typeof value === "string" && (AGENT_DM_INTENTS as readonly string[]).includes(value);
+}
+
 export interface ImageRef {
   url: string;
   alt?: string;
@@ -25,6 +52,14 @@ export interface AgentDmEnvelope {
   text: string;
   images?: ImageRef[];
   priority?: boolean; // if true, interrupts recipient's non-user work
+  /** Plan 477 P4.1 — sender-declared intent; drives wake prompt + auto-return. */
+  intent?: AgentDmIntent;
+  /**
+   * Plan 477 P4.2 — bot→bot hop depth (0 = born from human context).
+   * Written by the dispatcher (computed from the replyTo chain), not by the
+   * sending model, so it cannot be forged downward.
+   */
+  hops?: number;
   timestampMs: number;
   /** Client-generated idempotency key. */
   clientMsgId: string;
@@ -80,6 +115,8 @@ export function computeEnvelopeDigest(envelope: AgentDmEnvelope): string {
     txt: envelope.text,
     img: envelope.images ?? [],
     pri: envelope.priority ?? false,
+    intent: envelope.intent ?? null,
+    hops: envelope.hops ?? null,
     ts: envelope.timestampMs,
     mid: envelope.clientMsgId,
     nonce: envelope.clientNonce ?? null,

@@ -23,6 +23,11 @@
  *                       notification / TaskTool notification
  *  - 'channel_mirror' → gateway_user:appendMirror writes from external
  *                       channels (Slack/Discord redelivery ledger)
+ *  - 'reaction'       → ReactToMessage output (plan 490 P1): an emoji
+ *                       tapback row targeting another message via
+ *                       metadata.reaction. Mirrors grok's transcript-entry
+ *                       reactions; rendered later as a pill on the target
+ *                       bubble (UI pending — plan 491 P2 surface).
  *
  * `source` is inferred at the IPC boundary (`ipcMessageToNewEvent`) when
  * the caller does not supply one explicitly. The inference rules live in
@@ -35,7 +40,9 @@ export type MessageSource =
   | 'thinking'
   | 'scratchpad'
   | 'system'
-  | 'channel_mirror';
+  | 'channel_mirror'
+  | 'reaction'
+  | 'agent_dm';
 
 /**
  * Sources that are visible to the end user in a 1:1 bot chat view.
@@ -44,6 +51,12 @@ export type MessageSource =
 export const BOT_DIRECT_VISIBLE_SOURCES: readonly MessageSource[] = [
   'send_message',
   'user',
+  // Plan 490 P1: reaction tapbacks render as pills on target bubbles in the
+  // bot-direct view (UI pending). The rows must survive the projection so
+  // the future renderer can group them; they are never standalone bubbles.
+  'reaction',
+  // Plan 477 P4.4: bot→bot DM marker cards (sent + received directions).
+  'agent_dm',
 ] as const;
 
 /**

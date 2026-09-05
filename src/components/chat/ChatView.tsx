@@ -44,7 +44,6 @@ import { ArrowLeftIcon } from '@/components/icons';
 import { SessionSelector } from '@/components/home/SessionSelector';
 import { InputDialog } from '@/components/ui/InputDialog';
 import { Button } from '@/components/ui/Button';
-import { IconButton } from '@/components/ui/IconButton';
 import { TaskDrawer } from '@/components/layout/TaskDrawer';
 import { useTaskDrawerOpen } from '@/components/layout/task-drawer-store';
 import { useTaskList } from '@/hooks/useTaskList';
@@ -1514,21 +1513,16 @@ export function ChatView({
             <GoalStatusChip sessionId={sessionId} />
             {/* Scroll to bottom button - shown when not near bottom, floats above content */}
             {!isNearBottom && (
-              <div className="flex justify-center absolute left-1/2 -translate-x-1/2" style={{ top: '-44px' }}>
-                <IconButton
-                  variant="default"
-                  size="md"
-                  shape="round"
+              <div className="flex justify-center absolute left-1/2 -translate-x-1/2" style={{ top: '-48px' }}>
+                <button
+                  type="button"
                   onClick={handleScrollToBottom}
-                  className="flex items-center justify-center w-8 h-8 rounded-full bg-[var(--main-bg)] border border-[var(--border)] shadow-md hover:shadow-lg transition-all duration-200 hover:scale-105"
-                  style={{
-                    boxShadow: '0 2px 8px rgba(0,0,0,0.12), 0 0 0 1px var(--border)',
-                  }}
+                  className="flex items-center justify-center w-9 h-9 rounded-full bg-[var(--surface-solid)] border border-[var(--border)] text-[var(--muted)] shadow-[0_4px_12px_rgba(0,0,0,0.15)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-colors duration-200 animate-in fade-in slide-in-from-bottom-2"
                   title="Scroll to bottom"
                   aria-label="Scroll to bottom"
                 >
-                  <CaretDownIcon size={18} style={{ color: 'var(--muted)' }} />
-                </IconButton>
+                  <CaretDownIcon size={16} strokeWidth={2} />
+                </button>
               </div>
             )}
 

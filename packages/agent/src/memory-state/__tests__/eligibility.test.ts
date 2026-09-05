@@ -315,6 +315,34 @@ describe('selectEligible', () => {
       sourceFingerprint: 'fp-shape',
     });
   });
+
+  it('13. bot exclusion: excluded agent_profile_id is skipped, null/other ids stay eligible (Plan 479)', () => {
+    insertCatalogRow(db, {
+      rollout_id: 'bot-session',
+      agent_profile_id: 'bot-abc123',
+      last_message_at: BASE_LAST_MESSAGE_AT,
+    });
+    insertCatalogRow(db, {
+      rollout_id: 'other-bot-session',
+      agent_profile_id: 'bot-other',
+      last_message_at: BASE_LAST_MESSAGE_AT,
+    });
+    insertCatalogRow(db, {
+      rollout_id: 'desktop-session',
+      agent_profile_id: null,
+      last_message_at: BASE_LAST_MESSAGE_AT,
+    });
+
+    const ids = selectEligible(db, { now: T0, excludeAgentProfileIds: ['bot-abc123'] }).map(
+      (e) => e.rolloutId,
+    );
+    expect(ids).not.toContain('bot-session');
+    expect(ids).toContain('other-bot-session');
+    expect(ids).toContain('desktop-session');
+
+    // Empty list = old behavior (no filtering).
+    expect(eligibleIds(db)).toContain('bot-session');
+  });
 });
 
 describe('diagnoseEligibility', () => {
@@ -348,15 +376,28 @@ describe('diagnoseEligibility', () => {
     const diag = diagnoseEligibility(db, { now: T0 });
 
     expect(diag.total).toBe(6);
+    expect(diag.botExcluded).toBe(0);
     expect(diag.activeMain).toBe(5); // ready, fresh, thin, auto, done
     expect(diag.enoughMessages).toBe(4); // ready, fresh, auto, done
     expect(diag.idleReady).toBe(2); // ready + done (auto excluded, fresh not idle)
     expect(diag.alreadyExtracted).toBe(1); // done
   });
 
+  it('counts bot sessions in botExcluded when an exclusion list is given', () => {
+    insertCatalogRow(db, { rollout_id: 'bot-a', agent_profile_id: 'bot-aaa', last_message_at: BASE_LAST_MESSAGE_AT });
+    insertCatalogRow(db, { rollout_id: 'bot-b', agent_profile_id: 'bot-bbb', last_message_at: BASE_LAST_MESSAGE_AT });
+    insertCatalogRow(db, { rollout_id: 'human', agent_profile_id: null, last_message_at: BASE_LAST_MESSAGE_AT });
+
+    const diag = diagnoseEligibility(db, { now: T0, excludeAgentProfileIds: ['bot-aaa'] });
+    expect(diag.total).toBe(3);
+    expect(diag.botExcluded).toBe(1);
+    expect(diag.activeMain).toBe(3); // buckets remain unfiltered by bots
+  });
+
   it('returns zeroes on an empty catalog', () => {
     expect(diagnoseEligibility(db, { now: T0 })).toEqual({
       total: 0,
+      botExcluded: 0,
       activeMain: 0,
       enoughMessages: 0,
       idleReady: 0,

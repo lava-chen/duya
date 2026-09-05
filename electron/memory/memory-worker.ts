@@ -41,6 +41,7 @@ import {
   DEFAULT_WINDOW_MS,
 } from '../../packages/agent/src/memory-state/eligibility.js';
 import { drainOutbox } from '../../packages/agent/src/memory-state/outbox.js';
+import { readConfigAgents } from '../../packages/agent/src/agent-profile/config-agents.js';
 import {
   reconcileProjections,
   purgeDegradedOutputs,
@@ -95,6 +96,14 @@ export interface MemoryWorkerDeps {
    * legacy consolidator. When absent, the legacy consolidator path is used.
    */
   curation?: CurationWorkerDeps;
+  /**
+   * Bot profile ids excluded from the session memory pipeline (Plan 479):
+   * their sessions never become Stage 1 extraction inputs — bot memory is
+   * fed by update_state writes into the tier store instead. When absent,
+   * resolved per sweep from `~/.duya/config.toml` `[agents]` (tests inject
+   * a fixed list).
+   */
+  listBotAgentIds?: () => Promise<string[]>;
 }
 
 /**
@@ -632,6 +641,21 @@ function createWorker(
       cfg.extractCooldownMs > 0 && now - state.lastExtractAt < cfg.extractCooldownMs;
     if (options.force || !cooldownActive) {
       try {
+        // Plan 479: bot sessions never enter Stage 1 extraction. Resolve
+        // the bot id list per sweep (bots can be created at runtime);
+        // a resolution failure fails open (empty list = old behavior).
+        let excludeAgentProfileIds: string[] = [];
+        try {
+          excludeAgentProfileIds = deps.listBotAgentIds
+            ? await deps.listBotAgentIds()
+            : Object.keys(await readConfigAgents());
+        } catch (err) {
+          logger.warn(
+            'MemoryWorkerBotIdResolution failed — extraction runs unfiltered this tick',
+            { error: err instanceof Error ? err.message : String(err) },
+            LogComponent.DB,
+          );
+        }
         eligible = selectEligible(memoryDb, {
           now,
           limit: cfg.concurrency,
@@ -639,6 +663,7 @@ function createWorker(
           windowMs: cfg.windowMs,
           minMessageCount: cfg.minMessageCount,
           projectCooldownMs: cfg.projectCooldownMs,
+          excludeAgentProfileIds,
         });
       } catch (err) {
         logger.warn(

@@ -25,9 +25,15 @@
 import { getCoreStores } from '../db/core-connection'
 import type { WakeItem } from '../../packages/agent/src/wake/types'
 import { enqueueWakeItemForSession } from './wake-dispatcher'
-import { decodeEnvelope } from '../../packages/agent/src/agent/dm/index.js'
+import {
+  AGENT_DM_MAX_HOPS,
+  decodeEnvelope,
+} from '../../packages/agent/src/agent/dm/index.js'
 import { parseAgentIdFromBotSession } from './bot-session-id'
 import { getLogger, LogComponent } from '../logging/logger'
+import type { NewEvent } from '../db/core'
+import { ipcMessageToNewEvent, newEventToIpcMessage } from '../ipc/core-db-adapters'
+import { getSessionManager } from '../agents/session-manager'
 
 export interface AgentDmRowLike {
   id: string
@@ -35,6 +41,8 @@ export interface AgentDmRowLike {
   kind?: string
   content?: string
   clientMsgId?: string | null
+  /** Sender identity carried by the mailbox row (P4.2 hop-chain lookup). */
+  source?: string | null
 }
 
 export interface BotSessionSpec {
@@ -73,6 +81,64 @@ export function _setBotSessionCreatorForTest(spec: BotSessionSpec): void {
 }
 
 /**
+ * Persist the receiver-side agent_dm marker row (plan 477 P4.4) so the
+ * target bot's direct chat shows a "from peer" card — and so the wake
+ * prompt's visibility claim is true. Mirrors the sender-side marker in
+ * SendToAgentTool. Best-effort: marker failures never block the wake.
+ */
+function appendReceiverMarker(
+  sessionId: string,
+  envelope: ReturnType<typeof decodeEnvelope> & { clientMsgId: string },
+  hops: number,
+): void {
+  if (!envelope) return
+  try {
+    const message = {
+      id: `dm-marker-${envelope.clientMsgId}`,
+      session_id: sessionId,
+      role: 'user',
+      content: `${envelope.from.name || envelope.from.id}: ${envelope.text}`,
+      status: 'complete',
+      msg_type: 'text',
+      source: 'agent_dm',
+      metadata: {
+        source: 'agent_dm',
+        agentDm: {
+          direction: 'received',
+          peerId: envelope.from.id,
+          peerName: envelope.from.name || envelope.from.id,
+          text: envelope.text,
+          intent: envelope.intent ?? null,
+          priority: envelope.priority ?? false,
+          hops,
+          clientMsgId: envelope.clientMsgId,
+        },
+      },
+      created_at: Date.now(),
+    }
+    const { messageLog } = getCoreStores()
+    const event: NewEvent = ipcMessageToNewEvent(
+      sessionId,
+      message as unknown as Parameters<typeof ipcMessageToNewEvent>[1],
+      null,
+    )
+    messageLog.appendBatch([event])
+    const broadcast = newEventToIpcMessage(event)
+    if (broadcast) {
+      getSessionManager().broadcastSessionEvent('message:new', {
+        sessionId,
+        messages: [broadcast],
+      })
+    }
+  } catch (err) {
+    getLogger().warn('AgentDm: receiver marker append failed (non-fatal)', {
+      sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    }, LogComponent.AgentProcess)
+  }
+}
+
+/**
  * Handle a freshly created agent_dm mailbox row. Returns true when the DM was
  * enqueued (or suppressed by dedupe), false when it is not an agent_dm row or
  * the target session could not be resolved.
@@ -101,6 +167,47 @@ export function maybeDispatchAgentDm(row: AgentDmRowLike): boolean {
   }
 
   const clientMsgId = row.clientMsgId ?? envelope.clientMsgId ?? row.id
+
+  // Plan 477 P4.2 — compute the hop depth. A reply (replyTo present) adds one
+  // hop over the message it answers, looked up in the SENDER's mailbox (the
+  // inbound row lives in the replier's mailbox, which is this row's source
+  // session). Messages without a replyTo start at 0 (human-initiated
+  // context). Computed here — not by the sending model — so the value cannot
+  // be forged downward. Over-limit DMs are dropped (logged); the durable
+  // mailbox row stays behind for audit.
+  let hops = 0
+  if (envelope.replyTo?.messageId) {
+    try {
+      const inbound = getCoreStores().mailbox.getByClientMsgId(
+        row.source || envelope.from.id,
+        envelope.replyTo.messageId,
+      )
+      if (inbound) {
+        const inboundEnvelope = inbound.content ? decodeEnvelope(inbound.content) : null
+        hops = (inboundEnvelope?.hops ?? 0) + 1
+      }
+    } catch (err) {
+      getLogger().warn('AgentDm: hop lookup failed; treating as hop 0', {
+        sessionId,
+        clientMsgId,
+        error: err instanceof Error ? err.message : String(err),
+      }, LogComponent.AgentProcess)
+    }
+  }
+  if (hops > AGENT_DM_MAX_HOPS) {
+    getLogger().warn('AgentDm: dropped over hop limit', {
+      sessionId,
+      clientMsgId,
+      hops,
+      max: AGENT_DM_MAX_HOPS,
+    }, LogComponent.AgentProcess)
+    return false
+  }
+
+  // Plan 477 P4.4 — receiver-side marker row (before the wake so the card is
+  // already in the transcript when the hidden run starts).
+  appendReceiverMarker(sessionId, envelope, hops)
+
   const item: WakeItem = {
     id: `dm:${clientMsgId}`,
     source: 'agent.dm',
@@ -114,6 +221,8 @@ export function maybeDispatchAgentDm(row: AgentDmRowLike): boolean {
       fromAgentName: envelope.from.name,
       text: envelope.text,
       ...(envelope.priority ? { priority: true } : {}),
+      ...(envelope.intent ? { intent: envelope.intent } : {}),
+      ...(hops > 0 ? { hops } : {}),
     },
   }
 

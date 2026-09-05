@@ -585,6 +585,9 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   const scrollToBottomRef = useRef<() => void>(() => {});
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [activeMessageId, setActiveMessageId] = useState<string | null>(null);
+  // True while the user has scrolled away from the bottom — drives the
+  // bottom fade overlay (same logic as BotDirectChatView's scroll fade).
+  const [isScrolledUp, setIsScrolledUp] = useState(false);
   // Per-session Focus display mode (slash popover toggle).
   const focusMode = useFocusModeStore((s) => selectFocusEnabled(s, sessionId));
 
@@ -605,6 +608,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
     const isNearBottom = distFromBottom < 100;
     autoScrollRef.current = distFromBottom < 50;
+    setIsScrolledUp(!isNearBottom);
     onScrollStateChange?.(isNearBottom);
   }, [onScrollStateChange]);
 
@@ -979,6 +983,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
 
 
   return (
+    <div className="relative h-full isolate">
     <div ref={containerRef} className="message-list-scroll h-full overflow-y-auto pb-32 scrollbar-thin">
       <ChatMessageNavigator
         items={navigatorItems}
@@ -1055,6 +1060,17 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
           />
         )}
       </div>
+    </div>
+
+    {/* Bottom fade — dissolves the scroll boundary while scrolled up
+        (BotDirectChatView parity). Sibling of the scroll container so it
+        stays pinned to the visible bottom edge and never blocks clicks. */}
+    {isScrolledUp && (
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 bottom-0 z-30 h-14 bg-gradient-to-t from-[var(--main-bg)] to-transparent animate-in fade-in duration-200"
+      />
+    )}
     </div>
   );
 });

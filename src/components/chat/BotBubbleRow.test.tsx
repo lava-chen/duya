@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, fireEvent } from '@testing-library/react';
 import { BotBubbleRow } from './BotBubbleRow';
 
-// Rakazo parity for the message hover overlay: time label + pill pinned
-// to the row's reserved top lane, streaming suppression, and the
+// Rakazo parity for the message hover overlay: time label + action row
+// anchored beside the bubble, streaming suppression, and the
 // localStorage-backed thumbs-up toggle.
 describe('BotBubbleRow', () => {
   beforeEach(() => {
@@ -29,8 +29,48 @@ describe('BotBubbleRow', () => {
     expect(bar?.querySelector('[aria-label="Add thumbs-up"]')).not.toBeNull();
   });
 
-  it('suppresses the hover overlay while streaming (rakazo progress exemption)', () => {
-    const { container } = render(<BotBubbleRow role="assistant" isStreaming />);
+  it('anchors the hover overlay inside the bubble stack (screenshot placement)', () => {
+    const { container } = render(<BotBubbleRow role="assistant" text="hi" />);
+    const stack = container.querySelector('.bot-chat-row__stack');
+    const bar = container.querySelector('.bot-message-hover-metadata');
+    expect(stack).not.toBeNull();
+    expect(stack?.contains(bar ?? null)).toBe(true);
+  });
+
+  it('shows the reply button only when onReply is given, and fires it', () => {
+    const onReply = vi.fn();
+    const { container, rerender } = render(
+      <BotBubbleRow role="assistant" text="hi" />,
+    );
+    expect(container.querySelector('[aria-label="Reply"]')).toBeNull();
+
+    rerender(<BotBubbleRow role="assistant" text="hi" onReply={onReply} />);
+    const btn = container.querySelector('[aria-label="Reply"]');
+    expect(btn).not.toBeNull();
+    fireEvent.click(btn!);
+    expect(onReply).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders a clickable reply preview above the bubble', () => {
+    const onJump = vi.fn();
+    const { container } = render(
+      <BotBubbleRow
+        role="user"
+        text="my reply"
+        replyPreview={{ id: 'm-1', text: 'earlier message' }}
+        onJumpToReply={onJump}
+      />,
+    );
+    const preview = container.querySelector(
+      '[data-testid="reply-parent-preview"]',
+    );
+    expect(preview).not.toBeNull();
+    expect(preview?.textContent).toBe('earlier message');
+    fireEvent.click(preview!);
+    expect(onJump).toHaveBeenCalledWith('m-1');
+  });
+
+  it('suppresses the hover overlay while streaming (rakazo progress exemption)', () => {    const { container } = render(<BotBubbleRow role="assistant" isStreaming />);
     expect(container.querySelector('.bot-message-hover-metadata')).toBeNull();
     expect(container.querySelector('.bot-chat-typing')).not.toBeNull();
   });

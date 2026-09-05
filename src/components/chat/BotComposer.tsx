@@ -25,7 +25,7 @@
  */
 
 import React, { useRef, useCallback, useState, useMemo, useEffect } from 'react';
-import { PaperclipIcon, ArrowUpIcon, PlusIcon, XIcon } from '@/components/icons';
+import { ArrowUpIcon, PlusIcon, XIcon } from '@/components/icons';
 import { IconButton } from '@/components/ui/IconButton';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useBotDraft } from './bot/draft';
@@ -58,6 +58,8 @@ export interface BotComposerSendPayload {
   mode?: string;
   /** User-attached files (files/images). */
   files?: FileAttachment[];
+  /** Message being replied to (attached by the view from its reply state). */
+  replyTo?: { id: string; text: string };
 }
 
 interface BotComposerProps {
@@ -77,6 +79,10 @@ interface BotComposerProps {
   onModelChange?: (model: string, providerId?: string) => void;
   /** Reports a user effort pick so the parent can persist it. */
   onEffortChange?: (effort: string | undefined) => void;
+  /** Active reply target — renders the "Replying to …" chip above the input. */
+  replyPreview?: { id: string; text: string } | null;
+  /** Cancels the active reply (chip ✕). */
+  onClearReply?: () => void;
 }
 
 /**
@@ -162,6 +168,8 @@ export function BotComposer({
   initialEffort,
   onModelChange,
   onEffortChange,
+  replyPreview,
+  onClearReply,
 }: BotComposerProps) {
   const { t } = useTranslation();
   // Plan 491 P2.1: Use bot draft hook for persistence per botId
@@ -568,6 +576,25 @@ export function BotComposer({
           />
         )}
 
+        {/* Reply chip above the input (rakazo reply-chip): label + cancel. */}
+        {replyPreview && (
+          <div className="bot-chat-reply-chip" data-testid="reply-chip">
+            <span className="bot-chat-reply-chip__label">
+              {t('bot.chat.replyingTo', { name: replyPreview.text || '…' })}
+            </span>
+            {onClearReply && (
+              <button
+                type="button"
+                className="bot-chat-reply-chip__cancel"
+                onClick={onClearReply}
+                aria-label={t('bot.chat.cancelReply')}
+              >
+                <XIcon size={13} />
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Attachment chips above the input (files picked via + / attach). */}
         {attachments.length > 0 && (
           <div className="bot-chat-composer__chips">
@@ -638,17 +665,6 @@ export function BotComposer({
               <PlusIcon size={16} />
             </IconButton>
 
-            {/* Quick attach — direct file picker (grok paperclip). */}
-            <button
-              type="button"
-              className="bot-chat-composer__attach"
-              onClick={() => fileInputRef.current?.click()}
-              aria-label={t('bot.chat.attach')}
-              title={t('bot.chat.attach')}
-              disabled={disabled || busy}
-            >
-              <PaperclipIcon size={16} />
-            </button>
           </div>
 
           <div className="bot-chat-composer__actions-right">

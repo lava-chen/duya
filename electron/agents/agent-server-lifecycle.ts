@@ -10,6 +10,7 @@ import type { ConductorExecutorProxy, ExecutorRpcRequest } from '../conductor/ex
 import { getConnectorService } from '../services/app-connections/connector-service';
 import { dispatchComputerUseAction } from '../ipc/computer-use';
 import { handleMemoryTierRpc } from '../memory-state/tier-rpc';
+import { handleBotIdentityRpc } from '../config/bot-identity-rpc';
 
 let agentServerPort: number | null = null;
 let agentServerProcess: ChildProcess | null = null;
@@ -333,6 +334,52 @@ export function spawnAgentServer(): Promise<number> {
             if (child.killed) return;
             child.send({
               type: 'memory-tier:rpc:response',
+              requestId: msg.requestId,
+              success: false,
+              error: {
+                code: 'IPC_EXCEPTION',
+                message: err instanceof Error ? err.message : String(err),
+              },
+            });
+          });
+        return;
+      }
+
+      // Plan 481 amendment: bot-identity:rpc (update_state profile.set /
+      // avatar.set / avatar.clear). The main process owns profile.json and
+      // binds the subaction to the SESSION'S bot identity — the payload's
+      // actorAgentId is never trusted alone: a mismatched binding is
+      // rejected so a bot can only ever edit its own identity.
+      if (msg.type === 'bot-identity:rpc' && typeof msg.requestId === 'string') {
+        const subaction = typeof msg.subaction === 'string' ? msg.subaction : null;
+        const payload = (msg.payload as Record<string, unknown> | undefined) ?? {};
+        const sessionId = typeof msg.sessionId === 'string' ? msg.sessionId : undefined;
+        if (!subaction) {
+          if (!child.killed) {
+            child.send({
+              type: 'bot-identity:rpc:response',
+              requestId: msg.requestId,
+              success: false,
+              error: { code: 'SCHEMA_INVALID', message: 'missing subaction in bot-identity:rpc payload' },
+            });
+          }
+          return;
+        }
+        void handleBotIdentityRpc({ subaction, payload, sessionId })
+          .then((result) => {
+            if (child.killed) return;
+            child.send({
+              type: 'bot-identity:rpc:response',
+              requestId: msg.requestId,
+              success: result.success,
+              data: result.success ? result.outcome : undefined,
+              error: result.success ? undefined : result.error,
+            });
+          })
+          .catch((err) => {
+            if (child.killed) return;
+            child.send({
+              type: 'bot-identity:rpc:response',
               requestId: msg.requestId,
               success: false,
               error: {

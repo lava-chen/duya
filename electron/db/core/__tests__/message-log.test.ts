@@ -762,4 +762,52 @@ describe('MessageLog', () => {
 
     fresh.close();
   });
+
+  it('migration id=14 repairs DBs stuck at schema_version=13 without the Plan 493 columns', () => {
+    // Mirrors the production failure: CoreDatabase skips migrations with
+    // `id <= meta.schema_version`. The affected dev DB recorded
+    // schema_version=13 before the columns landed, so id=13 is skipped
+    // forever and id=14 must be the one to repair it.
+    const fresh = new Database(':memory:') as unknown as SqliteDatabase;
+    fresh.pragma('foreign_keys = ON');
+
+    // Bring the DB to the "broken" state: message_index (id=1) + sessions
+    // fixture exist, but neither generation nor agent_id, and the runner
+    // believes id=13 is already applied.
+    const id1 = MessageLog.migrations.find((m) => m.id === 1)!;
+    id1.up(fresh);
+    createSessionsFixture(fresh);
+    let current = 13;
+
+    const all = [...MessageLog.migrations, ...SessionStore.migrations].sort(
+      (a, b) => a.id - b.id,
+    );
+    for (const m of all) {
+      if (m.id <= current) continue;
+      m.up(fresh);
+      current = m.id;
+    }
+    expect(current).toBe(14);
+
+    const indexCols = (
+      fresh.prepare('PRAGMA table_info(message_index)').all() as Array<{ name: string }>
+    ).map((c) => c.name);
+    expect(indexCols).toContain('generation');
+
+    const sessionCols = (
+      fresh.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>
+    ).map((c) => c.name);
+    expect(sessionCols).toContain('agent_id');
+
+    // Repair must be idempotent — re-running the full union is a no-op.
+    expect(() => {
+      for (const m of all) {
+        if (m.id <= current) continue;
+        m.up(fresh);
+        current = m.id;
+      }
+    }).not.toThrow();
+
+    fresh.close();
+  });
 });

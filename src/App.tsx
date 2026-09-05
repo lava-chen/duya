@@ -6,9 +6,12 @@ import { useConversationStore } from "@/stores/conversation-store";
 import { initMailboxEventListener } from "@/stores/mailbox-store";
 import { ChatView } from "@/components/chat/ChatView";
 import { BotDirectChatView } from "@/components/chat/BotDirectChatView";
+import { AgentDmPairView } from "@/components/chat/bot/AgentDmPairView";
 import { resolveChatMode, resolveBotAgentId } from "@/components/chat/bot/chat-mode";
+import { useBotContacts } from "@/components/layout/sidebar/use-bot-contacts";
 import { botDirectSend, botDirectSendComplete } from "@/components/chat/bot/send";
 import type { BotComposerSendPayload } from "@/components/chat/BotComposer";
+import { composeReplyContent } from "@/components/chat/bot/reply";
 import { NewChatView } from "@/components/chat/NewChatView";
 import { WelcomeView } from "@/components/home/WelcomeView";
 import { SkillsView } from "@/components/skills/SkillsView";
@@ -25,7 +28,11 @@ import { ensureSession, startStream, stopStream, subscribeSession, getSnapshot, 
 import { useSettings } from "@/hooks/useSettings";
 import { ConductorHostProvider } from "@/conductor-host-provider";
 import type { Message, StreamPhase, FileAttachment } from "@/types/message";
-import type { Message as IpcMessage } from "@/lib/ipc-client";
+import {
+  dbMessageToMessage,
+  isBotDirectVisibleSource,
+  type DbMessage as DbMessageRow,
+} from "@/lib/ipc-client";
 import { stripPastedContentMarkers } from "@/lib/message-content-parser";
 import { interruptChat } from "@/lib/agent-sse-client";
 
@@ -257,34 +264,48 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       const activeThreadId = useConversationStore.getState().activeThreadId;
       if (sessionId !== activeThreadId) return;
 
-      // Convert IPC messages to store Message format (same as mapIpcMessagesToStore)
-      const storeMessages: Message[] = (ipcMessages as IpcMessage[]).map((m) => ({
-        id: m.id,
-        role: m.role,
-        content: m.content,
-        displayContent: m.displayContent ?? undefined,
-        name: m.name ?? undefined,
-        tool_call_id: m.toolCallId ?? undefined,
-        timestamp: m.createdAt,
-        tokenUsage: m.tokenUsage
-          ? (typeof m.tokenUsage === 'string'
-              ? JSON.parse(m.tokenUsage)
-              : m.tokenUsage)
-          : undefined,
-        msgType: (m.msgType || undefined) as Message['msgType'],
-        thinking: m.thinking ?? undefined,
-        toolName: m.toolName ?? undefined,
-        toolInput: m.toolInput ?? undefined,
-        parentToolCallId: m.parentToolCallId ?? undefined,
-        vizSpec: m.vizSpec ?? undefined,
-        status: m.status ?? undefined,
-        seqIndex: m.seqIndex ?? undefined,
-        durationMs: m.durationMs ?? undefined,
-        subAgentId: m.subAgentId ?? undefined,
-        attachments: m.attachments ?? undefined,
-        source: m.source ?? undefined,
-        sendMessageMeta: m.sendMessageMeta ?? undefined,
-      }));
+      // Convert IPC messages to store Message format (same as mapIpcMessagesToStore).
+      // The broadcast rows are snake_case MessageRow — convert them through
+      // dbMessageToMessage first; reading camelCase fields off the raw row
+      // yields undefined (timestamp, toolName, ...) and breaks rendering.
+      const storeMessages: Message[] = (ipcMessages as DbMessageRow[])
+        .map(dbMessageToMessage)
+        // Plan 497 — ingestion-boundary source filter: the broadcast carries
+        // every persisted row, including bot-internal ones (tool_use /
+        // thinking / scratchpad / system — e.g. a wake run's prompt user
+        // row). Without this guard they entered the visible conversation
+        // store unfiltered and out of order, surfacing as stray bubbles in
+        // the bot-direct chat behind the source-filtered projection. Same
+        // allowlist the main-process projection enforces.
+        .filter((m) => isBotDirectVisibleSource(m.source))
+        .map((m) => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          displayContent: m.displayContent ?? undefined,
+          name: m.name ?? undefined,
+          tool_call_id: m.toolCallId ?? undefined,
+          timestamp: m.createdAt,
+          tokenUsage: m.tokenUsage
+            ? (typeof m.tokenUsage === 'string'
+                ? JSON.parse(m.tokenUsage)
+                : m.tokenUsage)
+            : undefined,
+          msgType: (m.msgType || undefined) as Message['msgType'],
+          thinking: m.thinking ?? undefined,
+          toolName: m.toolName ?? undefined,
+          toolInput: m.toolInput ?? undefined,
+          parentToolCallId: m.parentToolCallId ?? undefined,
+          vizSpec: m.vizSpec ?? undefined,
+          status: m.status ?? undefined,
+          seqIndex: m.seqIndex ?? undefined,
+          durationMs: m.durationMs ?? undefined,
+          subAgentId: m.subAgentId ?? undefined,
+          attachments: m.attachments ?? undefined,
+          source: m.source ?? undefined,
+          sendMessageMeta: m.sendMessageMeta ?? undefined,
+          agentDmMeta: m.agentDmMeta ?? undefined,
+        }));
 
       // Add each message to the store
       for (const msg of storeMessages) {
@@ -475,7 +496,12 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       if (!activeThreadId) return;
       const agentId = resolveBotAgentId(activeThreadId);
       if (!agentId) return;
-      const { text: content, model, providerId, effort, mode, files } = payload;
+      const { text, model, providerId, effort, mode, files, replyTo } = payload;
+      // Reply quote (bot/reply.ts): the sentinel block rides inside the
+      // content the agent (and the persisted row) sees, while
+      // `displayContent` keeps the plain user text for the bubble body.
+      const content = composeReplyContent(text, replyTo);
+      const displayContent = replyTo ? text : undefined;
 
       // Bot-direct is an 'auto' surface: the session row stores the durable
       // default and the server binds the profile from the bot id.
@@ -490,6 +516,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
         enqueueMessage(activeThreadId, {
           sessionId: activeThreadId,
           content,
+          displayContent,
           language: settings.agentLanguage,
           permissionModeOverride,
           agentProfileId: agentId,
@@ -514,13 +541,17 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
           setMessageDelivery(activeThreadId, messageId, 'failed'),
         sendFn: async (messageId, text) => {
           // Optimistic bubble keyed to the pipeline's messageId so the
-          // delivery phase lookups line up with the rendered row.
+          // delivery phase lookups line up with the rendered row. Content
+          // MUST equal the persisted row's content (composed reply included)
+          // — the optimistic dedupe matches on exact content equality;
+          // displayContent keeps the bubble body plain.
           addMessage(
             activeThreadId,
             {
               id: messageId,
               role: 'user',
               content: text,
+              displayContent,
               timestamp: Date.now(),
               metadata: { optimistic: true },
             },
@@ -533,6 +564,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
           void startStream({
             sessionId: activeThreadId,
             content: text,
+            displayContent,
             language: settings.agentLanguage,
             permissionModeOverride,
             agentProfileId: agentId,
@@ -608,6 +640,28 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
   }
   const shouldRenderChat = chatEverMountedRef.current && !!activeThreadId;
 
+  // Plan 497 — bot↔bot DM pair view (sibling of BotDirectChatView, same
+  // app container; the chip hands over, the back arrow returns). Null = the
+  // bot chat itself. Reset on thread switch so a peer never lingers.
+  const [botDmPairPeer, setBotDmPairPeer] = useState<{ peerId: string; peerName: string } | null>(
+    null,
+  );
+  useEffect(() => {
+    setBotDmPairPeer(null);
+  }, [activeThreadId]);
+  const activeBotAgentId = activeThreadId ? resolveBotAgentId(activeThreadId) : null;
+  // The pair view header needs the CURRENT bot's identity (name/avatar);
+  // resolved from the same roster the bot chat header uses.
+  const allContacts = useBotContacts().allContacts;
+  const activeBotContact = activeBotAgentId
+    ? allContacts.find((c) => c.agentId === activeBotAgentId) ?? null
+    : null;
+  const botDirectIdentity = {
+    name: activeBotContact?.name ?? activeBotAgentId ?? '',
+    avatarUrl: activeBotContact?.avatarUrl,
+    avatarColor: activeBotContact?.avatarColor,
+  };
+
   const renderView = () => {
     // Lazy new-chat composer: no backing thread yet. Shown before the user
     // sends anything, so an unsent draft never appears in the sidebar.
@@ -621,7 +675,20 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
           {currentView === 'home' && (
             <WelcomeView onSelectThread={setActiveThread} onSendMessage={handleSendMessage} />
           )}
-          {currentView === 'chat' && resolveChatMode(activeThreadId) === 'bot-direct' && (
+          {currentView === 'chat' && resolveChatMode(activeThreadId) === 'bot-direct' && botDmPairPeer && activeBotAgentId && (
+            <AgentDmPairView
+              key={`${activeThreadId}:${botDmPairPeer.peerId}`}
+              selfAgentId={activeBotAgentId}
+              sessionId={activeThreadId}
+              selfName={botDirectIdentity.name}
+              selfAvatarUrl={botDirectIdentity.avatarUrl}
+              selfAvatarColor={botDirectIdentity.avatarColor}
+              peerId={botDmPairPeer.peerId}
+              peerName={botDmPairPeer.peerName}
+              onBack={() => setBotDmPairPeer(null)}
+            />
+          )}
+          {currentView === 'chat' && resolveChatMode(activeThreadId) === 'bot-direct' && !botDmPairPeer && (
             <BotDirectChatView
               key={activeThreadId}
               sessionId={activeThreadId}
@@ -630,6 +697,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
               isFinalizing={isFinalizing}
               onSend={handleBotDirectSend}
               onStop={handleInterrupt}
+              onOpenDmPair={(peerId, peerName) => setBotDmPairPeer({ peerId, peerName })}
             />
           )}
           {currentView === 'chat' && resolveChatMode(activeThreadId) !== 'bot-direct' && (

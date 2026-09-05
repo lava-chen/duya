@@ -71,7 +71,11 @@
      divider. Fixed height (not min-height) so no child (avatar, working
      pill) can ever inflate the bar. */
   height: 48px;
-  padding: 0 22px;
+  /* Right padding reserves the lane of the two floating overlays that
+     hover over the pane's top-right (TaskDrawerToggle ⓘ at right 54px +
+     32px wide, panel-edge-toggle at right 14px, both top 6px, z-index
+     above this header) so the working pill never slides under them. */
+  padding: 0 100px 0 22px;
   border-bottom: 1px solid var(--border);
   background: var(--main-bg);
 }
@@ -88,8 +92,11 @@
   gap: 0.6rem;
   min-width: 0;
   /* rakazo header pattern: the whole identity block is one button.
-     Negative margins keep the 22px header padding visually intact. */
-  padding: 4px 8px;
+     Negative margins keep the 22px header padding visually intact.
+     Vertical padding is tuned so the 28px avatar yields a 33px control —
+     the exact row height of the sidebar primary links (sidebar.css
+     .sidebar-primary-link: 2×0.4rem padding + 0.9rem/1.4 text). */
+  padding: 2.5px 8px;
   margin: 0 -8px;
   border: none;
   border-radius: 8px;
@@ -246,37 +253,23 @@
 .bot-chat-row {
   display: flex;
   align-items: flex-end;
-  /* rakazo pt-9 (2026-09-05): the 36px top padding IS the inter-message
-     rhythm AND the landing lane for the previous row's hanging hover
-     overlay — the overlay never covers the previous row. */
+  /* Screenshot rhythm (2026-09-05): ~14px between message groups. The
+     old rakazo 36px lane existed to catch the hover overlay hanging
+     below the row; the overlay now sits BESIDE the bubble, so the lane
+     is gone. Members INSIDE a group collapse to 6px (--grouped). */
   position: relative;
-  padding-top: 36px;
+  padding-top: 14px;
 }
 
-/* rakazo hover:z-20 — the hovered row lifts above its neighbours. */
+/* Consecutive same-role bubbles (Telegram grouping): tight lane. */
+.bot-chat-row--grouped {
+  padding-top: 6px;
+}
+
+/* rakazo hover:z-20 — the hovered row lifts above its neighbours (the
+   thumbs-up badge dips 12px below the bubble into the next row's band). */
 .bot-chat-row:hover {
   z-index: 20;
-}
-
-/* Hover bridge — extends the row's hover zone 30px below its box so the
-   hanging overlay stays reachable: the row's border box ends at the
-   bubble's bottom edge, so without this the pointer leaves the row the
-   moment it moves toward the bar and the bar (pointer-events: none once
-   unhovered) fades before it can be clicked. Paints above the next row
-   only while this row is hovered (z-index: 20 above); pointer-events
-   gated to hover so the idle bridge never intercepts clicks or hover. */
-.bot-chat-row::after {
-  content: '';
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  height: 30px;
-  pointer-events: none;
-}
-
-.bot-chat-row:hover::after {
-  pointer-events: auto;
 }
 
 .bot-chat-row--user {
@@ -304,6 +297,21 @@
   box-sizing: border-box;
 }
 
+/* @Agent mention chip in a text bubble (grok sand-mention parity): a small
+   accent-tinted pill so a referenced teammate reads as a component, not
+   plain words. Inline flow keeps the surrounding pre-wrap text intact. */
+.bot-mention {
+  display: inline-block;
+  padding: 0 6px;
+  margin: 0 1px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
 .bot-chat-row--assistant .bot-chat-bubble {
   background: var(--bot-bubble-assistant-bg);
   color: var(--bot-bubble-assistant-fg);
@@ -319,12 +327,35 @@
   line-height: 1.45;
 }
 
+/* Telegram-style corner grouping (screenshot logic): consecutive
+   same-role bubbles shrink the corners FACING a neighbor on the aligned
+   side — 20px everywhere except the join seam, which drops to 8px.
+   start = only the far-side corner stays full at the seam bottom;
+   middle = both seams tight; end = seam top tight; user rows mirror
+   to the right edge. */
+.bot-chat-row--assistant .bot-chat-bubble--group-start,
+.bot-chat-row--assistant .bot-chat-bubble--group-middle {
+  border-bottom-left-radius: 8px;
+}
+.bot-chat-row--assistant .bot-chat-bubble--group-middle,
+.bot-chat-row--assistant .bot-chat-bubble--group-end {
+  border-top-left-radius: 8px;
+}
+.bot-chat-row--user .bot-chat-bubble--group-start,
+.bot-chat-row--user .bot-chat-bubble--group-middle {
+  border-bottom-right-radius: 8px;
+}
+.bot-chat-row--user .bot-chat-bubble--group-middle,
+.bot-chat-row--user .bot-chat-bubble--group-end {
+  border-top-right-radius: 8px;
+}
+
 /* Slim status rows for tool_use / thinking / hook messages. Kept on the
-   same rakazo 36px top rhythm as bubble rows. */
+   same screenshot rhythm as bubble rows. */
 .bot-chat-status-row {
   display: flex;
   justify-content: flex-start;
-  padding-top: 36px;
+  padding-top: 14px;
 }
 
 .bot-chat-status-chip {
@@ -456,6 +487,46 @@
   align-items: center;
   gap: 0.35rem;
   padding: 0 4px;
+}
+
+/* Reply chip above the input (rakazo reply-chip: full-width rounded
+   capsule, muted "Replying to …" label + cancel button). */
+.bot-chat-reply-chip {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 4px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.bot-chat-reply-chip__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.bot-chat-reply-chip__cancel {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.bot-chat-reply-chip__cancel:hover {
+  color: var(--text);
 }
 
 .bot-chat-composer__chip {
@@ -700,8 +771,9 @@
 /* ============================================================================
    BotMessageHoverBar — rakazo-aligned hover overlay
    (MessageHoverMetadata + MessageHoverActions, apps/web Shell.tsx):
-   time label + rounded neutral pill, pinned to the row's reserved 36px
-   top lane. The whole ROW is the hover target (group/message parity).
+   time label + bare action row (reply / thumbs-up / copy), anchored
+   OUTSIDE the bubble on its open side, bottom-aligned with it. The
+   whole ROW is the hover target (group/message parity).
    ========================================================================== */
 
 /* Bubble + corner badge column; the flex item that owns the role cap.
@@ -730,14 +802,15 @@
   max-width: 100%;
 }
 
-/* Hover overlay — hangs below the row's bottom corner, landing in the
-   next row's 36px padding lane (2026-09-05: bottom-left for assistant
-   rows; user rows mirror to bottom-right, tracking the bubble side).
-   rakazo z-10 + opacity/pointer-events group-hover parity. */
+/* Hover overlay — sits OUTSIDE the bubble on its open side, bottom-aligned
+   with it (screenshot placement 2026-09-05): right of assistant bubbles,
+   mirrored left of user bubbles. Anchored to the fit-content stack, so
+   `left: 100%` is the bubble's right edge. rakazo z-10 +
+   opacity/pointer-events group-hover parity. */
 .bot-message-hover-metadata {
   position: absolute;
-  left: 0;
-  bottom: -30px;
+  left: calc(100% + 10px);
+  bottom: 0;
   z-index: 10;
   display: flex;
   align-items: center;
@@ -745,12 +818,15 @@
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.15s ease;
+  /* Bare-icon bars have no background — keep at least the pill row
+     reachable when a narrow pane leaves little room beside the bubble. */
+  max-width: 160px;
 }
 
-/* User rows mirror the overlay to the bubble's (right) side. */
+/* User rows mirror the overlay to the bubble's (left) side. */
 .bot-chat-row--user .bot-message-hover-metadata {
   left: auto;
-  right: 0;
+  right: calc(100% + 10px);
 }
 
 /* rakazo group-hover/message — row hover (or keyboard focus inside the
@@ -830,6 +906,32 @@
 .bot-chat-row--user .bot-chat-thumbs-badge {
   right: auto;
   left: 8px;
+}
+
+/* Reply quote preview above the bubble (rakazo reply-parent-preview:
+   rounded bordered box, muted truncated text, click jumps to the
+   replied message). Mirrors to the bubble side via the row alignment. */
+.bot-chat-reply-preview {
+  display: block;
+  max-width: 74%;
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-canvas);
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.4;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.bot-chat-reply-preview:hover,
+.bot-chat-reply-preview:focus-visible {
+  color: var(--text);
 }
 
 /* ============================================================================
@@ -1915,67 +2017,212 @@
 }
 
 /* ---------------------------------------------------------------------------
- * Plan 477 P4.4 — bot→bot DM marker cards in the bot-direct transcript.
- * Compact collaboration chip: arrow + peer name + intent tag; supports both
- * light and dark themes via the shared CSS variables.
+ * Plan 497 — collapsed bot↔bot DM chip in the bot-direct transcript
+ * (replaces the plan 477 P4.4 marker card; the full exchange lives in the
+ * AgentDmPairOverlay below). Centered pill, date-separator visual weight.
  * ------------------------------------------------------------------------- */
-.bot-chat-dm-marker {
-  max-width: 78%;
-  margin: 0.35rem auto;
-  padding: 0.4rem 0.65rem;
-  border-radius: 10px;
+.bot-chat-dm-chip-wrap {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+
+.bot-chat-dm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 90%;
+  margin: 0.45rem auto;
+  padding: 0.28rem 0.7rem;
+  border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--surface);
-  font-size: 0.82rem;
-  line-height: 1.35;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  line-height: 1.2;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
-.bot-chat-dm-marker--sent {
-  border-style: dashed;
-  opacity: 0.92;
-}
-
-.bot-chat-dm-marker--received {
-  border-left: 3px solid var(--accent);
-}
-
-.bot-chat-dm-marker__head {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  margin-bottom: 0.2rem;
-}
-
-.bot-chat-dm-marker__arrow {
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.bot-chat-dm-marker__peer {
-  font-weight: 600;
+.bot-chat-dm-chip:hover {
+  border-color: var(--accent);
   color: var(--text);
 }
 
-.bot-chat-dm-marker__intent {
-  padding: 0.05rem 0.4rem;
+.bot-chat-dm-chip__avatars {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Stacked fan-out avatars (grok's overlapping group avatar). */
+.bot-chat-dm-chip__avatar {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 50%;
+}
+
+.bot-chat-dm-chip__avatar + .bot-chat-dm-chip__avatar {
+  margin-left: -5px;
+}
+
+.bot-chat-dm-chip__label {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bot-chat-dm-chip__count {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* Fan-out roster popover (grok's bot list under the "N Bots" chip). */
+.bot-chat-dm-chip__popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  min-width: 200px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 0.3rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-solid, var(--main-bg));
+  box-shadow: 0 10px 32px rgb(0 0 0 / 0.25);
+  display: flex;
+  flex-direction: column;
+}
+
+.bot-chat-dm-chip__popover-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.55rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.8rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.bot-chat-dm-chip__popover-row:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.bot-chat-dm-chip__popover-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+
+.bot-chat-dm-chip__popover-count {
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------------
+ * Plan 497 — AgentDmPairView: full-container read-only 1:1 conversation
+ * between two agents (sibling of BotDirectChatView in the app container;
+ * back arrow returns to the bot chat). Shares .bot-chat-view tokens and the
+ * .bot-chat-transcript scroll classes; only the header/footer are custom.
+ * ------------------------------------------------------------------------- */
+.bot-dm-pair-view__header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.bot-dm-pair-view__back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.bot-dm-pair-view__back:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* Overlapping avatar pair (rakazo PeerMessagesOverlay header). */
+.bot-dm-pair-view__stack {
+  display: inline-flex;
+  align-items: center;
+}
+
+.bot-dm-pair-view__stack > * + * {
+  margin-left: -8px;
+}
+
+.bot-dm-pair-view__title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.bot-dm-pair-view__title-names {
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bot-dm-pair-view__title-sub {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.bot-dm-pair-view__empty {
+  margin: 3rem auto;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.bot-dm-pair-view__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.55rem 1rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.72rem;
+  user-select: none;
+}
+
+.bot-dm-pair-view__back-btn {
+  padding: 0.25rem 0.7rem;
   border-radius: 999px;
   border: 1px solid var(--border);
+  background: transparent;
   color: var(--text-secondary);
-  font-size: 0.68rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+  cursor: pointer;
 }
 
-.bot-chat-dm-marker__priority {
-  padding: 0.05rem 0.4rem;
-  border-radius: 999px;
-  background: var(--accent);
-  color: #fff;
-  font-size: 0.68rem;
-}
-
-.bot-chat-dm-marker__body {
-  white-space: pre-wrap;
-  word-break: break-word;
+.bot-dm-pair-view__back-btn:hover {
+  border-color: var(--accent);
   color: var(--text);
 }

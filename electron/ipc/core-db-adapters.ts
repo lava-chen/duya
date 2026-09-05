@@ -96,6 +96,11 @@ export interface MessageRow {
    * JSON-serialized from message metadata.sendMessage. Null for plain rows.
    */
   send_message_meta?: string | null;
+  /**
+   * Plan 477 P4.4: bot→bot DM marker payload (direction/peer/intent),
+   * JSON-serialized from message metadata.agentDm. Null for plain rows.
+   */
+  agent_dm_meta?: string | null;
 }
 
 // ─── Content serialization (ported from old db-handlers.ts) ───
@@ -170,7 +175,11 @@ export function inferMessageSource(dto: {
     explicit === 'thinking' ||
     explicit === 'scratchpad' ||
     explicit === 'system' ||
-    explicit === 'channel_mirror'
+    explicit === 'channel_mirror' ||
+    // Plan 490 P1: ReactToMessage tapback rows.
+    explicit === 'reaction' ||
+    // Plan 477 P4.4: bot→bot DM marker rows.
+    explicit === 'agent_dm'
   ) {
     return explicit;
   }
@@ -375,6 +384,15 @@ const PERSISTED_METADATA_KEYS = [
   // images) ride under this single namespaced key so bot-direct cards
   // survive reload.
   'sendMessage',
+  // Plan 490 P1: ReactToMessage tapback descriptor (target message id,
+  // emoji, reacting agent) rides under this key so the reaction pill
+  // renderer can group rows onto their target bubbles after reload.
+  'reaction',
+  // Plan 497: bot→bot DM marker payload (direction/peer/clientMsgId/raw
+  // text) — without it the persisted marker rows lose their card metadata
+  // on round-trip and the transcript renders them as plain bubbles instead
+  // of the collapsed DM chip (observed: every marker degraded after reload).
+  'agentDm',
 ] as const;
 
 /**
@@ -672,6 +690,10 @@ function messageToIpcRow(
     send_message_meta:
       metadata?.sendMessage != null
         ? JSON.stringify(metadata.sendMessage)
+        : null,
+    agent_dm_meta:
+      metadata?.agentDm != null
+        ? JSON.stringify(metadata.agentDm)
         : null,
   };
 }

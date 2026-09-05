@@ -47,6 +47,12 @@ import { toolSchemaTool } from './ToolSchemaTool/ToolSchemaTool.js';
 import { toolInvokeTool } from './ToolInvokeTool/ToolInvokeTool.js';
 import { updateStateTool } from './UpdateStateTool/UpdateStateTool.js';
 import { sendMessageTool } from './SendMessageTool/index.js';
+import { sendToAgentTool } from './SendToAgentTool/index.js';
+import { reactToMessageTool } from './ReactToMessageTool/index.js';
+import {
+  createAgentTool,
+  updateAgentTool,
+} from './AgentManagementTool/index.js';
 
 /**
  * BashTool instance
@@ -312,6 +318,28 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
   // SSE broadcast in the message:append handler.
   registry.register(sendMessageTool.toTool(), sendMessageTool, { exposeMode: 'discoverable' });
 
+  // Plan 477 P1.2: send_to_agent — asynchronous agent-to-agent DM. The
+  // message lands in the target's agent_mailbox (kind='agent_dm') and the
+  // 476 wake bus handles waking the recipient. Discoverable: bot profiles
+  // surface it via the BOT_TOOLSET exact-name promotion (plan 496).
+  registry.register(sendToAgentTool.toTool(), sendToAgentTool, { exposeMode: 'discoverable' });
+
+  // Plan 492 P4: create_agent / update_agent — bot self-management (grok
+  // sand-agent-management-tools parity). Persistence goes through the
+  // db-bridge config:agents:create|update cases; the main process owns the
+  // config.toml write. Discoverable: bot profiles surface them via
+  // BOT_TOOLSET; main-session '*' profiles stay behind tool_search.
+  registry.register(createAgentTool.toTool(), createAgentTool, { exposeMode: 'discoverable' });
+  registry.register(updateAgentTool.toTool(), updateAgentTool, { exposeMode: 'discoverable' });
+
+  // Plan 490 P1: ReactToMessage — emoji tapback on a chat message (grok
+  // sand-reaction-tool parity). Always-exposed (grok SAND_FORCED_STATIC
+  // parity: update_state + ReactToMessage are forced static there),
+  // deliberately NOT in BOT_TOOLSET — the tool is self-scoped expression,
+  // not a bot-only capability. Writes a source='reaction' row through the
+  // normal message pipeline; toggle semantics live in the tool.
+  registry.register(reactToMessageTool.toTool(), reactToMessageTool, { exposeMode: 'always' });
+
   return registry;
 }
 
@@ -349,5 +377,15 @@ export { duyaCliTool } from './DuyaCliTool/index.js';
 export { updateStateTool, UpdateStateTool, setMemoryTierBridge } from './UpdateStateTool/index.js';
 export { UPDATE_STATE_TOOL_NAME } from './UpdateStateTool/index.js';
 export { sendMessageTool, SendMessageTool, SEND_MESSAGE_TOOL_NAME } from './SendMessageTool/index.js';
+export { sendToAgentTool, SendToAgentTool, SEND_TO_AGENT_TOOL_NAME } from './SendToAgentTool/index.js';
+export { reactToMessageTool, ReactToMessageTool, REACT_TO_MESSAGE_TOOL_NAME, resolveReactToMessage } from './ReactToMessageTool/index.js';
+export {
+  createAgentTool,
+  updateAgentTool,
+  CreateAgentTool,
+  UpdateAgentTool,
+  CREATE_AGENT_TOOL_NAME,
+  UPDATE_AGENT_TOOL_NAME,
+} from './AgentManagementTool/index.js';
 
 
