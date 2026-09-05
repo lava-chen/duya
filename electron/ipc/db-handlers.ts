@@ -34,7 +34,7 @@ import {
   readGatewaySettingFromStore,
 } from '../config/gateway-setting-adapter';
 import { getConfigStore } from '../config/store-instance';
-import { listConfigAgents, listBots, upsertConfigAgent, deleteConfigAgent, updateBotProfileIdentity } from '../config/agents';
+import { listConfigAgents, listBots, upsertConfigAgent, deleteConfigAgent, createConfigAgentUnique, updateBotProfileIdentity } from '../config/agents';
 import {
   getWeixinAccounts,
   upsertWeixinAccount,
@@ -54,6 +54,7 @@ import {
 import type { DbInitResult, DatabaseStats } from '../db/index';
 import { emitMailApplied, emitMailCreated, emitMailEdited, emitMailCancelled } from '../messaging/mailbox-broadcaster';
 import { maybeDispatchIdleWake } from '../wake/idle-dispatcher';
+import { maybeDispatchAgentDm } from '../wake/agent-dm-dispatcher';
 import { uploadAsset as conductorUploadAsset, uploadProjectAsset as conductorUploadProjectAsset } from '../conductor/asset-service';
 import { captureWebsiteSnapshot } from '../conductor/link-snapshot-service';
 import { prepareCanvasDocument, syncCanvasDocument } from '../conductor/document-service';
@@ -91,6 +92,7 @@ import {
   corePermissionToIpcRow,
   coreMailboxToIpcRow,
 } from './core-db-adapters';
+import { BOT_DIRECT_VISIBLE_SOURCES } from '@duya/agent/message';
 import type { NewEvent, MailboxKind, MailboxStatus } from '../db/core';
 
 /** Per-session usage facts cache behind rollout-file mtime/size stamps —
@@ -415,6 +417,18 @@ export function registerDbHandlers(): void {
   ipcMain.handle('db:message:getBySession', (_event, sessionId: string) => {
     const { messageLog } = getCoreStores();
     const events = messageLog.listBySession(sessionId);
+    return storedEventsToIpcMessages(events);
+  });
+
+  // Plan 489 P0.3: bot-direct transcript — the DATA-LAYER projection the
+  // BotDirectChatView requires. The source allowlist is applied inside
+  // MessageLog.listBySession so only user-typed and SendMessage rows ever
+  // leave the main process; tool/thinking/scratchpad/system stay bot-private.
+  ipcMain.handle('db:message:botDirectGetTranscript', (_event, sessionId: string) => {
+    const { messageLog } = getCoreStores();
+    const events = messageLog.listBySession(sessionId, {
+      source: [...BOT_DIRECT_VISIBLE_SOURCES],
+    });
     return storedEventsToIpcMessages(events);
   });
 
@@ -1344,7 +1358,9 @@ export function registerDbHandlers(): void {
     return listBots();
   });
   ipcMain.handle('config:agents:create', (_event, id: string, input: unknown) => {
-    return upsertConfigAgent(id, input as Parameters<typeof upsertConfigAgent>[1]);
+    // Allocates a collision-free id (config + disk + tombstones) and returns
+    // the ACTUAL id — the renderer's deriveBotIdFromName only sees live ids.
+    return createConfigAgentUnique(id, input as Parameters<typeof upsertConfigAgent>[1]);
   });
   ipcMain.handle('config:agents:update', (_event, id: string, input: unknown) => {
     if (!(id in listConfigAgents())) throw new Error(`agent '${id}' not found`);
@@ -2811,6 +2827,13 @@ export function registerMailboxHandlers(): void {
     // wake-dispatcher queue); taskId dedupes (P0-D).
     if (row.kind === 'background_notification' && row.sessionId) {
       void maybeDispatchIdleWake(row as unknown as Parameters<typeof maybeDispatchIdleWake>[0]).catch(() => {});
+    }
+    // Plan 477 P3.1: a bot→bot DM row wakes the target bot's persistent
+    // session through the same queue (agent lane). Best-effort like the
+    // idle wake; the mailbox row is durable so a failed dispatch retries
+    // via wake-rearm on restart.
+    if (row.kind === 'agent_dm' && row.sessionId) {
+      void maybeDispatchAgentDm(row as unknown as Parameters<typeof maybeDispatchAgentDm>[0]).catch(() => {});
     }
     return row;
   });

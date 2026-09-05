@@ -124,6 +124,8 @@ export interface ModeStateAPI {
 export interface MessageAPI {
   add: (data: Record<string, unknown>) => Promise<unknown>
   getBySession: (sessionId: string) => Promise<unknown[]>
+  /** Plan 489 P0.3: bot-direct transcript (data-layer source projection). */
+  botDirectGetTranscript?: (sessionId: string) => Promise<unknown[]>
   replace: (sessionId: string, messages: unknown[], generation: number) => Promise<unknown>
   truncateAfter: (sessionId: string, messageId: string) => Promise<{ deletedCount: number; restoredFiles?: string[] }>
   truncateFromInclusive: (sessionId: string, messageId: string) => Promise<{ deletedCount: number; restoredFiles?: string[] }>
@@ -608,11 +610,25 @@ export interface AgentProfileAPI {
   delete: (id: string) => Promise<boolean>
 }
 
+/** Per-bot channel bindings (plan 488). Credentials are write-only. */
+export interface BotChannelsAPI {
+  manifests: () => Promise<{ manifests: Array<Record<string, unknown>> }>
+  list: (agentId: string) => Promise<{ channels?: Array<{ platform: string; label: string; status: 'configured' }>; error?: string }>
+  connect: (agentId: string, input: { platform: string; label?: string; credential: string }) => Promise<{ ok: boolean; platform?: string; error?: string }>
+  disconnect: (agentId: string, platform: string) => Promise<{ ok: boolean; platform?: string; error?: string }>
+}
+
 export interface ConfigAgentsAPI {
   list: () => Promise<Record<string, unknown>>;
-  create: (id: string, input: Record<string, unknown>) => Promise<unknown>;
+  listBots: () => Promise<unknown>;
+  // create allocates a unique id server-side — callers must use the returned id.
+  create: (id: string, input: Record<string, unknown>) => Promise<{ id: string; config: unknown }>;
   update: (id: string, input: Record<string, unknown>) => Promise<unknown>;
   delete: (id: string) => Promise<boolean>;
+  updateBotProfile: (id: string, input: Record<string, unknown>) => Promise<unknown>;
+  /** Opens the file dialog in the main process; null when the user canceled. */
+  uploadBotAvatar: (id: string) => Promise<{ avatarImage: string; avatarVersion: number; avatarUrl?: string } | null>;
+  clearBotAvatar: (id: string) => Promise<{ avatarImage: string; avatarVersion: number }>;
 }
 
 export interface HookRow {
@@ -948,6 +964,11 @@ export interface AppConnectionAPI {
   approveTool: (provider: string, toolAlias: string) => Promise<{ success: boolean; error?: string }>
   revokeToolApproval: (provider: string, toolAlias: string) => Promise<{ success: boolean; error?: string }>
   listToolApprovals: () => Promise<{ success: boolean; data?: string[]; error?: string }>
+  /**
+   * Plan 498: fired in every window after `appConnection:connect` succeeds so
+   * a pending connector auth card can flip to "connected" and resume the agent.
+   */
+  onConnected: (callback: (data: { provider: string; connectionId: string | null }) => void) => () => void
 }
 
 export interface TerminalAPI {
@@ -1022,6 +1043,8 @@ export interface ElectronAPI {
   }) => void) => () => void
   onBashTaskUpdate: (callback: (data: { sessionId: string; tasks: BashBackgroundTaskSnapshot[] }) => void) => () => void
   onHookTaskUpdate: (callback: (data: { sessionId: string; tasks: HookTaskSnapshot[] }) => void) => () => void
+  /** Plan 483 P2: agent messages appended by the bot's SendMessage tool (payload: IpcMessage[]). */
+  onMessageNew: (callback: (data: { sessionId: string; messages: unknown[] }) => void) => () => void
   app: {
     getVersion: () => Promise<string>
     quit: () => Promise<void>
@@ -1074,6 +1097,9 @@ export interface ElectronAPI {
     getMcpServers: () => Promise<{ success: boolean; data: Array<{ name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }>; error?: string }>
     setMcpServers: (servers: Array<{ name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }>) => Promise<{ success: boolean; error?: string }>
     reloadMcp: () => Promise<{ reloaded: boolean }>
+    // Plan 487: host-level standing permission switch.
+    getHostToolPermission: () => Promise<{ success: boolean; value: 'ask' | 'always' | 'never'; error?: string }>
+    setHostToolPermission: (value: 'ask' | 'always' | 'never') => Promise<{ success: boolean; value?: 'ask' | 'always' | 'never'; error?: string }>
   }
   // Functions to get port APIs (called dynamically, not getters)
   getConfigPort: () => ConfigPortAPI | null
@@ -1186,6 +1212,7 @@ export interface ElectronAPI {
   browserBackend: BrowserBackendAPI
   parser: DocumentParserAPI
   agentProfile: AgentProfileAPI
+  botChannels: BotChannelsAPI
   configAgents: ConfigAgentsAPI
   hooks: HooksAPI
   plugin: PluginAPI
@@ -1715,6 +1742,16 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.removeListener('hook_task:update', handler);
     };
   },
+  onMessageNew: (callback: (data: { sessionId: string; messages: unknown[] }) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: { sessionId: string; messages: unknown[] },
+    ) => callback(data);
+    ipcRenderer.on('message:new', handler);
+    return () => {
+      ipcRenderer.removeListener('message:new', handler);
+    };
+  },
   app: {
     getVersion: () => ipcRenderer.invoke('app:get-version'),
     quit: () => ipcRenderer.invoke('app:quit'),
@@ -1950,6 +1987,9 @@ const electronAPI: ElectronAPI = {
   message: {
     add: (data: Record<string, unknown>) => ipcRenderer.invoke('db:message:add', data),
     getBySession: (sessionId: string) => ipcRenderer.invoke('db:message:getBySession', sessionId),
+    // Plan 489 P0.3: bot-direct transcript (data-layer source projection).
+    botDirectGetTranscript: (sessionId: string) =>
+      ipcRenderer.invoke('db:message:botDirectGetTranscript', sessionId),
     replace: (sessionId: string, messages: unknown[], generation: number) =>
       ipcRenderer.invoke('db:message:replace', sessionId, messages, generation),
     truncateAfter: (sessionId: string, messageId: string) =>
@@ -2204,11 +2244,23 @@ const electronAPI: ElectronAPI = {
     update: (id: string, data: Record<string, unknown>) => ipcRenderer.invoke('db:agentProfile:update', id, data),
     delete: (id: string) => ipcRenderer.invoke('db:agentProfile:delete', id),
   },
+  botChannels: {
+    manifests: () => ipcRenderer.invoke('botChannels:manifests'),
+    list: (agentId: string) => ipcRenderer.invoke('botChannels:list', agentId),
+    connect: (agentId: string, input: { platform: string; label?: string; credential: string }) =>
+      ipcRenderer.invoke('botChannels:connect', agentId, input),
+    disconnect: (agentId: string, platform: string) =>
+      ipcRenderer.invoke('botChannels:disconnect', agentId, platform),
+  },
   configAgents: {
     list: () => ipcRenderer.invoke('config:agents:list'),
+    listBots: () => ipcRenderer.invoke('config:agents:listBots'),
     create: (id: string, input: Record<string, unknown>) => ipcRenderer.invoke('config:agents:create', id, input),
     update: (id: string, input: Record<string, unknown>) => ipcRenderer.invoke('config:agents:update', id, input),
     delete: (id: string) => ipcRenderer.invoke('config:agents:delete', id),
+    updateBotProfile: (id: string, input: Record<string, unknown>) => ipcRenderer.invoke('config:agents:updateBotProfile', id, input),
+    uploadBotAvatar: (id: string) => ipcRenderer.invoke('config:agents:uploadBotAvatar', id),
+    clearBotAvatar: (id: string) => ipcRenderer.invoke('config:agents:clearBotAvatar', id),
   },
   hooks: {
     overview: () => ipcRenderer.invoke('hooks:overview'),
@@ -2365,6 +2417,14 @@ const electronAPI: ElectronAPI = {
     revokeToolApproval: (provider: string, toolAlias: string) =>
       ipcRenderer.invoke('appConnection:revokeToolApproval', provider, toolAlias),
     listToolApprovals: () => ipcRenderer.invoke('appConnection:listToolApprovals'),
+    onConnected: (callback: (data: { provider: string; connectionId: string | null }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { provider: string; connectionId: string | null }) =>
+        callback(data);
+      ipcRenderer.on('app-connection:connected', handler);
+      return () => {
+        ipcRenderer.removeListener('app-connection:connected', handler);
+      };
+    },
   },
   terminal: {
     spawn: (params) => ipcRenderer.invoke('terminal:spawn', params),

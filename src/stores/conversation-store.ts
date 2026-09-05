@@ -2,7 +2,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Message, FileAttachment } from '@/types/message';
+import type { Message, FileAttachment, MessageDelivery } from '@/types/message';
 import {
   listThreadsIPC,
   getThreadIPC,
@@ -154,6 +154,10 @@ interface ConversationState {
    *  "new thread" entry). Consumed by NewChatView as its initial project. */
   newChatPresetProject: { workingDirectory: string; projectName: string } | null;
 
+  // Plan 491 P0.1: message delivery phase tracking (renderer-only, not persisted).
+  // Keyed by threadId, then messageId. Tracks sending → sent/failed lifecycle.
+  messageDelivery: Record<string, Record<string, MessageDelivery>>;
+
   // Actions
   setCurrentView: (view: ViewType) => void;
   setSettingsTab: (tab: SettingsTab) => void;
@@ -216,6 +220,14 @@ interface ConversationState {
   /** Leave the new-chat composer without clearing the draft (e.g. the user
    *  navigated to an existing session). */
   exitNewChatDraft: () => void;
+
+  // Plan 491 P0.1: message delivery phase actions.
+  /** Set the delivery phase for a message. */
+  setMessageDelivery: (threadId: string, messageId: string, delivery: MessageDelivery) => void;
+  /** Get the delivery phase for a message. */
+  getMessageDelivery: (threadId: string, messageId: string) => MessageDelivery | undefined;
+  /** Clear all delivery state for a thread (on thread switch / unload). */
+  clearThreadDelivery: (threadId: string) => void;
 }
 
 // BroadcastChannel for cross-tab synchronization
@@ -268,6 +280,58 @@ function notifyThreadsChanged() {
  * is preserved as a separate entry.
  */
 export const OPTIMISTIC_DEDUPE_WINDOW_MS = 5_000;
+
+/**
+ * True when `id` is a *placeholder* bot thread id (`bot:<agentId>` —
+ * one colon), as opposed to a real bot session (`bot:<agentId>:<sessionId>`
+ * — two colons) or any other thread kind.
+ *
+ * Placeholder ids are UI-only state produced by `resolveBotOpenThreadId`
+ * (sidebar/sidebar/bot-contacts.ts) when the user opens a bot that has
+ * never sent a message. They never correspond to a row in
+ * `chat_sessions`, and two consumers must keep this in mind:
+ *
+ *   - `partialize` must NOT write them to localStorage; they would
+ *     resurrect as orphan ids on next boot and the welcome screen
+ *     would not recover.
+ *   - `loadFromDatabase`'s "orphan cleanup" branch must NOT clear an
+ *     active placeholder; doing so makes the click that opened the bot
+ *     look like a no-op (the view briefly flashes the bot chat shell
+ *     then snaps back to the welcome screen).
+ *
+ * Room placeholder ids (`room:<roomId>`) are not currently produced,
+ * but the function is written defensively in case future sections
+ * adopt the same shape. Keep this in sync with
+ * `sidebar/section-system.ts` `SESSION_KIND_PREFIXES`.
+ */
+export function isPlaceholderBotThreadId(
+  id: string | null | undefined,
+): boolean {
+  if (!id) return false;
+  // Real session: `bot:<agentId>:<sessionId>` — at least two colons.
+  // Placeholder:    `bot:<agentId>`            — exactly one colon.
+  return id.startsWith('bot:') && id.split(':').length === 2;
+}
+
+/**
+ * Pure function form of the persist `partialize` selector for the
+ * conversation store. Plan 491 P2.5: drop placeholder bot ids
+ * (`bot:<agentId>`) from persistence. They are in-memory UI state —
+ * the bot has never sent a message, there is no chat_sessions row
+ * for it, and resurrecting it on next boot would just be cleared
+ * again by `loadFromDatabase`'s orphan cleanup, leaving the user
+ * stranded on the welcome screen.
+ *
+ * Exported separately so unit tests can lock in the placeholder
+ * round-trip without spinning up localStorage / jsdom — the
+ * persistence layer just delegates to this function.
+ */
+export function partializeConversationState<T extends Pick<ConversationState, 'activeThreadId'>>(state: T): T {
+  if (isPlaceholderBotThreadId(state.activeThreadId)) {
+    return { ...state, activeThreadId: null };
+  }
+  return state;
+}
 
 /**
  * Stable identity for the optimistic-dedupe bucket: (role, content
@@ -396,6 +460,8 @@ function mapIpcMessagesToStore(messages: IpcMessage[]): Message[] {
     durationMs: m.durationMs ?? undefined,
     subAgentId: m.subAgentId ?? undefined,
     attachments: m.attachments ?? undefined,
+    source: m.source ?? undefined,
+    sendMessageMeta: m.sendMessageMeta ?? undefined,
   }));
 }
 
@@ -423,6 +489,8 @@ export const useConversationStore = create<ConversationState>()(
       newChatDraft: EMPTY_NEW_CHAT_DRAFT,
       isNewChatDrafting: false,
       newChatPresetProject: null,
+      // Plan 491 P0.1: message delivery phase tracking (renderer-only, not persisted)
+      messageDelivery: {},
       lastSyncAt: 0, // Initialize to 0 to force first sync
 
       setCurrentView: (view) => {
@@ -1087,15 +1155,33 @@ export const useConversationStore = create<ConversationState>()(
               registerLoadedMessages(activeThreadId, threadData.messages);
             }
           } else if (activeThreadId && !dbThreadIds.has(activeThreadId)) {
-            // Persisted activeThreadId no longer exists in the DB (deleted,
-            // migrated, or orphaned by an older config). Clearing it here
-            // prevents the boot-splash watchdog in App.tsx from force-
-            // dismissing 5s later; the user lands on the welcome screen and
-            // can navigate to any other thread from the sidebar.
+            // The persisted activeThreadId no longer exists in the DB
+            // (deleted, migrated, or orphaned by an older config).
+            // Clearing it here prevents the boot-splash watchdog in
+            // App.tsx from force-dismissing 5s later; the user lands
+            // on the welcome screen and can navigate to any other
+            // thread from the sidebar.
+            //
+            // Exception (plan 491 P2.5): placeholder bot ids
+            // (`bot:<agentId>`) are NOT orphans. They are an
+            // in-memory UI marker for "the user just opened this bot
+            // with no bound session yet" — produced by
+            // `resolveBotOpenThreadId`. They are never rows in
+            // chat_sessions by design (plan 483 P1.3), so clearing
+            // them here would make the click that opened the bot
+            // look like a no-op (the view briefly flashes the bot
+            // chat shell then snaps back to the welcome screen).
+            if (isPlaceholderBotThreadId(activeThreadId)) {
+              // Keep activeThreadId as-is. The chat shell will render
+              // an empty transcript; the user can either send a
+              // message (which will promote the placeholder to a real
+              // session via createThread) or navigate away.
+            } else {
             console.warn(
               `[Store] Clearing orphaned activeThreadId: ${activeThreadId.slice(0, 8)} (not in DB)`,
             );
             activeThreadId = null;
+            }
           }
 
           // Load projects (already converted to camelCase by getProjectGroupsIPC)
@@ -1166,6 +1252,30 @@ export const useConversationStore = create<ConversationState>()(
         set({ isNewChatDrafting: false });
       },
 
+      // Plan 491 P0.1: message delivery phase actions
+      setMessageDelivery: (threadId, messageId, delivery) => {
+        set((state) => ({
+          messageDelivery: {
+            ...state.messageDelivery,
+            [threadId]: {
+              ...state.messageDelivery[threadId],
+              [messageId]: delivery,
+            },
+          },
+        }));
+      },
+      getMessageDelivery: (threadId, messageId) => {
+        const threadDelivery = get().messageDelivery[threadId];
+        return threadDelivery?.[messageId];
+      },
+      clearThreadDelivery: (threadId) => {
+        set((state) => {
+          const next = { ...state.messageDelivery };
+          delete next[threadId];
+          return { messageDelivery: next };
+        });
+      },
+
       syncThreadToDatabase: async (thread) => {
         try {
           await createThreadIPC({
@@ -1223,13 +1333,16 @@ export const useConversationStore = create<ConversationState>()(
     }),
     {
       name: 'duya-conversations',
-      partialize: (state) => ({
+      partialize: (state) => partializeConversationState({
         // View state
         currentView: state.currentView,
         settingsTab: state.settingsTab,
         // Threads are NOT persisted to localStorage anymore
         // They are always loaded from SQLite database to ensure consistency
         // across multiple browser tabs/windows
+        // Plan 491 P2.5: placeholder bot ids are stripped by
+        // partializeConversationState (see its docstring). Everything
+        // else round-trips verbatim.
         activeThreadId: state.activeThreadId,
         // Messages are NOT persisted here - they're stored in SQLite
         // Persisting only UI state

@@ -39,6 +39,11 @@ export const MULTIMODAL_MODEL_PATTERNS: RegExp[] = [
   // inputs via the Anthropic-compatible endpoint. M2.x series is text-only.
   // See https://platform.minimaxi.com/docs/api-reference/text-anthropic-api
   /minimax-m3/i,
+  // Zhipu GLM: the glm-4v* line is vision-dedicated; the 4.5+ chat family
+  // (incl. glm-4.5-flash / glm-5.3-flash) accepts image input — matches
+  // packages/ai glm.models.ts where every curated GLM entry carries
+  // input: ['text', 'image']. glm-3.x stays unmatched (text-only).
+  /glm-[4-9]/i,
   /vision/i,
   /multimodal/i,
 ];

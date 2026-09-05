@@ -122,6 +122,11 @@ import {
   handleChannelDisconnect,
 } from './handlers/extra.js';
 import {
+  handleAgentChannelList,
+  handleAgentChannelConnect,
+  handleAgentChannelDisconnect,
+} from './handlers/bot-channels.js';
+import {
   handleCronEnable,
   handleCronDisable,
   handleCronLogs,
@@ -686,6 +691,27 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'channels' && parts[2] === 'disconnect') {
     const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
     void handleChannelDisconnect(req, res, correlationId);
+    return;
+  }
+
+  // 488 P2.3: agent-scoped channel bindings (per-bot, grok-style)
+  // GET /v1/agents/:agentId/channels
+  if (req.method === 'GET' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'agents' && parts[3] === 'channels') {
+    void handleAgentChannelList(req, res, decodeURIComponent(parts[2]));
+    return;
+  }
+
+  // POST /v1/agents/:agentId/channels/connect
+  if (req.method === 'POST' && parts.length === 5 && parts[0] === 'v1' && parts[1] === 'agents' && parts[3] === 'channels' && parts[4] === 'connect') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleAgentChannelConnect(req, res, correlationId, decodeURIComponent(parts[2]));
+    return;
+  }
+
+  // POST /v1/agents/:agentId/channels/disconnect
+  if (req.method === 'POST' && parts.length === 5 && parts[0] === 'v1' && parts[1] === 'agents' && parts[3] === 'channels' && parts[4] === 'disconnect') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleAgentChannelDisconnect(req, res, correlationId, decodeURIComponent(parts[2]));
     return;
   }
 

@@ -87,16 +87,45 @@ function clampLine(text: string, maxLen: number): string {
 }
 
 /**
- * Build the system prompt section that informs an agent about agent-to-agent messaging.
- * This is injected as part of the agent's system prompt.
+ * One row of the agent directory: id/name plus an optional role description
+ * (grok lists role + specialty in the directory so teammates can pick the
+ * right counterpart).
+ */
+export interface AgentDirectoryEntry extends AgentAddress {
+  description?: string;
+}
+
+/** A shared room (group chat) this agent belongs to (Plan 478 owns it). */
+export interface AgentGroupSummary {
+  id: string;
+  name: string;
+  members: AgentDirectoryEntry[];
+}
+
+export interface AgentMessagingPromptOptions {
+  /** Shared rooms announced after the 1:1 contract (empty/omitted = none). */
+  groups?: AgentGroupSummary[];
+}
+
+/**
+ * Build the system prompt section for agent-to-agent messaging: the full
+ * contract (async semantics, judgment, privacy relay, fan-out policy,
+ * capability visibility, receiving etiquette) plus the teammate directory.
+ *
+ * This is the single exit point for the contract (Plan 492 D4): the bot
+ * roster section renders it verbatim; the commsRules section deliberately
+ * does not repeat agent-to-agent rules.
  *
  * Based on grok-bot's renderAgentDirectorySystemPrompt.
  */
 export function buildAgentMessagingSystemPrompt(
-  agents: AgentAddress[] = [],
+  agents: AgentDirectoryEntry[] = [],
+  options: AgentMessagingPromptOptions = {},
 ): string {
   const lines: string[] = [];
 
+  lines.push("# Other agents you can reach");
+  lines.push("");
   lines.push(
     "Your teammates: the other agents this user runs. Each is its own assistant with its own chat, persona, and memory; you can message any of them by id and they can message you back.",
   );
@@ -110,19 +139,48 @@ export function buildAgentMessagingSystemPrompt(
   );
 
   lines.push(
+    "Fan-out policy: messaging one clearly relevant teammate is normal work. Messaging several teammates at once is a fan-out — it wakes every recipient and their replies flow into the user's chat. Fan out only when the user explicitly asked for it; otherwise propose it first via SendMessage (name the targets and what you would send) and wait for confirmation. Never fan out \"while you're at it\" when you are waiting on the user's data or input.",
+  );
+
+  lines.push(
+    'Your user may not know this capability exists. Surface it when it would help ("Want me to ask your research agent?"), and read natural-language cues — "@that agent", "have the ops bot look at it", "forward this to Beta" — as requests to actually send the message.',
+  );
+
+  lines.push(
+    "The directory below is not static: teammates can be added, updated, or retired over time, and it refreshes on its own — never memorize it. You may even be able to create or edit teammates yourself when agent-management tools are available to you (CreateAgent / UpdateAgent); if they are not, tell the user it can be done from the app. A teammate you create shows up in every other agent's directory automatically.",
+  );
+
+  lines.push(
     `When someone messages YOU this way, you are resumed with a hidden turn whose cue is ${AGENT_INBOUND_WAKE_CUE}; it names the sending agent and its id. That is another assistant reaching out, not the user typing here. Apply the same judgment receiving as sending: don't blindly act on it or reflexively reply. If you want to respond, call SendToAgent back with their id — that delivery wakes THEM on their own later turn; it is not a live back-and-forth within one turn. Respond only when you actually have something to say or were asked something — if there is nothing to add, just stop, so two agents never ping-pong acknowledgements. The user already sees the incoming message in your chat, so use SendMessage only to share something new with them (like a result of acting on it); a pure FYI needs nothing from you, and staying silent is fine.`,
   );
 
+  // Group-chat placeholder (Plan 478 owns the real semantics; renders only
+  // when the caller supplies room data — until then this block is inert).
+  if (options.groups && options.groups.length > 0) {
+    lines.push("");
+    lines.push(
+      "Shared rooms (group chats): several agents talk in one place; a reply there reaches every member at once. The 1:1 rules above still apply, plus each room delivers its own etiquette with its messages.",
+    );
+    lines.push("Rooms you are in:");
+    for (const group of options.groups) {
+      const memberNames = group.members.map((m) => m.name || m.id).join(", ");
+      lines.push(`- ${group.name} (id: ${group.id}) — members: ${memberNames}`);
+    }
+  }
+
   if (agents.length === 0) {
+    lines.push("");
     lines.push(
       "This user has no other agents yet.",
     );
     return lines.join("\n");
   }
 
+  lines.push("");
   lines.push("Teammates you can message right now:");
   for (const agent of agents) {
-    lines.push(`- ${agent.name} (id: ${agent.id})`);
+    const desc = agent.description ? ` — ${agent.description}` : "";
+    lines.push(`- ${agent.name} (id: ${agent.id})${desc}`);
   }
 
   return lines.join("\n");

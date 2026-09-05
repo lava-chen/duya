@@ -66,6 +66,7 @@ import {
   IconChartBar,
   IconCopy as TablerIconCopy,
   IconCheck,
+  IconThumbUp,
   IconMessageCircle,
   IconMessageCirclePlus,
   IconMessage2,
@@ -283,6 +284,7 @@ export const ChartBarIcon = wrapIcon(IconChartBar);
 export const GlobeSimpleIcon = wrapIcon(IconWorld);
 export const CopyIcon = wrapIcon(TablerIconCopy);
 export const CheckIcon = wrapIcon(IconCheck);
+export const ThumbsUpIcon = wrapIcon(IconThumbUp);
 export const ChatCircleIcon = wrapIcon(IconMessageCircle);
 export const FileIcon = wrapIcon(IconFile);
 export const WrenchIcon = wrapIcon(IconTool);

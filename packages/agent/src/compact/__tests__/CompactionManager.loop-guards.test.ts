@@ -1,18 +1,21 @@
 /**
- * Unit tests for CompactionManager loop guards (grok-aligned 5-state
- * suppression machine):
+ * Unit tests for CompactionManager loop guards (Pi-aligned flat suppression):
  * - provider-usage anchoring of shouldCompact
- * - SUPPRESS_TURN clears at turn start
- * - SUPPRESS_STICKY clears only on a context-budget change (post-compact)
- * - SUPPRESS_UNTIL_SUCCESS clears on LLM success
- * - SUPPRESS_AUTH clears only on auth refresh
+ * - 'other' suppression clears at the next turn start (onTurnStart)
+ * - 'size' suppression survives onTurnStart and clears only on a successful
+ *   compaction — the budget change it was waiting for (see updateMaxTokens)
+ * - 'auth' suppression clears only on auth refresh (onAuthRefresh)
+ * - non-auto triggers (manual / emergency / model_switch) call compact()
+ *   directly and never consult shouldCompact(), so the gate does not apply
+ * - runtime model-switch wiring: updateMaxTokens rewrites the budget
  * - post-compact over-threshold self-check flag
  *
  * Regression context: session 5e930b44 (2026-08-26) compacted every ~50-90s
  * because the post-compaction projection kept reading above the threshold.
- * The grok-aligned suppression machine (see compactErrors.ts and the grok
- * reference at `xai-grok-shell/src/session/compaction.rs:444-810`) replaces
- * the legacy cooldown + loop-strikes + circuit-breaker three-piece set.
+ * Rewritten 2026-09-05 for the pi-aligned flat design (commit 59e9cbd8) —
+ * the grok 5-state API this file previously exercised (updateContextTokens /
+ * isCircuitBreakerTriggered / onLlmSuccess / effectiveTotalTokensForOverflowCheck)
+ * no longer exists.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -36,7 +39,8 @@ function makeMessages(chars: number): Message[] {
   ]
 }
 
-/** ~700k ASCII chars ≈ 175k estimated tokens — above the 78% threshold of a 200k window. */
+/** 22 messages × ~700k ASCII chars ≈ several M estimated tokens — far above
+ *  the compaction threshold of a 200k-window manager. */
 const OVER_THRESHOLD_CHARS = 700_000
 
 describe('CompactionManager loop guards', () => {
@@ -64,177 +68,87 @@ describe('CompactionManager loop guards', () => {
 
   describe('usage anchoring', () => {
     it('uses the char estimate when no provider usage was observed', () => {
-      manager.updateContextTokens(makeMessages(OVER_THRESHOLD_CHARS))
-      expect(manager.shouldCompact()).toBe(true)
+      expect(manager.shouldCompact(makeMessages(OVER_THRESHOLD_CHARS))).toBe(
+        true,
+      )
     })
 
     it('prefers observed provider usage over an inflated estimate', () => {
-      manager.updateContextTokens(makeMessages(OVER_THRESHOLD_CHARS))
+      const messages = makeMessages(OVER_THRESHOLD_CHARS)
       manager.setObservedPromptTokens(50_000)
-      expect(manager.shouldCompact()).toBe(false)
+      expect(manager.shouldCompact(messages)).toBe(false)
 
       manager.clearObservedPromptTokens()
-      expect(manager.shouldCompact()).toBe(true)
+      expect(manager.shouldCompact(messages)).toBe(true)
     })
 
     it('ignores non-positive observed usage', () => {
-      manager.updateContextTokens([])
       manager.setObservedPromptTokens(0)
       manager.setObservedPromptTokens(-5)
-      // Falls back to the (tiny) estimate — must NOT read the anchor as 0/-5
-      // and must not throw.
-      expect(manager.shouldCompact()).toBe(false)
+      // Falls back to the (tiny) char estimate — must NOT read the anchor as
+      // 0/-5 and must not throw.
+      expect(manager.shouldCompact(makeMessages(4_000))).toBe(false)
     })
   })
 
-  describe('preflight overflow check', () => {
-    it('reports over-window totals through effectiveTotalTokensForOverflowCheck', () => {
-      // Anchor just over the 200k window — must fire preflight_overflow.
-      manager.updateContextTokens(makeMessages(OVER_THRESHOLD_CHARS))
-      manager.setObservedPromptTokens(250_000)
-      expect(
-        manager.effectiveTotalTokensForOverflowCheck(),
-      ).toBeGreaterThan(200_000)
-    })
-
-    it('reports under-window totals correctly', () => {
-      manager.updateContextTokens([])
-      manager.setObservedPromptTokens(180_000)
-      expect(
-        manager.effectiveTotalTokensForOverflowCheck(),
-      ).toBeLessThanOrEqual(200_000)
-    })
-  })
-
-  describe('5-state suppression — TURN', () => {
-    it('clears SUPPRESS_TURN at the next turn start', async () => {
+  describe('failure suppression (flat)', () => {
+    it("clears a transient 'other' failure at the next turn start", async () => {
       const messages = makeMessages(OVER_THRESHOLD_CHARS)
-      manager.updateContextTokens(messages)
-      // Force a deterministic failure to land in TURN.
       mockSummarizer.mockRejectedValueOnce(new Error('HTTP 500 transient'))
-      let caught: unknown = null
-      try {
-        await manager.compact(messages, { trigger: 'auto' })
-      } catch (e) {
-        caught = e
-      }
-      expect(caught).not.toBeNull()
-      expect(manager.getSuppressionState()).toBeGreaterThan(0)
-      expect(manager.isCircuitBreakerTriggered()).toBe(true)
+      await expect(manager.compact(messages, { trigger: 'auto' })).rejects.toThrow()
+      expect(manager.isSuppressed()).toBe(true)
+      expect(manager.getSuppressionType()).toBe('other')
 
       manager.onTurnStart()
-      expect(manager.isCircuitBreakerTriggered()).toBe(false)
-      expect(manager.shouldCompact()).toBe(true)
+      expect(manager.isSuppressed()).toBe(false)
+      expect(manager.shouldCompact(messages)).toBe(true)
     })
 
-    it('STICKY survives onTurnStart (only clearOnBudgetChange clears it)', async () => {
+    it("'size' failures survive onTurnStart and clear only on a successful compaction", async () => {
       const messages = makeMessages(OVER_THRESHOLD_CHARS)
       mockSummarizer.mockRejectedValueOnce(
         new Error('context_length_exceeded'),
       )
-      try {
-        await manager.compact(messages, { trigger: 'auto' })
-      } catch {
-        // ignored
-      }
-      // context_length_exceeded → size → STICKY
+      await expect(manager.compact(messages, { trigger: 'auto' })).rejects.toThrow()
+      expect(manager.getSuppressionType()).toBe('size')
+
+      // onTurnStart clears only 'other' — size suppression must survive.
       manager.onTurnStart()
-      expect(manager.isCircuitBreakerTriggered()).toBe(true)
+      expect(manager.isSuppressed()).toBe(true)
+
+      // A successful compaction clears 'size' (the budget change it waited
+      // for — clearOnBudgetChange runs in onCompactionSuccess).
+      await manager.compact(messages, { trigger: 'auto' })
+      expect(manager.isSuppressed()).toBe(false)
     })
-  })
 
-  describe('5-state suppression — STICKY clear on budget change', () => {
-    it('a successful compaction clears STICKY', async () => {
+    it("'auth' failures clear only on auth refresh", async () => {
       const messages = makeMessages(OVER_THRESHOLD_CHARS)
-      mockSummarizer.mockRejectedValueOnce(
-        new Error('context_length_exceeded'),
-      )
-      try {
-        await manager.compact(messages, { trigger: 'auto' })
-      } catch {
-        // ignored
-      }
-      // Now size → STICKY. Successful compaction in this fresh state must
-      // clear it (clearOnBudgetChange is called inside compact()'s success
-      // path when tokensAfter < tokensBefore).
-      await manager.compact(makeMessages(OVER_THRESHOLD_CHARS), {
-        trigger: 'auto',
-      })
-      expect(manager.isCircuitBreakerTriggered()).toBe(false)
-    })
-  })
-
-  describe('5-state suppression — UNTIL_SUCCESS / AUTH', () => {
-    it('clearOnSuccess clears UNTIL_SUCCESS (credit) but not AUTH', async () => {
-      const messages = makeMessages(OVER_THRESHOLD_CHARS)
-      mockSummarizer.mockRejectedValueOnce(new Error('out of credits'))
-      try {
-        await manager.compact(messages, { trigger: 'auto' })
-      } catch {
-        // ignored
-      }
-      manager.onLlmSuccess()
-      expect(manager.isCircuitBreakerTriggered()).toBe(false)
-
-      // Now produce an AUTH failure.
       mockSummarizer.mockRejectedValueOnce(new Error('HTTP 401 unauthorized'))
-      try {
-        await manager.compact(messages, { trigger: 'auto' })
-      } catch {
-        // ignored
-      }
-      manager.onLlmSuccess()
-      expect(manager.isCircuitBreakerTriggered()).toBe(true)
+      await expect(manager.compact(messages, { trigger: 'auto' })).rejects.toThrow()
+      expect(manager.getSuppressionType()).toBe('auth')
+
+      manager.onTurnStart()
+      expect(manager.isSuppressed()).toBe(true)
 
       manager.onAuthRefresh()
-      expect(manager.isCircuitBreakerTriggered()).toBe(false)
+      expect(manager.isSuppressed()).toBe(false)
     })
-  })
 
-  describe('5-state suppression — manual / emergency / model_switch bypass', () => {
-    it('manual trigger succeeds even when suppressed', async () => {
+    it('non-auto triggers bypass the suppression gate', async () => {
       const messages = makeMessages(OVER_THRESHOLD_CHARS)
       mockSummarizer.mockRejectedValueOnce(
         new Error('context_length_exceeded'),
       )
-      try {
-        await manager.compact(messages, { trigger: 'auto' })
-      } catch {
-        // ignored
-      }
-      expect(manager.isCircuitBreakerTriggered()).toBe(true)
-      // Manual trigger calls compact() directly, never hits shouldCompact(),
-      // so the suppression gate does not apply.
-      const result = await manager.compact(messages, { trigger: 'manual' })
-      expect(result.strategy).not.toBe('none')
-    })
+      await expect(manager.compact(messages, { trigger: 'auto' })).rejects.toThrow()
+      expect(manager.isSuppressed()).toBe(true)
 
-    it('emergency trigger succeeds even when suppressed', async () => {
-      const messages = makeMessages(OVER_THRESHOLD_CHARS)
-      mockSummarizer.mockRejectedValueOnce(
-        new Error('context_length_exceeded'),
-      )
-      try {
-        await manager.compact(messages, { trigger: 'auto' })
-      } catch {
-        // ignored
+      // manual / emergency / model_switch call compact() directly and never
+      // consult shouldCompact(), so the suppression gate does not apply.
+      for (const trigger of ['manual', 'emergency', 'model_switch'] as const) {
+        const result = await manager.compact(messages, { trigger })
+        expect(result.strategy).not.toBe('none')
       }
-      const result = await manager.compact(messages, { trigger: 'emergency' })
-      expect(result.strategy).not.toBe('none')
-    })
-
-    it('model_switch trigger succeeds even when suppressed', async () => {
-      const messages = makeMessages(OVER_THRESHOLD_CHARS)
-      mockSummarizer.mockRejectedValueOnce(
-        new Error('context_length_exceeded'),
-      )
-      try {
-        await manager.compact(messages, { trigger: 'auto' })
-      } catch {
-        // ignored
-      }
-      const result = await manager.compact(messages, { trigger: 'model_switch' })
-      expect(result.strategy).not.toBe('none')
     })
   })
 

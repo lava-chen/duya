@@ -20,6 +20,7 @@ import { estimateMessagesTokens } from '../tokenBudget.js'
 import { adjustSliceBoundary } from '../compact.js'
 import { sanitizeCompactedHistory } from '../historySanitize.js'
 import { cleanSummaryText, isDegenerateSummary } from '../summaryGuard.js'
+import { summarizeWithRetryLadder } from '../summaryRetry.js'
 import {
   findCutPoint,
   buildSummarizationPrompt,
@@ -490,8 +491,11 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
       }
     }
 
-    // If conversation is small enough, no need to compact
-    if (conversationMessages.length <= this.config.maxMessagesToKeep) {
+    // If conversation is small enough, no need to compact. `force` (Plan 495
+    // G2 image-threshold trigger) bypasses the message-count guard — image
+    // volume can degrade the context long before the message count does —
+    // while still respecting the nothing-to-summarize early return below.
+    if (!options?.force && conversationMessages.length <= this.config.maxMessagesToKeep) {
       return {
         messages,
         tokensRemoved: 0,
@@ -565,30 +569,42 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
     if (this.summarizer && olderMessages.length > 0) {
       const cleanedMessages = this.stripImagesFromMessages(olderMessages)
       const conversationText = serializeMessagesForSummary(cleanedMessages)
-      const prompt = buildSummarizationPrompt(
-        conversationText,
-        effectivePreviousSummary,
-        undefined, // customInstructions
-      )
 
       const toolCount = countToolCalls(olderMessages)
       const fileOpsList = extractFileOperations(olderMessages)
       const hasRecentToolCalls = hasToolCallsInLastTurn(olderMessages)
-      const enhancedPrompt = `${prompt}\n\n---\n\nConversation Statistics:\n- Total older messages: ${olderMessages.length}\n- Tool calls: ${toolCount}\n- File operations: ${fileOpsList.length}\n- Has tool calls in last turn: ${hasRecentToolCalls}`
+      const statsSuffix = `\n\n---\n\nConversation Statistics:\n- Total older messages: ${olderMessages.length}\n- Tool calls: ${toolCount}\n- File operations: ${fileOpsList.length}\n- Has tool calls in last turn: ${hasRecentToolCalls}`
+      const buildPrompt = (conversationTextForPrompt: string): string =>
+        buildSummarizationPrompt(conversationTextForPrompt, effectivePreviousSummary, undefined) + statsSuffix
+      const enhancedPrompt = buildPrompt(conversationText)
 
-      // Retry once when the first summary is degenerate.
+      // Retry ladder (Plan 495 G4, grok self-summary alignment): output-length
+      // failures get a one-shot shorter-output instruction, input-length
+      // failures shrink the summarized range (tool traffic drops first), and
+      // up to MAX_SUMMARY_RETRIES attempts run before the failure escapes.
       let rawSummary = ''
       try {
-        rawSummary = cleanSummaryText(await this.summarize(conversationText, enhancedPrompt))
-        if (isDegenerateSummary(rawSummary)) {
-          rawSummary = cleanSummaryText(await this.summarize(conversationText, enhancedPrompt))
-        }
+        rawSummary = cleanSummaryText(
+          (
+            await summarizeWithRetryLadder(
+              (text, promptText) => this.summarize(text, promptText),
+              {
+                conversationText,
+                prompt: enhancedPrompt,
+                messages: cleanedMessages,
+                rebuild: (reduced) => {
+                  const text = serializeMessagesForSummary([...reduced])
+                  return { conversationText: text, prompt: buildPrompt(text) }
+                },
+              },
+              (t) => isDegenerateSummary(t),
+            )
+          ).text,
+        )
       } catch (summaryError) {
         // Re-throw so CompactionManager.compact() can route the error into
-        // the 5-state suppression machine (see `classifySuppressReason`).
-        // The previous behaviour (silently setting `rawSummary = ''` and
-        // pretending success) bypassed suppression entirely — a summarizer
-        // that keeps failing on the same content would loop forever.
+        // the suppression machine (see `classifySuppressReason`). A summarizer
+        // that keeps failing on the same content must not loop forever.
         throw summaryError
       }
 

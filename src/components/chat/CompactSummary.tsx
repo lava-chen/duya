@@ -1,10 +1,14 @@
 // CompactSummary — the context-compaction record row in the message flow.
 //
 // When the agent compacts history, the summary lands in the stream as a
-// message tagged `isCompactSummary`. This renders that record as an
-// action row sharing the tool / hook row chrome:
-//   - collapsed: [compress icon] 已对上下文进行压缩   [N messages]
-//   - expanded: card showing the compressed summary text verbatim
+// message tagged `isCompactSummary` (rendered here), and during the active
+// turn the compaction milestone is streamed as an inline `compact` action
+// (also rendered here). Both render as action rows sharing the tool / hook
+// row chrome:
+//   - compacting: spinner + "compacting" verb
+//   - done/success: [compress icon] 已对上下文进行压缩   [N messages],
+//     expand to show the compressed summary text verbatim
+//   - error:      failure verb
 //
 // All chrome is shared with `ActionRowChrome` so visual weight matches
 // every other action row.
@@ -15,43 +19,55 @@ import React, { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { CornersInIcon } from '@/components/icons';
 import { ActionRowChrome } from './tools/chrome/ActionRowChrome';
+import type { ToolStatus } from './tools/types';
+import type { TranslationKey } from '@/i18n';
 import { useTranslation } from '@/hooks/useTranslation';
 
 interface CompactSummaryProps {
   /** The compressed summary text recorded in the message stream. */
-  content: string;
+  content?: string;
   /** Number of messages that were compacted into this summary. */
-  compactedMessageCount: number;
+  compactedMessageCount?: number;
+  /** Status→chrome mapping; 'success' matches a completed compaction. */
+  status?: ToolStatus;
+  /** Override the verb shown next to the icon. Defaults to the collapsed
+   *  "已对上下文进行压缩" verb used by the durable summary row. */
+  verbKey?: TranslationKey;
 }
 
-export function CompactSummary({ content, compactedMessageCount }: CompactSummaryProps) {
+export function CompactSummary({
+  content = '',
+  compactedMessageCount = 0,
+  status = 'success',
+  verbKey = 'streaming.toolAction.compact.collapsed',
+}: CompactSummaryProps) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const [hovered, setHovered] = useState(false);
 
   // A degenerate compaction can produce an empty summary; without body
   // text there is nothing to reveal, so the row stays inert.
-  const canExpand = content.trim().length > 0;
+  const canExpand = status === 'success' && content.trim().length > 0;
 
   // Right slot: how much went into the summary. Hidden below the sm
   // breakpoint so narrow viewports keep the collapsed row clean.
-  const countSlot =
-    compactedMessageCount > 0 ? (
-      <span className="text-muted-foreground/40 text-[10px] font-mono hidden sm:inline shrink-0">
-        {t(
-          compactedMessageCount === 1
-            ? 'streaming.toolAction.compact.messagesCompacted.one'
-            : 'streaming.toolAction.compact.messagesCompacted.other',
-          { count: compactedMessageCount },
-        )}
-      </span>
-    ) : null;
+  const showCount = compactedMessageCount > 0;
+  const countSlot = showCount ? (
+    <span className="text-muted-foreground/40 text-[10px] font-mono hidden sm:inline shrink-0">
+      {t(
+        compactedMessageCount === 1
+          ? 'streaming.toolAction.compact.messagesCompacted.one'
+          : 'streaming.toolAction.compact.messagesCompacted.other',
+        { count: compactedMessageCount },
+      )}
+    </span>
+  ) : null;
 
   return (
     <div className="py-0.5">
       <ActionRowChrome
-        status="success"
-        verbKey={'streaming.toolAction.compact.collapsed'}
+        status={status}
+        verbKey={verbKey}
         icon={<CornersInIcon size={14} />}
         canExpand={canExpand}
         expanded={expanded}

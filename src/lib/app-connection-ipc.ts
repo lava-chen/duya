@@ -59,6 +59,17 @@ export function getAppConnectionAPI() {
     return null;
   }
   return {
+    /**
+     * Plan 498: subscribe to main-process `app-connection:connected`
+     * broadcasts. Fired after any successful `appConnection:connect`
+     * (chat auth card or settings page), so a pending connector auth
+     * card can flip to its real "connected" state.
+     */
+    onConnected: (
+      callback: (data: { provider: string; connectionId: string | null }) => void,
+    ): (() => void) => {
+      return api.appConnection.onConnected(callback);
+    },
     list: async (): Promise<AppConnectionListResponse> => {
       return api.appConnection.list() as Promise<AppConnectionListResponse>;
     },

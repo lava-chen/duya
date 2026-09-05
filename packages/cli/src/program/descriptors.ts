@@ -451,6 +451,35 @@ const subChannelSend: CliSubcommand = {
   run: (ctx) => runChannelCommand.send(ctx),
 };
 
+const subChannelDisconnect: CliSubcommand = {
+  description: 'Unbind a platform. With --agent, removes that bot\'s profile route (optionally chat-scoped); otherwise uses the primary agent.',
+  write: true,
+  options: [
+    { flags: '--platform <platform>', description: 'Platform to disconnect (required)' },
+    { flags: '--agent <agentId>', description: 'Agent id for per-bot bindings' },
+    { flags: '--chat <chatId>', description: 'Chat-scoped unbind (with --agent)' },
+  ],
+  run: (ctx) => runChannelCommand.disconnect(ctx),
+};
+
+const subChannelBindings: CliSubcommand = {
+  description: 'List the channels bound to a bot (gateway profile routes, plan 488).',
+  options: [{ flags: '--agent <agentId>', description: 'Agent id (required)' }],
+  run: (ctx) => runChannelCommand.bindings(ctx),
+};
+
+const subChannelConnect: CliSubcommand = {
+  description: 'Bind a platform (or a single chat) to a bot via a gateway profile route. The platform must already be configured in Channel settings.',
+  write: true,
+  options: [
+    { flags: '--agent <agentId>', description: 'Agent id (required)' },
+    { flags: '--platform <platform>', description: 'Platform to bind (required)' },
+    { flags: '--chat <chatId>', description: 'Bind a single chat; omit to bind the whole platform' },
+    { flags: '--label <name>', description: 'Route name for diagnostics' },
+  ],
+  run: (ctx) => runChannelCommand.connect(ctx),
+};
+
 const subCronList: CliSubcommand = {
   description: 'List all scheduled jobs (id / name / schedule / nextRunAt / lastRunAt / lastError)',
   run: (ctx) => runCronCommand.list(ctx),
@@ -1169,6 +1198,9 @@ export const CLI_DESCRIPTORS = defineDescriptors([
       test: subChannelTest,
       'send-test': subChannelSendTest,
       send: subChannelSend,
+      disconnect: subChannelDisconnect,
+      bindings: subChannelBindings,
+      connect: subChannelConnect,
     },
   },
   {

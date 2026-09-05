@@ -179,6 +179,18 @@ export interface CustomAgentConfig {
   plugins?: string[];
   /** Bot system-prompt section config (Plan 474 P3.2). Preserved as-is on upsert. */
   prompt?: CustomAgentPromptConfig;
+  /**
+   * Plan 493 (Phase D): soft-delete timestamp in Unix ms. When set, the
+   * agent is in the soft-deleted state — its tree lives under
+   * `<agentsDir>/.deleted/<deletedAt>-<id>/`, IPC handlers report "not
+   * found", and the sidebar / drawer hide it from the default list.
+   * `undefined` or `null` (and the JSON round-trip `null`) means "live".
+   */
+  deleted_at?: number | null;
+  /** Optional free-text note from the caller (e.g. "owner request"). */
+  deleted_reason?: string | null;
+  /** Scheduled wall-clock time (Unix ms) when the bot will be physically removed. */
+  deleted_purge_at?: number | null;
 }
 
 /**

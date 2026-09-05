@@ -122,7 +122,12 @@ export function preprocessBareMathExpressions(text: string): string {
 }
 
 function countMathSymbolHits(line: string): number {
-  const matches = line.match(MATH_SYMBOL_RE);
+  // `MATH_SYMBOL_RE` carries no /g flag (it is also used as a plain
+  // "does this line contain any math symbol?" test), so `String.match`
+  // would stop at the first hit and every CJK-mixed line would look
+  // like it has exactly one symbol — the CJK branch below could then
+  // never fire. Match against a global clone for the real count.
+  const matches = line.match(new RegExp(MATH_SYMBOL_RE.source, 'g'));
   return matches ? matches.length : 0;
 }
 
@@ -188,15 +193,29 @@ export function preprocessMarkdownHeadings(text: string): string {
     .join('');
 }
 
+/** Sentinel standing in for an inline code span while headings are repaired. */
+const INLINE_CODE_PLACEHOLDER = '\u0000';
+
 function repairHeadingSyntax(segment: string): string {
-  let out = segment;
+  // Mask inline code spans first: a `###` inside backticks is a literal,
+  // not a heading marker, and splitting in front of it would corrupt the
+  // rendered list item (see markdown-heading.test.ts). Masking (rather
+  // than splitting into independent strings) keeps the "heading glued to
+  // the end of a code span" case working, because the sentinel still
+  // counts as "some character before the marker".
+  const codeSpans: string[] = [];
+  let out = segment.replace(/`[^`]*`/g, (span) => {
+    codeSpans.push(span);
+    return INLINE_CODE_PLACEHOLDER;
+  });
   // 1) Missing space after a heading marker at line start.
   out = out.replace(/^(#{2,6})(?!\s)(?!#)/gm, '$1 ');
   // 2) Heading glued to the previous line: ensure a newline precedes it.
   //    Never match a subset of an existing marker (preceded by #) or a
   //    marker already at line start.
   out = out.replace(/(?<![#\n])(?<!^)(#{2,6}\s)/gm, '\n$1');
-  return out;
+  if (codeSpans.length === 0) return out;
+  return out.replace(new RegExp(INLINE_CODE_PLACEHOLDER, 'g'), () => codeSpans.shift()!);
 }
 
 /**

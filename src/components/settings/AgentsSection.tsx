@@ -27,6 +27,7 @@ import {
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { Input } from "@/components/ui/Input";
+import { deriveBotIdFromName } from "@/components/layout/sidebar/bot-contacts";
 import {
   listAgentProfiles,
   listCustomAgents,
@@ -297,7 +298,7 @@ export function AgentsSection() {
     try {
       const id = editingAgentId
         ? editingAgentId
-        : agentFormName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+        : deriveBotIdFromName(agentFormName, Object.keys(configAgents));
 
       const input: AgentUpsertInput = {
         name: agentFormName.trim(),

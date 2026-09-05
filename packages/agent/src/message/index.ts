@@ -58,6 +58,17 @@ export {
   type IngestMessageOptions,
 } from './message-factories.js';
 
+// Message origin classifier (plan 489 P0.1) — canonical MessageSource union
+// + the bot-direct visibility helpers shared by the worker and the desktop
+// main process.
+export {
+  BOT_DIRECT_VISIBLE_SOURCES,
+  BOT_INTERNAL_SOURCES,
+  DEFAULT_MESSAGE_SOURCE,
+  isBotDirectVisible,
+} from './message-source.js';
+export type { MessageSource } from './message-source.js';
+
 // AgentMessage domain types
 export type {
   AgentMessage,

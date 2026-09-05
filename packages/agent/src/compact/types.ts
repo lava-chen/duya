@@ -65,4 +65,10 @@ export interface CompactOptions {
   trigger?: 'auto' | 'manual' | 'emergency' | 'preflight_overflow' | 'model_switch'
   /** Transient seed from prefire (not used without prefire, kept for compat). */
   previousSummary?: string
+  /**
+   * Bypass strategy-level guards that would return the input unchanged
+   * (Plan 495 G2 image-threshold trigger). The nothing-to-summarize
+   * early return still applies.
+   */
+  force?: boolean
 }

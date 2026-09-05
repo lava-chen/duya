@@ -5,6 +5,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useConversationStore } from "@/stores/conversation-store";
 import { initMailboxEventListener } from "@/stores/mailbox-store";
 import { ChatView } from "@/components/chat/ChatView";
+import { BotDirectChatView } from "@/components/chat/BotDirectChatView";
+import { resolveChatMode, resolveBotAgentId } from "@/components/chat/bot/chat-mode";
+import { botDirectSend, botDirectSendComplete } from "@/components/chat/bot/send";
+import type { BotComposerSendPayload } from "@/components/chat/BotComposer";
 import { NewChatView } from "@/components/chat/NewChatView";
 import { WelcomeView } from "@/components/home/WelcomeView";
 import { SkillsView } from "@/components/skills/SkillsView";
@@ -278,6 +282,8 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
         durationMs: m.durationMs ?? undefined,
         subAgentId: m.subAgentId ?? undefined,
         attachments: m.attachments ?? undefined,
+        source: m.source ?? undefined,
+        sendMessageMeta: m.sendMessageMeta ?? undefined,
       }));
 
       // Add each message to the store
@@ -457,6 +463,110 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
     [activeThreadId, addMessage, settings.titleGenerationModel, updateThreadTitle],
   );
 
+  // Plan 491 P1.1 / 477 P3.1: dedicated bot-direct send path. The workspace
+  // handleSendMessage would work for message transport, but the bot session
+  // needs (a) agentProfileId carried so the worker loads the bot identity +
+  // toolset + prompt (the server force-overrides it for bot sessions anyway),
+  // (b) the nonce-dedup + preemption pipeline from the 491 send module, and
+  // (c) per-message delivery phases in the conversation store.
+  const setMessageDelivery = useConversationStore((s) => s.setMessageDelivery);
+  const handleBotDirectSend = useCallback(
+    (payload: BotComposerSendPayload) => {
+      if (!activeThreadId) return;
+      const agentId = resolveBotAgentId(activeThreadId);
+      if (!agentId) return;
+      const { text: content, model, providerId, effort, mode, files } = payload;
+
+      // Bot-direct is an 'auto' surface: the session row stores the durable
+      // default and the server binds the profile from the bot id.
+      const permissionModeOverride = 'auto' as const;
+      const sessionProviderId = useConversationStore
+        .getState()
+        .threads.find((t) => t.id === activeThreadId)?.providerId;
+
+      // Busy → reuse the workspace queue (auto-flushed by
+      // autoStartQueuedStream when the stream settles).
+      if (isStreaming || !canSend(activeThreadId)) {
+        enqueueMessage(activeThreadId, {
+          sessionId: activeThreadId,
+          content,
+          language: settings.agentLanguage,
+          permissionModeOverride,
+          agentProfileId: agentId,
+          titleGenerationModel: settings.titleGenerationModel,
+          defaultWorkspaceDirectory: settings.workspaceDir,
+          providerId: providerId ?? sessionProviderId,
+          model,
+          effort,
+          mode,
+          files,
+        });
+        return;
+      }
+
+      void botDirectSend({
+        sessionId: activeThreadId,
+        content,
+        strategy: 'queue',
+        onQueued: (messageId) =>
+          setMessageDelivery(activeThreadId, messageId, 'queued'),
+        onFailed: (messageId) =>
+          setMessageDelivery(activeThreadId, messageId, 'failed'),
+        sendFn: async (messageId, text) => {
+          // Optimistic bubble keyed to the pipeline's messageId so the
+          // delivery phase lookups line up with the rendered row.
+          addMessage(
+            activeThreadId,
+            {
+              id: messageId,
+              role: 'user',
+              content: text,
+              timestamp: Date.now(),
+              metadata: { optimistic: true },
+            },
+            { persist: false },
+          );
+          setMessageDelivery(activeThreadId, messageId, 'sending');
+          setIsStreaming(true);
+          // Fire-and-forget: the tracker stays busy until the stream settles
+          // (released by the botDirectSendComplete effect below).
+          void startStream({
+            sessionId: activeThreadId,
+            content: text,
+            language: settings.agentLanguage,
+            permissionModeOverride,
+            agentProfileId: agentId,
+            titleGenerationModel: settings.titleGenerationModel,
+            defaultWorkspaceDirectory: settings.workspaceDir,
+            providerId: providerId ?? sessionProviderId,
+            model,
+            effort,
+            mode,
+            files,
+          });
+        },
+      });
+    },
+    [
+      activeThreadId,
+      isStreaming,
+      addMessage,
+      setMessageDelivery,
+      settings.agentLanguage,
+      settings.titleGenerationModel,
+      settings.workspaceDir,
+    ],
+  );
+
+  // Release the bot-direct send pipeline's busy lock when the stream
+  // settles, so the next send is not misclassified as a duplicate turn.
+  useEffect(() => {
+    if (!activeThreadId || isStreaming) return;
+    if (resolveChatMode(activeThreadId) === 'bot-direct') {
+      botDirectSendComplete(activeThreadId);
+    }
+  }, [activeThreadId, isStreaming]);
+
   const handleInterrupt = useCallback(() => {
     if (!activeThreadId) return;
     const now = Date.now();
@@ -511,7 +621,18 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
           {currentView === 'home' && (
             <WelcomeView onSelectThread={setActiveThread} onSendMessage={handleSendMessage} />
           )}
-          {currentView === 'chat' && (
+          {currentView === 'chat' && resolveChatMode(activeThreadId) === 'bot-direct' && (
+            <BotDirectChatView
+              key={activeThreadId}
+              sessionId={activeThreadId}
+              messages={threadMessages}
+              isStreaming={isStreaming}
+              isFinalizing={isFinalizing}
+              onSend={handleBotDirectSend}
+              onStop={handleInterrupt}
+            />
+          )}
+          {currentView === 'chat' && resolveChatMode(activeThreadId) !== 'bot-direct' && (
             <ChatView
               key={activeThreadId}
               sessionId={activeThreadId}

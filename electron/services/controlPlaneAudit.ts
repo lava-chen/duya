@@ -69,6 +69,8 @@ export type AuditEventKind =
   | 'channel.send'
   // 488 P2.3: `duya channel disconnect`
   | 'channel.disconnect'
+  // 488 P2.3: `duya channel connect` (per-bot channel binding)
+  | 'channel.connect'
   // `duya gateway` secret reload + generic rpc (Plan 200 P4).
   | 'gateway.reload_secrets'
   | 'gateway.rpc';

@@ -135,13 +135,19 @@ function buildExecutor(desc: AppConnectionToolDescriptor): ToolExecutor {
         }
         // Surface `connection_not_available` / `connection_revoked` with
         // a user-actionable hint so the LLM can tell the user to reconnect.
+        // Plan 498: for `connector_auth_required` the renderer already drew
+        // the re-authorization card (SSE event above) — mirror grok-bot's
+        // AuthenticateMcpServer contract: tell the model to stop retrying,
+        // finish other work, and end the turn. The UI resumes it with a
+        // follow-up message once the user completes authorization.
         const message =
-          error.code === 'connection_not_available' ||
-          error.code === 'connection_revoked' ||
-          error.code === 'connection_not_found' ||
           error.code === 'connector_auth_required'
-            ? `${error.message} — the user may need to reconnect the ${desc.provider} account.`
-            : error.message;
+            ? `${error.message} A re-authorization card for ${desc.provider} has been shown to the user in the chat UI. Do NOT retry this call right now — finish any other useful work, then end your turn. The user will complete authorization in the browser, and the UI will automatically send a follow-up message so you can re-issue this call with the same arguments.`
+            : error.code === 'connection_not_available' ||
+                error.code === 'connection_revoked' ||
+                error.code === 'connection_not_found'
+              ? `${error.message} — the user may need to reconnect the ${desc.provider} account.`
+              : error.message;
         return {
           id: crypto.randomUUID(),
           name: toolName,

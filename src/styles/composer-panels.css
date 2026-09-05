@@ -1,0 +1,642 @@
+/*
+ * composer-panels.css — extracted from src/styles/globals.css (domain split).
+ * Do not edit the ordering of rules within this file; the entry file
+ * imports domain files in cascade order.
+ */
+/* Light theme: lift the expanded composer to pure white so the floated
+ * surface matches --main-bg / --composer-bg. Dark theme is intentionally
+ * left alone (the original --surface-solid still applies). */
+:root:not([data-theme="dark"]) .workspace-floating-composer-expanded .message-input-surface {
+  background-color: var(--main-bg) !important;
+}
+
+/* Light theme: composer-attached panels (sub-agent, queued mailbox,
+ * streaming input) share the composer's white surface, and permission
+ * prompts drop the heavier --command-menu-border in favor of --border —
+ * the whole input stack then reads as one control. Dark theme untouched:
+ * --composer-bg falls back to --surface and these rules don't match. */
+:root:not([data-theme="dark"]) .sub-agent-panel,
+:root:not([data-theme="dark"]) .mailbox-panel,
+:root:not([data-theme="dark"]) .streaming-input-bar {
+  background-color: var(--composer-bg);
+}
+
+:root:not([data-theme="dark"]) .permission-prompt-panel,
+:root:not([data-theme="dark"]) .permission-prompt-panel.resolved,
+:root:not([data-theme="dark"]) .permission-prompt-panel.ask-user-question-panel {
+  border-color: var(--border);
+}
+
+.workspace-floating-composer-expanded .agent-mode-selector {
+  background-color: var(--surface-solid) !important;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.26);
+}
+
+.workspace-task-toggle {
+  position: absolute;
+  z-index: 62;
+  top: 6px;
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    left 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    right 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    background 150ms ease,
+    color 150ms ease;
+}
+
+.workspace-task-toggle:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+@media (max-width: 760px) {
+  .panel-file-tree {
+    position: absolute;
+    z-index: 18;
+    inset: 0 0 0 auto;
+    width: min(84vw, 320px);
+    min-width: 240px;
+    box-shadow: -18px 0 36px rgba(0, 0, 0, 0.24);
+  }
+}
+
+/* When the workspace cannot fit the chat minimum plus the smallest panel
+   (420 + 300 = 720px), float the panel so the chat column never shrinks below
+   MIN_CHAT_WIDTH. */
+@container (max-width: 719px) {
+  .panel-zone-open:not(.panel-zone-expanded) {
+    position: absolute;
+    z-index: 40;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(var(--panel-zone-width), calc(100% - 48px));
+    height: 100%;
+    flex-basis: auto;
+    box-shadow: -16px 0 34px rgba(0, 0, 0, 0.18);
+  }
+
+  .panel-zone-open:not(.panel-zone-expanded) .sidebar-panel-inner {
+    width: 100% !important;
+  }
+}
+/* Canvas-native table editing rails keep structural controls outside the grid. */
+.canvas-table__column-rail {
+  position: absolute;
+  top: -20px;
+  left: 0;
+  right: 0;
+  height: 18px;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  align-items: center;
+  justify-items: center;
+  color: #963df2;
+  background: var(--bg-canvas);
+  border: 1px solid color-mix(in srgb, var(--border) 78%, #963df2);
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 2px;
+}
+
+.canvas-table__row-rail {
+  position: absolute;
+  top: 31px;
+  bottom: 0;
+  left: -26px;
+  width: 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, #963df2);
+  border-radius: 4px;
+  background: var(--bg-canvas);
+}
+
+/* Inline task row inside the composer (plan 416). Renders a single
+   row above the textarea that grows the input box when present, and
+   an absolutely-positioned popover with the same chrome as the
+   slash-command settings popover (`--command-menu-*` tokens). */
+.inline-task-row-wrap {
+  position: relative;
+  z-index: 2;
+  transform-origin: top center;
+  animation: inline-task-row-in 180ms ease-out;
+}
+
+@keyframes inline-task-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.inline-task-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 4px 8px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.inline-task-row-main {
+  display: inline-flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.inline-task-row-main:hover {
+  color: inherit;
+}
+
+.inline-task-row-icon {
+  flex: none;
+  color: inherit;
+}
+
+.inline-task-row-prefix {
+  flex: none;
+  color: inherit;
+}
+
+.inline-task-row-subject {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: inherit;
+}
+
+.inline-task-row-subject-swap {
+  animation: inline-task-subject-swap 160ms ease-out;
+}
+
+@keyframes inline-task-subject-swap {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.inline-task-row-bottom-line {
+  width: calc(100% - 16px);
+  height: 1px;
+  margin: 2px auto 0;
+  background: var(--command-menu-border);
+  transform-origin: center;
+  animation: inline-task-line-in 220ms ease-out;
+}
+
+@keyframes inline-task-line-in {
+  from {
+    opacity: 0;
+    transform: scaleX(0.4);
+  }
+  to {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+.inline-task-row-divider {
+  flex: none;
+  width: 1px;
+  height: 14px;
+  background: color-mix(in srgb, var(--command-menu-border) 70%, transparent);
+}
+
+.inline-task-row-git {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  line-height: inherit;
+  cursor: pointer;
+}
+
+.inline-task-row-git:hover {
+  color: inherit;
+}
+
+.inline-task-row-git-count {
+  font-size: 11px;
+  color: var(--command-menu-muted);
+  white-space: nowrap;
+}
+
+.inline-task-row-git-changes {
+  display: inline-flex;
+  gap: 6px;
+  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* Popover — mirrors `.command-menu-popover` for visual consistency. */
+.inline-task-popover {
+  position: absolute;
+  left: 0;
+  right: auto;
+  bottom: calc(100% + 6px);
+  margin: 0;
+  width: min(420px, calc(100vw - 48px));
+  max-height: calc(26px * 6 + 20px);
+  overflow-y: auto;
+  padding: 2px;
+  border: 1px solid var(--command-menu-border);
+  border-radius: 10px;
+  background: var(--command-menu-bg);
+  box-shadow: none;
+}
+
+.inline-task-popover-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.inline-task-popover-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.inline-task-popover-item:hover {
+  background: var(--command-menu-selected);
+}
+
+.inline-task-popover-status {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--command-menu-muted);
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.inline-task-popover-status:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.inline-task-popover-title {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.inline-task-popover-title-done {
+  color: var(--command-menu-muted);
+  text-decoration: line-through;
+}
+
+.canvas-table__add-column,
+.canvas-table__add-row {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, #963df2);
+  border-radius: 4px;
+  background: var(--bg-canvas);
+  color: #923df0;
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.canvas-table__add-column {
+  top: 31px;
+  right: -26px;
+  bottom: 0;
+  width: 22px;
+}
+
+.canvas-table__add-row {
+  right: 0;
+  bottom: -26px;
+  left: 0;
+  height: 22px;
+}
+
+.canvas-table__add-column:hover,
+.canvas-table__add-row:hover,
+.canvas-table__row-rail button:hover {
+  background: color-mix(in srgb, #963df2 14%, var(--bg-canvas));
+}
+
+.canvas-table__palette {
+  position: absolute;
+  z-index: 40;
+  top: -146px;
+  left: 50%;
+  display: grid;
+  grid-template-columns: repeat(4, 24px);
+  gap: 8px;
+  padding: 12px;
+  transform: translateX(-50%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  background: rgba(40, 44, 52, 0.98);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+.canvas-table__palette::after {
+  position: absolute;
+  bottom: -6px;
+  left: calc(50% - 6px);
+  width: 12px;
+  height: 12px;
+  content: "";
+  transform: rotate(45deg);
+  background: rgba(40, 44, 52, 0.98);
+}
+
+.canvas-table__palette button {
+  position: relative;
+  z-index: 1;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+/* ── Goal status chip (plan 420) ─────────────────────────────────────
+   Compact pill above the composer while a goal is active. Mirrors the
+   input-box chip look: flat surface, hairline border, rounded full. */
+.goal-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-solid, var(--surface));
+  color: var(--text);
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+}
+.goal-chip:hover {
+  background: var(--surface-hover, var(--surface));
+}
+.goal-chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: none;
+}
+.goal-chip-dot[data-state="active"] { background: var(--accent); }
+.goal-chip-dot[data-state="verifying"],
+.goal-chip-dot[data-state="user_paused"],
+.goal-chip-dot[data-state="backoff_paused"],
+.goal-chip-dot[data-state="no_progress_paused"],
+.goal-chip-dot[data-state="infra_paused"] { background: var(--warning, #eab308); }
+.goal-chip-dot[data-state="budget_limited"],
+.goal-chip-dot[data-state="blocked"] { background: var(--error, #ef4444); }
+.goal-chip-dot[data-state="complete"] { background: var(--success, #22c55e); }
+.goal-chip-dot[data-state="gathering"],
+.goal-chip-dot[data-state="evaluating"],
+.goal-chip-dot[data-state="synthesizing"],
+.goal-chip-dot[data-state="planning"] { background: var(--accent); }
+.goal-chip-dot[data-state="clarifying"],
+.goal-chip-dot[data-state="awaiting_input"] { background: var(--warning, #eab308); }
+.goal-chip-label { font-weight: 500; }
+.goal-chip-tokens { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* ── Goal status detail panel (option-panel style) ─────────────────── */
+.goal-panel {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 50;
+  width: min(360px, 80vw);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-solid, var(--surface));
+  box-shadow: var(--shadow-resting);
+  color: var(--text);
+  font-size: 12px;
+}
+.goal-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.goal-panel-objective {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.goal-panel-close {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px;
+}
+.goal-panel-body {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.goal-panel-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+.goal-panel-status .goal-chip-dot { flex: none; }
+.goal-panel-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--warning);
+  border-top-color: transparent;
+  border-radius: 50%;
+  flex: none;
+  animation: goal-panel-spin 0.8s linear infinite;
+}
+@keyframes goal-panel-spin {
+  to { transform: rotate(360deg); }
+}
+.goal-panel-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.goal-panel-progress {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-hover, var(--surface));
+  overflow: hidden;
+}
+.goal-panel-progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.2s ease;
+}
+.goal-panel-progress-pct {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+}
+.goal-panel-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 2px 0;
+}
+.goal-panel-history {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text-secondary, var(--muted));
+}
+.goal-panel-history-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.goal-panel-history-time {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.goal-panel-gaps {
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+.goal-panel-action-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+.goal-panel-btn {
+  flex: 1;
+  padding: 5px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-hover, var(--surface));
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+.goal-panel-btn:hover {
+  background: var(--accent-soft, var(--surface));
+}
+
+/* ── Composer mode chips (goal / plan-task / research / conductor) ────
+   Blue button look: light-blue text, transparent border, blue hover fill. */
+
+/* Placeholder shown while a lazy panel chunk (conductor / code review /
+   office) loads. Local-disk chunks resolve in milliseconds, so a plain
+   surface-colored block is enough (plan 426 Phase 5.2). */
+.sidebar-panel-lazy-fallback {
+  height: 100%;
+  min-height: 160px;
+  background: var(--main-bg);
+}
+
+/* ── Low-power mode (plan 426 Phase 5.3) ─────────────────────────────
+   `data-lowpower` is set on <html> by low-power-store. Backdrop-filter
+   blurs are a major frame cost on integrated GPUs, so the heaviest
+   frosted-glass surfaces switch to solid translucent backgrounds and
+   every remaining blur is disabled globally. */
+[data-lowpower] .conductor-panel,
+[data-lowpower] .conductor-zoom-pill,
+[data-lowpower] .conductor-popover {
+  background: var(--panel-bg-solid);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+[data-lowpower] .app-header,
+[data-lowpower] .hero-card,
+[data-lowpower] .surface-card {
+  background: var(--main-bg);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+[data-lowpower] .attachment-preview-overlay {
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* Generic fallback: kill any remaining backdrop filter (4~12px pills,
+   scrims, closers) without per-selector rules. */
+[data-lowpower] * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}

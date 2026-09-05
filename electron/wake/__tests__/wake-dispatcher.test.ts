@@ -361,4 +361,81 @@ describe('wake sources (P2.3c inbound / P2.4 broadcast) + lane ordering (P2.2)',
       expect.stringContaining('second'),
     ])
   })
+
+  // ---- 477 P3.1: agent.dm wakes build the inbound cue prompt ----
+
+  function dmItem(fromId: string, fromName: string, text: string, sessionId = 'bot:receiver'): WakeItem {
+    return {
+      id: `dm:${fromId}:${text}`,
+      source: 'agent.dm',
+      lane: 'agent',
+      agentId: sessionId,
+      enqueuedAtMs: Date.now(),
+      payload: {
+        kind: 'dm',
+        clientMsgId: `cmi-${fromId}-${text}`,
+        fromAgentId: fromId,
+        fromAgentName: fromName,
+        text,
+      },
+    }
+  }
+
+  it('dispatches a dm wake with the [agent] inbound cue prompt', async () => {
+    enqueueWakeItemForSession('bot:receiver', dmItem('bot-a', 'Alpha', 'please check the build'))
+    await flush()
+    expect(fake.runWakeCalls).toHaveLength(1)
+    expect(fake.runWakeCalls[0].sessionId).toBe('bot:receiver')
+    // The grok-style inbound cue names the sender and their id.
+    expect(fake.runWakeCalls[0].prompt).toContain('Alpha')
+    expect(fake.runWakeCalls[0].prompt).toContain('bot-a')
+    expect(fake.runWakeCalls[0].prompt).toContain('please check the build')
+  })
+
+  it('marks a priority dm wake as an interrupting instruction', async () => {
+    const item = dmItem('bot-a', 'Alpha', 'urgent deploy rollback')
+    enqueueWakeItemForSession('bot:receiver', {
+      ...item,
+      payload: { ...item.payload, priority: true },
+    })
+    await flush()
+    expect(fake.runWakeCalls).toHaveLength(1)
+    expect(fake.runWakeCalls[0].prompt).toContain('PRIORITY')
+  })
+
+  it('skips a dm wake with empty text or unknown sender without wedging the queue', async () => {
+    const item = dmItem('', '', '')
+    enqueueWakeItemForSession('bot:receiver', item)
+    enqueueWakeItemForSession('bot:receiver', dmItem('bot-a', 'Alpha', 'valid after empty'))
+    await flush()
+    // The empty dm was dropped silently; the valid one still ran.
+    expect(fake.runWakeCalls).toHaveLength(1)
+    expect(fake.runWakeCalls[0].prompt).toContain('valid after empty')
+  })
+
+  it('keeps an agent-lane dm parked before a user turn (not superseded)', async () => {
+    fake.lockedSessions.add('bot:receiver')
+    enqueueWakeItemForSession('bot:receiver', dmItem('bot-a', 'Alpha', 'queued before user turn'))
+    // A user turn starts and ends while the DM is parked.
+    advanceUserTurn('bot:receiver')
+    fake.lockedSessions.delete('bot:receiver')
+    notifySessionIdle('bot:receiver')
+    await flush()
+    // The DM survives: it is the bot's inbox, not a background noise wake.
+    expect(fake.runWakeCalls).toHaveLength(1)
+    expect(fake.runWakeCalls[0].prompt).toContain('queued before user turn')
+  })
+
+  it('runs a dm wake before a queued background wake when both survive', async () => {
+    fake.lockedSessions.add('bot:receiver')
+    enqueueWakeItemForSession('bot:receiver', completionItem('bg-1', 'bot:receiver'))
+    enqueueWakeItemForSession('bot:receiver', dmItem('bot-a', 'Alpha', 'agent lane first'))
+    fake.lockedSessions.delete('bot:receiver')
+    notifySessionIdle('bot:receiver')
+    await flush()
+    // Strict lane order: agent outranks background even though it arrived second.
+    expect(fake.runWakeCalls).toHaveLength(2)
+    expect(fake.runWakeCalls[0].prompt).toContain('agent lane first')
+    expect(fake.runWakeCalls[1].prompt).toContain('bg-1')
+  })
 })
