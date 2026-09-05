@@ -76,6 +76,12 @@ WHERE r.agent_type = 'main'
       AND l.next_retry_at IS NOT NULL
       AND l.next_retry_at > :now)
   AND NOT EXISTS (SELECT 1 FROM rollout_retired t WHERE t.rollout_id = r.rollout_id)
+`;
+
+/** ORDER BY / LIMIT tail — the optional bot-exclusion clause is spliced in
+ * BEFORE these (appending after LIMIT would fold the clause into the LIMIT
+ * expression, where the `r` alias is out of scope). */
+const SELECT_ELIGIBLE_SQL_TAIL = `
 ORDER BY (:now - r.last_message_at) DESC
 LIMIT :limit
 `;
@@ -94,17 +100,38 @@ export function selectEligible(
     idleMs?: number; // default 6h
     windowMs?: number; // default 30d
     minMessageCount?: number; // default 6
+    /**
+     * Bot profile ids whose sessions never enter the session memory
+     * pipeline (Plan 479): a bot's memory is fed by update_state writes
+     * into its own tier, not by Stage 1 extraction over its chat
+     * sessions. Null agent_profile_id (plain desktop sessions) and ids
+     * outside the list stay eligible.
+     */
+    excludeAgentProfileIds?: string[];
   }
 ): EligibleRollout[] {
+  const excluded = input.excludeAgentProfileIds ?? [];
+  const params: Record<string, unknown> = {
+    now: input.now,
+    limit: input.limit ?? DEFAULT_ELIGIBILITY_LIMIT,
+    idleMs: input.idleMs ?? DEFAULT_IDLE_MS,
+    windowMs: input.windowMs ?? DEFAULT_WINDOW_MS,
+    minMessageCount: input.minMessageCount ?? DEFAULT_MIN_MESSAGE_COUNT,
+  };
+  let exclusionClause = '';
+  if (excluded.length > 0) {
+    const placeholders = excluded
+      .map((id, i) => {
+        params[`ex${i}`] = id;
+        return `:ex${i}`;
+      })
+      .join(', ');
+    exclusionClause = `\n  AND (r.agent_profile_id IS NULL OR r.agent_profile_id NOT IN (${placeholders}))`;
+  }
+
   const rows = db
-    .prepare(SELECT_ELIGIBLE_SQL)
-    .all({
-      now: input.now,
-      limit: input.limit ?? DEFAULT_ELIGIBILITY_LIMIT,
-      idleMs: input.idleMs ?? DEFAULT_IDLE_MS,
-      windowMs: input.windowMs ?? DEFAULT_WINDOW_MS,
-      minMessageCount: input.minMessageCount ?? DEFAULT_MIN_MESSAGE_COUNT,
-    }) as EligibleRow[];
+    .prepare(SELECT_ELIGIBLE_SQL + exclusionClause + SELECT_ELIGIBLE_SQL_TAIL)
+    .all(params) as EligibleRow[];
 
   return rows.map((row) => ({
     rolloutId: row.rollout_id,
@@ -119,6 +146,8 @@ export function selectEligible(
 
 export interface EligibilityDiagnostic {
   total: number;
+  /** Sessions belonging to excluded bot profiles (never eligible). */
+  botExcluded: number;
   activeMain: number;
   enoughMessages: number;
   idleReady: number;
@@ -142,12 +171,33 @@ export interface EligibilityDiagnostic {
  */
 export function diagnoseEligibility(
   db: Database,
-  input: { now: number; idleMs?: number; windowMs?: number; minMessageCount?: number }
+  input: {
+    now: number;
+    idleMs?: number;
+    windowMs?: number;
+    minMessageCount?: number;
+    /** Mirrors selectEligible's bot exclusion — counted as `botExcluded`. */
+    excludeAgentProfileIds?: string[];
+  }
 ): EligibilityDiagnostic {
   const now = input.now;
   const idleMs = input.idleMs ?? DEFAULT_IDLE_MS;
   const windowMs = input.windowMs ?? DEFAULT_WINDOW_MS;
   const minMessageCount = input.minMessageCount ?? DEFAULT_MIN_MESSAGE_COUNT;
+  const excluded = input.excludeAgentProfileIds ?? [];
+
+  const botExcluded =
+    excluded.length > 0
+      ? (
+          db
+            .prepare(
+              `SELECT COUNT(*) AS c FROM rollout_catalog WHERE agent_profile_id IN (${excluded
+                .map(() => '?')
+                .join(', ')})`
+            )
+            .get(...excluded) as { c: number }
+        ).c
+      : 0;
 
   const row = db
     .prepare(
@@ -173,6 +223,7 @@ export function diagnoseEligibility(
 
   return {
     total: row.total || 0,
+    botExcluded,
     activeMain: row.active_main || 0,
     enoughMessages: row.enough_messages || 0,
     idleReady: row.idle_ready || 0,

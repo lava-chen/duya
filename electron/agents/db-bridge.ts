@@ -16,6 +16,7 @@ import {
 } from '../db/toolApprovalState';
 import { getProviderStore } from '../services/providers/provider-store-electron';
 import { getConfigStore } from '../config/store-instance';
+import { createConfigAgentFromName, patchConfigAgentIdentity } from '../config/agents';
 import { toLegacyApiProvider, migrateLegacyApiProvider } from '../../src/lib/providers/legacy';
 import type { ApiProvider } from '../config/provider-types';
 import { getAutomationScheduler } from '../automation/Scheduler.js';
@@ -27,7 +28,17 @@ import { readPluginManifest } from '../plugins/manifest';
 import { resolvePermissionProfile } from '../db/permission-resolver';
 import type { PermissionProfile } from '../lib/permission-profile';
 import { getCoreStores } from '../db/core-connection';
+import {
+  createWidgetPending,
+  updateWidgetResponse,
+  upsertCursorAgentRun,
+  updateCursorAgentRun,
+  createSecretPending,
+  markSecretProvided,
+} from '../db/sendMessageState';
 import { notifySessionIdle, advanceUserTurn } from '../wake/wake-dispatcher';
+import { maybeDispatchAgentDm } from '../wake/agent-dm-dispatcher';
+import { maybeDispatchIdleWake } from '../wake/idle-dispatcher';
 import { getSessionManager } from './session-manager.js';
 import { getChannelBackgroundWakes } from '../wake/channels';
 import { parseAgentIdFromBotSession } from '../wake/bot-session-id';
@@ -638,6 +649,78 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       }
     }
 
+    // ==================== SendMessage side-state actions ====================
+    // Plan 489 P0.2: persist interaction state for card-shaped SendMessage
+    // (widget / cursor-agent / secret-request) into the three side tables in the
+    // legacy main DB. `messageId` is the id assigned by messageDb.append. These
+    // mirrors helper.ts directly; errors are logged and returned so the Agent
+    // sub-process never sees an unhandled rejection (best-effort).
+    case 'sendMessageState:createWidgetPending': {
+      const msgId = p.messageId as string;
+      try {
+        createWidgetPending(db, p as never);
+        return { success: true, messageId: msgId };
+      } catch (err) {
+        getLogger().error('sendMessageState:createWidgetPending failed', err instanceof Error ? err : new Error(String(err)), { messageId: msgId }, LogComponent.AgentCommunicator);
+        return { success: false, reason: 'transaction_failed' };
+      }
+    }
+
+    case 'sendMessageState:updateWidgetResponse': {
+      const msgId = p.messageId as string;
+      try {
+        updateWidgetResponse(db, { messageId: msgId, status: p.status as never, customAnswer: p.customAnswer as string | null | undefined, answeredAt: p.answeredAt as number | null | undefined });
+        return { success: true, messageId: msgId };
+      } catch (err) {
+        getLogger().error('sendMessageState:updateWidgetResponse failed', err instanceof Error ? err : new Error(String(err)), { messageId: msgId }, LogComponent.AgentCommunicator);
+        return { success: false, reason: 'transaction_failed' };
+      }
+    }
+
+    case 'sendMessageState:upsertCursorAgentRun': {
+      const msgId = p.messageId as string;
+      try {
+        upsertCursorAgentRun(db, p as never);
+        return { success: true, messageId: msgId };
+      } catch (err) {
+        getLogger().error('sendMessageState:upsertCursorAgentRun failed', err instanceof Error ? err : new Error(String(err)), { messageId: msgId }, LogComponent.AgentCommunicator);
+        return { success: false, reason: 'transaction_failed' };
+      }
+    }
+
+    case 'sendMessageState:updateCursorAgentRun': {
+      const msgId = p.messageId as string;
+      try {
+        updateCursorAgentRun(db, { messageId: msgId, status: p.status as never, updatedAt: p.updatedAt as number });
+        return { success: true, messageId: msgId };
+      } catch (err) {
+        getLogger().error('sendMessageState:updateCursorAgentRun failed', err instanceof Error ? err : new Error(String(err)), { messageId: msgId }, LogComponent.AgentCommunicator);
+        return { success: false, reason: 'transaction_failed' };
+      }
+    }
+
+    case 'sendMessageState:createSecretPending': {
+      const msgId = p.messageId as string;
+      try {
+        createSecretPending(db, p as never);
+        return { success: true, messageId: msgId };
+      } catch (err) {
+        getLogger().error('sendMessageState:createSecretPending failed', err instanceof Error ? err : new Error(String(err)), { messageId: msgId }, LogComponent.AgentCommunicator);
+        return { success: false, reason: 'transaction_failed' };
+      }
+    }
+
+    case 'sendMessageState:markSecretProvided': {
+      const msgId = p.messageId as string;
+      try {
+        markSecretProvided(db, { messageId: msgId, status: p.status as 'provided' | 'dismissed', providedAt: p.providedAt as number | null | undefined });
+        return { success: true, messageId: msgId };
+      } catch (err) {
+        getLogger().error('sendMessageState:markSecretProvided failed', err instanceof Error ? err : new Error(String(err)), { messageId: msgId }, LogComponent.AgentCommunicator);
+        return { success: false, reason: 'transaction_failed' };
+      }
+    }
+
     // Decision 3: message:replace maps to MessageLog.appendBatch (INSERT OR IGNORE
     // idempotency). Generation optimistic lock is deprecated (append-only store).
     case 'message:replace': {
@@ -1084,6 +1167,42 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       const merged = { ...current, ...p as Record<string, unknown> };
       getConfigStore().set('agent', merged);
       return { ok: true };
+    }
+
+    // Plan 492 P4.2: agent-side CreateAgent/UpdateAgent tools (bot self-
+    // management, grok sand-agent-management-tools parity). The agent
+    // subprocess never writes config.toml itself — the main process owns
+    // the config store, so these cases serialize every bot's writes.
+    // Audit (D1 default): each mutation logs an INFO line.
+    case 'config:agents:create': {
+      const input = p as { name?: string; description?: string };
+      if (!input.name || !input.name.trim()) {
+        throw new Error('agent name is required');
+      }
+      const created = createConfigAgentFromName(input.name, input.description);
+      getLogger().info(
+        `Agent created via CreateAgent tool: '${created.id}' (${input.name.trim()})`,
+        { agentId: created.id },
+        LogComponent.AgentProcess,
+      );
+      return { id: created.id, name: created.config.name ?? created.id };
+    }
+
+    case 'config:agents:update': {
+      const input = p as { agentId?: string; name?: string; description?: string };
+      if (!input.agentId) {
+        throw new Error('agentId is required');
+      }
+      const updated = patchConfigAgentIdentity(input.agentId, {
+        name: input.name,
+        description: input.description,
+      });
+      getLogger().info(
+        `Agent updated via UpdateAgent tool: '${input.agentId}'`,
+        { agentId: input.agentId },
+        LogComponent.AgentProcess,
+      );
+      return { id: input.agentId, name: updated.name ?? input.agentId };
     }
 
     case 'config:vision:get': {
@@ -2074,6 +2193,37 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       });
       const row = coreMailboxToIpcRow(item);
       emitMailboxEvent('emitMailCreated', row);
+      // Plan 476 P0-B/P2.1 + Plan 477 P3.1: workers reach the mailbox through
+      // this bridge, not the renderer-facing `mailbox:send` handler in
+      // db-handlers.ts — so the main-process wake hooks must fire here too,
+      // or a background notification / bot→bot DM written by a worker is
+      // persisted but never wakes anyone (observed: SendToAgent rows stayed
+      // pending with no dispatch, no receiver marker, no wake run).
+      // `row` is the snake_case IPC DTO — map the fields the dispatchers read
+      // (they take camelCase rows) explicitly instead of casting.
+      if (row.kind === 'background_notification' && row.session_id) {
+        void maybeDispatchIdleWake({
+          id: row.id as string,
+          sessionId: row.session_id as string,
+          kind: row.kind as string,
+          content: row.content as string | undefined,
+          clientMsgId: row.client_msg_id as string | null | undefined,
+        }).catch(() => {});
+      }
+      if (row.kind === 'agent_dm' && row.session_id) {
+        // maybeDispatchAgentDm is sync (boolean) — Promise.resolve gives the
+        // fire-and-forget catch without letting a sync throw escape.
+        void Promise.resolve(
+          maybeDispatchAgentDm({
+            id: row.id as string,
+            sessionId: row.session_id as string,
+            kind: row.kind as string,
+            content: row.content as string | undefined,
+            clientMsgId: row.client_msg_id as string | null | undefined,
+            source: row.source as string | null | undefined,
+          }),
+        ).catch(() => {});
+      }
       return row;
     }
 

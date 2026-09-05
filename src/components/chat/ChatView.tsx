@@ -11,6 +11,7 @@ import { MessageInput } from './MessageInput';
 import { GoalStatusChip } from './GoalStatusChip';
 import { PermissionPrompt } from './PermissionPrompt';
 import { ConnectorAuthRequiredCard } from './ConnectorAuthRequiredCard';
+import { getAppConnectionAPI } from '@/lib/app-connection-ipc';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useNextStepSuggestions } from '@/hooks/useNextStepSuggestions';
 import { dispatchPrefillChatInput } from '@/lib/prefill-chat-input-event';
@@ -44,7 +45,6 @@ import { ArrowLeftIcon } from '@/components/icons';
 import { SessionSelector } from '@/components/home/SessionSelector';
 import { InputDialog } from '@/components/ui/InputDialog';
 import { Button } from '@/components/ui/Button';
-import { IconButton } from '@/components/ui/IconButton';
 import { TaskDrawer } from '@/components/layout/TaskDrawer';
 import { useTaskDrawerOpen } from '@/components/layout/task-drawer-store';
 import { useTaskList } from '@/hooks/useTaskList';
@@ -743,23 +743,32 @@ export function ChatView({
   // surfaces as a discrete event so we can prompt them with a re-auth
   // button without polluting the chat error stream.
   const [pendingAuthRequest, setPendingAuthRequest] = useState<{ provider?: string; connectionId?: string; toolName?: string } | null>(null);
+  // Plan 498: ref mirror so the main-process `app-connection:connected`
+  // broadcast (async, fires outside React state) can match the pending
+  // elicitation without a stale-closure subscribe.
+  const pendingAuthRequestRef = useRef(pendingAuthRequest);
+  useEffect(() => {
+    pendingAuthRequestRef.current = pendingAuthRequest;
+  }, [pendingAuthRequest]);
+  // Plan 498: provider whose (re-)authorization main confirmed — flips the
+  // card to its real "connected" state. Cleared when a new elicitation
+  // arrives so a stale completion can't auto-resolve a future card.
+  const [authCompletedFor, setAuthCompletedFor] = useState<string | null>(null);
+  // Plan 498: dedup guard — the card's own connect promise and the main
+  // broadcast can both report the same completion; only one resume turn
+  // may be sent. Re-armed whenever a new elicitation arrives. Declared
+  // here; consumed by retryAfterAuth (defined after handleSend below).
+  const resumeTriggeredRef = useRef<string | null>(null);
   useEffect(() => {
     if (!sessionId) return;
     const unsubscribe = subscribeToConnectorAuthRequired(sessionId, (data) => {
+      resumeTriggeredRef.current = null;
+      setAuthCompletedFor(null);
       setPendingAuthRequest(data);
     });
     return () => unsubscribe();
   }, [sessionId]);
   const dismissAuthRequest = useCallback(() => {
-    setPendingAuthRequest(null);
-    clearConnectorAuthRequired(sessionId);
-  }, [sessionId]);
-  // Auto-retry hook (Phase B3): after a successful re-authorization, the
-  // card passes back through here so a placeholder user turn can prompt
-  // the model to re-issue the failed call. The exact mechanism (mailbox
-  // nudge vs. synthetic stream) is left as a future iteration; for now
-  // we just clear the card and let the next user message trigger work.
-  const retryAfterAuth = useCallback(() => {
     setPendingAuthRequest(null);
     clearConnectorAuthRequired(sessionId);
   }, [sessionId]);
@@ -975,6 +984,44 @@ export function ChatView({
     },
     [agentProfileId, isStreaming, onSendMessage, parseModelName, sendMailbox, sessionId, sessionModel, effort, conductorEnabled, permissionMode, busyMessageMode, activeThread?.workingDirectory]
   );
+
+  // Plan 498 auto-retry (Plan 450 B3): after a successful re-authorization
+  // the card hands back through here. Clear the pending state and send a
+  // localized resume message so the model re-issues the failed call with
+  // the same arguments — it still has the original call in its context.
+  // If a stream is active, handleSend routes the message through the
+  // mailbox automatically (queued/followup), so mid-run completions are
+  // safe. The card's own connect and the main broadcast both funnel here;
+  // resumeTriggeredRef keeps it to one resume per elicitation.
+  const retryAfterAuth = useCallback(() => {
+    const request = pendingAuthRequestRef.current;
+    setPendingAuthRequest(null);
+    setAuthCompletedFor(null);
+    clearConnectorAuthRequired(sessionId);
+    if (!request?.provider || resumeTriggeredRef.current === request.provider) {
+      return;
+    }
+    resumeTriggeredRef.current = request.provider;
+    void handleSend(
+      t('connectorAuth.resumeMessage', {
+        provider: request.provider,
+        tool: request.toolName ?? '',
+      }),
+    );
+  }, [sessionId, handleSend, t]);
+  // Plan 498: main-process completion broadcast — covers a re-authorization
+  // completed from the settings page (or racing the card's own connect).
+  // The card flips to "connected" and calls retryAfterAuth itself.
+  useEffect(() => {
+    if (!sessionId) return;
+    const api = getAppConnectionAPI();
+    if (!api) return;
+    return api.onConnected((data) => {
+      const request = pendingAuthRequestRef.current;
+      if (!request || request.provider !== data.provider) return;
+      setAuthCompletedFor(data.provider);
+    });
+  }, [sessionId]);
 
   // Toggle conductor mode for the current session. On enable, resolve the
   // canvas ID with the following priority (per project requirement:
@@ -1514,27 +1561,23 @@ export function ChatView({
             <GoalStatusChip sessionId={sessionId} />
             {/* Scroll to bottom button - shown when not near bottom, floats above content */}
             {!isNearBottom && (
-              <div className="flex justify-center absolute left-1/2 -translate-x-1/2" style={{ top: '-44px' }}>
-                <IconButton
-                  variant="default"
-                  size="md"
-                  shape="round"
+              <div className="flex justify-center absolute left-1/2 -translate-x-1/2" style={{ top: '-48px' }}>
+                <button
+                  type="button"
                   onClick={handleScrollToBottom}
-                  className="flex items-center justify-center w-8 h-8 rounded-full bg-[var(--main-bg)] border border-[var(--border)] shadow-md hover:shadow-lg transition-all duration-200 hover:scale-105"
-                  style={{
-                    boxShadow: '0 2px 8px rgba(0,0,0,0.12), 0 0 0 1px var(--border)',
-                  }}
+                  className="flex items-center justify-center w-9 h-9 rounded-full bg-[var(--surface-solid)] border border-[var(--border)] text-[var(--muted)] shadow-[0_4px_12px_rgba(0,0,0,0.15)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-colors duration-200 animate-in fade-in slide-in-from-bottom-2"
                   title="Scroll to bottom"
                   aria-label="Scroll to bottom"
                 >
-                  <CaretDownIcon size={18} style={{ color: 'var(--muted)' }} />
-                </IconButton>
+                  <CaretDownIcon size={16} strokeWidth={2} />
+                </button>
               </div>
             )}
 
             {pendingAuthRequest && (
               <ConnectorAuthRequiredCard
                 request={pendingAuthRequest}
+                authCompleted={authCompletedFor !== null && authCompletedFor === pendingAuthRequest.provider}
                 onDismiss={dismissAuthRequest}
                 onRetry={retryAfterAuth}
                 resolveProviderLabel={(id) => id}

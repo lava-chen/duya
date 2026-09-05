@@ -1,9 +1,11 @@
-export { updateStateTool, UpdateStateTool, setMemoryTierBridge } from './UpdateStateTool.js';
+export { updateStateTool, UpdateStateTool, setMemoryTierBridge, setBotIdentityBridge } from './UpdateStateTool.js';
 export { resolveUpdateStateOperation, normalizeDedupeKey } from './UpdateStateTool.js';
 export type {
   MemoryTierBridge,
   MemoryTierBridgeResponse,
   MemoryTierWritePayload,
+  BotIdentityBridge,
+  BotIdentityPatchPayload,
   ResolvedOperation,
   UpdateStateInput,
 } from './UpdateStateTool.js';

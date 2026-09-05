@@ -50,6 +50,10 @@ import { getCachedAppConnectionDescriptors } from '../tool/AppConnectionTool/ind
 import { buildAppsSystemSection, collectConnectorActivationInjection, collectPluginInjections, collectSkillInjections } from '../mentions/index.js';
 import { DEFAULT_CONTEXT_WINDOW } from '../compact/compact.js';
 import { compressProjectedToolMessages } from '../compact/projectionCompress.js';
+import {
+  IMAGE_COMPACTION_TRIGGER_COUNT,
+  countImagePartsInMessages,
+} from '../compact/imageParts.js';
 import { createAIClient, createAIClientWithRetry, inferProvider, findModelCompat } from '@duya/ai';
 import type { AIClient, AIClientOptions, RetryConfig, ApiFormat } from '@duya/ai';
 import { resolveDefaultBaseURL, resolveLlmClientDiscriminator } from '@duya/ai';
@@ -75,6 +79,7 @@ import { logger } from '../utils/logger.js';
 import { createChildAbortController } from '../abort/index.js';
 import { getAgentProfileService } from '../agent-profile/AgentProfileService.js';
 import { readConfigAgents, toAgentProfile } from '../agent-profile/config-agents.js';
+import { parseAgentMentions, buildMentionedAgentsContext } from './dm/index.js';
 import type { AgentProfile } from '../agent-profile/types.js';
 import { isToolVisible, type ToolVisibilityConstraints } from '../agent-profile/ToolFilter.js';
 import { mailboxDb, pluginDb } from '../ipc/db-client.js';
@@ -373,6 +378,8 @@ export class duyaAgent {
   activeMCPRuntimeSnapshot: import('../mcp/apply.js').ActiveMCPRuntimeSnapshot | null = null;
   private providerNameToInternalKey: Map<string, string> = new Map();
   private activeAgentProfileId: string | undefined;
+  /** Profile resolved by the most recent `streamChat` call (undefined if none). */
+  private lastAppliedAgentProfile: AgentProfile | undefined;
   /** When true, skip the first-turn AGENTS.md injection (Plan 408 Phase 2). */
   private readonly omitAgentsMd: boolean = false;
 
@@ -820,8 +827,33 @@ export class duyaAgent {
       }
     }
 
+    // Agent @-mentions in the raw text (grok-bot 0.18 port): when the user
+    // writes "@Bot Name", inject the reachability block naming each
+    // mentioned teammate with its SendToAgent id, so "@ that agent" style
+    // references become actionable without guessing ids. Parsed here against
+    // the config agent roster (minus the session's own agent) rather than
+    // renderer-side, mirroring grok's host-side withMentionedAgentsContext.
+    // Fail-open: a config read failure never breaks the turn.
+    if (promptText) {
+      try {
+        const agents = await readConfigAgents();
+        const roster = Object.entries(agents)
+          .filter(([id]) => id !== options?.agentProfileId)
+          .map(([id, entry]) => ({ id, name: entry.name || id }));
+        const mentionedContext = buildMentionedAgentsContext(parseAgentMentions(promptText, roster));
+        if (mentionedContext) {
+          this.promptContexts.push(mentionedContext);
+          logger.info('[Agent] Injected mentioned-agents context into first turn');
+        }
+      } catch (err) {
+        logger.warn(`[Agent] Agent mention parse skipped: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
     // Resolve agent profile early so mode dispatch can use promptSystem for auto-resolution
     const appliedProfile = await this._resolveAgentProfile(options);
+    // Remember it for turn-end consumers (e.g. bot-pipeline title skip).
+    this.lastAppliedAgentProfile = appliedProfile;
 
     // === Mode Dispatch ===
     // Resolve mode: explicit option > 'normal'. Orchestrator-paradigm
@@ -1369,6 +1401,10 @@ export class duyaAgent {
             timestamp: Date.now(),
             seq_index: seqIndex,
             attachments: (options as ChatOptions & { attachments?: Message['attachments'] })?.attachments,
+            // Plan 497: a wake run's prompt is model context, not user chat —
+            // persist it source 'system' (bot-direct hidden) so it does not
+            // duplicate the agent_dm marker card the dispatcher already wrote.
+            ...(options?.wakeRun ? { source: 'system' as const } : {}),
           } as Message;
           // Plan 486 搂2.1/搂2.2: fork/reply creation rule. The target must
           // exist in this session's timeline (checked against entries already
@@ -1533,12 +1569,34 @@ export class duyaAgent {
 
       // Lightweight tool result cleanup before each turn
 
-      // Proactive context compaction before each LLM call
-      if (this.compactionController.shouldCompact()) {
+      // Proactive context compaction before each LLM call.
+      // Plan 495 G1: kick the background pass1 prefire when approaching the
+      // threshold — best-effort, never blocks or fails this turn. The seed
+      // is harvested inside compactProactive when a real compaction fires.
+      // Plan 495 G2: image-volume trigger (grok
+      // IMAGE_SUMMARIZATION_TRIGGER_COUNT) — force compaction even when the
+      // token budget has not been crossed yet.
+      let imageTriggered = false;
+      try {
+        const checkpointProjection = this.compactionController.projectInputMessages();
+        this.compactionManager.maybeStartPrefire(checkpointProjection);
+        imageTriggered =
+          countImagePartsInMessages(checkpointProjection) >= IMAGE_COMPACTION_TRIGGER_COUNT;
+      } catch {
+        // Checkpoint projection is best-effort; shouldCompact() below still
+        // runs its own projection.
+      }
+      if (imageTriggered || this.compactionController.shouldCompact()) {
+        if (imageTriggered) {
+          logger.info(`[Agent] Turn ${turnCount}: Image-count compaction trigger fired`);
+        }
         logger.info(`[Agent] Turn ${turnCount}: Proactive compaction triggered`);
         yield { type: 'compact:start' } as unknown as SSEEvent;
         try {
-          const compactEntry = await this.compactionController.compactProactive({ trigger: 'auto' });
+          const compactEntry = await this.compactionController.compactProactive({
+            trigger: 'auto',
+            ...(imageTriggered ? { force: true } : {}),
+          });
           if (compactEntry) {
             logger.info(`[Agent] Turn ${turnCount}: Compacted with strategy=${compactEntry.strategy}, removed=${compactEntry.tokensBefore} tokens, retained=${compactEntry.tokensAfter ?? 0} tokens`);
             // The controller appended a checkpoint entry to the timeline
@@ -1573,6 +1631,7 @@ export class duyaAgent {
         messages,
         seqIndex,
         'before_model_turn',
+        options?.wakeRun === true,
       );
       if (mailboxDecision.action === 'soft_stop') {
         const stopMessage = mailboxDecision.summary || 'Stopped as requested.';
@@ -2217,14 +2276,23 @@ export class duyaAgent {
             if (toolResultMessageCount > 0) {
               const projectionForOverflow =
                 this.compactionController.projectInputMessages();
+              // Plan 495 G2: mid-loop image trigger — a computer-use /
+              // screenshot-heavy run can pile up images within one turn, so
+              // the count is checked here too, not only at turn start.
+              const imageCountOverflow =
+                countImagePartsInMessages(projectionForOverflow) >=
+                IMAGE_COMPACTION_TRIGGER_COUNT;
               if (
+                imageCountOverflow ||
                 this.compactionManager.getContextTokens(projectionForOverflow) >
-                contextWindow
+                  contextWindow
               ) {
                 try {
                   const compactEntry =
                     await this.compactionController.compactProactive({
-                      trigger: 'preflight_overflow',
+                      ...(imageCountOverflow
+                        ? { trigger: 'auto' as const, force: true }
+                        : { trigger: 'preflight_overflow' as const }),
                     });
                   if (compactEntry) {
                     logger.info(
@@ -2383,6 +2451,7 @@ export class duyaAgent {
             messages,
             seqIndex,
             'before_final_answer',
+            options?.wakeRun === true,
           );
           if (finalMailboxDecision.action === 'hard_replace') {
             // Replacement runtime_context was already pushed by
@@ -2811,6 +2880,7 @@ export class duyaAgent {
     messages: Message[],
     seqIndex: number,
     checkpoint: 'before_model_turn' | 'before_final_answer',
+    wakeRun = false,
   ): Promise<RuntimeMailboxDecision> {
     if (!this.sessionId) {
       return { action: 'continue', absorbed: false };
@@ -2852,16 +2922,20 @@ export class duyaAgent {
       return { action: 'continue', absorbed: false };
     }
 
-    // Segregate terminal background-task notifications from user guidance rows
-    // so each follows its own adapter. Background notifications keep the raw
-    // <task-notification> XML envelope (sub-agents / background bash), while
-    // followup rows collapse into a guidance block.
-    const guidanceRows = usableRows.filter((row) => row.kind !== 'background_notification');
-    const backgroundNotificationRows = usableRows.filter((row) => row.kind === 'background_notification');
-
     for (const row of usableRows) {
       await applyRow(row, claim.rows.indexOf(row), 'absorbed as runtime instruction before model turn');
     }
+
+    // Plan 497: on a wake run the DM body is already in the wake prompt —
+    // agent_dm rows are consumed above (never re-absorbed) but NOT injected
+    // again, or the model reads the same text twice. Mid-user-turn delivery
+    // (user-driven run) still injects via the guidance block below.
+    const injectableRows = wakeRun
+      ? usableRows.filter((row) => row.kind !== 'agent_dm')
+      : usableRows;
+
+    const backgroundNotificationRows = injectableRows.filter((row) => row.kind === 'background_notification');
+    const guidanceRows = injectableRows.filter((row) => row.kind !== 'background_notification');
 
     for (const row of backgroundNotificationRows) {
       const ctx = adaptBackgroundNotification(row, { seqIndex });
@@ -3832,6 +3906,16 @@ export class duyaAgent {
 
   setActiveAgentProfileId(id: string | undefined): void {
     this.activeAgentProfileId = id;
+  }
+
+  /**
+   * Profile applied by the most recent `streamChat` call. Set right after
+   * `_resolveAgentProfile` resolves (before mode dispatch), so turn-end
+   * logic in the process entry can inspect it (e.g. skip title generation
+   * for bot-pipeline sessions).
+   */
+  getLastAppliedAgentProfile(): AgentProfile | undefined {
+    return this.lastAppliedAgentProfile;
   }
 
   /**

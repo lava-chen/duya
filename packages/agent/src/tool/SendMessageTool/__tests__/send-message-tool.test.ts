@@ -10,12 +10,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   append: vi.fn(async () => undefined),
+  state: {
+    createWidgetPending: vi.fn(async () => undefined),
+    updateWidgetResponse: vi.fn(async () => undefined),
+    upsertCursorAgentRun: vi.fn(async () => undefined),
+    updateCursorAgentRun: vi.fn(async () => undefined),
+    createSecretPending: vi.fn(async () => undefined),
+    markSecretProvided: vi.fn(async () => undefined),
+  },
 }));
 
 // Mock the whole db-client module: importing the real one wires
 // process.send IPC at call time, which crashes under the vitest pool.
 vi.mock('../../../ipc/db-client.js', () => ({
   messageDb: { append: mocks.append },
+  sendMessageStateDb: mocks.state,
   channelDb: { deliver: vi.fn(async () => ({ success: true })) },
 }));
 
@@ -32,6 +41,7 @@ function exec(input: Record<string, unknown>): Promise<ExecResult> {
 describe('SendMessageTool validation (grok self-teaching errors)', () => {
   beforeEach(() => {
     mocks.append.mockClear();
+    Object.values(mocks.state).forEach((fn) => fn.mockClear());
   });
 
   it('rejects a field riding the wrong type with recovery instructions', async () => {
@@ -108,5 +118,65 @@ describe('SendMessageTool validation (grok self-teaching errors)', () => {
     expect(mocks.append).toHaveBeenCalledTimes(1);
     const [, rows] = mocks.append.mock.calls[0] as [string, Array<Record<string, unknown>>];
     expect(rows[0].source).toBe('send_message');
+  });
+
+  it('persists widget interaction state after append (Plan 489 P0.2)', async () => {
+    const res = await exec({
+      type: 'widget',
+      widget: { prompt: 'Deploy?', options: [{ label: 'Yes' }, { label: 'No' }] },
+    });
+    expect(res.error).toBeUndefined();
+    expect(mocks.append).toHaveBeenCalledTimes(1);
+    expect(mocks.state.createWidgetPending).toHaveBeenCalledTimes(1);
+    const call = mocks.state.createWidgetPending.mock.calls[0][0] as {
+      messageId: string;
+      sessionId: string;
+      prompt: string;
+      widgetJson: string;
+    };
+    expect(call.messageId).toBe(res.id);
+    expect(call.sessionId).toBe('bot:test:abc');
+    expect(call.prompt).toBe('Deploy?');
+    expect(JSON.parse(call.widgetJson).options.length).toBe(2);
+  });
+
+  it('persists cursor-agent run state after append (Plan 489 P0.2)', async () => {
+    const res = await exec({ type: 'cursor-agent', bcId: 'bc-123' });
+    expect(res.error).toBeUndefined();
+    expect(mocks.state.upsertCursorAgentRun).toHaveBeenCalledTimes(1);
+    const call = mocks.state.upsertCursorAgentRun.mock.calls[0][0] as {
+      messageId: string;
+      bcId: string;
+      status: string;
+    };
+    expect(call.messageId).toBe(res.id);
+    expect(call.bcId).toBe('bc-123');
+    expect(call.status).toBe('pending');
+  });
+
+  it('persists secret-request state after append (Plan 489 P0.2)', async () => {
+    const res = await exec({
+      type: 'secret-request',
+      secret: { label: 'Token', connector: 'slack', field: 'bot_token' },
+    });
+    expect(res.error).toBeUndefined();
+    expect(mocks.state.createSecretPending).toHaveBeenCalledTimes(1);
+    const call = mocks.state.createSecretPending.mock.calls[0][0] as {
+      messageId: string;
+      label: string;
+      connector: string;
+      field: string;
+    };
+    expect(call.messageId).toBe(res.id);
+    expect(call.label).toBe('Token');
+    expect(call.connector).toBe('slack');
+    expect(call.field).toBe('bot_token');
+  });
+
+  it('does not persist side state for plain text sends', async () => {
+    await exec({ type: 'text', content: 'hi' });
+    expect(mocks.state.createWidgetPending).not.toHaveBeenCalled();
+    expect(mocks.state.upsertCursorAgentRun).not.toHaveBeenCalled();
+    expect(mocks.state.createSecretPending).not.toHaveBeenCalled();
   });
 });

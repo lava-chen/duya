@@ -88,6 +88,29 @@ Renderer → Agent Server (HTTP POST) → Worker Process → LLM
 
 For high-frequency data: tool execution, tool streaming, config sync.
 
+## App Connections (Connectors)
+
+Unified AppConnector registry (Plan 455): first-party providers, plugin `.app.json`
+declarations (`mcp-remote` / `rest` bindings), and custom connectors, resolved by
+`electron/services/app-connections/app-connector.ts`. Tokens live in the main
+process (encrypted vault) and never cross IPC.
+
+Auth elicitation loop (Plan 450 Phase B + Plan 498):
+
+1. Connector invoke fails with `connector_auth_required` → worker emits
+   `chat:connector_auth_required` → agent server SSE → renderer auth card.
+2. Tool result tells the model to end its turn and wait (no retry, no links).
+3. `appConnection:connect` (card button or Settings) completes the OAuth
+   loopback → main broadcasts `app-connection:connected` to all windows.
+4. Card flips to its real connected state and ChatView sends a localized
+   resume message (mailbox-queued if a stream is active) so the model re-issues
+   the failed call; per-provider dedup keeps it to one resume.
+
+The system prompt carries a persistent "Apps (Connectors)" section
+(`packages/agent/src/mentions/index.ts` — connected-app catalog plus the
+help-the-user-connect guidance: prefer connectors over browser workarounds,
+name missing services, never paste authorization URLs).
+
 ## Database
 
 ### Location
@@ -207,6 +230,26 @@ Single grok-style strategy in `packages/agent/src/compact/` (`micro`/`snip`/`rea
 - **Summary prompt**: 9 structured sections wrapped in `<summary>`, tool use disabled, prior summary carried forward as authoritative.
 - **Robustness**: tool-call sanitize/validate (orphan ToolResult stripping, `historySanitize.ts`), degenerate-summary detection (<500 chars retry, `summaryGuard.ts`), Deterministic/Transient/Cancelled error classification with scope suppression, input ladder (Verbatim → Fitted → Lossy), wall-clock budget, dedicated `compact_model`, memory flush.
 - **Storage**: append-only `CompactionEntry` (Plan 315) + rollout JSONL full retention (Plan 441). Original history is always recoverable from rollouts, so no separate segment/transcript store (won't-fix decision, plan 422 P3.4).
+
+### Long-Session Parity Additions (Plan 495)
+
+Grok-parity gap closure on top of Plan 422, from the 2026-09-05 grok-bot compaction/epoch study:
+
+- **Background prefire** (`compact/BackgroundPrefire.ts` + `CompactionManager.maybeStartPrefire`): when usage crosses 75% of the compaction threshold a passive pass1 summarization runs best-effort; `MessageCompactionController.compactProactive` consumes the completed pass as the `previousSummary` seed (grok two-pass semantics). Validity is a message-id prefix fingerprint — append-only growth keeps it valid; a rewrite (mid-pass compaction) discards the result as prefix-invalid. Kickoff happens at DuyaAgent's per-turn proactive checkpoint; failures never block the turn.
+- **Image-parts trigger** (`compact/imageParts.ts`, `IMAGE_COMPACTION_TRIGGER_COUNT = 85`, grok parity): counted at the turn-start checkpoint and the mid-loop preflight-overflow checkpoint; firing forces compaction via `CompactOptions.force` even under the token budget (screenshot-heavy runs degrade attention before the budget does).
+- **Summary retry ladder** (`compact/summaryRetry.ts`): up to 3 attempts; output-length errors get a one-shot shorter-output instruction; input-length errors shrink the summarized range (tool traffic drops first, `TOOL_MESSAGE_DROP_THRESHOLD = 0.25`, grok `reduceSelfSummaryInputMessages` parity); fatal errors throw immediately; empty/degenerate exhaustion returns '' so the strategy's placeholder path keeps the compaction successful.
+- **Wake preemption / redrive / tail guard** (`electron/wake/wake-dispatcher.ts`, 476 §2.2 close-out): a preempting wake (user message / priority DM) interrupts a dispatcher-owned in-flight run at enqueue time (`interruptRun` dep, best-effort `DELETE /sessions/:id/chat`); the displaced item re-queues as `isRedriven` (exempt from the epoch-stale skip and the recently-dispatched dedupe) and runs after the preempting turn. A run whose epoch advanced mid-flight has its user-facing tail side-effects (DM auto-return) suppressed — grok turn-runtime parity. Dispatching a user-lane wake does not advance the epoch (existing 476/477 contract).
+
+### Bot Identity & Avatar (Plans 483/485, 481 amendment)
+
+A bot's runtime identity lives in `<duyaRoot>/agents/<id>/profile.json` (`electron/config/bot-profile.ts`): `name` / `description` (model-updatable via `update_state`), `title` (host-managed only), `avatarColor` (color token for the initial-circle avatar) and `avatarImage` (filename of an image inside the agent dir). `config.toml [agents.<id>]` name/description only seed the profile on first creation and act as fallback (485 §2.4). Avatars were (shape, color) tokens until 2026-09-05 — shape tokens are removed; legacy files' `avatarShape` is ignored on read.
+
+Avatar rendering priority (`src/components/layout/sidebar/BotCharacterAvatar.tsx`): image → colored initial circle → deterministic-hue fallback. The image is served to the renderer over the `duya-file://` protocol (`electron/main.ts`); `listBots()` pre-builds the URL with a `?v=<mtime>` cache-buster, so the renderer never handles raw paths.
+
+Write paths, all converging on profile.json:
+
+- **UI edit** (`EditBotDialog` / `BotSettingsPanel`, shared `useBotContactForm`): identity via `config:agents:updateBotProfile` → `updateBotProfileIdentity`; avatar image upload via `config:agents:uploadBotAvatar` (file dialog + copy in the main process) and `config:agents:clearBotAvatarImage`.
+- **Model self-edit** (`update_state` profile.set / avatar.set / avatar.clear): routed through the `bot-identity:rpc` channel (agent subprocess → agent-server-lifecycle → `electron/config/bot-identity-rpc.ts`), which binds the subaction to the session's `bot:<agentId>` identity (a bot can only edit its own profile), validates color tokens and image sources, and calls the same identity writers. `avatar.set` accepts `avatarColor` and/or `avatarImagePath` (e.g. the model's own `image_generate` output; validated extension whitelist + 5 MB cap + magic bytes, then copied to `agents/<id>/avatar.<ext>` by `setBotAvatarImage`).
 
 ## Package Workspace
 

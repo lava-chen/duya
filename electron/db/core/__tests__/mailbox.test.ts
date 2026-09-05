@@ -109,6 +109,58 @@ describe.skipIf(!nativeSqliteAvailable)('Mailbox', () => {
     expect(bg.priority).toBe(50);
   });
 
+  it('enqueue accepts agent_dm kind (plan 477) with queued-level priority', () => {
+    const dm = enqueue({ id: 'dm1', kind: 'agent_dm', source: 'bot:bot-a' });
+    expect(dm.status).toBe('pending');
+    expect(dm.kind).toBe('agent_dm');
+    expect(dm.priority).toBe(100);
+  });
+
+  it('agent_dm migration rebuilds a legacy table, preserves rows, and admits agent_dm', () => {
+    const legacyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'core-mailbox-legacy-'));
+    try {
+      const legacyDb = new Database(path.join(legacyDir, 'legacy.db')) as unknown as SqliteDatabase;
+      legacyDb.pragma('journal_mode = WAL');
+      // Simulate a pre-plan-477 database: run only the migrations before the
+      // agent_dm rebuild so the table carries the old 3-kind CHECK.
+      for (const m of Mailbox.migrations) {
+        if (m.id >= 15) break;
+        m.up(legacyDb);
+      }
+      legacyDb
+        .prepare(
+          `INSERT INTO mailbox_items (id, session_id, kind, status, priority, content, submitted_run_id, meta, created_at)
+           VALUES ('legacy1', 's1', 'followup', 'pending', 10, 'old row', 'r0', '{}', 123)`,
+        )
+        .run();
+
+      const rebuild = Mailbox.migrations.find((m) => m.id === 15)!;
+      rebuild.up(legacyDb);
+
+      // Legacy row survives the table rebuild.
+      const row = legacyDb.prepare("SELECT kind FROM mailbox_items WHERE id = 'legacy1'").get() as {
+        kind: string;
+      };
+      expect(row.kind).toBe('followup');
+
+      // The rebuilt CHECK admits agent_dm rows.
+      legacyDb
+        .prepare(
+          `INSERT INTO mailbox_items (id, session_id, kind, status, priority, content, submitted_run_id, meta, created_at)
+           VALUES ('dm1', 's2', 'agent_dm', 'pending', 100, 'dm', 'r0', '{}', 124)`,
+        )
+        .run();
+      const dm = legacyDb.prepare("SELECT kind FROM mailbox_items WHERE id = 'dm1'").get() as {
+        kind: string;
+      };
+      expect(dm.kind).toBe('agent_dm');
+
+      legacyDb.close();
+    } finally {
+      fs.rmSync(legacyDir, { recursive: true, force: true });
+    }
+  });
+
   it('enqueue is idempotent on client_msg_id collision', () => {
     const first = enqueue({ id: 'a', clientMsgId: 'cm-1', content: 'first' });
     const second = mailbox.enqueue({

@@ -124,6 +124,7 @@ import {
   IconFeather,
   IconDownload,
   IconArrowBackUp,
+  IconCornerUpLeft,
   IconTestPipe,
   IconUsersGroup,
   IconBook,
@@ -345,6 +346,8 @@ export const FeatherIcon = wrapIcon(IconFeather);
 export const DownloadSimpleIcon = wrapIcon(IconDownload);
   // Reset icon
 export const ArrowCounterClockwiseIcon = wrapIcon(IconArrowBackUp);
+// Bot chat hover bar — reply action (rakazo Reply parity).
+export const ReplyIcon = wrapIcon(IconCornerUpLeft);
   // Plan 204 — provider actions icons
 export const TestTubeIcon = wrapIcon(IconTestPipe);
 export const UsersThreeIcon = wrapIcon(IconUsersGroup);

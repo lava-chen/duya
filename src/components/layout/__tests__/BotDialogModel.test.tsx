@@ -51,7 +51,6 @@ const contact: BotContact = {
   title: '',
   description: '',
   model: 'glm-4',
-  avatarShape: 'blob',
   avatarColor: 'blue',
   boundThreadId: 'bot:test1:abc',
   lastActivity: 0,

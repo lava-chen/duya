@@ -99,3 +99,46 @@ describe('buildAgentInboundWakePrompt (477 P1.3, regression guard)', () => {
     expect(text).toContain('Alpha: hello there')
   })
 })
+
+// ---- Plan 477 P4.1 — intent-driven action paragraphs ----
+
+describe('buildAgentInboundWakePrompt intent paragraphs (P4.1)', () => {
+  const base = {
+    from: { id: 'alpha', name: 'Alpha' },
+    to: { id: 'beta', name: 'Beta' },
+    text: 'do the thing',
+    timestampMs: 0,
+    clientMsgId: 'm-intent',
+  }
+
+  it('promises auto-return for request intent and threads replyToMessageId', () => {
+    const text = buildAgentInboundWakePrompt({ ...base, intent: 'request' })
+    expect(text).toContain('AUTOMATICALLY returned to Alpha')
+    expect(text).toContain('replyToMessageId: m-intent')
+  })
+
+  it('promises auto-return for question intent', () => {
+    const text = buildAgentInboundWakePrompt({ ...base, intent: 'question' })
+    expect(text).toContain('This is a question')
+    expect(text).toContain('AUTOMATICALLY returned to Alpha')
+  })
+
+  it('tells the receiver no reply is expected for result intent', () => {
+    const text = buildAgentInboundWakePrompt({ ...base, intent: 'result' })
+    expect(text).toContain('result of an earlier request')
+    expect(text).not.toContain('SendToAgent')
+  })
+
+  it('allows silence for fyi intent', () => {
+    const text = buildAgentInboundWakePrompt({ ...base, intent: 'fyi' })
+    expect(text).toContain('This is an FYI')
+    expect(text).toContain('staying silent is fine')
+  })
+
+  it('keeps the truthful visibility wording (P4.5)', () => {
+    const text = buildAgentInboundWakePrompt(base)
+    expect(text).toContain('visible in your chat as an agent-message card')
+    // The grok-copied lie must not regress.
+    expect(text).not.toContain('Your user can already see it in this chat')
+  })
+})

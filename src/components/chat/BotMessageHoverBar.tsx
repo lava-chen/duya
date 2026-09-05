@@ -2,10 +2,11 @@
  * BotMessageHoverBar — rakazo-style hover overlay for bot chat rows.
  *
  * Mirrors rakazo's MessageHoverMetadata + MessageHoverActions (apps/web
- * Shell.tsx), with duya's own placement (2026-09-05): the overlay hangs
- * below the row's BOTTOM-LEFT corner, landing in the next row's 36px
- * padding lane. It shows the message time plus a rounded neutral pill
- * of actions (thumbs-up / copy). Visibility rides the ROW hover
+ * Shell.tsx). Placement (2026-09-05, screenshot-aligned): the bar sits
+ * OUTSIDE the bubble on its open side — right of assistant bubbles,
+ * left of user bubbles — bottom-aligned with the bubble. It shows the
+ * message time plus a bare action row (reply / thumbs-up / copy, the
+ * rakazo action order). Visibility rides the ROW hover
  * (`.bot-chat-row:hover`), not the bubble — the whole row is the hover
  * target, rakazo `group/message` parity. Rows suppress the bar while
  * streaming so text selection and stop clicks stay free (the rakazo
@@ -17,7 +18,7 @@
  */
 
 import React from 'react';
-import { CopyIcon, ThumbsUpIcon } from '@/components/icons';
+import { CopyIcon, ReplyIcon, ThumbsUpIcon } from '@/components/icons';
 
 const THUMBS_UP_KEY = 'duya:bot-chat:thumbs-up';
 
@@ -77,6 +78,8 @@ interface BotMessageHoverBarProps {
   /** Thumbs-up state + toggle, lifted to the row (badge shares it) */
   thumbsUp?: boolean;
   onToggleThumbsUp?: () => void;
+  /** Reply action (rakazo onReply); hides the button when absent */
+  onReply?: () => void;
 }
 
 export function BotMessageHoverBar({
@@ -85,6 +88,7 @@ export function BotMessageHoverBar({
   messageId,
   thumbsUp = false,
   onToggleThumbsUp,
+  onReply,
 }: BotMessageHoverBarProps) {
   const canReact = messageId != null && onToggleThumbsUp != null;
   const hasTime = timestamp != null && Number.isFinite(timestamp);
@@ -109,6 +113,16 @@ export function BotMessageHoverBar({
         </time>
       )}
       <div className="bot-message-hover-pill" data-testid="message-hover-actions">
+        {onReply && (
+          <button
+            type="button"
+            aria-label="Reply"
+            onClick={onReply}
+            className="bot-message-hover-pill__btn"
+          >
+            <ReplyIcon size={14} strokeWidth={1.8} />
+          </button>
+        )}
         {canReact && (
           <button
             type="button"

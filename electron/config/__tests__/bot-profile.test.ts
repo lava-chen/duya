@@ -40,13 +40,13 @@ describe('bot-profile (Plan 485 P1.3)', () => {
       name: 'Frontend Expert',
       title: '  前端架构与 React 专家  ',
       description: 'desc',
-      avatarShape: 'circle',
+      avatarImage: 'avatar.png',
       avatarColor: '#1a73e8',
     });
     expect(written.schemaVersion).toBe(BOT_PROFILE_SCHEMA_VERSION);
     // title/avatar tokens are trimmed on write.
     expect(written.title).toBe('前端架构与 React 专家');
-    expect(written.avatarShape).toBe('circle');
+    expect(written.avatarImage).toBe('avatar.png');
 
     const read = readBotProfile(file);
     expect(read).toEqual(written);
@@ -60,6 +60,17 @@ describe('bot-profile (Plan 485 P1.3)', () => {
     expect(read!.title).toBe('');
     expect(read!.description).toBe('');
     expect(read!.schemaVersion).toBe(BOT_PROFILE_SCHEMA_VERSION); // missing → current
+  });
+
+  it('ignores the legacy avatarShape field on read (shape tokens removed)', () => {
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ name: 'Legacy', title: '', description: '', avatarShape: 'hex', avatarColor: 'blue' }),
+      'utf8',
+    );
+    const read = readBotProfile(file);
+    expect(read!.avatarColor).toBe('blue');
+    expect('avatarShape' in read!).toBe(false);
   });
 
   it('creates the parent directory on write', () => {

@@ -2,18 +2,19 @@
  * Tier memory file reader (Plan 479 Phase 2, P2.1).
  *
  * Reads the three memory tiers straight from the file manifest — the
- * source of truth per the Plan 479 P1.0 decision. Mirrors the scan
- * scope of the electron-side `rebuildTierIndexFromFiles`:
+ * source of truth per the Plan 479 P1.0 decision. Scan scope mirrors the
+ * Plan 481 `tierWriter` shard layout (single-writer directories):
  *
- *   own    → `<duyaRoot>/agents/<agentId>/memory/**` (Plan 485
- *            reservation; tier/kind/dedupe_key frontmatter, the
- *            Phase 3 `update_state` write format)
- *   user   → `<duyaRoot>/memory/{items,entities,global}/**`
- *            (legacy canonical frontmatter via parseCanonicalFile)
- *   project→ `<duyaRoot>/memory/projects/<projectId>/**`
- *            (populated from Phase 3 on)
+ *   own    → `<duyaRoot>/agents/<agentId>/memory/**`
+ *   user   → `<duyaRoot>/memory/{items,entities,global}/**` (legacy
+ *            canonical frontmatter via parseCanonicalFile) plus every
+ *            per-writer shard `<duyaRoot>/agents/<agentId>/user/**`
+ *   project→ `<duyaRoot>/projects/<projectId>/agents/<agentId>/**`
+ *            (per-writer project shards; populated from Phase 3 on)
  *
- * Project membership comes from
+ * Shard files carry the tierWriter frontmatter vocabulary
+ * (canonical_key/claim_type/scope_id); legacy roots use the canonical
+ * one. Project membership comes from
  * `<duyaRoot>/agents/<agentId>/state/projects.json` (the `state/` dir is
  * the Plan 485 reservation for bot state); absent file → not joined.
  *
@@ -34,6 +35,7 @@ const USER_SCAN_ROOTS = ['memory/items', 'memory/entities', 'memory/global'] as 
 interface RawTierFrontmatter {
   tier?: string
   kind?: string
+  claim_type?: string
   dedupe_key?: string
   canonical_key?: string
   status?: string
@@ -90,7 +92,25 @@ function parseTimestamp(raw: string | undefined, mtimeMs: number): number {
 function fileTitle(body: string, filePath: string): string {
   const heading = /^#\s+(.+)$/m.exec(body)
   if (heading) return heading[1].trim()
-  return path.basename(filePath, '.md')
+  // TierWriter files carry the bare fact with no heading; the filename
+  // slug is unreadable and duplicates the body line, so prefer the
+  // first body line (formatEntry then renders the fact once).
+  const firstLine = body
+    .split('\n')
+    .find((l) => l.trim() !== '')
+    ?.trim() ?? ''
+  return firstLine || path.basename(filePath, '.md')
+}
+
+/**
+ * Entry kind from either frontmatter vocabulary: tierWriter shards use
+ * `claim_type` (profile|log|note), the older phase-3 contract used
+ * `kind`. Anything else (legacy canonical claim_type like person/fact)
+ * is a note.
+ */
+function tierKind(meta: RawTierFrontmatter): 'profile' | 'log' | 'note' {
+  const raw = meta.kind ?? meta.claim_type
+  return raw === 'profile' || raw === 'log' ? raw : 'note'
 }
 
 /**
@@ -125,7 +145,7 @@ function readTierFile(
   }
   return {
     tier,
-    kind: meta.kind === 'profile' || meta.kind === 'log' ? meta.kind : 'note',
+    kind: tierKind(meta),
     dedupeKey: normalizeKey(dedupeRaw),
     writerId: meta.agent_profile_id ?? fallbackWriter,
     projectId: meta.project_id ?? fallbackProjectId,
@@ -157,9 +177,11 @@ export function readOwnTierEntries(duyaRoot: string, agentId: string): TierMemor
 
 /**
  * User tier: the legacy canonical tree (`memory/items`, `entities`,
- * `global`). Canonical frontmatter files index as writerless notes
- * (dedupeKey = lowercased canonical_key); tier-format files (future
- * per-writer shards under `memory/shared/`) carry their own writer.
+ * `global`) — canonical frontmatter files index as writerless notes —
+ * plus every per-writer shard `agents/<agentId>/user/**` written by the
+ * Plan 481 tierWriter (tier-format files only; the shard owner is the
+ * writer). Recalling both keeps legacy rows visible while shard writes
+ * join the same dedupe/attribution space.
  */
 export function readUserTierEntries(duyaRoot: string): TierMemoryEntry[] {
   const entries: TierMemoryEntry[] = []
@@ -199,22 +221,63 @@ export function readUserTierEntries(duyaRoot: string): TierMemoryEntry[] {
       })
     }
   }
+  // Per-writer user shards: agents/<agentId>/user/** (tierWriter layout).
+  const agentsDir = path.join(duyaRoot, 'agents')
+  let agentIds: string[]
+  try {
+    agentIds = fs.readdirSync(agentsDir).filter((name) => {
+      if (name.startsWith('.')) return false
+      try {
+        return fs.statSync(path.join(agentsDir, name)).isDirectory()
+      } catch {
+        return false
+      }
+    })
+  } catch {
+    return entries
+  }
+  for (const agentId of agentIds) {
+    const shardDir = path.join(agentsDir, agentId, 'user')
+    const files: string[] = []
+    walkMdFiles(shardDir, files)
+    for (const file of files) {
+      const entry = readTierFile(file, duyaRoot, 'user', agentId, '')
+      if (entry) entries.push(entry)
+    }
+  }
   return entries
 }
 
 /**
- * Project tier: `memory/projects/<projectId>/**` for each joined id.
- * Unknown/unjoined ids are skipped by the caller-provided list.
+ * Project tier: per-writer shards `projects/<projectId>/agents/<agentId>/**`
+ * for each joined id (Plan 481 tierWriter layout). The shard directory
+ * name is the writer; unknown/unjoined ids are skipped by the
+ * caller-provided list.
  */
 export function readProjectTierEntries(duyaRoot: string, joinedProjectIds: string[]): TierMemoryEntry[] {
   const entries: TierMemoryEntry[] = []
   for (const projectId of joinedProjectIds) {
-    const dir = path.join(duyaRoot, 'memory', 'projects', projectId)
-    const files: string[] = []
-    walkMdFiles(dir, files)
-    for (const file of files) {
-      const entry = readTierFile(file, duyaRoot, 'project', '', projectId)
-      if (entry) entries.push(entry)
+    const shardsRoot = path.join(duyaRoot, 'projects', projectId, 'agents')
+    let writerIds: string[]
+    try {
+      writerIds = fs.readdirSync(shardsRoot).filter((name) => {
+        if (name.startsWith('.')) return false
+        try {
+          return fs.statSync(path.join(shardsRoot, name)).isDirectory()
+        } catch {
+          return false
+        }
+      })
+    } catch {
+      continue
+    }
+    for (const writerId of writerIds) {
+      const files: string[] = []
+      walkMdFiles(path.join(shardsRoot, writerId), files)
+      for (const file of files) {
+        const entry = readTierFile(file, duyaRoot, 'project', writerId, projectId)
+        if (entry) entries.push(entry)
+      }
     }
   }
   return entries

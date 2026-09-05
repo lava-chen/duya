@@ -17,6 +17,7 @@
  * already wired in `section-system.ts`.
  */
 
+import type { Message } from '@/types/message';
 import type { Thread } from '@/stores/conversation-store';
 import { SESSION_KIND_PREFIXES } from './section-system';
 
@@ -31,8 +32,9 @@ export interface BotSource {
   description: string;
   model?: string;
   workspace?: string;
-  avatarShape?: string;
   avatarColor?: string;
+  /** `duya-file://` URL of the bot's avatar image (main-process built). */
+  avatarUrl?: string;
 }
 
 export interface BotContact {
@@ -44,9 +46,10 @@ export interface BotContact {
   title: string;
   description: string;
   model?: string;
-  /** Grok-style avatar character tokens (empty → fallback initial circle). */
-  avatarShape?: string;
+  /** Color token for the initial-circle avatar (image wins when present). */
   avatarColor?: string;
+  /** `duya-file://` URL of the bot's avatar image; empty → colored circle. */
+  avatarUrl?: string;
   /**
    * Thread id of the bot's bound persistent session
    * (`bot:<agentId>:<sessionId>`, plan 477 convention), or null while
@@ -55,10 +58,141 @@ export interface BotContact {
   boundThreadId: string | null;
   /** Latest activity of the bound session (0 when unbound). */
   lastActivity: number;
+  /**
+   * Latest user-visible message text (one line), or `undefined` when the
+   * session has no messages yet, has only bot-internal rows, or has no
+   * bound session. Mirrors grok-bot's `preview` field (rakazo reference):
+   * "the most recent user-visible message in the bound session, sourced
+   * from the same source filter that BotDirectChatView uses to render the
+   * chat body." Trimmed + capped at 240 chars to keep the sidebar row
+   * compact.
+   */
+  preview?: string;
+  /** When `preview` was authored (timestamp ms). Used for tooltip ordering. */
+  previewAt?: number;
+  /**
+   * Coarse activity status derived from stream phase + mailbox queue depth:
+   *   - `idle`    — no active run AND no pending mailbox rows
+   *   - `running` — stream session is in an active phase
+   *   - `queued`  — user submitted a follow-up while another run was active
+   *                 (mailbox.pending count > 0); runs first when the active
+   *                 run reaches a safe checkpoint
+   * Unbound contacts always read `idle`. The renderer subscribes to live
+   * updates through `use-bot-contacts`; this field is the snapshot value.
+   */
+  status?: BotSessionStatus;
   /** Plan 483 P2: pinned to the top of the Bots section (ordered by `sidebar.botPinnedIds`). */
   isPinned?: boolean;
   /** Plan 483 P2: hidden from the sidebar (still configured; restorable). */
   isHidden?: boolean;
+}
+
+/** Coarse bot activity status for the sidebar row. */
+export type BotSessionStatus = 'idle' | 'running' | 'queued';
+
+const PREVIEW_MAX_CHARS = 240;
+
+/**
+ * Format a single-line preview snippet from message blocks. Mirrors the
+ * "first text block" extraction in grok-bot's `previewFromBlocks` and
+ * `BotDirectChatView`'s `textFromContent`. Collapses internal whitespace
+ * so the sidebar row height is stable.
+ */
+export function previewTextFromContent(
+  content: Message['content'] | Message['displayContent'],
+): string {
+  if (!content) return '';
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue;
+    const typed = block as Record<string, unknown>;
+    if (typed.type === 'text' && typeof typed.text === 'string') {
+      parts.push(typed.text);
+    }
+  }
+  return parts.join('\n');
+}
+
+/**
+ * Find the latest user-visible message in a transcript and return a
+ * single-line preview string + timestamp.
+ *
+ * "User-visible" matches `BotDirectChatView`'s projection rules:
+ *  - User rows: always visible (their `displayContent` is preferred so
+ *    the sidebar shows the user's typed prompt, not synthetic context
+ *    like the system prompt or attachment text).
+ *  - Assistant rows: visible only when produced by SendMessage
+ *    (`source === 'send_message'`), or when the older renderer
+ *    convention is used (role=assistant + msgType undefined/text).
+ *  - Tool / thinking / scratchpad / system rows: hidden. They are the
+ *    bot's workspace, not its voice.
+ *  - Compact boundaries, task notifications, queued `sending` rows are
+ *    skipped silently.
+ *
+ * Returns `null` when no row qualifies (e.g. unbound session, empty
+ * transcript, or transcript contains only bot-internal rows). The caller
+ * decides how to render the absence.
+ */
+export interface BotPreviewSnapshot {
+  text: string;
+  timestamp: number;
+}
+
+export function peekBotMessagePreview(
+  messages: readonly Message[] | undefined,
+): BotPreviewSnapshot | null {
+  if (!messages || messages.length === 0) return null;
+  // Walk from the tail: the most recent qualifying row wins.
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (!message) continue;
+    if (message.isTaskNotification || message.isCompactBoundary) continue;
+    if (message.role === 'user') {
+      // Optimistic / failed follow-ups already show `sending`/`failed`
+      // pills in the composer; the sidebar row mirrors that by skipping
+      // rows the user has not finished submitting yet. The persisted
+      // 'sent' row is what we want.
+      if (message.status === 'sending' || message.status === 'failed') continue;
+      const raw = previewTextFromContent(
+        message.displayContent ?? message.content,
+      ).trim();
+      if (!raw) continue;
+      return { text: clampPreview(raw), timestamp: message.timestamp };
+    }
+    if (message.role === 'assistant') {
+      // Treat the new source taxonomy as canonical; fall back to the
+      // legacy renderer convention (assistant + text/null msgType) when
+      // `source` is absent so pre-P0.1 data still surfaces a preview.
+      // Skip bot→bot DM marker cards (rendered as their own marker row
+      // inside BotDirectChatView; would otherwise leak as "intent" text
+      // into the sidebar preview).
+      const source = (message.source ?? null) as string | null;
+      // `agent_dm` rows are bot→bot DM marker cards (their own row type
+      // inside BotDirectChatView). Drop them so the "intent" text does
+      // not leak into the sidebar preview.
+      const isDmMarker = source === 'agent_dm';
+      const isVoiceBubble =
+        source === 'send_message' ||
+        source === 'user' ||
+        (source == null &&
+          (message.msgType == null || message.msgType === 'text'));
+      if (!isVoiceBubble || isDmMarker) continue;
+      const raw = previewTextFromContent(message.content).trim();
+      if (!raw) continue;
+      return { text: clampPreview(raw), timestamp: message.timestamp };
+    }
+    // tool / system rows are not part of the user-visible transcript.
+  }
+  return null;
+}
+
+function clampPreview(text: string): string {
+  // Collapse internal whitespace so the sidebar row stays one line.
+  const collapsed = text.replace(/\s+/g, ' ').trim();
+  if (collapsed.length <= PREVIEW_MAX_CHARS) return collapsed;
+  return collapsed.slice(0, PREVIEW_MAX_CHARS - 1).trimEnd() + '…';
 }
 
 /**
@@ -79,17 +213,27 @@ export function deriveBotPlaceholderThreadId(agentId: string): string {
 }
 
 /**
+ * True when `threadId` belongs to this bot: the plan 477 P3.1 persistent
+ * session is the BARE 2-part id `bot:<agentId>` (the placeholder and the
+ * live session are the same id), while legacy/derived rows use the older
+ * 3-part `bot:<agentId>:<sessionId>` shape. Both bind.
+ */
+export function matchesBotThread(agentId: string, threadId: string): boolean {
+  const stem = `${SESSION_KIND_PREFIXES.bot}${agentId}`;
+  return threadId === stem || threadId.startsWith(`${stem}:`);
+}
+
+/**
  * Resolve the thread id to open for a bot contact: prefer the bound
- * persistent session (477 convention `bot:<agentId>:<sessionId>`), fall
- * back to the placeholder id (empty chat shell) until 477 lands.
+ * persistent session (`bot:<agentId>` or `bot:<agentId>:<sessionId>`),
+ * fall back to the placeholder id (empty chat shell).
  */
 export function resolveBotOpenThreadId(
   contact: BotContact,
   threads: Thread[],
 ): string {
   if (contact.boundThreadId) return contact.boundThreadId;
-  const prefix = `${SESSION_KIND_PREFIXES.bot}${contact.agentId}:`;
-  const bound = threads.find((t) => t.id.startsWith(prefix));
+  const bound = threads.find((t) => matchesBotThread(contact.agentId, t.id));
   return bound?.id ?? deriveBotPlaceholderThreadId(contact.agentId);
 }
 
@@ -106,11 +250,10 @@ export function buildBotContacts(
   const contacts: BotContact[] = [];
   for (const bot of bots) {
     if (!bot?.id) continue;
-    const prefix = `${SESSION_KIND_PREFIXES.bot}${bot.id}:`;
     let boundThreadId: string | null = null;
     let lastActivity = 0;
     for (const thread of threads) {
-      if (!thread.id.startsWith(prefix)) continue;
+      if (!matchesBotThread(bot.id, thread.id)) continue;
       if (!boundThreadId || thread.updatedAt > lastActivity) {
         boundThreadId = thread.id;
         lastActivity = thread.updatedAt;
@@ -122,8 +265,8 @@ export function buildBotContacts(
       title: bot.title?.trim() ?? '',
       description: bot.description?.trim() ?? '',
       model: bot.model?.trim() ?? '',
-      avatarShape: bot.avatarShape,
       avatarColor: bot.avatarColor,
+      avatarUrl: bot.avatarUrl,
       boundThreadId,
       lastActivity,
     });

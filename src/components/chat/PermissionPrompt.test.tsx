@@ -298,7 +298,14 @@ describe('PermissionPrompt', () => {
       expect(screen.getByText('Which option do you prefer?')).toBeTruthy();
       expect(screen.getByText('Option A')).toBeTruthy();
       expect(screen.getByText('Option B')).toBeTruthy();
-      expect(screen.getByText('Submit')).toBeTruthy();
+      // The redesigned sheet (ask-question-sheet) replaced the old
+      // "Submit" button with a Continue action that stays disabled until
+      // an option is picked or the "tell duya" textarea has content.
+      const continueButton = document.querySelector(
+        '.ask-question-continue',
+      ) as HTMLButtonElement;
+      expect(continueButton).toBeTruthy();
+      expect(continueButton.disabled).toBe(true);
     });
 
     it('shows "Answer Submitted" when resolved', () => {
@@ -427,7 +434,7 @@ describe('PermissionPrompt', () => {
       expect(toggle.getAttribute('aria-expanded')).toBe('true');
     });
 
-    it('AskUserQuestion header is expanded by default', () => {
+    it('AskUserQuestion sheet renders its question inline (no collapse toggle)', () => {
       const { container } = render(
         <PermissionPrompt
           pendingPermission={createMockPermission({
@@ -442,8 +449,13 @@ describe('PermissionPrompt', () => {
           onPermissionResponse={vi.fn()}
         />
       );
-      const toggle = container.querySelector('.permission-prompt-header-toggle') as HTMLButtonElement;
-      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+      // The redesigned sheet is always expanded: the question sits in the
+      // sheet header, and the pager only appears with more than one question.
+      const sheet = container.querySelector('.ask-question-sheet');
+      expect(sheet).toBeTruthy();
+      expect(sheet!.querySelector('.ask-question-title')!.textContent).toBe('Q');
+      expect(container.querySelector('.permission-prompt-header-toggle')).toBeNull();
+      expect(container.querySelector('.ask-question-pager')).toBeNull();
     });
 
     it('AskUserQuestion options toggle selected class on click', () => {
@@ -468,8 +480,9 @@ describe('PermissionPrompt', () => {
           onPermissionResponse={vi.fn()}
         />
       );
-      const optionA = screen.getByText('A').closest('button')!;
-      expect(optionA.className).toContain('permission-prompt-option');
+      // Options are `div[role="button"]` in the redesigned sheet.
+      const optionA = screen.getByText('A').closest('[role="button"]')!;
+      expect(optionA.className).toContain('ask-question-option');
       expect(optionA.className).not.toContain('selected');
       fireEvent.click(optionA);
       expect(optionA.className).toContain('selected');

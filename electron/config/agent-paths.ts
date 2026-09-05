@@ -20,6 +20,7 @@
 import path from 'path';
 import { resolveConfigRoot } from './compass.js';
 import { assertValidBotId } from './agent-id.js';
+import { isValidAvatarImageFilename } from './bot-avatar.js';
 
 /** `~/.duya/agents` — root of all bot identity directories. */
 export function getDuyaAgentsRoot(duyaRoot: string = resolveConfigRoot()): string {
@@ -46,12 +47,22 @@ export function getBotSettingsPath(agentId: string, duyaRoot?: string): string {
   return path.join(resolveDuyaAgentDir(agentId, duyaRoot), 'settings.json');
 }
 
-/** Canonical avatar file name (png preferred; the loader may probe for others). */
-export const BOT_AVATAR_FILENAME = 'avatar.png';
+/**
+ * Canonical avatar image filename stem; the actual extension comes from the
+ * uploaded file (`avatar.png`, `avatar.svg`, … per the bot-avatar.ts whitelist).
+ */
+export const BOT_AVATAR_STEM = 'avatar';
 
-/** `<agentDir>/avatar.png` — canonical avatar path. */
-export function getBotAvatarPath(agentId: string, duyaRoot?: string): string {
-  return path.join(resolveDuyaAgentDir(agentId, duyaRoot), BOT_AVATAR_FILENAME);
+/**
+ * `<agentDir>/<filename>` — avatar image path. `filename` must pass
+ * `isValidAvatarImageFilename` (canonical stem + whitelisted extension) so
+ * nothing outside the agent directory can be addressed.
+ */
+export function getBotAvatarFilePath(agentId: string, filename: string, duyaRoot?: string): string {
+  if (!isValidAvatarImageFilename(filename)) {
+    throw new Error(`Invalid bot avatar filename: '${filename}'`);
+  }
+  return path.join(resolveDuyaAgentDir(agentId, duyaRoot), filename);
 }
 
 /** `<agentDir>/state` — reserved for 476 wake markers / 477 binding / 484 resume. */

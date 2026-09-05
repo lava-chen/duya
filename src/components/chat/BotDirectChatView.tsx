@@ -42,7 +42,13 @@ import { BotBubbleRow } from "./BotBubbleRow";
 import { BotToolCallRow } from "./BotToolCallRow";
 import { BotThinkingRow } from "./BotThinkingRow";
 import { BotTypingIndicator } from "./BotTypingIndicator";
-import { AgentDmMarker } from "./bot/AgentDmMarker";
+import { AgentDmGroupChip } from "./bot/AgentDmGroupChip";
+import {
+  buildAgentDmChipGroups,
+  isAgentDmMarkerMessage,
+  type AgentDmChipGroup,
+} from "./bot/agent-dm-pair";
+import { isBotDirectVisibleSource } from "@/lib/ipc-client";
 import { ChevronDownIcon } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { Message } from "@/types/message";
@@ -66,6 +72,7 @@ import {
 import { BotSendCard } from "./BotSendCard";
 import { BotToolApprovalCard, type ToolApprovalStatus } from "./bot/BotToolApprovalCard";
 import type { TranslationKey } from "@/i18n";
+import { splitReplyContent, isReplyContent, type ReplyQuote } from "./bot/reply";
 // Plan 494: bot-direct renders its own permission/ask cards — ChatView
 // (and its PermissionPrompt sheet) is not mounted in this mode.
 import { usePermissions } from "@/hooks/usePermissions";
@@ -81,6 +88,9 @@ export interface BotDirectChatViewProps {
   isFinalizing: boolean;
   onSend: (payload: BotComposerSendPayload) => void;
   onStop: () => void;
+  /** Plan 497: open a DM pair as a full sibling view (App owns the state;
+   *  absent → chips render but stay inert, e.g. standalone test renders). */
+  onOpenDmPair?: (peerId: string, peerName: string) => void;
 }
 
 /** Calendar-day key for grouping messages under date separators. */
@@ -104,6 +114,16 @@ interface BubbleRow {
   isGroupStart: boolean;
   /** Plan 477 P4.4: renders as a bot→bot DM marker card, not a bubble. */
   isDmMarker?: boolean;
+  /** Plan 497: set when this row renders the collapsed DM chip for a run
+   *  of consecutive same-peer marker rows (chip replaces the old card). */
+  dmGroup?: AgentDmChipGroup;
+  /** Reply quote parsed back out of a composed user content (see bot/reply.ts). */
+  replyPreview?: ReplyQuote | null;
+  /** True when the row renders as a BotBubbleRow (grouping candidate). */
+  isBubbleRow?: boolean;
+  /** Telegram-style position within a same-role bubble group (CSS keys
+   *  the tight spacing + reduced facing corners off this). */
+  groupPosition?: "start" | "middle" | "end" | "single";
 }
 
 /** Text bubbles only; tool/thinking/system render as slim status rows. */
@@ -113,10 +133,7 @@ function isBubbleMessage(message: Message): message is Message & { role: "user" 
   return type == null || type === 'text';
 }
 
-/** Plan 477 P4.4: bot→bot DM marker row (source agent_dm + card payload). */
-function isAgentDmMarker(message: Message): boolean {
-  return message.source === 'agent_dm' && message.agentDmMeta != null;
-}
+/** Plan 477 P4.4 marker detection lives in bot/agent-dm-pair.ts (plan 497). */
 
 function textFromContent(content: Message["content"] | Message["displayContent"]): string {
   if (!content) return "";
@@ -181,12 +198,14 @@ function isSendCardMessage(message: Message): boolean {
 function SendCardRow({
   message,
   onOptionClick,
+  onReply,
   approvalStatus,
   onApprovalResolve,
   t,
 }: {
   message: Message;
   onOptionClick?: (option: string) => void;
+  onReply?: () => void;
   approvalStatus?: ToolApprovalStatus;
   onApprovalResolve?: (id: string, decision: 'allow' | 'always' | 'deny') => void;
   t: (key: TranslationKey, params?: Record<string, string | number>) => string;
@@ -195,13 +214,6 @@ function SendCardRow({
   const approval = message.sendMessageMeta?.approval;
   return (
     <div className="bot-chat-row bot-chat-row--assistant" data-role="assistant">
-      <BotMessageHoverBar
-        timestamp={message.timestamp}
-        textToCopy={typeof message.content === 'string' ? message.content : undefined}
-        messageId={message.id}
-        thumbsUp={thumbsUp}
-        onToggleThumbsUp={toggleThumbsUp}
-      />
       <div className="bot-chat-row__stack">
         <div className="bot-chat-bubble bot-chat-bubble--assistant bot-chat-bubble--card">
           {message.msgType === 'tool-approval' && approval ? (
@@ -216,6 +228,14 @@ function SendCardRow({
           )}
         </div>
         {thumbsUp && <BotThumbsBadge onRemove={toggleThumbsUp} />}
+        <BotMessageHoverBar
+          timestamp={message.timestamp}
+          textToCopy={typeof message.content === 'string' ? message.content : undefined}
+          messageId={message.id}
+          thumbsUp={thumbsUp}
+          onToggleThumbsUp={toggleThumbsUp}
+          onReply={onReply}
+        />
       </div>
     </div>
   );
@@ -267,9 +287,13 @@ export function BotDirectChatView({
   isFinalizing,
   onSend,
   onStop,
+  onOpenDmPair,
 }: BotDirectChatViewProps) {
   const { t } = useTranslation();
   const { allContacts: contacts, reload: reloadContacts } = useBotContacts();
+  // Mention-chip sources: `@Name` tokens in any bubble resolve against the
+  // contact roster (grok sand-mention parity, see bot/mention-text.tsx).
+  const contactNames = useMemo(() => contacts.map((c) => c.name), [contacts]);
   // Soft dependency: the panel may be absent (tests, standalone renders);
   // the header button then just stays inert instead of crashing the view.
   const { openOrActivatePage } = useOptionalPanel() ?? { openOrActivatePage: null };
@@ -408,6 +432,23 @@ export function BotDirectChatView({
     setAnsweredAsks([]);
   }, [sessionId]);
 
+  // Reply targeting (rakazo onReply parity): hover-bar Reply sets the
+  // target, the composer chip shows/cancels it, and the next send carries
+  // it as `replyTo` (composed into the outgoing content by
+  // App.handleBotDirectSend via composeReplyContent). Cleared on send and
+  // on session switch.
+  const [replyTarget, setReplyTarget] = useState<ReplyQuote | null>(null);
+  useEffect(() => {
+    setReplyTarget(null);
+  }, [sessionId]);
+
+  const handleReply = useCallback((row: BubbleRow) => {
+    setReplyTarget({
+      id: row.message.id,
+      text: row.text || (row.message.msgType === 'tool_use' && row.message.toolName ? row.message.toolName : ''),
+    });
+  }, []);
+
   // Row count as of the latest render — read at submit time to anchor the
   // answered trace to its chronological slot in the transcript. Declared
   // after `rows` (assigned in an effect below).
@@ -436,31 +477,83 @@ export function BotDirectChatView({
   // Plan 491 P0.4: scroll freeze detection
   const [isScrolledUp, setIsScrolledUp] = useState(false);
 
+  // Reply preview click — scroll the quoted message back into view.
+  // Rows carry data-message-id (BotBubbleRow); the transcript container
+  // scopes the lookup. Unknown ids (message pruned mid-session) no-op.
+  const jumpToMessage = useCallback((messageId: string) => {
+    const root = transcriptRef.current;
+    if (!root) return;
+    let escaped: string;
+    try {
+      escaped = CSS.escape(messageId);
+    } catch {
+      escaped = messageId.replace(/"/g, '\\"');
+    }
+    const target = root.querySelector(`[data-message-id="${escaped}"]`);
+    target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, []);
+
   // Group consecutive same-role messages; a group start shows the bot
   // avatar + name (bot side only — user rows are compact, Telegram-style).
   const rows = useMemo<BubbleRow[]>(() => {
+    // Plan 497 — collapse consecutive same-peer DM marker rows into one
+    // chip, emitted at the FIRST member's position; the rest are dropped.
+    const dmInfoByRowId = new Map<string, { group: AgentDmChipGroup; first: boolean }>();
+    for (const group of buildAgentDmChipGroups(messages)) {
+      group.memberIds.forEach((id, i) => dmInfoByRowId.set(id, { group, first: i === 0 }));
+    }
     const result: BubbleRow[] = [];
     let previousRole: string | null = null;
     for (const message of messages) {
       if (message.isTaskNotification) continue;
+      // Plan 497 — defense-in-depth mirror of the ingestion filter (App's
+      // message:new handler): hidden-source rows (wake prompts, tool_use,
+      // scratchpad, …) never render, even if a stale store still holds one.
+      if (message.source != null && !isBotDirectVisibleSource(message.source)) {
+        continue;
+      }
       // Plan 477 P4.4: DM marker rows render as their own card type — they
       // do not participate in bubble grouping (previousRole unchanged).
-      if (isAgentDmMarker(message)) {
-        const text = textFromContent(message.content);
-        if (!text.trim()) continue;
-        result.push({
-          message,
-          role: "assistant",
-          text,
-          isGroupStart: false,
-          isDmMarker: true,
-        });
+      if (isAgentDmMarkerMessage(message)) {
+        const info = dmInfoByRowId.get(message.id);
+        if (info?.first) {
+          result.push({
+            message,
+            role: "assistant",
+            text: "",
+            isGroupStart: false,
+            isDmMarker: true,
+            dmGroup: info.group,
+          });
+        }
         continue;
       }
       if (isBubbleMessage(message)) {
-        const text = textFromContent(
+        const rawText = textFromContent(
           message.role === "user" ? (message.displayContent ?? message.content) : message.content,
         );
+        // Reply-quote extraction (bot/reply.ts): a composed user content
+        // carries the `[Replying to <id>]` sentinel; the bubble body stays
+        // plain (displayContent / the parsed tail) and the quote renders
+        // as the clickable preview above the bubble.
+        let replyPreview: ReplyQuote | null = null;
+        let text = rawText;
+        // typeof narrow: isReplyContent accepts unknown and cannot narrow
+        // message.content for splitReplyContent's string parameter.
+        if (
+          message.role === "user" &&
+          typeof message.content === "string" &&
+          isReplyContent(message.content)
+        ) {
+          const split = splitReplyContent(message.content);
+          if (split.reply) {
+            replyPreview = split.reply;
+            text =
+              typeof message.displayContent === 'string'
+                ? message.displayContent
+                : split.text;
+          }
+        }
         // A caption-less image message (text kind + sendMessageMeta.images)
         // still renders — as a card with just the image strip.
         const hasCardImages =
@@ -471,6 +564,10 @@ export function BotDirectChatView({
           role: message.role,
           text,
           isGroupStart: previousRole !== message.role,
+          replyPreview,
+          // Card rows render their own chrome — grouping candidates are
+          // plain text/reply bubbles only (a card breaks the visual group).
+          isBubbleRow: !isSendCardMessage(message),
         });
         previousRole = message.role;
       } else {
@@ -479,6 +576,39 @@ export function BotDirectChatView({
         result.push({ message, role: "assistant", text: "", isGroupStart: false });
       }
     }
+    // Telegram-style bubble grouping (screenshot parity): consecutive
+    // same-role bubble rows on the same calendar day form ONE visual
+    // group — group members after the first sit on the tight spacing lane
+    // and the corners FACING a neighbor take the reduced radius
+    // (.bot-chat-row--grouped / .bot-chat-bubble--group-{start,middle,end}).
+    let openStart = -1;
+    let prev: BubbleRow | null = null;
+    let prevIdx = -1;
+    const closeBubbleGroup = () => {
+      if (openStart < 0 || prevIdx < 0) return;
+      if (prevIdx === openStart) {
+        result[openStart].groupPosition = "single";
+      } else {
+        result[openStart].groupPosition = "start";
+        for (let j = openStart + 1; j < prevIdx; j++) result[j].groupPosition = "middle";
+        result[prevIdx].groupPosition = "end";
+      }
+    };
+    for (let i = 0; i < result.length; i++) {
+      const row = result[i];
+      if (row.isBubbleRow !== true) continue;
+      const joins =
+        prev != null &&
+        prev.role === row.role &&
+        dayKeyOf(prev.message.timestamp) === dayKeyOf(row.message.timestamp);
+      if (!joins) {
+        closeBubbleGroup();
+        openStart = i;
+      }
+      prev = row;
+      prevIdx = i;
+    }
+    closeBubbleGroup();
     return result;
   }, [messages]);
 
@@ -502,6 +632,7 @@ export function BotDirectChatView({
           key={row.message.id}
           message={row.message}
           onOptionClick={(option) => onSend({ text: option })}
+          onReply={() => handleReply(row)}
           approvalStatus={
             row.message.sendMessageMeta?.approval
               ? approvalStatuses[row.message.sendMessageMeta.approval.approvalId]
@@ -510,19 +641,28 @@ export function BotDirectChatView({
           onApprovalResolve={handleApprovalResolve}
           t={t}
         />
-      ) : row.isDmMarker && row.message.agentDmMeta ? (
-        <AgentDmMarker
-          key={row.message.id}
-          meta={row.message.agentDmMeta}
-          text={row.text}
+      ) : row.isDmMarker && row.dmGroup ? (
+        <AgentDmGroupChip
+          key={row.dmGroup.key}
+          group={row.dmGroup}
+          resolvePeer={(peerId) => {
+            const c = contacts.find((x) => x.agentId === peerId);
+            return { name: c?.name, avatarUrl: c?.avatarUrl, avatarColor: c?.avatarColor };
+          }}
+          onOpenPeer={(peerId, peerName) => onOpenDmPair?.(peerId, peerName)}
         />
-      ) : row.text ? (
+      ) : row.text || row.replyPreview ? (
         <BotBubbleRow
           key={row.message.id}
           role={row.role}
           messageId={row.message.id}
           timestamp={row.message.timestamp}
           text={row.text}
+          mentionNames={contactNames}
+          onReply={() => handleReply(row)}
+          replyPreview={row.replyPreview}
+          onJumpToReply={jumpToMessage}
+          groupPosition={row.groupPosition}
         />
       ) : (
         <StatusRow key={row.message.id} message={row.message} />
@@ -538,7 +678,7 @@ export function BotDirectChatView({
         element
       );
     },
-    [rows, onSend],
+    [rows, onSend, handleReply, jumpToMessage, contacts, contactNames],
   );
 
   // Interleave answered-ask traces into the transcript at their submit-time
@@ -580,6 +720,19 @@ export function BotDirectChatView({
     }
   }, [messages.length, isStreaming, isScrolledUp]);
 
+  // Composer send: attach the active reply target (App composes it into
+  // the outgoing content) and clear the chip, rakazo send parity.
+  const handleComposerSend = useCallback(
+    (payload: BotComposerSendPayload) => {
+      onSend({
+        ...payload,
+        replyTo: replyTarget ?? undefined,
+      });
+      setReplyTarget(null);
+    },
+    [onSend, replyTarget],
+  );
+
 
 
   return (
@@ -603,7 +756,7 @@ export function BotDirectChatView({
             <BotCharacterAvatar
               name={botName}
               agentId={agentId ?? sessionId}
-              avatarShape={contact?.avatarShape}
+              avatarUrl={contact?.avatarUrl}
               avatarColor={contact?.avatarColor}
               size={28}
             />
@@ -629,7 +782,7 @@ export function BotDirectChatView({
             <BotCharacterAvatar
               name={botName}
               agentId={agentId ?? sessionId}
-              avatarShape={contact?.avatarShape}
+              avatarUrl={contact?.avatarUrl}
               avatarColor={contact?.avatarColor}
               size={72}
             />
@@ -695,8 +848,10 @@ export function BotDirectChatView({
         botId={sessionId}
         disabled={!canSendToBot}
         busy={busy}
-        onSend={onSend}
+        onSend={handleComposerSend}
         onStop={onStop}
+        replyPreview={replyTarget}
+        onClearReply={() => setReplyTarget(null)}
         initialModel={modelPref?.model}
         initialProviderId={modelPref?.providerId}
         initialEffort={modelPref?.effort}

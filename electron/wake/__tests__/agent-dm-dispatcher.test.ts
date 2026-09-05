@@ -162,4 +162,114 @@ describe('maybeDispatchAgentDm (orchestration)', () => {
     // the bot profile.
     expect(runWake.mock.calls[0][2]).toMatchObject({ agentProfileId: 'bot-b' })
   })
+
+  // ---- Plan 477 P4.1/P4.2 — intent-driven prompt + hop limit ----
+
+  it('renders the intent-driven request paragraph (auto-return promise)', async () => {
+    const content = encodeEnvelope({
+      from: { id: 'bot-a', name: 'Alpha' },
+      to: { id: 'bot-b', name: 'Beta' },
+      text: 'Please summarize the report',
+      intent: 'request',
+      timestampMs: Date.now(),
+      clientMsgId: 'dm-intent',
+    })
+    const runWake = vi.fn(async () => {})
+    _setWakeDispatcherDeps({ isLocked: () => false, runWake })
+    expect(maybeDispatchAgentDm(dmRow({ content, clientMsgId: 'dm-intent' }))).toBe(true)
+    await flush()
+    const prompt = runWake.mock.calls[0][1] as string
+    expect(prompt).toContain('AUTOMATICALLY returned to Alpha')
+    // The cue must expose the clientMsgId so replies can thread (P4.2).
+    expect(prompt).toContain('replyToMessageId: dm-intent')
+  })
+
+  it('renders the fyi paragraph (silence acceptable)', async () => {
+    const content = encodeEnvelope({
+      from: { id: 'bot-a', name: 'Alpha' },
+      to: { id: 'bot-b', name: 'Beta' },
+      text: 'FYI only',
+      intent: 'fyi',
+      timestampMs: Date.now(),
+      clientMsgId: 'dm-fyi',
+    })
+    const runWake = vi.fn(async () => {})
+    _setWakeDispatcherDeps({ isLocked: () => false, runWake })
+    expect(maybeDispatchAgentDm(dmRow({ content, clientMsgId: 'dm-fyi' }))).toBe(true)
+    await flush()
+    const prompt = runWake.mock.calls[0][1] as string
+    expect(prompt).toContain('This is an FYI')
+    expect(prompt).toContain('staying silent is fine')
+  })
+
+  it('drops a DM whose replyTo chain exceeds the hop limit', async () => {
+    // hops=6 inbound in the sender's mailbox → the reply resolves to
+    // hops=7 > AGENT_DM_MAX_HOPS and is dropped before enqueue.
+    const inboundContent = encodeEnvelope({
+      from: { id: 'bot-b', name: 'Beta' },
+      to: { id: 'bot-a', name: 'Alpha' },
+      text: 'deep chain',
+      hops: 6,
+      timestampMs: Date.now(),
+      clientMsgId: 'dm-deep',
+    })
+    _setCoreStoresForTesting({
+      mailbox: { getByClientMsgId: () => ({ content: inboundContent }) },
+    } as unknown as CoreStores)
+    try {
+      const replyContent = encodeEnvelope({
+        from: { id: 'bot-a', name: 'Alpha' },
+        to: { id: 'bot-b', name: 'Beta' },
+        text: 'over the limit',
+        replyTo: { messageId: 'dm-deep' },
+        timestampMs: Date.now(),
+        clientMsgId: 'dm-reply',
+      })
+      const runWake = vi.fn(async () => {})
+      _setWakeDispatcherDeps({ isLocked: () => false, runWake })
+      const result = maybeDispatchAgentDm(
+        dmRow({ content: replyContent, clientMsgId: 'dm-reply', source: 'bot:bot-a' }),
+      )
+      expect(result).toBe(false)
+      expect(_queuedWakeCount('bot:bot-b')).toBe(0)
+    } finally {
+      _setCoreStoresForTesting(null)
+    }
+  })
+
+  it('accepts a reply within the hop chain and passes computed hops', async () => {
+    const inboundContent = encodeEnvelope({
+      from: { id: 'bot-b', name: 'Beta' },
+      to: { id: 'bot-a', name: 'Alpha' },
+      text: 'shallow chain',
+      hops: 1,
+      timestampMs: Date.now(),
+      clientMsgId: 'dm-shallow',
+    })
+    _setCoreStoresForTesting({
+      mailbox: { getByClientMsgId: () => ({ content: inboundContent }) },
+    } as unknown as CoreStores)
+    try {
+      const replyContent = encodeEnvelope({
+        from: { id: 'bot-a', name: 'Alpha' },
+        to: { id: 'bot-b', name: 'Beta' },
+        text: 'within limit',
+        replyTo: { messageId: 'dm-shallow' },
+        intent: 'status',
+        timestampMs: Date.now(),
+        clientMsgId: 'dm-reply-2',
+      })
+      const runWake = vi.fn(async () => {})
+      _setWakeDispatcherDeps({ isLocked: () => false, runWake })
+      expect(
+        maybeDispatchAgentDm(dmRow({ content: replyContent, clientMsgId: 'dm-reply-2', source: 'bot:bot-a' })),
+      ).toBe(true)
+      await flush()
+      expect(runWake).toHaveBeenCalledTimes(1)
+      const prompt = runWake.mock.calls[0][1] as string
+      expect(prompt).toContain('within limit')
+    } finally {
+      _setCoreStoresForTesting(null)
+    }
+  })
 })

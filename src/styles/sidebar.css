@@ -508,9 +508,12 @@ html[data-backdrop] .app-main-inner {
    `width: auto` lets the grid row stretch to fill the track minus the side
    margins (the base `.thread-item` `width: 100%` would otherwise overflow the
    right edge when combined with a margin). `min-width: 0` lets the ellipsis
-   apply to the nowrap title. */
+   apply to the nowrap title. Bot contact rows share the same inset so the
+   Bots section lines up with the nav buttons above and session rows below. */
 .flat-thread-list .thread-item,
-.sidebar-section-body .thread-item {
+.sidebar-section-body .thread-item,
+.flat-thread-list .bot-contact-item,
+.sidebar-section-body .bot-contact-item {
   width: auto;
   margin: 0 0.5rem;
   min-width: 0;
@@ -764,9 +767,8 @@ html[data-backdrop] .app-main-inner {
   user-select: none;
 }
 
-/* Vector character avatar (grok-style shape tokens): the SVG carries its
-   own shape + fill, just needs to participate in flex layout and not
-   shrink. */
+/* Bot avatar: an uploaded image (img) or legacy SVG token — either way it
+   just needs to participate in flex layout and not shrink. */
 .bot-character-avatar {
   display: block;
   flex-shrink: 0;
@@ -842,6 +844,46 @@ html[data-backdrop] .app-main-inner {
   text-overflow: ellipsis;
 }
 
+/* Plan 483 P1.4 (2026-09-05): the third row in the bot contact list
+   item. Holds the latest user-visible message text for the bound
+   session (mirrors grok-bot / rakazo's `preview` field). Smaller and
+   more muted than the subtitle so the eye still lands on the bot name;
+   collapses with `…` so very long prompts do not balloon the row. */
+.bot-contact-preview {
+  font-size: 0.72rem;
+  color: var(--muted);
+  opacity: 0.8;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  line-height: 1.25;
+  margin-top: 1px;
+}
+
+/* Status pill in the trailing slot — used when the user submitted a
+   follow-up that is queued behind another active run. Kept compact so
+   it does not crowd the relative-time text in the idle state. */
+.bot-contact-status-pill {
+  font-size: 0.66rem;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.bot-contact-status-pill.queued {
+  /* Mirrors the busy-dot hue so the row feels consistent across
+     running / queued states without leaning on a louder accent. */
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
 .bot-contact-trailing {
   position: relative;
   flex-shrink: 0;
@@ -861,18 +903,50 @@ html[data-backdrop] .app-main-inner {
   justify-content: center;
 }
 
-.bot-contact-busy-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--accent);
+/* Plan 483 P1.4 follow-up: WeChat-style avatar badges. While the bot's
+   bound session is streaming, a spinning ring orbits the avatar (replaces
+   the old trailing busy dot). When idle, a bottom-right corner dot marks
+   "finished but unseen" (green) or "last run errored" (red); both clear
+   when the user opens the bot. */
+.bot-contact-avatar-wrap {
+  position: relative;
   flex-shrink: 0;
-  animation: bot-busy-pulse 1.4s ease-in-out infinite;
+  display: inline-flex;
+  border-radius: 50%;
 }
 
-@keyframes bot-busy-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
+.bot-contact-avatar-wrap.running::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  border-top-color: var(--accent);
+  animation: bot-contact-spin 0.9s linear infinite;
+}
+
+@keyframes bot-contact-spin {
+  to { transform: rotate(360deg); }
+}
+
+.bot-contact-badge {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  /* Halo matching the row background so the dot reads on both themes. */
+  border: 2px solid var(--bg-canvas);
+  z-index: 1;
+}
+
+.bot-contact-badge.unseen {
+  background: #22c55e;
+}
+
+.bot-contact-badge.error {
+  background: var(--error);
 }
 
 /* Hover action buttons overlay the trailing area (same replace-not-overlap
