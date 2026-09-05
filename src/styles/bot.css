@@ -1999,6 +1999,106 @@
   filter: brightness(1.08);
 }
 
+/* ─── Plan 498: BotToolApprovalCard — durable approval card. ─── */
+
+.bot-tool-approval-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(420px, 88%);
+  padding: 12px 16px;
+  box-sizing: border-box;
+  border-radius: 20px;
+  background: var(--bot-bubble-assistant-bg);
+  color: var(--bot-bubble-assistant-fg);
+  border: 1px solid var(--border);
+}
+
+.bot-tool-approval-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.bot-tool-approval-card__tool {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.bot-tool-approval-card__pill {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--warning, #f59e0b) 15%, transparent);
+  color: var(--warning, #f59e0b);
+}
+
+.bot-tool-approval-card__pill--answered {
+  background: color-mix(in srgb, var(--success, #22c55e) 15%, transparent);
+  color: var(--success, #22c55e);
+}
+
+.bot-tool-approval-card__pill--denied {
+  background: color-mix(in srgb, var(--error, #ef4444) 15%, transparent);
+  color: var(--error, #ef4444);
+}
+
+.bot-tool-approval-card__summary {
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bot-bubble-assistant-fg) 6%, transparent);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  opacity: 0.8;
+}
+
+.bot-tool-approval-card__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.bot-tool-approval-card__btn {
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--bot-bubble-assistant-fg) 20%, transparent);
+  background: transparent;
+  color: var(--bot-bubble-assistant-fg);
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.bot-tool-approval-card__btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.bot-tool-approval-card__btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.bot-tool-approval-card__btn--danger:hover:not(:disabled) {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.bot-tool-approval-card__btn--primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+}
+
+.bot-tool-approval-card__btn--primary:hover:not(:disabled) {
+  color: #fff;
+  filter: brightness(1.08);
+}
+
 /* ---------------------------------------------------------------------------
  * Bot settings panel (P2.1c) — right-panel page opened from the bot chat
  * header. The PanelHeader owns the tab chrome; this only pads the form.
