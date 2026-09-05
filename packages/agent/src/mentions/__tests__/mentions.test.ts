@@ -59,4 +59,20 @@ describe('buildAppsSystemSection', () => {
     const section = buildAppsSystemSection([{ provider: 'linear', name: 't1' }]) ?? '';
     expect(section).toContain('- [linear](app://linear): t1');
   });
+
+  it('teaches the help-the-user-connect contract (Plan 498, grok-bot parity)', () => {
+    const section = buildAppsSystemSection(descriptors) ?? '';
+    // Prefer connectors over browser workarounds.
+    expect(section).toContain('Prefer them over browser or computer-use tools');
+    // Missing service: name it plainly, point at the real connect path,
+    // never fabricate authorization URLs.
+    expect(section).toContain('NOT in the list above');
+    expect(section).toContain('Settings → Extensions → Connections');
+    expect(section).toContain('Never compose or paste an install or authorization URL');
+    // Pending authorization: no workarounds, end turn and wait for resume.
+    expect(section).toContain('while its authorization is pending');
+    expect(section).toContain('finish unrelated work, then end your turn');
+    // Proactive surfacing of unconnected services.
+    expect(section).toContain('surface that connector to the user');
+  });
 });

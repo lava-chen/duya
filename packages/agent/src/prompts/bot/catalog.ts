@@ -46,6 +46,7 @@ import { renderBotCommsRules } from './commsRules.js'
 import { renderBotChannels } from './channels.js'
 import {
   BOT_MEMORY_OWN_SECTION,
+  BOT_MEMORY_USAGE_SECTION,
   BOT_MEMORY_USER_SECTION,
   BOT_MEMORY_PROJECT_SECTION,
 } from './memory/sections.js'
@@ -67,8 +68,8 @@ export const BOT_IDENTITY_SECTION: BotSectionDef = {
 export const BOT_COMMS_RULES_SECTION: BotSectionDef = {
   name: 'botCommsRules',
   description:
-    'Messaging rules: user voice (SendMessage cadence, ack≠delivery) + wakes/quiet-work silence (inter-agent contract lives in botRoster since 492 P1).',
-  budgetChars: 2000,
+    'Messaging rules: user voice (SendMessage cadence, ack≠delivery, reply length/shape style) + wakes/quiet-work silence (inter-agent contract lives in botRoster since 492 P1).',
+  budgetChars: 4600,
   compute: renderBotCommsRules,
 }
 
@@ -132,6 +133,7 @@ export const BOT_SECTION_CATALOG: readonly BotSectionDef[] = [
   BOT_COMMS_RULES_SECTION,
   BOT_SPOTLIGHT_SECTION,
   BOT_USER_IDENTITY_SECTION,
+  BOT_MEMORY_USAGE_SECTION,
   BOT_MEMORY_OWN_SECTION,
   BOT_MEMORY_USER_SECTION,
   BOT_MEMORY_PROJECT_SECTION,

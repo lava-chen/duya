@@ -5,9 +5,9 @@
  * bot identity lives once in the centered chat header. Rows are pure
  * bubbles (assistant left on surface, user right on contrast). The row
  * itself is the hover target (rakazo `group/message`): the hover bar
- * (time + thumbs-up/copy pill) hangs below the row's bottom-left corner,
- * landing in the next row's 36px padding lane, so it never covers the
- * previous message.
+ * (time + reply/thumbs-up/copy row) sits OUTSIDE the bubble on its open
+ * side — right of assistant bubbles, left of user bubbles —
+ * bottom-aligned with the bubble (screenshot placement).
  *
  * Handles:
  *   - User vs Assistant alignment (flex-end vs flex-start)
@@ -36,6 +36,8 @@ import {
   BotThumbsBadge,
   useMessageThumbsUp,
 } from './BotMessageHoverBar';
+import type { ReplyQuote } from './bot/reply';
+import { renderTextWithMentions } from './bot/mention-text';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { BotCodeBlock } from './BotCodeBlock';
 import { BotTypingIndicator } from './BotTypingIndicator';
@@ -63,6 +65,18 @@ interface BotBubbleRowProps {
   isStreaming?: boolean;
   /** Additional CSS class for the bubble */
   bubbleClassName?: string;
+  /** Reply action — shows the hover bar's reply button when given */
+  onReply?: () => void;
+  /** Composed reply this row answers — renders the quoted preview above the bubble */
+  replyPreview?: ReplyQuote | null;
+  /** Click on the reply preview — scrolls back to the quoted message */
+  onJumpToReply?: (messageId: string) => void;
+  /** Telegram-style position in a same-role bubble group: members after
+   *  the group start sit on the tight spacing lane, and the corners
+   *  facing a neighbor take the reduced radius (CSS). */
+  groupPosition?: 'start' | 'middle' | 'end' | 'single';
+  /** Agent names whose `@Name` mentions render as chips (grok parity) */
+  mentionNames?: string[];
 }
 
 export function BotBubbleRow({
@@ -76,8 +90,18 @@ export function BotBubbleRow({
   delivery,
   phase,
   timestamp,
+  onReply,
+  replyPreview,
+  onJumpToReply,
+  groupPosition,
+  mentionNames,
 }: BotBubbleRowProps) {
   const isUser = role === 'user';
+
+  // Telegram-style grouping: rows after the group start ride the tight
+  // 6px lane; the bubble's facing corners shrink (role-mirrored in CSS).
+  const grouped = groupPosition === 'middle' || groupPosition === 'end';
+  const groupClass = groupPosition ? ` bot-chat-bubble--group-${groupPosition}` : '';
 
   // Plan 491 P0.1: delivery state CSS class
   const deliveryClass = delivery && isUser ? ` bot-chat-bubble--${delivery}` : '';
@@ -104,7 +128,7 @@ export function BotBubbleRow({
       // messages go through the shared MarkdownRenderer — same renderer as
       // the workspace transcript (react-markdown + GFM + KaTeX + tables).
       return isUser ? (
-        text
+        renderTextWithMentions(text, mentionNames ?? [])
       ) : (
         <MarkdownRenderer className="prose prose-sm dark:prose-invert max-w-none bot-bubble-markdown">
           {text}
@@ -119,23 +143,24 @@ export function BotBubbleRow({
 
   return (
     <div
-      className={`bot-chat-row ${isUser ? 'bot-chat-row--user' : 'bot-chat-row--assistant'}`}
+      className={`bot-chat-row${grouped ? ' bot-chat-row--grouped' : ''} ${isUser ? 'bot-chat-row--user' : 'bot-chat-row--assistant'}`}
       data-role={role}
+      data-message-id={messageId}
     >
-      {/* rakazo MessageHoverActions: suppressed while streaming (progress
-          exemption) so selection / stop clicks stay hover-free. */}
-      {!isStreaming && (
-        <BotMessageHoverBar
-          timestamp={timestamp}
-          textToCopy={text}
-          messageId={messageId}
-          thumbsUp={thumbsUp}
-          onToggleThumbsUp={messageId ? toggleThumbsUp : undefined}
-        />
-      )}
       <div className="bot-chat-row__stack">
+        {replyPreview && (
+          <button
+            type="button"
+            className="bot-chat-reply-preview"
+            data-testid="reply-parent-preview"
+            onClick={() => onJumpToReply?.(replyPreview.id)}
+            aria-label="Jump to replied message"
+          >
+            {replyPreview.text || 'Earlier message'}
+          </button>
+        )}
         <div
-          className={`bot-chat-bubble ${isUser ? 'bot-chat-bubble--user' : 'bot-chat-bubble--assistant'} ${bubbleClassName}${deliveryClass}${phaseClass}`}
+          className={`bot-chat-bubble ${isUser ? 'bot-chat-bubble--user' : 'bot-chat-bubble--assistant'} ${bubbleClassName}${deliveryClass}${phaseClass}${groupClass}`}
         >
           {isUser && delivery === 'sending' ? (
             <div className="bot-chat-bubble__sending">
@@ -145,6 +170,20 @@ export function BotBubbleRow({
           ) : bubbleContent}
         </div>
         {thumbsUp && <BotThumbsBadge onRemove={toggleThumbsUp} />}
+        {/* rakazo MessageHoverActions: lives INSIDE the fit-content stack so
+            it anchors to the bubble's open side (screenshot placement).
+            Suppressed while streaming (progress exemption) so selection /
+            stop clicks stay hover-free. */}
+        {!isStreaming && (
+          <BotMessageHoverBar
+            timestamp={timestamp}
+            textToCopy={text}
+            messageId={messageId}
+            thumbsUp={thumbsUp}
+            onToggleThumbsUp={messageId ? toggleThumbsUp : undefined}
+            onReply={onReply}
+          />
+        )}
       </div>
     </div>
   );

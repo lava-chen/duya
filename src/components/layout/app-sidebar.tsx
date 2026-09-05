@@ -43,7 +43,6 @@ import { SidebarSectionItem, type SectionKind } from "./sidebar/SidebarSectionIt
 import {
   bucketThreadsByKind,
   SYSTEM_SECTIONS,
-  SESSION_KIND_PREFIXES,
 } from "./sidebar/section-system";
 import { useSidebarSectionsStore } from "@/stores/sidebar-sections-store";
 import { useTranslation } from "@/hooks/useTranslation";
@@ -56,6 +55,7 @@ import { BotContactListItem } from "./sidebar/BotContactListItem";
 import {
   resolveBotOpenThreadId,
   deriveBotPlaceholderThreadId,
+  matchesBotThread,
   type BotContact,
 } from "./sidebar/bot-contacts";
 import { CreateBotDialog } from "./CreateBotDialog";
@@ -363,8 +363,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     const handleOpenBotById = useCallback(
       (agentId: string) => {
         const liveThreads = useConversationStore.getState().threads;
-        const prefix = `${SESSION_KIND_PREFIXES.bot}${agentId}:`;
-        const bound = liveThreads.find((t) => t.id.startsWith(prefix));
+        const bound = liveThreads.find((t) => matchesBotThread(agentId, t.id));
         const threadId = bound?.id ?? deriveBotPlaceholderThreadId(agentId);
         setActiveThread(threadId);
         setCurrentView("chat");

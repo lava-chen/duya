@@ -3,6 +3,7 @@ import { BotPromptAssembly, fitToBudget } from '../framework'
 import { BOT_BASIC_SYSTEM_PROMPT } from '../basicPrompt'
 import { createBotPromptAssembly } from '../factory'
 import { BOT_IDENTITY_SECTION } from '../catalog'
+import { BOT_MEMORY_USAGE_SECTION } from '../memory/sections'
 import { isBotAgentProfile } from '../loader'
 import type { AgentProfile } from '../../../agent-profile/types'
 import type { BotPromptContext } from '../framework'
@@ -34,10 +35,12 @@ describe('fitToBudget (SectionBudget pure helper)', () => {
 })
 
 describe('BotPromptAssembly', () => {
-  it('emits the stable basic prompt when only placeholders are registered', async () => {
+  it('emits the basic prompt plus the static memory guidance when only placeholders are registered', async () => {
     const assembly = createBotPromptAssembly()
     const out = await assembly.render(emptyCtx)
-    expect(out).toBe(BOT_BASIC_SYSTEM_PROMPT)
+    // memoryUsage is deliberately static (always renders); every other
+    // catalog entry stays a placeholder that omits on an empty ctx.
+    expect(out).toBe(`${BOT_BASIC_SYSTEM_PROMPT}\n\n${BOT_MEMORY_USAGE_SECTION.compute!(emptyCtx)}`)
     // All catalog placeholders must be listed so future wiring is discoverable.
     expect(assembly.listSections()).toContain('botIdentity')
     expect(assembly.listSections()).toContain('botRoster')
@@ -66,12 +69,13 @@ describe('BotPromptAssembly', () => {
     expect(out).not.toContain(BOT_BASIC_SYSTEM_PROMPT)
   })
 
-  it('renderSections returns empty string when all sections are null', async () => {
+  it('renderSections degrades to the static memory guidance when all data sections are null', async () => {
     const assembly = createBotPromptAssembly()
     // Catalog placeholders (identity needs ctx data, roster needs directory) →
-    // empty ctx → nothing rendered → empty tail (safe no-op).
+    // only memoryUsage renders — the one section that must never be absent,
+    // so a fresh bot still learns its memory tiers exist.
     const out = await assembly.renderSections(emptyCtx)
-    expect(out).toBe('')
+    expect(out).toBe(BOT_MEMORY_USAGE_SECTION.compute!(emptyCtx))
   })
 
   it('omits sections that return null and keeps the rest', async () => {

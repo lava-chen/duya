@@ -5,7 +5,12 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 // Translation returns the key so assertions match i18n keys directly.
 vi.mock('@/hooks/useTranslation', () => ({
-  useTranslation: () => ({ t: (k: string) => k }),
+  // Params-aware: keys render as "key" (no params) or "key value1 ..." so
+  // tests can assert interpolated values (plan 497 chip counts).
+  useTranslation: () => ({
+    t: (k: string, params?: Record<string, unknown>) =>
+      params ? `${k} ${Object.values(params).join(' ')}` : k,
+  }),
 }));
 
 // Plan 494: permission state is injected via a mocked usePermissions so
@@ -72,6 +77,7 @@ vi.mock('@/components/icons', () => ({
   PaperclipIcon: () => null,
   ArrowUpIcon: () => null,
   CopyIcon: () => null,
+  ReplyIcon: () => null,
   CheckIcon: () => null,
   ThumbsUpIcon: () => null,
   DotsThreeIcon: () => null,
@@ -135,7 +141,6 @@ const mocks = vi.hoisted(() => ({
       title: '',
       description: '帮忙测试',
       model: 'glm-4',
-      avatarShape: 'blob',
       avatarColor: 'blue',
       boundThreadId: 'bot:test1:abc',
       lastActivity: 0,
@@ -153,6 +158,25 @@ vi.mock('@/components/layout/sidebar/use-bot-contacts', () => ({
     hidden: [],
     loading: false,
     reload: mocks.reload,
+  }),
+}));
+
+// Plan 497: the pair overlay's data hook needs the electronAPI fetch path,
+// absent in jsdom — stub fixed entries so the overlay body is assertable.
+vi.mock('./bot/use-agent-dm-pair', () => ({
+  useAgentDmPairMessages: () => ({
+    entries: [
+      {
+        key: 'pair-k1',
+        senderAgentId: 'test1',
+        text: '原始正文',
+        timestamp: 1700000000000,
+        intent: null,
+        priority: false,
+      },
+    ],
+    isLoading: false,
+    refresh: () => {},
   }),
 }));
 
@@ -439,5 +463,106 @@ describe('BotDirectChatView', () => {
     expect(screen.getByText('Bash')).toBeDefined();
     fireEvent.click(screen.getByText('permission.deny'));
     expect(permissionMocks.respondToPermission).toHaveBeenCalledWith('deny', undefined, undefined);
+  });
+
+  // Plan 497 — collapsed DM chips + read-only pair overlay.
+  describe('agent DM chips (plan 497)', () => {
+    function dm(partial: {
+      id: string;
+      direction: 'sent' | 'received';
+      peerId: string;
+      peerName?: string;
+      text?: string;
+    }): Message {
+      const peerName = partial.peerName ?? partial.peerId;
+      const text = partial.text ?? 'hello';
+      return msg({
+        id: partial.id,
+        role: partial.direction === 'sent' ? 'assistant' : 'user',
+        content: `→ ${peerName}: ${text}`,
+        source: 'agent_dm',
+        agentDmMeta: {
+          direction: partial.direction,
+          peerId: partial.peerId,
+          peerName,
+          text,
+        },
+      });
+    }
+
+    it('collapses consecutive same-peer markers into one clickable chip', () => {
+      const messages: Message[] = [
+        msg({ id: 'm1', role: 'user', content: '帮我问问' }),
+        dm({ id: 'd1', direction: 'sent', peerId: 'peer-a', peerName: '原型师' }),
+        dm({ id: 'd2', direction: 'sent', peerId: 'peer-a', peerName: '原型师' }),
+      ];
+      const { container } = render(<BotDirectChatView {...baseProps} messages={messages} />);
+      const chips = container.querySelectorAll('.bot-chat-dm-chip');
+      expect(chips.length).toBe(1);
+      // Full marker bodies never render as bubbles in the transcript.
+      expect(container.textContent).not.toContain('hello');
+      expect(screen.getByText('bot.dm.chipSent', { exact: false })).toBeDefined();
+      expect(container.textContent).toContain('bot.dm.chipCount 2');
+    });
+
+    it('splits separate bursts between the same pair into distinct chips', () => {
+      const messages: Message[] = [
+        dm({ id: 'd1', direction: 'sent', peerId: 'peer-a' }),
+        msg({ id: 'm1', role: 'user', content: '中间插了一条' }),
+        dm({ id: 'd2', direction: 'sent', peerId: 'peer-a' }),
+      ];
+      const { container } = render(<BotDirectChatView {...baseProps} messages={messages} />);
+      expect(container.querySelectorAll('.bot-chat-dm-chip').length).toBe(2);
+    });
+
+    it('hands the peer to App navigation when a chip is clicked', () => {
+      const messages: Message[] = [
+        dm({ id: 'd1', direction: 'sent', peerId: 'peer-a', peerName: '原型师', text: '原始正文' }),
+      ];
+      const onOpenDmPair = vi.fn();
+      const { container } = render(
+        <BotDirectChatView {...baseProps} messages={messages} onOpenDmPair={onOpenDmPair} />,
+      );
+      fireEvent.click(container.querySelector('.bot-chat-dm-chip')!);
+      expect(onOpenDmPair).toHaveBeenCalledWith('peer-a', '原型师');
+    });
+
+    it('drops hidden-source rows (wake prompts) behind the DM chip', () => {
+      const messages: Message[] = [
+        dm({ id: 'd1', direction: 'received', peerId: 'peer-a', peerName: '幕僚长', text: '同步状态' }),
+        // Wake-run prompt row: persisted source 'system' (plan 497). The
+        // App ingestion filter drops it before the store; the view mirrors
+        // the same source rule as defense in depth.
+        msg({
+          id: 'wake-1',
+          role: 'user',
+          source: 'system',
+          content: "[agent] A message just arrived from another of your user's agents.",
+        }),
+      ];
+      const { container } = render(<BotDirectChatView {...baseProps} messages={messages} />);
+      expect(container.querySelector('.bot-chat-dm-chip')).not.toBeNull();
+      expect(container.textContent).not.toContain('[agent]');
+    });
+
+    it('collapses a fan-out burst into one chip with a peer roster popover', () => {
+      const messages: Message[] = [
+        dm({ id: 'd1', direction: 'sent', peerId: 'peer-a', peerName: '工程师' }),
+        dm({ id: 'd2', direction: 'sent', peerId: 'peer-b', peerName: '研究员' }),
+      ];
+      const onOpenDmPair = vi.fn();
+      const { container } = render(
+        <BotDirectChatView {...baseProps} messages={messages} onOpenDmPair={onOpenDmPair} />,
+      );
+      const chips = container.querySelectorAll('.bot-chat-dm-chip');
+      expect(chips.length).toBe(1);
+      expect(chips[0].getAttribute('data-direction')).toBe('multi');
+      // Popover opens on chip click; a roster row hands the peer to App.
+      fireEvent.click(chips[0]);
+      const rows = container.querySelectorAll('.bot-chat-dm-chip__popover-row');
+      expect(rows.length).toBe(2);
+      fireEvent.click(rows[1]);
+      expect(onOpenDmPair).toHaveBeenCalledWith('peer-b', '研究员');
+    });
   });
 });

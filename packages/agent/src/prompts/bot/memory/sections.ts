@@ -17,6 +17,20 @@
 
 import type { BotSectionDef } from '../framework.js'
 import { renderMemoryOwn, renderMemoryProject, renderMemoryUser } from './render.js'
+import { renderMemoryUsage } from './usage.js'
+
+/**
+ * Static usage guidance rendered for every bot session (even with no
+ * memory yet) — without it a fresh bot never learns its own tier exists
+ * and the own tier stays empty forever (479 activation, grok parity).
+ */
+export const BOT_MEMORY_USAGE_SECTION: BotSectionDef = {
+  name: 'memoryUsage',
+  description:
+    'Static memory usage guidance: tier semantics, shard paths, update_state writes, precedence (479 activation).',
+  budgetChars: 2400,
+  compute: renderMemoryUsage,
+}
 
 function computeTier<K extends 'own' | 'user' | 'project'>(
   tier: K,

@@ -1,26 +1,12 @@
 /**
- * bot-avatar.ts — Bot avatar character tokens (Plan 483 / 485).
- *
- * Mirrors grok-bot's character system: a bot avatar is a (shape, color)
- * token pair rendered as a vector character — no image upload required
- * for the base flow. Rendered by the renderer's BotCharacterAvatar.
+ * bot-avatar.ts — Bot avatar color tokens + avatar image rules (Plan 483/485,
+ * revised 2026-09-05: geometric shape tokens removed — an avatar is either a
+ * colored initial circle (color token) or an uploaded image file stored in
+ * the bot's agent directory).
  *
  * Canonical constants live here (main process); the renderer keeps a
  * synced copy in `src/lib/bot-avatar.ts` (same convention as git-ipc).
  */
-
-export const AVATAR_SHAPES = [
-  'blob',
-  'pebble',
-  'squircle',
-  'tablet',
-  'wedge',
-  'hex',
-  'cloud',
-  'teardrop',
-] as const;
-
-export type BotAvatarShape = (typeof AVATAR_SHAPES)[number];
 
 export interface AvatarColorToken {
   id: string;
@@ -44,12 +30,7 @@ export const AVATAR_COLORS: readonly AvatarColorToken[] = [
 
 export type BotAvatarColor = (typeof AVATAR_COLORS)[number]['id'];
 
-const SHAPE_SET: ReadonlySet<string> = new Set(AVATAR_SHAPES);
 const COLOR_SET: ReadonlySet<string> = new Set(AVATAR_COLORS.map((c) => c.id));
-
-export function isValidAvatarShape(value: unknown): value is BotAvatarShape {
-  return typeof value === 'string' && SHAPE_SET.has(value);
-}
 
 export function isValidAvatarColor(value: unknown): value is BotAvatarColor {
   return typeof value === 'string' && COLOR_SET.has(value);
@@ -59,3 +40,58 @@ export function isValidAvatarColor(value: unknown): value is BotAvatarColor {
 export function avatarColorHex(color: string): string | null {
   return AVATAR_COLORS.find((c) => c.id === color)?.value ?? null;
 }
+
+/**
+ * Allowed avatar image files: the canonical stem `avatar` plus a fixed
+ * extension whitelist. Filenames are validated before any path is resolved
+ * inside the agent directory (no separators / traversal possible).
+ */
+export const AVATAR_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'] as const;
+
+export type BotAvatarImageExtension = (typeof AVATAR_IMAGE_EXTENSIONS)[number];
+
+const AVATAR_IMAGE_STEM = 'avatar';
+const EXT_SET: ReadonlySet<string> = new Set(AVATAR_IMAGE_EXTENSIONS);
+
+/**
+ * Split `<stem>.<ext>` without regex; returns null unless the string has
+ * exactly one dot-separated extension (used for avatar filename validation).
+ */
+function splitStemExtension(
+  value: string,
+): { stem: string; ext: string } | null {
+  const dot = value.indexOf('.');
+  if (dot <= 0 || dot === value.length - 1) return null;
+  if (value.indexOf('.', dot + 1) !== -1) return null;
+  return { stem: value.slice(0, dot), ext: value.slice(dot + 1).toLowerCase() };
+}
+
+export function isValidAvatarImageFilename(
+  value: unknown,
+): value is `avatar.${BotAvatarImageExtension}` {
+  if (typeof value !== 'string') return false;
+  const parts = splitStemExtension(value);
+  return parts !== null && parts.stem === AVATAR_IMAGE_STEM && EXT_SET.has(parts.ext);
+}
+
+/** Extension of a stored avatar filename (canonical `avatar.*` stem); null when not whitelisted. */
+export function avatarImageExtension(filename: string): BotAvatarImageExtension | null {
+  const parts = splitStemExtension(filename);
+  if (parts === null || parts.stem !== AVATAR_IMAGE_STEM || !EXT_SET.has(parts.ext)) {
+    return null;
+  }
+  return parts.ext as BotAvatarImageExtension;
+}
+
+/**
+ * Extension of an avatar IMAGE SOURCE (a user-picked or model-generated
+ * file with an arbitrary name — e.g. `photo.png`, `generated.svg`).
+ * Only the extension is checked; the `avatar.*` stem applies to stored
+ * filenames, not sources.
+ */
+export function avatarSourceExtension(filename: string): BotAvatarImageExtension | null {
+  const parts = splitStemExtension(filename);
+  return parts !== null && EXT_SET.has(parts.ext) ? (parts.ext as BotAvatarImageExtension) : null;
+}
+
+export const BOT_AVATAR_MAX_BYTES = 5 * 1024 * 1024;

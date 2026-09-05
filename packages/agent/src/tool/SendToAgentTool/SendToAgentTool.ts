@@ -16,13 +16,18 @@ import type { Tool, ToolResult, ToolUseContext } from "../../types.js";
 import { SEND_TO_AGENT_TOOL_NAME } from "./constants.js";
 import {
   AgentDmEnvelope,
+  AgentDmIntent,
   ImageRef,
   clampAgentMessage,
   encodeEnvelope,
+  getBotSessionId,
+  isAgentDmIntent,
+  parseAgentIdFromBotSession,
   prepareEnvelopeForSend,
 } from "../../agent/dm/index.js";
 import { dmCycleDetector, dmSendLimiter } from "../../agent/dm/dm-cycle-detector.js";
 import { mailboxSend } from "../../session/db.js";
+import { appendMessages } from "../../session/db.js";
 import { readConfigAgents } from "../../agent-profile/config-agents.js";
 
 /** Input schema for SendToAgent tool. */
@@ -57,6 +62,17 @@ const SEND_TO_AGENT_SCHEMA: Record<string, unknown> = {
       default: false,
       description:
         "If true, this is a priority message that interrupts the recipient's current non-user work.",
+    },
+    intent: {
+      type: "string",
+      enum: ["request", "result", "question", "status", "fyi"],
+      description:
+        "What kind of message this is. request/question: the recipient acts and their final response is AUTO-RETURNED to you as the result. result: delivery of an outcome they asked for. status/fyi: informational only. Omit for plain conversation.",
+    },
+    replyToMessageId: {
+      type: "string",
+      description:
+        "When replying to an inbound agent message, pass the clientMsgId shown in its cue so the exchange threads and hop limits apply.",
     },
   },
   required: ["toAgentId", "text"],
@@ -105,6 +121,15 @@ export class SendToAgentTool implements Tool {
     const text = (input.text as string) || "";
     const images = (input.images as ImageRef[] | undefined) ?? [];
     const priority = (input.priority as boolean) ?? false;
+    // Plan 477 P4.1 — optional intent classification; invalid values are
+    // ignored (treated as plain conversation) rather than rejected.
+    const intent: AgentDmIntent | undefined = isAgentDmIntent(input.intent)
+      ? input.intent
+      : undefined;
+    const replyToMessageId =
+      typeof input.replyToMessageId === "string" && input.replyToMessageId.trim()
+        ? input.replyToMessageId.trim()
+        : undefined;
 
     // Get sender identity from context
     const fromAgentId = context?.options?.sessionId || process.env.SESSION_ID || "unknown";
@@ -129,7 +154,11 @@ export class SendToAgentTool implements Tool {
       };
     }
 
-    if (toAgentId === fromAgentId) {
+    // The sender's own id is its persistent session id (`bot:<agentId>`) while
+    // roster ids are bare — normalize before the self-send comparison or the
+    // bot can DM itself.
+    const selfAgentId = parseAgentIdFromBotSession(fromAgentId) ?? fromAgentId;
+    if (toAgentId === selfAgentId) {
       return {
         id: randomUUID(),
         name: this.name,
@@ -141,7 +170,6 @@ export class SendToAgentTool implements Tool {
     // === P3.2: Validate target agent exists in botRoster ===
     const agents = await readConfigAgents();
     const targetConfig = agents[toAgentId];
-    const targetName = targetConfig?.name ?? `Agent ${toAgentId}`;
 
     if (!targetConfig) {
       // Target agent not found in roster - show available agents
@@ -152,6 +180,7 @@ export class SendToAgentTool implements Tool {
       const msg = `Error: Agent "${toAgentId}" not found. Available agents: ${availableAgents || "none configured"}.`;
       return { id: randomUUID(), name: this.name, result: msg, error: true };
     }
+    const targetName = targetConfig.name || `Agent ${toAgentId}`;
 
     // === Cycle detection: prevent A↔B same-pair cycles ===
     if (dmCycleDetector.hasEdge(toAgentId, fromAgentId)) {
@@ -186,8 +215,10 @@ export class SendToAgentTool implements Tool {
       text: clampedText,
       images: images.length > 0 ? images : undefined,
       priority: priority || undefined,
+      intent: intent || undefined,
       timestampMs,
       clientMsgId,
+      ...(replyToMessageId ? { replyTo: { messageId: replyToMessageId } } : {}),
     };
 
     // === Prepare and encode ===
@@ -196,9 +227,16 @@ export class SendToAgentTool implements Tool {
 
     // === Send to mailbox (kind='agent_dm') ===
     try {
-      const row = mailboxSend({
+      // IMPORTANT: must await. In IPC mode mailboxSend returns a Promise —
+      // without await the try/catch never sees DB failures (unhandled
+      // rejection) and the tool reports success even when the write failed.
+      await mailboxSend({
         id: randomUUID(),
-        sessionId: toAgentId, // Target agent's session (resolver handles this)
+        // The mailbox row must carry the target's PERSISTENT bot session id
+        // (`bot:<agentId>`), not the bare roster id — the wake dispatcher
+        // addresses the target's session with it verbatim (agent-dm-dispatcher).
+        // A bare agent id here lands the wake on a session that never exists.
+        sessionId: getBotSessionId(toAgentId),
         submittedDuringRunId: "", // DM is async, no run context
         content: encodedContent,
         kind: "agent_dm",
@@ -210,8 +248,40 @@ export class SendToAgentTool implements Tool {
       dmCycleDetector.addEdge(fromAgentId, toAgentId);
       dmSendLimiter.recordSend("default");
 
+      // === Plan 477 P4.4: sender-side marker row ===
+      // Persist an agent_dm-sourced message in the SENDER's own transcript so
+      // the bot-direct chat shows a compact "→ target" card (mirror of the
+      // receiver's marker). Best-effort: a transcript failure must not undo
+      // the (already durable) mailbox delivery.
+      try {
+        await appendMessages(fromAgentId, [
+          {
+            id: randomUUID(),
+            role: "assistant",
+            content: `→ ${targetName}: ${clampedText}`,
+            status: "complete",
+            msg_type: "text",
+            source: "agent_dm",
+            timestamp: Date.now(),
+            metadata: {
+              source: "agent_dm",
+              agentDm: {
+                direction: "sent",
+                peerId: toAgentId,
+                peerName: targetName,
+                text: clampedText,
+                intent: intent ?? null,
+                clientMsgId,
+              },
+            },
+          },
+        ]);
+      } catch {
+        // Marker persistence is cosmetic — swallow (wake run transcripts may
+        // not exist for synthetic sessions).
+      }
+
       // === Build response ===
-      const targetName = `Agent ${toAgentId}`;
       if (priority) {
         return {
           id: randomUUID(),

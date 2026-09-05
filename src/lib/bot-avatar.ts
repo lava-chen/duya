@@ -1,21 +1,10 @@
 /**
  * bot-avatar.ts — renderer mirror of `electron/config/bot-avatar.ts`
- * (Plan 483/485). Keep the two files synchronized: canonical source is
- * the main-process module; unknown tokens must fall back gracefully.
+ * (Plan 483/485, revised 2026-09-05: shape tokens removed; an avatar is a
+ * colored initial circle or an uploaded image file). Keep the two files
+ * synchronized: canonical source is the main-process module; unknown tokens
+ * must fall back gracefully.
  */
-
-export const BOT_AVATAR_SHAPES = [
-  'blob',
-  'pebble',
-  'squircle',
-  'tablet',
-  'wedge',
-  'hex',
-  'cloud',
-  'teardrop',
-] as const;
-
-export type BotAvatarShape = (typeof BOT_AVATAR_SHAPES)[number];
 
 export interface BotAvatarColorToken {
   id: string;
@@ -36,12 +25,6 @@ export const BOT_AVATAR_COLORS: readonly BotAvatarColorToken[] = [
   { id: 'magenta', label: 'Magenta', value: '#FF309B' },
   { id: 'gray', label: 'Gray', value: '#777777' },
 ];
-
-const SHAPE_SET: ReadonlySet<string> = new Set(BOT_AVATAR_SHAPES);
-
-export function isKnownAvatarShape(value: string | undefined): value is BotAvatarShape {
-  return typeof value === 'string' && SHAPE_SET.has(value);
-}
 
 /** Hex for a known color token; unknown/empty → null (caller falls back). */
 export function botAvatarColorHex(color: string | undefined): string | null {

@@ -174,6 +174,56 @@ export class MessageLog {
         );
       },
     },
+    {
+      // Plan 493 (Phase B) repair — id=13 was edited AFTER some dev DBs had
+      // already recorded schema_version=13 (CoreDatabase skips migrations
+      // with `id <= current`), so `message_index.generation` and
+      // `sessions.agent_id` never landed on those DBs and the first
+      // `listBySessionMultiFile` / bot append died with SQLITE_ERROR
+      // "no such column: generation". This migration re-applies the same
+      // idempotent blocks under a fresh id. On fresh installs every guard
+      // is a no-op; on affected DBs it repairs the missing columns.
+      id: 14,
+      name: 'repair_plan493_generation_and_agent_id',
+      up: (db) => {
+        // message_index.generation
+        const indexExists = db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='message_index'",
+          )
+          .get();
+        if (indexExists) {
+          const indexInfo = db
+            .prepare('PRAGMA table_info(message_index)')
+            .all() as Array<{ name: string }>;
+          const indexCols = new Set(indexInfo.map((c) => c.name));
+          if (!indexCols.has('generation')) {
+            db.exec(
+              'ALTER TABLE message_index ADD COLUMN generation INTEGER NOT NULL DEFAULT 0',
+            );
+          }
+        }
+
+        // sessions.agent_id (skip gracefully when the table is absent).
+        const sessionsExists = db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'",
+          )
+          .get();
+        if (!sessionsExists) return;
+
+        const tableInfo = db
+          .prepare('PRAGMA table_info(sessions)')
+          .all() as Array<{ name: string }>;
+        const cols = new Set(tableInfo.map((c) => c.name));
+        if (!cols.has('agent_id')) {
+          db.exec('ALTER TABLE sessions ADD COLUMN agent_id TEXT DEFAULT NULL');
+        }
+        db.exec(
+          'CREATE INDEX IF NOT EXISTS idx_sessions_agent_id ON sessions(agent_id) WHERE agent_id IS NOT NULL',
+        );
+      },
+    },
   ];
 
   private readonly db: SqliteDatabase;

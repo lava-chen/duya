@@ -30,6 +30,19 @@ describe('BOT_TOOLSET', () => {
     expect(BOT_TOOLSET).toContain('update_state');
   });
 
+  it('contains the plan 492 self-management tools', () => {
+    expect(BOT_TOOLSET).toContain('create_agent');
+    expect(BOT_TOOLSET).toContain('update_agent');
+  });
+
+  it('contains image_generate (grok static-surface parity, 2026-09-05)', () => {
+    expect(BOT_TOOLSET).toContain('image_generate');
+  });
+
+  it('does not claim the always-exposed ReactToMessage (plan 490 P1)', () => {
+    expect(BOT_TOOLSET).not.toContain('ReactToMessage');
+  });
+
   it('does not claim the always-exposed meta tools (T4/T5)', () => {
     expect(BOT_TOOLSET).not.toContain('tool_schema');
     expect(BOT_TOOLSET).not.toContain('tool_invoke');
@@ -51,10 +64,15 @@ describe('applyBotToolset', () => {
     expect(twice.allowedTools.filter((t) => t === 'update_state')).toHaveLength(1);
   });
 
-  it('leaves a "*" allowlist untouched', () => {
-    const profile = makeProfile(['*']);
-    const merged = applyBotToolset(profile);
-    expect(merged.allowedTools).toEqual(['*']);
+  it('appends the bot toolset to a "*" allowlist (plan 496 exposure promotion)', () => {
+    // The default `full` base profile resolves to ['*']. The exact names must
+    // still be appended: ToolFilter only promotes a discoverable tool on an
+    // exact allowlist entry, so a bare '*' bot never saw SendMessage.
+    const merged = applyBotToolset(makeProfile(['*']));
+    expect(merged.allowedTools).toContain('*');
+    for (const tool of BOT_TOOLSET) {
+      expect(merged.allowedTools).toContain(tool);
+    }
   });
 
   it('treats an undefined allowlist as no-op', () => {

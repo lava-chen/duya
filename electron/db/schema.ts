@@ -1,5 +1,6 @@
 import { getLogger, LogComponent } from '../logging/logger';
 import { ensureToolApprovalTables } from './toolApprovalState';
+import { createSendMessageStateTables } from './sendMessageState';
 
 // Use type-only import to avoid bundling better-sqlite3 in the schema module
 type BetterSqlite3Db = import('better-sqlite3').Database;
@@ -488,6 +489,11 @@ export function initializeSchema(db: BetterSqlite3Db): void {
   `);
   const now = Date.now();
   insertCanvas.run('default', '工作台', null, '{}', 0, now, now);
+
+  // Plan 489 P0.2 — SendMessage card side-state tables (widget / cursor-agent /
+  // secret-request). Idempotent self-repair, reused by migration 55 so fresh and
+  // legacy DBs converge on the same shape.
+  createSendMessageStateTables(db);
 
   runMigrations(db);
   // Plan 498: module-owned side tables, self-repaired on every boot so a
@@ -2604,9 +2610,19 @@ const migrations: Migration[] = [
     },
   },
   {
+    // Plan 489 P0.2 — SendMessage card side-state tables. Idempotent (CREATE
+    // TABLE IF NOT EXISTS), no-op on DBs already repaired by the self-repair
+    // region in initializeSchema.
+    id: 55,
+    name: 'add_send_message_card_side_state',
+    migrate(db: BetterSqlite3Db): void {
+      createSendMessageStateTables(db);
+    },
+  },
+  {
     // Plan 498: persistent tool-approval side state. Idempotent DDL also runs
-    // as a self-repair step in initializeSchema. Id 55 is intentionally left
-    // for parallel in-flight work (send-message card side state).
+    // as a self-repair step in initializeSchema. Id 55 was reserved for the
+    // send-message card side state (landed in parallel) — this stays 56.
     id: 56,
     name: 'add_tool_approval_side_state',
     migrate(db: BetterSqlite3Db): void {

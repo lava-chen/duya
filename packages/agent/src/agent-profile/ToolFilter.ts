@@ -77,7 +77,21 @@ export function isToolVisible(
   // tool_invoke (plan 480). discoverable keeps the legacy 241 behavior
   // (tool_search hit → injected next turn) until that path is retired.
   if (exposeMode === 'catalog') return false;
-  if (exposeMode === 'discoverable' && !discovered.has(toolName)) return false;
+  // Plan 496: an EXACT (non-wildcard) allowlist entry is a deliberate
+  // exposure decision — it promotes a discoverable tool into the toolset
+  // without a tool_search round-trip. This is what makes `SendMessage` /
+  // `send_to_agent` / `update_state` visible to bot profiles from turn one:
+  // bot-toolset.ts names them explicitly, and the pre-496 behavior gated
+  // them behind discovery so the bot's only voice was unreachable (the
+  // model cannot search for a tool it does not know it needs). Wildcards
+  // (`*`, `file:*`) deliberately do NOT promote — a `full`-profile bot must
+  // still name the tool, and main-session `'*'` profiles stay quiet.
+  const promoted =
+    c.allowedTools?.includes(toolName) === true ||
+    c.profileAllowedPatterns?.includes(toolName) === true;
+  if (exposeMode === 'discoverable' && !discovered.has(toolName) && !promoted) {
+    return false;
+  }
 
   // 2. Denylist (caller exact + profile wildcard) — deny wins
   if (c.disabledTools?.includes(toolName)) return false;

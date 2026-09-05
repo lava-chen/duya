@@ -44,29 +44,39 @@ import {
 } from '../../packages/agent/src/wake/queue'
 import type { WakeItem } from '../../packages/agent/src/wake/types'
 import { createTurnEpochState } from '../../packages/agent/src/wake/epoch'
+import { decidePreemption, asRedriven, type RunOrigin } from '../../packages/agent/src/wake/preemption'
 import { buildAgentInboundWakePrompt } from '../../packages/agent/src/agent/dm/index.js'
 import { getCoreStores } from '../db/core-connection'
-import { runWakePromptInExistingSession } from './wake-run'
+import { runWakePromptInExistingSession, type WakeRunOptions, type WakeRunOutcome } from './wake-run'
+import { maybeAutoReturnDmResult, runUsedSendToAgent } from './agent-dm-return'
 import { reviveForInbound } from './channels'
 import { parseAgentIdFromBotSession } from './bot-session-id'
+import { interruptCronSession } from '../automation/agent-run'
 import { getLogger, LogComponent } from '../logging/logger'
 
 export interface WakeDispatcherDeps {
   /** Busy/idle truth for a session (session_runtime_locks mirror). */
   isLocked(sessionId: string): boolean
   /** Launch one hidden wake run and resolve when it fully finishes. */
-  runWake(sessionId: string, prompt: string, opts?: WakeRunOptions): Promise<void>
+  runWake(sessionId: string, prompt: string, opts?: WakeRunOptions): Promise<WakeRunOutcome>
+  /**
+   * Best-effort interrupt of the session's in-flight run (Plan 495 G3,
+   * 476 §2.2 preemption). Optional: tests and embedders may omit it, in
+   * which case preempting wakes fall back to parking.
+   */
+  interruptRun?(sessionId: string): void
 }
 
-/** Per-run options resolved by the dispatcher (477 P3.1). */
-export interface WakeRunOptions {
-  /** Bot profile id for persistent `bot:<agentId>` sessions. */
-  agentProfileId?: string
-}
+/** Per-run options resolved by the dispatcher (477 P3.1; see wake-run.ts). */
+export type { WakeRunOptions, WakeRunOutcome } from './wake-run'
 
 interface SessionWakeState {
   queue: WakeQueue
   draining: boolean
+  /** The wake item whose run this dispatcher is currently awaiting. */
+  runningItem?: WakeItem
+  /** Displaced item awaiting its run's return so it can re-queue redriven. */
+  redrivePending?: WakeItem
 }
 
 /** In-memory recently-dispatched dedupe (476 P0-D; Phase 3 → pending_wakes). */
@@ -104,6 +114,7 @@ function currentDeps(): WakeDispatcherDeps {
         }
       },
       runWake: (sessionId, prompt, opts) => runWakePromptInExistingSession(sessionId, prompt, opts),
+      interruptRun: (sessionId) => interruptCronSession(sessionId),
     }
   }
   return activeDeps
@@ -128,7 +139,9 @@ export function enqueueWakeItemForSession(
   // no such item AND we already dispatched this taskId within the window do
   // we suppress the wake entirely ('deduped').
   const alreadyQueued = hasQueuedItem(state.queue, item.id)
-  if (!alreadyQueued && item.payload.kind === 'completion') {
+  if (!alreadyQueued && !item.isRedriven && item.payload.kind === 'completion') {
+    // Plan 495 G3: redriven items bypass the recently-dispatched window —
+    // they were re-queued deliberately after preemption, not re-notified.
     const lastAt = recentWakeTaskIds.get(item.payload.taskId)
     if (lastAt != null && now - lastAt < DEDUPE_WINDOW_MS) return 'deduped'
   }
@@ -150,7 +163,53 @@ export function enqueueWakeItemForSession(
 
   state.queue = queue
   kick(sessionId)
+  // Plan 495 G3 / 476 §2.2: preemption is decided at enqueue time — the
+  // drain loop is blocked awaiting the in-flight runWake, so a preempting
+  // wake that arrives mid-run must interrupt from here, not wait for the
+  // next drain pass.
+  if (outcome === 'added') tryPreemptRunning(sessionId, stamped)
   return outcome
+}
+
+/**
+ * Preemption decision for an incoming wake against the dispatcher-owned
+ * run in flight (Plan 495 G3, grok send-turn-dispatch parity):
+ *  - only when the session is locked (busy) and THIS dispatcher started
+ *    the running wake (`runningItem` attribution — a renderer chat or cron
+ *    holding the lock is never interrupted);
+ *  - only when `decidePreemption` says the incoming wake preempts (user
+ *    message / priority DM vs a non-user run);
+ *  - once per displaced run (`redrivePending` guard).
+ *
+ * The displaced run is interrupted; when its runWake returns, the drain
+ * re-queues it with `isRedriven: true` so the work is not lost.
+ */
+function tryPreemptRunning(sessionId: string, incoming: WakeItem): void {
+  const state = getState(sessionId)
+  if (!currentDeps().isLocked(sessionId)) return
+  const running = state.runningItem
+  if (!running || state.redrivePending) return
+  if (running.id === incoming.id) return
+  const decision = decidePreemption(incoming, runOriginOf(running))
+  if (decision.action !== 'preempt') return
+  // Preempting wakes start a new epoch so the displaced run's tail
+  // side-effects stand down (476 §2.6 tail guard).
+  turnEpochs.maybeAdvanceForItem(sessionId, incoming)
+  state.redrivePending = running
+  getLogger().info('Wake preemption: interrupting in-flight run', {
+    sessionId,
+    displacedSource: running.source,
+    incomingSource: incoming.source,
+    reason: decision.reason,
+  }, LogComponent.Automation)
+  try {
+    currentDeps().interruptRun?.(sessionId)
+  } catch (err) {
+    getLogger().warn('Wake preemption: interrupt failed', {
+      sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    }, LogComponent.Automation)
+  }
 }
 
 /**
@@ -288,7 +347,16 @@ async function drain(sessionId: string): Promise<void> {
     for (;;) {
       const head = peekNextWake(state.queue)
       if (!head) break
-      if (currentDeps().isLocked(sessionId)) break // user pre-empted mid-pass
+      if (currentDeps().isLocked(sessionId)) {
+        // Plan 495 G3 / 476 §2.2 + §6.4: preempt a dispatcher-owned run
+        // when the queued head is a preempting wake (user message /
+        // priority DM); the displaced run redrives after the preempting
+        // turn finishes. The enqueue path covers the mid-run case (the
+        // drain is blocked awaiting runWake); this covers items already
+        // parked when a user turn took the lock.
+        tryPreemptRunning(sessionId, head)
+        break
+      }
 
       const dequeued = dequeueNextWake(state.queue)
       if (!dequeued) break
@@ -300,10 +368,13 @@ async function drain(sessionId: string): Promise<void> {
       // is noise — the user has taken over the conversation. Agent-lane DMs
       // (477) and user-lane items are NOT dropped: a DM is the bot's own
       // inbox, so it queues behind the user turn and runs in lane order
-      // instead of being silently lost.
+      // instead of being silently lost. Plan 495 G3: redriven items are
+      // exempt too — they were re-queued precisely so the displaced work
+      // still happens once the preempting turn finishes.
       const epoch = dequeued.item.turnEpoch
       if (
         dequeued.item.lane === 'background' &&
+        !dequeued.item.isRedriven &&
         epoch != null &&
         !turnEpochs.isCurrent(sessionId, epoch)
       ) {
@@ -333,18 +404,80 @@ async function drain(sessionId: string): Promise<void> {
 
       const prompt = promptForItem(dequeued.item)
       if (!prompt) continue
+      // NOTE (Plan 495 G3): dispatching a user-lane wake does NOT advance
+      // the epoch — the existing 476/477 contract keeps background wakes
+      // queued behind a user wake running in lane order (they are the
+      // bot's inbox, not noise). The epoch advances only when main sees a
+      // real user turn (lock:acquire userTurn=true) or on preemption below.
+      // This run owns the epoch it was dispatched under, so the tail guard
+      // only fires when the epoch advances *mid-run*.
+      const dispatchEpoch = turnEpochs.current(sessionId)
       // 477 P3.1: a bot persistent session (`bot:<agentId>`) runs with the
       // bot's profile so the woken worker builds the bot toolset and 474
       // prompt sections. The fixed session id is the binding itself — the
       // agent id parses straight out of it, no lookup needed.
       const botAgentId = parseAgentIdFromBotSession(sessionId)
+      state.runningItem = dequeued.item
       try {
-        await currentDeps().runWake(
+        const outcome = await currentDeps().runWake(
           sessionId,
           prompt,
           botAgentId ? { agentProfileId: botAgentId } : undefined,
         )
+        state.runningItem = undefined
+        // Plan 495 G3 redrive: if this run was displaced by a preempting
+        // wake, re-queue the item (epoch re-stamped at enqueue) so the work
+        // still happens after the preempting turn finishes.
+        if (state.redrivePending?.id === dequeued.item.id) {
+          state.redrivePending = undefined
+          const requeued = asRedriven({ ...dequeued.item, turnEpoch: undefined })
+          getLogger().info('Wake redrive: re-queueing displaced run', {
+            sessionId,
+            source: requeued.source,
+          }, LogComponent.Automation)
+          enqueueWakeItemForSession(sessionId, requeued)
+        }
+        // Plan 495 G3 — run tail epoch guard (grok turn-runtime parity):
+        // when this item's epoch is no longer current, a newer user turn
+        // superseded the run and its user-facing tail side-effects must
+        // stand down (no auto-return, grok "旧回合不 nudge 不上报").
+        const tailSuppressed = turnEpochs.current(sessionId) !== dispatchEpoch
+        if (tailSuppressed) {
+          getLogger().debug('Wake run tail suppressed: superseded by newer user turn', {
+            sessionId,
+            source: dequeued.item.source,
+            dispatchEpoch,
+            currentEpoch: turnEpochs.current(sessionId),
+          }, LogComponent.Automation)
+        } else if (dequeued.item.payload.kind === 'dm' && outcome) {
+          // 477 P4.3 — auto-return: a DM run whose inbound message was a
+          // request/question hands its final response back to the delegating
+          // bot unless the bot already replied explicitly during the run.
+          // Outcome fields are read defensively: injected test deps may return
+          // void (legacy fakes).
+          const dm = dequeued.item.payload
+          if (!runUsedSendToAgent(outcome.events ?? [])) {
+            maybeAutoReturnDmResult(
+              {
+                sessionId,
+                clientMsgId: dm.clientMsgId,
+                fromAgentId: dm.fromAgentId,
+                ...(dm.fromAgentName ? { fromAgentName: dm.fromAgentName } : {}),
+                ...(dm.intent ? { intent: dm.intent } : {}),
+                ...(dm.hops != null ? { hops: dm.hops } : {}),
+              },
+              outcome.output ?? '',
+            )
+          }
+        }
       } catch (err) {
+        state.runningItem = undefined
+        // Plan 495 G3: a displaced run re-queues even on failure, so an
+        // interrupted item is never silently dropped.
+        if (state.redrivePending?.id === dequeued.item.id) {
+          state.redrivePending = undefined
+          enqueueWakeItemForSession(sessionId, asRedriven({ ...dequeued.item, turnEpoch: undefined }))
+        }
         // runWake is best-effort and swallows most failures; this guard is
         // for unexpected throws so one bad item cannot wedge the queue.
         getLogger().warn('Wake run failed', {
@@ -357,6 +490,17 @@ async function drain(sessionId: string): Promise<void> {
   } finally {
     state.draining = false
   }
+}
+
+/**
+ * Attribute a dispatched wake item to the origin that started its run
+ * (Plan 495 G3; grok RunOrigin). Only user-origin runs are immune to
+ * preemption — a user turn is driving, everything else yields.
+ */
+function runOriginOf(item: WakeItem): RunOrigin {
+  if (item.lane === 'user') return 'user'
+  if (item.lane === 'agent') return 'bot'
+  return 'background'
 }
 
 /** Build the model-facing prompt for an item. Empty string = skip silently. */
@@ -422,6 +566,11 @@ function promptForItem(item: WakeItem): string {
         to: { id: parseAgentIdFromBotSession(item.agentId) ?? item.agentId, name: '' },
         text,
         ...(item.payload.priority ? { priority: true } : {}),
+        // Plan 477 P4.1 — intent drives the action paragraph; the cast is
+        // safe because the dispatcher only forwards validated AgentDmIntent
+        // values (unknown strings degrade to the default paragraph inside
+        // the builder).
+        ...(item.payload.intent ? { intent: item.payload.intent as Parameters<typeof buildAgentInboundWakePrompt>[0]['intent'] } : {}),
         timestampMs: item.enqueuedAtMs,
         clientMsgId: item.payload.clientMsgId ?? item.id,
       })

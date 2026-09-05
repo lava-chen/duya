@@ -152,6 +152,15 @@ export async function loadBotPromptContext(agentId?: string): Promise<BotPromptC
     new Map([[agentId, botName], ...roster.map((r) => [r.id, r.name] as const)]),
   )
   if (memory) ctx.memory = memory
+  // 479 activation: absolute shard paths for the memoryUsage guidance
+  // section, so the bot knows where its tiers live on disk.
+  const duyaRoot = duyaRootForMemory()
+  if (duyaRoot) {
+    ctx.memoryRoots = {
+      own: path.join(duyaRoot, 'agents', agentId, 'memory'),
+      userShard: path.join(duyaRoot, 'agents', agentId, 'user'),
+    }
+  }
   // Plan 488 P2.4: read channel snapshots from agents/<agentId>/channels/
   const channels = await readAgentChannelSnapshots(agentId)
   if (channels.length > 0) ctx.channels = channels

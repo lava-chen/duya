@@ -1,20 +1,22 @@
 "use client";
 
 /**
- * CreateBotDialog — grok-style bot creation (Plan 483, add-bot flow
- * aligned with grok-bot's onboarding "create" step).
+ * CreateBotDialog — bot creation (Plan 483, add-bot flow; avatar revised
+ * 2026-09-05: shape tokens removed — creation picks a color for the
+ * initial-circle avatar; image avatars are uploaded in the edit dialog /
+ * settings panel).
  *
- * Fields mirror grok's draft shape:
- *   - template suggestions (tap → fills name + description)
- *   - name (required — submit disabled while empty, like grok)
+ * Fields:
+ *   - template suggestions (tap → fills name + description + color)
+ *   - name (required — submit disabled while empty)
  *   - description
- *   - avatar character: shape × color (8 × 11, defaults blob/blue)
+ *   - avatar color (11 tokens, defaults blue)
  *
  * The id is derived from the name (`deriveBotIdFromName`), never
  * user-authored; the main process re-allocates a collision-free id against
  * disk + tombstones and returns the ACTUAL id, which `onCreated` receives.
  * Submission goes through `config:agents:create`, which
- * seeds the 485 identity layer (profile.json with avatar tokens).
+ * seeds the 485 identity layer (profile.json).
  */
 
 import React, { useEffect, useRef, useState } from "react";
@@ -28,11 +30,7 @@ import { buildBotModelGroups } from "@/lib/bot-model-options";
 import type { ProviderModelGroup } from "@/components/chat/ModelProviderSelector";
 import { BotModelField } from "./BotModelField";
 import type { TranslationKey } from "@/i18n";
-import {
-  BOT_AVATAR_COLORS,
-  BOT_AVATAR_SHAPES,
-  type BotAvatarShape,
-} from "@/lib/bot-avatar";
+import { BOT_AVATAR_COLORS } from "@/lib/bot-avatar";
 import { BotCharacterAvatar } from "./sidebar/BotCharacterAvatar";
 import { deriveBotIdFromName } from "./sidebar/bot-contacts";
 
@@ -49,26 +47,24 @@ interface BotTemplate {
   id: string;
   nameKey: TranslationKey;
   descKey: TranslationKey;
-  shape: BotAvatarShape;
   color: string;
 }
 
 const BOT_TEMPLATES: readonly BotTemplate[] = [
-  { id: "researcher", nameKey: "bot.template.researcher.name", descKey: "bot.template.researcher.desc", shape: "hex", color: "blue" },
-  { id: "chief-of-staff", nameKey: "bot.template.chiefOfStaff.name", descKey: "bot.template.chiefOfStaff.desc", shape: "squircle", color: "violet" },
-  { id: "inbox-triage", nameKey: "bot.template.inboxTriage.name", descKey: "bot.template.inboxTriage.desc", shape: "tablet", color: "cyan" },
-  { id: "night-shift", nameKey: "bot.template.nightShift.name", descKey: "bot.template.nightShift.desc", shape: "cloud", color: "gray" },
-  { id: "lookout", nameKey: "bot.template.lookout.name", descKey: "bot.template.lookout.desc", shape: "teardrop", color: "green" },
-  { id: "prototyper", nameKey: "bot.template.prototyper.name", descKey: "bot.template.prototyper.desc", shape: "blob", color: "orange" },
-  { id: "shopper", nameKey: "bot.template.shopper.name", descKey: "bot.template.shopper.desc", shape: "pebble", color: "magenta" },
-  { id: "digest", nameKey: "bot.template.digest.name", descKey: "bot.template.digest.desc", shape: "wedge", color: "yellow" },
+  { id: "researcher", nameKey: "bot.template.researcher.name", descKey: "bot.template.researcher.desc", color: "blue" },
+  { id: "chief-of-staff", nameKey: "bot.template.chiefOfStaff.name", descKey: "bot.template.chiefOfStaff.desc", color: "violet" },
+  { id: "inbox-triage", nameKey: "bot.template.inboxTriage.name", descKey: "bot.template.inboxTriage.desc", color: "cyan" },
+  { id: "night-shift", nameKey: "bot.template.nightShift.name", descKey: "bot.template.nightShift.desc", color: "gray" },
+  { id: "lookout", nameKey: "bot.template.lookout.name", descKey: "bot.template.lookout.desc", color: "green" },
+  { id: "prototyper", nameKey: "bot.template.prototyper.name", descKey: "bot.template.prototyper.desc", color: "orange" },
+  { id: "shopper", nameKey: "bot.template.shopper.name", descKey: "bot.template.shopper.desc", color: "magenta" },
+  { id: "digest", nameKey: "bot.template.digest.name", descKey: "bot.template.digest.desc", color: "yellow" },
 ];
 
 export function CreateBotDialog({ isOpen, onCancel, onCreated, existingIds }: CreateBotDialogProps) {
   const { t } = useTranslation();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [shape, setShape] = useState<BotAvatarShape>("blob");
   const [color, setColor] = useState("blue");
   const [model, setModel] = useState("");
   const [modelGroups, setModelGroups] = useState<ProviderModelGroup[]>([]);
@@ -81,7 +77,6 @@ export function CreateBotDialog({ isOpen, onCancel, onCreated, existingIds }: Cr
     if (isOpen) {
       setName("");
       setDescription("");
-      setShape("blob");
       setColor("blue");
       setModel("");
       setSubmitting(false);
@@ -112,7 +107,6 @@ export function CreateBotDialog({ isOpen, onCancel, onCreated, existingIds }: Cr
   const applyTemplate = (template: BotTemplate) => {
     setName(t(template.nameKey));
     setDescription(t(template.descKey));
-    setShape(template.shape);
     setColor(template.color);
   };
 
@@ -126,7 +120,6 @@ export function CreateBotDialog({ isOpen, onCancel, onCreated, existingIds }: Cr
         name: name.trim(),
         description: description.trim() || undefined,
         model: model.trim() || undefined,
-        avatarShape: shape,
         avatarColor: color,
       });
       onCreated(createdId);
@@ -178,7 +171,6 @@ export function CreateBotDialog({ isOpen, onCancel, onCreated, existingIds }: Cr
               <BotCharacterAvatar
                 name={t(template.nameKey)}
                 agentId={template.id}
-                avatarShape={template.shape}
                 avatarColor={template.color}
                 size={22}
               />
@@ -232,24 +224,10 @@ export function CreateBotDialog({ isOpen, onCancel, onCreated, existingIds }: Cr
           {t("bot.create.avatar")}
         </div>
         <div className="flex items-center gap-3 mb-3">
-          <BotCharacterAvatar name={name || "?"} agentId="preview" avatarShape={shape} avatarColor={color} size={34} />
-          <div className="flex flex-wrap gap-1.5">
-            {BOT_AVATAR_SHAPES.map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => setShape(s)}
-                aria-label={s}
-                className="rounded-md p-1 transition-colors"
-                style={{
-                  background: shape === s ? "var(--surface-hover)" : "transparent",
-                  outline: shape === s ? "2px solid var(--accent)" : "none",
-                }}
-              >
-                <BotCharacterAvatar name={s} agentId={s} avatarShape={s} avatarColor={color} size={20} />
-              </button>
-            ))}
-          </div>
+          <BotCharacterAvatar name={name || "?"} agentId="preview" avatarColor={color} size={34} />
+          <span className="text-xs" style={{ color: "var(--muted)" }}>
+            {t("bot.create.avatarColorHint")}
+          </span>
         </div>
         <div className="flex flex-wrap gap-1.5 mb-5">
           {BOT_AVATAR_COLORS.map((c) => (

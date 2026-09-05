@@ -84,6 +84,7 @@ export interface CatalogRowOverrides {
   scope_kind?: 'global' | 'project';
   project_id?: string | null;
   agent_type?: string;
+  agent_profile_id?: string | null;
   parent_id?: string | null;
   mode?: string | null;
   working_directory?: string | null;
@@ -113,6 +114,7 @@ export function insertCatalogRow(db: BetterSqlite3Database, overrides: CatalogRo
     overrides.scope_kind ?? 'global',
     overrides.project_id ?? null,
     overrides.agent_type ?? 'main',
+    overrides.agent_profile_id ?? null,
     overrides.parent_id ?? null,
     overrides.mode ?? null,
     overrides.working_directory ?? null,

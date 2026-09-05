@@ -23,7 +23,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { messageDb } from '../../ipc/db-client.js';
+import { messageDb, sendMessageStateDb } from '../../ipc/db-client.js';
+import { getLogger } from '../../utils/logger.js';
 import { SEND_MESSAGE_TOOL_NAME } from './constants.js';
 import type { ToolUseContext } from '../../types.js';
 
@@ -451,6 +452,64 @@ function buildMessageForType(
   }
 }
 
+// ─── Card side-state persistence (Plan 489 P0.2) ────────────────────────────
+// After an interactive card message (widget / cursor-agent / secret-request) is
+// appended to the transcript, mirror its interaction state into the corresponding
+// side table. Best-effort: a state-write failure is logged and swallowed so it
+// never blocks the (already-delivered) main send path.
+async function persistCardState(
+  type: string,
+  built: BuiltMessage,
+  sessionId: string,
+  input: Record<string, unknown>,
+  context: ToolUseContext | undefined,
+): Promise<void> {
+  const messageId = built.message.id;
+  try {
+    const now = Date.now();
+    if (type === 'widget') {
+      const widget = (input.widget as Record<string, unknown>) ?? {};
+      await sendMessageStateDb.createWidgetPending({
+        id: messageId,
+        messageId,
+        sessionId,
+        botAgentId: context?.options?.agentProfileId ?? '',
+        prompt: typeof widget.prompt === 'string' ? widget.prompt : '',
+        widgetJson: JSON.stringify(widget),
+        createdAt: now,
+      });
+    } else if (type === 'cursor-agent') {
+      await sendMessageStateDb.upsertCursorAgentRun({
+        id: messageId,
+        messageId,
+        sessionId,
+        bcId: (input.bcId as string) ?? '',
+        status: 'pending',
+        createdAt: now,
+        updatedAt: now,
+      });
+    } else if (type === 'secret-request') {
+      const secret = (input.secret as Record<string, unknown>) ?? {};
+      await sendMessageStateDb.createSecretPending({
+        id: messageId,
+        messageId,
+        sessionId,
+        label: typeof secret.label === 'string' ? secret.label : '',
+        connector: typeof secret.connector === 'string' ? secret.connector : '',
+        field: typeof secret.field === 'string' ? secret.field : '',
+        createdAt: now,
+      });
+    }
+  } catch (err) {
+    getLogger().error(
+      `sendMessageState persist failed for type: ${type}`,
+      err instanceof Error ? err : new Error(String(err)),
+      { sessionId, messageId },
+      'SendMessageTool',
+    );
+  }
+}
+
 // ─── Channel delivery (Plan 488 P2.1 — only text / attachment) ──────────
 async function deliverToChannel(
   channel: string,
@@ -577,6 +636,10 @@ export class SendMessageTool {
       // The message is tagged with source='send_message' so the bot-direct
       // view can filter for it.
       await messageDb.append(sessionId, [built.message], null);
+
+      // Plan 489 P0.2 — mirror interaction state for interactive card types.
+      // Best-effort: never blocks the message delivery above.
+      await persistCardState(type, built, sessionId, input, context);
 
       return {
         id: built.message.id,

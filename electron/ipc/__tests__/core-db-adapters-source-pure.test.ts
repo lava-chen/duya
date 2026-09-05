@@ -20,6 +20,8 @@ describe('Plan 489 P0.1 — inferMessageSource (pure function)', () => {
       'scratchpad',
       'system',
       'channel_mirror',
+      // Plan 490 P1: ReactToMessage tapback rows.
+      'reaction',
     ] as const)('honors explicit source=%s', (source) => {
       const dto = { role: 'assistant', msg_type: 'text', source } as never;
       expect(inferMessageSource(dto)).toBe(source);
@@ -124,13 +126,16 @@ describe('Plan 489 P0.1 — inferMessageSource (pure function)', () => {
     // Simulates the projection BotDirectChatView will run after P0.3 lands.
     // Verifies that the inference rules produce values that the filter
     // accepts/rejects correctly.
-    const visible = new Set(['user', 'send_message']);
+    // Plan 490 P1: 'reaction' joined BOT_DIRECT_VISIBLE_SOURCES so tapback
+    // rows survive the projection for the future pill renderer.
+    const visible = new Set(['user', 'send_message', 'reaction']);
     const isBotDirectVisible = (s: string | undefined) =>
       typeof s === 'string' && visible.has(s);
 
     it.each([
       ['user', true],
       ['send_message', true],
+      ['reaction', true],
       ['scratchpad', false],
       ['tool_use', false],
       ['thinking', false],

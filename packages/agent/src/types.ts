@@ -328,6 +328,13 @@ export interface ChatOptions {
   /** Agent profile ID to use for this chat turn */
   agentProfileId?: string | null;
   /**
+   * Plan 477/497: true for hidden wake runs (background notification / bot→bot
+   * DM). The wake prompt is model context only — the persisted user row is
+   * tagged source 'system' so it never surfaces in the bot-direct chat (the
+   * visible row is the agent_dm marker written by the dispatcher).
+   */
+  wakeRun?: boolean;
+  /**
    * Plan 450: providers the user @-mentioned in the composer for this run.
    * Connector tools of these providers skip tool_search discovery (exposure
    * promotion) and a one-shot connector-activation reminder is injected into

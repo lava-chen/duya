@@ -13,7 +13,10 @@ export const isTestMode = process.env.DUYA_TEST === '1';
 // app.isPackaged returns true when Playwright _electron launches the Electron
 // binary directly, even in dev. Treat test mode as dev so setupDevMode(),
 // getRendererUrl(), and other isDev-gated paths work correctly.
-export const isDev = !app.isPackaged || isTestMode;
+// Optional chain: under vitest the `electron` package resolves to a plain
+// string (no `app`), and unit tests import modules that reach this file —
+// without the guard every such suite dies at module-eval time.
+export const isDev = !app?.isPackaged || isTestMode;
 export const isPreviewMode = process.env.DUYA_PREVIEW_MODE === 'true';
 export const DEBUG_IPC = process.env.DUYA_DEBUG_IPC === 'true';
 

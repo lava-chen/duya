@@ -6,10 +6,11 @@
  * lifecycle functions from db/ for backward compatibility.
  */
 
-import { ipcMain, app } from 'electron';
+import { ipcMain, app, dialog } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { randomUUID } from 'crypto';
+import { getMainWindow } from '../core/window-manager';
 import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
 import { getAutomationScheduler } from '../automation/Scheduler';
 import type { CreateAutomationCronInput, UpdateAutomationCronInput } from '../automation/types';
@@ -34,7 +35,7 @@ import {
   readGatewaySettingFromStore,
 } from '../config/gateway-setting-adapter';
 import { getConfigStore } from '../config/store-instance';
-import { listConfigAgents, listBots, upsertConfigAgent, deleteConfigAgent, createConfigAgentUnique, updateBotProfileIdentity } from '../config/agents';
+import { listConfigAgents, listBots, upsertConfigAgent, deleteConfigAgent, createConfigAgentUnique, updateBotProfileIdentity, setBotAvatarImage, clearBotAvatarImage } from '../config/agents';
 import {
   getWeixinAccounts,
   upsertWeixinAccount,
@@ -1460,6 +1461,26 @@ export function registerDbHandlers(): void {
   // (profile.json), never config.toml.
   ipcMain.handle('config:agents:updateBotProfile', (_event, id: string, input: unknown) => {
     return updateBotProfileIdentity(id, input as Parameters<typeof updateBotProfileIdentity>[1]);
+  });
+
+  // Avatar image upload: the main process owns the file dialog AND the copy
+  // into the bot's agent directory, so the renderer never touches paths.
+  ipcMain.handle('config:agents:uploadBotAvatar', async (_event, id: string) => {
+    const mainWindow = getMainWindow();
+    if (!mainWindow) throw new Error('no main window');
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Select bot avatar image',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'] },
+      ],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return setBotAvatarImage(id, result.filePaths[0]);
+  });
+
+  ipcMain.handle('config:agents:clearBotAvatar', (_event, id: string) => {
+    return clearBotAvatarImage(id);
   });
 
   ipcMain.handle('db:agentProfile:update', (_event, id: string, data: Record<string, unknown>) => {
@@ -2912,15 +2933,35 @@ export function registerMailboxHandlers(): void {
     // renderer to resume an idle session). Gate is `wake.idleDispatch`;
     // busy sessions park the wake until `lock:release` (P0-A mirror +
     // wake-dispatcher queue); taskId dedupes (P0-D).
-    if (row.kind === 'background_notification' && row.sessionId) {
-      void maybeDispatchIdleWake(row as unknown as Parameters<typeof maybeDispatchIdleWake>[0]).catch(() => {});
+    // `row` is the snake_case IPC DTO — the dispatchers read camelCase
+    // fields (`sessionId`/`clientMsgId`), so map explicitly instead of
+    // casting (a cast silently passed undefined and never dispatched).
+    if (row.kind === 'background_notification' && row.session_id) {
+      void maybeDispatchIdleWake({
+        id: row.id as string,
+        sessionId: row.session_id as string,
+        kind: row.kind as string,
+        content: row.content as string | undefined,
+        clientMsgId: row.client_msg_id as string | null | undefined,
+      }).catch(() => {});
     }
     // Plan 477 P3.1: a bot→bot DM row wakes the target bot's persistent
     // session through the same queue (agent lane). Best-effort like the
     // idle wake; the mailbox row is durable so a failed dispatch retries
     // via wake-rearm on restart.
-    if (row.kind === 'agent_dm' && row.sessionId) {
-      void maybeDispatchAgentDm(row as unknown as Parameters<typeof maybeDispatchAgentDm>[0]).catch(() => {});
+    if (row.kind === 'agent_dm' && row.session_id) {
+      // maybeDispatchAgentDm is sync (boolean) — Promise.resolve gives the
+      // fire-and-forget catch without letting a sync throw escape.
+      void Promise.resolve(
+        maybeDispatchAgentDm({
+          id: row.id as string,
+          sessionId: row.session_id as string,
+          kind: row.kind as string,
+          content: row.content as string | undefined,
+          clientMsgId: row.client_msg_id as string | null | undefined,
+          source: row.source as string | null | undefined,
+        }),
+      ).catch(() => {});
     }
     return row;
   });

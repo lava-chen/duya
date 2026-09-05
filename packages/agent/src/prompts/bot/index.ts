@@ -78,6 +78,7 @@ export {
   readJoinedProjects,
 } from './memory/tierReader.js'
 export {
+  BOT_MEMORY_USAGE_SECTION,
   BOT_MEMORY_OWN_SECTION,
   BOT_MEMORY_USER_SECTION,
   BOT_MEMORY_PROJECT_SECTION,

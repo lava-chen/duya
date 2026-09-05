@@ -61,6 +61,10 @@ const TOOL_BATCH_MAP: Record<string, ToolBatch> = {
   // parallel clicks/drag would interleave and corrupt the gesture.
   computer_use: ToolBatch.SYSTEM,
 
+  // Agent-to-agent DM (plan 477) — SYSTEM (exclusive, serial). Writes a
+  // mailbox row for the target agent and fires the wake bus.
+  send_to_agent: ToolBatch.SYSTEM,
+
   // Canvas Conductor tools (plan 221) — SYSTEM (mutate canvas state)
   canvas_create_element: ToolBatch.SYSTEM,
   canvas_delete_element: ToolBatch.SYSTEM,

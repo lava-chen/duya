@@ -7,14 +7,23 @@
  * which expose the bot collaboration tools — without this declaration the
  * tools were only reachable through the `full` profile's `'*'` allowlist.
  *
- * Membership rules (Plan 481 §3 tool table):
+ * Membership rules (Plan 481 §3 tool table, extended by Plan 492 P4.4):
  *   - send_to_agent (T2, plan 477): async DM delivery between bots.
  *   - update_state  (T1, this plan): memory/state writes into the bot's
  *     own shard (479 tier store).
+ *   - SendMessage (plan 483 P2): the bot's only voice to the user.
+ *   - create_agent / update_agent (plan 492 P4): teammate self-management
+ *     (grok sand-agent-management-tools parity; exposed from turn one per
+ *     the 490 exposure comparison).
+ *   - image_generate (2026-09-05 membership decision): grok exposes
+ *     GenerateImage statically on every non-subagent turn; duya's tool is
+ *     discoverable-only, so bots need the exact-name promotion to match.
  *   - post_to_room (T3) joins when plan 478 lands; background_tasks (T6)
  *     stays optional pending the 476 P3.3 evaluation. tool_schema /
  *     tool_invoke (T4/T5) are always-exposed for every profile and are
- *     deliberately NOT in this set.
+ *     deliberately NOT in this set. ReactToMessage (plan 490 P1) will
+ *     register always-exposed instead, mirroring grok's
+ *     SAND_FORCED_STATIC placement — also not in this set.
  *
  * Deny always wins: a bot that explicitly denies one of these tools in
  * `[agents.<id>.tools]` keeps the deny — ToolFilter applies after this
@@ -23,16 +32,28 @@
 
 import type { AgentProfile } from './types.js';
 
-export const BOT_TOOLSET: readonly string[] = ['send_to_agent', 'update_state', 'SendMessage'];
+export const BOT_TOOLSET: readonly string[] = [
+  'send_to_agent',
+  'update_state',
+  'SendMessage',
+  'create_agent',
+  'update_agent',
+  'image_generate',
+];
 
 /**
  * Append the bot toolset to a profile's allowlist (idempotent). An existing
- * `'*'` allowlist is returned unchanged — it already covers everything.
- * Deny entries are never touched.
+ * `'*'` allowlist keeps the wildcard AND gains the explicit bot tool names:
+ * plan 496 exposure promotion only surfaces a discoverable tool when its
+ * name appears EXACTLY in the allowlist, so a bare `'*'` bot (the default
+ * `full` base profile) previously never saw `SendMessage` — the bot's only
+ * voice — without a tool_search round-trip the model cannot know to make.
+ * An undefined allowlist stays a no-op (no explicit tool decisions to
+ * amend). Deny entries are never touched.
  */
 export function applyBotToolset<T extends AgentProfile>(profile: T): T {
   const allow = profile.allowedTools;
-  if (!allow || allow.includes('*')) {
+  if (!allow) {
     return profile;
   }
   const merged = [...allow];

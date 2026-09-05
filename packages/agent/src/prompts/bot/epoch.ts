@@ -81,6 +81,7 @@ export function computeBotContentHash(ctx: BotPromptContext): string {
     ['agentDirectory', safeStable(roster)],
     ['channels', safeStable(ctx.channels ?? null)],
     ['memory', safeStable(ctx.memory ?? null)],
+    ['memoryRoots', safeStable(ctx.memoryRoots ?? null)],
     ['automations', safeStable(ctx.automations ?? null)],
     ['mcpServers', safeStable(ctx.mcpServers ?? null)],
   ]
