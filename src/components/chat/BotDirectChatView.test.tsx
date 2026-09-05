@@ -8,6 +8,63 @@ vi.mock('@/hooks/useTranslation', () => ({
   useTranslation: () => ({ t: (k: string) => k }),
 }));
 
+// Plan 494: permission state is injected via a mocked usePermissions so
+// the tests can drive the ask/permission cards without the SSE stack.
+const permissionMocks = vi.hoisted(() => ({
+  pendingPermission: null as import('@/types/stream').PermissionRequestEvent | null,
+  respondToPermission: vi.fn(),
+}));
+
+vi.mock('@/hooks/usePermissions', () => ({
+  usePermissions: () => ({
+    pendingPermission: permissionMocks.pendingPermission,
+    permissionResolved: null,
+    respondToPermission: permissionMocks.respondToPermission,
+    clearPermission: vi.fn(),
+    handlePermissionRequest: vi.fn(),
+  }),
+}));
+
+// stream-session-manager singleton is heavy and unneeded when the hook is
+// mocked — the view only calls subscribeToPermissions for the live path.
+vi.mock('@/lib/stream-session-manager', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/stream-session-manager')>();
+  return {
+    ...actual,
+    subscribeToPermissions: () => () => {},
+  };
+});
+
+// The view reads usePanel().openOrActivatePage for its header settings
+// button; jsdom has no PanelProvider, so stub the whole hook module.
+vi.mock('@/hooks/usePanel', () => ({
+  usePanel: () => ({
+    panelOpen: false,
+    setPanelOpen: vi.fn(),
+    togglePanel: vi.fn(),
+    panelWidth: 0,
+    setPanelWidth: vi.fn(),
+    workspaceExpanded: false,
+    setWorkspaceExpanded: vi.fn(),
+    workspaceTreeOpen: false,
+    setWorkspaceTreeOpen: vi.fn(),
+    panelView: 'chat' as never,
+    setPanelView: vi.fn(),
+    tabs: [],
+    activeTabId: null,
+    openPanel: vi.fn(() => 'tab'),
+    closePanel: vi.fn(),
+    activateTab: vi.fn(),
+    updateTabTitle: vi.fn(),
+    updateTabFavicon: vi.fn(),
+    rememberUserWidth: vi.fn(),
+    resetPanelWidth: vi.fn(),
+    openOrActivatePage: vi.fn(() => 'tab'),
+    reorderTabs: vi.fn(),
+  }),
+  useOptionalPanel: () => null,
+}));
+
 // Icons barrel pulls in @tabler/icons-react (heap heavy in tests).
 // Mock every icon the bot chat import chain touches.
 vi.mock('@/components/icons', () => ({
@@ -46,6 +103,13 @@ vi.mock('@/components/icons', () => ({
   CubeIcon: () => null,
   CaretLeftIcon: () => null,
   RepeatIcon: () => null,
+  InfoIcon: () => null,
+  ShieldIcon: () => null,
+  // panels/registry icons (pulled in via usePanel → registry.ts).
+  FolderIcon: () => null,
+  FileTextIcon: () => null,
+  GitDiffIcon: () => null,
+  GlobeIcon: () => null,
 }));
 
 // Composer fetches providers via the preload IPC bridge, which is absent in
@@ -107,6 +171,7 @@ const baseProps = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  permissionMocks.pendingPermission = null;
 });
 
 describe('BotDirectChatView', () => {
@@ -273,5 +338,85 @@ describe('BotDirectChatView', () => {
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
     expect(baseProps.onSend).toHaveBeenCalledTimes(1);
     expect(input.value).toBe('line1');
+  });
+
+  // ─── Plan 494 — permission cards in the transcript ───
+
+  const askPermission = {
+    id: 'perm-ask-1',
+    toolName: 'AskUserQuestion',
+    mode: 'ask_user_question',
+    expiresAt: Date.now() + 60_000,
+    toolInput: {
+      questions: [
+        {
+          question: 'Which database?',
+          header: 'Storage',
+          multiSelect: false,
+          options: [{ label: 'PostgreSQL' }, { label: 'SQLite (Recommended)' }],
+        },
+      ],
+    },
+  } as import('@/types/stream').PermissionRequestEvent;
+
+  it('renders a pending AskUserQuestion as an in-chat ask card', () => {
+    permissionMocks.pendingPermission = askPermission;
+    const { container } = render(<BotDirectChatView {...baseProps} messages={[]} />);
+    const row = container.querySelector('.bot-chat-row--assistant .bot-ask-card');
+    expect(row).not.toBeNull();
+    expect(screen.getByText('Which database?')).toBeDefined();
+    expect(screen.getByText('PostgreSQL')).toBeDefined();
+  });
+
+  it('submits the ask card through respondToPermission and keeps an answered trace', async () => {
+    permissionMocks.pendingPermission = askPermission;
+    const { container } = render(<BotDirectChatView {...baseProps} messages={[]} />);
+    // Recommended option auto-preselected → submit directly.
+    fireEvent.click(screen.getByText('permission.continueHint'));
+    expect(permissionMocks.respondToPermission).toHaveBeenCalledWith(
+      'allow',
+      expect.objectContaining({
+        answers: { 'Which database?': 'SQLite (Recommended)' },
+      }),
+    );
+    // Answered trace replaces the pending card (state updates in an effect
+    // after submit, so wait for it).
+    await waitFor(() => {
+      expect(container.querySelector('.bot-ask-card--answered')).not.toBeNull();
+    });
+    expect(container.querySelector('.bot-ask-card:not(.bot-ask-card--answered)')).toBeNull();
+  });
+
+  it('renders a newer pending ask AFTER the earlier answered trace', async () => {
+    permissionMocks.pendingPermission = askPermission;
+    const { container, rerender } = render(<BotDirectChatView {...baseProps} messages={[]} />);
+    fireEvent.click(screen.getByText('permission.continueHint'));
+    await waitFor(() => {
+      expect(container.querySelector('.bot-ask-card--answered')).not.toBeNull();
+    });
+    // A second question arrives — it must render BELOW the answered trace.
+    permissionMocks.pendingPermission = { ...askPermission, id: 'perm-ask-2' };
+    rerender(<BotDirectChatView {...baseProps} messages={[]} />);
+    await waitFor(() => {
+      const cards = container.querySelectorAll('.bot-ask-card');
+      expect(cards.length).toBe(2);
+      expect(cards[0].classList.contains('bot-ask-card--answered')).toBe(true);
+      expect(cards[1].classList.contains('bot-ask-card--answered')).toBe(false);
+    });
+  });
+
+  it('renders generic tool permissions as a compact approval card', () => {
+    permissionMocks.pendingPermission = {
+      id: 'perm-generic-1',
+      toolName: 'Bash',
+      mode: 'generic',
+      expiresAt: Date.now() + 60_000,
+      toolInput: { command: 'npm test' },
+    } as import('@/types/stream').PermissionRequestEvent;
+    const { container } = render(<BotDirectChatView {...baseProps} messages={[]} />);
+    expect(container.querySelector('.bot-permission-card')).not.toBeNull();
+    expect(screen.getByText('Bash')).toBeDefined();
+    fireEvent.click(screen.getByText('permission.deny'));
+    expect(permissionMocks.respondToPermission).toHaveBeenCalledWith('deny', undefined, undefined);
   });
 });
