@@ -341,6 +341,8 @@ const en = {
   'permission.deny': 'Deny',
   'permission.allowOnce': 'Allow Once',
   'permission.allowForSession': 'Allow for Session',
+  'permission.approvalRequired': 'Approval needed',
+  'permission.toolFallback': 'tool',
   'permission.alwaysAllow': 'Always Allow',
   'connectorAuth.title': 'Re-authorize connected app',
   'connectorAuth.body': 'The {provider} connection expired and the `{tool}` call needs re-authorization to continue.',
@@ -1100,6 +1102,10 @@ const en = {
   'panel.terminal': 'Terminal',
   'panel.browser': 'Browser',
   'panel.office': 'Office',
+  'panel.botSettings': 'Bot Settings',
+  'panel.botSettings.loading': 'Loading bot…',
+  'panel.botSettings.notFound': 'Bot not found. It may have been deleted.',
+  'panel.botSettings.missing': 'No bot selected. Open a bot chat and click its header.',
   'panel.closePanel': 'Close Panel',
   'panel.resizeHandle': 'Resize panel width. Use arrow keys to adjust, Home/End for min/max, Enter to reset.',
   'panel.openPanel': 'Open Side Panel',
@@ -1256,6 +1262,11 @@ const en = {
 
   // Plan 483 — bot contact row + create-bot dialog
   'bot.contactBusy': 'Working',
+  // Plan 483 P1.4 (2026-09-05): activity status pill in the trailing
+  // slot of the bot sidebar row. `queued` mirrors grok-bot / rakazo's
+  // behavior of surfacing the mailbox queue depth so users know their
+  // follow-up is waiting behind an active run.
+  'bot.contactStatus.queued': 'Queued',
   'bot.create.title': 'Create Bot',
   'bot.create.close': 'Close',
   'bot.create.templates': 'Templates',
@@ -1312,6 +1323,8 @@ const en = {
   'bot.chat.removeAttachment': 'Remove attachment',
   'bot.chat.send': 'Send',
   'bot.chat.stop': 'Stop',
+  'bot.ask.cardTitle': 'Question · {count}',
+  'bot.ask.recommended': 'Recommended',
   'sidebar.section.newSection': 'New section',
   'sidebar.section.addToSection': 'Add to section',
   'sidebar.section.moveToSection': 'Move to section',
