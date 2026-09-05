@@ -205,16 +205,38 @@ export class MessageCompactionController {
    * a `CompactionEntry` to the timeline. Returns the new entry, or `null` when
    * the strategy decided no compaction was needed (returned input unchanged
    * with no marker message).
+   *
+   * Plan 495 G1: when a background prefire pass1 summary is completed and its
+   * message prefix is still valid, it is consumed as the `previousSummary`
+   * seed — the main summarization becomes an iterative update of pass1
+   * (grok two-pass semantics) instead of a cold full re-summarization.
    */
   async compactProactive(
     options?: CompactProactiveOptions,
   ): Promise<CompactionEntry | null> {
-    const inputMessages = this.projectInputMessages();
+    const inputMessages = this.projectInputMessages()
+    let effectiveOptions: Record<string, unknown> | undefined = options as Record<string, unknown> | undefined
+    const prefireSource = (this.compactionManager as {
+      takePrefireSummary?: (messages: readonly Message[]) => Promise<string | undefined>
+    }).takePrefireSummary?.bind(this.compactionManager)
+    if (prefireSource && !effectiveOptions?.previousSummary) {
+      try {
+        const seed = await prefireSource(inputMessages)
+        if (seed) {
+          effectiveOptions = {
+            ...(options ?? {}),
+            previousSummary: seed,
+          }
+        }
+      } catch {
+        // Prefire is best-effort; compact without the seed.
+      }
+    }
     const result = await this.compactionManager.compact(
       inputMessages,
-      options as Record<string, unknown> | undefined,
-    );
-    return this.applyCompactionResult(result, inputMessages);
+      effectiveOptions,
+    )
+    return this.applyCompactionResult(result, inputMessages)
   }
 
   // ─── Internal ─────────────────────────────────────────────────────────
