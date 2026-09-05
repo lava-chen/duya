@@ -8,6 +8,12 @@
 import { randomUUID } from 'crypto';
 import { BrowserWindow } from 'electron';
 import { getDatabase } from '../ipc/db-handlers';
+import {
+  consumeApprovedToolApproval,
+  createToolApproval,
+  listToolApprovalRules,
+  toolApprovalInputHash,
+} from '../db/toolApprovalState';
 import { getProviderStore } from '../services/providers/provider-store-electron';
 import { getConfigStore } from '../config/store-instance';
 import { toLegacyApiProvider, migrateLegacyApiProvider } from '../../src/lib/providers/legacy';
@@ -461,6 +467,44 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     case 'message:getBySession': {
       const { messageLog } = getCoreStores();
       return storedEventsToIpcMessages(messageLog.listBySession(p.sessionId as string));
+    }
+
+    // ==================== Tool approval side state (plan 498) ====================
+    // Worker-side writes for durable approval cards: row creation, one-shot
+    // ledger consume (from canUseTool), and always-allow rule reads.
+    case 'toolApproval:create': {
+      const db = getDatabase();
+      if (!db) return null;
+      return createToolApproval(db, {
+        id: p.id as string,
+        messageId: p.messageId as string,
+        sessionId: p.sessionId as string,
+        scopeType: (p.scopeType as 'bot' | 'session') ?? 'session',
+        scopeId: p.scopeId as string,
+        toolName: p.toolName as string,
+        toolInput: p.toolInput as Record<string, unknown> | undefined,
+      });
+    }
+
+    case 'toolApproval:consumeApproved': {
+      const db = getDatabase();
+      if (!db) return false;
+      return consumeApprovedToolApproval(
+        db,
+        p.sessionId as string,
+        p.toolName as string,
+        toolApprovalInputHash(p.toolInput as Record<string, unknown> | undefined),
+      );
+    }
+
+    case 'toolApproval:listRules': {
+      const db = getDatabase();
+      if (!db) return [];
+      return listToolApprovalRules(
+        db,
+        (p.scopeType as 'bot' | 'session') ?? 'session',
+        p.scopeId as string,
+      );
     }
 
     case 'message:getCount': {

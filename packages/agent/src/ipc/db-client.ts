@@ -208,6 +208,30 @@ export const messageDb = {
     sendDbRequest('session:loadMessages', { sessionId }),
 };
 
+// ==================== Tool Approval State (plan 498) ====================
+
+export const toolApprovalDb = {
+  create: (data: {
+    id: string;
+    messageId: string;
+    sessionId: string;
+    scopeType: 'bot' | 'session';
+    scopeId: string;
+    toolName: string;
+    toolInput?: Record<string, unknown>;
+  }) => sendDbRequest('toolApproval:create', data),
+
+  /** One-shot ledger consume: CAS approved → consumed on tool+input-hash match. */
+  consumeApproved: (data: {
+    sessionId: string;
+    toolName: string;
+    toolInput?: Record<string, unknown>;
+  }) => sendDbRequest('toolApproval:consumeApproved', data),
+
+  listRules: (data: { scopeType: 'bot' | 'session'; scopeId: string }) =>
+    sendDbRequest('toolApproval:listRules', data),
+};
+
 
 
 export const turnReviewDb = {

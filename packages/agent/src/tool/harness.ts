@@ -126,7 +126,7 @@ export function createToolContext(
     tools?: Tool[];
     appState?: AppState;
     agentProfileId?: string | null;
-    requestPermission?: (request: unknown) => Promise<'allow' | 'deny'>;
+    requestPermission?: (request: unknown) => Promise<'allow' | 'deny' | 'paused'>;
     extraOptions?: Record<string, unknown>;
   } = {},
 ): ToolContextFixture {

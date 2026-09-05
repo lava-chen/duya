@@ -266,6 +266,36 @@ src/
 - Tool protocol adapter validates inputs
 - Stream size limits
 
+### Durable Tool-Approval Cards (Plan 498)
+
+When a tool permission check resolves to `ask`, the worker persists an
+approval card instead of (or in addition to) the in-memory interactive wait:
+
+- **Persist**: approval row in `tool_approval_state` (legacy main DB,
+  `electron/db/toolApprovalState.ts`) + a chat card message
+  (`msg_type='tool-approval'`, `metadata.sendMessage.approval` — rides the
+  existing persistence whitelist). Deterministic ids
+  (`approval-card-<requestId>`); re-writes are no-ops.
+- **Surfaces**: bot sessions (`bot:<agentId>`, surface flag derived at
+  chat:start) PAUSE the turn — the requestPermission handler returns
+  `'paused'`, StreamingToolExecutor pushes a neutral "Waiting for user
+  approval" tool result and the turn ends; interactive sessions keep the
+  in-worker wait (SSE `permission` event → PermissionPrompt, 5-minute
+  timeout) with the persisted card as crash fallback. AskUserQuestion-style
+  two-phase prompts never pause.
+- **Decide**: `db:toolApproval:resolve(id, allow|always|deny)` CAS-transitions
+  the row (`pending → approved|denied`, terminal rows are no-ops), upserts a
+  `tool_approval_rules` entry for `always` (scoped per bot/session), enqueues
+  an `approval.resume` continuation wake, and broadcasts
+  `tool-approval:updated`. The interactive fast path (`db:permission:resolve`)
+  syncs card state via `syncApprovalCard` and burns the ledger entry.
+- **Replay**: the continuation run's retried call is authorized by the
+  one-shot ledger — `canUseTool` consumes the `approved` row on an exact
+  tool-name + input-hash match (CAS `approved → consumed`), so nothing else
+  is pre-approved and a replay can never double-execute.
+- Renderer: `BotToolApprovalCard` (bot-direct transcript; hydrated from
+  `db:toolApproval:listBySession`, live via `tool-approval:updated`).
+
 ### Provider Auth
 
 - Credential store (in-memory by default)

@@ -1,4 +1,5 @@
 import { getLogger, LogComponent } from '../logging/logger';
+import { ensureToolApprovalTables } from './toolApprovalState';
 
 // Use type-only import to avoid bundling better-sqlite3 in the schema module
 type BetterSqlite3Db = import('better-sqlite3').Database;
@@ -489,6 +490,9 @@ export function initializeSchema(db: BetterSqlite3Db): void {
   insertCanvas.run('default', '工作台', null, '{}', 0, now, now);
 
   runMigrations(db);
+  // Plan 498: module-owned side tables, self-repaired on every boot so a
+  // partially-migrated database heals without waiting for the migration gate.
+  ensureToolApprovalTables(db);
 }
 
 /**
@@ -2597,6 +2601,16 @@ const migrations: Migration[] = [
       db.exec(
         'CREATE INDEX IF NOT EXISTS idx_agent_profiles_deleted_at ON agent_profiles(deleted_at) WHERE deleted_at IS NOT NULL',
       );
+    },
+  },
+  {
+    // Plan 498: persistent tool-approval side state. Idempotent DDL also runs
+    // as a self-repair step in initializeSchema. Id 55 is intentionally left
+    // for parallel in-flight work (send-message card side state).
+    id: 56,
+    name: 'add_tool_approval_side_state',
+    migrate(db: BetterSqlite3Db): void {
+      ensureToolApprovalTables(db);
     },
   },
 ];
