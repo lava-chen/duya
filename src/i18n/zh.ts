@@ -333,6 +333,8 @@ const zh: Record<TranslationKey, string> = {
   'permission.deny': '拒绝',
   'permission.allowOnce': '允许一次',
   'permission.allowForSession': '本次会话允许',
+  'permission.approvalRequired': '需要授权',
+  'permission.toolFallback': '工具',
   'permission.alwaysAllow': '始终允许',
   'connectorAuth.title': '重新授权已连接的应用',
   'connectorAuth.body': '{provider} 连接授权已过期，调用 {tool} 需要重新授权后才能继续。',
@@ -1089,6 +1091,10 @@ const zh: Record<TranslationKey, string> = {
   'panel.terminal': '终端',
   'panel.browser': '浏览器',
   'panel.office': 'Office',
+  'panel.botSettings': 'Bot 设置',
+  'panel.botSettings.loading': '正在加载 Bot…',
+  'panel.botSettings.notFound': '找不到该 Bot,可能已被删除。',
+  'panel.botSettings.missing': '未选择 Bot。请打开 Bot 聊天并点击顶部栏。',
   'panel.closePanel': '关闭面板',
   'panel.resizeHandle': '调整面板宽度。使用方向键微调，Home/End 到最小/最大，回车重置。',
   'panel.openPanel': '打开侧栏',
@@ -1245,6 +1251,10 @@ const zh: Record<TranslationKey, string> = {
 
   // Plan 483 — bot 联系人与创建对话框
   'bot.contactBusy': '工作中',
+  // Plan 483 P1.4 (2026-09-05)：bot 侧栏条目右侧的活动状态标签。
+  // `queued` 与 grok-bot / rakazo 行为对齐，提示用户提交的追问正在
+  // 等待当前活跃 run 抵达安全检查点后再执行。
+  'bot.contactStatus.queued': '已排队',
   'bot.create.title': '创建 Bot',
   'bot.create.close': '关闭',
   'bot.create.templates': '模板',
@@ -1301,6 +1311,8 @@ const zh: Record<TranslationKey, string> = {
   'bot.chat.removeAttachment': '移除附件',
   'bot.chat.send': '发送',
   'bot.chat.stop': '停止',
+  'bot.ask.cardTitle': '提问 · {count}',
+  'bot.ask.recommended': '推荐',
 
   'sidebar.section.newSection': '新建分区',
   'sidebar.section.addToSection': '添加到分区',
