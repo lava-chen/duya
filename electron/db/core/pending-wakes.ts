@@ -24,7 +24,13 @@
 
 import type { Migration } from './database';
 
-export type PendingWakeKind = 'task.completion' | 'automation.fire' | 'connector.inbound' | 'broadcast'
+export type PendingWakeKind =
+  | 'task.completion'
+  | 'automation.fire'
+  | 'connector.inbound'
+  | 'broadcast'
+  | 'user.message'
+  | 'agent.dm'
 export type PendingWakeLane = 'user' | 'agent' | 'background'
 
 export interface PendingWakeRow {

@@ -10,3 +10,4 @@ export * from './session-store';
 export * from './mailbox';
 export * from './stores';
 export * from './legacy-import';
+export * from './pending-wakes';
