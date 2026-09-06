@@ -32,7 +32,7 @@ function parseAllowedTools(v: unknown): string[] {
   return [];
 }
 
-export type SkillSource = 'bundled' | 'user' | 'project' | 'custom' | 'plugin' | 'system';
+export type SkillSource = 'bundled' | 'user' | 'project' | 'custom' | 'plugin' | 'system' | 'agent';
 
 export interface SkillListItem {
   id: string;
@@ -69,6 +69,8 @@ interface DiscoverArgs {
   projectSkillsDirs?: string[];
   /** Custom skill dir (agent.skill_path), optional. */
   customSkillDir?: string;
+  /** Bot-scoped skills dir (`~/.duya/agents/<botId>/skills`), optional. */
+  agentSkillsDir?: string;
   /** System skills dir (<userSkillsDir>/.system), optional. */
   systemSkillsDir?: string;
   /** Map of pluginId → plugin install path. */
@@ -329,6 +331,29 @@ function discoverCandidates(args: DiscoverArgs): InternalCandidate[] {
     }
   }
 
+  // agent: scan the bot-scoped skills dir (a particular bot's own skills)
+  if (args.agentSkillsDir && existsSync(args.agentSkillsDir)) {
+    const entries = readdirSync(args.agentSkillsDir, { withFileTypes: true });
+    for (const e of entries) {
+      if (e.name.startsWith('.')) continue;
+      if (!e.isDirectory()) continue;
+      const entryPath = join(args.agentSkillsDir, e.name);
+      const descriptionPath = join(entryPath, 'DESCRIPTION.md');
+      if (existsSync(descriptionPath)) continue;
+      const fm = readFrontmatter(entryPath);
+      if (!fm) continue;
+      out.push({
+        candidate: { name: e.name, origin: 'agent', hasMarker: false },
+        meta: {
+          description: fm.description,
+          frontmatter: fm.frontmatter,
+          category: fm.category,
+          sourceDir: entryPath,
+        },
+      });
+    }
+  }
+
   return out;
 }
 
@@ -420,6 +445,7 @@ export interface SkillServiceListArgs {
   userSkillsDir: string;
   projectSkillsDirs?: string[];
   customSkillDir?: string;
+  agentSkillsDir?: string;
   systemSkillsDir?: string;
   pluginInstallPaths: Record<string, string>;
   overrides: Record<string, boolean>;

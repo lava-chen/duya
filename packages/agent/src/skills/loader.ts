@@ -462,6 +462,12 @@ export async function loadSkillsFromDirectory(
 export interface SkillLoadOptions {
   /** Additional custom skill directories to load from */
   additionalPaths?: string[];
+  /**
+   * Bot-scoped skills directory (`~/.duya/agents/<botId>/skills`). Loaded
+   * with source 'agent' so a bot's own skills shadow same-named global
+   * user/project skills at runtime.
+   */
+  agentSkillsDir?: string;
   /** Whether to sync bundled skills to user directory (default: true) */
   syncBundled?: boolean;
   /** List of skill names to bypass security checks for */
@@ -503,6 +509,18 @@ export function getSkillDirectories(cwd: string): {
       path.join(cwd, '.duya', 'skills'),
     ],
   };
+}
+
+/**
+ * Resolve the bot-scoped skills directory for a given agent id.
+ *
+ * `~/.duya/agents/<botId>/skills`. Skills created for a bot land here, and
+ * the session assembly passes this dir through as `agentSkillsDir` so only
+ * that bot's conversation sees them (loaded as source 'agent', which shadows
+ * global user/project skills of the same name).
+ */
+export function getAgentSkillDirectory(botId: string): string {
+  return path.join(homedir(), '.duya', 'agents', botId, 'skills');
 }
 
 /**
@@ -671,6 +689,14 @@ export async function loadSkills(cwd: string, options?: SkillLoadOptions): Promi
       const additionalSkills = await loadSkillsFromDirectory(resolvedPath, 'user', undefined, securityBypassSkills, bundledSkillNames, skipSecurityScan);
       allSkills.push(...additionalSkills);
     }
+  }
+
+  // Bot-scoped skills: load last among non-system sources so a bot's own
+  // directory shadows any same-named global user/project skill (the registry
+  // Map keeps the last registration).
+  if (options?.agentSkillsDir) {
+    const agentSkills = await loadSkillsFromDirectory(options.agentSkillsDir, 'agent', undefined, securityBypassSkills, bundledSkillNames, skipSecurityScan);
+    allSkills.push(...agentSkills);
   }
 
   const disabledSkillNames = await loadDisabledSkillNamesFromSettings();

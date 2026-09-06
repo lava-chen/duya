@@ -42,19 +42,37 @@ function baseArgs(overrides: Record<string, boolean> = {}) {
 }
 
 describe('resolver precedence (plan 435)', () => {
-  it('ranks system above custom, user/project, plugin, and bundled', () => {
+  it('ranks system above custom, agent, user/project, plugin, and bundled', () => {
     const cases: Array<[SkillCandidate, number]> = [
       [{ name: 'x', origin: 'system' }, 6],
       [{ name: 'x', origin: 'custom' }, 5],
-      [{ name: 'x', origin: 'user' }, 4],
-      [{ name: 'x', origin: 'project' }, 4],
-      [{ name: 'x', origin: 'plugin' }, 3],
+      [{ name: 'x', origin: 'agent' }, 4],
+      [{ name: 'x', origin: 'user' }, 3],
+      [{ name: 'x', origin: 'project' }, 3],
+      [{ name: 'x', origin: 'plugin' }, 2],
       [{ name: 'x', origin: 'bundled', hasMarker: true }, 2],
       [{ name: 'x', origin: 'bundled', hasMarker: false }, 1],
     ];
     for (const [candidate, expected] of cases) {
       expect(effectivePrecedenceOf(candidate)).toBe(expected);
     }
+  });
+
+  it('picks the agent winner over a global user skill with the same name', () => {
+    const winner = pickWinner([
+      { name: 'my-skill', origin: 'user' },
+      { name: 'my-skill', origin: 'agent' },
+    ]);
+    expect(winner?.origin).toBe('agent');
+    expect(winner?.effectivePrecedence).toBe(4);
+  });
+
+  it('picks the system skill over an agent skill with the same name', () => {
+    const winner = pickWinner([
+      { name: 'memory-search', origin: 'agent' },
+      { name: 'memory-search', origin: 'system' },
+    ]);
+    expect(winner?.origin).toBe('system');
   });
 
   it('picks the system winner over a user skill with the same name', () => {
@@ -125,6 +143,29 @@ describe('listSkillDTOs coverage (plan 435)', () => {
       expect(byId.get('project:project-skill')?.source).toBe('project');
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it('lists bot-scoped skills as agent source and shadows same-named user skills', () => {
+    const botDir = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-svc-bot-'));
+    try {
+      writeSkill(userDir, 'shared', 'Global user copy.');
+      writeSkill(botDir, 'shared', 'Bot-scoped copy.');
+      writeSkill(botDir, 'bot-only', 'Only this bot has it.');
+
+      const skills = listSkillDTOs({
+        ...baseArgs(),
+        userSkillsDir: userDir,
+        agentSkillsDir: botDir,
+      });
+
+      const byId = new Map(skills.map((s) => [s.id, s]));
+      // Agent skill shadows the global user skill with the same name.
+      expect(byId.get('agent:shared')?.source).toBe('agent');
+      expect(byId.get('user:shared')).toBeUndefined();
+      expect(byId.get('agent:bot-only')?.source).toBe('agent');
+    } finally {
+      fs.rmSync(botDir, { recursive: true, force: true });
     }
   });
 

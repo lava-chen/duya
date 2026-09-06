@@ -15,7 +15,7 @@
  * candidates and returns a deterministic result.
  */
 
-export type SkillOrigin = 'bundled' | 'user' | 'project' | 'custom' | 'plugin' | 'system';
+export type SkillOrigin = 'bundled' | 'user' | 'project' | 'custom' | 'plugin' | 'system' | 'agent';
 
 export interface SkillCandidate {
   /** Logical name (directory name). */
@@ -53,14 +53,17 @@ export function effectivePrecedenceOf(c: SkillCandidate): number {
   if (c.origin === 'system') return 6;
   // Custom skill_path is the last additional path loaded by the agent.
   if (c.origin === 'custom') return 5;
-  if (c.origin === 'user') return 4;
+  // Bot-scoped skills (origin 'agent') outrank global user/project skills so
+  // a bot's own directory shadows any same-named skill from the shared pool.
+  if (c.origin === 'agent') return 4;
+  if (c.origin === 'user') return 3;
   // Project skills share the user tier: cross-directory name collisions are
   // rare, and the agent registers project skills after user skills so the
   // project copy wins there; here ties resolve by discovery order.
-  if (c.origin === 'project') return 4;
-  if (c.origin === 'plugin') return 3;
+  if (c.origin === 'project') return 3;
+  if (c.origin === 'plugin') return 2;
   // origin === 'bundled'
-  if (c.customized === true) return 4;
+  if (c.customized === true) return 3;
   // plain bundled
   if (c.hasMarker === false) return 1; // unmarked defensive fallback
   return 2;
