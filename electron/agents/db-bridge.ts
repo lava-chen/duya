@@ -20,8 +20,8 @@ import { createConfigAgentFromName, patchConfigAgentIdentity } from '../config/a
 import { toLegacyApiProvider, migrateLegacyApiProvider } from '../../src/lib/providers/legacy';
 import type { ApiProvider } from '../config/provider-types';
 import { getAutomationScheduler } from '../automation/Scheduler.js';
-import { runPromptInSession, interruptCronSession, type CronProviderConfig } from '../automation/agent-run';
-import { toLLMProvider } from '../config/provider-types.js';
+import { runPromptInSession, interruptCronSession } from '../automation/agent-run';
+import { buildCronProviderConfig } from '../automation/provider-config';
 import { getLogger, LogComponent } from '../logging/logger';
 import { testProviderConnection } from '../ipc/net-handlers';
 import { getPairingStore } from '../gateway/pairing';
@@ -377,13 +377,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         (options.defaultModel as string) ||
         (options.model as string) ||
         getDefaultModelForProvider(activeProvider.providerType, options);
-      const providerConfig: CronProviderConfig = {
-        apiKey: activeProvider.apiKey ?? '',
-        baseURL: activeProvider.baseUrl || undefined,
-        model,
-        provider: toLLMProvider(activeProvider.providerType),
-        authStyle: 'api_key',
-      };
+      const providerConfig = buildCronProviderConfig({ provider: activeProvider, model });
 
       const childId = `spawn:${Date.now()}:${randomUUID().slice(0, 8)}`;
       const { sessions, spawnEdges } = getCoreStores();
@@ -539,13 +533,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         (options.defaultModel as string) ??
         (options.model as string) ??
         getDefaultModelForProvider(activeProvider.providerType, options);
-      const providerConfig: CronProviderConfig = {
-        apiKey: activeProvider.apiKey ?? '',
-        baseURL: activeProvider.baseUrl || undefined,
-        model,
-        provider: toLLMProvider(activeProvider.providerType),
-        authStyle: 'api_key',
-      };
+      const providerConfig = buildCronProviderConfig({ provider: activeProvider, model });
 
       // A follow-up is another async run on the child; the child's parent is
       // woken again on completion.
