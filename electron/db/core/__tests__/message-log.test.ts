@@ -787,7 +787,11 @@ describe('MessageLog', () => {
       m.up(fresh);
       current = m.id;
     }
-    expect(current).toBe(14);
+    // The latest migration id across the union (id=15: create_message_search
+    // landed after this repair test was written — the union must include it).
+    expect(current).toBe(
+      Math.max(...[...MessageLog.migrations, ...SessionStore.migrations].map((m) => m.id)),
+    );
 
     const indexCols = (
       fresh.prepare('PRAGMA table_info(message_index)').all() as Array<{ name: string }>

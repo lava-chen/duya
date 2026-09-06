@@ -1600,10 +1600,10 @@ export class MessageLog {
    * Id collisions: `message_index.id` is a GLOBAL primary key. When the
    * file's ids already exist anywhere in the DB (re-importing an export
    * while the original session still lives there) `INSERT OR IGNORE`
-   * would silently drop every row. In that case the whole file is remapped
+   * would silently drop every colliding row. Every colliding id is remapped
    * onto the `import:<sessionId>:<oldId>` namespace — cross-references
    * included — so the restored session is complete instead of empty.
-   * When no id collides the file content is written verbatim.
+   * Non-colliding ids keep their original identity.
    */
   importRestoreFromFile(sessionId: string, sourcePath: string): ImportResult {
     if (!this.sessionRowExists(sessionId)) {
@@ -1614,11 +1614,10 @@ export class MessageLog {
     const rawLines = this.readImportSource(sourcePath);
     const lines = validateImportLines(rawLines);
 
-    const ids = collectTopLevelIds(lines);
-    const colliding = this.findIdsOwnedByOthers(ids, null);
+    const colliding = this.findIdsOwnedByOthers(collectTopLevelIds(lines), null);
     const remapped = colliding.size > 0;
     const finalLines = remapped
-      ? remapImportNamespace(lines, sessionId, 'import')
+      ? remapImportNamespace(lines, sessionId, 'import', colliding)
       : lines;
 
     // The dated bucket derives from now — an import is a new session's
@@ -1671,7 +1670,7 @@ export class MessageLog {
     );
     const remapped = ownedByOthers.size > 0;
     const finalLines = remapped
-      ? remapImportNamespace(lines, sessionId, 'import')
+      ? remapImportNamespace(lines, sessionId, 'import', ownedByOthers)
       : lines;
 
     // Ids already indexed for the target are true duplicates — appendBatch
@@ -2455,7 +2454,7 @@ function collectTopLevelIds(lines: RolloutLine[]): string[] {
 
 /**
  * Remap the ids in `remapIds` onto the `<prefix>:<sessionId>:<oldId>`
- * namespace, updating every cross-reference that points at a remapped id:
+ * namespace, updating every occurrence that points at a remapped id:
  * top-level line ids, message identity fields (entry parentId, inner
  * message.id, plan-486 threadMeta.replyToId), CompactionEntry references
  * (firstKeptMessageId, compactedMessageIds, previousCompactionId), and
@@ -2473,15 +2472,11 @@ export function remapImportNamespace(
   if (remapIds.size === 0) return lines;
 
   const mint = (oldId: string): string => `${prefix}:${sessionId}:${oldId}`;
+  // Mint every colliding id upfront: an id in `remapIds` may appear as a
+  // top-level line id OR only as a cross-reference (parentId / replyToId /
+  // compaction refs) — both occurrences must land on the same new id.
   const idMap = new Map<string, string>();
-  for (const line of lines) {
-    if (remapIds.has(line.id)) idMap.set(line.id, mint(line.id));
-    if (line.type === 'rebase') {
-      for (const m of line.newMessages) {
-        if (remapIds.has(m.id)) idMap.set(m.id, mint(m.id));
-      }
-    }
-  }
+  for (const id of remapIds) idMap.set(id, mint(id));
 
   return lines.map((line) => {
     const copy = JSON.parse(JSON.stringify(line)) as RolloutLine;

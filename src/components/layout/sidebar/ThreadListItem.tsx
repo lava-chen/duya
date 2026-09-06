@@ -2,7 +2,9 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useConversationStore, type Thread } from "@/stores/conversation-store";
-import { ArchiveIcon, DotsThreeIcon, CopyIcon, NotePencilIcon, CircleNotchIcon, PinIcon, PinFilledIcon } from "@/components/icons";
+import { ArchiveIcon, DotsThreeIcon, CopyIcon, NotePencilIcon, CircleNotchIcon, PinIcon, PinFilledIcon, TrashIcon, DownloadSimpleIcon } from "@/components/icons";
+import { exportRolloutIPC } from "@/lib/ipc-client";
+import { showNotification } from "@/lib/notification";
 import { subscribeToPhase } from "@/lib/stream-session-manager";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { StreamPhase } from "@/types/message";
@@ -35,7 +37,7 @@ function formatTimeAgo(t: TFunc, timestamp: number): string {
 
 export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
   const { t } = useTranslation();
-  const { setActiveThread, deleteThread, updateThreadTitle, setThreadPinned } = useConversationStore();
+  const { setActiveThread, deleteThread, archiveThread, updateThreadTitle, setThreadPinned } = useConversationStore();
   const [showMenu, setShowMenu] = useState(false);
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
   const [isRenaming, setIsRenaming] = useState(false);
@@ -63,7 +65,7 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     const menuWidth = 160;
-    const menuHeight = 120;
+    const menuHeight = 200;
     let x = e.clientX;
     let y = e.clientY;
 
@@ -84,7 +86,7 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
     if (buttonRef.current) {
       const rect = buttonRef.current.getBoundingClientRect();
       const menuWidth = 160;
-      const menuHeight = 120;
+      const menuHeight = 200;
       let x = rect.right - menuWidth;
       let y = rect.bottom + 4;
 
@@ -132,6 +134,27 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
     setShowMenu(false);
     deleteThread(thread.id);
   }, [deleteThread, thread.id]);
+
+  // Plan 506 (C2): archive — status flip, rollout files stay on disk.
+  const handleArchive = useCallback(() => {
+    setShowMenu(false);
+    archiveThread(thread.id);
+  }, [archiveThread, thread.id]);
+
+  // Plan 506 (A1): export the complete rollout as one portable JSONL file.
+  const handleExportRollout = useCallback(async () => {
+    setShowMenu(false);
+    try {
+      const result = await exportRolloutIPC(thread.id);
+      try { await navigator.clipboard.writeText(result.absolutePath); } catch { /* clipboard unavailable */ }
+      void showNotification({
+        title: t('thread.exportDoneTitle'),
+        body: t('thread.exportDoneBody', { lines: result.lines }),
+      });
+    } catch (err) {
+      console.error('rollout export failed:', err);
+    }
+  }, [thread.id, t]);
 
   const isPinned = thread.pinned === 1;
 
@@ -274,6 +297,26 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
             {isPinned ? <PinFilledIcon size={14} /> : <PinIcon size={14} />}
             <span>{isPinned ? t("thread.unpinThread") : t("thread.pinThread")}</span>
           </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="thread-dropdown-item"
+            onClick={handleExportRollout}
+          >
+            <DownloadSimpleIcon size={14} />
+            <span>{t("thread.exportRollout")}</span>
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="thread-dropdown-item"
+            onClick={handleArchive}
+          >
+            <ArchiveIcon size={14} />
+            <span>{t("thread.archiveThread")}</span>
+          </Button>
           <div className="thread-dropdown-divider" />
           <Button
             type="button"
@@ -282,7 +325,7 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
             className="thread-dropdown-item danger"
             onClick={handleDelete}
           >
-            <ArchiveIcon size={14} />
+            <TrashIcon size={14} />
             <span>{t("thread.deleteThread")}</span>
           </Button>
         </div>

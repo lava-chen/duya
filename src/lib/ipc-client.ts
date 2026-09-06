@@ -530,6 +530,38 @@ export async function deleteThreadIPC(id: string): Promise<boolean> {
   return window.electronAPI!.thread!.delete(id) as Promise<boolean>
 }
 
+// Plan 506 (C2): archive lifecycle — status flip only, rollout files untouched.
+export async function archiveThreadIPC(sessionId: string): Promise<boolean> {
+  return window.electronAPI!.session!.archive(sessionId)
+}
+
+export async function unarchiveThreadIPC(sessionId: string): Promise<boolean> {
+  return window.electronAPI!.session!.unarchive(sessionId)
+}
+
+/** Plan 506 (A1): export one session's complete rollout as a single JSONL. */
+export async function exportRolloutIPC(sessionId: string): Promise<{
+  absolutePath: string
+  lines: number
+  bytes: number
+}> {
+  return window.electronAPI!.rollout!.export(sessionId)
+}
+
+/** Plan 506 (B1): fork a new session from a historical checkpoint message. */
+export async function forkAtMessageIPC(input: {
+  sourceSessionId: string
+  throughMessageId: string
+  title?: string
+}): Promise<{
+  ok: boolean
+  reason?: 'source_not_found' | 'message_not_found'
+  sessionId?: string
+  seedCount?: number
+}> {
+  return window.electronAPI!.session!.forkAt(input)
+}
+
 export async function saveDraftIPC(sessionId: string, draft: string): Promise<void> {
   return window.electronAPI!.session!.saveDraft(sessionId, draft) as Promise<void>
 }

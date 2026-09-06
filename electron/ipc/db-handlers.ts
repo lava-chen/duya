@@ -103,6 +103,7 @@ import {
 } from '../db/tool-approval-resolver';
 import { enqueueWakeItemForSession } from '../wake/wake-dispatcher';
 import type { WakeItem } from '../../packages/agent/src/wake/types';
+import { forkSession } from '../db/core/session-fork';
 import { CapabilityDao } from '../services/providers/capability-dao';
 import {
   SidebarSectionsStore,
@@ -125,7 +126,7 @@ import {
   serializeMessageContent,
   serializeDisplayContent,
   ipcTaskToCoreCreate,
-  ipcToUpdate,
+  ipcTaskToUpdate,
   coreTaskToIpcRow,
   coreGoalToIpcRow,
   ipcPermissionToCoreCreate,
@@ -395,6 +396,123 @@ export function registerDbHandlers(): void {
     const { sessions } = getCoreStores();
     const list = sessions.list({ parentSessionId: parentId });
     return list.map(coreSessionToIpcRow);
+  });
+
+  // ─── Plan 506: rollout portability + session fork + session archive ───
+
+  /**
+   * Plan 506 (A1): export one session's complete rollout as a single
+   * portable JSONL file (bot/non-bot multi-generation sessions are
+   * concatenated in generation order). Returns
+   * `{ absolutePath, lines, bytes }`.
+   */
+  ipcMain.handle('db:rollout:export', (_event, sessionId: string, destDir?: string) => {
+    const { messageLog } = getCoreStores();
+    return messageLog.exportRollout(sessionId, destDir);
+  });
+
+  /**
+   * Plan 506 (A3): explicit whole-store reconcile — rebuilds message_index
+   * from the rollout files (the source of truth), reporting missing and
+   * orphan files. Returns `ReconcileStats`.
+   */
+  ipcMain.handle('rollout:reconcile', () => {
+    const { messageLog } = getCoreStores();
+    return messageLog.reconcileAll();
+  });
+
+  /**
+   * Plan 506 (A2): import an external rollout .jsonl.
+   * - mode='restore': create a NEW session from the file. The session row
+   *   is created first so the import lands on a listable session.
+   * - mode='continue': append the file's lines onto `targetSessionId`.
+   * Throws `ImportValidationError` (message carries the 1-based line
+   * number) on invalid input — all-or-nothing, no partial import.
+   */
+  ipcMain.handle('rollout:import', (_event, input: {
+    sourcePath: string;
+    mode: 'restore' | 'continue';
+    targetSessionId?: string;
+    title?: string;
+  }) => {
+    const stores = getCoreStores();
+    if (!input || typeof input.sourcePath !== 'string' || input.sourcePath.length === 0) {
+      throw new Error('rollout:import: sourcePath is required');
+    }
+    if (input.mode === 'continue') {
+      if (!input.targetSessionId) {
+        throw new Error('rollout:import: targetSessionId is required for continue mode');
+      }
+      return stores.messageLog.importContinueFromFile(input.targetSessionId, input.sourcePath);
+    }
+    const sessionId = `import-${randomUUID()}`;
+    const title =
+      typeof input.title === 'string' && input.title.length > 0
+        ? input.title
+        : `Imported session (${path.basename(input.sourcePath)})`;
+    stores.sessions.create({ id: sessionId, title, agentType: 'main', status: 'active' });
+    return stores.messageLog.importRestoreFromFile(sessionId, input.sourcePath);
+  });
+
+  /**
+   * Plan 506 (B1): fork a NEW session from a historical checkpoint message
+   * of a source session. The seed is the source's projected (rebase-applied)
+   * message timeline up to and including `throughMessageId`; the new
+   * session records `parent_session_id` + a `fork` spawn edge.
+   */
+  ipcMain.handle('session:forkAt', (_event, input: {
+    sourceSessionId: string;
+    throughMessageId: string;
+    title?: string;
+  }) => {
+    const stores = getCoreStores();
+    const result = forkSession(
+      {
+        messageLog: stores.messageLog,
+        sessions: stores.sessions,
+        spawnEdges: stores.spawnEdges,
+      },
+      {
+        sourceSessionId: input.sourceSessionId,
+        throughMessageId: input.throughMessageId,
+        newSessionId: `fork-${randomUUID()}`,
+        title: input.title,
+      },
+    );
+    if (!result.ok) return result;
+    const created = stores.sessions.get(result.sessionId);
+    return {
+      ok: true as const,
+      sessionId: result.sessionId,
+      seedCount: result.seedCount,
+      session: created ? coreSessionToIpcRow(created) : null,
+    };
+  });
+
+  /**
+   * Plan 506 (C2): archive a session — status flip only, files untouched
+   * (rollback = session:unarchive). Archived sessions leave the default
+   * active list and appear via session:listArchived.
+   */
+  ipcMain.handle('db:session:archive', (_event, sessionId: string) => {
+    const { sessions } = getCoreStores();
+    if (!sessions.get(sessionId)) return false;
+    sessions.update(sessionId, { status: 'archived' });
+    return true;
+  });
+
+  /** Plan 506 (C2): unarchive — the one-click rollback for session:archive. */
+  ipcMain.handle('session:unarchive', (_event, sessionId: string) => {
+    const { sessions } = getCoreStores();
+    if (!sessions.get(sessionId)) return false;
+    sessions.update(sessionId, { status: 'active' });
+    return true;
+  });
+
+  /** Plan 506 (C2): list archived sessions (rollout files remain on disk). */
+  ipcMain.handle('db:session:listArchived', () => {
+    const { sessions } = getCoreStores();
+    return sessions.list({ status: 'archived' }).map(coreSessionToIpcRow);
   });
 
   ipcMain.handle('db:session:saveDraft', (_event, sessionId: string, draft: string) => {

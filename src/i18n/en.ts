@@ -1118,6 +1118,10 @@ const en = {
   'thread.noThreads': 'No threads yet',
   'thread.running': 'Agent is running...',
   'thread.options': 'Thread options',
+  'thread.archiveThread': 'Archive Thread',
+  'thread.exportRollout': 'Export Session Rollout',
+  'thread.exportDoneTitle': 'Rollout exported',
+  'thread.exportDoneBody': 'Exported {lines} lines — path copied to clipboard',
 
   'subAgent.status.running': 'Running...',
   'subAgent.status.completed': 'Completed',

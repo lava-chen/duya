@@ -80,6 +80,7 @@ function makeUserMessage(id: string, text: string, createdAt: number) {
   return {
     id,
     type: 'message' as const,
+    parentId: null,
     message: {
       role: 'user' as const,
       id,
@@ -599,5 +600,174 @@ describe('MessageLog rotation (Plan 493, Phase B)', () => {
       .prepare('SELECT id, generation FROM message_index WHERE session_id = ? ORDER BY seq')
       .all(sessionId) as Array<{ id: string; generation: number }>;
     expect(remaining.some((r) => r.id === 'm-2')).toBe(true);
+  });
+});
+
+describe('MessageLog non-bot rotation (Plan 506 C1)', () => {
+  let tempDir: string;
+  let rootDir: string;
+  let db: SqliteDatabase;
+  let log: MessageLog;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'core-msglog-nbrot-'));
+    rootDir = path.join(tempDir, 'data');
+    fs.mkdirSync(rootDir, { recursive: true });
+    db = new Database(path.join(tempDir, 'core.db')) as unknown as SqliteDatabase;
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    for (const m of MessageLog.migrations) m.up(db);
+    createSessionsFixture(db);
+    log = new MessageLog(db, rootDir);
+  });
+
+  afterEach(() => {
+    try {
+      db.close();
+    } catch {
+      /* already closed */
+    }
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
+  });
+
+  /** Resolve a session's current rollout file absolute path from the DB row. */
+  function rolloutAbsOf(sessionId: string): string {
+    const row = db
+      .prepare('SELECT rollout_path FROM sessions WHERE id = ?')
+      .get(sessionId) as { rollout_path: string };
+    return path.join(rootDir, row.rollout_path);
+  }
+
+  /** A compaction payload — the appendBatch rotation trigger. */
+  function makeCompactionEvent(sessionId: string, id: string, summary: string, createdAt: number): NewEvent {
+    return {
+      id,
+      sessionId,
+      payload: {
+        type: 'compaction' as const,
+        id,
+        parentId: null,
+        createdAt,
+        summary,
+        firstKeptMessageId: 'm-1',
+        compactedMessageIds: [],
+        tokensBefore: 100,
+        tokensAfter: 10,
+        strategy: 'test',
+        previousCompactionId: undefined,
+        reinjectedSystemMessages: [],
+      },
+      createdAt,
+    };
+  }
+
+  it('force-rotates a non-bot session into a per-session generation dir', () => {
+    const sessionId = 'nb-1';
+    const t = Date.UTC(2026, 8, 7, 1, 0, 0);
+    insertSessionFixture(db, sessionId, t);
+    log.appendBatch([
+      makeEvent(sessionId, makeUserMessage('nb-a', 'first', t)),
+      makeEvent(sessionId, makeUserMessage('nb-b', 'second', t + 1)),
+    ]);
+
+    const originalAbs = rolloutAbsOf(sessionId);
+    expect(fs.existsSync(originalAbs)).toBe(true);
+
+    const newGen = log.rotateArchive(sessionId, 'manual', t + 100, { force: true });
+    expect(newGen).toBe(1);
+
+    // The single file moved into sessions/<Y>/<M>/<D>/<id>/archive-0.jsonl and
+    // a fresh active.jsonl sits beside it.
+    const genDir = path.join(path.dirname(originalAbs), sessionId);
+    expect(fs.existsSync(path.join(genDir, 'archive-0.jsonl'))).toBe(true);
+    expect(fs.existsSync(path.join(genDir, 'active.jsonl'))).toBe(true);
+    expect(fs.existsSync(originalAbs)).toBe(false);
+
+    // The active file opens with the rotation audit event.
+    const activeLines = fs
+      .readFileSync(path.join(genDir, 'active.jsonl'), 'utf8')
+      .split('\n')
+      .filter((l) => l.length > 0);
+    expect(JSON.parse(activeLines[0]).type).toBe('rotation');
+
+    // The DB now points at the new active file (with its archive beside it).
+    expect(rolloutAbsOf(sessionId)).toBe(path.join(genDir, 'active.jsonl'));
+
+    // Generation stamps: messages gen=0, rotation gen=1.
+    const rows = db
+      .prepare(
+        'SELECT kind, generation FROM message_index WHERE session_id = ? ORDER BY seq',
+      )
+      .all(sessionId) as Array<{ kind: string; generation: number }>;
+    expect(rows.map((r) => r.generation)).toEqual([0, 0, 1]);
+
+    // listBySession reads across archive + active (rotation events filtered).
+    expect(log.listBySession(sessionId).map((e) => e.id)).toEqual(['nb-a', 'nb-b']);
+  });
+
+  it('appends after a non-bot rotation stay in the sticky generation dir', () => {
+    const sessionId = 'nb-2';
+    const t = Date.UTC(2026, 8, 7, 2, 0, 0);
+    insertSessionFixture(db, sessionId, t);
+    log.appendBatch([makeEvent(sessionId, makeUserMessage('nb-2-a', 'seed', t))]);
+    log.rotateArchive(sessionId, 'manual', t + 100, { force: true });
+
+    // A LATER timestamp would normally re-bucket into a new date dir — the
+    // generation layout is sticky, the active file must not move.
+    log.appendBatch([
+      makeEvent(sessionId, makeUserMessage('nb-2-b', 'after rotate', t + 86_400_000)),
+    ]);
+
+    const activeAbs = rolloutAbsOf(sessionId);
+    expect(path.basename(activeAbs)).toBe('active.jsonl');
+    expect(log.listBySession(sessionId).map((e) => e.id)).toEqual(['nb-2-a', 'nb-2-b']);
+
+    // The new row carries generation=1 (inherited from the rotation event).
+    const gen = db
+      .prepare(
+        "SELECT generation FROM message_index WHERE session_id = ? AND id = 'nb-2-b'",
+      )
+      .get(sessionId) as { generation: number };
+    expect(gen.generation).toBe(1);
+  });
+
+  it('a compaction payload rotates an already-rotated non-bot session unconditionally', () => {
+    const sessionId = 'nb-3';
+    const t = Date.UTC(2026, 8, 7, 3, 0, 0);
+    insertSessionFixture(db, sessionId, t);
+    log.appendBatch([makeEvent(sessionId, makeUserMessage('nb-3-a', 'seed', t))]);
+    log.rotateArchive(sessionId, 'manual', t + 100, { force: true });
+    log.appendBatch([makeEvent(sessionId, makeUserMessage('nb-3-b', 'mid', t + 200))]);
+
+    // The second compaction lands on an already-multi-generation session: no
+    // size gate applies, archive-1 must appear.
+    log.appendBatch([makeCompactionEvent(sessionId, 'comp-3', 'summary', t + 300)]);
+    const genDir = path.dirname(rolloutAbsOf(sessionId));
+    expect(fs.existsSync(path.join(genDir, 'archive-1.jsonl'))).toBe(true);
+
+    // chat_sessions.generation tracks the epoch.
+    const gen = db
+      .prepare('SELECT generation FROM chat_sessions WHERE id = ?')
+      .get(sessionId) as { generation: number };
+    expect(gen.generation).toBe(2);
+  });
+
+  it('thresholdBytes overrides the default size gate for non-bot rotation', () => {
+    const sessionId = 'nb-4';
+    const t = Date.UTC(2026, 8, 7, 4, 0, 0);
+    insertSessionFixture(db, sessionId, t);
+    log.appendBatch([makeEvent(sessionId, makeUserMessage('nb-4-a', 'tiny', t))]);
+
+    // Default gate: far below 4 MB, no rotation.
+    expect(log.rotateArchive(sessionId, 'compaction', t + 100)).toBe(0);
+    // A tiny threshold trips the gate.
+    expect(log.rotateArchive(sessionId, 'compaction', t + 200, { thresholdBytes: 1 })).toBe(1);
+    expect(fs.existsSync(path.join(path.dirname(rolloutAbsOf(sessionId)), 'archive-0.jsonl'))).toBe(
+      true,
+    );
   });
 });

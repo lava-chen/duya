@@ -86,6 +86,12 @@ export interface SessionListFilter {
    * Used by memory-state catalogSync to preserve tombstone semantics.
    */
   includeDeleted?: boolean;
+  /**
+   * Plan 506 (C2): when true, include archived sessions (status='archived')
+   * in the default result. Defaults to false — the active list hides them;
+   * `listArchived` / `list({ status: 'archived' })` is the explicit view.
+   */
+  includeArchived?: boolean;
 }
 
 // ─── SessionStore ───
@@ -215,8 +221,17 @@ export class SessionStore {
     if (filter.status !== undefined) {
       conditions.push('status = @status');
       params.status = filter.status;
-    } else if (!filter.includeDeleted) {
-      conditions.push("status != 'deleted'");
+    } else {
+      // Plan 506 (C2): archived sessions leave the default active list —
+      // they remain readable via `list({ status: 'archived' })` or the
+      // includeArchived escape hatch, and unarchive is always available.
+      if (!filter.includeDeleted && !filter.includeArchived) {
+        conditions.push("status NOT IN ('deleted', 'archived')");
+      } else if (!filter.includeDeleted) {
+        conditions.push("status != 'deleted'");
+      } else if (!filter.includeArchived) {
+        conditions.push("status != 'archived'");
+      }
     }
     if (filter.excludeModes && filter.excludeModes.length > 0) {
       const placeholders = filter.excludeModes.map((_, i) => `@em${i}`).join(',');
