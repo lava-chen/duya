@@ -720,6 +720,15 @@ function CronListItem({
       {/* Task name */}
       <div className="flex items-center gap-2 min-w-0">
         <span className="truncate font-medium text-foreground">{cron.name}</span>
+        {cron.agent && (
+          <span
+            className="shrink-0 rounded px-1.5 py-0.5 text-xs"
+            style={{ border: '1px solid var(--border)', color: 'var(--text-muted)' }}
+            title={cron.agent}
+          >
+            {t('automation.botBound')}
+          </span>
+        )}
       </div>
 
       {/* Schedule */}
