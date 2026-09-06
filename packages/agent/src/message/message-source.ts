@@ -28,6 +28,12 @@
  *                       metadata.reaction. Mirrors grok's transcript-entry
  *                       reactions; rendered later as a pill on the target
  *                       bubble (UI pending — plan 491 P2 surface).
+ *  - 'group'          → Plan 478: a bot's PostToRoom message inside a shared
+ *                       room transcript (session `room:<roomId>`); the bot's
+ *                       only voice in a group (grok send-message room entry).
+ *  - 'group_system'   → Plan 478: room lifecycle notices (turn concluded,
+ *                       member pass notes) rendered as system rows in the
+ *                       group room view.
  *
  * `source` is inferred at the IPC boundary (`ipcMessageToNewEvent`) when
  * the caller does not supply one explicitly. The inference rules live in
@@ -42,7 +48,9 @@ export type MessageSource =
   | 'system'
   | 'channel_mirror'
   | 'reaction'
-  | 'agent_dm';
+  | 'agent_dm'
+  | 'group'
+  | 'group_system';
 
 /**
  * Sources that are visible to the end user in a 1:1 bot chat view.
@@ -70,6 +78,20 @@ export const BOT_INTERNAL_SOURCES: readonly MessageSource[] = [
   'scratchpad',
   'system',
 ] as const;
+
+/**
+ * Plan 478: sources visible in a group room transcript (`room:<roomId>`
+ * session). User posts, bot PostToRoom messages, and room lifecycle notices;
+ * everything else is hidden from the room view.
+ */
+export const ROOM_VISIBLE_SOURCES: readonly MessageSource[] = [
+  'user',
+  'group',
+  'group_system',
+] as const;
+
+/** Sources the group orchestrator projects into GroupMessage history. */
+export const ROOM_HISTORY_SOURCES: readonly MessageSource[] = ['user', 'group'] as const;
 
 /**
  * Default source used when no other inference rule matches. Existing

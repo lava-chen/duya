@@ -35,6 +35,20 @@ export interface BotRosterEntry {
   description?: string
 }
 
+/**
+ * One shared room this bot belongs to (Plan 478). Mirrors the prompt layer's
+ * AgentGroupSummary so renderBotRoster can hand rooms to
+ * buildAgentMessagingSystemPrompt.
+ */
+export interface BotGroupSummary {
+  /** Room id (`groups.toml` `[groups.<id>]` key). */
+  id: string
+  /** Display name of the room. */
+  name: string
+  /** Fellow members (including this bot). */
+  members: BotRosterEntry[]
+}
+
 /** Plan 474 §2.4 — section gating from `[agents.<id>.prompt.sections]`. */
 export interface BotPromptSectionsFilter {
   /** Whitelist: when non-empty, only these registered sections render. */
@@ -84,6 +98,8 @@ export interface BotPromptContext {
   workingDirectory?: string
   /** Other bots visible to this bot (agent directory). */
   agentDirectory?: BotRosterEntry[]
+  /** Shared rooms this bot belongs to (Plan 478, from groups.toml). */
+  agentGroups?: BotGroupSummary[]
   /**
    * Runtime data slots the framework does not interpret yet; owning plans
    * narrow their types when they implement the corresponding sections.

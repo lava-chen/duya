@@ -12,6 +12,7 @@
 import * as path from 'path'
 import { readdir, readFile, stat } from 'fs/promises'
 import { readConfigAgents } from '../../agent-profile/config-agents.js'
+import { listResolvedGroups } from '../../agent-profile/config-groups.js'
 import { readBotProfileIdentity } from '../../agent-profile/bot-profile-reader.js'
 import type { CustomAgentPromptConfig } from '../../agent-profile/config-agents.js'
 import type { AgentProfile } from '../../agent-profile/types.js'
@@ -142,6 +143,31 @@ export async function loadBotPromptContext(agentId?: string): Promise<BotPromptC
   )
   if (roster.length > 0) {
     ctx.agentDirectory = roster
+  }
+
+  // Plan 478: shared rooms this bot belongs to (groups.toml read side) —
+  // rendered by renderBotRoster inside the messaging contract.
+  try {
+    const groups = await listResolvedGroups()
+    const memberGroups = Object.values(groups).filter((group) =>
+      group.memberIds.includes(agentId),
+    )
+    if (memberGroups.length > 0) {
+      ctx.agentGroups = memberGroups.map((group) => ({
+        id: group.id,
+        name: group.name,
+        members: group.memberIds.map((id) => {
+          const entry = agents[id]
+          return {
+            id,
+            name: entry?.name || id,
+            description: entry?.description,
+          }
+        }),
+      }))
+    }
+  } catch {
+    // groups.toml unreadable — the roster renders without rooms.
   }
 
   // Plan 479 P2.1: tiered memory from the file manifest. The duya root is

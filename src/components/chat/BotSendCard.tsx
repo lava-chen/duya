@@ -73,16 +73,24 @@ function WidgetBody({
         <div className="bot-send-card__widget-prompt">{widget.prompt}</div>
       )}
       <div className="bot-send-card__widget-options">
-        {widget.options.slice(0, 6).map((option, i) => (
-          <button
-            key={i}
-            type="button"
-            className="bot-send-card__option"
-            onClick={() => onOptionClick?.(option)}
-          >
-            {option}
-          </button>
-        ))}
+        {widget.options.slice(0, 6).map((option, i) => {
+          // SendMessageTool persists options as {label, value?, description?,
+          // style?}; rows written before that schema may hold bare strings.
+          const resolved =
+            typeof option === 'string' ? { label: option } : option;
+          return (
+            <button
+              key={i}
+              type="button"
+              className="bot-send-card__option"
+              data-style={resolved.style}
+              title={resolved.description}
+              onClick={() => onOptionClick?.(resolved.value ?? resolved.label)}
+            >
+              {resolved.label}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

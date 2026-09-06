@@ -1,6 +1,6 @@
 # 478 — Shared Rooms 群聊（Group 模型 + 轮次编排 + @Mention + 群 Transcript）
 
-> **Status**: Planning · **Priority**: P1 · **Owner**: TBD
+> **Status**: Implementation（2026-09-06 P1/P2/P3 核心落地） · **Priority**: P1 · **Owner**: TBD
 > **总纲**: [473-grok-bot-framework-overview](./473-grok-bot-framework-overview.md)
 > **前置**: plan 476（Wake Bus）、477（DM 与 per-bot 常驻绑定）
 > **参考源码**：grok-bot `source/host/groups/`（group-store.ts、group-chat.ts）、`source/host/extensions/transcript/shared-rooms.ts`
@@ -72,20 +72,67 @@ max_member_turns = 10
 
 ## 3. 分阶段实施
 
+> **2026-09-06 实施记录**：核心已全部落地（P1.1–P3.2，含 UI）。存储层的
+> 两条刻意偏离（均更贴近 grok 原机制、已被实现验证）：
+> 1. **群 transcript = `room:<roomId>` 独立 MessageLog session**（非
+>    `group_id` 列）：room session 存群 transcript 但永远不跑 LLM（grok
+>    "the room session itself never runs an LLM" 的直接对应）；渲染端
+>    `room:` 前缀路由/侧栏 room kind 本就预留。`group_id` 列方案无法回答
+>    "群消息挂在哪个 session" 的问题。
+> 2. **PostToRoom 走 `message:append` 直写房间 transcript**（非 mailbox
+>    `meta.toAgentId` 路由）：worker 的 append 经 db-bridge 广播
+>    `message:new` SSE，房间视图实时更新零成本；db-bridge 的 append 钩子
+>    检测 `metadata.groupPost` 并调度群 turn（等价 mailbox 双路径钩子）。
+> 其他对齐细节：PostToRoom 每成员每 turn 限 2 条（时间窗预算，key 常量同
+> dmSendLimiter 先例）；成员 turn 失败=pass（grok 语义，catch 在
+> orchestrator 内）；DM 抢占后 redrive 重发、automation 群播种、群 token
+> 预算熔断暂缓（见 §6 风险项）；Mimosa 扫描器会把 `Map.get(<tool 输入>)`
+> 误判为 SSRF——PostToRoomTool 的预算 Map 必须用常量 key。
+
 ### Phase 1 — 模型与编排器
-- [ ] **P1.1** groups.toml schema + 读写 + 校验（成员存在、≤6）+ 单测。
-- [ ] **P1.2** MessageLog `group_id` 列 + envelope 群字段（`fromUser/toAgent.kind:'group'`）扩展（**复用 plan 2026-08-31 §7.3 同名 migration，不另起 `group_room_messages` 表**）+ core-db store 群 query API + 单测。
-- [ ] **P1.3** 轮次编排器纯函数（mention 优先/轮转/pass/上限/预算）+ 单测（重点覆盖 grok 对齐用例）。
+- [x] **P1.1** groups.toml schema + 读写 + 校验（成员存在、≤6）+ 单测。
+  worker 读 `packages/agent/src/agent-profile/config-groups.ts`；main CRUD
+  `electron/config/groups.ts`（嵌套群/未知成员/超员/重名校验，
+  `electron/config/__tests__/groups.test.ts`）。
+- [x] **P1.2** 群 transcript 存储：`room:<roomId>` MessageLog session（见
+  上方偏离记录 1）；`MessageSource` 增 `group`/`group_system` +
+  `ROOM_VISIBLE_SOURCES`/`ROOM_HISTORY_SOURCES`；
+  `metadata.groupPost` 进 PERSISTED_METADATA_KEYS 白名单 +
+  `group_post_meta` 列透传（core-db-adapters）；`room:getTranscript`
+  源过滤投影。
+- [x] **P1.3** 轮次编排器纯函数：`packages/agent/src/wake/groupTurn.ts`
+  （grok group-chat.ts + group-chat-orchestrator.ts 忠实移植：
+  mention 解析含 @everyone/@all、resolveResponders、orderRoundSpeakers、
+  pass、上限、epoch 取消、失败=pass）+ 23 单测
+  （`packages/agent/src/wake/__tests__/groupTurn.test.ts`）。
 
 ### Phase 2 — 执行链
-- [ ] **P2.1** group-member runner（hidden wake，群 transcript 窗口注入）+ PostToRoom 工具。
-- [ ] **P2.2** `runGroupTurn` 编排循环（逐成员执行、收束、预算熔断）+ e2e（2 bot + 用户三方对话）。
-- [ ] **P2.3** automation 群播种（cron 可定向群房间）。
+- [x] **P2.1** PostToRoom 工具：`packages/agent/src/tool/PostToRoomTool/`
+  （append 投递，见偏离记录 2；pass 静默协议；房间存在性+成员校验经
+  `validateRoomTarget` allowlist）；入 `BOT_TOOLSET` + builtin 注册
+  （discoverable，exact-name promotion）。
+- [x] **P2.2** `runGroupTurn` 执行链：纯编排器在 packages/agent；
+  main 侧 `electron/wake/group-turn-dispatcher.ts`（per-room epoch +
+  promise 链、逐成员 hidden wake 复用 `runWakePromptInExistingSession`、
+  409/失败=pass、用户打断=epoch++ + interruptCronSession、收束时写
+  group_system 通知）；db-bridge `message:append` 钩子 +
+  `room:post` IPC 双入口。
+- [ ] **P2.3** automation 群播种（cron 可定向群房间）——待做（wake
+  payload `automation` 尚未接线，与本 plan 解耦）。
 
 ### Phase 3 — UI 与收口
-- [ ] **P3.1** 前端群房间视图（房间列表 + 群流 + 成员状态：等待发言/发言中/pass）。
-- [ ] **P3.2** 群管理 UI（建群/改成员/预算）。
-- [ ] **G1** `npm run typecheck:all` 全绿；e2e：3 bot 群完成受控轮转讨论并正确收束；用户打断生效。
+- [x] **P3.1** 前端群房间视图：侧栏 Bots 区"群聊"分组
+  （`buildRoomContacts` + `RoomContactListItem`，复合群头像 rakazo 式）；
+  `GroupRoomChatView`（日期分隔、speaker 名行+头像、group_system 居中
+  系统行、讨论中 typing pill、rakazo 式 @mention composer 成员下拉）；
+  App.tsx room 分支挂载（ChatView 不再兜底 room）。
+- [x] **P3.2** 群管理 UI：`GroupSettingsDialog`（建群/改成员 ≤6/删群，
+  rakazo GroupPanel 视觉）；IPC `config:groups:list|get|create|update|delete`
+  + `room:ensure|post|getTranscript|members` + preload `groups`/`room` API。
+- [ ] **G1** `npm run typecheck:all` 全绿（src/electron 本 plan 文件全绿；
+  ManageRoutineTool 红为并行会话 476 P2.3b WIP）；单测
+  groupTurn 23 + groups 14 + roomContacts 6 全绿；e2e 三方对话待手动冒烟
+  （dev：建群 → 群内 @成员 发言 → 成员依次 wake → PostToRoom 回帖）。
 
 ## 4. 非目标
 

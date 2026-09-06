@@ -101,6 +101,8 @@ export interface MessageRow {
    * JSON-serialized from message metadata.agentDm. Null for plain rows.
    */
   agent_dm_meta?: string | null;
+  /** Plan 478: shared-room post payload (JSON). */
+  group_post_meta?: string | null;
 }
 
 // ─── Content serialization (ported from old db-handlers.ts) ───
@@ -179,7 +181,10 @@ export function inferMessageSource(dto: {
     // Plan 490 P1: ReactToMessage tapback rows.
     explicit === 'reaction' ||
     // Plan 477 P4.4: bot→bot DM marker rows.
-    explicit === 'agent_dm'
+    explicit === 'agent_dm' ||
+    // Plan 478: shared-room entries (bot PostToRoom + room lifecycle notes).
+    explicit === 'group' ||
+    explicit === 'group_system'
   ) {
     return explicit;
   }
@@ -393,6 +398,10 @@ const PERSISTED_METADATA_KEYS = [
   // on round-trip and the transcript renders them as plain bubbles instead
   // of the collapsed DM chip (observed: every marker degraded after reload).
   'agentDm',
+  // Plan 478: shared-room payload (room/roomName/memberId/memberName/
+  // clientMsgId) — the room view and the group orchestrator both read the
+  // member identity back out of the persisted room transcript entries.
+  'groupPost',
 ] as const;
 
 /**
@@ -694,6 +703,10 @@ function messageToIpcRow(
     agent_dm_meta:
       metadata?.agentDm != null
         ? JSON.stringify(metadata.agentDm)
+        : null,
+    group_post_meta:
+      metadata?.groupPost != null
+        ? JSON.stringify(metadata.groupPost)
         : null,
   };
 }

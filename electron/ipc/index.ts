@@ -29,6 +29,7 @@ import { registerHooksHandlers } from './hooks-handlers';
 import { registerMcpReloadIpcHandler } from './mcp-handlers';
 import { registerComputerUseHandlers } from './computer-use';
 import { registerBotChannelHandlers } from './bot-channel-handlers';
+import { registerGroupHandlers } from './group-handlers';
 import {
   registerSidebarSectionsHandlers,
 } from './db-handlers';
@@ -60,4 +61,5 @@ export {
   registerMcpReloadIpcHandler,
   registerComputerUseHandlers,
   registerBotChannelHandlers,
+  registerGroupHandlers,
 };

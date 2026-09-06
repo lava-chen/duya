@@ -23,8 +23,21 @@ export interface SendMessageCardMeta {
   /** attachment-type target. */
   url?: string;
   alt?: string;
-  /** widget-type choice prompt (options 1-6). */
-  widget?: { prompt: string; options: string[] };
+  /** widget-type choice prompt (options 1-6). Options mirror the
+   *  SendMessageTool schema ({label, value?, description?, style?}); rows
+   *  persisted before that shape may hold bare strings. */
+  widget?: {
+    prompt: string;
+    options: Array<
+      | string
+      | {
+          label: string;
+          value?: string;
+          description?: string;
+          style?: 'default' | 'primary' | 'danger';
+        }
+    >;
+  };
   /** cursor-agent run reference. */
   bcId?: string;
   /** secret-request descriptor (value never persisted). */
@@ -49,6 +62,20 @@ export interface AgentDmCardMeta {
   intent?: string | null;
   priority?: boolean;
   hops?: number;
+  clientMsgId?: string;
+}
+
+/**
+ * Plan 478: shared-room post payload (parsed from group_post_meta).
+ * Carries the member identity of a post_to_room row so the room view can
+ * render the speaker name above the bubble.
+ */
+export interface RoomPostMeta {
+  roomId: string;
+  roomName?: string;
+  memberId: string;
+  memberName?: string;
+  text?: string;
   clientMsgId?: string;
 }
 
@@ -107,6 +134,9 @@ export interface Message {
 
   /** Plan 477 P4.4: bot→bot DM marker payload for marker card rendering. */
   agentDmMeta?: AgentDmCardMeta | null;
+
+  /** Plan 478: shared-room post payload for room view rendering. */
+  groupPostMeta?: RoomPostMeta | null;
 
   /** Plan 491 P1.2: Sequence number for entry ledger ordering.
    *  Used for windowed replay on reconnection (afterSeq cursor). */

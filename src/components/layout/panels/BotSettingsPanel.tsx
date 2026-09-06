@@ -23,10 +23,9 @@ import {
 import {
   connectBotChannel,
   disconnectBotChannel,
-  listBotChannelRoutes,
-  listGatewayPlatformInfo,
-  type BotChannelRoute,
-  type GatewayPlatformInfo,
+  listBotChannelManifests,
+  listBotChannels,
+  type BotChannelManifest,
 } from "@/lib/bot-channels-ipc";
 import { BOT_AVATAR_COLORS } from "@/lib/bot-avatar";
 import { BotModelField } from "../BotModelField";
@@ -65,35 +64,35 @@ function PanelNotice({ text }: { text: string }) {
 }
 
 /**
- * Per-bot channel bindings over the gateway channel stack: a binding is a
- * gateway profile route ((platform[, chatId]) → this bot), so inbound IM
- * messages (telegram/weixin/feishu/qq/…) run with the bot's persona. Platform
- * credentials are configured once in the channel settings — binding a bot
- * never touches credentials.
+ * Per-bot channel bindings (plan 488, grok-form): each bot owns its platform
+ * connection — the token is stored in the per-agent secret store and a live
+ * inbound connector wakes this bot's persistent session on every message.
  */
 function BotChannelsSection({ agentId }: { agentId: string }) {
   const { t } = useTranslation();
-  const [platforms, setPlatforms] = useState<GatewayPlatformInfo[]>([]);
-  const [routes, setRoutes] = useState<BotChannelRoute[]>([]);
-  const [binding, setBinding] = useState<string | null>(null);
-  const [chatId, setChatId] = useState("");
+  const [manifests, setManifests] = useState<BotChannelManifest[]>([]);
+  const [boundPlatforms, setBoundPlatforms] = useState<Map<string, string>>(new Map());
+  const [connecting, setConnecting] = useState<string | null>(null);
+  const [credential, setCredential] = useState("");
+  const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   const reload = useCallback(async () => {
-    // Platforms and bindings load independently — a binding failure must not
-    // hide the whole section (it renders from platforms alone).
+    // Manifests and bindings load independently — a binding failure must not
+    // hide the whole section (it renders from manifests alone).
     try {
-      setPlatforms(await listGatewayPlatformInfo());
+      setManifests(await listBotChannelManifests());
     } catch {
       // Dev browser without the Electron preload — leave the section empty.
       return;
     }
     try {
-      setRoutes(await listBotChannelRoutes(agentId));
+      const channels = await listBotChannels(agentId);
+      setBoundPlatforms(new Map(channels.map((c) => [c.platform, c.label])));
       setError("");
     } catch (err) {
-      setRoutes([]);
+      setBoundPlatforms(new Map());
       setError(err instanceof Error ? err.message : String(err));
     }
   }, [agentId]);
@@ -102,14 +101,15 @@ function BotChannelsSection({ agentId }: { agentId: string }) {
     void reload();
   }, [reload]);
 
-  const handleBind = useCallback(
+  const handleConnect = useCallback(
     async (platform: string) => {
       setBusy(true);
       setError("");
       try {
-        await connectBotChannel(agentId, { platform, chatId: chatId.trim() || undefined });
-        setBinding(null);
-        setChatId("");
+        await connectBotChannel(agentId, { platform, label: label.trim() || undefined, credential });
+        setConnecting(null);
+        setCredential("");
+        setLabel("");
         await reload();
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -117,15 +117,15 @@ function BotChannelsSection({ agentId }: { agentId: string }) {
         setBusy(false);
       }
     },
-    [agentId, chatId, reload]
+    [agentId, credential, label, reload]
   );
 
-  const handleUnbind = useCallback(
-    async (route: BotChannelRoute) => {
+  const handleDisconnect = useCallback(
+    async (platform: string) => {
       setBusy(true);
       setError("");
       try {
-        await disconnectBotChannel(agentId, route.platform, route.chatId);
+        await disconnectBotChannel(agentId, platform);
         await reload();
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -136,7 +136,7 @@ function BotChannelsSection({ agentId }: { agentId: string }) {
     [agentId, reload]
   );
 
-  if (platforms.length === 0) return null;
+  if (manifests.length === 0) return null;
 
   return (
     <div className="mb-5">
@@ -152,90 +152,98 @@ function BotChannelsSection({ agentId }: { agentId: string }) {
         </div>
       )}
       <div className="flex flex-col gap-2">
-        {platforms.map((p) => {
-          const bound = routes.filter((r) => r.platform === p.platform);
-          const isBinding = binding === p.platform;
+        {manifests.map((m) => {
+          const boundLabel = boundPlatforms.get(m.platform);
+          const isConnected = boundLabel !== undefined;
+          const isConnecting = connecting === m.platform;
           return (
             <div
-              key={p.platform}
+              key={m.platform}
               className="rounded-lg px-3 py-2"
               style={{ border: "1px solid var(--border)", background: "var(--surface)" }}
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="min-w-0">
                   <div className="text-sm" style={{ color: "var(--text)" }}>
-                    {p.platform}
+                    {m.displayName}
                     <span
                       className="ml-2 text-xs"
-                      style={{
-                        color:
-                          bound.length > 0
-                            ? "var(--accent)"
-                            : "var(--text-muted)",
-                      }}
+                      style={{ color: isConnected ? "var(--accent)" : "var(--text-muted)" }}
                     >
-                      {!p.hasCredentials
-                        ? t("panel.botSettings.channels.platformNotConfigured")
-                        : !p.enabled
-                          ? t("panel.botSettings.channels.platformDisabled")
-                          : bound.length > 0
-                            ? t("panel.botSettings.channels.connected")
-                            : t("panel.botSettings.channels.notConnected")}
+                      {isConnected
+                        ? t("panel.botSettings.channels.connected")
+                        : m.availability === "coming-soon"
+                          ? t("panel.botSettings.channels.comingSoon")
+                          : t("panel.botSettings.channels.notConnected")}
                     </span>
                   </div>
+                  {isConnected && (
+                    <div className="text-xs truncate" style={{ color: "var(--text-muted)" }}>
+                      {boundLabel}
+                    </div>
+                  )}
                 </div>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => {
-                    setChatId("");
-                    setBinding(isBinding ? null : p.platform);
-                  }}
-                >
-                  {t("panel.botSettings.channels.connect")}
-                </Button>
+                {m.availability === "available" && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => {
+                      setCredential("");
+                      setLabel("");
+                      setConnecting(isConnecting ? null : m.platform);
+                    }}
+                  >
+                    {isConnected
+                      ? t("panel.botSettings.channels.reconnect")
+                      : t("panel.botSettings.channels.connect")}
+                  </Button>
+                )}
               </div>
-              {bound.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mt-2">
-                  {bound.map((r, i) => (
-                    <span
-                      key={`${r.chatId ?? "*"}-${i}`}
-                      className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs"
-                      style={{ border: "1px solid var(--border)", color: "var(--text-muted)" }}
-                    >
-                      {r.chatId ? `#${r.chatId}` : t("panel.botSettings.channels.allChats")}
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void handleUnbind(r)}
-                        aria-label={t("panel.botSettings.channels.disconnect")}
-                        style={{ color: "var(--text-muted)" }}
-                      >
-                        ×
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-              {isBinding && (
+              {isConnecting && (
                 <div className="mt-2 flex flex-col gap-2">
+                  {m.connectGuide && (
+                    <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                      {m.connectGuide}
+                    </div>
+                  )}
                   <Input
-                    value={chatId}
-                    onChange={(e) => setChatId(e.target.value)}
-                    placeholder={t("panel.botSettings.channels.chatPlaceholder")}
+                    type="password"
+                    value={credential}
+                    onChange={(e) => setCredential(e.target.value)}
+                    placeholder={m.credentialLabel}
+                    className="w-full"
+                  />
+                  <Input
+                    value={label}
+                    onChange={(e) => setLabel(e.target.value)}
+                    placeholder={t("panel.botSettings.channels.labelPlaceholder")}
                     className="w-full"
                   />
                   <div className="flex justify-end gap-1.5">
+                    {isConnected && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => void handleDisconnect(m.platform)}
+                      >
+                        {t("panel.botSettings.channels.disconnect")}
+                      </Button>
+                    )}
                     <Button
                       variant="secondary"
                       size="sm"
                       disabled={busy}
-                      onClick={() => setBinding(null)}
+                      onClick={() => setConnecting(null)}
                     >
                       {t("common.cancel")}
                     </Button>
-                    <Button size="sm" disabled={busy} onClick={() => void handleBind(p.platform)}>
+                    <Button
+                      size="sm"
+                      disabled={busy || !credential.trim()}
+                      onClick={() => void handleConnect(m.platform)}
+                    >
                       {t("panel.botSettings.channels.save")}
                     </Button>
                   </div>
