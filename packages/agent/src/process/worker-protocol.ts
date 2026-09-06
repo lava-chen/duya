@@ -102,6 +102,14 @@ export interface ChatStartCommand {
      */
     allowedTools?: string[];
     /**
+     * Plan 498: permission ask surface for this session. 'bot' (bot/wake
+     * sessions) pauses the turn on ask — the request is persisted as a
+     * durable approval card and the turn ends with a neutral tool result.
+     * 'default' keeps the in-worker interactive wait (5-minute timeout).
+     * Derived by the agent server from the session row; absent → 'default'.
+     */
+    permissionSurface?: 'bot' | 'default';
+    /**
      * Mark this session transcript as excluded from Stage 1 memory
      * extraction (design §7.4). Used by the curator agent runner so
      * curator reasoning is not fed back into Stage 1.

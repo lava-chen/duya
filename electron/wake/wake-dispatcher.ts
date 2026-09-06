@@ -611,6 +611,27 @@ function promptForItem(item: WakeItem): string {
       // arrived). Dispatch = run it as the user's turn.
       return (item.payload.text ?? '').trim() || '[system] Continue with the user request.'
     }
+    case 'approval': {
+      // Plan 498: a durable approval card was decided (possibly long after
+      // the paused turn ended). The allow path's replay is authorized by the
+      // one-shot approval ledger (toolApproval:consumeApproved in canUseTool),
+      // so the model can simply retry the call — nothing else is pre-approved.
+      const p = item.payload
+      if (p.decision === 'deny') {
+        return (
+          `[system] The user DENIED the pending "${p.toolName}" tool call (approval ${p.approvalId}). ` +
+          `Do not retry it. Continue without it, or tell the user what you need instead.`
+        )
+      }
+      const always =
+        p.decision === 'always'
+          ? ' This tool is now allowed for your future turns as well.'
+          : ''
+      return (
+        `[system] The user APPROVED the pending "${p.toolName}" tool call (approval ${p.approvalId}). ` +
+        `Retry that call now with the same arguments you intended.${always}`
+      )
+    }
     case 'dm': {
       // 477 P3.1: a bot→bot DM wake. The envelope text was persisted in the
       // mailbox row; rebuild the grok-style inbound cue from the payload so

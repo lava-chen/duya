@@ -27,6 +27,7 @@ export type WakeSourceKind =
   | 'broadcast' // background: admin broadcast (dedupe: broadcast id)
   | 'agent.dm' // agent: bot→bot message, priority-capable (dedupe: clientMsgId)
   | 'user.message' // user: direct chat dispatch (dedupe: —)
+  | 'approval.resume' // agent: durable approval-card decision resumed the run (dedupe: approvalId)
 
 /** Lane for each source kind (compile-time mirror of 476 §2.3). */
 export const SOURCE_DEFAULT_LANE: Readonly<Record<WakeSourceKind, WakeLane>> = {
@@ -36,6 +37,9 @@ export const SOURCE_DEFAULT_LANE: Readonly<Record<WakeSourceKind, WakeLane>> = {
   broadcast: 'background',
   'agent.dm': 'agent',
   'user.message': 'user',
+  // Plan 498: an approval decision is user-authored but must not preempt a
+  // turn in flight — it queues as agent-lane work (behind user turns).
+  'approval.resume': 'agent',
 }
 
 /**
@@ -85,6 +89,14 @@ export type WakePayload =
       hops?: number
     }
   | { kind: 'user'; text: string; messageId?: string }
+  | {
+      /** Plan 498: a persisted approval card was decided; resume the run. */
+      kind: 'approval'
+      approvalId: string
+      toolName: string
+      decision: 'allow' | 'always' | 'deny'
+      text: string
+    }
 
 /** Dedupe key of an item (the queue collapses on it). */
 export function wakeDedupeKey(item: WakeItem): string {
@@ -99,6 +111,8 @@ export function wakeDedupeKey(item: WakeItem): string {
       return `broadcast:${item.payload.broadcastId}`
     case 'dm':
       return `dm:${item.payload.clientMsgId}`
+    case 'approval':
+      return `approval:${item.payload.approvalId}`
     case 'user':
       return item.payload.messageId == null
         ? `user:${item.enqueuedAtMs}`

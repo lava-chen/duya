@@ -33,9 +33,11 @@ import {
   pluginDb,
   settingDb,
   sessionDb,
+  toolApprovalDb,
   turnReviewDb,
   goalDb,
 } from '../ipc/db-client.js';
+import { createSurfaceAwarePermissionHandler } from './tool-approval-card.js';
 import { captureTurnReviewBaseline, completeTurnReview, type TurnReviewBaseline } from '../session/turn-review.js';
 
 // Note: sendMemoryWakeup is intentionally NOT statically imported here.
@@ -212,6 +214,12 @@ interface ChatStartMessage {
      * interagent `minimal` mode to restrict the target agent to Read/Grep/Glob.
      */
     allowedTools?: string[];
+    /**
+     * Plan 498: permission ask surface. 'bot' (bot/wake sessions) pauses the
+     * turn on ask — the request is persisted as a durable approval card and
+     * the turn ends with a neutral tool result. Absent → interactive wait.
+     */
+    permissionSurface?: 'bot' | 'default';
     /** Conductor mode — inject canvas tools + prompt overlay for this turn. */
     conductorMode?: boolean;
     /** Conductor canvas ID bound to the session (required when conductorMode is true). */
@@ -2039,7 +2047,45 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
   try {
     startChatHeartbeat();
-    const requestPermission = createPermissionHandler(msg.sessionId);
+    // Plan 498: surface-aware permission handling. Bot/wake sessions pause
+    // the turn on ask (durable approval card + continuation replay);
+    // interactive sessions keep the in-worker wait, plus a persisted card
+    // as a crash fallback. AskUserQuestion-style two-phase prompts never
+    // pause — they are inherently interactive.
+    const permissionSurface = msg.options?.permissionSurface === 'bot' ? 'bot' : 'default';
+    const botAgentId = msg.options?.agentProfileId || null;
+    const requestPermission = createSurfaceAwarePermissionHandler(
+      createPermissionHandler(msg.sessionId),
+      { sessionId: msg.sessionId, surface: permissionSurface, botAgentId },
+    );
+    // Plan 498: "Always allow this tool" grants from persisted approval
+    // cards, scoped to this session's bot (bot surface) or the session itself.
+    let approvedAlwaysAllowTools: string[] = [];
+    try {
+      approvedAlwaysAllowTools = (await toolApprovalDb.listRules({
+        scopeType: permissionSurface === 'bot' ? 'bot' : 'session',
+        scopeId: (permissionSurface === 'bot' ? botAgentId : msg.sessionId) || msg.sessionId,
+      })) as string[];
+    } catch {
+      // Best-effort: a failed rules read just skips the always-allow seeds.
+    }
+    const consumeApprovedEffect = async (
+      toolName: string,
+      toolInput?: Record<string, unknown>,
+    ): Promise<boolean> => {
+      try {
+        return Boolean(
+          await toolApprovalDb.consumeApproved({
+            sessionId: msg.sessionId,
+            toolName,
+            toolInput,
+          }),
+        );
+      } catch {
+        // Fail closed: a broken ledger read must never pre-approve a call.
+        return false;
+      }
+    };
     const sendStatus = (message: string): void => {
       sendToMain({ type: 'chat:status', sessionId: msg.sessionId, message });
     };
@@ -2609,6 +2655,9 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     const eventGen = agent.streamChat(messageContent, {
       systemPrompt: effectiveSystemPrompt,
       requestPermission,
+      // Plan 498: one-shot approval ledger + persisted always-allow grants.
+      consumeApprovedEffect,
+      approvedAlwaysAllowTools,
       agentProfileId: msg.options?.agentProfileId,
       outputStyleConfig: msg.options?.outputStyleConfig,
       mode: msg.options?.mode,

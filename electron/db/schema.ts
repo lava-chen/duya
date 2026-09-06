@@ -1,4 +1,5 @@
 import { getLogger, LogComponent } from '../logging/logger';
+import { ensureToolApprovalTables } from './toolApprovalState';
 import { createSendMessageStateTables } from './sendMessageState';
 
 // Use type-only import to avoid bundling better-sqlite3 in the schema module
@@ -495,6 +496,9 @@ export function initializeSchema(db: BetterSqlite3Db): void {
   createSendMessageStateTables(db);
 
   runMigrations(db);
+  // Plan 498: module-owned side tables, self-repaired on every boot so a
+  // partially-migrated database heals without waiting for the migration gate.
+  ensureToolApprovalTables(db);
 }
 
 /**
@@ -2613,6 +2617,16 @@ const migrations: Migration[] = [
     name: 'add_send_message_card_side_state',
     migrate(db: BetterSqlite3Db): void {
       createSendMessageStateTables(db);
+    },
+  },
+  {
+    // Plan 498: persistent tool-approval side state. Idempotent DDL also runs
+    // as a self-repair step in initializeSchema. Id 55 was reserved for the
+    // send-message card side state (landed in parallel) — this stays 56.
+    id: 56,
+    name: 'add_tool_approval_side_state',
+    migrate(db: BetterSqlite3Db): void {
+      ensureToolApprovalTables(db);
     },
   },
 ];
