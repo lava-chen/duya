@@ -870,8 +870,12 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
 
       try {
         const kind: 'text' | 'attachment' = outbound.url ? 'attachment' : 'text';
+        // Strip the `bot:` prefix: channelDelivery keys the live-outbound
+        // registry and the connector secret store by the bare agent id, so
+        // passing the full `bot:<agentId>` session id misses both lookups.
+        const agentId = parseAgentIdFromBotSession(sessionId) ?? sessionId;
         await getChannelBackgroundWakes().deliverToChannel(
-          sessionId,
+          agentId,
           sessionId,
           channelAddress,
           {
