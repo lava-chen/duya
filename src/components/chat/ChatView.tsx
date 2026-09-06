@@ -15,7 +15,7 @@ import { getAppConnectionAPI } from '@/lib/app-connection-ipc';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useNextStepSuggestions } from '@/hooks/useNextStepSuggestions';
 import { dispatchPrefillChatInput } from '@/lib/prefill-chat-input-event';
-import { subscribeToPermissions, subscribeToPhase, subscribeToModeChanged, subscribeToConnectorAuthRequired, clearConnectorAuthRequired, attachToExistingStream, getSnapshot } from '@/lib/stream-session-manager';
+import { subscribeToPermissions, subscribeToPhase, subscribeToModeChanged, subscribeToConnectorAuthRequired, clearConnectorAuthRequired, attachToExistingStream, getSnapshot, type ConnectorAuthRequiredData } from '@/lib/stream-session-manager';
 import { getAgentServerClient } from '@/lib/agent-http-client';
 import { InfoIcon, CaretDownIcon } from '@/components/icons';
 import { ChatHeader } from './ChatHeader';
@@ -742,7 +742,7 @@ export function ChatView({
   // Plan 450: connector re-authorization elicitation. A failed tool call
   // surfaces as a discrete event so we can prompt them with a re-auth
   // button without polluting the chat error stream.
-  const [pendingAuthRequest, setPendingAuthRequest] = useState<{ provider?: string; connectionId?: string; toolName?: string } | null>(null);
+  const [pendingAuthRequest, setPendingAuthRequest] = useState<ConnectorAuthRequiredData | null>(null);
   // Plan 498: ref mirror so the main-process `app-connection:connected`
   // broadcast (async, fires outside React state) can match the pending
   // elicitation without a stale-closure subscribe.

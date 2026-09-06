@@ -53,7 +53,6 @@ export function AgentDmPairView({
   selfName,
   selfAvatarUrl,
   selfAvatarColor,
-  selfAvatarEmoji,
   peerId,
   peerName,
   onBack,
