@@ -159,6 +159,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [492-bot-to-bot-grok-parity](./active/492-bot-to-bot-grok-parity.md)                             | Bot 间交互 grok 全面对齐：契约层接线（buildAgentMessagingSystemPrompt 死代码激活）+ priority DM 抢占闭环（decidePreemption/DmPreemptionTracker 接线 + redrive）+ 透明性（bot-direct 视图可见 agent DM）+ CreateAgent/UpdateAgent + 478 群聊增补修正 | P0       | Planning                                                       |
 | [494-bot-direct-ask-cards](./active/494-bot-direct-ask-cards.md)                                 | Bot-direct 问问题卡片：AskUserQuestion permission 流接入聊天流（bot-direct 缺订阅导致提问卡死）+ BotAskCard/BotPermissionCard（rakazo 视觉）+ answered 保留态；agent 包零改动                                                                 | P0       | T1-T5 ✅（2026-09-05）；T6 Playwright 冒烟待办                  |
 | [495-bot-long-session-grok-parity](./active/495-bot-long-session-grok-parity.md)                 | Bot 长会话 grok 对齐补差：后台预压缩 pass1+前缀指纹收割、图片阈值触发(85)、摘要重试阶梯(shorter-output/输入缩减/3 次)、抢占/Redrive+run 收尾 epoch 护栏（476 §2.2 收口）；compact 核心已提交 a20c0941，DuyaAgent/wake-dispatcher 接线随 497 WIP 落地 | P1       | T1-T7 ✅（2026-09-05）；待 497 后补提交接线文件                  |
+| [498-bot-tool-approval-cards](./active/498-bot-tool-approval-cards.md)                           | 工具审批持久卡片（rakazo 对齐）：ask → 持久卡片+审批行 → 三按钮 CAS resolver → 一次性账本 + continuation 续跑；bot pause / interactive 快路径统一 store+resolver；Always 规则 per-bot 持久化                                                | P0       | Implementation                                                  |
 
 ### CLI / Cron
 

@@ -42,6 +42,8 @@ bot-direct 会话内自行接 `usePermissions`（与 ChatView 同一 hook、同�
 - 不改 agent 包（AskUserQuestionTool / permission 管线零改动）。
 - 不动 workspace 的 `PermissionPrompt` sheet。
 - answered 卡片不持久化（内存态）；后续随 489 P2.5 卡宿主闭环一并考虑。
+  （2026-09-06：工具权限卡片的持久化由 plan 498 收口——`tool_approval_state`
+  侧表 + 卡片消息 + 续跑账本；AskUserQuestion 的持久化仍在 489 P2.5。）
 - widget / secret-request / cursor-agent 卡的完整交互闭环仍在 489 P2.5 范围。
 
 ## 4. 决策日志

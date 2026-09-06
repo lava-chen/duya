@@ -529,6 +529,22 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
               );
               return gateErrorResult('ask', '[MCP permission gate] Permission denied by user');
             }
+            // Plan 498: 'paused' means the request was persisted as a durable
+            // approval card and the turn must NOT fall through to execution.
+            // Surface the neutral waiting text as the tool result; a later
+            // continuation run replays the approved call via the one-shot
+            // approval ledger.
+            if (userDecision === 'paused') {
+              logger.info(
+                '[MCP] tool call paused for durable approval card',
+                { toolName: capturedMcpInfo.toolName, source },
+              );
+              return gateErrorResult(
+                'ask',
+                'Waiting for user approval. The request has been sent as an approval card; ' +
+                  'end your turn without further tool calls.',
+              );
+            }
             // Plan 419 P0: record the approval on the SAME channel
             // StreamingToolExecutor uses (`_approvedToolUses` in appState),
             // so a re-entry with this toolUseId skips the gate. appState is

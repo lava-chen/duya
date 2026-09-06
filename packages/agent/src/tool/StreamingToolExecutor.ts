@@ -1758,6 +1758,24 @@ export class StreamingToolExecutor {
         return;
       }
 
+      // Plan 498: the request was persisted as a durable approval card and
+      // nobody is answering it in-process (bot/wake runs, crashed renderer).
+      // Push a neutral tool result — NOT an error — so the model wraps the
+      // turn up; a later continuation run replays the approved call via the
+      // one-shot approval ledger.
+      if (decision === 'paused') {
+        messages.push({
+          role: 'tool' as const,
+          content:
+            'Waiting for user approval. The request has been sent as an approval card; ' +
+            'the tool call will run automatically once the user decides. Summarize the ' +
+            'pending action briefly and end your turn without further tool calls.',
+          tool_call_id: tool.id,
+        });
+        this.finalizeTool(tool, messages, 'Waiting for user approval');
+        return;
+      }
+
       // Permission granted - mark this tool use as approved and actually retry execution.
       // Previously we only emitted a "granted" message and returned, which caused
       // empty/no-op tool results after user approval.
