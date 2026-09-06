@@ -32,6 +32,13 @@ export interface ActionContext {
 export interface ActionHandler<TInput = Record<string, unknown>> {
   readonly operation: string;
   readonly schema: z.ZodType<TInput>;
+  /**
+   * Omit this action from the auto-generated tool schema (the LLM-facing
+   * operation enum, field shapes, and any `anyOf` variant). The action stays
+   * registered in the ActionRegistry and remains dispatchable by operation
+   * name — surface it to the model through the tool prompt instead.
+   */
+  readonly hidden?: boolean;
   execute(input: TInput, ctx: ActionContext): Promise<Record<string, unknown>>;
 }
 

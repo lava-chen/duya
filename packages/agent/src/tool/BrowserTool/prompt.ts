@@ -357,6 +357,16 @@ ${interactionGuide}
   - Any task requiring data from multiple URLs where serial navigation would be too slow
   Returns: results array with snapshot, interactiveElements, and timing for each URL.
 
+- **twitter_post** - Publish a tweet on X.com through the logged-in browser session (write, hidden from the schema)
+  \`\`\`json
+  {"operation": "twitter_post", "text": "Your tweet content", "images": ["/abs/path/a.png"]}
+  \`\`\`
+  This operation is callable even though it is not listed in the tool's JSON schema. Use it only
+  when the user explicitly asks to post on X.com and has confirmed.
+  - Opens the composer, attaches up to 4 images (\`images\` optional, jpg/png/gif/webp), types \`text\`, submits, and verifies the resulting tweet URL.
+  - Reuses the logged-in X.com session — no OAuth or separate auth.
+  - Posting is **irreversible and public**: get explicit user confirmation before calling.
+
 ### Computer-Use Operations (coordinate-driven)
 
 ${isHumanLike
