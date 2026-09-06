@@ -148,6 +148,17 @@ workspace/
 
 `message_index` table references these files.
 
+### Rollout as First-Class Data (Plan 506)
+
+The JSONL rollouts are the source of truth; `message_index` is a rebuildable projection. Core: `electron/db/core/message-log.ts` (export/import/reconcile + non-bot generation rotation), `electron/db/core/session-fork.ts` (checkpoint fork). IPC (`electron/ipc/db-handlers.ts`) + preload (`session.forkAt/archive/unarchive/listArchived`, `rollout.export/import/reconcile`):
+
+- **Export** (`db:rollout:export`): one file is one session — bot sessions concatenate `archive-<g>.jsonl` generations in order + `active.jsonl`; read-only.
+- **Import** (`db:rollout:import`): `restore` builds a new session from an external .jsonl; `continue` appends onto an existing session. All-or-nothing validation (1-based line numbers); ids colliding on the `message_index` GLOBAL PK are remapped into `import:<sessionId>:<oldId>` with every cross-reference (parentId / replyToId / compaction refs / rebase newMessages) following.
+- **Reconcile** (`db:rollout:reconcile`): explicit whole-store index rebuild from the rollout files, reporting missing/orphan files; orphans are never deleted.
+- **Fork** (`db:session:forkAt`): new session seeded from the source's projected timeline through a message id; fresh ids (`fork:<newSessionId>:<oldId>`), `parent_session_id` + `session_spawn_edges` edge of type `fork`.
+- **Archive** (`db:session:archive/unarchive/listArchived`): status flip only — archived sessions leave the default `list()` result (`includeArchived` to reveal) but rollout files stay on disk.
+- **Non-bot rotation** (Plan 506 C1): long ordinary chats rotate on the same `archive-<g>.jsonl` layout as bots once they cross `NON_BOT_ROTATION_THRESHOLD_BYTES` (4 MB) — compaction triggers rotation for already-rotated sessions; the active file's generation directory is sticky so segments never split.
+
 ### Memory State DB (Plan 479)
 
 Separate SQLite file (`memory-state.db`, next to `duya-main.db` in the same boot.json directory), managed by `electron/memory-state/`. Holds the memory control plane: projects / rollout catalog (0001), leases + stage1 outputs (0002-0003), curation runs / publications (0008), and the bot memory tier index (0010).

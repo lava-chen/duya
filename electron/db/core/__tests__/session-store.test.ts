@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { SessionStore, type CoreSession, type SessionCreateInput } from '../session-store';
+import { MessageLog } from '../message-log';
 import type { SqliteDatabase } from '../database';
 
 describe('SessionStore', () => {
@@ -17,6 +18,8 @@ describe('SessionStore', () => {
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
     for (const m of SessionStore.migrations) m.up(db);
+    // listByPrefix / getSummary aggregate over message_index (MessageLog id=1).
+    MessageLog.migrations.find((m) => m.id === 1)!.up(db);
     store = new SessionStore(db);
   });
 
@@ -295,5 +298,53 @@ describe('SessionStore', () => {
     }
     const results = store.search('Bug', 2);
     expect(results).toHaveLength(2);
+  });
+
+  // ─── Plan 506 (C2): archived sessions ───
+
+  it('list hides archived sessions by default (Plan 506 C2)', () => {
+    store.create(createInput('s-active'));
+    store.create(createInput('s-archived', { status: 'archived' }));
+    store.create(createInput('s-deleted', { status: 'deleted' }));
+
+    expect(store.list().map((s) => s.id)).toEqual(['s-active']);
+  });
+
+  it('list({ includeArchived: true }) reveals archived sessions but not deleted', () => {
+    store.create(createInput('s-active'));
+    store.create(createInput('s-archived', { status: 'archived' }));
+    store.create(createInput('s-deleted', { status: 'deleted' }));
+
+    const ids = store.list({ includeArchived: true }).map((s) => s.id).sort();
+    expect(ids).toEqual(['s-active', 's-archived']);
+  });
+
+  it('list({ includeDeleted: true }) still hides archived sessions', () => {
+    store.create(createInput('s-active'));
+    store.create(createInput('s-archived', { status: 'archived' }));
+    store.create(createInput('s-deleted', { status: 'deleted' }));
+
+    const ids = store.list({ includeDeleted: true }).map((s) => s.id).sort();
+    expect(ids).toEqual(['s-active', 's-deleted']);
+  });
+
+  it('list({ status: "archived" }) is the explicit archived view', () => {
+    store.create(createInput('s-active'));
+    store.create(createInput('s-archived', { status: 'archived' }));
+
+    expect(store.list({ status: 'archived' }).map((s) => s.id)).toEqual([
+      's-archived',
+    ]);
+  });
+
+  it('archive → unarchive round-trips through update(status)', () => {
+    store.create(createInput('s-1'));
+    store.update('s-1', { status: 'archived' });
+    expect(store.get('s-1')!.status).toBe('archived');
+    expect(store.list().map((s) => s.id)).toEqual([]);
+
+    store.update('s-1', { status: 'active' });
+    expect(store.get('s-1')!.status).toBe('active');
+    expect(store.list().map((s) => s.id)).toEqual(['s-1']);
   });
 });

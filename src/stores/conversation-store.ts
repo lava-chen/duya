@@ -8,6 +8,7 @@ import {
   getThreadIPC,
   createThreadIPC,
   deleteThreadIPC,
+  archiveThreadIPC,
   getProjectGroupsIPC,
   getNoProjectWorkspaceIPC,
   addRecentFolderIPC,
@@ -170,6 +171,9 @@ interface ConversationState {
   exitSettings: () => void;
   createThread: (options?: { workingDirectory?: string; projectName?: string; providerId?: string; model?: string; noProject?: boolean; agentProfileId?: string | null }) => Promise<Thread | null>;
   deleteThread: (id: string) => void;
+  /** Plan 506 (C2): archive a session — drops it from the active list via a
+   *  status flip; the rollout files stay on disk (unarchive restores it). */
+  archiveThread: (id: string) => void;
   setActiveThread: (id: string) => void;
   goToParentSession: () => void;
   addMessage: (threadId: string, message: Message, options?: { persist?: boolean }) => void;
@@ -638,6 +642,31 @@ export const useConversationStore = create<ConversationState>()(
 
         // Sync deletion to database and notify other windows/tabs
         deleteThreadIPC(id)
+          .then(() => {
+            notifyThreadsChanged();
+          })
+          .catch(console.error);
+      },
+
+      archiveThread: (id) => {
+        // Plan 506 (C2): identical local removal to deleteThread, but the
+        // backend flips status to 'archived' — rollout files stay intact.
+        set((state) => {
+          const { [id]: _, ...remainingMessages } = state.messages;
+          const newThreads = state.threads.filter((t) => t.id !== id);
+          const newActiveId =
+            state.activeThreadId === id
+              ? newThreads[0]?.id ?? null
+              : state.activeThreadId;
+
+          return {
+            threads: newThreads,
+            activeThreadId: newActiveId,
+            messages: remainingMessages,
+          };
+        });
+
+        archiveThreadIPC(id)
           .then(() => {
             notifyThreadsChanged();
           })

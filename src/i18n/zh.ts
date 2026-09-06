@@ -1106,6 +1106,10 @@ const zh: Record<TranslationKey, string> = {
   'thread.noThreads': '暂无对话',
   'thread.running': 'Agent 运行中...',
   'thread.options': '对话选项',
+  'thread.archiveThread': '归档对话',
+  'thread.exportRollout': '导出会话 Rollout',
+  'thread.exportDoneTitle': 'Rollout 已导出',
+  'thread.exportDoneBody': '已导出 {lines} 行，路径已复制到剪贴板',
 
   'subAgent.status.running': '正在运行...',
   'subAgent.status.completed': '已完成',

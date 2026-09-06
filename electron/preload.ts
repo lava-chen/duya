@@ -118,6 +118,41 @@ export interface SessionAPI {
   setPinned: (sessionId: string, pinned: boolean) => Promise<unknown>
   setPlanMode: (sessionId: string, enabled: boolean) => Promise<unknown>
   setGoalMode: (sessionId: string, enabled: boolean) => Promise<unknown>
+  // Plan 506 (B1): fork a new session from a historical checkpoint message.
+  forkAt: (input: {
+    sourceSessionId: string
+    throughMessageId: string
+    title?: string
+  }) => Promise<{
+    ok: boolean
+    reason?: 'source_not_found' | 'message_not_found'
+    sessionId?: string
+    seedCount?: number
+    session?: unknown
+  }>
+  // Plan 506 (C2): archive lifecycle — status flip only, files untouched.
+  archive: (sessionId: string) => Promise<boolean>
+  unarchive: (sessionId: string) => Promise<boolean>
+  listArchived: () => Promise<unknown[]>
+}
+
+/** Plan 506 Track A: rollout portability (export / import / reconcile). */
+export interface RolloutAPI {
+  /** Export one session's complete rollout as a single portable JSONL file. */
+  export: (sessionId: string, destDir?: string) => Promise<{ absolutePath: string; lines: number; bytes: number }>
+  /**
+   * Import an external rollout .jsonl.
+   * - mode='restore': create a NEW session from the file.
+   * - mode='continue': append the file's lines onto `targetSessionId`.
+   */
+  import: (input: {
+    sourcePath: string
+    mode: 'restore' | 'continue'
+    targetSessionId?: string
+    title?: string
+  }) => Promise<Record<string, unknown>>
+  /** Explicit whole-store reconcile: rebuild message_index from rollout files. */
+  reconcile: () => Promise<Record<string, unknown>>
 }
 
 export interface ModeStateAPI {
@@ -1254,6 +1289,7 @@ export interface ElectronAPI {
   projectDatabase: ProjectDatabaseAPI
   thread: ThreadAPI
   session: SessionAPI
+  rollout: RolloutAPI
   modeState: ModeStateAPI
   search: SearchAPI
   message: MessageAPI
@@ -2054,6 +2090,31 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('db:session:set_plan_mode', { sessionId, enabled }),
     setGoalMode: (sessionId: string, enabled: boolean) =>
       ipcRenderer.invoke('db:session:set_goal_mode', { sessionId, enabled }),
+    // Plan 506 (B1): fork a new session from a historical checkpoint message.
+    forkAt: (input: {
+      sourceSessionId: string
+      throughMessageId: string
+      title?: string
+    }) =>
+      ipcRenderer.invoke('db:session:forkAt', input),
+    // Plan 506 (C2): archive lifecycle — status flip only, files untouched.
+    archive: (sessionId: string) => ipcRenderer.invoke('db:session:archive', sessionId),
+    unarchive: (sessionId: string) => ipcRenderer.invoke('db:session:unarchive', sessionId),
+    listArchived: () => ipcRenderer.invoke('db:session:listArchived'),
+  },
+  rollout: {
+    // Plan 506 (A1): one file is one session — export the complete rollout.
+    export: (sessionId: string, destDir?: string) =>
+      ipcRenderer.invoke('db:rollout:export', sessionId, destDir),
+    // Plan 506 (A2): import an external .jsonl (restore / continue modes).
+    import: (input: {
+      sourcePath: string
+      mode: 'restore' | 'continue'
+      targetSessionId?: string
+      title?: string
+    }) => ipcRenderer.invoke('db:rollout:import', input),
+    // Plan 506 (A3): explicit index rebuild from the rollout files.
+    reconcile: () => ipcRenderer.invoke('db:rollout:reconcile'),
   },
   modeState: {
     get: (sessionId: string, mode: string) =>

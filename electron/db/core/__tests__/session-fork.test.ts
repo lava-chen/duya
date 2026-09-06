@@ -1,7 +1,7 @@
 /**
- * Session fork seed derivation tests (plan 506, Track B1).
+ * Session fork tests (plan 506, Track B).
  *
- * Pure derivation — no sqlite, no fs, no Electron. Coverage:
+ * Pure derivation (B1) — no sqlite, no fs, no Electron. Coverage:
  *   1. Seed = exactly the messages up to and including the target; later
  *      messages are excluded.
  *   2. Non-message entries are ignored defensively even if present.
@@ -15,13 +15,41 @@
  *   7. Determinism across identical calls; the input is never mutated.
  *   8. A tool_use/tool_result pair fully before the fork point survives
  *      with both members (repair already ran upstream — no reordering).
+ *
+ * Orchestration (B1) — real MessageLog + SessionStore + SpawnEdgeStore over
+ * a temp better-sqlite3 database (schema built from the stores' own
+ * migrations, sorted by id like CoreDatabase). Coverage:
+ *   9. forkSession happy path: seeds land in the new session with remapped
+ *      ids, the session row mirrors the source with parentSessionId set,
+ *      and a 'fork' spawn edge is recorded.
+ *  10. source_not_found / message_not_found leave nothing behind.
+ *  11. Reply-thread remap survives the appendBatch round trip.
+ *  12. Forking at the FIRST message seeds exactly that one message.
+ *
+ * Lineage helpers (B2) — pure edge-array walks:
+ *  13. ancestorChain: nearest-first order, [] for roots, cycle-safe.
+ *  14. childrenOf: direct children oldest-first, spawnType filter.
  */
 
-import { describe, expect, it } from 'vitest';
-import { deriveForkSeed } from '../session-fork';
-import type { NewEvent, TimelineEntryRow } from '../message-log';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import Database from 'better-sqlite3';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import {
+  ancestorChain,
+  childrenOf,
+  deriveForkSeed,
+  forkSession,
+  type ForkSessionDeps,
+  type LineageEdge,
+} from '../session-fork';
+import { MessageLog, type NewEvent, type TimelineEntryRow } from '../message-log';
 import type { TurnStartedEvent } from '../rollout-events';
 import { THREAD_METADATA_KEY, type MessageEntry } from '@duya/agent/message';
+import type { SqliteDatabase } from '../database';
+import { SessionStore } from '../session-store';
+import { SpawnEdgeStore } from '../stores';
 
 // ─── Fixtures (mirror message-repair.test.ts builder shapes) ───
 
@@ -133,6 +161,26 @@ function replyToIdOf(entry: MessageEntry): string | undefined {
 function toolCallIdOf(entry: MessageEntry): string | undefined {
   const message = entry.message as { tool_call_id?: string };
   return message.tool_call_id;
+}
+
+/** Wrap a MessageEntry as a NewEvent for MessageLog.appendBatch. */
+function seedEvent(sessionId: string, entry: MessageEntry): NewEvent {
+  return { id: entry.id, sessionId, turnId: null, payload: entry, createdAt: entry.createdAt };
+}
+
+/** Parse a StoredEvent payload (raw JSON string) back into a MessageEntry. */
+function storedEntry(payload: string): MessageEntry {
+  return JSON.parse(payload) as MessageEntry;
+}
+
+/** Minimal LineageEdge fixture. */
+function lineageEdge(
+  parentSessionId: string,
+  childSessionId: string,
+  spawnType: string,
+  spawnedAt: number,
+): LineageEdge {
+  return { parentSessionId, childSessionId, spawnType, spawnedAt };
 }
 
 // ─── Tests ───
@@ -343,5 +391,272 @@ describe('deriveForkSeed (plan 506, Track B1)', () => {
     // message identity).
     expect(toolCallIdOf(msgs[1])).toBe('call-1');
     expect(toolCallIdOf(msgs[2])).toBe('call-1');
+  });
+});
+
+// ─── forkSession orchestration (real stores, temp sqlite) ───
+
+describe('forkSession orchestration (plan 506, Track B1)', () => {
+  let tempDir: string;
+  let rootDir: string;
+  let db: SqliteDatabase;
+  let messageLog: MessageLog;
+  let sessions: SessionStore;
+  let spawnEdges: SpawnEdgeStore;
+  let deps: ForkSessionDeps;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'core-session-fork-'));
+    rootDir = path.join(tempDir, 'data');
+    fs.mkdirSync(rootDir, { recursive: true });
+    db = new Database(path.join(tempDir, 'core.db')) as unknown as SqliteDatabase;
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    // Schema from the stores' own migrations, sorted by id like CoreDatabase
+    // (1 message_index, 2 sessions, 9 spawn edges, 13/14 bumps, 15 search).
+    const migrations = [
+      ...MessageLog.migrations,
+      ...SessionStore.migrations,
+      ...SpawnEdgeStore.migrations,
+    ].sort((a, b) => a.id - b.id);
+    for (const m of migrations) m.up(db);
+    messageLog = new MessageLog(db, rootDir);
+    sessions = new SessionStore(db);
+    spawnEdges = new SpawnEdgeStore(db);
+    deps = { messageLog, sessions, spawnEdges };
+  });
+
+  afterEach(() => {
+    try {
+      db.close();
+    } catch {
+      /* already closed */
+    }
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
+  });
+
+  it('forks at message #2 of a 3-message session: seeds 2, remaps ids, links lineage', () => {
+    const sourceId = 'src-1';
+    const newId = 'fork-1';
+    const t = Date.UTC(2026, 8, 7, 9, 0, 0);
+    sessions.create({
+      id: sourceId,
+      title: 'Original',
+      workingDirectory: 'e:/proj/duya',
+      projectName: 'duya',
+      model: 'test-model',
+      providerId: 'test-provider',
+      mode: 'code',
+      permissionMode: 'default',
+      agentName: 'tester',
+    });
+    messageLog.appendBatch([
+      seedEvent(sourceId, textMsg('m-1', 'first', t)),
+      seedEvent(sourceId, textMsg('m-2', 'second', t + 1)),
+      seedEvent(sourceId, textMsg('m-3', 'third, after the fork', t + 2)),
+    ]);
+
+    const result = forkSession(deps, {
+      sourceSessionId: sourceId,
+      throughMessageId: 'm-2',
+      newSessionId: newId,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.sessionId).toBe(newId);
+    expect(result.seedCount).toBe(2);
+    expect(result.idMap.get('m-2')).toBe(`fork:${newId}:m-2`);
+
+    // The new session reads back end-to-end with remapped ids and content.
+    const events = messageLog.listBySession(newId);
+    expect(events.map((e) => e.id)).toEqual([`fork:${newId}:m-1`, `fork:${newId}:m-2`]);
+    expect(events.map((e) => contentOf(storedEntry(e.payload)))).toEqual(['first', 'second']);
+
+    // The session row mirrors the source and carries lineage on itself.
+    const forkRow = sessions.get(newId);
+    expect(forkRow).not.toBeNull();
+    expect(forkRow?.parentSessionId).toBe(sourceId);
+    expect(forkRow?.title).toBe('Original (fork)');
+    expect(forkRow?.workingDirectory).toBe('e:/proj/duya');
+    expect(forkRow?.projectName).toBe('duya');
+    expect(forkRow?.model).toBe('test-model');
+    expect(forkRow?.providerId).toBe('test-provider');
+    expect(forkRow?.mode).toBe('code');
+    expect(forkRow?.permissionMode).toBe('default');
+    expect(forkRow?.agentName).toBe('tester');
+    expect(forkRow?.status).toBe('active');
+
+    // The spawn edge is recorded with spawnType 'fork'.
+    const edge = spawnEdges.getParent(newId);
+    expect(edge).not.toBeNull();
+    expect(edge?.parentSessionId).toBe(sourceId);
+    expect(edge?.childSessionId).toBe(newId);
+    expect(edge?.spawnType).toBe('fork');
+    expect(edge?.spawnReason).toBe('fork at message m-2');
+    expect(edge?.spawnTurnId).toBeNull();
+
+    // Structural typing: live SpawnEdge[] feeds the pure lineage helpers.
+    const forkChildren = childrenOf(spawnEdges.listChildren(sourceId), sourceId, 'fork');
+    expect(forkChildren.map((c) => c.sessionId)).toEqual([newId]);
+
+    // The source session is untouched.
+    expect(messageLog.listBySession(sourceId).map((e) => e.id)).toEqual(['m-1', 'm-2', 'm-3']);
+  });
+
+  it('returns source_not_found when the source session does not exist', () => {
+    const result = forkSession(deps, {
+      sourceSessionId: 'ghost',
+      throughMessageId: 'm-1',
+      newSessionId: 'fork-2',
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'source_not_found', seedCount: 0 });
+    expect(sessions.get('fork-2')).toBeNull();
+  });
+
+  it('returns message_not_found when throughMessageId is absent, writing nothing', () => {
+    const sourceId = 'src-3';
+    const newId = 'fork-3';
+    const t = Date.UTC(2026, 8, 7, 9, 30, 0);
+    sessions.create({ id: sourceId, title: 'Original' });
+    messageLog.appendBatch([seedEvent(sourceId, textMsg('m-1', 'only', t))]);
+
+    const result = forkSession(deps, {
+      sourceSessionId: sourceId,
+      throughMessageId: 'm-404',
+      newSessionId: newId,
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'message_not_found', seedCount: 0 });
+    // Nothing was written: no session row, no rollout, no spawn edge.
+    expect(sessions.get(newId)).toBeNull();
+    expect(spawnEdges.getParent(newId)).toBeNull();
+    expect(messageLog.listBySession(newId)).toEqual([]);
+  });
+
+  it('remaps threadMeta.replyToId end-to-end so the reply thread survives the fork', () => {
+    const sourceId = 'src-4';
+    const newId = 'fork-4';
+    const t = Date.UTC(2026, 8, 7, 10, 0, 0);
+    sessions.create({ id: sourceId, title: 'Threaded' });
+    messageLog.appendBatch([
+      seedEvent(sourceId, textMsg('a-1', 'thread root', t)),
+      seedEvent(sourceId, replyMsg('b-1', 'reply to root', t + 1, 'a-1')),
+      seedEvent(sourceId, textMsg('c-1', 'after the fork point', t + 2)),
+    ]);
+
+    const result = forkSession(deps, {
+      sourceSessionId: sourceId,
+      throughMessageId: 'b-1',
+      newSessionId: newId,
+    });
+
+    expect(result.ok).toBe(true);
+    const events = messageLog.listBySession(newId);
+    expect(events.map((e) => e.id)).toEqual([`fork:${newId}:a-1`, `fork:${newId}:b-1`]);
+    // The reply's reference points at the REMAPPED root id in the new session.
+    expect(replyToIdOf(storedEntry(events[1].payload))).toBe(`fork:${newId}:a-1`);
+  });
+
+  it('forking at the FIRST message seeds exactly that one message', () => {
+    const sourceId = 'src-5';
+    const newId = 'fork-5';
+    const t = Date.UTC(2026, 8, 7, 11, 0, 0);
+    sessions.create({ id: sourceId, title: 'Original' });
+    messageLog.appendBatch([
+      seedEvent(sourceId, textMsg('m-1', 'the only seeded one', t)),
+      seedEvent(sourceId, textMsg('m-2', 'excluded', t + 1)),
+    ]);
+
+    const result = forkSession(deps, {
+      sourceSessionId: sourceId,
+      throughMessageId: 'm-1',
+      newSessionId: newId,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.seedCount).toBe(1);
+    expect(messageLog.listBySession(newId).map((e) => e.id)).toEqual([`fork:${newId}:m-1`]);
+  });
+});
+
+// ─── Lineage helpers (pure) ───
+
+describe('lineage helpers (plan 506, Track B2)', () => {
+  const t1 = 1_000;
+  const t2 = 2_000;
+  const t3 = 3_000;
+  const t4 = 4_000;
+
+  it('ancestorChain walks nearest-first up to the root; roots return []', () => {
+    const edges: LineageEdge[] = [
+      lineageEdge('A', 'B', 'fork', t1),
+      lineageEdge('B', 'C', 'subagent', t2),
+    ];
+
+    const chain = ancestorChain(edges, 'C');
+    expect(chain.map((n) => n.sessionId)).toEqual(['B', 'A']);
+    // Each node carries its OWN spawn metadata (the edge whose child it is);
+    // the root ancestor has no incoming edge, hence null fields.
+    expect(chain[0]).toEqual({
+      sessionId: 'B',
+      parentSessionId: 'A',
+      spawnType: 'fork',
+      spawnedAt: t1,
+    });
+    expect(chain[1]).toEqual({
+      sessionId: 'A',
+      parentSessionId: null,
+      spawnType: null,
+      spawnedAt: null,
+    });
+
+    // A root session (no incoming edge) has an empty chain.
+    expect(ancestorChain(edges, 'A')).toEqual([]);
+    // Unknown ids behave like roots.
+    expect(ancestorChain(edges, 'Z')).toEqual([]);
+  });
+
+  it('ancestorChain terminates on a malformed edge cycle instead of hanging', () => {
+    const cycle: LineageEdge[] = [
+      lineageEdge('A', 'B', 'fork', t1),
+      lineageEdge('B', 'A', 'fork', t2),
+    ];
+
+    // Neither walk loops; each emits the single reachable ancestor.
+    expect(ancestorChain(cycle, 'A').map((n) => n.sessionId)).toEqual(['B']);
+    expect(ancestorChain(cycle, 'B').map((n) => n.sessionId)).toEqual(['A']);
+  });
+
+  it('childrenOf returns direct children oldest-first, filtered by spawnType when given', () => {
+    const edges: LineageEdge[] = [
+      lineageEdge('A', 'B', 'subagent', t2),
+      lineageEdge('A', 'C', 'fork', t1),
+      lineageEdge('A', 'D', 'fork', t3),
+      lineageEdge('C', 'E', 'fork', t4), // grandchild of A — never returned for A
+    ];
+
+    // All edge types, oldest first.
+    expect(childrenOf(edges, 'A').map((n) => n.sessionId)).toEqual(['C', 'B', 'D']);
+
+    // Fork-only filter, oldest first.
+    const forks = childrenOf(edges, 'A', 'fork');
+    expect(forks.map((n) => n.sessionId)).toEqual(['C', 'D']);
+    expect(forks[0]).toEqual({
+      sessionId: 'C',
+      parentSessionId: 'A',
+      spawnType: 'fork',
+      spawnedAt: t1,
+    });
+
+    // No children / unknown parent.
+    expect(childrenOf(edges, 'B')).toEqual([]);
+    expect(childrenOf(edges, 'missing')).toEqual([]);
   });
 });
