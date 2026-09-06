@@ -230,14 +230,17 @@ function normalizeWorkerEvent(event: Record<string, unknown>): Record<string, un
     // Plan 450: re-authorization elicitation. Forwarded to the renderer
     // as a discrete event so the AuthRequiredCard can surface a button
     // without polluting the chat error stream. The rest of the event
-    // payload (provider, connectionId, toolName) is passed through as
-    // `data` so the renderer doesn't need to reach into the wire shape.
+    // payload (provider, connectionId, toolName, variant) is passed
+    // through as `data` so the renderer doesn't need to reach into the
+    // wire shape. Plan 503: variant distinguishes the bot-initiated
+    // first-time connect ('connect') from the mid-call re-auth ('reauth').
     sseEvent = {
       type: 'connector_auth_required',
       data: {
         provider: (event as { provider?: string }).provider,
         connectionId: (event as { connectionId?: string }).connectionId,
         toolName: (event as { toolName?: string }).toolName,
+        variant: (event as { variant?: string }).variant ?? 'reauth',
       },
     };
   } else if (msgType === 'chat:db_persisted') {
@@ -547,6 +550,12 @@ async function handlePostChat(
             workerDbRequests.set(`rpc:${msg.requestId}`, child);
             process.send(msg);
           }
+          // Plan 503: forward appConnection:catalog to the main process
+          // (bot-only connector-management tools).
+          if (msg.type === 'appConnection:catalog' && typeof msg.requestId === 'string' && process.send) {
+            workerDbRequests.set(`rpc:${msg.requestId}`, child);
+            process.send(msg);
+          }
           // Plan 454: forward computer-use:execute to the main process.
           if (msg.type === 'computer-use:execute' && typeof msg.requestId === 'string' && process.send) {
             workerDbRequests.set(`rpc:${msg.requestId}`, child);
@@ -555,6 +564,13 @@ async function handlePostChat(
           // Plan 481: forward memory-tier:rpc to the main process
           // (memory tier writer lives in Electron main).
           if (msg.type === 'memory-tier:rpc' && typeof msg.requestId === 'string' && process.send) {
+            workerDbRequests.set(`rpc:${msg.requestId}`, child);
+            process.send(msg);
+          }
+          // Plan 481 amendment: forward bot-identity:rpc to the main process
+          // (profile.json writer lives in Electron main). Without this the
+          // worker's identity subactions time out after 15s.
+          if (msg.type === 'bot-identity:rpc' && typeof msg.requestId === 'string' && process.send) {
             workerDbRequests.set(`rpc:${msg.requestId}`, child);
             process.send(msg);
           }
@@ -1527,6 +1543,12 @@ async function lazySpawnWorkerForCompact(
       workerDbRequests.set(`rpc:${msg.requestId}`, child);
       process.send(msg);
     }
+    // Plan 503: forward appConnection:catalog to the main process
+    // (bot-only connector-management tools).
+    if (msg.type === 'appConnection:catalog' && typeof msg.requestId === 'string' && process.send) {
+      workerDbRequests.set(`rpc:${msg.requestId}`, child);
+      process.send(msg);
+    }
     // Plan 454: forward computer-use:execute to the main process.
     if (msg.type === 'computer-use:execute' && typeof msg.requestId === 'string' && process.send) {
       workerDbRequests.set(`rpc:${msg.requestId}`, child);
@@ -1535,6 +1557,13 @@ async function lazySpawnWorkerForCompact(
     // Plan 481: forward memory-tier:rpc to the main process
     // (memory tier writer lives in Electron main).
     if (msg.type === 'memory-tier:rpc' && typeof msg.requestId === 'string' && process.send) {
+      workerDbRequests.set(`rpc:${msg.requestId}`, child);
+      process.send(msg);
+    }
+    // Plan 481 amendment: forward bot-identity:rpc to the main process
+    // (profile.json writer lives in Electron main). Without this the
+    // worker's identity subactions time out after 15s.
+    if (msg.type === 'bot-identity:rpc' && typeof msg.requestId === 'string' && process.send) {
       workerDbRequests.set(`rpc:${msg.requestId}`, child);
       process.send(msg);
     }

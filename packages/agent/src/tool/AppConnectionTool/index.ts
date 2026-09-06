@@ -131,6 +131,7 @@ function buildExecutor(desc: AppConnectionToolDescriptor): ToolExecutor {
             toolName,
             provider: desc.provider,
             connectionId: desc.connectionId,
+            variant: 'reauth',
           });
         }
         // Surface `connection_not_available` / `connection_revoked` with

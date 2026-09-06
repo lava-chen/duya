@@ -100,6 +100,19 @@ process.on('message', (msg: Record<string, unknown>) => {
     }
     return;
   }
+  // Plan 503: route appConnection:catalog:response back to the worker
+  // (bot-only connector-management tools: provider directory + status DTOs).
+  if (msg.type === 'appConnection:catalog:response' && typeof msg.requestId === 'string') {
+    const key = `rpc:${msg.requestId}`;
+    const workerChild = workerDbRequests.get(key);
+    if (workerChild) {
+      workerDbRequests.delete(key);
+      if (!workerChild.killed) {
+        workerChild.send(msg);
+      }
+    }
+    return;
+  }
   // Plan 454: route computer-use:execute:response back to the worker.
   // Without this branch every computer_use tool call times out after
   // 30s — the worker's pendingIpcRequests map never receives the

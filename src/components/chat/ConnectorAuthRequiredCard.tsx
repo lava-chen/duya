@@ -28,6 +28,12 @@ export interface ConnectorAuthRequiredRequest {
   provider?: string;
   connectionId?: string;
   toolName?: string;
+  /**
+   * Plan 503: 'connect' = bot-initiated first-time connect (connect_app
+   * tool); 'reauth' = mid-call re-authorization (Plan 498, default).
+   * Only the copy differs — the OAuth flow and resume are identical.
+   */
+  variant?: 'connect' | 'reauth';
 }
 
 export interface ConnectorAuthRequiredCardProps {
@@ -59,6 +65,7 @@ export function ConnectorAuthRequiredCard({
   const [phase, setPhase] = useState<CardPhase>('waiting');
   const [error, setError] = useState<string | null>(null);
   const resumedRef = useRef(false);
+  const isConnect = request.variant === 'connect';
 
   const providerLabel = resolveProviderLabel
     ? resolveProviderLabel(request.provider ?? '')
@@ -114,7 +121,7 @@ export function ConnectorAuthRequiredCard({
       <div className="flex items-center gap-2 mb-2">
         <ShieldIcon size={18} />
         <span className="font-medium text-sm text-foreground">
-          {t('connectorAuth.title')}
+          {isConnect ? t('connectorAuth.connectTitle') : t('connectorAuth.title')}
         </span>
       </div>
       {phase === 'connected' ? (
@@ -123,7 +130,9 @@ export function ConnectorAuthRequiredCard({
         </p>
       ) : (
         <p className="text-sm text-muted-foreground mb-3">
-          {t('connectorAuth.body', { provider: providerLabel, tool: request.toolName ?? '' })}
+          {isConnect
+            ? t('connectorAuth.connectBody', { provider: providerLabel })
+            : t('connectorAuth.body', { provider: providerLabel, tool: request.toolName ?? '' })}
         </p>
       )}
       {error && (
@@ -151,7 +160,9 @@ export function ConnectorAuthRequiredCard({
               ? t('connectorAuth.connecting')
               : phase === 'failed'
                 ? t('connectorAuth.retry')
-                : t('connectorAuth.reauthorize')}
+                : isConnect
+                  ? t('connectorAuth.authorize')
+                  : t('connectorAuth.reauthorize')}
           </Button>
         </div>
       )}
