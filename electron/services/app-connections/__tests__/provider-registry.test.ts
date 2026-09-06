@@ -53,6 +53,14 @@ describe('app connection provider registry', () => {
     expect(getProviderReadiness(asAppConnectorId('calendar'))).toEqual({ configured: true });
   });
 
+  it('registers QQ Mail as a custom-credential provider that is always connectable', () => {
+    const qq = getProviderConfig(asAppConnectorId('qq-mail'));
+    expect(qq?.label).toBe('QQ 邮箱');
+    expect(qq?.requiresOAuthClient).toBe(false);
+    expect(qq?.supportsManualConfiguration).toBe(true);
+    expect(getProviderReadiness(asAppConnectorId('qq-mail'))).toEqual({ configured: true });
+  });
+
   // --- Plan 455: the catalog is open ---
 
   it('returns undefined for unregistered ids instead of throwing', () => {

@@ -29,6 +29,7 @@ export const BUILTIN_CONNECTOR_IDS: readonly AppConnectorId[] = [
   'linear',
   'github',
   'wecom',
+  'qq-mail',
 ].map(asAppConnectorId);
 
 const BUILTIN_ID_SET = new Set<string>(BUILTIN_CONNECTOR_IDS);

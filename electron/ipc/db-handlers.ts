@@ -35,7 +35,8 @@ import {
   readGatewaySettingFromStore,
 } from '../config/gateway-setting-adapter';
 import { getConfigStore } from '../config/store-instance';
-import { listConfigAgents, listBots, upsertConfigAgent, deleteConfigAgent, createConfigAgentUnique, updateBotProfileIdentity, setBotAvatarImage, clearBotAvatarImage } from '../config/agents';
+import { listConfigAgents, listBots, upsertConfigAgent, deleteConfigAgent, createConfigAgentUnique, updateBotProfileIdentity, setBotAvatarImage, clearBotAvatarImage, slugifyBotIdFromName } from '../config/agents';
+import { notifyBotsChanged } from '../config/bot-change-notifier';
 import {
   getWeixinAccounts,
   upsertWeixinAccount,
@@ -60,7 +61,31 @@ import { uploadAsset as conductorUploadAsset, uploadProjectAsset as conductorUpl
 import { captureWebsiteSnapshot } from '../conductor/link-snapshot-service';
 import { prepareCanvasDocument, syncCanvasDocument } from '../conductor/document-service';
 import { getCoreStores } from '../db/core-connection';
-import { storeConnectorCredential } from '../channels/agent-session-channels';
+import { getConnectorCredential, storeConnectorCredential } from '../channels/agent-session-channels';
+import { getAppConnectionService } from '../services/app-connections/app-connection-service';
+
+/**
+ * Bridge: when a bot collects a QQ Mail credential via SendMessage secret-request
+ * (stored under platform "qq-mail"), auto-connect once both the email address and
+ * the 16-digit authorization code are available. Values come from the connector
+ * secret store — the raw auth code never enters the agent context or transcript.
+ */
+async function maybeConnectQqMail(agentId: string): Promise<void> {
+  const email = getConnectorCredential(agentId, 'qq-mail', 'email');
+  const authCode = getConnectorCredential(agentId, 'qq-mail', 'authCode');
+  if (!email || !authCode) return;
+  try {
+    await getAppConnectionService().connectQqMail({ email, authCode });
+    getLogger().info('[secret:store] connected qq-mail from collected credentials', { agentId }, LogComponent.AgentProcess);
+  } catch (error) {
+    getLogger().error(
+      '[secret:store] qq-mail connect failed after credential collection',
+      error instanceof Error ? error : new Error(String(error)),
+      { agentId },
+      LogComponent.AgentProcess,
+    );
+  }
+}
 import { restoreFilesForEvents } from '../services/file-snapshot-restore';
 import { resolvePermissionProfile } from '../db/permission-resolver';
 import {
@@ -1211,6 +1236,7 @@ export function registerDbHandlers(): void {
         platform,
         field,
       }, LogComponent.AgentProcess);
+      await maybeConnectQqMail(agentId);
       return { ok: true };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1446,21 +1472,37 @@ export function registerDbHandlers(): void {
     return listBots();
   });
   ipcMain.handle('config:agents:create', (_event, id: string, input: unknown) => {
-    // Allocates a collision-free id (config + disk + tombstones) and returns
-    // the ACTUAL id — the renderer's deriveBotIdFromName only sees live ids.
-    return createConfigAgentUnique(id, input as Parameters<typeof upsertConfigAgent>[1]);
+    // Single minting point (grok agent-session.ts parity: ids are never
+    // user-authored). An empty id mints one from the display name via
+    // slugifyBotIdFromName; createConfigAgentUnique then allocates a
+    // collision-free id (config + disk + tombstones) and returns the
+    // ACTUAL id.
+    const upsertInput = input as Parameters<typeof upsertConfigAgent>[1];
+    const desiredId =
+      typeof id === 'string' && id.trim()
+        ? id.trim()
+        : slugifyBotIdFromName(upsertInput?.name ?? '');
+    const result = createConfigAgentUnique(desiredId, upsertInput);
+    notifyBotsChanged();
+    return result;
   });
   ipcMain.handle('config:agents:update', (_event, id: string, input: unknown) => {
     if (!(id in listConfigAgents())) throw new Error(`agent '${id}' not found`);
-    return upsertConfigAgent(id, input as Parameters<typeof upsertConfigAgent>[1]);
+    const result = upsertConfigAgent(id, input as Parameters<typeof upsertConfigAgent>[1]);
+    notifyBotsChanged();
+    return result;
   });
   ipcMain.handle('config:agents:delete', (_event, id: string) => {
-    return deleteConfigAgent(id);
+    const deleted = deleteConfigAgent(id);
+    if (deleted) notifyBotsChanged();
+    return deleted;
   });
   // Plan 483 P2: sidebar "Edit Bot" — writes the runtime identity
   // (profile.json), never config.toml.
   ipcMain.handle('config:agents:updateBotProfile', (_event, id: string, input: unknown) => {
-    return updateBotProfileIdentity(id, input as Parameters<typeof updateBotProfileIdentity>[1]);
+    const updated = updateBotProfileIdentity(id, input as Parameters<typeof updateBotProfileIdentity>[1]);
+    notifyBotsChanged();
+    return updated;
   });
 
   // Avatar image upload: the main process owns the file dialog AND the copy
@@ -1476,11 +1518,15 @@ export function registerDbHandlers(): void {
       ],
     });
     if (result.canceled || result.filePaths.length === 0) return null;
-    return setBotAvatarImage(id, result.filePaths[0]);
+    const uploaded = setBotAvatarImage(id, result.filePaths[0]);
+    notifyBotsChanged();
+    return uploaded;
   });
 
   ipcMain.handle('config:agents:clearBotAvatar', (_event, id: string) => {
-    return clearBotAvatarImage(id);
+    const cleared = clearBotAvatarImage(id);
+    notifyBotsChanged();
+    return cleared;
   });
 
   ipcMain.handle('db:agentProfile:update', (_event, id: string, data: Record<string, unknown>) => {
