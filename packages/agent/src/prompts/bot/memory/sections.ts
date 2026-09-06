@@ -48,6 +48,7 @@ export const BOT_MEMORY_OWN_SECTION: BotSectionDef = {
   description: 'Bot-private memory shard (479; own > project > user precedence declared).',
   budgetChars: 4000,
   compute: computeTier('own', renderMemoryOwn),
+  volatile: true,
 }
 
 export const BOT_MEMORY_USER_SECTION: BotSectionDef = {
@@ -56,6 +57,7 @@ export const BOT_MEMORY_USER_SECTION: BotSectionDef = {
     'Shared user memory across bots, cross-shard dedupe with [via <bot>] attribution (479).',
   budgetChars: 6000,
   compute: computeTier('user', renderMemoryUser),
+  volatile: true,
 }
 
 export const BOT_MEMORY_PROJECT_SECTION: BotSectionDef = {
@@ -64,4 +66,5 @@ export const BOT_MEMORY_PROJECT_SECTION: BotSectionDef = {
     'Joined-project memory, activity-ranked cap 3, per-project profile/recent buckets (479).',
   budgetChars: 12000,
   compute: computeTier('project', renderMemoryProject),
+  volatile: true,
 }

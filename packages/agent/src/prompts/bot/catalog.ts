@@ -79,6 +79,7 @@ export const BOT_SPOTLIGHT_SECTION: BotSectionDef = {
   description: 'Runtime feature-switch state hints (476).',
   budgetChars: 400,
   compute: pending,
+  volatile: true,
 }
 
 export const BOT_USER_IDENTITY_SECTION: BotSectionDef = {
@@ -98,6 +99,7 @@ export const BOT_AUTOMATIONS_SECTION: BotSectionDef = {
     'Routines bound to this bot (cronjob.toml agent binding, 476 P2.3b): wake-cue conduct + current inventory with ids. Renderer reads the cron file directly.',
   budgetChars: 2800,
   compute: renderBotAutomations,
+  volatile: true,
 }
 
 export const BOT_CHANNELS_SECTION: BotSectionDef = {
@@ -105,6 +107,7 @@ export const BOT_CHANNELS_SECTION: BotSectionDef = {
   description: 'Connected message channels + connector manifests (P2.5/476).',
   budgetChars: 1600,
   compute: renderBotChannels,
+  volatile: true,
 }
 
 export const BOT_ROSTER_SECTION: BotSectionDef = {

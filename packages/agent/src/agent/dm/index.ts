@@ -8,7 +8,6 @@ export {
   AGENT_INBOUND_WAKE_CUE,
   AGENT_MESSAGE_MAX_TEXT_LENGTH,
   AGENT_DM_INTENTS,
-  AGENT_DM_MAX_HOPS,
   type AgentDmEnvelope,
   type AgentAddress,
   type AgentDmIntent,
@@ -38,14 +37,6 @@ export {
   type AgentGroupSummary,
   type AgentMessagingPromptOptions,
 } from "./wake-prompt.js";
-
-export {
-  DmCycleDetector,
-  DmSendLimiter,
-  dmCycleDetector,
-  dmSendLimiter,
-  type DmEdge,
-} from "./dm-cycle-detector.js";
 
 export {
   agentMentionHandles,

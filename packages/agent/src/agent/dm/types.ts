@@ -26,13 +26,6 @@ export const AGENT_DM_INTENTS: readonly AgentDmIntent[] = [
   "fyi",
 ] as const;
 
-/**
- * Maximum hop depth for bot→bot DM chains (plan 477 P4.2). A message born
- * from human context is hop 0; each bot→bot reply increments it. Enforced
- * at dispatch (main-side), so models cannot forge a lower value.
- */
-export const AGENT_DM_MAX_HOPS = 6;
-
 export function isAgentDmIntent(value: unknown): value is AgentDmIntent {
   return typeof value === "string" && (AGENT_DM_INTENTS as readonly string[]).includes(value);
 }

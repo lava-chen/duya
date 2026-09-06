@@ -17,6 +17,7 @@ import {
   _resetWakeDispatcherForTest,
   _setWakeDispatcherDeps,
   _setUserTurnWatchdogMsForTest,
+  _setWatchdogEscapeMsForTest,
   enqueueWakeItemForSession,
   notifySessionIdle,
   _queuedWakeCount,
@@ -158,6 +159,8 @@ describe('wake-dispatcher preemption / redrive / tail guard (Plan 495 G3)', () =
     await flush()
     expect(fake.runCalls).toHaveLength(3)
     expect(fake.runCalls[1]).toContain('what is the status?')
+    // Plan 501 L3: the redriven run carries the re-delivery narrative.
+    expect(fake.runCalls[2]).toMatch(/^\[redriven\]/)
     expect(fake.runCalls[2]).toContain('bg-1')
     expect(_queuedWakeCount('s1')).toBe(0)
   })
@@ -234,6 +237,100 @@ describe('wake-dispatcher preemption / redrive / tail guard (Plan 495 G3)', () =
       // and the drain can dispatch the parked user turn.
       await vi.advanceTimersByTimeAsync(1_000)
       expect(fake.interrupts).toEqual(['s1'])
+    } finally {
+      vi.useRealTimers()
+      _setUserTurnWatchdogMsForTest(120_000)
+    }
+  })
+
+  // ── Plan 501 L3: redrive cap + watchdog zombie escape ──
+
+  function groupTurnItem(agentId = 'member-1'): WakeItem {
+    return {
+      id: `group:room-1:1:${agentId}:${Date.now()}`,
+      source: 'group.turn',
+      lane: 'agent',
+      agentId,
+      enqueuedAtMs: Date.now(),
+      payload: { kind: 'group', roomId: 'room-1', text: 'say something' },
+    }
+  }
+
+  it('drops a displaced group turn at the redrive cap and notifies the room (Plan 501 L3)', async () => {
+    const dropped: string[] = []
+    _setWakeDispatcherDeps({
+      ...makeDeps(fake),
+      notifyGroupTurnDropped: (_sessionId, item) => {
+        dropped.push(item.agentId)
+      },
+    })
+
+    // Item already displaced 3 times — one more preemption exhausts the cap.
+    const item = { ...groupTurnItem('member-1'), redriveCount: 3, id: `group:room-1:1:member-1:${Date.now()}` }
+    fake.releasers.set('say something', () => {})
+    enqueueWakeItemForSession('bot:member-1', item)
+    await flush()
+    expect(fake.runCalls).toHaveLength(1)
+    fake.locked.add('bot:member-1')
+
+    // A user DM preempts the group member turn (agent lane, non-user origin).
+    enqueueWakeItemForSession('bot:member-1', userItem('take over'))
+    await flush()
+    expect(fake.interrupts).toEqual(['bot:member-1'])
+
+    // The interrupted run returns → cap exceeded → dropped, not re-queued.
+    for (const release of [...fake.releasers.values()]) release()
+    await flush()
+    expect(dropped).toEqual(['member-1'])
+    expect(_queuedWakeCount('bot:member-1')).toBe(1) // only the user item
+  })
+
+  it('escapes a wedged run after the post-interrupt grace (Plan 501 L3 zombie escape)', async () => {
+    vi.useFakeTimers()
+    try {
+      _setUserTurnWatchdogMsForTest(1_000)
+      _setWatchdogEscapeMsForTest(500)
+
+      // A dispatcher-owned background run that ignores interrupts entirely
+      // (hangs forever) — the case the watchdog interrupt cannot fix.
+      const deps = makeDeps(fake)
+      _setWakeDispatcherDeps({
+        ...deps,
+        runWake: (_sessionId, prompt) => {
+          fake.runCalls.push(prompt)
+          if (prompt.includes('stuck')) {
+            // The wedged run: interrupt is ignored, never settles.
+            return new Promise(() => {})
+          }
+          return Promise.resolve({ output: 'run reply', events: [] })
+        },
+      })
+
+      enqueueWakeItemForSession('s1', completionItem('stuck'))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(fake.runCalls).toHaveLength(1)
+      fake.locked.add('s1') // the run holds the session lock
+
+      // A user turn parks behind the wedged run. The dispatcher-owned run
+      // is preempted at ENQUEUE time (495 G3) and the watchdog fires again
+      // on its own schedule — two interrupts total.
+      enqueueWakeItemForSession('s1', userItem('urgent'))
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(fake.interrupts).toEqual(['s1', 's1'])
+      await vi.advanceTimersByTimeAsync(500)
+
+      // Escape: waiters resolved, the displaced work re-queued (with the
+      // redrive narrative marker queued behind the user turn).
+      expect(_queuedWakeCount('s1')).toBe(2)
+
+      // Lock freed → fresh drain pumps the queue despite the zombie run.
+      fake.locked.delete('s1')
+      notifySessionIdle('s1')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(fake.runCalls).toHaveLength(3)
+      expect(fake.runCalls[1]).toContain('urgent')
+      expect(fake.runCalls[2]).toMatch(/^\[redriven\]/)
+      expect(fake.runCalls[2]).toContain('stuck')
     } finally {
       vi.useRealTimers()
       _setUserTurnWatchdogMsForTest(120_000)

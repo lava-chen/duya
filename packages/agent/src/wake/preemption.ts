@@ -81,8 +81,10 @@ export function isPreemptingWake(item: WakeItem): boolean {
 
 /**
  * Mark an item as redriven (re-queue after preemption). Returns a new item
- * with `isRedriven: true` — the runtime re-enqueues it into its lane.
+ * with `isRedriven: true` and an incremented `redriveCount` (Plan 501 L3) —
+ * the runtime re-enqueues it into its lane and drops it once the count
+ * exceeds the dispatcher's cap.
  */
 export function asRedriven(item: WakeItem): WakeItem {
-  return { ...item, isRedriven: true }
+  return { ...item, isRedriven: true, redriveCount: (item.redriveCount ?? 0) + 1 }
 }

@@ -149,6 +149,13 @@ export interface WakeItem {
   payload: WakePayload
   /** True when this item was re-queued after being preempted. */
   isRedriven?: boolean
+  /**
+   * Plan 501 L3: how many times this item has been displaced and re-queued
+   * (grok caps a displaced group member at 3 redrive attempts). The
+   * dispatcher increments on every redrive and drops the item beyond the cap
+   * so a wedged session cannot loop a task forever.
+   */
+  redriveCount?: number
 }
 
 /** Priority flag derived from the item (user or priority DM preempts). */

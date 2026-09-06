@@ -123,16 +123,27 @@ describe('buildAgentInboundWakePrompt intent paragraphs (P4.1)', () => {
     expect(text).toContain('AUTOMATICALLY returned to Alpha')
   })
 
-  it('tells the receiver no reply is expected for result intent', () => {
+  it('requires the receiver to report a result, not stay silent', () => {
     const text = buildAgentInboundWakePrompt({ ...base, intent: 'result' })
-    expect(text).toContain('result of an earlier request')
+    expect(text).toContain('result of work you delegated to Alpha')
+    expect(text).toContain('concisely summarize it to your user now')
+    expect(text).toContain('Do not stay silent')
+    expect(text).toContain('do not merely acknowledge it')
     expect(text).not.toContain('SendToAgent')
   })
 
-  it('allows silence for fyi intent', () => {
+  it('requires a status update to conveyor progress, not an ack', () => {
+    const text = buildAgentInboundWakePrompt({ ...base, intent: 'status' })
+    expect(text).toContain('status update on work')
+    expect(text).toContain('Do not stay silent')
+    expect(text).toContain('do not merely acknowledge it')
+  })
+
+  it('allows silence for fyi intent but forbids an acknowledgement', () => {
     const text = buildAgentInboundWakePrompt({ ...base, intent: 'fyi' })
     expect(text).toContain('This is an FYI')
     expect(text).toContain('staying silent is fine')
+    expect(text).toContain('Do not send an acknowledgement message')
   })
 
   it('keeps the truthful visibility wording (P4.5)', () => {

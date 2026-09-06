@@ -311,7 +311,7 @@ describe('dual-key frozen snapshot (P2.2)', () => {
     expect(after).toContain('## Own memory')
   })
 
-  it('re-renders when memory content changes (content hash moves)', async () => {
+  it('keeps the frozen render when memory content changes mid-epoch (Plan 501 L1)', async () => {
     const assembly = createBotPromptAssembly()
     const memory = fixtureMemory()
     const key0 = { ...snapshot, contentHash: computeBotContentHash(botCtx(memory)) }
@@ -321,10 +321,18 @@ describe('dual-key frozen snapshot (P2.2)', () => {
       ...memory,
       own: [...memory.own, entry({ tier: 'agent', writerId: 'botA', dedupeKey: 'pref:new', title: 'New fact' })],
     }
+    // Memory sections are volatile (Plan 501 L1): the content hash no
+    // longer moves when the memory store changes — the frozen render stands
+    // until the compaction epoch advances.
     const key1 = { ...snapshot, contentHash: computeBotContentHash(botCtx(memory2)) }
-    expect(key1.contentHash).not.toBe(key0.contentHash)
+    expect(key1.contentHash).toBe(key0.contentHash)
     const after = await assembly.renderSections(botCtx(memory2), { snapshot: key1 })
-    expect(after).toContain('New fact')
+    expect(after).not.toContain('New fact')
+
+    // The new fact becomes visible at the next compaction boundary.
+    const key2 = { ...snapshot, contentHash: key0.contentHash, summaryEpoch: snapshot.summaryEpoch + 1 }
+    const nextEpoch = await assembly.renderSections(botCtx(memory2), { snapshot: key2 })
+    expect(nextEpoch).toContain('New fact')
   })
 
   it('registers the three tier sections in catalog order', () => {

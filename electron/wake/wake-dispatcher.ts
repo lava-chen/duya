@@ -91,6 +91,12 @@ export interface WakeDispatcherDeps {
    * hidden-run fallback.
    */
   pushScheduledTurn?(payload: ScheduledTurnPush): void
+  /**
+   * Plan 501 L3 — a `group.turn` item hit the redrive cap and is dropped;
+   * the room should get a system narrative instead of silent disappearance.
+   * Optional: tests and embedders may omit it.
+   */
+  notifyGroupTurnDropped?(sessionId: string, item: WakeItem): void
 }
 
 /** Payload of the `bot:scheduled-turn` renderer broadcast (Plan 500 P2.2). */
@@ -119,6 +125,20 @@ interface SessionWakeState {
    */
   watchdogTimer?: ReturnType<typeof setTimeout>
   /**
+   * Plan 501 L3 (grok zombie escape): armed after the watchdog interrupted a
+   * wedged run. If the run still holds the lock when it fires, the drain
+   * stops waiting on it — waiters resolve, displaced work re-queues, and a
+   * fresh drain pumps the queue (the wedged run keeps the lock; the lock TTL
+   * remains the correctness backstop).
+   */
+  escapeTimer?: ReturnType<typeof setTimeout>
+  /**
+   * Plan 501 L3: bumped on every watchdog escape. A drain awaiting a run
+   * compares its captured generation after the await — a mismatch means it
+   * was escaped (zombie) and it must exit without touching shared state.
+   */
+  drainGeneration: number
+  /**
    * Plan 500 P4: external callers (group turn chain) awaiting a specific
    * item's run outcome. Resolved when the run finishes, fails, or the item
    * is dropped/skipped.
@@ -130,6 +150,13 @@ interface SessionWakeState {
 const recentWakeTaskIds = new Map<string, number>()
 const DEDUPE_WINDOW_MS = 60_000
 const DEDUPE_MAX_ENTRIES = 500
+
+/**
+ * Plan ④ batching — a coalesced dm run's full member set, keyed by its
+ * representative item id. Used so a preempted/redriven batch re-queues every
+ * member, not just the representative. Cleared when the batch settles.
+ */
+const redriveBatches = new Map<string, WakeItem[]>()
 
 // ─── User-lane dispatch (Plan 500 P2.2) ───
 
@@ -329,6 +356,17 @@ function currentDeps(): WakeDispatcherDeps {
         }
       },
       interruptRun: (sessionId) => interruptCronSession(sessionId),
+      notifyGroupTurnDropped: (sessionId, item) => {
+        // Plan 501 L3: a dropped group member turn gets a room narrative.
+        // Dynamic import breaks the static cycle (group-turn-dispatcher
+        // imports dispatchBotTurn from this module).
+        if (item.payload.kind !== 'group') return
+        const roomId = item.payload.roomId
+        const memberId = item.agentId
+        void import('./group-turn-dispatcher')
+          .then((m) => m.appendGroupTurnDroppedNotice(roomId, memberId))
+          .catch(() => undefined)
+      },
       resolveRoutinePrompt: (payload) => {
         // P2.3b default: resolve the routine from cronjob.toml at dispatch
         // time. Deleted jobs / jobs unbound from an agent skip silently.
@@ -677,6 +715,9 @@ export function enqueueAutomationWake(opts: {
 
 /** Drop every queued wake for a session (agent deleted / session reset). */
 export function clearSessionWakes(sessionId: string): void {
+  const state = sessions.get(sessionId)
+  if (state?.watchdogTimer) clearTimeout(state.watchdogTimer)
+  if (state?.escapeTimer) clearTimeout(state.escapeTimer)
   sessions.delete(sessionId)
 }
 
@@ -695,10 +736,89 @@ export function removeQueuedWake(
 function getState(sessionId: string): SessionWakeState {
   let state = sessions.get(sessionId)
   if (!state) {
-    state = { queue: createWakeQueue(), draining: false, turnWaiters: new Map() }
+    state = {
+      queue: createWakeQueue(),
+      draining: false,
+      turnWaiters: new Map(),
+      drainGeneration: 0,
+    }
     sessions.set(sessionId, state)
   }
   return state
+}
+
+// ─── Redrive bookkeeping (Plan 501 L3, grok redelivery parity) ───
+
+/** A displaced item may be re-queued at most this many times (grok caps a
+ *  DM-preempted group member at 3 redrive attempts). */
+const MAX_WAKE_REDRIVES = 3
+
+/** Hidden narrative prepended to a re-queued run's prompt so the model knows
+ *  its earlier attempt was interrupted (grok re-delivery note). */
+const REDRIVE_NARRATIVE =
+  '[redriven] Your previous run on this task was interrupted by a newer user ' +
+  'message. The task below is the same work, re-delivered: pick up where you ' +
+  'left off and finish it.\n\n'
+
+function withRedriveNarrative(prompt: string): string {
+  return `${REDRIVE_NARRATIVE}${prompt}`
+}
+
+/**
+ * Re-queue one or more displaced runs with `isRedriven: true`. When the item
+ * is the representative of a coalesced dm batch (Plan ③batching), every member
+ * is re-queued. Drops each member (with a room narrative for group turns)
+ * once it exceeds MAX_WAKE_REDRIVES, so a wedged session cannot loop the same
+ * task forever.
+ */
+function requeueRedriven(sessionId: string, item: WakeItem): void {
+  const members = redriveBatches.get(item.id) ?? [item]
+  redriveBatches.delete(item.id)
+  for (const member of members) {
+    const requeued = asRedriven({ ...member, turnEpoch: undefined })
+    if ((requeued.redriveCount ?? 0) > MAX_WAKE_REDRIVES) {
+      getLogger().warn('Wake redrive limit reached; dropping displaced run', {
+        sessionId,
+        itemId: member.id,
+        source: member.source,
+        redriveCount: requeued.redriveCount,
+      }, LogComponent.Automation)
+      try {
+        currentDeps().notifyGroupTurnDropped?.(sessionId, requeued)
+      } catch {
+        // Narrative delivery is best-effort.
+      }
+      continue
+    }
+    getLogger().info('Wake redrive: re-queueing displaced run', {
+      sessionId,
+      source: requeued.source,
+      redriveCount: requeued.redriveCount,
+    }, LogComponent.Automation)
+    enqueueWakeItemForSession(sessionId, requeued)
+  }
+}
+
+/**
+ * Plan ④ — collect a contiguous run of queued `agent.dm` items for coalescing.
+ * `first` is the already-dequeued head; when it is not a dm (or nothing else
+ * is queued / the next head is not a dm / a higher-lane item arrived), returns
+ * just `[first]`. Otherwise drains following consecutive dm items off the
+ * queue and returns them as one batch. Cleared each member's durable marker.
+ */
+function collectDmBatch(state: SessionWakeState, first: WakeItem): WakeItem[] {
+  if (first.payload.kind !== 'dm') return [first]
+  const batch: WakeItem[] = [first]
+  for (;;) {
+    const head = peekNextWake(state.queue)
+    if (!head || head.payload.kind !== 'dm') break
+    const next = dequeueNextWake(state.queue)
+    if (!next) break
+    state.queue = next.queue
+    clearPersistedItem(next.item)
+    batch.push(next.item)
+  }
+  return batch
 }
 
 // ─── Watchdog (Plan 500 P5.1, grok run-scheduler parity) ───
@@ -715,6 +835,16 @@ function envPositiveInt(name: string): number | undefined {
 const USER_TURN_WATCHDOG_DEFAULT_MS = envPositiveInt('DUYA_BOT_WATCHDOG_MS') ?? 120_000
 /** Mutable for tests — the timeout is far too long to wait out for real. */
 let userTurnWatchdogMs = USER_TURN_WATCHDOG_DEFAULT_MS
+
+/** Plan 501 L3: after the watchdog interrupts a wedged run, how long to wait
+ *  for it to actually return before escaping it (grok zombie escape grace). */
+const WATCHDOG_ESCAPE_DEFAULT_MS = envPositiveInt('DUYA_BOT_WATCHDOG_ESCAPE_MS') ?? 30_000
+let watchdogEscapeMs = WATCHDOG_ESCAPE_DEFAULT_MS
+
+/** Test seam — override the watchdog escape grace (Plan 501 L3). */
+export function _setWatchdogEscapeMsForTest(ms: number): void {
+  watchdogEscapeMs = ms
+}
 
 /** Test seam — override the watchdog threshold (Plan 500 P5.1). */
 export function _setUserTurnWatchdogMsForTest(ms: number): void {
@@ -750,7 +880,44 @@ function armUserTurnWatchdog(sessionId: string): void {
     }
     turnEpochs.maybeAdvanceForItem(sessionId, head)
     interruptSafely(sessionId)
+    // Plan 501 L3 (grok zombie escape): the interrupt is best-effort — if
+    // the wedged run still holds the lock after the grace period, escape it
+    // instead of waiting forever.
+    if (running) armWatchdogEscape(sessionId, running)
   }, userTurnWatchdogMs)
+}
+
+/**
+ * Plan 501 L3: arm the post-interrupt escape. When it fires and the same
+ * item is STILL the running one (the interrupt did not land), resolve its
+ * waiters, re-queue displaced work, bump the drain generation (the awaiting
+ * drain exits as a zombie when its run finally returns) and pump the queue
+ * on a fresh drain. The wedged run keeps the lock — the lock TTL remains
+ * the ultimate correctness backstop.
+ */
+function armWatchdogEscape(sessionId: string, item: WakeItem): void {
+  const state = getState(sessionId)
+  if (state.escapeTimer) clearTimeout(state.escapeTimer)
+  state.escapeTimer = setTimeout(() => {
+    state.escapeTimer = undefined
+    if (state.runningItem?.id !== item.id) return // run already returned
+    if (!currentDeps().isLocked(sessionId)) return
+    getLogger().warn('Bot run watchdog escape: interrupted run still wedged; escaping it', {
+      sessionId,
+      itemId: item.id,
+      source: item.source,
+      graceMs: watchdogEscapeMs,
+    }, LogComponent.Automation)
+    state.drainGeneration += 1
+    state.runningItem = undefined
+    resolveTurnWaiters(sessionId, item.id, { output: '', events: [] })
+    if (state.redrivePending?.id === item.id) {
+      state.redrivePending = undefined
+      requeueRedriven(sessionId, item)
+    }
+    state.draining = false
+    void drain(sessionId)
+  }, watchdogEscapeMs)
 }
 
 function disarmUserTurnWatchdog(sessionId: string): void {
@@ -783,6 +950,9 @@ async function drain(sessionId: string): Promise<void> {
   const state = getState(sessionId)
   if (state.draining) return
   state.draining = true
+  // Plan 501 L3: a watchdog escape bumps drainGeneration and starts a fresh
+  // drain; this (older) loop's finally must not clobber the new one's flag.
+  const drainGen = state.drainGeneration
   try {
     for (;;) {
       const head = peekNextWake(state.queue)
@@ -859,10 +1029,29 @@ async function drain(sessionId: string): Promise<void> {
         continue
       }
 
-      const prompt = promptForItem(dequeued.item)
+      // Plan ④ batching (grok runAgentInboundWake parity): coalesce a
+      // contiguous run of `agent.dm` items sitting at the queue head into ONE
+      // wake run, so a burst of teammate DMs does not spawn one run per
+      // message. Each member is presented as its own block; turn-waiters
+      // resolve for every member; a preemption/redrive re-queues the whole
+      // batch. A non-dm head (or a higher-lane item that arrives mid-collect)
+      // passes through unchanged.
+      const batchRunItems = collectDmBatch(state, dequeued.item)
+      const representative = batchRunItems[0]
+      const prompts = batchRunItems.map(promptForItem)
+      const prompt = prompts.filter(Boolean).join('\n\n')
       if (!prompt) {
-        resolveTurnWaiters(sessionId, dequeued.item.id, { output: '', events: [] })
+        for (const it of batchRunItems) {
+          resolveTurnWaiters(sessionId, it.id, { output: '', events: [] })
+        }
         continue
+      }
+      if (batchRunItems.length > 1) {
+        redriveBatches.set(representative.id, batchRunItems)
+        getLogger().info('Wake batch: coalesced DMs into one run', {
+          sessionId,
+          count: batchRunItems.length,
+        }, LogComponent.Automation)
       }
       // NOTE (Plan 495 G3): dispatching a user-lane wake does NOT advance
       // the epoch — the existing 476/477 contract keeps background wakes
@@ -877,32 +1066,45 @@ async function drain(sessionId: string): Promise<void> {
       // prompt sections. The fixed session id is the binding itself — the
       // agent id parses straight out of it, no lookup needed.
       const botAgentId = parseAgentIdFromBotSession(sessionId)
-      state.runningItem = dequeued.item
+      state.runningItem = representative
+      // Plan 501 L3: capture the generation so a watchdog escape while this
+      // run is in flight can be detected on return (zombie run — the escape
+      // already resolved waiters and re-queued; touch nothing here).
+      const itemGen = state.drainGeneration
       try {
         const outcome = await currentDeps().runWake(
           sessionId,
-          prompt,
+          representative.isRedriven ? withRedriveNarrative(prompt) : prompt,
           botAgentId
-            ? { agentProfileId: botAgentId, lane: dequeued.item.lane }
-            : { lane: dequeued.item.lane },
+            ? { agentProfileId: botAgentId, lane: representative.lane }
+            : { lane: representative.lane },
         )
+        if (state.escapeTimer) {
+          clearTimeout(state.escapeTimer)
+          state.escapeTimer = undefined
+        }
+        if (itemGen !== state.drainGeneration) {
+          // Zombie run returned after its escape — the queue moved on.
+          getLogger().info('Zombie wake run returned after escape; ignoring', {
+            sessionId,
+            source: representative.source,
+          }, LogComponent.Automation)
+          return
+        }
         state.runningItem = undefined
         // Plan 500 P4: resolve external turn waiters (group chain) with the
-        // collected outcome. On redrive the re-queued run resolves nothing
-        // (the waiter is already gone) — the chain moves on with what the
-        // interrupted run produced.
-        resolveTurnWaiters(sessionId, dequeued.item.id, outcome ?? { output: '', events: [] })
+        // collected outcome — every batch member is satisfied by the one run.
+        for (const it of batchRunItems) {
+          resolveTurnWaiters(sessionId, it.id, outcome ?? { output: '', events: [] })
+        }
         // Plan 495 G3 redrive: if this run was displaced by a preempting
-        // wake, re-queue the item (epoch re-stamped at enqueue) so the work
+        // wake, re-queue the batch (epoch re-stamped at enqueue) so the work
         // still happens after the preempting turn finishes.
-        if (state.redrivePending?.id === dequeued.item.id) {
+        if (state.redrivePending?.id === representative.id) {
           state.redrivePending = undefined
-          const requeued = asRedriven({ ...dequeued.item, turnEpoch: undefined })
-          getLogger().info('Wake redrive: re-queueing displaced run', {
-            sessionId,
-            source: requeued.source,
-          }, LogComponent.Automation)
-          enqueueWakeItemForSession(sessionId, requeued)
+          requeueRedriven(sessionId, representative)
+        } else {
+          redriveBatches.delete(representative.id)
         }
         // Plan 495 G3 — run tail epoch guard (grok turn-runtime parity):
         // when this item's epoch is no longer current, a newer user turn
@@ -912,51 +1114,63 @@ async function drain(sessionId: string): Promise<void> {
         if (tailSuppressed) {
           getLogger().debug('Wake run tail suppressed: superseded by newer user turn', {
             sessionId,
-            source: dequeued.item.source,
+            source: representative.source,
             dispatchEpoch,
             currentEpoch: turnEpochs.current(sessionId),
           }, LogComponent.Automation)
-        } else if (dequeued.item.payload.kind === 'dm' && outcome) {
+        } else if (representative.payload.kind === 'dm' && outcome) {
           // 477 P4.3 — auto-return: a DM run whose inbound message was a
           // request/question hands its final response back to the delegating
           // bot unless the bot already replied explicitly during the run.
+          // For a batch we reply to the most recent member's sender.
           // Outcome fields are read defensively: injected test deps may return
           // void (legacy fakes).
-          const dm = dequeued.item.payload
+          const tailDm = batchRunItems[batchRunItems.length - 1].payload as Extract<WakeItem['payload'], { kind: 'dm' }>
           if (!runUsedSendToAgent(outcome.events ?? [])) {
             maybeAutoReturnDmResult(
               {
                 sessionId,
-                clientMsgId: dm.clientMsgId,
-                fromAgentId: dm.fromAgentId,
-                ...(dm.fromAgentName ? { fromAgentName: dm.fromAgentName } : {}),
-                ...(dm.intent ? { intent: dm.intent } : {}),
-                ...(dm.hops != null ? { hops: dm.hops } : {}),
+                clientMsgId: tailDm.clientMsgId,
+                fromAgentId: tailDm.fromAgentId,
+                ...(tailDm.fromAgentName ? { fromAgentName: tailDm.fromAgentName } : {}),
+                ...(tailDm.intent ? { intent: tailDm.intent } : {}),
+                ...(tailDm.hops != null ? { hops: tailDm.hops } : {}),
               },
               outcome.output ?? '',
             )
           }
         }
       } catch (err) {
+        if (state.escapeTimer) {
+          clearTimeout(state.escapeTimer)
+          state.escapeTimer = undefined
+        }
+        if (itemGen !== state.drainGeneration) return
         state.runningItem = undefined
-        resolveTurnWaiters(sessionId, dequeued.item.id, { output: '', events: [] })
+        for (const it of batchRunItems) {
+          resolveTurnWaiters(sessionId, it.id, { output: '', events: [] })
+        }
         // Plan 495 G3: a displaced run re-queues even on failure, so an
         // interrupted item is never silently dropped.
-        if (state.redrivePending?.id === dequeued.item.id) {
+        if (state.redrivePending?.id === representative.id) {
           state.redrivePending = undefined
-          enqueueWakeItemForSession(sessionId, asRedriven({ ...dequeued.item, turnEpoch: undefined }))
+          requeueRedriven(sessionId, representative)
+        } else {
+          redriveBatches.delete(representative.id)
         }
         // runWake is best-effort and swallows most failures; this guard is
         // for unexpected throws so one bad item cannot wedge the queue.
         getLogger().warn('Wake run failed', {
           sessionId,
-          source: dequeued.item.source,
+          source: representative.source,
           error: err instanceof Error ? err.message : String(err),
         }, LogComponent.Automation)
       }
     }
   } finally {
-    state.draining = false
+    if (drainGen === state.drainGeneration) {
+      state.draining = false
+    }
   }
 }
 
@@ -1085,9 +1299,11 @@ function sweepDedupeMap(now: number): void {
 export function _resetWakeDispatcherForTest(): void {
   for (const state of sessions.values()) {
     if (state.watchdogTimer) clearTimeout(state.watchdogTimer)
+    if (state.escapeTimer) clearTimeout(state.escapeTimer)
   }
   sessions.clear()
   recentWakeTaskIds.clear()
+  redriveBatches.clear()
   turnEpochs = createTurnEpochState()
   activeDeps = null
 }

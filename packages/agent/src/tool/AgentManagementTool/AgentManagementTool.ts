@@ -151,6 +151,7 @@ export class UpdateAgentTool implements Tool {
     const agentId = asString(input.agentId)?.trim();
     const name = asString(input.name);
     const description = asString(input.description);
+    const avatarEmoji = asString(input.emoji);
 
     if (!agentId) {
       return result(
@@ -173,6 +174,7 @@ export class UpdateAgentTool implements Tool {
         agentId,
         ...(name !== undefined ? { name } : {}),
         ...(description !== undefined ? { description } : {}),
+        ...(avatarEmoji !== undefined ? { avatarEmoji } : {}),
       });
       return result(
         this.name,
