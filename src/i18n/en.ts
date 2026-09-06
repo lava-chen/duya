@@ -358,6 +358,11 @@ const en = {
   'connectorAuth.connected': '{provider} re-authorized. Resuming…',
   'connectorAuth.retry': 'Retry',
   'connectorAuth.resumeMessage': 'Re-authorized {provider}. Please re-issue the failed `{tool}` call with the same arguments.',
+  // Plan 503: bot-initiated first-time connect variant.
+  'connectorAuth.connectTitle': 'Connect external app',
+  'connectorAuth.connectBody': '{provider} needs to be connected before it can be used. Click the button below to authorize in the browser; the bot is notified automatically once done.',
+  'connectorAuth.authorize': 'Connect',
+  'connectorAuth.connectResumeMessage': '{provider} is now connected. Please continue with the user\'s original request.',
   'permission.denyAll': 'Deny All',
   'permission.permissionRequired': 'Permission Required',
   'permission.collapse': 'Collapse',

@@ -350,6 +350,11 @@ const zh: Record<TranslationKey, string> = {
   'connectorAuth.connected': '{provider} 已重新授权，正在恢复…',
   'connectorAuth.retry': '重试',
   'connectorAuth.resumeMessage': '已重新授权 {provider}，请用相同参数重试刚才失败的 `{tool}` 调用。',
+  // Plan 503: bot-initiated first-time connect variant.
+  'connectorAuth.connectTitle': '连接外部应用',
+  'connectorAuth.connectBody': '{provider} 需要连接授权后才能继续。点击下方按钮在浏览器中完成授权，完成后会自动通知对方继续。',
+  'connectorAuth.authorize': '去连接',
+  'connectorAuth.connectResumeMessage': '{provider} 已连接成功，请继续处理用户最初的请求。',
   'permission.denyAll': '全部拒绝',
   'permission.permissionRequired': '需要权限',
   'permission.collapse': '收起',

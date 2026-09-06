@@ -219,11 +219,12 @@ export class WorkerManager {
         return;
       }
       // db:request, conductor:executor:rpc, appConnection:invoke,
-      // appConnection:listDescriptors, and computer-use:execute are
+      // appConnection:listDescriptors, appConnection:catalog, and
+      // computer-use:execute are
       // handled by the per-request handlers in router.ts (they forward
       // to main process). All other messages go to the centralized
       // handler (used by InteragentRouter).
-      if (msg.type === 'db:request' || msg.type === 'conductor:executor:rpc' || msg.type === 'appConnection:invoke' || msg.type === 'appConnection:listDescriptors' || msg.type === 'computer-use:execute') {
+      if (msg.type === 'db:request' || msg.type === 'conductor:executor:rpc' || msg.type === 'appConnection:invoke' || msg.type === 'appConnection:listDescriptors' || msg.type === 'appConnection:catalog' || msg.type === 'computer-use:execute') {
         return;
       }
       if (this.onWorkerMessage) {
