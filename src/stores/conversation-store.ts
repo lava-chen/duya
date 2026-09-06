@@ -21,6 +21,7 @@ import {
 import { getAgentServerClient } from '@/lib/agent-http-client';
 import { useContextUsageStore } from '@/stores/context-usage-store';
 import { registerLoadedMessages } from '@/lib/stream-session-manager';
+import { isPlaceholderThreadId } from '@/components/layout/sidebar/section-system';
 
 // Thread interface - uses camelCase for frontend consistency
 // generation is optional since older threads may not have it
@@ -299,18 +300,15 @@ export const OPTIMISTIC_DEDUPE_WINDOW_MS = 5_000;
  *     look like a no-op (the view briefly flashes the bot chat shell
  *     then snaps back to the welcome screen).
  *
- * Room placeholder ids (`room:<roomId>`) are not currently produced,
- * but the function is written defensively in case future sections
- * adopt the same shape. Keep this in sync with
- * `sidebar/section-system.ts` `SESSION_KIND_PREFIXES`.
+ * Room placeholder ids (`room:<roomId>`) are not currently produced, but the
+ * predicate is written generally in `section-system.ts` in case future
+ * sections adopt the same shape. This is a thin delegation to the single
+ * source of truth `isPlaceholderThreadId` (plan 505).
  */
 export function isPlaceholderBotThreadId(
   id: string | null | undefined,
 ): boolean {
-  if (!id) return false;
-  // Real session: `bot:<agentId>:<sessionId>` — at least two colons.
-  // Placeholder:    `bot:<agentId>`            — exactly one colon.
-  return id.startsWith('bot:') && id.split(':').length === 2;
+  return isPlaceholderThreadId(id, 'bot');
 }
 
 /**
@@ -1177,10 +1175,9 @@ export const useConversationStore = create<ConversationState>()(
               // message (which will promote the placeholder to a real
               // session via createThread) or navigate away.
             } else {
-            console.warn(
-              `[Store] Clearing orphaned activeThreadId: ${activeThreadId.slice(0, 8)} (not in DB)`,
-            );
-            activeThreadId = null;
+              // Orphaned placeholder: no chat_sessions row, not a bot
+              // placeholder — clear it so the user lands on welcome.
+              activeThreadId = null;
             }
           }
 

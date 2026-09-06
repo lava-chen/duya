@@ -87,6 +87,25 @@ export const SESSION_KIND_PREFIXES = {
 } as const;
 
 /**
+ * True when `id` is a *placeholder* thread id of `kind` — the prefix followed
+ * by exactly one segment (e.g. `bot:<agentId>`, `room:<roomId>`). Placeholder
+ * ids are UI-only state that never correspond to a `chat_sessions` row, as
+ * opposed to a bound session id which carries at least one extra segment
+ * (`bot:<agentId>:<sessionId>`).
+ *
+ * Single source of truth for the placeholder-vs-real distinction, keyed off
+ * `SESSION_KIND_PREFIXES`. Consumers must delegate here instead of re-deriving
+ * the prefix + colon-count themselves (plan 505 Part B).
+ */
+export function isPlaceholderThreadId(
+  id: string | null | undefined,
+  kind: keyof typeof SESSION_KIND_PREFIXES,
+): boolean {
+  if (!id) return false;
+  return id.startsWith(SESSION_KIND_PREFIXES[kind]) && id.split(':').length === 2;
+}
+
+/**
  * Detect the system section a thread belongs to. The first matching rule
  * wins. Sub-agents (parentId set) are excluded — they are internal
  * bookkeeping and should never be shown in the sidebar.

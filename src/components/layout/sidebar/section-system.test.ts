@@ -4,6 +4,7 @@ import {
   bucketThreadsByKind,
   SYSTEM_SECTIONS,
   SESSION_KIND_PREFIXES,
+  isPlaceholderThreadId,
 } from './section-system';
 import type { Thread } from '@/stores/conversation-store';
 
@@ -68,5 +69,29 @@ describe('section-system bot/room prefixes (plan 483 P1.1)', () => {
     expect(buckets.bot).toHaveLength(1);
     expect(buckets.room).toHaveLength(1);
     expect(buckets.project_ungrouped).toHaveLength(1);
+  });
+});
+
+describe('isPlaceholderThreadId (plan 505)', () => {
+  it('returns true for a bot placeholder bot:<agentId>', () => {
+    expect(isPlaceholderThreadId('bot:frontend-expert', 'bot')).toBe(true);
+  });
+
+  it('returns false for a bound bot session bot:<agentId>:<sessionId>', () => {
+    expect(isPlaceholderThreadId('bot:frontend-expert:abc-123', 'bot')).toBe(false);
+  });
+
+  it('returns true for a room placeholder room:<roomId> (defensive)', () => {
+    expect(isPlaceholderThreadId('room:product-discussion', 'room')).toBe(true);
+  });
+
+  it('returns false when the id does not use the requested kind prefix', () => {
+    expect(isPlaceholderThreadId('cron:daily-1', 'bot')).toBe(false);
+    expect(isPlaceholderThreadId('550e8400-e29b-41d4-a716-446655440000', 'bot')).toBe(false);
+  });
+
+  it('returns false for null / undefined', () => {
+    expect(isPlaceholderThreadId(null, 'bot')).toBe(false);
+    expect(isPlaceholderThreadId(undefined, 'bot')).toBe(false);
   });
 });
