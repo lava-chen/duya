@@ -197,6 +197,27 @@ export async function createWindow(): Promise<void> {
     mainWindow.maximize();
   }
 
+  // Electron drops the DWM backdrop attribute whenever the window changes
+  // native state (maximize / fullscreen / restore), so Mica silently
+  // disappears until the window is recreated. Re-apply it after every
+  // state transition; the short delay is needed because re-applying
+  // synchronously inside the event lands before DWM finishes the
+  // transition and gets overwritten again.
+  if (windowBackdrop === 'mica') {
+    const reapplyMica = (): void => {
+      setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.setBackgroundMaterial('mica');
+        }
+      }, 120);
+    };
+    mainWindow.on('maximize', reapplyMica);
+    mainWindow.on('unmaximize', reapplyMica);
+    mainWindow.on('restore', reapplyMica);
+    mainWindow.on('enter-full-screen', reapplyMica);
+    mainWindow.on('leave-full-screen', reapplyMica);
+  }
+
   // Register the main window with the browser daemon so it can forward
   // webview CDP commands to the renderer via IPC.
   setMainWindow(mainWindow);
