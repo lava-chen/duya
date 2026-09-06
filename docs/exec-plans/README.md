@@ -327,6 +327,7 @@ Moved here when finished. Each includes original goal, key decisions, and lesson
 | [22-singleton-daemon-architecture](./completed/22-singleton-daemon-architecture.md)                     | Singleton daemon architecture                           | 2026-04-23 |
 | [24-self-improvement-system](./completed/24-self-improvement-system.md)                                 | Self-improvement skill quality control                  | 2026-04-24 |
 | [52-deepseek-tui-feature-parity](./completed/52-deepseek-tui-feature-parity.md)                         | DeepSeek-TUI feature parity                             | 2026-05-12 |
+| [499-bot-routines-and-listeners](./completed/499-bot-routines-and-listeners.md)                        | Bot routines: cronjob × grok listeners (476 P2.3b/d)    | 2026-09-06 |
 | [53-agent-communication-architecture-v2](./completed/53-agent-communication-architecture-v2.md)         | Agent communication architecture V2                     | 2026-05-16 |
 | [55-agent-directory-restructuring](./completed/55-agent-directory-restructuring.md)                     | Agent directory restructure                             | 2026-05-16 |
 
