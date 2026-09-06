@@ -45,6 +45,10 @@ const en = {
   'chat.openNewProject': 'Open New Project...',
   'chat.recentThreads': 'Recent Threads',
   'chat.describeWhatToBuild': 'Describe what you want to build...',
+  'chat.greeting.morning': 'Good morning! What would you like to do?',
+  'chat.greeting.afternoon': 'Good afternoon! Need a break?',
+  'chat.greeting.evening': 'Good evening! What are we building today?',
+  'chat.greeting.night': "It's late — don't forget to rest.",
 
   'chat.header.openSideChat': 'Open side chat',
   'chat.header.copy': 'Copy',

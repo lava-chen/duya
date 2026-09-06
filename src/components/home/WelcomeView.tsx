@@ -29,6 +29,17 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
   // Remember the last-used thinking effort so it carries over to new sessions.
   const [effort, setEffortState] = useState<string | undefined>(settings.defaultThinkingEffort ?? undefined);
 
+  // Time-of-day greeting shown above the composer.
+  const hour = new Date().getHours();
+  const greeting =
+    hour >= 5 && hour < 12
+      ? t('chat.greeting.morning')
+      : hour >= 12 && hour < 18
+        ? t('chat.greeting.afternoon')
+        : hour >= 18 && hour < 23
+          ? t('chat.greeting.evening')
+          : t('chat.greeting.night');
+
   // Sync effort from settings when they load for the first time.
   useEffect(() => {
     setEffortState(settings.defaultThinkingEffort ?? undefined);
@@ -268,6 +279,7 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
     <div className="welcome-view">
       <div className="welcome-content">
         <SessionSelector
+          greeting={greeting}
           selectedProject={selectedProject}
           onSelectProject={handleSelectProject}
           onNewBlankProject={handleNewBlankProject}
@@ -275,7 +287,7 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
           onNewNoProjectSession={handleNewNoProjectSession}
           onSelectThread={onSelectThread}
         >
-          {/* Message Input rendered between selector and recent threads */}
+          {/* Message Input rendered between greeting and project selector */}
           <div className="welcome-message-input">
             <MessageInput
               onSend={handleSend}
@@ -287,14 +299,6 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
               onEffortChange={setEffort}
               placeholder={t('chat.describeWhatToBuild')}
             />
-            {/* Agent chosen once at session creation; fixed afterwards. */}
-            <div className="flex items-center justify-between mt-2 px-1">
-              <AgentModeSelector
-                value={agentProfileId ?? getProfileIdForMode('main')}
-                onChange={(profileId) => setAgentProfileId(profileId)}
-                disabled={!isHydrated || !selectedProject}
-              />
-            </div>
           </div>
         </SessionSelector>
       </div>
