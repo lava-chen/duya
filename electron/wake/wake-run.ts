@@ -14,9 +14,10 @@
 
 import { getCoreStores } from '../db/core-connection';
 import { resolveCronProvider } from '../automation/provider';
+import type { ResolvedCronProvider } from '../automation/provider';
+import { buildCronProviderConfig } from '../automation/provider-config';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
 import { runPromptInSession } from '../automation/agent-run';
-import { toLLMProvider } from '../config/provider-types';
 import { getLogger, LogComponent } from '../logging/logger';
 
 /** Per-run options handed down by the wake dispatcher (477 P3.1). */
@@ -47,6 +48,16 @@ export interface WakeRunOutcome {
  * SendToAgent / update_state) and the 474 prompt sections. Matching the
  * session's original model stays a 485 refinement.
  */
+/** Extract a session's own working directory, defaulting to '' when the row
+ *  is missing. Shared by the wake-run and user-turn run paths (plan 505). */
+function resolveSessionWorkingDirectory(sessionId: string): string {
+  try {
+    return getCoreStores().sessions.get(sessionId)?.workingDirectory ?? '';
+  } catch {
+    return '';
+  }
+}
+
 export async function runWakePromptInExistingSession(
   sessionId: string,
   prompt: string,
@@ -59,7 +70,7 @@ export async function runWakePromptInExistingSession(
   }
 
   // Resolve provider/model the same way cron does (default LLM provider).
-  let resolved: { provider: import('../../src/lib/providers/types').ApiProvider; model: string }
+  let resolved: ResolvedCronProvider
   try {
     resolved = resolveCronProvider(undefined)
   } catch {
@@ -68,13 +79,7 @@ export async function runWakePromptInExistingSession(
   }
 
   // Prefer the session's own working directory when it exists.
-  let workingDirectory = ''
-  try {
-    const session = getCoreStores().sessions.get(sessionId)
-    workingDirectory = session?.workingDirectory ?? ''
-  } catch {
-    // Session row may not exist yet — empty workspace falls back to default.
-  }
+  const workingDirectory = resolveSessionWorkingDirectory(sessionId)
 
   getLogger().info('Idle wake run starting', {
     sessionId,
@@ -86,13 +91,7 @@ export async function runWakePromptInExistingSession(
     sessionId,
     prompt,
     workingDirectory,
-    providerConfig: {
-      apiKey: resolved.provider.apiKey,
-      baseURL: resolved.provider.baseUrl,
-      model: resolved.model,
-      provider: toLLMProvider(resolved.provider.providerType),
-      authStyle: 'api_key',
-    },
+    providerConfig: buildCronProviderConfig(resolved),
     options: {
       agentProfileId: opts?.agentProfileId,
       effort: 'off',
@@ -125,23 +124,22 @@ export async function runUserTurnInSession(
   }
 
   // Prefer the session's own provider/model; fall back to the default.
-  let workingDirectory = ''
   let sessionModel: string | undefined
   try {
-    const session = getCoreStores().sessions.get(sessionId)
-    workingDirectory = session?.workingDirectory ?? ''
-    sessionModel = session?.model ?? undefined
+    sessionModel = getCoreStores().sessions.get(sessionId)?.model ?? undefined
   } catch {
     // Session row may not exist yet — empty workspace falls back to default.
   }
 
-  let resolved: { provider: import('../../src/lib/providers/types').ApiProvider; model: string }
+  let resolved: ResolvedCronProvider
   try {
     resolved = resolveCronProvider(sessionModel)
   } catch {
     getLogger().warn('User-turn fallback skipped: no provider configured', { sessionId }, LogComponent.Automation)
     return { output: '', events: [] }
   }
+
+  const workingDirectory = resolveSessionWorkingDirectory(sessionId)
 
   getLogger().info('Queued user-turn fallback run starting', {
     sessionId,
@@ -152,13 +150,7 @@ export async function runUserTurnInSession(
     sessionId,
     prompt,
     workingDirectory,
-    providerConfig: {
-      apiKey: resolved.provider.apiKey,
-      baseURL: resolved.provider.baseUrl,
-      model: resolved.model,
-      provider: toLLMProvider(resolved.provider.providerType),
-      authStyle: 'api_key',
-    },
+    providerConfig: buildCronProviderConfig(resolved),
     options: {
       agentProfileId: opts?.agentProfileId,
       llmRequestTimeoutMs: 240_000,
