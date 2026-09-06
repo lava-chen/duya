@@ -78,7 +78,7 @@ beforeEach(() => {
 describe('botChannels:manifests', () => {
   it('returns the connector manifests', async () => {
     const res = (await invokeHandler('botChannels:manifests')) as { manifests: Array<{ platform: string }> };
-    expect(res.manifests.map((m) => m.platform)).toEqual(['discord', 'slack', 'telegram']);
+    expect(res.manifests.map((m) => m.platform)).toEqual(['discord', 'slack', 'telegram', 'feishu', 'weixin']);
   });
 });
 
