@@ -935,6 +935,8 @@ export const automationDb = {
     enabled?: boolean;
     /** Plan 476 P2.3b — bot binding; ManageRoutineTool always sets it to the CALLING bot. */
     agent?: string;
+    /** Plan 476 P2.3d — event listeners (github/slack specs). */
+    eventTriggers?: Array<Record<string, unknown>>;
   }) => sendDbRequest('automation:cron:create', data) as Promise<{ id: string; name: string }>,
 
   updateCron: (
@@ -950,6 +952,8 @@ export const automationDb = {
       enabled?: boolean;
       /** Set to null to clear an existing bot binding. */
       agent?: string | null;
+      /** Plan 476 P2.3d — replace the event listener set. */
+      eventTriggers?: Array<Record<string, unknown>>;
     }
   ) => sendDbRequest('automation:cron:update', { id, patch }) as Promise<{ id: string; name: string }>,
 

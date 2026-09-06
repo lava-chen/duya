@@ -21,6 +21,7 @@ export { ROUTINE_WAKE_CUE };
 /** Human sentence describing when a routine fires (UI + wake prompt). */
 export function describeRoutineTrigger(job: Pick<AutomationCron, 'schedule'>): string {
   const schedule = job.schedule;
+  if (schedule == null) return 'on its event listeners';
   switch (schedule.kind) {
     case 'once':
       return `once at ${schedule.at}`;
