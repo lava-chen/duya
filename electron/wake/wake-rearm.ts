@@ -110,6 +110,9 @@ function pendingWakeRowToWakeItem(row: ReturnType<typeof getCoreStores>['wakes']
           jobKey: row.work_id,
           fireKey: 'rearm',
           name: row.title ?? undefined,
+          // Restart-rearm replays are always scheduled fires; manual/event
+          // fires are transient and never persisted as pending wakes.
+          trigger: 'schedule',
         },
       }
 

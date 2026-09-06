@@ -58,7 +58,15 @@ export interface QuietWakeOrigin {
  */
 export type WakePayload =
   | { kind: 'completion'; taskId: string; title?: string; quiet?: boolean; summary?: string }
-  | { kind: 'automation'; jobKey: string; fireKey: string; name?: string; quiet?: boolean }
+  | {
+      kind: 'automation'
+      jobKey: string
+      fireKey: string
+      name?: string
+      quiet?: boolean
+      /** P2.3b — which fire path produced this item (drives the wake prompt opening). */
+      trigger?: 'schedule' | 'manual' | 'event'
+    }
   | { kind: 'inbound'; envelopeId: string; text?: string }
   | { kind: 'broadcast'; broadcastId: string; text: string }
   | {

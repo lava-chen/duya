@@ -933,7 +933,9 @@ export const automationDb = {
     concurrencyPolicy?: 'skip' | 'parallel' | 'replace';
     maxRetries?: number;
     enabled?: boolean;
-  }) => sendDbRequest('automation:cron:create', data),
+    /** Plan 476 P2.3b — bot binding; ManageRoutineTool always sets it to the CALLING bot. */
+    agent?: string;
+  }) => sendDbRequest('automation:cron:create', data) as Promise<{ id: string; name: string }>,
 
   updateCron: (
     id: string,
@@ -946,8 +948,10 @@ export const automationDb = {
       concurrencyPolicy?: 'skip' | 'parallel' | 'replace';
       maxRetries?: number;
       enabled?: boolean;
+      /** Set to null to clear an existing bot binding. */
+      agent?: string | null;
     }
-  ) => sendDbRequest('automation:cron:update', { id, patch }),
+  ) => sendDbRequest('automation:cron:update', { id, patch }) as Promise<{ id: string; name: string }>,
 
   deleteCron: (id: string) => sendDbRequest('automation:cron:delete', { id }),
 
