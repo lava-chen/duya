@@ -11,8 +11,11 @@
  *
  * Sync model: `sync()` recomputes the desired connector set from the stores
  * (called at boot and after every bind/unbind) and starts/stops accordingly.
- * Only Telegram has an inbound implementation today; Discord/Slack bindings
- * are outbound-only (their inbound transports are plan 488 follow-ups).
+ * Each platform dispatches to its own connector: Telegram → thin long-poll
+ * connector; Feishu/Weixin → instances of the deep gateway adapters
+ * (FeishuChannel / WeixinAdapter), reused so heartbeat/reconnect/media/stream
+ * logic is not re-written. Feishu/Weixin outbound runs on the SAME live
+ * adapter instance via the live-outbound registry (segment below).
  */
 
 import * as fs from 'node:fs';
@@ -23,8 +26,13 @@ import { getLogger, LogComponent } from '../logging/logger';
 import { getConnectorSecretStore } from './connector-secret-store';
 import { getConnectorCredential } from './agent-session-channels';
 import { isKnownPlatform } from '../../packages/agent/src/channels/types';
-import type { ChannelInboundEnvelope } from '../../packages/agent/src/channels/types';
+import type {
+  ChannelInboundEnvelope,
+  ChannelOutboundMessage,
+} from '../../packages/agent/src/channels/types';
 import { TelegramChannelConnector } from './telegram-connector';
+import { FeishuChannelConnector } from './feishu-connector';
+import { WeixinConnector } from './weixin-connector';
 import { getChannelBackgroundWakes } from '../wake/channels';
 import { defaultBotSessionCreator } from '../wake/agent-dm-dispatcher';
 import { getBotSessionId } from '../wake/bot-session-id';
@@ -77,7 +85,70 @@ function listBoundAgentPlatforms(): Array<{ agentId: string; platform: string }>
 interface RunningConnector {
   agentId: string;
   platform: string;
-  connector: TelegramChannelConnector;
+  connector: BotConnector;
+}
+
+/** Minimal connector surface shared by Telegram/Feishu/WeChat connectors. */
+interface BotConnector {
+  readonly platform: string;
+  start(): void;
+  stop(): Promise<void>;
+  isRunning: boolean;
+}
+
+// =============================================================================
+// Live outbound registry
+// =============================================================================
+//
+// Feishu/WeChat outbound must reuse the SAME live adapter instance that's
+// polling inbound (context_token session continuity, batching, stream cards).
+// Connectors register a sender here; `channelDelivery` prefers it over the
+// stateless HTTP transports when present.
+
+export type LiveOutboundSender = (
+  chatId: string,
+  outbound: ChannelOutboundMessage,
+) => Promise<void>;
+
+const liveOutboundRegistry = new Map<string, LiveOutboundSender>();
+
+function liveOutboundKey(agentId: string, platform: string): string {
+  return `${agentId}:${platform}`;
+}
+
+export function registerLiveOutbound(
+  agentId: string,
+  platform: string,
+  sender: LiveOutboundSender,
+): void {
+  liveOutboundRegistry.set(liveOutboundKey(agentId, platform), sender);
+}
+
+export function unregisterLiveOutbound(agentId: string, platform: string): void {
+  liveOutboundRegistry.delete(liveOutboundKey(agentId, platform));
+}
+
+/** Resolve a live adapter-backed outbound sender, if any. */
+export function getLiveOutbound(
+  agentId: string,
+  platform: string,
+): LiveOutboundSender | undefined {
+  return liveOutboundRegistry.get(liveOutboundKey(agentId, platform));
+}
+
+/** Map a `ChannelOutboundMessage` to a gateway `NormalizedReply` for the live
+ * adapter's `sendReply`. Attachments degrade to text-with-link until a real
+ * multipart media send path is wired. */
+function channelOutboundToNormalizedReply(
+  outbound: ChannelOutboundMessage,
+): import('../../packages/gateway/src/types').NormalizedReply {
+  if (outbound.kind === 'attachment') {
+    return {
+      type: 'text',
+      text: [outbound.caption ?? 'Attachment', outbound.url].filter(Boolean).join('\n'),
+    };
+  }
+  return { type: 'text', text: outbound.content ?? '' };
 }
 
 /**
@@ -113,6 +184,7 @@ class BotConnectorManager {
     const all = [...this.running.values()];
     this.running.clear();
     for (const entry of all) {
+      unregisterLiveOutbound(entry.agentId, entry.platform);
       await entry.connector.stop();
     }
     if (all.length > 0) {
@@ -124,8 +196,6 @@ class BotConnectorManager {
   sync(): void {
     const desired = new Map<string, { agentId: string; platform: string }>();
     for (const { agentId, platform } of listBoundAgentPlatforms()) {
-      // Only Telegram has an inbound implementation today.
-      if (platform !== 'telegram') continue;
       desired.set(`${agentId}:${platform}`, { agentId, platform });
     }
 
@@ -133,6 +203,7 @@ class BotConnectorManager {
     for (const [key, entry] of [...this.running.entries()]) {
       if (!desired.has(key)) {
         this.running.delete(key);
+        unregisterLiveOutbound(entry.agentId, entry.platform);
         void entry.connector.stop();
         logger.info('connector-runtime: stopped bot connector', {
           agentId: entry.agentId,
@@ -144,16 +215,50 @@ class BotConnectorManager {
     // Start connectors for new bindings.
     for (const [key, { agentId, platform }] of desired.entries()) {
       if (this.running.has(key)) continue;
-      const token = getConnectorCredential(agentId, platform, 'token');
-      if (!token) continue;
-      const connector = new TelegramChannelConnector({
-        agentId,
-        token,
-        onInbound: routeInboundToBot,
-      });
+      const connector = this.buildConnector(agentId, platform);
+      if (!connector) continue;
       connector.start();
       this.running.set(key, { agentId, platform, connector });
       logger.info('connector-runtime: started bot connector', { agentId, platform }, LogComponent.Gateway);
+    }
+  }
+
+  /** Construct (and register live outbound for) a per-bot connector by platform. */
+  private buildConnector(agentId: string, platform: string): BotConnector | null {
+    switch (platform) {
+      case 'telegram': {
+        const token = getConnectorCredential(agentId, 'telegram', 'token');
+        if (!token) return null;
+        return new TelegramChannelConnector({ agentId, token, onInbound: routeInboundToBot });
+      }
+      case 'feishu': {
+        const connector = new FeishuChannelConnector({ agentId, onInbound: routeInboundToBot });
+        registerLiveOutbound(agentId, platform, async (chatId, outbound) => {
+          const result = await connector.getChannel().sendReply(
+            chatId,
+            channelOutboundToNormalizedReply(outbound),
+          );
+          if (!result.ok) {
+            throw new Error(result.error ?? 'Feishu sendReply failed');
+          }
+        });
+        return connector;
+      }
+      case 'weixin': {
+        const connector = new WeixinConnector({ agentId, onInbound: routeInboundToBot });
+        registerLiveOutbound(agentId, platform, async (chatId, outbound) => {
+          const result = await connector.getAdapter().sendReply(
+            chatId,
+            channelOutboundToNormalizedReply(outbound),
+          );
+          if (!result.ok) {
+            throw new Error(result.error ?? 'Weixin sendReply failed');
+          }
+        });
+        return connector;
+      }
+      default:
+        return null;
     }
   }
 

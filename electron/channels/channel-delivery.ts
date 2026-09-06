@@ -292,6 +292,21 @@ export async function channelDelivery(
     throw new Error(`Invalid channel address token: "${addressToken}". Expected format: "platform:chatId".`);
   }
 
+  // Feishu/WeChat outbound must reuse the SAME live adapter instance that is
+  // polling inbound (context_token continuity, batching, stream cards). Prefer
+  // the live registry over the stateless HTTP transports when present.
+  const { getLiveOutbound } = await import('./connector-runtime');
+  const live = getLiveOutbound(agentId, address.platform);
+  if (live) {
+    logger.info('channelDelivery: delivering via live adapter', {
+      agentId,
+      platform: address.platform,
+      chat: address.chat,
+    }, LogComponent.AgentProcess);
+    await live(address.chat, outbound);
+    return;
+  }
+
   const transport = getTransport(address.platform);
   if (!transport) {
     throw new Error(
