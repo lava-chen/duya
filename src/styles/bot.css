@@ -91,25 +91,19 @@
   align-items: center;
   gap: 0.6rem;
   min-width: 0;
-  /* rakazo header pattern: the whole identity block is one button.
-     Negative margins keep the 22px header padding visually intact.
-     Vertical padding is tuned so the 28px avatar yields a 33px control —
-     the exact row height of the sidebar primary links (sidebar.css
-     .sidebar-primary-link: 2×0.4rem padding + 0.9rem/1.4 text). */
-  padding: 2.5px 8px;
-  margin: 0 -8px;
+  /* Only the avatar + bot name are the clickable identity; it reads as
+     plain text with an embedded avatar (no button chrome / hover box), so
+     the header does not look like one big button — everything else in the
+     bar stays inert plain text. Clicking opens bot settings. */
+  padding: 0;
+  margin: 0;
   border: none;
-  border-radius: 8px;
+  border-radius: 0;
   background: transparent;
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background-color 0.15s ease;
-}
-
-.bot-chat-header__identity:hover:not(:disabled) {
-  background: var(--surface-hover);
 }
 
 .bot-chat-header__identity:disabled {
@@ -118,7 +112,8 @@
 
 .bot-chat-header__identity:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
 .bot-chat-header__name {
@@ -434,14 +429,24 @@
   display: flex;
   flex-direction: row;
   flex-wrap: wrap;
-  align-items: center;
+  /* Bottom-align the flex lines: the action buttons pin to the composer's
+     bottom edge when the textarea grows tall (chat-app standard) instead
+     of drifting with the vertical center. At rest everything is one line
+     and this is visually identical to centering. */
+  align-items: flex-end;
   gap: 8px;
   width: 100%;
   box-sizing: border-box;
   padding: 8px 10px 8px 12px;
   background: var(--bot-shell-bg);
   border: 1px solid var(--bot-shell-border);
-  border-radius: 999px;
+  /* CONSTANT radius — NOT 999px. The old pill radius is silently capped
+     at half the shell height, so every extra line (multiline input, chip
+     rows, reply chip) ballooned the end caps into semicircles. At rest
+     the shell is 48px tall, so 999px already rendered as 24px — a fixed
+     24px keeps that exact resting look and makes tall states grow as
+     straight vertical sides with unchanged corners. */
+  border-radius: 24px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   /* Anchors the reused SlashCommandPopover (absolute bottom-full) and the
      ModelProviderSelector flyout to the composer shell. */
@@ -578,6 +583,10 @@
   flex: 1 1 auto;
   position: relative;
   min-width: 0;
+  /* Bottom-alignment compensation: the 28px resting field sits 2px lower
+     against the 32px buttons under flex-end than under the old centering —
+     this restores the exact resting text position. */
+  padding-bottom: 2px;
 }
 
 /* Invisible mirror div — same font/padding as textarea, measures scrollHeight
@@ -695,6 +704,39 @@
 
 .bot-bubble-markdown > :last-child {
   margin-bottom: 0;
+}
+
+/* Markdown inside bubbles must follow the BUBBLE surface, not the app theme:
+   the assistant bubble sits on --surface-solid (light in light theme, dark in
+   dark theme), while the user / contrast bubble is ALWAYS the inverse tone.
+   Re-point the token the prose + markdown components read (--foreground /
+   --text / --muted / --tw-prose-body) to each row's paired fg token, so both
+   bubbles stay legible in every theme. `.bot-chat-view` prefix keeps the
+   specificity above `.prose` / `.prose-invert` / `dark:prose-invert`. */
+.bot-chat-view .bot-chat-row--assistant .bot-bubble-markdown {
+  --foreground: var(--bot-bubble-assistant-fg);
+  --text: var(--bot-bubble-assistant-fg);
+  --muted: color-mix(in srgb, var(--bot-bubble-assistant-fg) 60%, transparent);
+  --tw-prose-body: var(--bot-bubble-assistant-fg);
+  --tw-prose-bold: var(--bot-bubble-assistant-fg);
+  --tw-prose-headings: var(--bot-bubble-assistant-fg);
+  --tw-prose-quotes: var(--bot-bubble-assistant-fg);
+  --tw-prose-blockquote: var(--bot-bubble-assistant-fg);
+  --tw-prose-hr: transparent;
+  color: var(--bot-bubble-assistant-fg);
+}
+
+.bot-chat-view .bot-chat-row--user .bot-bubble-markdown {
+  --foreground: var(--bot-contrast-fg);
+  --text: var(--bot-contrast-fg);
+  --muted: color-mix(in srgb, var(--bot-contrast-fg) 58%, transparent);
+  --tw-prose-body: var(--bot-contrast-fg);
+  --tw-prose-bold: var(--bot-contrast-fg);
+  --tw-prose-headings: var(--bot-contrast-fg);
+  --tw-prose-quotes: var(--bot-contrast-fg);
+  --tw-prose-blockquote: var(--bot-contrast-fg);
+  --tw-prose-hr: transparent;
+  color: var(--bot-contrast-fg);
 }
 
 /* ============================================================================

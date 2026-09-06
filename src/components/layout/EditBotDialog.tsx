@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useBotContactForm } from "@/hooks/use-bot-contact-form";
-import { BotModelField } from "./BotModelField";
+import { BotModelSelectorField } from "./BotModelSelectorField";
 import { BOT_AVATAR_COLORS } from "@/lib/bot-avatar";
 import { BotCharacterAvatar } from "./sidebar/BotCharacterAvatar";
 import type { BotContact } from "./sidebar/bot-contacts";
@@ -36,22 +36,25 @@ export function EditBotDialog({ isOpen, contact, onCancel, onSaved }: EditBotDia
   const {
     name,
     setName,
+    title,
+    setTitle,
     description,
     setDescription,
     color,
     setColor,
+    emoji,
+    setEmoji,
     avatarUrl,
     avatarBusy,
     uploadAvatar,
     removeAvatar,
-    model,
-    setModel,
+    selectorModelId,
+    handleModelSelect,
     modelGroups,
     modelsLoading,
     submitting,
     error,
     canSubmit,
-    extraModelOption,
     nameRef,
     save,
   } = useBotContactForm({ active: isOpen, contact, onSaved });
@@ -112,6 +115,16 @@ export function EditBotDialog({ isOpen, contact, onCancel, onSaved }: EditBotDia
         />
 
         <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>
+          {t("bot.create.roleTitle")}
+        </div>
+        <Input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder={t("bot.create.roleTitlePlaceholder")}
+          className="w-full mb-3"
+        />
+
+        <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>
           {t("bot.create.description")}
         </div>
         <textarea
@@ -127,12 +140,21 @@ export function EditBotDialog({ isOpen, contact, onCancel, onSaved }: EditBotDia
           }}
         />
 
-        <BotModelField
-          value={model}
+        <BotModelSelectorField
+          value={selectorModelId}
           groups={modelGroups}
           loading={modelsLoading}
-          onChange={setModel}
-          extraOption={extraModelOption}
+          onChange={handleModelSelect}
+        />
+
+        <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>
+          {t("bot.create.emoji")}
+        </div>
+        <Input
+          value={emoji}
+          onChange={(e) => setEmoji(e.target.value)}
+          placeholder={t("bot.create.emojiPlaceholder")}
+          className="w-full mb-3"
         />
 
         <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>
@@ -144,6 +166,7 @@ export function EditBotDialog({ isOpen, contact, onCancel, onSaved }: EditBotDia
             agentId={contact?.agentId ?? "preview"}
             avatarUrl={avatarUrl}
             avatarColor={color}
+            avatarEmoji={emoji}
             size={34}
           />
           <div className="flex items-center gap-2">

@@ -38,6 +38,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BotComposer, type BotComposerSendPayload } from "./BotComposer";
+import { ContextUsageRing } from "./ContextUsageRing";
 import { BotBubbleRow } from "./BotBubbleRow";
 import { BotToolCallRow } from "./BotToolCallRow";
 import { BotThinkingRow } from "./BotThinkingRow";
@@ -58,11 +59,6 @@ import { useOptionalPanel } from "@/hooks/usePanel";
 import { BotCharacterAvatar } from "@/components/layout/sidebar/BotCharacterAvatar";
 import { resolveBotAgentId } from "./bot/chat-mode";
 import { useBotDirectTranscript } from "./bot/use-bot-direct-transcript";
-import {
-  loadBotModelPreference,
-  saveBotModelPreference,
-  type BotModelPreference,
-} from "./bot/model-preference";
 import { mergeInFlightOptimisticMessages } from "@/stores/conversation-store";
 import {
   BotMessageHoverBar,
@@ -202,6 +198,7 @@ function SendCardRow({
   approvalStatus,
   onApprovalResolve,
   t,
+  groupPosition,
 }: {
   message: Message;
   onOptionClick?: (option: string) => void;
@@ -209,13 +206,26 @@ function SendCardRow({
   approvalStatus?: ToolApprovalStatus;
   onApprovalResolve?: (id: string, decision: 'allow' | 'always' | 'deny') => void;
   t: (key: TranslationKey, params?: Record<string, string | number>) => string;
+  groupPosition?: BubbleRow["groupPosition"];
 }) {
   const [thumbsUp, toggleThumbsUp] = useMessageThumbsUp(message.id);
   const approval = message.sendMessageMeta?.approval;
+  const grouped = groupPosition === "middle" || groupPosition === "end";
+  const seamClass = groupPosition
+    ? ` bot-chat-bubble--group-${groupPosition}`
+    : "";
   return (
-    <div className="bot-chat-row bot-chat-row--assistant" data-role="assistant">
+    <div
+      className={`bot-chat-row${grouped ? " bot-chat-row--grouped" : ""} bot-chat-row--assistant`}
+      data-role="assistant"
+    >
       <div className="bot-chat-row__stack">
-        <div className="bot-chat-bubble bot-chat-bubble--assistant bot-chat-bubble--card">
+        {/* Seam modifiers reuse the bubble class names — the CSS targets the
+            modifier class inside the assistant row, so the card chrome joins
+            the same corner-grouping rhythm as text bubbles. */}
+        <div
+          className={`bot-chat-bubble bot-chat-bubble--assistant bot-chat-bubble--card${seamClass}`}
+        >
           {message.msgType === 'tool-approval' && approval ? (
             <BotToolApprovalCard
               approval={approval}
@@ -253,10 +263,29 @@ interface AnsweredAsk {
 }
 
 /** Static answered card — keeps the Q&A visible after submission. */
-function AnsweredAskRow({ ask }: { ask: AnsweredAsk }) {
+function AnsweredAskRow({
+  ask,
+  groupPosition,
+}: {
+  ask: AnsweredAsk;
+  groupPosition?: BubbleRow["groupPosition"];
+}) {
+  const grouped = groupPosition === "middle" || groupPosition === "end";
+  const seamClass = groupPosition
+    ? ` bot-chat-bubble--group-${groupPosition}`
+    : "";
   return (
-    <div className="bot-chat-row bot-chat-row--assistant" data-role="assistant">
-      <div className="bot-ask-card bot-ask-card--answered" data-permission-id={ask.id}>
+    <div
+      className={`bot-chat-row${grouped ? " bot-chat-row--grouped" : ""} bot-chat-row--assistant`}
+      data-role="assistant"
+    >
+      {/* Seam modifiers reuse the bubble class names — the CSS targets the
+          modifier class inside the assistant row, so cards join the same
+          corner-grouping rhythm as bubbles. */}
+      <div
+        className={`bot-ask-card bot-ask-card--answered${seamClass}`}
+        data-permission-id={ask.id}
+      >
         <div className="bot-ask-card__head">
           <span className="bot-ask-card__pill bot-ask-card__pill--answered">
             {ask.questions.length > 1
@@ -336,29 +365,6 @@ export function BotDirectChatView({
     () => contacts.find((c) => c.agentId === agentId) ?? null,
     [contacts, agentId],
   );
-
-  // Persisted per-bot model/effort preference (localStorage). Loaded on mount /
-  // session switch; every pick is written back so the choice survives reloads.
-  const [modelPref, setModelPref] = useState<BotModelPreference | null>(null);
-  useEffect(() => {
-    setModelPref(loadBotModelPreference(sessionId));
-  }, [sessionId]);
-
-  const handleBotModelChange = useCallback((model: string, providerId?: string) => {
-    setModelPref((prev) => {
-      const next = { model, providerId, effort: prev?.effort };
-      saveBotModelPreference(sessionId, next);
-      return { ...next, updatedAt: Date.now() };
-    });
-  }, [sessionId]);
-
-  const handleBotEffortChange = useCallback((effort: string | undefined) => {
-    setModelPref((prev) => {
-      const next = { model: prev?.model ?? '', providerId: prev?.providerId, effort };
-      saveBotModelPreference(sessionId, next);
-      return { ...next, updatedAt: Date.now() };
-    });
-  }, [sessionId]);
 
   const botName = contact?.name ?? agentId ?? sessionId;
   const subtitle = contact?.title || contact?.description || "";
@@ -565,9 +571,11 @@ export function BotDirectChatView({
           text,
           isGroupStart: previousRole !== message.role,
           replyPreview,
-          // Card rows render their own chrome — grouping candidates are
-          // plain text/reply bubbles only (a card breaks the visual group).
-          isBubbleRow: !isSendCardMessage(message),
+          // Card rows (Send cards, tool approvals) share the assistant-side
+          // bubble chrome, so they JOIN the same-role visual group — the
+          // tight spacing and seam corners flow through them (screenshot
+          // grouping treats cards and bubbles as one run).
+          isBubbleRow: true,
         });
         previousRole = message.role;
       } else {
@@ -614,9 +622,12 @@ export function BotDirectChatView({
 
   // Renders one transcript row (with date separator when the calendar day
   // changes). Extracted so answered-ask traces can splice between rows at
-  // their chronological anchor (plan 494).
+  // their chronological anchor (plan 494). `groupOverride` upgrades a row's
+  // computed group position when a CARD follows it (pending permission/ask
+  // card, spliced answered card): the card inherits the seam, so the row
+  // must keep its bottom seam tight (single→start, end→middle).
   const renderRow = useCallback(
-    (row: BubbleRow, index: number): React.ReactNode => {
+    (row: BubbleRow, index: number, groupOverride?: BubbleRow["groupPosition"]): React.ReactNode => {
       // Date separator before the first row of each calendar day
       // (grok sand-transcript-time-separator). Rows with an invalid
       // timestamp (NaN/undefined) must not reach Intl.format — it
@@ -640,6 +651,7 @@ export function BotDirectChatView({
           }
           onApprovalResolve={handleApprovalResolve}
           t={t}
+          groupPosition={groupOverride ?? row.groupPosition}
         />
       ) : row.isDmMarker && row.dmGroup ? (
         <AgentDmGroupChip
@@ -662,7 +674,7 @@ export function BotDirectChatView({
           onReply={() => handleReply(row)}
           replyPreview={row.replyPreview}
           onJumpToReply={jumpToMessage}
-          groupPosition={row.groupPosition}
+          groupPosition={groupOverride ?? row.groupPosition}
         />
       ) : (
         <StatusRow key={row.message.id} message={row.message} />
@@ -681,22 +693,93 @@ export function BotDirectChatView({
     [rows, onSend, handleReply, jumpToMessage, contacts, contactNames],
   );
 
+  // Pending card seam (permission/ask cards): the card joins the tail
+  // bubble group when the last transcript row is an assistant-side
+  // bubble/card run member from the same calendar day (a date separator
+  // would otherwise render between them — never group across one).
+  const tailCardJoins = useMemo(() => {
+    if (!pendingPermission || answeredAsks.some((a) => a.id === pendingPermission.id))
+      return false;
+    const last = rows[rows.length - 1];
+    return (
+      !!last &&
+      last.role === "assistant" &&
+      last.isBubbleRow === true &&
+      Number.isFinite(last.message.timestamp) &&
+      dayKeyOf(last.message.timestamp) === dayKeyOf(Date.now())
+    );
+  }, [pendingPermission, answeredAsks, rows]);
+
   // Interleave answered-ask traces into the transcript at their submit-time
   // anchor so a trace sits BETWEEN the messages around its question — a new
   // pending ask must always appear AFTER older answered cards (plan 494
-  // ordering fix).
+  // ordering fix). Cards participate in the bubble group: a spliced card
+  // joins the assistant-side run before it (seam upgrade on the previous
+  // member), and the following row keeps its own seam when it was computed
+  // to join the same run.
   const transcriptNodes = useMemo<React.ReactNode[]>(() => {
+    const upgradeForCard = (
+      pos: BubbleRow["groupPosition"],
+    ): BubbleRow["groupPosition"] =>
+      pos === "single" ? "start" : pos === "end" ? "middle" : pos;
+    // Does a card spliced at `anchor` join the assistant-side group that
+    // ends at rows[anchor - 1]? Never across a date-separator boundary
+    // (the next row would render one between the pair).
+    const joinsPrevGroup = (anchor: number): boolean => {
+      const prevRow = rows[anchor - 1];
+      const nextRow = rows[anchor];
+      if (!prevRow || prevRow.role !== "assistant" || prevRow.isBubbleRow !== true)
+        return false;
+      if (nextRow && !Number.isFinite(nextRow.message.timestamp)) return false;
+      return (
+        !nextRow ||
+        dayKeyOf(prevRow.message.timestamp) === dayKeyOf(nextRow.message.timestamp)
+      );
+    };
     const nodes: React.ReactNode[] = [];
     let cursor = 0;
     for (const ask of answeredAsks) {
       const anchor = Math.min(ask.anchor, rows.length);
-      for (let i = cursor; i < anchor; i++) nodes.push(renderRow(rows[i], i));
-      nodes.push(<AnsweredAskRow key={ask.id} ask={ask} />);
+      const joins = joinsPrevGroup(anchor);
+      const nextRow = rows[anchor];
+      const nextContinuesRun =
+        joins &&
+        !!nextRow &&
+        nextRow.role === "assistant" &&
+        (nextRow.groupPosition === "middle" || nextRow.groupPosition === "end");
+      for (let i = cursor; i < anchor; i++) {
+        nodes.push(
+          renderRow(
+            rows[i],
+            i,
+            joins && i === anchor - 1 ? upgradeForCard(rows[i].groupPosition) : undefined,
+          ),
+        );
+      }
+      nodes.push(
+        <AnsweredAskRow
+          key={ask.id}
+          ask={ask}
+          groupPosition={joins ? (nextContinuesRun ? "middle" : "end") : "single"}
+        />,
+      );
       cursor = anchor;
     }
-    for (let i = cursor; i < rows.length; i++) nodes.push(renderRow(rows[i], i));
+    // Pending permission/ask cards always render AFTER all rows — they
+    // join the tail group the same way (seam upgrade on the last member).
+    for (let i = cursor; i < rows.length; i++) {
+      nodes.push(
+        renderRow(
+          rows[i],
+          i,
+          tailCardJoins && i === rows.length - 1
+            ? upgradeForCard(rows[i].groupPosition)
+            : undefined,
+        ),
+      );
+    }
     return nodes;
-  }, [rows, answeredAsks, renderRow]);
+  }, [rows, answeredAsks, renderRow, pendingPermission, tailCardJoins]);
 
   // Keep the submit-time anchor current with the latest transcript length.
   useEffect(() => {
@@ -721,16 +804,20 @@ export function BotDirectChatView({
   }, [messages.length, isStreaming, isScrolledUp]);
 
   // Composer send: attach the active reply target (App composes it into
-  // the outgoing content) and clear the chip, rakazo send parity.
+  // the outgoing content) and clear the chip, rakazo send parity. The
+  // model/provider come from the bot's settings (config.toml `[agents.<id>]`)
+  // via the contact — there is no per-chat model picker in the bot composer.
   const handleComposerSend = useCallback(
     (payload: BotComposerSendPayload) => {
       onSend({
         ...payload,
+        model: contact?.model || undefined,
+        providerId: contact?.provider || undefined,
         replyTo: replyTarget ?? undefined,
       });
       setReplyTarget(null);
     },
-    [onSend, replyTarget],
+    [onSend, replyTarget, contact],
   );
 
 
@@ -758,6 +845,7 @@ export function BotDirectChatView({
               agentId={agentId ?? sessionId}
               avatarUrl={contact?.avatarUrl}
               avatarColor={contact?.avatarColor}
+              avatarEmoji={contact?.avatarEmoji}
               size={28}
             />
           </span>
@@ -784,6 +872,7 @@ export function BotDirectChatView({
               agentId={agentId ?? sessionId}
               avatarUrl={contact?.avatarUrl}
               avatarColor={contact?.avatarColor}
+              avatarEmoji={contact?.avatarEmoji}
               size={72}
             />
             <div className="bot-chat-empty__name">{botName}</div>
@@ -803,16 +892,28 @@ export function BotDirectChatView({
             the newest item in the flow. */}
         {pendingPermission && !answeredAsks.some((a) => a.id === pendingPermission.id) &&
           (isAskPending ? (
-            <div className="bot-chat-row bot-chat-row--assistant" data-role="assistant">
+            <div
+              className={`bot-chat-row${tailCardJoins ? " bot-chat-row--grouped" : ""} bot-chat-row--assistant`}
+              data-role="assistant"
+            >
               <BotAskCard
                 request={pendingPermission}
                 onSubmit={(updatedInput) => handleAskSubmit(pendingPermission, updatedInput)}
                 t={t}
+                className={tailCardJoins ? "bot-chat-bubble--group-end" : undefined}
               />
             </div>
           ) : (
-            <div className="bot-chat-row bot-chat-row--assistant" data-role="assistant">
-              <BotPermissionCard request={pendingPermission} onRespond={(decision, updatedInput, denyMessage) => void respondToPermission(decision, updatedInput, denyMessage)} t={t} />
+            <div
+              className={`bot-chat-row${tailCardJoins ? " bot-chat-row--grouped" : ""} bot-chat-row--assistant`}
+              data-role="assistant"
+            >
+              <BotPermissionCard
+                request={pendingPermission}
+                onRespond={(decision, updatedInput, denyMessage) => void respondToPermission(decision, updatedInput, denyMessage)}
+                t={t}
+                className={tailCardJoins ? "bot-chat-bubble--group-end" : undefined}
+              />
             </div>
           ))}
 
@@ -852,14 +953,19 @@ export function BotDirectChatView({
         onStop={onStop}
         replyPreview={replyTarget}
         onClearReply={() => setReplyTarget(null)}
-        initialModel={modelPref?.model}
-        initialProviderId={modelPref?.providerId}
-        initialEffort={modelPref?.effort}
-        onModelChange={handleBotModelChange}
-        onEffortChange={handleBotEffortChange}
+        contextRing={
+          messages.length > 0 ? (
+            <ContextUsageRing
+              variant="popup"
+              messages={messages}
+              sessionId={sessionId}
+              modelName={contact?.model}
+            />
+          ) : undefined
+        }
         placeholder={
           canSendToBot
-            ? t("bot.chat.placeholder")
+            ? t("bot.chat.placeholder", { name: botName })
             : t("bot.chat.placeholderUnbound")
         }
       />

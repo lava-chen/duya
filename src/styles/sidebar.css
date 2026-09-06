@@ -7,7 +7,14 @@
    sidebar's right edge (±4px) directly, so the layout stays seamless. */
 
 .app-sidebar {
-  background: var(--sidebar-bg);
+  /* Glassmorphism: a translucent frosted pane floating over the shell's
+     aurora gradient (and, on native platforms, the OS wallpaper). The
+     blur + low-alpha fill is what reads as "glass"; the 1px right edge
+     separates the pane from the main surface. */
+  background: color-mix(in srgb, var(--bg-canvas) 52%, transparent);
+  backdrop-filter: blur(24px) saturate(1.4);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  border-right: 1px solid var(--border);
   padding: 0.95rem 0.7rem;
   display: flex;
   flex-direction: column;
@@ -749,11 +756,131 @@ html[data-backdrop] .app-main-inner {
   margin: 0.25rem 0;
 }
 
-/* ── Bot contacts (plan 483) ────────────────────────────────────────────
+/* ── Sidebar top (work / bots) ───────────────────────────────────────
+   Mirrors the reference sidebar: a segmented pill control (work / bots)
+   on top, a full-width glass search chip below it, then content. The
+   primary nav row is NOT part of the Bots view — it only renders on the
+   Work tab (see app-sidebar.tsx). */
+.sidebar-top {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.5rem 0.75rem 0;
+}
+
+.sidebar-top-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sidebar-tab-group {
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+  flex-shrink: 0;
+  padding: 0.16rem;
+  border-radius: 0.65rem;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 6%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.sidebar-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 0.26rem 0.6rem;
+  border-radius: 0.45rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.sidebar-tab:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.sidebar-tab.active {
+  color: var(--text);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--bg-canvas) 88%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--text) 14%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.sidebar-tab-badge {
+  position: absolute;
+  top: 0.02rem;
+  right: 0.02rem;
+  min-width: 0.8rem;
+  height: 0.8rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: var(--accent, #4b8bff);
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: 600;
+  line-height: 0.8rem;
+  text-align: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 0 1.5px var(--bg-canvas);
+}
+
+/* Search icon button on the Work/Bots tab row (opens the Cmd/Ctrl+K palette).
+   Right-aligned on the same line as the tabs. */
+.sidebar-top-search-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border: 0;
+  border-radius: 0.45rem;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.18s ease, background-color 0.18s ease;
+}
+.sidebar-top-search-btn:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+/* Compact bot-section action row inside the Bots tab (new bot + ⋯ menu). */
+.sidebar-bots-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.15rem;
+  padding: 0.15rem 0.75rem 0.1rem;
+}
+
+.sidebar-bots-actions .sidebar-section-action {
+  width: 1.6rem;
+  height: 1.6rem;
+}
+
+/* Bot contacts (plan 483) ────────────────────────────────────────────
    Telegram-style rows in the sidebar Bots section. Mirrors the
    `.thread-item` geometry (same radius, padding, hover/active surfaces)
    but with a character avatar + two-line body + trailing activity. */
-/* Fallback initial-circle avatar: deterministic hue + centered initial.
+/* Fallback initial avatar: deterministic hue + centered initial.
+   Circular (50%) — matches the reference sidebar's round contact tiles.
    The width/height/font-size are set inline from the `size` prop. */
 .bot-contact-avatar {
   display: inline-flex;
@@ -765,22 +892,29 @@ html[data-backdrop] .app-main-inner {
   font-weight: 600;
   line-height: 1;
   user-select: none;
+  /* Top-lit sheen so the colored tile reads as a tiny glass surface. */
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.06);
 }
 
 /* Bot avatar: an uploaded image (img) or legacy SVG token — either way it
-   just needs to participate in flex layout and not shrink. */
+   just needs to participate in flex layout and not shrink. Circular,
+   matching the fallback tile. */
 .bot-character-avatar {
   display: block;
   flex-shrink: 0;
+  border-radius: 50%;
+  object-fit: cover;
 }
 
 .bot-contact-item {
   box-sizing: border-box;
   position: relative;
   border: 0;
-  border-radius: 0.35rem;
+  border-radius: 0.5rem;
   text-align: left;
-  padding: 0.2rem 0.5rem;
+  padding: 0.25rem 0.5rem; /* compact roster row */
   margin: 0;
   width: 100%;
   max-width: 100%;
@@ -796,12 +930,12 @@ html[data-backdrop] .app-main-inner {
 }
 
 .bot-contact-item:hover {
-  background: var(--surface-hover);
+  background: var(--rk-background);
   color: var(--text);
 }
 
 .bot-contact-item.active {
-  background: var(--surface);
+  background: var(--rk-card);
   color: var(--text);
 }
 
@@ -821,14 +955,27 @@ html[data-backdrop] .app-main-inner {
   line-height: 1.3;
 }
 
+/* Compact row head: name baseline row with the trailing time on the right. */
+.bot-contact-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
 .bot-contact-name {
   display: flex;
   align-items: center;
   gap: 0.3rem;
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  color: inherit;
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 500;
+  line-height: 1.3;
 }
 
 .bot-contact-pin-indicator {
@@ -837,27 +984,24 @@ html[data-backdrop] .app-main-inner {
 }
 
 .bot-contact-desc {
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   color: var(--muted);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-/* Plan 483 P1.4 (2026-09-05): the third row in the bot contact list
-   item. Holds the latest user-visible message text for the bound
-   session (mirrors grok-bot / rakazo's `preview` field). Smaller and
-   more muted than the subtitle so the eye still lands on the bot name;
-   collapses with `…` so very long prompts do not balloon the row. */
+/* Plan 483 P1.4: the latest user-visible message preview. Compact muted
+   line under the name; collapses with `…` so long prompts do not balloon
+   the row. */
 .bot-contact-preview {
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   color: var(--muted);
   opacity: 0.8;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
   line-height: 1.25;
-  margin-top: 1px;
 }
 
 /* Status pill in the trailing slot — used when the user submitted a
@@ -895,7 +1039,7 @@ html[data-backdrop] .app-main-inner {
 }
 
 .bot-contact-time {
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   color: var(--muted);
   flex-shrink: 0;
   display: flex;
@@ -903,30 +1047,16 @@ html[data-backdrop] .app-main-inner {
   justify-content: center;
 }
 
-/* Plan 483 P1.4 follow-up: WeChat-style avatar badges. While the bot's
-   bound session is streaming, a spinning ring orbits the avatar (replaces
-   the old trailing busy dot). When idle, a bottom-right corner dot marks
-   "finished but unseen" (green) or "last run errored" (red); both clear
-   when the user opens the bot. */
+/* Plan 483 P1.4 follow-up: avatar corner badges. While the bot's bound
+   session is streaming, the rakazo BotAvatar shows its own glow ring +
+   working eyes (no extra orbit here). When idle, a bottom-right corner
+   dot marks "finished but unseen" (green) or "last run errored" (red);
+   both clear when the user opens the bot. */
 .bot-contact-avatar-wrap {
   position: relative;
   flex-shrink: 0;
   display: inline-flex;
   border-radius: 50%;
-}
-
-.bot-contact-avatar-wrap.running::after {
-  content: '';
-  position: absolute;
-  inset: -3px;
-  border-radius: 50%;
-  border: 2px solid transparent;
-  border-top-color: var(--accent);
-  animation: bot-contact-spin 0.9s linear infinite;
-}
-
-@keyframes bot-contact-spin {
-  to { transform: rotate(360deg); }
 }
 
 .bot-contact-badge {
@@ -1028,8 +1158,101 @@ html[data-backdrop] .app-main-inner {
 }
 
 .bot-pinned-group .bot-contact-item,
-.bot-hidden-group .bot-contact-item {
+.bot-hidden-group .bot-contact-item,
+.sidebar-section-group .bot-contact-item {
   margin-top: 0;
+}
+
+/* Sidebar bot groups (sections): a compact label row that folds its
+   member rows. Mirrors `.bot-pinned-label` — small uppercase muted label,
+   no background block. */
+.sidebar-section-group + .sidebar-section-group {
+  margin-top: 0.25rem;
+}
+
+.sidebar-section-group-header {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  width: 100%;
+  padding: 0.25rem 0.5rem 0.1rem;
+}
+
+.sidebar-section-group-header-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 0.25rem;
+  padding: 0.1rem 0.15rem;
+}
+
+.sidebar-section-group-header-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.sidebar-section-group-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sidebar-section-group-caret {
+  flex-shrink: 0;
+  display: inline-flex;
+  color: var(--muted);
+  opacity: 0.55;
+}
+
+.sidebar-section-group-count {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 0.62rem;
+  font-weight: 500;
+  opacity: 0.7;
+}
+
+.sidebar-section-group-menu {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border: 0;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.sidebar-section-group-header:hover .sidebar-section-group-header-btn,
+.sidebar-section-group-header:focus-within .sidebar-section-group-header-btn {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.sidebar-section-group-header:hover .sidebar-section-group-menu,
+.sidebar-section-group-header:focus-within .sidebar-section-group-menu {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.sidebar-section-group-body {
+  display: flex;
+  flex-direction: column;
 }
 
 /* Bot dropdown menu (mirrors `.thread-dropdown-menu`). */

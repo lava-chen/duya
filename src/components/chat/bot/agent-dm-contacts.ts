@@ -12,6 +12,7 @@ export interface ContactSummaryLike {
   name: string;
   avatarUrl?: string;
   avatarColor?: string;
+  avatarEmoji?: string;
 }
 
 /**

@@ -4,14 +4,20 @@ import type { Message } from '@/types/message';
 import {
   buildBotContacts,
   buildRoomContacts,
+  createBotSection,
+  deleteBotSection,
   deriveBotAvatarLabel,
   deriveBotContactHue,
-  deriveBotIdFromName,
   deriveBotPlaceholderThreadId,
+  moveBotToSection,
   partitionBotContacts,
   peekBotMessagePreview,
   previewTextFromContent,
+  renameBotSection,
+  reorderSectionBots,
+  reorderSections,
   resolveBotOpenThreadId,
+  sectionOfBot,
   type BotSource,
 } from './bot-contacts';
 
@@ -117,69 +123,31 @@ describe('resolveBotOpenThreadId (plan 483 P1.3)', () => {
   });
 });
 
-describe('deriveBotIdFromName (grok-style create flow)', () => {
-  it('slugifies ASCII names', () => {
-    expect(deriveBotIdFromName('Frontend Expert', [])).toBe('frontend-expert');
-    expect(deriveBotIdFromName('  Researcher! ', [])).toBe('researcher');
-  });
-
-  it('generic fallback (non-ASCII) ALWAYS carries a random suffix, even when free', () => {
-    // a bare `bot` would be shared by every Chinese bot generation across
-    // delete/recreate cycles — never emitted anymore
-    expect(deriveBotIdFromName('研究员', [])).toMatch(/^bot-[a-f0-9]{6}$/);
-    expect(deriveBotIdFromName('助手 2号', [])).toMatch(/^bot-[a-f0-9]{6}$/);
-    // retries while the suffixed id is also taken
-    let calls = 0;
-    const seq = () => (calls++ === 0 ? 'a1b2c3' : 'fff000');
-    expect(deriveBotIdFromName('研究员', ['bot-a1b2c3'], seq)).toBe('bot-fff000');
-  });
-
-  it('resolves collisions with a random hex suffix (never the old predictable bot-2 slot)', () => {
-    expect(deriveBotIdFromName('bot', ['bot'], () => 'a1b2c3')).toBe('bot-a1b2c3');
-    // retries while the suffixed id is also taken
-    let calls = 0;
-    const seq = () => (calls++ === 0 ? 'a1b2c3' : 'fff000');
-    expect(deriveBotIdFromName('bot', ['bot', 'bot-a1b2c3'], seq)).toBe('bot-fff000');
-    // default maker yields 6 lowercase hex chars
-    expect(deriveBotIdFromName('bot', ['bot'])).toMatch(/^bot-[a-f0-9]{6}$/);
-  });
-
-  it('never produces an id longer than the 48-char base + suffix', () => {
-    const id = deriveBotIdFromName('a'.repeat(80), []);
-    expect(id.length).toBeLessThanOrEqual(48);
-  });
-
-  it('a colliding 48-char base + suffix stays inside the 63-char id limit', () => {
-    const longBase = 'a'.repeat(80);
-    const id = deriveBotIdFromName(longBase, ['a'.repeat(48)], () => 'a1b2c3');
-    expect(id.length).toBeLessThanOrEqual(63);
-    expect(id).toMatch(/^[a-z0-9][a-z0-9-]{0,62}$/);
-  });
-});
-
-describe('partitionBotContacts (plan 483 P2)', () => {
+describe('partitionBotContacts (plan 483 P2 + sections)', () => {
   const contacts = buildBotContacts(
     [
       { id: 'alpha', name: 'Alpha', title: '', description: '' },
       { id: 'beta', name: 'Beta', title: '', description: '' },
       { id: 'gamma', name: 'Gamma', title: '', description: '' },
+      { id: 'delta', name: 'Delta', title: '', description: '' },
     ],
     [],
   );
 
-  it('keeps everything unpinned with no pinned ids', () => {
-    const { pinned, unpinned, hidden } = partitionBotContacts(contacts, []);
+  it('keeps everything unassigned with no pinned ids or sections', () => {
+    const { pinned, sections, unassigned, hidden } = partitionBotContacts(contacts, []);
     expect(pinned).toHaveLength(0);
-    expect(unpinned.map((c) => c.agentId)).toEqual(['alpha', 'beta', 'gamma']);
+    expect(sections).toHaveLength(0);
+    expect(unassigned.map((c) => c.agentId)).toEqual(['alpha', 'beta', 'delta', 'gamma']);
     expect(hidden).toHaveLength(0);
   });
 
-  it('orders the pinned rail by pinnedIds, rest stay unpinned', () => {
-    const { pinned, unpinned } = partitionBotContacts(contacts, ['gamma', 'alpha']);
+  it('orders the pinned rail by pinnedIds, rest stay unassigned', () => {
+    const { pinned, unassigned } = partitionBotContacts(contacts, ['gamma', 'alpha']);
     expect(pinned.map((c) => c.agentId)).toEqual(['gamma', 'alpha']);
     expect(pinned.every((c) => c.isPinned === true)).toBe(true);
-    expect(unpinned.map((c) => c.agentId)).toEqual(['beta']);
-    expect(unpinned.every((c) => c.isPinned === false)).toBe(true);
+    expect(unassigned.map((c) => c.agentId)).toEqual(['beta', 'delta']);
+    expect(unassigned.every((c) => c.isPinned === false)).toBe(true);
   });
 
   it('drops pinned ids that have no matching contact', () => {
@@ -188,7 +156,7 @@ describe('partitionBotContacts (plan 483 P2)', () => {
   });
 
   it('separates hidden bots and stamps isHidden', () => {
-    const { pinned, unpinned, hidden } = partitionBotContacts(
+    const { pinned, unassigned, hidden } = partitionBotContacts(
       contacts,
       ['alpha'],
       ['gamma'],
@@ -196,7 +164,7 @@ describe('partitionBotContacts (plan 483 P2)', () => {
     expect(hidden.map((c) => c.agentId)).toEqual(['gamma']);
     expect(hidden.every((c) => c.isHidden === true)).toBe(true);
     expect(pinned.map((c) => c.agentId)).toEqual(['alpha']);
-    expect(unpinned.map((c) => c.agentId)).toEqual(['beta']);
+    expect(unassigned.map((c) => c.agentId)).toEqual(['beta', 'delta']);
     // A hidden bot never leaks into pinned even if its id is pinned.
     const { pinned: pinned2, hidden: hidden2 } = partitionBotContacts(
       contacts,
@@ -207,9 +175,178 @@ describe('partitionBotContacts (plan 483 P2)', () => {
     expect(hidden2.map((c) => c.agentId)).toEqual(['gamma']);
   });
 
-  it('does not mutate the input contacts array', () => {
-    partitionBotContacts(contacts, ['alpha'], ['gamma']);
+  it('groups section members in section order then member order', () => {
+    const sections = [
+      { id: 'work', name: 'Work' },
+      { id: 'life', name: 'Life' },
+    ];
+    const members = { work: ['gamma', 'alpha'], life: ['delta'] };
+    const { pinned, sections: partitions, unassigned } = partitionBotContacts(
+      contacts,
+      [],
+      [],
+      sections,
+      members,
+    );
+    expect(pinned).toHaveLength(0);
+    expect(partitions).toHaveLength(2);
+    expect(partitions[0]!.section.name).toBe('Work');
+    expect(partitions[0]!.contacts.map((c) => c.agentId)).toEqual(['gamma', 'alpha']);
+    expect(partitions[0]!.contacts.every((c) => c.sectionId === 'work')).toBe(true);
+    expect(partitions[1]!.section.name).toBe('Life');
+    expect(partitions[1]!.contacts.map((c) => c.agentId)).toEqual(['delta']);
+    expect(unassigned.map((c) => c.agentId)).toEqual(['beta']);
+  });
+
+  it('keeps empty sections in the partition list', () => {
+    const sections = [{ id: 'empty', name: 'Empty' }];
+    const { sections: partitions } = partitionBotContacts(contacts, [], [], sections, {});
+    expect(partitions).toHaveLength(1);
+    expect(partitions[0]!.contacts).toHaveLength(0);
+    expect(partitions[0]!.section.id).toBe('empty');
+  });
+
+  it('hidden wins over section membership', () => {
+    const sections = [{ id: 'work', name: 'Work' }];
+    const members = { work: ['gamma'] };
+    const { hidden, sections: partitions, unassigned } = partitionBotContacts(
+      contacts,
+      [],
+      ['gamma'],
+      sections,
+      members,
+    );
+    expect(hidden.map((c) => c.agentId)).toEqual(['gamma']);
+    expect(partitions[0]!.contacts).toHaveLength(0);
+    expect(unassigned.some((c) => c.agentId === 'gamma')).toBe(false);
+  });
+
+  it('pinned wins over section membership; unpinning returns the bot to its section', () => {
+    const sections = [{ id: 'work', name: 'Work' }];
+    const members = { work: ['alpha', 'gamma'] };
+    const { pinned, sections: partitions } = partitionBotContacts(
+      contacts,
+      ['alpha'],
+      [],
+      sections,
+      members,
+    );
+    expect(pinned.map((c) => c.agentId)).toEqual(['alpha']);
+    expect(partitions[0]!.contacts.map((c) => c.agentId)).toEqual(['gamma']);
+    // With alpha no longer pinned it slots back into its section.
+    const { pinned: pinned2, sections: partitions2 } = partitionBotContacts(
+      contacts,
+      [],
+      [],
+      sections,
+      members,
+    );
+    expect(pinned2).toHaveLength(0);
+    expect(partitions2[0]!.contacts.map((c) => c.agentId)).toEqual(['alpha', 'gamma']);
+  });
+
+  it('skips stale member ids that have no matching contact', () => {
+    const sections = [{ id: 'work', name: 'Work' }];
+    const members = { work: ['missing', 'alpha'] };
+    const { sections: partitions, unassigned } = partitionBotContacts(
+      contacts,
+      [],
+      [],
+      sections,
+      members,
+    );
+    expect(partitions[0]!.contacts.map((c) => c.agentId)).toEqual(['alpha']);
+    expect(unassigned.map((c) => c.agentId)).toEqual(['beta', 'delta', 'gamma']);
+  });
+
+  it('does not mutate the input arrays', () => {
+    const sections = [{ id: 'work', name: 'Work' }];
+    const members = { work: ['alpha'] };
+    partitionBotContacts(contacts, ['alpha'], ['gamma'], sections, members);
     expect(contacts.every((c) => c.isPinned === undefined && c.isHidden === undefined)).toBe(true);
+    expect(contacts.some((c) => c.sectionId !== undefined)).toBe(false);
+    expect(sections[0]!.name).toBe('Work');
+    expect(members.work).toEqual(['alpha']);
+  });
+});
+
+describe('bot section pure helpers', () => {
+  it('createBotSection appends a new section and mints an id', () => {
+    const input = [{ id: 'a', name: 'A' }];
+    const { sections, section } = createBotSection(input, '  Work  ');
+    expect(sections).toHaveLength(2);
+    expect(sections[1]).toBe(section);
+    expect(section.name).toBe('Work');
+    expect(section.id).toBeTruthy();
+    expect(input).toHaveLength(1);
+  });
+
+  it('renameBotSection updates only the target section', () => {
+    const input = [
+      { id: 'a', name: 'A' },
+      { id: 'b', name: 'B' },
+    ];
+    const next = renameBotSection(input, 'a', 'Renamed');
+    expect(next[0]!.name).toBe('Renamed');
+    expect(next[1]!.name).toBe('B');
+    expect(input[0]!.name).toBe('A');
+  });
+
+  it('deleteBotSection removes the section and its membership row only', () => {
+    const sections = [
+      { id: 'a', name: 'A' },
+      { id: 'b', name: 'B' },
+    ];
+    const members = { a: ['x', 'y'], b: ['z'] };
+    const result = deleteBotSection(sections, members, 'a');
+    expect(result.sections.map((s) => s.id)).toEqual(['b']);
+    expect(result.sectionMembers).toEqual({ b: ['z'] });
+  });
+
+  it('moveBotToSection assigns, moves between groups, and unassigns', () => {
+    const members = { work: ['alpha', 'beta'], life: ['gamma'] };
+    // Assign (append at end of an existing group).
+    expect(moveBotToSection(members, 'delta', 'life')).toEqual({
+      work: ['alpha', 'beta'],
+      life: ['gamma', 'delta'],
+    });
+    // Move between groups (removed from the old group first).
+    expect(moveBotToSection(members, 'alpha', 'life')).toEqual({
+      work: ['beta'],
+      life: ['gamma', 'alpha'],
+    });
+    // Unassign.
+    expect(moveBotToSection(members, 'alpha', null)).toEqual({
+      work: ['beta'],
+      life: ['gamma'],
+    });
+    // Input untouched.
+    expect(members.work).toEqual(['alpha', 'beta']);
+  });
+
+  it('reorderSectionBots reorders only the target section and tolerates stale ids', () => {
+    const members = { work: ['alpha', 'beta', 'gamma'], life: ['delta'] };
+    const next = reorderSectionBots(members, 'work', ['gamma', 'alpha']);
+    expect(next.work).toEqual(['gamma', 'alpha', 'beta']);
+    expect(next.life).toEqual(['delta']);
+    // Unknown section id → a fresh entry with just the ordered ids.
+    const fresh = reorderSectionBots(members, 'new', ['x']);
+    expect(fresh.new).toEqual(['x']);
+  });
+
+  it('reorderSections honors the given order and keeps missing ids at the tail', () => {
+    const input = [
+      { id: 'a', name: 'A' },
+      { id: 'b', name: 'B' },
+      { id: 'c', name: 'C' },
+    ];
+    expect(reorderSections(input, ['c', 'a']).map((s) => s.id)).toEqual(['c', 'a', 'b']);
+  });
+
+  it('sectionOfBot returns the owning section id or null', () => {
+    const members = { work: ['alpha'], life: ['gamma'] };
+    expect(sectionOfBot(members, 'alpha')).toBe('work');
+    expect(sectionOfBot(members, 'missing')).toBeNull();
   });
 });
 

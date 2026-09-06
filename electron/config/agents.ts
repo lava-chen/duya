@@ -39,7 +39,11 @@ import {
 export interface AgentUpsertInput {
   name: string;
   description?: string;
+  /** Role subtitle — profile.json ONLY (485 §2.4), never stored in config.toml. */
+  title?: string;
   model?: string;
+  /** Provider store id the `model` belongs to. Absent → preserve the existing value. */
+  provider?: string;
   workspace?: string;
   agents_md?: string;
   tools?: { profile?: string; allow?: string[]; deny?: string[] };
@@ -120,6 +124,8 @@ export interface BotListItem {
   title: string;
   description: string;
   model?: string;
+  /** Provider store id the configured `model` belongs to. */
+  provider?: string;
   workspace?: string;
   avatarColor?: string;
   /** `duya-file://` URL of the bot's avatar image, with `?v=<mtime>` cache-buster (absent when no image). */
@@ -160,8 +166,10 @@ export function listBots(): BotListItem[] {
       title: profile?.title ?? '',
       description: profile?.description || cfg.description || '',
       model: cfg.model,
+      provider: cfg.provider,
       workspace: cfg.workspace,
       avatarColor: profile?.avatarColor,
+      avatarEmoji: profile?.avatarEmoji,
       ...buildBotAvatarEntry(id, profile?.avatarImage, duyaRoot),
     });
   }
@@ -213,6 +221,11 @@ export function upsertConfigAgent(id: string, input: AgentUpsertInput): CustomAg
     name: input.name.trim(),
     description: input.description?.trim() || undefined,
     model: input.model?.trim() || undefined,
+    // Provider only changes when the caller carries it (the settings forms
+    // always do); callers that patch other fields must not drop the binding.
+    provider: input.provider !== undefined
+      ? input.provider.trim() || undefined
+      : agents[id]?.provider,
     workspace: input.workspace?.trim() || undefined,
     agents_md: input.agents_md?.trim() || undefined,
     tools: input.tools && Object.keys(input.tools).length ? input.tools : undefined,
@@ -225,7 +238,7 @@ export function upsertConfigAgent(id: string, input: AgentUpsertInput): CustomAg
   agents[id] = next;
   store.set('agents', agents);
   if (isNewAgent) {
-    seedBotProfileIfMissing(id, next, store, input.avatarColor);
+    seedBotProfileIfMissing(id, next, store, input.avatarColor, input.title, input.avatarEmoji);
   }
   return next;
 }
@@ -242,6 +255,7 @@ function seedBotProfileIfMissing(
   entry: CustomAgentConfig,
   store: { getConfigDir(): string },
   avatarColor?: string,
+  title?: string,
 ): void {
   if (!isSafeBotId(id)) return;
   try {
@@ -249,7 +263,7 @@ function seedBotProfileIfMissing(
     if (fs.existsSync(profilePath)) return;
     writeBotProfile(profilePath, {
       name: entry.name || id,
-      title: '',
+      title: title?.trim() || '',
       description: entry.description ?? '',
       avatarColor: avatarColor?.trim() || undefined,
     });
@@ -267,9 +281,10 @@ function seedBotProfileIfMissing(
  *   2. every directory under `<agentsRoot>/` (hard-delete leftovers, trees
  *      written out-of-band by older builds),
  *   3. ids recovered from `.deleted/<deletedAt>-<id>/` tombstones.
- * The renderer's deriveBotIdFromName only sees (1) live entries, which is
- * exactly why a freshly created bot could previously collide with a
- * deleted bot's stale on-disk tree.
+ * This is the ONLY id minting point since Plan 502 — the renderer passes a
+ * name (or an optional desired id hint) and main allocates here, which is
+ * also why a freshly created bot can no longer collide with a deleted
+ * bot's stale on-disk tree.
  */
 export function collectTakenBotIds(duyaRoot?: string): Set<string> {
   const taken = new Set<string>();
@@ -347,11 +362,11 @@ export function createConfigAgentUnique(desiredId: string, input: AgentUpsertInp
 }
 
 /**
- * Derive a bot id candidate from a display name (Plan 492 P4: CreateAgent
- * tool path — the model only supplies a name, no id). Mirrors the renderer's
- * deriveBotIdFromName slug rules: lowercase, non-alphanumerics collapse to
- * dashes, and non-ASCII names (e.g. Chinese) fall back to the generic
- * `bot` base. Uniqueness itself is allocateBotId's job.
+ * Derive a bot id candidate from a display name (Plan 492 P4 CreateAgent
+ * tool path and Plan 502 UI path — the caller only supplies a name, no id).
+ * Slug rules: lowercase, non-alphanumerics collapse to dashes, and
+ * non-ASCII names (e.g. Chinese) fall back to the generic `bot` base.
+ * Uniqueness itself is allocateBotId's job.
  */
 export function slugifyBotIdFromName(name: string): string {
   const slug = name
@@ -369,12 +384,17 @@ export function slugifyBotIdFromName(name: string): string {
  * the id is derived from the name and made collision-free by allocateBotId.
  * Profile.json seeding (Plan 485 §2.4) happens inside upsertConfigAgent.
  */
-export function createConfigAgentFromName(name: string, description?: string): CreatedConfigAgent {
+export function createConfigAgentFromName(
+  name: string,
+  description?: string,
+  avatarEmoji?: string,
+): CreatedConfigAgent {
   const trimmed = name.trim();
   if (!trimmed) throw new Error('agent name is required');
   return createConfigAgentUnique(slugifyBotIdFromName(trimmed), {
     name: trimmed,
     description: description?.trim() || undefined,
+    avatarEmoji: avatarEmoji?.trim() || undefined,
   });
 }
 
@@ -382,6 +402,7 @@ export function createConfigAgentFromName(name: string, description?: string): C
 export interface AgentIdentityPatch {
   name?: string;
   description?: string;
+  avatarEmoji?: string;
 }
 
 /**
@@ -406,6 +427,10 @@ export function patchConfigAgentIdentity(id: string, patch: AgentIdentityPatch):
       patch.description !== undefined && patch.description.trim()
         ? patch.description.trim()
         : existing.description,
+    avatarEmoji:
+      patch.avatarEmoji !== undefined && patch.avatarEmoji.trim()
+        ? patch.avatarEmoji.trim()
+        : readBotProfile(getBotProfilePath(id, getConfigStore().getConfigDir()))?.avatarEmoji,
     model: existing.model,
     workspace: existing.workspace,
     agents_md: existing.agents_md,
@@ -715,6 +740,7 @@ export interface BotIdentityInput {
   title?: string;
   description?: string;
   avatarColor?: string;
+  avatarEmoji?: string;
 }
 
 export function updateBotProfileIdentity(
@@ -741,6 +767,7 @@ export function updateBotProfileIdentity(
         ? input.description.trim()
         : (existing?.description ?? cfg.description ?? ''),
     avatarColor: input.avatarColor?.trim() || existing?.avatarColor,
+    avatarEmoji: input.avatarEmoji?.trim() || existing?.avatarEmoji,
     // Avatar image filename is managed by setBotAvatarImage/clearBotAvatarImage
     // (upload / update_state avatar.set) — an identity edit never drops it.
     avatarImage: existing?.avatarImage,
@@ -914,6 +941,7 @@ export function clearBotAvatarImage(id: string): BotAvatarImageResult {
     title: existing.title,
     description: existing.description,
     avatarColor: existing.avatarColor,
+    avatarEmoji: existing.avatarEmoji,
     avatarImage: undefined,
   });
   return { avatarImage: '', avatarVersion: 0 };

@@ -34,8 +34,11 @@ import {
   CheckIcon,
   NotePencilIcon,
   CircleNotchIcon,
+  TrashIcon,
+  SearchIcon,
 } from "@/components/icons";
 import { useConversationStore, type Thread, type ProjectGroup, type ViewType, type SettingsTab, type ProjectSortBy, type ProjectGroupBy } from "@/stores/conversation-store";
+import { useSearchPaletteStore } from "@/stores/search-palette-store";
 import { NewThreadDropdown } from "./sidebar/NewThreadDropdown";
 import { ProjectGroupItem } from "./sidebar/ProjectGroupItem";
 import { ThreadListItem } from "./sidebar/ThreadListItem";
@@ -45,8 +48,10 @@ import {
   SYSTEM_SECTIONS,
 } from "./sidebar/section-system";
 import { useSidebarSectionsStore } from "@/stores/sidebar-sections-store";
+import { useBotActivityStore } from "@/stores/bot-activity-store";
 import { useTranslation } from "@/hooks/useTranslation";
 import { Button } from "@/components/ui/Button";
+import { InputDialog } from "@/components/ui/InputDialog";
 import { useSettings } from "@/hooks/useSettings";
 import { useOptionalPanel } from "@/hooks/usePanel";
 import { CreateProjectDialog } from "@/components/ui/CreateProjectDialog";
@@ -59,6 +64,8 @@ import {
   deriveRoomThreadId,
   matchesBotThread,
   type BotContact,
+  type BotSectionDef,
+  type BotSectionPartition,
 } from "./sidebar/bot-contacts";
 import { CreateBotDialog } from "./CreateBotDialog";
 import { EditBotDialog } from "./EditBotDialog";
@@ -141,17 +148,110 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     const [isCreateBotDialogOpen, setIsCreateBotDialogOpen] = useState(false);
     const [editBotContact, setEditBotContact] = useState<BotContact | null>(null);
     const [showHiddenBots, setShowHiddenBots] = useState(false);
+    // Sidebar top tab switcher (work / bots) — defaults to bots.
+    const [sidebarTab, setSidebarTab] = useState<"work" | "bots">("bots");
     const {
       pinned: pinnedBots,
-      unpinned: unpinnedBots,
+      sections: botSectionGroups,
+      unassigned: unassignedBots,
       hidden: hiddenBots,
       allContacts: botContacts,
       roomContacts,
       reload: reloadBots,
       togglePin,
+      movePinned,
       hide,
       unhide,
+      botSections,
+      createSection,
+      renameSection,
+      deleteSection,
+      moveBotToSection,
+      reorderSectionBots,
     } = useBotContacts();
+    // Blue notification bubble on the Bots tab: aggregate of bots whose
+    // session activity is newer than the user's last open (finished-but-
+    // unseen), plus errored runs. Reuses the row-level badge signal.
+    const lastSeenAt = useBotActivityStore((s) => s.lastSeenAt);
+    const erroredAt = useBotActivityStore((s) => s.erroredAt);
+    const unseenFinishedCount = useMemo(
+      () =>
+        botContacts.filter((contact) => {
+          if (erroredAt[contact.agentId]) return true;
+          const seen = lastSeenAt[contact.agentId] ?? 0;
+          return contact.status === "idle" && contact.lastActivity > seen;
+        }).length,
+      [botContacts, lastSeenAt, erroredAt],
+    );
+    // Sidebar bot groups: renderer-only collapse state (mirrors
+    // `collapsedSystemSections`; not persisted).
+    const [collapsedBotGroups, setCollapsedBotGroups] = useState<Set<string>>(
+      () => new Set(),
+    );
+    const toggleBotGroupCollapsed = useCallback((sectionId: string) => {
+      setCollapsedBotGroups((prev) => {
+        const next = new Set(prev);
+        if (next.has(sectionId)) next.delete(sectionId);
+        else next.add(sectionId);
+        return next;
+      });
+    }, []);
+    // Drag-to-reorder within a pinned/section rail.
+    const [draggedBotId, setDraggedBotId] = useState<string | null>(null);
+    const makeBotDragHandlers = useCallback(
+      (
+        listIds: readonly string[],
+        onReorder: (movedId: string, targetId: string, position: "before" | "after") => void,
+      ) => {
+        const onDragStart =
+          (agentId: string) => (e: React.DragEvent) => {
+            setDraggedBotId(agentId);
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", agentId);
+          };
+        const onDragOver =
+          (agentId: string) => (e: React.DragEvent) => {
+            if (draggedBotId && draggedBotId !== agentId && listIds.includes(draggedBotId)) {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+            }
+          };
+        const onDrop =
+          (targetId: string) => (e: React.DragEvent) => {
+            e.preventDefault();
+            if (!draggedBotId || draggedBotId === targetId) return;
+            const fromIndex = listIds.indexOf(draggedBotId);
+            const toIndex = listIds.indexOf(targetId);
+            if (fromIndex < 0 || toIndex < 0) return;
+            onReorder(draggedBotId, targetId, fromIndex < toIndex ? "after" : "before");
+            setDraggedBotId(null);
+          };
+        return { onDragStart, onDragOver, onDrop, onDragEnd: () => setDraggedBotId(null) };
+      },
+      [draggedBotId],
+    );
+    // Section dialog state: create (optionally move a bot in) or rename.
+    const [botGroupDialog, setBotGroupDialog] = useState<
+      | { mode: "new"; agentId?: string }
+      | { mode: "rename"; sectionId: string; name: string }
+      | null
+    >(null);
+    const [botGroupMenu, setBotGroupMenu] = useState<{
+      sectionId: string;
+      x: number;
+      y: number;
+    } | null>(null);
+    const botGroupMenuRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+      if (!botGroupMenu) return;
+      const handleClickOutside = (e: MouseEvent) => {
+        if (botGroupMenuRef.current && !botGroupMenuRef.current.contains(e.target as Node)) {
+          setBotGroupMenu(null);
+        }
+      };
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }, [botGroupMenu]);
     // Plan 478: shared-room create/edit dialog state (群聊 lives in the
     // Bots section as its own "群聊" group).
     const [groupDialog, setGroupDialog] = useState<
@@ -410,6 +510,39 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         }
       },
       [reloadBots, t],
+    );
+
+    // Shared BotContactListItem row with the section ("Move to") surface
+    // wired. `dragHandlers` is optional — hidden/read-only rows pass none.
+    const renderBotRow = (
+      contact: BotContact,
+      opts: {
+        currentSectionId?: string | null;
+        dragHandlers?: ReturnType<typeof makeBotDragHandlers>;
+        restoreView?: boolean;
+      } = {},
+    ) => (
+      <BotContactListItem
+        key={contact.agentId}
+        contact={contact}
+        isActive={resolveBotOpenThreadId(contact, threads) === activeThreadId}
+        onOpen={handleOpenBot}
+        onTogglePin={(id, pinned) => togglePin(id, pinned)}
+        onEdit={handleEditBot}
+        onDelete={handleDeleteBot}
+        onHide={(c) => hide(c.agentId)}
+        onUnhide={(c) => unhide(c.agentId)}
+        sections={botSections}
+        currentSectionId={opts.currentSectionId ?? null}
+        onMoveToSection={(agentId, sectionId) => moveBotToSection(agentId, sectionId)}
+        onCreateSection={(agentId) => setBotGroupDialog({ mode: "new", agentId })}
+        restoreView={opts.restoreView}
+        draggable={Boolean(opts.dragHandlers)}
+        onDragStart={opts.dragHandlers?.onDragStart(contact.agentId)}
+        onDragOver={opts.dragHandlers?.onDragOver(contact.agentId)}
+        onDrop={opts.dragHandlers?.onDrop(contact.agentId)}
+        onDragEnd={opts.dragHandlers?.onDragEnd}
+      />
     );
 
     /**
@@ -735,6 +868,48 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     // Normal mode sidebar
     return (
       <aside className="app-sidebar" ref={ref} style={style}>
+        {/* Sidebar top: segmented work/bots switcher + search icon button on
+            the same row (opens the Cmd/K palette). The primary nav (new chat /
+            canvas / channels / automation / extensions) only renders on the
+            Work tab — the Bots view is a flat contact list with no creation
+            buttons above it. */}
+        <div className="sidebar-top">
+          <div className="sidebar-top-tabs" role="tablist" aria-label={t("sidebar.tab.bots")}>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sidebarTab === "work"}
+              className={`sidebar-tab${sidebarTab === "work" ? " active" : ""}`}
+              onClick={() => setSidebarTab("work")}
+            >
+              {t("sidebar.tab.work")}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sidebarTab === "bots"}
+              className={`sidebar-tab${sidebarTab === "bots" ? " active" : ""}`}
+              onClick={() => setSidebarTab("bots")}
+            >
+              {t("sidebar.tab.bots")}
+              {unseenFinishedCount > 0 && (
+                <span className="sidebar-tab-badge">
+                  {unseenFinishedCount > 99 ? "99+" : unseenFinishedCount}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              className="sidebar-top-search-btn"
+              aria-label={t("sidebar.search.placeholder")}
+              title={t("sidebar.search.placeholder")}
+              onClick={() => useSearchPaletteStore.getState().setOpen(true)}
+            >
+              <SearchIcon size={15} />
+            </button>
+          </div>
+        </div>
+        {sidebarTab === "work" && (
         <nav className="sidebar-primary-nav" aria-label="Primary Navigation">
           <NewThreadDropdown />
 
@@ -765,69 +940,140 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
             );
           })}
         </nav>
+        )}
 
         <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
-          {/* Plan 471: every top-level sidebar group is a section header that
-              can be toggled open/closed. The order is:
-                user sections (by sortOrder)
-                "项目" (system default — uncategorized projects)
-                "定时任务" (cron)  — id starts with `cron:` (capped to 8 most recent)
-                "网关" (gateway)    — id starts with `gw-`
-                "唤醒" (wakeup)    — id starts with `wakeless-`
-                "置顶" (pinned)    — thread.pinned === 1
-              Each section renders its own body and has a chevron toggle in
-              the header. The "项目" section also gets trailing action
-              buttons (collapse-all / sort / new project) via ProjectActions.
-          */}
-          {/* Plan 483: bot sidebar - grok-style bot management */}
-          {botContacts.length > 0 ? (
-            <SidebarSectionItem
-              id="__system__:bots"
-              name={t("sidebar.section.bots")}
-              kind="bot"
-              collapsed={collapsedSystemSections.has("__system__:bots")}
-              onToggleCollapsed={() => toggleSystemSectionCollapsed("__system__:bots")}
-              tone="bold"
-              trailing={
+          {sidebarTab === "bots" ? (
+            <>
+              {/* Compact action row: new bot + ⋯ (hidden list / new group). */}
+              <div className="sidebar-bots-actions">
                 <BotSectionActions
                   hiddenCount={hiddenBots.length}
                   showHidden={showHiddenBots}
                   onToggleHidden={() => setShowHiddenBots((prev) => !prev)}
                   onCreateBot={() => setIsCreateBotDialogOpen(true)}
+                  onCreateGroup={() => setBotGroupDialog({ mode: "new" })}
                 />
-              }
-            >
+              </div>
+              {botContacts.length > 0 ? (
+                <>
               {pinnedBots.length > 0 && (
                 <div className="sidebar-section-group">
-                  <div className="sidebar-section-group-header">{t("sidebar.section.pinned")}</div>
-                  {pinnedBots.map((contact) => (
-                    <BotContactListItem
-                      key={contact.agentId}
-                      contact={contact}
-                      isActive={resolveBotOpenThreadId(contact, threads) === activeThreadId}
-                      onOpen={handleOpenBot}
-                      onTogglePin={(id, pinned) => togglePin(id, pinned)}
-                      onEdit={handleEditBot}
-                      onDelete={handleDeleteBot}
-                      onHide={(c) => hide(c.agentId)}
-                    />
-                  ))}
+                  <div className="sidebar-section-group-header">
+                    <span className="sidebar-section-group-header-btn">
+                      <span className="sidebar-section-group-name">
+                        {t("sidebar.section.pinned")}
+                      </span>
+                    </span>
+                  </div>
+                  <div className="sidebar-section-group-body">
+                    {(() => {
+                      const drag = makeBotDragHandlers(
+                        pinnedBots.map((c) => c.agentId),
+                        (movedId, targetId, position) =>
+                          movePinned(movedId, targetId, position),
+                      );
+                      return pinnedBots.map((contact) =>
+                        renderBotRow(contact, { dragHandlers: drag }),
+                      );
+                    })()}
+                  </div>
                 </div>
               )}
-              {unpinnedBots.length > 0 && (
+              {botSectionGroups.map((group) => {
+                const collapsed = collapsedBotGroups.has(group.section.id);
+                return (
+                  <div key={group.section.id} className="sidebar-section-group">
+                    <div
+                      className="sidebar-section-group-header"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => toggleBotGroupCollapsed(group.section.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          toggleBotGroupCollapsed(group.section.id);
+                        }
+                      }}
+                    >
+                      <span
+                        className="sidebar-section-group-header-btn"
+                        aria-expanded={!collapsed}
+                      >
+                        <span className="sidebar-section-group-caret">
+                          {collapsed ? (
+                            <CaretRightIcon size={10} />
+                          ) : (
+                            <CaretDownIcon size={10} />
+                          )}
+                        </span>
+                        <span className="sidebar-section-group-name">
+                          {group.section.name}
+                        </span>
+                        <span className="sidebar-section-group-count">
+                          {group.contacts.length}
+                        </span>
+                      </span>
+                      <button
+                        type="button"
+                        className="sidebar-section-group-menu"
+                        aria-label={t("bot.actions.options")}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setBotGroupMenu({
+                            sectionId: group.section.id,
+                            x: rect.right - 140,
+                            y: rect.bottom + 4,
+                          });
+                        }}
+                      >
+                        <DotsThreeIcon size={14} />
+                      </button>
+                    </div>
+                    {!collapsed && (
+                      <div className="sidebar-section-group-body">
+                        {(() => {
+                          const ids = group.contacts.map((c) => c.agentId);
+                          const drag = makeBotDragHandlers(ids, (movedId, targetId, position) => {
+                            const without = ids.filter((id) => id !== movedId);
+                            const targetIndex = without.indexOf(targetId);
+                            if (targetIndex < 0) return;
+                            const insertAt =
+                              position === "before" ? targetIndex : targetIndex + 1;
+                            const next = [
+                              ...without.slice(0, insertAt),
+                              movedId,
+                              ...without.slice(insertAt),
+                            ];
+                            reorderSectionBots(group.section.id, next);
+                          });
+                          return group.contacts.map((contact) =>
+                            renderBotRow(contact, {
+                              currentSectionId: group.section.id,
+                              dragHandlers: drag,
+                            }),
+                          );
+                        })()}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {unassignedBots.length > 0 && (
                 <div className="sidebar-section-group">
-                  {unpinnedBots.map((contact) => (
-                    <BotContactListItem
-                      key={contact.agentId}
-                      contact={contact}
-                      isActive={resolveBotOpenThreadId(contact, threads) === activeThreadId}
-                      onOpen={handleOpenBot}
-                      onTogglePin={(id, pinned) => togglePin(id, pinned)}
-                      onEdit={handleEditBot}
-                      onDelete={handleDeleteBot}
-                      onHide={(c) => hide(c.agentId)}
-                    />
-                  ))}
+                  {botSectionGroups.length > 0 && (
+                    <div className="sidebar-section-group-header">
+                      <span className="sidebar-section-group-header-btn">
+                        <span className="sidebar-section-group-name">
+                          {t("bot.actions.unassigned")}
+                        </span>
+                      </span>
+                    </div>
+                  )}
+                  <div className="sidebar-section-group-body">
+                    {unassignedBots.map((contact) => renderBotRow(contact))}
+                  </div>
                 </div>
               )}
               {/* Plan 478: shared rooms (群聊) — Telegram-style group rows
@@ -835,50 +1081,122 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                   create-group dialog (member picker ≤6). */}
               <div className="sidebar-section-group">
                 <div className="sidebar-section-group-header">
-                  {t("sidebar.section.rooms")}
+                  <span className="sidebar-section-group-header-btn">
+                    <span className="sidebar-section-group-name">
+                      {t("sidebar.section.rooms")}
+                    </span>
+                  </span>
                   <button
                     type="button"
-                    className="ml-auto rounded p-0.5 text-[var(--text-muted)] hover:bg-[var(--bg-hover)]"
+                    className="sidebar-section-group-menu"
                     onClick={() => setGroupDialog({ mode: "create" })}
                     aria-label={t("room.create.title")}
                     data-testid="create-room-button"
                   >
-                    <PlusIcon size={12} />
+                    <PlusIcon size={14} />
                   </button>
                 </div>
-                {roomContacts.length === 0 && (
-                  <div className="px-3 py-1.5 text-[12px] text-[var(--text-muted)]">
-                    {t("room.create.empty")}
-                  </div>
-                )}
-                {roomContacts.map((room) => (
-                  <RoomContactListItem
-                    key={room.roomId}
-                    room={room}
-                    isActive={room.threadId === activeThreadId}
-                    onOpen={() => handleOpenRoom(room.roomId)}
-                    onEdit={() =>
-                      setGroupDialog({
-                        mode: "edit",
-                        roomId: room.roomId,
-                        name: room.name,
-                        memberIds: room.memberIds,
-                      })
-                    }
-                  />
-                ))}
+                <div className="sidebar-section-group-body">
+                  {roomContacts.length === 0 && (
+                    <div className="px-3 py-1.5 text-[12px] text-[var(--text-muted)]">
+                      {t("room.create.empty")}
+                    </div>
+                  )}
+                  {roomContacts.map((room) => (
+                    <RoomContactListItem
+                      key={room.roomId}
+                      room={room}
+                      isActive={room.threadId === activeThreadId}
+                      onOpen={() => handleOpenRoom(room.roomId)}
+                      onEdit={() =>
+                        setGroupDialog({
+                          mode: "edit",
+                          roomId: room.roomId,
+                          name: room.name,
+                          memberIds: room.memberIds,
+                        })
+                      }
+                    />
+                  ))}
+                </div>
               </div>
-            </SidebarSectionItem>
+              {/* Plan 483 P2 (gap fix): the restorable hidden list. Rendered
+                  only when the user toggles it from the Bots section header. */}
+              {showHiddenBots && (
+                <div className="sidebar-section-group">
+                  <div className="sidebar-section-group-header">
+                    <span className="sidebar-section-group-header-btn">
+                      <span className="sidebar-section-group-name">
+                        {t("bot.actions.showHidden", { count: hiddenBots.length })}
+                      </span>
+                    </span>
+                  </div>
+                  <div className="sidebar-section-group-body">
+                    {hiddenBots.length === 0 && (
+                      <div className="px-3 py-1.5 text-[12px] text-[var(--text-muted)]">
+                        {t("bot.actions.noHidden")}
+                      </div>
+                    )}
+                    {hiddenBots.map((contact) =>
+                      renderBotRow(contact, { restoreView: true }),
+                    )}
+                  </div>
+                </div>
+              )}
+              {/* Section group menu (rename / delete). */}
+              {botGroupMenu && (
+                <div
+                  ref={botGroupMenuRef}
+                  className="bot-dropdown-menu"
+                  style={{ top: botGroupMenu.y, left: botGroupMenu.x }}
+                >
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="bot-dropdown-item"
+                    onClick={() => {
+                      const target = botSections.find((s) => s.id === botGroupMenu.sectionId);
+                      setBotGroupMenu(null);
+                      if (target) {
+                        setBotGroupDialog({ mode: "rename", sectionId: target.id, name: target.name });
+                      }
+                    }}
+                  >
+                    <NotePencilIcon size={14} />
+                    <span>{t("bot.actions.renameGroup")}</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="danger"
+                    size="sm"
+                    className="bot-dropdown-item danger"
+                    onClick={() => {
+                      const target = botSections.find((s) => s.id === botGroupMenu.sectionId);
+                      setBotGroupMenu(null);
+                      if (target && window.confirm(t("bot.actions.deleteGroupConfirm", { name: target.name }))) {
+                        deleteSection(target.id);
+                      }
+                    }}
+                  >
+                    <TrashIcon size={14} />
+                    <span>{t("bot.actions.deleteGroup")}</span>
+                  </Button>
+                </div>
+              )}
+                </>
+              ) : (
+                <button
+                  className="sidebar-section-create"
+                  onClick={() => setIsCreateBotDialogOpen(true)}
+                >
+                  <PlusIcon size={14} />
+                  <span>{t("bot.create.title")}</span>
+                </button>
+              )}
+            </>
           ) : (
-            <button
-              className="sidebar-section-create"
-              onClick={() => setIsCreateBotDialogOpen(true)}
-            >
-              <PlusIcon size={14} />
-              <span>{t("bot.create.title")}</span>
-            </button>
-          )}
-
+            <>
           {sidebarStructure.map((section) => {
             const isUser = section.kind === 'user';
             // Plan 471 v5: items are already discriminated at the data
@@ -1067,6 +1385,8 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                 </div>
               </div>
             )}
+            </>
+          )}
         </div>
 
         <div className="sidebar-bottom">
@@ -1103,7 +1423,6 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         <CreateBotDialog
           isOpen={isCreateBotDialogOpen}
           onCancel={() => setIsCreateBotDialogOpen(false)}
-          existingIds={botContacts.map((c) => c.agentId)}
           onCreated={(agentId) => {
             // Plan 491 P2.5: navigate to the new bot's empty chat shell
             // immediately after creation. The await on reloadBots
@@ -1143,6 +1462,34 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
             setEditBotContact(null);
             void reloadBots();
           }}
+        />
+        <InputDialog
+          isOpen={botGroupDialog?.mode === "new"}
+          title={t("bot.dialog.newGroup.title")}
+          description={t("bot.dialog.newGroup.description")}
+          placeholder={t("bot.dialog.newGroup.placeholder")}
+          onConfirm={(name) => {
+            const agentId = botGroupDialog?.mode === "new" ? botGroupDialog.agentId : undefined;
+            const section = createSection(name);
+            setBotGroupDialog(null);
+            if (section && agentId) {
+              moveBotToSection(agentId, section.id);
+            }
+          }}
+          onCancel={() => setBotGroupDialog(null)}
+        />
+        <InputDialog
+          isOpen={botGroupDialog?.mode === "rename"}
+          title={t("bot.dialog.renameGroup.title")}
+          placeholder={t("bot.dialog.renameGroup.placeholder")}
+          defaultValue={botGroupDialog?.mode === "rename" ? botGroupDialog.name : ""}
+          onConfirm={(name) => {
+            if (botGroupDialog?.mode === "rename") {
+              renameSection(botGroupDialog.sectionId, name);
+            }
+            setBotGroupDialog(null);
+          }}
+          onCancel={() => setBotGroupDialog(null)}
         />
       </aside>
     );
@@ -1288,11 +1635,13 @@ function BotSectionActions({
   showHidden,
   onToggleHidden,
   onCreateBot,
+  onCreateGroup,
 }: {
   hiddenCount: number;
   showHidden: boolean;
   onToggleHidden: () => void;
   onCreateBot: () => void;
+  onCreateGroup: () => void;
 }) {
   const { t } = useTranslation();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -1328,10 +1677,20 @@ function BotSectionActions({
               className="sidebar-project-menu-item"
               onClick={() => {
                 setIsMenuOpen(false);
+                onCreateGroup();
+              }}
+            >
+              <span>{t('sidebar.section.newSection')}</span>
+            </button>
+            <button
+              type="button"
+              className="sidebar-project-menu-item"
+              onClick={() => {
+                setIsMenuOpen(false);
                 onToggleHidden();
               }}
             >
-              {showHidden ? t('bot.actions.hideFromList') : t('bot.actions.showHidden')}
+              {showHidden ? t('bot.actions.hideFromList') : t('bot.actions.showHidden', { count: hiddenCount })}
             </button>
           </div>
         </div>

@@ -1476,11 +1476,11 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     // the config store, so these cases serialize every bot's writes.
     // Audit (D1 default): each mutation logs an INFO line.
     case 'config:agents:create': {
-      const input = p as { name?: string; description?: string };
+      const input = p as { name?: string; description?: string; avatarEmoji?: string };
       if (!input.name || !input.name.trim()) {
         throw new Error('agent name is required');
       }
-      const created = createConfigAgentFromName(input.name, input.description);
+      const created = createConfigAgentFromName(input.name, input.description, input.avatarEmoji);
       getLogger().info(
         `Agent created via CreateAgent tool: '${created.id}' (${input.name.trim()})`,
         { agentId: created.id },
@@ -1490,13 +1490,14 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     }
 
     case 'config:agents:update': {
-      const input = p as { agentId?: string; name?: string; description?: string };
+      const input = p as { agentId?: string; name?: string; description?: string; avatarEmoji?: string };
       if (!input.agentId) {
         throw new Error('agentId is required');
       }
       const updated = patchConfigAgentIdentity(input.agentId, {
         name: input.name,
         description: input.description,
+        avatarEmoji: input.avatarEmoji,
       });
       getLogger().info(
         `Agent updated via UpdateAgent tool: '${input.agentId}'`,

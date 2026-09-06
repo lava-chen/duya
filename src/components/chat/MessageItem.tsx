@@ -38,6 +38,8 @@ import {
 } from '@/lib/browser-reference-display';
 import { parseToolInputSafe, buildToolAction } from './tools/normalize';
 import { extractResearchReport, ResearchReportCard, type ResearchReportData } from './ResearchReportCard';
+import { ChatNotice } from './ChatNotice';
+import type { ChatNotice as ChatNoticeData } from './tools/types';
 
 function isImageAttachment(attachment: FileAttachment): boolean {
   if (attachment.kind === 'image') return true;
@@ -312,6 +314,33 @@ function InterleavedContent({ actions, sourceMessageId }: { actions: ActionItem[
 }
 
 
+// Memory / routine tool families surface as centered chat hints rather
+// than collapsible tool chrome rows. The bot's memory writes and routine
+// maintenance read as status updates to the human, so we lift them into
+// `kind: 'notice'` actions and render them as quiet centered pills.
+const MEMORY_NOTICE_TOOLS = new Set(['memory_write', 'update_state']);
+const ROUTINE_NOTICE_TOOLS = new Set(['manage_routine']);
+
+/**
+ * Decide whether a tool call should render as a centered `ChatNotice`
+ * (memory / routine) instead of a tool chrome row. Returns null for tools
+ * that keep the normal chrome treatment.
+ */
+function toNotice(
+  toolName: string | undefined | null,
+  input: Record<string, unknown> | unknown,
+  result: ToolResultInfo | undefined,
+): ChatNoticeData | null {
+  const name = (toolName || '').toLowerCase();
+  if (ROUTINE_NOTICE_TOOLS.has(name)) {
+    return { kind: 'routine', toolName: name, input, result: result?.content, isError: result?.is_error };
+  }
+  if (MEMORY_NOTICE_TOOLS.has(name)) {
+    return { kind: 'memory', toolName: name, input, result: result?.content, isError: result?.is_error };
+  }
+  return null;
+}
+
 function messageToActionItems(
   msg: Message,
   toolResultMap: Map<string, ToolResultInfo>
@@ -347,6 +376,11 @@ function messageToActionItems(
   if (msg.msgType === 'tool_use' && msg.toolName) {
     const toolUseId = msg.tool_call_id || msg.id;
     const result = toolUseId ? toolResultMap.get(toolUseId) : undefined;
+    const notice = toNotice(msg.toolName, parseToolInputSafe(msg.toolInput) as Record<string, unknown>, result);
+    if (notice) {
+      actions.push({ kind: 'notice', notice });
+      return actions;
+    }
     actions.push({
       kind: 'tool',
       tool: buildToolAction(
@@ -377,6 +411,11 @@ function messageToActionItems(
         }
         const toolId = String(b.id || '');
         const result = toolId ? toolResultMap.get(toolId) : undefined;
+        const notice = toNotice(String(b.name || ''), (b.input as Record<string, unknown>) || {}, result);
+        if (notice) {
+          actions.push({ kind: 'notice', notice });
+          continue;
+        }
         actions.push({
           kind: 'tool',
           tool: buildToolAction(
@@ -578,7 +617,7 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
   }, [message.content, message.displayContent, message.msgType, message.role]);
 
   // Build ordered action items from all messages in this round
-  const { actions, finalText, allPastedContents } = useMemo(() => {
+  const { notices, actions, finalText, allPastedContents } = useMemo(() => {
     const allMessages = sortMessagesByOrder([message, ...mergedMessages]);
     const rawActions: ActionItem[] = [];
     const allPasted: PastedContentInfo[] = [...pastedContents];
@@ -626,15 +665,31 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
     // smart-joined into one markdown document so constructs spanning
     // fragments (table rows, code fences) keep parsing instead of
     // rendering half a construct plus literal markdown symbols.
-    const hasWidgetActions = mergedActions.some(a => a.kind === 'widget');
-    const hasThinkingOrTool = mergedActions.some(a => a.kind === 'thinking' || a.kind === 'tool');
+
+    // Memory / routine notice actions are lifted out of the work run
+    // entirely: they render as centered hints above the group, never
+    // participate in work-group detection, and never suppress the final
+    // text — a round that only wrote memory and replied must still show
+    // the reply as finalText.
+    const notices: ChatNoticeData[] = [];
+    const workActions = mergedActions.filter((action) => {
+      if (action.kind === 'notice') {
+        notices.push(action.notice);
+        return false;
+      }
+      return true;
+    });
+
+    const hasWidgetActions = workActions.some(a => a.kind === 'widget');
+    const hasThinkingOrTool = workActions.some(a => a.kind === 'thinking' || a.kind === 'tool');
 
     if (!hasThinkingOrTool && !hasWidgetActions) {
-      const plainTexts = mergedActions
+      const plainTexts = workActions
         .filter((action): action is ActionItem & { kind: 'text' } => action.kind === 'text')
         .map(action => action.content);
 
       return {
+        notices,
         actions: [],
         finalText: joinMarkdownFragments(plainTexts),
         allPastedContents: allPasted,
@@ -642,14 +697,14 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
     }
 
     let lastWorkIndex = -1;
-    mergedActions.forEach((action, index) => {
+    workActions.forEach((action, index) => {
       if (action.kind === 'tool' || action.kind === 'thinking') lastWorkIndex = index;
     });
 
     const resultActions: ActionItem[] = [];
     const finalFragments: string[] = [];
-    for (let index = 0; index < mergedActions.length; index++) {
-      const action = mergedActions[index]!;
+    for (let index = 0; index < workActions.length; index++) {
+      const action = workActions[index]!;
       if (index > lastWorkIndex && action.kind === 'text') {
         finalFragments.push(action.content);
         continue;
@@ -661,6 +716,7 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
     }
 
     return {
+      notices,
       actions: resultActions,
       finalText: joinMarkdownFragments(finalFragments),
       allPastedContents: allPasted,
@@ -1060,6 +1116,13 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
   return (
     <div data-message-id={message.id} className="py-3 px-4">
       <div className="w-full">
+        {notices.length > 0 && (
+          <div className="flex flex-col items-center gap-1 py-1">
+            {notices.map((n, i) => (
+              <ChatNotice key={`notice-${i}`} notice={n} />
+            ))}
+          </div>
+        )}
         {hasWidgets ? (
           <>
             {hasToolActions && (

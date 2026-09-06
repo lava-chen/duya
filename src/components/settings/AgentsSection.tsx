@@ -27,7 +27,6 @@ import {
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { Input } from "@/components/ui/Input";
-import { deriveBotIdFromName } from "@/components/layout/sidebar/bot-contacts";
 import {
   listAgentProfiles,
   listCustomAgents,
@@ -296,10 +295,6 @@ export function AgentsSection() {
     setAgentError(null);
 
     try {
-      const id = editingAgentId
-        ? editingAgentId
-        : deriveBotIdFromName(agentFormName, Object.keys(configAgents));
-
       const input: AgentUpsertInput = {
         name: agentFormName.trim(),
         description: agentFormDescription.trim() || undefined,
@@ -312,9 +307,11 @@ export function AgentsSection() {
       };
 
       if (editingAgentId) {
-        await updateConfigAgent(id, input);
+        await updateConfigAgent(editingAgentId, input);
       } else {
-        await createConfigAgent(id, input);
+        // No client-side id: the main process mints one from the name
+        // (single minting point, grok parity — ids are never user-authored).
+        await createConfigAgent("", input);
       }
 
       await loadConfigAgents();

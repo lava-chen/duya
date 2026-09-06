@@ -176,6 +176,38 @@ describe("bot session id helpers", () => {
   });
 });
 
+describe("legacy received rows (session-id peerId)", () => {
+  it("normalizes a bot:-prefixed peerId so the pair view merges both sides", () => {
+    // Legacy receiver marker: peerId is the sender's PERSISTENT SESSION id.
+    const received = dmMarker({
+      direction: "received",
+      peerId: "bot:duya",
+      peerName: "duya",
+      text: "先查 git 历史",
+      clientMsgId: "m1",
+    });
+    // The sender's own marker (in the sender's session) uses the bare id.
+    const sentByPeer = dmMarker({
+      direction: "sent",
+      peerId: "self",
+      peerName: "Self",
+      text: "先查 git 历史",
+      clientMsgId: "m1",
+    });
+    // The receiver-side legacy row is a mirror (direction received) — the
+    // merge intentionally takes only sent rows, so the entry comes from the
+    // sender's session with the bare peer id as sender.
+    const merged = buildAgentDmPairMessages("self", "duya", [received], [sentByPeer]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].senderAgentId).toBe("duya");
+    expect(merged[0].text).toBe("先查 git 历史");
+
+    // Chip grouping also normalizes the peer id.
+    const groups = buildAgentDmChipGroups([received]);
+    expect(groups[0].peerId).toBe("duya");
+  });
+});
+
 describe("timestamp resolution across Message shapes", () => {
   it("falls back to createdAt when timestamp is absent (wire rows)", () => {
     const base = dmMarker({

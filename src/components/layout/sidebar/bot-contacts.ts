@@ -31,8 +31,12 @@ export interface BotSource {
   title: string;
   description: string;
   model?: string;
+  /** Provider store id the configured `model` belongs to. */
+  provider?: string;
   workspace?: string;
   avatarColor?: string;
+  /** User-picked emoji for the colored circle (absent → deterministic per-agent emoji). */
+  avatarEmoji?: string;
   /** `duya-file://` URL of the bot's avatar image (main-process built). */
   avatarUrl?: string;
 }
@@ -46,8 +50,12 @@ export interface BotContact {
   title: string;
   description: string;
   model?: string;
+  /** Provider store id the configured `model` belongs to. */
+  provider?: string;
   /** Color token for the initial-circle avatar (image wins when present). */
   avatarColor?: string;
+  /** User-picked emoji for the colored circle (wins over the deterministic one). */
+  avatarEmoji?: string;
   /** `duya-file://` URL of the bot's avatar image; empty → colored circle. */
   avatarUrl?: string;
   /**
@@ -85,6 +93,27 @@ export interface BotContact {
   isPinned?: boolean;
   /** Plan 483 P2: hidden from the sidebar (still configured; restorable). */
   isHidden?: boolean;
+  /**
+   * Sidebar group (section) the bot belongs to (rakazo-style folders,
+   * persisted via `sidebar.botSections` + `sidebar.botSectionMembers`).
+   * `undefined` while unassigned.
+   */
+  sectionId?: string;
+}
+
+/**
+ * One user-defined bot sidebar group. The array position in
+ * `sidebar.botSections` is the display order (append = creation order).
+ */
+export interface BotSectionDef {
+  id: string;
+  name: string;
+}
+
+/** One section partition: the section header plus its ordered members. */
+export interface BotSectionPartition {
+  section: BotSectionDef;
+  contacts: BotContact[];
 }
 
 /** Coarse bot activity status for the sidebar row. */
@@ -246,6 +275,7 @@ export function resolveBotOpenThreadId(
 export function buildBotContacts(
   bots: BotSource[],
   threads: Thread[],
+  statusForThread?: (threadId: string | null) => BotSessionStatus | undefined,
 ): BotContact[] {
   const contacts: BotContact[] = [];
   for (const bot of bots) {
@@ -265,10 +295,13 @@ export function buildBotContacts(
       title: bot.title?.trim() ?? '',
       description: bot.description?.trim() ?? '',
       model: bot.model?.trim() ?? '',
+      provider: bot.provider?.trim() || undefined,
       avatarColor: bot.avatarColor,
+      avatarEmoji: bot.avatarEmoji,
       avatarUrl: bot.avatarUrl,
       boundThreadId,
       lastActivity,
+      status: statusForThread?.(boundThreadId),
     });
   }
   contacts.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
@@ -276,18 +309,29 @@ export function buildBotContacts(
 }
 
 /**
- * Plan 483 P2: split contacts into the three sidebar lists and stamp the
- * `isPinned` / `isHidden` flags onto each entry (new object per contact;
- * the input array is untouched).
+ * Plan 483 P2 (+ sections): split contacts into the sidebar lists and
+ * stamp the `isPinned` / `isHidden` / `sectionId` flags onto each entry
+ * (new object per contact; the input arrays are untouched).
  *
- *  - `pinned`   — order follows `pinnedIds` (the persisted `sidebar.botPinnedIds`
- *                 array), which doubles as the drag-to-reorder store.
- *  - `unpinned` — every visible bot not in `pinnedIds`, name-sorted.
- *  - `hidden`   — bots in `hiddenIds`; rendered only in the "restore" view.
+ *  - `pinned`     — order follows `pinnedIds` (the persisted
+ *                   `sidebar.botPinnedIds` array), which doubles as the
+ *                   drag-to-reorder store.
+ *  - `sections`   — one group per `sections` entry (even when empty),
+ *                   members in `sectionMembers[section.id]` order.
+ *  - `unassigned` — every visible bot that is neither pinned nor in a
+ *                   section, name-sorted (keeps the `buildBotContacts`
+ *                   order).
+ *  - `hidden`     — bots in `hiddenIds`; rendered only in the "restore"
+ *                   view.
+ *
+ * Priority: hidden > pinned > section > unassigned. Pin/hide never
+ * delete the section membership row, so unpinning or restoring a bot
+ * returns it to its original group automatically.
  */
 export interface BotPartition {
   pinned: BotContact[];
-  unpinned: BotContact[];
+  sections: BotSectionPartition[];
+  unassigned: BotContact[];
   hidden: BotContact[];
 }
 
@@ -295,6 +339,8 @@ export function partitionBotContacts(
   contacts: BotContact[],
   pinnedIds: readonly string[],
   hiddenIds: readonly string[] = [],
+  sections: readonly BotSectionDef[] = [],
+  sectionMembers: Readonly<Record<string, readonly string[]>> = {},
 ): BotPartition {
   const hiddenSet = new Set(hiddenIds);
   const hidden: BotContact[] = [];
@@ -306,6 +352,7 @@ export function partitionBotContacts(
       visible.push({ ...contact, isHidden: false });
     }
   }
+
   const pinned: BotContact[] = [];
   for (const id of pinnedIds) {
     const index = visible.findIndex((c) => c.agentId === id);
@@ -313,8 +360,141 @@ export function partitionBotContacts(
     pinned.push({ ...visible[index], isPinned: true, isHidden: false });
     visible.splice(index, 1);
   }
-  const unpinned = visible.map((c) => ({ ...c, isPinned: false }));
-  return { pinned, unpinned, hidden };
+
+  const sectionList: BotSectionPartition[] = [];
+  for (const section of sections) {
+    const members = sectionMembers[section.id] ?? [];
+    const membersOfSection: BotContact[] = [];
+    for (const memberId of members) {
+      const index = visible.findIndex((c) => c.agentId === memberId);
+      if (index < 0) continue;
+      membersOfSection.push({
+        ...visible[index],
+        isPinned: false,
+        isHidden: false,
+        sectionId: section.id,
+      });
+      visible.splice(index, 1);
+    }
+    sectionList.push({ section, contacts: membersOfSection });
+  }
+
+  const unassigned = visible.map((c) => ({ ...c, isPinned: false }));
+  return { pinned, sections: sectionList, unassigned, hidden };
+}
+
+/**
+ * Append a new bot section (array order = display order). Returns the
+ * minted section so the caller can assign bots to it immediately.
+ */
+export function createBotSection(
+  sections: readonly BotSectionDef[],
+  name: string,
+): { sections: BotSectionDef[]; section: BotSectionDef } {
+  const section: BotSectionDef = { id: crypto.randomUUID(), name: name.trim() };
+  return { sections: [...sections, section], section };
+}
+
+/** Rename one section; other sections untouched. */
+export function renameBotSection(
+  sections: readonly BotSectionDef[],
+  sectionId: string,
+  name: string,
+): BotSectionDef[] {
+  return sections.map((section) =>
+    section.id === sectionId ? { ...section, name: name.trim() } : section,
+  );
+}
+
+/**
+ * Remove a section and its membership row. Members silently become
+ * unassigned (their contact entries keep rendering).
+ */
+export function deleteBotSection(
+  sections: readonly BotSectionDef[],
+  sectionMembers: Readonly<Record<string, readonly string[]>>,
+  sectionId: string,
+): { sections: BotSectionDef[]; sectionMembers: Record<string, string[]> } {
+  const nextSections = sections.filter((section) => section.id !== sectionId);
+  const nextMembers: Record<string, string[]> = {};
+  for (const [id, members] of Object.entries(sectionMembers)) {
+    if (id === sectionId) continue;
+    nextMembers[id] = [...members];
+  }
+  return { sections: nextSections, sectionMembers: nextMembers };
+}
+
+/**
+ * Assign a bot to a section (appended at the end) or unassign it
+ * (`toSectionId === null`). Moving to another section removes the bot
+ * from its current group first. Input is untouched; returns a new map.
+ */
+export function moveBotToSection(
+  sectionMembers: Readonly<Record<string, readonly string[]>>,
+  agentId: string,
+  toSectionId: string | null,
+): Record<string, string[]> {
+  const next: Record<string, string[]> = {};
+  for (const [id, members] of Object.entries(sectionMembers)) {
+    const without = members.filter((memberId) => memberId !== agentId);
+    if (without.length > 0 || id !== toSectionId) next[id] = without;
+  }
+  if (toSectionId) {
+    const current = next[toSectionId] ?? [];
+    if (!current.includes(agentId)) next[toSectionId] = [...current, agentId];
+  }
+  return next;
+}
+
+/**
+ * Reorder one section's members. ids missing from `orderedIds` keep
+ * their relative order at the tail (tolerates stale member ids).
+ */
+export function reorderSectionBots(
+  sectionMembers: Readonly<Record<string, readonly string[]>>,
+  sectionId: string,
+  orderedIds: readonly string[],
+): Record<string, string[]> {
+  const current = sectionMembers[sectionId] ?? [];
+  const ordered = new Set(orderedIds);
+  const rest = current.filter((id) => !ordered.has(id));
+  const next: Record<string, string[]> = {};
+  for (const [id, members] of Object.entries(sectionMembers)) {
+    next[id] = id === sectionId ? [...orderedIds, ...rest] : [...members];
+  }
+  // Always materialize the target entry, even for a fresh section id.
+  if (!(sectionId in next)) next[sectionId] = [...orderedIds, ...rest];
+  return next;
+}
+
+/**
+ * Reorder the sections themselves. ids missing from `orderedIds` keep
+ * their existing relative order at the end.
+ */
+export function reorderSections(
+  sections: readonly BotSectionDef[],
+  orderedIds: readonly string[],
+): BotSectionDef[] {
+  const byId = new Map(sections.map((section) => [section.id, section]));
+  const orderedList: BotSectionDef[] = [];
+  for (const id of orderedIds) {
+    const section = byId.get(id);
+    if (section) orderedList.push(section);
+  }
+  const ordered = new Set(orderedIds);
+  const rest = sections.filter((section) => !ordered.has(section.id));
+  return [...orderedList, ...rest];
+}
+
+/** Current section id of a bot, or null when unassigned. */
+export function sectionOfBot(
+  sectionMembers: Readonly<Record<string, readonly string[]>>,
+  agentId: string,
+): string | null {
+  for (const [sectionId, members] of Object.entries(sectionMembers)) {
+    if (members.includes(agentId)) return sectionId;
+  }
+  return null;
 }
 
 /** Avatar fallback label: first grapheme of the display name, uppercased. */
@@ -385,62 +565,8 @@ export function buildRoomContacts(rooms: RoomSource[], threads: Thread[]): RoomC
   });
   return contacts;
 }
-
-/**
- * 6 lowercase hex chars from the Web Crypto API — always legal in a bot id.
- * A random suffix replaces the old `bot-2` numeric increment: the "next free
- * slot" was predictable and collidable with deleted bots' stale on-disk
- * trees (or hand-edited config ids). The main process re-checks
- * authoritatively at create time (allocateBotId) — this renderer-side check
- * is best-effort UX only.
- */
-function randomBotIdSuffix(): string {
-  const bytes = new Uint8Array(3);
-  globalThis.crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-/**
- * Derive a legal bot id (`BOT_ID_PATTERN`: kebab-case, max 63 chars) from
- * a display name. Meaningful ASCII slugs stay bare when free and get a
- * random `-<6 hex>` suffix on collision. Non-ASCII names (e.g. Chinese)
- * collapse to the generic `bot` base which ALWAYS carries a random suffix —
- * a bare `bot` would be shared by every Chinese bot generation across
- * delete/recreate cycles. Mirrors grok: ids are never user-authored.
- * `makeSuffix` is injectable for deterministic tests.
- */
-export function deriveBotIdFromName(
-  name: string,
-  existingIds: Iterable<string>,
-  makeSuffix: () => string = randomBotIdSuffix,
-): string {
-  const slug = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  // Non-ASCII names (e.g. Chinese) collapse to nothing; a lone digit or
-  // 1-char remnant is too meaningless to serve as an identity — fall
-  // back to the generic `bot` base in both cases.
-  const fellBackToGeneric = !(slug.length >= 2 && !slug.startsWith('-'));
-  const base = fellBackToGeneric ? 'bot' : slug;
-  const finalBase = /^[a-z0-9][a-z0-9-]*$/.test(base)
-    ? base.slice(0, 48).replace(/-+$/g, '') || 'bot'
-    : 'bot';
-  const taken = new Set(existingIds);
-  const nextSuffixed = (): string => {
-    let id = `${finalBase}-${makeSuffix()}`;
-    while (taken.has(id)) {
-      id = `${finalBase}-${makeSuffix()}`;
-    }
-    return id;
-  };
-  // Generic-fallback ids are never bare: every Chinese-named bot gets its
-  // own distinguishable directory, and delete/recreate cycles never reuse
-  // the same id across generations. The main process re-checks
-  // authoritatively at create time (allocateBotId) — this renderer-side
-  // check is best-effort UX only.
-  if (fellBackToGeneric) return nextSuffixed();
-  if (!taken.has(finalBase)) return finalBase;
-  return nextSuffixed();
-}
+// Bot id minting lives ONLY in the main process now (Plan 502: single
+// minting point, grok agent-session.ts parity) — `config:agents:create`
+// slugs the id from the display name and allocates it collision-free via
+// allocateBotId. The old renderer-side deriveBotIdFromName duplicate is
+// gone; its slug rules live in electron `slugifyBotIdFromName`.

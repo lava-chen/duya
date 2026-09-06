@@ -34,6 +34,7 @@ import {
   type BotIdentityInput,
 } from './agents';
 import { isValidAvatarColor } from './bot-avatar';
+import { notifyBotsChanged } from './bot-change-notifier';
 
 export interface BotIdentityRpcRequest {
   subaction: string;
@@ -130,6 +131,7 @@ function handleSync(request: BotIdentityRpcRequest): BotIdentityRpcResult {
       { agentId: sessionAgentId },
       LogComponent.AgentProcess,
     );
+    notifyBotsChanged();
     return {
       success: true,
       outcome: { agentId: sessionAgentId, avatarColor: '', avatarImage: '' },
@@ -181,6 +183,7 @@ function handleSync(request: BotIdentityRpcRequest): BotIdentityRpcResult {
       { agentId: sessionAgentId },
       LogComponent.AgentProcess,
     );
+    notifyBotsChanged();
     return {
       success: true,
       outcome: {

@@ -169,6 +169,12 @@ export interface CustomAgentConfig {
   description?: string;
   /** Provider/model ref, e.g. 'anthropic/claude-sonnet-4-20250514'. Empty → fallback to config.model.default. */
   model?: string;
+  /**
+   * Provider store id the `model` belongs to (set by the bot settings UI).
+   * Without it the model id is resolved against the default provider, which
+   * breaks when the model is enabled on a non-default provider.
+   */
+  provider?: string;
   /** This agent's own working directory. Empty → default workspace (~/.duya/workspace). */
   workspace?: string;
   /** Path to this agent's global instruction file (系统提示词配置路径). Empty → <workspace>/AGENTS.md. */

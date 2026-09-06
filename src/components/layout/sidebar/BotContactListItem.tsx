@@ -33,20 +33,26 @@ import { useBotActivityStore } from "@/stores/bot-activity-store";
 import { useBotDirectTranscript } from "@/components/chat/bot/use-bot-direct-transcript";
 import {
   ArchiveIcon,
+  CaretRightIcon,
   CopyIcon,
   DotsThreeIcon,
   EyeSlashIcon,
+  FolderIcon,
   NotePencilIcon,
   PinFilledIcon,
   PinIcon,
+  PlusIcon,
+  XIcon,
 } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
 import { Button } from "@/components/ui/Button";
+import { InputDialog } from "@/components/ui/InputDialog";
 import type { TranslationKey } from "@/i18n";
 import { BotCharacterAvatar } from "./BotCharacterAvatar";
 import {
   peekBotMessagePreview,
   type BotContact,
+  type BotSectionDef,
   type BotSessionStatus,
 } from "./bot-contacts";
 
@@ -86,6 +92,13 @@ interface BotContactListItemProps {
   onCopyId?: (contact: BotContact) => void;
   onHide?: (contact: BotContact) => void;
   onUnhide?: (contact: BotContact) => void;
+  /** Sidebar groups (sections) for the "Move to" submenu. */
+  sections?: BotSectionDef[];
+  /** The section this bot currently belongs to, or null/undefined when unassigned. */
+  currentSectionId?: string | null;
+  onMoveToSection?: (agentId: string, toSectionId: string | null) => void;
+  /** Create a new section and move this bot into it in one shot. */
+  onCreateSection?: (agentId: string) => void;
   /** Hidden-view mode: render dimmed with a restore affordance instead of the normal actions. */
   restoreView?: boolean;
   /** Plan 483 P2: drag-to-reorder inside the pinned rail. */
@@ -93,6 +106,7 @@ interface BotContactListItemProps {
   onDragStart?: (e: React.DragEvent) => void;
   onDragOver?: (e: React.DragEvent) => void;
   onDrop?: (e: React.DragEvent) => void;
+  onDragEnd?: (e: React.DragEvent) => void;
 }
 
 export function BotContactListItem({
@@ -105,17 +119,29 @@ export function BotContactListItem({
   onCopyId,
   onHide,
   onUnhide,
+  sections = [],
+  currentSectionId,
+  onMoveToSection,
+  onCreateSection,
   restoreView = false,
   draggable = false,
   onDragStart,
   onDragOver,
   onDrop,
+  onDragEnd,
 }: BotContactListItemProps) {
   const { t } = useTranslation();
   const [showMenu, setShowMenu] = useState(false);
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  // "Move to" cascading submenu (mirrors ProjectGroupItem's section
+  // submenu): flips left when the parent menu would push it past the
+  // right viewport edge.
+  const [submenuFlipLeft, setSubmenuFlipLeft] = useState(false);
+  const [sectionSubmenuOpen, setSectionSubmenuOpen] = useState(false);
+  const sectionMenuRef = useRef<HTMLDivElement>(null);
+  const [isNewSectionDialogOpen, setIsNewSectionDialogOpen] = useState(false);
 
   // Plan 483 P1.4 (2026-09-05): live activity for this bot row.
   // - `preview` is the latest user-visible message text in the bound
@@ -213,8 +239,11 @@ export function BotContactListItem({
   useEffect(() => {
     if (!showMenu) return;
     const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+      const inMainMenu = menuRef.current?.contains(e.target as Node);
+      const inSubMenu = sectionMenuRef.current?.contains(e.target as Node);
+      if (!inMainMenu && !inSubMenu) {
         setShowMenu(false);
+        setSectionSubmenuOpen(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
@@ -223,12 +252,20 @@ export function BotContactListItem({
 
   const openMenuAt = useCallback((x: number, y: number) => {
     const menuWidth = 200;
-    const menuHeight = 240;
+    const menuHeight = 300;
     let px = x;
     let py = y;
     if (px + menuWidth > window.innerWidth) px = window.innerWidth - menuWidth - 8;
     if (py + menuHeight > window.innerHeight) py = window.innerHeight - menuHeight - 8;
+    // Flip the cascading "Move to" submenu when the parent menu sits in
+    // the right gutter (mirrors ProjectGroupItem's submenu overflow guard).
+    const SUBMENU_MIN_WIDTH = 180;
+    const SUBMENU_GUTTER = 12;
+    setSubmenuFlipLeft(
+      px + menuWidth + SUBMENU_MIN_WIDTH + SUBMENU_GUTTER > window.innerWidth,
+    );
     setMenuPos({ x: px, y: py });
+    setSectionSubmenuOpen(false);
     setShowMenu(true);
   }, []);
 
@@ -254,6 +291,52 @@ export function BotContactListItem({
   );
 
   const closeMenu = () => setShowMenu(false);
+
+  // ─── "Move to" section actions (mirrors ProjectGroupItem) ───
+  const closeAllMenus = useCallback(() => {
+    setShowMenu(false);
+    setSectionSubmenuOpen(false);
+  }, []);
+
+  const handleNewSection = useCallback(() => {
+    closeAllMenus();
+    // The parent owns the create-and-move transaction: it opens the
+    // shared new-group dialog and moves this bot in on confirm.
+    onCreateSection?.(contact.agentId);
+  }, [closeAllMenus, contact.agentId, onCreateSection]);
+
+  const handleMoveToSection = useCallback(
+    (sectionId: string | null) => {
+      closeAllMenus();
+      onMoveToSection?.(contact.agentId, sectionId);
+    },
+    [contact.agentId, onMoveToSection, closeAllMenus],
+  );
+
+  // Submenu hover intent: a brief delay on leave so a diagonal move does
+  // not collapse the cascading submenu (mirrors ProjectGroupItem).
+  const submenuHoverIntent = useRef<number | null>(null);
+  const handleSubmenuEnter = useCallback(() => {
+    if (submenuHoverIntent.current) {
+      window.clearTimeout(submenuHoverIntent.current);
+      submenuHoverIntent.current = null;
+    }
+    setSectionSubmenuOpen(true);
+  }, []);
+  const handleSubmenuLeave = useCallback(() => {
+    if (submenuHoverIntent.current) {
+      window.clearTimeout(submenuHoverIntent.current);
+    }
+    submenuHoverIntent.current = window.setTimeout(() => {
+      setSectionSubmenuOpen(false);
+      submenuHoverIntent.current = null;
+    }, 200);
+  }, []);
+  useEffect(() => {
+    return () => {
+      if (submenuHoverIntent.current) window.clearTimeout(submenuHoverIntent.current);
+    };
+  }, []);
 
   const handleOpen = () => {
     closeMenu();
@@ -293,15 +376,15 @@ export function BotContactListItem({
 
   const body = (
     <>
-      <span
-        className={`bot-contact-avatar-wrap${activeIsBusy ? " running" : ""}`}
-      >
+      <span className="bot-contact-avatar-wrap">
         <BotCharacterAvatar
           name={contact.name}
           agentId={contact.agentId}
           avatarUrl={contact.avatarUrl}
           avatarColor={contact.avatarColor}
-          size={26}
+          avatarEmoji={contact.avatarEmoji}
+          size={28}
+          working={activeIsBusy}
         />
         {hasError ? (
           <span
@@ -316,33 +399,36 @@ export function BotContactListItem({
         ) : null}
       </span>
       <span className="bot-contact-body">
-        <span className="bot-contact-name">
-          {isPinned && <PinFilledIcon size={10} className="bot-contact-pin-indicator" />}
-          {contact.name}
+        <span className="bot-contact-head">
+          <span className="bot-contact-name">
+            {isPinned && <PinFilledIcon size={10} className="bot-contact-pin-indicator" />}
+            {contact.name}
+          </span>
+          <span className="bot-contact-trailing">
+            {status === "queued" ? (
+              <span
+                className="bot-contact-status-pill queued"
+                title={t("bot.contactStatus.queued")}
+              >
+                {t("bot.contactStatus.queued")}
+              </span>
+            ) : (
+              <span className="bot-contact-time">{formatTimeAgo(t, contact.lastActivity)}</span>
+            )}
+          </span>
         </span>
-        {/* WeChat-style second line: the latest transcript message wins;
-            the title/description only shows for bots with no messages yet. */}
+        {/* Compact two-line roster row: name + time share the top line,
+            the latest message preview (or role subtitle) sits below. */}
         {previewSnapshot ? (
-          <span
-            className="bot-contact-desc bot-contact-preview"
-            title={previewSnapshot.text}
-          >
+          <span className="bot-contact-preview" title={previewSnapshot.text}>
             {previewSnapshot.text}
           </span>
         ) : (
-          subtitle && <span className="bot-contact-desc">{subtitle}</span>
-        )}
-      </span>
-      <span className="bot-contact-trailing">
-        {status === "queued" ? (
-          <span
-            className="bot-contact-status-pill queued"
-            title={t("bot.contactStatus.queued")}
-          >
-            {t("bot.contactStatus.queued")}
-          </span>
-        ) : (
-          <span className="bot-contact-time">{formatTimeAgo(t, contact.lastActivity)}</span>
+          subtitle && (
+            <span className="bot-contact-desc" title={subtitle}>
+              {subtitle}
+            </span>
+          )
         )}
       </span>
     </>
@@ -394,6 +480,7 @@ export function BotContactListItem({
         onDragStart={onDragStart}
         onDragOver={onDragOver}
         onDrop={onDrop}
+        onDragEnd={onDragEnd}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
@@ -461,6 +548,87 @@ export function BotContactListItem({
               {isPinned ? <PinFilledIcon size={14} /> : <PinIcon size={14} />}
               <span>{isPinned ? t("bot.actions.unpin") : t("bot.actions.pin")}</span>
             </Button>
+          )}
+          {(onMoveToSection || onCreateSection) && (
+            <div
+              className="project-dropdown-section-row"
+              onMouseEnter={handleSubmenuEnter}
+              onMouseLeave={handleSubmenuLeave}
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="bot-dropdown-item project-dropdown-item-with-caret"
+                onClick={() => setSectionSubmenuOpen((p) => !p)}
+                aria-expanded={sectionSubmenuOpen}
+              >
+                <FolderIcon size={14} />
+                <span>{t("bot.actions.moveTo")}</span>
+                <CaretRightIcon
+                  size={12}
+                  className="ml-auto"
+                  style={submenuFlipLeft ? { transform: "scaleX(-1)" } : undefined}
+                />
+              </Button>
+              {sectionSubmenuOpen && (
+                <div
+                  ref={sectionMenuRef}
+                  className={`project-dropdown-submenu${submenuFlipLeft ? " project-dropdown-submenu-flip-left" : ""}`}
+                  onMouseEnter={handleSubmenuEnter}
+                  onMouseLeave={handleSubmenuLeave}
+                >
+                  {onCreateSection && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="project-dropdown-item"
+                      onClick={handleNewSection}
+                      data-section-action="new"
+                    >
+                      <PlusIcon size={14} />
+                      <span>{t("sidebar.section.newSection")}</span>
+                    </Button>
+                  )}
+                  {onMoveToSection && sections.length > 0 && (
+                    <div className="project-dropdown-divider" />
+                  )}
+                  {onMoveToSection &&
+                    sections.map((section) => (
+                      <Button
+                        key={section.id}
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className={`project-dropdown-item project-dropdown-item-checkable ${
+                          section.id === currentSectionId ? "is-current" : ""
+                        }`}
+                        onClick={() => handleMoveToSection(section.id)}
+                        data-section-id={section.id}
+                      >
+                        <FolderIcon size={14} />
+                        <span>{section.name}</span>
+                      </Button>
+                    ))}
+                  {onMoveToSection && currentSectionId && (
+                    <>
+                      <div className="project-dropdown-divider" />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="project-dropdown-item danger"
+                        onClick={() => handleMoveToSection(null)}
+                      >
+                        <XIcon size={14} />
+                        <span>{t("sidebar.section.removeFromSection")}</span>
+                      </Button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
           )}
           {onCopyId && (
             <Button

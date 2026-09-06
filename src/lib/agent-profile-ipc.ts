@@ -66,6 +66,8 @@ export interface CustomAgentConfig {
   name?: string;
   description?: string;
   model?: string;
+  /** Provider store id the `model` belongs to. */
+  provider?: string;
   workspace?: string;
   agents_md?: string;
   tools?: { profile?: string; allow?: string[]; deny?: string[] };
@@ -86,6 +88,8 @@ export interface BotListItem {
   title: string;
   description: string;
   model?: string;
+  /** Provider store id the configured `model` belongs to. */
+  provider?: string;
   workspace?: string;
   avatarColor?: string;
   /** `duya-file://` URL of the bot's avatar image (main-process built). */
@@ -101,13 +105,19 @@ export async function listBots(): Promise<BotListItem[]> {
 export type AgentUpsertInput = {
   name: string;
   description?: string;
+  /** Role subtitle — profile.json ONLY (485 §2.4), seeded on first creation. */
+  title?: string;
   model?: string;
+  /** Provider store id the `model` belongs to. Absent → preserve the existing value. */
+  provider?: string;
   workspace?: string;
   agents_md?: string;
   tools?: { profile?: string; allow?: string[]; deny?: string[] };
   plugins?: string[];
   /** Color token for the initial-circle avatar, seeded into `agents/<id>/profile.json` on first creation. */
   avatarColor?: string;
+  /** User-picked emoji for the colored circle, seeded into `agents/<id>/profile.json` on first creation. */
+  avatarEmoji?: string;
 };
 
 export interface CreateConfigAgentResult {
@@ -115,10 +125,14 @@ export interface CreateConfigAgentResult {
   id: string;
 }
 
+/**
+ * Create a config agent. `id` is a HINT: pass '' and the main process mints
+ * one from the display name (single minting point, grok agent-session.ts
+ * parity — ids are never user-authored); a non-empty id is honored verbatim
+ * when free or suffixed when taken. The returned id is always the ACTUAL id.
+ */
 export async function createConfigAgent(id: string, input: AgentUpsertInput): Promise<CreateConfigAgentResult> {
   const result = (await window.electronAPI.configAgents.create(id, input)) as { id?: string } | null;
-  // Fall back to the requested id when talking to an older main build that
-  // has not picked up the createConfigAgentUnique return shape yet.
   return { id: result?.id ?? id };
 }
 export async function updateConfigAgent(id: string, input: AgentUpsertInput): Promise<void> {
@@ -178,6 +192,7 @@ export interface BotIdentityUpdateInput {
   title?: string;
   description?: string;
   avatarColor?: string;
+  avatarEmoji?: string;
 }
 
 export async function updateBotIdentity(id: string, input: BotIdentityUpdateInput): Promise<void> {

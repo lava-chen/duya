@@ -97,6 +97,7 @@ export function readBotProfile(
     title: str(parsed.title).trim(),
     description: str(parsed.description),
     avatarColor: str(parsed.avatarColor).trim() || undefined,
+    avatarEmoji: str(parsed.avatarEmoji).trim() || undefined,
     avatarImage: str(parsed.avatarImage).trim() || undefined,
   };
 
@@ -115,6 +116,7 @@ export function writeBotProfile(filePath: string, profile: BotProfileInput): Bot
     description: profile.description,
     avatarColor: profile.avatarColor?.trim() || undefined,
     avatarImage: profile.avatarImage?.trim() || undefined,
+    avatarEmoji: profile.avatarEmoji?.trim() || undefined,
   };
 
   const serialized = `${JSON.stringify(normalized, null, 2)}\n`;

@@ -31,8 +31,8 @@ import {
 import { listProvidersIPC } from "@/lib/ipc-client";
 import {
   buildBotModelGroups,
-  findRawModelInGroups,
-  prefixedToRaw,
+  fromSelectorModelId,
+  toSelectorModelId,
 } from "@/lib/bot-model-options";
 import type { ProviderModelGroup } from "@/components/chat/ModelProviderSelector";
 import type { BotContact } from "@/components/layout/sidebar/bot-contacts";
@@ -48,12 +48,18 @@ export interface UseBotContactFormOptions {
 
 export function useBotContactForm({ active, contact, onSaved }: UseBotContactFormOptions) {
   const [name, setName] = useState("");
+  /** Role subtitle (profile.json `title`, 485 §2.4 — host-managed, display only). */
+  const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [color, setColor] = useState("blue");
+  /** User-picked emoji for the colored circle ('' = auto-assigned). */
+  const [emoji, setEmoji] = useState("");
   /** Current avatar image URL (live state; seeds from the contact). */
   const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined);
   const [avatarBusy, setAvatarBusy] = useState(false);
   const [model, setModel] = useState("");
+  /** Provider store id the configured `model` belongs to ('' = none). */
+  const [provider, setProvider] = useState("");
   const [modelGroups, setModelGroups] = useState<ProviderModelGroup[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -73,10 +79,13 @@ export function useBotContactForm({ active, contact, onSaved }: UseBotContactFor
     if (!contact || seededForRef.current === contact.agentId) return;
     seededForRef.current = contact.agentId;
     setName(contact.name);
+    setTitle(contact.title ?? "");
     setDescription(contact.description ?? "");
     setColor(contact.avatarColor ?? "blue");
+    setEmoji(contact.avatarEmoji ?? "");
     setAvatarUrl(contact.avatarUrl);
     setModel(contact.model ?? "");
+    setProvider(contact.provider ?? "");
     setSubmitting(false);
     setError(null);
     setTimeout(() => nameRef.current?.focus(), 80);
@@ -94,14 +103,16 @@ export function useBotContactForm({ active, contact, onSaved }: UseBotContactFor
     !!contact &&
     seededForRef.current === contact.agentId;
 
-  // If the configured model is no longer exposed by any provider, keep a
-  // synthetic option so the select never shows a blank value and saving
-  // without touching the field preserves the configured model.
-  const configuredModel = contact?.model ?? "";
-  const extraModelOption =
-    configuredModel && !findRawModelInGroups(configuredModel, modelGroups)
-      ? configuredModel
-      : undefined;
+  // ModelSelector state: the raw configured model + provider map to a
+  // prefixed selector id for display; a stale model (no longer exposed by
+  // any provider) falls back to displaying the raw id, so saving without
+  // touching the field preserves it.
+  const selectorModelId = toSelectorModelId(model, provider || undefined, modelGroups);
+  const handleModelSelect = (selectorId: string) => {
+    const { raw, providerId } = fromSelectorModelId(selectorId, modelGroups);
+    setModel(raw);
+    setProvider(providerId ?? "");
+  };
 
   const save = async (): Promise<boolean> => {
     if (!contact || !canSubmit) return false;
@@ -112,13 +123,16 @@ export function useBotContactForm({ active, contact, onSaved }: UseBotContactFor
       // identity write fails we must not leave the config half-updated.
       await updateBotIdentity(contact.agentId, {
         name: name.trim(),
+        title: title.trim() || undefined,
         description: description.trim() || undefined,
         avatarColor: color,
+        avatarEmoji: emoji.trim() || undefined,
       });
       await updateConfigAgent(contact.agentId, {
         name: name.trim(),
         description: description.trim() || undefined,
-        model: model.trim() ? prefixedToRaw(model.trim()) : undefined,
+        model: model.trim() || undefined,
+        provider: provider || undefined,
       });
       onSaved?.(contact.agentId);
       return true;
@@ -171,22 +185,28 @@ export function useBotContactForm({ active, contact, onSaved }: UseBotContactFor
   return {
     name,
     setName,
+    title,
+    setTitle,
     description,
     setDescription,
     color,
     setColor,
+    emoji,
+    setEmoji,
     avatarUrl,
     avatarBusy,
     uploadAvatar,
     removeAvatar,
     model,
-    setModel,
+    provider,
+    /** Prefixed selector id derived from model+provider (raw fallback for stale configs). */
+    selectorModelId,
+    handleModelSelect,
     modelGroups,
     modelsLoading,
     submitting,
     error,
     canSubmit,
-    extraModelOption,
     nameRef,
     save,
   };
