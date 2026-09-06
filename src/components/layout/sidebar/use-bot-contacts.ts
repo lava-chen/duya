@@ -24,11 +24,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useConversationStore } from "@/stores/conversation-store";
 import { listBots } from "@/lib/agent-profile-ipc";
+import { canSend } from "@/lib/stream-session-manager";
+import { pendingTurnCountForSession } from "@/components/chat/bot/send/scheduled-turns";
 import {
   buildBotContacts,
   buildRoomContacts,
   partitionBotContacts,
   type BotPartition,
+  type BotSessionStatus,
   type RoomContact,
   type RoomSource,
 } from "./bot-contacts";
@@ -149,9 +152,38 @@ export function useBotContacts() {
     });
   }, []);
 
+  // Plan 500 P2.4: coarse per-bot activity status. The renderer signal is
+  // the stream phase (`canSend` false = running) plus this window's queued
+  // turns (messageDelivery 'queued' + main-queue pending records). A short
+  // poll keeps it honest between store updates — stream phases mutate
+  // outside React.
+  const messageDelivery = useConversationStore((s) => s.messageDelivery);
+  const [statusTick, setStatusTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setStatusTick((n) => n + 1), 2_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const statusForThread = useCallback(
+    (threadId: string | null): BotSessionStatus | undefined => {
+      if (!threadId) return undefined;
+      void statusTick;
+      const deliveryRows = Object.values(messageDelivery[threadId] ?? {});
+      const queued =
+        pendingTurnCountForSession(threadId) > 0 ||
+        deliveryRows.some((d) => d === 'queued');
+      const running = !canSend(threadId);
+      if (running) return 'running';
+      if (queued) return 'queued';
+      return 'idle';
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [messageDelivery, statusTick],
+  );
+
   const allContacts = useMemo(
-    () => buildBotContacts(bots, threads),
-    [bots, threads],
+    () => buildBotContacts(bots, threads, statusForThread),
+    [bots, threads, statusForThread],
   );
 
   /** Plan 478: room contacts, activity-joined against the thread list. */
