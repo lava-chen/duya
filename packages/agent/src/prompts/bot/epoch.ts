@@ -57,10 +57,18 @@ function safeStable(value: unknown): string {
  * Content hash (botEpoch) over the bot-relevant fields of a context.
  *
  * Roster entries are sorted by id so config map iteration order cannot
- * change the hash. The reserved data slots (channels/memory/automations/
- * mcpServers) are included defensively — once the owning plans (476/479/
- * 405) type them and render sections from them, their content is already
- * part of the epoch and needs no further change here.
+ * change the hash.
+ *
+ * Plan 501 L1: the VOLATILE data slots (channels/memory/automations/
+ * mcpServers) are deliberately NOT part of this fingerprint. They change
+ * during normal operation (the memory extractor writes every turn), and
+ * folding them in changed the hash — and therefore the cache key of every
+ * section, stable ones included — on nearly every turn, voiding the frozen
+ * snapshot. Volatile sections now key on the compaction epoch alone (see
+ * `BotSectionDef.volatile` in framework.ts); their content refreshes at the
+ * next compaction boundary, grok `resolveFrozenMemoryPrompt` parity.
+ * Identity changes mid-epoch stay covered by the profileUpdate envelope
+ * (474 P3.1), which announces and folds at compaction.
  *
  * Returns a short hex digest suitable for embedding in cache keys.
  */
@@ -79,11 +87,6 @@ export function computeBotContentHash(ctx: BotPromptContext): string {
     ['voice', safeStable(ctx.voice ?? null)],
     ['promptConfig', safeStable(ctx.promptConfig ?? null)],
     ['agentDirectory', safeStable(roster)],
-    ['channels', safeStable(ctx.channels ?? null)],
-    ['memory', safeStable(ctx.memory ?? null)],
-    ['memoryRoots', safeStable(ctx.memoryRoots ?? null)],
-    ['automations', safeStable(ctx.automations ?? null)],
-    ['mcpServers', safeStable(ctx.mcpServers ?? null)],
   ]
     .map(([k, v]) => `${k}=${v}`)
     .join('|')

@@ -131,6 +131,21 @@ describe('SendMessage reminder predicates', () => {
     expect(isSendMessageReminderMessage(userTurn('hello'))).toBe(false);
     expect(isSendMessageReminderMessage(null)).toBe(false);
   });
+
+  it('counts post_to_room as a delivery (Plan 501 L2: group voice)', () => {
+    expect(hasSendMessageCall(assistantWithTools('post_to_room'))).toBe(true);
+    expect(countNonSendMessageToolCalls(assistantWithTools('post_to_room', 'Read'))).toBe(1);
+
+    // A room turn that already posted does not owe a delivery.
+    const roomTurn = [
+      userTurn('room prompt'),
+      assistantWithTools('post_to_room'),
+      toolResultTurn(),
+      assistantWithTools('Read'),
+    ];
+    expect(hasSendMessageSinceRealTurnStart(roomTurn)).toBe(true);
+    expect(countToolCallsSinceLastSendMessage(roomTurn)).toBe(1);
+  });
 });
 
 describe('createSendMessageReminderHook', () => {

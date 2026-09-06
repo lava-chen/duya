@@ -571,7 +571,15 @@ Write durable, self-contained facts (preferences, decisions, corrections). Do no
       return async (payload, ctx) => {
         const response = await ctx!.ipcRequest!(
           'bot-identity:rpc',
-          { subaction: payload.subaction, payload },
+          {
+            subaction: payload.subaction,
+            payload,
+            // The main process binds the subaction to the SESSION's bot
+            // identity (bot:<agentId> parsed from sessionId) — without the
+            // session id every subaction is rejected with NO_IDENTITY
+            // (same envelope pattern as computer_use).
+            sessionId: ctx?.options?.sessionId,
+          },
           { timeout: 15_000 },
         );
         return {

@@ -140,6 +140,16 @@ export interface BotSectionDef {
    */
   budgetChars?: number
   compute: (ctx: BotPromptContext) => string | null | Promise<string | null>
+  /**
+   * Plan 501 L1: volatile sections render from data that changes during
+   * normal operation (memory writes, connector state, routine edits). They
+   * key their frozen snapshot on the compaction epoch ALONE — mid-epoch
+   * changes do not re-render them (grok resolveFrozenMemoryPrompt parity:
+   * the model re-meets its environment at the next compaction boundary).
+   * Stable sections (default) key on the content hash, so an identity or
+   * roster edit invalidates them immediately.
+   */
+  volatile?: boolean
 }
 
 /**
@@ -305,8 +315,13 @@ export class BotPromptAssembly {
     ctx: BotPromptContext,
     snapshot: BotSnapshotKey | undefined,
   ): Promise<string | null> {
+    // Plan 501 L1: volatile sections freeze per compaction epoch only —
+    // their underlying data churns mid-epoch, so the content hash must not
+    // participate in their cache key (or the freeze would be void).
     const cacheKey = snapshot
-      ? botSectionCacheKey(snapshot.botId, snapshot.contentHash, snapshot.summaryEpoch, def.name)
+      ? def.volatile === true
+        ? `bot:${snapshot.botId}:v:${snapshot.summaryEpoch}:${def.name}`
+        : botSectionCacheKey(snapshot.botId, snapshot.contentHash, snapshot.summaryEpoch, def.name)
       : undefined
     if (cacheKey !== undefined && this.snapshotCache.has(cacheKey)) {
       return this.snapshotCache.get(cacheKey) ?? null

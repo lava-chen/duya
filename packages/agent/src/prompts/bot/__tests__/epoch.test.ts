@@ -65,10 +65,16 @@ describe('computeBotContentHash', () => {
     expect(computeBotContentHash(a)).not.toBe(computeBotContentHash(b))
   })
 
-  it('changes when a reserved data slot changes (memory/channels/…)', () => {
+  it('is INSENSITIVE to volatile data slots (memory/channels/…) — Plan 501 L1', () => {
+    // Volatile slots churn mid-epoch (the memory extractor writes every
+    // turn); they key on summaryEpoch alone and must not invalidate the
+    // content hash that stable sections freeze under.
     const a: BotPromptContext = { memory: { tier: 'recent', items: ['x'] } }
     const b: BotPromptContext = { memory: { tier: 'recent', items: ['x', 'y'] } }
-    expect(computeBotContentHash(a)).not.toBe(computeBotContentHash(b))
+    expect(computeBotContentHash(a)).toBe(computeBotContentHash(b))
+    expect(
+      computeBotContentHash({ channels: [{ platform: 'telegram', label: 't' } as never] }),
+    ).toBe(computeBotContentHash({}))
   })
 
   it('treats undefined and absent fields alike', () => {
@@ -244,5 +250,89 @@ describe('frozen snapshot (BotPromptAssembly + dual-key epoch)', () => {
     await assembly.renderSections({}, { snapshot: { ...KEY, botId: 'beta' } })
 
     expect(calls()).toBe(2)
+  })
+
+  describe('volatile sections (Plan 501 L1: epoch-only freeze)', () => {
+    function countingVolatile(name: string, make: () => string): {
+      def: BotSectionDef
+      calls: () => number
+      set: (text: string) => void
+    } {
+      let count = 0
+      let text = make()
+      return {
+        def: {
+          name,
+          volatile: true,
+          compute: () => {
+            count += 1
+            return text
+          },
+        },
+        calls: () => count,
+        set: (t: string) => {
+          text = t
+        },
+      }
+    }
+
+    it('freezes per epoch: mid-epoch data churn does NOT re-render', async () => {
+      const assembly = new BotPromptAssembly('')
+      const { def, calls, set } = countingVolatile('memoryOwn', () => 'SNAP A')
+      assembly.register(def)
+
+      const first = await assembly.renderSections({}, { snapshot: KEY })
+      expect(first).toBe('SNAP A')
+
+      // The memory store changed underneath — the frozen render stands.
+      set('SNAP B')
+      const second = await assembly.renderSections({}, { snapshot: KEY })
+      expect(second).toBe('SNAP A')
+      expect(calls()).toBe(1)
+    })
+
+    it('re-renders when the compaction epoch advances', async () => {
+      const assembly = new BotPromptAssembly('')
+      const { def, calls, set } = countingVolatile('memoryOwn', () => 'SNAP A')
+      assembly.register(def)
+
+      await assembly.renderSections({}, { snapshot: KEY })
+      set('SNAP B')
+      const after = await assembly.renderSections({}, {
+        snapshot: { ...KEY, summaryEpoch: 1 },
+      })
+
+      expect(after).toBe('SNAP B')
+      expect(calls()).toBe(2)
+    })
+
+    it('identity change mid-epoch re-renders stable sections but keeps volatile frozen', async () => {
+      const assembly = new BotPromptAssembly('')
+      let stableCalls = 0
+      let stableText = 'IDENT-1'
+      assembly.register({
+        name: 'botIdentity',
+        compute: () => {
+          stableCalls += 1
+          return stableText
+        },
+      })
+      const volatile = countingVolatile('memoryOwn', () => 'M1')
+      assembly.register(volatile.def)
+
+      await assembly.renderSections({}, { snapshot: KEY })
+
+      // Identity changed (new content hash), epoch unchanged: the stable
+      // section re-renders, the volatile one stays frozen per epoch.
+      stableText = 'IDENT-2'
+      const out = await assembly.renderSections({}, {
+        snapshot: { ...KEY, contentHash: 'h2' },
+      })
+
+      expect(stableCalls).toBe(2)
+      expect(volatile.calls()).toBe(1)
+      expect(out).toContain('IDENT-2')
+      expect(out).toContain('M1')
+    })
   })
 })

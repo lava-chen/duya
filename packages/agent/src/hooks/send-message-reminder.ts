@@ -120,15 +120,24 @@ function toolUseParts(message: {
 export function hasSendMessageCall(message: unknown): boolean {
   const m = message as { role?: string; content?: unknown } | null | undefined;
   if (!m) return false;
-  return toolUseParts(m).some((part) => part.name === SEND_MESSAGE_TOOL_NAME);
+  return toolUseParts(m).some(isDeliveryCall);
 }
 
-/** Non-SendMessage tool calls in one assistant turn (0 for other roles). */
+/** Non-delivery tool calls in one assistant turn (0 for other roles). */
 export function countNonSendMessageToolCalls(message: unknown): number {
   const m = message as { role?: string; content?: unknown } | null | undefined;
   if (!m) return 0;
-  return toolUseParts(m).filter((part) => part.name !== SEND_MESSAGE_TOOL_NAME)
-    .length;
+  return toolUseParts(m).filter((part) => !isDeliveryCall(part)).length;
+}
+
+/**
+ * Plan 501 L2: a delivery is any tool that puts words in front of an
+ * audience — SendMessage (the user voice) and post_to_room (a group
+ * member's voice, plan 478). Without the latter the delivery-owed check
+ * reads a room turn that already spoke as silent.
+ */
+function isDeliveryCall(part: ToolUsePart): boolean {
+  return part.name === SEND_MESSAGE_TOOL_NAME || part.name === 'post_to_room';
 }
 
 /**

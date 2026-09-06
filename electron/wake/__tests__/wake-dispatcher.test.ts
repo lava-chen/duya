@@ -307,14 +307,15 @@ describe('wake sources (P2.3c inbound / P2.4 broadcast) + lane ordering (P2.2)',
 
   // ---- P2.3c connector.inbound (dispatcher layer) ----
 
-  it('enqueues a channel inbound as a background wake', async () => {
+  it('enqueues a channel inbound as a background wake (executed via reviveForInbound)', async () => {
     const outcome = enqueueInboundWake('s1', { envelopeId: 'env-9', text: 'hello from telegram' })
     expect(outcome).toBe('added')
     await flush()
-    expect(fake.runWakeCalls).toHaveLength(1)
-    expect(fake.runWakeCalls[0].sessionId).toBe('s1')
-    expect(fake.runWakeCalls[0].prompt).toContain('hello from telegram')
-    expect(fake.runWakeCalls[0].prompt).toContain('env-9')
+    // Inbound drops off the queue; it is NOT run through the drain's runWake —
+    // the channel path hands it to reviveForInbound (fire-and-forget), so the
+    // injected runWake fake never sees it.
+    expect(_queuedWakeCount('s1')).toBe(0)
+    expect(fake.runWakeCalls).toHaveLength(0)
   })
 
   it('merges duplicate inbound envelopes while queued', async () => {
@@ -351,8 +352,8 @@ describe('wake sources (P2.3c inbound / P2.4 broadcast) + lane ordering (P2.2)',
 
   it('runs two same-lane items in FIFO order', async () => {
     fake.lockedSessions.add('s1')
-    enqueueInboundWake('s1', { envelopeId: 'e1', text: 'first' })
-    enqueueInboundWake('s1', { envelopeId: 'e2', text: 'second' })
+    enqueueWakeItemForSession('s1', completionItem('t1', 's1', 'first'))
+    enqueueWakeItemForSession('s1', completionItem('t2', 's1', 'second'))
     fake.lockedSessions.delete('s1')
     notifySessionIdle('s1')
     await flush()
@@ -437,5 +438,38 @@ describe('wake sources (P2.3c inbound / P2.4 broadcast) + lane ordering (P2.2)',
     expect(fake.runWakeCalls).toHaveLength(2)
     expect(fake.runWakeCalls[0].prompt).toContain('agent lane first')
     expect(fake.runWakeCalls[1].prompt).toContain('bg-1')
+  })
+
+  it('coalesces a burst of queued dms into a single wake run (batching)', async () => {
+    fake.lockedSessions.add('bot:receiver')
+    enqueueWakeItemForSession('bot:receiver', dmItem('bot-a', 'Alpha', 'one'))
+    enqueueWakeItemForSession('bot:receiver', dmItem('bot-a', 'Alpha', 'two'))
+    expect(_queuedWakeCount('bot:receiver')).toBe(2)
+    fake.lockedSessions.delete('bot:receiver')
+    notifySessionIdle('bot:receiver')
+    await flush()
+    // Both members run inside the ONE coalesced run (grok runAgentInboundWake
+    // parity) instead of one wake run per DM.
+    expect(fake.runWakeCalls).toHaveLength(1)
+    expect(fake.runWakeCalls[0].sessionId).toBe('bot:receiver')
+    expect(fake.runWakeCalls[0].prompt).toContain('one')
+    expect(fake.runWakeCalls[0].prompt).toContain('two')
+    expect(_queuedWakeCount('bot:receiver')).toBe(0)
+  })
+
+  it('coalesces dms while keeping a queued background item as its own run', async () => {
+    fake.lockedSessions.add('bot:receiver')
+    enqueueWakeItemForSession('bot:receiver', dmItem('bot-a', 'Alpha', 'one'))
+    enqueueWakeItemForSession('bot:receiver', dmItem('bot-a', 'Alpha', 'two'))
+    enqueueWakeItemForSession('bot:receiver', completionItem('bg-tail', 'bot:receiver'))
+    fake.lockedSessions.delete('bot:receiver')
+    notifySessionIdle('bot:receiver')
+    await flush()
+    // Both agent-lane dms coalesce into ONE run; the background item is never
+    // merged into it and runs on its own after (lane order agent > background).
+    expect(fake.runWakeCalls).toHaveLength(2)
+    expect(fake.runWakeCalls[0].prompt).toContain('one')
+    expect(fake.runWakeCalls[0].prompt).toContain('two')
+    expect(fake.runWakeCalls[1].prompt).toContain('bg-tail')
   })
 })

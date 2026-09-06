@@ -32,13 +32,13 @@ function intentActionParagraph(
     case "question":
       return `This is a question. Answer it. Your final written response will be AUTOMATICALLY returned to ${fromName} as the answer — do not call SendToAgent just to deliver it. Use ${replyHow} only for a useful interim status or follow-up question.`;
     case "result":
-      return `This is the result of an earlier request you made. Review it and act on it if needed — no reply is expected unless something is off.`;
+      return `This is the result of work you delegated to ${fromName}. Review it, then concisely summarize it to your user now. Do not stay silent and do not merely acknowledge it.`;
     case "status":
-      return `This is a status update. Acknowledge only if something needs your attention; otherwise continue your current work.`;
+      return `This is a status update on work you're coordinating with ${fromName}. Concisely report it to your user if it advances the outcome. Do not stay silent and do not merely acknowledge it.`;
     case "fyi":
-      return `This is an FYI. No reply is expected and staying silent is fine — act only if it genuinely affects your current work.`;
+      return `This is an FYI. No reply is expected — act only if it genuinely affects your current work, and staying silent is fine. Do not send an acknowledgement message.`;
     default:
-      return `If it needs a reply or an action, handle it: ${replyHow}, which reaches them on a later turn — not a live back-and-forth — and use SendMessage to tell your user only when you have a real result to share.`;
+      return `If it needs a reply or an action, handle it: ${replyHow}, which reaches them on a later turn — not a live back-and-forth — and use SendMessage to tell your user only when you have a real result to share. If there is nothing for you to do or say, stay silent — do not reply just to acknowledge the message, so the two of you never ping-pong back and forth.`;
   }
 }
 

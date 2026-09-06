@@ -25,10 +25,7 @@
 import { getCoreStores } from '../db/core-connection'
 import type { WakeItem } from '../../packages/agent/src/wake/types'
 import { enqueueWakeItemForSession } from './wake-dispatcher'
-import {
-  AGENT_DM_MAX_HOPS,
-  decodeEnvelope,
-} from '../../packages/agent/src/agent/dm/index.js'
+import { decodeEnvelope } from '../../packages/agent/src/agent/dm/index.js'
 import { parseAgentIdFromBotSession } from './bot-session-id'
 import { getLogger, LogComponent } from '../logging/logger'
 import type { NewEvent } from '../db/core'
@@ -103,11 +100,26 @@ function appendReceiverMarker(
 ): void {
   if (!envelope) return
   try {
+    // Plan 497 fix: the envelope's from.id is the SENDER'S PERSISTENT SESSION
+    // id (`bot:<agentId>`), but every UI consumer keys peers by the bare
+    // roster agent id (contact lookup, pair-view session derivation — a
+    // prefixed peerId rendered the wrong name and opened an empty pair view).
+    // Normalize here, and prefer the display name from the sender's session
+    // row (envelope.from.name is the worker's id-derived fallback).
+    const fromAgentId =
+      parseAgentIdFromBotSession(envelope.from.id) ?? envelope.from.id
+    let fromName = envelope.from.name || fromAgentId
+    try {
+      const senderSession = getCoreStores().sessions.get(envelope.from.id)
+      if (senderSession?.agentName) fromName = senderSession.agentName
+    } catch {
+      // Core stores unavailable (tests) — the envelope name is fine.
+    }
     const message = {
       id: `dm-marker-${envelope.clientMsgId}`,
       session_id: sessionId,
       role: 'user',
-      content: `${envelope.from.name || envelope.from.id}: ${envelope.text}`,
+      content: `${fromName}: ${envelope.text}`,
       status: 'complete',
       msg_type: 'text',
       source: 'agent_dm',
@@ -115,8 +127,8 @@ function appendReceiverMarker(
         source: 'agent_dm',
         agentDm: {
           direction: 'received',
-          peerId: envelope.from.id,
-          peerName: envelope.from.name || envelope.from.id,
+          peerId: fromAgentId,
+          peerName: fromName,
           text: envelope.text,
           intent: envelope.intent ?? null,
           priority: envelope.priority ?? false,
@@ -183,8 +195,11 @@ export function maybeDispatchAgentDm(row: AgentDmRowLike): boolean {
   // inbound row lives in the replier's mailbox, which is this row's source
   // session). Messages without a replyTo start at 0 (human-initiated
   // context). Computed here — not by the sending model — so the value cannot
-  // be forged downward. Over-limit DMs are dropped (logged); the durable
-  // mailbox row stays behind for audit.
+  // be forged downward, and attached to the wake payload for observability.
+  // No message is DROPPED on hop depth: a multi-round bot↔bot exchange is the
+  // intended shape, and runaway ping-pong is bounded by the model's own
+  // "nothing to add → stay silent" judgment (matching grok-bot), not by a hop
+  // counter that a fresh topic can reset.
   let hops = 0
   if (envelope.replyTo?.messageId) {
     try {
@@ -203,15 +218,6 @@ export function maybeDispatchAgentDm(row: AgentDmRowLike): boolean {
         error: err instanceof Error ? err.message : String(err),
       }, LogComponent.AgentProcess)
     }
-  }
-  if (hops > AGENT_DM_MAX_HOPS) {
-    getLogger().warn('AgentDm: dropped over hop limit', {
-      sessionId,
-      clientMsgId,
-      hops,
-      max: AGENT_DM_MAX_HOPS,
-    }, LogComponent.AgentProcess)
-    return false
   }
 
   // Plan 477 P4.4 — receiver-side marker row (before the wake so the card is

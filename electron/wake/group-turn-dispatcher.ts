@@ -79,6 +79,38 @@ export function _resetGroupTurnDispatcherForTest(): void {
   rooms.clear();
 }
 
+/** Resolve a member's display name from the config registry (id fallback). */
+function resolveMemberName(memberId: string): string {
+  try {
+    const agents = listConfigAgents();
+    return agents[memberId]?.name || memberId;
+  } catch {
+    return memberId;
+  }
+}
+
+/**
+ * Plan 501 L3 — a group member turn was dropped at the redrive cap by the
+ * wake dispatcher; post the room narrative the cap requires (grok posts a
+ * redelivery note rather than letting the member vanish silently).
+ */
+export function appendGroupTurnDroppedNotice(roomId: string, memberId: string): void {
+  try {
+    appendRoomEntry(getRoomSessionId(roomId), {
+      id: `room-redrive-drop-${roomId}-${memberId}-${Date.now()}`,
+      role: 'system',
+      content: `${resolveMemberName(memberId)}'s turn was interrupted repeatedly and gave up (redrive limit). Mention them again to retry.`,
+      source: 'group_system',
+    });
+  } catch (err) {
+    getLogger().warn('GroupTurn: redrive-drop notice failed (non-fatal)', {
+      roomId,
+      memberId,
+      error: err instanceof Error ? err.message : String(err),
+    }, LogComponent.AgentProcess);
+  }
+}
+
 // ─── Room session + transcript plumbing ───
 
 /**
@@ -229,6 +261,7 @@ export function scheduleGroupTurn(
   // voids the remaining plan; bot/automation posts wait for the chained turn.
   if (trigger === 'user' && state.currentMemberSession) {
     const memberSession = state.currentMemberSession;
+    const memberId = memberSession.replace(/^bot:/, '');
     getLogger().info('GroupTurn: user post interrupts in-flight member run', {
       roomId,
       memberSession,
@@ -241,6 +274,14 @@ export function scheduleGroupTurn(
         error: err instanceof Error ? err.message : String(err),
       }, LogComponent.AgentProcess);
     }
+    // Plan 501 L3 (grok redelivery note parity): the room sees why the
+    // member's stream went silent instead of a silent disappearance.
+    appendRoomEntry(sessionId, {
+      id: `room-interrupt-${roomId}-${epoch}`,
+      role: 'system',
+      content: `User message interrupted ${resolveMemberName(memberId)}'s turn; the room picks up after the user is served.`,
+      source: 'group_system',
+    });
   }
 
   state.queue = state.queue

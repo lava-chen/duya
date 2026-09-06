@@ -202,9 +202,11 @@ describe('maybeDispatchAgentDm (orchestration)', () => {
     expect(prompt).toContain('staying silent is fine')
   })
 
-  it('drops a DM whose replyTo chain exceeds the hop limit', async () => {
-    // hops=6 inbound in the sender's mailbox → the reply resolves to
-    // hops=7 > AGENT_DM_MAX_HOPS and is dropped before enqueue.
+  it('accepts a DM whose replyTo chain is very deep (no hop cap)', async () => {
+    // hops=6 inbound in the sender's mailbox → the reply would resolve to
+    // hops=7. There is no longer a hop cap that drops it: multi-round bot↔bot
+    // exchange is the intended shape (grok parity), so the deep reply is woken
+    // normally even at depth past any historical limit.
     const inboundContent = encodeEnvelope({
       from: { id: 'bot-b', name: 'Beta' },
       to: { id: 'bot-a', name: 'Alpha' },
@@ -220,7 +222,7 @@ describe('maybeDispatchAgentDm (orchestration)', () => {
       const replyContent = encodeEnvelope({
         from: { id: 'bot-a', name: 'Alpha' },
         to: { id: 'bot-b', name: 'Beta' },
-        text: 'over the limit',
+        text: 'deep reply stays delivered',
         replyTo: { messageId: 'dm-deep' },
         timestampMs: Date.now(),
         clientMsgId: 'dm-reply',
@@ -230,8 +232,10 @@ describe('maybeDispatchAgentDm (orchestration)', () => {
       const result = maybeDispatchAgentDm(
         dmRow({ content: replyContent, clientMsgId: 'dm-reply', source: 'bot:bot-a' }),
       )
-      expect(result).toBe(false)
-      expect(_queuedWakeCount('bot:bot-b')).toBe(0)
+      expect(result).not.toBe(false)
+      await flush()
+      expect(runWake).toHaveBeenCalledTimes(1)
+      expect(runWake.mock.calls[0][1] as string).toContain('deep reply stays delivered')
     } finally {
       _setCoreStoresForTesting(null)
     }
