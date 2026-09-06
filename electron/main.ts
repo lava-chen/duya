@@ -17,7 +17,7 @@ import { platform as getPlatform, tmpdir, homedir } from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 
-import { registerDbHandlers, registerConductorHandlers, registerSidebarSectionsHandlers, registerMailboxHandlers, registerMemoryListHandlers, registerMemorySystemLogHandlers, registerMemoryRagRebuildHandler, registerMemoryWakeupHandlers, registerComputerUseHandlers, registerBotChannelHandlers } from './ipc/index';
+import { registerDbHandlers, registerConductorHandlers, registerSidebarSectionsHandlers, registerMailboxHandlers, registerMemoryListHandlers, registerMemorySystemLogHandlers, registerMemoryRagRebuildHandler, registerMemoryWakeupHandlers, registerComputerUseHandlers, registerBotChannelHandlers, registerGroupHandlers } from './ipc/index';
 import { initDatabaseFromBoot, getDatabase, getSqliteCtor } from './db/connection';
 import { initCoreDatabase } from './db/core-connection';
 import { registerAgentHandlers } from './agents/agent-communicator';
@@ -296,6 +296,16 @@ if (gotTheLock) {
     registerDbHandlers();
     registerConductorHandlers();
     registerSidebarSectionsHandlers();
+
+    // Plan 488 P6 — start the per-bot inbound connectors (grok-form channel
+    // model). Bindings and credentials are file-based (agents/<id>/…), so this
+    // only needs userData resolved; wakes lazily open the core store.
+    try {
+      const { getBotConnectorManager } = await import('./channels/connector-runtime');
+      getBotConnectorManager().start();
+    } catch (err) {
+      logger.warn('Bot connector runtime failed to start', err instanceof Error ? err : new Error(String(err)), 'Main');
+    }
 
     // Plan 454 follow-up: register the DesktopBackend singleton so
     // electron/ipc/computer-use.ts can dispatch actions. The init
@@ -1093,6 +1103,7 @@ registerBrowserWebviewHandlers();
 registerBrowserCookieHandlers();
 registerGitHandlers();
 registerBotChannelHandlers();
+registerGroupHandlers();
 registerMemoryListHandlers();
 registerMemorySystemLogHandlers();
 registerMemoryRagRebuildHandler();

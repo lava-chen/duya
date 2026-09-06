@@ -16,7 +16,7 @@
 // =============================================================================
 
 /** Canonical platform identifiers. */
-export const KNOWN_PLATFORMS = ['discord', 'slack'] as const;
+export const KNOWN_PLATFORMS = ['discord', 'slack', 'telegram'] as const;
 export type KnownPlatform = typeof KNOWN_PLATFORMS[number];
 
 /**
@@ -56,6 +56,15 @@ export const CONNECTOR_MANIFESTS: readonly ConnectorManifest[] = [
       'Create a Slack app at https://api.slack.com/apps, enable Bot Token Scopes ' +
       '(chat:write, channels:history, groups:history, im:history, mpim:history), ' +
       'and install to your workspace.',
+  },
+  {
+    platform: 'telegram',
+    displayName: 'Telegram',
+    blurb: 'Connect a Telegram bot to receive and reply to messages in chats via long polling.',
+    credentialLabel: 'Bot Token',
+    availability: 'available',
+    connectGuide:
+      'Create a bot with @BotFather on Telegram, then paste the bot token here.',
   },
 ];
 
