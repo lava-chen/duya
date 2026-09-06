@@ -21,6 +21,8 @@ import {
   ImageIcon,
   SquaresFourIcon,
   AiGatewayIcon,
+  SparkleIcon,
+  ClockIcon,
 } from '@/components/icons';
 import {
   isBrowserTool,
@@ -294,6 +296,35 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
         return prompt.length > 60 ? prompt.slice(0, 57) + '…' : prompt;
       }
       return 'image_generate';
+    },
+  },
+  {
+    // Memory tools — `memory_write` and the bot's `update_state` write.
+    // They render as a centered "Memory updated" hint (see ChatNotice);
+    // this entry covers any fallback path with a sensible icon + summary.
+    match: (n) => ['memory_write', 'update_state'].includes(n.toLowerCase()),
+    icon: SparkleIcon,
+    labelKey: 'streaming.toolAction.label.memory',
+    getSummary: (input, name?: string) => {
+      const inp = (input || {}) as Record<string, unknown>;
+      const target = typeof inp.target === 'string' ? inp.target : '';
+      if (target) return target;
+      return (name || 'memory').toLowerCase();
+    },
+  },
+  {
+    // Routine tool — `manage_routine` (create/update/pause/resume/delete).
+    // Surfaces as a centered routine hint; the registry fallback supplies a
+    // clock icon and a short action summary.
+    match: (n) => n.toLowerCase() === 'manage_routine',
+    icon: ClockIcon,
+    labelKey: null,
+    getSummary: (input) => {
+      const inp = (input || {}) as Record<string, unknown>;
+      const action = typeof inp.action === 'string' ? inp.action.trim() : '';
+      const name = typeof inp.name === 'string' ? inp.name.trim() : '';
+      if (name) return `${action} ${name}`.trim();
+      return action || 'routine';
     },
   },
   {

@@ -33,16 +33,41 @@ export interface ToolAction {
 }
 
 /**
+ * Catalog of tool families that surface as a quiet, centered text hint
+ * in the message flow instead of a collapsible tool chrome row. The
+ * agent's use of these tools reads as a status update to the human
+ * ("Memory updated", "Created routine ⏱ …") rather than a stand-alone
+ * work artifact the user should expand.
+ */
+export type ChatNoticeKind = 'memory' | 'routine';
+
+/**
+ * Payload for a `kind: 'notice'` ActionItem — the memory / routine tool
+ * call rendered as a centered text hint. `result` is `undefined` while
+ * the tool is still running; once it returns, the notice flips from a
+ * short progress cue to the one-line outcome.
+ */
+export interface ChatNotice {
+  kind: ChatNoticeKind;
+  toolName: string;
+  input: unknown;
+  result?: string;
+  isError?: boolean;
+}
+
+/**
  * One element of the action stream. Tool actions are routed through
  * `ToolActionRow`; thinking / text / widget actions are rendered as
  * standalone rows that break the group run. Hook actions (plan 437)
  * render through `HookActionRow` and also break the run — they are not
  * LLM tool calls and should read as separate signals interleaved with
- * the model's prose.
+ * the model's prose. Notice actions are lifted out of the tool group by
+ * `MessageItem` and rendered as a centered hint (see `ChatNotice`).
  */
 export type ActionItem =
   | { kind: 'thinking'; content: string; isStreaming?: boolean }
   | { kind: 'tool'; tool: ToolAction; streamingToolOutput?: string }
+  | { kind: 'notice'; notice: ChatNotice }
   | { kind: 'text'; content: string }
   | { kind: 'widget'; content: string; sourceMessageId?: string; sourceLabel?: string }
   | { kind: 'hook'; hook: HookAction }
