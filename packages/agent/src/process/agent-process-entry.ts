@@ -66,7 +66,7 @@ import { rememberSessionApproval } from '../tool/AppConnectionTool/approvals.js'
 import { buildSandboxImage, setSandboxEnabled } from '../sandbox/index.js';
 import { duyaAgent } from '../agent/DuyaAgent.js';
 import { Journal } from '../journal/Journal.js';
-import { loadSkills, getSkillRegistry } from '../skills/index.js';
+import { loadSkills, getSkillRegistry, getAgentSkillDirectory } from '../skills/index.js';
 import { browserTool } from '../tool/builtin.js';
 import { getBashTaskRegistry } from '../session/bash-task-registry.js';
 import { hookTaskRegistry } from '../hooks/task-registry.js';
@@ -1604,9 +1604,17 @@ async function loadAgentSkills(workDir?: string, skillPaths?: string[], security
   try {
     // Bundled skills are now installed on-demand via the plugin marketplace;
     // do not auto-sync the entire bundled set at agent startup.
-    const loadOptions: { additionalPaths?: string[]; syncBundled?: boolean; securityBypassSkills?: string[]; skipSecurityScan?: boolean } = {
+    const loadOptions: { additionalPaths?: string[]; agentSkillsDir?: string; syncBundled?: boolean; securityBypassSkills?: string[]; skipSecurityScan?: boolean } = {
       syncBundled: false,
     };
+
+    // Bot-scoped skills: persistent bot sessions are `bot:<botId>`, so load
+    // that bot's own skills dir (source 'agent') and let them shadow global
+    // user/project skills of the same name.
+    if (sessionId?.startsWith('bot:')) {
+      const botId = sessionId.slice('bot:'.length);
+      if (botId) loadOptions.agentSkillsDir = getAgentSkillDirectory(botId);
+    }
 
     // Discover plugin skill directories dynamically
     const pluginSkillPaths = await discoverPluginSkillPaths();

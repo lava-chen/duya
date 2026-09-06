@@ -7,8 +7,18 @@ import type { ToolUseContext } from '../types.js';
 
 /**
  * Skill source
+ * `agent` is a bot-scoped source: skills live under the owning agent's own
+ * skills directory (`~/.duya/agents/<botId>/skills`) rather than the global
+ * user/project pool.
  */
-export type SkillSource = 'user' | 'project' | 'bundled' | 'mcp' | 'plugin' | 'system';
+export type SkillSource =
+  | 'user'
+  | 'project'
+  | 'bundled'
+  | 'mcp'
+  | 'plugin'
+  | 'system'
+  | 'agent';
 
 /**
  * Skill category (Hermes-inspired classification)
