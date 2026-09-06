@@ -1,4 +1,4 @@
-# Plan 502: Bot Connector Elicitation（bot 主动发起应用连接）
+# Plan 503: Bot Connector Elicitation（bot 主动发起应用连接）
 
 ## 背景
 
@@ -48,4 +48,5 @@
 - [x] P4: variant 贯穿 + 卡片/ChatView/i18n + 卡片测试
 - [x] P5: typecheck:all（仅预存红 ManageRoutineTool.ts:274，plan 499 簇归因）+
       electron tsc（改动行区间无错）+ vitest（18+4 绿）
-- [ ] P6（后续）: Gmail/Calendar provider；disconnect；455C 运行时装载
+- [x] P6a: Gmail + Google Calendar provider 注册（`providers/registry.ts` 独立入口 + `connectors/gmail.ts`（read+send）+ `connectors/calendar.ts`（list+create）+ `connector-service.ts` 接线 + 加入 BUILTIN_CONNECTOR_IDS + 9 单测绿；typecheck 零新增错误）
+- [ ] P6b: `disconnect_app`；455C 运行时装载
