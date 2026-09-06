@@ -35,6 +35,24 @@ describe('app connection provider registry', () => {
     expect(getProviderConfig(SLACK)?.supportsManualConfiguration).toBe(true);
   });
 
+  it('registers Gmail and Calendar as ready, independently connectable providers', () => {
+    const gmail = getProviderConfig(asAppConnectorId('gmail'));
+    const calendar = getProviderConfig(asAppConnectorId('calendar'));
+
+    expect(gmail?.label).toBe('Gmail');
+    expect(gmail?.defaultScopes).toContain('https://www.googleapis.com/auth/gmail.readonly');
+    expect(gmail?.defaultScopes).toContain('https://www.googleapis.com/auth/gmail.compose');
+    expect(gmail?.defaultScopes).toContain('https://www.googleapis.com/auth/gmail.modify');
+    expect(gmail?.redirectPath).toBe('/callback/gmail');
+    expect(gmail?.clientId).toMatch(/\.apps\.googleusercontent\.com$/);
+    expect(getProviderReadiness(asAppConnectorId('gmail'))).toEqual({ configured: true });
+
+    expect(calendar?.label).toBe('Google Calendar');
+    expect(calendar?.defaultScopes).toContain('https://www.googleapis.com/auth/calendar.events');
+    expect(calendar?.redirectPath).toBe('/callback/calendar');
+    expect(getProviderReadiness(asAppConnectorId('calendar'))).toEqual({ configured: true });
+  });
+
   // --- Plan 455: the catalog is open ---
 
   it('returns undefined for unregistered ids instead of throwing', () => {

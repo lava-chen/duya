@@ -55,7 +55,6 @@ import {
   updateAgentTool,
 } from './AgentManagementTool/index.js';
 import { manageRoutineTool } from './ManageRoutineTool/index.js';
-import { listAppConnectorsTool, connectAppTool } from './AppConnectorManageTool/index.js';
 
 /**
  * BashTool instance
@@ -348,15 +347,6 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
   // agent-side (bridge has no session context). Discoverable: bot profiles
   // surface it via BOT_TOOLSET; main sessions cannot own routines.
   registry.register(manageRoutineTool.toTool(), manageRoutineTool, { exposeMode: 'discoverable' });
-
-  // Plan 503: list_app_connectors / connect_app — bot-only connector
-  // elicitation (grok AuthenticateMcpServer parity). connect_app shows the
-  // user a connect card (chat:connector_auth_required variant 'connect')
-  // and never touches tokens; the OAuth flow and resume stay in main + UI.
-  // Discoverable: bot profiles surface them via BOT_TOOLSET; interactive
-  // main-session agents keep the settings-page connect flow.
-  registry.register(listAppConnectorsTool.toTool(), listAppConnectorsTool, { exposeMode: 'discoverable' });
-  registry.register(connectAppTool.toTool(), connectAppTool, { exposeMode: 'discoverable' });
 
   // Plan 490 P1: ReactToMessage — emoji tapback on a chat message (grok
   // sand-reaction-tool parity). Always-exposed (grok SAND_FORCED_STATIC

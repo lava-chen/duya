@@ -710,35 +710,6 @@ function appConnectionIpcRequest<T = unknown>(
   });
 }
 
-// Plan 503: IPC request for the App Connection catalog (bot-only
-// connector-management tools). Returns the provider directory plus the
-// current connection list as DTOs — no tokens, no client secrets.
-function appConnectionCatalogIpcRequest<T = unknown>(
-  _channel: string,
-  _payload: unknown,
-  options?: { timeout?: number }
-): Promise<{ success: boolean; data?: T; error?: { code: string; message: string } }> {
-  return new Promise((resolve) => {
-    const requestId = crypto.randomUUID();
-    const timeout = options?.timeout || 15_000;
-
-    const timeoutHandle = setTimeout(() => {
-      if (pendingIpcRequests.has(requestId)) {
-        pendingIpcRequests.delete(requestId);
-        resolve({ success: false, error: { code: 'TIMEOUT', message: `appConnection catalog IPC request timeout after ${timeout}ms` } });
-      }
-    }, timeout);
-
-    pendingIpcRequests.set(requestId, {
-      resolve: (v) => resolve(v as { success: boolean; data?: T; error?: { code: string; message: string } }),
-      reject: (e) => resolve({ success: false, error: { code: 'INTERNAL', message: e instanceof Error ? e.message : String(e) } }),
-      timeoutHandle,
-    });
-
-    sendToMain({ type: 'appConnection:catalog', requestId });
-  });
-}
-
 // Plan 454: IPC request for Computer Use tool execution.
 //
 // Routes `computer-use:execute` messages to the main process
@@ -881,9 +852,6 @@ function toolIpcRequest<T = unknown>(
 ): Promise<{ success: boolean; data?: T; error?: { code: string; message: string } }> {
   if (channel === 'appConnection:invoke') {
     return appConnectionIpcRequest<T>(channel, payload, options);
-  }
-  if (channel === 'appConnection:catalog') {
-    return appConnectionCatalogIpcRequest<T>(channel, payload, options);
   }
   if (channel === 'computer-use:execute') {
     return computerUseIpcRequest<T>(channel, payload, options);
@@ -4196,31 +4164,6 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             }
           } else {
             warn('[Agent-Process] No pending appConnection descriptor request found for requestId:', requestId);
-          }
-          break;
-        }
-
-        // Plan 503: App Connection catalog response (bot connector tools).
-        case 'appConnection:catalog:response': {
-          const { requestId, success, data, error } = msg as unknown as {
-            requestId: string;
-            success: boolean;
-            data?: unknown;
-            error?: { code: string; message: string };
-          };
-          const pending = pendingIpcRequests.get(requestId);
-          if (pending) {
-            if (pending.timeoutHandle) {
-              clearTimeout(pending.timeoutHandle);
-            }
-            pendingIpcRequests.delete(requestId);
-            if (success) {
-              pending.resolve({ success: true, data });
-            } else {
-              pending.resolve({ success: false, error: error || { code: 'UNKNOWN', message: 'Unknown error' } });
-            }
-          } else {
-            warn('[Agent-Process] No pending appConnection catalog request found for requestId:', requestId);
           }
           break;
         }

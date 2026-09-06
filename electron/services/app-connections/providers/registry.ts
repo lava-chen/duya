@@ -98,6 +98,54 @@ const BUILTIN_CONFIGS: Record<string, Omit<ProviderClientConfig, 'id'>> = {
     monogram: 'G',
     description: 'Search and read files from Google Drive with source links.',
   },
+  // Gmail and Calendar are distinct providers (not folded into `google`)
+  // so each gets its own OAuth consent page and can be connected or
+  // disconnected independently from Google Drive. All three reuse the same
+  // public Google desktop OAuth client; the per-provider redirect path is
+  // what disambiguates the loopback callback.
+  gmail: {
+    label: 'Gmail',
+    authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+    tokenUrl: 'https://oauth2.googleapis.com/token',
+    revokeUrl: 'https://oauth2.googleapis.com/revoke',
+    redirectPath: '/callback/gmail',
+    defaultScopes: [
+      'https://www.googleapis.com/auth/gmail.readonly',
+      // compose covers send + draft lifecycle; modify adds read/label state
+      // changes on existing messages (mark read, apply/remove labels).
+      'https://www.googleapis.com/auth/gmail.compose',
+      'https://www.googleapis.com/auth/gmail.modify',
+      'openid',
+      'email',
+      'profile',
+    ],
+    userinfoUrl: 'https://www.googleapis.com/oauth2/v3/userinfo',
+    requiresClientSecret: false,
+    supportsManualConfiguration: false,
+    clientId: process.env.DUYA_APP_CONNECTION_GMAIL_CLIENT_ID ?? DUYA_GOOGLE_DESKTOP_CLIENT_ID,
+    monogram: 'G',
+    description: 'Read and send email through your connected Gmail account.',
+  },
+  calendar: {
+    label: 'Google Calendar',
+    authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+    tokenUrl: 'https://oauth2.googleapis.com/token',
+    revokeUrl: 'https://oauth2.googleapis.com/revoke',
+    redirectPath: '/callback/calendar',
+    defaultScopes: [
+      // calendar.events covers read + create on the primary calendar.
+      'https://www.googleapis.com/auth/calendar.events',
+      'openid',
+      'email',
+      'profile',
+    ],
+    userinfoUrl: 'https://www.googleapis.com/oauth2/v3/userinfo',
+    requiresClientSecret: false,
+    supportsManualConfiguration: false,
+    clientId: process.env.DUYA_APP_CONNECTION_CALENDAR_CLIENT_ID ?? DUYA_GOOGLE_DESKTOP_CLIENT_ID,
+    monogram: 'C',
+    description: 'Read and create events on your Google Calendar.',
+  },
   slack: {
     label: 'Slack',
     authUrl: 'https://slack.com/oauth/v2/authorize',
