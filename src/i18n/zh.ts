@@ -47,6 +47,10 @@ const zh: Record<TranslationKey, string> = {
   'chat.openNewProject': '打开新项目...',
   'chat.recentThreads': '最近对话',
   'chat.describeWhatToBuild': '描述你想构建什么...',
+  'chat.greeting.morning': '上午好，有什么想做的？',
+  'chat.greeting.afternoon': '下午好，要不要休息一下？',
+  'chat.greeting.evening': '晚上好，今天想做什么？',
+  'chat.greeting.night': '夜深了，注意休息',
 
   'chat.header.openSideChat': '打开侧边聊天',
   'chat.header.copy': '复制',

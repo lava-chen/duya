@@ -20,6 +20,11 @@ interface SessionSelectorProps {
   /** Optional: create a no-project session (shared ~/.duya/workspace). */
   onNewNoProjectSession?: () => void;
   onSelectThread: (threadId: string) => void;
+  /**
+   * When provided, replaces the "build in X" header with this greeting line
+   * and moves the project selector to a row below the input area.
+   */
+  greeting?: string;
   showRecentThreads?: boolean;
   maxRecentThreads?: number;
   children?: React.ReactNode;
@@ -32,6 +37,7 @@ export function SessionSelector({
   onUseExistingFolder,
   onNewNoProjectSession,
   onSelectThread,
+  greeting,
   showRecentThreads = true,
   maxRecentThreads = 8,
   children,
@@ -95,77 +101,93 @@ export function SessionSelector({
     return date.toLocaleDateString(localeStr, { month: "short", day: "numeric" });
   };
 
+  const projectSelector = (
+    <div className="welcome-project-selector" ref={dropdownRef}>
+      <button
+        className="welcome-project-dropdown-trigger"
+        onClick={() => setIsProjectDropdownOpen(!isProjectDropdownOpen)}
+        disabled={!isHydrated}
+      >
+        <span className="welcome-project-name">
+          {selectedProject?.projectName || t('chat.selectProject')}
+        </span>
+        <ChevronDownIcon size={14} />
+      </button>
+      {isProjectDropdownOpen && (
+        <OptionPanel
+          className={`welcome-project-dropdown option-panel--${placement}`}
+          title={t('chat.selectProject')}
+          items={projectItems}
+          selectedId={selectedProject?.workingDirectory}
+          onSelect={(item) => {
+            const project = projects.find(({ workingDirectory }) => workingDirectory === item.id);
+            if (project) handleSelectProject(project);
+          }}
+          onClose={() => setIsProjectDropdownOpen(false)}
+          maxListHeight={maxListHeight}
+          searchPlaceholder={t('project.searchProjects')}
+          emptyMessage={t('project.noProjectMatches')}
+          footer={
+            <div className="grid gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full justify-start px-2 text-left"
+                onClick={handleNewBlankProject}
+              >
+                <FileIcon size={14} className="text-[var(--muted)]" />
+                <span>{t('project.newBlankProject')}</span>
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full justify-start px-2 text-left"
+                onClick={handleUseExistingFolder}
+              >
+                <FolderOpenIcon size={14} className="text-[var(--muted)]" />
+                <span>{t('project.useExistingFolder')}</span>
+              </Button>
+              {onNewNoProjectSession && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-start px-2 text-left"
+                  onClick={handleNewNoProjectSession}
+                >
+                  <NotePencilIcon size={14} className="text-[var(--muted)]" />
+                  <span>{t('project.newNoProjectSession')}</span>
+                </Button>
+              )}
+            </div>
+          }
+        />
+      )}
+    </div>
+  );
+
   return (
     <>
-      {/* Project selector header */}
-      <div className="welcome-input-header">
-        <span className="welcome-input-label">{t('chat.whatToBuildIn')}</span>
-        <div className="welcome-project-selector" ref={dropdownRef}>
-          <button
-            className="welcome-project-dropdown-trigger"
-            onClick={() => setIsProjectDropdownOpen(!isProjectDropdownOpen)}
-            disabled={!isHydrated}
-          >
-            <span className="welcome-project-name">
-              {selectedProject?.projectName || t('chat.selectProject')}
-            </span>
-            <ChevronDownIcon size={14} />
-          </button>
-          {isProjectDropdownOpen && (
-            <OptionPanel
-              className={`welcome-project-dropdown option-panel--${placement}`}
-              title={t('chat.selectProject')}
-              items={projectItems}
-              selectedId={selectedProject?.workingDirectory}
-              onSelect={(item) => {
-                const project = projects.find(({ workingDirectory }) => workingDirectory === item.id);
-                if (project) handleSelectProject(project);
-              }}
-              onClose={() => setIsProjectDropdownOpen(false)}
-              maxListHeight={maxListHeight}
-              searchPlaceholder={t('project.searchProjects')}
-              emptyMessage={t('project.noProjectMatches')}
-              footer={
-                <div className="grid gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="w-full justify-start px-2 text-left"
-                    onClick={handleNewBlankProject}
-                  >
-                    <FileIcon size={14} className="text-[var(--muted)]" />
-                    <span>{t('project.newBlankProject')}</span>
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="w-full justify-start px-2 text-left"
-                    onClick={handleUseExistingFolder}
-                  >
-                    <FolderOpenIcon size={14} className="text-[var(--muted)]" />
-                    <span>{t('project.useExistingFolder')}</span>
-                  </Button>
-                  {onNewNoProjectSession && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="w-full justify-start px-2 text-left"
-                      onClick={handleNewNoProjectSession}
-                    >
-                      <NotePencilIcon size={14} className="text-[var(--muted)]" />
-                      <span>{t('project.newNoProjectSession')}</span>
-                    </Button>
-                  )}
-                </div>
-              }
-            />
-          )}
+      {greeting ? (
+        /* Time-based greeting line (welcome page header) */
+        <div className="welcome-input-header">
+          <span className="welcome-input-label">{greeting}</span>
         </div>
-        <span className="welcome-input-label">{t('chat.whatToBuildInSuffix')}</span>
-      </div>
+      ) : (
+        /* Project selector header */
+        <div className="welcome-input-header">
+          <span className="welcome-input-label">{t('chat.whatToBuildIn')}</span>
+          {projectSelector}
+          <span className="welcome-input-label">{t('chat.whatToBuildInSuffix')}</span>
+        </div>
+      )}
 
       {/* Input area */}
       {children}
+
+      {/* Project selector below the input (greeting layout only) */}
+      {greeting && (
+        <div className="welcome-project-row">{projectSelector}</div>
+      )}
 
       {/* Tab strip: only shown when a project is selected */}
       {selectedProject && (
