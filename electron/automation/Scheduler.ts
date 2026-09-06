@@ -20,6 +20,9 @@ import { computeNextRunAt } from './schedule.js';
 import { createCronSessionRow, interruptCronSession, runCronInSession } from './agent-run.js';
 import { resolveCronProvider } from './provider.js';
 import { prepareAutomationWorkspace } from './workspace.js';
+import { enqueueAutomationWake } from '../wake/wake-dispatcher.js';
+import { getBotSessionId } from '../wake/bot-session-id.js';
+import { createBotSessionIfMissing } from '../wake/agent-dm-dispatcher.js';
 import type { AutomationCron, CreateAutomationCronInput, CronRunHandle, UpdateAutomationCronInput } from './types.js';
 
 export { computeNextRunAt } from './schedule.js';
@@ -122,13 +125,28 @@ export class AutomationScheduler {
   async runCronNow(id: string): Promise<CronRunHandle> {
     const job = this.store.getCron(id);
     if (!job) throw new Error(`cron not found: ${id}`);
-    // Plan 476 P2.3a: agent-bound routines fire into the bot's resident
-    // session (P2.3b, depends on 477 P3.1) — reject manual runs today with
-    // a clear message instead of creating a throwaway cron session.
+    // P2.3b: agent-bound routines fire into the bot's resident session via
+    // the wake bus (background lane). The wake dispatcher resolves the
+    // prompt from cronjob.toml at dispatch time; the returned handle points
+    // at the bot session so the UI opens the conversation the run lands in.
     if (job.agent) {
-      throw new Error(
-        `cron "${job.name}" is bound to agent "${job.agent}"; bot-bound automation is not wired yet (Plan 476 P2.3b, awaits plan 477 resident sessions)`,
-      );
+      const sessionId = getBotSessionId(job.agent);
+      createBotSessionIfMissing(sessionId, job.agent);
+      const fireKey = randomUUID();
+      const outcome = enqueueAutomationWake({
+        jobKey: job.id,
+        fireKey,
+        name: job.name,
+        targetSessionId: sessionId,
+        trigger: 'manual',
+      });
+      getLogger().info('Manual routine fire enqueued for bot', {
+        cronId: job.id,
+        agent: job.agent,
+        sessionId,
+        outcome,
+      }, LogComponent.Automation);
+      return { runId: fireKey, sessionId, cronId: job.id };
     }
     const runId = randomUUID();
     const sessionId = `cron:${job.id}:${Date.now()}:${runId}`;
@@ -177,19 +195,45 @@ export class AutomationScheduler {
     manual: boolean,
     existing?: { runId: string; sessionId: string },
   ): Promise<void> {
-    // Plan 476 P2.3a stub: agent-bound routines land in P2.3b (bot resident
-    // session, depends on 477 P3.1). Claim the fire so the schedule does not
-    // re-fire on every tick, log, and stand down — the job stays enabled and
-    // visibly listed, ready for P2.3b to take over execution.
+    // P2.3b: agent-bound routines fire into the bot's resident session
+    // (`bot:<agentId>`) through the wake bus instead of a throwaway cron
+    // session. Claim the fire first (at-least-once, same as standalone);
+    // the wake queue then serialises fires behind user/agent turns. No
+    // retry ladder here — the queue owns redrive, and a failed wake run
+    // simply waits for the next scheduled fire.
     if (job.agent) {
       this.store.markRunResult(job.id, {
         lastRunAt: Date.now(),
-        error: 'bot-bound automation pending (Plan 476 P2.3b / 477 resident sessions)',
-        retryCount: 0,
+        error: job.lastError,
+        retryCount: job.retryCount,
       });
-      getLogger().warn('Agent-bound cron fire deferred (P2.3a stub)', {
+      const sessionId = getBotSessionId(job.agent);
+      try {
+        createBotSessionIfMissing(sessionId, job.agent);
+      } catch (error) {
+        getLogger().error('Routine fire: bot session create failed', error instanceof Error ? error : new Error(String(error)), {
+          cronId: job.id,
+          agent: job.agent,
+        }, LogComponent.Automation);
+        this.store.markRunResult(job.id, {
+          lastRunAt: Date.now(),
+          error: 'bot session creation failed',
+          retryCount: job.retryCount,
+        });
+        return;
+      }
+      const outcome = enqueueAutomationWake({
+        jobKey: job.id,
+        fireKey: randomUUID(),
+        name: job.name,
+        targetSessionId: sessionId,
+        trigger: 'schedule',
+      });
+      getLogger().info('Scheduled routine fire enqueued for bot', {
         cronId: job.id,
         agent: job.agent,
+        sessionId,
+        outcome,
       }, LogComponent.Automation);
       return;
     }

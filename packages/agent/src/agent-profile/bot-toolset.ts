@@ -18,12 +18,16 @@
  *   - image_generate (2026-09-05 membership decision): grok exposes
  *     GenerateImage statically on every non-subagent turn; duya's tool is
  *     discoverable-only, so bots need the exact-name promotion to match.
- *   - post_to_room (T3) joins when plan 478 lands; background_tasks (T6)
- *     stays optional pending the 476 P3.3 evaluation. tool_schema /
- *     tool_invoke (T4/T5) are always-exposed for every profile and are
- *     deliberately NOT in this set. ReactToMessage (plan 490 P1) will
- *     register always-exposed instead, mirroring grok's
- *     SAND_FORCED_STATIC placement — also not in this set.
+ *   - manage_routine (Plan 476 P2.3b): bot routine self-management (grok
+ *     update_state target "routine" parity). Creates/edits cron-backed
+ *     routines bound to the calling bot; scheduled fires wake the bot's
+ *     resident session through the 476 wake bus.
+ *   - post_to_room (T3, plan 478): a member's only voice into a shared room
+ *     (grok group SendMessage parity). background_tasks (T6) stays optional
+ *     pending the 476 P3.3 evaluation. tool_schema / tool_invoke (T4/T5) are
+ *     always-exposed for every profile and are deliberately NOT in this set.
+ *     ReactToMessage (plan 490 P1) will register always-exposed instead,
+ *     mirroring grok's SAND_FORCED_STATIC placement — also not in this set.
  *
  * Deny always wins: a bot that explicitly denies one of these tools in
  * `[agents.<id>.tools]` keeps the deny — ToolFilter applies after this
@@ -39,6 +43,8 @@ export const BOT_TOOLSET: readonly string[] = [
   'create_agent',
   'update_agent',
   'image_generate',
+  'manage_routine',
+  'post_to_room',
 ];
 
 /**

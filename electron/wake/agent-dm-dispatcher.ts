@@ -56,22 +56,32 @@ export interface BotSessionSpec {
  */
 export const defaultBotSessionCreator: BotSessionSpec = {
   createIfMissing(sessionId, agentId) {
-    const { sessions } = getCoreStores()
-    if (sessions.get(sessionId)) return
-    sessions.create({
-      id: sessionId,
-      // The LLM provider/model for a wake run is resolved at request time by
-      // wake-run.ts (same as cron); the row only needs the bot identity.
-      title: agentId,
-      status: 'active',
-      mode: 'chat',
-      permissionMode: 'auto',
-      agentType: 'bot',
-      agentName: agentId,
-      agentProfileId: agentId,
-      extensions: { source: 'bot' },
-    })
+    createBotSessionIfMissing(sessionId, agentId)
   },
+}
+
+/**
+ * P2.3b — idempotently ensure the bot's persistent session row
+ * (`bot:<agentId>`) exists. Shared by the DM dispatch path and the
+ * automation Scheduler's routine fires (both POST hidden turns to that
+ * session via the wake bus).
+ */
+export function createBotSessionIfMissing(sessionId: string, agentId: string): void {
+  const { sessions } = getCoreStores()
+  if (sessions.get(sessionId)) return
+  sessions.create({
+    id: sessionId,
+    // The LLM provider/model for a wake run is resolved at request time by
+    // wake-run.ts (same as cron); the row only needs the bot identity.
+    title: agentId,
+    status: 'active',
+    mode: 'chat',
+    permissionMode: 'auto',
+    agentType: 'bot',
+    agentName: agentId,
+    agentProfileId: agentId,
+    extensions: { source: 'bot' },
+  })
 }
 
 /** Test seam — same pattern as wake-dispatcher's `_setWakeDispatcherDeps`. */

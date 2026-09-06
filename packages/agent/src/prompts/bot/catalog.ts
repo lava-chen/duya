@@ -44,6 +44,7 @@ import { renderBotIdentity } from './identity.js'
 import { renderBotRoster } from './roster.js'
 import { renderBotCommsRules } from './commsRules.js'
 import { renderBotChannels } from './channels.js'
+import { renderBotAutomations } from './automations.js'
 import {
   BOT_MEMORY_OWN_SECTION,
   BOT_MEMORY_USAGE_SECTION,
@@ -93,9 +94,10 @@ export const BOT_MEMORY_PROJECT_DEF = BOT_MEMORY_PROJECT_SECTION
 
 export const BOT_AUTOMATIONS_SECTION: BotSectionDef = {
   name: 'botAutomations',
-  description: 'Scheduled tasks / workflows for this bot (405/476).',
-  budgetChars: 1200,
-  compute: pending,
+  description:
+    'Routines bound to this bot (cronjob.toml agent binding, 476 P2.3b): wake-cue conduct + current inventory with ids. Renderer reads the cron file directly.',
+  budgetChars: 2800,
+  compute: renderBotAutomations,
 }
 
 export const BOT_CHANNELS_SECTION: BotSectionDef = {

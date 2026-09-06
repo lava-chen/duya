@@ -52,6 +52,8 @@ import { maybeAutoReturnDmResult, runUsedSendToAgent } from './agent-dm-return'
 import { reviveForInbound } from './channels'
 import { parseAgentIdFromBotSession } from './bot-session-id'
 import { interruptCronSession } from '../automation/agent-run'
+import { getAutomationScheduler } from '../automation/Scheduler'
+import { buildRoutineWakePrompt } from '../automation/routine-wake'
 import { getLogger, LogComponent } from '../logging/logger'
 
 export interface WakeDispatcherDeps {
@@ -65,6 +67,13 @@ export interface WakeDispatcherDeps {
    * which case preempting wakes fall back to parking.
    */
   interruptRun?(sessionId: string): void
+  /**
+   * P2.3b — resolve the model-facing prompt for an automation fire. Looked
+   * up at DISPATCH time (not enqueue time) so a routine that was edited or
+   * disabled while queued wakes with its current definition. Return null
+   * (or omit the dep) to skip the fire silently.
+   */
+  resolveRoutinePrompt?(payload: Extract<import('../../packages/agent/src/wake/types').WakePayload, { kind: 'automation' }>): string | null
 }
 
 /** Per-run options resolved by the dispatcher (477 P3.1; see wake-run.ts). */
@@ -115,6 +124,19 @@ function currentDeps(): WakeDispatcherDeps {
       },
       runWake: (sessionId, prompt, opts) => runWakePromptInExistingSession(sessionId, prompt, opts),
       interruptRun: (sessionId) => interruptCronSession(sessionId),
+      resolveRoutinePrompt: (payload) => {
+        // P2.3b default: resolve the routine from cronjob.toml at dispatch
+        // time. Deleted jobs / jobs unbound from an agent skip silently.
+        try {
+          const scheduler = getAutomationScheduler()
+          if (!scheduler) return null
+          const job = scheduler.getCron(payload.jobKey)
+          if (!job || !job.enabled || !job.agent) return null
+          return buildRoutineWakePrompt({ job, trigger: payload.trigger ?? 'schedule' })
+        } catch {
+          return null
+        }
+      },
     }
   }
   return activeDeps
@@ -293,6 +315,49 @@ export function enqueueInboundWake(
  */
 export function notifySessionIdle(sessionId: string): void {
   kick(sessionId)
+}
+
+/**
+ * P2.3b — enqueue one routine fire for a bot's resident session
+ * (`bot:<agentId>`, background lane). Called by the automation Scheduler
+ * for agent-bound cron fires (schedule + manual run-now) and, later, by
+ * the listener hub for event fires.
+ *
+ * Dedupe id is `auto:<jobKey>:<fireKey>` with a fresh fireKey per fire —
+ * every scheduled fire is a distinct item; the queue only collapses
+ * restart-rearm replays (same jobKey, fireKey unknown → 'rearm').
+ *
+ * The prompt is NOT carried here: the dispatcher resolves it from
+ * cronjob.toml at dispatch time (see `resolveRoutinePrompt`), so a queued
+ * fire wakes with the routine's current definition.
+ */
+export function enqueueAutomationWake(opts: {
+  jobKey: string
+  fireKey: string
+  name?: string
+  targetSessionId: string
+  trigger?: 'schedule' | 'manual' | 'event'
+  /** All completed items of this fire were quiet (476 §2.3 quiet work). */
+  quiet?: boolean
+}): 'added' | 'merged' | 'deduped' {
+  const now = Date.now()
+  const trigger = opts.trigger ?? 'schedule'
+  return enqueueWakeItemForSession(opts.targetSessionId, {
+    id: `auto:${opts.jobKey}:${opts.fireKey}`,
+    source: 'automation.fire',
+    lane: 'background',
+    agentId: opts.targetSessionId,
+    enqueuedAtMs: now,
+    ...(opts.quiet ? { quietOrigin: { automation: { id: opts.jobKey, name: opts.name ?? '' } } } : {}),
+    payload: {
+      kind: 'automation',
+      jobKey: opts.jobKey,
+      fireKey: opts.fireKey,
+      trigger,
+      ...(opts.name ? { name: opts.name } : {}),
+      ...(opts.quiet ? { quiet: true } : {}),
+    },
+  })
 }
 
 /** Drop every queued wake for a session (agent deleted / session reset). */
@@ -554,9 +619,16 @@ function promptForItem(item: WakeItem): string {
         clientMsgId: item.payload.clientMsgId ?? item.id,
       })
     }
+    case 'automation': {
+      // P2.3b: the prompt is resolved at dispatch time via the injected
+      // resolver (default: cronjob.toml lookup + buildRoutineWakePrompt).
+      // Null/missing → skip silently; the scheduler already claimed the
+      // fire, so a silent skip only loses ONE fire, never the schedule.
+      const payload = item.payload
+      return currentDeps().resolveRoutinePrompt?.(payload) ?? ''
+    }
     default:
-      // automation (P2.3b) is wired by a later phase; skipping is safe —
-      // the source still persists its own state.
+      // Unknown kinds skip silently — the source still persists its own state.
       return ''
   }
 }

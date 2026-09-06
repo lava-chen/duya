@@ -48,11 +48,13 @@ import { toolInvokeTool } from './ToolInvokeTool/ToolInvokeTool.js';
 import { updateStateTool } from './UpdateStateTool/UpdateStateTool.js';
 import { sendMessageTool } from './SendMessageTool/index.js';
 import { sendToAgentTool } from './SendToAgentTool/index.js';
+import { postToRoomTool } from './PostToRoomTool/index.js';
 import { reactToMessageTool } from './ReactToMessageTool/index.js';
 import {
   createAgentTool,
   updateAgentTool,
 } from './AgentManagementTool/index.js';
+import { manageRoutineTool } from './ManageRoutineTool/index.js';
 
 /**
  * BashTool instance
@@ -324,6 +326,13 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
   // surface it via the BOT_TOOLSET exact-name promotion (plan 496).
   registry.register(sendToAgentTool.toTool(), sendToAgentTool, { exposeMode: 'discoverable' });
 
+  // Plan 478 P2.1: post_to_room — a member's only voice into a shared room
+  // (grok group SendMessage parity). The authored entry lands directly in the
+  // room transcript session (`room:<roomId>`); the main process hooks the
+  // append for room sessions and drives the round-robin orchestrator.
+  // Discoverable: surfaced via the BOT_TOOLSET exact-name promotion.
+  registry.register(postToRoomTool.toTool(), postToRoomTool, { exposeMode: 'discoverable' });
+
   // Plan 492 P4: create_agent / update_agent — bot self-management (grok
   // sand-agent-management-tools parity). Persistence goes through the
   // db-bridge config:agents:create|update cases; the main process owns the
@@ -331,6 +340,13 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
   // BOT_TOOLSET; main-session '*' profiles stay behind tool_search.
   registry.register(createAgentTool.toTool(), createAgentTool, { exposeMode: 'discoverable' });
   registry.register(updateAgentTool.toTool(), updateAgentTool, { exposeMode: 'discoverable' });
+
+  // Plan 476 P2.3b: manage_routine — bot routine self-management (grok
+  // update_state target "routine" parity). Persistence goes through the
+  // db-bridge automation:cron:* cases; the tool enforces bot ownership
+  // agent-side (bridge has no session context). Discoverable: bot profiles
+  // surface it via BOT_TOOLSET; main sessions cannot own routines.
+  registry.register(manageRoutineTool.toTool(), manageRoutineTool, { exposeMode: 'discoverable' });
 
   // Plan 490 P1: ReactToMessage — emoji tapback on a chat message (grok
   // sand-reaction-tool parity). Always-exposed (grok SAND_FORCED_STATIC
@@ -378,6 +394,7 @@ export { updateStateTool, UpdateStateTool, setMemoryTierBridge } from './UpdateS
 export { UPDATE_STATE_TOOL_NAME } from './UpdateStateTool/index.js';
 export { sendMessageTool, SendMessageTool, SEND_MESSAGE_TOOL_NAME } from './SendMessageTool/index.js';
 export { sendToAgentTool, SendToAgentTool, SEND_TO_AGENT_TOOL_NAME } from './SendToAgentTool/index.js';
+export { postToRoomTool, PostToRoomTool, POST_TO_ROOM_TOOL_NAME } from './PostToRoomTool/index.js';
 export { reactToMessageTool, ReactToMessageTool, REACT_TO_MESSAGE_TOOL_NAME, resolveReactToMessage } from './ReactToMessageTool/index.js';
 export {
   createAgentTool,
@@ -387,5 +404,11 @@ export {
   CREATE_AGENT_TOOL_NAME,
   UPDATE_AGENT_TOOL_NAME,
 } from './AgentManagementTool/index.js';
+export {
+  manageRoutineTool,
+  ManageRoutineTool,
+  MANAGE_ROUTINE_TOOL_NAME,
+  MAX_ROUTINES_PER_BOT,
+} from './ManageRoutineTool/index.js';
 
 
