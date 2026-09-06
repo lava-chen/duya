@@ -1002,11 +1002,16 @@ export function ChatView({
       return;
     }
     resumeTriggeredRef.current = request.provider;
+    // Plan 503: a bot-initiated connect uses its own resume copy — there
+    // is no failed call to re-issue, the model should continue where it
+    // left off after the new connection came online.
     void handleSend(
-      t('connectorAuth.resumeMessage', {
-        provider: request.provider,
-        tool: request.toolName ?? '',
-      }),
+      request.variant === 'connect'
+        ? t('connectorAuth.connectResumeMessage', { provider: request.provider })
+        : t('connectorAuth.resumeMessage', {
+            provider: request.provider,
+            tool: request.toolName ?? '',
+          }),
     );
   }, [sessionId, handleSend, t]);
   // Plan 498: main-process completion broadcast — covers a re-authorization

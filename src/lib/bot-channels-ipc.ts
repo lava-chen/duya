@@ -14,6 +14,7 @@ export interface BotChannelManifest {
   credentialLabel: string;
   availability: 'available' | 'coming-soon';
   connectGuide?: string;
+  credentialFields?: Array<{ field: string; label: string; secret: boolean; required?: boolean }>;
 }
 
 export interface BotChannelConnection {
@@ -56,4 +57,28 @@ export async function connectBotChannel(
 export async function disconnectBotChannel(agentId: string, platform: string): Promise<void> {
   const res = await api().disconnect(agentId, platform);
   if (!res.ok) throw new Error(res.error ?? 'disconnect_failed');
+}
+
+/** Begin a QR connect flow (feishu/weixin): returns a sessionId + QR data URL. */
+export async function beginBotChannelQr(
+  agentId: string,
+  platform: string,
+  label?: string,
+): Promise<{ sessionId: string; qrImage: string }> {
+  const res = await api().qrBegin(agentId, platform, label ? { label } : undefined);
+  if (!res.ok) throw new Error(res.error ?? 'qr_begin_failed');
+  if (!res.sessionId || !res.qrImage) throw new Error('qr_begin_failed');
+  return { sessionId: res.sessionId, qrImage: res.qrImage };
+}
+
+/** Poll a QR session. Returns "bound" once the bot is connected. */
+export async function pollBotChannelQr(sessionId: string): Promise<{ status: string }> {
+  const res = await api().qrPoll(sessionId);
+  if (!res.ok) throw new Error(res.error ?? 'qr_poll_failed');
+  return { status: res.status ?? 'waiting' };
+}
+
+/** Cancel an in-flight QR session. */
+export async function cancelBotChannelQr(sessionId: string): Promise<void> {
+  await api().qrCancel(sessionId);
 }

@@ -127,4 +127,24 @@ describe('ConnectorAuthRequiredCard (Plan 498)', () => {
     });
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
+
+  it('renders the plan 502 connect variant copy for a bot-initiated connect', async () => {
+    connectMock.mockResolvedValue({ success: true, data: { id: 'conn-2' } });
+    const { onRetry } = renderCard({
+      request: { provider: 'google', toolName: 'connect_app', variant: 'connect' },
+    });
+
+    expect(screen.getByText('connectorAuth.connectTitle')).toBeInTheDocument();
+    expect(screen.getByText('connectorAuth.connectBody:{"provider":"google"}'))
+      .toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'connectorAuth.authorize' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'connectorAuth.authorize' }));
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'connectorAuth.connected:{"provider":"google"}',
+      );
+    });
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
 });

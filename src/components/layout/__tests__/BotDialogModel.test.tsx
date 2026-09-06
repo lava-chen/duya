@@ -7,7 +7,8 @@ vi.mock('@/hooks/useTranslation', () => ({
   useTranslation: () => ({ t: (k: string) => k }),
 }));
 
-vi.mock('@/components/icons', () => ({
+vi.mock('@/components/icons', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/components/icons')>()),
   XIcon: () => null,
 }));
 
@@ -51,13 +52,28 @@ const contact: BotContact = {
   title: '',
   description: '',
   model: 'glm-4',
+  provider: 'zhipu',
   avatarColor: 'blue',
   boundThreadId: 'bot:test1:abc',
   lastActivity: 0,
 };
 
-function modelSelect(): HTMLSelectElement {
-  return screen.getByRole('combobox') as HTMLSelectElement;
+/**
+ * Open the model menu and pick a model row. The selector opens in two levels:
+ * the root menu lists providers, clicking one opens the model flyout.
+ */
+async function pickModel(rawModel: string, providerName: string) {
+  // The trigger shows the clear option label while nothing is picked.
+  const trigger = await waitFor(() => {
+    const el = screen.getByText('bot.create.modelDefault').closest('button');
+    expect(el).not.toBeNull();
+    expect((el as HTMLButtonElement).disabled).toBe(false);
+    return el as HTMLButtonElement;
+  });
+  fireEvent.click(trigger);
+  // Root menu → provider row → flyout with models.
+  fireEvent.click(await screen.findByText(providerName));
+  fireEvent.click(await screen.findByText(rawModel));
 }
 
 beforeEach(() => {
@@ -67,22 +83,22 @@ beforeEach(() => {
 });
 
 describe('CreateBotDialog model selection', () => {
-  it('renders the provider option with the default option', async () => {
+  it('renders the model field with the default option and the provider menu', async () => {
     render(
-      <CreateBotDialog isOpen onCancel={() => {}} onCreated={() => {}} existingIds={[]} />,
+      <CreateBotDialog isOpen onCancel={() => {}} onCreated={() => {}} />,
     );
     expect(screen.getByText('bot.create.model')).toBeDefined();
-    expect(screen.getByText('bot.create.modelDefault')).toBeDefined();
-    expect(await screen.findByText('glm-4')).toBeDefined();
+    // While providers load the trigger shows a spinner; the default label
+    // appears once loading settles.
+    await screen.findByText('bot.create.modelDefault');
+    await pickModel('glm-4', 'Zhipu');
   });
 
-  it('passes the selected raw model to createConfigAgent', async () => {
+  it('passes the picked raw model + provider to createConfigAgent', async () => {
     render(
-      <CreateBotDialog isOpen onCancel={() => {}} onCreated={() => {}} existingIds={[]} />,
+      <CreateBotDialog isOpen onCancel={() => {}} onCreated={() => {}} />,
     );
-    await screen.findByText('glm-4');
-    await waitFor(() => expect(modelSelect().disabled).toBe(false));
-    fireEvent.change(modelSelect(), { target: { value: 'glm-4' } });
+    await pickModel('glm-4', 'Zhipu');
     fireEvent.change(screen.getByPlaceholderText('bot.create.namePlaceholder'), {
       target: { value: 'My Bot' },
     });
@@ -90,16 +106,19 @@ describe('CreateBotDialog model selection', () => {
     await waitFor(() =>
       expect(createAgent).toHaveBeenCalledWith(
         'my-bot',
-        expect.objectContaining({ model: 'glm-4' }),
+        expect.objectContaining({ model: 'glm-4', provider: 'zhipu' }),
       ),
     );
   });
 
   it('leaves model unset when nothing is picked', async () => {
     render(
-      <CreateBotDialog isOpen onCancel={() => {}} onCreated={() => {}} existingIds={[]} />,
+      <CreateBotDialog isOpen onCancel={() => {}} onCreated={() => {}} />,
     );
-    await screen.findByText('glm-4');
+    await waitFor(() => {
+      const el = screen.getByText('bot.create.modelDefault').closest('button');
+      expect((el as HTMLButtonElement | null)?.disabled).toBe(false);
+    });
     fireEvent.change(screen.getByPlaceholderText('bot.create.namePlaceholder'), {
       target: { value: 'My Bot' },
     });
@@ -114,36 +133,52 @@ describe('CreateBotDialog model selection', () => {
 });
 
 describe('EditBotDialog model selection', () => {
-  it('prefills the configured model and saves it via updateConfigAgent', async () => {
+  it('prefills the configured model and saves it with its provider', async () => {
     render(
       <EditBotDialog isOpen contact={contact} onCancel={() => {}} onSaved={() => {}} />,
     );
-    await screen.findByText('glm-4');
-    const select = modelSelect();
-    await waitFor(() => expect(select.value).toBe('glm-4'));
+    await waitFor(() => expect(screen.getByText('glm-4')).toBeDefined());
     fireEvent.click(screen.getByText('bot.edit.save'));
     await waitFor(() => {
       expect(updateIdentity).toHaveBeenCalledTimes(1);
       expect(updateAgent).toHaveBeenCalledWith(
         'test1',
-        expect.objectContaining({ model: 'glm-4' }),
+        expect.objectContaining({ model: 'glm-4', provider: 'zhipu' }),
       );
     });
   });
 
   it('preserves a configured model not exposed by any provider', async () => {
-    const stale = { ...contact, model: 'legacy-model' };
+    const stale = { ...contact, model: 'legacy-model', provider: undefined };
     render(
       <EditBotDialog isOpen contact={stale} onCancel={() => {}} onSaved={() => {}} />,
     );
-    await screen.findByText('glm-4');
-    const select = modelSelect();
-    await waitFor(() => expect(select.value).toBe('legacy-model'));
+    await waitFor(() => expect(screen.getByText('legacy-model')).toBeDefined());
     fireEvent.click(screen.getByText('bot.edit.save'));
     await waitFor(() =>
       expect(updateAgent).toHaveBeenCalledWith(
         'test1',
         expect.objectContaining({ model: 'legacy-model' }),
+      ),
+    );
+  });
+
+  it('clearing the selection saves model undefined', async () => {
+    render(
+      <EditBotDialog isOpen contact={contact} onCancel={() => {}} onSaved={() => {}} />,
+    );
+    // Wait for the model groups to load, then open the menu and clear.
+    await waitFor(() => expect(screen.getByText('glm-4')).toBeDefined());
+    fireEvent.click(screen.getByText('glm-4').closest('button') as HTMLButtonElement);
+    // Both the trigger and the clear row carry the label; the clear row is
+    // the one rendered inside the portal menu (role=option).
+    const clearRow = await screen.findByRole('option', { name: 'bot.create.modelDefault' });
+    fireEvent.click(clearRow);
+    fireEvent.click(screen.getByText('bot.edit.save'));
+    await waitFor(() =>
+      expect(updateAgent).toHaveBeenCalledWith(
+        'test1',
+        expect.objectContaining({ model: undefined, provider: undefined }),
       ),
     );
   });

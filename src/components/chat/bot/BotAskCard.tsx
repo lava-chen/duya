@@ -47,6 +47,8 @@ export interface BotAskCardProps {
   /** Submit answers via the permission channel ('allow' + updatedInput). */
   onSubmit: (updatedInput: Record<string, unknown>) => void;
   t: (key: TranslationKey, params?: Record<string, string | number>) => string;
+  /** Extra root class — the bubble-group seam modifiers ride in here. */
+  className?: string;
 }
 
 /** Letter badge for an option row (A/B/C/…, rakazo ChoiceCard style). */
@@ -59,7 +61,7 @@ function splitAnswer(answer: string): string[] {
   return answer.split(' || ').filter(Boolean);
 }
 
-export function BotAskCard({ request, onSubmit, t }: BotAskCardProps) {
+export function BotAskCard({ request, onSubmit, t, className }: BotAskCardProps) {
   const questions = useMemo<AskQuestion[]>(() => {
     const raw = (request.toolInput as { questions?: unknown } | undefined)?.questions;
     if (!Array.isArray(raw)) return [];
@@ -159,7 +161,7 @@ export function BotAskCard({ request, onSubmit, t }: BotAskCardProps) {
   if (questions.length === 0) return null;
 
   return (
-    <div className="bot-ask-card" data-permission-id={request.id}>
+    <div className={`bot-ask-card${className ? ` ${className}` : ''}`} data-permission-id={request.id}>
       <div className="bot-ask-card__head">
         <span className="bot-ask-card__pill">
           {t('bot.ask.cardTitle', { count: questions.length })}

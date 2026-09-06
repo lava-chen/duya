@@ -46,7 +46,7 @@ export function RoomContactListItem({
       }}
     >
       <span className="bot-contact-avatar-wrap">
-        <RoomGroupAvatar room={room} size={26} />
+        <RoomGroupAvatar room={room} size={28} />
       </span>
       <span className="bot-contact-body">
         <span className="bot-contact-name">{room.name}</span>
@@ -79,7 +79,7 @@ function RoomGroupAvatar({ room, size }: { room: RoomContact; size: number }) {
   if (members.length <= 1) {
     return (
       <span
-        className="flex items-center justify-center rounded-full bg-[var(--bg-hover)] text-[13px] font-semibold text-[var(--text-muted)]"
+        className="flex items-center justify-center rounded-full bg-[var(--surface-hover)] text-[13px] font-semibold text-[var(--text-muted)]"
         style={{ width: size, height: size }}
       >
         #
@@ -104,7 +104,7 @@ function RoomGroupAvatar({ room, size }: { room: RoomContact; size: number }) {
       )}
       {members.length > 2 && (
         <span
-          className="absolute bottom-0 right-0 z-10 flex items-center justify-center rounded-full bg-[var(--bg-hover)] text-[9px] font-semibold text-[var(--text-muted)]"
+          className="absolute bottom-0 right-0 z-10 flex items-center justify-center rounded-full bg-[var(--surface-hover)] text-[9px] font-semibold text-[var(--text-muted)]"
           style={{ width: mini, height: mini, boxShadow: "0 0 0 1.5px var(--bg-canvas, #fff)" }}
         >
           +{members.length - 2}

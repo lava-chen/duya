@@ -53,6 +53,7 @@ export function AgentDmPairView({
   selfName,
   selfAvatarUrl,
   selfAvatarColor,
+  selfAvatarEmoji,
   peerId,
   peerName,
   onBack,
@@ -152,6 +153,7 @@ export function AgentDmPairView({
                 messageId={entry.key}
                 timestamp={entry.timestamp}
                 text={entry.text}
+                markdown
               />
             );
             return showDay ? (

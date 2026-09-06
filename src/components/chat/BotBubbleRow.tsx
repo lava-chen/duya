@@ -43,6 +43,7 @@ import { BotCodeBlock } from './BotCodeBlock';
 import { BotTypingIndicator } from './BotTypingIndicator';
 import type { MessageDelivery } from '@/types/message';
 import type { BotSessionPhase } from './bot/use-bot-session-phase';
+import { useTheme } from '@/hooks/useTheme';
 
 interface BotBubbleRowProps {
   /** 'user' aligns right, 'assistant' aligns left */
@@ -77,6 +78,9 @@ interface BotBubbleRowProps {
   groupPosition?: 'start' | 'middle' | 'end' | 'single';
   /** Agent names whose `@Name` mentions render as chips (grok parity) */
   mentionNames?: string[];
+  /** Force Markdown rendering even for user-role bubbles (read-only bot pair
+   *  views, where both sides are agents). */
+  markdown?: boolean;
 }
 
 export function BotBubbleRow({
@@ -95,8 +99,22 @@ export function BotBubbleRow({
   onJumpToReply,
   groupPosition,
   mentionNames,
+  markdown,
 }: BotBubbleRowProps) {
   const isUser = role === 'user';
+  const { theme } = useTheme();
+
+  // Markdown theme must follow each BUBBLE background, not the app: the
+  // assistant bubble sits on --surface-solid (dark in dark theme, light in
+  // light theme), while the user / contrast bubble is ALWAYS the inverse tone.
+  // Tailwind's `dark:` variant follows the OS (prefers-color-scheme), NOT the
+  // app's data-theme that drives these bubbles — so flip prose-invert from the
+  // app theme directly instead of relying on `dark:prose-invert`.
+  const dark = theme === 'dark';
+  // Contrast (user) bubble is inverse of the app: invert only in the LIGHT app
+  // theme; assistant bubble matches the app: invert in the DARK app theme.
+  const invert = isUser ? !dark : dark;
+  const bubbleMarkdownClass = `prose prose-sm max-w-none bot-bubble-markdown${invert ? ' prose-invert' : ''}`;
 
   // Telegram-style grouping: rows after the group start ride the tight
   // 6px lane; the bubble's facing corners shrink (role-mirrored in CSS).
@@ -124,15 +142,14 @@ export function BotBubbleRow({
     }
     if (text !== undefined) {
       // Session-chat-view parity (MessageItem): user messages render as
-      // plain pre-wrap text (the bubble supplies white-space), assistant
+      // plain pre-wrap text (the bubble supplies white-space) unless the
+      // read-only pair view opts into Markdown for both sides, assistant
       // messages go through the shared MarkdownRenderer — same renderer as
       // the workspace transcript (react-markdown + GFM + KaTeX + tables).
-      return isUser ? (
+      return isUser && !markdown ? (
         renderTextWithMentions(text, mentionNames ?? [])
       ) : (
-        <MarkdownRenderer className="prose prose-sm dark:prose-invert max-w-none bot-bubble-markdown">
-          {text}
-        </MarkdownRenderer>
+        <MarkdownRenderer className={bubbleMarkdownClass}>{text}</MarkdownRenderer>
       );
     }
     return null;

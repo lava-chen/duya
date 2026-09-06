@@ -81,6 +81,26 @@ describe('BotBubbleRow', () => {
     expect(container.querySelector('[aria-label="Copy"]')).not.toBeNull();
   });
 
+  it('renders markdown for a user-role bubble when markdown is on (bot-pair view)', () => {
+    // The read-only two-bot pair view forces markdown on BOTH sides; the
+    // sender (role "user") must render `**x**` as bold, not literal asterisks.
+    const { container } = render(
+      <BotBubbleRow role="user" text="**加粗** 标题" markdown />,
+    );
+    expect(container.querySelector('.bot-bubble-markdown')).not.toBeNull();
+    expect(container.querySelector('.bot-bubble-markdown strong')?.textContent).toBe(
+      '加粗',
+    );
+  });
+
+  it('keeps a user-role bubble as plain text when markdown is off', () => {
+    const { container } = render(
+      <BotBubbleRow role="user" text="**加粗** 标题" />,
+    );
+    expect(container.querySelector('.bot-bubble-markdown')).toBeNull();
+    expect(container.textContent).toContain('**加粗**');
+  });
+
   it('persists a thumbs-up to localStorage and shows the badge below the bubble', () => {
     const { container } = render(
       <BotBubbleRow role="assistant" text="可反应" messageId="b2" />,

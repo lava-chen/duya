@@ -4,13 +4,16 @@
  * BotComposer.tsx — Telegram-style chat input for BotDirectChatView.
  *
  * Visual consistency with the Session ChatView (MessageInput):
- *   - Rounded shell with a clean input row: [plus] [textarea] [model] [send/stop]
+ *   - Rounded shell with a clean input row: [plus] [textarea] [send/stop]
  *   - Auto-expanding textarea (mirror-div technique, max 120px)
  *   - Send enabled only when there is non-whitespace text
  *   - Stop (■) shown while the bot is streaming
  *
+ * The model is NOT picked here: a bot's model/provider is configured once in
+ * the bot settings (create/edit dialog + BotSettingsPanel) and the view
+ * injects it into the send payload.
+ *
  * Reuses the session composer's components (2026-09-05):
- *   - ModelProviderSelector — cascading provider/model/effort picker
  *   - SlashCommandPopover + useSlashCommands — the `+` button opens the same
  *     `@` context popup as the session (添加附件 + modes). `/`-typed command
  *     mode is intentionally NOT wired here: a 1:1 bot chat has no session
@@ -24,24 +27,15 @@
  *   onStop      — called when user clicks Stop
  */
 
-import React, { useRef, useCallback, useState, useMemo, useEffect } from 'react';
+import React, { useRef, useCallback, useState } from 'react';
 import { ArrowUpIcon, PlusIcon, XIcon } from '@/components/icons';
 import { IconButton } from '@/components/ui/IconButton';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useBotDraft } from './bot/draft';
 import { useAttachments } from '@/hooks/useAttachments';
-import {
-  ModelProviderSelector,
-  type ModelOption,
-  type ProviderModelGroup,
-} from './ModelProviderSelector';
 import { SlashCommandPopover } from './SlashCommandPopover';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { filterItems } from '@/lib/message-input-logic';
-import { listProvidersIPC, type Provider } from '@/lib/ipc-client';
-import { isKeylessLocalProvider } from '@/lib/providers';
-import { modelCapabilityService } from '@/lib/providers/models/ModelCapabilityService';
-import { getEffortOptionsForCapability, getEffortOptionsForModel } from '@duya/ai';
 import type { PopoverItem, PopoverMode } from '@/types/slash-command';
 import type { ModeModifierId } from '@/types/mode-id';
 import { MODE_KIND, toggleModeInSet, isModeExcludedByActive } from '@/types/mode-id';
@@ -49,11 +43,10 @@ import type { FileAttachment } from '@/types/message';
 
 export interface BotComposerSendPayload {
   text: string;
-  /** Raw model id (no `[provider] ` prefix). Absent → server uses the bot default. */
+  /** Raw model id (no `[provider] ` prefix). Injected by the view from the bot's settings; absent → default provider model. */
   model?: string;
+  /** Provider store id the model belongs to. Injected by the view. */
   providerId?: string;
-  /** Anthropic thinking effort level (low/medium/high/max). */
-  effort?: string;
   /** Message-level mode (plan-task / research / ...). */
   mode?: string;
   /** User-attached files (files/images). */
@@ -70,19 +63,13 @@ interface BotComposerProps {
   onSend: (payload: BotComposerSendPayload) => void;
   onStop?: () => void;
   placeholder?: string;
-  /** Persisted per-bot model preference (raw model id, no `[provider] ` prefix). */
-  initialModel?: string;
-  initialProviderId?: string;
-  /** Persisted per-bot thinking-effort level. */
-  initialEffort?: string;
-  /** Reports a user model pick (raw model id) so the parent can persist it. */
-  onModelChange?: (model: string, providerId?: string) => void;
-  /** Reports a user effort pick so the parent can persist it. */
-  onEffortChange?: (effort: string | undefined) => void;
   /** Active reply target — renders the "Replying to …" chip above the input. */
   replyPreview?: { id: string; text: string } | null;
   /** Cancels the active reply (chip ✕). */
   onClearReply?: () => void;
+  /** Optional slot in the right action group next to the send button (the
+   *  context-usage ring). Self-contained node — the composer only places it. */
+  contextRing?: React.ReactNode;
 }
 
 /**
@@ -106,56 +93,6 @@ function clearMessageModes(prev: Set<ModeModifierId>): Set<ModeModifierId> {
   return next;
 }
 
-/** Inline labels for thinking levels not covered by i18n keys. */
-const EFFORT_LABELS: Partial<Record<string, string>> = {
-  minimal: 'Minimal',
-  xhigh: 'Extra High',
-};
-
-/** Effort options for a model (mirrors MessageInput's useEffortOptions). */
-function effortOptionsFor(
-  t: (key: 'messageInput.effortAuto' | 'messageInput.effortLow' | 'messageInput.effortMedium' | 'messageInput.effortHigh' | 'messageInput.effortMax') => string,
-  modelId?: string,
-  capability?: {
-    supportsReasoning?: boolean;
-    reasoningEffortOptions?: string[];
-  } | null,
-): Array<{ value: string; label: string }> {
-  if (capability) {
-    const capOptions = getEffortOptionsForCapability(capability);
-    if (capOptions) {
-      return capOptions.map((opt) => {
-        const inline = EFFORT_LABELS[opt.level];
-        return { value: opt.value, label: inline || opt.level };
-      });
-    }
-  }
-  if (modelId) {
-    const modelOptions = getEffortOptionsForModel(modelId);
-    if (modelOptions) {
-      return modelOptions.map((opt) => {
-        const inline = EFFORT_LABELS[opt.level];
-        if (inline) return { value: opt.value, label: inline };
-        switch (opt.level) {
-          case 'off': return { value: opt.value, label: t('messageInput.effortAuto') };
-          case 'low': return { value: opt.value, label: t('messageInput.effortLow') };
-          case 'medium': return { value: opt.value, label: t('messageInput.effortMedium') };
-          case 'high': return { value: opt.value, label: t('messageInput.effortHigh') };
-          case 'max': return { value: opt.value, label: t('messageInput.effortMax') };
-          default: return { value: opt.value, label: opt.level };
-        }
-      });
-    }
-  }
-  return [
-    { value: '', label: t('messageInput.effortAuto') },
-    { value: 'low', label: t('messageInput.effortLow') },
-    { value: 'medium', label: t('messageInput.effortMedium') },
-    { value: 'high', label: t('messageInput.effortHigh') },
-    { value: 'max', label: t('messageInput.effortMax') },
-  ];
-}
-
 export function BotComposer({
   botId,
   disabled = false,
@@ -163,13 +100,9 @@ export function BotComposer({
   onSend,
   onStop,
   placeholder,
-  initialModel,
-  initialProviderId,
-  initialEffort,
-  onModelChange,
-  onEffortChange,
   replyPreview,
   onClearReply,
+  contextRing,
 }: BotComposerProps) {
   const { t } = useTranslation();
   // Plan 491 P2.1: Use bot draft hook for persistence per botId
@@ -185,194 +118,6 @@ export function BotComposer({
     remove: removeAttachment,
     clear: clearAttachments,
   } = useAttachments();
-
-  // ---------------------------------------------------------------------------
-  // Model / provider / effort state — mirrors MessageInput's selector wiring.
-  // ---------------------------------------------------------------------------
-  const [selectedModel, setSelectedModel] = useState<string>('');
-  const [selectedEffort, setSelectedEffort] = useState<string | undefined>(initialEffort);
-  const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
-  const [providers, setProviders] = useState<Provider[]>([]);
-  const [hasProvider, setHasProvider] = useState(false);
-  const [modelsLoading, setModelsLoading] = useState(false);
-  // Map prefixed model id (`[Provider] model`) → provider id.
-  const [modelProviderMap, setModelProviderMap] = useState<Map<string, string>>(new Map());
-
-  // Fetch available models from providers API (same source as MessageInput).
-  const fetchModels = useCallback(async () => {
-    setModelsLoading(true);
-    try {
-      const providersList = await listProvidersIPC();
-      if (providersList && providersList.length > 0) {
-        providersList.forEach((p) => {
-          const pAny = p as Provider & Record<string, unknown>;
-          const hasKey = pAny.hasApiKey ?? pAny.has_api_key ?? !!(p.apiKey && p.apiKey.length > 0);
-          if (pAny.hasApiKey === undefined && hasKey) {
-            (p as Provider & { hasApiKey: boolean }).hasApiKey = hasKey;
-          }
-        });
-
-        if (providersList.some(
-          (p) => p.hasApiKey || isKeylessLocalProvider(p.providerType, p.baseUrl),
-        )) {
-          setHasProvider(true);
-        }
-
-        // Collect models from all providers (enabled_models / defaultModel only).
-        const allModels: ModelOption[] = [];
-        const modelIds = new Set<string>();
-        const providerMap = new Map<string, string>();
-
-        for (const provider of providersList) {
-          if (!provider.hasApiKey && !isKeylessLocalProvider(provider.providerType, provider.baseUrl)) {
-            continue;
-          }
-          let enabledModels: string[] = [];
-          try {
-            const opts = JSON.parse(provider.options || '{}');
-            if (opts.enabled_models && Array.isArray(opts.enabled_models) && opts.enabled_models.length > 0) {
-              enabledModels = opts.enabled_models;
-            } else if (typeof opts.defaultModel === 'string' && opts.defaultModel.length > 0) {
-              enabledModels = [opts.defaultModel];
-            }
-          } catch { /* ignore */ }
-
-          for (const id of enabledModels) {
-            const cleanId = id.startsWith('"') && id.endsWith('"') ? id.slice(1, -1) : id;
-            const providerName = provider.name || provider.providerType || provider.id;
-            const prefixedId = `[${providerName}] ${cleanId}`;
-            if (modelIds.has(prefixedId)) continue;
-            modelIds.add(prefixedId);
-            const cap = modelCapabilityService.getModelCapability(provider.id, cleanId);
-            allModels.push({
-              id: prefixedId,
-              display_name: cleanId,
-              ...(cap?.contextWindow && cap.contextWindow > 0
-                ? { context_length: cap.contextWindow }
-                : {}),
-              ...(cap?.supportsVision !== undefined
-                ? { supportsVision: cap.supportsVision }
-                : {}),
-              ...(cap?.supportsToolUse !== undefined
-                ? { supportsToolUse: cap.supportsToolUse }
-                : {}),
-              ...(cap?.supportsReasoning !== undefined
-                ? { supportsReasoning: cap.supportsReasoning }
-                : {}),
-              ...(cap?.reasoningEffortOptions !== undefined && cap.reasoningEffortOptions.length > 0
-                ? { reasoningEffortOptions: cap.reasoningEffortOptions }
-                : {}),
-              ...(cap?.isLoaded === true ? { isLoaded: true } : {}),
-            });
-            providerMap.set(prefixedId, provider.id);
-          }
-        }
-
-        setAvailableModels(allModels);
-        setProviders(
-          providersList.filter(
-            (p) => p.hasApiKey || isKeylessLocalProvider(p.providerType, p.baseUrl),
-          ),
-        );
-        setModelProviderMap(providerMap);
-        setModelsLoading(false);
-        return;
-      }
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('[BotComposer] Error fetching providers:', err);
-    }
-    setHasProvider(false);
-    setAvailableModels([]);
-    setModelsLoading(false);
-  }, []);
-
-  // Fetch models on mount + retry + refresh on window focus (mirrors MessageInput).
-  useEffect(() => {
-    fetchModels();
-    const retryTimer = setTimeout(() => {
-      if (!hasProvider) fetchModels();
-    }, 2000);
-    const fallbackTimer = setTimeout(() => {
-      if (!hasProvider) fetchModels();
-    }, 5000);
-    const handleFocus = () => fetchModels();
-    window.addEventListener('focus', handleFocus);
-    return () => {
-      clearTimeout(retryTimer);
-      clearTimeout(fallbackTimer);
-      window.removeEventListener('focus', handleFocus);
-    };
-  }, [fetchModels, hasProvider]);
-
-  // Group models by provider for the multi-level ModelProviderSelector.
-  const providerGroups: ProviderModelGroup[] = useMemo(
-    () =>
-      providers
-        .map((provider) => {
-          const providerName = provider.name || provider.providerType || provider.id;
-          const prefix = `[${providerName}] `;
-          const models = availableModels.filter((m) => m.id.startsWith(prefix));
-          return { id: provider.id, name: providerName, models };
-        })
-        .filter((g) => g.models.length > 0),
-    [providers, availableModels],
-  );
-
-  // Restore the persisted model preference once providers/models are loaded:
-  // rebuild the prefixed id from the stored raw model + provider, and select
-  // it only if the provider still exposes that model (otherwise leave unset).
-  useEffect(() => {
-    if (selectedModel) return;
-    if (!initialModel) return;
-    const provider =
-      providerGroups.find((g) => g.id === initialProviderId) ??
-      providers.find((p) => p.id === initialProviderId);
-    if (!provider) return;
-    const prefixed = `[${provider.name}] ${initialModel}`;
-    if (providerGroups.some((g) => g.models.some((m) => m.id === prefixed))) {
-      setSelectedModel(prefixed);
-    }
-  }, [selectedModel, initialModel, initialProviderId, providerGroups, providers]);
-
-  // Restore the persisted effort once the preference loads (initial prop is
-  // undefined on first render because the parent reads localStorage async).
-  useEffect(() => {
-    if (initialEffort !== undefined && selectedEffort === undefined) {
-      setSelectedEffort(initialEffort);
-    }
-  }, [initialEffort, selectedEffort]);
-
-  // Raw model id (no provider prefix) used to resolve thinking-effort options.
-  const rawSelectedModelId = useMemo(() => {
-    const match = selectedModel.match(/^\[([^\]]+)\]\s*(.+)$/);
-    return match ? match[2] : selectedModel;
-  }, [selectedModel]);
-
-  const selectedModelCapability = useMemo(() => {
-    if (!rawSelectedModelId) return null;
-    const providerId = modelProviderMap.get(selectedModel);
-    if (!providerId) return null;
-    return modelCapabilityService.getModelCapability(providerId, rawSelectedModelId);
-  }, [rawSelectedModelId, selectedModel, modelProviderMap]);
-
-  const modelEffortOptions = useMemo(
-    () => effortOptionsFor(t, rawSelectedModelId, selectedModelCapability),
-    [t, rawSelectedModelId, selectedModelCapability],
-  );
-
-  const handleModelChange = useCallback((modelId: string, providerId?: string) => {
-    setSelectedModel(modelId);
-    const match = modelId.match(/^\[([^\]]+)\]\s*(.+)$/);
-    const rawModel = match ? match[2] : modelId;
-    onModelChange?.(rawModel, providerId ?? modelProviderMap.get(modelId));
-  }, [onModelChange, modelProviderMap]);
-
-  const handleEffortChange = useCallback((value: string | null) => {
-    const effort = value || undefined;
-    setSelectedEffort(effort);
-    onEffortChange?.(effort);
-  }, [onEffortChange]);
 
   // ---------------------------------------------------------------------------
   // Plus-button context popover — reuses the session's SlashCommandPopover.
@@ -454,15 +199,9 @@ export function BotComposer({
   const handleSend = useCallback(() => {
     const text = draft.trim();
     if (!text || disabled || busy) return;
-    const match = selectedModel.match(/^\[([^\]]+)\]\s*(.+)$/);
-    const rawModel = match ? match[2] : selectedModel;
-    const providerId = modelProviderMap.get(selectedModel);
     const mode = pickSendMode(activeModes);
     onSend({
       text,
-      model: rawModel || undefined,
-      providerId,
-      effort: selectedEffort,
       mode,
       files: attachments.length > 0 ? attachments : undefined,
     });
@@ -473,8 +212,7 @@ export function BotComposer({
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     if (mirrorRef.current) mirrorRef.current.textContent = '';
   }, [
-    draft, disabled, busy, onSend, selectedModel, modelProviderMap,
-    selectedEffort, activeModes, attachments, clearDraft, clearAttachments,
+    draft, disabled, busy, onSend, activeModes, attachments, clearDraft, clearAttachments,
   ]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -553,11 +291,12 @@ export function BotComposer({
             searchInputRef={searchInputRef}
             allDisplayedItems={filteredItems}
             // Settings state (stubbed — the context popover for a bot only
-            // surfaces files + modes, not session settings).
-            thinkingEffort={selectedEffort ?? null}
-            onSelectThinkingEffort={handleEffortChange}
-            modelId={rawSelectedModelId}
-            providerId={modelProviderMap.get(selectedModel)}
+            // surfaces files + modes, not session settings; the bot's model
+            // is configured in the bot settings, not per chat).
+            thinkingEffort={null}
+            onSelectThinkingEffort={() => {}}
+            modelId={undefined}
+            providerId={undefined}
             responseStyles={[]}
             selectedStyle={null}
             onSelectStyle={() => {}}
@@ -668,20 +407,7 @@ export function BotComposer({
           </div>
 
           <div className="bot-chat-composer__actions-right">
-            {/* Model / Provider / Effort selector — reuses the session component. */}
-            {hasProvider && providerGroups.length > 0 && (
-              <ModelProviderSelector
-                providerGroups={providerGroups}
-                selectedModelId={selectedModel}
-                onSelectModel={handleModelChange}
-                effortValue={selectedEffort}
-                effortOptions={modelEffortOptions}
-                onSelectEffort={handleEffortChange}
-                disabled={disabled || busy}
-                loading={modelsLoading}
-              />
-            )}
-
+            {contextRing}
             {busy && onStop ? (
               <button
                 type="button"

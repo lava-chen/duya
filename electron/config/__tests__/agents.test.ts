@@ -46,6 +46,22 @@ describe('config agents write module', () => {
     expect(Object.keys(agents)).toHaveLength(1);
   });
 
+  it('upsertConfigAgent persists provider and listBots surfaces it', () => {
+    upsertConfigAgent('foo', { name: 'Foo', model: 'glm-4', provider: 'zhipu' });
+    expect(listConfigAgents()['foo']!.provider).toBe('zhipu');
+    const bot = listBots().find((b) => b.id === 'foo');
+    expect(bot?.model).toBe('glm-4');
+    expect(bot?.provider).toBe('zhipu');
+  });
+
+  it('upsert without provider preserves the binding; an empty string clears it', () => {
+    upsertConfigAgent('foo', { name: 'Foo', model: 'glm-4', provider: 'zhipu' });
+    upsertConfigAgent('foo', { name: 'Foo v2' });
+    expect(listConfigAgents()['foo']!.provider).toBe('zhipu');
+    upsertConfigAgent('foo', { name: 'Foo v3', provider: '' });
+    expect(listConfigAgents()['foo']!.provider).toBeUndefined();
+  });
+
   it('missing name throws', () => {
     expect(() => upsertConfigAgent('bar', {} as Parameters<typeof upsertConfigAgent>[1])).toThrow(/name is required/);
   });
@@ -307,5 +323,47 @@ describe('bot id allocation (collectTakenBotIds / allocateBotId / createConfigAg
     upsertConfigAgent('beta', { name: 'Beta' });
     softDeleteConfigAgent('beta');
     expect(listBots().map((b) => b.id)).toEqual(['alpha']);
+  });
+});
+
+// ── Plan 502: title seeding + single id minting point ──
+
+describe('Plan 502 (title field + id minting alignment)', () => {
+  it('upsertConfigAgent seeds the role title into profile.json', () => {
+    upsertConfigAgent('titled', { name: 'Titled', title: 'Ops steward', description: 'd' });
+    const profile = readBotProfile(getBotProfilePath('titled', dir));
+    expect(profile!.title).toBe('Ops steward');
+    expect(profile!.name).toBe('Titled');
+    // Title is profile.json ONLY — it must not leak into config.toml.
+    expect((listConfigAgents().titled as unknown as Record<string, unknown>).title).toBeUndefined();
+  });
+
+  it('upsertConfigAgent seeds an empty title when none is given', () => {
+    upsertConfigAgent('plain', { name: 'Plain' });
+    expect(readBotProfile(getBotProfilePath('plain', dir))!.title).toBe('');
+  });
+
+  it('updateBotProfileIdentity writes and clears the title', () => {
+    upsertConfigAgent('foo', { name: 'Foo' });
+    updateBotProfileIdentity('foo', { title: 'Night shift' });
+    expect(readBotProfile(getBotProfilePath('foo', dir))!.title).toBe('Night shift');
+    // Absent input.title preserves the existing value; empty string clears.
+    updateBotProfileIdentity('foo', { name: 'Foo renamed' });
+    expect(readBotProfile(getBotProfilePath('foo', dir))!.title).toBe('Night shift');
+    updateBotProfileIdentity('foo', { title: '' });
+    expect(readBotProfile(getBotProfilePath('foo', dir))!.title).toBe('');
+  });
+
+  it('listBots surfaces the title for the roster subtitle', () => {
+    upsertConfigAgent('foo', { name: 'Foo', title: 'Scout' });
+    expect(listBots().find((b) => b.id === 'foo')?.title).toBe('Scout');
+  });
+
+  it('createConfigAgentUnique mints a suffixed id from a non-ASCII name (generic base)', () => {
+    const { id } = createConfigAgentUnique('bot', { name: '研究员' });
+    // slugifyBotIdFromName falls back to the generic `bot` base for
+    // non-ASCII names; allocateBotId suffixes it against the taken set.
+    expect(id).toMatch(/^bot(-[a-z0-9]{6})?$/);
+    expect(id).not.toBe('');
   });
 });

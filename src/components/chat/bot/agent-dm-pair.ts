@@ -64,6 +64,17 @@ function tsOf(row: DmMarkerRowLike): number {
   return row.timestamp ?? row.createdAt ?? 0;
 }
 
+/**
+ * Legacy received rows carry the sender's PERSISTENT SESSION id
+ * (`bot:<agentId>`) as peerId while roster/pair addressing uses the bare
+ * agent id — normalize so contact lookup, chip grouping and the pair-view
+ * session derivation all resolve (a prefixed id rendered the wrong peer and
+ * opened an empty pair view).
+ */
+function normalizePeerId(peerId: string): string {
+  return parseBotSessionAgentId(peerId) ?? peerId;
+}
+
 /** Flatten message content blocks to plain text. */
 export function textFromDmContent(
   content: Message["content"] | Message["displayContent"],
@@ -132,8 +143,8 @@ export function buildAgentDmChipGroups(messages: readonly DmMarkerRowLike[]): Ag
     }
     const meta = message.agentDmMeta as AgentDmCardMeta;
     const sent = meta.direction === "sent";
-    const peerId = meta.peerId;
-    const peerName = meta.peerName || meta.peerId;
+    const peerId = normalizePeerId(meta.peerId);
+    const peerName = meta.peerName || peerId;
     if (!current) {
       current = {
         key: `dm-group-${message.id}`,
@@ -217,7 +228,8 @@ export function buildAgentDmPairMessages(
       if (!isAgentDmMarkerMessage(message)) continue;
       const meta = message.agentDmMeta as AgentDmCardMeta;
       if (meta.direction !== "sent") continue;
-      if (meta.peerId !== peerAgentId && meta.peerId !== selfAgentId) continue;
+      const markerPeerId = normalizePeerId(meta.peerId);
+      if (markerPeerId !== peerAgentId && markerPeerId !== selfAgentId) continue;
       const text = textFromDmMarker(message.content, meta).trim();
       if (!text) continue;
       const key = meta.clientMsgId || message.id;

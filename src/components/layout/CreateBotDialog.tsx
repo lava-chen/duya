@@ -9,14 +9,15 @@
  * Fields:
  *   - template suggestions (tap → fills name + description + color)
  *   - name (required — submit disabled while empty)
+ *   - role title (profile.json subtitle, 485 §2.4)
  *   - description
  *   - avatar color (11 tokens, defaults blue)
  *
- * The id is derived from the name (`deriveBotIdFromName`), never
- * user-authored; the main process re-allocates a collision-free id against
- * disk + tombstones and returns the ACTUAL id, which `onCreated` receives.
- * Submission goes through `config:agents:create`, which
- * seeds the 485 identity layer (profile.json).
+ * The id is minted by the MAIN process (grok agent-session.ts parity: ids
+ * are never user-authored) — an empty id makes `config:agents:create` slug
+ * it from the name and allocate a collision-free id against disk +
+ * tombstones; the ACTUAL id comes back and `onCreated` receives it.
+ * Submission seeds the 485 identity layer (profile.json).
  */
 
 import React, { useEffect, useRef, useState } from "react";
@@ -26,21 +27,22 @@ import { Input } from "@/components/ui/Input";
 import { useTranslation } from "@/hooks/useTranslation";
 import { createConfigAgent } from "@/lib/agent-profile-ipc";
 import { listProvidersIPC } from "@/lib/ipc-client";
-import { buildBotModelGroups } from "@/lib/bot-model-options";
+import {
+  buildBotModelGroups,
+  fromSelectorModelId,
+  toSelectorModelId,
+} from "@/lib/bot-model-options";
 import type { ProviderModelGroup } from "@/components/chat/ModelProviderSelector";
-import { BotModelField } from "./BotModelField";
+import { BotModelSelectorField } from "./BotModelSelectorField";
 import type { TranslationKey } from "@/i18n";
 import { BOT_AVATAR_COLORS } from "@/lib/bot-avatar";
 import { BotCharacterAvatar } from "./sidebar/BotCharacterAvatar";
-import { deriveBotIdFromName } from "./sidebar/bot-contacts";
 
 export interface CreateBotDialogProps {
   isOpen: boolean;
   onCancel: () => void;
   /** Called after a bot was created successfully (parent reloads contacts). */
   onCreated: (agentId: string) => void;
-  /** Existing bot ids, for collision-free id derivation. */
-  existingIds: string[];
 }
 
 interface BotTemplate {
@@ -61,12 +63,16 @@ const BOT_TEMPLATES: readonly BotTemplate[] = [
   { id: "digest", nameKey: "bot.template.digest.name", descKey: "bot.template.digest.desc", color: "yellow" },
 ];
 
-export function CreateBotDialog({ isOpen, onCancel, onCreated, existingIds }: CreateBotDialogProps) {
+export function CreateBotDialog({ isOpen, onCancel, onCreated }: CreateBotDialogProps) {
   const { t } = useTranslation();
   const [name, setName] = useState("");
+  const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [color, setColor] = useState("blue");
+  const [emoji, setEmoji] = useState("");
   const [model, setModel] = useState("");
+  /** Provider store id the picked model belongs to ('' = global default). */
+  const [provider, setProvider] = useState("");
   const [modelGroups, setModelGroups] = useState<ProviderModelGroup[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -76,9 +82,12 @@ export function CreateBotDialog({ isOpen, onCancel, onCreated, existingIds }: Cr
   useEffect(() => {
     if (isOpen) {
       setName("");
+      setTitle("");
       setDescription("");
       setColor("blue");
+      setEmoji("");
       setModel("");
+      setProvider("");
       setSubmitting(false);
       setError(null);
       setTimeout(() => nameRef.current?.focus(), 80);
@@ -115,12 +124,14 @@ export function CreateBotDialog({ isOpen, onCancel, onCreated, existingIds }: Cr
     setSubmitting(true);
     setError(null);
     try {
-      const id = deriveBotIdFromName(name, existingIds);
-      const { id: createdId } = await createConfigAgent(id, {
+      const { id: createdId } = await createConfigAgent("", {
         name: name.trim(),
+        title: title.trim() || undefined,
         description: description.trim() || undefined,
         model: model.trim() || undefined,
+        provider: provider || undefined,
         avatarColor: color,
+        avatarEmoji: emoji.trim() || undefined,
       });
       onCreated(createdId);
     } catch (err) {
@@ -198,6 +209,16 @@ export function CreateBotDialog({ isOpen, onCancel, onCreated, existingIds }: Cr
         />
 
         <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>
+          {t("bot.create.roleTitle")}
+        </div>
+        <Input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder={t("bot.create.roleTitlePlaceholder")}
+          className="w-full mb-3"
+        />
+
+        <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>
           {t("bot.create.description")}
         </div>
         <textarea
@@ -213,18 +234,38 @@ export function CreateBotDialog({ isOpen, onCancel, onCreated, existingIds }: Cr
           }}
         />
 
-        <BotModelField
-          value={model}
+        <BotModelSelectorField
+          value={toSelectorModelId(model, provider || undefined, modelGroups)}
           groups={modelGroups}
           loading={modelsLoading}
-          onChange={setModel}
+          onChange={(selectorId) => {
+            const { raw, providerId } = fromSelectorModelId(selectorId, modelGroups);
+            setModel(raw);
+            setProvider(providerId ?? "");
+          }}
+        />
+
+        <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>
+          {t("bot.create.emoji")}
+        </div>
+        <Input
+          value={emoji}
+          onChange={(e) => setEmoji(e.target.value)}
+          placeholder={t("bot.create.emojiPlaceholder")}
+          className="w-full mb-3"
         />
 
         <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>
           {t("bot.create.avatar")}
         </div>
         <div className="flex items-center gap-3 mb-3">
-          <BotCharacterAvatar name={name || "?"} agentId="preview" avatarColor={color} size={34} />
+          <BotCharacterAvatar
+            name={name || "?"}
+            agentId="preview"
+            avatarColor={color}
+            avatarEmoji={emoji}
+            size={34}
+          />
           <span className="text-xs" style={{ color: "var(--muted)" }}>
             {t("bot.create.avatarColorHint")}
           </span>

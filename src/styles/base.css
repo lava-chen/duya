@@ -153,6 +153,12 @@
   --border-strong: color-mix(in srgb, var(--text) 22%, var(--border));
   --border-width: 1px;
   --grid-dot: rgba(0, 0, 0, 0.06);
+  /* Rakazo-style bot roster tokens (light, ported from @rakazo/ui-tokens). */
+  --rk-background: #fafaf8;
+  --rk-card: #ffffff;
+  --rk-muted: #f0f0ed;
+  --rk-muted-fg: #6c6c70;
+  --rk-border: #f0f0ed;
   --accent: #7c3aed;
   --accent-soft: rgba(124, 58, 237, 0.2);
   --accent-shadow: rgba(124, 58, 237, 0.42);
@@ -256,6 +262,13 @@
   --foreground: #ffffff;
   --muted: #8a8a8a;
   --border: rgba(255, 255, 255, 0.08);
+  /* Rakazo-style bot roster tokens (dark): near-black warm surface with
+     #141416 solid cards — the rakazo sidebar palette. */
+  --rk-background: #0d0d0e;
+  --rk-card: #141416;
+  --rk-muted: #1a1a1d;
+  --rk-muted-fg: #85858a;
+  --rk-border: #26262a;
   /* --border-color: dark-theme counterpart, identical to --border */
   --border-color: var(--border);
   /* --composer-bg: dark theme keeps the original translucent surface */
@@ -333,8 +346,6 @@
 }
 
 /* Show scrollbar thumb on container hover */
-:ho
-
 ::-webkit-scrollbar-thumb:hover {
   background: var(--muted);
 }
@@ -908,7 +919,14 @@ a {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--sidebar-bg);
+  /* Aurora wallpaper: the pastel gradient plus two low-alpha accent
+     blooms. The frosted sidebar pane sits on top of this, so the
+     translucency has color to blur through — the glass reads as depth
+     instead of flat gray. */
+  background:
+    radial-gradient(70% 55% at 10% -5%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 62%),
+    radial-gradient(60% 45% at 100% 105%, color-mix(in srgb, var(--success) 10%, transparent), transparent 58%),
+    var(--sidebar-bg);
 }
 
 .app-body {

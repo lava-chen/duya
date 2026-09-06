@@ -45,6 +45,8 @@ export interface CustomAgentConfig {
   name?: string;
   description?: string;
   model?: string;
+  /** Provider store id the `model` belongs to (bot settings UI; see agents.<id>.model). */
+  provider?: string;
   workspace?: string;
   agents_md?: string;
   tools?: CustomAgentToolsConfig;

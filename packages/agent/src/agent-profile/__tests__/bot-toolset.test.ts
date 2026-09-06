@@ -39,6 +39,11 @@ describe('BOT_TOOLSET', () => {
     expect(BOT_TOOLSET).toContain('image_generate');
   });
 
+  it('contains the plan 502 connector elicitation tools', () => {
+    expect(BOT_TOOLSET).toContain('list_app_connectors');
+    expect(BOT_TOOLSET).toContain('connect_app');
+  });
+
   it('does not claim the always-exposed ReactToMessage (plan 490 P1)', () => {
     expect(BOT_TOOLSET).not.toContain('ReactToMessage');
   });

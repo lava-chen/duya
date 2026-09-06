@@ -22,6 +22,8 @@ export interface BotPermissionCardProps {
     denyMessage?: string,
   ) => void;
   t: (key: TranslationKey, params?: Record<string, string | number>) => string;
+  /** Extra root class — the bubble-group seam modifiers ride in here. */
+  className?: string;
 }
 
 /** One-line summary of the tool input (stringified, capped). */
@@ -35,10 +37,10 @@ function inputSummary(toolInput: Record<string, unknown> | undefined): string {
   }
 }
 
-export function BotPermissionCard({ request, onRespond, t }: BotPermissionCardProps) {
+export function BotPermissionCard({ request, onRespond, t, className }: BotPermissionCardProps) {
   const summary = inputSummary(request.toolInput);
   return (
-    <div className="bot-permission-card" data-permission-id={request.id}>
+    <div className={`bot-permission-card${className ? ` ${className}` : ''}`} data-permission-id={request.id}>
       <div className="bot-permission-card__head">
         <span className="bot-permission-card__tool">{request.toolName || t('permission.toolFallback')}</span>
         <span className="bot-permission-card__pill">{t('permission.approvalRequired')}</span>

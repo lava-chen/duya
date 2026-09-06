@@ -207,7 +207,7 @@ describe('BotDirectChatView', () => {
     // Header and empty state both surface the name — at least one each.
     expect(screen.getAllByText('测试 Bot').length).toBeGreaterThan(0);
     expect(screen.getAllByText('帮忙测试').length).toBeGreaterThan(0);
-    expect(screen.getByLabelText('bot.chat.placeholder')).toBeDefined();
+    expect(screen.getByLabelText(/^bot\.chat\.placeholder/)).toBeDefined();
   });
 
   it('falls back to the agent id when no contact matches the session', () => {
@@ -318,6 +318,8 @@ describe('BotDirectChatView', () => {
     ]);
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       message: { botDirectGetTranscript: fetchTranscript },
+      // Plan 497-era view also lists persisted tool approvals on mount.
+      toolApproval: { listBySession: () => Promise.resolve([]), onUpdated: () => () => {} },
       onMessageNew: () => () => {},
     };
     try {
@@ -365,19 +367,25 @@ describe('BotDirectChatView', () => {
 
   it('sends trimmed draft on click and clears the field', () => {
     render(<BotDirectChatView {...baseProps} messages={[]} />);
-    const input = screen.getByLabelText('bot.chat.placeholder') as HTMLTextAreaElement;
+    const input = screen.getByLabelText(/^bot\.chat\.placeholder/) as HTMLTextAreaElement;
     fireEvent.change(input, { target: { value: '  hello  ' } });
     fireEvent.click(screen.getByLabelText('bot.chat.send'));
-    expect(baseProps.onSend).toHaveBeenCalledWith({ text: 'hello' });
-    expect((screen.getByLabelText('bot.chat.placeholder') as HTMLTextAreaElement).value).toBe('');
+    // The view injects the bot's configured model/provider (undefined when
+    // the bot has none) alongside the text.
+    expect(baseProps.onSend).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'hello' }),
+    );
+    expect((screen.getByLabelText(/^bot\.chat\.placeholder/) as HTMLTextAreaElement).value).toBe('');
   });
 
   it('sends on Enter without shift and inserts a newline with shift', () => {
     render(<BotDirectChatView {...baseProps} messages={[]} />);
-    const input = screen.getByLabelText('bot.chat.placeholder') as HTMLTextAreaElement;
+    const input = screen.getByLabelText(/^bot\.chat\.placeholder/) as HTMLTextAreaElement;
     fireEvent.change(input, { target: { value: 'hi' } });
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: false });
-    expect(baseProps.onSend).toHaveBeenCalledWith({ text: 'hi' });
+    expect(baseProps.onSend).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'hi' }),
+    );
     expect(input.value).toBe('');
     fireEvent.change(input, { target: { value: 'line1' } });
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });

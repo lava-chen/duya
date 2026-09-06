@@ -445,6 +445,16 @@ export type StreamingEvent =
       errorMessage?: string;
     };
 
+/** Plan 450/502: payload of the `connector_auth_required` SSE event.
+ * `variant: 'connect'` = bot-initiated first-time connect (Plan 503);
+ * `variant: 'reauth'` = mid-call re-authorization (Plan 498). */
+export type ConnectorAuthRequiredData = {
+  provider?: string;
+  connectionId?: string;
+  toolName?: string;
+  variant?: 'connect' | 'reauth';
+};
+
 interface SessionState {
   sessionId: string;
   currentStreamId: string | null;
@@ -472,7 +482,7 @@ interface SessionState {
   agentProgressEvents: AgentProgressEvent[];
   streamingEvents: StreamingEvent[];
   pendingPermissionRequest: PermissionRequestEvent | null;
-  pendingConnectorAuthRequest: { provider?: string; connectionId?: string; toolName?: string } | null;
+  pendingConnectorAuthRequest: ConnectorAuthRequiredData | null;
   // Deduplication: tool IDs already loaded from DB on page refresh
   loadedToolUseIds: Set<string>;
   loadedToolResultIds: Set<string>;
@@ -482,7 +492,7 @@ interface SessionState {
   streamingEventsListeners: Set<(events: StreamingEvent[]) => void>;
   permissionListeners: Set<(request: PermissionRequestEvent) => void>;
   /** Plan 450: listeners for app-connection re-authorization events. */
-  authRequiredListeners: Set<(data: { provider?: string; connectionId?: string; toolName?: string }) => void>;
+  authRequiredListeners: Set<(data: ConnectorAuthRequiredData) => void>;
   /** Plan 224 follow-up: listeners for agent-initiated runtime mode switches. */
   modeChangedListeners: Set<(event: ModeChangedEvent) => void>;
   goalUpdatedListeners: Set<(event: GoalUpdatedEvent) => void>;
@@ -1785,7 +1795,7 @@ class StreamSessionManager {
           this.handleConnectorAuthRequiredEvent(
             sessionId,
             streamId,
-            (event.data ?? {}) as { provider?: string; connectionId?: string; toolName?: string },
+            (event.data ?? {}) as ConnectorAuthRequiredData,
           );
           break;
 
@@ -2435,7 +2445,7 @@ class StreamSessionManager {
   private handleConnectorAuthRequiredEvent(
     sessionId: string,
     streamId: string,
-    data: { provider?: string; connectionId?: string; toolName?: string },
+    data: ConnectorAuthRequiredData,
   ): void {
     const s = this.sessions.get(sessionId);
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;
@@ -2885,7 +2895,7 @@ class StreamSessionManager {
    */
   subscribeToConnectorAuthRequired(
     sessionId: string,
-    listener: (data: { provider?: string; connectionId?: string; toolName?: string }) => void,
+    listener: (data: ConnectorAuthRequiredData) => void,
   ): () => void {
     const state = this.getOrCreateState(sessionId);
     state.authRequiredListeners.add(listener);
@@ -4118,7 +4128,7 @@ export const ensureSession = (sessionId: string) => streamSessionManager.ensureS
 export const startStream = (params: StartStreamParams) => streamSessionManager.startStream(params);
 export const subscribeToConnectorAuthRequired = (
   sessionId: string,
-  listener: (data: { provider?: string; connectionId?: string; toolName?: string }) => void,
+  listener: (data: ConnectorAuthRequiredData) => void,
 ) => streamSessionManager.subscribeToConnectorAuthRequired(sessionId, listener);
 export const clearConnectorAuthRequired = (sessionId: string) =>
   streamSessionManager.clearConnectorAuthRequired(sessionId);
