@@ -47,11 +47,12 @@ import { createTurnEpochState } from '../../packages/agent/src/wake/epoch'
 import { decidePreemption, asRedriven, type RunOrigin } from '../../packages/agent/src/wake/preemption'
 import { buildAgentInboundWakePrompt } from '../../packages/agent/src/agent/dm/index.js'
 import { getCoreStores } from '../db/core-connection'
-import { runWakePromptInExistingSession, type WakeRunOptions, type WakeRunOutcome } from './wake-run'
+import { runWakePromptInExistingSession, runUserTurnInSession, type WakeRunOptions, type WakeRunOutcome } from './wake-run'
 import { maybeAutoReturnDmResult, runUsedSendToAgent } from './agent-dm-return'
 import { reviveForInbound } from './channels'
 import { parseAgentIdFromBotSession } from './bot-session-id'
 import { interruptCronSession } from '../automation/agent-run'
+import { BrowserWindow } from 'electron'
 import { getAutomationScheduler } from '../automation/Scheduler'
 import { buildRoutineWakePrompt } from '../automation/routine-wake'
 import { getLogger, LogComponent } from '../logging/logger'
@@ -59,6 +60,11 @@ import { getLogger, LogComponent } from '../logging/logger'
 export interface WakeDispatcherDeps {
   /** Busy/idle truth for a session (session_runtime_locks mirror). */
   isLocked(sessionId: string): boolean
+  /**
+   * Origin of the run currently holding the lock (Plan 500 P1). Null when
+   * idle or unattributed. Lets preemption classify renderer-driven runs.
+   */
+  lockOrigin?(sessionId: string): 'user' | 'agent' | 'background' | null
   /** Launch one hidden wake run and resolve when it fully finishes. */
   runWake(sessionId: string, prompt: string, opts?: WakeRunOptions): Promise<WakeRunOutcome>
   /**
@@ -74,6 +80,26 @@ export interface WakeDispatcherDeps {
    * (or omit the dep) to skip the fire silently.
    */
   resolveRoutinePrompt?(payload: Extract<import('../../packages/agent/src/wake/types').WakePayload, { kind: 'automation' }>): string | null
+  /**
+   * Plan 500 P2.2 — run a queued USER turn when no renderer view claims it.
+   * Must preserve user-turn semantics (userTurn lock, session's own model).
+   */
+  runUserTurn?(sessionId: string, prompt: string, opts?: WakeRunOptions): Promise<WakeRunOutcome>
+  /**
+   * Plan 500 P2.2 — offer a queued user turn to renderer windows
+   * (`bot:scheduled-turn` broadcast). Omit (tests) to always take the
+   * hidden-run fallback.
+   */
+  pushScheduledTurn?(payload: ScheduledTurnPush): void
+}
+
+/** Payload of the `bot:scheduled-turn` renderer broadcast (Plan 500 P2.2). */
+export interface ScheduledTurnPush {
+  sessionId: string
+  agentId: string
+  messageId: string
+  text: string
+  turnEpoch?: number
 }
 
 /** Per-run options resolved by the dispatcher (477 P3.1; see wake-run.ts). */
@@ -86,12 +112,168 @@ interface SessionWakeState {
   runningItem?: WakeItem
   /** Displaced item awaiting its run's return so it can re-queue redriven. */
   redrivePending?: WakeItem
+  /**
+   * Plan 500 P5.1: armed while a user-lane item waits behind an active run.
+   * Fires once — if the same user item is still parked and the session is
+   * still locked, the active run is judged wedged and interrupted.
+   */
+  watchdogTimer?: ReturnType<typeof setTimeout>
+  /**
+   * Plan 500 P4: external callers (group turn chain) awaiting a specific
+   * item's run outcome. Resolved when the run finishes, fails, or the item
+   * is dropped/skipped.
+   */
+  turnWaiters: Map<string, (outcome: WakeRunOutcome) => void>
 }
 
 /** In-memory recently-dispatched dedupe (476 P0-D; Phase 3 → pending_wakes). */
 const recentWakeTaskIds = new Map<string, number>()
 const DEDUPE_WINDOW_MS = 60_000
 const DEDUPE_MAX_ENTRIES = 500
+
+// ─── User-lane dispatch (Plan 500 P2.2) ───
+
+/** How long a scheduled-turn push waits for a renderer claim before the
+ *  hidden-run fallback executes the turn. */
+const USER_TURN_CLAIM_TIMEOUT_MS = 3_000
+/** After a claim, how long we wait for the renderer's turn to actually take
+ *  the lock before considering the claim lost (fallback then risk a 409
+ *  race — acceptable backstop). */
+const USER_TURN_LOCK_WAIT_MS = 8_000
+
+/** messageId → resolve, keyed `${sessionId}::${messageId}`. */
+const pendingUserTurnClaims = new Map<string, () => void>()
+
+function userTurnClaimKey(sessionId: string, messageId: string): string {
+  return `${sessionId}::${messageId}`
+}
+
+/**
+ * Called (via IPC) by the renderer window that has the bot's chat view open
+ * and is taking over the scheduled user turn. Returns true when the claim
+ * was accepted — only the claiming window starts the turn.
+ */
+export function claimScheduledUserTurn(sessionId: string, messageId: string): boolean {
+  const key = userTurnClaimKey(sessionId, messageId)
+  const resolve = pendingUserTurnClaims.get(key)
+  if (!resolve) return false
+  pendingUserTurnClaims.delete(key)
+  resolve()
+  return true
+}
+
+/**
+ * Drop a queued user turn (renderer "clear queued" gesture). Returns true
+ * when an item was removed.
+ */
+export function cancelQueuedUserTurn(sessionId: string, messageId: string): boolean {
+  const state = getState(sessionId)
+  const removed = removeWakeWhere(state.queue, (item) => item.id === `user:${messageId}`)
+  state.queue = removed.queue
+  return removed.removed.length > 0
+}
+
+/**
+ * Plan 500 P4 — run one item through the bot scheduler and resolve with its
+ * outcome. The group turn chain uses this for member turns: the item is
+ * enqueued on its lane (agent), parks behind user work, yields to user
+ * preemption (redrive), and runs when its lane slot arrives. The promise
+ * resolves when the run finishes — or with an empty outcome if the item was
+ * skipped/dropped.
+ */
+export function dispatchBotTurn(
+  sessionId: string,
+  item: WakeItem,
+): Promise<WakeRunOutcome> {
+  const state = getState(sessionId)
+  const existing = state.turnWaiters.get(item.id)
+  if (existing) {
+    // Same id dispatched twice (should not happen — ids carry a nonce);
+    // resolve the old waiter so it cannot leak.
+    existing({ output: '', events: [] })
+  }
+  return new Promise<WakeRunOutcome>((resolve) => {
+    state.turnWaiters.set(item.id, resolve)
+    enqueueWakeItemForSession(sessionId, item)
+  })
+}
+
+/** Resolve (and drop) any turn waiters registered for `itemId`. */
+function resolveTurnWaiters(
+  sessionId: string,
+  itemId: string,
+  outcome: WakeRunOutcome,
+): void {
+  const state = getState(sessionId)
+  const waiter = state.turnWaiters.get(itemId)
+  if (!waiter) return
+  state.turnWaiters.delete(itemId)
+  waiter(outcome)
+}
+
+/**
+ * Dispatch one queued user turn (Plan 500 P2.2). The turn is offered to the
+ * renderer first (streaming UX); a claiming window runs it via its normal
+ * startStream path. When no window claims it within the timeout, main runs
+ * it as a hidden user turn (runUserTurnInSession).
+ */
+async function dispatchUserLaneTurn(sessionId: string, item: WakeItem): Promise<void> {
+  const payload = item.payload as Extract<WakeItem['payload'], { kind: 'user' }>
+  const text = (payload.text ?? '').trim()
+  if (!text) return
+  const messageId = payload.messageId ?? item.id
+  const agentId = parseAgentIdFromBotSession(sessionId) ?? ''
+
+  const scheduledTurnPayload: ScheduledTurnPush = {
+    sessionId,
+    agentId,
+    messageId,
+    text,
+    ...(item.turnEpoch != null ? { turnEpoch: item.turnEpoch } : {}),
+  }
+
+  const pushScheduledTurn = currentDeps().pushScheduledTurn
+  const claimed = pushScheduledTurn
+    ? await new Promise<boolean>((resolve) => {
+        let settled = false
+        const finish = (value: boolean) => {
+          if (settled) return
+          settled = true
+          pendingUserTurnClaims.delete(userTurnClaimKey(sessionId, messageId))
+          resolve(value)
+        }
+        pendingUserTurnClaims.set(userTurnClaimKey(sessionId, messageId), () => finish(true))
+        setTimeout(() => finish(false), USER_TURN_CLAIM_TIMEOUT_MS)
+        pushScheduledTurn(scheduledTurnPayload)
+      })
+    : false
+
+  if (claimed) {
+    // Wait for the claiming renderer's turn to actually take the lock so the
+    // drain does not race the next item against the not-yet-started turn.
+    const deadline = Date.now() + USER_TURN_LOCK_WAIT_MS
+    while (Date.now() < deadline) {
+      if (currentDeps().isLocked(sessionId)) return
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    getLogger().warn('Scheduled user turn claimed but lock never acquired; falling back', {
+      sessionId,
+      messageId,
+    }, LogComponent.Automation)
+  } else {
+    getLogger().info('Scheduled user turn unclaimed; running hidden fallback', {
+      sessionId,
+      messageId,
+    }, LogComponent.Automation)
+  }
+
+  // The fallback must preserve user-turn semantics when `runUserTurn` is
+  // wired; embedders/tests without it degrade to the plain wake runner.
+  const botAgentId = parseAgentIdFromBotSession(sessionId)
+  const opts = botAgentId ? { agentProfileId: botAgentId } : undefined
+  const runner = currentDeps().runUserTurn ?? currentDeps().runWake
+  await runner(sessionId, text, opts)
+}
 
 const sessions = new Map<string, SessionWakeState>()
 
@@ -122,7 +304,30 @@ function currentDeps(): WakeDispatcherDeps {
           return false
         }
       },
+      lockOrigin(sessionId) {
+        try {
+          return getCoreStores().locks.lockOrigin(sessionId)
+        } catch {
+          return null
+        }
+      },
       runWake: (sessionId, prompt, opts) => runWakePromptInExistingSession(sessionId, prompt, opts),
+      runUserTurn: (sessionId, prompt, opts) => runUserTurnInSession(sessionId, prompt, opts),
+      pushScheduledTurn: (payload) => {
+        // Best-effort: no windows (CLI boot) → no claim, fallback run takes over.
+        try {
+          for (const window of BrowserWindow.getAllWindows()) {
+            if (!window.isDestroyed()) {
+              window.webContents.send('bot:scheduled-turn', payload)
+            }
+          }
+        } catch (err) {
+          getLogger().debug('Scheduled-turn push skipped', {
+            sessionId: payload.sessionId,
+            error: err instanceof Error ? err.message : String(err),
+          }, LogComponent.Automation)
+        }
+      },
       interruptRun: (sessionId) => interruptCronSession(sessionId),
       resolveRoutinePrompt: (payload) => {
         // P2.3b default: resolve the routine from cronjob.toml at dispatch
@@ -195,6 +400,12 @@ export function enqueueWakeItemForSession(
   }
 
   state.queue = queue
+  // Plan 500 P5.2: queue work survives a restart for the lanes whose
+  // payloads are self-contained (user turns, DM envelopes). `outcome` here
+  // is only 'added' | 'merged' — the dedupe path returned earlier.
+  persistQueuedItem(sessionId, stamped)
+  // Plan 500 P5.1: a queued user turn arms the wedged-run watchdog.
+  if (stamped.lane === 'user') armUserTurnWatchdog(sessionId)
   kick(sessionId)
   // Plan 495 G3 / 476 §2.2: preemption is decided at enqueue time — the
   // drain loop is blocked awaiting the in-flight runWake, so a preempting
@@ -205,36 +416,124 @@ export function enqueueWakeItemForSession(
 }
 
 /**
- * Preemption decision for an incoming wake against the dispatcher-owned
- * run in flight (Plan 495 G3, grok send-turn-dispatch parity):
- *  - only when the session is locked (busy) and THIS dispatcher started
- *    the running wake (`runningItem` attribution — a renderer chat or cron
- *    holding the lock is never interrupted);
- *  - only when `decidePreemption` says the incoming wake preempts (user
- *    message / priority DM vs a non-user run);
+ * Plan 500 P5.2 — persist a queued item whose payload is self-contained so
+ * a host restart can re-arm it (wake-rearm). Best-effort; the in-memory
+ * queue remains the primary carrier.
+ */
+function persistQueuedItem(sessionId: string, item: WakeItem): void {
+  try {
+    const { wakes } = getCoreStores()
+    if (item.source === 'user.message' && item.payload.kind === 'user') {
+      wakes.persist({
+        kind: 'user.message',
+        workId: item.payload.messageId ?? item.id,
+        agentId: item.agentId,
+        lane: 'user',
+        title: item.payload.text,
+      })
+    } else if (item.source === 'agent.dm' && item.payload.kind === 'dm') {
+      wakes.persist({
+        kind: 'agent.dm',
+        workId: item.payload.clientMsgId,
+        agentId: item.agentId,
+        lane: 'agent',
+        title: item.payload.text,
+        quietOriginJson: JSON.stringify({
+          dm: {
+            fromAgentId: item.payload.fromAgentId,
+            ...(item.payload.fromAgentName ? { fromAgentName: item.payload.fromAgentName } : {}),
+            ...(item.payload.intent ? { intent: item.payload.intent } : {}),
+            ...(item.payload.priority ? { priority: true } : {}),
+            ...(item.payload.hops != null ? { hops: item.payload.hops } : {}),
+          },
+        }),
+      })
+    }
+  } catch (err) {
+    getLogger().debug('Pending-wake persist skipped', {
+      sessionId,
+      itemId: item.id,
+      error: err instanceof Error ? err.message : String(err),
+    }, LogComponent.Automation)
+  }
+}
+
+/** Plan 500 P5.2 — the queued item left the queue (dispatched or dropped). */
+function clearPersistedItem(item: WakeItem): void {
+  try {
+    const { wakes } = getCoreStores()
+    if (item.source === 'user.message' && item.payload.kind === 'user') {
+      wakes.clear('user.message', item.payload.messageId ?? item.id)
+    } else if (item.source === 'agent.dm' && item.payload.kind === 'dm') {
+      wakes.clear('agent.dm', item.payload.clientMsgId)
+    }
+  } catch {
+    // Best-effort; the stale horizon prunes orphans.
+  }
+}
+
+/**
+ * Preemption decision for an incoming wake against the run in flight
+ * (Plan 495 G3 + Plan 500 P3, grok send-turn-dispatch parity):
+ *  - only when the session is locked (busy);
+ *  - dispatcher-owned runs are attributed via `runningItem`; any other
+ *    lock holder (renderer chat / cron / group member run) is classified
+ *    through the lock origin (Plan 500 P1) — Plan 500 removes the old
+ *    "renderer runs are never interrupted" rule;
+ *  - `decidePreemption` decides: a user message supersedes ANY run
+ *    (including a user turn — grok parity); a priority DM preempts only
+ *    non-user runs;
  *  - once per displaced run (`redrivePending` guard).
  *
- * The displaced run is interrupted; when its runWake returns, the drain
- * re-queues it with `isRedriven: true` so the work is not lost.
+ * A displaced dispatcher-owned run is interrupted; when its runWake
+ * returns, the drain re-queues it with `isRedriven: true` so the work is
+ * not lost. Displaced non-dispatcher runs (renderer chats) cannot be
+ * redriven — their partial transcript is persisted and the preempting
+ * turn takes over.
  */
 function tryPreemptRunning(sessionId: string, incoming: WakeItem): void {
   const state = getState(sessionId)
   if (!currentDeps().isLocked(sessionId)) return
+  if (state.redrivePending) return
+
   const running = state.runningItem
-  if (!running || state.redrivePending) return
-  if (running.id === incoming.id) return
-  const decision = decidePreemption(incoming, runOriginOf(running))
+  if (running) {
+    if (running.id === incoming.id) return
+    const decision = decidePreemption(incoming, runOriginOf(running))
+    if (decision.action !== 'preempt') return
+    // Preempting wakes start a new epoch so the displaced run's tail
+    // side-effects stand down (476 §2.6 tail guard).
+    turnEpochs.maybeAdvanceForItem(sessionId, incoming)
+    if (decision.redrive) state.redrivePending = running
+    getLogger().info('Wake preemption: interrupting in-flight run', {
+      sessionId,
+      displacedSource: running.source,
+      incomingSource: incoming.source,
+      reason: decision.reason,
+      redrive: decision.redrive,
+    }, LogComponent.Automation)
+    interruptSafely(sessionId)
+    return
+  }
+
+  // Plan 500 P3: the lock is held by a run this dispatcher did not start
+  // (renderer chat, cron, group member turn). Classify it via the lock
+  // origin and apply the same preemption rules.
+  const lockOrigin = currentDeps().lockOrigin?.(sessionId) ?? null
+  if (!lockOrigin) return
+  const decision = decidePreemption(incoming, lockOriginOf(lockOrigin))
   if (decision.action !== 'preempt') return
-  // Preempting wakes start a new epoch so the displaced run's tail
-  // side-effects stand down (476 §2.6 tail guard).
   turnEpochs.maybeAdvanceForItem(sessionId, incoming)
-  state.redrivePending = running
-  getLogger().info('Wake preemption: interrupting in-flight run', {
+  getLogger().info('Wake preemption: interrupting foreign in-flight run', {
     sessionId,
-    displacedSource: running.source,
+    lockOrigin,
     incomingSource: incoming.source,
     reason: decision.reason,
   }, LogComponent.Automation)
+  interruptSafely(sessionId)
+}
+
+function interruptSafely(sessionId: string): void {
   try {
     currentDeps().interruptRun?.(sessionId)
   } catch (err) {
@@ -396,10 +695,70 @@ export function removeQueuedWake(
 function getState(sessionId: string): SessionWakeState {
   let state = sessions.get(sessionId)
   if (!state) {
-    state = { queue: createWakeQueue(), draining: false }
+    state = { queue: createWakeQueue(), draining: false, turnWaiters: new Map() }
     sessions.set(sessionId, state)
   }
   return state
+}
+
+// ─── Watchdog (Plan 500 P5.1, grok run-scheduler parity) ───
+
+/** A user-lane item may wait this long behind an active run before the run
+ *  is judged wedged and interrupted (grok RUN_WATCHDOG_DEFAULT_MS). */
+function envPositiveInt(name: string): number | undefined {
+  const raw = process.env[name]
+  if (!raw) return undefined
+  const value = Number.parseInt(raw, 10)
+  return Number.isFinite(value) && value > 0 ? value : undefined
+}
+
+const USER_TURN_WATCHDOG_DEFAULT_MS = envPositiveInt('DUYA_BOT_WATCHDOG_MS') ?? 120_000
+/** Mutable for tests — the timeout is far too long to wait out for real. */
+let userTurnWatchdogMs = USER_TURN_WATCHDOG_DEFAULT_MS
+
+/** Test seam — override the watchdog threshold (Plan 500 P5.1). */
+export function _setUserTurnWatchdogMsForTest(ms: number): void {
+  userTurnWatchdogMs = ms
+}
+
+/**
+ * Arm (once) the watchdog while a user-lane item parks behind a busy
+ * session. When it fires: if a user item is STILL at the queue head and the
+ * session is STILL locked, the active run is wedged — interrupt it (the
+ * redrive decision is applied for dispatcher-owned runs; the lock TTL
+ * remains the ultimate correctness backstop).
+ */
+function armUserTurnWatchdog(sessionId: string): void {
+  const state = getState(sessionId)
+  if (state.watchdogTimer) return
+  state.watchdogTimer = setTimeout(() => {
+    state.watchdogTimer = undefined
+    const head = peekNextWake(state.queue)
+    if (!head || head.lane !== 'user') return
+    if (!currentDeps().isLocked(sessionId)) return
+    getLogger().warn('Bot run watchdog: user turn waited too long; interrupting wedged run', {
+      sessionId,
+      waitedMs: userTurnWatchdogMs,
+      headSource: head.source,
+    }, LogComponent.Automation)
+    const running = state.runningItem
+    if (running && !state.redrivePending) {
+      const decision = decidePreemption(head, runOriginOf(running))
+      if (decision.action === 'preempt' && decision.redrive) {
+        state.redrivePending = running
+      }
+    }
+    turnEpochs.maybeAdvanceForItem(sessionId, head)
+    interruptSafely(sessionId)
+  }, userTurnWatchdogMs)
+}
+
+function disarmUserTurnWatchdog(sessionId: string): void {
+  const state = getState(sessionId)
+  if (state.watchdogTimer) {
+    clearTimeout(state.watchdogTimer)
+    state.watchdogTimer = undefined
+  }
 }
 
 /** Whether an item with the same dedupe id is already parked in the queue. */
@@ -442,6 +801,10 @@ async function drain(sessionId: string): Promise<void> {
       const dequeued = dequeueNextWake(state.queue)
       if (!dequeued) break
       state.queue = dequeued.queue
+      // Plan 500: the item left the queue — clear its durable marker and
+      // disarm the watchdog that was waiting on it.
+      clearPersistedItem(dequeued.item)
+      if (dequeued.item.lane === 'user') disarmUserTurnWatchdog(sessionId)
 
       // 476 P2.5: skip background wakes that a newer user turn superseded
       // while they were parked. item.turnEpoch was stamped at enqueue; once
@@ -465,6 +828,7 @@ async function drain(sessionId: string): Promise<void> {
           itemEpoch: epoch,
           currentEpoch: turnEpochs.current(sessionId),
         }, LogComponent.Automation)
+        resolveTurnWaiters(sessionId, dequeued.item.id, { output: '', events: [] })
         continue
       }
 
@@ -480,11 +844,26 @@ async function drain(sessionId: string): Promise<void> {
             error: err instanceof Error ? err.message : String(err),
           }, LogComponent.AgentProcess)
         })
+        resolveTurnWaiters(sessionId, dequeued.item.id, { output: '', events: [] })
+        continue
+      }
+
+      // Plan 500 P2.2: a queued user turn is offered to the renderer (the
+      // claiming window runs its normal streaming path); the hidden fallback
+      // only covers "no renderer view". `runningItem` is deliberately NOT
+      // set — the renderer's own turn acquires the lock (userTurn=true) and
+      // the lock-wait above keeps the drain serialized behind it.
+      if (dequeued.item.source === 'user.message') {
+        await dispatchUserLaneTurn(sessionId, dequeued.item)
+        resolveTurnWaiters(sessionId, dequeued.item.id, { output: '', events: [] })
         continue
       }
 
       const prompt = promptForItem(dequeued.item)
-      if (!prompt) continue
+      if (!prompt) {
+        resolveTurnWaiters(sessionId, dequeued.item.id, { output: '', events: [] })
+        continue
+      }
       // NOTE (Plan 495 G3): dispatching a user-lane wake does NOT advance
       // the epoch — the existing 476/477 contract keeps background wakes
       // queued behind a user wake running in lane order (they are the
@@ -503,9 +882,16 @@ async function drain(sessionId: string): Promise<void> {
         const outcome = await currentDeps().runWake(
           sessionId,
           prompt,
-          botAgentId ? { agentProfileId: botAgentId } : undefined,
+          botAgentId
+            ? { agentProfileId: botAgentId, lane: dequeued.item.lane }
+            : { lane: dequeued.item.lane },
         )
         state.runningItem = undefined
+        // Plan 500 P4: resolve external turn waiters (group chain) with the
+        // collected outcome. On redrive the re-queued run resolves nothing
+        // (the waiter is already gone) — the chain moves on with what the
+        // interrupted run produced.
+        resolveTurnWaiters(sessionId, dequeued.item.id, outcome ?? { output: '', events: [] })
         // Plan 495 G3 redrive: if this run was displaced by a preempting
         // wake, re-queue the item (epoch re-stamped at enqueue) so the work
         // still happens after the preempting turn finishes.
@@ -553,6 +939,7 @@ async function drain(sessionId: string): Promise<void> {
         }
       } catch (err) {
         state.runningItem = undefined
+        resolveTurnWaiters(sessionId, dequeued.item.id, { output: '', events: [] })
         // Plan 495 G3: a displaced run re-queues even on failure, so an
         // interrupted item is never silently dropped.
         if (state.redrivePending?.id === dequeued.item.id) {
@@ -584,6 +971,17 @@ function runOriginOf(item: WakeItem): RunOrigin {
   return 'background'
 }
 
+/**
+ * Map a persisted lock origin (Plan 500 P1, wake-lane vocabulary) onto the
+ * preemption RunOrigin vocabulary. 'agent' lock rows cover both bot-lane
+ * DMs and group member turns — both are 'bot' for preemption purposes.
+ */
+function lockOriginOf(origin: 'user' | 'agent' | 'background'): RunOrigin {
+  if (origin === 'user') return 'user'
+  if (origin === 'agent') return 'bot'
+  return 'background'
+}
+
 /** Build the model-facing prompt for an item. Empty string = skip silently. */
 function promptForItem(item: WakeItem): string {
   switch (item.payload.kind) {
@@ -610,6 +1008,12 @@ function promptForItem(item: WakeItem): string {
       // A user message parked in the queue (session was busy when it
       // arrived). Dispatch = run it as the user's turn.
       return (item.payload.text ?? '').trim() || '[system] Continue with the user request.'
+    }
+    case 'group': {
+      // Plan 500 P4: a shared-room member turn. The group dispatcher
+      // pre-renders the full prompt (conduct block + transcript window +
+      // turn instruction) — pass it through verbatim.
+      return (item.payload.text ?? '').trim()
     }
     case 'approval': {
       // Plan 498: a durable approval card was decided (possibly long after
@@ -679,6 +1083,9 @@ function sweepDedupeMap(now: number): void {
 
 /** Test seam: reset module state (queues, dedupe, epochs, injected deps). */
 export function _resetWakeDispatcherForTest(): void {
+  for (const state of sessions.values()) {
+    if (state.watchdogTimer) clearTimeout(state.watchdogTimer)
+  }
   sessions.clear()
   recentWakeTaskIds.clear()
   turnEpochs = createTurnEpochState()

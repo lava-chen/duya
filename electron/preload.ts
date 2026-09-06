@@ -664,6 +664,22 @@ export interface RoomAPI {
   members: (roomId: string) => Promise<Array<{ id: string; name: string; description?: string }>>;
 }
 
+/** Plan 500 P2: bot DM turn scheduling (main-side run queue gate). */
+export interface BotTurnPush {
+  sessionId: string;
+  agentId: string;
+  messageId: string;
+  text: string;
+  turnEpoch?: number;
+}
+
+export interface BotTurnAPI {
+  sendTurn: (payload: { agentId: string; text: string; clientMsgId?: string }) => Promise<{ action: 'start' | 'queued'; messageId: string }>;
+  claimScheduledTurn: (payload: { sessionId: string; messageId: string }) => Promise<boolean>;
+  cancelQueuedTurn: (payload: { sessionId: string; messageId: string }) => Promise<boolean>;
+  onScheduledTurn: (callback: (payload: BotTurnPush) => void) => () => void;
+}
+
 export interface HookRow {
   /** Stable id used by the Settings → Hooks toggles (`builtin.*` / `file:*`). */
   id?: string;
@@ -1250,6 +1266,7 @@ export interface ElectronAPI {
   configAgents: ConfigAgentsAPI
   groups: GroupsAPI
   room: RoomAPI
+  botTurn: BotTurnAPI
   hooks: HooksAPI
   plugin: PluginAPI
   appConnection: AppConnectionAPI
@@ -2375,6 +2392,19 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on('mailbox:event', wrappedHandler);
       return () => {
         ipcRenderer.removeListener('mailbox:event', wrappedHandler);
+      };
+    },
+  },
+  // Bot turn scheduling API (Plan 500 P2)
+  botTurn: {
+    sendTurn: (payload) => ipcRenderer.invoke('bot:sendTurn', payload),
+    claimScheduledTurn: (payload) => ipcRenderer.invoke('bot:claimScheduledTurn', payload),
+    cancelQueuedTurn: (payload) => ipcRenderer.invoke('bot:cancelQueuedTurn', payload),
+    onScheduledTurn: (callback: (payload: BotTurnPush) => void) => {
+      const wrappedHandler = (_event: Electron.IpcRendererEvent, data: BotTurnPush) => callback(data);
+      ipcRenderer.on('bot:scheduled-turn', wrappedHandler);
+      return () => {
+        ipcRenderer.removeListener('bot:scheduled-turn', wrappedHandler);
       };
     },
   },

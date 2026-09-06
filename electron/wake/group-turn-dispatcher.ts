@@ -26,6 +26,7 @@
  */
 
 import { getCoreStores } from '../db/core-connection';
+import { randomUUID } from 'crypto';
 import type { NewEvent } from '../db/core';
 import { ipcMessageToNewEvent, newEventToIpcMessage } from '../ipc/core-db-adapters';
 import { getSessionManager } from '../agents/session-manager';
@@ -39,7 +40,7 @@ import {
 } from '../../packages/agent/src/wake/groupTurn';
 import { getRoomSessionId, parseRoomIdFromSession } from '../../packages/agent/src/agent/dm/bot-session-id';
 import { defaultBotSessionCreator } from './agent-dm-dispatcher';
-import { runWakePromptInExistingSession } from './wake-run';
+import { dispatchBotTurn } from './wake-dispatcher';
 import { interruptCronSession } from '../automation/agent-run';
 import { getLogger, LogComponent } from '../logging/logger';
 
@@ -305,13 +306,21 @@ async function runRoomTurn(roomId: string, sessionId: string, epoch: number): Pr
       const combinedPrompt = `${systemPrompt}\n\n${prompt}`;
       state.currentMemberSession = `bot:${member.id}`;
       try {
-        const outcome = await runWakePromptInExistingSession(`bot:${member.id}`, combinedPrompt, {
-          agentProfileId: member.id,
+        // Plan 500 P4: member turns go through the bot run scheduler. Busy
+        // member (user DM in flight) → the item parks on the agent lane
+        // instead of 409-passing; a user message preempts the member run
+        // and it redrives after the user's turn.
+        const outcome = await dispatchBotTurn(`bot:${member.id}`, {
+          id: `group:${roomId}:${epoch}:${member.id}:${randomUUID()}`,
+          source: 'group.turn',
+          lane: 'agent',
+          agentId: member.id,
+          enqueuedAtMs: Date.now(),
+          payload: { kind: 'group', roomId, text: combinedPrompt },
         });
         return collectRoomPosts(outcome.events ?? []);
       } catch (err) {
         // A failed member turn is a pass, not a room-wide failure (grok).
-        // 409 (member busy with a user DM) lands here too via reject.
         getLogger().warn('GroupTurn: member turn failed; treated as pass', {
           roomId,
           member: member.id,

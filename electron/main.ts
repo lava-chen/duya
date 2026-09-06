@@ -17,7 +17,7 @@ import { platform as getPlatform, tmpdir, homedir } from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 
-import { registerDbHandlers, registerConductorHandlers, registerSidebarSectionsHandlers, registerMailboxHandlers, registerMemoryListHandlers, registerMemorySystemLogHandlers, registerMemoryRagRebuildHandler, registerMemoryWakeupHandlers, registerComputerUseHandlers, registerBotChannelHandlers, registerGroupHandlers } from './ipc/index';
+import { registerDbHandlers, registerConductorHandlers, registerSidebarSectionsHandlers, registerMailboxHandlers, registerMemoryListHandlers, registerMemorySystemLogHandlers, registerMemoryRagRebuildHandler, registerMemoryWakeupHandlers, registerComputerUseHandlers, registerBotChannelHandlers, registerGroupHandlers, registerBotHandlers } from './ipc/index';
 import { initDatabaseFromBoot, getDatabase, getSqliteCtor } from './db/connection';
 import { initCoreDatabase } from './db/core-connection';
 import { registerAgentHandlers } from './agents/agent-communicator';
@@ -1104,6 +1104,7 @@ registerBrowserCookieHandlers();
 registerGitHandlers();
 registerBotChannelHandlers();
 registerGroupHandlers();
+registerBotHandlers();
 registerMemoryListHandlers();
 registerMemorySystemLogHandlers();
 registerMemoryRagRebuildHandler();

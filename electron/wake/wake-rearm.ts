@@ -137,6 +137,61 @@ function pendingWakeRowToWakeItem(row: ReturnType<typeof getCoreStores>['wakes']
         payload: { kind: 'broadcast', broadcastId: row.work_id, text: row.title ?? '' },
       }
 
+    case 'user.message':
+      // Plan 500 P5.2: a queued user turn that never got dispatched before
+      // the restart. Re-enters the user lane; the drain offers it to the
+      // renderer (claim) or runs the hidden fallback.
+      return {
+        id: `user:${row.work_id}`,
+        source: 'user.message',
+        lane: 'user',
+        agentId: row.agent_id,
+        enqueuedAtMs: now,
+        payload: { kind: 'user', text: row.title ?? '', messageId: row.work_id },
+      }
+
+    case 'agent.dm': {
+      // Plan 500 P5.2: a parked bot→bot DM. The envelope metadata rides in
+      // quiet_origin_json (persisted at enqueue); the text is in title.
+      let envelope: {
+        fromAgentId?: string
+        fromAgentName?: string
+        intent?: string
+        priority?: boolean
+        hops?: number
+      } = {}
+      try {
+        const parsed = row.quiet_origin_json ? JSON.parse(row.quiet_origin_json) : {}
+        if (parsed && typeof parsed === 'object' && parsed.dm) envelope = parsed.dm
+      } catch {
+        // Malformed JSON → empty envelope; fromAgentId empty → prompt skipped.
+      }
+      if (!envelope.fromAgentId) {
+        getLogger().debug('Pending wakes rearm: agent.dm row missing sender; skipping', {
+          workId: row.work_id,
+          agentId: row.agent_id,
+        }, LogComponent.Automation)
+        return null
+      }
+      return {
+        id: `dm:${row.work_id}`,
+        source: 'agent.dm',
+        lane: 'agent',
+        agentId: row.agent_id,
+        enqueuedAtMs: now,
+        payload: {
+          kind: 'dm',
+          clientMsgId: row.work_id,
+          fromAgentId: envelope.fromAgentId,
+          ...(envelope.fromAgentName ? { fromAgentName: envelope.fromAgentName } : {}),
+          text: row.title ?? '',
+          ...(envelope.priority ? { priority: true } : {}),
+          ...(envelope.intent ? { intent: envelope.intent } : {}),
+          ...(envelope.hops != null ? { hops: envelope.hops } : {}),
+        },
+      }
+    }
+
     default:
       return null
   }

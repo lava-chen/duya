@@ -16,6 +16,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   _resetWakeDispatcherForTest,
   _setWakeDispatcherDeps,
+  _setUserTurnWatchdogMsForTest,
   enqueueWakeItemForSession,
   notifySessionIdle,
   _queuedWakeCount,
@@ -75,6 +76,8 @@ function dmItem(text: string, sessionId = 'bot:receiver'): WakeItem {
 
 interface FakeDeps {
   locked: Set<string>
+  /** Lock origin per session (Plan 500 P1 attribution). */
+  origins: Map<string, 'user' | 'agent' | 'background'>
   runCalls: string[]
   interrupts: string[]
   /** Resolvers for hanging runs — keyed by the prompt substring. */
@@ -84,6 +87,7 @@ interface FakeDeps {
 function makeDeps(fake: FakeDeps): WakeDispatcherDeps {
   return {
     isLocked: (sessionId) => fake.locked.has(sessionId),
+    lockOrigin: (sessionId) => fake.origins.get(sessionId) ?? null,
     runWake: async (_sessionId, prompt) => {
       fake.runCalls.push(prompt)
       for (const [marker, resolve] of fake.releasers) {
@@ -115,6 +119,7 @@ describe('wake-dispatcher preemption / redrive / tail guard (Plan 495 G3)', () =
     vi.mocked(maybeAutoReturnDmResult).mockClear()
     fake = {
       locked: new Set(),
+      origins: new Map(),
       runCalls: [],
       interrupts: [],
       releasers: new Map(),
@@ -157,13 +162,37 @@ describe('wake-dispatcher preemption / redrive / tail guard (Plan 495 G3)', () =
     expect(_queuedWakeCount('s1')).toBe(0)
   })
 
-  it('never interrupts a lock held outside the dispatcher', async () => {
-    fake.locked.add('s1') // foreign lock: no dispatcher run in flight
-    enqueueWakeItemForSession('s1', userItem('queued behind foreign run'))
+  it('supersedes a foreign USER lock for a new user message (Plan 500 P3, grok parity)', async () => {
+    // A renderer user turn holds the lock; a NEW user message supersedes it
+    // (grok "superseded by a new user message"). No redrive — nothing of
+    // the displaced run can be re-queued by the dispatcher.
+    fake.locked.add('s1')
+    fake.origins.set('s1', 'user')
+    enqueueWakeItemForSession('s1', userItem('superseding user message'))
+    await flush()
+    expect(fake.interrupts).toEqual(['s1'])
+    expect(_queuedWakeCount('s1')).toBe(1)
+    expect(currentTurnEpoch('s1')).toBe(1)
+  })
+
+  it('a priority DM never interrupts a foreign USER lock', async () => {
+    fake.locked.add('s1')
+    fake.origins.set('s1', 'user')
+    enqueueWakeItemForSession('bot:receiver', dmItem('please audit the logs'))
     await flush()
     expect(fake.interrupts).toEqual([])
-    expect(fake.runCalls).toHaveLength(0)
+  })
+
+  it('preempts a foreign non-user lock via lock attribution (Plan 500 P3)', async () => {
+    // A renderer/other-origin background run holds the lock; the incoming
+    // user message supersedes it even though the dispatcher did not start it.
+    fake.locked.add('s1')
+    fake.origins.set('s1', 'background')
+    enqueueWakeItemForSession('s1', userItem('preempting foreign background run'))
+    await flush()
+    expect(fake.interrupts).toEqual(['s1'])
     expect(_queuedWakeCount('s1')).toBe(1)
+    expect(currentTurnEpoch('s1')).toBe(1)
   })
 
   it('suppresses DM auto-return when the epoch advances mid-run', async () => {
@@ -186,5 +215,28 @@ describe('wake-dispatcher preemption / redrive / tail guard (Plan 495 G3)', () =
     expect(fake.runCalls).toHaveLength(1)
     expect(maybeAutoReturnDmResult).toHaveBeenCalledTimes(1)
     expect(vi.mocked(maybeAutoReturnDmResult).mock.calls[0][1]).toBe('run reply')
+  })
+
+  it('watchdog interrupts a wedged run when a user turn waits too long (Plan 500 P5.1)', async () => {
+    vi.useFakeTimers()
+    try {
+      _setUserTurnWatchdogMsForTest(1_000)
+      // A foreign lock with NO origin (legacy/unattributed row) cannot be
+      // classified at enqueue time, so the user item parks without an
+      // interrupt — exactly the "wedged run" scenario the watchdog covers.
+      fake.locked.add('s1')
+      enqueueWakeItemForSession('s1', userItem('urgent question'))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(fake.interrupts).toEqual([])
+      expect(_queuedWakeCount('s1')).toBe(1)
+
+      // Watchdog fires: the wedged run is interrupted so the lock can free
+      // and the drain can dispatch the parked user turn.
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(fake.interrupts).toEqual(['s1'])
+    } finally {
+      vi.useRealTimers()
+      _setUserTurnWatchdogMsForTest(120_000)
+    }
   })
 })
