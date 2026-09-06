@@ -10,7 +10,13 @@ import { AgentDmPairView } from "@/components/chat/bot/AgentDmPairView";
 import { GroupRoomChatView } from "@/components/chat/GroupRoomChatView";
 import { resolveChatMode, resolveBotAgentId } from "@/components/chat/bot/chat-mode";
 import { useBotContacts } from "@/components/layout/sidebar/use-bot-contacts";
-import { botDirectSend, botDirectSendComplete } from "@/components/chat/bot/send";
+import { botDirectSendComplete } from "@/components/chat/bot/send";
+import {
+  cancelPendingTurnsForSession,
+  rememberPendingTurn,
+  subscribeScheduledTurns,
+  takePendingTurn,
+} from "@/components/chat/bot/send/scheduled-turns";
 import type { BotComposerSendPayload } from "@/components/chat/BotComposer";
 import { composeReplyContent } from "@/components/chat/bot/reply";
 import { NewChatView } from "@/components/chat/NewChatView";
@@ -36,6 +42,7 @@ import {
 } from "@/lib/ipc-client";
 import { stripPastedContentMarkers } from "@/lib/message-content-parser";
 import { interruptChat } from "@/lib/agent-sse-client";
+import { SearchCommandPalette } from "@/components/SearchCommandPalette";
 
 /** Boot splash lifecycle. Re-exported from StartupLanding for convenience. */
 type BootSplashPhase = StartupLandingPhase;
@@ -497,7 +504,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       if (!activeThreadId) return;
       const agentId = resolveBotAgentId(activeThreadId);
       if (!agentId) return;
-      const { text, model, providerId, effort, mode, files, replyTo } = payload;
+      const { text, model, providerId, mode, files, replyTo } = payload;
       // Reply quote (bot/reply.ts): the sentinel block rides inside the
       // content the agent (and the persisted row) sees, while
       // `displayContent` keeps the plain user text for the bubble body.
@@ -511,10 +518,29 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
         .getState()
         .threads.find((t) => t.id === activeThreadId)?.providerId;
 
-      // Busy → reuse the workspace queue (auto-flushed by
-      // autoStartQueuedStream when the stream settles).
-      if (isStreaming || !canSend(activeThreadId)) {
-        enqueueMessage(activeThreadId, {
+      // Plan 500 P2: every bot DM send goes through the main-process gate.
+      // Main decides: run now ('start', renderer keeps its streaming path)
+      // or park on the wake queue's user lane ('queued', priority judgment
+      // + preemption already applied main-side). The messageId is minted
+      // here so the queued bubble and the later scheduled-turn push match.
+      const messageId = crypto.randomUUID();
+      addMessage(
+        activeThreadId,
+        {
+          id: messageId,
+          role: 'user',
+          content,
+          displayContent,
+          timestamp: Date.now(),
+          metadata: { optimistic: true },
+        },
+        { persist: false },
+      );
+      setMessageDelivery(activeThreadId, messageId, 'sending');
+
+      const startTurn = (): void => {
+        setIsStreaming(true);
+        void startStream({
           sessionId: activeThreadId,
           content,
           displayContent,
@@ -525,64 +551,42 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
           defaultWorkspaceDirectory: settings.workspaceDir,
           providerId: providerId ?? sessionProviderId,
           model,
-          effort,
           mode,
           files,
         });
-        return;
-      }
+      };
 
-      void botDirectSend({
-        sessionId: activeThreadId,
-        content,
-        strategy: 'queue',
-        onQueued: (messageId) =>
-          setMessageDelivery(activeThreadId, messageId, 'queued'),
-        onFailed: (messageId) =>
-          setMessageDelivery(activeThreadId, messageId, 'failed'),
-        sendFn: async (messageId, text) => {
-          // Optimistic bubble keyed to the pipeline's messageId so the
-          // delivery phase lookups line up with the rendered row. Content
-          // MUST equal the persisted row's content (composed reply included)
-          // — the optimistic dedupe matches on exact content equality;
-          // displayContent keeps the bubble body plain.
-          addMessage(
-            activeThreadId,
-            {
-              id: messageId,
-              role: 'user',
-              content: text,
-              displayContent,
-              timestamp: Date.now(),
-              metadata: { optimistic: true },
-            },
-            { persist: false },
-          );
-          setMessageDelivery(activeThreadId, messageId, 'sending');
-          setIsStreaming(true);
-          // Fire-and-forget: the tracker stays busy until the stream settles
-          // (released by the botDirectSendComplete effect below).
-          void startStream({
-            sessionId: activeThreadId,
-            content: text,
-            displayContent,
-            language: settings.agentLanguage,
-            permissionModeOverride,
-            agentProfileId: agentId,
-            titleGenerationModel: settings.titleGenerationModel,
-            defaultWorkspaceDirectory: settings.workspaceDir,
-            providerId: providerId ?? sessionProviderId,
-            model,
-            effort,
-            mode,
-            files,
+      void (async () => {
+        let action: 'start' | 'queued' = 'start';
+        try {
+          const gate = await window.electronAPI?.botTurn?.sendTurn({
+            agentId,
+            text: content,
+            clientMsgId: messageId,
           });
-        },
-      });
+          if (gate?.action) action = gate.action;
+        } catch {
+          // Gate unavailable (older preload / IPC failure) → direct send,
+          // the pre-500 behavior.
+          action = 'start';
+        }
+        if (action === 'start') {
+          startTurn();
+          return;
+        }
+        // Queued on the user lane. Keep the captured start params so the
+        // scheduled-turn push can restart the turn with the same shape.
+        setMessageDelivery(activeThreadId, messageId, 'queued');
+        rememberPendingTurn(messageId, {
+          sessionId: activeThreadId,
+          content,
+          displayContent,
+          start: startTurn,
+        });
+      })();
     },
     [
       activeThreadId,
-      isStreaming,
       addMessage,
       setMessageDelivery,
       settings.agentLanguage,
@@ -599,6 +603,54 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       botDirectSendComplete(activeThreadId);
     }
   }, [activeThreadId, isStreaming]);
+
+  // Plan 500 P2.2 — main hands a queued user turn to the renderer when its
+  // lane slot arrives. Exactly one window claims it (IPC CAS inside
+  // subscribeScheduledTurns); the claiming window runs the turn through the
+  // normal streaming path. The ref keeps the subscription stable while the
+  // handler closure stays fresh.
+  const scheduledTurnHandlerRef = useRef<(push: { sessionId: string; agentId: string; messageId: string; text: string }) => void>(() => {});
+  scheduledTurnHandlerRef.current = (push) => {
+    const pending = takePendingTurn(push.messageId);
+    const content = pending?.content ?? push.text;
+    const alreadyRendered = (messages[push.sessionId] ?? []).some(
+      (m) => m.id === push.messageId,
+    );
+    if (!alreadyRendered) {
+      addMessage(
+        push.sessionId,
+        {
+          id: push.messageId,
+          role: 'user',
+          content,
+          displayContent: pending?.displayContent,
+          timestamp: Date.now(),
+          metadata: { optimistic: true },
+        },
+        { persist: false },
+      );
+    }
+    setMessageDelivery(push.sessionId, push.messageId, 'sending');
+    setIsStreaming(true);
+    if (pending?.start) {
+      pending.start();
+      return;
+    }
+    // Queued from another window (or before a reload): start with session
+    // defaults — the server binds the profile from the bot session id.
+    void startStream({
+      sessionId: push.sessionId,
+      content,
+      language: settings.agentLanguage,
+      permissionModeOverride: 'auto' as const,
+      agentProfileId: push.agentId,
+      titleGenerationModel: settings.titleGenerationModel,
+      defaultWorkspaceDirectory: settings.workspaceDir,
+    });
+  };
+  useEffect(() => {
+    return subscribeScheduledTurns((push) => scheduledTurnHandlerRef.current(push));
+  }, []);
 
   const handleInterrupt = useCallback(() => {
     if (!activeThreadId) return;
@@ -618,6 +670,10 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
     // Second press within 3s: clear queued messages
     if (hasQueuedMessages(activeThreadId) && now - lastCancelTimeRef.current < 3000) {
       clearQueuedMessages(activeThreadId);
+      // Plan 500: queued bot turns also live on the main wake queue.
+      if (resolveChatMode(activeThreadId) === 'bot-direct') {
+        cancelPendingTurnsForSession(activeThreadId);
+      }
       lastCancelTimeRef.current = 0;
       return;
     }
@@ -661,6 +717,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
     name: activeBotContact?.name ?? activeBotAgentId ?? '',
     avatarUrl: activeBotContact?.avatarUrl,
     avatarColor: activeBotContact?.avatarColor,
+    avatarEmoji: activeBotContact?.avatarEmoji,
   };
 
   const renderView = () => {
@@ -758,6 +815,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
     <I18nProvider>
       <FontProvider>
         <AppShell>{renderView()}</AppShell>
+        <SearchCommandPalette />
         {bootPhase !== "hidden" && (
           <StartupLanding phase={bootPhase} status={bootStatus} />
         )}
