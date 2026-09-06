@@ -43,6 +43,7 @@ import { FileEditToolRow } from './FileEditToolRow';
 import { ReadToolRow } from './ReadToolRow';
 import { AskUserQuestionResultRow } from './AskUserQuestionResultRow';
 import { MessageSessionToolRow } from './MessageSessionToolRow';
+import { SessionToolRow } from './SessionToolRow';
 import { SkillToolRow } from './SkillToolRow';
 import { ModuleToolRow } from './ModuleToolRow';
 import { TaskToolRow } from './TaskToolRow';
@@ -158,6 +159,13 @@ const ROUTES: RouteEntry[] = [
     // tool-call summary + status badge.
     match: (t) => isMessageSessionTool(t.name),
     render: (tool) => <MessageSessionToolRow tool={tool} />,
+  },
+  {
+    // Plan 504 session tool — spawn renders a live child-session card;
+    // other actions (get/reply/cancel/rename) fall back to the row's
+    // plain result text.
+    match: (t) => t.name.toLowerCase() === 'session',
+    render: (tool) => <SessionToolRow tool={tool} />,
   },
   {
     // vision_analyze returns a plain-text envelope ("Image analyzed:

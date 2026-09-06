@@ -20,6 +20,8 @@ import { createConfigAgentFromName, patchConfigAgentIdentity } from '../config/a
 import { toLegacyApiProvider, migrateLegacyApiProvider } from '../../src/lib/providers/legacy';
 import type { ApiProvider } from '../config/provider-types';
 import { getAutomationScheduler } from '../automation/Scheduler.js';
+import { runPromptInSession, interruptCronSession, type CronProviderConfig } from '../automation/agent-run';
+import { toLLMProvider } from '../config/provider-types.js';
 import { getLogger, LogComponent } from '../logging/logger';
 import { testProviderConnection } from '../ipc/net-handlers';
 import { getPairingStore } from '../gateway/pairing';
@@ -111,6 +113,50 @@ function emitMailboxEvent(
     broadcaster[name]?.(row as Record<string, unknown>, extra);
   } catch {
     // The agent DB bridge can run in test contexts without Electron windows.
+  }
+}
+
+/**
+ * Notify a parent session that a spawned child session finished (Plan 504).
+ * Writes a `background_notification` mailbox row into the parent — the same
+ * "background work completed, wake me" contract the cron/background-task path
+ * uses — then pokes the idle wake dispatcher exactly like `mailbox:send` does.
+ * The parent is woken now if idle; if busy, the existing lock-release → idle
+ * re-kick and slot-checkpoint mailbox claim deliver it on the next available
+ * turn. Best-effort: a wake failure must not surface to the spawn path.
+ */
+function notifySpawnCompletion(
+  parentSessionId: string,
+  childSessionId: string,
+  status: 'completed' | 'failed',
+  summary: string,
+): void {
+  try {
+    const { mailbox } = getCoreStores();
+    const item = mailbox.enqueue({
+      id: randomUUID(),
+      sessionId: parentSessionId,
+      submittedRunId: '',
+      content: `[session:${status}] spawned session ${childSessionId} finished:\n${summary}`,
+      kind: 'background_notification',
+      clientMsgId: null,
+      source: 'session-tool',
+    });
+    const row = coreMailboxToIpcRow(item);
+    void maybeDispatchIdleWake({
+      id: row.id as string,
+      sessionId: row.session_id as string,
+      kind: row.kind as string,
+      content: row.content as string | undefined,
+      clientMsgId: row.client_msg_id as string | null | undefined,
+    }).catch(() => {});
+  } catch (err) {
+    getLogger().error(
+      'notifySpawnCompletion failed',
+      err instanceof Error ? err : new Error(String(err)),
+      { parentSessionId, childSessionId },
+      LogComponent.AgentCommunicator,
+    );
   }
 }
 
@@ -303,6 +349,246 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     case 'session:listByParentId': {
       const { sessions } = getCoreStores();
       return sessions.list({ parentSessionId: p.parentId as string }).map(coreSessionToIpcRow);
+    }
+
+    // Plan 504 — session tool minimal loop. The worker calls
+    // sessionDb.spawn; MAIN creates a real project-scoped child session row,
+    // records parent→child lineage, and fires an ASYNC ordinary agent run via
+    // runPromptInSession (the same POST /sessions/:id/chat cron uses). Returns
+    // immediately with the child session id; the child's completion/failure
+    // wakes the parent through a background_notification mailbox row.
+    case 'session:spawn': {
+      const workingDirectory = p.workingDirectory as string | undefined;
+      const prompt = p.prompt as string | undefined;
+      const parentSessionId = p.parentSessionId as string | undefined;
+      if (!workingDirectory || !prompt || !parentSessionId) {
+        return { ok: false, reason: 'missing_required_fields' };
+      }
+
+      // Resolve the active provider + model for the child run.
+      const activeLlm = getProviderStore().getDefaultLlmProvider();
+      const activeProvider = activeLlm ? toLegacyApiProvider(activeLlm) : undefined;
+      if (!activeLlm || !activeProvider) {
+        return { ok: false, reason: 'no_active_provider' };
+      }
+      const options = (activeProvider.options ?? {}) as Record<string, unknown>;
+      const model =
+        (p.model as string | undefined) ||
+        (options.defaultModel as string) ||
+        (options.model as string) ||
+        getDefaultModelForProvider(activeProvider.providerType, options);
+      const providerConfig: CronProviderConfig = {
+        apiKey: activeProvider.apiKey ?? '',
+        baseURL: activeProvider.baseUrl || undefined,
+        model,
+        provider: toLLMProvider(activeProvider.providerType),
+        authStyle: 'api_key',
+      };
+
+      const childId = `spawn:${Date.now()}:${randomUUID().slice(0, 8)}`;
+      const { sessions, spawnEdges } = getCoreStores();
+      const permissionMode = resolvePermissionProfile(undefined, parentSessionId, {
+        isTrustedOverride: false,
+      });
+      sessions.create(
+        ipcSessionToCoreCreate(
+          {
+            id: childId,
+            title: `[Spawn] ${prompt.split('\n')[0]?.slice(0, 60) || 'task'}`,
+            working_directory: workingDirectory,
+            status: 'active',
+            mode: 'chat',
+            model,
+            provider_id: activeLlm.id,
+            parent_session_id: parentSessionId,
+            agent_type: 'spawn',
+          },
+          permissionMode,
+        ),
+      );
+      spawnEdges.record({
+        parentSessionId,
+        childSessionId: childId,
+        spawnReason: 'session-tool',
+        spawnType: 'session',
+      });
+
+      // Surface in the sidebar without a manual refresh (same as session:ensureBot).
+      try {
+        for (const window of BrowserWindow.getAllWindows()) {
+          if (!window.isDestroyed()) {
+            window.webContents.send('sync:threads-changed');
+          }
+        }
+      } catch {
+        // Headless boot / CLI has no windows — best-effort.
+      }
+
+      // Fire the child run asynchronously. Do NOT await — the tool returns the
+      // child id immediately and is woken via notifySpawnCompletion later.
+      setImmediate(() => {
+        runPromptInSession({
+          sessionId: childId,
+          prompt,
+          workingDirectory,
+          providerConfig,
+        })
+          .then((r) => notifySpawnCompletion(parentSessionId, childId, 'completed', r.output))
+          .catch((err) =>
+            notifySpawnCompletion(
+              parentSessionId,
+              childId,
+              'failed',
+              err instanceof Error ? err.message : String(err),
+            ),
+          );
+      });
+
+      return { ok: true, sessionId: childId, parentId: parentSessionId };
+    }
+
+    // Plan 504 Phase 2 — continuous session management. All `session:spawn*`
+    // actions scope to sessions the caller spawned (child.parentSessionId ===
+    // caller), matching grok's launchedIds ownership gate so one session cannot
+    // prod another session's children.
+
+    case 'session:spawnList': {
+      const parentSessionId = p.parentSessionId as string | undefined;
+      if (!parentSessionId) return { ok: false, reason: 'missing_parentSessionId' };
+      const { sessions } = getCoreStores();
+      const children = sessions.list({ parentSessionId }).map(coreSessionToIpcRow);
+      return { ok: true, sessions: children };
+    }
+
+    case 'session:spawnGet': {
+      const sessionId = p.sessionId as string | undefined;
+      const callerSessionId = p.callerSessionId as string | undefined;
+      if (!sessionId || !callerSessionId) return { ok: false, reason: 'missing_ids' };
+      const { sessions } = getCoreStores();
+      const session = sessions.get(sessionId);
+      if (!session) return { ok: false, reason: 'not_found' };
+      if (session.parentSessionId !== callerSessionId) {
+        return { ok: false, reason: 'not_owned' };
+      }
+      // Diff statistics come from the latest turn review (duya's own +N/-M
+      // capture; aggregate across all saved reviews as a cumulative total).
+      let linesAdded = 0;
+      let linesRemoved = 0;
+      let filesChanged = 0;
+      try {
+        const reviews = getDatabase().prepare(
+          'SELECT additions, removals, files_json FROM chat_turn_reviews WHERE session_id = ?',
+        ).all(sessionId) as Array<{ additions: number; removals: number; files_json: string }>;
+        const fileSet = new Set<string>();
+        for (const r of reviews) {
+          linesAdded += Number(r.additions) || 0;
+          linesRemoved += Number(r.removals) || 0;
+          try {
+            for (const f of JSON.parse(r.files_json) as { path?: string }[]) {
+              if (f?.path) fileSet.add(f.path);
+            }
+          } catch {
+            // files_json unparseable — ignore for stats
+          }
+        }
+        filesChanged = fileSet.size;
+      } catch {
+        // chat_turn_reviews absent / unreadable — stats default to zero.
+      }
+      return {
+        ok: true,
+        session: {
+          id: sessionId,
+          title: session.title ?? '',
+          status: session.status ?? '',
+          workingDirectory: session.workingDirectory ?? '',
+          parentId: session.parentSessionId,
+          filesChanged,
+          linesAdded,
+          linesRemoved,
+          updatedAt: session.updatedAt,
+          createdAt: session.createdAt,
+        },
+      };
+    }
+
+    case 'session:spawnReply': {
+      const sessionId = p.sessionId as string | undefined;
+      const callerSessionId = p.callerSessionId as string | undefined;
+      const prompt = p.prompt as string | undefined;
+      if (!sessionId || !callerSessionId || !prompt) {
+        return { ok: false, reason: 'missing_required_fields' };
+      }
+      const { sessions } = getCoreStores();
+      const session = sessions.get(sessionId);
+      if (!session) return { ok: false, reason: 'not_found' };
+      if (session.parentSessionId !== callerSessionId) {
+        return { ok: false, reason: 'not_owned' };
+      }
+      const parentSessionId = session.parentSessionId;
+      const workingDirectory = session.workingDirectory;
+      if (!workingDirectory) return { ok: false, reason: 'no_working_directory' };
+
+      // Reuse the same provider/model the child was created with.
+      const activeLlm = getProviderStore().getDefaultLlmProvider();
+      const activeProvider = activeLlm ? toLegacyApiProvider(activeLlm) : undefined;
+      if (!activeLlm || !activeProvider) return { ok: false, reason: 'no_active_provider' };
+      const options = (activeProvider.options ?? {}) as Record<string, unknown>;
+      const model =
+        session.model ??
+        (options.defaultModel as string) ??
+        (options.model as string) ??
+        getDefaultModelForProvider(activeProvider.providerType, options);
+      const providerConfig: CronProviderConfig = {
+        apiKey: activeProvider.apiKey ?? '',
+        baseURL: activeProvider.baseUrl || undefined,
+        model,
+        provider: toLLMProvider(activeProvider.providerType),
+        authStyle: 'api_key',
+      };
+
+      // A follow-up is another async run on the child; the child's parent is
+      // woken again on completion.
+      setImmediate(() => {
+        runPromptInSession({ sessionId, prompt, workingDirectory, providerConfig })
+          .then((r) => notifySpawnCompletion(parentSessionId, sessionId, 'completed', r.output))
+          .catch((err) =>
+            notifySpawnCompletion(
+              parentSessionId,
+              sessionId,
+              'failed',
+              err instanceof Error ? err.message : String(err),
+            ),
+          );
+      });
+      return { ok: true, sessionId };
+    }
+
+    case 'session:spawnCancel': {
+      const sessionId = p.sessionId as string | undefined;
+      const callerSessionId = p.callerSessionId as string | undefined;
+      if (!sessionId || !callerSessionId) return { ok: false, reason: 'missing_ids' };
+      const { sessions } = getCoreStores();
+      const session = sessions.get(sessionId);
+      if (!session) return { ok: false, reason: 'not_found' };
+      if (session.parentSessionId !== callerSessionId) return { ok: false, reason: 'not_owned' };
+      interruptCronSession(sessionId);
+      return { ok: true, sessionId };
+    }
+
+    case 'session:spawnRename': {
+      const sessionId = p.sessionId as string | undefined;
+      const callerSessionId = p.callerSessionId as string | undefined;
+      const title = p.title as string | undefined;
+      if (!sessionId || !callerSessionId || !title?.trim()) {
+        return { ok: false, reason: 'missing_required_fields' };
+      }
+      const { sessions } = getCoreStores();
+      const session = sessions.get(sessionId);
+      if (!session) return { ok: false, reason: 'not_found' };
+      if (session.parentSessionId !== callerSessionId) return { ok: false, reason: 'not_owned' };
+      sessions.update(sessionId, { title: title.trim() });
+      return { ok: true, sessionId };
     }
 
     // ==================== Goal actions (core store thin forward) ====================

@@ -35,6 +35,7 @@ import { skillTool } from './SkillTool/SkillTool.js';
 import { briefTool } from './BriefTool/BriefTool.js';
 import { sessionSearchTool } from './SessionSearchTool/index.js';
 import { messageSessionTool } from './MessageSessionTool/index.js';
+import { sessionTool } from './SessionTool/index.js';
 import { VisionTool } from './VisionTool/VisionTool.js';
 import { imageGenerateTool } from './ImageGenerateTool/index.js';
 import { duyaCliTool } from './DuyaCliTool/index.js';
@@ -55,6 +56,7 @@ import {
   updateAgentTool,
 } from './AgentManagementTool/index.js';
 import { manageRoutineTool } from './ManageRoutineTool/index.js';
+import { listAppConnectorsTool, connectAppTool } from './AppConnectorManageTool/index.js';
 
 /**
  * BashTool instance
@@ -169,6 +171,10 @@ export function createBuiltinRegistry(
   registry.register(sessionSearchTool.toTool(), sessionSearchTool, { exposeMode: 'discoverable' });
   // Inter-agent communication tool — message another session's agent
   registry.register(messageSessionTool.toTool(), messageSessionTool, { exposeMode: 'discoverable' });
+  // Plan 504 — spawn a real project-scoped child session and run it async.
+  // Bot-exclusive: not auto-surfaced to general sessions (mirrors
+  // send_to_agent); bots get exact-name promotion via BOT_TOOLSET.
+  registry.register(sessionTool.toTool(), sessionTool, { exposeMode: 'discoverable' });
   const visionTool = new VisionTool();
   registry.register(visionTool, visionTool, { exposeMode: 'always' });
 
@@ -347,6 +353,15 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
   // agent-side (bridge has no session context). Discoverable: bot profiles
   // surface it via BOT_TOOLSET; main sessions cannot own routines.
   registry.register(manageRoutineTool.toTool(), manageRoutineTool, { exposeMode: 'discoverable' });
+
+  // Plan 503: list_app_connectors / connect_app — bot-only connector
+  // elicitation (grok AuthenticateMcpServer parity). connect_app shows the
+  // user a connect card (chat:connector_auth_required variant 'connect')
+  // and never touches tokens; the OAuth flow and resume stay in main + UI.
+  // Discoverable: bot profiles surface them via BOT_TOOLSET; interactive
+  // main-session agents keep the settings-page connect flow.
+  registry.register(listAppConnectorsTool.toTool(), listAppConnectorsTool, { exposeMode: 'discoverable' });
+  registry.register(connectAppTool.toTool(), connectAppTool, { exposeMode: 'discoverable' });
 
   // Plan 490 P1: ReactToMessage — emoji tapback on a chat message (grok
   // sand-reaction-tool parity). Always-exposed (grok SAND_FORCED_STATIC

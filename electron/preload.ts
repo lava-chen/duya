@@ -102,6 +102,9 @@ export interface ThreadAPI {
   update: (id: string, data: Record<string, unknown>) => Promise<unknown>
   delete: (id: string) => Promise<boolean>
   listByParentId: (parentId: string) => Promise<unknown[]>
+  // Plan 504 UI: live child-session card (status + +N/-M) + cancel (interrupt).
+  getCard: (sessionId: string) => Promise<unknown>
+  cancelChild: (sessionId: string) => Promise<unknown>
   getTasks: (sessionId: string) => Promise<unknown[]>
   createTask: (data: Record<string, unknown>) => Promise<unknown>
   updateTask: (id: string, data: Record<string, unknown>) => Promise<unknown>
@@ -632,6 +635,9 @@ export interface BotChannelsAPI {
   list: (agentId: string) => Promise<{ channels?: Array<Record<string, unknown>>; error?: string }>
   connect: (agentId: string, input: { platform: string; label?: string; credential: string }) => Promise<{ ok: boolean; platform?: string; error?: string }>
   disconnect: (agentId: string, platform: string) => Promise<{ ok: boolean; platform?: string; error?: string }>
+  qrBegin: (agentId: string, platform: string, opts?: { label?: string }) => Promise<{ ok: boolean; sessionId?: string; qrImage?: string; error?: string }>
+  qrPoll: (sessionId: string) => Promise<{ ok: boolean; status?: string; error?: string }>
+  qrCancel: (sessionId: string) => Promise<{ ok: boolean; error?: string }>
 }
 
 export interface ConfigAgentsAPI {
@@ -645,6 +651,8 @@ export interface ConfigAgentsAPI {
   /** Opens the file dialog in the main process; null when the user canceled. */
   uploadBotAvatar: (id: string) => Promise<{ avatarImage: string; avatarVersion: number; avatarUrl?: string } | null>;
   clearBotAvatar: (id: string) => Promise<{ avatarImage: string; avatarVersion: number }>;
+  /** Fires after any bot config/identity mutation; returns an unsubscribe function. */
+  onBotsChanged: (callback: () => void) => () => void;
 }
 
 /** Plan 478: shared-room declaration CRUD (groups.toml write side). */
@@ -990,6 +998,12 @@ export interface AppConnectionAPI {
     errorCode?: string
   }>
   connect: (payload: { provider: string; scopes?: string[] }) => Promise<{
+    success: boolean
+    data?: AppConnectionStatusDTO
+    error?: string
+    errorCode?: string
+  }>
+  connectQqMail: (payload: { email: string; authCode: string }) => Promise<{
     success: boolean
     data?: AppConnectionStatusDTO
     error?: string
@@ -2016,6 +2030,9 @@ const electronAPI: ElectronAPI = {
     update: (id: string, data: Record<string, unknown>) => ipcRenderer.invoke('db:session:update', id, data),
     delete: (id: string) => ipcRenderer.invoke('db:session:delete', id),
     listByParentId: (parentId: string) => ipcRenderer.invoke('db:session:listByParentId', parentId),
+    // Plan 504 UI: live "child session" card (status + +N/-M) + cancel (interrupt).
+    getCard: (sessionId: string) => ipcRenderer.invoke('duya:session:card', sessionId),
+    cancelChild: (sessionId: string) => ipcRenderer.invoke('duya:session:cancel', sessionId),
     getTasks: (sessionId: string) => ipcRenderer.invoke('db:task:getBySession', sessionId),
     createTask: (data: Record<string, unknown>) => ipcRenderer.invoke('db:task:create', data),
     updateTask: (id: string, data: Record<string, unknown>) => ipcRenderer.invoke('db:task:update', id, data),
@@ -2328,6 +2345,10 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('botChannels:connect', agentId, input),
     disconnect: (agentId: string, platform: string) =>
       ipcRenderer.invoke('botChannels:disconnect', agentId, platform),
+    qrBegin: (agentId: string, platform: string, opts?: { label?: string }) =>
+      ipcRenderer.invoke('botChannels:qr:begin', agentId, platform, opts || {}),
+    qrPoll: (sessionId: string) => ipcRenderer.invoke('botChannels:qr:poll', sessionId),
+    qrCancel: (sessionId: string) => ipcRenderer.invoke('botChannels:qr:cancel', sessionId),
   },
   configAgents: {
     list: () => ipcRenderer.invoke('config:agents:list'),
@@ -2338,6 +2359,16 @@ const electronAPI: ElectronAPI = {
     updateBotProfile: (id: string, input: Record<string, unknown>) => ipcRenderer.invoke('config:agents:updateBotProfile', id, input),
     uploadBotAvatar: (id: string) => ipcRenderer.invoke('config:agents:uploadBotAvatar', id),
     clearBotAvatar: (id: string) => ipcRenderer.invoke('config:agents:clearBotAvatar', id),
+    // Plan 483: main broadcasts after any bot config/identity mutation
+    // (UI dialogs AND a bot's own update_state writes) so the sidebar
+    // Bots section can refresh live. Returns an unsubscribe function.
+    onBotsChanged: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on('config:bots:changed', handler);
+      return () => {
+        ipcRenderer.removeListener('config:bots:changed', handler);
+      };
+    },
   },
   // Shared rooms (group chat) — Plan 478 P1.1/P2.2/P3.1.
   groups: {
@@ -2514,6 +2545,7 @@ const electronAPI: ElectronAPI = {
     providers: () => ipcRenderer.invoke('appConnection:providers'),
     status: (connectionId: string) => ipcRenderer.invoke('appConnection:status', connectionId),
     connect: (payload: { provider: string; scopes?: string[] }) => ipcRenderer.invoke('appConnection:connect', payload),
+    connectQqMail: (payload: { email: string; authCode: string }) => ipcRenderer.invoke('appConnection:connectQqMail', payload),
     configureProvider: (payload: { provider: string; clientId: string; clientSecret?: string }) =>
       ipcRenderer.invoke('appConnection:configureProvider', payload),
     disconnect: (connectionId: string) => ipcRenderer.invoke('appConnection:disconnect', connectionId),

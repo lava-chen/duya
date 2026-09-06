@@ -243,6 +243,20 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
     },
   },
   {
+    // Plan 504 session tool — spawn shows the target project directory in
+    // the collapsed chrome (the live card renders in SessionToolRow).
+    match: (n) => n.toLowerCase() === 'session',
+    icon: WrenchIcon,
+    labelKey: null,
+    getSummary: (input) => {
+      const inp = (input || {}) as Record<string, unknown>;
+      const action = typeof inp.action === 'string' ? inp.action : 'spawn';
+      const wd = typeof inp.workingDirectory === 'string' ? inp.workingDirectory : '';
+      const text = wd ? wd : `session:${action}`;
+      return text.length > 50 ? '...' + text.slice(text.length - 50) : text;
+    },
+  },
+  {
     // vision_analyze — invokes a dedicated vision model on an image
     // (see packages/agent/src/tool/VisionTool/VisionTool.ts). The
     // summary shows the optional `question` (or the image filename)
