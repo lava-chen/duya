@@ -810,4 +810,57 @@ describe('MessageLog', () => {
 
     fresh.close();
   });
+
+  // ─── message_search incremental index (unified space search) ───
+
+  describe('message_search index', () => {
+    function searchRows(sessionId: string): Array<{ message_id: string; seq: number; searchable_text: string }> {
+      return db
+        .prepare('SELECT message_id, seq, searchable_text FROM message_search WHERE session_id = ? ORDER BY seq')
+        .all(sessionId) as Array<{ message_id: string; seq: number; searchable_text: string }>;
+    }
+
+    it('indexes message text into message_search on normal append', () => {
+      insertSessionFixture(db, 's1', 1000);
+      log.appendBatch([
+        makeEvent('s1', makeUserMessage('m1', 'alpha needle beta', 1000)),
+        makeEvent('s1', makeAssistantMessage('m2', 'gamma delta', 1100)),
+      ]);
+      const rows = searchRows('s1');
+      expect(rows).toHaveLength(2);
+      expect(rows[0].searchable_text).toContain('alpha needle beta');
+      expect(rows[1].searchable_text).toContain('gamma delta');
+    });
+
+    it('docker-first append after a wipe backfills all history (post-migration)', () => {
+      insertSessionFixture(db, 's1', 1000);
+      // A message that predates the index (simulated by wiping the table).
+      log.appendBatch([makeEvent('s1', makeUserMessage('old-msg', 'old needle term', 1000))]);
+      db.prepare('DELETE FROM message_search').run();
+      // Next append triggers a full rebuild → history is re-indexed.
+      log.appendBatch([makeEvent('s1', makeUserMessage('new-msg', 'new needle term', 2000))]);
+      const texts = searchRows('s1').map((r) => r.searchable_text);
+      expect(texts).toHaveLength(2);
+      expect(texts).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('old needle term'),
+          expect.stringContaining('new needle term'),
+        ]),
+      );
+    });
+
+    it('rebase drops superseded rows and keeps survivors', () => {
+      insertSessionFixture(db, 's1', 1000);
+      log.appendBatch([
+        makeEvent('s1', makeUserMessage('older', 'stale needle', 1000)),
+        makeEvent('s1', makeUserMessage('stale', 'also stale', 1100)),
+      ]);
+      // Supercede seqs 1..2, replacing them with a fresh survivor.
+      log.appendRebase('s1', null, 2, [makeEvent('s1', makeUserMessage('fresh', 'fresh needle', 1200))]);
+      const rows = searchRows('s1');
+      expect(rows).toHaveLength(1);
+      expect(rows[0].message_id).toBe('fresh');
+      expect(rows[0].searchable_text).toContain('fresh needle');
+    });
+  });
 });

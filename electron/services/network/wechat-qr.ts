@@ -15,7 +15,31 @@ export interface QrLoginSession {
   refreshCount: number;
   status: 'waiting' | 'scanned' | 'confirmed' | 'expired' | 'failed';
   accountId?: string;
+  /** Captured on confirm — the per-bot connector needs these to bind this
+   * WeChat account to a bot (written to the connector-secret store). */
+  token?: string;
+  ilinkBotId?: string;
+  baseUrl?: string;
   error?: string;
+}
+
+/**
+ * Return the confirmed credentials (token / ilink bot id / base URL) for a QR
+ * login session, or null if it has not been confirmed (or does not exist).
+ * Used by the per-bot channel binding flow so a confirmed scan can be written
+ * into the bot's connector-secret store — the global `upsertWeixinAccount`
+ * side effect stays untouched.
+ */
+export function getWeixinQrCredentials(
+  sessionId: string,
+): { token: string; ilinkBotId: string; baseUrl: string } | null {
+  const session = getLoginSessions().get(sessionId);
+  if (!session || session.status !== 'confirmed' || !session.token) return null;
+  return {
+    token: session.token,
+    ilinkBotId: session.ilinkBotId ?? '',
+    baseUrl: session.baseUrl ?? '',
+  };
 }
 
 const WEIXIN_GLOBAL_KEY = '__weixin_login_sessions__';
@@ -156,6 +180,10 @@ export async function pollWeixinQrStatus(sessionId: string): Promise<QrLoginSess
           const accountId = (resp.ilink_bot_id || '').replace(/[@.]/g, '-');
           const userId = resp.ilink_user_id || '';
           session.accountId = accountId;
+          // Capture the raw credentials so per-bot binding can persist them.
+          session.token = resp.bot_token;
+          session.ilinkBotId = resp.ilink_bot_id;
+          session.baseUrl = resp.baseurl || '';
 
           getLogger().info(
             '[WeixinQrLogin] Login confirmed by WeChat server',

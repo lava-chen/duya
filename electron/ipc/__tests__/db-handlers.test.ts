@@ -327,6 +327,28 @@ vi.mock('../../automation/Scheduler', () => ({
   getAutomationScheduler: () => null,
 }));
 
+// Unified space search reads bots/routines from config.toml; empty them in
+// tests so `db:search:query` is deterministic and hermetic.
+vi.mock('../../config/agents', () => ({
+  listConfigAgents: vi.fn(() => ({})),
+  listBots: vi.fn(() => []),
+  upsertConfigAgent: vi.fn(),
+  deleteConfigAgent: vi.fn(),
+  createConfigAgentUnique: vi.fn(),
+  updateBotProfileIdentity: vi.fn(),
+  setBotAvatarImage: vi.fn(),
+  clearBotAvatarImage: vi.fn(),
+  slugifyBotIdFromName: vi.fn(),
+}));
+
+vi.mock('../../automation/cron-file', () => ({
+  CronFileStore: class {
+    listCrons(): unknown[] {
+      return [];
+    }
+  },
+}));
+
 vi.mock('../../messaging/port-manager', () => ({
   getChannelManager: () => null,
 }));
@@ -730,6 +752,53 @@ describe('db-handlers (core store thin forward)', () => {
   });
 
   // ==================== Search Handlers ====================
+
+  describe('db:search:query (unified space search)', () => {
+    it('aggregates session + message + link hits with the nav/content budget', async () => {
+      // 1 metadata (nav) hit on session s1.
+      mocks.stores.sessions.search.mockReturnValueOnce([
+        { id: 's1', status: 'active', title: 'Alpha', agentName: '', projectName: 'proj', updatedAt: 3000 },
+      ]);
+      // 1 content hit on session s2 — title resolved via sessions.get.
+      mocks.stores.messageLog.searchText.mockReturnValueOnce([
+        { sessionId: 's2', messageId: 'm2', seq: 3, snippet: 'see https://example.com/q now' },
+      ]);
+      mocks.stores.sessions.get.mockReturnValueOnce({
+        id: 's2', status: 'active', title: 'Beta session', updatedAt: 5000,
+      });
+
+      const hits = (await invokeHandler(
+        'db:search:query',
+        {},
+        'example.com',
+      )) as Array<Record<string, unknown>>;
+
+      // nav cap (8) drives sessions.search limit; content budget = 25 - 1 nav = 24 (+5 headroom).
+      expect(mocks.stores.sessions.search).toHaveBeenCalledWith('example.com', 8);
+      expect(mocks.stores.messageLog.searchText).toHaveBeenCalledWith('example.com', {
+        limit: 29,
+      });
+
+      const sessionHit = hits.find((h) => h.kind === 'session');
+      expect(sessionHit).toMatchObject({ kind: 'session', sessionId: 's1', title: 'Alpha', snippet: 'proj' });
+
+      const messageHit = hits.find((h) => h.kind === 'message');
+      expect(messageHit).toMatchObject({
+        kind: 'message', sessionId: 's2', title: 'Beta session', messageId: 'm2', seq: 3,
+      });
+
+      // Link hit rides the matched message text.
+      const linkHit = hits.find((h) => h.kind === 'link');
+      expect(linkHit).toMatchObject({
+        kind: 'link', sessionId: 's2', title: 'https://example.com/q', messageId: 'm2', seq: 3,
+      });
+    });
+
+    it('returns an empty list for a blank query', async () => {
+      const result = await invokeHandler('db:search:query', {}, '   ');
+      expect(result).toEqual([]);
+    });
+  });
 
   describe('db:search:sessions', () => {
     it('combines sessions.search (metadata) with messageLog.searchText (content) — decision 7', async () => {

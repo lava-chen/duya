@@ -370,4 +370,234 @@ describe('MessageLog rotation (Plan 493, Phase B)', () => {
     expect(rows[0]).toMatchObject({ id: 'm-1', generation: 0 });
     expect(rows[2]).toMatchObject({ id: 'm-2', generation: 1 });
   });
+
+  // ── Plan 501 L4: appendBatch detects a compaction payload and rotates ──
+
+  function makeCompactionEvent(
+    sessionId: string,
+    id: string,
+    summary: string,
+    createdAt: number,
+  ): NewEvent {
+    return {
+      id,
+      sessionId,
+      payload: {
+        type: 'compaction' as const,
+        id,
+        parentId: null,
+        createdAt,
+        summary,
+        firstKeptMessageId: 'm-1',
+        compactedMessageIds: [],
+        tokensBefore: 100,
+        tokensAfter: 10,
+        strategy: 'test',
+        previousCompactionId: undefined,
+        reinjectedSystemMessages: [],
+      },
+      createdAt,
+    };
+  }
+
+  it('appendBatch rotates a bot session when a compaction payload lands (Plan 501 L4)', () => {
+    const agentId = 'zeta';
+    const sessionId = `bot:${agentId}`;
+    const t = Date.now();
+    insertSessionFixture(db, sessionId, t);
+
+    log.appendBatch([
+      makeEvent(sessionId, makeUserMessage('m-1', 'before compaction', t)),
+    ]);
+
+    // A compaction entry appended through the normal append path must
+    // trigger the Phase B rotation: the summary lands as the first data
+    // row of the fresh generation.
+    log.appendBatch([makeCompactionEvent(sessionId, 'comp-1', 'summary v1', t + 100)]);
+
+    const sessionsDir = path.join(rootDir, 'agents', agentId, 'sessions');
+    expect(fs.existsSync(path.join(sessionsDir, 'archive-0.jsonl'))).toBe(true);
+    expect(fs.readFileSync(path.join(sessionsDir, 'archive-0.jsonl'), 'utf8')).toContain('m-1');
+
+    // active.jsonl: rotation audit line first, then the compaction entry —
+    // "the new session's first data entry is the compressed text".
+    const newActive = fs.readFileSync(path.join(sessionsDir, 'active.jsonl'), 'utf8');
+    const lines = newActive.split('\n').filter((l) => l.length > 0);
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0]).type).toBe('rotation');
+    expect(JSON.parse(lines[1]).type).toBe('compaction');
+
+    // Index rows carry the new generation; chat_sessions.generation bumped.
+    const rows = db
+      .prepare('SELECT id, kind, generation FROM message_index WHERE session_id = ? ORDER BY seq')
+      .all(sessionId) as Array<{ id: string; kind: string; generation: number }>;
+    expect(rows.map((r) => r.kind)).toEqual(['user', 'rotation', 'compaction']);
+    expect(rows[2].generation).toBe(1);
+    const gen = db.prepare('SELECT generation FROM chat_sessions WHERE id = ?').get(sessionId) as {
+      generation: number;
+    };
+    expect(gen.generation).toBe(1);
+
+    // A second compaction rotates again (archive-1), epoch == generation.
+    log.appendBatch([makeCompactionEvent(sessionId, 'comp-2', 'summary v2', t + 200)]);
+    expect(fs.existsSync(path.join(sessionsDir, 'archive-1.jsonl'))).toBe(true);
+    const gen2 = db.prepare('SELECT generation FROM chat_sessions WHERE id = ?').get(sessionId) as {
+      generation: number;
+    };
+    expect(gen2.generation).toBe(2);
+  });
+
+  it('a compaction payload on a non-bot session does not rotate', () => {
+    const sessionId = 'human-sess-2';
+    const t = Date.now();
+    insertSessionFixture(db, sessionId, t);
+
+    log.appendBatch([
+      makeEvent(sessionId, makeUserMessage('m-1', 'hello', t)),
+      makeCompactionEvent(sessionId, 'comp-1', 'summary', t + 10),
+    ]);
+
+    // No agents/<id>/sessions tree and no rotation row — the shared dated
+    // tree keeps everything at generation 0.
+    expect(fs.existsSync(path.join(rootDir, 'agents'))).toBe(false);
+    const rows = db
+      .prepare('SELECT kind, generation FROM message_index WHERE session_id = ? ORDER BY seq')
+      .all(sessionId) as Array<{ kind: string; generation: number }>;
+    expect(rows.map((r) => r.generation)).toEqual([0, 0]);
+  });
+
+  it('appendBatch is fail-open when rotation throws (archive collision)', () => {
+    const agentId = 'theta';
+    const sessionId = `bot:${agentId}`;
+    const t = Date.now();
+    insertSessionFixture(db, sessionId, t);
+
+    log.appendBatch([makeEvent(sessionId, makeUserMessage('m-1', 'first', t))]);
+
+    // Simulate a crash-recovery orphan: archive-0 already exists, so
+    // rotateArchive refuses. The append must still succeed.
+    const sessionsDir = path.join(rootDir, 'agents', agentId, 'sessions');
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionsDir, 'archive-0.jsonl'), '{}\n');
+
+    expect(() =>
+      log.appendBatch([makeCompactionEvent(sessionId, 'comp-1', 'summary', t + 100)]),
+    ).not.toThrow();
+
+    // The compaction entry was still written (no rotation happened).
+    const rows = db
+      .prepare('SELECT kind FROM message_index WHERE session_id = ? ORDER BY seq')
+      .all(sessionId) as Array<{ kind: string }>;
+    expect(rows.map((r) => r.kind)).toEqual(['user', 'compaction']);
+    const active = fs.readFileSync(path.join(sessionsDir, 'active.jsonl'), 'utf8');
+    expect(active).toContain('comp-1');
+  });
+
+  it('listBySession self-heals a single-file bot session whose active.jsonl was rewritten in place', () => {
+    // Regression: the active file was overwritten (crash mid-rewrite or a bot
+    // rebuild) while `message_index.file_offset/byte_len` kept pointing at the
+    // OLD bytes. Previously every projection read garbage -> one
+    // "Unparseable rollout line skipped" WARN per stale row and the bot's
+    // history went invisible. With no `archive-*.jsonl`, the active file is the
+    // single authoritative source, so the projection must rebuild the index
+    // from it and return the surviving messages instead of skipping.
+    const agentId = 'recon';
+    const sessionId = `bot:${agentId}`;
+    const t = Date.now();
+    insertSessionFixture(db, sessionId, t);
+
+    log.appendBatch([
+      makeEvent(sessionId, makeUserMessage('m-1', 'old one', t)),
+      makeEvent(sessionId, makeUserMessage('m-2', 'old two', t + 1)),
+      makeEvent(sessionId, makeUserMessage('m-3', 'old three', t + 2)),
+    ]);
+
+    const sessionsDir = path.join(rootDir, 'agents', agentId, 'sessions');
+    const activePath = path.join(sessionsDir, 'active.jsonl');
+    // No archive exists yet.
+    expect(fs.existsSync(path.join(sessionsDir, 'archive-0.jsonl'))).toBe(false);
+
+    // Simulate an in-place rewrite of the active file to a different, shorter
+    // set of messages. The existing index offsets are now stale.
+    fs.writeFileSync(
+      activePath,
+      JSON.stringify(makeUserMessage('m-4', 'new four', t + 10)).trim() +
+        '\n' +
+        JSON.stringify(makeUserMessage('m-5', 'new five', t + 11)).trim() +
+        '\n',
+      'utf8',
+    );
+
+    // Sanity: the original indexed offsets no longer parse against the new file.
+    const stale = db
+      .prepare('SELECT file_offset, byte_len FROM message_index WHERE session_id = ? ORDER BY seq')
+      .all(sessionId) as Array<{ file_offset: number; byte_len: number }>;
+    const newContent = fs.readFileSync(activePath, 'utf8');
+    const anyStaleFails = stale.some(
+      (r) =>
+        r.file_offset + r.byte_len > Buffer.byteLength(newContent, 'utf8') ||
+        (() => {
+          try {
+            JSON.parse(
+              newContent.slice(r.file_offset, r.file_offset + r.byte_len),
+            );
+            return false;
+          } catch {
+            return true;
+          }
+        })(),
+    );
+    expect(anyStaleFails).toBe(true);
+
+    // listBySession must reconcile (rebuild the index from the active file) and
+    // expose only the surviving messages — no throw, no dropped-history WARNs.
+    const events = log.listBySession(sessionId);
+    expect(events.map((e) => e.id)).toEqual(['m-4', 'm-5']);
+
+    // The index is now consistent with the file: 2 rows, seq 1..2.
+    const rebuilt = db
+      .prepare('SELECT id, seq FROM message_index WHERE session_id = ? ORDER BY seq')
+      .all(sessionId) as Array<{ id: string; seq: number }>;
+    expect(rebuilt.map((r) => r.id)).toEqual(['m-4', 'm-5']);
+    expect(rebuilt.map((r) => r.seq)).toEqual([1, 2]);
+  });
+
+  it('does not rebuild multi-segment bot sessions from the active tail on an unparseable row', () => {
+    // A session that HAS archived generations must not be collapsed into the
+    // active file's rows by the self-heal path — one corrupt row in an archive
+    // could otherwise silently drop the healthy segments.
+    const agentId = 'multirecon';
+    const sessionId = `bot:${agentId}`;
+    const t = Date.now();
+    insertSessionFixture(db, sessionId, t);
+
+    log.appendBatch([makeEvent(sessionId, makeUserMessage('m-1', 'gen0', t))]);
+    log.rotateArchive(sessionId, 'compaction', t + 10);
+    log.appendBatch([makeEvent(sessionId, makeUserMessage('m-2', 'gen1', t + 20))]);
+
+    const sessionsDir = path.join(rootDir, 'agents', agentId, 'sessions');
+    expect(fs.existsSync(path.join(sessionsDir, 'archive-0.jsonl'))).toBe(true);
+
+    // Corrupt one archive row's byte range so projection would hit the guard.
+    const archive = path.join(sessionsDir, 'archive-0.jsonl');
+    const row = db
+      .prepare(
+        "SELECT file_offset, byte_len FROM message_index WHERE session_id = ? AND generation = 0 ORDER BY seq LIMIT 1",
+      )
+      .get(sessionId) as { file_offset: number; byte_len: number };
+    const content = fs.readFileSync(archive, 'utf8');
+    // Truncate the archive so that row reads past the end (unparseable).
+    fs.writeFileSync(archive, content.slice(0, row.file_offset), 'utf8');
+
+    // Self-heal must NOT collapse the session to the active tail: the guard
+    // detects an archive segment and keeps skipping the stale row only.
+    const events = log.listBySession(sessionId);
+    // m-1 is now unrecoverable (its archive bytes were wiped) but m-2 in the
+    // active segment survives and the timeline is NOT rebuilt from active alone.
+    expect(events.map((e) => e.id)).toEqual(['m-2']);
+    const remaining = db
+      .prepare('SELECT id, generation FROM message_index WHERE session_id = ? ORDER BY seq')
+      .all(sessionId) as Array<{ id: string; generation: number }>;
+    expect(remaining.some((r) => r.id === 'm-2')).toBe(true);
+  });
 });

@@ -61,6 +61,7 @@ import { uploadAsset as conductorUploadAsset, uploadProjectAsset as conductorUpl
 import { captureWebsiteSnapshot } from '../conductor/link-snapshot-service';
 import { prepareCanvasDocument, syncCanvasDocument } from '../conductor/document-service';
 import { getCoreStores } from '../db/core-connection';
+import { CronFileStore } from '../automation/cron-file';
 import { getConnectorCredential, storeConnectorCredential } from '../channels/agent-session-channels';
 import { getAppConnectionService } from '../services/app-connections/app-connection-service';
 
@@ -1150,6 +1151,139 @@ export function registerDbHandlers(): void {
     // Sort by updated_at DESC (matches old ORDER BY).
     rows.sort((a, b) => ((b.updated_at as number) ?? 0) - ((a.updated_at as number) ?? 0));
     return rows.slice(0, limit);
+  });
+
+  // ==================== Unified Search (rakazo-inspired space search) ====================
+  // Cross-entity aggregation over SQLite (sessions) + config.toml (bots, routines) +
+  // rollout content (messages/links). Nav-type hits (session/bot) are capped so content
+  // hits keep most of the budget. Returns a flat, kind-tagged list the Cmd+K panel renders.
+
+  const SEARCH_NAV_CAP = 8;
+  const SEARCH_KIND_ORDER: Record<string, number> = {
+    session: 0,
+    bot: 1,
+    message: 2,
+    link: 3,
+    routine: 4,
+  };
+
+  const hitContains = (query: string, ...fields: Array<string | undefined | null>): boolean => {
+    const q = query.toLowerCase();
+    return fields.some((f) => !!f && f.toLowerCase().includes(q));
+  };
+
+  const SEARCH_URL_RE = /https?:\/\/[^\s<>"')\]]+/gi;
+  const extractLinks = (text: string): string[] => {
+    const matches = text.match(SEARCH_URL_RE) ?? [];
+    return [...new Set(matches.map((u) => u.replace(/[.,;:!?)]+$/, '')))];
+  };
+
+  ipcMain.handle('db:search:query', (_event, rawQuery: string, limit = 25) => {
+    const TOTAL = Math.max(limit, 1);
+    const query = String(rawQuery ?? '').trim();
+    if (!query) return [] as unknown[];
+
+    const hits: Array<Record<string, unknown>> = [];
+    const navCount = (): number => hits.filter((h) => h.kind === 'session' || h.kind === 'bot').length;
+    const seenKey = (kind: string, key: string): boolean =>
+      hits.some((h) => h.kind === kind && h.key === key);
+
+    // 1. Navigation: sessions (metadata LIKE).
+    for (const s of getCoreStores().sessions.search(query, SEARCH_NAV_CAP)) {
+      if (navCount() >= SEARCH_NAV_CAP) break;
+      if (seenKey('session', s.id)) continue;
+      hits.push({
+        key: s.id,
+        kind: 'session',
+        sessionId: s.id,
+        title: s.title || s.agentName || s.id,
+        snippet: s.projectName || '',
+        updatedAt: s.updatedAt,
+      });
+    }
+
+    // 2. Navigation: bots (config.toml [agents.<id>]).
+    for (const b of listBots()) {
+      if (navCount() >= SEARCH_NAV_CAP) break;
+      if (seenKey('bot', b.id)) continue;
+      if (!hitContains(query, b.name, b.title, b.description)) continue;
+      hits.push({
+        key: b.id,
+        kind: 'bot',
+        botId: b.id,
+        botName: b.name,
+        title: b.name || b.id,
+        snippet: b.description || b.title || '',
+      });
+    }
+
+    // 3. Content: messages + links (rollout content scan).
+    const contentBudget = Math.max(0, TOTAL - navCount());
+    if (contentBudget > 0) {
+      const msgHits = getCoreStores().messageLog.searchText(query, { limit: contentBudget + 5 });
+      const { sessions } = getCoreStores();
+      const titleBySession = new Map<string, string>();
+      for (const m of msgHits) {
+        if (hits.length >= TOTAL) break;
+        if (seenKey('message', m.messageId)) continue;
+        let title = titleBySession.get(m.sessionId);
+        if (title === undefined) {
+          title = sessions.get(m.sessionId)?.title ?? m.sessionId;
+          titleBySession.set(m.sessionId, title);
+        }
+        hits.push({
+          key: m.messageId,
+          kind: 'message',
+          sessionId: m.sessionId,
+          title,
+          snippet: m.snippet,
+          messageId: m.messageId,
+          seq: m.seq,
+        });
+        // Link hits ride the same matched message text (best-effort: the snippet
+        // window, not the full message — fine for v1 navigation).
+        for (const url of extractLinks(m.snippet)) {
+          if (hits.length >= TOTAL || seenKey('link', url)) continue;
+          hits.push({
+            key: url,
+            kind: 'link',
+            sessionId: m.sessionId,
+            title: url,
+            snippet: m.snippet,
+            messageId: m.messageId,
+            seq: m.seq,
+          });
+        }
+      }
+    }
+
+    // 4. Content: routines (cronjob.toml).
+    if (hits.length >= TOTAL) return hits.slice(0, TOTAL);
+    try {
+      for (const job of new CronFileStore().listCrons()) {
+        if (hits.length >= TOTAL) break;
+        if (seenKey('routine', job.id)) continue;
+        if (!hitContains(query, job.name, job.prompt)) continue;
+        hits.push({
+          key: job.id,
+          kind: 'routine',
+          routineId: job.id,
+          title: job.name,
+          snippet: job.prompt,
+        });
+      }
+    } catch (err) {
+      // A malformed cronjob.toml must not break the whole search.
+      dbLogger.warn('db:search:query: cron read failed', { error: err instanceof Error ? err.message : String(err) });
+    }
+
+    // 5. Stable ordering: nav kinds first, then content; within kind by recency.
+    hits.sort((a, b) => {
+      const ka = (SEARCH_KIND_ORDER[a.kind as string] ?? 9) - (SEARCH_KIND_ORDER[b.kind as string] ?? 9);
+      if (ka !== 0) return ka;
+      return ((b.updatedAt as number) ?? 0) - ((a.updatedAt as number) ?? 0);
+    });
+    return hits.slice(0, TOTAL);
   });
 
   // ==================== Channel Binding Handlers ====================

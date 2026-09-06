@@ -29,8 +29,8 @@ function getStateDir(): string {
   return dir;
 }
 
-function stateFilePath(accountId: string): string {
-  return path.join(getStateDir(), `${accountId}.json`);
+function stateFilePath(accountId: string, stateDir?: string): string {
+  return path.join(stateDir ?? getStateDir(), `${accountId}.json`);
 }
 
 /**
@@ -38,17 +38,19 @@ function stateFilePath(accountId: string): string {
  */
 export class WeixinStateStore {
   private readonly accountId: string;
+  private readonly stateDir?: string;
   private state: WeixinPersistedState = { contextTokens: {}, syncBuf: '' };
   private dirty = false;
 
-  constructor(accountId: string) {
+  constructor(accountId: string, stateDir?: string) {
     this.accountId = accountId;
+    this.stateDir = stateDir;
     this.restore();
   }
 
   restore(): void {
     try {
-      const filePath = stateFilePath(this.accountId);
+      const filePath = stateFilePath(this.accountId, this.stateDir);
       if (!fs.existsSync(filePath)) return;
       const raw = fs.readFileSync(filePath, 'utf-8');
       const parsed = JSON.parse(raw) as Partial<WeixinPersistedState>;
@@ -65,8 +67,9 @@ export class WeixinStateStore {
   private persist(): void {
     if (!this.dirty) return;
     try {
-      const filePath = stateFilePath(this.accountId);
+      const filePath = stateFilePath(this.accountId, this.stateDir);
       const tmpPath = `${filePath}.tmp`;
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
       fs.writeFileSync(tmpPath, JSON.stringify(this.state), 'utf-8');
       fs.renameSync(tmpPath, filePath);
       this.dirty = false;

@@ -339,11 +339,11 @@ function buildCdnUploadUrl(params: {
  * configured CDN base host. Guards against server-side request forgery when
  * downloading media resolved from message content.
  */
-function assertSafeMediaHost(url: string): void {
+function assertSafeMediaHost(url: string, cdnBaseUrl?: string): void {
   const { hostname } = new URL(url);
   if (ALLOWED_CDN_HOSTS.has(hostname)) return;
-  if (_config.cdnBaseUrl) {
-    const cfgHost = new URL(_config.cdnBaseUrl).hostname;
+  if (cdnBaseUrl) {
+    const cfgHost = new URL(cdnBaseUrl).hostname;
     if (hostname === cfgHost) return;
   }
   throw new Error(`Blocked unsafe media URL host: ${hostname}`);
@@ -750,17 +750,88 @@ async function uploadBufferToCdn(params: {
 // Client
 // ---------------------------------------------------------------------------
 
-let _config: WxApiConfig & { cdnBaseUrl?: string } = {
+export interface WxApiClientConfiguration extends WxApiConfig {
+  cdnBaseUrl?: string;
+}
+
+const DEFAULT_WX_CONFIG: WxApiClientConfiguration = {
   baseUrl: 'https://ilinkai.weixin.qq.com',
   token: '',
   timeoutMs: HTTPS_POST_TIMEOUT_MS,
   cdnBaseUrl: DEFAULT_CDN_BASE_URL,
 };
 
-export const wxApi = {
-  configure(config: Partial<WxApiConfig & { cdnBaseUrl?: string }>): void {
-    _config = { ..._config, ...config };
-  },
+/**
+ * Create an instance-level iLink API client. Each client owns its own
+ * token/baseUrl/cdnBaseUrl so multiple WeChat bots can coexist in one process
+ * (per-bot connectors, plan 488). Methods that previously reached for a module
+ * global `_config` now read the closure `config` bound to their own instance.
+ */
+export function createWeixinApiClient(
+  initial: Partial<WxApiClientConfiguration> = {},
+): {
+  configure(config: Partial<WxApiClientConfiguration>): void;
+  currentConfig: WxApiClientConfiguration;
+  getUpdates(syncBuf: string, timeoutMs: number): Promise<GetUpdatesResponse>;
+  sendMessage(
+    arg0: string | SendMessageRequest,
+    arg1?: string,
+    contextToken?: string,
+  ): Promise<SendMessageResponse>;
+  sendTyping(toUserId: string, typingStatus: number, typingTicket?: string): Promise<SendTypingResponse>;
+  getConfig(userId: string, contextToken?: string): Promise<Record<string, unknown>>;
+  getUploadUrl(req: GetUploadUrlRequest): Promise<GetUploadUrlResponse>;
+  uploadMediaToCdn(params: {
+    filePath: string;
+    toUserId: string;
+    mediaType: (typeof UploadMediaType)[keyof typeof UploadMediaType];
+    label: string;
+  }): Promise<UploadedFileInfo>;
+  uploadImageToWeixin(params: { filePath: string; toUserId: string }): Promise<UploadedFileInfo>;
+  uploadVideoToWeixin(params: { filePath: string; toUserId: string }): Promise<UploadedFileInfo>;
+  uploadFileAttachmentToWeixin(params: {
+    filePath: string;
+    toUserId: string;
+  }): Promise<UploadedFileInfo>;
+  sendImageMessage(params: {
+    to: string;
+    text?: string;
+    uploaded: UploadedFileInfo;
+    contextToken?: string;
+  }): Promise<{ messageId: string }>;
+  sendVideoMessage(params: {
+    to: string;
+    text?: string;
+    uploaded: UploadedFileInfo;
+    contextToken?: string;
+  }): Promise<{ messageId: string }>;
+  sendFileMessage(params: {
+    to: string;
+    text?: string;
+    fileName: string;
+    uploaded: UploadedFileInfo;
+    contextToken?: string;
+  }): Promise<{ messageId: string }>;
+  downloadAndDecryptMedia(params: {
+    encryptedQueryParam: string;
+    aesKeyB64: string;
+    timeoutSeconds?: number;
+  }): Promise<Buffer>;
+  downloadImage(params: {
+    cdnBaseUrl: string;
+    encryptQueryParam: string;
+    aesKeyB64?: string;
+    aesKeyHex?: string;
+  }): Promise<Buffer>;
+} {
+  let config: WxApiClientConfiguration = { ...DEFAULT_WX_CONFIG, ...initial };
+  return {
+    configure(partial: Partial<WxApiClientConfiguration>): void {
+      config = { ...config, ...partial };
+    },
+    get currentConfig(): WxApiClientConfiguration {
+      return config;
+    },
 
   async getUpdates(syncBuf: string, timeoutMs: number): Promise<GetUpdatesResponse> {
     const payload = {
@@ -768,13 +839,13 @@ export const wxApi = {
       get_updates_buf: syncBuf,
     };
     const body = jsonEncode(payload);
-    const url = `${_config.baseUrl}/${EP_GET_UPDATES}`;
+    const url = `${config.baseUrl}/${EP_GET_UPDATES}`;
 
     const { data } = await httpsPost(url, {
-      headers: headers(_config.token, body),
+      headers: headers(config.token, body),
       body,
       timeoutMs,
-      useProxy: _config.useProxy,
+      useProxy: config.useProxy,
     });
 
     const response = JSON.parse(data) as GetUpdatesResponse;
@@ -806,13 +877,13 @@ export const wxApi = {
 
     const payload = { ...baseInfo(), ...request };
     const body = jsonEncode(payload);
-    const url = `${_config.baseUrl}/${EP_SEND_MESSAGE}`;
+    const url = `${config.baseUrl}/${EP_SEND_MESSAGE}`;
 
     const { data, status } = await httpsPost(url, {
-      headers: headers(_config.token, body),
+      headers: headers(config.token, body),
       body,
-      timeoutMs: _config.timeoutMs,
-      useProxy: _config.useProxy,
+      timeoutMs: config.timeoutMs,
+      useProxy: config.useProxy,
     });
 
     if (status < 200 || status >= 300) {
@@ -832,13 +903,13 @@ export const wxApi = {
       payload.typing_ticket = typingTicket;
     }
     const body = jsonEncode(payload);
-    const url = `${_config.baseUrl}/${EP_SEND_TYPING}`;
+    const url = `${config.baseUrl}/${EP_SEND_TYPING}`;
 
     const { data, status: responseStatus } = await httpsPost(url, {
-      headers: headers(_config.token, body),
+      headers: headers(config.token, body),
       body,
-      timeoutMs: _config.timeoutMs,
-      useProxy: _config.useProxy,
+      timeoutMs: config.timeoutMs,
+      useProxy: config.useProxy,
     });
 
     if (responseStatus < 200 || responseStatus >= 300) {
@@ -858,13 +929,13 @@ export const wxApi = {
     }
 
     const body = jsonEncode(payload);
-    const url = `${_config.baseUrl}/${EP_GET_CONFIG}`;
+    const url = `${config.baseUrl}/${EP_GET_CONFIG}`;
 
     const { data, status } = await httpsPost(url, {
-      headers: headers(_config.token, body),
+      headers: headers(config.token, body),
       body,
-      useProxy: _config.useProxy,
-      timeoutMs: _config.timeoutMs,
+      useProxy: config.useProxy,
+      timeoutMs: config.timeoutMs,
     });
 
     if (status < 200 || status >= 300) {
@@ -877,13 +948,13 @@ export const wxApi = {
   async getUploadUrl(req: GetUploadUrlRequest): Promise<GetUploadUrlResponse> {
     const payload = { ...baseInfo(), ...req };
     const body = jsonEncode(payload);
-    const url = `${_config.baseUrl}/${EP_GET_UPLOAD_URL}`;
+    const url = `${config.baseUrl}/${EP_GET_UPLOAD_URL}`;
 
     const { data, status } = await httpsPost(url, {
-      headers: headers(_config.token, body),
+      headers: headers(config.token, body),
       body,
-      timeoutMs: _config.timeoutMs,
-      useProxy: _config.useProxy,
+      timeoutMs: config.timeoutMs,
+      useProxy: config.useProxy,
     });
 
     if (status < 200 || status >= 300) {
@@ -938,10 +1009,10 @@ export const wxApi = {
       buf: plaintext,
       uploadParam,
       filekey,
-      cdnBaseUrl: _config.cdnBaseUrl || DEFAULT_CDN_BASE_URL,
+      cdnBaseUrl: config.cdnBaseUrl || DEFAULT_CDN_BASE_URL,
       aeskey,
       label: `${label}[orig filekey=${filekey}]`,
-      useProxy: _config.useProxy,
+      useProxy: config.useProxy,
     });
 
     return {
@@ -1151,9 +1222,9 @@ export const wxApi = {
     timeoutSeconds?: number;
   }): Promise<Buffer> {
     const { encryptedQueryParam, aesKeyB64, timeoutSeconds = 30 } = params;
-    const downloadUrl = `${_config.cdnBaseUrl || DEFAULT_CDN_BASE_URL}/download?encrypted_query_param=${encodeURIComponent(encryptedQueryParam)}`;
+    const downloadUrl = `${config.cdnBaseUrl || DEFAULT_CDN_BASE_URL}/download?encrypted_query_param=${encodeURIComponent(encryptedQueryParam)}`;
     console.debug(`downloadAndDecryptMedia: downloading from ${downloadUrl}`);
-    assertSafeMediaHost(downloadUrl);
+    assertSafeMediaHost(downloadUrl, config.cdnBaseUrl);
 
     const aesKey = parseAesKey(aesKeyB64);
 
@@ -1213,15 +1284,23 @@ export const wxApi = {
       throw new Error('downloadImage: neither aesKeyB64 nor aesKeyHex provided');
     }
 
-    const prevCdn = _config.cdnBaseUrl;
-    _config.cdnBaseUrl = cdnBaseUrl;
+    const prevCdn = config.cdnBaseUrl;
+    config.cdnBaseUrl = cdnBaseUrl;
     try {
       return await this.downloadAndDecryptMedia({
         encryptedQueryParam: encryptQueryParam,
         aesKeyB64: resolvedKey,
       });
     } finally {
-      _config.cdnBaseUrl = prevCdn;
+      config.cdnBaseUrl = prevCdn;
     }
   },
-};
+  };
+}
+
+/**
+ * Legacy default singleton — used by the gateway weixin adapter via
+ * `wxApi.configure(...)`. Per-bot connectors should create their own instance
+ * with `createWeixinApiClient({ token, baseUrl, ... })`.
+ */
+export const wxApi = createWeixinApiClient();

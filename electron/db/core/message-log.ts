@@ -224,6 +224,29 @@ export class MessageLog {
         );
       },
     },
+    {
+      // Unified space search (rakazo-inspired) incremental text index.
+      // One row per message carrying the searchable text (concatenated text
+      // blocks). Maintained alongside message_index; the table holds the
+      // EFFECTIVE message set once a session is indexed (first append triggers
+      // a full rebuild from the projected timeline; rebase triggers a rebuild
+      // too). Keyed by message_id so rebase rebuilds can reconcile by id.
+      id: 15,
+      name: 'create_message_search',
+      up: (db) => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS message_search (
+            message_id     TEXT PRIMARY KEY,
+            session_id     TEXT NOT NULL,
+            seq            INTEGER NOT NULL,
+            searchable_text TEXT NOT NULL,
+            text_len       INTEGER NOT NULL,
+            updated_at     INTEGER NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_msgsearch_session ON message_search(session_id, seq);
+        `);
+      },
+    },
   ];
 
   private readonly db: SqliteDatabase;
@@ -274,6 +297,26 @@ export class MessageLog {
       // Bucket by the session's last activity (newest event in this batch) so a
       // cross-midnight session's rollout lives under the day it was last active.
       const lastActivity = freshEvents.reduce((max, ev) => (ev.createdAt > max ? ev.createdAt : max), 0);
+
+      // Plan 501 L4 (plan 493 Phase B trigger): a compaction landing on a bot
+      // session rotates the rollout file, so the compacted summary becomes the
+      // first data entry of a fresh generation ("each compaction = one epoch =
+      // one new session"). Fail-open: a rotation error (crash-recovery archive
+      // collision) must never block the message append itself.
+      if (freshEvents.some((ev) => ev.payload.type === 'compaction')) {
+        try {
+          this.rotateArchive(sessionId, 'compaction', lastActivity);
+        } catch (err) {
+          logger.warn(
+            'appendBatch: rotateArchive failed; appending without rotation',
+            {
+              sessionId,
+              error: err instanceof Error ? err.message : String(err),
+            },
+          );
+        }
+      }
+
       const relativePath = this.getOrCreateRolloutPath(sessionId, lastActivity);
       const absolutePath = this.resolvePathOnDisk(relativePath);
 
@@ -316,6 +359,19 @@ export class MessageLog {
         }
       });
       txn();
+
+      // Unified search index (Plan: message_search). Fail-open: a text-index
+      // error must never block the append itself (same posture as rotateArchive).
+      // First append for a session triggers a full rebuild so historical
+      // messages get indexed; a rebase event rebuilds to drop superseded rows.
+      try {
+        this.syncSearchIndex(sessionId, freshEvents);
+      } catch (err) {
+        logger.warn('appendBatch: syncSearchIndex failed', {
+          sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
   }
 
@@ -538,9 +594,63 @@ export class MessageLog {
       return null;
     };
 
+    /**
+     * Plan: self-heal a single-file (never-rotated) bot session whose
+     * message_index offsets drifted from `active.jsonl`. This happens when the
+     * active file is rewritten in place (a crash mid-`rewriteSession`, or a bot
+     * rebuild) without rotating: `file_offset`/`byte_len` still point at the OLD
+     * bytes, so every `readRange` here fails `JSON.parse` — one WARN per row
+     * ("Unparseable rollout line skipped in projection" spam) and the bot's
+     * history becomes invisible. When no `archive-<g>.jsonl` exists, the active
+     * file is the single authoritative source, so `rebuildIndexFromRollout`
+     * restores correct offsets and the projection self-heals on the next read.
+     *
+     * Multi-segment sessions are NOT touched: a corrupt row inside one archive
+     * cannot be safely rebuilt from the active tail alone (we'd silently drop
+     * the healthy segments). Those keep skipping with a WARN for operator
+     * recovery, matching the non-bot drift-recovery policy.
+     */
+    let reconciled = false;
+    const reconcileIndex = (): boolean => {
+      if (reconciled) return false;
+      reconciled = true;
+      let hasArchive = false;
+      try {
+        hasArchive = fs
+          .readdirSync(botSessionsDir)
+          .some((f) => f.startsWith('archive-'));
+      } catch {
+        // Cannot inspect the directory — play it safe, do not rebuild.
+        return false;
+      }
+      if (hasArchive || !fs.existsSync(activeAbs)) return false;
+      this.rebuildIndexFromRollout(sessionId, activeAbs);
+      fileByGeneration.clear();
+      // Re-fetch rows with re-numbered seqs and fresh offsets.
+      const refreshed = this.db
+        .prepare(
+          'SELECT id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len, generation FROM message_index WHERE session_id = ? ORDER BY generation ASC, seq ASC',
+        )
+        .all(sessionId) as Array<{
+        id: string;
+        session_id: string;
+        seq: number;
+        turn_id: string | null;
+        kind: string;
+        created_at: number;
+        file_offset: number;
+        byte_len: number;
+        generation: number;
+      }>;
+      rows.length = 0;
+      rows.push(...refreshed);
+      return true;
+    };
+
     const timelineRows: TimelineEntryRow[] = [];
     const metaById = new Map<string, { turnId: string | null; createdAt: number }>();
-    for (const row of rows) {
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
       const filePath = resolveFile(row.generation);
       if (!filePath) {
         logger.warn(
@@ -556,6 +666,15 @@ export class MessageLog {
           this.readRange(filePath, row.file_offset, row.byte_len),
         ) as RolloutLine;
       } catch {
+        if (reconcileIndex()) {
+          // Index rebuilt from the current active file — restarting the loop
+          // re-reads every row with fresh offsets, so partial results collected
+          // before the rebuild must be discarded.
+          metaById.clear();
+          timelineRows.length = 0;
+          i = -1;
+          continue;
+        }
         logger.warn(
           'Unparseable rollout line skipped in projection',
           { sessionId, generation: row.generation, seq: row.seq },
@@ -840,6 +959,82 @@ export class MessageLog {
   }
 
   /**
+   * Keep `message_search` consistent for a session after an append.
+   *
+   * - First append for a session → full rebuild from the projected timeline so
+   *   pre-existing (pre-upgrade) messages get indexed too.
+   * - Rebase in the batch → full rebuild (superseded messages dropped, survivors
+   *   kept at their projected seq).
+   * - Otherwise → incremental upsert of the batch's new message entries.
+   */
+  private syncSearchIndex(sessionId: string, freshEvents: NewEvent[]): void {
+    const hasRebase = freshEvents.some((ev) => ev.payload.type === 'rebase');
+    const isFirstAppend = !this.hasSearchIndexForSession(sessionId);
+    if (hasRebase || isFirstAppend) {
+      this.rebuildSearchForSession(sessionId);
+      return;
+    }
+
+    const txn = this.db.transaction(() => {
+      for (const ev of freshEvents) {
+        const text = extractSearchableText(ev.payload);
+        if (!text) continue;
+        const row = this.db
+          .prepare('SELECT seq FROM message_index WHERE id = ?')
+          .get(ev.id) as { seq: number } | undefined;
+        this.upsertSearchRow(sessionId, ev.id, row?.seq ?? 0, text, ev.createdAt);
+      }
+    });
+    txn();
+  }
+
+  /**
+   * Rebuild a session's `message_search` rows from the projected
+   * (rebase-applied) effective timeline. Fully reconciles supersessions —
+   * deleted messages vanish, survivors are re-indexed at their projected seq.
+   */
+  private rebuildSearchForSession(sessionId: string): void {
+    const txn = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM message_search WHERE session_id = ?').run(sessionId);
+      for (const { entry, seq } of this.repairedProject(sessionId)) {
+        const text = extractSearchableText(entry);
+        if (!text) continue;
+        this.upsertSearchRow(sessionId, entry.id, seq, text, rolloutLineTimestamp(entry));
+      }
+    });
+    txn();
+  }
+
+  /** True when the session already has at least one `message_search` row. */
+  private hasSearchIndexForSession(sessionId: string): boolean {
+    const row = this.db
+      .prepare('SELECT 1 FROM message_search WHERE session_id = ? LIMIT 1')
+      .get(sessionId);
+    return row !== undefined;
+  }
+
+  /** Insert-or-replace a single search row (keyed by message_id). */
+  private upsertSearchRow(
+    sessionId: string,
+    id: string,
+    seq: number,
+    text: string,
+    updatedAt: number,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT INTO message_search (message_id, session_id, seq, searchable_text, text_len, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(message_id) DO UPDATE SET
+           seq = excluded.seq,
+           searchable_text = excluded.searchable_text,
+           text_len = excluded.text_len,
+           updated_at = excluded.updated_at`,
+      )
+      .run(id, sessionId, seq, text, text.length, updatedAt);
+  }
+
+  /**
    * Full-text search over rollout payloads. Scans up to `maxFiles` (default 200)
    * most-recently-updated sessions, case-insensitive substring match, snippet
    * ±120 chars around hit (capped at 300). `limit` (default 20) early exit.
@@ -899,6 +1094,7 @@ export class MessageLog {
   /** Delete all index rows for a session. File is preserved. Test/rollback only. */
   deleteBySession(sessionId: string): void {
     this.db.prepare('DELETE FROM message_index WHERE session_id = ?').run(sessionId);
+    this.db.prepare('DELETE FROM message_search WHERE session_id = ?').run(sessionId);
     this.pathCache.delete(sessionId);
   }
 
