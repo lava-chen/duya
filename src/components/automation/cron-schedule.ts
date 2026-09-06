@@ -105,6 +105,9 @@ function parseEveryDurationSafe(input: string): number | undefined {
 
 export function scheduleToDraft(cron: AutomationCron): ScheduleDraft {
   const draft = createDefaultScheduleDraft();
+  // Event-only routines carry no schedule — return the default draft so
+  // read-only callers (row summaries) never dereference null.
+  if (cron.schedule == null) return draft;
   const s = cron.schedule;
   draft.timezone = (s.kind === 'cron' && s.tz) || draft.timezone;
   draft.endRepeat = s.endAt ? 'on' : 'never';

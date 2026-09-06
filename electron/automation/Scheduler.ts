@@ -20,9 +20,7 @@ import { computeNextRunAt } from './schedule.js';
 import { createCronSessionRow, interruptCronSession, runCronInSession } from './agent-run.js';
 import { resolveCronProvider } from './provider.js';
 import { prepareAutomationWorkspace } from './workspace.js';
-import { enqueueAutomationWake } from '../wake/wake-dispatcher.js';
 import { getBotSessionId } from '../wake/bot-session-id.js';
-import { createBotSessionIfMissing } from '../wake/agent-dm-dispatcher.js';
 import type { AutomationCron, CreateAutomationCronInput, CronRunHandle, UpdateAutomationCronInput } from './types.js';
 
 export { computeNextRunAt } from './schedule.js';
@@ -78,6 +76,11 @@ export class AutomationScheduler {
     return this.store.getCron(id);
   }
 
+  /** Listener-hub access to the same store (cursors + external-edit reloads). */
+  getCronStore(): CronFileStore {
+    return this.store;
+  }
+
   createCron(input: CreateAutomationCronInput): AutomationCron {
     return this.store.createCron(input);
   }
@@ -122,6 +125,32 @@ export class AutomationScheduler {
    * background — awaiting completion would block the IPC handler up to the run
    * timeout, leaving the UI stuck on "run now".
    */
+  /**
+   * P2.3b — enqueue one fire into the bot's resident session. The wake-bus
+   * imports are dynamic: the dispatcher chain (session-manager, core-db
+   * adapters) is heavy and Scheduler tests must not have to mock it, and
+   * this also avoids a Scheduler ↔ wake-dispatcher static import cycle.
+   */
+  private async enqueueBotFire(
+    job: AutomationCron,
+    trigger: 'schedule' | 'manual',
+  ): Promise<'added' | 'merged' | 'deduped'> {
+    const [{ enqueueAutomationWake }, { createBotSessionIfMissing }] = await Promise.all([
+      import('../wake/wake-dispatcher.js'),
+      import('../wake/agent-dm-dispatcher.js'),
+    ]);
+    const agentId = job.agent as string;
+    const sessionId = getBotSessionId(agentId);
+    createBotSessionIfMissing(sessionId, agentId);
+    return enqueueAutomationWake({
+      jobKey: job.id,
+      fireKey: randomUUID(),
+      name: job.name,
+      targetSessionId: sessionId,
+      trigger,
+    });
+  }
+
   async runCronNow(id: string): Promise<CronRunHandle> {
     const job = this.store.getCron(id);
     if (!job) throw new Error(`cron not found: ${id}`);
@@ -131,22 +160,14 @@ export class AutomationScheduler {
     // at the bot session so the UI opens the conversation the run lands in.
     if (job.agent) {
       const sessionId = getBotSessionId(job.agent);
-      createBotSessionIfMissing(sessionId, job.agent);
-      const fireKey = randomUUID();
-      const outcome = enqueueAutomationWake({
-        jobKey: job.id,
-        fireKey,
-        name: job.name,
-        targetSessionId: sessionId,
-        trigger: 'manual',
-      });
+      const outcome = await this.enqueueBotFire(job, 'manual');
       getLogger().info('Manual routine fire enqueued for bot', {
         cronId: job.id,
         agent: job.agent,
         sessionId,
         outcome,
       }, LogComponent.Automation);
-      return { runId: fireKey, sessionId, cronId: job.id };
+      return { runId: randomUUID(), sessionId, cronId: job.id };
     }
     const runId = randomUUID();
     const sessionId = `cron:${job.id}:${Date.now()}:${runId}`;
@@ -207,34 +228,25 @@ export class AutomationScheduler {
         error: job.lastError,
         retryCount: job.retryCount,
       });
-      const sessionId = getBotSessionId(job.agent);
       try {
-        createBotSessionIfMissing(sessionId, job.agent);
+        const outcome = await this.enqueueBotFire(job, 'schedule');
+        getLogger().info('Scheduled routine fire enqueued for bot', {
+          cronId: job.id,
+          agent: job.agent,
+          sessionId: getBotSessionId(job.agent),
+          outcome,
+        }, LogComponent.Automation);
       } catch (error) {
-        getLogger().error('Routine fire: bot session create failed', error instanceof Error ? error : new Error(String(error)), {
+        getLogger().error('Routine fire: bot wake enqueue failed', error instanceof Error ? error : new Error(String(error)), {
           cronId: job.id,
           agent: job.agent,
         }, LogComponent.Automation);
         this.store.markRunResult(job.id, {
           lastRunAt: Date.now(),
-          error: 'bot session creation failed',
+          error: 'bot wake enqueue failed',
           retryCount: job.retryCount,
         });
-        return;
       }
-      const outcome = enqueueAutomationWake({
-        jobKey: job.id,
-        fireKey: randomUUID(),
-        name: job.name,
-        targetSessionId: sessionId,
-        trigger: 'schedule',
-      });
-      getLogger().info('Scheduled routine fire enqueued for bot', {
-        cronId: job.id,
-        agent: job.agent,
-        sessionId,
-        outcome,
-      }, LogComponent.Automation);
       return;
     }
 

@@ -37,6 +37,8 @@ import {
 } from './schedule.js';
 import { resolveAutomationWorkspace } from './workspace.js';
 import { isSafeBotId } from '../config/agent-id';
+import { parseEventTriggerList, parseEventTriggerSpec } from './trigger-match.js';
+import type { ListenerStateFile, RoutineEventTrigger } from './types.js';
 
 const DEFAULT_MAX_RETRIES = 3;
 
@@ -62,8 +64,10 @@ function normalizeAgentBinding(agent: string | null | undefined): string | null 
  * (everyMs vs every, cronExpr vs expr, ms vs "5m") so logically identical
  * schedules collide even when written through different code paths. Used by
  * `createCron` and `dedupeCrons` as the schedule half of the dedupe key.
+ * Null (event-only routine) fingerprints as `none`.
  */
-export function scheduleFingerprint(schedule: CronSchedule): string {
+export function scheduleFingerprint(schedule: CronSchedule | null): string {
+  if (schedule == null) return 'none';
   assertValidSchedule(schedule);
   if (schedule.kind === 'once') {
     const ms = Date.parse(schedule.at);
@@ -86,8 +90,8 @@ export function scheduleFingerprint(schedule: CronSchedule): string {
  * `every`/`once` already produce sensible first-run results when anchored
  * on `now`. See the comment in `jobToCron` for the full rationale.
  */
-function scheduleNeedsCreatedAtAnchor(schedule: CronSchedule): boolean {
-  return schedule.kind === 'cron';
+function scheduleNeedsCreatedAtAnchor(schedule: CronSchedule | null | undefined): boolean {
+  return schedule?.kind === 'cron';
 }
 
 /** On-disk TOML shape (snake_case); the public API is camelCase `AutomationCron`. */
@@ -96,11 +100,16 @@ export interface CronJobFile {
   name: string;
   prompt: string;
   enabled: boolean;
-  schedule: CronSchedule;
+  /** Time trigger; absent for event-only routines (P2.3d). */
+  schedule?: CronSchedule;
   working_directory?: string;
   model?: string;
   /** Bot binding slug (Plan 476 P2.3a). Absent = standalone cron. */
   agent?: string;
+  /** Event listeners (P2.3d), persisted as normalized spec objects. */
+  event_triggers?: RoutineEventTrigger[];
+  /** Per-listener poll cursors, keyed by listener index. */
+  listener_state?: ListenerStateFile[];
   concurrency?: ConcurrencyPolicy;
   max_retries?: number;
   last_run_at?: number;
@@ -134,7 +143,22 @@ export function parseCronJobFile(text: string): CronJobFileDoc {
     const job = raw as CronJobFile;
     if (typeof job.name !== 'string' || !job.name.trim()) throw new Error('job.name is required');
     if (typeof job.prompt !== 'string' || !job.prompt.trim()) throw new Error('job.prompt is required');
-    assertValidSchedule(job.schedule);
+    // Schedule is optional when the job carries event listeners instead
+    // (P2.3d event-only routines); a job must have at least one trigger.
+    if (job.schedule != null) {
+      assertValidSchedule(job.schedule);
+    } else if (!Array.isArray(job.event_triggers) || job.event_triggers.length === 0) {
+      throw new Error('job needs a schedule or at least one event_triggers entry');
+    }
+    if (job.event_triggers != null) {
+      // Re-validate every stored listener; malformed entries fail the file
+      // load loudly rather than silently never firing.
+      for (const trigger of job.event_triggers) {
+        if (parseEventTriggerSpec(trigger) == null) {
+          throw new Error(`job.event_triggers entry is not a valid listener spec: ${JSON.stringify(trigger).slice(0, 200)}`);
+        }
+      }
+    }
     // Plan 476 P2.3a: a bot-bound job must name a valid agent slug (485).
     if (job.agent !== undefined) {
       if (typeof job.agent !== 'string' || !isSafeBotId(job.agent.trim())) {
@@ -205,7 +229,7 @@ export class CronFileStore {
   }
 
   createCron(input: CreateAutomationCronInput): AutomationCron {
-    assertValidSchedule(input.schedule);
+    if (input.schedule != null) assertValidSchedule(input.schedule);
     if (!input.name?.trim()) {
       throw new Error(`name is required; got: ${JSON.stringify(input.name)}`);
     }
@@ -214,23 +238,30 @@ export class CronFileStore {
         `prompt is required (the natural-language instruction the scheduled run will execute); got: ${JSON.stringify(input.prompt)}`,
       );
     }
+    // At least one trigger: a time schedule, event listeners, or both.
+    const eventTriggers = parseEventTriggerList(input.eventTriggers);
+    if (input.schedule == null && (!eventTriggers || eventTriggers.length === 0)) {
+      throw new Error('a routine needs a schedule or at least one event trigger');
+    }
     const name = input.name.trim();
     const prompt = input.prompt.trim();
     const workingDirectory = resolveAutomationWorkspace(input.workingDirectory);
-    const fingerprint = scheduleFingerprint(input.schedule);
+    const fingerprint = scheduleFingerprint(input.schedule ?? null);
+    const triggersFingerprint = JSON.stringify(eventTriggers ?? []);
     // Plan 476 P2.3a: optional bot binding — validate eagerly so a bad slug
     // never reaches the file.
     const agent = normalizeAgentBinding(input.agent);
 
     // Idempotency: a create request that matches an existing job on
-    // (name, schedule, workingDirectory, agent) returns the existing row.
-    // This makes repeated "create in chat" / agent-tool calls collapse into
-    // a single job instead of stacking duplicates in cronjob.toml.
+    // (name, schedule, workingDirectory, agent, triggers) returns the
+    // existing row. This makes repeated "create in chat" / agent-tool calls
+    // collapse into a single job instead of stacking duplicates.
     const existing = this.doc.jobs.find(
       (j) =>
         j.name === name &&
         resolveAutomationWorkspace(j.working_directory) === workingDirectory &&
-        scheduleFingerprint(j.schedule) === fingerprint &&
+        scheduleFingerprint(j.schedule ?? null) === fingerprint &&
+        JSON.stringify(j.event_triggers ?? []) === triggersFingerprint &&
         (j.agent ?? null) === agent,
     );
     if (existing) {
@@ -248,10 +279,11 @@ export class CronFileStore {
       name,
       prompt,
       enabled: input.enabled !== false,
-      schedule: input.schedule,
+      ...(input.schedule != null ? { schedule: input.schedule } : {}),
       working_directory: workingDirectory,
       model: input.model?.trim() || undefined,
       ...(agent ? { agent } : {}),
+      ...(eventTriggers && eventTriggers.length ? { event_triggers: eventTriggers } : {}),
       concurrency: input.concurrencyPolicy ?? 'skip',
       max_retries: input.maxRetries ?? DEFAULT_MAX_RETRIES,
       last_run_at: 0,
@@ -278,7 +310,7 @@ export class CronFileStore {
       const key =
         job.name +
         '\u0001' +
-        scheduleFingerprint(job.schedule) +
+        scheduleFingerprint(job.schedule ?? null) +
         '\u0001' +
         resolveAutomationWorkspace(job.working_directory);
       const list = groups.get(key);
@@ -308,15 +340,24 @@ export class CronFileStore {
   updateCron(id: string, patch: UpdateAutomationCronInput): AutomationCron {
     const job = this.doc.jobs.find((j) => j.id === id);
     if (!job) throw new Error(`cron not found: ${id}`);
-    const mergedSchedule = patch.schedule ?? job.schedule;
-    assertValidSchedule(mergedSchedule);
+    const mergedSchedule = patch.schedule ?? job.schedule ?? null;
+    if (mergedSchedule != null) assertValidSchedule(mergedSchedule);
     if (patch.name !== undefined && !patch.name.trim()) throw new Error('name cannot be empty');
     if (patch.prompt !== undefined && !patch.prompt.trim()) {
       throw new Error('prompt cannot be empty');
     }
+    const eventTriggers = parseEventTriggerList(patch.eventTriggers);
     if (patch.name !== undefined) job.name = patch.name.trim();
     if (patch.prompt !== undefined) job.prompt = patch.prompt.trim();
-    if (patch.schedule !== undefined) job.schedule = mergedSchedule;
+    if (patch.schedule !== undefined) job.schedule = mergedSchedule ?? undefined;
+    if (patch.eventTriggers !== undefined) {
+      if (eventTriggers && eventTriggers.length) job.event_triggers = eventTriggers;
+      else delete job.event_triggers;
+    }
+    // A job must keep at least one trigger after the update.
+    if (job.schedule == null && (!Array.isArray(job.event_triggers) || job.event_triggers.length === 0)) {
+      throw new Error('a routine needs a schedule or at least one event trigger');
+    }
     if (patch.workingDirectory !== undefined) job.working_directory = resolveAutomationWorkspace(patch.workingDirectory);
     if (patch.model !== undefined) job.model = patch.model.trim() || undefined;
     if (patch.concurrencyPolicy !== undefined) job.concurrency = patch.concurrencyPolicy;
@@ -353,6 +394,28 @@ export class CronFileStore {
     this.save();
   }
 
+  /** Read a listener's poll cursor by listener index (P2.3d). */
+  getListenerCursor(id: string, index: number): string | null {
+    const job = this.doc.jobs.find((j) => j.id === id);
+    const entry = job?.listener_state?.find((s) => s.index === index);
+    return entry?.cursor ?? null;
+  }
+
+  /** Persist a listener's poll cursor + last poll time and write the file. */
+  setListenerCursor(id: string, index: number, cursor: string | null): void {
+    const job = this.doc.jobs.find((j) => j.id === id);
+    if (!job) return;
+    const state = job.listener_state ?? (job.listener_state = []);
+    const entry = state.find((s) => s.index === index);
+    if (entry) {
+      entry.cursor = cursor ?? undefined;
+      entry.last_poll_at = Date.now();
+    } else {
+      state.push({ index, ...(cursor != null ? { cursor } : {}), last_poll_at: Date.now() });
+    }
+    this.save();
+  }
+
   // ==== internal ====
 
   private jobToCron(job: CronJobFile): AutomationCron {
@@ -368,14 +431,20 @@ export class CronFileStore {
     // occurrence, so the very next tick on or after that occurrence fires
     // the job. `every` schedules use `now` as the first-run anchor — they
     // already work because `every` nextRunAt = anchor + everyMs is in the
-    // near future, not strictly-after the anchor.
+    // near future, not strictly-after the anchor. Event-only routines
+    // (no schedule) derive no nextRunAt — the listener hub owns them.
     const nextRunAnchor =
       lastRunAt > 0 ? lastRunAt : scheduleNeedsCreatedAtAnchor(job.schedule) ? (job.created_at ?? now) : now;
+    // Re-validate stored listeners on read; malformed entries degrade to
+    // dropped listeners instead of failing the whole store.
+    const eventTriggers = (job.event_triggers ?? [])
+      .map((trigger) => parseEventTriggerSpec(trigger))
+      .filter((trigger): trigger is RoutineEventTrigger => trigger != null);
     return {
       id: job.id ?? '',
       name: job.name,
       prompt: job.prompt,
-      schedule: job.schedule,
+      schedule: job.schedule ?? null,
       workingDirectory: job.working_directory ?? '',
       model: job.model ?? '',
       enabled: job.enabled !== false,
@@ -385,7 +454,9 @@ export class CronFileStore {
       lastError: job.last_error ?? null,
       retryCount: job.retry_count ?? 0,
       agent: job.agent ?? null,
-      nextRunAt: computeNextRunAt(job.schedule, nextRunAnchor, now),
+      ...(eventTriggers.length ? { eventTriggers } : {}),
+      nextRunAt:
+        job.schedule != null ? computeNextRunAt(job.schedule, nextRunAnchor, now) : null,
       createdAt: job.created_at ?? now,
       updatedAt: job.updated_at ?? now,
     };

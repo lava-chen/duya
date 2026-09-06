@@ -66,6 +66,9 @@ export type WakePayload =
       quiet?: boolean
       /** P2.3b — which fire path produced this item (drives the wake prompt opening). */
       trigger?: 'schedule' | 'manual' | 'event'
+      /** P2.3d — event fires: one-line summary + pre-rendered context blocks. */
+      eventSummary?: string
+      eventContext?: string
     }
   | { kind: 'inbound'; envelopeId: string; text?: string }
   | { kind: 'broadcast'; broadcastId: string; text: string }

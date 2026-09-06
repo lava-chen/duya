@@ -132,7 +132,18 @@ function currentDeps(): WakeDispatcherDeps {
           if (!scheduler) return null
           const job = scheduler.getCron(payload.jobKey)
           if (!job || !job.enabled || !job.agent) return null
-          return buildRoutineWakePrompt({ job, trigger: payload.trigger ?? 'schedule' })
+          const trigger = payload.trigger ?? 'schedule'
+          // P2.3d: event fires carry their (already sanitized) context so
+          // the model sees what woke it.
+          if (trigger === 'event' && payload.eventContext) {
+            return buildRoutineWakePrompt({
+              job,
+              trigger,
+              eventSummary: payload.eventSummary,
+              eventContextBlocks: [payload.eventContext],
+            })
+          }
+          return buildRoutineWakePrompt({ job, trigger })
         } catch {
           return null
         }
@@ -339,6 +350,9 @@ export function enqueueAutomationWake(opts: {
   trigger?: 'schedule' | 'manual' | 'event'
   /** All completed items of this fire were quiet (476 §2.3 quiet work). */
   quiet?: boolean
+  /** P2.3d — event fires: what woke the routine (summary + context blocks). */
+  eventSummary?: string
+  eventContext?: string
 }): 'added' | 'merged' | 'deduped' {
   const now = Date.now()
   const trigger = opts.trigger ?? 'schedule'
@@ -356,6 +370,8 @@ export function enqueueAutomationWake(opts: {
       trigger,
       ...(opts.name ? { name: opts.name } : {}),
       ...(opts.quiet ? { quiet: true } : {}),
+      ...(opts.eventSummary ? { eventSummary: opts.eventSummary } : {}),
+      ...(opts.eventContext ? { eventContext: opts.eventContext } : {}),
     },
   })
 }

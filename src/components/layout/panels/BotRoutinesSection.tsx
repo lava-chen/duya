@@ -69,6 +69,24 @@ function relativeTime(ts: number | null): string {
   return `${Math.floor(diff / 86_400_000)}d`;
 }
 
+/** List-row schedule summary: schedule line, event listeners, or both. */
+function describeCronWhen(cron: AutomationCron): string {
+  const parts: string[] = [];
+  if (cron.schedule) parts.push(describeScheduleDraft(scheduleToDraft(cron)));
+  for (const trigger of cron.eventTriggers ?? []) {
+    if (trigger.type === 'github') {
+      parts.push(`github ${trigger.repo} (${trigger.events.join('/')})`);
+    } else {
+      const match =
+        trigger.match.kind === 'keyword'
+          ? `"${trigger.match.keyword}"`
+          : trigger.match.kind;
+      parts.push(`slack ${trigger.channel} (${match})`);
+    }
+  }
+  return parts.join(' · ') || '—';
+}
+
 /** Tiny status glyph — Clock (active) / Pause bars (paused), no icon lib. */
 function StatusGlyph({ active }: { active: boolean }) {
   return active ? (
@@ -158,11 +176,19 @@ export function BotRoutinesSection({ agentId }: { agentId: string }) {
     setBusy(true);
     setError("");
     try {
-      const schedule = draftToSchedule(draft.scheduleDraft);
+      // Event-only routines are listener-managed (the bot owns the trigger
+      // set); the UI only saves name/prompt/enabled for those.
+      const scheduleOnly =
+        editing !== "new" && editing.schedule == null ? undefined : draftToSchedule(draft.scheduleDraft);
       if (editing === "new") {
-        await createAutomationCronIPC({ name, prompt, schedule, agent: agentId, enabled: draft.enabled });
+        await createAutomationCronIPC({ name, prompt, schedule: scheduleOnly ?? draftToSchedule(draft.scheduleDraft), agent: agentId, enabled: draft.enabled });
       } else {
-        await updateAutomationCronIPC(editing.id, { name, prompt, schedule, enabled: draft.enabled });
+        await updateAutomationCronIPC(editing.id, {
+          name,
+          prompt,
+          ...(scheduleOnly !== undefined ? { schedule: scheduleOnly } : {}),
+          enabled: draft.enabled,
+        });
       }
       setEditing(null);
       await reload();
@@ -258,7 +284,7 @@ export function BotRoutinesSection({ agentId }: { agentId: string }) {
                     )}
                   </div>
                   <div className="truncate pl-[23px] text-xs" style={{ color: "var(--text-muted)" }}>
-                    {describeScheduleDraft(scheduleToDraft(cron))}
+                    {describeCronWhen(cron)}
                     {cron.lastRunAt ? ` · ${t("panel.botSettings.routines.lastRun")} ${relativeTime(cron.lastRunAt)}` : ""}
                   </div>
                 </button>
@@ -304,13 +330,24 @@ export function BotRoutinesSection({ agentId }: { agentId: string }) {
           <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>
             {t("panel.botSettings.routines.whenToRun")}
           </div>
-          <CronScheduleCard
-            value={draft.scheduleDraft}
-            onChange={(scheduleDraft) => setDraft((d) => ({ ...d, scheduleDraft }))}
-          />
-          <div className="mt-2 mb-3 text-xs" style={{ color: "var(--text-muted)" }}>
-            {describeScheduleDraft(draft.scheduleDraft)}
-          </div>
+          {editing !== "new" && editing.schedule == null ? (
+            <div
+              className="rounded-lg px-3 py-2.5 text-xs"
+              style={{ border: "1px dashed var(--border)", color: "var(--text-muted)" }}
+            >
+              {describeCronWhen(editing)}
+            </div>
+          ) : (
+            <>
+              <CronScheduleCard
+                value={draft.scheduleDraft}
+                onChange={(scheduleDraft) => setDraft((d) => ({ ...d, scheduleDraft }))}
+              />
+              <div className="mt-2 mb-3 text-xs" style={{ color: "var(--text-muted)" }}>
+                {describeScheduleDraft(draft.scheduleDraft)}
+              </div>
+            </>
+          )}
 
           {error && (
             <div className="text-xs mb-2" style={{ color: "var(--error, #ef4444)" }}>

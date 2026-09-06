@@ -9,6 +9,20 @@
 export type ConcurrencyPolicy = 'skip' | 'parallel' | 'replace';
 export type CronScheduleKind = 'once' | 'every' | 'cron';
 
+/** Event listener specs (P2.3d) — shape validated main-side. */
+export interface GithubEventTrigger {
+  type: 'github';
+  repo: string;
+  events: string[];
+  userAllowlist?: string[];
+}
+export interface SlackEventTrigger {
+  type: 'slack';
+  channel: string;
+  match: { kind: 'mention' } | { kind: 'message' } | { kind: 'keyword'; keyword: string };
+}
+export type RoutineEventTrigger = GithubEventTrigger | SlackEventTrigger;
+
 export interface CronEverySchedule {
   kind: 'every';
   every: string; // human-friendly duration: "5m", "1h", "1d"
@@ -32,7 +46,8 @@ export interface AutomationCron {
   id: string;
   name: string;
   prompt: string;
-  schedule: CronSchedule;
+  /** Time trigger; null for event-only routines (they carry eventTriggers). */
+  schedule: CronSchedule | null;
   workingDirectory: string;
   model: string;
   enabled: boolean;
@@ -46,6 +61,8 @@ export interface AutomationCron {
    * named bot and fires into its resident session. Null = standalone cron.
    */
   agent?: string | null;
+  /** Event listeners (P2.3d); at least one of schedule/eventTriggers exists. */
+  eventTriggers?: RoutineEventTrigger[];
   /** Computed on read from (schedule, lastRunAt, now); not persisted. */
   nextRunAt: number | null;
   createdAt: number;

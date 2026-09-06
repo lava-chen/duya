@@ -45,6 +45,7 @@ import { initAgentProcessPool, getAgentProcessPool, AgentProcessPool } from './a
 import { startBrowserDaemon, stopBrowserDaemon, getBrowserExtensionStatus, setAllowedExtensionIds, setBrowserMaxTabs, DEFAULT_MAX_WEBVIEW_SESSIONS } from './services/browser/daemon';
 import { attachBrowserDownloadHandler } from './services/browser/cookie-writer';
 import { getAutomationScheduler, initAutomationScheduler } from './automation/Scheduler';
+import { initRoutineListenerHub } from './automation/listener-hub';
 import { initLogger, getLogger, LogComponent } from './logging/index';
 import { initUpdater, checkForUpdates, downloadUpdate, installUpdate, getUpdaterState, cleanupUpdater } from './services/updater';
 import { scanSkillFile, type SkillFinding, type SkillScanResult } from '../packages/agent/src/security/skillScanner.js';
@@ -434,7 +435,8 @@ if (gotTheLock) {
     }
 
     try {
-      initAutomationScheduler();
+      const scheduler = initAutomationScheduler();
+      initRoutineListenerHub(scheduler.getCronStore());
     } catch (error) {
       logger.error('Failed to initialize automation scheduler', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
     }

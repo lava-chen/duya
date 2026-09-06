@@ -29,12 +29,77 @@ export interface CronExprSchedule {
 }
 export type CronSchedule = CronEverySchedule | CronOnceSchedule | CronExprSchedule;
 
+// ==================== Event triggers (Plan 476 P2.3d, grok listener parity) ====================
+
+/**
+ * GitHub repository listener. Polling-based (duya is local-first — no cloud
+ * relay), so the v1 event-kind whitelist excludes CI kinds whose REST
+ * detection needs check-run fan-out. `userAllowlist` narrows events to
+ * those involving the listed logins (pr events by PR owner, review events
+ * by actor AND owner); empty/omitted = anyone.
+ */
+export interface GithubEventTrigger {
+  type: 'github';
+  /** `owner/name` — one concrete repo, no wildcard. */
+  repo: string;
+  events: string[];
+  userAllowlist?: string[];
+}
+
+/**
+ * Slack channel listener. `channel` is a channel id (C…) or a name with a
+ * leading `#`/`@`; `match.kind` selects mention / keyword / any message.
+ */
+export interface SlackEventTrigger {
+  type: 'slack';
+  channel: string;
+  match:
+    | { kind: 'mention' }
+    | { kind: 'message' }
+    | { kind: 'keyword'; keyword: string };
+}
+
+export type RoutineEventTrigger = GithubEventTrigger | SlackEventTrigger;
+
+/** A normalized outside event that a listener matched (grok event shape). */
+export type RoutineEvent =
+  | {
+      source: 'github';
+      repo: string;
+      kind: string;
+      title: string;
+      actor: string;
+      url?: string;
+      prOwner?: string;
+      timestampMs: number;
+    }
+  | {
+      source: 'slack';
+      channel: string;
+      sender: string;
+      text: string;
+      isMention: boolean;
+      ts: string;
+      timestampMs: number;
+    };
+
+/** Per-listener poll cursor persisted in cronjob.toml (dedupe between ticks). */
+export interface ListenerStateFile {
+  index: number;
+  cursor?: string;
+  last_poll_at?: number;
+}
+
 /** A cron job: definition + runtime state, mirrored from cronjob.toml. */
 export interface AutomationCron {
   id: string;
   name: string;
   prompt: string;
-  schedule: CronSchedule;
+  /**
+   * Time trigger. Null for event-only routines (they carry eventTriggers
+   * instead); at least one of schedule / eventTriggers is always present.
+   */
+  schedule: CronSchedule | null;
   workingDirectory: string;
   model: string;
   enabled: boolean;
@@ -50,6 +115,12 @@ export interface AutomationCron {
    * standalone cron (current behaviour, unchanged).
    */
   agent: string | null;
+  /**
+   * Event listeners (P2.3d): when non-empty, the listener hub polls the
+   * backing SaaS APIs and fires the routine on a match. Schedules and
+   * event triggers compose (grok group parity) — both fire the same prompt.
+   */
+  eventTriggers?: RoutineEventTrigger[];
   /** Computed on read from (schedule, lastRunAt, now); not persisted. */
   nextRunAt: number | null;
   createdAt: number;
@@ -76,7 +147,8 @@ export interface CronSessionSummary {
 export interface CreateAutomationCronInput {
   name: string;
   prompt: string;
-  schedule: CronSchedule;
+  /** Time trigger; omit when the routine is event-only. */
+  schedule?: CronSchedule;
   workingDirectory?: string;
   model?: string;
   concurrencyPolicy?: ConcurrencyPolicy;
@@ -84,6 +156,8 @@ export interface CreateAutomationCronInput {
   enabled?: boolean;
   /** Bot binding slug (Plan 476 P2.3a); omit for a standalone cron. */
   agent?: string;
+  /** Event listeners (P2.3d); at least one of schedule/eventTriggers required. */
+  eventTriggers?: RoutineEventTrigger[];
 }
 
 export interface UpdateAutomationCronInput {
@@ -97,6 +171,8 @@ export interface UpdateAutomationCronInput {
   enabled?: boolean;
   /** Set to null to clear an existing bot binding. */
   agent?: string | null;
+  /** Replace the event listener set (grok update semantics: full list). */
+  eventTriggers?: RoutineEventTrigger[];
 }
 
 export interface AutomationTemplate {

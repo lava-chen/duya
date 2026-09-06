@@ -144,6 +144,11 @@ function formatCronSchedule(expression: string | null): string {
 
 function getFriendlySchedule(cron: AutomationCron): string {
   const s = cron.schedule;
+  if (!s) {
+    return cron.eventTriggers?.length
+      ? `事件触发 · ${cron.eventTriggers.length} 个监听器`
+      : '未设置计划';
+  }
   switch (s.kind) {
     case 'every':
       return `每 ${s.every}`;

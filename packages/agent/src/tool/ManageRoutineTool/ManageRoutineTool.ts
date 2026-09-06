@@ -67,7 +67,7 @@ const INPUT_SCHEMA: Record<string, unknown> = {
     schedule: {
       type: "object",
       description:
-        "When to run. Required for create; optional for update. Shapes: { kind: 'cron', expr: '0 7 * * 1-5', tz? } (5-field cron), { kind: 'every', every: '30m' }, { kind: 'once', at: ISO date-time }.",
+        "When to run. Required for create unless you pass triggers instead; optional for update. Shapes: { kind: 'cron', expr: '0 7 * * 1-5', tz? } (5-field cron), { kind: 'every', every: '30m' }, { kind: 'once', at: ISO date-time }.",
       properties: {
         kind: { type: "string", enum: ["cron", "every", "once"] },
         expr: { type: "string", description: "5-field cron expression (for kind 'cron')." },
@@ -77,6 +77,12 @@ const INPUT_SCHEMA: Record<string, unknown> = {
         endAt: { type: "string", description: "Optional ISO date-time after which the routine stops." },
       },
       required: ["kind"],
+    },
+    triggers: {
+      type: "array",
+      description:
+        "Event listeners INSTEAD of a schedule: fire when matching outside activity arrives. GitHub: { type: 'github', repo: 'owner/name', events: [...], userAllowlist?: [...] } with events from pr-opened, pr-merged, review-approved, review-changes-requested, review-commented, pr-comment, issue-assigned (CI events are not supported). Slack: { type: 'slack', channel: '#eng' or 'C123…' or '*', match: { kind: 'mention' } | { kind: 'keyword', keyword: 'deploy' } | { kind: 'message' } }. Listeners require the user to have connected the platform in App Connections; if it is not connected the listener stays silent — tell the user to connect it. Prefer a listener over polling on a timer whenever the event is representable. Mix with schedule on one routine is allowed.",
+      items: { type: "object" },
     },
   },
   required: ["action"],
@@ -88,7 +94,7 @@ Be aggressive and proactive: the moment a request is recurring, time-based, or a
 
 Schedule rules: choose the coarsest cadence that delivers the value at the moment the user will act on it. Weekday waking hours are the DEFAULT — pin day-of-week ("1-5") and an 8am-7pm hour range ("15 8 * * 1-5"), never leave both open; "@daily" fires at midnight and "@hourly" fires all night, so translate loose asks ("check daily", "every 30m") into a bounded cron instead. When the user names an hour but no minute, use the CURRENT minute off their message ("daily at 2" asked at 1:32 → "32 2 * * *"). Leave that window only for a reason you could say out loud — explicit "including weekends", genuinely time-critical subjects, or routines on the user's life (medication, habits), not merely because a feed produces around the clock.
 
-Make every short-lived or conditional watch ("keep an eye on X", "until it merges") self-expiring: put a deadline in the prompt, delete the routine after reporting the watched condition, and delete it as soon as a run finds the deadline passed. Permanent routines are only for explicitly ongoing results (daily digest, standing reminder).
+Make every short-lived or conditional watch ("keep an eye on X", "until it merges") self-expiring: put a deadline in the prompt, delete the routine after reporting the watched condition, and delete it as soon as a run finds the deadline passed. Permanent routines are only for explicitly ongoing results (daily digest, standing reminder). Do not poll on a timer for Slack messages or repo events a trigger could deliver — but remember listeners do not wake on time, so a deadline that must be enforced even when the event never arrives belongs on a cron schedule instead.
 
 If a routine keeps failing on auth (an integration or tool rejects you on run after run — your own earlier messages are the record), pause it and tell the user what to reconnect instead of reporting the same failure every fire. To change or stop one: update / pause / resume / delete by id from list. Confirm to the user once saved or changed.`;
 
@@ -118,19 +124,56 @@ function asSchedule(value: unknown): RoutineScheduleInput | undefined {
   return schedule;
 }
 
-function describeCron(job: { id: string; name: string; enabled: boolean; schedule: RoutineScheduleInput; lastRunAt: number | null; lastError: string | null }): string {
+/**
+ * Event listener list passthrough: absent → undefined (no-op); an array is
+ * passed through object-by-object — deep validation (repo shape, event
+ * whitelist, channel bounds) happens main-side in the store, which throws
+ * with the reason that surfaces to the model.
+ */
+function asTriggerList(value: unknown): Array<Record<string, unknown>> | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null);
+}
+
+function describeTriggerSpec(value: unknown): string {
+  if (typeof value !== "object" || value === null) return "";
+  const record = value as Record<string, unknown>;
+  if (record.type === "github") {
+    const events = Array.isArray(record.events) ? record.events.join("/") : "events";
+    return `github ${String(record.repo ?? "?")} (${events})`;
+  }
+  if (record.type === "slack") {
+    const match = typeof record.match === "object" && record.match !== null ? (record.match as Record<string, unknown>) : {};
+    return `slack ${String(record.channel ?? "?")} (${String(match.kind ?? "message")})`;
+  }
+  return "";
+}
+
+function describeCron(job: {
+  id: string;
+  name: string;
+  enabled: boolean;
+  schedule?: RoutineScheduleInput | null;
+  eventTriggers?: Array<Record<string, unknown>>;
+  lastRunAt: number | null;
+  lastError: string | null;
+}): string {
   const state = job.enabled ? "enabled" : "paused";
+  const schedule = job.schedule;
   let when: string;
-  switch (job.schedule.kind) {
-    case "once":
-      when = `once at ${job.schedule.at ?? "?"}`;
-      break;
-    case "every":
-      when = `every ${job.schedule.every ?? "?"}`;
-      break;
-    case "cron":
-      when = `cron "${job.schedule.expr ?? "?"}"${job.schedule.tz ? ` (${job.schedule.tz})` : ""}`;
-      break;
+  if (schedule == null) {
+    when = "";
+  } else if (schedule.kind === "once") {
+    when = `once at ${schedule.at ?? "?"}`;
+  } else if (schedule.kind === "every") {
+    when = `every ${schedule.every ?? "?"}`;
+  } else {
+    when = `cron "${schedule.expr ?? "?"}"${schedule.tz ? ` (${schedule.tz})` : ""}`;
+  }
+  const triggers = (job.eventTriggers ?? []).map(describeTriggerSpec).filter(Boolean);
+  if (triggers.length > 0) {
+    when = `${when ? `${when} or ` : ""}when ${triggers.join(" or ")}`;
   }
   const lastRun = job.lastRunAt != null ? `; last run ${new Date(job.lastRunAt).toLocaleString()}` : "";
   const lastErr = job.lastError ? `; last error: ${job.lastError}` : "";
@@ -195,17 +238,29 @@ export class ManageRoutineTool implements Tool {
     const name = asString(input.name)?.trim();
     const prompt = asString(input.prompt)?.trim();
     const schedule = asSchedule(input.schedule);
+    const triggers = asTriggerList(input.triggers);
     if (!name) return result("Error: name is required. Give the routine a short, human-readable name.", true);
     if (!prompt) return result("Error: prompt is required. Write what you should do each time, as an intent to your future self.", true);
-    if (!schedule) return result("Error: schedule is required. Pass { kind: 'cron', expr } (5-field cron), { kind: 'every', every }, or { kind: 'once', at }.", true);
-    if (schedule.kind === "cron" && !schedule.expr?.trim()) {
+    if (!schedule && !triggers) {
+      return result(
+        "Error: a trigger is required. Pass schedule ({ kind: 'cron', expr } / { kind: 'every', every } / { kind: 'once', at }) or triggers (github/slack listeners).",
+        true,
+      );
+    }
+    if (schedule?.kind === "cron" && !schedule.expr?.trim()) {
       return result("Error: schedule.expr (5-field cron expression) is required for kind 'cron'.", true);
     }
-    if (schedule.kind === "every" && !schedule.every?.trim()) {
+    if (schedule?.kind === "every" && !schedule.every?.trim()) {
       return result("Error: schedule.every (like '30m' or '1h') is required for kind 'every'.", true);
     }
-    if (schedule.kind === "once" && !schedule.at?.trim()) {
+    if (schedule?.kind === "once" && !schedule.at?.trim()) {
       return result("Error: schedule.at (ISO date-time) is required for kind 'once'.", true);
+    }
+    if (typeof input.triggers !== "undefined" && triggers === undefined) {
+      return result(
+        "Error: triggers must be an array of listener specs — { type: 'github', repo: 'owner/name', events: [...] } or { type: 'slack', channel, match: { kind: 'mention' | 'keyword' | 'message', keyword? } }.",
+        true,
+      );
     }
 
     const owned = await this.listOwned(selfAgentId);
@@ -219,14 +274,19 @@ export class ManageRoutineTool implements Tool {
     const created = await automationDb.createCron({
       name,
       prompt,
-      schedule: {
-        kind: schedule.kind,
-        ...(schedule.kind === "every" ? { every: schedule.every } : {}),
-        ...(schedule.kind === "once" ? { at: schedule.at } : {}),
-        ...(schedule.kind === "cron" ? { expr: schedule.expr } : {}),
-        ...(schedule.tz != null ? { tz: schedule.tz } : {}),
-        ...(schedule.endAt != null ? { endAt: schedule.endAt } : {}),
-      },
+      ...(schedule
+        ? {
+            schedule: {
+              kind: schedule.kind,
+              ...(schedule.kind === "every" ? { every: schedule.every } : {}),
+              ...(schedule.kind === "once" ? { at: schedule.at } : {}),
+              ...(schedule.kind === "cron" ? { expr: schedule.expr } : {}),
+              ...(schedule.tz != null ? { tz: schedule.tz } : {}),
+              ...(schedule.endAt != null ? { endAt: schedule.endAt } : {}),
+            },
+          }
+        : {}),
+      ...(triggers ? { eventTriggers: triggers } : {}),
       // Always bind the routine to the CALLING bot — never trust a caller
       // supplied agent value.
       agent: selfAgentId,
@@ -249,8 +309,9 @@ export class ManageRoutineTool implements Tool {
     const name = asString(input.name)?.trim();
     const prompt = asString(input.prompt)?.trim();
     const schedule = asSchedule(input.schedule);
-    if (!name && !prompt && !schedule) {
-      return result("Nothing to update: provide a new name, prompt, and/or schedule.");
+    const triggers = asTriggerList(input.triggers);
+    if (!name && !prompt && !schedule && triggers === undefined) {
+      return result("Nothing to update: provide a new name, prompt, schedule, and/or triggers.");
     }
 
     const updated = await automationDb.updateCron(id, {
@@ -268,6 +329,7 @@ export class ManageRoutineTool implements Tool {
             } as RoutineScheduleInput,
           }
         : {}),
+      ...(triggers !== undefined ? { eventTriggers: triggers } : {}),
     });
     return result(`Updated routine "${updated.name}" (id ${updated.id}). It keeps its history.`);
   }
@@ -307,7 +369,15 @@ export class ManageRoutineTool implements Tool {
   }
 
   private async listOwned(selfAgentId: string): Promise<
-    Array<{ id: string; name: string; enabled: boolean; schedule: RoutineScheduleInput; lastRunAt: number | null; lastError: string | null }>
+    Array<{
+      id: string;
+      name: string;
+      enabled: boolean;
+      schedule?: RoutineScheduleInput | null;
+      eventTriggers?: Array<Record<string, unknown>>;
+      lastRunAt: number | null;
+      lastError: string | null;
+    }>
   > {
     const crons = (await automationDb.listCrons()) as Array<Record<string, unknown>>;
     return crons
@@ -316,7 +386,10 @@ export class ManageRoutineTool implements Tool {
         id: String(job.id),
         name: String(job.name),
         enabled: job.enabled === true,
-        schedule: (job.schedule ?? { kind: "cron", expr: "* * * * *" }) as RoutineScheduleInput,
+        schedule: (job.schedule ?? null) as RoutineScheduleInput | null,
+        eventTriggers: Array.isArray(job.eventTriggers)
+          ? (job.eventTriggers as Array<Record<string, unknown>>)
+          : undefined,
         lastRunAt: typeof job.lastRunAt === "number" ? job.lastRunAt : null,
         lastError: typeof job.lastError === "string" ? job.lastError : null,
       }));

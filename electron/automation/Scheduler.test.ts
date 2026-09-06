@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   runCronInSession: vi.fn(),
   createCronSessionRow: vi.fn(),
   resolveCronProvider: vi.fn(),
+  enqueueAutomationWake: vi.fn(),
+  createBotSessionIfMissing: vi.fn(),
 }));
 
 vi.mock('./agent-run', () => ({
@@ -23,19 +25,34 @@ vi.mock('./agent-run', () => ({
   createCronSessionRow: mocks.createCronSessionRow,
   interruptCronSession: vi.fn(),
 }));
+// The bot-fire path loads the wake bus via dynamic import; mocking both
+// modules keeps the test hermetic (the real chain pulls session-manager →
+// window-manager, which cannot load in the node test env).
+vi.mock('../wake/wake-dispatcher', () => ({
+  enqueueAutomationWake: mocks.enqueueAutomationWake,
+}));
+vi.mock('../wake/agent-dm-dispatcher', () => ({
+  createBotSessionIfMissing: mocks.createBotSessionIfMissing,
+}));
 vi.mock('./provider', () => ({
   resolveCronProvider: mocks.resolveCronProvider,
 }));
-vi.mock('../logging/logger', () => ({
-  getLogger: () => ({
+vi.mock('../logging/logger', () => {
+  const logger = {
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
     time: vi.fn(),
     timeAsync: vi.fn(),
-  }),
-  LogComponent: { Automation: 'Automation' },
-}));
+  };
+  return {
+    // Kept so future import-chain growth (anything touching logging at
+    // module scope) does not fail on a missing mock export.
+    initLogger: () => logger,
+    getLogger: () => logger,
+    LogComponent: { Automation: 'Automation' },
+  };
+});
 vi.mock('../db/core-connection', () => ({
   getCoreStores: () => ({ sessions: { get: () => null, create: vi.fn() } }),
 }));
@@ -73,6 +90,9 @@ beforeEach(() => {
     model: 'test-model',
   });
   mocks.runCronInSession.mockResolvedValue({ output: 'ok', events: [] });
+  mocks.enqueueAutomationWake.mockReset();
+  mocks.enqueueAutomationWake.mockReturnValue('added');
+  mocks.createBotSessionIfMissing.mockReset();
 });
 
 afterEach(() => {
@@ -178,25 +198,38 @@ describe('AutomationScheduler', () => {
     await expect(scheduler.runCronNow('nope')).rejects.toThrow('cron not found');
   });
 
-  it('runCronNow rejects a bot-bound cron (P2.3a stub — awaits 477 resident sessions)', async () => {
+  it('runCronNow enqueues a manual wake into the bot session (P2.3b)', async () => {
     const cron = scheduler.createCron(makeInput({ agent: 'weekly-reporter' }));
-    await expect(scheduler.runCronNow(cron.id)).rejects.toThrow(/bound to agent "weekly-reporter"/);
-    // No throwaway cron session row, no execution.
+    const handle = await scheduler.runCronNow(cron.id);
+    // The handle points at the bot's resident session, not a cron session.
+    expect(handle.sessionId).toBe('bot:weekly-reporter');
+    expect(handle.cronId).toBe(cron.id);
+    expect(mocks.createBotSessionIfMissing).toHaveBeenCalledWith('bot:weekly-reporter', 'weekly-reporter');
+    expect(mocks.enqueueAutomationWake).toHaveBeenCalledWith(
+      expect.objectContaining({ jobKey: cron.id, targetSessionId: 'bot:weekly-reporter', trigger: 'manual' }),
+    );
+    // No throwaway cron session row, no direct execution.
     expect(mocks.createCronSessionRow).not.toHaveBeenCalled();
     expect(mocks.runCronInSession).not.toHaveBeenCalled();
   });
 
-  it('tick claims the fire of a due bot-bound cron without executing it (P2.3a stub)', async () => {
+  it('tick claims the fire of a due bot-bound cron and enqueues a wake (P2.3b)', async () => {
     const cron = scheduler.createCron(makeInput({ agent: 'disk-saver', schedule: { kind: 'every', every: '1m' } }));
     // Force the job to be due (fresh jobs are now+1m).
     store.markRunResult(cron.id, { lastRunAt: Date.now() - 5 * 60_000, error: null, retryCount: 0 });
     await scheduler.tick();
-    await scheduler.tick(); // second pass — must NOT re-fire
+    await vi.waitFor(() => {
+      expect(mocks.enqueueAutomationWake).toHaveBeenCalledWith(
+        expect.objectContaining({ jobKey: cron.id, targetSessionId: 'bot:disk-saver', trigger: 'schedule' }),
+      );
+    });
+    await scheduler.tick(); // second pass — must NOT re-fire before the next due moment
+    expect(mocks.enqueueAutomationWake).toHaveBeenCalledTimes(1);
     expect(mocks.runCronInSession).not.toHaveBeenCalled();
+    expect(mocks.createCronSessionRow).not.toHaveBeenCalled();
     const read = new CronFileStore(path.join(dir, 'cronjob.toml')).getCron(cron.id)!;
     expect(read.lastRunAt).toBeGreaterThan(0);
-    expect(read.lastError).toContain('P2.3b');
-  });
+  }, 20_000);
 
   it('records last_error and pauses the job after retries are exhausted', async () => {
     const cron = scheduler.createCron(makeInput({ maxRetries: 1 }));
