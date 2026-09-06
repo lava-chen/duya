@@ -80,6 +80,8 @@ export function formatResult(operation: string, result: Record<string, unknown>)
       return formatClipboardWriteResult(result);
     case 'handle_dialog':
       return formatHandleDialogResult(result);
+    case 'twitter_post':
+      return formatTwitterPostResult(result);
     default:
       return formatGenericResult(operation, result);
   }
@@ -413,6 +415,18 @@ function formatFileUploadResult(result: Record<string, unknown>): string {
     return `Uploaded ${files.length} file(s) to ${selector}: ${files.join(', ')}`;
   }
   return 'File upload completed';
+}
+
+function formatTwitterPostResult(result: Record<string, unknown>): string {
+  if (result.error) {
+    return `### Post Tweet\nError: ${String(result.error)}${result.warning ? `\n⚠ ${String(result.warning)}` : ''}`;
+  }
+  const lines = ['### Post Tweet', `- Status: ${String(result.status ?? 'unknown')}`];
+  const text = result.text;
+  if (typeof text === 'string' && text) lines.push(`- Text: ${text.slice(0, 500)}`);
+  if (result.id) lines.push(`- Tweet ID: ${String(result.id)}`);
+  if (result.url) lines.push(`- URL: ${String(result.url)}`);
+  return lines.join('\n');
 }
 
 function formatNetworkStartResult(result: Record<string, unknown>): string {

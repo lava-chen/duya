@@ -5,6 +5,7 @@ import { evaluateAction, iframeEvaluateAction } from './evaluate.js';
 import { screenshotAction } from './screenshot.js';
 import { tabsListAction, tabsNewAction, tabsCloseAction, tabsSelectAction } from './tabs.js';
 import { fileUploadAction, selectAction } from './forms.js';
+import { twitterPostAction } from './twitterPost.js';
 import { networkStartAction, networkReadAction } from './network.js';
 import { cookiesAction } from './cookies.js';
 import { parallelFetchAction } from './parallel.js';
@@ -46,6 +47,7 @@ export {
   tabsCloseAction,
   tabsSelectAction,
   fileUploadAction,
+  twitterPostAction,
   networkStartAction,
   networkReadAction,
   iframeEvaluateAction,
@@ -82,6 +84,7 @@ const ALL_ACTIONS: ActionHandler[] = [
   tabsCloseAction,
   tabsSelectAction,
   fileUploadAction,
+  twitterPostAction,
   networkStartAction,
   networkReadAction,
   iframeEvaluateAction,
