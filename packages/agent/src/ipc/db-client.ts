@@ -978,7 +978,8 @@ export const automationDb = {
   createCron: (data: {
     name: string;
     prompt: string;
-    schedule: { kind: 'once' | 'every' | 'cron'; every?: string; at?: string; expr?: string; tz?: string | null; endAt?: string | null };
+    /** Optional: event-only routines omit schedule (matches CreateAutomationCronInput). */
+    schedule?: { kind: 'once' | 'every' | 'cron'; every?: string; at?: string; expr?: string; tz?: string | null; endAt?: string | null };
     workingDirectory?: string;
     model?: string;
     concurrencyPolicy?: 'skip' | 'parallel' | 'replace';
