@@ -12,13 +12,21 @@ export const capabilityGuides: Partial<Record<PlatformContentType, string>> = {
     '**X (Twitter) — status/article.** Serves single tweets and long-form articles.',
     '- /<user>/status/<id> → single tweet (content, counts).',
     '- /i/article/<id> or long-form tweet → article body (in `tweet`).',
-    'Threads return as a `thread` result. Interaction (post/reply/like) is out of scope.',
+    'Threads return as a `thread` result. Like/RT/delete are not automated.',
+    '',
+    '**Publishing (write).** A logged-in X.com session in the browser can also post.',
+    '- Use `twitter_post` to publish a new tweet (text + up to 4 jpg/png/gif/webp images).',
+    '- It drives the real composer: opens /compose/post, attaches media, types, submit, and verifies the resulting `/status/<id>` URL.',
+    '- Replies reuse the same composer route; confirm the account before any public post.',
+    '- Posting is irreversible and public — only call `twitter_post` after the user confirms.',
   ].join('\n'),
 
   'thread': [
     '**X (Twitter) — thread.** A tweet plus its parent/replies, ordered chronologically.',
     '- /<user>/status/<id> on the root/first tweet → numbered `thread` (author, text, like/RT per part).',
     'Prefer navigating to the thread root tweet for the full conversation.',
+    '',
+    '**Publishing (write).** With a logged-in session, `twitter_post` posts a single tweet; to start a thread, post the first tweet via `twitter_post`, then reply to it if the user wants a thread. Confirm before posting.',
   ].join('\n'),
 
   'youtube-video': [
