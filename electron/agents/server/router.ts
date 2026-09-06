@@ -11,7 +11,7 @@ import { CheckpointBatcher } from './checkpoint-batcher';
 import { Logger } from './logger';
 import { toLLMProvider, type ApiProvider } from '../../config/provider-types';
 import { calculateMaxConcurrentWorkers, getWorkerMemoryThreshold } from './worker-limits';
-import { acquireChatLock, releaseChatLock } from './chat-runtime-lock';
+import { acquireChatLock, releaseChatLock, type ChatLockOrigin } from './chat-runtime-lock';
 import { parseAgentIdFromBotSession } from '../../wake/bot-session-id';
 
 /**
@@ -636,7 +636,18 @@ async function handlePostChat(
         parsed.options?.effort === 'off' ||
         parsed.options?.wakeless === true
       );
-      void acquireChatLock(dbRequest, sessionId, { userTurn: isUserTurn }).catch(() => {});
+      // Plan 500 P1: persist run attribution on the lock row. Wake dispatches
+      // declare their lane via `options.runOrigin`; everything else is a
+      // renderer-driven chat (user) or a wakeless background run.
+      const runOrigin: ChatLockOrigin =
+        parsed.options?.runOrigin === 'user' ||
+        parsed.options?.runOrigin === 'agent' ||
+        parsed.options?.runOrigin === 'background'
+          ? parsed.options.runOrigin
+          : isUserTurn
+            ? 'user'
+            : 'background';
+      void acquireChatLock(dbRequest, sessionId, { userTurn: isUserTurn, origin: runOrigin }).catch(() => {});
 
       const wantsSSE = req.headers.accept?.includes('text/event-stream') ?? false;
 

@@ -771,7 +771,20 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     // ==================== Lock actions (core store thin forward) ====================
     case 'lock:acquire': {
       const { locks } = getCoreStores();
-      const result = locks.acquire(p.sessionId as string, p.lockId as string, p.owner as string, (p.ttlSec as number) || 300);
+      // Plan 500 P1: origin attributes the run (user chat / agent wake /
+      // background automation) so the bot run scheduler can classify any
+      // in-flight run before deciding to preempt it.
+      const origin =
+        p.origin === 'user' || p.origin === 'agent' || p.origin === 'background'
+          ? p.origin
+          : undefined;
+      const result = locks.acquire(
+        p.sessionId as string,
+        p.lockId as string,
+        p.owner as string,
+        (p.ttlSec as number) || 300,
+        origin,
+      );
       // Plan 476 P2.5: a user-initiated turn starts here (router marks
       // wake/automation runs with wakeRun/effort:off and omits userTurn).
       // Advance the turn epoch so older parked background wakes are
@@ -801,6 +814,13 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     case 'lock:isLocked': {
       const { locks } = getCoreStores();
       return locks.isLocked(p.sessionId as string);
+    }
+
+    // Plan 500 P1: run attribution of the current lock holder (null = idle
+    // or unattributed legacy row).
+    case 'lock:origin': {
+      const { locks } = getCoreStores();
+      return locks.lockOrigin(p.sessionId as string);
     }
 
     // ==================== Task actions (core store thin forward) ====================

@@ -79,10 +79,24 @@ describe('preemption — decidePreemption', () => {
     ).toBe('proceed')
   })
 
-  it('a user-driven run is never yanked (priority DM waits)', () => {
+  it('a user-driven run yields only to a user message (Plan 500 P3, grok supersede)', () => {
+    // A priority DM still waits behind a user-driven run.
     expect(decidePreemption(priorityDm(), 'user').action).toBe('proceed')
-    expect(decidePreemption(item({ source: 'user.message', lane: 'user' }), 'user').action)
-      .toBe('proceed')
+    // A new user message supersedes even a running user turn (grok
+    // "superseded by a new user message") — and does NOT redrive it: the
+    // user replaced the run on purpose.
+    expect(decidePreemption(item({ source: 'user.message', lane: 'user' }), 'user')).toEqual({
+      action: 'preempt',
+      redrive: false,
+      reason: 'user_wake',
+    })
+  })
+
+  it('preemption carries redrive=false only for displaced user runs', () => {
+    expect(decidePreemption(item({ source: 'user.message', lane: 'user' }), 'bot').redrive).toBe(true)
+    expect(decidePreemption(item({ source: 'user.message', lane: 'user' }), 'automation').redrive).toBe(true)
+    expect(decidePreemption(item({ source: 'user.message', lane: 'user' }), 'user').redrive).toBe(false)
+    expect(decidePreemption(priorityDm(), 'bot').redrive).toBe(true)
   })
 })
 

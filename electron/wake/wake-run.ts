@@ -23,6 +23,9 @@ import { getLogger, LogComponent } from '../logging/logger';
 export interface WakeRunOptions {
   /** Bot profile id for persistent `bot:<agentId>` sessions. */
   agentProfileId?: string
+  /** Lane of the wake item being dispatched — persisted as the run's lock
+   *  origin so the scheduler can attribute the in-flight run (Plan 500 P1). */
+  lane?: 'user' | 'agent' | 'background'
 }
 
 /** What the wake runner reports back to the dispatcher (477 P4.3). */
@@ -95,6 +98,71 @@ export async function runWakePromptInExistingSession(
       effort: 'off',
       llmRequestTimeoutMs: 240_000,
       wakeRun: true,
+      runOrigin: opts?.lane ?? 'background',
+    },
+  })
+    .then((result) => ({ output: result.output, events: result.events }))
+    .catch(() => ({ output: '', events: [] }))
+}
+
+/**
+ * Run a queued USER turn as a hidden fallback (Plan 500 P2.2) — used when a
+ * scheduled user-lane wake finds no renderer view to claim it (app window
+ * closed / different surface). Unlike `runWakePromptInExistingSession` this
+ * preserves user-turn semantics: no `effort: 'off'`, no `wakeRun` — the
+ * server marks it `userTurn` (epoch advances, lock origin 'user') and the
+ * session's own provider/model is used.
+ */
+export async function runUserTurnInSession(
+  sessionId: string,
+  prompt: string,
+  opts?: WakeRunOptions,
+): Promise<WakeRunOutcome> {
+  const port = getAgentServerPort()
+  if (!port) {
+    getLogger().warn('User-turn fallback skipped: agent server not running', { sessionId }, LogComponent.Automation)
+    return { output: '', events: [] }
+  }
+
+  // Prefer the session's own provider/model; fall back to the default.
+  let workingDirectory = ''
+  let sessionModel: string | undefined
+  try {
+    const session = getCoreStores().sessions.get(sessionId)
+    workingDirectory = session?.workingDirectory ?? ''
+    sessionModel = session?.model ?? undefined
+  } catch {
+    // Session row may not exist yet — empty workspace falls back to default.
+  }
+
+  let resolved: { provider: import('../../src/lib/providers/types').ApiProvider; model: string }
+  try {
+    resolved = resolveCronProvider(sessionModel)
+  } catch {
+    getLogger().warn('User-turn fallback skipped: no provider configured', { sessionId }, LogComponent.Automation)
+    return { output: '', events: [] }
+  }
+
+  getLogger().info('Queued user-turn fallback run starting', {
+    sessionId,
+    model: resolved.model,
+  }, LogComponent.Automation)
+
+  return await runPromptInSession({
+    sessionId,
+    prompt,
+    workingDirectory,
+    providerConfig: {
+      apiKey: resolved.provider.apiKey,
+      baseURL: resolved.provider.baseUrl,
+      model: resolved.model,
+      provider: toLLMProvider(resolved.provider.providerType),
+      authStyle: 'api_key',
+    },
+    options: {
+      agentProfileId: opts?.agentProfileId,
+      llmRequestTimeoutMs: 240_000,
+      runOrigin: 'user',
     },
   })
     .then((result) => ({ output: result.output, events: result.events }))

@@ -5,11 +5,16 @@
  * running turn, and what happens to the displaced run?".
  *
  * Rules (grok send-turn-dispatch / agent-to-agent-messaging parity):
- *  - a `user` wake or a `priority` DM may preempt a running turn whose
- *    origin is NOT user-driven (a bot/automation/background run);
- *  - the displaced run is NOT silently dropped: its in-flight wake is
- *    marked `isRedriven: true` and re-queued (redrive), so the work still
- *    happens once the preempting turn finishes;
+ *  - a `user` wake preempts ANY running turn — including a user turn
+ *    (Plan 500 P3, grok "superseded by a new user message": the user is
+ *    driving, nothing they type queues behind the bot);
+ *  - a `priority` DM preempts a running turn whose origin is NOT
+ *    user-driven (a bot/automation/background run);
+ *  - the displaced run is NOT silently dropped unless it was a user run:
+ *    agent/background runs are marked `isRedriven: true` and re-queued
+ *    (redrive) so the work still happens once the preempting turn finishes;
+ *    a displaced USER run is deliberately not redriven — the user replaced
+ *    it on purpose and its partial transcript is already persisted;
  *  - preempting advances turn_epoch (§2.6), so the displaced run's tail
  *    side-effects (nudge / error reporting) are suppressed by the epoch
  *    guard rather than by killing the run mid-flight.
@@ -47,13 +52,19 @@ export function decidePreemption(
   const preempting = isPreemptingWake(incoming)
   if (!preempting) return { action: 'proceed' }
 
-  // A user turn must never be yanked by anything (not even a priority DM —
-  // the user is driving; the DM waits in the agent lane).
-  if (currentOrigin === 'user') return { action: 'proceed' }
+  // Plan 500 P3 (grok parity): a new user message supersedes even a running
+  // user turn. Priority DMs still wait behind a user turn — the user is
+  // driving, the DM belongs to the agent lane.
+  if (currentOrigin === 'user' && incoming.lane !== 'user') {
+    return { action: 'proceed' }
+  }
 
+  // A displaced user run is not redriven — the user superseded it on
+  // purpose and its partial transcript is already persisted. Agent and
+  // background runs redrive so the displaced work still happens (476 §2.2).
   return {
     action: 'preempt',
-    redrive: true, // displaced run is re-queued, never dropped (476 §2.2)
+    redrive: currentOrigin !== 'user',
     reason: incoming.source === 'user.message' ? 'user_wake' : 'priority_dm',
   }
 }

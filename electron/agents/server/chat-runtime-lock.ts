@@ -30,6 +30,9 @@
 export const CHAT_LOCK_OWNER = 'agent-server'
 export const CHAT_LOCK_TTL_SEC = 300
 
+/** Run attribution persisted on the lock row (Plan 500 P1). */
+export type ChatLockOrigin = 'user' | 'agent' | 'background'
+
 export type DbRequest = (
   action: string,
   payload: Record<string, unknown>,
@@ -51,11 +54,16 @@ function chatLockId(runId: string): string {
  * message. Main uses it to advance the session's turn_epoch (a new user
  * turn supersedes older background wakes / run tail-effects). Wake and
  * automation runs pass false (or omit it).
+ *
+ * `opts.origin` (Plan 500 P1): run attribution persisted on the lock row so
+ * the bot run scheduler can classify any in-flight run before deciding to
+ * preempt it. Renderer chats pass 'user'; wake dispatches pass the item's
+ * lane ('agent' for DMs/group turns, 'background' for automations/inbound).
  */
 export async function acquireChatLock(
   dbRequest: DbRequest,
   sessionId: string,
-  opts?: { userTurn?: boolean },
+  opts?: { userTurn?: boolean; origin?: ChatLockOrigin },
 ): Promise<void> {
   const runId = crypto.randomUUID()
   activeLocks.set(sessionId, runId)
@@ -66,6 +74,7 @@ export async function acquireChatLock(
       owner: CHAT_LOCK_OWNER,
       ttlSec: CHAT_LOCK_TTL_SEC,
       ...(opts?.userTurn ? { userTurn: true } : {}),
+      ...(opts?.origin ? { origin: opts.origin } : {}),
     })
   } catch {
     // Best-effort mirroring — chat must never fail because of the lock.

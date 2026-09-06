@@ -28,6 +28,7 @@ export type WakeSourceKind =
   | 'agent.dm' // agent: bot→bot message, priority-capable (dedupe: clientMsgId)
   | 'user.message' // user: direct chat dispatch (dedupe: —)
   | 'approval.resume' // agent: durable approval-card decision resumed the run (dedupe: approvalId)
+  | 'group.turn' // agent: shared-room member turn (Plan 500 P4; dedupe: unique per run)
 
 /** Lane for each source kind (compile-time mirror of 476 §2.3). */
 export const SOURCE_DEFAULT_LANE: Readonly<Record<WakeSourceKind, WakeLane>> = {
@@ -40,6 +41,9 @@ export const SOURCE_DEFAULT_LANE: Readonly<Record<WakeSourceKind, WakeLane>> = {
   // Plan 498: an approval decision is user-authored but must not preempt a
   // turn in flight — it queues as agent-lane work (behind user turns).
   'approval.resume': 'agent',
+  // Plan 500 P4: room member turns are agent-lane work on the member's own
+  // session — they queue behind user DMs and yield to user preemption.
+  'group.turn': 'agent',
 }
 
 /**
@@ -97,6 +101,12 @@ export type WakePayload =
       decision: 'allow' | 'always' | 'deny'
       text: string
     }
+  | {
+      /** Plan 500 P4: a shared-room member turn on this bot's session. */
+      kind: 'group'
+      roomId: string
+      text: string
+    }
 
 /** Dedupe key of an item (the queue collapses on it). */
 export function wakeDedupeKey(item: WakeItem): string {
@@ -117,6 +127,11 @@ export function wakeDedupeKey(item: WakeItem): string {
       return item.payload.messageId == null
         ? `user:${item.enqueuedAtMs}`
         : `user:${item.payload.messageId}`
+    case 'group':
+      // Every member turn is a distinct run — the id is supplied by the
+      // dispatcher (`group:<roomId>:<epoch>:<memberId>:<nonce>`), so the
+      // dedupe key is the id itself.
+      return `group:${item.payload.roomId}:${item.id}`
   }
 }
 
