@@ -39,6 +39,7 @@ import {
 import { notifySessionIdle, advanceUserTurn } from '../wake/wake-dispatcher';
 import { maybeDispatchAgentDm } from '../wake/agent-dm-dispatcher';
 import { maybeDispatchIdleWake } from '../wake/idle-dispatcher';
+import { maybeScheduleGroupTurnFromAppend } from '../wake/group-turn-dispatcher';
 import { getSessionManager } from './session-manager.js';
 import { getChannelBackgroundWakes } from '../wake/channels';
 import { parseAgentIdFromBotSession } from '../wake/bot-session-id';
@@ -564,6 +565,12 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
           sessionId,
           messages: broadcastMessages,
         });
+
+        // Plan 478 P2.2: an authored bot entry (metadata.groupPost) in a room
+        // transcript session (`room:<roomId>`) schedules the room's group
+        // turn. The post_to_room tool wrote this entry from the worker; the
+        // room turn runs from the chained queue (stale epochs no-op).
+        maybeScheduleGroupTurnFromAppend(sessionId, messages);
 
         return { success: true, count: after - before };
       } catch (err) {

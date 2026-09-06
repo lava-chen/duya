@@ -3,6 +3,7 @@ import type { Thread } from '@/stores/conversation-store';
 import type { Message } from '@/types/message';
 import {
   buildBotContacts,
+  buildRoomContacts,
   deriveBotAvatarLabel,
   deriveBotContactHue,
   deriveBotIdFromName,
@@ -389,5 +390,39 @@ describe('peekBotMessagePreview (plan 483 P1.4, rakazo parity)', () => {
       userMessage({ id: '2', content: 'real user prompt', timestamp: 200 }),
     ];
     expect(peekBotMessagePreview(messages)?.text).toBe('real user prompt');
+  });
+});
+
+describe('buildRoomContacts (plan 478 P3.1)', () => {
+  it('derives room:<id> thread ids and joins activity from the thread list', () => {
+    const threads = [makeThread({ id: 'room:group-abc', updatedAt: 5000 })];
+    const contacts = buildRoomContacts(
+      [{ id: 'group-abc', name: '产品讨论组', memberIds: ['ada', 'bob'], memberNames: ['Ada', 'Bob'] }],
+      threads,
+    );
+    expect(contacts).toHaveLength(1);
+    expect(contacts[0]!.threadId).toBe('room:group-abc');
+    expect(contacts[0]!.name).toBe('产品讨论组');
+    expect(contacts[0]!.lastActivity).toBe(5000);
+    expect(contacts[0]!.memberNames).toEqual(['Ada', 'Bob']);
+  });
+
+  it('sorts recently-active rooms first, then by name', () => {
+    const threads = [makeThread({ id: 'room:b', updatedAt: 9000 })];
+    const contacts = buildRoomContacts(
+      [
+        { id: 'a', name: 'Alpha', memberIds: ['ada'], memberNames: [] },
+        { id: 'c', name: 'Charlie', memberIds: [], memberNames: [] },
+        { id: 'b', name: 'Beta', memberIds: ['ada'], memberNames: [] },
+      ],
+      threads,
+    );
+    expect(contacts.map((c) => c.name)).toEqual(['Beta', 'Alpha', 'Charlie']);
+  });
+
+  it('falls back to the id when the name is blank and tolerates empty threads', () => {
+    const contacts = buildRoomContacts([{ id: 'x', name: '  ', memberIds: [], memberNames: [] }], []);
+    expect(contacts[0]!.name).toBe('x');
+    expect(contacts[0]!.lastActivity).toBe(0);
   });
 });

@@ -324,6 +324,69 @@ export function deriveBotAvatarLabel(name: string): string {
 }
 
 /**
+ * Plan 478: one shared-room (group chat) row for the sidebar's 群聊 group.
+ * Identity comes from `~/.duya/groups.toml` via the `config:groups:list`
+ * IPC; the chat view is the room transcript session `room:<roomId>`.
+ */
+export interface RoomSource {
+  id: string;
+  name: string;
+  memberIds: string[];
+  memberNames: string[];
+}
+
+export interface RoomContact {
+  /** Room id (`[groups.<id>]` key). */
+  roomId: string;
+  /** Display name of the room. */
+  name: string;
+  /** Member agent ids, in declaration order. */
+  memberIds: string[];
+  /** Member display names, aligned with memberIds. */
+  memberNames: string[];
+  /** Thread id of the room transcript session (`room:<roomId>`). */
+  threadId: string;
+  /** Latest activity of the room session (0 when it has no transcript yet). */
+  lastActivity: number;
+}
+
+/** Thread id of a room transcript session (`room:<roomId>`). */
+export function deriveRoomThreadId(roomId: string): string {
+  return `${SESSION_KIND_PREFIXES.room}${roomId}`;
+}
+
+/**
+ * Build the room contact list from the groups declaration + the local
+ * thread list (for last-activity ordering). Name-sorted, like bot contacts.
+ */
+export function buildRoomContacts(rooms: RoomSource[], threads: Thread[]): RoomContact[] {
+  const activityById = new Map<string, number>();
+  for (const thread of threads) {
+    if (!thread.id.startsWith(SESSION_KIND_PREFIXES.room)) continue;
+    activityById.set(thread.id, thread.updatedAt);
+  }
+  const contacts: RoomContact[] = [];
+  for (const room of rooms) {
+    if (!room?.id) continue;
+    const threadId = deriveRoomThreadId(room.id);
+    contacts.push({
+      roomId: room.id,
+      name: room.name?.trim() || room.id,
+      memberIds: room.memberIds ?? [],
+      memberNames: room.memberNames ?? [],
+      threadId,
+      lastActivity: activityById.get(threadId) ?? 0,
+    });
+  }
+  contacts.sort((a, b) => {
+    // Rooms with recent activity first, then by name (Telegram-style).
+    if (a.lastActivity !== b.lastActivity) return b.lastActivity - a.lastActivity;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+  });
+  return contacts;
+}
+
+/**
  * 6 lowercase hex chars from the Web Crypto API — always legal in a bot id.
  * A random suffix replaces the old `bot-2` numeric increment: the "next free
  * slot" was predictable and collidable with deleted bots' stale on-disk

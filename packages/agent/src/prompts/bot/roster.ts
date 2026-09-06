@@ -20,16 +20,31 @@ export const BOT_ROSTER_MAX_ENTRIES = 40
 
 export function renderBotRoster(ctx: BotPromptContext): string | null {
   const entries = ctx.agentDirectory
-  if (!entries || entries.length === 0) return null
+  const groups = ctx.agentGroups
+  if ((!entries || entries.length === 0) && (!groups || groups.length === 0)) return null
 
-  const shown = entries.slice(0, BOT_ROSTER_MAX_ENTRIES)
+  const shown = (entries ?? []).slice(0, BOT_ROSTER_MAX_ENTRIES)
   const text = buildAgentMessagingSystemPrompt(
     shown.map((entry) => ({
       id: entry.id,
       name: entry.name || entry.id,
       description: entry.description,
     })),
+    // Plan 478: rooms render inside the contract (grok renders rooms in the
+    // same directory prompt). Each room's turn-time etiquette arrives with
+    // the group turn prompt itself.
+    {
+      groups: (groups ?? []).map((group) => ({
+        id: group.id,
+        name: group.name,
+        members: group.members.map((member) => ({
+          id: member.id,
+          name: member.name || member.id,
+          description: member.description,
+        })),
+      })),
+    },
   )
-  if (entries.length <= BOT_ROSTER_MAX_ENTRIES) return text
+  if (!entries || entries.length <= BOT_ROSTER_MAX_ENTRIES) return text
   return `${text}\n… and ${entries.length - BOT_ROSTER_MAX_ENTRIES} more.`
 }

@@ -57,6 +57,35 @@ describe('BotSendCard', () => {
     expect(onOptionClick).toHaveBeenCalledWith('the 14th');
   });
 
+  it('renders object widget options (SendMessageTool schema) and sends value', () => {
+    const onOptionClick = vi.fn();
+    render(
+      <BotSendCard
+        message={cardMessage({
+          msgType: 'widget',
+          content: '',
+          sendMessageMeta: {
+            widget: {
+              prompt: 'Deploy to production?',
+              options: [
+                { label: 'Deploy', value: 'Yes, deploy now', style: 'primary' },
+                { label: 'Cancel', value: 'No, hold off', description: 'keep it running' },
+                { label: 'Later' }, // value defaults to label
+              ],
+            },
+          },
+        })}
+        onOptionClick={onOptionClick}
+      />,
+    );
+    const cancel = screen.getByText('Cancel');
+    expect(cancel.getAttribute('title')).toBe('keep it running');
+    fireEvent.click(cancel);
+    expect(onOptionClick).toHaveBeenCalledWith('No, hold off');
+    fireEvent.click(screen.getByText('Later'));
+    expect(onOptionClick).toHaveBeenCalledWith('Later');
+  });
+
   it('renders cursor-agent badge with bcId', () => {
     render(
       <BotSendCard

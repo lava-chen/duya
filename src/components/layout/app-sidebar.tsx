@@ -52,14 +52,17 @@ import { useOptionalPanel } from "@/hooks/usePanel";
 import { CreateProjectDialog } from "@/components/ui/CreateProjectDialog";
 import { useBotContacts } from "./sidebar/use-bot-contacts";
 import { BotContactListItem } from "./sidebar/BotContactListItem";
+import { RoomContactListItem } from "./sidebar/RoomContactListItem";
 import {
   resolveBotOpenThreadId,
   deriveBotPlaceholderThreadId,
+  deriveRoomThreadId,
   matchesBotThread,
   type BotContact,
 } from "./sidebar/bot-contacts";
 import { CreateBotDialog } from "./CreateBotDialog";
 import { EditBotDialog } from "./EditBotDialog";
+import { GroupSettingsDialog } from "@/components/chat/bot/GroupSettingsDialog";
 import { deleteConfigAgent } from "@/lib/agent-profile-ipc";
 
 type ThemeMode = "light" | "dark";
@@ -143,11 +146,17 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       unpinned: unpinnedBots,
       hidden: hiddenBots,
       allContacts: botContacts,
+      roomContacts,
       reload: reloadBots,
       togglePin,
       hide,
       unhide,
     } = useBotContacts();
+    // Plan 478: shared-room create/edit dialog state (群聊 lives in the
+    // Bots section as its own "群聊" group).
+    const [groupDialog, setGroupDialog] = useState<
+      { mode: "create" } | { mode: "edit"; roomId: string; name: string; memberIds: string[] } | null
+    >(null);
     // Plan 471 v8: in "在一个列表中" (singleList) mode the flat session
     // list reveals incrementally (20 at a time — user preference, bigger
     // batch than the 5-per-project-group because it spans ALL projects
@@ -366,6 +375,15 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         const bound = liveThreads.find((t) => matchesBotThread(agentId, t.id));
         const threadId = bound?.id ?? deriveBotPlaceholderThreadId(agentId);
         setActiveThread(threadId);
+        setCurrentView("chat");
+      },
+      [setActiveThread, setCurrentView],
+    );
+
+    // Plan 478: open a shared room's transcript view (`room:<roomId>`).
+    const handleOpenRoom = useCallback(
+      (roomId: string) => {
+        setActiveThread(deriveRoomThreadId(roomId));
         setCurrentView("chat");
       },
       [setActiveThread, setCurrentView],
@@ -812,6 +830,44 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                   ))}
                 </div>
               )}
+              {/* Plan 478: shared rooms (群聊) — Telegram-style group rows
+                  under the same Bots section; the trailing "+" opens the
+                  create-group dialog (member picker ≤6). */}
+              <div className="sidebar-section-group">
+                <div className="sidebar-section-group-header">
+                  {t("sidebar.section.rooms")}
+                  <button
+                    type="button"
+                    className="ml-auto rounded p-0.5 text-[var(--text-muted)] hover:bg-[var(--bg-hover)]"
+                    onClick={() => setGroupDialog({ mode: "create" })}
+                    aria-label={t("room.create.title")}
+                    data-testid="create-room-button"
+                  >
+                    <PlusIcon size={12} />
+                  </button>
+                </div>
+                {roomContacts.length === 0 && (
+                  <div className="px-3 py-1.5 text-[12px] text-[var(--text-muted)]">
+                    {t("room.create.empty")}
+                  </div>
+                )}
+                {roomContacts.map((room) => (
+                  <RoomContactListItem
+                    key={room.roomId}
+                    room={room}
+                    isActive={room.threadId === activeThreadId}
+                    onOpen={() => handleOpenRoom(room.roomId)}
+                    onEdit={() =>
+                      setGroupDialog({
+                        mode: "edit",
+                        roomId: room.roomId,
+                        name: room.name,
+                        memberIds: room.memberIds,
+                      })
+                    }
+                  />
+                ))}
+              </div>
             </SidebarSectionItem>
           ) : (
             <button
@@ -1058,6 +1114,24 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
             // previous view" while the network round-trip completes.
             handleOpenBotById(agentId);
             setIsCreateBotDialogOpen(false);
+            void reloadBots();
+          }}
+        />
+
+        {/* Plan 478: shared-room create/edit dialog (groups.toml write side). */}
+        <GroupSettingsDialog
+          isOpen={groupDialog !== null}
+          mode={groupDialog?.mode ?? "create"}
+          groupId={groupDialog?.mode === "edit" ? groupDialog.roomId : undefined}
+          initialName={groupDialog?.mode === "edit" ? groupDialog.name : ""}
+          initialMemberIds={groupDialog?.mode === "edit" ? groupDialog.memberIds : []}
+          onCancel={() => setGroupDialog(null)}
+          onSaved={() => {
+            setGroupDialog(null);
+            void reloadBots();
+          }}
+          onDeleted={() => {
+            setGroupDialog(null);
             void reloadBots();
           }}
         />

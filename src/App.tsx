@@ -7,6 +7,7 @@ import { initMailboxEventListener } from "@/stores/mailbox-store";
 import { ChatView } from "@/components/chat/ChatView";
 import { BotDirectChatView } from "@/components/chat/BotDirectChatView";
 import { AgentDmPairView } from "@/components/chat/bot/AgentDmPairView";
+import { GroupRoomChatView } from "@/components/chat/GroupRoomChatView";
 import { resolveChatMode, resolveBotAgentId } from "@/components/chat/bot/chat-mode";
 import { useBotContacts } from "@/components/layout/sidebar/use-bot-contacts";
 import { botDirectSend, botDirectSendComplete } from "@/components/chat/bot/send";
@@ -700,7 +701,13 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
               onOpenDmPair={(peerId, peerName) => setBotDmPairPeer({ peerId, peerName })}
             />
           )}
-          {currentView === 'chat' && resolveChatMode(activeThreadId) !== 'bot-direct' && (
+          {currentView === 'chat' && resolveChatMode(activeThreadId) === 'room' && (
+            // Plan 478 P3.1: shared-room surface — self-contained (own
+            // transcript hook + composer), the workspace pipeline and
+            // ChatView never mount for `room:` sessions.
+            <GroupRoomChatView key={activeThreadId} sessionId={activeThreadId} />
+          )}
+          {currentView === 'chat' && resolveChatMode(activeThreadId) === 'workspace' && (
             <ChatView
               key={activeThreadId}
               sessionId={activeThreadId}

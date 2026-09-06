@@ -626,12 +626,12 @@ export interface AgentProfileAPI {
   delete: (id: string) => Promise<boolean>
 }
 
-/** Per-bot channel bindings (gateway profile routes). Credentials untouched. */
+/** Per-bot channel bindings (plan 488 grok-form). Credentials are write-only. */
 export interface BotChannelsAPI {
-  manifests: () => Promise<{ platforms: Array<Record<string, unknown>> }>
-  list: (agentId: string) => Promise<{ routes?: Array<Record<string, unknown>>; error?: string }>
-  connect: (agentId: string, input: { platform: string; chatId?: string; threadId?: string; label?: string }) => Promise<{ ok: boolean; error?: string }>
-  disconnect: (agentId: string, platform: string, chatId?: string) => Promise<{ ok: boolean; error?: string }>
+  manifests: () => Promise<{ manifests: Array<Record<string, unknown>> }>
+  list: (agentId: string) => Promise<{ channels?: Array<Record<string, unknown>>; error?: string }>
+  connect: (agentId: string, input: { platform: string; label?: string; credential: string }) => Promise<{ ok: boolean; platform?: string; error?: string }>
+  disconnect: (agentId: string, platform: string) => Promise<{ ok: boolean; platform?: string; error?: string }>
 }
 
 export interface ConfigAgentsAPI {
@@ -645,6 +645,23 @@ export interface ConfigAgentsAPI {
   /** Opens the file dialog in the main process; null when the user canceled. */
   uploadBotAvatar: (id: string) => Promise<{ avatarImage: string; avatarVersion: number; avatarUrl?: string } | null>;
   clearBotAvatar: (id: string) => Promise<{ avatarImage: string; avatarVersion: number }>;
+}
+
+/** Plan 478: shared-room declaration CRUD (groups.toml write side). */
+export interface GroupsAPI {
+  list: () => Promise<Record<string, { id?: string; name?: string; memberIds?: string[]; maxRounds?: number; maxMemberTurns?: number }>>;
+  get: (id: string) => Promise<{ id: string; name: string; memberIds: string[]; maxRounds: number; maxMemberTurns: number } | null>;
+  create: (input: { name: string; memberIds: string[]; maxRounds?: number; maxMemberTurns?: number }) => Promise<{ id: string; name: string; memberIds: string[] }>;
+  update: (id: string, patch: { name?: string; memberIds?: string[]; maxRounds?: number; maxMemberTurns?: number }) => Promise<{ id: string; name: string; memberIds: string[] }>;
+  delete: (id: string) => Promise<void>;
+}
+
+/** Plan 478: room transcript surface (room:<roomId> session reads/posts). */
+export interface RoomAPI {
+  ensure: (roomId: string) => Promise<string>;
+  post: (roomId: string, text: string) => Promise<{ ok: boolean }>;
+  getTranscript: (roomId: string) => Promise<unknown[]>;
+  members: (roomId: string) => Promise<Array<{ id: string; name: string; description?: string }>>;
 }
 
 export interface HookRow {
@@ -1231,6 +1248,8 @@ export interface ElectronAPI {
   agentProfile: AgentProfileAPI
   botChannels: BotChannelsAPI
   configAgents: ConfigAgentsAPI
+  groups: GroupsAPI
+  room: RoomAPI
   hooks: HooksAPI
   plugin: PluginAPI
   appConnection: AppConnectionAPI
@@ -2288,10 +2307,10 @@ const electronAPI: ElectronAPI = {
   botChannels: {
     manifests: () => ipcRenderer.invoke('botChannels:manifests'),
     list: (agentId: string) => ipcRenderer.invoke('botChannels:list', agentId),
-    connect: (agentId: string, input: { platform: string; chatId?: string; threadId?: string; label?: string }) =>
+    connect: (agentId: string, input: { platform: string; label?: string; credential: string }) =>
       ipcRenderer.invoke('botChannels:connect', agentId, input),
-    disconnect: (agentId: string, platform: string, chatId?: string) =>
-      ipcRenderer.invoke('botChannels:disconnect', agentId, platform, chatId),
+    disconnect: (agentId: string, platform: string) =>
+      ipcRenderer.invoke('botChannels:disconnect', agentId, platform),
   },
   configAgents: {
     list: () => ipcRenderer.invoke('config:agents:list'),
@@ -2302,6 +2321,22 @@ const electronAPI: ElectronAPI = {
     updateBotProfile: (id: string, input: Record<string, unknown>) => ipcRenderer.invoke('config:agents:updateBotProfile', id, input),
     uploadBotAvatar: (id: string) => ipcRenderer.invoke('config:agents:uploadBotAvatar', id),
     clearBotAvatar: (id: string) => ipcRenderer.invoke('config:agents:clearBotAvatar', id),
+  },
+  // Shared rooms (group chat) — Plan 478 P1.1/P2.2/P3.1.
+  groups: {
+    list: () => ipcRenderer.invoke('config:groups:list'),
+    get: (id: string) => ipcRenderer.invoke('config:groups:get', id),
+    create: (input: { name: string; memberIds: string[]; maxRounds?: number; maxMemberTurns?: number }) =>
+      ipcRenderer.invoke('config:groups:create', input),
+    update: (id: string, patch: { name?: string; memberIds?: string[]; maxRounds?: number; maxMemberTurns?: number }) =>
+      ipcRenderer.invoke('config:groups:update', id, patch),
+    delete: (id: string) => ipcRenderer.invoke('config:groups:delete', id),
+  },
+  room: {
+    ensure: (roomId: string) => ipcRenderer.invoke('room:ensure', roomId),
+    post: (roomId: string, text: string) => ipcRenderer.invoke('room:post', { roomId, text }),
+    getTranscript: (roomId: string) => ipcRenderer.invoke('room:getTranscript', roomId),
+    members: (roomId: string) => ipcRenderer.invoke('room:members', roomId),
   },
   hooks: {
     overview: () => ipcRenderer.invoke('hooks:overview'),

@@ -499,6 +499,18 @@ interface SecretRequestContent {
 - [ ] **P5.3** `npm run typecheck:all` 全绿 + 所有新增单测绿。
 - [ ] **P5.4** 更新 ARCHITECTURE.md：新增 "Bot Channel Integration" 章节。
 
+### Phase 6 — grok 完整形态：per-bot 入站 connector ✅ Telegram · P6 部分（2026-09-06）
+
+- [x] **P6.1** `telegram` 加入 `KNOWN_PLATFORMS` + `CONNECTOR_MANIFESTS`（available）。
+- [x] **P6.2** `electron/channels/telegram-connector.ts`：Telegram 长轮询入站 connector（bot 自己的 token，`getUpdates` offset 增量、错误退避、每轮让出宏任务队列避免饿死 `stop()`）。
+- [x] **P6.3** `electron/channels/connector-runtime.ts`：`BotConnectorManager` —— 扫描 `agents/*/channels/` + secret store，为每个有凭证的 (bot, telegram) 绑定保活一个 connector；`sync()` 在启动和每次 bind/unbind 后重算期望集。main 在 core DB 初始化后 `start()`。
+- [x] **P6.4** 唤醒接线：envelope → `defaultBotSessionCreator.createIfMissing(bot:<agentId>)` → `wakeForInbound(botSessionId, agentId, envelope)` 隐藏 `[inbound]` wake turn（记忆长在 bot 持久会话上）。
+- [x] **P6.5** 出站 `TelegramTransport`（SendMessage `channel: "telegram:<chatId>"` → `sendMessage` API，bot 自己的 token）。
+- [x] **P6.6** botChannels IPC / agent-scoped CLI / Bot 设置面板回到 per-bot token 绑定流，变更后同步 connector runtime。CLI 凭证仍只走 `DUYA_CHANNEL_TOKEN`/`--token-env`/`--stdin`。
+- [ ] **P6.7** Discord/Slack 入站 transport（WS gateway / Socket Mode）——当前仅出站。
+- [ ] **P6.8** 端到端实测：BotFather 建 bot → 面板/CLI 绑定 → 外部聊天发消息 → bot 持久会话出现 `[inbound]` turn → SendMessage 回复送达。
+- 备注：gateway profile-route 绑定（`channels.profile_routes`，2026-09-06 上一提交）保留为 config.toml 级功能，与 grok 形态并行；UI/CLI 表面以 grok 形态为准。
+
 ---
 
 ## 5. 与现有 plan 的接口

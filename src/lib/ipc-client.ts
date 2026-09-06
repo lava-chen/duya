@@ -73,6 +73,8 @@ export interface Message {
   sendMessageMeta?: SendMessageCardMeta | null;
   /** Plan 477 P4.4: bot→bot DM marker payload (parsed from agent_dm_meta). */
   agentDmMeta?: AgentDmCardMeta | null;
+  /** Plan 478: shared-room post payload (parsed from group_post_meta). */
+  groupPostMeta?: import("@/types/message").RoomPostMeta | null;
 }
 
 /** Plan 477 P4.4: bot→bot DM marker card descriptor (metadata.agentDm).
@@ -219,6 +221,8 @@ export interface DbMessage {
   send_message_meta?: string | null
   /** Plan 477 P4.4: bot→bot DM marker payload (JSON), mirrors MessageRow.agent_dm_meta. */
   agent_dm_meta?: string | null
+  /** Plan 478: shared-room post payload (JSON), mirrors MessageRow.group_post_meta. */
+  group_post_meta?: string | null
 }
 
 // Backend returns camelCase (via maskProvider in agent-communicator.ts)
@@ -408,6 +412,15 @@ export function dbMessageToMessage(db: DbMessage): Message {
         // that name, so chips group correctly and the overlay resolves what
         // it can.
         synthesizeLegacyAgentDmMeta(db),
+    groupPostMeta: db.group_post_meta
+      ? (() => {
+          try {
+            return JSON.parse(db.group_post_meta) as import("@/types/message").RoomPostMeta;
+          } catch {
+            return null;
+          }
+        })()
+      : null,
     // Surface the user-facing prompt (with pasted-content markers).
     // Falls back to `content` for legacy rows that pre-date the
     // `display_content` column — those rows had the prompt stored in

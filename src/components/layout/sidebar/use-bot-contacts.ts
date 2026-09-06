@@ -26,8 +26,11 @@ import { useConversationStore } from "@/stores/conversation-store";
 import { listBots } from "@/lib/agent-profile-ipc";
 import {
   buildBotContacts,
+  buildRoomContacts,
   partitionBotContacts,
   type BotPartition,
+  type RoomContact,
+  type RoomSource,
 } from "./bot-contacts";
 
 const PINNED_IDS_KEY = "sidebar.botPinnedIds";
@@ -59,6 +62,8 @@ function writeIds(key: string, ids: string[]): void {
 export function useBotContacts() {
   const threads = useConversationStore((s) => s.threads);
   const [bots, setBots] = useState<Awaited<ReturnType<typeof listBots>>>([]);
+  /** Plan 478: raw groups.toml declaration rows (activity joins via threads). */
+  const [roomSources, setRoomSources] = useState<RoomSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [pinnedIds, setPinnedIds] = useState<string[]>([]);
   const [hiddenIds, setHiddenIds] = useState<string[]>([]);
@@ -72,6 +77,20 @@ export function useBotContacts() {
       setBots([]);
     } finally {
       setLoading(false);
+    }
+    // Plan 478: shared rooms from groups.toml (via config:groups:list).
+    try {
+      const declared = await window.electronAPI?.groups?.list?.();
+      setRoomSources(
+        Object.entries(declared ?? {}).map(([id, group]) => ({
+          id,
+          name: group?.name ?? id,
+          memberIds: group?.memberIds ?? [],
+          memberNames: [],
+        })),
+      );
+    } catch {
+      setRoomSources([]);
     }
     setPinnedIds(await readIds(PINNED_IDS_KEY));
     setHiddenIds(await readIds(HIDDEN_IDS_KEY));
@@ -135,6 +154,12 @@ export function useBotContacts() {
     [bots, threads],
   );
 
+  /** Plan 478: room contacts, activity-joined against the thread list. */
+  const roomContacts: RoomContact[] = useMemo(
+    () => buildRoomContacts(roomSources, threads),
+    [roomSources, threads],
+  );
+
   const partition: BotPartition = useMemo(
     () => partitionBotContacts(allContacts, pinnedIds, hiddenIds),
     [allContacts, pinnedIds, hiddenIds],
@@ -143,6 +168,7 @@ export function useBotContacts() {
   return {
     ...partition,
     allContacts,
+    roomContacts,
     loading,
     reload,
     togglePin,
