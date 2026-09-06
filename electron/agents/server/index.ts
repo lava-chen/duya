@@ -100,7 +100,7 @@ process.on('message', (msg: Record<string, unknown>) => {
     }
     return;
   }
-  // Plan 503: route appConnection:catalog:response back to the worker
+  // Plan 502: route appConnection:catalog:response back to the worker
   // (bot-only connector-management tools: provider directory + status DTOs).
   if (msg.type === 'appConnection:catalog:response' && typeof msg.requestId === 'string') {
     const key = `rpc:${msg.requestId}`;

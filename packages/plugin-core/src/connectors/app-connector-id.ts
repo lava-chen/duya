@@ -17,6 +17,8 @@ export function asAppConnectorId(id: string): AppConnectorId {
 /** Well-known first-party connector ids (Plan 312 builtin providers). */
 export const BUILTIN_CONNECTOR_IDS: readonly AppConnectorId[] = [
   'google',
+  'gmail',
+  'calendar',
   'slack',
   'microsoft365',
   'figma',

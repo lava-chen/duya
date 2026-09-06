@@ -18,6 +18,8 @@ import { AppConnectionService, getAppConnectionService } from './app-connection-
 import { TokenService } from './token-service.js';
 import type { ConnectorModule, ConnectorToolDescriptor, ConnectorInvokeResult } from './connector-types.js';
 import { createGoogleConnector } from './connectors/google.js';
+import { createGmailConnector } from './connectors/gmail.js';
+import { createCalendarConnector } from './connectors/calendar.js';
 import { createSlackConnector } from './connectors/slack.js';
 import { createMicrosoft365Connector } from './connectors/microsoft365.js';
 import { createWeComConnector } from './connectors/wecom.js';
