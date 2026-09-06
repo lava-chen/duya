@@ -4,10 +4,16 @@
 // Hovering/clicking a provider (or Thinking) opens a second-level flyout next
 // to that row listing the provider's models (or the effort options), so the
 // root menu stays visible while browsing.
+//
+// Also used by the bot settings forms (create/edit dialog + settings panel):
+// `portal` escapes dialog scroll-container clipping, `clearOption` restores
+// the "follow the global default" state, and empty `effortOptions` hides the
+// effort surface entirely.
 
 'use client';
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import {
   CaretDownIcon,
   CaretRightIcon,
@@ -47,12 +53,26 @@ interface ModelProviderSelectorProps {
   /** Currently selected model id (with `[provider] ` prefix). */
   selectedModelId: string;
   onSelectModel: (modelId: string, providerId?: string) => void;
-  /** Thinking effort value + options. */
+  /** Thinking effort value + options. When `effortOptions` is empty the
+   *  whole effort surface (trigger label + Thinking row) is hidden — used
+   *  by the bot settings forms where effort is not a config concept. */
   effortValue?: string | null;
   effortOptions: EffortOption[];
   onSelectEffort: (effort: string | null) => void;
   disabled?: boolean;
   loading?: boolean;
+  /**
+   * Render the open menu through a portal with fixed positioning. Needed
+   * inside dialogs / scroll containers where the absolute menu would be
+   * clipped by an `overflow: auto` ancestor.
+   */
+  portal?: boolean;
+  /** When set, a first row with this label clears the selection
+   *  (`onSelectModel('')`) and the trigger shows it while nothing is picked. */
+  clearOption?: string;
+  /** Show the "Manage providers" footer row (default true — dialogs pass
+   *  false because the navigation would land behind the modal overlay). */
+  showManageProviders?: boolean;
 }
 
 type FlyoutView = 'models' | 'effort';
@@ -86,12 +106,23 @@ export function ModelProviderSelector({
   onSelectEffort,
   disabled = false,
   loading = false,
+  portal = false,
+  clearOption,
+  showManageProviders = true,
 }: ModelProviderSelectorProps) {
   const { t } = useTranslation();
   const { setCurrentView, setSettingsTab } = useConversationStore();
   const [open, setOpen] = useState(false);
   const [flyout, setFlyout] = useState<FlyoutState | null>(null);
+  // Portal placement (fixed coords of the root panel), computed at open time.
+  const [portalCoords, setPortalCoords] = useState<
+    { left: number; top?: number; bottom?: number; listMaxHeight: number } | null
+  >(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  // Portal hosts render the menu outside containerRef — the outside-click
+  // close must ignore it, or the mousedown that precedes every click tears
+  // the menu down before the row's click handler can fire.
+  const portalWrapRef = useRef<HTMLDivElement | null>(null);
   const rootPanelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef<Map<string, HTMLButtonElement | null>>(new Map());
@@ -104,41 +135,82 @@ export function ModelProviderSelector({
     providerGroups[0] ??
     null;
   const selectedModel = currentProvider?.models.find((m) => m.id === selectedModelId);
-  const modelLabel = selectedModel?.display_name || selectedPrefixed.modelId || t('messageInput.selectModel');
+  const hasEffortOptions = effortOptions.length > 0;
+  const modelLabel =
+    selectedModelId === '' && clearOption !== undefined
+      ? clearOption
+      : selectedModel?.display_name || selectedPrefixed.modelId || t('messageInput.selectModel');
   const effortLabel =
     effortOptions.find((o) => o.value === (effortValue || ''))?.label ??
     t('messageInput.effortAuto');
 
-  // Close on click outside.
+  // Close on click outside (trigger container OR the portal menu).
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-        setFlyout(null);
-      }
+      const target = e.target as Node;
+      if (containerRef.current?.contains(target)) return;
+      if (portalWrapRef.current?.contains(target)) return;
+      setOpen(false);
+      setFlyout(null);
+      setPortalCoords(null);
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const closeMenu = useCallback(() => {
+    setOpen(false);
+    setFlyout(null);
+    setPortalCoords(null);
   }, []);
 
   const handleToggle = useCallback(() => {
     if (disabled) return;
     setOpen((prev) => {
       const next = !prev;
-      if (!next) setFlyout(null);
+      if (!next) {
+        setFlyout(null);
+        setPortalCoords(null);
+        return next;
+      }
+      // Portal mode: measure the trigger and place the panel with fixed
+      // positioning — above the trigger when there is room, else below.
+      if (portal) {
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (rect) {
+          const FOOTER = 76; // Thinking + Manage rows allowance
+          const spaceAbove = rect.top - 8;
+          if (spaceAbove >= 200) {
+            setPortalCoords({
+              left: rect.left,
+              bottom: window.innerHeight - rect.top + 4,
+              listMaxHeight: Math.max(120, Math.min(320, spaceAbove - FOOTER)),
+            });
+          } else {
+            const spaceBelow = window.innerHeight - rect.bottom - 8;
+            setPortalCoords({
+              left: rect.left,
+              top: rect.bottom + 4,
+              listMaxHeight: Math.max(120, Math.min(320, spaceBelow - FOOTER)),
+            });
+          }
+        }
+      }
       return next;
     });
-  }, [disabled]);
+  }, [disabled, portal]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === 'Escape') {
+        // Stop propagation so a host dialog's own Escape handler does not
+        // close the dialog while the user is only dismissing this menu.
+        e.stopPropagation();
         e.preventDefault();
-        setOpen(false);
-        setFlyout(null);
+        closeMenu();
       }
     },
-    [],
+    [closeMenu],
   );
 
   /** Open a second-level flyout anchored to `anchor` (a row inside the root panel). */
@@ -167,27 +239,29 @@ export function ModelProviderSelector({
     (modelId: string) => {
       const provider = providerGroups.find((g) => g.models.some((m) => m.id === modelId));
       onSelectModel(modelId, provider?.id);
-      setOpen(false);
-      setFlyout(null);
+      closeMenu();
     },
-    [onSelectModel, providerGroups],
+    [onSelectModel, providerGroups, closeMenu],
   );
+
+  const handleSelectClear = useCallback(() => {
+    onSelectModel('');
+    closeMenu();
+  }, [onSelectModel, closeMenu]);
 
   const handleSelectEffort = useCallback(
     (value: string | null) => {
       onSelectEffort(value);
-      setOpen(false);
-      setFlyout(null);
+      closeMenu();
     },
-    [onSelectEffort],
+    [onSelectEffort, closeMenu],
   );
 
   const handleManageProviders = useCallback(() => {
     setSettingsTab('providers');
     setCurrentView('settings');
-    setOpen(false);
-    setFlyout(null);
-  }, [setSettingsTab, setCurrentView]);
+    closeMenu();
+  }, [setSettingsTab, setCurrentView, closeMenu]);
 
   const flyoutProvider = flyout?.view === 'models'
     ? providerGroups.find((g) => g.id === flyout.providerId)
@@ -214,6 +288,204 @@ export function ModelProviderSelector({
     gap: 8,
   };
 
+  // The open menu (root panel + flyout). Rendered inline (absolute, opens
+  // upward) for the composer, or through a portal with fixed positioning
+  // for dialog/panel hosts.
+  const panel = (
+    <div ref={rootPanelRef} className="relative">
+      {/* First-level menu: clear + providers */}
+      <div
+        className="command-menu-popover"
+        style={{
+          backgroundColor: 'var(--command-menu-bg)',
+          border: '1px solid var(--command-menu-border)',
+          borderRadius: 10,
+          boxShadow: 'var(--command-menu-shadow)',
+          padding: 3,
+          width: 240,
+        }}
+      >
+        <div
+          ref={scrollRef}
+          role="listbox"
+          className="flex flex-col overflow-y-auto"
+          style={{ gap: 1, maxHeight: portal && portalCoords ? portalCoords.listMaxHeight : 320 }}
+        >
+          {clearOption !== undefined && (
+            <button
+              type="button"
+              role="option"
+              aria-selected={selectedModelId === ''}
+              onClick={handleSelectClear}
+              className="command-menu-row px-2.5 cursor-pointer select-none"
+              style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(selectedModelId === ''), ...listItemGridStyle }}
+            >
+              <span className="truncate text-left" style={{ fontSize: 12, fontWeight: selectedModelId === '' ? 600 : 500, color: selectedModelId === '' ? 'var(--accent)' : 'var(--text)' }}>
+                {clearOption}
+              </span>
+              {selectedModelId === '' && <CheckIcon size={12} style={{ color: 'var(--accent)' }} />}
+            </button>
+          )}
+          {providerGroups.length === 0 ? (
+            <div className="px-2.5 py-2" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>
+              {t('messageInput.noModelsAvailable')}
+            </div>
+          ) : (
+            providerGroups.map((provider) => {
+              const isActive = provider.id === currentProvider?.id;
+              return (
+                <button
+                  key={provider.id}
+                  ref={(el) => { rowRefs.current.set(provider.id, el); }}
+                  type="button"
+                  role="option"
+                  aria-selected={isActive}
+                  onMouseEnter={() => openFlyout('models', rowRefs.current.get(provider.id) ?? null, provider.id)}
+                  onClick={() => openFlyout('models', rowRefs.current.get(provider.id) ?? null, provider.id)}
+                  className="command-menu-row px-2.5 cursor-pointer select-none"
+                  style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(isActive), ...listItemGridStyle }}
+                >
+                  <div className="min-w-0 flex items-baseline" style={{ gap: 8 }}>
+                    <span className="truncate" style={{ fontSize: 12, fontWeight: isActive ? 600 : 500, color: isActive ? 'var(--accent)' : 'var(--text)' }}>
+                      {provider.name}
+                    </span>
+                    <span className="truncate" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>
+                      {provider.models.length} model{provider.models.length === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <CaretRightIcon size={12} style={{ color: 'var(--muted)' }} />
+                </button>
+              );
+            })
+          )}
+        </div>
+
+        {/* Thinking + Manage footer */}
+        {(hasEffortOptions || showManageProviders) && (
+          <div
+            className="flex flex-col"
+            style={{ gap: 1, marginTop: 3, borderTop: '1px solid var(--command-menu-border)', paddingTop: 3 }}
+          >
+            {hasEffortOptions && (
+              <button
+                ref={effortRowRef}
+                type="button"
+                role="option"
+                onMouseEnter={() => openFlyout('effort', effortRowRef.current)}
+                onClick={() => openFlyout('effort', effortRowRef.current)}
+                className="command-menu-row px-2.5 cursor-pointer select-none"
+                style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(false), ...arrowRowGridStyle }}
+              >
+                <span className="truncate text-left" style={{ fontSize: 12, fontWeight: 500 }}>{t('messageInput.effort')}</span>
+                <span className="truncate text-right" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>{effortLabel}</span>
+                <CaretRightIcon size={12} style={{ color: 'var(--muted)' }} />
+              </button>
+            )}
+
+            {showManageProviders && (
+              <button
+                type="button"
+                role="option"
+                onClick={handleManageProviders}
+                className="command-menu-row px-2.5 cursor-pointer select-none"
+                style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(false), ...listItemGridStyle }}
+              >
+                <span className="truncate text-left flex items-center gap-1.5" style={{ fontSize: 12, fontWeight: 500 }}>
+                  <GearSixIcon size={13} className="shrink-0" style={{ color: 'var(--muted)' }} />
+                  {t('messageInput.manageProviders')}
+                </span>
+                <span />
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Second-level flyout: models for a provider, or effort options */}
+      {flyout && (
+        <div
+          className="command-menu-popover overflow-y-auto"
+          style={{
+            position: 'absolute',
+            top: flyout.top,
+            left: flyout.left,
+            width: FLYOUT_WIDTH,
+            zIndex: 20,
+            backgroundColor: 'var(--command-menu-bg)',
+            border: '1px solid var(--command-menu-border)',
+            borderRadius: 10,
+            boxShadow: 'var(--command-menu-shadow)',
+            padding: 3,
+            maxHeight: flyout.maxHeight,
+          }}
+        >
+          {flyout.view === 'models' ? (
+            <div role="listbox" className="flex flex-col" style={{ gap: 1 }}>
+              {flyoutModels.length === 0 ? (
+                <div className="px-2.5 py-2" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>
+                  {t('messageInput.noModelsAvailable')}
+                </div>
+              ) : (
+                flyoutModels.map((model) => {
+                  const isActive = model.id === selectedModelId;
+                  return (
+                    <button
+                      key={model.id}
+                      type="button"
+                      role="option"
+                      aria-selected={isActive}
+                      onClick={() => handleSelectModel(model.id)}
+                      className="command-menu-row px-2.5 cursor-pointer select-none"
+                      style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(isActive), ...listItemGridStyle }}
+                    >
+                      <div className="min-w-0 flex items-baseline" style={{ gap: 8 }}>
+                        <span className="truncate" style={{ fontSize: 12, fontWeight: isActive ? 600 : 500, color: isActive ? 'var(--accent)' : 'var(--text)' }}>
+                          {model.display_name}
+                        </span>
+                        {model.context_length ? (
+                          <span className="truncate" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>
+                            {model.context_length >= 1000000
+                              ? `${(model.context_length / 1000000).toFixed(1)}M`
+                              : model.context_length >= 1000
+                                ? `${(model.context_length / 1000).toFixed(0)}K`
+                                : String(model.context_length)}
+                          </span>
+                        ) : null}
+                      </div>
+                      {isActive && <CheckIcon size={12} style={{ color: 'var(--accent)' }} />}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          ) : (
+            <div role="listbox" className="flex flex-col" style={{ gap: 1 }}>
+              {effortOptions.map((option) => {
+                const isActive = (effortValue || '') === option.value;
+                return (
+                  <button
+                    key={option.value || 'auto'}
+                    type="button"
+                    role="option"
+                    aria-selected={isActive}
+                    onClick={() => handleSelectEffort(option.value || null)}
+                    className="command-menu-row px-2.5 cursor-pointer select-none"
+                    style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(isActive), ...listItemGridStyle }}
+                  >
+                    <span className="truncate text-left" style={{ fontSize: 12, fontWeight: isActive ? 600 : 500, color: isActive ? 'var(--accent)' : 'var(--text)' }}>
+                      {option.label}
+                    </span>
+                    {isActive && <CheckIcon size={12} style={{ color: 'var(--accent)' }} />}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div ref={containerRef} className="relative min-w-0 shrink" onKeyDown={handleKeyDown}>
       {/* Trigger button: <model> <effort> */}
@@ -231,194 +503,43 @@ export function ModelProviderSelector({
             <span className="min-w-0 max-w-[110px] shrink truncate" style={{ color: 'var(--text)' }}>
               {modelLabel}
             </span>
-            <span className="shrink-0" style={{ color: 'var(--command-menu-muted)' }}>·</span>
-            <span className="shrink-0" style={{ color: 'var(--muted)' }}>{effortLabel}</span>
+            {hasEffortOptions && (
+              <>
+                <span className="shrink-0" style={{ color: 'var(--command-menu-muted)' }}>·</span>
+                <span className="shrink-0" style={{ color: 'var(--muted)' }}>{effortLabel}</span>
+              </>
+            )}
           </>
         )}
         <CaretDownIcon size={12} className="shrink-0" style={{ color: 'var(--muted)' }} />
       </button>
 
-      {open && (
+      {open && !portal && (
         <div
           className="absolute left-0 z-50 bottom-full mb-1"
           style={{ overflow: 'visible' }}
         >
-          <div
-            ref={rootPanelRef}
-            className="relative"
-          >
-            {/* First-level menu: providers + thinking + manage */}
-            <div
-              className="command-menu-popover"
-              style={{
-                backgroundColor: 'var(--command-menu-bg)',
-                border: '1px solid var(--command-menu-border)',
-                borderRadius: 10,
-                boxShadow: 'var(--command-menu-shadow)',
-                padding: 3,
-                width: 240,
-              }}
-            >
-              <div
-                ref={scrollRef}
-                role="listbox"
-                className="flex flex-col overflow-y-auto"
-                style={{ gap: 1, maxHeight: 320 }}
-              >
-                {providerGroups.length === 0 ? (
-                  <div className="px-2.5 py-2" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>
-                    {t('messageInput.noModelsAvailable')}
-                  </div>
-                ) : (
-                  providerGroups.map((provider) => {
-                    const isActive = provider.id === currentProvider?.id;
-                    return (
-                      <button
-                        key={provider.id}
-                        ref={(el) => { rowRefs.current.set(provider.id, el); }}
-                        type="button"
-                        role="option"
-                        aria-selected={isActive}
-                        onMouseEnter={() => openFlyout('models', rowRefs.current.get(provider.id) ?? null, provider.id)}
-                        onClick={() => openFlyout('models', rowRefs.current.get(provider.id) ?? null, provider.id)}
-                        className="command-menu-row px-2.5 cursor-pointer select-none"
-                        style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(isActive), ...listItemGridStyle }}
-                      >
-                        <div className="min-w-0 flex items-baseline" style={{ gap: 8 }}>
-                          <span className="truncate" style={{ fontSize: 12, fontWeight: isActive ? 600 : 500, color: isActive ? 'var(--accent)' : 'var(--text)' }}>
-                            {provider.name}
-                          </span>
-                          <span className="truncate" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>
-                            {provider.models.length} model{provider.models.length === 1 ? '' : 's'}
-                          </span>
-                        </div>
-                        <CaretRightIcon size={12} style={{ color: 'var(--muted)' }} />
-                      </button>
-                    );
-                  })
-                )}
-              </div>
-
-              {/* Thinking + Manage footer */}
-              <div
-                className="flex flex-col"
-                style={{ gap: 1, marginTop: 3, borderTop: '1px solid var(--command-menu-border)', paddingTop: 3 }}
-              >
-                <button
-                  ref={effortRowRef}
-                  type="button"
-                  role="option"
-                  onMouseEnter={() => openFlyout('effort', effortRowRef.current)}
-                  onClick={() => openFlyout('effort', effortRowRef.current)}
-                  className="command-menu-row px-2.5 cursor-pointer select-none"
-                  style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(false), ...arrowRowGridStyle }}
-                >
-                  <span className="truncate text-left" style={{ fontSize: 12, fontWeight: 500 }}>{t('messageInput.effort')}</span>
-                  <span className="truncate text-right" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>{effortLabel}</span>
-                  <CaretRightIcon size={12} style={{ color: 'var(--muted)' }} />
-                </button>
-
-                <button
-                  type="button"
-                  role="option"
-                  onClick={handleManageProviders}
-                  className="command-menu-row px-2.5 cursor-pointer select-none"
-                  style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(false), ...listItemGridStyle }}
-                >
-                  <span className="truncate text-left flex items-center gap-1.5" style={{ fontSize: 12, fontWeight: 500 }}>
-                    <GearSixIcon size={13} className="shrink-0" style={{ color: 'var(--muted)' }} />
-                    {t('messageInput.manageProviders')}
-                  </span>
-                  <span />
-                </button>
-              </div>
-            </div>
-
-            {/* Second-level flyout: models for a provider, or effort options */}
-            {flyout && (
-              <div
-                className="command-menu-popover overflow-y-auto"
-                style={{
-                  position: 'absolute',
-                  top: flyout.top,
-                  left: flyout.left,
-                  width: FLYOUT_WIDTH,
-                  zIndex: 20,
-                  backgroundColor: 'var(--command-menu-bg)',
-                  border: '1px solid var(--command-menu-border)',
-                  borderRadius: 10,
-                  boxShadow: 'var(--command-menu-shadow)',
-                  padding: 3,
-                  maxHeight: flyout.maxHeight,
-                }}
-              >
-                {flyout.view === 'models' ? (
-                  <div role="listbox" className="flex flex-col" style={{ gap: 1 }}>
-                    {flyoutModels.length === 0 ? (
-                      <div className="px-2.5 py-2" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>
-                        {t('messageInput.noModelsAvailable')}
-                      </div>
-                    ) : (
-                      flyoutModels.map((model) => {
-                        const isActive = model.id === selectedModelId;
-                        return (
-                          <button
-                            key={model.id}
-                            type="button"
-                            role="option"
-                            aria-selected={isActive}
-                            onClick={() => handleSelectModel(model.id)}
-                            className="command-menu-row px-2.5 cursor-pointer select-none"
-                            style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(isActive), ...listItemGridStyle }}
-                          >
-                            <div className="min-w-0 flex items-baseline" style={{ gap: 8 }}>
-                              <span className="truncate" style={{ fontSize: 12, fontWeight: isActive ? 600 : 500, color: isActive ? 'var(--accent)' : 'var(--text)' }}>
-                                {model.display_name}
-                              </span>
-                              {model.context_length ? (
-                                <span className="truncate" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>
-                                  {model.context_length >= 1000000
-                                    ? `${(model.context_length / 1000000).toFixed(1)}M`
-                                    : model.context_length >= 1000
-                                      ? `${(model.context_length / 1000).toFixed(0)}K`
-                                      : String(model.context_length)}
-                                </span>
-                              ) : null}
-                            </div>
-                            {isActive && <CheckIcon size={12} style={{ color: 'var(--accent)' }} />}
-                          </button>
-                        );
-                      })
-                    )}
-                  </div>
-                ) : (
-                  <div role="listbox" className="flex flex-col" style={{ gap: 1 }}>
-                    {effortOptions.map((option) => {
-                      const isActive = (effortValue || '') === option.value;
-                      return (
-                        <button
-                          key={option.value || 'auto'}
-                          type="button"
-                          role="option"
-                          aria-selected={isActive}
-                          onClick={() => handleSelectEffort(option.value || null)}
-                          className="command-menu-row px-2.5 cursor-pointer select-none"
-                          style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(isActive), ...listItemGridStyle }}
-                        >
-                          <span className="truncate text-left" style={{ fontSize: 12, fontWeight: isActive ? 600 : 500, color: isActive ? 'var(--accent)' : 'var(--text)' }}>
-                            {option.label}
-                          </span>
-                          {isActive && <CheckIcon size={12} style={{ color: 'var(--accent)' }} />}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          {panel}
         </div>
       )}
+
+      {open && portal && portalCoords &&
+        createPortal(
+          <div
+            ref={portalWrapRef}
+            style={{
+              position: 'fixed',
+              zIndex: 60,
+              left: portalCoords.left,
+              ...(portalCoords.top !== undefined
+                ? { top: portalCoords.top }
+                : { bottom: portalCoords.bottom }),
+            }}
+          >
+            {panel}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

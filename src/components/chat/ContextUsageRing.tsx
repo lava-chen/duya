@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Message } from '@/types/message';
 import { useContextUsage, type ContextUsage } from '@/hooks/useContextUsage';
 import { formatTokensPi, type ModelPricing } from '@/lib/context-usage-utils';
@@ -16,6 +16,13 @@ interface ContextUsageRingProps {
   pricing?: ModelPricing;
   onCompress?: () => void;
   isCompacting?: boolean;
+  /**
+   * 'line' (default) — pi-style stats line slides out leftwards (session
+   *   composer footer).
+   * 'popup' — hover/pin opens a small stats CARD above the ring (bot
+   *   composer, ring sits next to the send button with no room to slide).
+   */
+  variant?: 'line' | 'popup';
 }
 
 /**
@@ -34,6 +41,7 @@ export function ContextUsageRing({
   pricing,
   onCompress,
   isCompacting = false,
+  variant = 'line',
 }: ContextUsageRingProps) {
   const usage = useContextUsage(messages, modelName, contextWindow, sessionId, pricing);
   const [hovered, setHovered] = useState(false);
@@ -99,6 +107,33 @@ export function ContextUsageRing({
 
   const expanded = hovered || pinned;
 
+  // Popup-variant rows (bot composer): label/value pairs over the same
+  // live `usage` data the line variant slides out.
+  const popoverRows: Array<{ label: string; value: ReactNode; dim?: boolean }> = [];
+  if (usage.hasData) {
+    popoverRows.push({
+      label: 'Context',
+      value: (
+        <>
+          <span className={ctxClass}>{ctxPercent}%</span>
+          {' · '}
+          {f(usage.used)} / {f(effectiveWindow)}
+          {isAutoWindow ? ' (auto)' : ''}
+        </>
+      ),
+    });
+    popoverRows.push({ label: 'Input ↑', value: f(usage.totalInput) });
+    popoverRows.push({ label: 'Output ↓', value: f(usage.totalOutput) });
+    if (usage.totalCacheRead > 0)
+      popoverRows.push({ label: 'Cache read R', value: f(usage.totalCacheRead) });
+    if (usage.totalCacheWrite > 0)
+      popoverRows.push({ label: 'Cache write W', value: f(usage.totalCacheWrite) });
+    if (hasCache && usage.cacheHitRate >= 0)
+      popoverRows.push({ label: 'Hit rate CH', value: `${(usage.cacheHitRate * 100).toFixed(1)}%` });
+    if (usage.totalCost > 0)
+      popoverRows.push({ label: 'Cost $', value: `$${usage.totalCost.toFixed(3)}` });
+  }
+
   return (
     <>
       <div
@@ -110,6 +145,38 @@ export function ContextUsageRing({
         }}
         onMouseLeave={scheduleHide}
       >
+        {variant === 'popup' ? (
+          <div className="context-usage-popover" role="status" aria-hidden={!expanded}>
+            {popoverRows.length > 0 ? (
+              popoverRows.map((row) => (
+                <div key={row.label} className="context-usage-popover__row">
+                  <span className="context-usage-popover__label">{row.label}</span>
+                  <span className={`context-usage-popover__value${row.dim ? ' context-usage-popover__value--dim' : ''}`}>
+                    {row.value}
+                  </span>
+                </div>
+              ))
+            ) : (
+              <div className="context-usage-popover__row">
+                <span className="context-usage-popover__label">Context</span>
+                <span className="context-usage-popover__value context-usage-popover__value--dim">?</span>
+              </div>
+            )}
+            {onCompress && usage.state !== 'normal' && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="context-usage-ring-compress"
+                onClick={onCompress}
+                disabled={isCompacting}
+                title="Compress context"
+              >
+                {isCompacting ? '…' : 'compress'}
+              </Button>
+            )}
+          </div>
+        ) : (
         <div
           className="context-usage-ring-stats-shell"
           aria-hidden={!expanded}
@@ -201,6 +268,7 @@ export function ContextUsageRing({
             )}
           </div>
         </div>
+        )}
 
         <span
           className="context-usage-ring-trigger"
@@ -403,6 +471,54 @@ export function ContextUsageRing({
         .context-usage-ring-compress:disabled {
           opacity: 0.5;
           cursor: not-allowed;
+        }
+
+        /* popup variant — small stats card above the ring (bot composer).
+           Same hover/pin state as the line variant, different presentation:
+           a label/value card instead of a slide-out line. */
+        .context-usage-popover {
+          position: absolute;
+          bottom: calc(100% + 10px);
+          right: 0;
+          z-index: 60;
+          min-width: 210px;
+          padding: 10px 12px;
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          background: var(--surface-solid, var(--surface));
+          box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          opacity: 0;
+          transform: translateY(4px);
+          pointer-events: none;
+          transition: opacity 0.15s ease, transform 0.15s ease;
+        }
+        .context-usage-ring-wrap[data-expanded='true'] .context-usage-popover {
+          opacity: 1;
+          transform: none;
+          pointer-events: auto;
+        }
+        .context-usage-popover__row {
+          display: flex;
+          align-items: baseline;
+          gap: 12px;
+          font-size: 12px;
+          line-height: 1.4;
+        }
+        .context-usage-popover__label {
+          flex: 1 1 auto;
+          color: var(--muted);
+        }
+        .context-usage-popover__value {
+          font-variant-numeric: tabular-nums;
+          color: var(--text);
+          text-align: right;
+          white-space: nowrap;
+        }
+        .context-usage-popover__value--dim {
+          opacity: 0.65;
         }
       `}</style>
     </>

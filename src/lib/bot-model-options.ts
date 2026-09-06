@@ -30,6 +30,39 @@ export function findRawModelInGroups(
 }
 
 /**
+ * Derive the prefixed selector id for a configured raw model + provider id.
+ * Prefers the configured provider; falls back to whichever group exposes the
+ * raw model; when nothing matches (stale config) the raw id is returned so
+ * the trigger still shows the configured name and saving without touching
+ * the field preserves it.
+ */
+export function toSelectorModelId(
+  rawModel: string,
+  providerId: string | undefined,
+  groups: ProviderModelGroup[],
+): string {
+  if (!rawModel) return '';
+  const candidates = providerId
+    ? [...groups.filter((g) => g.id === providerId), ...groups]
+    : groups;
+  for (const group of candidates) {
+    const match = group.models.find((m) => prefixedToRaw(m.id) === rawModel);
+    if (match) return match.id;
+  }
+  return rawModel;
+}
+
+/** Split a selector model id back into the raw model + provider id to persist. */
+export function fromSelectorModelId(
+  selectorModelId: string,
+  groups: ProviderModelGroup[],
+): { raw: string; providerId?: string } {
+  if (!selectorModelId) return { raw: '' };
+  const group = groups.find((g) => g.models.some((m) => m.id === selectorModelId));
+  return { raw: prefixedToRaw(selectorModelId), providerId: group?.id };
+}
+
+/**
  * Group each provider's enabled models (from `options.enabled_models`, else
  * `options.defaultModel`) by provider. Providers without a usable key are
  * skipped. Model ids are prefixed `[${name}] ${id}` and deduplicated across

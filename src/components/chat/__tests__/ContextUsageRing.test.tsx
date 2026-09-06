@@ -104,4 +104,33 @@ describe('ContextUsageRing', () => {
     expect(trigger.getAttribute('aria-pressed')).toBe('true');
     expect(shell.getAttribute('aria-hidden')).toBe('false');
   });
+
+  // popup variant (bot composer): hover opens the stats CARD instead of
+  // the slide-out line; no data yet → "?" placeholder row.
+  it('popup variant: shows the stats card on hover and hides it on leave', () => {
+    const view = render(<ContextUsageRing messages={[]} variant="popup" />);
+    const wrap = view.container.querySelector(
+      '.context-usage-ring-wrap',
+    ) as HTMLElement | null;
+    const popover = view.container.querySelector(
+      '.context-usage-popover',
+    ) as HTMLElement | null;
+    if (!wrap || !popover) throw new Error('popup structure missing');
+    // No slide-out line in popup mode.
+    expect(
+      view.container.querySelector('.context-usage-ring-stats-shell'),
+    ).toBeNull();
+
+    expect(popover.getAttribute('aria-hidden')).toBe('true');
+    fireEvent.mouseEnter(wrap);
+    expect(popover.getAttribute('aria-hidden')).toBe('false');
+    expect(popover.textContent).toContain('Context');
+    expect(popover.textContent).toContain('?');
+
+    fireEvent.mouseLeave(wrap);
+    act(() => {
+      vi.advanceTimersByTime(HIDE_DELAY_MS + 50);
+    });
+    expect(popover.getAttribute('aria-hidden')).toBe('true');
+  });
 });
