@@ -31,6 +31,7 @@ import { registerComputerUseHandlers } from './computer-use';
 import { registerBotChannelHandlers } from './bot-channel-handlers';
 import { registerGroupHandlers } from './group-handlers';
 import { registerBotHandlers } from './bot-handlers';
+import { registerSessionCardHandlers } from './session-card-handlers';
 import {
   registerSidebarSectionsHandlers,
 } from './db-handlers';
@@ -64,4 +65,5 @@ export {
   registerBotChannelHandlers,
   registerGroupHandlers,
   registerBotHandlers,
+  registerSessionCardHandlers,
 };

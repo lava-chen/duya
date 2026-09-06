@@ -28,6 +28,11 @@
  *     always-exposed for every profile and are deliberately NOT in this set.
  *     ReactToMessage (plan 490 P1) will register always-exposed instead,
  *     mirroring grok's SAND_FORCED_STATIC placement — also not in this set.
+ *   - list_app_connectors / connect_app (plan 503): connector elicitation
+ *     (grok AuthenticateMcpServer parity) — bots may discover providers and
+ *     start an authorization (connect card), but can never complete it
+ *     without the user's consent click. Interactive main-session agents are
+ *     deliberately excluded: they keep the settings-page connect flow.
  *
  * Deny always wins: a bot that explicitly denies one of these tools in
  * `[agents.<id>.tools]` keeps the deny — ToolFilter applies after this
@@ -45,6 +50,9 @@ export const BOT_TOOLSET: readonly string[] = [
   'image_generate',
   'manage_routine',
   'post_to_room',
+  'list_app_connectors',
+  'connect_app',
+  'session',
 ];
 
 /**

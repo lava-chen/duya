@@ -157,6 +157,33 @@ export const sessionDb = {
     sendDbRequest('session:search', { query, opts }),
 };
 
+// Plan 504 — session spawn (grok CloudAgent parity). The worker asks MAIN to
+// create a real project-scoped child session and run it asynchronously. MAIN
+// returns the child session id immediately; completion/failure wakes the parent.
+// Phase 2 adds continuous management scoped to sessions the caller spawned.
+export const sessionSpawnDb = {
+  spawn: (data: {
+    parentSessionId: string;
+    workingDirectory: string;
+    prompt: string;
+    model?: string;
+  }) => sendDbRequest('session:spawn', data),
+
+  list: (parentSessionId: string) => sendDbRequest('session:spawnList', { parentSessionId }),
+
+  get: (sessionId: string, callerSessionId: string) =>
+    sendDbRequest('session:spawnGet', { sessionId, callerSessionId }),
+
+  reply: (data: { sessionId: string; callerSessionId: string; prompt: string; model?: string }) =>
+    sendDbRequest('session:spawnReply', data),
+
+  cancel: (sessionId: string, callerSessionId: string) =>
+    sendDbRequest('session:spawnCancel', { sessionId, callerSessionId }),
+
+  rename: (sessionId: string, callerSessionId: string, title: string) =>
+    sendDbRequest('session:spawnRename', { sessionId, callerSessionId, title }),
+};
+
 // ==================== Message Operations ====================
 
 export const messageDb = {
