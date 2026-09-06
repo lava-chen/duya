@@ -418,6 +418,13 @@ export class PermissionLedger {
 
 // ─── LockStore ───
 
+/**
+ * What started the run holding the lock (Plan 500 P1). Uses the wake-lane
+ * vocabulary so the scheduler can classify any in-flight run — including
+ * renderer-driven chats — before deciding to preempt it.
+ */
+export type LockOrigin = 'user' | 'agent' | 'background';
+
 export class LockStore {
   /** Migration id=7: create session_runtime_locks (near-verbatim port). */
   static readonly migrations: Migration[] = [
@@ -435,6 +442,19 @@ export class LockStore {
         `);
       },
     },
+    {
+      // Plan 500 P1: attribute the run holding the lock (user chat /
+      // agent-lane wake / background automation). Nullable — legacy rows and
+      // older writers are treated as unattributed.
+      id: 8,
+      name: 'add_lock_origin',
+      up: (db) => {
+        const cols = (db.prepare('PRAGMA table_info(session_runtime_locks)').all() as Array<{ name: string }>).map((c) => c.name);
+        if (!cols.includes('origin')) {
+          db.exec('ALTER TABLE session_runtime_locks ADD COLUMN origin TEXT');
+        }
+      },
+    },
   ];
 
   private readonly db: SqliteDatabase;
@@ -446,8 +466,10 @@ export class LockStore {
    * success. If an existing (un-expired) lock with a different `lockId` is
    * held, returns false. Expired locks are reaped first, then the new row is
    * inserted (collision → false via the PRIMARY KEY constraint).
+   *
+   * `origin` (Plan 500 P1) attributes the run for the bot run scheduler.
    */
-  acquire(sessionId: string, lockId: string, owner: string, ttlSec = 300): boolean {
+  acquire(sessionId: string, lockId: string, owner: string, ttlSec = 300, origin?: LockOrigin): boolean {
     const now = Date.now();
     const expiresAt = now + ttlSec * 1000;
     const txn = this.db.transaction((): boolean => {
@@ -462,17 +484,17 @@ export class LockStore {
       try {
         this.db
           .prepare(
-            'INSERT INTO session_runtime_locks (session_id, lock_id, owner, expires_at) VALUES (?, ?, ?, ?)',
+            'INSERT INTO session_runtime_locks (session_id, lock_id, owner, expires_at, origin) VALUES (?, ?, ?, ?, ?)',
           )
-          .run(sessionId, lockId, owner, expiresAt);
+          .run(sessionId, lockId, owner, expiresAt, origin ?? null);
         return true;
       } catch {
         // PRIMARY KEY collision — row already exists, replace via UPSERT
         this.db
           .prepare(
-            'UPDATE session_runtime_locks SET lock_id = ?, owner = ?, expires_at = ? WHERE session_id = ?',
+            'UPDATE session_runtime_locks SET lock_id = ?, owner = ?, expires_at = ?, origin = ? WHERE session_id = ?',
           )
-          .run(lockId, owner, expiresAt, sessionId);
+          .run(lockId, owner, expiresAt, origin ?? null, sessionId);
         return true;
       }
     });
@@ -514,6 +536,24 @@ export class LockStore {
       .prepare('SELECT 1 FROM session_runtime_locks WHERE session_id = ?')
       .get(sessionId);
     return row !== undefined;
+  }
+
+  /**
+   * Origin of the run currently holding the lock (Plan 500 P1). Reaps
+   * expired rows first. Returns null when the session is idle or the row
+   * predates attribution.
+   */
+  lockOrigin(sessionId: string): LockOrigin | null {
+    const now = Date.now();
+    this.db.prepare('DELETE FROM session_runtime_locks WHERE expires_at < ?').run(now);
+    const row = this.db
+      .prepare('SELECT origin FROM session_runtime_locks WHERE session_id = ?')
+      .get(sessionId) as { origin: string | null } | undefined;
+    if (row == null || row.origin == null) return null;
+    if (row.origin === 'user' || row.origin === 'agent' || row.origin === 'background') {
+      return row.origin;
+    }
+    return null;
   }
 }
 

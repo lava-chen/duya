@@ -468,6 +468,22 @@ describe.skipIf(!nativeSqliteAvailable)('stores', () => {
       const row = db.prepare('SELECT owner FROM session_runtime_locks WHERE session_id = ?').get('s1') as { owner: string };
       expect(row.owner).toBe('bob');
     });
+
+    it('lockOrigin reports the attributed origin of the holder (Plan 500 P1)', () => {
+      expect(locks.lockOrigin('s1')).toBeNull(); // idle
+      locks.acquire('s1', 'lock-1', 'agent-server', 300, 'user');
+      expect(locks.lockOrigin('s1')).toBe('user');
+      // Re-acquire overwrites the origin.
+      locks.acquire('s1', 'lock-1', 'agent-server', 300, 'background');
+      expect(locks.lockOrigin('s1')).toBe('background');
+      // Unattributed acquire (legacy callers) reads back null.
+      locks.acquire('s2', 'lock-2', 'agent-server');
+      expect(locks.lockOrigin('s2')).toBeNull();
+      // Expired lock → null.
+      locks.acquire('s3', 'lock-3', 'agent-server', 300, 'agent');
+      db.prepare('UPDATE session_runtime_locks SET expires_at = ? WHERE session_id = ?').run(Date.now() - 1, 's3');
+      expect(locks.lockOrigin('s3')).toBeNull();
+    });
   });
 
   // ─── GoalStore ───

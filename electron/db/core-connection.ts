@@ -27,6 +27,7 @@ import {
   SpawnEdgeStore,
   AttachmentStore,
   ModeStateStore,
+  PendingWakeStore,
   LegacyImport,
   type SqliteCtor,
   type Migration,
@@ -45,6 +46,8 @@ export interface CoreStores {
   spawnEdges: SpawnEdgeStore;
   attachments: AttachmentStore;
   modeState: ModeStateStore;
+  /** Durable pending-wake markers (Plan 476 Phase 3 / Plan 500 P5.2). */
+  wakes: PendingWakeStore;
 }
 
 let stores: CoreStores | null = null;
@@ -110,6 +113,7 @@ function collectMigrations(): Migration[] {
     ...SpawnEdgeStore.migrations,
     ...AttachmentStore.migrations,
     ...ModeStateStore.migrations,
+    ...PendingWakeStore.migrations,
   ].sort((a, b) => a.id - b.id);
 }
 
@@ -156,6 +160,7 @@ export function initCoreDatabase(sqlite: SqliteCtor): CoreStores | null {
       spawnEdges: new SpawnEdgeStore(db),
       attachments: new AttachmentStore(db, attachmentsRoot),
       modeState: new ModeStateStore(db),
+      wakes: new PendingWakeStore(db),
     };
 
     // Plan 329: auto-run the legacy import on first boot. Runs before any
