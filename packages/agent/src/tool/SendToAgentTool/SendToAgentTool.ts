@@ -25,7 +25,6 @@ import {
   parseAgentIdFromBotSession,
   prepareEnvelopeForSend,
 } from "../../agent/dm/index.js";
-import { dmCycleDetector, dmSendLimiter } from "../../agent/dm/dm-cycle-detector.js";
 import { mailboxSend } from "../../session/db.js";
 import { appendMessages } from "../../session/db.js";
 import { readConfigAgents } from "../../agent-profile/config-agents.js";
@@ -133,7 +132,6 @@ export class SendToAgentTool implements Tool {
 
     // Get sender identity from context
     const fromAgentId = context?.options?.sessionId || process.env.SESSION_ID || "unknown";
-    const fromAgentName = this.resolveAgentName(fromAgentId);
 
     // === Validation ===
     if (!toAgentId) {
@@ -171,6 +169,13 @@ export class SendToAgentTool implements Tool {
     const agents = await readConfigAgents();
     const targetConfig = agents[toAgentId];
 
+    // Plan 497: resolve the sender's DISPLAY name from the roster (the
+    // context session id is `bot:<agentId>`; strip before the lookup). The
+    // id-derived fallback name flows into the envelope and the receiver's
+    // marker metadata — a bare id there rendered the wrong peer label.
+    const selfRosterId = parseAgentIdFromBotSession(fromAgentId) ?? fromAgentId;
+    const fromAgentName = agents[selfRosterId]?.name || this.resolveAgentName(fromAgentId);
+
     if (!targetConfig) {
       // Target agent not found in roster - show available agents
       const availableAgents = Object.entries(agents)
@@ -182,27 +187,13 @@ export class SendToAgentTool implements Tool {
     }
     const targetName = targetConfig.name || `Agent ${toAgentId}`;
 
-    // === Cycle detection: prevent A↔B same-pair cycles ===
-    if (dmCycleDetector.hasEdge(toAgentId, fromAgentId)) {
-      return {
-        id: randomUUID(),
-        name: this.name,
-        result: `Error: Cannot send to ${targetName}. They recently sent a message to you, and a round-trip exchange would create a ping-pong loop. Wait for your message to be handled before sending another.`,
-        error: false,
-      };
-    }
-
-    // === Send limit check: prevent flooding (>5 per run) ===
-    // Note: runId from context is not available; using a process-wide default
-    // TODO: wire proper runId from execution context when available
-    if (!dmSendLimiter.canSend("default")) {
-      return {
-        id: randomUUID(),
-        name: this.name,
-        result: `Error: Send limit reached (${dmSendLimiter.max} messages per run). Do not send more DMs this turn — wait for replies to arrive first.`,
-        error: false,
-      };
-    }
+    // No hard guard prevents an agent from replying to (or continuing a
+    // round-trip with) a peer here: the round-trip is the intended multi-round
+    // shape, and unbounded ping-pong is controlled by the model's own judgment
+    // (the messaging contract tells every bot "nothing to add → stay silent")
+    // rather than a per-worker counter that cannot see the other peer and is
+    // never reset. Matches grok-bot's agent messaging. The self-message guard
+    // above is the only hard structural rule.
 
     // === Build envelope ===
     const clientMsgId = randomUUID();
@@ -226,27 +217,23 @@ export class SendToAgentTool implements Tool {
     const encodedContent = encodeEnvelope(preparedEnvelope);
 
     // === Send to mailbox (kind='agent_dm') ===
-    try {
-      // IMPORTANT: must await. In IPC mode mailboxSend returns a Promise —
-      // without await the try/catch never sees DB failures (unhandled
-      // rejection) and the tool reports success even when the write failed.
-      await mailboxSend({
-        id: randomUUID(),
-        // The mailbox row must carry the target's PERSISTENT bot session id
-        // (`bot:<agentId>`), not the bare roster id — the wake dispatcher
-        // addresses the target's session with it verbatim (agent-dm-dispatcher).
-        // A bare agent id here lands the wake on a session that never exists.
-        sessionId: getBotSessionId(toAgentId),
-        submittedDuringRunId: "", // DM is async, no run context
-        content: encodedContent,
-        kind: "agent_dm",
-        source: fromAgentId,
-        clientMsgId,
-      });
-
-      // === Record in cycle detector and send limiter ===
-      dmCycleDetector.addEdge(fromAgentId, toAgentId);
-      dmSendLimiter.recordSend("default");
+      try {
+        // IMPORTANT: must await. In IPC mode mailboxSend returns a Promise —
+        // without await the try/catch never sees DB failures (unhandled
+        // rejection) and the tool reports success even when the write failed.
+        await mailboxSend({
+          id: randomUUID(),
+          // The mailbox row must carry the target's PERSISTENT bot session id
+          // (`bot:<agentId>`), not the bare roster id — the wake dispatcher
+          // addresses the target's session with it verbatim (agent-dm-dispatcher).
+          // A bare agent id here lands the wake on a session that never exists.
+          sessionId: getBotSessionId(toAgentId),
+          submittedDuringRunId: "", // DM is async, no run context
+          content: encodedContent,
+          kind: "agent_dm",
+          source: fromAgentId,
+          clientMsgId,
+        });
 
       // === Plan 477 P4.4: sender-side marker row ===
       // Persist an agent_dm-sourced message in the SENDER's own transcript so

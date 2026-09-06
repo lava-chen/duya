@@ -287,6 +287,13 @@ export class InteragentRouter {
         this.deps.workerDbRequests.set(`rpc:${msg.requestId}`, child);
         process.send(msg);
       }
+      // Plan 481 amendment: forward bot-identity:rpc to the main process.
+      // Same gap class as router.ts — without the relay the worker's
+      // update_state identity subactions time out after 15s.
+      if (msg.type === 'bot-identity:rpc' && typeof msg.requestId === 'string' && process.send) {
+        this.deps.workerDbRequests.set(`rpc:${msg.requestId}`, child);
+        process.send(msg);
+      }
     };
     child.on('message', onDbRequest);
 
