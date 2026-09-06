@@ -295,6 +295,12 @@ const twitterPostSchema = z.object({
 
 export const twitterPostAction: ActionHandler<z.infer<typeof twitterPostSchema>> = {
   operation: 'twitter_post',
+  // Deliberately hidden from the auto-generated tool schema: posting is an
+  // irreversible, public write. The model learns it is callable from the tool
+  // prompt (and the X.com capability guide) rather than from a self-advertising
+  // schema entry, so it is only used when explicitly warranted. Dispatch still
+  // works — ActionRegistry resolves by operation name.
+  hidden: true,
   schema: twitterPostSchema,
   async execute(data, ctx) {
     // Publishing always requires a real logged-in browser session.

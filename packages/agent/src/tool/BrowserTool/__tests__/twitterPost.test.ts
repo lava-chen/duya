@@ -3,6 +3,29 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { validateImagePaths, isUnsupportedInsertTextError } from '../actions/twitterPost.js';
+import { SchemaGenerator, ActionRegistry, getAllActions } from '../actions/index.js';
+
+describe('twitter_post is hidden from the schema yet still callable', () => {
+  it('omits twitter_post from the auto-generated operation enum and fields', () => {
+    const { inputSchema } = SchemaGenerator.generate(getAllActions());
+    const enumList = (inputSchema.properties?.operation as { enum?: string[] })?.enum ?? [];
+    expect(enumList).not.toContain('twitter_post');
+
+    // No anyOf variant and no merged properties for the hidden action
+    // (`images` is twitter_post-specific; A shared `text` field exists from the
+    // generic `type` action, so assert on the twitter-only field instead).
+    const variants = (inputSchema as { anyOf?: Array<{ properties?: { operation?: { enum?: string[] } } }> }).anyOf ?? [];
+    expect(variants.some((v) => v.properties?.operation?.enum?.includes('twitter_post'))).toBe(false);
+    expect(inputSchema.properties).not.toHaveProperty('images');
+  });
+
+  it('still resolves twitter_post through the ActionRegistry by operation name', () => {
+    const registry = new ActionRegistry();
+    registry.registerAll(getAllActions());
+    expect(registry.get('twitter_post')).toBeDefined();
+    expect(registry.get('twitter_post')?.hidden).toBe(true);
+  });
+});
 
 describe('twitterPost validation', () => {
   it('normalizes supported image paths to absolute paths', () => {

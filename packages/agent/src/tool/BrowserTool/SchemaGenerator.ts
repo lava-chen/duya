@@ -14,9 +14,14 @@ export class SchemaGenerator {
     inputSchema: Record<string, unknown>;
     operations: string[];
   } {
-    const operations = allActions.map(a => a.operation);
+    // Hidden actions stay registered (so they remain dispatchable by operation
+    // name) but are omitted from the LLM-facing schema: no operation enum
+    // entry, no `anyOf` variant, no merged properties. They are surfaced to the
+    // model via the tool prompt / platform capability guide instead.
+    const visibleActions = allActions.filter((a) => !a.hidden);
+    const operations = visibleActions.map(a => a.operation);
 
-    const variants = allActions.map((action) => {
+    const variants = visibleActions.map((action) => {
       const shape = this.extractShape(action.schema as any) || {};
       const required = this.extractRequired(action.schema as any);
       return {
