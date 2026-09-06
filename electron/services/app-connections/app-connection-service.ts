@@ -46,6 +46,7 @@ import type {
 import { toStatusDTO } from './types.js';
 
 const WECOM_PROVIDER = asAppConnectorId('wecom');
+const QQ_MAIL_PROVIDER = asAppConnectorId('qq-mail');
 
 const COMPONENT = 'AppConnectionService' as LogComponent;
 
@@ -260,6 +261,59 @@ export class AppConnectionService {
     this.logger.info(
       'App Connection: connected wecom (manual credentials)',
       { connectionId: conn.id, provider: 'wecom' },
+      COMPONENT,
+    );
+
+    await this.fireReload();
+    return toStatusDTO(this._connectionStore.get(conn.id)!);
+  }
+
+  /**
+   * Connect a custom-credential provider (QQ Mail) with an email address and a
+   * 16-digit authorization code (granted in QQ Mail web settings).
+   *
+   * Mirrors {@link connectWeCom}: no OAuth flow; the credentials are stored in
+   * the vault's per-provider OAuth-client slot (clientId = email, clientSecret =
+   * auth code) and a connected AppConnection is upserted so the qq-mail IMAP/SMTP
+   * tools come online after reload. Only the idempotent status DTO crosses IPC —
+   * the auth code never reaches the renderer.
+   */
+  async connectQqMail(payload: {
+    email: string;
+    authCode: string;
+  }): Promise<AppConnectionStatusDTO> {
+    const email = payload.email.trim();
+    const authCode = payload.authCode.trim();
+    if (!email || !authCode) {
+      throw new FlowError('provider_not_configured', 'QQ Mail email address and authorization code are required');
+    }
+    if (this.providerBlockCheck) {
+      const gate = this.providerBlockCheck(QQ_MAIL_PROVIDER);
+      if (!gate.allowed) {
+        throw new FlowError('provider_blocked', gate.reason ?? 'qq-mail is blocked by enterprise policy');
+      }
+    }
+
+    this.vault.setOAuthClient(QQ_MAIL_PROVIDER, { clientId: email, clientSecret: authCode });
+
+    const existing = this._connectionStore.listByProvider(QQ_MAIL_PROVIDER)[0];
+    const conn: AppConnection = {
+      id: existing?.id ?? `qq-mail-${randomUUID().slice(0, 8)}`,
+      provider: QQ_MAIL_PROVIDER,
+      accountLabel: `QQ 邮箱 ${email}`,
+      accountId: email,
+      scopes: [],
+      status: 'connected',
+      expiresAt: null,
+      lastError: null,
+      createdAt: existing?.createdAt ?? Date.now(),
+      updatedAt: Date.now(),
+    };
+    this._connectionStore.upsert(conn);
+
+    this.logger.info(
+      'App Connection: connected qq-mail (manual credentials)',
+      { connectionId: conn.id, provider: 'qq-mail' },
       COMPONENT,
     );
 

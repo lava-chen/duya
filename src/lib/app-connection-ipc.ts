@@ -85,6 +85,12 @@ export function getAppConnectionAPI() {
     }): Promise<AppConnectionSingleResponse> => {
       return api.appConnection.connect(payload) as Promise<AppConnectionSingleResponse>;
     },
+    connectQqMail: async (payload: {
+      email: string;
+      authCode: string;
+    }): Promise<AppConnectionSingleResponse> => {
+      return (api.appConnection.connectQqMail as (p: { email: string; authCode: string }) => Promise<AppConnectionSingleResponse>)(payload);
+    },
     configureProvider: async (payload: {
       provider: ProviderId;
       clientId: string;

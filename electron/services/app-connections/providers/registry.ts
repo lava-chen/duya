@@ -196,6 +196,23 @@ const BUILTIN_CONFIGS: Record<string, Omit<ProviderClientConfig, 'id'>> = {
     monogram: 'W',
     description: 'WeCom (WeChat Work) enterprise messaging, docs, contacts, meetings, schedules, todos',
   },
+  // QQ Mail is a custom-credential provider (email + 16-digit authorization
+  // code), not OAuth. It has no public OAuth2 for third parties; the connector
+  // uses IMAP (read) and SMTP (send). Credentials live in the vault's
+  // OAuth-client slot (clientId = email, clientSecret = auth code).
+  'qq-mail': {
+    label: 'QQ 邮箱',
+    authUrl: '',
+    tokenUrl: '',
+    redirectPath: '/callback/qq-mail',
+    defaultScopes: [],
+    requiresClientSecret: false,
+    supportsManualConfiguration: true,
+    requiresOAuthClient: false,
+    clientId: '',
+    monogram: 'Q',
+    description: 'QQ Mail (mail.qq.com) read, search, and send via IMAP/SMTP with an authorization code',
+  },
 };
 
 function remoteMcpConfig(

@@ -298,6 +298,39 @@ export function registerAppConnectionHandlers(): void {
     },
   );
 
+  // --- appConnection:connectQqMail ---
+  ipcMain.handle(
+    'appConnection:connectQqMail',
+    async (
+      _event,
+      payload: { email: string; authCode: string },
+    ): Promise<AppConnectionSingleResponse> => {
+      if (!payload || typeof payload.email !== 'string' || typeof payload.authCode !== 'string') {
+        return { success: false, error: 'email and authorization code are required' };
+      }
+      try {
+        const dto = await getReadyAppConnectionService().connectQqMail({
+          email: payload.email,
+          authCode: payload.authCode,
+        });
+        return { success: true, data: dto };
+      } catch (err) {
+        const errorCode = getErrorCode(err);
+        logger.error(
+          'appConnection:connectQqMail failed',
+          err instanceof Error ? err : new Error(String(err)),
+          { code: errorCode },
+          COMPONENT,
+        );
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+          errorCode,
+        };
+      }
+    },
+  );
+
   // --- appConnection:disconnect ---
   ipcMain.handle(
     'appConnection:disconnect',
