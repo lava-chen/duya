@@ -110,4 +110,35 @@ describe('ModelProviderSelector', () => {
     fireEvent.click(screen.getByText('High'));
     expect(onSelectEffort).toHaveBeenCalledWith('high');
   });
+
+  it('portal mode: menu rows survive the mousedown that precedes a real click', () => {
+    const { onSelectModel } = setup({ portal: true });
+    fireEvent.click(screen.getByRole('button', { name: /claude-sonnet/ }));
+    const providerRow = screen.getByText('OpenAI');
+    // Real browsers fire mousedown before click; the outside-click guard
+    // must not tear the portal menu down between the two.
+    fireEvent.mouseDown(providerRow);
+    expect(screen.getByText('OpenAI')).toBeInTheDocument();
+    fireEvent.click(providerRow);
+    expect(screen.getByText('gpt-4o')).toBeInTheDocument();
+    const modelRow = screen.getByText('gpt-4-turbo');
+    fireEvent.mouseDown(modelRow);
+    fireEvent.click(modelRow);
+    expect(onSelectModel).toHaveBeenCalledWith('[OpenAI] gpt-4-turbo', 'p2');
+  });
+
+  it('clearOption renders a clear row and reports an empty selection', () => {
+    const { onSelectModel } = setup({ clearOption: '跟随全局默认' });
+    fireEvent.click(screen.getByRole('button', { name: /claude-sonnet/ }));
+    fireEvent.click(screen.getByText('跟随全局默认'));
+    expect(onSelectModel).toHaveBeenCalledWith('');
+  });
+
+  it('empty effortOptions hide the effort surface', () => {
+    setup({ effortOptions: [] });
+    const trigger = screen.getByRole('button', { name: /claude-sonnet/ });
+    expect(trigger.textContent).not.toMatch(/Auto/);
+    fireEvent.click(trigger);
+    expect(screen.queryByText('推理力度')).not.toBeInTheDocument();
+  });
 });
