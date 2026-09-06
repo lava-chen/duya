@@ -1,10 +1,10 @@
 /**
  * bot-channels.test.ts — unit tests for the agent-scoped channel binding
- * HTTP handlers: GET/POST /v1/agents/:agentId/channels*.
+ * HTTP handlers (plan 488 grok-form): GET/POST /v1/agents/:agentId/channels*.
  *
- * A binding is a gateway profile route (platform[, chatId] → bot config-agent
- * id). The './extra' helpers and the profile-route store are mocked so no
- * Electron app, config.toml, or audit log is touched.
+ * The './extra' helpers (sendJson / readJsonBody / recordAudit) and the
+ * channel stores are mocked so no Electron app, filesystem, or audit log is
+ * touched.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -15,12 +15,13 @@ const mocks = vi.hoisted(() => ({
   responses: [] as Array<{ status: number; body: unknown }>,
   body: {} as Record<string, unknown>,
   audit: vi.fn(),
-  routes: {
-    listGatewayPlatforms: vi.fn(),
-    listBotProfileRoutes: vi.fn(),
-    addBotProfileRoute: vi.fn(),
-    removeBotProfileRoute: vi.fn(),
+  channels: {
+    listAgentChannels: vi.fn(),
+    storeConnectorCredential: vi.fn(),
+    disconnectChannel: vi.fn(),
   },
+  store: { writeMetadata: vi.fn() },
+  connectorManager: { sync: vi.fn() },
 }));
 
 function sendJson(res: unknown, status: number, body: unknown): void {
@@ -51,11 +52,18 @@ vi.mock('../../logging/logger', () => ({
   LogComponent: new Proxy({}, { get: (_t, p) => String(p) }),
 }));
 
-vi.mock('../../channels/profile-routes', () => ({
-  listGatewayPlatforms: mocks.routes.listGatewayPlatforms,
-  listBotProfileRoutes: mocks.routes.listBotProfileRoutes,
-  addBotProfileRoute: mocks.routes.addBotProfileRoute,
-  removeBotProfileRoute: mocks.routes.removeBotProfileRoute,
+vi.mock('../../channels/agent-session-channels', () => ({
+  listAgentChannels: mocks.channels.listAgentChannels,
+  storeConnectorCredential: mocks.channels.storeConnectorCredential,
+  disconnectChannel: mocks.channels.disconnectChannel,
+}));
+
+vi.mock('../../channels/channel-store', () => ({
+  openChannelStore: () => mocks.store,
+}));
+
+vi.mock('../../channels/connector-runtime', () => ({
+  getBotConnectorManager: () => mocks.connectorManager,
 }));
 
 import {
@@ -82,16 +90,16 @@ describe('handleAgentChannelList', () => {
     expect((mocks.responses[0]?.body as { error: { code: string } }).error.code).toBe('agent_not_found');
   });
 
-  it('returns the bound channels', async () => {
+  it('returns the bound channels without credentials', async () => {
     mocks.agentLookup.mockReturnValue({ id: 'bot-x' });
-    mocks.routes.listBotProfileRoutes.mockReturnValue([
-      { platform: 'telegram', profile: 'bot-x', chatId: '123' },
+    mocks.channels.listAgentChannels.mockReturnValue([
+      { platform: 'telegram', label: 'My Bot', status: 'configured' },
     ]);
     await handleAgentChannelList({} as unknown as FakeReq, {} as unknown as FakeRes, 'bot-x');
     const { status, body } = mocks.responses[0]!;
     expect(status).toBe(200);
-    const channels = (body as { channels: Array<{ platform: string; chatId?: string }> }).channels;
-    expect(channels).toEqual([{ platform: 'telegram', profile: 'bot-x', chatId: '123' }]);
+    const channels = (body as { channels: Array<{ platform: string; label: string }> }).channels;
+    expect(channels).toEqual([{ platform: 'telegram', label: 'My Bot', status: 'configured', displayName: 'Telegram' }]);
   });
 });
 
@@ -99,46 +107,44 @@ describe('handleAgentChannelConnect', () => {
   const req = {} as unknown as FakeReq;
   const res = {} as unknown as FakeRes;
 
+  it('rejects an invalid JSON body', async () => {
+    mocks.body = Promise.reject(new Error('bad json')) as unknown as Record<string, unknown>;
+    await handleAgentChannelConnect(req, res, undefined, 'bot-x');
+    expect(mocks.responses[0]?.status).toBe(400);
+  });
+
   it('404s for an unknown agent', async () => {
-    mocks.body = { platform: 'telegram' };
+    mocks.body = { platform: 'telegram', credential: 'tok' };
     mocks.agentLookup.mockReturnValue(undefined);
     await handleAgentChannelConnect(req, res, undefined, 'bot-x');
     expect(mocks.responses[0]?.status).toBe(404);
   });
 
-  it('rejects a platform with no gateway adapter', async () => {
-    mocks.body = { platform: 'irc' };
+  it('rejects an unknown platform', async () => {
+    mocks.body = { platform: 'irc', credential: 'tok' };
     mocks.agentLookup.mockReturnValue({ id: 'bot-x' });
-    mocks.routes.listGatewayPlatforms.mockReturnValue([
-      { platform: 'telegram', enabled: true, hasCredentials: true },
-    ]);
     await handleAgentChannelConnect(req, res, undefined, 'bot-x');
     expect(mocks.responses[0]?.status).toBe(400);
     expect((mocks.responses[0]?.body as { error: { code: string } }).error.code).toBe('unknown_platform');
   });
 
-  it('binds and audits', async () => {
-    mocks.body = { platform: 'telegram', chatId: '123', label: 'ops' };
-    mocks.agentLookup.mockReturnValue({ id: 'bot-x' });
-    mocks.routes.listGatewayPlatforms.mockReturnValue([
-      { platform: 'telegram', enabled: true, hasCredentials: true },
-    ]);
-    mocks.routes.addBotProfileRoute.mockReturnValue({ ok: true });
-    await handleAgentChannelConnect(req, res, 'corr-1', 'bot-x');
-    expect(mocks.responses[0]?.status).toBe(200);
-    expect(mocks.routes.addBotProfileRoute).toHaveBeenCalledWith('bot-x', 'telegram', '123', undefined, 'ops');
-    expect(mocks.audit).toHaveBeenCalledWith(req, 'corr-1', 'channel.connect', 'bot-x:telegram:123');
-  });
-
-  it('maps store failures to 502', async () => {
+  it('rejects a missing credential', async () => {
     mocks.body = { platform: 'telegram' };
     mocks.agentLookup.mockReturnValue({ id: 'bot-x' });
-    mocks.routes.listGatewayPlatforms.mockReturnValue([
-      { platform: 'telegram', enabled: true, hasCredentials: true },
-    ]);
-    mocks.routes.addBotProfileRoute.mockReturnValue({ ok: false, error: 'store_failed' });
     await handleAgentChannelConnect(req, res, undefined, 'bot-x');
-    expect(mocks.responses[0]?.status).toBe(502);
+    expect(mocks.responses[0]?.status).toBe(400);
+    expect((mocks.responses[0]?.body as { error: { code: string } }).error.code).toBe('missing_credential');
+  });
+
+  it('stores the credential, writes metadata, syncs connectors, and audits', async () => {
+    mocks.body = { platform: 'telegram', credential: 'tok-1', label: 'Main' };
+    mocks.agentLookup.mockReturnValue({ id: 'bot-x' });
+    await handleAgentChannelConnect(req, res, 'corr-1', 'bot-x');
+    expect(mocks.responses[0]?.status).toBe(200);
+    expect(mocks.channels.storeConnectorCredential).toHaveBeenCalledWith('bot-x', 'telegram', 'token', 'tok-1');
+    expect(mocks.store.writeMetadata).toHaveBeenCalledWith('telegram', 'Main');
+    expect(mocks.connectorManager.sync).toHaveBeenCalled();
+    expect(mocks.audit).toHaveBeenCalledWith(req, 'corr-1', 'channel.connect', 'bot-x:telegram', expect.any(String));
   });
 });
 
@@ -146,28 +152,20 @@ describe('handleAgentChannelDisconnect', () => {
   const req = {} as unknown as FakeReq;
   const res = {} as unknown as FakeRes;
 
-  it('rejects a missing platform', async () => {
-    mocks.body = {};
+  it('rejects an unknown platform', async () => {
+    mocks.body = { platform: 'irc' };
     mocks.agentLookup.mockReturnValue({ id: 'bot-x' });
     await handleAgentChannelDisconnect(req, res, undefined, 'bot-x');
     expect(mocks.responses[0]?.status).toBe(400);
   });
 
-  it('unbinds and audits', async () => {
-    mocks.body = { platform: 'telegram', chatId: '123' };
-    mocks.agentLookup.mockReturnValue({ id: 'bot-x' });
-    mocks.routes.removeBotProfileRoute.mockReturnValue({ ok: true });
-    await handleAgentChannelDisconnect(req, res, undefined, 'bot-x');
-    expect(mocks.responses[0]?.status).toBe(200);
-    expect(mocks.routes.removeBotProfileRoute).toHaveBeenCalledWith('bot-x', 'telegram', '123');
-    expect(mocks.audit).toHaveBeenCalledWith(req, undefined, 'channel.disconnect', 'bot-x:telegram:123');
-  });
-
-  it('maps not_found to 404', async () => {
+  it('disconnects, syncs connectors, and audits', async () => {
     mocks.body = { platform: 'telegram' };
     mocks.agentLookup.mockReturnValue({ id: 'bot-x' });
-    mocks.routes.removeBotProfileRoute.mockReturnValue({ ok: false, error: 'not_found' });
     await handleAgentChannelDisconnect(req, res, undefined, 'bot-x');
-    expect(mocks.responses[0]?.status).toBe(404);
+    expect(mocks.responses[0]?.status).toBe(200);
+    expect(mocks.channels.disconnectChannel).toHaveBeenCalledWith('bot-x', 'telegram');
+    expect(mocks.connectorManager.sync).toHaveBeenCalled();
+    expect(mocks.audit).toHaveBeenCalledWith(req, undefined, 'channel.disconnect', 'bot-x:telegram');
   });
 });

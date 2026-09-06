@@ -10,10 +10,11 @@
  *   status     — ChannelStatus snapshot (connected / lastError / streaming)
  *   bindings   — per-bot channel bindings (agents/<id>/channels/, plan 488)
  *
- * Write surface (488 P2.3):
+ * Write surface (488 P2.3/P6):
  *   send       — push a message to a channel via the gateway
- *   connect    — bind a platform/chat to a bot (gateway profile route)
- *   disconnect — unbind a platform (optionally agent- and chat-scoped)
+ *   connect    — connect a platform to a bot with the bot's own token
+ *                (credential via env/stdin only)
+ *   disconnect — unbind a platform (optionally agent-scoped)
  *
  * Data source: `electron/cli/handlers/channels.ts` → `GET /v1/channels`,
  * `GET /v1/channels/:id`, `GET /v1/platforms`, `GET /v1/platforms/:p/status`.
@@ -316,14 +317,12 @@ export interface ChannelDisconnectResultDTO {
   error?: string;
 }
 
-/** Per-bot channel binding = a gateway profile route ((platform[, chatId]) → bot). */
+/** Per-bot channel connection (plan 488 grok-form: bot-owned platform token). */
 export interface AgentChannelBindingDTO {
-  name?: string;
   platform: string;
-  profile: string;
-  chatId?: string;
-  threadId?: string;
-  enabled?: boolean;
+  label: string;
+  status: 'configured';
+  displayName: string;
 }
 
 export interface AgentChannelListResultDTO {
@@ -335,7 +334,7 @@ export interface AgentChannelConnectResultDTO {
   ok: boolean;
   agentId: string;
   platform: string;
-  chatId?: string;
+  label?: string;
   error?: string;
 }
 
@@ -344,8 +343,7 @@ function renderBindingsText(result: AgentChannelListResultDTO): string {
   if (channels.length === 0) return `(no channels bound to agent ${result.agentId})`;
   const lines = [`${result.agentId}: ${channels.length} channel${channels.length !== 1 ? 's' : ''} bound`];
   for (const c of channels) {
-    const target = c.chatId ? `${c.platform}#${c.chatId}` : `${c.platform} (all chats)`;
-    lines.push(`  ${target.padEnd(32)} profile=${c.profile}${c.enabled === false ? '  [disabled]' : ''}`);
+    lines.push(`  ${c.platform.padEnd(12)} ${c.label}  (${c.status})`);
   }
   return lines.join('\n');
 }
@@ -372,32 +370,61 @@ async function listAgentChannels(
   }
 }
 
+/**
+ * Read the channel credential from the environment or stdin.
+ * Credentials are never accepted as command-line arguments (argv leaks via
+ * process listings and shell history).
+ */
+async function readCredential(tokenEnv?: string, fromStdin?: boolean): Promise<string> {
+  if (fromStdin) {
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) {
+      chunks.push(chunk as Buffer);
+    }
+    return Buffer.concat(chunks).toString('utf-8').trim();
+  }
+  const envName = tokenEnv || 'DUYA_CHANNEL_TOKEN';
+  return (process.env[envName] ?? '').trim();
+}
+
 async function connectAgentChannel(
   format: OutputFormat,
   agentId: string,
   platform: string,
-  chatId?: string,
   label?: string,
+  tokenEnv?: string,
+  fromStdin?: boolean,
 ): Promise<ExitCode> {
   if (!agentId || !platform) {
     process.stderr.write(
-      'usage: duya channel connect --agent <agentId> --platform <p> [--chat <chatId>] [--label <name>]\n' +
-        'omit --chat to bind the whole platform; the platform must already be configured in Channel settings\n',
+      'usage: duya channel connect --agent <agentId> --platform <p> [--label <label>] [--token-env <VAR> | --stdin]\n' +
+        'credential source: DUYA_CHANNEL_TOKEN env var (default), --token-env <VAR>, or --stdin\n',
     );
     return 64;
+  }
+  let credential = '';
+  try {
+    credential = await readCredential(tokenEnv, fromStdin);
+  } catch (err) {
+    process.stderr.write(`Failed to read credential: ${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  }
+  if (!credential) {
+    process.stderr.write(
+      'No credential provided. Set DUYA_CHANNEL_TOKEN (or --token-env <VAR> / --stdin); never pass tokens as CLI args.\n',
+    );
+    return 1;
   }
   try {
     const client = await CliApiClient.connect();
     const result = await client.post<AgentChannelConnectResultDTO>(
       `/v1/agents/${encodeURIComponent(agentId)}/channels/connect`,
-      { platform, ...(chatId ? { chatId } : {}), ...(label ? { label } : {}) },
+      { platform, credential, ...(label ? { label } : {}) },
     );
     if (format === 'json') {
       process.stdout.write(renderJson(result) + '\n');
     } else if (result.ok) {
-      process.stdout.write(
-        `Bound ${result.platform}${result.chatId ? `#${result.chatId}` : ' (all chats)'} to agent ${result.agentId}\n`,
-      );
+      process.stdout.write(`Connected ${result.platform} to agent ${result.agentId} (label: ${result.label ?? '-'})\n`);
     } else {
       process.stderr.write(`Connect failed: ${result.error ?? 'unknown error'}\n`);
     }
@@ -411,10 +438,9 @@ async function disconnectChannel(
   format: OutputFormat,
   platform: string,
   agentId?: string,
-  chatId?: string,
 ): Promise<ExitCode> {
   if (!platform) {
-    process.stderr.write('usage: duya channel disconnect --platform <platform> [--agent <agentId>] [--chat <chatId>]\n');
+    process.stderr.write('usage: duya channel disconnect --platform <platform> [--agent <agentId>]\n');
     return 64;
   }
   try {
@@ -422,12 +448,12 @@ async function disconnectChannel(
     if (agentId) {
       const result = await client.post<AgentChannelConnectResultDTO>(
         `/v1/agents/${encodeURIComponent(agentId)}/channels/disconnect`,
-        { platform, ...(chatId ? { chatId } : {}) },
+        { platform },
       );
       if (format === 'json') {
         process.stdout.write(renderJson(result) + '\n');
       } else if (result.ok) {
-        process.stdout.write(`Disconnected ${result.platform}${result.chatId ? `#${result.chatId}` : ''} from agent ${result.agentId}\n`);
+        process.stdout.write(`Disconnected ${result.platform} from agent ${result.agentId}\n`);
       } else {
         process.stderr.write(`Disconnect failed: ${result.error ?? 'unknown error'}\n`);
       }
@@ -488,17 +514,15 @@ export const runChannelCommand = {
     if (!text) text = typeof ctx.options.text === 'string' ? ctx.options.text : '';
     return sendChannel(ctx.format, channelId, text, platform, chatId, filePath);
   },
-  // 488 P2.3: channel disconnect (agent-scoped = profile-route unbind)
+  // 488 P2.3/P6: channel disconnect (agent-scoped = bot-owned connector unbind)
   disconnect: (ctx: CliSubcommandContext): Promise<ExitCode> => {
     const platform =
       typeof ctx.options.platform === 'string' ? ctx.options.platform : undefined;
     const agentId =
       typeof ctx.options.agent === 'string' ? ctx.options.agent : undefined;
-    const chatId =
-      typeof ctx.options.chat === 'string' ? ctx.options.chat : undefined;
-    return disconnectChannel(ctx.format, platform ?? '', agentId, chatId);
+    return disconnectChannel(ctx.format, platform ?? '', agentId);
   },
-  // 488 P2.3: per-bot channel bindings (list/bind via gateway profile routes)
+  // 488 P6: per-bot channel connections (list/connect, grok-form)
   bindings: (ctx: CliSubcommandContext): Promise<ExitCode> => {
     const agentId =
       typeof ctx.options.agent === 'string' ? ctx.options.agent : undefined;
@@ -509,10 +533,11 @@ export const runChannelCommand = {
       typeof ctx.options.agent === 'string' ? ctx.options.agent : undefined;
     const platform =
       typeof ctx.options.platform === 'string' ? ctx.options.platform : undefined;
-    const chatId =
-      typeof ctx.options.chat === 'string' ? ctx.options.chat : undefined;
     const label =
       typeof ctx.options.label === 'string' ? ctx.options.label : undefined;
-    return connectAgentChannel(ctx.format, agentId ?? '', platform ?? '', chatId, label);
+    const tokenEnv =
+      typeof ctx.options['token-env'] === 'string' ? ctx.options['token-env'] : undefined;
+    const fromStdin = ctx.options.stdin === true;
+    return connectAgentChannel(ctx.format, agentId ?? '', platform ?? '', label, tokenEnv, fromStdin);
   },
 };

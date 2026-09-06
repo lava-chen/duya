@@ -452,30 +452,30 @@ const subChannelSend: CliSubcommand = {
 };
 
 const subChannelDisconnect: CliSubcommand = {
-  description: 'Unbind a platform. With --agent, removes that bot\'s profile route (optionally chat-scoped); otherwise uses the primary agent.',
+  description: 'Unbind a platform. With --agent, removes that bot\'s own connector binding (plan 488); otherwise uses the primary agent.',
   write: true,
   options: [
     { flags: '--platform <platform>', description: 'Platform to disconnect (required)' },
     { flags: '--agent <agentId>', description: 'Agent id for per-bot bindings' },
-    { flags: '--chat <chatId>', description: 'Chat-scoped unbind (with --agent)' },
   ],
   run: (ctx) => runChannelCommand.disconnect(ctx),
 };
 
 const subChannelBindings: CliSubcommand = {
-  description: 'List the channels bound to a bot (gateway profile routes, plan 488).',
+  description: 'List the channels connected to a bot (per-bot connector bindings, plan 488).',
   options: [{ flags: '--agent <agentId>', description: 'Agent id (required)' }],
   run: (ctx) => runChannelCommand.bindings(ctx),
 };
 
 const subChannelConnect: CliSubcommand = {
-  description: 'Bind a platform (or a single chat) to a bot via a gateway profile route. The platform must already be configured in Channel settings.',
+  description: 'Connect a platform to a bot with the bot\'s own token (plan 488 grok-form). Credential comes from DUYA_CHANNEL_TOKEN (default), --token-env <VAR>, or --stdin — never an argv flag.',
   write: true,
   options: [
     { flags: '--agent <agentId>', description: 'Agent id (required)' },
-    { flags: '--platform <platform>', description: 'Platform to bind (required)' },
-    { flags: '--chat <chatId>', description: 'Bind a single chat; omit to bind the whole platform' },
-    { flags: '--label <name>', description: 'Route name for diagnostics' },
+    { flags: '--platform <platform>', description: 'Platform to connect (required)' },
+    { flags: '--label <label>', description: 'Human-readable label for the binding' },
+    { flags: '--token-env <var>', description: 'Env var holding the credential (default DUYA_CHANNEL_TOKEN)' },
+    { flags: '--stdin', description: 'Read the credential from stdin instead of an env var' },
   ],
   run: (ctx) => runChannelCommand.connect(ctx),
 };

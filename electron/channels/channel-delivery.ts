@@ -317,3 +317,49 @@ export async function channelDelivery(
 // Register built-in transports on module load
 registerTransport(new DiscordTransport());
 registerTransport(new SlackTransport());
+
+/**
+ * Telegram channel transport (plan 488 P6).
+ *
+ * Uses the Telegram Bot API with the bot's own token:
+ *   POST https://api.telegram.org/bot<token>/sendMessage
+ *   { chat_id, text }
+ */
+class TelegramTransport implements ChannelTransport {
+  readonly platform = 'telegram';
+
+  async send(agentId: string, address: ChannelAddress, outbound: ChannelOutboundMessage): Promise<void> {
+    const token = getConnectorCredential(agentId, 'telegram', 'token');
+    if (!token) {
+      throw new Error(`Telegram bot token not found for agent ${agentId}. Use secret-request to provide it.`);
+    }
+
+    let text: string;
+    if (outbound.kind === 'attachment') {
+      // Telegram media send needs multipart (sendPhoto/sendDocument); until a
+      // multipart transport lands, deliver the URL as a link with caption.
+      text = [outbound.caption ?? 'Attachment', outbound.url].filter(Boolean).join('\n');
+    } else {
+      text = outbound.content ?? '';
+    }
+
+    const result = await httpRequest({
+      method: 'POST',
+      hostname: 'api.telegram.org',
+      path: `/bot${token}/sendMessage`,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: address.chat, text }),
+    });
+
+    if (result.statusCode < 200 || result.statusCode >= 300) {
+      let errMsg = `Telegram API returned ${result.statusCode}`;
+      try {
+        const parsed = JSON.parse(result.body);
+        if (parsed.description) errMsg += `: ${parsed.description}`;
+      } catch { /* ignore parse errors */ }
+      throw new Error(errMsg);
+    }
+  }
+}
+
+registerTransport(new TelegramTransport());
