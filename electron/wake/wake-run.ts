@@ -13,9 +13,11 @@
  */
 
 import { getCoreStores } from '../db/core-connection';
-import { resolveCronProvider } from '../automation/provider';
+import { resolveCronProvider, resolveBotWakeProvider } from '../automation/provider';
 import type { ResolvedCronProvider } from '../automation/provider';
 import { buildCronProviderConfig } from '../automation/provider-config';
+import { readConfigAgents } from '../../packages/agent/src/agent-profile/config-agents.js';
+import type { CustomAgentConfig } from '../../packages/agent/src/agent-profile/config-agents.js';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
 import { runPromptInSession } from '../automation/agent-run';
 import { getLogger, LogComponent } from '../logging/logger';
@@ -69,10 +71,20 @@ export async function runWakePromptInExistingSession(
     return { output: '', events: [] }
   }
 
-  // Resolve provider/model the same way cron does (default LLM provider).
+  // A bot wake uses the bot's own provider/model (from config.toml) so a bot
+  // with its own provider wakes even when there is no global default; a plain
+  // session falls back to the default provider, exactly like cron.
   let resolved: ResolvedCronProvider
   try {
-    resolved = resolveCronProvider(undefined)
+    const botAgentId = opts?.agentProfileId
+    let botConfig: CustomAgentConfig | undefined
+    if (botAgentId) {
+      const agents = await readConfigAgents()
+      botConfig = agents[botAgentId]
+    }
+    resolved = botConfig
+      ? resolveBotWakeProvider(botConfig.provider, botConfig.model)
+      : resolveCronProvider(undefined)
   } catch {
     getLogger().warn('Wake run skipped: no provider configured', { sessionId }, LogComponent.Automation)
     return { output: '', events: [] }

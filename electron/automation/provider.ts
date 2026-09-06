@@ -18,17 +18,47 @@ export interface ResolvedCronProvider {
 }
 
 /**
+ * Resolve the underlying LLM provider — by provider store id when given
+ * (a bot's own provider), else the default / first configured. Throws
+ * 'no active provider configured' when no provider exists at all.
+ */
+function resolveLlmProvider(providerId?: string): ApiProvider {
+  const store = getProviderStore();
+  const p = providerId
+    ? (store.getLlmProvider(providerId) ??
+      store.getDefaultLlmProvider() ??
+      store.listLlmProviders()[0])
+    : (store.getDefaultLlmProvider() ?? store.listLlmProviders()[0]);
+  const provider = p ? toLegacyApiProvider(p) : undefined;
+  if (!provider) throw new Error('no active provider configured');
+  return provider;
+}
+
+/**
  * Resolve the active LLM provider + model for a cron run.
  * Throws 'no active provider configured' when no provider exists at all.
  */
 export function resolveCronProvider(jobModel?: string): ResolvedCronProvider {
-  const store = getProviderStore();
-  const p = store.getDefaultLlmProvider() ?? store.listLlmProviders()[0];
-  const provider = p ? toLegacyApiProvider(p) : undefined;
-  if (!provider) throw new Error('no active provider configured');
+  const provider = resolveLlmProvider();
   const model = resolveCronModel(jobModel, provider);
   if (!model) throw new Error('cron model is not configured');
   return { provider, model };
+}
+
+/**
+ * Resolve the provider + model for a bot wake run. Uses the bot's own
+ * provider store id when present (falling back to the default provider),
+ * honoring its `model`; a missing provider falls back to the default, so a
+ * bot without an override wakes exactly like a cron run.
+ */
+export function resolveBotWakeProvider(
+  providerId: string | undefined,
+  model?: string,
+): ResolvedCronProvider {
+  const provider = resolveLlmProvider(providerId);
+  const resolvedModel = resolveCronModel(model, provider);
+  if (!resolvedModel) throw new Error('bot wake model is not configured');
+  return { provider, model: resolvedModel };
 }
 
 function resolveCronModel(jobModel: string | undefined, provider: ApiProvider): string {
