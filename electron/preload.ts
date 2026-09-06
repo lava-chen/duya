@@ -124,6 +124,10 @@ export interface ModeStateAPI {
   get: (sessionId: string, mode: string) => Promise<{ snapshotJson?: string } | null>
 }
 
+export interface SearchAPI {
+  query: (q: string, limit?: number) => Promise<Array<Record<string, unknown>>>
+}
+
 export interface MessageAPI {
   add: (data: Record<string, unknown>) => Promise<unknown>
   getBySession: (sessionId: string) => Promise<unknown[]>
@@ -1251,6 +1255,7 @@ export interface ElectronAPI {
   thread: ThreadAPI
   session: SessionAPI
   modeState: ModeStateAPI
+  search: SearchAPI
   message: MessageAPI
   usage: UsageAPI
   settingsDb: SettingsAPI
@@ -2053,6 +2058,9 @@ const electronAPI: ElectronAPI = {
   modeState: {
     get: (sessionId: string, mode: string) =>
       ipcRenderer.invoke('db:session:get_mode_state', sessionId, mode),
+  },
+  search: {
+    query: (q: string, limit?: number) => ipcRenderer.invoke('db:search:query', q, limit),
   },
   message: {
     add: (data: Record<string, unknown>) => ipcRenderer.invoke('db:message:add', data),

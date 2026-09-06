@@ -28,7 +28,7 @@ import {
 } from './markdown-utils.js';
 import type { WeChatMessage, WeChatConfigOptions } from './types.js';
 import { parseMessageContent, isFromGroup } from './message-utils.js';
-import { wxApi, getMimeFromFilename, MessageItemType } from './api.js';
+import { createWeixinApiClient, getMimeFromFilename, MessageItemType } from './api.js';
 import type { IpcClient } from '../../ipc-client.js';
 import { WeixinStateStore, acquireTokenLock, releaseTokenLock } from './state-store.js';
 import path from 'node:path';
@@ -86,6 +86,17 @@ export class WeixinAdapter extends BaseAdapter {
   private accountId = '';
   private baseUrl = ILINK_BASE_URL;
   private cdnBaseUrl = DEFAULT_CDN_BASE_URL;
+  /** Per-instance iLink API client (owns its own token/baseUrl/cdnBaseUrl). */
+  private client: ReturnType<typeof createWeixinApiClient> | null = null;
+  /** Override state store root (per-bot connectors isolate their WeChat state). */
+  private stateDir?: string;
+  /** Bound client accessor — throws if the adapter hasn't started yet. */
+  private get api(): ReturnType<typeof createWeixinApiClient> {
+    if (!this.client) {
+      throw new Error('WeixinApiClient not initialized (WeixinAdapter.start not called)');
+    }
+    return this.client;
+  }
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private sendChunkDelaySeconds: number = DEFAULT_CHUNK_DELAY_SECONDS;
   private sendChunkRetries: number = DEFAULT_CHUNK_RETRIES;
@@ -128,11 +139,13 @@ export class WeixinAdapter extends BaseAdapter {
   constructor(options?: {
     rateLimitMs?: number;
     dedupCapacity?: number;
+    stateDir?: string;
   }) {
     super({
       rateLimitMs: options?.rateLimitMs ?? 1000,
       dedupCapacity: options?.dedupCapacity ?? 200,
     });
+    this.stateDir = options?.stateDir;
   }
 
   // ---------------------------------------------------------------------------
@@ -167,7 +180,7 @@ export class WeixinAdapter extends BaseAdapter {
     }
 
     // Restore persisted state (context_token + sync_buf) for continuity.
-    this.stateStore = new WeixinStateStore(this.accountId || 'default');
+    this.stateStore = new WeixinStateStore(this.accountId || 'default', this.stateDir);
     for (const peer of this.contextTokens.keys()) {
       this.contextTokens.delete(peer);
     }
@@ -218,7 +231,7 @@ export class WeixinAdapter extends BaseAdapter {
     this.updateHealthConnected();
 
     this.cdnBaseUrl = (config.credentials.cdnBaseUrl ?? config.credentials.cdn_base_url ?? DEFAULT_CDN_BASE_URL) as string;
-    wxApi.configure({
+    this.client = createWeixinApiClient({
       baseUrl: this.baseUrl,
       token: this.token,
       timeoutMs: API_TIMEOUT_MS,
@@ -323,7 +336,7 @@ export class WeixinAdapter extends BaseAdapter {
     let ticket = this.typingTickets.get(chatId);
     if (!ticket) {
       try {
-        const cfg = await wxApi.getConfig(chatId);
+        const cfg = await this.api.getConfig(chatId);
         if (cfg && typeof cfg.typing_ticket === 'string') {
           ticket = cfg.typing_ticket;
           this.typingTickets.set(chatId, ticket);
@@ -335,7 +348,7 @@ export class WeixinAdapter extends BaseAdapter {
 
     const doTyping = async () => {
       try {
-        await wxApi.sendTyping(chatId, TYPING_START, ticket);
+        await this.api.sendTyping(chatId, TYPING_START, ticket);
         this.typingActive.set(chatId, true);
       } catch {
         // Best-effort
@@ -354,7 +367,7 @@ export class WeixinAdapter extends BaseAdapter {
       this.typingKeepalives.delete(chatId);
     }
     try {
-      await wxApi.sendTyping(chatId, TYPING_STOP);
+      await this.api.sendTyping(chatId, TYPING_STOP);
       this.typingActive.set(chatId, false);
     } catch {
       // Best-effort
@@ -425,7 +438,7 @@ export class WeixinAdapter extends BaseAdapter {
 
     for (let attempt = 0; attempt <= this.sendChunkRetries; attempt++) {
       try {
-        const resp = await wxApi.sendMessage(chatId, text, contextToken);
+        const resp = await this.api.sendMessage(chatId, text, contextToken);
 
         if (resp.errcode && resp.errcode !== 0) {
           const errcode = resp.errcode;
@@ -496,14 +509,14 @@ export class WeixinAdapter extends BaseAdapter {
 
       let uploaded;
       if (mime.startsWith('image/')) {
-        uploaded = await wxApi.uploadImageToWeixin({ filePath, toUserId: chatId });
-        await wxApi.sendImageMessage({ to: chatId, text: caption, uploaded });
+        uploaded = await this.api.uploadImageToWeixin({ filePath, toUserId: chatId });
+        await this.api.sendImageMessage({ to: chatId, text: caption, uploaded });
       } else if (mime.startsWith('video/')) {
-        uploaded = await wxApi.uploadVideoToWeixin({ filePath, toUserId: chatId });
-        await wxApi.sendVideoMessage({ to: chatId, text: caption, uploaded });
+        uploaded = await this.api.uploadVideoToWeixin({ filePath, toUserId: chatId });
+        await this.api.sendVideoMessage({ to: chatId, text: caption, uploaded });
       } else {
-        uploaded = await wxApi.uploadFileAttachmentToWeixin({ filePath, toUserId: chatId });
-        await wxApi.sendFileMessage({ to: chatId, text: caption, fileName, uploaded });
+        uploaded = await this.api.uploadFileAttachmentToWeixin({ filePath, toUserId: chatId });
+        await this.api.sendFileMessage({ to: chatId, text: caption, fileName, uploaded });
       }
 
       this.incrementMessageCount();
@@ -525,7 +538,7 @@ export class WeixinAdapter extends BaseAdapter {
       }
 
       try {
-        const response = await wxApi.getUpdates(this.pollSyncBuf, LONG_POLL_TIMEOUT_MS);
+        const response = await this.api.getUpdates(this.pollSyncBuf, LONG_POLL_TIMEOUT_MS);
 
         const newSyncBuf = response.get_updates_buf;
         if (newSyncBuf) {
@@ -723,7 +736,7 @@ export class WeixinAdapter extends BaseAdapter {
         }
 
         try {
-          const imageBuffer = await wxApi.downloadImage({
+          const imageBuffer = await this.api.downloadImage({
             cdnBaseUrl: this.cdnBaseUrl,
             encryptQueryParam,
             aesKeyHex,
@@ -752,7 +765,7 @@ export class WeixinAdapter extends BaseAdapter {
         }
 
         try {
-          const voiceBuffer = await wxApi.downloadAndDecryptMedia({
+          const voiceBuffer = await this.api.downloadAndDecryptMedia({
             encryptedQueryParam: encryptQueryParam,
             aesKeyB64,
           });
@@ -780,7 +793,7 @@ export class WeixinAdapter extends BaseAdapter {
         }
 
         try {
-          const fileBuffer = await wxApi.downloadAndDecryptMedia({
+          const fileBuffer = await this.api.downloadAndDecryptMedia({
             encryptedQueryParam: encryptQueryParam,
             aesKeyB64,
           });
@@ -811,7 +824,7 @@ export class WeixinAdapter extends BaseAdapter {
         }
 
         try {
-          const videoBuffer = await wxApi.downloadAndDecryptMedia({
+          const videoBuffer = await this.api.downloadAndDecryptMedia({
             encryptedQueryParam: encryptQueryParam,
             aesKeyB64,
           });
