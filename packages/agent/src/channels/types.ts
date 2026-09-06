@@ -16,8 +16,24 @@
 // =============================================================================
 
 /** Canonical platform identifiers. */
-export const KNOWN_PLATFORMS = ['discord', 'slack', 'telegram'] as const;
+export const KNOWN_PLATFORMS = ['discord', 'slack', 'telegram', 'feishu', 'weixin'] as const;
 export type KnownPlatform = typeof KNOWN_PLATFORMS[number];
+
+/**
+ * A single credential field the user must supply to bind a platform.
+ * Most platforms need one field ("token"); Feishu needs appId+appSecret so the
+ * manifest carries an explicit per-platform field list.
+ */
+export interface ConnectorCredentialField {
+  /** Secret-store key (e.g. "token", "appId", "appSecret", "botToken"). */
+  field: string;
+  /** Human-readable label shown in the bind UI. */
+  label: string;
+  /** Rendered as a masked input. */
+  secret: boolean;
+  /** Whether the value is required to bind (ilinkBotId for weixin is optional). */
+  required?: boolean;
+}
 
 /**
  * Manifest entry describing a connector platform.
@@ -27,11 +43,22 @@ export interface ConnectorManifest {
   platform: string;
   displayName: string;
   blurb: string;
-  /** Human-readable label for the credential field, e.g. "Bot Token" */
+  /** Human-readable label for the primary credential field, e.g. "Bot Token" */
   credentialLabel: string;
+  /** Per-field credential requirements. Defaults to a single "token" field. */
+  credentialFields?: ConnectorCredentialField[];
   availability: 'available' | 'coming-soon';
   /** Optional markdown guide for obtaining credentials */
   connectGuide?: string;
+}
+
+/** Resolve a manifest's credential fields, defaulting to a single `token`. */
+export function manifestCredentialFields(m: ConnectorManifest): ConnectorCredentialField[] {
+  return (
+    m.credentialFields ?? [
+      { field: 'token', label: m.credentialLabel, secret: true, required: true },
+    ]
+  );
 }
 
 /** All currently registered connector manifests. */
@@ -65,6 +92,34 @@ export const CONNECTOR_MANIFESTS: readonly ConnectorManifest[] = [
     availability: 'available',
     connectGuide:
       'Create a bot with @BotFather on Telegram, then paste the bot token here.',
+  },
+  {
+    platform: 'feishu',
+    displayName: 'Feishu',
+    blurb: 'Connect a Feishu (Lark) bot app to receive and reply to messages via WebSocket gateway.',
+    credentialLabel: 'App ID',
+    credentialFields: [
+      { field: 'appId', label: 'App ID', secret: true, required: true },
+      { field: 'appSecret', label: 'App Secret', secret: true, required: true },
+    ],
+    availability: 'available',
+    connectGuide:
+      'Create an app in the Feishu open platform (https://open.feishu.cn), enable ' +
+      'im:message event + im:message:send permissions, then paste the App ID and App Secret.',
+  },
+  {
+    platform: 'weixin',
+    displayName: 'WeChat',
+    blurb: 'Connect a WeChat iLink bot to receive and reply to messages via long polling.',
+    credentialLabel: 'Bot Token',
+    credentialFields: [
+      { field: 'botToken', label: 'Bot Token', secret: true, required: true },
+      { field: 'ilinkBotId', label: 'iLink Bot ID (optional)', secret: false, required: false },
+    ],
+    availability: 'available',
+    connectGuide:
+      'Register a WeChat iLink bot for the account you want, then paste its bot token ' +
+      '(and, if given, the iLink bot id).',
   },
 ];
 

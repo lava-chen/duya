@@ -100,7 +100,7 @@ process.on('message', (msg: Record<string, unknown>) => {
     }
     return;
   }
-  // Plan 502: route appConnection:catalog:response back to the worker
+  // Plan 503: route appConnection:catalog:response back to the worker
   // (bot-only connector-management tools: provider directory + status DTOs).
   if (msg.type === 'appConnection:catalog:response' && typeof msg.requestId === 'string') {
     const key = `rpc:${msg.requestId}`;
@@ -132,6 +132,22 @@ process.on('message', (msg: Record<string, unknown>) => {
   }
   // Plan 481: route memory-tier:rpc:response back to the worker.
   if (msg.type === 'memory-tier:rpc:response' && typeof msg.requestId === 'string') {
+    const key = `rpc:${msg.requestId}`;
+    const workerChild = workerDbRequests.get(key);
+    if (workerChild) {
+      workerDbRequests.delete(key);
+      if (!workerChild.killed) {
+        workerChild.send(msg);
+      }
+    }
+    return;
+  }
+  // Plan 481 amendment: route bot-identity:rpc:response back to the worker.
+  // The request side (router.ts relay) and the main-side dispatcher
+  // (agent-server-lifecycle.ts) are both wired; only this return path
+  // would otherwise be missing — same failure mode as the original
+  // computer-use response gap (30s timeouts).
+  if (msg.type === 'bot-identity:rpc:response' && typeof msg.requestId === 'string') {
     const key = `rpc:${msg.requestId}`;
     const workerChild = workerDbRequests.get(key);
     if (workerChild) {

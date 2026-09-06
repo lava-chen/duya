@@ -253,6 +253,38 @@ export function spawnAgentServer(): Promise<number> {
         return;
       }
 
+      // Plan 503: App Connection catalog for the bot-only connector
+      // management tools (list_app_connectors / connect_app). Returns the
+      // provider directory (readiness + default scopes) and the current
+      // connection list as renderer-safe DTOs — no tokens, no client
+      // secrets cross this boundary.
+      if (msg.type === 'appConnection:catalog' && typeof msg.requestId === 'string') {
+        import('../services/app-connections/app-connection-service')
+          .then(({ getAppConnectionService }) => {
+            const svc = getAppConnectionService();
+            const data = { providers: svc.listProviders(), connections: svc.list() };
+            if (!child.killed) {
+              child.send({
+                type: 'appConnection:catalog:response',
+                requestId: msg.requestId,
+                success: true,
+                data,
+              });
+            }
+          })
+          .catch((err) => {
+            if (!child.killed) {
+              child.send({
+                type: 'appConnection:catalog:response',
+                requestId: msg.requestId,
+                success: false,
+                error: { code: 'INTERNAL', message: err instanceof Error ? err.message : String(err) },
+              });
+            }
+          });
+        return;
+      }
+
       // Plan 454: route computer-use:execute to the Computer Use IPC
       // dispatcher (electron/ipc/computer-use.ts). The agent-side
       // computer_use tool calls context.ipcRequest('computer-use:execute',
