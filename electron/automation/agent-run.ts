@@ -24,19 +24,31 @@ import { getCoreStores } from '../db/core-connection';
 // reintroduces an eager-write path.
 // import { ipcMessageToNewEvent } from '../ipc/core-db-adapters';
 import { getLogger, LogComponent } from '../logging/logger';
-import { toLLMProvider } from '../config/provider-types.js';
 import { resolveCronProvider } from './provider';
+import { buildCronProviderConfig } from './provider-config';
+import type { CronProviderConfig } from './provider-config';
+export type { CronProviderConfig } from './provider-config';
 import { prepareAutomationWorkspace } from './workspace';
 import type { AutomationCron } from './types.js';
 
 const RUN_TIMEOUT_MS = 10 * 60_000;
 
-export interface CronProviderConfig {
-  apiKey: string;
-  baseURL?: string;
-  model: string;
-  provider: string;
-  authStyle: 'api_key';
+export type RunOrigin = 'user' | 'agent' | 'background';
+
+/** Type-safe knobs accepted by the Chat API `POST /sessions/:id/chat`
+ *  `options` body. Kept in sync with the keys `electron/agents/server/router.ts`
+ *  + the worker chat:start command consume, plus the headless-run knobs
+ *  (`agentProfileId`/`llmRequestTimeoutMs`) — plan 505 Part A. */
+export interface ChatRunOptions {
+  agentProfileId?: string;
+  runOrigin?: RunOrigin;
+  wakeRun?: boolean;
+  wakeless?: boolean;
+  effort?: 'off' | 'low' | 'medium' | 'high';
+  llmRequestTimeoutMs?: number;
+  platform?: string;
+  securityScanEnabled?: boolean;
+  permissionRules?: unknown;
 }
 
 export interface RunPromptInSessionOptions {
@@ -44,7 +56,7 @@ export interface RunPromptInSessionOptions {
   prompt: string;
   workingDirectory: string;
   providerConfig: CronProviderConfig;
-  options?: Record<string, unknown>;
+  options?: ChatRunOptions;
   timeoutMs?: number;
   onText?: (text: string) => void;
 }
@@ -287,13 +299,12 @@ export async function runCronInSession(job: AutomationCron, sessionId: string): 
     sessionId,
     prompt: job.prompt,
     workingDirectory,
-    providerConfig: {
-      apiKey: provider.apiKey,
-      baseURL: provider.baseUrl,
-      model,
-      provider: toLLMProvider(provider.providerType),
-      authStyle: 'api_key',
+    providerConfig: buildCronProviderConfig({ provider, model }),
+    options: {
+      agentProfileId: 'cron',
+      effort: 'off',
+      llmRequestTimeoutMs: 240_000,
+      runOrigin: 'background',
     },
-    options: { agentProfileId: 'cron', effort: 'off', llmRequestTimeoutMs: 240_000 },
   });
 }
