@@ -30,7 +30,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { getLogger, LogComponent } from '../../logging/logger';
-import type { AgentMessage, MessageEntry, CompactionEntry } from '@duya/agent/message';
+import { THREAD_METADATA_KEY, type AgentMessage, type MessageEntry, type CompactionEntry } from '@duya/agent/message';
 import type { Migration, SqliteDatabase } from './database';
 import {
   isRolloutEvent,
@@ -93,6 +93,52 @@ export interface SearchHit {
   messageId: string;
   seq: number;
   snippet: string;
+}
+
+/**
+ * Plan 506 (C1): options for `rotateArchive`. Bot sessions ignore these
+ * (they rotate unconditionally on compaction); non-bot sessions honor the
+ * size gate — `force` bypasses it, `thresholdBytes` overrides the default.
+ */
+export interface RotationOptions {
+  force?: boolean;
+  thresholdBytes?: number;
+}
+
+/**
+ * Plan 506 (C1): a non-bot session's rollout must exceed this size before a
+ * compaction-triggered rotation kicks in. Keeps ordinary sessions on the
+ * single-file behavior byte-for-byte; only genuinely long sessions get the
+ * generation layout.
+ */
+export const NON_BOT_ROTATION_THRESHOLD_BYTES = 4 * 1024 * 1024;
+
+/** Plan 506 (A1): export result for one session's portable rollout file. */
+export interface RolloutExportResult {
+  absolutePath: string;
+  lines: number;
+  bytes: number;
+}
+
+/** Plan 506 (A3): whole-store reconcile statistics. */
+export interface ReconcileStats {
+  sessionsScanned: number;
+  rowsAdded: number;
+  missingFiles: string[];
+  orphanFiles: string[];
+}
+
+/**
+ * Plan 506 (A2): import outcome for both modes. `linesSkipped` counts
+ * duplicates already indexed for the target session (continue mode);
+ * `remapped` is true when ids were re-minted to avoid global
+ * message_index PK collisions.
+ */
+export interface ImportResult {
+  sessionId: string;
+  linesImported: number;
+  linesSkipped: number;
+  remapped: boolean;
 }
 
 // ─── MessageLog ───
@@ -396,10 +442,16 @@ export class MessageLog {
     // (`active.jsonl` + `archive-<g>.jsonl`). Each `file_offset/byte_len`
     // pair in message_index references a SPECIFIC file, so we must look
     // up the file by generation, not by the single rollout_path column.
-    // Non-bot sessions keep the legacy single-file resolution below.
+    // Plan 506 (C1): non-bot sessions that have rotated into the same
+    // generation layout read the identical way — single-file resolution
+    // would misread archive offsets against active.jsonl alone.
     const botAgentId = parseAgentIdFromBotSession(sessionId);
     if (botAgentId) {
-      return this.listBySessionMultiFile(sessionId, botAgentId, options);
+      return this.listBySessionMultiFile(
+        sessionId,
+        path.join(this.rootDir, 'agents', botAgentId, 'sessions'),
+        options,
+      );
     }
 
     let absolutePath = this.resolvePathOnDisk(relativePath);
@@ -443,6 +495,18 @@ export class MessageLog {
         );
         return [];
       }
+    }
+
+    // Plan 506 (C1): a rotated non-bot session reads across its archive
+    // segments + active.jsonl exactly like a bot session — the single-file
+    // resolution below would read every generation's byte ranges out of
+    // active.jsonl alone and corrupt the projection.
+    if (path.basename(relativePath) === 'active.jsonl') {
+      return this.listBySessionMultiFile(
+        sessionId,
+        path.dirname(absolutePath),
+        options,
+      );
     }
 
     const rows = this.db
@@ -509,8 +573,10 @@ export class MessageLog {
   }
 
   /**
-   * Plan 493 (Phase B): list events for a bot session that may span
-   * multiple rollout files (`active.jsonl` + `archive-<g>.jsonl`).
+   * Plan 493 (Phase B): list events for a session that may span multiple
+   * rollout files (`active.jsonl` + `archive-<g>.jsonl`). Plan 506 (C1):
+   * generalized beyond bot sessions — any session in the generation layout
+   * passes its own sessions dir (bot dir or the session-private dated dir).
    *
    * `message_index` rows carry `file_offset/byte_len` into the SPECIFIC
    * file that owns the line. We resolve the right file per row from the
@@ -525,16 +591,10 @@ export class MessageLog {
    */
   private listBySessionMultiFile(
     sessionId: string,
-    agentId: string,
+    sessionsDir: string,
     options?: { source?: readonly string[] },
   ): StoredEvent[] {
-    const botSessionsDir = path.join(
-      this.rootDir,
-      'agents',
-      agentId,
-      'sessions',
-    );
-    const activeAbs = path.join(botSessionsDir, 'active.jsonl');
+    const activeAbs = path.join(sessionsDir, 'active.jsonl');
     const activeExists = fs.existsSync(activeAbs);
 
     const rows = this.db
@@ -570,7 +630,7 @@ export class MessageLog {
       // Active file holds the highest generation that has rows; lower
       // generations must live in archive-<g>.jsonl.
       const archiveAbs = path.join(
-        botSessionsDir,
+        sessionsDir,
         `archive-${generation}.jsonl`,
       );
       if (fs.existsSync(archiveAbs)) {
@@ -617,7 +677,7 @@ export class MessageLog {
       let hasArchive = false;
       try {
         hasArchive = fs
-          .readdirSync(botSessionsDir)
+          .readdirSync(sessionsDir)
           .some((f) => f.startsWith('archive-'));
       } catch {
         // Cannot inspect the directory — play it safe, do not rebuild.
@@ -770,12 +830,21 @@ export class MessageLog {
   project(sessionId: string): TimelineEntryRow[] {
     const botAgentId = parseAgentIdFromBotSession(sessionId);
     if (botAgentId) {
-      return this.projectBotMultiFile(botAgentId);
+      return this.projectMultiFile(
+        path.join(this.rootDir, 'agents', botAgentId, 'sessions'),
+      );
     }
 
     const relativePath = this.getRolloutPath(sessionId);
     if (!relativePath) return [];
     const absolutePath = this.resolvePathOnDisk(relativePath);
+
+    // Plan 506 (C1): a rotated non-bot session projects across its archive
+    // segments + active.jsonl, same as a bot session.
+    if (path.basename(relativePath) === 'active.jsonl' && fs.existsSync(absolutePath)) {
+      return this.projectMultiFile(path.dirname(absolutePath));
+    }
+
     const lines = this.readAll(absolutePath);
     const result: TimelineEntryRow[] = [];
     for (let i = 0; i < lines.length; i++) {
@@ -792,33 +861,14 @@ export class MessageLog {
   }
 
   /**
-   * Plan 493 (Phase B): bot session projection that reads every archive
-   * segment + the active file. Seq is assigned as a monotonic counter
-   * across all files in generation order; applyRebases operates on this
-   * flat seq axis.
+   * Plan 493 (Phase B): generation-layout projection that reads every
+   * archive segment + the active file. Plan 506 (C1): generalized beyond
+   * bot sessions to any rotated session's dir. Seq is assigned as a
+   * monotonic counter across all files in generation order; applyRebases
+   * operates on this flat seq axis.
    */
-  private projectBotMultiFile(agentId: string): TimelineEntryRow[] {
-    const botSessionsDir = path.join(
-      this.rootDir,
-      'agents',
-      agentId,
-      'sessions',
-    );
-    if (!fs.existsSync(botSessionsDir)) return [];
-
-    // Enumerate archive files in generation order (0, 1, 2, ...). We
-    // probe a bounded range (0..50) — beyond 50 rotations a single bot
-    // session is a pathological case worth operator intervention. Real
-    // production bots rotate every few hundred turns; 50 archives is a
-    // generous safety margin.
-    const files: string[] = [];
-    for (let g = 0; g <= 50; g++) {
-      const archiveAbs = path.join(botSessionsDir, `archive-${g}.jsonl`);
-      if (fs.existsSync(archiveAbs)) files.push(archiveAbs);
-      else break; // archives are dense starting at 0 — first gap means end of history
-    }
-    const activeAbs = path.join(botSessionsDir, 'active.jsonl');
-    if (fs.existsSync(activeAbs)) files.push(activeAbs);
+  private projectMultiFile(sessionsDir: string): TimelineEntryRow[] {
+    const files = this.collectSessionGenerationFiles(sessionsDir);
 
     const result: TimelineEntryRow[] = [];
     let seq = 0;
@@ -836,6 +886,29 @@ export class MessageLog {
       }
     }
     return result;
+  }
+
+  /**
+   * Ordered source files for a session in the generation layout: every
+   * dense archive segment (`archive-0.jsonl`, `archive-1.jsonl`, …)
+   * followed by `active.jsonl`. Shared by the projection, export, and
+   * archive listing paths.
+   *
+   * We probe a bounded range (0..50) — beyond 50 rotations a single
+   * session is a pathological case worth operator intervention. Real
+   * production sessions rotate every few hundred turns; 50 archives is
+   * a generous safety margin.
+   */
+  private collectSessionGenerationFiles(sessionsDir: string): string[] {
+    const files: string[] = [];
+    for (let g = 0; g <= 50; g++) {
+      const archiveAbs = path.join(sessionsDir, `archive-${g}.jsonl`);
+      if (fs.existsSync(archiveAbs)) files.push(archiveAbs);
+      else break; // archives are dense starting at 0 — first gap means end of history
+    }
+    const activeAbs = path.join(sessionsDir, 'active.jsonl');
+    if (fs.existsSync(activeAbs)) files.push(activeAbs);
+    return files;
   }
 
   /**
@@ -1166,22 +1239,27 @@ export class MessageLog {
    *   5. Bump `chat_sessions.generation` so external readers see the
    *      new value.
    *
+   * Plan 506 (C1): non-bot sessions rotate too, into the same
+   * `active.jsonl + archive-<g>.jsonl` generation layout — but only
+   * once their rollout exceeds `NON_BOT_ROTATION_THRESHOLD_BYTES` (or
+   * when `opts.force` is set), so ordinary sessions keep today's
+   * single-file behavior byte-for-byte.
+   *
    * Returns the new generation number. Returns 0 when there was
-   * nothing to rotate (no active file yet) or for non-bot sessions
-   * (rotation is a bot-only mechanism — human sessions keep their
-   * dated file tree).
+   * nothing to rotate (no active file yet, or a non-bot session under
+   * the size threshold).
    */
   rotateArchive(
     sessionId: string,
     reason: 'compaction' | 'manual' = 'compaction',
     createdAt: number = Date.now(),
+    opts: RotationOptions = {},
   ): number {
     const agentId = parseAgentIdFromBotSession(sessionId);
     if (!agentId) {
-      // Non-bot sessions do not rotate. Shared-tree path produces a
-      // new file every day already; rotating would create dangling
-      // archive segments with no clear consumption path.
-      return 0;
+      // Plan 506 C1: non-bot sessions rotate under a size gate (see
+      // rotateNonBotArchive). Bot sessions rotate unconditionally.
+      return this.rotateNonBotArchive(sessionId, reason, createdAt, opts);
     }
 
     // Step 1: ensure the bot's sessions dir + active.jsonl exist.
@@ -1210,13 +1288,42 @@ export class MessageLog {
     fs.mkdirSync(path.dirname(archiveAbs), { recursive: true });
     fs.renameSync(activePath, archiveAbs);
 
-    // Step 4: invalidate the path cache. The next getOrCreateRolloutPath
-    // call will re-resolve and ensure the new active.jsonl exists.
+    // Step 4: invalidate the path cache. The next getRolloutPath call
+    // re-resolves from the sessions table.
     this.pathCache.delete(sessionId);
 
     // Step 5: write the rotation event into the new active file.
     const newGeneration = prevGeneration + 1;
+    this.commitRotationMarker(
+      sessionId,
+      activePath,
+      archiveRel,
+      newGeneration,
+      reason,
+      createdAt,
+    );
 
+    return newGeneration;
+  }
+
+  /**
+   * Shared rotation tail (Plan 506 C1 extraction): ensure the fresh
+   * `active.jsonl` exists at `activeAbs`, append the `rotation` audit
+   * event as its first line, index it with the new generation stamped
+   * explicitly, and bump `chat_sessions.generation`.
+   *
+   * The append goes through the file helper directly (NOT appendBatch) so
+   * the row can stamp `generation` with the new value — appendBatch would
+   * call getCurrentGeneration which is still prevGeneration at this point.
+   */
+  private commitRotationMarker(
+    sessionId: string,
+    activeAbs: string,
+    archiveRel: string,
+    newGeneration: number,
+    reason: 'compaction' | 'manual',
+    createdAt: number,
+  ): void {
     // Capture the highest seq BEFORE the rotation insert so the audit
     // event can record how many rows the archive contained.
     const maxBefore = this.db
@@ -1235,17 +1342,9 @@ export class MessageLog {
       createdAt,
     };
 
-    // Ensure the new active file exists (resolvePath + ensureFile), then
-    // append the rotation event line. The append goes through the file
-    // helper directly (NOT appendBatch) so we can stamp `generation`
-    // explicitly with the new value — appendBatch would call
-    // getCurrentGeneration which is still prevGeneration at this point.
     const txn = this.db.transaction(() => {
-      this.getOrCreateRolloutPath(sessionId, createdAt);
-      const activePathNow = this.resolvePathOnDisk(
-        this.getRolloutPath(sessionId)!,
-      );
-      const lineMeta = this.appendLines(activePathNow, [event]);
+      this.ensureFile(activeAbs);
+      const lineMeta = this.appendLines(activeAbs, [event]);
 
       // Insert the message_index row for the rotation event with the
       // new generation stamped explicitly.
@@ -1284,8 +1383,381 @@ export class MessageLog {
       }
     });
     txn();
+  }
 
+  /**
+   * Plan 506 (C1): rotate a non-bot (human/cron) session's dated-tree rollout
+   * into the generation layout. The first rotation moves the single
+   * `rollout-<stamp>-<id>.jsonl` into a session-private directory
+   * `sessions/<YYYY>/<MM>/<DD>/<sanitized-id>/archive-<g>.jsonl` and starts
+   * `<dir>/active.jsonl`; subsequent rotations reuse that directory.
+   *
+   * Size gate: single-file sessions only rotate once their rollout is at
+   * least `NON_BOT_ROTATION_THRESHOLD_BYTES` (default 4 MB) — ordinary
+   * sessions keep the single-file behavior byte-for-byte. Already-rotated
+   * sessions always rotate when asked (their active segment is bounded by
+   * each compaction epoch). `opts.force` bypasses the gate.
+   */
+  private rotateNonBotArchive(
+    sessionId: string,
+    reason: 'compaction' | 'manual',
+    createdAt: number,
+    opts: RotationOptions,
+  ): number {
+    const rel = this.getRolloutPath(sessionId);
+    if (!rel) return 0;
+    const currentAbs = this.resolvePathOnDisk(rel);
+    if (!fs.existsSync(currentAbs)) return 0;
+
+    const alreadyMultiGen = path.basename(rel) === 'active.jsonl';
+    if (!alreadyMultiGen && !opts.force) {
+      const threshold = opts.thresholdBytes ?? NON_BOT_ROTATION_THRESHOLD_BYTES;
+      if (fs.statSync(currentAbs).size < threshold) return 0;
+    }
+
+    const prevGeneration = this.getCurrentGeneration(sessionId);
+    const sessionsDir = alreadyMultiGen
+      ? path.dirname(currentAbs)
+      : path.join(path.dirname(currentAbs), sanitizeFilenameSegment(sessionId));
+    const archiveAbs = path.join(sessionsDir, `archive-${prevGeneration}.jsonl`);
+    if (fs.existsSync(archiveAbs)) {
+      throw new Error(
+        `rotateArchive: archive file already exists at ${archiveAbs} — refuse to overwrite. ` +
+          `sessionId=${sessionId} prevGeneration=${prevGeneration}`,
+      );
+    }
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.renameSync(currentAbs, archiveAbs);
+
+    const activeAbs = path.join(sessionsDir, 'active.jsonl');
+    const activeRel = path.relative(this.rootDir, activeAbs).split(path.sep).join('/');
+    // Point the session at the new active file BEFORE writing the marker so
+    // a crash in between leaves the DB referencing an existing (empty) file
+    // rather than one that was renamed away.
+    this.pathCache.delete(sessionId);
+    this.adoptRolloutPath(sessionId, activeRel);
+
+    const newGeneration = prevGeneration + 1;
+    this.commitRotationMarker(
+      sessionId,
+      activeAbs,
+      activeRel,
+      newGeneration,
+      reason,
+      createdAt,
+    );
     return newGeneration;
+  }
+
+  // ─── Plan 506 Track A: rollout portability ───
+
+  /**
+   * Plan 506 (A1): export a session's complete rollout as ONE portable
+   * JSONL file — "one file is one session". Bot sessions and rotated
+   * non-bot sessions concatenate every archive segment in generation
+   * order followed by `active.jsonl`; single-file sessions are copied
+   * verbatim. Read-only: source files and the DB are never touched.
+   *
+   * The export lands in `<rootDir>/exports/rollout-<sanitizedId>.jsonl`
+   * (or `destDir` when given) and overwrites any previous export of the
+   * same session — an export is a deterministic snapshot, not a
+   * versioned artifact. Empty sessions produce an empty file; an empty
+   * rollout is a valid session representation.
+   */
+  exportRollout(sessionId: string, destDir?: string): RolloutExportResult {
+    if (!this.sessionRowExists(sessionId)) {
+      throw new Error(`exportRollout: session not found: ${sessionId}`);
+    }
+
+    const files: string[] = [];
+    const botAgentId = parseAgentIdFromBotSession(sessionId);
+    if (botAgentId) {
+      files.push(
+        ...this.collectSessionGenerationFiles(
+          path.join(this.rootDir, 'agents', botAgentId, 'sessions'),
+        ),
+      );
+    } else {
+      const rel = this.getRolloutPath(sessionId);
+      if (rel) {
+        const abs = this.resolvePathOnDisk(rel);
+        if (path.basename(rel) === 'active.jsonl') {
+          files.push(...this.collectSessionGenerationFiles(path.dirname(abs)));
+        } else if (fs.existsSync(abs)) {
+          files.push(abs);
+        }
+      }
+    }
+
+    const exportDir = destDir ?? path.join(this.rootDir, 'exports');
+    fs.mkdirSync(exportDir, { recursive: true });
+    const destAbs = path.join(
+      exportDir,
+      `rollout-${sanitizeFilenameSegment(sessionId)}.jsonl`,
+    );
+
+    let bytes = 0;
+    let lines = 0;
+    const fd = fs.openSync(destAbs, 'w');
+    try {
+      for (const src of files) {
+        let buf = fs.readFileSync(src);
+        if (buf.length === 0) continue;
+        // A crash-truncated tail can lack the trailing newline; add one so
+        // the next segment's first line does not merge into the last line.
+        if (buf[buf.length - 1] !== 0x0a) {
+          buf = Buffer.concat([buf, Buffer.from('\n', 'utf8')]);
+        }
+        fs.writeSync(fd, buf);
+        bytes += buf.length;
+        for (const line of buf.toString('utf8').split('\n')) {
+          if (line.length > 0) lines += 1;
+        }
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+    return { absolutePath: destAbs, lines, bytes };
+  }
+
+  /**
+   * Plan 506 (A3): whole-store reconcile. Promotes the startup `scan()`
+   * from a passive crash-recovery hook into an explicit, user-triggerable
+   * promise: "the rollout files are the truth; the index is a rebuildable
+   * projection".
+   *
+   * For every session with a recorded rollout_path: re-scan the file and
+   * back-fill missing message_index rows (no full delete — INSERT OR
+   * IGNORE idempotency). Sessions whose file is missing on disk are
+   * reported, never deleted. Additionally sweeps the rollout root for
+   * .jsonl files no session references (orphans) and reports them without
+   * touching them. Archive segments are exempt — they are managed by
+   * rotation and referenced via the generation column, not rollout_path.
+   */
+  reconcileAll(): ReconcileStats {
+    const stats: ReconcileStats = {
+      sessionsScanned: 0,
+      rowsAdded: 0,
+      missingFiles: [],
+      orphanFiles: [],
+    };
+
+    let rows: Array<{ id: string; rollout_path: string | null }> = [];
+    try {
+      rows = this.db.prepare('SELECT id, rollout_path FROM sessions').all() as Array<{
+        id: string;
+        rollout_path: string | null;
+      }>;
+    } catch {
+      return stats; // no sessions table (isolated fixtures) — nothing to do
+    }
+
+    const referenced = new Set<string>();
+    for (const row of rows) {
+      if (!row.rollout_path) continue;
+      const abs = this.resolvePathOnDisk(row.rollout_path);
+      referenced.add(path.resolve(abs));
+      if (!fs.existsSync(abs)) {
+        stats.missingFiles.push(row.id);
+        continue;
+      }
+      const before = this.getCount(row.id);
+      this.scan(row.id);
+      stats.rowsAdded += this.getCount(row.id) - before;
+      stats.sessionsScanned += 1;
+    }
+
+    const walk = (dir: string): void => {
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const p = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(p);
+        else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+          if (entry.name.startsWith('archive-')) continue;
+          if (!referenced.has(path.resolve(p))) stats.orphanFiles.push(p);
+        }
+      }
+    };
+    walk(path.join(this.rootDir, 'sessions'));
+    walk(path.join(this.rootDir, 'agents'));
+
+    return stats;
+  }
+
+  /**
+   * Plan 506 (A2) restore mode: rebuild a NEW session from an external
+   * rollout file. The session row must already exist (the caller creates
+   * it via SessionStore so the session is immediately listable); this
+   * method validates every line, writes the payload into the dated
+   * rollout tree, points `sessions.rollout_path` at the copy, and
+   * rebuilds message_index + message_search via `scan()`.
+   *
+   * Id collisions: `message_index.id` is a GLOBAL primary key. When the
+   * file's ids already exist anywhere in the DB (re-importing an export
+   * while the original session still lives there) `INSERT OR IGNORE`
+   * would silently drop every row. In that case the whole file is remapped
+   * onto the `import:<sessionId>:<oldId>` namespace — cross-references
+   * included — so the restored session is complete instead of empty.
+   * When no id collides the file content is written verbatim.
+   */
+  importRestoreFromFile(sessionId: string, sourcePath: string): ImportResult {
+    if (!this.sessionRowExists(sessionId)) {
+      throw new Error(
+        `importRestoreFromFile: session row missing — create it before import: ${sessionId}`,
+      );
+    }
+    const rawLines = this.readImportSource(sourcePath);
+    const lines = validateImportLines(rawLines);
+
+    const ids = collectTopLevelIds(lines);
+    const colliding = this.findIdsOwnedByOthers(ids, null);
+    const remapped = colliding.size > 0;
+    const finalLines = remapped
+      ? remapImportNamespace(lines, sessionId, 'import')
+      : lines;
+
+    // The dated bucket derives from now — an import is a new session's
+    // first write. getOrCreateRolloutPath creates the file and records
+    // sessions.rollout_path.
+    const relativePath = this.getOrCreateRolloutPath(sessionId, Date.now());
+    const absolutePath = this.resolvePathOnDisk(relativePath);
+    this.ensureFile(absolutePath);
+    const content =
+      finalLines.map((l) => JSON.stringify(l)).join('\n') +
+      (finalLines.length > 0 ? '\n' : '');
+    fs.writeFileSync(absolutePath, content, 'utf8');
+
+    this.scan(sessionId);
+    this.rebuildSearchForSession(sessionId);
+
+    return {
+      sessionId,
+      linesImported: finalLines.length,
+      linesSkipped: 0,
+      remapped,
+    };
+  }
+
+  /**
+   * Plan 506 (A2) continue mode: append an external rollout file's lines
+   * onto an EXISTING session's tail. Idempotent for re-imports — ids
+   * already indexed for the target session are skipped by appendBatch's
+   * file-level dedup and counted in `linesSkipped`. Ids owned by a
+   * DIFFERENT session are remapped onto the `import:<sessionId>:<oldId>`
+   * namespace first: message_index.id is a global PK, so a verbatim
+   * append would be silently dropped.
+   *
+   * Rebase lines get their numeric `supersededUpToSeq` bound shifted by
+   * the target's current line count — the bound refers to positions in
+   * the source file, and after the append those rows live `offset` lines
+   * later in the merged trace. Null bounds (the compaction form) are
+   * position-independent and pass through untouched.
+   */
+  importContinueFromFile(sessionId: string, sourcePath: string): ImportResult {
+    if (!this.sessionRowExists(sessionId)) {
+      throw new Error(`importContinueFromFile: session not found: ${sessionId}`);
+    }
+    const rawLines = this.readImportSource(sourcePath);
+    const lines = validateImportLines(rawLines);
+
+    const ownedByOthers = this.findIdsOwnedByOthers(
+      collectTopLevelIds(lines),
+      sessionId,
+    );
+    const remapped = ownedByOthers.size > 0;
+    const finalLines = remapped
+      ? remapImportNamespace(lines, sessionId, 'import')
+      : lines;
+
+    // Ids already indexed for the target are true duplicates — appendBatch
+    // filters them from the file write; count them as skipped.
+    const existing = this.getIndexedIds(sessionId);
+    const fresh = finalLines.filter((l) => !existing.has(l.id));
+
+    // Shift numeric rebase bounds past the existing tail (see docblock).
+    const offset = this.getSessionLineCount(sessionId);
+    const shifted = shiftRebaseBounds(fresh, offset);
+
+    this.appendBatch(
+      shifted.map((l) => ({
+        id: l.id,
+        sessionId,
+        turnId: null,
+        payload: l,
+        createdAt: rolloutLineTimestamp(l),
+      })),
+    );
+
+    const importedIds = new Set(fresh.map((l) => l.id));
+    return {
+      sessionId,
+      linesImported: importedIds.size,
+      linesSkipped: finalLines.length - importedIds.size,
+      remapped,
+    };
+  }
+
+  /** Read an external rollout file for import; throws when it is absent. */
+  private readImportSource(sourcePath: string): string[] {
+    if (!fs.existsSync(sourcePath)) {
+      throw new Error(`importRollout: source file not found: ${sourcePath}`);
+    }
+    const content = fs.readFileSync(sourcePath, 'utf8');
+    if (content.length === 0) return [];
+    return content.split('\n').filter((l) => l.length > 0);
+  }
+
+  /** True when the sessions table has a row for `sessionId`. */
+  private sessionRowExists(sessionId: string): boolean {
+    try {
+      return (
+        this.db.prepare('SELECT 1 FROM sessions WHERE id = ?').get(sessionId) !==
+        undefined
+      );
+    } catch {
+      // sessions table absent in isolated fixtures — do not block the call.
+      return true;
+    }
+  }
+
+  /**
+   * Which of `ids` already exist in message_index owned by a session
+   * OTHER than `excludeSessionId` (null = any owner counts). Chunked to
+   * stay under SQLite's variable limit. Used by the import paths to
+   * decide when the global id PK would silently drop rows.
+   */
+  private findIdsOwnedByOthers(
+    ids: string[],
+    excludeSessionId: string | null,
+  ): Set<string> {
+    const out = new Set<string>();
+    if (ids.length === 0) return out;
+    const CHUNK = 400;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      const placeholders = chunk.map(() => '?').join(',');
+      const sql = excludeSessionId
+        ? `SELECT id FROM message_index WHERE id IN (${placeholders}) AND session_id != ?`
+        : `SELECT id FROM message_index WHERE id IN (${placeholders})`;
+      const args = excludeSessionId ? [...chunk, excludeSessionId] : chunk;
+      for (const row of this.db.prepare(sql).all(...args) as Array<{ id: string }>) {
+        out.add(row.id);
+      }
+    }
+    return out;
+  }
+
+  /** Highest assigned seq for a session = number of indexed rollout lines. */
+  private getSessionLineCount(sessionId: string): number {
+    const row = this.db
+      .prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM message_index WHERE session_id = ?')
+      .get(sessionId) as { m: number };
+    return row.m;
   }
 
   /**
@@ -1555,6 +2027,10 @@ export class MessageLog {
     const desired = this.resolvePath(sessionId, createdAt);
     const existing = this.getRolloutPath(sessionId);
     if (existing && existing !== desired) {
+      // Plan 506 (C1): the generation layout is sticky — the active file
+      // must stay beside its archive segments, so never re-bucket it into
+      // a new date directory. Only legacy single files move.
+      if (path.basename(existing) === 'active.jsonl') return existing;
       // Date bucket changed (cross-midnight session) — move the file.
       this.moveRollout(sessionId, existing, desired);
       return desired;
@@ -1921,4 +2397,174 @@ export function applyRebases(rows: TimelineEntryRow[]): TimelineEntryRow[] {
 export function effectiveMessageTimeline(rows: TimelineEntryRow[]): TimelineEntryRow[] {
   const rebased = applyRebases(rows);
   return rebased.filter((r) => r.entry.type === 'message' || r.entry.type === 'compaction');
+}
+
+// ─── Plan 506 Track A2: import validation + id remapping (pure helpers) ───
+
+/** Import validation error carrying the 1-based source line number. */
+export class ImportValidationError extends Error {
+  readonly lineNumber: number;
+  constructor(lineNumber: number, reason: string) {
+    super(`Invalid rollout line ${lineNumber}: ${reason}`);
+    this.name = 'ImportValidationError';
+    this.lineNumber = lineNumber;
+  }
+}
+
+/**
+ * Validate raw JSONL lines from an external rollout file. Every line must
+ * parse and carry a known `type` discriminator ('message', 'compaction',
+ * or one of the six rollout event types) plus a non-empty string `id` —
+ * the message_index primary key. Throws `ImportValidationError` with the
+ * 1-based line number on the first violation: import is all-or-nothing,
+ * a partial import would leave a misleading half-session.
+ */
+export function validateImportLines(rawLines: string[]): RolloutLine[] {
+  const lines: RolloutLine[] = [];
+  for (let i = 0; i < rawLines.length; i++) {
+    const raw = rawLines[i];
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new ImportValidationError(i + 1, 'not valid JSON');
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new ImportValidationError(i + 1, 'not a JSON object');
+    }
+    const type = (parsed as { type?: unknown }).type;
+    if (typeof type !== 'string') {
+      throw new ImportValidationError(i + 1, 'missing "type" discriminator');
+    }
+    if (type !== 'message' && type !== 'compaction' && !isRolloutEvent(parsed)) {
+      throw new ImportValidationError(i + 1, `unknown rollout line type "${type}"`);
+    }
+    const id = (parsed as { id?: unknown }).id;
+    if (typeof id !== 'string' || id.length === 0) {
+      throw new ImportValidationError(i + 1, 'missing non-empty string "id"');
+    }
+    lines.push(parsed as RolloutLine);
+  }
+  return lines;
+}
+
+/** Top-level ids of validated lines (the message_index PK domain). */
+function collectTopLevelIds(lines: RolloutLine[]): string[] {
+  return lines.map((l) => l.id);
+}
+
+/**
+ * Remap the ids in `remapIds` onto the `<prefix>:<sessionId>:<oldId>`
+ * namespace, updating every cross-reference that points at a remapped id:
+ * top-level line ids, message identity fields (entry parentId, inner
+ * message.id, plan-486 threadMeta.replyToId), CompactionEntry references
+ * (firstKeptMessageId, compactedMessageIds, previousCompactionId), and
+ * RebaseEvent newMessages. Ids outside `remapIds` — and references to ids
+ * that are not being remapped — stay verbatim, so non-colliding content
+ * keeps its original identity. Returns fresh deep copies; the input is
+ * never mutated.
+ */
+export function remapImportNamespace(
+  lines: RolloutLine[],
+  sessionId: string,
+  prefix: string,
+  remapIds: ReadonlySet<string>,
+): RolloutLine[] {
+  if (remapIds.size === 0) return lines;
+
+  const mint = (oldId: string): string => `${prefix}:${sessionId}:${oldId}`;
+  const idMap = new Map<string, string>();
+  for (const line of lines) {
+    if (remapIds.has(line.id)) idMap.set(line.id, mint(line.id));
+    if (line.type === 'rebase') {
+      for (const m of line.newMessages) {
+        if (remapIds.has(m.id)) idMap.set(m.id, mint(m.id));
+      }
+    }
+  }
+
+  return lines.map((line) => {
+    const copy = JSON.parse(JSON.stringify(line)) as RolloutLine;
+    copy.id = idMap.get(copy.id) ?? copy.id;
+    remapLineReferences(copy, idMap);
+    return copy;
+  });
+}
+
+/** In-place reference remap on one deep-copied line (never the original). */
+function remapLineReferences(line: RolloutLine, idMap: Map<string, string>): void {
+  switch (line.type) {
+    case 'message': {
+      if (typeof line.parentId === 'string') {
+        line.parentId = idMap.get(line.parentId) ?? line.parentId;
+      }
+      remapMessageIdentity(line.message, idMap);
+      break;
+    }
+    case 'compaction': {
+      line.firstKeptMessageId = idMap.get(line.firstKeptMessageId) ?? line.firstKeptMessageId;
+      line.compactedMessageIds = line.compactedMessageIds.map(
+        (id) => idMap.get(id) ?? id,
+      );
+      if (typeof line.previousCompactionId === 'string') {
+        line.previousCompactionId = idMap.get(line.previousCompactionId) ?? line.previousCompactionId;
+      }
+      break;
+    }
+    case 'rebase': {
+      for (const m of line.newMessages) {
+        if (typeof m.parentId === 'string') {
+          m.parentId = idMap.get(m.parentId) ?? m.parentId;
+        }
+        remapMessageIdentity(m.message, idMap);
+      }
+      break;
+    }
+    default:
+      // reasoning/tool_call/turn_started/system_context/rotation carry no
+      // message-id references.
+      break;
+  }
+}
+
+/** Remap `id` + threadMeta.replyToId on one AgentMessage (deep-copied). */
+function remapMessageIdentity(message: unknown, idMap: Map<string, string>): void {
+  if (typeof message !== 'object' || message === null) return;
+  const rec = message as { id?: unknown; metadata?: unknown };
+  if (typeof rec.id === 'string') {
+    rec.id = idMap.get(rec.id) ?? rec.id;
+  }
+  const metadata = rec.metadata as Record<string, unknown> | undefined;
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return;
+  const threadMeta = metadata[THREAD_METADATA_KEY] as
+    | Record<string, unknown>
+    | undefined;
+  if (!threadMeta || typeof threadMeta !== 'object' || Array.isArray(threadMeta)) {
+    return;
+  }
+  if (typeof threadMeta.replyToId === 'string') {
+    threadMeta.replyToId = idMap.get(threadMeta.replyToId) ?? threadMeta.replyToId;
+  }
+}
+
+/**
+ * Shift numeric `supersededUpToSeq` bounds by `offset` (continue-mode
+ * import): the bound refers to line positions in the source file, and
+ * after the append those rows sit `offset` lines later in the merged
+ * trace. Null/negative bounds are position-independent and untouched.
+ * Returns fresh copies only for modified lines.
+ */
+export function shiftRebaseBounds(
+  lines: RolloutLine[],
+  offset: number,
+): RolloutLine[] {
+  if (offset === 0) return lines;
+  return lines.map((line) => {
+    if (line.type !== 'rebase') return line;
+    const bound = line.supersededUpToSeq;
+    if (typeof bound !== 'number' || bound < 0) return line;
+    const copy = JSON.parse(JSON.stringify(line)) as RolloutLine;
+    (copy as { supersededUpToSeq?: number | null }).supersededUpToSeq = bound + offset;
+    return copy;
+  });
 }
