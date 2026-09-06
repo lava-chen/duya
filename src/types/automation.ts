@@ -41,6 +41,11 @@ export interface AutomationCron {
   lastRunAt: number | null;
   lastError: string | null;
   retryCount: number;
+  /**
+   * Bot binding (Plan 476 P2.3b): when set, this routine belongs to the
+   * named bot and fires into its resident session. Null = standalone cron.
+   */
+  agent?: string | null;
   /** Computed on read from (schedule, lastRunAt, now); not persisted. */
   nextRunAt: number | null;
   createdAt: number;
@@ -73,6 +78,8 @@ export interface CreateAutomationCronInput {
   concurrencyPolicy?: ConcurrencyPolicy;
   maxRetries?: number;
   enabled?: boolean;
+  /** Bot binding slug (Plan 476 P2.3b); omit for a standalone cron. */
+  agent?: string;
 }
 
 export interface UpdateAutomationCronInput {
@@ -84,6 +91,8 @@ export interface UpdateAutomationCronInput {
   concurrencyPolicy?: ConcurrencyPolicy;
   maxRetries?: number;
   enabled?: boolean;
+  /** Omitted fields (including the bot binding) are preserved on update. */
+  agent?: string | null;
 }
 
 export interface AutomationTemplate {

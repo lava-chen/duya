@@ -32,6 +32,7 @@ import { BOT_AVATAR_COLORS } from "@/lib/bot-avatar";
 import { BotModelField } from "../BotModelField";
 import { BotCharacterAvatar } from "../sidebar/BotCharacterAvatar";
 import type { BotContact } from "../sidebar/bot-contacts";
+import { BotRoutinesSection } from "./BotRoutinesSection";
 import type { PageTab } from "./registry";
 
 /** Narrow adapter: the panel only ever receives its own params shape. */
@@ -411,6 +412,8 @@ export function BotSettingsPanel({ tab }: { tab: PageTab; embedded: boolean }) {
       </div>
 
       <BotChannelsSection agentId={agentId} />
+
+      <BotRoutinesSection agentId={agentId} />
     </div>
   );
 }
