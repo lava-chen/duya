@@ -276,9 +276,25 @@
 /* Project selector row below the composer (welcome greeting layout) */
 .welcome-project-row {
   display: flex;
-  justify-content: center;
-  margin-top: -1rem;
+  justify-content: flex-start;
+  width: 100%;
+  max-width: 800px;
+  margin-top: -1.5rem;
   margin-bottom: 1.5rem;
+}
+
+/* Compact chip matching the composer's toolbar buttons (IconButton md = 28px). */
+.welcome-project-row .welcome-project-dropdown-trigger {
+  height: 28px;
+  padding: 0 0.5rem;
+  border-radius: 0.5rem;
+  font-size: 0.8rem;
+}
+
+/* Keep the dropdown panel edge-aligned with the left-anchored trigger. */
+.welcome-project-row .welcome-project-dropdown {
+  left: 0;
+  transform: none;
 }
 
 .welcome-recent {
