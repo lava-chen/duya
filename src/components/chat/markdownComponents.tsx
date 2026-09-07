@@ -47,6 +47,14 @@ export function rewriteMediaSrc(src: string): string {
   if (isWindowsAbsolutePath(src)) {
     return `duya-file:///${src.replace(/\\/g, '/')}`;
   }
+  // `file://` URLs (the one non-http scheme SendMessage validates for bot
+  // images) are blocked by Chromium on an http-origin renderer page, so the
+  // local file would never load. Map them to the app's `duya-file://` protocol
+  // so the Electron main process can serve the file. `file:///C:/...` and
+  // `file://C:/...` both resolve via the protocol handler's drive recovery.
+  if (/^file:/i.test(src)) {
+    return `duya-file:///${src.slice(5).replace(/^\/+/, '')}`;
+  }
   // Scheme-bearing URL (`http:`, `https:`, `data:`, `blob:`, ...) passes
   // through. Anything else that begins with `/` is a Unix absolute path.
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(src)) return src;

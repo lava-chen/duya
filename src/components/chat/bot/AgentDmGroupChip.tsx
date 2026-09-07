@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
-import { BotCharacterAvatar } from "@/components/layout/sidebar/BotCharacterAvatar";
+import {
+  BotCharacterAvatar,
+  botContactColorHex,
+} from "@/components/layout/sidebar/BotCharacterAvatar";
 import type { AgentDmChipGroup, AgentDmChipPeer } from "./agent-dm-pair";
 
 interface AgentDmGroupChipProps {
@@ -51,12 +54,34 @@ export function AgentDmGroupChip({ group, resolvePeer, onOpenPeer }: AgentDmGrou
   const primary = group.peers[0];
   const primaryIdentity = resolvePeer(primary.peerId);
   const primaryName = primaryIdentity.name || primary.peerName;
+  const primaryColor = botContactColorHex(primary.peerId, primaryIdentity.avatarColor);
 
-  const label = multi
-    ? t("bot.dm.chipMulti", { count: group.peers.length })
+  const direction = multi
+    ? "multi"
     : group.receivedCount === 0
-      ? t("bot.dm.chipSent", { name: primaryName })
-      : t("bot.dm.chipReceived", { name: primaryName });
+      ? "sent"
+      : "received";
+
+  // Only the bot name is an interactive anchor — the surrounding text
+  // (prefix / suffix) stays plain and carries no hover reaction. The message
+  // count is folded into the sentence for single peers ("向 X 发送了 N 条
+  // 消息") and shown separately only for a fan-out roster.
+  const count = group.count;
+  const prefix =
+    direction === "sent"
+      ? t("bot.dm.chipSentPrefix", { count })
+      : direction === "received"
+        ? t("bot.dm.chipReceivedPrefix", { count })
+        : "";
+  const suffix =
+    direction === "sent"
+      ? t("bot.dm.chipSentSuffix", { count })
+      : direction === "received"
+        ? t("bot.dm.chipReceivedSuffix", { count })
+        : "";
+  const peerText = multi
+    ? t("bot.dm.chipMulti", { count: group.peers.length })
+    : primaryName;
 
   const handleActivate = () => {
     if (multi) setPopoverOpen((open) => !open);
@@ -69,32 +94,51 @@ export function AgentDmGroupChip({ group, resolvePeer, onOpenPeer }: AgentDmGrou
         type="button"
         className="bot-chat-dm-chip"
         data-peer={multi ? undefined : primary.peerId}
-        data-direction={
-          multi ? "multi" : group.receivedCount === 0 ? "sent" : "received"
-        }
+        data-direction={direction}
         onClick={handleActivate}
         title={t("bot.dm.pairReadonly")}
       >
-        <span className="bot-chat-dm-chip__avatars" aria-hidden="true">
-          {group.peers.slice(0, 3).map((peer) => {
-            const identity = resolvePeer(peer.peerId);
-            return (
-              <span className="bot-chat-dm-chip__avatar" key={peer.peerId}>
-                <BotCharacterAvatar
-                  name={identity.name || peer.peerName}
-                  agentId={peer.peerId}
-                  avatarUrl={identity.avatarUrl}
-                  avatarColor={identity.avatarColor}
-                  size={16}
-                />
-              </span>
-            );
-          })}
+        {prefix && <span className="bot-chat-dm-chip__prefix">{prefix}</span>}
+        <span className="bot-chat-dm-chip__peer">
+          {multi ? (
+            <span className="bot-chat-dm-chip__avatars" aria-hidden="true">
+              {group.peers.slice(0, 3).map((peer) => {
+                const identity = resolvePeer(peer.peerId);
+                return (
+                  <span className="bot-chat-dm-chip__avatar" key={peer.peerId}>
+                    <BotCharacterAvatar
+                      name={identity.name || peer.peerName}
+                      agentId={peer.peerId}
+                      avatarUrl={identity.avatarUrl}
+                      avatarColor={identity.avatarColor}
+                      size={16}
+                    />
+                  </span>
+                );
+              })}
+            </span>
+          ) : (
+            <BotCharacterAvatar
+              name={primaryName}
+              agentId={primary.peerId}
+              avatarUrl={primaryIdentity.avatarUrl}
+              avatarColor={primaryIdentity.avatarColor}
+              size={16}
+            />
+          )}
+          <span
+            className="bot-chat-dm-chip__peer-text"
+            style={multi ? undefined : { color: primaryColor ?? undefined }}
+          >
+            {peerText}
+          </span>
         </span>
-        <span className="bot-chat-dm-chip__label">{label}</span>
-        <span className="bot-chat-dm-chip__count">
-          {t("bot.dm.chipCount", { count: group.count })}
-        </span>
+        {suffix && <span className="bot-chat-dm-chip__suffix">{suffix}</span>}
+        {multi && (
+          <span className="bot-chat-dm-chip__count">
+            {t("bot.dm.chipCount", { count: group.count })}
+          </span>
+        )}
       </button>
 
       {popoverOpen && (

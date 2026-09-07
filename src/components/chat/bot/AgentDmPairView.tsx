@@ -13,7 +13,7 @@ import React, { useEffect, useMemo, useRef } from "react";
 import { ArrowLeftIcon } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useBotContacts } from "@/components/layout/sidebar/use-bot-contacts";
-import { BotCharacterAvatar } from "@/components/layout/sidebar/BotCharacterAvatar";
+import { BotCharacterAvatar, botContactColorHex } from "@/components/layout/sidebar/BotCharacterAvatar";
 import { BotBubbleRow } from "../BotBubbleRow";
 import { resolveContactFor, type ContactSummaryLike } from "./agent-dm-contacts";
 import { useAgentDmPairMessages } from "./use-agent-dm-pair";
@@ -84,18 +84,18 @@ export function AgentDmPairView({
   const self = resolve(selfAgentId);
   const peer = resolve(peerId);
 
-  // Reuse the transcript row model: consecutive same-sender messages group,
-  // each entry renders as a standard BotBubbleRow (hover time / copy bar
-  // included). The current bot's sends sit on the user side (right).
+  // Every message (from either bot) sits on the LEFT with the author's
+  // avatar + name above its bubble; the sender only decides which identity to
+  // show, not the alignment. Rows reuse BotBubbleRow as a plain assistant row
+  // (left-aligned, Markdown, hover bar) wrapped in an author header.
   const rows = useMemo(
     () =>
-      entries.map((entry) => ({
-        entry,
-        role: (entry.senderAgentId === selfAgentId ? "user" : "assistant") as
-          | "user"
-          | "assistant",
-      })),
-    [entries, selfAgentId],
+      entries.map((entry) => {
+        const isSelf = entry.senderAgentId === selfAgentId;
+        const sender = isSelf ? self : peer;
+        return { entry, sender };
+      }),
+    [entries, self, peer],
   );
 
   return (
@@ -140,20 +140,37 @@ export function AgentDmPairView({
           {entries.length === 0 && !isLoading && (
             <div className="bot-dm-pair-view__empty">{t("bot.dm.pairEmpty")}</div>
           )}
-          {rows.map(({ entry, role }, index) => {
+          {rows.map(({ entry, sender }, index) => {
             const previous = rows[index - 1];
             const showDay =
               index === 0 ||
               dayKeyOf(previous.entry.timestamp) !== dayKeyOf(entry.timestamp);
             const row = (
-              <BotBubbleRow
-                key={entry.key}
-                role={role}
-                messageId={entry.key}
-                timestamp={entry.timestamp}
-                text={entry.text}
-                markdown
-              />
+              <div key={entry.key} className="bot-dm-pair-row">
+                <div className="bot-dm-pair-row__author">
+                  <BotCharacterAvatar
+                    name={sender.name}
+                    agentId={sender.agentId}
+                    avatarUrl={sender.avatarUrl}
+                    avatarColor={sender.avatarColor}
+                    size={20}
+                  />
+                  <span
+                    className="bot-dm-pair-row__name"
+                    style={{ color: botContactColorHex(sender.agentId, sender.avatarColor) ?? undefined }}
+                  >
+                    {sender.name}
+                  </span>
+                </div>
+                <div className="bot-dm-pair-row__body">
+                  <BotBubbleRow
+                    role="assistant"
+                    messageId={entry.key}
+                    timestamp={entry.timestamp}
+                    text={entry.text}
+                  />
+                </div>
+              </div>
             );
             return showDay ? (
               <React.Fragment key={entry.key}>

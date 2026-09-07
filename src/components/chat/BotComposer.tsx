@@ -29,7 +29,6 @@
 
 import React, { useRef, useCallback, useState } from 'react';
 import { ArrowUpIcon, PlusIcon, XIcon } from '@/components/icons';
-import { IconButton } from '@/components/ui/IconButton';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useBotDraft } from './bot/draft';
 import { useAttachments } from '@/hooks/useAttachments';
@@ -379,12 +378,11 @@ export function BotComposer({
         <div className="bot-chat-composer__actions">
           <div className="bot-chat-composer__actions-left">
             {/* Plus Button — opens the `@` context popup (添加附件 / modes),
-                reusing the session's plus button behavior. */}
-            <IconButton
-              variant="ghost"
-              shape="square"
-              size="md"
-              aria-label={t('common.settings') || 'Settings'}
+                reusing the session's plus button behavior. Same shape as the
+                send button but with a distinct accent color. */}
+            <button
+              type="button"
+              className={`bot-chat-composer__plus${plusActive ? ' active' : ''}`}
               data-plus-trigger
               onClick={() => {
                 if (plusActive) {
@@ -393,16 +391,12 @@ export function BotComposer({
                   openContextPopover();
                 }
               }}
-              className={`border ${
-                plusActive
-                  ? 'text-foreground bg-chip border-border'
-                  : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-accent/50'
-              }`}
               title={t('common.settings') || 'Settings'}
+              aria-label={t('common.settings') || 'Settings'}
               disabled={disabled || busy}
             >
               <PlusIcon size={16} />
-            </IconButton>
+            </button>
 
           </div>
 

@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { BotSendCard } from '../BotSendCard';
+import { BotSendCard, BotSendImageView } from '../BotSendCard';
 import type { Message } from '@/types/message';
 
 function cardMessage(overrides: Partial<Message>): Message {
@@ -119,7 +119,7 @@ describe('BotSendCard', () => {
     expect(screen.queryByDisplayValue(/slack/i)).toBeNull();
   });
 
-  it('renders image strip for text kind with images', () => {
+  it('renders caption only for text kind with images (images split into standalone bubbles)', () => {
     render(
       <BotSendCard
         message={cardMessage({
@@ -129,7 +129,31 @@ describe('BotSendCard', () => {
         })}
       />,
     );
-    const img = screen.getByAltText('chart');
-    expect(img?.getAttribute('src')).toBe('file:///tmp/a.png');
+    // The image is NOT embedded in the card — BotSendCard renders just the text;
+    // BotDirectChatView splits image(s) into their own standalone bubbles.
+    expect(screen.getByText('look at this')).toBeDefined();
+    expect(screen.queryByAltText('chart')).toBeNull();
+  });
+
+  it('renders an attachment that points at an image as a borderless preview', () => {
+    render(
+      <BotSendCard
+        message={cardMessage({
+          content: 'see attached',
+          sendMessageMeta: { url: 'file:///tmp/shot.png', alt: 'shot' },
+        })}
+      />,
+    );
+    // `file://` images are proxied through the app's `duya-file://` protocol.
+    const img = screen.getByAltText('shot');
+    expect(img?.getAttribute('src')).toBe('duya-file:///tmp/shot.png');
+  });
+
+  it('BotSendImageView opens a lightbox on click', () => {
+    render(
+      <BotSendImageView image={{ url: 'https://example.com/a.png', alt: 'pic' }} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'pic' }));
+    expect(screen.getByRole('dialog')).toBeDefined();
   });
 });

@@ -65,7 +65,7 @@ import {
   BotThumbsBadge,
   useMessageThumbsUp,
 } from "./BotMessageHoverBar";
-import { BotSendCard } from "./BotSendCard";
+import { BotSendCard, BotSendImageView } from "./BotSendCard";
 import { BotToolApprovalCard, type ToolApprovalStatus } from "./bot/BotToolApprovalCard";
 import type { TranslationKey } from "@/i18n";
 import { splitReplyContent, isReplyContent, type ReplyQuote } from "./bot/reply";
@@ -115,6 +115,9 @@ interface BubbleRow {
   dmGroup?: AgentDmChipGroup;
   /** Reply quote parsed back out of a composed user content (see bot/reply.ts). */
   replyPreview?: ReplyQuote | null;
+  /** Standalone image bubble (text-kind message with re-attached images is
+   *  split into one image row per image). */
+  image?: { url: string; alt?: string };
   /** True when the row renders as a BotBubbleRow (grouping candidate). */
   isBubbleRow?: boolean;
   /** Telegram-style position within a same-role bubble group (CSS keys
@@ -177,6 +180,8 @@ function StatusRow({ message }: { message: Message }) {
 function isSendCardMessage(message: Message): boolean {
   if (message.role !== "assistant") return false;
   const type = message.msgType;
+  // text with re-attached images is NOT a card here — it splits into a plain
+  // text bubble plus one standalone image bubble per image (see rows below).
   if (
     type === 'attachment' ||
     type === 'widget' ||
@@ -187,8 +192,7 @@ function isSendCardMessage(message: Message): boolean {
   ) {
     return true;
   }
-  // Plain text with re-attached images renders text + image strip.
-  return type === 'text' && !!message.sendMessageMeta?.images?.length;
+  return false;
 }
 
 function SendCardRow({
@@ -241,6 +245,46 @@ function SendCardRow({
         <BotMessageHoverBar
           timestamp={message.timestamp}
           textToCopy={typeof message.content === 'string' ? message.content : undefined}
+          messageId={message.id}
+          thumbsUp={thumbsUp}
+          onToggleThumbsUp={toggleThumbsUp}
+          onReply={onReply}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A standalone image bubble: the borderless preview in the assistant bubble
+ * chrome, grouped like any other bubble. Shares the hover bar + thumb actions.
+ */
+function BotImageRow({
+  message,
+  image,
+  onReply,
+  groupPosition,
+}: {
+  message: Message;
+  image: { url: string; alt?: string };
+  onReply?: () => void;
+  groupPosition?: BubbleRow["groupPosition"];
+}) {
+  const [thumbsUp, toggleThumbsUp] = useMessageThumbsUp(message.id);
+  const grouped = groupPosition === "middle" || groupPosition === "end";
+  return (
+    <div
+      className={`bot-chat-row${grouped ? " bot-chat-row--grouped" : ""} bot-chat-row--assistant`}
+      data-role="assistant"
+    >
+      <div className="bot-chat-row__stack">
+        <BotSendImageView
+            image={image}
+            groupPosition={groupPosition === "single" ? undefined : groupPosition}
+          />
+        {thumbsUp && <BotThumbsBadge onRemove={toggleThumbsUp} />}
+        <BotMessageHoverBar
+          timestamp={message.timestamp}
           messageId={message.id}
           thumbsUp={thumbsUp}
           onToggleThumbsUp={toggleThumbsUp}
@@ -561,23 +605,38 @@ export function BotDirectChatView({
           }
         }
         // A caption-less image message (text kind + sendMessageMeta.images)
-        // still renders — as a card with just the image strip.
-        const hasCardImages =
-          message.role === 'assistant' && !!message.sendMessageMeta?.images?.length;
-        if (!text.trim() && !hasCardImages) continue;
-        result.push({
-          message,
-          role: message.role,
-          text,
-          isGroupStart: previousRole !== message.role,
-          replyPreview,
-          // Card rows (Send cards, tool approvals) share the assistant-side
-          // bubble chrome, so they JOIN the same-role visual group — the
-          // tight spacing and seam corners flow through them (screenshot
-          // grouping treats cards and bubbles as one run).
-          isBubbleRow: true,
-        });
-        previousRole = message.role;
+        // still renders — each image as its own standalone bubble.
+        const attachedImages = message.role === 'assistant'
+          ? (message.sendMessageMeta?.images ?? []).map((img) => ({
+              url: img.url,
+              alt: img.alt,
+            }))
+          : undefined;
+        if (!text.trim() && !attachedImages?.length) continue;
+        if (text.trim()) {
+          result.push({
+            message,
+            role: message.role,
+            text,
+            isGroupStart: previousRole !== message.role,
+            replyPreview,
+            isBubbleRow: true,
+          });
+          previousRole = message.role;
+        }
+        // Re-attached images render as standalone image bubbles — never inside
+        // the text bubble.
+        for (const image of attachedImages ?? []) {
+          result.push({
+            message,
+            role: message.role,
+            text: "",
+            isGroupStart: previousRole !== message.role,
+            image,
+            isBubbleRow: true,
+          });
+          previousRole = message.role;
+        }
       } else {
         // Status row (tool/thinking/hook): does not reset bubble grouping —
         // an assistant text after its tool calls continues the same group.
@@ -651,6 +710,14 @@ export function BotDirectChatView({
           }
           onApprovalResolve={handleApprovalResolve}
           t={t}
+          groupPosition={groupOverride ?? row.groupPosition}
+        />
+      ) : row.image ? (
+        <BotImageRow
+          key={`${row.message.id}-${row.image.url}`}
+          message={row.message}
+          image={row.image}
+          onReply={() => handleReply(row)}
           groupPosition={groupOverride ?? row.groupPosition}
         />
       ) : row.isDmMarker && row.dmGroup ? (
@@ -851,7 +918,6 @@ export function BotDirectChatView({
           </span>
           <span className="bot-chat-header__name">{botName}</span>
         </button>
-        {busy && <small className="bot-chat-header__working">{t("bot.chat.working")}</small>}
       </header>
 
       {/* Scroll wrapper hosts the bottom fade overlay: the overlay must be

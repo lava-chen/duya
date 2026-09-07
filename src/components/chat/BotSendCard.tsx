@@ -19,8 +19,10 @@
  * degradation for minimal cards.
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { rewriteMediaSrc } from './markdownComponents';
+import { ToolImagePreviewModal } from './tools/ToolImagePreviewModal';
 import type { Message, SendMessageCardMeta } from '@/types/message';
 
 interface BotSendCardProps {
@@ -40,8 +42,15 @@ function urlLabel(url: string): string {
   }
 }
 
+// Common image extensions — an attachment whose url points at an image
+// renders as a borderless preview instead of a generic file chip.
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|svg)(?:\?|#|$)/i;
+
 function AttachmentBody({ meta }: { meta: SendMessageCardMeta }) {
   if (!meta.url) return null;
+  if (IMAGE_EXT_RE.test(meta.url)) {
+    return <BotSendImageView image={{ url: meta.url, alt: meta.alt }} />;
+  }
   return (
     <a
       className="bot-send-card__chip"
@@ -128,19 +137,50 @@ function SecretRequestBody({ meta }: { meta: SendMessageCardMeta }) {
   );
 }
 
-function ImageStrip({ images }: { images: Array<{ url: string; alt?: string }> }) {
+/**
+ * A standalone image bubble: the picture IS the bubble. The image is clipped
+ * directly to the assistant-bubble radius (including Telegram-style seam
+ * corners when grouped) instead of being nested inside a gray chat bubble, so
+ * the whole image fills the bubble shape. Local `file://` images are proxied
+ * through the `duya-file://` protocol (same as markdown images).
+ */
+export function BotSendImageView({
+  image,
+  groupPosition,
+}: {
+  image: { url: string; alt?: string };
+  groupPosition?: "start" | "middle" | "end";
+}) {
+  const [open, setOpen] = useState(false);
+  const resolvedSrc = rewriteMediaSrc(image.url);
+  const altText = image.alt || '';
+  const seamClass = groupPosition
+    ? ` bot-send-image-preview__img--group-${groupPosition}`
+    : '';
   return (
-    <div className="bot-send-card__images">
-      {images.map((image, i) => (
+    <>
+      <button
+        type="button"
+        className="bot-send-image-preview__button"
+        onClick={() => setOpen(true)}
+        aria-label={altText || 'Enlarge image'}
+      >
         <img
-          key={i}
-          className="bot-send-card__image"
-          src={image.url}
-          alt={image.alt || ''}
+          className={`bot-send-image-preview__img${seamClass}`}
+          src={resolvedSrc}
+          alt={altText}
           loading="lazy"
         />
-      ))}
-    </div>
+      </button>
+      <ToolImagePreviewModal
+        open={open}
+        onClose={() => setOpen(false)}
+        src={resolvedSrc}
+        title={altText || 'Image preview'}
+        body=""
+        hideTextPane
+      />
+    </>
   );
 }
 
@@ -161,7 +201,6 @@ export function BotSendCard({ message, onOptionClick }: BotSendCardProps) {
       )}
       {message.msgType === 'cursor-agent' && <CursorAgentBody meta={meta} />}
       {message.msgType === 'secret-request' && <SecretRequestBody meta={meta} />}
-      {meta.images && meta.images.length > 0 && <ImageStrip images={meta.images} />}
     </div>
   );
 }

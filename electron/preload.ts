@@ -724,6 +724,10 @@ export interface BotTurnAPI {
   sendTurn: (payload: { agentId: string; text: string; clientMsgId?: string }) => Promise<{ action: 'start' | 'queued'; messageId: string }>;
   claimScheduledTurn: (payload: { sessionId: string; messageId: string }) => Promise<boolean>;
   cancelQueuedTurn: (payload: { sessionId: string; messageId: string }) => Promise<boolean>;
+  /** Kickstart a freshly created bot: hidden first-turn wake that makes the
+   *  bot open the conversation with a greeting. Resolves true when the run
+   *  produced a reply. */
+  kickstart: (payload: { agentId: string }) => Promise<boolean>;
   onScheduledTurn: (callback: (payload: BotTurnPush) => void) => () => void;
 }
 
@@ -2500,6 +2504,7 @@ const electronAPI: ElectronAPI = {
     sendTurn: (payload) => ipcRenderer.invoke('bot:sendTurn', payload),
     claimScheduledTurn: (payload) => ipcRenderer.invoke('bot:claimScheduledTurn', payload),
     cancelQueuedTurn: (payload) => ipcRenderer.invoke('bot:cancelQueuedTurn', payload),
+    kickstart: (payload) => ipcRenderer.invoke('bot:kickstart', payload),
     onScheduledTurn: (callback: (payload: BotTurnPush) => void) => {
       const wrappedHandler = (_event: Electron.IpcRendererEvent, data: BotTurnPush) => callback(data);
       ipcRenderer.on('bot:scheduled-turn', wrappedHandler);

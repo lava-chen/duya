@@ -23,6 +23,8 @@ import {
   QuestionIcon,
   ChannelIcon,
   PlugIcon,
+  EyeIcon,
+  EyeSlashIcon,
   FileIcon,
   FolderOpenIcon,
   DotsThreeIcon,
@@ -67,10 +69,9 @@ import {
   type BotSectionDef,
   type BotSectionPartition,
 } from "./sidebar/bot-contacts";
-import { CreateBotDialog } from "./CreateBotDialog";
 import { EditBotDialog } from "./EditBotDialog";
 import { GroupSettingsDialog } from "@/components/chat/bot/GroupSettingsDialog";
-import { deleteConfigAgent } from "@/lib/agent-profile-ipc";
+import { createConfigAgent, deleteConfigAgent } from "@/lib/agent-profile-ipc";
 
 type ThemeMode = "light" | "dark";
 
@@ -144,8 +145,6 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     // Plan 471 v7: replaced the old `isNameProjectDialogOpen` + name-only
     // dialog with `CreateProjectDialog` (project name + optional folder).
     const [isCreateProjectDialogOpen, setIsCreateProjectDialogOpen] = useState(false);
-    // Plan 483: grok-style bot management sidebar
-    const [isCreateBotDialogOpen, setIsCreateBotDialogOpen] = useState(false);
     const [editBotContact, setEditBotContact] = useState<BotContact | null>(null);
     const [showHiddenBots, setShowHiddenBots] = useState(false);
     // Sidebar top tab switcher (work / bots) — defaults to bots.
@@ -479,6 +478,34 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       },
       [setActiveThread, setCurrentView],
     );
+
+    // Grok parity quick-create: the sidebar "+" mints a bot directly (no
+    // dialog), opens its chat shell, and kickstarts a hidden first-turn so
+    // the bot greets the user. The id is minted by the MAIN process — the
+    // actual id comes back from createConfigAgent, so navigation never
+    // guesses it.
+    const handleQuickCreateBot = useCallback(async () => {
+      try {
+        const { id: agentId } = await createConfigAgent("", {
+          name: t("bot.create.defaultName"),
+          description: "",
+          avatarColor: "blue",
+        });
+        handleOpenBotById(agentId);
+        // Refresh the contact list (NOT a gate for navigation — the chat
+        // shell resolves the bot by id; the contact row arrives with the
+        // reload and lets the header show name/avatar).
+        void reloadBots();
+        // Hidden first-turn wake: the bot opens the conversation with a
+        // greeting. Best-effort — a slow/absent agent server must not
+        // block navigation.
+        void window.electronAPI?.botTurn
+          ?.kickstart({ agentId })
+          .catch(() => undefined);
+      } catch (err) {
+        console.error("[AppSidebar] Failed to quick-create bot:", err);
+      }
+    }, [handleOpenBotById, reloadBots, t]);
 
     // Plan 478: open a shared room's transcript view (`room:<roomId>`).
     const handleOpenRoom = useCallback(
@@ -951,7 +978,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                   hiddenCount={hiddenBots.length}
                   showHidden={showHiddenBots}
                   onToggleHidden={() => setShowHiddenBots((prev) => !prev)}
-                  onCreateBot={() => setIsCreateBotDialogOpen(true)}
+                  onCreateBot={() => void handleQuickCreateBot()}
                   onCreateGroup={() => setBotGroupDialog({ mode: "new" })}
                 />
               </div>
@@ -1188,7 +1215,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
               ) : (
                 <button
                   className="sidebar-section-create"
-                  onClick={() => setIsCreateBotDialogOpen(true)}
+                  onClick={() => void handleQuickCreateBot()}
                 >
                   <PlusIcon size={14} />
                   <span>{t("bot.create.title")}</span>
@@ -1393,48 +1420,45 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           <button
             type="button"
             className="sidebar-settings"
-            onClick={enterSettings}
+            onClick={() => setCurrentView('extensions')}
           >
             <span className="nav-icon">
-              <GearSixIcon size={16} />
+              <PlugIcon size={16} />
             </span>
-            <span>{t('common.settings')}</span>
+            <span>{t('nav.extensions')}</span>
           </button>
 
-          <button
-            type="button"
-            className="theme-toggle"
-            onClick={toggleTheme}
-            aria-label={t('sidebar.toggleThemeAria')}
-          >
-            {resolvedTheme === "dark" ? (
-              <SunIcon size={16} />
-            ) : (
-              <MoonStarsIcon size={16} />
-            )}
-          </button>
+          <div className="sidebar-bottom-row">
+            <button
+              type="button"
+              className="sidebar-settings"
+              onClick={enterSettings}
+            >
+              <span className="nav-icon">
+                <GearSixIcon size={16} />
+              </span>
+              <span>{t('common.settings')}</span>
+            </button>
+
+            <button
+              type="button"
+              className="theme-toggle"
+              onClick={toggleTheme}
+              aria-label={t('sidebar.toggleThemeAria')}
+            >
+              {resolvedTheme === "dark" ? (
+                <SunIcon size={16} />
+              ) : (
+                <MoonStarsIcon size={16} />
+              )}
+            </button>
+          </div>
         </div>
 
         <CreateProjectDialog
           isOpen={isCreateProjectDialogOpen}
           onCancel={() => setIsCreateProjectDialogOpen(false)}
           onConfirm={handleCreateProjectConfirm}
-        />
-        <CreateBotDialog
-          isOpen={isCreateBotDialogOpen}
-          onCancel={() => setIsCreateBotDialogOpen(false)}
-          onCreated={(agentId) => {
-            // Plan 491 P2.5: navigate to the new bot's empty chat shell
-            // immediately after creation. The await on reloadBots
-            // refreshes the contact list for subsequent renders (it is
-            // NOT a gate for navigation — handleOpenBotById reads the
-            // latest threads from the store directly), but we navigate
-            // first so the user does not see a flash of "still on the
-            // previous view" while the network round-trip completes.
-            handleOpenBotById(agentId);
-            setIsCreateBotDialogOpen(false);
-            void reloadBots();
-          }}
         />
 
         {/* Plan 478: shared-room create/edit dialog (groups.toml write side). */}
@@ -1660,6 +1684,18 @@ function BotSectionActions({
       >
         <PlusIcon size={14} />
       </button>
+      {hiddenCount > 0 && (
+        <button
+          type="button"
+          className={`sidebar-section-action${showHidden ? " active" : ""}`}
+          onClick={onToggleHidden}
+          title={showHidden ? t('bot.actions.hideFromList') : t('bot.actions.showHidden', { count: hiddenCount })}
+          aria-label={showHidden ? t('bot.actions.hideFromList') : t('bot.actions.showHidden', { count: hiddenCount })}
+          aria-pressed={showHidden}
+        >
+          {showHidden ? <EyeSlashIcon size={14} /> : <EyeIcon size={14} />}
+        </button>
+      )}
       <button
         type="button"
         className="sidebar-section-action"

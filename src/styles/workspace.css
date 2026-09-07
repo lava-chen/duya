@@ -289,7 +289,6 @@
 }
 
 .resize-handle-bar {
-  width: 2px;
   height: 40px;
   background: var(--border);
   border-radius: 1px;
@@ -655,6 +654,10 @@ html.compact .chat-header-inner {
 }
 
 html.compact .app-content:has(.chat-view) {
+  padding: 0;
+}
+
+html.compact .app-content:has(.bot-chat-view) {
   padding: 0;
 }
 

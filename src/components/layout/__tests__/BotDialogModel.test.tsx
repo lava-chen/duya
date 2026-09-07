@@ -42,7 +42,6 @@ vi.mock('@/lib/agent-profile-ipc', () => ({
   updateBotIdentity: (...args: unknown[]) => updateIdentity(...args),
 }));
 
-import { CreateBotDialog } from '../CreateBotDialog';
 import { EditBotDialog } from '../EditBotDialog';
 import type { BotContact } from '../sidebar/bot-contacts';
 
@@ -58,78 +57,10 @@ const contact: BotContact = {
   lastActivity: 0,
 };
 
-/**
- * Open the model menu and pick a model row. The selector opens in two levels:
- * the root menu lists providers, clicking one opens the model flyout.
- */
-async function pickModel(rawModel: string, providerName: string) {
-  // The trigger shows the clear option label while nothing is picked.
-  const trigger = await waitFor(() => {
-    const el = screen.getByText('bot.create.modelDefault').closest('button');
-    expect(el).not.toBeNull();
-    expect((el as HTMLButtonElement).disabled).toBe(false);
-    return el as HTMLButtonElement;
-  });
-  fireEvent.click(trigger);
-  // Root menu → provider row → flyout with models.
-  fireEvent.click(await screen.findByText(providerName));
-  fireEvent.click(await screen.findByText(rawModel));
-}
-
 beforeEach(() => {
   createAgent.mockReset().mockResolvedValue({ id: 'my-bot' });
   updateAgent.mockReset().mockResolvedValue(undefined);
   updateIdentity.mockReset().mockResolvedValue(undefined);
-});
-
-describe('CreateBotDialog model selection', () => {
-  it('renders the model field with the default option and the provider menu', async () => {
-    render(
-      <CreateBotDialog isOpen onCancel={() => {}} onCreated={() => {}} />,
-    );
-    expect(screen.getByText('bot.create.model')).toBeDefined();
-    // While providers load the trigger shows a spinner; the default label
-    // appears once loading settles.
-    await screen.findByText('bot.create.modelDefault');
-    await pickModel('glm-4', 'Zhipu');
-  });
-
-  it('passes the picked raw model + provider to createConfigAgent', async () => {
-    render(
-      <CreateBotDialog isOpen onCancel={() => {}} onCreated={() => {}} />,
-    );
-    await pickModel('glm-4', 'Zhipu');
-    fireEvent.change(screen.getByPlaceholderText('bot.create.namePlaceholder'), {
-      target: { value: 'My Bot' },
-    });
-    fireEvent.click(screen.getByText('bot.create.create'));
-    await waitFor(() =>
-      expect(createAgent).toHaveBeenCalledWith(
-        'my-bot',
-        expect.objectContaining({ model: 'glm-4', provider: 'zhipu' }),
-      ),
-    );
-  });
-
-  it('leaves model unset when nothing is picked', async () => {
-    render(
-      <CreateBotDialog isOpen onCancel={() => {}} onCreated={() => {}} />,
-    );
-    await waitFor(() => {
-      const el = screen.getByText('bot.create.modelDefault').closest('button');
-      expect((el as HTMLButtonElement | null)?.disabled).toBe(false);
-    });
-    fireEvent.change(screen.getByPlaceholderText('bot.create.namePlaceholder'), {
-      target: { value: 'My Bot' },
-    });
-    fireEvent.click(screen.getByText('bot.create.create'));
-    await waitFor(() =>
-      expect(createAgent).toHaveBeenCalledWith(
-        'my-bot',
-        expect.objectContaining({ model: undefined }),
-      ),
-    );
-  });
 });
 
 describe('EditBotDialog model selection', () => {

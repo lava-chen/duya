@@ -7,6 +7,7 @@ import { useBashTasks } from "@/hooks/useBashTasks";
 import { useConversationStore } from "@/stores/conversation-store";
 import { setTaskDrawerOpen, useTaskDrawerOpen } from "./task-drawer-store";
 import { useTranslation } from "@/hooks/useTranslation";
+import { resolveChatMode } from "@/components/chat/bot/chat-mode";
 
 export function TaskDrawerToggle() {
   const { t } = useTranslation();
@@ -22,7 +23,11 @@ export function TaskDrawerToggle() {
     }
   }, [taskDrawerOpen, workspaceExpanded]);
 
+  // The task drawer is a workspace-chat (and code-review) affordance.
+  // In bot-direct / room chats — Telegram-style surfaces that never mount
+  // the Taskln panel — hide the floating drawer toggle.
   if (currentView !== "chat" || !activeThreadId || workspaceExpanded) return null;
+  if (resolveChatMode(activeThreadId) !== 'workspace') return null;
 
   const position = {
     right: panelOpen

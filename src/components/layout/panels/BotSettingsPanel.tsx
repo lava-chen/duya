@@ -39,9 +39,8 @@ import {
   cancelBotChannelQr,
   type BotChannelManifest,
 } from "@/lib/bot-channels-ipc";
-import { BOT_AVATAR_COLORS } from "@/lib/bot-avatar";
 import { BotModelSelectorField } from "../BotModelSelectorField";
-import { BotCharacterAvatar } from "../sidebar/BotCharacterAvatar";
+import { BotAvatarPicker } from "../BotAvatarPicker";
 import type { BotContact } from "../sidebar/bot-contacts";
 import { BotRoutinesSection } from "./BotRoutinesSection";
 import type { PageTab } from "./registry";
@@ -478,6 +477,7 @@ export function BotSettingsPanel({ tab }: { tab: PageTab; embedded: boolean }) {
       title === (contact.title ?? "") &&
       description === (contact.description ?? "") &&
       color === (contact.avatarColor ?? "blue") &&
+      emoji === (contact.avatarEmoji ?? "") &&
       model === (contact.model ?? "") &&
       provider === (contact.provider ?? "");
     if (unchanged || !name.trim()) return;
@@ -563,16 +563,6 @@ export function BotSettingsPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           }}
         />
 
-        <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>
-          {t("bot.create.emoji")}
-        </div>
-        <Input
-          value={emoji}
-          onChange={(e) => setEmoji(e.target.value)}
-          placeholder={t("bot.create.emojiPlaceholder")}
-          className="w-full mb-3"
-        />
-
         <BotModelSelectorField
           value={selectorModelId}
           groups={modelGroups}
@@ -584,14 +574,15 @@ export function BotSettingsPanel({ tab }: { tab: PageTab; embedded: boolean }) {
         <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>
           {t("bot.create.avatar")}
         </div>
-        <div className="flex items-center gap-3 mb-3">
-          <BotCharacterAvatar
+        {/* Combined emoji + background-color picker (Notion page-icon style). */}
+        <div className="flex items-center gap-3 mb-4">
+          <BotAvatarPicker
             name={name || "?"}
             agentId={agentId}
-            avatarUrl={avatarUrl}
-            avatarColor={color}
-            avatarEmoji={emoji}
-            size={34}
+            emoji={emoji}
+            onEmojiChange={setEmoji}
+            color={color}
+            onColorChange={setColor}
           />
           <div className="flex items-center gap-2">
             <Button variant="secondary" size="sm" disabled={avatarBusy} onClick={() => void uploadAvatar()}>
@@ -604,27 +595,6 @@ export function BotSettingsPanel({ tab }: { tab: PageTab; embedded: boolean }) {
             )}
           </div>
         </div>
-        {!avatarUrl && (
-          <div className="flex flex-wrap gap-1.5 mb-4">
-            {BOT_AVATAR_COLORS.map((c) => (
-              <button
-                key={c.id}
-                type="button"
-                onClick={() => setColor(c.id)}
-                aria-label={c.label}
-                title={c.label}
-                className="rounded-full transition-transform"
-                style={{
-                  width: 18,
-                  height: 18,
-                  backgroundColor: c.value,
-                  outline: color === c.id ? "2px solid var(--text)" : "none",
-                  outlineOffset: 1,
-                }}
-              />
-            ))}
-          </div>
-        )}
 
         {liveError && (
           <div className="text-sm" style={{ color: "var(--error, #ef4444)" }}>

@@ -334,7 +334,8 @@
 }
 
 /* Chat page: no padding, flex child handles its own scroll */
-.app-content:has(.chat-view) {
+.app-content:has(.chat-view),
+.app-content:has(.bot-chat-view) {
   padding: 0;
 }
 

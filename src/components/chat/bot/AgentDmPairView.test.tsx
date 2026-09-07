@@ -118,9 +118,15 @@ describe('AgentDmPairView', () => {
     // Raw DM bodies render via the reused BotBubbleRow.
     expect(container.textContent).toContain('同步一下分工');
     expect(container.textContent).toContain('收到,我是原型师');
-    // Sender sides: self right (user role), peer left (assistant role).
-    expect(container.querySelector('.bot-chat-row--user')).not.toBeNull();
-    expect(container.querySelector('.bot-chat-row--assistant')).not.toBeNull();
+    // Left-aligned author rows for BOTH bots, each with a name label; the
+    // identity (avatar/name) marks who sent it, alignment is always left.
+    expect(container.querySelectorAll('.bot-dm-pair-row').length).toBe(2);
+    expect(container.querySelectorAll('.bot-dm-pair-row__name').length).toBe(2);
+    expect(container.textContent).toContain('幕僚长');
+    expect(container.textContent).toContain('原型师');
+    // Both messages render as plain assistant bubbles (no user / contrast row).
+    expect(container.querySelector('.bot-chat-row--user')).toBeNull();
+    expect(container.querySelectorAll('.bot-chat-row--assistant').length).toBe(2);
     // Read-only footer with count.
     expect(container.textContent).toContain('bot.dm.pairReadonly');
     expect(container.textContent).toContain('bot.dm.pairCount 2');
