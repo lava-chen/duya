@@ -352,7 +352,7 @@ export function BotDirectChatView({
   // the shared logical-send dedupe (persisted rows win). When the IPC is
   // not wired (web build / jsdom tests) the hook bails out empty and the
   // prop transcript renders as-is.
-  const { messages: persistedTranscript } = useBotDirectTranscript(sessionId);
+  const { messages: persistedTranscript, usageMessages } = useBotDirectTranscript(sessionId);
   const ipcWired =
     typeof window !== "undefined" &&
     !!window.electronAPI?.message?.botDirectGetTranscript;
@@ -954,10 +954,10 @@ export function BotDirectChatView({
         replyPreview={replyTarget}
         onClearReply={() => setReplyTarget(null)}
         contextRing={
-          messages.length > 0 ? (
+          usageMessages.length > 0 ? (
             <ContextUsageRing
               variant="popup"
-              messages={messages}
+              messages={usageMessages}
               sessionId={sessionId}
               modelName={contact?.model}
             />

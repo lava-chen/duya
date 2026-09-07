@@ -24,7 +24,7 @@
  * cannot regress by a future refactor of conversation-store.
  */
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { getBotDirectTranscriptIPC, dbMessageToMessage, type DbMessage as DbMessageRow, type Message as IpcMessage } from '@/lib/ipc-client';
+import { getMessagesBySessionIPC, dbMessageToMessage, type DbMessage as DbMessageRow, type Message as IpcMessage } from '@/lib/ipc-client';
 import type { Message } from '@/types/message';
 
 const BOT_DIRECT_VISIBLE_SOURCES: ReadonlySet<string> = new Set([
@@ -77,7 +77,16 @@ function ipcMessageToUiMessage(m: IpcMessage): Message {
 }
 
 export interface UseBotDirectTranscriptResult {
+  /** Source-filtered display transcript (send_message | user | agent_dm). */
   messages: Message[];
+  /**
+   * Full session transcript (all roles/sources) used ONLY to feed the
+   * context-usage ring. The ring needs the token-usage anchors that live on
+   * bot-private assistant (`scratchpad`) messages, which the display
+   * projection intentionally hides — so the ring scans these instead of
+   * `messages`. Never rendered to the user.
+   */
+  usageMessages: Message[];
   isLoading: boolean;
   error: string | null;
   refresh: (afterSeq?: number) => Promise<void>;
@@ -88,6 +97,7 @@ export function useBotDirectTranscript(
   sessionId: string | null
 ): UseBotDirectTranscriptResult {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [usageMessages, setUsageMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Plan 491 P1.2: lastSeq cursor for windowed replay on reconnection
@@ -99,24 +109,23 @@ export function useBotDirectTranscript(
   const refresh = useCallback(async (afterSeq?: number) => {
     if (!sessionId) {
       setMessages([]);
+      setUsageMessages([]);
       setLastSeq(null);
       return;
     }
     // Bail out when IPC is not wired (jsdom test runner, web build).
     // The hook's contract stays observable: callers can still pass
     // `messages` through their own prop and ignore the hook output.
-    if (!window.electronAPI?.message?.botDirectGetTranscript) return;
+    if (!window.electronAPI?.message?.getBySession) return;
     setIsLoading(true);
     setError(null);
     try {
-      const result = await getBotDirectTranscriptIPC(sessionId);
-      // Defense in depth: even if the server ever returned a non-visible
-      // source, drop it here so the renderer surface is source-safe too.
-      setMessages(
-        result.messages
-          .map(ipcMessageToUiMessage)
-          .filter((m) => isBotDirectVisible(m.source)),
-      );
+      const full = (await getMessagesBySessionIPC(sessionId)).map(ipcMessageToUiMessage);
+      // `usageMessages` = raw full transcript for context-ring scanning.
+      setUsageMessages(full);
+      // Defense in depth: drop non-visible sources so the renderer
+      // surface stays source-safe too.
+      setMessages(full.filter((m) => isBotDirectVisible(m.source)));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
@@ -143,6 +152,7 @@ export function useBotDirectTranscript(
     if (!onMessageNew) return;
     const unsubscribe = onMessageNew((payload: { sessionId: string; messages: unknown[] }) => {
       if (payload.sessionId !== sessionId) return;
+      const incomingAll: Message[] = [];
       const incoming: Message[] = [];
       for (const raw of payload.messages) {
         if (!raw || typeof raw !== 'object') continue;
@@ -151,10 +161,10 @@ export function useBotDirectTranscript(
         // otherwise `createdAt` (and every other mapped field) is
         // undefined and the row later crashes Intl date separators.
         const m = ipcMessageToUiMessage(dbMessageToMessage(raw as DbMessageRow));
-        if (!isBotDirectVisible(m.source)) continue;
-        incoming.push(m);
+        incomingAll.push(m);
+        if (isBotDirectVisible(m.source)) incoming.push(m);
       }
-      if (incoming.length === 0) return;
+      if (incomingAll.length === 0) return;
       // Plan 491 P1.2: track lastSeq from incoming messages. The IPC wire
       // shape carries `seqIndex`; older `seq` alias kept for safety.
       let maxSeq = lastSeq ?? 0;
@@ -167,6 +177,20 @@ export function useBotDirectTranscript(
       if (maxSeq !== (lastSeq ?? 0)) {
         setLastSeq(maxSeq);
       }
+      // `usageMessages` absorbs ALL rows so the context-usage ring keeps its
+      // token-usage anchors (bot-private scratchpad rows carry the usage).
+      setUsageMessages((current) => {
+        const seen = new Set(current.map((cm) => cm.id));
+        const next = [...current];
+        let appended = 0;
+        for (const m of incomingAll) {
+          if (m.id && seen.has(m.id)) continue;
+          seen.add(m.id);
+          next.push(m);
+          appended += 1;
+        }
+        return appended === 0 ? current : next;
+      });
       setMessages((current) => {
         const seen = new Set(current.map((cm) => cm.id));
         const next = [...current];
@@ -182,5 +206,5 @@ export function useBotDirectTranscript(
     return unsubscribe;
   }, [sessionId]);
 
-  return { messages, isLoading, error, refresh, lastSeq };
+  return { messages, usageMessages, isLoading, error, refresh, lastSeq };
 }

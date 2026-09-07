@@ -317,7 +317,7 @@ describe('BotDirectChatView', () => {
       },
     ]);
     (window as unknown as { electronAPI: unknown }).electronAPI = {
-      message: { botDirectGetTranscript: fetchTranscript },
+      message: { getBySession: fetchTranscript },
       // Plan 497-era view also lists persisted tool approvals on mount.
       toolApproval: { listBySession: () => Promise.resolve([]), onUpdated: () => () => {} },
       onMessageNew: () => () => {},
