@@ -1331,6 +1331,7 @@ const en = {
   'sidebar.tab.work': 'Work',
   'sidebar.tab.bots': 'Bots',
   'sidebar.search.placeholder': 'Search',
+  'sidebar.create.title': 'Create',
   // Plan 478 — shared rooms (群聊) group
   'sidebar.section.rooms': 'Rooms',
   'room.create.title': 'New group',

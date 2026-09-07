@@ -289,6 +289,34 @@ describe('BotDirectChatView', () => {
     expect(container.querySelectorAll('.bot-chat-date-separator').length).toBe(1);
   });
 
+  it('inserts a within-day time separator for a gap of 5+ minutes', () => {
+    const noon = new Date();
+    noon.setHours(12, 0, 0, 0);
+    const later = new Date(noon.getTime() + 10 * 60 * 1000); // 12:10, same day
+    const messages: Message[] = [
+      msg({ id: 't1', role: 'user', content: 'a', timestamp: noon.getTime() }),
+      msg({ id: 't2', role: 'assistant', content: 'b', timestamp: later.getTime() }),
+    ];
+    const { container } = render(
+      <BotDirectChatView {...baseProps} messages={messages} />,
+    );
+    expect(container.querySelectorAll('.bot-chat-date-separator').length).toBe(1);
+    expect(container.querySelectorAll('.bot-chat-time-separator').length).toBe(1);
+  });
+
+  it('does not insert a within-day time separator for a sub-5-minute gap', () => {
+    const noon = new Date();
+    noon.setHours(12, 0, 0, 0);
+    const messages: Message[] = [
+      msg({ id: 'u1', role: 'user', content: 'a', timestamp: noon.getTime() }),
+      msg({ id: 'u2', role: 'assistant', content: 'b', timestamp: noon.getTime() + 60 * 1000 }),
+    ];
+    const { container } = render(
+      <BotDirectChatView {...baseProps} messages={messages} />,
+    );
+    expect(container.querySelectorAll('.bot-chat-time-separator').length).toBe(0);
+  });
+
   it('renders tool_use messages as status chips, not bubbles', () => {
     const messages: Message[] = [
       msg({ id: 'm1', role: 'assistant', content: '', msgType: 'tool_use', toolName: 'Read' }),

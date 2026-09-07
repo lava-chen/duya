@@ -40,7 +40,8 @@ import {
   type BotChannelManifest,
 } from "@/lib/bot-channels-ipc";
 import { BotModelSelectorField } from "../BotModelSelectorField";
-import { BotAvatarPicker } from "../BotAvatarPicker";
+import { BotAvatarEditor } from "../BotAvatarEditor";
+import { AutoResizeTextarea } from "../../ui/AutoResizeTextarea";
 import type { BotContact } from "../sidebar/bot-contacts";
 import { BotRoutinesSection } from "./BotRoutinesSection";
 import type { PageTab } from "./registry";
@@ -526,7 +527,29 @@ export function BotSettingsPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           </span>
         </div>
 
-        <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>
+        {/* Avatar editor on top (upload / emoji / color), then identity fields. */}
+        <div className="mb-4">
+          <BotAvatarEditor
+            name={name || "?"}
+            agentId={agentId}
+            emoji={emoji}
+            onEmojiChange={setEmoji}
+            color={color}
+            onColorChange={setColor}
+            avatarUrl={avatarUrl}
+            avatarBusy={avatarBusy}
+            onUpload={() => void uploadAvatar()}
+          />
+          {avatarUrl && (
+            <div className="mt-2 flex justify-center">
+              <Button variant="secondary" size="sm" disabled={avatarBusy} onClick={() => void removeAvatar()}>
+                {t("bot.avatar.remove")}
+              </Button>
+            </div>
+          )}
+        </div>
+
+        <div className="mb-1" style={{ color: "var(--text-muted)", fontSize: 13 }}>
           {t("bot.create.name")}
         </div>
         <Input
@@ -534,31 +557,31 @@ export function BotSettingsPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder={t("bot.create.namePlaceholder")}
-          className="w-full mb-3"
+          className="w-full mb-3 h-11"
         />
 
-        <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>
+        <div className="mb-1" style={{ color: "var(--text-muted)", fontSize: 13 }}>
           {t("bot.create.roleTitle")}
         </div>
         <Input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder={t("bot.create.roleTitlePlaceholder")}
-          className="w-full mb-3"
+          className="w-full mb-3 h-11"
         />
 
-        <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>
+        <div className="mb-1" style={{ color: "var(--text-muted)", fontSize: 13 }}>
           {t("bot.create.description")}
         </div>
-        <textarea
+        <AutoResizeTextarea
           value={description}
-          onChange={(e) => setDescription(e.target.value)}
+          onChange={setDescription}
+          maxHeight={160}
           placeholder={t("bot.create.descriptionPlaceholder")}
-          rows={2}
-          className="w-full mb-4 rounded-lg px-3 py-2 text-sm resize-none"
+          className="w-full mb-4 rounded-lg border px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-accent/50"
           style={{
             background: "var(--surface)",
-            border: "1px solid var(--border)",
+            borderColor: "var(--border)",
             color: "var(--text)",
           }}
         />
@@ -570,31 +593,6 @@ export function BotSettingsPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           onChange={handleModelSelect}
           showManageProviders
         />
-
-        <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>
-          {t("bot.create.avatar")}
-        </div>
-        {/* Combined emoji + background-color picker (Notion page-icon style). */}
-        <div className="flex items-center gap-3 mb-4">
-          <BotAvatarPicker
-            name={name || "?"}
-            agentId={agentId}
-            emoji={emoji}
-            onEmojiChange={setEmoji}
-            color={color}
-            onColorChange={setColor}
-          />
-          <div className="flex items-center gap-2">
-            <Button variant="secondary" size="sm" disabled={avatarBusy} onClick={() => void uploadAvatar()}>
-              {avatarUrl ? t("bot.avatar.replace") : t("bot.avatar.upload")}
-            </Button>
-            {avatarUrl && (
-              <Button variant="secondary" size="sm" disabled={avatarBusy} onClick={() => void removeAvatar()}>
-                {t("bot.avatar.remove")}
-              </Button>
-            )}
-          </div>
-        </div>
 
         {liveError && (
           <div className="text-sm" style={{ color: "var(--error, #ef4444)" }}>

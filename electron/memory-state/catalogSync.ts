@@ -676,8 +676,12 @@ function markRolloutDeleted(
     | undefined;
 
   if (!existing) {
+    // Expected for bot sessions (Plan 479: they never materialize a
+    // rollout_catalog row) and for never-synced sessions that are gone.
+    // No-op — keep only as DEBUG so the 60s catalog sync doesn't flood
+    // the default WARN+ log line-per-bot-session.
     const logger = getLogger();
-    logger.warn(
+    logger.debug(
       'memory-state: cannot tombstone missing rollout (no existing row)',
       { sessionId },
       LogComponent.DB

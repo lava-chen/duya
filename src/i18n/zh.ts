@@ -1319,6 +1319,7 @@ const zh: Record<TranslationKey, string> = {
   'sidebar.tab.work': '工作',
   'sidebar.tab.bots': 'Bots',
   'sidebar.search.placeholder': '搜索',
+  'sidebar.create.title': '新建',
   // Plan 478 — shared rooms (群聊) group
   'sidebar.section.rooms': '群聊',
   'room.create.title': '新建群聊',
