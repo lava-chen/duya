@@ -180,6 +180,25 @@ export interface ChannelReaction {
 }
 
 /**
+ * A media/file attachment carried by an inbound channel message (plan 507).
+ * Adapters download the payload; the electron main process persists it to a
+ * stable path under `agents/<ownerId>/attachments/inbound/<platform>/` and
+ * records it here so the wake prompt can point the bot at the file.
+ */
+export interface ChannelInboundAttachment {
+  /** Original file name from the platform (sanitized for display). */
+  readonly name: string;
+  /** Absolute path of the persisted copy. Bot tools (Read/Bash) use this. */
+  readonly path: string;
+  /** Best-effort MIME type from extension/magic detection. */
+  readonly mimeType: string;
+  /** Size in bytes of the persisted copy. */
+  readonly size: number;
+  /** Coarse kind for prompt rendering and size-limit selection. */
+  readonly kind: 'image' | 'audio' | 'video' | 'document';
+}
+
+/**
  * Envelope for an incoming message from a channel.
  * This is what gets passed to `BackgroundWakes.wakeForInbound()`.
  */
@@ -194,6 +213,12 @@ export interface ChannelInboundEnvelope {
    * constitutes the inbound event.
    */
   readonly reaction: ChannelReaction | null;
+  /**
+   * Media/file attachments persisted to stable paths (plan 507). Empty for
+   * pure-text messages; entries that failed to persist (e.g. too large) are
+   * omitted — callers surface that via a skipped note in `text`.
+   */
+  readonly attachments?: readonly ChannelInboundAttachment[];
 }
 
 /**

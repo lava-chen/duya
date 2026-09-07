@@ -27,7 +27,9 @@ import { getConfigStore } from '../config/store-instance';
 import { toLegacyApiProvider } from '../../src/lib/providers/legacy';
 import type { ChannelAdapterEntry } from '../config/schema';
 import { wakeForInbound } from '../wake/channels';
-import type { ChannelAddress, ChannelInboundEnvelope } from '../../packages/agent/src/channels/types';
+import { botAgentIdFromSession } from '../automation/provider';
+import { persistInboundAttachment } from '../channels/attachment-store';
+import type { ChannelAddress, ChannelInboundAttachment, ChannelInboundEnvelope } from '../../packages/agent/src/channels/types';
 
 const GATEWAY_SESSION_KEY = '__gateway_session_states__';
 
@@ -361,6 +363,47 @@ function handleInboundMessage(msg: Record<string, unknown>): void {
   }
 }
 
+/**
+ * 507 P2.2: persist plain-path inbound attachment refs (gateway route path)
+ * to stable storage. Refs come from `options.attachments` on gateway:inbound
+ * (built by GatewayManager.forwardInbound); old senders omit the field, so a
+ * non-array input yields nothing. Per-attachment failures are reported back
+ * as skipped lines so the bot can see them in the wake prompt.
+ */
+async function persistInboundAttachmentRefs(
+  sessionId: string,
+  platform: string,
+  rawRefs: unknown,
+): Promise<{ attachments: ChannelInboundAttachment[]; skippedLines: string[] }> {
+  const attachments: ChannelInboundAttachment[] = [];
+  const skippedLines: string[] = [];
+  if (!Array.isArray(rawRefs)) return { attachments, skippedLines };
+
+  // Resolve the persistence owner the same way the wake path does
+  // (wake-run.ts): bot sessions carry the agent id in the session id itself;
+  // other sessions fall back to a sanitized session id (path-unsafe chars → '_').
+  const ownerId =
+    botAgentIdFromSession(sessionId) ?? sessionId.replace(/[^\w.-]+/g, '_');
+
+  for (const raw of rawRefs) {
+    const ref = raw as { name?: unknown; path?: unknown };
+    if (typeof ref?.path !== 'string' || !ref.path) continue;
+    const name = typeof ref.name === 'string' && ref.name ? ref.name : 'file';
+    const result = await persistInboundAttachment(
+      ownerId,
+      platform,
+      { kind: 'path', path: ref.path },
+      name,
+    );
+    if (result.attachment) {
+      attachments.push(result.attachment);
+    } else {
+      skippedLines.push(`[attachment skipped: ${result.skippedReason ?? 'unknown reason'}]`);
+    }
+  }
+  return { attachments, skippedLines };
+}
+
 export function handleGatewayMessage(
   msg: Record<string, unknown>,
   onAuthFailure: () => void,
@@ -550,24 +593,58 @@ export function handleGatewayMessage(
       // 488 Plan B: enqueue the connector.inbound wake via wakeForInbound.
       // wakeForInbound stores the envelope in inboundEnvelopeStore, calls
       // enqueueInboundWake, and calls notifySessionIdle to kick the dispatcher.
+      //
+      // 507 P2.2: before waking, persist plain-path attachment refs
+      // (options.attachments) to stable storage so the wake prompt can point
+      // the bot at durable files; skipped entries surface as
+      // `[attachment skipped: ...]` lines appended to the envelope text.
+      // handleGatewayMessage is synchronous, so the awaited persistence and
+      // the wake run in an async IIFE — the message is still never lost if
+      // persistence throws (the wake fires without attachments).
       const address: ChannelAddress = {
         platform,
         chat: platformChatId,
       };
-      const envelope: ChannelInboundEnvelope = {
-        address,
-        sender: 'unknown', // gateway manager doesn't expose sender identity
-        text: inboundMsg.prompt,
-        reaction: null,
-      };
-      wakeForInbound(sessionId, envelope);
+      void (async () => {
+        let attachments: ChannelInboundAttachment[] = [];
+        const skippedLines: string[] = [];
+        try {
+          const persisted = await persistInboundAttachmentRefs(
+            sessionId,
+            platform,
+            inboundMsg.options?.attachments,
+          );
+          attachments = persisted.attachments;
+          skippedLines.push(...persisted.skippedLines);
+        } catch (err) {
+          getLogger().warn(
+            '[gateway:inbound] attachment persistence failed — waking without attachments',
+            { sessionId, error: err instanceof Error ? err.message : String(err) },
+            LogComponent.Gateway,
+          );
+        }
 
-      getLogger().debug('[gateway:inbound] enqueued via wakeForInbound', {
-        sessionId,
-        platform,
-        platformChatId,
-        promptLength: inboundMsg.prompt.length,
-      }, LogComponent.Gateway);
+        const text =
+          skippedLines.length > 0
+            ? [inboundMsg.prompt, ...skippedLines].join('\n')
+            : inboundMsg.prompt;
+
+        const envelope: ChannelInboundEnvelope = {
+          address,
+          sender: 'unknown', // gateway manager doesn't expose sender identity
+          text,
+          reaction: null,
+          attachments: attachments.length > 0 ? attachments : undefined,
+        };
+        wakeForInbound(sessionId, envelope);
+
+        getLogger().debug('[gateway:inbound] enqueued via wakeForInbound', {
+          sessionId,
+          platform,
+          platformChatId,
+          promptLength: text.length,
+        }, LogComponent.Gateway);
+      })();
       break;
     }
 

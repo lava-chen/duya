@@ -1,4 +1,7 @@
 import { EventEmitter } from 'events';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 import { FeishuWSClient } from './websocket-client.js';
 import { FeishuWebhookServer } from './webhook-server.js';
 import { TextBatcher } from './text-batcher.js';
@@ -59,6 +62,7 @@ import type {
 import type { PlatformType, PlatformConfig, AdapterHealth } from '../../types.js';
 import type { PlatformAdapter } from '../base.js';
 import type { NormalizedMessage, NormalizedReply, SendResult } from '../../types.js';
+import { MIME_EXT_MAP } from '../../utils/mime.js';
 import {
   isRetryableFeishuError,
   FEISHU_MSG_TYPE_LABELS,
@@ -73,6 +77,21 @@ const USER_CACHE_TTL_MS = 600000;
 const CARD_ACTION_DEDUP_WINDOW_MS = 15000;
 /** 飞书桥内 Agent run 的最大并发数(跨 scope 全局上限)。 */
 const DEFAULT_MAX_CONCURRENT_RUNS = 4;
+/** Best-effort cap for inbound media downloads (plan 507 P2.4). */
+const MAX_INBOUND_RESOURCE_BYTES = 25 * 1024 * 1024;
+/** Temp cache for inbound media downloads (mirrors telegram/weixin adapters). */
+const MEDIA_CACHE_DIR = path.join(os.tmpdir(), 'duya-feishu-media');
+
+/**
+ * Map a resource response content-type to a file extension ('' when unknown).
+ * `application/octet-stream` is treated as unknown: Feishu uses it as the
+ * generic file type and the reverse MIME map would otherwise guess '.ipa'.
+ */
+function resourceExtFromContentType(contentType: string | null): string {
+  const ct = (contentType || '').split(';')[0].trim().toLowerCase();
+  if (!ct || ct === 'application/octet-stream') return '';
+  return MIME_EXT_MAP[ct] || '';
+}
 
 interface CachedUser {
   name: string;
@@ -455,18 +474,27 @@ export class FeishuChannel extends EventEmitter {
       }
       case 'image': {
         const imageKey = content?.image_key || '';
-        if (imageKey) await this._options.onImageMessage(chatId, userId, imageKey, message.message_id);
+        if (imageKey) {
+          const localPath = await this.downloadMessageResource(message.message_id, imageKey, 'image', '.jpg');
+          await this._options.onImageMessage(chatId, userId, imageKey, message.message_id, localPath ?? undefined);
+        }
         break;
       }
       case 'file': {
         const fileKey = content?.file_key || '';
         const fileName = content ? parseFileNameFromMessage(content) : 'unknown_file';
-        if (fileKey) await this._options.onFileMessage(chatId, userId, fileKey, fileName, message.message_id);
+        if (fileKey) {
+          const localPath = await this.downloadMessageResource(message.message_id, fileKey, 'file', path.extname(fileName));
+          await this._options.onFileMessage(chatId, userId, fileKey, fileName, message.message_id, localPath ?? undefined);
+        }
         break;
       }
       case 'audio': {
         const audioKey = content?.audio_key || '';
-        if (audioKey) await this._options.onAudioMessage(chatId, userId, audioKey, content?.duration || 0, message.message_id);
+        if (audioKey) {
+          const localPath = await this.downloadMessageResource(message.message_id, audioKey, 'file', '.ogg');
+          await this._options.onAudioMessage(chatId, userId, audioKey, content?.duration || 0, message.message_id, localPath ?? undefined);
+        }
         break;
       }
     }
@@ -877,6 +905,49 @@ export class FeishuChannel extends EventEmitter {
       if (data.code === 0 && data.data?.items) return data.data.items;
     } catch {}
     return [];
+  }
+
+  /**
+   * Best-effort download of an inbound message resource (image / file /
+   * audio, plan 507 P2.4) to the OS temp cache, so consumers can persist a
+   * stable copy and point the bot at a local path.
+   *
+   * Endpoint: GET /im/v1/messages/:message_id/resources/:file_key?type=image|file
+   * (audio resources download with type=file per the Feishu API). Returns the
+   * local file path, or null when the request fails, the payload is empty or
+   * it exceeds MAX_INBOUND_RESOURCE_BYTES — callers then invoke their media
+   * callback without the path so existing flows are never broken.
+   */
+  async downloadMessageResource(
+    messageId: string,
+    fileKey: string,
+    resourceType: 'image' | 'file',
+    fallbackExt: string = '',
+  ): Promise<string | null> {
+    try {
+      const token = await this._getTenantAccessToken();
+      const base = this._getApiBase();
+      const res = await fetch(
+        `${base}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(fileKey)}?type=${resourceType}`,
+        { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (!res.ok) return null;
+
+      const declaredLength = Number(res.headers.get('content-length') || 0);
+      if (declaredLength > MAX_INBOUND_RESOURCE_BYTES) return null;
+
+      const buffer = Buffer.from(await res.arrayBuffer());
+      if (buffer.length === 0 || buffer.length > MAX_INBOUND_RESOURCE_BYTES) return null;
+
+      fs.mkdirSync(MEDIA_CACHE_DIR, { recursive: true });
+      const ext = resourceExtFromContentType(res.headers.get('content-type')) || fallbackExt;
+      const safeKey = fileKey.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const filePath = path.join(MEDIA_CACHE_DIR, `${Date.now()}_${safeKey}${ext}`);
+      fs.writeFileSync(filePath, buffer);
+      return filePath;
+    } catch {
+      return null;
+    }
   }
 
   private async _sendMediaMessage(

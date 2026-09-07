@@ -20,12 +20,16 @@
  * - Returning rejected promise on failure (caller handles via queueChannelDeliveryFailure)
  */
 
+import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as https from 'node:https';
+import * as path from 'node:path';
+import { randomBytes } from 'node:crypto';
 
 import type { ChannelAddress, ChannelOutboundMessage } from '../../packages/agent/src/channels/types';
 import { parseChannelAddress } from '../../packages/agent/src/channels/types';
 import { getConnectorCredential } from './agent-session-channels';
+import { isFileUrl, fileUrlToPath, mediaTypeForPath, mimeTypeForPath } from './file-url';
 import { getLogger, LogComponent } from '../logging/logger';
 
 // =============================================================================
@@ -55,23 +59,30 @@ export interface ChannelTransport {
 /**
  * Simple HTTP request helper for platform API calls.
  * Handles Discord and Slack's HTTPS API requirements.
+ *
+ * `body` may be a string (JSON — sent as before) or a Buffer (multipart —
+ * Content-Length is set from the byte length, plan 507 P3.2).
  */
 function httpRequest(opts: {
   method: string;
   hostname: string;
   path: string;
   headers: Record<string, string>;
-  body?: string;
+  body?: string | Buffer;
   timeout?: number;
 }): Promise<{ statusCode: number; body: string }> {
   return new Promise((resolve, reject) => {
     const lib = opts.hostname.startsWith('discord') ? https : http;
+    const headers: Record<string, string> = { ...opts.headers };
+    if (Buffer.isBuffer(opts.body)) {
+      headers['Content-Length'] = String(opts.body.length);
+    }
     const req = lib.request(
       {
         method: opts.method,
         hostname: opts.hostname,
         path: opts.path,
-        headers: opts.headers,
+        headers,
         timeout: opts.timeout ?? 10_000,
       },
       (res) => {
@@ -88,6 +99,78 @@ function httpRequest(opts: {
     req.end();
   });
 }
+
+// =============================================================================
+// Multipart builder (plan 507 P3.2/P3.3)
+// =============================================================================
+
+/** A single file part of a multipart/form-data body. */
+export interface MultipartFilePart {
+  /** Form field name for the file part (e.g. "photo", "files[0]"). */
+  name: string;
+  /** Filename reported in the Content-Disposition. */
+  filename: string;
+  /** MIME type for the file part. */
+  contentType: string;
+  bytes: Buffer;
+}
+
+/**
+ * Minimal RFC 7578 multipart/form-data body builder: string fields plus one
+ * file part. Enough for Telegram media sends (single file + chat_id/caption)
+ * and Discord uploads (files[0] + payload_json); not a general MIME writer.
+ */
+export function buildMultipartBody(
+  fields: Record<string, string>,
+  file: MultipartFilePart,
+): { body: Buffer; contentType: string } {
+  const boundary = `----duya-${randomBytes(16).toString('hex')}`;
+  const parts: Buffer[] = [];
+  for (const [name, value] of Object.entries(fields)) {
+    parts.push(
+      Buffer.from(
+        `--${boundary}\r\n` +
+          `Content-Disposition: form-data; name="${name}"\r\n` +
+          `\r\n` +
+          `${value}\r\n`,
+      ),
+    );
+  }
+  parts.push(
+    Buffer.from(
+      `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="${file.name}"; filename="${file.filename}"\r\n` +
+        `Content-Type: ${file.contentType}\r\n` +
+        `\r\n`,
+    ),
+  );
+  parts.push(file.bytes, Buffer.from(`\r\n--${boundary}--\r\n`));
+  return {
+    body: Buffer.concat(parts),
+    contentType: `multipart/form-data; boundary=${boundary}`,
+  };
+}
+
+export type TelegramMediaKind = 'photo' | 'voice' | 'video' | 'document';
+
+/**
+ * Map a media kind (from `mediaTypeForPath`) to the Telegram Bot API endpoint
+ * and the multipart file-part field name for the media upload.
+ */
+export function telegramMediaSend(kind: TelegramMediaKind): {
+  endpoint: string;
+  fileField: string;
+} {
+  switch (kind) {
+    case 'photo': return { endpoint: 'sendPhoto', fileField: 'photo' };
+    case 'video': return { endpoint: 'sendVideo', fileField: 'video' };
+    case 'voice': return { endpoint: 'sendAudio', fileField: 'audio' };
+    default: return { endpoint: 'sendDocument', fileField: 'document' };
+  }
+}
+
+/** Hard truncation limit for Telegram media captions. */
+const TELEGRAM_CAPTION_LIMIT = 1024;
 
 // =============================================================================
 // Discord transport
@@ -110,6 +193,13 @@ class DiscordTransport implements ChannelTransport {
     }
 
     const channelId = address.chat; // For Discord, chat = channel ID
+
+    // file:// attachments are uploaded as real files via multipart (plan 507
+    // P3.3); https:// attachments keep the embed/link path below.
+    if (outbound.kind === 'attachment' && outbound.url && isFileUrl(outbound.url)) {
+      await this.sendFile(token, channelId, outbound);
+      return;
+    }
 
     let body: Record<string, unknown>;
     if (outbound.kind === 'text') {
@@ -152,6 +242,58 @@ class DiscordTransport implements ChannelTransport {
 
     getLogger().debug('DiscordTransport: message sent', {
       agentId,
+      channelId,
+      statusCode: result.statusCode,
+    }, LogComponent.AgentProcess);
+  }
+
+  /**
+   * Upload a file:// attachment as a real file: POST multipart to
+   * /channels/{channelId}/messages with `files[0]` (the bytes) and
+   * `payload_json` (message content). The file:// url is included in the
+   * content next to the caption so the link survives alongside the upload.
+   */
+  private async sendFile(
+    token: string,
+    channelId: string,
+    outbound: ChannelOutboundMessage,
+  ): Promise<void> {
+    const filePath = fileUrlToPath(outbound.url as string);
+    const bytes = await fs.promises.readFile(filePath);
+    const caption = outbound.caption ?? outbound.content ?? '';
+    const content = caption ? `${caption}\n${outbound.url}` : (outbound.url ?? '');
+    const { body, contentType } = buildMultipartBody(
+      { payload_json: JSON.stringify({ content }) },
+      {
+        name: 'files[0]',
+        filename: path.basename(filePath),
+        contentType: mimeTypeForPath(filePath),
+        bytes,
+      },
+    );
+
+    const result = await httpRequest({
+      method: 'POST',
+      hostname: 'discord.com',
+      path: `/api/v10/channels/${channelId}/messages`,
+      headers: {
+        'Authorization': `Bot ${token}`,
+        'Content-Type': contentType,
+        'User-Agent': 'DiscordBot (duya, 1.0.0)',
+      },
+      body,
+    });
+
+    if (result.statusCode < 200 || result.statusCode >= 300) {
+      let errMsg = `Discord API returned ${result.statusCode}`;
+      try {
+        const parsed = JSON.parse(result.body);
+        if (parsed.message) errMsg += `: ${parsed.message}`;
+      } catch { /* ignore parse errors */ }
+      throw new Error(errMsg);
+    }
+
+    getLogger().debug('DiscordTransport: attachment uploaded', {
       channelId,
       statusCode: result.statusCode,
     }, LogComponent.AgentProcess);
@@ -349,10 +491,15 @@ class TelegramTransport implements ChannelTransport {
       throw new Error(`Telegram bot token not found for agent ${agentId}. Use secret-request to provide it.`);
     }
 
+    // file:// attachments are uploaded as real media via multipart (plan 507
+    // P3.2); https:// attachments keep the link-with-caption text below.
+    if (outbound.kind === 'attachment' && outbound.url && isFileUrl(outbound.url)) {
+      await this.sendFile(token, address.chat, outbound);
+      return;
+    }
+
     let text: string;
     if (outbound.kind === 'attachment') {
-      // Telegram media send needs multipart (sendPhoto/sendDocument); until a
-      // multipart transport lands, deliver the URL as a link with caption.
       text = [outbound.caption ?? 'Attachment', outbound.url].filter(Boolean).join('\n');
     } else {
       text = outbound.content ?? '';
@@ -364,6 +511,52 @@ class TelegramTransport implements ChannelTransport {
       path: `/bot${token}/sendMessage`,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: address.chat, text }),
+    });
+
+    if (result.statusCode < 200 || result.statusCode >= 300) {
+      let errMsg = `Telegram API returned ${result.statusCode}`;
+      try {
+        const parsed = JSON.parse(result.body);
+        if (parsed.description) errMsg += `: ${parsed.description}`;
+      } catch { /* ignore parse errors */ }
+      throw new Error(errMsg);
+    }
+  }
+
+  /**
+   * Upload a file:// attachment as real media: read the bytes from disk and
+   * POST multipart to the Bot API endpoint picked by media type —
+   * sendPhoto (image), sendVideo (video), sendAudio (audio), sendDocument
+   * (everything else) — with chat_id and a caption (hard-truncated to
+   * Telegram's 1024-char caption limit) as form fields.
+   */
+  private async sendFile(
+    token: string,
+    chatId: string,
+    outbound: ChannelOutboundMessage,
+  ): Promise<void> {
+    const filePath = fileUrlToPath(outbound.url as string);
+    const bytes = await fs.promises.readFile(filePath);
+    const kind: TelegramMediaKind = mediaTypeForPath(filePath);
+    const { endpoint, fileField } = telegramMediaSend(kind);
+    const caption = (outbound.caption ?? outbound.content ?? '').slice(0, TELEGRAM_CAPTION_LIMIT);
+
+    const { body, contentType } = buildMultipartBody(
+      { chat_id: chatId, ...(caption ? { caption } : {}) },
+      {
+        name: fileField,
+        filename: path.basename(filePath),
+        contentType: mimeTypeForPath(filePath),
+        bytes,
+      },
+    );
+
+    const result = await httpRequest({
+      method: 'POST',
+      hostname: 'api.telegram.org',
+      path: `/bot${token}/${endpoint}`,
+      headers: { 'Content-Type': contentType },
+      body,
     });
 
     if (result.statusCode < 200 || result.statusCode >= 300) {

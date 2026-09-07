@@ -79,6 +79,9 @@ export function renderBotChannels(ctx: BotPromptContext): string | null {
   lines.push(
     `**INBOUND**: When someone messages you on a connected channel, you are woken with a hidden message starting with the cue \`${CHANNEL_INBOUND_WAKE_CUE}\` naming the source address and sender. That is a real person reaching out on that platform, not the user typing here. Reply on that same channel by calling SendMessage with \`channel\` set to the address. If you omit \`channel\`, your message goes to this in-app chat instead.`,
   )
+  lines.push(
+    'Inbound messages may carry attachments (files, images, voice, video) saved to local file paths, shown as `[attachment saved to: ...]` lines under the message. Open them with your Read/Bash tools — spreadsheets, PDFs, and images are all readable — and reply on the same channel as usual.',
+  )
   lines.push('')
 
   // ---------------------------------------------------------------

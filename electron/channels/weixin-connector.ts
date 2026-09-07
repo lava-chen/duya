@@ -8,17 +8,27 @@
  * process. Inbound `onMessage` is mapped to a `ChannelInboundEnvelope` for the
  * wake pipeline; outbound goes through the SAME adapter's `sendReply` (inherits
  * chunk-splitting, context_token session continuity, rate-limit circuit).
+ *
+ * Media the adapter already downloaded to its temp cache (imagePaths /
+ * voicePaths / filePaths / videoPaths) is persisted to the stable attachment
+ * store (plan 507 P2.3) and rides the envelope as `attachments`; entries the
+ * store skipped surface as `[attachment skipped: ...]` notes in the text.
  */
 
 import * as path from 'node:path';
 import { app } from 'electron';
 
-import type { ChannelInboundEnvelope } from '../../packages/agent/src/channels/types';
+import type {
+  ChannelInboundAttachment,
+  ChannelInboundEnvelope,
+} from '../../packages/agent/src/channels/types';
 import { getLogger, LogComponent } from '../logging/logger';
 import {
   WeixinAdapter,
 } from './gateway-adapters';
-import type { PlatformConfig } from './gateway-adapters';
+import type { NormalizedMessage, PlatformConfig } from './gateway-adapters';
+import { persistInboundAttachments } from './attachment-store';
+import type { AttachmentSource } from './attachment-store';
 import { getConnectorCredential } from './agent-session-channels';
 
 const logger = getLogger();
@@ -86,11 +96,19 @@ export class WeixinConnector {
 
     const adapter = new WeixinAdapter({ stateDir: resolveAgentStateDir(this.agentId) });
     adapter.onMessage((msg) => {
-      this.inbound({
-        address: { platform: 'weixin', chat: msg.platformChatId },
-        sender: msg.platformUserId,
-        text: msg.text ?? '',
-        reaction: null,
+      // The Weixin adapter invokes its message handler without awaiting it
+      // (BaseAdapter keeps a void-returning callback), so attachment
+      // persistence is fire-and-forget from the adapter's perspective. Route
+      // only after the copies land so attachments ride the same envelope, and
+      // swallow rejections so a failed copy never surfaces as an unhandled
+      // rejection inside the adapter's poll loop.
+      void this.handleInbound(msg).catch((err) => {
+        logger.error(
+          'Weixin connector: failed to handle inbound message',
+          err instanceof Error ? err : new Error(String(err)),
+          { agentId: this.agentId },
+          LogComponent.Gateway,
+        );
       });
     });
     this.adapter = adapter;
@@ -129,4 +147,73 @@ export class WeixinConnector {
     }, LogComponent.Gateway);
     this.onInbound(this.agentId, envelope);
   }
+
+  /**
+   * Persist the adapter's temp-cache media to the stable attachment store,
+   * then route the envelope (text + attachments + skipped notes) to the wake
+   * pipeline. Called fire-and-forget from onMessage — must never reject.
+   */
+  private async handleInbound(msg: NormalizedMessage): Promise<void> {
+    const entries: Array<{ source: AttachmentSource; name: string }> = [];
+    for (const file of msg.filePaths ?? []) {
+      entries.push({ source: { kind: 'path', path: file.path }, name: file.name });
+    }
+    for (const imagePath of msg.imagePaths ?? []) {
+      entries.push({
+        source: { kind: 'path', path: imagePath },
+        name: `photo${cacheExt(imagePath, '.jpg')}`,
+      });
+    }
+    for (const voicePath of msg.voicePaths ?? []) {
+      entries.push({
+        source: { kind: 'path', path: voicePath },
+        name: `voice${cacheExt(voicePath, '.mp3')}`,
+      });
+    }
+    for (const videoPath of msg.videoPaths ?? []) {
+      entries.push({
+        source: { kind: 'path', path: videoPath },
+        name: `video${cacheExt(videoPath, '.mp4')}`,
+      });
+    }
+
+    let text = msg.text ?? '';
+    let attachments: ChannelInboundAttachment[] | undefined;
+
+    if (entries.length > 0) {
+      const results = await persistInboundAttachments(this.agentId, 'weixin', entries);
+      const persisted: ChannelInboundAttachment[] = [];
+      const skippedNotes: string[] = [];
+      for (const result of results) {
+        if (result.attachment) {
+          persisted.push(result.attachment);
+        } else {
+          skippedNotes.push(`[attachment skipped: ${result.skippedReason}]`);
+        }
+      }
+      if (persisted.length > 0) attachments = persisted;
+      if (skippedNotes.length > 0) {
+        const notes = skippedNotes.join('\n');
+        text = text ? `${text}\n${notes}` : notes;
+      }
+    }
+
+    this.inbound({
+      address: { platform: 'weixin', chat: msg.platformChatId },
+      sender: msg.platformUserId,
+      text,
+      reaction: null,
+      ...(attachments ? { attachments } : {}),
+    });
+  }
+}
+
+/**
+ * Extension (with dot) derived from an adapter cache path, falling back to the
+ * format the Weixin adapter downloads that media kind as (voice is cached as
+ * MP3, images as JPEG, videos as MP4).
+ */
+function cacheExt(cachePath: string, fallback: string): string {
+  const ext = path.extname(cachePath).toLowerCase();
+  return ext || fallback;
 }

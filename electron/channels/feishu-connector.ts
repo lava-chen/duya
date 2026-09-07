@@ -8,6 +8,8 @@
  * the channel for outbound via the SAME live instance (`sendReply`).
  */
 
+import * as path from 'node:path';
+
 import type { ChannelInboundEnvelope } from '../../packages/agent/src/channels/types';
 import { getLogger, LogComponent } from '../logging/logger';
 import {
@@ -16,8 +18,20 @@ import {
 } from './gateway-adapters';
 import type { FeishuAdapterOptions, FeishuConfig } from './gateway-adapters';
 import { getConnectorCredential } from './agent-session-channels';
+import { persistInboundAttachment } from './attachment-store';
 
 const logger = getLogger();
+
+/**
+ * Derive the persist name for image/voice downloads from the downloaded temp
+ * file's extension ('photo.jpg' fallback + '.png' cache file → 'photo.png').
+ * Files keep the original platform file name instead.
+ */
+function mediaNameFromTempExt(fallbackName: string, localPath: string): string {
+  const ext = path.extname(localPath).toLowerCase();
+  if (!ext) return fallbackName;
+  return `${fallbackName.replace(/\.[^.]+$/, '')}${ext}`;
+}
 
 export interface FeishuConnectorOptions {
   agentId: string;
@@ -101,14 +115,14 @@ export class FeishuChannelConnector {
         });
         void msgId;
       },
-      onImageMessage: async (chatId, userId) => {
-        this.inbound({ address: { platform: 'feishu', chat: chatId }, sender: userId, text: '[image]', reaction: null });
+      onImageMessage: async (chatId, userId, _imageKey, _messageId, localPath) => {
+        await this.inboundMedia(chatId, userId, localPath, 'image', 'photo.jpg');
       },
-      onFileMessage: async (chatId, userId, _fileKey, fileName) => {
-        this.inbound({ address: { platform: 'feishu', chat: chatId }, sender: userId, text: `[file: ${fileName}]`, reaction: null });
+      onFileMessage: async (chatId, userId, _fileKey, fileName, _messageId, localPath) => {
+        await this.inboundMedia(chatId, userId, localPath, 'file', fileName);
       },
-      onAudioMessage: async (chatId, userId) => {
-        this.inbound({ address: { platform: 'feishu', chat: chatId }, sender: userId, text: '[voice]', reaction: null });
+      onAudioMessage: async (chatId, userId, _audioKey, _duration, _messageId, localPath) => {
+        await this.inboundMedia(chatId, userId, localPath, 'audio', 'voice.ogg');
       },
       onPostMessage: async (chatId, userId, title) => {
         const text = title?.trim() ? title.trim() : '[rich text]';
@@ -156,12 +170,65 @@ export class FeishuChannelConnector {
     }
   }
 
+  /**
+   * Inbound media (image / file / voice, plan 507 P2.4): persist the channel's
+   * downloaded copy to the stable attachment store and emit the envelope with
+   * `attachments`. Without a local download the placeholder text is kept; a
+   * skipped persist surfaces `[attachment skipped: ...]` in the text.
+   */
+  private async inboundMedia(
+    chatId: string,
+    userId: string,
+    localPath: string | undefined,
+    kind: 'image' | 'file' | 'audio',
+    fallbackName: string,
+  ): Promise<void> {
+    if (!localPath) {
+      this.inbound({
+        address: { platform: 'feishu', chat: chatId },
+        sender: userId,
+        text: kind === 'file' ? `[file: ${fallbackName}]` : kind === 'image' ? '[image]' : '[voice]',
+        reaction: null,
+      });
+      return;
+    }
+
+    const name = kind === 'file' ? fallbackName : mediaNameFromTempExt(fallbackName, localPath);
+    const result = await persistInboundAttachment(
+      this.agentId,
+      'feishu',
+      { kind: 'path', path: localPath },
+      name,
+    );
+
+    if (result.attachment) {
+      // Persisted — drop the placeholder; Feishu media messages carry no
+      // caption text of their own, so the attachment is the whole payload.
+      this.inbound({
+        address: { platform: 'feishu', chat: chatId },
+        sender: userId,
+        text: '',
+        reaction: null,
+        attachments: [result.attachment],
+      });
+      return;
+    }
+
+    this.inbound({
+      address: { platform: 'feishu', chat: chatId },
+      sender: userId,
+      text: `[attachment skipped: ${result.skippedReason ?? 'persist failed'}]`,
+      reaction: null,
+    });
+  }
+
   private inbound(envelope: ChannelInboundEnvelope): void {
     logger.info('Feishu connector: inbound message', {
       agentId: this.agentId,
       chat: envelope.address.chat,
       sender: envelope.sender,
       hasReaction: Boolean(envelope.reaction),
+      hasAttachments: Boolean(envelope.attachments?.length),
     }, LogComponent.Gateway);
     this.onInbound(this.agentId, envelope);
   }
