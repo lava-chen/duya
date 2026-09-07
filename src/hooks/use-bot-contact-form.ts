@@ -60,6 +60,8 @@ export function useBotContactForm({ active, contact, onSaved }: UseBotContactFor
   const [model, setModel] = useState("");
   /** Provider store id the configured `model` belongs to ('' = none). */
   const [provider, setProvider] = useState("");
+  /** Thinking level bound to the model; undefined → runtime default medium. */
+  const [reasoning, setReasoning] = useState<'off' | 'low' | 'medium' | 'high' | undefined>(undefined);
   const [modelGroups, setModelGroups] = useState<ProviderModelGroup[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -86,6 +88,7 @@ export function useBotContactForm({ active, contact, onSaved }: UseBotContactFor
     setAvatarUrl(contact.avatarUrl);
     setModel(contact.model ?? "");
     setProvider(contact.provider ?? "");
+    setReasoning(contact.reasoning);
     setSubmitting(false);
     setError(null);
     setTimeout(() => nameRef.current?.focus(), 80);
@@ -133,6 +136,7 @@ export function useBotContactForm({ active, contact, onSaved }: UseBotContactFor
         description: description.trim() || undefined,
         model: model.trim() || undefined,
         provider: provider || undefined,
+        reasoning,
       });
       onSaved?.(contact.agentId);
       return true;
@@ -199,6 +203,9 @@ export function useBotContactForm({ active, contact, onSaved }: UseBotContactFor
     removeAvatar,
     model,
     provider,
+    /** Thinking level bound to the model (undefined → runtime default medium). */
+    reasoning,
+    setReasoning,
     /** Prefixed selector id derived from model+provider (raw fallback for stale configs). */
     selectorModelId,
     handleModelSelect,

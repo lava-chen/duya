@@ -46,6 +46,8 @@ export interface BotComposerSendPayload {
   model?: string;
   /** Provider store id the model belongs to. Injected by the view. */
   providerId?: string;
+  /** Thinking level bound to the bot's model ('off'|'low'|'medium'|'high'); absent → runtime default medium. */
+  reasoning?: 'off' | 'low' | 'medium' | 'high';
   /** Message-level mode (plan-task / research / ...). */
   mode?: string;
   /** User-attached files (files/images). */

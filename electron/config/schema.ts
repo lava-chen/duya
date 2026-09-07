@@ -175,6 +175,13 @@ export interface CustomAgentConfig {
    * breaks when the model is enabled on a non-default provider.
    */
   provider?: string;
+  /**
+   * This agent's own thinking level (bound to the model): 'off' disables
+   * thinking, 'low'/'medium'/'high' map to the provider's native reasoning
+   * effort. Absent → the runtime default ('medium').
+   */
+  reasoning?: 'off' | 'low' | 'medium' | 'high';
+
   /** This agent's own working directory. Empty → default workspace (~/.duya/workspace). */
   workspace?: string;
   /** Path to this agent's global instruction file (系统提示词配置路径). Empty → <workspace>/AGENTS.md. */
