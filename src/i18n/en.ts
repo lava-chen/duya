@@ -1136,6 +1136,7 @@ const en = {
   'panel.browser': 'Browser',
   'panel.office': 'Office',
   'panel.botSettings': 'Bot Settings',
+  'panel.roomSettings': 'Room Settings',
   'panel.botSettings.identity': 'Identity & Model',
   'panel.botSettings.identity.hint': 'Changes save automatically.',
   'panel.botSettings.loading': 'Loading bot…',
@@ -1335,7 +1336,19 @@ const en = {
   // Plan 478 — shared rooms (群聊) group
   'sidebar.section.rooms': 'Rooms',
   'room.create.title': 'New group',
+  'room.create.defaultName': 'New group',
   'room.create.empty': 'No rooms yet — tap + to create one.',
+  'room.settings.name': 'Group name',
+  'room.settings.namePlaceholder': 'e.g. Product discussion',
+  'room.settings.description': 'Description',
+  'room.settings.descriptionPlaceholder': 'What is this group about?',
+  'room.settings.members': 'Members',
+  'room.settings.emptyMembers': 'No bots to add yet — create a bot first.',
+  'room.settings.delete': 'Delete group',
+  'room.settings.deleteConfirm': 'Delete group “{{name}}”?',
+  'room.settings.deleted': 'Group deleted',
+  'room.settings.missing': 'Room settings are unavailable',
+  'room.settings.notFound': 'Group not found',
 
   // Plan 483 — bot contact row + create-bot dialog
   'bot.contactBusy': 'Working',

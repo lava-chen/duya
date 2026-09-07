@@ -13,7 +13,7 @@
  *   - room lifecycle notices (group_system) render as centered system rows;
  *   - a composite group avatar (1 / 2 / 3+ member layouts) in the header;
  *   - the header carries a members subtitle and opens the group settings
- *     dialog (member picker, GROUP_MEMBER_MAX 6).
+ *     panel (member picker, GROUP_MEMBER_MAX 6) on click.
  *
  * Data flow is fully room-scoped (useRoomTranscript): the workspace
  * conversation store never sees `room:` sessions. Sends go through the
@@ -23,9 +23,10 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BotCharacterAvatar } from "@/components/layout/sidebar/BotCharacterAvatar";
-import { GroupSettingsDialog, GROUP_MEMBER_MAX } from "./bot/GroupSettingsDialog";
 import { useRoomTranscript } from "./bot/use-room-transcript";
-import { parseRoomIdFromSession } from "@/lib/room-session";
+import { parseRoomIdFromSession, GROUP_MEMBER_MAX } from "@/lib/room-session";
+import { useOptionalPanel } from "@/hooks/usePanel";
+import { useTranslation } from "@/hooks/useTranslation";
 import type { Message } from "@/types/message";
 
 interface RoomMember {
@@ -39,6 +40,7 @@ interface RoomMember {
 interface RoomMeta {
   id: string;
   name: string;
+  description?: string;
   members: RoomMember[];
 }
 
@@ -134,11 +136,12 @@ export interface GroupRoomChatViewProps {
 }
 
 export function GroupRoomChatView({ sessionId }: GroupRoomChatViewProps) {
+  const { t } = useTranslation();
   const roomId = parseRoomIdFromSession(sessionId) ?? "";
   const { messages, isLoading, error } = useRoomTranscript(sessionId);
+  const panel = useOptionalPanel() ?? null;
 
   const [room, setRoom] = useState<RoomMeta | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
@@ -149,30 +152,37 @@ export function GroupRoomChatView({ sessionId }: GroupRoomChatViewProps) {
 
   // Room identity + members (room:members resolves names from the bot
   // roster; groups.get supplies the display name).
-  useEffect(() => {
+  const loadRoomMeta = useCallback(async () => {
     if (!roomId) return;
-    let cancelled = false;
-    const load = async () => {
-      try {
-        await window.electronAPI?.room?.ensure?.(roomId);
-        const members = ((await window.electronAPI?.room?.members?.(roomId)) ?? []) as RoomMember[];
-        const declared = await window.electronAPI?.groups?.get?.(roomId);
-        if (!cancelled) {
-          setRoom({
-            id: roomId,
-            name: declared?.name ?? roomId,
-            members: members.map((m) => ({ ...m, description: m.description ?? "" })),
-          });
-        }
-      } catch {
-        if (!cancelled) setRoom({ id: roomId, name: roomId, members: [] });
-      }
-    };
-    void load();
-    return () => {
-      cancelled = true;
-    };
+    try {
+      await window.electronAPI?.room?.ensure?.(roomId);
+      const members = ((await window.electronAPI?.room?.members?.(roomId)) ?? []) as RoomMember[];
+      const declared = await window.electronAPI?.groups?.get?.(roomId);
+      setRoom({
+        id: roomId,
+        name: declared?.name ?? roomId,
+        description: declared?.description ?? "",
+        members: members.map((m) => ({ ...m, description: m.description ?? "" })),
+      });
+    } catch {
+      setRoom({ id: roomId, name: roomId, members: [] });
+    }
   }, [roomId]);
+
+  // Refresh room meta whenever the settings panel saves (name / description /
+  // members) or deletes the room.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ roomId?: string }>).detail;
+      if (detail?.roomId === roomId) void loadRoomMeta();
+    };
+    window.addEventListener("duya:room-identity-updated", handler);
+    return () => window.removeEventListener("duya:room-identity-updated", handler);
+  }, [roomId, loadRoomMeta]);
+
+  useEffect(() => {
+    void loadRoomMeta();
+  }, [loadRoomMeta]);
 
   // Auto-scroll to the newest row.
   useEffect(() => {
@@ -317,7 +327,28 @@ export function GroupRoomChatView({ sessionId }: GroupRoomChatViewProps) {
         <span className="bot-chat-header__avatar">
           <GroupAvatar members={room?.members ?? []} size={28} />
         </span>
-        <span className="bot-chat-header__identity" onClick={() => setSettingsOpen(true)} role="button" tabIndex={0}>
+        <span
+          className="bot-chat-header__identity"
+          onClick={() => {
+            if (!roomId || !panel) return;
+            // Toggle: clicking the header closes the settings panel when it
+            // is already the active tab; otherwise open/activate it.
+            const existing = panel.tabs.find(
+              (t) => t.pageId === "room-settings" && t.params?.roomId === roomId,
+            );
+            if (existing && panel.activeTabId === existing.id) {
+              panel.closePanel(existing.id);
+              return;
+            }
+            panel.openOrActivatePage("room-settings", {
+              roomId,
+              title: room?.name ?? roomId,
+            });
+          }}
+          role="button"
+          tabIndex={0}
+          aria-label={t("panel.roomSettings")}
+        >
           <span className="bot-chat-header__name">{room?.name ?? roomId}</span>
           <span className="bot-chat-header__subtitle">
             {room ? `${room.members.length}/${GROUP_MEMBER_MAX} · ${membersSubtitle}` : ""}
@@ -458,33 +489,6 @@ export function GroupRoomChatView({ sessionId }: GroupRoomChatViewProps) {
           </div>
         </div>
       </div>
-
-      <GroupSettingsDialog
-        isOpen={settingsOpen}
-        mode="edit"
-        groupId={roomId}
-        initialName={room?.name ?? ""}
-        initialMemberIds={room?.members.map((m) => m.id) ?? []}
-        onCancel={() => setSettingsOpen(false)}
-        onSaved={() => {
-          setSettingsOpen(false);
-          // Reload room identity after member/name changes.
-          void (async () => {
-            try {
-              const members = ((await window.electronAPI?.room?.members?.(roomId)) ?? []) as RoomMember[];
-              const declared = await window.electronAPI?.groups?.get?.(roomId);
-              setRoom({
-                id: roomId,
-                name: declared?.name ?? roomId,
-                members: members.map((m) => ({ ...m, description: m.description ?? "" })),
-              });
-            } catch {
-              // keep the previous snapshot
-            }
-          })();
-        }}
-        onDeleted={() => setSettingsOpen(false)}
-      />
     </div>
   );
 }

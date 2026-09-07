@@ -15,6 +15,8 @@ import { resolveConfigRoot } from './config-agents.js';
 /** `[groups.<id>]` entry as written on disk (snake_case keys). */
 export interface GroupEntryConfig {
   name?: string;
+  /** Optional short description shown in the room settings panel. */
+  description?: string;
   /** Member agent ids (config.toml `[agents.*]` references), ≤ GROUP_MAX_MEMBERS. */
   members?: string[];
   /** Round-robin rounds per room turn (default GROUP_MAX_ROUNDS). */
@@ -27,6 +29,7 @@ export interface GroupEntryConfig {
 export interface ResolvedGroupConfig {
   id: string;
   name: string;
+  description: string;
   memberIds: string[];
   maxRounds: number;
   maxMemberTurns: number;
@@ -61,6 +64,7 @@ export function resolveGroupConfig(id: string, entry: GroupEntryConfig): Resolve
   return {
     id,
     name: entry.name?.trim() || id,
+    description: (entry.description ?? '').trim(),
     memberIds: Array.isArray(entry.members) ? entry.members.filter((m) => typeof m === 'string' && m.trim()) : [],
     maxRounds: clampPositive(entry.max_rounds, 3),
     maxMemberTurns: clampPositive(entry.max_member_turns, 10),
