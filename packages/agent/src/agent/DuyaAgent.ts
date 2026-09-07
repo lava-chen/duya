@@ -1,4 +1,4 @@
-﻿/**
+/**
  * duyaAgent - AI Agent 鏍稿績绫? * 鎻愪緵娴佸紡瀵硅瘽銆佸伐鍏疯皟鐢ㄣ€佷細璇濈鐞嗚兘鍔? *
  * Implementation home for the `duyaAgent` class. The public surface
  * (type re-exports, supporting utilities) lives in `src/index.ts`,
@@ -1490,6 +1490,11 @@ export class duyaAgent {
         },
         // Permission callback - passed from ChatOptions by API route
         requestPermission: options?.requestPermission,
+        // IPC for conductor executor communication. sendToMain powers the
+        // connector elicitation cards (connect_app / reauth) — always
+        // injected by agent-process-entry (plan 312), forwarded here so
+        // bot sessions can surface a connect card (plan 503).
+        sendToMain: options?.conductorIpc?.sendToMain,
         // IPC for conductor executor communication
         ipcRequest: options?.conductorIpc?.ipcRequest,
         // Plan 224 Phase 3: mode modifiers surface fields like
