@@ -162,7 +162,7 @@ export function ContextUsageRing({
                 <span className="context-usage-popover__value context-usage-popover__value--dim">?</span>
               </div>
             )}
-            {onCompress && usage.state !== 'normal' && (
+            {onCompress && usage.hasData && (
               <Button
                 type="button"
                 variant="ghost"
@@ -253,7 +253,7 @@ export function ContextUsageRing({
                 </span>
               </span>
             )}
-            {onCompress && usage.state !== 'normal' && (
+            {onCompress && usage.hasData && (
               <Button
                 type="button"
                 variant="ghost"

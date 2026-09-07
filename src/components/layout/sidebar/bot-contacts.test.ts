@@ -83,16 +83,18 @@ describe('buildBotContacts (plan 483 P1.2)', () => {
     expect(contacts[0].lastActivity).toBe(500);
   });
 
-  it('sorts contacts by display name case-insensitively', () => {
+  it('sorts recently-active bots first, then by name', () => {
+    // 'zulu' has the newest binding activity → first; the other two are
+    // unbound (lastActivity 0) and fall back to name order.
     const contacts = buildBotContacts(
       [
-        { id: 'b', name: 'Beta', title: '', description: '' },
-        { id: 'a', name: 'alpha', title: '', description: '' },
-        { id: 'c', name: '', title: '', description: '' },
+        { id: 'zulu', name: 'Zulu', title: '', description: '' },
+        { id: 'beta', name: 'Beta', title: '', description: '' },
+        { id: 'alpha', name: 'Alpha', title: '', description: '' },
       ],
-      [],
+      [makeThread({ id: 'bot:zulu', updatedAt: 9000 })],
     );
-    expect(contacts.map((c) => c.name)).toEqual(['alpha', 'Beta', 'c']);
+    expect(contacts.map((c) => c.agentId)).toEqual(['zulu', 'alpha', 'beta']);
   });
 
   it('skips entries without an id', () => {

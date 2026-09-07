@@ -450,6 +450,13 @@ export interface ChatOptions {
    * budget. Optional; absent = no per-request cap.
    */
   llmRequestTimeoutMs?: number;
+  /**
+   * Renderer-minted id of this user send. The persisted user row reuses this
+   * id so the renderer can dedupe its optimistic bubble by id regardless of
+   * timestamp drift (e.g. a queued bot turn). Absent for CLI / agent-spawned
+   * runs — those fall back to a fresh server UUID.
+   */
+  clientMsgId?: string;
 }
 
 // 会话信息

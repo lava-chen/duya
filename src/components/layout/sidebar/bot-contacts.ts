@@ -273,8 +273,9 @@ export function resolveBotOpenThreadId(
 /**
  * Build the contact list from the merged bot read side + the local
  * thread list. Contacts without a bound session still render (the user
- * can open the placeholder chat); sorting is by display name,
- * case-insensitive.
+ * can open the placeholder chat); sorting is by most recent activity
+ * (persistent-session `updatedAt`, 0 when unbound), then by display
+ * name case-insensitively (Telegram-style, like `buildRoomContacts`).
  */
 export function buildBotContacts(
   bots: BotSource[],
@@ -309,7 +310,13 @@ export function buildBotContacts(
       status: statusForThread?.(boundThreadId),
     });
   }
-  contacts.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  contacts.sort((a, b) => {
+    // Recently-active bots first, then by display name (Telegram-style,
+    // matching `buildRoomContacts`). Pinned/section orders are applied
+    // later by `partitionBotContacts` and are not affected by this sort.
+    if (a.lastActivity !== b.lastActivity) return b.lastActivity - a.lastActivity;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+  });
   return contacts;
 }
 

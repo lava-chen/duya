@@ -17,7 +17,7 @@ import {
   subscribeScheduledTurns,
   takePendingTurn,
 } from "@/components/chat/bot/send/scheduled-turns";
-import type { BotComposerSendPayload } from "@/components/chat/BotComposer";
+import type { BotDirectSendPayload } from "@/components/chat/BotDirectChatView";
 import { composeReplyContent } from "@/components/chat/bot/reply";
 import { NewChatView } from "@/components/chat/NewChatView";
 import { WelcomeView } from "@/components/home/WelcomeView";
@@ -456,6 +456,9 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
         agentProfileId,
         outputStyleConfig: outputStyleConfig ?? undefined,
         mode,
+        // Persisted user row reuses this id so the merge dedupes the
+        // optimistic bubble by id even when the worker persists late.
+        clientMsgId: userMsgId,
         titleGenerationModel: settings.titleGenerationModel,
         defaultWorkspaceDirectory: settings.workspaceDir,
         providerId: sessionProviderId,
@@ -500,7 +503,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
   // (c) per-message delivery phases in the conversation store.
   const setMessageDelivery = useConversationStore((s) => s.setMessageDelivery);
   const handleBotDirectSend = useCallback(
-    (payload: BotComposerSendPayload) => {
+    (payload: BotDirectSendPayload) => {
       if (!activeThreadId) return;
       const agentId = resolveBotAgentId(activeThreadId);
       if (!agentId) return;
@@ -553,6 +556,9 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
           model,
           mode,
           files,
+          // Persisted user row reuses the optimistic id so the merge
+          // dedupes by id, even for a turn queued on the wake lane.
+          clientMsgId: messageId,
         });
       };
 
@@ -646,6 +652,8 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       agentProfileId: push.agentId,
       titleGenerationModel: settings.titleGenerationModel,
       defaultWorkspaceDirectory: settings.workspaceDir,
+      // Persisted user row reuses the optimistic id so the merge dedupes by id.
+      clientMsgId: push.messageId,
     });
   };
   useEffect(() => {

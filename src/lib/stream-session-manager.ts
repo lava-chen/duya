@@ -349,6 +349,12 @@ interface StartStreamParams {
   queuedMailboxId?: string;
   /** Internal follow-up turn that consumes queued background task results. */
   backgroundTaskResume?: boolean;
+  /**
+   * Renderer-minted id of this user send. Threaded through to the agent worker
+   * so the persisted user row reuses the same id as the optimistic bubble,
+   * letting the frontend merge dedupe by id regardless of timestamp drift.
+   */
+  clientMsgId?: string;
 }
 
 interface StartStreamResult {
@@ -1266,7 +1272,7 @@ class StreamSessionManager {
   }
 
   async startStream(params: StartStreamParams): Promise<StartStreamResult> {
-    const { sessionId, content, displayContent, model, providerId, effort, maxTokens, systemPrompt, language, initialGeneration, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam, mode, defaultWorkspaceDirectory, securityScanEnabled, conductorMode, conductorCanvasId, backgroundTaskResume } = params;
+    const { sessionId, content, displayContent, model, providerId, effort, maxTokens, systemPrompt, language, initialGeneration, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam, mode, defaultWorkspaceDirectory, securityScanEnabled, conductorMode, conductorCanvasId, backgroundTaskResume, clientMsgId } = params;
 
     if (!backgroundTaskResume) {
       this.backgroundResumeTemplates.set(sessionId, {
@@ -1472,7 +1478,7 @@ class StreamSessionManager {
     void this.startStreamViaAgentServer(
       sessionId,
       streamId,
-      { content, displayContent, model, maxTokens, maxTurns: params.maxTurns ?? (await readAgentMaxTurns()), systemPrompt, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig, providerConfig, workingDirectory, mode, defaultWorkspaceDirectory, securityScanEnabled, effort, conductorMode, conductorCanvasId, backgroundTaskResume },
+      { content, displayContent, model, maxTokens, maxTurns: params.maxTurns ?? (await readAgentMaxTurns()), systemPrompt, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig, providerConfig, workingDirectory, mode, defaultWorkspaceDirectory, securityScanEnabled, effort, conductorMode, conductorCanvasId, backgroundTaskResume, clientMsgId },
       nextGeneration
     );
 
@@ -1505,6 +1511,7 @@ class StreamSessionManager {
       conductorMode?: boolean;
       conductorCanvasId?: string;
       backgroundTaskResume?: boolean;
+      clientMsgId?: string;
     },
     generation: number
   ): Promise<void> {
@@ -1585,6 +1592,7 @@ class StreamSessionManager {
         conductorMode: params.conductorMode,
         conductorCanvasId: params.conductorCanvasId,
         backgroundTaskResume: params.backgroundTaskResume,
+        clientMsgId: params.clientMsgId,
       } satisfies ChatOptions);
     } catch (error) {
       console.error('[stream-session-manager] Agent Server error:', error);

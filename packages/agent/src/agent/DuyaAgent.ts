@@ -1394,7 +1394,7 @@ export class duyaAgent {
 
         if (!isDuplicate) {
           const userMessage = {
-            id: crypto.randomUUID(),
+            id: options?.clientMsgId ?? crypto.randomUUID(),
             role: 'user',
             content: persistedPromptContent,
             displayContent: displayContent !== undefined ? displayContent : undefined,

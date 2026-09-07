@@ -37,7 +37,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BotComposer, type BotComposerSendPayload } from "./BotComposer";
+import { Composer, type ComposerPayload } from "./Composer";
 import { ContextUsageRing } from "./ContextUsageRing";
 import { BotBubbleRow } from "./BotBubbleRow";
 import { BotToolCallRow } from "./BotToolCallRow";
@@ -83,13 +83,31 @@ import { getAppConnectionAPI } from "@/lib/app-connection-ipc";
 import { ConnectorAuthRequiredCard } from "./ConnectorAuthRequiredCard";
 import { BotAskCard } from "./bot/BotAskCard";
 import { BotPermissionCard } from "./bot/BotPermissionCard";
+import { compactContext } from "@/lib/agent-sse-client";
+import { useContextUsageStore } from "@/stores/context-usage-store";
+
+export interface BotDirectSendPayload {
+  text: string;
+  /** Raw model id (no `[provider] ` prefix). Inject by the host from the bot's settings. */
+  model?: string;
+  /** Provider store id the model belongs to. */
+  providerId?: string;
+  /** Thinking level bound to the bot's model. */
+  reasoning?: 'off' | 'low' | 'medium' | 'high';
+  /** Message-level mode (plan-task / research / ...). */
+  mode?: string;
+  /** User-attached files (files/images). */
+  files?: import('@/types/message').FileAttachment[];
+  /** Message being replied to. */
+  replyTo?: { id: string; text: string };
+}
 
 export interface BotDirectChatViewProps {
   sessionId: string;
   messages: Message[];
   isStreaming: boolean;
   isFinalizing: boolean;
-  onSend: (payload: BotComposerSendPayload) => void;
+  onSend: (payload: BotDirectSendPayload) => void;
   onStop: () => void;
   /** Plan 497: open a DM pair as a full sibling view (App owns the state;
    *  absent → chips render but stay inert, e.g. standalone test renders). */
@@ -429,7 +447,7 @@ export function BotDirectChatView({
   // the shared logical-send dedupe (persisted rows win). When the IPC is
   // not wired (web build / jsdom tests) the hook bails out empty and the
   // prop transcript renders as-is.
-  const { messages: persistedTranscript, usageMessages } = useBotDirectTranscript(sessionId);
+  const { messages: persistedTranscript, usageMessages, refresh: refreshTranscript } = useBotDirectTranscript(sessionId);
   const ipcWired =
     typeof window !== "undefined" &&
     !!window.electronAPI?.message?.botDirectGetTranscript;
@@ -452,6 +470,19 @@ export function BotDirectChatView({
   // The bot only needs to exist in the configured roster.
   const canSendToBot = contact != null;
   const busy = isStreaming || isFinalizing;
+
+  // Manual context compression (context-ring "compress" button): mirrors
+  // ChatView's handleCompact. The bot's session goes through the same agent
+  // server `/sessions/:id/compact` endpoint, so the button is the proactive
+  // trigger for the worker's compaction process.
+  const [isCompacting, setIsCompacting] = useState(false);
+  const [compressionNotice, setCompressionNotice] = useState<string | null>(null);
+  const compressionNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showCompressionNotice = useCallback((message: string) => {
+    if (compressionNoticeTimer.current) clearTimeout(compressionNoticeTimer.current);
+    setCompressionNotice(message);
+    compressionNoticeTimer.current = setTimeout(() => setCompressionNotice(null), 5000);
+  }, []);
 
   // Plan 494 — permission surface for bot-direct. The bot session's
   // startStream already routes permission_request events into the shared
@@ -987,12 +1018,51 @@ export function BotDirectChatView({
     }
   }, [messages.length, isStreaming, isScrolledUp]);
 
+  // Manual context compression: POST /sessions/:id/compact, same endpoint
+  // ChatView's ring uses. The worker broadcasts a fresh post-compaction
+  // token_usage before compact:done, so the live ring snapshot is
+  // authoritative — keep it; only clear when no fresh frame arrived.
+  const handleCompact = useCallback(() => {
+    if (!sessionId || isCompacting) return;
+    const compactStartedAt = Date.now();
+    setIsCompacting(true);
+    compactContext(sessionId, {
+      onDone: (result) => {
+        setIsCompacting(false);
+        const live = useContextUsageStore.getState().liveBySession[sessionId];
+        if (!live || live.updatedAt < compactStartedAt) {
+          useContextUsageStore.getState().clearLive(sessionId);
+        }
+        // Re-fetch the transcript so the ring re-anchors on the compacted
+        // history (compacted rows are superseded server-side).
+        void refreshTranscript();
+        let removedMsg: string;
+        if (result.strategy === 'none') {
+          removedMsg = 'No compaction needed (conversation too short)';
+        } else if (result.removedCount == null || result.removedCount === 0) {
+          removedMsg = 'Compaction ran, nothing removed';
+        } else {
+          removedMsg = `${result.removedCount} messages compacted`;
+        }
+        const tokenMsg =
+          result.tokenReduction != null && result.tokenReduction > 0
+            ? `, ~${Math.round(result.tokenReduction)} tokens saved`
+            : '';
+        showCompressionNotice(`${removedMsg}${tokenMsg}.`);
+      },
+      onError: (error) => {
+        setIsCompacting(false);
+        showCompressionNotice(`Compression failed: ${error}`);
+      },
+    });
+  }, [sessionId, isCompacting, refreshTranscript, showCompressionNotice]);
+
   // Composer send: attach the active reply target (App composes it into
   // the outgoing content) and clear the chip, rakazo send parity. The
   // model/provider come from the bot's settings (config.toml `[agents.<id>]`)
   // via the contact — there is no per-chat model picker in the bot composer.
   const handleComposerSend = useCallback(
-    (payload: BotComposerSendPayload) => {
+    (payload: ComposerPayload) => {
       onSend({
         ...payload,
         model: contact?.model || undefined,
@@ -1009,6 +1079,14 @@ export function BotDirectChatView({
 
   return (
     <div className="bot-chat-view">
+      {/* Manual-compression result toast (context-ring "compress" button). */}
+      {compressionNotice && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-top-2 duration-300 pointer-events-none">
+          <div className="flex items-center gap-2 px-4 py-2 bg-blue-500/90 text-white text-sm rounded-lg shadow-lg backdrop-blur-sm">
+            <span>{compressionNotice}</span>
+          </div>
+        </div>
+      )}
       <header className="bot-chat-header">
         <button
           type="button"
@@ -1157,13 +1235,15 @@ export function BotDirectChatView({
         )}
       </div>
 
-      <BotComposer
+      <Composer
         key={sessionId}
-        botId={sessionId}
+        draftKey={sessionId}
         disabled={!canSendToBot}
         busy={busy}
-        onSend={handleComposerSend}
+        onSubmit={handleComposerSend}
         onStop={onStop}
+        showPlus
+        enableAttachments
         replyPreview={replyTarget}
         onClearReply={() => setReplyTarget(null)}
         contextRing={
@@ -1173,6 +1253,8 @@ export function BotDirectChatView({
               messages={usageMessages}
               sessionId={sessionId}
               modelName={contact?.model}
+              onCompress={handleCompact}
+              isCompacting={isCompacting}
             />
           ) : undefined
         }

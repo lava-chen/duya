@@ -644,12 +644,17 @@ export function ExtensionsPage() {
   const requestConnection = useCallback(
     (provider: AppConnectionProviderDTO) => {
       if (provider.supportsManualConfiguration) {
+        if (!provider.configured) {
+          // Needs its own OAuth client first (e.g. Gmail/Calendar/Slack).
+          setConnectionSetupProvider(provider);
+          return;
+        }
         void handleConnect(provider.id);
         return;
       }
       setManagedConnectionProvider(provider);
     },
-    [handleConnect],
+    [handleConnect, setConnectionSetupProvider],
   );
 
   const handleDisconnect = useCallback(

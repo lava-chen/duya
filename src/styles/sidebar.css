@@ -937,9 +937,11 @@ html[data-backdrop] .app-main-inner {
   font-weight: 600;
   line-height: 1;
   user-select: none;
-  /* Emoji glyphs sit slightly below the box's optical center; nudge the
-     content up so it reads centered in the circle. */
-  transform: translateY(-2px);
+  /* NOTE: no box-level translateY here. The streaming ring
+     (.bot-contact-running-ring) centers itself on the wrap via `inset`, and
+     its `spin` animation owns `transform`, so translating this circle out of
+     place would make the ring and the avatar non-concentric. The emoji stays
+     optically centered on its own line box. */
   /* Glass tile: a top-lit translucent sheen layered over the identity color
      (set inline as background-color), so the emoji reads in 3/4 light and
      the tile reads as a tiny frosted-glass badge floating on the sidebar. */
@@ -957,6 +959,13 @@ html[data-backdrop] .app-main-inner {
     0 1px 2px rgba(0, 0, 0, 0.18),
     0 5px 14px -4px rgba(0, 0, 0, 0.28);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+/* Emoji glyph stays visually centered in the circle: nudge it up on its OWN
+   box (not the parent circle), so the tile's geometry stays concentric with
+   the streaming ring while the emoji reads optically centered. */
+.bot-contact-avatar-glyph {
+  transform: translateY(-2px);
 }
 
 /* Bot avatar: an uploaded image (img) or legacy SVG token — either way it
@@ -1042,6 +1051,26 @@ html[data-backdrop] .app-main-inner {
 .bot-contact-pin-indicator {
   color: var(--accent);
   flex-shrink: 0;
+}
+
+/* Title tag: a small accent pill shown next to the bot name when the bot's
+   profile carries a `title` (role/position). Rendered inline so it reads as
+   metadata about the bot; shrinks to ellipsis instead of crowding the row. */
+.bot-contact-title-tag {
+  flex-shrink: 0;
+  font-size: 0.6rem;
+  line-height: 1.2;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  white-space: nowrap;
+  max-width: 9em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .bot-contact-desc {

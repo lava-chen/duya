@@ -288,33 +288,64 @@ async function exchangeCodeForTokens(
     fetchImpl: typeof fetch;
   },
 ): Promise<TokenSet> {
-  const body = new URLSearchParams({
-    grant_type: 'authorization_code',
-    code: params.code,
-    redirect_uri: params.redirectUri,
-    client_id: config.clientId,
-    code_verifier: params.codeVerifier,
-  });
-
-  if (config.requiresClientSecret) {
+  const post = (includeSecret: boolean): Promise<Response> => {
+    const body = new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: params.code,
+      redirect_uri: params.redirectUri,
+      client_id: config.clientId,
+      code_verifier: params.codeVerifier,
+    });
     const secret = getClientSecret(config.id);
-    if (!secret) {
-      throw new FlowError(
-        'missing_client_secret',
-        `Provider ${config.id} requires a client_secret that was not supplied`,
-      );
+    if ((config.requiresClientSecret || includeSecret) && secret) {
+      // Google/others accept the secret for confidential clients; for public
+      // clients an extra secret param is ignored harmlessly.
+      body.set('client_secret', secret);
     }
-    body.set('client_secret', secret);
+    return params.fetchImpl(config.tokenUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json',
+      },
+      body: body.toString(),
+    });
+  };
+
+  // Deterministic first attempt: confidential providers always send the
+  // secret; public (PKCE) providers omit it unless one is configured.
+  const secretReady = Boolean(getClientSecret(config.id));
+  if (config.requiresClientSecret && !secretReady) {
+    throw new FlowError(
+      'missing_client_secret',
+      `Provider ${config.id} requires a client_secret that was not supplied`,
+    );
   }
 
-  const resp = await params.fetchImpl(config.tokenUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      Accept: 'application/json',
-    },
-    body: body.toString(),
-  });
+  let resp = await post(config.requiresClientSecret);
+  if (
+    !resp.ok &&
+    !config.requiresClientSecret &&
+    secretReady
+  ) {
+    // Google occasionally types a client as confidential even when we treat
+    // it as a public/desktop one: the token endpoint then demands the secret.
+    // Retry once with it attached so both typings work transparently.
+    const text = await resp.clone().text();
+    const parsed = (() => {
+      try {
+        return JSON.parse(text) as TokenEndpointResponse;
+      } catch {
+        return null;
+      }
+    })();
+    const demandsSecretTopped =
+      parsed?.error === 'invalid_request' &&
+      (parsed.error_description ?? '').toLowerCase().includes('client_secret');
+    if (demandsSecretTopped) {
+      resp = await post(true);
+    }
+  }
 
   // Slack returns 200 with `{ok:false,error}`; others use 4xx.
   if (!resp.ok) {

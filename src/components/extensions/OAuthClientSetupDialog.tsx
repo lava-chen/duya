@@ -33,7 +33,7 @@ export function OAuthClientSetupDialog({
 
   if (!provider) return null;
 
-  const needsSecret = provider.id === "slack";
+  const needsSecret = provider.requiresClientSecret;
 
   return (
     <div
@@ -61,6 +61,11 @@ export function OAuthClientSetupDialog({
               Add the OAuth client created for this app. Credentials are encrypted in the local
               system vault and never sent to the agent.
             </p>
+            {provider.configurationHint && !provider.configured && (
+              <p className="mt-2 text-xs leading-5 text-amber-500">
+                {provider.configurationHint}
+              </p>
+            )}
           </div>
           <button
             type="button"

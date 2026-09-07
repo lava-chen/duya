@@ -244,8 +244,8 @@ export function BotContactListItem({
     if (isActive && sessionId) markSeen(contact.agentId);
   }, [isActive, sessionId, contact.agentId, markSeen, lastMsgTs]);
 
-  const subtitle = contact.title || contact.description;
-  const rowTitle = previewSnapshot?.text || subtitle || contact.name;
+  const subtitle = contact.description;
+  const rowTitle = previewSnapshot?.text || subtitle || contact.title || contact.name;
   const isPinned = contact.isPinned === true;
   const isHidden = contact.isHidden === true;
 
@@ -423,6 +423,11 @@ export function BotContactListItem({
           <span className="bot-contact-name">
             {isPinned && <PinFilledIcon size={10} className="bot-contact-pin-indicator" />}
             {contact.name}
+            {contact.title && (
+              <span className="bot-contact-title-tag" title={contact.title}>
+                {contact.title}
+              </span>
+            )}
           </span>
           <span className="bot-contact-trailing">
             {status === "queued" ? (

@@ -25,6 +25,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { BotCharacterAvatar } from "@/components/layout/sidebar/BotCharacterAvatar";
 import { GroupCompositeAvatar } from "./GroupCompositeAvatar";
 import { useRoomTranscript } from "./bot/use-room-transcript";
+import { Composer } from "./Composer";
 import { parseRoomIdFromSession, GROUP_MEMBER_MAX } from "@/lib/room-session";
 import { useOptionalPanel } from "@/hooks/usePanel";
 import { useTranslation } from "@/hooks/useTranslation";
@@ -90,13 +91,10 @@ export function GroupRoomChatView({ sessionId }: GroupRoomChatViewProps) {
   const panel = useOptionalPanel() ?? null;
 
   const [room, setRoom] = useState<RoomMeta | null>(null);
-  const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
-  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [awaitingReplies, setAwaitingReplies] = useState(false);
 
   const transcriptRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Room identity + members (room:members resolves names from the bot
   // roster; groups.get supplies the display name).
@@ -155,41 +153,23 @@ export function GroupRoomChatView({ sessionId }: GroupRoomChatViewProps) {
     if (lastMemberPostAt > 0) setAwaitingReplies(false);
   }, [lastMemberPostAt]);
 
-  // rakazo mention detection: `@` token at the caret's word start.
-  const mentionCandidates = useMemo(() => {
-    if (mentionQuery == null || !room) return [];
-    const query = mentionQuery.toLowerCase();
-    return room.members.filter(
-      (m) =>
-        m.name.toLowerCase().includes(query) || m.id.toLowerCase().includes(query),
-    );
-  }, [mentionQuery, room]);
-
-  const handleDraftChange = (value: string) => {
-    setDraft(value);
-    const match = /(?:^|\s)@([\w-]*)$/.exec(value);
-    setMentionQuery(match ? (match[1] ?? "") : null);
-  };
-
-  const insertMention = (member: RoomMember) => {
-    setDraft((prev) => prev.replace(/@([\w-]*)$/, `@${member.name} `));
-    setMentionQuery(null);
-    textareaRef.current?.focus();
-  };
-
-  const send = useCallback(async () => {
-    const text = draft.trim();
-    if (!text || sending || !roomId) return;
-    setSending(true);
-    try {
-      await window.electronAPI?.room?.post?.(roomId, text);
-      setDraft("");
-      setMentionQuery(null);
-      setAwaitingReplies(true);
-    } finally {
-      setSending(false);
-    }
-  }, [draft, sending, roomId]);
+  // Group send: post plain text to the room. The composer owns the draft,
+  // mention autocomplete and submit flow (Composer); sending state + the
+  // "members are discussing" pill live here.
+  const sendText = useCallback(
+    async (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed || sending || !roomId) return;
+      setSending(true);
+      try {
+        await window.electronAPI?.room?.post?.(roomId, trimmed);
+        setAwaitingReplies(true);
+      } finally {
+        setSending(false);
+      }
+    },
+    [sending, roomId],
+  );
 
   const memberById = useMemo(() => {
     const map = new Map<string, RoomMember>();
@@ -384,59 +364,18 @@ export function GroupRoomChatView({ sessionId }: GroupRoomChatViewProps) {
         </div>
       </div>
 
-      <div className="bot-chat-composer">
-        <div className="bot-chat-composer__shell">
-          {mentionCandidates.length > 0 && (
-            <div
-              className="mb-2 max-h-[180px] overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-canvas)]"
-              data-testid="room-mention-list"
-            >
-              {mentionCandidates.map((member) => (
-                <button
-                  key={member.id}
-                  type="button"
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-[var(--bg-hover)]"
-                  onClick={() => insertMention(member)}
-                >
-                  <BotCharacterAvatar name={member.name} agentId={member.id} avatarColor={member.avatarColor} avatarUrl={member.avatarUrl} size={20} />
-                  <span className="text-[13px] text-[var(--text)]">{member.name}</span>
-                </button>
-              ))}
-            </div>
-          )}
-          <div className="bot-chat-composer__input-area">
-            <textarea
-              ref={textareaRef}
-              className="bot-chat-composer__input"
-              placeholder={`发消息到 ${room?.name ?? "群聊"}…（@成员 定向唤醒）`}
-              value={draft}
-              rows={1}
-              onChange={(e) => handleDraftChange(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                  e.preventDefault();
-                  void send();
-                }
-              }}
-              data-testid="room-composer-input"
-            />
-          </div>
-          <div className="bot-chat-composer__actions">
-            <div className="bot-chat-composer__actions-left" />
-            <div className="bot-chat-composer__actions-right">
-              <button
-                type="button"
-                className="bot-chat-composer__send"
-                onClick={() => void send()}
-                disabled={sending || !draft.trim()}
-                data-testid="room-composer-send"
-              >
-                发送
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
+      <Composer
+        draftKey={roomId}
+        disabled={false}
+        busy={sending}
+        onSubmit={({ text }) => void sendText(text)}
+        enableMentions
+        mentionMembers={room?.members ?? []}
+        placeholder={`发消息到 ${room?.name ?? "群聊"}…（@成员 定向唤醒）`}
+        inputTestId="room-composer-input"
+        sendTestId="room-composer-send"
+        mentionListTestId="room-mention-list"
+      />
     </div>
   );
 }
