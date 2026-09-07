@@ -9,7 +9,7 @@
 
 import React from "react";
 import { NotePencilIcon } from "@/components/icons";
-import { BotCharacterAvatar } from "./BotCharacterAvatar";
+import { GroupCompositeAvatar } from "@/components/chat/GroupCompositeAvatar";
 import type { RoomContact } from "./bot-contacts";
 
 export interface RoomContactListItemProps {
@@ -46,7 +46,10 @@ export function RoomContactListItem({
       }}
     >
       <span className="bot-contact-avatar-wrap">
-        <RoomGroupAvatar room={room} size={28} />
+        <GroupCompositeAvatar
+          members={room.memberIds.map((id, i) => ({ id, name: room.memberNames[i] ?? id }))}
+          size={28}
+        />
       </span>
       <span className="bot-contact-body">
         <span className="bot-contact-name">{room.name}</span>
@@ -67,49 +70,5 @@ export function RoomContactListItem({
         </button>
       </span>
     </div>
-  );
-}
-
-/**
- * Composite room avatar (rakazo group-avatar parity, simplified): 1 member →
- * plain bot avatar; 2 → overlapping pair; 3+ → two avatars + overflow badge.
- */
-function RoomGroupAvatar({ room, size }: { room: RoomContact; size: number }) {
-  const members = room.memberIds;
-  if (members.length <= 1) {
-    return (
-      <span
-        className="flex items-center justify-center rounded-full bg-[var(--surface-hover)] text-[13px] font-semibold text-[var(--text-muted)]"
-        style={{ width: size, height: size }}
-      >
-        #
-      </span>
-    );
-  }
-  const [firstId, secondId] = members;
-  const firstName = room.memberNames[0] ?? firstId ?? "";
-  const secondName = room.memberNames[1] ?? secondId ?? "";
-  const mini = Math.round(size * 0.62);
-  return (
-    <span className="relative inline-block" style={{ width: size, height: size }} aria-hidden>
-      {firstId && (
-        <span className="absolute left-0 top-0 rounded-full" style={{ boxShadow: "0 0 0 1.5px var(--bg-canvas, #fff)" }}>
-          <BotCharacterAvatar name={firstName} agentId={firstId} size={mini} />
-        </span>
-      )}
-      {secondId && (
-        <span className="absolute bottom-0 right-0 rounded-full" style={{ boxShadow: "0 0 0 1.5px var(--bg-canvas, #fff)" }}>
-          <BotCharacterAvatar name={secondName} agentId={secondId} size={mini} />
-        </span>
-      )}
-      {members.length > 2 && (
-        <span
-          className="absolute bottom-0 right-0 z-10 flex items-center justify-center rounded-full bg-[var(--surface-hover)] text-[9px] font-semibold text-[var(--text-muted)]"
-          style={{ width: mini, height: mini, boxShadow: "0 0 0 1.5px var(--bg-canvas, #fff)" }}
-        >
-          +{members.length - 2}
-        </span>
-      )}
-    </span>
   );
 }

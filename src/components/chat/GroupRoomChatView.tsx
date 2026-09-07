@@ -23,6 +23,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BotCharacterAvatar } from "@/components/layout/sidebar/BotCharacterAvatar";
+import { GroupCompositeAvatar } from "./GroupCompositeAvatar";
 import { useRoomTranscript } from "./bot/use-room-transcript";
 import { parseRoomIdFromSession, GROUP_MEMBER_MAX } from "@/lib/room-session";
 import { useOptionalPanel } from "@/hooks/usePanel";
@@ -75,59 +76,6 @@ function textFromContent(content: Message["content"] | Message["displayContent"]
     }
   }
   return parts.join("\n");
-}
-
-/**
- * Composite room avatar (rakazo group-avatar parity): 1 member renders as a
- * plain bot avatar, 2 as overlapping mini avatars, 3+ as a triangle with an
- * overflow badge.
- */
-function GroupAvatar({ members, size = 28 }: { members: RoomMember[]; size?: number }) {
-  if (members.length === 0) {
-    return (
-      <span
-        className="inline-flex items-center justify-center rounded-full bg-[var(--bg-hover)] text-[12px] text-[var(--text-muted)]"
-        style={{ width: size, height: size }}
-      >
-        #
-      </span>
-    );
-  }
-  if (members.length === 1) {
-    const only = members[0]!;
-    return <BotCharacterAvatar name={only.name} agentId={only.id} avatarColor={only.avatarColor} avatarUrl={only.avatarUrl} size={size} />;
-  }
-  const pair = members.length === 2;
-  const mini = Math.round(size * (pair ? 0.62 : 0.52));
-  const positions: React.CSSProperties[] = pair
-    ? [{ top: 0, left: 0 }, { right: 0, bottom: 0 }]
-    : [{ top: 0, left: "50%", transform: "translateX(-50%)" }, { bottom: 0, left: 0 }, { bottom: 0, right: 0 }];
-  const visible = pair ? members.slice(0, 2) : members.slice(0, 3);
-  return (
-    <span className="relative inline-block" style={{ width: size, height: size }} aria-hidden>
-      {visible.map((member, index) => (
-        <span
-          key={member.id}
-          className="absolute rounded-full"
-          style={{
-            ...positions[index],
-            zIndex: index + 1,
-            boxShadow: "0 0 0 1.5px var(--bg-canvas, #fff)",
-          }}
-        >
-          <BotCharacterAvatar name={member.name} agentId={member.id} avatarColor={member.avatarColor} avatarUrl={member.avatarUrl} size={mini} />
-        </span>
-      ))}
-      {members.length > 3 && (
-        <span
-          className="absolute flex items-center justify-center rounded-full bg-[var(--bg-hover)] text-[9px] font-semibold text-[var(--text-muted)]"
-          style={{ width: mini, height: mini, right: 0, bottom: 0, zIndex: 4 }}
-        >
-          +{members.length - 2}
-        </span>
-      )}
-    </span>
-  );
 }
 
 export interface GroupRoomChatViewProps {
@@ -325,7 +273,7 @@ export function GroupRoomChatView({ sessionId }: GroupRoomChatViewProps) {
     <div className="bot-chat-view" data-testid="group-room-chat-view">
       <header className="bot-chat-header">
         <span className="bot-chat-header__avatar">
-          <GroupAvatar members={room?.members ?? []} size={28} />
+          <GroupCompositeAvatar members={room?.members ?? []} size={28} />
         </span>
         <span
           className="bot-chat-header__identity"
@@ -371,7 +319,7 @@ export function GroupRoomChatView({ sessionId }: GroupRoomChatViewProps) {
           )}
           {!isLoading && !error && messages.length === 0 && (
             <div className="bot-chat-empty">
-              <GroupAvatar members={room?.members ?? []} size={44} />
+              <GroupCompositeAvatar members={room?.members ?? []} size={44} />
               <div className="bot-chat-empty__name">{room?.name ?? roomId}</div>
               <div className="bot-chat-empty__desc">
                 {room && room.members.length > 0
