@@ -77,6 +77,8 @@ export class ConnectorService {
     // residents. slack/microsoft365/google migrate to `rest` declarations
     // in Plan 460 Phase 2-4; wecom stays (CLI subprocess).
     registerCustomConnector(asAppConnectorId('google'), (d) => createGoogleConnector(d.fetchImpl));
+    registerCustomConnector(asAppConnectorId('gmail'), (d) => createGmailConnector(d.fetchImpl));
+    registerCustomConnector(asAppConnectorId('calendar'), (d) => createCalendarConnector(d.fetchImpl));
     registerCustomConnector(asAppConnectorId('slack'), (d) => createSlackConnector(d.fetchImpl));
     registerCustomConnector(asAppConnectorId('microsoft365'), (d) => createMicrosoft365Connector(d.fetchImpl));
     registerCustomConnector(asAppConnectorId('wecom'), () => createWeComConnector(this.service.vault));
