@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { LlmProvider } from '../../../src/lib/providers/types';
-import { resolveCronProvider, resolveBotWakeProvider } from '../provider';
+import { resolveCronProvider, resolveBotWakeProvider, resolveBotOrDefaultProvider, botAgentIdFromSession } from '../provider';
 import type { ProviderStore } from '../../services/providers/provider-store';
 
 // Shared mutable store so getProviderStore() and the test bodies agree on the
@@ -79,6 +79,32 @@ describe('provider resolution', () => {
 
   it('resolveBotWakeProvider falls back to the default provider for an unknown provider id', () => {
     const r = resolveBotWakeProvider('missing-provider', 'gpt-4o');
+    expect(r.provider.id).toBe('default-provider');
+    expect(r.model).toBe('gpt-4o');
+  });
+
+  it('botAgentIdFromSession strips the bot: prefix from a bot session id', () => {
+    expect(botAgentIdFromSession('bot:f35e82')).toBe('f35e82');
+  });
+
+  it('botAgentIdFromSession returns undefined for a non-bot session id', () => {
+    expect(botAgentIdFromSession('default-user-session')).toBeUndefined();
+  });
+
+  it('resolveBotOrDefaultProvider honors the bot config provider + model when present', () => {
+    const r = resolveBotOrDefaultProvider({ provider: 'claude-provider', model: 'claude-sonnet' });
+    expect(r.provider.id).toBe('claude-provider');
+    expect(r.model).toBe('claude-sonnet');
+  });
+
+  it('resolveBotOrDefaultProvider falls back to default when no bot config', () => {
+    const r = resolveBotOrDefaultProvider(undefined);
+    expect(r.provider.id).toBe('default-provider');
+    expect(r.model).toBe('gpt-default');
+  });
+
+  it('resolveBotOrDefaultProvider falls back to explicit model for a non-bot session', () => {
+    const r = resolveBotOrDefaultProvider(undefined, 'gpt-4o');
     expect(r.provider.id).toBe('default-provider');
     expect(r.model).toBe('gpt-4o');
   });
