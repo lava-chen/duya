@@ -72,8 +72,15 @@ import { splitReplyContent, isReplyContent, type ReplyQuote } from "./bot/reply"
 // Plan 494: bot-direct renders its own permission/ask cards — ChatView
 // (and its PermissionPrompt sheet) is not mounted in this mode.
 import { usePermissions } from "@/hooks/usePermissions";
-import { subscribeToPermissions } from "@/lib/stream-session-manager";
+import {
+  subscribeToPermissions,
+  subscribeToConnectorAuthRequired,
+  clearConnectorAuthRequired,
+  type ConnectorAuthRequiredData,
+} from "@/lib/stream-session-manager";
 import type { PermissionRequestEvent } from "@/types/stream";
+import { getAppConnectionAPI } from "@/lib/app-connection-ipc";
+import { ConnectorAuthRequiredCard } from "./ConnectorAuthRequiredCard";
 import { BotAskCard } from "./bot/BotAskCard";
 import { BotPermissionCard } from "./bot/BotPermissionCard";
 
@@ -250,12 +257,11 @@ function SendCardRow({
       data-role="assistant"
     >
       <div className="bot-chat-row__stack">
-        {/* Seam modifiers reuse the bubble class names — the CSS targets the
-            modifier class inside the assistant row, so the card chrome joins
-            the same corner-grouping rhythm as text bubbles. */}
-        <div
-          className={`bot-chat-bubble bot-chat-bubble--assistant bot-chat-bubble--card${seamClass}`}
-        >
+        {/* The card surface replaces the chat bubble — a single chrome layer
+            (rakazo BuiCard), NOT a card nested inside a bubble. The seam
+            modifiers reuse the bubble class names so the card joins the same
+            corner-grouping rhythm as text bubbles. */}
+        <div className={`bot-send-card-surface${seamClass}`}>
           {message.msgType === 'tool-approval' && approval ? (
             <BotToolApprovalCard
               approval={approval}
@@ -461,6 +467,73 @@ export function BotDirectChatView({
   useEffect(() => {
     return subscribeToPermissions(sessionId, handlePermissionRequest);
   }, [sessionId, handlePermissionRequest]);
+
+  // Plan 503: connector elicitation card for bot-direct. `connect_app` /
+  // reauth surfaces `chat:connector_auth_required`, which the shared
+  // stream-session-manager already routes into `pendingConnectorAuthRequest`
+  // (this session's startStream registers createStreamEventHandler). ChatView
+  // renders the card; bot-direct was the one surface that never subscribed,
+  // so the card never appeared here. Mirrors ChatView's wiring but hands the
+  // resume message through the bot composer (onSend).
+  const [pendingAuthRequest, setPendingAuthRequest] = useState<ConnectorAuthRequiredData | null>(null);
+  const pendingAuthRequestRef = useRef(pendingAuthRequest);
+  useEffect(() => {
+    pendingAuthRequestRef.current = pendingAuthRequest;
+  }, [pendingAuthRequest]);
+  const [authCompletedFor, setAuthCompletedFor] = useState<string | null>(null);
+  const resumeTriggeredRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    const unsubscribe = subscribeToConnectorAuthRequired(sessionId, (data) => {
+      resumeTriggeredRef.current = null;
+      setAuthCompletedFor(null);
+      setPendingAuthRequest(data);
+    });
+    return () => unsubscribe();
+  }, [sessionId]);
+
+  const dismissAuthRequest = useCallback(() => {
+    setPendingAuthRequest(null);
+    clearConnectorAuthRequired(sessionId);
+  }, [sessionId]);
+
+  // After a successful connect/reauth, clear the pending card and send a
+  // localized resume message through the composer so the model continues in
+  // the same turn (a bot-initiated connect has no failed call to re-issue —
+  // it carries its own resume copy).
+  const retryAfterAuth = useCallback(() => {
+    const request = pendingAuthRequestRef.current;
+    setPendingAuthRequest(null);
+    setAuthCompletedFor(null);
+    clearConnectorAuthRequired(sessionId);
+    if (!request?.provider || resumeTriggeredRef.current === request.provider) {
+      return;
+    }
+    resumeTriggeredRef.current = request.provider;
+    onSend?.({
+      text:
+        request.variant === 'connect'
+          ? t('connectorAuth.connectResumeMessage', { provider: request.provider })
+          : t('connectorAuth.resumeMessage', {
+              provider: request.provider,
+              tool: request.toolName ?? '',
+            }),
+    });
+  }, [sessionId, onSend, t]);
+
+  // Main-process completion broadcast — covers authorization finished from
+  // the settings page while this card was pending.
+  useEffect(() => {
+    if (!sessionId) return;
+    const api = getAppConnectionAPI();
+    if (!api) return;
+    return api.onConnected((data) => {
+      const request = pendingAuthRequestRef.current;
+      if (!request || request.provider !== data.provider) return;
+      setAuthCompletedFor(data.provider);
+    });
+  }, [sessionId]);
 
   // Plan 498: durable tool-approval card states, hydrated from the approval
   // side table and kept live via the `tool-approval:updated` broadcast (the
@@ -721,10 +794,19 @@ export function BotDirectChatView({
       // throws RangeError and takes down the whole transcript render
       // — so such rows are skipped instead.
       const previous = rows[index - 1];
+      const rowFinite = Number.isFinite(row.message.timestamp);
+      const prevFinite = previous != null && Number.isFinite(previous.message.timestamp);
+      const dayChanged =
+        previous != null &&
+        dayKeyOf(previous.message.timestamp) !== dayKeyOf(row.message.timestamp);
       const showSeparator =
-        Number.isFinite(row.message.timestamp) &&
-        (previous == null ||
-          dayKeyOf(previous.message.timestamp) !== dayKeyOf(row.message.timestamp));
+        rowFinite && (previous == null || dayChanged);
+      // WeChat-style within-day time separator: same calendar day but the gap
+      // to the previous message reaches WITHIN_DAY_GAP_MS → show HH:MM (the
+      // row also already starts a fresh bubble group).
+      const showTimeSeparator =
+        rowFinite && prevFinite && !dayChanged &&
+        row.message.timestamp - previous!.message.timestamp >= WITHIN_DAY_GAP_MS;
       const element = isSendCardMessage(row.message) ? (
         <SendCardRow
           key={row.message.id}
@@ -774,11 +856,18 @@ export function BotDirectChatView({
       ) : (
         <StatusRow key={row.message.id} message={row.message} />
       );
-      return showSeparator ? (
+      const separator = showSeparator ? (
+        <div className="bot-chat-date-separator" role="separator">
+          {dateSeparatorLabel(row.message.timestamp)}
+        </div>
+      ) : showTimeSeparator ? (
+        <div className="bot-chat-time-separator" role="separator">
+          {timeSeparatorLabel(row.message.timestamp)}
+        </div>
+      ) : null;
+      return separator ? (
         <React.Fragment key={row.message.id}>
-          <div className="bot-chat-date-separator" role="separator">
-            {dateSeparatorLabel(row.message.timestamp)}
-          </div>
+          {separator}
           {element}
         </React.Fragment>
       ) : (
@@ -908,6 +997,7 @@ export function BotDirectChatView({
         ...payload,
         model: contact?.model || undefined,
         providerId: contact?.provider || undefined,
+        reasoning: contact?.reasoning,
         replyTo: replyTarget ?? undefined,
       });
       setReplyTarget(null);
@@ -925,17 +1015,22 @@ export function BotDirectChatView({
           className="bot-chat-header__identity"
           title={subtitle || undefined}
           onClick={() => {
-            if (!contact || !panel || !openOrActivatePage) return;
-            // Toggle: clicking the header again closes the panel when it is
-            // already showing this bot's settings; otherwise open/activate it.
+            if (!contact || !panel) return;
+            // Toggle: clicking the header closes the settings panel only when
+            // it is currently OPEN and the active tab; otherwise open/activate
+            // it. `panelOpen` matters: the panel can be collapsed (drawer
+            // toggle) while the bot-settings tab is still active — in that
+            // state clicking the header must re-OPEN, not "close" the remaining
+            // tab away. Closing goes through the same closePanel the tab's own
+            // X uses, so activeTabId is cleared and the next click opens cleanly.
             const existing = panel.tabs.find(
               (t) => t.pageId === "bot-settings" && t.params?.agentId === contact.agentId,
             );
-            if (panel.panelOpen && existing && panel.activeTabId === existing.id) {
-              panel.setPanelOpen(false);
+            if (existing && panel.panelOpen && panel.activeTabId === existing.id) {
+              panel.closePanel(existing.id);
               return;
             }
-            openOrActivatePage("bot-settings", {
+            panel.openOrActivatePage("bot-settings", {
               agentId: contact.agentId,
               title: botName,
             });
@@ -1019,6 +1114,21 @@ export function BotDirectChatView({
               />
             </div>
           ))}
+
+        {pendingAuthRequest && (
+          <div
+            className={`bot-chat-row${tailCardJoins ? " bot-chat-row--grouped" : ""} bot-chat-row--assistant`}
+            data-role="assistant"
+          >
+            <ConnectorAuthRequiredCard
+              request={pendingAuthRequest}
+              authCompleted={authCompletedFor !== null && authCompletedFor === pendingAuthRequest.provider}
+              onDismiss={dismissAuthRequest}
+              onRetry={retryAfterAuth}
+              resolveProviderLabel={(id) => id}
+            />
+          </div>
+        )}
 
         {busy && <BotTypingIndicator />}
         </div>

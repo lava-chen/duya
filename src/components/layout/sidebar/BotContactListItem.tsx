@@ -27,6 +27,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { subscribeToPhase } from "@/lib/stream-session-manager";
+import { createPortal } from "react-dom";
 import type { StreamPhase } from "@/types/message";
 import { useMailboxStore } from "@/stores/mailbox-store";
 import { useBotActivityStore } from "@/stores/bot-activity-store";
@@ -537,13 +538,16 @@ export function BotContactListItem({
         </div>
       </div>
 
-      {/* Dropdown Menu */}
-      {showMenu && (
-        <div
-          ref={menuRef}
-          className="bot-dropdown-menu"
-          style={{ top: menuPos.y, left: menuPos.x }}
-        >
+      {/* Dropdown Menu — portaled to <body> so the sidebar's backdrop-filter /
+          overflow-hidden context (a containing block for `position: fixed`)
+          can't clip the cascading "Move to" submenu at the sidebar's edge. */}
+      {showMenu &&
+        createPortal(
+          <div
+            ref={menuRef}
+            className="bot-dropdown-menu"
+            style={{ top: menuPos.y, left: menuPos.x }}
+          >
           {onEdit && (
             <Button
               type="button"
@@ -688,8 +692,9 @@ export function BotContactListItem({
               </Button>
             </>
           )}
-        </div>
-      )}
+        </div>,
+          document.body,
+        )}
     </>
   );
 }

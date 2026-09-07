@@ -1575,8 +1575,39 @@
 }
 
 /* ─── Plan 489 P2.2: BotSendCard — minimal cards for SendMessage kinds ───
-   Cards render INSIDE .bot-chat-bubble--assistant, so they inherit the
-   assistant bubble surface/border; only inner elements are styled here. */
+   Cards render STANDALONE (rakazo BuiCard surface), NOT nested inside a
+   bubble. `.bot-send-card-surface` is the single chrome layer (border, bg,
+   padding, radius); the inner components are content only. */
+
+.bot-send-card-surface {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: fit-content;
+  max-width: min(420px, 88%);
+  padding: 13px 16px;
+  box-sizing: border-box;
+  border-radius: 20px;
+  /* Solid panel fill (white in light, dark in dark) — clearly distinct from
+     the canvas so the card reads as a surfaced card, not a bg-less frame. */
+  background: var(--panel-bg-solid);
+  color: var(--text);
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+/* Telegram-style seam corners on the card surface, mirroring text bubbles
+   (20px → 8px on the side facing a neighbor). These override the base radius
+   above; the modifier class name is the shared `.bot-chat-bubble--group-*`,
+   set by SendCardRow. */
+.bot-send-card-surface.bot-chat-bubble--group-start,
+.bot-send-card-surface.bot-chat-bubble--group-middle {
+  border-bottom-left-radius: 8px;
+}
+.bot-send-card-surface.bot-chat-bubble--group-middle,
+.bot-send-card-surface.bot-chat-bubble--group-end {
+  border-top-left-radius: 8px;
+}
 
 .bot-send-card {
   display: flex;
@@ -2107,16 +2138,12 @@
 /* ─── Plan 498: BotToolApprovalCard — durable approval card. ─── */
 
 .bot-tool-approval-card {
+  /* Content-only — the chrome (border/bg/padding/radius) lives on
+     the wrapping .bot-send-card-surface so the card reads as a single
+     layer, not a bubble-nested card. */
   display: flex;
   flex-direction: column;
   gap: 10px;
-  width: min(420px, 88%);
-  padding: 12px 16px;
-  box-sizing: border-box;
-  border-radius: 20px;
-  background: var(--bot-bubble-assistant-bg);
-  color: var(--bot-bubble-assistant-fg);
-  border: 1px solid var(--border);
 }
 
 .bot-tool-approval-card__head {
