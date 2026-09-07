@@ -1079,6 +1079,37 @@ html[data-backdrop] .app-main-inner {
   background: var(--error);
 }
 
+/* Plan 483 P1.4 follow-up: loading ring around the avatar while the bot's
+   session is streaming (foreground or background). Drafted as the avatar's
+   own glow in the original P1.4 comment; rendered at the wrap level so it
+   works for both avatar images and emoji tiles. `canSend`-derived working
+   state means the ring only appears while a stream is genuinely live. */
+.bot-contact-running-ring {
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    var(--accent) 90deg,
+    transparent 220deg,
+    transparent 360deg
+  );
+  -webkit-mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - 2.5px),
+    #000 calc(100% - 2px)
+  );
+  mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - 2.5px),
+    #000 calc(100% - 2px)
+  );
+  animation: spin 1s linear infinite;
+  z-index: 0;
+  pointer-events: none;
+}
+
 /* Hover action buttons overlay the trailing area (same replace-not-overlap
    trick as `.thread-item-actions-hover`). */
 .bot-contact-actions-hover {

@@ -207,7 +207,20 @@ export function BotContactListItem({
     if (queuedCount > 0) return "queued";
     return "idle";
   })();
-  const activeIsBusy = status === "running";
+  // Plan 483 P1.4 follow-up: the loading ring must light up for ANY bot
+  // genuinely running a turn — including in the background. Two signals,
+  // unioned:
+  //   - the reactive phase subscription (`process`-level, fires the instant
+  //     this bot's bound session crosses into an active phase, regardless of
+  //     which view is focused), and
+  //   - the roster's coarse status (`contact.status`, derived from
+  //     `canSend` in use-bot-contacts). It polls at 2s, so it catches a
+  //     run that started via the main process (wake / scheduled /
+  //     send-to-agent) before the renderer attached to the live stream.
+  // `canSend === false` only while a stream is truly live, so the ring can
+  // never light up for an idle bot — it appears iff the bot is working.
+  const isWorking = status === "running" || contact.status === "running";
+  const activeIsBusy = isWorking;
 
   // WeChat-style avatar badges (green = finished but unseen, red = errored).
   // Unseen derives from the transcript's last message timestamp vs the
@@ -386,7 +399,13 @@ export function BotContactListItem({
           size={28}
           working={activeIsBusy}
         />
-        {hasError ? (
+        {activeIsBusy ? (
+          <span
+            className="bot-contact-running-ring"
+            title={t("bot.contactStatus.running")}
+            aria-label={t("bot.contactStatus.running")}
+          />
+        ) : hasError ? (
           <span
             className="bot-contact-badge error"
             title={t("bot.contactBadgeError")}
