@@ -21,7 +21,6 @@
  */
 
 import * as fs from 'node:fs';
-import * as http from 'node:http';
 import * as https from 'node:https';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -58,11 +57,20 @@ export interface ChannelTransport {
 
 /**
  * Simple HTTP request helper for platform API calls.
- * Handles Discord and Slack's HTTPS API requirements.
+ * Handles Discord, Slack and Telegram's HTTPS API requirements.
+ *
+ * All built-in platform transports are HTTPS-only: api.telegram.org and
+ * api.slack.com answer plaintext (port 80) with a 301 → https redirect that
+ * raw clients do not follow, so requests always go over TLS. Redirect
+ * responses (301/302/303/307/308) with a Location header are followed up to
+ * MAX_REDIRECT_HOPS (Telegram's Bot API uses them for datacenter routing).
  *
  * `body` may be a string (JSON — sent as before) or a Buffer (multipart —
  * Content-Length is set from the byte length, plan 507 P3.2).
  */
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const MAX_REDIRECT_HOPS = 5;
+
 function httpRequest(opts: {
   method: string;
   hostname: string;
@@ -71,17 +79,24 @@ function httpRequest(opts: {
   body?: string | Buffer;
   timeout?: number;
 }): Promise<{ statusCode: number; body: string }> {
+  return requestOnce({ ...opts, url: new URL(`https://${opts.hostname}${opts.path}`) }, 0);
+}
+
+function requestOnce(
+  opts: { url: URL; method: string; headers: Record<string, string>; body?: string | Buffer; timeout?: number },
+  hop: number,
+): Promise<{ statusCode: number; body: string }> {
   return new Promise((resolve, reject) => {
-    const lib = opts.hostname.startsWith('discord') ? https : http;
     const headers: Record<string, string> = { ...opts.headers };
     if (Buffer.isBuffer(opts.body)) {
       headers['Content-Length'] = String(opts.body.length);
     }
-    const req = lib.request(
+    const req = https.request(
       {
         method: opts.method,
-        hostname: opts.hostname,
-        path: opts.path,
+        hostname: opts.url.hostname,
+        port: opts.url.port || 443,
+        path: opts.url.pathname + opts.url.search,
         headers,
         timeout: opts.timeout ?? 10_000,
       },
@@ -89,7 +104,13 @@ function httpRequest(opts: {
         let body = '';
         res.on('data', (chunk) => { body += chunk; });
         res.on('end', () => {
-          resolve({ statusCode: res.statusCode ?? 0, body });
+          const status = res.statusCode ?? 0;
+          const location = res.headers.location;
+          if (REDIRECT_STATUSES.has(status) && location && hop < MAX_REDIRECT_HOPS) {
+            requestOnce({ ...opts, url: new URL(location, opts.url) }, hop + 1).then(resolve, reject);
+            return;
+          }
+          resolve({ statusCode: status, body });
         });
       },
     );
