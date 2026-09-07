@@ -17,6 +17,7 @@ import {
 import { getProviderStore } from '../services/providers/provider-store-electron';
 import { getConfigStore } from '../config/store-instance';
 import { createConfigAgentFromName, patchConfigAgentIdentity } from '../config/agents';
+import { readConfigAgents } from '../../packages/agent/src/agent-profile/config-agents.js';
 import { toLegacyApiProvider, migrateLegacyApiProvider } from '../../src/lib/providers/legacy';
 import type { ApiProvider } from '../config/provider-types';
 import { getAutomationScheduler } from '../automation/Scheduler.js';
@@ -39,6 +40,23 @@ import {
   markSecretProvided,
 } from '../db/sendMessageState';
 import { notifySessionIdle, advanceUserTurn } from '../wake/wake-dispatcher';
+
+/**
+ * Resolve a bot's configured provider (store id) + model from its
+ * `[agents.<id>]` entry so the persisted bot session row carries the agent's
+ * own LLM config instead of the defaults — the single source the foreground
+ * chat path derives its providerConfig from.
+ */
+function botAgentConfigFor(agentId: string): { providerId?: string; model?: string } {
+  try {
+    const agents = readConfigAgents();
+    const cfg = agents[agentId];
+    if (!cfg) return {};
+    return { providerId: cfg.provider, model: cfg.model };
+  } catch {
+    return {};
+  }
+}
 import { maybeDispatchAgentDm } from '../wake/agent-dm-dispatcher';
 import { maybeDispatchIdleWake } from '../wake/idle-dispatcher';
 import { maybeScheduleGroupTurnFromAppend } from '../wake/group-turn-dispatcher';
@@ -284,8 +302,17 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       }
       const existing = sessions.get(sessionId);
       if (existing) {
+        // Backfill the agent's configured provider/model when an older row was
+        // created before per-agent config landed (it stored the defaults).
+        const cfg = botAgentConfigFor(agentId);
+        if (cfg.model && !existing.model) {
+          sessions.update(sessionId, { model: cfg.model, providerId: cfg.providerId ?? existing.providerId });
+          const backfilled = sessions.get(sessionId);
+          return { ok: true, created: false, session: coreSessionToIpcRow(backfilled ?? existing) };
+        }
         return { ok: true, created: false, session: coreSessionToIpcRow(existing) };
       }
+      const cfg = botAgentConfigFor(agentId);
       const created = sessions.create({
         id: sessionId,
         title: agentId,
@@ -295,6 +322,8 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         agentType: 'bot',
         agentName: agentId,
         agentProfileId: agentId,
+        model: cfg.model,
+        providerId: cfg.providerId,
         extensions: { source: 'bot' },
       });
       // The row was created outside any renderer action (the agent-server
