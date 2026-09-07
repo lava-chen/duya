@@ -10,6 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildChannelInboundWakePrompt,
+  CHANNEL_INBOUND_REPLY_HINT,
   CHANNEL_INBOUND_WAKE_CUE,
   MAX_INBOUND_TEXT_CHARS,
 } from '../prompts';
@@ -17,6 +18,9 @@ import type {
   ChannelInboundAttachment,
   ChannelInboundEnvelope,
 } from '../types';
+
+/** Expected prefix of every inbound prompt: cue + reply hint. */
+const PREFIX = `${CHANNEL_INBOUND_WAKE_CUE}\n${CHANNEL_INBOUND_REPLY_HINT}`;
 
 function makeEnvelope(
   overrides: Partial<ChannelInboundEnvelope> = {},
@@ -47,14 +51,14 @@ describe('buildChannelInboundWakePrompt — attachments (plan 507 P2.1)', () => 
   it('renders a text-only envelope exactly as before (no attachments field)', () => {
     const prompt = buildChannelInboundWakePrompt([makeEnvelope()]);
     expect(prompt).toBe(
-      `${CHANNEL_INBOUND_WAKE_CUE}\nOn telegram, from telegram:12345: alice: hello`,
+      `${PREFIX}\nOn telegram, from telegram:12345: alice: hello`,
     );
   });
 
   it('renders an empty attachments array identically to no attachments', () => {
     const prompt = buildChannelInboundWakePrompt([makeEnvelope({ attachments: [] })]);
     expect(prompt).toBe(
-      `${CHANNEL_INBOUND_WAKE_CUE}\nOn telegram, from telegram:12345: alice: hello`,
+      `${PREFIX}\nOn telegram, from telegram:12345: alice: hello`,
     );
   });
 
@@ -63,7 +67,7 @@ describe('buildChannelInboundWakePrompt — attachments (plan 507 P2.1)', () => 
       makeEnvelope({ text: 'check this report', attachments: [makeAttachment()] }),
     ]);
     expect(prompt).toBe(
-      `${CHANNEL_INBOUND_WAKE_CUE}\n` +
+      `${PREFIX}\n` +
         'On telegram, from telegram:12345: alice: check this report\n' +
         '  [attachment saved to: ' +
         '/userData/agents/bot1/attachments/inbound/telegram/20260907_120000_000_report.xlsx ' +
@@ -94,13 +98,14 @@ describe('buildChannelInboundWakePrompt — attachments (plan 507 P2.1)', () => 
       }),
     ]);
     const lines = prompt.split('\n');
-    expect(lines).toHaveLength(4);
+    expect(lines).toHaveLength(5);
     expect(lines[0]).toBe(CHANNEL_INBOUND_WAKE_CUE);
-    expect(lines[1]).toBe('On telegram, from telegram:12345: alice: two files');
-    expect(lines[2]).toBe(
+    expect(lines[1]).toBe(CHANNEL_INBOUND_REPLY_HINT);
+    expect(lines[2]).toBe('On telegram, from telegram:12345: alice: two files');
+    expect(lines[3]).toBe(
       '  [attachment saved to: /userData/agents/bot1/attachments/inbound/telegram/a.png (a.png, image/png, 800 B)]',
     );
-    expect(lines[3]).toBe(
+    expect(lines[4]).toBe(
       '  [attachment saved to: /userData/agents/bot1/attachments/inbound/telegram/notes.pdf (notes.pdf, application/pdf, 2.1 MB)]',
     );
   });
@@ -121,9 +126,9 @@ describe('buildChannelInboundWakePrompt — attachments (plan 507 P2.1)', () => 
       }),
     ]);
     const lines = prompt.split('\n');
-    expect(lines).toHaveLength(3);
-    expect(lines[1]).toBe('On telegram, from telegram:12345: alice: ');
-    expect(lines[2]).toBe(
+    expect(lines).toHaveLength(4);
+    expect(lines[2]).toBe('On telegram, from telegram:12345: alice: ');
+    expect(lines[3]).toBe(
       '  [attachment saved to: /userData/agents/bot1/attachments/inbound/telegram/photo.jpg (photo.jpg, image/jpeg, 2.0 KB)]',
     );
   });
@@ -140,7 +145,7 @@ describe('buildChannelInboundWakePrompt — attachments (plan 507 P2.1)', () => 
         ],
       }),
     ]);
-    const lines = prompt.split('\n').slice(2);
+    const lines = prompt.split('\n').slice(3);
     expect(lines[0]).toContain('(a.bin, application/octet-stream, 800 B)');
     expect(lines[1]).toContain('(b.bin, application/octet-stream, 1023 B)');
     expect(lines[2]).toContain('(c.bin, application/octet-stream, 1.0 KB)');
@@ -157,7 +162,7 @@ describe('buildChannelInboundWakePrompt — attachments (plan 507 P2.1)', () => 
       }),
     ]);
     expect(prompt).toBe(
-      `${CHANNEL_INBOUND_WAKE_CUE}\n` +
+      `${PREFIX}\n` +
         "On telegram, from telegram:12345: alice reacted 👍 to your message: 'nice'",
     );
   });
@@ -186,11 +191,11 @@ describe('buildChannelInboundWakePrompt — attachments (plan 507 P2.1)', () => 
     ];
     const prompt = buildChannelInboundWakePrompt(envelopes);
     const lines = prompt.split('\n');
-    // cue + 3 long text lines + truncation marker
-    expect(lines).toHaveLength(5);
+    // cue + reply hint + 3 long text lines + truncation marker
+    expect(lines).toHaveLength(6);
     expect(prompt).not.toContain('final message');
     expect(prompt).not.toContain('attachment saved to');
-    expect(lines[4]).toBe(
+    expect(lines[5]).toBe(
       `<${MAX_INBOUND_TEXT_CHARS} character limit reached — earlier messages truncated>`,
     );
   });
