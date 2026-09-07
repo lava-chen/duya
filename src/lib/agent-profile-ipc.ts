@@ -90,6 +90,8 @@ export interface BotListItem {
   model?: string;
   /** Provider store id the configured `model` belongs to. */
   provider?: string;
+  /** Thinking level bound to the model ('off'|'low'|'medium'|'high'). Absent → runtime default medium. */
+  reasoning?: 'off' | 'low' | 'medium' | 'high';
   workspace?: string;
   avatarColor?: string;
   /** `duya-file://` URL of the bot's avatar image (main-process built). */
@@ -110,6 +112,8 @@ export type AgentUpsertInput = {
   model?: string;
   /** Provider store id the `model` belongs to. Absent → preserve the existing value. */
   provider?: string;
+  /** Thinking level bound to the model. Absent → preserve the existing value. */
+  reasoning?: 'off' | 'low' | 'medium' | 'high';
   workspace?: string;
   agents_md?: string;
   tools?: { profile?: string; allow?: string[]; deny?: string[] };

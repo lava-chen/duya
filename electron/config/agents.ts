@@ -44,6 +44,8 @@ export interface AgentUpsertInput {
   model?: string;
   /** Provider store id the `model` belongs to. Absent → preserve the existing value. */
   provider?: string;
+  /** Thinking level bound to the model ('off'|'low'|'medium'|'high'). Absent → preserve the existing value. */
+  reasoning?: 'off' | 'low' | 'medium' | 'high';
   workspace?: string;
   agents_md?: string;
   tools?: { profile?: string; allow?: string[]; deny?: string[] };
@@ -126,6 +128,8 @@ export interface BotListItem {
   model?: string;
   /** Provider store id the configured `model` belongs to. */
   provider?: string;
+  /** Thinking level bound to the model ('off'|'low'|'medium'|'high'); absent → runtime default medium. */
+  reasoning?: 'off' | 'low' | 'medium' | 'high';
   workspace?: string;
   avatarColor?: string;
   /** `duya-file://` URL of the bot's avatar image, with `?v=<mtime>` cache-buster (absent when no image). */
@@ -168,6 +172,7 @@ export function listBots(): BotListItem[] {
       model: cfg.model,
       provider: cfg.provider,
       workspace: cfg.workspace,
+      reasoning: cfg.reasoning,
       avatarColor: profile?.avatarColor,
       avatarEmoji: profile?.avatarEmoji,
       ...buildBotAvatarEntry(id, profile?.avatarImage, duyaRoot),
@@ -226,6 +231,11 @@ export function upsertConfigAgent(id: string, input: AgentUpsertInput): CustomAg
     provider: input.provider !== undefined
       ? input.provider.trim() || undefined
       : agents[id]?.provider,
+    // Reasoning only changes when the caller carries it; patch callers must
+    // not drop the bound thinking level.
+    reasoning: input.reasoning !== undefined
+      ? input.reasoning
+      : agents[id]?.reasoning,
     workspace: input.workspace?.trim() || undefined,
     agents_md: input.agents_md?.trim() || undefined,
     tools: input.tools && Object.keys(input.tools).length ? input.tools : undefined,

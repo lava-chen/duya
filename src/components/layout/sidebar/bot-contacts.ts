@@ -33,6 +33,8 @@ export interface BotSource {
   model?: string;
   /** Provider store id the configured `model` belongs to. */
   provider?: string;
+  /** Thinking level bound to the model ('off'|'low'|'medium'|'high'); absent → runtime default medium. */
+  reasoning?: 'off' | 'low' | 'medium' | 'high';
   workspace?: string;
   avatarColor?: string;
   /** User-picked emoji for the colored circle (absent → deterministic per-agent emoji). */
@@ -52,6 +54,8 @@ export interface BotContact {
   model?: string;
   /** Provider store id the configured `model` belongs to. */
   provider?: string;
+  /** Thinking level bound to the model ('off'|'low'|'medium'|'high'); absent → runtime default medium. */
+  reasoning?: 'off' | 'low' | 'medium' | 'high';
   /** Color token for the initial-circle avatar (image wins when present). */
   avatarColor?: string;
   /** User-picked emoji for the colored circle (wins over the deterministic one). */
@@ -296,6 +300,7 @@ export function buildBotContacts(
       description: bot.description?.trim() ?? '',
       model: bot.model?.trim() ?? '',
       provider: bot.provider?.trim() || undefined,
+      reasoning: bot.reasoning,
       avatarColor: bot.avatarColor,
       avatarEmoji: bot.avatarEmoji,
       avatarUrl: bot.avatarUrl,

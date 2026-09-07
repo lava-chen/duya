@@ -463,6 +463,8 @@ export function BotSettingsPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     handleModelSelect,
     modelGroups,
     modelsLoading,
+    reasoning,
+    setReasoning,
     nameRef,
   } = useBotContactForm({ active: !!contact, contact, onSaved: handleSaved });
 
@@ -591,6 +593,8 @@ export function BotSettingsPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           groups={modelGroups}
           loading={modelsLoading}
           onChange={handleModelSelect}
+          reasoning={reasoning}
+          onReasoningChange={setReasoning}
           showManageProviders
         />
 

@@ -61,6 +61,8 @@ export function EditBotDialog({ isOpen, contact, onCancel, onSaved }: EditBotDia
     handleModelSelect,
     modelGroups,
     modelsLoading,
+    reasoning,
+    setReasoning,
     submitting,
     error,
     canSubmit,
@@ -164,6 +166,8 @@ export function EditBotDialog({ isOpen, contact, onCancel, onSaved }: EditBotDia
           groups={modelGroups}
           loading={modelsLoading}
           onChange={handleModelSelect}
+          reasoning={reasoning}
+          onReasoningChange={setReasoning}
         />
 
         {avatarUrl && (
