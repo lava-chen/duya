@@ -13,11 +13,10 @@
  */
 
 import { getCoreStores } from '../db/core-connection';
-import { resolveCronProvider, resolveBotWakeProvider } from '../automation/provider';
+import { resolveCronProvider, resolveBotOrDefaultProvider, botAgentIdFromSession } from '../automation/provider';
 import type { ResolvedCronProvider } from '../automation/provider';
 import { buildCronProviderConfig } from '../automation/provider-config';
 import { readConfigAgents } from '../../packages/agent/src/agent-profile/config-agents.js';
-import type { CustomAgentConfig } from '../../packages/agent/src/agent-profile/config-agents.js';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
 import { runPromptInSession } from '../automation/agent-run';
 import { getLogger, LogComponent } from '../logging/logger';
@@ -50,6 +49,13 @@ export interface WakeRunOutcome {
  * SendToAgent / update_state) and the 474 prompt sections. Matching the
  * session's original model stays a 485 refinement.
  */
+/** Persistent bot sessions are keyed `bot:<agentId>` — derive the agent id
+ *  straight from the session id so every wake entry (DM, channel, user-turn)
+ *  picks up the bot's own provider/model without requiring the caller to pass
+ *  it explicitly. Returns undefined for non-bot sessions. (Re-exported from
+ *  `automation/provider` for readability at these call sites.) */
+export { botAgentIdFromSession };
+
 /** Extract a session's own working directory, defaulting to '' when the row
  *  is missing. Shared by the wake-run and user-turn run paths (plan 505). */
 function resolveSessionWorkingDirectory(sessionId: string): string {
@@ -76,15 +82,9 @@ export async function runWakePromptInExistingSession(
   // session falls back to the default provider, exactly like cron.
   let resolved: ResolvedCronProvider
   try {
-    const botAgentId = opts?.agentProfileId
-    let botConfig: CustomAgentConfig | undefined
-    if (botAgentId) {
-      const agents = await readConfigAgents()
-      botConfig = agents[botAgentId]
-    }
-    resolved = botConfig
-      ? resolveBotWakeProvider(botConfig.provider, botConfig.model)
-      : resolveCronProvider(undefined)
+    const botAgentId = opts?.agentProfileId ?? botAgentIdFromSession(sessionId)
+    const agents = await readConfigAgents()
+    resolved = resolveBotOrDefaultProvider(botAgentId ? agents[botAgentId] : undefined)
   } catch {
     getLogger().warn('Wake run skipped: no provider configured', { sessionId }, LogComponent.Automation)
     return { output: '', events: [] }
@@ -135,7 +135,8 @@ export async function runUserTurnInSession(
     return { output: '', events: [] }
   }
 
-  // Prefer the session's own provider/model; fall back to the default.
+  // Prefer the session's own provider/model; fall back to the default. For a
+  // bot session that means its own config.toml provider/model.
   let sessionModel: string | undefined
   try {
     sessionModel = getCoreStores().sessions.get(sessionId)?.model ?? undefined
@@ -145,7 +146,9 @@ export async function runUserTurnInSession(
 
   let resolved: ResolvedCronProvider
   try {
-    resolved = resolveCronProvider(sessionModel)
+    const botAgentId = opts?.agentProfileId ?? botAgentIdFromSession(sessionId)
+    const agents = await readConfigAgents()
+    resolved = resolveBotOrDefaultProvider(botAgentId ? agents[botAgentId] : undefined, sessionModel)
   } catch {
     getLogger().warn('User-turn fallback skipped: no provider configured', { sessionId }, LogComponent.Automation)
     return { output: '', events: [] }

@@ -61,6 +61,32 @@ export function resolveBotWakeProvider(
   return { provider, model: resolvedModel };
 }
 
+/**
+ * Derive the agent id from a persistent bot session id (`bot:<agentId>`).
+ * Returns undefined for non-bot sessions. Central so every wake/run entry
+ * (DM, channel, user-turn fallback) picks up the bot's own provider/model
+ * without requiring the caller to thread the id through.
+ */
+export function botAgentIdFromSession(sessionId: string): string | undefined {
+  const PREFIX = 'bot:';
+  return sessionId.startsWith(PREFIX) ? sessionId.slice(PREFIX.length) : undefined;
+}
+
+/**
+ * Resolve provider + model for an agent run: when the bot config (its own
+ * provider/model) is present, honor it; otherwise fall back to the generic
+ * cron resolution. `bot` is the agent's `[agents.<id>]` entry, already keyed by
+ * the resolved agent id by the caller.
+ */
+export function resolveBotOrDefaultProvider(
+  bot: { provider?: string; model?: string } | undefined,
+  fallbackModel?: string,
+): ResolvedCronProvider {
+  return bot
+    ? resolveBotWakeProvider(bot.provider, bot.model)
+    : resolveCronProvider(fallbackModel);
+}
+
 function resolveCronModel(jobModel: string | undefined, provider: ApiProvider): string {
   const explicit = jobModel?.trim() ?? '';
   if (explicit && explicit.toLowerCase() !== 'default') return explicit;
