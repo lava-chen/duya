@@ -240,6 +240,18 @@
   user-select: none;
 }
 
+/* Within-day time separator (WeChat-style): HH:MM shown between messages on
+   the same calendar day whose gap reaches the 5-minute threshold. Lighter
+   weight than the day separator — just a faint centered timestamp. */
+.bot-chat-time-separator {
+  margin-top: 16px;
+  margin-bottom: -6px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 0.65rem;
+  user-select: none;
+}
+
 .bot-chat-row {
   display: flex;
   align-items: flex-end;

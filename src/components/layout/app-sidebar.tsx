@@ -82,9 +82,6 @@ const mainNavItems: { view: ViewType; labelKey: NavLabelKey; icon: React.Compone
   { view: 'conductor', labelKey: 'nav.conductor', icon: ChalkboardIcon },
   { view: 'bridge', labelKey: 'nav.channels', icon: ChannelIcon },
   { view: 'automation', labelKey: 'nav.automation', icon: ClockCounterClockwiseIcon },
-  // Extensions (plugins / marketplace / app connections) is a top-level
-  // surface, not a settings sub-page — it is browsed as often as channels.
-  { view: 'extensions', labelKey: 'nav.extensions', icon: PlugIcon },
 ];
 
 const settingsNavGroups: {
@@ -146,7 +143,6 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     // dialog with `CreateProjectDialog` (project name + optional folder).
     const [isCreateProjectDialogOpen, setIsCreateProjectDialogOpen] = useState(false);
     const [editBotContact, setEditBotContact] = useState<BotContact | null>(null);
-    const [showHiddenBots, setShowHiddenBots] = useState(false);
     // Sidebar top tab switcher (work / bots) — defaults to bots.
     const [sidebarTab, setSidebarTab] = useState<"work" | "bots">("bots");
     const {
@@ -164,7 +160,6 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       botSections,
       createSection,
       renameSection,
-      deleteSection,
       moveBotToSection,
       reorderSectionBots,
     } = useBotContacts();
@@ -235,22 +230,20 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       | { mode: "rename"; sectionId: string; name: string }
       | null
     >(null);
-    const [botGroupMenu, setBotGroupMenu] = useState<{
-      sectionId: string;
-      x: number;
-      y: number;
-    } | null>(null);
-    const botGroupMenuRef = useRef<HTMLDivElement>(null);
+    // Unified create entry (grok-style): the single top "+" opens a chooser
+    // for a new bot vs. a new group chat; no other create buttons remain.
+    const [isCreateMenuOpen, setIsCreateMenuOpen] = useState(false);
+    const createMenuRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
-      if (!botGroupMenu) return;
+      if (!isCreateMenuOpen) return;
       const handleClickOutside = (e: MouseEvent) => {
-        if (botGroupMenuRef.current && !botGroupMenuRef.current.contains(e.target as Node)) {
-          setBotGroupMenu(null);
+        if (createMenuRef.current && !createMenuRef.current.contains(e.target as Node)) {
+          setIsCreateMenuOpen(false);
         }
       };
       document.addEventListener("mousedown", handleClickOutside);
       return () => document.removeEventListener("mousedown", handleClickOutside);
-    }, [botGroupMenu]);
+    }, [isCreateMenuOpen]);
     // Plan 478: shared-room create/edit dialog state (群聊 lives in the
     // Bots section as its own "群聊" group).
     const [groupDialog, setGroupDialog] = useState<
@@ -925,6 +918,46 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                 </span>
               )}
             </button>
+            <div className="sidebar-top-create" ref={createMenuRef}>
+              <button
+                type="button"
+                className="sidebar-top-create-btn"
+                aria-label={t("sidebar.create.title")}
+                title={t("sidebar.create.title")}
+                aria-expanded={isCreateMenuOpen}
+                onClick={() => setIsCreateMenuOpen((prev) => !prev)}
+              >
+                <PlusIcon size={15} />
+              </button>
+              {isCreateMenuOpen && (
+                <div className="sidebar-project-menu sidebar-create-menu">
+                  <div className="sidebar-project-menu-section">
+                    <button
+                      type="button"
+                      className="sidebar-project-menu-item"
+                      onClick={() => {
+                        setIsCreateMenuOpen(false);
+                        void handleQuickCreateBot();
+                      }}
+                    >
+                      <PlusIcon size={14} />
+                      <span>{t("bot.create.title")}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="sidebar-project-menu-item"
+                      onClick={() => {
+                        setIsCreateMenuOpen(false);
+                        setGroupDialog({ mode: "create" });
+                      }}
+                    >
+                      <PlusIcon size={14} />
+                      <span>{t("room.create.title")}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
             <button
               type="button"
               className="sidebar-top-search-btn"
@@ -972,92 +1005,62 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
           {sidebarTab === "bots" ? (
             <>
-              {/* Compact action row: new bot + ⋯ (hidden list / new group). */}
-              <div className="sidebar-bots-actions">
-                <BotSectionActions
-                  hiddenCount={hiddenBots.length}
-                  showHidden={showHiddenBots}
-                  onToggleHidden={() => setShowHiddenBots((prev) => !prev)}
-                  onCreateBot={() => void handleQuickCreateBot()}
-                  onCreateGroup={() => setBotGroupDialog({ mode: "new" })}
-                />
-              </div>
-              {botContacts.length > 0 ? (
+              {botContacts.length > 0 && (
                 <>
               {pinnedBots.length > 0 && (
                 <div className="sidebar-section-group">
-                  <div className="sidebar-section-group-header">
-                    <span className="sidebar-section-group-header-btn">
-                      <span className="sidebar-section-group-name">
-                        {t("sidebar.section.pinned")}
-                      </span>
+                  <button
+                    type="button"
+                    className="sidebar-section-group-header"
+                    aria-expanded={!collapsedBotGroups.has("pinned")}
+                    onClick={() => toggleBotGroupCollapsed("pinned")}
+                  >
+                    <span className="sidebar-section-group-name">
+                      {t("sidebar.section.pinned")}
                     </span>
-                  </div>
-                  <div className="sidebar-section-group-body">
-                    {(() => {
-                      const drag = makeBotDragHandlers(
-                        pinnedBots.map((c) => c.agentId),
-                        (movedId, targetId, position) =>
-                          movePinned(movedId, targetId, position),
-                      );
-                      return pinnedBots.map((contact) =>
-                        renderBotRow(contact, { dragHandlers: drag }),
-                      );
-                    })()}
-                  </div>
+                    <CaretDownIcon
+                      size={14}
+                      className={`sidebar-section-group-caret${
+                        collapsedBotGroups.has("pinned") ? " collapsed" : ""
+                      }`}
+                    />
+                  </button>
+                  {!collapsedBotGroups.has("pinned") && (
+                    <div className="sidebar-section-group-body">
+                      {(() => {
+                        const drag = makeBotDragHandlers(
+                          pinnedBots.map((c) => c.agentId),
+                          (movedId, targetId, position) =>
+                            movePinned(movedId, targetId, position),
+                        );
+                        return pinnedBots.map((contact) =>
+                          renderBotRow(contact, { dragHandlers: drag }),
+                        );
+                      })()}
+                    </div>
+                  )}
                 </div>
               )}
               {botSectionGroups.map((group) => {
                 const collapsed = collapsedBotGroups.has(group.section.id);
                 return (
                   <div key={group.section.id} className="sidebar-section-group">
-                    <div
+                    <button
+                      type="button"
                       className="sidebar-section-group-header"
-                      role="button"
-                      tabIndex={0}
+                      aria-expanded={!collapsed}
                       onClick={() => toggleBotGroupCollapsed(group.section.id)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          toggleBotGroupCollapsed(group.section.id);
-                        }
-                      }}
                     >
-                      <span
-                        className="sidebar-section-group-header-btn"
-                        aria-expanded={!collapsed}
-                      >
-                        <span className="sidebar-section-group-caret">
-                          {collapsed ? (
-                            <CaretRightIcon size={10} />
-                          ) : (
-                            <CaretDownIcon size={10} />
-                          )}
-                        </span>
-                        <span className="sidebar-section-group-name">
-                          {group.section.name}
-                        </span>
-                        <span className="sidebar-section-group-count">
-                          {group.contacts.length}
-                        </span>
+                      <span className="sidebar-section-group-name">
+                        {group.section.name}
                       </span>
-                      <button
-                        type="button"
-                        className="sidebar-section-group-menu"
-                        aria-label={t("bot.actions.options")}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          setBotGroupMenu({
-                            sectionId: group.section.id,
-                            x: rect.right - 140,
-                            y: rect.bottom + 4,
-                          });
-                        }}
-                      >
-                        <DotsThreeIcon size={14} />
-                      </button>
-                    </div>
+                      <CaretDownIcon
+                        size={14}
+                        className={`sidebar-section-group-caret${
+                          collapsed ? " collapsed" : ""
+                        }`}
+                      />
+                    </button>
                     {!collapsed && (
                       <div className="sidebar-section-group-body">
                         {(() => {
@@ -1090,136 +1093,107 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
               {unassignedBots.length > 0 && (
                 <div className="sidebar-section-group">
                   {botSectionGroups.length > 0 && (
-                    <div className="sidebar-section-group-header">
-                      <span className="sidebar-section-group-header-btn">
-                        <span className="sidebar-section-group-name">
-                          {t("bot.actions.unassigned")}
-                        </span>
+                    <button
+                      type="button"
+                      className="sidebar-section-group-header"
+                      aria-expanded={!collapsedBotGroups.has("unassigned")}
+                      onClick={() => toggleBotGroupCollapsed("unassigned")}
+                    >
+                      <span className="sidebar-section-group-name">
+                        {t("bot.actions.unassigned")}
                       </span>
+                      <CaretDownIcon
+                        size={14}
+                        className={`sidebar-section-group-caret${
+                          collapsedBotGroups.has("unassigned") ? " collapsed" : ""
+                        }`}
+                      />
+                    </button>
+                  )}
+                  {(!(botSectionGroups.length > 0) ||
+                    !collapsedBotGroups.has("unassigned")) && (
+                    <div className="sidebar-section-group-body">
+                      {unassignedBots.map((contact) => renderBotRow(contact))}
                     </div>
                   )}
-                  <div className="sidebar-section-group-body">
-                    {unassignedBots.map((contact) => renderBotRow(contact))}
-                  </div>
                 </div>
               )}
               {/* Plan 478: shared rooms (群聊) — Telegram-style group rows
-                  under the same Bots section; the trailing "+" opens the
-                  create-group dialog (member picker ≤6). */}
+                  under the same Bots section; creation lives in the unified
+                  top "+" menu. */}
               <div className="sidebar-section-group">
-                <div className="sidebar-section-group-header">
-                  <span className="sidebar-section-group-header-btn">
-                    <span className="sidebar-section-group-name">
-                      {t("sidebar.section.rooms")}
-                    </span>
+                <button
+                  type="button"
+                  className="sidebar-section-group-header"
+                  aria-expanded={!collapsedBotGroups.has("rooms")}
+                  onClick={() => toggleBotGroupCollapsed("rooms")}
+                >
+                  <span className="sidebar-section-group-name">
+                    {t("sidebar.section.rooms")}
                   </span>
-                  <button
-                    type="button"
-                    className="sidebar-section-group-menu"
-                    onClick={() => setGroupDialog({ mode: "create" })}
-                    aria-label={t("room.create.title")}
-                    data-testid="create-room-button"
-                  >
-                    <PlusIcon size={14} />
-                  </button>
-                </div>
-                <div className="sidebar-section-group-body">
-                  {roomContacts.length === 0 && (
-                    <div className="px-3 py-1.5 text-[12px] text-[var(--text-muted)]">
-                      {t("room.create.empty")}
-                    </div>
-                  )}
-                  {roomContacts.map((room) => (
-                    <RoomContactListItem
-                      key={room.roomId}
-                      room={room}
-                      isActive={room.threadId === activeThreadId}
-                      onOpen={() => handleOpenRoom(room.roomId)}
-                      onEdit={() =>
-                        setGroupDialog({
-                          mode: "edit",
-                          roomId: room.roomId,
-                          name: room.name,
-                          memberIds: room.memberIds,
-                        })
-                      }
-                    />
-                  ))}
-                </div>
-              </div>
-              {/* Plan 483 P2 (gap fix): the restorable hidden list. Rendered
-                  only when the user toggles it from the Bots section header. */}
-              {showHiddenBots && (
-                <div className="sidebar-section-group">
-                  <div className="sidebar-section-group-header">
-                    <span className="sidebar-section-group-header-btn">
-                      <span className="sidebar-section-group-name">
-                        {t("bot.actions.showHidden", { count: hiddenBots.length })}
-                      </span>
-                    </span>
-                  </div>
+                  <CaretDownIcon
+                    size={14}
+                    className={`sidebar-section-group-caret${
+                      collapsedBotGroups.has("rooms") ? " collapsed" : ""
+                    }`}
+                  />
+                </button>
+                {!collapsedBotGroups.has("rooms") && (
                   <div className="sidebar-section-group-body">
-                    {hiddenBots.length === 0 && (
+                    {roomContacts.length === 0 && (
                       <div className="px-3 py-1.5 text-[12px] text-[var(--text-muted)]">
-                        {t("bot.actions.noHidden")}
+                        {t("room.create.empty")}
                       </div>
                     )}
-                    {hiddenBots.map((contact) =>
-                      renderBotRow(contact, { restoreView: true }),
-                    )}
+                    {roomContacts.map((room) => (
+                      <RoomContactListItem
+                        key={room.roomId}
+                        room={room}
+                        isActive={room.threadId === activeThreadId}
+                        onOpen={() => handleOpenRoom(room.roomId)}
+                        onEdit={() =>
+                          setGroupDialog({
+                            mode: "edit",
+                            roomId: room.roomId,
+                            name: room.name,
+                            memberIds: room.memberIds,
+                          })
+                        }
+                      />
+                    ))}
                   </div>
-                </div>
-              )}
-              {/* Section group menu (rename / delete). */}
-              {botGroupMenu && (
-                <div
-                  ref={botGroupMenuRef}
-                  className="bot-dropdown-menu"
-                  style={{ top: botGroupMenu.y, left: botGroupMenu.x }}
-                >
-                  <Button
+                )}
+              </div>
+              {/* Always-present restorable hidden list, collapsible like the
+                  other groups; shown only when at least one bot is hidden. */}
+              {hiddenBots.length > 0 && (
+                <div className="sidebar-section-group">
+                  <button
                     type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="bot-dropdown-item"
-                    onClick={() => {
-                      const target = botSections.find((s) => s.id === botGroupMenu.sectionId);
-                      setBotGroupMenu(null);
-                      if (target) {
-                        setBotGroupDialog({ mode: "rename", sectionId: target.id, name: target.name });
-                      }
-                    }}
+                    className="sidebar-section-group-header"
+                    aria-expanded={!collapsedBotGroups.has("hidden")}
+                    onClick={() => toggleBotGroupCollapsed("hidden")}
                   >
-                    <NotePencilIcon size={14} />
-                    <span>{t("bot.actions.renameGroup")}</span>
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="danger"
-                    size="sm"
-                    className="bot-dropdown-item danger"
-                    onClick={() => {
-                      const target = botSections.find((s) => s.id === botGroupMenu.sectionId);
-                      setBotGroupMenu(null);
-                      if (target && window.confirm(t("bot.actions.deleteGroupConfirm", { name: target.name }))) {
-                        deleteSection(target.id);
-                      }
-                    }}
-                  >
-                    <TrashIcon size={14} />
-                    <span>{t("bot.actions.deleteGroup")}</span>
-                  </Button>
+                    <span className="sidebar-section-group-name">
+                      {t("bot.actions.showHidden", { count: hiddenBots.length })}
+                    </span>
+                    <CaretDownIcon
+                      size={14}
+                      className={`sidebar-section-group-caret${
+                        collapsedBotGroups.has("hidden") ? " collapsed" : ""
+                      }`}
+                    />
+                  </button>
+                  {!collapsedBotGroups.has("hidden") && (
+                    <div className="sidebar-section-group-body">
+                      {hiddenBots.map((contact) =>
+                        renderBotRow(contact, { restoreView: true }),
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
                 </>
-              ) : (
-                <button
-                  className="sidebar-section-create"
-                  onClick={() => void handleQuickCreateBot()}
-                >
-                  <PlusIcon size={14} />
-                  <span>{t("bot.create.title")}</span>
-                </button>
               )}
             </>
           ) : (
@@ -1645,88 +1619,6 @@ function ProjectSectionActions({
             >
               {projectSortBy === 'manual' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />}
               <span>{t('project.manualSort')}</span>
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Plan 483: bot section trailing actions (grok-style)
-function BotSectionActions({
-  hiddenCount,
-  showHidden,
-  onToggleHidden,
-  onCreateBot,
-  onCreateGroup,
-}: {
-  hiddenCount: number;
-  showHidden: boolean;
-  onToggleHidden: () => void;
-  onCreateBot: () => void;
-  onCreateGroup: () => void;
-}) {
-  const { t } = useTranslation();
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  const menuPosition = { top: '100%', right: 0 };
-
-  return (
-    <div className="relative flex items-center gap-1" ref={menuRef}>
-      <button
-        type="button"
-        className="sidebar-section-action"
-        onClick={onCreateBot}
-        title={t('bot.create.title')}
-        aria-label={t('bot.create.title')}
-      >
-        <PlusIcon size={14} />
-      </button>
-      {hiddenCount > 0 && (
-        <button
-          type="button"
-          className={`sidebar-section-action${showHidden ? " active" : ""}`}
-          onClick={onToggleHidden}
-          title={showHidden ? t('bot.actions.hideFromList') : t('bot.actions.showHidden', { count: hiddenCount })}
-          aria-label={showHidden ? t('bot.actions.hideFromList') : t('bot.actions.showHidden', { count: hiddenCount })}
-          aria-pressed={showHidden}
-        >
-          {showHidden ? <EyeSlashIcon size={14} /> : <EyeIcon size={14} />}
-        </button>
-      )}
-      <button
-        type="button"
-        className="sidebar-section-action"
-        onClick={() => setIsMenuOpen((prev) => !prev)}
-        title={t('common.more')}
-        aria-expanded={isMenuOpen}
-      >
-        <DotsThreeIcon size={16} />
-      </button>
-      {isMenuOpen && (
-        <div className="sidebar-project-menu" style={menuPosition}>
-          <div className="sidebar-project-menu-section">
-            <button
-              type="button"
-              className="sidebar-project-menu-item"
-              onClick={() => {
-                setIsMenuOpen(false);
-                onCreateGroup();
-              }}
-            >
-              <span>{t('sidebar.section.newSection')}</span>
-            </button>
-            <button
-              type="button"
-              className="sidebar-project-menu-item"
-              onClick={() => {
-                setIsMenuOpen(false);
-                onToggleHidden();
-              }}
-            >
-              {showHidden ? t('bot.actions.hideFromList') : t('bot.actions.showHidden', { count: hiddenCount })}
             </button>
           </div>
         </div>

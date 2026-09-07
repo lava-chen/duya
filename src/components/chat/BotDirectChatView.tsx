@@ -94,13 +94,39 @@ function dayKeyOf(timestamp: number): string {
   return new Date(timestamp).toDateString();
 }
 
-/** Separator label: locale date, year omitted when current. */
+/** Within-day messages closer than this run in the same bubble group; a gap
+ *  at or above it breaks the group and shows an HH:MM time separator
+ *  (WeChat-style feed rhythm). */
+const WITHIN_DAY_GAP_MS = 5 * 60 * 1000;
+
+/** Day separator label ("token-sand-transcript-time-separator"): relative
+ *  "today"/"yesterday" for the nearest two calendar days, otherwise a locale
+ *  date with the year omitted when it matches the current one. */
 function dateSeparatorLabel(timestamp: number): string {
   const date = new Date(timestamp);
   const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfDay = new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+  ).getTime();
+  const diffDays = Math.round((startOfToday - startOfDay) / 86_400_000);
+  if (diffDays === 0) return '今天';
+  if (diffDays === 1) return '昨天';
   return date.getFullYear() === now.getFullYear()
     ? new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(date)
     : new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: 'numeric' }).format(date);
+}
+
+/** Within-day time separator: absolute HH:MM (the finer-grained sibling of
+ *  the date separator — shown when the gap to the previous message reaches
+ *  WITHIN_DAY_GAP_MS). */
+function timeSeparatorLabel(timestamp: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(timestamp));
 }
 
 interface BubbleRow {
@@ -369,7 +395,8 @@ export function BotDirectChatView({
   const contactNames = useMemo(() => contacts.map((c) => c.name), [contacts]);
   // Soft dependency: the panel may be absent (tests, standalone renders);
   // the header button then just stays inert instead of crashing the view.
-  const { openOrActivatePage } = useOptionalPanel() ?? { openOrActivatePage: null };
+  const panel = useOptionalPanel() ?? null;
+  const openOrActivatePage = panel?.openOrActivatePage ?? null;
   const agentId = resolveBotAgentId(sessionId);
 
   // The bot-settings panel saves through its own contact list; this event
@@ -667,7 +694,8 @@ export function BotDirectChatView({
       const joins =
         prev != null &&
         prev.role === row.role &&
-        dayKeyOf(prev.message.timestamp) === dayKeyOf(row.message.timestamp);
+        dayKeyOf(prev.message.timestamp) === dayKeyOf(row.message.timestamp) &&
+        row.message.timestamp - prev.message.timestamp < WITHIN_DAY_GAP_MS;
       if (!joins) {
         closeBubbleGroup();
         openStart = i;
@@ -897,7 +925,16 @@ export function BotDirectChatView({
           className="bot-chat-header__identity"
           title={subtitle || undefined}
           onClick={() => {
-            if (!contact || !openOrActivatePage) return;
+            if (!contact || !panel || !openOrActivatePage) return;
+            // Toggle: clicking the header again closes the panel when it is
+            // already showing this bot's settings; otherwise open/activate it.
+            const existing = panel.tabs.find(
+              (t) => t.pageId === "bot-settings" && t.params?.agentId === contact.agentId,
+            );
+            if (panel.panelOpen && existing && panel.activeTabId === existing.id) {
+              panel.setPanelOpen(false);
+              return;
+            }
             openOrActivatePage("bot-settings", {
               agentId: contact.agentId,
               title: botName,
