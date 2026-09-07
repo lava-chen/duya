@@ -396,7 +396,7 @@ export function BotContactListItem({
           avatarUrl={contact.avatarUrl}
           avatarColor={contact.avatarColor}
           avatarEmoji={contact.avatarEmoji}
-          size={28}
+          size={32}
           working={activeIsBusy}
         />
         {activeIsBusy ? (

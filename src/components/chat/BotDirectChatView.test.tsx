@@ -300,6 +300,31 @@ describe('BotDirectChatView', () => {
     expect(screen.getByText('Read')).toBeDefined();
   });
 
+  it('splits a text message with images into a text bubble plus a standalone borderless image bubble', () => {
+    const messages: Message[] = [
+      msg({
+        id: 'm1',
+        role: 'assistant',
+        content: '报告完成',
+        msgType: 'text',
+        sendMessageMeta: {
+          images: [{ url: 'file:///tmp/shot.png', alt: '截图' }],
+        },
+      } as Message),
+    ];
+    const { container } = render(
+      <BotDirectChatView {...baseProps} messages={messages} />,
+    );
+    // The image renders as its own bubble — not inside the text bubble.
+    expect(screen.getByText('报告完成')).toBeDefined();
+    expect(container.querySelectorAll('.bot-chat-bubble').length).toBe(1);
+    // The picture IS the bubble (image carries the bubble radius/seam), no gray
+    // chat-bubble wrapper nesting it; local `file://` loads via `duya-file://`.
+    const img = container.querySelector<HTMLImageElement>('.bot-send-image-preview__img');
+    expect(img?.getAttribute('src')).toBe('duya-file:///tmp/shot.png');
+    expect(img?.getAttribute('alt')).toBe('截图');
+  });
+
   // Plan 489 P0.3 — wired (IPC present) path. The view is driven by
   // `useBotDirectTranscript`, which feeds the source-filtered projection
   // (send_message | user). Even when the unfiltered `messages` prop still
@@ -509,8 +534,9 @@ describe('BotDirectChatView', () => {
       expect(chips.length).toBe(1);
       // Full marker bodies never render as bubbles in the transcript.
       expect(container.textContent).not.toContain('hello');
-      expect(screen.getByText('bot.dm.chipSent', { exact: false })).toBeDefined();
-      expect(container.textContent).toContain('bot.dm.chipCount 2');
+      // Single-peer sent chip reads "向 <peer> 发送了 N 条消息".
+      expect(screen.getByText('bot.dm.chipSentPrefix', { exact: false })).toBeDefined();
+      expect(container.textContent).toContain('bot.dm.chipSentSuffix 2');
     });
 
     it('splits separate bursts between the same pair into distinct chips', () => {

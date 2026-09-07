@@ -14,8 +14,7 @@
   background: color-mix(in srgb, var(--bg-canvas) 52%, transparent);
   backdrop-filter: blur(24px) saturate(1.4);
   -webkit-backdrop-filter: blur(24px) saturate(1.4);
-  border-right: 1px solid var(--border);
-  padding: 0.95rem 0.7rem;
+  padding: 0.95rem 0.7rem 0.95rem 0;
   display: flex;
   flex-direction: column;
   gap: 0.95rem;
@@ -202,6 +201,11 @@ html[data-backdrop] .app-main-inner {
 .sidebar-section-action:hover {
   background: var(--surface-hover);
   color: var(--text);
+}
+
+.sidebar-section-action.active {
+  background: var(--surface);
+  color: var(--accent);
 }
 
 .sidebar-project-menu {
@@ -892,10 +896,26 @@ html[data-backdrop] .app-main-inner {
   font-weight: 600;
   line-height: 1;
   user-select: none;
-  /* Top-lit sheen so the colored tile reads as a tiny glass surface. */
+  /* Emoji glyphs sit slightly below the box's optical center; nudge the
+     content up so it reads centered in the circle. */
+  transform: translateY(-2px);
+  /* Glass tile: a top-lit translucent sheen layered over the identity color
+     (set inline as background-color), so the emoji reads in 3/4 light and
+     the tile reads as a tiny frosted-glass badge floating on the sidebar. */
+  background-image:
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.32),
+      rgba(255, 255, 255, 0.06) 46%,
+      rgba(0, 0, 0, 0.1)
+    );
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.22),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.06);
+    inset 0 1px 1px rgba(255, 255, 255, 0.42),
+    inset 0 -2px 3px rgba(0, 0, 0, 0.18),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+    0 1px 2px rgba(0, 0, 0, 0.18),
+    0 5px 14px -4px rgba(0, 0, 0, 0.28);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
 /* Bot avatar: an uploaded image (img) or legacy SVG token — either way it
@@ -914,7 +934,7 @@ html[data-backdrop] .app-main-inner {
   border: 0;
   border-radius: 0.5rem;
   text-align: left;
-  padding: 0.25rem 0.5rem; /* compact roster row */
+  padding: 0.52rem 0.5rem; /* taller roster row */
   margin: 0;
   width: 100%;
   max-width: 100%;
@@ -973,8 +993,8 @@ html[data-backdrop] .app-main-inner {
   white-space: nowrap;
   text-overflow: ellipsis;
   color: var(--text);
-  font-size: 0.86rem;
-  font-weight: 500;
+  font-size: 0.88rem;
+  font-weight: 600;
   line-height: 1.3;
 }
 
@@ -995,9 +1015,8 @@ html[data-backdrop] .app-main-inner {
    line under the name; collapses with `…` so long prompts do not balloon
    the row. */
 .bot-contact-preview {
-  font-size: 0.7rem;
+  font-size: 0.74rem;
   color: var(--muted);
-  opacity: 0.8;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -1198,7 +1217,7 @@ html[data-backdrop] .app-main-inner {
    member rows. Mirrors `.bot-pinned-label` — small uppercase muted label,
    no background block. */
 .sidebar-section-group + .sidebar-section-group {
-  margin-top: 0.25rem;
+  margin-top: 0.5rem;
 }
 
 .sidebar-section-group-header {
@@ -1206,7 +1225,7 @@ html[data-backdrop] .app-main-inner {
   align-items: center;
   gap: 0.25rem;
   width: 100%;
-  padding: 0.25rem 0.5rem 0.1rem;
+  padding: 0.38rem 0.5rem 0.16rem;
 }
 
 .sidebar-section-group-header-btn {

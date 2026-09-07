@@ -60,9 +60,7 @@ export function BotCharacterAvatar({
 
   // Emoji tile: explicit token color, else the deterministic per-agent
   // hue converted to hex (legacy config agents / unset color).
-  const tokenHex = botAvatarColorHex(avatarColor);
-  const backgroundColor =
-    tokenHex ?? hslToHex(deriveBotContactHue(agentId), 42, 46);
+  const backgroundColor = botContactColorHex(agentId, avatarColor) ?? "#777777";
   return (
     <span
       className="bot-contact-avatar"
@@ -70,13 +68,26 @@ export function BotCharacterAvatar({
         backgroundColor,
         width: size,
         height: size,
-        fontSize: Math.round(size * 0.55),
+        fontSize: Math.round(size * 0.63),
       }}
       aria-hidden="true"
     >
       {avatarEmoji?.trim() || botEmojiFor(agentId)}
     </span>
   );
+}
+
+/**
+ * Hex for an agent's identity color — explicit token first, else the
+ * deterministic hue derived from the agent id. Shared so that names in a
+ * transcript chip can be colored to match the avatar tile.
+ */
+export function botContactColorHex(
+  agentId: string,
+  avatarColor?: string,
+): string | null {
+  const tokenHex = botAvatarColorHex(avatarColor);
+  return tokenHex ?? hslToHex(deriveBotContactHue(agentId), 42, 46);
 }
 
 /** Stable emoji for an agent id (hash into the bot-themed palette). */

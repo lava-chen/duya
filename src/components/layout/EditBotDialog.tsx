@@ -11,16 +11,26 @@
  * this component owns the modal chrome and the Escape/overlay dismissal.
  */
 
-import { useEffect } from "react";
-import { XIcon } from "@/components/icons";
+import { useEffect, useState } from "react";
+import { XIcon, PencilIcon } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useBotContactForm } from "@/hooks/use-bot-contact-form";
 import { BotModelSelectorField } from "./BotModelSelectorField";
 import { BOT_AVATAR_COLORS } from "@/lib/bot-avatar";
+import { BOT_EMOJI_CATEGORIES } from "@/lib/bot-emoji";
 import { BotCharacterAvatar } from "./sidebar/BotCharacterAvatar";
 import type { BotContact } from "./sidebar/bot-contacts";
+
+/** iOS-style edit-field label: small muted text sitting above its control. */
+function FieldLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mb-1" style={{ color: "var(--text-muted)", fontSize: 13 }}>
+      {children}
+    </div>
+  );
+}
 
 export interface EditBotDialogProps {
   isOpen: boolean;
@@ -33,6 +43,8 @@ export interface EditBotDialogProps {
 
 export function EditBotDialog({ isOpen, contact, onCancel, onSaved }: EditBotDialogProps) {
   const { t } = useTranslation();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [emojiOpen, setEmojiOpen] = useState(false);
   const {
     name,
     setName,
@@ -103,39 +115,156 @@ export function EditBotDialog({ isOpen, contact, onCancel, onSaved }: EditBotDia
           </Button>
         </div>
 
-        <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>
-          {t("bot.create.name")}
+        {/* Top: centered avatar that opens an upload-or-emoji menu on click. */}
+        <div
+          className="relative mb-4 flex flex-col items-center"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={() => setMenuOpen((v) => !v)}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            aria-label={t("bot.avatarPicker.label")}
+            className="group relative block rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+          >
+            <BotCharacterAvatar
+              name={name || "?"}
+              agentId={contact?.agentId ?? "preview"}
+              avatarUrl={avatarUrl}
+              avatarColor={color}
+              avatarEmoji={emoji}
+              size={64}
+            />
+            <span
+              className="absolute inset-0 flex items-center justify-center rounded-full opacity-0 transition-opacity group-hover:opacity-100"
+              style={{ background: "rgba(0,0,0,0.35)", pointerEvents: "none" }}
+              aria-hidden="true"
+            >
+              <span className="grid h-7 w-7 place-items-center rounded-full bg-white/90 text-black/80">
+                <PencilIcon size={15} />
+              </span>
+            </span>
+          </button>
+
+          {menuOpen && (
+            <div
+              className="absolute top-full z-30 mt-2 min-w-[150px] rounded-xl border p-1"
+              style={{ background: "var(--surface-solid, var(--main-bg))", borderColor: "var(--border)", boxShadow: "0 10px 32px rgba(0,0,0,0.25)" }}
+              role="menu"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                disabled={avatarBusy}
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-50"
+                style={{ color: "var(--text)" }}
+                onClick={() => {
+                  setMenuOpen(false);
+                  void uploadAvatar();
+                }}
+              >
+                {t("bot.avatar.upload")}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--surface-hover)]"
+                style={{ color: "var(--text)" }}
+                onClick={() => {
+                  setMenuOpen(false);
+                  setEmojiOpen((v) => !v);
+                }}
+              >
+                {t("bot.avatar.pickEmoji")}
+              </button>
+            </div>
+          )}
+
+          {emojiOpen && !avatarUrl && (
+            <div
+              className="mt-2 w-full max-w-[300px] rounded-xl border p-2"
+              style={{ background: "var(--surface-solid, var(--main-bg))", borderColor: "var(--border)", maxHeight: 220, overflowY: "auto" }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {BOT_EMOJI_CATEGORIES.map((cat) => (
+                <div key={cat.id}>
+                  <div className="px-0.5 pb-0.5 pt-1.5 text-[11px] font-medium" style={{ color: "var(--text-muted)" }}>
+                    {t(cat.labelKey)}
+                  </div>
+                  <div className="grid" style={{ gridTemplateColumns: "repeat(8, 1fr)" }}>
+                    {cat.emojis.map((e) => (
+                      <button
+                        key={e.char}
+                        type="button"
+                        onClick={() => {
+                          setEmoji(e.char);
+                          setEmojiOpen(false);
+                        }}
+                        className="flex h-8 items-center justify-center rounded-lg text-xl leading-none transition-colors hover:bg-[var(--surface-hover)]"
+                        style={{ background: "transparent" }}
+                      >
+                        {e.char}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Simple color swatches below the avatar (no explicit image). */}
+          {!avatarUrl && (
+            <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+              {BOT_AVATAR_COLORS.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setColor(c.id)}
+                  aria-label={c.label}
+                  title={c.label}
+                  className="rounded-full transition-transform hover:scale-110"
+                  style={{
+                    width: 22,
+                    height: 22,
+                    backgroundColor: c.value,
+                    outline: color === c.id ? "2px solid var(--text)" : "2px solid transparent",
+                    outlineOffset: 2,
+                  }}
+                />
+              ))}
+            </div>
+          )}
         </div>
+
+        <FieldLabel>{t("bot.create.name")}</FieldLabel>
         <Input
           ref={nameRef}
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder={t("bot.create.namePlaceholder")}
-          className="w-full mb-3"
+          className="mb-3 h-11"
         />
 
-        <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>
-          {t("bot.create.roleTitle")}
-        </div>
+        <FieldLabel>{t("bot.create.roleTitle")}</FieldLabel>
         <Input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder={t("bot.create.roleTitlePlaceholder")}
-          className="w-full mb-3"
+          className="mb-3 h-11"
         />
 
-        <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>
-          {t("bot.create.description")}
-        </div>
+        <FieldLabel>{t("bot.create.description")}</FieldLabel>
         <textarea
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           placeholder={t("bot.create.descriptionPlaceholder")}
-          rows={2}
-          className="w-full mb-4 rounded-lg px-3 py-2 text-sm resize-none"
+          rows={3}
+          className="w-full rounded-lg border px-3 py-2.5 text-sm resize-none mb-4 focus:outline-none focus:ring-2 focus:ring-accent/50"
           style={{
             background: "var(--surface)",
-            border: "1px solid var(--border)",
+            borderColor: "var(--border)",
             color: "var(--text)",
           }}
         />
@@ -147,58 +276,11 @@ export function EditBotDialog({ isOpen, contact, onCancel, onSaved }: EditBotDia
           onChange={handleModelSelect}
         />
 
-        <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>
-          {t("bot.create.emoji")}
-        </div>
-        <Input
-          value={emoji}
-          onChange={(e) => setEmoji(e.target.value)}
-          placeholder={t("bot.create.emojiPlaceholder")}
-          className="w-full mb-3"
-        />
-
-        <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>
-          {t("bot.create.avatar")}
-        </div>
-        <div className="flex items-center gap-3 mb-3">
-          <BotCharacterAvatar
-            name={name || "?"}
-            agentId={contact?.agentId ?? "preview"}
-            avatarUrl={avatarUrl}
-            avatarColor={color}
-            avatarEmoji={emoji}
-            size={34}
-          />
-          <div className="flex items-center gap-2">
-            <Button variant="secondary" size="sm" disabled={avatarBusy} onClick={() => void uploadAvatar()}>
-              {avatarUrl ? t("bot.avatar.replace") : t("bot.avatar.upload")}
+        {avatarUrl && (
+          <div className="mt-3 flex justify-center">
+            <Button variant="secondary" size="sm" disabled={avatarBusy} onClick={() => void removeAvatar()}>
+              {t("bot.avatar.remove")}
             </Button>
-            {avatarUrl && (
-              <Button variant="secondary" size="sm" disabled={avatarBusy} onClick={() => void removeAvatar()}>
-                {t("bot.avatar.remove")}
-              </Button>
-            )}
-          </div>
-        </div>
-        {!avatarUrl && (
-          <div className="flex flex-wrap gap-1.5 mb-5">
-            {BOT_AVATAR_COLORS.map((c) => (
-              <button
-                key={c.id}
-                type="button"
-                onClick={() => setColor(c.id)}
-                aria-label={c.label}
-                title={c.label}
-                className="rounded-full transition-transform"
-                style={{
-                  width: 18,
-                  height: 18,
-                  backgroundColor: c.value,
-                  outline: color === c.id ? "2px solid var(--text)" : "none",
-                  outlineOffset: 1,
-                }}
-              />
-            ))}
           </div>
         )}
 

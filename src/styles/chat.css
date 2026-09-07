@@ -7,9 +7,17 @@
 .sidebar-bottom {
   margin-top: auto;
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 0.25rem;
   padding: 0 0.5rem;
+}
+
+/* Row that keeps the settings button + theme toggle side by side below the
+   fixed bottom buttons (e.g. the extensions entry). */
+.sidebar-bottom-row {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
 }
 
 .sidebar-settings {
@@ -18,7 +26,6 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.4rem 0.5rem;
-  margin-left: 0.5rem;
   border-radius: 0.375rem;
   color: var(--muted);
   font-size: 0.8125rem;
