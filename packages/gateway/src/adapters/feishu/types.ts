@@ -317,9 +317,24 @@ export interface PairingState {
 export interface FeishuAdapterOptions {
   config: FeishuConfig;
   onMessage: (chatId: string, userId: string, text: string, messageId: string, threadId?: string, mentions?: FeishuMention[]) => Promise<void>;
-  onImageMessage: (chatId: string, userId: string, imageKey: string, messageId: string) => Promise<void>;
-  onFileMessage: (chatId: string, userId: string, fileKey: string, fileName: string, messageId: string) => Promise<void>;
-  onAudioMessage: (chatId: string, userId: string, audioKey: string, duration: number, messageId: string) => Promise<void>;
+  /**
+   * Inbound image message. `localPath` carries the channel's best-effort
+   * download of the image to the OS temp cache (plan 507 P2.4); undefined
+   * when the download failed or was skipped (oversize / API error).
+   */
+  onImageMessage: (chatId: string, userId: string, imageKey: string, messageId: string, localPath?: string) => Promise<void>;
+  /**
+   * Inbound file message. `localPath` carries the channel's best-effort
+   * download of the file to the OS temp cache (plan 507 P2.4); undefined
+   * when the download failed or was skipped (oversize / API error).
+   */
+  onFileMessage: (chatId: string, userId: string, fileKey: string, fileName: string, messageId: string, localPath?: string) => Promise<void>;
+  /**
+   * Inbound audio (voice) message. `localPath` carries the channel's
+   * best-effort download of the audio to the OS temp cache (plan 507 P2.4);
+   * undefined when the download failed or was skipped (oversize / API error).
+   */
+  onAudioMessage: (chatId: string, userId: string, audioKey: string, duration: number, messageId: string, localPath?: string) => Promise<void>;
   onPostMessage: (chatId: string, userId: string, title: string, paragraphs: FeishuPostParagraph[][], messageId: string) => Promise<void>;
   onCardAction: (action: FeishuCardAction, chatId: string) => Promise<void>;
   onReactionAdded: (messageId: string, emojiType: string, userId: string, chatId: string) => Promise<void>;

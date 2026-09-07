@@ -30,6 +30,8 @@ import type {
   ChannelInboundEnvelope,
   ChannelOutboundMessage,
 } from '../../packages/agent/src/channels/types';
+import type { NormalizedReply } from '../../packages/gateway/src/types';
+import { isFileUrl, fileUrlToPath, mediaTypeForPath } from './file-url';
 import { TelegramChannelConnector } from './telegram-connector';
 import { FeishuChannelConnector } from './feishu-connector';
 import { WeixinConnector } from './weixin-connector';
@@ -136,19 +138,54 @@ export function getLiveOutbound(
   return liveOutboundRegistry.get(liveOutboundKey(agentId, platform));
 }
 
-/** Map a `ChannelOutboundMessage` to a gateway `NormalizedReply` for the live
- * adapter's `sendReply`. Attachments degrade to text-with-link until a real
- * multipart media send path is wired. */
-function channelOutboundToNormalizedReply(
+/**
+ * Map a `ChannelOutboundMessage` to a gateway `NormalizedReply` for the live
+ * adapter's `sendReply`. `file://` attachments map to a `MediaReply` so the
+ * live adapters (feishu/weixin) upload the real file (plan 507 P3.1); other
+ * attachment urls (https://) degrade to text-with-link.
+ */
+export function channelOutboundToNormalizedReply(
   outbound: ChannelOutboundMessage,
-): import('../../packages/gateway/src/types').NormalizedReply {
+): NormalizedReply {
   if (outbound.kind === 'attachment') {
+    if (outbound.url && isFileUrl(outbound.url)) {
+      let filePath: string;
+      try {
+        filePath = fileUrlToPath(outbound.url);
+      } catch {
+        filePath = '';
+      }
+      // Only upload an actual file when it exists on disk and is non-empty;
+      // otherwise degrade to text-with-link (the file may have been evicted).
+      if (filePath && fileExistsNonEmpty(filePath)) {
+        const caption = outbound.caption ?? outbound.content;
+        return {
+          type: 'media',
+          mediaType: mediaTypeForPath(filePath),
+          filePath,
+          ...(caption ? { caption } : {}),
+        };
+      }
+      logger.warn('channelOutboundToNormalizedReply: file attachment missing or empty, sending text-with-link', {
+        url: outbound.url,
+        path: filePath || null,
+      }, LogComponent.Gateway);
+    }
     return {
       type: 'text',
       text: [outbound.caption ?? 'Attachment', outbound.url].filter(Boolean).join('\n'),
     };
   }
   return { type: 'text', text: outbound.content ?? '' };
+}
+
+/** True when the path resolves to a real, non-zero-length file. */
+function fileExistsNonEmpty(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).size > 0;
+  } catch {
+    return false;
+  }
 }
 
 /**

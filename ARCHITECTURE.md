@@ -111,6 +111,33 @@ The system prompt carries a persistent "Apps (Connectors)" section
 help-the-user-connect guidance: prefer connectors over browser workarounds,
 name missing services, never paste authorization URLs).
 
+### Channel Attachments (Plan 507)
+
+Per-bot channel connectors (`electron/channels/*-connector.ts`) and the gateway
+route path carry inbound media to the bot and upload outbound files to the
+platform. Two data flows:
+
+- **Inbound persist + path injection**: adapters (`gateway-manager.ts`
+  `forwardInbound`, Feishu/Weixin/TG deep adapters) download media to temp
+  cache; the main process persists each to stable storage via
+  `electron/channels/attachment-store.ts` →
+  `<userData>/agents/<ownerId>/attachments/inbound/<platform>/<ts>_<name>`
+  (atomic write, per-kind size caps mirroring `attachment-builder.ts`, traveral
+  guard on owner/platform/name). The `ChannelInboundEnvelope.attachments`
+  (`packages/agent/src/channels/types.ts`) feeds
+  `packages/agent/src/channels/prompts.ts`, which renders
+  `[attachment saved to: <path> (...)]` lines under each inbound message so the
+  bot can Read/Bash the file. Oversize/unreadable entries become
+  `[attachment skipped: <reason>]` lines instead.
+- **Outbound real upload**: `SendMessage type:"attachment"` with a `file://` url
+  becomes a `MediaReply` (`gateway` `NormalizedReply.type==='media'`) mapped in
+  `electron/channels/connector-runtime.ts` (feishu/weixin live adapters) or a
+  multipart send in `electron/channels/channel-delivery.ts` (`file-url.ts`
+  decodes `file://` and infers MIME/key); media type follows MIME:
+  image→photo, audio→voice, video→video, else document. A missing/empty file or
+  `https://` url degrades to the existing text-with-link. Slack stays
+  text-with-link.
+
 ## Database
 
 ### Location

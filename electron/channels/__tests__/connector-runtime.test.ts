@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 // Mock electron USER DATA away from the real app data before importing.
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-runtime-test-'));
@@ -21,6 +22,7 @@ import {
   registerLiveOutbound,
   unregisterLiveOutbound,
   getLiveOutbound,
+  channelOutboundToNormalizedReply,
 } from '../connector-runtime';
 import type { ChannelOutboundMessage } from '../../../packages/agent/src/channels/types';
 
@@ -51,3 +53,111 @@ describe('connector-runtime live outbound registry', () => {
     expect(getLiveOutbound('agent-a', 'feishu')).toBeUndefined();
   });
 });
+
+describe('channelOutboundToNormalizedReply (plan 507 P3.1)', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-reply-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  function fileUrl(name: string): string {
+    // pathToFileURL yields a platform-appropriate file:// URL for a real path.
+    return `${cryptoURL().href}${name}`;
+  }
+
+  function makeFile(name: string, content = 'not empty'): string {
+    const abs = path.join(tempDir, name);
+    fs.writeFileSync(abs, content);
+    return abs;
+  }
+
+  it('maps a real file:// image attachment to a photo MediaReply', () => {
+    const abs = makeFile('chart.png');
+    const reply = channelOutboundToNormalizedReply({
+      kind: 'attachment',
+      url: urlFor(abs),
+      caption: 'weekly chart',
+    });
+    expect(reply).toEqual({
+      type: 'media',
+      mediaType: 'photo',
+      filePath: abs,
+      caption: 'weekly chart',
+    });
+  });
+
+  it('maps a file:// xlsx attachment to a document MediaReply without caption', () => {
+    const abs = makeFile('report.xlsx');
+    const reply = channelOutboundToNormalizedReply({
+      kind: 'attachment',
+      url: urlFor(abs),
+    });
+    expect(reply).toEqual({
+      type: 'media',
+      mediaType: 'document',
+      filePath: abs,
+    });
+  });
+
+  it('falls back to content as the MediaReply caption when caption is absent', () => {
+    const abs = makeFile('clip.mp4');
+    const reply = channelOutboundToNormalizedReply({
+      kind: 'attachment',
+      url: urlFor(abs),
+      content: 'the demo clip',
+    });
+    expect(reply).toEqual({
+      type: 'media',
+      mediaType: 'video',
+      filePath: abs,
+      caption: 'the demo clip',
+    });
+  });
+
+  it('falls back to text-with-link when the file:// attachment is missing', () => {
+    const missingUrl = pathToFileURL(path.join(tempDir, 'gone.png')).href;
+    const reply = channelOutboundToNormalizedReply({
+      kind: 'attachment',
+      url: missingUrl,
+      caption: 'chart',
+    });
+    expect(reply).toEqual({ type: 'text', text: `chart\n${missingUrl}` });
+  });
+
+  it('falls back to text-with-link when the file:// attachment is empty', () => {
+    const abs = makeFile('empty.png', '');
+    const reply = channelOutboundToNormalizedReply({
+      kind: 'attachment',
+      url: urlFor(abs),
+      caption: 'chart',
+    });
+    expect(reply).toEqual({ type: 'text', text: `chart\n${urlFor(abs)}` });
+  });
+
+  it('keeps https:// attachments as text-with-link degradation', () => {
+    const reply = channelOutboundToNormalizedReply({
+      kind: 'attachment',
+      url: 'https://example.com/a.png',
+      caption: 'chart',
+    });
+    expect(reply).toEqual({
+      type: 'text',
+      text: 'chart\nhttps://example.com/a.png',
+    });
+  });
+
+  it('maps plain text outbound to a text reply', () => {
+    expect(
+      channelOutboundToNormalizedReply({ kind: 'text', content: 'hi' }),
+    ).toEqual({ type: 'text', text: 'hi' });
+  });
+});
+
+function urlFor(abs: string): string {
+  return pathToFileURL(abs).href;
+}

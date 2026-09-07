@@ -20,7 +20,7 @@ import type {
   NormalizedReply,
   MediaReply,
 } from './types.js';
-import { extname } from 'node:path';
+import { basename, extname } from 'node:path';
 import { PlatformAdapter, createAdapter, getRegisteredPlatforms } from './adapters/base.js';
 import { IpcClient } from './ipc-client.js';
 import { UserMapper } from './user-mapper.js';
@@ -35,6 +35,18 @@ import { resolveDisplayConfig, type DisplayUserConfig } from './display-config.j
 
 const ADAPTER_START_TIMEOUT_MS = 30_000;
 const ADAPTER_STOP_TIMEOUT_MS = 10_000;
+
+/**
+ * Plain-path inbound attachment reference (plan 507 P2.2).
+ *
+ * Carries the adapter's local cache path (and best-known name) alongside the
+ * base64 `options.files` payload so the main process can persist the file to
+ * stable storage for the wake prompt without re-downloading it.
+ */
+export interface InboundAttachmentRef {
+  name: string;
+  path: string;
+}
 
 export class GatewayManager {
   private running = false;
@@ -795,6 +807,28 @@ export class GatewayManager {
     });
     if (attachments.length > 0) {
       options.files = attachments;
+    }
+
+    // Plain-path attachment refs (plan 507 P2.2): parallel to the base64
+    // `options.files` above (which stays for compat) — carries the adapter's
+    // local cache paths so the main process can persist them to stable
+    // storage for the wake prompt. Cache file names already carry their
+    // extension, so basename preserves MIME-recognizable names.
+    const attachmentRefs: InboundAttachmentRef[] = [];
+    for (const p of msg.imagePaths ?? []) {
+      if (p) attachmentRefs.push({ name: basename(p), path: p });
+    }
+    for (const f of msg.filePaths ?? []) {
+      if (f.path) attachmentRefs.push({ name: f.name, path: f.path });
+    }
+    for (const p of msg.voicePaths ?? []) {
+      if (p) attachmentRefs.push({ name: basename(p), path: p });
+    }
+    for (const p of msg.videoPaths ?? []) {
+      if (p) attachmentRefs.push({ name: basename(p), path: p });
+    }
+    if (attachmentRefs.length > 0) {
+      options.attachments = attachmentRefs;
     }
 
     // Profile routing: carry the resolved profile so the worker can use it.

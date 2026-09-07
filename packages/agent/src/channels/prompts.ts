@@ -94,10 +94,14 @@ export function buildChannelInboundWakePrompt(
 }
 
 /**
- * Format a single inbound envelope into one line of prompt text.
+ * Format a single inbound envelope into its prompt block: the header line
+ * (text or reaction) plus one indented line per persisted attachment
+ * (plan 507 P2.1). Attachment lines count toward the caller's
+ * MAX_INBOUND_TEXT_CHARS budget as part of the combined block.
  *
  * Format variants:
  * - Text message:  `"On <platform>, from <addr>: <sender>: <text>"`
+ * - Media-only:    header line with empty text, then attachment lines
  * - Reaction only: `"On <platform>, from <addr>: <sender> reacted <emoji> to your message: '<quote>'"`
  * - Reaction no quote: `"On <platform>, from <addr>: <sender> reacted <emoji>"`
  */
@@ -106,7 +110,7 @@ function formatInboundEnvelope(env: ChannelInboundEnvelope, addrKey: string): st
   const sender = env.sender;
   const text = env.text;
 
-  // Reaction case
+  // Reaction case — reactions carry no attachments (plan 507)
   if (env.reaction) {
     const emoji = env.reaction.emoji;
     const quote =
@@ -116,9 +120,16 @@ function formatInboundEnvelope(env: ChannelInboundEnvelope, addrKey: string): st
     return `On ${platform}, from ${addrKey}: ${sender} reacted ${emoji}${quote}`;
   }
 
-  // Text case
+  // Text case (+ attachment lines, plan 507 P2.1)
   const content = truncate(text, 2000);
-  return `On ${platform}, from ${addrKey}: ${sender}: ${content}`;
+  const lines = [`On ${platform}, from ${addrKey}: ${sender}: ${content}`];
+  for (const attachment of env.attachments ?? []) {
+    lines.push(
+      `  [attachment saved to: ${attachment.path} ` +
+        `(${attachment.name}, ${attachment.mimeType}, ${formatAttachmentSize(attachment.size)})]`,
+    );
+  }
+  return lines.join('\n');
 }
 
 // =============================================================================
@@ -181,6 +192,17 @@ export function buildChannelOutboundMessage(outbound: ChannelOutboundMessage): s
 
 function formatAddress(addr: ChannelAddress): string {
   return `${addr.platform}:${addr.chat}`;
+}
+
+/**
+ * Human-readable byte size for attachment lines: plain bytes under 1 KB,
+ * one decimal for KB/MB/GB (e.g. "800 B", "12.3 KB", "2.1 MB").
+ */
+function formatAttachmentSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 function truncate(s: string, maxLen: number): string {
