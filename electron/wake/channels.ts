@@ -276,8 +276,21 @@ export class DefaultChannelBackgroundWakes implements ChannelBackgroundWakes {
       };
       queueChannelDeliveryFailure(failure);
 
-      // Trigger the failure wake immediately
-      await reviveForChannelFailuresWake(sessionId);
+      // Fire the failure wake without awaiting it: the wake runs its own turn
+      // (it acquires the session lock internally), and blocking here would
+      // hold the `channel:deliver` IPC past the agent's db-client timeout —
+      // observed as a 30s "DB request timeout" tool result masking the real
+      // delivery reason.
+      void reviveForChannelFailuresWake(sessionId).catch((wakeErr) => {
+        logger.warn('ChannelBackgroundWakes: failure wake revival failed', {
+          sessionId,
+          error: wakeErr instanceof Error ? wakeErr.message : String(wakeErr),
+        }, LogComponent.AgentProcess);
+      });
+
+      // Re-throw so the IPC caller surfaces the real delivery reason back to
+      // the SendMessage tool instead of reporting a false success.
+      throw err instanceof Error ? err : new Error(reason);
     }
   }
 
