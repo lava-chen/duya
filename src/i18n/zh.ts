@@ -1124,6 +1124,7 @@ const zh: Record<TranslationKey, string> = {
   'panel.browser': '浏览器',
   'panel.office': 'Office',
   'panel.botSettings': 'Bot 设置',
+  'panel.roomSettings': '群聊设置',
   'panel.botSettings.identity': '身份与模型',
   'panel.botSettings.identity.hint': '更改即时生效。',
   'panel.botSettings.loading': '正在加载 Bot…',
@@ -1323,7 +1324,19 @@ const zh: Record<TranslationKey, string> = {
   // Plan 478 — shared rooms (群聊) group
   'sidebar.section.rooms': '群聊',
   'room.create.title': '新建群聊',
+  'room.create.defaultName': '新群聊',
   'room.create.empty': '还没有群聊 — 点 + 新建。',
+  'room.settings.name': '群名称',
+  'room.settings.namePlaceholder': '例如：产品讨论组',
+  'room.settings.description': '群描述',
+  'room.settings.descriptionPlaceholder': '这个群聊是做什么的？',
+  'room.settings.members': '成员',
+  'room.settings.emptyMembers': '还没有可加入的 Bot — 先创建 Bot 再建群。',
+  'room.settings.delete': '删除群聊',
+  'room.settings.deleteConfirm': '删除群聊「{{name}}」？',
+  'room.settings.deleted': '群聊已删除',
+  'room.settings.missing': '群聊设置不可用',
+  'room.settings.notFound': '未找到该群聊',
 
   // Plan 483 — bot 联系人与创建对话框
   'bot.contactBusy': '工作中',

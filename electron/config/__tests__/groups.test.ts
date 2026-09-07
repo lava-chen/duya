@@ -88,6 +88,30 @@ describe('groups CRUD', () => {
     await expect(createGroup({ name: '   ', memberIds: ['ada'] })).rejects.toThrow(/name is required/);
   });
 
+  it('createGroup allows an empty room (members added later via settings)', async () => {
+    const created = await createGroup({ name: 'Empty Room', memberIds: [] });
+    expect(created.memberIds).toEqual([]);
+    expect(created.description).toBe('');
+  });
+
+  it('persists and trims the description on create and update', async () => {
+    const created = await createGroup({
+      name: 'With Desc',
+      memberIds: ['ada'],
+      description: '  产品评审专用  ',
+    });
+    expect(created.description).toBe('产品评审专用');
+    expect((await getGroup(created.id))?.description).toBe('产品评审专用');
+
+    // Patch only the description: name/members stay untouched.
+    const updated = await updateGroup(created.id, { description: '改版评审' });
+    expect(updated.description).toBe('改版评审');
+    expect(updated.name).toBe('With Desc');
+    expect(updated.memberIds).toEqual(['ada']);
+    const raw = fs.readFileSync(groupsTomlPath(), 'utf8');
+    expect(raw).toContain('改版评审');
+  });
+
   it('updateGroup patches only the supplied fields and revalidates members', async () => {
     const created = await createGroup({ name: 'Before', memberIds: ['ada'] });
     const updated = await updateGroup(created.id, { name: 'After', memberIds: ['ada', 'bob'], maxRounds: 5 });

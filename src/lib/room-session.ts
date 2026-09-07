@@ -8,6 +8,9 @@
 
 export const ROOM_SESSION_ID_PREFIX = "room:";
 
+/** Room size cap (grok GROUP_MAX_MEMBERS / rakazo GROUP_MEMBER_MAX). */
+export const GROUP_MEMBER_MAX = 6;
+
 /** Derive a room's transcript session id from the room id. */
 export function getRoomSessionId(roomId: string): string {
   return `${ROOM_SESSION_ID_PREFIX}${roomId}`;

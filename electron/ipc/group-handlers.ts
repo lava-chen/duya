@@ -55,7 +55,7 @@ export function registerGroupHandlers(): void {
 
   ipcMain.handle(
     'config:groups:create',
-    (_event, input: { name: string; memberIds: string[]; maxRounds?: number; maxMemberTurns?: number }) => {
+    (_event, input: { name: string; memberIds: string[]; description?: string; maxRounds?: number; maxMemberTurns?: number }) => {
       try {
         return Promise.resolve(createGroup(input));
       } catch (err) {
@@ -67,7 +67,7 @@ export function registerGroupHandlers(): void {
 
   ipcMain.handle(
     'config:groups:update',
-    (_event, id: string, patch: { name?: string; memberIds?: string[]; maxRounds?: number; maxMemberTurns?: number }) => {
+    (_event, id: string, patch: { name?: string; description?: string; memberIds?: string[]; maxRounds?: number; maxMemberTurns?: number }) => {
       try {
         return Promise.resolve(updateGroup(id, patch));
       } catch (err) {

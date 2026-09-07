@@ -696,10 +696,10 @@ export interface ConfigAgentsAPI {
 
 /** Plan 478: shared-room declaration CRUD (groups.toml write side). */
 export interface GroupsAPI {
-  list: () => Promise<Record<string, { id?: string; name?: string; memberIds?: string[]; maxRounds?: number; maxMemberTurns?: number }>>;
-  get: (id: string) => Promise<{ id: string; name: string; memberIds: string[]; maxRounds: number; maxMemberTurns: number } | null>;
-  create: (input: { name: string; memberIds: string[]; maxRounds?: number; maxMemberTurns?: number }) => Promise<{ id: string; name: string; memberIds: string[] }>;
-  update: (id: string, patch: { name?: string; memberIds?: string[]; maxRounds?: number; maxMemberTurns?: number }) => Promise<{ id: string; name: string; memberIds: string[] }>;
+  list: () => Promise<Record<string, { id?: string; name?: string; description?: string; memberIds?: string[]; maxRounds?: number; maxMemberTurns?: number }>>;
+  get: (id: string) => Promise<{ id: string; name: string; description: string; memberIds: string[]; maxRounds: number; maxMemberTurns: number } | null>;
+  create: (input: { name: string; memberIds: string[]; description?: string; maxRounds?: number; maxMemberTurns?: number }) => Promise<{ id: string; name: string; description?: string; memberIds: string[] }>;
+  update: (id: string, patch: { name?: string; description?: string; memberIds?: string[]; maxRounds?: number; maxMemberTurns?: number }) => Promise<{ id: string; name: string; description?: string; memberIds: string[] }>;
   delete: (id: string) => Promise<void>;
 }
 

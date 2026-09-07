@@ -18,6 +18,7 @@ import { TerminalPanel } from "./TerminalPanel";
 import { BrowserPanel } from "./BrowserPanel";
 import { FilePreviewPanel } from "./FilePreviewPanel";
 import { BotSettingsPanel } from "./BotSettingsPanel";
+import { RoomSettingsPanel } from "./RoomSettingsPanel";
 
 // Heavy, low-frequency panels are lazy-loaded so their dependencies
 // (conductor canvas engine, diff viewer, office suite) stay out of the
@@ -33,7 +34,7 @@ const OfficePanel = lazy(() =>
   import("./OfficePanel").then((m) => ({ default: m.OfficePanel }))
 );
 
-export type PageId = "files" | "preview" | "review" | "conductor" | "terminal" | "browser" | "office" | "bot-settings";
+export type PageId = "files" | "preview" | "review" | "conductor" | "terminal" | "browser" | "office" | "bot-settings" | "room-settings";
 
 export interface PageTab {
   id: string;
@@ -168,6 +169,20 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     preferredWidth: 360,
     defaultExpanded: false,
     component: BotSettingsPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
+  },
+  "room-settings": {
+    id: "room-settings",
+    labelKey: "panel.roomSettings",
+    icon: GearSixIcon,
+    // One tab per room: openOrActivatePage dedups on the params roomId, so
+    // repeated header clicks on the same room activate the existing tab.
+    // Not in EMPTY_LAUNCHER_ORDER — it is only opened programmatically.
+    multiInstance: true,
+    available: true,
+    minWidth: 320,
+    preferredWidth: 360,
+    defaultExpanded: false,
+    component: RoomSettingsPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
 };
 

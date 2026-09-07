@@ -70,7 +70,6 @@ import {
   type BotSectionPartition,
 } from "./sidebar/bot-contacts";
 import { EditBotDialog } from "./EditBotDialog";
-import { GroupSettingsDialog } from "@/components/chat/bot/GroupSettingsDialog";
 import { createConfigAgent, deleteConfigAgent } from "@/lib/agent-profile-ipc";
 
 type ThemeMode = "light" | "dark";
@@ -244,11 +243,16 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       document.addEventListener("mousedown", handleClickOutside);
       return () => document.removeEventListener("mousedown", handleClickOutside);
     }, [isCreateMenuOpen]);
-    // Plan 478: shared-room create/edit dialog state (群聊 lives in the
-    // Bots section as its own "群聊" group).
-    const [groupDialog, setGroupDialog] = useState<
-      { mode: "create" } | { mode: "edit"; roomId: string; name: string; memberIds: string[] } | null
-    >(null);
+    // Room settings panel dispatches `duya:rooms-changed` after create /
+    // update / delete; reload the contact list (rooms load through the same
+    // roster, so a new/renamed/deleted room appears in the sidebar).
+    useEffect(() => {
+      const handler = () => void reloadBots();
+      window.addEventListener("duya:rooms-changed", handler);
+      return () => window.removeEventListener("duya:rooms-changed", handler);
+    }, [reloadBots]);
+    // Plan 478: shared-room edit opens the settings panel (rooms live in the
+    // Bots section as their own "群聊" group).
     // Plan 471 v8: in "在一个列表中" (singleList) mode the flat session
     // list reveals incrementally (20 at a time — user preference, bigger
     // batch than the 5-per-project-group because it spans ALL projects
@@ -508,6 +512,26 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       },
       [setActiveThread, setCurrentView],
     );
+
+    // Quick-create room parity: the create menu mints an empty room directly
+    // (no dialog), opens its transcript view, and lets the room settings
+    // panel add members later. The id comes back from `groups.create`, so
+    // navigation never guesses it.
+    const handleQuickCreateRoom = useCallback(async () => {
+      try {
+        const created = await window.electronAPI?.groups?.create({
+          name: t("room.create.defaultName"),
+          memberIds: [],
+        });
+        const roomId = created?.id;
+        if (!roomId) return;
+        handleOpenRoom(roomId);
+        // Refresh the contact list (rooms load through the same roster).
+        void reloadBots();
+      } catch (err) {
+        console.error("[AppSidebar] Failed to quick-create room:", err);
+      }
+    }, [handleOpenRoom, reloadBots, t]);
 
     // Plan 483 P2: open the edit dialog for a bot. The dialog writes the
     // runtime identity (profile.json); on save we reload the contacts.
@@ -948,7 +972,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                       className="sidebar-project-menu-item"
                       onClick={() => {
                         setIsCreateMenuOpen(false);
-                        setGroupDialog({ mode: "create" });
+                        void handleQuickCreateRoom();
                       }}
                     >
                       <PlusIcon size={14} />
@@ -1152,11 +1176,9 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                         isActive={room.threadId === activeThreadId}
                         onOpen={() => handleOpenRoom(room.roomId)}
                         onEdit={() =>
-                          setGroupDialog({
-                            mode: "edit",
+                          openOrActivatePage("room-settings", {
                             roomId: room.roomId,
-                            name: room.name,
-                            memberIds: room.memberIds,
+                            title: room.name,
                           })
                         }
                       />
@@ -1435,23 +1457,8 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           onConfirm={handleCreateProjectConfirm}
         />
 
-        {/* Plan 478: shared-room create/edit dialog (groups.toml write side). */}
-        <GroupSettingsDialog
-          isOpen={groupDialog !== null}
-          mode={groupDialog?.mode ?? "create"}
-          groupId={groupDialog?.mode === "edit" ? groupDialog.roomId : undefined}
-          initialName={groupDialog?.mode === "edit" ? groupDialog.name : ""}
-          initialMemberIds={groupDialog?.mode === "edit" ? groupDialog.memberIds : []}
-          onCancel={() => setGroupDialog(null)}
-          onSaved={() => {
-            setGroupDialog(null);
-            void reloadBots();
-          }}
-          onDeleted={() => {
-            setGroupDialog(null);
-            void reloadBots();
-          }}
-        />
+        {/* Plan 478: shared-room settings open from the chat header / row
+            edit; creation is one-click from the top "+" menu. */}
         <EditBotDialog
           isOpen={editBotContact !== null}
           contact={editBotContact}

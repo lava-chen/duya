@@ -80,9 +80,6 @@ async function validateMembers(
   if (unique.length !== memberIds.length) {
     throw new GroupValidationError('Duplicate group members are not allowed.');
   }
-  if (unique.length === 0) {
-    throw new GroupValidationError('A group needs at least one member.');
-  }
   if (unique.length > GROUP_MAX_MEMBERS) {
     throw new GroupValidationError(`A group can have at most ${GROUP_MAX_MEMBERS} members.`);
   }
@@ -134,6 +131,7 @@ function allocateGroupId(taken: ReadonlySet<string>): string {
 export interface CreateGroupInput {
   name: string;
   memberIds: string[];
+  description?: string;
   maxRounds?: number;
   maxMemberTurns?: number;
 }
@@ -147,6 +145,7 @@ export async function createGroup(input: CreateGroupInput): Promise<ResolvedGrou
   const id = allocateGroupId(new Set(Object.keys(entries)));
   const entry: GroupEntryConfig = {
     name,
+    ...(input.description !== undefined ? { description: input.description.trim() } : {}),
     members: [...input.memberIds],
     ...(input.maxRounds != null ? { max_rounds: input.maxRounds } : {}),
     ...(input.maxMemberTurns != null ? { max_member_turns: input.maxMemberTurns } : {}),
@@ -160,6 +159,7 @@ export async function createGroup(input: CreateGroupInput): Promise<ResolvedGrou
 export interface UpdateGroupInput {
   name?: string;
   memberIds?: string[];
+  description?: string;
   maxRounds?: number;
   maxMemberTurns?: number;
 }
@@ -175,6 +175,7 @@ export async function updateGroup(id: string, patch: UpdateGroupInput): Promise<
   const next: GroupEntryConfig = {
     ...existing,
     ...(patch.name !== undefined ? { name: patch.name.trim() || id } : {}),
+    ...(patch.description !== undefined ? { description: patch.description.trim() } : {}),
     ...(patch.memberIds !== undefined ? { members: [...patch.memberIds] } : {}),
     ...(patch.maxRounds !== undefined ? { max_rounds: patch.maxRounds } : {}),
     ...(patch.maxMemberTurns !== undefined ? { max_member_turns: patch.maxMemberTurns } : {}),

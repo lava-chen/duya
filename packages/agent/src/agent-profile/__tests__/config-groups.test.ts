@@ -17,10 +17,21 @@ describe('resolveGroupConfig', () => {
     expect(resolved).toEqual({
       id: 'group-aa',
       name: '产品讨论组',
+      description: '',
       memberIds: ['a', 'b'],
       maxRounds: 3,
       maxMemberTurns: 10,
     });
+  });
+
+  it('resolves and trims the optional description', () => {
+    const resolved = resolveGroupConfig('group-dd', {
+      name: '产品讨论组',
+      description: '  产品评审专用  ',
+      members: ['a'],
+    });
+    expect(resolved.description).toBe('产品评审专用');
+    expect(resolveGroupConfig('group-ee', { members: [] }).description).toBe('');
   });
 
   it('clamps invalid limit values to the defaults', () => {
