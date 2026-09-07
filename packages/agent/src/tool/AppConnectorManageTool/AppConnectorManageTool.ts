@@ -150,6 +150,7 @@ const CONNECT_DESCRIPTION = [
   'Never compose an authorization link yourself, never paste OAuth URLs, and never reach the same service through another tool while its authorization is pending.',
   'After calling this tool, finish any other useful work and END YOUR TURN — the UI sends you a follow-up message once the user completes authorization, and you continue then.',
   'If the user has not explicitly asked to connect the app, ask first and call this tool only after they agree.',
+  'Connectors whose supportsManualConfiguration is true but configured is false (e.g. Gmail, Calendar) need the user to supply their own OAuth client first; the tool returns guidance and will NOT show a connect card for them. Do not force a card for those, and do not fabricate authorization instructions.',
 ].join(' ');
 
 const CONNECT_SCHEMA = {
@@ -224,6 +225,27 @@ export class ConnectAppTool {
           success: true,
           alreadyConnected: true,
           message: `${providerConfig.label} is already connected — use its connector tools directly.`,
+        }),
+        error: false,
+      };
+    }
+
+    // Connectors that need the user's own OAuth client (Gmail/Calendar etc.)
+    // cannot be connected on the model's initiative: the user must supply a
+    // client first. Return guidance instead of showing a connect card.
+    if (providerConfig.supportsManualConfiguration && !providerConfig.configured) {
+      return {
+        id: randomUUID(),
+        name: this.name,
+        result: JSON.stringify({
+          success: false,
+          requiresManualConfiguration: true,
+          message:
+            `${providerConfig.label} needs a user-supplied OAuth client before it can connect. ` +
+            `Configure it under Settings → Extensions → Connections → ${providerConfig.label} ` +
+            `(or send the user to docs/product-specs/gmail-oauth-client-setup.md for the Google Cloud steps), ` +
+            `then try ` + 'connect again once it shows as configured. ' +
+            'Do not use a shared client for this connector and do not fabricate an authorization link.',
         }),
         error: false,
       };

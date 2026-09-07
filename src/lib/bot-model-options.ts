@@ -2,8 +2,8 @@
  * bot-model-options.ts — build provider-grouped model lists for the bot
  * create/edit dialogs.
  *
- * Extracts the provider → model grouping logic that BotComposer keeps inline
- * so both dialogs share one implementation (pure, node-testable). Only
+ * Extracts the provider → model grouping logic the bot-composer chain keeps
+ * inline so both dialogs share one implementation (pure, node-testable). Only
  * providers with a usable key (or keyless local endpoints like Ollama) are
  * surfaced, mirroring the composer/MessageInput source of truth.
  */

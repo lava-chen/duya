@@ -89,6 +89,9 @@ export interface AppConnectionProviderDTO {
   configurationHint?: string;
   /** Whether this provider intentionally supports a self-hosted OAuth client. */
   supportsManualConfiguration: boolean;
+  /** Whether the token endpoint requires a client_secret (drives the secret
+   * input visibility in the manual-config dialog). */
+  requiresClientSecret: boolean;
   /** Single-letter icon for UI rendering (e.g. 'G' for Google). */
   monogram: string;
   /** One-line summary shown in the marketplace / connection list. */

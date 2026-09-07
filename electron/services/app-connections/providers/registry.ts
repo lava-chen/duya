@@ -60,6 +60,9 @@ export interface ProviderClientConfig {
   monogram: string;
   /** One-line summary shown in the marketplace / connection list. */
   description: string;
+  /** Friendly guidance for providers that need the user to supply their own
+   * OAuth client. Shown when `supportsManualConfiguration` AND not configured. */
+  manualConfigHint?: string;
 }
 
 export interface ProviderReadiness {
@@ -120,11 +123,17 @@ const BUILTIN_CONFIGS: Record<string, Omit<ProviderClientConfig, 'id'>> = {
       'profile',
     ],
     userinfoUrl: 'https://www.googleapis.com/oauth2/v3/userinfo',
-    requiresClientSecret: false,
-    supportsManualConfiguration: false,
-    clientId: process.env.DUYA_APP_CONNECTION_GMAIL_CLIENT_ID ?? DUYA_GOOGLE_DESKTOP_CLIENT_ID,
+    // Gmail reads/writes private mailbox data, so DUYA does not ship a shared
+    // client for it: the user must configure their own Google Cloud Desktop
+    // OAuth client (Client ID + Secret). Google enforces the secret at the
+    // token endpoint even for desktop clients, so requiresClientSecret is true.
+    requiresClientSecret: true,
+    supportsManualConfiguration: true,
+    clientId: process.env.DUYA_APP_CONNECTION_GMAIL_CLIENT_ID ?? '',
     monogram: 'G',
     description: 'Read and send email through your connected Gmail account.',
+    manualConfigHint:
+      'Gmail 涉及私有邮箱数据，DUYA 不托管共享 client。请配置你自己的 Google Cloud OAuth Client（Client ID + Client Secret），见 docs/product-specs/gmail-oauth-client-setup.md',
   },
   calendar: {
     label: 'Google Calendar',
@@ -140,11 +149,13 @@ const BUILTIN_CONFIGS: Record<string, Omit<ProviderClientConfig, 'id'>> = {
       'profile',
     ],
     userinfoUrl: 'https://www.googleapis.com/oauth2/v3/userinfo',
-    requiresClientSecret: false,
-    supportsManualConfiguration: false,
-    clientId: process.env.DUYA_APP_CONNECTION_CALENDAR_CLIENT_ID ?? DUYA_GOOGLE_DESKTOP_CLIENT_ID,
+    requiresClientSecret: true,
+    supportsManualConfiguration: true,
+    clientId: process.env.DUYA_APP_CONNECTION_CALENDAR_CLIENT_ID ?? '',
     monogram: 'C',
     description: 'Read and create events on your Google Calendar.',
+    manualConfigHint:
+      'Google Calendar 涉及私人日程，DUYA 不托管共享 client。请配置你自己的 Google Cloud OAuth Client（Client ID + Client Secret），见 docs/product-specs/gmail-oauth-client-setup.md',
   },
   slack: {
     label: 'Slack',
@@ -297,13 +308,17 @@ export function getProviderReadiness(provider: ProviderId): ProviderReadiness {
   if (!config.clientId.trim()) {
     return {
       configured: false,
-      reason: `OAuth client ID for ${provider} is not configured in this build`,
+      reason:
+        config.manualConfigHint ??
+        `OAuth client ID for ${provider} is not configured in this build`,
     };
   }
   if (config.requiresClientSecret && !getClientSecret(provider)) {
     return {
       configured: false,
-      reason: `OAuth client secret for ${provider} is not configured`,
+      reason:
+        config.manualConfigHint ??
+        `OAuth client secret for ${provider} is not configured`,
     };
   }
   return { configured: true };

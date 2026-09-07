@@ -116,6 +116,32 @@ describe('mergeInFlightOptimisticMessages', () => {
     expect(keptOptimistic).toBe(2);
   });
 
+  // Regression: the renderer mints the optimistic user message id and the
+  // worker now persists the user row with that SAME id (clientMsgId). The
+  // merge must drop the optimistic copy by id alone, even when the timestamps
+  // drifted far apart — which is exactly the queued bot turn (plan 500) that
+  // persists the row seconds/minutes after the client send.
+  it('drops the optimistic copy when the persisted row shares its id, regardless of timestamp drift', () => {
+    const sendTs = 1_700_000_000_000;
+    const queuedTs = sendTs + 60_000; // persisted 1 minute later than the send
+    const persisted: Message[] = [
+      userMsg('client-uuid', '协调一下把这件事做好', queuedTs),
+      assistantMsg('db-asst', '好的，我来协调…', queuedTs + 1_000),
+    ];
+    const local: Message[] = [
+      userMsg('client-uuid', '协调一下把这件事做好', sendTs, {
+        optimistic: true,
+      }),
+    ];
+
+    const { merged, droppedOptimistic, keptOptimistic } =
+      mergeInFlightOptimisticMessages(persisted, local);
+
+    expect(merged.map((m) => m.id)).toEqual(['client-uuid', 'db-asst']);
+    expect(droppedOptimistic).toBe(1);
+    expect(keptOptimistic).toBe(0);
+  });
+
   it('dedupes user rows by true timestamp distance, not bucket index', () => {
     // The merge compares |Δt| against the window instead of comparing
     // Math.round(ts / window) bucket indices. Bucket indices jump at every

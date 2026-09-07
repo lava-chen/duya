@@ -479,7 +479,6 @@ export const BOT_EMOJI_CATEGORIES: readonly BotEmojiCategory[] = [
       { char: "⚡", keywords: "high voltage lightning energy" },
       { char: "🔥", keywords: "fire hot burn" },
       { char: "💥", keywords: "collision boom explosion" },
-      { char: "💫", keywords: "dizzy stars sparkle" },
       { char: "💦", keywords: "sweat droplets water" },
       { char: "💨", keywords: "dashing away wind speed" },
       { char: "☀️", keywords: "sun sunny weather" },

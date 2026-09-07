@@ -72,7 +72,13 @@ export function BotCharacterAvatar({
       }}
       aria-hidden="true"
     >
-      {avatarEmoji?.trim() || botEmojiFor(agentId)}
+      {/* The glyph is a dedicated inner box so it can be nudged for optical
+          centering WITHOUT moving the parent circle out of place — the
+          streaming ring centers itself on the wrap, so the circle must stay
+          concentric with it. */}
+      <span className="bot-contact-avatar-glyph">
+        {avatarEmoji?.trim() || botEmojiFor(agentId)}
+      </span>
     </span>
   );
 }

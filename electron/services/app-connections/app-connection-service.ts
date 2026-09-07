@@ -144,8 +144,9 @@ export class AppConnectionService {
         id: provider.id,
         label: provider.label,
         configured: readiness.configured,
-        configurationHint: readiness.reason,
+        configurationHint: provider.manualConfigHint ?? readiness.reason,
         supportsManualConfiguration: provider.supportsManualConfiguration,
+        requiresClientSecret: provider.requiresClientSecret,
         monogram: provider.monogram,
         description: provider.description,
         scopes: provider.defaultScopes,
@@ -176,6 +177,12 @@ export class AppConnectionService {
     if (!clientId) {
       throw new FlowError('provider_not_configured', 'OAuth client ID is required');
     }
+    if (providerConfig.requiresClientSecret && !credentials.clientSecret?.trim()) {
+      throw new FlowError(
+        'provider_not_configured',
+        `${providerConfig.label} requires an OAuth client secret at the token endpoint`,
+      );
+    }
     this.vault.setOAuthClient(provider, {
       clientId,
       ...(credentials.clientSecret?.trim() ? { clientSecret: credentials.clientSecret.trim() } : {}),
@@ -190,8 +197,9 @@ export class AppConnectionService {
       id: provider,
       label: config.label,
       configured: readiness.configured,
-      configurationHint: readiness.reason,
+      configurationHint: config.manualConfigHint ?? readiness.reason,
       supportsManualConfiguration: config.supportsManualConfiguration,
+      requiresClientSecret: config.requiresClientSecret,
       monogram: config.monogram,
       description: config.description,
       scopes: config.defaultScopes,

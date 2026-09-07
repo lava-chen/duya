@@ -397,6 +397,16 @@ export function mergeInFlightOptimisticMessages(
   local: Message[],
 ): { merged: Message[]; droppedOptimistic: number; keptOptimistic: number } {
   const persistedUsers = persisted.filter((m) => m.role === 'user');
+  /**
+   * Id-based dedupe. The renderer mints the optimistic message id and threads
+   * it through to the worker, which persists the user row with that SAME id.
+   * When the persistent row is echoed back, its id equals the local optimistic
+   * bubble's id, so the optimistic copy is dropped by id alone. This is
+   * timestamp-independent — it stays correct even when the queued-turn
+   * pipeline persists the row seconds/minutes after the client send (the 5s
+   * window mis-matches and would otherwise leak a duplicate).
+   */
+  const persistedIds = new Set(persisted.map((p) => p.id));
   const merged = [...persisted];
   let droppedOptimistic = 0;
   let keptOptimistic = 0;
@@ -406,7 +416,7 @@ export function mergeInFlightOptimisticMessages(
     // forced reload of a streaming session, growing by one full copy per
     // reload until the run ended.
     if (m.role !== 'user') continue;
-    if (persistedUsers.some((p) => isSameLogicalUserSend(p, m))) {
+    if ((m.id && persistedIds.has(m.id)) || persistedUsers.some((p) => isSameLogicalUserSend(p, m))) {
       droppedOptimistic++;
       continue;
     }

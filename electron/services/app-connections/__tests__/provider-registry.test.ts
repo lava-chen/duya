@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  clearClientSecret,
   getProviderConfig,
   getProviderReadiness,
+  overrideClientId,
   registerProviderConfig,
+  setClientSecret,
   unregisterProviderConfig,
 } from '../providers/registry.js';
 import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
@@ -35,7 +38,7 @@ describe('app connection provider registry', () => {
     expect(getProviderConfig(SLACK)?.supportsManualConfiguration).toBe(true);
   });
 
-  it('registers Gmail and Calendar as ready, independently connectable providers', () => {
+  it('registers Gmail and Calendar as manual-config providers (not ready by default)', () => {
     const gmail = getProviderConfig(asAppConnectorId('gmail'));
     const calendar = getProviderConfig(asAppConnectorId('calendar'));
 
@@ -44,13 +47,39 @@ describe('app connection provider registry', () => {
     expect(gmail?.defaultScopes).toContain('https://www.googleapis.com/auth/gmail.compose');
     expect(gmail?.defaultScopes).toContain('https://www.googleapis.com/auth/gmail.modify');
     expect(gmail?.redirectPath).toBe('/callback/gmail');
-    expect(gmail?.clientId).toMatch(/\.apps\.googleusercontent\.com$/);
-    expect(getProviderReadiness(asAppConnectorId('gmail'))).toEqual({ configured: true });
+    // Gmail/Calendar are NOT shipped a shared client: the user supplies their
+    // own Google Cloud Desktop OAuth client (ID + Secret).
+    expect(gmail?.supportsManualConfiguration).toBe(true);
+    expect(gmail?.requiresClientSecret).toBe(true);
+    expect(gmail?.clientId).toBe('');
+    expect(getProviderReadiness(asAppConnectorId('gmail')).configured).toBe(false);
 
     expect(calendar?.label).toBe('Google Calendar');
     expect(calendar?.defaultScopes).toContain('https://www.googleapis.com/auth/calendar.events');
     expect(calendar?.redirectPath).toBe('/callback/calendar');
-    expect(getProviderReadiness(asAppConnectorId('calendar'))).toEqual({ configured: true });
+    expect(calendar?.supportsManualConfiguration).toBe(true);
+    expect(calendar?.clientId).toBe('');
+    expect(getProviderReadiness(asAppConnectorId('calendar')).configured).toBe(false);
+  });
+
+  it('treats Gmail as configured once the user supplies a client id+secret at runtime', () => {
+    const gmail = asAppConnectorId('gmail');
+    expect(getProviderReadiness(gmail).configured).toBe(false);
+
+    // Mirrors configureProvider: overrideClientId + setClientSecret drive
+    // readiness (env vars are only read at boot for the baked clientId).
+    overrideClientId(gmail, 'acme.apps.googleusercontent.com');
+    setClientSecret(gmail, 'GOCSPX-acme-secret');
+    try {
+      expect(getProviderReadiness(gmail).configured).toBe(true);
+    } finally {
+      clearClientSecret(gmail);
+      if (getProviderConfig(gmail)) {
+        // Reset the in-memory clientId override back to empty so later
+        // tests keep Gmail unconfigured.
+        overrideClientId(gmail, process.env.DUYA_APP_CONNECTION_GMAIL_CLIENT_ID ?? '');
+      }
+    }
   });
 
   it('registers QQ Mail as a custom-credential provider that is always connectable', () => {

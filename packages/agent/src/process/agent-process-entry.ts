@@ -240,6 +240,9 @@ interface ChatStartMessage {
      * bot-direct chat (the dispatcher's agent_dm marker is the visible row).
      */
     wakeRun?: boolean;
+    /** Renderer-minted id of this user send; worker persists the user row
+     *  with this id so the renderer can dedupe the optimistic bubble by id. */
+    clientMsgId?: string;
   };
 }
 
@@ -2730,6 +2733,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       // Plan 497: wake runs (cron/background notification/agent DM) persist
       // their prompt user row source 'system' — model context, not chat.
       wakeRun: msg.options?.wakeRun === true,
+      clientMsgId: msg.options?.clientMsgId,
       todoGate: { enabled: steering.todoGateEnabled },
       antiDeadLoop: { ...steering.antiDeadLoop },
       toolIntentNudgeMax: steering.toolIntentNudgeMax,

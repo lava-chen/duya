@@ -54,6 +54,11 @@ export interface ChatOptions {
   /** Internal background-task follow-up; never supplied by user input. */
   backgroundTaskResume?: boolean;
   /**
+   * Renderer-minted id of this user send. Forwarded so the worker persists
+   * the user row with the same id as the optimistic bubble (id-based dedupe).
+   */
+  clientMsgId?: string;
+  /**
    * Plan 450: providers @-mentioned in the composer for this run. Forwarded
    * to the worker so connector tools of these providers skip tool_search.
    */
@@ -216,6 +221,7 @@ export class AgentServerClient {
             conductorMode: options?.conductorMode,
             conductorCanvasId: options?.conductorCanvasId,
             backgroundTaskResume: options?.backgroundTaskResume,
+            clientMsgId: options?.clientMsgId,
           },
           providerConfig: options?.providerConfig,
           workingDirectory: options?.workingDirectory,
