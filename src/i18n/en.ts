@@ -1343,6 +1343,7 @@ const en = {
   // behavior of surfacing the mailbox queue depth so users know their
   // follow-up is waiting behind an active run.
   'bot.contactStatus.queued': 'Queued',
+  'bot.contactStatus.running': 'Working',
   'bot.contactBadgeUnseen': 'New reply',
   'bot.contactBadgeError': 'Error — click to view',
   'bot.create.title': 'Create Bot',

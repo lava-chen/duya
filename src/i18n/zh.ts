@@ -1330,6 +1330,7 @@ const zh: Record<TranslationKey, string> = {
   // `queued` 与 grok-bot / rakazo 行为对齐，提示用户提交的追问正在
   // 等待当前活跃 run 抵达安全检查点后再执行。
   'bot.contactStatus.queued': '已排队',
+  'bot.contactStatus.running': '工作中',
   'bot.contactBadgeUnseen': '有新回复',
   'bot.contactBadgeError': '出错了 — 点击查看',
   'bot.create.title': '创建 Bot',
