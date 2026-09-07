@@ -168,7 +168,7 @@ const BUILTIN_CONFIGS: Record<string, Omit<ProviderClientConfig, 'id'>> = {
     defaultScopes: ['Mail.Read', 'Calendars.Read', 'Files.Read.All', 'User.Read'],
     userinfoUrl: 'https://graph.microsoft.com/v1.0/me',
     requiresClientSecret: false,
-    supportsManualConfiguration: false,
+    supportsManualConfiguration: true,
     clientId: process.env.DUYA_APP_CONNECTION_MICROSOFT365_CLIENT_ID ?? '',
     monogram: 'M',
     description: 'Microsoft 365 (Outlook, OneDrive, Teams)',
