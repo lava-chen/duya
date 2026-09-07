@@ -27,6 +27,16 @@ import type {
 /** Cue prepended to inbound wake prompts. */
 export const CHANNEL_INBOUND_WAKE_CUE = '[inbound]';
 
+/**
+ * Reply guidance appended right after the cue. Without it, bots treat an
+ * inbound channel message like an in-app one and answer with plain turn
+ * text — which only lands in the desktop chat, leaving the external sender
+ * in silence. The hint makes the routing contract explicit: replies must
+ * go through SendMessage with the channel address from each line.
+ */
+export const CHANNEL_INBOUND_REPLY_HINT =
+  'The messages below arrived from an external messaging channel. The sender cannot see this chat, and your final written reply does not reach them either — to answer, call SendMessage with channel set to the address shown in each line (e.g. channel="telegram:12345"); without channel your reply only lands in the in-app chat.';
+
 /** Cue prepended to delivery-failure wake prompts. */
 export const CHANNEL_DELIVERY_FAILED_WAKE_CUE = '[channel-delivery-failed]';
 
@@ -47,9 +57,10 @@ export const MAX_INBOUND_TEXT_CHARS = 8000;
 /**
  * Build the hidden wake prompt for one or more inbound channel envelopes.
  *
- * Groups envelopes by address, formats each as a block, and joins them.
- * If the total exceeds MAX_INBOUND_TEXT_CHARS, later envelopes are truncated
- * with a `<truncated>` marker.
+ * Emits the cue, a reply-routing hint, then groups envelopes by address,
+ * formats each as a block, and joins them. If the total exceeds
+ * MAX_INBOUND_TEXT_CHARS, later envelopes are truncated with a
+ * `<truncated>` marker.
  *
  * @param envelopes - Inbound envelopes, newest first recommended.
  * @param cue - Override the default cue (mostly for testing).
@@ -60,7 +71,7 @@ export function buildChannelInboundWakePrompt(
 ): string {
   if (!envelopes.length) return '';
 
-  const blocks: string[] = [cue];
+  const blocks: string[] = [cue, CHANNEL_INBOUND_REPLY_HINT];
 
   // Group by address
   const byAddress = new Map<string, ChannelInboundEnvelope[]>();
@@ -70,7 +81,7 @@ export function buildChannelInboundWakePrompt(
     byAddress.get(key)!.push(env);
   }
 
-  let totalChars = cue.length + 1;
+  let totalChars = cue.length + CHANNEL_INBOUND_REPLY_HINT.length + 2;
   let truncated = false;
 
   for (const [addrKey, envs] of byAddress) {
