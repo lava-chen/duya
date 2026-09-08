@@ -363,6 +363,27 @@ if (gotTheLock) {
       // Agent communication now uses HTTP+SSE via Agent Server
     ]);
 
+    // Show the window as soon as DB + message-port channels are
+    // registered. The renderer paints immediately, the OS can process
+    // DWM input (drag/resize), and the rest of the subsystem boot below
+    // can take its time without leaving the window irresponsive for the
+    // first 200-500ms after launch. The previous sequence (DB →
+    // lowPower → sessionManager → spawnAgentServer 15s handshake →
+    // memory worker LLM init → createWindow) starved the main thread
+    // and made the window non-interactive until spawnAgentServer
+    // resolved.
+    await createWindow();
+
+    // Yield one event-loop tick so the OS can drain the DWM message
+    // queue (the user may have already grabbed the title bar while the
+    // microtask above was scheduling). Without this, the synchronous
+    // init chain below — initLowPower / migrateConfig / memory worker
+    // LLM init — would still hold the main thread for ~100-300ms and
+    // the titlebar would freeze briefly even though BrowserWindow
+    // already exists. setImmediate runs on the next libuv poll phase,
+    // interleaved with the OS-level input pump.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
     // Plan 426 Phase 3: resolve performance.lowPower BEFORE any child
     // processes spawn — the agent server inherits DUYA_LOW_POWER from
     // process.env, and main services read isLowPowerEnabled() live.
@@ -399,17 +420,26 @@ if (gotTheLock) {
     // ============================================================
     // Step 4.5: Start Agent Server (HTTP+SSE for Agent communication)
     // ============================================================
-    try {
+    // Fire-and-forget: the handshake can take up to 15s and the main
+    // thread would otherwise stay blocked on this await, leaving the
+    // newly-shown window irresponsive. The agent server registers its
+    // own IPC bridge via the db-bridge (db:request messages), so the
+    // renderer can still queue requests while the server is warming up;
+    // the agent-process-pool fallbacks cover the gap.
+    {
       const { spawnAgentServer, stopAgentServer } = await import('./agents/agent-server-lifecycle');
-      await spawnAgentServer();
-      logger.info('Agent Server started', undefined, 'Main');
+      void spawnAgentServer()
+        .then((port) => {
+          logger.info('Agent Server started', { port }, 'Main');
+        })
+        .catch((error) => {
+          logger.error('Failed to start Agent Server', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
+        });
 
       // Register shutdown handler for Agent Server
       const { getIsShuttingDown } = await import('./core/graceful-shutdown');
       const originalIsShuttingDown = getIsShuttingDown();
       // Agent Server will be stopped by graceful shutdown
-    } catch (error) {
-      logger.error('Failed to start Agent Server', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
     }
 
     try {
@@ -973,19 +1003,6 @@ if (gotTheLock) {
     const { setConductorExecutorProxy } = await import('./agents/agent-server-lifecycle');
     setConductorExecutorProxy(conductorExecutorProxy);
 
-    await createWindow();
-    recapService.init(getMainWindow()!);
-    createTray();
-
-    // Flush any files queued before the window was ready (macOS open-file
-    // events that arrived during cold launch from Dock/Finder).
-    const mainWindow = getMainWindow();
-    if (mainWindow && pendingOpenFiles.length > 0) {
-      for (const f of pendingOpenFiles.splice(0)) {
-        mainWindow.webContents.send('system:open-file', f);
-      }
-    }
-
     // ============================================================
     // Step 7: Deferred non-critical services (plan 426 Phase 6.3)
     // ============================================================
@@ -994,6 +1011,41 @@ if (gotTheLock) {
     // mirrors the pre-move inline blocks (unchanged).
     runAfterWindowReady(() => {
       void (async () => {
+        // Recap service and tray depend on the main window handle, which
+        // is only valid after createWindow. They used to run inline just
+        // after createWindow; with the new sequence they are deferred
+        // to did-finish-load alongside the rest of the boot work.
+        recapService.init(getMainWindow()!);
+        createTray();
+
+        // Flush any files queued before the window was ready (macOS
+        // open-file events that arrived during cold launch from
+        // Dock/Finder).
+        const mainWindow = getMainWindow();
+        if (mainWindow && pendingOpenFiles.length > 0) {
+          for (const f of pendingOpenFiles.splice(0)) {
+            mainWindow.webContents.send('system:open-file', f);
+          }
+        }
+
+        // Auto updater: was previously initialized in
+        // window-manager.ts did-finish-load. Moved here so the first-paint
+        // path stays clean and the updater can reach the renderer through
+        // the main window handle.
+        if (mainWindow) {
+          try {
+            initUpdater(mainWindow);
+            logger.info('Auto updater initialized', undefined, 'Main');
+          } catch (err) {
+            logger.error(
+              'Failed to initialize auto updater',
+              err instanceof Error ? err : new Error(String(err)),
+              undefined,
+              'Main',
+            );
+          }
+        }
+
         try {
           const allowedExtensionIds = getJsonSetting<string[]>('browserExtensionAllowedIds', []);
           const normalizedExtensionIds = Array.from(new Set(

@@ -4,18 +4,21 @@
  * requested runtime.
  *
  * better-sqlite3 is a V8-ABI native module: the Electron runtime (main +
- * agent workers, spawned with ELECTRON_RUN_AS_NODE=1 → ABI 119) and the
- * local Node.js used by Vitest (ABI 137 on Node 24) need DIFFERENT builds.
- * One `build/Release/better_sqlite3.node` can only serve one ABI, so any
- * switch between `npm test` and `npm run electron:dev` requires swapping it.
+ * agent workers, spawned with ELECTRON_RUN_AS_NODE=1) and the local Node.js
+ * used by Vitest need DIFFERENT builds (they report different
+ * process.versions.modules — e.g. ABI 132 for Electron 36 vs ABI 137 on
+ * Node 24). One `build/Release/better_sqlite3.node` can only serve one ABI,
+ * so any switch between `npm test` and `npm run electron:dev` requires
+ * swapping it.
  *
  * Instead of recompiling from source (slow, needs the VS toolchain, and
  * `npm rebuild`/`node-gyp` can clobber the working binary), this script
  * swaps in the matching PREBUILT binary:
  *
  *   - node:     `prebuild-install --force` (current Node ABI, cached)
- *   - electron: copy `<pkg>/bin/win32-x64-119/better-sqlite3.node` (the
- *               Electron prebuilt) into build/Release, or download it via
+ *   - electron: copy `<pkg>/bin/<platform>-<arch>-<abi>/better-sqlite3.node`
+ *               (the Electron prebuilt matching the installed Electron ABI)
+ *               into build/Release, or download it via
  *               `prebuild-install --runtime electron --target <version>`.
  *
  * It is wired as the `pre`-hook of the DB-touching entry points
@@ -186,13 +189,12 @@ console.error(`[abi] better-sqlite3 does not load under ${target} (${check.error
 
 let healed = false;
 if (target === 'electron') {
-  // Offline-first: the Electron prebuilt ships in <pkg>/bin/<platform>-<arch>-119/.
+  // Offline-first: the Electron prebuilt ships in <pkg>/bin/<platform>-<arch>-<abi>/.
   // Fallback: repo-level prebuilds/ — survives `npm ci`, which wipes <pkg>/bin.
-  // The artifact there was produced once via `npx electron-rebuild -o better-sqlite3`
-  // (upstream publishes no electron-v119 prebuilt for better-sqlite3 v12+).
-  // Fixed filename: this repo pins Electron 28, so the electron ABI is
-  // constant; deriving it from process.versions.modules would wrongly use
-  // the running Node's ABI.
+  // The artifact is regenerated per Electron target (see
+  // prebuilds/better-sqlite3-electron-win32-x64.node) via `npx prebuild-install
+  // --runtime electron --target <ver>` (Electron prebuilds for better-sqlite3
+  // are published upstream) and committed so dev/pack work offline.
   const candidates = [];
   const binDir = path.join(dir, 'bin');
   if (fs.existsSync(binDir)) {

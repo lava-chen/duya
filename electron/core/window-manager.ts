@@ -6,8 +6,6 @@ import * as os from 'os';
 import { isDev, isPreviewMode, isTestMode } from './bootstrap';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getChannelManager } from '../messaging/port-manager';
-import { getConfigStore } from '../config/store-instance';
-import { initUpdater } from '../services/updater';
 import { wasLaunchedAsHidden } from '../services/auto-start';
 import { getNodeExecutable } from '../services/dev-detector';
 import { isHttpUrl } from '../ipc/system-handlers';
@@ -272,10 +270,12 @@ export async function createWindow(): Promise<void> {
       LogComponent.Main,
     );
   });
-  mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
-    if (level >= 2) {
+  // Electron 25+ passes a single event object (level/message/sourceId/
+  // lineNumber); the old positional signature was removed.
+  mainWindow.webContents.on('console-message', (event) => {
+    if (event.level >= 2) {
       logger.error(
-        `Renderer console: ${message} (${sourceId}:${line})`,
+        `Renderer console: ${event.message} (${event.sourceId}:${event.lineNumber})`,
         undefined,
         LogComponent.Main,
       );
@@ -289,8 +289,6 @@ export async function createWindow(): Promise<void> {
     );
   });
 
-  let updaterSetup = false;
-
   mainWindow.webContents.on('did-finish-load', () => {
     logger.info('Window did-finish-load, setting up ports...', undefined, LogComponent.Main);
 
@@ -298,11 +296,6 @@ export async function createWindow(): Promise<void> {
     if (channelManager) {
       const configChannel = new MessageChannelMain();
       channelManager.registerChannel('config', configChannel.port1);
-
-      const configStore = getConfigStore();
-      if (configStore) {
-        configStore.addSubscriber(configChannel.port1, 'renderer');
-      }
 
       mainWindow?.webContents.postMessage('config-port', null, [configChannel.port2]);
       logger.info('Config port sent to renderer', undefined, LogComponent.Main);
@@ -312,12 +305,6 @@ export async function createWindow(): Promise<void> {
       mainWindow?.webContents.postMessage('conductor-port', null, [conductorChannel.port2]);
 
       logger.info('Conductor port sent to renderer', undefined, LogComponent.Main);
-    }
-
-    if (!updaterSetup) {
-      updaterSetup = true;
-      initUpdater(mainWindow!);
-      logger.info('Auto updater initialized', undefined, 'Main');
     }
   });
 

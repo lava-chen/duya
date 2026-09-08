@@ -80,7 +80,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/diff": "^7.0.2",
     "@types/mailparser": "^3.4.6",
-    "@types/node": "^20.11.0",
+    "@types/node": "^22.10.0",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
@@ -93,8 +93,8 @@
     "autoprefixer": "^10.4.27",
     "concurrently": "^9.2.1",
     "cross-env": "^10.1.0",
-    "electron": "^28.2.0",
-    "electron-builder": "^24.9.1",
+    "electron": "^36.0.0",
+    "electron-builder": "^26.0.12",
     "esbuild": "^0.27.7",
     "gifenc": "^1.0.3",
     "jsdom": "^26.1.0",
@@ -117,7 +117,7 @@
     "@xterm/addon-web-links": "^0.12.0",
     "@xterm/xterm": "^6.0.0",
     "antd": "^6.3.5",
-    "better-sqlite3": "^12.8.0",
+    "better-sqlite3": "^12.11.1",
     "clsx": "^2.1.1",
     "croner": "^9.1.0",
     "diff": "^9.0.0",
@@ -148,5 +148,8 @@
     "write-file-atomic": "^7.0.1",
     "yaml": "^2.9.0",
     "zustand": "^5.0.12"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
