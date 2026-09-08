@@ -139,6 +139,27 @@ export function getLiveOutbound(
 }
 
 /**
+ * Resolve the live per-bot connector instance for a given (agentId, platform)
+ * pair, if one has been started by `BotConnectorManager.sync()`. Returns
+ * `undefined` when the binding is not bound, credentials are missing, or the
+ * connector has not yet been built.
+ *
+ * Used by `WeixinTransport` to reuse the existing WeixinConnector (and its
+ * started `WeixinAdapter`) instead of `new`-ing a duplicate whose `start()`
+ * is fire-and-forget and races the outbound call. Narrowly typed to
+ * `WeixinConnector` because that is the only consumer today; widen if a
+ * generic accessor is needed.
+ */
+export function getConnector(agentId: string, platform: string): WeixinConnector | undefined {
+  const manager = getBotConnectorManager();
+  const entry = manager.running.get(liveOutboundKey(agentId, platform));
+  if (!entry) return undefined;
+  if (entry.platform !== platform) return undefined;
+  if (platform !== 'weixin') return undefined;
+  return entry.connector as WeixinConnector;
+}
+
+/**
  * Map a `ChannelOutboundMessage` to a gateway `NormalizedReply` for the live
  * adapter's `sendReply`. `file://` attachments map to a `MediaReply` so the
  * live adapters (feishu/weixin) upload the real file (plan 507 P3.1); other
