@@ -30,6 +30,8 @@ import { parseChannelAddress } from '../../packages/agent/src/channels/types';
 import { getConnectorCredential } from './agent-session-channels';
 import { isFileUrl, fileUrlToPath, mediaTypeForPath, mimeTypeForPath } from './file-url';
 import { getLogger, LogComponent } from '../logging/logger';
+import { channelOutboundToNormalizedReply, getConnector } from './connector-runtime';
+
 
 // =============================================================================
 // Transport interface
@@ -591,4 +593,49 @@ class TelegramTransport implements ChannelTransport {
   }
 }
 
+/**
+ * WeChat channel transport (plan 488 P6).
+ *
+ * Outbound must reuse the SAME WeixinConnector (and its started
+ * `WeixinAdapter`) that `BotConnectorManager` is already running for inbound
+ * polling — context_token continuity, batching, and stream cards all assume
+ * one adapter instance per bot. The transport therefore reaches into
+ * `getConnector(agentId, 'weixin')` instead of `new`-ing a duplicate (the
+ * duplicate path was previously fire-and-forget `start()`, which races the
+ * outbound call). When the bot's weixin connector has not been started yet
+ * (binding missing, credentials absent, or manager.sync() not yet run) we
+ * surface a clear error instead of silently spinning up a parallel adapter.
+ *
+ * Note: the live outbound registry path in `channelDelivery()` is preferred
+ * and will normally short-circuit before this transport runs; this fallback
+ * remains so callers hitting `WeixinTransport.send` directly still go through
+ * the right adapter instance.
+ */
+class WeixinTransport implements ChannelTransport {
+  readonly platform = 'weixin';
+
+  async send(agentId: string, address: ChannelAddress, outbound: ChannelOutboundMessage): Promise<void> {
+    const botToken = getConnectorCredential(agentId, 'weixin', 'botToken');
+    if (!botToken) {
+      throw new Error(`Weixin bot token not found for agent ${agentId}. Use secret-request to provide it.`);
+    }
+
+    const connector = getConnector(agentId, 'weixin');
+    if (!connector) {
+      throw new Error(
+        `Weixin bot connector is not running for agent ${agentId}. ` +
+        `Make sure the agent is bound to the weixin platform and the connector-runtime has started it.`,
+      );
+    }
+
+    const normalized = channelOutboundToNormalizedReply(outbound);
+    const result = await connector.getAdapter().sendReply(address.chat, normalized);
+
+    if (!result.ok) {
+      throw new Error(result.error ?? 'Weixin sendReply failed');
+    }
+  }
+}
+
+registerTransport(new WeixinTransport());
 registerTransport(new TelegramTransport());

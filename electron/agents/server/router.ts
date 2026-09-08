@@ -1626,9 +1626,9 @@ async function lazySpawnWorkerForCompact(
  * The worker signals ready by emitting either `ready` (with optional
  * `status: 'error' | 'deferred'`) or `conductor:ready`. We resolve on the
  * first successful ready, and reject with a structured reason on:
- *  - `status: 'error'`  -> surface the worker's `error` message (503 upstream)
- *  - `status: 'deferred'` -> init deferred to a later handshake (409 upstream)
- *  - timeout             -> no signal within `timeoutMs` (504 upstream)
+ *  - `status: 'error'`  → surface the worker's `error` message (503 upstream)
+ *  - `status: 'deferred'` → init deferred to a later handshake (409 upstream)
+ *  - timeout             → no signal within `timeoutMs` (504 upstream)
  *
  * Extracted from `lazySpawnWorkerForCompact` so the contract is unit-testable
  * independently of the full session-store / provider-config path.
@@ -1690,6 +1690,7 @@ export function waitForWorkerReady(
     child.stdout!.on('data', readyHandler);
   });
 }
+
 async function handlePostCompact(
   sessionId: string,
   req: http.IncomingMessage,
