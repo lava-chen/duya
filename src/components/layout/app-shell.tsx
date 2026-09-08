@@ -8,6 +8,7 @@ import { useConversationStore } from "@/stores/conversation-store";
 import { PanelProvider, usePanel } from "@/hooks/usePanel";
 import { PanelZone } from "@/components/layout/PanelZone";
 import { TaskDrawerToggle } from "@/components/layout/TaskDrawerToggle";
+import { useBackdropRepair } from "@/lib/backdrop-repair";
 
 // Custom event for triggering onboarding reset
 const RESET_ONBOARDING_EVENT = "duya:reset-onboarding";
@@ -44,6 +45,10 @@ function AppShellInner({ children }: AppShellProps) {
   const sidebarRef = useRef<HTMLDivElement>(null);
   const startXRef = useRef(0);
   const startWidthRef = useRef(DEFAULT_SIDEBAR_WIDTH);
+
+  // Windows/Mica: force the glass layers to re-composite when the window
+  // leaves fullscreen, or they can render stuck on a stale backdrop.
+  useBackdropRepair();
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
