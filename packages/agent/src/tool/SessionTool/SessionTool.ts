@@ -67,6 +67,12 @@ export class SessionTool implements Tool {
   (e.g. a deep refactor, a large build, an isolated experiment).
 - When you want a normal project session and a bot/agent session to be connected:
   spawn real project sessions to do work, then get woken with their results.
+- Delegation preference: when a task is concrete engineering work that can be
+  scoped to a project (reading/writing files, editing code, running builds,
+  refactoring, isolated experiments), prefer SPAWNING a child session to do the
+  work rather than doing it inline. Stay the coordinator: keep talking with the
+  user and other agents, and drive the work through this tool (get for progress,
+  reply for follow-ups, cancel to stop, list to manage all your children).
 
 ## Behavior
 - ASYNC + auto-wake: spawn/reply return immediately; the child runs in its own

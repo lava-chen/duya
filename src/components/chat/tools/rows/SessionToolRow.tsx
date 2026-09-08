@@ -16,6 +16,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { getGitCommits, getGitReview, type GitReviewResult } from '@/lib/git-ipc';
+import { useConversationStore } from '@/stores/conversation-store';
 import type { ToolAction } from '../types';
 
 interface CardSession {
@@ -133,8 +134,17 @@ export function SessionToolRow({ tool }: { tool: ToolAction }) {
   }
   const branch = git?.branch ? `⭑ ${git.branch}` : null;
 
+  const { setActiveThread } = useConversationStore();
+
   const handleOpen = () => {
-    if (sessionId) void window.electronAPI.recap.setActiveSession(sessionId);
+    if (!sessionId) return;
+    // Switch the main UI to the spawned session's normal chat view so the user
+    // can read its progress and continue typing in it directly. setActiveThread
+    // loads the row from the DB if it is not yet cached and opens ChatView
+    // (currentView 'chat') — the same path the sidebar uses. Recap registration
+    // is kept for background summary bookkeeping (harmless, no UI effect).
+    void setActiveThread(sessionId);
+    void window.electronAPI.recap.setActiveSession(sessionId);
   };
   const handleCancel = () => {
     if (!sessionId) return;
@@ -144,7 +154,7 @@ export function SessionToolRow({ tool }: { tool: ToolAction }) {
   const busy = projection.tone === 'accent';
 
   return (
-    <div style={styles.card} data-tone={projection.tone}>
+    <div style={styles.card} data-tone={projection.tone} onClick={handleOpen} role="button" aria-label={`Open session ${sessionId || ''}`} data-clickable>
       {/* Header */}
       <div style={styles.header}>
         <span style={{ ...styles.title, color }}>{session?.title || '[Spawn] session'}</span>
@@ -170,10 +180,10 @@ export function SessionToolRow({ tool }: { tool: ToolAction }) {
 
       {/* Actions */}
       <div style={styles.actions}>
-        <button type="button" style={styles.primaryBtn} onClick={handleOpen} disabled={!sessionId}>
-          Open session
+        <button type="button" style={styles.primaryBtn} onClick={(e) => { e.stopPropagation(); handleOpen(); }} disabled={!sessionId}>
+          Open &amp; continue
         </button>
-        <button type="button" style={styles.ghostBtn} onClick={handleCancel} disabled={cancelled || busy === false}>
+        <button type="button" style={styles.ghostBtn} onClick={(e) => { e.stopPropagation(); handleCancel(); }} disabled={cancelled || busy === false}>
           {cancelled ? 'Cancelled' : 'Cancel'}
         </button>
       </div>
@@ -192,6 +202,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     gap: 6,
     fontFamily: 'var(--font-ui, inherit)',
+    cursor: 'pointer',
   },
   header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   title: { fontWeight: 600, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
