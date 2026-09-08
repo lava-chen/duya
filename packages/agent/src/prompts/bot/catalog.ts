@@ -45,6 +45,7 @@ import { renderBotRoster } from './roster.js'
 import { renderBotCommsRules } from './commsRules.js'
 import { renderBotChannels } from './channels.js'
 import { renderBotAutomations } from './automations.js'
+import { renderBotTaskDelegation } from './delegation.js'
 import {
   BOT_MEMORY_OWN_SECTION,
   BOT_MEMORY_USAGE_SECTION,
@@ -118,6 +119,14 @@ export const BOT_ROSTER_SECTION: BotSectionDef = {
   compute: renderBotRoster,
 }
 
+export const BOT_TASK_DELEGATION_SECTION: BotSectionDef = {
+  name: 'botTaskDelegation',
+  description:
+    'Coordinator/hands split: prefer spawning child sessions via the `session` tool for project-scoped engineering work; stay the coordinator with the user and other agents (soft preference).',
+  budgetChars: 1200,
+  compute: renderBotTaskDelegation,
+}
+
 export const BOT_MCP_SECTION: BotSectionDef = {
   name: 'botMCP',
   description: 'MCP server-declared usage preferences / discovery status.',
@@ -145,6 +154,7 @@ export const BOT_SECTION_CATALOG: readonly BotSectionDef[] = [
   BOT_AUTOMATIONS_SECTION,
   BOT_CHANNELS_SECTION,
   BOT_ROSTER_SECTION,
+  BOT_TASK_DELEGATION_SECTION,
   BOT_MCP_SECTION,
   BOT_REMOTE_BOX_SECTION,
 ]
