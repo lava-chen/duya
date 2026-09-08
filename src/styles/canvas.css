@@ -248,7 +248,6 @@
   color: var(--text-secondary);
   font-size: 11px;
   box-shadow: 0 4px 16px color-mix(in srgb, var(--text) 10%, transparent);
-  backdrop-filter: blur(12px);
 }
 
 @media (max-width: 560px) {

@@ -35,8 +35,8 @@ export function AddReferencesModal({ isOpen, onClose, onUpload, busy }: AddRefer
       if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
         for (let i = 0; i < e.dataTransfer.files.length; i++) {
           const file = e.dataTransfer.files[i];
-          if (file.path) {
-            files.push(file.path);
+          if ("path" in file) {
+            files.push((file as { path: string }).path);
           }
         }
       }

@@ -8,16 +8,12 @@
 
 .app-sidebar {
   /* Glassmorphism: a translucent frosted pane floating over the shell's
-     aurora gradient (and, on native platforms, the OS wallpaper). The
-     blur + low-alpha fill is what reads as "glass"; the 1px right edge
-     separates the pane from the main surface.
-     Perf: a 24px full-height blur (+saturate) re-samples the entire
-     sidebar background on every repaint, stacking with the native
-     Mica/vibrancy material. Reduced to a light blur with a higher
-     alpha fill so the glass look survives at a fraction of the GPU cost. */
+     aurora gradient (and, on native platforms, the OS wallpaper). */
+  /* No backdrop-filter here: on native (data-backdrop) windows the OS Mica
+     material already blurs the backdrop cheaply, so a translucent fill alone
+     reads as glass. A CSS blur would re-sample the full-height surface on
+     every repaint (double-blur cost + fullscreen/repaint instability). */
   background: color-mix(in srgb, var(--bg-canvas) 78%, transparent);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
   padding: 0.95rem 0.5rem 0.95rem 0.5rem;
   display: flex;
   flex-direction: column;
@@ -72,6 +68,33 @@ html[data-backdrop] .app-main-inner {
   background:
     linear-gradient(var(--glass-main), var(--glass-main)) padding-box,
     var(--glass-edge) border-box;
+}
+
+/* Windows fullscreen→windowed repaint guard (plan 426 follow-up). After a
+   native fullscreen transition Chromium's compositor can leave any remaining
+   backdrop-filter layers (small popovers/panels kept for layered glass)
+   sampling a stale backdrop. backdrop-repair.ts drops data-glass-repair on
+   <html> for a single frame; the near-zero blur forces those layers to
+   rebuild and re-sample, then real blur returns. The 0.02px-vs-4~20px delta
+   is imperceptible. Most of the heavy chrome uses Mica + translucent fill
+   only (no CSS blur), so the rebuild cost is now bounded to the few small
+   elements that still opt in. */
+html[data-glass-repair] .conductor-panel,
+html[data-glass-repair] .conductor-zoom-pill,
+html[data-glass-repair] .conductor-popover,
+html[data-glass-repair] .canvas-presentation-toggle,
+html[data-glass-repair] .finite-widget-drag-handle,
+html[data-glass-repair] .finite-freeform-drag-handle,
+html[data-glass-repair] .finite-canvas-only-note,
+html[data-glass-repair] .attachment-preview-close,
+html[data-glass-repair] .terminal-selection-menu,
+html[data-glass-repair] .image-preview-overlay,
+html[data-glass-repair] .references-modal-overlay,
+html[data-glass-repair] .skills-modal-overlay,
+html[data-glass-repair] .gateway-chat-modal-overlay,
+html[data-glass-repair] .attachment-preview-overlay {
+  backdrop-filter: blur(0.02px);
+  -webkit-backdrop-filter: blur(0.02px);
 }
 
 .sidebar-logo {
@@ -810,8 +833,6 @@ html[data-backdrop] .app-main-inner {
   border-radius: 0.65rem;
   background: color-mix(in srgb, var(--text) 7%, transparent);
   border: 1px solid color-mix(in srgb, var(--text) 6%, transparent);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }
 
 .sidebar-tab {
@@ -839,9 +860,8 @@ html[data-backdrop] .app-main-inner {
 .sidebar-tab.active {
   color: var(--text);
   font-weight: 600;
+  /* 88%-opaque fill over Mica gives a crisper pill than a blur would. */
   background: color-mix(in srgb, var(--bg-canvas) 88%, transparent);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
   box-shadow:
     0 1px 2px color-mix(in srgb, var(--text) 14%, transparent),
     0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent);

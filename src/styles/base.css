@@ -239,8 +239,6 @@
 
 :root[data-theme="dark"] {
   --bg-canvas: #1e1e1e;
-  --bg-accent-1: transparent;
-  --bg-accent-2: transparent;
   --shell-bg: #1e1e1e;
   /* Soft pastel aurora (dark) — warm brown fading to dark teal. */
   --sidebar-bg: linear-gradient(
@@ -389,9 +387,6 @@ body {
 
 body {
   background-color: var(--bg-canvas);
-  background-image:
-    radial-gradient(circle at 8% 10%, var(--bg-accent-1), transparent 46%),
-    radial-gradient(circle at 86% 0%, var(--bg-accent-2), transparent 44%);
   color: var(--text);
   font-family: 'Styrene', "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   /* No -webkit-font-smoothing override on purpose: on Windows it disables
@@ -399,6 +394,24 @@ body {
      "sticky" with hard vertical strokes. The platform default (subpixel
      / ClearType on Windows, grayscale on macOS) gives the cleanest result
      for the same font stack. */
+}
+
+/* Radial accent blooms on a dedicated fixed layer instead of
+   background-attachment: fixed on body. Same visual and the same perf
+   benefit (viewport-anchored, no repaint on scroll), but WITHOUT promoting
+   body into a composited layer — `background-attachment: fixed` on body
+   breaks Electron's -webkit-app-region: drag hit-testing (titlebar can no
+   longer be dragged) and degrades input latency. The layer paints behind
+   all content, so it never intercepts the drag region. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    radial-gradient(circle at 8% 10%, var(--bg-accent-1), transparent 46%),
+    radial-gradient(circle at 86% 0%, var(--bg-accent-2), transparent 44%);
 }
 
 /* Message font styles - Styrene as primary font */
