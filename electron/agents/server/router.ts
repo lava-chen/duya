@@ -13,6 +13,8 @@ import { toLLMProvider, type ApiProvider } from '../../config/provider-types';
 import { calculateMaxConcurrentWorkers, getWorkerMemoryThreshold } from './worker-limits';
 import { acquireChatLock, releaseChatLock, type ChatLockOrigin } from './chat-runtime-lock';
 import { parseAgentIdFromBotSession } from '../../wake/bot-session-id';
+import { buildCronProviderConfig, resolveCronModel } from '../../automation/provider-config';
+import { readConfigAgents } from '../../../packages/agent/src/agent-profile/config-agents.js';
 
 /**
  * Detect whether the project has a `.duya/references/` directory.
@@ -62,6 +64,120 @@ function getAvailableMemory(): number {
     // If vm_stat fails for any reason, fall back to the conservative value.
     return os.freemem();
   }
+}
+
+/**
+ * Plan 506 — bot binding config fallback for `providerConfig.model`.
+ *
+ * A bot session (`bot:<agentId>`) wakes its worker with an HTTP body that
+ * carries the RENDERER's currently active provider/model, NOT the bot's own
+ * binding. When the user has never opened Settings the body has no model at
+ * all, and the worker crashes with "Model is required" before the channel
+ * handler can ever send a reply. This helper resolves the bot's binding
+ * config (`[agents.<id>]` in `~/.duya/config.toml`) and patches the empty
+ * fields with the bot's own provider/model — resolved through the provider
+ * store so `apiKey`/`baseURL`/`authStyle` line up automatically. Pure
+ * function so it's directly unit-testable (Plan 506 review note: keep
+ * adapter-free — never throws for "no binding", returns the input
+ * unchanged so the existing `!providerConfig.model` guard at L617 still
+ * surfaces a 400 to the user).
+ */
+export async function resolveBotProviderConfigFallback(
+  botAgentId: string,
+  currentProviderConfig: Record<string, unknown> | undefined,
+  deps: BotProviderConfigFallbackDeps = {},
+): Promise<Record<string, unknown> | undefined> {
+  // Only act when the body actually has a gap. If the renderer already
+  // supplied a model, respect it — user-driven provider/model choice for
+  // ad-hoc chats wins over the bot's binding.
+  if (currentProviderConfig?.model) return currentProviderConfig;
+
+  const readAgents = deps.readConfigAgents ?? readConfigAgents;
+  // Default provider resolution goes through the dbRequest IPC bridge (main
+  // process) — see `resolveProviderViaDbRequest`. The agent server runs as a
+  // raw Node.js child process where Electron's `app` module is unavailable, so
+  // importing `provider-store-electron` (→ `db/connection` → `require('electron')`)
+  // would crash the server on startup. Tests inject their own resolver.
+  const defaultResolveProvider: NonNullable<BotProviderConfigFallbackDeps['resolveBotOrDefaultProvider']> =
+    async (bot, fallbackModel) => {
+      const provider = await resolveProviderViaDbRequest(deps.dbRequest, bot?.provider);
+      if (!provider) throw new Error('no active provider configured');
+      const explicit = `${bot?.model ?? ''}${fallbackModel ?? ''}`.trim();
+      const model = resolveCronModel(explicit, provider);
+      if (!model) throw new Error('cron model is not configured');
+      return { provider, model };
+    };
+  const resolveProvider = deps.resolveBotOrDefaultProvider ?? defaultResolveProvider;
+  const buildFallback = deps.buildCronProviderConfig ?? buildCronProviderConfig;
+
+  let agents: Awaited<ReturnType<typeof readAgents>>;
+  try {
+    agents = await readAgents();
+  } catch {
+    return currentProviderConfig;
+  }
+  const botBinding = agents[botAgentId];
+
+  let resolved: { provider: ApiProvider; model: string };
+  try {
+    resolved = await resolveProvider(
+      botBinding ? { provider: botBinding.provider, model: botBinding.model } : undefined,
+    );
+  } catch {
+    return currentProviderConfig;
+  }
+  const fallback = buildFallback(resolved);
+
+  return {
+    ...fallback,
+    ...(currentProviderConfig ?? {}),
+    // Mirror field-by-field so an empty-string body field can never win
+    // against a resolved fallback (e.g. `providerConfig.model = ''`).
+    model: currentProviderConfig?.model || fallback.model,
+    provider: currentProviderConfig?.provider || fallback.provider,
+    apiKey: currentProviderConfig?.apiKey || fallback.apiKey,
+    baseURL: currentProviderConfig?.baseURL || fallback.baseURL,
+  };
+}
+
+/**
+ * Resolve a provider through the main-process dbRequest IPC bridge, mirroring
+ * the compact lazy-spawn path (`config:provider:get` then
+ * `config:provider:getActive`). Electron-free: the agent server is a plain
+ * Node child process and must never `require('electron')`.
+ */
+async function resolveProviderViaDbRequest(
+  dbRequest: ((action: string, payload: Record<string, unknown>) => Promise<unknown>) | undefined,
+  providerId: string | undefined,
+): Promise<ApiProvider | undefined> {
+  if (!dbRequest) return undefined;
+  let provider: ApiProvider | undefined;
+  if (providerId) {
+    try {
+      provider = await dbRequest('config:provider:get', { id: providerId }) as ApiProvider | undefined;
+    } catch {
+      // fall through to the active provider
+    }
+  }
+  if (!provider) {
+    try {
+      provider = await dbRequest('config:provider:getActive', {}) as ApiProvider | undefined;
+    } catch {
+      // no provider available
+    }
+  }
+  return provider && typeof provider === 'object' ? provider : undefined;
+}
+
+export interface BotProviderConfigFallbackDeps {
+  readConfigAgents?: typeof readConfigAgents;
+  resolveBotOrDefaultProvider?: (
+    bot: { provider?: string; model?: string } | undefined,
+    fallbackModel?: string,
+  ) => { provider: ApiProvider; model: string } | Promise<{ provider: ApiProvider; model: string }>;
+  buildCronProviderConfig?: typeof buildCronProviderConfig;
+  /** IPC bridge to the main process, used by the default provider resolver. */
+  dbRequest?: (action: string, payload: Record<string, unknown>) => Promise<unknown>;
 }
 
 export interface RouterDeps {
@@ -411,6 +527,24 @@ async function handlePostChat(
     const providerConfig = parsed.providerConfig;
     const workingDirectory = parsed.workingDirectory;
     const defaultWorkspaceDirectory = parsed.defaultWorkspaceDirectory;
+
+    // Plan 506 — see `resolveBotProviderConfigFallback` above.
+    const botAgentIdEarly = parseAgentIdFromBotSession(sessionId);
+    if (botAgentIdEarly && (!providerConfig || !providerConfig.model)) {
+      const fallback = await resolveBotProviderConfigFallback(
+        botAgentIdEarly,
+        providerConfig,
+        { dbRequest },
+      );
+      if (fallback && fallback !== providerConfig) {
+        httpLogger.info('Applied bot providerConfig fallback', {
+          sessionId,
+          agentId: botAgentIdEarly,
+          model: fallback.model,
+        });
+      }
+      parsed.providerConfig = fallback;
+    }
 
     try {
       // Validate session exists in DB before proceeding (normal sessions).
