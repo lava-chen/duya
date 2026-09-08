@@ -10,16 +10,27 @@
   /* Glassmorphism: a translucent frosted pane floating over the shell's
      aurora gradient (and, on native platforms, the OS wallpaper). The
      blur + low-alpha fill is what reads as "glass"; the 1px right edge
-     separates the pane from the main surface. */
-  background: color-mix(in srgb, var(--bg-canvas) 52%, transparent);
-  backdrop-filter: blur(24px) saturate(1.4);
-  -webkit-backdrop-filter: blur(24px) saturate(1.4);
-  padding: 0.95rem 0.7rem 0.95rem 0;
+     separates the pane from the main surface.
+     Perf: a 24px full-height blur (+saturate) re-samples the entire
+     sidebar background on every repaint, stacking with the native
+     Mica/vibrancy material. Reduced to a light blur with a higher
+     alpha fill so the glass look survives at a fraction of the GPU cost. */
+  background: color-mix(in srgb, var(--bg-canvas) 78%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  padding: 0.95rem 0.5rem 0.95rem 0.5rem;
   display: flex;
   flex-direction: column;
   gap: 0.95rem;
   min-height: 0;
   overflow: hidden;
+}
+
+/* macOS: the custom TitleBar is hidden (window uses hiddenInset, so traffic
+   lights sit in the top-left of the content area). Give the sidebar extra
+   top padding so the first row clears the window controls on every DPI. */
+.app-shell-root[data-platform="mac"] .app-sidebar {
+  padding-top: 1.75rem;
 }
 
 /* Native window backdrop — activated when the main process created the window
