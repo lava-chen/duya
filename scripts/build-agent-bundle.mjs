@@ -28,6 +28,7 @@ await build({
   minify: true,
   external: [
     'better-sqlite3',
+    'fsevents',
     'playwright',
     'chromium-bidi/lib/cjs/bidiMapper/BidiMapper',
     'chromium-bidi/lib/cjs/cdp/CdpConnection',
@@ -76,7 +77,7 @@ await build({
   format: 'cjs',
   sourcemap: false,
   minify: false,
-  external: [],
+  external: ['fsevents'],
   banner: {
     js: importMetaUrlPolyfill,
   },

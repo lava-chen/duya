@@ -31,6 +31,7 @@ await build({
     'node:*',
     'date-format',
     'better-sqlite3',
+    'fsevents',
     'playwright',
   ],
   banner: {

@@ -22,6 +22,7 @@ async function buildElectron() {
     external: [
       'electron',
       'better-sqlite3',
+      'fsevents',
       'node-pty',
       // nut.js + its native libnut binding - the JS is plain require()
       // but `bindings("libnut")` walks the call stack to locate the

@@ -121,6 +121,176 @@ function messagesEqual(a: Message[] | undefined, b: Message[] | undefined): bool
   return true;
 }
 
+/**
+ * Group sorted messages into UI "rounds" (a user message plus its assistant
+ * replies, with tool results attached). Extracted from the component so an
+ * append-only increment can reuse frozen rows instead of re-grouping the
+ * whole transcript (and re-serializing every tool result) on each update.
+ */
+function buildGroupedMessages(orderedMessages: Message[]): GroupedMessage[] {
+  const result: GroupedMessage[] = [];
+  const toolResultMap = new Map<string, import('@/types').ToolResultInfo>();
+  const matchedToolResultIds = new Set<string>();
+
+  // First pass: collect all tool results
+  for (const msg of orderedMessages) {
+    if (msg.role === 'tool' && msg.tool_call_id) {
+      const contentStr = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+      toolResultMap.set(msg.tool_call_id, {
+        tool_use_id: msg.tool_call_id,
+        content: contentStr,
+        is_error: msg.status === 'error' || (typeof contentStr === 'string' && contentStr.includes('<tool_error>')),
+        duration_ms: msg.durationMs,
+      });
+    }
+    if (msg.msgType === 'tool_result' && msg.parentToolCallId) {
+      toolResultMap.set(msg.parentToolCallId, {
+        tool_use_id: msg.parentToolCallId,
+        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+        is_error: msg.status === 'error',
+        duration_ms: msg.durationMs,
+      });
+    }
+  }
+
+  // Second pass: group messages into rounds
+  // A round = user message + all consecutive assistant messages until next user message
+  // This handles multi-turn thinking -> tool -> thinking -> tool -> text cycles
+  let currentAssistantGroup: GroupedMessage | null = null;
+
+  for (const msg of orderedMessages) {
+    // Skip pure tool results (they'll be attached to their tool_use)
+    if (msg.msgType === 'tool_result') continue;
+    if (msg.role === 'tool') continue;
+
+    if (msg.role === 'user') {
+      // End current assistant group if any
+      if (currentAssistantGroup) {
+        result.push(currentAssistantGroup);
+        currentAssistantGroup = null;
+      }
+      // User messages are rendered separately
+      result.push({ message: msg, toolResults: [] });
+    } else if (msg.role === 'assistant') {
+      if (!currentAssistantGroup) {
+        // First assistant message after a user message.
+        currentAssistantGroup = {
+          message: msg,
+          toolResults: [],
+          mergedMessages: [],
+        };
+      } else {
+        // Merge every consecutive assistant message into the same
+        // round. Previously we split on seqIndex changes, which
+        // produced one "N completed" summary per round when the
+        // agent ran multiple think→tool→think→tool cycles for a
+        // single user request. From the user's point of view that
+        // is still one continuous piece of work; they want a
+        // single collapsed row ("任务耗时 X") that expands to show
+        // all steps and the final answer.
+        //
+        // A new user message already breaks the group above, so
+        // unrelated user turns cannot be merged. If the persistence
+        // layer ever emits assistant messages with no user turn in
+        // between that should NOT be grouped, that should be fixed
+        // in persistence (e.g. by giving them distinct session
+        // boundaries), not here.
+        currentAssistantGroup.mergedMessages!.push(msg);
+      }
+
+      // Collect tool results for this assistant message
+      if (msg.msgType === 'tool_use' && msg.tool_call_id) {
+        const toolResult = toolResultMap.get(msg.tool_call_id);
+        if (toolResult) {
+          currentAssistantGroup.toolResults.push(toolResult);
+          matchedToolResultIds.add(msg.tool_call_id);
+        }
+      } else {
+        const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+        try {
+          const blocks = JSON.parse(content);
+          if (Array.isArray(blocks)) {
+            for (const block of blocks) {
+              if (block.type === 'tool_use' && block.id) {
+                const toolResult = toolResultMap.get(block.id);
+                if (toolResult) {
+                  currentAssistantGroup.toolResults.push(toolResult);
+                  matchedToolResultIds.add(block.id);
+                }
+              }
+            }
+          }
+        } catch {
+          // Content is not JSON, skip
+        }
+      }
+    }
+  }
+
+  // Push the last assistant group
+  if (currentAssistantGroup) {
+    result.push(currentAssistantGroup);
+  }
+
+  // Handle orphan tool results — tool_results whose matching tool_use
+  // isn't in the loaded message set (e.g. truncated history, legacy
+  // import). Synthesize a minimal tool_use-shaped message so the
+  // existing ToolActionsGroup → ToolActionRow pipeline can render
+  // the result. Use `tool_result` as the toolName (matches the
+  // convention in pairTools) so it routes to the registry catch-all
+  // (WrenchIcon) instead of masquerading as a nonexistent "Error" or
+  // "Tool" tool that would leak misleading verbs into group summaries.
+  for (const [toolUseId, toolResult] of toolResultMap) {
+    if (!matchedToolResultIds.has(toolUseId)) {
+      result.push({
+        message: {
+          id: `orphan-result-${toolUseId}`,
+          role: 'assistant',
+          content: '',
+          timestamp: Date.now(),
+          msgType: 'tool_use',
+          tool_call_id: toolUseId,
+          toolName: 'tool_result',
+        } as Message,
+        toolResults: [toolResult],
+      });
+    }
+  }
+
+  // A few persistence paths create empty assistant placeholders after an
+  // interrupted stream. They render only a timestamp/copy icon, producing
+  // the stray time labels visible in the transcript.
+  return result.filter((group) => (
+    group.message.role !== 'assistant'
+    || group.toolResults.length > 0
+    || [group.message, ...(group.mergedMessages ?? [])]
+      .some(hasRenderableAssistantContent)
+  ));
+}
+
+/**
+ * True when `next` equals `prev` plus one-or-more trailing messages, where
+ * every element of `prev` is reference-identical in `next`. Message objects
+ * are only ever replaced in-place by the store on an edit (rewind, edit-and-
+ * resend, session switch), so reference equality is a safe append test.
+ */
+function isStrictAppend(prev: Message[], next: Message[]): boolean {
+  if (prev.length === 0) return false;
+  if (next.length <= prev.length) return false;
+  for (let index = 0; index < prev.length; index += 1) {
+    if (prev[index] !== next[index]) return false;
+  }
+  return true;
+}
+
+/** Index of the last user message in an already-sorted list, or -1. */
+function lastUserIndexSorted(ordered: Message[]): number {
+  for (let index = ordered.length - 1; index >= 0; index -= 1) {
+    if (ordered[index].role === 'user') return index;
+  }
+  return -1;
+}
+
 const LazyMessageRow = React.memo(function LazyMessageRow({
   group,
   scrollRoot,
@@ -581,6 +751,10 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   const hasScrolledOnMountRef = useRef(false);
   const rowHeightsRef = useRef(new Map<string, number>());
   const lastActiveNavUpdateRef = useRef(0);
+  // Append-cache for the incremental grouped-message fast path. Holds the
+  // last sorted input and its grouped output so an append-only transcript
+  // update reuses frozen rows instead of re-grouping from scratch.
+  const groupCacheRef = useRef<{ sorted: Message[]; groups: GroupedMessage[] } | null>(null);
   // Ref to always access the latest scrollToBottom without causing useLayoutEffect re-runs
   const scrollToBottomRef = useRef<() => void>(() => {});
   const [isInitialLoading, setIsInitialLoading] = useState(true);
@@ -653,149 +827,44 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     return () => ro.disconnect();
   }, []);
 
+  // Sort once so the grouping increment can compare append-only prefixes and
+  // reuse frozen rows instead of re-sorting the whole transcript per update.
+  const sortedMessages = useMemo(() => sortMessagesForConversation(messages), [messages]);
+
   // Group assistant messages with their tool results
   // Merge messages from the same round (same seqIndex or consecutive assistant messages)
-  const groupedMessages = useMemo(() => {
-    const result: GroupedMessage[] = [];
-    const toolResultMap = new Map<string, import('@/types').ToolResultInfo>();
-    const matchedToolResultIds = new Set<string>();
-    const orderedMessages = sortMessagesForConversation(messages);
+  const groupedMessages = useMemo<GroupedMessage[]>(() => {
+    const cached = groupCacheRef.current;
 
-    // First pass: collect all tool results
-    for (const msg of orderedMessages) {
-      if (msg.role === 'tool' && msg.tool_call_id) {
-        const contentStr = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
-        toolResultMap.set(msg.tool_call_id, {
-          tool_use_id: msg.tool_call_id,
-          content: contentStr,
-          is_error: msg.status === 'error' || (typeof contentStr === 'string' && contentStr.includes('<tool_error>')),
-          duration_ms: msg.durationMs,
-        });
-      }
-      if (msg.msgType === 'tool_result' && msg.parentToolCallId) {
-        toolResultMap.set(msg.parentToolCallId, {
-          tool_use_id: msg.parentToolCallId,
-          content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
-          is_error: msg.status === 'error',
-          duration_ms: msg.durationMs,
-        });
-      }
-    }
-
-    // Second pass: group messages into rounds
-    // A round = user message + all consecutive assistant messages until next user message
-    // This handles multi-turn thinking -> tool -> thinking -> tool -> text cycles
-    let currentAssistantGroup: GroupedMessage | null = null;
-
-    for (const msg of orderedMessages) {
-      // Skip pure tool results (they'll be attached to their tool_use)
-      if (msg.msgType === 'tool_result') continue;
-      if (msg.role === 'tool') continue;
-
-      if (msg.role === 'user') {
-        // End current assistant group if any
-        if (currentAssistantGroup) {
-          result.push(currentAssistantGroup);
-          currentAssistantGroup = null;
+    // Append-only fast path: when only new messages were added to the tail,
+    // the last user message is the only grouping boundary, so every row
+    // before it is frozen (an appended assistant message merges into the round
+    // that follows the last user message — never earlier ones). Reuse those
+    // rows and re-group only the tail, keeping the common streaming append
+    // O(new messages) instead of re-serializing every tool result across the
+    // whole transcript.
+    if (cached && isStrictAppend(cached.sorted, sortedMessages)) {
+      const lastUserIndex = lastUserIndexSorted(sortedMessages);
+      if (lastUserIndex >= 0) {
+        let keepCount = 0;
+        for (const group of cached.groups) {
+          if (sortedMessages.indexOf(group.message) >= lastUserIndex) break;
+          keepCount += 1;
         }
-        // User messages are rendered separately
-        result.push({ message: msg, toolResults: [] });
-      } else if (msg.role === 'assistant') {
-        if (!currentAssistantGroup) {
-          // First assistant message after a user message.
-          currentAssistantGroup = {
-            message: msg,
-            toolResults: [],
-            mergedMessages: [],
-          };
-        } else {
-          // Merge every consecutive assistant message into the same
-          // round. Previously we split on seqIndex changes, which
-          // produced one "N completed" summary per round when the
-          // agent ran multiple think→tool→think→tool cycles for a
-          // single user request. From the user's point of view that
-          // is still one continuous piece of work; they want a
-          // single collapsed row ("任务耗时 X") that expands to show
-          // all steps and the final answer.
-          //
-          // A new user message already breaks the group above, so
-          // unrelated user turns cannot be merged. If the persistence
-          // layer ever emits assistant messages with no user turn in
-          // between that should NOT be grouped, that should be fixed
-          // in persistence (e.g. by giving them distinct session
-          // boundaries), not here.
-          currentAssistantGroup.mergedMessages!.push(msg);
-        }
-
-        // Collect tool results for this assistant message
-        if (msg.msgType === 'tool_use' && msg.tool_call_id) {
-          const toolResult = toolResultMap.get(msg.tool_call_id);
-          if (toolResult) {
-            currentAssistantGroup.toolResults.push(toolResult);
-            matchedToolResultIds.add(msg.tool_call_id);
-          }
-        } else {
-          const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
-          try {
-            const blocks = JSON.parse(content);
-            if (Array.isArray(blocks)) {
-              for (const block of blocks) {
-                if (block.type === 'tool_use' && block.id) {
-                  const toolResult = toolResultMap.get(block.id);
-                  if (toolResult) {
-                    currentAssistantGroup.toolResults.push(toolResult);
-                    matchedToolResultIds.add(block.id);
-                  }
-                }
-              }
-            }
-          } catch {
-            // Content is not JSON, skip
-          }
-        }
+        const tailGroups = buildGroupedMessages(sortedMessages.slice(lastUserIndex));
+        const groups = [...cached.groups.slice(0, keepCount), ...tailGroups];
+        groupCacheRef.current = { sorted: sortedMessages, groups };
+        return groups;
       }
     }
 
-    // Push the last assistant group
-    if (currentAssistantGroup) {
-      result.push(currentAssistantGroup);
-    }
-
-    // Handle orphan tool results — tool_results whose matching tool_use
-    // isn't in the loaded message set (e.g. truncated history, legacy
-    // import). Synthesize a minimal tool_use-shaped message so the
-    // existing ToolActionsGroup → ToolActionRow pipeline can render
-    // the result. Use `tool_result` as the toolName (matches the
-    // convention in pairTools) so it routes to the registry catch-all
-    // (WrenchIcon) instead of masquerading as a nonexistent "Error" or
-    // "Tool" tool that would leak misleading verbs into group summaries.
-    for (const [toolUseId, toolResult] of toolResultMap) {
-      if (!matchedToolResultIds.has(toolUseId)) {
-        result.push({
-          message: {
-            id: `orphan-result-${toolUseId}`,
-            role: 'assistant',
-            content: '',
-            timestamp: Date.now(),
-            msgType: 'tool_use',
-            tool_call_id: toolUseId,
-            toolName: 'tool_result',
-          } as Message,
-          toolResults: [toolResult],
-        });
-      }
-    }
-
-    // A few persistence paths create empty assistant placeholders after an
-    // interrupted stream. They render only a timestamp/copy icon, producing
-    // the stray time labels visible in the transcript.
-    return result.filter((group) => (
-      group.message.role !== 'assistant'
-      || group.toolResults.length > 0
-      || [group.message, ...(group.mergedMessages ?? [])]
-        .some(hasRenderableAssistantContent)
-    ));
-  }, [messages]);
+    // Any non-trivial change (rewind, edit-and-resend, session switch, or a
+    // non-tail insertion such as a queued turn) disappears the cache and
+    // re-groups everything from scratch.
+    const groups = buildGroupedMessages(sortedMessages);
+    groupCacheRef.current = { sorted: sortedMessages, groups };
+    return groups;
+  }, [sortedMessages, messages]);
 
   // Only the last user message in the conversation is editable.
   const lastUserMessageId = useMemo(() => {

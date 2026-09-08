@@ -50,6 +50,7 @@ await build({
   external: [
     'electron',
     'better-sqlite3',
+    'fsevents',
     'playwright',
     'chromium-bidi/lib/cjs/bidiMapper/BidiMapper',
     'chromium-bidi/lib/cjs/cdp/CdpConnection',

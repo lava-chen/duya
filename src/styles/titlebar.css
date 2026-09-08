@@ -111,6 +111,12 @@
   overflow: hidden;
 }
 
+/* macOS: window uses the native hiddenInset traffic-light chrome; no custom
+   title bar, no rounded top-left corner on the main column. */
+.app-shell-root[data-platform="mac"] .app-main {
+  border-top-left-radius: 0;
+}
+
 .app-main-inner {
   flex: 1;
   min-height: 0;
@@ -120,6 +126,10 @@
   border-radius: 0;
   border-top-left-radius: 1rem;
   overflow: hidden;
+}
+
+.app-shell-root[data-platform="mac"] .app-main-inner {
+  border-top-left-radius: 0;
 }
 
 .app-status-bar {
@@ -355,7 +365,7 @@
   border-radius: 0.92rem;
   padding: 0.9rem 1rem;
   background: var(--surface);
-  backdrop-filter: blur(20px);
+  backdrop-filter: blur(8px);
 }
 
 .hero-card.compact {

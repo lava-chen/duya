@@ -32,6 +32,13 @@ function AppShellInner({ children }: AppShellProps) {
   const { currentView, isHydrated } = useConversationStore();
   const { panelOpen, tabs, activeTabId, setPanelOpen, workspaceExpanded } = usePanel();
 
+  // macOS uses the system hiddenInset titlebar (traffic lights on the top-left),
+  // so we skip the custom TitleBar there and let the window chrome blend with
+  // the vibrancy backdrop. On Windows/Linux we keep the custom drag region.
+  const isMac =
+    typeof window !== "undefined" &&
+    window.electronAPI?.versions?.platform === "darwin";
+
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
@@ -150,6 +157,7 @@ function AppShellInner({ children }: AppShellProps) {
       className="app-shell-root"
       data-conductor-open={isConductorOpen ? "true" : undefined}
       data-panel-expanded={workspaceExpanded ? "true" : undefined}
+      data-platform={isMac ? "mac" : "win"}
       style={{ "--app-sidebar-width": `${sidebarWidth}px` } as CSSProperties}
     >
       {showOnboarding && (
@@ -164,7 +172,7 @@ function AppShellInner({ children }: AppShellProps) {
         </Suspense>
       )}
       <div className="app-shell">
-        <TitleBar sidebarWidth={sidebarWidth} />
+        {!isMac && <TitleBar sidebarWidth={sidebarWidth} />}
         <div
           className="app-body"
           onMouseDown={handleBodyMouseDown}

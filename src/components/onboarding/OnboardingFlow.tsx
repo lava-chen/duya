@@ -72,6 +72,17 @@ export function OnboardingFlow({ onComplete, forceShow }: OnboardingFlowProps) {
     onComplete?.();
   }, [onComplete]);
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        markComplete();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [markComplete]);
+
   const updateState = useCallback((updates: Partial<OnboardingState>) => {
     setState((prev) => ({ ...prev, ...updates }));
     setError(null);
@@ -237,11 +248,17 @@ export function OnboardingFlow({ onComplete, forceShow }: OnboardingFlowProps) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/50" />
+      <div
+        className="absolute inset-0 bg-black/45 backdrop-blur-sm"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) handleSkip();
+        }}
+        aria-hidden="true"
+      />
 
       {/* Fixed-size dialog — size never changes with step content */}
       <div
-        className="relative flex flex-col overflow-hidden rounded-xl bg-[var(--main-bg)] border border-border/50 shadow-2xl"
+        className="relative flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-[var(--glass-main)] shadow-2xl backdrop-blur-2xl"
         style={{
           width: DIALOG_SIZE.width,
           height: DIALOG_SIZE.height,
@@ -258,13 +275,15 @@ export function OnboardingFlow({ onComplete, forceShow }: OnboardingFlowProps) {
             </span>
           </div>
 
-          {/* Skip button - show on all steps except last */}
-          {!isLastStep && (
-            <Button variant="ghost" size="sm" onClick={handleSkip}>
-              <XIcon size={14} />
-              {t("onboarding.skip")}
-            </Button>
-          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleSkip}
+            aria-label={t(isLastStep ? "common.close" : "onboarding.skip")}
+          >
+            <XIcon size={14} />
+            {t(isLastStep ? "common.close" : "onboarding.skip")}
+          </Button>
         </div>
 
         {/* Progress dots */}
