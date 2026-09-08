@@ -262,6 +262,12 @@ let lastInterruptTime = 0;
 const DOUBLE_INTERRUPT_WINDOW_MS = 3000;
 let sessionSystemPrompt: string | undefined = undefined;
 let existingMessageCount = 0;
+// Plan 508: pending compact command captured during init. The router may
+// dispatch a 'compact' message before init finishes (e.g. bot session whose
+// worker was lazy-spawned by the same POST). Stash it here and replay after
+// the worker reports ready so the user does not see a misleading 'Agent not
+// initialized' error. Cleared once consumed (success or failure).
+let pendingCompactCommand: unknown = null;
 
 // Live context-usage emission (plan 443, pi parity). The context size is
 // computed STATELESSLY on every emit via computeContextEstimate(@duya/ai):
@@ -3739,6 +3745,27 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             ...(initError ? { status: 'error', error: initError } : {}),
           });
 
+          // Plan 508: drain any compact command that arrived while init was
+          // still running. If init failed, send a clearer error than the
+          // previous 'Agent not initialized' so the renderer can recover.
+          if (pendingCompactCommand) {
+            const pending = pendingCompactCommand;
+            pendingCompactCommand = null;
+            if (initError) {
+              sendToMain({
+                type: 'compact:error',
+                sessionId,
+                message: `Worker initialization failed: ${initError}; please retry the chat session to recover.`,
+                reason: 'init-failed',
+              });
+            } else {
+              log('[Agent-Process] Replaying pending compact after init');
+              handleCompactMessage(pending).catch((err) => {
+                warn('[Agent-Process] Deferred compact failed:', err);
+              });
+            }
+          }
+
           // Plan 312: fire-and-forget App Connection descriptor fetch.
           // Caches the descriptor list so DuyaAgent._resolveTools can
           // merge connector tools into the per-turn registry.
@@ -3898,95 +3925,7 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
         }
 
         case 'compact': {
-          log('[Agent-Process] Received compact for session:', sessionId);
-          if (!agent) {
-            sendToMain({ type: 'compact:error', sessionId, message: 'Agent not initialized' });
-            break;
-          }
-          // Backpressure gate: compaction mutates the shared messages timeline
-          // and the llmClient reference. Running it concurrently with an in-
-          // flight turn would race the stream generator. Wait briefly for
-          // the active turn to finish; if it takes too long, surface a busy
-          // error so the renderer can retry.
-          if (chatInProgress || initializing) {
-            const compactBusyStart = Date.now();
-            const COMPACT_BUSY_WAIT_MS = 5_000;
-            log('[Agent-Process] Chat in progress, waiting before compact');
-            while ((chatInProgress || initializing) && Date.now() - compactBusyStart < COMPACT_BUSY_WAIT_MS) {
-              await new Promise((r) => setTimeout(r, 100));
-            }
-            if (chatInProgress || initializing) {
-              sendToMain({
-                type: 'compact:error',
-                sessionId,
-                message: 'Chat turn still in progress after 5s; please retry after the turn completes',
-              });
-              break;
-            }
-          }
-          chatInProgress = true;
-          // Plan 422: lazy-load messages if the worker has not yet seen this
-          // session via chat:start. The /compact popover button is dispatched
-          // independently of chat:start, so without this the worker would call
-          // agent.compact() on an empty timeline and return strategy: 'none'
-          // — the symptom the user hit on a 332-message session.
-          try {
-            if (sessionId) {
-              const dbCount = await messageDb.getCount(sessionId) as number
-              if (dbCount > 0 && agent.getMessages().length === 0) {
-                const loaded = await messageDb.loadMessages(sessionId) as { messages: MessageRow[] }
-                const attachmentMap = getAttachmentsForSession(sessionId)
-                const allMsgs = loaded.messages.map(row => messageRowToMessage(row, attachmentMap))
-                const validated = validateMessageHistory(allMsgs)
-                agent.setMessages(validated)
-                existingMessageCount = validated.length
-                log('[Agent-Process] Compact: lazy-loaded ' + validated.length + ' messages from DB')
-              }
-            }
-          } catch (loadErr) {
-            log('[Agent-Process] Compact: lazy-load failed (continuing):', loadErr)
-          }
-          try {
-            // Extract optional compact options from message
-            const compactMsg = msg as unknown as {
-              strategy?: string;
-              maxMessagesToKeep?: number;
-              customInstructions?: string;
-              keepRecentTokens?: number;
-            };
-
-            const result = await agent.compact({
-              strategy: compactMsg.strategy,
-              maxMessagesToKeep: compactMsg.maxMessagesToKeep,
-              customInstructions: compactMsg.customInstructions,
-            });
-            log('[Agent-Process] Compaction complete:', result);
-            // Plan 475 P4.6 follow-up: persistence is owned by the
-            // `onMessagesCompacted` wiring, which emits an append-only
-            // `rebase` journal event (supersedes compacted-away messages,
-            // carries the summary + survivors). The legacy appendMessages-
-            // of-all call that used to live here is gone — it never
-            // superseded anything, so a reload resurrected the full
-            // pre-compaction history next to the summary (ghost history).
-            existingMessageCount = agent.getMessages().length;
-            log(`[Agent-Process] Compaction: rebase emitted, new count=${existingMessageCount}`);
-            // Broadcast BEFORE compact:done: retained anchors describe the
-            // pre-compact prompt, so mark pending and emit an unanchored
-            // frame — the ring shows "?" until the next turn's first `result`
-            // provides a post-compaction anchor (plan 443, pi parity).
-            compactedPending = true;
-            emitLiveUsage(sessionId);
-            sendToMain({ type: 'compact:done', sessionId, result });
-          } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            log('[Agent-Process] Compaction failed:', errorMessage);
-            sendToMain({ type: 'compact:error', sessionId, message: errorMessage });
-          } finally {
-            // Release the gate even on error so subsequent compactions or
-            // chat:start messages can proceed. Without this, a thrown
-            // error would deadlock the worker until process restart.
-            chatInProgress = false;
-          }
+          void handleCompactMessage(msg);
           break;
         }
 
@@ -4313,6 +4252,122 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
         }
     default:
       warn('[Agent-Process] Unknown message type:', msgType);
+  }
+}
+
+/**
+ * Plan 508: extracted compact-message handler so the switch case stays a
+ * thin dispatch and the same body can be replayed from the init-drain path
+ * when a compact command arrived before init finished.
+ */
+async function handleCompactMessage(msg: unknown): Promise<void> {
+  log('[Agent-Process] Received compact for session:', sessionId);
+  // Plan 508: when the worker has not finished init yet, defer the
+  // compact until init completes (mirror chat:start's enqueue).
+  // Without this, the bot session 'compact' popover clicks hit a
+  // 'Agent not initialized' error every time the worker has just been
+  // lazy-spawned by the router.
+  if (!agent && initializing) {
+    log('[Agent-Process] Compact received during init, deferring until ready');
+    pendingCompactCommand = msg;
+    return;
+  }
+  if (!agent) {
+    // Plan 508: init previously failed for this worker (e.g. bot session
+    // with no provider config). Surface a clearer error so the renderer
+    // can recover by triggering a new chat:start / re-init flow instead
+    // of looping on the same opaque 'Agent not initialized'.
+    sendToMain({
+      type: 'compact:error',
+      sessionId,
+      message: 'Worker initialization previously failed; please retry the chat session to recover.',
+      reason: 'init-failed',
+    });
+    return;
+  }
+  // Backpressure gate: compaction mutates the shared messages timeline
+  // and the llmClient reference. Running it concurrently with an in-
+  // flight turn would race the stream generator. Wait briefly for
+  // the active turn to finish; if it takes too long, surface a busy
+  // error so the renderer can retry.
+  if (chatInProgress || initializing) {
+    const compactBusyStart = Date.now();
+    const COMPACT_BUSY_WAIT_MS = 5_000;
+    log('[Agent-Process] Chat in progress, waiting before compact');
+    while ((chatInProgress || initializing) && Date.now() - compactBusyStart < COMPACT_BUSY_WAIT_MS) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    if (chatInProgress || initializing) {
+      sendToMain({
+        type: 'compact:error',
+        sessionId,
+        message: 'Chat turn still in progress after 5s; please retry after the turn completes',
+      });
+      return;
+    }
+  }
+  chatInProgress = true;
+  // Plan 422: lazy-load messages if the worker has not yet seen this
+  // session via chat:start. The /compact popover button is dispatched
+  // independently of chat:start, so without this the worker would call
+  // agent.compact() on an empty timeline and return strategy: 'none'
+  // — the symptom the user hit on a 332-message session.
+  try {
+    if (sessionId) {
+      const dbCount = await messageDb.getCount(sessionId) as number
+      if (dbCount > 0 && agent.getMessages().length === 0) {
+        const loaded = await messageDb.loadMessages(sessionId) as { messages: MessageRow[] }
+        const attachmentMap = getAttachmentsForSession(sessionId)
+        const allMsgs = loaded.messages.map(row => messageRowToMessage(row, attachmentMap))
+        const validated = validateMessageHistory(allMsgs)
+        agent.setMessages(validated)
+        existingMessageCount = validated.length
+        log('[Agent-Process] Compact: lazy-loaded ' + validated.length + ' messages from DB')
+      }
+    }
+  } catch (loadErr) {
+    log('[Agent-Process] Compact: lazy-load failed (continuing):', loadErr)
+  }
+  try {
+    // Extract optional compact options from message
+    const compactMsg = msg as unknown as {
+      strategy?: string;
+      maxMessagesToKeep?: number;
+      customInstructions?: string;
+      keepRecentTokens?: number;
+    };
+
+    const result = await agent.compact({
+      strategy: compactMsg.strategy,
+      maxMessagesToKeep: compactMsg.maxMessagesToKeep,
+      customInstructions: compactMsg.customInstructions,
+    });
+    log('[Agent-Process] Compaction complete:', result);
+    // Plan 475 P4.6 follow-up: persistence is owned by the
+    // `onMessagesCompacted` wiring, which emits an append-only
+    // `rebase` journal event (supersedes compacted-away messages,
+    // carries the summary + survivors). The legacy appendMessages-
+    // of-all call that used to live here is gone — it never
+    // superseded anything, so a reload resurrected the full
+    // pre-compaction history next to the summary (ghost history).
+    existingMessageCount = agent.getMessages().length;
+    log(`[Agent-Process] Compaction: rebase emitted, new count=${existingMessageCount}`);
+    // Broadcast BEFORE compact:done: retained anchors describe the
+    // pre-compact prompt, so mark pending and emit an unanchored
+    // frame — the ring shows "?" until the next turn's first `result`
+    // provides a post-compaction anchor (plan 443, pi parity).
+    compactedPending = true;
+    emitLiveUsage(sessionId);
+    sendToMain({ type: 'compact:done', sessionId, result });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    log('[Agent-Process] Compaction failed:', errorMessage);
+    sendToMain({ type: 'compact:error', sessionId, message: errorMessage });
+  } finally {
+    // Release the gate even on error so subsequent compactions or
+    // chat:start messages can proceed. Without this, a thrown
+    // error would deadlock the worker until process restart.
+    chatInProgress = false;
   }
 }
 
