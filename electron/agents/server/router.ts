@@ -1599,54 +1599,97 @@ async function lazySpawnWorkerForCompact(
     referencesEnabled: detectReferencesEnabled(init.workingDirectory),
   });
 
-  // Wait for ready (30s).
-  const waitForReady = (): Promise<void> => {
-    return new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        cleanup();
-        reject(new Error('Worker ready timeout (30s)'));
-      }, 30000);
-      let readyBuffer = '';
-      const readyHandler = (data: Buffer): void => {
-        readyBuffer += data.toString();
-        const lines = readyBuffer.split('\n');
-        readyBuffer = lines.pop() || '';
-        for (const rawLine of lines) {
-          const line = rawLine.trim();
-          if (!line || !line.startsWith('{')) continue;
-          try {
-            const m = JSON.parse(line);
-            if (m.type === 'ready' || m.type === 'conductor:ready') {
-              clearTimeout(timeout);
-              cleanup();
-              resolve();
-              return;
-            }
-          } catch {
-            // Continue scanning
-          }
-        }
-      };
-      const cleanup = (): void => {
-        clearTimeout(timeout);
-        child.stdout?.removeListener('data', readyHandler);
-      };
-      child.stdout!.on('data', readyHandler);
-    });
-  };
-
-  try {
-    await waitForReady();
+  // Plan 508: distinguish `ready { status: 'error' | 'deferred' }` from a
+  // normal ready handshake so a failed worker init (e.g. bot session with
+  // no provider config) no longer makes the subsequent compact command hit
+  // "Agent not initialized" inside the worker.
+  const readyResult = await waitForWorkerReady(child, 30000);
+  if (readyResult.ok) {
     httpLogger.info('Compact: lazy-spawned worker ready', { sessionId });
     return { ok: true, child, init };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error('Compact lazy-spawn: worker ready timeout', err instanceof Error ? err : new Error(msg), { sessionId });
-    sendJson(res, 500, { error: `Worker initialization timeout: ${msg}` });
-    return { ok: false };
   }
+  logger.error(
+    'Compact lazy-spawn: worker ready failed',
+    new Error(readyResult.message),
+    { sessionId, reason: readyResult.reason },
+  );
+  const status = readyResult.reason === 'timeout' ? 504
+    : readyResult.reason === 'error' ? 503
+    : 409;
+  sendJson(res, status, { error: readyResult.message });
+  return { ok: false };
 }
 
+/**
+ * Plan 508: shared worker-ready handshake helper.
+ *
+ * The worker signals ready by emitting either `ready` (with optional
+ * `status: 'error' | 'deferred'`) or `conductor:ready`. We resolve on the
+ * first successful ready, and reject with a structured reason on:
+ *  - `status: 'error'`  -> surface the worker's `error` message (503 upstream)
+ *  - `status: 'deferred'` -> init deferred to a later handshake (409 upstream)
+ *  - timeout             -> no signal within `timeoutMs` (504 upstream)
+ *
+ * Extracted from `lazySpawnWorkerForCompact` so the contract is unit-testable
+ * independently of the full session-store / provider-config path.
+ */
+export type WorkerReadyOutcome =
+  | { ok: true }
+  | { ok: false; reason: 'error' | 'deferred' | 'timeout'; message: string };
+
+export function waitForWorkerReady(
+  child: ChildProcess,
+  timeoutMs: number,
+): Promise<WorkerReadyOutcome> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      resolve({ ok: false, reason: 'timeout', message: `Worker ready timeout (${timeoutMs}ms)` });
+    }, timeoutMs);
+    let readyBuffer = '';
+    const readyHandler = (data: Buffer): void => {
+      readyBuffer += data.toString();
+      const lines = readyBuffer.split('\n');
+      readyBuffer = lines.pop() || '';
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line || !line.startsWith('{')) continue;
+        try {
+          const m = JSON.parse(line) as { type?: string; status?: string; error?: string; reason?: string };
+          if (m.type === 'ready' || m.type === 'conductor:ready') {
+            clearTimeout(timeout);
+            cleanup();
+            if (m.status === 'error') {
+              resolve({
+                ok: false,
+                reason: 'error',
+                message: m.error ?? 'Worker initialization failed (no error message)',
+              });
+              return;
+            }
+            if (m.status === 'deferred') {
+              resolve({
+                ok: false,
+                reason: 'deferred',
+                message: m.reason ?? m.error ?? 'Worker init deferred; retry once the session is active',
+              });
+              return;
+            }
+            resolve({ ok: true });
+            return;
+          }
+        } catch {
+          // Continue scanning
+        }
+      }
+    };
+    const cleanup = (): void => {
+      clearTimeout(timeout);
+      child.stdout?.removeListener('data', readyHandler);
+    };
+    child.stdout!.on('data', readyHandler);
+  });
+}
 async function handlePostCompact(
   sessionId: string,
   req: http.IncomingMessage,
