@@ -10,6 +10,7 @@
 
 import { getProviderStore } from '../services/providers/provider-store-electron';
 import { toLegacyApiProvider } from '../../src/lib/providers/legacy';
+import { resolveCronModel } from './provider-config';
 import type { ApiProvider } from '../../src/lib/providers/types';
 
 export interface ResolvedCronProvider {
@@ -85,29 +86,4 @@ export function resolveBotOrDefaultProvider(
   return bot
     ? resolveBotWakeProvider(bot.provider, bot.model)
     : resolveCronProvider(fallbackModel);
-}
-
-function resolveCronModel(jobModel: string | undefined, provider: ApiProvider): string {
-  const explicit = jobModel?.trim() ?? '';
-  if (explicit && explicit.toLowerCase() !== 'default') return explicit;
-
-  const opts = provider.options ?? {};
-  const fromOptions =
-    (typeof opts.defaultModel === 'string' ? opts.defaultModel : '') ||
-    (typeof opts.model === 'string' ? opts.model : '') ||
-    (Array.isArray(opts.enabled_models) && opts.enabled_models.length > 0
-      ? String(opts.enabled_models[0])
-      : '');
-  if (fromOptions) return fromOptions;
-
-  switch (provider.providerType) {
-    case 'ollama':
-      return 'llama3.2';
-    case 'anthropic':
-    case 'bedrock':
-    case 'vertex':
-      return 'claude-sonnet-4-20250514';
-    default:
-      return 'gpt-4o';
-  }
 }

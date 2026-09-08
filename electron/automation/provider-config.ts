@@ -10,6 +10,7 @@
  */
 
 import { toLLMProvider } from '../config/provider-types';
+import type { ApiProvider } from '../../src/lib/providers/types';
 import type { ResolvedCronProvider } from './provider';
 
 export interface CronProviderConfig {
@@ -18,6 +19,37 @@ export interface CronProviderConfig {
   model: string;
   provider: string;
   authStyle: 'api_key';
+}
+
+/**
+ * Resolve the model to run a job with. An explicit non-'default' value wins;
+ * otherwise fall back to the provider's configured default model, and finally
+ * to a provider-type-specific default. Mirrors the chat path so cron/bot runs
+ * keep behaving like ad-hoc chats. Pure — no electron, no I/O.
+ */
+export function resolveCronModel(jobModel: string | undefined, provider: ApiProvider): string {
+  const explicit = jobModel?.trim() ?? '';
+  if (explicit && explicit.toLowerCase() !== 'default') return explicit;
+
+  const opts = provider.options ?? {};
+  const fromOptions =
+    (typeof opts.defaultModel === 'string' ? opts.defaultModel : '') ||
+    (typeof opts.model === 'string' ? opts.model : '') ||
+    (Array.isArray(opts.enabled_models) && opts.enabled_models.length > 0
+      ? String(opts.enabled_models[0])
+      : '');
+  if (fromOptions) return fromOptions;
+
+  switch (provider.providerType) {
+    case 'ollama':
+      return 'llama3.2';
+    case 'anthropic':
+    case 'bedrock':
+    case 'vertex':
+      return 'claude-sonnet-4-20250514';
+    default:
+      return 'gpt-4o';
+  }
 }
 
 export function buildCronProviderConfig(r: ResolvedCronProvider): CronProviderConfig {
