@@ -18,8 +18,7 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { useSettings } from '@/hooks/useSettings';
 import { isKeylessLocalProvider } from '@/lib/providers';
 import { MessageInput } from './MessageInput';
-import { AgentModeSelector, getProfileIdForMode } from './AgentModeSelector';
-import { listCustomAgents } from '@/lib/agent-profile-ipc';
+import { getProfileIdForMode } from './AgentModeSelector';
 import { SessionSelector } from '@/components/home/SessionSelector';
 import { InputDialog } from '@/components/ui/InputDialog';
 import { updateThreadIPC } from '@/lib/ipc-client';
@@ -63,12 +62,22 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
   const [isSending, setIsSending] = useState(false);
   const [sessionModel, setSessionModel] = useState<string>('');
   const [providerId, setProviderId] = useState<string>('');
-  const [agentProfileId, setAgentProfileId] = useState<string | null>(getProfileIdForMode('main'));
   // Permission mode picked in the composer; persisted to the session row on
   // creation and passed along on the first send as a per-turn override.
   const [permissionMode, setPermissionMode] = useState<PermissionModeUi>('auto');
   const [selectedProject, setSelectedProject] = useState<{ workingDirectory: string; projectName: string } | null>(null);
   const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
+  // Time-of-day greeting shown above the composer.
+  const hour = new Date().getHours();
+  const greeting =
+    hour >= 5 && hour < 12
+      ? t('chat.greeting.morning')
+      : hour >= 12 && hour < 18
+        ? t('chat.greeting.afternoon')
+        : hour >= 18 && hour < 23
+          ? t('chat.greeting.evening')
+          : t('chat.greeting.night');
+
   // Remember the last-used thinking effort so it carries over to new sessions.
   const [effort, setEffortState] = useState<string | undefined>(settings.defaultThinkingEffort ?? undefined);
 
@@ -318,23 +327,13 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
           }
         }
 
-        // Plan 424: when a config-driven custom agent ([agents.<id>]) is
-        // selected, its model and workspace override the session parameters.
-        const customAgents = await listCustomAgents();
-        const custom = agentProfileId ? customAgents[agentProfileId] : undefined;
-        let sessionModelName = actualModel;
-        if (custom) {
-          workingDirectory = custom.workspace || workingDirectory;
-          if (custom.model) sessionModelName = parseModelName(custom.model).modelName || custom.model;
-        }
-
         const thread = await createThread({
           workingDirectory,
           projectName,
           noProject: !workingDirectory,
           providerId: effectiveProviderId || undefined,
-          model: sessionModelName || undefined,
-          agentProfileId,
+          model: actualModel || undefined,
+          agentProfileId: getProfileIdForMode('main'),
         });
         if (!thread) return;
 
@@ -359,7 +358,7 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             const send = onSendMessageRef.current;
-            send?.(content, actualModel, files, agentProfileId, outputStyleConfig, mode, effort, displayContent, conductorMode, undefined, permissionMode);
+            send?.(content, actualModel, files, getProfileIdForMode('main'), outputStyleConfig, mode, effort, displayContent, conductorMode, undefined, permissionMode);
           });
         });
       } catch (error) {
@@ -368,13 +367,14 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
         setIsSending(false);
       }
     },
-    [selectedProject, createThread, setActiveThread, clearNewChatDraft, parseModelName, resolveDefaultModelSync, isSending, agentProfileId, effort, permissionMode],
+    [selectedProject, createThread, setActiveThread, clearNewChatDraft, parseModelName, resolveDefaultModelSync, isSending, effort, permissionMode],
   );
 
   return (
     <div className="welcome-view">
       <div className="welcome-content">
         <SessionSelector
+          greeting={greeting}
           selectedProject={selectedProject}
           onSelectProject={handleSelectProject}
           onNewBlankProject={handleNewBlankProject}
@@ -400,14 +400,6 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
               initialDraft={{ text: newChatDraft.text, attachments: newChatDraft.attachments }}
               onDraftChange={handleDraftChange}
             />
-            {/* Agent chosen once at session creation; fixed afterwards. */}
-            <div className="flex items-center justify-between mt-2 px-1">
-              <AgentModeSelector
-                value={agentProfileId ?? getProfileIdForMode('main')}
-                onChange={(profileId) => setAgentProfileId(profileId)}
-                disabled={!isHydrated || isSending}
-              />
-            </div>
           </div>
         </SessionSelector>
       </div>
