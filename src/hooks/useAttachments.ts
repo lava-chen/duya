@@ -14,7 +14,7 @@
  * input value. Drafts do NOT include attachments — by design.
  */
 
-import { useCallback, useReducer, useRef } from 'react';
+import { useCallback, useReducer } from 'react';
 import type { FileAttachment } from '@/types/message';
 import type {
   AttachmentKind,
@@ -25,9 +25,8 @@ import {
   compressImage,
 } from './useImageCompression';
 import {
-  parseDocument,
   resolveFilePath,
-  isDocumentFile,
+  isBinaryDocumentFile,
   readFileAsDataURL,
 } from './useFileParsing';
 
@@ -286,10 +285,6 @@ export interface UseAttachmentsApi {
 
 export function useAttachments(): UseAttachmentsApi {
   const [state, dispatch] = useReducer(reducer, initialState);
-  // Track parsing-in-progress across async calls. The reducer field is
-  // for the synchronous "is anything parsing" snapshot, but we also need
-  // to dedupe concurrent parseDocument calls in flight.
-  const parsingRef = useRef(false);
 
   const hasUnparsedDocs = state.attachments.some(
     (a) =>
@@ -316,49 +311,10 @@ export function useAttachments(): UseAttachmentsApi {
   }, []);
 
   const addFile = useCallback(async (file: File) => {
-    if (isDocumentFile(file.name)) {
-      const filePath = resolveFilePath(file);
-      const placeholderId = crypto.randomUUID();
-      dispatch({
-        type: 'add',
-        payload: {
-          id: placeholderId,
-          kind: 'file',
-          name: file.name,
-          type: file.type,
-          url: filePath,
-          path: filePath,
-          size: file.size,
-        },
-      });
-
-      if (!parsingRef.current) {
-        parsingRef.current = true;
-        dispatch({ type: 'parsing-start' });
-        const result = await parseDocument(placeholderId, filePath);
-        if (!result.ok) {
-          dispatch({ type: 'parse-error', filename: file.name, message: result.error ?? 'Unknown' });
-        } else {
-          dispatch({
-            type: 'update',
-            id: placeholderId,
-            patch: {
-              url: filePath,
-              path: filePath,
-              text: result.text,
-              extractMethod: result.extractMethod,
-              imageChunks: result.imageChunks.length > 0 ? result.imageChunks : undefined,
-              thumbnail: result.thumbnail,
-            },
-          });
-        }
-        parsingRef.current = false;
-        dispatch({ type: 'parsing-end' });
-      }
-    } else {
+    if (file.type.startsWith('image/')) {
       // Image path: compress if too large, then store as data URL.
       let processedFile: File = file;
-      if (file.type.startsWith('image/') && file.size > MAX_IMAGE_SIZE) {
+      if (file.size > MAX_IMAGE_SIZE) {
         try {
           processedFile = await compressImage(file, {
             maxWidth: 2048,
@@ -389,6 +345,33 @@ export function useAttachments(): UseAttachmentsApi {
           path: filePath || undefined,
           size: processedFile.size,
         },
+      });
+      return;
+    }
+
+    // Non-image file: attach with its filesystem path. The Electron
+    // document-parser sidecar (PDF/Office extraction) was removed, so
+    // binary office formats are flagged instead of parsed; text-like
+    // files still inline their content for the model.
+    const filePath = resolveFilePath(file);
+    const id = crypto.randomUUID();
+    dispatch({
+      type: 'add',
+      payload: {
+        id,
+        kind: 'file',
+        name: file.name,
+        type: file.type,
+        url: filePath,
+        path: filePath || undefined,
+        size: file.size,
+      },
+    });
+    if (isBinaryDocumentFile(file.name)) {
+      dispatch({
+        type: 'parse-error',
+        filename: file.name,
+        message: '文档解析已移除：PDF/Office 文件不再提取内容',
       });
     }
   }, []);

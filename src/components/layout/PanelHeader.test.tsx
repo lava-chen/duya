@@ -38,7 +38,6 @@ vi.mock("./panels/registry", () => {
       conductor: { id: "conductor", labelKey: "panel.conductor", icon },
       terminal: { id: "terminal", labelKey: "panel.terminal", icon },
       browser: { id: "browser", labelKey: "panel.browser", icon },
-      office: { id: "office", labelKey: "panel.office", icon },
       preview: { id: "preview", labelKey: "panel.preview", icon },
     },
     getPageDescriptor: (id: string) => ({

@@ -1,10 +1,10 @@
 /**
  * OSContextBridge shared types.
  *
- * Re-exports the v0.4 schema types from `@duya/computer-use-demo`
- * (a local copy of the external `E:\Projects\computer-use-demo`
- * daemon's types.ts; the daemon itself runs out-of-tree and is
- * spawned by the Electron main as a child process).
+ * The v0.4 schema types are vendored in `./daemon-schema.ts` (a local
+ * copy of the external `E:\Projects\computer-use-demo` daemon's
+ * types.ts; the daemon itself runs out-of-tree and is spawned by the
+ * Electron main as a child process).
  *
  * The daemon writes its `ContextPayload` to
  * `~/.duya/context/<sessionId>.json` (one file per session; see plan
@@ -26,7 +26,7 @@ import type {
   IntentCandidate,
   InteractionEvent,
   RedactionReason,
-} from '@duya/computer-use-demo';
+} from './daemon-schema.js';
 
 /**
  * The schema versions this bridge accepts. The daemon is at v0.4.0

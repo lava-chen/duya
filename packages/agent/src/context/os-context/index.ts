@@ -16,7 +16,7 @@ export type {
   IntentCandidate,
   InteractionEvent,
   RedactionReason,
-} from '@duya/computer-use-demo';
+} from './daemon-schema.js';
 
 export type {
   ParseFailureReason,

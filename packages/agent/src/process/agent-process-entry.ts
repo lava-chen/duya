@@ -38,7 +38,7 @@ import {
   goalDb,
 } from '../ipc/db-client.js';
 import { createSurfaceAwarePermissionHandler } from './tool-approval-card.js';
-import { captureTurnReviewBaseline, completeTurnReview, type TurnReviewBaseline } from '../session/turn-review.js';
+// Plan 426 Phase 4: lazy-loaded — only needed when permissionSurface='bot'.
 
 // Note: sendMemoryWakeup is intentionally NOT statically imported here.
 // It pulls the entire memory-rollout + memory-state module graph
@@ -61,9 +61,14 @@ import type { PromptProfile } from '../prompts/modes/types.js';
 import { isBotAgentProfile } from '../prompts/index.js';
 // Plan 312: type-only import for the App Connection tool descriptor.
 import type { AppConnectionToolDescriptor } from '../tool/AppConnectionTool/index.js';
-import { getCachedAppConnectionDescriptors } from '../tool/AppConnectionTool/index.js';
-import { rememberSessionApproval } from '../tool/AppConnectionTool/approvals.js';
-import { buildSandboxImage, setSandboxEnabled } from '../sandbox/index.js';
+// Plan 426 Phase 4: lazy-loaded — only needed when @plugins are @-mentioned or
+// an app-connection tool triggers a permission ask. Module is cached after
+// first import so repeated calls across a session reuse the same instance.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _appConnectionModule: any = null;
+// Plan 426 Phase 4: lazy-loaded to avoid pulling sandbox module graph into every
+// cold-start worker when sandboxEnabled is false (default for most sessions).
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { duyaAgent } from '../agent/DuyaAgent.js';
 import { Journal } from '../journal/Journal.js';
 import { loadSkills, getSkillRegistry, getAgentSkillDirectory } from '../skills/index.js';
@@ -80,7 +85,6 @@ import { resizeImageBuffer, needsResizing, TARGET_IMAGE_SIZE_BYTES } from '../ut
 import { isModelLikelyMultimodal } from '../utils/multimodal-detection.js';
 import { detectModelCapability } from '../utils/model-capability-cache.js';
 import type { ProbeConfig } from '../utils/model-capability-cache.js';
-import { VisionTool } from '../tool/VisionTool/VisionTool.js';
 import type { ToolExecutor } from '../tool/registry.js';
 import { estimateMessagesTokens } from '../compact/tokenBudget.js';
 import type { ApiFormat, ModelCompat } from '@duya/ai';
@@ -454,7 +458,7 @@ const emitLiveUsage = (
 // Track the main model name for multimodal detection
 let mainModelName = '';
 let probeConfig: ProbeConfig | null = null;
-const visionTool = new VisionTool();
+let visionTool: any = null;
 // Track title generation per session (Map<sessionId, lastGeneratedTitle>)
 const titleGeneratedBySession = new Map<string, string>();
 // Title generation model config (from settings)
@@ -944,10 +948,14 @@ function fetchAppConnectionDescriptors(): Promise<{
  * and caches them. The per-turn registry merge in DuyaAgent._resolveTools
  * reads from this cache — no IPC round-trip per turn.
  */
+async function getAppConnection(): Promise<any> {
+  if (!_appConnectionModule) _appConnectionModule = await import('../tool/AppConnectionTool/index.js');
+  return _appConnectionModule;
+}
+
 async function reloadAppConnectionTools(): Promise<void> {
   try {
-    const { setCachedAppConnectionDescriptors } =
-      await import('../tool/AppConnectionTool/index.js');
+    const { setCachedAppConnectionDescriptors } = await getAppConnection();
     const response = await fetchAppConnectionDescriptors();
     if (!response.success || !response.descriptors) {
       log('[Agent-Process] App Connection: descriptor fetch failed:', response.error?.message);
@@ -1627,14 +1635,9 @@ async function initAgent(
     emitLiveUsage(sessionId);
   };
 
-  if (setSandboxEnabled) {
-    setSandboxEnabled(sandboxEnabled ?? true);
-  }
-
-  // Pre-build Docker sandbox image in the background (non-blocking).
-  // Image takes ~60s on first build; agent processes commands immediately.
-  // If image isn't ready when first command runs, regex defense kicks in.
-  if (sandboxEnabled !== false && buildSandboxImage) {
+  if (sandboxEnabled !== false) {
+    const { buildSandboxImage, setSandboxEnabled } = await import('../sandbox/index.js');
+    if (setSandboxEnabled) setSandboxEnabled(true);
     buildSandboxImage((msg: string) => log(msg)).catch(() => {});
   }
 
@@ -1747,10 +1750,11 @@ function sendToMain(msg: Record<string, unknown>): void {
 async function persistTurnReview(
   currentSessionId: string,
   turnId: string,
-  baseline: TurnReviewBaseline | null,
+  baseline: unknown,
 ): Promise<void> {
   if (!baseline) return;
-  const review = completeTurnReview(baseline);
+  const { completeTurnReview } = await import('../session/turn-review.js');
+  const review = completeTurnReview(baseline as Parameters<typeof completeTurnReview>[0]);
   if (!review) return;
   try {
     await turnReviewDb.save({
@@ -1936,7 +1940,8 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
 
 // Create permission handler for streaming
 function createPermissionHandler(sessId: string): (request: { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt: number; metadata?: { toolParamsDisplay?: Array<{ name: string; label: string; value: string }> } }) => Promise<'allow' | 'deny'> {
-  return (request) => {
+  return async (request) => {
+    const descriptor = (await getAppConnection()).getCachedAppConnectionDescriptors().find((d: any) => d.name === request.toolName);
     return new Promise<'allow' | 'deny'>((resolve, reject) => {
       const key = pendingPermissionKey(sessId, request.id);
 
@@ -1965,10 +1970,6 @@ function createPermissionHandler(sessId: string): (request: { id: string; toolNa
       }
 
       pendingPermissions.set(key, { resolve, reject, timeoutHandle, toolName: request.toolName });
-
-      // Plan 449: attach connector metadata when the tool is an app-connection
-      // tool so the renderer can offer "Always allow" (global approval).
-      const descriptor = getCachedAppConnectionDescriptors().find((d) => d.name === request.toolName);
 
       sendToMain({
         type: 'chat:permission',
@@ -2032,6 +2033,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
   await agent.waitForMcpReady(3000);
 
   const workingDirectory = typeof agent.workingDirectory === 'string' ? agent.workingDirectory : '';
+  const { captureTurnReviewBaseline } = await import('../session/turn-review.js');
   const turnReviewBaseline = captureTurnReviewBaseline(workingDirectory);
 
   // Update title generation model config from chat options
@@ -2377,7 +2379,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
             const analysis = await analyzeImage(cached.base64, cached.mediaType, question);
             toolResult = { result: analysis };
           } else if (imagePath && !imagePath.startsWith('data:')) {
-            // For local file paths, use VisionTool which reads the file
+            visionTool ??= new (await import('../tool/VisionTool/VisionTool.js')).VisionTool();
             toolResult = await visionTool.execute(
               {
                 image_path: imagePath,
@@ -4033,11 +4035,11 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
               // actually remembers — same tool skips the write/modify ask for
               // the rest of this worker's (session-scoped) lifetime.
               if (decision === 'allow_for_session' && pending.toolName) {
-                const connectorDescriptor = getCachedAppConnectionDescriptors().find(
-                  (d) => d.name === pending.toolName,
+                const connectorDescriptor = (await getAppConnection()).getCachedAppConnectionDescriptors().find(
+                  (d: any) => d.name === pending.toolName,
                 );
                 if (connectorDescriptor) {
-                  rememberSessionApproval(pending.toolName);
+                  (await import('../tool/AppConnectionTool/approvals.js')).rememberSessionApproval(pending.toolName);
                 }
               }
               pending.resolve('allow');

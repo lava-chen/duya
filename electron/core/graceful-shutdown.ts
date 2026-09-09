@@ -7,7 +7,6 @@ import { stopGatewayProcess } from '../gateway/index';
 import { getSessionManager } from '../agents/session-manager';
 import { stopBrowserDaemon } from '../services/browser/daemon';
 import { getAutomationScheduler } from '../automation/Scheduler';
-import { getDocumentParser } from '../services/document-parser/index';
 import { getDatabase } from '../ipc/db-handlers';
 import { stopWalCheckpoint } from '../db/connection';
 import { closeCoreDatabase } from '../db/core-connection';
@@ -115,16 +114,6 @@ export async function performGracefulShutdown(): Promise<void> {
     getAutomationScheduler()?.shutdown();
   } catch (err) {
     logger.error('Error shutting down automation scheduler', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
-  }
-
-  // 6.55 Stop document parser
-  try {
-    const docParser = getDocumentParser();
-    if (docParser) {
-      await docParser.stop();
-    }
-  } catch (err) {
-    logger.error('Error stopping document parser', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
   }
 
   // 6.6 Cleanup updater

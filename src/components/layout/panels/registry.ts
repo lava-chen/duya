@@ -30,11 +30,8 @@ const SidebarConductorView = lazy(() =>
 const CodeReviewPanel = lazy(() =>
   import("./CodeReviewPanel").then((m) => ({ default: m.CodeReviewPanel }))
 );
-const OfficePanel = lazy(() =>
-  import("./OfficePanel").then((m) => ({ default: m.OfficePanel }))
-);
 
-export type PageId = "files" | "preview" | "review" | "conductor" | "terminal" | "browser" | "office" | "bot-settings" | "room-settings";
+export type PageId = "files" | "preview" | "review" | "conductor" | "terminal" | "browser" | "bot-settings" | "room-settings";
 
 export interface PageTab {
   id: string;
@@ -144,17 +141,6 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     maxWidth: null,
     defaultExpanded: false,
     component: BrowserPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
-  },
-  office: {
-    id: "office",
-    labelKey: "panel.office",
-    icon: FileTextIcon,
-    multiInstance: true,
-    available: true,
-    minWidth: 520,
-    preferredWidth: 760,
-    defaultExpanded: false,
-    component: OfficePanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   "bot-settings": {
     id: "bot-settings",

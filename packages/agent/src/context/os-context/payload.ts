@@ -18,7 +18,7 @@
  * Plan 453 Task B.
  */
 
-import type { RedactionReason } from '@duya/computer-use-demo';
+import type { RedactionReason } from './daemon-schema.js';
 import { logger } from '../../utils/logger.js';
 import {
   ACCEPTED_SCHEMA_VERSIONS,

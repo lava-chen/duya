@@ -16,7 +16,6 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { homedir } from 'os';
 import { getLogger, LogComponent } from '../logging/logger';
-import { getDocumentParser } from '../services/document-parser/index';
 import { isDev } from '../core/bootstrap';
 import { getMainWindow } from '../core/window-manager';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
@@ -317,27 +316,6 @@ export function registerSystemHandlers(): void {
       logger.error('Failed to create project folder', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.System);
       return { success: false, error: String(err), path: '' };
     }
-  });
-
-  // Parser handlers
-  ipcMain.handle('parser:parse', async (_event, filePath: string, options?: { timeout?: number }) => {
-    const docParser = getDocumentParser();
-    if (!docParser) {
-      throw new Error('Document parser not initialized');
-    }
-    return docParser.parse(filePath, 'default');
-  });
-
-  ipcMain.handle('parser:getCapabilities', async () => {
-    const docParser = getDocumentParser();
-    if (!docParser) return null;
-    return docParser.getCapabilities();
-  });
-
-  ipcMain.handle('parser:isReady', async () => {
-    const docParser = getDocumentParser();
-    if (!docParser) return false;
-    return docParser.isReady();
   });
 
   // Recent folders management

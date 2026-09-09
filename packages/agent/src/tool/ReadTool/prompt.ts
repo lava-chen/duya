@@ -39,10 +39,8 @@ Usage:
 - By default, it reads up to ${MAX_LINES_TO_READ} lines starting from the beginning of the file${maxSizeInstruction}
 ${offsetInstruction}
 ${lineFormat}
-- This tool can read PDFs (.pdf). Use the \`pages\` parameter to read specific page ranges (e.g. pages: "1-5"). For scanned PDFs without embedded text, image extraction may be limited; use the vision tool for visual analysis.
-- This tool can read Word documents (.docx) and PowerPoint files (.pptx), extracting their text content along with any embedded images.
+- This tool does NOT read binary formats (PDF, .docx, .pptx, .xlsx). Use the matching skill (\`pdf\`, \`docx\`, \`pptx\`, \`xlsx\`) to extract their content.
 - This tool does NOT read image files (PNG, JPEG, GIF, WebP, etc.) directly. Use the \`vision_analyze\` tool to analyze image content.
-- This tool can read Jupyter notebooks (.ipynb files). It returns a per-cell summary header, then each cell as \`<cell id="cell-N"><language>python</language>source</cell id="cell-N">\`. Code cell outputs are included unless they exceed 10KB (replaced with a jq hint). Use the \`cell_range\` parameter to read a 1-indexed inclusive subset (e.g. \`cell_range: {start: 5, end: 15}\`, end=-1 for to-end). Image outputs (matplotlib etc.) are written to \`<notebook>.cells/\` and surfaced via the vision tool.
 - This tool can only read files, not directories. To read a directory, use an ls command via the ${BASH_TOOL_NAME} tool.
 - You will regularly be asked to read screenshots. When the user provides a path to a screenshot, use the \`vision_analyze\` tool to view and analyze the image at that path.
 `

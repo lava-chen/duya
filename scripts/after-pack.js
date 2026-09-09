@@ -108,18 +108,23 @@ module.exports = async function afterPack(context) {
   // x64 on an arm64 Mac), the copied binary will have the wrong arch and must
   // be rebuilt.
   let foundPrebuilt = false;
+  let prebuiltSourcePath = null;
   function findPrebuiltNode(dir) {
     if (!fs.existsSync(dir)) return;
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
+        // Skip prebuilds/ subdirectories when scanning the packaged resources
+        // — they are searched separately below for NAPI binaries.
+        if (entry.name === 'prebuilds') continue;
         findPrebuiltNode(fullPath);
       } else if (entry.name === 'better_sqlite3.node') {
         const archOk = isArchMatch(fullPath, archName);
         if (archOk) {
           console.log(`[afterPack] Found prebuilt binary with correct arch: ${fullPath}`);
           foundPrebuilt = true;
+          prebuiltSourcePath = fullPath;
         } else {
           console.log(`[afterPack] Found prebuilt binary but wrong arch, will rebuild: ${fullPath}`);
         }
@@ -128,7 +133,49 @@ module.exports = async function afterPack(context) {
   }
   findPrebuiltNode(RESOURCES_DIR);
 
-  if (foundPrebuilt) {
+  // better-sqlite3 >= 11.5 ships NAPI prebuilds at
+  // node_modules/better-sqlite3/prebuilds/<platform>-<arch>.node. NAPI
+  // binaries are ABI-stable across Node.js and Electron versions, so the
+  // prebuilt works directly under Electron 44 without any rebuild step.
+  // When the packaged resources directory does not yet contain a usable
+  // .node file, fall back to the project node_modules prebuilds.
+  if (!foundPrebuilt) {
+    // better-sqlite3 prebuilds use Node.js triple naming: win32-x64,
+    // darwin-arm64, linux-x64, etc. process.platform is the Node.js source
+    // of truth here, not electron-builder's `context.packager.platform.name`.
+    const napiPlatform =
+      process.platform === 'darwin' ? 'darwin' :
+      process.platform === 'win32' ? 'win32' :
+      process.platform === 'linux' ? 'linux' :
+      process.platform;
+    const platformNodeTriple = `${napiPlatform}-${archName}`;
+    console.log(`[afterPack] Looking for NAPI prebuilt: ${platformNodeTriple}.node`);
+    const projectPrebuilds = [
+      path.join(projectDir, 'node_modules', 'better-sqlite3', 'prebuilds', `${platformNodeTriple}.node`),
+      path.join(projectDir, 'packages', 'agent', 'node_modules', 'better-sqlite3', 'prebuilds', `${platformNodeTriple}.node`),
+      path.join(projectDir, 'packages', 'plugin-core', 'node_modules', 'better-sqlite3', 'prebuilds', `${platformNodeTriple}.node`),
+    ];
+    for (const candidate of projectPrebuilds) {
+      console.log(`[afterPack]   probing ${candidate} — exists: ${fs.existsSync(candidate)}`);
+      if (fs.existsSync(candidate)) {
+        console.log(`[afterPack] Found NAPI prebuilt at ${candidate}`);
+        prebuiltSourcePath = candidate;
+        foundPrebuilt = true;
+        break;
+      }
+    }
+  }
+
+  if (foundPrebuilt && prebuiltSourcePath) {
+    console.log('[afterPack] Prebuilt better-sqlite3 binary with correct arch exists, copying to resources');
+    const targetDir = path.join(RESOURCES_DIR, 'better-sqlite3', 'build', 'Release');
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+    const targetNode = path.join(targetDir, 'better_sqlite3.node');
+    fs.copyFileSync(prebuiltSourcePath, targetNode);
+    console.log(`[afterPack] Copied prebuilt .node to ${targetNode}`);
+  } else if (foundPrebuilt) {
     console.log('[afterPack] Prebuilt better-sqlite3 binary with correct arch exists, skipping rebuild');
   } else {
     console.log('[afterPack] No suitable prebuilt binary found, attempting rebuild...');
@@ -179,14 +226,17 @@ module.exports = async function afterPack(context) {
 
     if (fs.existsSync(rebuiltSource)) {
       console.log(`[afterPack] Rebuilt .node file: ${rebuiltSource}`);
+      prebuiltSourcePath = rebuiltSource;
+    }
 
+    if (prebuiltSourcePath && fs.existsSync(prebuiltSourcePath)) {
       const targetDir = path.join(RESOURCES_DIR, 'better-sqlite3', 'build', 'Release');
       if (!fs.existsSync(targetDir)) {
         fs.mkdirSync(targetDir, { recursive: true });
       }
       const targetNode = path.join(targetDir, 'better_sqlite3.node');
-      fs.copyFileSync(rebuiltSource, targetNode);
-      console.log(`[afterPack] Copied rebuilt .node to ${targetNode}`);
+      fs.copyFileSync(prebuiltSourcePath, targetNode);
+      console.log(`[afterPack] Copied .node to ${targetNode}`);
     } else {
       throw new Error(
         `[afterPack] FATAL: Rebuild reported success but .node file not found at ${rebuiltSource}. ` +

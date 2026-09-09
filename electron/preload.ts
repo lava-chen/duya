@@ -807,29 +807,6 @@ export interface BrowserBackendAPI {
   updateMode: (mode: 'auto' | 'extension' | 'built-in' | 'human-like') => Promise<{ success: boolean; reason?: string }>
 }
 
-export interface DocumentParserAPI {
-  parse: (filePath: string, options?: { timeout?: number }) => Promise<{
-    fileHash: string
-    sessionId: string
-    filename: string
-    charCount: number
-    chunks: Array<
-      | { type: 'text'; index: number; text: string }
-      | { type: 'image'; index: number; base64: string; mediaType: string }
-    >
-    extractMethod?: 'text' | 'vision' | 'hybrid'
-    metadata?: Record<string, unknown>
-    thumbnail?: { base64: string; mediaType: string }
-    parsedAt: number
-  }>
-  getCapabilities: () => Promise<{
-    parsers: Record<string, string | boolean>
-    libreoffice_path: string | null
-    version: string
-  } | null>
-  isReady: () => Promise<boolean>
-}
-
 export interface MailboxAPI {
   send: (params: {
     sessionId: string;
@@ -1319,7 +1296,6 @@ export interface ElectronAPI {
   browserWebview: BrowserWebviewAPI
   browserCookie: BrowserCookieAPI
   browserBackend: BrowserBackendAPI
-  parser: DocumentParserAPI
   agentProfile: AgentProfileAPI
   botChannels: BotChannelsAPI
   configAgents: ConfigAgentsAPI
@@ -2398,11 +2374,6 @@ const electronAPI: ElectronAPI = {
   browserBackend: {
     updateMode: (mode: 'auto' | 'extension' | 'built-in' | 'human-like') =>
       ipcRenderer.invoke('browser:update-backend-mode', mode),
-  },
-  parser: {
-    parse: (filePath, options) => ipcRenderer.invoke('parser:parse', filePath, options),
-    getCapabilities: () => ipcRenderer.invoke('parser:getCapabilities'),
-    isReady: () => ipcRenderer.invoke('parser:isReady'),
   },
   agentProfile: {
     list: () => ipcRenderer.invoke('db:agentProfile:list'),

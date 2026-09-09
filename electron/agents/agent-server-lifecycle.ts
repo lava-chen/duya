@@ -3,6 +3,9 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { app, BrowserWindow } from 'electron';
 import { getLogger, LogComponent, safeUserDataPath } from '../logging/logger';
+import { getConfigStore } from '../config/store-instance';
+import type { PerformanceConfig } from '../config/schema';
+import { workerLimitEnvFromConfig } from './server/worker-limits';
 import { handleDbRequest } from './db-bridge';
 import { killProcessTree } from '../lib/process-cleanup';
 import { getDatabasePath } from '../db/connection';
@@ -87,6 +90,17 @@ export function spawnAgentServer(): Promise<number> {
       // builds never set this, so dev-only diagnostics stay disabled in prod.
       ...(app.isPackaged ? {} : { DUYA_DEV: '1' }),
     };
+
+    // Plan 426: [performance] worker-pool overrides → agent-server env. The
+    // worker limits read these at boot; an explicit DUYA_* env var (ops /
+    // testing) still wins over config.toml settings.
+    const perf = getConfigStore().getByPath('performance') as
+      | Partial<PerformanceConfig>
+      | undefined;
+    const workerOverrides = workerLimitEnvFromConfig(perf);
+    for (const [key, value] of Object.entries(workerOverrides)) {
+      if (value !== undefined && env[key] === undefined) env[key] = value;
+    }
 
     let command: string;
     let args: string[];

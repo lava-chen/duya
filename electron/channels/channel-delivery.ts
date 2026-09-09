@@ -340,7 +340,7 @@ class SlackTransport implements ChannelTransport {
   async send(agentId: string, address: ChannelAddress, outbound: ChannelOutboundMessage): Promise<void> {
     const token = getConnectorCredential(agentId, 'slack', 'token');
     if (!token) {
-      throw new Error('Slack bot token not found for agent ${agentId}. Use secret-request to provide it.');
+      throw new Error(`Slack bot token not found for agent ${agentId}. Use secret-request to provide it.`);
     }
 
     const channelId = address.chat; // For Slack, chat = channel ID

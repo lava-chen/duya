@@ -84,7 +84,6 @@ export function PanelZone() {
       if (pageId === "terminal") return { cwd };
       if (pageId === "files") return { workingDirectory: cwd };
       if (pageId === "review") return { workingDirectory: cwd, sessionId: activeThreadId };
-      if (pageId === "office") return { workingDirectory: cwd };
       return undefined;
     },
     [cwd]

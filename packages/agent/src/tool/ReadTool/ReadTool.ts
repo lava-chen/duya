@@ -32,13 +32,6 @@ import type { ToolPermissionContext } from '../../permissions/types.js';
 import { checkPathReadPermission } from '../../permissions/policy.js';
 import { expandPath } from '../../utils/path.js';
 import { isPathWithinRoots } from '../allowedRoots.js';
-import { getFileParserConfig } from '../../file-parser/config.js';
-import {
-  NodeFileParser,
-  getParser,
-  type ParseChunk,
-  type ParseResult,
-} from '../../file-parser/index.js';
 import {
   validateReadInput,
   type ReadInput,
@@ -54,7 +47,6 @@ import {
   findSimilarFile,
   suggestPathUnderCwd,
 } from './path-suggest.js';
-import { serializeParseResult } from './result-builder.js';
 import { computeContentSha, recordFileRead } from '../file-read-state.js';
 import { isModelLikelyMultimodal } from '../../utils/multimodal-detection.js';
 
@@ -63,7 +55,6 @@ export { validateReadInput } from './schema.js';
 export type { ReadInput } from './schema.js';
 
 const MAX_LINES = 10000;
-const DEFAULT_MAX_TOKENS = 25_000;
 // Full-file (no line_range) text reads are capped at 2000 lines OR 50KB
 // (whichever is hit first) so a single read cannot emit unbounded output.
 // This matches the ReadTool.description promise. line_range remains the
@@ -199,74 +190,9 @@ function parseLineRange(lineRange?: { start: number; end: number }): { start: nu
   return { start, end };
 }
 
-// Per-session parser instances. The previous global singleton tagged
-// every parse with sessionId='read-tool', which meant two concurrent
-// sessions shared one parser's internal cache. NodeFileParser's cache
-// key includes sessionId for some code paths (e.g. cross-session
-// permission gating) and the singleton broke that isolation. Keeping
-// one parser per real sessionId restores the intended isolation.
-//
-// The map is bounded (LRU by insertion order, see getParserForSession)
-// so a long-running agent process that spawns many sub-agent sessions
-// doesn't accumulate parsers forever. Each NodeFileParser holds its
-// own bounded cache; disposing on eviction releases that memory.
-const parserBySession = new Map<string, NodeFileParser>();
-const MAX_PARSERS = 32;
-
-function getParserForSession(sessionId: string | undefined): NodeFileParser {
-  const key = sessionId ?? 'default';
-  const existing = parserBySession.get(key);
-  if (existing) {
-    // Move-to-end so LRU order reflects recent use.
-    parserBySession.delete(key);
-    parserBySession.set(key, existing);
-    return existing;
-  }
-  const config = getFileParserConfig();
-  const parser = new NodeFileParser({
-    sessionId: key,
-    parseTimeoutMs: config.parseTimeoutMs,
-    cacheTtlMs: config.cacheTtlMs,
-    maxConcurrent: config.maxConcurrent,
-  });
-  // Bounded LRU: evict the oldest idle parser when at capacity.
-  // We MUST NOT dispose a parser with in-flight work — doing so
-  // leaves the pool in a "disposed" state where subsequent parseFile
-  // calls on the same session throw "WorkerPool is disposed". If
-  // every cached parser is busy, we let the cache grow past MAX_PARSERS
-  // rather than abort a running parse; the next idle insertion will
-  // reclaim the slot. Worst case (all 32+ parsers permanently busy)
-  // is bounded by the number of concurrent sub-agent sessions, which
-  // is itself bounded elsewhere.
-  if (parserBySession.size >= MAX_PARSERS) {
-    let evictKey: string | undefined;
-    for (const k of parserBySession.keys()) {
-      const p = parserBySession.get(k);
-      if (p && p.pendingCount === 0) {
-        evictKey = k;
-        break;
-      }
-    }
-    if (evictKey !== undefined) {
-      const evict = parserBySession.get(evictKey);
-      evict?.dispose();
-      parserBySession.delete(evictKey);
-    }
-  }
-  parserBySession.set(key, parser);
-  return parser;
-}
-
-export function _resetSharedParser(): void {
-  for (const p of parserBySession.values()) {
-    p.dispose();
-  }
-  parserBySession.clear();
-}
-
 export class ReadTool extends BaseTool {
   readonly name = 'read';
-  readonly description = 'Read the contents of a file from the file system. Supports text files, PDFs, Word documents (.docx), and PowerPoint files (.pptx). For text files the output is truncated to 2000 lines or 50KB (whichever is hit first); use `line_range` to read large files in chunks and keep advancing the range until the file is complete. Use the `pages` parameter for PDFs to read specific page ranges. Image files (png, jpg, gif, webp, etc.) are NOT read directly by this tool — use the `vision_analyze` tool to analyze image content. Prefer read over cat or sed to examine files.';
+  readonly description = 'Read the contents of a file from the file system. Supports text and source files; output is truncated to 2000 lines or 50KB (whichever is hit first); use `line_range` to read large files in chunks and keep advancing the range until the file is complete. Binary office formats (PDF, .docx, .pptx, .xlsx) are not parsed — use the matching skill instead. Image files (png, jpg, gif, webp, etc.) are NOT read directly by this tool — use the `vision_analyze` tool to analyze image content. Prefer read over cat or sed to examine files.';
   readonly input_schema: Record<string, unknown> = {
     type: 'object',
     properties: {
@@ -276,7 +202,7 @@ export class ReadTool extends BaseTool {
       },
       line_range: {
         type: 'object',
-        description: 'Optional line range to read a text file. If not specified, reads the entire file (or routes to the document parser for binary formats).',
+        description: 'Optional line range to read a text file. If not specified, reads the entire file.',
         properties: {
           start: { type: 'number', description: 'The starting line number (1-indexed).' },
           end: { type: 'number', description: 'The ending line number (1-indexed, inclusive). Use -1 to read to end of file.' },
@@ -284,33 +210,21 @@ export class ReadTool extends BaseTool {
       },
       pages: {
         type: 'string',
-        description: 'Optional PDF page range, e.g. "1-5" or "3". Only valid for PDF files. If not provided, the entire document is read.',
+        description: 'Optional PDF page range, e.g. "1-5" or "3". Retained for compatibility; PDF parsing is no longer built in.',
       },
       max_tokens: {
         type: 'number',
-        description: 'Optional token cap for the returned content (default output is capped at 50KB). Documents exceeding the limit include read metadata explaining the truncation.',
+        description: 'Optional token cap for the returned content (default output is capped at 50KB).',
       },
     },
     required: ['file_path'],
   };
 
-  readonly parser: NodeFileParser | undefined;
   private readonly allowedRoots?: readonly string[];
 
-  constructor(opts: { parser?: NodeFileParser; allowedRoots?: string[] } = {}) {
+  constructor(opts: { allowedRoots?: string[] } = {}) {
     super();
-    this.parser = opts.parser;
     this.allowedRoots = opts.allowedRoots;
-  }
-
-  /**
-   * Resolve the parser for a given call. Tests may inject a parser
-   * via the constructor; production code paths go through the
-   * per-session parser cache so two concurrent sessions don't share
-   * a single parser's internal state.
-   */
-  private resolveParser(context?: ToolUseContext): NodeFileParser {
-    return this.parser ?? getParserForSession(context?.options.sessionId);
   }
 
   get interruptBehavior(): ToolInterruptBehavior {
@@ -407,30 +321,14 @@ export class ReadTool extends BaseTool {
     context?: ToolUseContext,
     rawExt: string | null = null,
   ): Promise<ToolResult> {
-    if (getFileParserConfig().disabled) {
-      return {
-        id, name: 'read', error: true,
-        result: `Error: File parser is disabled (DUYA_FILE_PARSER_DISABLED). Read tools for ${input.file_path} are unavailable in this configuration.`,
-      };
-    }
-
     try {
       const resolved = expandPath(input.file_path, workingDirectory);
 
-      // Resolve extension once so we can skip the magic-byte sniff
-      // for files the document parser already knows how to handle.
-      // (Otherwise a renamed PNG with .docx extension would be
-      // refused by the magic-byte check before the parser could
-      // legitimately process it.)
       const ext = (rawExt ?? resolved.toLowerCase().match(/\.[^./\\]+$/)?.[0]) || null;
 
       // Spreadsheet extensions have a dedicated `xlsx` skill (Python
-      // pandas/openpyxl via the office skill family) that is more
-      // capable than the built-in XlsxParser. Route these extensions
-      // to the skill suggestion path instead of attempting to parse
-      // them inline. The registry still keeps `.xlsx` registered for
-      // direct XlsxParser consumers (e.g. tests), but ReadTool skips
-      // it here so the model is pointed at the skill.
+      // pandas/openpyxl via the office skill family). Point the model at
+      // the skill instead of attempting to parse them inline.
       const SKILL_ROUTED_EXTENSIONS = new Set(['.xlsx', '.xls', '.xlsm']);
       if (ext && SKILL_ROUTED_EXTENSIONS.has(ext.toLowerCase())) {
         const magicCheck = await sniffBinary(resolved);
@@ -466,23 +364,6 @@ export class ReadTool extends BaseTool {
         };
       }
 
-      if (!ext || !getParser(ext)) {
-        // No parser for this extension. Magic-byte sniff is the
-        // only thing that could tell us what's actually inside;
-        // if it's recognizable as a known binary format, surface
-        // a clear error that points the model at a concrete next
-        // step instead of a generic "use another tool" stub.
-        const magicCheck = await sniffBinary(resolved);
-        const formatHint = magicCheck.binary
-          ? ` (${magicCheck.format ?? 'binary'})`
-          : '';
-        const suggestion = suggestHandlerForFormat(ext, magicCheck.format);
-        return {
-          id, name: 'read', error: true,
-          result: `Error: Cannot read '${input.file_path}' — unsupported binary format (${ext ?? 'no extension'})${formatHint}. ${suggestion}`,
-        };
-      }
-
       let statResult: Awaited<ReturnType<typeof stat>>;
       try {
         statResult = await stat(resolved);
@@ -499,26 +380,18 @@ export class ReadTool extends BaseTool {
         };
       }
 
-      const result = await this.resolveParser(context).parseFile(resolved, context?.abortController?.signal);
-      const { result: text, metadata, images } = serializeParseResult(result, {
-        maxTokens: input.max_tokens ?? DEFAULT_MAX_TOKENS,
-        resolvedPath: normalizePath(resolved),
-      });
-
-      let finalText = text;
-      if (input.cell_range) {
-        finalText = filterChunksByCellRange(text, input.cell_range, result.chunks);
-      }
-
-      // Record the observed mtime/size so edit can anchor old_string to
-      // this exact version of the file (plan 428, file-read-state.ts).
-      // Document parses are never a full raw-content view (plan 448):
-      // the extracted text differs from the bytes on disk, so no
-      // content fingerprint is recorded and the staleness exemption
-      // never applies to doc-mode reads.
-      recordFileRead(resolved, { mtimeMs: statResult.mtimeMs, size: statResult.size, isFullView: false });
-
-      return { id, name: 'read', result: finalText, metadata, images };
+      // The built-in document parser (PDF/DOCX/PPTX extraction) was removed
+      // from the codebase. Surface a clear error that points the model at
+      // the matching skill instead of a generic stub.
+      const magicCheck = await sniffBinary(resolved);
+      const formatHint = magicCheck.binary
+        ? ` (${magicCheck.format ?? 'binary'})`
+        : '';
+      const suggestion = suggestHandlerForFormat(ext, magicCheck.format);
+      return {
+        id, name: 'read', error: true,
+        result: `Error: Cannot read '${input.file_path}' — unsupported binary format (${ext ?? 'no extension'})${formatHint}. ${suggestion}`,
+      };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       return { id, name: 'read', error: true, result: `Error reading file: ${msg}` };
@@ -973,27 +846,4 @@ function suggestHandlerForFormat(
   }
 
   return 'Use a tool that handles this format directly.';
-}
-
-/**
- * Drop cell chunks outside the requested range. Matches the
- * 1-indexed, inclusive semantics of cell_range. The summary chunk
- * (index === -1) is always kept.
- */
-function filterChunksByCellRange(
-  _text: string,
-  range: { start: number; end: number },
-  chunks: ParseChunk[],
-): string {
-  const summaryChunk = chunks.find((c) => c.index === -1);
-  const cellChunks = chunks.filter((c) => c.index !== -1);
-  const last = range.end === -1 ? cellChunks.length : range.end;
-  const first = range.start - 1;
-  const sliced = cellChunks.slice(first, last);
-  const parts: string[] = [];
-  if (summaryChunk && summaryChunk.type === 'text') parts.push(summaryChunk.text);
-  for (const c of sliced) {
-    if (c.type === 'text') parts.push(c.text);
-  }
-  return parts.join('\n\n');
 }

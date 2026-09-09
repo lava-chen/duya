@@ -11,22 +11,17 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  ReadTool,
-  _resetSharedParser,
-} from '../ReadTool.js';
+import { ReadTool } from '../ReadTool.js';
 
 let tmpDir: string;
 let tool: ReadTool;
 
 beforeEach(() => {
-  _resetSharedParser();
   tmpDir = mkdtempSync(join(tmpdir(), 'duya-readtool-conc-'));
   tool = new ReadTool();
 });
 
 afterEach(() => {
-  _resetSharedParser();
   rmSync(tmpDir, { recursive: true, force: true });
 });
 

@@ -7,6 +7,7 @@ import {
   getWorkerIdleTtlMs,
   isLowPowerEnv,
   selectIdleSessionIds,
+  workerLimitEnvFromConfig,
   WORKER_IDLE_TTL_MS,
   WORKER_IDLE_TTL_LOW_POWER_MS,
 } from '../worker-limits';
@@ -150,6 +151,34 @@ describe('getWorkerIdleTtlMs', () => {
   it('env override wins', () => {
     process.env.DUYA_WORKER_IDLE_TTL_MS = '60000';
     expect(getWorkerIdleTtlMs()).toBe(60000);
+  });
+});
+
+describe('workerLimitEnvFromConfig', () => {
+  it('returns empty env when no overrides are configured', () => {
+    expect(workerLimitEnvFromConfig(undefined)).toEqual({});
+    expect(workerLimitEnvFromConfig({})).toEqual({});
+    expect(workerLimitEnvFromConfig({ lowPower: 'auto' })).toEqual({});
+  });
+
+  it('maps each worker-pool field to its DUYA_* env var', () => {
+    expect(
+      workerLimitEnvFromConfig({
+        max_concurrent_workers: 16,
+        worker_idle_ttl_ms: 300000,
+        worker_max_memory_mb: 4096,
+      }),
+    ).toEqual({
+      DUYA_MAX_CONCURRENT_WORKERS: '16',
+      DUYA_WORKER_IDLE_TTL_MS: '300000',
+      DUYA_WORKER_MAX_MEMORY_MB: '4096',
+    });
+  });
+
+  it('treats 0 / negative / non-number values as unset', () => {
+    expect(workerLimitEnvFromConfig({ max_concurrent_workers: 0 })).toEqual({});
+    expect(workerLimitEnvFromConfig({ worker_idle_ttl_ms: -5 })).toEqual({});
+    expect(workerLimitEnvFromConfig({ worker_max_memory_mb: NaN })).toEqual({});
   });
 });
 
