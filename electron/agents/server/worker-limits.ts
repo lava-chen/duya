@@ -7,6 +7,7 @@
  * where the `electron` module is unavailable.
  */
 import * as os from 'os';
+import type { PerformanceConfig } from '../../config/schema';
 
 const GB = 1024 * 1024 * 1024;
 
@@ -74,6 +75,28 @@ export function getWorkerMaxMemoryMB(): number {
   const env = parsePositiveInt(process.env.DUYA_WORKER_MAX_MEMORY_MB);
   if (env !== null) return env;
   return os.totalmem() / GB < 8 ? 1024 : 2048;
+}
+
+function positiveIntFromValue(v: unknown): number | undefined {
+  if (typeof v !== 'number') return undefined;
+  return Number.isFinite(v) && v > 0 ? Math.trunc(v) : undefined;
+}
+
+/**
+ * Map `[performance]` worker-pool config into the same env vars the node-side
+ * limits read at boot. Absent / 0 / negative → `{}` (adaptive auto defaults
+ * apply). Electron-free pure function so callers can wire them wherever they
+ * like (e.g. the main process populating the agent-server spawn env).
+ */
+export function workerLimitEnvFromConfig(perf?: Partial<PerformanceConfig>): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  const max = positiveIntFromValue(perf?.max_concurrent_workers);
+  if (max !== undefined) env.DUYA_MAX_CONCURRENT_WORKERS = String(max);
+  const ttl = positiveIntFromValue(perf?.worker_idle_ttl_ms);
+  if (ttl !== undefined) env.DUYA_WORKER_IDLE_TTL_MS = String(ttl);
+  const mem = positiveIntFromValue(perf?.worker_max_memory_mb);
+  if (mem !== undefined) env.DUYA_WORKER_MAX_MEMORY_MB = String(mem);
+  return env;
 }
 
 /** Default idle TTL before an idle worker is reaped: 10 minutes. */

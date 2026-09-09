@@ -64,17 +64,17 @@ export const readInputSchema = z.object({
   line_range: lineRangeSchema
     .optional()
     .describe(
-      'Optional line range for text files. If specified, bypasses the document parser and reads the file as plain text.',
+      'Optional line range for text files. If specified, reads the file as plain text.',
     ),
   pages: pagesSchema
     .optional()
     .describe(
-      'Optional PDF page range, e.g. "1-5" or "3". Only valid for PDF files. If not provided, the entire document is read.',
+      'Optional PDF page range, e.g. "1-5" or "3". Retained for input compatibility; PDF parsing is no longer built in and returns an error pointing at the pdf skill.',
     ),
   cell_range: cellRangeSchema
     .optional()
     .describe(
-      'Optional cell range for Jupyter notebooks (.ipynb). 1-indexed, inclusive. Use -1 for end.',
+      'Optional cell range for Jupyter notebooks (.ipynb). Retained for input compatibility; notebook parsing is no longer built in.',
     ),
   max_tokens: z
     .number()
@@ -83,7 +83,7 @@ export const readInputSchema = z.object({
     .max(1_000_000)
     .optional()
     .describe(
-      'Optional token cap for the returned content (default output is capped at 50KB). Documents exceeding the limit include read metadata explaining the truncation.',
+      'Optional token cap for the returned content (default output is capped at 50KB).',
     ),
 });
 

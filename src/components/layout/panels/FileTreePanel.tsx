@@ -300,12 +300,6 @@ export function FileTreePanel({ tab, embedded, embeddedInPreview }: { tab?: Page
   const handleOpenFile = useCallback((treePath: string) => {
     const filePath = resolveTreePath(workingDirectory, treePath);
     setSelectedPath(treePath);
-    if (/\.(docx|pptx|xlsx)$/i.test(filePath)) {
-      window.dispatchEvent(new CustomEvent("duya:open-office-panel", {
-        detail: { filePath, workingDirectory },
-      }));
-      return;
-    }
     // When embedded inside FilePreviewPanel (PanelFileTreeSplit), dispatch
     // `duya:open-file` so the parent preview panel switches its current
     // file in place instead of opening a new tab. Note: the `embedded`

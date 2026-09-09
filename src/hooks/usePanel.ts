@@ -186,8 +186,6 @@ function dedupKey(pageId: PageId, params?: Record<string, unknown>): string {
       return `files::${(params?.workingDirectory as string | undefined) ?? ""}`;
     case "conductor":
       return `conductor::${(params?.canvasId as string | undefined) ?? "__active__"}`;
-    case "office":
-      return `office::${(params?.filePath as string | undefined) ?? "__picker__"}`;
     case "preview":
       return `preview::${(params?.filePath as string | undefined) ?? "__picker__"}`;
     case "browser":
@@ -689,25 +687,6 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       window.removeEventListener("duya:open-skill-preview", handleOpenSkillPreview as EventListener);
     };
   }, []);
-
-  useEffect(() => {
-    const handleOpenOfficePanel = (event: Event) => {
-      const detail = (event as CustomEvent<{ filePath?: string; workingDirectory?: string }>).detail;
-      const filePath = typeof detail?.filePath === "string" ? detail.filePath : "";
-      const workingDirectory = typeof detail?.workingDirectory === "string" ? detail.workingDirectory : "";
-      if (!filePath.trim()) return;
-      openOrActivatePage("office", {
-        filePath,
-        workingDirectory,
-        title: filePath.split(/[/\\]/).pop() || t('panel.office'),
-      });
-    };
-
-    window.addEventListener("duya:open-office-panel", handleOpenOfficePanel as EventListener);
-    return () => {
-      window.removeEventListener("duya:open-office-panel", handleOpenOfficePanel as EventListener);
-    };
-  }, [openOrActivatePage]);
 
   // Chat-surface canvas links (markdown pills, tool rows) open the canvas
   // in the sidebar Conductor panel. `dedupKey` folds on `canvasId`, so a

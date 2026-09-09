@@ -96,10 +96,8 @@ extraResources:
   - from: node_modules/node-pty/
     to: node-pty/
     filter: ["**/*"]
-  # Document parser sidecar is Windows-only (document-parser.exe is a
-  # PyInstaller Windows binary). It is declared under win.extraResources
-  # below to avoid shipping ~hundreds of MB of useless Windows binaries
-  # inside the macOS .app and Linux AppImage.
+  # The document-parser sidecar (PDF/Office extraction) was removed from
+  # the codebase; there is no extraResources entry for it anymore.
 
 afterPack: scripts/after-pack.js
 afterSign: scripts/after-sign.js
@@ -144,14 +142,6 @@ win:
   target:
     - target: nsis
       arch: [x64]
-  # Windows-only document parser sidecar (OPTIONAL). Only present when
-  # build/document-parser/ has been populated by `npm run build:docparser`.
-  # Kept here (not in the global extraResources) so macOS/Linux builds do
-  # not ship the Windows .exe/.dll/.pyd payload.
-  extraResources:
-    - from: build/document-parser/
-      to: document-parser/
-      filter: ["**/*"]
 
 nsis:
   oneClick: false

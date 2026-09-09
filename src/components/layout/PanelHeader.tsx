@@ -49,7 +49,6 @@ export function PanelHeader() {
       if (!cwd) return undefined;
       if (pageId === "terminal") return { cwd };
       if (pageId === "files") return { workingDirectory: cwd };
-      if (pageId === "office") return { workingDirectory: cwd };
       return undefined;
     },
     [cwd]
@@ -238,11 +237,11 @@ const AddPageMenu = forwardRef<
   HTMLDivElement,
   { onSelect: (pageId: PageId) => void }
 >(function AddPageMenu({ onSelect }, ref) {
-  // `office` is a passive surface — opened by the agent / external
+  // `preview` is a passive surface — opened by the agent / external
   // events, not chosen from the menu. Hide it here so the picker only
   // surfaces pages the user can launch themselves.
   const entries = Object.values(PAGE_REGISTRY).filter(
-    (entry) => entry.id !== "office" && entry.id !== "preview"
+    (entry) => entry.id !== "preview"
   );
 
   return (

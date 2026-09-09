@@ -23,11 +23,9 @@ vi.mock('node:os', async (importOriginal) => {
 });
 import {
   ReadTool,
-  _resetSharedParser,
   isMainModelMultimodal,
   type ReadInput,
 } from '../ReadTool.js';
-import { _resetFileParserConfig } from '../../../file-parser/config.js';
 import { Jimp } from 'jimp';
 import type { ToolUseContext, ToolUseContextOptions } from '../../../types.js';
 
@@ -35,15 +33,11 @@ let tmpDir: string;
 let tool: ReadTool;
 
 beforeEach(() => {
-  _resetFileParserConfig();
-  _resetSharedParser();
   tmpDir = mkdtempSync(join(tmpdir(), 'duya-readtool-'));
   tool = new ReadTool();
 });
 
 afterEach(() => {
-  _resetFileParserConfig();
-  _resetSharedParser();
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -319,30 +313,6 @@ describe('ReadTool input validation (new fields)', () => {
   });
 });
 
-describe('ReadTool kill switch (DUYA_FILE_PARSER_DISABLED)', () => {
-  it('blocks document reads when disabled via env', async () => {
-    process.env.DUYA_FILE_PARSER_DISABLED = '1';
-    _resetFileParserConfig();
-    _resetSharedParser();
-    const f = join(tmpDir, 'img.png');
-    await makePng(f);
-    const result = await tool.execute({ file_path: f });
-    expect(result.error).toBe(true);
-    expect(result.result).toContain('DUYA_FILE_PARSER_DISABLED');
-  });
-
-  it('does NOT block text reads when disabled (text path is independent)', async () => {
-    process.env.DUYA_FILE_PARSER_DISABLED = '1';
-    _resetFileParserConfig();
-    _resetSharedParser();
-    const f = join(tmpDir, 'a.txt');
-    writeFileSync(f, 'plain text content');
-    const result = await tool.execute({ file_path: f });
-    expect(result.error).toBeFalsy();
-    expect(result.result).toContain('plain text content');
-  });
-});
-
 describe('ReadTool.renderToolResultMessage', () => {
   it('renders error results as type=error', () => {
     const msg = tool.renderToolResultMessage({
@@ -404,8 +374,6 @@ describe('ReadTool allowedRoots sandbox', () => {
   let outside: string;
 
   beforeEach(() => {
-    _resetFileParserConfig();
-    _resetSharedParser();
     root = mkdtempSync(join(tmpdir(), 'duya-read-roots-'));
     outside = mkdtempSync(join(tmpdir(), 'duya-read-out-'));
     mkdirSync(join(root, 'memory'), { recursive: true });
@@ -470,11 +438,12 @@ function makeContext(model?: string): ToolUseContext {
 
 describe('ReadTool multimodal direct-read (plan 428)', () => {
   beforeEach(() => {
-    // Clear any kill-switch env leak from the 'DUYA_FILE_PARSER_DISABLED'
-    // describe block above so document-mode reads actually run here.
-    delete process.env.DUYA_FILE_PARSER_DISABLED;
-    _resetFileParserConfig();
-    _resetSharedParser();
+    tmpDir = mkdtempSync(join(tmpdir(), 'duya-readtool-mm-'));
+    tool = new ReadTool();
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
   });
 
   it('returns image inline for a multimodal main model instead of rejecting', async () => {

@@ -104,29 +104,13 @@ function PdfPreview({ attachment }: { attachment: FileAttachment }) {
   );
 }
 
-function DocPreview({ attachment, onClose }: { attachment: FileAttachment; onClose: () => void }) {
-  const canOpenInOffice = !!attachment.path && /\.(docx|pptx|xlsx)$/i.test(attachment.path);
-
-  const openInOffice = () => {
-    if (!attachment.path) return;
-    window.dispatchEvent(new CustomEvent('duya:open-office-panel', {
-      detail: { filePath: attachment.path },
-    }));
-    onClose();
-  };
-
+function DocPreview({ attachment }: { attachment: FileAttachment; onClose: () => void }) {
   return (
     <div className="attachment-preview-doc-wrapper">
       <div className="attachment-preview-doc-header">
         <span className="attachment-preview-doc-filename">{attachment.name}</span>
       </div>
       <div className="attachment-preview-doc-content">
-        {canOpenInOffice && (
-          <Button type="button" variant="ghost" size="sm" className="attachment-preview-pdf-open-btn" onClick={openInOffice}>
-            <DownloadIcon size={14} />
-            <span>Open in DUYA Office</span>
-          </Button>
-        )}
         {attachment.text ? (
           <pre className="attachment-preview-doc-text">{attachment.text}</pre>
         ) : attachment.thumbnail ? (
@@ -140,7 +124,7 @@ function DocPreview({ attachment, onClose }: { attachment: FileAttachment; onClo
             <FileTextIcon size={48} />
             <span>Word Document</span>
             <span className="attachment-preview-doc-hint">
-              {attachment.path ? 'Document parsed content will appear here' : 'No preview available'}
+              {attachment.path ? 'No preview available' : 'No preview available'}
             </span>
           </div>
         )}

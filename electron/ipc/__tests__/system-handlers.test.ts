@@ -31,11 +31,6 @@ const mocks = vi.hoisted(() => ({
     getInterruptedSessions: vi.fn(() => []),
   },
   agentServerPort: 0,
-  docParser: {
-    parse: vi.fn(async () => ({ content: 'parsed', metadata: {} })),
-    getCapabilities: vi.fn(() => ({ formats: ['pdf'] })),
-    isReady: vi.fn(() => true),
-  },
   logger: {
     info: vi.fn(),
     error: vi.fn(),
@@ -107,10 +102,6 @@ vi.mock('../../agents/process-pool/agent-process-pool', () => ({
 
 vi.mock('../../config/store-instance', () => ({
   getConfigStore: () => mocks.configStore,
-}));
-
-vi.mock('../../services/document-parser/index', () => ({
-  getDocumentParser: () => mocks.docParser,
 }));
 
 vi.mock('fs', () => mocks.fsState);

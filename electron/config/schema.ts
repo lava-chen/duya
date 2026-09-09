@@ -388,6 +388,22 @@ export interface ProjectEntry {
  */
 export interface PerformanceConfig {
   lowPower: 'auto' | 'on' | 'off';
+  /**
+   * Worker-pool tuning the agent server reads at boot (plan 426). Each maps
+   * to its `DUYA_*` env override; when set here it tunes the node-side
+   * adaptive defaults, e.g. raising `max_concurrent_workers` on high-core /
+   * high-RAM machines that otherwise bump into the 503-capacity guard. Direct
+   * `DUYA_*` env vars (ops/testing) still win over config.toml.
+   *
+   *   - `max_concurrent_workers`: hard concurrency ceiling (clamped to 16).
+   *   - `worker_idle_ttl_ms`: idle TTL before an idle worker is reaped.
+   *   - `worker_max_memory_mb`: per-worker `--max-old-space-size` heap cap.
+   *
+   * Absent / 0 / negative → keep the adaptive auto default.
+   */
+  max_concurrent_workers?: number;
+  worker_idle_ttl_ms?: number;
+  worker_max_memory_mb?: number;
 }
 
 /** [apps] entry — reserved app/connector toggle (decision 17, not wired). */

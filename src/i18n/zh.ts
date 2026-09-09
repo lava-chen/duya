@@ -1123,7 +1123,6 @@ const zh: Record<TranslationKey, string> = {
   'panel.conductor': '指挥台',
   'panel.terminal': '终端',
   'panel.browser': '浏览器',
-  'panel.office': 'Office',
   'panel.botSettings': 'Bot 设置',
   'panel.roomSettings': '群聊设置',
   'panel.botSettings.identity': '身份与模型',

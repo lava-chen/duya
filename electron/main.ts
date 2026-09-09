@@ -3,9 +3,8 @@ import { app, BrowserWindow, ipcMain, protocol, session } from 'electron';
 // (`yd = !e1.app.isPackaged`, `xj = process.env.DUYA_TEST === '1'`, etc.) BEFORE
 // any other module's lazy factory runs. Without this, esbuild's `ye(() => {...})`
 // wrappers defer bootstrap.ts's `require('electron').app` until first export access;
-// modules like messaging/index (S0e) invoke their own factories (`uee()` for
-// document-parser) before reaching `bj()` for bootstrap, and document-parser's
-// factory body dereferences bootstrap's `yd` — crashing with
+// modules that invoke their own factories before reaching `bj()` for bootstrap
+// would dereference bootstrap's `yd` — crashing with
 // `Cannot read properties of undefined (reading 'isPackaged')`.
 // Use CJS `require` so esbuild emits a synchronous `require(...)` call at the
 // top of the bundle instead of a lazy ESM import. bootstrap's top level is
@@ -49,7 +48,6 @@ import { initRoutineListenerHub } from './automation/listener-hub';
 import { initLogger, getLogger, LogComponent } from './logging/index';
 import { initUpdater, checkForUpdates, downloadUpdate, installUpdate, getUpdaterState, cleanupUpdater } from './services/updater';
 import { scanSkillFile, type SkillFinding, type SkillScanResult } from '../packages/agent/src/security/skillScanner.js';
-import { initDocumentParser, getDocumentParser } from './services/document-parser/index';
 import { resolveMemoryModel } from './services/providers/memory-model-resolution';
 import { createRagIndexExecutor, type RagRefreshResult } from './memory/rag_refresh';
 import { toLegacyApiProvider } from '../src/lib/providers/legacy';
@@ -772,13 +770,6 @@ if (gotTheLock) {
       } catch (error) {
         logger.warn('Failed to start memory worker', { error: error instanceof Error ? error.message : String(error) }, LogComponent.DB);
       }
-    }
-
-    try {
-      const docParser = initDocumentParser();
-      await docParser.start();
-    } catch (error) {
-      logger.error('Failed to start document parser', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
     }
 
     // Apply app auto-start setting (Windows login)

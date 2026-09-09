@@ -1135,7 +1135,6 @@ const en = {
   'panel.conductor': 'Conductor',
   'panel.terminal': 'Terminal',
   'panel.browser': 'Browser',
-  'panel.office': 'Office',
   'panel.botSettings': 'Bot Settings',
   'panel.roomSettings': 'Room Settings',
   'panel.botSettings.identity': 'Identity & Model',
