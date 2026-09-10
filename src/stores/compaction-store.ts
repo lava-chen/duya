@@ -19,8 +19,31 @@
  */
 import { create } from 'zustand';
 
-export type CompactionPhase = 'idle' | 'compacting' | 'done' | 'error' | 'degraded';
+/**
+ * Plan 517 P3 expanded the phase union to mirror the per-step boundaries
+ * the worker emits. The terminal phases (`done`, `error`, `degraded`) and
+ * the legacy umbrella (`compacting`) are preserved for backward compat.
+ */
+export type CompactionPhase =
+  | 'idle'
+  | 'compacting'
+  | 'done'
+  | 'error'
+  | 'degraded'
+  | 'projecting'
+  | 'cutting'
+  | 'summarizing'
+  | 'rebuilding'
+  | 'reinjecting'
+  | 'trimming'
+  | 'over_threshold';
 
+/**
+ * Plan 517 P3: surface the most recent step boundary from the worker so
+ * the inline compact row in MessageList can show "summarizing 32
+ * messages..." style text without each render needing to look up the
+ * session in a separate event log.
+ */
 export interface CompactionState {
   phase: CompactionPhase;
   /** Set on 'done' / 'error' so the toast can show counts or the failure reason. */
@@ -30,6 +53,10 @@ export interface CompactionState {
   errorMessage?: string;
   /** Rolling count of consecutive compaction errors since the last success. */
   failureCount?: number;
+  /** Most recent step message count surfaced by the worker. */
+  stepMessageCount?: number;
+  /** Tokens retained (over-threshold path) — surfaced alongside phase. */
+  available?: number;
   /** When the latest phase change happened; used to clear the toast after a delay. */
   updatedAt: number;
 }
@@ -37,8 +64,17 @@ export interface CompactionState {
 interface CompactionStoreState {
   bySession: Record<string, CompactionState | undefined>;
   setCompacting: (sessionId: string) => void;
+  setStep: (
+    sessionId: string,
+    info: {
+      step: 'projecting' | 'cutting' | 'summarizing' | 'rebuilding' | 'reinjecting' | 'trimming';
+      phase: 'started' | 'finished';
+      messageCount?: number;
+    },
+  ) => void;
   setDone: (sessionId: string, info: { strategy: string; tokensRemoved: number; tokensRetained: number }) => void;
   setError: (sessionId: string, message: string) => void;
+  setOverThreshold: (sessionId: string, info: { tokensRetained: number; available: number }) => void;
   clear: (sessionId: string) => void;
 }
 
@@ -61,6 +97,27 @@ export const useCompactionStore = create<CompactionStoreState>((set) => ({
         [sessionId]: { phase: 'compacting', updatedAt: Date.now() },
       },
     })),
+
+  setStep: (sessionId, info) =>
+    set((s) => {
+      // Plan 517 P3: a fresh 'started' boundary always wins over the
+      // previous step's carry-over. The renderer's MessageList reads
+      // phase + stepMessageCount off this row.
+      const phase =
+        info.phase === 'started' ? (info.step as CompactionPhase) : s.bySession[sessionId]?.phase ?? 'compacting'
+      const prev = s.bySession[sessionId]
+      return {
+        bySession: {
+          ...s.bySession,
+          [sessionId]: {
+            ...(prev ?? { phase: 'idle', updatedAt: 0 }),
+            phase,
+            stepMessageCount: info.messageCount ?? prev?.stepMessageCount,
+            updatedAt: Date.now(),
+          },
+        },
+      }
+    }),
 
   setDone: (sessionId, info) =>
     set((s) => ({
@@ -107,6 +164,23 @@ export const useCompactionStore = create<CompactionStoreState>((set) => ({
       const next = { ...s.bySession };
       delete next[sessionId];
       return { bySession: next };
+    }),
+
+  setOverThreshold: (sessionId, info) =>
+    set((s) => {
+      const prev = s.bySession[sessionId];
+      return {
+        bySession: {
+          ...s.bySession,
+          [sessionId]: {
+            ...(prev ?? { phase: 'idle', updatedAt: 0 }),
+            phase: 'over_threshold',
+            tokensRetained: info.tokensRetained,
+            available: info.available,
+            updatedAt: Date.now(),
+          },
+        },
+      }
     }),
 }));
 

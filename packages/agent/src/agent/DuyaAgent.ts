@@ -1677,11 +1677,44 @@ export class duyaAgent {
         }
         logger.info(`[Agent] Turn ${turnCount}: Proactive compaction triggered`);
         yield { type: 'compact:start' } as unknown as SSEEvent;
+        // Plan 517 P3: subscribe to CompactionManager events for the
+        // duration of this compaction. Step + over-threshold events are
+        // pushed into a buffer that we drain synchronously after the
+        // await completes — order is preserved by emit order, and the
+        // single buffering point keeps the agent loop free of nested
+        // event handlers.
+        const stepBuffer: Array<SSEEvent> = []
+        const unsubscribe = this.compactionManager.addEventHandler((event) => {
+          if (event.type === 'compaction_step') {
+            stepBuffer.push({
+              type: 'compact:step',
+              data: {
+                step: event.step,
+                phase: event.phase,
+                messageCount: event.messageCount,
+                tokensBefore: event.tokensBefore,
+                tokensEstimated: event.tokensEstimated,
+                filesCached: event.filesCached,
+              },
+            } as unknown as SSEEvent)
+          } else if (event.type === 'compaction_over_threshold') {
+            stepBuffer.push({
+              type: 'compact:over_threshold',
+              data: {
+                tokensRetained: event.tokensRetained,
+                available: event.available,
+              },
+            } as unknown as SSEEvent)
+          }
+        })
         try {
           const compactEntry = await this.compactionController.compactProactive({
             trigger: 'auto',
             ...(imageTriggered ? { force: true } : {}),
           });
+          // Drain buffered step + over-threshold events before yielding
+          // compact:done so the renderer sees the lifecycle in order.
+          for (const ev of stepBuffer) yield ev
           if (compactEntry) {
             logger.info(`[Agent] Turn ${turnCount}: Compacted with strategy=${compactEntry.strategy}, removed=${compactEntry.tokensBefore} tokens, retained=${compactEntry.tokensAfter ?? 0} tokens`);
             // Plan 517 P2.1 + P2.3: pin the cooldown baseline. The next

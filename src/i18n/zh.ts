@@ -346,6 +346,18 @@ const zh: Record<TranslationKey, string> = {
   'streaming.toolAction.compact.failed': '上下文压缩失败',
   'streaming.toolAction.compact.messagesCompacted.one': '{count} 条消息',
   'streaming.toolAction.compact.messagesCompacted.other': '{count} 条消息',
+  // Plan 517 P3: per-step verb shown while the worker is inside compact().
+  // Each verb is paired with the message count the worker surfaces so the
+  // user can see how far along the projection/summarize/trim pipeline
+  // currently is.
+  'streaming.toolAction.compact.step.projecting': '正在投影会话上下文…',
+  'streaming.toolAction.compact.step.cutting': '正在定位安全切割点…',
+  'streaming.toolAction.compact.step.summarizing': '正在压缩总结（{count} 条消息）…',
+  'streaming.toolAction.compact.step.rebuilding': '正在重建消息结构…',
+  'streaming.toolAction.compact.step.reinjecting': '正在重新注入文件、技能与工具上下文（{count} 项已缓存）…',
+  'streaming.toolAction.compact.step.trimming': '仍超阈值，正在裁剪…',
+  'streaming.toolAction.compact.overThreshold': '自动压缩已暂停 — 压缩后仍超阈值',
+  'streaming.toolAction.compact.doneWithStats': '已压缩：{tokensBefore} \u2192 {tokensRetained} tokens（{strategy}）',
 
   'permission.allow': '允许',
   'permission.deny': '拒绝',
