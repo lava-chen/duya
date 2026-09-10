@@ -22,7 +22,7 @@ export default defineConfig({
   },
   // Pre-bundle heavy UI / state libs up-front so the first browser
   // request doesn't have to wait for esbuild to crawl them on demand.
-  // Heavy deps: antd, framer-motion, streamdown, react-syntax-highlighter,
+  // Heavy deps: antd, framer-motion, react-syntax-highlighter,
   // react-grid-layout, xterm… (plus the SDK CommonJS entries listed below).
   optimizeDeps: {
     // `entries` restricts the dep crawler to the app entry's real import
@@ -60,7 +60,6 @@ export default defineConfig({
       'remark-gfm',
       'react-syntax-highlighter',
       'react-grid-layout',
-      'streamdown',
       'html2canvas',
       '@xterm/xterm',
       '@xterm/addon-fit',
@@ -125,10 +124,6 @@ export default defineConfig({
           // State management
           if (id.includes('node_modules/zustand')) {
             return 'vendor-state';
-          }
-          // Streamdown and plugins
-          if (id.includes('node_modules/streamdown')) {
-            return 'vendor-streamdown';
           }
         },
       },
