@@ -496,7 +496,7 @@ export function BotDirectChatView({
     handlePermissionRequest,
   } = usePermissions({ sessionId, permissionProfile: 'auto' });
   useEffect(() => {
-    return subscribeToPermissions(sessionId, handlePermissionRequest);
+    return subscribeToPermissions(sessionId, (req) => handlePermissionRequest(req));
   }, [sessionId, handlePermissionRequest]);
 
   // Plan 503: connector elicitation card for bot-direct. `connect_app` /

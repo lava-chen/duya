@@ -70,7 +70,7 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
   type AwaitingInputKind = 'ask' | 'permission' | 'auth';
   const [awaitingInput, setAwaitingInput] = useState<AwaitingInputKind | null>(null);
   useEffect(() => {
-    const unsubPerm = subscribeToPermissions(thread.id, (request: PermissionRequestEvent) => {
+    const unsubPerm = subscribeToPermissions(thread.id, (request: PermissionRequestEvent | null) => {
       if (request == null) {
         setAwaitingInput(null);
         return;

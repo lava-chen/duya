@@ -45,7 +45,7 @@ export interface UsePermissionsReturn {
   /** Clear the pending permission state */
   clearPermission: () => void;
   /** Handle incoming permission request events from SSE */
-  handlePermissionRequest: (request: PermissionRequestEvent) => void;
+  handlePermissionRequest: (request: PermissionRequestEvent | null) => void;
 }
 
 /**
@@ -158,7 +158,12 @@ export function usePermissions(options: UsePermissionsOptions = {}): UsePermissi
 
   // Handle permission request events from SSE
   // This should be called by the stream subscription when a permission_request event arrives
-  const handlePermissionRequest = useCallback((request: PermissionRequestEvent) => {
+  const handlePermissionRequest = useCallback<(request: PermissionRequestEvent | null) => void>((request) => {
+    if (request == null) {
+      setPendingPermission(null);
+      setPermissionResolved(null);
+      return;
+    }
     if (lastSeenIdRef.current === request.id) {
       // B5: same permission id replayed. Leave UI state alone so the
       // user's in-progress decision is not clobbered. (The first POST in

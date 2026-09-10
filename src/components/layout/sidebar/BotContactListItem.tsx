@@ -194,7 +194,7 @@ export function BotContactListItem({
       setAwaitingInput(null);
       return;
     }
-    const unsubPerm = subscribeToPermissions(sessionId, (request: PermissionRequestEvent) => {
+    const unsubPerm = subscribeToPermissions(sessionId, (request: PermissionRequestEvent | null) => {
       // AskUserQuestion takes precedence over generic tool approvals:
       // both arrive on the same channel, but the user expects the
       // "answer this question" pill over a background approval badge.

@@ -605,9 +605,9 @@ interface SessionState {
   listeners: Set<(snapshot: SessionStreamSnapshot) => void>;
   fieldListeners: FieldListeners;
   streamingEventsListeners: Set<(events: StreamingEvent[]) => void>;
-  permissionListeners: Set<(request: PermissionRequestEvent) => void>;
+  permissionListeners: Set<(request: PermissionRequestEvent | null) => void>;
   /** Plan 450: listeners for app-connection re-authorization events. */
-  authRequiredListeners: Set<(data: ConnectorAuthRequiredData) => void>;
+  authRequiredListeners: Set<(data: ConnectorAuthRequiredData | null) => void>;
   /** Plan 224 follow-up: listeners for agent-initiated runtime mode switches. */
   modeChangedListeners: Set<(event: ModeChangedEvent) => void>;
   goalUpdatedListeners: Set<(event: GoalUpdatedEvent) => void>;
@@ -1456,6 +1456,7 @@ class StreamSessionManager {
     state.agentProgressEvents = [];
     state.streamingEvents = [];
     state.pendingPermissionRequest = null;
+    this.notifyPermissionListeners(sessionId, null);
     state.loadedToolUseIds = new Set();
     state.loadedToolResultIds = new Set();
     // Plan 461: fresh run → no stale partial tool inputs or coalescing timer.
@@ -2731,6 +2732,7 @@ class StreamSessionManager {
     if (reason === 'max_turns' || reason === 'repeated_tool_calls') {
       s.phase = 'error';
       s.pendingPermissionRequest = null;
+      this.notifyPermissionListeners(sessionId, null);
       s.statusText = undefined;
       s.error = formatDoneReason(reason);
       s.errorCode = reason;
@@ -2753,6 +2755,7 @@ class StreamSessionManager {
     if (reason === 'aborted') {
       s.phase = 'aborted';
       s.pendingPermissionRequest = null;
+      this.notifyPermissionListeners(sessionId, null);
       s.statusText = undefined;
       s.error = formatDoneReason(reason);
       s.errorCode = reason;
@@ -2772,6 +2775,7 @@ class StreamSessionManager {
     // Normal completion (completed / end_turn / stop_sequence / undefined).
     s.phase = 'completed';
     s.pendingPermissionRequest = null;
+    this.notifyPermissionListeners(sessionId, null);
     s.statusText = undefined;
     s.completedAt = Date.now();
     this.notifyPhaseListeners(sessionId, s.phase);
@@ -3044,7 +3048,7 @@ class StreamSessionManager {
 
   subscribeToPermissions(
     sessionId: string,
-    listener: (request: PermissionRequestEvent) => void
+    listener: (request: PermissionRequestEvent | null) => void
   ): () => void {
     const state = this.getOrCreateState(sessionId);
     state.permissionListeners.add(listener);
@@ -3067,7 +3071,7 @@ class StreamSessionManager {
    */
   subscribeToConnectorAuthRequired(
     sessionId: string,
-    listener: (data: ConnectorAuthRequiredData) => void,
+    listener: (data: ConnectorAuthRequiredData | null) => void,
   ): () => void {
     const state = this.getOrCreateState(sessionId);
     state.authRequiredListeners.add(listener);
@@ -3088,6 +3092,7 @@ class StreamSessionManager {
     const state = this.sessions.get(sessionId);
     if (!state) return;
     state.pendingConnectorAuthRequest = null;
+    this.notifyAuthRequiredListeners(sessionId, null);
   }
 
   /**
@@ -3102,6 +3107,7 @@ class StreamSessionManager {
     const state = this.sessions.get(sessionId);
     if (state) {
       state.pendingPermissionRequest = null;
+      this.notifyPermissionListeners(sessionId, null);
     }
   }
 
@@ -3337,6 +3343,32 @@ class StreamSessionManager {
     if (!state) return;
     state.fieldListeners.dbPersisted.forEach((listener) => {
       try { listener(event); } catch (e) { console.error(e); }
+    });
+  }
+
+  /**
+   * Plan 516 — notify permission / connector-auth subscribers when the
+   * pending request is cleared (user answered, stream ended, fresh run).
+   * The push path (permission_request event handler) already notifies
+   * listeners with the event; the clear path previously only mutated
+   * state, leaving subscribers (e.g. the sidebar awaiting-input pill
+   * in BotContactListItem / ThreadListItem) stuck on the stale request
+   * until remount. Always pair the push with a clear notification so
+   * listeners can drop the pill.
+   */
+  private notifyPermissionListeners(sessionId: string, request: PermissionRequestEvent | null): void {
+    const state = this.sessions.get(sessionId);
+    if (!state) return;
+    state.permissionListeners.forEach((listener) => {
+      try { listener(request); } catch (e) { console.error(e); }
+    });
+  }
+
+  private notifyAuthRequiredListeners(sessionId: string, request: ConnectorAuthRequiredData | null): void {
+    const state = this.sessions.get(sessionId);
+    if (!state) return;
+    state.authRequiredListeners.forEach((listener) => {
+      try { listener(request); } catch (e) { console.error(e); }
     });
   }
 
@@ -4294,7 +4326,7 @@ export const ensureSession = (sessionId: string) => streamSessionManager.ensureS
 export const startStream = (params: StartStreamParams) => streamSessionManager.startStream(params);
 export const subscribeToConnectorAuthRequired = (
   sessionId: string,
-  listener: (data: ConnectorAuthRequiredData) => void,
+  listener: (data: ConnectorAuthRequiredData | null) => void,
 ) => streamSessionManager.subscribeToConnectorAuthRequired(sessionId, listener);
 export const clearConnectorAuthRequired = (sessionId: string) =>
   streamSessionManager.clearConnectorAuthRequired(sessionId);
@@ -4314,7 +4346,7 @@ export const subscribe = (sessionId: string, listener: (snapshot: SessionStreamS
   streamSessionManager.subscribe(sessionId, listener);
 export const subscribeSession = (sessionId: string, listener: (snapshot: SessionStreamSnapshot) => void) =>
   streamSessionManager.subscribeSession(sessionId, listener);
-export const subscribeToPermissions = (sessionId: string, listener: (request: PermissionRequestEvent) => void) =>
+export const subscribeToPermissions = (sessionId: string, listener: (request: PermissionRequestEvent | null) => void) =>
   streamSessionManager.subscribeToPermissions(sessionId, listener);
 export const clearPendingPermission = (sessionId: string) =>
   streamSessionManager.clearPendingPermission(sessionId);
