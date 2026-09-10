@@ -286,6 +286,158 @@
   white-space: nowrap;
 }
 
+/* Terminal appearance controls (font-size zoom + theme picker). Kept out of
+ * the way until the panel is hovered/focused, then pinned open while the
+ * theme menu is showing. */
+.terminal-panel-appearance {
+  position: absolute;
+  z-index: 4;
+  top: 6px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--terminal-border);
+  border-radius: 8px;
+  background: var(--terminal-toolbar-bg);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.terminal-panel:hover .terminal-panel-appearance,
+.terminal-panel:focus-within .terminal-panel-appearance,
+.terminal-panel-appearance[data-open="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.terminal-appearance-btn {
+  position: relative;
+}
+
+.terminal-appearance-decor {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  color: currentColor;
+  pointer-events: none;
+}
+
+.terminal-appearance-menu {
+  position: absolute;
+  z-index: 6;
+  top: 36px;
+  right: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 200px;
+  padding: 5px;
+  border: 1px solid var(--terminal-border);
+  border-radius: 10px;
+  background: var(--terminal-suggestion-bg);
+  box-shadow: 0 14px 34px var(--terminal-suggestion-shadow);
+  backdrop-filter: blur(12px);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.terminal-appearance-menu-title {
+  padding: 4px 8px 5px;
+  color: var(--terminal-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.terminal-appearance-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.terminal-appearance-menu-item:hover {
+  background: var(--terminal-button-hover-bg);
+  color: var(--terminal-button-hover-color);
+}
+
+.terminal-appearance-menu-item[data-active="true"] {
+  color: var(--accent);
+}
+
+.terminal-appearance-swatch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 26px;
+  height: 18px;
+  border-radius: 5px;
+  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+  font-size: 9px;
+  line-height: 1;
+}
+
+.terminal-appearance-swatch-glyph {
+  opacity: 0.85;
+}
+
+.terminal-appearance-menu-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-appearance-menu-check {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.terminal-appearance-menu-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  padding: 6px 8px 3px;
+  border-top: 1px solid var(--terminal-border);
+  color: var(--terminal-muted);
+  font-size: 11px;
+}
+
+.terminal-appearance-menu-foot-label {
+  flex: 1;
+}
+
+.terminal-appearance-menu-foot-value {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.terminal-appearance-menu-foot-renderer {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--accent-soft, rgba(99, 102, 241, 0.16));
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
 .terminal-reference-chip-list {
   display: none;
   flex-wrap: wrap;

@@ -1,13 +1,25 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowClockwiseIcon, ChatCircleTextIcon, QuotesIcon, XCircleIcon } from "@/components/icons";
+import {
+  ArrowClockwiseIcon,
+  ChatCircleTextIcon,
+  CheckIcon,
+  MinusIcon,
+  PaintBucketIcon,
+  PlusIcon,
+  QuotesIcon,
+  TextAaIcon,
+  XCircleIcon,
+} from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import {
   killTerminal,
@@ -20,6 +32,13 @@ import {
   type TerminalHandle,
   type TerminalSuggestion,
 } from "@/lib/terminal-ipc";
+import {
+  TERMINAL_FONT_SIZE_MAX,
+  TERMINAL_FONT_SIZE_MIN,
+  TERMINAL_FONT_SIZE_STEP,
+  useTerminalAppearanceStore,
+} from "@/stores/terminal-appearance-store";
+import { TERMINAL_THEME_PRESETS, resolveTerminalTheme } from "@/lib/terminal-themes";
 import type { PageTab } from "./registry";
 
 interface Props {
@@ -28,6 +47,9 @@ interface Props {
 }
 
 type Status = "spawning" | "ready" | "exited" | "error";
+
+/** Renderer actually powering the terminal: GPU (WebGL) or the DOM fallback. */
+type RendererKind = "webgl" | "dom";
 
 interface QuoteEventDetail {
   terminalId: string;
@@ -65,36 +87,6 @@ function applyInputToLine(current: string, data: string): { line: string; submit
   return { line, submitted };
 }
 
-function applyTerminalTheme(term: Terminal) {
-  term.options.theme = terminalTheme();
-}
-
-function terminalTheme() {
-  const styles = getComputedStyle(document.documentElement);
-  return {
-    background: styles.getPropertyValue("--terminal-bg").trim() || "#111111",
-    foreground: styles.getPropertyValue("--text").trim() || "#e5e7eb",
-    cursor: styles.getPropertyValue("--accent").trim() || "#7c9cff",
-    selectionBackground: "rgba(124, 156, 255, 0.28)",
-    black: "#1f2430",
-    red: "#f7768e",
-    green: "#9ece6a",
-    yellow: "#e0af68",
-    blue: "#7aa2f7",
-    magenta: "#bb9af7",
-    cyan: "#7dcfff",
-    white: "#c0caf5",
-    brightBlack: "#414868",
-    brightRed: "#ff7a93",
-    brightGreen: "#b9f27c",
-    brightYellow: "#ffcf7a",
-    brightBlue: "#8db0ff",
-    brightMagenta: "#caa9ff",
-    brightCyan: "#9be8ff",
-    brightWhite: "#ffffff",
-  };
-}
-
 export function TerminalPanel({ tab }: Props) {
   const { t } = useTranslation();
   const panelRef = useRef<HTMLDivElement>(null);
@@ -105,12 +97,36 @@ export function TerminalPanel({ tab }: Props) {
   const currentLineRef = useRef("");
   const suggestionRef = useRef<TerminalSuggestion | null>(null);
   const writeSeqRef = useRef(0);
+  const webglRef = useRef<WebglAddon | null>(null);
   const [status, setStatus] = useState<Status>("spawning");
   const [handle, setHandle] = useState<TerminalHandle | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selection, setSelection] = useState("");
   const [selectionMenu, setSelectionMenu] = useState<{ left: number; top: number } | null>(null);
   const [suggestion, setSuggestion] = useState<TerminalSuggestion | null>(null);
+  const [renderer, setRenderer] = useState<RendererKind>("dom");
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
+
+  const fontSize = useTerminalAppearanceStore((s) => s.fontSize);
+  const themeId = useTerminalAppearanceStore((s) => s.themeId);
+  const stepFontSize = useTerminalAppearanceStore((s) => s.stepFontSize);
+  const resetFontSize = useTerminalAppearanceStore((s) => s.resetFontSize);
+  const setThemeId = useTerminalAppearanceStore((s) => s.setThemeId);
+
+  // Mirror store-backed appearance into refs so the (mount-once) terminal
+  // creation effect can read the latest values without being torn down.
+  const themeIdRef = useRef(themeId);
+  const fontSizeRef = useRef(fontSize);
+  useEffect(() => {
+    themeIdRef.current = themeId;
+    fontSizeRef.current = fontSize;
+  }, [fontSize, themeId]);
+
+  const applyTheme = useCallback(() => {
+    const term = terminalRef.current;
+    if (!term) return;
+    term.options.theme = resolveTerminalTheme(themeIdRef.current);
+  }, []);
 
   const fitAndResize = useCallback(() => {
     const term = terminalRef.current;
@@ -169,14 +185,15 @@ export function TerminalPanel({ tab }: Props) {
     if (!container) return;
 
     const term = new Terminal({
-      allowProposedApi: false,
+      // The Unicode 11 width addon reads `term.unicode`, a proposed API.
+      allowProposedApi: true,
       convertEol: true,
       cursorBlink: true,
       fontFamily: "JetBrains Mono, Cascadia Mono, SFMono-Regular, Consolas, monospace",
-      fontSize: 13,
+      fontSize: fontSizeRef.current,
       lineHeight: 1.35,
       scrollback: 5000,
-      theme: terminalTheme(),
+      theme: resolveTerminalTheme(themeIdRef.current),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -184,6 +201,52 @@ export function TerminalPanel({ tab }: Props) {
     term.open(container);
     terminalRef.current = term;
     fitAddonRef.current = fit;
+
+    // Unicode 11 width tables: correct cell widths for CJK and emoji.
+    try {
+      term.loadAddon(new Unicode11Addon());
+      term.unicode.activeVersion = "11";
+    } catch {
+      // Proposed API unavailable; keep the bundled Unicode 6 tables.
+    }
+
+    // GPU-accelerated renderer, degrading gracefully to the DOM renderer when
+    // WebGL2 is unavailable or the context is lost (e.g. GPU reset).
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => {
+        webgl.dispose();
+        webglRef.current = null;
+        setRenderer("dom");
+      });
+      term.loadAddon(webgl);
+      webglRef.current = webgl;
+      setRenderer("webgl");
+    } catch {
+      webglRef.current = null;
+      setRenderer("dom");
+    }
+
+    // Ctrl/Cmd +/-/0 adjust the terminal font size. Consuming the event keeps
+    // it away from the shell and from the browser's page-zoom shortcut.
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.type !== "keydown" || event.altKey) return true;
+      if (!event.ctrlKey && !event.metaKey) return true;
+      if (event.key === "=" || event.key === "+") {
+        stepFontSize(TERMINAL_FONT_SIZE_STEP);
+        return false;
+      }
+      if (event.key === "-" || event.key === "_") {
+        stepFontSize(-TERMINAL_FONT_SIZE_STEP);
+        return false;
+      }
+      if (event.key === "0") {
+        resetFontSize();
+        return false;
+      }
+      return true;
+    });
+
     fitAndResize();
 
     const dataDisposable = term.onData((data) => {
@@ -210,9 +273,9 @@ export function TerminalPanel({ tab }: Props) {
     const resizeObserver = new ResizeObserver(() => fitAndResize());
     resizeObserver.observe(container);
 
-    const themeObserver = new MutationObserver(() => {
-      if (terminalRef.current) applyTerminalTheme(terminalRef.current);
-    });
+    // Re-resolve the palette when the app theme flips; only the 'auto' preset
+    // depends on the CSS variables, but a no-op update for the rest is cheap.
+    const themeObserver = new MutationObserver(() => applyTheme());
     themeObserver.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ["data-theme"],
@@ -223,11 +286,45 @@ export function TerminalPanel({ tab }: Props) {
       selectionDisposable.dispose();
       resizeObserver.disconnect();
       themeObserver.disconnect();
+      webglRef.current?.dispose();
+      webglRef.current = null;
       terminalRef.current = null;
       fitAddonRef.current = null;
       term.dispose();
     };
-  }, [fitAndResize, sendData, tab.id]);
+  }, [applyTheme, fitAndResize, resetFontSize, sendData, stepFontSize, tab.id]);
+
+  // Live-apply font size without re-creating the terminal.
+  useEffect(() => {
+    const term = terminalRef.current;
+    if (!term || term.options.fontSize === fontSize) return;
+    term.options.fontSize = fontSize;
+    fitAndResize();
+  }, [fitAndResize, fontSize]);
+
+  // Live-apply theme changes.
+  useEffect(() => {
+    applyTheme();
+  }, [applyTheme, themeId]);
+
+  // Dismiss the appearance menu on outside click or Escape.
+  useEffect(() => {
+    if (!appearanceOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest(".terminal-panel-appearance, .terminal-appearance-menu")) return;
+      setAppearanceOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setAppearanceOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [appearanceOpen]);
 
   useEffect(() => {
     let alive = true;
@@ -395,6 +492,96 @@ export function TerminalPanel({ tab }: Props) {
           <ArrowClockwiseIcon size={12} stroke={2.5} />
         </IconButton>
       </div>
+
+      <div className="terminal-panel-appearance" data-open={appearanceOpen ? "true" : undefined}>
+        <IconButton
+          type="button"
+          variant="default"
+          shape="square"
+          size="sm"
+          className="terminal-appearance-btn"
+          onClick={() => stepFontSize(-TERMINAL_FONT_SIZE_STEP)}
+          disabled={fontSize <= TERMINAL_FONT_SIZE_MIN}
+          title={t("terminal.decreaseFontSize")}
+          aria-label={t("terminal.decreaseFontSize")}
+        >
+          <TextAaIcon size={13} stroke={2.2} />
+          <MinusIcon size={8} stroke={3} className="terminal-appearance-decor" />
+        </IconButton>
+        <IconButton
+          type="button"
+          variant="default"
+          shape="square"
+          size="sm"
+          className="terminal-appearance-btn"
+          onClick={() => stepFontSize(TERMINAL_FONT_SIZE_STEP)}
+          disabled={fontSize >= TERMINAL_FONT_SIZE_MAX}
+          title={t("terminal.increaseFontSize")}
+          aria-label={t("terminal.increaseFontSize")}
+        >
+          <TextAaIcon size={13} stroke={2.2} />
+          <PlusIcon size={8} stroke={3} className="terminal-appearance-decor terminal-appearance-decor-plus" />
+        </IconButton>
+        <IconButton
+          type="button"
+          variant="default"
+          shape="square"
+          size="sm"
+          className="terminal-appearance-btn"
+          onClick={() => setAppearanceOpen((open) => !open)}
+          title={t("terminal.appearance")}
+          aria-label={t("terminal.appearance")}
+          aria-haspopup="menu"
+          aria-expanded={appearanceOpen}
+        >
+          <PaintBucketIcon size={13} stroke={2.2} />
+        </IconButton>
+      </div>
+
+      {appearanceOpen && (
+        <div className="terminal-appearance-menu" role="menu" aria-label={t("terminal.appearance")}>
+          <div className="terminal-appearance-menu-title">{t("terminal.theme")}</div>
+          {TERMINAL_THEME_PRESETS.map((preset) => {
+            const active = preset.id === themeId;
+            return (
+              <button
+                key={preset.id}
+                type="button"
+                role="menuitemradio"
+                aria-checked={active}
+                className="terminal-appearance-menu-item"
+                data-active={active ? "true" : undefined}
+                onClick={() => {
+                  setThemeId(preset.id);
+                  setAppearanceOpen(false);
+                }}
+              >
+                <span
+                  className="terminal-appearance-swatch"
+                  style={{
+                    background: preset.swatch[0],
+                    color: preset.swatch[1],
+                    boxShadow: `inset 0 0 0 1px ${preset.swatch[2]}`,
+                  }}
+                >
+                  <span className="terminal-appearance-swatch-glyph">{">_"}</span>
+                </span>
+                <span className="terminal-appearance-menu-label">{t(preset.labelKey)}</span>
+                {active && (
+                  <CheckIcon size={13} stroke={2.5} className="terminal-appearance-menu-check" />
+                )}
+              </button>
+            );
+          })}
+          <div className="terminal-appearance-menu-foot">
+            <span className="terminal-appearance-menu-foot-label">{t("terminal.fontSize")}</span>
+            <span className="terminal-appearance-menu-foot-value">{fontSize}px</span>
+            <span className="terminal-appearance-menu-foot-renderer" data-renderer={renderer}>
+              {renderer === "webgl" ? "WebGL" : "DOM"}
+            </span>
+          </div>
+        </div>
+      )}
 
       <div
         ref={containerRef}

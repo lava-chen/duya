@@ -1302,6 +1302,17 @@ const en = {
   'office.askDuya': 'Ask DUYA',
 
   'terminal.addToChat': 'Add to Chat',
+  'terminal.appearance': 'Terminal appearance',
+  'terminal.theme': 'Theme',
+  'terminal.fontSize': 'Font size',
+  'terminal.decreaseFontSize': 'Decrease font size',
+  'terminal.increaseFontSize': 'Increase font size',
+  'terminal.themeAuto': 'Follow app',
+  'terminal.themeTokyoNight': 'Tokyo Night',
+  'terminal.themeDracula': 'Dracula',
+  'terminal.themeNord': 'Nord',
+  'terminal.themeSolarized': 'Solarized Dark',
+  'terminal.themeGruvbox': 'Gruvbox Dark',
 
   'project.selectFolder': 'Select Folder',
   'project.enterFolderPath': 'Enter Project Folder Path',
