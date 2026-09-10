@@ -132,6 +132,7 @@ import {
 import {
   getDiscoveredToolPrompts,
   harvestDiscoveredTools,
+  renderDiscoveredToolSchemaBlock,
 } from './tool-search-discovery.js';
 import type { AgentDefinition } from '../tool/SubagentTool/index.js';
 import { CompactionManager, createCompactionManager } from '../compact/CompactionManager.js';
@@ -1280,6 +1281,15 @@ export class duyaAgent {
     // so it is GC'd when streamChat finishes (no cross-session pollution).
     const discoveredTools: Set<string> = new Set();
     let discoveredToolPromptSuffix = '';
+    // Plan 480 P3.2: discovered-tool schema delivery for this call.
+    //   'tail'  → the full schema is appended to the conversation tail
+    //             (grok `GetMcpTools` parity; the tools array stays stable);
+    //   'array' → legacy plan-241 merge into the next turn's tools array.
+    // `discoveredPromotedToToolList` flips to true once a compaction fires
+    // mid-stream: compaction summarizes the tail away, so the discovered
+    // tools return to the persistent tool list for the rest of the call.
+    const discoveredSchemaDelivery = exposureConfig.discoveredSchemaDelivery;
+    let discoveredPromotedToToolList = false;
 
     // Generate a unique seq_index for this streamChat call
     // All messages created in this call (including multi-turn) will share this seq_index
@@ -1338,7 +1348,12 @@ export class duyaAgent {
       // dynamic tools (MCP + discoverable built-ins) are reached exclusively
       // through tool_schema (builtin namespace) + tool_invoke.
       const catalogExposure = exposureConfig.exposure === 'catalog';
-      if (!catalogExposure && discoveredTools.size > 0) {
+      // Plan 480 P3.2: default tail delivery does NOT touch the tools array —
+      // the legacy plan-241 merge runs only when explicitly configured, or
+      // once a mid-stream compaction promoted the discovered set.
+      const mergeDiscoveredToToolList =
+        discoveredSchemaDelivery === 'array' || discoveredPromotedToToolList;
+      if (!catalogExposure && mergeDiscoveredToToolList && discoveredTools.size > 0) {
         const visible = new Set(tools.map((t) => t.name));
         let added = 0;
         for (const name of discoveredTools) {
@@ -1394,7 +1409,7 @@ export class duyaAgent {
       // to this turn's system prompt as well.
       // Plan 480 P4: catalog exposure appends no on-demand guides 鈥?dynamic
       // tools are discovered via tool_schema instead.
-      const discoveredPrompts = !catalogExposure
+      const discoveredPrompts = !catalogExposure && mergeDiscoveredToToolList
         ? getDiscoveredToolPrompts(registry, discoveredTools)
         : [];
       if (discoveredPrompts.length > 0) {
@@ -1716,6 +1731,9 @@ export class duyaAgent {
           // compact:done so the renderer sees the lifecycle in order.
           for (const ev of stepBuffer) yield ev
           if (compactEntry) {
+            // Plan 480 P3.2: compaction summarizes the tail away, so the
+            // discovered tools return to the persistent tool list from here on.
+            discoveredPromotedToToolList = true;
             logger.info(`[Agent] Turn ${turnCount}: Compacted with strategy=${compactEntry.strategy}, removed=${compactEntry.tokensBefore} tokens, retained=${compactEntry.tokensAfter ?? 0} tokens`);
             // Plan 517 P2.1 + P2.3: pin the cooldown baseline. The next
             // MIN_TURNS_SINCE_COMPACT turns skip the proactive checkpoint
@@ -1859,6 +1877,29 @@ export class duyaAgent {
         // it via __setBridgeForTest. The fragment is ephemeral (lives only
         // on `llmMessages`; never lands in the durable timeline).
         injectOSContextFragment(llmMessages, runtimePromptMessageId);
+
+        // Plan 480 P3.2 (grok `GetMcpTools` parity): full schemas of tools found
+        // via `tool_search` are appended at the very tail, leaving the request's
+        // `tools` array untouched so the cached prefix stays byte-stable. The
+        // model invokes each via the constant `tool_invoke` meta tool. Transient:
+        // rebuilt from `discoveredTools` every turn, never persisted.
+        if (
+          !catalogExposure &&
+          discoveredSchemaDelivery === 'tail' &&
+          !discoveredPromotedToToolList &&
+          discoveredTools.size > 0
+        ) {
+          const schemaBlock = renderDiscoveredToolSchemaBlock(registry, discoveredTools);
+          if (schemaBlock) {
+            llmMessages.push({
+              id: crypto.randomUUID(),
+              role: 'user',
+              content: schemaBlock,
+              timestamp: Date.now(),
+              metadata: { runtimeContext: true, isDiscoveredToolSchemas: true },
+            });
+          }
+        }
         // Cache the system-prompt + tool-surface estimate for the live
         // context ring's no-usage fallback. Only the provider contract is
         // counted (name/description/input_schema), mirroring what is
@@ -2430,6 +2471,8 @@ export class duyaAgent {
                         : { trigger: 'preflight_overflow' as const }),
                     });
                   if (compactEntry) {
+                    // Plan 480 P3.2: discovered tools return to the tool list.
+                    discoveredPromotedToToolList = true;
                     logger.info(
                       `[Agent] Turn ${turnCount}: Preflight overflow compaction fired, retained=${compactEntry.tokensAfter ?? 0} tokens`,
                       undefined,
@@ -2687,6 +2730,8 @@ export class duyaAgent {
           try {
             const compactEntry = await this.compactionController.compactProactive({ trigger: 'emergency' });
             if (compactEntry) {
+              // Plan 480 P3.2: discovered tools return to the tool list.
+              discoveredPromotedToToolList = true;
               logger.info(`[Agent] Turn ${turnCount}: Compaction succeeded, strategy=${compactEntry.strategy}, retained=${compactEntry.tokensAfter ?? 0} tokens`);
               const reProjected = this._projectModelMessages(systemPromptContent, { injectHookContexts: true });
               systemPromptContent = reProjected.systemPromptContent;

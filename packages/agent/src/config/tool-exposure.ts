@@ -39,6 +39,19 @@ export type MCPExposureMode = 'full' | 'search' | 'catalog';
 /** Catalog-mode visibility guard level (plan 480 §8.3). */
 export type CatalogGuardMode = 'warn' | 'enforce';
 
+/**
+ * How a tool discovered via `tool_search` gets its schema to the model
+ * (plan 480 P3.2, grok `GetMcpTools` parity):
+ *
+ *   - `tail`  (default) the full schema is appended to the conversation tail
+ *             as a transient runtime-context block; the request's `tools`
+ *             array stays byte-stable (prompt-cache friendly). The model
+ *             invokes the tool through the constant `tool_invoke` meta tool.
+ *   - `array` (legacy plan 241) the tool is merged into the next turn's
+ *             `tools` array. Kept as a configurable fallback.
+ */
+export type DiscoveredSchemaDelivery = 'tail' | 'array';
+
 /** Map the user-facing policy to the registry ExposeMode used by MCP tools. */
 export function mcpExposureToExposeMode(
   exposure: MCPExposureMode,
@@ -72,13 +85,30 @@ export interface ToolExposureConfig {
    * `[tools] catalog_guard = "warn"|"enforce"`; env DUYA_CATALOG_GUARD.
    */
   catalogGuard: CatalogGuardMode;
+  /**
+   * Discovered-tool schema delivery (plan 480 P3.2). Default `'tail'`.
+   * `[tools] discovered_schema = "tail"|"array"`; env
+   * DUYA_TOOLS_DISCOVERED_SCHEMA.
+   */
+  discoveredSchemaDelivery: DiscoveredSchemaDelivery;
 }
 
 const DEFAULTS: ToolExposureConfig = {
   exposure: 'full',
   onDemandDiscovery: false,
   catalogGuard: 'warn',
+  discoveredSchemaDelivery: 'tail',
 };
+
+const DELIVERY_VALUES: readonly DiscoveredSchemaDelivery[] = ['tail', 'array'];
+
+function parseDelivery(value: unknown): DiscoveredSchemaDelivery | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  return (DELIVERY_VALUES as readonly string[]).includes(normalized)
+    ? (normalized as DiscoveredSchemaDelivery)
+    : undefined;
+}
 
 const GUARD_VALUES: readonly CatalogGuardMode[] = ['warn', 'enforce'];
 
@@ -111,6 +141,7 @@ export function readToolExposureConfig(configRootOverride?: string): ToolExposur
           exposure?: unknown;
           on_demand_discovery?: unknown;
           catalog_guard?: unknown;
+          discovered_schema?: unknown;
         };
       };
       const toolsSection = doc?.tools;
@@ -124,6 +155,8 @@ export function readToolExposureConfig(configRootOverride?: string): ToolExposur
         }
         const guard = parseGuard(toolsSection.catalog_guard);
         if (guard !== undefined) config.catalogGuard = guard;
+        const delivery = parseDelivery(toolsSection.discovered_schema);
+        if (delivery !== undefined) config.discoveredSchemaDelivery = delivery;
       }
     }
   } catch {
@@ -139,6 +172,15 @@ export function readToolExposureConfig(configRootOverride?: string): ToolExposur
   const envExposureMode = envExposure !== undefined && envExposure !== ''
     ? parseExposure(envExposure)
     : undefined;
+  const envDelivery = process.env.DUYA_TOOLS_DISCOVERED_SCHEMA;
+  const envDeliveryMode =
+    envDelivery !== undefined && envDelivery !== ''
+      ? parseDelivery(envDelivery)
+      : undefined;
+  if (envDeliveryMode !== undefined) {
+    config.discoveredSchemaDelivery = envDeliveryMode;
+  }
+
   if (envExposureMode !== undefined) {
     config.exposure = envExposureMode;
   } else {
