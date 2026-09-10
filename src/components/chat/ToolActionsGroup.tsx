@@ -224,7 +224,7 @@ function ToolActionsGroupImpl({
       <button
         type="button"
         onClick={handleToggle}
-        className="flex w-full items-center gap-2 py-1 pl-2 text-xs rounded-sm border-l-2 border-muted-foreground/30 hover:bg-muted/30 transition-colors"
+        className="flex w-full items-center gap-2 py-1 text-xs rounded-sm hover:bg-muted/30 transition-colors"
       >
         <CaretRightIcon
           size={12}
