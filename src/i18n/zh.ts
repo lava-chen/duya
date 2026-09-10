@@ -1345,6 +1345,12 @@ const zh: Record<TranslationKey, string> = {
   // 等待当前活跃 run 抵达安全检查点后再执行。
   'bot.contactStatus.queued': '已排队',
   'bot.contactStatus.running': '工作中',
+  // Plan 516 — 侧栏 trailing 槽的「等待用户操作」标签。文案取决于挂起
+  // 会话的具体请求类型：AskUserQuestion 用 awaitingAnswer，工具授权
+  // 用 awaitingPermission，连接器授权用 awaitingAuth。
+  'bot.contactStatus.awaitingAnswer': '待回答',
+  'bot.contactStatus.awaitingPermission': '待授权',
+  'bot.contactStatus.awaitingAuth': '待连接',
   'bot.contactBadgeUnseen': '有新回复',
   'bot.contactBadgeError': '出错了 — 点击查看',
   'bot.create.title': '创建 Bot',

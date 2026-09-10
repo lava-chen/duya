@@ -26,9 +26,15 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { subscribeToPhase } from "@/lib/stream-session-manager";
+import {
+  subscribeToPhase,
+  subscribeToPermissions,
+  subscribeToConnectorAuthRequired,
+  type ConnectorAuthRequiredData,
+} from "@/lib/stream-session-manager";
 import { createPortal } from "react-dom";
 import type { StreamPhase } from "@/types/message";
+import type { PermissionRequestEvent } from "@/types/stream";
 import { useMailboxStore } from "@/stores/mailbox-store";
 import { useBotActivityStore } from "@/stores/bot-activity-store";
 import { useBotDirectTranscript } from "@/components/chat/bot/use-bot-direct-transcript";
@@ -171,6 +177,45 @@ export function BotContactListItem({
     });
     return unsubscribe;
   }, [sessionId, contact.agentId, markErrored, clearError]);
+
+  // Plan 516 — "waiting on user" trailing pill. The bound session is
+  // paused on a permission request (AskUserQuestion, generic tool
+  // approval, or connector auth). The shared StreamSessionManager
+  // already publishes these into pendingPermissionRequest /
+  // pendingConnectorAuthRequest and pushes them via the same subscribeTo*
+  // APIs that BotDirectChatView uses to render the cards (plan 494 +
+  // 503). We just mirror the latest event into local state so the row
+  // can show a pill regardless of which view the user is in.
+  // Priority in the trailing slot: awaiting-input > queued > time.
+  type AwaitingInputKind = 'ask' | 'permission' | 'auth';
+  const [awaitingInput, setAwaitingInput] = useState<AwaitingInputKind | null>(null);
+  useEffect(() => {
+    if (!sessionId) {
+      setAwaitingInput(null);
+      return;
+    }
+    const unsubPerm = subscribeToPermissions(sessionId, (request: PermissionRequestEvent) => {
+      // AskUserQuestion takes precedence over generic tool approvals:
+      // both arrive on the same channel, but the user expects the
+      // "answer this question" pill over a background approval badge.
+      if (request == null) {
+        setAwaitingInput(null);
+        return;
+      }
+      const kind: AwaitingInputKind =
+        request.toolName === 'AskUserQuestion' || request.mode === 'ask_user_question'
+          ? 'ask'
+          : 'permission';
+      setAwaitingInput(kind);
+    });
+    const unsubAuth = subscribeToConnectorAuthRequired(sessionId, (data: ConnectorAuthRequiredData | null) => {
+      setAwaitingInput(data ? 'auth' : null);
+    });
+    return () => {
+      unsubPerm();
+      unsubAuth();
+    };
+  }, [sessionId]);
 
   // Mailbox pending rows (plan 202). The store's `bySession` is a Map,
   // so we subscribe at the map reference and count rows lazily on each
@@ -430,7 +475,30 @@ export function BotContactListItem({
             )}
           </span>
           <span className="bot-contact-trailing">
-            {status === "queued" ? (
+            {/* Plan 516 — awaiting-input pill wins over queued and time. The
+                bound session is paused on a user-visible request, so the
+                pill text identifies what the user needs to do (answer a
+                question, approve a tool, finish connecting an app). */}
+            {awaitingInput != null ? (
+              <span
+                className="bot-contact-status-pill awaiting-input"
+                title={t(
+                  awaitingInput === 'ask'
+                    ? 'bot.contactStatus.awaitingAnswer'
+                    : awaitingInput === 'auth'
+                      ? 'bot.contactStatus.awaitingAuth'
+                      : 'bot.contactStatus.awaitingPermission',
+                )}
+              >
+                {t(
+                  awaitingInput === 'ask'
+                    ? 'bot.contactStatus.awaitingAnswer'
+                    : awaitingInput === 'auth'
+                      ? 'bot.contactStatus.awaitingAuth'
+                      : 'bot.contactStatus.awaitingPermission',
+                )}
+              </span>
+            ) : status === "queued" ? (
               <span
                 className="bot-contact-status-pill queued"
                 title={t("bot.contactStatus.queued")}
