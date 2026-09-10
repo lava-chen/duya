@@ -102,7 +102,7 @@ describe('StreamSessionManager State Machine', () => {
     it('allows pre-registering permission listeners before stream starts', async () => {
       const { streamSessionManager } = await import('./stream-session-manager');
 
-      const permissionSnapshots: PermissionRequestEvent[] = [];
+      const permissionSnapshots: Array<PermissionRequestEvent | null> = [];
       const unsubscribe = streamSessionManager.subscribeToPermissions('session-perm', (req) => {
         permissionSnapshots.push(req);
       });
@@ -111,6 +111,22 @@ describe('StreamSessionManager State Machine', () => {
       const initial = streamSessionManager.getSnapshot('session-perm');
       expect(initial).not.toBeNull();
 
+      unsubscribe();
+    });
+
+    it('plan 516 — notifies permission listeners when clearPendingPermission runs', async () => {
+      const { streamSessionManager } = await import('./stream-session-manager');
+      const sessionId = 'session-clear-perm';
+
+      const seen: Array<PermissionRequestEvent | null> = [];
+      const unsubscribe = streamSessionManager.subscribeToPermissions(sessionId, (req) => {
+        seen.push(req);
+      });
+
+      // Even with no pending event, clearing must notify listeners so
+      // any UI that subscribed optimistically can drop the pill.
+      streamSessionManager.clearPendingPermission(sessionId);
+      expect(seen).toContain(null);
       unsubscribe();
     });
   });

@@ -733,7 +733,7 @@ export function ChatView({
 
   // Subscribe to permission events from SSE
   useEffect(() => {
-    const unsubscribe = subscribeToPermissions(sessionId, handlePermissionRequest);
+    const unsubscribe = subscribeToPermissions(sessionId, (req) => handlePermissionRequest(req));
     return () => {
       unsubscribe();
     };
