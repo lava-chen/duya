@@ -1323,6 +1323,10 @@ const en = {
 
   // Plan 471 — sidebar sections
   'sidebar.section.project': 'Projects',
+  // Plan 471 v9: singleList mode renders the section as a flat session list,
+  // so we relabel the header from 'Projects' to 'Sessions' to match what the
+  // user actually sees (no project grouping, just threads).
+  'sidebar.section.sessions': 'Sessions',
   'sidebar.section.cron': 'Scheduled',
   'sidebar.section.gateway': 'Gateway',
   'sidebar.section.wakeup': 'Wake',

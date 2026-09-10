@@ -1239,7 +1239,13 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                 case '__system__:pinned':
                   return 'sidebar.section.pinned';
                 case '__system__:project':
-                  return 'sidebar.section.project';
+                  // Plan 471 v9: in singleList (… menu → 在一个列表中) mode the project hierarchy
+                  // is suppressed and the section is rendered as a flat session list.
+                  // "项目" no longer fits because there are no project groups to group by,
+                  // so we rename it to "会话" to match what the user actually sees.
+                  return projectGroupBy === 'singleList'
+                    ? 'sidebar.section.sessions'
+                    : 'sidebar.section.project';
                 default:
                   return null;
               }
