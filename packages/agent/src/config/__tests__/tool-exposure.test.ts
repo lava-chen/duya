@@ -160,3 +160,58 @@ describe('catalog guard level (plan 480 P2.5)', () => {
     expect(readToolExposureConfig(tmpRoot).catalogGuard).toBe('enforce');
   });
 });
+
+describe('discovered-tool schema delivery (plan 480 P3.2)', () => {
+  beforeEach(() => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-tool-delivery-'));
+    delete process.env.DUYA_TOOLS_DISCOVERED_SCHEMA;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    delete process.env.DUYA_TOOLS_DISCOVERED_SCHEMA;
+  });
+
+  it('defaults to tail delivery (tools array stays byte-stable)', () => {
+    expect(readToolExposureConfig(tmpRoot).discoveredSchemaDelivery).toBe('tail');
+  });
+
+  it('reads [tools] discovered_schema = "array" (legacy fallback)', () => {
+    fs.writeFileSync(
+      path.join(tmpRoot, 'config.toml'),
+      '[tools]\ndiscovered_schema = "array"\n',
+      'utf-8',
+    );
+    expect(readToolExposureConfig(tmpRoot).discoveredSchemaDelivery).toBe('array');
+  });
+
+  it('ignores invalid delivery values (keeps default)', () => {
+    fs.writeFileSync(
+      path.join(tmpRoot, 'config.toml'),
+      '[tools]\ndiscovered_schema = "bogus"\n',
+      'utf-8',
+    );
+    expect(readToolExposureConfig(tmpRoot).discoveredSchemaDelivery).toBe('tail');
+  });
+
+  it('env DUYA_TOOLS_DISCOVERED_SCHEMA overrides config', () => {
+    fs.writeFileSync(
+      path.join(tmpRoot, 'config.toml'),
+      '[tools]\ndiscovered_schema = "tail"\n',
+      'utf-8',
+    );
+    process.env.DUYA_TOOLS_DISCOVERED_SCHEMA = 'array';
+    expect(readToolExposureConfig(tmpRoot).discoveredSchemaDelivery).toBe('array');
+  });
+
+  it('keeps delivery independent of the exposure policy', () => {
+    fs.writeFileSync(
+      path.join(tmpRoot, 'config.toml'),
+      '[tools]\nexposure = "catalog"\ndiscovered_schema = "array"\n',
+      'utf-8',
+    );
+    const config = readToolExposureConfig(tmpRoot);
+    expect(config.exposure).toBe('catalog');
+    expect(config.discoveredSchemaDelivery).toBe('array');
+  });
+});

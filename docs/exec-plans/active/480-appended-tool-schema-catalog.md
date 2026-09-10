@@ -70,7 +70,7 @@ interface CatalogNamespace { namespace: string; source: 'mcp' | 'plugin' | 'conn
 
 ### Phase 3 — Provider 接线
 - [ ] **P3.1** 目录 system section 渲染（通道 2）+ ModelCompat 模式选择 + 418 tool_reference 优先分支。
-- [ ] **P3.2** 241 收编：tool_search 命中 → 挂目录；删除"下一轮全量注入"路径。
+- [x] **P3.2** 241 收编：tool_search 命中 → 挂目录；删除"下一轮全量注入"路径。（2026-09-10 默认路径已消费 —见 §8.17，旧数组路径保留为 `[tools] discovered_schema = "array"` fallback。）
 - [ ] **P3.3** MCP/插件/connector 动态工具迁移到目录 + 高频白名单机制。
 
 ### 验收
@@ -379,3 +379,26 @@ exposure = "full"
 - 直调率偏高 → 维持 `warn-only` 或回查 catalog 引导文案，不删双通道。
 
 **仍外部依赖**：P3.3 目录 section 挂载待 plan 474 框架；connector 收编待 plan 450。
+
+### 8.17 P3.2 默认路径消费（2026-09-10，主动跳过灰度闸门）
+
+**决策**：默认（`exposure='full'`/`'search'`）下`tool_search` 命中后的下一轮"tools 数组全量合并"已**主动替换为尾部 schema 块注入**（grok `GetMcpTools` 同构），tools 数组逐会话不再增长。T1–T3 灰度闸门（直调率≤5%）**未达到**也提前消费——作者亲自推翻 §8.13「等灰度数据达标」的决议。
+
+**改动**：
+- `config/tool-exposure.ts` 新增 `[tools] discovered_schema = "tail"|"array"`（默认 `"`）；环境变量 `DUYA_TOOLS_DISCOVERED_SCHEMA`；与 `exposure` 正交。
+- `agent/tool-search-discovery.ts` 新增 `renderDiscoveredToolSchemaBlock(registry, names)`：构造 `<discovered-tool-schemas>` 区块，逐工具输出 namespace（`mcpInfo.serverName` 或 `builtin`）、description、完整 `input_schema` JSON、可选 usage guide，引导 `tool_invoke({namespace,tool,arguments})`。纯函数，输出确定性（按 name 排序）。
+- `agent/DuyaAgent.ts`：turn 循环内“241 注入块 + discoveredToolPromptSuffix”门控为 `mergeDiscoveredToToolList = discoveredSchemaDelivery === 'array' || discoveredPromotedToToolList`；默认走尾部注入（`role:'user'`，`metadata:{runtimeContext:true,isDiscoveredToolSchemas:true}`，与 `deferred-tool-context` 同处理）。系统提示里附 discovered guide 的部分同步折叠进尾部块（避免系统提示变）。
+- 三处就地压缩（1718 preflight-overflow / 2432 overflow / 2688 emergency）成功后置位 `discoveredPromotedToToolList = true`：尾部证据被压缩摘要洗走，已发现工具“回归 tool 列表”＝重新 merge 进 tools 数组，后续轮次再次问它们时已是声明状态。
+- `tool/ToolSearchTool/ToolSearchTool.ts` 描述与结果尾行文案改为"下一轮尾部拿到 schema，调 `tool_invoke`"。
+
+**不再走双通道**：
+- `exposure='catalog'` 下 tail 本来就是唯一路径，现在 `full`/`search` 默认也走 tail——只有显式设置 `discovered_schema = "array"` 才会回退到 241 数组合并。
+
+**T1–T3 状态**：
+- T1（discoverable 三态）/ T2（exposure 三值收两值）：**取消**——默认已被 tail 占据，不再需要两个通道。
+- T3（删 DuyaAgent 241 注入块）：**部分消费**——默认路径已删（门控后不达），`discovered_schema = "array"` 路径仍保留数组合并供回退用；待该 fallback 被零实例引用后可完全删除。
+- 直调率采集与灰度统计（§8.16 harness）：**仍然需要**——这是验证“模型能否稳定走 tool_invoke 补 schema”的唯一信号，推荐开关 `catalogGuard='warn'` + 周期性读 `readUndeclaredCallStats()`。
+
+**风险与回退**：
+- 风险：个别 provider 在模型发出未声明的 tool_use 时拒绝——已靠 `tool_invoke` 双重保险（以及 visibility-guard 在 `catalog` 下启用；`full`/`search` 下不启用但仍有 harness 解析兜底）。
+- 回退：用户/会话设为 `[tools] discovered_schema = "array"` 或 `DUYA_TOOLS_DISCOVERED_SCHEMA=array` 即恢复旧路径。

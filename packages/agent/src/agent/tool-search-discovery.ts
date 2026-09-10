@@ -8,9 +8,17 @@
 
 import type { Message, MessageContent } from '../types.js';
 import type { ToolRegistry } from '../tool/registry.js';
+import { BUILTIN_TOOLS_NAMESPACE } from '../tool/ToolSchemaTool/catalogFromRegistry.js';
 
 const TOOL_SEARCH_RESULT_MARKER = '<!-- duya-tool-search-result -->';
 const TOOL_HEADING_PATTERN = /^## Tool: `([^`]+)`\s*$/gm;
+
+/** Stable marker for the transient discovered-tool schema block. */
+export const DISCOVERED_TOOL_SCHEMA_MARKER = '<!-- duya-discovered-tool-schemas -->';
+
+/** Per-tool schema JSON cap, mirroring ToolSchemaTool's truncation contract. */
+const MAX_SCHEMA_JSON_CHARS = 24_000;
+const TRUNCATED_SCHEMA_SUFFIX = '\n... [schema truncated]';
 
 /**
  * Extract tool names from the Markdown payload produced by
@@ -54,6 +62,85 @@ export function getDiscoveredToolPrompts(
   }
 
   return prompts;
+}
+
+/**
+ * Resolve the namespace a tool belongs to, matching the catalog provider's
+ * naming so `tool_invoke({ namespace, tool })` accepts the same value the
+ * block advertises: MCP tools use their `mcpInfo.serverName`, every other
+ * discoverable tool joins the reserved `builtin` namespace.
+ */
+function resolveToolNamespace(registry: ToolRegistry, name: string): string {
+  if (registry.getOwner(name) === 'mcp') {
+    return registry.getTool(name)?.mcpInfo?.serverName ?? 'mcp';
+  }
+  return BUILTIN_TOOLS_NAMESPACE;
+}
+
+/**
+ * Plan 480 P3.2 (grok `GetMcpTools` parity): render the full schema of every
+ * tool discovered via `tool_search` as a transient conversation-tail block,
+ * so the request's `tools` array stays byte-stable (prompt-cache friendly).
+ *
+ * The model reads each schema here and invokes the tool through the constant
+ * `tool_invoke` meta tool (the grok `CallMcpTool` analog). Returns null when
+ * no discovered tool is (still) registered.
+ *
+ * Deterministic: names are sorted, so the block is byte-identical while the
+ * discovered set is unchanged.
+ */
+export function renderDiscoveredToolSchemaBlock(
+  registry: ToolRegistry,
+  toolNames: ReadonlySet<string>,
+): string | null {
+  if (toolNames.size === 0) return null;
+
+  const entries: string[] = [];
+  for (const name of [...toolNames].sort()) {
+    const def = registry.getTool(name);
+    if (!def) continue;
+
+    const namespace = resolveToolNamespace(registry, name);
+    const parts: string[] = [
+      `### \`${name}\``,
+      '',
+      `Namespace: \`${namespace}\``,
+      '',
+    ];
+    if (def.description) parts.push(def.description.trim(), '');
+
+    let schema: string;
+    try {
+      schema = JSON.stringify(def.input_schema, null, 2);
+    } catch {
+      schema = String(def.input_schema);
+    }
+    if (schema.length > MAX_SCHEMA_JSON_CHARS) {
+      schema = schema.slice(0, MAX_SCHEMA_JSON_CHARS) + TRUNCATED_SCHEMA_SUFFIX;
+    }
+    parts.push('**Input schema:**', '', '```json', schema, '```', '');
+
+    // Usage guide (e.g. BrowserTool.getPrompt) — folded into the tail block
+    // instead of the system prompt so the cached prefix is untouched.
+    const guide = registry.getExecutor(name)?.getPrompt?.()?.trim();
+    if (guide) parts.push(guide, '');
+
+    entries.push(parts.join('\n'));
+  }
+
+  if (entries.length === 0) return null;
+
+  return [
+    DISCOVERED_TOOL_SCHEMA_MARKER,
+    '',
+    '# Discovered Tool Schemas',
+    '',
+    'You found these tools with `tool_search`. Their full schemas are below ' +
+      '- they are intentionally NOT in the tool list, so this request\'s prefix stays cache-stable.',
+    'Invoke each one with `tool_invoke`: {"namespace": "<namespace>", "tool": "<name>", "arguments": {...}}.',
+    '',
+    entries.join('\n'),
+  ].join('\n');
 }
 
 /**

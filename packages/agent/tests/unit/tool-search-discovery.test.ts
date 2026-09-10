@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
+  DISCOVERED_TOOL_SCHEMA_MARKER,
   extractToolNamesFromSearchResult,
   getDiscoveredToolPrompts,
   harvestDiscoveredTools,
+  renderDiscoveredToolSchemaBlock,
 } from '../../src/agent/tool-search-discovery.js';
 import type { Message, MessageContent, Tool } from '../../src/types.js';
 import { ToolRegistry } from '../../src/tool/registry.js';
@@ -159,5 +161,66 @@ describe('harvestDiscoveredTools', () => {
     // Repeated harvests do not duplicate the marker.
     harvestDiscoveredTools([msg], acc);
     expect(msg.addedToolNames).toEqual(['canvas_manage']);
+  });
+});
+
+describe('renderDiscoveredToolSchemaBlock', () => {
+  function makeRegistry(): ToolRegistry {
+    const registry = new ToolRegistry();
+    const def = (
+      name: string,
+      description: string,
+      inputSchema: Record<string, unknown>,
+    ) => ({ name, description, input_schema: inputSchema }) as unknown as Tool;
+
+    registry.register(
+      def('zebra', 'Z tool', { type: 'object', properties: { z: { type: 'string' } } }),
+      { execute: async () => ({ id: 'x', name: 'zebra', result: '' }) },
+    );
+    registry.register(
+      def('alpha', 'A tool', { type: 'object', properties: {} }),
+      {
+        execute: async () => ({ id: 'y', name: 'alpha', result: '' }),
+        getPrompt: () => '## Alpha guide',
+      },
+    );
+    return registry;
+  }
+
+  it('renders full schemas + namespace + invocation hint, sorted by name', () => {
+    const block = renderDiscoveredToolSchemaBlock(makeRegistry(), new Set(['zebra', 'alpha']));
+    expect(block).not.toBeNull();
+    expect(block!).toContain(DISCOVERED_TOOL_SCHEMA_MARKER);
+    expect(block!).toContain('`tool_invoke`');
+    // Non-MCP tools resolve to the reserved builtin namespace.
+    expect(block!).toContain('Namespace: `builtin`');
+    // Deterministic ordering: alpha before zebra.
+    expect(block!.indexOf('### `alpha`')).toBeLessThan(block!.indexOf('### `zebra`'));
+    // Complete schema (not the one-line summary used by tool_search).
+    expect(block!).toContain('"z"');
+    // Usage guide folded into the block (not the system prompt).
+    expect(block!).toContain('## Alpha guide');
+  });
+
+  it('uses the MCP server name as the namespace for MCP-owned tools', () => {
+    const registry = new ToolRegistry();
+    const mcpDef = {
+      name: 'mcp_tool',
+      description: 'MCP tool',
+      input_schema: { type: 'object', properties: {} },
+      mcpInfo: { serverName: 'my-server', toolName: 'do_thing', source: 'local' },
+    } as unknown as Tool;
+    registry.registerWithKey('mcp__my-server__do_thing', mcpDef, {
+      execute: async () => ({ id: 'z', name: 'mcp_tool', result: '' }),
+    });
+
+    const block = renderDiscoveredToolSchemaBlock(registry, new Set(['mcp_tool']));
+    expect(block!).toContain('Namespace: `my-server`');
+  });
+
+  it('returns null for an empty set or a tool that is no longer registered', () => {
+    const registry = makeRegistry();
+    expect(renderDiscoveredToolSchemaBlock(registry, new Set())).toBeNull();
+    expect(renderDiscoveredToolSchemaBlock(registry, new Set(['missing']))).toBeNull();
   });
 });
