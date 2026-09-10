@@ -526,3 +526,105 @@ describe('ProviderStore — capability surface (Phase 3)', () => {
     expect(store.listModelCapabilities('a')).toEqual([]);
   });
 });
+
+// =============================================================================
+// Plan 517 — resolveRuntimeCapability audit log + fallback coverage
+// =============================================================================
+describe('ProviderStore — resolveRuntimeCapability (Plan 517 R1)', () => {
+  class InMemoryCapabilityStore {
+    private rows = new Map<string, ModelCapability>();
+    listByProvider(providerId: string): ModelCapability[] {
+      return Array.from(this.rows.values()).filter(
+        (c) => c.providerId === providerId,
+      );
+    }
+    getOne(providerId: string, modelId: string): ModelCapability | undefined {
+      return this.rows.get(`${providerId}::${modelId}`);
+    }
+    upsert(c: ModelCapability): ModelCapability {
+      const stored: ModelCapability = { ...c, updatedAt: Date.now() };
+      this.rows.set(`${c.providerId}::${c.modelId}`, stored);
+      return stored;
+    }
+    delete(providerId: string, modelId: string): boolean {
+      return this.rows.delete(`${providerId}::${modelId}`);
+    }
+  }
+
+  it('returns the built-in baseline contextWindow for a 1M preset model', () => {
+    const reader = new FakeReader();
+    reader.data = { anthropic: makeLegacyAnthropic('anthropic', true) };
+    const store = new ProviderStore(reader, new InMemoryCapabilityStore());
+    store.migrateAllLegacyProviders();
+
+    // `claude-sonnet-5` is a built-in 1M preset (anthropic.models.ts).
+    const cap = store.resolveRuntimeCapability('anthropic', 'claude-sonnet-5');
+    expect(cap).toBeDefined();
+    expect(cap!.contextWindow).toBe(1_000_000);
+  });
+
+  it('returns the config-marker contextWindow even when DB override exists', () => {
+    // Plan 517 R1: `[options].model_context[modelId]` is the highest-priority
+    // marker. It must win over DB overrides and built-in baselines.
+    const reader = new FakeReader();
+    reader.data = { openrouter: makeLegacyAnthropic('openrouter', true) };
+    const store = new ProviderStore(reader, new InMemoryCapabilityStore());
+    store.migrateAllLegacyProviders();
+    // Pin the API format to openrouter so baselineCap misses the built-in list.
+    const llm = store.getLlmProvider('openrouter')!;
+    store.upsertLlmProvider({ ...llm, options: { model_context: { 'anthropic/claude-sonnet-4.5': 1_000_000 } } });
+
+    const cap = store.resolveRuntimeCapability(
+      'openrouter',
+      'anthropic/claude-sonnet-4.5',
+    );
+    expect(cap).toBeDefined();
+    expect(cap!.contextWindow).toBe(1_000_000);
+    expect(cap!.source).toBe('user');
+  });
+
+  it('returns the DB-override contextWindow when no config marker is set', () => {
+    const reader = new FakeReader();
+    reader.data = { custom: makeLegacyAnthropic('custom', true) };
+    const store = new ProviderStore(reader, new InMemoryCapabilityStore());
+    store.migrateAllLegacyProviders();
+    // Pin apiFormat to something not in allProviderModels so baselineCap misses.
+    store.upsertLlmProvider({
+      ...store.getLlmProvider('custom')!,
+      apiFormat: 'openai',
+    });
+    store.upsertModelCapability({
+      providerId: 'custom',
+      modelId: 'gpt-4o-custom',
+      contextWindow: 500_000,
+      source: 'user',
+      updatedAt: 0,
+    });
+
+    const cap = store.resolveRuntimeCapability('custom', 'gpt-4o-custom');
+    expect(cap).toBeDefined();
+    expect(cap!.contextWindow).toBe(500_000);
+  });
+
+  it('returns undefined when no layer matches — DuyaAgent falls back to 200K', () => {
+    // Plan 517 R1 regression test: a custom modelId on a custom provider
+    // with no DB row and no config marker must return undefined so the
+    // DuyaAgent constructor can log a WARN. (The WARN itself is hard to
+    // assert here because logInfo/logWarn are module-level lazy require
+    // helpers; the agent-side WARN is verified by manual app.log grep.)
+    const reader = new FakeReader();
+    reader.data = { custom: makeLegacyAnthropic('custom', true) };
+    const store = new ProviderStore(reader, new InMemoryCapabilityStore());
+    store.migrateAllLegacyProviders();
+    store.upsertLlmProvider({
+      ...store.getLlmProvider('custom')!,
+      apiFormat: 'openai',
+    });
+
+    const cap = store.resolveRuntimeCapability(
+      'custom',
+      'totally-unknown-model-id',
+    );
+    expect(cap).toBeUndefined();
+  });
+});

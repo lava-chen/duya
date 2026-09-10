@@ -355,6 +355,18 @@ const en = {
   'streaming.toolAction.compact.failed': 'Context compaction failed',
   'streaming.toolAction.compact.messagesCompacted.one': '{count} message',
   'streaming.toolAction.compact.messagesCompacted.other': '{count} messages',
+  // Plan 517 P3: per-step verb shown while the worker is inside compact().
+  // Each verb is paired with the message count the worker surfaces so the
+  // user can see how far along the projection/summarize/trim pipeline
+  // currently is.
+  'streaming.toolAction.compact.step.projecting': 'Projecting conversation...',
+  'streaming.toolAction.compact.step.cutting': 'Locating safe cut point...',
+  'streaming.toolAction.compact.step.summarizing': 'Summarizing {count} messages...',
+  'streaming.toolAction.compact.step.rebuilding': 'Rebuilding message structure...',
+  'streaming.toolAction.compact.step.reinjecting': 'Re-injecting files, skills and tools ({count} cached)...',
+  'streaming.toolAction.compact.step.trimming': 'Trimming — still over budget',
+  'streaming.toolAction.compact.overThreshold': 'Auto-compaction paused — context still over budget',
+  'streaming.toolAction.compact.doneWithStats': 'Compacted: {tokensBefore} \u2192 {tokensRetained} tokens ({strategy})',
 
   'permission.allow': 'Allow',
   'permission.deny': 'Deny',
@@ -978,6 +990,12 @@ const en = {
   'provider.modelsEmptyHint': 'No models enabled yet. Click "Fetch models" above, or add a custom model id below.',
   'provider.custom': 'custom',
   'provider.setContextWindow': 'set ctx',
+  // Plan 517 P1.2: hover tooltip for the per-model context-window button.
+  // Explains why the fallback (200K) bites users on 1M models whose id is
+  // not in the built-in list (OpenRouter-style third-party relays, custom
+  // model ids) and points at the three ways to fix it. Falls back to the
+  // plain 'set ctx' string when the button shows a button-label role.
+  'provider.setContextWindow.tooltip': 'Context window for compaction + cost ring. Set this if your model id is missing from the built-in list — without it the auto-compactor falls back to 200K and may trigger way too early. Override via this dialog, via [options].model_context[modelId] in config.toml, or via the capability DB row.',
   'provider.remove': 'Remove',
   'provider.fetchFirst': 'Fetch models first',
   'provider.fetchFirstHint': 'Click "Fetch models" above to load the list, then you can add them here.',

@@ -72,6 +72,21 @@ class Suppression {
     this.suppressedUntil = 0
   }
 
+  /**
+   * Plan 517 P2.2: idempotent suppress — apply `type` only when no
+   * suppression is currently active. Mirrors the 5-state
+   * `CompactSuppression.trySuppress` semantics but for the legacy
+   * 3-state machine. Returns true when the suppression was applied,
+   * false when an existing suppression kept precedence (so callers
+   * can avoid double-firing).
+   */
+  trySuppress(type: FailureType): boolean {
+    if (this.failure !== null) return false
+    this.failure = type
+    this.suppressedUntil = 0
+    return true
+  }
+
   clearOnBudgetChange(): void {
     if (this.failure === 'size') {
       this.failure = null
@@ -123,6 +138,34 @@ export type CompactionManagerEvent =
   | { type: 'compaction_complete'; result: CompactionResult }
   | { type: 'compaction_error'; error: string; suppressed?: boolean }
   | { type: 'reinject_complete'; files: number; skills: number }
+  /**
+   * Plan 517 P3: lifecycle step boundaries emitted during compact() so the
+   * renderer can show where in the pipeline the worker currently is. Each
+   * step has a stable string key + the inputs that drive the step's
+   * UI text (e.g. messageCount for 'summarizing' surfaces "compressed N
+   * messages of the conversation"). Steps are intentionally coarse —
+   * summarize is the slowest step by far but the legacy summarizer does
+   * not stream progress; a 'started' emit + a 'completed' implicit via
+   * the next 'started' is the most honest signal we have today.
+   */
+  | {
+      type: 'compaction_step'
+      step: 'projecting' | 'cutting' | 'summarizing' | 'rebuilding' | 'reinjecting' | 'trimming'
+      phase: 'started' | 'finished'
+      messageCount?: number
+      tokensBefore?: number
+      tokensEstimated?: number
+      filesCached?: number
+    }
+  /**
+   * Plan 517 P2.2: emitted after a successful compaction when the
+   * post-compaction projection is still above the budget (e.g. system
+   * prompt + reinject overshoots). Consumers (typically DuyaAgent) react
+   * by suppress('size') so the next shouldCompact() call returns false
+   * until a future compaction actually reduces the context below the
+   * threshold — breaks the compaction loop.
+   */
+  | { type: 'compaction_over_threshold'; tokensRetained: number; available: number }
 
 export interface EnhancedCompactionResult extends CompactionResult {
   reinjection?: {
@@ -240,6 +283,16 @@ export class CompactionManager {
     if (Number.isFinite(tokens) && tokens > 0) {
       this.observedPromptTokens = Math.floor(tokens)
     }
+  }
+
+  /**
+   * Plan 517 P2.3: read the most recent provider-anchored prompt volume.
+   * Returns undefined when no anchor is set (post-compaction window or
+   * never-streamed agent). Used by the turn-based + token-based cooldown
+   * gate in DuyaAgent to suppress repeated auto-compaction.
+   */
+  getObservedPromptTokens(): number | undefined {
+    return this.observedPromptTokens
   }
 
   clearObservedPromptTokens(): void {
@@ -360,6 +413,30 @@ export class CompactionManager {
 
     this.emit({ type: 'compaction_start', strategy: strategy.name })
 
+    // Plan 517 P3: step boundary emits. summarize + cut live inside the
+    // strategy.compact() call so we emit 'started' before and the next
+    // step's 'started' implicitly marks the previous as finished. The
+    // current summarizer does not stream progress (single-shot callback),
+    // so the renderer shows a spinner with the messageCount hint rather
+    // than a live progress bar.
+    const emitStep = (
+      step: 'projecting' | 'cutting' | 'summarizing' | 'rebuilding' | 'reinjecting' | 'trimming',
+      phase: 'started' | 'finished',
+      extra: {
+        messageCount?: number
+        tokensBefore?: number
+        tokensEstimated?: number
+        filesCached?: number
+      } = {},
+    ): void => {
+      this.emit({ type: 'compaction_step', step, phase, ...extra })
+    }
+    const stats = this.getStats(messages)
+    emitStep('projecting', 'started', {
+      messageCount: messages.length,
+      tokensBefore: this.contextSize(messages),
+    })
+
     if (!Array.isArray(messages) || messages.length === 0) {
       const err = new Error('Compaction failed: conversation is empty')
       this.emitError(err, trigger, false)
@@ -371,15 +448,28 @@ export class CompactionManager {
         this.reinjector.cacheFileState(messages)
       }
 
-      const stats = this.getStats(messages)
+      emitStep('summarizing', 'started', {
+        messageCount: messages.length,
+        tokensBefore: this.contextSize(messages),
+      })
       const baseResult = await strategy.compact(messages, stats, options)
+      emitStep('summarizing', 'finished', {
+        messageCount: baseResult.messages.length,
+        tokensBefore: this.contextSize(messages),
+        tokensEstimated: this.contextSize(baseResult.messages),
+      })
 
       let finalMessages = baseResult.messages
       let reinjectionInfo: EnhancedCompactionResult['reinjection'] | undefined
 
-      if (this.reinjector && this.reinjector.getCacheStats().filesCached > 0) {
+      const cachedFiles = this.reinjector?.getCacheStats().filesCached ?? 0
+      if (cachedFiles > 0) {
+        emitStep('reinjecting', 'started', {
+          messageCount: finalMessages.length,
+          filesCached: cachedFiles,
+        })
         try {
-          const reinjectResult = await this.reinjector.reinject(baseResult.messages, {
+          const reinjectResult = await this.reinjector!.reinject(baseResult.messages, {
             workingDirectory: options?.workingDirectory,
             recentChanges: options?.recentChanges,
             customContext: options?.customReinjectContext,
@@ -391,6 +481,10 @@ export class CompactionManager {
             toolsRestored: reinjectResult.toolsRestored.length,
             totalTokensAdded: reinjectResult.totalTokensAdded,
           }
+          emitStep('reinjecting', 'finished', {
+            messageCount: finalMessages.length,
+            tokensEstimated: this.contextSize(finalMessages),
+          })
           this.emit({ type: 'reinject_complete', files: reinjectionInfo.filesReinjected, skills: reinjectionInfo.skillsReinjected })
         } catch (reinjectError) {
           logger.warn('Post-compact reinjection failed', {
@@ -435,8 +529,18 @@ export class CompactionManager {
       // post-compact projection compared against the same threshold remains
       // consistent — over-budget after compression triggers further trim.
       const available = this.budget.maxTokens - this.budget.reservedTokens
-      if (this.contextSize(finalMessages) > available) {
+      const tokensBeforeTrim = this.contextSize(finalMessages)
+      if (tokensBeforeTrim > available) {
+        emitStep('trimming', 'started', {
+          messageCount: finalMessages.length,
+          tokensBefore: tokensBeforeTrim,
+          tokensEstimated: available,
+        })
         finalMessages = fitCompactedToBudget(finalMessages, available)
+        emitStep('trimming', 'finished', {
+          messageCount: finalMessages.length,
+          tokensEstimated: this.contextSize(finalMessages),
+        })
       }
 
       // Memory flush (best-effort)
@@ -446,6 +550,22 @@ export class CompactionManager {
 
       const finalTokens = this.contextSize(finalMessages)
       const overThresholdAfterCompact = finalTokens > this.budget.maxTokens - this.budget.reservedTokens
+
+      // Plan 517 P2.2: activate the dead-code `overThresholdAfterCompact`
+      // flag as an active loop brake. When compaction cannot shrink the
+      // context below the threshold (system prompt + reinject overshoot),
+      // suppress 'size' so subsequent shouldCompact() returns false until
+      // a future successful compaction drives `finalTokens` down. This
+      // breaks the loop where compaction runs every other turn because
+      // the post-compaction context keeps re-crossing the threshold.
+      if (overThresholdAfterCompact) {
+        this.suppression.trySuppress('size')
+        this.emit({
+          type: 'compaction_over_threshold',
+          tokensRetained: finalTokens,
+          available: this.budget.maxTokens - this.budget.reservedTokens,
+        })
+      }
 
       this.onCompactionSuccess()
       this.clearObservedPromptTokens()

@@ -77,14 +77,38 @@ export type ActionItem =
       compactedMessageCount?: number;
       strategy?: string;
       errorMessage?: string;
+      /**
+       * Plan 517 P3: per-step message count surfaced by the worker for the
+       * current phase. Used to show "summarizing 32 messages..." etc.
+       * Older action rows (e.g. historical compact summaries without a
+       * step counter) leave this undefined.
+       */
+      stepMessageCount?: number;
     };
 
 /**
  * Lifecycle state of a context compaction while it streams inline. Unlike
  * the persisted `isCompactSummary` message (which holds the full summary),
  * `done` carries only the counts surfaced by the `compact:done` SSE frame.
+ *
+ * Plan 517 P3 expanded the phase union to mirror the per-step boundary
+ * events the worker emits (`projecting` / `cutting` / `summarizing` /
+ * `rebuilding` / `reinjecting` / `trimming` / `over_threshold`). The
+ * legacy three phases (`compacting` / `done` / `error`) remain in the
+ * union because the CompactSummary chrome still treats them as the
+ * three terminal forms of the row.
  */
-export type CompactionStreamPhase = 'compacting' | 'done' | 'error';
+export type CompactionStreamPhase =
+  | 'compacting'
+  | 'done'
+  | 'error'
+  | 'projecting'
+  | 'cutting'
+  | 'summarizing'
+  | 'rebuilding'
+  | 'reinjecting'
+  | 'trimming'
+  | 'over_threshold';
 
 /**
  * One element of a Segment's run. Tool actions render through

@@ -28,6 +28,14 @@ interface ActionRowChromeProps {
    *  string when undefined — useful for the Group header, whose
    *  summary text is already a complete sentence. */
   verbKey?: TranslationKey;
+  /**
+   * Plan 517 P3: pre-translated verb text. Takes precedence over
+   * `verbKey` when present so callers that need interpolation
+   * variables (e.g. compact step count) can pre-build the string
+   * instead of forcing the chrome to know about every consumer's
+   * interpolation shape.
+   */
+  verbText?: string;
   /** Optional leading icon rendered before the verb. Used by rows that
    *  want a glyph next to the status text (e.g. MCP tool rows). Kept
    *  optional so existing rows are unaffected. */
@@ -54,6 +62,7 @@ interface ActionRowChromeProps {
 export function ActionRowChrome({
   status,
   verbKey,
+  verbText,
   icon,
   canExpand,
   expanded,
@@ -67,7 +76,7 @@ export function ActionRowChrome({
   children,
 }: ActionRowChromeProps) {
   const { t } = useTranslation();
-  const verb = verbKey ? t(verbKey) : null;
+  const verb = verbText ?? (verbKey ? t(verbKey) : null);
   const showCaret = canExpand && (expanded || hovered);
   return (
     <button

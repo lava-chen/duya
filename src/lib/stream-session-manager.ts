@@ -535,7 +535,22 @@ export type StreamingEvent =
     }
   | {
       type: 'compact';
-      phase: 'compacting' | 'done' | 'error';
+      /**
+       * Plan 517 P3: phase union expanded to mirror the worker's per-step
+       * boundary events. The three legacy phases remain terminal forms
+       * rendered by CompactSummary chrome.
+       */
+      phase:
+        | 'compacting'
+        | 'done'
+        | 'error'
+        | 'projecting'
+        | 'cutting'
+        | 'summarizing'
+        | 'rebuilding'
+        | 'reinjecting'
+        | 'trimming'
+        | 'over_threshold';
       timestamp: number;
       /** Post-compaction summary text (only on the transient 'done' frame);
        *  the durable record is the persisted `isCompactSummary` message. */
@@ -1815,6 +1830,51 @@ class StreamSessionManager {
           break;
         }
 
+        case 'compact:step': {
+          // Plan 517 P3: per-step lifecycle event. Mirror into the
+          // compaction store so the inline MessageList row can read
+          // current step + stepMessageCount without each render
+          // resubscribing. The streaming event is also pushed so the
+          // chrome reflects the current verb (e.g. "summarizing 32
+          // messages...").
+          const data = event.data as
+            | {
+                step: 'projecting' | 'cutting' | 'summarizing' | 'rebuilding' | 'reinjecting' | 'trimming';
+                phase: 'started' | 'finished';
+                messageCount?: number;
+              }
+            | undefined;
+          if (data) {
+            useCompactionStore.getState().setStep(sessionId, data);
+            // Only the 'started' boundary changes the visible phase — a
+            // 'finished' boundary for step N is implicitly the start of
+            // step N+1, and the worker emits that next.
+            if (data.phase === 'started') {
+              this.handleCompactEvent(sessionId, streamId, {
+                phase: data.step,
+                compactedMessageCount: data.messageCount,
+              });
+            }
+          }
+          break;
+        }
+
+        case 'compact:over_threshold': {
+          // Plan 517 P2.2: compaction succeeded but the post-compact
+          // projection is still over the budget. The agent has already
+          // applied `suppress('size')`; we surface the info so the
+          // renderer can show a paused-state hint.
+          const data = event.data as { tokensRetained?: number; available?: number } | undefined;
+          useCompactionStore.getState().setOverThreshold(sessionId, {
+            tokensRetained: data?.tokensRetained ?? 0,
+            available: data?.available ?? 0,
+          });
+          this.handleCompactEvent(sessionId, streamId, {
+            phase: 'over_threshold',
+          });
+          break;
+        }
+
         case 'done':
           this.handleDoneEvent(sessionId, streamId, event.data as { reason?: string } | undefined);
           break;
@@ -2222,7 +2282,17 @@ class StreamSessionManager {
     sessionId: string,
     streamId: string,
     info: {
-      phase: 'compacting' | 'done' | 'error';
+      phase:
+        | 'compacting'
+        | 'done'
+        | 'error'
+        | 'projecting'
+        | 'cutting'
+        | 'summarizing'
+        | 'rebuilding'
+        | 'reinjecting'
+        | 'trimming'
+        | 'over_threshold';
       compactedMessageCount?: number;
       strategy?: string;
       errorMessage?: string;
