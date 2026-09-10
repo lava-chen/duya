@@ -24,17 +24,157 @@ import { basename, extname } from 'node:path';
 import { PlatformAdapter, createAdapter, getRegisteredPlatforms } from './adapters/base.js';
 import { IpcClient } from './ipc-client.js';
 import { UserMapper } from './user-mapper.js';
-import { StreamHandler } from './stream-handler.js';
-import { DeliveryLedger } from './delivery-ledger.js';
-import { DeliveryMirror } from './delivery-mirror.js';
 import { matchProfileRoute, parseProfileRoutes, type ProfileRoute } from './profile-routing.js';
-import { PermissionBroker } from './permission-broker.js';
 import { setProxyUrl, initProxy } from './proxy-fetch.js';
-import { buildAttachments } from './attachment-builder.js';
-import { resolveDisplayConfig, type DisplayUserConfig } from './display-config.js';
+import { EXT_MIME_MAP, MIME_EXT_MAP } from './utils/mime.js';
+import { readFile } from 'node:fs/promises';
 
 const ADAPTER_START_TIMEOUT_MS = 30_000;
 const ADAPTER_STOP_TIMEOUT_MS = 10_000;
+
+/**
+ * Local replacement for the old PermissionBroker callback parser. Inline-button
+ * permission flows have been removed; the gateway now resolves permissions via
+ * `/approve` and `/deny` slash commands. The callback parser stays here so any
+ * stale button-click messages forwarded by an old adapter are still tolerated.
+ */
+function parsePermissionCallback(
+  callbackData: string,
+): { permissionId: string; decision: 'allow' | 'allow_once' | 'deny' } | null {
+  const match = callbackData.match(/^perm:(allow|allow_once|deny):(.+)$/);
+  if (!match) return null;
+  return { permissionId: match[2], decision: match[1] as 'allow' | 'allow_once' | 'deny' };
+}
+
+/**
+ * Build the inbound `options.files` payload (GatewayFileAttachment[]) from a
+ * NormalizedMessage. Inlined from the old `attachment-builder.ts` because the
+ * gateway is now its only consumer and the file was a 187-line wrapper around
+ * the same reductions + size guards.
+ */
+interface GatewayFileAttachment {
+  id?: string;
+  name: string;
+  type: string;
+  url: string;
+  size: number;
+}
+
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_DOC_BYTES = 20 * 1024 * 1024;
+const MAX_AUDIO_VIDEO_BYTES = 25 * 1024 * 1024;
+
+const IMAGE_MAGIC_BYTES: Record<string, number[]> = {
+  'image/png': [0x89, 0x50, 0x4e, 0x47],
+  'image/jpeg': [0xff, 0xd8, 0xff],
+  'image/gif': [0x47, 0x49, 0x46, 0x38],
+  'image/webp': [0x52, 0x49, 0x46, 0x46],
+  'image/bmp': [0x42, 0x4d],
+};
+
+function getMimeByExtension(filePath?: string): string | null {
+  if (!filePath) return null;
+  const ext = extname(filePath).toLowerCase();
+  return EXT_MIME_MAP[ext] || null;
+}
+
+function detectMimeType(buffer: Buffer, filePath?: string): string | null {
+  for (const [mime, magic] of Object.entries(IMAGE_MAGIC_BYTES)) {
+    const matches = magic.every((byte, i) => buffer[i] === byte);
+    if (matches) return mime;
+  }
+  return getMimeByExtension(filePath);
+}
+
+function ensureExtension(name: string, mimeType: string): string {
+  const existingExt = extname(name).toLowerCase();
+  if (existingExt) return name;
+  const ext = MIME_EXT_MAP[mimeType];
+  return ext ? `${name}${ext}` : name;
+}
+
+function bufferToAttachment(
+  buffer: Buffer,
+  name: string,
+  filePath?: string,
+): GatewayFileAttachment {
+  const mimeType = detectMimeType(buffer, filePath) || 'application/octet-stream';
+  const base64 = buffer.toString('base64');
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+    name: ensureExtension(name, mimeType),
+    type: mimeType,
+    url: `data:${mimeType};base64,${base64}`,
+    size: buffer.length,
+  };
+}
+
+async function readFileToAttachment(
+  filePath: string,
+  name?: string,
+  maxSize: number = MAX_DOC_BYTES,
+): Promise<GatewayFileAttachment | null> {
+  try {
+    const buffer = await readFile(filePath);
+    if (buffer.length > maxSize) {
+      console.warn(
+        `[GatewayManager] Skipping large file: ${filePath} ` +
+          `(${(buffer.length / (1024 * 1024)).toFixed(1)} MB > ${(maxSize / (1024 * 1024)).toFixed(1)} MB)`,
+      );
+      return null;
+    }
+    const fileName = name || filePath.split(/[/\\]/).pop() || 'file';
+    return bufferToAttachment(buffer, fileName, filePath);
+  } catch (err) {
+    console.warn(`[GatewayManager] Failed to read file: ${filePath}`, err);
+    return null;
+  }
+}
+
+async function buildInboundFiles(msg: NormalizedMessage): Promise<GatewayFileAttachment[]> {
+  const out: GatewayFileAttachment[] = [];
+
+  for (let i = 0; i < (msg.images?.length ?? 0); i++) {
+    const buffer = msg.images![i];
+    if (buffer.length > MAX_IMAGE_BYTES) {
+      console.warn(`[GatewayManager] Skipping large image buffer #${i + 1}`);
+      continue;
+    }
+    out.push(bufferToAttachment(buffer, `image-${i + 1}.jpg`));
+  }
+
+  for (let i = 0; i < (msg.imagePaths?.length ?? 0); i++) {
+    const att = await readFileToAttachment(msg.imagePaths![i], `image-${i + 1}`, MAX_IMAGE_BYTES);
+    if (att) out.push(att);
+  }
+
+  for (let i = 0; i < (msg.files?.length ?? 0); i++) {
+    const f = msg.files![i];
+    if (f.buffer.length > MAX_DOC_BYTES) {
+      console.warn(`[GatewayManager] Skipping large file: ${f.name}`);
+      continue;
+    }
+    out.push(bufferToAttachment(f.buffer, f.name));
+  }
+
+  for (let i = 0; i < (msg.filePaths?.length ?? 0); i++) {
+    const f = msg.filePaths![i];
+    const att = await readFileToAttachment(f.path, f.name, MAX_DOC_BYTES);
+    if (att) out.push(att);
+  }
+
+  for (let i = 0; i < (msg.voicePaths?.length ?? 0); i++) {
+    const att = await readFileToAttachment(msg.voicePaths![i], `voice-${i + 1}`, MAX_AUDIO_VIDEO_BYTES);
+    if (att) out.push(att);
+  }
+
+  for (let i = 0; i < (msg.videoPaths?.length ?? 0); i++) {
+    const att = await readFileToAttachment(msg.videoPaths![i], `video-${i + 1}`, MAX_AUDIO_VIDEO_BYTES);
+    if (att) out.push(att);
+  }
+
+  return out;
+}
 
 /**
  * Plain-path inbound attachment reference (plan 507 P2.2).
@@ -54,10 +194,6 @@ export class GatewayManager {
   private adapterConfigs = new Map<PlatformType, PlatformConfig>();
   private ipc: IpcClient;
   private userMapper: UserMapper;
-  private streamHandler: StreamHandler;
-  private permissionBroker: PermissionBroker;
-  private ledger: DeliveryLedger;
-  private mirror: DeliveryMirror;
   private profileRoutes: ProfileRoute[] = [];
   private autoStart = false;
   private proxyConfig?: GatewayProxyConfig;
@@ -66,52 +202,83 @@ export class GatewayManager {
   /** Queued inbound text per busy session (merged into a single prompt). */
   private busyQueue = new Map<string, string[]>();
   /**
-   * Periodic sweep of ledger obligations for connected adapters. Backstop for
-   * the reconnect hook: a failed send lands in the ledger AFTER the channel
-   * reconnects, so the reconnect event itself cannot see it. The sweep retries
-   * it on the next tick instead of waiting for a process restart.
+   * Per-session lightweight stream tracking. Replaces StreamHandler for the
+   * minimal responsibilities the gateway still owns:
+   *  - the platformMsgId to quote on outbound replies (Hermes parity),
+   *  - whether a working reaction has been placed that needs clearing on
+   *    completion.
+   *
+   * Streaming-card / placeholder-edit / chunk aggregation / delivery-ledger
+   * responsibilities have moved to the main process. The gateway now treats
+   * outbound traffic as discrete NormalizedReply deliveries.
    */
-  private redeliveryTimer: ReturnType<typeof setInterval> | null = null;
+  private activeStreams = new Map<string, {
+    replyTargetMsgId?: string;
+    platform?: PlatformType;
+    platformChatId?: string;
+    workingReactionSet: boolean;
+  }>();
 
   constructor() {
     this.ipc = new IpcClient();
     this.userMapper = new UserMapper(this.ipc);
-    this.ledger = new DeliveryLedger();
-    this.ledger.load();
-    this.mirror = new DeliveryMirror(this.ipc);
-    this.streamHandler = new StreamHandler(undefined, this.ledger, this.mirror);
-    this.permissionBroker = new PermissionBroker();
+  }
 
-    // Wire up chatId resolver for stream handler
-    this.streamHandler.setChatIdResolver(async (sessionId) => {
-      const mapping = await this.userMapper.getChatIdForSession(sessionId);
-      return mapping?.platformChatId ?? null;
+  /** Track a session as busy, recording the inbound message id that subsequent
+   *  replies should quote. Idempotent — repeated calls update only the fields
+   *  actually provided. */
+  private markBusy(
+    sessionId: string,
+    info: { replyTargetMsgId?: string; platform?: PlatformType; platformChatId?: string },
+  ): void {
+    const existing = this.activeStreams.get(sessionId);
+    if (existing) {
+      if (info.replyTargetMsgId) existing.replyTargetMsgId = info.replyTargetMsgId;
+      if (info.platform) existing.platform = info.platform;
+      if (info.platformChatId) existing.platformChatId = info.platformChatId;
+      return;
+    }
+    this.activeStreams.set(sessionId, {
+      ...(info.replyTargetMsgId ? { replyTargetMsgId: info.replyTargetMsgId } : {}),
+      ...(info.platform ? { platform: info.platform } : {}),
+      ...(info.platformChatId ? { platformChatId: info.platformChatId } : {}),
+      workingReactionSet: false,
     });
+  }
 
-    // Wire up per-platform display config for the stream handler.
-    this.streamHandler.setDisplayConfigResolver((platform) => {
-      const cfg = resolveDisplayConfig(platform);
-      return {
-        showReasoning: cfg.showReasoning,
-        toolProgress: cfg.toolProgress,
-        toolPreviewLength: cfg.toolPreviewLength,
-        streaming: cfg.streaming,
-      };
-    });
+  /** True if this session is currently being tracked as busy. */
+  private hasActiveStream(sessionId: string): boolean {
+    return this.activeStreams.has(sessionId);
+  }
 
-    // Wire up per-platform reaction emoji resolver for the stream handler.
-    this.streamHandler.setReactionConfigResolver((platform) => {
-      const opts = this.adapterConfigs.get(platform)?.options ?? {};
-      const r = (opts as { reactions?: { enabled?: boolean; working?: string; done?: string; error?: string } }).reactions;
-      // Defaults must be in Telegram's built-in reaction emoji set; custom
-      // emoji like 🔨/✅/❌ are rejected with REACTION_INVALID for free bots.
-      return {
-        enabled: r?.enabled ?? true,
-        working: r?.working ?? '🤔',
-        done: r?.done ?? '👍',
-        error: r?.error ?? '👎',
-      };
-    });
+  /** Clear busy state for a session. If a working reaction was placed on the
+   *  user's message, replace it with the platform's terminal emoji. */
+  private clearBusy(
+    sessionId: string,
+    terminal: 'done' | 'error' | 'none' = 'done',
+  ): void {
+    const state = this.activeStreams.get(sessionId);
+    if (!state) return;
+    this.activeStreams.delete(sessionId);
+    if (!state.workingReactionSet) return;
+    if (!state.platform || !state.platformChatId || !state.replyTargetMsgId) return;
+    const adapter = this.adapters.get(state.platform);
+    if (!adapter) return;
+    const opts = (this.adapterConfigs.get(state.platform)?.options ?? {}) as {
+      reactions?: { enabled?: boolean; done?: string; error?: string };
+    };
+    const doneEmoji = terminal === 'error'
+      ? (opts.reactions?.error ?? '👎')
+      : (opts.reactions?.done ?? '👍');
+    try {
+      if (terminal === 'none') {
+        adapter.removeMessageReaction?.(state.platformChatId, state.replyTargetMsgId);
+      } else {
+        adapter.setMessageReaction?.(state.platformChatId, state.replyTargetMsgId, doneEmoji);
+      }
+    } catch {
+      // Reaction updates are best-effort; never break the reply path on them.
+    }
   }
 
   /**
@@ -204,21 +371,6 @@ export class GatewayManager {
             ),
           ]);
 
-          // Flush delivery-ledger redeliveries whenever this channel recovers
-          // from a disconnect. A final reply that failed to send while the
-          // channel was down must not wait for a process restart to be retried.
-          adapter.onReconnected?.(() => {
-            console.log(`[GatewayManager] Adapter reconnected: ${platform}, flushing pending redeliveries`);
-            this.streamHandler.redeliverRecoverable(
-              (p) => this.adapters.get(p as PlatformType),
-              [platformType],
-            ).then((n) => {
-              if (n > 0) console.log(`[GatewayManager] Reconnected redelivery: delivered ${n} message(s) for ${platform}`);
-            }).catch((err) => {
-              console.error(`[GatewayManager] Reconnected redelivery failed for ${platform}:`, err);
-            });
-          });
-
           console.log(`[GatewayManager] Adapter started: ${platform}`);
           return { platform: platformType, adapter };
         } catch (err) {
@@ -247,35 +399,6 @@ export class GatewayManager {
     }
 
     console.log(`[GatewayManager] Started ${startedCount}/${this.adapterConfigs.size} adapter(s)` + (failedCount > 0 ? `, ${failedCount} failed` : ''));
-
-    // After adapters are up, redeliver any obligations recovered from a
-    // previous crash. Best-effort: failures stay in the ledger for a later
-    // retry boundary.
-    const redelivered = await this.streamHandler.redeliverRecoverable(
-      (platform) => this.adapters.get(platform as PlatformType),
-    );
-    if (redelivered > 0) {
-      console.log(`[GatewayManager] Redelivered ${redelivered} recoverable message(s) from delivery ledger`);
-    }
-
-    // Periodic backstop sweep (60s). Only connected adapters are swept so a
-    // still-offline channel's obligations are not burned against a dead link.
-    if (!this.redeliveryTimer) {
-      this.redeliveryTimer = setInterval(() => {
-        const connectedPlatforms = Array.from(this.adapters.entries())
-          .filter(([, a]) => a.getHealth?.().connected ?? a.isRunning())
-          .map(([p]) => p);
-        if (connectedPlatforms.length === 0) return;
-        this.streamHandler.redeliverRecoverable(
-          (platform) => this.adapters.get(platform as PlatformType),
-          connectedPlatforms,
-        ).then((n) => {
-          if (n > 0) console.log(`[GatewayManager] Periodic sweep delivered ${n} pending message(s)`);
-        }).catch((err) => {
-          console.error('[GatewayManager] Periodic redelivery sweep failed:', err);
-        });
-      }, 60_000);
-    }
 
     // Broadcast gateway-online to the home channel (Hermes parity).
     await this.broadcastHome('🟢 Gateway online');
@@ -312,20 +435,6 @@ export class GatewayManager {
     // (Hermes parity). Best-effort and silent on failure.
     await this.broadcastHome('🔴 Gateway offline');
 
-    // Graceful shutdown flush: attempt one final delivery of any recoverable
-    // obligations while adapters are still online. Anything still failing is
-    // durable in the ledger and will be re-attempted on the next boot.
-    try {
-      const flushed = await this.streamHandler.redeliverRecoverable(
-        (platform) => this.adapters.get(platform as PlatformType),
-      );
-      if (flushed > 0) {
-        console.log(`[GatewayManager] Shutdown flush delivered ${flushed} pending message(s)`);
-      }
-    } catch (err) {
-      console.error('[GatewayManager] Shutdown flush failed:', err);
-    }
-
     const stopTasks = Array.from(this.adapters).map(
       async ([platform, adapter]) => {
         try {
@@ -344,13 +453,8 @@ export class GatewayManager {
 
     await Promise.allSettled(stopTasks);
 
-    if (this.redeliveryTimer) {
-      clearInterval(this.redeliveryTimer);
-      this.redeliveryTimer = null;
-    }
-
     this.adapters.clear();
-    this.streamHandler.cleanupAll();
+    this.activeStreams.clear();
     this.running = false;
 
     console.log('[GatewayManager] All adapters stopped');
@@ -391,31 +495,19 @@ export class GatewayManager {
 
     for (const [platform, adapter] of this.adapters) {
       const health = adapter.getHealth?.();
-      const displayConfig = resolveDisplayConfig(platform);
       adapters.push({
         platform,
         running: adapter.isRunning(),
         health,
-        displayConfig: {
-          streaming: displayConfig.streaming,
-          toolProgress: displayConfig.toolProgress,
-          showReasoning: displayConfig.showReasoning,
-        },
       });
     }
 
     // Include configured but not started adapters
     for (const platform of this.adapterConfigs.keys()) {
       if (!this.adapters.has(platform)) {
-        const displayConfig = resolveDisplayConfig(platform);
         adapters.push({
           platform,
           running: false,
-          displayConfig: {
-            streaming: displayConfig.streaming,
-            toolProgress: displayConfig.toolProgress,
-            showReasoning: displayConfig.showReasoning,
-          },
         });
       }
     }
@@ -428,12 +520,19 @@ export class GatewayManager {
   }
 
   /**
-   * Handle an outbound stream event from Main Process
-   * Routes to the correct adapter based on session → platform mapping
-   * @param sessionId - The session ID
-   * @param event - The stream event
-   * @param directPlatform - Optional platform passed directly from Main to avoid DB race condition
-   * @param directPlatformChatId - Optional platformChatId passed directly from Main to avoid DB race condition
+   * Handle an outbound delivery from the Main Process.
+   *
+   * The gateway no longer runs a streaming card manager; the main process
+   * aggregates the agent's stream into a discrete NormalizedReply (text, media,
+   * or a card) and pushes one final delivery through this entry. Any sub-final
+   * events are no-ops — the gateway does not own a stream state machine.
+   *
+   * Recognized event types:
+   *  - `text` / `image` / `audio` / `video` / `file` / `card` / `media` —
+   *    delivered as-is to the platform adapter.
+   *  - `stream_start` / `stream_chunk` / `stream_end` — silently ignored
+   *    (kept on the type for backward compat with older main processes).
+   *  - `error` — sent verbatim to the adapter.
    */
   async handleOutboundEvent(
     sessionId: string,
@@ -441,37 +540,56 @@ export class GatewayManager {
     directPlatform?: string,
     directPlatformChatId?: string
   ): Promise<void> {
-    // Use direct platformChatId if provided (avoids DB race condition)
+    // Tool progress / status / thinking / permission events are handled by
+    // the main process renderer; the channel-only gateway only delivers
+    // terminal replies (`chat:text` / `chat:done` / `chat:error`).
+    const isTerminal =
+      event.type === 'chat:text' ||
+      event.type === 'chat:done' ||
+      event.type === 'chat:error';
+    if (!isTerminal) {
+      return;
+    }
+
+    let adapter: PlatformAdapter | undefined;
+    let chatId: string | undefined;
     if (directPlatform && directPlatformChatId) {
-      const adapter = this.adapters.get(directPlatform as PlatformType);
-      if (!adapter) {
-        console.warn(`[GatewayManager] No running adapter for platform: ${directPlatform}`);
-        return;
+      adapter = this.adapters.get(directPlatform as PlatformType);
+      chatId = directPlatformChatId;
+    } else {
+      const mapping = await this.userMapper.getChatIdForSession(sessionId);
+      if (mapping) {
+        adapter = this.adapters.get(mapping.platform as PlatformType);
+        chatId = mapping.platformChatId;
       }
-      await this.streamHandler.handleStreamEvent(sessionId, event, adapter, directPlatformChatId);
+    }
+    if (!adapter || !chatId) {
+      console.warn(`[GatewayManager] handleOutboundEvent: no adapter/chat for session=${sessionId}`);
       return;
     }
 
-    // Fallback: look up which platform/chat this session belongs to
-    const mapping = await this.userMapper.getChatIdForSession(sessionId);
-    if (!mapping) {
-      console.warn(`[GatewayManager] No platform mapping for session: ${sessionId}`);
-      return;
+    const reply: NormalizedReply = event.type === 'chat:error'
+      ? { type: 'text', text: event.message ?? '⚠️ agent error' }
+      : { type: 'text', text: event.finalContent ?? event.content ?? '' };
+    if (!reply.text) return;
+
+    try {
+      await adapter.sendReply(chatId, reply);
+    } catch (err) {
+      console.error('[GatewayManager] handleOutboundEvent sendReply failed:', err);
     }
 
-    const adapter = this.adapters.get(mapping.platform);
-    if (!adapter) {
-      console.warn(`[GatewayManager] No running adapter for platform: ${mapping.platform}`);
-      return;
-    }
-
-    // Route to stream handler for platform-specific delivery
-    await this.streamHandler.handleStreamEvent(sessionId, event, adapter);
+    this.clearBusy(sessionId, event.type === 'chat:error' ? 'error' : 'done');
   }
 
   /**
-   * Handle a permission request from Main Process
-   * Sends a message with inline buttons to the platform
+   * Handle a permission request from the Main Process.
+   *
+   * The old PermissionBroker used inline buttons (Allow / Deny / Allow Once)
+   * which most bot platforms reject. The channel-only gateway instead surfaces
+   * the request as plain text and lets the user reply via the existing
+   * `/approve` and `/deny` slash commands, which route through `ipc`. Anything
+   * the user types or selects is forwarded via `gateway:permission_resolve`.
    */
   async handlePermissionRequest(
     sessionId: string,
@@ -483,8 +601,22 @@ export class GatewayManager {
     const adapter = this.adapters.get(mapping.platform);
     if (!adapter) return;
 
-    const reply = this.permissionBroker.createPermissionReply(permission);
-    await adapter.sendReply(mapping.platformChatId, reply);
+    const inputPreview = JSON.stringify(permission.toolInput, null, 2).slice(0, 300);
+    await adapter.sendReply(mapping.platformChatId, {
+      type: 'text',
+      text: [
+        '**Permission Request**',
+        '',
+        `Tool: \`${permission.toolName}\``,
+        'Input:',
+        '```',
+        inputPreview,
+        '```',
+        '',
+        `Reply with \`/approve\` or \`/deny\` (id: \`${permission.id}\`).`,
+      ].join('\n'),
+      parseMode: 'Markdown',
+    });
   }
 
   /**
@@ -557,7 +689,7 @@ export class GatewayManager {
    * Cleans up local state (active streams) for the given session.
    */
   onSessionReset(sessionId: string): void {
-    this.streamHandler.cleanupStream(sessionId);
+    this.activeStreams.delete(sessionId);
   }
 
   /**
@@ -587,7 +719,7 @@ export class GatewayManager {
    * Whether the given session currently has an active stream (agent busy).
    */
   private isSessionBusy(sessionId: string): boolean {
-    return this.streamHandler.hasActiveStream(sessionId);
+    return this.activeStreams.has(sessionId);
   }
 
   /**
@@ -658,7 +790,7 @@ export class GatewayManager {
     try {
       // Check if this is a callback (permission button click)
       if (msg.callbackData) {
-        const decision = this.permissionBroker.parseCallback(msg.callbackData);
+        const decision = parsePermissionCallback(msg.callbackData);
         if (decision) {
           this.ipc.send({
             type: 'gateway:permission_resolve',
@@ -692,7 +824,7 @@ export class GatewayManager {
 
         if (busyMode === 'interrupt') {
           this.ipc.interruptSession(sessionId);
-          this.streamHandler.cleanupStream(sessionId);
+          this.activeStreams.delete(sessionId);
           await this.forwardInbound(msg, sessionId, {});
           await this.adapters.get(msg.platform)?.sendReply?.(msg.platformChatId, {
             type: 'text',
@@ -732,8 +864,14 @@ export class GatewayManager {
         return;
       }
 
-      // Remember the user's message ID so outbound replies quote it (hermes-style).
-      this.streamHandler.setReplyTarget(sessionId, msg.platformMsgId);
+      // Mark the session as busy so subsequent inbound messages trigger the
+      // busy-input handling above. The reply target is recorded for hermes-
+      // style "reply to user" quoting on outbound messages.
+      this.markBusy(sessionId, {
+        replyTargetMsgId: msg.platformMsgId,
+        platform: msg.platform as PlatformType,
+        platformChatId: msg.platformChatId,
+      });
 
       // Signal "working" on the user's message via a reaction (hermes-style).
       const adapter = this.adapters.get(msg.platform);
@@ -741,22 +879,14 @@ export class GatewayManager {
         { reactions?: { enabled?: boolean; working?: string } };
       const reactionsEnabled = reactionOpts.reactions?.enabled ?? true;
       const workingEmoji = reactionOpts.reactions?.working ?? '🤔';
-      if (reactionsEnabled) {
-        adapter?.setMessageReaction?.(msg.platformChatId, msg.platformMsgId, workingEmoji);
-      }
-
-      // Build attachments from all attachment fields (images/files/voice/video)
-      const options: Record<string, unknown> = {};
-      const attachments = await buildAttachments({
-        images: msg.images,
-        imagePaths: msg.imagePaths,
-        files: msg.files,
-        filePaths: msg.filePaths,
-        voicePaths: msg.voicePaths,
-        videoPaths: msg.videoPaths,
-      });
-      if (attachments.length > 0) {
-        options.files = attachments;
+      if (reactionsEnabled && msg.platformMsgId) {
+        try {
+          adapter?.setMessageReaction?.(msg.platformChatId, msg.platformMsgId, workingEmoji);
+          const state = this.activeStreams.get(sessionId);
+          if (state) state.workingReactionSet = true;
+        } catch {
+          // Reaction is best-effort.
+        }
       }
 
       // Profile routing (basic version): if a route matches this (platform,
@@ -768,6 +898,8 @@ export class GatewayManager {
         chatId: msg.platformChatId,
         threadId: msg.threadId,
       });
+
+      const options: Record<string, unknown> = {};
       if (route) {
         options.profile = route.profile;
       }
@@ -796,17 +928,10 @@ export class GatewayManager {
   ): Promise<void> {
     const options: Record<string, unknown> = { ...extraOptions };
 
-    // Build attachments from all attachment fields (images/files/voice/video).
-    const attachments = await buildAttachments({
-      images: msg.images,
-      imagePaths: msg.imagePaths,
-      files: msg.files,
-      filePaths: msg.filePaths,
-      voicePaths: msg.voicePaths,
-      videoPaths: msg.videoPaths,
-    });
-    if (attachments.length > 0) {
-      options.files = attachments;
+    // Base64 file payload for backward compat with main-process consumers.
+    const files = await buildInboundFiles(msg);
+    if (files.length > 0) {
+      options.files = files;
     }
 
     // Plain-path attachment refs (plan 507 P2.2): parallel to the base64
@@ -837,7 +962,7 @@ export class GatewayManager {
       chatId: msg.platformChatId,
       threadId: msg.threadId,
     });
-    if (route) {
+    if (route && options.profile === undefined) {
       options.profile = route.profile;
     }
 
@@ -1044,7 +1169,10 @@ export class GatewayManager {
         }
 
         case 'reasoning': {
-          const display = resolveDisplayConfig(msg.platform);
+          // Display config moved out of the gateway; the channel-only build
+          // can only echo the current persisted setting. `/reasoning on|off`
+          // writes through `gatewayModel` settings, with a graceful fallback
+          // when the main process can't persist it.
           const arg = args[0]?.toLowerCase();
           if (arg === 'on' || arg === 'off' || arg === 'toggle') {
             const ok = await this.updateSetting('display.reasoning', arg === 'on');
@@ -1052,13 +1180,13 @@ export class GatewayManager {
               type: 'text',
               text: ok
                 ? `✅ Reasoning \`${arg === 'on' ? 'enabled' : 'disabled'}\``
-                : `🔄 Toggle requested (\`${arg}\`). *Note:* reasoning display is configured in settings; the gateway cannot persist it directly. Currently \`${display.showReasoning ? 'on' : 'off'}\`.`,
+                : `🔄 Toggle requested (\`${arg}\`). *Note:* reasoning display is configured in main settings; the channel-only gateway cannot persist it directly.`,
               parseMode: 'Markdown',
             });
           } else {
             await adapter.sendReply(msg.platformChatId, {
               type: 'text',
-              text: `*Reasoning*\n\nCurrently: \`${display.showReasoning ? 'on' : 'off'}\`\n\nUsage: \`/reasoning [on|off|toggle]\``,
+              text: '*Reasoning*\n\nThe channel-only gateway does not track display config locally.\n\nUsage: `/reasoning [on|off|toggle]`',
               parseMode: 'Markdown',
             });
           }
@@ -1086,7 +1214,7 @@ export class GatewayManager {
         case 'stop': {
           const sessionId = await this.getSessionId(msg);
           if (sessionId) {
-            this.streamHandler.cleanupStream(sessionId);
+            this.activeStreams.delete(sessionId);
             // Forward an interrupt signal so the worker can kill running
             // terminal commands / cancel pending tool calls (Hermes semantics).
             this.ipc.interruptSession(sessionId);
@@ -1466,7 +1594,7 @@ export class GatewayManager {
         case 'delete': {
           const sessionId = await this.getSessionId(msg);
           if (sessionId) {
-            this.streamHandler.cleanupStream(sessionId);
+            this.activeStreams.delete(sessionId);
           }
           const { newSessionId } = await this.resetSession(msg);
           const sessionId2 = sessionId ?? '(none)';
