@@ -981,6 +981,9 @@ const zh: Record<TranslationKey, string> = {
   'provider.modelsEmptyHint': '尚未启用任何模型。点击上方「拉取模型」按钮，或在下方添加自定义模型 id。',
   'provider.custom': '自定义',
   'provider.setContextWindow': '设置上下文',
+  // Plan 517 P1.2: 设置按钮的悬浮提示。解释为什么 1M 模型在没有 built-in
+  // 匹配时会回退到 200K，并指向三种修复路径。按钮文本回退到「设置上下文」。
+  'provider.setContextWindow.tooltip': '此模型上下文窗口，用于自动压缩与用量环。如果模型 id 不在内置列表（OpenRouter 中转、自定义 id），请在这里设置——否则自动压缩会回退到 200K 并过早触发。可通过本面板、config.toml 的 [options].model_context[modelId]，或 capability DB 行覆盖。',
   'provider.remove': '移除',
   'provider.fetchFirst': '请先拉取',
   'provider.fetchFirstHint': '点击上方「拉取模型列表」加载模型后即可添加。',
