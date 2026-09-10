@@ -41,6 +41,15 @@ function logError(message: string, err: unknown) {
     // logger not available
   }
 }
+function logWarn(message: string, meta?: unknown) {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getLogger } = require('../../logging/logger.js') as { getLogger: () => { warn: (m: string, meta?: unknown, component?: string) => void } };
+    getLogger().warn(message, meta, 'ConfigManager');
+  } catch {
+    // logger not available in non-electron test env
+  }
+}
 import {
   inferApiFormatFromLegacyProviderType,
   migrateLegacyApiProvider,
@@ -703,7 +712,7 @@ export class ProviderStore {
         : undefined;
 
     if (configCtx !== undefined && configCtx > 0) {
-      return {
+      const merged: ModelCapability = {
         ...(dbCap ??
           baselineCap ?? {
             providerId,
@@ -715,10 +724,44 @@ export class ProviderStore {
         source: 'user',
         updatedAt: Date.now(),
       };
+      logInfo('capability resolved from config marker', {
+        providerId,
+        modelId,
+        contextWindow: configCtx,
+        source: 'config',
+      });
+      return merged;
     }
     // DB override (may carry contextWindow or other caps).
-    if (dbCap) return dbCap;
-    return baselineCap;
+    if (dbCap) {
+      logInfo('capability resolved from DB override', {
+        providerId,
+        modelId,
+        contextWindow: dbCap.contextWindow,
+        source: 'db',
+      });
+      return dbCap;
+    }
+    if (baselineCap) {
+      logInfo('capability resolved from built-in baseline', {
+        providerId,
+        modelId,
+        contextWindow: baselineCap.contextWindow,
+        source: 'preset',
+      });
+      return baselineCap;
+    }
+    // Plan 517 R1: all three layers missed. DuyaAgent will fall back to
+    // DEFAULT_CONTEXT_WINDOW = 200_000. Emit a WARN so users can grep
+    // app.log and add `[options].model_context[modelId] = N` in config.toml
+    // or a DB override row to recover the real window.
+    logWarn(
+      'compaction contextWindow fallback to 200000 — no capability resolved. ' +
+        'Add [options].model_context[modelId] = N in config.toml or set a DB override ' +
+        'via provider:updateModelCapability to override the 200K fallback.',
+      { providerId, modelId, apiFormat },
+    );
+    return undefined;
   }
 
   deleteModelCapability(providerId: string, modelId: string): boolean {

@@ -496,6 +496,24 @@ export class duyaAgent {
     // didn't attach a capability row (e.g. legacy call site or missing entry).
     const capabilityContextWindow =
       options.runtimeConfig?.modelCapabilities?.contextWindow;
+    if (
+      typeof capabilityContextWindow !== 'number' ||
+      capabilityContextWindow <= 0
+    ) {
+      // Plan 517 R1: surfaces the silent 200K fallback so users can fix
+      // their config (custom / OpenRouter model ids need a manual marker).
+      logger.warn(
+        '[Agent] compaction contextWindow fallback to 200000 — no capability.contextWindow on runtimeConfig. ' +
+          'Add [options].model_context[modelId] = N in config.toml or a DB override row to recover the real window.',
+        {
+          runtimeConfigHasCapabilities:
+            options.runtimeConfig?.modelCapabilities !== undefined,
+          model: options.runtimeConfig?.model,
+          apiFormat: options.runtimeConfig?.apiFormat,
+        },
+        'AgentCore',
+      );
+    }
     this.compactionManager = createCompactionManager({
       enableReinjection: true,
       maxTokens:
