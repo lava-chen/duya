@@ -1311,6 +1311,10 @@ const zh: Record<TranslationKey, string> = {
 
   // Plan 471 — sidebar sections
   'sidebar.section.project': '项目',
+  // Plan 471 v9: singleList (… menu → 在一个列表中) 模式下
+  // section 内容是平坦的会话列表，没有项目分组，
+  // 标题从「项目」改为「会话」。
+  'sidebar.section.sessions': '会话',
   'sidebar.section.cron': '定时任务',
   'sidebar.section.gateway': '网关',
   'sidebar.section.wakeup': '唤醒',
