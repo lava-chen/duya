@@ -579,6 +579,25 @@
   transition: padding-right 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+/*
+ * Plan 516: tell the browser that the chat scroll viewport is an isolated
+ * layout/paint/styling subtree so scrolling it doesn't dirty the rest of the
+ * page. Pairs with the LazyMessageRow content-visibility: auto skip below.
+ */
+.chat-view .message-list-scroll {
+  contain: layout paint style;
+}
+
+/*
+ * Plan 516: a rendered message row is already isolated for content-visibility
+ * (off-screen) and IO gating. Marking it as a strict layout/paint containment
+ * boundary lets the browser skip recomputing children when only sibling rows
+ * change (e.g. a streaming chunk arriving for a different row).
+ */
+.chat-view [data-message-id] {
+  contain: layout paint;
+}
+
 .task-card-rail {
   position: absolute;
   z-index: 3;

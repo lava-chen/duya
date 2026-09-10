@@ -27,6 +27,100 @@ import { useConversationStore } from '@/stores/conversation-store';
 import { applyWorkerUsageSnapshot, type WorkerUsageSnapshot } from '@/stores/context-usage-store';
 import { useCompactionStore } from '@/stores/compaction-store';
 
+// ---------------------------------------------------------------------------
+// Plan 516: rAF-batched field listener fan-out.
+//
+// Streaming text/thinking/toolOutput arrives at 20-100 chunks/second during
+// a long answer. Each notifyXxxListeners() call walks the listener set and
+// invokes React setState synchronously, which commits a render. At 100Hz
+// this saturates the main thread even when only one chat row is mounted.
+//
+// We coalesce notifications per (sessionId, field) into a single
+// requestAnimationFrame tick: the latest payload wins, listeners see at most
+// one call per frame. Outside the browser (SSR / Node test) the helper
+// degrades to a direct flush so behavior is preserved.
+// ---------------------------------------------------------------------------
+
+type RafFieldKind = 'text' | 'thinking' | 'toolOutput';
+
+interface RafPending {
+  handle?: number;
+  // We keep the latest payload of the field and broadcast it on flush.
+  // Generics collapse to a single shape per field; we narrow on flush.
+  text?: string;
+  thinking?: string;
+  toolOutput?: string;
+}
+
+const rafPendingByKey = new Map<string, RafPending>();
+const rafListenerSets = new Map<string, Set<(value: never) => void>>();
+
+function rafFlushKey(sessionId: string, field: RafFieldKind): string {
+  return `${sessionId}\u0000${field}`;
+}
+
+function flushRafBatched(key: string): void {
+  const pending = rafPendingByKey.get(key);
+  rafPendingByKey.delete(key);
+  const listeners = rafListenerSets.get(key);
+  if (!pending || !listeners) return;
+  // We carry one of three fields; dispatch on whichever is set.
+  const payload =
+    pending.text !== undefined
+      ? pending.text
+      : pending.thinking !== undefined
+        ? pending.thinking
+        : pending.toolOutput;
+  listeners.forEach((listener) => {
+    try {
+      listener(payload as never);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(e);
+    }
+  });
+}
+
+function scheduleRafBatched<T>(
+  sessionId: string,
+  field: RafFieldKind,
+  listeners: Set<(value: T) => void>,
+  payload: T,
+): void {
+  const key = rafFlushKey(sessionId, field);
+  rafListenerSets.set(key, listeners as unknown as Set<(value: never) => void>);
+
+  // SSR / Node fallback: flush synchronously so callers see consistent behavior.
+  if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+    listeners.forEach((listener) => {
+      try {
+        listener(payload);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error(e);
+      }
+    });
+    return;
+  }
+
+  const existing = rafPendingByKey.get(key);
+  if (existing) {
+    if (field === 'text') existing.text = payload as unknown as string;
+    else if (field === 'thinking') existing.thinking = payload as unknown as string;
+    else existing.toolOutput = payload as unknown as string;
+    return;
+  }
+
+  const entry: RafPending = {};
+  if (field === 'text') entry.text = payload as unknown as string;
+  else if (field === 'thinking') entry.thinking = payload as unknown as string;
+  else entry.toolOutput = payload as unknown as string;
+
+  const handle = window.requestAnimationFrame(() => flushRafBatched(key));
+  entry.handle = handle;
+  rafPendingByKey.set(key, entry);
+}
+
 // Provider config interface
 interface ProviderConfig {
   apiKey: string;
@@ -3078,17 +3172,13 @@ class StreamSessionManager {
   private notifyTextListeners(sessionId: string, text: string): void {
     const state = this.sessions.get(sessionId);
     if (!state) return;
-    state.fieldListeners.text.forEach((listener) => {
-      try { listener(text); } catch (e) { console.error(e); }
-    });
+    scheduleRafBatched(sessionId, 'text', state.fieldListeners.text, text);
   }
 
   private notifyThinkingListeners(sessionId: string, thinking: string): void {
     const state = this.sessions.get(sessionId);
     if (!state) return;
-    state.fieldListeners.thinking.forEach((listener) => {
-      try { listener(thinking); } catch (e) { console.error(e); }
-    });
+    scheduleRafBatched(sessionId, 'thinking', state.fieldListeners.thinking, thinking);
   }
 
   private notifyToolListeners(sessionId: string): void {
@@ -3119,9 +3209,7 @@ class StreamSessionManager {
   private notifyToolOutputListeners(sessionId: string, output: string): void {
     const state = this.sessions.get(sessionId);
     if (!state) return;
-    state.fieldListeners.toolOutput.forEach((listener) => {
-      try { listener(output); } catch (e) { console.error(e); }
-    });
+    scheduleRafBatched(sessionId, 'toolOutput', state.fieldListeners.toolOutput, output);
   }
 
   private notifyToolProgressListeners(sessionId: string, info: { toolName: string; elapsedSeconds: number } | null): void {

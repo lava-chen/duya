@@ -37,7 +37,7 @@ interface GroupedMessage {
   mergedMessages?: Message[];
 }
 
-const MESSAGE_ROW_OVERSCAN_PX = 1200;
+const MESSAGE_ROW_OVERSCAN_PX = 600;
 const MIN_ESTIMATED_ROW_HEIGHT = 88;
 const MAX_ESTIMATED_ROW_HEIGHT = 560;
 const ALWAYS_RENDER_TRAILING_ROWS = 8;
@@ -378,7 +378,16 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
       id={rowDomId}
       data-message-id={group.message.id}
       className="transition-[min-height] duration-200 ease-out"
-      style={shouldRender ? undefined : { minHeight: estimatedHeight }}
+      style={shouldRender
+        ? undefined
+        : {
+            // Off-screen rows: skip layout/paint/composite for this subtree.
+            // The browser uses `contain-intrinsic-size` as the placeholder
+            // height so the scrollbar position stays correct without us
+            // reserving a forced min-height (which would still cost layout).
+            contentVisibility: 'auto',
+            containIntrinsicSize: `auto ${estimatedHeight}px`,
+          }}
     >
       {shouldRender ? (
         <MessageItem

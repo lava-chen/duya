@@ -334,7 +334,7 @@ interface MarkdownRendererProps {
   baseDirectory?: string;
 }
 
-export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
+const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
   children,
   className,
   showFrontmatterCard = false,
@@ -367,3 +367,19 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
     </MarkdownBaseDirectoryContext.Provider>
   );
 };
+
+function markdownRendererPropsEqual(
+  prev: MarkdownRendererProps,
+  next: MarkdownRendererProps,
+): boolean {
+  // children is the dominant cost driver (drives the whole pipeline).
+  // Primitive props can be compared with Object.is.
+  return (
+    prev.children === next.children &&
+    prev.className === next.className &&
+    prev.showFrontmatterCard === next.showFrontmatterCard &&
+    prev.baseDirectory === next.baseDirectory
+  );
+}
+
+export const MarkdownRenderer = React.memo(MarkdownRendererInner, markdownRendererPropsEqual);
