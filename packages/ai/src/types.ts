@@ -311,6 +311,44 @@ export type SSEEvent =
         gapsSummary?: string;
         strategyProposal?: string;
       };
+    }
+  /**
+   * Plan 517 P2.2 + P3: compact lifecycle events surfaced to the renderer.
+   * `compact:start` / `compact:done` / `compact:error` are the legacy
+   * Plan 422 events; `compact:step` (Plan 517 P3) is a per-step boundary
+   * inside `compact:start` and `compact:done`; `compact:over_threshold`
+   * (Plan 517 P2.2) fires when a successful compaction could not shrink
+   * the context under the budget. The renderer mirrors these into the
+   * CompactSummary row + the compaction store phase.
+   */
+  | { type: 'compact:start' }
+  | {
+      type: 'compact:done';
+      data?: {
+        strategy?: string;
+        tokensRemoved?: number;
+        tokensRetained?: number;
+        removedCount?: number;
+      };
+    }
+  | { type: 'compact:error'; data: { message?: string } }
+  | {
+      type: 'compact:step';
+      data: {
+        step: 'projecting' | 'cutting' | 'summarizing' | 'rebuilding' | 'reinjecting' | 'trimming';
+        phase: 'started' | 'finished';
+        messageCount?: number;
+        tokensBefore?: number;
+        tokensEstimated?: number;
+        filesCached?: number;
+      };
+    }
+  | {
+      type: 'compact:over_threshold';
+      data: {
+        tokensRetained: number;
+        available: number;
+      };
     };
 // ─── Message types (superset of packages/agent definitions) ───
 

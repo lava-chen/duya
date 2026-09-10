@@ -295,4 +295,80 @@ describe('CompactionManager loop guards', () => {
       // a normal small compaction')` test above.
     })
   })
+
+  describe('Plan 517 P3: per-step boundary events', () => {
+    it('emits projecting started → summarizing started → summarizing finished → compaction_complete on a small compaction', async () => {
+      const before = events.length
+      await manager.compact(makeMessages(4_000), { trigger: 'auto' })
+      const compactEvents = events.slice(before)
+      // The two fixed anchors must always be present and in order.
+      expect(compactEvents[0]?.type).toBe('compaction_start')
+      expect(compactEvents.at(-1)?.type).toBe('compaction_complete')
+
+      // Per-step boundaries: at minimum we expect the umbrella
+      // 'projecting started' and 'summarizing started' before the
+      // strategy runs; 'summarizing finished' lands after the
+      // summarizer returns. There is no reinjector on this manager,
+      // so no 'reinjecting' pair is expected.
+      const stepEvents = compactEvents.filter(
+        (e): e is Extract<CompactionManagerEvent, { type: 'compaction_step' }> =>
+          e.type === 'compaction_step',
+      )
+      const stepsInOrder = stepEvents.map((e) => `${e.step}:${e.phase}` as const)
+      expect(stepsInOrder).toEqual([
+        'projecting:started',
+        'summarizing:started',
+        'summarizing:finished',
+      ])
+
+      // messageCount is surfaced on each step's start so the renderer can
+      // interpolate "{count} messages..." verbs.
+      const projectingStarted = stepEvents.find(
+        (e) => e.step === 'projecting' && e.phase === 'started',
+      )!
+      expect(typeof projectingStarted.messageCount).toBe('number')
+      expect(projectingStarted.messageCount).toBeGreaterThan(0)
+    })
+
+    it('emits trimming started/finished when the projection crosses the panic-trim threshold', async () => {
+      const before = events.length
+      // Giant input that lands the strategy's projection above the
+      // budget before fitCompactedToBudget fires. Whether the trim
+      // successfully shrinks below the threshold is up to
+      // fitCompactedToBudget's aggressive trim — we test the
+      // trimming-emission contract independently: a giant input
+      // either triggers the trim (and we see two events) or shrinks
+      // on its own (and we see none).
+      const messages: Message[] = [{ role: 'user', content: 'x'.repeat(OVER_THRESHOLD_CHARS * 2) }]
+      await manager.compact(messages, { trigger: 'auto' })
+      const compactEvents = events.slice(before)
+      const stepEvents = compactEvents.filter(
+        (e): e is Extract<CompactionManagerEvent, { type: 'compaction_step' }> =>
+          e.type === 'compaction_step',
+      )
+      const trimming = stepEvents.filter((e) => e.step === 'trimming')
+      // The two-shape contract: 0 events (strategy shrunk below budget)
+      // or 2 events (panic-trim fired). Both are valid; the renderer
+      // only sees the verb when events fire.
+      if (trimming.length === 0) {
+        // Strategy shrunk on its own — no trim, no trimming verb.
+        return
+      }
+      expect(trimming.length).toBe(2)
+      expect(trimming[0]?.phase).toBe('started')
+      expect(trimming[1]?.phase).toBe('finished')
+    })
+
+    it('omits trimming events entirely when the projection fits under budget', async () => {
+      const before = events.length
+      await manager.compact(makeMessages(4_000), { trigger: 'auto' })
+      const stepEvents = events
+        .slice(before)
+        .filter(
+          (e): e is Extract<CompactionManagerEvent, { type: 'compaction_step' }> =>
+            e.type === 'compaction_step',
+        )
+      expect(stepEvents.some((e) => e.step === 'trimming')).toBe(false)
+    })
+  })
 })

@@ -33,6 +33,13 @@ interface CompactSummaryProps {
   /** Override the verb shown next to the icon. Defaults to the collapsed
    *  "已对上下文进行压缩" verb used by the durable summary row. */
   verbKey?: TranslationKey;
+  /**
+   * Plan 517 P3: when present, the verb interpolation receives `{count}`.
+   * Used by per-step verbs like "summarizing 32 messages..." — the worker
+   * emits messageCount on each `compact:step` start. The collapsed
+   * terminal verb (and the historical compact summary) leave this undefined.
+   */
+  stepMessageCount?: number;
 }
 
 export function CompactSummary({
@@ -40,6 +47,7 @@ export function CompactSummary({
   compactedMessageCount = 0,
   status = 'success',
   verbKey = 'streaming.toolAction.compact.collapsed',
+  stepMessageCount,
 }: CompactSummaryProps) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
@@ -63,11 +71,19 @@ export function CompactSummary({
     </span>
   ) : null;
 
+  // Plan 517 P3: per-step verb interpolates {count} from the worker's
+  // step message count. When undefined, the verb falls back to its no-
+  // count form so legacy translations keep working.
+  const verbWithCount =
+    stepMessageCount !== undefined
+      ? t(verbKey, { count: stepMessageCount })
+      : t(verbKey);
+
   return (
     <div className="py-0.5">
       <ActionRowChrome
         status={status}
-        verbKey={verbKey}
+        verbText={verbWithCount}
         icon={<CornersInIcon size={14} />}
         canExpand={canExpand}
         expanded={expanded}

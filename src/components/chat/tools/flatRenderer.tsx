@@ -78,24 +78,42 @@ function renderActionItem(
           sourceLabel={action.sourceLabel}
         />
       );
-    case 'compact':
+    case 'compact': {
       // Context compaction renders inline like a tool row. The 'compacting'
       // phase shows a spinner; 'done' collapses to the compacted summary and
       // 'error' shows the failure reason — all sharing ActionRowChrome.
+      //
+      // Plan 517 P3: per-step phases (projecting / cutting / summarizing /
+      // rebuilding / reinjecting / trimming) each get their own i18n verb
+      // so the user can see which step of compact() is currently active.
+      // The terminal phases map to the same chrome states as before.
+      const isTerminal =
+        action.phase === 'done' || action.phase === 'error' || action.phase === 'over_threshold'
+      const stepVerbKey = isTerminal
+        ? null
+        : (`streaming.toolAction.compact.step.${action.phase}` as TranslationKey)
+      const verbKey: TranslationKey =
+        action.phase === 'error'
+          ? 'streaming.toolAction.compact.failed'
+          : action.phase === 'done'
+            ? 'streaming.toolAction.compact.collapsed'
+            : stepVerbKey ?? 'streaming.toolAction.compact.inProgress'
       return (
         <CompactSummary
           key={key}
           compactedMessageCount={action.compactedMessageCount}
-          status={action.phase === 'compacting' ? 'running' : action.phase === 'error' ? 'error' : 'success'}
-          verbKey={
-            action.phase === 'compacting'
-              ? 'streaming.toolAction.compact.inProgress'
-              : action.phase === 'error'
-                ? 'streaming.toolAction.compact.failed'
-                : 'streaming.toolAction.compact.collapsed'
+          stepMessageCount={action.stepMessageCount}
+          status={
+            action.phase === 'error'
+              ? 'error'
+              : isTerminal
+                ? 'success'
+                : 'running'
           }
+          verbKey={verbKey}
         />
-      );
+      )
+    }
     default:
       return null;
   }

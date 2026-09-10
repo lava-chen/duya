@@ -355,6 +355,18 @@ const en = {
   'streaming.toolAction.compact.failed': 'Context compaction failed',
   'streaming.toolAction.compact.messagesCompacted.one': '{count} message',
   'streaming.toolAction.compact.messagesCompacted.other': '{count} messages',
+  // Plan 517 P3: per-step verb shown while the worker is inside compact().
+  // Each verb is paired with the message count the worker surfaces so the
+  // user can see how far along the projection/summarize/trim pipeline
+  // currently is.
+  'streaming.toolAction.compact.step.projecting': 'Projecting conversation...',
+  'streaming.toolAction.compact.step.cutting': 'Locating safe cut point...',
+  'streaming.toolAction.compact.step.summarizing': 'Summarizing {count} messages...',
+  'streaming.toolAction.compact.step.rebuilding': 'Rebuilding message structure...',
+  'streaming.toolAction.compact.step.reinjecting': 'Re-injecting files, skills and tools ({count} cached)...',
+  'streaming.toolAction.compact.step.trimming': 'Trimming — still over budget',
+  'streaming.toolAction.compact.overThreshold': 'Auto-compaction paused — context still over budget',
+  'streaming.toolAction.compact.doneWithStats': 'Compacted: {tokensBefore} \u2192 {tokensRetained} tokens ({strategy})',
 
   'permission.allow': 'Allow',
   'permission.deny': 'Deny',
