@@ -346,6 +346,18 @@ const zh: Record<TranslationKey, string> = {
   'streaming.toolAction.compact.failed': '上下文压缩失败',
   'streaming.toolAction.compact.messagesCompacted.one': '{count} 条消息',
   'streaming.toolAction.compact.messagesCompacted.other': '{count} 条消息',
+  // Plan 517 P3: per-step verb shown while the worker is inside compact().
+  // Each verb is paired with the message count the worker surfaces so the
+  // user can see how far along the projection/summarize/trim pipeline
+  // currently is.
+  'streaming.toolAction.compact.step.projecting': '正在投影会话上下文…',
+  'streaming.toolAction.compact.step.cutting': '正在定位安全切割点…',
+  'streaming.toolAction.compact.step.summarizing': '正在压缩总结（{count} 条消息）…',
+  'streaming.toolAction.compact.step.rebuilding': '正在重建消息结构…',
+  'streaming.toolAction.compact.step.reinjecting': '正在重新注入文件、技能与工具上下文（{count} 项已缓存）…',
+  'streaming.toolAction.compact.step.trimming': '仍超阈值，正在裁剪…',
+  'streaming.toolAction.compact.overThreshold': '自动压缩已暂停 — 压缩后仍超阈值',
+  'streaming.toolAction.compact.doneWithStats': '已压缩：{tokensBefore} \u2192 {tokensRetained} tokens（{strategy}）',
 
   'permission.allow': '允许',
   'permission.deny': '拒绝',
@@ -969,6 +981,9 @@ const zh: Record<TranslationKey, string> = {
   'provider.modelsEmptyHint': '尚未启用任何模型。点击上方「拉取模型」按钮，或在下方添加自定义模型 id。',
   'provider.custom': '自定义',
   'provider.setContextWindow': '设置上下文',
+  // Plan 517 P1.2: 设置按钮的悬浮提示。解释为什么 1M 模型在没有 built-in
+  // 匹配时会回退到 200K，并指向三种修复路径。按钮文本回退到「设置上下文」。
+  'provider.setContextWindow.tooltip': '此模型上下文窗口，用于自动压缩与用量环。如果模型 id 不在内置列表（OpenRouter 中转、自定义 id），请在这里设置——否则自动压缩会回退到 200K 并过早触发。可通过本面板、config.toml 的 [options].model_context[modelId]，或 capability DB 行覆盖。',
   'provider.remove': '移除',
   'provider.fetchFirst': '请先拉取',
   'provider.fetchFirstHint': '点击上方「拉取模型列表」加载模型后即可添加。',

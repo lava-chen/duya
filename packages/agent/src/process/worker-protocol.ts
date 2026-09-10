@@ -533,6 +533,38 @@ export interface CompactErrorEvent {
 }
 
 /**
+ * Plan 517 P2.2: surfaced when a successful compaction could not
+ * shrink the context below the budget (system prompt + reinject
+ * overshoot). The agent has already applied `suppress('size')` so
+ * future shouldCompact() calls return false until context drops.
+ * The renderer may surface a "auto-compaction paused" hint here.
+ */
+export interface CompactOverThresholdEvent {
+  type: 'compact:over_threshold';
+  sessionId: string;
+  tokensRetained: number;
+  available: number;
+}
+
+/**
+ * Plan 517 P3: lifecycle step boundary emitted by CompactionManager during
+ * compact(). The renderer mirrors these into a per-phase verb + count
+ * (e.g. "summarizing 32 messages"). Step + phase together fully describe
+ * where in the pipeline the worker currently is; the legacy 'compact:start'
+ * / 'compact:done' events still anchor the overall lifecycle.
+ */
+export interface CompactStepEvent {
+  type: 'compact:step';
+  sessionId: string;
+  step: 'projecting' | 'cutting' | 'summarizing' | 'rebuilding' | 'reinjecting' | 'trimming';
+  phase: 'started' | 'finished';
+  messageCount?: number;
+  tokensBefore?: number;
+  tokensEstimated?: number;
+  filesCached?: number;
+}
+
+/**
  * Memory wakeup (Plan 305 Phase B). Sent by the agent subprocess
  * fire-and-forget after `ready` to nudge the memory worker into an
  * immediate sweep. Gated by `DUYA_MEMORY_ENABLED` on the agent side.

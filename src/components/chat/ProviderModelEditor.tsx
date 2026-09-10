@@ -224,11 +224,11 @@ export function ProviderModelEditor({
                       size="sm"
                       onClick={() => selection.beginEditContext(model.id, model.context_length)}
                       className="shrink-0 text-[10px] text-muted-foreground hover:text-accent"
-                      title="Set context window"
+                      title={t('provider.setContextWindow.tooltip')}
                     >
                       {formatContext(
                         selection.modelCapabilities.get(model.id) ?? model.context_length,
-                      ) || 'set ctx'}
+                      ) || t('provider.setContextWindow')}
                     </Button>
                   )}
                 </div>
