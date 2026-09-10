@@ -72,6 +72,21 @@ class Suppression {
     this.suppressedUntil = 0
   }
 
+  /**
+   * Plan 517 P2.2: idempotent suppress — apply `type` only when no
+   * suppression is currently active. Mirrors the 5-state
+   * `CompactSuppression.trySuppress` semantics but for the legacy
+   * 3-state machine. Returns true when the suppression was applied,
+   * false when an existing suppression kept precedence (so callers
+   * can avoid double-firing).
+   */
+  trySuppress(type: FailureType): boolean {
+    if (this.failure !== null) return false
+    this.failure = type
+    this.suppressedUntil = 0
+    return true
+  }
+
   clearOnBudgetChange(): void {
     if (this.failure === 'size') {
       this.failure = null
@@ -123,6 +138,15 @@ export type CompactionManagerEvent =
   | { type: 'compaction_complete'; result: CompactionResult }
   | { type: 'compaction_error'; error: string; suppressed?: boolean }
   | { type: 'reinject_complete'; files: number; skills: number }
+  /**
+   * Plan 517 P2.2: emitted after a successful compaction when the
+   * post-compaction projection is still above the budget (e.g. system
+   * prompt + reinject overshoots). Consumers (typically DuyaAgent) react
+   * by suppress('size') so the next shouldCompact() call returns false
+   * until a future compaction actually reduces the context below the
+   * threshold — breaks the compaction loop.
+   */
+  | { type: 'compaction_over_threshold'; tokensRetained: number; available: number }
 
 export interface EnhancedCompactionResult extends CompactionResult {
   reinjection?: {
@@ -240,6 +264,16 @@ export class CompactionManager {
     if (Number.isFinite(tokens) && tokens > 0) {
       this.observedPromptTokens = Math.floor(tokens)
     }
+  }
+
+  /**
+   * Plan 517 P2.3: read the most recent provider-anchored prompt volume.
+   * Returns undefined when no anchor is set (post-compaction window or
+   * never-streamed agent). Used by the turn-based + token-based cooldown
+   * gate in DuyaAgent to suppress repeated auto-compaction.
+   */
+  getObservedPromptTokens(): number | undefined {
+    return this.observedPromptTokens
   }
 
   clearObservedPromptTokens(): void {
@@ -446,6 +480,22 @@ export class CompactionManager {
 
       const finalTokens = this.contextSize(finalMessages)
       const overThresholdAfterCompact = finalTokens > this.budget.maxTokens - this.budget.reservedTokens
+
+      // Plan 517 P2.2: activate the dead-code `overThresholdAfterCompact`
+      // flag as an active loop brake. When compaction cannot shrink the
+      // context below the threshold (system prompt + reinject overshoot),
+      // suppress 'size' so subsequent shouldCompact() returns false until
+      // a future successful compaction drives `finalTokens` down. This
+      // breaks the loop where compaction runs every other turn because
+      // the post-compaction context keeps re-crossing the threshold.
+      if (overThresholdAfterCompact) {
+        this.suppression.trySuppress('size')
+        this.emit({
+          type: 'compaction_over_threshold',
+          tokensRetained: finalTokens,
+          available: this.budget.maxTokens - this.budget.reservedTokens,
+        })
+      }
 
       this.onCompactionSuccess()
       this.clearObservedPromptTokens()

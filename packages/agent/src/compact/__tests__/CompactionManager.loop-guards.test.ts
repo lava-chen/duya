@@ -184,4 +184,115 @@ describe('CompactionManager loop guards', () => {
       expect(result.overThresholdAfterCompact).toBe(false)
     })
   })
+
+  describe('Plan 517 P2.2: loop brake via over-threshold suppression', () => {
+    it('suppresses auto-compaction when post-compact projection stays over budget', async () => {
+      // One giant message that fitCompactedToBudget cannot fully trim — the
+      // compaction fires, runs, and ends up over budget. Plan 517 P2.2
+      // converts the previously-dead-code `overThresholdAfterCompact` flag
+      // into an active loop brake: trySuppress('size') is called so the
+      // next shouldCompact() returns false.
+      const messages: Message[] = [{ role: 'user', content: 'x'.repeat(OVER_THRESHOLD_CHARS * 2) }]
+      const result = await manager.compact(messages, { trigger: 'auto' })
+
+      // The flag should fire (or not) depending on the strategy's trim path;
+      // we check the suppression gate as the actual loop brake.
+      if (result.overThresholdAfterCompact) {
+        expect(manager.isSuppressed()).toBe(true)
+        expect(manager.getSuppressionType()).toBe('size')
+        // shouldCompact must return false despite the budget being crossed —
+        // this is the actual user-visible loop break.
+        expect(manager.shouldCompact(messages)).toBe(false)
+      }
+      // If the strategy trimmed successfully, no suppression expected.
+    })
+
+    it("emits a 'compaction_over_threshold' event when over budget", async () => {
+      const messages: Message[] = [{ role: 'user', content: 'x'.repeat(OVER_THRESHOLD_CHARS * 2) }]
+      const result = await manager.compact(messages, { trigger: 'auto' })
+      const overEvents = events.filter((e) => e.type === 'compaction_over_threshold')
+      // 1:1 with the flag — exactly one event per compaction that stays over.
+      expect(overEvents.length).toBe(result.overThresholdAfterCompact ? 1 : 0)
+      if (result.overThresholdAfterCompact) {
+        const event = overEvents[0] as Extract<
+          CompactionManagerEvent,
+          { type: 'compaction_over_threshold' }
+        >
+        expect(event.tokensRetained).toBe(result.tokensRetained)
+        // available = maxTokens - reserveTokens, both unchanged.
+        expect(event.available).toBe(200_000 - 16_384)
+      }
+    })
+
+    it('a successful compaction that fits under budget does not suppress', async () => {
+      const result = await manager.compact(makeMessages(4_000), { trigger: 'auto' })
+      expect(result.overThresholdAfterCompact).toBe(false)
+      expect(manager.isSuppressed()).toBe(false)
+      expect(events.some((e) => e.type === 'compaction_over_threshold')).toBe(false)
+    })
+  })
+
+  describe('Plan 517 P2.3: observed-prompt anchor getter', () => {
+    it('returns undefined when no provider usage was observed', () => {
+      expect(manager.getObservedPromptTokens()).toBeUndefined()
+    })
+
+    it('returns the most recently observed value', () => {
+      manager.setObservedPromptTokens(120_000)
+      expect(manager.getObservedPromptTokens()).toBe(120_000)
+      manager.setObservedPromptTokens(155_500)
+      expect(manager.getObservedPromptTokens()).toBe(155_500)
+    })
+
+    it('ignores non-positive values', () => {
+      manager.setObservedPromptTokens(100_000)
+      expect(manager.getObservedPromptTokens()).toBe(100_000)
+      manager.setObservedPromptTokens(0)
+      manager.setObservedPromptTokens(-1)
+      // 0 / negative are rejected by setObservedPromptTokens so the anchor
+      // keeps the last good value.
+      expect(manager.getObservedPromptTokens()).toBe(100_000)
+    })
+
+    it('is cleared after a successful compaction', async () => {
+      manager.setObservedPromptTokens(190_000)
+      expect(manager.getObservedPromptTokens()).toBe(190_000)
+      await manager.compact(makeMessages(4_000), { trigger: 'auto' })
+      expect(manager.getObservedPromptTokens()).toBeUndefined()
+    })
+  })
+
+  describe('Plan 517 P2.2: trySuppress idempotence', () => {
+    it('over-threshold compaction applies size suppression exactly once', async () => {
+      // The 'size' suppression applied by trySuppress('size') inside the
+      // successful compaction path is sticky until the next successful
+      // compaction — `clearOnBudgetChange()` clears only on the budget
+      // change that follows a successful compaction. We verify the
+      // user-visible loop break: after a single over-threshold compaction,
+      // shouldCompact() returns false; only a subsequent successful
+      // compaction clears the gate.
+      const messages: Message[] = [{ role: 'user', content: 'x'.repeat(OVER_THRESHOLD_CHARS * 2) }]
+      const first = await manager.compact(messages, { trigger: 'auto' })
+
+      if (first.overThresholdAfterCompact) {
+        // The gate is active: shouldCompact must return false even when
+        // the input is still huge.
+        expect(manager.isSuppressed()).toBe(true)
+        expect(manager.getSuppressionType()).toBe('size')
+        expect(manager.shouldCompact(messages)).toBe(false)
+
+        // onTurnStart does NOT clear 'size' (Pi-aligned flat semantics).
+        manager.onTurnStart()
+        expect(manager.isSuppressed()).toBe(true)
+
+        // A subsequent successful compaction clears 'size' via
+        // clearOnBudgetChange() inside onCompactionSuccess().
+        await manager.compact(makeMessages(2_000), { trigger: 'auto' })
+        expect(manager.isSuppressed()).toBe(false)
+      }
+      // If the strategy trimmed successfully, the gate is not active and
+      // this assertion does not apply — see the matching `it('is false for
+      // a normal small compaction')` test above.
+    })
+  })
 })

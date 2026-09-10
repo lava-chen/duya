@@ -533,6 +533,20 @@ export interface CompactErrorEvent {
 }
 
 /**
+ * Plan 517 P2.2: surfaced when a successful compaction could not
+ * shrink the context below the budget (system prompt + reinject
+ * overshoot). The agent has already applied `suppress('size')` so
+ * future shouldCompact() calls return false until context drops.
+ * The renderer may surface a "auto-compaction paused" hint here.
+ */
+export interface CompactOverThresholdEvent {
+  type: 'compact:over_threshold';
+  sessionId: string;
+  tokensRetained: number;
+  available: number;
+}
+
+/**
  * Memory wakeup (Plan 305 Phase B). Sent by the agent subprocess
  * fire-and-forget after `ready` to nudge the memory worker into an
  * immediate sweep. Gated by `DUYA_MEMORY_ENABLED` on the agent side.

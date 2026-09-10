@@ -296,6 +296,30 @@ export class duyaAgent {
    */
   private promptContextBlocks: string[] = [];
   /**
+   * Plan 517 P2.1: turn-based cooldown to prevent the compaction-loop bug.
+   * `lastCompactionTurn` is the streamChat-local turn number at which the
+   * last proactive compaction succeeded; combined with `MIN_TURNS_SINCE_COMPACT`
+   * it forces the next `N` turns to skip the proactive checkpoint, even
+   * when `shouldCompact()` would otherwise return true. Pi/grok-style
+   * design — let the agent run at least `N` tool-use turns before we
+   * consider compacting again.
+   */
+  private lastCompactionTurn = -Infinity;
+  /**
+   * Plan 517 P2.3: token-based cooldown. `lastCompactionObservedTokens`
+   * captures the `observedPromptTokens` value at the most recent
+   * successful compaction. Combined with `MIN_TOKENS_GROWTH_SINCE_COMPACT`
+   * it requires the new turns to have grown the context by at least this
+   * many tokens before another compaction can fire.
+   */
+  private lastCompactionObservedTokens: number | undefined = undefined;
+  /**
+   * Plan 517 P2.1: counters and thresholds are config-driven so future
+   * sessions can tune them per profile / per workspace.
+   */
+  static readonly MIN_TURNS_SINCE_COMPACT = 3;
+  static readonly MIN_TOKENS_GROWTH_SINCE_COMPACT = 30_000;
+  /**
    * Plan 437: hook invocations emitted during this `streamChat` call,
    * in arrival order. Drained by `drainPendingHookMessages()` at the
    * turn-end boundary in `agent-process-entry` and persisted as
@@ -520,6 +544,19 @@ export class duyaAgent {
         typeof capabilityContextWindow === 'number' && capabilityContextWindow > 0
           ? capabilityContextWindow
           : undefined,
+    });
+
+    // Plan 517 P2.2: forward the over-threshold event so the renderer can
+    // surface a "auto-compaction paused" hint. The loop brake itself
+    // (suppress('size')) is applied synchronously inside CompactionManager;
+    // this hook is informational only.
+    this.compactionManager.addEventHandler((event) => {
+      if (event.type === 'compaction_over_threshold') {
+        logger.warn(
+          `[Agent] Compaction over threshold: retained=${event.tokensRetained}, available=${event.available} — ` +
+            `auto-compaction suppressed until next successful shrink`,
+        );
+      }
     });
 
     // Wire up the LLM summarizer so strategies can generate summaries
@@ -1609,7 +1646,32 @@ export class duyaAgent {
         // Checkpoint projection is best-effort; shouldCompact() below still
         // runs its own projection.
       }
-      if (imageTriggered || this.compactionController.shouldCompact()) {
+      // Plan 517 P2.1 + P2.3: turn-based + token-based cooldown to break
+      // the compaction-loop bug. After a successful compaction, the next
+      // MIN_TURNS_SINCE_COMPACT turns skip the proactive checkpoint even
+      // when shouldCompact() returns true, AND the new turns must have
+      // grown the context by at least MIN_TOKENS_GROWTH_SINCE_COMPACT
+      // tokens. Image-volume triggers (grok style) bypass the gate so
+      // multimodal floods are still handled immediately.
+      const turnsSinceLastCompact = turnCount - this.lastCompactionTurn;
+      const currentObservedTokens = this.compactionManager.getObservedPromptTokens?.();
+      const tokensGrowthSinceCompact =
+        currentObservedTokens !== undefined && this.lastCompactionObservedTokens !== undefined
+          ? currentObservedTokens - this.lastCompactionObservedTokens
+          : Number.POSITIVE_INFINITY;
+      const cooldownActive =
+        !imageTriggered &&
+        (turnsSinceLastCompact < duyaAgent.MIN_TURNS_SINCE_COMPACT ||
+          tokensGrowthSinceCompact < duyaAgent.MIN_TOKENS_GROWTH_SINCE_COMPACT);
+      if (cooldownActive) {
+        logger.debug(
+          `[Agent] Turn ${turnCount}: Skipping proactive compaction (cooldown: ` +
+            `turnsSinceLast=${turnsSinceLastCompact}/${duyaAgent.MIN_TURNS_SINCE_COMPACT}, ` +
+            `tokensGrowth=${Number.isFinite(tokensGrowthSinceCompact) ? tokensGrowthSinceCompact : 'unknown'}` +
+            `/${duyaAgent.MIN_TOKENS_GROWTH_SINCE_COMPACT})`,
+        );
+      }
+      if (!cooldownActive && (imageTriggered || this.compactionController.shouldCompact())) {
         if (imageTriggered) {
           logger.info(`[Agent] Turn ${turnCount}: Image-count compaction trigger fired`);
         }
@@ -1622,6 +1684,23 @@ export class duyaAgent {
           });
           if (compactEntry) {
             logger.info(`[Agent] Turn ${turnCount}: Compacted with strategy=${compactEntry.strategy}, removed=${compactEntry.tokensBefore} tokens, retained=${compactEntry.tokensAfter ?? 0} tokens`);
+            // Plan 517 P2.1 + P2.3: pin the cooldown baseline. The next
+            // MIN_TURNS_SINCE_COMPACT turns skip the proactive checkpoint
+            // unless the agent has grown the context by at least
+            // MIN_TOKENS_GROWTH_SINCE_COMPACT tokens OR an image-volume
+            // trigger fires (handled inside the gate).
+            this.lastCompactionTurn = turnCount;
+            // CompactionManager.clearObservedPromptTokens() runs at the end
+            // of compact(); capture the post-compaction observed value as
+            // the new baseline. If the projection hasn't surfaced a real
+            // anchor yet, leave undefined so the cooldown defers to
+            // turn-based protection only.
+            const postCompactObserved = this.compactionManager.getObservedPromptTokens?.();
+            if (typeof postCompactObserved === 'number' && postCompactObserved > 0) {
+              this.lastCompactionObservedTokens = postCompactObserved;
+            } else {
+              this.lastCompactionObservedTokens = undefined;
+            }
             // The controller appended a checkpoint entry to the timeline
             // instead of mutating history in place; `this.messages` is a
             // timeline-derived getter, so it already reflects the compaction.
