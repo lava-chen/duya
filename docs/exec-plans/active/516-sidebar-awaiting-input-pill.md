@@ -115,6 +115,6 @@ selector stable for any other consumer.
 - [x] i18n keys (en + zh: awaitingAnswer / awaitingPermission / awaitingAuth)
 - [x] Unit tests (ThreadListItem: 10/10 ✓, BotContactListItem: 6/6 ✓)
 - [x] `typecheck:all` passes
-- [x] Commit (`7ac28b98`)
+- [x] Commit (`8dd3f2df`)
 - [ ] Manual Electron smoke (deferred — same env constraint as plan 494 T7; pending Electron idle)
 - [ ] Push to origin (waiting on user; multi-file feat, may want a PR instead)
