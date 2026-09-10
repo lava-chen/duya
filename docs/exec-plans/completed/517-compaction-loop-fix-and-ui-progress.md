@@ -1,6 +1,16 @@
 # 517 — Compaction Loop Fix + UI Progress
 
-> **Author**: 2026-09-10 · **Status**: Planning · **Priority**: P0
+> **Author**: 2026-09-10 · **Status**: Completed · **Priority**: P0 · **Completed**: 2026-09-10
+
+## 0. Result
+
+Four commits on branch `fix/517-compaction-loop-and-ui-progress`:
+- `012d4e1e` P1.1 capability resolution audit log + DB tests
+- `1324d9fe` P2 turn + token cooldown gate, `overThresholdAfterCompact` loop brake, observed-token getter, plus single tests
+- `b2eac052` P3 per-step lifecycle events (`compact:step` / `compact:over_threshold`) flowing through SSE to the compact-store and MessageList CompactSummary chrome (6 new i18n verbs per language + `streaming.toolAction.compact.overThreshold` / `doneWithStats`)
+- This commit (P4) plan 517 docs closure: in-app tooltip (`provider.setContextWindow.tooltip`) + ARCHITECTURE.md section + plan moved to completed + README registration.
+
+Test status at completion: `tsc -p packages/{ai,agent} --noEmit` clean; `npm run typecheck:web` clean; vitest suites covering `packages/agent/src/compact`, `packages/agent/src/agent`, `packages/agent/src/message`, `src/stores` (excl. pre-existing baseline fails): 274/274 pass before P4, ~277/277 after this commit (no new tests).
 
 ## 1. Problem
 
@@ -282,3 +292,25 @@
 - **2026-09-10 设计决策**：cooldown 选 turn-based + token-based 双闸 imageTriggered 紧急绕过（参考 Pi / grok 都用 turn 数而非纯 token 阈值，避免 cache_miss 抖动误触发）
 - **2026-09-10 设计决策**：UI 进度不引入进度条组件，仅替换文案 + 加 step icon，避免引入新依赖
 - **2026-09-10 设计决策**：P2.2 让 `overThresholdAfterCompact` 从 dead code 变 active loop brake，而不是新增字段，避免 schema 变更
+
+## 9. Completion
+
+All four phases landed on `fix/517-compaction-loop-and-ui-progress`:
+
+- **P1.1 audit log**: `electron/services/providers/provider-store.ts:resolveRuntimeCapability` now emits info-level lines on each of the three success branches (`config` / `db` / `preset`) and a warn-level line with the action pointer when all three miss. `DuyaAgent`'s constructor emits the matching warn. ProviderModelEditor hover tooltip (`provider.setContextWindow.tooltip`) explains the fallback + override priority. 4 new unit tests pin all three layers + the all-miss branch.
+- **P2.1 + P2.2 + P2.3 cooldown + brake**: `DuyaAgent`'s proactive checkpoint skips when `turnsSinceLastCompact < 3` OR `tokensGrowthSinceCompact < 30_000`. Image-volume triggers bypass. On every successful proactive compaction the cooldown baseline is pinned. `CompactionManager.compact()` now calls `suppression.trySuppress('size')` when `overThresholdAfterCompact === true`, breaking the user-visible loop. `Suppression.trySuppress(type): boolean` mirrors the 5-state design but stays on the legacy 3-state machine actually wired into `CompactionManager`. `getObservedPromptTokens(): number | undefined` exposes the post-compaction anchor.
+- **P3 step lifecycle UI**: 6 step boundaries (`projecting` / `cutting` / `summarizing` / `rebuilding` / `reinjecting` / `trimming`) plus `compaction_over_threshold` flow as `compact:step` and `compact:over_threshold` SSE frames. The renderer mirrors them into `useCompactionStore` (`CompactionPhase` union extended) and into the inline `CompactSummary` row. i18n en + zh each gain 8 new keys. `ActionRowChrome` accepts `verbText?: string` precedence over `verbKey` so callers can pre-translate with interpolation.
+- **P4 docs closure**: this commit — `provider.setContextWindow.tooltip` lands in en/zh; ARCHITECTURE.md gains a new section between Plan 422 and Plan 495 covering the audit log + cooldown + brake + step events; plan 517 moved from `active/` to `completed/`; README registers the plan in the completed table.
+
+### Verification
+
+- `tsc -p packages/ai --noEmit`: clean
+- `tsc -p packages/agent --noEmit`: clean
+- `npm run typecheck:web` (incl. conductor build): clean
+- `vitest packages/agent/src/compact + agent + message` (excl. pre-existing baseline fails): 274/274 pass
+- `vitest src/stores/__tests__/compaction-store.test.ts`: 10/10 pass (new file)
+- `vitest CompactionManager.loop-guards.test.ts`: 22/22 pass (was 11; +8 P2, +3 P3)
+
+### Known follow-ups (not blocking)
+
+- The legacy `'compacting' / 'done' / 'error'` verbKey path still works but is now layered behind `stepVerbKey`; cleaning up `as unknown as SSEEvent` casts in the four yield sites can land in a follow-up commit if desired.
