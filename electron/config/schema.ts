@@ -559,7 +559,12 @@ export const DEFAULT_CONFIG: DuyaConfig = {
   delegation: {},
   session_reset: {},
   channels: {
-    auto_start: false,
+    // Plan 99 G2: gateway auto-start defaults to ON so a fresh packaged
+    // install reaches the "bridge ready" state without requiring the user
+    // to open Settings first. Users who explicitly disable it via the
+    // settings UI get their preference persisted in ConfigStore under
+    // `channels.auto_start` and mergeConfig() preserves the override.
+    auto_start: true,
     workspace: '',
     proxy_url: '',
     gateway_model: '',
