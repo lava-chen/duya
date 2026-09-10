@@ -1287,6 +1287,17 @@ const zh: Record<TranslationKey, string> = {
   'office.askDuya': '问问 DUYA',
 
   'terminal.addToChat': '添加到对话',
+  'terminal.appearance': '终端外观',
+  'terminal.theme': '主题',
+  'terminal.fontSize': '字号',
+  'terminal.decreaseFontSize': '减小字号',
+  'terminal.increaseFontSize': '增大字号',
+  'terminal.themeAuto': '跟随应用',
+  'terminal.themeTokyoNight': 'Tokyo Night',
+  'terminal.themeDracula': 'Dracula',
+  'terminal.themeNord': 'Nord',
+  'terminal.themeSolarized': 'Solarized Dark',
+  'terminal.themeGruvbox': 'Gruvbox Dark',
 
   'project.selectFolder': '选择文件夹',
   'project.enterFolderPath': '输入项目文件夹路径',
