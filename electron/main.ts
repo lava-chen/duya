@@ -25,6 +25,7 @@ import { getProviderStore } from './services/providers/provider-store-electron';
 import { registerNetHandlers } from './ipc/net-handlers';
 import { registerDuyaLinkHandlers } from './ipc/duya-link-handlers';
 import { startGatewayProcess, stopGatewayProcess, registerGatewayIpcHandlers, forwardToGateway, isGatewaySession, waitForGatewayReady } from './gateway/index';
+import { getOrBuildInitConfig } from './gateway/message-bus';
 import { resolveDatabasePath, updateDatabasePath } from './config/index';
 import { getConfigStore } from './config/store-instance';
 import { migrateConfig, migrateCronJobsToFile } from './config/migrate';
@@ -478,6 +479,35 @@ if (gotTheLock) {
     } catch (error) {
       logger.error('Failed to initialize automation scheduler', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
     }
+    // Plan 99 G2: honour `channels.auto_start` at boot. When the user
+    // (or a packaged install default) leaves the setting ON, we spawn the
+    // gateway once the agent server is up; otherwise we wait for an
+    // explicit `gateway:start` IPC from the renderer. This replaces the
+    // previous behaviour where gateway would never come up unless the
+    // user toggled the Bridge section in Settings.
+    try {
+      const gatewayConfig = getOrBuildInitConfig();
+      if (gatewayConfig.autoStart) {
+        logger.info('Gateway auto-start enabled, spawning gateway', undefined, 'Main');
+        const child = startGatewayProcess(gatewayConfig);
+        // Don't await waitForGatewayReady() — the renderer can show a
+        // "starting" state via gateway:status IPC while the handshake
+        // completes asynchronously (matches spawnAgentServer's pattern).
+        void waitForGatewayReady(gatewayConfig, child, 15_000).catch((error) => {
+          logger.error(
+            'Gateway failed to become ready during auto-start',
+            error instanceof Error ? error : new Error(String(error)),
+            undefined,
+            'Main',
+          );
+        });
+      } else {
+        logger.info('Gateway auto-start disabled, waiting for explicit IPC', undefined, 'Main');
+      }
+    } catch (error) {
+      logger.error('Failed to auto-start gateway', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
+    }
+
 
     // ============================================================
     // Step 0.85: computer-use-demo daemon (Plan 453 Task D)
