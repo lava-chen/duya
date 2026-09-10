@@ -84,6 +84,7 @@ import { isCDNImageUrl } from '../utils/urlSafety.js';
 import { resizeImageBuffer, needsResizing, TARGET_IMAGE_SIZE_BYTES } from '../utils/imageResizer.js';
 import { isModelLikelyMultimodal } from '../utils/multimodal-detection.js';
 import { detectModelCapability } from '../utils/model-capability-cache.js';
+import { buildImageAttachmentContext } from '../utils/image-attachment-context.js';
 import type { ProbeConfig } from '../utils/model-capability-cache.js';
 import type { ToolExecutor } from '../tool/registry.js';
 import { estimateMessagesTokens } from '../compact/tokenBudget.js';
@@ -2211,8 +2212,20 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     }
     const imageDataCache = new Map<string, CachedImageData>();
     const readFailedFiles = new Set<string>();
+    // Track CDN URLs separately from transient read failures. Both end up
+    // with no cached base64, but the fallback prompt needs to tell the main
+    // model *why* each image is unavailable. See buildImageAttachmentContext
+    // in utils/image-attachment-context.ts.
+    const cdnSkippedFiles = new Set<string>();
+    const visionFailedFiles = new Set<string>();
     const markReadFailed = (name: string) => {
       if (name) readFailedFiles.add(name);
+    };
+    const markCdnSkipped = (name: string) => {
+      if (name) cdnSkippedFiles.add(name);
+    };
+    const markVisionFailed = (name: string) => {
+      if (name) visionFailedFiles.add(name);
     };
 
     for (const file of imageFiles) {
@@ -2274,14 +2287,19 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           markReadFailed(file.name);
         }
       } else if (isCDNImageUrl(file.url)) {
-        // CDN URLs have no local data available; skip silently.
+        // CDN URLs have no local data available. Mark explicitly so the
+        // fallback prompt can distinguish "skipped on purpose" from
+        // "read failed transiently" — both end up with no cached base64.
+        markCdnSkipped(file.name);
       } else {
         markReadFailed(file.name);
       }
 
       if (base64Data) {
         imageDataCache.set(file.name, { base64: base64Data, mediaType });
-      } else if (!isCDNImageUrl(file.url)) {
+      } else if (isCDNImageUrl(file.url)) {
+        // Already recorded in cdnSkippedFiles above; nothing more to do.
+      } else {
         markReadFailed(file.name);
       }
     }
@@ -2293,7 +2311,12 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     let preAnalysisText = '';
     let visionAnalysisFailed = false;
     let visionAnalysisError: string | null = null;
-    const failedVisionFiles = new Set<string>();
+    // Names of images whose pre-analysis text was successfully appended to
+    // preAnalysisText. Used by the fallback prompt so a partially-failed
+    // vision pass doesn't double-count "analyzed" images as failures.
+    const analyzedImageNames = new Set<string>();
+    // Failed-vision tracking now lives in visionFailedFiles (Phase 1) so the
+    // fallback prompt can attribute each skip reason precisely.
     const hasVisionAnalyzer = agent && typeof (agent as Record<string, unknown>).analyzeImage === 'function';
     const shouldUseVisionPreAnalysis = imageFiles.length > 0 && hasVisionAnalyzer && !modelIsMultimodal;
     if (imageFiles.length > 0 && hasVisionAnalyzer && modelIsMultimodal) {
@@ -2324,11 +2347,21 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
             quickVisionPrompt,
           );
           preAnalysisText += `\n\n[Image: "${file.name}"]\n${result}`;
+          analyzedImageNames.add(file.name);
           log(`[Agent-Process] Vision analysis: "${file.name}" — ${result.length} chars`);
         } catch (err) {
           visionAnalysisFailed = true;
           visionAnalysisError = err instanceof Error ? err.message : String(err);
-          failedVisionFiles.add(file.name);
+          markVisionFailed(file.name);
+          logger.warn(
+            'Vision pre-analysis failed',
+            {
+              phase: 'image-pre-analysis',
+              fileName: file.name,
+              reason: visionAnalysisError,
+            },
+            'ImageProcessing',
+          );
           warn(`[Agent-Process] Vision analysis failed for "${file.name}": ${visionAnalysisError}`);
         }
       }
@@ -2364,7 +2397,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
           if (cached) {
             // Skip immediate re-try if this file already failed in phase 2.
-            if (failedVisionFiles.has(file.name)) {
+            if (visionFailedFiles.has(file.name)) {
               continue;
             }
             // For data: URLs and already-read files, use analyzeImage directly
@@ -2406,9 +2439,23 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
               : normalized.trim();
             if (body) {
               toolPassResults.push(`[Image: "${file.name}"]\n${body}`);
+              analyzedImageNames.add(file.name);
             }
           }
         } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          markVisionFailed(file.name);
+          visionAnalysisFailed = true;
+          if (!visionAnalysisError) visionAnalysisError = errMsg;
+          logger.warn(
+            'Vision tool fallback failed',
+            {
+              phase: 'vision-tool-fallback',
+              fileName: file.name,
+              reason: errMsg,
+            },
+            'ImageProcessing',
+          );
           warn(`[Agent-Process] vision_analyze fallback failed for "${file.name}":`, err);
         }
       }
@@ -2422,46 +2469,27 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       }
     }
 
-    // When vision analysis failed and the main model doesn't support
-    // multimodal, warn the user that images cannot be analyzed.
-    if (visionAnalysisFailed && imageFiles.length > 0 && !modelIsMultimodal) {
-      const errorDetail = visionAnalysisError ? ` Error: ${visionAnalysisError}` : '';
-      const warnMsg = `\n\n[System: Image analysis is unavailable.${errorDetail} `
-        + 'The configured vision model failed to analyze the uploaded image(s), '
-        + 'and the main model does not support direct image input. '
-        + 'Please check your vision model settings or switch to a multimodal model '
-        + '(e.g. Claude, GPT-4V, Gemini).]';
-      effectivePrompt = effectivePrompt
-        ? `${effectivePrompt}${warnMsg}`
-        : `The user sent image(s) but image analysis is unavailable. ${warnMsg}`;
-    }
-
-    // When images exist but the agent cannot see them at all (model not
-    // multimodal and no vision analyzer configured), at minimum include
-    // the image file names in the prompt so the agent knows they exist.
-    if (imageFiles.length > 0 && !modelIsMultimodal && !hasVisionAnalyzer && !visionAnalysisFailed) {
-      const imageNames = imageFiles.map(f => f.name).join(', ');
-      const parts: string[] = [];
-      parts.push(`\n\n[System: The user sent ${imageFiles.length} image file(s): ${imageNames}.`);
-      parts.push('This model cannot view images directly and no vision model is configured.');
-      if (readFailedFiles.size > 0) {
-        parts.push(`Unable to read from disk: ${Array.from(readFailedFiles).join(', ')}.`);
+    // Single source of truth for the [System: ...] block that explains to
+    // the main model which images it received, which it could see, and why
+    // any images are unavailable. Replaces three formerly-separate fallback
+    // branches that conflated CDN-skip with read-failure and missed partial
+    // vision success (see buildImageAttachmentContext for the buckets).
+    if (imageFiles.length > 0) {
+      const ctx = buildImageAttachmentContext({
+        imageFiles,
+        analyzedFileNames: analyzedImageNames,
+        cdnSkipped: cdnSkippedFiles,
+        readFailed: readFailedFiles,
+        visionFailed: visionFailedFiles,
+        modelIsMultimodal,
+        hasVisionAnalyzer,
+        visionAnalysisError,
+      });
+      if (ctx.appendText) {
+        effectivePrompt = effectivePrompt
+          ? `${effectivePrompt}${ctx.appendText}`
+          : ctx.appendText.trimStart();
       }
-      parts.push('Please configure a vision model in Settings or use a multimodal model (e.g. Claude, GPT-4V, Gemini) to process images.]');
-      const imageInfo = parts.join(' ');
-      effectivePrompt = effectivePrompt
-        ? `${effectivePrompt}${imageInfo}`
-        : `The user sent image(s): ${imageNames}. ${imageInfo}`;
-    }
-
-    // Image read failures that still have some cached data (multimodal model
-    // will see the image blocks, but add a note about failed files)
-    if (readFailedFiles.size > 0 && modelIsMultimodal) {
-      const failedFileNames = Array.from(readFailedFiles);
-      const failedInfo = `\n\n[System: Note: ${failedFileNames.length} image file(s) could not be read from disk (${failedFileNames.join(', ')}). Only successfully read images are shown.]`;
-      effectivePrompt = effectivePrompt
-        ? `${effectivePrompt}${failedInfo}`
-        : failedInfo;
     }
 
     // When files are attached but no text prompt, provide a default instruction
