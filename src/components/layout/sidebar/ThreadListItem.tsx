@@ -5,9 +5,15 @@ import { useConversationStore, type Thread } from "@/stores/conversation-store";
 import { ArchiveIcon, DotsThreeIcon, CopyIcon, NotePencilIcon, CircleNotchIcon, PinIcon, PinFilledIcon, TrashIcon, DownloadSimpleIcon } from "@/components/icons";
 import { exportRolloutIPC } from "@/lib/ipc-client";
 import { showNotification } from "@/lib/notification";
-import { subscribeToPhase } from "@/lib/stream-session-manager";
+import {
+  subscribeToPhase,
+  subscribeToPermissions,
+  subscribeToConnectorAuthRequired,
+  type ConnectorAuthRequiredData,
+} from "@/lib/stream-session-manager";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { StreamPhase } from "@/types/message";
+import type { PermissionRequestEvent } from "@/types/stream";
 import type { TranslationKey } from "@/i18n";
 import { Button } from "@/components/ui/Button";
 
@@ -54,6 +60,34 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
       setIsRunning(ACTIVE_PHASES.includes(phase));
     });
     return unsubscribe;
+  }, [thread.id]);
+
+  // Plan 516 — "waiting on user" trailing pill. Mirrors the same
+  // subscriptions BotContactListItem uses, so a paused permission /
+  // connector-auth request shows a pill on the sidebar thread row
+  // regardless of which chat is focused. Priority in the trailing slot:
+  // awaiting-input > running > pinned > time.
+  type AwaitingInputKind = 'ask' | 'permission' | 'auth';
+  const [awaitingInput, setAwaitingInput] = useState<AwaitingInputKind | null>(null);
+  useEffect(() => {
+    const unsubPerm = subscribeToPermissions(thread.id, (request: PermissionRequestEvent) => {
+      if (request == null) {
+        setAwaitingInput(null);
+        return;
+      }
+      const kind: AwaitingInputKind =
+        request.toolName === 'AskUserQuestion' || request.mode === 'ask_user_question'
+          ? 'ask'
+          : 'permission';
+      setAwaitingInput(kind);
+    });
+    const unsubAuth = subscribeToConnectorAuthRequired(thread.id, (data: ConnectorAuthRequiredData | null) => {
+      setAwaitingInput(data ? 'auth' : null);
+    });
+    return () => {
+      unsubPerm();
+      unsubAuth();
+    };
   }, [thread.id]);
 
   const handleClick = () => {
@@ -217,7 +251,29 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
             fades out and the buttons fade in over the same area. */}
         <div className="thread-item-actions">
           <div className="thread-item-actions-default">
-            {isRunning ? (
+            {/* Plan 516 — awaiting-input pill wins over running / pinned / time.
+                Reuses the same .bot-contact-status-pill .awaiting-input class
+                pair as the bot row so the sidebar visual language stays unified. */}
+            {awaitingInput != null ? (
+              <span
+                className="bot-contact-status-pill awaiting-input"
+                title={t(
+                  awaitingInput === 'ask'
+                    ? 'bot.contactStatus.awaitingAnswer'
+                    : awaitingInput === 'auth'
+                      ? 'bot.contactStatus.awaitingAuth'
+                      : 'bot.contactStatus.awaitingPermission',
+                )}
+              >
+                {t(
+                  awaitingInput === 'ask'
+                    ? 'bot.contactStatus.awaitingAnswer'
+                    : awaitingInput === 'auth'
+                      ? 'bot.contactStatus.awaitingAuth'
+                      : 'bot.contactStatus.awaitingPermission',
+                )}
+              </span>
+            ) : isRunning ? (
               <span className="thread-item-running-indicator" title={t('thread.running')}>
                 <CircleNotchIcon size={14} stroke={2.5} className="animate-spin" />
               </span>

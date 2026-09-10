@@ -1148,6 +1148,22 @@ html[data-glass-repair] .attachment-preview-overlay {
   background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
+/* Plan 516 — sidebar "waiting on user" pill. The bound session is
+   paused on a permission request (AskUserQuestion, generic tool
+   approval, or connector auth), so the user can answer / approve from
+   any view — they just need to see which row needs their attention.
+   Amber-tinted to stand out from the queued pill without competing
+   with the red error badge on the avatar. */
+.bot-contact-status-pill.awaiting-input {
+  background: color-mix(in srgb, #f59e0b 22%, transparent);
+  color: #b45309;
+}
+
+[data-theme="dark"] .bot-contact-status-pill.awaiting-input {
+  background: color-mix(in srgb, #f59e0b 28%, transparent);
+  color: #fbbf24;
+}
+
 .bot-contact-trailing {
   position: relative;
   flex-shrink: 0;

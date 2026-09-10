@@ -1358,6 +1358,13 @@ const en = {
   // follow-up is waiting behind an active run.
   'bot.contactStatus.queued': 'Queued',
   'bot.contactStatus.running': 'Working',
+  // Plan 516 — sidebar "waiting on user" pill in the trailing slot.
+  // The pill text comes from the kind of request that paused the bound
+  // session; AskUserQuestion uses awaitingAnswer, tool approvals use
+  // awaitingPermission, and connector auth requests use awaitingAuth.
+  'bot.contactStatus.awaitingAnswer': 'Awaiting your answer',
+  'bot.contactStatus.awaitingPermission': 'Awaiting your approval',
+  'bot.contactStatus.awaitingAuth': 'Awaiting connection',
   'bot.contactBadgeUnseen': 'New reply',
   'bot.contactBadgeError': 'Error — click to view',
   'bot.create.title': 'Create Bot',
