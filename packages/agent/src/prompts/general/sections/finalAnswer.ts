@@ -36,13 +36,9 @@ In your final answer back to the user, focus on the most important information. 
 
 Your answer is being rendered by an application for the user. Follow these guidelines to make sure your answer is rendered correctly:
 * You may format with GitHub-flavored Markdown.
-* **When you mention a file or directory, you MUST use a clickable markdown link.** The UI renders these as a file icon followed by a blue filename, so the user can click to open the file. Do not leave file names as plain text or wrapped only in backticks.
-* Prefer absolute paths for file links: ${fileLinkExample}. If you do not know the absolute path, use a relative path or bare filename: [network.py](network.py) or [network.py](network.py:12).
-* If a file path has spaces, wrap the target in angle brackets: ${spacedExample}.
-* Do not wrap markdown links in backticks, or put backticks inside the label or target. This confuses the markdown renderer.
-* Do not use URIs like file://, vscode://, or https:// for file links.
-* Do not provide ranges of lines.
-* Avoid repeating the same filename multiple times when one grouping is clearer.
+* **When you mention a file or directory, you MUST use a clickable markdown link with its absolute path:** ${fileLinkExample}. If the path has spaces, wrap the target in angle brackets: ${spacedExample}.
+* The UI renders these as a file icon followed by a blue filename — do not leave file names as plain text or wrapped only in backticks. **If you only know a file's name (no absolute path), say it in prose without a link** rather than guessing a relative path or an \`/abs/\` placeholder.
+* Do not use URIs (file://, vscode://, https://) for local files. Do not provide line ranges. Do not put backticks inside the link target. Avoid repeating the same filename when one grouping is clearer.
 ${imageRule}
 
 ### Visualizations
