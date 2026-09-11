@@ -105,6 +105,19 @@ export interface RebaseEvent {
   turnId: string;
   /** Highest seq whose line should be replaced by newMessages; null = all prior rows. */
   supersededUpToSeq?: number | null;
+  /**
+   * Why this rebase was emitted. Drives rotation in `appendBatch`:
+   * - `compaction` — auto/manual compaction; rotates the rollout file so the
+   *   compacted summary lands as the first data row of a new generation
+   *   (Plan 506 C1 + Plan 493 Phase B).
+   * - `edit_resend` — user edit / message truncate; inline mutation that
+   *   must NOT rotate (it is not an epoch boundary).
+   *
+   * Optional for backwards compatibility — historical events from before
+   * this field existed are all compaction form (Plan 441), so the rotation
+   * trigger treats a missing reason as `compaction`.
+   */
+  reason?: 'compaction' | 'edit_resend';
   newMessages: MessageEntry[];
   createdAt: number;
 }

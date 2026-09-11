@@ -19,11 +19,21 @@ const recordedAppends: Array<{
   turnId: string | null;
 }> = [];
 
+const recordedEmits: Array<{
+  sessionId: string;
+  event: unknown;
+  turnId: string | null;
+}> = [];
+
 vi.mock('../../ipc/db-client.js', () => ({
   messageDb: {
     append: (sessionId: string, messages: unknown[], turnId: string | null) => {
       recordedAppends.push({ sessionId, messages, turnId });
       return Promise.resolve({ success: true, count: messages.length });
+    },
+    emit: (sessionId: string, event: unknown, turnId: string | null) => {
+      recordedEmits.push({ sessionId, event, turnId });
+      return Promise.resolve({ success: true });
     },
   },
 }));
@@ -66,6 +76,7 @@ function toolMsg(overrides: Partial<Message> = {}): Message {
 describe('Journal', () => {
   beforeEach(() => {
     recordedAppends.length = 0;
+    recordedEmits.length = 0;
   });
 
   it('builds deterministic ids for the same source + kind', () => {
@@ -123,12 +134,17 @@ describe('Journal', () => {
     const journal = new Journal({ sessionId: 'sess-1' });
     journal.hookInvoked('turn-1', 'hook-evt-7', { name: 'PreToolUse', toolInput: { x: 1 } });
 
-    expect(recordedAppends).toHaveLength(1);
-    const evt = recordedAppends[0].messages[0] as { type: string; turnId: string; payload: unknown; id: string };
+    // hook_invoked is a RolloutEvent, not a MessageEntry — it routes through
+    // messageDb.emit (journal:emit) so MessageLog preserves the `type` discriminator.
+    expect(recordedEmits).toHaveLength(1);
+    expect(recordedAppends).toHaveLength(0);
+    const evt = recordedEmits[0].event as { type: string; turnId: string; payload: unknown; id: string };
     expect(evt.type).toBe('hook_invoked');
     expect(evt.turnId).toBe('turn-1');
     expect(evt.payload).toEqual({ name: 'PreToolUse', toolInput: { x: 1 } });
     expect(evt.id).toBe('journal:hook-evt-7:hook_invoked');
+    expect(recordedEmits[0].sessionId).toBe('sess-1');
+    expect(recordedEmits[0].turnId).toBe('turn-1');
   });
 
   it('appendRebase converts Message[] to MessageEntry[] before sending', () => {
@@ -139,8 +155,12 @@ describe('Journal', () => {
     ];
     journal.appendRebase('turn-1', 5, compacted, 999);
 
-    expect(recordedAppends).toHaveLength(1);
-    const evt = recordedAppends[0].messages[0] as {
+    // Rebase events are RolloutEvents — must route through messageDb.emit so
+    // the storage layer stores the {type:'rebase',...} row verbatim instead
+    // of collapsing it into a legacy_unknown_role MessageEntry.
+    expect(recordedEmits).toHaveLength(1);
+    expect(recordedAppends).toHaveLength(0);
+    const evt = recordedEmits[0].event as {
       type: string;
       supersededUpToSeq: number;
       newMessages: unknown[];
@@ -156,6 +176,8 @@ describe('Journal', () => {
     expect(first.id).toBe('c-1');
     expect(first.createdAt).toBe(100);
     expect(first.message.role).toBe('user');
+    expect(recordedEmits[0].sessionId).toBe('sess-1');
+    expect(recordedEmits[0].turnId).toBe('turn-1');
   });
 
   it('appendRebase with null bound supersedes all prior messages', () => {
@@ -166,11 +188,101 @@ describe('Journal', () => {
     ];
     journal.appendRebase('turn-1', null, compacted, 999);
 
-    const rebase = recordedAppends[recordedAppends.length - 1].messages[0] as { supersededUpToSeq: number | null };
+    expect(recordedEmits).toHaveLength(1);
+    const rebase = recordedEmits[0].event as { supersededUpToSeq: number | null };
     // null = supersede ALL prior raw messages; survivors are kept by id
     // matching in newMessages. A subprocess-local numeric bound cannot be
     // correct for resumed sessions (DB seqs predate the process).
     expect(rebase.supersededUpToSeq).toBeNull();
+  });
+
+  it('appendRebase defaults reason to "compaction"', () => {
+    const journal = new Journal({ sessionId: 'sess-1' });
+    journal.appendRebase('turn-1', null, [userMsg({ id: 'c-1', timestamp: 100 })], 999);
+
+    const evt = recordedEmits[0].event as { reason?: string };
+    expect(evt.reason).toBe('compaction');
+  });
+
+  it('appendRebase forwards an explicit reason (edit_resend)', () => {
+    const journal = new Journal({ sessionId: 'sess-1' });
+    journal.appendRebase(
+      'turn-1',
+      null,
+      [userMsg({ id: 'c-1', timestamp: 100 })],
+      999,
+      'edit_resend',
+    );
+
+    const evt = recordedEmits[0].event as { reason?: string };
+    // The reason rides on the event payload verbatim so the storage layer
+    // can branch on it. Compaction rebases rotate; edit_resend rebases do
+    // not (Plan 506 C1 + Plan 493 Phase B trigger wiring).
+    expect(evt.reason).toBe('edit_resend');
+  });
+
+  // Regression: Plan 441 left fireEventRaw routing through messageDb.append
+  // (message:append IPC) instead of messageDb.emit (journal:emit IPC). The
+  // append adapter force-feeds every event through ingestMessage as if it
+  // were a fresh IpcMessageDTO, which collapses RolloutEvents (rebase /
+  // hook_invoked) into legacy_unknown_role MessageEntry rows on disk and
+  // leaves chat_history with broken kind tags. Pin the routing here so a
+  // future refactor of fireEventRaw can't silently re-introduce the bug.
+  it('routes RolloutEvents through messageDb.emit, never append', () => {
+    const journal = new Journal({ sessionId: 'sess-1' });
+
+    journal.hookInvoked('turn-1', 'hook-evt-r', { name: 'PreToolUse' });
+    journal.appendRebase(
+      'turn-1',
+      null,
+      [userMsg({ id: 'r-1', timestamp: 100 })],
+      Date.now(),
+    );
+
+    // Two RolloutEvents, both must land on the emit sink.
+    expect(recordedEmits).toHaveLength(2);
+    expect(recordedAppends).toHaveLength(0);
+
+    // The emit IPC signature takes the event as a single object (not wrapped
+    // in an array), matching db-client.ts: `emit(sessionId, event, turnId)`.
+    for (const call of recordedEmits) {
+      expect(call.event).toBeDefined();
+      expect((call.event as { type: string }).type).toMatch(/^(rebase|hook_invoked)$/);
+    }
+  });
+
+  it('surfaces emit failures through onError', async () => {
+    const errors: Array<{ kind: string; err: unknown }> = [];
+    // Re-route the mocked emit sink to resolve with {success:false} for this
+    // test only. The success:false branch in fireEventRaw must invoke
+    // onError with the new "emit returned" wording — not the old
+    // "append returned" string.
+    const { messageDb } = await import('../../ipc/db-client.js');
+    const realEmit = messageDb.emit;
+    const spy = vi.spyOn(messageDb, 'emit').mockImplementationOnce(
+      (_sessionId, _event, _turnId) =>
+        Promise.resolve({ success: false, reason: 'rolled back in test' }),
+    );
+    try {
+      const failingJournal = new Journal({
+        sessionId: 'sess-1',
+        onError: (kind, err) => errors.push({ kind, err }),
+      });
+      failingJournal.hookInvoked('turn-1', 'hook-evt-fail', { name: 'noop' });
+      await failingJournal.flush();
+      expect(errors).toHaveLength(1);
+      expect(errors[0].kind).toBe('hook_invoked');
+      // The error message must come from the new emit-path copy. The old
+      // wording would mean the bug regressed.
+      const errStr = (errors[0].err as Error).message;
+      expect(errStr).toContain('emit returned');
+      expect(errStr).toContain('rolled back in test');
+    } finally {
+      spy.mockRestore();
+      // Ensure the test leaves the module in a clean state even if
+      // mockImplementationOnce was the only mock (realEmit unused).
+      void realEmit;
+    }
   });
 
   it('passes turnId through to the IPC payload', () => {
@@ -198,12 +310,13 @@ describe('Journal', () => {
     // guard against) and confirm the journal silently skips.
     errJournal.hookInvoked('turn-1', '', { name: 'noop' });
     expect(errors).toHaveLength(0);
-    expect(recordedAppends).toHaveLength(0); // empty hookEventId dropped
+    expect(recordedEmits).toHaveLength(0); // empty hookEventId dropped
   });
 });
 describe('Journal token_usage serialization (plan 444 ring fix)', () => {
   beforeEach(() => {
     recordedAppends.length = 0;
+    recordedEmits.length = 0;
   });
 
   it('serializes a top-level tokenUsage object into dto.token_usage', () => {

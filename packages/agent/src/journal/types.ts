@@ -30,6 +30,14 @@ export type RolloutEvent =
       id: string;
       turnId: string;
       supersededUpToSeq: number;
+      /**
+       * Why this rebase was emitted. Drives rotation in the storage layer:
+       * `compaction` rebases rotate the rollout file (Plan 506/493),
+       * `edit_resend` rebases are inline mutations and do not. Defaults to
+       * `compaction` when omitted — historical rebase events from before
+       * this field existed were all compaction form (Plan 441).
+       */
+      reason?: 'compaction' | 'edit_resend';
       newMessages: Message[];
       createdAt: number;
     }

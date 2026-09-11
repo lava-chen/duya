@@ -112,6 +112,7 @@ export class Journal {
     supersededUpToSeq: number | null,
     newMessages: Message[],
     createdAt: number = Date.now(),
+    reason: 'compaction' | 'edit_resend' = 'compaction',
   ): void {
     // Convert agent-core Message[] → MessageEntry[] for the storage layer.
     // The db-bridge's journal:emit handler forwards the payload verbatim,
@@ -122,6 +123,7 @@ export class Journal {
       id: deterministicEventId(`${turnId}:${supersededUpToSeq ?? 'all'}`, 'rebase'),
       turnId,
       supersededUpToSeq,
+      reason,
       newMessages: newEntries,
       createdAt,
     };
@@ -227,15 +229,24 @@ export class Journal {
    * Emit a RolloutEvent whose `newMessages` is already `MessageEntry[]`
    * (rebase path — the converter ran above). For hook_invoked the payload
    * field is unchanged. Pass-through IPC.
+   *
+   * Must route through `messageDb.emit` (→ `journal:emit`), NOT
+   * `messageDb.append` (→ `message:append`). The `message:append` adapter
+   * treats each entry as a fresh IpcMessageDTO and forces it through
+   * `ingestMessage`, which discards the event's `type` discriminator and
+   * collapses unknown shapes into `legacy_unknown_role` rows. Routing
+   * rebase / hook_invoked events through emit preserves the discriminator
+   * so MessageLog stores them as RolloutEvent rows. (Bug: an earlier
+   * version called append here, producing silently-broken bot sessions.)
    */
   private fireEventRaw(kind: string, event: unknown, turnId: string | null | undefined): void {
     this.trackPending(
       messageDb
-        .append(this.sessionId, [event], turnId ?? null)
+        .emit(this.sessionId, event, turnId ?? null)
         .then((result) => {
           const r = result as { success?: boolean; reason?: string } | undefined;
           if (!r?.success) {
-            this.onError(kind, new Error(`append returned ${JSON.stringify(result)}`));
+            this.onError(kind, new Error(`emit returned ${JSON.stringify(result)}`));
           }
         })
         .catch((err: unknown) => {

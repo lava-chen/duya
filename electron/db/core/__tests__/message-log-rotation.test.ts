@@ -106,6 +106,30 @@ function makeEvent(
   };
 }
 
+function makeRebaseEvent(
+  sessionId: string,
+  id: string,
+  reason: 'compaction' | 'edit_resend',
+  createdAt: number,
+  survivors: Array<ReturnType<typeof makeUserMessage>> = [
+    makeUserMessage('rb-summary', 'compacted summary', createdAt),
+  ],
+): NewEvent {
+  return {
+    id,
+    sessionId,
+    payload: {
+      type: 'rebase' as const,
+      id,
+      turnId: null,
+      supersededUpToSeq: null,
+      reason,
+      newMessages: survivors,
+      createdAt,
+    },
+    createdAt,
+  };
+}
 // ─── Tests ────────────────────────────────────────────────────────────────
 
 describe('MessageLog rotation (Plan 493, Phase B)', () => {
@@ -374,34 +398,7 @@ describe('MessageLog rotation (Plan 493, Phase B)', () => {
 
   // ── Plan 501 L4: appendBatch detects a compaction payload and rotates ──
 
-  function makeCompactionEvent(
-    sessionId: string,
-    id: string,
-    summary: string,
-    createdAt: number,
-  ): NewEvent {
-    return {
-      id,
-      sessionId,
-      payload: {
-        type: 'compaction' as const,
-        id,
-        parentId: null,
-        createdAt,
-        summary,
-        firstKeptMessageId: 'm-1',
-        compactedMessageIds: [],
-        tokensBefore: 100,
-        tokensAfter: 10,
-        strategy: 'test',
-        previousCompactionId: undefined,
-        reinjectedSystemMessages: [],
-      },
-      createdAt,
-    };
-  }
-
-  it('appendBatch rotates a bot session when a compaction payload lands (Plan 501 L4)', () => {
+  it('appendBatch rotates a bot session when a compaction rebase lands (Plan 501 L4 + Plan 441 wiring)', () => {
     const agentId = 'zeta';
     const sessionId = `bot:${agentId}`;
     const t = Date.now();
@@ -411,36 +408,47 @@ describe('MessageLog rotation (Plan 493, Phase B)', () => {
       makeEvent(sessionId, makeUserMessage('m-1', 'before compaction', t)),
     ]);
 
-    // A compaction entry appended through the normal append path must
+    // A compaction rebase appended through the normal append path must
     // trigger the Phase B rotation: the summary lands as the first data
-    // row of the fresh generation.
-    log.appendBatch([makeCompactionEvent(sessionId, 'comp-1', 'summary v1', t + 100)]);
+    // row of the fresh generation. Plan 441 replaced the standalone
+    // CompactionEntry with the rebase event; Plan 506/493 wire the
+    // rotation trigger on `type:'rebase' + reason:'compaction'`.
+    log.appendBatch([
+      makeRebaseEvent(sessionId, 'comp-1', 'compaction', t + 100, [
+        makeUserMessage('comp-1-summary', 'summary v1', t + 100),
+      ]),
+    ]);
 
     const sessionsDir = path.join(rootDir, 'agents', agentId, 'sessions');
     expect(fs.existsSync(path.join(sessionsDir, 'archive-0.jsonl'))).toBe(true);
     expect(fs.readFileSync(path.join(sessionsDir, 'archive-0.jsonl'), 'utf8')).toContain('m-1');
 
-    // active.jsonl: rotation audit line first, then the compaction entry —
-    // "the new session's first data entry is the compressed text".
+    // active.jsonl: rotation audit line first, then the rebase — the
+    // compacted summary becomes the first data row of the fresh generation.
     const newActive = fs.readFileSync(path.join(sessionsDir, 'active.jsonl'), 'utf8');
     const lines = newActive.split('\n').filter((l) => l.length > 0);
     expect(lines).toHaveLength(2);
     expect(JSON.parse(lines[0]).type).toBe('rotation');
-    expect(JSON.parse(lines[1]).type).toBe('compaction');
+    expect(JSON.parse(lines[1]).type).toBe('rebase');
+    expect((JSON.parse(lines[1]) as { reason?: string }).reason).toBe('compaction');
 
     // Index rows carry the new generation; chat_sessions.generation bumped.
     const rows = db
       .prepare('SELECT id, kind, generation FROM message_index WHERE session_id = ? ORDER BY seq')
       .all(sessionId) as Array<{ id: string; kind: string; generation: number }>;
-    expect(rows.map((r) => r.kind)).toEqual(['user', 'rotation', 'compaction']);
+    expect(rows.map((r) => r.kind)).toEqual(['user', 'rotation', 'rebase']);
     expect(rows[2].generation).toBe(1);
     const gen = db.prepare('SELECT generation FROM chat_sessions WHERE id = ?').get(sessionId) as {
       generation: number;
     };
     expect(gen.generation).toBe(1);
 
-    // A second compaction rotates again (archive-1), epoch == generation.
-    log.appendBatch([makeCompactionEvent(sessionId, 'comp-2', 'summary v2', t + 200)]);
+    // A second compaction rebase rotates again (archive-1), epoch == generation.
+    log.appendBatch([
+      makeRebaseEvent(sessionId, 'comp-2', 'compaction', t + 200, [
+        makeUserMessage('comp-2-summary', 'summary v2', t + 200),
+      ]),
+    ]);
     expect(fs.existsSync(path.join(sessionsDir, 'archive-1.jsonl'))).toBe(true);
     const gen2 = db.prepare('SELECT generation FROM chat_sessions WHERE id = ?').get(sessionId) as {
       generation: number;
@@ -448,14 +456,74 @@ describe('MessageLog rotation (Plan 493, Phase B)', () => {
     expect(gen2.generation).toBe(2);
   });
 
-  it('a compaction payload on a non-bot session does not rotate', () => {
+  // ── Plan 441 rebase + Plan 506/493 rotation trigger wiring ──
+
+  it('rebase with reason="compaction" triggers bot rotation (the production path)', () => {
+    // Plan 441 replaced the standalone CompactionEntry with a rebase event;
+    // Plan 506/493 wire the rotation on `rebase` + `reason: 'compaction'`.
+    // A rebase without `reason` (or with `reason: 'edit_resend'`) must NOT
+    // rotate. This is the regression pin for the trigger wiring — without
+    // it the storage layer silently never rotates, leaving each bot session
+    // as a single 1.5MB+ file forever.
+    const agentId = 'rot-via-rebase';
+    const sessionId = `bot:${agentId}`;
+    const t = Date.now();
+    insertSessionFixture(db, sessionId, t);
+
+    log.appendBatch([makeEvent(sessionId, makeUserMessage('m-1', 'before', t))]);
+    log.appendBatch([makeRebaseEvent(sessionId, 'rb-1', 'compaction', t + 100)]);
+
+    const sessionsDir = path.join(rootDir, 'agents', agentId, 'sessions');
+    expect(fs.existsSync(path.join(sessionsDir, 'archive-0.jsonl'))).toBe(true);
+
+    const newActive = fs.readFileSync(path.join(sessionsDir, 'active.jsonl'), 'utf8');
+    const lines = newActive.split('\n').filter((l) => l.length > 0);
+    expect(JSON.parse(lines[0]).type).toBe('rotation');
+    expect(JSON.parse(lines[1]).type).toBe('rebase');
+
+    const gen = db.prepare('SELECT generation FROM chat_sessions WHERE id = ?').get(sessionId) as {
+      generation: number;
+    };
+    expect(gen.generation).toBe(1);
+  });
+
+  it('rebase with reason="edit_resend" does NOT rotate (inline mutation, not an epoch boundary)', () => {
+    // Edit-resend is a session-level mutation that supersedes prior messages
+    // without crossing an epoch. Rotating here would orphan the rotated-out
+    // archive mid-edit and force the projection to reconcile two unrelated
+    // segments. The trigger must distinguish the two reasons.
+    const agentId = 'no-rotate-on-edit';
+    const sessionId = `bot:${agentId}`;
+    const t = Date.now();
+    insertSessionFixture(db, sessionId, t);
+
+    log.appendBatch([makeEvent(sessionId, makeUserMessage('m-1', 'before', t))]);
+    log.appendBatch([makeRebaseEvent(sessionId, 'rb-edit', 'edit_resend', t + 100)]);
+
+    const sessionsDir = path.join(rootDir, 'agents', agentId, 'sessions');
+    // No archive created — the active file holds the rebase alongside m-1.
+    expect(fs.existsSync(path.join(sessionsDir, 'archive-0.jsonl'))).toBe(false);
+    expect(fs.existsSync(path.join(sessionsDir, 'active.jsonl'))).toBe(true);
+    const active = fs.readFileSync(path.join(sessionsDir, 'active.jsonl'), 'utf8');
+    expect(active).toContain('m-1');
+    expect(active).toContain('rb-edit');
+
+    const gen = db.prepare('SELECT generation FROM chat_sessions WHERE id = ?').get(sessionId) as {
+      generation: number;
+    };
+    expect(gen.generation).toBe(0);
+  });
+
+  it('a compaction rebase on a non-bot session does not rotate', () => {
     const sessionId = 'human-sess-2';
     const t = Date.now();
     insertSessionFixture(db, sessionId, t);
 
     log.appendBatch([
       makeEvent(sessionId, makeUserMessage('m-1', 'hello', t)),
-      makeCompactionEvent(sessionId, 'comp-1', 'summary', t + 10),
+      makeRebaseEvent(sessionId, 'comp-1', 'compaction', t + 10, [
+        makeUserMessage('comp-1-summary', 'summary', t + 10),
+      ]),
     ]);
 
     // No agents/<id>/sessions tree and no rotation row — the shared dated
@@ -465,6 +533,7 @@ describe('MessageLog rotation (Plan 493, Phase B)', () => {
       .prepare('SELECT kind, generation FROM message_index WHERE session_id = ? ORDER BY seq')
       .all(sessionId) as Array<{ kind: string; generation: number }>;
     expect(rows.map((r) => r.generation)).toEqual([0, 0]);
+    expect(rows.map((r) => r.kind)).toEqual(['user', 'rebase']);
   });
 
   it('appendBatch is fail-open when rotation throws (archive collision)', () => {
@@ -482,14 +551,20 @@ describe('MessageLog rotation (Plan 493, Phase B)', () => {
     fs.writeFileSync(path.join(sessionsDir, 'archive-0.jsonl'), '{}\n');
 
     expect(() =>
-      log.appendBatch([makeCompactionEvent(sessionId, 'comp-1', 'summary', t + 100)]),
+      log.appendBatch([
+        makeRebaseEvent(sessionId, 'comp-1', 'compaction', t + 100, [
+          makeUserMessage('comp-1-summary', 'summary', t + 100),
+        ]),
+      ]),
     ).not.toThrow();
 
-    // The compaction entry was still written (no rotation happened).
+    // The rebase was still written (no rotation happened — the trigger
+    // fired, rotateArchive threw on archive-0 collision, appendBatch
+    // swallowed the error and persisted the line anyway).
     const rows = db
       .prepare('SELECT kind FROM message_index WHERE session_id = ? ORDER BY seq')
       .all(sessionId) as Array<{ kind: string }>;
-    expect(rows.map((r) => r.kind)).toEqual(['user', 'compaction']);
+    expect(rows.map((r) => r.kind)).toEqual(['user', 'rebase']);
     const active = fs.readFileSync(path.join(sessionsDir, 'active.jsonl'), 'utf8');
     expect(active).toContain('comp-1');
   });
@@ -643,28 +718,6 @@ describe('MessageLog non-bot rotation (Plan 506 C1)', () => {
   }
 
   /** A compaction payload — the appendBatch rotation trigger. */
-  function makeCompactionEvent(sessionId: string, id: string, summary: string, createdAt: number): NewEvent {
-    return {
-      id,
-      sessionId,
-      payload: {
-        type: 'compaction' as const,
-        id,
-        parentId: null,
-        createdAt,
-        summary,
-        firstKeptMessageId: 'm-1',
-        compactedMessageIds: [],
-        tokensBefore: 100,
-        tokensAfter: 10,
-        strategy: 'test',
-        previousCompactionId: undefined,
-        reinjectedSystemMessages: [],
-      },
-      createdAt,
-    };
-  }
-
   it('force-rotates a non-bot session into a per-session generation dir', () => {
     const sessionId = 'nb-1';
     const t = Date.UTC(2026, 8, 7, 1, 0, 0);
@@ -735,7 +788,7 @@ describe('MessageLog non-bot rotation (Plan 506 C1)', () => {
     expect(gen.generation).toBe(1);
   });
 
-  it('a compaction payload rotates an already-rotated non-bot session unconditionally', () => {
+  it('a compaction rebase rotates an already-rotated non-bot session unconditionally', () => {
     const sessionId = 'nb-3';
     const t = Date.UTC(2026, 8, 7, 3, 0, 0);
     insertSessionFixture(db, sessionId, t);
@@ -743,9 +796,15 @@ describe('MessageLog non-bot rotation (Plan 506 C1)', () => {
     log.rotateArchive(sessionId, 'manual', t + 100, { force: true });
     log.appendBatch([makeEvent(sessionId, makeUserMessage('nb-3-b', 'mid', t + 200))]);
 
-    // The second compaction lands on an already-multi-generation session: no
-    // size gate applies, archive-1 must appear.
-    log.appendBatch([makeCompactionEvent(sessionId, 'comp-3', 'summary', t + 300)]);
+    // The second compaction rebase lands on an already-multi-generation
+    // session: no size gate applies, archive-1 must appear. The trigger
+    // keys on the rebase's reason field, not on a standalone compaction
+    // entry (Plan 441 + Plan 506/493 wiring).
+    log.appendBatch([
+      makeRebaseEvent(sessionId, 'comp-3', 'compaction', t + 300, [
+        makeUserMessage('comp-3-summary', 'summary', t + 300),
+      ]),
+    ]);
     const genDir = path.dirname(rolloutAbsOf(sessionId));
     expect(fs.existsSync(path.join(genDir, 'archive-1.jsonl'))).toBe(true);
 

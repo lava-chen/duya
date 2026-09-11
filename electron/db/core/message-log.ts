@@ -277,7 +277,14 @@ export class MessageLog {
       // EFFECTIVE message set once a session is indexed (first append triggers
       // a full rebuild from the projected timeline; rebase triggers a rebuild
       // too). Keyed by message_id so rebase rebuilds can reconcile by id.
-      id: 15,
+      // id 16 (NOT 15): this migration was introduced after the core DB had
+      // already recorded schema_version >= 15 via Mailbox's id-15
+      // (`mailbox_items_agent_dm_kind`), so `runMigrations`'s `id <= current`
+      // guard skipped it and `message_search` was never created — every
+      // appendBatch then logged "no such table: message_search". A fresh id
+      // above the core max makes it run once on existing DBs and on fresh
+      // installs (id 15 also collided with Mailbox's 15).
+      id: 16,
       name: 'create_message_search',
       up: (db) => {
         db.exec(`
@@ -349,7 +356,18 @@ export class MessageLog {
       // first data entry of a fresh generation ("each compaction = one epoch =
       // one new session"). Fail-open: a rotation error (crash-recovery archive
       // collision) must never block the message append itself.
-      if (freshEvents.some((ev) => ev.payload.type === 'compaction')) {
+      //
+      // The trigger was `payload.type === 'compaction'`, but Plan 441 unified
+      // compaction and edit-resend onto the `rebase` RolloutEvent and nothing
+      // in the production path emits `type: 'compaction'` anymore. Distinguish
+      // the two by the event's `reason` field — `compaction` (or omitted for
+      // backward compatibility with pre-fix rebase events) rotates; `edit_resend`
+      // does not, because it is an inline mutation, not an epoch boundary.
+      const hasCompactionRebase = freshEvents.some((ev) => {
+        const p = ev.payload as { type?: string; reason?: string };
+        return p.type === 'rebase' && (p.reason === undefined || p.reason === 'compaction');
+      });
+      if (hasCompactionRebase) {
         try {
           this.rotateArchive(sessionId, 'compaction', lastActivity);
         } catch (err) {
@@ -1197,6 +1215,7 @@ export class MessageLog {
     supersededUpToSeq: number | null,
     newMessages: NewEvent[],
     createdAt: number = Date.now(),
+    reason: 'compaction' | 'edit_resend' = 'compaction',
   ): void {
     if (newMessages.length === 0 && (supersededUpToSeq == null || supersededUpToSeq <= 0)) return;
     const event: RebaseEvent = {
@@ -1204,6 +1223,7 @@ export class MessageLog {
       id: `rebase:${sessionId}:${supersededUpToSeq ?? 'all'}:${createdAt}`,
       turnId: turnId ?? null,
       supersededUpToSeq,
+      reason,
       newMessages: newMessages.map((e) => e.payload as MessageEntry),
       createdAt,
     };
