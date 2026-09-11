@@ -446,7 +446,14 @@ export class LockStore {
       // Plan 500 P1: attribute the run holding the lock (user chat /
       // agent-lane wake / background automation). Nullable — legacy rows and
       // older writers are treated as unattributed.
-      id: 8,
+      // id 17 (NOT 8): this migration was added after the core DB had already
+      // recorded schema_version >= 8 via GoalStore's id-8
+      // (`create_session_goals`), so `runMigrations`'s `id <= current` guard
+      // skipped it and `session_runtime_locks.origin` was never added —
+      // LockStore.acquire()/lockOrigin() then threw "no such column: origin".
+      // A fresh id above the core max makes it run once on existing DBs and
+      // on fresh installs (id 8 also collided with GoalStore's 8).
+      id: 17,
       name: 'add_lock_origin',
       up: (db) => {
         const cols = (db.prepare('PRAGMA table_info(session_runtime_locks)').all() as Array<{ name: string }>).map((c) => c.name);
