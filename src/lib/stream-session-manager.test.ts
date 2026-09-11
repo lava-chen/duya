@@ -731,4 +731,91 @@ describe('StreamSessionManager State Machine', () => {
       vi.restoreAllMocks();
     });
   });
+
+  describe('runtimeConfig pass-through (compaction budget)', () => {
+    /** Extract the JSON body of the first fetch call. */
+    function firstChatBody(mockFetch: { mock: { calls: unknown[][] } }): Record<string, unknown> {
+      const call = mockFetch.mock.calls[0]!;
+      return JSON.parse((call[1] as { body: string }).body) as Record<string, unknown>;
+    }
+
+    it('threads providerId + runtimeConfig from the provider IPC into the chat request body', async () => {
+      const { streamSessionManager } = await import('./stream-session-manager');
+
+      const runtimeConfig = {
+        providerId: 'prov-1',
+        apiFormat: 'openai-chat',
+        model: 'test-model',
+        modelCapabilities: { contextWindow: 1_000_000 },
+      };
+      (
+        (window as unknown as { electronAPI: { provider: { getActiveProviderConfig: (cfg: unknown) => void } } }).electronAPI
+          .provider.getActiveProviderConfig as unknown as { mockResolvedValue: (v: unknown) => void }
+      ).mockResolvedValue({
+        apiKey: 'test-key',
+        baseUrl: 'https://example.test',
+        provider: 'openai',
+        providerType: 'openai',
+        model: 'test-model',
+        authStyle: 'api_key',
+        providerId: 'prov-1',
+        runtimeConfig,
+      });
+
+      const mockFetch = vi.fn().mockResolvedValue(
+        createMockSSEResponse([{ type: 'connected' }, { type: 'done' }])
+      );
+      vi.stubGlobal('fetch', mockFetch);
+
+      await streamSessionManager.startStream({ sessionId: 'rc-thread', content: 'hi' });
+      await new Promise((r) => setTimeout(r, 50));
+
+      const body = firstChatBody(mockFetch);
+      const providerConfig = body.providerConfig as Record<string, unknown>;
+      expect(providerConfig.providerId).toBe('prov-1');
+      expect(providerConfig.runtimeConfig).toEqual(runtimeConfig);
+
+      vi.restoreAllMocks();
+    });
+
+    it('drops a stale runtimeConfig when the caller overrides the model', async () => {
+      const { streamSessionManager } = await import('./stream-session-manager');
+
+      (
+        (window as unknown as { electronAPI: { provider: { getActiveProviderConfig: (cfg: unknown) => void } } }).electronAPI
+          .provider.getActiveProviderConfig as unknown as { mockResolvedValue: (v: unknown) => void }
+      ).mockResolvedValue({
+        apiKey: 'test-key',
+        baseUrl: 'https://example.test',
+        provider: 'openai',
+        providerType: 'openai',
+        model: 'default-model',
+        authStyle: 'api_key',
+        providerId: 'prov-1',
+        // Built for default-model — stale for the override below.
+        runtimeConfig: { providerId: 'prov-1', model: 'default-model', modelCapabilities: { contextWindow: 200_000 } },
+      });
+
+      const mockFetch = vi.fn().mockResolvedValue(
+        createMockSSEResponse([{ type: 'connected' }, { type: 'done' }])
+      );
+      vi.stubGlobal('fetch', mockFetch);
+
+      await streamSessionManager.startStream({
+        sessionId: 'rc-override',
+        content: 'hi',
+        model: 'override-model',
+      });
+      await new Promise((r) => setTimeout(r, 50));
+
+      const body = firstChatBody(mockFetch);
+      const providerConfig = body.providerConfig as Record<string, unknown>;
+      expect(providerConfig.model).toBe('override-model');
+      // The stale capability must not reach the worker — the agent server
+      // re-resolves it for the exact (provider, model) pair at init time.
+      expect(providerConfig.runtimeConfig).toBeUndefined();
+
+      vi.restoreAllMocks();
+    });
+  });
 });

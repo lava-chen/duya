@@ -404,6 +404,7 @@ export function registerAgentHandlers(): void {
     }
 
     return {
+      providerId: provider.id,
       // Legacy fields (kept for backward compat with existing agent runtime).
       apiKey: provider.apiKey,
       baseUrl: provider.baseUrl || undefined,
@@ -463,6 +464,7 @@ export function registerAgentHandlers(): void {
     }
 
     return {
+      providerId: provider.id,
       apiKey: provider.apiKey,
       baseUrl: provider.baseUrl || undefined,
       model: resolvedModel,

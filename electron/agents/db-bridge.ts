@@ -19,6 +19,7 @@ import { getConfigStore } from '../config/store-instance';
 import { createConfigAgentFromName, patchConfigAgentIdentity } from '../config/agents';
 import { readConfigAgents } from '../../packages/agent/src/agent-profile/config-agents.js';
 import { toLegacyApiProvider, migrateLegacyApiProvider } from '../../src/lib/providers/legacy';
+import { toRuntimeConfig } from '@duya/ai';
 import type { ApiProvider } from '../config/provider-types';
 import { getAutomationScheduler } from '../automation/Scheduler.js';
 import { runPromptInSession, interruptCronSession } from '../automation/agent-run';
@@ -1457,6 +1458,53 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     case 'config:provider:getActive': {
       const activeLlm = getProviderStore().getDefaultLlmProvider();
       return activeLlm ? toLegacyApiProvider(activeLlm) : null;
+    }
+
+    // Resolve the full ProviderRuntimeConfig (capability merge + compat
+    // flags) for a provider/model pair on behalf of the agent server, which
+    // cannot reach the provider store directly (it runs as a plain Node
+    // child process). Mirrors the construction in agent-communicator.ts
+    // (`agent:getProviderConfig` / `config:provider:getConfig`). The worker
+    // reads `runtimeConfig.modelCapabilities.contextWindow` from this for
+    // its compaction budget — without it every init falls back to 200k even
+    // for 1M-window models.
+    case 'config:provider:resolveRuntime': {
+      const store = getProviderStore();
+      store.migrateAllLegacyProviders();
+      const runtimeProviderId = typeof p.providerId === 'string' ? p.providerId.trim() : '';
+      const runtimeModel = typeof p.model === 'string' ? p.model.trim() : '';
+      const runtimeLlm = runtimeProviderId
+        ? store.getLlmProvider(runtimeProviderId)
+        : store.getDefaultLlmProvider();
+      if (!runtimeLlm) return null;
+      const runtimeLegacy = toLegacyApiProvider(runtimeLlm);
+      const runtimeExplicit =
+        (runtimeLegacy.options?.defaultModel as string) ||
+        (runtimeLegacy.options?.model as string) ||
+        (Array.isArray(runtimeLegacy.options?.enabled_models) &&
+          (runtimeLegacy.options?.enabled_models as string[])[0]) ||
+        '';
+      const resolvedModelId =
+        runtimeModel || runtimeExplicit || getDefaultModelForProvider(runtimeLegacy.providerType, runtimeLegacy.options);
+      if (!resolvedModelId) return null;
+      const capability = store.resolveRuntimeCapability(runtimeLlm.id, resolvedModelId);
+      const cfg = toRuntimeConfig(runtimeLlm, {
+        modelId: resolvedModelId,
+        capabilities: capability,
+      });
+      return {
+        providerId: cfg.providerId,
+        providerName: cfg.providerName,
+        apiFormat: cfg.apiFormat,
+        baseUrl: cfg.baseUrl,
+        apiKey: cfg.apiKey,
+        accessToken: cfg.accessToken,
+        headers: cfg.headers,
+        model: cfg.model,
+        modelCapabilities: cfg.modelCapabilities,
+        modelCompat: cfg.modelCompat,
+        requestOptions: cfg.requestOptions,
+      };
     }
 
     case 'config:provider:upsert': {
