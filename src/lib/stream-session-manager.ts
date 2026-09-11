@@ -128,6 +128,15 @@ interface ProviderConfig {
   model: string;
   provider: string;
   authStyle: string;
+  /** Provider store id — lets the agent server resolve capabilities for the exact provider. */
+  providerId?: string;
+  /**
+   * Full runtime config (modelCapabilities + modelCompat) resolved by the
+   * main process. Threaded through to the worker init so DuyaAgent's
+   * compaction budget uses the model's real context window instead of the
+   * 200k default. Only set when the resolved (provider, model) pair matches.
+   */
+  runtimeConfig?: Record<string, unknown>;
 }
 
 /**
@@ -166,6 +175,8 @@ async function getActiveProviderConfig(): Promise<ProviderConfig | null> {
       model: string;
       provider: string;
       authStyle: string;
+      providerId?: string;
+      runtimeConfig?: Record<string, unknown>;
     } | null;
     if (!config) {
       console.warn('[stream-session-manager] No active provider config');
@@ -185,6 +196,8 @@ async function getActiveProviderConfig(): Promise<ProviderConfig | null> {
       model: config.model,
       provider: config.provider,
       authStyle: config.authStyle,
+      providerId: config.providerId,
+      runtimeConfig: config.runtimeConfig,
     };
   } catch (error) {
     console.error('[stream-session-manager] Failed to get active provider config:', error);
@@ -192,13 +205,13 @@ async function getActiveProviderConfig(): Promise<ProviderConfig | null> {
   }
 }
 
-async function getProviderConfigById(providerId: string, model: string): Promise<{ provider: string; apiKey: string; baseURL: string; model: string } | null> {
+async function getProviderConfigById(providerId: string, model: string): Promise<{ provider: string; apiKey: string; baseURL: string; model: string; providerId?: string; runtimeConfig?: Record<string, unknown> } | null> {
   try {
     console.log(`[stream-session-manager] Resolving title model provider: "${providerId}", model: "${model}"`);
 
     const electronApi = window.electronAPI as unknown as Record<string, unknown> | undefined;
     const providerApi = electronApi?.provider as {
-      getConfig?: (providerId: string, model: string) => Promise<{ apiKey: string; baseUrl?: string; model: string; provider: string; authStyle: string } | null>;
+      getConfig?: (providerId: string, model: string) => Promise<{ apiKey: string; baseUrl?: string; model: string; provider: string; authStyle: string; providerId?: string; runtimeConfig?: Record<string, unknown> } | null>;
       list?: () => Promise<Array<{ id: string; name: string; providerType: string; baseUrl: string; apiKey: string; protocol: string }>>;
     } | undefined;
 
@@ -212,6 +225,8 @@ async function getProviderConfigById(providerId: string, model: string): Promise
           apiKey: config.apiKey,
           baseURL: config.baseUrl || '',
           model: config.model,
+          providerId,
+          runtimeConfig: config.runtimeConfig,
         };
       }
     }
@@ -246,6 +261,9 @@ async function getProviderConfigById(providerId: string, model: string): Promise
       apiKey: provider.apiKey,
       baseURL: provider.baseUrl,
       model,
+      providerId: provider.id,
+      // No runtimeConfig on this path — the masked list API doesn't carry one.
+      // The agent server attaches a server-resolved one at init time.
     };
   } catch (error) {
     console.error('[stream-session-manager] Failed to get provider config by id:', error);
@@ -297,6 +315,8 @@ async function getProviderConfigForModel(
         model: resolved.model,
         provider: resolved.provider,
         authStyle: 'api_key',
+        providerId: resolved.providerId,
+        runtimeConfig: resolved.runtimeConfig,
       };
     }
     console.warn('[stream-session-manager] providerIdHint failed, falling back to format detection:', {
@@ -310,8 +330,16 @@ async function getProviderConfigForModel(
     // Regular model name - use active provider with this model
     const activeConfig = await getActiveProviderConfig();
     if (activeConfig) {
+      // The IPC built runtimeConfig for the provider's default model. When
+      // the caller overrides the model per-turn, the capability (and thus
+      // the compaction budget) would be stale — drop it and let the agent
+      // server re-resolve for the exact (provider, model) pair at init.
+      const staleRuntime =
+        activeConfig.runtimeConfig &&
+        activeConfig.runtimeConfig.model !== model;
       activeConfig.model = model;
-      console.log('[stream-session-manager] Using active provider with model override:', { provider: activeConfig.provider, model: activeConfig.model });
+      if (staleRuntime) delete activeConfig.runtimeConfig;
+      console.log('[stream-session-manager] Using active provider with model override:', { provider: activeConfig.provider, model: activeConfig.model, droppedStaleRuntime: !!staleRuntime });
     }
     return activeConfig;
   }
@@ -335,6 +363,8 @@ async function getProviderConfigForModel(
       model: resolved.model,
       provider: resolved.provider,
       authStyle: 'api_key',
+      providerId: resolved.providerId,
+      runtimeConfig: resolved.runtimeConfig,
     };
   }
 

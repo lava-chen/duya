@@ -6,7 +6,7 @@ import { SessionState } from './types';
 import { workerLogger } from './logger';
 import type { WorkerEvent } from '../../../packages/agent/src/process/worker-protocol';
 import type { ApiProvider } from '../../config/provider-types';
-import { buildInitProviderConfig, detectReferencesEnabled } from './router';
+import { buildInitProviderConfig, detectReferencesEnabled, resolveRuntimeConfigViaDbRequest } from './router';
 import { calculateMaxConcurrentWorkers } from './worker-limits';
 
 /**
@@ -222,6 +222,18 @@ export class InteragentRouter {
       return;
     }
 
+    // Attach the server-resolved runtimeConfig so the target worker's
+    // compaction budget reflects the model's real context window.
+    // Best-effort — see resolveRuntimeConfigViaDbRequest.
+    let finalProviderConfig = providerConfig;
+    if (!finalProviderConfig.runtimeConfig) {
+      const runtimeConfig = await resolveRuntimeConfigViaDbRequest(this.deps.dbRequest, {
+        providerId: typeof finalProviderConfig.providerId === 'string' ? finalProviderConfig.providerId : undefined,
+        model: typeof finalProviderConfig.model === 'string' ? finalProviderConfig.model : undefined,
+      });
+      if (runtimeConfig) finalProviderConfig = { ...finalProviderConfig, runtimeConfig };
+    }
+
     const workingDirectory = typeof sessionRow.working_directory === 'string' ? sessionRow.working_directory : undefined;
     const systemPrompt = typeof sessionRow.system_prompt === 'string' ? sessionRow.system_prompt : undefined;
 
@@ -311,7 +323,7 @@ export class InteragentRouter {
     this.deps.workerManager.sendCommand(targetSessionId, {
       type: 'init',
       sessionId: targetSessionId,
-      providerConfig,
+      providerConfig: finalProviderConfig,
       workingDirectory: workingDirectory || '',
       defaultWorkspaceDirectory: '',
       systemPrompt: systemPrompt || undefined,

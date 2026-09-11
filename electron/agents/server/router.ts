@@ -169,6 +169,41 @@ async function resolveProviderViaDbRequest(
   return provider && typeof provider === 'object' ? provider : undefined;
 }
 
+/**
+ * Resolve the `ProviderRuntimeConfig` for a provider/model pair through the
+ * main-process dbRequest IPC bridge (action `config:provider:resolveRuntime`).
+ *
+ * The main process merges every capability layer (config.toml
+ * `[options].model_context`, the `provider_model_capabilities` DB override
+ * rows, and the built-in `@duya/ai` catalog) via
+ * `ProviderStore.resolveRuntimeCapability` and builds the config with
+ * `toRuntimeConfig` — the same construction `agent-communicator.ts` uses for
+ * the `agent:getProviderConfig` IPC path.
+ *
+ * The agent server runs as a plain Node child process and must never touch
+ * Electron or the provider store directly, hence the IPC round-trip.
+ * Best-effort by design: any failure resolves `undefined` so the caller sends
+ * the init message unchanged and the worker falls back to its 200k default
+ * compaction budget (with the existing WARN in app.log).
+ */
+export async function resolveRuntimeConfigViaDbRequest(
+  dbRequest: ((action: string, payload: Record<string, unknown>) => Promise<unknown>) | undefined,
+  input: { providerId?: string; model?: string },
+): Promise<Record<string, unknown> | undefined> {
+  if (!dbRequest) return undefined;
+  try {
+    const result = await dbRequest('config:provider:resolveRuntime', {
+      providerId: input.providerId ?? '',
+      model: input.model ?? '',
+    });
+    return result && typeof result === 'object'
+      ? (result as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export interface BotProviderConfigFallbackDeps {
   readConfigAgents?: typeof readConfigAgents;
   resolveBotOrDefaultProvider?: (
@@ -524,7 +559,7 @@ async function handlePostChat(
     });
 
     const prompt = parsed.prompt || '';
-    const providerConfig = parsed.providerConfig;
+    let providerConfig = parsed.providerConfig;
     const workingDirectory = parsed.workingDirectory;
     const defaultWorkspaceDirectory = parsed.defaultWorkspaceDirectory;
 
@@ -545,6 +580,11 @@ async function handlePostChat(
       }
       parsed.providerConfig = fallback;
     }
+    // Plan 506 follow-up: the fallback above mutates `parsed.providerConfig`,
+    // but the init send below captured the pre-fallback value. Re-read it so
+    // bot sessions without a model in the request body actually receive the
+    // resolved binding instead of being rejected by the guard below.
+    providerConfig = parsed.providerConfig;
 
     try {
       // Validate session exists in DB before proceeding (normal sessions).
@@ -754,6 +794,27 @@ async function handlePostChat(
         revertStreamingLock();
         sendJson(res, 400, { error: 'No provider or model configured' });
         return;
+      }
+
+      // Attach the server-resolved runtimeConfig when the renderer didn't
+      // provide one (legacy renderer, bot fallback, cron bodies). The worker's
+      // DuyaAgent reads runtimeConfig.modelCapabilities.contextWindow for the
+      // compaction budget — without it every desktop chat compacts at the
+      // 200k default even for 1M-window models (see DuyaAgent constructor).
+      if (!providerConfig.runtimeConfig) {
+        const runtimeConfig = await resolveRuntimeConfigViaDbRequest(dbRequest, {
+          providerId: typeof providerConfig.providerId === 'string' ? providerConfig.providerId : undefined,
+          model: typeof providerConfig.model === 'string' ? providerConfig.model : undefined,
+        });
+        if (runtimeConfig) {
+          providerConfig = { ...providerConfig, runtimeConfig };
+          httpLogger.info('Attached server-resolved runtimeConfig to chat init', {
+            sessionId,
+            providerId: runtimeConfig.providerId,
+            model: runtimeConfig.model,
+            contextWindow: (runtimeConfig.modelCapabilities as Record<string, unknown> | undefined)?.contextWindow,
+          });
+        }
       }
 
       // Send init first if provider config is provided
@@ -1534,6 +1595,7 @@ export function buildInitProviderConfig(
   }
 
   return {
+    providerId: provider.id,
     apiKey: typeof provider.apiKey === 'string' ? provider.apiKey : '',
     baseURL: typeof provider.baseUrl === 'string' && provider.baseUrl
       ? provider.baseUrl
@@ -1632,6 +1694,17 @@ async function lazySpawnWorkerForCompact(
     httpLogger.warn('Compact lazy-spawn: session not in DB', { sessionId });
     sendJson(res, 404, { error: 'Session not found' });
     return { ok: false };
+  }
+
+  // Attach the server-resolved runtimeConfig (capability merge) so the
+  // compact-spawned worker gets the same compaction budget as a
+  // chat-spawned one. Best-effort — see resolveRuntimeConfigViaDbRequest.
+  if (providerConfig && !providerConfig.runtimeConfig) {
+    const runtimeConfig = await resolveRuntimeConfigViaDbRequest(deps.dbRequest, {
+      providerId: typeof providerConfig.providerId === 'string' ? providerConfig.providerId : undefined,
+      model: typeof providerConfig.model === 'string' ? providerConfig.model : undefined,
+    });
+    if (runtimeConfig) providerConfig = { ...providerConfig, runtimeConfig };
   }
 
   const init: ChatInitParams = {
