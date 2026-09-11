@@ -112,6 +112,28 @@ export class CoreDatabase {
   private runMigrations(migrations: Migration[]): void {
     const logger = getLogger();
     const sorted = [...migrations].sort((a, b) => a.id - b.id);
+
+    // Every aggregate numbers its own migrations from 1, but they all share
+    // one `schema_version` counter. Two migrations with the same id therefore
+    // mean the second is silently skipped forever by the `id <= current`
+    // guard below (exactly how `message_search` and
+    // `session_runtime_locks.origin` went missing). Fail loud in the log
+    // instead of shipping another silent data bug.
+    const seenIds = new Map<number, string>();
+    for (const migration of sorted) {
+      const prior = seenIds.get(migration.id);
+      if (prior !== undefined) {
+        logger.error(
+          `Duplicate core migration id ${migration.id}: "${prior}" vs "${migration.name}" — the later one will never run`,
+          undefined,
+          undefined,
+          LogComponent.DBMigration,
+        );
+      } else {
+        seenIds.set(migration.id, migration.name);
+      }
+    }
+
     const current = this.schemaVersion;
     for (const migration of sorted) {
       if (migration.id <= current) continue;
