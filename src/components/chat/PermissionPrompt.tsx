@@ -118,10 +118,6 @@ function PanelHeader({ toolName, title, summary, detailCount, expanded, onToggle
         aria-expanded={expanded}
       >
         <Icon size={14} className="permission-prompt-icon" />
-        <CaretRightIcon
-          size={12}
-          className={`permission-prompt-caret ${expanded ? 'rotate-90' : ''}`}
-        />
         <span className="permission-prompt-tag">{title}</span>
         <span className="permission-prompt-summary" title={summary}>{summary}</span>
         {detailCount !== undefined && detailCount > 0 && (
@@ -129,6 +125,10 @@ function PanelHeader({ toolName, title, summary, detailCount, expanded, onToggle
             <CircleNotchIcon size={12} className="animate-spin" />
           </span>
         )}
+        <CaretRightIcon
+          size={12}
+          className={`permission-prompt-caret ${expanded ? 'rotate-90' : ''}`}
+        />
       </button>
     </div>
   );
@@ -233,6 +233,13 @@ function GenericPermissionPrompt({
   // Plan 449: app-connection tools can be globally approved ("Always allow").
   const connector = pendingPermission.connector;
   const paramsDisplay = pendingPermission.metadata?.toolParamsDisplay;
+  // Content-first layout: a clamped input preview is always visible while
+  // collapsed, so the user can review what will run without expanding.
+  // Capped in JS too — toolInput can be a huge MCP JSON blob.
+  const previewText = (() => {
+    const text = formatToolInput(pendingPermission.toolInput);
+    return text.length > 200 ? `${text.slice(0, 200)}…` : text;
+  })();
   return (
     <>
       <PanelHeader
@@ -245,6 +252,11 @@ function GenericPermissionPrompt({
         t={t}
       />
       {reason && <p className="permission-prompt-reason">{reason}</p>}
+      {!expanded && (
+        <div className="permission-prompt-tool-input clamped">
+          <pre>{previewText}</pre>
+        </div>
+      )}
       <CollapsibleDetails expanded={expanded} onToggle={() => setExpanded((v) => !v)} t={t}>
         {paramsDisplay && <ToolParamsDisplay params={paramsDisplay} />}
         <ToolInputBlock input={pendingPermission.toolInput} t={t} />

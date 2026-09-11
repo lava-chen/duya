@@ -906,20 +906,23 @@ html.compact .panel-zone {
 }
 
 /* Pending card: rounded top, flat bottom — matches the input box (rounded-3xl = 1.5rem).
-   Colors now mirror the composer popover (`--command-menu-*`). */
+   Chrome mirrors the mailbox queue panel (flat surface, hairline border,
+   no drop shadow) so the whole composer stack reads as one control. */
 .permission-prompt-panel {
   border-radius: 0.75rem 0.75rem 0 0;
-  background: var(--command-menu-bg);
-  border: 1px solid var(--command-menu-border);
-  border-bottom: none;
-  box-shadow: var(--command-menu-shadow);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  /* Seam against the input surface below — same rule as .mailbox-panel:
+   * the wrapper's -1px margin overlaps this border onto the input's top
+   * edge, so it reads as the single divider between panel and composer. */
+  border-bottom: 1px solid var(--command-menu-border);
   overflow: hidden;
 }
 
 /* Resolved card: fully rounded, slightly muted (no input to bond with) */
 .permission-prompt-panel.resolved {
   border-radius: 0.75rem;
-  border-bottom: 1px solid var(--command-menu-border);
+  border-bottom: 1px solid var(--border);
   box-shadow: none;
 }
 
@@ -932,8 +935,12 @@ html.compact .panel-zone {
 
 .permission-prompt-panel.ask-user-question-panel {
   border-radius: 1.35rem;
+  border: 1px solid var(--command-menu-border);
   border-bottom: 1px solid var(--command-menu-border);
   background: var(--command-menu-bg);
+  /* Floating sheet, not seam-bonded to the input — keeps the popover
+   * shadow that the base panel dropped when it adopted the mailbox chrome. */
+  box-shadow: var(--command-menu-shadow);
 }
 
 .ask-question-sheet {
@@ -1344,6 +1351,21 @@ html[data-theme="light"] .ask-question-option.selected {
   max-height: none;
 }
 
+/* Collapsed content preview: sits directly in the panel (not inside
+   .permission-prompt-body), so it carries its own gutters. Clamped to
+   two lines — expanding via the header caret reveals the full block. */
+.permission-prompt-tool-input.clamped {
+  margin: 0 0.75rem 0.5rem;
+}
+
+.permission-prompt-tool-input.clamped pre {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: var(--text);
+}
+
 .permission-prompt-expand-btn {
   width: 100%;
   border: none;
@@ -1367,6 +1389,7 @@ html[data-theme="light"] .ask-question-option.selected {
   gap: 0.5rem;
   padding: 0 0.75rem 0.5rem;
   flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .permission-prompt-btn {
