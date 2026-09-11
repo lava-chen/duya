@@ -142,9 +142,7 @@
     "sharp": "^0.33.5",
     "simple-icons": "^16.28.0",
     "socks-proxy-agent": "^8.0.5",
-    "streamdown": "^2.5.0",
     "tailwind-merge": "^3.5.0",
-    "undici": "^6.25.0",
     "write-file-atomic": "^7.0.1",
     "yaml": "^2.9.0",
     "zustand": "^5.0.12"

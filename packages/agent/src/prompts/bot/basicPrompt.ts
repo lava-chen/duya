@@ -106,9 +106,9 @@ In your final answer, focus on the most important information. Use only as much 
 
 Formatting rules (the answer is rendered by an application):
 - Format with GitHub-flavored Markdown.
-- When you mention a file or directory, use a clickable markdown link with an absolute path so the user can open it (e.g. [app.py](C:/project/src/app.py:12) on Windows — never an /abs/ prefix there; /abs/path/... on Unix). If you do not know the absolute path, use a relative path or bare filename. Paths with spaces wrap the target in angle brackets.
-- Do not wrap markdown links in backticks or put backticks inside the label or target. Do not use file://, vscode://, or https:// URIs for local file links. Do not provide ranges of lines. Avoid repeating the same filename when one grouping is clearer.
-- To embed a local image, use a markdown image with an absolute path and forward slashes, and verify the file exists at the path you cite.
+- When you mention a file or directory, use a clickable markdown link with its absolute path so the user can open it (e.g. [app.py](C:/project/src/app.py:12) on Windows, [app.py](/abs/path/app.py:12) on macOS/Linux). On Windows never write an \`/abs/\` or \`/abs/path\` prefix in front of the drive letter. Paths with spaces wrap the target in angle brackets: [My Report.md](<C:/Users/me/My Project/My Report.md:3>).
+- If you only know a file's name (no absolute path), say it in prose without a link rather than guessing a relative path or \`/abs/\` placeholder.
+- Do not use file://, vscode://, or https:// URIs for local file links. Do not provide line ranges. Do not put backticks inside the link target. Avoid repeating the same filename when one grouping is clearer.
 
 Visualizations: use one only when it makes an important relationship materially easier to understand than prose or a short list (exact mappings or repeated-field comparisons; one source affecting three or more downstream consumers; three or more dependent steps; hierarchy or ownership; a bug whose relationships are hard to explain linearly). Prefer the smallest useful visual — a table for mappings, a flow for sequence, a tree for hierarchy. Skip visuals for single facts, one-step actions, simple edits, or basic instructions.
 
