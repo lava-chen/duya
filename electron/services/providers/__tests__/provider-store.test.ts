@@ -609,7 +609,9 @@ describe('ProviderStore — resolveRuntimeCapability (Plan 517 R1)', () => {
   it('returns undefined when no layer matches — DuyaAgent falls back to 200K', () => {
     // Plan 517 R1 regression test: a custom modelId on a custom provider
     // with no DB row and no config marker must return undefined so the
-    // DuyaAgent constructor can log a WARN. (The WARN itself is hard to
+    // DuyaAgent constructor can log a WARN. (Plan 522: the agent now tries
+    // the @duya/ai catalog before the 200K default, so this id is
+    // deliberately unknown to every layer. The WARN itself is hard to
     // assert here because logInfo/logWarn are module-level lazy require
     // helpers; the agent-side WARN is verified by manual app.log grep.)
     const reader = new FakeReader();
@@ -626,5 +628,60 @@ describe('ProviderStore — resolveRuntimeCapability (Plan 517 R1)', () => {
       'totally-unknown-model-id',
     );
     expect(cap).toBeUndefined();
+  });
+});
+
+describe('ProviderStore — runtime config carries the merged capability (Plan 522)', () => {
+  /** In-memory CapabilityStore — same shape as the Phase 3 block above. */
+  class InMemoryCapabilityStore {
+    private rows = new Map<string, ModelCapability>();
+    listByProvider(providerId: string): ModelCapability[] {
+      return Array.from(this.rows.values()).filter(
+        (c) => c.providerId === providerId,
+      );
+    }
+    getOne(providerId: string, modelId: string): ModelCapability | undefined {
+      return this.rows.get(`${providerId}::${modelId}`);
+    }
+    upsert(c: ModelCapability): ModelCapability {
+      const stored: ModelCapability = { ...c, updatedAt: Date.now() };
+      this.rows.set(`${c.providerId}::${c.modelId}`, stored);
+      return stored;
+    }
+    delete(providerId: string, modelId: string): boolean {
+      return this.rows.delete(`${providerId}::${modelId}`);
+    }
+  }
+
+  it('falls back to the built-in baseline window when there is no DB row', () => {
+    // Regression (plan 522): the reported bug was a 1M model whose chat
+    // session carried NO capability row, so the agent's compaction budget
+    // collapsed to the 200K default while the context ring showed 1M. The
+    // runtime config must carry the catalog window so the two agree.
+    const reader = new FakeReader();
+    reader.data = { a: makeLegacyAnthropic('a', true) };
+    const store = new ProviderStore(reader, new InMemoryCapabilityStore());
+    store.migrateAllLegacyProviders();
+
+    const r = store.getActiveProviderRuntimeConfig('claude-sonnet-5');
+    if ('error' in r) throw new Error('expected runtime config');
+    expect(r.modelCapabilities?.contextWindow).toBe(1_000_000);
+  });
+
+  it('still prefers an explicit caller capability over the baseline', () => {
+    const reader = new FakeReader();
+    reader.data = { a: makeLegacyAnthropic('a', true) };
+    const store = new ProviderStore(reader, new InMemoryCapabilityStore());
+    store.migrateAllLegacyProviders();
+
+    const r = store.getActiveProviderRuntimeConfig('claude-sonnet-5', {
+      providerId: 'a',
+      modelId: 'claude-sonnet-5',
+      contextWindow: 64_000,
+      source: 'user',
+      updatedAt: 0,
+    });
+    if ('error' in r) throw new Error('expected runtime config');
+    expect(r.modelCapabilities?.contextWindow).toBe(64_000);
   });
 });
