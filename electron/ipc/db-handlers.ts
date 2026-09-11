@@ -669,7 +669,7 @@ export function registerDbHandlers(): void {
         createdAt: e.createdAt,
       }));
     const deletedCount = events.length - keptEvents.length;
-    messageLog.appendRebase(sessionId, null, null, keptEvents); // null bound: supersede all prior; survivors kept by id
+    messageLog.appendRebase(sessionId, null, null, keptEvents, Date.now(), 'edit_resend'); // edit-resend form: inline mutation, must NOT rotate
     return { deletedCount, restoredFiles: restored.restoredFiles };
   });
 
@@ -701,7 +701,7 @@ export function registerDbHandlers(): void {
         createdAt: e.createdAt,
       }));
     const deletedCount = events.length - keptEvents.length;
-    messageLog.appendRebase(sessionId, null, null, keptEvents); // null bound: supersede all prior; survivors kept by id
+    messageLog.appendRebase(sessionId, null, null, keptEvents, Date.now(), 'edit_resend'); // edit-resend form: inline mutation, must NOT rotate
     return { deletedCount, restoredFiles: restored.restoredFiles };
   });
 
@@ -764,6 +764,19 @@ export function registerDbHandlers(): void {
     });
     usageFactsCache.prune(new Set(listed.map((s) => s.id)));
 
+    // Pricing audit stamp (token-accounting): max capability updated_at —
+    // cost figures are only reproducible against the pricing table version
+    // that produced them.
+    let pricingVersion: string | undefined;
+    try {
+      const stampRow = getDb().prepare(
+        'SELECT MAX(updated_at) AS v FROM provider_model_capabilities'
+      ).get() as { v: number | null } | undefined;
+      pricingVersion = stampRow?.v != null ? `pricing@${stampRow.v}` : undefined;
+    } catch {
+      pricingVersion = undefined;
+    }
+
     return aggregateUsageFromFacts(inputs, (providerId, model) => {
       if (!model) return undefined;
       const pricing = capabilityDao.getOne(providerId, model)?.pricing;
@@ -774,7 +787,7 @@ export function registerDbHandlers(): void {
         cacheReadPerMillion: pricing.cacheReadPerMillion,
         cacheWritePerMillion: pricing.cacheWritePerMillion,
       };
-    });
+    }, Date.now(), pricingVersion);
   });
 
   // ==================== Lock Handlers (core store thin forward) ====================
