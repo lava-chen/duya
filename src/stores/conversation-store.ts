@@ -376,6 +376,27 @@ function isSameLogicalUserSend(a: Message, b: Message): boolean {
 }
 
 /**
+ * Journal boundary events (plan 441) persist message rows under a
+ * deterministic event id `journal:<sourceMsgId>:<kind>`; the original
+ * message id — the renderer's clientMsgId — only survives embedded inside
+ * that string. The optimistic-dedupe contract ("persisted user row reuses
+ * the clientMsgId, so id matching is timestamp-independent") therefore
+ * needs both sides unwrapped before comparing ids, or a worker cold start
+ * (> OPTIMISTIC_DEDUPE_WINDOW_MS) re-renders the user message twice.
+ *
+ * Message ids never contain colons (crypto.randomUUID()), so this pattern
+ * cannot false-positive on real ids. `journal-rebase:...` fallback ids
+ * deliberately do NOT match (no colon right after "journal"). Mirrors
+ * `deterministicEventId` in packages/agent/src/journal/Journal.ts — keep
+ * the two in sync.
+ */
+export function unwrapJournalMessageId(id: string | null | undefined): string {
+  if (!id) return '';
+  const match = /^journal:(.+):([a-z_]+)$/.exec(id);
+  return match ? match[1] : id;
+}
+
+/**
  * Pure helper for `loadThreadMessages`'s streaming-session merge branch.
  *
  * Returns the merged list (DB rows + any user message that is genuinely still
@@ -406,7 +427,7 @@ export function mergeInFlightOptimisticMessages(
    * pipeline persists the row seconds/minutes after the client send (the 5s
    * window mis-matches and would otherwise leak a duplicate).
    */
-  const persistedIds = new Set(persisted.map((p) => p.id));
+  const persistedIds = new Set(persisted.map((p) => unwrapJournalMessageId(p.id)));
   const merged = [...persisted];
   let droppedOptimistic = 0;
   let keptOptimistic = 0;
@@ -416,7 +437,7 @@ export function mergeInFlightOptimisticMessages(
     // forced reload of a streaming session, growing by one full copy per
     // reload until the run ended.
     if (m.role !== 'user') continue;
-    if ((m.id && persistedIds.has(m.id)) || persistedUsers.some((p) => isSameLogicalUserSend(p, m))) {
+    if ((m.id && persistedIds.has(unwrapJournalMessageId(m.id))) || persistedUsers.some((p) => isSameLogicalUserSend(p, m))) {
       droppedOptimistic++;
       continue;
     }
@@ -840,6 +861,11 @@ export const useConversationStore = create<ConversationState>()(
       },
 
       addMessage: (threadId, message, options) => {
+        // Debug log for user messages to trace SSE echo arrival
+        if (message.role === 'user') {
+          console.log(`[Store] addMessage called for USER message: id=${message.id?.slice(0, 8)}, optimistic=${message.metadata?.optimistic}, thread=${threadId.slice(0, 8)}, existingCount=${(get().messages[threadId] ?? []).length}`);
+        }
+
         let shouldUpdateTitle = false;
         let titlePreview = '';
 
@@ -858,6 +884,27 @@ export const useConversationStore = create<ConversationState>()(
         if (isDuplicateOptimisticUser(get().messages[threadId] ?? [], message)) {
           console.log(`[Store] addMessage dropped duplicate optimistic user message: ${threadId.slice(0, 8)}`);
           return;
+        }
+
+        // Fallback: when the SSE echo arrives (no metadata.optimistic) and
+        // isDuplicateOptimisticUser didn't catch it, check by ID first (same
+        // as mergeInFlightOptimisticMessages' primary leg), then by logical
+        // identity as a secondary check. ID-based dedupe is timestamp-
+        // independent and won't misfire due to 5s window edges.
+        if (message.role === 'user' && !message.metadata?.optimistic) {
+          console.log(`[Store] addMessage fallback check ENTERED for USER message: id=${message.id?.slice(0, 8)}, thread=${threadId.slice(0, 8)}`);
+          const existing = get().messages[threadId] ?? [];
+          const isIdDuplicate = message.id && existing.some((m) => unwrapJournalMessageId(m.id) === unwrapJournalMessageId(message.id));
+          const isLogicalDuplicate = existing.some(
+            (m) => m.role === 'user' && isSameLogicalUserSend(m, message),
+          );
+          console.log(`[Store] addMessage fallback result: isIdDuplicate=${isIdDuplicate}, isLogicalDuplicate=${isLogicalDuplicate}, existingUserCount=${existing.filter(m => m.role === 'user').length}`);
+          if (isIdDuplicate || isLogicalDuplicate) {
+            console.log(
+              `[Store] addMessage dropped duplicate (idMatch=${isIdDuplicate}, logicalMatch=${isLogicalDuplicate}): ${threadId.slice(0, 8)}`,
+            );
+            return;
+          }
         }
 
         set((state) => {
