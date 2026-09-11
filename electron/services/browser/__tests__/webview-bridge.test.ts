@@ -14,6 +14,18 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('electron', () => ({
   webContents: { fromId: (id: number) => mocks.wcRegistry.get(id) },
+  // The bridge now asks the memory manager to release the browser partition
+  // caches when the last tab closes. Stub the session surface so the release
+  // is a silent no-op instead of a caught "session is undefined" warning.
+  session: {
+    fromPartition: () => ({
+      clearCache: async () => {},
+      clearCodeCaches: async () => {},
+      clearHostResolverCache: async () => {},
+      clearAuthCache: async () => {},
+      clearStorageData: async () => {},
+    }),
+  },
 }));
 
 vi.mock('../../logging/logger', () => ({
