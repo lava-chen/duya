@@ -16,6 +16,31 @@
 import type { FocusedEntity } from '@duya/computer-use-demo';
 import type { SomElement } from '../backend/types.js';
 
+/**
+ * Minimal structural view of an accessibility-tree input (plan 519 §3.4).
+ * Structurally compatible with the daemon's `UiaInfo.inputs` /
+ * `MsaaInfo.inputs` — the wiring passes them straight through, so extra
+ * fields on the source object are fine.
+ */
+export interface AxInput {
+  /** Label / accessible name (e.g. "Sign In"). */
+  name?: string;
+  /** UIA ControlType (Edit / Button / ComboBox / TabItem / ...). */
+  controlType?: string;
+  /** Current value for text-bearing controls. */
+  value?: string;
+  isPassword?: boolean;
+  urlCandidate?: string;
+}
+
+/** Accessibility-tree snapshots made available to the detector. */
+export interface AxInfo {
+  /** UIA sidecar inputs (Chromium / Electron reachable only here). */
+  uia: readonly AxInput[];
+  /** MSAA sidecar inputs (Qt / WPS / WeChat fallback). */
+  msaa: readonly AxInput[];
+}
+
 export interface ElementDetectorInput {
   /** Image dimensions in CSS pixels. */
   width: number;
@@ -25,6 +50,13 @@ export interface ElementDetectorInput {
    * returns just a screen-center fallback.
    */
   focusedEntity?: FocusedEntity | null;
+  /**
+   * Accessibility-tree labels (plan 519 §3.4). When present, each
+   * UIA / MSAA input becomes a labeled SOM element tagged with an
+   * `axSource`. AX elements carry no screen coordinates, so their bboxes
+   * are a heuristic grid — prefer focused-entity markers for precision.
+   */
+  axInfo?: AxInfo | null;
 }
 
 /**
@@ -33,6 +65,13 @@ export interface ElementDetectorInput {
  * Returns 0..N elements. The contract is "best-effort — empty array
  * is valid when nothing is detectable". Tests should assert on
  * element count + indexes, never on shape variability.
+ *
+ * Sources, in priority order:
+ *   1. focusedEntity   → one element at its bbox, `axSource: 'focused-entity'`
+ *   2. UIA inputs      → labeled elements, `axSource: 'uia'`
+ *   3. MSAA inputs     → labeled elements, `axSource: 'msaa'`
+ *   4. centered fallback → one 'primary' element, `axSource: 'heuristic'`
+ *      (only when none of the above produced anything)
  */
 export function detectSomElements(input: ElementDetectorInput): SomElement[] {
   const elements: SomElement[] = [];
@@ -47,13 +86,38 @@ export function detectSomElements(input: ElementDetectorInput): SomElement[] {
         bbox,
         label: focusedEntityLabel(input.focusedEntity),
         kind: kindFromFocusedEntity(input.focusedEntity),
+        axSource: 'focused-entity',
       });
     }
   }
 
-  // 2. Primary action fallback — a centered square that always
-  //    exists so the LLM has a "safe" target when nothing else is
-  //    detectable. Disabled in test fixtures via omitPrimaryAction.
+  // 2 + 3. AX tree → labeled elements filling an otherwise element-poor
+  // capture. bboxes are a heuristic grid (AX carries no coordinates);
+  // `axSource` lets the model weigh label confidence.
+  const ax = input.axInfo;
+  if (ax) {
+    const uiaElements = axInputsToSom(
+      ax.uia,
+      'uia',
+      input.width,
+      input.height,
+      nextIndex,
+    );
+    for (const el of uiaElements) elements.push(el);
+    nextIndex = lastIndex(elements) + 1;
+
+    const msaaElements = axInputsToSom(
+      ax.msaa,
+      'msaa',
+      input.width,
+      input.height,
+      nextIndex,
+    );
+    for (const el of msaaElements) elements.push(el);
+  }
+
+  // 4. Primary action fallback — a centered square that always exists so
+  //    the LLM has a "safe" target when nothing else is detectable.
   if (elements.length === 0 && input.width > 0 && input.height > 0) {
     const size = Math.min(120, Math.floor(input.width / 6));
     elements.push({
@@ -66,10 +130,74 @@ export function detectSomElements(input: ElementDetectorInput): SomElement[] {
       },
       label: 'primary',
       kind: 'Unknown',
+      axSource: 'heuristic',
     });
   }
 
   return elements;
+}
+
+/**
+ * Map accessibility-tree inputs to labeled SOM elements. AX records carry
+ * no screen coordinates, so bboxes are drawn as a left-aligned grid to
+ * keep indexes stable and bounded. `axSource` tags the origin.
+ */
+function axInputsToSom(
+  inputs: readonly AxInput[],
+  source: 'uia' | 'msaa',
+  width: number,
+  height: number,
+  startIndex: number,
+): SomElement[] {
+  const result: SomElement[] = [];
+  const cap = Math.max(0, Math.floor((height - AX_GRID_MARGIN) / (AX_GRID_ROW_H + AX_GRID_GAP)));
+  const n = Math.min(inputs.length, cap);
+  for (let i = 0; i < n; i++) {
+    const ax = inputs[i];
+    if (!ax) continue;
+    const controlType = ax.controlType ?? 'Control';
+    const name = ax.name ?? ax.value ?? '';
+    result.push({
+      index: startIndex + i,
+      bbox: axGridBbox(i, width),
+      label: `${controlType}: '${name}'`.slice(0, 48),
+      kind: kindFromControlType(controlType),
+      axSource: source,
+    });
+  }
+  return result;
+}
+
+/** Left-edge grid position for the i-th AX element. */
+function axGridBbox(i: number, width: number): { x: number; y: number; w: number; h: number } {
+  return {
+    x: AX_GRID_MARGIN,
+    y: AX_GRID_MARGIN + i * (AX_GRID_ROW_H + AX_GRID_GAP),
+    w: Math.min(220, Math.max(80, Math.floor(width * 0.3))),
+    h: AX_GRID_ROW_H,
+  };
+}
+
+/** Grid metrics for AX label placement. */
+const AX_GRID_MARGIN = 8;
+const AX_GRID_ROW_H = 26;
+const AX_GRID_GAP = 4;
+
+/** Map a UIA ControlType to the extended SomElement kind union. */
+function kindFromControlType(controlType: string): SomElement['kind'] {
+  const t = controlType.toLowerCase();
+  if (t === 'edit' || t === 'document') return t === 'edit' ? 'Edit' : 'Document';
+  if (t === 'combobox') return 'ComboBox';
+  if (t === 'button') return 'Button';
+  if (t === 'tab' || t === 'tabitem') return 'Tab';
+  if (t === 'text') return 'Text';
+  if (t === 'image') return 'Image';
+  return 'Input';
+}
+
+function lastIndex(elements: SomElement[]): number {
+  const last = elements[elements.length - 1];
+  return last ? last.index : 0;
 }
 
 /**

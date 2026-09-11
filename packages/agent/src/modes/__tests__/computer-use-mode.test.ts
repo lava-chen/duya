@@ -8,7 +8,11 @@ import { describe, it, expect } from 'vitest';
 
 import { modeModifierRegistry } from '../index.js';
 import { computerUseMode, COMPUTER_USE_MODE_ID } from '../computer-use-mode.js';
-import { getComputerUseTools } from '../../tool/OSTool/index.js';
+import {
+  getComputerUseTools,
+  recordComputerUseContextTrigger,
+  shouldInjectComputerUseContext,
+} from '../../tool/OSTool/index.js';
 import { COMPUTER_USE_TOOL_NAME } from '../../tool/OSTool/constants.js';
 
 describe('computerUseMode — registration', () => {
@@ -29,7 +33,14 @@ describe('computerUseMode — registration', () => {
 
   it('declares the computer_use tool via inject (function form)', () => {
     expect(typeof computerUseMode.tools?.inject).toBe('function');
-    const tools = (computerUseMode.tools!.inject as () => ReturnType<typeof getComputerUseTools>)();
+    // plan 519 D2: inject is function-form and consults the session's
+    // trigger registry — an unarmed session sees only `computer_use`.
+    const inject = computerUseMode.tools!.inject as (ctx: {
+      sessionId: string;
+      workingDirectory: string;
+      state: Record<string, never>;
+    }) => ReturnType<typeof getComputerUseTools>;
+    const tools = inject({ sessionId: 'unarmed-session', workingDirectory: '/tmp', state: {} });
     expect(tools.length).toBe(1);
     expect(tools[0].definition.name).toBe(COMPUTER_USE_TOOL_NAME);
   });
@@ -42,9 +53,8 @@ describe('computerUseMode — registration', () => {
     const prefix = computerUseMode.prompt?.prefix;
     expect(typeof prefix).toBe('string');
     const text = prefix as string;
-    expect(text).toContain('Computer Use Mode Active');
-    expect(text).toContain("action: 'capture'");
-    expect(text).toContain('element: N');
+    expect(text).toContain('capture(somMode=true)');
+    expect(text).toContain('suspected_noop');
     expect(text).toContain('APP_BLOCKED');
     expect(text).toContain('REDACTED_FIELD');
   });
@@ -61,6 +71,17 @@ describe('computerUseMode — registration', () => {
 
   it('has an onExit hook (OSContextBridge disable)', () => {
     expect(typeof computerUseMode.hooks?.onExit).toBe('function');
+  });
+
+  it('onExit clears the context-tool trigger for the session (plan 519 D2)', async () => {
+    recordComputerUseContextTrigger('mode-exit-session', 'explicit-call');
+    expect(shouldInjectComputerUseContext('mode-exit-session')).toBe(true);
+    await computerUseMode.hooks!.onExit!({
+      sessionId: 'mode-exit-session',
+      workingDirectory: '/tmp',
+      state: {},
+    });
+    expect(shouldInjectComputerUseContext('mode-exit-session')).toBe(false);
   });
 
   it('has a persist round-trip (empty for Phase 2)', () => {

@@ -114,15 +114,30 @@ export async function drawSomOverlay(
   image: Buffer,
   elements: readonly SomElement[],
   opts: DrawSomOverlayOptions = {},
+  dims?: { width: number; height: number },
 ): Promise<Buffer> {
   if (elements.length === 0) return image;
 
-  // Build the SVG at a sensible size: we use 1280x720 by default
-  // since sharp's resize matches the underlying image. We use the
-  // SVG dimensions as-is and let sharp composite without scaling.
-  // For now, pick conservative 1920x1080; downstream code can override.
-  const svgWidth = 1920;
-  const svgHeight = 1080;
+  // sharp's composite() rejects an overlay larger than the base image
+  // ("Image to composite must have same dimensions or smaller"), so the
+  // SVG must be sized to the *actual* capture — a hardcoded 1920x1080
+  // overlay explodes on smaller thumbnails (observed live: desktopCapturer
+  // returned 1440x810 for a 2048x1152 request on a 1.875-scaled 4K
+  // panel). Resolution order: explicit dims from the caller (win32
+  // capture knows the thumbnail size) → sharp metadata probe → legacy
+  // 1920x1080 fallback.
+  let svgWidth = dims?.width ?? 0;
+  let svgHeight = dims?.height ?? 0;
+  if (!svgWidth || !svgHeight) {
+    try {
+      const meta = await sharp(image).metadata?.();
+      svgWidth = svgWidth || meta?.width || 1920;
+      svgHeight = svgHeight || meta?.height || 1080;
+    } catch {
+      svgWidth = svgWidth || 1920;
+      svgHeight = svgHeight || 1080;
+    }
+  }
   const svg = buildSomOverlaySvg(svgWidth, svgHeight, elements, opts);
 
   // Render the SVG to a PNG buffer via sharp(SVG-as-buffer).

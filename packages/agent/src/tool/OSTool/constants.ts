@@ -47,6 +47,28 @@ export const COMPUTER_USE_ACTION_LIST: readonly string[] = COMPUTER_USE_ACTIONS;
 export type ComputerUseAction = (typeof COMPUTER_USE_ACTIONS)[number];
 
 /**
+ * plan 519 §3.2 (D2) — the conditional sibling tool. NOT part of the
+ * 9-action enum above: `list_apps` / `focus_app` were deliberately
+ * removed from `computer_use` (user decision 2026-08-29, "pure
+ * vision") and come back only as a second tool that is injected just
+ * when the vision path needs an escape hatch (0-element capture /
+ * suspected_noop click / explicit prior call — see context-tool.ts).
+ */
+export const COMPUTER_USE_CONTEXT_TOOL_NAME = 'computer_use_context';
+
+export const COMPUTER_USE_CONTEXT_ACTIONS = ['list_apps', 'focus_app'] as const;
+
+export type ComputerUseContextAction = (typeof COMPUTER_USE_CONTEXT_ACTIONS)[number];
+
+/**
+ * Union of every action string the `computer-use:execute` IPC channel
+ * can carry — the 9-action vision enum plus the conditional context
+ * actions. Tool-level schemas stay separate; only the main-process
+ * dispatcher and the envelope type see the union.
+ */
+export type ComputerUseExecuteAction = ComputerUseAction | ComputerUseContextAction;
+
+/**
  * Actions that require user confirmation before execution. These
  * are destructive / state-changing operations where the LLM could
  * easily misuse them.

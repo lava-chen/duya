@@ -19,6 +19,7 @@
  * have a clean cross-platform equivalent.
  */
 
+import type { FocusedEntity } from '@duya/computer-use-demo';
 import type {
   ActionResult,
   AppInfo,
@@ -34,6 +35,16 @@ import type {
   SomElement,
   TypeTextOptions,
 } from '../types.js';
+import type { Verdict } from '../../verdict/types.js';
+import {
+  buildClickVerdict,
+  buildUnverifiableVerdict,
+} from '../../verdict/builder.js';
+import {
+  decideClickInjection,
+  applyInjectionToVerdict,
+  type Win32NativeAdapter,
+} from './win32-injection.js';
 
 /**
  * Minimal subset of the `electron` module we depend on. The actual
@@ -77,6 +88,12 @@ export interface SharpPipeline {
   composite(images: Array<{ input: Buffer; top?: number; left?: number }>): SharpPipeline;
   /** Encode to PNG. */
   png(opts?: { compressionLevel?: number }): { toBuffer(): Promise<Buffer> };
+  /**
+   * Image dimensions probe (sharp.metadata). Optional so test fakes can
+   * omit it; the SOM overlay uses it to size the SVG to the actual
+   * bitmap when the caller doesn't pass explicit dims.
+   */
+  metadata?(): Promise<{ width?: number; height?: number }>;
 }
 
 /**
@@ -117,8 +134,14 @@ export interface ElectronDesktopBackendOptions {
   /**
    * Overlay renderer. Defaults to a no-op (returns the raw capture).
    * Phase 1 ships `drawSomOverlay` in `../som/overlay.ts`.
+   * `dims` carries the capture thumbnail's real pixel size — the overlay
+   * must not exceed the base image or sharp's composite() throws.
    */
-  renderOverlay?: (image: Buffer, elements: SomElement[]) => Promise<Buffer>;
+  renderOverlay?: (
+    image: Buffer,
+    elements: SomElement[],
+    dims?: { width: number; height: number },
+  ) => Promise<Buffer>;
   /**
    * Provider for app list. Defaults to returning empty (the
    // OSContextBridge singleton is the production source).
@@ -130,6 +153,21 @@ export interface ElectronDesktopBackendOptions {
    * may need platform-specific hooks.
    */
   focusAppProvider?: (opts: FocusAppOptions) => Promise<boolean>;
+  /**
+   * Provider for a post-action focused-entity read-back used to build a
+   * Verdict (plan 519 §3.5 / A3). Production wires OSContextBridge's
+   * latest `focusedEntity`. When absent, state-changing actions return
+   * an `ActionResult` without a verdict (behavior unchanged).
+   */
+  readFocusedEntity?: () => Promise<FocusedEntity | null> | FocusedEntity | null;
+  /**
+   * Win32 native adapter for background-priority click injection
+   * (plan 519 §3.7 / C1). When present, `click` resolves the window under
+   * the target point and flags `fallbackUsed` on the verdict if the click
+   * has to raise a different window. Absent → the normal cursor path runs
+   * with no injection decision (behavior unchanged on non-Windows).
+   */
+  win32InputProvider?: Win32NativeAdapter | null;
   /**
    * Capture resolution in logical CSS pixels. Defaults to 1920x1080.
    * desktopCapturer returns native pixels; we resize down.
@@ -225,7 +263,10 @@ export class ElectronDesktopBackend implements DesktopBackend {
         }
       }
       if (this.opts.renderOverlay && elements.length > 0) {
-        renderedBuffer = await this.opts.renderOverlay(nativeBuffer, elements);
+        renderedBuffer = await this.opts.renderOverlay(nativeBuffer, elements, {
+          width: nativeSize.width,
+          height: nativeSize.height,
+        });
       }
     }
 
@@ -292,6 +333,7 @@ export class ElectronDesktopBackend implements DesktopBackend {
           durationMs: Date.now() - start,
         };
       }
+      const before = this.canReadback() ? await this.peekFocusedEntity() : null;
       await this.opts.nut.mouse.setPosition(point);
       const button = this.toNutButton(opts.button ?? 'left');
       const count = opts.count ?? 'single';
@@ -306,7 +348,22 @@ export class ElectronDesktopBackend implements DesktopBackend {
           await new Promise<void>((resolve) => setTimeout(resolve, interClickDelayMs));
         }
       }
-      return { ok: true, durationMs: Date.now() - start };
+      let verdict =
+        this.canReadback() && this.opts.readFocusedEntity
+          ? await this.mouseReadback(before)
+          : undefined;
+      // plan 519 §3.7 / C1: when a Win32 native adapter is wired, check
+      // whether the target window differs from the foreground. A fallback
+      // to raise (or a missing target) must be surfaced on the verdict so
+      // the model knows the click may have moved focus.
+      if (this.opts.win32InputProvider && verdict) {
+        const decision = decideClickInjection({
+          foreground: this.opts.win32InputProvider.getForegroundWindow(),
+          target: this.opts.win32InputProvider.windowFromPoint(point.x, point.y),
+        });
+        applyInjectionToVerdict(verdict, decision);
+      }
+      return { ok: true, durationMs: Date.now() - start, verdict };
     } catch (err) {
       return {
         ok: false,
@@ -337,6 +394,7 @@ export class ElectronDesktopBackend implements DesktopBackend {
           y: Math.round(opts.fromY + (opts.toY - opts.fromY) * t),
         });
       }
+      const before = this.canReadback() ? await this.peekFocusedEntity() : null;
       // nut.js drag expects a path; fall back to setPosition sequence
       // if drag isn't available.
       if (this.opts.nut.mouse.drag) {
@@ -346,7 +404,11 @@ export class ElectronDesktopBackend implements DesktopBackend {
           await this.opts.nut.mouse.setPosition(p);
         }
       }
-      return { ok: true, durationMs: Date.now() - start };
+      const verdict =
+        this.canReadback() && this.opts.readFocusedEntity
+          ? await this.mouseReadback(before)
+          : undefined;
+      return { ok: true, durationMs: Date.now() - start, verdict };
     } catch (err) {
       return {
         ok: false,
@@ -361,7 +423,8 @@ export class ElectronDesktopBackend implements DesktopBackend {
     try {
       const dir = this.toNutDirection(opts.direction);
       await this.opts.nut.mouse.wheel(dir, opts.amount);
-      return { ok: true, durationMs: Date.now() - start };
+      const verdict = this.canReadback() ? await this.textReadback() : undefined;
+      return { ok: true, durationMs: Date.now() - start, verdict };
     } catch (err) {
       return {
         ok: false,
@@ -375,7 +438,8 @@ export class ElectronDesktopBackend implements DesktopBackend {
     const start = Date.now();
     try {
       await this.opts.nut.keyboard.type(opts.text, { delayMs: opts.delayMs ?? 10 });
-      return { ok: true, durationMs: Date.now() - start };
+      const verdict = this.canReadback() ? await this.textReadback() : undefined;
+      return { ok: true, durationMs: Date.now() - start, verdict };
     } catch (err) {
       return {
         ok: false,
@@ -395,7 +459,8 @@ export class ElectronDesktopBackend implements DesktopBackend {
         resolved.push(this.toNutKey(k));
       }
       await this.opts.nut.keyboard.pressKey(...resolved);
-      return { ok: true, durationMs: Date.now() - start };
+      const verdict = this.canReadback() ? await this.textReadback() : undefined;
+      return { ok: true, durationMs: Date.now() - start, verdict };
     } catch (err) {
       return {
         ok: false,
@@ -418,7 +483,11 @@ export class ElectronDesktopBackend implements DesktopBackend {
     }
     const start = Date.now();
     try {
-      const ok = await this.opts.focusAppProvider(opts);
+      // plan 519 §3.7 / C2: `raise` defaults to false (background
+      // priority) — never resurrect a foreground-stealing default. Pass
+      // the explicit value through so the provider can branch.
+      const resolved: FocusAppOptions = { ...opts, raise: opts.raise ?? false };
+      const ok = await this.opts.focusAppProvider(resolved);
       return {
         ok,
         reason: ok ? undefined : 'focusApp: provider returned false',
@@ -444,7 +513,8 @@ export class ElectronDesktopBackend implements DesktopBackend {
         modifiers: [selectAllModifier],
       });
       await this.opts.nut.keyboard.type(opts.value, { delayMs: opts.delayMs ?? 10 });
-      return { ok: true, durationMs: Date.now() - start };
+      const verdict = this.canReadback() ? await this.textReadback() : undefined;
+      return { ok: true, durationMs: Date.now() - start, verdict };
     } catch (err) {
       return {
         ok: false,
@@ -461,8 +531,51 @@ export class ElectronDesktopBackend implements DesktopBackend {
   }
 
   // ────────────────────────────────────────────────────────────────────
-  // Private helpers
+  // Verdict read-back helpers (plan 519 §3.5 / A3)
   // ────────────────────────────────────────────────────────────────────
+
+  /** Whether a post-action read-back provider is wired. */
+  private canReadback(): boolean {
+    return typeof this.opts.readFocusedEntity === 'function';
+  }
+
+  /** One focused-entity snapshot via the injected provider (never throws). */
+  private async peekFocusedEntity(): Promise<FocusedEntity | null> {
+    if (!this.opts.readFocusedEntity) return null;
+    try {
+      return await Promise.resolve(this.opts.readFocusedEntity());
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Read-back + verdict for mouse ops (click / drag): compare focus
+   * captured before the action with the post-action snapshot.
+   */
+  private async mouseReadback(
+    before: FocusedEntity | null,
+  ): Promise<Verdict | undefined> {
+    const readStart = Date.now();
+    const after = await this.peekFocusedEntity();
+    return buildClickVerdict(before, after, {
+      readbackMs: Date.now() - readStart,
+    });
+  }
+
+  /**
+   * Read-back + verdict for keyboard / text ops (type / key / set_value /
+   * scroll). A keystroke into the focused field never changes
+   * `FocusedEntity`, so we report an honest `unverifiable` rather than a
+   * false `suspected_noop`.
+   */
+  private async textReadback(): Promise<Verdict | undefined> {
+    const readStart = Date.now();
+    const after = await this.peekFocusedEntity();
+    return buildUnverifiableVerdict(after, {
+      readbackMs: Date.now() - readStart,
+    });
+  }
 
   /**
    * Resolve a click target to a screen point. Prefers SOM element

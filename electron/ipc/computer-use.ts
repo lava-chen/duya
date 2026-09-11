@@ -24,7 +24,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
   COMPUTER_USE_IPC_CHANNEL,
-  type ComputerUseAction,
+  type ComputerUseExecuteAction,
 } from '../../packages/agent/dist/tool/OSTool/constants.js';
 import {
   ComputerUseErrorCode,
@@ -51,14 +51,16 @@ import {
 } from '../services/computer-use-overlay.js';
 import {
   clearZoomOrigin,
+  getRememberedCaptureSize,
   modelPointToScreen,
+  rememberCaptureSize,
   rememberZoomOrigin,
 } from './computer-use-coords.js';
 
 const logger = getLogger();
 
 interface ExecuteRequestPayload {
-  action: ComputerUseAction;
+  action: ComputerUseExecuteAction;
   payload: Record<string, unknown>;
   sessionId?: string;
 }
@@ -73,7 +75,7 @@ interface IpcExecuteResponse<T = unknown> {
  * Map a thrown / rejected error into our structured envelope shape.
  */
 function envelopeError(
-  action: ComputerUseAction,
+  action: ComputerUseExecuteAction,
   code: ComputerUseErrorCode,
   message: string,
 ): ComputerUseToolEnvelope {
@@ -110,6 +112,24 @@ function getScaleFactor(): number {
     return screen.getPrimaryDisplay().scaleFactor;
   } catch {
     return 1;
+  }
+}
+
+/**
+ * Primary display size in physical pixels — the far end of the
+ * image→physical coordinate mapping. Undefined when the display
+ * readout is unavailable so the mapping degrades to scaleFactor-only.
+ */
+function getPhysicalDisplaySize(): { width: number; height: number } | undefined {
+  try {
+    const d = screen.getPrimaryDisplay();
+    if (!(d.bounds.width > 0 && d.bounds.height > 0)) return undefined;
+    return {
+      width: Math.round(d.bounds.width * d.scaleFactor),
+      height: Math.round(d.bounds.height * d.scaleFactor),
+    };
+  } catch {
+    return undefined;
   }
 }
 
@@ -288,7 +308,7 @@ function attachSavedCapturePath(cap: unknown, savedTo: string | null): void {
  * captured into the envelope so the tool layer can render it.
  */
 async function runAction(
-  action: ComputerUseAction,
+  action: ComputerUseExecuteAction,
   payload: Record<string, unknown>,
   sessionId: string | undefined,
 ): Promise<ComputerUseToolEnvelope> {
@@ -320,6 +340,11 @@ async function runAction(
           somMode: data.somMode === true,
           displayId: typeof data.displayId === 'number' ? data.displayId : undefined,
         });
+        // Remember the actual thumbnail bitmap size for click mapping —
+        // desktopCapturer may return a smaller bitmap than requested
+        // (observed 1440x810 for a 2048x1152 request), and scaling model
+        // coords by scaleFactor alone lands clicks short of the target.
+        rememberCaptureSize(sessionId, { width: cap.width, height: cap.height });
         attachSavedCapturePath(cap, saveComputerUseCapture({
           sessionId,
           action: 'capture',
@@ -365,6 +390,7 @@ async function runAction(
             { x: clickOpts.x, y: clickOpts.y },
             sessionId,
             getScaleFactor(),
+            getPhysicalDisplaySize(),
           );
           clickOpts.x = sp.x;
           clickOpts.y = sp.y;
@@ -537,11 +563,13 @@ async function runAction(
             { x: dragOpts.fromX, y: dragOpts.fromY },
             sessionId,
             sf,
+            getPhysicalDisplaySize(),
           );
           const to = modelPointToScreen(
             { x: dragOpts.toX, y: dragOpts.toY },
             sessionId,
             sf,
+            getPhysicalDisplaySize(),
           );
           dragOpts.fromX = from.x;
           dragOpts.fromY = from.y;
@@ -558,9 +586,11 @@ async function runAction(
             : { code: ComputerUseErrorCode.BACKEND_UNAVAILABLE, message: r.reason ?? 'drag failed' },
         };
       }
-      // window_switch / list_apps removed (user decision 2026-08-29):
-      // targeting is pure vision — capture/zoom + click. The backend
-      // keeps the underlying focusApp / listApps providers.
+      // window_switch removed (user decision 2026-08-29): targeting is
+      // pure vision — capture/zoom + click. plan 519 §3.2 (D2) brings
+      // list_apps / focus_app back on the conditional
+      // `computer_use_context` tool (cases below) — the `computer_use`
+      // 9-action enum itself stays closed.
       case 'set_value': {
         const redacted = getRedactedReason();
         if (redacted) {
@@ -632,12 +662,20 @@ async function runAction(
             return null;
           }
         })();
+        // The model's zoom coords live in the last capture's bitmap
+        // space, which can be smaller than the display's logical bounds
+        // — validate against the remembered capture size when we have
+        // it, and fall back to the logical bounds otherwise.
+        const captureSize = getRememberedCaptureSize(sessionId);
         const originX = Math.max(0, zoomX);
         const originY = Math.max(0, zoomY);
+        const originInsideImage = captureSize
+          ? (zoomX < captureSize.width && zoomY < captureSize.height)
+          : (!displayBounds || (zoomX < displayBounds.width && zoomY < displayBounds.height));
         if (
           zoomW > 0 &&
           zoomH > 0 &&
-          (!displayBounds || (zoomX < displayBounds.width && zoomY < displayBounds.height))
+          originInsideImage
         ) {
           rememberZoomOrigin(sessionId, { x: originX, y: originY });
         }
@@ -651,6 +689,54 @@ async function runAction(
           base64: extractCaptureBase64(cap),
         }));
         return { success: true, action, data: cap };
+      }
+      // plan 519 §3.2 (D2): conditional `computer_use_context` actions.
+      // They ride the same channel + DesktopBackend; the agent-side
+      // tool is injected only when the vision path arms the escape
+      // hatch, so these branches stay dormant otherwise. Read-only /
+      // focus-level operations — no approval gate (matches the plan's
+      // Non-Goal of not touching the plan-454 safety contract).
+      case 'list_apps': {
+        const apps = await backend.listApps();
+        logger.debug(
+          'computer-use: list_apps',
+          { count: apps.length, sessionId: sessionId ?? null },
+          LogComponent.ComputerUse,
+        );
+        return { success: true, action, data: { apps } };
+      }
+      case 'focus_app': {
+        const r = await backend.focusApp({
+          title: typeof data.title === 'string' ? data.title : undefined,
+          processName:
+            typeof data.processName === 'string' ? data.processName : undefined,
+          // plan 519 §3.7: background priority — raise defaults to
+          // false; only an explicit raise=true activates the window.
+          raise: data.raise === true,
+        });
+        logger.info(
+          'computer-use: focus_app',
+          {
+            title: typeof data.title === 'string' ? data.title : null,
+            processName:
+              typeof data.processName === 'string' ? data.processName : null,
+            raise: data.raise === true,
+            ok: r.ok,
+            sessionId: sessionId ?? null,
+          },
+          LogComponent.ComputerUse,
+        );
+        return {
+          success: r.ok,
+          action,
+          data: r,
+          error: r.ok
+            ? undefined
+            : {
+                code: ComputerUseErrorCode.BACKEND_UNAVAILABLE,
+                message: r.reason ?? 'focus_app failed',
+              },
+        };
       }
       default: {
         // Exhaustive check — TS will complain if a new action is
@@ -696,7 +782,7 @@ async function runAction(
  * dispatcher logic.
  */
 export async function dispatchComputerUseAction(input: {
-  action: ComputerUseAction;
+  action: ComputerUseExecuteAction;
   payload: Record<string, unknown>;
   sessionId?: string;
 }): Promise<ComputerUseToolEnvelope> {

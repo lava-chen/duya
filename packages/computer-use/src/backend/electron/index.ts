@@ -16,6 +16,14 @@ export {
   type SharpPipeline,
 } from './win32.js';
 
+export {
+  decideClickInjection,
+  applyInjectionToVerdict,
+  type ClickInjectionDecision,
+  type ClickInjectionInput,
+  type Win32NativeAdapter,
+} from './win32-injection.js';
+
 import { ElectronDesktopBackend, type ElectronDesktopBackendOptions } from './win32.js';
 
 /**

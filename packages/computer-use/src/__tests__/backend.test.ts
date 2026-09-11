@@ -19,6 +19,7 @@ import type {
   SharpAdapter,
   SharpPipeline,
 } from '../backend/electron/win32.js';
+import type { Win32NativeAdapter } from '../backend/electron/win32-injection.js';
 
 describe('NoopDesktopBackend', () => {
   it('returns a valid capture shape by default', async () => {
@@ -477,5 +478,106 @@ describe('ElectronDesktopBackend (Phase 1 contract)', () => {
     const nut = makeNutFake();
     const backend = new ElectronDesktopBackend({ electron, sharp, nut });
     expect(backend.id).toBe('electron');
+  });
+
+  // ── Phase 3 / §3.7 — background-priority click injection ──────────────
+  it('click with a win32 adapter flags fallbackUsed on the verdict when the target window must raise', async () => {
+    const electron = makeElectronFake();
+    const sharp = makeSharpFake();
+    const nut = makeNutFake();
+    const readFocusedEntity = async () => ({
+      kind: 'button' as const,
+      name: 'ignored',
+      rect: { x: 0, y: 0, width: 0, height: 0 },
+    });
+    const win32InputProvider: Win32NativeAdapter = {
+      // Target window differs from foreground AND foreground is unknown
+      // (headless-style snapshot) → raise fallback.
+      getForegroundWindow: () => null,
+      windowFromPoint: () => 0x40,
+    };
+    const backend = new ElectronDesktopBackend({
+      electron,
+      sharp,
+      nut,
+      readFocusedEntity,
+      win32InputProvider,
+    });
+
+    const result = await backend.click({ x: 10, y: 20 });
+    expect(result.ok).toBe(true);
+    // readFocusedEntity is stable across the read-back (element unchanged),
+    // so the verdict is suspected_noop; the injection patch ADDS
+    // fallbackUsed=true.
+    expect(result.verdict?.fallbackUsed).toBe(true);
+  });
+
+  it('click with a win32 adapter does NOT flag fallbackUsed for a same-window target', async () => {
+    const electron = makeElectronFake();
+    const sharp = makeSharpFake();
+    const nut = makeNutFake();
+    const readFocusedEntity = async () => ({
+      kind: 'button' as const,
+      name: 'ignored',
+      rect: { x: 0, y: 0, width: 0, height: 0 },
+    });
+    const win32InputProvider: Win32NativeAdapter = {
+      getForegroundWindow: () => 0x50,
+      // Same HWND as foreground → same-window, no fallback.
+      windowFromPoint: () => 0x50,
+    };
+    const backend = new ElectronDesktopBackend({
+      electron,
+      sharp,
+      nut,
+      readFocusedEntity,
+      win32InputProvider,
+    });
+
+    const result = await backend.click({ x: 10, y: 20 });
+    expect(result.ok).toBe(true);
+    expect(result.verdict?.fallbackUsed).toBeUndefined();
+    expect(result.verdict?.effect).toBe('suspected_noop');
+  });
+
+  // ── Phase 3 / §3.7 — focusApp raise default ────────────────────────────
+  it('focusApp defaults raise to false for the provider', async () => {
+    const electron = makeElectronFake();
+    const sharp = makeSharpFake();
+    const nut = makeNutFake();
+    let received: { title?: string; raise?: boolean } | null = null;
+    const focusAppProvider = async (opts: { title?: string; raise?: boolean }) => {
+      received = opts;
+      return true;
+    };
+    const backend = new ElectronDesktopBackend({
+      electron,
+      sharp,
+      nut,
+      focusAppProvider,
+    });
+
+    await backend.focusApp({ title: 'foo' });
+    expect(received?.raise).toBe(false);
+  });
+
+  it('focusApp passes through an explicit raise=true', async () => {
+    const electron = makeElectronFake();
+    const sharp = makeSharpFake();
+    const nut = makeNutFake();
+    let received: { title?: string; raise?: boolean } | null = null;
+    const focusAppProvider = async (opts: { title?: string; raise?: boolean }) => {
+      received = opts;
+      return true;
+    };
+    const backend = new ElectronDesktopBackend({
+      electron,
+      sharp,
+      nut,
+      focusAppProvider,
+    });
+
+    await backend.focusApp({ title: 'foo', raise: true });
+    expect(received?.raise).toBe(true);
   });
 });
