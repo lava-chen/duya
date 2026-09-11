@@ -15,5 +15,7 @@ export {
 
 export {
   detectSomElements,
+  type AxInfo,
+  type AxInput,
   type ElementDetectorInput,
 } from './element-detector.js';

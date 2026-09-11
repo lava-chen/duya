@@ -30,7 +30,13 @@ interface ZoomOrigin {
   y: number;
 }
 
+interface CaptureSize {
+  width: number;
+  height: number;
+}
+
 const zoomOrigins = new Map<string, ZoomOrigin>();
+const captureSizes = new Map<string, CaptureSize>();
 
 export function zoomOriginKey(sessionId: string | undefined): string {
   return sessionId ?? '(no-session)';
@@ -50,22 +56,76 @@ export function clearZoomOrigin(sessionId: string | undefined): void {
 }
 
 /**
+ * Remember the pixel size of the last full-screen capture thumbnail.
+ *
+ * `desktopCapturer` is asked for a thumbnail at the display's logical
+ * size, but the bitmap it actually returns can be smaller (observed:
+ * 1440x810 for a 2048x1152 request on a 1.875-scaled 4K panel). Click
+ * mapping therefore needs the *actual* bitmap size, not the requested
+ * one — remember it after every successful full capture.
+ */
+export function rememberCaptureSize(
+  sessionId: string | undefined,
+  size: CaptureSize,
+): void {
+  if (size.width > 0 && size.height > 0) {
+    captureSizes.set(zoomOriginKey(sessionId), size);
+  }
+}
+
+/** Last remembered capture thumbnail size, if any. */
+export function getRememberedCaptureSize(
+  sessionId: string | undefined,
+): CaptureSize | undefined {
+  return captureSizes.get(zoomOriginKey(sessionId));
+}
+
+/** Forget the remembered capture size (display change / tests). */
+export function clearCaptureSize(sessionId: string | undefined): void {
+  captureSizes.delete(zoomOriginKey(sessionId));
+}
+
+/**
  * Map a model-supplied image-space point to the physical screen point
  * nut.js expects: rebase out of the active zoom crop (if any), then
- * scale logical → physical. Pure — the caller passes the primary
- * display's scaleFactor; values <= 0 fall back to 1 (unscaled) so a
- * missing display readout degrades to the old behavior instead of
- * collapsing every click into the top-left corner.
+ * scale image → physical. Pure — the caller passes the primary
+ * display's scaleFactor plus its physical pixel size.
+ *
+ * The image→physical ratio is `physical pixels / captured bitmap
+ * pixels` when both ends are known. Scaling by scaleFactor alone is
+ * only correct when the captured bitmap matches the display's logical
+ * size — when desktopCapturer hands back a smaller thumbnail, the
+ * scaleFactor path lands every click short of its target (up-left).
+ * Ratios <= 0 / non-finite and a missing capture size degrade to the
+ * scaleFactor behavior instead of collapsing clicks into the corner.
  */
 export function modelPointToScreen(
   point: { x: number; y: number },
   sessionId: string | undefined,
   scaleFactor: number,
+  physical?: { width: number; height: number },
 ): ScreenPoint {
-  const origin = zoomOrigins.get(zoomOriginKey(sessionId));
+  const key = zoomOriginKey(sessionId);
+  const origin = zoomOrigins.get(key);
   const sf = Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1;
+  const img = captureSizes.get(key);
+  let kx = sf;
+  let ky = sf;
+  if (
+    img &&
+    physical &&
+    Number.isFinite(physical.width) &&
+    Number.isFinite(physical.height) &&
+    physical.width > 0 &&
+    physical.height > 0
+  ) {
+    const rx = physical.width / img.width;
+    const ry = physical.height / img.height;
+    if (Number.isFinite(rx) && rx > 0) kx = rx;
+    if (Number.isFinite(ry) && ry > 0) ky = ry;
+  }
   return {
-    x: Math.round((point.x + (origin?.x ?? 0)) * sf),
-    y: Math.round((point.y + (origin?.y ?? 0)) * sf),
+    x: Math.round((point.x + (origin?.x ?? 0)) * kx),
+    y: Math.round((point.y + (origin?.y ?? 0)) * ky),
   };
 }

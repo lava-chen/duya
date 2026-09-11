@@ -15,6 +15,7 @@
  */
 
 import type { FocusedEntity } from '@duya/computer-use-demo';
+import type { Verdict } from '../verdict/types.js';
 
 /**
  * Captured screen with optional SOM (Set-of-Mark) overlay.
@@ -67,7 +68,22 @@ export interface SomElement {
    * require focus before typing). Optional because heuristic detection
    * is best-effort.
    */
-  kind?: 'Button' | 'Input' | 'Text' | 'Image' | 'Unknown';
+  kind?:
+    | 'Button'
+    | 'Input'
+    | 'Text'
+    | 'Image'
+    | 'Edit'
+    | 'Document'
+    | 'ComboBox'
+    | 'Tab'
+    | 'Unknown';
+  /**
+   * Where this element's metadata came from (plan 519 §3.4). Lets the
+   * model judge the reliability of the label: UIA/MSAA carry a real
+   * `name`/`controlType`; focused-entity and heuristic are best-effort.
+   */
+  axSource?: 'uia' | 'msaa' | 'focused-entity' | 'heuristic';
 }
 
 /**
@@ -180,6 +196,13 @@ export interface FocusAppOptions {
   title?: string;
   /** Process name (case-insensitive). */
   processName?: string;
+  /**
+   * Whether to raise + activate the window to the foreground. Default
+   * `false` (plan 519 §3.7 / C2, background priority): focus the target
+   * window without stealing the user's foreground when possible. Set
+   * `true` to force a foreground activation.
+   */
+  raise?: boolean;
 }
 
 export interface SetValueOptions {
@@ -199,6 +222,13 @@ export interface ActionResult {
   reason?: string;
   /** Approximate duration in ms (best-effort). */
   durationMs?: number;
+  /**
+   * Structured read-back verdict for state-changing actions
+   * (plan 519 §3.5). Present after click / drag / type / key / set_value
+   * when a read-back provider is configured. Lets the model react rather
+   * than guess whether the action took effect.
+   */
+  verdict?: Verdict;
 }
 
 /**

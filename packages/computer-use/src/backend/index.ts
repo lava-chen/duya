@@ -46,4 +46,21 @@ export {
   getDefaultDesktopBackend,
   setDefaultDesktopBackend,
   __resetDefaultDesktopBackend,
+  getOrCreateNoopBackend,
+  buildPlatformDefault,
+  shouldUseMcpDriver,
+  resolveCuaDriverCommand,
 } from './electron/factory.js';
+
+export {
+  McpCuaDriverBackend,
+  CUA_TOOL_NAME,
+  type McpCuaDriverOptions,
+  type CallTool,
+} from './mcp/cua-driver.js';
+
+export {
+  parseCaptureResult,
+  parseActionResult,
+  parseListApps,
+} from './mcp/result-parser.js';

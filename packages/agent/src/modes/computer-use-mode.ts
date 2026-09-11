@@ -18,7 +18,11 @@
  *
  * Tool injection: the single `computer_use` tool with 9-action enum
  * (Phase 2 decision: single tool + action enum, hermes-agent style).
- * `overrideFilter: true` so the tool survives even under restrictive
+ * plan 519 §3.2 (D2) adds a conditional sibling — `computer_use_context`
+ * (list_apps / focus_app) — injected only when the vision path armed
+ * its escape hatch (0-element SOM capture / suspected_noop click /
+ * explicit prior call); the 9-action enum itself is never widened.
+ * `overrideFilter: true` so the tools survive even under restrictive
  * agent profiles.
  *
  * Phase 2 deliberately does NOT include `tracker` — Computer Use is
@@ -27,7 +31,12 @@
  */
 
 import type { ModeModifier } from './types.js';
-import { getComputerUseTools } from '../tool/OSTool/index.js';
+import {
+  clearComputerUseContextTrigger,
+  getComputerUseTools,
+  getComputerUseToolsWithContext,
+  shouldInjectComputerUseContext,
+} from '../tool/OSTool/index.js';
 
 export const COMPUTER_USE_MODE_ID = 'computer-use';
 
@@ -45,41 +54,27 @@ export const COMPUTER_USE_MODE_ID = 'computer-use';
  */
 const COMPUTER_USE_PROMPT = `# Computer Use Mode
 
-You control the host desktop through the \`computer_use\` tool only (screenshot + mouse + keyboard). There is no app/window enumeration and no focus-by-name — you navigate entirely by looking.
+You drive the host desktop through the \`computer_use\` tool only (screenshot + mouse + keyboard). No app/window enumeration, no focus-by-name — navigate by looking. The full manual is in the \`computer-use\` skill.
 
 ## Operating loop (every step)
+1. **LOOK** — \`capture(somMode=true)\`; never act on a screen state you have not just seen.
+2. **ZOOM when unsure** — small text/dense toolbar/dialog: \`zoom(x, y, w, h)\`, read the crop before clicking.
+3. **ACT** — one state change: \`click\` / \`type\` / \`key\` / \`scroll\` / \`drag\` / \`set_value\`.
+4. **VERIFY** — \`capture(somMode=true)\` again; confirm it landed before the next step. For text, click the field first, then \`type\`; \`set_value\` replaces the whole focused value.
 
-1. **LOOK** — \`capture(somMode=true)\`. Read the full screen. Never act on a screen state you have not just seen.
-2. **ZOOM when unsure** — small text, dense toolbars, or a specific dialog: \`zoom(x, y, w, h)\` around the area. Read the returned image before clicking.
-3. **ACT** — one state-changing step: \`click\`, \`type\`, \`key\`, \`scroll\`, \`drag\`, or \`set_value\`.
-4. **VERIFY** — \`capture(somMode=true)\` again. Confirm the step did what you intended before the next one. If nothing changed, diagnose (wrong target? menu still loading?) instead of repeating blindly.
+## Coordinates
+- \`x\`/\`y\` are pixels in the **last image you received** (full screen or zoom crop). After \`zoom\`, coords are relative to the crop (top-left 0,0) until your next full \`capture\`; the backend maps to real screen — do not add offsets. Copy what you see; never guess from memory.
 
-## Coordinates — read this carefully
-
-- \`x\`/\`y\` are pixels in the **last image you received**: the full-screen capture, or the zoom crop.
-- After a \`zoom\`, coordinates are relative to the cropped image (its top-left is 0,0) until your next full \`capture\` resets the frame. The backend handles the mapping to real screen space — do not add offsets yourself.
-- Copy coordinates from what you see; never estimate from memory of a previous screenshot.
-- For text input, click the field first, then \`type\`. \`set_value\` replaces the whole value of the focused field.
-
-## Pacing
-
-- One action per step; verify after each state change.
-- After launching an app, opening a menu, or submitting a form, \`wait\` 1–3s before re-capturing — screens take time to settle.
-- Long renders (app splash screens, file dialogs): \`wait\` then capture again rather than clicking on a stale screenshot.
+## Verdict (in \`data.verdict.effect\` after state changes)
+- \`confirmed\` — it landed; continue.
+- \`unverifiable\` — could not tell; re-capture and read the screen yourself.
+- \`suspected_noop\` — no on-screen change; **re-capture FIRST to see the state, then decide. Never blindly re-issue the same action / don't double-click.**
 
 ## Refusals are policy, not bugs
+- \`APP_BLOCKED\` (app not allow-listed) / \`REDACTED_FIELD\` (password field) / \`BLOCKED\` (safety rule) / \`USER_REJECTED\` (declined) all mean: **stop that approach and tell the user** — no variations, no retries.
 
-- \`APP_BLOCKED\` — the foreground app is not in the user's allow-list. Tell the user which app you need and stop.
-- \`REDACTED_FIELD\` — a password or sensitive field is focused. Never work around it.
-- \`BLOCKED\` — a safety rule fired (dangerous key combo, shell-like text). Do not try variations.
-- \`USER_REJECTED\` or confirmation timeout — the user declined. Stop that approach; ask the user.
-- Control may be revoked at any moment by the user (stop button on the control overlay). If actions start failing after a revocation, stop and hand control back to the user.
-
-## Hard limits
-
-- Never type into fields you cannot see, or that appear to contain credentials.
-- No destructive system actions (deleting files via dialogs, closing unsaved work, changing system settings) unless the user explicitly asked for that exact outcome.
-- If you cannot reach a goal after ~3 failed attempts, stop and report what you see instead of guessing.`;
+## Pacing & limits
+- One action per step; after launching/menu/form, \`wait\` 1–3s and re-capture. If a goal eludes you after ~3 attempts, stop and report what you see instead of guessing.`;
 
 /**
  * Computer Use Mode modifier — session-level, exclusive with every
@@ -96,9 +91,17 @@ export const computerUseMode: ModeModifier = {
   },
 
   tools: {
-    // Single tool + 10-action enum (Phase 2 decision — single tool +
-    // action enum, recommended default per plan §7 #1).
-    inject: () => getComputerUseTools(),
+    // plan 519 §3.2 (D2) — function-form inject so the tool list is
+    // decided per run. The `computer_use` vision tool (9-action enum,
+    // Phase 2 decision, never widened) is always present; the
+    // `computer_use_context` escape hatch (list_apps / focus_app) is
+    // appended only when its sticky trigger registry is armed for the
+    // session: 0-element SOM capture, suspected_noop click, or an
+    // explicit prior call (see OSTool/context-tool.ts).
+    inject: (ctx) =>
+      shouldInjectComputerUseContext(ctx.sessionId)
+        ? getComputerUseToolsWithContext()
+        : getComputerUseTools(),
     // Computer Use tools must survive profile filtering — even the
     // `code` profile should see them when this mode is on.
     overrideFilter: true,
@@ -145,7 +148,11 @@ export const computerUseMode: ModeModifier = {
       ctx.state.computerUseDaemonRunning = daemonRunning;
     },
 
-    onExit: async () => {
+    onExit: async (ctx) => {
+      // plan 519 §3.2 (D2): the conditional `computer_use_context`
+      // escape hatch is armed per session — disarm it when the mode
+      // is toggled off so it doesn't outlive Computer Use.
+      clearComputerUseContextTrigger(ctx.sessionId);
       try {
         const bridge = await import('../context/os-context/index.js');
         bridge.getOSContextBridge().disable();

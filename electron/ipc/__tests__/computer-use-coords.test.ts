@@ -11,7 +11,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   clearZoomOrigin,
+  clearCaptureSize,
   modelPointToScreen,
+  rememberCaptureSize,
   rememberZoomOrigin,
   zoomOriginKey,
 } from '../computer-use-coords.js';
@@ -27,6 +29,10 @@ describe('modelPointToScreen', () => {
   beforeEach(() => {
     clearZoomOrigin(undefined);
     clearZoomOrigin('s1');
+    clearZoomOrigin('s4k');
+    clearCaptureSize(undefined);
+    clearCaptureSize('s1');
+    clearCaptureSize('s4k');
   });
 
   it('scales logical image coords to physical pixels', () => {
@@ -98,6 +104,53 @@ describe('modelPointToScreen', () => {
     expect(modelPointToScreen({ x: 10, y: 10 }, undefined, 1.25)).toEqual({
       x: 138,
       y: 138,
+    });
+  });
+
+  it('scales by physical/bitmap ratio when the thumbnail is smaller than requested', () => {
+    // Live-observed case (2026-09-11): 4K panel at 1.875 scaling —
+    // desktopCapturer returned a 1440x810 bitmap for a 2048x1152
+    // request. Scaling model coords by 1.875 lands them at ~70% of the
+    // target; the ratio 3840/1440 = 2.667 is the correct factor.
+    rememberCaptureSize('s4k', { width: 1440, height: 810 });
+    expect(
+      modelPointToScreen({ x: 878, y: 460 }, 's4k', 1.875, {
+        width: 3840,
+        height: 2160,
+      }),
+    ).toEqual({
+      x: Math.round(878 * (3840 / 1440)),
+      y: Math.round(460 * (2160 / 810)),
+    });
+  });
+
+  it('keeps origin rebasing when the physical/bitmap ratio is active', () => {
+    rememberCaptureSize('s4k', { width: 1440, height: 810 });
+    rememberZoomOrigin('s4k', { x: 280, y: 770 });
+    expect(
+      modelPointToScreen({ x: 50, y: 20 }, 's4k', 1.875, {
+        width: 3840,
+        height: 2160,
+      }),
+    ).toEqual({
+      x: Math.round((50 + 280) * (3840 / 1440)),
+      y: Math.round((20 + 770) * (2160 / 810)),
+    });
+  });
+
+  it('degrades to scaleFactor when the bitmap size is unknown or physical size missing', () => {
+    // No capture size remembered → legacy scaleFactor path.
+    expect(
+      modelPointToScreen({ x: 100, y: 50 }, 's4k', 1.875, {
+        width: 3840,
+        height: 2160,
+      }),
+    ).toEqual({ x: 188, y: 94 });
+    rememberCaptureSize('s4k', { width: 1440, height: 810 });
+    // Physical size missing → legacy scaleFactor path.
+    expect(modelPointToScreen({ x: 100, y: 50 }, 's4k', 1.875)).toEqual({
+      x: 188,
+      y: 94,
     });
   });
 });

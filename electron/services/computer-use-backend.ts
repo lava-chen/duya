@@ -284,6 +284,29 @@ async function focusWindowViaPowerShell(pid: number): Promise<boolean> {
 }
 
 /**
+ * plan 519 §3.7 / C2: surface a window without stealing the user's
+ * foreground. Uses ShowWindow(SW_SHOWNOACTIVATE, 4) so the window is
+ * restored + shown but does NOT take focus. Falls back to a normal
+ * raise if the non-activating call is unavailable.
+ */
+async function showWindowWithoutFocus(pid: number): Promise<boolean> {
+  try {
+    const stdout = await runPowerShell(
+      '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; ' +
+      '$t = Add-Type -MemberDefinition "[DllImport(\'user32.dll\')] ' +
+      'public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow); " ' +
+      '-Name Win -Namespace Native -PassThru; ' +
+      '$p = Get-Process -Id ' + Number(pid) + ' -ErrorAction Stop; ' +
+      '$r = $t::ShowWindow($p.MainWindowHandle, 4); ' +
+      'if ($r) { "ok" } else { "refused" }',
+    );
+    return stdout.trim() === 'ok';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Enumerate visible top-level windows via libnut. Returns [] when the
  * native API is unavailable or the platform call fails — callers fall
  * back to the OSContextBridge snapshot.
@@ -363,11 +386,16 @@ async function listAppsFromContext(): Promise<AppInfo[]> {
  *      or webContents URL.
  */
 async function focusAppByTitle(
-  opts: { title?: string; processName?: string },
+  opts: { title?: string; processName?: string; raise?: boolean },
 ): Promise<boolean> {
   if (!opts.title && !opts.processName) return false;
   const target = opts.title?.toLowerCase();
   const targetProcess = opts.processName?.toLowerCase();
+  // plan 519 §3.7 / C2: background priority by default. false → show
+  // without activating; true → raise to the foreground.
+  const raise = opts.raise === true;
+  const activate = async (pid: number): Promise<boolean> =>
+    raise ? focusWindowViaPowerShell(pid) : showWindowWithoutFocus(pid);
   const matches = (title: string, processName = ''): boolean => {
     const t = title.toLowerCase();
     const p = processName.toLowerCase();
@@ -381,7 +409,7 @@ async function focusAppByTitle(
   const viaPs = await listWindowsViaPowerShell();
   for (const w of viaPs) {
     if (matches(w.title, w.processName)) {
-      if (await focusWindowViaPowerShell(w.pid)) return true;
+      if (await activate(w.pid)) return true;
     }
   }
 
@@ -421,16 +449,25 @@ async function focusAppByTitle(
     const url = (w.webContents?.getURL() ?? '').toLowerCase();
     if (target && (title.includes(target) || url.includes(target))) {
       if (w.isMinimized()) w.restore();
-      w.moveTop();
-      w.show();
-      w.focus();
+      if (raise) {
+        w.moveTop();
+        w.show();
+        w.focus();
+      } else {
+        // Background priority: show without stealing focus.
+        w.showInactive();
+      }
       return true;
     }
     if (targetProcess && title.includes(targetProcess)) {
       if (w.isMinimized()) w.restore();
-      w.moveTop();
-      w.show();
-      w.focus();
+      if (raise) {
+        w.moveTop();
+        w.show();
+        w.focus();
+      } else {
+        w.showInactive();
+      }
       return true;
     }
   }
@@ -466,16 +503,31 @@ export function initializeComputerUseBackend(): boolean {
             width,
             height,
             focusedEntity: ctx?.focusedEntity ?? null,
+            // plan 519 §3.4: feed the UIA / MSAA accessibility inputs the
+            // daemon already captures so SOM is upgraded from "no usable
+            // element" to "labeled controls". Empty arrays keep the
+            // detector's focused-entity / heuristic fallbacks active.
+            axInfo: {
+              uia: ctx?.uiaInputs ?? [],
+              msaa: ctx?.msaaInputs ?? [],
+            },
           });
         } catch {
           return detectSomElements({ width, height });
         }
       },
-      renderOverlay: async (image, elements) => {
-        return drawSomOverlay(sharpAdapter, image, elements);
+      renderOverlay: async (image, elements, dims) => {
+        return drawSomOverlay(sharpAdapter, image, elements, {}, dims);
       },
       listAppsProvider: listAppsFromContext,
       focusAppProvider: focusAppByTitle,
+      // plan 519 §3.5 / A3: post-action read-back source for Verdicts.
+      // Uses the bridge's latest focused entity; resolves to null when the
+      // snapshot is unavailable so the verdict ladder always has a signal.
+      readFocusedEntity: () => {
+        const ctx = getOSContextBridge().getCurrent();
+        return ctx?.focusedEntity ?? null;
+      },
       // Use the primary display's actual pixel size as the capture
       // resolution baseline. desktopCapturer returns native pixels;
       // we let the backend resize via thumbnailSize on getSources.

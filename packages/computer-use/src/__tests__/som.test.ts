@@ -124,6 +124,57 @@ describe('drawSomOverlay', () => {
     expect(result).toBeDefined();
     expect(sharp.compositeCalls).toBe(1);
   });
+
+  it('sizes the SVG to the explicit dims instead of the legacy 1920x1080', async () => {
+    const svgInputs: string[] = [];
+    const sharp = makeSharpFake();
+    // Wrap the adapter so every SVG input is recorded. The overlay SVG
+    // arrives as a UTF-8 Buffer (Buffer.from(svg, 'utf-8')); the base
+    // image is a plain pixel buffer.
+    const recording = ((input: Buffer | string) => {
+      if (Buffer.isBuffer(input) && input.toString('utf8').startsWith('<svg')) {
+        svgInputs.push(input.toString('utf8'));
+      }
+      return sharp(input);
+    }) as SharpAdapter;
+    const image = Buffer.from([0x00]);
+    const elements: SomElement[] = [
+      { index: 1, bbox: { x: 5, y: 5, w: 50, h: 50 }, label: 'one' },
+    ];
+    await drawSomOverlay(recording, image, elements, {}, {
+      width: 1440,
+      height: 810,
+    });
+    expect(svgInputs.length).toBe(1);
+    expect(svgInputs[0]).toContain('width="1440"');
+    expect(svgInputs[0]).toContain('height="810"');
+    expect(svgInputs[0]).not.toContain('width="1920"');
+  });
+
+  it('falls back to a metadata probe when dims are omitted and the fake exposes metadata', async () => {
+    const svgInputs: string[] = [];
+    const sharp = makeSharpFake();
+    const recording = ((input: Buffer | string) => {
+      if (Buffer.isBuffer(input) && input.toString('utf8').startsWith('<svg')) {
+        svgInputs.push(input.toString('utf8'));
+      }
+      const pipe = sharp(input);
+      if (typeof input !== 'string') {
+        if (!Buffer.isBuffer(input) || !input.toString('utf8').startsWith('<svg')) {
+          // Attach a metadata probe to the base-image pipeline only.
+          return { ...pipe, metadata: async () => ({ width: 800, height: 600 }) };
+        }
+      }
+      return pipe;
+    }) as unknown as SharpAdapter;
+    const image = Buffer.from([0x00]);
+    const elements: SomElement[] = [
+      { index: 1, bbox: { x: 5, y: 5, w: 50, h: 50 }, label: 'one' },
+    ];
+    await drawSomOverlay(recording, image, elements);
+    expect(svgInputs[0]).toContain('width="800"');
+    expect(svgInputs[0]).toContain('height="600"');
+  });
 });
 
 describe('detectSomElements', () => {
@@ -183,5 +234,78 @@ describe('detectSomElements', () => {
       focusedEntity: entity,
     });
     expect(elements[0]?.index).toBe(1);
+  });
+
+  // Plan 519 §3.4 / A2: AX tree fills the SOM with labeled elements.
+  describe('with axInfo (plan 519 A2)', () => {
+    it('emits one element per UIA input tagged axSource=uia with an extended kind', () => {
+      const elements = detectSomElements({
+        width: 1920,
+        height: 1080,
+        axInfo: {
+          uia: [
+            { name: 'url bar', controlType: 'Edit' },
+            { name: 'Sign In', controlType: 'Button' },
+            { name: 'tab 1', controlType: 'TabItem' },
+          ],
+          msaa: [],
+        },
+      });
+      expect(elements.length).toBe(3);
+      expect(elements.map((e) => e.axSource)).toEqual(['uia', 'uia', 'uia']);
+      expect(elements.map((e) => e.kind)).toEqual(['Edit', 'Button', 'Tab']);
+      expect(elements[0]?.label).toMatch(/Edit: 'url bar'/);
+      expect(elements[1]?.label).toMatch(/Button: 'Sign In'/);
+      expect(elements.map((e) => e.index)).toEqual([1, 2, 3]);
+    });
+
+    it('labels MSAA inputs with axSource=msaa after UIA', () => {
+      const elements = detectSomElements({
+        width: 1280,
+        height: 720,
+        axInfo: {
+          uia: [{ name: 'search', controlType: 'Edit' }],
+          msaa: [{ name: 'OK', value: 'OK' }],
+        },
+      });
+      expect(elements.map((e) => e.axSource)).toEqual(['uia', 'msaa']);
+      expect(elements[1]?.label).toMatch(/OK/);
+    });
+
+    it('keeps focused-entity as a distinct axSource when both are present', () => {
+      const entity: FocusedEntity = {
+        kind: 'Button',
+        name: 'submit',
+        bbox: { x: 0, y: 0, w: 80, h: 40 },
+        redaction: { redacted: false, reasons: [] },
+      } as unknown as FocusedEntity;
+      const elements = detectSomElements({
+        width: 1920,
+        height: 1080,
+        focusedEntity: entity,
+        axInfo: {
+          uia: [{ name: 'field', controlType: 'Edit' }],
+          msaa: [],
+        },
+      });
+      expect(elements[0]?.axSource).toBe('focused-entity');
+      expect(elements[1]?.axSource).toBe('uia');
+      expect(elements[0]?.index).toBe(1);
+      expect(elements[1]?.index).toBe(2);
+    });
+
+    it('caps AX elements so the grid stays inside the viewport', () => {
+      const many = Array.from({ length: 500 }, (_, i) => ({
+        name: `f${i}`,
+        controlType: 'Edit',
+      }));
+      const elements = detectSomElements({
+        width: 1920,
+        height: 1080,
+        axInfo: { uia: many, msaa: [] },
+      });
+      expect(elements.length).toBeLessThan(500);
+      expect(elements.length).toBeGreaterThan(0);
+    });
   });
 });

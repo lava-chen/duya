@@ -34,8 +34,14 @@ import {
   COMPUTER_USE_ACTIONS,
   COMPUTER_USE_IPC_CHANNEL,
   type ComputerUseAction,
+  type ComputerUseExecuteAction,
 } from './constants.js';
 import { computerUseInputSchema } from './schema.js';
+// Intentional sibling-module cycle: context-tool.ts only touches this
+// module's exports inside function bodies (deferred), and this module
+// only calls the trigger recorder inside execute() — safe under ESM
+// and the esbuild CJS bundle (plan 519 §3.2 / D2).
+import { recordComputerUseContextTrigger } from './context-tool.js';
 
 /**
  * Tool definition. Codex-skill style description: short imperative
@@ -58,7 +64,8 @@ export const definition: Tool = {
     '  - never guess coordinates from memory — re-capture if the screen may have changed\n' +
     '  - wait 1-3s after launching apps or opening menus before re-capturing\n' +
     '  - APP_BLOCKED / REDACTED_FIELD / BLOCKED / USER_REJECTED refusals are policy: stop and tell the user, do not retry variations\n' +
-    '  - clicking, dragging and set_value pop a 3s user confirmation; a timeout cancels the action',
+    '  - clicking, dragging and set_value pop a 3s user confirmation; a timeout cancels the action\n' +
+    "  - 'verdict.effect' in the result tells you if the action landed (confirmed/unverifiable/suspected_noop); on suspected_noop, re-capture before retrying — never blindly repeat",
   input_schema: {
     type: 'object',
     properties: {
@@ -138,12 +145,41 @@ export type ComputerUseErrorCode =
   (typeof ComputerUseErrorCode)[keyof typeof ComputerUseErrorCode];
 
 /**
+ * Structured read-back for state-changing actions (click / type / key /
+ * scroll / drag / set_value). plan 519 §3.5: the main process returns a
+ * `verdict` alongside a successful action so the agent can tell whether
+ * the action actually landed before retrying. Kept as a local structural
+ * type on purpose — do NOT import `@duya/computer-use`'s Verdict type,
+ * to avoid pulling a runtime dependency on the computer-use package into
+ * the agent bundle.
+ */
+export interface ComputerUseActionResult {
+  ok: boolean;
+  reason?: string;
+  durationMs?: number;
+  /** plan 519 §3.5: structured read-back verdict */
+  verdict?: {
+    effect: 'confirmed' | 'unverifiable' | 'suspected_noop';
+    verified: { elementChanged: boolean; newFocusedEntity: unknown | null };
+    escalation?: { recommended: 're-capture' | 'raise' | 'foreground'; reason: string };
+    readbackMs?: number;
+    fallbackUsed?: boolean;
+  };
+}
+
+/**
  * Result envelope returned by the executor. Tools callers see a
  * ToolResult whose `result` field is the JSON-serialized envelope.
+ *
+ * plan 519 (D2): `action` widened to include the conditional
+ * `computer_use_context` actions — the main-process dispatcher
+ * (`computer-use:execute`) returns the same envelope shape for
+ * `list_apps` / `focus_app`, and the main side imports THIS type.
+ * Tool-level schemas stay separate; only the envelope sees the union.
  */
 export interface ComputerUseToolEnvelope<T = unknown> {
   success: boolean;
-  action: ComputerUseAction;
+  action: ComputerUseExecuteAction;
   data?: T;
   error?: { code: ComputerUseErrorCode; message: string };
 }
@@ -243,6 +279,11 @@ export const executor: ToolExecutor = {
       const envelope: ComputerUseToolEnvelope = {
         success: data.success ?? true,
         action: data.action ?? action,
+        // `data.data` is passed through verbatim. For state-changing
+        // actions it is a ComputerUseActionResult and may carry a
+        // `verdict` (plan 519 §3.5): confirmed / unverifiable /
+        // suspected_noop + readback escalation. We intentionally do NOT
+        // reshape it — the LLM reads the raw verdict from the envelope.
         data: data.data,
         error: data.error,
       };
@@ -273,6 +314,33 @@ export const executor: ToolExecutor = {
           const { base64: _omit, ...rest } = captureData;
           void _omit;
           envelope.data = rest;
+        }
+      }
+
+      // plan 519 §3.2 (D2): arm the conditional `computer_use_context`
+      // escape hatch when the vision path signals it is needed —
+      //   1. a SOM capture came back with zero elements
+      //      (nothing to anchor coordinates on), or
+      //   2. a click read back `verdict.effect === 'suspected_noop'`
+      //      (actions are not landing).
+      // Sticky per session; computer-use-mode's function-form inject
+      // consults it on the next run.
+      const triggerSessionId = context?.options?.sessionId;
+      if (envelope.success && triggerSessionId) {
+        if (parsed.data.action === 'capture' && parsed.data.somMode === true) {
+          const captureElements = (envelope.data as { elements?: unknown } | undefined)
+            ?.elements;
+          if (Array.isArray(captureElements) && captureElements.length === 0) {
+            recordComputerUseContextTrigger(triggerSessionId, 'capture-zero-elements');
+          }
+        }
+        if (parsed.data.action === 'click') {
+          const clickData = envelope.data as
+            | { verdict?: { effect?: unknown } }
+            | undefined;
+          if (clickData?.verdict?.effect === 'suspected_noop') {
+            recordComputerUseContextTrigger(triggerSessionId, 'click-suspected-noop');
+          }
         }
       }
 

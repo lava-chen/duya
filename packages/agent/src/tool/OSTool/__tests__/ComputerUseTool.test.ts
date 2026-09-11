@@ -373,4 +373,71 @@ describe('ComputerUseTool.executor', () => {
     expect(parsed.action).toBe('click');
     expect(parsed.data.ok).toBe(true);
   });
+
+  // plan 519 §3.5: verdict from the main process is passed through
+  // verbatim on state-changing actions. Test that a click whose
+  // action result carries a `verdict` surfaces that verdict (and its
+  // readback timing) in the caller-visible envelope JSON, while
+  // images stay undefined (click is not capture/zoom).
+  it('passes through the verdict on state-changing actions (confirmed)', async () => {
+    const ipcRequest = vi.fn().mockResolvedValue({
+      success: true,
+      data: {
+        success: true,
+        action: 'click',
+        data: {
+          ok: true,
+          durationMs: 12,
+          verdict: {
+            effect: 'confirmed',
+            verified: { elementChanged: true, newFocusedEntity: null },
+            readbackMs: 7,
+          },
+        },
+      },
+    });
+    const result = await executor.execute(
+      { action: 'click', element: 5 },
+      undefined,
+      { ipcRequest, options: { sessionId: 's' } } as never,
+    );
+    expect(result.error).toBeFalsy();
+    expect(result.images).toBeUndefined();
+    const parsed = JSON.parse(result.result);
+    expect(parsed.success).toBe(true);
+    expect(parsed.action).toBe('click');
+    expect(parsed.data.verdict.effect).toBe('confirmed');
+    expect(parsed.data.verdict.readbackMs).toBe(7);
+  });
+
+  // Negative case: a suspected_noop verdict carries its escalation
+  // policy through to the caller so the LLM knows to re-capture.
+  it('surfaces verdict escalation (suspected_noop)', async () => {
+    const ipcRequest = vi.fn().mockResolvedValue({
+      success: true,
+      data: {
+        success: true,
+        action: 'type',
+        data: {
+          ok: true,
+          verdict: {
+            effect: 'suspected_noop',
+            verified: { elementChanged: false, newFocusedEntity: null },
+            escalation: { recommended: 're-capture', reason: 'no element change detected' },
+          },
+        },
+      },
+    });
+    const result = await executor.execute(
+      { action: 'type', text: 'hi' },
+      undefined,
+      { ipcRequest, options: { sessionId: 's' } } as never,
+    );
+    expect(result.error).toBeFalsy();
+    expect(result.images).toBeUndefined();
+    const parsed = JSON.parse(result.result);
+    expect(parsed.data.verdict.effect).toBe('suspected_noop');
+    expect(parsed.data.verdict.escalation.recommended).toBe('re-capture');
+    expect(parsed.data.verdict.escalation.reason).toMatch(/no element change/);
+  });
 });
