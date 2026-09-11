@@ -15,7 +15,7 @@ import {
 } from '@/components/icons';
 import { FileAttachmentCard } from './FileAttachmentCard';
 import { AttachmentBar } from './AttachmentBar';
-import { AttachmentPreviewModal } from './AttachmentPreviewModal';
+import { ImagePreview } from './preview/ImagePreview';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
 import { parseMessageContentWithPasted, type PastedContentInfo } from '@/lib/message-content-parser';
@@ -1048,7 +1048,12 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
                   className="rounded-2xl rounded-tr-sm px-4 py-2.5"
                   style={{ backgroundColor: 'rgba(0, 0, 0, 0.06)' }}
                 >
-                  <p className="text-sm whitespace-pre-wrap" style={{ color: 'var(--text)' }}>{userBrowserReferences.text}</p>
+                  <p
+                    className="text-sm whitespace-pre-wrap break-words"
+                    style={{ color: 'var(--text)', overflowWrap: 'anywhere' }}
+                  >
+                    {userBrowserReferences.text}
+                  </p>
                 </div>
               )}
               <div className="flex justify-end items-center gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1085,10 +1090,12 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
         </div>
 
         {/* Preview Modal */}
-        <AttachmentPreviewModal
+        <ImagePreview
+          open={previewAttachment !== null || previewPastedContent !== null}
+          onClose={handleClosePreview}
+          variant="panel"
           attachment={previewAttachment}
           pastedContent={previewPastedContent}
-          onClose={handleClosePreview}
         />
       </div>
     );
