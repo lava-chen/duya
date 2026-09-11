@@ -569,7 +569,11 @@ html[data-glass-repair] .attachment-preview-overlay {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  transition: padding-left 0.15s ease;
+  transition: padding-right 0.2s ease;
+}
+
+.thread-item:hover .thread-item-title {
+  padding-right: 1.5rem;
 }
 
 .thread-item-actions {
@@ -666,13 +670,7 @@ html[data-glass-repair] .attachment-preview-overlay {
 }
 
 .thread-item-menu-btn:hover {
-  /* Opaque gradient (not the translucent --surface-hover wash) so the
-     thread's title/preview text can't bleed through the small button. */
-  background: linear-gradient(
-    145deg,
-    var(--surface-solid),
-    color-mix(in srgb, var(--surface-solid) 88%, var(--accent))
-  );
+  background: var(--surface-hover);
   color: var(--text);
 }
 
@@ -694,13 +692,7 @@ html[data-glass-repair] .attachment-preview-overlay {
 }
 
 .thread-item-pin-btn:hover {
-  /* Same opaque gradient as the menu button so row text never shows
-     through on hover. Shared stop values keep the two buttons identical. */
-  background: linear-gradient(
-    145deg,
-    var(--surface-solid),
-    color-mix(in srgb, var(--surface-solid) 88%, var(--accent))
-  );
+  background: var(--surface-hover);
   color: var(--text);
 }
 
@@ -1089,6 +1081,11 @@ html[data-glass-repair] .attachment-preview-overlay {
   white-space: nowrap;
   text-overflow: ellipsis;
   line-height: 1.25;
+  transition: padding-right 0.2s ease;
+}
+
+.bot-contact-item:hover .bot-contact-preview {
+  padding-right: 2rem;
 }
 
 /* Status pill in the trailing slot — used when the user submitted a
