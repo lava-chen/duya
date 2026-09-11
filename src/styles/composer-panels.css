@@ -11,18 +11,18 @@
 }
 
 /* Light theme: composer-attached panels (sub-agent, queued mailbox,
- * streaming input) share the composer's white surface, and permission
- * prompts drop the heavier --command-menu-border in favor of --border —
- * the whole input stack then reads as one control. Dark theme untouched:
+ * streaming input, permission prompt) share the composer's white surface
+ * so the whole input stack reads as one control. Dark theme untouched:
  * --composer-bg falls back to --surface and these rules don't match. */
 :root:not([data-theme="dark"]) .sub-agent-panel,
 :root:not([data-theme="dark"]) .mailbox-panel,
-:root:not([data-theme="dark"]) .streaming-input-bar {
+:root:not([data-theme="dark"]) .streaming-input-bar,
+:root:not([data-theme="dark"]) .permission-prompt-panel {
   background-color: var(--composer-bg);
 }
 
-:root:not([data-theme="dark"]) .permission-prompt-panel,
-:root:not([data-theme="dark"]) .permission-prompt-panel.resolved,
+/* Light theme keeps the AskUserQuestion sheet's border flattened to
+ * --border (pre-existing behavior); base + dark use --command-menu-border. */
 :root:not([data-theme="dark"]) .permission-prompt-panel.ask-user-question-panel {
   border-color: var(--border);
 }
