@@ -11,6 +11,7 @@ import {
   mergeInFlightOptimisticMessages,
   isDuplicateOptimisticUser,
   optimisticBucketKey,
+  unwrapJournalMessageId,
   OPTIMISTIC_DEDUPE_WINDOW_MS,
 } from '../conversation-store';
 
@@ -163,6 +164,54 @@ describe('mergeInFlightOptimisticMessages', () => {
     const farResult = mergeInFlightOptimisticMessages([dbFarApart], [farApart]);
     expect(farResult.droppedOptimistic).toBe(0);
     expect(farResult.keptOptimistic).toBe(1);
+  });
+
+  // Regression (plan 441 cold-start duplicate): the journal persists the user
+  // row under the deterministic event id `journal:<clientMsgId>:user_msg_added`,
+  // and the worker-side timestamp is taken AFTER the agent process boots. On a
+  // cold start that is more than OPTIMISTIC_DEDUPE_WINDOW_MS after the send, so
+  // the timestamp leg cannot rescue the id leg — the optimistic bubble survived
+  // next to the broadcast DB row, exactly when "Turn 1" appeared. Unwrapping
+  // the journal id restores the timestamp-independent id contract.
+  it('drops the optimistic copy when the persisted row carries the journal-wrapped clientMsgId, even far outside the window', () => {
+    const sendTs = 1_700_000_000_000;
+    const coldStartTs = sendTs + 9_000; // agent process boot exceeded the 5s window
+    const persisted: Message[] = [
+      userMsg('journal:client-uuid:user_msg_added', '现在压缩到底是什么触发逻辑', coldStartTs),
+      assistantMsg('db-asst', '回复', coldStartTs + 1_000),
+    ];
+    const local: Message[] = [
+      userMsg('client-uuid', '现在压缩到底是什么触发逻辑', sendTs, { optimistic: true }),
+    ];
+
+    const { merged, droppedOptimistic, keptOptimistic } =
+      mergeInFlightOptimisticMessages(persisted, local);
+
+    expect(merged.map((m) => m.id)).toEqual([
+      'journal:client-uuid:user_msg_added',
+      'db-asst',
+    ]);
+    expect(droppedOptimistic).toBe(1);
+    expect(keptOptimistic).toBe(0);
+  });
+
+  it('does not unwrap unrelated journal ids into a match (different source message)', () => {
+    // Same content, but the persisted journal id wraps a DIFFERENT message id
+    // and the pair sits outside the window: a genuine re-send, must be kept.
+    const sendTs = 1_700_000_000_000;
+    const persisted: Message[] = [
+      userMsg('journal:other-uuid:user_msg_added', '同文案重发', sendTs + 30_000),
+    ];
+    const local: Message[] = [
+      userMsg('client-uuid', '同文案重发', sendTs, { optimistic: true }),
+    ];
+
+    const { merged, droppedOptimistic, keptOptimistic } =
+      mergeInFlightOptimisticMessages(persisted, local);
+
+    expect(merged).toHaveLength(2);
+    expect(droppedOptimistic).toBe(0);
+    expect(keptOptimistic).toBe(1);
   });
 
   it('returns the persisted list untouched when local is empty', () => {
@@ -322,6 +371,43 @@ describe('isDuplicateOptimisticUser', () => {
       optimistic: true,
     });
     expect(isDuplicateOptimisticUser(existing, candidate)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// unwrapJournalMessageId — mirrors Journal.deterministicEventId
+// (packages/agent/src/journal/Journal.ts). Journal boundary events persist
+// rows as `journal:<sourceMsgId>:<kind>`; the optimistic-dedupe id legs
+// compare both sides through this unwrapper so the renderer's clientMsgId
+// matches even though the raw stored id differs.
+// ---------------------------------------------------------------------------
+
+describe('unwrapJournalMessageId', () => {
+  it('passes plain message ids through unchanged', () => {
+    expect(unwrapJournalMessageId('0f5d2c1e-6a7b-4c8d-9e0f-1a2b3c4d5e6f')).toBe(
+      '0f5d2c1e-6a7b-4c8d-9e0f-1a2b3c4d5e6f',
+    );
+  });
+
+  it('unwraps journal boundary ids back to the source message id', () => {
+    expect(unwrapJournalMessageId('journal:client-uuid:user_msg_added')).toBe('client-uuid');
+    expect(unwrapJournalMessageId('journal:client-uuid:assistant_message_finalized')).toBe('client-uuid');
+    expect(unwrapJournalMessageId('journal:client-uuid:tool_result_added')).toBe('client-uuid');
+  });
+
+  it('keeps a source id that itself contains colons intact (greedy capture)', () => {
+    expect(unwrapJournalMessageId('journal:weird:id:user_msg_added')).toBe('weird:id');
+  });
+
+  it('does not match journal-rebase fallback ids (no colon after journal)', () => {
+    expect(unwrapJournalMessageId('journal-rebase:sess:turn:0:1700')).toBe(
+      'journal-rebase:sess:turn:0:1700',
+    );
+  });
+
+  it('coerces null/undefined to the empty string', () => {
+    expect(unwrapJournalMessageId(null)).toBe('');
+    expect(unwrapJournalMessageId(undefined)).toBe('');
   });
 });
 
