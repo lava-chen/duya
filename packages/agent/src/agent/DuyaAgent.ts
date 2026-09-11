@@ -48,7 +48,6 @@ import { extractTriggerPaths } from '../agentsmd/nested-loader.js';
 import { isNestedAgentsMdEnabled } from '../config/feature-flags.js';
 import { getCachedAppConnectionDescriptors } from '../tool/AppConnectionTool/index.js';
 import { buildAppsSystemSection, collectConnectorActivationInjection, collectPluginInjections, collectSkillInjections } from '../mentions/index.js';
-import { DEFAULT_CONTEXT_WINDOW } from '../compact/compact.js';
 import { compressProjectedToolMessages } from '../compact/projectionCompress.js';
 import {
   IMAGE_COMPACTION_TRIGGER_COUNT,
@@ -136,6 +135,7 @@ import {
 } from './tool-search-discovery.js';
 import type { AgentDefinition } from '../tool/SubagentTool/index.js';
 import { CompactionManager, createCompactionManager } from '../compact/CompactionManager.js';
+import { resolveCompactionContextWindow } from '../compact/contextWindow.js';
 import type { CompactOptions } from '../compact/types.js';
 
 // New message domain framework (plan 315)
@@ -516,24 +516,27 @@ export class duyaAgent {
     // always available before the first provider request and before any prompt
     // section is resolved.
 
-    // Wire the model-level `contextWindow` (e.g. 1M for Sonnet 4.6 1M) into
-    // the compaction budget. Falls back to the 200K default if the renderer
-    // didn't attach a capability row (e.g. legacy call site or missing entry).
-    const capabilityContextWindow =
-      options.runtimeConfig?.modelCapabilities?.contextWindow;
-    if (
-      typeof capabilityContextWindow !== 'number' ||
-      capabilityContextWindow <= 0
-    ) {
+    // Wire the model-level `contextWindow` (e.g. 1M for a 1M-context model)
+    // into the compaction budget. Resolution order (plan 522): runtime
+    // capability → @duya/ai catalog → 200K default. The catalog layer
+    // matters because the plain chat path does not always attach a
+    // capability row; without it the ring can read 1M while compaction
+    // still fires at the 200K fallback.
+    const resolvedContextWindow = resolveCompactionContextWindow({
+      capabilityContextWindow:
+        options.runtimeConfig?.modelCapabilities?.contextWindow,
+      modelId: options.runtimeConfig?.model ?? options.model,
+    });
+    if (resolvedContextWindow.source === 'default') {
       // Plan 517 R1: surfaces the silent 200K fallback so users can fix
       // their config (custom / OpenRouter model ids need a manual marker).
       logger.warn(
-        '[Agent] compaction contextWindow fallback to 200000 — no capability.contextWindow on runtimeConfig. ' +
+        '[Agent] compaction contextWindow fallback to 200000 — neither runtimeConfig.modelCapabilities.contextWindow nor the @duya/ai catalog declares a window for this model. ' +
           'Add [options].model_context[modelId] = N in config.toml or a DB override row to recover the real window.',
         {
           runtimeConfigHasCapabilities:
             options.runtimeConfig?.modelCapabilities !== undefined,
-          model: options.runtimeConfig?.model,
+          model: options.runtimeConfig?.model ?? options.model,
           apiFormat: options.runtimeConfig?.apiFormat,
         },
         'AgentCore',
@@ -541,10 +544,7 @@ export class duyaAgent {
     }
     this.compactionManager = createCompactionManager({
       enableReinjection: true,
-      maxTokens:
-        typeof capabilityContextWindow === 'number' && capabilityContextWindow > 0
-          ? capabilityContextWindow
-          : undefined,
+      maxTokens: resolvedContextWindow.contextWindow,
     });
 
     // Plan 517 P2.2: forward the over-threshold event so the renderer can
@@ -1019,11 +1019,15 @@ export class duyaAgent {
         },
       }),
     );
-    const contextWindow =
-      this.runtimeConfig?.modelCapabilities?.contextWindow &&
-      this.runtimeConfig.modelCapabilities.contextWindow > 0
-        ? this.runtimeConfig.modelCapabilities.contextWindow
-        : DEFAULT_CONTEXT_WINDOW;
+    // Plan 522: route the model-switch window check through the same
+    // capability → catalog → default resolution as the constructor, so a
+    // switch re-bases the compaction budget on the real window instead of
+    // the 200K default.
+    const contextWindow = resolveCompactionContextWindow({
+      capabilityContextWindow:
+        this.runtimeConfig?.modelCapabilities?.contextWindow,
+      modelId: this.runtimeConfig?.model ?? this._model,
+    }).contextWindow;
 
     // Grok-aligned model-switch trigger (`maybe_compact_on_model_switch`,
     // grok `compaction.rs:1984-2016`). When the model or its context window
