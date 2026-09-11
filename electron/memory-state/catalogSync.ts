@@ -333,17 +333,6 @@ export function syncSessionFromMainDb(opts: {
 
   const session = coreSessionToChatRow(coreSession);
 
-  // Plan 479: bot sessions never enter the memory pipeline (see the
-  // syncAllFromMainDb loop comment). Tombstone any pre-existing catalog
-  // row; a row-less bot session is a no-op.
-  if (session.agent_type === 'bot') {
-    const now = Date.now();
-    const txn = memoryDb.transaction(() =>
-      markRolloutDeleted(memoryDb, sessionId, now)
-    );
-    return txn();
-  }
-
   // Per-session transaction. One txn per session (NOT one big txn for
   // all sessions) so the lock is held briefly and a single failure
   // does not roll back the entire sync.
@@ -394,28 +383,6 @@ export function syncAllFromMainDb(opts: {
   const sessions = coreSessions.map(coreSessionToChatRow);
 
   for (const session of sessions) {
-    // Plan 479: bot sessions never enter the memory pipeline — bot memory
-    // is fed by update_state tier writes, not Stage 1 extraction. The
-    // catalog CHECK constraint cannot represent agent_type='bot' anyway,
-    // so materialize nothing and tombstone any row that predates the
-    // exclusion (markRolloutDeleted is a no-op when no row exists).
-    if (session.agent_type === 'bot') {
-      try {
-        const txn = opts.memoryDb.transaction(() =>
-          markRolloutDeleted(opts.memoryDb, session.id, Date.now())
-        );
-        if (txn().status === 'tombstoned') tombstoned++;
-      } catch (err) {
-        errors++;
-        logger.error(
-          'memory-state: bot session tombstone failed during syncAll',
-          err instanceof Error ? err : new Error(String(err)),
-          { sessionId: session.id },
-          LogComponent.DB
-        );
-      }
-      continue;
-    }
     try {
       const txn = opts.memoryDb.transaction(() => {
         return syncOneSession(opts.coreDb, opts.memoryDb, session, opts);
@@ -569,7 +536,7 @@ function activeSync(
     rollout_id: session.id,
     scope_kind: scope.scope_kind,
     project_id: scope.project_id,
-    agent_type: session.agent_type as AgentType,
+    agent_type: session.agent_type,
     parent_id: session.parent_id,
     mode: session.mode,
     working_directory: scope.working_directory,
@@ -637,7 +604,7 @@ function tombstoneRollout(
 
   memoryDb.prepare(UPSERT_TOMBSTONE_SQL).run({
     rollout_id: session.id,
-    agent_type: session.agent_type as AgentType,
+    agent_type: session.agent_type,
     parent_id: session.parent_id,
     mode: session.mode,
     working_directory: session.working_directory || null,
@@ -676,10 +643,9 @@ function markRolloutDeleted(
     | undefined;
 
   if (!existing) {
-    // Expected for bot sessions (Plan 479: they never materialize a
-    // rollout_catalog row) and for never-synced sessions that are gone.
-    // No-op — keep only as DEBUG so the 60s catalog sync doesn't flood
-    // the default WARN+ log line-per-bot-session.
+    // Expected for never-synced sessions (no catalog row exists yet)
+    // and for sessions that are already deleted/tombstoned.
+    // No-op — keep as DEBUG to avoid flooding the log on every 60s tick.
     const logger = getLogger();
     logger.debug(
       'memory-state: cannot tombstone missing rollout (no existing row)',

@@ -14,7 +14,7 @@ export type AliasKind = 'workspace_override' | 'working_directory' | 'git_root' 
 
 export type ScopeKind = 'global' | 'project';
 
-export type AgentType = 'main' | 'sub-agent' | 'gateway' | 'automation' | 'research' | 'conductor';
+export type AgentType = 'main' | 'sub-agent' | 'gateway' | 'automation' | 'research' | 'conductor' | 'bot' | 'spawn';
 
 export type SourceStatus = 'active' | 'deleted' | 'missing';
 
