@@ -19,11 +19,18 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { webContents, type BrowserWindow, type WebContents } from 'electron';
 import { getLogger, LogComponent } from '../../logging/logger';
+import { releaseBrowserMemory, setWebviewIdProvider } from './webview-memory';
 
 const logger = getLogger();
 
 /** sessionId -> webContentsId */
 const webviewSessionMap = new Map<string, number>();
+
+// Let the webview memory manager enumerate live guests without importing this
+// module (keeps the dependency one-way and avoids an import cycle).
+setWebviewIdProvider(() =>
+  Array.from(webviewSessionMap, ([sessionId, webContentsId]) => ({ sessionId, webContentsId })),
+);
 /** webContentsIds that currently have the debugger attached */
 const attachedDebuggers = new Set<number>();
 /** webContentsIds whose CDP Network events are observed by this bridge */
@@ -166,6 +173,13 @@ export function unregisterWebviewSession(sessionId: string): void {
     undefined,
     LogComponent.BrowserDaemon,
   );
+
+  // Last tab gone → strictly discard the partition's caches so the guest's
+  // footprint does not persist into the next browser session. Fire-and-forget;
+  // cookies/localStorage are preserved (see webview-memory.ts).
+  if (webviewSessionMap.size === 0) {
+    void releaseBrowserMemory('last-webview-unregistered');
+  }
 }
 
 export function getWebviewIdForSession(sessionId: string): number | undefined {

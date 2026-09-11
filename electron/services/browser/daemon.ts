@@ -34,6 +34,7 @@ import {
   setMaxWebviewSessions,
   DEFAULT_MAX_WEBVIEW_SESSIONS,
 } from './webview-bridge';
+import { startWebviewMemoryWatchdog, stopWebviewMemoryWatchdog } from './webview-memory';
 
 const DEFAULT_DAEMON_PORT = 19825;
 const PORT = parseInt(process.env.DUYA_DAEMON_PORT ?? String(DEFAULT_DAEMON_PORT), 10);
@@ -721,6 +722,9 @@ function doStartBrowserDaemon(): Promise<void> {
       httpServer.listen(PORT, '127.0.0.1', () => {
         isRunning = true;
         log('info', `Browser Daemon listening on http://127.0.0.1:${PORT}`);
+        // Sample live browser guests and reload any that exceed the per-tab
+        // memory budget so a heavy page cannot grow without bound.
+        startWebviewMemoryWatchdog();
         resolve();
       });
     } catch (err) {
@@ -740,6 +744,7 @@ function doStartBrowserDaemon(): Promise<void> {
 
 export function stopBrowserDaemon(): Promise<void> {
   return new Promise((resolve) => {
+    stopWebviewMemoryWatchdog();
     if (!isRunning) {
       resolve();
       return;
