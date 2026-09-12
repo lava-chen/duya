@@ -62,9 +62,9 @@ queue，服务设置页 BridgeSection 的直连渠道绑定）。
 
 ## Phase 1 — 删除独立文件 + 目录结构改造
 
-- [ ] **`packages/gateway/src/user-mapper.ts`** — 整个文件删掉
+- [x] **`packages/gateway/src/user-mapper.ts`** — 整个文件删掉
   - 移除 `getOrCreateSession` / `getChatIdForSession` / `resetSession` 及对应 IPC
-- [ ] **`packages/gateway/src/commands/`** — **改造，不删除**
+- [x] **`packages/gateway/src/commands/`** — **改造，不删除**
   - `commands/dispatcher.ts` — **删执行逻辑**，改为命令检测 + 透传包装
   - `commands/registry.ts` — **保留**，命令识别（哪些是合法命令）；移除 `/approve` `/deny` 注册
   - `commands/help.ts` — **保留**，help 文本生成（Main Process 执行 /help 时回显用）
@@ -235,9 +235,9 @@ Main Process → IPC: gateway:agent_busy { platform, platformChatId, busy: true/
 
 **Pairing UI 改造（修订新增）：**
 
-- [ ] **`electron/gateway/pairing.ts`** — 整个文件删掉（plan 原版未点名）
-- [ ] **`src/components/settings/BridgeSection.tsx`** — 移除 pairing code 审批 UI（`pairingList`/`pairingApprove`/`pairingRevoke` 三处调用，:241-270），改为 channel-directory allow-list 的增删 UI（`{ platform, userId }` 列表 + 添加入口）
-- [ ] channel-directory 增加直连渠道 allow-list 的读写与 IPC（渲染层可管理）
+- [x] **`electron/gateway/pairing.ts`** — 整个文件删掉（plan 原版未点名）
+- [x] **`src/components/settings/BridgeSection.tsx`** — 移除 pairing code 审批 UI（`pairingList`/`pairingApprove`/`pairingRevoke` 三处调用，:241-270），改为 channel-directory allow-list 的增删 UI（`{ platform, userId }` 列表 + 添加入口）
+- [x] channel-directory 增加直连渠道 allow-list 的读写与 IPC（渲染层可管理）
 
 ---
 
@@ -276,8 +276,8 @@ onAgentBusy(false):  # agent 变闲
 
 ## Phase 7 — 验证
 
-- [ ] `npm run typecheck:all` 通过
-- [ ] `npm run test` 全部通过
+- [x] `npm run typecheck:all` 通过（gateway 包 + web 全绿；electron tsc 相对 origin/master 基线 0 新增错误——electron 不在 gate 内有预存红）
+- [x] `npm run test` 全部通过（83 个失败文件与 origin/master 基线完全一致，0 新增回归）
 - [ ] 直连渠道绑定后消息仍能正确路由（手动冒烟测试，legacy 线）
 - [ ] **`duya channel send` 仍可用（修订新增）** — `/v1/channels/send` → `sendMessage` 链路无回归
 - [ ] Typing 指示符和 reaction 改造后正常工作（基于 adapter 队列状态，legacy 渠道）
@@ -285,8 +285,8 @@ onAgentBusy(false):  # agent 变闲
 - [ ] **入站附件不回退（修订新增）** — 直连渠道收图后 `persistInboundAttachmentRefs` 仍落库（plan 507 行为保持）
 - [ ] Adapter busyMode 配置生效（queue/steer/interrupt）
 - [ ] **命令透传闭环（修订新增）** — 直连渠道发 `/help`，Main 侧执行并经 adapter 回显
-- [ ] 确认 `user-mapper.ts`、`electron/gateway/pairing.ts` 和 pairing IPC 全网无引用
-- [ ] 确认 `gateway:create_session` / `gateway:reset_session` / 死代码 `ipcMain.handle('gateway:send')` 已清除
+- [x] 确认 `user-mapper.ts`、`electron/gateway/pairing.ts` 和 pairing IPC 全网无引用
+- [x] 确认 `gateway:create_session` / `gateway:reset_session` / 死代码 `ipcMain.handle('gateway:send')` 已清除
 
 ---
 
