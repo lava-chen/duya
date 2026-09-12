@@ -30,19 +30,6 @@ import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
 import { Input } from '@/components/ui/Input';
 
-interface PendingPairing {
-  platform: string;
-  platformUserId: string;
-  code: string;
-  expiresAt: number;
-}
-
-interface ApprovedUser {
-  platform: string;
-  platformUserId: string;
-  approvedAt: number;
-}
-
 interface BridgeStatus {
   running: boolean;
   adapters: Array<{
@@ -119,12 +106,13 @@ export default function BridgeSection() {
   const [testingChannel, setTestingChannel] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
   const [activeChannel, setActiveChannel] = useState<ChannelType>('telegram');
-  const [pairingPending, setPairingPending] = useState<PendingPairing[]>([]);
-  const [pairingApproved, setPairingApproved] = useState<ApprovedUser[]>([]);
-  const [pairingCode, setPairingCode] = useState('');
-  const [pairingPlatform, setPairingPlatform] = useState('weixin');
-  const [pairingLoading, setPairingLoading] = useState(false);
-  const [pairingError, setPairingError] = useState<string | null>(null);
+  // Plan 520: channel allow-list (replaces the pairing system). Keyed by
+  // platform; an empty list for a platform means open.
+  const [allowlist, setAllowlist] = useState<Record<string, string[]>>({});
+  const [allowlistPlatform, setAllowlistPlatform] = useState('weixin');
+  const [allowlistUserId, setAllowlistUserId] = useState('');
+  const [allowlistLoading, setAllowlistLoading] = useState(false);
+  const [allowlistError, setAllowlistError] = useState<string | null>(null);
   const channels: ChannelInfo[] = [
     {
       id: 'telegram',
@@ -167,7 +155,7 @@ export default function BridgeSection() {
     fetchStatus();
     fetchSettings();
     fetchProxyStatus();
-    fetchPairing();
+    fetchAllowlist();
   }, []);
 
   const fetchStatus = async () => {
@@ -236,39 +224,32 @@ export default function BridgeSection() {
     }
   };
 
-  const fetchPairing = async () => {
+  const fetchAllowlist = async () => {
     try {
-      const data = await window.electronAPI?.gateway?.pairingList();
-      if (data) {
-        setPairingPending((data.pending as PendingPairing[]) ?? []);
-        setPairingApproved((data.approved as ApprovedUser[]) ?? []);
-      }
+      const data = await window.electronAPI?.gateway?.allowlistList();
+      if (data) setAllowlist(data);
     } catch { /* ignore */ }
   };
 
-  const handlePairingApprove = async () => {
-    if (!pairingCode.trim() || !pairingPlatform) return;
-    setPairingLoading(true);
-    setPairingError(null);
+  const handleAllowlistAdd = async () => {
+    if (!allowlistUserId.trim() || !allowlistPlatform) return;
+    setAllowlistLoading(true);
+    setAllowlistError(null);
     try {
-      const result = await window.electronAPI?.gateway?.pairingApprove(pairingPlatform, pairingCode.trim());
-      if (result?.approved) {
-        setPairingCode('');
-        await fetchPairing();
-      } else {
-        setPairingError(result?.error || 'Invalid pairing code');
-      }
+      await window.electronAPI?.gateway?.allowlistAdd(allowlistPlatform, allowlistUserId.trim());
+      setAllowlistUserId('');
+      await fetchAllowlist();
     } catch (err) {
-      setPairingError(err instanceof Error ? err.message : 'Approve failed');
+      setAllowlistError(err instanceof Error ? err.message : 'Add failed');
     } finally {
-      setPairingLoading(false);
+      setAllowlistLoading(false);
     }
   };
 
-  const handlePairingRevoke = async (platform: string, platformUserId: string) => {
+  const handleAllowlistRemove = async (platform: string, platformUserId: string) => {
     try {
-      await window.electronAPI?.gateway?.pairingRevoke(platform, platformUserId);
-      await fetchPairing();
+      await window.electronAPI?.gateway?.allowlistRemove(platform, platformUserId);
+      await fetchAllowlist();
     } catch { /* ignore */ }
   };
 
@@ -637,51 +618,18 @@ export default function BridgeSection() {
         </SettingsCard>
       </SettingsSection>
 
-      {/* Pairing Section */}
-      <SettingsSection title="Pairing" description="Approve users from messaging platforms to interact with the agent">
+      {/* Allow-list Section (plan 520 — replaces the pairing system) */}
+      <SettingsSection title="Allow-list" description="Restrict which platform users may talk to the agent. An empty list for a platform means open.">
         <SettingsCard>
-          {/* Pending pairing requests */}
-          {pairingPending.length > 0 && (
-            <div className="px-4 pt-3 pb-2">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-                Pending Requests ({pairingPending.length})
-              </p>
-              <div className="space-y-1.5">
-                {pairingPending.map((p, i) => (
-                  <div key={`${p.platform}-${p.platformUserId}-${i}`}
-                    className="flex items-center justify-between rounded-lg border border-warning/30 bg-warning/5 px-3 py-2">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <span className="text-xs font-mono font-bold text-warning bg-warning/10 px-1.5 py-0.5 rounded">
-                        {p.code}
-                      </span>
-                      <span className="text-xs text-muted-foreground capitalize">{p.platform}</span>
-                      <span className="text-xs text-muted-foreground/70 truncate max-w-[140px]">
-                        {p.platformUserId}
-                      </span>
-                    </div>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => { setPairingCode(p.code); setPairingPlatform(p.platform); handlePairingApprove(); }}
-                      className="shrink-0 bg-warning/20 text-warning hover:bg-warning/30"
-                    >
-                      Approve
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Manual pairing code input */}
+          {/* Add entry */}
           <div className="py-3">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-              Enter Pairing Code
+              Add User ID
             </p>
             <div className="flex items-center gap-2">
               <select
-                value={pairingPlatform}
-                onChange={(e) => setPairingPlatform(e.target.value)}
+                value={allowlistPlatform}
+                onChange={(e) => setAllowlistPlatform(e.target.value)}
                 className="h-9 rounded-lg border border-border/50 bg-background px-2.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
               >
                 <option value="weixin">WeChat</option>
@@ -693,63 +641,61 @@ export default function BridgeSection() {
               </select>
               <Input
                 type="text"
-                value={pairingCode}
-                onChange={(e) => { setPairingCode(e.target.value); setPairingError(null); }}
-                onKeyDown={(e) => { if (e.key === 'Enter') handlePairingApprove(); }}
-                placeholder="8-character code"
-                maxLength={8}
+                value={allowlistUserId}
+                onChange={(e) => { setAllowlistUserId(e.target.value); setAllowlistError(null); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleAllowlistAdd(); }}
+                placeholder="Platform user ID"
                 className="flex-1"
               />
               <Button
                 variant="primary"
                 size="sm"
-                onClick={handlePairingApprove}
-                disabled={pairingLoading || !pairingCode.trim()}
+                onClick={handleAllowlistAdd}
+                disabled={allowlistLoading || !allowlistUserId.trim()}
                 className="h-9 shrink-0"
               >
-                {pairingLoading ? <SpinnerGapIcon size={14} className="animate-spin" /> : 'Approve'}
+                {allowlistLoading ? <SpinnerGapIcon size={14} className="animate-spin" /> : 'Add'}
               </Button>
             </div>
-            {pairingError && (
-              <p className="text-xs text-destructive mt-1.5">{pairingError}</p>
+            {allowlistError && (
+              <p className="text-xs text-destructive mt-1.5">{allowlistError}</p>
             )}
           </div>
 
-          {/* Approved users */}
-          {pairingApproved.length > 0 && (
-            <div className="pb-3 pt-1 border-t border-border/30">
+          {/* Entries */}
+          {Object.entries(allowlist).filter(([, ids]) => ids.length > 0).map(([platform, ids]) => (
+            <div key={platform} className="pb-3 pt-1 border-t border-border/30">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-                Approved Users ({pairingApproved.length})
+                {platform.charAt(0).toUpperCase() + platform.slice(1)} ({ids.length})
               </p>
               <div className="space-y-1.5">
-                {pairingApproved.map((a, i) => (
-                  <div key={`${a.platform}-${a.platformUserId}-${i}`}
+                {ids.map((userId) => (
+                  <div key={`${platform}-${userId}`}
                     className="flex items-center justify-between rounded-lg border border-success/30 bg-success/5 px-3 py-2">
                     <div className="flex items-center gap-2 min-w-0">
                       <CheckCircleIcon size={12} className="text-green-500 shrink-0" />
-                      <span className="text-xs text-muted-foreground capitalize">{a.platform}</span>
-                      <span className="text-xs text-muted-foreground/70 truncate max-w-[180px]">
-                        {a.platformUserId}
+                      <span className="text-xs text-muted-foreground/70 truncate max-w-[220px] font-mono">
+                        {userId}
                       </span>
                     </div>
                     <Button
                       variant="danger"
                       size="sm"
-                      onClick={() => handlePairingRevoke(a.platform, a.platformUserId)}
+                      onClick={() => handleAllowlistRemove(platform, userId)}
                       className="shrink-0"
                     >
-                      Revoke
+                      Remove
                     </Button>
                   </div>
                 ))}
               </div>
             </div>
-          )}
+          ))}
 
-          {pairingPending.length === 0 && pairingApproved.length === 0 && (
+          {Object.values(allowlist).every((ids) => ids.length === 0) && (
             <div className="py-4 text-center">
               <p className="text-xs text-muted-foreground">
-                No pairing requests yet. When someone DMs the bot (with DM policy set to "pairing"), their code will appear here.
+                No allow-list entries — every user is allowed. Add platform user IDs above to restrict access; unauthorized senders get a rejection reply from the bot.
               </p>
             </div>
           )}
