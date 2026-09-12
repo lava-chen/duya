@@ -30,7 +30,7 @@
     "fetch:ripgrep": "node scripts/fetch-ripgrep.mjs",
     "electron:dev": "npm run build:gateway && npm run bundle:agent && npm run build:voice && npm run build:cli-bundle && node scripts/build-electron.mjs && concurrently -k \"vite --port 3000 --strictPort\" \"wait-on http://127.0.0.1:3000 && electron .\"",
     "electron:dev:nohmr": "npm run build:gateway && npm run bundle:agent && npm run build:voice && npm run build:cli-bundle && node scripts/build-electron.mjs && cross-env DUYA_NO_HMR=1 concurrently -k \"vite --port 3000 --strictPort\" \"wait-on http://127.0.0.1:3000 && electron .\"",
-    "electron:build": "npm run build:agent && npm run bundle:agent && npm run build:cli-bundle && npm run build:gateway && npm run bundle:gateway && npm run build:voice && vite build && node scripts/build-electron.mjs",
+    "electron:build": "npm run build:agent && npm run bundle:agent && npm run build:cli-bundle && npm run build:gateway && npm run bundle:gateway && npm run build:voice && npm run -w @duya/computer-use build && vite build && node scripts/build-electron.mjs",
     "electron:pack": "npm run electron:build && electron-builder --config electron-builder.yml",
     "electron:verify:packaged": "node scripts/verify-packaged-parity.mjs",
     "diagnose:env": "node scripts/diagnose-env.mjs",
