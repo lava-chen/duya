@@ -1214,16 +1214,25 @@ export class StreamSessionManager {
    * Register messages already loaded from DB (e.g., after page refresh).
    * Extracts tool_use/tool_result IDs so incoming SSE events for the same
    * tools are filtered out, preventing duplicate rendering.
+   *
+   * Input contract: each `msg` must be a camelCase IpcMessage shape (post
+   * `dbMessageToMessage` mapping). Snake_case raw rows (e.g. the output of
+   * `storedEventsToIpcMessages`) silently lose their `parentToolCallId`
+   * and `toolCallId` fields, leaving `loadedToolResultIds` empty and
+   * causing every SSE tool_result replay to re-render. The `assertShape`
+   * guard below catches that regression loudly in dev. The 447 + 489
+   * callers in `conversation-store.ts` already feed the mapped shape.
    */
   registerLoadedMessages(
     sessionId: string,
-    messages: ReadonlyArray<{ role: string; content: string | unknown[]; msgType?: string }>,
+    messages: ReadonlyArray<{ role: string; content: string | unknown[]; msgType?: string; parentToolCallId?: unknown; toolCallId?: unknown }>,
   ): void {
     const state = this.getOrCreateState(sessionId);
     const toolUseIds = new Set<string>();
     const toolResultIds = new Set<string>();
     const loadedUses: ToolUseInfo[] = [];
     const loadedResults: ToolResultInfo[] = [];
+    let toolRowCount = 0;
 
     for (const msg of messages) {
       if (msg.role === 'assistant' && Array.isArray(msg.content)) {
@@ -1243,10 +1252,13 @@ export class StreamSessionManager {
         }
       }
       if (msg.role === 'tool') {
-        const toolCallId = msg.msgType === 'tool_result'
-          ? (msg as unknown as Record<string, unknown>).parentToolCallId as string
-          : undefined;
-        if (toolCallId) {
+        toolRowCount += 1;
+        // addMessage() always writes msg_type='tool_result' for role='tool'
+        // rows (db.ts:969), so the msgType guard is implicit. We read
+        // `parentToolCallId` (camelCase) directly — see Input contract above.
+        const toolCallId = (msg as unknown as { parentToolCallId?: string }).parentToolCallId
+          ?? (msg as unknown as { toolCallId?: string }).toolCallId;
+        if (typeof toolCallId === 'string' && toolCallId) {
           toolResultIds.add(toolCallId);
           const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
           loadedResults.push({
@@ -1260,6 +1272,21 @@ export class StreamSessionManager {
 
     state.loadedToolUseIds = toolUseIds;
     state.loadedToolResultIds = toolResultIds;
+
+    // Dev shape guard: if the input has tool rows but we extracted zero
+    // tool_call ids, the caller almost certainly passed raw snake_case
+    // rows from `storedEventsToIpcMessages` instead of the camelCase
+    // `IpcMessage` shape produced by `dbMessageToMessage`. Warn loudly
+    // so this regression is caught in development instead of silently
+    // re-rendering every SSE tool_result on switch-back.
+    if (import.meta.env?.DEV && toolRowCount > 0 && toolResultIds.size === 0) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[stream-session-manager] registerLoadedMessages received tool rows but extracted 0 tool_call ids. ' +
+          'This usually means the input is raw snake_case rows; pass `dbMessageToMessage`-mapped IpcMessages instead. ' +
+          'See stream-session-manager.ts:1162 (Input contract).',
+      );
+    }
 
     // Pre-populate tool state so the UI shows tools immediately before SSE catch-up
     if (loadedUses.length > 0 && state.toolUses.length === 0) {
@@ -1393,7 +1420,10 @@ export class StreamSessionManager {
                   name: string;
                   description?: string;
                   enabled?: boolean;
-                  manifest?: { components?: { appConnections?: string[]; mcpServers?: string[]; skills?: string[] } };
+                  manifest?: {
+                    components?: { appConnections?: string[]; mcpServers?: string[]; skills?: string[] };
+                    capabilities?: { mcpServers?: Array<{ name: string }>; skills?: string[] };
+                  };
                 }>;
                 error?: string;
               }>;
@@ -1419,14 +1449,24 @@ export class StreamSessionManager {
         (appRes?.data ?? []).filter((c) => c.status === 'connected').map((c) => c.provider),
       );
       const available = plugins.map((p): PluginMentionCapabilities => {
+        // v1 manifests store skills/mcpServers in `manifest.capabilities`;
+        // v2 manifests store them in `manifest.components`.  Both paths must
+        // be checked so builtin v1 plugins (github / notion / zotero / ...) are
+        // not silently dropped from the @mention capability list.
         const comps = p.manifest?.components;
+        const caps = p.manifest?.capabilities;
         return {
           pluginId: p.id,
           name: p.name || p.id,
           description: typeof p.description === 'string' && p.description ? p.description : undefined,
           appConnections: comps?.appConnections ?? [],
-          mcpServers: comps?.mcpServers ?? [],
-          skillNames: comps?.skills ?? [],
+          // v2: components.mcpServers is string[]; v1: capabilities.mcpServers is
+          // MCPServerDeclaration[] — extract names for v1, use string[] directly for v2.
+          mcpServers: comps?.mcpServers?.length
+            ? comps.mcpServers
+            : caps?.mcpServers?.map((s: { name: string }) => s.name) ?? [],
+          // v1 stores skill names in capabilities.skills; v2 in components.skills.
+          skillNames: comps?.skills ?? caps?.skills ?? [],
         };
       });
 

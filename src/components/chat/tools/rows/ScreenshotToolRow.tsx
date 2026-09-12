@@ -17,7 +17,7 @@ import { Button } from '@/components/ui/Button';
 import { ActionRowChrome } from '../chrome/ActionRowChrome';
 import { ToolStatusBadge } from '../statusBadge';
 import { getStatus } from '../registry';
-import { ToolImagePreviewModal } from '../ToolImagePreviewModal';
+import { ImagePreview } from '../../preview/ImagePreview';
 import type { ToolAction } from '../types';
 
 interface ScreenshotToolRowProps {
@@ -109,16 +109,16 @@ export function ScreenshotToolRow({ tool }: ScreenshotToolRowProps) {
         </div>
       ) : null}
 
-      <ToolImagePreviewModal
+      <ImagePreview
         open={previewOpen}
         onClose={() => setPreviewOpen(false)}
+        variant="lightbox"
         src={metadata.screenshot ?? ''}
+        alt={subtitle || 'Browser screenshot'}
         title={subtitle ? `Browser screenshot · ${subtitle}` : 'Browser screenshot'}
         subtitle={typeof metadata.screenshotWidth === 'number' && typeof metadata.screenshotHeight === 'number'
           ? `${metadata.screenshotWidth}×${metadata.screenshotHeight}${typeof metadata.screenshotBytes === 'number' ? ` · ${(metadata.screenshotBytes / 1024).toFixed(1)} KB` : ''}`
           : undefined}
-        body=""
-        hideTextPane
       />
     </div>
   );

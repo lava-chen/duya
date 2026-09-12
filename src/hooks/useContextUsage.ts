@@ -89,6 +89,53 @@ export function getContextWindowForModel(
   return findModelById(modelName)?.contextWindow || DEFAULT_CONTEXT_WINDOW;
 }
 
+/**
+ * Token-accounting: resolve the context window against the model that
+ * actually produced the anchor (or the live worker's runtime model), NOT
+ * necessarily the session's current model. After a mid-session switch the
+ * context that exists was billed by the PREVIOUS model — using the current
+ * model's pinned window would mis-state the ratio in both directions.
+ *
+ * The caller's `contextWindow` is pinned to the CURRENT model, so it is only
+ * trusted when the anchor model matches (or is unknown). A different anchor
+ * model resolves through the built-in catalog first; the caller's window is
+ * the last-resort fallback (better a slightly-off ratio than no ratio).
+ */
+function resolveWindowForAnchor(
+  anchorModel: string | null | undefined,
+  sessionModel: string | undefined,
+  callerWindow: number | undefined,
+): number {
+  if (anchorModel && anchorModel !== sessionModel) {
+    const catalogWindow = findModelById(anchorModel)?.contextWindow;
+    if (catalogWindow && catalogWindow > 0) return catalogWindow;
+  }
+  return getContextWindowForModel(sessionModel, callerWindow);
+}
+
+/**
+ * Token-accounting: per-message pricing. Messages produced by the session's
+ * current model price at the caller-supplied capability pricing; messages
+ * from other models (mid-session switch) price from the built-in catalog.
+ * Unknown models contribute token volume but zero cost — hiding the figure
+ * beats mispricing at the wrong model's rates.
+ */
+function pricingForMessage(
+  msgModel: string | null | undefined,
+  sessionModel: string | undefined,
+  sessionPricing: ModelPricing | undefined,
+): ModelPricing | undefined {
+  if (!msgModel || msgModel === sessionModel) return sessionPricing;
+  const cost = findModelById(msgModel)?.cost;
+  if (!cost) return undefined;
+  return {
+    inputPerMillion: cost.input,
+    outputPerMillion: cost.output,
+    cacheReadPerMillion: cost.cacheRead,
+    cacheWritePerMillion: cost.cacheWrite,
+  };
+}
+
 export function formatTokens(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M';
   if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K';
@@ -105,6 +152,7 @@ function stateFor(ratio: number): ContextState {
 function scanTotals(
   messages: Message[],
   pricing?: ModelPricing,
+  sessionModel?: string,
 ): {
   totalInput: number;
   totalInputRaw: number;
@@ -130,7 +178,14 @@ function scanTotals(
     totalOutput += output;
     totalCacheRead += cacheRead;
     totalCacheWrite += cacheWrite;
-    totalCost += estimateCost(rawInput, output, cacheRead, cacheWrite, pricing);
+    // Token-accounting: price each message at ITS OWN model's rates.
+    totalCost += estimateCost(
+      rawInput,
+      output,
+      cacheRead,
+      cacheWrite,
+      pricingForMessage(msg.model, sessionModel, pricing),
+    );
   }
   return { totalInput, totalInputRaw, totalOutput, totalCacheRead, totalCacheWrite, totalCost };
 }
@@ -199,14 +254,19 @@ export function useContextUsage(
   );
 
   return useMemo(() => {
-    const resolvedContextWindow = getContextWindowForModel(modelName, contextWindow);
-    const scanTotalsResult = scanTotals(messages, pricing);
+    const scanTotalsResult = scanTotals(messages, pricing, modelName);
 
     // ── Branch A: live worker frame ──────────────────────────────────────
     // Trust it only when anchored (real API usage); unanchored frames are
     // rough estimates or post-compaction unknowns → fall through so the
     // ring shows "?" instead of swinging against later authoritative data.
     if (live && live.usedTokens > 0 && live.anchored) {
+      // Token-accounting: the frame carries the worker's runtime model —
+      // window/ratio priced against the model actually in use, not the
+      // session's current picker value.
+      const liveModel = live.model || modelName;
+      const resolvedContextWindow = resolveWindowForAnchor(liveModel, modelName, contextWindow);
+      const livePricing = pricingForMessage(live.model, modelName, pricing);
       const liveTotalCost =
         live.totalInputRaw !== undefined &&
         live.totalOutput !== undefined &&
@@ -217,12 +277,12 @@ export function useContextUsage(
               live.totalOutput,
               live.totalCacheHit,
               live.totalCacheCreation,
-              pricing,
+              livePricing,
             )
           : scanTotalsResult.totalCost;
       return finalize({
         hasData: true,
-        modelName,
+        modelName: liveModel,
         contextWindow: resolvedContextWindow,
         used: live.usedTokens,
         inputTokens: live.inputTokens || 0,
@@ -249,19 +309,24 @@ export function useContextUsage(
         role: m.role,
         content: m.content as string | unknown[],
         tokenUsage: m.tokenUsage ?? undefined,
+        model: m.model ?? undefined,
       })),
     );
     if (estimate.anchored && (estimate.usedTokens ?? 0) > 0) {
-      // Per-request stats line values come from the anchor block itself.
+      // Token-accounting: the ring describes the context as it exists —
+      // produced by the ANCHOR's model. Window resolves against that model
+      // so a mid-session switch doesn't mis-state the ratio.
       const anchorMsg =
         estimate.anchorIndex !== null ? messages[estimate.anchorIndex] : undefined;
+      const anchorModel = estimate.anchorModel || modelName;
+      const resolvedContextWindow = resolveWindowForAnchor(anchorModel, modelName, contextWindow);
       const src = anchorMsg?.tokenUsage?.last_call ?? anchorMsg?.tokenUsage;
       const anchorInput = src?.input_tokens || 0;
       const anchorCacheRead = src?.cache_hit_tokens || 0;
       const anchorCacheWrite = src?.cache_creation_tokens || 0;
       return finalize({
         hasData: true,
-        modelName,
+        modelName: anchorModel,
         contextWindow: resolvedContextWindow,
         used: estimate.usedTokens ?? 0,
         inputTokens: normalizeInputTokens(anchorInput, anchorCacheRead, anchorCacheWrite),
@@ -279,7 +344,7 @@ export function useContextUsage(
     return finalize({
       hasData: false,
       modelName,
-      contextWindow: resolvedContextWindow,
+      contextWindow: getContextWindowForModel(modelName, contextWindow),
       used: 0,
       inputTokens: 0,
       outputTokens: 0,

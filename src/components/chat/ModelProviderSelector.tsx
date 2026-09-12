@@ -23,6 +23,8 @@ import {
 } from '@/components/icons';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useConversationStore } from '@/stores/conversation-store';
+import { usePopoverPlacement } from '@/components/ui/usePopoverPlacement';
+import type { Placement } from '@floating-ui/react';
 
 export interface EffortOption {
   value: string;
@@ -73,6 +75,14 @@ interface ModelProviderSelectorProps {
   /** Show the "Manage providers" footer row (default true — dialogs pass
    *  false because the navigation would land behind the modal overlay). */
   showManageProviders?: boolean;
+  /**
+   * Preferred side of the trigger to open the menu. The hook auto-flips
+   * when there is not enough room on the preferred side (see Plan 237).
+   * Default `'top'` preserves the legacy ChatView behaviour; the welcome
+   * page passes `'bottom'` so the menu opens below the composer instead
+   * of overlapping the greeting / recent sessions.
+   */
+  placement?: 'top' | 'bottom';
 }
 
 type FlyoutView = 'models' | 'effort';
@@ -109,6 +119,7 @@ export function ModelProviderSelector({
   portal = false,
   clearOption,
   showManageProviders = true,
+  placement = 'top',
 }: ModelProviderSelectorProps) {
   const { t } = useTranslation();
   const { setCurrentView, setSettingsTab } = useConversationStore();
@@ -119,6 +130,11 @@ export function ModelProviderSelector({
     { left: number; top?: number; bottom?: number; listMaxHeight: number } | null
   >(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  // The popover hook expects the trigger as its anchor so it can measure
+  // the trigger rect and place the floating menu next to it. In portal
+  // mode we still attach it — the hook is only consulted for the inline
+  // (non-portal) path.
+  const triggerRef = useRef<HTMLButtonElement>(null);
   // Portal hosts render the menu outside containerRef — the outside-click
   // close must ignore it, or the mousedown that precedes every click tears
   // the menu down before the row's click handler can fire.
@@ -127,6 +143,30 @@ export function ModelProviderSelector({
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef<Map<string, HTMLButtonElement | null>>(new Map());
   const effortRowRef = useRef<HTMLButtonElement | null>(null);
+
+  // Map our coarse `'top' | 'bottom'` prop onto a floating-ui Placement.
+  // We anchor to `start` so the panel aligns with the trigger's left edge
+  // (matches the previous hard-coded `left-0` Tailwind class) and let the
+  // hook flip to the opposite side when the preferred side would clip.
+  const floatingPlacement: Placement = placement === 'bottom' ? 'bottom-start' : 'top-start';
+  const { ref: anchorRef, popoverRef, style: popoverStyle } = usePopoverPlacement({
+    placement: floatingPlacement,
+  });
+  // Wire the trigger element to the hook's anchor ref.
+  const setTriggerRef = useCallback(
+    (el: HTMLButtonElement | null) => {
+      triggerRef.current = el;
+      anchorRef(el);
+    },
+    [anchorRef],
+  );
+  const setFloatingRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      rootPanelRef.current = el;
+      popoverRef(el);
+    },
+    [popoverRef],
+  );
 
   // Resolve the current provider group from the selected model's prefix.
   const selectedPrefixed = parsePrefixed(selectedModelId);
@@ -490,6 +530,7 @@ export function ModelProviderSelector({
     <div ref={containerRef} className="relative min-w-0 shrink" onKeyDown={handleKeyDown}>
       {/* Trigger button: <model> <effort> */}
       <button
+        ref={setTriggerRef}
         type="button"
         onClick={handleToggle}
         disabled={disabled || loading}
@@ -516,8 +557,13 @@ export function ModelProviderSelector({
 
       {open && !portal && (
         <div
-          className="absolute left-0 z-50 bottom-full mb-1"
-          style={{ overflow: 'visible' }}
+          ref={setFloatingRef}
+          style={{
+            ...popoverStyle,
+            zIndex: 50,
+            overflow: 'visible',
+          }}
+          data-placement={floatingPlacement}
         >
           {panel}
         </div>

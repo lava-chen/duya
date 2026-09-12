@@ -11,11 +11,10 @@
  * this component owns the modal chrome and the Escape/overlay dismissal.
  */
 
-import { useEffect } from "react";
-import { XIcon } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { AutoResizeTextarea } from "@/components/ui/AutoResizeTextarea";
+import { Modal } from "@/components/ui/page";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useBotContactForm } from "@/hooks/use-bot-contact-form";
 import { BotAvatarEditor } from "./BotAvatarEditor";
@@ -63,21 +62,11 @@ export function EditBotDialog({ isOpen, contact, onCancel, onSaved }: EditBotDia
     modelsLoading,
     reasoning,
     setReasoning,
-    submitting,
     error,
     canSubmit,
     nameRef,
     save,
   } = useBotContactForm({ active: isOpen, contact, onSaved });
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [isOpen, onCancel]);
 
   if (!isOpen || !contact) return null;
 
@@ -88,111 +77,92 @@ export function EditBotDialog({ isOpen, contact, onCancel, onSaved }: EditBotDia
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      role="dialog"
-      aria-modal="true"
-      aria-label={t("bot.edit.title")}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onCancel();
-      }}
-    >
-      <div
-        className="w-full max-w-md rounded-xl p-6 shadow-xl overflow-y-auto"
-        style={{
-          background: "var(--bg-canvas, var(--surface))",
-          border: "1px solid var(--border)",
-          maxHeight: "85vh",
-        }}
-      >
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-medium" style={{ color: "var(--text)" }}>
-            {t("bot.edit.title")}
-          </h3>
-          <Button variant="ghost" size="sm" onClick={onCancel} aria-label={t("bot.edit.close")}>
-            <XIcon size={16} />
-          </Button>
-        </div>
-
-        {/* Top: centered avatar editor (upload / emoji / color). */}
-        <div className="mb-4">
-          <BotAvatarEditor
-            name={name || "?"}
-            agentId={contact?.agentId ?? "preview"}
-            emoji={emoji}
-            onEmojiChange={setEmoji}
-            color={color}
-            onColorChange={setColor}
-            avatarUrl={avatarUrl}
-            avatarBusy={avatarBusy}
-            onUpload={() => void uploadAvatar()}
-          />
-        </div>
-
-        <FieldLabel>{t("bot.create.name")}</FieldLabel>
-        <Input
-          ref={nameRef}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder={t("bot.create.namePlaceholder")}
-          className="mb-3 h-11"
-        />
-
-        <FieldLabel>{t("bot.create.roleTitle")}</FieldLabel>
-        <Input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder={t("bot.create.roleTitlePlaceholder")}
-          className="mb-3 h-11"
-        />
-
-        <FieldLabel>{t("bot.create.description")}</FieldLabel>
-        <AutoResizeTextarea
-          value={description}
-          onChange={setDescription}
-          maxHeight={160}
-          placeholder={t("bot.create.descriptionPlaceholder")}
-          className="w-full rounded-lg border px-3 py-2 text-sm textarea-resize-none mb-4 focus:outline-none focus:ring-2 focus:ring-accent/50"
-          style={{
-            background: "var(--surface)",
-            borderColor: "var(--border)",
-            color: "var(--text)",
-            resize: "none",
-          }}
-        />
-
-        <BotModelSelectorField
-          value={selectorModelId}
-          groups={modelGroups}
-          loading={modelsLoading}
-          onChange={handleModelSelect}
-          reasoning={reasoning}
-          onReasoningChange={setReasoning}
-        />
-
-        {avatarUrl && (
-          <div className="mt-3 flex justify-center">
-            <Button variant="secondary" size="sm" disabled={avatarBusy} onClick={() => void removeAvatar()}>
-              {t("bot.avatar.remove")}
-            </Button>
-          </div>
-        )}
-
-        {error && (
-          <div className="text-sm mb-3" style={{ color: "var(--error, #ef4444)" }}>
-            {error}
-          </div>
-        )}
-
-        <div className="flex justify-end gap-2">
+    <Modal
+      open={isOpen}
+      onClose={onCancel}
+      title={t("bot.edit.title")}
+      size="sm"
+      className="edit-bot-dialog"
+      footer={
+        <>
           <Button variant="secondary" onClick={onCancel}>
             {t("bot.edit.cancel")}
           </Button>
           <Button onClick={handleSave} disabled={!canSubmit}>
             {t("bot.edit.save")}
           </Button>
-        </div>
+        </>
+      }
+    >
+      {/* Top: centered avatar editor (upload / emoji / color). */}
+      <div className="mb-4">
+        <BotAvatarEditor
+          name={name || "?"}
+          agentId={contact?.agentId ?? "preview"}
+          emoji={emoji}
+          onEmojiChange={setEmoji}
+          color={color}
+          onColorChange={setColor}
+          avatarUrl={avatarUrl}
+          avatarBusy={avatarBusy}
+          onUpload={() => void uploadAvatar()}
+        />
       </div>
-    </div>
+
+      <FieldLabel>{t("bot.create.name")}</FieldLabel>
+      <Input
+        ref={nameRef}
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder={t("bot.create.namePlaceholder")}
+        className="mb-3 h-11"
+      />
+
+      <FieldLabel>{t("bot.create.roleTitle")}</FieldLabel>
+      <Input
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        placeholder={t("bot.create.roleTitlePlaceholder")}
+        className="mb-3 h-11"
+      />
+
+      <FieldLabel>{t("bot.create.description")}</FieldLabel>
+      <AutoResizeTextarea
+        value={description}
+        onChange={setDescription}
+        maxHeight={160}
+        placeholder={t("bot.create.descriptionPlaceholder")}
+        className="w-full rounded-lg border px-3 py-2 text-sm textarea-resize-none mb-4 focus:outline-none focus:ring-2 focus:ring-accent/50"
+        style={{
+          background: "var(--surface)",
+          borderColor: "var(--border)",
+          color: "var(--text)",
+          resize: "none",
+        }}
+      />
+
+      <BotModelSelectorField
+        value={selectorModelId}
+        groups={modelGroups}
+        loading={modelsLoading}
+        onChange={handleModelSelect}
+        reasoning={reasoning}
+        onReasoningChange={setReasoning}
+      />
+
+      {avatarUrl && (
+        <div className="mt-3 flex justify-center">
+          <Button variant="secondary" size="sm" disabled={avatarBusy} onClick={() => void removeAvatar()}>
+            {t("bot.avatar.remove")}
+          </Button>
+        </div>
+      )}
+
+      {error && (
+        <div className="text-sm mb-3" style={{ color: "var(--error, #ef4444)" }}>
+          {error}
+        </div>
+      )}
+    </Modal>
   );
 }

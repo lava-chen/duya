@@ -99,9 +99,8 @@ const DEEPSEEK_PRESET: QuickPreset = {
   baseUrl: 'https://api.deepseek.com/anthropic',
   defaultEnvOverrides: { API_TIMEOUT_MS: '3000000' },
   defaultModels: [
+    { modelId: 'deepseek-flash', displayName: 'DeepSeek V4.1 Flash' },
     { modelId: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro' },
-    { modelId: 'deepseek-v4-flash', displayName: 'DeepSeek V4 Flash' },
-    { modelId: 'deepseek-chat', displayName: 'DeepSeek Chat' },
   ],
   fields: ['api_key'],
   iconKey: 'deepseek',
@@ -229,13 +228,12 @@ describe('ProviderQuickConnect — add mode', () => {
     expect(data.base_url).toBe('https://api.deepseek.com/anthropic');
     expect(data.api_key).toBe(TYPED_KEY);
     expect(data.enabled_models).toEqual([
+      'deepseek-flash',
       'deepseek-v4-pro',
-      'deepseek-v4-flash',
-      'deepseek-chat',
     ]);
     expect(data.options).toEqual({
-      enabled_models: ['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-chat'],
-      defaultModel: 'deepseek-v4-pro',
+      enabled_models: ['deepseek-flash', 'deepseek-v4-pro'],
+      defaultModel: 'deepseek-flash',
     });
     expect(data.extra_env).toBe('{"API_TIMEOUT_MS":"3000000"}');
     await waitFor(() => {

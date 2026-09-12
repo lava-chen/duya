@@ -96,6 +96,10 @@ export interface Message {
   tool_call_id?: string;
   timestamp: number;
   tokenUsage?: TokenUsage | null;
+  /** Token-accounting: model that produced this message (per-message). */
+  model?: string | null;
+  /** Token-accounting: provider that produced this message (per-message). */
+  providerId?: string | null;
   msgType?: MsgType;
   thinking?: string | null;
   toolName?: string | null;

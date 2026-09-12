@@ -4,6 +4,7 @@ import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import type { Message, ToolUseInfo, ToolResultInfo } from '@/types';
 import { ToolActionsGroup, pairTools, type ActionItem, type ToolAction } from './ToolActionsGroup';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { PluginMentionText } from './PluginMentionChip';
 import {
   CopyIcon,
   CheckIcon,
@@ -1052,7 +1053,7 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
                     className="text-sm whitespace-pre-wrap break-words"
                     style={{ color: 'var(--text)', overflowWrap: 'anywhere' }}
                   >
-                    {userBrowserReferences.text}
+                    <PluginMentionText text={userBrowserReferences.text} />
                   </p>
                 </div>
               )}

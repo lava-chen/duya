@@ -7,7 +7,7 @@ import { CopyIcon, CheckIcon, DownloadSimpleIcon, SquaresFourIcon } from '@/comp
 import { addChatWidgetToCanvas } from '@duya/conductor/renderer/ipc/chat-widget-to-canvas';
 import { useOptionalPanel } from '@/hooks/usePanel';
 import { useConductorStore } from '@duya/conductor/renderer/stores/conductor-store';
-import { ImagePreviewModal } from '@/components/chat/ImagePreviewModal';
+import { ImagePreview } from '@/components/chat/preview/ImagePreview';
 import { IconButton } from '@/components/ui/IconButton';
 import { Button } from '@/components/ui/Button';
 
@@ -417,13 +417,13 @@ export const WidgetRenderer = React.memo(function WidgetRenderer({
           />
         </>
       )}
-      {previewImage && (
-        <ImagePreviewModal
-          src={previewImage.src}
-          alt={previewImage.alt}
-          onClose={() => setPreviewImage(null)}
-        />
-      )}
+      <ImagePreview
+        open={previewImage !== null}
+        onClose={() => setPreviewImage(null)}
+        variant="lightbox"
+        src={previewImage?.src ?? ''}
+        alt={previewImage?.alt ?? ''}
+      />
     </div>
   );
 });

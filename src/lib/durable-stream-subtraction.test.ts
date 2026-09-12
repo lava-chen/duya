@@ -91,7 +91,7 @@ describe('subtractDurableStreamingEvents', () => {
     expect(out).toBe(events);
   });
 
-  it('cuts the prefix through the last durable tool_result, keeping the live tail', () => {
+  it('cuts the prefix through the last durable tool_use, keeping the live tail', () => {
     const events = [
       evThinking('round 1 thinking'),
       evText('round 1 text'),
@@ -108,7 +108,7 @@ describe('subtractDurableStreamingEvents', () => {
     expect(out).toEqual([evThinking('round 2 thinking'), evText('partial answer')]);
   });
 
-  it('cuts at the LAST durable tool_result, not the first', () => {
+  it('cuts at the LAST durable tool_use, not the first', () => {
     const events = [
       evToolUse('tu_1'),
       evToolResult('tu_1'),
@@ -123,19 +123,83 @@ describe('subtractDurableStreamingEvents', () => {
     expect(out).toEqual([evText('final streaming text')]);
   });
 
-  it('drops stray durable tool_use events without cutting the text tail', () => {
-    // Defensive path: a durable tool_use with no durable result must not
-    // anchor a cut, but still gets removed from the timeline.
+  it('cuts on durable tool_use even when durable tool_result is still missing (plan 447 race window)', () => {
+    // Plan 441 Journal persists the assistant message (which carries the
+    // tool_use block) before the matching tool_result row, and IPC writes
+    // are fire-and-forget — there's a 3-5ms window where the DB has the
+    // tool_use but not the tool_result. SSE already pushed both events to
+    // `streamingEvents`. Cutting on tool_result (the old behaviour) would
+    // fail in this window and re-render the entire SSE prefix, breaking
+    // the group summary. Cutting on tool_use closes the window because
+    // tool_use persistence always lands first.
+    const events = [
+      evThinking('round 1 thinking'),
+      evText('round 1 text'),
+      evToolUse('tu_1'),
+      evToolResult('tu_1'),
+      // live tail — round 2 in progress
+      evToolUse('tu_2'),
+      evThinking('round 2 thinking'),
+    ];
+    const out = subtractDurableStreamingEvents(events, {
+      // toolUseIds already landed; toolResultIds still empty (race).
+      toolUseIds: new Set(['tu_1']),
+      toolResultIds: new Set(),
+    });
+    expect(out).toEqual([evToolUse('tu_2'), evThinking('round 2 thinking')]);
+  });
+
+  it('cuts on durable tool_use even when its durable result is missing (plan 447 race window)', () => {
+    // Plan 441 Journal persists the assistant message (which carries the
+    // tool_use block) before the matching tool_result row, and IPC writes
+    // are fire-and-forget — there's a 3-5ms window where the DB has the
+    // tool_use but not the tool_result. SSE already pushed both events to
+    // `streamingEvents`. Cutting on tool_result (the old behaviour) would
+    // fail in this window and re-render the entire SSE prefix, breaking
+    // the group summary. Cutting on tool_use closes the window because
+    // tool_use persistence always lands first; the `allDurableToolIds`
+    // union then drops the still-in-SSE tool_result so it doesn't
+    // re-render either.
+    const events = [
+      evThinking('round 1 thinking'),
+      evText('round 1 text'),
+      evToolUse('tu_1'),
+      evToolResult('tu_1'),
+      // live tail — round 2 in progress
+      evToolUse('tu_2'),
+      evThinking('round 2 thinking'),
+    ];
+    const out = subtractDurableStreamingEvents(events, {
+      // toolUseIds already landed; toolResultIds still empty (race).
+      toolUseIds: new Set(['tu_1']),
+      toolResultIds: new Set(),
+    });
+    // The cut lands on tool_use tu_1; tool_result tu_1 is dropped by
+    // the union-dedup pass; the round-2 tail is preserved.
+    expect(out).toEqual([evToolUse('tu_2'), evThinking('round 2 thinking')]);
+  });
+
+  it('drops a stray tool_result whose id is durable via the toolUse union, without extending the cut', () => {
+    // Defensive path: a durable tool_result whose matching tool_use is
+    // NOT in SSE (legacy fixtures, attach-on-reconnect partial replay)
+    // must be removed from the tail so the durable row is the single
+    // source of truth. `allDurableToolIds` covers this because
+    // toolResultIds alone would miss the case where the durable side
+    // has the tool_use but the tool_result row hasn't landed yet
+    // (inverse of the race above).
     const events = [
       evText('before'),
       evToolUse('tu_1'),
+      evToolResult('tu_1'),
       evText('after'),
     ];
     const out = subtractDurableStreamingEvents(events, {
       toolUseIds: new Set(['tu_1']),
-      toolResultIds: new Set(),
+      toolResultIds: new Set(['tu_1']),
     });
-    expect(out).toEqual([evText('before'), evText('after')]);
+    // cut lands on tool_use tu_1; the prefix (text before, tool_use,
+    // tool_result) is dropped; the tail (text after) is kept.
+    expect(out).toEqual([evText('after')]);
   });
 
   it('keeps everything when only an earlier non-matching result exists', () => {

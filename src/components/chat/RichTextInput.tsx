@@ -1,21 +1,47 @@
 // RichTextInput.tsx - Plan 220 Phase 4.
 //
-// ContentEditable input that handles slash-command highlighting. Inline
-// chip rendering was removed in Plan 220 — chips are now lifted to
-// <AttachmentBar> above the editor and don't live inside the text
-// stream. The DOM-mutation machinery that used to reconcile chip tokens
-// is gone.
+// ContentEditable input that handles slash-command highlighting and atomic
+// inline mention chips. Attachment chips were lifted to <AttachmentBar> above
+// the editor in Plan 220, but two kinds of inline token still live in the text
+// stream:
 //
-// Skill slash commands (`/docx`, `/commit`) are rendered as a blue bold
-// inline chip with a leading cube icon. Clicking the chip opens the
-// skill's SKILL.md in the side-panel preview. The chip is only rendered
-// when the input value is exactly `/<skill-name>` (with optional trailing
-// whitespace) so it doesn't interfere with typing arguments.
+//   - Skill slash commands (`/docx`, `/commit`) render as a blue bold inline
+//     chip with a leading cube icon, but only when the input value is exactly
+//     `/<skill-name>` (with optional trailing whitespace).
+//   - Plugin @-mentions (`@wechat-pay`) render as an icon + name chip wherever
+//     they appear. The chip shows the plugin display name while the value
+//     carries the bare `@<pluginId>` token; see rich-text-canonical.ts.
+//
+// Both chips are `contentEditable=false` atomic nodes: the caret cannot land
+// inside them, and Backspace/Delete removes the whole chip in one keystroke.
 
 'use client';
 
-import React, { useRef, useEffect, forwardRef, useCallback } from 'react';
-import { parseSlashCommand, parseSkillToken } from '@/lib/message-input-logic';
+import React, { useRef, useEffect, useCallback } from 'react';
+import { forwardRef } from 'react';
+import {
+  parseSlashCommand,
+  parseSkillToken,
+  findPluginMentionSpans,
+  type PluginMentionTarget,
+} from '@/lib/message-input-logic';
+import {
+  PLUGIN_MENTION_ATTR,
+  MENTION_TOKEN_ATTR,
+  SKILL_CHIP_ATTR,
+  chipCanonicalToken,
+  getCanonicalCaretOffset,
+  readCanonicalText,
+  setCanonicalCaret,
+} from '@/lib/rich-text-canonical';
+// Chip look (styles + glyph) lives in one module so the composer chip and the
+// sent-bubble chip cannot drift apart.
+import {
+  MENTION_CHIP_STYLE,
+  MENTION_ICON_STYLE,
+  MENTION_LABEL_STYLE,
+  PLUG_GLYPH_PATHS,
+} from './PluginMentionChip';
 
 interface RichTextInputProps {
   value: string;
@@ -24,12 +50,34 @@ interface RichTextInputProps {
   onPaste: (e: React.ClipboardEvent<HTMLDivElement>) => void;
   placeholder?: string;
   disabled?: boolean;
+  /** Installed plugins that a bare `@token` in the text resolves to. */
+  mentionTargets?: readonly PluginMentionTarget[];
 }
 
 function dispatchOpenSkillPreview(skillName: string): void {
   window.dispatchEvent(new CustomEvent('duya:open-skill-preview', {
     detail: { skillName },
   }));
+}
+
+/** Generic plug glyph, used when a plugin declares no icon (or it fails). */
+function createPlugGlyph(): SVGSVGElement {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', '13');
+  svg.setAttribute('height', '13');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.75');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.style.flexShrink = '0';
+  for (const d of PLUG_GLYPH_PATHS) {
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', d);
+    svg.appendChild(path);
+  }
+  return svg;
 }
 
 function createSkillChip(skillName: string): HTMLSpanElement {
@@ -42,7 +90,7 @@ function createSkillChip(skillName: string): HTMLSpanElement {
   // Treat the selected skill as one inline control rather than editable text.
   // Backspace/Delete handling below removes this entire node at once.
   chip.contentEditable = 'false';
-  chip.dataset.skillChip = skillName;
+  chip.dataset[SKILL_CHIP_ATTR] = skillName;
   chip.title = `Open ${skillName} skill source`;
 
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -68,7 +116,76 @@ function createSkillChip(skillName: string): HTMLSpanElement {
   return chip;
 }
 
-function getAdjacentSkillChip(
+/**
+ * Atomic plugin mention chip: brand icon + display name (blue, code font).
+ * The canonical `@<pluginId>` token is stashed on the node so the composer
+ * value round-trips exactly; the visible label is the friendly plugin name.
+ */
+function createMentionChip(target: PluginMentionTarget, token: string): HTMLSpanElement {
+  const chip = document.createElement('span');
+  chip.contentEditable = 'false';
+  chip.dataset[PLUGIN_MENTION_ATTR] = target.pluginId;
+  chip.dataset[MENTION_TOKEN_ATTR] = token;
+  chip.title = target.name;
+  Object.assign(chip.style, MENTION_CHIP_STYLE);
+  // Composer-only: a non-selectable chip keeps the caret from being parked
+  // inside it. In a sent bubble the name stays selectable/copyable.
+  chip.style.userSelect = 'none';
+
+  if (target.iconUrl) {
+    const img = document.createElement('img');
+    img.src = target.iconUrl;
+    img.alt = '';
+    Object.assign(img.style, MENTION_ICON_STYLE);
+    img.addEventListener('error', () => img.replaceWith(createPlugGlyph()));
+    chip.appendChild(img);
+  } else {
+    chip.appendChild(createPlugGlyph());
+  }
+
+  const label = document.createElement('span');
+  label.textContent = target.name;
+  Object.assign(label.style, MENTION_LABEL_STYLE);
+  chip.appendChild(label);
+
+  // Keep the caret out of the chip: swallowing mousedown leaves the current
+  // selection untouched instead of dropping a caret inside the atomic token.
+  chip.addEventListener('mousedown', (e) => e.preventDefault());
+  return chip;
+}
+
+/**
+ * Append `text`, replacing each resolvable `@plugin` token with an atomic
+ * mention chip. Unresolved `@tokens` stay as plain text.
+ */
+function appendTextWithMentions(
+  el: HTMLElement,
+  text: string,
+  targets: readonly PluginMentionTarget[],
+): void {
+  const spans = findPluginMentionSpans(text, targets);
+  if (spans.length === 0) {
+    if (text) el.appendChild(document.createTextNode(text));
+    return;
+  }
+  const byId = new Map(targets.map((t) => [t.pluginId, t]));
+  let cursor = 0;
+  for (const span of spans) {
+    const target = byId.get(span.pluginId);
+    if (!target) continue;
+    if (span.start > cursor) {
+      el.appendChild(document.createTextNode(text.slice(cursor, span.start)));
+    }
+    el.appendChild(createMentionChip(target, span.token));
+    cursor = span.end;
+  }
+  if (cursor < text.length) {
+    el.appendChild(document.createTextNode(text.slice(cursor)));
+  }
+}
+
+/** Nearest chip (skill token or plugin mention) touching a collapsed caret. */
+function getAdjacentChip(
   editor: HTMLDivElement,
   direction: 'backward' | 'forward',
 ): HTMLElement | null {
@@ -92,16 +209,9 @@ function getAdjacentSkillChip(
     }
   }
 
-  return sibling instanceof HTMLElement && sibling.dataset.skillChip
+  return sibling instanceof HTMLElement && chipCanonicalToken(sibling) !== null
     ? sibling
     : null;
-}
-
-// Extract user-typed text from the editable element.
-function extractUserText(el: HTMLElement): string {
-  return Array.from(el.childNodes)
-    .map((n) => (n.nodeType === Node.TEXT_NODE ? n.textContent : (n as HTMLElement).textContent ?? ''))
-    .join('');
 }
 
 export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
@@ -112,10 +222,16 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
     onPaste,
     placeholder,
     disabled,
+    mentionTargets,
   }, ref) => {
     const innerRef = useRef<HTMLDivElement>(null);
     const isComposing = useRef(false);
-    const lastValue = useRef(value);
+    // null forces the first build even when the initial value is non-empty
+    // (restored draft), so any mention token is chipped on mount.
+    const lastValue = useRef<string | null>(null);
+    // Read through a ref so buildContent stays stable across target refreshes.
+    const targetsRef = useRef<readonly PluginMentionTarget[]>(mentionTargets ?? []);
+    targetsRef.current = mentionTargets ?? [];
 
     // Sync forwarded ref
     useEffect(() => {
@@ -129,7 +245,6 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
     // Build content with optional slash-command highlight span or skill chip.
     const buildContent = useCallback((el: HTMLDivElement, text: string) => {
       const skillToken = parseSkillToken(text);
-      const slashParsed = parseSlashCommand(text);
       el.innerHTML = '';
 
       if (skillToken) {
@@ -139,30 +254,34 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
         if (trailing) {
           el.appendChild(document.createTextNode(trailing));
         }
-      } else if (slashParsed) {
-        const { slashCommand, remainingText } = slashParsed;
-        const slashSpan = document.createElement('span');
-        slashSpan.dataset.slashCommand = 'true';
-        slashSpan.textContent = slashCommand;
-        slashSpan.style.color = 'var(--accent)';
-        el.appendChild(slashSpan);
-        if (remainingText) {
-          const spaceText = document.createTextNode(' ');
-          el.appendChild(spaceText);
-          const restText = document.createTextNode(remainingText);
-          el.appendChild(restText);
+      } else {
+        const slashParsed = parseSlashCommand(text);
+        if (slashParsed) {
+          const { slashCommand, remainingText } = slashParsed;
+          const slashSpan = document.createElement('span');
+          slashSpan.dataset.slashCommand = 'true';
+          slashSpan.textContent = slashCommand;
+          slashSpan.style.color = 'var(--accent)';
+          el.appendChild(slashSpan);
+          if (remainingText) {
+            el.appendChild(document.createTextNode(' '));
+            appendTextWithMentions(el, remainingText, targetsRef.current);
+          }
+        } else {
+          appendTextWithMentions(el, text, targetsRef.current);
         }
-      } else if (text) {
-        el.appendChild(document.createTextNode(text));
       }
 
-      // Keep the caret at the end after external rebuilds.
-      const range = document.createRange();
-      range.selectNodeContents(el);
-      range.collapse(false);
-      const selection = window.getSelection();
-      selection?.removeAllRanges();
-      selection?.addRange(range);
+      // Keep the caret at the end after external rebuilds, but never steal a
+      // selection while the editor is unfocused (e.g. a background refresh).
+      if (document.activeElement === el) {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(false);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+      }
     }, []);
 
     // Update content when value changes externally.
@@ -175,10 +294,24 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
       }
     }, [value, buildContent]);
 
+    // Re-render once the plugin list arrives, so mentions already typed (or
+    // waiting on an async refresh) upgrade to chips without losing the caret.
+    useEffect(() => {
+      const el = innerRef.current;
+      if (!el) return;
+      const text = lastValue.current;
+      if (!text || !text.includes('@')) return;
+      if (findPluginMentionSpans(text, targetsRef.current).length === 0) return;
+      const caret = getCanonicalCaretOffset(el);
+      buildContent(el, text);
+      if (caret !== null) setCanonicalCaret(el, caret);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [mentionTargets]);
+
     const handleInput = useCallback(() => {
       const el = innerRef.current;
       if (!el || isComposing.current) return;
-      const text = extractUserText(el);
+      const text = readCanonicalText(el);
       lastValue.current = text;
       onChange(text);
       // Re-highlight on subsequent typing when slash command active.
@@ -187,27 +320,45 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
       }
     }, [buildContent, onChange]);
 
-    const removeAdjacentSkillChip = useCallback((direction: 'backward' | 'forward'): boolean => {
+    const removeAdjacentChip = useCallback((direction: 'backward' | 'forward'): boolean => {
       const el = innerRef.current;
-      if (!el || !getAdjacentSkillChip(el, direction)) return false;
+      if (!el) return false;
+      const chip = getAdjacentChip(el, direction);
+      if (!chip) return false;
 
-      lastValue.current = '';
-      onChange('');
-      buildContent(el, '');
+      const parent = chip.parentNode;
+      const index = parent
+        ? Array.prototype.indexOf.call(parent.childNodes, chip)
+        : 0;
+      chip.remove();
+
+      const text = readCanonicalText(el);
+      lastValue.current = text;
+      onChange(text);
+
+      // Leave the caret where the chip used to be.
+      if (parent) {
+        const range = document.createRange();
+        range.setStart(parent, Math.min(index, parent.childNodes.length));
+        range.collapse(true);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+      }
       return true;
-    }, [buildContent, onChange]);
+    }, [onChange]);
 
     const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
       if (
         !disabled
-        && ((event.key === 'Backspace' && removeAdjacentSkillChip('backward'))
-          || (event.key === 'Delete' && removeAdjacentSkillChip('forward')))
+        && ((event.key === 'Backspace' && removeAdjacentChip('backward'))
+          || (event.key === 'Delete' && removeAdjacentChip('forward')))
       ) {
         event.preventDefault();
         return;
       }
       onKeyDown(event);
-    }, [disabled, onKeyDown, removeAdjacentSkillChip]);
+    }, [disabled, onKeyDown, removeAdjacentChip]);
 
     const handleBeforeInput = useCallback((event: React.FormEvent<HTMLDivElement>) => {
       const inputType = (event.nativeEvent as InputEvent).inputType;
@@ -216,10 +367,10 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
         : inputType === 'deleteContentForward'
           ? 'forward'
           : null;
-      if (direction && !disabled && removeAdjacentSkillChip(direction)) {
+      if (direction && !disabled && removeAdjacentChip(direction)) {
         event.preventDefault();
       }
-    }, [disabled, removeAdjacentSkillChip]);
+    }, [disabled, removeAdjacentChip]);
 
     const handleCompositionStart = useCallback(() => {
       isComposing.current = true;
@@ -229,7 +380,7 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
       isComposing.current = false;
       const el = innerRef.current;
       if (!el) return;
-      const text = extractUserText(el);
+      const text = readCanonicalText(el);
       lastValue.current = text;
       onChange(text);
     }, [onChange]);

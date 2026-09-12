@@ -331,6 +331,66 @@ export function htmlToPlainText(html: string): string {
 
 const SKILL_TOKEN_RE = /^\/(\S+)$/;
 
+/** Resolvable @-mention target for an installed plugin (composer chip source). */
+export interface PluginMentionTarget {
+  pluginId: string;
+  name: string;
+  /** Resolved `duya-file://` icon URL, when the plugin declares one. */
+  iconUrl?: string;
+}
+
+/** A resolved `@token` occurrence inside the composer text. */
+export interface PluginMentionSpan {
+  /** Inclusive start index of the token in the source text. */
+  start: number;
+  /** Exclusive end index of the token. */
+  end: number;
+  /** The literal token, including the leading `@`. */
+  token: string;
+  /** Plugin id the token resolved to. */
+  pluginId: string;
+}
+
+// A boundary char (or start of input) is consumed by the first group so it is
+// not part of the token; the token itself allows dots so marketplace ids like
+// `wechat.pay` resolve. Mirrors the regex in plugin-mentions.ts.
+const PLUGIN_MENTION_TOKEN_RE = /(^|[^A-Za-z0-9_-])@([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)/g;
+
+/**
+ * Find `@token` occurrences that resolve to an installed plugin. Resolution
+ * mirrors `rewritePluginMentionTokens` (plugin-mentions.ts): a token matches
+ * the plugin id, its display name, or the slugified display name. Tokens that
+ * resolve to nothing are skipped, so prose like "email me @home" stays prose.
+ */
+export function findPluginMentionSpans(
+  text: string,
+  targets: readonly PluginMentionTarget[],
+): PluginMentionSpan[] {
+  if (!text || !text.includes('@') || targets.length === 0) return [];
+
+  const byKey = new Map<string, string>();
+  for (const target of targets) {
+    if (!target.pluginId) continue;
+    byKey.set(target.pluginId.toLowerCase(), target.pluginId);
+    const name = target.name?.trim();
+    if (!name) continue;
+    byKey.set(name.toLowerCase(), target.pluginId);
+    const slug = name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/-+/g, '-');
+    if (slug && slug !== name.toLowerCase()) byKey.set(slug, target.pluginId);
+  }
+
+  const spans: PluginMentionSpan[] = [];
+  for (const match of text.matchAll(PLUGIN_MENTION_TOKEN_RE)) {
+    const boundary = match[1] ?? '';
+    const raw = match[2];
+    if (!raw) continue;
+    const pluginId = byKey.get(raw.toLowerCase());
+    if (!pluginId) continue;
+    const start = (match.index ?? 0) + boundary.length;
+    spans.push({ start, end: start + raw.length + 1, token: text.slice(start, start + raw.length + 1), pluginId });
+  }
+  return spans;
+}
 
 
 /**

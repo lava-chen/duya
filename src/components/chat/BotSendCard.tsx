@@ -22,7 +22,7 @@
 import React, { useState } from 'react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { rewriteMediaSrc } from './markdownComponents';
-import { ToolImagePreviewModal } from './tools/ToolImagePreviewModal';
+import { ImagePreview } from './preview/ImagePreview';
 import type { Message, SendMessageCardMeta } from '@/types/message';
 
 interface BotSendCardProps {
@@ -172,13 +172,13 @@ export function BotSendImageView({
           loading="lazy"
         />
       </button>
-      <ToolImagePreviewModal
+      <ImagePreview
         open={open}
         onClose={() => setOpen(false)}
+        variant="lightbox"
         src={resolvedSrc}
+        alt={altText}
         title={altText || 'Image preview'}
-        body=""
-        hideTextPane
       />
     </>
   );

@@ -53,6 +53,10 @@ export interface Message {
   name: string | null
   toolCallId: string | null
   tokenUsage: string | null
+  /** Token-accounting: model that produced this message (per-message). */
+  model?: string | null
+  /** Token-accounting: provider that produced this message (per-message). */
+  providerId?: string | null
   msgType: string
   thinking: string | null
   toolName: string | null
@@ -198,6 +202,10 @@ export interface DbMessage {
   name: string | null
   tool_call_id: string | null
   token_usage: string | null
+  /** Token-accounting: model that produced this message (per-message). */
+  model?: string | null
+  /** Token-accounting: provider that produced this message (per-message). */
+  provider_id?: string | null
   msg_type: string
   thinking: string | null
   tool_name: string | null
@@ -375,6 +383,8 @@ export function dbMessageToMessage(db: DbMessage): Message {
     name: db.name,
     toolCallId: db.tool_call_id,
     tokenUsage: db.token_usage,
+    model: db.model ?? null,
+    providerId: db.provider_id ?? null,
     msgType: db.msg_type || 'text',
     thinking: db.thinking,
     toolName: db.tool_name,

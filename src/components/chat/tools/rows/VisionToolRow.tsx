@@ -20,7 +20,7 @@ import { Button } from '@/components/ui/Button';
 import { ActionRowChrome } from '../chrome/ActionRowChrome';
 import { ToolStatusBadge } from '../statusBadge';
 import { getStatus } from '../registry';
-import { ToolImagePreviewModal } from '../ToolImagePreviewModal';
+import { ImagePreview } from '../../preview/ImagePreview';
 import type { ToolAction } from '../types';
 
 interface VisionToolRowProps {
@@ -138,18 +138,32 @@ export function VisionToolRow({ tool }: VisionToolRowProps) {
         </div>
       ) : null}
 
-      <ToolImagePreviewModal
+      <ImagePreview
         open={previewOpen}
         onClose={() => setPreviewOpen(false)}
+        variant="panel"
         src={metadata.imageDataUrl ?? ''}
+        alt={parsed?.imageLabel || 'Analyzed image'}
         title={parsed?.imageLabel || 'Analyzed image'}
         subtitle={
           metadata.mimeType
             ? `${metadata.mimeType}${typeof metadata.imageSizeBytes === 'number' ? ` · ${(metadata.imageSizeBytes / 1024).toFixed(1)} KB` : ''}`
             : undefined
         }
-        question={parsed?.question}
-        body={parsed?.analysis || '(no analysis text returned)'}
+        body={
+          <>
+            {parsed?.question && (
+              <div className="image-preview-panel-question-callout">
+                <div className="image-preview-panel-section-label">Question</div>
+                <div className="image-preview-panel-question">{parsed.question}</div>
+              </div>
+            )}
+            <div className="image-preview-panel-section-label">Answer</div>
+            <div className="image-preview-panel-answer">
+              {parsed?.analysis || '(no analysis text returned)'}
+            </div>
+          </>
+        }
       />
     </div>
   );
