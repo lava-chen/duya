@@ -375,6 +375,24 @@ async function getProviderConfigForModel(
 
 const ACTIVE_PHASES: StreamPhase[] = ['starting', 'streaming', 'awaiting_permission', 'persisting'];
 
+/**
+ * Renderer memory policy for retained chat-stream state. The transcript is
+ * DB-backed, so once a turn reaches a terminal phase the renderer only needs
+ * a small summary (phase / error / finalMessageContent) — not the turn's
+ * full event timeline. Mutable so tests can shrink the values; production
+ * numbers live here.
+ */
+export const streamMemoryPolicy = {
+  /** Grace period after a terminal phase before the last turn's streaming
+   *  payload (events, tool uses, accumulated text) is freed. The delay keeps
+   *  the terminal handoff window (StreamingMessage → DB rows) intact. */
+  terminalSlimDelayMs: 30_000,
+  /** Cap on SessionStates retained in the sessions map. Post-slim states are
+   *  small, but the map previously grew without bound for the lifetime of
+   *  the renderer. Eviction is LRU and only touches non-active sessions. */
+  maxRetainedSessions: 40,
+};
+
 /** Stream error with optional provider `code` (e.g. `rate_limit_error`,
  *  `usage_limit_exceeded`). Surfaced through `useStreamingError` so the UI
  *  can render a tailored banner instead of the generic agent-error fallback. */
@@ -616,6 +634,8 @@ interface SessionState {
   statusText: string | undefined;
   startedAt: number;
   completedAt: number | null;
+  /** LRU stamp for sessions-map eviction (streamMemoryPolicy). */
+  lastActiveAt: number;
   error: string | null;
   /** Provider error code (e.g. `rate_limit_error`, `usage_limit_exceeded`).
    *  Set alongside `error` so the UI can render a tailored banner. */
@@ -759,6 +779,7 @@ function createInitialState(sessionId: string): Omit<SessionState, 'listeners' |
     researchStage: '',
     startedAt: Date.now(),
     completedAt: null,
+    lastActiveAt: Date.now(),
     error: null,
     errorCode: null,
     finalMessageContent: null,
@@ -1034,7 +1055,9 @@ function formatResearchAuxEventTitle(type: string, data: unknown): string {
   return type;
 }
 
-class StreamSessionManager {
+// Exported for tests that need a fresh instance isolated from the
+// globalThis singleton (memory-retention / eviction specs).
+export class StreamSessionManager {
   private sessions: Map<string, SessionState> = new Map();
   private researchSessions: Map<string, ResearchSessionState> = new Map();
   private pendingMessages: Map<string, StartStreamParams[]> = new Map();
@@ -1043,6 +1066,8 @@ class StreamSessionManager {
   private drainingQueuedSessions = new Set<string>();
   private textEmitInterval = 64; // Plan 491 P0.2: 15fps throttle (~64ms) // Increased from 100ms to reduce UI flickering
   private idleTimeoutMs = STREAM_IDLE_TIMEOUT_MS;
+  /** Deferred slim timers keyed by sessionId (streamMemoryPolicy). */
+  private terminalSlimTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private debugIpc = typeof process !== 'undefined' && process.env?.DUYA_DEBUG_IPC === 'true';
 
   private debugLog(...args: unknown[]): void {
@@ -1097,6 +1122,7 @@ class StreamSessionManager {
         sendRetryMessage: null,
       };
       this.sessions.set(sessionId, state);
+      this.evictExcessSessions();
     }
     return buildSnapshot(state);
   }
@@ -1476,6 +1502,7 @@ class StreamSessionManager {
     // as the run progresses (handleTextEvent clears statusText on first text).
     state.statusText = '@i18n:streaming.preparing';
     state.startedAt = Date.now();
+    state.lastActiveAt = Date.now();
     state.completedAt = null;
     state.error = null;
     state.errorCode = null;
@@ -2752,6 +2779,9 @@ class StreamSessionManager {
     // made the ring flicker to 0% between turns. Rewind / compaction /
     // errors invalidate explicitly at their own completion points instead.
     const reason = data?.reason;
+    // The turn is terminal for every branch below — schedule the deferred
+    // slim of this turn's streaming payload (see slimTerminalSessionState).
+    this.scheduleTerminalSlim(sessionId, streamId);
 
     // Plan 462: terminal — drop any pending retry notice from the status line.
     this.notifyRetryListeners(sessionId, null);
@@ -2826,6 +2856,7 @@ class StreamSessionManager {
     const s = this.sessions.get(sessionId);
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;
     this.flushPendingText(sessionId, streamId);
+    this.scheduleTerminalSlim(sessionId, streamId);
     const normalizedError = normalizeStreamError(data);
     s.phase = 'error';
     s.statusText = undefined;
@@ -2918,6 +2949,78 @@ class StreamSessionManager {
     }
   }
 
+  /**
+   * Free the last turn's streaming payload once the turn is over. The
+   * transcript is DB-backed, so the renderer only keeps a small terminal
+   * summary (phase / error / finalMessageContent — the bot phase hook reads
+   * the latter). Without this, every session that ever streamed held its
+   * full event timeline (tool inputs included) for the renderer's lifetime.
+   */
+  private slimTerminalSessionState(sessionId: string): void {
+    const s = this.sessions.get(sessionId);
+    if (!s || isActivePhase(s.phase)) return;
+    s.streamingText = '';
+    s.streamingThinking = '';
+    s.streamingToolOutput = '';
+    s.streamingEvents = [];
+    s.toolUses = [];
+    s.toolResults = [];
+    s.agentProgressEvents = [];
+    s.partialToolInputRaw.clear();
+  }
+
+  /**
+   * Schedule the terminal slim for a session's current stream. Guarded by
+   * streamId so a follow-up turn (which reuses the same SessionState) is
+   * never slimmed out from under its live events.
+   */
+  private scheduleTerminalSlim(sessionId: string, streamId: string | null): void {
+    const prev = this.terminalSlimTimers.get(sessionId);
+    if (prev) clearTimeout(prev);
+    const timer = setTimeout(() => {
+      this.terminalSlimTimers.delete(sessionId);
+      const s = this.sessions.get(sessionId);
+      if (!s) return;
+      if (streamId && s.streamId !== streamId) return;
+      if (isActivePhase(s.phase)) return;
+      this.slimTerminalSessionState(sessionId);
+      this.evictExcessSessions();
+    }, streamMemoryPolicy.terminalSlimDelayMs);
+    this.terminalSlimTimers.set(sessionId, timer);
+  }
+
+  private isSessionEvictable(sessionId: string, state: SessionState): boolean {
+    if (isActivePhase(state.phase)) return false;
+    if ((this.pendingMessages.get(sessionId)?.length ?? 0) > 0) return false;
+    if (this.pendingBackgroundResumes.has(sessionId)) return false;
+    return true;
+  }
+
+  /**
+   * LRU-cap on the sessions map. Post-slim states are small but previously
+   * accumulated without bound; only non-active sessions (no live turn, no
+   * queued messages, no pending background resume) are evicted, and any SSE
+   * subscription left over from the finished stream is unsubscribed first.
+   */
+  private evictExcessSessions(): void {
+    if (this.sessions.size <= streamMemoryPolicy.maxRetainedSessions) return;
+    const evictable = [...this.sessions.entries()]
+      .filter(([id, s]) => this.isSessionEvictable(id, s))
+      .sort((a, b) => a[1].lastActiveAt - b[1].lastActiveAt);
+    let excess = this.sessions.size - streamMemoryPolicy.maxRetainedSessions;
+    for (const [id] of evictable) {
+      if (excess <= 0) break;
+      const timer = this.terminalSlimTimers.get(id);
+      if (timer) {
+        clearTimeout(timer);
+        this.terminalSlimTimers.delete(id);
+      }
+      this.cleanupMessagePort(id);
+      this.sessions.delete(id);
+      excess -= 1;
+    }
+  }
+
   async stopStream(sessionId: string, reason?: string): Promise<void> {
     const state = this.sessions.get(sessionId);
     if (!state) return;
@@ -2932,6 +3035,7 @@ class StreamSessionManager {
 
     // Clean up MessagePort listeners to prevent stale listeners
     this.cleanupMessagePort(sessionId);
+    this.scheduleTerminalSlim(sessionId, state.currentStreamId);
 
     this.clearIdleTimeout(sessionId);
     this.flushPendingText(sessionId, state.currentStreamId || '');
@@ -3257,6 +3361,7 @@ class StreamSessionManager {
     };
 
     this.sessions.set(sessionId, state);
+    this.evictExcessSessions();
     return state;
   }
 
@@ -4416,6 +4521,17 @@ export const subscribeToRetry = (sessionId: string, listener: (info: RetryNotice
   streamSessionManager.subscribeToRetry(sessionId, listener);
 export const subscribeToStreamingEvents = (sessionId: string, listener: (events: StreamingEvent[]) => void) =>
   streamSessionManager.subscribeToStreamingEvents(sessionId, listener);
+
+/**
+ * True while the session has a live turn (starting/streaming/awaiting_
+ * permission/persisting). Consumers that free session-scoped renderer state
+ * (e.g. conversation-store evicting off-screen transcripts) must skip busy
+ * sessions — their in-memory rows feed the durable-subtraction path.
+ */
+export const isSessionBusy = (sessionId: string): boolean => {
+  const state = streamSessionManager.getSnapshot(sessionId);
+  return state ? isActivePhase(state.phase) : false;
+};
 
 // Research session helpers — used by the UI to rebuild research mode state
 // from persisted research_events after an app restart.

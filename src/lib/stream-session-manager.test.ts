@@ -818,4 +818,167 @@ describe('StreamSessionManager State Machine', () => {
       vi.restoreAllMocks();
     });
   });
+
+
+  describe('memory retention', () => {
+    let originalDelay: number;
+    let originalCap: number;
+
+    /**
+     * Fresh manager instance isolated from the globalThis singleton — the
+     * singleton accumulates sessions from every earlier test in this file,
+     * which would make LRU-eviction assertions non-deterministic.
+     */
+    async function createFreshManager() {
+      const mod = await import('./stream-session-manager');
+      return { mod, manager: new mod.StreamSessionManager() };
+    }
+
+    /**
+     * Start a stream whose SSE body never advances, then drive content
+     * events through the client's emit() — the same path the SSE parser
+     * feeds. A mock SSE body that flushes immediately would race the
+     * manager's onEvent registration and drop every content event.
+     */
+    async function startHangingStream(
+      manager: import('./stream-session-manager').StreamSessionManager,
+      sessionId: string,
+    ) {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        body: {
+          getReader: () => ({
+            read: () => new Promise<ReadableStreamReadResult<Uint8Array>>(() => {}),
+            releaseLock: () => {},
+          }),
+        },
+      } as unknown as Response));
+
+      await manager.startStream({ sessionId, content: 'Run something' });
+      // Flush microtasks so the manager's onEvent handler is registered.
+      // (advanceTimersByTimeAsync works under both real and fake timers —
+      // the memory-retention specs run under fake timers.)
+      await vi.advanceTimersByTimeAsync(0);
+
+      const { getAgentServerClient } = await import('./agent-http-client');
+      const client = getAgentServerClient();
+      const emit = (event: { type: string; data?: Record<string, unknown> }) => {
+        client['emit'](sessionId, {
+          type: event.type,
+          sessionId,
+          data: event.data,
+          id: event.data?.id as string | undefined,
+          name: event.data?.name as string | undefined,
+          input: event.data?.input,
+          result: event.data?.result,
+          error: event.data?.error as string | undefined,
+          content: event.data?.content as string | undefined,
+          reason: event.data?.reason as string | undefined,
+        });
+      };
+      return { emit };
+    }
+
+    beforeEach(async () => {
+      const { streamMemoryPolicy } = await import('./stream-session-manager');
+      originalDelay = streamMemoryPolicy.terminalSlimDelayMs;
+      originalCap = streamMemoryPolicy.maxRetainedSessions;
+    });
+
+    afterEach(async () => {
+      const { streamMemoryPolicy } = await import('./stream-session-manager');
+      streamMemoryPolicy.terminalSlimDelayMs = originalDelay;
+      streamMemoryPolicy.maxRetainedSessions = originalCap;
+    });
+
+    it('frees the last turn streaming payload after the terminal grace period but keeps finalMessageContent', async () => {
+      const { streamMemoryPolicy } = await import('./stream-session-manager');
+      streamMemoryPolicy.terminalSlimDelayMs = 250;
+      const { manager } = await createFreshManager();
+      vi.useFakeTimers();
+      const { emit } = await startHangingStream(manager, 'slim-test');
+
+      emit({ type: 'text', data: { content: 'final answer' } });
+      emit({ type: 'tool_use', data: { id: 'tool-1', name: 'bash', input: { command: 'cargo test' } } });
+      emit({ type: 'done' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const live = manager.getSnapshot('slim-test');
+      expect(live!.phase).toBe('completed');
+      // The finished turn is still in memory during the handoff window.
+      expect(live!.toolUses).toHaveLength(1);
+      expect(live!.streamingContent).toBe('final answer');
+
+      // Well past the 250ms grace period.
+      await vi.advanceTimersByTimeAsync(300);
+
+      const slimmed = manager.getSnapshot('slim-test');
+      expect(slimmed).not.toBeNull();
+      // Streaming payload freed — the transcript is DB-backed.
+      expect(slimmed!.toolUses).toHaveLength(0);
+      expect(slimmed!.streamingContent).toBe('');
+      // Terminal summary kept: the bot phase hook reads finalMessageContent.
+      expect(slimmed!.finalMessageContent).toBe('final answer');
+      expect(slimmed!.phase).toBe('completed');
+
+      vi.useRealTimers();
+    });
+
+    it('keeps the new turn payload when a stale slim timer from the previous turn fires', async () => {
+      const { streamMemoryPolicy } = await import('./stream-session-manager');
+      streamMemoryPolicy.terminalSlimDelayMs = 300;
+      const { manager } = await createFreshManager();
+      vi.useFakeTimers();
+
+      // Turn one completes and schedules its slim timer.
+      const first = await startHangingStream(manager, 'slim-followup');
+      first.emit({ type: 'text', data: { content: 'turn one' } });
+      first.emit({ type: 'done' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(manager.getSnapshot('slim-followup')!.streamingContent).toBe('turn one');
+
+      // Space the two turns apart in virtual time so the stale timer and
+      // turn two's own timer come due at different marks.
+      await vi.advanceTimersByTimeAsync(100);
+
+      // Turn two starts before the first turn's slim timer fires; it reuses
+      // the same SessionState with a new streamId.
+      const second = await startHangingStream(manager, 'slim-followup');
+      second.emit({ type: 'text', data: { content: 'turn two' } });
+      second.emit({ type: 'tool_use', data: { id: 'tool-2', name: 'bash', input: { command: 'ls' } } });
+      second.emit({ type: 'done' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Advance to virtual now+250: turn one's stale timer (due 300 after
+      // its done) has fired and must have been skipped, while turn two's
+      // own timer (due 300 after ITS done, 100 later) has not yet fired.
+      await vi.advanceTimersByTimeAsync(250);
+
+      const snapshot = manager.getSnapshot('slim-followup');
+      expect(snapshot!.phase).toBe('completed');
+      expect(snapshot!.streamingContent).toBe('turn two');
+      expect(snapshot!.toolUses).toHaveLength(1);
+
+      vi.useRealTimers();
+    });
+
+    it('evicts the least recently active terminal session when the retained cap is exceeded', async () => {
+      const { manager } = await createFreshManager();
+      const { streamMemoryPolicy } = await import('./stream-session-manager');
+      streamMemoryPolicy.maxRetainedSessions = 2;
+
+      manager.ensureSession('evict-old');
+      await new Promise((r) => setTimeout(r, 15));
+      manager.ensureSession('evict-mid');
+      await new Promise((r) => setTimeout(r, 15));
+      // Creating a third state pushes the map over the cap and evicts the
+      // oldest idle session.
+      manager.ensureSession('evict-new');
+
+      expect(manager.getSnapshot('evict-old')).toBeNull();
+      expect(manager.getSnapshot('evict-mid')).not.toBeNull();
+      expect(manager.getSnapshot('evict-new')).not.toBeNull();
+    });
+  });
 });
