@@ -34,13 +34,6 @@ const mocks = vi.hoisted(() => ({
     deleteLlmProvider: vi.fn(() => true),
     setDefaultLlmProvider: vi.fn(() => true),
   },
-  pairing: {
-    listAllPending: vi.fn(() => []),
-    listApproved: vi.fn(() => []),
-    approve: vi.fn(() => ({ approved: false })),
-    revoke: vi.fn(() => false),
-    isApproved: vi.fn(() => false),
-  },
   agents: {
     listConfigAgents: vi.fn(() => []),
     upsertConfigAgent: vi.fn(),
@@ -50,10 +43,6 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../services/providers/provider-store-electron', () => ({
   getProviderStore: () => mocks.providers,
-}));
-
-vi.mock('../../gateway/pairing', () => ({
-  getPairingStore: () => mocks.pairing,
 }));
 
 vi.mock('../../config/agents', () => ({

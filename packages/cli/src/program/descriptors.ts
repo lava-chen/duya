@@ -54,10 +54,6 @@ import { runCronCommand } from '../commands/cron.js';
 import { runMessageCommand } from '../commands/message.js';
 import { runGatewayCommand } from '../commands/gateway.js';
 import {
-  runConfigPairingApprove,
-  runConfigPairingCheck,
-  runConfigPairingList,
-  runConfigPairingRevoke,
   runConfigProviderAdd,
   runConfigProviderInfo,
   runConfigProviderList,
@@ -875,45 +871,6 @@ const subConfigStyleSet: CliSubcommand = {
   run: (ctx) => runConfigStyleSet(ctx),
 };
 
-const subConfigPairingList: CliSubcommand = {
-  description: 'List pending + approved pairing requests.',
-  options: [
-    { flags: '--include <scope>', description: 'Restrict to `pending` or `approved` (default: both)' },
-  ],
-  run: (ctx) => runConfigPairingList(ctx),
-};
-
-const subConfigPairingApprove: CliSubcommand = {
-  description: 'Approve a pending pairing code. Plan 102 write op; replaces `duya_config pairing_approve`.',
-  write: true,
-  options: [
-    { flags: '--platform <platform>', description: 'Platform name (telegram / qq / feishu / discord / whatsapp)' },
-    { flags: '--code <code>', description: '8-character pairing code' },
-    { flags: '--yes', description: 'Skip confirmation prompt' },
-  ],
-  run: (ctx) => runConfigPairingApprove(ctx),
-};
-
-const subConfigPairingRevoke: CliSubcommand = {
-  description: 'Revoke an approved pairing. Plan 102 write op; replaces `duya_config pairing_revoke`.',
-  write: true,
-  options: [
-    { flags: '--platform <platform>', description: 'Platform name' },
-    { flags: '--user <userId>', description: 'Platform user id' },
-    { flags: '--yes', description: 'Skip confirmation prompt' },
-  ],
-  run: (ctx) => runConfigPairingRevoke(ctx),
-};
-
-const subConfigPairingCheck: CliSubcommand = {
-  description: 'Check whether a (platform, user) pair is approved.',
-  options: [
-    { flags: '--platform <platform>', description: 'Platform name' },
-    { flags: '--user <userId>', description: 'Platform user id' },
-  ],
-  run: (ctx) => runConfigPairingCheck(ctx),
-};
-
 const subConfigKvSet: CliSubcommand = {
   description: 'Generic config KV set. Plan 200 P4 write op; merges --value into the top-level key.',
   write: true,
@@ -1326,7 +1283,7 @@ export const CLI_DESCRIPTORS = defineDescriptors([
   },
   {
     name: 'config',
-    description: 'Read and modify DUYA desktop configuration (providers / agent settings / vision / output style / pairing). Plan 102: replaces the legacy `duya_config` tool.',
+    description: 'Read and modify DUYA desktop configuration (providers / agent settings / vision / output style). Plan 102: replaces the legacy `duya_config` tool.',
     subcommands: {
       // Flat subcommand naming (matches `cron create`, `plugin enable`).
       // The third level of the conceptual tree (e.g. "provider add")
@@ -1345,10 +1302,6 @@ export const CLI_DESCRIPTORS = defineDescriptors([
       'vision-set': subConfigVisionSet,
       'style-list': subConfigStyleList,
       'style-set': subConfigStyleSet,
-      'pairing-list': subConfigPairingList,
-      'pairing-approve': subConfigPairingApprove,
-      'pairing-revoke': subConfigPairingRevoke,
-      'pairing-check': subConfigPairingCheck,
       // Phase 4.2 — generic KV.
       'kv-set': subConfigKvSet,
       'kv-get': subConfigKvGet,

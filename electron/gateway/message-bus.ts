@@ -18,7 +18,6 @@ import { createGatewaySessionRecord, updateGatewaySessionMeta } from './session-
 const GATEWAY_PERMISSION_PROFILE = 'auto';
 import { execSync } from 'child_process';
 import { testBridgeChannel } from '../services/network/bridge-tester';
-import { getPairingStore } from './pairing';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
 import { getDefaultGatewayWorkspace, prepareGatewayWorkspace } from './config';
 import { buildGatewayInboundChatRequest } from './inbound-request';
@@ -30,6 +29,9 @@ import { wakeForInbound } from '../wake/channels';
 import { botAgentIdFromSession } from '../automation/provider';
 import { persistInboundAttachment } from '../channels/attachment-store';
 import type { ChannelAddress, ChannelInboundAttachment, ChannelInboundEnvelope } from '../../packages/agent/src/channels/types';
+import { isUserAllowed, getChannelAllowlist, addChannelAllowlistEntry, removeChannelAllowlistEntry } from './channel-directory';
+import { generateHelpText } from '../../packages/gateway/src/commands/help';
+import { interruptCronSession } from '../automation/agent-run';
 
 const GATEWAY_SESSION_KEY = '__gateway_session_states__';
 
@@ -299,7 +301,6 @@ export function createOrResetGatewaySession(sessionId: string, channel: string):
     // | 'terminating' | 'error').
     if (existing.state === 'terminating' || existing.state === 'error') {
       getLogger().debug('Gateway session in abnormal state, sending reset', { sessionId, state: existing.state }, LogComponent.Gateway);
-      sendToGatewayProcess({ type: 'reset', sessionId });
     } else {
       // Session already active and healthy; just refresh metadata, don't reset.
       getLogger().debug('Gateway session already active, skip reset', { sessionId, state: existing.state }, LogComponent.Gateway);
@@ -329,8 +330,6 @@ export function resetGatewaySession(sessionId: string): void {
   }
   states.delete(sessionId);
 
-  sendToGatewayProcess({ type: 'reset', sessionId });
-
   try {
     const db = getDatabase();
     if (db) {
@@ -346,6 +345,188 @@ export function resetGatewaySession(sessionId: string): void {
   }
 
   getLogger().info('Gateway session reset', { sessionId }, LogComponent.Gateway);
+}
+
+/**
+ * Plan 520: resolve the gateway session for (platform, platformChatId) from
+ * the DB mapping, creating the deterministic session + mapping when missing
+ * (the old gateway:create_session path, now Main-side only — the gateway's
+ * user-mapper is gone).
+ */
+export function resolveOrCreateGatewaySession(
+  platform: string,
+  platformChatId: string,
+  platformUserId: string,
+): string {
+  const db = getDatabase();
+  if (db) {
+    const row = db.prepare(
+      'SELECT session_id FROM gateway_user_map WHERE platform = ? AND platform_chat_id = ?'
+    ).get(platform, platformChatId) as { session_id?: string } | undefined;
+    if (row?.session_id) return row.session_id;
+  }
+
+  const sessionId = `gw-${platform}-${platformChatId}`;
+  createOrResetGatewaySession(sessionId, platform);
+
+  // Resolve workspace from init config (reads bridge_workspace setting,
+  // falls back to ~/.duya/workspace).
+  const workingDirectory = prepareGatewayWorkspace(getOrBuildInitConfig());
+
+  if (db) {
+    try {
+      const now = Date.now();
+      const title = `${platform} ${new Date().toLocaleString()}`;
+      db.prepare(`
+        INSERT INTO threads (id, title, provider_type, model, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
+      `).run(sessionId, title, 'gateway', '', now, now);
+      createGatewaySessionRecord(sessionId, title, workingDirectory, platform);
+
+      db.prepare(`
+        INSERT INTO gateway_user_map (id, platform, platform_user_id, platform_chat_id, session_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(platform, platform_chat_id) DO UPDATE SET session_id = excluded.session_id, updated_at = excluded.updated_at
+      `).run(`${platform}:${platformChatId}`, platform, platformUserId, platformChatId, sessionId, now, now);
+    } catch (err) {
+      getLogger().error('Failed to save gateway session', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
+    }
+  }
+
+  return sessionId;
+}
+
+/**
+ * Plan 520: execute a gateway-detected slash command Main-side and answer
+ * through the same channel via requestChannelSend. The gateway only forwards
+ * commands present in the shared registry; anything without a Main-side
+ * implementation gets an honest "not enabled" reply.
+ */
+async function handleGatewayCommand(
+  command: string,
+  args: string[],
+  platform: string,
+  platformChatId: string,
+): Promise<void> {
+  const reply = (text: string): void => {
+    requestChannelSend(platform, platformChatId, text).catch((err) => {
+      getLogger().warn('gateway command reply failed', {
+        command,
+        error: err instanceof Error ? err.message : String(err),
+      }, LogComponent.Gateway);
+    });
+  };
+
+  try {
+    switch (command) {
+      case 'help':
+        reply(generateHelpText('gateway'));
+        return;
+
+      case 'new':
+      case 'reset':
+      case 'clear': {
+        const newSessionId = resetGatewaySessionForChat(platform, platformChatId);
+        reply(`✨ Session reset! Starting fresh.\n\nSession: \`${newSessionId}\``);
+        return;
+      }
+
+      case 'stop': {
+        const db = getDatabase();
+        const row = db?.prepare(
+          'SELECT session_id FROM gateway_user_map WHERE platform = ? AND platform_chat_id = ?'
+        ).get(platform, platformChatId) as { session_id?: string } | undefined;
+        const sessionId = row?.session_id;
+        if (sessionId) {
+          try {
+            interruptCronSession(sessionId);
+          } catch {
+            // Best effort: the session may not have an interruptible run.
+          }
+          reply(`⏹ Stopped the current run for session \`${sessionId}\`.`);
+        } else {
+          reply('⏹ No active session to stop.');
+        }
+        return;
+      }
+
+      case 'status': {
+        const db = getDatabase();
+        const row = db?.prepare(
+          'SELECT session_id FROM gateway_user_map WHERE platform = ? AND platform_chat_id = ?'
+        ).get(platform, platformChatId) as { session_id?: string } | undefined;
+        const lines = [
+          '*Session Status*',
+          '',
+          `Platform: ${platform}`,
+          `Chat ID: \`${platformChatId}\``,
+          `Session: \`${row?.session_id ?? '(no active session)'}\``,
+          `Running: ${isGatewayRunning() ? 'Yes' : 'No'}`,
+        ];
+        reply(lines.join('\n'));
+        return;
+      }
+
+      default:
+        reply(`🚧 \`/${command}\` 尚未在此构建中启用。`);
+    }
+  } catch (err) {
+    reply(`Command failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
+ * /new /reset /clear: reset the mapped session and create a fresh one,
+ * repointing the (platform, chatId) mapping (the old gateway:reset_session
+ * handler, now Main-side only).
+ */
+function resetGatewaySessionForChat(platform: string, platformChatId: string): string {
+  const db = getDatabase();
+
+  // 1. Find the old session id from the mapping table (source of truth).
+  let oldSessionId: string | undefined;
+  if (db) {
+    const row = db.prepare(
+      'SELECT session_id FROM gateway_user_map WHERE platform = ? AND platform_chat_id = ?'
+    ).get(platform, platformChatId) as { session_id?: string } | undefined;
+    oldSessionId = row?.session_id;
+  }
+
+  // 2. Reset the old session's in-memory state. Messages are intentionally
+  //    preserved so the old session remains viewable in the UI.
+  if (oldSessionId) {
+    resetGatewaySession(oldSessionId);
+  }
+
+  // 3. Fresh random id guarantees a clean slate (deterministic ids would
+  //    reuse the same DB rows and the agent would still see old context).
+  const sessionId = `gw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  createOrResetGatewaySession(sessionId, platform);
+
+  const workingDirectory = prepareGatewayWorkspace(getOrBuildInitConfig());
+
+  if (db) {
+    try {
+      const now = Date.now();
+      const title = `${platform} Reset ${new Date().toLocaleString()}`;
+      db.prepare(`
+        INSERT INTO threads (id, title, provider_type, model, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at
+      `).run(sessionId, title, 'gateway', '', now, now);
+      createGatewaySessionRecord(sessionId, title, workingDirectory, platform);
+      db.prepare(`
+        INSERT INTO gateway_user_map (id, platform, platform_user_id, platform_chat_id, session_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(platform, platform_chat_id) DO UPDATE SET session_id = excluded.session_id, updated_at = excluded.updated_at
+      `).run(`${platform}:${platformChatId}`, platform, '', platformChatId, sessionId, now, now);
+    } catch (err) {
+      getLogger().error('Failed to save gateway reset session', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
+    }
+  }
+
+  return sessionId;
 }
 
 function handleInboundMessage(msg: Record<string, unknown>): void {
@@ -538,32 +719,74 @@ export function handleGatewayMessage(
     }
 
     case 'gateway:inbound': {
-      // 488 Plan B: enqueue the inbound wake and return immediately.
-      // The dispatcher drain handles it asynchronously via reviveForInbound,
-      // which calls runWakePromptInExistingSession → POST to agent server →
-      // SSE stream → gateway:outbound forwarding (unchanged).
-      //
-      // The SSE forwarding that was previously inline here (HTTP POST + SSE
-      // handlers) is now handled by reviveForInbound. This avoids blocking the
-      // gateway:inbound handler while waiting for the SSE stream.
+      // Plan 520: the gateway no longer resolves sessions (user-mapper
+      // removed) and no longer gates senders. Main resolves/creates the
+      // session from (platform, platformChatId), enforces the channel
+      // allow-list, and replies `gateway:inbound:response` with the verdict
+      // (the gateway awaits it and surfaces the unauthorized reply).
+      // 488 Plan B behavior is unchanged otherwise: enqueue the inbound wake
+      // and return immediately; the dispatcher drain handles it
+      // asynchronously via reviveForInbound.
       const inboundMsg = msg as {
-        sessionId: string;
+        id?: string;
+        kind?: 'command' | 'message';
         prompt: string;
         platform: string;
-        platformMsgId: string;
+        platformUserId?: string;
+        platformMsgId?: string;
         platformChatId: string;
+        command?: string;
+        args?: string[];
         options?: Record<string, unknown>;
       };
 
-      const port = getAgentServerPort();
-      if (!port) {
-        getLogger().error('Agent Server not running, cannot enqueue gateway:inbound', undefined, { sessionId: inboundMsg.sessionId }, LogComponent.Gateway);
+      const platform = inboundMsg.platform;
+      const platformChatId = inboundMsg.platformChatId;
+      const replyAuthorized = (authorized: boolean): void => {
+        if (inboundMsg.id) {
+          sendToGatewayProcess({ type: 'gateway:inbound:response', id: inboundMsg.id, authorized });
+        }
+      };
+
+      // Channel allow-list (channel-directory, plan 520): an empty list for
+      // the platform means open — the legacy adapters did their own gating.
+      if (!isUserAllowed(platform, inboundMsg.platformUserId ?? '')) {
+        getLogger().info('gateway:inbound rejected by allow-list', {
+          platform,
+          platformChatId,
+        }, LogComponent.Gateway);
+        replyAuthorized(false);
         break;
       }
 
-      const sessionId = inboundMsg.sessionId;
-      const platform = inboundMsg.platform;
-      const platformChatId = inboundMsg.platformChatId;
+      // Command passthrough (plan 520): the gateway detected a known slash
+      // command; execute it Main-side and answer through the same channel.
+      if (inboundMsg.kind === 'command' && inboundMsg.command) {
+        replyAuthorized(true);
+        void handleGatewayCommand(inboundMsg.command, inboundMsg.args ?? [], platform, platformChatId);
+        break;
+      }
+
+      let sessionId: string;
+      try {
+        sessionId = resolveOrCreateGatewaySession(platform, platformChatId, inboundMsg.platformUserId ?? '');
+      } catch (err) {
+        getLogger().error(
+          'Failed to resolve gateway session for inbound message',
+          err instanceof Error ? err : new Error(String(err)),
+          { platform, platformChatId },
+          LogComponent.Gateway,
+        );
+        replyAuthorized(false);
+        break;
+      }
+
+      const port = getAgentServerPort();
+      if (!port) {
+        getLogger().error('Agent Server not running, cannot enqueue gateway:inbound', undefined, { sessionId }, LogComponent.Gateway);
+        replyAuthorized(true);
+        break;
+      }
 
       // Generate a meaningful title from the first inbound message (fire-and-forget).
       maybeUpdateGatewaySessionTitle(sessionId, inboundMsg.prompt, platform);
@@ -638,6 +861,10 @@ export function handleGatewayMessage(
         };
         wakeForInbound(sessionId, envelope);
 
+        // Busy broadcast (plan 520): the chat is now busy; forwardToGateway
+        // clears it when the terminal chat:done/chat:error is forwarded.
+        sendToGatewayProcess({ type: 'gateway:agent_busy', platform, platformChatId, busy: true });
+
         getLogger().debug('[gateway:inbound] enqueued via wakeForInbound', {
           sessionId,
           platform,
@@ -645,6 +872,8 @@ export function handleGatewayMessage(
           promptLength: text.length,
         }, LogComponent.Gateway);
       })();
+
+      replyAuthorized(true);
       break;
     }
 
@@ -749,171 +978,6 @@ export function handleGatewayMessage(
       break;
     }
 
-    case 'gateway:create_session': {
-      // Handle gateway:create_session from Gateway subprocess
-      const data = msg as {
-        id?: string;
-        platform: string;
-        platformUserId: string;
-        platformChatId: string;
-      };
-      console.log('[Main] gateway:create_session received, id:', data.id);
-
-      // Use platform + platformChatId as sessionId to ensure conversation history is preserved
-      const sessionId = `gw-${data.platform}-${data.platformChatId}`;
-      createOrResetGatewaySession(sessionId, data.platform);
-
-      // Resolve workspace from init config (reads bridge_workspace setting,
-      // falls back to ~/.duya/workspace).
-      const workingDirectory = prepareGatewayWorkspace(getOrBuildInitConfig());
-
-      // Save session to threads table and chat_sessions table
-      const db = getDatabase();
-      if (db) {
-        try {
-          const now = Date.now();
-          const title = `${data.platform} ${new Date().toLocaleString()}`;
-          db.prepare(`
-            INSERT INTO threads (id, title, provider_type, model, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
-          `).run(sessionId, title, 'gateway', '', now, now);
-          createGatewaySessionRecord(sessionId, title, workingDirectory, data.platform);
-
-          // Create user mapping atomically (saves one IPC round-trip from Gateway)
-          db.prepare(`
-            INSERT INTO gateway_user_map (id, platform, platform_user_id, platform_chat_id, session_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(platform, platform_chat_id) DO UPDATE SET session_id = excluded.session_id, updated_at = excluded.updated_at
-          `).run(`${data.platform}:${data.platformChatId}`, data.platform, data.platformUserId, data.platformChatId, sessionId, now, now);
-        } catch (err) {
-          getLogger().error('Failed to save gateway session', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
-        }
-      }
-
-      // Send response back to Gateway
-      console.log('[Main] Sending gateway:create_session:response, id:', data.id, 'sessionId:', sessionId);
-      sendToGatewayProcess({
-        type: 'gateway:create_session:response',
-        id: data.id,
-        sessionId,
-      });
-      break;
-    }
-
-    case 'gateway:reset_session': {
-      // Handle gateway:reset_session from Gateway subprocess
-      const data = msg as {
-        id?: string;
-        platform: string;
-        platformChatId: string;
-        platformUserId: string;
-        platformMsgId: string;
-      };
-      console.log('[Main] gateway:reset_session received, platform:', data.platform);
-
-      const db = getDatabase();
-
-      // 1. Find old session id from the user mapping table (source of
-      //    truth for platform+chat → session). The in-memory states map
-      //    may have been cleared or keyed differently, so DB lookup is
-      //    more reliable.
-      let oldSessionId: string | undefined;
-      if (db) {
-        const row = db.prepare(
-          'SELECT session_id FROM gateway_user_map WHERE platform = ? AND platform_chat_id = ?'
-        ).get(data.platform, data.platformChatId) as { session_id?: string } | undefined;
-        oldSessionId = row?.session_id;
-      }
-
-      // 2. Reset old session in-memory state if it exists. Messages are
-      //    intentionally preserved so the old session remains viewable in
-      //    the UI; /new creates a fresh session by updating the mapping
-      //    below.
-      if (oldSessionId) {
-        resetGatewaySession(oldSessionId);
-      }
-
-      // 3. Generate a NEW random session id. A deterministic id
-      //    (gw-<platform>-<chatId>) would reuse the same DB rows and
-      //    the agent would still see the old context. A fresh id
-      //    guarantees a clean slate — matches the renderer IPC path
-      //    (ipcMain.handle('gateway:reset_session')).
-      const sessionId = `gw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-      createOrResetGatewaySession(sessionId, data.platform);
-
-      // Resolve workspace from init config (reads bridge_workspace setting,
-      // falls back to ~/.duya/workspace).
-      const workingDirectory = prepareGatewayWorkspace(getOrBuildInitConfig());
-
-      // Save new session to threads table and chat_sessions table
-      if (db) {
-        try {
-          const now = Date.now();
-          const title = `${data.platform} Reset ${new Date().toLocaleString()}`;
-          db.prepare(`
-            INSERT INTO threads (id, title, provider_type, model, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at
-          `).run(sessionId, title, 'gateway', '', now, now);
-          // Also create the core-store session so messages can be persisted via replaceMessages
-          createGatewaySessionRecord(sessionId, title, workingDirectory, data.platform);
-          // Update the user mapping to point at the new session. Without
-          // this, getOrCreateSession would return the old session id and
-          // the reset would be invisible — the next inbound message would
-          // still route to the old session with its old context.
-          db.prepare(`
-            INSERT INTO gateway_user_map (id, platform, platform_user_id, platform_chat_id, session_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(platform, platform_chat_id) DO UPDATE SET session_id = excluded.session_id, updated_at = excluded.updated_at
-          `).run(`${data.platform}:${data.platformChatId}`, data.platform, data.platformUserId, data.platformChatId, sessionId, now, now);
-        } catch (err) {
-          getLogger().error('Failed to save gateway reset session', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
-        }
-      }
-
-      // Send response back to Gateway
-      sendToGatewayProcess({
-        type: 'gateway:reset_session:response',
-        id: data.id,
-        sessionId,
-        oldSessionId,
-      });
-      break;
-    }
-
-    case 'gateway:pairing:check': {
-      const data = msg as { id: string; platform: string; platformUserId: string };
-      try {
-        const store = getPairingStore();
-        const approved = store.isApproved(data.platform, data.platformUserId);
-        sendToGatewayProcess({ type: 'gateway:pairing:check:response', id: data.id, approved });
-      } catch (err) {
-        getLogger().error('Failed to check pairing', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
-        sendToGatewayProcess({ type: 'gateway:pairing:check:response', id: data.id, approved: false });
-      }
-      break;
-    }
-
-    case 'gateway:pairing:generate': {
-      const data = msg as {
-        id: string;
-        platform: string;
-        platformUserId: string;
-        platformChatId: string;
-        userName: string;
-      };
-      try {
-        const store = getPairingStore();
-        const result = store.generateCode(data.platform, data.platformUserId, data.platformChatId, data.userName);
-        sendToGatewayProcess({ type: 'gateway:pairing:generate:response', id: data.id, ...result });
-      } catch (err) {
-        getLogger().error('Failed to generate pairing code', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
-        sendToGatewayProcess({ type: 'gateway:pairing:generate:response', id: data.id, code: '', error: 'internal_error' });
-      }
-      break;
-    }
-
     case 'bridge:error': {
       const message = msg.message as string || 'Unknown gateway error';
       getLogger().error(`Gateway bridge error: ${message}`, undefined, { sessionId, error: msg.error }, LogComponent.Gateway);
@@ -999,27 +1063,40 @@ export function forwardToGateway(sessionId: string, event: Record<string, unknow
   const states = getSessionStates();
   const sessionInfo = states.get(sessionId);
 
+  // Plan 520: the gateway's user-mapper is gone — resolve platform + chat
+  // from the DB mapping (in-memory bridgeChannel stays the platform hint).
+  let platform = sessionInfo?.bridgeChannel;
+  let platformChatId: string | undefined;
+  const db = getDatabase();
+  if (db) {
+    try {
+      const row = db.prepare(
+        'SELECT platform, platform_chat_id FROM gateway_user_map WHERE session_id = ? LIMIT 1'
+      ).get(sessionId) as { platform?: string; platform_chat_id?: string } | undefined;
+      platform = platform ?? row?.platform;
+      platformChatId = row?.platform_chat_id;
+    } catch { /* best effort */ }
+  }
+
   proc.send({
     type: 'gateway:outbound',
     sessionId,
-    platform: sessionInfo?.bridgeChannel,
-    platformChatId: undefined,
+    platform,
+    platformChatId,
     event,
   });
-}
 
-export function forwardPermissionToGateway(
-  sessionId: string,
-  permission: { id: string; toolName: string; toolInput: Record<string, unknown> },
-): void {
-  const proc = getGatewayProcess();
-  if (!proc || proc.killed) return;
-
-  proc.send({
-    type: 'gateway:permission_request',
-    sessionId,
-    permission,
-  });
+  // Terminal event → clear the busy broadcast (bot-status signal, plan 520).
+  const eventType = event.type as string | undefined;
+  if ((eventType === 'chat:done' || eventType === 'chat:error') && platform && platformChatId) {
+    sendToGatewayProcess({
+      type: 'gateway:agent_busy',
+      platform,
+      platformChatId,
+      busy: false,
+      ok: eventType !== 'chat:error',
+    });
+  }
 }
 
 export function isGatewaySession(sessionId: string): boolean {
@@ -1276,62 +1353,20 @@ export function registerGatewayIpcHandlers(): void {
     };
   });
 
-  ipcMain.handle('gateway:pairing:list', async () => {
-    try {
-      const store = getPairingStore();
-      const pending = store.listAllPending();
-      const approved = store.listApproved();
-      return { pending, approved };
-    } catch (err) {
-      getLogger().error('Failed to list pairings', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
-      return { pending: [], approved: [] };
-    }
+  // Plan 520: allow-list replaces the pairing system. Managed by Main via
+  // channel-directory; the gateway only transparently forwards sender ids.
+  ipcMain.handle('gateway:allowlist:list', () => {
+    return getChannelAllowlist();
   });
 
-  ipcMain.handle('gateway:pairing:check', async (_event, platform: string, platformUserId: string) => {
-    try {
-      const store = getPairingStore();
-      return { approved: store.isApproved(platform, platformUserId) };
-    } catch (err) {
-      getLogger().error('Failed to check pairing', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
-      return { approved: false };
-    }
+  ipcMain.handle('gateway:allowlist:add', (_event, platform: string, platformUserId: string) => {
+    addChannelAllowlistEntry(platform, platformUserId);
+    return { success: true };
   });
 
-  ipcMain.handle('gateway:pairing:generate', async (
-    _event,
-    platform: string,
-    platformUserId: string,
-    platformChatId: string,
-    userName: string,
-  ) => {
-    try {
-      const store = getPairingStore();
-      return store.generateCode(platform, platformUserId, platformChatId, userName);
-    } catch (err) {
-      getLogger().error('Failed to generate pairing code', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
-      return { code: '', error: 'internal_error' };
-    }
-  });
-
-  ipcMain.handle('gateway:pairing:approve', async (_event, platform: string, code: string) => {
-    try {
-      const store = getPairingStore();
-      return store.approve(platform, code);
-    } catch (err) {
-      getLogger().error('Failed to approve pairing', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
-      return { approved: false, error: 'internal_error' };
-    }
-  });
-
-  ipcMain.handle('gateway:pairing:revoke', async (_event, platform: string, platformUserId: string) => {
-    try {
-      const store = getPairingStore();
-      return { revoked: store.revoke(platform, platformUserId) };
-    } catch (err) {
-      getLogger().error('Failed to revoke pairing', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
-      return { revoked: false };
-    }
+  ipcMain.handle('gateway:allowlist:remove', (_event, platform: string, platformUserId: string) => {
+    removeChannelAllowlistEntry(platform, platformUserId);
+    return { success: true };
   });
 
   ipcMain.handle('gateway:getStatus', async () => {
@@ -1365,21 +1400,6 @@ export function registerGatewayIpcHandlers(): void {
       autoStart,
       _orphaned: false,
     };
-  });
-
-  ipcMain.handle('gateway:send', (_event, sessionId: string, data: string) => {
-    try {
-      const parsed = typeof data === 'string' ? JSON.parse(data) : data;
-      forwardToGateway(sessionId, parsed);
-    } catch {
-      forwardToGateway(sessionId, data as unknown as Record<string, unknown>);
-    }
-    return { success: true };
-  });
-
-  ipcMain.handle('gateway:permission', (_event, sessionId: string, permission: { id: string; toolName: string; toolInput: Record<string, unknown> }) => {
-    forwardPermissionToGateway(sessionId, permission);
-    return { success: true };
   });
 
   ipcMain.handle('gateway:feishu:qr:begin', async (_event, _domain?: string) => {
@@ -1457,35 +1477,6 @@ export function registerGatewayIpcHandlers(): void {
       } as { resolve: (value: unknown) => void; reject: (err: Error) => void; timeout: ReturnType<typeof setTimeout> });
       proc.send({ type: 'gateway:feishu:qr:poll', id, begin, domain: _domain || 'feishu' });
     });
-  });
-
-  ipcMain.handle('gateway:create_session', (_event, data: { platform: string; platformUserId: string; platformChatId: string }) => {
-    const sessionId = `gw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    createOrResetGatewaySession(sessionId, data.platform);
-
-    // Resolve workspace from init config (reads bridge_workspace setting,
-    // falls back to ~/.duya/workspace).
-    const workingDirectory = prepareGatewayWorkspace(getOrBuildInitConfig());
-
-    // Save session to threads table and chat_sessions table
-    const db = getDatabase();
-    if (db) {
-      try {
-        const now = Date.now();
-        const title = `${data.platform} ${new Date().toLocaleString()}`;
-        db.prepare(`
-          INSERT INTO threads (id, title, provider_type, model, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
-        `).run(sessionId, title, 'gateway', '', now, now);
-        // Also create the core-store session so messages can be persisted via replaceMessages
-        createGatewaySessionRecord(sessionId, title, workingDirectory, data.platform);
-      } catch (err) {
-        getLogger().error('Failed to save gateway session to threads', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
-      }
-    }
-
-    return { sessionId, success: true };
   });
 
   ipcMain.handle('gateway:is_gateway_session', (_event, sessionId: string) => {
