@@ -60,9 +60,13 @@ export interface CacheWasteTotals {
 }
 
 /**
- * Timeline entry fed to the scanner, in row order. duya's persisted rows carry
- * no per-message model/provider (session-level only), so unlike pi there is no
- * modelChanged flag here yet — see plan 444 decisions.
+ * Timeline entry fed to the scanner, in row order. Usage entries carry the
+ * per-message model/provider (token-accounting) so the scanner prices each
+ * request against the model that actually produced it — after a mid-session
+ * model switch the re-billed prompt is costed at the NEW model's rates.
+ * `model_change` markers document the boundary (emitted by
+ * extractSessionFacts); they do NOT reset the scanner baseline — a model
+ * switch re-bills the full prompt and is counted as waste (pi semantics).
  */
 export type CacheSequenceEntry =
   | {
@@ -72,9 +76,20 @@ export type CacheSequenceEntry =
       input: number;
       output: number;
       cacheRead: number;
+      /** Total cache writes (normal + ephemeral 1h) — the scanner blends both
+       *  into the paid rate. */
       cacheWrite: number;
+      /** Model id that produced this call ('' = legacy → session fallback). */
+      model?: string;
+      /** Provider id that produced this call ('' = legacy → session fallback). */
+      providerId?: string;
     }
-  | { kind: 'compaction' };
+  | { kind: 'compaction' }
+  | { kind: 'model_change'; ts: number };
+
+/** Per-entry pricing lookup: given the entry's model/provider, return its
+ *  rates. Callers bind session fallbacks ('' model → session model). */
+export type CachePricingLookup = (model: string, providerId: string) => UsagePricing | undefined;
 
 export interface CacheWasteResult extends CacheWasteTotals {
   /** Individual counted misses in timeline order (for UI drill-down). */
@@ -169,12 +184,20 @@ function asPreviousRequest(
 /**
  * Scan one session's ordered timeline for cache waste. Entries must be in
  * chronological order (seq order of the rollout rows).
+ *
+ * `pricing` is the session-level fallback (used for entries without
+ * model/provider info, i.e. legacy rows). `pricingLookup` resolves the
+ * per-entry rates for entries that DO carry model info (token-accounting) —
+ * after a mid-session model switch the re-billed prompt is costed at the
+ * NEW model's rates. When the lookup misses for a model-carrying entry, the
+ * rates degrade to zero (token-only waste) rather than silently mispricing
+ * with the session fallback.
  */
 export function computeCacheWaste(
   entries: readonly CacheSequenceEntry[],
   pricing: UsagePricing | undefined,
+  pricingLookup?: CachePricingLookup,
 ): CacheWasteResult {
-  const rates = perTokenRates(pricing);
   let prev: PreviousRequest | undefined;
   const totals = emptyTotals();
   const misses: CacheWasteMiss[] = [];
@@ -187,6 +210,19 @@ export function computeCacheWaste(
       prev = undefined;
       continue;
     }
+    if (entry.kind === 'model_change') {
+      // Documented boundary only — deliberately does NOT reset the baseline:
+      // switching models re-bills the whole prompt against the new model's
+      // cache namespace, which IS waste (pi semantics).
+      continue;
+    }
+    // Per-entry rates: model-carrying entries price against their own model;
+    // legacy entries fall back to the session-level pricing table.
+    const entryPricing =
+      (entry.model || entry.providerId) && pricingLookup
+        ? (pricingLookup(entry.model ?? '', entry.providerId ?? '') ?? undefined)
+        : pricing;
+    const rates = perTokenRates(entryPricing);
     const miss = detectMiss(prev, entry, rates);
     if (miss) {
       totals.missedTokens += miss.missedTokens;
