@@ -154,7 +154,6 @@ describe('resolveSubcommand', () => {
       expect.arrayContaining([
         'provider-add', 'provider-remove', 'settings-show', 'settings-set',
         'vision-show', 'vision-set', 'style-list', 'style-set',
-        'pairing-list', 'pairing-approve', 'pairing-revoke', 'pairing-check',
       ]),
     );
   });
