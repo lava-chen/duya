@@ -271,17 +271,20 @@ export interface PermissionDecision {
 export type GatewayToMainMessage =
   | { type: 'gateway:ready' }
   | { type: 'gateway:init:complete'; success: boolean; error?: string; adapters?: AdapterStatus[] }
-  | { type: 'gateway:inbound'; sessionId: string; prompt: string; platform: PlatformType; platformMsgId: string; platformChatId: string; options?: Record<string, unknown> }
+  /**
+   * Plan 520: the gateway no longer resolves sessions (user-mapper removed).
+   * Main resolves/creates the session from (platform, platformChatId) and
+   * enforces the channel allow-list, replying `gateway:inbound:response`.
+   * `kind: 'command'` carries a detected slash command for Main-side
+   * execution; `kind: 'message'` is a normal prompt wake.
+   */
+  | { type: 'gateway:inbound'; id?: string; kind: 'command' | 'message'; prompt: string; platform: PlatformType; platformUserId: string; platformMsgId: string; platformChatId: string; command?: string; args?: string[]; options?: Record<string, unknown> }
   | { type: 'gateway:reaction'; sessionId: string; platform: PlatformType; platformChatId: string; platformMsgId: string; emoji: string; userId: string }
-  | { type: 'gateway:permission_resolve'; permissionId: string; decision: 'allow' | 'allow_once' | 'deny' }
-  | { type: 'gateway:interrupt'; sessionId: string }
-  | { type: 'gateway:command'; command: string; args: string[]; sessionId?: string; platform: PlatformType; platformChatId: string; options?: Record<string, unknown> }
   | { type: 'db:request'; id: string; action: string; payload: unknown }
   | { type: 'gateway:error'; error: string }
   | { type: 'gateway:start:response'; id?: string; success: boolean; error?: string }
   | { type: 'gateway:stop:response'; id?: string; success: boolean; error?: string }
   | { type: 'gateway:getStatus:response'; id?: string; status: GatewayStatus }
-  | { type: 'gateway:reset_session'; id?: string; platform: PlatformType; platformChatId: string; platformUserId: string; platformMsgId: string }
   | { type: 'gateway:feishu:qr:begin:response'; id?: string; result: QrRegistrationBegin | null; error?: string }
   | { type: 'gateway:feishu:qr:poll:response'; id?: string; result: QrRegistrationResult | null; error?: string }
   | { type: 'gateway:send:response'; id?: string; ok: boolean; error?: string; platformMsgId?: string };
@@ -294,18 +297,18 @@ export type MainToGatewayMessage =
   | { type: 'gateway:reload'; config: GatewayInitConfig }
   | { type: 'gateway:getStatus'; id: string }
   | { type: 'gateway:outbound'; sessionId: string; platform?: string; platformChatId?: string; event: StreamEvent }
-  | { type: 'gateway:permission_request'; sessionId: string; permission: { id: string; toolName: string; toolInput: Record<string, unknown> } }
   | { type: 'db:response'; id: string; success: boolean; result?: unknown; error?: string }
-  | { type: 'gateway:create_session:response'; sessionId: string; error?: string }
-  | { type: 'gateway:reset_session:response'; sessionId: string; oldSessionId?: string; platformMsgId?: string; error?: string }
+  | { type: 'gateway:inbound:response'; id: string; authorized: boolean }
   | { type: 'gateway:display_state'; sessionId: string; platform: string; platformChatId: string; state: 'typing_start' | 'typing_stop' }
+  /**
+   * Plan 520: busy broadcast. Main resolves (platform, platformChatId)
+   * itself; the gateway forwards to the matching adapter, which decides
+   * queue/steer/interrupt locally. `ok` distinguishes the terminal state
+   * when `busy: false` (done → 👍, error → 👎).
+   */
+  | { type: 'gateway:agent_busy'; platform: string; platformChatId: string; busy: boolean; ok?: boolean }
   | { type: 'gateway:feishu:qr:begin'; id: string; domain?: string }
   | { type: 'gateway:feishu:qr:poll'; id: string; begin: QrPollInput; domain?: string }
-  | { type: 'reset'; sessionId: string }
-  | { type: 'gateway:pairing:check'; id: string; platform: string; userId: string }
-  | { type: 'gateway:pairing:generate'; id: string; platform: string; userId: string }
-  | { type: 'gateway:pairing:check:response'; id: string; approved: boolean }
-  | { type: 'gateway:pairing:generate:response'; id: string; code: string; error?: string }
   | { type: 'gateway:send'; id: string; platform: string; platformChatId: string; text: string; filePath?: string };
 
 /** QR Registration types */

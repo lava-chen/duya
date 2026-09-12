@@ -11,15 +11,15 @@ export * from './types.js';
 export { GatewayManager } from './gateway-manager.js';
 export { PlatformAdapter, createAdapter, registerAdapterFactory } from './adapters/base.js';
 export { IpcClient } from './ipc-client.js';
-export { UserMapper } from './user-mapper.js';
 export { matchProfileRoute, parseProfileRoutes, sortRoutes } from './profile-routing.js';
 export type { ProfileRoute, ProfileMatchInput } from './profile-routing.js';
 export { getProxyStatus } from './proxy-fetch.js';
 
-// Command system
-export { resolveCommand, getCommandNamesForPlatform, isGatewayKnownCommand, COMMAND_REGISTRY } from './commands/registry.js';
+// Command system (plan 520: detection + registry + help only — execution
+// moved to the Main Process; these exports are consumed there)
+export { resolveCommand, getCommandNamesForPlatform, isGatewayKnownCommand, getAllCommands, registerDynamicCommands, COMMAND_REGISTRY } from './commands/registry.js';
 export { generateHelpText, getCommandHelp } from './commands/help.js';
-export { dispatchCommand, getHelpReply, getStatusReply, getNewSessionReply, shouldInterceptCommand } from './commands/dispatcher.js';
+export { detectCommand, shouldInterceptCommand } from './commands/dispatcher.js';
 
 // ---------------------------------------------------------------------------
 // Subprocess entry point (when run via child_process.fork)
@@ -129,13 +129,14 @@ function handleMessage(msg: MainToGatewayMessage): void {
       break;
     }
 
-    case 'gateway:permission_request': {
-      gatewayManager?.handlePermissionRequest(msg.sessionId, msg.permission).catch((err) => {
-        console.error('[Gateway] Error handling permission request:', err);
-      });
+    case 'gateway:agent_busy': {
+      const busyMsg = msg as { platform: string; platformChatId: string; busy: boolean; ok?: boolean };
+      gatewayManager?.handleAgentBusy(busyMsg.platform, busyMsg.platformChatId, busyMsg.busy, busyMsg.ok);
       break;
     }
 
+    // CLI control-plane send (plan 520 retained): duya channel send →
+    // POST /v1/channels/send → requestChannelSend → this handler.
     case 'gateway:send': {
       const sendMsg = msg as { id: string; platform: string; platformChatId: string; text: string; filePath?: string };
       gatewayManager?.sendMessage(sendMsg.platform, sendMsg.platformChatId, sendMsg.text, sendMsg.filePath)
@@ -152,22 +153,6 @@ function handleMessage(msg: MainToGatewayMessage): void {
     case 'db:response': {
       // Forward db responses to IpcClient for pending request resolution
       gatewayManager?.getIpcClient().handleResponse(msg);
-      break;
-    }
-
-    case 'gateway:create_session:response': {
-      gatewayManager?.getIpcClient().handleResponse(msg);
-      break;
-    }
-
-    case 'gateway:reset_session:response': {
-      gatewayManager?.getIpcClient().handleResponse(msg);
-      break;
-    }
-
-    case 'reset': {
-      const sessionId = (msg as { type: 'reset'; sessionId: string }).sessionId;
-      gatewayManager?.onSessionReset(sessionId);
       break;
     }
 
