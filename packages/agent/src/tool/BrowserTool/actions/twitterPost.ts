@@ -19,7 +19,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod/v4';
-import type { ActionHandler } from './types.js';
+import type { ActionHandler, ActionContext } from './types.js';
 
 const MAX_IMAGES = 4;
 const COMPOSE_URL = 'https://x.com/compose/post';
@@ -27,6 +27,7 @@ const COMPOSER_SELECTOR = '[data-testid="tweetTextarea_0"]';
 const FILE_INPUT_SELECTOR = 'input[type="file"][data-testid="fileInput"]';
 const SUPPORTED_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
 const SUBMIT_SELECTORS = '[data-testid="tweetButtonInline"], [data-testid="tweetButton"]';
+const REPLY_BUTTON_SELECTOR = '[data-testid="reply"]';
 
 const UPLOAD_POLL_MS = 500;
 const UPLOAD_TIMEOUT_MS = 30_000;
@@ -65,6 +66,163 @@ export function validateImagePaths(paths: string[]): string[] {
     }
     return absPath;
   });
+}
+
+// ─── Twitter-specific post implementation ───────────────────────────────
+
+/** Options for {@link postOnTwitter}. */
+export interface TwitterPostOptions {
+  /** When set, publish as a reply to this tweet (full status URL or numeric id). */
+  replyTo?: string;
+}
+
+/** A normalized tweet target. */
+export interface TweetTarget {
+  url: string;
+  id: string;
+}
+
+/**
+ * Normalize a reply target — a full x.com/twitter.com status URL or a bare
+ * numeric status id — into a canonical `{ url, id }`. Returns `{ error }`
+ * when the input cannot be interpreted.
+ */
+export function parseTweetTarget(input: string): TweetTarget | { error: string } {
+  const trimmed = (input ?? '').trim();
+  if (!trimmed) return { error: 'Empty reply target: provide a status URL or numeric id.' };
+  if (/^\d+$/.test(trimmed)) {
+    return { url: `https://x.com/i/status/${trimmed}`, id: trimmed };
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return { error: `Invalid reply target "${trimmed}". Provide a status URL or numeric id.` };
+  }
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  if (!['x.com', 'twitter.com', 'mobile.twitter.com'].includes(host)) {
+    return { error: `Unsupported reply target host "${host}". Use an x.com or twitter.com status URL.` };
+  }
+  const match = parsed.pathname.match(/^\/([^/]+)\/status\/(\d+)\/?$/);
+  if (!match) return { error: `Could not parse a status id from "${trimmed}".` };
+  return { url: `https://x.com/${match[1]}/status/${match[2]}`, id: match[2] };
+}
+
+/**
+ * Core Twitter posting logic — extracted so it can be called from the
+ * unified `post` action with `platform: "x"` or `platform: "twitter"`.
+ *
+ * @param text       Tweet text
+ * @param images     Absolute paths to images (max 4)
+ * @param ctx        ActionContext (needs ctx.cdp for browser automation)
+ * @param options    Optional reply target
+ */
+export async function postOnTwitter(
+  text: string,
+  images: string[],
+  ctx: ActionContext,
+  options: TwitterPostOptions = {}
+): Promise<{ status?: string; message?: string; text?: string; id?: string; url?: string; replyTo?: string; error?: string; warning?: string; mode?: string }> {
+  // Publishing always requires a real logged-in browser session.
+  if (!ctx.cdp) {
+    return {
+      error: 'Publishing a tweet requires an active logged-in browser session on x.com.',
+      warning: 'Posting publishes publicly — only call this after the user confirms.',
+      mode: ctx.mode,
+    };
+  }
+
+  const trimmedText = text.trim();
+  if (!trimmedText) {
+    return { error: 'Tweet text is empty. Provide a non-empty text to publish.', mode: ctx.mode };
+  }
+
+  let absPaths: string[];
+  try {
+    absPaths = validateImagePaths(images ?? []);
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err), mode: ctx.mode };
+  }
+
+  const target = options.replyTo !== undefined ? parseTweetTarget(options.replyTo) : null;
+  if (target && 'error' in target) {
+    return { error: target.error, mode: ctx.mode };
+  }
+
+  const client = ctx.cdp;
+  try {
+    if (target) {
+      // Reply: open the tweet, then reveal its inline reply composer.
+      await client.navigate(target.url);
+      const opened = await openReplyComposer(client);
+      if (!opened?.ok) {
+        return { error: opened?.message ?? 'Could not open the reply composer.', mode: ctx.mode };
+      }
+      await client.waitForElement(COMPOSER_SELECTOR, 20000);
+    } else {
+      await client.navigate(COMPOSE_URL);
+      await client.waitForElement(COMPOSER_SELECTOR, 20000);
+    }
+
+    if (absPaths.length > 0) {
+      let attached = true;
+      try {
+        await client.waitForElement(FILE_INPUT_SELECTOR, 15000);
+        await client.setFileInput(absPaths, FILE_INPUT_SELECTOR);
+      } catch {
+        attached = false;
+      }
+      if (!attached) {
+        attached = await attachViaDataTransfer(client, absPaths);
+      }
+      if (!attached) {
+        return { error: 'Image upload failed. Nothing was posted.', mode: ctx.mode };
+      }
+      const upload = await waitForImageUpload(client, absPaths.length);
+      if (!upload?.ok) {
+        return {
+          error: upload?.message ?? `Image upload did not complete (${absPaths.length} file(s)). Nothing was posted.`,
+          mode: ctx.mode,
+        };
+      }
+    }
+
+    const typed = await insertComposerText(client, trimmedText);
+    if (!typed?.ok) {
+      return {
+        error: typed?.message ?? 'Could not type the tweet text.',
+        warning: 'Open the composer in the browser and check whether X.com is asking you to log in.',
+        mode: ctx.mode,
+      };
+    }
+
+    const result = await submitTweet(client, trimmedText);
+    if (result?.unconfirmed) {
+      return {
+        error: `${result.message} Check the account before retrying; the tweet may already be live.`,
+        status: 'unknown',
+        mode: ctx.mode,
+      };
+    }
+    if (!result?.ok) {
+      return {
+        error: result?.message ?? 'Tweet failed to post. Nothing was posted.',
+        status: 'failed',
+        mode: ctx.mode,
+      };
+    }
+    return {
+      status: 'success',
+      message: result.message ?? (target ? 'Reply posted.' : 'Tweet posted.'),
+      text: trimmedText,
+      ...(target ? { replyTo: target.url } : {}),
+      ...(result.id ? { id: result.id } : {}),
+      ...(result.url ? { url: result.url } : {}),
+      mode: ctx.mode,
+    };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err), mode: ctx.mode };
+  }
 }
 
 export function isUnsupportedInsertTextError(err: unknown): boolean {
@@ -115,6 +273,34 @@ async function verifyComposerText(
       actualText: box ? (box.innerText || box.textContent || '') : ''
     };
   })()`)) as PageResult;
+}
+
+/** Reveal the reply composer on a tweet page (it may already be inline). */
+async function openReplyComposer(
+  client: { evaluate(js: string): Promise<unknown>; waitForElement(sel: string, ms: number): Promise<void> }
+): Promise<PageResult> {
+  const alreadyOpen = (await client.evaluate(`(() => {
+    const visible = (el) => !!el && (el.offsetParent !== null || el.getClientRects().length > 0);
+    const box = Array.from(document.querySelectorAll(${JSON.stringify(COMPOSER_SELECTOR)})).find(visible);
+    return { ok: !!box };
+  })()`)) as PageResult;
+  if (alreadyOpen?.ok) return { ok: true };
+
+  const clicked = (await client.evaluate(`(() => {
+    const visible = (el) => !!el && (el.offsetParent !== null || el.getClientRects().length > 0);
+    const btn = Array.from(document.querySelectorAll(${JSON.stringify(REPLY_BUTTON_SELECTOR)})).find(visible);
+    if (!btn) return { ok: false, message: 'Reply button not found on the tweet. Is this tab logged in?' };
+    btn.click();
+    return { ok: true };
+  })()`)) as PageResult;
+  if (!clicked?.ok) return clicked;
+
+  try {
+    await client.waitForElement(COMPOSER_SELECTOR, 20000);
+  } catch {
+    return { ok: false, message: 'Reply composer did not appear after clicking Reply.' };
+  }
+  return { ok: true };
 }
 
 async function insertComposerText(
@@ -291,6 +477,10 @@ const twitterPostSchema = z.object({
     .optional()
     .default([])
     .describe('Absolute paths to images to attach, max 4 (jpg/png/gif/webp)'),
+  replyTo: z
+    .string()
+    .optional()
+    .describe('When set, publish as a reply to this tweet (full status URL or numeric id)'),
 });
 
 export const twitterPostAction: ActionHandler<z.infer<typeof twitterPostSchema>> = {
@@ -303,96 +493,8 @@ export const twitterPostAction: ActionHandler<z.infer<typeof twitterPostSchema>>
   hidden: true,
   schema: twitterPostSchema,
   async execute(data, ctx) {
-    // Publishing always requires a real logged-in browser session.
-    if (!ctx.cdp) {
-      return {
-        error: 'Publishing a tweet requires an active logged-in browser session on x.com.',
-        warning: 'Posting publishes publicly — only call this after the user confirms.',
-        mode: ctx.mode,
-      };
-    }
-
-    const text = data.text.trim();
-    if (!text) {
-      return { error: 'Tweet text is empty. Provide a non-empty text to publish.', mode: ctx.mode };
-    }
-
-    let absPaths: string[];
-    try {
-      absPaths = validateImagePaths(data.images ?? []);
-    } catch (err) {
-      return { error: err instanceof Error ? err.message : String(err), mode: ctx.mode };
-    }
-
-    const client = ctx.cdp;
-    try {
-      // 1) Open the standalone composer. This is the same route used for
-      //    replies and keeps a single visible composer.
-      await client.navigate(COMPOSE_URL);
-      await client.waitForElement(COMPOSER_SELECTOR, 20000);
-
-      // 2) Attach media BEFORE inserting text — uploading after Draft.js has
-      //    text can re-render/reset the editor, producing image-only posts.
-      if (absPaths.length > 0) {
-        let attached = true;
-        try {
-          await client.waitForElement(FILE_INPUT_SELECTOR, 15000);
-          await client.setFileInput(absPaths, FILE_INPUT_SELECTOR);
-        } catch {
-          attached = false;
-        }
-        if (!attached) {
-          attached = await attachViaDataTransfer(client, absPaths);
-        }
-        if (!attached) {
-          return { error: 'Image upload failed. Nothing was posted.', mode: ctx.mode };
-        }
-        const upload = await waitForImageUpload(client, absPaths.length);
-        if (!upload?.ok) {
-          return {
-            error: upload?.message ?? `Image upload did not complete (${absPaths.length} file(s)). Nothing was posted.`,
-            mode: ctx.mode,
-          };
-        }
-      }
-
-      // 3) Insert and verify the text after media upload so text + images are
-      //    in the final composer state immediately before clicking Post.
-      const typed = await insertComposerText(client, text);
-      if (!typed?.ok) {
-        return {
-          error: typed?.message ?? 'Could not type the tweet text.',
-          warning: 'Open the composer in the browser and check whether X.com is asking you to log in.',
-          mode: ctx.mode,
-        };
-      }
-
-      // 4) Submit, then verify a success toast and the resulting status URL.
-      const result = await submitTweet(client, text);
-      if (result?.unconfirmed) {
-        return {
-          error: `${result.message} Check the account before retrying; the tweet may already be live.`,
-          status: 'unknown',
-          mode: ctx.mode,
-        };
-      }
-      if (!result?.ok) {
-        return {
-          error: result?.message ?? 'Tweet failed to post. Nothing was posted.',
-          status: 'failed',
-          mode: ctx.mode,
-        };
-      }
-      return {
-        status: 'success',
-        message: result.message ?? 'Tweet posted.',
-        text,
-        ...(result.id ? { id: result.id } : {}),
-        ...(result.url ? { url: result.url } : {}),
-        mode: ctx.mode,
-      };
-    } catch (err) {
-      return { error: err instanceof Error ? err.message : String(err), mode: ctx.mode };
-    }
+    // Delegate to the extracted postOnTwitter function — the logic is shared
+    // with the unified `post` action when platform is "x" or "twitter".
+    return postOnTwitter(data.text, data.images ?? [], ctx, { replyTo: data.replyTo });
   },
 };
