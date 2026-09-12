@@ -133,6 +133,35 @@ export function toSplitRows(lines: ReviewDisplayLine[]): ReviewSplitRow[] {
   return rows;
 }
 
+/** Counts add/remove lines across hunks — the per-file (+N −M) diffstat. */
+export function countPatchChanges(hunks: ReviewDiffHunk[]): { additions: number; removals: number } {
+  let additions = 0;
+  let removals = 0;
+  for (const hunk of hunks) {
+    for (const line of hunk.lines) {
+      if (line.type === 'add') additions += 1;
+      else if (line.type === 'remove') removals += 1;
+    }
+  }
+  return { additions, removals };
+}
+
+const LANGUAGE_LABELS: Record<string, string> = {
+  ts: 'TS', tsx: 'TSX', js: 'JS', jsx: 'JSX', mjs: 'JS', cjs: 'JS',
+  css: 'CSS', scss: 'SCSS', less: 'LESS', html: 'HTML', vue: 'VUE',
+  md: 'MD', json: 'JSON', jsonc: 'JSON', yaml: 'YAML', yml: 'YAML',
+  toml: 'TOML', sh: 'SH', bash: 'SH', ps1: 'PS1', py: 'PY', rs: 'RS',
+  go: 'GO', java: 'JAVA', kt: 'KT', c: 'C', h: 'H', cpp: 'C++', hpp: 'C++',
+  cs: 'C#', rb: 'RB', php: 'PHP', sql: 'SQL', lua: 'LUA', swift: 'SWIFT',
+};
+
+/** Short uppercase language badge for a path (Codex-style), null when unknown. */
+export function fileLanguageLabel(path: string): string | null {
+  const match = path.match(/\.([A-Za-z0-9]+)$/);
+  if (!match) return null;
+  return LANGUAGE_LABELS[match[1].toLowerCase()] ?? null;
+}
+
 /** Splits a concatenated multi-file Git patch into per-file sections. */
 export function parseReviewPatch(patch: string): ReviewFilePatch[] {
   const files: ReviewFilePatch[] = [];

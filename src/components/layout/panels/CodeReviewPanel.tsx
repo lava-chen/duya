@@ -4,15 +4,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   IconAlertCircle,
   IconChevronDown,
+  IconChevronLeft,
+  IconChevronRight,
   IconColumns2,
   IconCopy,
-  IconFileCode,
+  IconDots,
   IconFileDiff,
   IconFileMinus,
   IconFilePlus,
   IconFileX,
   IconFold,
   IconGitCompare,
+  IconInfoCircle,
   IconLayoutSidebarRight,
   IconMessagePlus,
   IconRefresh,
@@ -40,6 +43,8 @@ import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import {
   collapseContextLines,
+  countPatchChanges,
+  fileLanguageLabel,
   parseReviewPatch,
   toSplitRows,
   type ReviewDiffHunk,
@@ -102,15 +107,25 @@ function StatusIcon({ status }: { status: GitReviewFile["status"] }) {
   }
 }
 
-function DiffLineView({ line, wrapped }: { line: ReviewDiffLine; wrapped: boolean }) {
+/** Makes whitespace visible (Codex parity): spaces → ·, tabs → →. */
+function visualizeWhitespace(content: string): string {
+  return content.replace(/ /g, "·").replace(/\t/g, "→");
+}
+
+function DiffLineView({ line, wrapped, showWhitespace }: {
+  line: ReviewDiffLine;
+  wrapped: boolean;
+  showWhitespace: boolean;
+}) {
   const lineNumber = line.type === "remove" ? line.oldLineNumber : line.newLineNumber;
+  const content = line.content ? (showWhitespace ? visualizeWhitespace(line.content) : line.content) : " ";
   return (
     <div className={`code-review-line code-review-line-${line.type}${wrapped ? " is-wrapped" : ""}`}>
       <span className="code-review-line-number">{lineNumber ?? ""}</span>
       <span className="code-review-line-prefix" aria-hidden="true">
         {line.type === "add" ? "+" : line.type === "remove" ? "−" : " "}
       </span>
-      <code className="code-review-line-code">{line.content || " "}</code>
+      <code className="code-review-line-code">{content}</code>
     </div>
   );
 }
@@ -124,10 +139,11 @@ function CollapsedLinesButton({ count, onExpand }: { count: number; onExpand: ()
   );
 }
 
-function UnifiedHunk({ hunk, wrapped, foldUnchanged }: {
+function UnifiedHunk({ hunk, wrapped, foldUnchanged, showWhitespace }: {
   hunk: ReviewDiffHunk;
   wrapped: boolean;
   foldUnchanged: boolean;
+  showWhitespace: boolean;
 }) {
   const [expandedContext, setExpandedContext] = useState(false);
   const lines = useMemo(
@@ -145,16 +161,17 @@ function UnifiedHunk({ hunk, wrapped, foldUnchanged }: {
           onExpand={() => setExpandedContext(true)}
         />
       ) : (
-        <DiffLineView key={`${line.type}-${line.oldLineNumber ?? line.newLineNumber ?? index}`} line={line} wrapped={wrapped} />
+        <DiffLineView key={`${line.type}-${line.oldLineNumber ?? line.newLineNumber ?? index}`} line={line} wrapped={wrapped} showWhitespace={showWhitespace} />
       ))}
     </section>
   );
 }
 
-function SplitHunk({ hunk, wrapped, foldUnchanged }: {
+function SplitHunk({ hunk, wrapped, foldUnchanged, showWhitespace }: {
   hunk: ReviewDiffHunk;
   wrapped: boolean;
   foldUnchanged: boolean;
+  showWhitespace: boolean;
 }) {
   const [expandedContext, setExpandedContext] = useState(false);
   const lines = useMemo<ReviewDisplayLine[]>(
@@ -174,19 +191,20 @@ function SplitHunk({ hunk, wrapped, foldUnchanged }: {
         />
       ) : (
         <div className="code-review-split-row" key={`split-${index}`}>
-          {row.oldLine ? <DiffLineView line={row.oldLine} wrapped={wrapped} /> : <div className="code-review-line code-review-line-empty" />}
-          {row.newLine ? <DiffLineView line={row.newLine} wrapped={wrapped} /> : <div className="code-review-line code-review-line-empty" />}
+          {row.oldLine ? <DiffLineView line={row.oldLine} wrapped={wrapped} showWhitespace={showWhitespace} /> : <div className="code-review-line code-review-line-empty" />}
+          {row.newLine ? <DiffLineView line={row.newLine} wrapped={wrapped} showWhitespace={showWhitespace} /> : <div className="code-review-line code-review-line-empty" />}
         </div>
       ))}
     </section>
   );
 }
 
-function DiffContents({ hunks, layout, wrapped, foldUnchanged }: {
+function DiffContents({ hunks, layout, wrapped, foldUnchanged, showWhitespace }: {
   hunks: ReviewDiffHunk[];
   layout: DiffLayout;
   wrapped: boolean;
   foldUnchanged: boolean;
+  showWhitespace: boolean;
 }) {
   if (hunks.length === 0) {
     return <div className="code-review-empty">此文件没有可显示的文本差异。</div>;
@@ -194,9 +212,9 @@ function DiffContents({ hunks, layout, wrapped, foldUnchanged }: {
   return (
     <div className={`code-review-diff code-review-diff-${layout}`}>
       {hunks.map((hunk, index) => layout === "split" ? (
-        <SplitHunk key={`${hunk.header}-${index}`} hunk={hunk} wrapped={wrapped} foldUnchanged={foldUnchanged} />
+        <SplitHunk key={`${hunk.header}-${index}`} hunk={hunk} wrapped={wrapped} foldUnchanged={foldUnchanged} showWhitespace={showWhitespace} />
       ) : (
-        <UnifiedHunk key={`${hunk.header}-${index}`} hunk={hunk} wrapped={wrapped} foldUnchanged={foldUnchanged} />
+        <UnifiedHunk key={`${hunk.header}-${index}`} hunk={hunk} wrapped={wrapped} foldUnchanged={foldUnchanged} showWhitespace={showWhitespace} />
       ))}
     </div>
   );
@@ -320,11 +338,27 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const [wrapped, setWrapped] = useState(false);
   const [foldUnchanged, setFoldUnchanged] = useState(true);
   const [showFiles, setShowFiles] = useState(true);
+  const [showWhitespace, setShowWhitespace] = useState(false);
+  const [overflowOpen, setOverflowOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false, x: 0, y: 0, path: "",
   });
   const fileRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const overflowRef = useRef<HTMLDivElement | null>(null);
+
+  // Close the overflow menu on any outside press (not a portal, so a
+  // contains() check is reliable here).
+  useEffect(() => {
+    if (!overflowOpen) return;
+    const handleMouseDown = (event: MouseEvent) => {
+      if (overflowRef.current && !overflowRef.current.contains(event.target as Node)) {
+        setOverflowOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleMouseDown);
+    return () => document.removeEventListener("mousedown", handleMouseDown);
+  }, [overflowOpen]);
 
   const refresh = useCallback(async () => {
     if (!workingDirectory) {
@@ -471,6 +505,34 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   );
   const totals = review.totals;
 
+  // Codex parity: when the patch hit the 1 MB cap the full stack of file
+  // sections degrades to one file at a time with ‹ › navigation.
+  const truncated = scope === "latest-turn"
+    ? turnReview?.truncated ?? false
+    : review.truncated ?? false;
+  const singleFileMode = truncated && filePatches.length > 0;
+  const selectedPatchIndex = useMemo(() => {
+    const index = filePatches.findIndex((filePatch) => filePatch.path === selectedPath);
+    return index >= 0 ? index : 0;
+  }, [filePatches, selectedPath]);
+  const visiblePatches = useMemo(() => {
+    if (!singleFileMode) return filePatches;
+    return filePatches.slice(selectedPatchIndex, selectedPatchIndex + 1);
+  }, [filePatches, selectedPatchIndex, singleFileMode]);
+
+  const stepPatchFile = useCallback((delta: number) => {
+    if (!singleFileMode || filePatches.length === 0) return;
+    const next = Math.min(Math.max(selectedPatchIndex + delta, 0), filePatches.length - 1);
+    setSelectedPath(filePatches[next].path);
+    scrollContainerRef.current?.scrollTo({ top: 0 });
+  }, [filePatches, selectedPatchIndex, singleFileMode]);
+
+  const handleCopyPatch = useCallback(() => {
+    if (!patch) return;
+    navigator.clipboard.writeText(patch).catch(() => {});
+    setOverflowOpen(false);
+  }, [patch]);
+
   const scrollToFile = useCallback((filePath: string) => {
     const element = fileRefs.current[filePath];
     const container = scrollContainerRef.current;
@@ -568,6 +630,9 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           <span className="is-remove">−{totals?.removals ?? 0}</span>
           <span className="code-review-file-count">{files.length} 个文件</span>
         </div>
+        {review.baseRef && (
+          <span className="code-review-scope-range" title={review.baseRef}>{review.baseRef}</span>
+        )}
         <div className="code-review-toolbar-actions">
           <IconButton type="button" variant="default" shape="square" size="sm" onClick={() => void refresh()} title="刷新变更" aria-label="刷新变更" disabled={loading}>
             <IconRefresh size={15} className={loading ? "animate-spin" : ""} />
@@ -584,6 +649,47 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           <IconButton type="button" variant="default" shape="square" size="sm" className={showFiles ? "is-active" : ""} onClick={() => setShowFiles((value) => !value)} title={showFiles ? "隐藏文件" : "显示文件"} aria-label={showFiles ? "隐藏文件" : "显示文件"} aria-pressed={showFiles}>
             <IconLayoutSidebarRight size={15} />
           </IconButton>
+          <div className="code-review-overflow" ref={overflowRef}>
+            <IconButton
+              type="button"
+              variant="default"
+              shape="square"
+              size="sm"
+              className={overflowOpen ? "is-active" : ""}
+              onClick={() => setOverflowOpen((value) => !value)}
+              title="更多选项"
+              aria-label="更多选项"
+              aria-expanded={overflowOpen}
+              aria-haspopup="menu"
+            >
+              <IconDots size={15} />
+            </IconButton>
+            {overflowOpen && (
+              <div className="code-review-overflow-menu" role="menu">
+                <button
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={showWhitespace}
+                  className="code-review-overflow-item"
+                  onClick={() => { setShowWhitespace((value) => !value); setOverflowOpen(false); }}
+                >
+                  <span className="code-review-overflow-check" aria-hidden="true">{showWhitespace ? "✓" : ""}</span>
+                  <span>显示空白字符</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="code-review-overflow-item"
+                  onClick={handleCopyPatch}
+                  disabled={!patch}
+                  title="复制可用于 git apply 的补丁内容"
+                >
+                  <span className="code-review-overflow-check" aria-hidden="true" />
+                  <span>复制 git apply 补丁</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -592,7 +698,18 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
       ) : !review.isGitRepo ? (
         <div className="code-review-state"><IconGitCompare size={22} />正在检查工作区…</div>
       ) : files.length === 0 ? (
-        <div className="code-review-state"><IconGitCompare size={22} />{scope === "latest-turn" ? "上一轮对话没有文件变更。" : "工作区没有相对 HEAD 的未提交改动。"}</div>
+        <div className="code-review-state code-review-state-empty">
+          <IconGitCompare size={26} aria-hidden="true" />
+          <div className="code-review-state-title">尚无文件更改</div>
+          <div className="code-review-state-sub">
+            {scope === "latest-turn" ? "上一轮对话没有产生文件变更。" : "所选范围内没有文件变更。"}
+          </div>
+          {scope === "latest-turn" && (
+            <Button type="button" variant="secondary" size="sm" onClick={() => setScope("uncommitted")}>
+              查看未提交改动
+            </Button>
+          )}
+        </div>
       ) : (
         <div className="code-review-workspace">
           <main className="code-review-main">
@@ -603,31 +720,75 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
                 <div className="code-review-state code-review-state-error"><IconAlertCircle size={18} />{diffError}</div>
               ) : (
                 <>
-                  {diffError && <div className="code-review-diff-notice">{diffError}</div>}
-                  {filePatches.length === 0 ? (
+                  {truncated ? (
+                    <div className="code-review-large-banner">
+                      <IconInfoCircle size={14} aria-hidden="true" />
+                      <span>此差异较大，每次仅显示一个文件</span>
+                      {filePatches.length > 1 && (
+                        <div className="code-review-large-banner-nav">
+                          <IconButton
+                            type="button"
+                            variant="default"
+                            shape="square"
+                            size="sm"
+                            onClick={() => stepPatchFile(-1)}
+                            disabled={selectedPatchIndex <= 0}
+                            title="上一个文件"
+                            aria-label="上一个文件"
+                          >
+                            <IconChevronLeft size={14} />
+                          </IconButton>
+                          <span className="code-review-large-banner-pos">{selectedPatchIndex + 1} / {filePatches.length}</span>
+                          <IconButton
+                            type="button"
+                            variant="default"
+                            shape="square"
+                            size="sm"
+                            onClick={() => stepPatchFile(1)}
+                            disabled={selectedPatchIndex >= filePatches.length - 1}
+                            title="下一个文件"
+                            aria-label="下一个文件"
+                          >
+                            <IconChevronRight size={14} />
+                          </IconButton>
+                        </div>
+                      )}
+                    </div>
+                  ) : diffError ? (
+                    <div className="code-review-diff-notice">{diffError}</div>
+                  ) : null}
+                  {visiblePatches.length === 0 ? (
                     <div className="code-review-empty">没有可显示的文本差异。</div>
                   ) : (
-                    filePatches.map((filePatch) => (
-                      <div
-                        key={filePatch.path}
-                        id={`review-file-${filePatch.path}`}
-                        ref={(element) => { fileRefs.current[filePatch.path] = element; }}
-                        className={`code-review-file-section${selectedPath === filePatch.path ? " is-selected" : ""}`}
-                      >
-                        <div className="code-review-file-header">
-                          <div className="code-review-file-identity">
-                            <IconFileCode size={18} aria-hidden="true" />
-                            <span title={filePatch.path}>{filePatch.path}</span>
-                            {filePatch.status === "binary" && <span className="code-review-file-binary">binary</span>}
+                    visiblePatches.map((filePatch) => {
+                      const fileStat = countPatchChanges(filePatch.hunks);
+                      const langLabel = fileLanguageLabel(filePatch.path);
+                      return (
+                        <div
+                          key={filePatch.path}
+                          id={`review-file-${filePatch.path}`}
+                          ref={(element) => { fileRefs.current[filePatch.path] = element; }}
+                          className={`code-review-file-section${selectedPath === filePatch.path ? " is-selected" : ""}`}
+                        >
+                          <div className="code-review-file-header">
+                            <div className="code-review-file-identity">
+                              {langLabel && <span className="code-review-lang-badge">{langLabel}</span>}
+                              <span title={filePatch.path}>{filePatch.path}</span>
+                              {filePatch.status === "binary" && <span className="code-review-file-binary">binary</span>}
+                            </div>
+                            <span className="code-review-file-diffstat" aria-label={`+${fileStat.additions} −${fileStat.removals}`}>
+                              <span className="is-add">+{fileStat.additions}</span>
+                              <span className="is-remove">−{fileStat.removals}</span>
+                            </span>
                           </div>
+                          {filePatch.status === "binary" ? (
+                            <div className="code-review-empty">二进制文件，无法以内联文本显示。</div>
+                          ) : (
+                            <DiffContents hunks={filePatch.hunks} layout={layout} wrapped={wrapped} foldUnchanged={foldUnchanged} showWhitespace={showWhitespace} />
+                          )}
                         </div>
-                        {filePatch.status === "binary" ? (
-                          <div className="code-review-empty">二进制文件，无法以内联文本显示。</div>
-                        ) : (
-                          <DiffContents hunks={filePatch.hunks} layout={layout} wrapped={wrapped} foldUnchanged={foldUnchanged} />
-                        )}
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </>
               )}
