@@ -61,9 +61,17 @@ describe('isToolVisible — plan 496 exact-entry promotion', () => {
     expect(isToolVisible('SendMessage', 'discoverable', new Set(), constraints(['SendMessage'], ['SendMessage']))).toBe(false);
   });
 
-  it('promote does not apply to catalog/internal tools', () => {
-    expect(isToolVisible('SendMessage', 'catalog', new Set(['SendMessage']), constraints(['SendMessage']))).toBe(false);
-    expect(isToolVisible('SendMessage', 'internal', new Set(['SendMessage']), constraints(['SendMessage']))).toBe(false);
+  it('promote does not apply to hidden tools', () => {
+    expect(isToolVisible('SendMessage', 'hidden', new Set(['SendMessage']), constraints(['SendMessage']))).toBe(false);
+  });
+
+  it('hint tools are visible without discovery (stub entry, not full schema)', () => {
+    expect(isToolVisible('mcp__srv__query', 'hint', new Set(), NO_CONSTRAINTS)).toBe(true);
+  });
+
+  it('hint tools still respect deny/allow constraints', () => {
+    expect(isToolVisible('mcp__srv__query', 'hint', new Set(), constraints(['other_tool']))).toBe(false);
+    expect(isToolVisible('mcp__srv__query', 'hint', new Set(), constraints(['mcp__srv__query']))).toBe(true);
   });
 
   it('always-exposed tools keep working regardless of promotion', () => {

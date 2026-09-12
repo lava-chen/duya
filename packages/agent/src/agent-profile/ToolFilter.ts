@@ -3,7 +3,8 @@
  *
  * One question: is this tool visible to the LLM this turn?
  *
- *   visible = (always-exposed || already-discovered)
+ *   visible = (exposure tier admits it: always/hint directly,
+ *              discoverable only once found or exact-promoted)
  *           && not denied
  *           && (no allowlist || matches allowlist)
  *
@@ -11,6 +12,7 @@
  */
 
 import type { AgentProfile } from './types.js';
+import type { ExposeMode } from '../tool/registry.js';
 
 // ============================================================
 // Wildcard Matching
@@ -66,17 +68,17 @@ export interface ToolVisibilityConstraints {
  */
 export function isToolVisible(
   toolName: string,
-  exposeMode: 'always' | 'catalog' | 'discoverable' | 'internal',
+  exposeMode: ExposeMode,
   discovered: ReadonlySet<string>,
   c: ToolVisibilityConstraints,
 ): boolean {
-  // 1. Exposure policy
-  if (exposeMode === 'internal') return false;
-  // Catalog tools NEVER enter the request's tools array — even when they were
-  // discovered. The model reads their schema via tool_schema and invokes via
-  // tool_invoke (plan 480). discoverable keeps the legacy 241 behavior
-  // (tool_search hit → injected next turn) until that path is retired.
-  if (exposeMode === 'catalog') return false;
+  // 1. Exposure policy (four tiers)
+  // hidden: never exposed — not in the tools array, not discoverable, not
+  // reachable through the meta tools. Exact allowlist entries do NOT
+  // promote a hidden tool: promotion is an exposure decision, and the
+  // registration already decided this tool is not for the model.
+  if (exposeMode === 'hidden') return false;
+  // discoverable: unknown to the model until found via tool_search.
   // Plan 496: an EXACT (non-wildcard) allowlist entry is a deliberate
   // exposure decision — it promotes a discoverable tool into the toolset
   // without a tool_search round-trip. This is what makes `SendMessage` /
@@ -86,12 +88,17 @@ export function isToolVisible(
   // model cannot search for a tool it does not know it needs). Wildcards
   // (`*`, `file:*`) deliberately do NOT promote — a `full`-profile bot must
   // still name the tool, and main-session `'*'` profiles stay quiet.
-  const promoted =
-    c.allowedTools?.includes(toolName) === true ||
-    c.profileAllowedPatterns?.includes(toolName) === true;
-  if (exposeMode === 'discoverable' && !discovered.has(toolName) && !promoted) {
-    return false;
+  if (exposeMode === 'discoverable') {
+    const promoted =
+      c.allowedTools?.includes(toolName) === true ||
+      c.profileAllowedPatterns?.includes(toolName) === true;
+    if (!discovered.has(toolName) && !promoted) {
+      return false;
+    }
   }
+  // 'always' (full schema entry) and 'hint' (stub entry) are declared on
+  // every request; the caller decides the entry shape. Both fall through
+  // to the constraint checks below.
 
   // 2. Denylist (caller exact + profile wildcard) — deny wins
   if (c.disabledTools?.includes(toolName)) return false;

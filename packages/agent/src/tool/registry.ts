@@ -49,16 +49,19 @@ export interface ToolExecutor {
 }
 
 /**
- * How a tool is exposed to the LLM.
- *   `always` (default) = schema is always in the request's tool list;
- *   `discoverable` = reachable via `tool_search` but not in the default
- *   tool list (plan 241; phased out by plan 480 as tools move to catalog);
- *   `catalog` = NEVER in the request's tool list — schema is read on demand
- *   via the constant `tool_schema` meta tool and the tool is invoked through
- *   `tool_invoke` (plan 480 appended-catalog exposure);
- *   `internal` = not exposed to the LLM at all (debug helpers etc.).
+ * How a tool is exposed to the LLM (four-tier model).
+ *   `always` (default) = full schema rides every request's tool list;
+ *   `hint` = a stub entry (name + description + argument summary, empty
+ *   schema) rides the tool list; the full schema is read on demand via
+ *   the constant `tool_schema` meta tool (dynamic tools such as MCP);
+ *   `discoverable` = NOT in the tool list and unknown to the model until
+ *   found via `tool_search` (schema then delivered as a conversation-tail
+ *   block; invoked through `tool_invoke`);
+ *   `hidden` = not exposed to the LLM at all — invisible to the tool list,
+ *   `tool_search`, the `tool_schema` catalog and `tool_invoke`; internal
+ *   helpers only.
  */
-export type ExposeMode = 'always' | 'catalog' | 'discoverable' | 'internal';
+export type ExposeMode = 'always' | 'hint' | 'discoverable' | 'hidden';
 
 /**
  * Plan 241: persisted registration metadata. Forwarded to the
@@ -180,6 +183,7 @@ export class ToolRegistry {
     definition: Tool,
     executor: ToolExecutor,
     owner: 'non-mcp' | 'mcp' = 'mcp',
+    meta?: ToolMetaInput,
   ): void {
     if (this.tools.has(key)) {
       throw new Error(
@@ -188,7 +192,7 @@ export class ToolRegistry {
         `fix the upstream server; otherwise this is a registry bug.`,
       );
     }
-    this.tools.set(key, { definition, executor, owner });
+    this.tools.set(key, { definition, executor, owner, meta: meta ? { ...meta } : undefined });
   }
 
   /**

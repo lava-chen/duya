@@ -23,7 +23,7 @@ describe('readToolExposureConfig (plan 452 Phase A)', () => {
     delete process.env.DUYA_TOOLS_ON_DEMAND_DISCOVERY;
   });
 
-  it('defaults to Direct exposure (onDemandDiscovery: false) without config', () => {
+  it('defaults to hint exposure (onDemandDiscovery: false) without config', () => {
     expect(readToolExposureConfig(tmpRoot).onDemandDiscovery).toBe(false);
   });
 
@@ -52,7 +52,7 @@ describe('readToolExposureConfig (plan 452 Phase A)', () => {
   });
 });
 
-describe('readToolExposureConfig three-value policy (plan 480 §8.4)', () => {
+describe('readToolExposureConfig exposure policy (four-tier model)', () => {
   beforeEach(() => {
     tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-tool-exposure3-'));
     delete process.env.DUYA_TOOLS_EXPOSURE;
@@ -65,26 +65,33 @@ describe('readToolExposureConfig three-value policy (plan 480 §8.4)', () => {
     delete process.env.DUYA_TOOLS_ON_DEMAND_DISCOVERY;
   });
 
-  it('defaults to full exposure', () => {
+  it('defaults to hint exposure', () => {
     const config = readToolExposureConfig(tmpRoot);
-    expect(config.exposure).toBe('full');
+    expect(config.exposure).toBe('hint');
     expect(config.onDemandDiscovery).toBe(false);
   });
 
-  it('reads the explicit exposure key', () => {
+  it('reads the explicit exposure keys', () => {
+    for (const value of ['full', 'hint', 'search'] as const) {
+      fs.writeFileSync(path.join(tmpRoot, 'config.toml'), `[tools]\nexposure = "${value}"\n`, 'utf-8');
+      expect(readToolExposureConfig(tmpRoot).exposure).toBe(value);
+    }
+  });
+
+  it('normalizes the retired catalog policy to hint', () => {
     fs.writeFileSync(path.join(tmpRoot, 'config.toml'), '[tools]\nexposure = "catalog"\n', 'utf-8');
     const config = readToolExposureConfig(tmpRoot);
-    expect(config.exposure).toBe('catalog');
+    expect(config.exposure).toBe('hint');
     expect(config.onDemandDiscovery).toBe(false);
   });
 
   it('exposure key wins over the legacy boolean', () => {
     fs.writeFileSync(
       path.join(tmpRoot, 'config.toml'),
-      '[tools]\nexposure = "catalog"\non_demand_discovery = true\n',
+      '[tools]\nexposure = "hint"\non_demand_discovery = true\n',
       'utf-8',
     );
-    expect(readToolExposureConfig(tmpRoot).exposure).toBe('catalog');
+    expect(readToolExposureConfig(tmpRoot).exposure).toBe('hint');
   });
 
   it('maps legacy on_demand_discovery=true to search', () => {
@@ -100,19 +107,19 @@ describe('readToolExposureConfig three-value policy (plan 480 §8.4)', () => {
 
   it('ignores invalid exposure values (keeps default)', () => {
     fs.writeFileSync(path.join(tmpRoot, 'config.toml'), '[tools]\nexposure = "banana"\n', 'utf-8');
-    expect(readToolExposureConfig(tmpRoot).exposure).toBe('full');
+    expect(readToolExposureConfig(tmpRoot).exposure).toBe('hint');
   });
 
   it('env DUYA_TOOLS_EXPOSURE overrides config', () => {
     fs.writeFileSync(path.join(tmpRoot, 'config.toml'), '[tools]\nexposure = "full"\n', 'utf-8');
     process.env.DUYA_TOOLS_EXPOSURE = 'catalog';
-    expect(readToolExposureConfig(tmpRoot).exposure).toBe('catalog');
+    expect(readToolExposureConfig(tmpRoot).exposure).toBe('hint');
   });
 
   it('new env key wins over the legacy env key', () => {
     process.env.DUYA_TOOLS_ON_DEMAND_DISCOVERY = '1';
-    process.env.DUYA_TOOLS_EXPOSURE = 'catalog';
-    expect(readToolExposureConfig(tmpRoot).exposure).toBe('catalog');
+    process.env.DUYA_TOOLS_EXPOSURE = 'full';
+    expect(readToolExposureConfig(tmpRoot).exposure).toBe('full');
   });
 });
 
@@ -120,98 +127,11 @@ describe('mcpExposureToExposeMode', () => {
   it('maps each policy value to the registry ExposeMode', () => {
     const cases: Array<[MCPExposureMode, string]> = [
       ['full', 'always'],
+      ['hint', 'hint'],
       ['search', 'discoverable'],
-      ['catalog', 'catalog'],
     ];
     for (const [policy, expected] of cases) {
       expect(mcpExposureToExposeMode(policy)).toBe(expected);
     }
-  });
-});
-
-describe('catalog guard level (plan 480 P2.5)', () => {
-  beforeEach(() => {
-    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-tool-guard-'));
-    delete process.env.DUYA_CATALOG_GUARD;
-  });
-
-  afterEach(() => {
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
-    delete process.env.DUYA_CATALOG_GUARD;
-  });
-
-  it('defaults to warn', () => {
-    expect(readToolExposureConfig(tmpRoot).catalogGuard).toBe('warn');
-  });
-
-  it('reads [tools] catalog_guard = "enforce"', () => {
-    fs.writeFileSync(path.join(tmpRoot, 'config.toml'), '[tools]\ncatalog_guard = "enforce"\n', 'utf-8');
-    expect(readToolExposureConfig(tmpRoot).catalogGuard).toBe('enforce');
-  });
-
-  it('ignores invalid guard values (keeps default)', () => {
-    fs.writeFileSync(path.join(tmpRoot, 'config.toml'), '[tools]\ncatalog_guard = "block_all"\n', 'utf-8');
-    expect(readToolExposureConfig(tmpRoot).catalogGuard).toBe('warn');
-  });
-
-  it('env DUYA_CATALOG_GUARD overrides config', () => {
-    fs.writeFileSync(path.join(tmpRoot, 'config.toml'), '[tools]\ncatalog_guard = "warn"\n', 'utf-8');
-    process.env.DUYA_CATALOG_GUARD = 'enforce';
-    expect(readToolExposureConfig(tmpRoot).catalogGuard).toBe('enforce');
-  });
-});
-
-describe('discovered-tool schema delivery (plan 480 P3.2)', () => {
-  beforeEach(() => {
-    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-tool-delivery-'));
-    delete process.env.DUYA_TOOLS_DISCOVERED_SCHEMA;
-  });
-
-  afterEach(() => {
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
-    delete process.env.DUYA_TOOLS_DISCOVERED_SCHEMA;
-  });
-
-  it('defaults to tail delivery (tools array stays byte-stable)', () => {
-    expect(readToolExposureConfig(tmpRoot).discoveredSchemaDelivery).toBe('tail');
-  });
-
-  it('reads [tools] discovered_schema = "array" (legacy fallback)', () => {
-    fs.writeFileSync(
-      path.join(tmpRoot, 'config.toml'),
-      '[tools]\ndiscovered_schema = "array"\n',
-      'utf-8',
-    );
-    expect(readToolExposureConfig(tmpRoot).discoveredSchemaDelivery).toBe('array');
-  });
-
-  it('ignores invalid delivery values (keeps default)', () => {
-    fs.writeFileSync(
-      path.join(tmpRoot, 'config.toml'),
-      '[tools]\ndiscovered_schema = "bogus"\n',
-      'utf-8',
-    );
-    expect(readToolExposureConfig(tmpRoot).discoveredSchemaDelivery).toBe('tail');
-  });
-
-  it('env DUYA_TOOLS_DISCOVERED_SCHEMA overrides config', () => {
-    fs.writeFileSync(
-      path.join(tmpRoot, 'config.toml'),
-      '[tools]\ndiscovered_schema = "tail"\n',
-      'utf-8',
-    );
-    process.env.DUYA_TOOLS_DISCOVERED_SCHEMA = 'array';
-    expect(readToolExposureConfig(tmpRoot).discoveredSchemaDelivery).toBe('array');
-  });
-
-  it('keeps delivery independent of the exposure policy', () => {
-    fs.writeFileSync(
-      path.join(tmpRoot, 'config.toml'),
-      '[tools]\nexposure = "catalog"\ndiscovered_schema = "array"\n',
-      'utf-8',
-    );
-    const config = readToolExposureConfig(tmpRoot);
-    expect(config.exposure).toBe('catalog');
-    expect(config.discoveredSchemaDelivery).toBe('array');
   });
 });
