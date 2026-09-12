@@ -48,10 +48,6 @@ import {
   handleSetVisionSettings,
   handleListOutputStyles,
   handleSetOutputStyle,
-  handleListPairing,
-  handleApprovePairing,
-  handleRevokePairing,
-  handleCheckPairing,
   handleConfigKvSet,
   handleConfigKvGet,
   handleConfigKvUnset,
@@ -820,30 +816,6 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // POST /v1/config/output-styles
   if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'output-styles') {
     void handleSetOutputStyle(req, res);
-    return;
-  }
-
-  // GET /v1/config/pairing
-  if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'pairing') {
-    handleListPairing(req, res);
-    return;
-  }
-
-  // POST /v1/config/pairing/approve
-  if (req.method === 'POST' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'pairing' && parts[3] === 'approve') {
-    void handleApprovePairing(req, res);
-    return;
-  }
-
-  // POST /v1/config/pairing/revoke
-  if (req.method === 'POST' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'pairing' && parts[3] === 'revoke') {
-    void handleRevokePairing(req, res);
-    return;
-  }
-
-  // GET /v1/config/pairing/check
-  if (req.method === 'GET' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'pairing' && parts[3] === 'check') {
-    handleCheckPairing(req, res);
     return;
   }
 

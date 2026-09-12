@@ -2,7 +2,8 @@
  * CDPClient - Chrome DevTools Protocol client
  * Supports two modes:
  * 1. Extension mode: Connect via HTTP bridge to Chrome Extension (reuses user's Chrome)
- * 2. Playwright mode: Launch independent Chromium (no extension needed)
+ * 2. Playwright mode: One shared headed Chromium, each session owns a tab
+ *    (no extension needed)
  */
 
 import { EventEmitter } from 'events';
@@ -1053,24 +1054,88 @@ export class ExtensionCDPClient extends EventEmitter implements ICDPClient {
 }
 
 // ========================================================================
-// Playwright Mode: Launch independent Chromium
+// Playwright Mode: shared headed Chromium, one tab per session
 // ========================================================================
 
 /**
- * CDP Client using Playwright (fallback when Extension is not available)
+ * Shared browser singleton. All PlaywrightCDPClient instances in this
+ * process multiplex a single headed Chromium and a single browser context,
+ * so parallel sessions appear as tabs of one window instead of one window
+ * per task. Storage (cookies, localStorage) is shared across sessions —
+ * the same trade-off the extension backend makes by driving the user's
+ * real profile.
+ */
+interface SharedPlaywrightBrowser {
+  browser: any;
+  context: any;
+  refCount: number;
+}
+
+let sharedPlaywright: SharedPlaywrightBrowser | null = null;
+let sharedPlaywrightLaunch: Promise<SharedPlaywrightBrowser> | null = null;
+
+async function launchSharedPlaywright(): Promise<SharedPlaywrightBrowser> {
+  try {
+    // Dynamic import to avoid loading when not needed
+    const { chromium } = await import('playwright');
+    const browser = await chromium.launch({ headless: false });
+    const context = await browser.newContext();
+    const shared: SharedPlaywrightBrowser = { browser, context, refCount: 0 };
+    browser.on('disconnected', () => {
+      if (sharedPlaywright === shared) sharedPlaywright = null;
+    });
+    sharedPlaywright = shared;
+    return shared;
+  } finally {
+    sharedPlaywrightLaunch = null;
+  }
+}
+
+async function acquireSharedPlaywright(attempt = 0): Promise<SharedPlaywrightBrowser> {
+  if (sharedPlaywright && sharedPlaywright.browser.isConnected()) {
+    sharedPlaywright.refCount++;
+    return sharedPlaywright;
+  }
+  if (!sharedPlaywrightLaunch) {
+    sharedPlaywrightLaunch = launchSharedPlaywright();
+  }
+  const shared = await sharedPlaywrightLaunch;
+  // The browser may have been torn down between launch and here if the
+  // previous holder released it first; retry with a fresh launch.
+  if (!shared.browser.isConnected()) {
+    if (attempt >= 2) {
+      throw new Error('Shared Playwright browser exited immediately after launch');
+    }
+    return acquireSharedPlaywright(attempt + 1);
+  }
+  shared.refCount++;
+  return shared;
+}
+
+function releaseSharedPlaywright(shared: SharedPlaywrightBrowser): void {
+  shared.refCount = Math.max(0, shared.refCount - 1);
+  if (shared.refCount === 0) {
+    if (sharedPlaywright === shared) sharedPlaywright = null;
+    void shared.browser.close().catch(() => {});
+  }
+}
+
+/**
+ * CDP Client using Playwright (fallback when Extension is not available).
+ * Connects to a shared headed Chromium; each client owns one tab.
  */
 export class PlaywrightCDPClient extends EventEmitter implements ICDPClient {
-  private browser: unknown | null = null;
+  private shared: SharedPlaywrightBrowser | null = null;
   private page: unknown | null = null;
   private cdpSession: unknown | null = null;
+  private ownedPages: any[] = [];
   private connected = false;
 
   async connect(): Promise<void> {
     try {
-      // Dynamic import to avoid loading when not needed
-      const { chromium } = await import('playwright');
-      this.browser = await chromium.launch({ headless: false });
-      this.page = await (this.browser as any).newPage();
+      this.shared = await acquireSharedPlaywright();
+      this.page = await this.shared.context.newPage();
+      this.ownedPages = [this.page];
       this.cdpSession = await (this.page as any).context().newCDPSession(this.page);
       this.connected = true;
       this.emit('connected');
@@ -1179,61 +1244,74 @@ export class PlaywrightCDPClient extends EventEmitter implements ICDPClient {
   }
 
   async close(): Promise<void> {
-    if (this.browser) {
-      await (this.browser as any).close();
-      this.browser = null;
-      this.page = null;
-      this.cdpSession = null;
+    const page = this.page as any;
+    this.page = null;
+    this.cdpSession = null;
+    if (page) {
+      try { await page.close(); } catch {}
+    }
+    this.ownedPages = [];
+    if (this.shared) {
+      releaseSharedPlaywright(this.shared);
+      this.shared = null;
     }
     this.connected = false;
     this.emit('closed');
   }
 
   async closeWindow(): Promise<void> {
-    // Playwright mode: close the entire browser (single window)
+    // Close this session's tab; the shared Chromium exits when the last
+    // session releases it (refcount hits zero).
     await this.close();
   }
 
-  // Tab management stubs for Playwright
+  // Tab management, scoped to the pages this session owns
   async tabs(): Promise<TabInfo[]> {
-    const contexts = await (this.browser as any).contexts();
     const allTabs: TabInfo[] = [];
-    for (const context of contexts) {
-      const pages = await context.pages();
-      for (let i = 0; i < pages.length; i++) {
+    for (let i = 0; i < this.ownedPages.length; i++) {
+      const p = this.ownedPages[i];
+      try {
         allTabs.push({
           id: i,
-          url: await pages[i].url(),
-          title: await pages[i].title(),
-          active: pages[i] === this.page,
+          url: p.url(),
+          title: await p.title(),
+          active: p === this.page,
         });
+      } catch {
+        // Page closed externally — drop it so indices stay stable going forward.
+        this.ownedPages.splice(i, 1);
+        i--;
       }
     }
     return allTabs;
   }
 
   async newTab(url?: string): Promise<string | undefined> {
-    const newPage = await (this.browser as any).newPage();
+    if (!this.shared) throw new Error('Not connected');
+    const newPage = await this.shared.context.newPage();
+    this.ownedPages.push(newPage);
     if (url) await newPage.goto(url);
-    return '0';
+    this.page = newPage;
+    return String(this.ownedPages.length - 1);
   }
 
-  async closeTab(_target?: number | string): Promise<void> {
-    // Playwright doesn't support closing arbitrary tabs easily
-    console.warn('[BrowserTool] closeTab not fully supported in Playwright mode');
+  async closeTab(target?: number | string): Promise<void> {
+    const index = typeof target === 'number' ? target : parseInt(String(target), 10);
+    const p = this.ownedPages[index];
+    if (!p) throw new Error(`Tab not found: ${target}`);
+    this.ownedPages.splice(index, 1);
+    try { await p.close(); } catch {}
+    if (this.page === p) {
+      this.page = this.ownedPages[this.ownedPages.length - 1] ?? null;
+    }
   }
 
   async selectTab(target: number | string): Promise<void> {
-    const contexts = await (this.browser as any).contexts();
-    for (const context of contexts) {
-      const pages = await context.pages();
-      const index = typeof target === 'number' ? target : parseInt(target, 10);
-      if (pages[index]) {
-        this.page = pages[index];
-        return;
-      }
+    const index = typeof target === 'number' ? target : parseInt(String(target), 10);
+    if (!this.ownedPages[index]) {
+      throw new Error(`Tab not found: ${target}`);
     }
-    throw new Error(`Tab not found: ${target}`);
+    this.page = this.ownedPages[index];
   }
 
   // File upload stub for Playwright
@@ -1409,10 +1487,10 @@ export async function createCDPClientForMode(
     return webviewClient;
   }
 
-  logger.info('Extension and webview unavailable, launching Playwright mode (independent Chromium)...', undefined, 'BrowserTool');
+  logger.info('Extension and webview unavailable, launching Playwright mode (shared headed Chromium)...', undefined, 'BrowserTool');
   const playwrightClient = new PlaywrightCDPClient();
   await playwrightClient.connect();
-  logger.info('Playwright mode connected - using independent browser window', undefined, 'BrowserTool');
+  logger.info('Playwright mode connected - session runs as a tab of the shared browser window', undefined, 'BrowserTool');
   return playwrightClient;
 }
 

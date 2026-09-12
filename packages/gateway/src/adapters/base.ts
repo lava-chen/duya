@@ -94,6 +94,14 @@ export interface PlatformAdapter {
    * next gateway process restart.
    */
   onReconnected?(handler: () => void): void;
+
+  /**
+   * Plan 520: notified when Main broadcasts the agent busy/idle state for
+   * chats routed through this adapter. Adapters may use it for
+   * platform-specific busy UX; queue/steer/interrupt buffering itself is
+   * handled generically by the GatewayManager.
+   */
+  onAgentBusy?(isBusy: boolean): void;
 }
 
 /**

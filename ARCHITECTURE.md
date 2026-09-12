@@ -138,6 +138,36 @@ platform. Two data flows:
   `https://` url degrades to the existing text-with-link. Slack stays
   text-with-link.
 
+### Gateway = Router + Status Broadcast (Plan 520)
+
+`packages/gateway` serves the **legacy direct-channel line** only (settings
+BridgeSection bindings). Bots ride the per-bot `electron/channels` pipeline
+and never touch it. The gateway subprocess no longer:
+
+- resolves sessions (`user-mapper.ts` deleted) — Main resolves/creates the
+  session from the `gateway_user_map` row in
+  `message-bus.ts:resolveOrCreateGatewaySession`;
+- executes slash commands — `commands/dispatcher.ts` detects known commands
+  and wraps them as `gateway:inbound { kind: 'command', command, args }`;
+  Main executes help/new/reset/clear/status/stop and answers via
+  `requestChannelSend`;
+- gates senders — pairing (`electron/gateway/pairing.ts`,
+  `gateway:pairing:*`, `/pair` `/approve` `/deny`) is fully removed;
+  Main enforces a per-platform channel allow-list
+  (`channel-directory.ts`, settings key `gateway_allowlist`, empty list =
+  open) and replies `gateway:inbound:response { authorized }`.
+
+Busy handling is a Main→Gateway broadcast:
+`gateway:agent_busy { platform, platformChatId, busy, ok }` — set when a wake
+is enqueued, cleared by `forwardToGateway` on the terminal
+`chat:done`/`chat:error`. Each adapter's `busy_input` option decides
+queue (buffer + flush on idle) / steer / interrupt locally; the working
+reaction (🤔→👍/👎) and typing indicator are the user-facing bot-status
+signal. Retained: CLI control-plane proactive send
+(`duya channel send` → `POST /v1/channels/send` → `requestChannelSend` →
+`gateway:send` → `GatewayManager.sendMessage`) and plan 507 inbound
+attachment persistence.
+
 ## Database
 
 ### Location

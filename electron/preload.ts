@@ -560,18 +560,11 @@ export interface GatewayAPI {
     createdAt: number
     updatedAt: number
   } | null>
-  pairingList: () => Promise<{ pending: unknown[]; approved: unknown[] }>
-  pairingApprove: (platform: string, code: string) => Promise<{ approved: boolean; error?: string }>
-  pairingRevoke: (platform: string, platformUserId: string) => Promise<{ revoked: boolean }>
+  allowlistList: () => Promise<Record<string, string[]>>
+  allowlistAdd: (platform: string, platformUserId: string) => Promise<{ success: boolean }>
+  allowlistRemove: (platform: string, platformUserId: string) => Promise<{ success: boolean }>
   feishuQrBegin: () => Promise<{ success: boolean; result?: { qr_url?: string; device_code?: string; user_code?: string; interval?: number; expire_in?: number }; error?: string }>
   feishuQrPoll: (begin: { device_code: string; interval: number; expire_in: number }) => Promise<{ success: boolean; result?: { app_id?: string; app_secret?: string; open_id?: string; domain?: string }; error?: string }>
-  // Permission handling
-  getPendingPermission: (sessionId: string) => Promise<{
-    id: string
-    toolName: string
-    toolInput: Record<string, unknown>
-  } | null>
-  resolvePermission: (sessionId: string, decision: 'allow' | 'deny') => Promise<{ success: boolean }>
 }
 
 export interface AutomationAPI {
@@ -2253,18 +2246,13 @@ const electronAPI: ElectronAPI = {
     getProxyStatus: () => ipcRenderer.invoke('gateway:getProxyStatus'),
     listSessions: () => ipcRenderer.invoke('gateway:listSessions'),
     getSession: (sessionId: string) => ipcRenderer.invoke('gateway:getSession', sessionId),
-    pairingList: async () => {
-      return await ipcRenderer.invoke('gateway:pairing:list');
-    },
-    pairingApprove: (platform: string, code: string) => ipcRenderer.invoke('gateway:pairing:approve', platform, code),
-    pairingRevoke: (platform: string, platformUserId: string) => ipcRenderer.invoke('gateway:pairing:revoke', platform, platformUserId),
+    // Plan 520: channel allow-list (replaces the pairing system)
+    allowlistList: () => ipcRenderer.invoke('gateway:allowlist:list'),
+    allowlistAdd: (platform: string, platformUserId: string) => ipcRenderer.invoke('gateway:allowlist:add', platform, platformUserId),
+    allowlistRemove: (platform: string, platformUserId: string) => ipcRenderer.invoke('gateway:allowlist:remove', platform, platformUserId),
     feishuQrBegin: () => ipcRenderer.invoke('gateway:feishu:qr:begin'),
     feishuQrPoll: (begin: { device_code: string; interval: number; expire_in: number }) =>
       ipcRenderer.invoke('gateway:feishu:qr:poll', begin),
-    // Permission handling
-    getPendingPermission: (sessionId: string) => ipcRenderer.invoke('gateway:getPendingPermission', sessionId),
-    resolvePermission: (sessionId: string, decision: 'allow' | 'deny') =>
-      ipcRenderer.invoke('gateway:resolvePermission', sessionId, decision),
   },
   automation: {
     listCrons: () => ipcRenderer.invoke('automation:cron:list'),

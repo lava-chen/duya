@@ -464,9 +464,14 @@ export class ProviderStore {
     if (!modelId) {
       return { error: 'modelId required', code: 'runtime.missingModel' };
     }
-    // Plan 334 Phase 4: if the caller did not pass capabilities, pull the
-    // DB override row so user toggles feed into the runtime config.
-    const resolved = capabilities ?? this.catalogStore.getOverrides(active.id, modelId);
+    // Plan 334 Phase 4 / plan 522: when the caller did not pass
+    // capabilities, resolve the merged capability (config marker > DB
+    // override > @duya/ai catalog baseline) instead of reading the DB
+    // override row alone. The DB-only lookup dropped the catalog window
+    // for providers without an override row (e.g. deepseek) and forced
+    // the agent's 200K compaction fallback.
+    const resolved =
+      capabilities ?? this.resolveRuntimeCapability(active.id, modelId);
     const cfg = toRuntimeConfig(active, { modelId, capabilities: resolved });
     const v = validateRuntimeConfig(cfg);
     if (!v.ok) {
@@ -491,9 +496,11 @@ export class ProviderStore {
     const p = this.getLlmProvider(providerId);
     if (!p) return { error: `provider ${providerId} not found`, code: 'provider.notFound' };
     if (!modelId) return { error: 'modelId required', code: 'runtime.missingModel' };
-    // Plan 334 Phase 4: fall back to the DB override row when the caller
-    // did not pass capabilities explicitly.
-    const resolved = capabilities ?? this.catalogStore.getOverrides(providerId, modelId);
+    // Plan 334 Phase 4 / plan 522: fall back to the merged capability
+    // resolver (config marker > DB override > catalog baseline) when the
+    // caller did not pass capabilities explicitly.
+    const resolved =
+      capabilities ?? this.resolveRuntimeCapability(providerId, modelId);
     const cfg = toRuntimeConfig(p, { modelId, capabilities: resolved });
     const v = validateRuntimeConfig(cfg);
     if (!v.ok) {
