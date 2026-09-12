@@ -10,13 +10,17 @@
 要手工移动文件并同步两处索引。
 
 目标：把 plan 管理做成一个 **duya 插件**，插件自带一个 **stdio MCP server**，
-用结构化工具（`plan_status` / `plan_get` / `plan_create` …）替代 README 整读和手工文件操作。
-存储放在**项目目录**下的 `.duya/plans/`，随仓库走。
+提供**最小查询/归档工具集**（`plan_status` / `plan_search` / `plan_complete`）替代
+README 整读和手工归档；plan 的创建与内容更新继续用原生文件工具（Write/Edit）直接操作
+markdown。存储放在**项目目录**下的 `.duya/plans/`，随仓库走。
 
 **用户已拍板的决策**：
 
 - 存储位置：`<workspace>/.duya/plans/`（项目级，非全局 `~/.duya/`）。
 - 形态：duya 插件（manifest + MCP server + skill），不是 agent 内置工具——顺带 dogfood 插件/MCP 管线（plan 455/498 已落地的栈）。
+- 工具面刻意最小化（2026-09-12）：只保留查询类（`plan_search` / `plan_status`）+
+  归档类（`plan_complete`）。创建/更新/内容读取一律用原生文件工具直改 markdown——
+  模型本来就擅长，不值得占 schema 预算。索引用 **JSON**（决策理由见下节）。
 
 ## 存储设计
 
@@ -47,13 +51,24 @@ updated: 2026-09-12
 ---
 ```
 
-- `index.json` 只缓存 `{id, slug, title, priority, status, tags, updated, path}`；
-  任何写操作后原地更新，读操作优先走索引、损坏/缺失时全量扫描重建（自愈）。
-- 正文（阶段/checkbox/进度记录）保持 markdown，工具做**定点改写**（frontmatter 字段替换、
-  checkbox 行替换），不整文件重写，保留人工直接编辑文件的兼容性。
+- `index.json` 只缓存 `{id, slug, title, priority, status, tags, updated, path}`。
+  **索引选 JSON，不选数据库**，理由：
+  1. 索引是纯派生缓存，任何时刻可从 frontmatter 全量重建——数据库的 ACID/事务
+     在这里没有收益，正确性从不依赖索引；
+  2. MCP server 是独立 esbuild bundle 的 stdio 进程：better-sqlite3 是 native 模块，
+     无法打进 cjs bundle，还得随插件分发 ABI 匹配的二进制，违背零依赖树目标；
+     JSON 只用 `node:fs`；
+  3. 创建/更新走文件工具、**不经过 server**，索引必然落后于文件——所以索引按
+     plan 445 skills snapshot 的范式做**指纹缓存**（每文件记 mtime+size）：每次查询
+     先比对指纹，变更/新增/删除的文件增量重扫合并，索引损坏/缺失触发全量重建。
+     文件工具绕过 server 直写因此天然安全；
+  4. 规模在百级 plan，全量扫描 <50ms，增量只是顺手。
+- 正文（阶段/checkbox/进度记录）保持 markdown；**checkbox 继续检测靠 Read 直读正文**——
+  agent 看 `- [ ]`/`- [x]` 自行判断接续点，勾选就是 Edit 那一行，不设专门工具。
 - **Git 跟踪**：`.duya/plans/` 默认纳入版本控制（这是相对旧 `docs/exec-plans/` 的改进——
   旧位置被 `docs/*/` gitignore 规则吞掉，新文件要 `git add -f`）。若 `.duya/` 下将来有
   其他非 git 数据，只对 `plans/` 子树做 gitignore 例外，其余默认忽略。
+  `index.json` 同样入库（重建成本低，入库只为 diff 可见）。
 
 ## 插件设计
 
@@ -77,20 +92,25 @@ packages/plugin-core/src/plugins/builtin/plans/
 - **工具门控**：通过 `packages/agent/src/config/tool-exposure.ts` 限制暴露——默认仅对
   开发者/内部 profile 暴露，避免占用普通会话的 schema 预算（对齐 plan 480 的约束）。
 
-## MCP 工具契约（6 个，单 server 收口）
+## MCP 工具契约（3 个，查询 + 归档收口）
 
 | 工具 | 输入 | 行为 |
 | --- | --- | --- |
-| `plan_status` | `{}` | 活跃 plan 紧凑列表（id/title/priority/status/最近 updated），替代整读 README |
-| `plan_get` | `{id}` | frontmatter + 正文（可 `include_body: false` 只取元数据） |
-| `plan_search` | `{query}` | title/tags/正文匹配，返回 id + 片段 |
-| `plan_create` | `{title, priority?, tags?, body?}` | 分配下一个全局递增 id，slug 化文件名，写入 `active/` |
-| `plan_update` | `{id, status?, priority?, note?}` | frontmatter 定点更新；`note` 追加到正文 `## Progress` 段（自动带日期） |
-| `plan_complete` | `{id}` | status=completed → 移入 `completed/`，索引同步（obsolete 用 `plan_update(status)` + `superseded_by`） |
+| `plan_status` | `{}` | 活跃 plan 紧凑列表（id/title/priority/status/最近 updated）+ 各目录计数 + `nextId` 建议（max+1），替代整读 README |
+| `plan_search` | `{keyword}` | title/tags/正文全文匹配，返回 id/slug/相对路径/片段——agent 拿路径后直接 Read |
+| `plan_complete` | `{id}` | 唯一写操作：frontmatter `status=completed` → 移入 `completed/`，索引同步 |
 
-- id 分配：仓库内独立计数（`index.json` 里存 `nextId`，重建时取 max+1 兜底）。
-- 错误面：id 不存在 / frontmatter 损坏 / 并发写冲突（写前 mtime 校验）返回结构化错误，
-  不静默。
+**不经 MCP 的操作（原生文件工具直做）**：
+
+- **创建**：agent 从 `plan_status` 的 `nextId` 取号，按 skill 里的 frontmatter 模板
+  Write 到 `active/NNN-slug.md`；server 下次查询经指纹比对自动发现新文件。
+- **更新状态/优先级/进度/勾 checkbox**：Edit 直改 frontmatter 或正文行。
+- **内容读取**：`plan_search` 给出路径后 Read。
+- **obsolete**：低频操作，不设工具——Edit frontmatter（`status: obsolete` +
+  `superseded_by`）后手动移入 `obsolete/` 即可。
+
+- 错误面：id 不存在 / frontmatter 损坏返回结构化错误，不静默。
+  `plan_complete` 写前做 mtime 校验，避免与并行的文件工具编辑互踩。
 
 ## Git 取舍（相比旧体系是净收益）
 
@@ -116,14 +136,14 @@ README 与文件双处手工同步）全部消失。唯一变化是路径从 `do
 
 - [ ] 1.1 `.duya/plans/` 目录布局 + 从会话 workspace 解析根路径（`plansStore/paths.ts`）
 - [ ] 1.2 frontmatter 解析/定点写回（容错：无 frontmatter 的旧文件可读不可写升级）
-- [ ] 1.3 index.json 读写、损坏自愈重建、nextId 分配
-- [ ] 1.4 六个操作的 store 层实现（create/get/search/update/complete/status），mtime 写冲突校验
-- [ ] 1.5 单测：CRUD、重建、损坏 frontmatter、并发写、checkbox 定点改写
+- [ ] 1.3 index.json（含 per-file mtime+size 指纹）：查询前增量重扫合并，损坏/缺失全量重建；`nextId` 取 max+1 派生
+- [ ] 1.4 三个操作的 store 层实现（status/search/complete），complete 写前 mtime 校验
+- [ ] 1.5 单测：指纹增量与全量重建、损坏 frontmatter、complete 移动与并发校验、绕过 server 的直写文件能被查询发现
 
 ### Phase 2 — MCP server
 
 - [ ] 2.1 esbuild 配置：`plans-server.ts` → `plans-server.cjs`（bundle MCP SDK，cjs，外部化 node builtin）
-- [ ] 2.2 stdio server：6 工具 schema + handler 接 store；workspace 根注入 + 无 workspace 不注入
+- [ ] 2.2 stdio server：3 工具 schema + handler 接 store；workspace 根注入 + 无 workspace 不注入
 - [ ] 2.3 server 级单测（in-process 驱动 handler）
 
 ### Phase 3 — 插件封装与接线
@@ -142,7 +162,7 @@ README 与文件双处手工同步）全部消失。唯一变化是路径从 `do
 
 ### Phase 5 — Dogfood 验证
 
-- [ ] 5.1 本 plan 自身迁入新存储，用 `plan_update`/`plan_complete` 走完剩余生命周期
+- [ ] 5.1 本 plan 自身迁入新存储，用 `plan_complete` 收尾；状态/checkbox 变更全程走 Edit 直改验证文件工具路径
 - [ ] 5.2 并行会话实测：主检出与 worktree 各自的 store 互不干扰
 - [ ] 5.3 插件禁用路径：fallback 读文件说明有效
 
