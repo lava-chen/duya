@@ -929,35 +929,9 @@ export class WeixinAdapter extends BaseAdapter {
       return this.allowFrom.has(senderId);
     }
     if (this.dmPolicy === 'pairing') {
-      // Check pairing via IPC
-      const ipc = this.getIpcClient?.();
-      if (ipc) {
-        try {
-          const result = await ipc.checkPairing('weixin', senderId) as { approved?: boolean };
-          if (result?.approved) {
-            return true;
-          }
-          // Generate pairing code via IPC
-          const genResult = await ipc.generatePairingCode(
-            'weixin',
-            senderId,
-            senderId,
-            ''
-          ) as { code?: string; error?: string };
-          if (genResult?.code) {
-            const msg = `📱 请将此配对码发送给管理员进行审批：\n\n**${genResult.code}**\n\n配对码有效期1小时。`;
-            this.sendText(senderId, msg).catch((err) => {
-              console.error('[Weixin] Failed to send pairing code:', err);
-            });
-          }
-          return false;
-        } catch (err) {
-          console.error('[Weixin] Pairing check error:', err);
-          return false;
-        }
-      }
-      // If IPC not available, use open policy (fail open for development)
-      console.warn('[Weixin] IPC not available, using open policy');
+      // Plan 520: pairing codes are gone. Forward the message and let the
+      // Main Process channel allow-list decide; the gateway surfaces the
+      // unauthorized reply when the sender is not on the list.
       return true;
     }
     // 'open' policy
@@ -976,32 +950,7 @@ export class WeixinAdapter extends BaseAdapter {
       return this.groupAllowFrom.has(groupId);
     }
     if (this.groupPolicy === 'pairing') {
-      const ipc = this.getIpcClient?.();
-      if (ipc) {
-        try {
-          const result = await ipc.checkPairing('weixin', groupId) as { approved?: boolean };
-          if (result?.approved) {
-            return true;
-          }
-          const genResult = await ipc.generatePairingCode(
-            'weixin',
-            groupId,
-            groupId,
-            ''
-          ) as { code?: string; error?: string };
-          if (genResult?.code) {
-            const msg = `📱 请将此配对码发送给管理员进行审批：\n\n**${genResult.code}**\n\n配对码有效期1小时。`;
-            this.sendText(groupId, msg).catch((err) => {
-              console.error('[Weixin] Failed to send group pairing code:', err);
-            });
-          }
-          return false;
-        } catch (err) {
-          console.error('[Weixin] Group pairing check error:', err);
-          return false;
-        }
-      }
-      console.warn('[Weixin] IPC not available, using open group policy');
+      // Plan 520: pairing codes are gone — forward, Main allow-list decides.
       return true;
     }
     // 'open' group policy

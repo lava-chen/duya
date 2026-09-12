@@ -1,99 +1,36 @@
 /**
- * Gateway Command Dispatcher
+ * Gateway Command Dispatcher (plan 520)
  *
- * Handles slash command dispatch for gateway platform messages.
+ * The gateway no longer executes slash commands locally. Detection only:
+ * resolve the command against the shared registry, and wrap it as
+ * `{ kind: 'command', command, args }` for the `gateway:inbound` IPC so the
+ * Main Process executes it and answers through the same channel.
  */
 
-import type { NormalizedMessage, NormalizedReply } from '../types.js';
-import { resolveCommand, isGatewayKnownCommand } from './registry.js';
-import { generateHelpText } from './help.js';
+import type { NormalizedMessage } from '../types.js';
+import { resolveCommand } from './registry.js';
 
-export interface CommandDispatcherOptions {
-  resetSession: (msg: NormalizedMessage) => Promise<{ oldSessionId: string; newSessionId: string }>;
-  getSessionId: (msg: NormalizedMessage) => Promise<string | null>;
+export interface DetectedCommand {
+  command: string;
+  args: string[];
 }
 
 /**
- * Dispatch a command and return whether it was handled.
+ * Detect a known slash command in an inbound message. Returns null when the
+ * text is not a command or is not in the registry (unknown commands pass
+ * through to the agent as plain prompts, matching the old behavior).
  */
-export async function dispatchCommand(
-  msg: NormalizedMessage,
-  options: CommandDispatcherOptions
-): Promise<boolean> {
+export function detectCommand(msg: NormalizedMessage): DetectedCommand | null {
   const text = msg.text ?? '';
-  if (!text.startsWith('/')) return false;
+  if (!text.startsWith('/')) return null;
+
+  const cmd = resolveCommand(text);
+  if (!cmd) return null;
 
   const parts = text.slice(1).split(/\s+/);
-  const commandName = parts[0]?.toLowerCase() ?? '';
-  const args = parts.slice(1);
-
-  // Resolve command
-  const cmd = resolveCommand(text);
-  if (!cmd) {
-    // Unknown command - let it pass through to agent
-    return false;
-  }
-
-  // Handle built-in gateway commands
-  switch (cmd.name) {
-    case 'new':
-    case 'reset': {
-      const result = await options.resetSession(msg);
-      return true;
-    }
-
-    case 'help': {
-      // Help is handled by sending help text (caller should send reply)
-      return true;
-    }
-
-    case 'status': {
-      // Status is handled by caller (needs IPC)
-      return true;
-    }
-
-    default:
-      // For commands without local handlers, pass to agent
-      return false;
-  }
-}
-
-/**
- * Get the reply for a help command.
- */
-export function getHelpReply(): NormalizedReply {
   return {
-    type: 'text',
-    text: generateHelpText('gateway'),
-    parseMode: 'Markdown',
-  };
-}
-
-/**
- * Get the reply for a status command.
- */
-export function getStatusReply(msg: NormalizedMessage, sessionId: string | null): NormalizedReply {
-  return {
-    type: 'text',
-    text: [
-      '*Session Status*',
-      '',
-      `Platform: ${msg.platform}`,
-      `Chat ID: \`${msg.platformChatId}\``,
-      `Session: \`${sessionId ?? '(no active session)'}\``,
-    ].join('\n'),
-    parseMode: 'Markdown',
-  };
-}
-
-/**
- * Get the reply for a new/reset session command.
- */
-export function getNewSessionReply(newSessionId: string): NormalizedReply {
-  return {
-    type: 'text',
-    text: `✨ Session reset! Starting fresh.\n\nNew session: \`${newSessionId}\``,
-    parseMode: 'Markdown',
+    command: cmd.name,
+    args: parts.slice(1),
   };
 }
 
@@ -103,5 +40,5 @@ export function getNewSessionReply(newSessionId: string): NormalizedReply {
 export function shouldInterceptCommand(text: string): boolean {
   if (!text.startsWith('/')) return false;
   const name = text.slice(1).toLowerCase().split(/\s+/)[0];
-  return isGatewayKnownCommand(name);
+  return resolveCommand(`/${name}`) !== null;
 }
