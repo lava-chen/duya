@@ -74,6 +74,10 @@ export interface MessageRow {
   seq_index: number;
   duration_ms: number | null;
   sub_agent_id: string | null;
+  /** Token-accounting: model id that produced this message (per-message). */
+  model: string;
+  /** Token-accounting: provider id that produced this message (per-message). */
+  provider_id: string;
   attachments: string | null;
   provider_state: string | null;
   thinking_signature: string | null;
@@ -355,6 +359,12 @@ interface IpcMessageDTO {
   seq_index?: number;
   duration_ms?: number;
   sub_agent_id?: string;
+  /** Token-accounting: model id that produced this message (per-message,
+   *  first-class — NOT metadata). Empty string when unknown/legacy. */
+  model?: string;
+  /** Token-accounting: provider id that produced this message (per-message,
+   *  first-class — NOT metadata). Empty string when unknown/legacy. */
+  provider_id?: string;
   attachments?: unknown[];
   /**
    * Plan 489 P0.1: explicit origin classifier. Honored when it is a known
@@ -468,6 +478,10 @@ export function ipcMessageToNewEvent(
     seq_index: data.seq_index,
     duration_ms: data.duration_ms,
     sub_agent_id: data.sub_agent_id,
+    // Token-accounting: per-message model/provider_id ride as first-class
+    // Message fields (not metadata), round-tripping through the rollout.
+    model: data.model || undefined,
+    providerId: data.provider_id || undefined,
     attachments: data.attachments,
     source,
     displayContent: displayContent ?? undefined,
@@ -687,6 +701,10 @@ function messageToIpcRow(
     seq_index: event.seq,
     duration_ms: msg.duration_ms ?? null,
     sub_agent_id: msg.sub_agent_id ?? null,
+    // Token-accounting: per-message model/provider_id round-trip from the
+    // first-class Message fields (empty string when unknown/legacy).
+    model: (msg as { model?: string }).model ?? '',
+    provider_id: (msg as { providerId?: string }).providerId ?? '',
     attachments,
     created_at: msg.timestamp ?? event.createdAt,
     provider_state: providerState,
