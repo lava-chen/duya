@@ -193,15 +193,15 @@ describe('summarizeWithRetryLadder', () => {
     expect(calls).toBe(MAX_SUMMARY_RETRIES)
   })
 
-  it('returns empty text (not a throw) when every attempt is empty/degenerate', async () => {
+  it('throws SummaryDegenerateError (not a silent placeholder) when every attempt is empty/degenerate', async () => {
     let calls = 0
-    const { text, attempts } = await summarizeWithRetryLadder(
-      async () => { calls++; return '' },
-      { conversationText: 'c', prompt: 'p', messages: [], rebuild: () => ({ conversationText: 'c', prompt: 'p' }) },
-      () => false,
-    )
-    expect(text).toBe('')
-    expect(attempts).toBe(MAX_SUMMARY_RETRIES)
+    await expect(
+      summarizeWithRetryLadder(
+        async () => { calls++; return '' },
+        { conversationText: 'c', prompt: 'p', messages: [], rebuild: () => ({ conversationText: 'c', prompt: 'p' }) },
+        () => false,
+      ),
+    ).rejects.toThrow('degenerate/empty summaries')
     expect(calls).toBe(MAX_SUMMARY_RETRIES)
   })
 })

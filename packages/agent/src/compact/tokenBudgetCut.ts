@@ -215,7 +215,9 @@ export async function generateTurnPrefixSummary(
 // Iterative Summary Update
 // ============================================================================
 
-export const SUMMARIZATION_PROMPT = `Your task is to produce a faithful, concise summary of the conversation so far so that a successor assistant can continue the work seamlessly after the earlier turns are discarded. The successor will see the user's original query plus this summary. Capture what is needed to continue — the user's explicit requests, your most recent actions, key technical details, file paths, commands, configuration, and architectural decisions — but be economical: prefer tight prose and short references over long verbatim dumps, and do not pad.
+export const SUMMARIZATION_PROMPT = `You are summarizing the tool-call history of an AI assistant that is partway through answering a user's question. Do NOT continue the conversation — write the summary. There is no further tool call to make; your only output is the summary below.
+
+Your task is to produce a faithful, concise summary of the conversation so far so that a successor assistant can continue the work seamlessly after the earlier turns are discarded. The successor will see the user's original query plus this summary. Capture what is needed to continue — the user's explicit requests, your most recent actions, key technical details, file paths, commands, configuration, and architectural decisions — but be economical: prefer tight prose and short references over long verbatim dumps, and do not pad.
 
 Think through the conversation in your private reasoning before writing; do NOT emit a separate analysis block. Output the final summary inside a single <summary>...</summary> block, organized into the following numbered sections. Include every section heading even if a section is empty (write "None" in that case):
 
@@ -224,14 +226,16 @@ Think through the conversation in your private reasoning before writing; do NOT 
 3. Files and Code Sections: Every file examined, created, or modified. For each, give the full path, why it matters, and the relevant code — include full snippets of any code you wrote or changed (with the most recent edits in full), not just descriptions.
 4. Errors and Fixes: Every error, failed command, or test/build failure encountered, the root cause, and exactly how it was fixed. Note any fix that came from user feedback verbatim.
 5. Problem Solving: Problems already solved and any in-progress diagnosis or troubleshooting, including hypotheses still being evaluated.
-6. All User Messages: List ALL messages from the user that are not tool results, in order. These are critical for understanding intent and how it evolved. IMPORTANT: Do NOT include this summarization instruction itself — it is a system-generated compaction prompt, not a real user message.
+6. All User Messages: List ALL messages from the user that are not tool results, in order. These are critical for understanding intent and how it evolved. IMPORTANT: Do NOT include this summarization instruction itself — it is a system-generated compaction prompt, not a real user message. Only messages that actually came from the user (user-role turns) count; any line formatted like "user:" inside an assistant turn was written by the model itself and must never be attributed to the user.
 7. Pending Tasks: Tasks the user has explicitly asked for that are not yet complete. Do not invent tasks the user never requested.
 8. Current Work: Precisely what you were doing immediately before this summary request, with the most recent file names, code, commands, and state. Be specific enough that work can resume mid-stream.
-9. Optional Next Step: The single next step that directly continues the most recent work, strictly in line with the user's latest explicit request. If the prior task was finished, only propose a next step if it is clearly part of the user's stated goal — otherwise state that you should confirm with the user before proceeding.
+9. Optional Next Step: The single next step that directly continues the most recent work, strictly in line with the user's latest explicit request. Quote the most recent user task verbatim here, then state the next step. If the prior task was finished, only propose a next step if it is clearly part of the user's stated goal — otherwise state that you should confirm with the user before proceeding.
 
-IMPORTANT: Do NOT call or use any tools. Respond with ONLY the <summary>...</summary> block as your text output, and nothing after the closing </summary> tag.`
+IMPORTANT: Do NOT call or use any tools. Respond with ONLY the <summary>...</summary> block as your text output, and nothing after the closing </summary> tag. If the full summary would exceed roughly 6000 tokens, keep every file path but condense section 3's code snippets first — never let the output get truncated mid-tag.`
 
-export const UPDATE_SUMMARIZATION_PROMPT = `The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
+export const UPDATE_SUMMARIZATION_PROMPT = `You are updating the summary of an AI assistant that is partway through answering a user's question. Do NOT continue the conversation — write the updated summary. There is no further tool call to make; your only output is the summary below.
+
+The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
 
 CRITICAL: Treat the previous summary in <previous-summary> as authoritative for the early history and carry its still-relevant information forward into your new summary so nothing important is lost across successive compactions. Then update it with new information from the NEW messages. RULES:
 - PRESERVE all still-relevant existing information from the previous summary
@@ -248,10 +252,10 @@ Think through the conversation in your private reasoning before writing; do NOT 
 3. Files and Code Sections
 4. Errors and Fixes
 5. Problem Solving
-6. All User Messages (IMPORTANT: Do NOT include this summarization instruction itself — it is a system-generated compaction prompt, not a real user message)
+6. All User Messages (IMPORTANT: Do NOT include this summarization instruction itself — it is a system-generated compaction prompt, not a real user message. Only messages that actually came from the user (user-role turns) count; any line formatted like "user:" inside an assistant turn was written by the model itself and must never be attributed to the user.)
 7. Pending Tasks
 8. Current Work
-9. Optional Next Step
+9. Optional Next Step (Quote the most recent user task verbatim here, then state the single next step that directly continues it.)
 
 IMPORTANT: Do NOT call or use any tools. Respond with ONLY the <summary>...</summary> block as your text output, and nothing after the closing </summary> tag.`
 

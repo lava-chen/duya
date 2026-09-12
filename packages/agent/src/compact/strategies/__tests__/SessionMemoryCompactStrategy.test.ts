@@ -5,21 +5,29 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { Message } from '../../../types.js'
 import { SessionMemoryCompactStrategy } from '../SessionMemoryCompactStrategy.js'
+import { SummaryDegenerateError } from '../../compactErrors.js'
 
 describe('SessionMemoryCompactStrategy', () => {
   let strategy: SessionMemoryCompactStrategy
   let mockSummarizer: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
+    // Plan 523 P2: the summary must match the 9-section numbered format the
+    // SUMMARIZATION_PROMPT demands (>= 3 numbered section headings + length),
+    // otherwise isDegenerateSummary flags it and the retry ladder throws.
     mockSummarizer = vi.fn().mockResolvedValue(
-      '## Goal\nTest goal\n\n## Progress\n### Done\n- [x] Task 1\n\n' +
-        '## Decisions\n- Use TypeScript strict mode throughout the migration.\n\n' +
-        '## Technical Concepts\n- MessageTimeline is an append-only store; the compaction controller ' +
-        'bridges the legacy manager to it without mutating existing entries.\n\n' +
-        '## Current Work\n- Phase 2 hardening: tool-call invariant sanitation, degenerate summary ' +
-        'detection with retry, and error classification with suppression windows.\n\n' +
-        '## Pending Tasks\n- [ ] Wire the two-pass prefire summary into the next compaction.\n' +
-        '## Optional Next Step\n- Inject the cached prefire summary as the previous summary.\n'
+      '1. Primary Request and Intent: Complete the migration to TypeScript strict mode.\n\n' +
+        '2. Key Technical Concepts: TypeScript strict mode, MessageTimeline append-only store.\n\n' +
+        '3. Files and Code Sections: src/timeline.ts — the append-only message store; ' +
+        'src/compaction.ts — bridge from the legacy manager.\n\n' +
+        '4. Errors and Fixes: Fixed the tool-call invariant sanitation regression by ' +
+        'adding degenerate summary detection with retry.\n\n' +
+        '5. Problem Solving: Resolved cross-compaction state leakage by keeping the ' +
+        'two-pass prefire seed on the manager instead of the strategy.\n\n' +
+        '6. All User Messages: Use TypeScript strict mode throughout the migration.\n\n' +
+        '7. Pending Tasks: Wire the two-pass prefire summary into the next compaction.\n\n' +
+        '8. Current Work: Phase 2 hardening — error classification with suppression windows.\n\n' +
+        '9. Optional Next Step: Inject the cached prefire summary as the previous summary.\n'
     )
     strategy = new SessionMemoryCompactStrategy({
       maxMessagesToKeep: 5,
@@ -187,7 +195,7 @@ describe('SessionMemoryCompactStrategy', () => {
       expect(visible!.content as string).toContain(result.summaryText!)
     })
 
-    it('should track file operations across compactions', async () => {
+    it('should surface tracked file operations in the summary text', async () => {
       const messages: Message[] = [
         { role: 'user', content: 'Read file' },
         {
@@ -207,7 +215,7 @@ describe('SessionMemoryCompactStrategy', () => {
         )
       }
 
-      await strategy.compact(messages, {
+      const result = await strategy.compact(messages, {
         totalTokens: 2000,
         maxTokens: 10000,
         messageCount: messages.length,
@@ -215,10 +223,36 @@ describe('SessionMemoryCompactStrategy', () => {
         sessionAge: 0,
       })
 
-      // Check that file operations are tracked
-      const fileOps = strategy.getFileOperations()
-      expect(fileOps.length).toBeGreaterThan(0)
-      expect(fileOps.some(op => op.filePath === '/test1.txt')).toBe(true)
+      // Plan 523: file operations are now surfaced through the summary text
+      // (via formatFileOperations) rather than a removed getFileOperations() API.
+      expect(result.summaryText).toBeDefined()
+      expect(result.summaryText).toContain('/test1.txt')
+    })
+
+    it('throws SummaryDegenerateError when the ladder exhausts on degenerate output (Plan 523)', async () => {
+      const bad = new SessionMemoryCompactStrategy({
+        maxMessagesToKeep: 1,
+        keepRecentTokens: 5,
+      })
+      bad.setSummarizer(async () => 'junk') // always degenerate (< 500 chars)
+      const messages: Message[] = []
+      for (let i = 0; i < 10; i++) {
+        messages.push(
+          { role: 'user', content: `Message ${i}` },
+          { role: 'assistant', content: `Response ${i}` },
+        )
+      }
+      // Degenerate exhaustion must propagate — compaction fails loudly instead
+      // of producing the old "[Session memory unavailable …]" placeholder.
+      await expect(
+        bad.compact(messages, {
+          totalTokens: 5000,
+          maxTokens: 10000,
+          messageCount: 20,
+          toolCallCount: 0,
+          sessionAge: 0,
+        }),
+      ).rejects.toBeInstanceOf(SummaryDegenerateError)
     })
 
     it('should handle split turn correctly', async () => {
@@ -248,23 +282,6 @@ describe('SessionMemoryCompactStrategy', () => {
 
       // Should compact the messages
       expect(result.messages.length).toBeLessThan(messages.length)
-    })
-  })
-
-  describe('getFileOperations', () => {
-    it('should return empty array when no file operations', () => {
-      const fileOps = strategy.getFileOperations()
-      expect(fileOps).toEqual([])
-    })
-  })
-
-  describe('setPreviousSummary', () => {
-    it('should update previous summary', () => {
-      const summary = '## Goal\nUpdated goal'
-      strategy.setPreviousSummary(summary)
-
-      // Verify by checking that next compact uses update prompt
-      expect(strategy['config'].previousSummary).toBe(summary)
     })
   })
 })

@@ -71,4 +71,15 @@ export interface CompactOptions {
    * early return still applies.
    */
   force?: boolean
+  /**
+   * Plan 523 P6: per-attempt summary outcome hook (success/degenerate/empty/
+   * error). Injected by CompactionManager so the renderer sees *why* a retry
+   * or failure happened, not just the coarse 'summarizing' step.
+   */
+  onSummaryAttempt?: (report: {
+    attempt: number
+    outcome: 'success' | 'degenerate' | 'empty' | 'error'
+    errorKind?: string
+    chars: number
+  }) => void
 }
