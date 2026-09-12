@@ -4,9 +4,12 @@
  * Receives commands from Agent Process via Daemon
  *
  * Features:
- * - Automation window isolation: all operations happen in a dedicated Chrome window
- *   so the user's active browsing session is never touched.
- * - The automation window auto-closes after idle timeout.
+ * - Tab group management: agent tabs live in the user's own browser window,
+ *   grouped per session with a labeled chrome.tabGroups group (the same
+ *   model Claude for Chrome uses), instead of spawning a dedicated window.
+ * - Fallback: if the runtime lacks the tabGroups API (Chromium forks) or the
+ *   last focused window is not a usable normal window, the legacy dedicated
+ *   automation window is created instead; it auto-closes when idle.
  */
 
 const DAEMON_URL = 'ws://127.0.0.1:19825/ext';
@@ -25,21 +28,100 @@ let helloSent = false;
 /** @type {Map<string, chrome.debugger.Debuggee>} */
 const attachedTabs = new Map();
 
-// ─── Automation Window Isolation ─────────────────────────────────────
-// All DUYA operations happen in a dedicated Chrome window so the
-// user's active browsing session is never touched.
-// Each agent session gets its own tab for independent parallel operation.
+// ─── Session Tab Isolation ───────────────────────────────────────────
+// Agent tabs are grouped per session inside the user's own browser window
+// via chrome.tabs.group / chrome.tabGroups. Each session owns one labeled,
+// colored group; its tabs are tracked in sessionTabs regardless of which
+// window they live in, so ownership validation never depends on the host
+// window. Runtimes without the tabGroups API (some Chromium forks) fall
+// back to the legacy dedicated automation window.
 
 /** @type {number | null} */
 let automationWindowId = null;
 const IDLE_TIMEOUT = 60000; // 60s idle timeout
 
 /**
- * @typedef {{ tabId: number; tabIds: Set<number>; idleTimer: ReturnType<typeof setTimeout> | null }} SessionState
+ * @typedef {{
+ *   tabId: number;
+ *   tabIds: Set<number>;
+ *   groupId: number | null;
+ *   idleTimer: ReturnType<typeof setTimeout> | null
+ * }} SessionState
  */
 
 /** @type {Map<string, SessionState>} */
 const sessionTabs = new Map();
+
+const GROUP_COLORS = ['blue', 'cyan', 'green', 'purple', 'pink', 'yellow', 'red', 'grey'];
+
+function groupsSupported() {
+  return typeof chrome.tabGroups !== 'undefined' && typeof chrome.tabs.group === 'function';
+}
+
+function shortSessionLabel(sessionId) {
+  const s = String(sessionId);
+  return s.length > 12 ? s.slice(0, 12) : s;
+}
+
+function groupColorFor(sessionId) {
+  let hash = 0;
+  const s = String(sessionId);
+  for (let i = 0; i < s.length; i++) {
+    hash = (hash * 31 + s.charCodeAt(i)) & 0x7fffffff;
+  }
+  return GROUP_COLORS[hash % GROUP_COLORS.length];
+}
+
+/**
+ * Resolve the window a new session tab should be created in.
+ * Grouped mode targets the user's last focused normal window; anything
+ * else (no tabGroups API, incognito, popup/fullscreen windows) falls back
+ * to the dedicated automation window.
+ */
+async function resolveSessionWindowId() {
+  if (groupsSupported()) {
+    try {
+      const win = await chrome.windows.getLastFocused();
+      if (win && win.type === 'normal' && !win.incognito) {
+        return win.id;
+      }
+    } catch {
+      // Fall through to the dedicated window.
+    }
+  }
+  return getOrCreateAutomationWindow();
+}
+
+/**
+ * Assign a session tab to the session's tab group, creating the group on
+ * first use. If the group was dissolved by the user, a fresh group is
+ * created so the session keeps a visible identity.
+ */
+async function ensureSessionGroup(sessionId, tabId) {
+  const session = sessionTabs.get(sessionId);
+  if (!session || !groupsSupported()) return;
+
+  try {
+    if (session.groupId !== null) {
+      await chrome.tabs.group({ tabIds: [tabId], groupId: session.groupId });
+      return;
+    }
+  } catch {
+    // Stale groupId (group dissolved or SW restart) — recreate below.
+    session.groupId = null;
+  }
+
+  try {
+    session.groupId = await chrome.tabs.group({ tabIds: [tabId] });
+    await chrome.tabGroups.update(session.groupId, {
+      title: `DUYA · ${shortSessionLabel(sessionId)}`,
+      color: groupColorFor(sessionId),
+    });
+  } catch (error) {
+    session.groupId = null;
+    console.warn(`[DUYA Bridge] Tab grouping unavailable, continuing ungrouped: ${error.message}`);
+  }
+}
 
 // ─── Max agent pages (user-configurable) ──────────────────────────────
 // The DUYA desktop pushes the user's `browserMaxTabs` setting to this
@@ -74,7 +156,8 @@ async function loadStoredMaxTabs() {
 
 /**
  * Get or create a tab for the given session.
- * Each session gets its own independent tab in the automation window.
+ * Each session gets its own independent tab, grouped with the session's
+ * other tabs (or inside the dedicated automation window in fallback mode).
  */
 async function getOrCreateSessionTab(sessionId) {
   if (!sessionId) {
@@ -98,10 +181,9 @@ async function getOrCreateSessionTab(sessionId) {
     sessionTabs.delete(sessionId);
   }
 
-  // Ensure automation window exists
-  const windowId = await getOrCreateAutomationWindow();
+  const windowId = await resolveSessionWindowId();
   if (!windowId) {
-    throw new Error('Failed to create automation window');
+    throw new Error('Failed to resolve a window for the session tab');
   }
 
   // Enforce the user-configurable page cap before opening a new tab.
@@ -124,9 +206,11 @@ async function getOrCreateSessionTab(sessionId) {
     throw new Error('Failed to create session tab: no tab id');
   }
 
-  sessionTabs.set(sessionId, { tabId, tabIds: new Set([tabId]), idleTimer: null });
+  sessionTabs.set(sessionId, { tabId, tabIds: new Set([tabId]), groupId: null, idleTimer: null });
 
   console.log(`[DUYA Bridge] Created session tab ${tabId} for session "${sessionId}"`);
+
+  await ensureSessionGroup(sessionId, tabId);
 
   // Wait for initial tab load
   await new Promise((resolve) => {
@@ -152,8 +236,8 @@ async function createAdditionalSessionTab(sessionId, url) {
     if (url) await chrome.tabs.update(tabId, { url });
     return tabId;
   }
-  const windowId = await getOrCreateAutomationWindow();
-  if (!windowId) throw new Error('Failed to create automation window');
+  const windowId = await resolveSessionWindowId();
+  if (!windowId) throw new Error('Failed to resolve a window for the session tab');
   if (totalOpenTabs() >= maxTabs) {
     throw new Error(
       `BROWSER_MAX_TABS_REACHED: maximum browser pages reached (${maxTabs}). ` +
@@ -163,13 +247,15 @@ async function createAdditionalSessionTab(sessionId, url) {
   const tab = await chrome.tabs.create({ windowId, url: url || 'about:blank', active: false });
   if (!tab.id) throw new Error('Failed to create browser tab');
   existing.tabIds.add(tab.id);
+  await ensureSessionGroup(sessionId, tab.id);
   resetSessionIdleTimer(sessionId);
   return tab.id;
 }
 
 /**
- * Get or create the shared automation window.
- * All session tabs live inside this single window.
+ * Get or create the dedicated automation window.
+ * Only used as a fallback when tab grouping is unavailable or the last
+ * focused window is not a usable normal window.
  */
 async function getOrCreateAutomationWindow() {
   if (automationWindowId) {
@@ -213,7 +299,9 @@ function resetSessionIdleTimer(sessionId) {
 
 /**
  * Close a specific session tab and clean up its debugger attachment.
- * If no sessions remain, close the automation window.
+ * In grouped mode the (now empty) tab group dissolves on its own; in
+ * fallback mode the dedicated automation window closes when the last
+ * session ends.
  */
 async function closeSessionTab(sessionId) {
   const session = sessionTabs.get(sessionId);
@@ -298,7 +386,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   }
 });
 
-// Clean up when the automation window is closed by user
+// Clean up when the automation window is closed by user (fallback mode).
+// In grouped mode closing a window removes its tabs, which the onRemoved
+// handler below cleans up per session.
 chrome.windows.onRemoved.addListener((windowId) => {
   if (automationWindowId === windowId) {
     // Clean up all session tabs
@@ -313,6 +403,20 @@ chrome.windows.onRemoved.addListener((windowId) => {
     console.log('[DUYA Bridge] Automation window closed by user, all sessions cleaned up');
   }
 });
+
+// If the user dissolves a session's tab group, drop the stale groupId so
+// the next tab for that session creates a fresh group. Tabs that the user
+// closed along with the group are cleaned up by the tabs.onRemoved handler.
+if (groupsSupported()) {
+  chrome.tabGroups.onRemoved.addListener((group) => {
+    for (const session of sessionTabs.values()) {
+      if (session.groupId === group.id) {
+        session.groupId = null;
+        console.log(`[DUYA Bridge] Tab group ${group.id} dissolved by user; session will regroup on next tab`);
+      }
+    }
+  });
+}
 
 // ─── WebSocket Connection ────────────────────────────────────────────
 
@@ -871,26 +975,28 @@ async function handleTabs(id, msg) {
 
   if (op === 'list') {
     const session = sessionTabs.get(sessionId);
-    if (automationWindowId && session) {
+    if (!session) {
+      sendResult(id, { ok: true, data: [] });
+      return;
+    }
+    // Session-owned tabs may live in any window (grouped mode), so list
+    // them from the ownership map instead of querying by windowId.
+    const tabs = [];
+    for (const tabId of session.tabIds) {
       try {
-        const tabs = await chrome.tabs.query({ windowId: automationWindowId });
-        sendResult(id, {
-          ok: true,
-          data: tabs
-            .filter(t => session.tabIds.has(t.id))
-            .map(t => ({
-              id: t.id,
-              url: t.url,
-              title: t.title,
-              active: t.active,
-            })),
+        const t = await chrome.tabs.get(tabId);
+        tabs.push({
+          id: t.id,
+          url: t.url,
+          title: t.title,
+          active: t.active,
         });
-        return;
       } catch {
-        // Window closed, fall through to empty list
+        session.tabIds.delete(tabId);
+        attachedTabs.delete(String(tabId));
       }
     }
-    sendResult(id, { ok: true, data: [] });
+    sendResult(id, { ok: true, data: tabs });
     return;
   }
 
