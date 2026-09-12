@@ -1,4 +1,4 @@
-import type { ToolRegistry } from '../registry.js';
+import type { ExposeMode, ToolRegistry } from '../registry.js';
 import type { ToolCatalogNamespace } from './ToolSchemaTool.js';
 
 /**
@@ -6,15 +6,16 @@ import type { ToolCatalogNamespace } from './ToolSchemaTool.js';
  *
  * Builds the read-only namespace catalog that `tool_schema` serves:
  *   - MCP-owned tools: one namespace per `mcpInfo.serverName` (source 'mcp').
- *   - Non-MCP `discoverable` tools (plan 241 on-demand tools like
- *     image_generate): a single reserved `builtin` namespace (source
- *     'builtin'), added by plan 480 P2.3 so the model can discover and
- *     invoke them through the meta tools without the legacy next-turn
- *     injection path.
+ *   - Non-MCP `hint` / `discoverable` tools (on-demand tools like
+ *     image_generate, and hint-tier dynamic tools): a single reserved
+ *     `builtin` namespace (source 'builtin'), added by plan 480 P2.3 so
+ *     the model can discover and invoke them through the meta tools.
  *
- * `always` tools are excluded (they are already in the request's tools
- * array — discovering them through tool_schema would be redundant);
- * `internal` tools are excluded entirely.
+ * Under the four-tier exposure model the catalog carries exactly the tools
+ * whose full schema is NOT on the request's tools array: `hint` (stub entry
+ * with an empty schema) and `discoverable` (absent until found).
+ * `always` tools are excluded (their full schema already rides every
+ * request); `hidden` tools are excluded entirely.
  *
  * Deterministic ordering: namespaces are sorted by name and tools within a
  * namespace by name, so the discovery surface is byte-stable across turns
@@ -27,6 +28,11 @@ import type { ToolCatalogNamespace } from './ToolSchemaTool.js';
 
 /** Reserved namespace for non-MCP discoverable built-in tools. */
 export const BUILTIN_TOOLS_NAMESPACE = 'builtin';
+
+/** Expose modes whose full schema is served through the tool_schema catalog. */
+function isCatalogVisible(mode: ExposeMode): boolean {
+  return mode === 'hint' || mode === 'discoverable';
+}
 
 export function createToolSchemaProviderFromRegistry(
   registry: ToolRegistry,
@@ -41,7 +47,9 @@ export function createToolSchemaProviderFromRegistry(
       };
 
       for (const tool of registry.getAllTools()) {
+        const mode = registry.getExposeMode(tool.name);
         if (registry.getOwner(tool.name) === 'mcp') {
+          if (!isCatalogVisible(mode)) continue;
           const info = tool.mcpInfo;
           if (!info) continue;
 
@@ -60,8 +68,9 @@ export function createToolSchemaProviderFromRegistry(
           continue;
         }
 
-        // Non-MCP discoverable built-ins join the reserved builtin namespace.
-        if (registry.getExposeMode(tool.name) !== 'discoverable') continue;
+        // Non-MCP hint/discoverable built-ins join the reserved builtin
+        // namespace.
+        if (!isCatalogVisible(mode)) continue;
         if (!builtinNs.tools.some((entry) => entry.name === tool.name)) {
           builtinNs.tools.push({
             name: tool.name,

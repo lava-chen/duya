@@ -73,8 +73,13 @@ describe('isToolVisible', () => {
     expect(isToolVisible('read', 'always', EMPTY_DISCOVERED, NO_CONSTRAINTS)).toBe(true);
   });
 
-  it('internal tool is never visible', () => {
-    expect(isToolVisible('debug', 'internal', EMPTY_DISCOVERED, NO_CONSTRAINTS)).toBe(false);
+  it('hidden tool is never visible', () => {
+    expect(isToolVisible('debug', 'hidden', EMPTY_DISCOVERED, NO_CONSTRAINTS)).toBe(false);
+    expect(isToolVisible('debug', 'hidden', new Set(['debug']), NO_CONSTRAINTS)).toBe(false);
+  });
+
+  it('hint tool is visible without discovery (stub entry)', () => {
+    expect(isToolVisible('mcp__srv__query', 'hint', EMPTY_DISCOVERED, NO_CONSTRAINTS)).toBe(true);
   });
 
   it('discoverable tool is hidden until discovered', () => {

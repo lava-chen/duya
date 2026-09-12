@@ -278,6 +278,35 @@ Separate SQLite file (`memory-state.db`, next to `duya-main.db` in the same boot
 - `packages/agent/src/mcp/` - MCP server integration
 - Tool protocol adapter layer (Plan 418)
 
+#### Four-Tier Tool Exposure
+
+Every registered tool carries an `ExposeMode`
+(`packages/agent/src/tool/registry.ts`) that decides how the model sees it.
+All discovery/invocation paths funnel through one set of rules:
+
+| Tier | ExposeMode | Request tools array | Discovery | Invocation |
+| ---- | ---------- | ------------------- | --------- | ---------- |
+| T1 | `always` | full schema entry | n/a (declared) | direct call |
+| T2 | `hint` | stub entry: name + description + argument summary, empty schema (`tool/hint-stub.ts`) | full schema via `tool_schema` | direct call |
+| T3 | `discoverable` | absent until found | `tool_search` hit → schema appended as a conversation-tail block (`agent/tool-search-discovery.ts`) | `tool_invoke` |
+| T4 | `hidden` | never | invisible to `tool_search` and the `tool_schema` catalog | unreachable by the model |
+
+Key wiring:
+
+- Visibility policy: `isToolVisible` (`agent-profile/ToolFilter.ts`) — deny
+  wins over allow; an exact allowlist entry promotes a `discoverable` tool
+  (plan 496); `hidden` is never promotable.
+- MCP tier: `[tools] exposure = "full" \| "hint" \| "search"` in
+  `config.toml` maps to `always` / `hint` / `discoverable`
+  (`config/tool-exposure.ts`); default `hint`, legacy `catalog` normalizes
+  to `hint`.
+- Guard: a model call to a name not declared on the request's tools array
+  is always rejected (`tool/visibility-guard.ts`), pointing the model at
+  `tool_search` → `tool_schema` → `tool_invoke`. Compaction may promote the
+  discovered set into the array at runtime (`discoveredPromotedToToolList`)
+  — the sole array-merge path after the config-driven `array` delivery was
+  retired.
+
 ### Mode System (Plan 224)
 
 Modes are declarative `ModeModifier` objects:

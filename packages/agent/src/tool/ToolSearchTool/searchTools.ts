@@ -28,6 +28,9 @@ export function searchToolsFromRegistry(
 
   const scored: Array<{ meta: ToolMeta; score: number }> = [];
   for (const def of registry.getAllTools()) {
+    // `hidden` tools are unreachable by ANY discovery path — tool_search
+    // must never surface them (four-tier exposure model).
+    if (registry.getExposeMode(def.name) === 'hidden') continue;
     const name = (def.name ?? '').toLowerCase();
     const desc = (def.description ?? '').toLowerCase();
 

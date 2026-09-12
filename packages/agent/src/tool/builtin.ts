@@ -285,10 +285,11 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
   );
 
   // send_artifact - explicit outbound file delivery through a gateway channel.
-  // Always-exposed so the gateway agent can hand files to the channel without
-  // a tool_search round-trip. In desktop sessions it is a harmless no-op.
+  // Discoverable: gateway sessions reach it via tool_search; in desktop
+  // sessions it is a harmless no-op, so keeping it off the default tool
+  // surface saves the schema tokens.
   const sendArtifactTool = new SendArtifactTool();
-  registry.register(sendArtifactTool.toTool(), sendArtifactTool, { exposeMode: 'always' });
+  registry.register(sendArtifactTool.toTool(), sendArtifactTool, { exposeMode: 'discoverable' });
 
   // Plan 224 Phase 3: canvas conductor tools are no longer registered
   // here. They are injected declaratively via `conductorMode.tools.inject`
@@ -364,12 +365,11 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
   registry.register(connectAppTool.toTool(), connectAppTool, { exposeMode: 'discoverable' });
 
   // Plan 490 P1: ReactToMessage — emoji tapback on a chat message (grok
-  // sand-reaction-tool parity). Always-exposed (grok SAND_FORCED_STATIC
-  // parity: update_state + ReactToMessage are forced static there),
-  // deliberately NOT in BOT_TOOLSET — the tool is self-scoped expression,
-  // not a bot-only capability. Writes a source='reaction' row through the
+  // sand-reaction-tool parity). Discoverable: reached via tool_search when
+  // the model needs it; the schema cost does not justify a permanent slot
+  // on the default surface. Writes a source='reaction' row through the
   // normal message pipeline; toggle semantics live in the tool.
-  registry.register(reactToMessageTool.toTool(), reactToMessageTool, { exposeMode: 'always' });
+  registry.register(reactToMessageTool.toTool(), reactToMessageTool, { exposeMode: 'discoverable' });
 
   return registry;
 }
