@@ -6,6 +6,7 @@ import { screenshotAction } from './screenshot.js';
 import { tabsListAction, tabsNewAction, tabsCloseAction, tabsSelectAction } from './tabs.js';
 import { fileUploadAction, selectAction } from './forms.js';
 import { twitterPostAction } from './twitterPost.js';
+import { postAction } from './post.js';
 import { networkStartAction, networkReadAction } from './network.js';
 import { cookiesAction } from './cookies.js';
 import { parallelFetchAction } from './parallel.js';
@@ -48,6 +49,7 @@ export {
   tabsSelectAction,
   fileUploadAction,
   twitterPostAction,
+  postAction,
   networkStartAction,
   networkReadAction,
   iframeEvaluateAction,
@@ -85,6 +87,7 @@ const ALL_ACTIONS: ActionHandler[] = [
   tabsSelectAction,
   fileUploadAction,
   twitterPostAction,
+  postAction,
   networkStartAction,
   networkReadAction,
   iframeEvaluateAction,
