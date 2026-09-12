@@ -1121,29 +1121,10 @@ export class TelegramAdapter extends BaseAdapter {
 
     const threadId = getThreadId(msg);
 
-    // Check pairing requirement for private chats
-    const requirePairing = this.config?.options?.['require_pairing'] as boolean | undefined;
-    if (requirePairing && isPrivateChat(msg)) {
-      const userId = String(msg.from?.id ?? 0);
-      // Check pairing via IPC - if not approved, show pairing message
-      const ipc = this.getIpcClient?.();
-      if (ipc) {
-        try {
-          const result = await ipc.checkPairing('telegram', userId) as { approved?: boolean };
-          if (!result?.approved) {
-            await this.sendMessageWithRetry(String(msg.chat.id), {
-              text: '🔒 *Pairing Required*\n\n' +
-                'This bot requires approval before use.\n\n' +
-                'Use /pair to request access, then share the code with the admin.',
-              parse_mode: 'MarkdownV2',
-            });
-            return;
-          }
-        } catch {
-          // On error, allow message through (best effort)
-        }
-      }
-    }
+    // Plan 520: pairing/allow-list enforcement moved to the Main Process.
+    // The gateway transparently forwards (platform, userId) with every
+    // inbound message; Main checks the channel allow-list and the gateway
+    // surfaces the unauthorized reply, so no adapter-side gate here.
 
     // Group-scope handling: observation mode + authorization orthogonal matrix.
     // Tracks any augmented text (prefix + prior observed context) for triggered

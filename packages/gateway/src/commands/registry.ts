@@ -155,25 +155,6 @@ const GATEWAY_COMMANDS: CommandDef[] = [
     category: 'config',
   },
 
-  // --- Pairing ---
-  {
-    name: 'pair',
-    description: 'Request pairing code for approval',
-    category: 'pairing',
-  },
-
-  // --- Permission / safety ---
-  {
-    name: 'approve',
-    description: 'Approve the pending dangerous command',
-    category: 'account',
-  },
-  {
-    name: 'deny',
-    description: 'Reject the pending dangerous command',
-    category: 'account',
-  },
-
   // --- Personality / voice ---
   {
     name: 'personality',

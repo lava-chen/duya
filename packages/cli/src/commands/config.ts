@@ -60,14 +60,6 @@ export interface OutputStyleEntry {
   description?: string;
 }
 
-export interface PairingEntry {
-  platform: string;
-  code?: string;
-  platformUserId?: string;
-  approvedAt?: number;
-  expiresAt?: number;
-}
-
 // ---------------------------------------------------------------------------
 // Rendering helpers
 // ---------------------------------------------------------------------------
@@ -113,24 +105,6 @@ function renderStylesText(styles: OutputStyleEntry[]): string {
   for (const s of styles) {
     lines.push(`  ${s.id.padEnd(20)} ${s.name}`);
   }
-  return lines.join('\n');
-}
-
-function renderPairingText(pending: PairingEntry[], approved: PairingEntry[]): string {
-  const lines: string[] = [];
-  if (pending.length > 0) {
-    lines.push(`pending (${pending.length}):`);
-    for (const p of pending) {
-      lines.push(`  ${p.platform}  code=${p.code}  user=${p.platformUserId ?? '?'}`);
-    }
-  }
-  if (approved.length > 0) {
-    lines.push(`approved (${approved.length}):`);
-    for (const p of approved) {
-      lines.push(`  ${p.platform}  user=${p.platformUserId ?? '?'}`);
-    }
-  }
-  if (lines.length === 0) return '(no pairing requests)';
   return lines.join('\n');
 }
 
@@ -439,107 +413,6 @@ export async function runConfigStyleSet(ctx: CliSubcommandContext): Promise<Exit
       process.stdout.write(renderJson(body) + '\n');
     } else {
       process.stdout.write(`output style set to '${styleId}'\n`);
-    }
-    return 0;
-  } catch (err) {
-    return writeErrorAndExit(err), 0;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// `duya config pairing …`
-// ---------------------------------------------------------------------------
-
-export async function runConfigPairingList(ctx: CliSubcommandContext): Promise<ExitCode> {
-  const include = ctx.options.configInclude;
-  try {
-    const client = await CliApiClient.connect();
-    const path =
-      include === 'approved'
-        ? '/v1/config/pairing?include=approved'
-        : include === 'pending'
-        ? '/v1/config/pairing?include=pending'
-        : '/v1/config/pairing';
-    const body = await client.get<{ pending: PairingEntry[]; approved: PairingEntry[] }>(path);
-    if (ctx.format === 'json') {
-      process.stdout.write(renderJson(body) + '\n');
-    } else {
-      process.stdout.write(renderPairingText(body.pending, body.approved) + '\n');
-    }
-    return 0;
-  } catch (err) {
-    return writeErrorAndExit(err), 0;
-  }
-}
-
-export async function runConfigPairingApprove(ctx: CliSubcommandContext): Promise<ExitCode> {
-  // Pull platform from the standard `platform` option bag (consistent
-  // with `duya channel list --platform`); the pairing code lives in
-  // the config-flavor slot so it doesn't collide with the legacy
-  // `--code` cron flag.
-  const p = ctx.options.platform;
-  const code = ctx.options.configCode;
-  if (typeof p !== 'string' || typeof code !== 'string') {
-    process.stderr.write('config pairing approve — --platform and --code are required\n');
-    return 64;
-  }
-  try {
-    const client = await CliApiClient.connect();
-    const body = await client.post<{ ok: boolean }>(
-      '/v1/config/pairing/approve',
-      { platform: p, code },
-    );
-    if (ctx.format === 'json') {
-      process.stdout.write(renderJson(body) + '\n');
-    } else {
-      process.stdout.write(`pairing code approved for ${p}\n`);
-    }
-    return 0;
-  } catch (err) {
-    return writeErrorAndExit(err), 0;
-  }
-}
-
-export async function runConfigPairingRevoke(ctx: CliSubcommandContext): Promise<ExitCode> {
-  const p = ctx.options.platform;
-  const u = ctx.options.configUser;
-  if (typeof p !== 'string' || typeof u !== 'string') {
-    process.stderr.write('config pairing revoke — --platform and --user are required\n');
-    return 64;
-  }
-  try {
-    const client = await CliApiClient.connect();
-    const body = await client.post<{ ok: boolean }>(
-      '/v1/config/pairing/revoke',
-      { platform: p, platformUserId: u },
-    );
-    if (ctx.format === 'json') {
-      process.stdout.write(renderJson(body) + '\n');
-    } else {
-      process.stdout.write(`pairing revoked for ${p}:${u}\n`);
-    }
-    return 0;
-  } catch (err) {
-    return writeErrorAndExit(err), 0;
-  }
-}
-
-export async function runConfigPairingCheck(ctx: CliSubcommandContext): Promise<ExitCode> {
-  const p = ctx.options.platform;
-  const u = ctx.options.configUser;
-  if (typeof p !== 'string' || typeof u !== 'string') {
-    process.stderr.write('config pairing check — --platform and --user are required\n');
-    return 64;
-  }
-  try {
-    const client = await CliApiClient.connect();
-    const body = await client.get<{ approved: boolean }>(
-      `/v1/config/pairing/check?platform=${encodeURIComponent(p)}&user=${encodeURIComponent(u)}`,
-    );
-    if (ctx.format === 'json') {
-      process.stdout.write(renderJson(body) + '\n');
-    } else {
-      process.stdout.write(`${p}:${u} ${body.approved ? 'approved' : 'not approved'}\n`);
     }
     return 0;
   } catch (err) {
