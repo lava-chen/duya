@@ -582,11 +582,12 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
       definition: downgradeToolSchemaForBudget(t, hint).definition,
       executor,
       meta: {
-        // Plan 480 §8.4: three-value exposure policy.
-        //   full    → 'always'   (schema rides every request; today's default)
-        //   search  → 'discoverable' (tool_search-only; legacy on_demand)
-        //   catalog → 'catalog'  (schema NEVER in tools array — read via
-        //             tool_schema, invoke via tool_invoke)
+        // Four-tier exposure policy: the `[tools] exposure` value maps
+        //   full   → 'always'       (full schema rides every request)
+        //   hint   → 'hint'          (stub entry: description + argument
+        //                             summary, empty schema; deep-read via
+        //                             tool_schema) — default
+        //   search → 'discoverable' (tool_search-only)
         exposeMode: mcpExposureToExposeMode(readToolExposureConfig().exposure),
         inputSchemaSummary: hint,
       },

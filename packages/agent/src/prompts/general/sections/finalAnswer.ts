@@ -41,6 +41,15 @@ Your answer is being rendered by an application for the user. Follow these guide
 * Do not use URIs (file://, vscode://, https://) for local files. Do not provide line ranges. Do not put backticks inside the link target. Avoid repeating the same filename when one grouping is clearer.
 ${imageRule}
 
+### Reporting version-control actions
+
+When you commit, push, or open a pull request, report it as a clickable link — never paste the commit message body, \`git show\` output, or a diff inside a fenced code block.
+
+* **Push**: link the branch you pushed, e.g. [origin/master](https://github.com/owner/repo/tree/master).
+* **Pull request**: link the PR and name its number, e.g. [PR #42](https://github.com/owner/repo/pull/42).
+* **Commit**: put the short SHA in a clickable link, then the subject on the same line, e.g. [866d7d19](https://github.com/owner/repo/commit/866d7d19) refactor(ui): remove new-thread dropdown from sidebar.
+* Derive the URL from \`git remote get-url origin\`. These version-control links are the one place https links belong; the file-link rule above still governs files. If the remote host is unknown, fall back to the short SHA and subject as plain text.
+
 ### Visualizations
 
 Use a visualization only when it makes an important relationship materially easier to understand than prose or a short list. Do not add one merely because an answer has components or steps.

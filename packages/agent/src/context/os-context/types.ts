@@ -17,7 +17,14 @@
  * full UIA tree, etc.) and caps the interactionTrail sliding window
  * at `MAX_TRAIL_EVENTS` to keep token usage predictable.
  *
- * Plan 453 Task A.
+ * Plan 519 re-opens three fields — `uiaInputs` / `msaaInputs` /
+ * `windowList` — for the computer-use SOM detector only. They are
+ * consumed by the selector (`computer-use`) and never enter the LLM
+ * prompt: `renderSnapshot` in `fragment.ts` serializes fields
+ * explicitly, so these additive fields stay out of the prompt by
+ * default.
+ *
+ * Plan 453 Task A. Plan 519 Phase 1 Task A1.
  */
 
 import type {
@@ -26,6 +33,8 @@ import type {
   IntentCandidate,
   InteractionEvent,
   RedactionReason,
+  UiaInput,
+  WindowInfo,
 } from './daemon-schema.js';
 
 /**
@@ -84,6 +93,22 @@ export interface OSContext {
     exeName: string;
     title: string;
   };
+  /**
+   * UIA accessibility inputs for the detector's SOM. plan 519 §3.4.
+   * Consumed only by the computer-use SOM detector — never the LLM prompt.
+   * Absent when the daemon omitted `uia` or `uia.inputs` is malformed.
+   */
+  uiaInputs?: UiaInput[];
+  /**
+   * MSAA accessibility inputs (fallback source). Same consumer contract as
+   * `uiaInputs`. Absent when `msaa` / `msaa.inputs` is missing or malformed.
+   */
+  msaaInputs?: Array<{ name: string; value: string }>;
+  /**
+   * Visible top-level window list (MITM-relevant for the SOM detector).
+   * Capped at `MAX_WINDOW_LIST`. Absent when `windowList` is missing.
+   */
+  windowList?: WindowInfo[];
   /** Whether the daemon has redacted this payload (e.g. password manager). */
   redacted: boolean;
   /** Redaction reason when `redacted=true`, otherwise null. */
@@ -96,4 +121,6 @@ export type {
   IntentCandidate,
   InteractionEvent,
   RedactionReason,
+  UiaInput,
+  WindowInfo,
 };
