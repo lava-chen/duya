@@ -8,6 +8,7 @@ import {
   suppressReasonMessage,
   suppressReasonToString,
   suppressStateToString,
+  SummaryDegenerateError,
   SUPPRESS_NONE,
   SUPPRESS_TURN,
   SUPPRESS_STICKY,
@@ -79,6 +80,11 @@ describe('classifySuppressReason (grok-aligned)', () => {
   it('classifies unknown 5xx / network as other (TURN)', () => {
     expect(classifySuppressReason(new Error('HTTP 500 server error'))).toBe('other')
     expect(classifySuppressReason(new Error('ECONNRESET'))).toBe('other')
+  })
+
+  it('classifies SummaryDegenerateError as other (TURN), not size/credit/auth/schema', () => {
+    expect(classifySuppressReason(new SummaryDegenerateError(3, 500))).toBe('other')
+    expect(classifyCompactFailure(new SummaryDegenerateError(3, 500))).toBe('transient')
   })
 })
 

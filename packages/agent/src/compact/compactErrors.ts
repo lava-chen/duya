@@ -41,6 +41,28 @@ export type SuppressState =
 /** Failure class — drives the user-facing message and the suppression scope. */
 export type SuppressReason = 'size' | 'schema' | 'auth' | 'credit' | 'other'
 
+/**
+ * Plan 523 P1: the retry ladder throws this when every attempt returned only
+ * degenerate/empty summary text (instead of the pre-495 placeholder contract
+ * that returned '' — which let bad summaries silently replace real history).
+ *
+ * It is not a provider/SDK error, so classification must not match against
+ * token/credit/auth keywords; it always drives a TURN-scoped suppression.
+ */
+export class SummaryDegenerateError extends Error {
+  readonly attempts: number
+  readonly lastChars: number
+  constructor(attempts: number, lastChars: number) {
+    super(
+      `[summary-retry] received only degenerate/empty summaries across ${attempts} attempts ` +
+        `(last probe was ${lastChars} chars)`,
+    )
+    this.name = 'SummaryDegenerateError'
+    this.attempts = attempts
+    this.lastChars = lastChars
+  }
+}
+
 const REASON_TO_STATE: Readonly<Record<SuppressReason, SuppressState>> = {
   size: SUPPRESS_STICKY,
   schema: SUPPRESS_STICKY,
@@ -88,6 +110,11 @@ export function isRetryableCompactFailure(kind: CompactFailureKind): boolean {
 export function classifySuppressReason(error: unknown): SuppressReason | null {
   const message = error instanceof Error ? error.message : String(error)
   if (!message) return 'other'
+
+  // Plan 523 P1: a degenerate summary exhausted the retry ladder. This is a
+  // quality failure, not a token/credit/auth/schema problem — drive a
+  // TURN-scoped suppression so the next turn (context grew again) retries.
+  if (error instanceof SummaryDegenerateError) return 'other'
 
   if (/abort|cancelled|cancel/i.test(message)) return null
 
