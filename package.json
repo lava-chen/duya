@@ -138,6 +138,7 @@
     "react-grid-layout": "^2.2.3",
     "react-markdown": "^10.1.0",
     "react-syntax-highlighter": "^16.1.1",
+    "readable-stream": "^4.7.0",
     "remark-gfm": "^4.0.1",
     "sharp": "^0.33.5",
     "simple-icons": "^16.28.0",
