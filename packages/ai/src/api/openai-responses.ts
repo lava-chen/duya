@@ -673,7 +673,9 @@ export function createOpenAIResponsesClient(options: AIClientOptions): AIClient 
           : {}),
         ...(reasoning ? { reasoning } : {}),
         ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
-        ...(chatOptions?.tools?.length
+        // Plan 523 P4: `toolChoice: 'none'` omits the tools field so the
+        // summarizer model cannot invoke tools (the DSML/tool-call leak guard).
+        ...(chatOptions?.tools?.length && chatOptions?.toolChoice !== 'none'
           ? {
               tools: sortToolsByName(chatOptions.tools).map(t => ({
                 type: 'function' as const,

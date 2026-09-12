@@ -44,6 +44,11 @@ export interface ContextEstimateMessage {
   /** Compaction boundary marker — anchors at/before it describe the
    *  pre-compaction context and must be ignored. */
   isCompactBoundary?: boolean;
+  /** Token-accounting: model that produced this message. Surfaced as
+   *  `anchorModel` when this message is the anchor, so consumers can
+   *  resolve the context window / pricing against the model that ACTUALLY
+   *  processed the last request (a mid-session switch no longer lies). */
+  model?: string | null;
 }
 
 export interface ContextEstimateOptions {
@@ -63,6 +68,9 @@ export interface ContextEstimate {
   anchorIndex: number | null;
   anchorTokens: number;
   trailingTokens: number;
+  /** Model that produced the anchor request (token-accounting). Null when
+   *  unanchored or the anchor predates per-message model attribution. */
+  anchorModel: string | null;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -263,6 +271,7 @@ export function computeContextEstimate(
     anchorIndex: null,
     anchorTokens: 0,
     trailingTokens: 0,
+    anchorModel: null,
   };
 
   // Last compaction boundary — anchors at or before it are stale.
@@ -279,6 +288,7 @@ export function computeContextEstimate(
   let anchorIndex: number | null = null;
   let anchorValue = 0;
   let anchorUnderReported = false;
+  let anchorModel: string | null = null;
   let prevAnchorValue = 0;
   for (let i = messages.length - 1; i > boundaryIndex; i--) {
     const usable = isUsableAnchor(messages[i]);
@@ -287,6 +297,7 @@ export function computeContextEstimate(
       anchorIndex = i;
       anchorValue = usable.value;
       anchorUnderReported = usable.underReported;
+      anchorModel = messages[i]?.model || null;
       continue;
     }
     prevAnchorValue = usable.value;
@@ -315,6 +326,7 @@ export function computeContextEstimate(
       anchorIndex,
       anchorTokens: base,
       trailingTokens: trailing,
+      anchorModel,
     };
   }
 
@@ -334,5 +346,6 @@ export function computeContextEstimate(
     anchorIndex: null,
     anchorTokens: 0,
     trailingTokens: tokens,
+    anchorModel: null,
   };
 }

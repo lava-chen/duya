@@ -122,7 +122,7 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
   {
     id: 'deepseek',
     name: 'DeepSeek',
-    descriptionZh: 'DeepSeek Anthropic 兼容 API — V4 Pro / V4 Flash',
+    descriptionZh: 'DeepSeek Anthropic 兼容 API — V4.1 Flash / V4 Pro',
     protocol: 'anthropic',
     authTypes: ['auth_token'],
     baseUrl: 'https://api.deepseek.com/anthropic',
@@ -131,10 +131,8 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     },
     defaultModels: [
+      { modelId: 'deepseek-flash', displayName: 'DeepSeek V4.1 Flash' },
       { modelId: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro' },
-      { modelId: 'deepseek-v4-flash', displayName: 'DeepSeek V4 Flash' },
-      { modelId: 'deepseek-chat', displayName: 'DeepSeek Chat' },
-      { modelId: 'deepseek-reasoner', displayName: 'DeepSeek Reasoner' },
     ],
     fields: ['api_key'],
     iconKey: 'deepseek',

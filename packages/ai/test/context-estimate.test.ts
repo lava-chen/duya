@@ -242,3 +242,36 @@ describe('gateway under-report guard (plan 444)', () => {
     expect(est.usedTokens).toBe(150 + est.trailingTokens);
   });
 });
+
+describe('anchorModel (token accounting)', () => {
+  it('surfaces the anchor message model when present', () => {
+    const messages: ContextEstimateMessage[] = [
+      { role: 'user', content: 'hello' },
+      assistant({ input_tokens: 1000, output_tokens: 200 }, { model: 'model-a' }),
+    ];
+    const est = computeContextEstimate(messages);
+    expect(est.anchored).toBe(true);
+    expect(est.anchorModel).toBe('model-a');
+  });
+
+  it('tracks the model across a mid-session switch (latest anchor wins)', () => {
+    const messages: ContextEstimateMessage[] = [
+      assistant({ input_tokens: 1000, output_tokens: 100 }, { model: 'model-a' }),
+      assistant({ input_tokens: 9000, output_tokens: 100 }, { model: 'model-b' }),
+    ];
+    const est = computeContextEstimate(messages);
+    expect(est.anchorIndex).toBe(1);
+    expect(est.anchorModel).toBe('model-b');
+  });
+
+  it('is null when unanchored or the anchor predates per-message attribution', () => {
+    const noModel = computeContextEstimate([
+      assistant({ input_tokens: 1000, output_tokens: 100 }),
+    ]);
+    expect(noModel.anchorModel).toBeNull();
+
+    const unanchored = computeContextEstimate([{ role: 'user', content: 'hi' }]);
+    expect(unanchored.anchored).toBe(false);
+    expect(unanchored.anchorModel).toBeNull();
+  });
+});
