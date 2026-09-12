@@ -1,14 +1,15 @@
 /**
  * BrowserPool - Manages multiple independent browser sessions for parallel investigation.
- * Each session operates a separate browser window/tab independently.
+ * Each session operates its own tab independently; in Playwright mode all
+ * tabs share one headed Chromium window instead of spawning one per task.
  * Inspired by hermes-agent's per-task session model and openclaw's multi-bridge architecture.
  *
  * Architecture:
  *   BrowserPool
  *   ├── sessions: Map<sessionId, BrowserSession>
- *   │   ├── session_1 → PlaywrightCDPClient → Chromium window 1
- *   │   ├── session_2 → PlaywrightCDPClient → Chromium window 2
- *   │   └── session_3 → PlaywrightCDPClient → Chromium window 3
+ *   │   ├── session_1 → PlaywrightCDPClient → tab in shared Chromium
+ *   │   ├── session_2 → PlaywrightCDPClient → tab in shared Chromium
+ *   │   └── session_3 → PlaywrightCDPClient → tab in shared Chromium
  *   └── concurrency control via Semaphore (max 5 parallel sessions)
  */
 
