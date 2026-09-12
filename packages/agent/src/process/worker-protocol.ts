@@ -565,6 +565,21 @@ export interface CompactStepEvent {
 }
 
 /**
+ * Plan 523 P6: one event per summarization attempt inside the retry ladder,
+ * so the renderer can explain *why* a compaction retried or failed (degenerate
+ * output, empty response, output-length error, …) rather than only seeing the
+ * coarse 'summarizing' step boundary.
+ */
+export interface CompactSummaryOutcomeEvent {
+  type: 'compact:summary_outcome';
+  sessionId: string;
+  attempt: number;
+  outcome: 'success' | 'degenerate' | 'empty' | 'error';
+  errorKind?: string;
+  chars: number;
+}
+
+/**
  * Memory wakeup (Plan 305 Phase B). Sent by the agent subprocess
  * fire-and-forget after `ready` to nudge the memory worker into an
  * immediate sweep. Gated by `DUYA_MEMORY_ENABLED` on the agent side.

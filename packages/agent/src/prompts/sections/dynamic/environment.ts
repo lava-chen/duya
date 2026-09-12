@@ -82,6 +82,8 @@ function getMarketingNameForModel(modelId: string): string | null {
   if (modelId.includes('gemini')) return 'Gemini'
 
   // DeepSeek models
+  if (modelId.includes('deepseek-flash')) return 'DeepSeek V4.1 Flash'
+  if (modelId.includes('deepseek-v4-pro')) return 'DeepSeek V4 Pro'
   if (modelId.includes('deepseek-r1')) return 'DeepSeek R1'
   if (modelId.includes('deepseek-v3')) return 'DeepSeek V3'
   if (modelId.includes('deepseek')) return 'DeepSeek'

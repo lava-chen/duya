@@ -417,6 +417,55 @@ describe('dedupeRuntimeContextMessages', () => {
 
     expect(input).toEqual(before);
   });
+
+  it('drops an attachment context re-injected with the same attachment id set', () => {
+    const ids = deterministicIds('att');
+    const attachments = [
+      makeAttachment({ id: 'img-1', name: 'screenshot.png', type: 'image/png', text: undefined }),
+    ];
+    // Same attachments re-adapted (e.g. per-round re-injection): fresh message
+    // id each time, but the attachmentIds metadata set is identical.
+    const first = adaptAttachmentContext(attachments, options(ids.next));
+    const second = adaptAttachmentContext(attachments, options(ids.next));
+
+    const result = dedupeRuntimeContextMessages([first!, second!]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe('att-1');
+  });
+
+  it('keeps attachment contexts whose id sets differ', () => {
+    const ids = deterministicIds('att');
+    const turn1 = adaptAttachmentContext(
+      [makeAttachment({ id: 'img-1', name: 'a.png', type: 'image/png', text: undefined })],
+      options(ids.next),
+    );
+    const turn2 = adaptAttachmentContext(
+      [makeAttachment({ id: 'img-2', name: 'b.png', type: 'image/png', text: undefined })],
+      options(ids.next),
+    );
+
+    const result = dedupeRuntimeContextMessages([turn1!, turn2!]);
+
+    expect(result).toHaveLength(2);
+  });
+
+  it('keeps an attachment context without attachment ids (no dedup key)', () => {
+    const ids = deterministicIds('att');
+    const base = adaptAttachmentContext(
+      [makeAttachment({ id: 'img-1', name: 'a.png', type: 'image/png', text: undefined })],
+      options(ids.next),
+    );
+    const noIds: AgentMessage = {
+      ...base!,
+      id: 'att-no-ids',
+      metadata: { ...base!.metadata, [RUNTIME_CONTEXT_METADATA_KEYS.attachmentIds]: [] },
+    };
+
+    const result = dedupeRuntimeContextMessages([base!, noIds]);
+
+    expect(result).toHaveLength(2);
+  });
 });
 
 // ─── Attachment context ──────────────────────────────────────────────────
