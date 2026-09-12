@@ -2,8 +2,10 @@
  * attachment-store.test.ts — unit tests for the inbound channel attachment
  * store (plan 507 P1.2).
  *
- * Electron's `app.getPath('userData')` is mocked to a per-test temp dir, so
- * persistence runs against a real filesystem without touching the app data.
+ * The shared agents root (plan 526) is resolved through the ConfigStore
+ * singleton, so a temp store is injected per test and persistence runs
+ * against a real filesystem without touching the app data. The electron
+ * mock stays in place for the module import chain.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
@@ -20,6 +22,8 @@ vi.mock('electron', () => ({
   },
 }));
 
+import { ConfigStore } from '../../config/store';
+import { _setConfigStoreForTest } from '../../config/store-instance';
 import {
   persistInboundAttachment,
   persistInboundAttachments,
@@ -33,9 +37,16 @@ let tmpRoot: string;
 beforeEach(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-attachment-store-'));
   mocks.userDataDir = tmpRoot;
+  _setConfigStoreForTest(
+    new ConfigStore({
+      configPath: path.join(tmpRoot, 'config.toml'),
+      secretsPath: path.join(tmpRoot, 'secrets.json'),
+    }),
+  );
 });
 
 afterEach(() => {
+  _setConfigStoreForTest(undefined);
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 

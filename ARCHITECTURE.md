@@ -121,8 +121,9 @@ platform. Two data flows:
   `forwardInbound`, Feishu/Weixin/TG deep adapters) download media to temp
   cache; the main process persists each to stable storage via
   `electron/channels/attachment-store.ts` →
-  `<userData>/agents/<ownerId>/attachments/inbound/<platform>/<ts>_<name>`
-  (atomic write, per-kind size caps mirroring `attachment-builder.ts`, traveral
+  `~/.duya/agents/<ownerId>/attachments/inbound/<platform>/<ts>_<name>`
+  (shared agents root, plan 526; atomic write, per-kind size caps mirroring
+  `attachment-builder.ts`, traveral
   guard on owner/platform/name). The `ChannelInboundEnvelope.attachments`
   (`packages/agent/src/channels/types.ts`) feeds
   `packages/agent/src/channels/prompts.ts`, which renders
@@ -393,6 +394,25 @@ Write paths, all converging on profile.json:
 
 - **UI edit** (`EditBotDialog` / `BotSettingsPanel`, shared `useBotContactForm`): identity via `config:agents:updateBotProfile` → `updateBotProfileIdentity`; avatar image upload via `config:agents:uploadBotAvatar` (file dialog + copy in the main process) and `config:agents:clearBotAvatarImage`.
 - **Model self-edit** (`update_state` profile.set / avatar.set / avatar.clear): routed through the `bot-identity:rpc` channel (agent subprocess → agent-server-lifecycle → `electron/config/bot-identity-rpc.ts`), which binds the subaction to the session's `bot:<agentId>` identity (a bot can only edit its own profile), validates color tokens and image sources, and calls the same identity writers. `avatar.set` accepts `avatarColor` and/or `avatarImagePath` (e.g. the model's own `image_generate` output; validated extension whitelist + 5 MB cap + magic bytes, then copied to `agents/<id>/avatar.<ext>` by `setBotAvatarImage`).
+
+### Shared Agents Root (Plan 526)
+
+The ENTIRE `agents/<agentId>/` tree — identity (profile.json, settings.json,
+avatar), sessions, memory shards, skills AND the channels subsystem
+(`channels/<platform>/connection.json`, `connector-secrets/<platform>.json`,
+`gateway/weixin/` state, `attachments/inbound/`) — lives under the shared
+`<duyaRoot>/agents` root (`~/.duya/agents`), resolved via
+`getSharedAgentsRoot()` (`electron/config/agent-paths.ts` →
+`ConfigStore.getConfigDir()`). This is what makes a bot fully portable
+across dev and packaged installs: previously channel bindings lived under
+`<userData>/agents/`, which is namespaced per install mode (`duya-dev` vs
+packaged), so a packaged app could never see bindings configured in dev.
+The worker already read `connection.json` from the shared root
+(`packages/agent/src/prompts/bot/loader.ts`), so main and worker now agree.
+At boot, `electron/channels/legacy-root-migration.ts` merges any remaining
+`<userData>/agents/*` channel data into the shared root (per-file,
+target-exists wins, source kept). Soft delete/hard delete of a bot moves or
+removes the whole directory, so credentials are purged with the bot.
 
 ### Bot Routines & Event Listeners (Plan 499, 476 P2.3b/P2.3d)
 

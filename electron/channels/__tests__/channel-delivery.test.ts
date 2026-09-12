@@ -1,10 +1,10 @@
 /**
  * channel-delivery.test.ts — multipart builder + Telegram media routing
- * (plan 507 P3.2/P3.3). The helper functions under test are pure, but the
- * module's import chain resolves `connector-secret-store` (electron app),
- * so `electron` is mocked to a temp userData before import.
+ * (plan 507 P3.2/P3.3). The helper functions under test are pure; a temp
+ * ConfigStore is injected (plan 526 shared agents root) and `electron` is
+ * mocked so the module import chain never touches real app data.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -19,10 +19,19 @@ vi.mock('electron', () => ({
   app: { getPath: () => userData },
 }));
 
+import { ConfigStore } from '../../config/store';
+import { _setConfigStoreForTest } from '../../config/store-instance';
 import {
   buildMultipartBody,
   telegramMediaSend,
 } from '../channel-delivery';
+
+_setConfigStoreForTest(
+  new ConfigStore({
+    configPath: path.join(userData, 'config.toml'),
+    secretsPath: path.join(userData, 'secrets.json'),
+  }),
+);
 
 describe('buildMultipartBody', () => {
   it('wraps a file part in a well-formed multipart buffer with boundary and filename', () => {
