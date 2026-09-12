@@ -50,6 +50,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Download Electron binary
+        # Electron 44+ ships its npm package without a postinstall hook, so a
+        # clean checkout has no node_modules/electron/dist. Download it
+        # explicitly: ensure-sqlite-abi.mjs (preelectron:build hook) probes
+        # the real Electron binary to verify the better-sqlite3 ABI, and
+        # exits 1 when the binary is missing.
+        run: node node_modules/electron/install.js
+
       - name: Build workspace packages
         # Two-pass build to break the @duya/agent ↔ @duya/conductor circular
         # dependency on a clean checkout (no dist/):
