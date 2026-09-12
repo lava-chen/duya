@@ -27,6 +27,7 @@ import { collectDiagnostics } from '../utils/simple-options.js';
 import { withIdleTimeout } from '../utils/idle-timeout.js';
 import { sortToolsByName } from '../utils/tool-order.js';
 import { localRuntimeApiKeyOrPlaceholder } from './local-runtime.js';
+import { normalizeUsage, type UsageLike } from '../utils/usage.js';
 
 // =============================================================================
 // Tool call ID synthesis
@@ -274,13 +275,44 @@ export function repairToolPairing(messages: Message[]): Message[] {
 }
 
 /**
+ * Wire field that a thinking block replays into, keyed by the signature
+ * recorded at stream time (`reasoning_content` / `reasoning` /
+ * `reasoning_text` — see appendThinking). DeepSeek thinking mode REQUIRES
+ * the reasoning_content of all previous turns to be passed back whenever the
+ * request carries tools, and otherwise rejects the request with HTTP 400
+ * "The `reasoning_content` in the thinking mode must be passed back to the
+ * API". This surfaces right after a compaction rebase (the rewritten message
+ * prefix re-validates the whole history server-side). Endpoints that don't
+ * accept the field ignore it.
+ */
+const THINKING_REPLAY_FIELD_BY_SIGNATURE: Record<
+  string,
+  'reasoning_content' | 'reasoning' | 'reasoning_text'
+> = {
+  reasoning_content: 'reasoning_content',
+  reasoning: 'reasoning',
+  reasoning_text: 'reasoning_text',
+};
+
+/**
+ * Assistant wire message extended with the provider reasoning replay fields
+ * (DeepSeek/Qwen/GLM-style extensions beyond the OpenAI schema; the OpenAI
+ * SDK JSON-serializes params verbatim, so extra fields pass through).
+ */
+type AssistantWireMessage = OpenAI.Chat.ChatCompletionAssistantMessageParam &
+  Partial<Record<'reasoning_content' | 'reasoning' | 'reasoning_text', string>>;
+
+/**
  * Convert duya Message[] to OpenAI ChatCompletionMessageParam[].
  *
  * System messages are skipped (they are passed separately via the systemPrompt
  * option). Tool results inside user messages become 'tool' role messages.
- * Thinking blocks in assistant history are dropped — OpenAI has no wire format
- * for them, and transformMessages has already downgraded cross-model thinking
- * to plain text.
+ * Thinking blocks in assistant history are replayed into their original
+ * reasoning wire field (reasoning_content / reasoning / reasoning_text) —
+ * required by DeepSeek thinking mode when the request carries tools, and
+ * ignored by endpoints that don't accept the field. Cross-model thinking has
+ * already been downgraded to plain text by transformMessages, and 'think-tag'
+ * thinking (extracted from content tags) stays dropped.
  */
 // Exported for tests (same seam rationale as parseAnthropicEvent).
 export function toOpenAIMessages(
@@ -336,12 +368,28 @@ export function toOpenAIMessages(
       } else if (Array.isArray(msg.content)) {
         const textParts: string[] = [];
         const toolCalls: OpenAI.Chat.ChatCompletionMessageToolCall[] = [];
+        const thinkingReplay: Partial<
+          Record<'reasoning_content' | 'reasoning' | 'reasoning_text', string>
+        > = {};
         for (const block of msg.content) {
           if (block.type === 'text') {
             textParts.push(block.text);
           } else if (block.type === 'thinking') {
-            // OpenAI doesn't support thinking blocks in history — skip.
-            // (transformMessages already downgraded cross-model thinking to text)
+            // Replay same-model thinking into the wire field it originally
+            // came from (transformMessages already downgraded cross-model
+            // thinking to text, so any thinking block reaching here is
+            // same-model). DeepSeek thinking mode requires this whenever the
+            // request carries tools; endpoints that ignore the field are
+            // unaffected. 'think-tag' thinking arrived inside content tags —
+            // replaying it as a reasoning field would be a foreign format.
+            const replayField =
+              THINKING_REPLAY_FIELD_BY_SIGNATURE[block.thinkingSignature ?? ''];
+            if (replayField && block.thinking) {
+              const existing = thinkingReplay[replayField];
+              thinkingReplay[replayField] = existing
+                ? `${existing}\n\n${block.thinking}`
+                : block.thinking;
+            }
           } else if (block.type === 'tool_use') {
             toolCalls.push({
               id: block.id,
@@ -358,12 +406,21 @@ export function toOpenAIMessages(
             textParts.push(summarizeProviderBlock(block));
           }
         }
-        const assistantMsg: OpenAI.Chat.ChatCompletionAssistantMessageParam = {
+        const assistantMsg: AssistantWireMessage = {
           role: 'assistant',
           content: textParts.join('') || null,
         };
         if (toolCalls.length > 0) {
           assistantMsg.tool_calls = toolCalls;
+        }
+        if (thinkingReplay.reasoning_content !== undefined) {
+          assistantMsg.reasoning_content = thinkingReplay.reasoning_content;
+        }
+        if (thinkingReplay.reasoning !== undefined) {
+          assistantMsg.reasoning = thinkingReplay.reasoning;
+        }
+        if (thinkingReplay.reasoning_text !== undefined) {
+          assistantMsg.reasoning_text = thinkingReplay.reasoning_text;
         }
         result.push(assistantMsg);
       }
@@ -646,7 +703,9 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
         temperature: chatOptions?.temperature,
         stream: true,
         stream_options: { include_usage: true },
-        ...(chatOptions?.tools?.length
+        // Plan 523 P4: `toolChoice: 'none'` omits the tools field so the
+        // summarizer model cannot invoke tools (the DSML/tool-call leak guard).
+        ...(chatOptions?.tools?.length && chatOptions?.toolChoice !== 'none'
           ? {
               tools: sortToolsByName(chatOptions.tools).map(t => ({
                 type: 'function' as const,
@@ -721,9 +780,19 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
         // Some chunks only carry usage (no choices) — capture and continue.
         if (!choice) {
           if (chunk.usage) {
+            // normalizeUsage is the canonical extractor (Anthropic TTLs,
+            // OpenAI prompt_tokens_details, reasoning). input_tokens is
+            // overridden with the raw prompt_tokens to match the downstream
+            // contract: agent-process-entry and useContextUsage.normalizeInputTokens
+            // treat input_tokens as cache-inclusive and re-derive the
+            // non-cached split themselves.
+            const n = normalizeUsage(chunk.usage as UsageLike);
             assistantMsg.usage = {
-              input_tokens: chunk.usage.prompt_tokens || 0,
-              output_tokens: chunk.usage.completion_tokens || 0,
+              input_tokens: chunk.usage.prompt_tokens ?? 0,
+              output_tokens: n.output,
+              cache_hit_tokens: n.cacheRead,
+              cache_creation_tokens: n.cacheWrite,
+              total_tokens: n.total,
             };
           }
           continue;
@@ -805,9 +874,19 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
 
         // 9d. Track usage if present (final chunk carries it).
         if (chunk.usage) {
+          // normalizeUsage is the canonical extractor (Anthropic TTLs,
+          // OpenAI prompt_tokens_details, reasoning). input_tokens is
+          // overridden with the raw prompt_tokens to match the downstream
+          // contract: agent-process-entry and useContextUsage.normalizeInputTokens
+          // treat input_tokens as cache-inclusive and re-derive the
+          // non-cached split themselves.
+          const n = normalizeUsage(chunk.usage as UsageLike);
           assistantMsg.usage = {
-            input_tokens: chunk.usage.prompt_tokens || 0,
-            output_tokens: chunk.usage.completion_tokens || 0,
+            input_tokens: chunk.usage.prompt_tokens ?? 0,
+            output_tokens: n.output,
+            cache_hit_tokens: n.cacheRead,
+            cache_creation_tokens: n.cacheWrite,
+            total_tokens: n.total,
           };
         }
 
