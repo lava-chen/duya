@@ -235,7 +235,12 @@ html[data-message-font-size="large"] .prose h3 {
   border-radius: 0.75rem 0.75rem 0 0;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-bottom: none;
+  /* Seam against the input surface below: the wrapper's -1px margin
+   * overlaps this border onto the input's top edge, so it reads as the
+   * single divider between the queue and the composer. Uses the same
+   * token as the in-input task-row divider for a consistent internal
+   * divider language. */
+  border-bottom: 1px solid var(--command-menu-border);
   overflow: hidden;
 }
 
@@ -425,7 +430,8 @@ html[data-message-font-size="large"] .prose h3 {
   border-radius: 0.75rem 0.75rem 0 0;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-bottom: none;
+  /* Authoritative seam rule — see the first .mailbox-panel block above. */
+  border-bottom: 1px solid var(--command-menu-border);
   overflow: hidden;
   box-shadow: none;
 }

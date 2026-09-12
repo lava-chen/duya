@@ -2,12 +2,14 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { CodeBlock } from './CodeBlock';
 import { openLocalArtifactTarget, isLikelyLocalFileReference, isLocalhostUrl, fileNameFromPath, isPathInsideRoot, parseInternalCanvasLink, openConductorCanvas, tryDecodeURI } from '@/lib/chat-file-links';
 import { useConversationStore } from '@/stores/conversation-store';
-import { ImagePreviewModal } from './ImagePreviewModal';
+import { ImagePreview } from './preview/ImagePreview';
 import { FileIcon, ChalkboardIcon } from '../icons';
 import { Button } from '@/components/ui/Button';
 import { fileExtensionFromName, getFileTypeIcon } from '../file-tree/file-type-icon';
 import { useLinkOpener } from '@/hooks/useLinkOpener';
 import { useLinkFavicon } from '@/lib/link-favicon';
+import { parsePluginMentionHref } from '@/lib/plugin-mention-display';
+import { PluginMentionLinkChip } from './PluginMentionChip';
 
 // Inline media: renders <img> thumbnails that open the lightbox on click,
 // or <video controls> elements for common video extensions so the same
@@ -107,13 +109,13 @@ function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
       >
         <img src={resolvedSrc} alt={altText} className="markdown-image" loading="lazy" />
       </Button>
-      {open && (
-        <ImagePreviewModal
+      <ImagePreview
+          open={open}
+          onClose={() => setOpen(false)}
+          variant="lightbox"
           src={resolvedSrc}
           alt={altText || 'image'}
-          onClose={() => setOpen(false)}
         />
-      )}
     </>
   );
 }
@@ -131,6 +133,20 @@ const BARE_FILE_REFERENCE_RE = /^[^/\\:?#\s]+\.\w+(?::\d+)?$/;
  * back to the thread working directory.
  */
 export const MarkdownBaseDirectoryContext = createContext<string | null>(null);
+
+/**
+ * Label for a plugin mention chip: the link text with the prompt-taught
+ * leading `@` removed. Non-string children (e.g. emphasis inside the label)
+ * yield undefined so the chip falls back to `@<pluginId>`.
+ */
+function pluginMentionLabel(children: React.ReactNode): string | undefined {
+  const text = typeof children === 'string'
+    ? children
+    : Array.isArray(children) && children.length === 1 && typeof children[0] === 'string'
+      ? children[0]
+      : undefined;
+  return text?.replace(/^@/, '') || undefined;
+}
 
 function MarkdownAnchor({ href, children }: { href?: string; children?: React.ReactNode }) {
   const { openLinksInExternalBrowser, openLink } = useLinkOpener();
@@ -162,6 +178,17 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
   // navigation is unaffected.
   if (typeof resolvedHref === 'string') {
     resolvedHref = tryDecodeURI(resolvedHref);
+  }
+
+  // `plugin://<pluginId>` links are plugin @-mentions (`[@Name](plugin://id)`,
+  // the syntax the agent prompt itself emits). Render the same chip the
+  // composer uses — never a link — so this must run before the local-file and
+  // external branches, which would otherwise turn it into a dead link.
+  const pluginMentionId = typeof href === 'string' ? parsePluginMentionHref(href) : null;
+  if (pluginMentionId) {
+    return (
+      <PluginMentionLinkChip pluginId={pluginMentionId} label={pluginMentionLabel(children)} />
+    );
   }
 
   // Internal canvas routes (`/duya/canvas/<id>`, taught to the agent by the

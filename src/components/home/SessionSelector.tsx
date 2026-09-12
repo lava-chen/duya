@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useTranslation } from "@/hooks/useTranslation";
 import { ChevronDownIcon, FileIcon, FolderOpenIcon, NotePencilIcon } from "@/components/icons";
@@ -42,7 +43,13 @@ export function SessionSelector({
   maxRecentThreads = 8,
   children,
 }: SessionSelectorProps) {
-  const { threads, projects, isHydrated } = useConversationStore();
+  const { threads, projects, isHydrated } = useConversationStore(
+    useShallow((s) => ({
+      threads: s.threads,
+      projects: s.projects,
+      isHydrated: s.isHydrated,
+    }))
+  );
   const { t, locale } = useTranslation();
   const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"threads" | "references">("threads");

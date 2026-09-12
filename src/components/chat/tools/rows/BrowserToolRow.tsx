@@ -77,6 +77,7 @@ const BROWSER_OPERATION_LABELS: Record<string, string> = {
   tabs_close: '已关闭标签页',
   tabs_select: '已切换标签页',
   file_upload: '已上传文件',
+  post: '已发布动态',
   network_start: '已监听网络',
   network_read: '已读取网络请求',
   iframe_evaluate: '已在页面内执行',

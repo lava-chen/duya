@@ -392,3 +392,349 @@
     max-height: calc(100vh - 10rem);
   }
 }
+
+/* ============================================
+   Unified Image Preview Modal (Plan 511)
+   Replaces .attachment-preview-* + .image-preview-* (mailbox.css)
+   + .attachment-preview-sidebar-* (skills.css). The legacy rules
+   above stay until Plan 511 Phase 3 deletes the old components.
+   ============================================ */
+
+@keyframes image-preview-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes image-preview-slide-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.image-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(10px) saturate(1.05);
+  -webkit-backdrop-filter: blur(10px) saturate(1.05);
+  animation: image-preview-fade-in 0.2s ease-out;
+}
+
+.image-preview-close {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 201;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 0.5rem;
+  border: none;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  cursor: pointer;
+  transition: background-color 0.15s ease, transform 0.12s ease;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.image-preview-close:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.image-preview-close:active {
+  transform: scale(0.96);
+}
+
+/* ----- Lightbox variant ----- */
+
+.image-preview-canvas {
+  max-width: 90vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+  padding: 1rem;
+}
+
+.image-preview-canvas-img {
+  max-width: 100%;
+  max-height: 85vh;
+  object-fit: contain;
+  border-radius: 8px;
+  user-select: none;
+}
+
+.image-preview-caption {
+  margin-top: 0.75rem;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.8125rem;
+  max-width: 80vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ----- Panel variant ----- */
+
+.image-preview-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(92vw, 1200px);
+  height: min(90vh, 900px);
+  max-width: calc(100vw - 3rem);
+  max-height: calc(100vh - 3rem);
+  border-radius: 1rem;
+  background: var(--main-bg);
+  border: 1px solid var(--border);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  animation: image-preview-slide-up 0.25s ease-out;
+}
+
+.image-preview-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.image-preview-panel-title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.image-preview-panel-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-preview-panel-subtitle {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+}
+
+.image-preview-panel-body {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  background: var(--main-bg);
+  display: flex;
+  flex-direction: column;
+}
+
+.image-preview-panel-image {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  background: rgba(0, 0, 0, 0.04);
+  flex-shrink: 0;
+}
+
+[data-theme="dark"] .image-preview-panel-image {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.image-preview-panel-img {
+  max-width: 100%;
+  max-height: 50vh;
+  object-fit: contain;
+  border-radius: 0.5rem;
+}
+
+/* Panel body sub-renderers (image/pdf/code/text/doc/unknown).
+   Mirrors the shapes of the legacy .attachment-preview-* rules but with
+   new class names. */
+
+.image-preview-panel-code-wrapper,
+.image-preview-panel-text-wrapper,
+.image-preview-panel-pdf-wrapper,
+.image-preview-panel-doc-wrapper {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.image-preview-panel-code-header,
+.image-preview-panel-text-header,
+.image-preview-panel-doc-header {
+  display: flex;
+  align-items: center;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.image-preview-panel-pdf-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.image-preview-panel-code-filename,
+.image-preview-panel-text-filename,
+.image-preview-panel-doc-filename {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text);
+  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+}
+
+.image-preview-panel-text-filename,
+.image-preview-panel-doc-filename {
+  font-family: inherit;
+}
+
+.image-preview-panel-code-content,
+.image-preview-panel-text-content {
+  flex: 1;
+  margin: 0;
+  padding: 1.25rem;
+  overflow: auto;
+  font-family: 'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--main-bg);
+}
+
+.image-preview-panel-code-content {
+  white-space: pre;
+  word-wrap: normal;
+}
+
+.image-preview-panel-code-content code {
+  font-family: inherit;
+  background: transparent;
+  padding: 0;
+}
+
+.image-preview-panel-text-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.image-preview-panel-pdf-content {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  min-height: 0;
+  overflow: auto;
+}
+
+.image-preview-panel-pdf-thumbnail,
+.image-preview-panel-doc-thumbnail {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.image-preview-panel-pdf-placeholder,
+.image-preview-panel-doc-placeholder,
+.image-preview-panel-unknown {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--muted);
+}
+
+.image-preview-panel-pdf-placeholder {
+  padding: 0;
+}
+
+.image-preview-panel-doc-placeholder,
+.image-preview-panel-unknown {
+  padding: 3rem 1rem;
+}
+
+.image-preview-panel-doc-content {
+  flex: 1;
+  padding: 1.25rem;
+  overflow: auto;
+  min-height: 0;
+}
+
+.image-preview-panel-doc-text {
+  margin: 0;
+  font-family: 'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.image-preview-panel-doc-hint {
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+.image-preview-panel-pdf-open-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  border-radius: 0.375rem;
+  border: 1px solid var(--border);
+  background: var(--chip);
+  color: var(--text);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.image-preview-panel-pdf-open-btn:hover {
+  background: var(--surface-hover);
+  border-color: var(--accent-soft);
+}
+
+@media (max-width: 768px) {
+  .image-preview-panel {
+    max-width: calc(100vw - 1rem);
+    max-height: calc(100vh - 2rem);
+    border-radius: 0.75rem;
+  }
+
+  .image-preview-close {
+    top: 0.75rem;
+    right: 0.75rem;
+  }
+
+  .image-preview-panel-img,
+  .image-preview-panel-pdf-thumbnail,
+  .image-preview-panel-doc-thumbnail {
+    max-height: calc(100vh - 10rem);
+  }
+}

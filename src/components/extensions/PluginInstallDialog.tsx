@@ -15,6 +15,7 @@
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
+import { Modal } from "@/components/ui/page";
 import {
   SpinnerGapIcon,
   XIcon,
@@ -226,208 +227,208 @@ export function PluginInstallDialog({
     : t("marketplace.dialog.installButton");
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && !busy) onClose();
-      }}
+    <Modal
+      open
+      onClose={busy ? () => undefined : onClose}
+      size="sm"
+      hideCloseButton
+      closeOnOverlayClick={!busy}
     >
-      <div className="relative w-full max-w-lg rounded-2xl bg-[var(--main-bg)] border border-border/50 shadow-xl p-6">
-        <IconButton
-          variant="ghost"
-          size="sm"
-          shape="square"
-          aria-label={t("marketplace.close")}
-          className="absolute right-4 top-4"
-          disabled={busy}
-          onClick={onClose}
+      {/* Custom close button — we hide the standard header to keep the centered hero */}
+      <IconButton
+        variant="ghost"
+        size="sm"
+        shape="square"
+        aria-label={t("marketplace.close")}
+        className="absolute right-4 top-4"
+        disabled={busy}
+        onClick={onClose}
+      >
+        <XIcon size={18} />
+      </IconButton>
+
+      {/* Icon cluster — duya agent mark → (connector mark → check) */}
+      <div className="flex items-center justify-center gap-3 mb-4 mt-2">
+        <div
+          className="flex shrink-0 items-center justify-center rounded-[10px] overflow-hidden"
+          style={{ width: 56, height: 56 }}
         >
-          <XIcon size={18} />
-        </IconButton>
-
-        {/* Icon cluster — duya agent mark → (connector mark → check) */}
-        <div className="flex items-center justify-center gap-3 mb-4 mt-2">
-          <div
-            className="flex shrink-0 items-center justify-center rounded-[10px] overflow-hidden"
-            style={{ width: 56, height: 56 }}
-          >
-            <img
-              src="/icon.png"
-              alt="DUYA"
-              draggable={false}
-              className="h-full w-full object-cover"
-            />
-          </div>
-          {connectable && provider && (
-            <>
-              <span className="flex items-center gap-1 text-muted-foreground/50">
-                <span className="h-1 w-1 rounded-full bg-current" />
-                <span className="h-1 w-1 rounded-full bg-current" />
-                <span className="h-1 w-1 rounded-full bg-current" />
-              </span>
-              <div className="relative">
-                <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-[var(--surface-hover)]">
-                  <ConnectorIcon
-                    provider={provider.id}
-                    size={32}
-                    monogram={provider.monogram}
-                    label={provider.label}
-                  />
-                </div>
-                <span className="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 text-white">
-                  <CheckIcon size={12} />
-                </span>
-              </div>
-            </>
-          )}
+          <img
+            src="/icon.png"
+            alt="DUYA"
+            draggable={false}
+            className="h-full w-full object-cover"
+          />
         </div>
-
-        <h2 className="text-center text-lg font-semibold text-foreground">{title}</h2>
-        <p className="mt-2 text-center text-sm text-muted-foreground line-clamp-3">
-          {description}
-        </p>
-
         {connectable && provider && (
-          <p className="mt-2 text-center text-xs text-muted-foreground/80">
-            {t("marketplace.dialog.needsConnectHint", { provider: provider.label })}
-          </p>
-        )}
-
-        <div className="mt-5 flex justify-center">
-          <Button
-            variant="primary"
-            size="md"
-            disabled={busy}
-            onClick={() => void handleConfirm()}
-            className="bg-black text-white hover:bg-black/85 dark:bg-foreground dark:text-background dark:hover:bg-foreground/85"
-          >
-            {busy ? (
-              <SpinnerGapIcon size={14} className="animate-spin" />
-            ) : (
-              <PlugIcon size={14} />
-            )}
-            {phase === "installing"
-              ? t("marketplace.dialog.installing")
-              : phase === "connecting"
-                ? t("marketplace.dialog.connecting")
-                : primaryLabel}
-          </Button>
-        </div>
-
-        {phase === "error" && errorMessage && (
-          <p className="mt-3 text-center text-xs text-red-500 break-all">{errorMessage}</p>
-        )}
-
-        {(usageExamples.length > 0 || includedGroups.length > 0) && (
-          <div className="mt-5">
-            {/* Header + segmented control. When only one section has content
-                we skip the tabs to keep the dialog compact. */}
-            <div className="flex items-center justify-between gap-3 mb-2">
-              {usageExamples.length > 0 && includedGroups.length > 0 ? (
-                <div className="inline-flex rounded-lg border border-border/40 bg-[var(--surface)] p-0.5 text-[12px]">
-                  <button
-                    type="button"
-                    className={cn(
-                      "px-2.5 py-1 rounded-md transition-colors",
-                      bottomTab === "examples"
-                        ? "bg-[var(--main-bg)] text-foreground shadow-sm"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                    onClick={() => setBottomTab("examples")}
-                  >
-                    {t("marketplace.dialog.tabTryIt")}
-                  </button>
-                  <button
-                    type="button"
-                    className={cn(
-                      "px-2.5 py-1 rounded-md transition-colors",
-                      bottomTab === "included"
-                        ? "bg-[var(--main-bg)] text-foreground shadow-sm"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                    onClick={() => setBottomTab("included")}
-                  >
-                    {t("marketplace.dialog.tabIncluded")}
-                  </button>
-                </div>
-              ) : (
-                <p className="flex items-center gap-1.5 text-sm font-medium text-foreground">
-                  {usageExamples.length > 0 ? (
-                    <>
-                      <ChatCircleIcon size={14} className="text-muted-foreground" />
-                      {t("marketplace.dialog.tryThese")}
-                    </>
-                  ) : (
-                    <>
-                      <LightningIcon size={14} className="text-muted-foreground" />
-                      {t("marketplace.dialog.included")}
-                    </>
-                  )}
-                </p>
-              )}
+          <>
+            <span className="flex items-center gap-1 text-muted-foreground/50">
+              <span className="h-1 w-1 rounded-full bg-current" />
+              <span className="h-1 w-1 rounded-full bg-current" />
+              <span className="h-1 w-1 rounded-full bg-current" />
+            </span>
+            <div className="relative">
+              <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-[var(--surface-hover)]">
+                <ConnectorIcon
+                  provider={provider.id}
+                  size={32}
+                  monogram={provider.monogram}
+                  label={provider.label}
+                />
+              </div>
+              <span className="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 text-white">
+                <CheckIcon size={12} />
+              </span>
             </div>
-
-            {/* Try-it examples */}
-            {usageExamples.length > 0 &&
-              (includedGroups.length > 0 ? bottomTab === "examples" : true) && (
-                <div className="space-y-2">
-                  {usageExamples.map((example) => (
-                    <button
-                      key={example.prompt}
-                      type="button"
-                      className="w-full flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-[var(--surface)] px-3.5 py-2.5 text-left text-sm text-foreground hover:border-border/60 transition-colors"
-                      onClick={() => {
-                        dispatchPrefillChatInput(example.prompt);
-                        onClose();
-                      }}
-                    >
-                      <span className="truncate">"{example.prompt}"</span>
-                      <ChatCircleIcon size={14} className="shrink-0 text-muted-foreground" />
-                    </button>
-                  ))}
-                </div>
-              )}
-
-            {/* What's included — grouped by capability type */}
-            {includedGroups.length > 0 &&
-              (usageExamples.length > 0 ? bottomTab === "included" : true) && (
-                <div className="space-y-3">
-                  {includedGroups.map((group) => (
-                    <div key={group.type}>
-                      <p className="flex items-center gap-1.5 text-[12px] font-medium text-muted-foreground mb-1.5">
-                        <CapabilityTypeIcon type={group.type} size={12} />
-                        {t(`marketplace.dialog.capabilityType.${group.type}`)}
-                      </p>
-                      <ul className="space-y-1.5">
-                        {group.items.map((cap) => (
-                          <li
-                            key={cap.id}
-                            className="rounded-lg border border-border/40 bg-[var(--surface)] px-3 py-2"
-                          >
-                            <div className="text-[13px] font-medium text-foreground">
-                              {cap.name}
-                            </div>
-                            {cap.description && (
-                              <p className="mt-0.5 text-[12px] text-muted-foreground line-clamp-2">
-                                {cap.description}
-                              </p>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  ))}
-                  {includedGroups.every((g) => g.items.every((i) => !i.description)) && (
-                    <p className="text-[11px] text-muted-foreground/70">
-                      {t("marketplace.dialog.includedEmpty")}
-                    </p>
-                  )}
-                </div>
-              )}
-          </div>
+          </>
         )}
       </div>
-    </div>
+
+      <h2 className="text-center text-lg font-semibold text-foreground">{title}</h2>
+      <p className="mt-2 text-center text-sm text-muted-foreground line-clamp-3">
+        {description}
+      </p>
+
+      {connectable && provider && (
+        <p className="mt-2 text-center text-xs text-muted-foreground/80">
+          {t("marketplace.dialog.needsConnectHint", { provider: provider.label })}
+        </p>
+      )}
+
+      <div className="mt-5 flex justify-center">
+        <Button
+          variant="primary"
+          size="md"
+          disabled={busy}
+          onClick={() => void handleConfirm()}
+          className="bg-black text-white hover:bg-black/85 dark:bg-foreground dark:text-background dark:hover:bg-foreground/85"
+        >
+          {busy ? (
+            <SpinnerGapIcon size={14} className="animate-spin" />
+          ) : (
+            <PlugIcon size={14} />
+          )}
+          {phase === "installing"
+            ? t("marketplace.dialog.installing")
+            : phase === "connecting"
+              ? t("marketplace.dialog.connecting")
+              : primaryLabel}
+        </Button>
+      </div>
+
+      {phase === "error" && errorMessage && (
+        <p className="mt-3 text-center text-xs text-red-500 break-all">{errorMessage}</p>
+      )}
+
+      {(usageExamples.length > 0 || includedGroups.length > 0) && (
+        <div className="mt-5">
+          {/* Header + segmented control. When only one section has content
+              we skip the tabs to keep the dialog compact. */}
+          <div className="flex items-center justify-between gap-3 mb-2">
+            {usageExamples.length > 0 && includedGroups.length > 0 ? (
+              <div className="inline-flex rounded-lg border border-border/40 bg-[var(--surface)] p-0.5 text-[12px]">
+                <button
+                  type="button"
+                  className={cn(
+                    "px-2.5 py-1 rounded-md transition-colors",
+                    bottomTab === "examples"
+                      ? "bg-[var(--main-bg)] text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                  onClick={() => setBottomTab("examples")}
+                >
+                  {t("marketplace.dialog.tabTryIt")}
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    "px-2.5 py-1 rounded-md transition-colors",
+                    bottomTab === "included"
+                      ? "bg-[var(--main-bg)] text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                  onClick={() => setBottomTab("included")}
+                >
+                  {t("marketplace.dialog.tabIncluded")}
+                </button>
+              </div>
+            ) : (
+              <p className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+                {usageExamples.length > 0 ? (
+                  <>
+                    <ChatCircleIcon size={14} className="text-muted-foreground" />
+                    {t("marketplace.dialog.tryThese")}
+                  </>
+                ) : (
+                  <>
+                    <LightningIcon size={14} className="text-muted-foreground" />
+                    {t("marketplace.dialog.included")}
+                  </>
+                )}
+              </p>
+            )}
+          </div>
+
+          {/* Try-it examples */}
+          {usageExamples.length > 0 &&
+            (includedGroups.length > 0 ? bottomTab === "examples" : true) && (
+              <div className="space-y-2">
+                {usageExamples.map((example) => (
+                  <button
+                    key={example.prompt}
+                    type="button"
+                    className="w-full flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-[var(--surface)] px-3.5 py-2.5 text-left text-sm text-foreground hover:border-border/60 transition-colors"
+                    onClick={() => {
+                      dispatchPrefillChatInput(example.prompt);
+                      onClose();
+                    }}
+                  >
+                    <span className="truncate">"{example.prompt}"</span>
+                    <ChatCircleIcon size={14} className="shrink-0 text-muted-foreground" />
+                  </button>
+                ))}
+              </div>
+            )}
+
+          {/* What's included — grouped by capability type */}
+          {includedGroups.length > 0 &&
+            (usageExamples.length > 0 ? bottomTab === "included" : true) && (
+              <div className="space-y-3">
+                {includedGroups.map((group) => (
+                  <div key={group.type}>
+                    <p className="flex items-center gap-1.5 text-[12px] font-medium text-muted-foreground mb-1.5">
+                      <CapabilityTypeIcon type={group.type} size={12} />
+                      {t(`marketplace.dialog.capabilityType.${group.type}`)}
+                    </p>
+                    <ul className="space-y-1.5">
+                      {group.items.map((cap) => (
+                        <li
+                          key={cap.id}
+                          className="rounded-lg border border-border/40 bg-[var(--surface)] px-3 py-2"
+                        >
+                          <div className="text-[13px] font-medium text-foreground">
+                            {cap.name}
+                          </div>
+                          {cap.description && (
+                            <p className="mt-0.5 text-[12px] text-muted-foreground line-clamp-2">
+                              {cap.description}
+                            </p>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+                {includedGroups.every((g) => g.items.every((i) => !i.description)) && (
+                  <p className="text-[11px] text-muted-foreground/70">
+                    {t("marketplace.dialog.includedEmpty")}
+                  </p>
+                )}
+              </div>
+            )}
+        </div>
+      )}
+    </Modal>
   );
 }
 

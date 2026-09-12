@@ -7,8 +7,8 @@ import '@testing-library/jest-dom/vitest';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { markdownComponents, MarkdownBaseDirectoryContext } from './markdownComponents';
 
-vi.mock('./ImagePreviewModal', () => ({
-  ImagePreviewModal: () => <div data-testid="image-preview-modal" />,
+vi.mock('./preview/ImagePreview', () => ({
+  ImagePreview: () => <div data-testid="image-preview-modal" />,
 }));
 
 vi.mock('@/stores/conversation-store', () => ({

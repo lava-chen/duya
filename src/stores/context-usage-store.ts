@@ -30,6 +30,10 @@ export interface LiveContextUsage {
   totalOutput?: number;
   totalCacheHit?: number;
   totalCacheCreation?: number;
+  /** Token-accounting: model snapshot of the worker's runtime — the live
+   *  ring resolves window/pricing against the model actually in use. */
+  model?: string;
+  providerId?: string;
   /**
    * Token-calc breakdown pushed by the worker for diagnostic surfaces
    * (hover-detail / debug panel). Lets the operator see exactly how
@@ -87,6 +91,9 @@ export interface WorkerUsageSnapshot {
   totalOutput?: number;
   totalCacheHit?: number;
   totalCacheCreation?: number;
+  /** Token-accounting: model/provider snapshot from the worker frame. */
+  model?: string;
+  providerId?: string;
   debugBreakdown?: LiveContextUsage['debugBreakdown'];
 }
 
@@ -114,6 +121,8 @@ export function applyWorkerUsageSnapshot(
     totalOutput: snapshot.totalOutput,
     totalCacheHit: snapshot.totalCacheHit,
     totalCacheCreation: snapshot.totalCacheCreation,
+    model: snapshot.model,
+    providerId: snapshot.providerId,
     debugBreakdown: snapshot.debugBreakdown,
   });
 }
