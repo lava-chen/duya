@@ -62,21 +62,21 @@ import { registerFilesHandlers } from './ipc/files-handlers';
 import { registerReferencesHandlers } from './ipc/references-handlers';
 import { registerLoggerHandlers } from './ipc/logger-handlers';
 import { ensureOfficialMarketplace, syncAllMarketplaces } from './plugins/marketplace/manager';
+import { syncBuiltinPlugins } from './plugins/catalog';
 import { registerUpdaterHandlers } from './ipc/updater-handlers';
 import { registerAgentServerHandlers } from './ipc/agent-server-handlers';
 import { registerPluginHandlers } from './ipc/plugin-handlers';
 import { reconcilePluginAppDeclarations } from './services/app-connections/declarative/reconcile';
 import { registerAppConnectionHandlers } from './ipc/app-connection-handlers';
-import { registerCapabilityManagementHandlers } from './ipc/capability-management-handlers';
 import { registerTerminalHandlers } from './ipc/terminal-handlers';
 import { registerBrowserWebviewHandlers } from './ipc/browser-webview-handlers';
 import { registerBrowserCookieHandlers } from './ipc/browser-cookie-handlers';
-import { registerImportHandlers } from './import/import-handlers';
 import { registerProjectDatabaseHandlers } from './ipc/project-database-handlers';
 import { registerGitHandlers } from './ipc/git-handlers';
 import { registerVoiceHandlers } from './ipc/voice-handlers';
 import { registerHooksHandlers } from './ipc/hooks-handlers';
 import { registerMcpReloadIpcHandler } from './ipc/mcp-handlers';
+import { registerLazyIpcHandlers } from './ipc/lazy-ipc-registry';
 import { ConductorExecutorProxy } from './conductor/executor-proxy';
 import { getJsonSetting } from './db/queries/settings';
 
@@ -361,6 +361,17 @@ if (gotTheLock) {
       // NOTE: agentControl channel removed - Phase 7.1 of plan 53
       // Agent communication now uses HTTP+SSE via Agent Server
     ]);
+
+    // ============================================================
+    // Step 4.25: Sync builtin plugins to user-home cache (Plan 455 follow-up)
+    // ============================================================
+    // Populate ~/.duya/plugins/cache/builtin/<id>/<version>/ so that
+    // getBuiltinCatalogEntries() finds them and the composer @mention
+    // system can activate builtin plugins (github / notion / zotero / ...).
+    // Must run before createWindow() so the catalog is populated on the
+    // first composer interaction — the sync is fast (idempotent, mtime
+    // skip) so it does not meaningfully delay window display.
+    syncBuiltinPlugins();
 
     // Show the window as soon as DB + message-port channels are
     // registered. The renderer paints immediately, the OS can process
@@ -1170,8 +1181,30 @@ try {
     'Main',
   );
 }
-registerCapabilityManagementHandlers();
-registerImportHandlers();
+// Lazy groups: the module graphs behind these channels are only needed once
+// the corresponding UI is used, so the real handlers load on first invoke.
+registerLazyIpcHandlers({
+  label: 'capability-management',
+  channels: ['capability-management:snapshot'],
+  load: async (register) => {
+    const mod = await import('./ipc/capability-management-handlers');
+    mod.registerCapabilityManagementHandlers(register);
+  },
+});
+registerLazyIpcHandlers({
+  label: 'import',
+  channels: [
+    'import:detect',
+    'import:scan',
+    'import:apply',
+    'import:rollback',
+    'import:history',
+  ],
+  load: async (register) => {
+    const mod = await import('./import/import-handlers');
+    mod.registerImportHandlers(register);
+  },
+});
 registerBrowserWebviewHandlers();
 registerBrowserCookieHandlers();
 registerGitHandlers();
