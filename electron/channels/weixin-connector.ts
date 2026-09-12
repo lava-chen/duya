@@ -16,7 +16,6 @@
  */
 
 import * as path from 'node:path';
-import { app } from 'electron';
 
 import type {
   ChannelInboundAttachment,
@@ -30,6 +29,7 @@ import type { NormalizedMessage, PlatformConfig } from './gateway-adapters';
 import { persistInboundAttachments } from './attachment-store';
 import type { AttachmentSource } from './attachment-store';
 import { getConnectorCredential } from './agent-session-channels';
+import { getSharedAgentsRoot } from '../config/agent-paths';
 
 const logger = getLogger();
 
@@ -41,9 +41,10 @@ export interface WeixinConnectorOptions {
 }
 
 /** Resolve the per-agent state directory so each WeChat bot persists its own
- * context_token/sync_buf without colliding with other bots or the gateway. */
+ * context_token/sync_buf without colliding with other bots or the gateway.
+ * Shared root (plan 526): `~/.duya/agents/<agentId>/gateway/weixin`. */
 function resolveAgentStateDir(agentId: string): string {
-  return path.join(app.getPath('userData'), 'agents', agentId, 'gateway', 'weixin');
+  return path.join(getSharedAgentsRoot(), agentId, 'gateway', 'weixin');
 }
 
 /**

@@ -296,9 +296,20 @@ if (gotTheLock) {
     registerConductorHandlers();
     registerSidebarSectionsHandlers();
 
+    // Plan 526 — merge legacy <userData>/agents channel data into the shared
+    // ~/.duya/agents root before anything reads bindings/secrets. Idempotent;
+    // a no-op once every legacy file has been copied.
+    try {
+      const { migrateLegacyAgentChannelData } = await import('./channels/legacy-root-migration');
+      migrateLegacyAgentChannelData();
+    } catch (err) {
+      logger.warn('Legacy agents root migration failed', err instanceof Error ? err : new Error(String(err)), 'Main');
+    }
+
     // Plan 488 P6 — start the per-bot inbound connectors (grok-form channel
-    // model). Bindings and credentials are file-based (agents/<id>/…), so this
-    // only needs userData resolved; wakes lazily open the core store.
+    // model). Bindings and credentials are file-based (agents/<id>/…) under
+    // the shared ~/.duya/agents root (plan 526); wakes lazily open the core
+    // store.
     try {
       const { getBotConnectorManager } = await import('./channels/connector-runtime');
       getBotConnectorManager().start();

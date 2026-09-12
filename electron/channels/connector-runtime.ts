@@ -20,7 +20,6 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { app } from 'electron';
 
 import { getLogger, LogComponent } from '../logging/logger';
 import { getConnectorSecretStore } from './connector-secret-store';
@@ -38,15 +37,20 @@ import { WeixinConnector } from './weixin-connector';
 import { getChannelBackgroundWakes } from '../wake/channels';
 import { defaultBotSessionCreator } from '../wake/agent-dm-dispatcher';
 import { getBotSessionId } from '../wake/bot-session-id';
+import { getSharedAgentsRoot } from '../config/agent-paths';
 
 const logger = getLogger();
 
-/** Enumerate every agent id that has an `agents/<id>/` directory. */
+/**
+ * Enumerate every agent id that has an `agents/<id>/` directory under the
+ * shared root (plan 526). Dot directories (`.deleted`, …) are not agent ids.
+ */
 function listAgentIds(): string[] {
-  const agentsDir = path.join(app.getPath('userData'), 'agents');
+  const agentsDir = getSharedAgentsRoot();
   if (!fs.existsSync(agentsDir)) return [];
   try {
     return fs.readdirSync(agentsDir).filter((entry) => {
+      if (entry.startsWith('.')) return false;
       try {
         return fs.statSync(path.join(agentsDir, entry)).isDirectory();
       } catch {
@@ -63,7 +67,7 @@ function listBoundAgentPlatforms(): Array<{ agentId: string; platform: string }>
   const secretStore = getConnectorSecretStore();
   const out: Array<{ agentId: string; platform: string }> = [];
   for (const agentId of listAgentIds()) {
-    const channelsDir = path.join(app.getPath('userData'), 'agents', agentId, 'channels');
+    const channelsDir = path.join(getSharedAgentsRoot(), agentId, 'channels');
     if (!fs.existsSync(channelsDir)) continue;
     try {
       for (const platform of fs.readdirSync(channelsDir)) {
