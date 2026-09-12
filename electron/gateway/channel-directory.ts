@@ -194,3 +194,85 @@ export function getChannelStatus(platform: string): ChannelStatus | undefined {
 export function getAllChannelStatuses(): ChannelStatus[] {
   return Array.from(_channelStatuses.values());
 }
+
+// ============================================================================
+// Channel allow-list (plan 520 — replaces the pairing system)
+// ============================================================================
+
+/**
+ * Per-platform sender allow-list, stored in `settings` under the
+ * `gateway_allowlist` key as `{ [platform]: platformUserId[] }`. The gateway
+ * transparently forwards (platform, userId) with every inbound message and
+ * Main enforces the list here.
+ *
+ * An empty or missing list for a platform means **open** — legacy adapters
+ * gated via their own dm_policy/allow_from options, so an empty Main-side
+ * list preserves that behavior until the admin curates entries.
+ */
+const ALLOWLIST_SETTING_KEY = 'gateway_allowlist';
+
+export function getChannelAllowlist(): Record<string, string[]> {
+  const db = getDatabase();
+  if (!db) return {};
+
+  try {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(ALLOWLIST_SETTING_KEY) as { value: string } | undefined;
+    if (!row?.value) return {};
+    const parsed = JSON.parse(row.value) as Record<string, unknown>;
+    const out: Record<string, string[]> = {};
+    for (const [platform, entries] of Object.entries(parsed)) {
+      if (Array.isArray(entries)) {
+        out[platform] = entries.filter((e): e is string => typeof e === 'string');
+      }
+    }
+    return out;
+  } catch (err) {
+    getLogger().error('Failed to read channel allow-list', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
+    return {};
+  }
+}
+
+function saveChannelAllowlist(list: Record<string, string[]>): void {
+  const db = getDatabase();
+  if (!db) return;
+  const now = Date.now();
+  db.prepare(`
+    INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `).run(ALLOWLIST_SETTING_KEY, JSON.stringify(list), now);
+}
+
+/**
+ * Whether a sender may use the gateway. Unknown sender ids (adapters that
+ * don't expose user identity) and platforms without a curated list fail open.
+ */
+export function isUserAllowed(platform: string, platformUserId: string): boolean {
+  if (!platformUserId) return true;
+  const entries = getChannelAllowlist()[platform];
+  if (!entries || entries.length === 0) return true;
+  return entries.includes(platformUserId);
+}
+
+export function addChannelAllowlistEntry(platform: string, platformUserId: string): void {
+  if (!platform || !platformUserId) return;
+  const list = getChannelAllowlist();
+  const entries = list[platform] ?? [];
+  if (!entries.includes(platformUserId)) {
+    entries.push(platformUserId);
+    list[platform] = entries;
+    saveChannelAllowlist(list);
+  }
+}
+
+export function removeChannelAllowlistEntry(platform: string, platformUserId: string): void {
+  const list = getChannelAllowlist();
+  const entries = list[platform];
+  if (!entries) return;
+  const next = entries.filter((e) => e !== platformUserId);
+  if (next.length > 0) {
+    list[platform] = next;
+  } else {
+    delete list[platform];
+  }
+  saveChannelAllowlist(list);
+}

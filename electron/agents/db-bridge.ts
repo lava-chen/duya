@@ -26,7 +26,6 @@ import { runPromptInSession, interruptCronSession } from '../automation/agent-ru
 import { buildCronProviderConfig } from '../automation/provider-config';
 import { getLogger, LogComponent } from '../logging/logger';
 import { testProviderConnection } from '../ipc/net-handlers';
-import { getPairingStore } from '../gateway/pairing';
 import { getPluginManager } from '../plugins/PluginManager';
 import { readPluginManifest } from '../plugins/manifest';
 import { resolvePermissionProfile } from '../db/permission-resolver';
@@ -2462,34 +2461,6 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     case 'researchMemory:relation:delete': {
       const result = db.prepare('DELETE FROM research_memory_relations WHERE id = ?').run(p.id);
       return { success: result.changes > 0 };
-    }
-
-    case 'pairing:listPending': {
-      const store = getPairingStore();
-      return store.listAllPending();
-    }
-
-    case 'pairing:listApproved': {
-      const store = getPairingStore();
-      return store.listApproved();
-    }
-
-    case 'pairing:approve': {
-      if (!p.platform || !p.code) throw new Error('Missing platform or code');
-      const store = getPairingStore();
-      return store.approve(p.platform as string, p.code as string);
-    }
-
-    case 'pairing:revoke': {
-      if (!p.platform || !p.platformUserId) throw new Error('Missing platform or platformUserId');
-      const store = getPairingStore();
-      return store.revoke(p.platform as string, p.platformUserId as string);
-    }
-
-    case 'pairing:isApproved': {
-      if (!p.platform || !p.platformUserId) throw new Error('Missing platform or platformUserId');
-      const store = getPairingStore();
-      return { approved: store.isApproved(p.platform as string, p.platformUserId as string) };
     }
 
     case 'plugin:registry:list': {
