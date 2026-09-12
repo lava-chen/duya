@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { collapseContextLines, parseUnifiedDiff, toSplitRows } from './code-review-diff';
+import {
+  collapseContextLines,
+  countPatchChanges,
+  fileLanguageLabel,
+  parseReviewPatch,
+  parseUnifiedDiff,
+  toSplitRows,
+} from './code-review-diff';
 
 const PATCH = [
   'diff --git a/src/example.ts b/src/example.ts',
@@ -52,5 +59,19 @@ describe('code review diff parsing', () => {
     }));
     expect(collapseContextLines(longContext, true)).toHaveLength(7);
     expect(collapseContextLines(longContext, true)[3]).toEqual({ type: 'collapsed', count: 3 });
+  });
+
+  it('counts per-file additions and removals from parsed hunks', () => {
+    const [filePatch] = parseReviewPatch(PATCH);
+    expect(countPatchChanges(filePatch.hunks)).toEqual({ additions: 2, removals: 1 });
+    expect(countPatchChanges([])).toEqual({ additions: 0, removals: 0 });
+  });
+
+  it('maps file extensions to short language badges', () => {
+    expect(fileLanguageLabel('src/app/components/Panel.tsx')).toBe('TSX');
+    expect(fileLanguageLabel('docs/README.MD')).toBe('MD');
+    expect(fileLanguageLabel('styles/theme.scss')).toBe('SCSS');
+    expect(fileLanguageLabel('Makefile')).toBeNull();
+    expect(fileLanguageLabel('assets/logo.xyz')).toBeNull();
   });
 });

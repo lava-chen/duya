@@ -30,7 +30,7 @@ import {
   IconCode,
   IconDatabase,
   IconWorld,
-  IconDots,
+  IconDots as TablerIconDots,
   IconSearch as TablerIconSearch,
   IconEdit,
   IconPencil,
@@ -48,15 +48,15 @@ import {
   IconCpu,
   IconCube,
   IconLoader2,
-  IconInfoCircle,
+  IconInfoCircle as TablerIconInfoCircle,
   IconShield,
   IconX,
   IconCommand,
   IconPlus,
   IconMinus,
   IconChevronDown as TablerIconChevronDown,
-  IconChevronLeft,
-  IconChevronRight,
+  IconChevronLeft as TablerIconChevronLeft,
+  IconChevronRight as TablerIconChevronRight,
   IconChevronUp,
   IconMicrophone,
   IconTerminal,
@@ -245,7 +245,7 @@ export const CodeIcon = wrapIcon(IconCode);
 export const DatabaseIcon = wrapIcon(IconDatabase);
 export const GlobeHemisphereWestIcon = wrapIcon(IconWorld);
 export const GlobeIcon = wrapIcon(IconWorld);
-export const DotsThreeIcon = wrapIcon(IconDots);
+export const DotsThreeIcon = wrapIcon(TablerIconDots);
 export const MagnifyingGlassIcon = wrapIcon(TablerIconSearch);
 export const NotePencilIcon = wrapIcon(IconEdit);
 export const PencilIcon = wrapIcon(IconPencil);
@@ -265,15 +265,15 @@ export const CpuIcon = wrapIcon(IconCpu);
 export const CubeIcon = wrapIcon(IconCube);
 export const AiGatewayIcon = wrapIcon(IconAiGateway);
 export const SpinnerGapIcon = wrapIcon(IconLoader2);
-export const InfoIcon = wrapIcon(IconInfoCircle);
+export const InfoIcon = wrapIcon(TablerIconInfoCircle);
 export const ShieldIcon = wrapIcon(IconShield);
 export const XIcon = wrapIcon(IconX);
 export const CommandIcon = wrapIcon(IconCommand);
 export const PlusIcon = wrapIcon(IconPlus);
 export const MinusIcon = wrapIcon(IconMinus);
 export const CaretDownIcon = wrapIcon(TablerIconChevronDown);
-export const CaretLeftIcon = wrapIcon(IconChevronLeft);
-export const CaretRightIcon = wrapIcon(IconChevronRight);
+export const CaretLeftIcon = wrapIcon(TablerIconChevronLeft);
+export const CaretRightIcon = wrapIcon(TablerIconChevronRight);
 export const CaretUpIcon = wrapIcon(IconChevronUp);
 export const MicrophoneIcon = wrapIcon(IconMicrophone);
 export const ArrowUpIcon = wrapIcon(IconArrowUp);
@@ -368,8 +368,12 @@ export const ExternalLinkIcon = wrapIcon(IconExternalLink);
   // the panel can import them from this central file unchanged.
 export const IconAlertCircle = wrapIcon(TablerIconAlertCircle);
 export const IconChevronDown = wrapIcon(TablerIconChevronDown);
+export const IconChevronLeft = wrapIcon(TablerIconChevronLeft);
+export const IconChevronRight = wrapIcon(TablerIconChevronRight);
 export const IconColumns2 = wrapIcon(TablerIconColumns2);
 export const IconCopy = wrapIcon(TablerIconCopy);
+export const IconDots = wrapIcon(TablerIconDots);
+export const IconInfoCircle = wrapIcon(TablerIconInfoCircle);
 export const IconFileCode = wrapIcon(TablerIconFileCode);
 export const IconFileDiff = wrapIcon(TablerIconFileDiff);
 export const IconFileMinus = wrapIcon(TablerIconFileMinus);
