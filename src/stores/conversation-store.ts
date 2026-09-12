@@ -21,7 +21,7 @@ import {
 } from '@/lib/ipc-client';
 import { getAgentServerClient } from '@/lib/agent-http-client';
 import { useContextUsageStore } from '@/stores/context-usage-store';
-import { registerLoadedMessages } from '@/lib/stream-session-manager';
+import { registerLoadedMessages, isSessionBusy } from '@/lib/stream-session-manager';
 import { isPlaceholderThreadId } from '@/components/layout/sidebar/section-system';
 
 // Thread interface - uses camelCase for frontend consistency
@@ -468,6 +468,26 @@ export function isDuplicateOptimisticUser(
   );
 }
 
+/**
+ * Memory hygiene decision for `setActiveThread`: the transcripts of sessions
+ * the user navigated away from are dropped — `loadThreadMessages` reloads
+ * them from the DB on demand, so the renderer no longer accumulates every
+ * opened session's history for its lifetime.
+ *
+ * A session with a live turn must be kept: `useStreamingActions` subtracts
+ * DB-covered events from the stream timeline using the in-memory rows, and
+ * the stream may still append optimistic entries to them.
+ */
+export function isThreadEvictable(
+  prevThreadId: string | null,
+  nextThreadId: string,
+  isBusy: (threadId: string) => boolean,
+): boolean {
+  return !!prevThreadId
+    && prevThreadId !== nextThreadId
+    && !isBusy(prevThreadId);
+}
+
 function mapIpcMessagesToStore(messages: IpcMessage[]): Message[] {
   return messages.map((m) => ({
     id: m.id,
@@ -707,6 +727,7 @@ export const useConversationStore = create<ConversationState>()(
       setActiveThread: async (id) => {
         const startTime = performance.now();
         console.log(`[Store] setActiveThread START: ${id.slice(0, 8)}`);
+        const prevThreadId = get().activeThreadId;
         // Leaving the new-chat composer to open an existing session: keep the
         // draft (so the user can resume it later) but exit draft mode.
         set({ isNewChatDrafting: false });
@@ -746,6 +767,16 @@ export const useConversationStore = create<ConversationState>()(
         // Force reload threads from DB to show newly created sub-agent sessions in sidebar
         updates.lastSyncAt = 0;
         set(updates);
+
+        // Drop the transcript of the session we just left. It is reloaded
+        // from the DB on the next visit; keeping it made renderer memory
+        // grow with every session opened. Sessions with a live stream are
+        // kept (their rows feed the durable-subtraction path).
+        if (isThreadEvictable(prevThreadId, id, isSessionBusy)) {
+          const evictedThreadId = prevThreadId as string;
+          const { [evictedThreadId]: _evicted, ...remainingMessages } = get().messages;
+          set({ messages: remainingMessages });
+        }
 
         // Refresh thread metadata first, then force-load the selected
         // session's transcript. Keeping this ordered avoids a race where
