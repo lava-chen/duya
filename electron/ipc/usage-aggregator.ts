@@ -28,7 +28,7 @@
  */
 
 import type { MessageRow } from './core-db-adapters';
-import { computeCacheWaste, type CacheSequenceEntry } from './cache-waste';
+import { computeCacheWaste, type CacheSequenceEntry, type CachePricingLookup } from './cache-waste';
 import {
   MODEL_PALETTE,
   type UsageSummary,
@@ -64,25 +64,69 @@ interface ParsedUsage {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Subset of cacheWrite billed at the 1h-TTL premium (Anthropic
+   *  ephemeral_1h). cache_creation_input_tokens INCLUDES this subset. */
+  cacheWrite1h: number;
+  /** Reasoning tokens — subset of output, tracked for display only. */
+  reasoning: number;
+  /** Model snapshot (per-call ledger only; top-level has none). */
+  model?: string;
+  /** Provider snapshot (per-call ledger only). */
+  providerId?: string;
 }
 
-function parseUsage(raw: string | null): ParsedUsage | null {
+/** Result of parsing one persisted token_usage JSON: the legacy top-level
+ *  cumulative block (when meaningful) plus the per-call ledger when present.
+ *  When `calls` is non-empty the top-level block is the SUM of the calls —
+ *  consumers must use ONE of the two, never both (double counting). */
+interface ParsedTokenUsage {
+  top: ParsedUsage | null;
+  calls: ParsedUsage[];
+}
+
+function num(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+}
+
+function str(v: unknown): string | undefined {
+  return typeof v === 'string' && v ? v : undefined;
+}
+
+/** Parse one usage block (top-level cumulative OR a single calls[] entry). */
+function parseUsageBlock(u: Record<string, unknown>): ParsedUsage | null {
+  const input = num(u.input_tokens) ?? 0;
+  const output = num(u.output_tokens) ?? 0;
+  const cacheRead = num(u.cache_hit_tokens) ?? num(u.cache_read_input_tokens) ?? 0;
+  const cacheWrite = num(u.cache_creation_tokens) ?? num(u.cache_creation_input_tokens) ?? 0;
+  if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0) return null;
+  const cc = u.cache_creation as { ephemeral_1h_input_tokens?: unknown } | undefined;
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    cacheWrite1h: num(cc?.ephemeral_1h_input_tokens) ?? num(u.ephemeral_1h_input_tokens) ?? 0,
+    reasoning: num(u.reasoning_tokens) ?? 0,
+    model: str(u.model),
+    providerId: str(u.provider_id),
+  };
+}
+
+function parseUsage(raw: string | null): ParsedTokenUsage | null {
   if (!raw) return null;
   try {
-    const u = JSON.parse(raw) as {
-      input_tokens?: number;
-      output_tokens?: number;
-      cache_hit_tokens?: number;
-      cache_read_input_tokens?: number;
-      cache_creation_tokens?: number;
-      cache_creation_input_tokens?: number;
-    };
-    const input = u.input_tokens ?? 0;
-    const output = u.output_tokens ?? 0;
-    const cacheRead = u.cache_hit_tokens ?? u.cache_read_input_tokens ?? 0;
-    const cacheWrite = u.cache_creation_tokens ?? u.cache_creation_input_tokens ?? 0;
-    if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0) return null;
-    return { input, output, cacheRead, cacheWrite };
+    const u = JSON.parse(raw) as Record<string, unknown>;
+    const top = parseUsageBlock(u);
+    const calls: ParsedUsage[] = [];
+    if (Array.isArray(u.calls)) {
+      for (const c of u.calls) {
+        if (!c || typeof c !== 'object') continue;
+        const parsed = parseUsageBlock(c as Record<string, unknown>);
+        if (parsed) calls.push(parsed);
+      }
+    }
+    if (!top && calls.length === 0) return null;
+    return { top, calls };
   } catch {
     return null;
   }
@@ -103,15 +147,21 @@ function dayKey(timestamp: number): string {
 }
 
 function computeCost(
-  buckets: { input: number; output: number; cacheRead: number; cacheWrite: number },
+  buckets: { input: number; output: number; cacheRead: number; cacheWrite: number; cacheWrite1h: number },
   pricing: UsagePricing | undefined,
 ): { inputCost: number; outputCost: number; cacheReadCost: number; cacheWriteCost: number } {
   if (!pricing) return { inputCost: 0, outputCost: 0, cacheReadCost: 0, cacheWriteCost: 0 };
+  // Anthropic 1h-TTL cache writes bill at 2× the standard write price. The 1h
+  // tokens are a SUBSET of cacheWrite (cache_creation_input_tokens includes
+  // them), so the write bucket is split: 1h share at 2×, remainder at 1×.
+  const writeRate = pricing.cacheWritePerMillion ?? 0;
+  const cacheWrite1h = Math.min(buckets.cacheWrite1h, buckets.cacheWrite);
+  const cacheWrite5m = buckets.cacheWrite - cacheWrite1h;
   return {
     inputCost: (buckets.input * (pricing.inputPerMillion ?? 0)) / 1_000_000,
     outputCost: (buckets.output * (pricing.outputPerMillion ?? 0)) / 1_000_000,
     cacheReadCost: (buckets.cacheRead * (pricing.cacheReadPerMillion ?? 0)) / 1_000_000,
-    cacheWriteCost: (buckets.cacheWrite * (pricing.cacheWritePerMillion ?? 0)) / 1_000_000,
+    cacheWriteCost: (cacheWrite5m * writeRate + cacheWrite1h * writeRate * 2) / 1_000_000,
   };
 }
 
@@ -135,7 +185,11 @@ export interface SessionUsageFacts {
   activeDates: string[];
   /** Message count per local-day key (drives daily.messageCount). */
   messagesPerDate: Record<string, number>;
-  /** One entry per usage-bearing message, buckets already exclusive. */
+  /** One entry per LLM API call (pi-style per-call ledger): when the
+   *  persisted token_usage carries a `calls` array each entry becomes one
+   *  row with its own model attribution; legacy rows fall back to one row
+   *  per usage-bearing message with the row-level model. Buckets already
+   *  exclusive. */
   usageRows: Array<{
     date: string;
     input: number;
@@ -144,10 +198,18 @@ export interface SessionUsageFacts {
     cacheWrite: number;
     /** Cache-inclusive processed volume: exclusive input + cache + output. */
     volume: number;
+    /** Subset of cacheWrite billed at the 1h-TTL premium. */
+    cacheWrite1h: number;
+    /** Reasoning tokens (subset of output, display only). */
+    reasoning: number;
+    /** Model that produced this call ('' = legacy → session fallback). */
+    model: string;
+    /** Provider that produced this call ('' = legacy → session fallback). */
+    providerId: string;
   }>;
   /** Ordered timeline for the cache-waste scanner (plan 444): usage events
-   *  with exclusive buckets plus compaction boundaries, in row order.
-   *  Pricing-independent so it stays cacheable. */
+   *  with exclusive buckets plus compaction and model-change boundaries, in
+   *  row order. Pricing-independent so it stays cacheable. */
   cacheSequence: CacheSequenceEntry[];
 }
 
@@ -167,6 +229,38 @@ export function extractSessionFacts(rows: MessageRow[]): SessionUsageFacts {
     cacheSequence: [],
   };
   const dates = new Set<string>();
+  // Last non-empty row-level model seen — drives model_change boundary
+  // detection for the cache-waste scanner (null until the first usage-bearing
+  // row, so the session's opening model never emits a spurious marker).
+  let lastModel: string | null = null;
+
+  // Shared row-pusher: exclusive buckets + cache-sequence entry with the
+  // model attribution resolved by the caller (per-call or row-level).
+  const pushUsage = (usage: ParsedUsage, model: string, providerId: string, date: string, ts: number) => {
+    const buckets = toExclusiveBuckets(usage);
+    facts.usageRows.push({
+      date,
+      input: buckets.input,
+      output: usage.output,
+      cacheRead: buckets.cacheRead,
+      cacheWrite: buckets.cacheWrite,
+      volume: buckets.input + usage.output + buckets.cacheRead + buckets.cacheWrite,
+      cacheWrite1h: Math.min(usage.cacheWrite1h, buckets.cacheWrite),
+      reasoning: usage.reasoning,
+      model,
+      providerId,
+    });
+    facts.cacheSequence.push({
+      kind: 'usage',
+      ts,
+      input: buckets.input,
+      output: usage.output,
+      cacheRead: buckets.cacheRead,
+      cacheWrite: buckets.cacheWrite,
+      model: model || undefined,
+      providerId: providerId || undefined,
+    });
+  };
 
   for (const row of rows) {
     facts.messageTotal++;
@@ -193,25 +287,30 @@ export function extractSessionFacts(rows: MessageRow[]): SessionUsageFacts {
       continue;
     }
 
-    const usage = parseUsage(row.token_usage);
-    if (!usage) continue;
-    const buckets = toExclusiveBuckets(usage);
-    facts.usageRows.push({
-      date,
-      input: buckets.input,
-      output: usage.output,
-      cacheRead: buckets.cacheRead,
-      cacheWrite: buckets.cacheWrite,
-      volume: buckets.input + usage.output + buckets.cacheRead + buckets.cacheWrite,
-    });
-    facts.cacheSequence.push({
-      kind: 'usage',
-      ts: row.created_at,
-      input: buckets.input,
-      output: usage.output,
-      cacheRead: buckets.cacheRead,
-      cacheWrite: buckets.cacheWrite,
-    });
+    const parsed = parseUsage(row.token_usage);
+    if (!parsed) continue;
+
+    // Token-accounting: model-change boundary. Row-level model differs from
+    // the last seen model → document the boundary (the scanner does NOT
+    // reset its baseline on it — a switch re-bills the prompt).
+    const rowModel = row.model || '';
+    const rowProviderId = row.provider_id || '';
+    if (rowModel && lastModel !== null && rowModel !== lastModel) {
+      facts.cacheSequence.push({ kind: 'model_change', ts: row.created_at });
+    }
+    if (rowModel) lastModel = rowModel;
+
+    if (parsed.calls.length > 0) {
+      // Per-call ledger (pi-style): each call carries its own model/provider
+      // snapshot, falling back to the row-level attribution. The top-level
+      // cumulative block is the sum of these calls — using both would
+      // double-count, so it is skipped when the ledger exists.
+      for (const call of parsed.calls) {
+        pushUsage(call, call.model || rowModel, call.providerId || rowProviderId, date, row.created_at);
+      }
+    } else if (parsed.top) {
+      pushUsage(parsed.top, rowModel, rowProviderId, date, row.created_at);
+    }
   }
 
   facts.activeDates = Array.from(dates);
@@ -236,6 +335,7 @@ export function aggregateUsageFromFacts(
   sessions: SessionFactsInput[],
   pricingLookup: UsagePricingLookup,
   now = Date.now(),
+  pricingVersion?: string,
 ): UsageSummary {
   const totals: UsageTotals = {
     input: 0,
@@ -243,6 +343,8 @@ export function aggregateUsageFromFacts(
     cacheRead: 0,
     cacheWrite: 0,
     totalTokens: 0,
+    reasoningTokens: 0,
+    cacheWrite1hTokens: 0,
     inputCost: 0,
     outputCost: 0,
     cacheReadCost: 0,
@@ -304,8 +406,6 @@ export function aggregateUsageFromFacts(
   for (const session of sessions) {
     const { facts } = session;
     if (facts.messageTotal === 0) continue;
-    const pricing = pricingLookup(session.providerId, session.model);
-    if (!pricing) totals.costEstimated = true;
 
     let sessionTokens = 0;
     let sessionCost = 0;
@@ -313,8 +413,17 @@ export function aggregateUsageFromFacts(
     let sessionOutput = 0;
     let sessionCacheRead = 0;
     let sessionCacheWrite = 0;
+    let sessionReasoning = 0;
+    let sessionCacheWrite1h = 0;
     const sessionDaily = new Map<string, { tokens: number; cost: number }>();
-    const sessionCacheHealth = computeCacheWaste(facts.cacheSequence, pricing);
+    // Session-level pricing: fallback for rows without per-message model.
+    const sessionPricing = pricingLookup(session.providerId, session.model);
+    if (!sessionPricing) totals.costEstimated = true;
+    // Cache-waste scanner: per-entry pricing via the same lookup, with the
+    // session fallback bound in for provider-less entries.
+    const cachePricingLookup: CachePricingLookup = (model, providerId) =>
+      model ? pricingLookup(providerId || session.providerId, model) : undefined;
+    const sessionCacheHealth = computeCacheWaste(facts.cacheSequence, sessionPricing, cachePricingLookup);
     cacheHealth.missedTokens += sessionCacheHealth.missedTokens;
     cacheHealth.missedCost += sessionCacheHealth.missedCost;
     cacheHealth.missCount += sessionCacheHealth.missCount;
@@ -336,6 +445,13 @@ export function aggregateUsageFromFacts(
     }
 
     for (const usage of facts.usageRows) {
+      // Token-accounting: per-message pricing. A row with its own model is
+      // priced against THAT model (mid-session switches stay accurate);
+      // legacy rows fall back to the session-level pricing.
+      const pricing = usage.model
+        ? pricingLookup(usage.providerId || session.providerId, usage.model)
+        : sessionPricing;
+      if (!pricing) totals.costEstimated = true;
       const cost = computeCost(usage, pricing);
       const costTotal = cost.inputCost + cost.outputCost + cost.cacheReadCost + cost.cacheWriteCost;
 
@@ -344,6 +460,8 @@ export function aggregateUsageFromFacts(
       totals.cacheRead += usage.cacheRead;
       totals.cacheWrite += usage.cacheWrite;
       totals.totalTokens += usage.volume;
+      totals.reasoningTokens += usage.reasoning;
+      totals.cacheWrite1hTokens += usage.cacheWrite1h;
       totals.inputCost += cost.inputCost;
       totals.outputCost += cost.outputCost;
       totals.cacheReadCost += cost.cacheReadCost;
@@ -356,6 +474,8 @@ export function aggregateUsageFromFacts(
       sessionOutput += usage.output;
       sessionCacheRead += usage.cacheRead;
       sessionCacheWrite += usage.cacheWrite;
+      sessionReasoning += usage.reasoning;
+      sessionCacheWrite1h += usage.cacheWrite1h;
 
       const daily = dailyFor(usage.date);
       daily.sessionIds.add(session.id);
@@ -370,7 +490,10 @@ export function aggregateUsageFromFacts(
       daily.cacheWriteCost += cost.cacheWriteCost;
       daily.cost += costTotal;
 
-      const modelKey = session.model || 'unknown';
+      // Token-accounting: modelUsage groups by the ROW's model (per-message
+      // attribution) — a session that switched models contributes to both
+      // models, instead of everything landing on the session's current one.
+      const modelKey = usage.model || session.model || 'unknown';
       daily.models[modelKey] = (daily.models[modelKey] ?? 0) + usage.volume;
       modelTokensMap.set(modelKey, (modelTokensMap.get(modelKey) ?? 0) + usage.volume);
       modelCostMap.set(modelKey, (modelCostMap.get(modelKey) ?? 0) + costTotal);
@@ -397,6 +520,8 @@ export function aggregateUsageFromFacts(
       outputTokens: sessionOutput,
       cacheReadTokens: sessionCacheRead,
       cacheWriteTokens: sessionCacheWrite,
+      reasoningTokens: sessionReasoning,
+      cacheWrite1hTokens: sessionCacheWrite1h,
       cacheHealth: toCacheHealthTotals(sessionCacheHealth),
       messageCount: facts.messageTotal,
       toolCallCount: facts.toolCallCount,
@@ -474,6 +599,7 @@ export function aggregateUsageFromFacts(
     modelUsage,
     sessions: sessionList,
     cacheHealth,
+    pricingVersion,
     generatedAt: now,
   };
 }

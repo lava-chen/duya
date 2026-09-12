@@ -2379,11 +2379,20 @@ export function applyRebases(rows: TimelineEntryRow[]): TimelineEntryRow[] {
 
   // Forward pass: compute disposition per row.
   const result: TimelineEntryRow[] = [];
+  // Dedup guard: one message id must appear at most once in the projection.
+  // A rebase-emitted survivor and a later standalone raw row can share an id
+  // (the re-emitted compaction checkpoint uses a bare `<entryId>:checkpoint`
+  // id that is never indexed under the rebase event, so a load→replace repair
+  // cycle used to persist it again as a plain user row). First emission wins:
+  // the rebase-emitted copy is authoritative, later duplicates are dropped.
+  const emittedMessageIds = new Set<string>();
   for (const row of rows) {
     const entry = row.entry;
 
     if (entry.type === 'message') {
       if (supersededByLaterRebase(row.seq)) continue;
+      if (emittedMessageIds.has(entry.id)) continue;
+      emittedMessageIds.add(entry.id);
       result.push(row);
       continue;
     }
@@ -2396,6 +2405,7 @@ export function applyRebases(rows: TimelineEntryRow[]): TimelineEntryRow[] {
       // no more durable than a raw row with the same seq.
       for (const m of entry.newMessages) {
         if (supersededByLaterRebase(row.seq)) continue;
+        emittedMessageIds.add(m.id);
         result.push({ entry: m, seq: row.seq });
       }
       continue;

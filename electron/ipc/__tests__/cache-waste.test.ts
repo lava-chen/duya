@@ -153,3 +153,74 @@ describe('computeCacheWaste', () => {
     expect(r.missedCost).toBeCloseTo((40_000 * (paidPerToken - 0.3)) / 1_000_000, 8);
   });
 });
+
+describe('computeCacheWaste — per-entry pricing (token accounting)', () => {
+  const MODEL_A: UsagePricing = {
+    inputPerMillion: 3,
+    outputPerMillion: 15,
+    cacheReadPerMillion: 0.3,
+    cacheWritePerMillion: 3.75,
+  };
+  const MODEL_B: UsagePricing = {
+    inputPerMillion: 10,
+    outputPerMillion: 30,
+    cacheReadPerMillion: 1,
+    cacheWritePerMillion: 12.5,
+  };
+  const lookup = (model: string) => (model === 'model-a' ? MODEL_A : model === 'model-b' ? MODEL_B : undefined);
+
+  it('model_change boundary does NOT reset the baseline (switch re-bills the prompt)', () => {
+    const r = computeCacheWaste(
+      [
+        usage(0, { input: 1_000, cacheWrite: 49_000 }),
+        { kind: 'model_change', ts: 500 },
+        usage(1_000, { input: 50_000 }),
+      ],
+      PRICING,
+    );
+    expect(r.missCount).toBe(1);
+    expect(r.missedTokens).toBe(50_000);
+  });
+
+  it('prices a post-switch miss at the NEW model rates (model-a write → model-b input)', () => {
+    const r = computeCacheWaste(
+      [
+        { kind: 'usage', ts: 0, input: 1_000, output: 100, cacheRead: 0, cacheWrite: 49_000, model: 'model-a', providerId: 'prov' },
+        { kind: 'model_change', ts: 500 },
+        { kind: 'usage', ts: 1_000, input: 50_000, output: 100, cacheRead: 0, cacheWrite: 0, model: 'model-b', providerId: 'prov' },
+      ],
+      MODEL_A, // session fallback (model-a)
+      (model) => lookup(model),
+    );
+    expect(r.missCount).toBe(1);
+    expect(r.missedTokens).toBe(50_000);
+    // Missed tokens billed at model-b input rate vs model-b cache-read rate.
+    expect(r.missedCost).toBeCloseTo((50_000 * (10 - 1)) / 1_000_000, 8);
+  });
+
+  it('legacy entries without model info fall back to the session pricing table', () => {
+    const r = computeCacheWaste(
+      [
+        usage(0, { input: 1_000, cacheWrite: 49_000 }),
+        usage(1_000, { input: 50_000 }),
+      ],
+      MODEL_A,
+      (model) => lookup(model),
+    );
+    expect(r.missedCost).toBeCloseTo((50_000 * (3 - 0.3)) / 1_000_000, 8);
+  });
+
+  it('a model-carrying entry with unknown pricing degrades to token-only waste (no session mispricing)', () => {
+    const r = computeCacheWaste(
+      [
+        usage(0, { input: 1_000, cacheWrite: 49_000 }),
+        { kind: 'usage', ts: 1_000, input: 50_000, output: 100, cacheRead: 0, cacheWrite: 0, model: 'unknown-model', providerId: 'prov' },
+      ],
+      MODEL_A,
+      (model) => lookup(model),
+    );
+    expect(r.missCount).toBe(1);
+    expect(r.missedTokens).toBe(50_000);
+    expect(r.missedCost).toBe(0);
+  });
+});
