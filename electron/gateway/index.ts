@@ -1,7 +1,7 @@
-export { registerGatewayIpcHandlers, startGateway, handleGatewayMessage, createOrResetGatewaySession, resetGatewaySession, getSessionStates, getSessionState, forwardToGateway, forwardPermissionToGateway, isGatewaySession, sendToGatewayProcess, getOrBuildInitConfig } from './message-bus';
+export { registerGatewayIpcHandlers, startGateway, handleGatewayMessage, createOrResetGatewaySession, resetGatewaySession, resolveOrCreateGatewaySession, getSessionStates, getSessionState, forwardToGateway, isGatewaySession, sendToGatewayProcess, getOrBuildInitConfig } from './message-bus';
 export { startGatewayProcess, stopGatewayProcess, waitForGatewayReady, isGatewayRunning, getGatewayProcess, reloadGatewayProcess, isGatewayReloading } from './lifecycle';
 export { dispatchGatewayDbAction } from './db-bridge';
 export { buildInitConfig, resolveGatewayWorkspace, getSetting } from './config';
-export { updateChannelStatus, getChannelStatus, getAllChannelStatuses, updateChannelDirectory, getChannelDirectory, resolveChannelName } from './channel-directory';
+export { updateChannelStatus, getChannelStatus, getAllChannelStatuses, updateChannelDirectory, getChannelDirectory, resolveChannelName, isUserAllowed, getChannelAllowlist } from './channel-directory';
 export type { ChannelEntry, ChannelStatus } from './channel-directory';
 export type { GatewayInitConfig, PlatformConfig, GatewaySessionState, GatewayMessage, GatewayDbAction, WorkerSpawnConfig } from './types';
