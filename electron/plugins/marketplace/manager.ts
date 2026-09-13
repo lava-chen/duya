@@ -27,17 +27,35 @@ import { getMarketplaceStatuses, readConfigMarketplaces } from '../catalog';
 const COMPONENT = 'PluginMarketplaceManager' as LogComponent;
 
 /** Plan 455 D6 — the pre-seeded official marketplace. Sync failures are
- *  WARN-only so first launch works offline. */
+ *  WARN-only so first launch works offline.
+ *  Plan 529: there are now two default sources seeded together — the
+ *  legacy DUYA official (gitee primary, github mirror, plan 528) and
+ *  Anthropic's `claude-plugins-official`. They appear as separate tabs
+ *  in the UI; the catalog layer dedups by plugin id (first-wins). */
 export const DEFAULT_OFFICIAL_MARKETPLACE = 'official';
-export const DEFAULT_OFFICIAL_SOURCE: MarketplaceSourceConfig = {
-  source: 'git',
-  // Gitee primary (国内 + 海外连接都好), GitHub mirror as fallback.
-  // plan 528 — marketplace source fallback / mirror.
-  urls: [
-    'https://gitee.com/lava-chen/duya-marketplace.git',
-    'https://github.com/lava-chen/duya-marketplace.git',
-  ],
-};
+export const DEFAULT_OFFICIAL_SOURCES: ReadonlyArray<MarketplaceSourceConfig> = [
+  {
+    source: 'git',
+    displayName: 'DUYA Official',
+    // Gitee primary (国内 + 海外连接都好), GitHub mirror as fallback.
+    // plan 528 — marketplace source fallback / mirror.
+    urls: [
+      'https://gitee.com/lava-chen/duya-marketplace.git',
+      'https://github.com/lava-chen/duya-marketplace.git',
+    ],
+  },
+  {
+    source: 'git',
+    displayName: 'Claude Code Official',
+    // anthropics/claude-plugins-official — Anthropic-managed, 36.2k
+    // stars, Apache 2.0, the canonical Claude Code plugin directory.
+    // plan 529 — second seeded marketplace.
+    urls: ['https://github.com/anthropics/claude-plugins-official.git'],
+  },
+];
+/** Back-compat shim: legacy code that imports the singular form. */
+export const DEFAULT_OFFICIAL_SOURCE: MarketplaceSourceConfig =
+  DEFAULT_OFFICIAL_SOURCES[0];
 
 export interface MarketplaceView {
   name: string;
@@ -274,23 +292,29 @@ export async function syncAllMarketplaces(): Promise<MarketplaceSyncOutcome[]> {
 
 /**
  * Seed the default official marketplace into `[marketplaces]` if absent
- * (Plan 455 user decision 2). No network I/O — the startup sync performs
- * the first clone and tolerates failure.
+ * (Plan 455 user decision 2 + plan 529). No network I/O — the startup
+ * sync performs the first clone and tolerates failure.
+ *
+ * Idempotent: existing entries are never overwritten so a user who has
+ * manually removed a default source keeps their choice. The legacy
+ * registry key 'official' is kept for back-compat with users who
+ * already have it in config.toml; the Anthropic marketplace uses the
+ * new 'claude-plugins-official' key.
  */
 export function ensureOfficialMarketplace(): void {
   const configs = readConfigMarketplaces();
-  if (configs[DEFAULT_OFFICIAL_MARKETPLACE]) {
-    return;
+  const seeded: Array<{ name: string; url: string }> = [];
+  for (let i = 0; i < DEFAULT_OFFICIAL_SOURCES.length; i++) {
+    const source = DEFAULT_OFFICIAL_SOURCES[i];
+    const name = i === 0 ? DEFAULT_OFFICIAL_MARKETPLACE : 'claude-plugins-official';
+    if (configs[name]) continue;
+    configs[name] = { ...source, addedAt: new Date().toISOString() };
+    seeded.push({ name, url: resolveSourceUrls(source)[0] });
   }
-  writeConfigMarketplaces({
-    ...configs,
-    [DEFAULT_OFFICIAL_MARKETPLACE]: {
-      ...DEFAULT_OFFICIAL_SOURCE,
-      addedAt: new Date().toISOString(),
-    },
-  });
-  const primaryUrl = resolveSourceUrls(DEFAULT_OFFICIAL_SOURCE)[0];
-  getLogger().info('Seeded default official marketplace', {
-    url: primaryUrl,
-  }, COMPONENT);
+  if (seeded.length === 0) return;
+  writeConfigMarketplaces(configs);
+  const logger = getLogger();
+  for (const { name, url } of seeded) {
+    logger.info('Seeded default official marketplace', { name, url }, COMPONENT);
+  }
 }

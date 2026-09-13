@@ -217,6 +217,23 @@ describe.skipIf(!GIT_AVAILABLE)('resolveSourceUrls', () => {
   });
 });
 
+describe('MarketplaceSourceConfig — plan 529 displayName', () => {
+  it('accepts an optional displayName field', async () => {
+    // Smoke test: schema accepts displayName without breaking back-compat
+    // (older configs without displayName still type-check via resolveSourceUrls).
+    const { resolveSourceUrls } = await import('./git-source');
+    const config: import('./git-source').MarketplaceSourceConfig = {
+      source: 'git',
+      urls: ['https://gitee.com/lava-chen/duya-marketplace.git'],
+      displayName: 'DUYA Official',
+    };
+    expect(config.displayName).toBe('DUYA Official');
+    expect(resolveSourceUrls(config)).toEqual([
+      'https://gitee.com/lava-chen/duya-marketplace.git',
+    ]);
+  });
+});
+
 
 /** Directory is "empty" when it only contains empty subdirectories. */
 function readFileSyncDirEmpty(dir: string): boolean {

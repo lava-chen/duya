@@ -2467,6 +2467,7 @@ const zh: Record<TranslationKey, string> = {
   // Extensions page (plan 2026-07-30)
   'marketplace.title': '市场',
   'marketplace.directory': '目录',
+  'marketplace.tabs.all': '全部',
   'marketplace.tabs.official': 'Duya 官方',
   'marketplace.tabs.others': '其他',
   'marketplace.categories.plugins': '插件',

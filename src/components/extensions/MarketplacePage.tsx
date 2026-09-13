@@ -19,7 +19,9 @@ import { MarketplaceRowItem } from "./MarketplaceRowItem";
 import { I18nContext } from "@/components/layout/I18nProvider";
 import { GlobeSimpleIcon } from "@/components/icons";
 
-type MarketSource = "official" | "others";
+type TabDescriptor =
+  | { kind: "all" }
+  | { kind: "source"; name: string; displayName: string };
 
 interface MarketplacePageProps {
   installedPlugins: PluginRegistryEntry[];
@@ -37,7 +39,7 @@ export function MarketplacePage({
   onOpenDetail,
 }: MarketplacePageProps) {
   const { t } = useTranslation();
-  const [source, setSource] = useState<MarketSource>("official");
+  const [activeTab, setActiveTab] = useState<TabDescriptor>({ kind: "all" });
   const [search, setSearch] = useState("");
   const [catalog, setCatalog] = useState<PluginCatalogEntry[]>([]);
   const [sourcesOpen, setSourcesOpen] = useState(false);
@@ -83,26 +85,22 @@ export function MarketplacePage({
     );
   }, [catalog, search]);
 
-  // Attribution-based source tabs: builtin plugins and anything from the
-  // official marketplace are "official"; other marketplaces and local
-  // installs are "others". Skills are excluded here — the marketplace
-  // tab is plugins-only by design.
-  const officialPlugins = useMemo(
-    () =>
-      filteredCatalog.filter(
-        (c) =>
-          c.kind !== "skill" &&
-          (c.source === "bundled" || c.marketplace === "official")
-      ),
-    [filteredCatalog]
-  );
-  const otherPlugins = useMemo(
-    () =>
-      filteredCatalog.filter(
-        (c) => c.kind !== "skill" && !officialPlugins.includes(c)
-      ),
-    [filteredCatalog, officialPlugins]
-  );
+  // Plan 529: build one tab per configured marketplace (plus a leading
+  // "All" tab). Tab label comes from each source's `displayName` and
+  // falls back to the registry key (`name`). Order = source insertion
+  // order — the DUYA official source is seeded first by
+  // ensureOfficialMarketplace so its tab appears to the left of any
+  // later community additions.
+  const tabs: TabDescriptor[] = useMemo(() => {
+    const sourceTabs: TabDescriptor[] = marketplaces
+      .filter((m) => !m.error || m.pluginCount > 0)
+      .map((m) => ({
+        kind: "source" as const,
+        name: m.name,
+        displayName: m.displayName ?? m.name,
+      }));
+    return [{ kind: "all" }, ...sourceTabs];
+  }, [marketplaces]);
 
   const openPlugin = useCallback(
     (plugin: PluginCatalogEntry) => {
@@ -115,32 +113,46 @@ export function MarketplacePage({
     [installedIds, onOpenDetail, onOpenInstall]
   );
 
-  const pluginsToShow = source === "official" ? officialPlugins : otherPlugins;
+  // Plan 529: filter by active tab. 'all' shows everything; a 'source' tab
+  // shows only plugins whose `marketplace` matches the tab's source name.
+  const pluginsToShow = useMemo(() => {
+    const pool = filteredCatalog.filter((c) => c.kind !== "skill");
+    if (activeTab.kind === "all") return pool;
+    return pool.filter((c) => c.marketplace === activeTab.name);
+  }, [filteredCatalog, activeTab]);
 
   return (
     <div className="flex flex-col min-w-0">
       {/* Toolbar */}
       <div className="flex items-center justify-between gap-3 mb-3">
         <div className="flex items-center gap-1">
-          {(["official", "others"] as MarketSource[]).map((src) => (
-            <button
-              key={src}
-              type="button"
-              onClick={() => setSource(src)}
-              className={cn(
-                "px-3 py-1.5 text-[13px] rounded-lg transition-colors",
-                source === src
-                  ? "bg-accent/10 text-accent font-medium"
-                  : "text-muted-foreground hover:bg-muted/40"
-              )}
-            >
-              {t(
-                src === "official"
-                  ? "marketplace.tabs.official"
-                  : "marketplace.tabs.others"
-              )}
-            </button>
-          ))}
+          {tabs.map((tab) => {
+            const isActive =
+              activeTab.kind === tab.kind &&
+              (tab.kind === "all" ||
+                (activeTab.kind === "source" && tab.kind === "source" &&
+                 activeTab.name === tab.name));
+            const label =
+              tab.kind === "all"
+                ? t("marketplace.tabs.all")
+                : tab.displayName;
+            const key = tab.kind === "all" ? "all" : tab.name;
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setActiveTab(tab)}
+                className={cn(
+                  "px-3 py-1.5 text-[13px] rounded-lg transition-colors",
+                  isActive
+                    ? "bg-accent/10 text-accent font-medium"
+                    : "text-muted-foreground hover:bg-muted/40"
+                )}
+              >
+                {label}
+              </button>
+            );
+          })}
         </div>
         <div className="flex items-center gap-2">
           <div className="w-64">

@@ -2483,6 +2483,7 @@ const en = {
   // Extensions page (plan 2026-07-30)
   'marketplace.title': 'Marketplace',
   'marketplace.directory': 'Directory',
+  'marketplace.tabs.all': 'All',
   'marketplace.tabs.official': 'Duya Official',
   'marketplace.tabs.others': 'Others',
   'marketplace.categories.plugins': 'Plugins',
