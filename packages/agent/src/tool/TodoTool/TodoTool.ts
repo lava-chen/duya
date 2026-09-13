@@ -61,7 +61,7 @@ export class TodoTool implements Tool, ToolExecutor {
 
 - Send the full list up front with merge=false to replace any existing list.
 - To update, send only the items you are changing with merge=true (default). To flip a status without changing content, send just id + status.
-- Task ids are assigned by the system. After creating a list, reference the returned ids (not the ones you sent) when merging later.
+- Ids you supply are preserved on the row. Omit id only if you do not need a stable handle — the tool will assign one. Ids must be unique within a session; pick a distinct value if the previous attempt reported a collision.
 - Do not use this tool for subagent scheduling — use the \`task\` tool for that.`;
 
   readonly input_schema = {
@@ -125,6 +125,7 @@ async function applyReplace(store: TaskStore, updates: TodoUpdate[]) {
   for (const e of await store.listTasks()) if (!e.id.startsWith('_')) await store.deleteTask(e.id);
   for (const u of updates) {
     await store.createTask({
+      id: u.id,
       subject: u.content || u.id, description: '',
       status: u.status || 'pending', blocks: [], blockedBy: [],
     });
@@ -141,6 +142,7 @@ async function applyMerge(store: TaskStore, updates: TodoUpdate[]) {
       });
     } else {
       await store.createTask({
+        id: u.id,
         subject: u.content || u.id, description: '',
         status: u.status || 'pending', blocks: [], blockedBy: [],
       });
