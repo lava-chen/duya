@@ -22,6 +22,7 @@ import { NewChatView } from "@/components/chat/NewChatView";
 import { WelcomeView } from "@/components/home/WelcomeView";
 import { SkillsView } from "@/components/skills/SkillsView";
 import { AutomationView } from "@/components/automation/AutomationView";
+import { ProjectsView } from "@/components/projects/ProjectsView";
 import { ExtensionsPage } from "@/components/extensions/ExtensionsPage";
 import { ConductorView } from "@duya/conductor/renderer/components/ConductorView";
 import { SettingsView } from "@/components/settings/SettingsView";
@@ -811,6 +812,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
           )}
           {currentView === 'skills' && <SkillsView />}
           {currentView === 'automation' && <AutomationView />}
+          {currentView === 'projects' && <ProjectsView />}
           {currentView === 'conductor' && <ConductorView />}
           {currentView === 'settings' && <SettingsView />}
           {currentView === 'extensions' && <ExtensionsPage />}
@@ -826,6 +828,12 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
         return <SkillsView />;
       case 'automation':
         return <AutomationView />;
+      case 'projects':
+        // Plan 525 Phase 2: Projects page must be reachable even when no
+        // session has ever been mounted (chatEverMountedRef stays false on
+        // a brand-new install). The `shouldRenderChat` branch above also
+        // routes `projects`, so this only fires on first-launch paths.
+        return <ProjectsView />;
       case 'conductor':
         return <ConductorView />;
       case 'settings':
