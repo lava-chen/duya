@@ -355,6 +355,9 @@ updated: 2026-09-12
 - ❌ bot 主动推送到桌面 widget(C4 缺口) — 独立 plan
 - ❌ bot 记忆语义检索 — 独立 plan
 - ❌ UI(任何形式)— 用户指示暂不做
+  - **2026-09-13 变更**:用户指示部分推翻——创建项目对话框已做多路径 + 图标/颜色
+    avatar(migration 0013 `icon`/`color` 列),语义为「建 project 实体 + thread 绑
+    paths[0]」,见 commit f6006a3c;`manage_project` 工具仍不做
 - ❌ `manage_project` 工具 — 用户指示不做
 - ❌ plan-database 后端(plan 236 复用)— plans 纯文件系统,不上数据库
 - ❌ plan 进度统计 / 看板 — 独立 plan
