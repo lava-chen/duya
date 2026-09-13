@@ -340,6 +340,7 @@ Moved here when finished. Each includes original goal, key decisions, and lesson
 
 | Plan                                                                                                    | Description                                             | Completed  |
 | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | ---------- |
+| [532-browser-parallel-fetch-text-only](./completed/532-browser-parallel-fetch-text-only.md)             | `parallel_fetch` returns readable text, never DOM structure | 2026-09-13 |
 | [230-gateway-agent-capability-and-workspace](./completed/230-gateway-agent-capability-and-workspace.md) | Gateway Agent direct tools + isolated workspace         | 2026-07-17 |
 | [229-recent-session-directory](./completed/229-recent-session-directory.md)                             | Project-aware recent session discovery                  | 2026-07-15 |
 | [228-cookie-import-app-bound-fix](./completed/228-cookie-import-app-bound-fix.md)                       | Cookie import app-bound + live export hardening         | 2026-07-13 |

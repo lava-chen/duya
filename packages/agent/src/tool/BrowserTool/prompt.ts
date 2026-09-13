@@ -350,12 +350,12 @@ ${interactionGuide}
   - \`useBrowser\` **must be a boolean** (\`true\` or \`false\`), not a string. Do NOT wrap it in quotes.
   Uses real browsers by default (Extension CDP / Duya browser plugin). Set \`useBrowser: false\` for fast HTTP only (no JS rendering).
   Opens multiple independent browser sessions (up to 5) to investigate different URLs at the same time.
-  Each URL gets its own browser window and DOM snapshot.
+  Each URL gets its own browser window; the page is reduced to readable text.
   Use this for:
   - Comparing multiple products/prices across sites
   - Researching a topic across multiple sources simultaneously
   - Any task requiring data from multiple URLs where serial navigation would be too slow
-  Returns: results array with snapshot, interactiveElements, and timing for each URL.
+  Returns: results array with text content, interactiveElements, and timing for each URL.
 
 - **post** - Publish to a social platform through the logged-in browser session (write, hidden from the schema)
   \`\`\`json
