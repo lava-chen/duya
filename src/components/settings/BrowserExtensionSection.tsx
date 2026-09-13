@@ -52,7 +52,7 @@ function isValidDomainInput(input: string): boolean {
 export default function BrowserExtensionSection() {
   const { t } = useTranslation();
   const { settings, loading: settingsLoading, saving, save } = useSettings();
-  const { status, health, isInstalled, checkExtension, lastChecked, storeAvailable, checkStoreAvailability } = useBrowserExtension({
+  const { status, health, isInstalled, checkExtension, lastChecked, storeAvailable, checkStoreAvailability, localInstall } = useBrowserExtension({
     autoCheck: true,
     interval: 30000,
   });
@@ -322,6 +322,13 @@ export default function BrowserExtensionSection() {
             {lastChecked && (
               <div className="pb-3 text-[11px] font-mono text-muted-foreground">
                 {t('browserExtension.lastChecked')}: {lastChecked.toLocaleTimeString()}
+              </div>
+            )}
+            {localInstall && localInstall.state !== 'unsupported' && (
+              <div className="pb-3 text-[11px] font-mono text-muted-foreground">
+                {t('browserExtension.localInstallLabel') || 'Local install:'} {localInstall.state}
+                {localInstall.expectedVersion && ` · expected v${localInstall.expectedVersion}`}
+                {localInstall.installedVersion && ` · installed v${localInstall.installedVersion}`}
               </div>
             )}
           </SettingsCard>

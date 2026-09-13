@@ -5,6 +5,20 @@ import { usePolling } from '@/hooks/usePolling';
 
 export type ExtensionStatus = 'checking' | 'connected' | 'disconnected' | 'error';
 
+export type LocalInstallState =
+  | 'not-installed'
+  | 'installed-current'
+  | 'installed-outdated'
+  | 'unsupported';
+
+export interface LocalInstallInfo {
+  state: LocalInstallState;
+  expectedVersion: string;
+  installedVersion: string | null;
+  expectedPath: string | null;
+  installedIn: string[];
+}
+
 export interface ExtensionHealth {
   status: 'ok' | 'unavailable';
   extensionConnected: boolean;
@@ -30,6 +44,10 @@ export interface UseBrowserExtensionReturn {
   lastChecked: Date | null;
   storeAvailable: boolean | null;
   checkStoreAvailability: () => Promise<boolean>;
+  localInstall: LocalInstallInfo | null;
+  refreshLocalStatus: () => Promise<void>;
+  installLocal: () => Promise<{ ok: boolean; error?: string; registryKeysWritten?: string[] }>;
+  uninstallLocal: () => Promise<{ ok: boolean; error?: string }>;
 }
 
 const CHECK_INTERVAL = 30000; // Check every 30 seconds
@@ -45,6 +63,11 @@ function getElectronAPI() {
           getStatus: () => Promise<{ success: boolean; status?: Record<string, unknown>; error?: string }>;
           approvePending?: () => Promise<{ success: boolean; status?: Record<string, unknown>; error?: string }>;
           denyPending?: () => Promise<{ success: boolean; status?: Record<string, unknown>; error?: string }>;
+        };
+        browserExtensionInstaller?: {
+          detect: () => Promise<LocalInstallInfo>;
+          install: () => Promise<{ ok: boolean; error?: string; registryKeysWritten?: string[] }>;
+          uninstall: () => Promise<{ ok: boolean; error?: string; registryKeysRemoved?: string[] }>;
         };
       };
     }
@@ -99,6 +122,7 @@ export function useBrowserExtension(
   const [health, setHealth] = useState<ExtensionHealth | null>(null);
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
   const [storeAvailable, setStoreAvailable] = useState<boolean | null>(null);
+  const [localInstall, setLocalInstall] = useState<LocalInstallInfo | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const checkStoreAvailability = useCallback(async (): Promise<boolean> => {
@@ -213,6 +237,65 @@ export function useBrowserExtension(
     activeWhen: () => autoCheck,
   });
 
+  const refreshLocalStatus = useCallback(async () => {
+    const electronAPI = getElectronAPI();
+    const installer = electronAPI?.browserExtensionInstaller;
+    if (!installer) {
+      setLocalInstall({
+        state: 'unsupported',
+        expectedVersion: '',
+        installedVersion: null,
+        expectedPath: null,
+        installedIn: [],
+      });
+      return;
+    }
+    try {
+      const result = await installer.detect();
+      setLocalInstall(result);
+    } catch {
+      setLocalInstall({
+        state: 'unsupported',
+        expectedVersion: '',
+        installedVersion: null,
+        expectedPath: null,
+        installedIn: [],
+      });
+    }
+  }, []);
+
+  // Initial pull — local install state changes only on user action or
+  // DUYA upgrade, so we don't need to poll it the way we poll daemon
+  // health. Callers can invoke `refreshLocalStatus()` after install /
+  // uninstall to update the UI.
+  useEffect(() => {
+    void refreshLocalStatus();
+  }, [refreshLocalStatus]);
+
+  const installLocal = useCallback(async () => {
+    const electronAPI = getElectronAPI();
+    const installer = electronAPI?.browserExtensionInstaller;
+    if (!installer) {
+      return { ok: false, error: 'Installer IPC not available' };
+    }
+    const result = await installer.install();
+    // Always refresh status after an install attempt — even on failure
+    // the path / version fields may have changed.
+    void refreshLocalStatus();
+    return result;
+  }, [refreshLocalStatus]);
+
+  const uninstallLocal = useCallback(async () => {
+    const electronAPI = getElectronAPI();
+    const installer = electronAPI?.browserExtensionInstaller;
+    if (!installer) {
+      return { ok: false, error: 'Installer IPC not available' };
+    }
+    const result = await installer.uninstall();
+    void refreshLocalStatus();
+    return result;
+  }, [refreshLocalStatus]);
+
   return {
     status,
     health,
@@ -221,6 +304,10 @@ export function useBrowserExtension(
     lastChecked,
     storeAvailable,
     checkStoreAvailability,
+    localInstall,
+    refreshLocalStatus,
+    installLocal,
+    uninstallLocal,
   };
 }
 
