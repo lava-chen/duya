@@ -1,4 +1,4 @@
-# Plan 532 — `parallel_fetch` returns text, not DOM structure
+# Plan 533 — `parallel_fetch` returns text, not DOM structure
 
 **Status:** ✅ Complete (2026-09-13)
 
