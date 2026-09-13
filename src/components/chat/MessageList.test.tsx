@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, act } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import type { Message } from '@/types';
 
@@ -42,10 +42,27 @@ import { MessageList } from './MessageList';
 // Mock scrollIntoView since JSDOM doesn't support it
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
+  // JSDOM does not implement scrollTo on HTMLDivElement — the smooth-scroll
+  // code path in MessageList uses it; stub it so handler clicks don't throw.
+  if (!Element.prototype.scrollTo) {
+    Element.prototype.scrollTo = vi.fn();
+  }
   global.ResizeObserver = vi.fn().mockImplementation(() => ({
     observe: vi.fn(),
     disconnect: vi.fn(),
   }));
+  // Force rAF to run synchronously so the scroll-state observer's
+  // `requestAnimationFrame(() => updateScrollState())` resolves inside the
+  // test body. Without this JSDOM's rAF only fires when `_pretendToBeVisual`
+  // is set, and `isScrolledUp` never flips to true after we dispatch `scroll`.
+  const raf = globalThis.requestAnimationFrame as unknown as (cb: FrameRequestCallback) => number;
+  if (raf && !globalThis.__duyaTestRafStubbed) {
+    globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => {
+      cb(performance.now());
+      return 0;
+    }) as unknown as typeof globalThis.requestAnimationFrame;
+    globalThis.__duyaTestRafStubbed = true;
+  }
 });
 
 function createMockMessage(overrides: Partial<Message> = {}): Message {
@@ -251,6 +268,209 @@ describe('MessageList', () => {
       render(<MessageList messages={messages} sessionId="session-1" />);
 
       expect(screen.queryByTestId('message-item')).toBeNull();
+    });
+  });
+
+  // =========================================================================
+  // Plan 532 — scroll behaviour parity with BotDirectChatView
+  // (jump-to-latest on freeze, no scrollIntoView yank on new user messages,
+  //  jump-to-latest clears the unread badge).
+  // =========================================================================
+
+  describe('scroll behaviour (plan 532)', () => {
+    function getScrollContainer(container: HTMLElement): HTMLDivElement {
+      // The outermost scroll element is `.message-list-scroll`.
+      const scrollEl = container.querySelector('.message-list-scroll');
+      if (!(scrollEl instanceof HTMLDivElement)) {
+        throw new Error('Expected .message-list-scroll container');
+      }
+      return scrollEl;
+    }
+
+    /**
+     * Install `clientHeight` / `scrollHeight` properties on every
+     * `.message-list-scroll` element. Use this BEFORE `render(...)` so the
+     * mount useLayoutEffect observes the right dimensions. Also works
+     * afterwards, because we re-apply to the freshly-mounted container.
+     */
+    function stubContainerHeights(): void {
+      const original = Object.getOwnPropertyDescriptor(
+        HTMLElement.prototype,
+        'clientHeight'
+      );
+      Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+        configurable: true,
+        get: () => 400,
+      });
+      Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+        configurable: true,
+        get: () => 2400,
+      });
+      return () => {
+        if (original) {
+          Object.defineProperty(HTMLElement.prototype, 'clientHeight', original);
+        }
+      };
+    }
+
+    it('mounts with scroll pinned to the bottom on the first paint', () => {
+      const restore = stubContainerHeights();
+      try {
+        const messages: Message[] = [
+          createMockMessage({ id: 'u1', role: 'user', content: 'hi' }),
+          createMockMessage({ id: 'a1', role: 'assistant', content: 'hello' }),
+        ];
+
+        const { container } = render(
+          <MessageList messages={messages} sessionId="session-1" />
+        );
+
+        const scrollEl = getScrollContainer(container);
+
+        // The synchronous useLayoutEffect runs scrollTop = scrollHeight.
+        expect(scrollEl.scrollTop).toBe(scrollEl.scrollHeight);
+      } finally {
+        restore();
+      }
+    });
+
+    it('does not call scrollIntoView when the user sends a message while pinned to the bottom', () => {
+      const restore = stubContainerHeights();
+      try {
+        const initial: Message[] = [
+          createMockMessage({ id: 'u1', role: 'user', content: 'hi' }),
+        ];
+        const { container, rerender } = render(
+          <MessageList messages={initial} sessionId="session-1" />
+        );
+        const scrollEl = getScrollContainer(container);
+        scrollEl.scrollTop = scrollEl.scrollHeight; // pin user to bottom
+        const scrollIntoViewSpy = Element.prototype.scrollIntoView as unknown as ReturnType<typeof vi.fn>;
+        scrollIntoViewSpy.mockClear();
+
+        const next: Message[] = [
+          ...initial,
+          createMockMessage({ id: 'u2', role: 'user', content: 'another question' }),
+        ];
+        rerender(<MessageList messages={next} sessionId="session-1" />);
+
+        // Plan 532: scrollIntoView must not be used to "rescue" the viewport
+        // when the user is at the bottom. We only call scrollTop = scrollHeight.
+        expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+      } finally {
+        restore();
+      }
+    });
+
+    it('does not call scrollIntoView when a message arrives while the user is scrolled away', async () => {
+      const restore = stubContainerHeights();
+      try {
+        const initial: Message[] = [
+          createMockMessage({ id: 'u1', role: 'user', content: 'hi' }),
+        ];
+        const { container, rerender } = render(
+          <MessageList messages={initial} sessionId="session-1" />
+        );
+        const scrollEl = getScrollContainer(container);
+
+        // User scrolls away from the bottom.
+        await act(async () => {
+          scrollEl.scrollTop = 50;
+          scrollEl.dispatchEvent(new Event('scroll'));
+        });
+
+        const scrollIntoViewSpy = Element.prototype.scrollIntoView as unknown as ReturnType<typeof vi.fn>;
+        scrollIntoViewSpy.mockClear();
+
+        const next: Message[] = [
+          ...initial,
+          createMockMessage({ id: 'a1', role: 'assistant', content: 'reply' }),
+        ];
+        rerender(<MessageList messages={next} sessionId="session-1" />);
+
+        // Plan 532: never yank the viewport back. The user has the jump-to-
+        // latest button to come back on their own terms.
+        expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+      } finally {
+        restore();
+      }
+    });
+
+    it('renders the jump-to-latest button with an unread badge after the user is scrolled away and a new turn lands', async () => {
+      const restore = stubContainerHeights();
+      try {
+        const initial: Message[] = [
+          createMockMessage({ id: 'u1', role: 'user', content: 'hi' }),
+        ];
+        const { container, rerender } = render(
+          <MessageList messages={initial} sessionId="session-1" />
+        );
+        const scrollEl = getScrollContainer(container);
+        // Scroll away so isScrolledUp flips to true on the next render.
+        // Wrap the scroll dispatch in act so the rAF-scheduled state update
+        // is flushed before we assert.
+        await act(async () => {
+          scrollEl.scrollTop = 50;
+          scrollEl.dispatchEvent(new Event('scroll'));
+        });
+
+        const next: Message[] = [
+          ...initial,
+          createMockMessage({ id: 'a1', role: 'assistant', content: 'reply' }),
+        ];
+        rerender(<MessageList messages={next} sessionId="session-1" />);
+
+        const next2: Message[] = [
+          ...next,
+          createMockMessage({ id: 'u2', role: 'user', content: 'another question' }),
+        ];
+        rerender(<MessageList messages={next2} sessionId="session-1" />);
+
+        const button = await screen.findByRole('button', { name: /jump to latest/i });
+        expect(button).toBeTruthy();
+        expect(button.getAttribute('aria-label')).toMatch(/jump to latest/i);
+      } finally {
+        restore();
+      }
+    });
+
+    it('clicking jump-to-latest clears the unread badge and fires the smooth scrollTo call', async () => {
+      const restore = stubContainerHeights();
+      const scrollToSpy = Element.prototype.scrollTo as unknown as ReturnType<typeof vi.fn>;
+      try {
+        scrollToSpy.mockClear();
+        const initial: Message[] = [
+          createMockMessage({ id: 'u1', role: 'user', content: 'hi' }),
+        ];
+        const { container, rerender } = render(
+          <MessageList messages={initial} sessionId="session-1" />
+        );
+        const scrollEl = getScrollContainer(container);
+        await act(async () => {
+          scrollEl.scrollTop = 50;
+          scrollEl.dispatchEvent(new Event('scroll'));
+        });
+
+        const next: Message[] = [
+          ...initial,
+          createMockMessage({ id: 'u2', role: 'user', content: 'another' }),
+        ];
+        rerender(<MessageList messages={next} sessionId="session-1" />);
+
+        const button = await screen.findByRole('button', { name: /jump to latest/i });
+        await act(async () => {
+          button.click();
+        });
+
+        // Plan 532: the click handler delegates to `container.scrollTo` so
+        // the browser handles the smooth-scroll interpolation. Verify the
+        // imperative scrollTo was called with the bottom-anchored target.
+        expect(scrollToSpy).toHaveBeenCalled();
+        const lastCall = scrollToSpy.mock.calls.at(-1)?.[0] as { top: number } | undefined;
+        expect(lastCall?.top).toBe(scrollEl.scrollHeight);
+      } finally {
+        restore();
+      }
     });
   });
 });
