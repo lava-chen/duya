@@ -69,6 +69,8 @@ export {
 // Plan 525 Phase 3 — project entity service + global plans directory
 export {
   createProject,
+  updateProject,
+  deleteProject,
   listProjects,
   getProject,
   projectPaths,
@@ -78,6 +80,7 @@ export {
   resolveProjectsRoot,
   projectPlansDir,
   type CreateProjectInput,
+  type UpdateProjectInput,
   type ProjectServiceOptions,
   type PlanStatus,
   type PlansIndex,

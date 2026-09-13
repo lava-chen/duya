@@ -21,7 +21,7 @@
  */
 import { ipcMain } from 'electron';
 
-import { createProject, getProject, listProjects, projectPaths, type CreateProjectInput } from '../memory-state';
+import { createProject, deleteProject, getProject, listProjects, projectPaths, updateProject, type CreateProjectInput, type UpdateProjectInput } from '../memory-state';
 import type { ProjectPathEntry, ProjectRow } from '../memory-state';
 import { getLogger, LogComponent } from '../logging/logger';
 
@@ -125,6 +125,86 @@ export function registerProjectEntityHandlers(): void {
       // `createProject` throws 'at least one path entry is required' for empty paths.
       const code: 'EMPTY_PATHS' | 'INVALID_INPUT' = /at least one path/.test(message) ? 'EMPTY_PATHS' : 'INVALID_INPUT';
       return { success: false, error: message, code };
+    }
+  });
+
+  // Plan 525 — ProjectsView "编辑项目": patch name/description/paths/icon/color.
+  // When `paths` is provided it REPLACES the list and re-derives canonical_root
+  // from paths[0].path (same rule as createProject).
+  ipcMain.handle('projects:update', async (_event, rawProjectId: unknown, rawPatch: unknown): Promise<
+    | { success: true; project: ProjectRowDTO }
+    | { success: false; error: string; code: 'NOT_FOUND' | 'INVALID_INPUT' }
+  > => {
+    if (typeof rawProjectId !== 'string' || rawProjectId.length === 0) {
+      return { success: false, error: 'Invalid projectId: must be a non-empty string', code: 'INVALID_INPUT' };
+    }
+    if (!rawPatch || typeof rawPatch !== 'object') {
+      return { success: false, error: 'Invalid patch: expected object', code: 'INVALID_INPUT' };
+    }
+    const patch = rawPatch as Partial<UpdateProjectInput>;
+    if (patch.paths !== undefined && (!Array.isArray(patch.paths) || patch.paths.length === 0)) {
+      return {
+        success: false,
+        error: 'paths must be a non-empty array when provided (canonical_root derives from paths[0])',
+        code: 'INVALID_INPUT',
+      };
+    }
+    if (Array.isArray(patch.paths)) {
+      for (let i = 0; i < patch.paths.length; i++) {
+        const entry = patch.paths[i] as Record<string, unknown>;
+        if (!entry || typeof entry.path !== 'string' || entry.path.length === 0) {
+          return {
+            success: false,
+            error: `paths[${i}].path must be a non-empty string`,
+            code: 'INVALID_INPUT',
+          };
+        }
+      }
+    }
+    try {
+      const normalized: UpdateProjectInput = {
+        ...(patch.name !== undefined ? { name: String(patch.name) } : {}),
+        ...(patch.description !== undefined ? { description: patch.description } : {}),
+        ...(Array.isArray(patch.paths)
+          ? {
+              paths: patch.paths.map((p) => ({
+                path: (p as { path: string }).path,
+                description: (p as { description?: string | null }).description ?? null,
+              })),
+            }
+          : {}),
+        ...(patch.icon !== undefined ? { icon: patch.icon == null ? null : String(patch.icon).slice(0, 64) } : {}),
+        ...(patch.color !== undefined ? { color: patch.color == null ? null : String(patch.color).slice(0, 32) } : {}),
+      };
+      const row = updateProject(rawProjectId, normalized);
+      if (!row) {
+        return { success: false, error: `project ${rawProjectId} not found`, code: 'NOT_FOUND' };
+      }
+      return { success: true, project: toDTO(row) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('projects:update failed', error instanceof Error ? error : new Error(message), undefined, LogComponent.DB);
+      return { success: false, error: message, code: 'INVALID_INPUT' };
+    }
+  });
+
+  // Plan 525 — ProjectsView "移除项目": delete the entity row. Sessions,
+  // threads and rollout files are untouched; rollout_catalog rows are
+  // unbound to global scope inside the same transaction (FK is RESTRICT).
+  ipcMain.handle('projects:delete', async (_event, rawProjectId: unknown): Promise<
+    | { success: true; deleted: boolean }
+    | { success: false; error: string }
+  > => {
+    if (typeof rawProjectId !== 'string' || rawProjectId.length === 0) {
+      return { success: false, error: 'Invalid projectId: must be a non-empty string' };
+    }
+    try {
+      const deleted = deleteProject(rawProjectId);
+      return { success: true, deleted };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('projects:delete failed', error instanceof Error ? error : new Error(message), undefined, LogComponent.DB);
+      return { success: false, error: message };
     }
   });
 }

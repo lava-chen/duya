@@ -222,3 +222,87 @@ export function getProject(projectId: string, opts?: { memoryDb?: Database }): P
 export function projectPaths(row: ProjectRow): ProjectPathEntry[] {
   return parseProjectPaths(row.paths);
 }
+
+/** Patch shape for `updateProject` — every field optional, NULL clears. */
+export interface UpdateProjectInput {
+  name?: string;
+  description?: string | null;
+  /** Replacement path list; paths[0].path becomes the new canonical_root. */
+  paths?: Array<{ path: string; description?: string | null }>;
+  icon?: string | null;
+  color?: string | null;
+}
+
+/**
+ * Patch a project row (ProjectsView "编辑项目"). When `paths` is
+ * replaced, canonical_root is re-derived from paths[0].path. Returns
+ * the updated row, or null when the project does not exist.
+ */
+export function updateProject(
+  projectId: string,
+  patch: UpdateProjectInput,
+  opts?: { memoryDb?: Database }
+): ProjectRow | null {
+  if (!projectId || typeof projectId !== 'string') return null;
+  const db = opts?.memoryDb ?? getDb();
+
+  const txn = db.transaction((): ProjectRow | null => {
+    const row = db.prepare('SELECT * FROM projects WHERE project_id = ?').get(projectId) as
+      | ProjectRow
+      | undefined;
+    if (!row) return null;
+
+    if (typeof patch.name === 'string') {
+      db.prepare('UPDATE projects SET name = ? WHERE project_id = ?').run(patch.name, projectId);
+    }
+    if (patch.description !== undefined) {
+      db.prepare('UPDATE projects SET description = ? WHERE project_id = ?').run(
+        patch.description,
+        projectId
+      );
+    }
+    if (Array.isArray(patch.paths) && patch.paths.length > 0) {
+      const entries: ProjectPathEntry[] = patch.paths.map((p) => ({
+        path: p.path,
+        description: p.description ?? null,
+      }));
+      db.prepare('UPDATE projects SET paths = ?, canonical_root = ? WHERE project_id = ?').run(
+        serializeProjectPaths(entries),
+        entries[0].path,
+        projectId
+      );
+    }
+    if (patch.icon !== undefined) {
+      db.prepare('UPDATE projects SET icon = ? WHERE project_id = ?').run(patch.icon, projectId);
+    }
+    if (patch.color !== undefined) {
+      db.prepare('UPDATE projects SET color = ? WHERE project_id = ?').run(patch.color, projectId);
+    }
+    return (db.prepare('SELECT * FROM projects WHERE project_id = ?').get(projectId) as ProjectRow) ?? null;
+  });
+  return txn.immediate();
+}
+
+/**
+ * Delete a project row (ProjectsView "移除项目"). Sessions, threads and
+ * rollout files are NOT touched. `rollout_catalog` rows referencing the
+ * project are unbound (scope_kind → 'global', project_id → NULL) inside
+ * the same transaction — the table's FK is ON DELETE RESTRICT, so the
+ * delete would otherwise fail for any project with sessions. Returns
+ * true when a row was deleted.
+ */
+export function deleteProject(projectId: string, opts?: { memoryDb?: Database }): boolean {
+  if (!projectId || typeof projectId !== 'string') return false;
+  const db = opts?.memoryDb ?? getDb();
+  const txn = db.transaction((): boolean => {
+    db.prepare(
+      `UPDATE rollout_catalog
+       SET project_id = NULL, scope_kind = 'global'
+       WHERE project_id = ?`
+    ).run(projectId);
+    db.prepare('DELETE FROM project_bots WHERE project_id = ?').run(projectId);
+    const result = db.prepare('DELETE FROM projects WHERE project_id = ?').run(projectId);
+    return Number(result.changes) > 0;
+  });
+  return txn.immediate();
+}

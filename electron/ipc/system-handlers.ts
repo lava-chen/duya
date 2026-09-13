@@ -353,6 +353,17 @@ export function registerSystemHandlers(): void {
     return updated;
   });
 
+  // Plan 525 — ProjectsView "移除项目" for path-only (no entity) entries.
+  ipcMain.handle('projects:remove-recent-folder', async (_event, folderPath: string) => {
+    if (typeof folderPath !== 'string' || folderPath.length === 0) {
+      return getRecentFolders();
+    }
+    const recent = getRecentFolders();
+    const updated = recent.filter(f => f !== folderPath);
+    saveRecentFolders(updated);
+    return updated;
+  });
+
   // Sync threads changed event
   ipcMain.on('sync:threads-changed', (_event) => {
     const senderWindow = BrowserWindow.fromWebContents(_event.sender);

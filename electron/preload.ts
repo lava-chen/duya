@@ -1197,6 +1197,24 @@ export interface ElectronAPI {
       | { success: true; projectId: string; project: ProjectEntityDTO }
       | { success: false; error: string; code?: 'EMPTY_PATHS' | 'INVALID_INPUT' }
     >
+    /** Plan 525 — ProjectsView "编辑项目": patch name/paths/icon/color. */
+    update: (projectId: string, patch: {
+      name?: string
+      description?: string | null
+      paths?: Array<{ path: string; description?: string | null }>
+      icon?: string | null
+      color?: string | null
+    }) => Promise<
+      | { success: true; project: ProjectEntityDTO }
+      | { success: false; error: string; code?: 'NOT_FOUND' | 'INVALID_INPUT' }
+    >
+    /** Plan 525 — ProjectsView "移除项目": delete the entity row. */
+    delete: (projectId: string) => Promise<
+      | { success: true; deleted: boolean }
+      | { success: false; error: string }
+    >
+    /** Plan 525 — remove a path-only entry from the recent-folders list. */
+    removeRecentFolder: (folderPath: string) => Promise<string[]>
   }
   sync: SyncAPI
   settings: {
@@ -1921,6 +1939,16 @@ const electronAPI: ElectronAPI = {
       icon?: string | null
       color?: string | null
     }) => ipcRenderer.invoke('projects:register', input),
+    update: (projectId: string, patch: {
+      name?: string
+      description?: string | null
+      paths?: Array<{ path: string; description?: string | null }>
+      icon?: string | null
+      color?: string | null
+    }) => ipcRenderer.invoke('projects:update', projectId, patch),
+    delete: (projectId: string) => ipcRenderer.invoke('projects:delete', projectId),
+    removeRecentFolder: (folderPath: string) =>
+      ipcRenderer.invoke('projects:remove-recent-folder', folderPath),
   },
   sync: {
     notifyThreadsChanged: () => {
