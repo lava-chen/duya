@@ -63,21 +63,25 @@ CREATE TABLE rollout_catalog (
   )
 );
 
--- Step 3: restore all existing indexes
+-- Step 3: migrate existing rows (preserves all column values verbatim;
+-- only the CHECK constraint is tightened by the new table definition).
+INSERT OR ABORT INTO rollout_catalog
+  SELECT * FROM _rollout_catalog_backup;
+
+-- Step 4: clean up the backup. Its indexes (idx_rollout_catalog_scope /
+-- _agent_type / _status) die with the table, freeing their names —
+-- the old indexes survive an ALTER TABLE RENAME attached to the
+-- backup table, so creating the new indexes before this DROP would
+-- fail with "index ... already exists".
+DROP TABLE _rollout_catalog_backup;
+
+-- Step 5: restore indexes on the new table (must come after Step 4).
 CREATE INDEX idx_rollout_catalog_scope
   ON rollout_catalog(scope_kind, project_id, last_message_at DESC);
 CREATE INDEX idx_rollout_catalog_agent_type
   ON rollout_catalog(agent_type, last_message_at DESC);
 CREATE INDEX idx_rollout_catalog_status
   ON rollout_catalog(source_status, last_message_at DESC);
-
--- Step 4: migrate existing rows (preserves all column values verbatim;
--- only the CHECK constraint is tightened by the new table definition).
-INSERT OR ABORT INTO rollout_catalog
-  SELECT * FROM _rollout_catalog_backup;
-
--- Step 5: clean up the backup
-DROP TABLE _rollout_catalog_backup;
 `;
 
 export const migration0011 = {
