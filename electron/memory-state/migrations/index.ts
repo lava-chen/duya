@@ -10,6 +10,7 @@ import { migration0008 } from './0008_curation_runs.sql';
 import { migration0009 } from './0009_drop_legacy_phase2.sql';
 import { migration0010 } from './0010_memory_tier_index.sql';
 import { migration0011 } from './0011_extend_agent_type_check.sql';
+import { migration0012 } from './0012_project_entity_minimal.sql';
 import { getLogger, LogComponent } from '../../logging/logger';
 
 export interface Migration {
@@ -32,8 +33,9 @@ export interface Migration {
  *   - 0009 (Plan 406 Phase D) — drop legacy memory_entries / memory_evidence / phase2_runs
  *   - 0010 (Plan 479 Phase 1) — memory_tier_index (bot memory isolation query index)
  *   - 0011 — extend rollout_catalog.agent_type CHECK with 'bot' and 'spawn'
+ *   - 0012 (Plan 525 Phase 1) — projects name/description/paths columns + project_bots
  */
-export const MIGRATIONS: Migration[] = [migration0001, migration0002, migration0003, migration0005, migration0006, migration0007, migration0008, migration0009, migration0010, migration0011];
+export const MIGRATIONS: Migration[] = [migration0001, migration0002, migration0003, migration0005, migration0006, migration0007, migration0008, migration0009, migration0010, migration0011, migration0012];
 
 function computeSha256(sql: string): string {
   return crypto.createHash('sha256').update(sql).digest('hex');

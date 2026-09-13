@@ -21,15 +21,18 @@ export { migration0002 } from './migrations/0002_lease_stage1.sql';
 export type {
   ProjectRow,
   ProjectPathAliasRow,
-  RolloutCatalogRow,
+  ProjectPathEntry,
+  ProjectBotRow,
   InsertProjectInput,
   InsertProjectAliasInput,
+  InsertProjectBotInput,
   UpsertRolloutCatalogInput,
   AliasKind,
   ScopeKind,
   AgentType,
   SourceStatus,
 } from './schema';
+export { parseProjectPaths, serializeProjectPaths } from './schema';
 
 // Phase B — project registry
 export {

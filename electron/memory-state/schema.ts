@@ -21,8 +21,79 @@ export type SourceStatus = 'active' | 'deleted' | 'missing';
 export interface ProjectRow {
   project_id: string;
   canonical_root: string;
+  /** Display name (migration 0012). Empty string when unset. */
+  name: string;
+  /** One-line description (migration 0012). NULL when unset. */
+  description: string | null;
+  /**
+   * JSON-encoded array of {path, description} entries (migration 0012).
+   * Parse with `parseProjectPaths` — never JSON.parse directly, so a
+   * corrupted payload degrades to [] instead of throwing.
+   */
+  paths: string;
   created_at: number;
   last_seen_at: number;
+}
+
+/** One entry of the `projects.paths` JSON column (Plan 525 §2.4). */
+export interface ProjectPathEntry {
+  path: string;
+  /** NULL when no description — never an empty string. */
+  description: string | null;
+}
+
+export interface ProjectBotRow {
+  project_id: string;
+  /**
+   * Plain TEXT — `agents` lives in duya-main.db so a real FK is
+   * impossible across the two databases (migration 0012).
+   */
+  bot_id: string;
+  joined_at: number;
+}
+
+export interface InsertProjectBotInput {
+  project_id: string;
+  bot_id: string;
+  joined_at?: number;
+}
+
+/**
+ * Parse the `projects.paths` JSON column.
+ *
+ * Corrupted or malformed payloads degrade to `[]` (Plan 525 §2.4) —
+ * never throw, because a broken JSON blob must not take down project
+ * resolution. Entries missing `path` or with a non-string path are
+ * dropped; a missing/empty-string description is normalized to NULL.
+ */
+export function parseProjectPaths(raw: string | null | undefined): ProjectPathEntry[] {
+  if (raw == null || raw === '') return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const entries: ProjectPathEntry[] = [];
+  for (const item of parsed) {
+    if (typeof item !== 'object' || item === null) continue;
+    const { path, description } = item as Record<string, unknown>;
+    if (typeof path !== 'string' || path === '') continue;
+    entries.push({
+      path,
+      description: typeof description === 'string' && description !== '' ? description : null,
+    });
+  }
+  return entries;
+}
+
+/**
+ * Serialize `projects.paths` entries to the JSON column value.
+ * Always produces a valid JSON array string (empty entries → '[]').
+ */
+export function serializeProjectPaths(entries: ProjectPathEntry[]): string {
+  return JSON.stringify(entries);
 }
 
 export interface ProjectPathAliasRow {
@@ -60,6 +131,12 @@ export interface RolloutCatalogRow {
 export interface InsertProjectInput {
   project_id?: string;
   canonical_root: string;
+  /** Optional since migration 0012 — DB defaults to ''. */
+  name?: string;
+  /** Optional since migration 0012 — DB defaults to NULL. */
+  description?: string | null;
+  /** Optional since migration 0012 — DB defaults to '[]'. Pre-serialized via serializeProjectPaths. */
+  paths?: string;
   created_at?: number;
   last_seen_at?: number;
 }
