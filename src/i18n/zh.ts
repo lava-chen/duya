@@ -1331,6 +1331,10 @@ const zh: Record<TranslationKey, string> = {
   'project.createProject': '创建项目',
   'project.sourceFolder': '源文件夹',
   'project.addLocalFolder': '添加 duya 可读取和编辑的文件夹',
+  // Plan 525: multi-path create dialog + avatar picker.
+  'project.addFolder': '添加文件夹',
+  'project.avatarDone': '完成',
+  'project.removeFolder': '移除该文件夹',
   'project.collapseAll': '全部收起',
   'project.expandAll': '全部展开',
   'project.organize': '整理',

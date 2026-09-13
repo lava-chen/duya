@@ -58,6 +58,10 @@ export interface CreateProjectInput {
    * `canonical_root` (Plan 525 §7). At least one path is required.
    */
   paths: Array<{ path: string; description?: string | null }>;
+  /** Avatar icon name (migration 0013). NULL/undefined = default folder icon. */
+  icon?: string | null;
+  /** Avatar accent color keyword (migration 0013). NULL/undefined = default. */
+  color?: string | null;
 }
 
 export interface ProjectServiceOptions {
@@ -151,8 +155,9 @@ export function readPlansIndex(projectId: string, opts?: ProjectServiceOptions):
  *
  * `canonical_root` is derived from `paths[0].path` (Plan 525 §7);
  * at least one path is required. Not idempotent — each call mints a
- * new UUID, so duplicate calls produce distinct projects (users merge
- * or clean up manually; there is no UI by design).
+ * new UUID, so duplicate calls produce distinct projects. The
+ * renderer's CreateProjectDialog is the production caller (via the
+ * `projects:register` IPC handler).
  */
 export function createProject(input: CreateProjectInput, opts?: ProjectServiceOptions): ProjectRow {
   if (!Array.isArray(input.paths) || input.paths.length === 0) {
@@ -169,14 +174,16 @@ export function createProject(input: CreateProjectInput, opts?: ProjectServiceOp
   const projectId = randomUUID();
 
   db.prepare(
-    `INSERT INTO projects (project_id, canonical_root, name, description, paths, created_at, last_seen_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO projects (project_id, canonical_root, name, description, paths, icon, color, created_at, last_seen_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     projectId,
     canonicalRoot,
     input.name,
     input.description ?? null,
     serializeProjectPaths(entries),
+    input.icon ?? null,
+    input.color ?? null,
     now,
     now
   );

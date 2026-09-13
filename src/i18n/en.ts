@@ -1346,6 +1346,10 @@ const en = {
   'project.createProject': 'Create project',
   'project.sourceFolder': 'Source folder',
   'project.addLocalFolder': 'Add a folder duya can read and edit',
+  // Plan 525: multi-path create dialog + avatar picker.
+  'project.addFolder': 'Add folder',
+  'project.avatarDone': 'Done',
+  'project.removeFolder': 'Remove this folder',
   'project.collapseAll': 'Collapse All',
   'project.expandAll': 'Expand All',
   'project.organize': 'Organize',

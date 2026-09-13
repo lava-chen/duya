@@ -103,6 +103,10 @@ export function registerProjectEntityHandlers(): void {
         };
       }
     }
+    // Avatar fields (migration 0013): optional, bounded strings from the
+    // create-project dialog's icon/color picker.
+    const icon = input.icon == null ? null : String(input.icon).slice(0, 64);
+    const color = input.color == null ? null : String(input.color).slice(0, 32);
     try {
       const row = createProject({
         name: input.name,
@@ -111,6 +115,8 @@ export function registerProjectEntityHandlers(): void {
           path: p.path,
           description: p.description ?? null,
         })),
+        icon,
+        color,
       });
       return { success: true, projectId: row.project_id, project: toDTO(row) };
     } catch (error) {
