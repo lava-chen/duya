@@ -768,3 +768,60 @@ describe('readPluginManifest — foreign dot-folder layouts', () => {
     expect(manifest.description).toBeUndefined();
   });
 });
+
+// ----------------------------------------------------------------------------
+// Plan 531 — foreign layouts are normalized through the format registry
+// before the generic reader runs. Fixture trimmed from the real
+// openai/plugins/plugins/figma/.codex-plugin/plugin.json.
+// ----------------------------------------------------------------------------
+
+describe('readPluginManifest — Codex layout via the format registry', () => {
+  it('maps Codex composerIcon/logo onto the canonical interface icon', () => {
+    mkdirSync(join(dir, '.codex-plugin'));
+    writeFileSync(
+      join(dir, '.codex-plugin', 'plugin.json'),
+      JSON.stringify({
+        name: 'figma',
+        version: '2.0.20',
+        description: 'Figma workflows for design implementation.',
+        author: { name: 'Figma', url: 'https://www.figma.com' },
+        homepage: 'https://www.figma.com',
+        license: 'LicenseRef-Figma-Developer-Terms',
+        keywords: ['figma', 'design'],
+        skills: './skills/',
+        apps: './.app.json',
+        interface: {
+          displayName: 'Figma',
+          shortDescription: 'Figma design-to-code workflows',
+          category: 'Creativity',
+          brandColor: '#1ABCFE',
+          composerIcon: './assets/logo-padded.png',
+          logo: './assets/logo-padded.png',
+        },
+      }),
+    );
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.name).toBe('figma');
+    expect(manifest.version).toBe('2.0.20');
+    expect(manifest.author.name).toBe('Figma');
+    expect(manifest.author.url).toBe('https://www.figma.com');
+    expect(manifest.license).toBe('LicenseRef-Figma-Developer-Terms');
+    // The registry maps Codex's composerIcon → duya's canonical icon.
+    expect(manifest.interface?.icon).toBe('./assets/logo-padded.png');
+    expect(manifest.interface?.displayName).toBe('Figma');
+    expect(manifest.interface?.brandColor).toBe('#1ABCFE');
+  });
+
+  it('defaults the author when a foreign manifest omits it', () => {
+    mkdirSync(join(dir, '.claude-plugin'));
+    writeFileSync(
+      join(dir, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'anonymous-plugin' }),
+    );
+    const manifest = readPluginManifest(dir);
+    expect(manifest.name).toBe('anonymous-plugin');
+    expect(manifest.version).toBe('0.0.0');
+    expect(manifest.author.name).toBe('Unknown');
+  });
+});

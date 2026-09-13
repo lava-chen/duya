@@ -72,13 +72,22 @@ describe('readMarketplaceManifest — path priority', () => {
     expect(m?.displayName).toBe('Acme Market');
   });
 
-  it('falls back to the codex-compatible search paths in order', () => {
+  it('falls back in format-adapter priority order (claude before codex)', () => {
     const dir = makeMarketplace('claude-fallback');
     writeManifest(dir, '.agents/plugins/marketplace.json', { name: 'agents-first', plugins: [] });
     writeManifest(dir, '.claude-plugin/marketplace.json', { name: 'claude', plugins: [] });
     const m = readMarketplaceManifest(dir);
-    expect(m?.manifestPath).toBe('.agents/plugins/marketplace.json');
-    expect(m?.name).toBe('agents-first');
+    // Plan 531: the probe order is derived from the format registry, so the
+    // Claude Code layout (adapter priority 10) now precedes the Codex layout
+    // (priority 20). Previously this order was hard-coded here.
+    expect(m?.manifestPath).toBe('.claude-plugin/marketplace.json');
+    expect(m?.name).toBe('claude');
+  });
+
+  it('still reads the codex layout when it is the only catalog', () => {
+    const dir = makeMarketplace('codex-only');
+    writeManifest(dir, '.agents/plugins/marketplace.json', { name: 'codex-market', plugins: [] });
+    expect(readMarketplaceManifest(dir)?.name).toBe('codex-market');
   });
 
   it('reads .cursor-plugin/marketplace.json when it is the only one', () => {
@@ -313,5 +322,80 @@ describe('resolvePluginEntryDir', () => {
       source: { source: 'git' as const, url: 'https://github.com/a/b.git' },
     };
     expect(() => resolvePluginEntryDir(dir, entry)).toThrow(/materialized/);
+  });
+});
+
+// ----------------------------------------------------------------------------
+// Plan 531 — normalization now flows through the format adapter registry.
+// Fixtures below are trimmed copies of real captured catalogs.
+// ----------------------------------------------------------------------------
+
+describe('catalog normalization via the format registry', () => {
+  it('folds Codex UPPERCASE policy enums to canonical lowercase', () => {
+    // openai/plugins/.agents/plugins/marketplace.json uses UPPERCASE enums,
+    // which fail duya's `z.enum` if not folded — taking the whole catalog
+    // down with them.
+    const dir = makeMarketplace('codex-policy');
+    writeManifest(dir, '.agents/plugins/marketplace.json', {
+      name: 'openai-curated',
+      interface: { displayName: 'Codex official' },
+      plugins: [
+        {
+          name: 'linear',
+          source: { source: 'local', path: './plugins/linear' },
+          policy: {
+            installation: 'AVAILABLE',
+            authentication: 'ON_INSTALL',
+            products: ['CODEX'],
+          },
+          category: 'Productivity',
+        },
+      ],
+    });
+    const manifest = readMarketplaceManifest(dir);
+    expect(manifest?.manifestPath).toBe('.agents/plugins/marketplace.json');
+    const entry = manifest?.plugins[0];
+    expect(entry?.source).toEqual({ source: 'local', path: './plugins/linear' });
+    expect(entry?.policy?.installation).toBe('available');
+    expect(entry?.policy?.authentication).toBe('on_install');
+  });
+
+  it('normalizes a Claude git-subdir source through the registry', () => {
+    const dir = makeMarketplace('claude-subdir');
+    writeManifest(dir, '.claude-plugin/marketplace.json', {
+      name: 'claude-plugins-official',
+      plugins: [
+        {
+          name: 'api-security-testing',
+          source: {
+            source: 'git-subdir',
+            url: 'https://github.com/42Crunch-AI/claude-plugins.git',
+            path: 'plugins/api-security-testing',
+            ref: 'v1.5.5',
+            sha: '30287f5e3f122a646d1ac5ca3ab96e130c52a3ad',
+          },
+        },
+      ],
+    });
+    const entry = readMarketplaceManifest(dir)?.plugins[0];
+    expect(entry?.source).toEqual({
+      source: 'git',
+      url: 'https://github.com/42Crunch-AI/claude-plugins.git',
+      path: 'plugins/api-security-testing',
+      ref_name: 'v1.5.5',
+      sha: '30287f5e3f122a646d1ac5ca3ab96e130c52a3ad',
+    });
+  });
+
+  it('normalizes a Claude string source to a local path', () => {
+    const dir = makeMarketplace('claude-string');
+    writeManifest(dir, '.claude-plugin/marketplace.json', {
+      name: 'claude-plugins-official',
+      plugins: [{ name: 'agent-sdk-dev', source: './plugins/agent-sdk-dev' }],
+    });
+    expect(readMarketplaceManifest(dir)?.plugins[0]?.source).toEqual({
+      source: 'local',
+      path: './plugins/agent-sdk-dev',
+    });
   });
 });

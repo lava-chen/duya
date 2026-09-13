@@ -9,15 +9,19 @@
 import fs from 'fs';
 import path from 'path';
 import { z } from 'zod';
+import {
+  allCatalogPaths,
+  normalizeCatalogPolicy,
+  normalizeCatalogSource,
+} from '../../../packages/plugin-core/src/formats/registry';
 
-/** Search order — duya root manifest first, then codex-compatible paths. */
-export const MARKETPLACE_MANIFEST_RELATIVE_PATHS = [
-  'marketplace.json',
-  '.agents/plugins/marketplace.json',
-  '.agents/plugins/api_marketplace.json',
-  '.claude-plugin/marketplace.json',
-  '.cursor-plugin/marketplace.json',
-] as const;
+/**
+ * Catalog search order. Plan 531: derived from the format adapter registry
+ * (duya native `marketplace.json` first, then the Claude Code / Codex /
+ * Cursor layout paths in adapter priority order) instead of being
+ * hard-coded here — adding an ecosystem updates this automatically.
+ */
+export const MARKETPLACE_MANIFEST_RELATIVE_PATHS: readonly string[] = allCatalogPaths();
 
 export type MarketplaceInstallPolicy = 'not_available' | 'available' | 'installed_by_default';
 export type MarketplaceAuthPolicy = 'on_install' | 'on_use';
@@ -36,70 +40,34 @@ const GitPluginSourceSchema = z.object({
   sha: z.string().optional(),
 });
 
-/**
- * Claude Code marketplace compatibility (plan 529 follow-up).
- *
- * Anthropic's official directory (anthropics/claude-plugins-official) ships
- * three plugin-source shapes that differ from duya's canonical union:
- *
- * 1. String source — a repo-relative path: `"./plugins/agent-sdk-dev"`
- * 2. `git-subdir` object — external repo + subdirectory, pinned:
- *      { source: 'git-subdir', url, path, ref, sha }
- * 3. `url` object — whole external repo, pinned:
- *      { source: 'url', url, sha }
- *
- * Claude Code names its ref pin `ref`; duya's schema calls it `ref_name`.
- *
- * The preprocess below normalizes all three into duya's canonical
- * local/git discriminated union at parse time, so catalog/install code
- * downstream sees exactly one shape. String sources that look like git
- * URLs (https://, git@, github: shorthand) map to git sources; anything
- * else is treated as a repo-relative local path (Anthropic only ships
- * `./`-prefixed strings today, verified 2026-09-13 across all 295
- * entries: 52 string, 154 url, 89 git-subdir).
- */
-function normalizeClaudeCodePluginSource(raw: unknown): unknown {
-  if (typeof raw === 'string') {
-    const s = raw.trim();
-    if (/^(https?:\/\/|git@|github:)/.test(s)) {
-      return { source: 'git', url: s };
-    }
-    return { source: 'local', path: s };
-  }
-  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-    const obj = raw as Record<string, unknown>;
-    const disc = obj.source;
-    // Claude Code git variants → duya 'git', `ref` → `ref_name`.
-    if (disc === 'git-subdir' || disc === 'url' || disc === 'github') {
-      return {
-        ...obj,
-        source: 'git',
-        ref_name:
-          (typeof obj.ref_name === 'string' && obj.ref_name) ||
-          (typeof obj.ref === 'string' ? obj.ref : undefined),
-      };
-    }
-    // duya-native git object: still honor `ref` as an alias when
-    // `ref_name` is absent, so mixed-hand-authored manifests work.
-    if (disc === 'git' && obj.ref_name === undefined && typeof obj.ref === 'string') {
-      return { ...obj, ref_name: obj.ref };
-    }
-  }
-  return raw;
-}
-
 const MarketplacePluginEntrySchema = z.object({
   name: z.string().min(1),
+  // Plan 531: the format registry owns source normalization (duya local/git
+  // union, Claude Code string / git-subdir / url, …). Shapes no adapter
+  // recognizes fall through untouched so the union below emits the canonical
+  // validation error rather than a swallowed generic one.
   source: z.preprocess(
-    normalizeClaudeCodePluginSource,
+    (raw) => {
+      try {
+        return normalizeCatalogSource(raw);
+      } catch {
+        return raw;
+      }
+    },
     z.discriminatedUnion('source', [LocalPluginSourceSchema, GitPluginSourceSchema]),
   ),
-  policy: z
-    .object({
-      installation: z.enum(['not_available', 'available', 'installed_by_default']).optional(),
-      authentication: z.enum(['on_install', 'on_use']).optional(),
-    })
-    .optional(),
+  // Codex emits UPPERCASE policy enums ("AVAILABLE" / "ON_INSTALL"); the
+  // registry folds them to duya's canonical lowercase so a Codex catalog does
+  // not fail validation wholesale. Unknown values are dropped.
+  policy: z.preprocess(
+    (raw) => normalizeCatalogPolicy(raw) ?? raw,
+    z
+      .object({
+        installation: z.enum(['not_available', 'available', 'installed_by_default']).optional(),
+        authentication: z.enum(['on_install', 'on_use']).optional(),
+      })
+      .optional(),
+  ),
   category: z.string().optional(),
 });
 
