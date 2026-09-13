@@ -75,7 +75,7 @@ function commitMarkerChange(version: string): void {
 describe.skipIf(!GIT_AVAILABLE)('cloneMarketplace', () => {
   it('clones into the cache root and the manifest is readable', async () => {
     const result = await cloneMarketplace({
-      url: originRepo,
+      urls: [originRepo],
       name: 'fixture',
       rootOverride,
     });
@@ -93,13 +93,13 @@ describe.skipIf(!GIT_AVAILABLE)('cloneMarketplace', () => {
 
   it('rejects a second clone over an existing marketplace', async () => {
     await expect(
-      cloneMarketplace({ url: originRepo, name: 'fixture', rootOverride }),
+      cloneMarketplace({ urls: [originRepo], name: 'fixture', rootOverride }),
     ).rejects.toThrow(/already exists/);
   });
 
   it('never leaves staging residue after a failed clone', async () => {
     await expect(
-      cloneMarketplace({ url: join(workspace, 'does-not-exist'), name: 'broken', rootOverride }),
+      cloneMarketplace({ urls: [join(workspace, 'does-not-exist')], name: 'broken', rootOverride }),
     ).rejects.toThrow();
     const staging = join(rootOverride, '.staging');
     if (existsSync(staging)) {
@@ -109,14 +109,14 @@ describe.skipIf(!GIT_AVAILABLE)('cloneMarketplace', () => {
 
   it('rejects unsafe marketplace names before touching the fs', async () => {
     await expect(
-      cloneMarketplace({ url: originRepo, name: '../escape', rootOverride }),
+      cloneMarketplace({ urls: [originRepo], name: '../escape', rootOverride }),
     ).rejects.toBeInstanceOf(MarketplaceSourceError);
   });
 });
 
 describe.skipIf(!GIT_AVAILABLE)('updateMarketplace', () => {
   it('fetch + reset picks up new origin commits', async () => {
-    const first = await cloneMarketplace({ url: originRepo, name: 'upd', rootOverride });
+    const first = await cloneMarketplace({ urls: [originRepo], name: 'upd', rootOverride });
     commitMarkerChange('v2');
 
     const updated = await updateMarketplace({ dir: first.dir, ref: 'main', rootOverride });
@@ -130,13 +130,93 @@ describe.skipIf(!GIT_AVAILABLE)('updateMarketplace', () => {
 
 describe.skipIf(!GIT_AVAILABLE)('removeMarketplaceClone', () => {
   it('removes the clone directory', async () => {
-    await cloneMarketplace({ url: originRepo, name: 'removeme', rootOverride });
+    await cloneMarketplace({ urls: [originRepo], name: 'removeme', rootOverride });
     const dir = getMarketplaceCloneDir('removeme', rootOverride);
     expect(existsSync(dir)).toBe(true);
     removeMarketplaceClone('removeme', rootOverride);
     expect(existsSync(dir)).toBe(false);
   });
 });
+
+describe.skipIf(!GIT_AVAILABLE)('cloneMarketplace with urls fallback', () => {
+  it('falls back to mirror when the primary URL fails', async () => {
+    const result = await cloneMarketplace({
+      urls: [join(workspace, 'does-not-exist'), originRepo],
+      name: 'fallback-to-mirror',
+      rootOverride,
+    });
+    const dir = getMarketplaceCloneDir('fallback-to-mirror', rootOverride);
+    expect(existsSync(dir)).toBe(true);
+    expect(result.commit).not.toBeNull();
+    const manifest = readMarketplaceManifest(dir);
+    expect(manifest?.name).toBe('fixture');
+  });
+
+  it('returns the working URL when the primary URL succeeds', async () => {
+    const result = await cloneMarketplace({
+      urls: [originRepo, join(workspace, 'does-not-exist')],
+      name: 'primary-wins',
+      rootOverride,
+    });
+    const dir = getMarketplaceCloneDir('primary-wins', rootOverride);
+    expect(existsSync(dir)).toBe(true);
+    const originCheck = spawnSync('git', [
+      'remote', 'get-url', 'origin',
+    ], { cwd: dir });
+    expect(originCheck.status).toBe(0);
+    expect(originCheck.stdout.toString().trim()).toBe(originRepo);
+    expect(result.commit).not.toBeNull();
+  });
+
+  it('throws with both URLs in the error when every mirror fails', async () => {
+    await expect(
+      cloneMarketplace({
+        urls: [
+          join(workspace, 'does-not-exist-a'),
+          join(workspace, 'does-not-exist-b'),
+        ],
+        name: 'all-broken',
+        rootOverride,
+      }),
+    ).rejects.toThrow(/all 2 marketplace mirror.s. failed/);
+  });
+
+  it('rejects an empty urls array', async () => {
+    await expect(
+      cloneMarketplace({
+        urls: [],
+        name: 'no-urls',
+        rootOverride,
+      }),
+    ).rejects.toThrow(/at least one url is required/);
+  });
+});
+
+describe.skipIf(!GIT_AVAILABLE)('resolveSourceUrls', () => {
+  it('prefers urls over the legacy url field', async () => {
+    const { resolveSourceUrls } = await import('./git-source');
+    expect(resolveSourceUrls({
+      source: 'git',
+      url: 'https://github.com/legacy.git',
+      urls: ['https://gitee.com/new.git', 'https://github.com/new.git'],
+    })).toEqual(['https://gitee.com/new.git', 'https://github.com/new.git']);
+  });
+
+  it('falls back to url when urls is unset or empty', async () => {
+    const { resolveSourceUrls } = await import('./git-source');
+    expect(resolveSourceUrls({ source: 'git', url: 'https://github.com/x.git' }))
+      .toEqual(['https://github.com/x.git']);
+    expect(resolveSourceUrls({ source: 'git', url: 'https://github.com/x.git', urls: [] }))
+      .toEqual(['https://github.com/x.git']);
+  });
+
+  it('returns an empty array when no URL is configured', async () => {
+    const { resolveSourceUrls } = await import('./git-source');
+    expect(resolveSourceUrls({ source: 'git' })).toEqual([]);
+    expect(resolveSourceUrls({ source: 'git', urls: [] })).toEqual([]);
+  });
+});
+
 
 /** Directory is "empty" when it only contains empty subdirectories. */
 function readFileSyncDirEmpty(dir: string): boolean {

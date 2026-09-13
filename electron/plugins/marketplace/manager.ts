@@ -17,6 +17,7 @@ import {
   getMarketplaceCloneDir,
   removeMarketplaceClone,
   resolveConfiguredMarketplaceDir,
+  resolveSourceUrls,
   updateMarketplace,
   type MarketplaceSourceConfig,
 } from './git-source';
@@ -30,7 +31,12 @@ const COMPONENT = 'PluginMarketplaceManager' as LogComponent;
 export const DEFAULT_OFFICIAL_MARKETPLACE = 'official';
 export const DEFAULT_OFFICIAL_SOURCE: MarketplaceSourceConfig = {
   source: 'git',
-  url: 'https://github.com/lava-chen/duya-marketplace.git',
+  // Gitee primary (国内 + 海外连接都好), GitHub mirror as fallback.
+  // plan 528 — marketplace source fallback / mirror.
+  urls: [
+    'https://gitee.com/lava-chen/duya-marketplace.git',
+    'https://github.com/lava-chen/duya-marketplace.git',
+  ],
 };
 
 export interface MarketplaceView {
@@ -116,7 +122,7 @@ export async function addMarketplace(input: string, ref?: string): Promise<Marke
     if (configs[provisional]) {
       throw new Error(`marketplace "${provisional}" is already configured`);
     }
-    const result = await cloneMarketplace({ url: parsed.url!, name: provisional, ref: parsed.ref });
+    const result = await cloneMarketplace({ urls: [parsed.url!], name: provisional, ref: parsed.ref });
     try {
       const manifest = readMarketplaceManifest(result.dir);
       if (!manifest) {
@@ -211,21 +217,27 @@ export async function refreshMarketplace(name: string): Promise<MarketplaceView>
     }
   } else {
     const dir = getMarketplaceCloneDir(name);
+    const urls = resolveSourceUrls(cfg);
+    if (urls.length === 0) {
+      throw new Error(`marketplace "${name}" has no clone URL configured`);
+    }
     try {
       if (!fs.existsSync(dir)) {
-        await cloneMarketplace({ url: cfg.url!, name, ref: cfg.ref });
+        await cloneMarketplace({ urls, name, ref: cfg.ref });
       } else {
         await updateMarketplace({ dir, ref: cfg.ref });
       }
     } catch (err) {
       // Stale/broken clone (shallow fetch failure, force-push, ...) —
-      // re-clone from scratch as the codex fallback path.
+      // re-clone from scratch as the codex fallback path. plan 528
+      // extends this so the re-clone walks every mirror, not just the
+      // first URL.
       logger.warn('Marketplace update failed, re-cloning', {
         marketplace: name,
         error: err instanceof Error ? err.message : String(err),
       }, COMPONENT);
       removeMarketplaceClone(name);
-      await cloneMarketplace({ url: cfg.url!, name, ref: cfg.ref });
+      await cloneMarketplace({ urls, name, ref: cfg.ref });
     }
   }
 
@@ -277,7 +289,8 @@ export function ensureOfficialMarketplace(): void {
       addedAt: new Date().toISOString(),
     },
   });
+  const primaryUrl = resolveSourceUrls(DEFAULT_OFFICIAL_SOURCE)[0];
   getLogger().info('Seeded default official marketplace', {
-    url: DEFAULT_OFFICIAL_SOURCE.url,
+    url: primaryUrl,
   }, COMPONENT);
 }
