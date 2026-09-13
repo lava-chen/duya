@@ -111,18 +111,29 @@ export interface CreateProjectDialogSubmit {
   color: string | null;
 }
 
+/** Prefill for edit mode (ProjectsView "编辑项目"). */
+export interface CreateProjectDialogInitial {
+  name?: string;
+  paths?: string[];
+  icon?: string | null;
+  color?: string | null;
+}
+
 export interface CreateProjectDialogProps {
   isOpen: boolean;
   onCancel: () => void;
   /** Called when the user confirms; the parent creates the project entity + thread. */
   onConfirm: (input: CreateProjectDialogSubmit) => void;
+  /** 'edit' prefills from `initial` and relabels the dialog for updates. */
+  mode?: "create" | "edit";
+  initial?: CreateProjectDialogInitial;
 }
 
 function basename(p: string): string {
   return p.split(/[\\/]/).filter(Boolean).slice(-1)[0] ?? p;
 }
 
-export function CreateProjectDialog({ isOpen, onCancel, onConfirm }: CreateProjectDialogProps) {
+export function CreateProjectDialog({ isOpen, onCancel, onConfirm, mode = "create", initial }: CreateProjectDialogProps) {
   const { t } = useTranslation();
   const [name, setName] = useState("");
   const [paths, setPaths] = useState<string[]>([]);
@@ -134,16 +145,21 @@ export function CreateProjectDialog({ isOpen, onCancel, onConfirm }: CreateProje
   const pickerRef = useRef<HTMLDivElement | null>(null);
 
   // Reset state every time the dialog opens, then focus the name field.
+  // Edit mode prefills from `initial` (paths/icon/color fall back to the
+  // create defaults so the picker still works untouched).
   useEffect(() => {
     if (isOpen) {
-      setName("");
-      setPaths([]);
-      setIcon(DEFAULT_PROJECT_ICON);
-      setColor(null);
+      setName(mode === "edit" ? initial?.name ?? "" : "");
+      setPaths(mode === "edit" ? [...(initial?.paths ?? [])] : []);
+      setIcon(mode === "edit" ? initial?.icon ?? DEFAULT_PROJECT_ICON : DEFAULT_PROJECT_ICON);
+      setColor(mode === "edit" ? initial?.color ?? null : null);
       setPickerOpen(false);
       setTimeout(() => inputRef.current?.focus(), 80);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }
-  }, [isOpen]);
+  }, [isOpen, mode, initial]);
+  // `initial` is an object literal from the parent; identity changes would
+  // reset mid-edit, so only reopen-driven props are intentional deps.
 
   // Close the avatar picker on outside mousedown. The popover lives
   // inside the modal DOM (no portal), so a contained-ref check is
@@ -201,7 +217,7 @@ export function CreateProjectDialog({ isOpen, onCancel, onConfirm }: CreateProje
     onConfirm({ name: finalName, paths, icon, color });
   };
 
-  const canSubmit = name.trim().length > 0 || paths.length > 0;
+  const canSubmit = mode === "edit" ? name.trim().length > 0 && paths.length > 0 : name.trim().length > 0 || paths.length > 0;
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !pickingFolder) {
@@ -216,7 +232,7 @@ export function CreateProjectDialog({ isOpen, onCancel, onConfirm }: CreateProje
     <Modal
       open={isOpen}
       onClose={onCancel}
-      title={t("project.createProject")}
+      title={mode === "edit" ? t("projects.editProject") : t("project.createProject")}
       size="sm"
       footer={
         <>
@@ -224,7 +240,7 @@ export function CreateProjectDialog({ isOpen, onCancel, onConfirm }: CreateProje
             {t("common.cancel")}
           </Button>
           <Button onClick={handleConfirm} variant="primary" size="md" disabled={!canSubmit}>
-            {t("project.createProject")}
+            {mode === "edit" ? t("common.save") : t("project.createProject")}
           </Button>
         </>
       }
