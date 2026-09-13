@@ -72,6 +72,10 @@ export interface NormalizedDeclaredCapabilities {
   mcpServers?: string;
   apps?: string;
   hooks?: string;
+  /** Cursor declares sub-agent definitions as a path string. */
+  agents?: string;
+  /** Cursor declares rule files as a path string. */
+  rules?: string;
 }
 
 export interface NormalizedPluginManifest {

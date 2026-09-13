@@ -326,13 +326,48 @@ describe('duya adapter — plugin manifest', () => {
 // ---------------------------------------------------------------------------
 
 describe('cursor adapter', () => {
-  it('normalizes a Cursor plugin manifest via the shared shape', () => {
+  it('hoists top-level displayName/logo/category into the interface block', () => {
+    // Trimmed from cursor/plugins/advisor/.cursor-plugin/plugin.json. Cursor
+    // keeps every presentation field at the TOP LEVEL — there is no
+    // `interface` block at all, which is why cursor needs its own normalizer.
     const out = normalizePluginManifest('.cursor-plugin/plugin.json', {
-      name: 'cursor-thing',
-      description: 'A Cursor plugin',
+      name: 'advisor',
+      displayName: 'Advisor',
+      version: '1.0.0',
+      description: 'Consult a stronger model at key checkpoints.',
+      author: { name: 'Cursor', email: 'plugins@cursor.com' },
+      homepage: 'https://github.com/cursor/plugins/tree/main/advisor',
+      repository: 'https://github.com/cursor/plugins',
+      license: 'MIT',
+      logo: 'assets/avatar.png',
+      category: 'developer-tools',
+      keywords: ['advisor', 'second-opinion'],
+      tags: ['agents', 'quality'],
+      skills: './skills/',
+      agents: './agents/',
+      rules: './rules/',
     });
-    expect(out.name).toBe('cursor-thing');
-    expect(out.version).toBe('0.0.0');
+    expect(out.name).toBe('advisor');
+    expect(out.version).toBe('1.0.0');
+    expect(out.author).toEqual({ name: 'Cursor', email: 'plugins@cursor.com' });
+    expect(out.license).toBe('MIT');
+    expect(out.keywords).toEqual(['advisor', 'second-opinion']);
+    expect(out.interface?.displayName).toBe('Advisor');
+    expect(out.interface?.category).toBe('developer-tools');
+    expect(out.interface?.icon).toBe('assets/avatar.png');
+    expect(out.declared).toEqual({
+      skills: './skills/',
+      agents: './agents/',
+      rules: './rules/',
+    });
+  });
+
+  it('maps a bare (no ./) catalog source to a local path', () => {
+    // cursor/plugins/.cursor-plugin/marketplace.json uses bare strings.
+    expect(normalizeCatalogSource('teaching')).toEqual({
+      source: 'local',
+      path: 'teaching',
+    });
   });
 
   it('is reachable by id', () => {

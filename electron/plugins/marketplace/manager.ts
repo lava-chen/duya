@@ -22,40 +22,88 @@ import {
   type MarketplaceSourceConfig,
 } from './git-source';
 import { readMarketplaceManifest } from './manifest';
-import { getMarketplaceStatuses, readConfigMarketplaces } from '../catalog';
+import { getMarketplaceStatuses, invalidatePluginCatalogCache, readConfigMarketplaces } from '../catalog';
 
 const COMPONENT = 'PluginMarketplaceManager' as LogComponent;
 
-/** Plan 455 D6 — the pre-seeded official marketplace. Sync failures are
+/**
+ * A pre-seeded official marketplace: the config key to seed it under, plus
+ * the source itself.
+ *
+ * `registryName` is the key written under `[marketplaces]` in config.toml.
+ * It is stable — changing it would orphan an existing user's clone — so it is
+ * declared explicitly instead of being derived from the display name.
+ */
+export interface OfficialMarketplaceSeed {
+  registryName: string;
+  source: MarketplaceSourceConfig;
+}
+
+/** Plan 455 D6 — the pre-seeded official marketplaces. Sync failures are
  *  WARN-only so first launch works offline.
- *  Plan 529: there are now two default sources seeded together — the
- *  legacy DUYA official (gitee primary, github mirror, plan 528) and
- *  Anthropic's `claude-plugins-official`. They appear as separate tabs
- *  in the UI; the catalog layer dedups by plugin id (first-wins). */
-export const DEFAULT_OFFICIAL_MARKETPLACE = 'official';
-export const DEFAULT_OFFICIAL_SOURCES: ReadonlyArray<MarketplaceSourceConfig> = [
+ *
+ *  Plan 529 seeded two (DUYA + Claude Code). Plan 531 adds Codex and Cursor
+ *  now that the format adapter layer can read their catalogs:
+ *
+ *    DUYA        gitee primary + github mirror (plan 528)
+ *    Claude Code anthropics/claude-plugins-official   (295 plugins)
+ *    Codex       openai/plugins                       (65 plugins)
+ *    Cursor      cursor/plugins                       (78 plugins)
+ *
+ *  Each appears as its own tab. The catalog layer dedups by plugin id
+ *  (first-wins), so DUYA's own entries take precedence over overlaps. */
+export const DEFAULT_OFFICIAL_SOURCES: ReadonlyArray<OfficialMarketplaceSeed> = [
   {
-    source: 'git',
-    displayName: 'DUYA Official',
-    // Gitee primary (国内 + 海外连接都好), GitHub mirror as fallback.
-    // plan 528 — marketplace source fallback / mirror.
-    urls: [
-      'https://gitee.com/lava-chen/duya-marketplace.git',
-      'https://github.com/lava-chen/duya-marketplace.git',
-    ],
+    registryName: 'official',
+    source: {
+      source: 'git',
+      displayName: 'DUYA Official',
+      // Gitee primary (国内 + 海外连接都好), GitHub mirror as fallback.
+      // plan 528 — marketplace source fallback / mirror.
+      urls: [
+        'https://gitee.com/lava-chen/duya-marketplace.git',
+        'https://github.com/lava-chen/duya-marketplace.git',
+      ],
+    },
   },
   {
-    source: 'git',
-    displayName: 'Claude Code Official',
-    // anthropics/claude-plugins-official — Anthropic-managed, 36.2k
-    // stars, Apache 2.0, the canonical Claude Code plugin directory.
-    // plan 529 — second seeded marketplace.
-    urls: ['https://github.com/anthropics/claude-plugins-official.git'],
+    registryName: 'claude-plugins-official',
+    source: {
+      source: 'git',
+      displayName: 'Claude Code Official',
+      // anthropics/claude-plugins-official — Anthropic-managed, 36.2k stars,
+      // Apache 2.0. Catalog: .claude-plugin/marketplace.json.
+      urls: ['https://github.com/anthropics/claude-plugins-official.git'],
+    },
+  },
+  {
+    registryName: 'codex-official',
+    source: {
+      source: 'git',
+      displayName: 'Codex Official',
+      // openai/plugins — OpenAI-managed. Catalog:
+      // .agents/plugins/marketplace.json (65 plugins; UPPERCASE policy enums,
+      // folded by registry.normalizeCatalogPolicy).
+      urls: ['https://github.com/openai/plugins.git'],
+    },
+  },
+  {
+    registryName: 'cursor-official',
+    source: {
+      source: 'git',
+      displayName: 'Cursor Official',
+      // cursor/plugins — Cursor-managed ("plugin specification and official
+      // plugins"). Catalog: .cursor-plugin/marketplace.json (78 plugins;
+      // top-level displayName/logo presentation fields).
+      urls: ['https://github.com/cursor/plugins.git'],
+    },
   },
 ];
+/** Legacy key for the first (duya) source. */
+export const DEFAULT_OFFICIAL_MARKETPLACE = 'official';
 /** Back-compat shim: legacy code that imports the singular form. */
 export const DEFAULT_OFFICIAL_SOURCE: MarketplaceSourceConfig =
-  DEFAULT_OFFICIAL_SOURCES[0];
+  DEFAULT_OFFICIAL_SOURCES[0].source;
 
 export interface MarketplaceView {
   name: string;
@@ -179,6 +227,7 @@ export async function addMarketplace(input: string, ref?: string): Promise<Marke
     ...configs,
     [name]: { ...stored, addedAt: new Date().toISOString() },
   });
+  invalidatePluginCatalogCache();
   logger.info('Marketplace added', { name, kind: stored.source }, COMPONENT);
 
   const view = listMarketplaces().find((m) => m.name === name);
@@ -212,6 +261,7 @@ export function removeMarketplace(name: string): void {
   const next = { ...configs };
   delete next[name];
   writeConfigMarketplaces(next);
+  invalidatePluginCatalogCache();
 
   getLogger().info('Marketplace removed', { name }, COMPONENT);
 }
@@ -259,6 +309,10 @@ export async function refreshMarketplace(name: string): Promise<MarketplaceView>
     }
   }
 
+  // Clone contents changed on disk — the catalog must not serve the
+  // pre-refresh memoized list (a fast re-clone can land inside the 5s TTL).
+  invalidatePluginCatalogCache();
+
   const view = listMarketplaces().find((m) => m.name === name);
   if (!view) {
     throw new Error(`marketplace "${name}" vanished during refresh`);
@@ -291,25 +345,23 @@ export async function syncAllMarketplaces(): Promise<MarketplaceSyncOutcome[]> {
 }
 
 /**
- * Seed the default official marketplace into `[marketplaces]` if absent
- * (Plan 455 user decision 2 + plan 529). No network I/O — the startup
+ * Seed the default official marketplaces into `[marketplaces]` if absent
+ * (Plan 455 user decision 2 + plans 529/531). No network I/O — the startup
  * sync performs the first clone and tolerates failure.
  *
- * Idempotent: existing entries are never overwritten so a user who has
- * manually removed a default source keeps their choice. The legacy
- * registry key 'official' is kept for back-compat with users who
- * already have it in config.toml; the Anthropic marketplace uses the
- * new 'claude-plugins-official' key.
+ * Idempotent: an existing entry is never overwritten, so a user who has
+ * manually removed a default source keeps their choice. Registry keys are
+ * declared on each seed (`OfficialMarketplaceSeed.registryName`) — the
+ * legacy 'official' key is preserved so existing config.toml files keep
+ * working, and each newly added ecosystem gets a key of its own.
  */
 export function ensureOfficialMarketplace(): void {
   const configs = readConfigMarketplaces();
   const seeded: Array<{ name: string; url: string }> = [];
-  for (let i = 0; i < DEFAULT_OFFICIAL_SOURCES.length; i++) {
-    const source = DEFAULT_OFFICIAL_SOURCES[i];
-    const name = i === 0 ? DEFAULT_OFFICIAL_MARKETPLACE : 'claude-plugins-official';
-    if (configs[name]) continue;
-    configs[name] = { ...source, addedAt: new Date().toISOString() };
-    seeded.push({ name, url: resolveSourceUrls(source)[0] });
+  for (const { registryName, source } of DEFAULT_OFFICIAL_SOURCES) {
+    if (configs[registryName]) continue;
+    configs[registryName] = { ...source, addedAt: new Date().toISOString() };
+    seeded.push({ name: registryName, url: resolveSourceUrls(source)[0] });
   }
   if (seeded.length === 0) return;
   writeConfigMarketplaces(configs);
