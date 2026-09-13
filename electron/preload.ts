@@ -780,6 +780,40 @@ export interface BrowserExtensionAPI {
   denyPending: () => Promise<{ success: boolean; status?: BrowserExtensionStatus; error?: string }>
 }
 
+export type LocalInstallState =
+  | 'not-installed'
+  | 'installed-current'
+  | 'installed-outdated'
+  | 'unsupported';
+
+export interface DetectLocalExtensionResult {
+  state: LocalInstallState;
+  expectedVersion: string;
+  installedVersion: string | null;
+  expectedPath: string | null;
+  installedIn: string[];
+}
+
+export interface InstallLocalExtensionResult {
+  ok: boolean;
+  error?: string;
+  registryKeysWritten: string[];
+  expectedPath: string;
+  expectedVersion: string;
+}
+
+export interface UninstallLocalExtensionResult {
+  ok: boolean;
+  error?: string;
+  registryKeysRemoved: string[];
+}
+
+export interface BrowserExtensionInstallerAPI {
+  detect: () => Promise<DetectLocalExtensionResult>
+  install: () => Promise<InstallLocalExtensionResult>
+  uninstall: () => Promise<UninstallLocalExtensionResult>
+}
+
 export interface BrowserWebviewAPI {
   registerWebview: (sessionId: string, webContentsId: number) => Promise<{ ok: boolean; error?: string }>
   unregisterWebview: (sessionId: string) => Promise<{ ok: boolean; error?: string }>
@@ -1304,6 +1338,7 @@ export interface ElectronAPI {
   git: GitAPI
   weixin: WeixinAccountAPI
   browserExtension: BrowserExtensionAPI
+  browserExtensionInstaller: BrowserExtensionInstallerAPI
   browserWebview: BrowserWebviewAPI
   browserCookie: BrowserCookieAPI
   browserBackend: BrowserBackendAPI
@@ -2354,6 +2389,11 @@ const electronAPI: ElectronAPI = {
     getExtensionPath: () => ipcRenderer.invoke('browser-extension:get-path'),
     approvePending: () => ipcRenderer.invoke('browser-extension:approve-pending'),
     denyPending: () => ipcRenderer.invoke('browser-extension:deny-pending'),
+  },
+  browserExtensionInstaller: {
+    detect: () => ipcRenderer.invoke('extensionInstaller:detect'),
+    install: () => ipcRenderer.invoke('extensionInstaller:install'),
+    uninstall: () => ipcRenderer.invoke('extensionInstaller:uninstall'),
   },
   browserWebview: {
     registerWebview: (sessionId: string, webContentsId: number) =>

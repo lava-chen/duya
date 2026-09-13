@@ -4,6 +4,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from '@/hooks/useTranslation';
+import { useBrowserExtension } from '@/hooks/useBrowserExtension';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
 import { 
@@ -68,11 +69,17 @@ export function ExtensionInstallPrompt({
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [storeAvailable, setStoreAvailable] = useState<boolean | null>(null);
   const [checkingStore, setCheckingStore] = useState(false);
+  const [oneClickBusy, setOneClickBusy] = useState(false);
+  const [oneClickError, setOneClickError] = useState<string | null>(null);
+  const { localInstall, installLocal, refreshLocalStatus } = useBrowserExtension({
+    autoCheck: false,
+  });
 
   useEffect(() => {
     if (isOpen) {
       setShowManualInstall(false);
       setStoreAvailable(null);
+      setOneClickError(null);
       setCheckingStore(true);
       // Check store availability in background
       checkStoreAvailabilityInternal().then((available) => {
@@ -83,8 +90,11 @@ export function ExtensionInstallPrompt({
           setShowManualInstall(true);
         }
       });
+      // Refresh local install state so the one-click panel reflects
+      // the latest registry detection.
+      void refreshLocalStatus();
     }
-  }, [isOpen]);
+  }, [isOpen, refreshLocalStatus]);
 
   useEffect(() => {
     if (isOpen && showManualInstall) {
@@ -168,6 +178,24 @@ export function ExtensionInstallPrompt({
       await navigator.clipboard.writeText(extensionPath);
       setCopyFeedback(true);
       setTimeout(() => setCopyFeedback(false), 2000);
+    }
+  };
+
+  const handleOneClickInstall = async () => {
+    setOneClickBusy(true);
+    setOneClickError(null);
+    try {
+      const result = await installLocal();
+      if (result.ok) {
+        // Force a re-detection so the UI shows the post-install state.
+        await refreshLocalStatus();
+      } else {
+        setOneClickError(result.error ?? 'Install failed');
+      }
+    } catch (error) {
+      setOneClickError((error as Error).message);
+    } finally {
+      setOneClickBusy(false);
     }
   };
 
@@ -277,6 +305,64 @@ export function ExtensionInstallPrompt({
               </p>
             </div>
           </div>
+
+          {/* One-click local install (HKCU registry) */}
+          {localInstall && localInstall.state !== 'installed-current' && localInstall.state !== 'unsupported' && (
+            <div
+              className="mb-5 p-4 rounded-xl"
+              style={{
+                backgroundColor: 'rgba(94, 109, 255, 0.06)',
+                border: '1px solid rgba(94, 109, 255, 0.25)',
+              }}
+            >
+              <div className="flex items-start gap-3 mb-3">
+                <ChromeIcon size={18} style={{ color: 'var(--accent)' }} />
+                <div className="flex-1">
+                  <p className="text-xs font-semibold mb-1" style={{ color: 'var(--text)' }}>
+                    {t('extensionInstall.oneClickTitle') || 'One-click local install (Recommended in China)'}
+                  </p>
+                  <p className="text-[11px]" style={{ color: 'var(--muted)' }}>
+                    {localInstall.state === 'installed-outdated'
+                      ? (t('extensionInstall.oneClickUpdateDesc') ||
+                          `DUYA ships v${localInstall.expectedVersion} but the registry has v${localInstall.installedVersion}. Click to update the registry entry.`)
+                      : (t('extensionInstall.oneClickInstallDesc') ||
+                          'Writes the extension path to HKCU. Chrome / Edge will load it on next browser start. No admin rights required.')}
+                  </p>
+                </div>
+              </div>
+              {oneClickError && (
+                <p
+                  className="text-[11px] mb-2 px-2 py-1.5 rounded"
+                  style={{ backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#dc2626' }}
+                >
+                  {oneClickError}
+                </p>
+              )}
+              <Button
+                variant="primary"
+                size="md"
+                onClick={handleOneClickInstall}
+                disabled={oneClickBusy}
+                className="w-full rounded-xl gap-2 hover:opacity-90"
+                style={{ background: 'linear-gradient(140deg, #5f71ff, #7286ff)' }}
+              >
+                {oneClickBusy
+                  ? (t('extensionInstall.oneClickInstalling') || 'Installing…')
+                  : localInstall.state === 'installed-outdated'
+                    ? (t('extensionInstall.oneClickUpdate') || `Update registry to v${localInstall.expectedVersion}`)
+                    : (t('extensionInstall.oneClickInstall') || 'Install Locally')}
+                <ArrowRightIcon size={14} />
+              </Button>
+              {localInstall.expectedPath && (
+                <p className="text-[10px] mt-2 font-mono truncate" style={{ color: 'var(--muted)' }}>
+                  {t('extensionInstall.oneClickPathLabel') || 'Target:'} {localInstall.expectedPath}
+                </p>
+              )}
+              <p className="text-[10px] mt-1" style={{ color: 'var(--muted)' }}>
+                {t('extensionInstall.oneClickRestartHint') || 'Restart Chrome / Edge after clicking.'}
+              </p>
+            </div>
+          )}
 
           {/* Installation steps */}
           <div className="mb-6">
