@@ -8,6 +8,7 @@ import { MessageItem } from './MessageItem';
 import { StreamingMessage } from './StreamingMessage';
 import { NextStepSuggestions } from './NextStepSuggestions';
 import { Button } from '@/components/ui/Button';
+import { ChevronDownIcon } from '@/components/icons';
 import { useFocusModeStore, selectFocusEnabled } from '@/stores/focus-mode-store';
 
 export interface MessageListRef {
@@ -899,6 +900,42 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     return -1;
   }, [groupedMessages]);
 
+  // Plan 532: count user messages added while the user is scrolled away
+  // from the bottom. Drives the unread badge on the jump-to-latest button
+  // so the user knows how many new turns have landed since they froze.
+  const [unreadTurns, setUnreadTurns] = useState(0);
+  const lastSeenUserCountRef = useRef(0);
+
+  // Keep the counter in sync with the actual user-message count.
+  useEffect(() => {
+    const totalUsers = groupedMessages.filter((g) => g.message.role === 'user').length;
+    const seen = lastSeenUserCountRef.current;
+    if (totalUsers > seen) {
+      // If the user is at the bottom, the new turn is already visible — no badge.
+      if (autoScrollRef.current) {
+        lastSeenUserCountRef.current = totalUsers;
+        if (unreadTurns !== 0) setUnreadTurns(0);
+      } else {
+        const delta = totalUsers - seen;
+        lastSeenUserCountRef.current = totalUsers;
+        setUnreadTurns((prev) => prev + delta);
+      }
+    } else if (totalUsers < seen) {
+      // Session switch / rewind resets both refs and the badge.
+      lastSeenUserCountRef.current = totalUsers;
+      if (unreadTurns !== 0) setUnreadTurns(0);
+    }
+  }, [groupedMessages, unreadTurns]);
+
+  const handleJumpToLatest = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+    autoScrollRef.current = true;
+    setIsScrolledUp(false);
+    setUnreadTurns(0);
+  }, []);
+
   // Track session changes and reset scroll state
   useEffect(() => {
     const isSessionChanged = prevSessionIdRef.current !== sessionId;
@@ -911,6 +948,8 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
       autoScrollRef.current = true;
       rowHeightsRef.current.clear();
       lastActiveNavUpdateRef.current = 0;
+      lastSeenUserCountRef.current = 0;
+      setUnreadTurns(0);
       setActiveMessageId(null);
       setIsInitialLoading(true);
     }
@@ -991,22 +1030,48 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     scrollToBottomRef.current = scrollToBottom;
   }, [scrollToBottom]);
 
-  // Scroll to bottom when messages are first loaded (after session switch or initial load)
-  // Runs once on mount and when messages array becomes non-empty.
-  // Uses scrollToBottomRef to avoid re-creating the effect when scrollToBottom changes.
+  // Plan 532: Scroll to bottom when messages are first loaded.
+  //
+  // Two timing hazards force us to do this in stages instead of one shot:
+  //
+  //   1. LazyMessageRow (line ~320) uses IntersectionObserver + the
+  //      `contentVisibility: auto` placeholder. At mount time only the
+  //      trailing `ALWAYS_RENDER_TRAILING_ROWS` rows are in the DOM, so
+  //      `container.scrollHeight` is far smaller than the eventual height
+  //      of the full transcript.
+  //   2. The IO callback fires asynchronously (microtask + next frame) and
+  //      each newly-realised row mutates `scrollHeight`. Without a follow-up
+  //      scroll, the user lands partway up and the rest of the rows render
+  //      above the visible area — which is exactly the "scrolls to top and
+  //      you can't scroll down" complaint that motivates this plan.
+  //
+  // Strategy: do the synchronous jump immediately so the user sees content
+  // pinned to the bottom on the first frame, then schedule one rAF follow-up
+  // to catch the rows that IO realised after commit. The follow-up is gated
+  // by `autoScrollRef` so it never fights a user who is actively scrolling.
   useLayoutEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
-    // Only scroll when we have messages and haven't scrolled yet for this session
     if (messages.length > 0 && !hasScrolledOnMountRef.current) {
       hasScrolledOnMountRef.current = true;
-      // Scroll immediately without animation to prevent visible scrolling
+      // Synchronous first paint — place the visible content at the bottom.
       container.scrollTop = container.scrollHeight;
       autoScrollRef.current = true;
-      // Show content after scroll is done — layout is correct now
       setIsInitialLoading(false);
+
+      // rAF follow-up: catch LazyMessageRow IO callbacks that landed after
+      // commit. We re-read scrollHeight on the next frame and, if the user
+      // is still pinned to the bottom, snap to the new bottom. Idempotent —
+      // ResizeObserver continues to handle streaming growth past this point.
+      const rafId = requestAnimationFrame(() => {
+        const el = containerRef.current;
+        if (!el || !autoScrollRef.current) return;
+        el.scrollTop = el.scrollHeight;
+      });
+      return () => cancelAnimationFrame(rafId);
     }
+    return undefined;
   }, [messages.length]);
 
   useImperativeHandle(ref, () => ({
@@ -1026,25 +1091,23 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
       return;
     }
 
-    // New user message detected — only scroll if user is NOT at bottom.
-    // When autoScrollRef is true the user already sees the bottom; the new
-    // message arrives in-place without any scroll. When false the user has
-    // scrolled away and should NOT be yanked back.
+    // Plan 532: aligned with BotDirectChatView (plan 491 P0.4) — never use
+    // `scrollIntoView({ block: 'nearest' })` to "rescue" the viewport when the
+    // user is scrolled away. That call scrolls the container so the target
+    // sits at the nearest viewport edge, which the user perceives as the
+    // list jumping several hundred pixels upward. Instead:
+    //   - If user is at the bottom (`autoScrollRef === true`), just snap down.
+    //   - If user is scrolled away, do nothing — they have the jump-to-latest
+    //     button (and unread badge) to come back on their own terms.
     if (messages.length > prevMessagesLengthRef.current) {
       const lastMsg = messages[messages.length - 1];
-      if (lastMsg.role === 'user' && userMessageIdRef.current !== lastMsg.id) {
+      if (lastMsg.role === 'user') {
+        // Record the user-message id so the counter stays monotonic across
+        // re-renders; no scroll action here.
         userMessageIdRef.current = lastMsg.id;
-        // Only scroll if user is not already at the bottom.
-        if (!autoScrollRef.current) {
-          requestAnimationFrame(() => {
-            const target = document.getElementById(`message-row-${sessionId}-${lastMsg.id}`);
-            if (target && container.contains(target)) {
-              target.scrollIntoView({ block: 'nearest', behavior: 'instant' as ScrollBehavior });
-            }
-          });
-        }
       } else if (autoScrollRef.current) {
-        // Non-user message added — scroll to bottom only if user is already there
+        // Non-user (assistant/tool) delta — only follow if user is already
+        // pinned to the bottom.
         scrollToBottom();
       }
     }
@@ -1148,6 +1211,30 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
         aria-hidden="true"
         className="pointer-events-none absolute inset-x-0 bottom-0 z-30 h-14 bg-gradient-to-t from-[var(--main-bg)] to-transparent animate-in fade-in duration-200"
       />
+    )}
+
+    {/* Jump-to-latest button — appears when the user is scrolled away from
+        the bottom. Mirrors BotDirectChatView's `.bot-chat-jump-to-latest`
+        so the two transcript UIs feel identical. The optional unread badge
+        shows how many user turns landed while the user was frozen. */}
+    {isScrolledUp && (
+      <button
+        type="button"
+        onClick={handleJumpToLatest}
+        className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40 inline-flex items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--surface-solid)] px-3 py-1.5 text-xs font-medium text-[var(--muted)] shadow-sm hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-colors animate-in fade-in slide-in-from-bottom-2 duration-200"
+        aria-label="Jump to latest message"
+      >
+        <ChevronDownIcon size={14} strokeWidth={2.25} />
+        <span>Jump to latest</span>
+        {unreadTurns > 0 && (
+          <span
+            className="ml-0.5 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-[var(--accent)] px-1 text-[10px] font-semibold text-white"
+            aria-label={`${unreadTurns} new turn${unreadTurns === 1 ? '' : 's'}`}
+          >
+            {unreadTurns > 99 ? '99+' : unreadTurns}
+          </span>
+        )}
+      </button>
     )}
     </div>
   );
