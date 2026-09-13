@@ -121,8 +121,9 @@ platform. Two data flows:
   `forwardInbound`, Feishu/Weixin/TG deep adapters) download media to temp
   cache; the main process persists each to stable storage via
   `electron/channels/attachment-store.ts` →
-  `<userData>/agents/<ownerId>/attachments/inbound/<platform>/<ts>_<name>`
-  (atomic write, per-kind size caps mirroring `attachment-builder.ts`, traveral
+  `~/.duya/agents/<ownerId>/attachments/inbound/<platform>/<ts>_<name>`
+  (shared agents root, plan 526; atomic write, per-kind size caps mirroring
+  `attachment-builder.ts`, traveral
   guard on owner/platform/name). The `ChannelInboundEnvelope.attachments`
   (`packages/agent/src/channels/types.ts`) feeds
   `packages/agent/src/channels/prompts.ts`, which renders
@@ -278,6 +279,35 @@ Separate SQLite file (`memory-state.db`, next to `duya-main.db` in the same boot
 - `packages/agent/src/mcp/` - MCP server integration
 - Tool protocol adapter layer (Plan 418)
 
+#### Four-Tier Tool Exposure
+
+Every registered tool carries an `ExposeMode`
+(`packages/agent/src/tool/registry.ts`) that decides how the model sees it.
+All discovery/invocation paths funnel through one set of rules:
+
+| Tier | ExposeMode | Request tools array | Discovery | Invocation |
+| ---- | ---------- | ------------------- | --------- | ---------- |
+| T1 | `always` | full schema entry | n/a (declared) | direct call |
+| T2 | `hint` | stub entry: name + description + argument summary, empty schema (`tool/hint-stub.ts`) | full schema via `tool_schema` | direct call |
+| T3 | `discoverable` | absent until found | `tool_search` hit → schema appended as a conversation-tail block (`agent/tool-search-discovery.ts`) | `tool_invoke` |
+| T4 | `hidden` | never | invisible to `tool_search` and the `tool_schema` catalog | unreachable by the model |
+
+Key wiring:
+
+- Visibility policy: `isToolVisible` (`agent-profile/ToolFilter.ts`) — deny
+  wins over allow; an exact allowlist entry promotes a `discoverable` tool
+  (plan 496); `hidden` is never promotable.
+- MCP tier: `[tools] exposure = "full" \| "hint" \| "search"` in
+  `config.toml` maps to `always` / `hint` / `discoverable`
+  (`config/tool-exposure.ts`); default `hint`, legacy `catalog` normalizes
+  to `hint`.
+- Guard: a model call to a name not declared on the request's tools array
+  is always rejected (`tool/visibility-guard.ts`), pointing the model at
+  `tool_search` → `tool_schema` → `tool_invoke`. Compaction may promote the
+  discovered set into the array at runtime (`discoveredPromotedToToolList`)
+  — the sole array-merge path after the config-driven `array` delivery was
+  retired.
+
 ### Mode System (Plan 224)
 
 Modes are declarative `ModeModifier` objects:
@@ -298,6 +328,16 @@ Single grok-style strategy in `packages/agent/src/compact/` (`micro`/`snip`/`rea
 - **Summary prompt**: 9 structured sections wrapped in `<summary>`, tool use disabled, prior summary carried forward as authoritative.
 - **Robustness**: tool-call sanitize/validate (orphan ToolResult stripping, `historySanitize.ts`), degenerate-summary detection (<500 chars retry, `summaryGuard.ts`), Deterministic/Transient/Cancelled error classification with scope suppression, input ladder (Verbatim → Fitted → Lossy), wall-clock budget, dedicated `compact_model`, memory flush.
 - **Storage**: append-only `CompactionEntry` (Plan 315) + rollout JSONL full retention (Plan 441). Original history is always recoverable from rollouts, so no separate segment/transcript store (won't-fix decision, plan 422 P3.4).
+### Compaction Loop Brake + Capability Audit (Plan 517)
+
+Three surgical fixes layered on top of the Plan 422 / Plan 495 stack after a user-reported compaction-loop bug in 2026-09-10:
+
+- **Capability resolution audit log** (`electron/services/providers/provider-store.ts:resolveRuntimeCapability`): the silent `DEFAULT_CONTEXT_WINDOW = 200_000` fallback (`packages/agent/src/compact/types.ts`) was hidden from users on 1M-context models whose id is not in `allProviderModels` (custom OpenRouter-style ids, third-party relays). Each call now emits an info-level audit line with `{ providerId, modelId, contextWindow, source: 'config' | 'db' | 'preset' }` on the three success branches and a warn-level line with `{ providerId, modelId, apiFormat }` plus a concrete pointer to `[options].model_context[modelId]` in `config.toml` when all three layers miss. `DuyaAgent`'s constructor mirrors the same warn with `{ runtimeConfigHasCapabilities, model, apiFormat }`. Users can `grep 'fallback to 200000' app.log` and recover in one step. Override priority: `config.options.model_context[modelId]` > DB row > built-in `allProviderModels`.
+- **Turn-based + token-based cooldown** (`packages/agent/src/agent/DuyaAgent.ts:1594`, gates `imageTriggered || compactionController.shouldCompact()`): the proactive checkpoint now skips when `turnsSinceLastCompact < MIN_TURNS_SINCE_COMPACT (3)` OR `tokensGrowthSinceCompact < MIN_TOKENS_GROWTH_SINCE_COMPACT (30_000)`. Cooldown baseline pins on every successful proactive compaction via the new `lastCompactionTurn` and `lastCompactionObservedTokens` instance fields. The Pi/grok-style design lets the agent run at least three tool-use turns after each compaction; image-volume triggers (`compact/imageParts.ts`, Plan 495) bypass the gate so multimodal floods are still handled immediately.
+- **`overThresholdAfterCompact` becomes an active loop brake** (`packages/agent/src/compact/CompactionManager.ts:compact`): the flag that Plan 422 computed but never consumed is now wired. When `overThresholdAfterCompact === true` (e.g. system prompt + reinject overshoot), `suppression.trySuppress('size')` fires and a new `compaction_over_threshold` event emits with `{ tokensRetained, available }`. The next `shouldCompact()` returns false at the existing suppression gate until a future successful compaction shrinks `finalTokens` below `available` — breaking the loop where Plan 422 ran every other turn because the post-compaction context kept re-crossing the threshold. `Suppression.trySuppress(type): boolean` (idempotent, mirrors the 5-state `CompactSuppression` design) was added to the legacy 3-state machine actually used by `CompactionManager`; the 5-state API in `compactErrors.ts` remains test-only and is documented in the new comment.
+- **Per-step lifecycle events** (`packages/agent/src/compact/CompactionManager.ts` + `packages/agent/src/process/worker-protocol.ts` + `src/lib/stream-session-manager.ts` + `src/stores/compaction-store.ts`): a new `compaction_step` event (`projecting | cutting | summarizing | rebuilding | reinjecting | trimming`, `started | finished`) plus `compaction_over_threshold` flow as `compact:step` and `compact:over_threshold` SSE frames. The renderer mirrors them into the `compaction-store` (`CompactionPhase` union extended) and into the inline `CompactSummary` row, replacing the legacy single-spinner `'Compacting context...'` with `Summarizing 32 messages...`, `Re-injecting files, skills and tools (6 cached)...`, `Trimming — still over budget`, etc. i18n keys live in `src/i18n/en.ts` / `src/i18n/zh.ts` under `streaming.toolAction.compact.step.{phase}`. `ActionRowChrome` accepts a `verbText?: string` precedence over `verbKey` for callers that need interpolation variables. `@duya/ai`'s `SSEEvent` union gained the four `compact:*` frame types so the legacy `as unknown as SSEEvent` casts in `DuyaAgent.ts` could finally be removed at a future cleanup.
+
+### Long-Session Parity Additions (Plan 495)
 
 ### Compaction Loop Brake + Capability Audit (Plan 517)
 
@@ -354,6 +394,25 @@ Write paths, all converging on profile.json:
 
 - **UI edit** (`EditBotDialog` / `BotSettingsPanel`, shared `useBotContactForm`): identity via `config:agents:updateBotProfile` → `updateBotProfileIdentity`; avatar image upload via `config:agents:uploadBotAvatar` (file dialog + copy in the main process) and `config:agents:clearBotAvatarImage`.
 - **Model self-edit** (`update_state` profile.set / avatar.set / avatar.clear): routed through the `bot-identity:rpc` channel (agent subprocess → agent-server-lifecycle → `electron/config/bot-identity-rpc.ts`), which binds the subaction to the session's `bot:<agentId>` identity (a bot can only edit its own profile), validates color tokens and image sources, and calls the same identity writers. `avatar.set` accepts `avatarColor` and/or `avatarImagePath` (e.g. the model's own `image_generate` output; validated extension whitelist + 5 MB cap + magic bytes, then copied to `agents/<id>/avatar.<ext>` by `setBotAvatarImage`).
+
+### Shared Agents Root (Plan 526)
+
+The ENTIRE `agents/<agentId>/` tree — identity (profile.json, settings.json,
+avatar), sessions, memory shards, skills AND the channels subsystem
+(`channels/<platform>/connection.json`, `connector-secrets/<platform>.json`,
+`gateway/weixin/` state, `attachments/inbound/`) — lives under the shared
+`<duyaRoot>/agents` root (`~/.duya/agents`), resolved via
+`getSharedAgentsRoot()` (`electron/config/agent-paths.ts` →
+`ConfigStore.getConfigDir()`). This is what makes a bot fully portable
+across dev and packaged installs: previously channel bindings lived under
+`<userData>/agents/`, which is namespaced per install mode (`duya-dev` vs
+packaged), so a packaged app could never see bindings configured in dev.
+The worker already read `connection.json` from the shared root
+(`packages/agent/src/prompts/bot/loader.ts`), so main and worker now agree.
+At boot, `electron/channels/legacy-root-migration.ts` merges any remaining
+`<userData>/agents/*` channel data into the shared root (per-file,
+target-exists wins, source kept). Soft delete/hard delete of a bot moves or
+removes the whole directory, so credentials are purged with the bot.
 
 ### Bot Routines & Event Listeners (Plan 499, 476 P2.3b/P2.3d)
 

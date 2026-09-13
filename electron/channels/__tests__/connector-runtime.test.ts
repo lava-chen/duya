@@ -3,8 +3,8 @@
  * outbound must reuse the live adapter instance; this registry is how
  * `channelDelivery` prefers it over stateless HTTP transports.
  *
- * Electron's `app.getPath('userData')` is mocked to a temp dir so the module
- * (and its fs-backed secret store) loads without touching real user data.
+ * A temp ConfigStore is injected (plan 526 shared agents root) and electron's
+ * app is mocked so the module chain never touches real user data.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
@@ -12,12 +12,14 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-// Mock electron USER DATA away from the real app data before importing.
+// Mock electron away from the real app data before importing.
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-runtime-test-'));
 vi.mock('electron', () => ({
   app: { getPath: () => userData },
 }));
 
+import { ConfigStore } from '../../config/store';
+import { _setConfigStoreForTest } from '../../config/store-instance';
 import {
   registerLiveOutbound,
   unregisterLiveOutbound,
@@ -26,8 +28,26 @@ import {
 } from '../connector-runtime';
 import type { ChannelOutboundMessage } from '../../../packages/agent/src/channels/types';
 
+_setConfigStoreForTest(
+  new ConfigStore({
+    configPath: path.join(userData, 'config.toml'),
+    secretsPath: path.join(userData, 'secrets.json'),
+  }),
+);
+
 describe('connector-runtime live outbound registry', () => {
+  beforeEach(() => {
+    // Re-inject per test: other suites in the same worker may reset it.
+    _setConfigStoreForTest(
+      new ConfigStore({
+        configPath: path.join(userData, 'config.toml'),
+        secretsPath: path.join(userData, 'secrets.json'),
+      }),
+    );
+  });
+
   afterEach(() => {
+    _setConfigStoreForTest(undefined);
     fs.rmSync(userData, { recursive: true, force: true });
   });
 

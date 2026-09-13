@@ -13,9 +13,9 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { app } from 'electron';
 
 import type { ConnectorSecretRecord } from '../../packages/agent/src/channels/types';
+import { getSharedAgentsRoot } from '../config/agent-paths';
 
 // =============================================================================
 // Path resolution
@@ -23,18 +23,18 @@ import type { ConnectorSecretRecord } from '../../packages/agent/src/channels/ty
 
 /**
  * Resolve the connector-secrets root for a specific agent.
- * `<userData>/agents/<agentId>/connector-secrets/`
+ * `~/.duya/agents/<agentId>/connector-secrets/` (plan 526 shared root)
  */
 function resolveAgentSecretsDir(agentId: string): string {
   if (!agentId || agentId.includes(path.sep) || agentId.includes('/')) {
     throw new Error(`Invalid agentId: "${agentId}"`);
   }
-  return path.join(app.getPath('userData'), 'agents', agentId, 'connector-secrets');
+  return path.join(getSharedAgentsRoot(), agentId, 'connector-secrets');
 }
 
 /**
  * Resolve the secret file path for a specific platform.
- * `<userData>/agents/<agentId>/connector-secrets/<platform>.json`
+ * `~/.duya/agents/<agentId>/connector-secrets/<platform>.json`
  */
 function resolveSecretPath(agentId: string, platform: string): string {
   return path.join(resolveAgentSecretsDir(agentId), `${platform}.json`);

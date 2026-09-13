@@ -8,7 +8,9 @@
  *   - drop raw message rows that a later rebase superseded,
  *   - emit rebase events verbatim (audit trail),
  *   - insert rebase.newMessages at the rebase's position,
- *   - leave rollout process events and compaction entries untouched.
+ *   - leave rollout process events and compaction entries untouched,
+ *   - yield each message id at most once (first emission wins) so a
+ *     standalone duplicate of a rebase-emitted id cannot double the row.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -242,5 +244,36 @@ describe('applyRebases', () => {
     const effective = effectiveMessageTimeline(rows);
 
     expect(effective.map((r) => r.entry.id)).toEqual(['c-1']);
+  });
+
+  it('yields a rebase-emitted checkpoint exactly once when a standalone duplicate row follows it', () => {
+    // Regression: the worker load→replace repair cycle used to re-persist the
+    // projection-synthesized compaction checkpoint (bare `<entryId>:checkpoint`
+    // id, degraded to a plain user row) as a standalone row right after the
+    // rebase. The projection then yielded the checkpoint twice and the agent
+    // timeline threw "Duplicate agent message id" on hydration. First
+    // emission wins — the rebase-emitted copy is authoritative.
+    const checkpoint = userMsg('ckpt-1:checkpoint', 'This session is being continued...', 250);
+    const rows: TimelineEntryRow[] = [
+      row(userMsg('u-1', 'before compaction', 1), 1),
+      row(rebase('rb-1', null, [checkpoint], 2), 213),
+      // Standalone degraded duplicate written by the repair cycle (seq 214).
+      row(userMsg('ckpt-1:checkpoint', 'degraded duplicate', 250), 214),
+      row(userMsg('u-2', 'after compaction', 300), 215),
+    ];
+
+    const out = applyRebases(rows);
+    const checkpointRows = out.filter((r) => r.entry.id === 'ckpt-1:checkpoint');
+
+    expect(checkpointRows).toHaveLength(1);
+    // The surviving copy is the rebase-emitted one, not the degraded row.
+    expect(checkpointRows[0].seq).toBe(213);
+    expect(checkpointRows[0].entry.type === 'message' && checkpointRows[0].entry.message.content).toBe(
+      'This session is being continued...',
+    );
+    // Supersession semantics unchanged: u-1 dropped (null bound), u-2 kept.
+    const ids = out.map((r) => r.entry.id);
+    expect(ids).not.toContain('u-1');
+    expect(ids).toContain('u-2');
   });
 });

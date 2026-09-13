@@ -13,7 +13,6 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { app } from 'electron';
 
 import type {
   ChannelAddress,
@@ -25,6 +24,7 @@ import {
   isKnownPlatform,
   KNOWN_PLATFORMS,
 } from '../../packages/agent/src/channels/types';
+import { getSharedAgentsRoot } from '../config/agent-paths';
 
 // =============================================================================
 // Path resolution
@@ -32,11 +32,12 @@ import {
 
 /**
  * Resolve the root agents directory.
- * In production: `<userData>/agents/`
- * In dev: `<userData>/agents/` (same layout, isolated via `app.setPath('userData')`)
+ * Shared root: `~/.duya/agents/` (plan 526) — the same tree the bot identity
+ * (profile.json) lives in, so dev and packaged installs share bindings and
+ * the worker-side channel snapshot reader sees the same files.
  */
 function resolveAgentsDir(): string {
-  return path.join(app.getPath('userData'), 'agents');
+  return getSharedAgentsRoot();
 }
 
 /**

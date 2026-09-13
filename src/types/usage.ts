@@ -73,6 +73,10 @@ export interface UsageSessionSummary {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  /** Reasoning tokens (subset of outputTokens, display only). */
+  reasoningTokens: number;
+  /** Cache writes at the 1h-TTL premium — a SUBSET of cacheWriteTokens. */
+  cacheWrite1hTokens: number;
   /** Cache-waste scan for this session (see electron/ipc/cache-waste.ts). */
   cacheHealth: CacheHealthTotals;
   messageCount: number;
@@ -131,7 +135,13 @@ export interface ModelUsageEntry {
   colorIndex: number;
 }
 
-export interface UsageTotals extends TokenUsageBreakdown, CostBreakdown {}
+export interface UsageTotals extends TokenUsageBreakdown, CostBreakdown {
+  /** Reasoning tokens summed across all usage (subset of output, display
+   *  only — never added on top of totalTokens). */
+  reasoningTokens: number;
+  /** Cache writes billed at the 1h-TTL premium — a SUBSET of cacheWrite. */
+  cacheWrite1hTokens: number;
+}
 
 /** Wire shape returned by `db:usage:summary`. Aggregated in the main
  *  process; the renderer only renders it. */
@@ -143,6 +153,10 @@ export interface UsageSummary {
   sessions: UsageSessionSummary[];
   /** Session-summed cache waste (see CacheHealthTotals). */
   cacheHealth: CacheHealthTotals;
+  /** Audit stamp for the pricing table used (max provider_model_capabilities
+   *  updated_at). Reproducibility: cost figures are only meaningful against
+   *  the pricing version that produced them. */
+  pricingVersion?: string;
   generatedAt: number;
 }
 

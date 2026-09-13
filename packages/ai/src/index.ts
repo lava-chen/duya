@@ -138,6 +138,7 @@ export type {
   ToolUse,
   ToolUseContent,
   TokenUsage,
+  UsageCall,
   ParameterDiagnostic,
 } from './types.js';
 

@@ -21,10 +21,20 @@ import path from 'path';
 import { resolveConfigRoot } from './compass.js';
 import { assertValidBotId } from './agent-id.js';
 import { isValidAvatarImageFilename } from './bot-avatar.js';
+import { getConfigStore } from './store-instance';
 
 /** `~/.duya/agents` — root of all bot identity directories. */
 export function getDuyaAgentsRoot(duyaRoot: string = resolveConfigRoot()): string {
   return path.join(duyaRoot, 'agents');
+}
+
+/**
+ * `~/.duya/agents` resolved through the ConfigStore singleton, so dev and
+ * packaged installs share one tree and tests that inject a temp store via
+ * `_setConfigStoreForTest` get an isolated one automatically (plan 526).
+ */
+export function getSharedAgentsRoot(): string {
+  return getDuyaAgentsRoot(getConfigStore().getConfigDir());
 }
 
 /**

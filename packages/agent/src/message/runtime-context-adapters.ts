@@ -408,6 +408,11 @@ export function adaptResearchContinuationContext(
  * - background_notification messages: keyed by
  *   {@link RUNTIME_CONTEXT_METADATA_KEYS.taskId}. A message without a task ID
  *   is always kept (no dedup key).
+ * - attachment messages: keyed by the exact
+ *   {@link RUNTIME_CONTEXT_METADATA_KEYS.attachmentIds} set — the same set of
+ *   attachments is not recorded twice (mirrors DuyaAgent's live dedup in
+ *   `_appendRuntimeContextToTimeline`). A message with an empty or missing
+ *   attachmentIds key is always kept.
  * - Other runtime_context and non-runtime-context messages are passed through
  *   untouched.
  *
@@ -419,6 +424,7 @@ export function dedupeRuntimeContextMessages<T extends AgentMessage>(
   const seenMailboxRowIds = new Set<string>();
   const seenTaskIds = new Set<string>();
   const seenCwdGenerations = new Set<number>();
+  const seenAttachmentIdSets = new Set<string>();
   const result: T[] = [];
 
   for (const message of messages) {
@@ -467,6 +473,22 @@ export function dedupeRuntimeContextMessages<T extends AgentMessage>(
           continue;
         }
         seenCwdGenerations.add(gen);
+      }
+      result.push(message);
+      continue;
+    }
+
+    if (message.source === 'attachment') {
+      const attachmentIds = readStringArray(
+        message.metadata,
+        RUNTIME_CONTEXT_METADATA_KEYS.attachmentIds,
+      );
+      const key = [...attachmentIds].sort().join('\u0000');
+      if (key.length > 0) {
+        if (seenAttachmentIdSets.has(key)) {
+          continue;
+        }
+        seenAttachmentIdSets.add(key);
       }
       result.push(message);
       continue;

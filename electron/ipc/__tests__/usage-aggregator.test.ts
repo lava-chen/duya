@@ -38,6 +38,8 @@ function msgRow(overrides: Partial<MessageRow> & { id: string }): MessageRow {
     seq_index: overrides.seq_index ?? 1,
     duration_ms: overrides.duration_ms ?? null,
     sub_agent_id: null,
+    model: overrides.model ?? '',
+    provider_id: overrides.provider_id ?? '',
     attachments: null,
     provider_state: null,
     thinking_signature: null,
@@ -398,6 +400,10 @@ describe('facts split + cache', () => {
       cacheRead: 600,
       cacheWrite: 100,
       volume: 1100,
+      cacheWrite1h: 0,
+      reasoning: 0,
+      model: '',
+      providerId: '',
     });
   });
 
@@ -461,5 +467,159 @@ describe('cache health (plan 444)', () => {
     const summary = aggregateUsage([session('s1', rows)], pricedLookup);
     expect(summary.cacheHealth.missCount).toBe(0);
     expect(summary.cacheHealth.missedTokens).toBe(0);
+  });
+});
+
+describe('token accounting — per-message model attribution', () => {
+  const t0 = new Date(2026, 7, 15, 10, 0).getTime();
+  const MODEL_A = {
+    inputPerMillion: 3,
+    outputPerMillion: 15,
+    cacheReadPerMillion: 0.3,
+    cacheWritePerMillion: 3.75,
+  };
+  const MODEL_B = {
+    inputPerMillion: 10,
+    outputPerMillion: 30,
+    cacheReadPerMillion: 1,
+    cacheWritePerMillion: 12.5,
+  };
+  const multiLookup: UsagePricingLookup = (_providerId, model) =>
+    model === 'model-a' ? MODEL_A : model === 'model-b' ? MODEL_B : undefined;
+
+  it('per-call ledger: each calls[] entry becomes one usageRow attributed to its own model', () => {
+    const rows = [
+      msgRow({
+        id: 'a1',
+        model: 'model-a',
+        provider_id: 'prov',
+        token_usage: JSON.stringify({
+          // Top-level is the SUM of the calls — must NOT be double-counted.
+          input_tokens: 3000,
+          output_tokens: 300,
+          total_tokens: 3300,
+          calls: [
+            { input_tokens: 1000, output_tokens: 100, model: 'model-a', provider_id: 'prov' },
+            { input_tokens: 2000, output_tokens: 200, model: 'model-b', provider_id: 'prov' },
+          ],
+        }),
+        created_at: t0,
+      }),
+    ];
+    const facts = extractSessionFacts(rows);
+    expect(facts.usageRows).toHaveLength(2);
+    expect(facts.usageRows[0]).toMatchObject({ input: 1000, output: 100, model: 'model-a' });
+    expect(facts.usageRows[1]).toMatchObject({ input: 2000, output: 200, model: 'model-b' });
+
+    const summary = aggregateUsage([session('s1', rows, 'model-a')], multiLookup);
+    // No double counting: totals equal the sum of the calls, not top + calls.
+    expect(summary.totals.input).toBe(3000);
+    expect(summary.totals.output).toBe(300);
+    expect(summary.totals.totalTokens).toBe(3300);
+    // modelUsage splits by the per-call model.
+    const byModel = Object.fromEntries(summary.modelUsage.map((m) => [m.model, m]));
+    expect(byModel['model-a'].tokens).toBe(1100);
+    expect(byModel['model-b'].tokens).toBe(2200);
+    expect(byModel['model-a'].cost).toBeCloseTo((1000 * 3 + 100 * 15) / 1_000_000, 8);
+    expect(byModel['model-b'].cost).toBeCloseTo((2000 * 10 + 200 * 30) / 1_000_000, 8);
+  });
+
+  it('legacy rows (no calls) attribute to the row-level model column', () => {
+    const rows = [
+      msgRow({
+        id: 'a1',
+        model: 'model-a',
+        provider_id: 'prov',
+        token_usage: JSON.stringify({ input_tokens: 1000, output_tokens: 100 }),
+        created_at: t0,
+      }),
+      msgRow({
+        id: 'a2',
+        model: 'model-b',
+        provider_id: 'prov',
+        token_usage: JSON.stringify({ input_tokens: 2000, output_tokens: 200 }),
+        created_at: t0 + 1000,
+      }),
+    ];
+    const summary = aggregateUsage([session('s1', rows, 'model-a')], multiLookup);
+    const byModel = Object.fromEntries(summary.modelUsage.map((m) => [m.model, m]));
+    expect(byModel['model-a'].tokens).toBe(1100);
+    expect(byModel['model-b'].tokens).toBe(2200);
+    // Each row priced at its OWN model's rates.
+    expect(byModel['model-a'].cost).toBeCloseTo((1000 * 3 + 100 * 15) / 1_000_000, 8);
+    expect(byModel['model-b'].cost).toBeCloseTo((2000 * 10 + 200 * 30) / 1_000_000, 8);
+  });
+
+  it('emits a model_change boundary when the row-level model switches', () => {
+    const rows = [
+      msgRow({
+        id: 'a1',
+        model: 'model-a',
+        provider_id: 'prov',
+        token_usage: JSON.stringify({ input_tokens: 1000, output_tokens: 10, cache_creation_input_tokens: 49_000 }),
+        created_at: t0,
+      }),
+      msgRow({
+        id: 'a2',
+        model: 'model-b',
+        provider_id: 'prov',
+        token_usage: JSON.stringify({ input_tokens: 50_000, output_tokens: 10 }),
+        created_at: t0 + 60_000,
+      }),
+    ];
+    const facts = extractSessionFacts(rows);
+    const kinds = facts.cacheSequence.map((e) => e.kind);
+    expect(kinds).toContain('model_change');
+    // Marker sits between the two usage entries.
+    expect(kinds.indexOf('model_change')).toBeGreaterThan(0);
+    expect(kinds.indexOf('model_change')).toBeLessThan(kinds.length - 1);
+
+    // The switch re-bills the prompt: counted as waste, priced at model-b rates.
+    const summary = aggregateUsage([session('s1', rows, 'model-a')], multiLookup);
+    expect(summary.cacheHealth.missCount).toBe(1);
+    expect(summary.cacheHealth.missedCost).toBeCloseTo((50_000 * (10 - 1)) / 1_000_000, 8);
+  });
+
+  it('bills 1h-TTL cache writes at 2x the standard write price', () => {
+    const rows = [
+      msgRow({
+        id: 'a1',
+        model: 'model-a',
+        provider_id: 'prov',
+        token_usage: JSON.stringify({
+          input_tokens: 1000,
+          output_tokens: 10,
+          cache_creation_input_tokens: 49_000,
+          cache_creation: { ephemeral_1h_input_tokens: 9000 },
+        }),
+        created_at: t0,
+      }),
+    ];
+    const summary = aggregateUsage([session('s1', rows, 'model-a')], multiLookup);
+    // 1h subset is tracked separately but stays INSIDE cacheWrite.
+    expect(summary.totals.cacheWrite1hTokens).toBe(9000);
+    expect(summary.totals.cacheWrite).toBe(49_000);
+    // (40_000 * 3.75 + 9_000 * 7.5) / 1e6
+    expect(summary.totals.cacheWriteCost).toBeCloseTo((40_000 * 3.75 + 9_000 * 7.5) / 1_000_000, 8);
+  });
+
+  it('carries reasoning tokens without inflating volume', () => {
+    const rows = [
+      msgRow({
+        id: 'a1',
+        model: 'model-a',
+        provider_id: 'prov',
+        token_usage: JSON.stringify({
+          input_tokens: 1000,
+          output_tokens: 200,
+          reasoning_tokens: 150,
+        }),
+        created_at: t0,
+      }),
+    ];
+    const summary = aggregateUsage([session('s1', rows, 'model-a')], multiLookup);
+    expect(summary.totals.reasoningTokens).toBe(150);
+    // reasoning ⊆ output — volume unchanged (1200).
+    expect(summary.totals.totalTokens).toBe(1200);
   });
 });

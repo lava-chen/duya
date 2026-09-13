@@ -7,12 +7,24 @@
 // finished rounds while the snapshot still replays them — rendering the
 // turn twice.
 //
-// Ordering invariant: journal persistence follows event arrival order, so
-// durable-covered events form a PREFIX of the streaming timeline ending at
-// the last durable `tool_result` (the only event kind with a stable id on
-// both sides). Text/thinking have no ids but always sit inside that prefix,
-// so cutting there removes exactly the finalized rounds and keeps the live
-// tail (unfinalized text/thinking, running tools).
+// Ordering invariant: SSE yields `tool_use` before its matching `tool_result`
+// (generator protocol), and plan 441's Journal persists the assistant message
+// (which carries the `tool_use` block) before the standalone tool_result row
+// (assistant boundary at `done`, tool result at `for await ... getRemainingResults`).
+// So durable-covered events form a PREFIX of the streaming timeline ending at
+// the last durable `tool_use` — the earliest event with a stable id on both
+// sides. Text/thinking have no ids but always sit inside that prefix, so
+// cutting there removes exactly the finalized rounds and keeps the live tail
+// (unfinalized text/thinking, running tools).
+//
+// Why not cut on `tool_result`? Tool result persistence is fire-and-forget IPC
+// with a 3-5ms roundtrip; SSE's `yield` is synchronous. A renderer that
+// reloads during the 3-5ms window between `assistant_message_finalized` and
+// `tool_result_added` will see the tool_use in DB but the tool_result not yet
+// in DB — yet both are already in `streamingEvents` (SSE pushed them earlier).
+// Cutting on tool_result would fail in that window and re-render the entire
+// SSE prefix, breaking the group summary. Cutting on tool_use closes that
+// window because tool_use persistence always lands before tool_result.
 //
 // Trailing-text fallback: a finalized text-only assistant block (no tool
 // round in the same turn) cannot be cut by id. We additionally compare the
@@ -119,21 +131,36 @@ export function subtractDurableStreamingEvents(
     return events as StreamingEvent[];
   }
 
-  // Last durable tool_result marks the end of the covered prefix.
+  // Union of durable tool ids: a tool_result whose id is in toolUseIds is
+  // *also* durably covered (the matching tool_use row is durable, the
+  // tool_result row is just a 3-5ms IPC lag behind it). Without this union
+  // the dedup pass below would keep the SSE tool_result on screen and
+  // re-render the same tool that MessageItem already drew from the
+  // durable row. Plan 441's mid-turn persistence is what makes this
+  // window reachable.
+  const allDurableToolIds = new Set<string>([
+    ...durable.toolUseIds,
+    ...durable.toolResultIds,
+  ]);
+
+  // Last durable tool_use marks the end of the covered prefix. See the
+  // module-level Ordering invariant for why we anchor on tool_use instead
+  // of tool_result (Journal persists the assistant message — which carries
+  // the tool_use block — strictly before the matching tool_result row).
   let cut = -1;
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i];
-    if (e.type === 'tool_result' && durable.toolResultIds.has(e.toolResult.tool_use_id)) {
+    if (e.type === 'tool_use' && durable.toolUseIds.has(e.toolUse.id)) {
       cut = i;
       break;
     }
   }
 
-  const hasToolWork = durable.toolUseIds.size > 0 || durable.toolResultIds.size > 0;
+  const hasToolWork = allDurableToolIds.size > 0;
   const hasStrayDurableToolEvent = hasToolWork && events.some((e, i) => {
     if (i <= cut) return false;
-    if (e.type === 'tool_use') return durable.toolUseIds.has(e.toolUse.id);
-    if (e.type === 'tool_result') return durable.toolResultIds.has(e.toolResult.tool_use_id);
+    if (e.type === 'tool_use') return allDurableToolIds.has(e.toolUse.id);
+    if (e.type === 'tool_result') return allDurableToolIds.has(e.toolResult.tool_use_id);
     return false;
   });
 
@@ -147,8 +174,8 @@ export function subtractDurableStreamingEvents(
   const out: StreamingEvent[] = [];
   for (let i = cut + 1; i < events.length; i++) {
     const e = events[i];
-    if (e.type === 'tool_use' && durable.toolUseIds.has(e.toolUse.id)) continue;
-    if (e.type === 'tool_result' && durable.toolResultIds.has(e.toolResult.tool_use_id)) continue;
+    if (e.type === 'tool_use' && allDurableToolIds.has(e.toolUse.id)) continue;
+    if (e.type === 'tool_result' && allDurableToolIds.has(e.toolResult.tool_use_id)) continue;
     out.push(e);
   }
 

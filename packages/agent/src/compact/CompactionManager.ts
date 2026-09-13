@@ -166,6 +166,19 @@ export type CompactionManagerEvent =
    * threshold — breaks the compaction loop.
    */
   | { type: 'compaction_over_threshold'; tokensRetained: number; available: number }
+  /**
+   * Plan 523 P6: one event per summarization attempt inside the retry ladder,
+   * so the renderer / logs can see *why* a retry or failure happened (degenerate
+   * output, empty response, output-length error, …) instead of only the coarse
+   * 'summarizing' step boundary.
+   */
+  | {
+      type: 'compaction_summary_outcome'
+      attempt: number
+      outcome: 'success' | 'degenerate' | 'empty' | 'error'
+      errorKind?: string
+      chars: number
+    }
 
 export interface EnhancedCompactionResult extends CompactionResult {
   reinjection?: {
@@ -452,7 +465,12 @@ export class CompactionManager {
         messageCount: messages.length,
         tokensBefore: this.contextSize(messages),
       })
-      const baseResult = await strategy.compact(messages, stats, options)
+      // Plan 523 P6: feed each summary-attempt outcome back as an event
+      // without mutating the caller-owned options object.
+      const outcomeOptions: CompactOptions = options
+        ? { ...options, onSummaryAttempt: (r) => this.emit({ type: 'compaction_summary_outcome', ...r }) }
+        : { onSummaryAttempt: (r) => this.emit({ type: 'compaction_summary_outcome', ...r }) }
+      const baseResult = await strategy.compact(messages, stats, outcomeOptions)
       emitStep('summarizing', 'finished', {
         messageCount: baseResult.messages.length,
         tokensBefore: this.contextSize(messages),

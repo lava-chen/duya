@@ -102,6 +102,8 @@ export function initializeSchema(db: BetterSqlite3Db): void {
       seq_index INTEGER,
       duration_ms INTEGER,
       sub_agent_id TEXT,
+      model TEXT NOT NULL DEFAULT '',
+      provider_id TEXT NOT NULL DEFAULT '',
       created_at INTEGER NOT NULL,
       FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
     )
@@ -2627,6 +2629,34 @@ const migrations: Migration[] = [
     name: 'add_tool_approval_side_state',
     migrate(db: BetterSqlite3Db): void {
       ensureToolApprovalTables(db);
+    },
+  },
+  {
+    // Token-accounting rigor: per-message model/provider_id so usage/cost can
+    // be attributed per message (a session that switched models mid-history
+    // previously fell back to the session's current model). Legacy rows are
+    // backfilled from their session row — the best available approximation,
+    // applied only when the columns are first added.
+    id: 57,
+    name: 'add_model_provider_id_to_messages',
+    migrate(db: BetterSqlite3Db): void {
+      const tableInfo = db.prepare('PRAGMA table_info(messages)').all() as Array<{ name: string }>;
+      const columns = tableInfo.map((col) => col.name);
+      const addedModel = !columns.includes('model');
+      const addedProviderId = !columns.includes('provider_id');
+      if (addedModel) {
+        db.exec(`ALTER TABLE messages ADD COLUMN model TEXT NOT NULL DEFAULT ''`);
+      }
+      if (addedProviderId) {
+        db.exec(`ALTER TABLE messages ADD COLUMN provider_id TEXT NOT NULL DEFAULT ''`);
+      }
+      if (addedModel || addedProviderId) {
+        db.exec(`
+          UPDATE messages SET
+            model = COALESCE((SELECT model FROM chat_sessions WHERE id = messages.session_id), ''),
+            provider_id = COALESCE((SELECT provider_id FROM chat_sessions WHERE id = messages.session_id), '')
+        `);
+      }
     },
   },
 ];

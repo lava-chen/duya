@@ -21,7 +21,6 @@ import {
   CheckCircleIcon,
   XCircleIcon,
   CircleNotchIcon,
-  XIcon,
   ArrowUpRightIcon,
   CaretDownIcon,
   CaretUpIcon,
@@ -36,6 +35,7 @@ import { PresetIcon } from "./PresetIcon";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { Input } from "@/components/ui/Input";
+import { Modal } from "@/components/ui/page";
 import { useApiKeyState } from "./forms/hooks/useApiKeyState";
 import { useBaseUrlState } from "./forms/hooks/useBaseUrlState";
 import { useModelSelection } from "./forms/hooks/useModelSelection";
@@ -434,82 +434,93 @@ export function ProviderConnectDialog({
   };
 
   return (
-    <div
-      className={`fixed inset-0 z-50 flex items-center justify-center ${
-        open ? "" : "hidden"
-      }`}
-    >
-      {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/50" onClick={() => onOpenChange(false)} />
-
-      {/* Dialog */}
-      <div className="relative z-10 w-full max-w-md mx-4 bg-[var(--main-bg)] border border-border/50 rounded-xl shadow-xl overflow-hidden max-h-[90vh] overflow-y-auto">
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-border/30 bg-[var(--main-bg)]">
-          <div className="flex items-center gap-3">
-            <div className="shrink-0 text-muted-foreground">
-              <PresetIcon iconKey={preset.iconKey} />
-            </div>
-            <div>
-              <h2 className="text-sm font-semibold">
-                {isEdit ? t("provider.edit") : t("provider.connect")} {preset.name}
-              </h2>
-              <p className="text-xs text-muted-foreground mt-0.5">{preset.descriptionZh}</p>
-            </div>
-          </div>
-          <IconButton
+    <Modal
+      open={open}
+      onClose={() => onOpenChange(false)}
+      icon={<PresetIcon iconKey={preset.iconKey} />}
+      title={`${isEdit ? t("provider.edit") : t("provider.connect")} ${preset.name}`}
+      subtitle={preset.descriptionZh}
+      size="sm"
+      footer={
+        <>
+          <Button
             variant="ghost"
-            size="sm"
-            aria-label="Close"
             onClick={() => onOpenChange(false)}
           >
-            <XIcon size={16} />
-          </IconButton>
-        </div>
-
-        {/* Meta info */}
-        {preset.meta && (
-          <div className="px-4 pt-3 pb-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              {preset.meta.billingModel && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-chip text-muted-foreground border border-border/30">
-                  {preset.meta.billingModel === "token_plan"
-                    ? t("provider.tokenPlan")
-                    : preset.meta.billingModel === "coding_plan"
-                      ? t("provider.codingPlan")
-                      : preset.meta.billingModel === "pay_as_you_go"
-                        ? t("provider.payAsYouGo")
-                        : preset.meta.billingModel === "free"
-                          ? t("provider.free")
-                          : preset.meta.billingModel}
-                </span>
-              )}
-              {preset.meta.apiKeyUrl && (
-                <a
-                  href={preset.meta.apiKeyUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-[11px] text-accent hover:underline"
-                >
-                  <ArrowUpRightIcon size={10} />
-                  {t("onboarding.getApiKey")}
-                </a>
-              )}
-            </div>
-            {preset.meta.notes && preset.meta.notes.length > 0 && (
-              <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
-                {preset.meta.notes.map((note, i) => (
-                  <p key={i} className="text-[11px] text-amber-600 dark:text-amber-400">
-                    <AutoLink text={note} />
-                  </p>
-                ))}
-              </div>
+            {t("provider.cancel")}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={handleTestConnection}
+            disabled={
+              testing ||
+              (preset.fields.includes("api_key") &&
+                apiKeyState.keyState !== "replaced")
+            }
+          >
+            {testing ? (
+              <SpinnerGapIcon size={12} className="animate-spin" />
+            ) : (
+              <CircleNotchIcon size={12} />
+            )}
+            {testing ? t("settings.providers.testing") : t("bridge.testConnection")}
+          </Button>
+          <Button
+            type="submit"
+            form="provider-connect-form"
+            variant="primary"
+            disabled={saving}
+          >
+            {saving && <SpinnerGapIcon size={12} className="animate-spin" />}
+            {isEdit ? t("provider.update") : t("provider.connect")}
+          </Button>
+        </>
+      }
+    >
+      {/* Meta info (rendered as first body block so it sits below the header) */}
+      {preset.meta && (
+        <div className="pb-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            {preset.meta.billingModel && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-chip text-muted-foreground border border-border/30">
+                {preset.meta.billingModel === "token_plan"
+                  ? t("provider.tokenPlan")
+                  : preset.meta.billingModel === "coding_plan"
+                    ? t("provider.codingPlan")
+                    : preset.meta.billingModel === "pay_as_you_go"
+                      ? t("provider.payAsYouGo")
+                      : preset.meta.billingModel === "free"
+                        ? t("provider.free")
+                        : preset.meta.billingModel}
+              </span>
+            )}
+            {preset.meta.apiKeyUrl && (
+              <a
+                href={preset.meta.apiKeyUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-[11px] text-accent hover:underline"
+              >
+                <ArrowUpRightIcon size={10} />
+                {t("onboarding.getApiKey")}
+              </a>
             )}
           </div>
-        )}
+          {preset.meta.notes && preset.meta.notes.length > 0 && (
+            <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+              {preset.meta.notes.map((note, i) => (
+                <p key={i} className="text-[11px] text-amber-600 dark:text-amber-400">
+                  <AutoLink text={note} />
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="p-4 space-y-4">
+        <form id="provider-connect-form" onSubmit={handleSubmit} className="space-y-4">
           {/* Name + Notes (side-by-side) */}
           {preset.fields.includes("name") && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -824,45 +835,7 @@ export function ProviderConnectDialog({
               {error}
             </div>
           )}
-
-          {/* Footer */}
-          <div className="flex items-center justify-between pt-2 border-t border-border/30">
-            <Button
-              variant="ghost"
-              onClick={() => onOpenChange(false)}
-            >
-              {t("provider.cancel")}
-            </Button>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={handleTestConnection}
-                disabled={
-                  testing ||
-                  (preset.fields.includes("api_key") &&
-                    apiKeyState.keyState !== "replaced")
-                }
-              >
-                {testing ? (
-                  <SpinnerGapIcon size={12} className="animate-spin" />
-                ) : (
-                  <CircleNotchIcon size={12} />
-                )}
-                {testing ? t("settings.providers.testing") : t("bridge.testConnection")}
-              </Button>
-              <Button
-                type="submit"
-                variant="primary"
-                disabled={saving}
-              >
-                {saving && <SpinnerGapIcon size={12} className="animate-spin" />}
-                {isEdit ? t("provider.update") : t("provider.connect")}
-              </Button>
-            </div>
-          </div>
         </form>
-      </div>
-    </div>
+    </Modal>
   );
 }

@@ -11,6 +11,7 @@ import { writeInstructions, rollbackInstructions } from './writer/instruction-wr
 import { writeMemories, rollbackMemories } from './writer/memory-writer';
 import { writeSessions, rollbackSessions } from './writer/session-writer';
 import type { ImportSource, ScanResult, ApplyImportParams, ImportManifest, ImportBatch, ImportItem } from '../types';
+import type { IpcRegistrar } from '../ipc/lazy-ipc-registry';
 
 const logger = getLogger();
 const COMPONENT = 'ImportHandlers' as LogComponent;
@@ -33,15 +34,17 @@ function isCodexInstalled(): boolean {
   }
 }
 
-export function registerImportHandlers(): void {
-  ipcMain.handle('import:detect', async (): Promise<{ claude: boolean; codex: boolean }> => {
+export function registerImportHandlers(
+  register: IpcRegistrar = (channel, handler) => ipcMain.handle(channel, handler),
+): void {
+  register('import:detect', async (): Promise<{ claude: boolean; codex: boolean }> => {
     return {
       claude: isClaudeCodeInstalled(),
       codex: isCodexInstalled(),
     };
   });
 
-  ipcMain.handle('import:scan', async (
+  register('import:scan', async (
     _event,
     params: { source: ImportSource; projectPath?: string },
   ): Promise<ScanResult> => {
@@ -83,7 +86,7 @@ export function registerImportHandlers(): void {
     }
   });
 
-  ipcMain.handle('import:apply', async (
+  register('import:apply', async (
     _event,
     params: ApplyImportParams,
   ): Promise<ImportManifest> => {
@@ -200,7 +203,7 @@ export function registerImportHandlers(): void {
     }
   });
 
-  ipcMain.handle('import:rollback', async (
+  register('import:rollback', async (
     _event,
     params: { batchId: string },
   ): Promise<void> => {
@@ -255,7 +258,7 @@ export function registerImportHandlers(): void {
     }
   });
 
-  ipcMain.handle('import:history', async (): Promise<ImportBatch[]> => {
+  register('import:history', async (): Promise<ImportBatch[]> => {
     try {
       return listBatches();
     } catch (error) {

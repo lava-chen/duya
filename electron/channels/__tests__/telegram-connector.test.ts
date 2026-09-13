@@ -13,6 +13,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { TelegramChannelConnector } from '../telegram-connector';
+import { ConfigStore } from '../../config/store';
+import { _setConfigStoreForTest } from '../../config/store-instance';
 import type { ChannelInboundEnvelope } from '../../../packages/agent/src/channels/types';
 
 const mocks = vi.hoisted(() => ({
@@ -58,9 +60,16 @@ describe('TelegramChannelConnector', () => {
     onInbound = vi.fn();
     tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-telegram-connector-'));
     mocks.userDataDir = tmpRoot;
+    _setConfigStoreForTest(
+      new ConfigStore({
+        configPath: path.join(tmpRoot, 'config.toml'),
+        secretsPath: path.join(tmpRoot, 'secrets.json'),
+      }),
+    );
   });
 
   afterEach(() => {
+    _setConfigStoreForTest(undefined);
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   });
 

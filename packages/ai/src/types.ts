@@ -185,6 +185,35 @@ export interface TokenUsage {
   /** Upstream provider name when using an aggregator like OpenRouter.
    *  E.g., "Anthropic", "OpenAI", "Google". Undefined for direct API calls. */
   upstreamProvider?: string;
+  /**
+   * Per-call usage ledger (pi-style). A tool-heavy turn emits one entry per
+   * LLM API call; each entry snapshots the model / provider that produced
+   * it, so a session that switches models mid-turn attributes every call to
+   * the exact model that generated it. Absent on legacy records — parsers
+   * fall back to the top-level cumulative fields.
+   */
+  calls?: UsageCall[];
+}
+
+/**
+ * Single LLM API call usage detail. Mirrors Anthropic's per-request usage
+ * block; aliases for OpenAI-compatible gateways are normalized at parse time
+ * (see packages/agent/src/process/call-usage.ts).
+ */
+export interface UsageCall {
+  input_tokens: number;
+  output_tokens: number;
+  cache_hit_tokens?: number;
+  cache_creation_tokens?: number;
+  /** Reasoning tokens — a subset of output_tokens, never double-counted. */
+  reasoning_tokens?: number;
+  /** Anthropic ephemeral 1h cache write tokens. */
+  cache_write_1h_tokens?: number;
+  total_tokens?: number;
+  /** Model id snapshot at the moment this call was made (hot-swap exact). */
+  model?: string;
+  /** Provider id snapshot at the moment this call was made. */
+  provider_id?: string;
 }
 
 // ─── Stop reason ───
@@ -631,6 +660,10 @@ export interface AIClient {
     options?: {
       systemPrompt?: string;
       tools?: Array<{ name: string; description: string; input_schema: Record<string, unknown> }>;
+      /** Plan 523 P4: explicitly disable tool calling for this request (e.g.
+       *  a compaction summarizer). When 'none', the tools field is omitted
+       *  from the wire payload so the model cannot invoke tools. */
+      toolChoice?: 'none';
       maxTokens?: number;
       temperature?: number;
       disableThinking?: boolean;

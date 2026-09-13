@@ -396,6 +396,8 @@ export class AgentSSEClient {
           outputTokens: eventObj.outputTokens as number,
           cacheHitTokens: eventObj.cacheHitTokens as number | undefined,
           cacheCreationTokens: eventObj.cacheCreationTokens as number | undefined,
+          model: eventObj.model as string | undefined,
+          providerId: eventObj.providerId as string | undefined,
         });
         break;
       case 'done':

@@ -223,7 +223,7 @@ describe('useContextUsage', () => {
     });
 
     it('resolves known models from the @duya/ai static catalog', () => {
-      expect(getContextWindowForModel('deepseek-chat')).toBe(64_000);
+      expect(getContextWindowForModel('deepseek-flash')).toBe(1_048_576);
       expect(getContextWindowForModel('claude-sonnet-4-20250514')).toBe(200_000);
     });
 

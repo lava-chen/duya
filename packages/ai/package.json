@@ -15,7 +15,8 @@
     "build": "tsc -b",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "generate:models": "node scripts/generate-models.mjs"
+    "generate:models": "node scripts/generate-models.mjs",
+    "sync:models": "node scripts/sync-models.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",

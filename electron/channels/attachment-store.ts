@@ -2,8 +2,8 @@
  * attachment-store.ts — stable persistence for inbound channel attachments
  * (plan 507 P1.2).
  *
- * Layout (mirrors the 485 `agents/<id>/` convention):
- *   <userData>/agents/<ownerId>/attachments/inbound/<platform>/
+ * Layout (plan 526 shared root, mirrors the 485 `agents/<id>/` convention):
+ *   ~/.duya/agents/<ownerId>/attachments/inbound/<platform>/
  *     <yyyyMMdd_HHmmss_SSS>_<safeName>
  *
  * Why: adapters download media to OS temp caches (evicted on reboot); the
@@ -16,10 +16,10 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { app } from 'electron';
 
 import { EXT_MIME_MAP } from '../../packages/gateway/src/utils/mime';
 import type { ChannelInboundAttachment } from '../../packages/agent/src/channels/types';
+import { getSharedAgentsRoot } from '../config/agent-paths';
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_DOC_BYTES = 20 * 1024 * 1024;
@@ -82,7 +82,7 @@ function timestampName(): string {
 export function inboundAttachmentDir(ownerId: string, platform: string): string {
   assertSafeSegment('ownerId', ownerId);
   assertSafeSegment('platform', platform);
-  return path.join(app.getPath('userData'), 'agents', ownerId, 'attachments', 'inbound', platform);
+  return path.join(getSharedAgentsRoot(), ownerId, 'attachments', 'inbound', platform);
 }
 
 export interface PersistResult {

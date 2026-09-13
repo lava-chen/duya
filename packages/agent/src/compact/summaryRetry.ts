@@ -11,6 +11,7 @@
  */
 
 import type { Message } from '../types.js'
+import { SummaryDegenerateError } from './compactErrors.js'
 
 /** Maximum summarization attempts (first call + retries). Grok: 3. */
 export const MAX_SUMMARY_RETRIES = 3
@@ -152,21 +153,31 @@ export interface SummaryRetryOutcome {
   attempts: number
 }
 
+/** Plan 523 P6: per-attempt result reported via {@link summarizeWithRetryLadder}'s onAttempt. */
+export interface SummaryAttemptReport {
+  attempt: number
+  outcome: 'success' | 'degenerate' | 'empty' | 'error'
+  errorKind?: string
+  chars: number
+}
+
 /**
  * Run the retry ladder. `run` performs one summarization attempt and throws
  * on failure; an empty string counts as a degenerate result and retries
  * like any other failure (grok retries empty content as well). `isDegenerate`
  * lets the caller keep its own degeneracy detector.
  *
- * Contract note: an *error* exhausts the ladder by throwing, but an
- * empty/degenerate result exhausts it by returning '' — the strategy falls
- * back to its placeholder summary (pre-495 behaviour), so a summarizer that
- * returns nothing never fails the whole compaction.
+ * Contract note: an *error* exhausts the ladder by throwing, and (Plan 523)
+ * an empty/degenerate result now also throws `SummaryDegenerateError` instead
+ * of returning '' — so a summarizer that keeps producing degenerate output
+ * fails the whole compaction, routing it into the suppression machine rather
+ * than silently replacing real history with a zero-information placeholder.
  */
 export async function summarizeWithRetryLadder(
   run: (conversationText: string, prompt: string) => Promise<string>,
   ctx: SummaryRetryContext,
   isDegenerate: (text: string) => boolean,
+  onAttempt?: (report: SummaryAttemptReport) => void,
 ): Promise<SummaryRetryOutcome> {
   let currentText = ctx.conversationText
   let currentPrompt = ctx.prompt
@@ -174,19 +185,29 @@ export async function summarizeWithRetryLadder(
   let shorterOutputRequested = false
   let lastError: unknown
   let lastWasDegenerate = false
+  let lastDegenerateChars = 0
 
   for (let attempt = 1; attempt <= MAX_SUMMARY_RETRIES; attempt++) {
     try {
       const text = await run(currentText, currentPrompt)
-      if (text.trim().length > 0 && !isDegenerate(text)) {
+      const trimmed = text.trim()
+      if (trimmed.length > 0 && !isDegenerate(text)) {
+        onAttempt?.({ attempt, outcome: 'success', chars: text.length })
         return { text, attempts: attempt }
       }
       lastWasDegenerate = true
+      lastDegenerateChars = text.length
       lastError = new Error('[summary-retry] empty or degenerate summary')
+      onAttempt?.({
+        attempt,
+        outcome: trimmed.length > 0 ? 'degenerate' : 'empty',
+        chars: text.length,
+      })
     } catch (err) {
       lastWasDegenerate = false
       lastError = err
       const kind = classifySummaryError(err)
+      onAttempt?.({ attempt, outcome: 'error', errorKind: kind, chars: 0 })
       if (kind === 'fatal') throw err
       if (kind === 'output_length' && !shorterOutputRequested) {
         currentPrompt = appendShorterOutputInstruction(currentPrompt)
@@ -201,6 +222,8 @@ export async function summarizeWithRetryLadder(
       }
     }
   }
-  if (lastWasDegenerate) return { text: '', attempts: MAX_SUMMARY_RETRIES }
+  if (lastWasDegenerate) {
+    throw new SummaryDegenerateError(MAX_SUMMARY_RETRIES, lastDegenerateChars)
+  }
   throw lastError
 }

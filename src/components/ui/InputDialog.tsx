@@ -1,10 +1,9 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { XIcon } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
-import { IconButton } from "@/components/ui/IconButton";
 import { Input } from "@/components/ui/Input";
+import { Modal } from "@/components/ui/page";
 
 interface InputDialogProps {
   isOpen: boolean;
@@ -36,76 +35,37 @@ export function InputDialog({
     }
   }, [isOpen, defaultValue]);
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        onCancel();
-      } else if (e.key === "Enter") {
-        onConfirm(value);
-      }
-    };
-
-    if (isOpen) {
-      document.addEventListener("keydown", handleKeyDown);
-      return () => document.removeEventListener("keydown", handleKeyDown);
-    }
-  }, [isOpen, value, onConfirm, onCancel]);
-
   if (!isOpen) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      style={{ backgroundColor: "rgba(0, 0, 0, 0.5)" }}
-      onClick={onCancel}
-    >
-      <div
-        className="w-full max-w-md rounded-xl p-6 shadow-xl"
-        style={{
-          backgroundColor: "var(--sidebar-bg)",
-          border: "1px solid var(--border)",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex-1">
-            <h3 className="text-lg font-medium" style={{ color: "var(--text)" }}>
-              {title}
-            </h3>
-            {description && (
-              <p className="text-sm mt-1" style={{ color: "var(--muted)" }}>
-                {description}
-              </p>
-            )}
-          </div>
-          <IconButton
-            onClick={onCancel}
-            aria-label="Close"
-            variant="default"
-            size="md"
-          >
-            <XIcon size={18} />
-          </IconButton>
-        </div>
-
-        <Input
-          ref={inputRef}
-          type="text"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          placeholder={placeholder}
-          className="w-full mb-4"
-        />
-
-        <div className="flex justify-end gap-2">
+    <Modal
+      open={isOpen}
+      onClose={onCancel}
+      title={title}
+      description={description}
+      size="sm"
+      footer={
+        <>
           <Button onClick={onCancel} variant="ghost" size="md">
             Cancel
           </Button>
           <Button onClick={() => onConfirm(value)} variant="primary" size="md">
             Confirm
           </Button>
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    >
+      <Input
+        ref={inputRef}
+        type="text"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder={placeholder}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") onConfirm(value);
+        }}
+        className="w-full"
+      />
+    </Modal>
   );
 }

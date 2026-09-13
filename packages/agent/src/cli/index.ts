@@ -20,6 +20,7 @@ import { join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { Command } from '@commander-js/extra-typings';
 import { duyaAgent } from '../agent/DuyaAgent.js';
+import { COMPACTION_CHECKPOINT_ID_SUFFIX } from '../message/index.js';
 import { createBuiltinRegistry } from '../tool/builtin.js';
 import { sessionSearchTool, type SummaryLLMConfig } from '../tool/SessionSearchTool/index.js';
 import type { AgentOptions, Message, SSEEvent } from '../types.js';
@@ -451,10 +452,16 @@ async function runInteractive(
         if (handled) {
           // Handle special exit case - persist messages and stop REPL
           if (trimmed === '/exit' || trimmed === '/quit' || trimmed === '/q') {
-            // Persist all messages before exit
+            // Persist all messages before exit. Drop projection-synthesized
+            // compaction checkpoint markers: the rebase event already carries
+            // them inline, and a standalone copy collides with the
+            // rebase-emitted id on the next load (duplicate message id).
             const allMessages = agent.getMessages();
-            if (allMessages.length > 0) {
-              await replaceMessages(sessionId, allMessages, 0);
+            const persistableMessages = allMessages.filter(
+              (m) => !(m.id ?? '').endsWith(COMPACTION_CHECKPOINT_ID_SUFFIX),
+            );
+            if (persistableMessages.length > 0) {
+              await replaceMessages(sessionId, persistableMessages, 0);
             }
             // Update session title from first user message
             const firstUserMsg = allMessages.find((m) => m.role === 'user');

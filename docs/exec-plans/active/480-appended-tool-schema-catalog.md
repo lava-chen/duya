@@ -402,3 +402,21 @@ exposure = "full"
 **风险与回退**：
 - 风险：个别 provider 在模型发出未声明的 tool_use 时拒绝——已靠 `tool_invoke` 双重保险（以及 visibility-guard 在 `catalog` 下启用；`full`/`search` 下不启用但仍有 harness 解析兜底）。
 - 回退：用户/会话设为 `[tools] discovered_schema = "array"` 或 `DUYA_TOOLS_DISCOVERED_SCHEMA=array` 即恢复旧路径。
+
+### 8.18 四档 ExposeModel 统一（2026-09-10，取代 §8.16/§8.17 的灰度路线）
+
+**决策**（用户拍板）：工具曝光统一为四档 `ExposeMode = 'always' | 'hint' | 'discoverable' | 'hidden'`，所有发现/调用链路围绕该模型收敛，本计划的三值 exposure + warn 灰度路线被**取代**：
+
+- T1 `always`：完整 schema 常驻 tools 数组。
+- T2 `hint`：数组内放 stub 条目（name + description + 参数摘要，空 schema，`tool/hint-stub.ts`）；完整 schema 走 `tool_schema` 深读；可直接调用。**MCP 工具默认归此档**（`[tools] exposure` 默认改 `'hint'`，legacy `"catalog"` 归一化为 `hint`）。
+- T3 `discoverable`：不在数组、初始不可知；`tool_search` 发现 → 尾部 schema 块 → `tool_invoke` 调用；精确名 allowlist 提升保留（plan 496）。
+- T4 `hidden`：数组、tool_search、tool_schema 目录、tool_invoke 全部不可达；仅内部代码可用。全仓尚无注册点，类型先行。
+
+**取代项**：
+- §8.16/§8.17 的 `catalogGuard='warn'` 直调率灰度采集**废止**——guard 统一为 enforce-only（`evaluateVisibilityGuard`：未声明调用一律拒绝，`readUndeclaredCallStats` 退化为拒绝遥测）。
+- `[tools] discovered_schema = "array"` 配置交付**删除**（§8.17 T3 的"零引用后删除"条件提前执行）；`discoveredPromotedToToolList` 运行时提升保留为唯一数组合并通道（压缩洗掉尾部块后的回退）。
+- `exposure='catalog'`（永不进数组）被 `hint` 取代：hint stub 常驻数组，模型初始即知情。
+- MCP 能力目录（system prompt 段）仅在 `exposure='search'` 下渲染；`full`/`hint` 下工具已在数组中声明，目录属冗余。
+- builtin 重分档：`send_artifact`、`ReactToMessage` `always` → `discoverable`。
+
+**落地**：`tool/registry.ts`（类型 + `registerWithKey` 增 meta 参）、`agent-profile/ToolFilter.ts`（四档判定）、`tool/hint-stub.ts`（新）、`tool/{searchTools,catalogFromRegistry,dispatcherFromRegistry,visibility-guard}.ts`、`config/tool-exposure.ts`（收敛）、`agent/DuyaAgent.ts` + `agent/session/agent-shell.ts`（stub 构建 / guard / tail 门控 / 目录条件化）、`tool/builtin.ts`。`typecheck:all` 绿；exposure 相关 16 个测试套件全部通过（含重写的 tool-exposure / tool-filter ×2 / grayscale-harness / hint-stub / runtime-closure Case 12 / ReactToMessage discoverability）。

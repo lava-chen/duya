@@ -690,7 +690,7 @@ export function registerGitHandlers(): void {
       return { isGitRepo: false };
     }
     const params = scope as ReviewScopeParams;
-    if (!['uncommitted', 'unstaged', 'staged', 'commit'].includes(params.type)) {
+    if (!['uncommitted', 'unstaged', 'staged', 'commit', 'branch', 'commit-pair'].includes(params.type)) {
       return { isGitRepo: false };
     }
 
@@ -700,9 +700,7 @@ export function registerGitHandlers(): void {
       const fullPatch = buildScopedFullPatch(cwd, params);
       return {
         isGitRepo: true,
-        branch: params.type === 'commit'
-          ? `${params.commitFrom?.slice(0, 7) ?? '?'} → ${params.commitTo?.slice(0, 7) ?? '?'}`
-          : undefined,
+        branch: scopeBranchLabel(params),
         baseRef: scopeLabel(params),
         files,
         totals: computeTotals(files, files.length),
@@ -742,26 +740,122 @@ export function registerGitHandlers(): void {
     }
   });
 
-  ipcMain.handle('git:list-commits', async (_event, cwd: unknown, count: unknown): Promise<GitListCommitsResult> => {
+  ipcMain.handle('git:list-commits', async (_event, cwd: unknown, options: unknown): Promise<GitListCommitsResult> => {
     if (typeof cwd !== 'string' || cwd.length === 0 || !isGitRepoDir(cwd)) {
       return { commits: [] };
     }
-    const limit = typeof count === 'number' && count > 0 && count <= 200 ? count : 50;
+    // Backwards-compatible signature: legacy callers passed a number for
+    // `count` directly. Tolerate either form.
+    const opts = normaliseListCommitsOptions(options);
+    const limit = typeof opts.count === 'number' && opts.count > 0 && opts.count <= 200 ? opts.count : 50;
+    const args: string[] = [
+      'log',
+      '--no-color',
+      `--format=${GIT_LOG_FORMAT}`,
+      '-z',
+      `-n${limit}`,
+    ];
+    if (opts.ref && validateGitRef(opts.ref)) {
+      args.push(opts.ref);
+    }
+    if (opts.grep) args.push('--grep', opts.grep);
+    if (opts.author) args.push('--author', opts.author);
     try {
-      const output = stdoutOf(runGit(cwd, ['log', '--oneline', `-n${limit}`, '--format=%H %s'], 256 * 1024));
+      const output = stdoutOf(runGit(cwd, args, 512 * 1024));
       if (!output) return { commits: [] };
-      const commits: GitCommitInfo[] = [];
-      for (const line of output.trim().split('\n')) {
-        const spaceIndex = line.indexOf(' ');
-        if (spaceIndex < 7) continue;
-        commits.push({
-          hash: line.slice(0, spaceIndex),
-          subject: line.slice(spaceIndex + 1),
-        });
-      }
-      return { commits };
+      return { commits: parseCommitLogOutput(output) };
     } catch {
       return { commits: [] };
+    }
+  });
+
+  ipcMain.handle('git:list-branches', async (_event, cwd: unknown): Promise<GitListBranchesResult> => {
+    if (typeof cwd !== 'string' || cwd.length === 0 || !isGitRepoDir(cwd)) {
+      return { isGitRepo: false, locals: [], remotes: [] };
+    }
+    // Single `for-each-ref` pass over both refs/heads and refs/remotes so
+    // the result is consistent under concurrent ref creation. The format
+    // yields: HEAD marker (only for current local branch), full refname,
+    // short SHA.
+    const output = stdoutOf(
+      runGit(cwd, [
+        'for-each-ref',
+        '--format=%(HEAD)%(refname)%(objectname:short)',
+        'refs/heads',
+        'refs/remotes',
+      ], 256 * 1024),
+    );
+    if (output === null) return { isGitRepo: false, locals: [], remotes: [] };
+
+    const locals: GitBranchRef[] = [];
+    const remotes: GitBranchRef[] = [];
+    for (const line of output.split('\n')) {
+      if (!line) continue;
+      const current = line[0] === '*';
+      const rest = line.slice(1);
+      // Split the short SHA off the tail — refnames can contain any of the
+      // characters GIT_REF_NAME_RE allows, so head-splitting is unsafe.
+      const shaMatch = rest.match(/^(.+?)([0-9a-f]{4,})$/);
+      if (!shaMatch) continue;
+      const fullName = shaMatch[1];
+      const head = shaMatch[2];
+      if (fullName.startsWith('refs/heads/')) {
+        locals.push({ name: fullName.slice('refs/heads/'.length), current, head });
+      } else if (fullName.startsWith('refs/remotes/')) {
+        const tail = fullName.slice('refs/remotes/'.length);
+        const slash = tail.indexOf('/');
+        if (slash < 0) continue;
+        const remote = tail.slice(0, slash);
+        const name = tail.slice(slash + 1);
+        // Hide HEAD pseudo-refs kept on the remote side (`origin/HEAD`).
+        if (name === 'HEAD') continue;
+        remotes.push({ name, remote, head });
+      }
+    }
+    return { isGitRepo: true, locals, remotes };
+  });
+
+  ipcMain.handle('git:commit-detail', async (_event, cwd: unknown, sha: unknown): Promise<GitCommitDetailResult> => {
+    if (typeof cwd !== 'string' || cwd.length === 0 || !isGitRepoDir(cwd)) {
+      return { isGitRepo: false, error: 'Not a Git repository.' };
+    }
+    if (!validateGitRef(sha)) {
+      return { isGitRepo: true, error: 'Invalid commit ref.' };
+    }
+    try {
+      const meta = stdoutOf(
+        runGit(cwd, ['show', '--no-patch', `--format=${GIT_LOG_FORMAT}`, '-z', sha as string], 16 * 1024),
+      );
+      if (!meta) return { isGitRepo: true, error: 'Commit not found.' };
+      const commits = parseCommitLogOutput(meta);
+      if (commits.length === 0) return { isGitRepo: true, error: 'Commit not found.' };
+      const commit = commits[0];
+
+      const numstat = stdoutOf(
+        runGit(cwd, ['show', '--numstat', '--format=', sha as string], MAX_DIFF_BYTES),
+      );
+      const files: GitReviewFile[] = [];
+      if (numstat) {
+        for (const change of parseNumstat(numstat)) {
+          files.push({ ...change, status: 'modified' });
+        }
+      }
+
+      const patchResult = runGit(cwd, ['show', '--no-ext-diff', '--no-color', '--unified=20', sha as string], MAX_DIFF_BYTES);
+      const patch = patchStdoutOf(patchResult) ?? '';
+      const binary = patch.length > 0 ? isBinaryPatch(patch) : files.length === 0;
+      const bounded = boundedPatchPart(patch, MAX_DIFF_BYTES);
+      return {
+        isGitRepo: true,
+        commit,
+        files,
+        totals: computeTotals(files, files.length),
+        patch: bounded.patch,
+        truncated: bounded.truncated || didExceedDiffBuffer(patchResult) || undefined,
+        binary,
+      };
+    } catch {
+      return { isGitRepo: true, error: 'Unable to load commit detail.' };
     }
   });
 }
@@ -772,7 +866,69 @@ function scopeLabel(scope: ReviewScopeParams): string {
     case 'uncommitted': return 'HEAD → 工作区';
     case 'unstaged':   return '索引 → 工作区';
     case 'staged':     return 'HEAD → 索引';
-    case 'commit':     return `${scope.commitFrom?.slice(0, 7) ?? '?'} → ${scope.commitTo?.slice(0, 7) ?? '?'}`;
+    case 'commit':     return `${(scope.commitTo ?? 'HEAD').slice(0, 7)} (commit)`;
+    case 'branch':     return `HEAD → ${scope.commitTo ?? '?'}`;
+    case 'commit-pair': return `${(scope.commitFrom ?? '?').slice(0, 7)} → ${(scope.commitTo ?? '?').slice(0, 7)}`;
     default:           return '?';
   }
+}
+
+/** Short tag for the scope selector (replaces the legacy two-arrow label). */
+function scopeBranchLabel(scope: ReviewScopeParams): string | undefined {
+  switch (scope.type) {
+    case 'commit':
+      return `${(scope.commitTo ?? 'HEAD').slice(0, 7)} (commit)`;
+    case 'branch':
+      return scope.commitTo;
+    case 'commit-pair':
+      return `${(scope.commitFrom ?? '?').slice(0, 7)}…${(scope.commitTo ?? '?').slice(0, 7)}`;
+    default:
+      return undefined;
+  }
+}
+
+// ── Rich commit log parsing (plan 518) ────────────────────────────
+
+/**
+ * `git log` format string. Fields are unit-separated (`\x1f`) within a
+ * commit, and `\x00` separates commits, so commit messages with embedded
+ * newlines don't poison the row split. Fields mirror `GitCommitInfo` in
+ * the order the parser expects.
+ */
+const GIT_LOG_FORMAT = '%H%x1f%h%x1f%s%x1f%b%x1f%an%x1f%ae%x1f%aI%x1f%P%x1f%D%x00';
+
+/** Parse the output of `git log --format=<GIT_LOG_FORMAT> -z`. */
+export function parseCommitLogOutput(output: string): GitCommitInfo[] {
+  const commits: GitCommitInfo[] = [];
+  const records = output.split('\0');
+  for (const record of records) {
+    if (!record) continue;
+    const parts = record.split('\x1f');
+    if (parts.length < 9) continue;
+    const [hash, shortHash, subject, body, author, authorEmail, authorDate, parentsRaw, refsRaw] = parts;
+    if (!/^[0-9a-f]{7,40}$/i.test(hash) || !/^[0-9a-f]{7,40}$/i.test(shortHash)) continue;
+    const parents = parentsRaw.trim() ? parentsRaw.trim().split(/\s+/).filter(Boolean) : [];
+    const refs = refsRaw.trim() ? refsRaw.trim().split(/,\s*/).filter(Boolean) : [];
+    commits.push({
+      hash,
+      shortHash,
+      subject,
+      body: body ?? '',
+      author: author ?? '',
+      authorEmail: authorEmail ?? '',
+      authorDate: authorDate ?? '',
+      parents,
+      refs,
+      isMerge: parents.length > 1,
+    });
+  }
+  return commits;
+}
+
+/** Coerce legacy numeric `count` argument to the new options bag. */
+function normaliseListCommitsOptions(value: unknown): GitListCommitsOptions {
+  if (value == null) return {};
+  if (typeof value === 'number') return { count: value };
+  if (typeof value === 'object') return value as GitListCommitsOptions;
+  return {};
 }

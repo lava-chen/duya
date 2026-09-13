@@ -27,6 +27,7 @@ import type {
   SSEEvent,
   PermissionRequestEvent,
   TokenUsage,
+  UsageCall,
   AgentProgressEvent,
   StopReason,
   ProviderRuntimeConfig,
@@ -49,6 +50,7 @@ export type {
   SSEEvent,
   PermissionRequestEvent,
   TokenUsage,
+  UsageCall,
   AgentProgressEvent,
   StopReason,
 };

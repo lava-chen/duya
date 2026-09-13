@@ -1,21 +1,21 @@
 /**
- * Plan 480 — catalog exposure grayscale validation harness (T6).
+ * Four-tier exposure — declared-tools visibility guard harness.
  *
- * This is the "灰度验证闸门" that unblocks the T1–T3 closure (deleting the
- * `discoverable`/`search` dual path + 241 injection). It validates the
- * catalog mechanism deterministically WITHOUT spinning the full agent loop:
+ * Validates the guard mechanism deterministically WITHOUT spinning the
+ * full agent loop:
  *
- *   1. P2.5 enforce decision matrix — `evaluateCatalogVisibilityGuard` is the
- *      exact policy DuyaAgent.guardedCanUseTool replays; we assert the reject
- *      path and the verbatim denial message under `catalog`+`enforce`.
+ *   1. Enforce decision matrix — `evaluateVisibilityGuard` is the exact
+ *      policy DuyaAgent.guardedCanUseTool replays; undeclared calls are
+ *      always rejected with the verbatim denial message, declared tools
+ *      pass.
  *   2. Meta-tool loop — `tool_schema` discovers the MCP tool, `tool_invoke`
- *      resolves + permission-gates + executes it (the catalog end-to-end).
- *   3. Edge paths — unknown tool, MCP-disconnect (unknown namespace), executor
- *      failure (G9 timeout shape), permission deny.
- *   4. Grayscale collector — replays a simulated session the way the agent
+ *      resolves + permission-gates + executes it (the discovery path
+ *      end-to-end).
+ *   3. Edge paths — unknown tool, MCP-disconnect (unknown namespace),
+ *      executor failure (G9 timeout shape), permission deny.
+ *   4. Rejection collector — replays a simulated session the way the agent
  *      loop does and reports the undeclared direct-call rate via
- *      `readUndeclaredCallStats()`. Run against real `exposure='catalog'`
- *      traffic; once the rate is at/under threshold, T1–T3 may be deleted.
+ *      `readUndeclaredCallStats()`.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -23,8 +23,8 @@ import type { Tool, ToolResult } from '../../types.js';
 import type { ToolExecutor } from '../registry.js';
 import { ToolRegistry } from '../registry.js';
 import {
-  evaluateCatalogVisibilityGuard,
-  CATALOG_VISIBILITY_DENIAL_MESSAGE,
+  evaluateVisibilityGuard,
+  VISIBILITY_DENIAL_MESSAGE,
   recordUndeclaredCall,
   readUndeclaredCallStats,
   resetUndeclaredCallStats,
@@ -51,68 +51,46 @@ function makeFakeMcpRegistry(): ToolRegistry {
       return { id: 'fake', name: 'mcp__fakeserver__ping', result: `pong:${msg}` };
     },
   };
-  registry.registerWithKey('mcp__fakeserver__ping', pingTool, pingExecutor, 'mcp');
+  // Mimic the default exposure policy: MCP tools register with the hint
+  // tier (stub entry on the tools array; full schema via tool_schema).
+  registry.registerWithKey('mcp__fakeserver__ping', pingTool, pingExecutor, 'mcp', {
+    exposeMode: 'hint',
+    inputSchemaSummary: 'msg',
+  });
   return registry;
 }
 
-describe('P2.5 enforce decision matrix (evaluateCatalogVisibilityGuard)', () => {
+describe('enforce decision matrix (evaluateVisibilityGuard)', () => {
   const declared = META_TOOLS;
 
-  it('catalog + enforce + undeclared real tool → reject with verbatim message', () => {
-    const r = evaluateCatalogVisibilityGuard({
-      exposure: 'catalog',
-      catalogGuard: 'enforce',
+  it('undeclared real tool → reject with verbatim message', () => {
+    const r = evaluateVisibilityGuard({
       declaredTools: declared,
       toolName: 'mcp__fakeserver__ping',
     });
     expect(r.undeclared).toBe(true);
-    expect(r.reject).toBe(true);
-    expect(r.message).toBe(CATALOG_VISIBILITY_DENIAL_MESSAGE('mcp__fakeserver__ping'));
+    expect(r.message).toBe(VISIBILITY_DENIAL_MESSAGE('mcp__fakeserver__ping'));
   });
 
-  it('catalog + warn + undeclared → undeclared but NOT rejected (telemetry only)', () => {
-    const r = evaluateCatalogVisibilityGuard({
-      exposure: 'catalog',
-      catalogGuard: 'warn',
-      declaredTools: declared,
-      toolName: 'mcp__fakeserver__ping',
-    });
-    expect(r.undeclared).toBe(true);
-    expect(r.reject).toBe(false);
-  });
-
-  it('full exposure disables the guard (no undeclared concept)', () => {
-    const r = evaluateCatalogVisibilityGuard({
-      exposure: 'full',
-      catalogGuard: 'enforce',
-      declaredTools: declared,
-      toolName: 'mcp__fakeserver__ping',
-    });
-    expect(r).toEqual({ undeclared: false, reject: false });
-  });
-
-  it('search exposure disables the guard (legacy 241 path still allowed)', () => {
-    const r = evaluateCatalogVisibilityGuard({
-      exposure: 'search',
-      catalogGuard: 'enforce',
-      declaredTools: declared,
-      toolName: 'mcp__fakeserver__ping',
-    });
-    expect(r.undeclared).toBe(false);
-  });
-
-  it('declared meta tool is never flagged even under catalog + enforce', () => {
-    const r = evaluateCatalogVisibilityGuard({
-      exposure: 'catalog',
-      catalogGuard: 'enforce',
+  it('declared meta tool is never flagged', () => {
+    const r = evaluateVisibilityGuard({
       declaredTools: declared,
       toolName: 'tool_invoke',
+    });
+    expect(r).toEqual({ undeclared: false });
+  });
+
+  it('a declared hint stub passes (declared = always + hint entries)', () => {
+    const declared = new Set([...META_TOOLS, 'mcp__fakeserver__ping']);
+    const r = evaluateVisibilityGuard({
+      declaredTools: declared,
+      toolName: 'mcp__fakeserver__ping',
     });
     expect(r.undeclared).toBe(false);
   });
 });
 
-describe('catalog meta-tool loop: tool_schema → tool_invoke', () => {
+describe('meta-tool loop: tool_schema → tool_invoke', () => {
   let registry: ToolRegistry;
 
   beforeEach(() => {
@@ -207,7 +185,7 @@ describe('catalog meta-tool loop: tool_schema → tool_invoke', () => {
   });
 });
 
-describe('grayscale direct-call collector (T6 measurement hook)', () => {
+describe('undeclared direct-call collector (rejection telemetry)', () => {
   beforeEach(() => {
     resetUndeclaredCallStats();
   });
@@ -216,15 +194,10 @@ describe('grayscale direct-call collector (T6 measurement hook)', () => {
    * Replays a session the way DuyaAgent.guardedCanUseTool does per tool_use:
    * decide via the pure guard, and only then record undeclared calls.
    */
-  function simulateSession(
-    toolUses: string[],
-    opts: { exposure: 'full' | 'search' | 'catalog'; catalogGuard: 'warn' | 'enforce' },
-  ) {
+  function simulateSession(toolUses: string[]) {
     let undeclared = 0;
     for (const name of toolUses) {
-      const d = evaluateCatalogVisibilityGuard({
-        exposure: opts.exposure,
-        catalogGuard: opts.catalogGuard,
+      const d = evaluateVisibilityGuard({
         declaredTools: META_TOOLS,
         toolName: name,
       });
@@ -239,26 +212,14 @@ describe('grayscale direct-call collector (T6 measurement hook)', () => {
   }
 
   it('counts undeclared direct calls and reports the rate', () => {
-    const out = simulateSession(
-      ['tool_invoke', 'mcp__fakeserver__ping', 'mcp__fakeserver__ping'],
-      { exposure: 'catalog', catalogGuard: 'warn' },
-    );
+    const out = simulateSession(['tool_invoke', 'mcp__fakeserver__ping', 'mcp__fakeserver__ping']);
     expect(out.undeclared).toBe(2);
     expect(out.stats['mcp__fakeserver__ping']).toBe(2);
     expect(out.rate).toBeCloseTo(2 / 3);
   });
 
-  it('full exposure → zero undeclared (guard off, legacy path)', () => {
-    const out = simulateSession(['mcp__fakeserver__ping'], {
-      exposure: 'full',
-      catalogGuard: 'enforce',
-    });
-    expect(out.undeclared).toBe(0);
-    expect(out.stats).toEqual({});
-  });
-
   it('resets cleanly between sessions', () => {
-    simulateSession(['mcp__fakeserver__ping'], { exposure: 'catalog', catalogGuard: 'warn' });
+    simulateSession(['mcp__fakeserver__ping']);
     resetUndeclaredCallStats();
     expect(readUndeclaredCallStats()).toEqual({});
   });

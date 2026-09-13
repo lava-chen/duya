@@ -87,6 +87,12 @@ extraResources:
   - from: packages/agent/skills/
     to: agent/skills/
     filter: ["**/*"]
+  # Plan 455 follow-up: builtin plugins (github / notion / zotero / ...)
+  # ship in extraResources so syncBuiltinPlugins() can copy them to
+  # ~/.duya/plugins/cache/builtin/ at startup.
+  - from: packages/plugin-core/src/plugins/builtin/
+    to: builtin-plugins/
+    filter: ["**/*"]
   - from: public/
     to: public/
     filter: ["**/*"]

@@ -64,7 +64,12 @@ vi.mock('fs', () => mocks.fs);
 vi.mock('child_process', () => mocks.spawn);
 vi.mock('../db-handlers', () => mocks.db);
 
-import { registerGitHandlers } from '../git-handlers';
+import {
+  parseCommitLogOutput,
+  registerGitHandlers,
+  validateDiffPair,
+  validateGitRef,
+} from '../git-handlers';
 
 async function invokeHandler(
   channel: string,

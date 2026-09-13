@@ -120,8 +120,9 @@ import { toolInvokeTool } from '../tool/ToolInvokeTool/ToolInvokeTool.js';
 import { createToolInvokeDispatcherFromRegistry } from '../tool/ToolInvokeTool/dispatcherFromRegistry.js';
 import {
   recordUndeclaredCall,
-  evaluateCatalogVisibilityGuard,
+  evaluateVisibilityGuard,
 } from '../tool/visibility-guard.js';
+import { buildHintStubEntry } from '../tool/hint-stub.js';
 
 // Plan 453 Task C: contextual-user-fragment injection channel.
 import {
@@ -562,10 +563,14 @@ export class duyaAgent {
 
     // Wire up the LLM summarizer so strategies can generate summaries
     this.compactionManager.setSummarizer(async (text: string, prompt: string): Promise<string> => {
+      // Plan 523 P4.2: put the instructions directly inside the user message
+      // (alongside the transcription) so a gateway that weakens/ignores the
+      // `system` field still delivers the 9-section contract. The prompt
+      // already contains the conversation plus the summarization instructions.
       const summaryMessages: Message[] = [
         {
           role: 'user',
-          content: text,
+          content: prompt,
         },
       ];
 
@@ -577,7 +582,13 @@ export class duyaAgent {
         : new AbortController();
       const stream = (this.compactClient ?? this.llmClient).streamChat(summaryMessages, {
         systemPrompt: prompt,
-        maxTokens: 4096,
+        // Plan 523 P4.1: disable tool calling so the summarizer cannot emit
+        // DSML/tool-call tokens instead of a summary.
+        toolChoice: 'none',
+        // Plan 523 P4.3: 4096 clipped long-session summaries (unclosed-tag
+        // producer). 8192 + self-trim instruction in the prompt guards the
+        // new ceiling.
+        maxTokens: 8192,
         temperature: 0.3,
         signal: childController.signal,
       });
@@ -968,30 +979,24 @@ export class duyaAgent {
     console.error(`[Agent-Process] canvas tools: ${tools.filter(t => t.name.startsWith('canvas_')).map(t => t.name).join(', ') || '(none)'}`);
     let systemPromptContent = await this._buildSystemPrompt(tools, options, appliedProfile);
     const { permissionContext, canUseTool } = this._buildPermissionContext(registry);
-    // Plan 480 P2.4/P2.5: visibility guard. Snapshot of the tools declared on
-    // the current provider request (filled before each openLLMStream). Under
-    // catalog exposure MCP tools are intentionally absent from that set 鈥?a
-    // direct call to one is an undeclared call. 'warn' logs/counts it and
-    // lets it run; 'enforce' rejects it with a structured message pointing
-    // the model at tool_schema 鈫?tool_invoke (搂8.3 gray-scale ladder).
+    // Declared-tools visibility guard. Snapshot of the tools declared on
+    // the current provider request (filled before each openLLMStream). Any
+    // model call to a tool name outside that set is rejected — the only
+    // sanctioned paths to undeclared tools are
+    // tool_search → tool_schema → tool_invoke (four-tier exposure).
     let declaredToolsForRequest = new Set<string>();
-    const exposureConfig = readToolExposureConfig();
     const guardedCanUseTool: typeof canUseTool = async (toolName, toolInput) => {
-      const decision = evaluateCatalogVisibilityGuard({
-        exposure: exposureConfig.exposure,
-        catalogGuard: exposureConfig.catalogGuard,
+      const decision = evaluateVisibilityGuard({
         declaredTools: declaredToolsForRequest,
         toolName,
       });
       if (decision.undeclared) {
         recordUndeclaredCall(toolName);
-        if (decision.reject) {
-          return {
-            allowed: false,
-            behavior: 'deny' as const,
-            message: decision.message!,
-          };
-        }
+        return {
+          allowed: false,
+          behavior: 'deny' as const,
+          message: decision.message!,
+        };
       }
       return canUseTool(toolName, toolInput);
     };
@@ -1285,14 +1290,14 @@ export class duyaAgent {
     // so it is GC'd when streamChat finishes (no cross-session pollution).
     const discoveredTools: Set<string> = new Set();
     let discoveredToolPromptSuffix = '';
-    // Plan 480 P3.2: discovered-tool schema delivery for this call.
-    //   'tail'  → the full schema is appended to the conversation tail
-    //             (grok `GetMcpTools` parity; the tools array stays stable);
-    //   'array' → legacy plan-241 merge into the next turn's tools array.
-    // `discoveredPromotedToToolList` flips to true once a compaction fires
-    // mid-stream: compaction summarizes the tail away, so the discovered
-    // tools return to the persistent tool list for the rest of the call.
-    const discoveredSchemaDelivery = exposureConfig.discoveredSchemaDelivery;
+    // Discovered-tool schema delivery: the full schema rides the
+    // conversation tail (grok `GetMcpTools` parity; the tools array stays
+    // stable). The config-driven 'array' delivery was retired with the
+    // four-tier exposure model; `discoveredPromotedToToolList` remains as
+    // the sole runtime merge path — it flips to true once a compaction
+    // fires mid-stream (compaction summarizes the tail away, so the
+    // discovered tools return to the persistent tool list for the rest of
+    // the call).
     let discoveredPromotedToToolList = false;
 
     // Generate a unique seq_index for this streamChat call
@@ -1343,21 +1348,13 @@ export class duyaAgent {
       // to its hook matcher (PostToolUseFailure).
       const turnToolCallIds = new Map<string, string>();
 
-      // Surface tools discovered via tool_search in previous turns.
-      // Discoverable tools are excluded from the base list by
-      // _resolveTools; this loop merges them in once discovered,
-      // respecting the same deny/allow constraints.
-      // Plan 480 P4: under `exposure = "catalog"` NO tool is ever merged
-      // into the request this way 鈥?the tools array stays byte-constant and
-      // dynamic tools (MCP + discoverable built-ins) are reached exclusively
-      // through tool_schema (builtin namespace) + tool_invoke.
-      const catalogExposure = exposureConfig.exposure === 'catalog';
-      // Plan 480 P3.2: default tail delivery does NOT touch the tools array —
-      // the legacy plan-241 merge runs only when explicitly configured, or
-      // once a mid-stream compaction promoted the discovered set.
-      const mergeDiscoveredToToolList =
-        discoveredSchemaDelivery === 'array' || discoveredPromotedToToolList;
-      if (!catalogExposure && mergeDiscoveredToToolList && discoveredTools.size > 0) {
+      // Runtime fallback: once a mid-stream compaction promoted the
+      // discovered set, merge those tools into the request's tools array
+      // for the rest of the call, respecting the same deny/allow
+      // constraints. Config-driven 'array' delivery was retired — this
+      // promotion is the only remaining merge path.
+      const mergeDiscoveredToToolList = discoveredPromotedToToolList;
+      if (mergeDiscoveredToToolList && discoveredTools.size > 0) {
         const visible = new Set(tools.map((t) => t.name));
         let added = 0;
         for (const name of discoveredTools) {
@@ -1410,10 +1407,9 @@ export class duyaAgent {
       // A discoverable tool receives the exact same full schema object that
       // an always-exposed tool receives. If its executor also provides a
       // usage guide (BrowserTool.getPrompt, for example), append that guide
-      // to this turn's system prompt as well.
-      // Plan 480 P4: catalog exposure appends no on-demand guides 鈥?dynamic
-      // tools are discovered via tool_schema instead.
-      const discoveredPrompts = !catalogExposure && mergeDiscoveredToToolList
+      // to this turn's system prompt as well — only meaningful once the
+      // tool actually rides the tools array (post-compaction promotion).
+      const discoveredPrompts = mergeDiscoveredToToolList
         ? getDiscoveredToolPrompts(registry, discoveredTools)
         : [];
       if (discoveredPrompts.length > 0) {
@@ -1724,6 +1720,18 @@ export class duyaAgent {
                 available: event.available,
               },
             } as unknown as SSEEvent)
+          } else if (event.type === 'compaction_summary_outcome') {
+            // Plan 523 P6: surface per-attempt summary outcomes over SSE so
+            // the renderer can explain why a compaction failed/retried.
+            stepBuffer.push({
+              type: 'compact:summary_outcome',
+              data: {
+                attempt: event.attempt,
+                outcome: event.outcome,
+                errorKind: event.errorKind,
+                chars: event.chars,
+              },
+            } as unknown as SSEEvent)
           }
         })
         try {
@@ -1882,17 +1890,13 @@ export class duyaAgent {
         // on `llmMessages`; never lands in the durable timeline).
         injectOSContextFragment(llmMessages, runtimePromptMessageId);
 
-        // Plan 480 P3.2 (grok `GetMcpTools` parity): full schemas of tools found
+        // (grok `GetMcpTools` parity): full schemas of tools found
         // via `tool_search` are appended at the very tail, leaving the request's
         // `tools` array untouched so the cached prefix stays byte-stable. The
         // model invokes each via the constant `tool_invoke` meta tool. Transient:
-        // rebuilt from `discoveredTools` every turn, never persisted.
-        if (
-          !catalogExposure &&
-          discoveredSchemaDelivery === 'tail' &&
-          !discoveredPromotedToToolList &&
-          discoveredTools.size > 0
-        ) {
+        // rebuilt from `discoveredTools` every turn, never persisted. Skipped
+        // once a compaction promoted the set into the persistent tool list.
+        if (!discoveredPromotedToToolList && discoveredTools.size > 0) {
           const schemaBlock = renderDiscoveredToolSchemaBlock(registry, discoveredTools);
           if (schemaBlock) {
             llmMessages.push({
@@ -2970,7 +2974,9 @@ export class duyaAgent {
     for (const entry of snapshot) {
       if (entry.type !== 'message') continue;
       const msg = entry.message as unknown as Record<string, unknown>;
-      if (msg.kind !== 'runtime_context') continue;
+      // RuntimeContextMessage discriminates on `role` (message-framework.ts).
+      // Keep `kind` as a legacy fallback for envelope-shaped entries.
+      if (msg.role !== 'runtime_context' && msg.kind !== 'runtime_context') continue;
       if ((msg as { source?: string }).source !== 'attachment') continue;
       const md = (msg as { metadata?: Readonly<Record<string, unknown>> }).metadata;
       const ids = (md?.[RUNTIME_CONTEXT_METADATA_KEYS.attachmentIds as string] ?? []) as unknown[];
@@ -3246,7 +3252,8 @@ export class duyaAgent {
     // Single-pass tool visibility filter.
     //
     // One question per tool: is it visible to the LLM this turn?
-    //   1. Exposure: always-exposed, or already discovered via tool_search
+    //   1. Exposure tier: always/hint declared, discoverable only once
+    //      found or exact-promoted, hidden never
     //   2. Denylist: caller exact + profile wildcard (deny wins)
     //   3. Allowlist: caller exact + profile wildcard
     //
@@ -3268,16 +3275,23 @@ export class duyaAgent {
     logger.debug(
       `[Agent] Tool snapshot: ${allTools.length} total (${mcpToolCount} MCP, ${allTools.length - mcpToolCount} non-MCP)`,
     );
-    const tools: Tool[] = allTools.filter((t) =>
-      isToolVisible(
-        t.name,
-        snapshot.getExposeMode(t.name),
-        preExposedConnectorTools.size > 0
-          ? new Set([...EMPTY_DISCOVERED, ...preExposedConnectorTools])
-          : EMPTY_DISCOVERED,
-        constraints,
-      ),
-    );
+    // Four-tier exposure: `always` tools push their full definition,
+    // `hint` tools push a stub (description + argument summary, empty
+    // schema — full schema stays behind tool_schema), `discoverable`
+    // tools are excluded until found via tool_search or exact-promoted,
+    // `hidden` tools are never exposed.
+    const discoveredSeed =
+      preExposedConnectorTools.size > 0
+        ? new Set([...EMPTY_DISCOVERED, ...preExposedConnectorTools])
+        : EMPTY_DISCOVERED;
+    const tools: Tool[] = [];
+    for (const t of allTools) {
+      const mode = snapshot.getExposeMode(t.name);
+      if (!isToolVisible(t.name, mode, discoveredSeed, constraints)) continue;
+      tools.push(
+        mode === 'hint' ? buildHintStubEntry(t, snapshot.getMeta(t.name)) : t,
+      );
+    }
     logger.info(
       `[Agent] streamChat: ${tools.length}/${allTools.length} tools visible after visibility filter`,
     );
@@ -3375,24 +3389,18 @@ export class duyaAgent {
       systemPromptContent = [...systemPromptResult].join('\n\n');
     }
 
-    // MCP tool schemas are deliberately discoverable rather than placed in
-    // every provider request. Keep the model aware of connected capability
-    // families with a bounded directory, so a broad request such as "what MCP
-    // tools do I have?" does not depend on arbitrary search-result ordering.
-    if (!options?.disableSystemPrompt) {
+    // Four-tier exposure: under `exposure = "search"` MCP tools are absent
+    // from the tools array and unknown to the model — keep a bounded
+    // capability directory in the system prompt so a broad request such as
+    // "what MCP tools do I have?" does not depend on search-result
+    // ordering. Under `full`/`hint` every MCP tool is declared on the
+    // request already; the directory would be redundant.
+    if (!options?.disableSystemPrompt && readToolExposureConfig().exposure === 'search') {
       const mcpCatalog = buildMCPCapabilityCatalog(
         this.activeMCPRegistry.getAllTools().filter(
           (tool) => this.activeMCPRegistry.getOwner(tool.name) === 'mcp',
         ),
-        // Plan 480 搂8.4: under `exposure = "catalog"` MCP tools are absent
-        // from the tools array 鈥?the directory must point the model at the
-        // tool_schema/tool_invoke meta pair instead of tool_search.
-        {
-          entryPoint:
-            readToolExposureConfig().exposure === 'catalog'
-              ? 'tool_invoke'
-              : 'tool_search',
-        },
+        { entryPoint: 'tool_search' },
       );
       if (mcpCatalog) {
         systemPromptContent = systemPromptContent

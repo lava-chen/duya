@@ -235,9 +235,19 @@ function repairHeadingSyntax(segment: string): string {
  */
 const PRESERVED_URL_RE = /^(?:duya-file:|blob:|data:image\/)/i;
 
-export function preserveLocalUrlTransform(url: string): string {
+/**
+ * `plugin://<pluginId>` — a plugin @-mention link. MarkdownAnchor consumes it
+ * and renders a chip instead of a link, so the URL is preserved on `href`
+ * only; an `img src="plugin://..."` is still stripped by the default
+ * transform. This keeps the widened allow-list scoped to the one attribute
+ * that has a dedicated renderer.
+ */
+const PLUGIN_MENTION_URL_RE = /^plugin:\/\//i;
+
+export function preserveLocalUrlTransform(url: string, key?: string): string {
   if (!url) return url;
   if (PRESERVED_URL_RE.test(url)) return url;
+  if (key === 'href' && PLUGIN_MENTION_URL_RE.test(url)) return url;
   // Windows absolute path (`C:/...` or `C:\...`).
   if (/^[a-zA-Z]:[\\/]/.test(url)) return url.replace(/\\/g, '/');
   // Unix absolute path or app-internal route.
