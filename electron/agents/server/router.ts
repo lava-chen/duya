@@ -204,6 +204,62 @@ export async function resolveRuntimeConfigViaDbRequest(
   }
 }
 
+/**
+ * Resolve the multi-path project roots for a session's working directory
+ * (Plan 525, codex workspace_roots semantics): the session's cwd stays the
+ * PRIMARY root; every other `projects.paths` entry of the owning project
+ * entity comes back as an additional root.
+ *
+ * Main side is best-effort (memory DB may be unbootstrapped / no matching
+ * project) — on any miss the session behaves exactly as before.
+ */
+export async function resolveProjectAdditionalRootsViaDbRequest(
+  dbRequest: ((action: string, payload: Record<string, unknown>) => Promise<unknown>) | undefined,
+  workingDirectory: string | undefined,
+): Promise<string[]> {
+  if (!dbRequest || !workingDirectory) return [];
+  try {
+    const result = await dbRequest('projects:resolveAdditionalRoots', {
+      workingDirectory,
+    }) as { projectId?: unknown; additionalRoots?: unknown } | null;
+    if (!result || !Array.isArray(result.additionalRoots)) return [];
+    return result.additionalRoots.filter((r): r is string => typeof r === 'string').slice(0, 32);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Merge additional workspace roots into a permissionRules blob's
+ * `permissions.additionalDirectories` (dedup, case-insensitive on Windows
+ * style paths is left to the worker's own path.resolve — here exact-string
+ * dedupe is enough since roots come from one source of truth).
+ */
+export function mergeAdditionalRootsIntoPermissionRules(
+  permissionRules: unknown,
+  additionalRoots: string[],
+): unknown {
+  if (additionalRoots.length === 0) return permissionRules;
+  const base = permissionRules && typeof permissionRules === 'object' ? permissionRules as Record<string, unknown> : {};
+  const permissions = base.permissions && typeof base.permissions === 'object' ? base.permissions as Record<string, unknown> : {};
+  const existing = Array.isArray(permissions.additionalDirectories)
+    ? permissions.additionalDirectories.filter((d): d is string => typeof d === 'string')
+    : [];
+  const merged = [...existing];
+  for (const root of additionalRoots) {
+    if (!merged.some((d) => d.replace(/\\/g, '/').toLowerCase() === root.replace(/\\/g, '/').toLowerCase())) {
+      merged.push(root);
+    }
+  }
+  return {
+    ...base,
+    permissions: {
+      ...permissions,
+      additionalDirectories: merged,
+    },
+  };
+}
+
 export interface BotProviderConfigFallbackDeps {
   readConfigAgents?: typeof readConfigAgents;
   resolveBotOrDefaultProvider?: (
@@ -820,6 +876,17 @@ async function handlePostChat(
       // Send init first if provider config is provided
       // M7: Use structured logger
       httpLogger.debug('Sending init command to worker', { sessionId, hasProviderConfig: !!providerConfig });
+      // Plan 525: the session's cwd is the primary workspace root; every
+      // other path of the owning project entity becomes an additional
+      // writable root (codex workspace_roots parity). Best-effort.
+      const projectAdditionalRoots = await resolveProjectAdditionalRootsViaDbRequest(
+        dbRequest,
+        workingDirectory || undefined,
+      );
+      const effectivePermissionRules = mergeAdditionalRootsIntoPermissionRules(
+        parsed.options?.permissionRules,
+        projectAdditionalRoots,
+      );
       workerManager.sendCommand(sessionId, {
         type: 'init',
         sessionId,
@@ -831,7 +898,7 @@ async function handlePostChat(
         communicationPlatform: parsed.options?.platform,
         securityScanEnabled: parsed.options?.securityScanEnabled,
         referencesEnabled: detectReferencesEnabled(workingDirectory),
-        permissionRules: parsed.options?.permissionRules,
+        permissionRules: effectivePermissionRules,
       });
 
       // Plan 476 P0-A: mirror "this session is running a chat" into
