@@ -130,11 +130,14 @@ describe('project-entity-handlers', () => {
       expect(listResult.success).toBe(true);
       expect(listResult.projects).toHaveLength(1);
       expect(listResult.projects[0].name).toBe('duya');
-      // paths is a parsed array, not a JSON string
+      // paths is a parsed array, not a JSON string. After L1 hardening
+      // every stored entry is run through `normalizePath`, which
+      // lowercases the Windows drive letter — so the wire form is
+      // canonical even if the user typed an uppercase drive.
       expect(Array.isArray(listResult.projects[0].paths)).toBe(true);
       expect(listResult.projects[0].paths).toEqual([
-        { path: 'E:/Projects/duya', description: null },
-        { path: 'E:/Projects/duya-website', description: 'website' },
+        { path: 'e:/Projects/duya', description: null },
+        { path: 'e:/Projects/duya-website', description: 'website' },
       ]);
     });
   });
@@ -156,7 +159,7 @@ describe('project-entity-handlers', () => {
       expect(result.success).toBe(true);
       expect(result.project).not.toBeNull();
       expect(result.project!.project_id).toBe(projectId);
-      expect(result.project!.paths).toEqual([{ path: 'E:/Projects/duya', description: null }]);
+      expect(result.project!.paths).toEqual([{ path: 'e:/Projects/duya', description: null }]);
     });
 
     it('rejects empty-string projectId with INVALID_INPUT', async () => {
@@ -189,9 +192,11 @@ describe('project-entity-handlers', () => {
       expect(result.success).toBe(true);
       expect(typeof result.projectId).toBe('string');
       expect(result.project.project_id).toBe(result.projectId);
+      // Stored form is the canonical normalized path (lowercased
+      // drive letter on Windows).
       expect(result.project.paths).toEqual([
-        { path: 'E:/Projects/duya', description: null },
-        { path: 'E:/Projects/duya/docs', description: 'design notes' },
+        { path: 'e:/Projects/duya', description: null },
+        { path: 'e:/Projects/duya/docs', description: 'design notes' },
       ]);
     });
 
@@ -240,6 +245,55 @@ describe('project-entity-handlers', () => {
         error: 'paths[1].path must be a non-empty string',
         code: 'INVALID_INPUT',
       });
+    });
+
+    it('L1 hardening: rejects a relative path', async () => {
+      const result = await invoke('projects:register', {}, {
+        name: 'duya',
+        paths: [{ path: 'relative/path' }],
+      });
+      expect(result).toMatchObject({ success: false, code: 'INVALID_INPUT' });
+      expect((result as { error: string }).error).toMatch(/absolute path/);
+    });
+
+    it('L1 hardening: rejects a `..`-laden path', async () => {
+      const result = await invoke('projects:register', {}, {
+        name: 'duya',
+        paths: [{ path: 'E:/Projects/duya/../../Windows/System32' }],
+      });
+      // `..` segments are blocked at the IPC boundary so the
+      // renderer cannot ask the worker to treat the resolved form
+      // (`e:/Windows/System32`) as a writable root.
+      expect(result).toMatchObject({ success: false, code: 'INVALID_INPUT' });
+      expect((result as { error: string }).error).toMatch(/`..` segments/);
+    });
+
+    it('L1 hardening: rejects UNC device namespace', async () => {
+      const result = await invoke('projects:register', {}, {
+        name: 'duya',
+        paths: [{ path: '\\\\?\\C:\\Windows\\System32' }],
+      });
+      expect(result).toMatchObject({ success: false, code: 'INVALID_INPUT' });
+      expect((result as { error: string }).error).toMatch(/device namespace/);
+    });
+
+    it('L1 hardening: rejects UNC remote share', async () => {
+      const result = await invoke('projects:register', {}, {
+        name: 'duya',
+        paths: [{ path: '\\\\fileserver\\share\\projects' }],
+      });
+      expect(result).toMatchObject({ success: false, code: 'INVALID_INPUT' });
+      expect((result as { error: string }).error).toMatch(/UNC remote share/);
+    });
+
+    it('L1 hardening: rejects paths longer than MAX_PROJECT_PATH_LENGTH', async () => {
+      const tooLong = 'E:/' + 'a'.repeat(4096);
+      const result = await invoke('projects:register', {}, {
+        name: 'duya',
+        paths: [{ path: tooLong }],
+      });
+      expect(result).toMatchObject({ success: false, code: 'INVALID_INPUT' });
+      expect((result as { error: string }).error).toMatch(/≤ 4096 characters/);
     });
   });
 

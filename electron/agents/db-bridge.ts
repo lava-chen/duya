@@ -1542,12 +1542,18 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     // agent server injects them as additionalDirectories so the permission
     // boundary covers all of the project's folders (codex-style
     // workspace_roots: cwd is the primary, the rest are writable roots).
+    //
+    // L3 hardening: match the same `normalizePath` algorithm used by
+    // `projectService` on the storage side (realpath + posix + win32
+    // drive-letter lowercasing). The previous local `normalizeForMatch`
+    // (string-lower + slash-strip) diverged from pathUtils: `..`
+    // segments, symlinks, and case mismatches all fell through silently,
+    // which let an attacker register a project whose `paths[0]` was the
+    // lexical form of a sensitive directory and have it survive the
+    // cwd match against a `..`-laden additional path.
     case 'projects:resolveAdditionalRoots': {
       const sessionCwd = typeof p.workingDirectory === 'string' ? p.workingDirectory.trim() : '';
       if (!sessionCwd) return { projectId: null, additionalRoots: [] };
-      const normalizeForMatch = (value: string): string =>
-        value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-      const cwdNorm = normalizeForMatch(sessionCwd);
       try {
         // listProjects throws when the memory-state DB is not bootstrapped
         // (memory worker disabled) — bootstrap lazily once and retry, so
@@ -1568,14 +1574,32 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
             // no database dir available — treat as no project
           }
         }
+        // Normalize the cwd through the same algorithm as the stored
+        // path entries. `normalizePath` swallows realpath failures
+        // (ELOOP / ENOENT / EACCES) and falls back to lexical resolve,
+        // so cwd for a fresh chat on a not-yet-created directory still
+        // matches a stored entry created from the same lexical form.
+        const cwdNorm = memoryState.normalizePath(sessionCwd).absolute_normalized_path;
         const hit = rows.find((row) =>
-          memoryState.projectPaths(row).some((entry) => normalizeForMatch(entry.path) === cwdNorm)
+          memoryState.projectPaths(row).some((entry) => entry.path === cwdNorm)
         );
         if (!hit) return { projectId: null, additionalRoots: [] };
-        const additionalRoots = memoryState
-          .projectPaths(hit)
-          .map((entry) => entry.path)
-          .filter((entryPath) => normalizeForMatch(entryPath) !== cwdNorm);
+        // L2 hardening: only inject roots that the project actually
+        // owns. `projectPaths(row)` is the canonical list stored in
+        // `projects.paths` (already normalized by `createProject` /
+        // `updateProject` since the L1 fix). Filter against the cwd
+        // (already excluded) and dedupe — we never trust any extra
+        // root passed in by the IPC caller (the bridge contract is
+        // rooted solely in DB state).
+        const cwdNormLower = cwdNorm.toLowerCase();
+        const seen = new Set<string>([cwdNormLower]);
+        const additionalRoots: string[] = [];
+        for (const entry of memoryState.projectPaths(hit)) {
+          const lower = entry.path.toLowerCase();
+          if (seen.has(lower)) continue;
+          seen.add(lower);
+          additionalRoots.push(entry.path);
+        }
         return { projectId: hit.project_id, additionalRoots };
       } catch (error) {
         getLogger().warn(

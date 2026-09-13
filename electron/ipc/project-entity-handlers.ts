@@ -23,6 +23,7 @@ import { ipcMain } from 'electron';
 
 import { createProject, deleteProject, getProject, listProjects, projectPaths, updateProject, type CreateProjectInput, type UpdateProjectInput } from '../memory-state';
 import type { ProjectPathEntry, ProjectRow } from '../memory-state';
+import { MAX_PROJECT_PATH_LENGTH } from '../memory-state';
 import { getLogger, LogComponent } from '../logging/logger';
 
 /** Row shape sent over the wire: same as DB row but with `paths` already parsed. */
@@ -39,6 +40,79 @@ function toDTO(row: ProjectRow): ProjectRowDTO {
     ...row,
     paths: projectPaths(row),
   };
+}
+
+/**
+ * Pre-flight validation for an incoming path entry (L1 hardening —
+ * Plan 525 §7 defense-in-depth). Runs before `createProject` /
+ * `updateProject` so the user sees a clean error code instead of the
+ * service throwing mid-transaction.
+ *
+ * Rejects:
+ *   - Non-absolute paths (e.g. `../../etc/passwd`, `foo/bar`). The
+ *     service normalizes with `path.resolve`, which would still make
+ *     a relative path absolute relative to `process.cwd()` — but
+ *     `process.cwd()` is not what the user means to register, so we
+ *     surface it as an explicit error.
+ *   - NUL bytes (Node rejects these via `path.resolve` but we want a
+ *     structured `INVALID_INPUT` instead of a thrown TypeError).
+ *   - UNC paths starting with `\\?\` or `\\host\share`. The `\\?\`
+ *     device namespace is a Windows symlink attack vector and we do
+ *     not need to support it for project paths. `\\host` is a remote
+ *     share — out of scope and slow.
+ *   - Excessive length (≥ MAX_PROJECT_PATH_LENGTH).
+ *
+ * Does NOT enforce existence or walk-up: `normalizeProjectPathEntries`
+ * + `walkToExistingAncestor` handle that (the service must remain
+ * tolerant of yet-to-be-created directories, so we cannot require
+ * every path to exist on disk).
+ */
+function validateProjectPathEntry(entry: unknown, index: number): string | null {
+  if (!entry || typeof entry !== 'object') {
+    return `paths[${index}] must be an object`;
+  }
+  const path = (entry as { path?: unknown }).path;
+  if (typeof path !== 'string' || path.length === 0) {
+    return `paths[${index}].path must be a non-empty string`;
+  }
+  if (path.length > MAX_PROJECT_PATH_LENGTH) {
+    return `paths[${index}].path must be ≤ ${MAX_PROJECT_PATH_LENGTH} characters`;
+  }
+  if (path.includes('\0')) {
+    return `paths[${index}].path must not contain NUL bytes`;
+  }
+  // Reject UNC device namespace (`\\?\C:\...`) and remote shares
+  // (`\\server\share\...`). `path.resolve` on Node normalizes forward
+  // slashes to backslashes on Windows before this check, so we also
+  // normalize the input here for symmetry.
+  // Normalize the slash style ONLY — we do NOT collapse consecutive
+  // backslashes, because doing so would hide the UNC prefix (`\\?\`
+  // would become `\?\` and slip past the device-namespace check). We
+  // also do not normalize away `//` style sequences, since `\\\\?\`
+  // is the only shape we want to match.
+  const normalized = path.replace(/\//g, '\\');
+  if (normalized.startsWith('\\\\?\\') || normalized.startsWith('\\\\.\\')) {
+    return `paths[${index}].path must not use the Windows device namespace (\\\\?\\ or \\\\.\\)`;
+  }
+  if (normalized.startsWith('\\\\')) {
+    return `paths[${index}].path must not be a UNC remote share`;
+  }
+  // Reject relative paths. `path.isAbsolute` accepts both forms; we
+  // require forward or backslash roots so the renderer cannot hide a
+  // `../etc/passwd` style traversal behind a non-leading slash.
+  const isAbsolute = /^([\\/]|[A-Za-z]:[\\/])/.test(path);
+  if (!isAbsolute) {
+    return `paths[${index}].path must be an absolute path`;
+  }
+  // Reject `..` segments. The service-layer `normalizePath` collapses
+  // them silently, which would let a renderer slip `E:/foo/../../etc`
+  // through and have the worker treat `e:/etc` as a writable root.
+  // We surface a clean error instead so the user types the resolved
+  // directory directly.
+  if (/(^|[\\/])\.\.([\\/]|$)/.test(path)) {
+    return `paths[${index}].path must not contain \`..\` segments`;
+  }
+  return null;
 }
 
 export function registerProjectEntityHandlers(): void {
@@ -92,15 +166,11 @@ export function registerProjectEntityHandlers(): void {
         code: 'EMPTY_PATHS',
       };
     }
-    // Validate every path entry's `path` field up front for a clearer error.
+    // Validate every path entry up front (L1 hardening).
     for (let i = 0; i < input.paths.length; i++) {
-      const entry = input.paths[i] as Record<string, unknown>;
-      if (!entry || typeof entry.path !== 'string' || entry.path.length === 0) {
-        return {
-          success: false,
-          error: `paths[${i}].path must be a non-empty string`,
-          code: 'INVALID_INPUT',
-        };
+      const error = validateProjectPathEntry(input.paths[i], i);
+      if (error) {
+        return { success: false, error, code: 'INVALID_INPUT' };
       }
     }
     // Avatar fields (migration 0013): optional, bounded strings from the
@@ -151,13 +221,9 @@ export function registerProjectEntityHandlers(): void {
     }
     if (Array.isArray(patch.paths)) {
       for (let i = 0; i < patch.paths.length; i++) {
-        const entry = patch.paths[i] as Record<string, unknown>;
-        if (!entry || typeof entry.path !== 'string' || entry.path.length === 0) {
-          return {
-            success: false,
-            error: `paths[${i}].path must be a non-empty string`,
-            code: 'INVALID_INPUT',
-          };
+        const error = validateProjectPathEntry(patch.paths[i], i);
+        if (error) {
+          return { success: false, error, code: 'INVALID_INPUT' };
         }
       }
     }

@@ -79,6 +79,8 @@ export {
   readPlansIndex,
   resolveProjectsRoot,
   projectPlansDir,
+  normalizeProjectPathEntries,
+  MAX_PROJECT_PATH_LENGTH,
   type CreateProjectInput,
   type UpdateProjectInput,
   type ProjectServiceOptions,

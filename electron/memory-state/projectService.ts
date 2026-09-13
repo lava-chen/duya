@@ -5,6 +5,8 @@ import { randomUUID } from 'crypto';
 import type { Database } from 'better-sqlite3';
 import { getDb } from './db';
 import { parseProjectPaths, serializeProjectPaths, type ProjectPathEntry, type ProjectRow } from './schema';
+import { normalizePath } from './pathUtils';
+import { getLogger, LogComponent } from '../logging/logger';
 
 /**
  * Project entity service (Plan 525 Phase 3).
@@ -151,6 +153,78 @@ export function readPlansIndex(projectId: string, opts?: ProjectServiceOptions):
 }
 
 /**
+ * Normalize every path entry of an input path list. Empty or invalid
+ * paths are dropped (caller already enforced ≥1 entry). Returns the
+ * deduped list keyed by `absolute_normalized_path`.
+ *
+ * Defense-in-depth for L1 (Plan 525 hardening):
+ * - `path.resolve` collapses `..`/`.` and makes the path absolute.
+ * - `realpathSync.native` resolves symlinks (falls back to lexical on
+ *   failure so we never throw on missing drives).
+ * - `path.posix.normalize` collapses duplicate separators.
+ * - Win32 only: drive letter is lowercased so case mismatch on
+ *   `E:\Foo` vs `e:/foo` does not produce two distinct projects.
+ *
+ * Every consumer of `projects.paths` (db-bridge, projectResolver,
+ * plan MCP) can now assume entries are already normalized — they only
+ * need to normalize the *query* side. This removes the L3 algorithm
+ * fork where db-bridge used a different `normalizeForMatch` than
+ * `pathUtils.normalizePath`.
+ */
+export function normalizeProjectPathEntries(
+  paths: Array<{ path: string; description?: string | null }>,
+  opts?: { platform?: string; logger?: ReturnType<typeof getLogger> },
+): ProjectPathEntry[] {
+  const platform = opts?.platform ?? process.platform;
+  const logger = opts?.logger ?? getLogger();
+  const seen = new Set<string>();
+  const out: ProjectPathEntry[] = [];
+  for (const entry of paths) {
+    if (!entry || typeof entry.path !== 'string' || entry.path.length === 0) {
+      throw new Error('project-service: path entries must have a non-empty `path`');
+    }
+    if (entry.path.length > MAX_PROJECT_PATH_LENGTH) {
+      throw new Error(
+        `project-service: path entries must be ≤ ${MAX_PROJECT_PATH_LENGTH} characters`,
+      );
+    }
+    // Defense against renderer-supplied NUL / control bytes and UNC
+    // symlink escapes. NUL is rejected by `path.resolve` on Node but
+    // we surface a clean error early. Backslashes and forward slashes
+    // are both legal; we only reject the things that *cannot* be
+    // safely normalized to a single canonical form.
+    if (entry.path.includes('\0')) {
+      throw new Error('project-service: path entries must not contain NUL bytes');
+    }
+    let normalized: string;
+    try {
+      normalized = normalizePath(entry.path, platform).absolute_normalized_path;
+    } catch (err) {
+      logger.warn(
+        'project-service: path normalization failed, skipping entry',
+        { raw: entry.path, error: err instanceof Error ? err.message : String(err) },
+        LogComponent.DB,
+      );
+      continue;
+    }
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push({ path: normalized, description: entry.description ?? null });
+  }
+  if (out.length === 0) {
+    throw new Error(
+      'project-service: at least one valid path entry is required (all entries failed normalization)',
+    );
+  }
+  return out;
+}
+
+/** Cap on a single path entry to bound JSON column size. 4096 chars is
+ *  generous for any realistic Windows / POSIX path and rejects
+ *  pathological input that would inflate `projects.paths` JSON. */
+export const MAX_PROJECT_PATH_LENGTH = 4096;
+
+/**
  * Create a project row and its plans directory skeleton.
  *
  * `canonical_root` is derived from `paths[0].path` (Plan 525 §7);
@@ -158,15 +232,15 @@ export function readPlansIndex(projectId: string, opts?: ProjectServiceOptions):
  * new UUID, so duplicate calls produce distinct projects. The
  * renderer's CreateProjectDialog is the production caller (via the
  * `projects:register` IPC handler).
+ *
+ * All path entries are normalized via `normalizeProjectPathEntries`
+ * before insertion so DB state is canonical from day one (L1/L3 fix).
  */
 export function createProject(input: CreateProjectInput, opts?: ProjectServiceOptions): ProjectRow {
   if (!Array.isArray(input.paths) || input.paths.length === 0) {
     throw new Error('project-service: at least one path entry is required (canonical_root derives from paths[0])');
   }
-  const entries: ProjectPathEntry[] = input.paths.map((p) => ({
-    path: p.path,
-    description: p.description ?? null,
-  }));
+  const entries = normalizeProjectPathEntries(input.paths);
   const canonicalRoot = entries[0].path;
 
   const db = opts?.memoryDb ?? getDb();
@@ -262,10 +336,12 @@ export function updateProject(
       );
     }
     if (Array.isArray(patch.paths) && patch.paths.length > 0) {
-      const entries: ProjectPathEntry[] = patch.paths.map((p) => ({
-        path: p.path,
-        description: p.description ?? null,
-      }));
+      // Same normalization as createProject so DB state stays canonical.
+      // Empty-after-normalize (all entries dropped) is rejected: the
+      // caller already gated on length > 0 raw, but normalization can
+      // dedupe every entry to nothing — fail loud instead of silently
+      // emptying an existing project's paths.
+      const entries = normalizeProjectPathEntries(patch.paths);
       db.prepare('UPDATE projects SET paths = ?, canonical_root = ? WHERE project_id = ?').run(
         serializeProjectPaths(entries),
         entries[0].path,
