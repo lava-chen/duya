@@ -21,7 +21,6 @@ import { composeReplyContent } from "@/components/chat/bot/reply";
 import { NewChatView } from "@/components/chat/NewChatView";
 import { WelcomeView } from "@/components/home/WelcomeView";
 import { SkillsView } from "@/components/skills/SkillsView";
-import { ChannelsView } from "@/components/bridge/ChannelsView";
 import { AutomationView } from "@/components/automation/AutomationView";
 import { ExtensionsPage } from "@/components/extensions/ExtensionsPage";
 import { ConductorView } from "@duya/conductor/renderer/components/ConductorView";
@@ -811,7 +810,6 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
             />
           )}
           {currentView === 'skills' && <SkillsView />}
-          {currentView === 'bridge' && <ChannelsView />}
           {currentView === 'automation' && <AutomationView />}
           {currentView === 'conductor' && <ConductorView />}
           {currentView === 'settings' && <SettingsView />}
@@ -826,8 +824,6 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
         return <WelcomeView onSelectThread={setActiveThread} onSendMessage={handleSendMessage} />;
       case 'skills':
         return <SkillsView />;
-      case 'bridge':
-        return <ChannelsView />;
       case 'automation':
         return <AutomationView />;
       case 'conductor':

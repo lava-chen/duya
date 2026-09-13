@@ -14,7 +14,7 @@ import {
   TrashIcon,
   GlobeIcon,
 } from '@/components/icons';
-import { ChannelIcon, CHANNEL_COLORS } from '@/components/bridge/ChannelIcon';
+import { ChannelIcon, CHANNEL_COLORS } from '@/components/settings/ChannelIcon';
 import { useTranslation } from '@/hooks/useTranslation';
 
 import {

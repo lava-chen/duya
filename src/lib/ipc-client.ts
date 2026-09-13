@@ -1295,25 +1295,6 @@ export async function deleteWeixinAccountIPC(accountId: string): Promise<boolean
   return window.electronAPI!.weixin.deleteAccount(accountId) as Promise<boolean>
 }
 
-// Gateway Session operations
-export interface GatewaySession {
-  id: string
-  title: string
-  platform: string
-  platformUserId: string
-  platformChatId: string
-  createdAt: number
-  updatedAt: number
-}
-
-export async function listGatewaySessionsIPC(): Promise<GatewaySession[]> {
-  return window.electronAPI!.gateway.listSessions() as Promise<GatewaySession[]>
-}
-
-export async function getGatewaySessionIPC(id: string): Promise<GatewaySession | null> {
-  return window.electronAPI!.gateway.getSession(id) as Promise<GatewaySession | null>
-}
-
 export async function listMemoryIPC(): Promise<{ entries: MemoryEntry[]; enabled: boolean }> {
   return window.electronAPI!.memory.list()
 }

@@ -82,7 +82,6 @@ export function SearchCommandPalette() {
           { key: "cmd:plugins", title: "插件", run: () => goView("extensions") },
           { key: "cmd:automation", title: "自动化", run: () => goView("automation") },
           { key: "cmd:agents", title: "Agents", run: () => goView("agents") },
-          { key: "cmd:bridge", title: "网关", run: () => goView("bridge") },
           { key: "cmd:conductor", title: "画布", run: () => goView("conductor") },
         ],
       ],
