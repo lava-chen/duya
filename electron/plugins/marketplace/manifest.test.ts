@@ -120,6 +120,132 @@ describe('readMarketplaceManifest — validation', () => {
   });
 });
 
+describe('readMarketplaceManifest — Claude Code compatibility (plan 529 follow-up)', () => {
+  // Shapes lifted from anthropics/claude-plugins-official (verified
+  // 2026-09-13 across all 295 entries: 52 string, 154 url, 89 git-subdir).
+  const CLAUDE_CODE_MANIFEST = {
+    $schema: 'https://anthropic.com/claude-code/marketplace.schema.json',
+    name: 'claude-plugins-official',
+    description: 'Directory of popular Claude Code extensions',
+    owner: { name: 'Anthropic', email: 'support@anthropic.com' },
+    plugins: [
+      {
+        name: 'agent-sdk-dev',
+        description: 'Development kit for working with the Claude Agent SDK',
+        author: { name: 'Anthropic' },
+        source: './plugins/agent-sdk-dev',
+      },
+      {
+        name: 'api-security-testing',
+        description: 'Automate API security directly in Claude Code',
+        author: { name: '42Crunch' },
+        category: 'security',
+        source: {
+          source: 'git-subdir',
+          url: 'https://github.com/42Crunch-AI/claude-plugins.git',
+          path: 'plugins/api-security-testing',
+          ref: 'v1.5.5',
+          sha: '30287f5e3f122a646d1ac5ca3ab96e130c52a3ad',
+        },
+        homepage: 'https://42crunch.com',
+      },
+      {
+        name: 'agentforce-adlc',
+        description: 'Salesforce agentforce plugin',
+        source: {
+          source: 'url',
+          url: 'https://github.com/SalesforceAIResearch/agentforce-adlc.git',
+          sha: 'b280f6346fa70aaf4fbd0e0bc5d18582c1fb039a',
+        },
+      },
+    ],
+  };
+
+  it('parses the full Anthropic manifest without schema errors', () => {
+    const dir = makeMarketplace('claude-code');
+    writeManifest(dir, '.claude-plugin/marketplace.json', CLAUDE_CODE_MANIFEST);
+    const manifest = readMarketplaceManifest(dir);
+    expect(manifest).not.toBeNull();
+    expect(manifest?.name).toBe('claude-plugins-official');
+    expect(manifest?.plugins).toHaveLength(3);
+  });
+
+  it('normalizes a string source into a local source', () => {
+    const dir = makeMarketplace('claude-code-string');
+    writeManifest(dir, '.claude-plugin/marketplace.json', CLAUDE_CODE_MANIFEST);
+    const entry = readMarketplaceManifest(dir)?.plugins[0];
+    expect(entry?.name).toBe('agent-sdk-dev');
+    expect(entry?.source).toEqual({ source: 'local', path: './plugins/agent-sdk-dev' });
+  });
+
+  it('normalizes git-subdir into git with ref mapped to ref_name', () => {
+    const dir = makeMarketplace('claude-code-subdir');
+    writeManifest(dir, '.claude-plugin/marketplace.json', CLAUDE_CODE_MANIFEST);
+    const entry = readMarketplaceManifest(dir)?.plugins[1];
+    expect(entry?.name).toBe('api-security-testing');
+    expect(entry?.source).toEqual({
+      source: 'git',
+      url: 'https://github.com/42Crunch-AI/claude-plugins.git',
+      path: 'plugins/api-security-testing',
+      sha: '30287f5e3f122a646d1ac5ca3ab96e130c52a3ad',
+      ref_name: 'v1.5.5',
+    });
+  });
+
+  it('normalizes url (whole-repo) into a git source', () => {
+    const dir = makeMarketplace('claude-code-url');
+    writeManifest(dir, '.claude-plugin/marketplace.json', CLAUDE_CODE_MANIFEST);
+    const entry = readMarketplaceManifest(dir)?.plugins[2];
+    expect(entry?.name).toBe('agentforce-adlc');
+    expect(entry?.source).toEqual({
+      source: 'git',
+      url: 'https://github.com/SalesforceAIResearch/agentforce-adlc.git',
+      sha: 'b280f6346fa70aaf4fbd0e0bc5d18582c1fb039a',
+      ref_name: undefined,
+    });
+  });
+
+  it('maps a git-URL string source to git, not local', () => {
+    const dir = makeMarketplace('claude-code-gitstring');
+    writeManifest(dir, 'marketplace.json', {
+      name: 'mixed',
+      plugins: [
+        { name: 'remote', source: 'https://github.com/acme/plugin.git' },
+        { name: 'shorthand', source: 'github:acme/plugin' },
+      ],
+    });
+    const plugins = readMarketplaceManifest(dir)?.plugins ?? [];
+    expect(plugins[0]?.source).toEqual({ source: 'git', url: 'https://github.com/acme/plugin.git' });
+    expect(plugins[1]?.source).toEqual({ source: 'git', url: 'github:acme/plugin' });
+  });
+
+  it('still accepts duya-native source shapes unchanged', () => {
+    const dir = makeMarketplace('duya-native');
+    writeManifest(dir, 'marketplace.json', VALID_MANIFEST);
+    const entry = readMarketplaceManifest(dir)?.plugins[0];
+    expect(entry?.source).toEqual({ source: 'local', path: './plugins/linear' });
+  });
+
+  it('honors ref as an alias for ref_name on duya-native git objects', () => {
+    const dir = makeMarketplace('duya-ref-alias');
+    writeManifest(dir, 'marketplace.json', {
+      name: 'mixed',
+      plugins: [
+        {
+          name: 'pinned',
+          source: { source: 'git', url: 'https://example.com/repo.git', ref: 'v2.0.0' },
+        },
+      ],
+    });
+    const entry = readMarketplaceManifest(dir)?.plugins[0];
+    expect(entry?.source).toEqual({
+      source: 'git',
+      url: 'https://example.com/repo.git',
+      ref_name: 'v2.0.0',
+    });
+  });
+});
+
 describe('resolveContainedPath — the fence', () => {
   it('resolves simple relative paths inside the root', () => {
     const dir = makeMarketplace('fence');
