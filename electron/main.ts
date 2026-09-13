@@ -72,6 +72,7 @@ import { registerTerminalHandlers } from './ipc/terminal-handlers';
 import { registerBrowserWebviewHandlers } from './ipc/browser-webview-handlers';
 import { registerBrowserCookieHandlers } from './ipc/browser-cookie-handlers';
 import { registerProjectDatabaseHandlers } from './ipc/project-database-handlers';
+import { registerProjectEntityHandlers } from './ipc/project-entity-handlers';
 import { registerGitHandlers } from './ipc/git-handlers';
 import { registerVoiceHandlers } from './ipc/voice-handlers';
 import { registerHooksHandlers } from './ipc/hooks-handlers';
@@ -241,6 +242,10 @@ if (gotTheLock) {
     // never observe the preload API without its matching main-process route,
     // including when the application falls back to Safe Mode.
     registerProjectDatabaseHandlers();
+    // Plan 525 Phase 2.5: expose the `projects` table to the renderer so
+    // downstream UI plans (Plan 530: multi-path sidebar) can read
+    // `projects.paths` without re-deriving client-side.
+    registerProjectEntityHandlers();
 
     // ============================================================
     // Step 0.5: Cross-platform CLI install (best-effort, non-blocking)

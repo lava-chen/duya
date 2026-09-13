@@ -70,6 +70,7 @@ export {
 export {
   createProject,
   listProjects,
+  getProject,
   projectPaths,
   ensurePlansDirs,
   writePlansIndex,
