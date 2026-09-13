@@ -671,3 +671,100 @@ describe('readPluginManifest — standard Agent Plugins package detection (Plan 
     expect(manifest.id).toBe('com.duya.other');
   });
 });
+
+// ----------------------------------------------------------------------------
+// Foreign dot-folder layouts (plan 529 follow-up)
+//
+// duya consumes the Claude Code / Codex / Cursor plugin directories
+// directly, so readPluginManifest must accept their folder names. All
+// three use the same minimal shape as `.duya-plugin/plugin.json`; the
+// only real differences are the folder and that foreign manifests may
+// omit `version` / `description`.
+// ----------------------------------------------------------------------------
+
+describe('readPluginManifest — foreign dot-folder layouts', () => {
+  it('reads a Claude Code .claude-plugin/plugin.json (no version)', () => {
+    // Exact shape from anthropics/claude-plugins-official:
+    // plugins/agent-sdk-dev/.claude-plugin/plugin.json
+    mkdirSync(join(dir, '.claude-plugin'));
+    writeFileSync(
+      join(dir, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({
+        name: 'agent-sdk-dev',
+        description: 'Claude Agent SDK Development Plugin',
+        author: { name: 'Anthropic', email: 'support@anthropic.com' },
+      }),
+    );
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.name).toBe('agent-sdk-dev');
+    expect(manifest.version).toBe('0.0.0'); // missing → neutral default
+    expect(manifest.description).toBe('Claude Agent SDK Development Plugin');
+    expect(manifest.author.name).toBe('Anthropic');
+  });
+
+  it('reads a Codex .codex-plugin/plugin.json', () => {
+    mkdirSync(join(dir, '.codex-plugin'));
+    writeFileSync(
+      join(dir, '.codex-plugin', 'plugin.json'),
+      JSON.stringify({
+        name: 'codex-thing',
+        version: '1.2.0',
+        description: 'A Codex plugin',
+      }),
+    );
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.name).toBe('codex-thing');
+    expect(manifest.version).toBe('1.2.0');
+  });
+
+  it('reads a Cursor .cursor-plugin/plugin.json', () => {
+    mkdirSync(join(dir, '.cursor-plugin'));
+    writeFileSync(
+      join(dir, '.cursor-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'cursor-thing', description: 'A Cursor plugin' }),
+    );
+
+    expect(readPluginManifest(dir).name).toBe('cursor-thing');
+  });
+
+  it('prefers duya-native .duya-plugin over compat folders', () => {
+    mkdirSync(join(dir, '.duya-plugin'));
+    writeFileSync(
+      join(dir, '.duya-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'duya-native', version: '2.0.0', description: 'native' }),
+    );
+    mkdirSync(join(dir, '.claude-plugin'));
+    writeFileSync(
+      join(dir, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'claude-copy', description: 'foreign' }),
+    );
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.name).toBe('duya-native');
+    expect(manifest.version).toBe('2.0.0');
+  });
+
+  it('still requires name in a foreign manifest', () => {
+    mkdirSync(join(dir, '.claude-plugin'));
+    writeFileSync(
+      join(dir, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({ description: 'no name here' }),
+    );
+
+    expect(() => readPluginManifest(dir)).toThrow(/name/);
+  });
+
+  it('defaults a missing description instead of throwing', () => {
+    mkdirSync(join(dir, '.claude-plugin'));
+    writeFileSync(
+      join(dir, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'minimal' }),
+    );
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.name).toBe('minimal');
+    expect(manifest.description).toBeUndefined();
+  });
+});

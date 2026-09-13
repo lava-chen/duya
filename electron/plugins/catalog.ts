@@ -352,6 +352,25 @@ function getMarketplaceCatalogEntries(): {
       continue;
     }
 
+    // Plan 529 fix: dedup whole marketplaces by on-disk directory before
+    // reading the manifest. The original placement inside the per-plugin
+    // loop marked the directory as seen after the first successfully
+    // built plugin and silently dropped every sibling plugin in the same
+    // marketplace (so duya-official rendered exactly one entry).
+    const dirKey = path.resolve(dir);
+    if (seenDirs.has(dirKey)) {
+      logger.debug('Skipping duplicate marketplace directory', {
+        marketplace: name, dir: dirKey,
+      }, COMPONENT);
+      statuses.push({
+        marketplace: name,
+        displayName: config.displayName,
+        pluginCount: 0,
+      });
+      continue;
+    }
+    seenDirs.add(dirKey);
+
     let manifest;
     try {
       manifest = readMarketplaceManifest(dir);
@@ -381,13 +400,6 @@ function getMarketplaceCatalogEntries(): {
       try {
         const entry = buildMarketplaceCatalogEntry(name, dir, pluginEntry);
         if (!entry) continue;
-        const dirKey = path.resolve(dir);
-        if (seenDirs.has(dirKey)) {
-          logger.debug('Skipping duplicate marketplace directory', {
-            marketplace: name, dir: dirKey,
-          }, COMPONENT);
-          continue;
-        }
         if (seenIds.has(entry.id)) {
           logger.debug('Skipping duplicate plugin id across marketplaces', {
             id: entry.id, marketplace: name,
@@ -395,7 +407,6 @@ function getMarketplaceCatalogEntries(): {
           continue;
         }
         seenIds.add(entry.id);
-        seenDirs.add(dirKey);
         entries.push(entry);
         pluginCount++;
       } catch (err) {

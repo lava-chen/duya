@@ -20,6 +20,20 @@ vi.mock('electron', () => ({
   },
 }));
 
+// Mutable marketplace registry so a test can point the catalog at temp
+// fixture marketplaces. Everything else returns undefined, matching the
+// unconfigured store the rest of this file already runs against.
+const configMocks = vi.hoisted(() => ({
+  marketplaces: {} as Record<string, unknown>,
+}));
+
+vi.mock('../config/store-instance', () => ({
+  getConfigStore: () => ({
+    getByPath: (path: string) =>
+      path === 'marketplaces' ? configMocks.marketplaces : undefined,
+  }),
+}));
+
 // ----------------------------------------------------------------------------
 // Temp fixture builder — creates minimal on-disk plugins for testing.
 // ----------------------------------------------------------------------------
@@ -202,5 +216,62 @@ describe('getPluginCatalog — smoke', () => {
     const ids = catalog.map((e) => e.id);
     const unique = new Set(ids);
     expect(unique.size).toBe(ids.length);
+  });
+});
+
+// ----------------------------------------------------------------------------
+// Plan 529 fix regression guard: the directory-level dedup must run once
+// per marketplace, not once per plugin. The original placement inside the
+// per-plugin loop reported pluginCount 1 for every marketplace and dropped
+// every sibling plugin.
+// ----------------------------------------------------------------------------
+
+describe('getMarketplaceStatuses — multi-plugin marketplace', () => {
+  function buildMarketplace(id: string, pluginNames: string[]): string {
+    const mk = mkdtempSync(join(tmpdir(), `duya-mp-${id}-`));
+    writeFileSync(
+      join(mk, 'marketplace.json'),
+      JSON.stringify({
+        name: id,
+        plugins: pluginNames.map((name) => ({
+          name,
+          source: { source: 'local', path: `./plugins/${name}` },
+        })),
+      }),
+    );
+    for (const name of pluginNames) {
+      const pdir = join(mk, 'plugins', name, '.duya-plugin');
+      mkdirSync(pdir, { recursive: true });
+      writeFileSync(
+        join(pdir, 'plugin.json'),
+        JSON.stringify({ name, version: '1.0.0', description: `${name} fixture` }),
+      );
+    }
+    return mk;
+  }
+
+  it('counts every plugin in a marketplace, not just the first', async () => {
+    const { getMarketplaceStatuses } = await import('./catalog.js');
+    // Distinct plugin names per marketplace so the cross-marketplace id
+    // dedup is orthogonal to what this test measures.
+    const m1 = buildMarketplace('m1', ['alpha-one', 'beta-one', 'gamma-one']);
+    const m2 = buildMarketplace('m2', ['alpha-two', 'beta-two']);
+    configMocks.marketplaces = {
+      m1: { source: 'local', path: m1 },
+      m2: { source: 'local', path: m2 },
+    };
+
+    try {
+      const statuses = getMarketplaceStatuses();
+      const byName = Object.fromEntries(statuses.map((s) => [s.marketplace, s]));
+      expect(byName.m1?.pluginCount).toBe(3);
+      expect(byName.m2?.pluginCount).toBe(2);
+      expect(byName.m1?.error).toBeUndefined();
+      expect(byName.m2?.error).toBeUndefined();
+    } finally {
+      configMocks.marketplaces = {};
+      rmSync(m1, { recursive: true, force: true });
+      rmSync(m2, { recursive: true, force: true });
+    }
   });
 });
