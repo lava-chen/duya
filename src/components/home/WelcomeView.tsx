@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { useConversationStore } from "@/stores/conversation-store";
-import { getActiveProviderIPC } from "@/lib/ipc-client";
+import { getActiveProviderIPC, listProvidersIPC } from "@/lib/ipc-client";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useSettings } from "@/hooks/useSettings";
 import { isKeylessLocalProvider } from "@/lib/providers";
@@ -18,7 +19,21 @@ interface WelcomeViewProps {
 }
 
 export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps) {
-  const { projects, createThread, addProjectFolder, isHydrated } = useConversationStore();
+  // Actions: stable references via useShallow
+  const { createThread, addProjectFolder } = useConversationStore(
+    useShallow((s) => ({
+      createThread: s.createThread,
+      addProjectFolder: s.addProjectFolder,
+    }))
+  );
+
+  // State: only subscribe to what this view actually needs
+  const { projects, isHydrated } = useConversationStore(
+    useShallow((s) => ({
+      projects: s.projects,
+      isHydrated: s.isHydrated,
+    }))
+  );
   const { t } = useTranslation();
   const { settings, save: saveSettings } = useSettings();
   const [selectedProject, setSelectedProject] = useState<{ workingDirectory: string; projectName: string } | null>(null);
@@ -226,10 +241,41 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
   // chat immediately without the user manually picking a model first.
   // Without this, `sessionModel` stays empty, the send path passes an
   // empty model, and the backend reports "no provider configured".
+  //
+  // Priority for the welcome composer (no backing session yet):
+  //   0. settings.lastSelectedModel — what the user picked last time, as
+  //      long as the named provider still exists in the provider store.
+  //   1. active provider's defaultModel / enabled_models[0].
+  // Existing ChatView sessions keep their own per-session model (the
+  // thread row is the source of truth there) — this effect never runs
+  // for them, so older sessions are unaffected.
   useEffect(() => {
     let cancelled = false;
     const resolveDefaultModel = async () => {
       if (sessionModel) return;
+      // Priority 0: try the remembered model first. We only adopt it when
+      // the named provider still exists — otherwise we'd seed the picker
+      // with a ghost that the user can never resolve.
+      const remembered = settings.lastSelectedModel;
+      if (remembered) {
+        try {
+          const { providerName, modelName } = parseModelName(remembered);
+          if (providerName && modelName) {
+            const providers = await listProvidersIPC();
+            if (!cancelled) {
+              const matched = providers.find((p) => p.name === providerName);
+              if (matched) {
+                setSessionModel(remembered);
+                setProviderId(matched.id);
+                return;
+              }
+            }
+          }
+        } catch {
+          // Fall through to the active-provider path.
+        }
+      }
+      // Priority 1: the active provider's configured default.
       try {
         const provider = await getActiveProviderIPC();
         if (cancelled || !provider) return;
@@ -266,14 +312,20 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
       cancelled = true;
       clearTimeout(retryTimer);
     };
-  }, [sessionModel]);
+  }, [sessionModel, settings.lastSelectedModel, parseModelName]);
 
   const handleModelChange = useCallback((model: string, nextProviderId?: string) => {
     setSessionModel(model);
     if (nextProviderId) {
       setProviderId(nextProviderId);
     }
-  }, []);
+    // Remember the pick so the next new-chat composer pre-selects it.
+    // We only persist when the user actually chose a model (an empty
+    // string is the "follow the default" reset).
+    if (model && model !== settings.lastSelectedModel) {
+      saveSettings({ lastSelectedModel: model }).catch(console.error);
+    }
+  }, [saveSettings, settings.lastSelectedModel]);
 
   return (
     <div className="welcome-view">

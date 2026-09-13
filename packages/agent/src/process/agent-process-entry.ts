@@ -22,12 +22,14 @@ import { appendFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { appendMessages, storeParsedDocumentAttachment } from '../session/db.js';
+import { COMPACTION_CHECKPOINT_ID_SUFFIX } from '../message/index.js';
 
 import type { MessageRow, AttachmentRow, ParsedDocumentAttachment } from '../session/db.js';
 import { getAttachmentsForSession, rehydrateContentWithAttachments } from '../session/db.js';
-import type { Message, MessageContent, MCPServerConfig, Tool, TokenUsage } from '../types.js';
+import type { Message, MessageContent, MCPServerConfig, Tool, TokenUsage, UsageCall } from '../types.js';
 import type { ProviderRuntimeConfig } from '@duya/ai';
 import { logger } from '../utils/logger.js';
+import { parseUsageCall } from './call-usage.js';
 import {
   messageDb,
   pluginDb,
@@ -441,6 +443,10 @@ const emitLiveUsage = (
     totalOutput: liveTotalOutput,
     totalCacheHit: liveTotalCacheHit,
     totalCacheCreation: liveTotalCacheCreation,
+    // Model/provider snapshot (current runtime state) so the live ring can
+    // price and window against the model actually in use (token-accounting).
+    model: agent?.model ?? mainModelName,
+    providerId: currentProviderId,
     // Token-calc breakdown for the renderer's debug surface. Lets a developer
     // see exactly which inputs fed `usedTokens`: anchor index, anchor tokens,
     // trailing estimate, system prefix. Combined with the cumulative totals
@@ -458,6 +464,10 @@ const emitLiveUsage = (
 };
 // Track the main model name for multimodal detection
 let mainModelName = '';
+// Current provider id (settings row id) — snapshot from initAgent's runtime
+// config. Read at result-event time to stamp each UsageCall; provider hot-swap
+// mid-run is not a supported flow (unlike model), so a static snapshot suffices.
+let currentProviderId = '';
 let probeConfig: ProbeConfig | null = null;
 let visionTool: any = null;
 // Track title generation per session (Map<sessionId, lastGeneratedTitle>)
@@ -1550,6 +1560,8 @@ async function initAgent(
 
   // Store model name for multimodal detection
   mainModelName = config.model;
+  // Provider id snapshot for per-call usage attribution (token-accounting).
+  currentProviderId = config.runtimeConfig?.providerId ?? '';
   if (config.runtimeConfig) {
     // Phase 2: log that the new runtime config has been delivered.
     // The actual wiring into the LLM client is staged for a later
@@ -2779,19 +2791,19 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     log('[Agent-Process] streamChat started, agentProfileId:', msg.options?.agentProfileId || '(none)', 'iterating events...');
     // Turn-cumulative token usage (sum over every `result` event of this
     // turn; persisted on the turn's last assistant message at stream end).
-    let tokenUsage: {
-      input_tokens: number;
-      output_tokens: number;
-      total_tokens?: number;
-      cache_hit_tokens?: number;
-      cache_creation_tokens?: number;
-    } | null = null;
+    // `calls` is the per-LLM-call ledger (token-accounting): one entry per
+    // API call with the exact model/provider that produced it.
+    let tokenUsage: TokenUsage | null = null;
     // Usage of the SINGLE LLM call behind the newest `result`. Persisted as a
     // `last_call` sub-block inside the turn-cumulative token_usage so the
     // next turn's seed (and the renderer's persisted scan) can restore the
     // context base from one real prompt size instead of the N-call sum.
     let lastCallUsage: LastCallUsageBlock & { output_tokens: number } | null =
       null;
+    // Model/provider of the LAST LLM call of this turn — attributed to the
+    // final assistant message at stream end (same source as the calls ledger).
+    let lastCallModel = '';
+    let lastCallProviderId = '';
     // Terminal `done` reason from the agent loop (completed / max_turns /
     // repeated_tool_calls / aborted). Captured from the deferred chat:done
     // and attached to the final chat:done so the renderer can surface why
@@ -2844,42 +2856,39 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       }
 
       if (event.type === 'result' && event.data) {
-        const candidateUsage = event.data as { input_tokens: number; output_tokens: number; total_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cache_hit_tokens?: number; cache_creation_tokens?: number };
-        const rawInput = candidateUsage.input_tokens ?? 0;
-        const outputTokens = candidateUsage.output_tokens ?? 0;
-        const cacheHitTokens = candidateUsage.cache_hit_tokens ?? candidateUsage.cache_read_input_tokens ?? 0;
-        const cacheCreationTokens =
-          candidateUsage.cache_creation_tokens ?? candidateUsage.cache_creation_input_tokens ?? 0;
-        // Cache-convention guard: Anthropic's input_tokens already includes
-        // cached tokens, but some OpenAI-compatible gateways report
-        // prompt_tokens EXCLUDING cache. When cache hits exceed the reported
-        // input, the input clearly omits cache — add the hits back (pi does
-        // the same: input + cacheRead + cacheWrite). The cacheWrite clause
-        // covers the first request of a session where cacheRead is still 0
-        // but the full prefix (system + tools) is written to cache.
-        const normalizedInput =
-          cacheHitTokens > rawInput || cacheCreationTokens > rawInput
-            ? rawInput + cacheHitTokens + cacheCreationTokens
-            : rawInput;
-        // Ignore all-zero usage: persisting it would make the context ring show
-        // hasData=true but used=0, which renders as an empty ring. Cache hits
-        // count toward meaningful usage too (a fully cache-served request can
-        // report input=0 while hits are large).
-        const meaningfulUsage =
-          rawInput +
-          outputTokens +
-          cacheHitTokens +
-          (candidateUsage.total_tokens ?? 0) > 0;
-        if (meaningfulUsage) {
+        // Parse the single LLM API call's usage. One `result` fires per API
+        // call, so a tool-heavy turn emits many — each becomes one UsageCall
+        // in the turn ledger (token-accounting), keeping per-model attribution
+        // exact when the model hot-swaps mid-turn.
+        const call = parseUsageCall(event.data as Record<string, unknown>);
+        if (call) {
+          // Snapshot the exact model/provider that produced THIS call.
+          // `agent.model` is the hot-swap surface (ModelRuntime), so reading
+          // it here attributes each call to the model actually in use.
+          call.model = agent?.model ?? mainModelName;
+          call.provider_id = currentProviderId;
+          const rawInput = call.input_tokens;
+          const outputTokens = call.output_tokens;
+          const cacheHitTokens = call.cache_hit_tokens ?? 0;
+          const cacheCreationTokens = call.cache_creation_tokens ?? 0;
+          // Cache-convention guard: Anthropic's input_tokens already includes
+          // cached tokens, but some OpenAI-compatible gateways report
+          // prompt_tokens EXCLUDING cache. When cache hits exceed the reported
+          // input, the input clearly omits cache — add the hits back (pi does
+          // the same: input + cacheRead + cacheWrite). The cacheWrite clause
+          // covers the first request of a session where cacheRead is still 0
+          // but the full prefix (system + tools) is written to cache.
+          const normalizedInput =
+            cacheHitTokens > rawInput || cacheCreationTokens > rawInput
+              ? rawInput + cacheHitTokens + cacheCreationTokens
+              : rawInput;
           // Accumulate across ALL result events in this turn — one fires per
           // LLM API call, so a tool-heavy turn emits many. Keeping only the
           // last event (the old behavior) lost every earlier round's tokens,
           // and input grows each round, so the loss was large. Raw fields are
           // summed; per-provider conventions (input includes cache,
           // total_tokens = input + output) survive summation.
-          const cacheCreationTokens =
-            candidateUsage.cache_creation_tokens ?? candidateUsage.cache_creation_input_tokens ?? 0;
-          const callTotal = candidateUsage.total_tokens ?? rawInput + outputTokens;
+          const callTotal = call.total_tokens ?? rawInput + outputTokens;
           if (!tokenUsage) {
             tokenUsage = {
               input_tokens: rawInput,
@@ -2887,6 +2896,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
               total_tokens: callTotal,
               cache_hit_tokens: cacheHitTokens,
               cache_creation_tokens: cacheCreationTokens,
+              calls: [],
             };
           } else {
             tokenUsage.input_tokens += rawInput;
@@ -2895,18 +2905,15 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
             tokenUsage.cache_hit_tokens = (tokenUsage.cache_hit_tokens ?? 0) + cacheHitTokens;
             tokenUsage.cache_creation_tokens = (tokenUsage.cache_creation_tokens ?? 0) + cacheCreationTokens;
           }
+          // Push the per-call ledger entry (carries model/provider snapshot).
+          if (!tokenUsage.calls) tokenUsage.calls = [];
+          tokenUsage.calls.push(call);
           // last_call feeds the persisted anchor (normalizePromptTokens
           // prefers it on reload) and the footer's per-request line. Keep the
           // LARGEST-prompt call of the turn, not the latest: GLM-style
           // gateways report a near-fresh prefix (input=0, tiny hit) on some
           // rounds, and a collapsed last_call would permanently shrink the
           // ring after an app restart. Context only grows within a turn.
-          const candidateAnchor = {
-            input_tokens: rawInput,
-            output_tokens: outputTokens,
-            cache_hit_tokens: cacheHitTokens,
-            cache_creation_tokens: cacheCreationTokens,
-          };
           const anchorVolume = (
             u: { input_tokens?: number; output_tokens?: number; cache_hit_tokens?: number; cache_creation_tokens?: number },
           ): number => {
@@ -2915,10 +2922,26 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
             const write = u.cache_creation_tokens ?? 0;
             return (hit > input || write > input ? input + hit + write : input) + (u.output_tokens ?? 0);
           };
-          if (!lastCallUsage || anchorVolume(candidateAnchor) >= anchorVolume(lastCallUsage)) {
-            lastCallUsage = candidateAnchor;
+          // Recompute last_call from the calls ledger each time, so the
+          // anchor block can never diverge from the per-call records.
+          let maxCall: UsageCall | null = null;
+          for (const c of tokenUsage.calls) {
+            if (!maxCall || anchorVolume(c) >= anchorVolume(maxCall)) maxCall = c;
           }
-          ringTrace(`[${(msg.sessionId ?? sessionId ?? '?').slice(0, 8)}] result call: input=${rawInput}, output=${outputTokens}, cacheHit=${cacheHitTokens}, cacheWrite=${cacheCreationTokens}, normalizedInput=${normalizedInput}`);
+          lastCallUsage = maxCall
+            ? {
+                input_tokens: maxCall.input_tokens,
+                output_tokens: maxCall.output_tokens,
+                cache_hit_tokens: maxCall.cache_hit_tokens,
+                cache_creation_tokens: maxCall.cache_creation_tokens,
+              }
+            : null;
+          // Track the LAST call's model/provider for the assistant-message
+          // attribution at stream end (the final answer is produced by the
+          // turn's last LLM call).
+          lastCallModel = call.model ?? '';
+          lastCallProviderId = call.provider_id ?? '';
+          ringTrace(`[${(msg.sessionId ?? sessionId ?? '?').slice(0, 8)}] result call: input=${rawInput}, output=${outputTokens}, cacheHit=${cacheHitTokens}, cacheWrite=${cacheCreationTokens}, normalizedInput=${normalizedInput}, model=${call.model ?? '?'}`);
           // A real request just landed — its usage rides on the assistant
           // message DuyaAgent pushes right after `done` (plan 443), so the
           // pure estimator anchors on it directly. Clear the post-compaction
@@ -3021,7 +3044,15 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           // layer dedupes via INSERT OR IGNORE.
           (lastAssistant as Record<string, unknown>).token_usage =
             lastCallUsage ? { ...tokenUsage, last_call: lastCallUsage } : tokenUsage;
-          log(`[Agent-Process] Attached token_usage to last assistant message: id=${lastAssistant.id}, lastCallInput=${lastCallUsage?.input_tokens ?? 'n/a'}`);
+          // Attribute the final assistant message to the model/provider that
+          // produced the turn's last LLM call (per-message model accounting).
+          if (lastCallModel) {
+            (lastAssistant as Record<string, unknown>).model = lastCallModel;
+          }
+          if (lastCallProviderId) {
+            (lastAssistant as Record<string, unknown>).providerId = lastCallProviderId;
+          }
+          log(`[Agent-Process] Attached token_usage to last assistant message: id=${lastAssistant.id}, lastCallInput=${lastCallUsage?.input_tokens ?? 'n/a'}, model=${lastCallModel || 'n/a'}`);
         } else {
           warn('[Agent-Process] No assistant message found to attach token_usage');
         }
@@ -3693,7 +3724,18 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
                 // session again after the worker restarts.
                 const validatedMessages = validateMessageHistory(existingMessages);
                 if (validatedMessages !== existingMessages) {
-                  const repairResult = await messageDb.replace(sessionId!, validatedMessages, 0) as {
+                  // Projection-synthesized compaction checkpoint markers (id
+                  // `<entryId>:checkpoint`) are already carried inline by their
+                  // rebase event. Re-persisting one lands as a NEW un-indexed
+                  // row (INSERT OR IGNORE cannot dedupe the bare id against the
+                  // rebase event), and on the next load the projection then
+                  // yields the checkpoint twice — "Duplicate agent message id"
+                  // breaks hydration. The in-memory list keeps the marker (the
+                  // timeline needs it); only the replace payload drops it.
+                  const persistableMessages = validatedMessages.filter(
+                    (m) => !(m.id ?? '').endsWith(COMPACTION_CHECKPOINT_ID_SUFFIX),
+                  );
+                  const repairResult = await messageDb.replace(sessionId!, persistableMessages, 0) as {
                     success?: boolean;
                     reason?: string;
                   };

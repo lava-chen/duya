@@ -35,6 +35,7 @@ import {
 import type { PromptSystem } from '../../prompts/index.js';
 import type { ToolRegistry } from '../../tool/registry.js';
 import { readToolExposureConfig } from '../../config/tool-exposure.js';
+import { buildHintStubEntry } from '../../tool/hint-stub.js';
 import type { AgentDefinition } from '../../tool/SubagentTool/index.js';
 import type { ChatOptions, Message, MessageContent, SSEEvent, Tool, WidgetStyleSignature } from '../../types.js';
 import { logger } from '../../utils/logger.js';
@@ -128,9 +129,15 @@ export async function resolveTools(
   const allTools = snapshot.tools;
   const mcpToolCount = allTools.filter((t) => registry.getOwner(t.name) === 'mcp').length;
   logger.debug(`[Agent] Tool snapshot: ${allTools.length} total (${mcpToolCount} MCP, ${allTools.length - mcpToolCount} non-MCP)`);
-  const tools: Tool[] = allTools.filter((t) =>
-    isToolVisible(t.name, snapshot.getExposeMode(t.name), EMPTY_DISCOVERED, constraints),
-  );
+  // Four-tier exposure: `always` pushes the full definition, `hint` pushes
+  // a stub (full schema behind tool_schema), `discoverable` is excluded
+  // until found/promoted, `hidden` is never exposed.
+  const tools: Tool[] = [];
+  for (const t of allTools) {
+    const mode = snapshot.getExposeMode(t.name);
+    if (!isToolVisible(t.name, mode, EMPTY_DISCOVERED, constraints)) continue;
+    tools.push(mode === 'hint' ? buildHintStubEntry(t, snapshot.getMeta(t.name)) : t);
+  }
   logger.info(`[Agent] streamChat: ${tools.length}/${allTools.length} tools visible after visibility filter`);
   if (appliedProfile?.allowedTools?.length && tools.length === 0) {
     throw new Error(
@@ -186,21 +193,19 @@ export async function buildSystemPrompt(
   }
 
   if (!options?.disableSystemPrompt) {
-    const mcpCatalog = buildMCPCapabilityCatalog(
-      ctx.activeMCPRegistry.getAllTools().filter(
-        (tool) => ctx.activeMCPRegistry.getOwner(tool.name) === 'mcp',
-      ),
-      // Plan 480 §8.4: under `exposure = "catalog"` point the model at the
-      // tool_schema/tool_invoke meta pair (tools are not in the tools array).
-      {
-        entryPoint:
-          readToolExposureConfig().exposure === 'catalog'
-            ? 'tool_invoke'
-            : 'tool_search',
-      },
-    );
-    if (mcpCatalog) {
-      systemPromptContent = systemPromptContent ? `${systemPromptContent}\n\n${mcpCatalog}` : mcpCatalog;
+    // Four-tier exposure: the bounded MCP directory is only useful when MCP
+    // tools are absent from the request's tools array (exposure = "search").
+    // Under `full`/`hint` the tools are declared on every request.
+    if (readToolExposureConfig().exposure === 'search') {
+      const mcpCatalog = buildMCPCapabilityCatalog(
+        ctx.activeMCPRegistry.getAllTools().filter(
+          (tool) => ctx.activeMCPRegistry.getOwner(tool.name) === 'mcp',
+        ),
+        { entryPoint: 'tool_search' },
+      );
+      if (mcpCatalog) {
+        systemPromptContent = systemPromptContent ? `${systemPromptContent}\n\n${mcpCatalog}` : mcpCatalog;
+      }
     }
   }
 

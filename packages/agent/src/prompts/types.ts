@@ -521,19 +521,12 @@ export const KNOWLEDGE_CUTOFFS = {
 
   // Current production IDs, but DeepSeek has not stably disclosed cutoffs
   // suitable for engineering judgement.
+  'deepseek-flash': null,
   'deepseek-v4-pro': null,
-  'deepseek-v4-flash': null,
-  'deepseek-v3.2': null,
-  'deepseek-v3.2-speciale': null,
-  'deepseek-v3.1': null,
-  'deepseek-v3': null,
-  'deepseek-r1': null,
-  'deepseek-r1-0528': null,
 
-  // Rolling aliases whose underlying model can change.
-  'deepseek-chat': null,
-  'deepseek-reasoner': null,
-  'deepseek-coder': null,
+  // Retired ids still accepted by the API and routed to deepseek-flash.
+  'deepseek-v4-flash': null,
+  'deepseek-v4-flash-vision-exp': null,
   deepseek: null,
 
   // ---------------------------------------------------------------------------

@@ -1,7 +1,6 @@
-"use client";
-
 import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useShallow } from "zustand/react/shallow";
 import { useConversationStore } from "@/stores/conversation-store";
 import { initMailboxEventListener } from "@/stores/mailbox-store";
 import { ChatView } from "@/components/chat/ChatView";
@@ -106,18 +105,42 @@ export function App({ onReady }: { onReady?: () => void } = {}) {
 }
 
 function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
+  // Actions: stable references via useShallow — avoids re-renders when
+  // the store returns new references for other (unrelated) state fields.
   const {
-    currentView,
-    activeThreadId,
-    messages,
     setActiveThread,
     setCurrentView,
     addMessage,
     loadThreadMessages,
-    isHydrated,
     updateThreadTitle,
-    isNewChatDrafting,
-  } = useConversationStore();
+  } = useConversationStore(
+    useShallow((s) => ({
+      setActiveThread: s.setActiveThread,
+      setCurrentView: s.setCurrentView,
+      addMessage: s.addMessage,
+      loadThreadMessages: s.loadThreadMessages,
+      updateThreadTitle: s.updateThreadTitle,
+    }))
+  );
+
+  // State: individual field subscriptions to avoid subscribing to the
+  // entire store. threadMessages is derived here so only the active
+  // thread's message-array changes trigger re-renders of child ChatViews.
+  const { currentView, isHydrated, isNewChatDrafting, activeThreadId, messages } =
+    useConversationStore(
+      useShallow((s) => ({
+        currentView: s.currentView,
+        isHydrated: s.isHydrated,
+        isNewChatDrafting: s.isNewChatDrafting,
+        activeThreadId: s.activeThreadId,
+        messages: s.messages,
+      }))
+    );
+
+  const threadMessages = useMemo(
+    () => (activeThreadId ? messages[activeThreadId] ?? [] : []),
+    [activeThreadId, messages],
+  );
   const { settings } = useSettings();
 
   const [isStreaming, setIsStreaming] = useState(false);
@@ -690,7 +713,6 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
     lastCancelTimeRef.current = now;
   }, [activeThreadId, isStreaming]);
 
-  const threadMessages = activeThreadId ? (messages[activeThreadId] ?? []) : [];
   const isPendingHandoffForActiveThread = pendingPersistedHandoff?.sessionId === activeThreadId;
   const hasDurableHandoffMessage = isPendingHandoffForActiveThread
     && threadMessages.some((message) => (

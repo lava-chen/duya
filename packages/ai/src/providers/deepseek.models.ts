@@ -6,10 +6,39 @@
 // direct endpoints honour identically.
 import type { Model } from '../types.js';
 
+// api.deepseek.com currently serves exactly two models. The V4.1 Flash line
+// replaced the retired deepseek-v4-flash / deepseek-v4-flash-vision-exp ids and
+// is exposed as `deepseek-flash`; deepseek-v4-pro remains valid but is being
+// routed to V4.1 Flash from 2026-09-14. Refresh with:
+//   npm run sync:models -w @duya/ai -- --only=deepseek
+//
+// Pricing: DeepSeek bills off-peak (default, ~82% of hours) and peak (UTC
+// Mon-Fri 01:00-04:00 and 06:00-10:00, 2x off-peak). Model.cost only holds a
+// single number per field, so the values below are off-peak rates (the most
+// representative single number); peak usage will be 2x. Values are kept at
+// natural precision - do not round to 6 decimals, that zeros out the
+// input/cacheRead fields for these models.
 export const deepseekModels: Model<'openai-chat'>[] = [
   {
+    id: 'deepseek-flash',
+    name: 'DeepSeek: DeepSeek V4.1 Flash',
+    api: 'openai-chat',
+    providerId: 'deepseek',
+    baseUrl: 'https://api.deepseek.com/v1',
+    reasoning: true,
+    input: ['text', 'image'],
+    contextWindow: 1048576,
+    maxTokens: 384000,
+    cost: {
+      input: 0.00000015,
+      output: 0.0000006,
+      cacheRead: 0.000000003,
+      cacheWrite: 0,
+    },
+  },
+  {
     id: 'deepseek-v4-pro',
-    name: "DeepSeek: DeepSeek V4 Pro 0423",
+    name: 'DeepSeek: DeepSeek V4 Pro 0813',
     api: 'openai-chat',
     providerId: 'deepseek',
     baseUrl: 'https://api.deepseek.com/v1',
@@ -18,77 +47,9 @@ export const deepseekModels: Model<'openai-chat'>[] = [
     contextWindow: 1048576,
     maxTokens: 384000,
     cost: {
-      input: 0.000001,
-      output: 0.000002,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
-  },
-  {
-    id: 'deepseek-v4-flash',
-    name: "DeepSeek: DeepSeek V4 Flash 0423",
-    api: 'openai-chat',
-    providerId: 'deepseek',
-    baseUrl: 'https://api.deepseek.com/v1',
-    reasoning: true,
-    input: ['text'],
-    contextWindow: 1048576,
-    maxTokens: 384000,
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
-  },
-  {
-    id: 'deepseek-v3.2',
-    name: "DeepSeek: DeepSeek V3.2",
-    api: 'openai-chat',
-    providerId: 'deepseek',
-    baseUrl: 'https://api.deepseek.com/v1',
-    reasoning: true,
-    input: ['text'],
-    contextWindow: 163840,
-    maxTokens: 147456,
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
-  },
-  {
-    id: 'deepseek-r1',
-    name: "DeepSeek: R1",
-    api: 'openai-chat',
-    providerId: 'deepseek',
-    baseUrl: 'https://api.deepseek.com/v1',
-    reasoning: true,
-    input: ['text'],
-    contextWindow: 64000,
-    maxTokens: 16000,
-    cost: {
-      input: 0.000001,
-      output: 0.000003,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
-  },
-  {
-    id: 'deepseek-chat',
-    name: "DeepSeek: DeepSeek V3",
-    api: 'openai-chat',
-    providerId: 'deepseek',
-    baseUrl: 'https://api.deepseek.com/v1',
-    reasoning: false,
-    input: ['text'],
-    contextWindow: 163840,
-    maxTokens: 16000,
-    cost: {
-      input: 0,
-      output: 0.000001,
-      cacheRead: 0,
+      input: 0.00000066,
+      output: 0.00000198,
+      cacheRead: 0.000000022,
       cacheWrite: 0,
     },
   },

@@ -51,9 +51,15 @@ describe('CompactionManager loop guards', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     mockSummarizer = vi.fn().mockResolvedValue(
-      '## Goal\nTest\n\n## Progress\n### Done\n- [x] Task\n\n' +
-        '## Decisions\n- Keep going.\n\n## Technical Concepts\n- Testing.\n\n' +
-        '## Pending Tasks\n- [ ] None\n\n## Optional Next Step\n- Continue.\n',
+      '1. Primary Request and Intent: Complete the compaction loop regression test suite and verify suppression behaves correctly.\n\n' +
+        '2. Key Technical Concepts: Token budgeting, context window estimation, five-state suppression machine, and the retry ladder.\n\n' +
+        '3. Files and Code Sections: CompactionManager.ts — flat delegation, budget anchoring, and suppression; SessionMemoryCompactStrategy.ts — the retry ladder.\n\n' +
+        '4. Errors and Fixes: Fixed the transient 5xx handling so a failed summarizer retries rather than poisoning the suppression window.\n\n' +
+        '5. Problem Solving: The compaction loop is broken by a post-compaction projection that stays above threshold; suppression clears on success.\n\n' +
+        '6. All User Messages: Verify compaction failure suppression and that auto-compaction does not loop endlessly.\n\n' +
+        '7. Pending Tasks: None outstanding for this test scope.\n\n' +
+        '8. Current Work: Running the rejection-path assertions against the mocked summarizer.\n\n' +
+        '9. Optional Next Step: Confirm the suppress-after-failure test passes and the events array contains the expected compaction_error.\n',
     )
     // Small keepRecentTokens so the strategy produces a real summary marker.
     manager = new CompactionManager({ keepRecentTokens: 30 })

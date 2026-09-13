@@ -1,8 +1,9 @@
 /**
  * Tool-call invariant enforcement for compacted histories.
  *
- * Guarantees every tool_result has a matching preceding tool_use; orphaned
- * results are stripped. Also validates the final history shape.
+ * Guarantees every tool_result (in content arrays) and every role: 'tool' message
+ * has a matching preceding tool_use; orphaned results are stripped.
+ * Also validates the final history shape.
  */
 
 import type { Message } from '../types.js'
@@ -33,6 +34,25 @@ function collectToolUseIds(messages: readonly Message[]): Set<string> {
 }
 
 /**
+ * Remove orphaned role: 'tool' messages whose tool_call_id has no matching
+ * tool_use in any preceding assistant message. This handles the case where
+ * compaction removed an assistant message with tool_use blocks but left the
+ * corresponding tool result messages behind.
+ */
+function removeOrphanedToolRoleMessages(
+  messages: readonly Message[],
+  toolUseIds: Set<string>,
+): Message[] {
+  return messages.filter((msg) => {
+    if (msg.role !== 'tool') return true
+    // If no tool_call_id, keep it (let the API validate)
+    if (typeof msg.tool_call_id !== 'string') return true
+    // Orphan if the tool_call_id doesn't match any tool_use
+    return toolUseIds.has(msg.tool_call_id)
+  })
+}
+
+/**
  * Remove tool_result blocks whose tool_use_id has no matching tool_use.
  * Mutates nothing; returns a new message array.
  */
@@ -41,8 +61,11 @@ export function sanitizeCompactedHistory(messages: readonly Message[]): Message[
   // lives earlier in the same history is not treated as orphaned.
   const toolUseIds = collectToolUseIds(messages)
 
+  // First pass: remove orphaned role: 'tool' messages
+  const afterToolRoleFilter = removeOrphanedToolRoleMessages(messages, toolUseIds)
+
   const result: Message[] = []
-  for (const msg of messages) {
+  for (const msg of afterToolRoleFilter) {
     if (!Array.isArray(msg.content)) {
       result.push(msg)
       continue
@@ -72,24 +95,48 @@ export function sanitizeCompactedHistory(messages: readonly Message[]): Message[
 }
 
 /**
- * Validate that every tool_result has a matching preceding tool_use.
- * Returns a list of offending tool_use_ids (empty when valid).
+ * Validate that every tool_result (in content arrays) and every role: 'tool'
+ * message has a matching preceding tool_use.
+ * Returns a list of offending tool_use_ids / tool_call_ids (empty when valid).
  */
 export function validateCompactedHistory(messages: readonly Message[]): string[] {
   const orphaned: string[] = []
   const seenToolUses = new Set<string>()
 
   for (const msg of messages) {
-    if (!Array.isArray(msg.content)) continue
-    for (const block of msg.content as unknown as ContentBlock[]) {
-      if (block.type === 'tool_use' && typeof block.id === 'string') {
-        seenToolUses.add(block.id)
-      } else if (
-        block.type === 'tool_result' &&
-        typeof block.tool_use_id === 'string' &&
-        !seenToolUses.has(block.tool_use_id)
-      ) {
-        orphaned.push(block.tool_use_id)
+    // Collect tool_use ids from assistant messages and check content blocks
+    if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+      for (const block of msg.content as unknown as ContentBlock[]) {
+        if (block.type === 'tool_use' && typeof block.id === 'string') {
+          seenToolUses.add(block.id)
+        } else if (
+          block.type === 'tool_result' &&
+          typeof block.tool_use_id === 'string' &&
+          !seenToolUses.has(block.tool_use_id)
+        ) {
+          orphaned.push(block.tool_use_id)
+        }
+      }
+    }
+    // Check standalone role: 'tool' messages (OpenAI format)
+    if (msg.role === 'tool') {
+      // Format 1: tool_call_id at top level (OpenAI)
+      if (typeof msg.tool_call_id === 'string') {
+        if (!seenToolUses.has(msg.tool_call_id)) {
+          orphaned.push(msg.tool_call_id)
+        }
+      }
+      // Format 2: tool_result blocks in content array (Anthropic)
+      if (Array.isArray(msg.content)) {
+        for (const block of msg.content as unknown as ContentBlock[]) {
+          if (
+            block.type === 'tool_result' &&
+            typeof block.tool_use_id === 'string' &&
+            !seenToolUses.has(block.tool_use_id)
+          ) {
+            orphaned.push(block.tool_use_id)
+          }
+        }
       }
     }
   }

@@ -19,6 +19,7 @@ export {
   projectTimelinePersistenceMessages,
   getLegacyCompactionCheckpoint,
   COMPACTION_CHECKPOINT_MESSAGE_TYPE,
+  COMPACTION_CHECKPOINT_ID_SUFFIX,
   type ModelMessageProjection,
   type ProjectModelMessagesOptions,
   type ProjectTranscriptOptions,

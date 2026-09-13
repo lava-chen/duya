@@ -128,20 +128,20 @@ describe('image_generate bot exposure (2026-09-05 membership decision)', () => {
 });
 
 describe('ReactToMessage exposure (plan 490 P1)', () => {
-  it('is registered always-exposed in the builtin registry (grok SAND_FORCED_STATIC parity)', () => {
+  it('is registered discoverable in the builtin registry (off the default surface)', () => {
     const registry = createBuiltinRegistry();
     expect(registry.getTool('ReactToMessage')).toBeDefined();
-    expect(registry.getExposeMode('ReactToMessage')).toBe('always');
+    expect(registry.getExposeMode('ReactToMessage')).toBe('discoverable');
   });
 
-  it('is visible on the default surface without any bot toolset', () => {
+  it('is reachable via tool_search discovery', () => {
     const registry = createBuiltinRegistry();
     expect(
-      isToolVisible('ReactToMessage', registry.getExposeMode('ReactToMessage'), new Set(), NO_CONSTRAINTS),
+      isToolVisible('ReactToMessage', registry.getExposeMode('ReactToMessage'), new Set(['ReactToMessage']), NO_CONSTRAINTS),
     ).toBe(true);
   });
 
-  it('is NOT in BOT_TOOLSET (always-exposed, not a bot-only capability)', () => {
+  it('is NOT in BOT_TOOLSET (not a bot-only capability)', () => {
     expect(BOT_TOOLSET).not.toContain('ReactToMessage');
   });
 });

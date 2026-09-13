@@ -12,8 +12,9 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useConversationStore } from '@/stores/conversation-store';
-import { getActiveProviderIPC } from '@/lib/ipc-client';
+import { getActiveProviderIPC, listProvidersIPC } from '@/lib/ipc-client';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useSettings } from '@/hooks/useSettings';
 import { isKeylessLocalProvider } from '@/lib/providers';
@@ -46,18 +47,34 @@ interface NewChatViewProps {
 export function NewChatView({ onSendMessage }: NewChatViewProps) {
   const { t } = useTranslation();
   const { settings, save: saveSettings } = useSettings();
+  // Actions: stable references via useShallow
   const {
-    projects,
-    isHydrated,
-    newChatDraft,
-    newChatPresetProject,
     createThread,
     setActiveThread,
     addProjectFolder,
     updateNewChatDraft,
     clearNewChatDraft,
     clearNewChatPresetProject,
-  } = useConversationStore();
+  } = useConversationStore(
+    useShallow((s) => ({
+      createThread: s.createThread,
+      setActiveThread: s.setActiveThread,
+      addProjectFolder: s.addProjectFolder,
+      updateNewChatDraft: s.updateNewChatDraft,
+      clearNewChatDraft: s.clearNewChatDraft,
+      clearNewChatPresetProject: s.clearNewChatPresetProject,
+    }))
+  );
+
+  // State: only subscribe to what this view actually needs
+  const { projects, isHydrated, newChatDraft, newChatPresetProject } = useConversationStore(
+    useShallow((s) => ({
+      projects: s.projects,
+      isHydrated: s.isHydrated,
+      newChatDraft: s.newChatDraft,
+      newChatPresetProject: s.newChatPresetProject,
+    }))
+  );
 
   const [isSending, setIsSending] = useState(false);
   const [sessionModel, setSessionModel] = useState<string>('');
@@ -129,10 +146,41 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
 
   // Auto-select the default provider's model so a brand-new session can chat
   // immediately without the user picking a model first.
+  //
+  // Priority for the *new-chat composer* (no backing session yet):
+  //   0. settings.lastSelectedModel — what the user picked last time, as
+  //      long as the named provider still exists in the provider store.
+  //   1. active provider's defaultModel / enabled_models[0].
+  // Existing ChatView sessions keep their own per-session model (the
+  // thread row is the source of truth there) — this effect never runs
+  // for them, so older sessions are unaffected.
   useEffect(() => {
     let cancelled = false;
     const resolveDefaultModel = async () => {
       if (sessionModel) return;
+      // Priority 0: try the remembered model first. We only adopt it when
+      // the named provider still exists — otherwise we'd seed the picker
+      // with a ghost that the user can never resolve.
+      const remembered = settings.lastSelectedModel;
+      if (remembered) {
+        try {
+          const { providerName, modelName } = parseModelName(remembered);
+          if (providerName && modelName) {
+            const providers = await listProvidersIPC();
+            if (!cancelled) {
+              const matched = providers.find((p) => p.name === providerName);
+              if (matched) {
+                setSessionModel(remembered);
+                setProviderId(matched.id);
+                return;
+              }
+            }
+          }
+        } catch {
+          // Fall through to the active-provider path.
+        }
+      }
+      // Priority 1: the active provider's configured default.
       try {
         const provider = await getActiveProviderIPC();
         if (cancelled || !provider) return;
@@ -165,14 +213,20 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
       cancelled = true;
       clearTimeout(retryTimer);
     };
-  }, [sessionModel]);
+  }, [sessionModel, settings.lastSelectedModel, parseModelName]);
 
   const handleModelChange = useCallback((model: string, nextProviderId?: string) => {
     setSessionModel(model);
     if (nextProviderId) {
       setProviderId(nextProviderId);
     }
-  }, []);
+    // Remember the pick so the next new-chat composer pre-selects it.
+    // We only persist when the user actually chose a model (an empty
+    // string is the "follow the default" reset).
+    if (model && model !== settings.lastSelectedModel) {
+      saveSettings({ lastSelectedModel: model }).catch(console.error);
+    }
+  }, [saveSettings, settings.lastSelectedModel]);
 
   const handleDraftChange = useCallback(
     (text: string, attachments: FileAttachment[]) => {

@@ -14,6 +14,18 @@ import type { ActionItem, Segment, ToolAction } from './types';
 import type { AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
 import type { TranslationKey } from '@/i18n';
 
+// Per-step compaction phases that have a dedicated
+// `streaming.toolAction.compact.step.*` i18n verb. The legacy umbrella
+// 'compacting' phase is intentionally absent — it reuses 'inProgress'.
+const STEP_PHASES = new Set<string>([
+  'projecting',
+  'cutting',
+  'summarizing',
+  'rebuilding',
+  'reinjecting',
+  'trimming',
+]);
+
 // Find the index of the last text action so the renderer can pass the
 // `isLastTextAction` flag to it. The last text block is the one that's
 // still growing as SSE text deltas arrive — it's the only block that
@@ -87,9 +99,13 @@ function renderActionItem(
       // rebuilding / reinjecting / trimming) each get their own i18n verb
       // so the user can see which step of compact() is currently active.
       // The terminal phases map to the same chrome states as before.
+      // The legacy umbrella 'compacting' phase (emitted before the first
+      // step event arrives) has no step.* key — route it to the generic
+      // 'inProgress' verb instead of building a missing translation key.
       const isTerminal =
         action.phase === 'done' || action.phase === 'error' || action.phase === 'over_threshold'
-      const stepVerbKey = isTerminal
+      const isStepPhase = STEP_PHASES.has(action.phase)
+      const stepVerbKey = isTerminal || !isStepPhase
         ? null
         : (`streaming.toolAction.compact.step.${action.phase}` as TranslationKey)
       const verbKey: TranslationKey =

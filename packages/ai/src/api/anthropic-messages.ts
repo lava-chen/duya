@@ -1929,10 +1929,13 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
       // Plan 418 Phase 4: deferred (already-loaded) tools keep their schema
       // out of the request — the provider references them instead. This only
       // runs when the endpoint declared supportsToolReferences.
-      const { immediate: requestTools } = splitDeferredTools(
+      const { immediate: requestToolsBase } = splitDeferredTools(
         tools,
         deferredNames ?? new Set(),
       );
+      // Plan 523 P4: `toolChoice: 'none'` omits the tools field entirely so the
+      // summarizer model cannot invoke tools (the DSML/tool-call leak guard).
+      const requestTools = chatOptions?.toolChoice === 'none' ? [] : requestToolsBase;
       // Plan 480 P0.1: when the native Anthropic surface supports it, mark the
       // final tool with a cache breakpoint. sortToolsByName above already
       // established the deterministic byte order, so the marker lands on a

@@ -21,6 +21,7 @@ import { InfoIcon, CaretDownIcon } from '@/components/icons';
 import { ChatHeader } from './ChatHeader';
 import { DB_DEFAULT_MODEL } from '@/lib/constants';
 import { getThreadIPC, updateThreadIPC, getProviderIPC, getModelCapabilityIPC } from '@/lib/ipc-client';
+import { findModelById } from '@duya/ai';
 import type { ModelPricing } from '@/lib/context-usage-utils';
 import { useSettings } from '@/hooks/useSettings';
 import { usePolling } from '@/hooks/usePolling';
@@ -699,7 +700,20 @@ export function ChatView({
         );
         // Same capability row carries the real pricing the ring's $ figure
         // uses (hidden when absent — no hardcoded fallback rates).
-        setCapabilityPricing(cap?.pricing ?? undefined);
+        // Fall back to the built-in catalog if IPC returns no pricing.
+        let pricing: ModelPricing | undefined = cap?.pricing as ModelPricing | undefined;
+        if (!pricing && pureModel) {
+          const builtIn = findModelById(pureModel);
+          if (builtIn?.cost) {
+            pricing = {
+              inputPerMillion: builtIn.cost.input,
+              outputPerMillion: builtIn.cost.output,
+              cacheReadPerMillion: builtIn.cost.cacheRead,
+              cacheWritePerMillion: builtIn.cost.cacheWrite ?? 0,
+            };
+          }
+        }
+        setCapabilityPricing(pricing);
       })
       .catch(() => {
         if (cancelled) return;

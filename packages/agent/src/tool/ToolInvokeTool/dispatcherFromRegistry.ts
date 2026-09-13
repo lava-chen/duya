@@ -1,4 +1,4 @@
-import type { ToolRegistry } from '../registry.js';
+import type { ExposeMode, ToolRegistry } from '../registry.js';
 import type { ToolUseContext } from '../../types.js';
 import type { ToolInvokeDispatcher, ToolInvokeRequest, ToolInvokeOutcome } from './ToolInvokeTool.js';
 import { BUILTIN_TOOLS_NAMESPACE } from '../ToolSchemaTool/catalogFromRegistry.js';
@@ -11,8 +11,8 @@ import { BUILTIN_TOOLS_NAMESPACE } from '../ToolSchemaTool/catalogFromRegistry.j
  *
  * Resolution scope (must mirror the tool_schema catalog provider):
  *   - namespace = an MCP server name   → MCP-owned tools by `mcpInfo`
- *   - namespace = 'builtin'            → non-MCP `discoverable` built-ins by
- *                                        definition name (plan 480 P2.3)
+ *   - namespace = 'builtin'            → non-MCP `hint` / `discoverable`
+ *                                        built-ins by definition name
  * The schema the model read via `tool_schema` and the tool that actually
  * runs come from the SAME registry, so discovery can never promise a tool
  * the executor cannot find.
@@ -62,13 +62,29 @@ interface ResolvedTool {
   isBuiltin: boolean;
 }
 
+/**
+ * Four-tier exposure: `tool_invoke` reaches exactly the tools whose full
+ * schema is NOT declared on the request's tools array — `discoverable`
+ * (found via tool_search) and `hint` (stub entry, deep-read via
+ * tool_schema). `always` tools are declared already; `hidden` tools are
+ * unreachable by any model path.
+ */
+function isInvocableThroughMetaTool(mode: ExposeMode): boolean {
+  return mode === 'discoverable' || mode === 'hint';
+}
+
 function listNamespaces(registry: ToolRegistry): string[] {
   const namespaces = new Set<string>();
   let hasBuiltin = false;
   for (const tool of registry.getAllTools()) {
     if (registry.getOwner(tool.name) === 'mcp') {
-      if (tool.mcpInfo) namespaces.add(tool.mcpInfo.serverName);
-    } else if (registry.getExposeMode(tool.name) === 'discoverable') {
+      if (
+        tool.mcpInfo &&
+        registry.getExposeMode(tool.name) !== 'hidden'
+      ) {
+        namespaces.add(tool.mcpInfo.serverName);
+      }
+    } else if (isInvocableThroughMetaTool(registry.getExposeMode(tool.name))) {
       hasBuiltin = true;
     }
   }
@@ -83,7 +99,7 @@ function resolveBuiltinTool(
   for (const tool of registry.getAllTools()) {
     if (registry.getOwner(tool.name) !== 'mcp') {
       if (
-        registry.getExposeMode(tool.name) === 'discoverable' &&
+        isInvocableThroughMetaTool(registry.getExposeMode(tool.name)) &&
         tool.name === toolName
       ) {
         return { internalName: tool.name, displayName: tool.name, isBuiltin: true };
@@ -100,6 +116,7 @@ function resolveMcpTool(
 ): ResolvedTool | undefined {
   for (const tool of registry.getAllTools()) {
     if (registry.getOwner(tool.name) !== 'mcp') continue;
+    if (registry.getExposeMode(tool.name) === 'hidden') continue;
     const info = tool.mcpInfo;
     if (!info) continue;
     if (info.serverName === namespace && info.toolName === toolName) {
@@ -115,10 +132,11 @@ function listToolsInNamespace(
 ): string[] {
   const names: string[] = [];
   for (const tool of registry.getAllTools()) {
+    if (registry.getExposeMode(tool.name) === 'hidden') continue;
     if (namespace === BUILTIN_TOOLS_NAMESPACE) {
       if (
         registry.getOwner(tool.name) !== 'mcp' &&
-        registry.getExposeMode(tool.name) === 'discoverable'
+        isInvocableThroughMetaTool(registry.getExposeMode(tool.name))
       ) {
         names.push(tool.name);
       }

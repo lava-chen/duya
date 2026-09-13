@@ -631,3 +631,159 @@ function getBundledSkillCatalogEntries(): PluginCatalogEntry[] {
 
   return cachedSkillCatalog;
 }
+
+// ----------------------------------------------------------------------------
+// Builtin Plugin Sync (Plan 455 follow-up)
+// ----------------------------------------------------------------------------
+
+/**
+ * Resolve the builtin plugins source directory.
+ * - Dev: `<appPath>/packages/plugin-core/src/plugins/builtin/`
+ * - Prod: `<resourcesPath>/builtin-plugins/` (electron-builder extraResources)
+ */
+export function getBuiltinPluginsSourceDir(): string {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'builtin-plugins');
+  }
+  return path.join(app.getAppPath(), 'packages', 'plugin-core', 'src', 'plugins', 'builtin');
+}
+
+/**
+ * Recursively copy a directory tree. Overwrites files that differ in mtime
+ * or size; leaves existing identical files untouched to avoid unnecessary
+ * disk churn on startup.
+ */
+function copyDirRecursive(src: string, dest: string): void {
+  const logger = getLogger();
+  if (!fs.existsSync(dest)) {
+    fs.mkdirSync(dest, { recursive: true });
+  }
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(src, { withFileTypes: true });
+  } catch (err) {
+    logger.warn('Failed to read builtin plugin source directory', {
+      src,
+      error: err instanceof Error ? err.message : String(err),
+    }, COMPONENT);
+    return;
+  }
+  for (const entry of entries) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      copyDirRecursive(srcPath, destPath);
+    } else {
+      try {
+        const srcStat = fs.statSync(srcPath);
+        let needsCopy = true;
+        if (fs.existsSync(destPath)) {
+          const destStat = fs.statSync(destPath);
+          // Skip if mtime and size match — identical file
+          if (srcStat.mtimeMs <= destStat.mtimeMs && srcStat.size === destStat.size) {
+            needsCopy = false;
+          }
+        }
+        if (needsCopy) {
+          fs.copyFileSync(srcPath, destPath);
+        }
+      } catch (err) {
+        logger.warn('Failed to copy builtin plugin file', {
+          src: srcPath,
+          dest: destPath,
+          error: err instanceof Error ? err.message : String(err),
+        }, COMPONENT);
+      }
+    }
+  }
+}
+
+/**
+ * Sync builtin plugins from the app bundle to the user-home cache at
+ * `~/.duya/plugins/cache/builtin/<id>/<version>/`.
+ *
+ * This is called once at startup (before the window is shown) so that
+ * `getBuiltinCatalogEntries()` can find them in the cache.
+ *
+ * The sync is idempotent: it only copies when the destination is missing
+ * or the source file is newer (by mtime + size). This avoids unnecessary
+ * disk writes on every launch.
+ */
+export function syncBuiltinPlugins(): void {
+  const logger = getLogger();
+  const sourceDir = getBuiltinPluginsSourceDir();
+
+  if (!fs.existsSync(sourceDir)) {
+    // In dev this path should always exist; in prod it only exists after
+    // electron-builder copies extraResources. Warn once if missing in prod.
+    if (app.isPackaged) {
+      logger.warn('Builtin plugins source directory not found in production build', {
+        sourceDir,
+      }, COMPONENT);
+    }
+    return;
+  }
+
+  const targetRoot = path.join(os.homedir(), '.duya', 'plugins', 'cache', 'builtin');
+
+  let pluginDirs: fs.Dirent[];
+  try {
+    pluginDirs = fs.readdirSync(sourceDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && !e.name.startsWith('.'));
+  } catch (err) {
+    logger.warn('Failed to enumerate builtin plugin source directory', {
+      sourceDir,
+      error: err instanceof Error ? err.message : String(err),
+    }, COMPONENT);
+    return;
+  }
+
+  for (const pluginDir of pluginDirs) {
+    const pluginSourceDir = path.join(sourceDir, pluginDir.name);
+    const manifestPath = path.join(pluginSourceDir, '.duya-plugin', 'plugin.json');
+
+    if (!fs.existsSync(manifestPath)) {
+      logger.debug('Skipping builtin plugin directory without manifest', {
+        pluginDir: pluginDir.name,
+        manifestPath,
+      }, COMPONENT);
+      continue;
+    }
+
+    let manifest: Record<string, unknown>;
+    try {
+      manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    } catch (err) {
+      logger.warn('Failed to parse builtin plugin manifest', {
+        pluginDir: pluginDir.name,
+        error: err instanceof Error ? err.message : String(err),
+      }, COMPONENT);
+      continue;
+    }
+
+    const pluginId = (manifest.id as string) || `com.duya.${manifest.name as string}`;
+    const version = (manifest.version as string) || '0.1.0';
+    const pluginTargetDir = path.join(targetRoot, pluginId, version);
+
+    try {
+      copyDirRecursive(pluginSourceDir, pluginTargetDir);
+      logger.debug('Synced builtin plugin', {
+        plugin: pluginId,
+        version,
+        from: pluginSourceDir,
+        to: pluginTargetDir,
+      }, COMPONENT);
+    } catch (err) {
+      logger.warn('Failed to sync builtin plugin', {
+        plugin: pluginId,
+        error: err instanceof Error ? err.message : String(err),
+      }, COMPONENT);
+    }
+  }
+
+  // Invalidate the catalog cache so the next getPluginCatalog() call
+  // picks up any newly-synced plugins.
+  cachedCatalog = null;
+  cachedCatalogAt = 0;
+  cachedSkillCatalog = null;
+}

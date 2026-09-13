@@ -11,11 +11,13 @@
  *   2. Validates `schemaVersion` against `ACCEPTED_SCHEMA_VERSIONS`
  *      (unknown → WARN + drop).
  *   3. Prunes to the `OSContext` envelope (drops windowList / uia /
- *      msaa — not needed for grounding the first LLM turn).
+ *      msaa — not needed for grounding the first LLM turn). plan 519
+ *      re-opens `uiaInputs` / `msaaInputs` / `windowList` for the
+ *      computer-use SOM detector only (never the prompt).
  *   4. Caps `interactionTrail` at `MAX_TRAIL_EVENTS` (sliding window
  *      — daemon writes up to 50, we keep the most recent 30).
  *
- * Plan 453 Task B.
+ * Plan 453 Task B. Plan 519 Phase 1 Task A1.
  */
 
 import type { RedactionReason } from './daemon-schema.js';
@@ -29,6 +31,9 @@ import {
 
 /** Component tag for structured logs. */
 const COMPONENT = 'OSContextBridge';
+
+/** Cap on the re-opened top-level window list (extreme desktop enums). */
+const MAX_WINDOW_LIST = 64;
 
 /** Allowed redaction reasons. Anything else passes through as null. */
 const REDACTION_REASONS: ReadonlySet<RedactionReason> = new Set([
@@ -200,6 +205,21 @@ export function parseOSContext(
         .map((e) => e as unknown as OSContext['interactionTrail'][number]))
     : [];
 
+  // plan 519 — pass through the SOM inputs to the computer-use detector.
+  const uiaInputs = readInputsArray(parsed, 'uia', 'inputs') as unknown as
+    | OSContext['uiaInputs']
+    | undefined;
+  const msaaInputs = readInputsArray(parsed, 'msaa', 'inputs') as unknown as
+    | OSContext['msaaInputs']
+    | undefined;
+  const windowListRaw = (parsed as { windowList?: unknown }).windowList;
+  const windowList = Array.isArray(windowListRaw)
+    ? (windowListRaw
+        .filter(isObject)
+        .slice(0, MAX_WINDOW_LIST)
+        .map((e) => e as unknown as NonNullable<OSContext['windowList']>[number]))
+    : undefined;
+
   const ctx: OSContext = {
     schemaVersion: schemaVersion as AcceptedSchemaVersion,
     capturedAt,
@@ -211,6 +231,9 @@ export function parseOSContext(
       exeName: focusExe,
       title: typeof focusTitle === 'string' ? focusTitle : '',
     },
+    ...(uiaInputs ? { uiaInputs } : {}),
+    ...(msaaInputs ? { msaaInputs } : {}),
+    ...(windowList ? { windowList } : {}),
     redacted: redactedInfo.redacted,
     redactionReason: redactedInfo.reason,
   };
@@ -223,6 +246,9 @@ export function parseOSContext(
       hasFocusedEntity: focusedEntity !== null,
       hasIntent: intentCandidate !== null,
       redacted: redactedInfo.redacted,
+      uiaInputs: uiaInputs?.length,
+      msaaInputs: msaaInputs?.length,
+      windowList: windowList?.length,
     },
     COMPONENT,
   );
@@ -246,6 +272,26 @@ export function capTrail<T>(events: readonly T[], cap: number = MAX_TRAIL_EVENTS
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Read `holder[holderKey]` from the parsed payload where `holder` is a
+ * sidecar like `uia` / `msaa`, then filter `holder[holderKey].inputs`
+ * to plain objects. Returns undefined when the holder or its inputs
+ * array is missing / malformed (the test path for these fields — they
+ * must never throw).
+ */
+function readInputsArray(
+  parsed: Record<string, unknown>,
+  holderKey: string,
+  inputsKey: string,
+): unknown[] | undefined {
+  const holderRaw = parsed[holderKey];
+  if (!isObject(holderRaw)) return undefined;
+  const inputsRaw = holderRaw[inputsKey];
+  if (!Array.isArray(inputsRaw)) return undefined;
+  const filtered = inputsRaw.filter(isObject);
+  return filtered.length > 0 ? filtered : undefined;
 }
 
 function normalizeRedactionReason(reason: unknown): RedactionReason | null {

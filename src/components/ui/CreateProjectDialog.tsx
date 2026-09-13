@@ -1,10 +1,10 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { XIcon, FolderOpenIcon, PlusIcon } from "@/components/icons";
+import { FolderOpenIcon, PlusIcon } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
-import { IconButton } from "@/components/ui/IconButton";
 import { Input } from "@/components/ui/Input";
+import { Modal } from "@/components/ui/page";
 import { useTranslation } from "@/hooks/useTranslation";
 
 /**
@@ -55,22 +55,6 @@ export function CreateProjectDialog({ isOpen, onCancel, onConfirm }: CreateProje
     }
   }, [isOpen]);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        onCancel();
-      } else if (e.key === "Enter" && !pickingFolder) {
-        // Don't fire when the user is mid-folder-pick (Enter on a child
-        // element of the picker would prematurely submit).
-        handleConfirm();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, name, workingDirectory, pickingFolder]);
-
   const handlePickFolder = async () => {
     if (pickingFolder) return;
     setPickingFolder(true);
@@ -111,92 +95,22 @@ export function CreateProjectDialog({ isOpen, onCancel, onConfirm }: CreateProje
 
   const canSubmit = name.trim().length > 0 || workingDirectory !== null;
 
-  if (!isOpen) return null;
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !pickingFolder) {
+      // Don't fire when the user is mid-folder-pick (Enter on a child
+      // element of the picker would prematurely submit).
+      handleConfirm();
+    }
+  };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      style={{ backgroundColor: "rgba(0, 0, 0, 0.5)" }}
-      onClick={onCancel}
-    >
-      <div
-        className="w-full max-w-md rounded-xl p-6 shadow-xl"
-        style={{
-          backgroundColor: "var(--sidebar-bg)",
-          border: "1px solid var(--border)",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between mb-5">
-          <h3 className="text-lg font-medium" style={{ color: "var(--text)" }}>
-            {t('project.createProject')}
-          </h3>
-          <IconButton onClick={onCancel} aria-label="Close" variant="default" size="md">
-            <XIcon size={18} />
-          </IconButton>
-        </div>
-
-        {/* Project name — file-icon prefix like Codex so the row reads as
-            a single labeled field. */}
-        <div
-          className="flex items-center gap-2 rounded-lg px-3 py-2 mb-4"
-          style={{
-            backgroundColor: "var(--surface)",
-            border: "1px solid var(--border)",
-          }}
-        >
-          <FolderOpenIcon
-            size={16}
-            style={{ color: "var(--muted)", flexShrink: 0 }}
-          />
-          <Input
-            ref={inputRef}
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={t('project.nameProjectPlaceholder')}
-            className="border-0 bg-transparent p-0 shadow-none focus-visible:ring-0 flex-1"
-            style={{ height: 'auto', padding: 0 }}
-          />
-        </div>
-
-        <div className="text-sm font-medium mb-2" style={{ color: "var(--text)" }}>
-          {t('project.sourceFolder')}
-        </div>
-        {workingDirectory ? (
-          <button
-            type="button"
-            onClick={handlePickFolder}
-            className="w-full text-left rounded-lg px-3 py-3 mb-5 transition-colors"
-            style={{
-              backgroundColor: "var(--surface)",
-              border: "1px solid var(--border)",
-              color: "var(--text)",
-              fontSize: "0.85rem",
-              wordBreak: "break-all",
-            }}
-          >
-            {workingDirectory}
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={handlePickFolder}
-            disabled={pickingFolder}
-            className="w-full flex flex-col items-center justify-center gap-2 rounded-lg py-6 mb-5 transition-colors disabled:opacity-60"
-            style={{
-              backgroundColor: "var(--surface)",
-              border: "1px dashed var(--border)",
-              color: "var(--muted)",
-              minHeight: 96,
-            }}
-          >
-            <PlusIcon size={18} />
-            <span className="text-sm">{t('project.addLocalFolder')}</span>
-          </button>
-        )}
-
-        <div className="flex justify-end gap-2">
+    <Modal
+      open={isOpen}
+      onClose={onCancel}
+      title={t('project.createProject')}
+      size="sm"
+      footer={
+        <>
           <Button onClick={onCancel} variant="ghost" size="md">
             {t('common.cancel')}
           </Button>
@@ -208,8 +122,69 @@ export function CreateProjectDialog({ isOpen, onCancel, onConfirm }: CreateProje
           >
             {t('project.createProject')}
           </Button>
-        </div>
+        </>
+      }
+    >
+      {/* Project name — file-icon prefix like Codex so the row reads as
+          a single labeled field. */}
+      <div
+        className="flex items-center gap-2 rounded-lg px-3 py-2 mb-4"
+        style={{
+          backgroundColor: "var(--surface)",
+          border: "1px solid var(--border)",
+        }}
+      >
+        <FolderOpenIcon
+          size={16}
+          style={{ color: "var(--muted)", flexShrink: 0 }}
+        />
+        <Input
+          ref={inputRef}
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={t('project.nameProjectPlaceholder')}
+          className="border-0 bg-transparent p-0 shadow-none focus-visible:ring-0 flex-1"
+          style={{ height: 'auto', padding: 0 }}
+        />
       </div>
-    </div>
+
+      <div className="text-sm font-medium mb-2" style={{ color: "var(--text)" }}>
+        {t('project.sourceFolder')}
+      </div>
+      {workingDirectory ? (
+        <button
+          type="button"
+          onClick={handlePickFolder}
+          className="w-full text-left rounded-lg px-3 py-3 mb-2 transition-colors"
+          style={{
+            backgroundColor: "var(--surface)",
+            border: "1px solid var(--border)",
+            color: "var(--text)",
+            fontSize: "0.85rem",
+            wordBreak: "break-all",
+          }}
+        >
+          {workingDirectory}
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={handlePickFolder}
+          disabled={pickingFolder}
+          className="w-full flex flex-col items-center justify-center gap-2 rounded-lg py-6 transition-colors disabled:opacity-60"
+          style={{
+            backgroundColor: "var(--surface)",
+            border: "1px dashed var(--border)",
+            color: "var(--muted)",
+            minHeight: 96,
+          }}
+        >
+          <PlusIcon size={18} />
+          <span className="text-sm">{t('project.addLocalFolder')}</span>
+        </button>
+      )}
+    </Modal>
   );
 }

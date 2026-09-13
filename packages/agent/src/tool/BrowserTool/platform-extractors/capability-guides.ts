@@ -15,10 +15,10 @@ export const capabilityGuides: Partial<Record<PlatformContentType, string>> = {
     'Threads return as a `thread` result. Like/RT/delete are not automated.',
     '',
     '**Publishing (write).** A logged-in X.com session in the browser can also post.',
-    '- Use `twitter_post` to publish a new tweet (text + up to 4 jpg/png/gif/webp images).',
+    '- Use `post` with `platform: "x"` (or the legacy `twitter_post` alias) to publish a new tweet (text + up to 4 jpg/png/gif/webp images); add `replyTo` (status URL or id) to reply to an existing tweet.',
     '- It drives the real composer: opens /compose/post, attaches media, types, submit, and verifies the resulting `/status/<id>` URL.',
     '- Replies reuse the same composer route; confirm the account before any public post.',
-    '- Posting is irreversible and public — only call `twitter_post` after the user confirms.',
+    '- Posting is irreversible and public — only call `post` after the user confirms.',
   ].join('\n'),
 
   'thread': [
@@ -26,7 +26,7 @@ export const capabilityGuides: Partial<Record<PlatformContentType, string>> = {
     '- /<user>/status/<id> on the root/first tweet → numbered `thread` (author, text, like/RT per part).',
     'Prefer navigating to the thread root tweet for the full conversation.',
     '',
-    '**Publishing (write).** With a logged-in session, `twitter_post` posts a single tweet; to start a thread, post the first tweet via `twitter_post`, then reply to it if the user wants a thread. Confirm before posting.',
+    '**Publishing (write).** With a logged-in session, `post` (`platform: "x"`) posts a single tweet; pass `replyTo` (status URL or numeric id) to reply to an existing tweet, and thread by replying to your own last post. Confirm before posting.',
   ].join('\n'),
 
   'youtube-video': [

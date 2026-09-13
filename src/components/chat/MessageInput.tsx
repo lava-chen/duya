@@ -29,6 +29,7 @@ import {
   resolveDirectSlash,
   filterItems,
   htmlToPlainText,
+  type PluginMentionTarget,
 } from '@/lib/message-input-logic';
 import { ModelProviderSelector, type ModelOption, type ProviderModelGroup } from './ModelProviderSelector';
 
@@ -66,6 +67,7 @@ import type { Task } from '@duya/agent';
 import type { Message } from '@/types/message';
 import { IconButton } from '@/components/ui/IconButton';
 import { getPluginAPI } from '@/lib/plugin-ipc';
+import { usePluginMentionStore } from '@/stores/plugin-mention-store';
 import { normalizeManifestComponents } from '@/lib/plugin-types';
 
 function getEditableCursorPosition(element: HTMLElement | null, fallback: number): number {
@@ -650,6 +652,17 @@ export function MessageInput({
   // (existing app-tool injection + connector-activation reminder).
   const [pluginItems, setPluginItems] = useState<PopoverItem[]>([]);
 
+  // Same plugin list, reduced to what <RichTextInput> needs to turn a bare
+  // `@<pluginId>` token into an icon + name chip: id, display name, icon URL.
+  const [pluginMentionTargets, setPluginMentionTargets] = useState<PluginMentionTarget[]>([]);
+
+  // The sent user bubble renders the same chip, so every refresh here has to
+  // reach the shared store as well as the composer.
+  const publishMentionTargets = useCallback((next: PluginMentionTarget[]) => {
+    setPluginMentionTargets(next);
+    usePluginMentionStore.getState().setTargets(next);
+  }, []);
+
   // Refresh the @ plugin list on mount, on sessionId change, and every time
   // the user opens the `@` context popover (typed or via plus button). Covers
   // the case where a plugin was installed in Settings *after* the chat tab
@@ -658,6 +671,7 @@ export function MessageInput({
     const api = getPluginAPI();
     if (!api) {
       setPluginItems([]);
+      publishMentionTargets([]);
       return;
     }
     try {
@@ -712,12 +726,18 @@ export function MessageInput({
           }
         });
       setPluginItems(items);
+      publishMentionTargets(
+        (res.data ?? [])
+          .filter((p) => p.enabled !== false)
+          .map((p) => ({ pluginId: p.id, name: p.name || p.id, iconUrl: p.icon })),
+      );
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error('[MessageInput] refreshPluginItems failed:', err);
       setPluginItems([]);
+      publishMentionTargets([]);
     }
-  }, []);
+  }, [publishMentionTargets]);
 
   useEffect(() => {
     void refreshPluginItems();
@@ -2038,6 +2058,7 @@ export function MessageInput({
             onPaste={handlePasteEvent}
             placeholder={cliBadge ? t('messageInput.describeWhat') : (placeholder || t('chat.placeholder'))}
             disabled={disabled}
+            mentionTargets={pluginMentionTargets}
           />
 
           {/* CLI Badge */}

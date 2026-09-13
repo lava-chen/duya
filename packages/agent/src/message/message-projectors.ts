@@ -510,6 +510,15 @@ export interface LegacyCompactionCheckpoint {
 
 const COMPACTION_CHECKPOINT_METADATA_KEY = 'duyaCompactionCheckpoint';
 export const COMPACTION_CHECKPOINT_MESSAGE_TYPE = 'compact_checkpoint';
+/**
+ * Id suffix shared by every projection-synthesized compaction checkpoint row
+ * (`${checkpoint.id}:checkpoint`, see projectTimelinePersistenceMessages).
+ * Persistence callers must never re-persist such rows standalone: the rebase
+ * event already carries the checkpoint inline, and a standalone copy lands as
+ * a new un-indexed row that collides with the rebase-emitted copy on the next
+ * load (duplicate message id breaks agent hydration).
+ */
+export const COMPACTION_CHECKPOINT_ID_SUFFIX = ':checkpoint';
 
 function checkpointForEntry(entry: CompactionEntry): LegacyCompactionCheckpoint {
   return {

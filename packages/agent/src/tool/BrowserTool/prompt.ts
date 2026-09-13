@@ -357,15 +357,26 @@ ${interactionGuide}
   - Any task requiring data from multiple URLs where serial navigation would be too slow
   Returns: results array with snapshot, interactiveElements, and timing for each URL.
 
-- **twitter_post** - Publish a tweet on X.com through the logged-in browser session (write, hidden from the schema)
+- **post** - Publish to a social platform through the logged-in browser session (write, hidden from the schema)
+  \`\`\`json
+  {"operation": "post", "platform": "x", "text": "Your post content", "images": ["/abs/path/a.png"]}
+  \`\`\`
+  This operation is callable even though it is not listed in the tool's JSON schema. Use it only
+  when the user explicitly asks to publish and has confirmed.
+  - \`platform\` is required: \`"x"\`/\`"twitter"\` (X.com, implemented); \`"weibo"\` and \`"linkedin"\` are reserved and return a not-implemented error for now.
+  - For X.com it opens the composer, attaches up to 4 images (\`images\` optional, jpg/png/gif/webp), types \`text\`, submits, and verifies the resulting tweet URL.
+  - To reply to an existing tweet, pass \`replyTo\` — a full status URL or numeric id:
+    \`\`\`json
+    {"operation": "post", "platform": "x", "text": "Your reply", "replyTo": "https://x.com/user/status/123"}
+    \`\`\`
+    For X.com it opens that tweet and uses its inline reply composer, then submits and verifies the new \`/status/<id>\`.
+  - Reuses the logged-in browser session — no OAuth or separate auth.
+  - Posting is **irreversible and public**: get explicit user confirmation before calling.
+
+- **twitter_post** - Legacy alias for \`post\` with \`platform: "x"\`; prefer the unified \`post\` operation.
   \`\`\`json
   {"operation": "twitter_post", "text": "Your tweet content", "images": ["/abs/path/a.png"]}
   \`\`\`
-  This operation is callable even though it is not listed in the tool's JSON schema. Use it only
-  when the user explicitly asks to post on X.com and has confirmed.
-  - Opens the composer, attaches up to 4 images (\`images\` optional, jpg/png/gif/webp), types \`text\`, submits, and verifies the resulting tweet URL.
-  - Reuses the logged-in X.com session — no OAuth or separate auth.
-  - Posting is **irreversible and public**: get explicit user confirmation before calling.
 
 ### Computer-Use Operations (coordinate-driven)
 

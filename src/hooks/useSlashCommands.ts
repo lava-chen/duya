@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo } from 'react';
 import type { PopoverItem, PopoverMode } from '@/types/slash-command';
 import { detectPopoverTrigger, resolveItemSelection } from '@/lib/message-input-logic';
+import { canonicalOffsetAt, setCanonicalCaret } from '@/lib/rich-text-canonical';
 import { getCommandsForPlatform } from '@/lib/commands';
 import { useTranslation } from '@/hooks/useTranslation';
 import {
@@ -61,15 +62,16 @@ function getCursorPosition(element: SlashInputElement): number {
     return element.selectionStart;
   }
 
+  const fallback = element.textContent?.length ?? 0;
   const selection = window.getSelection();
-  if (!selection || selection.rangeCount === 0) return element.textContent?.length ?? 0;
+  if (!selection || selection.rangeCount === 0) return fallback;
   const range = selection.getRangeAt(0);
-  if (!element.contains(range.endContainer)) return element.textContent?.length ?? 0;
+  if (!element.contains(range.endContainer)) return fallback;
 
-  const preRange = document.createRange();
-  preRange.selectNodeContents(element);
-  preRange.setEnd(range.endContainer, range.endOffset);
-  return preRange.toString().length;
+  // Atomic chips (plugin @-mentions, skill tokens) render a friendly label
+  // that differs in length from the canonical token they stand for, so map the
+  // DOM caret back through canonical lengths instead of raw textContent.
+  return canonicalOffsetAt(element, range.endContainer, range.endOffset) ?? fallback;
 }
 
 function setCursorPosition(element: SlashInputElement, position: number): void {
@@ -79,29 +81,7 @@ function setCursorPosition(element: SlashInputElement, position: number): void {
     return;
   }
 
-  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-  let remaining = position;
-  let node: Node | null;
-  while ((node = walker.nextNode())) {
-    const length = node.textContent?.length ?? 0;
-    if (remaining <= length) {
-      const range = document.createRange();
-      range.setStart(node, remaining);
-      range.collapse(true);
-      const selection = window.getSelection();
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-      return;
-    }
-    remaining -= length;
-  }
-
-  const range = document.createRange();
-  range.selectNodeContents(element);
-  range.collapse(false);
-  const selection = window.getSelection();
-  selection?.removeAllRanges();
-  selection?.addRange(range);
+  setCanonicalCaret(element, position);
 }
 
 export function useSlashCommands(opts: {
@@ -329,11 +309,22 @@ export function useSlashCommands(opts: {
           });
           return;
 
-        case 'insert_file_mention':
+        case 'insert_file_mention': {
           setInputValue(result.newInputValue!);
           closePopover();
-          setTimeout(() => textareaRef.current?.focus(), 0);
+          // Land the caret right after the inserted token (before any text
+          // that followed the `@filter`). Chips count as canonical tokens, so
+          // the offset is derived from the post-insert string, not the DOM.
+          const afterLength = inputValue.slice(effectiveTriggerPos + popoverFilter.length + 1).length;
+          const caret = Math.max(0, (result.newInputValue ?? '').length - afterLength);
+          requestAnimationFrame(() => {
+            const textarea = textareaRef.current;
+            if (!textarea) return;
+            textarea.focus();
+            setCursorPosition(textarea, caret);
+          });
           return;
+        }
       }
     },
     [triggerPos, popoverMode, closePopover, inputValue, popoverFilter, textareaRef, setInputValue],

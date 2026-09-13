@@ -21,6 +21,7 @@ import { adjustSliceBoundary } from '../compact.js'
 import { sanitizeCompactedHistory } from '../historySanitize.js'
 import { cleanSummaryText, isDegenerateSummary } from '../summaryGuard.js'
 import { summarizeWithRetryLadder } from '../summaryRetry.js'
+import { logger } from '../../utils/logger.js'
 import {
   findCutPoint,
   buildSummarizationPrompt,
@@ -582,6 +583,9 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
       // failures get a one-shot shorter-output instruction, input-length
       // failures shrink the summarized range (tool traffic drops first), and
       // up to MAX_SUMMARY_RETRIES attempts run before the failure escapes.
+      // Plan 523 P6: forward each attempt's outcome to the manager hook for
+      // SSE observability + structured logging.
+      const reportAttempt = options?.onSummaryAttempt
       let rawSummary = ''
       try {
         rawSummary = cleanSummaryText(
@@ -598,6 +602,17 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
                 },
               },
               (t) => isDegenerateSummary(t),
+              (r) => {
+                if (r.outcome !== 'success') {
+                  logger.warn('[compact] summarization attempt not usable', {
+                    attempt: r.attempt,
+                    outcome: r.outcome,
+                    errorKind: r.errorKind,
+                    chars: r.chars,
+                  })
+                }
+                reportAttempt?.(r)
+              },
             )
           ).text,
         )
@@ -608,18 +623,19 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
         throw summaryError
       }
 
-      if (isDegenerateSummary(rawSummary)) {
-        summaryText = `[Session memory unavailable - ${olderMessages.length} messages truncated]`
-      } else {
-        summaryText = formatSessionMemorySummary(rawSummary)
-        summaryText += formatFileOperations(readFiles, modifiedFiles)
-        if (turnPrefixSummary) {
-          summaryText = `${summaryText}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixSummary}`
-        }
-        // NOTE: do NOT mutate this.config.previousSummary here. The manager
-        // now owns the iterative summary (driven by result.summaryText), and
-        // mutating the strategy would leak across sessions if the strategy is shared.
+      // Plan 523 P1: the ladder now throws `SummaryDegenerateError` when every
+      // attempt is degenerate, so `rawSummary` reaching here is always usable —
+      // the post-495 placeholder branch (silently replacing real history with
+      // "[Session memory unavailable…]") is removed. Degenerate exhaustion
+      // propagates via the catch above into the suppression machine instead.
+      summaryText = formatSessionMemorySummary(rawSummary)
+      summaryText += formatFileOperations(readFiles, modifiedFiles)
+      if (turnPrefixSummary) {
+        summaryText = `${summaryText}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixSummary}`
       }
+      // NOTE: do NOT mutate this.config.previousSummary here. The manager
+      // now owns the iterative summary (driven by result.summaryText), and
+      // mutating the strategy would leak across sessions if the strategy is shared.
     } else {
       summaryText = `[${olderMessages.length} messages from earlier in the conversation]`
     }
