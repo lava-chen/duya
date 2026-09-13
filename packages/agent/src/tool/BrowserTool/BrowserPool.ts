@@ -212,18 +212,23 @@ export class BrowserPool {
         }
       }
 
-      // Fallback to snapshot engine
+      // Fallback: plain readable text (never the structured DOM snapshot).
+      // parallel_fetch returns content plus refs, not page structure, so the
+      // interactive elements are harvested from a separate refs-only capture.
       if (!snapshotText && session.snapshotEngine) {
-        const snapshot = await session.snapshotEngine.capture({
+        snapshotText = (await session.snapshotEngine.capturePlainText({
           maxLength: task.selector ? 50000 : 100000,
-          interactiveOnly: false,
-        });
-        snapshotText = snapshot.snapshot;
-        interactiveElements = snapshot.interactiveElements.map(el => ({
-          ref: el.ref,
-          tag: el.tag,
-          text: el.text,
-        }));
+        })) ?? '';
+        if (interactiveElements.length === 0) {
+          try {
+            const refs = await session.snapshotEngine.capture({ maxLength: 50000, interactiveOnly: true });
+            interactiveElements = refs.interactiveElements.map(el => ({
+              ref: el.ref,
+              tag: el.tag,
+              text: el.text,
+            }));
+          } catch { /* best effort */ }
+        }
       }
 
       let evaluateResult: unknown;

@@ -1085,6 +1085,23 @@ export class SnapshotEngine {
   }
 
   /**
+   * Capture plain readable text only — never the structured DOM snapshot.
+   *
+   * `parallel_fetch` returns page *content* (text) plus interactive refs, not
+   * page structure. Callers that need structure (navigate/snapshot) must use
+   * `capture()` instead.
+   */
+  async capturePlainText(options: { maxLength?: number } = {}): Promise<string | null> {
+    const maxLength = options.maxLength ?? 100000;
+    const text = await this.captureViaSimpleText();
+    if (!text) return null;
+    if (text.length > maxLength) {
+      return text.slice(0, maxLength) + '\n\n[Text truncated...]';
+    }
+    return text;
+  }
+
+  /**
    * Capture via CDP DOM.getDocument (fallback)
    */
   private async captureViaCDP(options: SnapshotOptions): Promise<string | null> {
