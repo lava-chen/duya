@@ -15,6 +15,7 @@ import { acquireChatLock, releaseChatLock, type ChatLockOrigin } from './chat-ru
 import { parseAgentIdFromBotSession } from '../../wake/bot-session-id';
 import { buildCronProviderConfig, resolveCronModel } from '../../automation/provider-config';
 import { readConfigAgents } from '../../../packages/agent/src/agent-profile/config-agents.js';
+import { normalizePath } from '../../memory-state/pathUtils';
 
 /**
  * Detect whether the project has a `.duya/references/` directory.
@@ -234,6 +235,13 @@ export async function resolveProjectAdditionalRootsViaDbRequest(
  * `permissions.additionalDirectories` (dedup, case-insensitive on Windows
  * style paths is left to the worker's own path.resolve — here exact-string
  * dedupe is enough since roots come from one source of truth).
+ *
+ * L2 hardening (Plan 525): every input root is normalized through
+ * `normalizePath` before merging. The dedupe key is the lowercased
+ * normalized form so symlink / `..` / case variants of an already-
+ * trusted directory collapse onto a single entry. A root whose
+ * normalization throws (e.g. NUL byte) is dropped with a WARN so
+ * the worker never sees a string that bypassed the boundary.
  */
 export function mergeAdditionalRootsIntoPermissionRules(
   permissionRules: unknown,
@@ -245,11 +253,27 @@ export function mergeAdditionalRootsIntoPermissionRules(
   const existing = Array.isArray(permissions.additionalDirectories)
     ? permissions.additionalDirectories.filter((d): d is string => typeof d === 'string')
     : [];
-  const merged = [...existing];
+  // Normalize every existing entry too, so the merged output is in
+  // canonical form (matches what we push for the incoming roots).
+  // The dedupe key is the lowercased normalized form.
+  const merged: string[] = [];
+  const seenLower = new Set<string>();
+  for (const entry of existing) {
+    const normalized = safeNormalize(entry);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seenLower.has(key)) continue;
+    seenLower.add(key);
+    merged.push(normalized);
+  }
   for (const root of additionalRoots) {
-    if (!merged.some((d) => d.replace(/\\/g, '/').toLowerCase() === root.replace(/\\/g, '/').toLowerCase())) {
-      merged.push(root);
-    }
+    if (typeof root !== 'string' || root.length === 0) continue;
+    const normalized = safeNormalize(root);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seenLower.has(key)) continue;
+    seenLower.add(key);
+    merged.push(normalized);
   }
   return {
     ...base,
@@ -258,6 +282,22 @@ export function mergeAdditionalRootsIntoPermissionRules(
       additionalDirectories: merged,
     },
   };
+}
+
+/**
+ * Normalize a path through `pathUtils.normalizePath` and return its
+ * canonical form, or null when the input cannot be safely normalized.
+ *
+ * Wrapped to swallow `path.resolve` / `realpathSync` failures so the
+ * worker permission merge never throws mid-handshake.
+ */
+function safeNormalize(value: string): string | null {
+  if (typeof value !== 'string' || value.length === 0) return null;
+  try {
+    return normalizePath(value).absolute_normalized_path;
+  } catch {
+    return null;
+  }
 }
 
 export interface BotProviderConfigFallbackDeps {

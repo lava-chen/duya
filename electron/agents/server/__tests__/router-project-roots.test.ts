@@ -53,7 +53,7 @@ describe('mergeAdditionalRootsIntoPermissionRules', () => {
   it('creates permissions.additionalDirectories when no rules exist', () => {
     const merged = mergeAdditionalRootsIntoPermissionRules(undefined, ['E:/a', 'E:/b']);
     expect(merged).toEqual({
-      permissions: { additionalDirectories: ['E:/a', 'E:/b'] },
+      permissions: { additionalDirectories: ['e:/a', 'e:/b'] },
     });
   });
 
@@ -62,18 +62,46 @@ describe('mergeAdditionalRootsIntoPermissionRules', () => {
       permissions: { additionalDirectories: ['E:\\A'], other: 'keep' },
       version: 1,
     };
-    const merged = mergeAdditionalRootsIntoPermissionRules(existing, ['e:/a', 'E:/b']) as {
+    const merged = mergeAdditionalRootsIntoPermissionRules(existing, ['e:/A', 'E:/b']) as {
       permissions: { additionalDirectories: string[]; other?: string };
       version: number;
     };
-    expect(merged.permissions.additionalDirectories).toEqual(['E:\\A', 'E:/b']);
+    // L2 hardening: every entry is normalized through `normalizePath`
+    // before merge. The dedupe key is the lowercased canonical form
+    // so `E:\A` and `e:/A` collapse onto one entry. `normalizePath`
+    // lowercases only the drive letter on win32 — the path component
+    // keeps its case — so the merged entry reads `e:/A`.
+    expect(merged.permissions.additionalDirectories).toEqual(['e:/A', 'e:/b']);
     expect(merged.permissions.other).toBe('keep');
     expect(merged.version).toBe(1);
   });
 
   it('returns the input untouched when there is nothing to add', () => {
     expect(mergeAdditionalRootsIntoPermissionRules(undefined, [])).toBeUndefined();
-    const rules = { permissions: { additionalDirectories: ['E:/a'] } };
+    const rules = { permissions: { additionalDirectories: ['e:/a'] } };
     expect(mergeAdditionalRootsIntoPermissionRules(rules, [])).toBe(rules);
+  });
+
+  it('L2 hardening: NUL-byte paths pass through normalization (IPC layer is the boundary)', () => {
+    const merged = mergeAdditionalRootsIntoPermissionRules(
+      undefined,
+      ['E:/Projects/duya', 'E:/foo\x00bar'],
+    ) as { permissions: { additionalDirectories: string[] } };
+    // `normalizePath` swallows `realpathSync` failures but `path.resolve`
+    // does NOT throw on NUL on Windows — the byte survives the round trip.
+    // The IPC handler (`projects:register`) is the canonical boundary
+    // for NUL rejection; this layer is a defense-in-depth passthrough.
+    expect(merged.permissions.additionalDirectories).toEqual([
+      'e:/Projects/duya',
+      'e:/foo\x00bar',
+    ]);
+  });
+
+  it('L2 hardening: collapses `..` segments before merging', () => {
+    const merged = mergeAdditionalRootsIntoPermissionRules(
+      undefined,
+      ['E:/Projects/duya/../duya-website'],
+    ) as { permissions: { additionalDirectories: string[] } };
+    expect(merged.permissions.additionalDirectories).toEqual(['e:/Projects/duya-website']);
   });
 });

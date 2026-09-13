@@ -316,6 +316,70 @@ updated: 2026-09-12
 
 ---
 
+### Phase 6 — Path safety hardening(L1/L2/L3)
+
+> 2026-09-13: 跟随 plan 530 多路径画布(commit `ad5044e6`)与 plan 525
+> 完整实体落地后识别出三个串联的边界缺陷 — 从 UI IPC 到 worker permission
+> 注入有一条完整的攻击链。本 phase 仅补防线,**不动 schema**,只改
+> service / IPC / bridge / router 四处边界。
+
+#### 6.1 边界链与漏洞定位
+
+```
+renderer (CreateProjectDialog / 任何 IPC caller)
+    │
+    ▼  IPC: projects:register / projects:update
+projects:register handler  ← L1 入口: 路径原始字符串
+    │
+    ▼  createProject(input)
+projectService.createProject  ← L1 防线: 入库前 normalize
+    │
+    ▼  INSERT INTO projects(paths = JSON)
+SQLite row  ← 真理源: paths 永远是 normalized 形式
+    │
+    ▼  IPC: projects:resolveAdditionalRoots
+db-bridge handler  ← L3: cwd 与 paths 用同一算法
+    │
+    ▼  mergeAdditionalRootsIntoPermissionRules
+router.ts (Electron main)  ← L2: 二次校验
+    │
+    ▼  worker permissions.additionalDirectories
+agent / bash tool  ← 受信任
+```
+
+**L1**(`projects:register` / `projects:update` IPC handler):
+  - 接受任意字符串,不做规范化、不验证路径是否落在用户工作目录下、不拒绝 `..` / UNC / NUL
+  - 攻击者(或被钓鱼的 UI 流程)可注册 `E:/Projects/duya/../../../Windows/System32`
+  - DB 会原样存储(`projectService.createProject` 之前仅做 `path === ''` 检查)
+
+**L2**(router.ts merge 函数):
+  - 已有 paths 列表会被原样合并到 `additionalDirectories`,只做去尾斜杠 + 大小写 string replace
+  - 没有 realpath 解析:symlink 逃逸不可见
+  - 一旦 L1 失守,worker 权限被注入到任意目录
+
+**L3**(db-bridge `projects:resolveAdditionalRoots`):
+  - 内部用 `normalizeForMatch = (s) => s.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()`
+  - 不折叠 `..`、不解析 symlink、不下盘符大小写(win32 之外)
+  - 与 `pathUtils.normalizePath` 算法分叉,存储端规范化但查询端不一致
+
+#### 6.2 修复策略
+
+- **L1 主防线 — `createProject` / `updateProject`**:入库前用 `normalizeProjectPathEntries` 走 `pathUtils.normalizePath`(realpath + posix + 盘符小写),DB 永远是 canonical 形式
+- **L1 强化 — IPC handler `validateProjectPathEntry`**:拒绝相对路径 / NUL 字节 / UNC device (`\\?\` / `\\.\`) / UNC 远程共享 / `..` 段 / > 4096 字符
+- **L2 — router.ts `mergeAdditionalRootsIntoPermissionRules`**:每个 entry 都走 `safeNormalize`,dedupe 用 normalized lower key,existing 也被 normalize
+- **L3 — db-bridge**:删除本地 `normalizeForMatch`,改用 `memoryState.normalizePath(cwd)` 与存储端保持单一规范化算法
+
+#### 6.3 验证(已落实)
+
+- [x] 6.3.1 `npx vitest run electron/memory-state/__tests__/projectService.test.ts` — 16 用例全绿(8 原有 + 8 path safety)
+- [x] 6.3.2 `npx vitest run electron/ipc/__tests__/project-entity-handlers.test.ts` — 20 用例全绿(15 原有 + 5 L1 hardening:relative / `..` / UNC device / UNC remote / length)
+- [x] 6.3.3 `npx vitest run electron/agents/server/__tests__/router-project-roots.test.ts` — 8 用例全绿(6 原有 + 2 L2 hardening:NUL passthrough / `..` collapse)
+- [x] 6.3.4 `npm run typecheck:all` — 我影响的所有 workspace package 通过(`src/App.tsx` 两处 ViewType 错是 pre-existing)
+- [x] 6.3.5 攻击链复现测试(IPC handler 拒绝 `..` + 长度上限 + UNC device + UNC remote + NUL + 相对路径)
+- [x] 6.3.6 端到端: `E:/Projects/duya/../duya-website` 在 IPC 层被拒绝(`INVALID_INPUT` + 'must not contain `..` segments'),不在 DB 中落库
+
+---
+
 ## 6. 验证
 
 - 每个 phase 提交前:`npm run typecheck:all`
