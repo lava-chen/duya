@@ -742,18 +742,6 @@ html.compact .skills-section-wrapper {
   gap: 1.5rem;
 }
 
-html.compact .gateway-section {
-  padding: 0.75rem 1rem;
-}
-
-html.compact .gateway-status-card {
-  padding: 0.75rem 1rem;
-}
-
-html.compact .gateway-session-item {
-  padding: 0.4rem 0.5rem;
-}
-
 html.compact .file-tree-folder-header,
 html.compact .file-tree-file {
   padding: 2px 12px;

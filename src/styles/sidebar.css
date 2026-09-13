@@ -91,7 +91,6 @@ html[data-glass-repair] .terminal-selection-menu,
 html[data-glass-repair] .image-preview-overlay,
 html[data-glass-repair] .references-modal-overlay,
 html[data-glass-repair] .skills-modal-overlay,
-html[data-glass-repair] .gateway-chat-modal-overlay,
 html[data-glass-repair] .attachment-preview-overlay {
   backdrop-filter: blur(0.02px);
   -webkit-backdrop-filter: blur(0.02px);

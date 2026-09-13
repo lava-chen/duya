@@ -542,24 +542,6 @@ export interface GatewayAPI {
       effective: string | undefined
     }
   }>
-  listSessions: () => Promise<Array<{
-    id: string
-    title: string
-    platform: string
-    platformUserId: string
-    platformChatId: string
-    createdAt: number
-    updatedAt: number
-  }>>
-  getSession: (sessionId: string) => Promise<{
-    id: string
-    title: string
-    platform: string
-    platformUserId: string
-    platformChatId: string
-    createdAt: number
-    updatedAt: number
-  } | null>
   allowlistList: () => Promise<Record<string, string[]>>
   allowlistAdd: (platform: string, platformUserId: string) => Promise<{ success: boolean }>
   allowlistRemove: (platform: string, platformUserId: string) => Promise<{ success: boolean }>
@@ -2244,8 +2226,6 @@ const electronAPI: ElectronAPI = {
     getStatus: () => ipcRenderer.invoke('gateway:getStatus'),
     testChannel: (channel) => ipcRenderer.invoke('gateway:testChannel', channel),
     getProxyStatus: () => ipcRenderer.invoke('gateway:getProxyStatus'),
-    listSessions: () => ipcRenderer.invoke('gateway:listSessions'),
-    getSession: (sessionId: string) => ipcRenderer.invoke('gateway:getSession', sessionId),
     // Plan 520: channel allow-list (replaces the pairing system)
     allowlistList: () => ipcRenderer.invoke('gateway:allowlist:list'),
     allowlistAdd: (platform: string, platformUserId: string) => ipcRenderer.invoke('gateway:allowlist:add', platform, platformUserId),

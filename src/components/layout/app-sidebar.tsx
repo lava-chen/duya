@@ -41,7 +41,6 @@ import {
 } from "@/components/icons";
 import { useConversationStore, type Thread, type ProjectGroup, type ViewType, type SettingsTab, type ProjectSortBy, type ProjectGroupBy } from "@/stores/conversation-store";
 import { useSearchPaletteStore } from "@/stores/search-palette-store";
-import { NewThreadDropdown } from "./sidebar/NewThreadDropdown";
 import { ProjectGroupItem } from "./sidebar/ProjectGroupItem";
 import { ThreadListItem } from "./sidebar/ThreadListItem";
 import { SidebarSectionItem, type SectionKind } from "./sidebar/SidebarSectionItem";
@@ -54,6 +53,7 @@ import { useBotActivityStore } from "@/stores/bot-activity-store";
 import { useTranslation } from "@/hooks/useTranslation";
 import { Button } from "@/components/ui/Button";
 import { InputDialog } from "@/components/ui/InputDialog";
+import { DropdownMenu, type MenuAction } from "@/components/ui/DropdownMenu";
 import { useSettings } from "@/hooks/useSettings";
 import { useOptionalPanel } from "@/hooks/usePanel";
 import { CreateProjectDialog } from "@/components/ui/CreateProjectDialog";
@@ -75,11 +75,10 @@ import { createConfigAgent, deleteConfigAgent } from "@/lib/agent-profile-ipc";
 type ThemeMode = "light" | "dark";
 
 // Type-safe label keys
-type NavLabelKey = 'nav.channels' | 'nav.automation' | 'nav.conductor' | 'nav.extensions';
+type NavLabelKey = 'nav.automation' | 'nav.conductor' | 'nav.extensions';
 
 const mainNavItems: { view: ViewType; labelKey: NavLabelKey; icon: React.ComponentType<{ size?: number; className?: string }> }[] = [
   { view: 'conductor', labelKey: 'nav.conductor', icon: ChalkboardIcon },
-  { view: 'bridge', labelKey: 'nav.channels', icon: ChannelIcon },
   { view: 'automation', labelKey: 'nav.automation', icon: ClockCounterClockwiseIcon },
 ];
 
@@ -230,7 +229,9 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       | null
     >(null);
     // Unified create entry (grok-style): the single top "+" opens a chooser
-    // for a new bot vs. a new group chat; no other create buttons remain.
+    // for a new bot vs. a new group chat on the Bots tab, and becomes a direct
+    // "new chat" trigger on the Work tab so the same button handles both
+    // views and there is only one place to create things from the sidebar top.
     const [isCreateMenuOpen, setIsCreateMenuOpen] = useState(false);
     const createMenuRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
@@ -286,6 +287,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       projectGroupBy,
       setProjectGroupBy,
       noProjectWorkspace,
+      startNewChat,
     } = useConversationStore();
     const panel = useOptionalPanel();
     const openOrActivatePage = panel?.openOrActivatePage ?? (() => {});
@@ -912,11 +914,12 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     // Normal mode sidebar
     return (
       <aside className="app-sidebar" ref={ref} style={style}>
-        {/* Sidebar top: segmented work/bots switcher + search icon button on
-            the same row (opens the Cmd/K palette). The primary nav (new chat /
-            canvas / channels / automation / extensions) only renders on the
-            Work tab — the Bots view is a flat contact list with no creation
-            buttons above it. */}
+        {/* Sidebar top: segmented work/bots switcher + a single create "+"
+            + search icon button on the same row (search opens the Cmd/K
+            palette; the "+" behaves per tab: new chat on Work, chooser on
+            Bots). The primary nav (canvas / channels / automation /
+            extensions) only renders on the Work tab — the Bots view is a flat
+            contact list. */}
         <div className="sidebar-top">
           <div className="sidebar-top-tabs" role="tablist" aria-label={t("sidebar.tab.bots")}>
             <button
@@ -942,46 +945,46 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                 </span>
               )}
             </button>
-            <div className="sidebar-top-create" ref={createMenuRef}>
+            {sidebarTab === "bots" ? (
+              <DropdownMenu
+                trigger={
+                  <button
+                    type="button"
+                    className="sidebar-top-create-btn"
+                    aria-label={t("sidebar.create.title")}
+                    title={t("sidebar.create.title")}
+                  >
+                    <PlusIcon size={15} />
+                  </button>
+                }
+                items={[
+                  {
+                    kind: "action",
+                    id: "create-bot",
+                    label: t("bot.create.title"),
+                    iconLeft: <PlusIcon size={14} />,
+                    onSelect: () => void handleQuickCreateBot(),
+                  },
+                  {
+                    kind: "action",
+                    id: "create-room",
+                    label: t("room.create.title"),
+                    iconLeft: <PlusIcon size={14} />,
+                    onSelect: () => void handleQuickCreateRoom(),
+                  },
+                ]}
+              />
+            ) : (
               <button
                 type="button"
                 className="sidebar-top-create-btn"
-                aria-label={t("sidebar.create.title")}
-                title={t("sidebar.create.title")}
-                aria-expanded={isCreateMenuOpen}
-                onClick={() => setIsCreateMenuOpen((prev) => !prev)}
+                aria-label={t("nav.newChat")}
+                title={t("nav.newChat")}
+                onClick={() => startNewChat()}
               >
                 <PlusIcon size={15} />
               </button>
-              {isCreateMenuOpen && (
-                <div className="sidebar-project-menu sidebar-create-menu">
-                  <div className="sidebar-project-menu-section">
-                    <button
-                      type="button"
-                      className="sidebar-project-menu-item"
-                      onClick={() => {
-                        setIsCreateMenuOpen(false);
-                        void handleQuickCreateBot();
-                      }}
-                    >
-                      <PlusIcon size={14} />
-                      <span>{t("bot.create.title")}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="sidebar-project-menu-item"
-                      onClick={() => {
-                        setIsCreateMenuOpen(false);
-                        void handleQuickCreateRoom();
-                      }}
-                    >
-                      <PlusIcon size={14} />
-                      <span>{t("room.create.title")}</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
+            )}
             <button
               type="button"
               className="sidebar-top-search-btn"
@@ -995,8 +998,6 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         </div>
         {sidebarTab === "work" && (
         <nav className="sidebar-primary-nav" aria-label="Primary Navigation">
-          <NewThreadDropdown />
-
           {mainNavItems.map((item) => {
             const Icon = item.icon;
             const isActive = currentView === item.view;
@@ -1535,46 +1536,72 @@ function ProjectSectionActions({
   onProjectGroupBy,
 }: ProjectSectionActionsProps) {
   const { t } = useTranslation();
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const menuButtonRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    if (!isMenuOpen) return;
-    function handleClickOutside(event: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setIsMenuOpen(false);
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isMenuOpen]);
-
-  const closeMenu = () => {
-    setIsMenuOpen(false);
-  };
-
-  const menuPosition = useMemo(() => {
-    if (!menuButtonRef.current) return { top: 0, left: 0 };
-    const rect = menuButtonRef.current.getBoundingClientRect();
-    return {
-      top: rect.bottom + 6,
-      left: rect.right - 168,
-    };
-  }, [isMenuOpen]);
 
   return (
-    <div className="relative flex items-center gap-1" ref={menuRef}>
-      <button
-        type="button"
-        className="sidebar-section-action"
-        ref={menuButtonRef}
-        onClick={() => setIsMenuOpen((prev) => !prev)}
-        title={t('common.more')}
-        aria-expanded={isMenuOpen}
-      >
-        <DotsThreeIcon size={16} />
-      </button>
+    <div className="relative flex items-center gap-1">
+      <DropdownMenu
+        trigger={
+          <button
+            type="button"
+            className="sidebar-section-action"
+            title={t('common.more')}
+          >
+            <DotsThreeIcon size={16} />
+          </button>
+        }
+        items={[
+          {
+            kind: "section",
+            id: "organize",
+            title: t('project.organize'),
+            items: [
+              {
+                kind: "action",
+                id: "by-project",
+                label: t('project.byProject'),
+                iconRight: projectGroupBy === 'byProject' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />,
+                onSelect: () => onProjectGroupBy('byProject'),
+              },
+              {
+                kind: "action",
+                id: "single-list",
+                label: t('project.inOneList'),
+                iconRight: projectGroupBy === 'singleList' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />,
+                onSelect: () => onProjectGroupBy('singleList'),
+              },
+            ],
+          },
+          { kind: "divider", id: "divider-1" },
+          {
+            kind: "section",
+            id: "sort-by",
+            title: t('project.sortBy'),
+            items: [
+              {
+                kind: "action",
+                id: "priority",
+                label: t('project.priority'),
+                iconRight: projectSortBy === 'priority' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />,
+                onSelect: () => onProjectSortBy('priority'),
+              },
+              {
+                kind: "action",
+                id: "last-activity",
+                label: t('project.lastUpdated'),
+                iconRight: projectSortBy === 'lastActivity' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />,
+                onSelect: () => onProjectSortBy('lastActivity'),
+              },
+              {
+                kind: "action",
+                id: "manual",
+                label: t('project.manualSort'),
+                iconRight: projectSortBy === 'manual' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />,
+                onSelect: () => onProjectSortBy('manual'),
+              },
+            ],
+          },
+        ]}
+      />
       <button
         type="button"
         className="sidebar-section-action"
@@ -1584,58 +1611,6 @@ function ProjectSectionActions({
       >
         <PlusIcon size={14} />
       </button>
-
-      {isMenuOpen && (
-        <div className="sidebar-project-menu" style={menuPosition}>
-          <div className="sidebar-project-menu-section">
-            <span className="sidebar-project-menu-section-title">{t('project.organize')}</span>
-            <button
-              type="button"
-              className="sidebar-project-menu-item"
-              onClick={() => { onProjectGroupBy('byProject'); closeMenu(); }}
-            >
-              {projectGroupBy === 'byProject' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />}
-              <span>{t('project.byProject')}</span>
-            </button>
-            <button
-              type="button"
-              className="sidebar-project-menu-item"
-              onClick={() => { onProjectGroupBy('singleList'); closeMenu(); }}
-            >
-              {projectGroupBy === 'singleList' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />}
-              <span>{t('project.inOneList')}</span>
-            </button>
-          </div>
-          <div className="sidebar-project-menu-divider" />
-          <div className="sidebar-project-menu-section">
-            <span className="sidebar-project-menu-section-title">{t('project.sortBy')}</span>
-            <button
-              type="button"
-              className="sidebar-project-menu-item"
-              onClick={() => { onProjectSortBy('priority'); closeMenu(); }}
-            >
-              {projectSortBy === 'priority' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />}
-              <span>{t('project.priority')}</span>
-            </button>
-            <button
-              type="button"
-              className="sidebar-project-menu-item"
-              onClick={() => { onProjectSortBy('lastActivity'); closeMenu(); }}
-            >
-              {projectSortBy === 'lastActivity' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />}
-              <span>{t('project.lastUpdated')}</span>
-            </button>
-            <button
-              type="button"
-              className="sidebar-project-menu-item"
-              onClick={() => { onProjectSortBy('manual'); closeMenu(); }}
-            >
-              {projectSortBy === 'manual' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />}
-              <span>{t('project.manualSort')}</span>
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
