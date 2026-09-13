@@ -29,6 +29,18 @@ import type {
   GitAPI,
 } from './ipc/git-types'
 
+/** Plan 525 Phase 2.5 — wire shape of a `projects` row. Mirrors the DB
+ *  row (ProjectRow) but with `paths` decoded from JSON to an array. */
+export interface ProjectEntityDTO {
+  project_id: string
+  canonical_root: string
+  name: string
+  description: string | null
+  paths: Array<{ path: string; description: string | null }>
+  created_at: number
+  last_seen_at: number
+}
+
 // webUtils.getPathForFile is exposed from Electron 30+. On older versions
 // (e.g. Electron 28 in this project) `File.path` still works for dragged
 // files, so the renderer falls back to that. We require it lazily so the
@@ -1127,6 +1139,24 @@ export interface ElectronAPI {
   projects: {
     getRecentFolders: () => Promise<string[]>
     addRecentFolder: (path: string) => Promise<string[]>
+    /** Plan 525 Phase 2.5: project entity (multi-path) API. `paths` is
+     *  returned as a parsed array, never as a raw JSON string. */
+    list: () => Promise<
+      | { success: true; projects: ProjectEntityDTO[] }
+      | { success: false; error: string }
+    >
+    get: (projectId: string) => Promise<
+      | { success: true; project: ProjectEntityDTO | null }
+      | { success: false; error: string }
+    >
+    register: (input: {
+      name: string
+      description?: string | null
+      paths: Array<{ path: string; description?: string | null }>
+    }) => Promise<
+      | { success: true; projectId: string; project: ProjectEntityDTO }
+      | { success: false; error: string; code?: 'EMPTY_PATHS' | 'INVALID_INPUT' }
+    >
   }
   sync: SyncAPI
   settings: {
@@ -1839,6 +1869,15 @@ const electronAPI: ElectronAPI = {
   projects: {
     getRecentFolders: () => ipcRenderer.invoke('projects:get-recent-folders'),
     addRecentFolder: (folderPath) => ipcRenderer.invoke('projects:add-recent-folder', folderPath),
+    // Plan 525 Phase 2.5 — project entity (multi-path) API. See
+    // electron/ipc/project-entity-handlers.ts for the main-process side.
+    list: () => ipcRenderer.invoke('projects:list'),
+    get: (projectId: string) => ipcRenderer.invoke('projects:get', projectId),
+    register: (input: {
+      name: string
+      description?: string | null
+      paths: Array<{ path: string; description?: string | null }>
+    }) => ipcRenderer.invoke('projects:register', input),
   },
   sync: {
     notifyThreadsChanged: () => {

@@ -197,6 +197,20 @@ export function listProjects(opts?: { memoryDb?: Database }): ProjectRow[] {
   return rows;
 }
 
+/**
+ * Fetch a single project row by id. Returns null when not found
+ * (vs throwing) so callers can decide whether missing is an error.
+ *
+ * Added in Plan 525 Phase 2.5 (2026-09-13) to support the renderer
+ * IPC layer; pure function, no side effects.
+ */
+export function getProject(projectId: string, opts?: { memoryDb?: Database }): ProjectRow | null {
+  if (!projectId || typeof projectId !== 'string') return null;
+  const db = opts?.memoryDb ?? getDb();
+  const row = db.prepare('SELECT * FROM projects WHERE project_id = ?').get(projectId) as ProjectRow | undefined;
+  return row ?? null;
+}
+
 /** Convenience: parsed path entries of a project row. */
 export function projectPaths(row: ProjectRow): ProjectPathEntry[] {
   return parseProjectPaths(row.paths);
