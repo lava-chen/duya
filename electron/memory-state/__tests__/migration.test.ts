@@ -59,7 +59,7 @@ describe('memory-state migration runner', () => {
       name: string;
       sha256: string;
     }>;
-    expect(rows).toHaveLength(9);
+    expect(rows).toHaveLength(11);
     expect(rows[0].version).toBe(1);
     expect(rows[0].name).toBe('init_control_plane');
     expect(rows[0].sha256).toBe(migration0001.sha256);
@@ -80,6 +80,10 @@ describe('memory-state migration runner', () => {
     expect(rows[7].name).toBe('drop_legacy_phase2');
     expect(rows[8].version).toBe(10);
     expect(rows[8].name).toBe('memory_tier_index');
+    expect(rows[9].version).toBe(11);
+    expect(rows[9].name).toBe('extend_agent_type_check');
+    expect(rows[10].version).toBe(12);
+    expect(rows[10].name).toBe('project_entity_minimal');
 
     // Schema tables exist.
     const tables = db
@@ -103,13 +107,13 @@ describe('memory-state migration runner', () => {
     runMigrations(db);
 
     const rowsBefore = db.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rowsBefore.n).toBe(9);
+    expect(rowsBefore.n).toBe(11);
 
     // Re-run; should not throw, not insert a duplicate, not re-exec migration.
     runMigrations(db);
 
     const rowsAfter = db.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rowsAfter.n).toBe(9);
+    expect(rowsAfter.n).toBe(11);
 
     db.close();
   });
@@ -126,7 +130,7 @@ describe('memory-state migration runner', () => {
     runMigrations(dbB);
 
     const rows = dbB.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rows.n).toBe(9);
+    expect(rows.n).toBe(11);
 
     dbA.close();
     dbB.close();
@@ -180,7 +184,7 @@ describe('memory-state migration runner', () => {
     runMigrations(dbB);
 
     const rows = dbB.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rows.n).toBe(9);
+    expect(rows.n).toBe(11);
 
     // Schema is intact — tables still queryable.
     const projectCount = dbB.prepare('SELECT COUNT(*) AS n FROM projects').get() as { n: number };
@@ -304,8 +308,8 @@ describe('memory-state migration runner', () => {
     db.close();
   });
 
-  it('MIGRATIONS registry includes migrations 0001, 0002, 0003, 0005, 0006, 0007, 0008, 0009 and 0010 in order', () => {
-    expect(MIGRATIONS).toHaveLength(9);
+  it('MIGRATIONS registry includes migrations 0001-0010, 0011 and 0012 in order', () => {
+    expect(MIGRATIONS).toHaveLength(11);
     expect(MIGRATIONS[0].version).toBe(1);
     expect(MIGRATIONS[0].name).toBe('init_control_plane');
     expect(MIGRATIONS[0].sha256).toBe(migration0001.sha256);
@@ -326,6 +330,10 @@ describe('memory-state migration runner', () => {
     expect(MIGRATIONS[7].name).toBe('drop_legacy_phase2');
     expect(MIGRATIONS[8].version).toBe(10);
     expect(MIGRATIONS[8].name).toBe('memory_tier_index');
+    expect(MIGRATIONS[9].version).toBe(11);
+    expect(MIGRATIONS[9].name).toBe('extend_agent_type_check');
+    expect(MIGRATIONS[10].version).toBe(12);
+    expect(MIGRATIONS[10].name).toBe('project_entity_minimal');
   });
 
   it('migration sha256 values are stable (deterministic from SQL body)', () => {
