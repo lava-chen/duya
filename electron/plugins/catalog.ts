@@ -263,7 +263,30 @@ export function getPluginCatalog(): PluginCatalogEntry[] {
   // resolve a manifest, and downstream consumers (e.g. the composer `@`
   // plugin list) degrade to empty.
   const builtinEntries = getBuiltinCatalogEntries();
-  cachedCatalog = [...localEntries, ...builtinEntries, ...marketplaceEntries, ...skillEntries];
+  // Priority order for first-wins dedup below:
+  //   1. builtin — `officialAssets` resolved + `trustLevel: 'official'`,
+  //      canonical installed copy under `~/.duya/plugins/cache/builtin/`.
+  //   2. marketplace — remote upstream; surfaces "newer version available".
+  //   3. local — `marketplace.json` entries; shadowed by builtin/marketplace.
+  //   4. skill — bundled skills, distinct id namespace; dedup is a no-op.
+  // Without this, a single id can appear twice (e.g. both `com.duya.documents/`
+  // and `documents/` under the builtin cache root), which:
+  //   - trips React's `warnOnInvalidKey` in MarketplacePage
+  //     (`key={`${marketplace ?? "local"}:${id}`}` → duplicate `local:` prefix)
+  //   - makes `getPluginCatalogEntry(id)` return the local copy instead of
+  //     the canonical builtin one, so installs resolve against the wrong root.
+  const combined: PluginCatalogEntry[] = [
+    ...builtinEntries,
+    ...marketplaceEntries,
+    ...localEntries,
+    ...skillEntries,
+  ];
+  const seen = new Set<string>();
+  cachedCatalog = combined.filter((entry) => {
+    if (seen.has(entry.id)) return false;
+    seen.add(entry.id);
+    return true;
+  });
   cachedCatalogAt = now;
   return cachedCatalog;
 }
