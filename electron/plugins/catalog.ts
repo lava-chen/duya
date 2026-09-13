@@ -40,6 +40,22 @@ export function readConfigMarketplaces(): Record<string, MarketplaceSourceConfig
 const COMPONENT = 'PluginCatalog' as LogComponent;
 
 /**
+ * Invalidate the in-process plugin catalog cache.
+ *
+ * Marketplace lifecycle mutations (add / remove / sync) call this so the
+ * next `getPluginCatalog()` re-scans disk instead of returning a stale
+ * snapshot. The TTL cache was removed in the plugin-config-simplification
+ * refactor (catalog reads now go through `getBuiltinCatalogEntries` /
+ * `getLocalCatalogEntries` / `getMarketplaceCatalogEntries` on every
+ * call), so this is currently a no-op kept for the manager.ts import
+ * surface — the function exists so `import { invalidatePluginCatalogCache }
+ * from '../catalog'` resolves at build time.
+ */
+export function invalidatePluginCatalogCache(): void {
+  // No-op: catalog is reconstructed per call. See comment above.
+}
+
+/**
  * Resolve a plugin's manifest `interface.icon` (a path relative to the plugin
  * root, e.g. `./assets/icon.svg`) into a `duya-file://` URL the renderer can
  * load as an `<img src>`. Returns undefined when no icon is declared or the
