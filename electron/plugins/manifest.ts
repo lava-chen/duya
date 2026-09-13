@@ -70,6 +70,30 @@ const DOT_FOLDER_DIR = '.duya-plugin';
 const DOT_FOLDER_MANIFEST = path.join(DOT_FOLDER_DIR, 'plugin.json');
 
 /**
+ * Foreign plugin-layout dot-folders we transparently accept (plan 529
+ * follow-up, "one canonical model + per-format adapters").
+ *
+ * All of these ship the same *minimal* manifest shape (name /
+ * description / optional version / author) that `.duya-plugin/plugin.json`
+ * uses, so they route through `readMinimalManifest` unchanged. The
+ * difference between ecosystems is the folder name, not the payload:
+ *
+ *   - `.duya-plugin/plugin.json`   duya native (what codex's folder was
+ *                                  renamed to)
+ *   - `.claude-plugin/plugin.json` Claude Code (anthropics/claude-plugins-official)
+ *   - `.codex-plugin/plugin.json`  OpenAI Codex
+ *   - `.cursor-plugin/plugin.json` Cursor
+ *
+ * Probing them means a third-party marketplace can be consumed with no
+ * per-source adapter — the normalizer lives at the manifest boundary.
+ */
+const COMPAT_DOT_FOLDER_MANIFESTS: readonly string[] = [
+  path.join('.claude-plugin', 'plugin.json'),
+  path.join('.codex-plugin', 'plugin.json'),
+  path.join('.cursor-plugin', 'plugin.json'),
+];
+
+/**
  * Agent Plugins 1.0.0 — canonical root `plugin.json` manifest schema
  * identifier. A root `plugin.json` whose `$schema` equals this exactly
  * (the schema declares it as a `const`) is treated as a standard Agent
@@ -263,8 +287,18 @@ function readMinimalManifest(pluginRoot: string, manifestPath: string): PluginMa
   }
 
   const name = asString(raw.name, 'name');
-  const version = asString(raw.version, 'version');
-  const description = asString(raw.description, 'description');
+  // Foreign manifests (Claude Code, Codex, Cursor) routinely omit
+  // `version` and sometimes `description`. Treat both as optional with
+  // neutral defaults so a third-party plugin is not rejected outright —
+  // only `name` is load-bearing enough to fail on.
+  const version =
+    typeof raw.version === 'string' && raw.version.trim().length > 0
+      ? raw.version.trim()
+      : '0.0.0';
+  const description =
+    typeof raw.description === 'string' && raw.description.trim().length > 0
+      ? raw.description
+      : undefined;
   const id =
     typeof raw.id === 'string' && raw.id.trim().length > 0 ? raw.id : `com.duya.${name}`;
 
@@ -691,9 +725,14 @@ function readAgentPluginsManifest(pluginRoot: string, manifestPath: string): Plu
  * Throws when neither file is present.
  */
 export function readPluginManifest(pluginRoot: string): PluginManifest {
-  const dotPath = path.join(pluginRoot, DOT_FOLDER_MANIFEST);
-  if (fs.existsSync(dotPath)) {
-    return readMinimalManifest(pluginRoot, dotPath);
+  // Plan 529 follow-up: accept any known dot-folder layout. duya native
+  // (.duya-plugin) wins when present; then the Claude / Codex / Cursor
+  // compatibility folders, in that order. All share the minimal shape.
+  for (const rel of [DOT_FOLDER_MANIFEST, ...COMPAT_DOT_FOLDER_MANIFESTS]) {
+    const candidate = path.join(pluginRoot, rel);
+    if (fs.existsSync(candidate)) {
+      return readMinimalManifest(pluginRoot, candidate);
+    }
   }
 
   const rootPath = path.join(pluginRoot, 'plugin.json');
