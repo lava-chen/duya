@@ -37,6 +37,10 @@ export interface ProjectEntityDTO {
   name: string
   description: string | null
   paths: Array<{ path: string; description: string | null }>
+  /** Avatar icon name (migration 0013). Null = default folder icon. */
+  icon: string | null
+  /** Avatar accent color keyword (migration 0013). Null = default. */
+  color: string | null
   created_at: number
   last_seen_at: number
 }
@@ -1153,6 +1157,8 @@ export interface ElectronAPI {
       name: string
       description?: string | null
       paths: Array<{ path: string; description?: string | null }>
+      icon?: string | null
+      color?: string | null
     }) => Promise<
       | { success: true; projectId: string; project: ProjectEntityDTO }
       | { success: false; error: string; code?: 'EMPTY_PATHS' | 'INVALID_INPUT' }
@@ -1877,6 +1883,8 @@ const electronAPI: ElectronAPI = {
       name: string
       description?: string | null
       paths: Array<{ path: string; description?: string | null }>
+      icon?: string | null
+      color?: string | null
     }) => ipcRenderer.invoke('projects:register', input),
   },
   sync: {

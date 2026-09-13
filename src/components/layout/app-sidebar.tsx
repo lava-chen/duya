@@ -34,6 +34,7 @@ import {
   CaretRightIcon,
   CaretDownIcon,
   CheckIcon,
+  ChatCirclePlusIcon,
   NotePencilIcon,
   CircleNotchIcon,
   TrashIcon,
@@ -592,36 +593,66 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     );
 
     /**
-     * Plan 471 v7: single submit path for the create-project dialog.
-     * Branches on whether the user picked a folder or only typed a name:
-     *  - folder set → use that path; pass the typed name as the project
-     *    label (fall back to the folder's basename if the field is empty).
-     *  - folder empty → call `app.createProjectFolder(name)` to spawn a
-     *    new empty directory and create a thread tied to it.
+     * Plan 471 v7 submit path, reworked for Plan 525 (2026-09-13):
+     * the dialog now returns name + paths[] + avatar (icon/color).
+     *
+     *   - paths non-empty → register the project ENTITY via
+     *     `projects.register` (all paths land in projects.paths,
+     *     icon/color on migration-0013 columns), then open a thread
+     *     bound to paths[0].
+     *   - paths empty → spawn a fresh folder via the legacy
+     *     `app.createProjectFolder`, register the entity around it,
+     *     and open a thread tied to it.
+     *
+     * Entity registration failure is logged but non-fatal — the
+     * thread still opens so the flow degrades to pre-525 behavior.
      */
-    const handleCreateProjectConfirm = async (input: { name: string; workingDirectory: string | null }) => {
+    const handleCreateProjectConfirm = async (input: { name: string; paths: string[]; icon: string | null; color: string | null }) => {
       setIsCreateProjectDialogOpen(false);
       const projectName = input.name.trim();
       if (!projectName) return;
       try {
-        if (input.workingDirectory) {
-          // Folder picked — the project IS that folder.
-          const thread = await createThread({
-            workingDirectory: input.workingDirectory,
-            projectName,
-          });
-          if (thread) setCurrentView('chat');
-          return;
-        }
-        if (window.electronAPI?.app?.createProjectFolder) {
-          const result = await window.electronAPI.app.createProjectFolder(projectName);
-          if (result.success && result.path) {
-            const thread = await createThread({ workingDirectory: result.path, projectName });
-            if (thread) setCurrentView('chat');
+        let firstPath = input.paths[0] ?? null;
+
+        if (!firstPath) {
+          // Name only — spawn an empty folder as the project's home.
+          if (window.electronAPI?.app?.createProjectFolder) {
+            const result = await window.electronAPI.app.createProjectFolder(projectName);
+            if (result.success && result.path) {
+              firstPath = result.path;
+            } else {
+              console.error('[AppSidebar] Failed to create project folder:', result.error);
+              return;
+            }
           } else {
-            console.error('[AppSidebar] Failed to create project folder:', result.error);
+            return;
           }
         }
+
+        // Register the entity (best-effort): multi-path + avatar land
+        // in the memory-state projects table for Plan 530 / bot use.
+        try {
+          const register = window.electronAPI?.projects?.register;
+          if (register) {
+            const registered = await register({
+              name: projectName,
+              paths:
+                input.paths.length > 0
+                  ? input.paths.map((p) => ({ path: p }))
+                  : [{ path: firstPath }],
+              icon: input.icon,
+              color: input.color,
+            });
+            if (!registered.success) {
+              console.error('[AppSidebar] Failed to register project entity:', registered.error);
+            }
+          }
+        } catch (entityError) {
+          console.error('[AppSidebar] Project entity registration threw:', entityError);
+        }
+
+        const thread = await createThread({ workingDirectory: firstPath, projectName });
+        if (thread) setCurrentView('chat');
       } catch (error) {
         console.error('[AppSidebar] Failed to create project:', error);
       }
@@ -945,6 +976,11 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                 </span>
               )}
             </button>
+            {/* Right-aligned action group: create "+" + search. Lives inside
+                the tab row but visually pins to the far right. The
+                `sidebar-top-actions` class applies `margin-left: auto` so
+                both tabs render flush-left and the icons stay flush-right. */}
+            <div className="sidebar-top-actions">
             {sidebarTab === "bots" ? (
               <DropdownMenu
                 trigger={
@@ -975,15 +1011,34 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                 ]}
               />
             ) : (
-              <button
-                type="button"
-                className="sidebar-top-create-btn"
-                aria-label={t("nav.newChat")}
-                title={t("nav.newChat")}
-                onClick={() => startNewChat()}
-              >
-                <PlusIcon size={15} />
-              </button>
+              <DropdownMenu
+                trigger={
+                  <button
+                    type="button"
+                    className="sidebar-top-create-btn"
+                    aria-label={t("sidebar.create.title")}
+                    title={t("sidebar.create.title")}
+                  >
+                    <PlusIcon size={15} />
+                  </button>
+                }
+                items={[
+                  {
+                    kind: "action",
+                    id: "create-chat",
+                    label: t("nav.newChat"),
+                    iconLeft: <ChatCirclePlusIcon size={14} />,
+                    onSelect: () => startNewChat(),
+                  },
+                  {
+                    kind: "action",
+                    id: "create-project",
+                    label: t("project.newProject"),
+                    iconLeft: <FolderIcon size={14} />,
+                    onSelect: () => handleNewBlankProject(),
+                  },
+                ]}
+              />
             )}
             <button
               type="button"
@@ -994,6 +1049,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
             >
               <SearchIcon size={15} />
             </button>
+            </div>
           </div>
         </div>
         {sidebarTab === "work" && (
@@ -1298,6 +1354,8 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                 trailing={isProjectSection ? (
                   <ProjectSectionActions
                     onNewBlankProject={handleNewBlankProject}
+                    onNewSession={() => startNewChat()}
+                    isFlatList={projectGroupBy === 'singleList'}
                     projectSortBy={projectSortBy}
                     onProjectSortBy={setProjectSortBy}
                     projectGroupBy={projectGroupBy}
@@ -1510,6 +1568,8 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
 
 interface ProjectSectionActionsProps {
   onNewBlankProject: () => void;
+  onNewSession: () => void;
+  isFlatList: boolean;
   projectSortBy: ProjectSortBy;
   onProjectSortBy: (sortBy: ProjectSortBy) => void;
   projectGroupBy: ProjectGroupBy;
@@ -1523,13 +1583,22 @@ interface ProjectSectionActionsProps {
  *   - 整理 (organize): 按项目 / 在一个列表中  — project layout toggle
  *   - 排序方式 (sortBy): 优先级 / 最近更新 / 手动排序
  *
- * The "+" creates a new blank project. This is the same control surface
- * the old `SidebarProjectHeader` exposed, but relocated into the section
- * header's trailing slot so the header itself stays a plain
- * "name + caret + [⋯ +]" row that matches the Codex reference.
+ * The "+" semantic depends on `isFlatList`:
+ *   - byProject mode: creates a new blank project (opens the unified
+ *     create-project dialog).
+ *   - singleList mode: creates a new no-project session directly,
+ *     matching the section's "Sessions" rename. There are no project
+ *     groups to add to, so a project dialog would feel off.
+ *
+ * This is the same control surface the old `SidebarProjectHeader`
+ * exposed, but relocated into the section header's trailing slot so
+ * the header itself stays a plain "name + caret + [⋯ +]" row that
+ * matches the Codex reference.
  */
 function ProjectSectionActions({
   onNewBlankProject,
+  onNewSession,
+  isFlatList,
   projectSortBy,
   onProjectSortBy,
   projectGroupBy,
@@ -1605,9 +1674,9 @@ function ProjectSectionActions({
       <button
         type="button"
         className="sidebar-section-action"
-        onClick={onNewBlankProject}
-        title={t('project.newProject')}
-        aria-label={t('project.newProject')}
+        onClick={isFlatList ? onNewSession : onNewBlankProject}
+        title={isFlatList ? t('nav.newChat') : t('project.newProject')}
+        aria-label={isFlatList ? t('nav.newChat') : t('project.newProject')}
       >
         <PlusIcon size={14} />
       </button>

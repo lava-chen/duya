@@ -31,6 +31,10 @@ export interface ProjectRow {
    * corrupted payload degrades to [] instead of throwing.
    */
   paths: string;
+  /** Avatar icon name from the renderer icon registry (migration 0013). NULL = default. */
+  icon: string | null;
+  /** Avatar accent color, a palette keyword chosen in the create dialog (migration 0013). NULL = default. */
+  color: string | null;
   created_at: number;
   last_seen_at: number;
 }
@@ -137,6 +141,10 @@ export interface InsertProjectInput {
   description?: string | null;
   /** Optional since migration 0012 — DB defaults to '[]'. Pre-serialized via serializeProjectPaths. */
   paths?: string;
+  /** Optional since migration 0013 — DB defaults to NULL. */
+  icon?: string | null;
+  /** Optional since migration 0013 — DB defaults to NULL. */
+  color?: string | null;
   created_at?: number;
   last_seen_at?: number;
 }
