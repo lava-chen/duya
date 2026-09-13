@@ -255,6 +255,53 @@ html[data-glass-repair] .attachment-preview-overlay {
   opacity: 0.6;
 }
 
+.sidebar-project-menu-item.has-description {
+  /* Two-line rows need a bit more vertical padding and a column flex
+     so the label sits above the description. */
+  align-items: flex-start;
+  padding: 0.45rem 0.6rem;
+}
+
+.sidebar-project-menu-item.has-description .sidebar-project-menu-item-icon {
+  /* Top-align the leading icon with the label line so the description
+     below does not stretch it down. */
+  align-self: center;
+  margin-top: 1px;
+}
+
+.sidebar-project-menu-item-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 0%;
+  gap: 1px;
+}
+
+.sidebar-project-menu-item-label,
+.sidebar-project-menu-item-description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-project-menu-item-label {
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
+
+.sidebar-project-menu-item-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar-project-menu-item-description {
+  font-size: 0.7rem;
+  color: var(--muted);
+  line-height: 1.2;
+}
+
 .sidebar-project-menu-item.has-submenu {
   position: relative;
 }
@@ -263,6 +310,21 @@ html[data-glass-repair] .attachment-preview-overlay {
   height: 1px;
   background: var(--border);
   margin: 0.25rem 0.6rem;
+}
+
+.sidebar-project-menu-header {
+  /* Optional slot above the items (e.g. search input). Visual separator
+     matches the divider rhythm and keeps the header from collapsing into
+     the first item when the menu opens. */
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  margin: 0 0 4px;
+}
+
+.sidebar-project-menu-header > * {
+  /* Hosts typically render an input that should fill the row, not its
+     intrinsic width. */
+  width: 100%;
 }
 
 .sidebar-project-menu-section {
@@ -781,6 +843,15 @@ html[data-glass-repair] .attachment-preview-overlay {
   align-items: center;
   gap: 0.5rem;
 }
+/* Right-aligned action group (create "+" + search) that lives at the end of
+   the tab row. Keeping it as a single flex child means a single
+   `margin-left: auto` pushes both icons to the far right in every state. */
+.sidebar-top-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: auto;
+}
 
 .sidebar-tab-group {
   display: flex;
@@ -868,10 +939,6 @@ html[data-glass-repair] .attachment-preview-overlay {
 /* Unified create "+" button: right-aligned right next to the search icon
    (not against the tab selector), opens a chooser for a new bot vs. a new
    group chat. Same geometry as the search button. */
-.sidebar-top-create {
-  position: relative;
-  margin-left: auto;
-}
 .sidebar-top-create-btn {
   display: inline-flex;
   align-items: center;
@@ -888,11 +955,6 @@ html[data-glass-repair] .attachment-preview-overlay {
 .sidebar-top-create-btn:hover {
   color: var(--text);
   background: color-mix(in srgb, var(--text) 5%, transparent);
-}
-.sidebar-create-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
 }
 
 /* Compact bot-section action row inside the Bots tab (hidden toggle + ⋯). */

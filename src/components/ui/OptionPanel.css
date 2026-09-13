@@ -2,7 +2,7 @@
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
   border-radius: 12px;
-  background-color: var(--sidebar-bg, var(--surface-solid));
+  background-color: var(--command-menu-bg, var(--surface-solid));
   box-shadow: var(--shadow-resting);
 }
 
