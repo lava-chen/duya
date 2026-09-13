@@ -29,7 +29,7 @@ const parallelFetchSchema = z.object({
       return val;
     },
     z.boolean().optional().default(true)
-  ).describe('Use real browser (Extension CDP / Duya browser plugin) for JS-rendered snapshots. Default: true. Set to false to use fast HTTP fetch (no JS rendering).'),
+  ).describe('Use real browser (Extension CDP / Duya browser plugin) for JS-rendered pages. Default: true. Set to false to use fast HTTP fetch (no JS rendering). Either way the result is readable text plus interactive refs, never DOM structure.'),
   task: z.string().optional().describe('Optional task description for context-aware investigation'),
   evaluate: z.string().optional().describe('Optional JavaScript to execute on each page after load (only when useBrowser=true)'),
   timeoutMs: z.preprocess(
@@ -112,7 +112,6 @@ export const parallelFetchAction: ActionHandler<z.infer<typeof parallelFetchSche
     const tasks = data.urls.map((url, index) => ({
       id: `task_${index}`,
       url,
-      extract: 'text' as const,
     }));
     const results = await fetcher.fetchBatch(tasks);
 
