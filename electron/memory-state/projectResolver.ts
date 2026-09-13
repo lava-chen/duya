@@ -3,13 +3,14 @@ import { spawnSync } from 'child_process';
 import type { Database } from 'better-sqlite3';
 import { loadWorkspaceOverrides, type WorkspaceOverride } from './workspaceOverrides';
 import { normalizePath } from './pathUtils';
+import { parseProjectPaths, serializeProjectPaths, type ProjectPathEntry } from './schema';
 
 /**
  * Project identity resolver (Plan 301 §Phase B).
  *
  * Resolves a chat session's `working_directory` (and optional explicit
  * override) to a stable `project_id` UUID, registering the project
- * and its path alias on first sight. Subsequent calls with the same
+ * and its path entry on first sight. Subsequent calls with the same
  * normalized path return the same UUID.
  *
  * Resolution order (D3):
@@ -235,18 +236,31 @@ function matchOverride(
 /**
  * Register a project in the memory DB.
  *
- * Algorithm (Plan 301 §Phase B "Project registration"):
+ * Algorithm (Plan 301 §Phase B "Project registration", path storage
+ * switched to the `projects.paths` JSON column in Plan 525 Phase 2 —
+ * the `project_path_aliases` table is dropped by the Phase 2
+ * migration script and must no longer be read or written):
+ *
  *   1. BEGIN IMMEDIATE
- *   2. SELECT from `project_path_aliases` by `absolute_normalized_path`.
+ *   2. Scan `projects.paths` for `absolute_normalized_path`.
  *      If found → return existing `project_id`.
  *   3. Otherwise SELECT from `projects` by `canonical_root` (UNIQUE
- *      catches duplicates). If found → INSERT alias; return.
- *   4. Otherwise generate UUID v4, INSERT both `projects` row and
- *      `project_path_aliases` row. COMMIT.
+ *      catches duplicates). If found → append the path to `paths`;
+ *      return.
+ *   4. Otherwise generate UUID v4, INSERT a `projects` row with the
+ *      path as the single entry of `paths`. COMMIT.
+ *
+ * The reverse lookup is a full scan over `projects.paths` (Plan 525
+ * §2.5: project and path counts are small; a materialized reverse
+ * index is a future plan if it ever matters).
  *
  * If `requestedProjectId` is provided (from an override), we use it
- * as the project_id. If it conflicts with an existing alias path that
+ * as the project_id. If it conflicts with an existing path entry that
  * belongs to a different project_id, we throw a structured error.
+ *
+ * `alias_kind` / `relative_path` inputs are accepted for API
+ * compatibility but no longer persisted — kinds were dropped with the
+ * alias table.
  */
 export function registerProject(input: {
   memoryDb?: Database;
@@ -264,36 +278,29 @@ export function registerProject(input: {
   const now = Date.now();
 
   const txn = db.transaction(() => {
-    // Step 2: alias lookup. Exclude `git_root` aliases — git_root is
-    // debug metadata only (D5) and must never participate in identity
-    // lookup. Without this filter, a session whose working_directory
-    // happens to equal another session's git_root would inherit the
-    // other project's identity, violating D5.
-    const aliasRow = db
-      .prepare(
-        `SELECT project_id FROM project_path_aliases
-         WHERE absolute_normalized_path = ? AND alias_kind != 'git_root'`
-      )
-      .get(input.absolute_normalized_path) as { project_id: string } | undefined;
+    // Step 2: path lookup across all projects' paths JSON.
+    const rows = db
+      .prepare('SELECT project_id, paths FROM projects')
+      .all() as Array<{ project_id: string; paths: string }>;
+    const pathRow = rows.find((row) =>
+      parseProjectPaths(row.paths).some((entry) => entry.path === input.absolute_normalized_path)
+    );
 
-    if (aliasRow) {
-      // Verify override does not conflict with the existing alias.
-      if (input.requestedProjectId && input.requestedProjectId !== aliasRow.project_id) {
+    if (pathRow) {
+      // Verify override does not conflict with the existing path.
+      if (input.requestedProjectId && input.requestedProjectId !== pathRow.project_id) {
         throw new ProjectAliasConflictError(
           input.absolute_normalized_path,
-          aliasRow.project_id,
+          pathRow.project_id,
           input.requestedProjectId
         );
       }
-      // Bump last_seen_at so we know the alias was recently observed.
-      db.prepare(
-        'UPDATE project_path_aliases SET last_seen_at = ? WHERE absolute_normalized_path = ?'
-      ).run(now, input.absolute_normalized_path);
+      // Bump last_seen_at so we know the project was recently observed.
       db.prepare('UPDATE projects SET last_seen_at = ? WHERE project_id = ?').run(
         now,
-        aliasRow.project_id
+        pathRow.project_id
       );
-      return { project_id: aliasRow.project_id, canonical_root: input.canonical_root };
+      return { project_id: pathRow.project_id, canonical_root: input.canonical_root };
     }
 
     // Step 3: existing project by canonical_root.
@@ -313,46 +320,42 @@ export function registerProject(input: {
         );
       }
       const projectId = input.requestedProjectId ?? projectRow.project_id;
-      insertAlias(db, projectId, input, now);
+      appendPathEntry(db, projectId, input.absolute_normalized_path);
+      db.prepare('UPDATE projects SET last_seen_at = ? WHERE project_id = ?').run(now, projectId);
       return { project_id: projectId, canonical_root: input.canonical_root };
     }
 
     // Step 4: brand-new project. Use requestedProjectId if provided,
     // else generate UUID v4.
     const projectId = input.requestedProjectId ?? randomUUID();
+    const entries: ProjectPathEntry[] = [
+      { path: input.absolute_normalized_path, description: null },
+    ];
     db.prepare(
-      `INSERT INTO projects (project_id, canonical_root, created_at, last_seen_at)
-       VALUES (?, ?, ?, ?)`
-    ).run(projectId, input.canonical_root, now, now);
-    insertAlias(db, projectId, input, now);
+      `INSERT INTO projects (project_id, canonical_root, name, description, paths, created_at, last_seen_at)
+       VALUES (?, ?, '', NULL, ?, ?, ?)`
+    ).run(projectId, input.canonical_root, serializeProjectPaths(entries), now, now);
     return { project_id: projectId, canonical_root: input.canonical_root };
   });
 
   return txn.immediate();
 }
 
-function insertAlias(
-  db: Database,
-  projectId: string,
-  input: {
-    absolute_normalized_path: string;
-    alias_kind: AliasKind;
-    relative_path?: string | null;
-  },
-  now: number
-): void {
-  db.prepare(
-    `INSERT INTO project_path_aliases
-       (project_id, absolute_normalized_path, relative_path, alias_kind,
-        first_seen_at, last_seen_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(
-    projectId,
-    input.absolute_normalized_path,
-    input.relative_path ?? null,
-    input.alias_kind,
-    now,
-    now
+/**
+ * Append a path entry to a project's `paths` JSON if not already
+ * present. Must run inside the caller's IMMEDIATE transaction so the
+ * read-modify-write serializes against other writers.
+ */
+function appendPathEntry(db: Database, projectId: string, path: string): void {
+  const row = db.prepare('SELECT paths FROM projects WHERE project_id = ?').get(projectId) as
+    | { paths: string }
+    | undefined;
+  const entries = parseProjectPaths(row?.paths);
+  if (entries.some((entry) => entry.path === path)) return;
+  entries.push({ path, description: null });
+  db.prepare('UPDATE projects SET paths = ? WHERE project_id = ?').run(
+    serializeProjectPaths(entries),
+    projectId
   );
 }
 

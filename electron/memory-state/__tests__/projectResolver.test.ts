@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { runMigrations } from '../migrations';
 import { resolveProject, registerProject, ProjectAliasConflictError } from '../projectResolver';
+import { parseProjectPaths } from '../schema';
 import { addWorkspaceOverride } from '../workspaceOverrides';
 import { createTempDbDir, type TempDbDir } from './fixture';
 
@@ -78,11 +79,9 @@ describe('project resolver', () => {
     };
   }
 
-  function countAliases(): number {
-    const row = memoryDb
-      .prepare('SELECT COUNT(*) AS n FROM project_path_aliases')
-      .get() as { n: number };
-    return row.n;
+  function countPathEntries(): number {
+    const rows = memoryDb.prepare('SELECT paths FROM projects').all() as Array<{ paths: string }>;
+    return rows.reduce((n, row) => n + parseProjectPaths(row.paths).length, 0);
   }
 
   function countProjects(): number {
@@ -90,12 +89,17 @@ describe('project resolver', () => {
     return row.n;
   }
 
-  function getAlias(normalizedPath: string): { project_id: string; alias_kind: string } | undefined {
-    return memoryDb
-      .prepare(
-        'SELECT project_id, alias_kind FROM project_path_aliases WHERE absolute_normalized_path = ?'
-      )
-      .get(normalizedPath) as { project_id: string; alias_kind: string } | undefined;
+  // Plan 525 Phase 2: paths live in the projects.paths JSON column —
+  // the project_path_aliases table is gone after the migration.
+  function getProjectForPath(normalizedPath: string): { project_id: string } | undefined {
+    const rows = memoryDb.prepare('SELECT project_id, paths FROM projects').all() as Array<{
+      project_id: string;
+      paths: string;
+    }>;
+    const hit = rows.find((row) =>
+      parseProjectPaths(row.paths).some((entry) => entry.path === normalizedPath)
+    );
+    return hit ? { project_id: hit.project_id } : undefined;
   }
 
   it('1. two cwd values inside same project (D:/duya, D:/duya/packages/agent) without override → DIFFERENT project_ids (D5)', () => {
@@ -110,9 +114,9 @@ describe('project resolver', () => {
     const r1 = resolveProject(makeInput({ workingDirectory: 'D:/duya' }));
     const r2 = resolveProject(makeInput({ workingDirectory: 'D:/duya' }));
     expect(r1.project_id).toBe(r2.project_id);
-    // Idempotent: only one project row and one alias row.
+    // Idempotent: only one project row and one path entry.
     expect(countProjects()).toBe(1);
-    expect(countAliases()).toBe(1);
+    expect(countPathEntries()).toBe(1);
   });
 
   it('3. workspace override wins — override project_id returned; working_directory alias added', () => {
@@ -126,11 +130,10 @@ describe('project resolver', () => {
     expect(r.alias_kind).toBe('workspace_override');
     expect(r.canonical_root).toBe('d:/projects/alpha');
 
-    // The working_directory alias should be registered on the override project.
-    const alias = getAlias(r.absolute_normalized_path);
-    expect(alias).toBeDefined();
-    expect(alias?.project_id).toBe('override-uuid-alpha');
-    expect(alias?.alias_kind).toBe('workspace_override');
+    // The working_directory path should be registered on the override project.
+    const hit = getProjectForPath(r.absolute_normalized_path);
+    expect(hit).toBeDefined();
+    expect(hit?.project_id).toBe('override-uuid-alpha');
   });
 
   it('4. git root matches cwd — cwd path used, git never changes identity (D5)', () => {
@@ -149,15 +152,15 @@ describe('project resolver', () => {
     const parent = resolveProject(makeInput({ workingDirectory: 'D:/parent-repo' }));
     expect(r.project_id).not.toBe(parent.project_id);
 
-    // Git root is NOT persisted as a `git_root` alias (D5: git metadata
-    // never changes project identity, never merges projects). The
-    // gitProbe callback was invoked for debug metadata only. Note:
-    // `d:/parent-repo` DOES have a `working_directory` alias from the
-    // second resolveProject call above — that is expected. We assert
-    // no `git_root` alias exists at that path.
+    // Git root is NOT persisted as a path entry of the subdir project
+    // (D5: git metadata never changes project identity, never merges
+    // projects). Note: `d:/parent-repo` DOES have a path entry from
+    // the second resolveProject call above — that is expected, and it
+    // belongs to the parent project, not the subdir's.
     expect(gitProbe).toHaveBeenCalledWith('D:/parent-repo/subdir');
-    const alias = getAlias('d:/parent-repo');
-    expect(alias?.alias_kind).not.toBe('git_root');
+    const parentHit = getProjectForPath('d:/parent-repo');
+    expect(parentHit?.project_id).toBe(parent.project_id);
+    expect(parentHit?.project_id).not.toBe(r.project_id);
   });
 
   it('6. symlink loop on cwd — resolve succeeds via lexical fallback', () => {
@@ -223,15 +226,13 @@ describe('project resolver', () => {
     const r2 = resolveProject(makeInput({ workingDirectory: 'D:/dir-b', gitProbe }));
     expect(r1.project_id).not.toBe(r2.project_id);
 
-    // Git root is NOT persisted as an alias (D5). Both sessions
-    // remain distinct projects; the shared git root is debug metadata
-    // only and never lands in `project_path_aliases`.
+    // Git root is NOT persisted (D5). Both sessions remain distinct
+    // projects; the shared git root is debug metadata only and never
+    // lands in any project's paths.
     expect(gitProbe).toHaveBeenCalledTimes(2);
-    expect(getAlias('d:/shared-git-root')).toBeUndefined();
-    expect(getAlias('d:/dir-a')).toBeDefined();
-    expect(getAlias('d:/dir-b')).toBeDefined();
-    expect(getAlias('d:/dir-a')?.alias_kind).toBe('working_directory');
-    expect(getAlias('d:/dir-b')?.alias_kind).toBe('working_directory');
+    expect(getProjectForPath('d:/shared-git-root')).toBeUndefined();
+    expect(getProjectForPath('d:/dir-a')?.project_id).toBe(r1.project_id);
+    expect(getProjectForPath('d:/dir-b')?.project_id).toBe(r2.project_id);
   });
 
   it('12. same canonical_root called twice — second call returns existing row, NOT a duplicate', () => {
@@ -239,7 +240,7 @@ describe('project resolver', () => {
     const r2 = resolveProject(makeInput({ workingDirectory: 'D:/duya' }));
     expect(r1.project_id).toBe(r2.project_id);
     expect(countProjects()).toBe(1);
-    expect(countAliases()).toBe(1);
+    expect(countPathEntries()).toBe(1);
   });
 
   it('13. override requests an existing project ID at a new path — alias is added; canonical root unchanged', () => {
@@ -320,10 +321,10 @@ describe('project resolver', () => {
     );
     const r = resolveProject(makeInput({ workingDirectory: 'D:/projects/alpha' }));
     expect(r.project_id).toBe('exact-uuid');
-    // The alias registered on the override project is the working directory's normalized form.
-    const alias = getAlias('d:/projects/alpha');
-    expect(alias).toBeDefined();
-    expect(alias?.project_id).toBe('exact-uuid');
+    // The path entry registered on the override project is the working directory's normalized form.
+    const hit = getProjectForPath('d:/projects/alpha');
+    expect(hit).toBeDefined();
+    expect(hit?.project_id).toBe('exact-uuid');
   });
 
   it('19. override prefix does NOT match similar-but-distinct paths (D:/foo vs D:/foobar)', () => {

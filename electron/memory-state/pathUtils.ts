@@ -22,7 +22,7 @@ import * as path from 'path';
  */
 
 export interface NormalizedPath {
-  /** Lookup key for `project_path_aliases.absolute_normalized_path`. */
+  /** Lookup key across `projects.paths` path entries. */
   absolute_normalized_path: string;
   /** Identity anchor for `projects.canonical_root`. Same as above for non-override paths. */
   canonical_root: string;
