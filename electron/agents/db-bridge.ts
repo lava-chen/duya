@@ -1352,19 +1352,49 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     // ==================== Project actions ====================
     case 'project:getGroups': {
       // Plan 328 Phase 5: aggregate from core SessionStore.
+      // Plan 525: sessions of one multi-path project entity merge into a
+      // single group whose working_directory is the entity's canonical
+      // root (paths[0]); sessions in projects without an entity keep the
+      // per-path grouping.
       const { sessions } = getCoreStores();
       const all = sessions.list();
+      const normalizeForMatch = (value: string): string =>
+        value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+
+      // Best-effort entity lookup: memory DB may be unbootstrapped.
+      let entityByPath: Map<string, { projectId: string; canonicalRoot: string; name: string }>;
+      try {
+        const memoryState = await import('../memory-state');
+        entityByPath = new Map();
+        for (const row of memoryState.listProjects()) {
+          const entries = memoryState.projectPaths(row);
+          for (const entry of entries) {
+            entityByPath.set(normalizeForMatch(entry.path), {
+              projectId: row.project_id,
+              canonicalRoot: entries[0]?.path ?? entry.path,
+              name: row.name,
+            });
+          }
+        }
+      } catch {
+        entityByPath = new Map();
+      }
+
       const groups = new Map<string, { working_directory: string; project_name: string; thread_count: number; last_activity: number }>();
       for (const s of all) {
         if (!s.workingDirectory) continue;
-        const existing = groups.get(s.workingDirectory);
+        const entity = entityByPath.get(normalizeForMatch(s.workingDirectory));
+        const groupKey = entity ? entity.projectId : s.workingDirectory;
+        const groupPath = entity ? entity.canonicalRoot : s.workingDirectory;
+        const groupName = entity ? (entity.name || s.projectName) : s.projectName;
+        const existing = groups.get(groupKey);
         if (existing) {
           existing.thread_count += 1;
           if (s.updatedAt > existing.last_activity) existing.last_activity = s.updatedAt;
         } else {
-          groups.set(s.workingDirectory, {
-            working_directory: s.workingDirectory,
-            project_name: s.projectName,
+          groups.set(groupKey, {
+            working_directory: groupPath,
+            project_name: groupName,
             thread_count: 1,
             last_activity: s.updatedAt,
           });
@@ -1550,7 +1580,6 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       } catch (error) {
         getLogger().warn(
           'projects:resolveAdditionalRoots failed',
-          error instanceof Error ? error : new Error(String(error)),
           { error: error instanceof Error ? error.message : String(error) },
           LogComponent.AgentCommunicator
         );

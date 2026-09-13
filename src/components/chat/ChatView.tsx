@@ -29,6 +29,7 @@ import { useStreamPhase } from '@/hooks/useStreamPhase';
 import { useStreamingTools } from '@/hooks/useStreamingTools';
 import { useStreamingError } from '@/hooks/useStreamingError';
 import { useConversationStore } from '@/stores/conversation-store';
+import { useProjectsStore } from '@/stores/projects-store';
 import { useContextUsageStore } from '@/stores/context-usage-store';
 import { useCompactionStore } from '@/stores/compaction-store';
 import { useMailboxStore } from '@/stores/mailbox-store';
@@ -1098,11 +1099,29 @@ export function ChatView({
       const projectName = thread?.projectName || (workingDirectory ? workingDirectory.split(/[\\/]/).pop() ?? 'Untitled' : 'Untitled');
 
       if (!canvasId && workingDirectory) {
-        try {
-          const existing = await window.electronAPI.conductor.getCanvasByProjectPath(workingDirectory);
-          canvasId = (existing as { id?: string } | null)?.id ?? null;
-        } catch (err) {
-          console.error('[ChatView] getCanvasByProjectPath failed', err);
+        // Plan 525: a multi-path project shares ONE canvas. Probe the
+        // session's own path first (preserves pre-525 bindings), then the
+        // project entity's other paths; only create when none exists.
+        const project = useProjectsStore.getState().getByWorkingDirectory(workingDirectory);
+        const candidatePaths = [
+          workingDirectory,
+          ...(project?.paths ?? []).map((entry) => entry.path),
+        ];
+        const seen = new Set<string>();
+        for (const candidate of candidatePaths) {
+          const normalized = candidate.replace(/[\\/]+$/, '');
+          if (seen.has(normalized)) continue;
+          seen.add(normalized);
+          try {
+            const existing = await window.electronAPI.conductor.getCanvasByProjectPath(candidate);
+            const id = (existing as { id?: string } | null)?.id ?? null;
+            if (id) {
+              canvasId = id;
+              break;
+            }
+          } catch (err) {
+            console.error('[ChatView] getCanvasByProjectPath failed', err);
+          }
         }
       }
 
