@@ -247,10 +247,16 @@ updated: 2026-09-12
 
 ### Phase 3 — plans 目录布局实施
 
-- [ ] 3.1 创建 `~/.duya/projects/<project_id>/plans/` 目录创建工具(被 `electron/memory-state/projectService.ts::createProject` 调用)
-- [ ] 3.2 写 `index.json` 生成函数(`writeIndex(projectId, plans)`)
-- [ ] 3.3 `project.json` 可选冗余文件(Phase 3 不强求,留为后续优化)
-- [ ] 3.4 单测:目录创建 / index.json 序列化
+> 2026-09-13: 服务在 `electron/memory-state/projectService.ts`(`~/.duya/projects` 根,
+> DUYA_TEST 命名空间感知,与 tier-rpc 同语义);index.json 写入走 temp+rename,
+> 读取损坏/缺失降级空索引。生产调用方暂无(UI/manage_project 均为非目标),
+> createProject 是纯服务层 API,等 Phase 4 工具 / 手动管理使用。
+
+- [x] 3.1 `~/.duya/projects/<project_id>/plans/` 目录创建工具(`ensurePlansDirs`,由 `projectService.ts::createProject` 调用)
+- [x] 3.2 `index.json` 生成函数(`writePlansIndex(projectId, plans)`,plan §3.4 形状)+ `readPlansIndex`
+- [x] 3.3 `project.json` 可选冗余文件(Phase 3 不强求,留为后续优化)
+- [x] 3.4 单测:`__tests__/projectService.test.ts`(8 用例:目录创建 / index.json 序列化 / canonical_root 派生 / UNIQUE 透传 / 损坏降级)
+- [x] 3.5 dogfood:dev DB 里 duya project(`e4e2b217`)的 plans 骨架已在 `~/.duya/projects/` 建好
 
 ### Phase 4 — plan MCP 工具
 

@@ -66,6 +66,23 @@ export {
   type MessageForHash,
 } from './sourceFingerprint';
 
+// Plan 525 Phase 3 — project entity service + global plans directory
+export {
+  createProject,
+  listProjects,
+  projectPaths,
+  ensurePlansDirs,
+  writePlansIndex,
+  readPlansIndex,
+  resolveProjectsRoot,
+  projectPlansDir,
+  type CreateProjectInput,
+  type ProjectServiceOptions,
+  type PlanStatus,
+  type PlansIndex,
+  type PlansIndexEntry,
+} from './projectService';
+
 // Plan 479 Phase 1 — bot memory tier index (query index over the file manifest)
 export {
   normalizeDedupeKey,
