@@ -6,6 +6,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import * as path from 'path';
 import { BrowserWindow } from 'electron';
 import { getDatabase } from '../ipc/db-handlers';
 import {
@@ -1506,11 +1507,61 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       };
     }
 
+    // Plan 525: resolve the multi-path project entity a session's working
+    // directory belongs to. Returns every OTHER path of the project — the
+    // agent server injects them as additionalDirectories so the permission
+    // boundary covers all of the project's folders (codex-style
+    // workspace_roots: cwd is the primary, the rest are writable roots).
+    case 'projects:resolveAdditionalRoots': {
+      const sessionCwd = typeof p.workingDirectory === 'string' ? p.workingDirectory.trim() : '';
+      if (!sessionCwd) return { projectId: null, additionalRoots: [] };
+      const normalizeForMatch = (value: string): string =>
+        value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+      const cwdNorm = normalizeForMatch(sessionCwd);
+      try {
+        // listProjects throws when the memory-state DB is not bootstrapped
+        // (memory worker disabled) — bootstrap lazily once and retry, so
+        // project root injection works regardless of the memory toggle.
+        let memoryState: typeof import('../memory-state');
+        try {
+          memoryState = await import('../memory-state');
+        } catch {
+          return { projectId: null, additionalRoots: [] };
+        }
+        let rows = memoryState.listProjects();
+        if (rows.length === 0) {
+          try {
+            const { getDatabasePath } = await import('../config/boot-config');
+            memoryState.bootstrap({ bootJsonDatabaseDir: path.dirname(getDatabasePath()) });
+            rows = memoryState.listProjects();
+          } catch {
+            // no database dir available — treat as no project
+          }
+        }
+        const hit = rows.find((row) =>
+          memoryState.projectPaths(row).some((entry) => normalizeForMatch(entry.path) === cwdNorm)
+        );
+        if (!hit) return { projectId: null, additionalRoots: [] };
+        const additionalRoots = memoryState
+          .projectPaths(hit)
+          .map((entry) => entry.path)
+          .filter((entryPath) => normalizeForMatch(entryPath) !== cwdNorm);
+        return { projectId: hit.project_id, additionalRoots };
+      } catch (error) {
+        getLogger().warn(
+          'projects:resolveAdditionalRoots failed',
+          error instanceof Error ? error : new Error(String(error)),
+          { error: error instanceof Error ? error.message : String(error) },
+          LogComponent.AgentCommunicator
+        );
+        return { projectId: null, additionalRoots: [] };
+      }
+    }
+
     case 'config:provider:upsert': {
       getProviderStore().upsertLlmProvider(migrateLegacyApiProvider(p as unknown as ApiProvider));
       return { ok: true };
     }
-
     case 'config:provider:delete': {
       const ok = getProviderStore().deleteLlmProvider(p.id as string);
       return { ok };
