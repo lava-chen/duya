@@ -1,7 +1,6 @@
 ---
 name: self-config
-description: "DUYA self-configuration — 配置 DUYA 自身：记忆(含 RAG 检索钩子)、模型、MCP、频道、定时任务、语音、技能、agent 行为，编辑 ~/.duya/config.toml 等。用户说"配置 duya / 改设置 / 配 MCP / 加模型 / 配记忆 / 配钩子 / 配定时任务"时使用。Do not use for the user's own project; that is ordinary file work."
-when-to-use: "Whenever the task reads or writes DUYA's own runtime configuration (~/.duya), not user project config."
+description: "Configures DUYA itself — reads and writes ~/.duya/config.toml, secrets.json, cronjob.toml, and related runtime files for the model, providers, MCP servers, memory (including RAG), skills, voice, cron jobs, channels, and plugins. Trigger on user requests like 'configure duya', 'change settings', 'add a model', 'add an MCP server', 'enable RAG', 'set up voice', 'schedule a cron job'. Use the `duya` CLI when available; fall back to file edits only when no CLI command exists."
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash]
 ---
 
@@ -103,93 +102,18 @@ overrides below.
 
 ## Common tasks
 
-Each task below lists the *preferred* `duya` CLI / UI path first, with the
-underlying `config.toml` shape as reference only (the CLI writes it for you).
+Each task has a dedicated reference file. Read only the one relevant to the
+current task — load on demand, not all at once.
 
-- **Add a model provider**: use the Settings UI or `duya provider` /
-  `duya config set` if available. Underlying shape: `[providers.<id>]` in
-  `config.toml`, `[model] default/provider/base_url`, key in `secrets.json`.
-- **Add an MCP server**: use `duya mcp add --server <name> --command <cmd>`
-  (plus `--arg`, `--env KEY=VAL`, `--agent`). Underlying shape: an entry in
-  `mcp_servers` (stdio: `command`+`args`; remote: `url`+`headers`), scope with
-  `allowed_agent_ids` if desired. **Do not guess the `command` alone.** For a
-  stdio server, the exact `command` plus `args` is what makes it enter MCP
-  mode — a bare `command` (e.g. `codegraph` without `args: ["serve", "--mcp"]`)
-  starts the server's interactive CLI instead of speaking MCP over stdio, so
-  the agent never sees its tools. Always obtain the exact `command` + `args`
-  from the server's own documentation or its installer:
-  - Run the server's official install/print subcommand when available, e.g.
-    `codegraph install --print-config claude` (prints the exact
-    `command`+`args` snippet), then copy those values verbatim.
-  - Otherwise consult the server's README / MCP page for the canonical
-    stdio invocation rather than inferring it.
-  After adding the entry, verify the server actually connects and yields
-  tools (see "Verify an MCP server" below) before telling the user it works.
-- **Enable/disable a skill**: use the Settings UI / skill manager when
-  present. Underlying shape: `{ name = "<skill>", enabled = false }` in the
-  `skills` array (or remove it to re-enable).
-- **Enable retrievable memory (RAG)**: toggle Settings → Memory → RAG, or set
-  `enabled = true` under `[memory.rag]` (a file edit is acceptable here), and
-  add extra scan dirs to `scan_paths` if desired. Then register the retrieval
-  hook with the CLI — do NOT hand-edit config.toml for hooks:
-  1. Use the `hooks.json` in the `memory-search` skill
-     (`packages/agent/skills/.system/memory-search/`) — fix its `args[0]` to
-     the absolute path of `scripts/memory-rag-hook.mjs` on this machine.
-  2. Register it: `duya hook add <path-to-that-hooks.json>` (validates the
-     file before writing; `--yes` required in non-interactive mode).
-     `duya hook validate <path>` checks a file without writing;
-     `duya hook list` shows what is registered.
-  The template runs the retrieval in the **background** (`async: true`) and
-  delivers the result back into the session as a background notification
-  next turn (`asyncRewake: true`) — keep both fields; a synchronous RAG
-  hook would block the first turn and its stdout is never injected into
-  the model. Query the index directly with `duya memory search "<query>"`
-  (or rebuild on demand with `duya memory rebuild`); see the
-  `memory-search` skill for the full RAG overview and hook.json schema.
-- **Schedule a cron job**: use `duya cron` / the Settings UI. Underlying
-  source: `~/.duya/cronjob.toml`.
-- **Change voice input**: use the Settings UI if present. Underlying shape:
-  `[voice] stt.engine` and device/model fields.
-- **Enable image generation**: add a `[image_generation]` section to
-  `config.toml` (no dedicated CLI subcommand exists; this one is a file edit):
-  ```toml
-  [image_generation]
-  enabled = true
-  provider = "openai"     # openai | fal
-  model = "gpt-image-1"   # openai: gpt-image-1/2, dall-e-3; fal: fal-ai/flux/dev …
-  # base_url = ""         # OpenAI-compatible endpoint override (optional)
-  size = "1024x1024"
-  quality = "auto"        # auto | low | medium | high
-  # output_dir = ""       # default ~/.duya/media/generated
-  # timeout_ms = 180000
-  ```
-  Store the key in env (`IMAGE_GENERATION_API_KEY`, or `OPENAI_API_KEY`
-  for the openai provider / `FAL_KEY` for fal) — prefer env over the
-  `api_key` field per the secrets rule above. The `image_generate` tool
-  stays off the default tool surface (exposeMode `discoverable`): the
-  agent reaches it via `tool_search`, or the user can generate directly
-  with `duya image "<prompt>" [--provider …] [--model …] [--size …]` and
-  inspect the effective config with `duya image:config`.
+| Task | Reference |
+|---|---|
+| Add / change a model provider | `references/model-and-providers.md` |
+| Add / verify an MCP server | `references/mcp.md` |
+| Enable / disable a skill, or enable RAG memory | `references/skills-and-memory.md` |
+| Schedule a cron job, change voice input, or enable image generation | `references/cron-and-media.md` |
 
-## Verify an MCP server
-
-A config entry that parses is not proof the server works. "Configured" only
-means the static fields are valid; the server may still fail to connect or
-yield zero tools. After adding/editing a stdio server, verify it before
-reporting success:
-
-1. Confirm the `command` resolves on PATH for the process DUYA spawns
-   (`Get-Command <cmd>` on Windows, `which <cmd>` on Unix). A PowerShell
-   shim (`<cmd>.ps1`) is what a bare `command` resolves to — prefer the args
-   form that enters MCP mode.
-2. Spawn the server with the exact `command` + `args` and confirm it speaks
-   MCP over stdio — a bare `command` that drops into an interactive CLI will
-   time out on the handshake instead of listing tools.
-3. Confirm the tool count is non-zero; a server that connects but exposes no
-   tools is still not useful to the agent.
-4. If it fails, inspect the MCP apply log / `app.log` for the connection
-   error and fix the `command`+`args` (or transport/url) rather than
-   assuming the config is correct.
+When in doubt, prefer the CLI first; see "Change settings through the `duya`
+CLI first" above.
 
 ## Security boundaries
 
