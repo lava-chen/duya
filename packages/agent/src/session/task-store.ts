@@ -54,7 +54,7 @@ export type AgentStatus = {
 export interface TaskStore {
   getTask(taskId: string): Promise<Task | null>;
   listTasks(): Promise<Task[]>;
-  createTask(task: Omit<Task, 'id'>): Promise<Task>;
+  createTask(task: Omit<Task, 'id'> & { id?: string }): Promise<Task>;
   updateTask(taskId: string, updates: Partial<Task>): Promise<Task | null>;
   deleteTask(taskId: string): Promise<boolean>;
   claimTask(taskId: string, owner: string): Promise<ClaimTaskResult>;
@@ -114,18 +114,28 @@ class IPCTaskStore implements TaskStore {
     return results.map(rowToTask);
   }
 
-  async createTask(task: Omit<Task, 'id'>): Promise<Task> {
+  async createTask(task: Omit<Task, 'id'> & { id?: string }): Promise<Task> {
     const ipc = getIpcClient()!;
-    const id = crypto.randomUUID();
-    await ipc.taskDb.create({
-      id,
-      session_id: this.sessionId,
-      subject: task.subject,
-      description: task.description,
-      status: task.status,
-      active_form: task.activeForm,
-      owner: task.owner,
-    });
+    // Caller-supplied id is honored so tools (e.g. todo) can preserve
+    // their own identity across re-issue. If the row already exists in
+    // any session, fail loudly rather than silently overwriting it.
+    const id = task.id ?? crypto.randomUUID();
+    try {
+      await ipc.taskDb.create({
+        id,
+        session_id: this.sessionId,
+        subject: task.subject,
+        description: task.description,
+        status: task.status,
+        active_form: task.activeForm,
+        owner: task.owner,
+      });
+    } catch (err) {
+      if (isUniqueConstraintError(err)) {
+        throw new Error(`Task id "${id}" already exists. Pick a different id, or use the existing row's update path.`);
+      }
+      throw err;
+    }
     const result = await this.getTask(id);
     if (!result) throw new Error('Failed to create task');
     return result;
@@ -206,8 +216,8 @@ class NoopTaskStore implements TaskStore {
     return [];
   }
 
-  async createTask(task: Omit<Task, 'id'>): Promise<Task> {
-    return { id: 'unpersisted', ...task };
+  async createTask(task: Omit<Task, 'id'> & { id?: string }): Promise<Task> {
+    return { id: task.id ?? 'unpersisted', ...task };
   }
 
   async updateTask(taskId: string, updates: Partial<Task>): Promise<Task | null> {
@@ -238,6 +248,16 @@ class NoopTaskStore implements TaskStore {
 // =============================================================================
 // TaskStore Factory
 // =============================================================================
+
+/**
+ * SQLite surfaces primary-key / unique-constraint failures with a `code`
+ * property of the form `SQLITE_CONSTRAINT_*`. The IPC layer wraps these
+ * errors but preserves `code`, so this duck-typed check is enough.
+ */
+function isUniqueConstraintError(err: unknown): boolean {
+  const code = (err as { code?: string } | null | undefined)?.code;
+  return typeof code === 'string' && code.startsWith('SQLITE_CONSTRAINT');
+}
 
 const storeCache = new Map<string, TaskStore>();
 

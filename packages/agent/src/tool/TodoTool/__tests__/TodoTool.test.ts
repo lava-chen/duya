@@ -9,8 +9,17 @@ const mocks = vi.hoisted(() => {
   const store: TaskStore = {
     getTask: vi.fn(async (id: string) => state.tasks.find(t => t.id === id) ?? null),
     listTasks: vi.fn(async () => [...state.tasks]),
-    createTask: vi.fn(async (task: Omit<Task, 'id'>) => {
-      const created: Task = { id: `t${state.tasks.length + 1}`, ...task };
+    createTask: vi.fn(async (task: Omit<Task, 'id'> & { id?: string }) => {
+      // Honor caller-supplied id when present, otherwise mint one.
+      const id = task.id ?? `t${state.tasks.length + 1}`;
+      const created: Task = { id, ...task };
+      if (state.tasks.some(t => t.id === id)) {
+        // Match IPCTaskStore behavior: surface a constraint error instead of
+        // silently overwriting so the test exercises the same code path.
+        const err = new Error(`UNIQUE constraint failed: tasks.id = ${id}`) as Error & { code: string };
+        err.code = 'SQLITE_CONSTRAINT_PRIMARYKEY';
+        throw err;
+      }
       state.tasks.push(created);
       return created;
     }),
@@ -55,7 +64,10 @@ describe('TodoTool', () => {
   });
 
   it('tracks the legacy wire names accepted during projection', () => {
-    expect(LEGACY_TODO_WIRE_NAMES).toEqual(['task', 'Task']);
+    // After the renames in plan 2026-08-13-grok-task-todo-alignment, the only
+    // legacy wire name is `TodoWrite`. `task` / `Task` belong to the
+    // subagent tool now and are no longer todo aliases.
+    expect(LEGACY_TODO_WIRE_NAMES).toEqual(['TodoWrite']);
   });
 
   it('replace builds the full list (merge=false)', async () => {
@@ -73,9 +85,31 @@ describe('TodoTool', () => {
     expect(res.error).toBeFalsy();
     const parsed = JSON.parse(res.result) as { todos: { id: string; content: string; status: string }[]; summary_for_prompt: string };
     expect(parsed.todos).toHaveLength(2);
-    expect(parsed.todos[0]).toMatchObject({ content: 'First step', status: 'pending' });
-    expect(parsed.todos[1]).toMatchObject({ content: 'Second step', status: 'in_progress' });
+    expect(parsed.todos[0]).toMatchObject({ id: 'a', content: 'First step', status: 'pending' });
+    expect(parsed.todos[1]).toMatchObject({ id: 'b', content: 'Second step', status: 'in_progress' });
     expect(parsed.summary_for_prompt).toContain('- [pending]');
+  });
+
+  it('replace preserves the caller-supplied id on each row', async () => {
+    const res = await tool.execute(
+      {
+        merge: false,
+        todos: [
+          { id: 'step-1', content: 'first' },
+          { id: 'step-2', content: 'second' },
+        ],
+      },
+      undefined,
+      ctx(),
+    );
+    expect(res.error).toBeFalsy();
+    const parsed = JSON.parse(res.result) as { todos: { id: string }[] };
+    expect(parsed.todos.map(t => t.id)).toEqual(['step-1', 'step-2']);
+    // The store must have been called with the user ids (not auto-minted UUIDs).
+    const createCalls = mocks.store.createTask.mock.calls;
+    expect(createCalls.length).toBe(2);
+    expect((createCalls[0][0] as { id: string }).id).toBe('step-1');
+    expect((createCalls[1][0] as { id: string }).id).toBe('step-2');
   });
 
   it('merge updates an existing item by status without dropping content', async () => {
@@ -101,9 +135,21 @@ describe('TodoTool', () => {
       ctx(),
     );
     expect(res.error).toBeFalsy();
-    const parsed = JSON.parse(res.result) as { todos: { content: string }[] };
+    const parsed = JSON.parse(res.result) as { todos: { id: string; content: string }[] };
     expect(parsed.todos).toHaveLength(1);
-    expect(parsed.todos[0].content).toBe('Brand new');
+    expect(parsed.todos[0]).toMatchObject({ id: 'new', content: 'Brand new' });
+  });
+
+  it('merge preserves the caller-supplied id when creating a new row', async () => {
+    const res = await tool.execute(
+      { todos: [{ id: 'custom-id', content: 'fresh' }] },
+      undefined,
+      ctx(),
+    );
+    expect(res.error).toBeFalsy();
+    const createCalls = mocks.store.createTask.mock.calls;
+    expect(createCalls.length).toBe(1);
+    expect((createCalls[0][0] as { id: string }).id).toBe('custom-id');
   });
 
   it('rejects duplicate ids', async () => {
