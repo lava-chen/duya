@@ -10,7 +10,6 @@ export interface FetchTask {
   id: string;
   url: string;
   selector?: string;
-  extract?: 'text' | 'html' | 'markdown';
 }
 
 export interface FetchResult {
@@ -33,6 +32,14 @@ const SKIP_TAGS = new Set([
   'template', 'br', 'wbr', 'col', 'colgroup',
 ]);
 
+// Block-level tags that introduce line breaks when serializing readable text.
+const BLOCK_TAGS = new Set([
+  'p', 'div', 'section', 'article', 'aside', 'header', 'footer', 'main', 'nav',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'dl', 'dt', 'dd',
+  'table', 'thead', 'tbody', 'tr', 'th', 'td', 'blockquote', 'pre', 'figure',
+  'figcaption', 'form', 'fieldset', 'address', 'details', 'summary', 'hr', 'br',
+]);
+
 const INTERACTIVE_TAGS = new Set([
   'a', 'button', 'input', 'select', 'textarea', 'details',
   'summary', 'option', 'optgroup',
@@ -44,8 +51,6 @@ const AD_DOMAINS = [
   'facebook.com/tr', 'analytics.google.com', 'connect.facebook.net',
   'ad.doubleclick', 'pagead', 'adsense',
 ];
-
-const MAX_TEXT_LENGTH = 120;
 
 interface ParsedElement {
   tagName: string;
@@ -134,56 +139,6 @@ function parseHtmlSimple(html: string): ParsedElement[] {
   return elements;
 }
 
-function getTagText(element: ParsedElement): string {
-  let text = '';
-  for (const child of element.children) {
-    if (typeof child === 'string') {
-      text += child + ' ';
-    } else if (child.tagName === 'script' || child.tagName === 'style') {
-      // Skip
-    } else {
-      text += getTagText(child) + ' ';
-    }
-  }
-  return text.trim();
-}
-
-function serializeAttributes(attrs: Record<string, string>): string {
-  const ATTR_WHITELIST = new Set([
-    'id', 'name', 'type', 'value', 'placeholder', 'title', 'alt',
-    'role', 'aria-label', 'aria-expanded', 'aria-checked', 'aria-selected',
-    'aria-disabled', 'href', 'src', 'action', 'method', 'for', 'checked', 'selected',
-    'disabled', 'required', 'multiple', 'accept', 'min', 'max',
-    'pattern', 'maxlength', 'minlength', 'data-testid', 'data-test',
-    'contenteditable', 'tabindex', 'autocomplete',
-  ]);
-
-  const parts: string[] = [];
-  for (const [name, value] of Object.entries(attrs)) {
-    if (!ATTR_WHITELIST.has(name)) continue;
-    if (!value || typeof value !== 'string') continue;
-
-    let val = value.trim();
-    if (val.length > 120) val = val.slice(0, 100) + '…';
-
-    if (name === 'href') {
-      if (val.startsWith('javascript:')) continue;
-      try {
-        const u = new URL(val, 'https://example.com');
-        if (u.origin === 'https://example.com') val = u.pathname + u.search + u.hash;
-      } catch {}
-    }
-    parts.push(name + '=' + val);
-  }
-  return parts.join(' ');
-}
-
-function capText(s: string): string {
-  if (!s) return '';
-  const t = s.replace(/\s+/g, ' ').trim();
-  return t.length > MAX_TEXT_LENGTH ? t.slice(0, MAX_TEXT_LENGTH) + '…' : t;
-}
-
 function isInteractiveTag(tag: string): boolean {
   return INTERACTIVE_TAGS.has(tag);
 }
@@ -202,85 +157,59 @@ function isAdElement(element: ParsedElement): boolean {
   return false;
 }
 
-function isLandmarkTag(tag: string): boolean {
-  return ['nav', 'main', 'header', 'footer', 'aside', 'form', 'search', 'dialog', 'section', 'article'].includes(tag);
-}
-
-function compressHtml(html: string, options: { interactiveOnly?: boolean; maxLength?: number } = {}): { content: string; interactiveCount: number } {
-  // Remove skip tags
-  let cleaned = html;
+/**
+ * Extract readable plain text from HTML — no tags, no structure.
+ *
+ * The static HTTP path is a research/read path: callers want the page's text
+ * content, not a serialized DOM. Block-level elements are separated by line
+ * breaks; ads and non-content tags are dropped.
+ */
+function htmlToPlainText(html: string, maxLength = 100000): { text: string; interactiveCount: number } {
+  let cleaned = html.replace(/<br\s*\/?>/gi, '\n');
   for (const tag of SKIP_TAGS) {
-    const regex = new RegExp(`<${tag}[^>]*>[\\s\\S]*?</${tag}>`, 'gi');
-    cleaned = cleaned.replace(regex, '');
-    const selfClosing = new RegExp(`<${tag}[^>]*\\/?>`, 'gi');
-    cleaned = cleaned.replace(selfClosing, '');
+    if (tag === 'br') continue;
+    cleaned = cleaned.replace(new RegExp(`<${tag}[^>]*>[\\s\\S]*?</${tag}>`, 'gi'), '');
+    cleaned = cleaned.replace(new RegExp(`<${tag}[^>]*\\/?>`, 'gi'), '');
   }
-
-  // Remove HTML/HEAD/BODY
   cleaned = cleaned.replace(/<\/?(html|head|body)[^>]*>/gi, '');
 
-  const lines: string[] = [];
+  const pieces: string[] = [];
   let interactiveCount = 0;
-  let refIndex = 0;
 
-  function walkElement(element: ParsedElement, depth: number): boolean {
-    const tag = element.tagName;
-
-    if (isAdElement(element)) {
-      return false;
+  function walk(element: ParsedElement): void {
+    if (isAdElement(element)) return;
+    if (isInteractiveTag(element.tagName) || element.attributes.href || element.attributes.onclick) {
+      interactiveCount++;
     }
-
-    let hasInteractive = false;
-    let childHasInteractive = false;
-
+    const block = BLOCK_TAGS.has(element.tagName);
+    if (block) pieces.push('\n');
     for (const child of element.children) {
-      if (typeof child === 'string') continue;
-      if (walkElement(child, depth + 1)) {
-        childHasInteractive = true;
+      if (typeof child === 'string') {
+        pieces.push(child);
+      } else {
+        walk(child);
       }
     }
-
-    const text = capText(getTagText(element));
-    const interactive = isInteractiveTag(tag) || element.attributes.href || element.attributes.onclick;
-    const landmark = isLandmarkTag(tag);
-
-    if (options.interactiveOnly && !interactive && !landmark && !childHasInteractive && !text) {
-      return false;
-    }
-
-    if (!interactive && !childHasInteractive && !text && !landmark) {
-      return false;
-    }
-
-    let line = '  '.repeat(depth);
-
-    if (interactive) {
-      refIndex++;
-      interactiveCount++;
-      line += '[' + refIndex + ']';
-    }
-
-    const attrs = serializeAttributes(element.attributes);
-    if (text) {
-      line += '<' + tag + (attrs ? ' ' + attrs : '') + '>' + text + '</' + tag + '>';
-    } else {
-      line += '<' + tag + (attrs ? ' ' + attrs : '') + ' />';
-    }
-
-    lines.push(line);
-    if (interactive || childHasInteractive) hasInteractive = true;
-
-    return hasInteractive;
+    // Inner text of a closed element lives in `raw`, not in `children`.
+    if (element.raw) pieces.push(element.raw);
+    if (block) pieces.push('\n');
   }
 
-  const elements = parseHtmlSimple(cleaned);
-  for (const element of elements) {
+  for (const element of parseHtmlSimple(cleaned)) {
     if (SKIP_TAGS.has(element.tagName)) continue;
-    walkElement(element, 0);
+    walk(element);
   }
+
+  const text = pieces
+    .join('')
+    .replace(/[ \t\f\v\u00a0]+/g, ' ')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.length > 0)
+    .join('\n');
 
   return {
-    content: lines.join('\n').slice(0, options.maxLength || 100000),
+    text: text.length > maxLength ? `${text.slice(0, maxLength)}\n\n[Text truncated...]` : text,
     interactiveCount,
   };
 }
@@ -359,13 +288,11 @@ export class ParallelFetcher {
       const html = response.data as string;
       const title = extractTitle(html);
 
-      const { content: compressedContent, interactiveCount } = compressHtml(html, {
-        interactiveOnly: false,
-        maxLength: 100000,
-      });
+      // Plain readable text only — the static path must not return page structure.
+      const { text: content, interactiveCount } = htmlToPlainText(html, 100000);
 
       // A 2xx status does not guarantee useful content; validate before reporting success.
-      if (!isContentMeaningful(compressedContent, title)) {
+      if (!isContentMeaningful(content, title)) {
         return {
           id: task.id,
           url: task.url,
@@ -376,7 +303,7 @@ export class ParallelFetcher {
       }
 
       // Detect error / bot-block pages served with a 2xx status.
-      const errorSignal = matchErrorPageSignal(title, compressedContent);
+      const errorSignal = matchErrorPageSignal(title, content);
       if (errorSignal) {
         return {
           id: task.id,
@@ -392,7 +319,7 @@ export class ParallelFetcher {
         url: task.url,
         success: true,
         title,
-        content: compressedContent,
+        content,
         interactiveCount,
         durationMs: Date.now() - startTime,
       };

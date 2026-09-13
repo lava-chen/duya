@@ -31,6 +31,11 @@ export class PlatformHookManager {
    * via regex test, so we keep it as `defaultExtractor` to avoid the loop.
    */
   private hostnameExtractors: Map<string, PlatformExtractor> = new Map();
+  /**
+   * Platform-specific extractors whose `matches()` matched none of the sample
+   * hostnames (e.g. arxiv.org). Scanned linearly after the hostname map.
+   */
+  private fallbackExtractors: PlatformExtractor[] = [];
   private defaultExtractor: PlatformExtractor | null = null;
 
   constructor() {
@@ -53,6 +58,15 @@ export class PlatformHookManager {
    */
   private indexExtractors(extractors: PlatformExtractor[]): void {
     for (const extractor of extractors) {
+      // The generic readability fallback claims no specific hostname. It must
+      // be handled before the sample-host probe: `article.matches()` is true
+      // for every http(s) URL, so probing it would mark it `indexed` and leave
+      // ordinary sites with no extractor at all (they fell back to a structured
+      // DOM snapshot instead of readable text).
+      if (extractor.name === 'article') {
+        this.defaultExtractor = extractor;
+        continue;
+      }
       const sampleHosts = [
         'twitter.com', 'x.com', 'reddit.com', 'www.zhihu.com',
         'youtube.com', 'www.youtube.com', 'youtu.be', 'www.bilibili.com',
@@ -60,7 +74,6 @@ export class PlatformHookManager {
         'en.wikipedia.org', 'news.ycombinator.com', 'pubmed.ncbi.nlm.nih.gov',
         'weibo.com', 'www.instagram.com', 'www.tiktok.com', 'www.xiaohongshu.com',
         'www.goofish.com', 'item.jd.com', 'www.taobao.com', 'detail.1688.com',
-        'example.com',
       ];
       let indexed = false;
       for (const host of sampleHosts) {
@@ -72,16 +85,10 @@ export class PlatformHookManager {
           indexed = true;
         }
       }
-      // The generic article extractor matches any http(s) URL — keep it as
-      // the fallback so we don't pay an O(N) scan for every navigation.
-      if (!indexed && extractor.name === 'article') {
-        this.defaultExtractor = extractor;
-      } else if (!indexed) {
-        // Unknown platform-specific extractor that we couldn't pin to a known
-        // hostname — fall back to linear scan but only over this small remainder.
-        if (!this.defaultExtractor) {
-          this.defaultExtractor = extractor;
-        }
+      // Platform-specific extractor that matched none of the sample hostnames —
+      // keep it for a bounded linear scan in `getExtractor`.
+      if (!indexed) {
+        this.fallbackExtractors.push(extractor);
       }
     }
   }
@@ -205,6 +212,9 @@ export class PlatformHookManager {
     if (!hostname) return null;
     const cached = this.hostnameExtractors.get(hostname);
     if (cached) return cached;
+    for (const extractor of this.fallbackExtractors) {
+      if (extractor.matches(url)) return extractor;
+    }
     if (this.defaultExtractor && this.defaultExtractor.matches(url)) {
       return this.defaultExtractor;
     }
