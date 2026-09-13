@@ -289,24 +289,24 @@ updated: 2026-09-12
 > 只写 main 进程 IPC 通道 + preload 暴露,无 React 组件 / 无 CSS
 > / 无 hooks(hooks 在 plan 530 Phase 2)。
 
-- [ ] 2.5.1 新建 `electron/ipc/project-entity-handlers.ts`(参考 `project-database-handlers.ts` 模式):
+- [x] 2.5.1 新建 `electron/ipc/project-entity-handlers.ts`(参考 `project-database-handlers.ts` 模式):
   - `ipcMain.handle('projects:list', ...)` → 调 `projectService.listProjects()`,返回 `ProjectRow[]`
   - `ipcMain.handle('projects:get', (_, { projectId }) => ...)` → 单条查询(后续 plan 530 hook 用)
   - `ipcMain.handle('projects:register', (_, input) => ...)` → 调 `registerProject`(已有纯函数,补 IPC 暴露)
   - JSON 损坏容错: 读 `paths` 字段时 `parseProjectPaths` 失败降级为 `[]` 数组(与 §2.4 一致)
   - 错误返回 `ProjectEntityError` 结构化错误码
-- [ ] 2.5.2 `electron/preload.ts` 暴露:
+- [x] 2.5.2 `electron/preload.ts` 暴露:
   - `window.electronAPI.projects.list(): Promise<ProjectRow[]>`
   - `window.electronAPI.projects.get(projectId: string): Promise<ProjectRow | null>`
   - `window.electronAPI.projects.register(input: RegisterProjectInput): Promise<{ projectId: string }>`
   - 与现有 `projectDatabase` 命名风格一致(小驼峰 + 嵌套对象)
-- [ ] 2.5.3 `electron/ipc/index.ts` 注册 `registerProjectEntityHandlers()`(在 `boot.json` 加载顺序中插在 plans 注册之后)
-- [ ] 2.5.4 单测: `electron/ipc/__tests__/project-entity-handlers.test.ts`
+- [x] 2.5.3 `electron/ipc/index.ts` 注册 `registerProjectEntityHandlers()`(在 `boot.json` 加载顺序中插在 plans 注册之后)
+- [x] 2.5.4 单测: `electron/ipc/__tests__/project-entity-handlers.test.ts`
   - 调真实 main 进程 `getMemoryDb()` + `registerProject` 写入测试数据,验证 IPC 返回
   - `paths` 字段 JSON 损坏时 list/get 都降级为 `[]`,不抛
   - `registerProject` paths 为空时抛 `ProjectEntityError{ code: 'EMPTY_PATHS' }`
   - 用 `vi.hoisted` + `vi.mock` 模式(参照 `logger-handlers.test.ts`)
-- [ ] 2.5.5 Phase 2.5 完成判据: `npx vitest run electron/ipc/__tests__/project-entity-handlers.test.ts` 全绿,`npm run typecheck:all` 过
+- [x] 2.5.5 Phase 2.5 完成判据: `npx vitest run electron/ipc/__tests__/project-entity-handlers.test.ts` 全绿,`npm run typecheck:all` 过
 
 **边界声明**(避免被误读为 UI):
 - 不写 React 组件
