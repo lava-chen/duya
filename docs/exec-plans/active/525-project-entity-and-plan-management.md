@@ -232,12 +232,18 @@ updated: 2026-09-12
 
 ### Phase 2 — 数据迁移
 
-- [ ] 2.1 创建 `scripts/migrate-projects-paths.ts`(干跑默认,`--apply` 真跑)
-- [ ] 2.2 干跑脚本:读 `project_path_aliases` 全部行,按 project_id 聚合
+> 2026-09-13: 核心逻辑在 `electron/memory-state/pathsMigration.ts`(自包含无运行时依赖,
+> 兼容 better-sqlite3 / node:sqlite),CLI 在 `scripts/migrate-projects-paths.ts`(node 直跑 TS)。
+> 真实表 PK 是路径本身,同 path 多 kind 合并只在纯函数层可达(防御性保留)。
+> **同 phase 附带**:`registerProject` 已切换为读写 `projects.paths`(砍表后 resolver 不断链),
+> 反查按 §2.5 全表扫描取舍实现。`--apply` 前有内建停点(等用户 review 干跑报告)。
+
+- [x] 2.1 `scripts/migrate-projects-paths.ts`(干跑默认,`--apply` 真跑)
+- [x] 2.2 干跑脚本:读 `project_path_aliases` 全部行,按 project_id 聚合
   - 同一 `(project_id, absolute_normalized_path)` 多 alias_kind → 合并,`description` 取第一个非空
-- [ ] 2.3 输出报告:每个 project 合并前后行数,等待用户确认
-- [ ] 2.4 `--apply` 模式:写入 `projects.paths`,验证 JSON 合法,删 `project_path_aliases` 表
-- [ ] 2.5 单测:JSON 合并函数 / NULL description 保留 / 同一 path 多 kind 合并 / 边界(空表 / 单行)
+- [x] 2.3 输出报告 — **dev DB 实测(2026-09-13)**:30 project / 30 alias 行 / 一对一 / 无孤儿
+- [ ] 2.4 `--apply` 模式:写入 `projects.paths`,验证 JSON 合法,删 `project_path_aliases` 表(代码已实现,等用户确认后对 dev DB 执行)
+- [x] 2.5 单测:`__tests__/pathsMigration.test.ts`(合并 / NULL description / 孤儿拒绝 / 幂等 / 迁移后 resolver 兼容)
 
 ### Phase 3 — plans 目录布局实施
 
