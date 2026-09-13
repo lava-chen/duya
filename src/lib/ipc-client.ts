@@ -982,11 +982,30 @@ export async function getProjectGroupsIPC(): Promise<ProjectGroup[]> {
     return projects
   }
 
+  // Plan 525: a multi-path project entity is ONE group anchored at its
+  // canonical root; a recent folder that is ANY path of an already-listed
+  // entity must not appear as a second entry.
+  const entityPaths = new Set<string>()
+  const normalizePathKey = (p: string) => p.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase()
+  if (window.electronAPI?.projects?.list) {
+    try {
+      const entities = await window.electronAPI.projects.list()
+      if (entities.success) {
+        for (const entity of entities.projects) {
+          for (const entry of entity.paths) entityPaths.add(normalizePathKey(entry.path))
+        }
+      }
+    } catch {
+      // entity IPC unavailable — fall back to group paths only
+    }
+  }
   const existingPaths = new Set(projects.map((project) => project.workingDirectory))
+  const isCovered = (wd: string) =>
+    existingPaths.has(wd) || entityPaths.has(normalizePathKey(wd))
   const recentFolders = (await window.electronAPI.projects.getRecentFolders())
     .filter((wd) => !isNoProject(wd))
   const recentProjects = recentFolders
-    .filter((workingDirectory) => workingDirectory && !existingPaths.has(workingDirectory))
+    .filter((workingDirectory) => workingDirectory && !isCovered(workingDirectory))
     .map((workingDirectory, index) => ({
       workingDirectory,
       projectName: workingDirectory.split(/[\\/]/).pop() || 'Untitled',
