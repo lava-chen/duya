@@ -46,6 +46,11 @@ export interface MarketplaceSourceConfig {
    * always fetches from whichever URL ended up as `origin`.
    */
   urls?: string[];
+  /**
+   * Optional UI tab label for this marketplace source. Falls back to the
+   * marketplace registry key (`name`) when unset. plan 529.
+   */
+  displayName?: string;
   path?: string;
   ref?: string;
 }

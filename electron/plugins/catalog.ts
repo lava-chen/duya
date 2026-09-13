@@ -284,6 +284,8 @@ export function getPluginCatalogEntry(id: string, marketplace?: string): PluginC
 /** Per-marketplace sync status surfaced alongside the catalog (Plan 455). */
 export interface MarketplaceCatalogStatus {
   marketplace: string;
+  /** Optional UI tab label override; falls back to `marketplace`. Plan 529. */
+  displayName?: string;
   /** Set when the clone is missing or its manifest failed to read. */
   error?: string;
   pluginCount: number;
@@ -329,11 +331,24 @@ function getMarketplaceCatalogEntries(): {
   const logger = getLogger();
   const entries: PluginCatalogEntry[] = [];
   const statuses: MarketplaceCatalogStatus[] = [];
+  // Plan 529: dedup by plugin id across marketplaces (first-wins) and by
+  // on-disk directory (catches the case where two configs point at the
+  // same physical clone, e.g. an accidentally re-added source). Source
+  // iteration order matches config insertion order; duya-official is
+  // seeded first by ensureOfficialMarketplace, so it takes precedence
+  // over any community mirror registered later.
+  const seenIds = new Set<string>();
+  const seenDirs = new Set<string>();
 
   for (const [name, config] of Object.entries(readConfigMarketplaces())) {
     const dir = marketplaceDirFor(name, config);
     if (!dir || !fs.existsSync(dir)) {
-      statuses.push({ marketplace: name, error: 'not synced yet', pluginCount: 0 });
+      statuses.push({
+        marketplace: name,
+        displayName: config.displayName,
+        error: 'not synced yet',
+        pluginCount: 0,
+      });
       continue;
     }
 
@@ -343,11 +358,21 @@ function getMarketplaceCatalogEntries(): {
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       logger.warn('Failed to read marketplace manifest', { marketplace: name, error }, COMPONENT);
-      statuses.push({ marketplace: name, error, pluginCount: 0 });
+      statuses.push({
+        marketplace: name,
+        displayName: config.displayName,
+        error,
+        pluginCount: 0,
+      });
       continue;
     }
     if (!manifest) {
-      statuses.push({ marketplace: name, error: 'no marketplace.json found', pluginCount: 0 });
+      statuses.push({
+        marketplace: name,
+        displayName: config.displayName,
+        error: 'no marketplace.json found',
+        pluginCount: 0,
+      });
       continue;
     }
 
@@ -355,10 +380,24 @@ function getMarketplaceCatalogEntries(): {
     for (const pluginEntry of manifest.plugins) {
       try {
         const entry = buildMarketplaceCatalogEntry(name, dir, pluginEntry);
-        if (entry) {
-          entries.push(entry);
-          pluginCount++;
+        if (!entry) continue;
+        const dirKey = path.resolve(dir);
+        if (seenDirs.has(dirKey)) {
+          logger.debug('Skipping duplicate marketplace directory', {
+            marketplace: name, dir: dirKey,
+          }, COMPONENT);
+          continue;
         }
+        if (seenIds.has(entry.id)) {
+          logger.debug('Skipping duplicate plugin id across marketplaces', {
+            id: entry.id, marketplace: name,
+          }, COMPONENT);
+          continue;
+        }
+        seenIds.add(entry.id);
+        seenDirs.add(dirKey);
+        entries.push(entry);
+        pluginCount++;
       } catch (err) {
         logger.warn('Failed to read marketplace plugin', {
           marketplace: name,
@@ -367,7 +406,11 @@ function getMarketplaceCatalogEntries(): {
         }, COMPONENT);
       }
     }
-    statuses.push({ marketplace: name, pluginCount });
+    statuses.push({
+      marketplace: name,
+      displayName: config.displayName,
+      pluginCount,
+    });
   }
 
   return { entries, statuses };
