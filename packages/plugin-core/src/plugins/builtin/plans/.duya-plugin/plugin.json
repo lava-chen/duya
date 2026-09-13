@@ -1,0 +1,26 @@
+{
+  "name": "plans",
+  "version": "0.1.0",
+  "description": "Query and archive duya execution plans from the global plans directory (~/.duya/projects/<projectId>/plans): list active plans, search across projects, and move finished plans to completed.",
+  "author": {
+    "name": "duya",
+    "url": "https://github.com/lava-chen/duya"
+  },
+  "homepage": "https://github.com/lava-chen/duya",
+  "license": "MIT",
+  "keywords": [
+    "plans",
+    "exec-plans",
+    "project-management",
+    "mcp"
+  ],
+  "interface": {
+    "displayName": "Plans",
+    "shortDescription": "Query and archive duya execution plans",
+    "longDescription": "Exposes the duya plans store (~/.duya/projects/<projectId>/plans/) as three MCP tools: plan_status lists a project's active plans, plan_search finds plans across projects by keyword, and plan_complete archives a finished plan. Plan creation and content editing stay with the ordinary file tools.",
+    "category": "developer-tools",
+    "brandColor": "#2563EB",
+    "icon": "",
+    "screenshots": []
+  }
+}
