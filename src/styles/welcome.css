@@ -134,18 +134,12 @@
 }
 
 .welcome-project-dropdown {
-  position: absolute;
-  top: calc(100% + 0.4rem);
-  left: 50%;
-  transform: translateX(-50%);
-  min-width: 280px;
+  /* DropdownMenu now controls the menu's own `position: fixed` and
+     viewport bounds; this class only narrows the surface to the
+     project-picker visual width (kept in sync with `minWidth` /
+     `maxWidth` props on the host). */
+  min-width: 320px;
   max-width: 400px;
-  z-index: 100;
-}
-
-.welcome-project-dropdown.option-panel--above {
-  top: auto;
-  bottom: calc(100% + 0.4rem);
 }
 
 .welcome-project-dropdown-item {

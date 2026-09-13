@@ -1,17 +1,19 @@
 "use client";
 
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useTranslation } from "@/hooks/useTranslation";
-import { ChevronDownIcon, FileIcon, FolderOpenIcon, NotePencilIcon } from "@/components/icons";
 import {
-  OptionPanel,
-  type OptionPanelItem,
-  useOptionPanelPlacement,
-} from "@/components/ui/OptionPanel";
+  ChevronDownIcon,
+  FileIcon,
+  FolderOpenIcon,
+  NotePencilIcon,
+  MagnifyingGlassIcon,
+  CheckIcon,
+} from "@/components/icons";
+import { DropdownMenu, type MenuAction } from "@/components/ui/DropdownMenu";
 import { ReferencesPanel } from "./ReferencesPanel";
-import { Button } from "@/components/ui/Button";
 
 interface SessionSelectorProps {
   selectedProject: { workingDirectory: string; projectName: string } | null;
@@ -53,47 +55,42 @@ export function SessionSelector({
   const { t, locale } = useTranslation();
   const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"threads" | "references">("threads");
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const { placement, maxListHeight } = useOptionPanelPlacement(isProjectDropdownOpen, dropdownRef);
+  const [projectSearch, setProjectSearch] = useState("");
 
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsProjectDropdownOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+  const closeProjectDropdown = useCallback(() => {
+    setIsProjectDropdownOpen(false);
+    setProjectSearch("");
   }, []);
 
   const handleSelectProject = (project: { workingDirectory: string; projectName: string }) => {
     onSelectProject(project);
-    setIsProjectDropdownOpen(false);
+    closeProjectDropdown();
     setActiveTab("threads");
   };
 
   const handleNewBlankProject = () => {
-    setIsProjectDropdownOpen(false);
+    closeProjectDropdown();
     onNewBlankProject();
   };
 
   const handleUseExistingFolder = () => {
-    setIsProjectDropdownOpen(false);
+    closeProjectDropdown();
     onUseExistingFolder();
   };
 
   const handleNewNoProjectSession = () => {
-    setIsProjectDropdownOpen(false);
+    closeProjectDropdown();
     onNewNoProjectSession?.();
   };
 
   const recentThreads = threads.slice(0, maxRecentThreads);
-  const projectItems: OptionPanelItem[] = projects.map((project) => ({
-    id: project.workingDirectory,
-    label: project.projectName,
-    description: project.workingDirectory,
-    searchText: `${project.projectName} ${project.workingDirectory}`,
-  }));
+  const filteredProjects = useMemo(() => {
+    const q = projectSearch.trim().toLocaleLowerCase();
+    if (!q) return projects;
+    return projects.filter((p) =>
+      `${p.projectName} ${p.workingDirectory}`.toLocaleLowerCase().includes(q)
+    );
+  }, [projects, projectSearch]);
 
   const formatDate = (timestamp: number): string => {
     const now = Date.now();
@@ -108,67 +105,124 @@ export function SessionSelector({
     return date.toLocaleDateString(localeStr, { month: "short", day: "numeric" });
   };
 
-  const projectSelector = (
-    <div className="welcome-project-selector" ref={dropdownRef}>
-      <button
-        className="welcome-project-dropdown-trigger"
-        onClick={() => setIsProjectDropdownOpen(!isProjectDropdownOpen)}
-        disabled={!isHydrated}
-      >
-        <span className="welcome-project-name">
-          {selectedProject?.projectName || t('chat.selectProject')}
-        </span>
-        <ChevronDownIcon size={14} />
-      </button>
-      {isProjectDropdownOpen && (
-        <OptionPanel
-          className={`welcome-project-dropdown option-panel--${placement}`}
-          title={t('chat.selectProject')}
-          items={projectItems}
-          selectedId={selectedProject?.workingDirectory}
-          onSelect={(item) => {
-            const project = projects.find(({ workingDirectory }) => workingDirectory === item.id);
-            if (project) handleSelectProject(project);
-          }}
-          onClose={() => setIsProjectDropdownOpen(false)}
-          maxListHeight={maxListHeight}
-          searchPlaceholder={t('project.searchProjects')}
-          emptyMessage={t('project.noProjectMatches')}
-          footer={
-            <div className="grid gap-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full justify-start px-2 text-left"
-                onClick={handleNewBlankProject}
-              >
-                <FileIcon size={14} className="text-[var(--muted)]" />
-                <span>{t('project.newBlankProject')}</span>
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full justify-start px-2 text-left"
-                onClick={handleUseExistingFolder}
-              >
-                <FolderOpenIcon size={14} className="text-[var(--muted)]" />
-                <span>{t('project.useExistingFolder')}</span>
-              </Button>
-              {onNewNoProjectSession && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="w-full justify-start px-2 text-left"
-                  onClick={handleNewNoProjectSession}
-                >
-                  <NotePencilIcon size={14} className="text-[var(--muted)]" />
-                  <span>{t('project.newNoProjectSession')}</span>
-                </Button>
-              )}
-            </div>
+  // Build the menu items: one entry per matching project (with a
+  // description for the working directory), then a divider + the three
+  // create/import actions. The leading search field is rendered in the
+  // DropdownMenu `header` slot — see `DropdownMenu.tsx` for why the host
+  // owns open state and must stop click propagation on the input.
+  const projectMenuItems: MenuAction[] = useMemo(() => {
+    const items: MenuAction[] = filteredProjects.map((project) => ({
+      kind: "action",
+      id: project.workingDirectory,
+      label: project.projectName,
+      description: project.workingDirectory,
+      iconLeft:
+        selectedProject?.workingDirectory === project.workingDirectory ? (
+          <CheckIcon size={12} />
+        ) : (
+          <span className="sidebar-project-menu-check" />
+        ),
+      onSelect: () => handleSelectProject(project),
+    }));
+    if (filteredProjects.length === 0 && projectSearch.trim()) {
+      items.push({
+        kind: "action",
+        id: "no-match",
+        label: t('project.noProjectMatches'),
+        disabled: true,
+        onSelect: () => undefined,
+      });
+    }
+    items.push({ kind: "divider", id: "project-actions-divider" });
+    items.push({
+      kind: "action",
+      id: "new-blank-project",
+      label: t('project.newBlankProject'),
+      iconLeft: <FileIcon size={14} />,
+      onSelect: handleNewBlankProject,
+    });
+    items.push({
+      kind: "action",
+      id: "use-existing-folder",
+      label: t('project.useExistingFolder'),
+      iconLeft: <FolderOpenIcon size={14} />,
+      onSelect: handleUseExistingFolder,
+    });
+    if (onNewNoProjectSession) {
+      items.push({
+        kind: "action",
+        id: "new-no-project-session",
+        label: t('project.newNoProjectSession'),
+        iconLeft: <NotePencilIcon size={14} />,
+        onSelect: handleNewNoProjectSession,
+      });
+    }
+    return items;
+    // t() is a stable hook reference; we depend on filteredProjects to
+    // refresh the list when the search query or projects change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredProjects, projectSearch, selectedProject?.workingDirectory, onNewNoProjectSession]);
+
+  const projectMenuHeader = (
+    <div
+      className="flex items-center gap-2"
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <MagnifyingGlassIcon size={12} style={{ color: "var(--muted)", flexShrink: 0 }} />
+      <input
+        autoFocus
+        type="text"
+        value={projectSearch}
+        onChange={(e) => setProjectSearch(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            closeProjectDropdown();
+          } else if (e.key === "Enter") {
+            e.preventDefault();
+            const first = filteredProjects[0];
+            if (first) handleSelectProject(first);
           }
-        />
-      )}
+        }}
+        placeholder={t('project.searchProjects')}
+        aria-label={t('project.searchProjects')}
+        className="bg-transparent border-0 outline-none text-xs"
+        style={{ color: "var(--text)", minWidth: 0 }}
+      />
+    </div>
+  );
+
+  const projectSelector = (
+    <div className="welcome-project-selector">
+      <DropdownMenu
+        trigger={
+          <button
+            type="button"
+            className="welcome-project-dropdown-trigger"
+            disabled={!isHydrated}
+          >
+            <span className="welcome-project-name">
+              {selectedProject?.projectName || t('chat.selectProject')}
+            </span>
+            <ChevronDownIcon size={14} />
+          </button>
+        }
+        items={projectMenuItems}
+        header={projectMenuHeader}
+        className="welcome-project-dropdown"
+        align="center"
+        minWidth={320}
+        maxWidth={400}
+        open={isProjectDropdownOpen}
+        onOpenChange={(open) => {
+          if (open) {
+            setIsProjectDropdownOpen(true);
+          } else {
+            closeProjectDropdown();
+          }
+        }}
+      />
     </div>
   );
 
