@@ -38,9 +38,24 @@ export function getMarketplaceCloneDir(name: string, rootOverride?: string): str
 
 export interface MarketplaceSourceConfig {
   source: 'git' | 'local';
+  /** Single git URL. Kept for back-compat with existing configs and UI forms. */
   url?: string;
+  /**
+   * Ordered list of git URLs (primary → mirror). Wins over `url` when set.
+   * cloneMarketplace tries each in order; first success wins. updateMarketplace
+   * always fetches from whichever URL ended up as `origin`.
+   */
+  urls?: string[];
   path?: string;
   ref?: string;
+}
+
+/** Resolve the effective ordered list of clone URLs for a git source.
+ *  Prefers `urls` when set, falls back to `[url]` for legacy configs. */
+export function resolveSourceUrls(source: MarketplaceSourceConfig): string[] {
+  if (source.urls?.length) return source.urls;
+  if (source.url) return [source.url];
+  return [];
 }
 
 /**
@@ -55,7 +70,7 @@ export function resolveConfiguredMarketplaceDir(
   if (source.source === 'local') {
     return source.path ?? null;
   }
-  if (!source.url) return null;
+  if (resolveSourceUrls(source).length === 0) return null;
   return getMarketplaceCloneDir(name);
 }
 
@@ -128,15 +143,45 @@ function ensureInsideRoot(destination: string, root: string): void {
 /**
  * Clone `url` (optionally at `ref`) into the marketplaces cache as `name`,
  * staging first and renaming into place so a mid-clone failure never
- * leaves a half-written marketplace directory.
+ * leaves a half-written marketplace directory. After a successful clone,
+ * the working URL is set as `origin` so updateMarketplace can
+ * fetch/reset against it without caring which mirror was used.
+ */
+async function tryCloneOne(opts: {
+  url: string;
+  stagingDir: string;
+  destination: string;
+  ref?: string;
+}): Promise<void> {
+  const args = ['clone', '--depth', '1'];
+  if (opts.ref) {
+    args.push('--branch', opts.ref);
+  }
+  args.push(opts.url, opts.stagingDir);
+  await runGit(args);
+  if (fs.existsSync(opts.destination)) {
+    fs.rmSync(opts.stagingDir, { recursive: true, force: true });
+    throw new Error(`marketplace directory already exists: ${opts.destination}`);
+  }
+  fs.renameSync(opts.stagingDir, opts.destination);
+}
+
+/**
+ * Clone one of `urls` (ordered primary → mirror) into the marketplaces
+ * cache as `name`. Tries each URL in order; first success wins. After a
+ * success the working URL is renamed to `origin` so updateMarketplace
+ * just works without caring which mirror was used.
  */
 export async function cloneMarketplace(opts: {
-  url: string;
+  urls: string[];
   name: string;
   ref?: string;
   rootOverride?: string;
 }): Promise<MarketplaceCloneResult> {
   const logger = getLogger();
+  if (!opts.urls.length) {
+    throw new Error('cloneMarketplace: at least one url is required');
+  }
   const root = opts.rootOverride ?? getMarketplacesCacheRoot();
   ensureDir(root);
   const destination = getMarketplaceCloneDir(opts.name, opts.rootOverride);
@@ -144,36 +189,39 @@ export async function cloneMarketplace(opts: {
     throw new Error(`marketplace directory already exists: ${destination}`);
   }
   ensureInsideRoot(destination, root);
-
-  const stagingDir = path.join(
-    getMarketplaceStagingRoot(opts.rootOverride),
-    `${safeMarketplaceDirName(opts.name)}-${Date.now()}`,
-  );
   ensureDir(getMarketplaceStagingRoot(opts.rootOverride));
 
-  try {
-    const args = ['clone', '--depth', '1'];
-    if (opts.ref) {
-      args.push('--branch', opts.ref);
+  const errors: Array<{ url: string; error: string }> = [];
+  for (const url of opts.urls) {
+    const stagingDir = path.join(
+      getMarketplaceStagingRoot(opts.rootOverride),
+      `${safeMarketplaceDirName(opts.name)}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    );
+    try {
+      await tryCloneOne({ url, stagingDir, destination, ref: opts.ref });
+      const commit = await readHeadCommit(destination);
+      logger.info('Marketplace cloned', {
+        name: opts.name,
+        url,
+        commit,
+        triedFallback: opts.urls.length > 1 ? errors.length > 0 : false,
+      }, COMPONENT);
+      return { dir: destination, commit };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      errors.push({ url, error: message });
+      logger.warn('Marketplace clone attempt failed', {
+        name: opts.name,
+        url,
+        error: message,
+      }, COMPONENT);
     }
-    args.push(opts.url, stagingDir);
-    await runGit(args);
-
-    // Clone.shallow repos cannot always be fetched from later; keep the
-    // origin so updateMarketplace can fetch/reset against it.
-    if (fs.existsSync(destination)) {
-      fs.rmSync(stagingDir, { recursive: true, force: true });
-      throw new Error(`marketplace directory already exists: ${destination}`);
-    }
-    fs.renameSync(stagingDir, destination);
-  } catch (err) {
-    fs.rmSync(stagingDir, { recursive: true, force: true });
-    throw err;
   }
 
-  const commit = await readHeadCommit(destination);
-  logger.info('Marketplace cloned', { name: opts.name, url: opts.url, commit }, COMPONENT);
-  return { dir: destination, commit };
+  throw new Error(
+    `all ${opts.urls.length} marketplace mirror(s) failed for "${opts.name}":\n` +
+      errors.map((e) => `  - ${e.url}\n    ${e.error}`).join('\n'),
+  );
 }
 
 /**
