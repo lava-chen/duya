@@ -1,0 +1,13 @@
+{
+  "servers": [
+    {
+      "name": "plans",
+      "transport": "stdio",
+      "command": "node",
+      "args": ["./server/plans-server.cjs"],
+      "nameOverride": "plans",
+      "startupTimeoutSec": 15,
+      "toolTimeoutSec": 15
+    }
+  ]
+}

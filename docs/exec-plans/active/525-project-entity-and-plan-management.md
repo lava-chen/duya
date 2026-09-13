@@ -260,10 +260,18 @@ updated: 2026-09-12
 
 ### Phase 4 — plan MCP 工具
 
-- [ ] 4.1 `packages/plugin-core/src/plugins/builtin/plans/server/` 实现 3 个工具
-- [ ] 4.2 走 plan 522 规划的 plugin manifest 路径:`plugins/builtin/plans/manifest.json` + `server/plans-server.cjs`
-- [ ] 4.3 单测:`plan_status` 按 projectId 过滤 / `plan_search` 跨 project / `plan_complete` 移动文件 + 改 index.json
-- [ ] 4.4 验证:跑通 dogfood — 用 plan 525 自身做测试对象
+> 2026-09-13: 落地为 builtin 插件 `packages/plugin-core/src/plugins/builtin/plans/`。
+> 与 522 设计的两处偏差:(1) MCP 声明用仓库现行约定 `mcp/servers.json`(非
+> capabilities.mcpServers);(2) **不做 esbuild bundle**——server 是零依赖手写
+> stdio JSON-RPC(`plans-server.cjs`)+ 存储层(`plans-core.cjs`),插件目录原样
+> 分发、node 直接跑,免去构建链与 ABI 问题。索引按 522 的"派生缓存"哲学:
+> 每次读全量重扫对账 index.json,直写文件天然被发现。
+> `projectId` 全部过 `^[a-zA-Z0-9_-]{1,64}$` 白名单后才碰文件系统。
+
+- [x] 4.1 3 个工具实现(`server/plans-core.cjs` 存储层 + `server/plans-server.cjs` MCP 线协议层)
+- [x] 4.2 插件封装:`.duya-plugin/plugin.json` + `mcp/servers.json`(stdio,`node ./server/plans-server.cjs`,相对路径按 pluginRoot 解析已由 resolve.ts 支持)
+- [x] 4.3 单测:`packages/plugin-core/tests/plugins/plans-tools.test.ts`(10 用例:status 过滤 / 跨 project 搜索 / complete 移动+frontmatter 改写 / 幂等与错误面 / 直写文件发现 / wire 协议)
+- [x] 4.4 dogfood:duya project(`e4e2b217`)真实根目录跑通 — 直写 `900-plans-plugin-dogfood.md` → 真实 spawn server 走 wire 协议 init/list/status/search → `plan_complete` 归档 → `plan_status` 复查为空
 
 ### Phase 5 — 文档 + 删除 plan 522
 
@@ -271,6 +279,40 @@ updated: 2026-09-12
 - [ ] 5.2 更新 `docs/exec-plans/README.md` 索引(522 → 525)
 - [ ] 5.3 `ARCHITECTURE.md` 增加 "Project 实体" + "Plans 文件目录" 两节
 - [ ] 5.4 `AGENTS.md` 增加 plans 目录约定(简要,不重复 plan 525 内容)
+
+### Phase 2.5 — renderer IPC 暴露(为下游 UI 铺路,非 UI 本体)
+
+> 2026-09-13: plan 530(多路径侧栏渲染)推进时发现 renderer
+> 完全读不到 `projects` 表 — `projectService.listProjects /
+> registerProject` 是 main 进程纯函数,没暴露 IPC。本 phase 在
+> **不违反 §1.3 "UI 任何形式不做" 边界**的前提下补这一缺口:
+> 只写 main 进程 IPC 通道 + preload 暴露,无 React 组件 / 无 CSS
+> / 无 hooks(hooks 在 plan 530 Phase 2)。
+
+- [ ] 2.5.1 新建 `electron/ipc/project-entity-handlers.ts`(参考 `project-database-handlers.ts` 模式):
+  - `ipcMain.handle('projects:list', ...)` → 调 `projectService.listProjects()`,返回 `ProjectRow[]`
+  - `ipcMain.handle('projects:get', (_, { projectId }) => ...)` → 单条查询(后续 plan 530 hook 用)
+  - `ipcMain.handle('projects:register', (_, input) => ...)` → 调 `registerProject`(已有纯函数,补 IPC 暴露)
+  - JSON 损坏容错: 读 `paths` 字段时 `parseProjectPaths` 失败降级为 `[]` 数组(与 §2.4 一致)
+  - 错误返回 `ProjectEntityError` 结构化错误码
+- [ ] 2.5.2 `electron/preload.ts` 暴露:
+  - `window.electronAPI.projects.list(): Promise<ProjectRow[]>`
+  - `window.electronAPI.projects.get(projectId: string): Promise<ProjectRow | null>`
+  - `window.electronAPI.projects.register(input: RegisterProjectInput): Promise<{ projectId: string }>`
+  - 与现有 `projectDatabase` 命名风格一致(小驼峰 + 嵌套对象)
+- [ ] 2.5.3 `electron/ipc/index.ts` 注册 `registerProjectEntityHandlers()`(在 `boot.json` 加载顺序中插在 plans 注册之后)
+- [ ] 2.5.4 单测: `electron/ipc/__tests__/project-entity-handlers.test.ts`
+  - 调真实 main 进程 `getMemoryDb()` + `registerProject` 写入测试数据,验证 IPC 返回
+  - `paths` 字段 JSON 损坏时 list/get 都降级为 `[]`,不抛
+  - `registerProject` paths 为空时抛 `ProjectEntityError{ code: 'EMPTY_PATHS' }`
+  - 用 `vi.hoisted` + `vi.mock` 模式(参照 `logger-handlers.test.ts`)
+- [ ] 2.5.5 Phase 2.5 完成判据: `npx vitest run electron/ipc/__tests__/project-entity-handlers.test.ts` 全绿,`npm run typecheck:all` 过
+
+**边界声明**(避免被误读为 UI):
+- 不写 React 组件
+- 不写 CSS
+- 不写 renderer hooks(`useProject` / `useActiveProjectId` 在 plan 530 Phase 2.1/2.2)
+- 不暴露 `paths` 字段的"在 renderer 端编辑"路径 — `registerProject` IPC 暴露只给"创建/更新 project"用,UI 层编辑等专门 plan
 
 ---
 
