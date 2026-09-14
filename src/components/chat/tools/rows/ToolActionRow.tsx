@@ -47,6 +47,7 @@ import { SessionToolRow } from './SessionToolRow';
 import { SkillToolRow } from './SkillToolRow';
 import { ModuleToolRow } from './ModuleToolRow';
 import { TaskToolRow } from './TaskToolRow';
+import { TodoToolRow } from './TodoToolRow';
 import { VisionToolRow } from './VisionToolRow';
 import { CanvasConductorToolRow } from './CanvasConductorToolRow';
 import { BrowserToolRow } from './BrowserToolRow';
@@ -149,6 +150,14 @@ const ROUTES: RouteEntry[] = [
     // subagent dispatch (handled above by SubAgent route).
     match: (t) => isTaskToolAction(t.input),
     render: (tool) => <TaskToolRow tool={tool} />,
+  },
+  {
+    // TodoTool (todo/todowrite) — manages an internal task list with
+    // `todos[] + merge` interface. Route to TodoToolRow so the chrome
+    // summary reads as natural language ("Created 3 todos") and the
+    // expanded card shows a styled checkbox todolist.
+    match: (t) => ['todo', 'todowrite'].includes(t.name.toLowerCase()),
+    render: (tool) => <TodoToolRow tool={tool} />,
   },
   {
     // MessageSession returns a plain-text response from the target

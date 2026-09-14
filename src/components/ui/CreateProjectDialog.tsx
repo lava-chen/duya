@@ -28,6 +28,7 @@ import {
   LightningIcon,
   PaperPlaneRightIcon,
   HouseIcon,
+  CheckCircleIcon,
 } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -137,6 +138,7 @@ export function CreateProjectDialog({ isOpen, onCancel, onConfirm, mode = "creat
   const { t } = useTranslation();
   const [name, setName] = useState("");
   const [paths, setPaths] = useState<string[]>([]);
+  const [primaryPathIndex, setPrimaryPathIndex] = useState(0);
   const [icon, setIcon] = useState<string | null>(DEFAULT_PROJECT_ICON);
   const [color, setColor] = useState<string | null>(null);
   const [pickingFolder, setPickingFolder] = useState(false);
@@ -151,6 +153,7 @@ export function CreateProjectDialog({ isOpen, onCancel, onConfirm, mode = "creat
     if (isOpen) {
       setName(mode === "edit" ? initial?.name ?? "" : "");
       setPaths(mode === "edit" ? [...(initial?.paths ?? [])] : []);
+      setPrimaryPathIndex(0); // paths[0] is always the canonical root in the backend
       setIcon(mode === "edit" ? initial?.icon ?? DEFAULT_PROJECT_ICON : DEFAULT_PROJECT_ICON);
       setColor(mode === "edit" ? initial?.color ?? null : null);
       setPickerOpen(false);
@@ -208,6 +211,18 @@ export function CreateProjectDialog({ isOpen, onCancel, onConfirm, mode = "creat
 
   const removePath = (p: string) => {
     setPaths((prev) => prev.filter((x) => x !== p));
+  };
+
+  /** Move the path at `fromIndex` to index 0, making it the canonical root. */
+  const setPrimaryPath = (fromIndex: number) => {
+    if (fromIndex === 0) return;
+    setPaths((prev) => {
+      const next = [...prev];
+      const [item] = next.splice(fromIndex, 1);
+      next.unshift(item);
+      return next;
+    });
+    setPrimaryPathIndex(0);
   };
 
   const handleConfirm = () => {
@@ -380,6 +395,23 @@ export function CreateProjectDialog({ isOpen, onCancel, onConfirm, mode = "creat
               >
                 {basename(p)}
               </span>
+              {idx === 0 ? (
+                <CheckCircleIcon
+                  size={14}
+                  style={{ color: "var(--accent)", flexShrink: 0 }}
+                  title={t("project.primaryFolder")}
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setPrimaryPath(idx)}
+                  title={t("project.setAsPrimary")}
+                  className="flex items-center justify-center rounded transition-colors hover:bg-[var(--surface-hover)]"
+                  style={{ width: 20, height: 20, color: "var(--muted)", flexShrink: 0 }}
+                >
+                  <StarIcon size={12} />
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => removePath(p)}
