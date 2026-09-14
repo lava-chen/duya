@@ -223,6 +223,49 @@ export function ensurePlansDirs(
   return { plansDir, activeDir, completedDir };
 }
 
+/**
+ * Best-effort reconciliation: ensure every project row in the core
+ * ProjectStore has a `plans/active/` + `plans/completed/` directory.
+ *
+ * Background — projects migrated in from the legacy
+ * `project_path_aliases` era (Plan 525 Phase 2.4) never went through
+ * `createProject`, so they exist as rows but lack `~/.duya/projects/<id>/`
+ * entirely. `updateProject` repairs a single project the first time the
+ * user edits it; this function repairs the rest in one shot.
+ *
+ * Semantics:
+ *   - Only projects whose plans dir is missing get a directory created.
+ *   - We do NOT touch `index.json` — projects that already have a real
+ *     plan index keep their existing entries.
+ *   - Errors are swallowed and logged; one bad project id must not
+ *     prevent the rest from being repaired.
+ *
+ * Designed to be called once from `projects:list` (fire-and-forget) so
+ * the renderer doesn't pay the disk-walk latency.
+ */
+export function reconcileProjectPlansDirs(opts?: ProjectServiceOptions): {
+  scanned: number;
+  repaired: number;
+  errors: string[];
+} {
+  const rows = store(opts).list();
+  let repaired = 0;
+  const errors: string[] = [];
+  for (const row of rows) {
+    try {
+      const dir = projectPlansDir(row.project_id, opts);
+      if (!fs.existsSync(dir)) {
+        ensurePlansDirs(row.project_id, opts);
+        repaired += 1;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      errors.push(`${row.project_id}: ${message}`);
+    }
+  }
+  return { scanned: rows.length, repaired, errors };
+}
+
 /** Write a project's plans/index.json (temp + rename, atomic single-writer). */
 export function writePlansIndex(
   projectId: string,
@@ -389,6 +432,17 @@ export function updateProject(
   if (Object.keys(resultPatch).length > 0) {
     s.update(projectId, resultPatch as Parameters<ProjectStore['update']>[1]);
   }
+  // Ensure the plans directory skeleton exists for every project that
+  // gets touched by an update. This is idempotent (mkdir recursive) and
+  // safe even when the project was migrated in from the legacy
+  // `project_path_aliases` era and never went through `createProject`
+  // (Plan 525 Phase 3 only ran `ensurePlansDirs` from `createProject`).
+  // The renderer surfaces projects that pre-date the plans-dir layout
+  // (no `~/.duya/projects/<id>/plans/`) and editing them via
+  // ProjectsView → 编辑项目 was a no-op for directory creation; this
+  // hook repairs that. We do NOT call `writePlansIndex` here — if a
+  // project already has real plans we'd overwrite them with `[]`.
+  ensurePlansDirs(projectId, opts);
   return s.get(projectId);
 }
 

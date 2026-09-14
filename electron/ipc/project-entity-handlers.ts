@@ -27,6 +27,7 @@ import {
   getProject,
   listProjects,
   projectPaths,
+  reconcileProjectPlansDirs,
   updateProject,
   MAX_PROJECT_PATH_LENGTH,
   type CreateProjectInput,
@@ -43,6 +44,38 @@ export interface ProjectRowDTO extends Omit<ProjectRow, 'paths'> {
 let registered = false;
 
 const logger = getLogger();
+
+/**
+ * Idempotent best-effort wrapper around `reconcileProjectPlansDirs`.
+ * Designed to be called from `projects:list` without blocking the
+ * renderer response. Errors are logged at WARN (not ERROR) because a
+ * reconciliation failure is never fatal — the next call retries it.
+ */
+let _reconcileInFlight = false;
+function reconcileProjectPlansDirsBestEffort(): void {
+  if (_reconcileInFlight) return;
+  _reconcileInFlight = true;
+  setImmediate(() => {
+    _reconcileInFlight = false;
+    try {
+      const result = reconcileProjectPlansDirs();
+      if (result.repaired > 0 || result.errors.length > 0) {
+        logger.warn(
+          `projects:list reconciliation scanned=${result.scanned} repaired=${result.repaired} errors=${result.errors.length}`,
+          undefined,
+          LogComponent.DB,
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(
+        `projects:list reconciliation failed: ${message}`,
+        undefined,
+        LogComponent.DB,
+      );
+    }
+  });
+}
 
 function toDTO(row: ProjectRow): ProjectRowDTO {
   return {
@@ -133,6 +166,14 @@ export function registerProjectEntityHandlers(): void {
   > => {
     try {
       const rows = listProjects();
+      // Fire-and-forget reconciliation — projects migrated from the
+      // legacy `project_path_aliases` era (Plan 525 Phase 2.4) have
+      // rows but no `~/.duya/projects/<id>/plans/` directory on disk.
+      // We repair them in the background so the renderer response is
+      // not blocked on a disk walk over every project. Subsequent
+      // `projects:list` calls after reconciliation finishes become
+      // no-ops (idempotent existsSync check).
+      void reconcileProjectPlansDirsBestEffort();
       return { success: true, projects: rows.map(toDTO) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
