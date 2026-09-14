@@ -371,6 +371,15 @@ html:hover {
   background: rgba(255, 255, 255, 0.22);
 }
 
+/* Scrollbar hide utility - hides scrollbar while keeping scroll functionality */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
 /* Slash command menu row hover — fallback for keyboards that miss mouseenter.
    !important needed so the rule beats inline backgroundColor:'transparent'
    used by sub-view rows (thinking/style/mcp) when not active. */
