@@ -224,8 +224,50 @@ export function ensurePlansDirs(
 }
 
 /**
+ * Idempotently seed an empty `plans/index.json` for a project. Skips
+ * when the file already exists so we never overwrite a real plan
+ * index. Used by `ensureProjectPlansSkeleton` for projects that need
+ * a complete skeleton (e.g. legacy rows repaired by `updateProject`
+ * or `reconcileProjectPlansDirs`).
+ */
+export function ensurePlansIndex(
+  projectId: string,
+  opts?: ProjectServiceOptions
+): { indexPath: string; written: boolean } {
+  const plansDir = projectPlansDir(projectId, opts);
+  const indexPath = path.join(plansDir, 'index.json');
+  if (fs.existsSync(indexPath)) {
+    return { indexPath, written: false };
+  }
+  writePlansIndex(projectId, [], opts);
+  return { indexPath, written: true };
+}
+
+/**
+ * Combined "first-time setup" for a project's plans storage:
+ *   - `ensurePlansDirs`:  mkdir plans/active + plans/completed
+ *   - `ensurePlansIndex`: write empty `plans/index.json` if absent
+ *
+ * Idempotent. Used both for freshly-created projects (from
+ * `createProject`) and for legacy projects that get repaired in place
+ * via `updateProject` / `reconcileProjectPlansDirs`. AGENTS.md is NOT
+ * touched here because the placeholder template needs a project name
+ * and canonical root that legacy migration rows may not have — that
+ * stays in `createProject`'s explicit `ensureProjectAgentsMd` call.
+ */
+export function ensureProjectPlansSkeleton(
+  projectId: string,
+  opts?: ProjectServiceOptions
+): { plansDir: string; indexWritten: boolean } {
+  const { plansDir } = ensurePlansDirs(projectId, opts);
+  const { written: indexWritten } = ensurePlansIndex(projectId, opts);
+  return { plansDir, indexWritten };
+}
+
+/**
  * Best-effort reconciliation: ensure every project row in the core
- * ProjectStore has a `plans/active/` + `plans/completed/` directory.
+ * ProjectStore has a complete plans skeleton
+ * (`plans/active/` + `plans/completed/` + `plans/index.json`).
  *
  * Background — projects migrated in from the legacy
  * `project_path_aliases` era (Plan 525 Phase 2.4) never went through
@@ -234,10 +276,13 @@ export function ensurePlansDirs(
  * user edits it; this function repairs the rest in one shot.
  *
  * Semantics:
- *   - Only projects whose plans dir is missing get a directory created.
- *   - We do NOT touch `index.json` — projects that already have a real
- *     plan index keep their existing entries.
- *   - Errors are swallowed and logged; one bad project id must not
+ *   - Only projects whose plans dir is missing get any directory or
+ *     file created. Projects that already have a plans dir (and
+ *     possibly a real `index.json`) are left untouched.
+ *   - `ensureProjectPlansSkeleton` is idempotent: it writes an empty
+ *     `index.json` only when the file is absent, so projects that
+ *     already have a real plan index keep their entries.
+ *   - Errors are swallowed and recorded; one bad project id must not
  *     prevent the rest from being repaired.
  *
  * Designed to be called once from `projects:list` (fire-and-forget) so
@@ -246,24 +291,27 @@ export function ensurePlansDirs(
 export function reconcileProjectPlansDirs(opts?: ProjectServiceOptions): {
   scanned: number;
   repaired: number;
+  indexSeeded: number;
   errors: string[];
 } {
   const rows = store(opts).list();
   let repaired = 0;
+  let indexSeeded = 0;
   const errors: string[] = [];
   for (const row of rows) {
     try {
       const dir = projectPlansDir(row.project_id, opts);
       if (!fs.existsSync(dir)) {
-        ensurePlansDirs(row.project_id, opts);
+        const result = ensureProjectPlansSkeleton(row.project_id, opts);
         repaired += 1;
+        if (result.indexWritten) indexSeeded += 1;
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       errors.push(`${row.project_id}: ${message}`);
     }
   }
-  return { scanned: rows.length, repaired, errors };
+  return { scanned: rows.length, repaired, indexSeeded, errors };
 }
 
 /** Write a project's plans/index.json (temp + rename, atomic single-writer). */
@@ -380,8 +428,7 @@ export function createProject(input: CreateProjectInput, opts?: ProjectServiceOp
     color: input.color ?? null,
   });
 
-  ensurePlansDirs(row.project_id, opts);
-  writePlansIndex(row.project_id, [], opts);
+  ensureProjectPlansSkeleton(row.project_id, opts);
   ensureProjectAgentsMd(row.project_id, { projectName: input.name, canonicalRoot }, opts);
 
   return row;
@@ -433,16 +480,17 @@ export function updateProject(
     s.update(projectId, resultPatch as Parameters<ProjectStore['update']>[1]);
   }
   // Ensure the plans directory skeleton exists for every project that
-  // gets touched by an update. This is idempotent (mkdir recursive) and
-  // safe even when the project was migrated in from the legacy
-  // `project_path_aliases` era and never went through `createProject`
-  // (Plan 525 Phase 3 only ran `ensurePlansDirs` from `createProject`).
-  // The renderer surfaces projects that pre-date the plans-dir layout
-  // (no `~/.duya/projects/<id>/plans/`) and editing them via
+  // gets touched by an update. This is idempotent and safe even when
+  // the project was migrated in from the legacy `project_path_aliases`
+  // era and never went through `createProject` (Plan 525 Phase 3 only
+  // ran `ensurePlansDirs` from `createProject`). The renderer surfaces
+  // projects that pre-date the plans-dir layout (no
+  // `~/.duya/projects/<id>/plans/`) and editing them via
   // ProjectsView → 编辑项目 was a no-op for directory creation; this
-  // hook repairs that. We do NOT call `writePlansIndex` here — if a
-  // project already has real plans we'd overwrite them with `[]`.
-  ensurePlansDirs(projectId, opts);
+  // hook repairs that. `ensureProjectPlansSkeleton` is safe for
+  // projects that already have a real plan index because the index
+  // writer is gated by `existsSync(index.json)`.
+  ensureProjectPlansSkeleton(projectId, opts);
   return s.get(projectId);
 }
 

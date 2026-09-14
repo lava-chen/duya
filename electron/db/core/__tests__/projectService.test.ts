@@ -1,6 +1,7 @@
 /**
  * projectService.test.ts — Plans-directory side-effects of
- * `createProject` / `updateProject` / `reconcileProjectPlansDirs`.
+ * `createProject` / `updateProject` / `reconcileProjectPlansDirs` /
+ * `ensureProjectPlansSkeleton`.
  *
  * Plan 525 Phase 3 puts the projects table on the core store and ties
  * its lifecycle to a `~/.duya/projects/<id>/plans/` skeleton. Projects
@@ -8,14 +9,17 @@
  * never went through `createProject`, so they exist as rows but have
  * no plans directory. The renderer exposes them anyway and used to
  * leave them without a directory after 编辑项目 — this suite pins the
- * three guarantees:
+ * four guarantees:
  *
- *   1. `createProject` still creates the plans skeleton (regression).
- *   2. `updateProject` creates the plans skeleton when the project
- *      does not yet have one — but never overwrites an existing
+ *   1. `createProject` still creates the full plans skeleton
+ *      (regression).
+ *   2. `updateProject` creates the full plans skeleton for legacy
+ *      projects that lack one — but never overwrites a pre-existing
  *      `plans/index.json`.
  *   3. `reconcileProjectPlansDirs` repairs every project whose plans
  *      dir is missing and is a no-op when all dirs already exist.
+ *   4. `ensureProjectPlansSkeleton` is idempotent and safe to call
+ *      twice on the same project.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
@@ -26,6 +30,7 @@ import { ProjectStore, parseProjectPaths, serializeProjectPaths } from '../proje
 import {
   createProject,
   ensurePlansDirs,
+  ensureProjectPlansSkeleton,
   readPlansIndex,
   reconcileProjectPlansDirs,
   updateProject,
@@ -89,7 +94,7 @@ describe('projectService — plans dir lifecycle', () => {
     expect(index.plans).toEqual([]);
   });
 
-  it('updateProject repairs plans dir for a legacy project that lacks one', () => {
+  it('updateProject repairs the full plans skeleton for a legacy project', () => {
     // Seed a row that mimics Phase 2.4 migration output (no plans dir).
     seedLegacyProject('legacy-1', 'E:/Projects/legacy-1');
     expect(fs.existsSync(path.join(projectsRoot, 'legacy-1'))).toBe(false);
@@ -102,11 +107,16 @@ describe('projectService — plans dir lifecycle', () => {
     expect(updated).not.toBeNull();
     expect(updated!.name).toBe('Legacy 1');
 
-    // plans/active + plans/completed must now exist.
+    // Full skeleton must now exist: plans/, plans/active/, plans/completed/, plans/index.json.
+    expect(fs.existsSync(path.join(projectsRoot, 'legacy-1', 'plans'))).toBe(true);
     expect(fs.existsSync(path.join(projectsRoot, 'legacy-1', 'plans', 'active'))).toBe(true);
     expect(fs.existsSync(path.join(projectsRoot, 'legacy-1', 'plans', 'completed'))).toBe(true);
-    // We did NOT call writePlansIndex, so index.json must be absent.
-    expect(fs.existsSync(path.join(projectsRoot, 'legacy-1', 'plans', 'index.json'))).toBe(false);
+    expect(fs.existsSync(path.join(projectsRoot, 'legacy-1', 'plans', 'index.json'))).toBe(true);
+
+    // The seeded index.json must be a well-formed empty index for this project.
+    const index = readPlansIndex('legacy-1', opts());
+    expect(index.projectId).toBe('legacy-1');
+    expect(index.plans).toEqual([]);
   });
 
   it('updateProject does NOT overwrite an existing plans/index.json', () => {
@@ -145,7 +155,7 @@ describe('projectService — plans dir lifecycle', () => {
     expect(fs.existsSync(path.join(projectsRoot, 'does-not-exist'))).toBe(false);
   });
 
-  it('reconcileProjectPlansDirs repairs every project lacking a plans dir', () => {
+  it('reconcileProjectPlansDirs repairs every project lacking a plans dir + seeds empty index.json', () => {
     // 3 legacy projects, no plans dirs on disk.
     seedLegacyProject('legacy-a', 'E:/A');
     seedLegacyProject('legacy-b', 'E:/B');
@@ -154,11 +164,19 @@ describe('projectService — plans dir lifecycle', () => {
     const report = reconcileProjectPlansDirs(opts());
     expect(report.scanned).toBe(3);
     expect(report.repaired).toBe(3);
+    expect(report.indexSeeded).toBe(3);
     expect(report.errors).toEqual([]);
 
     for (const id of ['legacy-a', 'legacy-b', 'legacy-c']) {
+      // Full skeleton must exist after reconciliation.
       expect(fs.existsSync(path.join(projectsRoot, id, 'plans', 'active'))).toBe(true);
       expect(fs.existsSync(path.join(projectsRoot, id, 'plans', 'completed'))).toBe(true);
+      expect(fs.existsSync(path.join(projectsRoot, id, 'plans', 'index.json'))).toBe(true);
+
+      // Seeded index.json must be a well-formed empty index for the project.
+      const index = readPlansIndex(id, opts());
+      expect(index.projectId).toBe(id);
+      expect(index.plans).toEqual([]);
     }
   });
 
@@ -190,6 +208,58 @@ describe('projectService — plans dir lifecycle', () => {
     ensurePlansDirs('idempotent-id', opts());
     expect(fs.existsSync(path.join(projectsRoot, 'idempotent-id', 'plans', 'active'))).toBe(true);
     expect(fs.existsSync(path.join(projectsRoot, 'idempotent-id', 'plans', 'completed'))).toBe(true);
+  });
+
+  it('ensureProjectPlansSkeleton creates the full skeleton on first call and is idempotent after', () => {
+    const first = ensureProjectPlansSkeleton('skel-id', opts());
+    expect(first.plansDir).toBe(path.join(projectsRoot, 'skel-id', 'plans'));
+    expect(first.indexWritten).toBe(true);
+    expect(fs.existsSync(path.join(projectsRoot, 'skel-id', 'plans', 'active'))).toBe(true);
+    expect(fs.existsSync(path.join(projectsRoot, 'skel-id', 'plans', 'completed'))).toBe(true);
+    expect(fs.existsSync(path.join(projectsRoot, 'skel-id', 'plans', 'index.json'))).toBe(true);
+
+    // Capture the index.json content before the second call so we can
+    // detect any silent overwrite.
+    const indexBefore = fs.readFileSync(
+      path.join(projectsRoot, 'skel-id', 'plans', 'index.json'),
+      'utf8',
+    );
+
+    const second = ensureProjectPlansSkeleton('skel-id', opts());
+    expect(second.indexWritten).toBe(false);
+    const indexAfter = fs.readFileSync(
+      path.join(projectsRoot, 'skel-id', 'plans', 'index.json'),
+      'utf8',
+    );
+    expect(indexAfter).toBe(indexBefore);
+  });
+
+  it('ensureProjectPlansSkeleton does NOT overwrite a real plans/index.json', () => {
+    // Seed a project via createProject (which now also goes through
+    // ensureProjectPlansSkeleton), then write a real plan entry.
+    const row = createProject({ name: 'real', paths: [{ path: 'E:/real' }] }, opts());
+    writePlansIndex(
+      row.project_id,
+      [
+        {
+          id: 7,
+          slug: 'real-plan',
+          title: 'Real plan',
+          status: 'active',
+          file: 'active/7-real-plan.md',
+          created: '2026-09-14',
+          updated: '2026-09-14',
+        },
+      ],
+      opts(),
+    );
+
+    // Re-running the skeleton must not touch the existing index.
+    const result = ensureProjectPlansSkeleton(row.project_id, opts());
+    expect(result.indexWritten).toBe(false);
+    const index = readPlansIndex(row.project_id, opts());
+    expect(index.plans).toHaveLength(1);
+    expect(index.plans[0].slug).toBe('real-plan');
   });
 
   it('parseProjectPaths / serializeProjectPaths round-trip the seeded legacy row', () => {

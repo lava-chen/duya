@@ -61,7 +61,7 @@ function reconcileProjectPlansDirsBestEffort(): void {
       const result = reconcileProjectPlansDirs();
       if (result.repaired > 0 || result.errors.length > 0) {
         logger.warn(
-          `projects:list reconciliation scanned=${result.scanned} repaired=${result.repaired} errors=${result.errors.length}`,
+          `projects:list reconciliation scanned=${result.scanned} repaired=${result.repaired} indexSeeded=${result.indexSeeded} errors=${result.errors.length}`,
           undefined,
           LogComponent.DB,
         );
