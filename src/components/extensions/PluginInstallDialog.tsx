@@ -33,6 +33,7 @@ import { cn } from "@/lib/utils";
 import { getPluginAPI } from "@/lib/plugin-ipc";
 import { getAppConnectionAPI } from "@/lib/app-connection-ipc";
 import { dispatchPrefillChatInput } from "@/lib/prefill-chat-input-event";
+import { useAssetUrl } from "@/lib/asset-url";
 import type { PluginCatalogEntry, PluginCapabilityDisplay } from "@/lib/plugin-types";
 import type {
   AppConnectionProviderDTO,
@@ -253,12 +254,7 @@ export function PluginInstallDialog({
           className="flex shrink-0 items-center justify-center rounded-[10px] overflow-hidden"
           style={{ width: 56, height: 56 }}
         >
-          <img
-            src="/icon.png"
-            alt="DUYA"
-            draggable={false}
-            className="h-full w-full object-cover"
-          />
+          <AppIcon />
         </div>
         {connectable && provider && (
           <>
@@ -447,4 +443,33 @@ function CapabilityTypeIcon({
   if (type === "tool") return <WrenchIcon size={size} className={cls} />;
   if (type === "cli") return <TerminalIcon size={size} className={cls} />;
   return null;
+}
+
+/**
+ * App icon shown in the install dialog hero. Resolves the bundled
+ * `public/icon.png` to a `duya-file://` URL via the main process so the
+ * image renders in both dev and packaged builds — a bare `/icon.png`
+ * silently 404s once the renderer is loaded from
+ * `file://.../app.asar/dist/index.html`. While the IPC round-trip is in
+ * flight, or when the asset is missing, we render a neutral monogram
+ * tile so the dialog layout never shifts.
+ */
+function AppIcon() {
+  const url = useAssetUrl("appIcon");
+  const ready = typeof url === "string" && url.length > 0;
+  return ready ? (
+    <img
+      src={url}
+      alt="DUYA"
+      draggable={false}
+      className="h-full w-full object-cover"
+    />
+  ) : (
+    <span
+      aria-hidden
+      className="flex h-full w-full items-center justify-center bg-[var(--surface-hover)] text-sm font-semibold text-muted-foreground"
+    >
+      D
+    </span>
+  );
 }

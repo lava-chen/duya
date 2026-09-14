@@ -417,4 +417,57 @@ export function registerSystemHandlers(): void {
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     };
   });
+
+  // Resolve a named bundled asset to a `duya-file://` URL the renderer can
+  // load as an `<img src=...>`. Replaces bare `/icon.png` references that
+  // only resolve under Vite's dev server — packaged builds load
+  // `file://.../app.asar/dist/index.html`, where `/icon.png` would point
+  // at the disk root and 404 silently. The protocol handler in main.ts
+  // already serves these URLs (same scheme used by agent avatars and
+  // conductor-assets), so renderer + Electron round-trip stays in-band.
+  //
+  // Known asset names:
+  //   - `appIcon`            — public/icon.png (splash, install dialog hero)
+  //   - `appIconSquare`      — assets/square.png if present
+  ipcMain.handle(
+    'app:get-asset-url',
+    (_event, name: 'appIcon' | 'appIconSquare' | string): string | null => {
+      const candidates: Record<string, { dev: string[]; prod: string[] }> = {
+        appIcon: {
+          dev: [
+            path.join(app.getAppPath(), 'public', 'icon.png'),
+            path.join(app.getAppPath(), 'dist', 'icon.png'),
+          ],
+          prod: [
+            // Packaged: public/* is copied to resources/public/ via
+            // electron-builder.yml extraResources.
+            path.join(process.resourcesPath, 'public', 'icon.png'),
+            // Fallback: bundled inside dist/ via Vite's publicDir copy.
+            path.join(process.resourcesPath, 'app.asar', 'dist', 'icon.png'),
+          ],
+        },
+        appIconSquare: {
+          dev: [
+            path.join(app.getAppPath(), 'public', 'icon-square.png'),
+          ],
+          prod: [
+            path.join(process.resourcesPath, 'public', 'icon-square.png'),
+            path.join(process.resourcesPath, 'app.asar', 'dist', 'icon-square.png'),
+          ],
+        },
+      };
+      const entry = candidates[name];
+      if (!entry) return null;
+      const pool = isDev ? entry.dev : entry.prod;
+      for (const candidate of pool) {
+        if (fs.existsSync(candidate)) {
+          // Forward-slash separators work on all platforms; the duya-file
+          // protocol handler in main.ts normalizes them back to the OS
+          // separator before readFile.
+          return `duya-file:///${candidate.replace(/\\/g, '/')}`;
+        }
+      }
+      return null;
+    },
+  );
 }

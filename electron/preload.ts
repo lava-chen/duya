@@ -1159,6 +1159,15 @@ export interface ElectronAPI {
     getDefaultWorkspace: () => Promise<string>
     getNoProjectWorkspace: () => Promise<string>
     createProjectFolder: (projectName: string) => Promise<{ success: boolean; error: string; path: string }>
+    /**
+     * Resolve a named bundled asset to a `duya-file://` URL the renderer
+     * can load as an `<img src=...>`. Returns `null` when the asset is
+     * unknown or the file is missing. Used by the splash screen and the
+     * install dialog hero — both reference `public/icon.png`, which is
+     * not reachable via bare `/icon.png` once the renderer is loaded
+     * from `file://.../app.asar/dist/index.html`.
+     */
+    getAssetUrl: (name: 'appIcon' | 'appIconSquare' | string) => Promise<string | null>
   }
   system: {
     getLocation: () => Promise<{
@@ -1910,6 +1919,16 @@ const electronAPI: ElectronAPI = {
     getDefaultWorkspace: () => ipcRenderer.invoke('app:get-default-workspace'),
     getNoProjectWorkspace: () => ipcRenderer.invoke('app:get-no-project-workspace'),
     createProjectFolder: (projectName: string) => ipcRenderer.invoke('app:create-project-folder', projectName),
+    /**
+     * Resolve a named bundled asset (e.g. the splash / install-dialog
+     * icon) to a `duya-file://` URL that works in both dev and packaged
+     * builds. Replaces bare `/icon.png` references that 404 under
+     * `file://.../app.asar/dist/index.html`. Returns `null` when the
+     * asset name is unknown or the file is missing — callers fall back
+     * to a letter monogram (see `CardIcon`).
+     */
+    getAssetUrl: (name: 'appIcon' | 'appIconSquare' | string) =>
+      ipcRenderer.invoke('app:get-asset-url', name) as Promise<string | null>,
   },
   system: {
     getLocation: () => ipcRenderer.invoke('system:get-location'),
