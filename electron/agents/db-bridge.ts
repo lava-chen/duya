@@ -229,6 +229,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
   if (!db) {
     throw new Error('Database not initialized');
   }
+  const { research } = getCoreStores();
 
   const p = payload as Record<string, unknown>;
   const now = Date.now();
@@ -1888,85 +1889,63 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
 
     // ==================== Research Session actions (Plan 60 - Research Mode) ====================
     case 'researchSession:create': {
-      db.prepare(`
-        INSERT INTO research_sessions (
-          id, session_id, original_query, clarification, context_json,
-          status, current_phase, iterations, coverage, created_at, updated_at,
-          title, run_status, plan_version, active_step_id, progress_summary, completed_at, error_json
-        ) VALUES (?, ?, ?, ?, ?, ?, 'idle', 0, 0, ?, ?, ?, ?, 0, NULL, NULL, NULL, NULL)
-      `).run(
-        p.id, p.session_id, p.original_query, p.clarification || null,
-        p.context_json, p.status || 'active', now, now,
-        p.title || null, p.run_status || null
-      );
-      return db.prepare('SELECT * FROM research_sessions WHERE id = ?').get(p.id);
+      return research.createSession({
+        id: p.id as string,
+        sessionId: p.session_id as string,
+        originalQuery: p.original_query as string,
+        clarification: p.clarification as string | null,
+        contextJson: p.context_json as string,
+        status: p.status as string,
+        title: p.title as string | null,
+        runStatus: p.run_status as string | null,
+      });
     }
 
     case 'researchSession:get': {
-      return db.prepare('SELECT * FROM research_sessions WHERE id = ?').get(p.id);
+      return research.getSession(p.id as string);
     }
 
     case 'researchSession:getBySessionId': {
-      return db.prepare(
-        'SELECT * FROM research_sessions WHERE session_id = ? ORDER BY created_at DESC LIMIT 1'
-      ).get(p.sessionId);
+      return research.getSessionBySessionId(p.sessionId as string);
     }
 
     case 'researchSession:update': {
       const id = p.id as string;
-      const now = Date.now();
-      const fields: string[] = ['updated_at = ?'];
-      const params: unknown[] = [now];
-
-      if (p.clarification !== undefined) { fields.push('clarification = ?'); params.push(p.clarification); }
-      if (p.context_json !== undefined) { fields.push('context_json = ?'); params.push(p.context_json); }
-      if (p.status !== undefined) { fields.push('status = ?'); params.push(p.status); }
-      if (p.current_phase !== undefined) { fields.push('current_phase = ?'); params.push(p.current_phase); }
-      if (p.iterations !== undefined) { fields.push('iterations = ?'); params.push(p.iterations); }
-      if (p.coverage !== undefined) { fields.push('coverage = ?'); params.push(p.coverage); }
-      if (p.title !== undefined) { fields.push('title = ?'); params.push(p.title); }
-      if (p.run_status !== undefined) { fields.push('run_status = ?'); params.push(p.run_status); }
-      if (p.plan_version !== undefined) { fields.push('plan_version = ?'); params.push(p.plan_version); }
-      if (p.active_step_id !== undefined) { fields.push('active_step_id = ?'); params.push(p.active_step_id); }
-      if (p.progress_summary !== undefined) { fields.push('progress_summary = ?'); params.push(p.progress_summary); }
-      if (p.completed_at !== undefined) { fields.push('completed_at = ?'); params.push(p.completed_at); }
-      if (p.error_json !== undefined) { fields.push('error_json = ?'); params.push(p.error_json); }
-      params.push(id);
-
-      db.prepare(`UPDATE research_sessions SET ${fields.join(', ')} WHERE id = ?`).run(...params);
-      return db.prepare('SELECT * FROM research_sessions WHERE id = ?').get(id);
+      const patch: Parameters<typeof research.updateSession>[1] = {};
+      if (p.clarification !== undefined) patch.clarification = p.clarification as string | null;
+      if (p.context_json !== undefined) patch.contextJson = p.context_json as string;
+      if (p.status !== undefined) patch.status = p.status as string;
+      if (p.current_phase !== undefined) patch.currentPhase = p.current_phase as string;
+      if (p.iterations !== undefined) patch.iterations = p.iterations as number;
+      if (p.coverage !== undefined) patch.coverage = p.coverage as number;
+      if (p.title !== undefined) patch.title = p.title as string | null;
+      if (p.run_status !== undefined) patch.runStatus = p.run_status as string | null;
+      if (p.plan_version !== undefined) patch.planVersion = p.plan_version as number;
+      if (p.active_step_id !== undefined) patch.activeStepId = p.active_step_id as string | null;
+      if (p.progress_summary !== undefined) patch.progressSummary = p.progress_summary as string | null;
+      if (p.completed_at !== undefined) patch.completedAt = p.completed_at as number | null;
+      if (p.error_json !== undefined) patch.errorJson = p.error_json as string | null;
+      return research.updateSession(id, patch);
     }
 
     case 'researchSession:delete': {
-      const result = db.prepare('DELETE FROM research_sessions WHERE id = ?').run(p.id);
-      return { success: result.changes > 0 };
+      return { success: research.deleteSession(p.id as string) };
     }
 
     case 'researchSession:list': {
-      const limit = (p.limit as number) || 100;
-      return db.prepare('SELECT * FROM research_sessions ORDER BY updated_at DESC LIMIT ?').all(limit);
+      return research.listSessions(p.limit as number);
     }
 
     case 'researchSession:listByStatus': {
-      return db.prepare(
-        'SELECT * FROM research_sessions WHERE status = ? ORDER BY updated_at DESC'
-      ).all(p.status);
+      return research.listSessionsByStatus(p.status as string);
     }
 
     case 'researchSession:getActiveRun': {
-      return db.prepare(
-        `SELECT * FROM research_sessions
-         WHERE session_id = ? AND run_status IN ('planning', 'awaiting_approval', 'running', 'paused', 'synthesizing')
-         ORDER BY created_at DESC LIMIT 1`
-      ).get(p.sessionId);
+      return research.getActiveRun(p.sessionId as string);
     }
 
     case 'researchSession:listActiveRuns': {
-      return db.prepare(
-        `SELECT * FROM research_sessions
-         WHERE run_status IN ('planning', 'awaiting_approval', 'running', 'paused', 'synthesizing')
-         ORDER BY updated_at DESC`
-      ).all();
+      return research.listActiveRuns();
     }
 
     // ==================== Research Plan Steps ====================
@@ -1979,592 +1958,342 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         user_facing_label: string;
         internal_question_ids: string[];
       }>;
-      const stmt = db.prepare(`
-        INSERT OR REPLACE INTO research_plan_steps (id, run_id, order_num, user_facing_label, internal_question_ids, status)
-        VALUES (?, ?, ?, ?, ?, 'pending')
-      `);
-      const txn = db.transaction(() => {
-        for (const step of steps) {
-          stmt.run(step.id, runId, step.order_num, step.user_facing_label, JSON.stringify(step.internal_question_ids));
-        }
-      });
-      txn();
-      return db.prepare('SELECT * FROM research_plan_steps WHERE run_id = ? ORDER BY order_num ASC').all(runId);
+      return research.createSteps(runId, steps.map(s => ({
+        id: s.id,
+        orderNum: s.order_num,
+        userFacingLabel: s.user_facing_label,
+        internalQuestionIds: s.internal_question_ids,
+      })));
     }
 
     case 'researchPlanStep:getByRunId': {
-      return db.prepare('SELECT * FROM research_plan_steps WHERE run_id = ? ORDER BY order_num ASC').all(p.runId);
+      return research.getPlanStepsByRunId(p.runId as string);
     }
 
     case 'researchPlanStep:update': {
       const stepId = p.stepId as string;
-      const fields: string[] = [];
-      const params: unknown[] = [];
-      if (p.status !== undefined) { fields.push('status = ?'); params.push(p.status); }
-      if (p.started_at !== undefined) { fields.push('started_at = ?'); params.push(p.started_at); }
-      if (p.completed_at !== undefined) { fields.push('completed_at = ?'); params.push(p.completed_at); }
-      if (fields.length === 0) return null;
-      params.push(stepId);
-      db.prepare(`UPDATE research_plan_steps SET ${fields.join(', ')} WHERE id = ?`).run(...params);
-      return db.prepare('SELECT * FROM research_plan_steps WHERE id = ?').get(stepId);
+      const patch: Parameters<typeof research.updatePlanStep>[1] = {};
+      if (p.status !== undefined) patch.status = p.status as string;
+      if (p.started_at !== undefined) patch.startedAt = p.started_at as number | null;
+      if (p.completed_at !== undefined) patch.completedAt = p.completed_at as number | null;
+      return research.updatePlanStep(stepId, patch);
     }
 
     case 'researchPlanStep:deleteByRunId': {
-      return db.prepare('DELETE FROM research_plan_steps WHERE run_id = ?').run(p.runId);
+      research.deletePlanStepsByRunId(p.runId as string);
+      return undefined;
     }
 
     // ==================== Research Activities ====================
 
     case 'researchActivity:create': {
-      const now = Date.now();
-      db.prepare(`
-        INSERT INTO research_activities (id, run_id, sequence, kind, title, detail, visibility, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(p.id, p.run_id, p.sequence, p.kind, p.title, p.detail || null, p.visibility || 'user', now);
-      return db.prepare('SELECT * FROM research_activities WHERE id = ?').get(p.id);
+      return research.createActivity({
+        id: p.id as string,
+        runId: p.run_id as string,
+        sequence: p.sequence as number,
+        kind: p.kind as string,
+        title: p.title as string,
+        detail: p.detail as string | null,
+        visibility: p.visibility as string,
+      });
     }
 
     case 'researchActivity:getByRunId': {
-      const runId = p.runId as string;
-      const visibility = p.visibility as string | undefined;
-      const limit = (p.limit as number) || 200;
-      const afterSequence = p.afterSequence as number | undefined;
-
-      if (visibility) {
-        if (afterSequence !== undefined) {
-          return db.prepare(
-            'SELECT * FROM research_activities WHERE run_id = ? AND visibility = ? AND sequence > ? ORDER BY sequence ASC LIMIT ?'
-          ).all(runId, visibility, afterSequence, limit);
-        }
-        return db.prepare(
-          'SELECT * FROM research_activities WHERE run_id = ? AND visibility = ? ORDER BY sequence ASC LIMIT ?'
-        ).all(runId, visibility, limit);
-      }
-      if (afterSequence !== undefined) {
-        return db.prepare(
-          'SELECT * FROM research_activities WHERE run_id = ? AND sequence > ? ORDER BY sequence ASC LIMIT ?'
-        ).all(runId, afterSequence, limit);
-      }
-      return db.prepare(
-        'SELECT * FROM research_activities WHERE run_id = ? ORDER BY sequence ASC LIMIT ?'
-      ).all(runId, limit);
+      return research.getActivitiesByRunId(p.runId as string, {
+        visibility: p.visibility as string | undefined,
+        limit: p.limit as number | undefined,
+        afterSequence: p.afterSequence as number | undefined,
+      });
     }
 
     case 'researchActivity:getMaxSequence': {
-      const result = db.prepare(
-        'SELECT MAX(sequence) as max_seq FROM research_activities WHERE run_id = ?'
-      ).get(p.runId) as { max_seq: number | null };
-      return { max_seq: result?.max_seq ?? 0 };
+      return { max_seq: research.getMaxActivitySequence(p.runId as string) };
     }
 
     case 'researchActivity:deleteByRunId': {
-      return db.prepare('DELETE FROM research_activities WHERE run_id = ?').run(p.runId);
+      research.deleteActivitiesByRunId(p.runId as string);
+      return undefined;
     }
 
     // ==================== Research Events / Sources / Citations / Reports ====================
 
     case 'researchEvent:create': {
-      const now = Date.now();
-      db.prepare(`
-        INSERT INTO research_events (id, run_id, sequence, event_type, payload_json, visibility, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(p.id, p.run_id, p.sequence, p.event_type, p.payload_json, p.visibility || 'user', now);
-      return db.prepare('SELECT * FROM research_events WHERE run_id = ? AND sequence = ?').get(p.run_id, p.sequence);
+      return research.createEvent({
+        id: p.id as string,
+        runId: p.run_id as string,
+        sequence: p.sequence as number,
+        eventType: p.event_type as string,
+        payloadJson: p.payload_json as string,
+        visibility: p.visibility as string,
+      });
     }
 
     case 'researchEvent:getByRunId': {
-      const runId = p.runId as string;
-      const limit = (p.limit as number) || 500;
-      const afterSequence = (p.afterSequence as number | undefined) ?? -1;
-      const visibility = p.visibility as string | undefined;
-      if (visibility) {
-        return db.prepare(
-          'SELECT * FROM research_events WHERE run_id = ? AND visibility = ? AND sequence > ? ORDER BY sequence ASC LIMIT ?'
-        ).all(runId, visibility, afterSequence, limit);
-      }
-      return db.prepare(
-        'SELECT * FROM research_events WHERE run_id = ? AND sequence > ? ORDER BY sequence ASC LIMIT ?'
-      ).all(runId, afterSequence, limit);
+      return research.getEventsByRunId(p.runId as string, {
+        limit: p.limit as number | undefined,
+        afterSequence: p.afterSequence as number | undefined,
+        visibility: p.visibility as string | undefined,
+      });
     }
 
     case 'researchEvent:getMaxSequence': {
-      const result = db.prepare(
-        'SELECT MAX(sequence) as max_seq FROM research_events WHERE run_id = ?'
-      ).get(p.runId) as { max_seq: number | null };
-      return { max_seq: result?.max_seq ?? 0 };
+      return { max_seq: research.getMaxEventSequence(p.runId as string) };
     }
 
     case 'researchSource:upsert': {
-      const now = Date.now();
-      db.prepare(`
-        INSERT INTO research_sources (
-          id, run_id, title, url, canonical_url, source_type, allowed_by_policy,
-          reliability_json, dedupe_key, rejected_reason, metadata_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          title = excluded.title,
-          url = excluded.url,
-          canonical_url = excluded.canonical_url,
-          source_type = excluded.source_type,
-          allowed_by_policy = excluded.allowed_by_policy,
-          reliability_json = excluded.reliability_json,
-          dedupe_key = excluded.dedupe_key,
-          rejected_reason = excluded.rejected_reason,
-          metadata_json = excluded.metadata_json,
-          updated_at = excluded.updated_at
-      `).run(
-        p.id,
-        p.run_id,
-        p.title,
-        p.url ?? null,
-        p.canonical_url ?? p.url ?? null,
-        p.source_type ?? 'web',
-        p.allowed_by_policy === false ? 0 : 1,
-        p.reliability_json ?? null,
-        p.dedupe_key ?? null,
-        p.rejected_reason ?? null,
-        p.metadata_json ?? null,
-        now,
-        now,
-      );
-      return db.prepare('SELECT * FROM research_sources WHERE id = ?').get(p.id);
+      return research.upsertSource({
+        id: p.id as string,
+        runId: p.run_id as string,
+        title: p.title as string,
+        url: p.url as string | null,
+        canonicalUrl: (p.canonical_url ?? p.url) as string | null,
+        sourceType: p.source_type as string,
+        allowedByPolicy: p.allowed_by_policy !== false,
+        reliabilityJson: p.reliability_json as string | null,
+        dedupeKey: p.dedupe_key as string | null,
+        rejectedReason: p.rejected_reason as string | null,
+        metadataJson: p.metadata_json as string | null,
+      });
     }
 
     case 'researchSource:getByRunId': {
-      return db.prepare('SELECT * FROM research_sources WHERE run_id = ? ORDER BY created_at ASC').all(p.runId);
+      return research.getSourcesByRunId(p.runId as string);
     }
 
     case 'researchCitation:create': {
-      const now = Date.now();
-      db.prepare(`
-        INSERT OR REPLACE INTO research_citations (
-          id, run_id, report_id, source_id, finding_id, claim, locator_json, quoted_evidence, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        p.id,
-        p.run_id,
-        p.report_id ?? null,
-        p.source_id,
-        p.finding_id ?? null,
-        p.claim,
-        p.locator_json ?? null,
-        p.quoted_evidence ?? null,
-        now,
-      );
-      return db.prepare('SELECT * FROM research_citations WHERE id = ?').get(p.id);
+      return research.createCitation({
+        id: p.id as string,
+        runId: p.run_id as string,
+        reportId: p.report_id as string | null,
+        sourceId: p.source_id as string,
+        findingId: p.finding_id as string | null,
+        claim: p.claim as string,
+        locatorJson: p.locator_json as string | null,
+        quotedEvidence: p.quoted_evidence as string | null,
+      });
     }
 
     case 'researchCitation:getByRunId': {
-      if (p.reportId) {
-        return db.prepare(
-          'SELECT * FROM research_citations WHERE run_id = ? AND report_id = ? ORDER BY created_at ASC'
-        ).all(p.runId, p.reportId);
-      }
-      return db.prepare('SELECT * FROM research_citations WHERE run_id = ? ORDER BY created_at ASC').all(p.runId);
+      return research.getCitationsByRunId(p.runId as string, p.reportId as string | undefined);
     }
 
     case 'researchReport:upsert': {
-      const now = Date.now();
-      db.prepare(`
-        INSERT INTO research_reports (
-          id, run_id, title, markdown, outline_json, source_ids_json, citation_ids_json,
-          activity_summary_json, export_metadata_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          title = excluded.title,
-          markdown = excluded.markdown,
-          outline_json = excluded.outline_json,
-          source_ids_json = excluded.source_ids_json,
-          citation_ids_json = excluded.citation_ids_json,
-          activity_summary_json = excluded.activity_summary_json,
-          export_metadata_json = excluded.export_metadata_json,
-          updated_at = excluded.updated_at
-      `).run(
-        p.id,
-        p.run_id,
-        p.title ?? null,
-        p.markdown,
-        p.outline_json ?? null,
-        p.source_ids_json ?? '[]',
-        p.citation_ids_json ?? '[]',
-        p.activity_summary_json ?? null,
-        p.export_metadata_json ?? null,
-        now,
-        now,
-      );
-      return db.prepare('SELECT * FROM research_reports WHERE id = ?').get(p.id);
+      return research.upsertReport({
+        id: p.id as string,
+        runId: p.run_id as string,
+        title: p.title as string | null,
+        markdown: p.markdown as string,
+        outlineJson: p.outline_json as string | null,
+        sourceIdsJson: p.source_ids_json as string,
+        citationIdsJson: p.citation_ids_json as string,
+        activitySummaryJson: p.activity_summary_json as string | null,
+        exportMetadataJson: p.export_metadata_json as string | null,
+      });
     }
 
     case 'researchReport:getLatest': {
-      return db.prepare(
-        'SELECT * FROM research_reports WHERE run_id = ? ORDER BY updated_at DESC LIMIT 1'
-      ).get(p.runId);
+      return research.getLatestReport(p.runId as string);
     }
 
     // ==================== Research Memory actions ====================
 
     case 'researchMemory:project:create': {
-      const now = Date.now();
-      db.prepare(`
-        INSERT INTO research_projects (id, name, description, created_at, updated_at)
-        VALUES (@id, @name, @description, @created_at, @updated_at)
-      `).run({
-        id: p.id,
-        name: p.name,
-        description: p.description ?? null,
-        created_at: now,
-        updated_at: now,
+      return research.createProject({
+        id: p.id as string,
+        name: p.name as string,
+        description: p.description as string | null,
       });
-      return db.prepare('SELECT * FROM research_projects WHERE id = ?').get(p.id);
     }
 
-    case 'researchMemory:project:get':
-      return db.prepare('SELECT * FROM research_projects WHERE id = ?').get(p.id);
+    case 'researchMemory:project:get': {
+      return research.getProject(p.id as string);
+    }
 
-    case 'researchMemory:project:list':
-      return db.prepare('SELECT * FROM research_projects ORDER BY updated_at DESC').all();
+    case 'researchMemory:project:list': {
+      return research.listProjects();
+    }
 
     case 'researchMemory:project:update': {
       const id = p.id as string;
-      const now = Date.now();
-      const fields: string[] = ['updated_at = ?'];
-      const params: unknown[] = [now];
-
-      if (p.name !== undefined) { fields.push('name = ?'); params.push(p.name); }
-      if (p.description !== undefined) { fields.push('description = ?'); params.push(p.description); }
-      if (p.status !== undefined) { fields.push('status = ?'); params.push(p.status); }
-      params.push(id);
-
-      db.prepare(`UPDATE research_projects SET ${fields.join(', ')} WHERE id = ?`).run(...params);
-      return db.prepare('SELECT * FROM research_projects WHERE id = ?').get(id);
+      const patch: Parameters<typeof research.updateProject>[1] = {};
+      if (p.name !== undefined) patch.name = p.name as string;
+      if (p.description !== undefined) patch.description = p.description as string | null;
+      if (p.status !== undefined) patch.status = p.status as string;
+      return research.updateProject(id, patch);
     }
 
     case 'researchMemory:project:delete': {
-      const result = db.prepare('DELETE FROM research_projects WHERE id = ?').run(p.id);
-      return { success: result.changes > 0 };
+      return { success: research.deleteProject(p.id as string) };
     }
 
-    case 'researchMemory:projectState:get':
-      return db.prepare('SELECT * FROM research_project_states WHERE project_id = ?').get(p.projectId);
+    case 'researchMemory:projectState:get': {
+      return research.getProjectState(p.projectId as string);
+    }
 
     case 'researchMemory:projectState:upsert': {
-      const now = Date.now();
-      db.prepare(`
-        INSERT INTO research_project_states (project_id, state_json, updated_at)
-        VALUES (@project_id, @state_json, @updated_at)
-        ON CONFLICT(project_id) DO UPDATE SET state_json = @state_json, updated_at = @updated_at
-      `).run({
-        project_id: p.projectId,
-        state_json: JSON.stringify(p.state),
-        updated_at: now,
-      });
-      return db.prepare('SELECT * FROM research_project_states WHERE project_id = ?').get(p.projectId);
+      const stateJson = typeof p.state === 'string' ? p.state : JSON.stringify(p.state);
+      return research.upsertProjectState(p.projectId as string, stateJson);
     }
 
     case 'researchMemory:object:create': {
-      const now = Date.now();
-      db.prepare(`
-        INSERT INTO research_memory_objects (
-          id, project_id, type, content, summary, source_refs_json, relation_refs_json,
-          valid_from, valid_to, status, confidence, importance, tags_json,
-          embedding_json, created_at, updated_at
-        ) VALUES (
-          @id, @project_id, @type, @content, @summary, @source_refs_json, @relation_refs_json,
-          @valid_from, @valid_to, @status, @confidence, @importance, @tags_json,
-          @embedding_json, @created_at, @updated_at
-        )
-      `).run({
-        id: p.id,
-        project_id: p.projectId,
-        type: p.type,
-        content: p.content,
-        summary: p.summary ?? null,
-        source_refs_json: JSON.stringify(p.sourceRefs ?? []),
-        relation_refs_json: JSON.stringify(p.relationRefs ?? []),
-        valid_from: p.validFrom ?? null,
-        valid_to: p.validTo ?? null,
-        status: p.status ?? 'active',
-        confidence: p.confidence ?? 0.5,
-        importance: p.importance ?? 0.5,
-        tags_json: JSON.stringify(p.tags ?? []),
-        embedding_json: (p as Record<string, unknown>).embedding_json ?? null,
-        created_at: now,
-        updated_at: now,
+      return research.createMemoryObject({
+        id: p.id as string,
+        projectId: p.projectId as string,
+        type: p.type as string,
+        content: p.content as string,
+        summary: p.summary as string | null,
+        sourceRefs: p.sourceRefs as string[] | undefined,
+        relationRefs: p.relationRefs as string[] | undefined,
+        validFrom: p.validFrom as number | null,
+        validTo: p.validTo as number | null,
+        status: p.status as string,
+        confidence: p.confidence as number,
+        importance: p.importance as number,
+        tags: p.tags as string[] | undefined,
+        embeddingJson: (p as Record<string, unknown>).embedding_json as string | null,
       });
-      return db.prepare('SELECT * FROM research_memory_objects WHERE id = ?').get(p.id);
     }
 
-    case 'researchMemory:object:get':
-      return db.prepare('SELECT * FROM research_memory_objects WHERE id = ?').get(p.id);
+    case 'researchMemory:object:get': {
+      return research.getMemoryObject(p.id as string);
+    }
 
     case 'researchMemory:object:listByProject': {
-      const conditions: string[] = ['project_id = ?'];
-      const params: unknown[] = [p.projectId];
-
-      if (p.type) { conditions.push('type = ?'); params.push(p.type); }
-      if (p.status) { conditions.push('status = ?'); params.push(p.status); }
-
-      const limit = (p.limit as number) || 100;
-      return db.prepare(
-        `SELECT * FROM research_memory_objects WHERE ${conditions.join(' AND ')} ORDER BY updated_at DESC LIMIT ?`
-      ).all(...params, limit);
+      return research.listMemoryObjectsByProject(p.projectId as string, {
+        type: p.type as string | undefined,
+        status: p.status as string | undefined,
+        limit: p.limit as number | undefined,
+      });
     }
 
     case 'researchMemory:object:search': {
-      const conditions: string[] = ['(content LIKE ? OR summary LIKE ?)'];
-      const searchTerm = `%${p.query}%`;
-      const params: unknown[] = [searchTerm, searchTerm];
-
-      if (p.projectId) { conditions.push('project_id = ?'); params.push(p.projectId); }
-      if (p.type) { conditions.push('type = ?'); params.push(p.type); }
-      if (p.status) { conditions.push('status = ?'); params.push(p.status); }
-
-      const limit = (p.limit as number) || 100;
-      return db.prepare(
-        `SELECT * FROM research_memory_objects WHERE ${conditions.join(' AND ')} ORDER BY updated_at DESC LIMIT ?`
-      ).all(...params, limit);
+      return research.searchMemoryObjects(p.query as string, {
+        projectId: p.projectId as string | undefined,
+        type: p.type as string | undefined,
+        status: p.status as string | undefined,
+        limit: p.limit as number | undefined,
+      });
     }
 
     case 'researchMemory:object:update': {
       const id = p.id as string;
-      const now = Date.now();
-      const fields: string[] = ['updated_at = ?'];
-      const params: unknown[] = [now];
-
-      const stringFields: Array<{ key: string; db: string }> = [
-        { key: 'content', db: 'content' },
-        { key: 'summary', db: 'summary' },
-        { key: 'status', db: 'status' },
-        { key: 'type', db: 'type' },
-      ];
-      for (const { key, db: dbField } of stringFields) {
-        if (p[key] !== undefined) { fields.push(`${dbField} = ?`); params.push(p[key]); }
-      }
-
-      if (p.sourceRefs !== undefined) { fields.push('source_refs_json = ?'); params.push(JSON.stringify(p.sourceRefs)); }
-      if (p.relationRefs !== undefined) { fields.push('relation_refs_json = ?'); params.push(JSON.stringify(p.relationRefs)); }
-      if (p.validFrom !== undefined) { fields.push('valid_from = ?'); params.push(p.validFrom); }
-      if (p.validTo !== undefined) { fields.push('valid_to = ?'); params.push(p.validTo); }
-      if (p.confidence !== undefined) { fields.push('confidence = ?'); params.push(p.confidence); }
-      if (p.importance !== undefined) { fields.push('importance = ?'); params.push(p.importance); }
-      if (p.tags !== undefined) { fields.push('tags_json = ?'); params.push(JSON.stringify(p.tags)); }
-
-      params.push(id);
-      db.prepare(`UPDATE research_memory_objects SET ${fields.join(', ')} WHERE id = ?`).run(...params);
-      return db.prepare('SELECT * FROM research_memory_objects WHERE id = ?').get(id);
+      const patch: Parameters<typeof research.updateMemoryObject>[1] = {};
+      if (p.content !== undefined) patch.content = p.content as string;
+      if (p.summary !== undefined) patch.summary = p.summary as string | null;
+      if (p.status !== undefined) patch.status = p.status as string;
+      if (p.type !== undefined) patch.type = p.type as string;
+      if (p.sourceRefs !== undefined) patch.sourceRefs = p.sourceRefs as string[];
+      if (p.relationRefs !== undefined) patch.relationRefs = p.relationRefs as string[];
+      if (p.validFrom !== undefined) patch.validFrom = p.validFrom as number | null;
+      if (p.validTo !== undefined) patch.validTo = p.validTo as number | null;
+      if (p.confidence !== undefined) patch.confidence = p.confidence as number;
+      if (p.importance !== undefined) patch.importance = p.importance as number;
+      if (p.tags !== undefined) patch.tags = p.tags as string[];
+      return research.updateMemoryObject(id, patch);
     }
 
     case 'researchMemory:object:delete': {
-      const result = db.prepare('DELETE FROM research_memory_objects WHERE id = ?').run(p.id);
-      return { success: result.changes > 0 };
+      return { success: research.deleteMemoryObject(p.id as string) };
     }
 
     case 'researchMemory:hypothesis:create': {
-      const now = Date.now();
-      db.prepare(`
-        INSERT INTO research_hypotheses (
-          id, project_id, statement, status, supporting_evidence_ids_json,
-          contradicting_evidence_ids_json, related_source_ids_json, superseded_by,
-          created_at, updated_at
-        ) VALUES (
-          @id, @project_id, @statement, @status, @supporting_evidence_ids_json,
-          @contradicting_evidence_ids_json, @related_source_ids_json, @superseded_by,
-          @created_at, @updated_at
-        )
-      `).run({
-        id: p.id,
-        project_id: p.projectId,
-        statement: p.statement,
-        status: p.status ?? 'proposed',
-        supporting_evidence_ids_json: JSON.stringify(p.supportingEvidenceIds ?? []),
-        contradicting_evidence_ids_json: JSON.stringify(p.contradictingEvidenceIds ?? []),
-        related_source_ids_json: JSON.stringify(p.relatedSourceIds ?? []),
-        superseded_by: null,
-        created_at: now,
-        updated_at: now,
+      return research.createHypothesis({
+        id: p.id as string,
+        projectId: p.projectId as string,
+        statement: p.statement as string,
+        status: p.status as string,
+        supportingEvidenceIds: p.supportingEvidenceIds as string[] | undefined,
+        contradictingEvidenceIds: p.contradictingEvidenceIds as string[] | undefined,
+        relatedSourceIds: p.relatedSourceIds as string[] | undefined,
       });
-      return db.prepare('SELECT * FROM research_hypotheses WHERE id = ?').get(p.id);
     }
 
-    case 'researchMemory:hypothesis:get':
-      return db.prepare('SELECT * FROM research_hypotheses WHERE id = ?').get(p.id);
+    case 'researchMemory:hypothesis:get': {
+      return research.getHypothesis(p.id as string);
+    }
 
-    case 'researchMemory:hypothesis:listByProject':
-      return db.prepare('SELECT * FROM research_hypotheses WHERE project_id = ? ORDER BY updated_at DESC').all(p.projectId);
+    case 'researchMemory:hypothesis:listByProject': {
+      return research.listHypothesesByProject(p.projectId as string);
+    }
 
     case 'researchMemory:hypothesis:update': {
       const id = p.id as string;
-      const now = Date.now();
-      const fields: string[] = ['updated_at = ?'];
-      const params: unknown[] = [now];
-
-      if (p.status !== undefined) { fields.push('status = ?'); params.push(p.status); }
-      if (p.supersededBy !== undefined) { fields.push('superseded_by = ?'); params.push(p.supersededBy); }
-      if (p.supportingEvidenceIds !== undefined) { fields.push('supporting_evidence_ids_json = ?'); params.push(JSON.stringify(p.supportingEvidenceIds)); }
-      if (p.contradictingEvidenceIds !== undefined) { fields.push('contradicting_evidence_ids_json = ?'); params.push(JSON.stringify(p.contradictingEvidenceIds)); }
-      if (p.relatedSourceIds !== undefined) { fields.push('related_source_ids_json = ?'); params.push(JSON.stringify(p.relatedSourceIds)); }
-
-      params.push(id);
-      db.prepare(`UPDATE research_hypotheses SET ${fields.join(', ')} WHERE id = ?`).run(...params);
-      return db.prepare('SELECT * FROM research_hypotheses WHERE id = ?').get(id);
+      const patch: Parameters<typeof research.updateHypothesis>[1] = {};
+      if (p.status !== undefined) patch.status = p.status as string;
+      if (p.supersededBy !== undefined) patch.supersededBy = p.supersededBy as string | null;
+      if (p.supportingEvidenceIds !== undefined) patch.supportingEvidenceIds = p.supportingEvidenceIds as string[];
+      if (p.contradictingEvidenceIds !== undefined) patch.contradictingEvidenceIds = p.contradictingEvidenceIds as string[];
+      if (p.relatedSourceIds !== undefined) patch.relatedSourceIds = p.relatedSourceIds as string[];
+      return research.updateHypothesis(id, patch);
     }
 
     case 'researchMemory:hypothesis:delete': {
-      const result = db.prepare('DELETE FROM research_hypotheses WHERE id = ?').run(p.id);
-      return { success: result.changes > 0 };
+      return { success: research.deleteHypothesis(p.id as string) };
     }
 
     case 'researchMemory:candidate:create': {
-      const now = Date.now();
-      db.prepare(`
-        INSERT INTO research_memory_candidates (
-          id, project_id, proposed_type, content, rationale, source_refs_json,
-          confidence, status, created_by_session_id, created_at
-        ) VALUES (
-          @id, @project_id, @proposed_type, @content, @rationale, @source_refs_json,
-          @confidence, 'pending', @created_by_session_id, @created_at
-        )
-      `).run({
-        id: p.id,
-        project_id: p.projectId,
-        proposed_type: p.proposedType,
-        content: p.content,
-        rationale: p.rationale,
-        source_refs_json: JSON.stringify(p.sourceRefs ?? []),
-        confidence: p.confidence ?? 0.5,
-        created_by_session_id: p.createdBySessionId ?? null,
-        created_at: now,
+      return research.createCandidate({
+        id: p.id as string,
+        projectId: p.projectId as string,
+        proposedType: p.proposedType as string,
+        content: p.content as string,
+        rationale: p.rationale as string,
+        sourceRefs: p.sourceRefs as string[] | undefined,
+        confidence: p.confidence as number,
+        createdBySessionId: p.createdBySessionId as string | null,
       });
-      return db.prepare('SELECT * FROM research_memory_candidates WHERE id = ?').get(p.id);
     }
 
     case 'researchMemory:candidate:get': {
-      return db.prepare('SELECT * FROM research_memory_candidates WHERE id = ?').get(p.id);
+      return research.getCandidate(p.id as string);
     }
 
     case 'researchMemory:candidate:listByProject': {
-      if (p.status) {
-        return db.prepare(
-          'SELECT * FROM research_memory_candidates WHERE project_id = ? AND status = ? ORDER BY created_at DESC'
-        ).all(p.projectId, p.status);
-      }
-      return db.prepare(
-        'SELECT * FROM research_memory_candidates WHERE project_id = ? ORDER BY created_at DESC'
-      ).all(p.projectId);
+      return research.listCandidatesByProject(p.projectId as string, p.status as string | undefined);
     }
 
     case 'researchMemory:candidate:accept': {
-      const now = Date.now();
-      const txn = db.transaction(() => {
-        const candidate = db.prepare('SELECT * FROM research_memory_candidates WHERE id = ?').get(p.id) as Record<string, unknown> | undefined;
-        if (!candidate) throw new Error('Candidate not found');
-
-        const memoryId = randomUUID();
-        db.prepare(`
-          INSERT INTO research_memory_objects (
-            id, project_id, type, content, summary, source_refs_json, relation_refs_json,
-            valid_from, valid_to, status, confidence, importance, tags_json,
-            embedding_json, created_at, updated_at
-          ) VALUES (
-            @id, @project_id, @type, @content, @summary, @source_refs_json, @relation_refs_json,
-            @valid_from, @valid_to, @status, @confidence, @importance, @tags_json,
-            @embedding_json, @created_at, @updated_at
-          )
-        `).run({
-          id: memoryId,
-          project_id: candidate.project_id as string,
-          type: candidate.proposed_type as string,
-          content: candidate.content as string,
-          summary: null,
-          source_refs_json: candidate.source_refs_json as string,
-          relation_refs_json: JSON.stringify([]),
-          valid_from: null,
-          valid_to: null,
-          status: 'active',
-          confidence: candidate.confidence ?? 0.5,
-          importance: 0.7,
-          tags_json: JSON.stringify(['accepted_candidate']),
-          embedding_json: (p as Record<string, unknown>).embedding_json ?? null,
-          created_at: now,
-          updated_at: now,
-        });
-
-        db.prepare(
-          'UPDATE research_memory_candidates SET status = ?, reviewed_at = ? WHERE id = ?'
-        ).run('accepted', now, p.id);
-
-        const acceptedCandidate = db.prepare('SELECT * FROM research_memory_candidates WHERE id = ?').get(p.id);
-        const createdMemory = db.prepare('SELECT * FROM research_memory_objects WHERE id = ?').get(memoryId);
-        return { success: true, candidate: acceptedCandidate, memory: createdMemory };
-      });
-      return txn();
+      return research.acceptCandidate(p.id as string, (p as Record<string, unknown>).embedding_json as string | null);
     }
 
     case 'researchMemory:candidate:reject': {
-      const now = Date.now();
-      db.prepare(
-        'UPDATE research_memory_candidates SET status = ?, reviewed_at = ? WHERE id = ?'
-      ).run('rejected', now, p.id);
-      return db.prepare('SELECT * FROM research_memory_candidates WHERE id = ?').get(p.id);
+      return research.rejectCandidate(p.id as string);
     }
 
     case 'researchMemory:candidate:delete': {
-      const result = db.prepare('DELETE FROM research_memory_candidates WHERE id = ?').run(p.id);
-      return { success: result.changes > 0 };
+      return { success: research.deleteCandidate(p.id as string) };
     }
 
     case 'researchMemory:object:updateEmbedding': {
-      const id = p.id as string;
-      const embeddingJson = (p as Record<string, unknown>).embedding_json;
-      db.prepare(
-        'UPDATE research_memory_objects SET embedding_json = ?, updated_at = ? WHERE id = ?'
-      ).run(embeddingJson ?? null, Date.now(), id);
-      return db.prepare('SELECT * FROM research_memory_objects WHERE id = ?').get(id);
+      return research.updateEmbedding(p.id as string, (p as Record<string, unknown>).embedding_json as string | null);
     }
 
     case 'researchMemory:object:listWithEmbeddings': {
-      const conditions: string[] = ['embedding_json IS NOT NULL'];
-      const params: unknown[] = [];
-      if (p.projectId) { conditions.push('project_id = ?'); params.push(p.projectId); }
-      const limit = (p.limit as number) || 500;
-      return db.prepare(
-        `SELECT id, project_id, content, summary, embedding_json FROM research_memory_objects WHERE ${conditions.join(' AND ')} ORDER BY updated_at DESC LIMIT ?`
-      ).all(...params, limit);
+      return research.listWithEmbeddings({
+        projectId: p.projectId as string | undefined,
+        limit: p.limit as number | undefined,
+      });
     }
 
     case 'researchMemory:relation:create': {
-      const now = Date.now();
-      const id = randomUUID();
-      db.prepare(`
-        INSERT INTO research_memory_relations (id, project_id, from_memory_id, to_memory_id, relation_type, created_at)
-        VALUES (@id, @project_id, @from_memory_id, @to_memory_id, @relation_type, @created_at)
-      `).run({
-        id,
-        project_id: p.projectId,
-        from_memory_id: p.fromMemoryId,
-        to_memory_id: p.toMemoryId,
-        relation_type: p.relationType,
-        created_at: now,
+      return research.createRelation({
+        projectId: p.projectId as string,
+        fromMemoryId: p.fromMemoryId as string,
+        toMemoryId: p.toMemoryId as string,
+        relationType: p.relationType as string,
       });
-      return db.prepare('SELECT * FROM research_memory_relations WHERE id = ?').get(id);
     }
 
     case 'researchMemory:relation:listByMemory': {
-      const memoryId = p.memoryId as string;
-      return db.prepare(
-        'SELECT * FROM research_memory_relations WHERE from_memory_id = ? OR to_memory_id = ? ORDER BY created_at DESC'
-      ).all(memoryId, memoryId);
+      return research.listRelationsByMemory(p.memoryId as string);
     }
 
     case 'researchMemory:relation:listByProject': {
-      return db.prepare(
-        'SELECT * FROM research_memory_relations WHERE project_id = ? ORDER BY created_at DESC'
-      ).all(p.projectId);
+      return research.listRelationsByProject(p.projectId as string);
     }
 
     case 'researchMemory:relation:delete': {
-      const result = db.prepare('DELETE FROM research_memory_relations WHERE id = ?').run(p.id);
-      return { success: result.changes > 0 };
+      return { success: research.deleteRelation(p.id as string) };
     }
 
     case 'plugin:registry:list': {

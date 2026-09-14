@@ -28,6 +28,9 @@ import {
   AttachmentStore,
   ModeStateStore,
   PendingWakeStore,
+  ProjectStore,
+  ResearchStore,
+  ConductorStore,
   LegacyImport,
   type SqliteCtor,
   type Migration,
@@ -48,6 +51,12 @@ export interface CoreStores {
   modeState: ModeStateStore;
   /** Durable pending-wake markers (Plan 476 Phase 3 / Plan 500 P5.2). */
   wakes: PendingWakeStore;
+  /** Project entity registry (plan 534 — migrated from memory-state). */
+  projects: ProjectStore;
+  /** Research subsystem store (Plan 423 — deep research). */
+  research: ResearchStore;
+  /** Conductor subsystem store (canvas/groups/widgets/elements/actions). */
+  conductor: ConductorStore;
 }
 
 let stores: CoreStores | null = null;
@@ -114,6 +123,9 @@ function collectMigrations(): Migration[] {
     ...AttachmentStore.migrations,
     ...ModeStateStore.migrations,
     ...PendingWakeStore.migrations,
+    ...ProjectStore.migrations,
+    ...ResearchStore.migrations,
+    ...ConductorStore.migrations,
   ].sort((a, b) => a.id - b.id);
 }
 
@@ -161,6 +173,9 @@ export function initCoreDatabase(sqlite: SqliteCtor): CoreStores | null {
       attachments: new AttachmentStore(db, attachmentsRoot),
       modeState: new ModeStateStore(db),
       wakes: new PendingWakeStore(db),
+      projects: new ProjectStore(db),
+      research: new ResearchStore(db),
+      conductor: new ConductorStore(db),
     };
 
     // Plan 329: auto-run the legacy import on first boot. Runs before any

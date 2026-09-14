@@ -41,7 +41,7 @@ import { imageGenerateTool } from './ImageGenerateTool/index.js';
 import { duyaCliTool } from './DuyaCliTool/index.js';
 import { askUserQuestionTool } from './AskUserQuestionTool/AskUserQuestionTool.js';
 import { moduleTool } from './ModuleTool/ModuleTool.js';
-import { runVisualSelfReview } from './WidgetRenderer/runVisualSelfReview.js';
+import { widgetTool } from './WidgetTool/index.js';
 import { hasShellFamily } from '../utils/shellDetector.js';
 import { toolSearchTool } from './ToolSearchTool/ToolSearchTool.js';
 import { toolSchemaTool } from './ToolSchemaTool/ToolSchemaTool.js';
@@ -57,6 +57,7 @@ import {
 } from './AgentManagementTool/index.js';
 import { manageRoutineTool } from './ManageRoutineTool/index.js';
 import { listAppConnectorsTool, connectAppTool } from './AppConnectorManageTool/index.js';
+import { planTool } from './PlanTool/index.js';
 
 /**
  * BashTool instance
@@ -158,15 +159,15 @@ export function createBuiltinRegistry(
   registry.register(exitPlanModeTool, exitPlanModeTool, { exposeMode: 'discoverable' });
   registry.register(switchModeTool, switchModeTool, { exposeMode: 'discoverable' });
 
-  // Browser is the supported web search and fetch surface. Exposed on the
-  // initial tool surface so the model can reach web content without first
-  // having to discover the tool via `tool_search`.
-  registry.register(browserTool.toTool(), browserTool, { exposeMode: 'always' });
+  // Browser — web search and fetch surface. Large schema (many operations),
+  // so hint mode reduces token overhead while keeping it on the initial tool
+  // surface. The stub appends argument summary to the description.
+  registry.register(browserTool.toTool(), browserTool, { exposeMode: 'hint' });
 
   // Phase 5: Other tools
-  // The Skills catalog instructs the model to call Skill. It must therefore
-  // be present on the initial tool surface, not merely discoverable.
-  registry.register(skillTool, skillTool, { exposeMode: 'always' });
+  // Skill must be on the initial surface (Skills catalog instructs model to
+  // call it); hint mode keeps it surfaced with stub schema to reduce overhead.
+  registry.register(skillTool, skillTool, { exposeMode: 'hint' });
   registry.register(briefTool, briefTool, { exposeMode: 'discoverable' });
   registry.register(sessionSearchTool.toTool(), sessionSearchTool, { exposeMode: 'discoverable' });
   // Inter-agent communication tool — message another session's agent
@@ -176,7 +177,7 @@ export function createBuiltinRegistry(
   // send_to_agent); bots get exact-name promotion via BOT_TOOLSET.
   registry.register(sessionTool.toTool(), sessionTool, { exposeMode: 'discoverable' });
   const visionTool = new VisionTool();
-  registry.register(visionTool, visionTool, { exposeMode: 'always' });
+  registry.register(visionTool, visionTool, { exposeMode: 'hint' });
 
   // image_generate — media generation tool (plan image-gen). Registered
   // discoverable: it stays off the default tool surface and is reached via
@@ -208,81 +209,9 @@ export function createBuiltinRegistry(
   // Agent calls read_module BEFORE show_widget or canvas tools to get style guides
   registry.register(moduleTool.toTool(), moduleTool, { exposeMode: 'discoverable' });
 
-  // show_widget tool - pass-through for generative UI widgets
-  registry.register(
-    {
-      name: 'show_widget',
-      description: `Create interactive visualizations, diagrams, charts, calculators, and mini-apps directly in the chat message.
-
-## When to use (two-layer judgment)
-
-Layer 1 — Intent Recognition: use when user asks for visual content ("draw", "visualize", "chart", "diagram", "calculator", "show me").
-
-Layer 2 — Proactive Triggering: use when explaining hierarchical structures, sequential flows, comparisons, step-by-step processes, or any concept where a diagram is clearer than text.
-
-When in doubt, choose the diagram over text.
-
-## Before calling show_widget for the first time
-
-Call \`read_module\` to load the design specification for your rendering approach:
-- **diagram** — SVG flowcharts, architecture, structure diagrams
-- **mockup** — HTML cards, dashboards, comparison tables, data displays
-- **chart** — Chart.js / D3 data visualizations
-- **interactive** — Interactive calculators, mini-apps, explainers
-
-You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This is YOUR decision — no hook triggers it automatically.
-
-## Guidelines
-
-- Use CDN-whitelisted libraries only: Chart.js, D3.js (SVG mode), ApexCharts, or ECharts
-- Include required scripts from CDN (e.g., https://cdn.jsdelivr.net/npm/chart.js)
-- Use dark-friendly colors where possible (#4f8cff for primary, #ff6b6b for errors)
-- Keep widgets self-contained - embed all data and styling inline
-- Specify fixed dimensions (e.g., width=600, height=400) for reliability
-- Avoid external API calls from widgets to prevent network errors
-- **Embedding images**: Widget images must use \`https:\` or \`data:\` URLs only. The widget iframe's Content-Security-Policy blocks local file paths (\`file://\`, bare relative paths). To embed a generated image, encode it as a data URL or host it temporarily on a CDN the widget allowlist permits. Clicking an embedded image opens DUYA's lightbox.`,
-      input_schema: {
-        type: 'object',
-        properties: {
-          widget_code: {
-            type: 'string',
-            description: 'Raw HTML/SVG/JS content. For SVG diagrams, use injected CSS classes as defined in the design modules (loaded via read_module). Output order: <style> → content HTML → <script>. For images, use https: or data: URLs only — local file paths are blocked by the widget CSP.',
-          },
-        },
-        required: ['widget_code'],
-      },
-    },
-    {
-      execute: async (input: Record<string, unknown>, _wd?: string, context?: ToolUseContext) => {
-        const widgetCode = input.widget_code as string;
-
-        // Sync pass-through — immediately return widget_code so the existing
-        // stream → vizSpec → MessageItem pipeline renders unchanged.
-        // The visual self-review is fired as a pendingExtraResult and yields
-        // a second tool_result after the headless render + vision call.
-        const reviewPromise = runVisualSelfReview(widgetCode ?? '', context);
-
-        // Catch any error inside the deferred pipeline so the executor never
-        // sees an unhandled rejection. The agent gets a soft-degrade message
-        // instead of the tool_use hanging on a hung promise.
-        const safePromise = reviewPromise.then(
-          (text) => ({ result: text, is_error: false }),
-          (err: unknown) => ({
-            result: `Visual self-review failed unexpectedly: ${err instanceof Error ? err.message : String(err)}`,
-            is_error: true,
-          }),
-        );
-
-        return {
-          id: crypto.randomUUID(),
-          name: 'show_widget',
-          result: JSON.stringify({ widget_code: widgetCode }),
-          pendingExtraResult: safePromise,
-        };
-      },
-    },
-    { exposeMode: 'discoverable' }
-  );
+  // show_widget — generative UI widgets (charts, diagrams, calculators, mini-apps).
+  // Short description kept inline; see WidgetTool for full executor.
+  registry.register(widgetTool.toTool(), widgetTool, { exposeMode: 'hint' });
 
   // send_artifact - explicit outbound file delivery through a gateway channel.
   // Discoverable: gateway sessions reach it via tool_search; in desktop
@@ -371,6 +300,12 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
   // normal message pipeline; toggle semantics live in the tool.
   registry.register(reactToMessageTool.toTool(), reactToMessageTool, { exposeMode: 'discoverable' });
 
+  // Plan 525 Phase 4: Plan tools — unified built-in tool for duya project plan
+  // management. Single tool with three actions (status/search/complete) replaces
+  // the previous MCP-server-based implementation. Exposed as hint level to reduce
+  // token overhead while keeping it on the initial tool surface.
+  registry.register(planTool.toTool(), planTool, { exposeMode: 'hint' });
+
   return registry;
 }
 
@@ -425,5 +360,9 @@ export {
   MANAGE_ROUTINE_TOOL_NAME,
   MAX_ROUTINES_PER_BOT,
 } from './ManageRoutineTool/index.js';
+
+// Plan tools (Plan 525 Phase 4 — unified built-in, replaced MCP implementation)
+export { planTool } from './PlanTool/index.js';
+export { PLAN_TOOL_NAME } from './PlanTool/index.js';
 
 

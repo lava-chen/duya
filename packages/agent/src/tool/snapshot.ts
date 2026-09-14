@@ -20,7 +20,7 @@
 //     `resolveMCPProviderToolName`.
 
 import type { Tool } from '../types.js';
-import type { ToolExecutor, ExposeMode, ToolMeta } from './registry.js';
+import type { ToolExecutor, ExposeMode, ToolHintMeta } from './registry.js';
 
 /**
  * Immutable per-turn view of the ToolCatalog.
@@ -38,7 +38,7 @@ export interface ToolSnapshot {
   /** Look up executor by tool name. */
   getExecutor(name: string): ToolExecutor | undefined;
   /** Look up persisted meta by tool name. */
-  getMeta(name: string): ToolMeta | undefined;
+  getMeta(name: string): ToolHintMeta | undefined;
   /** Creation timestamp (ms since epoch) for diagnostics. */
   readonly createdAt: number;
 }

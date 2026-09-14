@@ -21,9 +21,18 @@
  */
 import { ipcMain } from 'electron';
 
-import { createProject, deleteProject, getProject, listProjects, projectPaths, updateProject, type CreateProjectInput, type UpdateProjectInput } from '../memory-state';
-import type { ProjectPathEntry, ProjectRow } from '../memory-state';
-import { MAX_PROJECT_PATH_LENGTH } from '../memory-state';
+import {
+  createProject,
+  deleteProject,
+  getProject,
+  listProjects,
+  projectPaths,
+  updateProject,
+  MAX_PROJECT_PATH_LENGTH,
+  type CreateProjectInput,
+  type UpdateProjectInput,
+} from '../db/core/projectService';
+import type { ProjectPathEntry, ProjectRow } from '../db/core/project-store';
 import { getLogger, LogComponent } from '../logging/logger';
 
 /** Row shape sent over the wire: same as DB row but with `paths` already parsed. */

@@ -66,7 +66,10 @@ export {
   type MessageForHash,
 } from './sourceFingerprint';
 
-// Plan 525 Phase 3 — project entity service + global plans directory
+// Plan 525 Phase 3 — project entity service + global plans directory.
+// Moved to core (plan 534): the `projects` table now lives in duya-core.db.
+// These re-exported symbols keep every existing consumer (IPC handlers,
+// db-bridge) pointing at the same implementation without churn.
 export {
   createProject,
   updateProject,
@@ -87,7 +90,7 @@ export {
   type PlanStatus,
   type PlansIndex,
   type PlansIndexEntry,
-} from './projectService';
+} from '../db/core/projectService';
 
 // Plan 479 Phase 1 — bot memory tier index (query index over the file manifest)
 export {

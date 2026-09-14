@@ -2342,6 +2342,7 @@ const zh: Record<TranslationKey, string> = {
   'conductor.toolbar.connector': '连接线',
   'conductor.toolbar.media': '媒体',
   'conductor.toolbar.link': '链接',
+  'conductor.toolbar.newConversation': '新建对话',
   'conductor.toolbar.closePalette': '关闭',
   'conductor.toolbar.shapeRounded': '圆角矩形',
   'conductor.toolbar.shapeParallelogram': '平行四边形',

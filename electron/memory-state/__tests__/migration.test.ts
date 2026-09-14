@@ -59,7 +59,7 @@ describe('memory-state migration runner', () => {
       name: string;
       sha256: string;
     }>;
-    expect(rows).toHaveLength(12);
+    expect(rows).toHaveLength(10);
     expect(rows[0].version).toBe(1);
     expect(rows[0].name).toBe('init_control_plane');
     expect(rows[0].sha256).toBe(migration0001.sha256);
@@ -82,10 +82,6 @@ describe('memory-state migration runner', () => {
     expect(rows[8].name).toBe('memory_tier_index');
     expect(rows[9].version).toBe(11);
     expect(rows[9].name).toBe('extend_agent_type_check');
-    expect(rows[10].version).toBe(12);
-    expect(rows[10].name).toBe('project_entity_minimal');
-    expect(rows[11].version).toBe(13);
-    expect(rows[11].name).toBe('project_icon_color');
 
     // Schema tables exist.
     const tables = db
@@ -109,13 +105,13 @@ describe('memory-state migration runner', () => {
     runMigrations(db);
 
     const rowsBefore = db.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rowsBefore.n).toBe(12);
+    expect(rowsBefore.n).toBe(10);
 
     // Re-run; should not throw, not insert a duplicate, not re-exec migration.
     runMigrations(db);
 
     const rowsAfter = db.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rowsAfter.n).toBe(12);
+    expect(rowsAfter.n).toBe(10);
 
     db.close();
   });
@@ -132,7 +128,7 @@ describe('memory-state migration runner', () => {
     runMigrations(dbB);
 
     const rows = dbB.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rows.n).toBe(12);
+    expect(rows.n).toBe(10);
 
     dbA.close();
     dbB.close();
@@ -186,7 +182,7 @@ describe('memory-state migration runner', () => {
     runMigrations(dbB);
 
     const rows = dbB.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rows.n).toBe(12);
+    expect(rows.n).toBe(10);
 
     // Schema is intact — tables still queryable.
     const projectCount = dbB.prepare('SELECT COUNT(*) AS n FROM projects').get() as { n: number };
@@ -310,8 +306,8 @@ describe('memory-state migration runner', () => {
     db.close();
   });
 
-  it('MIGRATIONS registry includes migrations 0001-0010, 0011 and 0012 in order', () => {
-    expect(MIGRATIONS).toHaveLength(12);
+  it('MIGRATIONS registry includes migrations 0001-0011 in order', () => {
+    expect(MIGRATIONS).toHaveLength(10);
     expect(MIGRATIONS[0].version).toBe(1);
     expect(MIGRATIONS[0].name).toBe('init_control_plane');
     expect(MIGRATIONS[0].sha256).toBe(migration0001.sha256);
@@ -334,10 +330,6 @@ describe('memory-state migration runner', () => {
     expect(MIGRATIONS[8].name).toBe('memory_tier_index');
     expect(MIGRATIONS[9].version).toBe(11);
     expect(MIGRATIONS[9].name).toBe('extend_agent_type_check');
-    expect(MIGRATIONS[10].version).toBe(12);
-    expect(MIGRATIONS[10].name).toBe('project_entity_minimal');
-    expect(MIGRATIONS[11].version).toBe(13);
-    expect(MIGRATIONS[11].name).toBe('project_icon_color');
   });
 
   it('migration sha256 values are stable (deterministic from SQL body)', () => {

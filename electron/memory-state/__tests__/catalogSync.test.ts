@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { runMigrations } from '../migrations';
 import { syncAllFromMainDb, syncSessionFromMainDb, markSourceMissing } from '../catalogSync';
-import { SessionStore, MessageLog } from '../../db/core';
+import { SessionStore, MessageLog, ProjectStore } from '../../db/core';
 import { createTempDbDir, type TempDbDir } from './fixture';
 
 // Stub the Phase B project resolver. The real resolver is owned by
@@ -108,7 +108,11 @@ vi.mock('../../logging/logger', () => ({
  */
 function createCoreDb(dbPath: string): { db: Database.Database; sessions: SessionStore } {
   const db = new Database(dbPath);
-  for (const m of [...SessionStore.migrations, ...MessageLog.migrations].sort((a, b) => a.id - b.id)) {
+  for (const m of [
+    ...ProjectStore.migrations,
+    ...SessionStore.migrations,
+    ...MessageLog.migrations,
+  ].sort((a, b) => a.id - b.id)) {
     m.up(db);
   }
   return { db, sessions: new SessionStore(db) };

@@ -43,6 +43,14 @@ describe('paths migration (Plan 525 Phase 2)', () => {
     db = new Database(':memory:');
     db.pragma('foreign_keys = ON');
     runMigrations(db);
+    // The project entity columns used to live in memory-state migration 0012.
+    // Plan 534 moved them to duya-core.db, so recreate them on the test DB only
+    // (projectResolver / resolveProject still read & write them here).
+    db.exec(`
+      ALTER TABLE projects ADD COLUMN name TEXT NOT NULL DEFAULT '';
+      ALTER TABLE projects ADD COLUMN description TEXT;
+      ALTER TABLE projects ADD COLUMN paths TEXT NOT NULL DEFAULT '[]';
+    `);
   });
 
   afterEach(() => {

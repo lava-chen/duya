@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   MagnifyingGlassIcon,
   DotsThreeIcon,
@@ -16,6 +16,7 @@ import {
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { PageFrame, PageHeader } from "@/components/ui/page";
+import { DropdownMenu, type MenuAction } from "@/components/ui/DropdownMenu";
 import {
   CreateProjectDialog,
   PROJECT_ICON_REGISTRY,
@@ -94,9 +95,6 @@ export function ProjectsView() {
   const [recentFolders, setRecentFolders] = useState<string[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showAllSessions, setShowAllSessions] = useState<Set<string>>(new Set());
-  const [menuFor, setMenuFor] = useState<string | null>(null);
-  const menuRef = useRef<HTMLDivElement | null>(null);
-
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<ProjectEntity | null>(null);
 
@@ -114,19 +112,6 @@ export function ProjectsView() {
       setRecentFolders(Array.isArray(folders) ? folders : []);
     }).catch(() => setRecentFolders([]));
   }, [loadProjects]);
-
-  // Close the open ⋯ menu on outside mousedown (real browsers dismiss
-  // before the click lands; the contained-ref check covers the menu body).
-  useEffect(() => {
-    if (!menuFor) return;
-    const handleMouseDown = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuFor(null);
-      }
-    };
-    document.addEventListener("mousedown", handleMouseDown);
-    return () => document.removeEventListener("mousedown", handleMouseDown);
-  }, [menuFor]);
 
   const pathKey = useCallback((p: string) => p.replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase(), []);
 
@@ -223,14 +208,12 @@ export function ProjectsView() {
   };
 
   const handleArchiveChats = (row: ProjectRowModel) => {
-    setMenuFor(null);
     for (const session of row.sessions) {
       archiveThread(session.id);
     }
   };
 
   const handleRemove = async (row: ProjectRowModel) => {
-    setMenuFor(null);
     if (row.kind === "entity") {
       if (!window.confirm(t("projects.removeConfirm"))) return;
       const result = await window.electronAPI?.projects?.delete?.(row.projectId!);
@@ -349,71 +332,66 @@ export function ProjectsView() {
                 >
                   {row.lastActivity > 0 ? formatTimeAgo(row.lastActivity) : "—"}
                 </span>
-                <div className="relative shrink-0" style={{ width: 32 }}>
-                  <button
-                    type="button"
-                    onClick={() => setMenuFor(menuFor === row.key ? null : row.key)}
-                    className="flex items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-hover)]"
-                    style={{ width: 28, height: 28, color: "var(--muted)" }}
-                    aria-label={t("projects.editProject")}
-                  >
-                    <DotsThreeIcon size={16} />
-                  </button>
-                  {menuFor === row.key && (
-                    <div
-                      ref={menuRef}
-                      className="absolute right-0 top-full z-50 mt-1 rounded-lg py-1"
-                      style={{
-                        minWidth: 180,
-                        backgroundColor: "var(--surface)",
-                        border: "1px solid var(--border)",
-                        boxShadow: "0 8px 24px rgba(0,0,0,0.16)",
-                      }}
-                    >
+                <div className="shrink-0" style={{ width: 32 }}>
+                  <DropdownMenu
+                    className="project-dropdown-menu"
+                    align="end"
+                    minWidth={180}
+                    items={[
+                      {
+                        kind: "action",
+                        id: "new-chat",
+                        label: t("projects.newChatInProject"),
+        className: "project-dropdown-item",
+                        iconLeft: <ChatCirclePlusIcon size={14} />,
+                        onSelect: () => handleNewChatInProject(row),
+                      },
+                      ...(row.kind === "entity"
+                        ? [
+                            {
+                              kind: "action" as const,
+                              id: "edit",
+                              label: t("projects.editProject"),
+        className: "project-dropdown-item",
+                              iconLeft: <PencilSimpleIcon size={14} />,
+                              onSelect: () => {
+                                const entity = projects.find((p) => p.project_id === row.projectId);
+                                if (entity) setEditing(entity);
+                              },
+                            },
+                          ]
+                        : []),
+                      {
+                        kind: "action",
+                        id: "archive",
+                        label: t("projects.archiveChats"),
+        className: "project-dropdown-item",
+                        iconLeft: <ArchiveIcon size={14} />,
+                        disabled: row.sessions.length === 0,
+                        onSelect: () => handleArchiveChats(row),
+                      },
+                      { kind: "divider", id: "sep-remove" },
+                      {
+                        kind: "action",
+                        id: "remove",
+                        label: t("projects.removeProject"),
+        className: "project-dropdown-item",
+                        iconLeft: <TrashIcon size={14} />,
+                        danger: true,
+                        onSelect: () => void handleRemove(row),
+                      },
+                    ]}
+                    trigger={
                       <button
                         type="button"
-                        onClick={() => {
-                          setMenuFor(null);
-                          handleNewChatInProject(row);
-                        }}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--surface-hover)]"
-                        style={{ color: "var(--text)" }}
+                        className="flex items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-hover)]"
+                        style={{ width: 28, height: 28, color: "var(--muted)" }}
+                        aria-label={t("projects.editProject")}
                       >
-                        <ChatCirclePlusIcon size={14} /> {t("projects.newChatInProject")}
+                        <DotsThreeIcon size={16} />
                       </button>
-                      {row.kind === "entity" && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setMenuFor(null);
-                            const entity = projects.find((p) => p.project_id === row.projectId);
-                            if (entity) setEditing(entity);
-                          }}
-                          className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--surface-hover)]"
-                          style={{ color: "var(--text)" }}
-                        >
-                          <PencilSimpleIcon size={14} /> {t("projects.editProject")}
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        disabled={row.sessions.length === 0}
-                        onClick={() => handleArchiveChats(row)}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-50"
-                        style={{ color: "var(--text)" }}
-                      >
-                        <ArchiveIcon size={14} /> {t("projects.archiveChats")}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void handleRemove(row)}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--surface-hover)]"
-                        style={{ color: "var(--error, #e5484d)" }}
-                      >
-                        <TrashIcon size={14} /> {t("projects.removeProject")}
-                      </button>
-                    </div>
-                  )}
+                    }
+                  />
                 </div>
               </div>
 

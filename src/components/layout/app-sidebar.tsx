@@ -76,11 +76,12 @@ import { createConfigAgent, deleteConfigAgent } from "@/lib/agent-profile-ipc";
 type ThemeMode = "light" | "dark";
 
 // Type-safe label keys
-type NavLabelKey = 'nav.automation' | 'nav.conductor' | 'nav.extensions';
+type NavLabelKey = 'nav.automation' | 'nav.conductor' | 'nav.extensions' | 'nav.projects';
 
 const mainNavItems: { view: ViewType; labelKey: NavLabelKey; icon: React.ComponentType<{ size?: number; className?: string }> }[] = [
   { view: 'conductor', labelKey: 'nav.conductor', icon: ChalkboardIcon },
   { view: 'automation', labelKey: 'nav.automation', icon: ClockCounterClockwiseIcon },
+  { view: 'projects', labelKey: 'nav.projects', icon: FolderIcon },
 ];
 
 const settingsNavGroups: {

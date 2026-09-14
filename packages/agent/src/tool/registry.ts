@@ -108,23 +108,21 @@ interface RegisteredTool {
 }
 
 /**
- * Tool metadata for search results
+ * Tool metadata for search results (Plan 241: minimal shape — name + description only).
  */
 export interface ToolMeta {
   name: string;
   description: string;
-  category: string;
-  /**
-   * Optional human-readable summary of the tool's input schema.
-   * Set when the registry persists metadata via the extended register
-   * variants; otherwise undefined (caller-safe).
-   */
+}
+
+/**
+ * Internal metadata stored in registry snapshot for hint stub building.
+ * Contains fields needed by `buildHintStubEntry` and risk-tier lookups.
+ */
+export interface ToolHintMeta {
   inputSchemaSummary?: string;
-  /**
-   * How this tool is exposed to the LLM (Plan 241). Defaults to
-   * undefined which is treated as 'always' by the prompt builder.
-   */
   exposeMode?: ExposeMode;
+  riskTier?: import('../permissions/policy.js').RiskTier;
 }
 
 /**
@@ -393,18 +391,16 @@ export class ToolRegistry {
     const tools: Tool[] = [];
     const exposeModeMap = new Map<string, ExposeMode>();
     const executorMap = new Map<string, ToolExecutor>();
-    const metaMap = new Map<string, ToolMeta>();
+    const metaMap = new Map<string, ToolHintMeta>();
     for (const [, rt] of this.tools) {
       const name = rt.definition.name;
       tools.push(rt.definition);
       exposeModeMap.set(name, rt.meta?.exposeMode ?? 'always');
       executorMap.set(name, rt.executor);
       metaMap.set(name, {
-        name,
-        description: rt.definition.description,
-        category: 'unknown',
         inputSchemaSummary: rt.meta?.inputSchemaSummary,
         exposeMode: rt.meta?.exposeMode,
+        riskTier: rt.meta?.riskTier,
       });
     }
     return {
