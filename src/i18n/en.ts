@@ -2512,6 +2512,8 @@ const en = {
   'marketplace.categories.skills': 'Skills',
   'marketplace.categories.connectors': 'Connectors',
   'marketplace.categories.sources': 'Sources',
+  'marketplace.sources.manageTitle': 'Marketplace sources',
+  'marketplace.sources.manageDescription': 'Add git repositories or local directories that publish a marketplace.json. Plugins from these sources appear in the tabs above.',
   'marketplace.sources.addTitle': 'Add a source',
   'marketplace.sources.addPlaceholder': 'owner/repo, https git URL, or local directory',
   'marketplace.sources.add': 'Add',

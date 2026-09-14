@@ -10,6 +10,7 @@
 import { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { Modal } from "@/components/ui/page";
 import { useTranslation } from "@/hooks/useTranslation";
 import { cn } from "@/lib/utils";
 import { getPluginAPI } from "@/lib/plugin-ipc";
@@ -175,62 +176,69 @@ export function MarketplacePage({
         </div>
       </div>
 
-      {/* Marketplace source manager (collapsed by default) */}
-      {sourcesOpen && (
-        <div className="mb-4">
-          <SourcesPanel
-            marketplaces={marketplaces}
-            busy={marketplaceBusy}
-            sourceInput={sourceInput}
-            sourceError={sourceError}
-            onSourceInputChange={setSourceInput}
-            onAdd={async (src) => {
-              const api = getPluginAPI();
-              if (!api) return;
-              setSourceError(null);
-              setMarketplaceBusy("__adding");
-              try {
-                const res = await api.registry.marketplace.add({ source: src });
-                if (res.success) {
-                  setSourceInput("");
-                  await Promise.all([reloadMarketplaces(), reloadCatalog()]);
-                } else {
-                  setSourceError(res.error ?? t("extensions.actionFailed"));
-                }
-              } finally {
-                setMarketplaceBusy(null);
-              }
-            }}
-            onRefresh={async (name) => {
-              const api = getPluginAPI();
-              if (!api) return;
-              setMarketplaceBusy(name ?? "__all");
-              try {
-                await api.registry.marketplace.refresh(name);
+      {/* Marketplace source manager — opens as a centered modal so the
+          plugin grid stays full-width underneath. The grid never reflows
+          when sources are toggled. State (input, error, busy) lives on
+          this page so re-opens preserve the user's in-progress entry. */}
+      <Modal
+        open={sourcesOpen}
+        onClose={() => setSourcesOpen(false)}
+        size="lg"
+        title={t("marketplace.sources.manageTitle")}
+        description={t("marketplace.sources.manageDescription")}
+      >
+        <SourcesPanel
+          marketplaces={marketplaces}
+          busy={marketplaceBusy}
+          sourceInput={sourceInput}
+          sourceError={sourceError}
+          onSourceInputChange={setSourceInput}
+          onAdd={async (src) => {
+            const api = getPluginAPI();
+            if (!api) return;
+            setSourceError(null);
+            setMarketplaceBusy("__adding");
+            try {
+              const res = await api.registry.marketplace.add({ source: src });
+              if (res.success) {
+                setSourceInput("");
                 await Promise.all([reloadMarketplaces(), reloadCatalog()]);
-              } finally {
-                setMarketplaceBusy(null);
+              } else {
+                setSourceError(res.error ?? t("extensions.actionFailed"));
               }
-            }}
-            onRemove={async (name) => {
-              const api = getPluginAPI();
-              if (!api) return;
-              setMarketplaceBusy(name);
-              try {
-                const res = await api.registry.marketplace.remove(name);
-                if (!res.success) {
-                  setSourceError(res.error ?? t("extensions.actionFailed"));
-                } else {
-                  setSourceError(null);
-                }
-                await Promise.all([reloadMarketplaces(), reloadCatalog()]);
-              } finally {
-                setMarketplaceBusy(null);
+            } finally {
+              setMarketplaceBusy(null);
+            }
+          }}
+          onRefresh={async (name) => {
+            const api = getPluginAPI();
+            if (!api) return;
+            setMarketplaceBusy(name ?? "__all");
+            try {
+              await api.registry.marketplace.refresh(name);
+              await Promise.all([reloadMarketplaces(), reloadCatalog()]);
+            } finally {
+              setMarketplaceBusy(null);
+            }
+          }}
+          onRemove={async (name) => {
+            const api = getPluginAPI();
+            if (!api) return;
+            setMarketplaceBusy(name);
+            try {
+              const res = await api.registry.marketplace.remove(name);
+              if (!res.success) {
+                setSourceError(res.error ?? t("extensions.actionFailed"));
+              } else {
+                setSourceError(null);
               }
-            }}
-          />
-        </div>
-      )}
+              await Promise.all([reloadMarketplaces(), reloadCatalog()]);
+            } finally {
+              setMarketplaceBusy(null);
+            }
+          }}
+        />
+      </Modal>
 
       {/* Plugin grid — full width, auto-fill columns */}
       <MarketplaceGrid
