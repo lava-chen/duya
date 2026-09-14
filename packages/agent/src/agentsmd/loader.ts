@@ -472,6 +472,19 @@ export interface LoadAgentsMdOptions {
   config?: Partial<AgentsMdConfig>
   /** Force include external files */
   forceIncludeExternal?: boolean
+  /**
+   * Optional project-entity home directory (e.g.
+   * `~/.duya/projects/<projectId>/`). When supplied, the loader reads
+   * `<projectHome>/AGENTS.md` as a `'Project entity'` source. This is
+   * the project's seeded instruction file (Plan 525 / 408 follow-up);
+   * it is independent of the cwd ancestor walk and is loaded even when
+   * `cwd` does not contain an `AGENTS.md`.
+   *
+   * Silent skip if the file does not exist — the entity home is duya-
+   * internal, the user may have deleted it. A missing home is not an
+   * error.
+   */
+  projectHome?: string
 }
 
 /**
@@ -536,6 +549,26 @@ export async function loadAgentsMdFiles(
       config,
     )
     result.push(...userRules)
+  }
+
+  // 3a. Load project-entity home AGENTS.md (Plan 525 / 408 follow-up).
+  // This is the project's seeded instruction file at
+  // `~/.duya/projects/<projectId>/AGENTS.md`. Loaded independently of the
+  // cwd ancestor walk — the entity home may live on a completely different
+  // filesystem subtree than the user's code, so a normal walk would miss it.
+  if (config.enableProject && options.projectHome) {
+    const homeAgentsPath = path.join(options.projectHome, 'AGENTS.md')
+    if (await fileExists(homeAgentsPath)) {
+      const homeFiles = await processAgentsFile(
+        homeAgentsPath,
+        'Project entity',
+        processedPaths,
+        config,
+      )
+      result.push(...homeFiles)
+    }
+    // Missing file: silent skip. The home is duya-internal, the user may
+    // have deleted it; do not warn.
   }
 
   // 3. Load Project AGENTS.md (from root to cwd)
@@ -614,6 +647,19 @@ export async function loadAgentsMdFiles(
 
 /**
  * Build the AGENTS.md prompt section from loaded files
+ *
+ * Each file is wrapped in a codex-style mini-envelope:
+ *   # AGENTS.md instructions for <abs path>
+ *
+ *   <INSTRUCTIONS>
+ *   <content>
+ *   </INSTRUCTIONS>
+ *
+ * The absolute path in the header tells the agent where each instruction
+ * set came from (managed / user / project-entity / project-ancestor /
+ * local). The outer `<system-reminder>` + `<project_instructions_spec>`
+ * envelope is preserved (Plan 408): it gives the prompt-injection guard
+ * a strippable boundary and the model a stable training slot.
  */
 export function buildAgentsMdPrompt(files: AgentsFileInfo[]): string {
   if (files.length === 0) {
@@ -624,18 +670,9 @@ export function buildAgentsMdPrompt(files: AgentsFileInfo[]): string {
 
   for (const file of files) {
     if (!file.content) continue
-
-    const description =
-      file.type === 'Project'
-        ? ' (project instructions, checked into the codebase)'
-        : file.type === 'Local'
-          ? " (user's private project instructions, not checked in)"
-          : file.type === 'Managed'
-            ? ' (system-wide instructions)'
-            : " (user's private global instructions for all projects)"
-
     memories.push(
-      `Contents of ${file.path}${description}:\n\n${file.content}`,
+      `# AGENTS.md instructions for ${file.path}\n\n` +
+        `<INSTRUCTIONS>\n${file.content}\n</INSTRUCTIONS>`,
     )
   }
 
