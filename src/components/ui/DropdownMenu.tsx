@@ -70,6 +70,14 @@ interface DropdownMenuProps {
    */
   minWidth?: number;
   maxWidth?: number;
+  /**
+   * Hard cap on the menu's height (px). When omitted, the menu derives
+   * a cap from the viewport so the popover never overflows the window
+   * and a long item list becomes scrollable instead of pushing past
+   * the bottom of the screen. Use this prop to override the cap (e.g.
+   * a host that wants a fixed-height picker).
+   */
+  maxHeight?: number;
 }
 
 export function DropdownMenu({
@@ -85,10 +93,14 @@ export function DropdownMenu({
   align = "start",
   minWidth,
   maxWidth,
+  maxHeight,
 }: DropdownMenuProps) {
   const [internalOpen, setInternalOpen] = useState(false);
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
   const [position, setPosition] = useState({ top: 0, left: 0 });
+  const [resolvedMaxHeight, setResolvedMaxHeight] = useState<number | undefined>(
+    undefined
+  );
   const triggerRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const submenuTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -138,6 +150,23 @@ export function DropdownMenu({
     const viewportW = window.innerWidth;
     const viewportH = window.innerHeight;
 
+    // Height cap derived from viewport so long lists scroll inside the
+    // popover instead of overflowing the bottom of the screen. 480px
+    // upper bound keeps the menu from becoming unwieldy on tall
+    // windows; hosts can override via the `maxHeight` prop.
+    const VIEWPORT_FLOOR = 100;
+    const MAX_HEIGHT_CEILING = 480;
+    const belowRoom = viewportH - rect.bottom - GAP - 8;
+    const aboveRoom = rect.top - GAP - 8;
+    const defaultCap =
+      side === "above"
+        ? Math.max(VIEWPORT_FLOOR, aboveRoom)
+        : Math.max(VIEWPORT_FLOOR, belowRoom);
+    const nextMaxHeight =
+      typeof maxHeight === "number"
+        ? Math.min(maxHeight, MAX_HEIGHT_CEILING)
+        : Math.min(defaultCap, MAX_HEIGHT_CEILING);
+
     let top = side === "above" ? rect.top - menuHeight - GAP : rect.bottom + GAP;
     if (top < 0) top = rect.bottom + GAP; // fall back to below
     if (top + menuHeight > viewportH) top = Math.max(0, viewportH - menuHeight - 4);
@@ -148,8 +177,9 @@ export function DropdownMenu({
     if (left < 4) left = 4;
     if (left + menuWidth > viewportW) left = Math.max(4, viewportW - menuWidth - 4);
 
+    setResolvedMaxHeight(nextMaxHeight);
     setPosition({ top, left });
-  }, [actualOpen, anchorPosition, side, align, items, header, minWidth, maxWidth]);
+  }, [actualOpen, anchorPosition, side, align, items, header, minWidth, maxWidth, maxHeight]);
 
   // Close on click outside
   useEffect(() => {
@@ -337,7 +367,15 @@ export function DropdownMenu({
             aria-label="Dropdown menu"
           >
             {header && <div className="sidebar-project-menu-header">{header}</div>}
-            {items.map((item) => renderItem(item))}
+            <div
+              className="sidebar-project-menu-list"
+              style={{
+                maxHeight: resolvedMaxHeight,
+                overflowY: resolvedMaxHeight ? "auto" : undefined,
+              }}
+            >
+              {items.map((item) => renderItem(item))}
+            </div>
           </div>,
           document.body
         )}
