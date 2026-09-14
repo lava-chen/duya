@@ -301,6 +301,30 @@ if (gotTheLock) {
     registerConductorHandlers();
     registerSidebarSectionsHandlers();
 
+    // Plan 534 — one-time copy of `memory-state.db.projects`/`project_bots`
+    // into `duya-core.db` (the `projects` table was misplaced in memory-state,
+    // plan 525). Runs unconditionally (independent of the memory worker) so
+    // users with the worker disabled still keep their historical project rows.
+    // Idempotent + marker-guarded; a no-op once core `meta` records it.
+    try {
+      const { getCoreStoresOrNull } = await import('./db/core-connection');
+      const { runProjectsImport, needsProjectsImport } = await import('./db/core/projects-import');
+      const { resolveMemoryDbPath } = await import('./memory-state/path');
+      const coreStoresForImport = getCoreStoresOrNull();
+      if (coreStoresForImport) {
+        const coreDb = coreStoresForImport.coreDb.db;
+        if (needsProjectsImport(coreDb)) {
+          runProjectsImport({
+            memoryDbPath: resolveMemoryDbPath({ bootJsonDatabaseDir: path.dirname(dbPath) }),
+            coreDb,
+            sqlite: sqliteCtor,
+          });
+        }
+      }
+    } catch (err) {
+      logger.warn('Projects one-time import skipped', { error: err instanceof Error ? err.message : String(err) }, LogComponent.Main);
+    }
+
     // Plan 526 — merge legacy <userData>/agents channel data into the shared
     // ~/.duya/agents root before anything reads bindings/secrets. Idempotent;
     // a no-op once every legacy file has been copied.

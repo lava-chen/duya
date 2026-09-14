@@ -66,17 +66,8 @@ export class ToolSearchTool implements Tool, ToolExecutor {
     try {
       const results = this.searchFn(query, Math.min(limit, 20));
       const sections = results.map((result) => {
-        const metadata = [
-          `- **Exposure:** ${result.exposeMode ?? 'always'}`,
-          result.inputSchemaSummary
-            ? `- **Input summary:** ${result.inputSchemaSummary}`
-            : null,
-        ].filter((line): line is string => line !== null);
-
         return [
           `## Tool: \`${result.name}\``,
-          '',
-          ...metadata,
           '',
           result.description.trim(),
           '',

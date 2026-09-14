@@ -16,14 +16,7 @@ import { getAutomationScheduler } from '../automation/Scheduler';
 import type { CreateAutomationCronInput, UpdateAutomationCronInput } from '../automation/types';
 import { getLogger, LogComponent } from '../logging/logger';
 import { setBrowserMaxTabs } from '../services/browser/daemon';
-import {
-  createCanvas as createConductorCanvas,
-  getMaxZIndex,
-  listCanvasGroups,
-  createCanvasGroup,
-  updateCanvasGroup,
-  deleteCanvasGroup,
-} from '../db/queries/conductors';
+import { getCoreStores } from '../db/core-connection';
 import { getChannelManager } from '../messaging/port-manager';
 import { updateDatabasePath, readBootConfig } from '../config/boot-config';
 import { emitGatewayConfigChanged, isGatewayConfigKey } from '../gateway/config-events';
@@ -1915,233 +1908,52 @@ export function registerConductorHandlers(): void {
   if (!getDatabase()) return;
 
   ipcMain.handle('conductor:canvas:list', () => {
-    const rows = getDb().prepare(
-      'SELECT * FROM conductor_canvases ORDER BY sort_order, created_at DESC'
-    ).all() as any[];
-    return rows.map((r: any) => ({
-      id: r.id,
-      name: r.name,
-      description: r.description,
-      layoutConfig: JSON.parse(r.layout_config),
-      sortOrder: r.sort_order,
-      createdAt: r.created_at,
-      updatedAt: r.updated_at,
-      projectPath: r.project_path ?? null,
-      isFavorite: r.is_favorite === 1,
-      groupId: r.group_id ?? null,
-      tags: JSON.parse(r.tags ?? '[]'),
-    }));
+    return getCoreStores().conductor.listCanvases();
   });
 
   ipcMain.handle('conductor:canvas:getByProjectPath', (_event, projectPath: string) => {
-    const row = getDb().prepare(
-      'SELECT * FROM conductor_canvases WHERE project_path = ?'
-    ).get(projectPath) as any;
-    if (!row) return null;
-    return {
-      id: row.id,
-      name: row.name,
-      description: row.description,
-      layoutConfig: JSON.parse(row.layout_config),
-      sortOrder: row.sort_order,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      projectPath: row.project_path ?? null,
-      isFavorite: row.is_favorite === 1,
-      groupId: row.group_id ?? null,
-      tags: JSON.parse(row.tags ?? '[]'),
-    };
+    return getCoreStores().conductor.getCanvasByProjectPath(projectPath);
   });
 
   ipcMain.handle('conductor:canvas:create', (_event, data: { name: string; description?: string; projectPath?: string | null }) => {
-    const canvas = createConductorCanvas(data);
-    return {
-      id: canvas.id,
-      name: canvas.name,
-      description: canvas.description,
-      layoutConfig: canvas.layoutConfig,
-      sortOrder: canvas.sortOrder,
-      createdAt: canvas.createdAt,
-      updatedAt: canvas.updatedAt,
-      projectPath: canvas.projectPath,
-      isFavorite: canvas.isFavorite,
-      groupId: canvas.groupId,
-      tags: canvas.tags,
-    };
+    return getCoreStores().conductor.createCanvas(data);
   });
 
   ipcMain.handle('conductor:canvas:update', (_event, id: string, data: { name?: string; description?: string | null; layoutConfig?: Record<string, unknown>; sortOrder?: number; isFavorite?: boolean; groupId?: string | null; tags?: string[] }) => {
-    const d = getDb();
-    const now = Date.now();
-    const fields: string[] = ['updated_at = ?'];
-    const values: unknown[] = [now];
-
-    if (data.name !== undefined) {
-      fields.push('name = ?');
-      values.push(data.name);
-    }
-    if (data.description !== undefined) {
-      fields.push('description = ?');
-      values.push(data.description);
-    }
-    if (data.layoutConfig !== undefined) {
-      fields.push('layout_config = ?');
-      values.push(JSON.stringify(data.layoutConfig));
-    }
-    if (data.sortOrder !== undefined) {
-      fields.push('sort_order = ?');
-      values.push(data.sortOrder);
-    }
-    if (data.isFavorite !== undefined) {
-      fields.push('is_favorite = ?');
-      values.push(data.isFavorite ? 1 : 0);
-    }
-    if (data.groupId !== undefined) {
-      fields.push('group_id = ?');
-      values.push(data.groupId);
-    }
-    if (data.tags !== undefined) {
-      fields.push('tags = ?');
-      values.push(JSON.stringify(data.tags));
-    }
-
-    values.push(id);
-    d.prepare(`UPDATE conductor_canvases SET ${fields.join(', ')} WHERE id = ?`).run(...values);
-
-    const row = d.prepare('SELECT * FROM conductor_canvases WHERE id = ?').get(id) as any;
-    if (!row) return null;
-    return {
-      id: row.id,
-      name: row.name,
-      description: row.description,
-      layoutConfig: JSON.parse(row.layout_config),
-      sortOrder: row.sort_order,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      projectPath: row.project_path ?? null,
-      isFavorite: row.is_favorite === 1,
-      groupId: row.group_id ?? null,
-      tags: JSON.parse(row.tags ?? '[]'),
-    };
+    return getCoreStores().conductor.updateCanvas(id, data);
   });
 
   ipcMain.handle('conductor:canvas:delete', (_event, id: string) => {
-    const d = getDb();
-    const result = d.prepare('DELETE FROM conductor_canvases WHERE id = ?').run(id);
-    return result.changes > 0;
+    return getCoreStores().conductor.deleteCanvas(id);
   });
 
   // --- Canvas group (asset library collection) handlers ---
 
   ipcMain.handle('conductor:canvas:group:list', (_event, projectPath?: string | null) => {
-    return listCanvasGroups(projectPath);
+    return getCoreStores().conductor.listGroups(projectPath);
   });
 
   ipcMain.handle('conductor:canvas:group:create', (_event, data: { name: string; projectPath?: string | null }) => {
-    return createCanvasGroup(data);
+    return getCoreStores().conductor.createGroup(data);
   });
 
   ipcMain.handle('conductor:canvas:group:update', (_event, id: string, data: { name?: string; sortOrder?: number }) => {
-    return updateCanvasGroup(id, data);
+    return getCoreStores().conductor.updateGroup(id, data);
   });
 
   ipcMain.handle('conductor:canvas:group:delete', (_event, id: string) => {
-    return deleteCanvasGroup(id);
+    return getCoreStores().conductor.deleteGroup(id);
   });
 
   ipcMain.handle('conductor:snapshot', (_event, canvasId: string) => {
-    const d = getDb();
-    const canvas = d.prepare('SELECT * FROM conductor_canvases WHERE id = ?').get(canvasId) as any;
+    const conductor = getCoreStores().conductor;
+    const canvas = conductor.getCanvas(canvasId);
     if (!canvas) return null;
-
-    const elementRows = d.prepare('SELECT * FROM conductor_elements WHERE canvas_id = ?').all(canvasId) as any[];
-
-    let elements: Array<{
-      id: string;
-      canvasId: string;
-      elementKind: string;
-      position: unknown;
-      config: unknown;
-      vizSpec: unknown | null;
-      sourceCode: string | null;
-      state: string;
-      dataVersion: number;
-      permissions: unknown;
-      metadata: unknown;
-      createdAt: number;
-      updatedAt: number;
-    }> = [];
-
-    if (elementRows.length > 0) {
-      elements = elementRows.map((e: any) => ({
-        id: e.id,
-        canvasId: e.canvas_id,
-        elementKind: e.element_kind,
-        position: JSON.parse(e.position),
-        config: JSON.parse(e.config),
-        vizSpec: e.viz_spec ? JSON.parse(e.viz_spec) : null,
-        sourceCode: e.source_code,
-        state: e.state,
-        dataVersion: e.data_version,
-        permissions: JSON.parse(e.permissions),
-        metadata: JSON.parse(e.metadata),
-        createdAt: e.created_at,
-        updatedAt: e.updated_at,
-      }));
-    } else {
-      const widgetRows = d.prepare('SELECT * FROM conductor_widgets WHERE canvas_id = ?').all(canvasId) as any[];
-      elements = widgetRows.map((w: any) => ({
-        id: w.id,
-        canvasId: w.canvas_id,
-        elementKind: `widget/${w.type}`,
-        position: { ...JSON.parse(w.position), zIndex: 0, rotation: 0 },
-        config: JSON.parse(w.config),
-        vizSpec: null,
-        sourceCode: w.source_code,
-        state: w.state,
-        dataVersion: w.data_version,
-        permissions: JSON.parse(w.permissions),
-        metadata: { label: `${w.kind}:${w.type}`, tags: [], createdBy: 'user' },
-        createdAt: w.created_at,
-        updatedAt: w.updated_at,
-      }));
-    }
-
-    const widgetRows = d.prepare('SELECT * FROM conductor_widgets WHERE canvas_id = ?').all(canvasId) as any[];
-    const lastAction = d.prepare('SELECT MAX(id) as max_id FROM conductor_actions WHERE canvas_id = ?').get(canvasId) as { max_id: number | null };
-
-    return {
-      canvas: {
-        id: canvas.id,
-        name: canvas.name,
-        description: canvas.description,
-        layoutConfig: JSON.parse(canvas.layout_config),
-        sortOrder: canvas.sort_order,
-        createdAt: canvas.created_at,
-        updatedAt: canvas.updated_at,
-        projectPath: canvas.project_path ?? null,
-        isFavorite: canvas.is_favorite === 1,
-        groupId: canvas.group_id ?? null,
-        tags: JSON.parse(canvas.tags ?? '[]'),
-      },
-      elements,
-      widgets: widgetRows.map((w: any) => ({
-        id: w.id,
-        canvasId: w.canvas_id,
-        kind: w.kind,
-        type: w.type,
-        position: JSON.parse(w.position),
-        config: JSON.parse(w.config),
-        data: JSON.parse(w.data),
-        dataVersion: w.data_version,
-        sourceCode: w.source_code,
-        state: w.state,
-        permissions: JSON.parse(w.permissions),
-        createdAt: w.created_at,
-        updatedAt: w.updated_at,
-      })),
-      actionCursor: lastAction?.max_id ?? 0,
-    };
+    const elements = conductor.listElementsByCanvas(canvasId);
+    const widgets = conductor.listWidgetsByCanvas(canvasId);
+    const allActions = conductor.listActionsBySession(canvasId);
+    const lastAction = allActions.length > 0 ? Math.max(...allActions.map((a) => a.id)) : 0;
+    return { canvas, elements, widgets, actionCursor: lastAction };
   });
 
   ipcMain.handle('conductor:action', (_event, request: Record<string, unknown>) => {

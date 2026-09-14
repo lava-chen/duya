@@ -10,8 +10,6 @@ import { migration0008 } from './0008_curation_runs.sql';
 import { migration0009 } from './0009_drop_legacy_phase2.sql';
 import { migration0010 } from './0010_memory_tier_index.sql';
 import { migration0011 } from './0011_extend_agent_type_check.sql';
-import { migration0012 } from './0012_project_entity_minimal.sql';
-import { migration0013 } from './0013_project_icon_color.sql';
 import { getLogger, LogComponent } from '../../logging/logger';
 
 export interface Migration {
@@ -34,10 +32,12 @@ export interface Migration {
  *   - 0009 (Plan 406 Phase D) — drop legacy memory_entries / memory_evidence / phase2_runs
  *   - 0010 (Plan 479 Phase 1) — memory_tier_index (bot memory isolation query index)
  *   - 0011 — extend rollout_catalog.agent_type CHECK with 'bot' and 'spawn'
- *   - 0012 (Plan 525 Phase 1) — projects name/description/paths columns + project_bots
- *   - 0013 (Plan 525 follow-up) — projects icon/color avatar columns
+ *   - 0012/0013 (plan 525 project entity + icon/color) — these two entity
+ *     migrations (name/description/paths columns + project_bots, icon/color)
+ *     were migrated over to `duya-core.db` (ProjectStore, migration id=18) as
+ *     part of plan 534 and are no longer applied to memory-state.db.
  */
-export const MIGRATIONS: Migration[] = [migration0001, migration0002, migration0003, migration0005, migration0006, migration0007, migration0008, migration0009, migration0010, migration0011, migration0012, migration0013];
+export const MIGRATIONS: Migration[] = [migration0001, migration0002, migration0003, migration0005, migration0006, migration0007, migration0008, migration0009, migration0010, migration0011];
 
 function computeSha256(sql: string): string {
   return crypto.createHash('sha256').update(sql).digest('hex');

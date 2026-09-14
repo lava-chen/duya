@@ -2358,6 +2358,7 @@ const en = {
   'conductor.toolbar.connector': 'Connector',
   'conductor.toolbar.media': 'Media',
   'conductor.toolbar.link': 'Link',
+  'conductor.toolbar.newConversation': 'New conversation',
   'conductor.toolbar.closePalette': 'Close',
   'conductor.toolbar.shapeRounded': 'Rounded rectangle',
   'conductor.toolbar.shapeParallelogram': 'Parallelogram',

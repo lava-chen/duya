@@ -16,6 +16,7 @@ import { useTranslation } from "@/hooks/useTranslation";
 import {
   ArrowElbowDownRightIcon,
   ArrowUpRightIcon,
+  ChatCirclePlusIcon,
   CircleIcon,
   DiamondIcon,
   HexagonIcon,
@@ -315,6 +316,14 @@ export function CanvasToolbar() {
     setDatabaseDialogOpen(false);
   }, [setActiveTool]);
 
+  const handleNewConversation = useCallback(async () => {
+    try {
+      await window.electronAPI?.orb?.resetConversation?.();
+    } catch {
+      // best-effort — orb may not be available in all contexts
+    }
+  }, []);
+
   const handleClick = useCallback((tool: Tool, e: React.MouseEvent) => {
     if (tool.id === "document") {
       setDocumentDialogOpen(true);
@@ -413,6 +422,22 @@ export function CanvasToolbar() {
           </div>
         </div>
       ))}
+
+      <div className="canvas-toolbar__divider" />
+
+      <div className="relative">
+        <ToolbarTooltip label="conductor.toolbar.newConversation">
+          <button
+            type="button"
+            onClick={handleNewConversation}
+            className="conductor-tool-button"
+          >
+            <div className="w-[21px] h-[21px]">
+              <ChatCirclePlusIcon size={21} />
+            </div>
+          </button>
+        </ToolbarTooltip>
+      </div>
 
       {openSubmenu && (
         <Submenu

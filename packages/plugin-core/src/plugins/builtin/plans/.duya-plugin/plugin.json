@@ -11,13 +11,12 @@
   "keywords": [
     "plans",
     "exec-plans",
-    "project-management",
-    "mcp"
+    "project-management"
   ],
   "interface": {
     "displayName": "Plans",
     "shortDescription": "Query and archive duya execution plans",
-    "longDescription": "Exposes the duya plans store (~/.duya/projects/<projectId>/plans/) as three MCP tools: plan_status lists a project's active plans, plan_search finds plans across projects by keyword, and plan_complete archives a finished plan. Plan creation and content editing stay with the ordinary file tools.",
+    "longDescription": "Built-in tools for working with duya execution plans stored under (~/.duya/projects/<projectId>/plans/): plan_status lists a project's active plans, plan_search finds plans across projects by keyword, and plan_complete archives a finished plan. Plan creation and content editing stay with the ordinary file tools. These are built-in tools in the duya agent, not MCP servers.",
     "category": "developer-tools",
     "brandColor": "#2563EB",
     "icon": "",

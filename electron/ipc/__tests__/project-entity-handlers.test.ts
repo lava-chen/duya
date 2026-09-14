@@ -21,10 +21,21 @@ import * as os from 'os';
 import * as path from 'path';
 
 import type { ProjectPathEntry } from '../../memory-state';
+import { CoreDatabase } from '../../db/core/database';
+import { ProjectStore } from '../../db/core/project-store';
+import type { CoreStores } from '../../db/core-connection';
 
 // Dynamically imported in beforeEach after vi.resetModules() so each test
 // gets a fresh module instance (the handler module has a module-level
 // `registered` guard that would otherwise skip re-registration).
+
+// The `projects` table now lives in `duya-core.db` (plan 534), so a real core
+// DB is initialized per test and published through `core-connection`'s test
+// hook (`_setCoreStoresForTesting`) — `projectService` reads/writes through
+// `getCoreStores().coreDb.db`, and the corrupted-JSON cases seed rows directly
+// against that table (not memory-state). `core-connection` must be imported
+// dynamically each `beforeEach` (after `vi.resetModules()`) so it shares the
+// same module instance that `projectService`'s lazy `require` resolves to.
 
 // All mock state lives in vi.hoisted so the vi.mock factory closure
 // (also hoisted) and the test bodies see the same singleton.
@@ -55,6 +66,10 @@ vi.mock('../../logging/logger', () => ({
 let testDir = '';
 // Module handle refreshed each test via vi.resetModules() + dynamic import.
 let memoryState: typeof import('../../memory-state');
+// Real core DB (projects table lives here, plan 534).
+let coreDb: CoreDatabase;
+// Fresh `core-connection` module per test (must match projectService's lazy require).
+let coreConn: typeof import('../../db/core-connection');
 
 async function invoke(channel: string, event: unknown = {}, ...args: unknown[]): Promise<unknown> {
   const handler = mocks.handlers.get(channel);
@@ -80,12 +95,27 @@ describe('project-entity-handlers', () => {
     // Sanity: db must be open before handlers run.
     expect(memoryState.getDb()).toBeTruthy();
 
+    // Initialize a real core DB (projects table lives here, plan 534) and
+    // publish it through the test hook so `projectService` finds it via
+    // `getCoreStores()` without routing to a shared user path.
+    coreDb = new CoreDatabase({
+      filename: path.join(testDir, 'duya-core.db'),
+      migrations: ProjectStore.migrations,
+    });
+    coreConn = await import('../../db/core-connection');
+    coreConn._setCoreStoresForTesting({
+      coreDb,
+      projects: new ProjectStore(coreDb.db),
+    } as CoreStores);
+
     // Register handlers AFTER the DB is ready (fresh module instance).
     const { registerProjectEntityHandlers } = await import('../project-entity-handlers');
     registerProjectEntityHandlers();
   });
 
   afterEach(() => {
+    coreConn?._setCoreStoresForTesting(null);
+    try { coreDb?.close(); } catch { /* best-effort */ }
     memoryState?.closeDb();
     try { fs.rmSync(testDir, { recursive: true, force: true }); } catch { /* best-effort */ }
     delete process.env.DUYA_TEST;
@@ -299,9 +329,10 @@ describe('project-entity-handlers', () => {
 
   describe('JSON corruption in paths field', () => {
     it('list degrades to [] when the raw JSON is corrupted', async () => {
-      // Bypass the IPC and write a corrupted row directly via the DB
-      // (we never expose JSON.write through IPC).
-      const db = memoryState.getDb();
+      // Bypass the IPC and write a corrupted row directly into the CORE
+      // projects table (we never expose JSON.write through IPC; the table
+      // lives in duya-core.db after plan 534).
+      const db = coreConn.getCoreStores().coreDb.db;
       db.prepare(
         `INSERT INTO projects (project_id, canonical_root, name, description, paths, created_at, last_seen_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -323,7 +354,7 @@ describe('project-entity-handlers', () => {
     });
 
     it('get degrades to [] when the raw JSON is corrupted', async () => {
-      const db = memoryState.getDb();
+      const db = coreConn.getCoreStores().coreDb.db;
       db.prepare(
         `INSERT INTO projects (project_id, canonical_root, name, description, paths, created_at, last_seen_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,

@@ -205,6 +205,20 @@ const UPDATE_HEARTBEAT_SQL = `
   WHERE rollout_id = @rollout_id
 `;
 
+// Plan 534: project entities now live in `duya-core.db`, but `rollout_catalog`
+// (a Plan 305 catalog table in `memory-state.db`) still carries a FOREIGN KEY
+// that references `projects` in the SAME (`memory-state.db`) database — SQLite
+// cannot enforce a cross-database FK. So every project scoped by catalogSync
+// needs a minimal bookkeeping row here to satisfy the legacy constraint.
+// We deliberately insert ONLY the 0001 base columns (project_id, canonical_root,
+// created_at, last_seen_at) so this works whether or not the 0012/0013 entity
+// columns were ever applied. The entity payload (name/description/paths/
+// icon/color) is maintained solely in core via projectResolver/projectService.
+const INSERT_PROJECT_FK_PLACEHOLDER_SQL = `
+  INSERT OR IGNORE INTO projects (project_id, canonical_root, created_at, last_seen_at)
+  VALUES (?, ?, ?, ?)
+`;
+
 /**
  * Resolve a session's scope (global vs project) via the Phase B
  * project resolver. Returns `scope_kind='global'` and `project_id=null`
@@ -221,7 +235,8 @@ function resolveScope(opts: {
   agentProfileId: string | null;
   cwd?: string;
   workspaceOverridesPath?: string;
-  memoryDb: Database;
+  /** Projects now live in duya-core.db (plan 534) — pass coreDb for registration. */
+  coreDb: Database;
 }): {
   scope_kind: ScopeKind;
   project_id: string | null;
@@ -245,7 +260,9 @@ function resolveScope(opts: {
       agent_profile_id: opts.agentProfileId ?? undefined,
       cwd: opts.cwd,
       workspaceOverridesPath: opts.workspaceOverridesPath,
-      memoryDb: opts.memoryDb,
+      // Projects table lives in duya-core.db (plan 534): resolveProject's
+      // identity registration must target the core db, not the memory db.
+      memoryDb: opts.coreDb,
     });
     return {
       scope_kind: 'project',
@@ -483,10 +500,11 @@ function syncOneSession(
 
   // Active session — compute fingerprint and message metadata.
   const messages = readMessagesForFingerprint(coreDb, session.id);
-  return activeSync(memoryDb, session, messages, opts, now);
+  return activeSync(coreDb, memoryDb, session, messages, opts, now);
 }
 
 function activeSync(
+  coreDb: Database,
   memoryDb: Database,
   session: ChatSessionRow,
   messages: MessageForHash[],
@@ -524,8 +542,20 @@ function activeSync(
     agentProfileId: session.agent_profile_id,
     cwd: opts.cwd,
     workspaceOverridesPath: opts.workspaceOverridesPath,
-    memoryDb,
+    coreDb,
   });
+
+  // Plan 534: keep the legacy memory-state `projects` FK target in sync with
+  // the resolved project so the roll insert below never trips the constraint,
+  // even when the entity row exists only in core. No-op when global scope.
+  if (scope.scope_kind === 'project' && scope.project_id) {
+    memoryDb.prepare(INSERT_PROJECT_FK_PLACEHOLDER_SQL).run(
+      scope.project_id,
+      scope.working_directory_normalized ?? scope.working_directory ?? '',
+      now,
+      now,
+    );
+  }
 
   // Generation bump: existing.generation + 1 if existing, else 0.
   // (A brand-new row starts at generation=0; the first content change

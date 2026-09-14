@@ -47,6 +47,14 @@ describe('project resolver', () => {
     memoryDb.pragma('foreign_keys = ON');
     memoryDb.pragma('busy_timeout = 5000');
     runMigrations(memoryDb);
+    // projectResolver's registerProject reads/writes the entity columns that
+    // used to come from memory-state migration 0012. Plan 534 moved them to
+    // duya-core.db, so recreate them on the test DB only.
+    memoryDb.exec(`
+      ALTER TABLE projects ADD COLUMN name TEXT NOT NULL DEFAULT '';
+      ALTER TABLE projects ADD COLUMN description TEXT;
+      ALTER TABLE projects ADD COLUMN paths TEXT NOT NULL DEFAULT '[]';
+    `);
     overridesPath = path.join(temp.dir, 'workspace-overrides.json');
   });
 

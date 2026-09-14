@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useConversationStore, type Thread, type ProjectGroup } from "@/stores/conversation-store";
 import { ThreadListItem } from "./ThreadListItem";
 import { FolderIcon, FolderOpenIcon, ArchiveIcon, DotsThreeIcon, FolderOpenIcon as OpenFolderIcon, CopyIcon, PlusIcon, CaretRightIcon, XIcon } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
 import { Button } from "@/components/ui/Button";
+import { DropdownMenu, type MenuAction } from "@/components/ui/DropdownMenu";
 import { useSidebarSectionsStore } from "@/stores/sidebar-sections-store";
 import { InputDialog } from "@/components/ui/InputDialog";
 
@@ -33,24 +34,18 @@ export function ProjectGroupItem({ project, threads, activeThreadId }: ProjectGr
     unassignProject,
     createSection,
   } = useSidebarSectionsStore();
-  const [showMenu, setShowMenu] = useState(false);
-  const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
-  // Plan 471 v4: when the context menu sits in the right ~180px of the
-  // viewport, the cascading "分区" submenu would overflow past the screen
-  // edge. We flip it to render on the left of the parent menu instead.
-  const [submenuFlipLeft, setSubmenuFlipLeft] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [visibleCount, setVisibleCount] = useState(THREAD_COLLAPSE_THRESHOLD);
-  // Section submenu state. Two-state machine:
-  //  - "closed": submenu not shown
-  //  - `sectionSubmenuOpen`: hover/select state. The parent menu stays open
-  //    while the submenu floats to the right.
-  const [sectionSubmenuOpen, setSectionSubmenuOpen] = useState(false);
   // Inline dialog for creating a brand-new section from the project menu.
   const [isNewSectionDialogOpen, setIsNewSectionDialogOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const sectionMenuRef = useRef<HTMLDivElement>(null);
+  // Plan 535: anchor position for the shared DropdownMenu when opened from
+  // the right-click context menu. The ⋯ button does not need this — its
+  // anchor is computed from the button rect inside DropdownMenu.
+  const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(null);
+  // Plan 535: controlled open state. The ⋯ button toggles via the
+  // DropdownMenu's own click handler; the right-click path forces `true`
+  // after computing `menuAnchor`.
+  const [menuOpen, setMenuOpen] = useState(false);
 
   // Sort threads by updatedAt, most recent first
   const sortedThreads = [...threads].sort((a, b) => b.updatedAt - a.updatedAt);
@@ -70,18 +65,11 @@ export function ProjectGroupItem({ project, threads, activeThreadId }: ProjectGr
     setVisibleCount(THREAD_COLLAPSE_THRESHOLD);
   }, [toggleProjectExpanded, project.workingDirectory]);
 
-  const closeAllMenus = useCallback(() => {
-    setShowMenu(false);
-    setSectionSubmenuOpen(false);
-  }, []);
-
   // ─── Section actions ───
-  // These callbacks are stable so the menu items can be declared as
-  // plain DOM without recreating closures on every render.
+  // The shared DropdownMenu already handles close-on-select, so these
+  // callbacks only need to flip the InputDialog where needed.
 
   const handleNewSection = useCallback(() => {
-    setShowMenu(false);
-    setSectionSubmenuOpen(false);
     setIsNewSectionDialogOpen(true);
   }, []);
 
@@ -98,109 +86,42 @@ export function ProjectGroupItem({ project, threads, activeThreadId }: ProjectGr
 
   const handleMoveToSection = useCallback(
     (sectionId: string) => {
-      setShowMenu(false);
-      setSectionSubmenuOpen(false);
       void assignProjectToSection(sectionId, project.workingDirectory);
     },
     [assignProjectToSection, project.workingDirectory],
   );
 
   const handleRemoveFromSection = useCallback(() => {
-    setShowMenu(false);
-    setSectionSubmenuOpen(false);
     void unassignProject(project.workingDirectory);
   }, [unassignProject, project.workingDirectory]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
-    const menuWidth = 220;
-    const menuHeight = 240;
-    let x = e.clientX;
-    let y = e.clientY;
-
-    // Adjust position if menu would go off screen
-    if (x + menuWidth > window.innerWidth) {
-      x = window.innerWidth - menuWidth - 8;
-    }
-    if (y + menuHeight > window.innerHeight) {
-      y = window.innerHeight - menuHeight - 8;
-    }
-
-    // Plan 471 v4: if the parent menu sits within the right gutter that
-    // would clip the cascading submenu (parent.right + submenuWidth ≥
-    // viewport), flip the submenu to render on the left of the parent.
-    // The submenu is min-width 180px so we reserve exactly that plus a
-    // 12px gutter; anything tighter triggers the flip.
-    const SUBMENU_MIN_WIDTH = 180;
-    const SUBMENU_GUTTER = 12;
-    const wouldOverflowRight =
-      x + menuWidth + SUBMENU_MIN_WIDTH + SUBMENU_GUTTER >
-      window.innerWidth;
-    setSubmenuFlipLeft(wouldOverflowRight);
-
-    setMenuPos({ x, y });
-    // Same reset as the ⋯ button: clean submenu state on every open.
-    setSectionSubmenuOpen(false);
-    setShowMenu(true);
+    // Plan 535: anchor the shared DropdownMenu to the cursor. The shared
+    // component handles its own viewport clamping and the submenu flip-left
+    // behavior (Plan 471 v4) — we no longer compute it here.
+    setMenuAnchor({ x: e.clientX, y: e.clientY });
+    setMenuOpen(true);
   }, []);
 
   const handleOpenFolder = useCallback(() => {
-    closeAllMenus();
     if (project.workingDirectory && window.electronAPI?.shell?.openPath) {
       window.electronAPI.shell.openPath(project.workingDirectory);
     }
-  }, [project.workingDirectory, closeAllMenus]);
+  }, [project.workingDirectory]);
 
   const handleCopyPath = useCallback(() => {
-    closeAllMenus();
     if (project.workingDirectory) {
       navigator.clipboard.writeText(project.workingDirectory);
     }
-  }, [project.workingDirectory, closeAllMenus]);
+  }, [project.workingDirectory]);
 
   const handleDeleteProject = useCallback(() => {
-    closeAllMenus();
     // Delete all threads in this project
     for (const thread of sortedThreads) {
       deleteThread(thread.id);
     }
-  }, [deleteThread, sortedThreads, closeAllMenus]);
-
-  const handleMenuClick = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (buttonRef.current) {
-      const rect = buttonRef.current.getBoundingClientRect();
-      const menuWidth = 220;
-      const menuHeight = 240;
-      let x = rect.right - menuWidth;
-      let y = rect.bottom + 4;
-
-      // Adjust position if menu would go off screen
-      if (x < 0) {
-        x = 8;
-      }
-      if (x + menuWidth > window.innerWidth) {
-        x = window.innerWidth - menuWidth - 8;
-      }
-      if (y + menuHeight > window.innerHeight) {
-        y = rect.top - menuHeight - 4;
-      }
-
-      // Plan 471 v4: same submenu overflow guard as handleContextMenu.
-      // See notes there for why 180+12 are the magic numbers.
-      const SUBMENU_MIN_WIDTH = 180;
-      const SUBMENU_GUTTER = 12;
-      const wouldOverflowRight =
-        x + menuWidth + SUBMENU_MIN_WIDTH + SUBMENU_GUTTER >
-        window.innerWidth;
-      setSubmenuFlipLeft(wouldOverflowRight);
-
-      setMenuPos({ x, y });
-    }
-    // Reset the submenu state on every open: users get a clean slate.
-    setSectionSubmenuOpen(false);
-    setShowMenu((prev) => !prev);
-  }, []);
+  }, [deleteThread, sortedThreads]);
 
   const handleNewThread = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -214,47 +135,84 @@ export function ProjectGroupItem({ project, threads, activeThreadId }: ProjectGr
     });
   }, [startNewChat, project.workingDirectory, project.projectName]);
 
-  // Close menu on click outside
-  useEffect(() => {
-    if (!showMenu) return;
+  // Plan 535: the shared DropdownMenu now owns click-outside, Esc,
+  // submenu hover-intent (150ms), and viewport clamping. All of the
+  // above plumbing is gone.
 
-    const handleClickOutside = (e: MouseEvent) => {
-      const inMainMenu = menuRef.current?.contains(e.target as Node);
-      const inSubMenu = sectionMenuRef.current?.contains(e.target as Node);
-      if (!inMainMenu && !inSubMenu) {
-        closeAllMenus();
-      }
-    };
-
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [showMenu, closeAllMenus]);
-
-  // Submenu hover intent: when the user mouses into the section row, the
-  // submenu floats to the right. `intent` delays the close so a brief
-  // diagonal movement does not collapse the submenu immediately.
-  const submenuHoverIntent = useRef<number | null>(null);
-  const handleSubmenuEnter = useCallback(() => {
-    if (submenuHoverIntent.current) {
-      window.clearTimeout(submenuHoverIntent.current);
-      submenuHoverIntent.current = null;
-    }
-    setSectionSubmenuOpen(true);
-  }, []);
-  const handleSubmenuLeave = useCallback(() => {
-    if (submenuHoverIntent.current) {
-      window.clearTimeout(submenuHoverIntent.current);
-    }
-    submenuHoverIntent.current = window.setTimeout(() => {
-      setSectionSubmenuOpen(false);
-      submenuHoverIntent.current = null;
-    }, 200);
-  }, []);
-  useEffect(() => {
-    return () => {
-      if (submenuHoverIntent.current) window.clearTimeout(submenuHoverIntent.current);
-    };
-  }, []);
+  // Plan 535: build the project context menu as MenuActions so the shared
+  // DropdownMenu can render it. The "section" item is a submenu that mirrors
+  // Plan 471 v4's "Move to / Add to section" flow, including the
+  // `.project-dropdown-submenu` look-and-feel (flip-left, is-current dot).
+  const projectMenuItems: MenuAction[] = [
+    {
+      kind: "action",
+      id: "open-folder",
+      label: t("project.openFolder"),
+        className: "project-dropdown-item",
+      iconLeft: <OpenFolderIcon size={14} />,
+      onSelect: handleOpenFolder,
+    },
+    {
+      kind: "action",
+      id: "copy-path",
+      label: t("project.copyFolderPath"),
+        className: "project-dropdown-item",
+      iconLeft: <CopyIcon size={14} />,
+      onSelect: handleCopyPath,
+    },
+    {
+      kind: "submenu",
+      id: "section",
+      label: currentSectionId
+        ? t("sidebar.section.moveToSection")
+        : t("sidebar.section.addToSection"),
+      iconLeft: <FolderIcon size={14} />,
+      className: "project-dropdown-submenu",
+      items: [
+        {
+          kind: "action",
+          id: "section-new",
+          label: t("sidebar.section.newSection"),
+        className: "project-dropdown-item",
+          iconLeft: <PlusIcon size={14} />,
+          onSelect: handleNewSection,
+        },
+        ...(userSections.length > 0 ? [{ kind: "divider", id: "section-list-sep" } as const] : []),
+        ...userSections.map<MenuAction>((s) => ({
+          kind: "action" as const,
+          id: `section-${s.id}`,
+          label: s.name,
+          iconLeft: <FolderIcon size={14} />,
+          description: s.id === currentSectionId ? "•" : undefined,
+          onSelect: () => handleMoveToSection(s.id),
+        })),
+        ...(currentSectionId
+          ? [
+              { kind: "divider", id: "section-remove-sep" } as const,
+              {
+                kind: "action" as const,
+                id: "section-remove",
+                label: t("sidebar.section.removeFromSection"),
+        className: "project-dropdown-item",
+                iconLeft: <XIcon size={14} />,
+                danger: true,
+                onSelect: handleRemoveFromSection,
+              },
+            ]
+          : []),
+      ],
+    },
+    { kind: "divider", id: "delete-sep" },
+    {
+      kind: "action",
+      id: "delete-project",
+      label: t("project.removeProject"),
+        className: "project-dropdown-item",
+      iconLeft: <ArchiveIcon size={14} />,
+      danger: true,
+      onSelect: handleDeleteProject,
+    },
+  ];
 
   return (
     <>
@@ -287,16 +245,28 @@ export function ProjectGroupItem({ project, threads, activeThreadId }: ProjectGr
           </button>
 
           {/* Three dots menu button - visible on hover */}
-          <button
-            ref={buttonRef}
-            type="button"
-            className="project-group-menu-btn"
-            onClick={handleMenuClick}
-            style={{ opacity: isHovered || showMenu ? 1 : 0 }}
-            aria-label={t('project.options')}
-          >
-            <DotsThreeIcon size={16} stroke={2.5} />
-          </button>
+          <DropdownMenu
+            className="project-dropdown-menu"
+            align="start"
+            minWidth={220}
+            open={menuOpen}
+            onOpenChange={(next) => {
+              setMenuOpen(next);
+              if (!next) setMenuAnchor(null);
+            }}
+            anchorPosition={menuAnchor ?? undefined}
+            items={projectMenuItems}
+            trigger={
+              <button
+                type="button"
+                className="project-group-menu-btn"
+                style={{ opacity: isHovered || menuOpen ? 1 : 0 }}
+                aria-label={t('project.options')}
+              >
+                <DotsThreeIcon size={16} stroke={2.5} />
+              </button>
+            }
+          />
         </div>
 
         {/* Thread List */}
@@ -325,134 +295,6 @@ export function ProjectGroupItem({ project, threads, activeThreadId }: ProjectGr
         )}
       </div>
 
-      {/* Dropdown Menu */}
-      {showMenu && (
-        <div
-          ref={menuRef}
-          className="project-dropdown-menu"
-          style={{ top: menuPos.y, left: menuPos.x }}
-        >
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="project-dropdown-item"
-            onClick={handleOpenFolder}
-          >
-            <OpenFolderIcon size={14} />
-            <span>{t("project.openFolder")}</span>
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="project-dropdown-item"
-            onClick={handleCopyPath}
-          >
-            <CopyIcon size={14} />
-            <span>{t("project.copyFolderPath")}</span>
-          </Button>
-          {/* Plan 471: section submenu trigger row. The popover floats to
-              the right of this row when the cursor enters (it stays open
-              briefly after the cursor leaves so a diagonal move does not
-              collapse it). */}
-          <div
-            className="project-dropdown-section-row"
-            onMouseEnter={handleSubmenuEnter}
-            onMouseLeave={handleSubmenuLeave}
-          >
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="project-dropdown-item project-dropdown-item-with-caret"
-              onClick={() => setSectionSubmenuOpen((p) => !p)}
-              aria-expanded={sectionSubmenuOpen}
-            >
-              <FolderIcon size={14} />
-              <span>
-                {currentSectionId
-                  ? t('sidebar.section.moveToSection')
-                  : t('sidebar.section.addToSection')}
-              </span>
-              <CaretRightIcon
-                  size={12}
-                  className="ml-auto"
-                  // Plan 471 v4: when the submenu flips left, mirror the
-                  // caret so it visually points at the submenu opening
-                  // (matching the user's mental model).
-                  style={submenuFlipLeft ? { transform: 'scaleX(-1)' } : undefined}
-                />
-            </Button>
-            {sectionSubmenuOpen && (
-              <div
-                ref={sectionMenuRef}
-                className={`project-dropdown-submenu${submenuFlipLeft ? ' project-dropdown-submenu-flip-left' : ''}`}
-                onMouseEnter={handleSubmenuEnter}
-                onMouseLeave={handleSubmenuLeave}
-              >
-                {/* The first row is always the "新建分区…" entry. From
-                    there the user can build a section on the fly and
-                    immediately move this project into it. */}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="project-dropdown-item"
-                  onClick={handleNewSection}
-                  data-section-action="new"
-                >
-                  <PlusIcon size={14} />
-                  <span>{t('sidebar.section.newSection')}</span>
-                </Button>
-                {userSections.length > 0 && <div className="project-dropdown-divider" />}
-                {userSections.map((s) => (
-                  <Button
-                    key={s.id}
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className={`project-dropdown-item project-dropdown-item-checkable ${
-                      s.id === currentSectionId ? 'is-current' : ''
-                    }`}
-                    onClick={() => handleMoveToSection(s.id)}
-                    data-section-id={s.id}
-                  >
-                    <FolderIcon size={14} />
-                    <span>{s.name}</span>
-                  </Button>
-                ))}
-                {currentSectionId && (
-                  <>
-                    <div className="project-dropdown-divider" />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="project-dropdown-item danger"
-                      onClick={handleRemoveFromSection}
-                    >
-                      <XIcon size={14} />
-                      <span>{t('sidebar.section.removeFromSection')}</span>
-                    </Button>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-          <div className="project-dropdown-divider" />
-          <Button
-            type="button"
-            variant="danger"
-            size="sm"
-            className="project-dropdown-item danger"
-            onClick={handleDeleteProject}
-          >
-            <ArchiveIcon size={14} />
-            <span>{t("project.removeProject")}</span>
-          </Button>
-        </div>
-      )}
       {/* Plan 471: dialog for creating a section on the fly from the
           project context menu. The new section is committed and then the
           current project is assigned to it in one shot. */}

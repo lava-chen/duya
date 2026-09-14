@@ -1,5 +1,5 @@
 /**
- * Plan 241 Phase 2: keyword-based tool search over a registry.
+ * Plan 241: keyword-based tool search over a registry.
  *
  * Scoring rules (highest first wins, ties broken by name asc):
  *   - 100  name === query (exact, case-insensitive)
@@ -8,12 +8,7 @@
  *   - 40   description contains query
  *   - 0    otherwise (excluded)
  *
- * Phase 2 change: `inputSchemaSummary` and `exposeMode` are now
- * pulled from the registry's persisted metadata (set via the third
- * arg of `ToolRegistry.register`). Tools registered without meta
- * default to `exposeMode: undefined` (treated as `'always'`) and
- * `inputSchemaSummary: undefined`. The `category` field remains a
- * constant `'other'` until the registry carries a real category.
+ * Returns only name + description (minimal shape). Full schema via tool_schema.
  */
 
 import type { ToolMeta, ToolRegistry } from '../registry.js';
@@ -41,14 +36,10 @@ export function searchToolsFromRegistry(
     else if (desc.includes(q)) score = 40;
 
     if (score > 0) {
-      const meta = registry.getMeta(def.name);
       scored.push({
         meta: {
           name: def.name,
           description: def.description ?? '',
-          category: 'other',
-          inputSchemaSummary: meta?.inputSchemaSummary,
-          exposeMode: meta?.exposeMode,
         },
         score,
       });
