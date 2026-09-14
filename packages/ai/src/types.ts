@@ -193,6 +193,23 @@ export interface TokenUsage {
    * fall back to the top-level cumulative fields.
    */
   calls?: UsageCall[];
+  /**
+   * Plan 445: single-call usage snapshot of the LARGEST-prompt call of the
+   * turn (NOT necessarily the latest — see comment in
+   * agent-process-entry.ts result handler). The cumulative top-level fields
+   * sum every LLM call of the turn, which inflates the persisted anchor
+   * ~N× on tool-heavy turns (10 tool_use = 10× the actual context size).
+   * normalizePromptTokens / computeContextEstimate prefer this on reload
+   * so the ring recovers to the real single-call prompt volume.
+   *
+   * Field shape mirrors the top-level usage block (no nested calls ledger).
+   */
+  last_call?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_hit_tokens?: number;
+    cache_creation_tokens?: number;
+  };
 }
 
 /**

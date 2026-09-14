@@ -459,6 +459,24 @@ export interface ChatOptions {
    * runs — those fall back to a fresh server UUID.
    */
   clientMsgId?: string;
+  /**
+   * Plan 445: mutable reference the agent loop READS at the `done` event
+   * boundary to know the cumulative tokenUsage block (with `last_call`
+   * sub-block) it should attach to the final assistant message before
+   * journal.assistantMsgFinalized fires. The caller (typically
+   * agent-process-entry) updates this reference inside its own for-await
+   * loop on every `result` event; the agent loop yields `done` AFTER every
+   * `result` for the final call, so the reference is guaranteed to hold
+   * the per-turn sum by the time the agent reads it.
+   *
+   * Why this exists: without it, the journal persisted the SINGLE-call
+   * `usageBlock` derived from `roundResultUsage` (the largest prompt of
+   * the turn) — losing the turn-cumulative sum and the `last_call` sub-
+   * block. On reload, the persisted scan had to fall back to the
+   * single-call value, undershooting session-level cumulative metrics and
+   * breaking the persisted anchor (which prefers `last_call`).
+   */
+  cumulativeTokenUsageRef?: { current: TokenUsage | null };
 }
 
 // 会话信息
