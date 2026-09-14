@@ -2496,6 +2496,8 @@ const zh: Record<TranslationKey, string> = {
   'marketplace.categories.skills': '技能',
   'marketplace.categories.connectors': '应用连接',
   'marketplace.categories.sources': '来源管理',
+  'marketplace.sources.manageTitle': '市场来源',
+  'marketplace.sources.manageDescription': '添加发布 marketplace.json 的 git 仓库或本地目录，这些来源里的插件会出现在上方的标签页中。',
   'marketplace.sources.addTitle': '添加来源',
   'marketplace.sources.addPlaceholder': 'owner/repo、https git URL 或本地目录',
   'marketplace.sources.add': '添加',
