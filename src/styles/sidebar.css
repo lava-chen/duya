@@ -229,18 +229,14 @@ html[data-glass-repair] .attachment-preview-overlay {
 }
 
 .sidebar-project-menu {
-  /* Plan 471 v11: align this popover with the @-mention popover
-     (`command-menu-popover`) — same rounded card + thin border +
-     no drop shadow. The original deep box-shadow made the sidebar
-     ⋯ menu look heavier than the input-field popovers elsewhere in
-     the app; the user wants a uniform "thin card" feel. */
   position: fixed;
-  padding: 4px 0;
+  padding: 4px;
   border-radius: 12px;
   background: var(--command-menu-bg);
   border: 1px solid var(--command-menu-border);
   min-width: 150px;
   z-index: 100;
+  overflow: visible;
 }
 
 .sidebar-project-menu-item {
@@ -251,15 +247,13 @@ html[data-glass-repair] .attachment-preview-overlay {
   display: flex;
   align-items: center;
   gap: 0.45rem;
-  width: calc(100% - 8px);
-  margin: 0 4px;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
   padding: 0.3rem 0.6rem;
   border-radius: 0.3rem;
   font-size: 0.78rem;
   text-align: left;
-  /* Plan 471 v4: same fix as .project-dropdown-item — keep the row
-     contents pinned to the left edge. Slight inset (4px on each side)
-     gives the row a "card within menu" feel like Codex. */
   justify-content: flex-start;
   transition: background-color 0.15s ease, color 0.15s ease;
 }
@@ -326,6 +320,25 @@ html[data-glass-repair] .attachment-preview-overlay {
   position: relative;
 }
 
+.sidebar-project-submenu {
+  /* The submenu is portaled to <body> by DropdownMenu.SubmenuItem so it
+     escapes the parent list's overflow clipping. Position comes from
+     floating-ui (usePopoverPlacement); width comes from the parent
+     DropdownMenu's `minWidth` / `maxWidth` props (passed through as
+     inline styles) so a fixed-width picker host stays consistent.
+     Visual chrome mirrors `.sidebar-project-menu` exactly — same
+     background, border, radius, padding — and deliberately has NO
+     box-shadow, so the submenu reads as a continuation of the parent
+     rather than a floating dialog. */
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--command-menu-bg);
+  border: 1px solid var(--command-menu-border);
+  z-index: 1100; /* above the parent menu's 1000 */
+}
+
 .sidebar-project-menu-divider {
   height: 1px;
   background: var(--border);
@@ -354,6 +367,9 @@ html[data-glass-repair] .attachment-preview-overlay {
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 0;
+  max-width: 100%;
   scrollbar-width: thin;
   scrollbar-color: var(--muted) transparent;
 }
@@ -825,17 +841,12 @@ html[data-glass-repair] .attachment-preview-overlay {
   border-color: var(--accent);
 }
 
-/* Thread dropdown menu */
-.thread-dropdown-menu {
-  position: fixed;
-  z-index: 1000;
-  min-width: 160px;
-  background: var(--sidebar-bg);
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  padding: 0.25rem;
-}
-
+/* Thread dropdown menu — item styling only.
+   The container + divider are owned by `DropdownMenu`
+   (`.sidebar-project-menu` / `.sidebar-project-menu-divider`); the
+   per-item className is still injected via `className: "thread-dropdown-item"`
+   so the visual stays byte-for-byte equivalent to the prior
+   hand-rolled implementation. */
 .thread-dropdown-item {
   display: flex;
   align-items: center;
@@ -862,12 +873,6 @@ html[data-glass-repair] .attachment-preview-overlay {
 
 .thread-dropdown-item.danger:hover {
   background: rgba(239, 68, 68, 0.1);
-}
-
-.thread-dropdown-divider {
-  height: 1px;
-  background: var(--border);
-  margin: 0.25rem 0;
 }
 
 /* ── Sidebar top (work / bots) ───────────────────────────────────────
