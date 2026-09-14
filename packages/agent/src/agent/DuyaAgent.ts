@@ -72,6 +72,7 @@ import { readToolExposureConfig } from '../config/tool-exposure.js';
 import type { ToolPermissionCheckContext } from '../permissions/permissions.js';
 import type { ToolPermissionContext, PermissionMode, ToolPermissionRulesBySource, AdditionalWorkingDirectory, PermissionRuleSource, LocalToolPermission } from '../permissions/types.js';
 import { permissionModeFromString } from '../permissions/policy.js';
+import { deriveSingleCallUsage } from '../process/seed-token-usage.js';
 import { settingsJsonToRules } from '../permissions/rules.js';
 import { permissionRuleValueToString } from '../permissions/rules.js';
 import { logger } from '../utils/logger.js';
@@ -2178,11 +2179,20 @@ export class duyaAgent {
               // turn sum, matching pre-plan-445 behavior.
               const cumulative = options?.cumulativeTokenUsageRef?.current ?? null;
               if (cumulative) {
-                // Caller already validated and normalized (see
-                // agent-process-entry result handler): cumulative contains
-                // the per-turn sum, `calls` ledger, and `last_call`
-                // sub-block. Trust it verbatim.
-                (pushed as AssistantMessage).usage = cumulative as AssistantMessage['usage'];
+                // Plan 546: `pushed.usage` is the in-memory anchor consumed
+                // by computeContextEstimate (pi style). It MUST stay the
+                // single-call snapshot (largest-prompt call of the turn),
+                // not the turn-cumulative block — otherwise every consumer
+                // that reads `usage` (seed loop, anchor scans, anchor
+                // correction) inherits a per-turn sum that overlaps with
+                // the per-call ledger the `result` handler also walks.
+                // `pushed.tokenUsage` remains the turn-cumulative block
+                // (with `last_call` + `calls` ledger) for the DB column;
+                // the renderer's persisted scan prefers `last_call`, so the
+                // anchor still recovers correctly on reload.
+                const singleCall = deriveSingleCallUsage(cumulative);
+                (pushed as AssistantMessage).usage = singleCall as AssistantMessage['usage'];
+                // Persisted shape — turn-cumulative + last_call + calls
                 (pushed as Message & { tokenUsage?: unknown }).tokenUsage = cumulative;
               } else if (roundResultUsage && ((roundResultUsage.input_tokens ?? 0) + (roundResultUsage.output_tokens ?? 0)) > 0) {
                 // Legacy fallback (CLI / unit tests): single-call block.
