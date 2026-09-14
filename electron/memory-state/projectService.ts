@@ -73,6 +73,92 @@ export interface ProjectServiceOptions {
   projectsRoot?: string;
 }
 
+/**
+ * Default AGENTS.md body seeded into `~/.duya/projects/<projectId>/AGENTS.md`
+ * when a project is first created. Exported so tests can assert on the
+ * exact string (after placeholder substitution) and so future changes
+ * stay reviewable in a single diff.
+ *
+ * Placeholder contract (see `buildDefaultAgentsMd`):
+ *   {projectName}, {projectId}, {canonicalRoot}, {createdAt}, {duyaVersion}
+ *
+ * Static content — written exactly once per project at create time.
+ * Subsequent `ensureProjectAgentsMd` calls must NEVER overwrite an
+ * existing file (the user is expected to edit it).
+ */
+export const DEFAULT_PROJECT_AGENTS_MD_TEMPLATE = `# Project: {projectName}
+
+> Seeded by duya {duyaVersion} on {createdAt}. This is the project's home
+> AGENTS.md — loaded as project-level instruction whenever an Agent
+> session lands under this project. Edit freely; duya will not overwrite
+> an existing file.
+
+## 1. What this project is
+
+_Describe the project: goal, scope, audience, success criteria._
+
+- **Project ID**: \`{projectId}\`
+- **Canonical root**: \`{canonicalRoot}\`
+- **Home directory**: \`~/.duya/projects/{projectId}/\` (duya-owned: plans/, AGENTS.md)
+- **Created**: {createdAt}
+
+## 2. How duya manages projects
+
+A duya project is a **long-lived entity**, not a one-off chat. It owns:
+
+- a stable \`project_id\` (UUID) — survives renames, moves, restarts
+- a home directory (\`~/.duya/projects/<id>/\`) — duya-internal storage
+- a list of working paths (\`projects.paths\`) — your code/data locations
+- a plans index (\`plans/index.json\`) — active and completed work
+
+Anything that should outlive a single session lives in the project's
+plans. Sessions come and go; plans persist.
+
+## 3. The plan toolchain (Plan 525 §3)
+
+duya exposes three MCP tools scoped to this project:
+
+| Tool | When to call |
+| --- | --- |
+| \`plan_status\` | Start of a new session, or whenever you need to know which plans are active / completed / paused. First call in any session should be \`plan_status\`. |
+| \`plan_search\` | Cross-plan lookup: find a past decision, constraint, or reference. Pass keywords and (optionally) a \`plan_id\` filter. |
+| \`plan_complete\` | After every checkbox is done and verification evidence is attached. Moves the plan from \`plans/active/\` to \`plans/completed/\`. |
+
+**Workflow**:
+
+1. **Before coding**, run \`plan_status\`. If an active plan covers this
+   work, extend it. If not, open a new plan (via duya's standard plan
+   authoring flow — not in this file).
+2. **During work**, keep the plan's checkboxes in sync with reality.
+   Update the plan as you commit, not after the fact.
+3. **Before declaring done**, grep the plan for leftover TODOs and
+   investigation items. Only call \`plan_complete\` when everything is
+   resolved and verification evidence is in place.
+
+## 4. Long-term project hygiene
+
+- **One plan = one milestone.** Don't bundle "refactor X + ship Y +
+  investigate Z" into a single plan — split them.
+- **Every plan has**: goal, phased checkboxes, a \`## Decisions\` log
+  (append-only), a \`## Verification\` section, and a handoff note for
+  the next session.
+- **Sessions are connected via plans, not chat history.** Agents have
+  no memory; the plan is the only durable handoff between sessions.
+- **\`plans/completed/\` over time IS the project timeline.** Six months
+  from now, the \`plans/completed/\` tree tells the story of what shipped
+  and why.
+- **Commit + plan updates in the same change.** Code, plan checkbox,
+  and (if applicable) \`## Decisions\` entry move together.
+
+## 5. Don't
+
+- Don't edit \`plans/index.json\` by hand — duya writes it atomically.
+- Don't put code or non-plan files in the home directory
+  (\`~/.duya/projects/<id>/\`). Code lives under the canonical root.
+- Don't start architectural changes without a plan. \`plan_status\` first,
+  then decide: extend an existing plan, or open a new one.
+`;
+
 /** Resolve `~/.duya/projects` (test-namespace aware). */
 export function resolveProjectsRoot(): string {
   const base = path.join(os.homedir(), '.duya');
@@ -128,6 +214,86 @@ export function writePlansIndex(
   fs.writeFileSync(tmpPath, JSON.stringify(index, null, 2), 'utf8');
   fs.renameSync(tmpPath, indexPath);
   return index;
+}
+
+/**
+ * Render the default AGENTS.md content for a brand-new project home.
+ *
+ * Static template — populated once at project creation, never auto-
+ * regenerated. The user is expected to edit it after seeding; subsequent
+ * `ensureProjectAgentsMd` calls must NOT overwrite existing content.
+ *
+ * Placeholders:
+ *   {projectName}     — display name from `projects.name`
+ *   {projectId}      — UUID
+ *   {canonicalRoot}  — first `projects.paths[0].path`, or `"(no working directory — duya home only)"`
+ *   {createdAt}      — ISO date (YYYY-MM-DD, UTC slice)
+ *   {duyaVersion}    — `package.json` version at write time, falls back to `unknown`
+ */
+function buildDefaultAgentsMd(args: {
+  projectName: string;
+  projectId: string;
+  canonicalRoot: string;
+  createdAt: string;
+}): string {
+  const placeholders: Record<string, string> = {
+    projectName: args.projectName,
+    projectId: args.projectId,
+    canonicalRoot: args.canonicalRoot,
+    createdAt: args.createdAt,
+    duyaVersion: readDuyaVersion(),
+  };
+  return DEFAULT_PROJECT_AGENTS_MD_TEMPLATE.replace(
+    /\{(projectName|projectId|canonicalRoot|createdAt|duyaVersion)\}/g,
+    (_, key: string) => placeholders[key] ?? '',
+  );
+}
+
+let _cachedDuyaVersion: string | null = null;
+function readDuyaVersion(): string {
+  if (_cachedDuyaVersion !== null) return _cachedDuyaVersion;
+  try {
+    // Resolve from CWD upward — works in dev (`E:/Projects/duya`) and in
+    // packaged builds (process.resourcesPath ancestor). Tolerate failure.
+    const pkgPath = require.resolve('../../package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { version?: string };
+    _cachedDuyaVersion = pkg.version ?? 'unknown';
+  } catch {
+    _cachedDuyaVersion = 'unknown';
+  }
+  return _cachedDuyaVersion;
+}
+
+/**
+ * Idempotent: if `~/.duya/projects/<projectId>/AGENTS.md` already exists
+ * (user edited, or a previous create partially ran), do nothing. Otherwise
+ * render the default template and write it atomically (temp + rename).
+ *
+ * Intentionally does NOT recursively create `plans/` — that is
+ * `ensurePlansDirs`' job. We only guarantee the AGENTS.md file is
+ * present alongside `plans/`.
+ */
+export function ensureProjectAgentsMd(
+  projectId: string,
+  args: { projectName: string; canonicalRoot: string },
+  opts?: ProjectServiceOptions
+): { path: string; created: boolean } {
+  const homeDir = path.join(projectsBase(opts), projectId);
+  fs.mkdirSync(homeDir, { recursive: true });
+  const agentsPath = path.join(homeDir, 'AGENTS.md');
+  if (fs.existsSync(agentsPath)) {
+    return { path: agentsPath, created: false };
+  }
+  const content = buildDefaultAgentsMd({
+    projectName: args.projectName,
+    projectId,
+    canonicalRoot: args.canonicalRoot,
+    createdAt: today(),
+  });
+  const tmpPath = `${agentsPath}.tmp`;
+  fs.writeFileSync(tmpPath, content, 'utf8');
+  fs.renameSync(tmpPath, agentsPath);
+  return { path: agentsPath, created: true };
 }
 
 /**
@@ -264,6 +430,13 @@ export function createProject(input: CreateProjectInput, opts?: ProjectServiceOp
 
   ensurePlansDirs(projectId, opts);
   writePlansIndex(projectId, [], opts);
+  // Seed the project home AGENTS.md (static template; idempotent — skips
+  // if a previous run or user edit already produced the file).
+  ensureProjectAgentsMd(
+    projectId,
+    { projectName: input.name, canonicalRoot },
+    opts,
+  );
 
   const row = db.prepare('SELECT * FROM projects WHERE project_id = ?').get(projectId) as ProjectRow;
   return row;
