@@ -1054,7 +1054,17 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           </div>
         </div>
         {sidebarTab === "work" && (
-        <nav className="sidebar-primary-nav" aria-label="Primary Navigation">
+          <>
+            <button
+              type="button"
+              onClick={() => startNewChat()}
+              className="sidebar-new-chat-btn"
+              title={t('nav.newChat')}
+            >
+              <ChatCirclePlusIcon size={16} />
+              <span>{t('nav.newChat')}</span>
+            </button>
+            <nav className="sidebar-primary-nav" aria-label="Primary Navigation">
           {mainNavItems.map((item) => {
             const Icon = item.icon;
             const isActive = currentView === item.view;
@@ -1082,6 +1092,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
             );
           })}
         </nav>
+          </>
         )}
 
         <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
