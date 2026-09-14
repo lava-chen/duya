@@ -2169,7 +2169,23 @@ export class duyaAgent {
 
             if (finalAssistantContent.length > 0 || needsFollowUp) {
               const pushed: Message = { id: crypto.randomUUID(), role: 'assistant', content: finalAssistantContent.length > 0 ? finalAssistantContent : assistantContent, timestamp: Date.now(), duration_ms: Date.now() - streamStartTime, seq_index: seqIndex };
-              if (roundResultUsage && ((roundResultUsage.input_tokens ?? 0) + (roundResultUsage.output_tokens ?? 0)) > 0) {
+              // Plan 445: prefer the turn-cumulative tokenUsage (with
+              // `last_call` sub-block) supplied by the caller via
+              // `cumulativeTokenUsageRef`. Falls back to the single-call
+              // `usageBlock` derived from `roundResultUsage` so callers that
+              // never set the ref (CLI / tests / direct streamChat) still
+              // get a working ring — they just lose `last_call` and the
+              // turn sum, matching pre-plan-445 behavior.
+              const cumulative = options?.cumulativeTokenUsageRef?.current ?? null;
+              if (cumulative) {
+                // Caller already validated and normalized (see
+                // agent-process-entry result handler): cumulative contains
+                // the per-turn sum, `calls` ledger, and `last_call`
+                // sub-block. Trust it verbatim.
+                (pushed as AssistantMessage).usage = cumulative as AssistantMessage['usage'];
+                (pushed as Message & { tokenUsage?: unknown }).tokenUsage = cumulative;
+              } else if (roundResultUsage && ((roundResultUsage.input_tokens ?? 0) + (roundResultUsage.output_tokens ?? 0)) > 0) {
+                // Legacy fallback (CLI / unit tests): single-call block.
                 // Attach BOTH field names: `usage` is the pi-style in-memory
                 // convention read by computeContextEstimate's anchor scan,
                 // `tokenUsage` is the duya projection field listed in

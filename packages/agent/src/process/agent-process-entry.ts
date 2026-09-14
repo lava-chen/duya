@@ -304,6 +304,13 @@ let liveTotalCacheCreation = 0;
 // message to be pushed to the timeline (which lags the result event by a
 // fraction of a second — long enough for the user to see a wrong value).
 let liveLatestObserved = 0;
+// Plan 445 Bug #7: dedupe emitLiveUsage so a tool-heavy turn's N
+// consecutive tool_result events don't spam the renderer with the
+// same snapshot. Key = (usedTokens, anchored, totalInput,
+// totalCacheHit, totalCacheCreation, totalOutput, model, providerId).
+// Cleared on session switch so the first emit of the new session
+// always wins.
+let lastEmittedUsageKey: string | null = null;
 
 /** Single-request usage sub-block persisted inside the turn-cumulative
  *  `token_usage` JSON. The cumulative block sums EVERY LLM call of the turn,
@@ -423,6 +430,17 @@ const emitLiveUsage = (
       : undefined;
   const anchorUsage = anchorMsg?.usage ?? anchorMsg?.tokenUsage;
   const { prompt: lastInput, output: lastOutput } = normalizePromptTokens(anchorUsage);
+  // Plan 445 Bug #7: skip the SSE frame if nothing material changed.
+  // The frame is the source of truth for the live ring; re-emitting
+  // the same payload every tool_result event would cause redundant
+  // zustand sets and React re-renders. Diff over the fields the
+  // ring + stats line actually read.
+  const emitKey = `${usedForRing}|${anchored ? 1 : 0}|${liveTotalInput}|${liveTotalCacheHit}|${liveTotalCacheCreation}|${liveTotalOutput}|${agent?.model ?? mainModelName}|${currentProviderId}`;
+  if (emitKey === lastEmittedUsageKey) {
+    ringTrace(`[${targetSessionId.slice(0, 8)}] emit-skip (no change) used=${usedForRing}`);
+    return;
+  }
+  lastEmittedUsageKey = emitKey;
   sendToMain({
     type: 'chat:token_usage',
     sessionId: targetSessionId,
@@ -2680,14 +2698,13 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       let seedTotalCacheHit = 0;
       let seedTotalCacheCreation = 0;
       for (const m of agent.getMessages()) {
-        // `tokenUsage` (camel) is set when messages were reloaded from the DB;
-        // `token_usage` (snake) is attached in-process at turn end. Read both
-        // so same-process follow-up turns seed from the previous turn too.
-        const raw = m as {
-          tokenUsage?: (Record<string, number | undefined> & { last_call?: LastCallUsageBlock });
-          token_usage?: (Record<string, number | undefined> & { last_call?: LastCallUsageBlock });
-        };
-        const u = raw.tokenUsage ?? raw.token_usage;
+        // Plan 445: only the camelCase `tokenUsage` field is set now.
+        // DB reload maps row.token_usage (snake_case column) ->
+        // msg.tokenUsage via messageRowToMessage (session/db.ts);
+        // in-process the agent loop attaches `pushed.tokenUsage`
+        // directly (camelCase). The legacy snake_case fallback is
+        // dead — removed.
+        const u = m.tokenUsage;
         if (!u) continue;
         const rawInput = u.input_tokens ?? 0;
         const output = u.output_tokens ?? 0;
@@ -2713,6 +2730,10 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       liveTotalCacheHit = seedTotalCacheHit;
       liveTotalCacheCreation = seedTotalCacheCreation;
       liveLatestObserved = 0;
+      // Plan 445 Bug #7: dedupe cache must reset on init so the first
+      // frame of the session always emits even if the numbers happen
+      // to match a previous session.
+      lastEmittedUsageKey = null;
       // Plan 443: no context-base restore here. The pure estimator anchors on
       // the persisted usage blocks directly (preferring `last_call`) — same
       // numbers, zero bookkeeping. Post-compaction staleness is handled by
@@ -2742,6 +2763,23 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         await reloadAppConnectionTools();
       }
     }
+
+    // Plan 445: turn-cumulative tokenUsage lives in agent-process-entry's
+    // scope (this is where every `result` event lands). The agent loop's
+    // done handler READS it through `cumulativeTokenUsageRef` BEFORE
+    // journal.assistantMsgFinalized fires, so the persisted DB row gets
+    // the cumulative sum + `last_call` sub-block instead of the single-
+    // call usageBlock.
+    let tokenUsage: TokenUsage | null = null;
+    let lastCallUsage: LastCallUsageBlock & { output_tokens: number } | null = null;
+    let lastCallModel = '';
+    let lastCallProviderId = '';
+    // Mutable reference passed to streamChat options. Agent loop reads
+    // `.current` synchronously when building the final assistant message;
+    // the result handler below mutates it as each `result` event lands.
+    const cumulativeTokenUsageRef: { current: TokenUsage | null } = {
+      current: null,
+    };
 
     const eventGen = agent.streamChat(messageContent, {
       systemPrompt: effectiveSystemPrompt,
@@ -2786,24 +2824,16 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       antiDeadLoop: { ...steering.antiDeadLoop },
       toolIntentNudgeMax: steering.toolIntentNudgeMax,
       disabledLoopHooks: steering.disabledLoopHooks,
+      // Plan 445: agent loop reads this mutable reference at the `done`
+      // boundary to know the turn-cumulative tokenUsage (with `last_call`
+      // sub-block) it should attach to the final assistant message before
+      // journal.assistantMsgFinalized fires. Without this, journal would
+      // persist only the single-call usageBlock (roundResultUsage),
+      // losing the per-turn sum and last_call forever.
+      cumulativeTokenUsageRef,
     });
 
     log('[Agent-Process] streamChat started, agentProfileId:', msg.options?.agentProfileId || '(none)', 'iterating events...');
-    // Turn-cumulative token usage (sum over every `result` event of this
-    // turn; persisted on the turn's last assistant message at stream end).
-    // `calls` is the per-LLM-call ledger (token-accounting): one entry per
-    // API call with the exact model/provider that produced it.
-    let tokenUsage: TokenUsage | null = null;
-    // Usage of the SINGLE LLM call behind the newest `result`. Persisted as a
-    // `last_call` sub-block inside the turn-cumulative token_usage so the
-    // next turn's seed (and the renderer's persisted scan) can restore the
-    // context base from one real prompt size instead of the N-call sum.
-    let lastCallUsage: LastCallUsageBlock & { output_tokens: number } | null =
-      null;
-    // Model/provider of the LAST LLM call of this turn — attributed to the
-    // final assistant message at stream end (same source as the calls ledger).
-    let lastCallModel = '';
-    let lastCallProviderId = '';
     // Terminal `done` reason from the agent loop (completed / max_turns /
     // repeated_tool_calls / aborted). Captured from the deferred chat:done
     // and attached to the final chat:done so the renderer can surface why
@@ -2908,6 +2938,17 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           // Push the per-call ledger entry (carries model/provider snapshot).
           if (!tokenUsage.calls) tokenUsage.calls = [];
           tokenUsage.calls.push(call);
+          // Plan 445: keep the agent loop's done handler in sync with
+          // the cumulative block we're building here. Include
+          // `last_call` so the persisted anchor (normalizePromptTokens
+          // prefers it on reload) reflects the largest-prompt call of
+          // the turn instead of the cumulative N-call sum. We update
+          // the ref AFTER every result, so by the time the agent loop
+          // yields `done` and reads `.current`, it sees the final turn
+          // state.
+          cumulativeTokenUsageRef.current = lastCallUsage
+            ? { ...tokenUsage, last_call: lastCallUsage }
+            : { ...tokenUsage };
           // last_call feeds the persisted anchor (normalizePromptTokens
           // prefers it on reload) and the footer's per-request line. Keep the
           // LARGEST-prompt call of the turn, not the latest: GLM-style
@@ -3034,18 +3075,23 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       if (tokenUsage) {
         const lastAssistant = [...agentMessages].reverse().find(m => m.role === 'assistant');
         if (lastAssistant) {
-          // Attach the turn-cumulative token_usage + last_call sub-block
-          // directly on the in-memory assistant message. The journal already
-          // emitted this assistant message via assistant_message_finalized
-          // at the done-event boundary (see _pushDurable wrap), so the
-          // token_usage lands on the next replay through setMessages in
-          // load-on-start (it serializes via metadata.token_usage in the
-          // IPC DTO). Persisting it here would be a re-emit the storage
-          // layer dedupes via INSERT OR IGNORE.
-          (lastAssistant as Record<string, unknown>).token_usage =
-            lastCallUsage ? { ...tokenUsage, last_call: lastCallUsage } : tokenUsage;
-          // Attribute the final assistant message to the model/provider that
-          // produced the turn's last LLM call (per-message model accounting).
+          // Plan 445: the cumulative tokenUsage + last_call are already
+          // attached to `pushed.tokenUsage` BEFORE _pushDurable runs
+          // (see cumulativeTokenUsageRef in streamChat options), so
+          // journal persists the correct shape. The legacy write here
+          // only mutated the in-memory message after journal had
+          // already fired — INSERT OR IGNORE dropped the re-emit on the
+          // next replay. Removing it eliminates the dead assignment.
+          //
+          // Attribute the final assistant message to the model/provider
+          // that produced the turn's last LLM call (per-message model
+          // accounting). The journal already has `pushed.providerId` /
+          // `pushed.model` from when DuyaAgent built it, but the agent
+          // loop's roundResultUsage is updated on EVERY result while
+          // lastCallModel / lastCallProviderId reflect the FINAL call.
+          // Overwrite here so the persisted row carries the final
+          // call's attribution rather than whichever call happened to
+          // produce the largest prompt.
           if (lastCallModel) {
             (lastAssistant as Record<string, unknown>).model = lastCallModel;
           }
@@ -3631,6 +3677,8 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             liveTotalCacheHit = 0;
             liveTotalCacheCreation = 0;
             liveLatestObserved = 0;
+            // Plan 445 Bug #7: dedupe cache must reset on session switch.
+            lastEmittedUsageKey = null;
           }
           if (agent) {
             log('[Agent-Process] Re-init: destroying existing agent and creating new one');

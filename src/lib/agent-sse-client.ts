@@ -391,14 +391,16 @@ export class AgentSSEClient {
         });
         break;
       case 'token_usage':
-        this.dispatch('token_usage', {
-          inputTokens: eventObj.inputTokens as number,
-          outputTokens: eventObj.outputTokens as number,
-          cacheHitTokens: eventObj.cacheHitTokens as number | undefined,
-          cacheCreationTokens: eventObj.cacheCreationTokens as number | undefined,
-          model: eventObj.model as string | undefined,
-          providerId: eventObj.providerId as string | undefined,
-        });
+        // Plan 445 fix: pass the FULL worker frame through. Earlier we
+        // stripped 8 of the 11 fields the worker emits (usedTokens / anchored
+        // / totalInput / totalInputRaw / totalOutput / totalCacheHit /
+        // totalCacheCreation / systemTokens / debugBreakdown), which forced
+        // applyWorkerUsageSnapshot to fall back to defaults — the ring then
+        // rejected every live frame (anchored=false) and walked back to the
+        // persisted scan, defeating the whole point of the live SSE path.
+        // The downstream types already accept the full WorkerUsageSnapshot
+        // shape, so this is a pure pass-through.
+        this.dispatch('token_usage', eventObj);
         break;
       case 'done':
         this.streamEnded = true;
@@ -489,6 +491,9 @@ export class AgentSSEClient {
         });
         break;
       case 'token_usage':
+        // Plan 445: see processEvent's token_usage case. The shape going in
+        // is now the full WorkerUsageSnapshot; the legacy onTokenUsage
+        // callback still wants the slim subset — extract just what it needs.
         this.options.onTokenUsage?.({
           inputTokens: obj.inputTokens as number,
           outputTokens: obj.outputTokens as number,
