@@ -378,6 +378,42 @@ agent / bash tool  ← 受信任
 - [x] 6.3.5 攻击链复现测试(IPC handler 拒绝 `..` + 长度上限 + UNC device + UNC remote + NUL + 相对路径)
 - [x] 6.3.6 端到端: `E:/Projects/duya/../duya-website` 在 IPC 层被拒绝(`INVALID_INPUT` + 'must not contain `..` segments'),不在 DB 中落库
 
+### Phase 7 — Project Home AGENTS.md Bootstrap (2026-09-14)
+
+每个 project 创建时,在 `~/.duya/projects/<project_id>/AGENTS.md` 写入一份静态模板,作为这个 project entity 的总纲。模板包含:
+
+- 项目身份(Project ID / Canonical root / Home / Created)
+- duya 项目管理哲学(project 是长生命周期实体,plans 是核心制品)
+- 三个 plan 工具的使用约定(`plan_status` / `plan_search` / `plan_complete`)
+- 长期项目管理实务与禁区
+
+**实现**(`electron/memory-state/projectService.ts`):
+
+- 新增导出常量 `DEFAULT_PROJECT_AGENTS_MD_TEMPLATE`(5 个占位符:`{projectName}`、`{projectId}`、`{canonicalRoot}`、`{createdAt}`、`{duyaVersion}`)
+- 新增 `ensureProjectAgentsMd(projectId, { projectName, canonicalRoot }, opts?)`:
+  - `mkdir -p` home(幂等)
+  - 如果 `AGENTS.md` 已存在 → 跳过(`created: false`)
+  - 否则渲染模板并 atomic write(temp + rename)
+- `createProject` 在 `writePlansIndex` 之后调用 `ensureProjectAgentsMd`
+
+**设计原则**:
+
+- 只创建时写一次,后续不覆盖(用户编辑后保留)
+- 用户指定的 working path 不被覆盖——只写 duya 自己的 home
+- 模板是占位文本,不是脚本生成的元数据,未来可由 duya 提供 UI 编辑(后续 plan)
+
+**单测**(`electron/memory-state/__tests__/projectService.test.ts` 追加 4 case):
+
+- [x] 7.1 `createProject` 后 `~/.duya/projects/<id>/AGENTS.md` 存在,5 个占位符被正确渲染,plan 工具表格保留
+- [x] 7.2 二次调用 `ensureProjectAgentsMd` 不覆盖用户编辑(`created: false`,字节不变)
+- [x] 7.3 中文项目名 + 含空格 + 含中文的 canonical_root 渲染正确,无意外转义
+- [x] 7.4 模板常量包含全部 5 个占位符 + plan 工具表格(catch template drift)
+
+**验证**:
+
+- [x] 7.5 `npx vitest run electron/memory-state/__tests__/projectService.test.ts` — 20/20(16 原有 + 4 新加)
+- [x] 7.6 `projectService.ts` 单独 typecheck 零错误(其他 20 个 error 在 `src/` 是 pre-existing)
+
 ---
 
 ## 6. 验证
@@ -408,6 +444,7 @@ agent / bash tool  ← 受信任
 - [ ] Phase 3 创建 project 时自动建 `~/.duya/projects/<id>/plans/` 目录
 - [ ] Phase 4 三个 plan MCP 工具可用
 - [ ] Phase 5 plan 522 已删,文档已更新
+- [x] Phase 7 Project home AGENTS.md bootstrap 完成(2026-09-14)
 - [ ] 用 duya 自身项目走通整条链路 dogfood
 - [ ] 计划文件移入 `completed/`,索引更新
 
