@@ -10,6 +10,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { CaretRightIcon } from "@/components/icons";
+import { usePopoverPlacement } from "@/components/ui/usePopoverPlacement";
 
 export type MenuAction =
   | {
@@ -22,18 +23,7 @@ export type MenuAction =
       onSelect: () => void;
       danger?: boolean;
       disabled?: boolean;
-      /**
-       * Optional secondary line rendered below the label in a smaller /
-       * muted style. Used by project / thread pickers to show the working
-       * directory or last-activity timestamp next to the primary name.
-       */
       description?: ReactNode;
-      /**
-       * Optional className applied to the rendered item element. Used by
-       * the sidebar project / bot menus to re-apply legacy item styles
-       * (`.project-dropdown-item`, `.bot-dropdown-item`) so the visual is
-       * byte-for-byte equivalent to the prior hand-rolled implementation.
-       */
       className?: string;
     }
   | {
@@ -42,14 +32,15 @@ export type MenuAction =
       label: string;
       iconLeft?: ReactNode;
       items: MenuAction[];
-      /**
-       * Optional className applied to the submenu's inner popover div.
-       * Used by the sidebar project / bot menus to re-apply the legacy
-       * `.project-dropdown-submenu` look (Plan 471 v4: `top: -4px; left: 100%`,
-       * `min-width: 180px`, plus the `.project-dropdown-submenu-flip-left`
-       * variant when the parent menu sits in the right gutter).
-       */
       className?: string;
+    }
+  | {
+      kind: "checkbox";
+      id: string;
+      label: string;
+      checked: boolean;
+      onToggle: (checked: boolean) => void;
+      disabled?: boolean;
     }
   | { kind: "divider"; id: string }
   | { kind: "section"; id: string; title: string; items: MenuAction[] };
@@ -125,6 +116,17 @@ export function DropdownMenu({
   const triggerRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const submenuTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * Refs to every portaled submenu root. The outside-click handler
+   * consults this set so hovering or clicking inside a submenu does NOT
+   * close the parent menu (the submenu lives in document.body and would
+   * otherwise be invisible to menuRef.contains()).
+   *
+   * We deliberately use a ref of a Set instead of state — the contents
+   * are only read inside a document-level event listener and never
+   * trigger re-renders.
+   */
+  const portalSubmenuRefs = useRef<Set<HTMLElement>>(new Set());
 
   // Support both controlled (external) and uncontrolled (internal) open state
   const isControlled = open !== undefined;
@@ -208,11 +210,13 @@ export function DropdownMenu({
     if (!actualOpen) return;
 
     const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
       if (
         menuRef.current &&
-        !menuRef.current.contains(e.target as Node) &&
+        !menuRef.current.contains(target) &&
         triggerRef.current &&
-        !triggerRef.current.contains(e.target as Node)
+        !triggerRef.current.contains(target) &&
+        !Array.from(portalSubmenuRefs.current).some((el) => el.contains(target))
       ) {
         handleOpenChange(false);
       }
@@ -264,6 +268,11 @@ export function DropdownMenu({
           item.onSelect();
           handleOpenChange(false);
         }
+      } else if (item.kind === "checkbox") {
+        if (!item.disabled) {
+          item.onToggle(!item.checked);
+          handleOpenChange(false);
+        }
       }
     },
     [handleOpenChange]
@@ -292,30 +301,49 @@ export function DropdownMenu({
 
       if (item.kind === "submenu") {
         return (
-          <div
+          <SubmenuItem
             key={item.id}
-            className="sidebar-project-menu-item has-submenu"
-            onMouseEnter={() => handleSubmenuMouseEnter(item.id)}
-            onMouseLeave={handleSubmenuMouseLeave}
+            item={item}
+            open={openSubmenu === item.id}
+            onOpen={() => handleSubmenuMouseEnter(item.id)}
+            onScheduleClose={handleSubmenuMouseLeave}
+            onCancelClose={() => handleSubmenuMouseEnter(item.id)}
+            renderItem={renderItem}
+            minWidth={minWidth}
+            maxWidth={maxWidth}
+            registerPortalRef={(el) => {
+              if (el) portalSubmenuRefs.current.add(el);
+              else portalSubmenuRefs.current.delete(el);
+            }}
+          />
+        );
+      }
+
+      if (item.kind === "checkbox") {
+        return (
+          <button
+            key={item.id}
+            type="button"
+            role="menuitemcheckbox"
+            aria-checked={item.checked}
+            className={`sidebar-project-menu-item${
+              item.disabled ? " disabled" : ""
+            }`}
+            onClick={() => handleItemClick(item)}
+            disabled={item.disabled}
           >
-            {item.iconLeft && (
-              <span className="sidebar-project-menu-item-icon">{item.iconLeft}</span>
-            )}
-            <span>{item.label}</span>
-            <CaretRightIcon
-              size={12}
-              style={{ marginLeft: "auto", flexShrink: 0 }}
-            />
-            {openSubmenu === item.id && (
-              <div
-                className={item.className ?? "sidebar-project-submenu"}
-                onMouseEnter={() => handleSubmenuMouseEnter(item.id)}
-                onMouseLeave={handleSubmenuMouseLeave}
-              >
-                {item.items.map((subItem) => renderItem(subItem))}
-              </div>
-            )}
-          </div>
+            <span
+              style={{
+                marginRight: 8,
+                width: 14,
+                textAlign: "center",
+                flexShrink: 0,
+              }}
+            >
+              {item.checked ? "✓" : ""}
+            </span>
+            <span className="sidebar-project-menu-item-label">{item.label}</span>
+          </button>
         );
       }
 
@@ -360,7 +388,14 @@ export function DropdownMenu({
         </button>
       );
     },
-    [openSubmenu, handleSubmenuMouseEnter, handleSubmenuMouseLeave, handleItemClick]
+    [
+      openSubmenu,
+      handleSubmenuMouseEnter,
+      handleSubmenuMouseLeave,
+      handleItemClick,
+      minWidth,
+      maxWidth,
+    ]
   );
 
   return (
@@ -402,5 +437,96 @@ export function DropdownMenu({
           document.body
         )}
     </>
+  );
+}
+
+/**
+ * SubmenuItem — renders a menu row that owns a nested submenu, but the
+ * submenu itself is portaled to `document.body` (via usePopoverPlacement).
+ *
+ * Why a portal:
+ *   - The parent `.sidebar-project-menu-list` has `overflow-x: hidden`
+ *     (so a long shortcut / description cannot trigger a horizontal scroll).
+ *     A nested submenu placed inside would be clipped by that overflow.
+ *   - Portaling keeps the submenu from being trapped by ancestor stacking
+ *     contexts, and lets floating-ui's flip/shift position it cleanly against
+ *     the viewport edges.
+ *
+ * The parent row still carries the hover affordance (`has-submenu`,
+ * caret icon) and forwards open/close via callbacks so the parent menu can
+ * keep a single `openSubmenu` state and the 150 ms close-delay timer.
+ */
+interface SubmenuItemProps {
+  item: Extract<MenuAction, { kind: "submenu" }>;
+  open: boolean;
+  onOpen: () => void;
+  onScheduleClose: () => void;
+  onCancelClose: () => void;
+  renderItem: (item: MenuAction) => ReactNode;
+  /** Inherited from the parent DropdownMenu so the submenu visually matches. */
+  minWidth?: number;
+  maxWidth?: number;
+  /**
+   * Ref-callback registration so the parent can include this submenu's
+   * portal root in its outside-click exemption set. The SubmenuItem
+   * appends on mount and removes on unmount.
+   */
+  registerPortalRef?: (el: HTMLElement | null) => void;
+}
+
+function SubmenuItem({
+  item,
+  open,
+  onOpen,
+  onScheduleClose,
+  onCancelClose,
+  renderItem,
+  minWidth,
+  maxWidth,
+  registerPortalRef,
+}: SubmenuItemProps) {
+  const placement = usePopoverPlacement<HTMLDivElement>({
+    placement: "right-start",
+    offsetPx: 4,
+  });
+
+  return (
+    <div
+      ref={placement.ref}
+      className="sidebar-project-menu-item has-submenu"
+      onMouseEnter={onOpen}
+      onMouseLeave={onScheduleClose}
+    >
+      {item.iconLeft && (
+        <span className="sidebar-project-menu-item-icon">{item.iconLeft}</span>
+      )}
+      <span>{item.label}</span>
+      <CaretRightIcon
+        size={12}
+        style={{ marginLeft: "auto", flexShrink: 0 }}
+      />
+      {open &&
+        createPortal(
+          <div
+            ref={(el) => {
+              placement.popoverRef(el);
+              registerPortalRef?.(el);
+            }}
+            className={item.className ?? "sidebar-project-submenu"}
+            style={{
+              ...placement.style,
+              minWidth,
+              maxWidth,
+            }}
+            onMouseEnter={onCancelClose}
+            onMouseLeave={onScheduleClose}
+            role="menu"
+            aria-label={item.label}
+          >
+            {item.items.map((subItem) => renderItem(subItem))}
+          </div>,
+          document.body
+        )}
+    </div>
   );
 }
