@@ -58,24 +58,43 @@ export class AgentsMdManager {
     return this._initialized && this._projectPath === projectPath
   }
 
+  // Project-entity home directory (`~/.duya/projects/<projectId>/`) for the
+  // current snapshot. Independent of `_projectPath` because the entity home
+  // is duya-internal storage, not the user's code. Optional — when unset,
+  // no `'Project entity'` AGENTS.md is loaded.
+  private _projectHome: string = ''
+  // Mirror used by the fast-path mtime skip; same value as `_projectHome`
+  // but tracked separately so a future change to the home (e.g. project
+  // moved between namespaces) triggers a fresh scan even when the cwd
+  // path is unchanged.
+  private _lastProjectHome: string = ''
+
   /**
    * Initialize the AGENTS.md system for a session.
    * Kept for compatibility with callers that initialize once.
    */
-  async loadForSession(projectPath: string): Promise<void> {
-    await this.refreshForTask(projectPath)
+  async loadForSession(projectPath: string, projectHome?: string): Promise<void> {
+    await this.refreshForTask(projectPath, projectHome)
   }
 
   /**
    * Refresh the resolved instruction snapshot at a task/prompt-build boundary.
    * Returns true only when the effective prompt changed.
+   *
+   * `projectHome` is the project's entity home directory (Plan 525 / 408
+   * follow-up). When supplied, the loader reads `<projectHome>/AGENTS.md`
+   * as a `'Project entity'` source. The parameter is optional — callers
+   * that have not yet plumbed the home through their IPC layer pass
+   * `undefined` and the behavior is identical to before this option
+   * existed.
    */
-  async refreshForTask(projectPath: string): Promise<boolean> {
-    // Fast path: same path and no tracked file mtime changed since last scan
-    // → skip the full disk traversal (cwd → root) entirely.
+  async refreshForTask(projectPath: string, projectHome?: string): Promise<boolean> {
+    // Fast path: same path+home and no tracked file mtime changed since last
+    // scan → skip the full disk traversal (cwd → root + home) entirely.
     if (
       this._initialized &&
       this._lastScanPath === projectPath &&
+      this._lastProjectHome === (projectHome ?? '') &&
       this._lastFileMtimes.size > 0
     ) {
       const mtimesUnchanged = await this._checkMtimesUnchanged()
@@ -87,14 +106,17 @@ export class AgentsMdManager {
     const files = await loadAgentsMdFiles({
       cwd: projectPath,
       config: this._config,
+      projectHome,
     })
     const prompt = buildAgentsMdPrompt(files)
     const changed =
       !this._initialized ||
       this._projectPath !== projectPath ||
+      this._projectHome !== (projectHome ?? '') ||
       this._snapshotPrompt !== prompt
 
     this._projectPath = projectPath
+    this._projectHome = projectHome ?? ''
 
     this._snapshot = files
     this._snapshotPrompt = prompt
@@ -103,6 +125,7 @@ export class AgentsMdManager {
 
     // Record mtimes for next fast-path check
     this._lastScanPath = projectPath
+    this._lastProjectHome = projectHome ?? ''
     this._lastFileMtimes = await this._collectFileMtimes(files)
 
     if (changed) {
@@ -218,8 +241,10 @@ export class AgentsMdManager {
     this._snapshot = []
     this._snapshotPrompt = ''
     this._projectPath = ''
+    this._projectHome = ''
     this._initialized = false
     this._lastScanPath = undefined
+    this._lastProjectHome = ''
     this._lastFileMtimes = new Map()
     this._loadedNestedPaths = new Set()
   }
