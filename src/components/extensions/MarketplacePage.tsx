@@ -125,8 +125,8 @@ export function MarketplacePage({
   return (
     <div className="flex flex-col min-w-0">
       {/* Toolbar */}
-      <div className="flex items-center justify-between gap-3 mb-3">
-        <div className="flex items-center gap-1">
+      <div className="flex items-center justify-between gap-3 mb-3 min-w-0">
+        <div className="flex items-center gap-1 min-w-0 overflow-x-auto scrollbar-hide">
           {tabs.map((tab) => {
             const isActive =
               activeTab.kind === tab.kind &&
@@ -144,7 +144,7 @@ export function MarketplacePage({
                 type="button"
                 onClick={() => setActiveTab(tab)}
                 className={cn(
-                  "px-3 py-1.5 text-[13px] rounded-lg transition-colors",
+                  "px-3 py-1.5 text-[13px] rounded-lg transition-colors shrink-0",
                   isActive
                     ? "bg-accent/10 text-accent font-medium"
                     : "text-muted-foreground hover:bg-muted/40"
