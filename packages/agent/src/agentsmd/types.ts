@@ -12,7 +12,7 @@
 // Memory Types
 // =============================================================================
 
-export type AgentsMemoryType = 'Managed' | 'User' | 'Project' | 'Local'
+export type AgentsMemoryType = 'Managed' | 'User' | 'Project' | 'Project entity' | 'Local'
 
 // =============================================================================
 // Agents File Info
