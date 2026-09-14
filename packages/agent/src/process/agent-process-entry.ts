@@ -30,6 +30,7 @@ import type { Message, MessageContent, MCPServerConfig, Tool, TokenUsage, UsageC
 import type { ProviderRuntimeConfig } from '@duya/ai';
 import { logger } from '../utils/logger.js';
 import { parseUsageCall } from './call-usage.js';
+import { seedTokenUsageFromHistory } from './seed-token-usage.js';
 import {
   messageDb,
   pluginDb,
@@ -435,7 +436,10 @@ const emitLiveUsage = (
   // the same payload every tool_result event would cause redundant
   // zustand sets and React re-renders. Diff over the fields the
   // ring + stats line actually read.
-  const emitKey = `${usedForRing}|${anchored ? 1 : 0}|${liveTotalInput}|${liveTotalCacheHit}|${liveTotalCacheCreation}|${liveTotalOutput}|${agent?.model ?? mainModelName}|${currentProviderId}`;
+  // Plan 546: include `liveTotalInputRaw` so the cost line (which the
+  // ring renders from this field) does not appear to flicker when only
+  // the raw counter advances between two normalized-equal events.
+  const emitKey = `${usedForRing}|${anchored ? 1 : 0}|${liveTotalInput}|${liveTotalInputRaw}|${liveTotalCacheHit}|${liveTotalCacheCreation}|${liveTotalOutput}|${agent?.model ?? mainModelName}|${currentProviderId}`;
   if (emitKey === lastEmittedUsageKey) {
     ringTrace(`[${targetSessionId.slice(0, 8)}] emit-skip (no change) used=${usedForRing}`);
     return;
@@ -2692,43 +2696,20 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // from the DB above), so the stats stay correct regardless of process
     // lifetime. `result` events during this turn then accumulate on top.
     {
-      let seedTotalInput = 0;
-      let seedTotalInputRaw = 0;
-      let seedTotalOutput = 0;
-      let seedTotalCacheHit = 0;
-      let seedTotalCacheCreation = 0;
-      for (const m of agent.getMessages()) {
-        // Plan 445: only the camelCase `tokenUsage` field is set now.
-        // DB reload maps row.token_usage (snake_case column) ->
-        // msg.tokenUsage via messageRowToMessage (session/db.ts);
-        // in-process the agent loop attaches `pushed.tokenUsage`
-        // directly (camelCase). The legacy snake_case fallback is
-        // dead — removed.
-        const u = m.tokenUsage;
-        if (!u) continue;
-        const rawInput = u.input_tokens ?? 0;
-        const output = u.output_tokens ?? 0;
-        const cacheHit = u.cache_hit_tokens ?? 0;
-        const cacheCreation = u.cache_creation_tokens ?? 0;
-        // Keep the cache-convention guard identical to the `result` handler
-        // below: a fully cache-served request can report input=0 while hits
-        // (read or write) are large, so the persisted raw fields must be
-        // normalized the same way when re-seeding the cumulative totals.
-        const normalizedInput =
-          cacheHit > rawInput || cacheCreation > rawInput
-            ? rawInput + cacheHit + cacheCreation
-            : rawInput;
-        seedTotalInput += normalizedInput;
-        seedTotalInputRaw += rawInput;
-        seedTotalOutput += output;
-        seedTotalCacheHit += cacheHit;
-        seedTotalCacheCreation += cacheCreation;
-      }
-      liveTotalInput = seedTotalInput;
-      liveTotalInputRaw = seedTotalInputRaw;
-      liveTotalOutput = seedTotalOutput;
-      liveTotalCacheHit = seedTotalCacheHit;
-      liveTotalCacheCreation = seedTotalCacheCreation;
+      // Plan 546: walk PER-CALL fields (plan 445 calls[] ledger, then
+      // last_call, then legacy single-call block) instead of summing
+      // top-level input_tokens / cache_hit_tokens directly. The top-
+      // level fields are now turn-cumulative (sum of every LLM call in
+      // the turn), and the `result` handler ALSO accumulates per-call
+      // rawInput on top — so the old seed summed each turn twice, and
+      // over N turns the gap grew ~N× (1720M / 1.0M screenshots).
+      // See packages/agent/src/process/seed-token-usage.ts.
+      const seeded = seedTokenUsageFromHistory(agent.getMessages());
+      liveTotalInput = seeded.totalInput;
+      liveTotalInputRaw = seeded.totalInputRaw;
+      liveTotalOutput = seeded.totalOutput;
+      liveTotalCacheHit = seeded.totalCacheHit;
+      liveTotalCacheCreation = seeded.totalCacheCreation;
       liveLatestObserved = 0;
       // Plan 445 Bug #7: dedupe cache must reset on init so the first
       // frame of the session always emits even if the numbers happen
