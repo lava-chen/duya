@@ -189,6 +189,7 @@ const en = {
   'streaming.toolAction.label.messageSession': 'Asked',
   'streaming.toolAction.label.vision': 'Vision',
   'streaming.toolAction.label.canvas': 'Canvas',
+  'streaming.toolAction.label.todo': 'Todo',
   // Per-tool action row verbs, dispatched by row status (running /
   // done / error). The row component picks one of three keys based on
   // the tool's current ToolStatus and renders the resulting label
@@ -1368,6 +1369,8 @@ const en = {
   'project.addFolder': 'Add folder',
   'project.avatarDone': 'Done',
   'project.removeFolder': 'Remove this folder',
+  'project.primaryFolder': 'Primary folder',
+  'project.setAsPrimary': 'Set as primary folder',
   'project.collapseAll': 'Collapse All',
   'project.expandAll': 'Expand All',
   'project.organize': 'Organize',

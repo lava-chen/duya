@@ -191,6 +191,7 @@ const zh: Record<TranslationKey, string> = {
   'streaming.toolAction.label.messageSession': '已询问',
   'streaming.toolAction.label.vision': '视觉',
   'streaming.toolAction.label.canvas': '画布',
+  'streaming.toolAction.label.todo': '待办',
   // Per-tool action row verbs, dispatched by row status (running /
   // done / error). The row component picks one of three keys based on
   // the tool's current ToolStatus and renders the resulting label
@@ -1353,6 +1354,8 @@ const zh: Record<TranslationKey, string> = {
   'project.addFolder': '添加文件夹',
   'project.avatarDone': '完成',
   'project.removeFolder': '移除该文件夹',
+  'project.primaryFolder': '主文件夹',
+  'project.setAsPrimary': '设为主文件夹',
   'project.collapseAll': '全部收起',
   'project.expandAll': '全部展开',
   'project.organize': '整理',

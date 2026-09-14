@@ -143,6 +143,25 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
     },
   },
   {
+    // TodoTool (todo/todowrite) — manages an internal task list with
+    // `todos[] + merge` interface. This entry is a fallback used only
+    // when the dedicated TodoToolRow is not matched (shouldn't happen
+    // in practice since ToolActionRow routes todo/todowrite to
+    // TodoToolRow before falling through to the registry).
+    match: (n) => ['todo', 'todowrite'].includes(n.toLowerCase()),
+    icon: ListChecksIcon,
+    labelKey: 'streaming.toolAction.label.todo',
+    getSummary: (input) => {
+      const inp = (input || {}) as Record<string, unknown>;
+      const todos = (inp.todos as Array<{ id: string; content?: string; status?: string }>) ?? [];
+      const total = todos.length;
+      const completed = todos.filter(t => t.status === 'completed').length;
+      if (total === 0) return 'No todos';
+      if (completed === 0) return total === 1 ? '1 todo' : `${total} todos`;
+      return `${completed}/${total} completed`;
+    },
+  },
+  {
     match: (n) => isBrowserTool(n),
     icon: ChromeIcon,
     labelKey: 'streaming.toolAction.label.browser',
