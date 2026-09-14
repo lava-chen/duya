@@ -327,6 +327,30 @@ html[data-glass-repair] .attachment-preview-overlay {
   width: 100%;
 }
 
+.sidebar-project-menu-list {
+  /* The list is the only part that scrolls when `maxHeight` (set by
+     the popover in DropdownMenu) clips the content. The container
+     stays flexible so a short list does not get a phantom scrollbar. */
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--muted) transparent;
+}
+
+.sidebar-project-menu-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar-project-menu-list::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 60%, transparent);
+  border-radius: 3px;
+}
+
+.sidebar-project-menu-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 .sidebar-project-menu-section {
   display: flex;
   flex-direction: column;
