@@ -214,6 +214,7 @@ export function SessionSelector({
         align="center"
         minWidth={320}
         maxWidth={400}
+        maxHeight={320}
         open={isProjectDropdownOpen}
         onOpenChange={(open) => {
           if (open) {

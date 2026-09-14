@@ -28,8 +28,29 @@ export type MenuAction =
        * directory or last-activity timestamp next to the primary name.
        */
       description?: ReactNode;
+      /**
+       * Optional className applied to the rendered item element. Used by
+       * the sidebar project / bot menus to re-apply legacy item styles
+       * (`.project-dropdown-item`, `.bot-dropdown-item`) so the visual is
+       * byte-for-byte equivalent to the prior hand-rolled implementation.
+       */
+      className?: string;
     }
-  | { kind: "submenu"; id: string; label: string; iconLeft?: ReactNode; items: MenuAction[] }
+  | {
+      kind: "submenu";
+      id: string;
+      label: string;
+      iconLeft?: ReactNode;
+      items: MenuAction[];
+      /**
+       * Optional className applied to the submenu's inner popover div.
+       * Used by the sidebar project / bot menus to re-apply the legacy
+       * `.project-dropdown-submenu` look (Plan 471 v4: `top: -4px; left: 100%`,
+       * `min-width: 180px`, plus the `.project-dropdown-submenu-flip-left`
+       * variant when the parent menu sits in the right gutter).
+       */
+      className?: string;
+    }
   | { kind: "divider"; id: string }
   | { kind: "section"; id: string; title: string; items: MenuAction[] };
 
@@ -151,11 +172,12 @@ export function DropdownMenu({
     const viewportH = window.innerHeight;
 
     // Height cap derived from viewport so long lists scroll inside the
-    // popover instead of overflowing the bottom of the screen. 480px
-    // upper bound keeps the menu from becoming unwieldy on tall
-    // windows; hosts can override via the `maxHeight` prop.
-    const VIEWPORT_FLOOR = 100;
-    const MAX_HEIGHT_CEILING = 480;
+    // popover instead of overflowing the bottom of the screen. 360px
+    // default ceiling keeps the menu compact (~10 rows) — taller popovers
+    // look heavy next to a small composer. Hosts can override via the
+    // `maxHeight` prop (e.g. a fixed-height command palette).
+    const VIEWPORT_FLOOR = 120;
+    const MAX_HEIGHT_CEILING = 360;
     const belowRoom = viewportH - rect.bottom - GAP - 8;
     const aboveRoom = rect.top - GAP - 8;
     const defaultCap =
@@ -286,7 +308,7 @@ export function DropdownMenu({
             />
             {openSubmenu === item.id && (
               <div
-                className="sidebar-project-submenu"
+                className={item.className ?? "sidebar-project-submenu"}
                 onMouseEnter={() => handleSubmenuMouseEnter(item.id)}
                 onMouseLeave={handleSubmenuMouseLeave}
               >
@@ -305,7 +327,7 @@ export function DropdownMenu({
             item.danger ? " danger" : ""
           }${item.disabled ? " disabled" : ""}${
             item.description ? " has-description" : ""
-          }`}
+          }${item.className ? ` ${item.className}` : ""}`}
           onClick={() => handleItemClick(item)}
           disabled={item.disabled}
         >
