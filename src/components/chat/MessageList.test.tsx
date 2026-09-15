@@ -55,13 +55,22 @@ beforeEach(() => {
   // `requestAnimationFrame(() => updateScrollState())` resolves inside the
   // test body. Without this JSDOM's rAF only fires when `_pretendToBeVisual`
   // is set, and `isScrolledUp` never flips to true after we dispatch `scroll`.
-  const raf = globalThis.requestAnimationFrame as unknown as (cb: FrameRequestCallback) => number;
-  if (raf && !globalThis.__duyaTestRafStubbed) {
-    globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => {
+  // Use a typed `g` alias for the JSDOM `globalThis` — TS strict mode
+  // rejects `globalThis.requestAnimationFrame` because `globalThis` has no
+  // index signature, and using `as unknown as ...` cascades into "this
+  // expression is not callable" downstream. A local `g` with a precise
+  // interface keeps the cast narrow and explicit.
+  interface JSDOMGlobals {
+    requestAnimationFrame?: (cb: FrameRequestCallback) => number;
+    __duyaTestRafStubbed?: boolean;
+  }
+  const g = globalThis as unknown as JSDOMGlobals;
+  if (g.requestAnimationFrame && !g.__duyaTestRafStubbed) {
+    g.requestAnimationFrame = (cb: FrameRequestCallback) => {
       cb(performance.now());
       return 0;
-    }) as unknown as typeof globalThis.requestAnimationFrame;
-    globalThis.__duyaTestRafStubbed = true;
+    };
+    g.__duyaTestRafStubbed = true;
   }
 });
 
@@ -293,7 +302,7 @@ describe('MessageList', () => {
      * mount useLayoutEffect observes the right dimensions. Also works
      * afterwards, because we re-apply to the freshly-mounted container.
      */
-    function stubContainerHeights(): void {
+    function stubContainerHeights(): () => void {
       const original = Object.getOwnPropertyDescriptor(
         HTMLElement.prototype,
         'clientHeight'

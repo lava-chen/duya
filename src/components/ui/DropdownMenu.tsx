@@ -312,8 +312,16 @@ export function DropdownMenu({
             minWidth={minWidth}
             maxWidth={maxWidth}
             registerPortalRef={(el) => {
-              if (el) portalSubmenuRefs.current.add(el);
-              else portalSubmenuRefs.current.delete(el);
+              if (el) {
+                portalSubmenuRefs.current.add(el);
+              } else {
+                // el is null on unmount — drop every ref currently
+                // tracked; portal submenus are unmounted together with
+                // their parent, so the Set is empty by the time we get
+                // here in practice, but clear() keeps the contract
+                // explicit if multiple submenus ever share a callback.
+                portalSubmenuRefs.current.clear();
+              }
             }}
           />
         );
