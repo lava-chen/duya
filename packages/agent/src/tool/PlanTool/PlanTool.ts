@@ -143,7 +143,7 @@ Three actions:
       // ── status ──────────────────────────────────────────────────────────────
       projectId: {
         type: 'string' as const,
-        description: 'Project ID (e.g. e4e2b217). Required for status and complete actions.',
+        description: 'Project ID (e.g. e4e2b217). Optional for status/complete/search — falls back to the current project bound to this session (see ToolUseContext.currentProjectId). Pass an explicit ID only to operate on a non-current project.',
       },
       status: {
         type: 'string' as const,
@@ -172,7 +172,7 @@ Three actions:
     allOf: [
       {
         if: { properties: { action: { const: 'status' } } },
-        then: { required: ['projectId'] },
+        then: {},
       },
       {
         if: { properties: { action: { const: 'search' } } },
@@ -180,7 +180,7 @@ Three actions:
       },
       {
         if: { properties: { action: { const: 'complete' } } },
-        then: { required: ['projectId', 'planId'] },
+        then: { required: ['planId'] },
       },
     ],
   };
@@ -189,7 +189,7 @@ Three actions:
     return { name: this.name, description: this.description, input_schema: this.input_schema };
   }
 
-  async execute(input: Record<string, unknown>, _wd?: string, _context?: ToolUseContext): Promise<ToolResult> {
+  async execute(input: Record<string, unknown>, _wd?: string, context?: ToolUseContext): Promise<ToolResult> {
     const { action, projectId, status, query, scope, planId } = input as {
       action: PlanAction;
       projectId?: string;
@@ -199,10 +199,31 @@ Three actions:
       planId?: number;
     };
 
+    // Plan 536: projectId is optional in the schema; fall back to the project
+    // bound to this session when the model omits it. Only "status" and
+    // "complete" require a project; "search" works without one (defaults to
+    // scope='all').
+    const resolvedProjectId =
+      projectId ??
+      (action === 'status' || action === 'complete' ? context?.currentProjectId : undefined) ??
+      undefined;
+
+    if ((action === 'status' || action === 'complete') && !resolvedProjectId) {
+      return toResult(
+        this.name,
+        '**Error**: `projectId` required for `' +
+          action +
+          '` action. ' +
+          'Either pass `projectId` explicitly, or ensure the session is bound to a known project ' +
+          '(ToolUseContext.currentProjectId is null when no project owns the session workingDirectory).',
+        true,
+      );
+    }
+
     try {
       switch (action) {
         case 'status': {
-          const result = planStatus({ projectId: projectId!, status });
+          const result = planStatus({ projectId: resolvedProjectId!, status });
           return toResult(this.name, formatStatus(result, status ?? 'active'));
         }
         case 'search': {
@@ -210,8 +231,8 @@ Three actions:
           return toResult(this.name, formatSearch(result, query!));
         }
         case 'complete': {
-          const result = planComplete({ projectId: projectId!, planId: planId! });
-          return toResult(this.name, formatComplete(result, projectId!, planId!));
+          const result = planComplete({ projectId: resolvedProjectId!, planId: planId! });
+          return toResult(this.name, formatComplete(result, resolvedProjectId!, planId!));
         }
         default:
           return toResult(this.name, `**Unknown action:** \`${action}\`. Use 'status', 'search', or 'complete'.`, true);
