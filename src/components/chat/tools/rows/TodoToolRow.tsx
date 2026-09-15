@@ -18,6 +18,7 @@ import {
 } from '@/components/icons';
 import { ActionRowChrome } from '../chrome/ActionRowChrome';
 import { getStatus } from '../registry';
+import type { TranslationKey } from '@/i18n';
 import type { ToolAction, ToolStatus } from '../types';
 
 interface TodoToolRowProps {
@@ -92,10 +93,16 @@ function buildSummary(input: unknown, result: TodoWriteResult | null): string {
   return `${total} todos, ${completed} completed`;
 }
 
-function verbKeyFor(status: ToolStatus): string {
+function verbKeyFor(status: ToolStatus): TranslationKey {
   if (status === 'running') return 'streaming.toolAction.running.todo';
   if (status === 'error') return 'streaming.toolAction.error.todo';
-  return 'streaming.toolAction.done.todo';
+  // Baseline fix: `done.todo` is not a key — the existing
+  // `done.todo.*` set covers add / complete / start / merge / list.
+  // `merge` is the default path in `buildSummary` (merge !== false),
+  // and the chrome only renders the verb, not the full summary, so
+  // picking `merge` keeps the visible label closest to "managed the
+  // todo list" without branching inside this helper.
+  return 'streaming.toolAction.done.todo.merge';
 }
 
 export function TodoToolRow({ tool }: TodoToolRowProps) {
