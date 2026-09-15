@@ -30,8 +30,12 @@ const storeMocks = vi.hoisted(() => ({
   setThreadPinned: vi.fn(),
 }));
 
+// Selector-aware mock. ThreadListItem now subscribes via per-action
+// selectors (`useConversationStore((s) => s.deleteThread)`) so the
+// mock must forward the selector to the store stub.
 vi.mock('@/stores/conversation-store', () => ({
-  useConversationStore: () => storeMocks,
+  useConversationStore: (selector?: (state: typeof storeMocks) => unknown) =>
+    selector ? selector(storeMocks) : storeMocks,
 }));
 
 const ipcMocks = vi.hoisted(() => ({

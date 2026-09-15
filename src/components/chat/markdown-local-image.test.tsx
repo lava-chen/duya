@@ -65,6 +65,17 @@ describe('preserveLocalUrlTransform', () => {
       'https://example.com/a.png',
     );
   });
+
+  // Regression (2026-09-14): react-markdown parses `c:/Users/...` as a
+  // URL with scheme `c`, host `c`, pathname `/Users/...`, and concatenates
+  // them back without the colon, leaving `c/Users/...`. The transform must
+  // restore the colon so the Windows-absolute branch matches and the
+  // downstream MarkdownImage can re-prefix `duya-file:///`.
+  it('restores the drive-letter colon on a colon-stripped Windows path', () => {
+    expect(
+      preserveLocalUrlTransform('c/Users/lavachen/AppData/Local/Temp/x.png'),
+    ).toBe('c:/Users/lavachen/AppData/Local/Temp/x.png');
+  });
 });
 
 describe('MarkdownRenderer embeds local-path images end to end', () => {
@@ -100,5 +111,16 @@ describe('MarkdownRenderer embeds local-path images end to end', () => {
     expect(firstImgSrc('![x](/abs/E:/Projects/MCTS/frame_4s.png)')).toBe(
       'duya-file:///E:/Projects/MCTS/frame_4s.png',
     );
+  });
+
+  // Regression (2026-09-14): when a Windows path is emitted with a
+  // lowercase drive letter (e.g. `c:/Users/...`), react-markdown parses
+  // `c:` as a scheme, host `c`, pathname `/Users/...`, and concatenates
+  // them back without the colon. The transform + MarkdownImage rewrite
+  // must still produce a valid `duya-file:///c:/...` URL.
+  it('renders a lowercase-drive Windows path despite react-markdown stripping the colon', () => {
+    expect(
+      firstImgSrc('![x](c:/Users/lavachen/AppData/Local/Temp/blender_screenshot_v1.png)'),
+    ).toBe('duya-file:///c:/Users/lavachen/AppData/Local/Temp/blender_screenshot_v1.png');
   });
 });

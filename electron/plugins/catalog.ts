@@ -360,8 +360,10 @@ function applyInterfaceMetadata(
  * Plan 455 — build catalog entries from every configured marketplace's
  * clone. Per-marketplace failures degrade to a status error (the rest of
  * the catalog still loads); per-plugin failures degrade to a warn log.
- * Git-source plugin entries inside a manifest are out of scope (Plan 455
- * ships local-path entries only) and are skipped with a warn.
+ *
+ * Plan 531 extension: git-source plugin entries are included as lightweight
+ * placeholder entries (no manifest) since the full plugin content must be
+ * cloned on-demand. The manifest is resolved lazily at install time.
  */
 function getMarketplaceCatalogEntries(): {
   entries: PluginCatalogEntry[];
@@ -370,12 +372,6 @@ function getMarketplaceCatalogEntries(): {
   const logger = getLogger();
   const entries: PluginCatalogEntry[] = [];
   const statuses: MarketplaceCatalogStatus[] = [];
-  // Plan 529: dedup by plugin id across marketplaces (first-wins) and by
-  // on-disk directory (catches the case where two configs point at the
-  // same physical clone, e.g. an accidentally re-added source). Source
-  // iteration order matches config insertion order; duya-official is
-  // seeded first by ensureOfficialMarketplace, so it takes precedence
-  // over any community mirror registered later.
   const seenIds = new Set<string>();
   const seenDirs = new Set<string>();
 
@@ -391,11 +387,6 @@ function getMarketplaceCatalogEntries(): {
       continue;
     }
 
-    // Plan 529 fix: dedup whole marketplaces by on-disk directory before
-    // reading the manifest. The original placement inside the per-plugin
-    // loop marked the directory as seen after the first successfully
-    // built plugin and silently dropped every sibling plugin in the same
-    // marketplace (so duya-official rendered exactly one entry).
     const dirKey = path.resolve(dir);
     if (seenDirs.has(dirKey)) {
       logger.debug('Skipping duplicate marketplace directory', {
@@ -471,46 +462,64 @@ function buildMarketplaceCatalogEntry(
   marketplaceDir: string,
   pluginEntry: MarketplacePluginEntry,
 ): PluginCatalogEntry | null {
-  if (pluginEntry.source.source !== 'local') {
-    getLogger().warn('Skipping git-source plugin entry inside marketplace (Plan 455 scope)', {
+  const official = marketplaceName === 'official';
+
+  if (pluginEntry.source.source === 'local') {
+    const pluginDir = resolvePluginEntryDir(marketplaceDir, pluginEntry);
+    const manifest = readPluginManifest(pluginDir);
+    const category = normalizeCategory(pluginEntry.category ?? manifest.interface?.category);
+
+    const officialAssets = official
+      ? getOfficialPluginAssets(manifest.id || `com.duya.${pluginEntry.name}`)
+      : undefined;
+    const manifestWithAssets: PluginManifest = officialAssets
+      ? { ...manifest, officialAssets }
+      : manifest;
+
+    return applyInterfaceMetadata({
+      id: manifest.id || `com.duya.${pluginEntry.name}`,
+      name: manifest.name || pluginEntry.name,
+      version: manifest.version || '0.1.0',
+      description: manifest.description || `Plugin: ${pluginEntry.name}`,
+      icon: resolveIconUrl(manifest, pluginDir),
+      source: 'marketplace',
       marketplace: marketplaceName,
-      plugin: pluginEntry.name,
-    }, COMPONENT);
-    return null;
+      marketplacePluginDir: pluginDir,
+      installPolicy: pluginEntry.policy?.installation ?? 'available',
+      authPolicy: pluginEntry.policy?.authentication,
+      category,
+      trustLevel: official ? 'official' : 'verified',
+      capabilityCounts: deriveCapabilityCounts(manifestWithAssets, pluginDir),
+      manifest: manifestWithAssets,
+      author: manifest.author,
+    }, manifest);
   }
 
-  // Fenced resolution — a remote manifest can never point outside its clone.
-  const pluginDir = resolvePluginEntryDir(marketplaceDir, pluginEntry);
-  const manifest = readPluginManifest(pluginDir);
-  const official = marketplaceName === 'official';
-  const category = normalizeCategory(pluginEntry.category ?? manifest.interface?.category);
+  if (pluginEntry.source.source === 'git') {
+    return {
+      id: `com.duya.${pluginEntry.name}`,
+      name: pluginEntry.name,
+      version: '0.1.0',
+      description: `Plugin: ${pluginEntry.name}`,
+      source: 'marketplace',
+      marketplace: marketplaceName,
+      installPolicy: pluginEntry.policy?.installation ?? 'available',
+      authPolicy: pluginEntry.policy?.authentication,
+      category: normalizeCategory(pluginEntry.category),
+      trustLevel: official ? 'official' : 'verified',
+      gitSourceUrl: pluginEntry.source.url,
+      gitSourceRef: pluginEntry.source.ref_name,
+      manifest: {
+        id: `com.duya.${pluginEntry.name}`,
+        name: pluginEntry.name,
+        version: '0.1.0',
+        description: `Plugin: ${pluginEntry.name}`,
+        components: {},
+      },
+    };
+  }
 
-  // Plan 455: builtin plugins moved to the official marketplace — the
-  // audited first-party asset registry now attaches via the catalog id.
-  const officialAssets = official
-    ? getOfficialPluginAssets(manifest.id || `com.duya.${pluginEntry.name}`)
-    : undefined;
-  const manifestWithAssets: PluginManifest = officialAssets
-    ? { ...manifest, officialAssets }
-    : manifest;
-
-  return applyInterfaceMetadata({
-    id: manifest.id || `com.duya.${pluginEntry.name}`,
-    name: manifest.name || pluginEntry.name,
-    version: manifest.version || '0.1.0',
-    description: manifest.description || `Plugin: ${pluginEntry.name}`,
-    icon: resolveIconUrl(manifest, pluginDir),
-    source: 'marketplace',
-    marketplace: marketplaceName,
-    marketplacePluginDir: pluginDir,
-    installPolicy: pluginEntry.policy?.installation ?? 'available',
-    authPolicy: pluginEntry.policy?.authentication,
-    category,
-    trustLevel: official ? 'official' : 'verified',
-    capabilityCounts: deriveCapabilityCounts(manifestWithAssets, pluginDir),
-    manifest: manifestWithAssets,
-    author: manifest.author,
-  }, manifest);
+  return null;
 }
 
 /** Sync status for each configured marketplace (Plan 455 IPC surface). */

@@ -29,6 +29,36 @@ function isUnixAbsolutePath(value: string): boolean {
   return value.startsWith('/');
 }
 
+// react-markdown parses `c:/Users/foo/a.png` as a URL whose scheme is `c`,
+// host is `c`, and pathname is `/Users/foo/a.png`. When it later
+// reconstructs the string for our custom `img` component, it glues the
+// host and pathname back together without the colon, so `src` arrives as
+// `c/Users/foo/a.png` — no leading slash, no drive-letter colon. Detect
+// that case by looking for a single letter followed by a typical Windows
+// top-level directory (Users, Windows, Program Files, ProgramData, ...),
+// then promote it back to a proper `C:/...` absolute path.
+const WINDOWS_DRIVE_LETTER_RE = /^[a-zA-Z]$/;
+function isColonStrippedWindowsPath(value: string): boolean {
+  if (value.length < 3) return false;
+  if (!WINDOWS_DRIVE_LETTER_RE.test(value[0])) return false;
+  if (value[1] !== '/') return false;
+  // The 2nd path segment (after the drive letter) must be a known Windows
+  // top-level directory. This avoids misclassifying short relative paths
+  // like `a/b` as Windows absolute paths.
+  const secondSlash = value.indexOf('/', 2);
+  const secondSegment = secondSlash === -1 ? value.slice(2) : value.slice(2, secondSlash);
+  return (
+    secondSegment === 'Users' ||
+    secondSegment === 'Windows' ||
+    secondSegment === 'Program Files' ||
+    secondSegment === 'Program Files (x86)' ||
+    secondSegment === 'ProgramData'
+  );
+}
+function restoreColonStrippedWindowsPath(value: string): string {
+  return `${value[0]}:${value.slice(1)}`;
+}
+
 /**
  * Rewrite a markdown image `src` so the renderer can actually load it.
  * Standard web URLs pass through unchanged. Absolute filesystem paths
@@ -48,6 +78,14 @@ export function rewriteMediaSrc(src: string): string {
   // prefix could be mistaken for a URL scheme, so check this first.
   if (isWindowsAbsolutePath(src)) {
     return `duya-file:///${src.replace(/\\/g, '/')}`;
+  }
+  // react-markdown sometimes drops the drive-letter colon when it parses
+  // `c:/Users/...` as a URL with scheme `c`, host `c`, pathname `/Users/...`
+  // and concatenates them back without the colon (see
+  // `c/Users/lavachen/AppData/Local/Temp/blender_screenshot_v1.png` in the
+  // issue). Restore the colon so the Windows-absolute branch above matches.
+  if (isColonStrippedWindowsPath(src)) {
+    return rewriteMediaSrc(restoreColonStrippedWindowsPath(src));
   }
   // `file://` URLs (the one non-http scheme SendMessage validates for bot
   // images) are blocked by Chromium on an http-origin renderer page, so the

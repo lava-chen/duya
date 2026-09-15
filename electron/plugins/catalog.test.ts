@@ -211,7 +211,7 @@ describe('deriveCapabilityCounts — derive from disk', () => {
 describe('getPluginCatalog — smoke', () => {
   it('returns a catalog without duplicate ids', async () => {
     const { getPluginCatalog } = await import('./catalog.js');
-    const catalog = getPluginCatalog();
+    const catalog = await getPluginCatalog();
     expect(Array.isArray(catalog)).toBe(true);
     const ids = catalog.map((e) => e.id);
     const unique = new Set(ids);

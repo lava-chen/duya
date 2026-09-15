@@ -265,6 +265,15 @@ export interface PluginCatalogEntry {
    * here during materialization. Undefined for non-marketplace entries.
    */
   marketplacePluginDir?: string;
+  /**
+   * Plan 531 — for marketplace entries with `source: 'git'`: the git URL
+   * of the plugin repo, materialized on-demand at install time.
+   * When present, `installFromCatalog` clones the repo instead of copying
+   * from `marketplacePluginDir`.
+   */
+  gitSourceUrl?: string;
+  /** Plan 531 — optional git ref (branch/tag/sha) for git-source plugins. */
+  gitSourceRef?: string;
   /** Plan 455 — catalog-declared installation policy (codex 17.3.1 parity). */
   installPolicy?: 'not_available' | 'available' | 'installed_by_default';
   /** Plan 455 — catalog-declared authentication policy (codex 17.3.1 parity). */

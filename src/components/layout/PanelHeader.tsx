@@ -1,11 +1,12 @@
 // src/components/layout/PanelHeader.tsx
 "use client";
 
-import { forwardRef, useCallback, useEffect, useRef, useState, type DragEvent as ReactDragEvent, type ReactNode } from "react";
+import { useCallback, useState, type DragEvent as ReactDragEvent, type ReactNode } from "react";
 import { PlusIcon, XIcon } from "@/components/icons";
+import { DropdownMenu, type MenuAction } from "@/components/ui/DropdownMenu";
 import { useTranslation } from "@/hooks/useTranslation";
 import { usePanel } from "@/hooks/usePanel";
-import { getPageDescriptor, PAGE_REGISTRY, type PageDescriptor, type PageId, type PageTab } from "./panels/registry";
+import { getPageDescriptor, PAGE_REGISTRY, type PageId, type PageTab } from "./panels/registry";
 import { fileExtensionFromName, getFileTypeIcon } from "@/components/file-tree/file-type-icon";
 import { useConversationStore } from "@/stores/conversation-store";
 
@@ -37,9 +38,6 @@ export function PanelHeader() {
   const threads = useConversationStore((s) => s.threads);
 
   const [drag, setDrag] = useState<DragState | null>(null);
-  const [addMenuOpen, setAddMenuOpen] = useState(false);
-  const addButtonRef = useRef<HTMLButtonElement>(null);
-  const addMenuRef = useRef<HTMLDivElement>(null);
 
   const activeThread = threads.find((thread) => thread.id === activeThreadId);
   const cwd = activeThread?.workingDirectory ?? undefined;
@@ -57,35 +55,22 @@ export function PanelHeader() {
   const openPage = useCallback(
     (pageId: PageId) => {
       openOrActivatePage(pageId, paramsFor(pageId));
-      setAddMenuOpen(false);
     },
     [openOrActivatePage, paramsFor]
   );
 
-  useEffect(() => {
-    if (!addMenuOpen) return;
+  const entries = Object.values(PAGE_REGISTRY).filter((entry) => entry.id !== "preview");
 
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (addButtonRef.current?.contains(target) || addMenuRef.current?.contains(target)) {
-        return;
-      }
-      setAddMenuOpen(false);
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setAddMenuOpen(false);
-      }
-    };
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [addMenuOpen]);
+  const menuItems: MenuAction[] = entries.map((entry) => ({
+    kind: "action",
+    id: entry.id,
+    label: t(entry.labelKey),
+    shortcut: shortcutFor(entry.id) ?? undefined,
+    disabled: !entry.available,
+    description: !entry.available ? t("panel.unavailable") : undefined,
+    iconLeft: <entry.icon size={15} stroke={1.5} />,
+    onSelect: () => openPage(entry.id),
+  }));
 
   const onTabDragStart = useCallback(
     (e: ReactDragEvent<HTMLButtonElement>, tabId: string) => {
@@ -123,14 +108,13 @@ export function PanelHeader() {
       <div className="panel-header panel-header-empty">
         <span className="panel-header-empty-text">{t('panel.sidebar')}</span>
         <div className="panel-header-actions">
-          <div className="panel-header-add-wrap">
-            <AddPageButton
-              ref={addButtonRef}
-              open={addMenuOpen}
-              onClick={() => setAddMenuOpen((value) => !value)}
-            />
-            {addMenuOpen && <AddPageMenu ref={addMenuRef} onSelect={openPage} />}
-          </div>
+          <DropdownMenu
+            trigger={
+              <AddPageButton />
+            }
+            items={menuItems}
+            className="panel-add-menu"
+          />
         </div>
       </div>
     );
@@ -188,19 +172,16 @@ export function PanelHeader() {
           );
         })}
       </div>
-      {/* Sits right after the tab strip (not inside it): the strip clips
-       * overflowing tabs, which would guillotine the add-page menu. */}
-      <div className="panel-header-add-wrap">
-        <AddPageButton
-          ref={addButtonRef}
-          open={addMenuOpen}
-          onClick={() => setAddMenuOpen((value) => !value)}
+      <DropdownMenu
+          trigger={
+            <AddPageButton />
+          }
+          items={menuItems}
+          className="panel-add-menu"
         />
-        {addMenuOpen && <AddPageMenu ref={addMenuRef} onSelect={openPage} />}
       </div>
-    </div>
-  );
-}
+    );
+  }
 
 function shortcutFor(id: PageId): string | null {
   switch (id) {
@@ -212,91 +193,16 @@ function shortcutFor(id: PageId): string | null {
   }
 }
 
-const AddPageButton = forwardRef<
-  HTMLButtonElement,
-  { open: boolean; onClick: () => void }
->(function AddPageButton({ open, onClick }, ref) {
+function AddPageButton() {
   const { t } = useTranslation();
   return (
     <button
-      ref={ref}
       type="button"
-      className={`panel-header-icon-btn panel-header-add-page${open ? " active" : ""}`}
-      onClick={onClick}
+      className="panel-header-icon-btn panel-header-add-page"
       title={t('panel.addPage')}
       aria-label={t('panel.addPage')}
-      aria-expanded={open}
-      aria-haspopup="menu"
     >
       <PlusIcon size={14} stroke={1.5} />
-    </button>
-  );
-});
-
-const AddPageMenu = forwardRef<
-  HTMLDivElement,
-  { onSelect: (pageId: PageId) => void }
->(function AddPageMenu({ onSelect }, ref) {
-  // `preview` is a passive surface — opened by the agent / external
-  // events, not chosen from the menu. Hide it here so the picker only
-  // surfaces pages the user can launch themselves.
-  const entries = Object.values(PAGE_REGISTRY).filter(
-    (entry) => entry.id !== "preview"
-  );
-
-  return (
-    <div
-      ref={ref}
-      className="panel-add-menu"
-      role="menu"
-    >
-      {entries.map((entry) => (
-        <AddPageMenuRow
-          key={entry.id}
-          entry={entry}
-          shortcut={shortcutFor(entry.id)}
-          onSelect={() => onSelect(entry.id)}
-        />
-      ))}
-    </div>
-  );
-});
-
-function AddPageMenuRow({
-  entry,
-  shortcut,
-  onSelect,
-}: {
-  entry: PageDescriptor;
-  shortcut: string | null;
-  onSelect: () => void;
-}) {
-  const { t } = useTranslation();
-  const Icon = entry.icon;
-  const label = t(entry.labelKey);
-
-  return (
-    <button
-      type="button"
-      role="menuitem"
-      className={`panel-add-menu-row${entry.available ? "" : " disabled"}`}
-      disabled={!entry.available}
-      onClick={() => {
-        if (!entry.available) return;
-        onSelect();
-      }}
-      title={entry.available ? label : `${label} (${t('panel.unavailable')})`}
-    >
-      <span className="panel-add-menu-main">
-        <span className="panel-add-menu-icon">
-          <Icon size={15} stroke={1.5} />
-        </span>
-        <span className="panel-add-menu-name">{label}</span>
-      </span>
-      <span className="panel-add-menu-meta">
-        {shortcut && <span className="panel-add-menu-shortcut">{shortcut}</span>}
-        {!entry.available && <span className="panel-add-menu-hint">{t('panel.unavailable')}</span>}
-      </span>
     </button>
   );
 }

@@ -112,7 +112,49 @@ function store(opts?: ProjectServiceOptions): ProjectStore {
  * Default AGENTS.md body seeded into `~/.duya/projects/<projectId>/AGENTS.md`
  * when a project is first created.
  */
-export const DEFAULT_PROJECT_AGENTS_MD_TEMPLATE = `# Project: {projectName}
+/**
+ * Bumped whenever the seeded AGENTS.md body changes materially (e.g.
+ * adding the project_id reminder). The reconcile path reads this token
+ * from existing files and upgrades only files whose recorded version
+ * is strictly less than `CURRENT_PROJECT_AGENTS_MD_VERSION`. Files
+ * with no token (legacy) are treated as version 0.
+ *
+ * Version history (do not renumber existing entries — append only):
+ *   1 — initial seed (table-formatted plan toolchain, "Home directory",
+ *       stable project_id bullet, `Plan 525 §3` heading).
+ *   2 — removed `(Plan 525 §3)` heading suffix; table → 3-bullet list;
+ *       `Home directory` → `Project config directory`; dropped
+ *       `project_id (UUID)` bullet.
+ *   3 — added explicit `Project ID` row in §1, re-added `a project ID
+ *       (UUID)` bullet in §2, added `Every call must include
+ *       projectId: "<uuid>"` emphasis to §3.
+ */
+export const CURRENT_PROJECT_AGENTS_MD_VERSION = 3 as const;
+
+/** Marker embedded as an HTML comment at the top of every seeded file. */
+export const AGENTS_MD_VERSION_MARKER_PREFIX = '<!-- duya-agents-md:version ';
+
+/** Regex matching the marker line; captures the integer version. */
+export const AGENTS_MD_VERSION_REGEX = /<!-- duya-agents-md:version\s+(\d+)\s*-->/;
+
+/**
+ * Read the recorded version from an existing AGENTS.md body. Returns
+ * 0 when the marker is absent (legacy file) or malformed.
+ */
+export function readProjectAgentsMdVersion(body: string): number {
+  const match = body.match(AGENTS_MD_VERSION_REGEX);
+  if (!match) return 0;
+  const parsed = Number.parseInt(match[1], 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+/** Build the marker line for a given version. */
+export function projectAgentsMdMarker(version: number): string {
+  return `${AGENTS_MD_VERSION_MARKER_PREFIX}${version} -->`;
+}
+
+export const DEFAULT_PROJECT_AGENTS_MD_TEMPLATE = `${projectAgentsMdMarker(CURRENT_PROJECT_AGENTS_MD_VERSION)}
+# Project: {projectName}
 
 > Seeded by duya {duyaVersion} on {createdAt}. This is the project's home
 > AGENTS.md — loaded as project-level instruction whenever an Agent
@@ -123,43 +165,50 @@ export const DEFAULT_PROJECT_AGENTS_MD_TEMPLATE = `# Project: {projectName}
 
 _Describe the project: goal, scope, audience, success criteria._
 
-- **Project ID**: \`{projectId}\`
 - **Canonical root**: \`{canonicalRoot}\`
-- **Home directory**: \`~/.duya/projects/{projectId}/\` (duya-owned: plans/, AGENTS.md)
+- **Project config directory**: \`~/.duya/projects/{projectId}/\` (duya-owned: plans/, AGENTS.md — your code never lives here)
+- **Project ID**: \`{projectId}\` ← pass this to every \`plan\` tool call
 - **Created**: {createdAt}
 
 ## 2. How duya manages projects
 
 A duya project is a **long-lived entity**, not a one-off chat. It owns:
 
-- a stable \`project_id\` (UUID) — survives renames, moves, restarts
-- a home directory (\`~/.duya/projects/<id>/\`) — duya-internal storage
+- a project ID (UUID) — stable across renames, moves, restarts
+- a project config directory (\`~/.duya/projects/<id>/\`) — duya-internal storage for plans and this file
 - a list of working paths (\`projects.paths\`) — your code/data locations
 - a plans index (\`plans/index.json\`) — active and completed work
 
 Anything that should outlive a single session lives in the project's
 plans. Sessions come and go; plans persist.
 
-## 3. The plan toolchain (Plan 525 §3)
+## 3. The plan toolchain
 
-duya exposes one built-in tool scoped to this project:
+duya exposes one built-in tool scoped to this project: \`plan\`. **Every
+call must include \`projectId: "{projectId}"\`** — that's how duya
+locates your plans on disk. Use it for three things:
 
-| Tool | Action | When to call |
-| --- | --- | --- |
-| \`plan\` | \`action: 'status'\` | Start of a new session, or whenever you need to know which plans are active / completed / paused. First call in any session should be \`plan({ action: 'status', projectId: '...' })\`. |
-| \`plan\` | \`action: 'search'\` | Cross-plan lookup: find a past decision, constraint, or reference. Pass keywords and (optionally) a \`plan_id\` filter. |
-| \`plan\` | \`action: 'complete'\` | After every checkbox is done and verification evidence is attached. Moves the plan from \`plans/active/\` to \`plans/completed/\`. |
+- **\`plan status\`** — list which plans are active / completed /
+  paused. First call in any session. If an active plan covers this
+  work, extend it; otherwise open a new plan.
+- **\`plan search <keywords>\`** — cross-plan lookup for a past
+  decision, constraint, or reference. Pass an optional \`plan_id\`
+  filter to scope the search.
+- **\`plan complete\`** — finalize a plan. Call only after every
+  checkbox is done and verification evidence is attached; this moves
+  the plan from \`plans/active/\` to \`plans/completed/\`.
 
 **Workflow**:
 
-1. **Before coding**, run \`plan({ action: 'status', projectId: '...' })\`. If an active plan covers this
-   work, extend it. If not, open a new plan (via duya's standard plan
-   authoring flow — not in this file).
+1. **Before coding**, run \`plan status\` (with this project's ID).
+   If an active plan covers this work, extend it. If not, open a new
+   plan (via duya's standard plan authoring flow — not in this file).
 2. **During work**, keep the plan's checkboxes in sync with reality.
    Update the plan as you commit, not after the fact.
 3. **Before declaring done**, grep the plan for leftover TODOs and
-   investigation items. Only call \`plan({ action: 'complete', ... })\` when everything is
-   resolved and verification evidence is in place.
+   investigation items. Only call \`plan complete\` (with this
+   project's ID) when everything is resolved and verification evidence
+   is in place.
 
 ## 4. Long-term project hygiene
 
@@ -334,7 +383,14 @@ function buildDefaultAgentsMd(args: {
   projectId: string;
   canonicalRoot: string;
   createdAt: string;
+  version?: number;
 }): string {
+  // The marker is hardcoded at the top of the template as
+  // `CURRENT_PROJECT_AGENTS_MD_VERSION`; the optional `version` arg is
+  // a defense-in-depth knob for future bumps — if the template itself
+  // is updated to a higher version, callers don't need to also remember
+  // to pass `version` here.
+  const version = args.version ?? CURRENT_PROJECT_AGENTS_MD_VERSION;
   const placeholders: Record<string, string> = {
     projectName: args.projectName,
     projectId: args.projectId,
@@ -342,10 +398,19 @@ function buildDefaultAgentsMd(args: {
     createdAt: args.createdAt,
     duyaVersion: readDuyaVersion(),
   };
-  return DEFAULT_PROJECT_AGENTS_MD_TEMPLATE.replace(
-    /\{(projectName|projectId|canonicalRoot|createdAt|duyaVersion)\}/g,
-    (_, key: string) => placeholders[key] ?? '',
-  );
+  // Re-stamp the marker with the resolved version. The template already
+  // contains a marker line, but doing a second replace keeps the body
+  // and marker honest if the template ever drifts.
+  const body = DEFAULT_PROJECT_AGENTS_MD_TEMPLATE
+    .replace(
+      AGENTS_MD_VERSION_REGEX,
+      projectAgentsMdMarker(version),
+    )
+    .replace(
+      /\{(projectName|projectId|canonicalRoot|createdAt|duyaVersion)\}/g,
+      (_, key: string) => placeholders[key] ?? '',
+    );
+  return body;
 }
 
 let _cachedDuyaVersion: string | null = null;
@@ -362,19 +427,53 @@ function readDuyaVersion(): string {
 }
 
 /**
- * Idempotent: if `~/.duya/projects/<projectId>/AGENTS.md` already exists
- * (user edited, or a previous create partially ran), do nothing.
+ * Idempotent seed for `~/.duya/projects/<projectId>/AGENTS.md`.
+ *
+ * Behavior matrix:
+ *   - file absent                 → write the current template.
+ *   - file present, no marker (v0) → upgrade to current version (legacy
+ *                                    files are treated as 0 because the
+ *                                    user never had a chance to author
+ *                                    them before the marker existed).
+ *   - file present, marker version < current → upgrade.
+ *   - file present, marker version >= current → no-op (user may have
+ *                                    edited; never overwrite).
+ *
+ * A user-edited file with the marker still records the version at
+ * which they started editing; we never overwrite once the recorded
+ * version is at-or-above current. This means a user who edits §4/§5 in
+ * place keeps their edits across upgrades — only files we wrote (or
+ * legacy files) get rewritten.
  */
 export function ensureProjectAgentsMd(
   projectId: string,
   args: { projectName: string; canonicalRoot: string },
   opts?: ProjectServiceOptions
-): { path: string; created: boolean } {
+): { path: string; created: boolean; upgraded: boolean; version: number } {
   const homeDir = path.join(projectsBase(opts), projectId);
   fs.mkdirSync(homeDir, { recursive: true });
   const agentsPath = path.join(homeDir, 'AGENTS.md');
   if (fs.existsSync(agentsPath)) {
-    return { path: agentsPath, created: false };
+    const existing = fs.readFileSync(agentsPath, 'utf8');
+    const recorded = readProjectAgentsMdVersion(existing);
+    if (recorded >= CURRENT_PROJECT_AGENTS_MD_VERSION) {
+      return { path: agentsPath, created: false, upgraded: false, version: recorded };
+    }
+    // Upgrade in place. Atomic temp + rename so a reader never sees a
+    // half-written file. The user's edits to §4 / §5 are intentionally
+    // NOT preserved — upgrading from a seeded version means we wrote
+    // it, so it carries no user intent. (A file the user edited at v3+
+    // would have been blocked above by `recorded >= current`.)
+    const content = buildDefaultAgentsMd({
+      projectName: args.projectName,
+      projectId,
+      canonicalRoot: args.canonicalRoot,
+      createdAt: today(),
+    });
+    const tmpPath = `${agentsPath}.tmp`;
+    fs.writeFileSync(tmpPath, content, 'utf8');
+    fs.renameSync(tmpPath, agentsPath);
+    return { path: agentsPath, created: false, upgraded: true, version: CURRENT_PROJECT_AGENTS_MD_VERSION };
   }
   const content = buildDefaultAgentsMd({
     projectName: args.projectName,
@@ -385,7 +484,66 @@ export function ensureProjectAgentsMd(
   const tmpPath = `${agentsPath}.tmp`;
   fs.writeFileSync(tmpPath, content, 'utf8');
   fs.renameSync(tmpPath, agentsPath);
-  return { path: agentsPath, created: true };
+  return { path: agentsPath, created: true, upgraded: false, version: CURRENT_PROJECT_AGENTS_MD_VERSION };
+}
+
+/**
+ * Background reconciliation: walk every project row and upgrade any
+ * AGENTS.md whose recorded version is below the current one. Mirrors
+ * `reconcileProjectPlansDirs` in shape — best-effort, errors swallowed
+ * and recorded so one bad project never blocks the rest.
+ *
+ * Note: this rewrites legacy (unmarked) files too, which is intentional
+ * — pre-marker AGENTS.md files were written by duya, not edited, so
+ * overwriting them is the same risk profile as a fresh seed.
+ *
+ * Designed to be called from `projects:list` (fire-and-forget). The
+ * caller guards against duplicate invocations via an in-flight flag
+ * (see `reconcileProjectAgentsMdBestEffort` in the IPC handler).
+ */
+export function reconcileProjectAgentsMd(opts?: ProjectServiceOptions): {
+  scanned: number;
+  upgraded: number;
+  skipped: number;
+  errors: string[];
+} {
+  const rows = store(opts).list();
+  let upgraded = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+  for (const row of rows) {
+    try {
+      const agentsPath = path.join(projectsBase(opts), row.project_id, 'AGENTS.md');
+      if (!fs.existsSync(agentsPath)) {
+        // Files we never wrote are also out of scope here — the
+        // reconcile pass focuses on upgrading existing seeds, not
+        // creating new ones for legacy rows. `updateProject` and
+        // `createProject` both call `ensureProjectAgentsMd` for that.
+        skipped += 1;
+        continue;
+      }
+      const existing = fs.readFileSync(agentsPath, 'utf8');
+      const recorded = readProjectAgentsMdVersion(existing);
+      if (recorded >= CURRENT_PROJECT_AGENTS_MD_VERSION) {
+        skipped += 1;
+        continue;
+      }
+      const content = buildDefaultAgentsMd({
+        projectName: row.name,
+        projectId: row.project_id,
+        canonicalRoot: row.canonical_root,
+        createdAt: today(),
+      });
+      const tmpPath = `${agentsPath}.tmp`;
+      fs.writeFileSync(tmpPath, content, 'utf8');
+      fs.renameSync(tmpPath, agentsPath);
+      upgraded += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      errors.push(`${row.project_id}: ${message}`);
+    }
+  }
+  return { scanned: rows.length, upgraded, skipped, errors };
 }
 
 /** Read a project's plans/index.json. Missing/corrupt → empty index. */
@@ -463,7 +621,8 @@ export function updateProject(
 ): ProjectRow | null {
   if (!projectId || typeof projectId !== 'string') return null;
   const s = store(opts);
-  if (!s.get(projectId)) return null;
+  const existing = s.get(projectId);
+  if (!existing) return null;
 
   const resultPatch: Record<string, unknown> = {};
   if (typeof patch.name === 'string') resultPatch.name = patch.name;
@@ -491,6 +650,19 @@ export function updateProject(
   // projects that already have a real plan index because the index
   // writer is gated by `existsSync(index.json)`.
   ensureProjectPlansSkeleton(projectId, opts);
+  // Same idempotent seed for AGENTS.md — upgrades legacy / older
+  // versions in place; never touches files the user has authored past
+  // the current version.
+  ensureProjectAgentsMd(
+    projectId,
+    {
+      projectName: patch.name ?? existing.name,
+      canonicalRoot: Array.isArray(patch.paths) && patch.paths.length > 0
+        ? normalizeProjectPathEntries(patch.paths)[0].path
+        : existing.canonical_root,
+    },
+    opts
+  );
   return s.get(projectId);
 }
 

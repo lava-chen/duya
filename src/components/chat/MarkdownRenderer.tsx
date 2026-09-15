@@ -250,6 +250,15 @@ export function preserveLocalUrlTransform(url: string, key?: string): string {
   if (key === 'href' && PLUGIN_MENTION_URL_RE.test(url)) return url;
   // Windows absolute path (`C:/...` or `C:\...`).
   if (/^[a-zA-Z]:[\\/]/.test(url)) return url.replace(/\\/g, '/');
+  // react-markdown sometimes parses `c:/Users/foo/a.png` as URL
+  // (scheme `c`, host `c`, pathname `/Users/foo/a.png`) and concatenates
+  // them back without the colon, leaving `c/Users/foo/a.png`. The default
+  // transform would then pass that malformed string straight through to
+  // the `img` component. Restore the colon so the Windows-absolute
+  // branch above matches on the next pass.
+  if (/^[a-zA-Z]\/(Users|Windows|Program Files|ProgramData)\//.test(url)) {
+    return preserveLocalUrlTransform(`${url[0]}:${url.slice(1)}`, key);
+  }
   // Unix absolute path or app-internal route.
   if (url.startsWith('/')) return url;
   return defaultUrlTransform(url);
