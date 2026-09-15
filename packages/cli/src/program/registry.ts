@@ -53,7 +53,8 @@ export type CliCommandPath =
   | 'agent'
   | 'voice'
   | 'hook'
-  | 'memory';
+  | 'memory'
+  | 'projects';
 
 /**
  * Normalized invocation that every subcommand `run` function receives.

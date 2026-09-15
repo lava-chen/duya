@@ -73,6 +73,7 @@ import {
 import { runAgentList, runAgentCreate, runAgentDelete } from '../commands/agent.js';
 import { runHookListCommand, runHookValidateCommand, runHookAddCommand, runHookRemoveCommand } from '../commands/hooks.js';
 import { runMemoryDoctor, runMemorySetup, runMemoryStatus, runMemoryEnable, runMemoryDisable, runMemorySet, runMemorySearch, runMemoryRebuild } from '../commands/memory.js';
+import { runProjectsCleanupCommand } from '../commands/projects-cleanup.js';
 
 import {
   type CliSubcommand,
@@ -1080,6 +1081,17 @@ const subMemoryRebuild: CliSubcommand = {
 // Top-level descriptors (frozen order — drives help output)
 // ============================================================================
 
+const subProjectsCleanup: CliSubcommand = {
+  description: 'Scan ~/.duya/projects/ for empty UUID directories and legacy non-UUID orphans (plan 536). Dry-run by default; pass --apply --yes to delete empty UUID directories; --archive-dir <path> to also copy non-UUID names to a safe location.',
+  write: true,
+  options: [
+    { flags: '--apply', description: 'Perform deletions (empty UUID directories only) and archive copies (non-UUID names, when --archive-dir is set). Default is dry-run.' },
+    { flags: '--archive-dir <path>', description: 'When set with --apply, copy legacy non-UUID directories to <path>/<name>-<timestamp> before any further action. Non-UUID directories are NEVER auto-deleted regardless of --apply.' },
+    { flags: '--yes', description: 'Skip confirmation prompt (required in non-TTY mode for --apply).' },
+  ],
+  run: (ctx) => runProjectsCleanupCommand(ctx),
+};
+
 export const CLI_DESCRIPTORS = defineDescriptors([
   {
     name: 'status',
@@ -1307,6 +1319,13 @@ export const CLI_DESCRIPTORS = defineDescriptors([
       'kv-get': subConfigKvGet,
       'kv-unset': subConfigKvUnset,
       'validate': subConfigValidate,
+    },
+  },
+  {
+    name: 'projects',
+    description: 'Project entity management (plan 536). Currently ships cleanup only; future subcommands will fold in plan 525 / 534 follow-ups.',
+    subcommands: {
+      cleanup: subProjectsCleanup,
     },
   },
 ]);
