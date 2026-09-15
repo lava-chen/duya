@@ -11,8 +11,9 @@
  * side panel so the two surfaces stay visually identical.
  */
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { PencilIcon } from "@/components/icons";
+import { DropdownMenu, type MenuAction } from "@/components/ui/DropdownMenu";
 import { useTranslation } from "@/hooks/useTranslation";
 import { BOT_AVATAR_COLORS } from "@/lib/bot-avatar";
 import { BOT_EMOJI_CATEGORIES } from "@/lib/bot-emoji";
@@ -46,83 +47,59 @@ export function BotAvatarEditor({
   onUpload,
 }: BotAvatarEditorProps) {
   const { t } = useTranslation();
-  const [menuOpen, setMenuOpen] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
 
   const hasImage = !!avatarUrl;
 
+  const menuItems: MenuAction[] = [
+    {
+      kind: "action",
+      id: "upload",
+      label: t("bot.avatar.upload"),
+      disabled: avatarBusy,
+      onSelect: onUpload,
+    },
+    {
+      kind: "action",
+      id: "pickEmoji",
+      label: t("bot.avatar.pickEmoji"),
+      onSelect: () => setEmojiOpen(true),
+    },
+  ];
+
   return (
     <div
-      ref={wrapRef}
       className="relative flex flex-col items-center"
       onClick={(e) => e.stopPropagation()}
     >
-      <button
-        type="button"
-        onClick={() => setMenuOpen((v) => !v)}
-        aria-haspopup="menu"
-        aria-expanded={menuOpen}
-        aria-label={t("bot.avatarPicker.label")}
-        className="group relative block rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
-      >
-        <BotCharacterAvatar
-          name={name || "?"}
-          agentId={agentId}
-          avatarUrl={avatarUrl ?? undefined}
-          avatarColor={color}
-          avatarEmoji={emoji}
-          size={64}
-        />
-        <span
-          className="absolute inset-0 flex items-center justify-center rounded-full opacity-0 transition-opacity group-hover:opacity-100"
-          style={{ background: "rgba(0,0,0,0.35)", pointerEvents: "none" }}
-          aria-hidden="true"
-        >
-          <span className="grid h-7 w-7 place-items-center rounded-full bg-white/90 text-black/80">
-            <PencilIcon size={15} />
-          </span>
-        </span>
-      </button>
-
-      {menuOpen && (
-        <div
-          className="absolute top-full z-30 mt-2 min-w-[150px] rounded-xl border p-1"
-          style={{
-            background: "var(--surface-solid, var(--main-bg))",
-            borderColor: "var(--border)",
-            boxShadow: "0 10px 32px rgba(0,0,0,0.25)",
-          }}
-          role="menu"
-          onClick={(e) => e.stopPropagation()}
-        >
+      <DropdownMenu
+        trigger={
           <button
             type="button"
-            role="menuitem"
-            disabled={avatarBusy}
-            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-50"
-            style={{ color: "var(--text)" }}
-            onClick={() => {
-              setMenuOpen(false);
-              onUpload();
-            }}
+            aria-label={t("bot.avatarPicker.label")}
+            className="group relative block rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
           >
-            {t("bot.avatar.upload")}
+            <BotCharacterAvatar
+              name={name || "?"}
+              agentId={agentId}
+              avatarUrl={avatarUrl ?? undefined}
+              avatarColor={color}
+              avatarEmoji={emoji}
+              size={64}
+            />
+            <span
+              className="absolute inset-0 flex items-center justify-center rounded-full opacity-0 transition-opacity group-hover:opacity-100"
+              style={{ background: "rgba(0,0,0,0.35)", pointerEvents: "none" }}
+              aria-hidden="true"
+            >
+              <span className="grid h-7 w-7 place-items-center rounded-full bg-white/90 text-black/80">
+                <PencilIcon size={15} />
+              </span>
+            </span>
           </button>
-          <button
-            type="button"
-            role="menuitem"
-            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--surface-hover)]"
-            style={{ color: "var(--text)" }}
-            onClick={() => {
-              setMenuOpen(false);
-              setEmojiOpen((v) => !v);
-            }}
-          >
-            {t("bot.avatar.pickEmoji")}
-          </button>
-        </div>
-      )}
+        }
+        items={menuItems}
+      />
 
       {emojiOpen && !hasImage && (
         <div

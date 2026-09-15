@@ -27,6 +27,7 @@ import {
   getProject,
   listProjects,
   projectPaths,
+  reconcileProjectAgentsMd,
   reconcileProjectPlansDirs,
   updateProject,
   MAX_PROJECT_PATH_LENGTH,
@@ -70,6 +71,40 @@ function reconcileProjectPlansDirsBestEffort(): void {
       const message = error instanceof Error ? error.message : String(error);
       logger.warn(
         `projects:list reconciliation failed: ${message}`,
+        undefined,
+        LogComponent.DB,
+      );
+    }
+  });
+}
+
+/**
+ * Idempotent best-effort wrapper around `reconcileProjectAgentsMd`.
+ * Runs alongside the plans-dir reconciliation so a returning user sees
+ * the latest seeded AGENTS.md body (project_id reminder, etc.) without
+ * having to delete the project. Shares the same `_reconcileInFlight`
+ * guard so we never run both reconciles in parallel — `setImmediate`
+ * already serializes them on the same tick, but a second `projects:list`
+ * while one is still walking the disk must not start a second pass.
+ */
+function reconcileProjectAgentsMdBestEffort(): void {
+  if (_reconcileInFlight) return;
+  _reconcileInFlight = true;
+  setImmediate(() => {
+    _reconcileInFlight = false;
+    try {
+      const result = reconcileProjectAgentsMd();
+      if (result.upgraded > 0 || result.errors.length > 0) {
+        logger.info(
+          `projects:list agents-md reconciliation scanned=${result.scanned} upgraded=${result.upgraded} skipped=${result.skipped} errors=${result.errors.length}`,
+          undefined,
+          LogComponent.DB,
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(
+        `projects:list agents-md reconciliation failed: ${message}`,
         undefined,
         LogComponent.DB,
       );
@@ -174,6 +209,12 @@ export function registerProjectEntityHandlers(): void {
       // `projects:list` calls after reconciliation finishes become
       // no-ops (idempotent existsSync check).
       void reconcileProjectPlansDirsBestEffort();
+      // Same shape for AGENTS.md: walk every project and upgrade any
+      // seeded file whose version is below the current one. Runs in
+      // the background so the renderer gets the (old) row set without
+      // waiting on disk I/O. Shares the in-flight guard with the
+      // plans-dir reconcile so the two never overlap.
+      void reconcileProjectAgentsMdBestEffort();
       return { success: true, projects: rows.map(toDTO) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

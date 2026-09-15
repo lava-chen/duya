@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getPluginCatalog, getPluginCatalogEntry, getLocalPluginPaths, resolveIconUrl } from './catalog';
 import { listCapabilityKinds, readPluginManifest } from './manifest';
+import { clonePluginFromGit } from './marketplace/git-source';
 import { PluginRegistryStore } from './PluginRegistryStore';
 import { PluginSetupStore } from './PluginSetupStore';
 import { notifyMcpConfigChanged } from '../services/mcp-write-reload';
@@ -364,7 +365,27 @@ export class PluginManager {
 
       ensureDir(stagingPath);
 
-      if (catalogEntry.marketplacePluginDir && fs.existsSync(catalogEntry.marketplacePluginDir)) {
+      if (catalogEntry.gitSourceUrl) {
+        // Plan 531 — git-source marketplace plugin: materialize the plugin
+        // by cloning its repo into the cache. The clone is cached so
+        // subsequent installs of the same plugin don't re-clone.
+        const cloneResult = await clonePluginFromGit({
+          url: catalogEntry.gitSourceUrl,
+          marketplace: catalogEntry.marketplace ?? 'unknown',
+          pluginName: catalogEntry.name,
+          ref: catalogEntry.gitSourceRef,
+        });
+        if (fs.existsSync(cloneResult.dir)) {
+          copyDirectoryRecursive(cloneResult.dir, stagingPath);
+        } else {
+          this.logger.warn('Git-source plugin clone missing, installing manifest only', {
+            pluginId: catalogEntry.id,
+            url: catalogEntry.gitSourceUrl,
+          }, LogComponent.Main);
+          const manifestPath = path.join(stagingPath, 'plugin.json');
+          fs.writeFileSync(manifestPath, JSON.stringify(catalogEntry.manifest, null, 2), 'utf8');
+        }
+      } else if (catalogEntry.marketplacePluginDir && fs.existsSync(catalogEntry.marketplacePluginDir)) {
         // Plan 455 — marketplace install: copy the plugin directory out of
         // its (containment-fenced) marketplace clone into the versioned
         // cache. Installed plugins stay independent of later marketplace

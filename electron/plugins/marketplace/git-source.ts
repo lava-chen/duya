@@ -257,6 +257,106 @@ export async function readHeadCommit(dir: string): Promise<string | null> {
   }
 }
 
+/**
+ * Get the cache root for individual plugin clones from marketplace git sources.
+ * Path: `<cacheRoot>/plugins/<marketplace>/<pluginName>/`
+ */
+export function getPluginGitCacheRoot(rootOverride?: string): string {
+  return path.join(rootOverride ?? getMarketplacesCacheRoot(), 'plugins');
+}
+
+/**
+ * Clone a single plugin from a git URL (Plan 455 extension: git-source
+ * plugins in marketplace catalogs). The plugin is cloned into a versioned
+ * subdirectory under the marketplace's plugin cache root.
+ *
+ * Plan 531: marketplace catalogs can declare plugins with `source: 'git'`
+ * pointing to their own repos. Rather than requiring the user to add the
+ * plugin repo as a separate marketplace, we materialize the plugin clone
+ * on-demand during catalog build. The clone is cached and refreshed
+ * alongside its parent marketplace.
+ */
+export async function clonePluginFromGit(opts: {
+  /** Git URL of the plugin repository. */
+  url: string;
+  /** Marketplace name (for cache organization). */
+  marketplace: string;
+  /** Plugin name (for cache organization and staging uniqueness). */
+  pluginName: string;
+  /** Optional git ref (branch/tag/sha). */
+  ref?: string;
+  /** Override the cache root (for testing). */
+  rootOverride?: string;
+}): Promise<MarketplaceCloneResult> {
+  const logger = getLogger();
+  const { url, marketplace, pluginName, ref, rootOverride } = opts;
+  const root = rootOverride ?? getMarketplacesCacheRoot();
+  ensureDir(root);
+
+  const pluginCacheRoot = getPluginGitCacheRoot(rootOverride);
+  ensureDir(pluginCacheRoot);
+
+  const marketplacePluginRoot = path.join(pluginCacheRoot, safeMarketplaceDirName(marketplace));
+  ensureDir(marketplacePluginRoot);
+
+  const destination = path.join(marketplacePluginRoot, safeMarketplaceDirName(pluginName));
+
+  if (fs.existsSync(destination)) {
+    logger.debug('Plugin git clone already cached, reusing', {
+      marketplace,
+      plugin: pluginName,
+      dir: destination,
+    }, COMPONENT);
+    const commit = await readHeadCommit(destination);
+    return { dir: destination, commit };
+  }
+
+  ensureInsideRoot(destination, root);
+  const stagingRoot = getMarketplaceStagingRoot(rootOverride);
+  ensureDir(stagingRoot);
+
+  const stagingDir = path.join(
+    stagingRoot,
+    `plugin-${safeMarketplaceDirName(pluginName)}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  );
+
+  const args = ['clone', '--depth', '1'];
+  if (ref) {
+    args.push('--branch', ref);
+  }
+  args.push(url, stagingDir);
+
+  await runGit(args);
+  fs.renameSync(stagingDir, destination);
+
+  const commit = await readHeadCommit(destination);
+  logger.info('Plugin cloned from git', {
+    marketplace,
+    plugin: pluginName,
+    url,
+    ref,
+    commit,
+  }, COMPONENT);
+
+  return { dir: destination, commit };
+}
+
+/**
+ * Remove a cached git plugin clone. Only ever touches the plugin cache subtree.
+ */
+export function removeCachedPluginClone(marketplace: string, pluginName: string, rootOverride?: string): void {
+  const dir = path.join(
+    getPluginGitCacheRoot(rootOverride),
+    safeMarketplaceDirName(marketplace),
+    safeMarketplaceDirName(pluginName),
+  );
+  const root = rootOverride ?? getMarketplacesCacheRoot();
+  ensureInsideRoot(dir, root);
+  if (fs.existsSync(dir)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 /** Remove a marketplace clone. Only ever touches the cache root subtree. */
 export function removeMarketplaceClone(name: string, rootOverride?: string): void {
   const dir = getMarketplaceCloneDir(name, rootOverride);

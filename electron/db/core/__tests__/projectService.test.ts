@@ -29,9 +29,14 @@ import { CoreDatabase } from '../database';
 import { ProjectStore, parseProjectPaths, serializeProjectPaths } from '../project-store';
 import {
   createProject,
+  CURRENT_PROJECT_AGENTS_MD_VERSION,
   ensurePlansDirs,
+  ensureProjectAgentsMd,
   ensureProjectPlansSkeleton,
+  projectAgentsMdMarker,
   readPlansIndex,
+  readProjectAgentsMdVersion,
+  reconcileProjectAgentsMd,
   reconcileProjectPlansDirs,
   updateProject,
   writePlansIndex,
@@ -278,5 +283,295 @@ describe('projectService — plans dir lifecycle', () => {
     expect(JSON.parse(serializeProjectPaths([{ path: 'E:/X', description: 'desc' }]))).toEqual([
       { path: 'E:/X', description: 'desc' },
     ]);
+  });
+});
+
+/**
+ * projectService — AGENTS.md version-token reconciliation.
+ *
+ * The seed file `~/.duya/projects/<id>/AGENTS.md` carries a hidden
+ * version marker `<!-- duya-agents-md:version N -->`. The reconcile
+ * pass upgrades any file whose recorded version is below
+ * `CURRENT_PROJECT_AGENTS_MD_VERSION`. Files the user edited past the
+ * current version must be left alone.
+ */
+describe('projectService — AGENTS.md version reconcile', () => {
+  let tempDir: string;
+  let core: CoreDatabase;
+  let projectsRoot: string;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'projectservice-agentsmd-'));
+    core = new CoreDatabase({
+      filename: path.join(tempDir, 'duya-core.db'),
+      migrations: ProjectStore.migrations,
+    });
+    projectsRoot = path.join(tempDir, 'projects');
+  });
+
+  afterEach(() => {
+    try { core.close(); } catch { /* best-effort */ }
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+  });
+
+  function serviceOpts() {
+    return {
+      projectsDb: core.db,
+      projectsRoot,
+    };
+  }
+
+  function seedProjectRow(id: string, name: string, canonicalRoot: string): void {
+    const now = Date.now();
+    core.db
+      .prepare(
+        `INSERT INTO projects (
+          project_id, canonical_root, name, description, paths, icon, color,
+          created_at, last_seen_at
+        ) VALUES (?, ?, ?, NULL, ?, NULL, NULL, ?, ?)`,
+      )
+      .run(id, canonicalRoot, name, '[]', now, now);
+  }
+
+  function writeAgentsMd(projectId: string, body: string): string {
+    const dir = path.join(projectsRoot, projectId);
+    fs.mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, 'AGENTS.md');
+    fs.writeFileSync(filePath, body, 'utf8');
+    return filePath;
+  }
+
+  function readAgentsMd(projectId: string): string {
+    return fs.readFileSync(path.join(projectsRoot, projectId, 'AGENTS.md'), 'utf8');
+  }
+
+  function v1Body(): string {
+    // Pre-marker legacy seed: no version line.
+    return `# Project: legacy
+> Seeded by duya.
+## 1. What this project is
+- **Home directory**: ...
+`;
+  }
+
+  function v2Body(): string {
+    return `${projectAgentsMdMarker(2)}
+# Project: v2
+> Seeded by duya.
+## 3. The plan toolchain
+- \`plan status\`
+`;
+  }
+
+  function v3Body(): string {
+    return `${projectAgentsMdMarker(3)}
+# Project: v3
+> Seeded by duya.
+## 3. The plan toolchain
+Every call must include projectId.
+`;
+  }
+
+  function currentBodyWithMarker(): string {
+    return `${projectAgentsMdMarker(CURRENT_PROJECT_AGENTS_MD_VERSION)}
+# Project: current
+`;
+  }
+
+  it('readProjectAgentsMdVersion returns 0 for unmarked legacy and the recorded number for marked files', () => {
+    expect(readProjectAgentsMdVersion(v1Body())).toBe(0);
+    expect(readProjectAgentsMdVersion(v2Body())).toBe(2);
+    expect(readProjectAgentsMdVersion(v3Body())).toBe(3);
+    // Tolerates whitespace and odd capitalization without throwing.
+    expect(readProjectAgentsMdVersion('<!-- duya-agents-md:version   5  -->')).toBe(5);
+    // Malformed → 0, not NaN.
+    expect(readProjectAgentsMdVersion('<!-- duya-agents-md:version nonsense -->')).toBe(0);
+  });
+
+  it('createProject stamps AGENTS.md with the current version marker', () => {
+    const row = createProject(
+      { name: 'fresh', paths: [{ path: 'E:/fresh' }] },
+      serviceOpts(),
+    );
+    const body = readAgentsMd(row.project_id);
+    const version = readProjectAgentsMdVersion(body);
+    expect(version).toBe(CURRENT_PROJECT_AGENTS_MD_VERSION);
+    // The marker must be the very first line so a future grep for the
+    // canonical version is reliable.
+    expect(body.startsWith(projectAgentsMdMarker(CURRENT_PROJECT_AGENTS_MD_VERSION))).toBe(true);
+  });
+
+  it('ensureProjectAgentsMd creates when absent and stamps the current version', () => {
+    const result = ensureProjectAgentsMd(
+      'p-create',
+      { projectName: 'p', canonicalRoot: 'E:/p' },
+      serviceOpts(),
+    );
+    expect(result.created).toBe(true);
+    expect(result.upgraded).toBe(false);
+    expect(result.version).toBe(CURRENT_PROJECT_AGENTS_MD_VERSION);
+    expect(readProjectAgentsMdVersion(readAgentsMd('p-create'))).toBe(
+      CURRENT_PROJECT_AGENTS_MD_VERSION,
+    );
+  });
+
+  it('ensureProjectAgentsMd is a no-op when the file is already at the current version', () => {
+    writeAgentsMd('p-current', currentBodyWithMarker());
+    const before = readAgentsMd('p-current');
+
+    const result = ensureProjectAgentsMd(
+      'p-current',
+      { projectName: 'p', canonicalRoot: 'E:/p' },
+      serviceOpts(),
+    );
+    expect(result.created).toBe(false);
+    expect(result.upgraded).toBe(false);
+    expect(result.version).toBe(CURRENT_PROJECT_AGENTS_MD_VERSION);
+    expect(readAgentsMd('p-current')).toBe(before);
+  });
+
+  it('ensureProjectAgentsMd upgrades a legacy (unmarked) file and stamps the current marker', () => {
+    writeAgentsMd('p-legacy', v1Body());
+
+    const result = ensureProjectAgentsMd(
+      'p-legacy',
+      { projectName: 'p', canonicalRoot: 'E:/p' },
+      serviceOpts(),
+    );
+    expect(result.created).toBe(false);
+    expect(result.upgraded).toBe(true);
+    expect(result.version).toBe(CURRENT_PROJECT_AGENTS_MD_VERSION);
+
+    const body = readAgentsMd('p-legacy');
+    expect(readProjectAgentsMdVersion(body)).toBe(CURRENT_PROJECT_AGENTS_MD_VERSION);
+    // The new template must mention the project_id reminder so the
+    // agent learns where to write plans. Match the literal
+    // `projectId: "<id>"` phrasing — wrapped in ** for emphasis, the
+    // assertion slices between the asterisks to stay marker-agnostic.
+    expect(body).toContain('Project ID');
+    expect(body).toMatch(/projectId:\s*"p-legacy"/);
+  });
+
+  it('ensureProjectAgentsMd upgrades an older-version file (v2 → current)', () => {
+    writeAgentsMd('p-v2', v2Body());
+
+    const result = ensureProjectAgentsMd(
+      'p-v2',
+      { projectName: 'p', canonicalRoot: 'E:/p' },
+      serviceOpts(),
+    );
+    expect(result.upgraded).toBe(true);
+    expect(readProjectAgentsMdVersion(readAgentsMd('p-v2'))).toBe(
+      CURRENT_PROJECT_AGENTS_MD_VERSION,
+    );
+  });
+
+  it('ensureProjectAgentsMd does NOT touch a file the user edited past the current version', () => {
+    // Pin a synthetic higher version so we can prove user-edited files
+    // are never overwritten, even when their recorded version is above
+    // CURRENT_PROJECT_AGENTS_MD_VERSION.
+    const futureBody = `${projectAgentsMdMarker(99)}
+# Project: hand-edited
+
+> This body was hand-written by the user and must survive every upgrade.
+`;
+    writeAgentsMd('p-future', futureBody);
+
+    const result = ensureProjectAgentsMd(
+      'p-future',
+      { projectName: 'p', canonicalRoot: 'E:/p' },
+      serviceOpts(),
+    );
+    expect(result.created).toBe(false);
+    expect(result.upgraded).toBe(false);
+    expect(result.version).toBe(99);
+    expect(readAgentsMd('p-future')).toBe(futureBody);
+  });
+
+  it('reconcileProjectAgentsMd upgrades legacy + v2 files and leaves current files alone', () => {
+    seedProjectRow('p-legacy', 'Legacy', 'E:/legacy');
+    seedProjectRow('p-v2', 'V2', 'E:/v2');
+    seedProjectRow('p-current', 'Current', 'E:/current');
+
+    writeAgentsMd('p-legacy', v1Body());
+    writeAgentsMd('p-v2', v2Body());
+    writeAgentsMd('p-current', currentBodyWithMarker());
+
+    const report = reconcileProjectAgentsMd(serviceOpts());
+    expect(report.scanned).toBe(3);
+    expect(report.upgraded).toBe(2);
+    expect(report.skipped).toBe(1);
+    expect(report.errors).toEqual([]);
+
+    // Legacy + v2 must both end up at the current version.
+    expect(readProjectAgentsMdVersion(readAgentsMd('p-legacy'))).toBe(
+      CURRENT_PROJECT_AGENTS_MD_VERSION,
+    );
+    expect(readProjectAgentsMdVersion(readAgentsMd('p-v2'))).toBe(
+      CURRENT_PROJECT_AGENTS_MD_VERSION,
+    );
+    // Current file must be byte-identical (no spurious rewrite).
+    expect(readAgentsMd('p-current')).toBe(currentBodyWithMarker());
+  });
+
+  it('reconcileProjectAgentsMd is a no-op when nothing needs upgrading', () => {
+    const a = createProject({ name: 'a', paths: [{ path: 'E:/A' }] }, serviceOpts());
+    const b = createProject({ name: 'b', paths: [{ path: 'E:/B' }] }, serviceOpts());
+    expect([a.project_id, b.project_id]).toHaveLength(2);
+
+    // Both projects have AGENTS.md stamped at CURRENT by createProject,
+    // so the reconcile pass must record every file as `skipped`
+    // (recorded version already >= current) — never `upgraded`, and
+    // never an error.
+    const report = reconcileProjectAgentsMd(serviceOpts());
+    expect(report.scanned).toBe(2);
+    expect(report.upgraded).toBe(0);
+    expect(report.skipped).toBe(2);
+    expect(report.errors).toEqual([]);
+  });
+
+  it('reconcileProjectAgentsMd preserves user-edited files past the current version', () => {
+    seedProjectRow('p-future', 'Future', 'E:/future');
+    const futureBody = `${projectAgentsMdMarker(99)}
+# Project: hand-edited
+user wrote this
+`;
+    writeAgentsMd('p-future', futureBody);
+
+    const report = reconcileProjectAgentsMd(serviceOpts());
+    expect(report.scanned).toBe(1);
+    expect(report.upgraded).toBe(0);
+    expect(report.skipped).toBe(1);
+    expect(readAgentsMd('p-future')).toBe(futureBody);
+  });
+
+  it('reconcileProjectAgentsMd tolerates projects with no AGENTS.md on disk', () => {
+    // A row exists but no file was ever seeded — skipped, not crashed.
+    seedProjectRow('p-empty', 'Empty', 'E:/empty');
+    const report = reconcileProjectAgentsMd(serviceOpts());
+    expect(report.scanned).toBe(1);
+    expect(report.upgraded).toBe(0);
+    expect(report.skipped).toBe(1);
+    expect(report.errors).toEqual([]);
+  });
+
+  it('updateProject upgrades an older AGENTS.md alongside the plans skeleton', () => {
+    seedProjectRow('legacy-update', 'Legacy Update', 'E:/legacy-update');
+    writeAgentsMd('legacy-update', v1Body());
+
+    const updated = updateProject(
+      'legacy-update',
+      { name: 'Legacy Update Renamed' },
+      serviceOpts(),
+    );
+    expect(updated).not.toBeNull();
+    // The plans skeleton is also repaired by updateProject.
+    expect(
+      fs.existsSync(path.join(projectsRoot, 'legacy-update', 'plans', 'active')),
+    ).toBe(true);
+    // The AGENTS.md must be upgraded to the current version.
+    expect(readProjectAgentsMdVersion(readAgentsMd('legacy-update'))).toBe(
+      CURRENT_PROJECT_AGENTS_MD_VERSION,
+    );
   });
 });

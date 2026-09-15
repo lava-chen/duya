@@ -146,4 +146,86 @@ describe('skillsMetadata (pi-style <available_skills> catalog)', () => {
     const catalog = formatSkillCatalog([makeSkill({ description: 'short' })]);
     expect(catalog).toContain('<description>short</description>');
   });
+
+  it('emits a ### Skill roots alias table mapping names to SKILL.md paths', () => {
+    const catalog = formatSkillCatalog([
+      makeSkill({ name: 'pdf', skillRoot: 'E:\\skills\\pdf' }),
+      makeSkill({ name: 'xlsx', skillRoot: 'E:\\skills\\xlsx' }),
+    ]);
+
+    expect(catalog).toContain('### Skill roots');
+    expect(catalog).toContain('| Skill | Source |');
+    expect(catalog).toContain('| pdf | E:\\skills\\pdf\\SKILL.md |');
+    expect(catalog).toContain('| xlsx | E:\\skills\\xlsx\\SKILL.md |');
+  });
+
+  it('omits ### Skill roots when no skill has a recorded skillRoot', () => {
+    const catalog = formatSkillCatalog([
+      makeSkill({ name: 'pdf', skillRoot: undefined }),
+    ]);
+
+    expect(catalog).not.toContain('### Skill roots');
+  });
+
+  it('renders full tier (name + description + location) when budget is generous', () => {
+    // 60k token budget — every small skill list fits comfortably.
+    const catalog = formatSkillCatalog(
+      [makeSkill()],
+      { tokens: 60_000, charsPerToken: 0.25 },
+    );
+
+    expect(catalog).toContain('<name>pdf</name>');
+    expect(catalog).toContain('<description>');
+    expect(catalog).toContain('<location>');
+  });
+
+  it('falls back to compact tier (no <location>) when budget is mid', () => {
+    // Build a skill list whose full-tier estimate exceeds the 70% headroom
+    // threshold but stays under 100% — exercises the compact branch.
+    // 4 skills × ~340 chars compact (name + 250 desc + wrapper) = ~1360 chars
+    // + ~510 fixed overhead ≈ 1870 chars compact. Budget 500 tokens =
+    // 2000 chars → 70% threshold 1400 (compact crosses it → not full),
+    // 100% threshold 2000 (compact fits → compact tier fires).
+    const skills = Array.from({ length: 4 }, (_, i) =>
+      makeSkill({ name: `s${i}`, description: 'x'.repeat(250) }),
+    );
+    const catalog = formatSkillCatalog(skills, { tokens: 500, charsPerToken: 0.25 });
+
+    expect(catalog).not.toMatch(/<skill>[\s\S]*?<location>[\s\S]*?<\/skill>/);
+    expect(catalog).toContain('<description>');
+    expect(catalog).toContain('### Skill roots');
+  });
+
+  it('falls back to alias-only tier (name only) when budget is tiny', () => {
+    // Budget so small even compact tier can't fit; aliases only.
+    const skills = Array.from({ length: 5 }, (_, i) =>
+      makeSkill({ name: `skill-${i}`, description: 'x'.repeat(250) }),
+    );
+    const catalog = formatSkillCatalog(skills, { tokens: 50, charsPerToken: 0.25 });
+
+    // Each skill renders only <name>; no <description> tags appear inside <skill>.
+    const skillBlocks = catalog.match(/<skill>[\s\S]*?<\/skill>/g) ?? [];
+    expect(skillBlocks.length).toBe(5);
+    for (const block of skillBlocks) {
+      expect(block).not.toContain('<description>');
+      expect(block).not.toContain('<location>');
+    }
+    expect(catalog).toContain('### Skill roots');
+  });
+
+  it('keeps system-first ordering inside the ### Skill roots table', () => {
+    const catalog = formatSkillCatalog([
+      makeSkill({ name: 'pdf' }),
+      makeSkill({ name: 'memory-search', source: 'system' }),
+      makeSkill({ name: 'arxiv' }),
+    ]);
+
+    const rootsStart = catalog.indexOf('### Skill roots');
+    const memoryIndex = catalog.indexOf('memory-search', rootsStart);
+    const pdfIndex = catalog.indexOf('pdf', rootsStart);
+    const arxivIndex = catalog.indexOf('arxiv', rootsStart);
+
+    expect(memoryIndex).toBeLessThan(pdfIndex);
+    expect(memoryIndex).toBeLessThan(arxivIndex);
+  });
 });

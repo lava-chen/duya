@@ -41,6 +41,7 @@ import { useOptionalPanel } from "@/hooks/usePanel";
 import type { PageTab } from "./registry";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
+import { DropdownMenu, type MenuAction } from "@/components/ui/DropdownMenu";
 import {
   collapseContextLines,
   countPatchChanges,
@@ -339,26 +340,33 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const [foldUnchanged, setFoldUnchanged] = useState(true);
   const [showFiles, setShowFiles] = useState(true);
   const [showWhitespace, setShowWhitespace] = useState(false);
-  const [overflowOpen, setOverflowOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false, x: 0, y: 0, path: "",
   });
   const fileRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
-  const overflowRef = useRef<HTMLDivElement | null>(null);
 
-  // Close the overflow menu on any outside press (not a portal, so a
-  // contains() check is reliable here).
-  useEffect(() => {
-    if (!overflowOpen) return;
-    const handleMouseDown = (event: MouseEvent) => {
-      if (overflowRef.current && !overflowRef.current.contains(event.target as Node)) {
-        setOverflowOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleMouseDown);
-    return () => document.removeEventListener("mousedown", handleMouseDown);
-  }, [overflowOpen]);
+  const handleCopyPatch = useCallback(() => {
+    if (!patch) return;
+    navigator.clipboard.writeText(patch).catch(() => {});
+  }, [patch]);
+
+  const overflowMenuItems: MenuAction[] = [
+    {
+      kind: "checkbox",
+      id: "showWhitespace",
+      label: "显示空白字符",
+      checked: showWhitespace,
+      onToggle: (checked) => setShowWhitespace(checked),
+    },
+    {
+      kind: "action",
+      id: "copyPatch",
+      label: "复制 git apply 补丁",
+      disabled: !patch,
+      onSelect: handleCopyPatch,
+    },
+  ];
 
   const refresh = useCallback(async () => {
     if (!workingDirectory) {
@@ -527,12 +535,6 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     scrollContainerRef.current?.scrollTo({ top: 0 });
   }, [filePatches, selectedPatchIndex, singleFileMode]);
 
-  const handleCopyPatch = useCallback(() => {
-    if (!patch) return;
-    navigator.clipboard.writeText(patch).catch(() => {});
-    setOverflowOpen(false);
-  }, [patch]);
-
   const scrollToFile = useCallback((filePath: string) => {
     const element = fileRefs.current[filePath];
     const container = scrollContainerRef.current;
@@ -649,47 +651,22 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           <IconButton type="button" variant="default" shape="square" size="sm" className={showFiles ? "is-active" : ""} onClick={() => setShowFiles((value) => !value)} title={showFiles ? "隐藏文件" : "显示文件"} aria-label={showFiles ? "隐藏文件" : "显示文件"} aria-pressed={showFiles}>
             <IconLayoutSidebarRight size={15} />
           </IconButton>
-          <div className="code-review-overflow" ref={overflowRef}>
-            <IconButton
-              type="button"
-              variant="default"
-              shape="square"
-              size="sm"
-              className={overflowOpen ? "is-active" : ""}
-              onClick={() => setOverflowOpen((value) => !value)}
-              title="更多选项"
-              aria-label="更多选项"
-              aria-expanded={overflowOpen}
-              aria-haspopup="menu"
-            >
-              <IconDots size={15} />
-            </IconButton>
-            {overflowOpen && (
-              <div className="code-review-overflow-menu" role="menu">
-                <button
-                  type="button"
-                  role="menuitemcheckbox"
-                  aria-checked={showWhitespace}
-                  className="code-review-overflow-item"
-                  onClick={() => { setShowWhitespace((value) => !value); setOverflowOpen(false); }}
-                >
-                  <span className="code-review-overflow-check" aria-hidden="true">{showWhitespace ? "✓" : ""}</span>
-                  <span>显示空白字符</span>
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="code-review-overflow-item"
-                  onClick={handleCopyPatch}
-                  disabled={!patch}
-                  title="复制可用于 git apply 的补丁内容"
-                >
-                  <span className="code-review-overflow-check" aria-hidden="true" />
-                  <span>复制 git apply 补丁</span>
-                </button>
-              </div>
-            )}
-          </div>
+          <DropdownMenu
+            trigger={
+              <IconButton
+                type="button"
+                variant="default"
+                shape="square"
+                size="sm"
+                title="更多选项"
+                aria-label="更多选项"
+              >
+                <IconDots size={15} />
+              </IconButton>
+            }
+            items={overflowMenuItems}
+            className="code-review-overflow-menu"
+          />
         </div>
       </header>
 

@@ -12,6 +12,7 @@ import {
   ArchiveIcon,
   TrashIcon,
   PlusIcon,
+  CheckIcon,
 } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -97,6 +98,10 @@ export function ProjectsView() {
   const [showAllSessions, setShowAllSessions] = useState<Set<string>>(new Set());
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<ProjectEntity | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [banner, setBanner] = useState<
+    { kind: "success" | "warning" | "error"; message: string } | null
+  >(null);
 
   const threads = useConversationStore((s) => s.threads);
   const { projects, loadProjects, invalidate } = useProjectsStore();
@@ -104,14 +109,6 @@ export function ProjectsView() {
   const setActiveThread = useConversationStore((s) => s.setActiveThread);
   const archiveThread = useConversationStore((s) => s.archiveThread);
   const setCurrentView = useConversationStore((s) => s.setCurrentView);
-
-  // Hydrate the entity store + recent folders on mount.
-  useEffect(() => {
-    void loadProjects();
-    window.electronAPI?.projects?.getRecentFolders?.().then((folders) => {
-      setRecentFolders(Array.isArray(folders) ? folders : []);
-    }).catch(() => setRecentFolders([]));
-  }, [loadProjects]);
 
   const pathKey = useCallback((p: string) => p.replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase(), []);
 
@@ -178,6 +175,137 @@ export function ProjectsView() {
     );
   }, [rows, query]);
 
+  const toggleSelected = useCallback((key: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const toggleSelectAll = useCallback(() => {
+    setSelected((prev) => {
+      if (prev.size === filtered.length) return new Set();
+      return new Set(filtered.map((r) => r.key));
+    });
+  }, [filtered]);
+
+  const handleBatchArchive = useCallback(() => {
+    let archivedCount = 0;
+    for (const key of selected) {
+      const row = filtered.find((r) => r.key === key);
+      if (row) {
+        for (const session of row.sessions) {
+          archiveThread(session.id);
+          archivedCount += 1;
+        }
+      }
+    }
+    setSelected(new Set());
+    if (archivedCount > 0) {
+      setBanner({
+        kind: "success",
+        message: t("projects.batchArchiveSuccess", { count: archivedCount }),
+      });
+    }
+  }, [selected, filtered, archiveThread]);
+
+  const handleBatchRemove = useCallback(async () => {
+    if (selected.size === 0) return;
+    // Aggregate all selected rows up front so we can craft a single
+    // confirmation dialog and a single result banner, instead of one
+    // confirm + one console.error per row.
+    const targets = filtered.filter((r) => selected.has(r.key));
+    const entityTargets = targets.filter((r) => r.kind === "entity");
+    const pathTargets = targets.filter((r) => r.kind === "path");
+    if (entityTargets.length > 0) {
+      const ok = window.confirm(
+        entityTargets.length === 1
+          ? t("projects.removeConfirm")
+          : t("projects.batchRemoveConfirm", { count: entityTargets.length })
+      );
+      if (!ok) return;
+    }
+    let removed = 0;
+    let failed = 0;
+    for (const row of entityTargets) {
+      const result = await window.electronAPI?.projects?.delete?.(row.projectId!);
+      if (result?.success) removed += 1;
+      else failed += 1;
+    }
+    // Recent-folder entries do not need a confirm — they are an
+    // untracked history list, not a registered entity.
+    if (pathTargets.length > 0) {
+      let nextFolders = recentFolders;
+      for (const row of pathTargets) {
+        const folders = await window.electronAPI?.projects?.removeRecentFolder?.(row.paths[0]);
+        if (Array.isArray(folders)) {
+          nextFolders = folders;
+          removed += 1;
+        } else {
+          failed += 1;
+        }
+      }
+      setRecentFolders(nextFolders);
+    }
+    if (removed > 0) {
+      invalidate();
+      void loadProjects();
+    }
+    setSelected(new Set());
+    if (failed === 0 && removed > 0) {
+      setBanner({ kind: "success", message: t("projects.batchRemoveSuccess", { count: removed }) });
+    } else if (failed > 0 && removed > 0) {
+      setBanner({
+        kind: "warning",
+        message: t("projects.batchRemovePartial", { removed, failed }),
+      });
+    } else if (failed > 0) {
+      setBanner({ kind: "error", message: t("projects.batchRemoveFailed") });
+    }
+  }, [selected, filtered, invalidate, loadProjects, recentFolders]);
+
+  const handleSingleRemove = useCallback(async (row: ProjectRowModel) => {
+    if (row.kind === "entity") {
+      const ok = window.confirm(t("projects.removeConfirm"));
+      if (!ok) return;
+      const result = await window.electronAPI?.projects?.delete?.(row.projectId!);
+      if (!result?.success) {
+        setBanner({ kind: "error", message: t("projects.removeFailed") });
+        return;
+      }
+      invalidate();
+      void loadProjects();
+      setBanner({ kind: "success", message: t("projects.removeSuccess", { name: row.name }) });
+    } else {
+      const folders = await window.electronAPI?.projects?.removeRecentFolder?.(row.paths[0]);
+      if (Array.isArray(folders)) {
+        setRecentFolders(folders);
+        setBanner({ kind: "success", message: t("projects.removeSuccess", { name: row.name }) });
+      }
+    }
+  }, [invalidate, loadProjects]);
+
+  const isAllSelected = filtered.length > 0 && selected.size === filtered.length;
+
+  // Hydrate the entity store + recent folders on mount.
+  useEffect(() => {
+    void loadProjects();
+    window.electronAPI?.projects?.getRecentFolders?.().then((folders) => {
+      setRecentFolders(Array.isArray(folders) ? folders : []);
+    }).catch(() => setRecentFolders([]));
+  }, [loadProjects]);
+
+  // Auto-dismiss the result banner. Success and warning fade after 3s;
+  // errors stay until the user dismisses them.
+  useEffect(() => {
+    if (!banner) return;
+    if (banner.kind === "error") return;
+    const id = window.setTimeout(() => setBanner(null), 3000);
+    return () => window.clearTimeout(id);
+  }, [banner]);
+
   const toggleExpanded = (key: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -213,20 +341,8 @@ export function ProjectsView() {
     }
   };
 
-  const handleRemove = async (row: ProjectRowModel) => {
-    if (row.kind === "entity") {
-      if (!window.confirm(t("projects.removeConfirm"))) return;
-      const result = await window.electronAPI?.projects?.delete?.(row.projectId!);
-      if (!result || !result.success) {
-        console.error("[ProjectsView] projects.delete failed:", result?.error);
-        return;
-      }
-      invalidate();
-      void loadProjects();
-    } else {
-      const folders = await window.electronAPI?.projects?.removeRecentFolder?.(row.paths[0]);
-      setRecentFolders(Array.isArray(folders) ? folders : []);
-    }
+  const handleRemove = (row: ProjectRowModel) => {
+    void handleSingleRemove(row);
   };
 
   const handleEditSubmit = async (input: CreateProjectDialogSubmit) => {
@@ -279,11 +395,85 @@ export function ProjectsView() {
         className="flex items-center px-4 text-xs uppercase tracking-wide select-none"
         style={{ color: "var(--muted)", paddingTop: 8, paddingBottom: 6 }}
       >
-        <span style={{ width: 30, flexShrink: 0 }} />
+        <button
+          type="button"
+          onClick={toggleSelectAll}
+          className="flex items-center justify-center shrink-0 rounded transition-colors hover:bg-[var(--surface-hover)]"
+          style={{ width: 30, height: 30 }}
+          aria-label={t("projects.selectAll")}
+        >
+          {isAllSelected ? (
+            <CheckIcon size={14} />
+          ) : selected.size > 0 ? (
+            <span
+              className="rounded-sm"
+              style={{ width: 14, height: 14, backgroundColor: "var(--accent)" }}
+            />
+          ) : (
+            <span
+              className="rounded-sm border"
+              style={{ width: 14, height: 14, borderColor: "var(--muted)" }}
+            />
+          )}
+        </button>
         <span className="flex-1">{t("projects.columnName")}</span>
         <span style={{ width: 72, textAlign: "right" }}>{t("projects.columnUpdated")}</span>
         <span style={{ width: 32, flexShrink: 0 }} />
       </div>
+
+      {selected.size > 0 && (
+        <div
+          className="flex items-center gap-3 px-4 py-2"
+          style={{ backgroundColor: "var(--surface)", borderBottom: "1px solid var(--border)" }}
+        >
+          <span className="text-sm" style={{ color: "var(--text)" }}>
+            {t("projects.selectedCount", { count: selected.size })}
+          </span>
+          <Button variant="ghost" size="sm" onClick={handleBatchArchive}>
+            <ArchiveIcon size={14} />
+            {t("projects.batchArchive")}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={handleBatchRemove}>
+            <TrashIcon size={14} />
+            {t("projects.batchRemove")}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
+            {t("projects.clearSelection")}
+          </Button>
+        </div>
+      )}
+
+      {banner && (
+        <div
+          className="flex items-center gap-2 px-4 py-2 text-sm"
+          style={{
+            backgroundColor:
+              banner.kind === "success"
+                ? "var(--success-soft, var(--surface))"
+                : banner.kind === "warning"
+                  ? "var(--warning-soft)"
+                  : "var(--error-soft)",
+            color:
+              banner.kind === "success"
+                ? "var(--success, var(--text))"
+                : banner.kind === "warning"
+                  ? "var(--warning)"
+                  : "var(--error)",
+            borderBottom: "1px solid var(--border)",
+          }}
+          role={banner.kind === "error" ? "alert" : "status"}
+        >
+          <span className="flex-1">{banner.message}</span>
+          <button
+            type="button"
+            onClick={() => setBanner(null)}
+            className="text-xs opacity-70 hover:opacity-100"
+            aria-label={t("projects.bannerDismiss")}
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       <div className="flex flex-col overflow-y-auto" style={{ borderTop: "1px solid var(--border)" }}>
         {filtered.length === 0 && (
@@ -295,12 +485,38 @@ export function ProjectsView() {
           const isExpanded = expanded.has(row.key);
           const showAll = showAllSessions.has(row.key);
           const visibleSessions = showAll ? row.sessions : row.sessions.slice(0, SESSION_PREVIEW);
+          const isSelected = selected.has(row.key);
+          const showSelectionUI = isSelected || selected.size > 0;
           return (
-            <div key={row.key} style={{ borderBottom: "1px solid var(--border)" }}>
+            <div
+              key={row.key}
+              className="project-row group"
+              data-selected={isSelected || undefined}
+              style={{ borderBottom: "1px solid var(--border)" }}
+            >
               <div
                 className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-[var(--surface-hover)]"
                 style={{ minHeight: 52 }}
               >
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleSelected(row.key);
+                  }}
+                  className="flex items-center justify-center shrink-0 rounded transition-colors hover:bg-[var(--surface-hover)] project-row-checkbox"
+                  style={{ width: 30, height: 30, opacity: showSelectionUI ? 1 : 0 }}
+                  aria-label={isSelected ? t("projects.deselect") : t("projects.select")}
+                >
+                  {isSelected ? (
+                    <CheckIcon size={14} />
+                  ) : (
+                    <span
+                      className="rounded-sm border"
+                      style={{ width: 14, height: 14, borderColor: "var(--border)" }}
+                    />
+                  )}
+                </button>
                 <button
                   type="button"
                   onClick={() => toggleExpanded(row.key)}
@@ -332,7 +548,10 @@ export function ProjectsView() {
                 >
                   {row.lastActivity > 0 ? formatTimeAgo(row.lastActivity) : "—"}
                 </span>
-                <div className="shrink-0" style={{ width: 32 }}>
+                <div
+                  className="flex items-center gap-1 shrink-0 project-row-actions"
+                  style={{ width: 32, justifyContent: "flex-end" }}
+                >
                   <DropdownMenu
                     className="project-dropdown-menu"
                     align="end"
@@ -384,7 +603,7 @@ export function ProjectsView() {
                     trigger={
                       <button
                         type="button"
-                        className="flex items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-hover)]"
+                        className="flex items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-hover)] project-row-action-btn"
                         style={{ width: 28, height: 28, color: "var(--muted)" }}
                         aria-label={t("projects.editProject")}
                       >
@@ -392,6 +611,21 @@ export function ProjectsView() {
                       </button>
                     }
                   />
+                  {row.kind === "entity" && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const entity = projects.find((p) => p.project_id === row.projectId);
+                        if (entity) setEditing(entity);
+                      }}
+                      className="flex items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-hover)] project-row-action-btn"
+                      style={{ width: 28, height: 28, color: "var(--muted)" }}
+                      aria-label={t("projects.editProject")}
+                      title={t("projects.editProject")}
+                    >
+                      <PencilSimpleIcon size={14} />
+                    </button>
+                  )}
                 </div>
               </div>
 

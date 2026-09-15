@@ -60,6 +60,37 @@ describe('rewriteMediaSrc', () => {
     const img = screen.getByRole('img', { name: 'x' });
     expect(img).toHaveAttribute('src', 'duya-file:///home/me/shots/canvas_1.png');
   });
+
+  // Regression (2026-09-14): react-markdown parses `c:/Users/...` as a
+  // URL with scheme `c`, host `c`, pathname `/Users/...`, and concatenates
+  // them back without the colon, so `src` arrives as `c/Users/...`. The
+  // colon must be restored before mapping to `duya-file://`, otherwise
+  // the protocol handler 404s on the malformed URL.
+  it('restores the drive-letter colon when react-markdown stripped it', () => {
+    render(
+      <Img src="c/Users/lavachen/AppData/Local/Temp/blender_screenshot_v1.png" alt="x" />,
+    );
+    const img = screen.getByRole('img', { name: 'x' });
+    expect(img).toHaveAttribute(
+      'src',
+      'duya-file:///c:/Users/lavachen/AppData/Local/Temp/blender_screenshot_v1.png',
+    );
+  });
+
+  it('restores the drive-letter colon for a Program Files path too', () => {
+    render(<Img src="d/Program Files/App/bin.exe" alt="x" />);
+    const img = screen.getByRole('img', { name: 'x' });
+    expect(img).toHaveAttribute('src', 'duya-file:///d:/Program Files/App/bin.exe');
+  });
+
+  it('does not mistake a short two-segment relative path for a Windows drive', () => {
+    // `Users/me` alone is too ambiguous; without a known Windows
+    // top-level segment after the drive letter we fall through to the
+    // default passthrough.
+    render(<Img src="Users/me" alt="x" />);
+    const img = screen.getByRole('img', { name: 'x' });
+    expect(img.getAttribute('src')).toBe('Users/me');
+  });
 });
 
 describe('MarkdownAnchor', () => {

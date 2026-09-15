@@ -111,7 +111,7 @@ export function registerPluginHandlers(): void {
     installed?: boolean;
   }): Promise<PluginIpcListResponse<unknown>> => {
     try {
-      let results = manager.listCatalog();
+      let results = await manager.listCatalog();
 
       if (filters?.search) {
         const q = filters.search.toLowerCase();

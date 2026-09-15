@@ -23,6 +23,34 @@ import type { PromptContext } from '../../types.js'
  */
 const MAX_LISTING_DESC_CHARS = 250
 
+/**
+ * Token budget for the whole catalog block. Aligned with codex's
+ * SkillMetadataBudget (see codex-rs/ext/skills/src/render.rs).
+ *
+ * Three render tiers, picked per-section by estimated size vs. budget:
+ *   full       — every skill has name + description + location
+ *   compact    — location stripped (model falls back to ### Skill roots)
+ *   alias-only — description + location stripped (short-name only)
+ *
+ * The char-per-token ratio is a rough conservative estimate (true tiktoken
+ * would push ~3.3 chars/token for English); using 0.25 means we err on the
+ * side of falling back earlier, which is safer for cache_creation cost.
+ */
+const DEFAULT_CATALOG_BUDGET_TOKENS = 1500
+const CATALOG_CHARS_PER_TOKEN = 0.25
+
+export type CatalogTier = 'full' | 'compact' | 'alias-only'
+
+export interface CatalogBudget {
+  tokens: number
+  charsPerToken: number
+}
+
+const DEFAULT_BUDGET: CatalogBudget = {
+  tokens: DEFAULT_CATALOG_BUDGET_TOKENS,
+  charsPerToken: CATALOG_CHARS_PER_TOKEN,
+}
+
 function clampDescription(value: string): string {
   if (value.length <= MAX_LISTING_DESC_CHARS) return value;
   return `${value.slice(0, MAX_LISTING_DESC_CHARS - 1).trimEnd()}…`;
@@ -42,42 +70,147 @@ function skillLocation(skill: PromptSkill): string | undefined {
   return skill.skillRoot ? join(skill.skillRoot, 'SKILL.md') : undefined
 }
 
-export function formatSkillCatalog(skills: PromptSkill[]): string {
+/**
+ * Estimate the rendered catalog's token footprint for a given tier.
+ * Used by `pickCatalogTier` to choose the tier that fits the budget.
+ *
+ * Counts only fields that would be emitted at the given tier — so the same
+ * skill list can be re-estimated cheaply as the tier drops.
+ */
+function estimateCatalogChars(
+  skills: PromptSkill[],
+  tier: CatalogTier,
+  fixedOverheadChars: number,
+): number {
+  let chars = fixedOverheadChars
+  for (const skill of skills) {
+    chars += skill.name.length + 1
+    if (tier === 'full' || tier === 'compact') {
+      chars += clampDescription(skill.description).length + 1
+    }
+    if (tier === 'full') {
+      const location = skillLocation(skill)
+      if (location) chars += location.length + 1
+    }
+    // Per-skill XML wrapper overhead: opening/closing tags, indent, plus
+    // the `<name>...</name>` and optional `<description>...</description>`
+    // tag wrapping. Picked empirically so that the actual rendered length
+    // tracks the estimate within ~10%.
+    chars += 80
+  }
+  return chars
+}
+
+/**
+ * Choose the richest tier whose estimated size fits within the budget.
+ *
+ *   1. Try `full` — if it fits at <= 70% of budget, use it (leaves headroom)
+ *   2. Try `compact` — if it fits at <= 100% of budget, use it
+ *   3. Fall back to `alias-only` — short names only; the model relies on the
+ *      `### Skill roots` table for paths and must load SKILL.md on demand
+ */
+function pickCatalogTier(
+  skills: PromptSkill[],
+  budget: CatalogBudget,
+  fixedOverheadChars: number,
+): CatalogTier {
+  const budgetChars = budget.tokens * (1 / budget.charsPerToken)
+  const fitsFull = estimateCatalogChars(skills, 'full', fixedOverheadChars)
+    <= budgetChars * 0.7
+  if (fitsFull) return 'full'
+  const fitsCompact = estimateCatalogChars(skills, 'compact', fixedOverheadChars)
+    <= budgetChars
+  if (fitsCompact) return 'compact'
+  return 'alias-only'
+}
+
+/**
+ * Render the `### Skill roots` alias table. Maps each skill's canonical name
+ * to its SKILL.md absolute path so the model can resolve names dropped from
+ * the catalog body (alias-only tier) without needing the Skill tool.
+ *
+ * Aligns with codex's `### Skill roots` block (catalog_prompt.rs:39), but
+ * stays inside the pi-style markdown shell instead of a separate `## Skills`
+ * section.
+ */
+function formatSkillRoots(skills: PromptSkill[]): string {
+  const sorted = [...skills].sort((left, right) => {
+    if (left.source === 'system' && right.source !== 'system') return -1
+    if (left.source !== 'system' && right.source === 'system') return 1
+    return left.name.localeCompare(right.name)
+  })
+  const rows: string[] = ['| Skill | Source |', '|---|---|']
+  for (const skill of sorted) {
+    const location = skillLocation(skill)
+    if (!location) continue
+    rows.push(`| ${escapeXml(skill.name)} | ${escapeXml(location)} |`)
+  }
+  if (rows.length === 2) return ''
+  return `### Skill roots
+
+When the catalog drops a \`<location>\` to fit the token budget, look it up here. Reading the path with the read tool is preferred over the \`Skill\` tool (fallback).
+
+${rows.join('\n')}`
+}
+
+export function formatSkillCatalog(
+  skills: PromptSkill[],
+  budget: CatalogBudget = DEFAULT_BUDGET,
+): string {
   const byName = (list: PromptSkill[]): PromptSkill[] =>
     [...list].sort((left, right) => left.name.localeCompare(right.name))
 
   // System skills first (they govern DUYA itself), then everything else.
   const systemSkills = byName(skills.filter(s => s.source === 'system'))
   const otherSkills = byName(skills.filter(s => s.source !== 'system'))
+  const orderedSkills = [...systemSkills, ...otherSkills]
+
+  // Fixed overhead covers the XML wrapper, the section header, the
+  // post-section usage line, and the optional ### Skill roots table.
+  // We approximate the latter by always counting its worst-case size and
+  // letting tier selection handle the difference.
+  const fixedOverhead =
+    '<available_skills>\n</available_skills>'.length
+    + '## Available skills\n\n'.length
+    + 'Load a skill by reading its <location> with the read tool; the `Skill` tool is a fallback that loads the same instructions by name. This index is not a substitute for the selected skill\'s SKILL.md.'.length
+    + '\n\n### Skill roots\n\nWhen the catalog drops a `<location>` to fit the token budget, look it up here. Reading the path with the read tool is preferred over the `Skill` tool (fallback).\n\n| Skill | Source |\n|---|---|\n'.length
+
+  const tier = pickCatalogTier(orderedSkills, budget, fixedOverhead)
 
   const lines: string[] = ['<available_skills>']
-  const renderSkill = (skill: PromptSkill): void => {
+  const renderSkill = (skill: PromptSkill, renderTier: CatalogTier): void => {
     lines.push('  <skill>')
     lines.push(`    <name>${escapeXml(skill.name)}</name>`)
-    lines.push(`    <description>${escapeXml(clampDescription(skill.description))}</description>`)
-    const location = skillLocation(skill)
-    if (location) {
-      lines.push(`    <location>${escapeXml(location)}</location>`)
+    if (renderTier === 'full' || renderTier === 'compact') {
+      lines.push(`    <description>${escapeXml(clampDescription(skill.description))}</description>`)
+    }
+    if (renderTier === 'full') {
+      const location = skillLocation(skill)
+      if (location) {
+        lines.push(`    <location>${escapeXml(location)}</location>`)
+      }
     }
     lines.push('  </skill>')
   }
   if (systemSkills.length > 0) {
     lines.push('  <!-- System (DUYA itself) -->')
     for (const skill of systemSkills) {
-      renderSkill(skill)
+      renderSkill(skill, tier)
     }
   }
   if (otherSkills.length > 0) {
     lines.push('  <!-- Other skills -->')
     for (const skill of otherSkills) {
-      renderSkill(skill)
+      renderSkill(skill, tier)
     }
   }
   lines.push('</available_skills>')
 
-  return `## Available skills
+  const roots = formatSkillRoots(orderedSkills)
+  const sections = [`## Available skills`, lines.join('\n')]
+  if (roots) sections.push(roots)
 
-${lines.join('\n')}
+  return `${sections.join('\n\n')}
 
 Load a skill by reading its <location> with the read tool; the \`Skill\` tool is a fallback that loads the same instructions by name. This index is not a substitute for the selected skill's SKILL.md.`
 }

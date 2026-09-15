@@ -1,18 +1,9 @@
 "use client";
 
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
-import { createPortal } from "react-dom";
-import {
-  DotsThreeIcon,
-  CaretRightIcon,
-} from "@/components/icons";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { DotsThreeIcon } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
+import { DropdownMenu, type MenuAction } from "@/components/ui/DropdownMenu";
 import { useConversationStore, type Thread } from "@/stores/conversation-store";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useOptionalPanel } from "@/hooks/usePanel";
@@ -22,11 +13,6 @@ interface ChatHeaderProps {
 }
 
 const NOOP_OPEN_PANEL = () => "";
-
-type MenuAction =
-  | { kind: "action"; id: string; label: string; shortcut?: string; onSelect: () => void; danger?: boolean }
-  | { kind: "submenu"; id: string; label: string; items: MenuAction[] }
-  | { kind: "divider"; id: string };
 
 /**
  * In-content header for the active chat session.
@@ -44,12 +30,7 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
 
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(thread.title || "");
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
 
-  const menuRootRef = useRef<HTMLDivElement>(null);
-  const menuListRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const projectName = thread.projectName || (thread.workingDirectory
@@ -68,99 +49,6 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
       inputRef.current?.select();
     }
   }, [isEditing]);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const handleDown = (e: MouseEvent) => {
-      const target = e.target as Node | null;
-      // The menu is portaled to document.body, so it is no longer a
-      // DOM descendant of `menuRootRef`. Check both the wrap and the
-      // menu element directly.
-      if (
-        menuRootRef.current?.contains(target) ||
-        menuListRef.current?.contains(target)
-      ) {
-        return;
-      }
-      setMenuOpen(false);
-      setOpenSubmenu(null);
-    };
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setMenuOpen(false);
-        setOpenSubmenu(null);
-      }
-    };
-    document.addEventListener("mousedown", handleDown);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("mousedown", handleDown);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [menuOpen]);
-
-  // Position the menu next to the trigger. Called once after mount
-  // (useLayoutEffect) and again on every scroll/resize while the
-  // menu is open (useEffect) so the menu follows the trigger when
-  // the layout shifts. The menu is portaled to document.body so
-  // `position: fixed` resolves against the viewport rather than a
-  // transformed ancestor's containing block.
-  const repositionMenu = useCallback(() => {
-    const el = menuListRef.current;
-    const trigger = triggerRef.current;
-    if (!el || !trigger) return;
-    const rect = trigger.getBoundingClientRect();
-    const pad = 8;
-    const gap = 4;
-    const menuW = el.offsetWidth || 240;
-    const menuH = el.offsetHeight || 200;
-
-    let left = rect.left;
-    let top = rect.bottom + gap;
-
-    if (left + menuW > window.innerWidth - pad) {
-      left = rect.right - menuW;
-    }
-    if (left < pad) left = pad;
-    if (left + menuW > window.innerWidth - pad) {
-      left = window.innerWidth - pad - menuW;
-    }
-
-    if (top + menuH > window.innerHeight - pad) {
-      top = rect.top - gap - menuH;
-    }
-    if (top < pad) top = pad;
-
-    el.style.left = `${left}px`;
-    el.style.top = `${top}px`;
-  }, []);
-
-  useLayoutEffect(() => {
-    if (!menuOpen) return;
-    repositionMenu();
-  }, [menuOpen, openSubmenu, repositionMenu]);
-
-  // Keep the menu anchored to the trigger while the page scrolls or
-  // resizes, and while the title reflows (e.g. side panel opens).
-  // capture: true catches scroll events on any ancestor, not just
-  // window. ResizeObserver fires when the trigger's own size changes
-  // (e.g. theme/font swap reflows the title).
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onScrollOrResize = () => repositionMenu();
-    window.addEventListener("scroll", onScrollOrResize, true);
-    window.addEventListener("resize", onScrollOrResize);
-    let observer: ResizeObserver | null = null;
-    if (typeof ResizeObserver !== "undefined" && triggerRef.current) {
-      observer = new ResizeObserver(onScrollOrResize);
-      observer.observe(triggerRef.current);
-    }
-    return () => {
-      window.removeEventListener("scroll", onScrollOrResize, true);
-      window.removeEventListener("resize", onScrollOrResize);
-      observer?.disconnect();
-    };
-  }, [menuOpen, repositionMenu]);
 
   const commitRename = useCallback(() => {
     const next = draft.trim();
@@ -190,30 +78,21 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
     [commitRename, cancelRename]
   );
 
-  const closeMenu = useCallback(() => {
-    setMenuOpen(false);
-    setOpenSubmenu(null);
-  }, []);
-
   const handleCopyId = useCallback(() => {
     navigator.clipboard.writeText(thread.id).catch(() => {});
-    closeMenu();
-  }, [thread.id, closeMenu]);
+  }, [thread.id]);
 
   const handleCopyTitle = useCallback(() => {
     navigator.clipboard.writeText(thread.title || "").catch(() => {});
-    closeMenu();
-  }, [thread.title, closeMenu]);
+  }, [thread.title]);
 
   const handleOpenSideChat = useCallback(() => {
     openOrActivatePage("files");
-    closeMenu();
-  }, [openOrActivatePage, closeMenu]);
+  }, [openOrActivatePage]);
 
   const handleAddAutomation = useCallback(() => {
     setCurrentView("automation");
-    closeMenu();
-  }, [setCurrentView, closeMenu]);
+  }, [setCurrentView]);
 
   const menuItems: MenuAction[] = [
     {
@@ -221,10 +100,7 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
       id: "rename",
       label: t("thread.renameThread"),
       shortcut: "Ctrl+Alt+R",
-      onSelect: () => {
-        setIsEditing(true);
-        closeMenu();
-      },
+      onSelect: () => setIsEditing(true),
     },
     { kind: "divider", id: "div-1" },
     {
@@ -300,105 +176,23 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
 
           {!isEditing && (
             <div className="chat-header-actions">
-              <div className="chat-header-menu-wrap" ref={menuRootRef}>
-                <button
-                  ref={triggerRef}
-                  type="button"
-                  className={`chat-header-btn chat-header-menu-trigger${menuOpen ? " active" : ""}`}
-                  onClick={() => setMenuOpen((v) => !v)}
-                  title={t("chat.header.more")}
-                  aria-label="More actions"
-                  aria-expanded={menuOpen}
-                  aria-haspopup="menu"
-                >
-                  <DotsThreeIcon size={16} />
-                </button>
-
-                {menuOpen &&
-                  createPortal(
-                    <div
-                      ref={menuListRef}
-                      role="menu"
-                      className="chat-header-menu"
-                      onMouseLeave={() => setOpenSubmenu(null)}
-                    >
-                      {menuItems.map((item) => (
-                        <MenuItem
-                          key={item.id}
-                          item={item}
-                          openSubmenu={openSubmenu}
-                          setOpenSubmenu={setOpenSubmenu}
-                          closeMenu={closeMenu}
-                        />
-                      ))}
-                    </div>,
-                    document.body,
-                  )}
-              </div>
+              <DropdownMenu
+                trigger={
+                  <button
+                    type="button"
+                    className="chat-header-btn chat-header-menu-trigger"
+                    title={t("chat.header.more")}
+                    aria-label="More actions"
+                  >
+                    <DotsThreeIcon size={16} />
+                  </button>
+                }
+                items={menuItems}
+              />
             </div>
           )}
         </div>
       </div>
     </div>
-  );
-}
-
-interface MenuItemProps {
-  item: MenuAction;
-  openSubmenu: string | null;
-  setOpenSubmenu: (id: string | null) => void;
-  closeMenu: () => void;
-}
-
-function MenuItem({ item, openSubmenu, setOpenSubmenu, closeMenu }: MenuItemProps) {
-  if (item.kind === "divider") {
-    return <div className="chat-header-menu-divider" role="separator" />;
-  }
-
-  if (item.kind === "submenu") {
-    const open = openSubmenu === item.id;
-    return (
-      <div
-        className="chat-header-menu-item has-submenu"
-        role="menuitem"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        tabIndex={0}
-        onMouseEnter={() => setOpenSubmenu(item.id)}
-        onClick={() => setOpenSubmenu(open ? null : item.id)}
-      >
-        <span className="chat-header-menu-label">{item.label}</span>
-        <CaretRightIcon size={12} className="chat-header-menu-caret" />
-        {open && (
-          <div className="chat-header-submenu" role="menu">
-            {item.items.map((sub) => (
-              <MenuItem
-                key={sub.id}
-                item={sub}
-                openSubmenu={openSubmenu}
-                setOpenSubmenu={setOpenSubmenu}
-                closeMenu={closeMenu}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="sm"
-      role="menuitem"
-      className={`chat-header-menu-item${item.danger ? " danger" : ""}`}
-      onClick={item.onSelect}
-    >
-      <span className="chat-header-menu-label">{item.label}</span>
-      {item.shortcut && (
-        <span className="chat-header-menu-shortcut">{item.shortcut}</span>
-      )}
-    </Button>
   );
 }
