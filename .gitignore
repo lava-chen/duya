@@ -96,6 +96,21 @@ duyaUI.pen
 .e2e-userdata/
 tmp/
 
+# Trae IDE html-share export artifacts — zipped copies of the
+# Chrome / Edge extension HTML pages Trae auto-generates when
+# sharing. These slipped into history in 2025-2026 via Trae's
+# auto-commit hook; nothing in this repo needs them and they
+# contain the same content as the real extension source under
+# extension/. Stripped from history with git filter-repo on
+# 2026-09-15; keep them ignored so a future Trae run doesn't
+# re-introduce them.
+.trae-html-share-packages/
+
+# Browser extension source under extension/ is tracked; the
+# packaged zip artifact (Trae's html-share output, see above)
+# is not. Same removal rationale.
+extension/*.zip
+
 # Scratch debug / probe scripts (do not commit)
 scripts/_probe-*.mjs
 scripts/_probe-*.js
@@ -183,3 +198,9 @@ probe-desktop-capture*.png
 .workbuddy/
 .tmp-diag.ps1
 .tmp-kill.ps1
+
+# One-off cleanup mailmap used by git filter-repo on 2026-09-15 to
+# rewrite author identities before public release. Keep the file
+# on disk for forensics / a future re-run, but never commit it —
+# the file itself documents the personal -> noreply mapping.
+scripts/cleanup-mailmap.txt
