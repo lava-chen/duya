@@ -695,6 +695,14 @@ export interface ToolUseContext {
    * the model toward different color palettes, fonts, and layouts.
    */
   widgetStyleHistory?: WidgetStyleSignature[];
+  /**
+   * Plan 536: project entity resolved from the session's workingDirectory.
+   * Injected by session bootstrap from `projects.paths` reverse lookup.
+   * Tools whose primary key is a projectId (e.g. the plan tool) read this
+   * as a fallback when the model omits the projectId from its input.
+   * null when the session is not bound to any known project.
+   */
+  currentProjectId?: string | null;
 }
 
 /**
