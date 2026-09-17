@@ -29,6 +29,7 @@ import {
   ipcMessageToNewEvent,
   newEventToIpcMessage,
   storedEventToIpcMessage,
+  storedEventsToIpcMessages,
 } from '../core-db-adapters';
 
 // better-sqlite3 native module may not load in some sandbox configs.
@@ -368,5 +369,31 @@ describe('Plan 489 P0.3 — NewEvent broadcast adapter', () => {
     );
     expect(storedEventToIpcMessage(event as never)).toBeNull();
     expect(newEventToIpcMessage(event)).not.toBeNull();
+  });
+
+  it('round-trips compaction summary markers (isCompactSummary, compactBoundaryId, compactedMessageCount)', () => {
+    // Regression: a compacted session reload must keep the compaction summary
+    // renderable as the dedicated CompactSummary UI, not a plain bubble. The
+    // durable compaction timeline entry is projected back to a `user` message
+    // carrying `isCompactSummary`/`compactBoundaryId`/`compactedMessageCount`;
+    // `messageToIpcRow` must carry them onto the row so the renderer read
+    // (dbMessageToMessage) can reconstruct them after persistence.
+    const event = ipcMessageToNewEvent(
+      'sess-1',
+      {
+        ...makeUserDTO('m-cs-sum', 'the earlier conversation covered X', 50),
+        is_compact_summary: true,
+        compact_boundary_id: 'cb-7',
+        compacted_message_count: 3,
+      } as never,
+    );
+
+    // Write path: the @duya/ai Message must carry the markers into ingest so
+    // they survive the rollout round-trip. Verify via the DB-less NewEvent.
+    const row = newEventToIpcMessage(event);
+    expect(row).not.toBeNull();
+    expect(row!.is_compact_summary).toBe(true);
+    expect(row!.compact_boundary_id).toBe('cb-7');
+    expect(row!.compacted_message_count).toBe(3);
   });
 });

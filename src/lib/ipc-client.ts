@@ -79,6 +79,12 @@ export interface Message {
   agentDmMeta?: AgentDmCardMeta | null;
   /** Plan 478: shared-room post payload (parsed from group_post_meta). */
   groupPostMeta?: import("@/types/message").RoomPostMeta | null;
+  /** Compaction marker: true when this row is a compact summary. */
+  isCompactSummary?: boolean;
+  /** Compaction marker: compaction boundary id this summary belongs to. */
+  compactBoundaryId?: string;
+  /** Compaction marker: number of messages folded into this summary. */
+  compactedMessageCount?: number;
 }
 
 /** Plan 477 P4.4: bot→bot DM marker card descriptor (metadata.agentDm).
@@ -231,6 +237,12 @@ export interface DbMessage {
   agent_dm_meta?: string | null
   /** Plan 478: shared-room post payload (JSON), mirrors MessageRow.group_post_meta. */
   group_post_meta?: string | null
+  /** Compaction marker: true when this row is a compact summary. */
+  is_compact_summary?: boolean | null
+  /** Compaction marker: compaction boundary id this summary belongs to. */
+  compact_boundary_id?: string | null
+  /** Compaction marker: number of messages folded into this summary. */
+  compacted_message_count?: number | null
 }
 
 // Backend returns camelCase (via maskProvider in agent-communicator.ts)
@@ -438,6 +450,11 @@ export function dbMessageToMessage(db: DbMessage): Message {
     displayContent: db.display_content != null
       ? db.display_content
       : (typeof content === 'string' ? content : undefined),
+    // Compaction markers (row columns → renderer Message fields) so the
+    // reloaded compact-summary row survives `MessageItem`'s branch check.
+    isCompactSummary: db.is_compact_summary === true ? true : undefined,
+    compactBoundaryId: db.compact_boundary_id ?? undefined,
+    compactedMessageCount: db.compacted_message_count ?? undefined,
   }
 }
 

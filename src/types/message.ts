@@ -118,6 +118,8 @@ export interface Message {
   isCompactSummary?: boolean;
   /** Number of messages that were compacted into this summary */
   compactedMessageCount?: number;
+  /** Compaction boundary id this summary belongs to (survives reload). */
+  compactBoundaryId?: string;
   /** True if this message is a system-generated <task-notification> for a
    * background subagent. The renderer hides it; the LLM still receives it
    * (it carries the <result> body). Set by DuyaAgent when injecting the

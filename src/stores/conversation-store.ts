@@ -515,6 +515,11 @@ function mapIpcMessagesToStore(messages: IpcMessage[]): Message[] {
     attachments: m.attachments ?? undefined,
     source: m.source ?? undefined,
     sendMessageMeta: m.sendMessageMeta ?? undefined,
+    // Compaction markers must survive the reload so MessageItem picks the
+    // CompactSummary branch after persistence (dbMessageToMessage feeds them).
+    isCompactSummary: m.isCompactSummary ?? undefined,
+    compactBoundaryId: m.compactBoundaryId ?? undefined,
+    compactedMessageCount: m.compactedMessageCount ?? undefined,
   }));
 }
 

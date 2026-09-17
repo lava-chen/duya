@@ -107,6 +107,16 @@ export interface MessageRow {
   agent_dm_meta?: string | null;
   /** Plan 478: shared-room post payload (JSON). */
   group_post_meta?: string | null;
+  /**
+   * Compaction marker (round-trips `Message.isCompactSummary` so MessageItem
+   * picks the CompactSummary branch after reload). Derived from the durable
+   * compaction timeline entry by `projectTimelinePersistenceMessages`.
+   */
+  is_compact_summary?: boolean | null;
+  /** Compaction marker: the compaction boundary id this summary belongs to. */
+  compact_boundary_id?: string | null;
+  /** Compaction marker: number of messages folded into this summary. */
+  compacted_message_count?: number | null;
 }
 
 // ─── Content serialization (ported from old db-handlers.ts) ───
@@ -380,6 +390,12 @@ interface IpcMessageDTO {
    * screenshots must not bloat rollout files.
    */
   metadata?: Record<string, unknown>;
+  /** Compaction marker: true when this row is a compact summary. */
+  is_compact_summary?: boolean;
+  /** Compaction marker: compaction boundary id this summary belongs to. */
+  compact_boundary_id?: string | null;
+  /** Compaction marker: number of messages folded into this summary. */
+  compacted_message_count?: number | null;
 }
 
 /**
@@ -486,6 +502,10 @@ export function ipcMessageToNewEvent(
     source,
     displayContent: displayContent ?? undefined,
     metadata: Object.keys(persistedMetadata).length > 0 ? persistedMetadata : undefined,
+    // Compaction markers (snake_case row column → @duya/ai Message field).
+    isCompactSummary: data.is_compact_summary === true ? true : undefined,
+    compactBoundaryId: data.compact_boundary_id ?? undefined,
+    compactedMessageCount: data.compacted_message_count ?? undefined,
   };
 
   const agentMessage = ingestMessage(message, { index: 0 });
@@ -726,6 +746,12 @@ function messageToIpcRow(
       metadata?.groupPost != null
         ? JSON.stringify(metadata.groupPost)
         : null,
+    is_compact_summary:
+      (msg as { isCompactSummary?: boolean }).isCompactSummary === true ? true : null,
+    compact_boundary_id:
+      (msg as { compactBoundaryId?: string }).compactBoundaryId ?? null,
+    compacted_message_count:
+      (msg as { compactedMessageCount?: number }).compactedMessageCount ?? null,
   };
 }
 

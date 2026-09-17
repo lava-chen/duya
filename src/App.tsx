@@ -336,6 +336,9 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
           source: m.source ?? undefined,
           sendMessageMeta: m.sendMessageMeta ?? undefined,
           agentDmMeta: m.agentDmMeta ?? undefined,
+          isCompactSummary: m.isCompactSummary ?? undefined,
+          compactBoundaryId: m.compactBoundaryId ?? undefined,
+          compactedMessageCount: m.compactedMessageCount ?? undefined,
         }));
 
       // Add each message to the store
