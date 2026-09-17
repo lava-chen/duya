@@ -21,10 +21,10 @@ sibling-plans:
 > **Status**: In Progress · **Priority**: P1 · **Created**: 2026-09-15
 >
 > **Layer status**:
+> - ✅ L1 — session bootstrap injection (`ToolUseContext.currentProjectId`)
 > - ✅ L2 — PlanTool projectId optional + context fallback (`73af9238` via PR #53)
 > - ✅ L4 — `projects:resolveProject` cwd→projectId reverse-lookup API
 > - ✅ L5 — CLI `projects cleanup` subcommand for empty uuid dirs (`c1d43ae0` via PR #53)
-> - ⏳ L1 — session bootstrap injection (ctx.env.currentProject)
 > - ⏳ L3 — memory section displays the current project
 >
 > **本文档由一个 agent 建议触发**：在某次会话中，agent 走了 5 步才从 cwd

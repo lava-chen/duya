@@ -957,6 +957,15 @@ async function handlePostChat(
         parsed.options?.permissionRules,
         projectAdditionalRoots,
       );
+      // Plan 536 L1: lightweight cwd -> projectId reverse-lookup so the
+      // agent subprocess can stamp `currentProjectId` into every
+      // ctx.options it builds. Best-effort; null when cwd is outside
+      // any registered project. Headless / CLI sessions without a
+      // workingDirectory get undefined.
+      const resolvedProject = await resolveProjectViaDbRequest(
+        dbRequest,
+        workingDirectory || undefined,
+      );
       workerManager.sendCommand(sessionId, {
         type: 'init',
         sessionId,
@@ -969,6 +978,10 @@ async function handlePostChat(
         securityScanEnabled: parsed.options?.securityScanEnabled,
         referencesEnabled: detectReferencesEnabled(workingDirectory),
         permissionRules: effectivePermissionRules,
+        // Plan 536 L1: propagate the resolved projectId so project-
+        // scoped tools (plan tool, etc.) can pick it up from the
+        // session context instead of forcing the agent to pass it.
+        currentProjectId: resolvedProject?.projectId ?? null,
       });
 
       // Plan 476 P0-A: mirror "this session is running a chat" into

@@ -151,6 +151,15 @@ export interface AgentOptions {
   baseURL?: string;
   model?: string;
   workingDirectory?: string;
+  /**
+   * Plan 536 L1: the project ID resolved from `workingDirectory` at session
+   * bootstrap. Mirrors `ToolUseContextOptions.currentProjectId` so the
+   * agent subprocess can stamp the resolved value into every
+   * `ctx.options.currentProjectId` it builds. Null when the session is not
+   * bound to any registered duya project (CLI / headless without a
+   * project root, or cwd outside any project).
+   */
+  currentProjectId?: string | null;
   systemPrompt?: string;
   maxTokens?: number;
   temperature?: number;
