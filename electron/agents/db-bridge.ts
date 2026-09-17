@@ -96,6 +96,45 @@ function debugLog(...args: unknown[]): void {
 }
 
 /**
+ * Plan 536 L4: resolve a session's working directory to the project that
+ * owns it, plus the canonical list of paths registered against that
+ * project. Returns `null` when no project matches (cwd outside any
+ * registered project, memory-state DB unavailable, or cwd unparseable).
+ *
+ * Used by both `projects:resolveAdditionalRoots` (writable-roots fan-out
+ * for session cwd) and `projects:resolveProject` (lightweight
+ * cwd → projectId reverse-lookup for runtime injection).
+ */
+async function resolveProjectByCwd(
+  cwd: string
+): Promise<{ projectId: string; paths: string[]; cwdNormalized: string } | null> {
+  let memoryState: typeof import('../memory-state');
+  try {
+    memoryState = await import('../memory-state');
+  } catch {
+    return null;
+  }
+  let rows = memoryState.listProjects();
+  if (rows.length === 0) {
+    try {
+      const { getDatabasePath } = await import('../config/boot-config');
+      memoryState.bootstrap({ bootJsonDatabaseDir: path.dirname(getDatabasePath()) });
+      rows = memoryState.listProjects();
+    } catch {
+      // no database dir available — treat as no project
+      return null;
+    }
+  }
+  const cwdNorm = memoryState.normalizePath(cwd).absolute_normalized_path;
+  const hit = rows.find((row) =>
+    memoryState.projectPaths(row).some((entry) => entry.path === cwdNorm)
+  );
+  if (!hit) return null;
+  const paths = memoryState.projectPaths(hit).map((entry) => entry.path);
+  return { projectId: hit.project_id, paths, cwdNormalized: cwdNorm };
+}
+
+/**
  * Map a file-backed parsed_document attachment to the legacy `message_attachments`
  * row shape so the Agent / renderer contract stays unchanged. The payload `data`
  * string is the JSON body written by `attachment:store` (plan 332 Phase 2).

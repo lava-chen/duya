@@ -231,6 +231,36 @@ export async function resolveProjectAdditionalRootsViaDbRequest(
 }
 
 /**
+ * Plan 536 L4: lightweight cwd -> projectId reverse-lookup, used by the
+ * session-bootstrap injection (L1) and any CLI / runtime caller that
+ * only needs to know "which project is this cwd in?". Mirrors
+ * `resolveProjectAdditionalRootsViaDbRequest` (which keeps the
+ * writable-roots fan-out) but consumes the `projects:resolveProject`
+ * IPC channel that returns `{ projectId, paths }`.
+ *
+ * Best-effort: returns `null` for any miss (no dbRequest, no cwd, IPC
+ * error, or malformed payload) so callers can treat `null` as
+ * "session is not bound to a duya project" without try/catching.
+ */
+export async function resolveProjectViaDbRequest(
+  dbRequest: ((action: string, payload: Record<string, unknown>) => Promise<unknown>) | undefined,
+  workingDirectory: string | undefined,
+): Promise<{ projectId: string; paths: string[] } | null> {
+  if (!dbRequest || !workingDirectory) return null;
+  try {
+    const result = await dbRequest('projects:resolveProject', {
+      workingDirectory,
+    }) as { projectId?: unknown; paths?: unknown } | null;
+    if (!result || typeof result.projectId !== 'string') return null;
+    if (!Array.isArray(result.paths)) return null;
+    const paths = result.paths.filter((p): p is string => typeof p === 'string');
+    return { projectId: result.projectId, paths };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Merge additional workspace roots into a permissionRules blob's
  * `permissions.additionalDirectories` (dedup, case-insensitive on Windows
  * style paths is left to the worker's own path.resolve — here exact-string

@@ -591,6 +591,26 @@ export const attachmentDb = {
 
 export const projectDb = {
   getGroups: () => sendDbRequest('project:getGroups', {}),
+
+  /**
+   * Plan 536 L4: lightweight cwd -> projectId reverse-lookup. Returns
+   * `{ projectId, paths }` when the cwd belongs to a registered duya
+   * project, or `{ projectId: null, paths: null }` when it doesn't (or
+   * cwd is unparseable / memory-state DB unavailable).
+   *
+   * Distinct from `projects:resolveAdditionalRoots` which also returns
+   * the writable-root fan-out. This is the canonical answer for the
+   * L1 session bootstrap injection and any CLI/runtime caller that
+   * only needs to know "which project is this cwd in?".
+   */
+  resolveProject: (workingDirectory: string): Promise<{
+    projectId: string | null;
+    paths: string[] | null;
+  }> =>
+    sendDbRequest('projects:resolveProject', { workingDirectory }) as Promise<{
+      projectId: string | null;
+      paths: string[] | null;
+    }>,
 };
 
 // ==================== Research Session Operations ====================
