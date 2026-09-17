@@ -229,6 +229,16 @@ export class duyaAgent {
   private provider: 'anthropic' | 'openai' | 'ollama';
   private sessionId?: string; // Session ID for task persistence
   private workingDirectory?: string; // Working directory for tool execution
+  /**
+   * Plan 536 L1: project ID resolved at session bootstrap from
+   * `workingDirectory` (via the agent server's
+   * `projects:resolveProject` IPC). Threaded into every
+   * `ctx.options.currentProjectId` so project-scoped tools (plan tool,
+   * research-memory, etc.) can pick it up without the model having to
+   * pass projectId explicitly. Null when cwd is outside any registered
+   * project.
+   */
+  private currentProjectId?: string | null;
   private defaultWorkspaceDirectory?: string; // Default workspace directory for permission checking
   private communicationPlatform?: import('../prompts/types.js').CommunicationPlatform; // Communication platform for prompt injection
   private language?: string; // Language preference for agent responses
@@ -492,6 +502,10 @@ export class duyaAgent {
     this.baseURL = options.baseURL;
     this.authStyle = options.authStyle;
     this.workingDirectory = options.workingDirectory;
+    // Plan 536 L1: project ID resolved at session bootstrap, propagated
+    // to every ctx.options so project-scoped tools (plan tool, etc.)
+    // can use it without the model having to pass projectId explicitly.
+    this.currentProjectId = options.currentProjectId ?? null;
     this.defaultWorkspaceDirectory = options.defaultWorkspaceDirectory;
     this.sessionInfo = {
       id: crypto.randomUUID(),
@@ -1528,6 +1542,11 @@ export class duyaAgent {
         setAppState: (updater) => { turnAppState = updater(turnAppState); },
         widgetStyleHistory: this.widgetStyleHistory,
         canvasFreshness: this.canvasFreshness,
+        // Plan 536 L1: session-bound projectId. Project-scoped tools
+        // (plan tool, etc.) read this as a fallback when the model
+        // omits projectId from its input. null when cwd is outside any
+        // registered duya project.
+        currentProjectId: this.currentProjectId ?? null,
         options: {
           recentImageAttachments: collectRecentImageAttachments(messages),
           tools,
@@ -4316,6 +4335,17 @@ export class duyaAgent {
     this.workingDirectory = directory;
     // PromptSystem reads workingDirectory fresh on every streamChat via
     // _buildSystemPrompt 鈫?buildContext, so no separate sync needed.
+  }
+
+  /**
+   * Plan 536 L1: update the session's resolved project ID at runtime
+   * (e.g. when the renderer reloads the project list after a switch).
+   * Future ctx.options built from this point on will pick up the new
+   * value via `this.currentProjectId`; in-flight tool calls keep the
+   * value they captured when they were dispatched.
+   */
+  setCurrentProjectId(projectId: string | null | undefined): void {
+    this.currentProjectId = projectId ?? null;
   }
 
   /**

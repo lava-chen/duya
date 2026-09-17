@@ -129,6 +129,14 @@ interface InitMessage {
     runtimeConfig?: ProviderRuntimeConfig;
   };
   workingDirectory?: string;
+  /**
+   * Plan 536 L1: project ID resolved from `workingDirectory` by the
+   * agent server's `projects:resolveProject` IPC. Threaded into the
+   * subprocess as part of session bootstrap so it lands in every
+   * `ctx.options.currentProjectId` the subprocess builds. Null when
+   * the cwd is outside any registered project.
+   */
+  currentProjectId?: string | null;
   defaultWorkspaceDirectory?: string;
   systemPrompt?: string;
   skillPaths?: string[];
@@ -1569,6 +1577,10 @@ async function initAgent(
   communicationPlatform?: string,
   browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like',
   permissionRules?: InitMessage['permissionRules'],
+  // Plan 536 L1: project ID resolved by the agent server from the
+  // session's workingDirectory. Forwarded into the agent as
+  // `currentProjectId` so it lands in every ctx.options.currentProjectId.
+  currentProjectId?: string | null,
 ): Promise<void> {
   // Store system prompt for use in chat
   sessionSystemPrompt = sysPrompt;
@@ -1614,6 +1626,8 @@ async function initAgent(
     sessionId: sessionId!,
     communicationPlatform: (communicationPlatform as 'cli' | 'duya-app' | 'weixin' | 'feishu' | 'telegram' | 'web' | 'api') ?? 'duya-app',
     workingDirectory: workDir,
+    // Plan 536 L1: project ID resolved by the agent server.
+    currentProjectId: currentProjectId ?? null,
     visionConfig: config.visionConfig,
     compactModelConfig: config.compactModelConfig,
     blockedDomains,
@@ -3712,6 +3726,8 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
               initMsg.communicationPlatform,
               initMsg.browserBackendMode,
               initMsg.permissionRules,
+              // Plan 536 L1: thread resolved projectId into the agent.
+              initMsg.currentProjectId,
             );
 
             try {

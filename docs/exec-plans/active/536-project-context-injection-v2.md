@@ -2,10 +2,10 @@
 id: 536
 title: Project 上下文注入 v2 — Session/Plan/Memory/Loader 五层整合
 priority: P1
-status: draft
+status: in-progress
 tags: [project, plans, session-bootstrap, memory, agents-md]
 created: 2026-09-15
-updated: 2026-09-15
+updated: 2026-09-16
 supersedes: []
 sibling-plans:
   - 525-project-entity-and-plan-management — 项目实体建模（路径反查 API 复用）
@@ -18,7 +18,14 @@ sibling-plans:
 
 # Plan 536 — Project 上下文注入 v2
 
-> **Status**: Draft · **Priority**: P1 · **Created**: 2026-09-15
+> **Status**: In Progress · **Priority**: P1 · **Created**: 2026-09-15
+>
+> **Layer status**:
+> - ✅ L1 — session bootstrap injection (`ToolUseContext.currentProjectId`)
+> - ✅ L2 — PlanTool projectId optional + context fallback (`73af9238` via PR #53)
+> - ✅ L4 — `projects:resolveProject` cwd→projectId reverse-lookup API
+> - ✅ L5 — CLI `projects cleanup` subcommand for empty uuid dirs (`c1d43ae0` via PR #53)
+> - ⏳ L3 — memory section displays the current project
 >
 > **本文档由一个 agent 建议触发**：在某次会话中，agent 走了 5 步才从 cwd
 > 匹配到当前 projectId（`95bd37a5-...`），暴露出 duya 当前在

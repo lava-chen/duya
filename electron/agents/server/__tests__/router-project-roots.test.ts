@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   mergeAdditionalRootsIntoPermissionRules,
   resolveProjectAdditionalRootsViaDbRequest,
+  resolveProjectViaDbRequest,
 } from '../router';
 
 /**
@@ -103,5 +104,69 @@ describe('mergeAdditionalRootsIntoPermissionRules', () => {
       ['E:/Projects/duya/../duya-website'],
     ) as { permissions: { additionalDirectories: string[] } };
     expect(merged.permissions.additionalDirectories).toEqual(['e:/Projects/duya-website']);
+  });
+});
+
+describe('resolveProjectViaDbRequest (Plan 536 L4)', () => {
+  it('returns { projectId, paths } from the bridge result', async () => {
+    const dbRequest = vi.fn().mockResolvedValue({
+      projectId: 'p-1',
+      paths: ['E:/Projects/duya', 'E:/Projects/duya-website', 'E:/Papers/duya-research'],
+    });
+    await expect(
+      resolveProjectViaDbRequest(dbRequest, 'E:/Projects/duya')
+    ).resolves.toEqual({
+      projectId: 'p-1',
+      paths: ['E:/Projects/duya', 'E:/Projects/duya-website', 'E:/Papers/duya-research'],
+    });
+    expect(dbRequest).toHaveBeenCalledWith('projects:resolveProject', {
+      workingDirectory: 'E:/Projects/duya',
+    });
+  });
+
+  it('returns null when the cwd does not belong to any project', async () => {
+    const dbRequest = vi.fn().mockResolvedValue({ projectId: null, paths: null });
+    await expect(
+      resolveProjectViaDbRequest(dbRequest, 'E:/unrelated/dir')
+    ).resolves.toBeNull();
+  });
+
+  it('is best-effort: no dbRequest, undefined cwd, null payload, or bad shapes all resolve to null', async () => {
+    await expect(resolveProjectViaDbRequest(undefined, 'E:/x')).resolves.toBeNull();
+    await expect(resolveProjectViaDbRequest(vi.fn(), undefined)).resolves.toBeNull();
+    await expect(
+      resolveProjectViaDbRequest(vi.fn().mockResolvedValue(null), 'E:/x')
+    ).resolves.toBeNull();
+    await expect(
+      resolveProjectViaDbRequest(
+        vi.fn().mockResolvedValue({ projectId: null, paths: null }),
+        'E:/x'
+      )
+    ).resolves.toBeNull();
+    await expect(
+      resolveProjectViaDbRequest(
+        vi.fn().mockResolvedValue({ paths: ['E:/x'] }),
+        'E:/x'
+      )
+    ).resolves.toBeNull();
+    await expect(
+      resolveProjectViaDbRequest(
+        vi.fn().mockResolvedValue({ projectId: 'p-1' }),
+        'E:/x'
+      )
+    ).resolves.toBeNull();
+    await expect(
+      resolveProjectViaDbRequest(vi.fn().mockRejectedValue(new Error('boom')), 'E:/x')
+    ).resolves.toBeNull();
+  });
+
+  it('filters non-string entries out of paths so callers always get a clean string[]', async () => {
+    const dbRequest = vi.fn().mockResolvedValue({
+      projectId: 'p-1',
+      paths: ['E:/a', 42, null, 'E:/b'],
+    });
+    await expect(
+      resolveProjectViaDbRequest(dbRequest, 'E:/a')
+    ).resolves.toEqual({ projectId: 'p-1', paths: ['E:/a', 'E:/b'] });
   });
 });
