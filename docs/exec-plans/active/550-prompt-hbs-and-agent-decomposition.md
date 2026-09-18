@@ -3,11 +3,38 @@
 > **Status**: In Progress (started 2026-09-19)
 > **Priority**: P1 (architecture evolution; complements plan 429 gap closure)
 > **Owner**: Mavis + 陈炫羽
+> **PR**: [#59](https://github.com/lava-chen/duya/pull/59) — covers step 1 (改造 1) plus 3a / 3b (Plan 550 step 3 partial)
+> **Worktree**: `feat/550-prompt-hbs-agent-decomposition` on `E:\Projects\duya`
 > **Related**:
 > - `docs/references/harness-comparison/prompt-and-system-prompt.md`
 > - `docs/references/harness-comparison/tool-system.md`
 > - `docs/references/harness-comparison/loop-control.md` (待办)
 > - `docs/exec-plans/active/429-harness-gap-closure.md` (并行 P0/P1 工程)
+
+## Progress (2026-09-19, end of session)
+
+| Step | Commit | Status |
+|---|---|---|
+| 1a Handlebars renderer + asset loader | `8f9ebb7d` | ✅ done |
+| 1b HbsPromptSystem + general/system-prompt.md.hbs | `3006d3fb` | ✅ done |
+| 1b Switch generalConfig to hbs | `dad3200e` | ✅ done |
+| 1c 5 dynamic sections migrated | `1a9d51e3` | ✅ done |
+| 1d Drop dead TS imports from generalConfig | `1e86dd49` | ✅ done |
+| 3a ToolDependencyDeclaration schema | `d92c1dce` | ✅ done |
+| 3b DependencyGraphOrchestrator (topo-sort) | `96968f11` | ✅ done |
+| **改造 2 (TurnAssembler / ToolExecutionPipeline / CompactionCoordinator / PermissionsGate / VisualAnalysis)** | — | ⏳ next session |
+| 1d-rest 8 remaining dynamic sections + gateway/code/research configs + delete `general/sections/*.ts` | — | ⏳ follow-up PR |
+| 3c StreamingToolExecutor wiring | — | ⏳ next session |
+| 3d end-to-end coverage | — | ⏳ next session |
+
+## Next-session starting points
+
+- **改造 2a**: `packages/agent/src/agent/DuyaAgent.ts:195` — extract `TurnAssembler`
+  class (~200-400 lines) by pulling `streamChat`'s turn-initialisation block.
+- **改造 3c**: `packages/agent/src/tool/StreamingToolExecutor.ts` — replace the
+  legacy batch-by-batch execution in `runBatch` with a `planExecution` +
+  wave-by-wave loop. The orchestrator is pure (3b); wiring is the only
+  remaining mechanical work.
 
 ## Background
 
