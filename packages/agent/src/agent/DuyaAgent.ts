@@ -1209,7 +1209,7 @@ export class duyaAgent implements AgentRuntime {
       //    resolution in ChatView.handleConductorChange)
       //  - widgetStyleHistory: the agent's rolling anti-slop history
       this.modeCtx = {
-        sessionId: this.sessionId ?? '',
+        sessionId: turnContext.sessionId ?? '',
         workingDirectory: this.workingDirectory ?? '',
         state: {
           conductorCanvasId: options?.conductorCanvasId,
@@ -1282,7 +1282,7 @@ export class duyaAgent implements AgentRuntime {
     }
     this.modeCoordinator =
       activeTrackerIds.size > 0
-        ? new ModeCoordinator(modeTrackerEngine, this.sessionId ?? '', activeTrackerIds)
+        ? new ModeCoordinator(modeTrackerEngine, turnContext.sessionId ?? '', activeTrackerIds)
         : undefined;
 
     // Plan 413c: restore persisted tracker state for this session before any
