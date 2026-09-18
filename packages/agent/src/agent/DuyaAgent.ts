@@ -830,6 +830,13 @@ export class duyaAgent implements AgentRuntime {
     // Plan 498: per-turn approval-ledger consume + always-allow grants.
     this._consumeApprovedEffect = options?.consumeApprovedEffect;
     this._turnAlwaysAllowTools = new Set(options?.approvedAlwaysAllowTools ?? []);
+    // Plan 550 step 2a-5: assemble the per-turn TurnContext once at
+    // the top of every streamChat call. The current generator body
+    // still reads from the local fields above; follow-up commits
+    // replace those reads with `turnContext.xxx` one field at a time
+    // so the diff stays reviewable. Until then the local store is
+    // the source of truth.
+    const turnContext = this.assembleTurnContext(options, prompt);
     logger.info(`[Agent] streamChat started, sessionId=${this.sessionId}, model=${this._model}, provider=${this.provider}, turnId=${this.currentTurnId ?? 'null'}`);
 
     // Plan 426 follow-up: configured [hooks] events dispatched outside the
