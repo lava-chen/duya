@@ -265,4 +265,239 @@ describe.skipIf(!nativeSqliteAvailable)('runConductorUndo / runConductorRedo (pl
       expect(result.inverted).toEqual({});
     });
   });
+
+  // Phase 3.7.b' ports: element.create_native / connector.create /
+  // element.update_content / element.reparent DML moves from the legacy
+  // IPC handler into the runConductorUndo / runConductorRedo helpers.
+  describe('Phase 3.7.b\' — native, connector, content, reparent', () => {
+    it('element.create_native undo deletes the row from conductor_elements', () => {
+      const canvas = store.createCanvas({ name: 'C' });
+      const elementId = 'native-1';
+      db.prepare(
+        `INSERT INTO conductor_elements (id, canvas_id, element_kind, native_kind, position, config, viz_spec, source_code, state, data_version, permissions, metadata, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 'idle', 1, ?, ?, ?, ?)`,
+      ).run(
+        elementId,
+        canvas.id,
+        'native/document',
+        'document',
+        JSON.stringify({ x: 0, y: 0, w: 4, h: 3, zIndex: 1, rotation: 0 }),
+        JSON.stringify({ title: 'Doc' }),
+        JSON.stringify({ agentCanRead: true, agentCanWrite: true, agentCanDelete: true }),
+        JSON.stringify({ label: 'document', tags: [], createdBy: 'user', parentId: null, childIds: [] }),
+        1,
+        1,
+      );
+      store.createAction({
+        canvasId: canvas.id,
+        widgetId: elementId,
+        actionType: 'element.create_native',
+        actor: 'user',
+        resultPatch: { element: { id: elementId, elementKind: 'native/document' } },
+      });
+
+      expect(store.getElement(elementId)).not.toBeNull();
+      const undo = runConductorUndo(db, canvas.id, patchSink);
+      expect(undo.success).toBe(true);
+      expect(undo.inverted).toEqual({ elementId });
+      expect(store.getElement(elementId)).toBeNull();
+    });
+
+    it('element.create_native redo re-inserts the row from patch.element', () => {
+      const canvas = store.createCanvas({ name: 'C' });
+      const elementId = 'native-2';
+      const createdAt = 1700000000000;
+      store.createAction({
+        canvasId: canvas.id,
+        widgetId: elementId,
+        actionType: 'element.create_native',
+        actor: 'user',
+        resultPatch: {
+          element: {
+            id: elementId,
+            elementKind: 'native/document',
+            nativeKind: 'document',
+            position: { x: 1, y: 2, w: 4, h: 3, zIndex: 5, rotation: 0 },
+            config: { title: 'Hello' },
+            permissions: { agentCanRead: true, agentCanWrite: true, agentCanDelete: true },
+            metadata: { label: 'document', tags: [], createdBy: 'user', parentId: null, childIds: [] },
+            createdAt,
+          },
+        },
+      });
+
+      // Undo first so redo has something to replay.
+      runConductorUndo(db, canvas.id);
+      const redo = runConductorRedo(db, canvas.id, patchSink);
+      expect(redo.success).toBe(true);
+      const row = store.getElement(elementId);
+      expect(row).not.toBeNull();
+      expect(row?.elementKind).toBe('native/document');
+      expect(row?.position).toEqual({ x: 1, y: 2, w: 4, h: 3, zIndex: 5, rotation: 0 });
+    });
+
+    it('connector.create undo deletes the connector row (kind=native/connector)', () => {
+      const canvas = store.createCanvas({ name: 'C' });
+      const connectorId = 'conn-1';
+      db.prepare(
+        `INSERT INTO conductor_elements (id, canvas_id, element_kind, native_kind, position, config, viz_spec, source_code, state, data_version, permissions, metadata, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 'idle', 1, ?, ?, ?, ?)`,
+      ).run(
+        connectorId,
+        canvas.id,
+        'native/connector',
+        'connector',
+        JSON.stringify({ x: 0, y: 0, w: 0, h: 0, zIndex: 10, rotation: 0 }),
+        JSON.stringify({ source: 'a', target: 'b', curvature: 0.4 }),
+        JSON.stringify({ agentCanRead: true, agentCanWrite: true, agentCanDelete: true }),
+        JSON.stringify({ label: 'Connector', tags: [], createdBy: 'user', parentId: null, childIds: [] }),
+        1,
+        1,
+      );
+      store.createAction({
+        canvasId: canvas.id,
+        widgetId: connectorId,
+        actionType: 'connector.create',
+        actor: 'user',
+        resultPatch: { element: { id: connectorId, elementKind: 'native/connector' } },
+      });
+
+      const undo = runConductorUndo(db, canvas.id);
+      expect(undo.success).toBe(true);
+      expect(store.getElement(connectorId)).toBeNull();
+    });
+
+    it('connector.create redo re-inserts the connector row', () => {
+      const canvas = store.createCanvas({ name: 'C' });
+      const connectorId = 'conn-2';
+      store.createAction({
+        canvasId: canvas.id,
+        widgetId: connectorId,
+        actionType: 'connector.create',
+        actor: 'user',
+        resultPatch: {
+          element: {
+            id: connectorId,
+            elementKind: 'native/connector',
+            nativeKind: 'connector',
+            position: { x: 0, y: 0, w: 0, h: 0, zIndex: 0, rotation: 0 },
+            config: { source: 'a', target: 'b', curvature: 0.5 },
+            permissions: { agentCanRead: true, agentCanWrite: true, agentCanDelete: true },
+            metadata: { label: 'Connector', tags: [], createdBy: 'user', parentId: null, childIds: [] },
+            createdAt: 1700000000000,
+          },
+        },
+      });
+
+      // Undo first so redo has something to replay.
+      runConductorUndo(db, canvas.id);
+      const redo = runConductorRedo(db, canvas.id);
+      expect(redo.success).toBe(true);
+      const row = store.getElement(connectorId);
+      expect(row).not.toBeNull();
+      expect(row?.elementKind).toBe('native/connector');
+    });
+
+    it('element.update_content undo restores prevConfig', () => {
+      const canvas = store.createCanvas({ name: 'C' });
+      const elem = store.createElement({
+        canvasId: canvas.id,
+        elementKind: 'native/sticky',
+        config: { title: 'Hello' },
+      });
+      store.createAction({
+        canvasId: canvas.id,
+        widgetId: elem.id,
+        actionType: 'element.update_content',
+        actor: 'user',
+        resultPatch: {
+          config: { title: 'World' },
+          prevConfig: { title: 'Hello' },
+        },
+      });
+
+      runConductorUndo(db, canvas.id);
+      const restored = store.getElement(elem.id);
+      expect(restored?.config).toEqual({ title: 'Hello' });
+    });
+
+    it('element.update_content redo re-applies nextConfig', () => {
+      const canvas = store.createCanvas({ name: 'C' });
+      const elem = store.createElement({
+        canvasId: canvas.id,
+        elementKind: 'native/sticky',
+        config: { title: 'Hello' },
+      });
+      store.createAction({
+        canvasId: canvas.id,
+        widgetId: elem.id,
+        actionType: 'element.update_content',
+        actor: 'user',
+        resultPatch: {
+          config: { title: 'World' },
+          prevConfig: { title: 'Hello' },
+        },
+      });
+
+      runConductorUndo(db, canvas.id);
+      runConductorRedo(db, canvas.id);
+      const restored = store.getElement(elem.id);
+      expect(restored?.config).toEqual({ title: 'World' });
+    });
+
+    it('element.reparent undo restores the previous parentId', () => {
+      const canvas = store.createCanvas({ name: 'C' });
+      const parent = store.createElement({
+        canvasId: canvas.id,
+        elementKind: 'native/group',
+      });
+      const child = store.createElement({
+        canvasId: canvas.id,
+        elementKind: 'native/sticky',
+        metadata: { label: 'sticky', tags: [], createdBy: 'user', parentId: parent.id, childIds: [] },
+      });
+      store.createAction({
+        canvasId: canvas.id,
+        widgetId: child.id,
+        actionType: 'element.reparent',
+        actor: 'user',
+        resultPatch: {
+          metadata: { parentId: null },
+          prevMetadata: { parentId: parent.id },
+        },
+      });
+
+      runConductorUndo(db, canvas.id);
+      const restored = store.getElement(child.id);
+      expect((restored?.metadata as any).parentId).toBe(parent.id);
+    });
+
+    it('element.reparent redo re-applies the new parentId (null)', () => {
+      const canvas = store.createCanvas({ name: 'C' });
+      const parent = store.createElement({
+        canvasId: canvas.id,
+        elementKind: 'native/group',
+      });
+      const child = store.createElement({
+        canvasId: canvas.id,
+        elementKind: 'native/sticky',
+        metadata: { label: 'sticky', tags: [], createdBy: 'user', parentId: parent.id, childIds: [] },
+      });
+      store.createAction({
+        canvasId: canvas.id,
+        widgetId: child.id,
+        actionType: 'element.reparent',
+        actor: 'user',
+        resultPatch: {
+          metadata: { parentId: null },
+          prevMetadata: { parentId: parent.id },
+        },
+      });
+
+      runConductorUndo(db, canvas.id);
+      runConductorRedo(db, canvas.id);
+      const restored = store.getElement(child.id);
+      expect((restored?.metadata as any).parentId).toBeNull();
+    });
+  });
 });

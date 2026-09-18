@@ -98,6 +98,10 @@ describe('invertPatch', () => {
   });
 
   describe('native and connector actions (Phase 3.7 additions)', () => {
+    // Patch shape must match what conductor:action writes in db-handlers.ts.
+    // For native/connector create the row is stored under patch.element.
+    // For update_content, prevConfig is the full previous config JSON.
+    // For reparent, prevMetadata.parentId is the previous parentId.
     it('element.create_native returns elementId for the undo branch', () => {
       const out = invertPatch({ element: { id: 'n1', elementKind: 'native/document' } }, 'element.create_native');
       expect(out).toEqual({ elementId: 'n1' });
@@ -108,34 +112,45 @@ describe('invertPatch', () => {
       expect(out).toEqual({ elementId: undefined });
     });
 
-    it('connector.create returns connectorId', () => {
-      const out = invertPatch({ connector: { id: 'c1' } }, 'connector.create');
-      expect(out).toEqual({ connectorId: 'c1' });
+    it('connector.create returns elementId (rows live in conductor_elements)', () => {
+      const out = invertPatch({ element: { id: 'c1', elementKind: 'native/connector' } }, 'connector.create');
+      expect(out).toEqual({ elementId: 'c1' });
     });
 
-    it('connector.create handles missing connector gracefully', () => {
+    it('connector.create handles missing element gracefully', () => {
       const out = invertPatch({}, 'connector.create');
-      expect(out).toEqual({ connectorId: undefined });
+      expect(out).toEqual({ elementId: undefined });
     });
 
-    it('element.update_content returns prevContent', () => {
-      const out = invertPatch({ content: 'new', prevContent: 'old' }, 'element.update_content');
-      expect(out).toEqual({ content: 'old' });
+    it('element.update_content returns prevConfig as content for undo UPDATE', () => {
+      const prevConfig = { title: 'Old Title' };
+      const nextConfig = { title: 'New Title' };
+      const out = invertPatch({ config: nextConfig, prevConfig }, 'element.update_content');
+      expect(out).toEqual({ content: prevConfig });
     });
 
-    it('element.update_content falls back to current content when prevContent missing', () => {
-      const out = invertPatch({ content: 'same' }, 'element.update_content');
-      expect(out).toEqual({ content: 'same' });
+    it('element.update_content falls back to current config when prevConfig missing', () => {
+      const cfg = { title: 'Same' };
+      const out = invertPatch({ config: cfg }, 'element.update_content');
+      expect(out).toEqual({ content: cfg });
     });
 
-    it('element.reparent returns prevParentId', () => {
-      const out = invertPatch({ parentId: 'p2', prevParentId: 'p1' }, 'element.reparent');
+    it('element.reparent returns prevMetadata.parentId', () => {
+      const out = invertPatch(
+        { metadata: { parentId: 'p2' }, prevMetadata: { parentId: 'p1' } },
+        'element.reparent',
+      );
       expect(out).toEqual({ parentId: 'p1' });
     });
 
-    it('element.reparent falls back to current parentId', () => {
-      const out = invertPatch({ parentId: 'p1' }, 'element.reparent');
+    it('element.reparent falls back to current metadata.parentId when prevMetadata missing', () => {
+      const out = invertPatch({ metadata: { parentId: 'p1' } }, 'element.reparent');
       expect(out).toEqual({ parentId: 'p1' });
+    });
+
+    it('element.reparent tolerates metadata.parentId missing (returns undefined)', () => {
+      const out = invertPatch({ metadata: {}, prevMetadata: {} }, 'element.reparent');
+      expect(out).toEqual({ parentId: undefined });
     });
   });
 

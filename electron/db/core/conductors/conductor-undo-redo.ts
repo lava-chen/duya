@@ -10,11 +10,10 @@
  * transaction, and emits the patch via the hook. No Electron imports.
  *
  * Coverage: every action_type handled by `conductor:undo` and
- * `conductor:redo` in the legacy db-handlers.ts path. Phase 3.7.a added
- * invertPatch branches for element.create_native / connector.create /
- * element.update_content / element.reparent, but the IPC handler still
- * had no DML for them — they are no-ops here until Phase 3.7.b' ports
- * them.
+ * `conductor:redo` in the legacy db-handlers.ts path. Phase 3.7.b'
+ * added DML for element.create_native / connector.create /
+ * element.update_content / element.reparent that previously no-op'd
+ * here while still being inline in the action handler.
  */
 
 import { invertPatch } from './invert-patch';
@@ -251,13 +250,52 @@ export function runConductorUndo(
       case 'element.arrange': {
         break;
       }
-      // Phase 3.7.a added invertPatch branches for these action_types but
-      // the corresponding undo DML is still wired in the IPC handler.
-      // No-op here until Phase 3.7.b' ports them.
-      case 'element.create_native':
-      case 'connector.create':
-      case 'element.update_content':
-      case 'element.reparent':
+      // Phase 3.7.b' ports the four action_types whose forward DML writes
+      // to conductor_elements (native nodes, connectors, content merge,
+      // reparent) into the undo path. The redo path lives further down.
+      case 'element.create_native': {
+        const nativeId = inverted.elementId as string | undefined;
+        if (nativeId) {
+          d.prepare('DELETE FROM conductor_elements WHERE id = ?').run(nativeId);
+        }
+        break;
+      }
+      case 'connector.create': {
+        const connectorId = inverted.elementId as string | undefined;
+        if (connectorId) {
+          d.prepare('DELETE FROM conductor_elements WHERE id = ?').run(connectorId);
+        }
+        break;
+      }
+      case 'element.update_content': {
+        const prevConfig = inverted.content as Record<string, unknown> | undefined;
+        if (widgetId && prevConfig !== undefined) {
+          d.prepare('UPDATE conductor_elements SET config = ?, updated_at = ? WHERE id = ?').run(
+            JSON.stringify(prevConfig),
+            now,
+            widgetId,
+          );
+        }
+        break;
+      }
+      case 'element.reparent': {
+        const prevParentId = inverted.parentId as string | null | undefined;
+        if (widgetId) {
+          const existing = d
+            .prepare('SELECT metadata FROM conductor_elements WHERE id = ? AND canvas_id = ?')
+            .get(widgetId, canvasId) as { metadata: string } | undefined;
+          if (existing) {
+            const meta = JSON.parse(existing.metadata);
+            meta.parentId = prevParentId ?? null;
+            d.prepare('UPDATE conductor_elements SET metadata = ?, updated_at = ? WHERE id = ?').run(
+              JSON.stringify(meta),
+              now,
+              widgetId,
+            );
+          }
+        }
+        break;
+      }
       default:
         break;
     }
@@ -509,13 +547,66 @@ export function runConductorRedo(
       case 'element.arrange': {
         break;
       }
-      // Phase 3.7.a added invertPatch branches for these action_types but
-      // the corresponding redo DML is still wired in the IPC handler.
-      // No-op here until Phase 3.7.b' ports them.
+      // Phase 3.7.b' redo DML — re-applies the forward action's effect.
+      // element.create_native / connector.create both INSERT a fresh row
+      // into conductor_elements from (patch).element (connectors share the
+      // same table with element_kind=native/connector).
+      // Placeholder count (10 `?` after the inline NULL/NULL/'idle'/1):
+      //   element.id, canvasId, element.elementKind, element.nativeKind,
+      //   JSON.stringify(position), JSON.stringify(config),
+      //   JSON.stringify(permissions), JSON.stringify(metadata),
+      //   element.createdAt ?? now, now (updated_at)
       case 'element.create_native':
-      case 'connector.create':
-      case 'element.update_content':
-      case 'element.reparent':
+      case 'connector.create': {
+        const element = (patch as any).element;
+        if (element) {
+          d.prepare(
+            `INSERT INTO conductor_elements (id, canvas_id, element_kind, native_kind, position, config, viz_spec, source_code, state, data_version, permissions, metadata, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 'idle', 1, ?, ?, ?, ?)`,
+          ).run(
+            element.id,
+            canvasId,
+            element.elementKind,
+            element.nativeKind ?? null,
+            JSON.stringify(element.position),
+            JSON.stringify(element.config),
+            JSON.stringify(element.permissions),
+            JSON.stringify(element.metadata),
+            element.createdAt ?? now,
+            now,
+          );
+        }
+        break;
+      }
+      case 'element.update_content': {
+        const nextConfig = (patch as any).config as Record<string, unknown> | undefined;
+        if (widgetId && nextConfig !== undefined) {
+          d.prepare('UPDATE conductor_elements SET config = ?, updated_at = ? WHERE id = ?').run(
+            JSON.stringify(nextConfig),
+            now,
+            widgetId,
+          );
+        }
+        break;
+      }
+      case 'element.reparent': {
+        if (widgetId) {
+          const existing = d
+            .prepare('SELECT metadata FROM conductor_elements WHERE id = ? AND canvas_id = ?')
+            .get(widgetId, canvasId) as { metadata: string } | undefined;
+          if (existing) {
+            const meta = JSON.parse(existing.metadata);
+            const newParentId = ((patch as any).metadata?.parentId ?? null) as string | null;
+            meta.parentId = newParentId;
+            d.prepare('UPDATE conductor_elements SET metadata = ?, updated_at = ? WHERE id = ?').run(
+              JSON.stringify(meta),
+              now,
+              widgetId,
+            );
+          }
+        }
+        break;
+      }
       default:
         break;
     }
