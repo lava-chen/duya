@@ -1325,7 +1325,7 @@ export class duyaAgent implements AgentRuntime {
     // and are never delegated.
     const loopHooks = new LoopHookBus();
     for (const registration of createBuiltinLoopHooks({
-      sessionId: this.sessionId,
+      sessionId: turnContext.sessionId ?? undefined,
       todoGateEnabled: options?.todoGate?.enabled ?? true,
       antiDeadLoop: {
         enabled: deadLoopEnabled,
@@ -1369,7 +1369,7 @@ export class duyaAgent implements AgentRuntime {
     }
     // Shared snapshot builder for loop-hook dispatches.
     const buildHookCtx = (): Omit<LoopHookDispatchContext, 'event'> => ({
-      sessionId: this.sessionId,
+      sessionId: turnContext.sessionId ?? undefined,
       turnCount,
       seqIndex,
       messages,
