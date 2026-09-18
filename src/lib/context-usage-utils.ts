@@ -500,9 +500,15 @@ export function normalizeAndBuildGrid(
         category: cat,
         // Full cell if tokensPerSquare >= 1 cell's worth (1 / TOTAL_SQUARES
         // of the context window). The very last cell of a category's run
-        // may be fractional.
+        // may be fractional: encode the leftover tokens as a 0..1
+        // fraction of one cell. Previous formula
+        //   tokens - Math.floor(tokens - 1)
+        // simplified to 1 for integer tokens and clamped to 1 for
+        // fractional ones, so the partial cell always rendered as full —
+        // a category with 5 squares + 13 tokens would still show all 5
+        // squares at 100%.
         fullness: isLast
-          ? Math.min(1, tokensPerSquare * squares - Math.floor(tokensPerSquare * squares - 1))
+          ? Math.max(0, Math.min(1, tokensPerSquare - Math.floor(tokensPerSquare)))
           : 1,
       });
     }
