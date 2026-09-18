@@ -43,7 +43,7 @@ export interface TurnId {
  * three separate setters.
  */
 export interface MentionInjections {
-  readonly provider?: string;
+  readonly provider?: string | string[];
   readonly skills: readonly string[];
   readonly plugins: readonly string[];
   /** Already-resolved render blocks; the assembler hands them straight to the model. */
@@ -56,7 +56,10 @@ export interface MentionInjections {
  */
 export interface ApprovalLedger {
   /** Optional callback to consume one pre-approved card. */
-  readonly consumeApprovedEffect?: () => void;
+  readonly consumeApprovedEffect?: (
+    toolName: string,
+    toolInput?: Record<string, unknown>,
+  ) => Promise<boolean>;
   /** Set of tool names the user pre-approved for this turn only. */
   readonly alwaysAllowTools: ReadonlySet<string>;
 }
