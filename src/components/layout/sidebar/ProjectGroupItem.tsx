@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { useConversationStore, type Thread, type ProjectGroup } from "@/stores/conversation-store";
-import { ThreadListItem } from "./ThreadListItem";
+import { ThreadListItem } from "../../shared/ThreadListItem";
 import { FolderIcon, FolderOpenIcon, ArchiveIcon, DotsThreeIcon, FolderOpenIcon as OpenFolderIcon, CopyIcon, PlusIcon, CaretRightIcon, XIcon } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
 import { Button } from "@/components/ui/Button";

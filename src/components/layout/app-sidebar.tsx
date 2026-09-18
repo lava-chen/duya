@@ -43,7 +43,7 @@ import {
 import { useConversationStore, type Thread, type ProjectGroup, type ViewType, type SettingsTab, type ProjectSortBy, type ProjectGroupBy } from "@/stores/conversation-store";
 import { useSearchPaletteStore } from "@/stores/search-palette-store";
 import { ProjectGroupItem } from "./sidebar/ProjectGroupItem";
-import { ThreadListItem } from "./sidebar/ThreadListItem";
+import { ThreadListItem } from "../shared/ThreadListItem";
 import { SidebarSectionItem, type SectionKind } from "./sidebar/SidebarSectionItem";
 import {
   bucketThreadsByKind,

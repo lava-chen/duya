@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { PageFrame, PageHeader } from "@/components/ui/page";
 import { DropdownMenu, type MenuAction } from "@/components/ui/DropdownMenu";
+import { ThreadListItem } from "@/components/shared/ThreadListItem";
 import {
   CreateProjectDialog,
   PROJECT_ICON_REGISTRY,
@@ -107,6 +108,7 @@ export function ProjectsView() {
   const { projects, loadProjects, invalidate } = useProjectsStore();
   const createThread = useConversationStore((s) => s.createThread);
   const setActiveThread = useConversationStore((s) => s.setActiveThread);
+  const activeThreadId = useConversationStore((s) => s.activeThreadId);
   const archiveThread = useConversationStore((s) => s.archiveThread);
   const setCurrentView = useConversationStore((s) => s.setCurrentView);
 
@@ -640,7 +642,11 @@ export function ProjectsView() {
                     </div>
                   ) : (
                     visibleSessions.map((session) => (
-                      <SessionRowItem key={session.id} thread={session} />
+                      <ThreadListItem
+                        key={session.id}
+                        thread={session}
+                        isActive={session.id === activeThreadId}
+                      />
                     ))
                   )}
                   {row.sessions.length > SESSION_PREVIEW && !showAll && (
@@ -732,31 +738,4 @@ export function ProjectsView() {
       setCurrentView("chat");
     }
   }
-}
-
-function SessionRowItem({ thread }: SessionRowItemProps) {
-  const setActiveThread = useConversationStore((s) => s.setActiveThread);
-  const setCurrentView = useConversationStore((s) => s.setCurrentView);
-  return (
-    <button
-      type="button"
-      onClick={() => {
-        setActiveThread(thread.id);
-        setCurrentView("chat");
-      }}
-      className="w-full flex items-center gap-2 px-4 py-2 text-left transition-colors hover:bg-[var(--surface-hover)]"
-      style={{ paddingLeft: 58 }}
-    >
-      <span className="text-xs flex-1 truncate" style={{ color: "var(--text)" }} title={thread.title}>
-        {thread.title || thread.id}
-      </span>
-      <span className="text-xs shrink-0" style={{ color: "var(--muted)" }}>
-        {formatTimeAgo(thread.updatedAt)}
-      </span>
-    </button>
-  );
-}
-
-interface SessionRowItemProps {
-  thread: Thread;
 }
