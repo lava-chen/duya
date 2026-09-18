@@ -856,7 +856,7 @@ export class duyaAgent implements AgentRuntime {
     const configHooks = new ConfigHooksRunner({
       cwd: this.workingDirectory ?? process.cwd(),
       vars: {
-        sessionId: this.sessionId ?? '',
+        sessionId: turnContext.sessionId ?? '',
         cwd: this.workingDirectory ?? '',
         prompt: promptText,
       },
@@ -868,14 +868,14 @@ export class duyaAgent implements AgentRuntime {
           data: {
             type: 'hook_invoked',
             hookEvent,
-            sessionId: this.sessionId ?? '',
+            sessionId: turnContext.sessionId ?? '',
           },
         });
         // Plan 437: also persist a Message row for this hook event so
         // reload / cross-device sync see hook rows in the message flow.
         // The renderer reads them back via MessageItem.messageToActionItems
         // using msgType === 'hook_invocation'.
-        this.pendingHookMessages.push(buildHookMessage(hookEvent, this.sessionId ?? ''));
+        this.pendingHookMessages.push(buildHookMessage(hookEvent, turnContext.sessionId ?? ''));
       },
     });
     const flushPendingHookEvents = (): SSEEvent[] => {
@@ -916,7 +916,7 @@ export class duyaAgent implements AgentRuntime {
     // Without this, the memory-RAG hook output is logged and discarded 鈥?    // the model never sees the retrieved memories on its first turn.
     const submitCtx = yield* dispatchHooks(
       'UserPromptSubmit',
-      { session_id: this.sessionId ?? '', cwd: this.workingDirectory ?? '', hook_event_name: 'UserPromptSubmit', prompt: promptText },
+      { session_id: turnContext.sessionId ?? '', cwd: this.workingDirectory ?? '', hook_event_name: 'UserPromptSubmit', prompt: promptText },
     );
     if (submitCtx && submitCtx.contexts.length > 0) {
       this.promptContexts = submitCtx.contexts.slice();
@@ -930,7 +930,7 @@ export class duyaAgent implements AgentRuntime {
     // since this sits ahead of the mode dispatch below).
     const startCtx = yield* dispatchHooks(
       'SessionStart',
-      { session_id: this.sessionId ?? '', cwd: this.workingDirectory ?? '', hook_event_name: 'SessionStart', source: 'startup' },
+      { session_id: turnContext.sessionId ?? '', cwd: this.workingDirectory ?? '', hook_event_name: 'SessionStart', source: 'startup' },
     );
     if (startCtx && startCtx.contexts.length > 0) {
       logger.info(`[Hooks] SessionStart produced ${startCtx.contexts.length} context line(s)`);
