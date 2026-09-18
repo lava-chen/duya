@@ -215,8 +215,13 @@ export class CliApiClient {
       const res = await this.send(url, lookup.runtime.token, timeout);
 
       if (res.rawError === 'timeout') {
+        // Timeout means we did NOT get an authoritative response. Treat
+        // the desktop as not-reachable so `doctor` short-circuits the
+        // dependent checks; otherwise a slow-but-alive server surfaces
+        // as "reachable" and downstream probes hit real `client.get`
+        // calls that re-time out on every check.
         return {
-          reachable: true,
+          reachable: false,
           statusCode: 0,
           error: 'timeout',
           message: 'Request timed out. The DUYA app did not respond in time.',
