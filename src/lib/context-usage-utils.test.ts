@@ -49,6 +49,10 @@ describe('normalizeInputTokens (cache-convention guard)', () => {
     expect(normalizeInputTokens(1000, 800, 0)).toBe(1000);
     expect(normalizeInputTokens(1000, 0, 0)).toBe(1000);
   });
+
+  it('returns 0 for all-zeros (no-op request)', () => {
+    expect(normalizeInputTokens(0, 0, 0)).toBe(0);
+  });
 });
 
 describe('formatTokensPi (pi-style compact formatting)', () => {
@@ -78,8 +82,17 @@ describe('formatTokensPi (pi-style compact formatting)', () => {
 describe('estimateCost', () => {
   it('computes Claude-style cost from rates', () => {
     // input $2.5/M, output $10/M, cache read $0.625/M, cache write $1.25/M
-    const cost = estimateCost(1000000, 100000, 2000000, 0);
-    expect(cost).toBeCloseTo(2.5 + 1.0 + 1.25, 6);
+    // estimateCost itself does NOT call normalizeInputTokens — the caller is
+    // responsible for passing the already-normalized totalInput. Here totalInput
+    // is 1M (already post-normalize), with 100k output and 2M cache reads.
+    // cost = 2.5*1 + 10*0.1 + 0.625*2 + 1.25*0 = 2.5+1.0+1.25 = 4.75
+    const cost = estimateCost(1000000, 100000, 2000000, 0, {
+      inputPerMillion: 2.5,
+      outputPerMillion: 10,
+      cacheReadPerMillion: 0.625,
+      cacheWritePerMillion: 1.25,
+    });
+    expect(cost).toBeCloseTo(4.75, 6);
   });
 
   it('returns 0 for no usage', () => {

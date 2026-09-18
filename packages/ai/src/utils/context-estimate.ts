@@ -188,9 +188,13 @@ export function estimateMessageTokens(message: {
  * Anthropic reports `input_tokens` EXCLUDING cache read/write; many
  * OpenAI-compatible gateways map `prompt_tokens` (which INCLUDES cached
  * tokens) onto the same field names, so field names alone cannot
- * distinguish the conventions. Heuristic (matches pi / legacy renderer):
- * if any cache counter exceeds raw input, the input cannot already contain
- * it — add all cache tokens back; otherwise assume they are included.
+ * distinguish the conventions. Heuristic: if any cache counter is at least
+ * as large as raw input, the input cannot already contain it — add all
+ * cache tokens back; otherwise assume they are included.
+ *
+ * The `>=` guard (not `>`) also catches the pure-cache-write first request
+ * where input=0 and cache_creation>0: the 0>=0 branch adds cache_write
+ * back rather than returning 0.
  *
  * The persisted turn-cumulative blocks carry `last_call` (the final single
  * request); prefer it — the cumulative sum inflates tool-heavy turns ~N×.
@@ -205,21 +209,25 @@ export function normalizePromptTokens(
   const cacheHit = src.cache_hit_tokens || 0;
   const cacheWrite = src.cache_creation_tokens || 0;
   const prompt =
-    cacheHit > input || cacheWrite > input ? input + cacheHit + cacheWrite : input;
+    cacheHit >= input || cacheWrite >= input
+      ? input + cacheHit + cacheWrite
+      : input;
   return { prompt, output };
 }
 
 /** True when a usage block reports output but ALL input-side counters are
- *  zero. Some gateways omit the cached volume entirely on fully-cached
- *  rounds, so the block cannot be trusted as a context-size anchor. */
+ *  zero. "Under-reported" means the model was called with a meaningful
+ *  context that the block failed to record — it should not be used as an
+ *  anchor so the ring collapses. If ANY cache counter (cache_hit or
+ *  cache_write) is non-zero, the round carried real content and is a valid
+ *  anchor even when raw input is 0 (e.g. a pure-cache-read response). */
 function isUnderReportedUsage(usage: ContextUsageBlock): boolean {
   const src = usage.last_call ?? usage;
-  return (
-    (src.input_tokens || 0) === 0 &&
-    (src.cache_hit_tokens || 0) === 0 &&
-    (src.cache_creation_tokens || 0) === 0 &&
-    (src.output_tokens || 0) > 0
-  );
+  const input = src.input_tokens || 0;
+  const cacheHit = src.cache_hit_tokens || 0;
+  const cacheWrite = src.cache_creation_tokens || 0;
+  const output = src.output_tokens || 0;
+  return input === 0 && !cacheHit && !cacheWrite && output > 0;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
