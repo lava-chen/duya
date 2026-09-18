@@ -26,6 +26,9 @@ const storeMocks = vi.hoisted(() => ({
   setActiveThread: vi.fn(),
   deleteThread: vi.fn(),
   archiveThread: vi.fn(),
+  // Plan 549 (Track B): unarchiveThread wires through the same store
+  // selector pattern as archiveThread.
+  unarchiveThread: vi.fn().mockResolvedValue(undefined),
   updateThreadTitle: vi.fn(),
   setThreadPinned: vi.fn(),
 }));
@@ -227,6 +230,77 @@ describe('ThreadListItem awaiting-input pill (Plan 516)', () => {
       streamMocks.authListeners[0]({ connectorId: 'github' });
     });
     expect(screen.getByText('bot.contactStatus.awaitingAuth')).toBeTruthy();
+  });
+});
+
+describe('ThreadListItem archive lifecycle (Plan 549)'  , () => {
+  beforeEach(() => {
+    storeMocks.archiveThread.mockClear();
+    storeMocks.unarchiveThread.mockClear();
+  });
+
+  it('shows unarchive (not archive) when the thread is already archived', () => {
+    const twoDaysAgo = Date.now() - 2 * 24 * 60 * 60 * 1000;
+    render(
+      <ThreadListItem
+        thread={makeThread({ archivedAt: twoDaysAgo })}
+        isActive={false}
+      />,
+    );
+    openMenu();
+    expect(screen.getByText('thread.unarchiveThread')).toBeTruthy();
+    expect(screen.queryByText('thread.archiveThread')).toBeNull();
+  });
+
+  it('shows archive (not unarchive) for an active thread', () => {
+    render(
+      <ThreadListItem
+        thread={makeThread({ archivedAt: null })}
+        isActive={false}
+      />,
+    );
+    openMenu();
+    expect(screen.getByText('thread.archiveThread')).toBeTruthy();
+    expect(screen.queryByText('thread.unarchiveThread')).toBeNull();
+  });
+
+  it('unarchive item invokes store.unarchiveThread with the thread id', async () => {
+    render(
+      <ThreadListItem
+        thread={makeThread({ archivedAt: Date.now() - 1000 })}
+        isActive={false}
+      />,
+    );
+    openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByText('thread.unarchiveThread'));
+    });
+    expect(storeMocks.unarchiveThread).toHaveBeenCalledWith('s-1');
+    expect(storeMocks.archiveThread).not.toHaveBeenCalled();
+  });
+
+  it('archived row carries the "archived" CSS class', () => {
+    const { container } = render(
+      <ThreadListItem
+        thread={makeThread({ archivedAt: Date.now() - 1000 })}
+        isActive={false}
+      />,
+    );
+    const item = container.querySelector('.thread-item');
+    expect(item).toBeTruthy();
+    expect(item!.className).toContain('archived');
+  });
+
+  it('active row does NOT carry the "archived" CSS class', () => {
+    const { container } = render(
+      <ThreadListItem
+        thread={makeThread({ archivedAt: null })}
+        isActive={false}
+      />,
+    );
+    const item = container.querySelector('.thread-item');
+    expect(item).toBeTruthy();
+    expect(item!.className).not.toContain('archived');
   });
 });
 

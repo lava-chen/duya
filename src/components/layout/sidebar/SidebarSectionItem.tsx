@@ -20,7 +20,7 @@ import {
   type IconProps,
 } from '@/components/icons';
 
-export type SectionKind = 'project' | 'cron' | 'gateway' | 'wakeup' | 'pinned' | 'user' | 'bot' | 'room';
+export type SectionKind = 'project' | 'cron' | 'gateway' | 'wakeup' | 'pinned' | 'user' | 'bot' | 'room' | 'archived';
 
 export interface SidebarSectionItemProps {
   id: string;

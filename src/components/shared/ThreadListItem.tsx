@@ -49,6 +49,10 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
   const setActiveThread = useConversationStore((s) => s.setActiveThread);
   const deleteThread = useConversationStore((s) => s.deleteThread);
   const archiveThread = useConversationStore((s) => s.archiveThread);
+  // Plan 549 (Track B): unarchive -- reverse the rename, restore the
+  // session to the active list. The store action drops the row from
+  // archivedThreads optimistically and re-fetches the active list.
+  const unarchiveThread = useConversationStore((s) => s.unarchiveThread);
   const updateThreadTitle = useConversationStore((s) => s.updateThreadTitle);
   const setThreadPinned = useConversationStore((s) => s.setThreadPinned);
   const [isRenaming, setIsRenaming] = useState(false);
@@ -133,6 +137,18 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
     archiveThread(thread.id);
   }, [archiveThread, thread.id]);
 
+  // Plan 549 (Track B): unarchive -- restores the session to the active
+  // list. Symmetric to handleArchive but waits on the store promise so
+  // we can surface a failure toast in the future without changing the
+  // call site here.
+  const handleUnarchive = useCallback(async () => {
+    try {
+      await unarchiveThread(thread.id);
+    } catch (err) {
+      console.error('[ThreadListItem] unarchive failed', err);
+    }
+  }, [unarchiveThread, thread.id]);
+
   // Plan 506 (A1): export the complete rollout as one portable JSONL file.
   const handleExportRollout = useCallback(async () => {
     try {
@@ -158,6 +174,28 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
   // (icon-left, danger-tinted delete); the container + divider come from
   // DropdownMenu's own `.sidebar-project-menu*` styles. Pin label flips
   // between "固定" / "取消固定" so the user can read the next action.
+  // Plan 549 (Track B): the archive/unarchive row depends on whether
+  // the thread is currently archived. We push the active one and skip
+  // the other so the user only ever sees the next action.
+  const isArchived = thread.archivedAt != null;
+  const archiveAction: MenuAction = isArchived
+    ? {
+        kind: "action",
+        id: "unarchive",
+        label: t("thread.unarchiveThread"),
+        iconLeft: <ArchiveIcon size={14} />,
+        className: "thread-dropdown-item",
+        onSelect: handleUnarchive,
+      }
+    : {
+        kind: "action",
+        id: "archive",
+        label: t("thread.archiveThread"),
+        iconLeft: <ArchiveIcon size={14} />,
+        className: "thread-dropdown-item",
+        onSelect: handleArchive,
+      };
+
   const threadMenuItems: MenuAction[] = [
     {
       kind: "action",
@@ -191,14 +229,7 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
       className: "thread-dropdown-item",
       onSelect: () => void handleExportRollout(),
     },
-    {
-      kind: "action",
-      id: "archive",
-      label: t("thread.archiveThread"),
-      iconLeft: <ArchiveIcon size={14} />,
-      className: "thread-dropdown-item",
-      onSelect: handleArchive,
-    },
+    archiveAction,
     { kind: "divider", id: "delete-sep" },
     {
       kind: "action",
@@ -214,7 +245,7 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
   return (
     <>
       <div
-        className={`thread-item${isActive ? " active" : ""}`}
+        className={`thread-item${isActive ? " active" : ""}${isArchived ? " archived" : ""}`}
         onClick={handleClick}
         title={thread.title}
         role="button"
@@ -275,6 +306,14 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
             ) : isRunning ? (
               <span className="thread-item-running-indicator" title={t('thread.running')}>
                 <CircleNotchIcon size={14} stroke={2.5} className="animate-spin" />
+              </span>
+            ) : isArchived ? (
+              /* Plan 549 (Track B): archived rows show the archive date
+               * in place of the updated time. The CSS class flags the row
+               * for the dimmed-stylesheet override so the title text and
+               * icon are greyed out at the same time. */
+              <span className="thread-item-archived-at" title={t("thread.archivedAt")}>
+                {t("thread.archivedAt")} {formatTimeAgo(t, thread.archivedAt ?? Date.now())}
               </span>
             ) : isPinned ? (
               /* Pinned threads show a filled pin icon even when not hovered, so

@@ -343,6 +343,11 @@ export function coreSessionToIpcRow(session: CoreSession): Record<string, unknow
     pinned: ext.pinned ? 1 : 0,
     created_at: session.createdAt,
     updated_at: session.updatedAt,
+    // Plan 549 (Track A): surface archive metadata so the renderer can
+    // render the archived section without an extra IPC round-trip per row.
+    rollout_path: session.rolloutPath,
+    archived_at: session.archivedAt,
+    archived_path: session.archivedPath,
   };
 }
 

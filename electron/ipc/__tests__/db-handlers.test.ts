@@ -309,6 +309,9 @@ vi.mock('../../config/boot-config', () => ({
     needsBootWrite: false,
     needsDbRename: false,
   })),
+  resolveCoreDatabasePath: vi.fn(() => '/tmp/core.db'),
+  resolveRolloutRoot: vi.fn(() => '/tmp/rollout-root'),
+  resolveAttachmentsRoot: vi.fn(() => '/tmp/attachments-root'),
   validateDatabasePath: vi.fn(() => ({ valid: true })),
   updateDatabasePath: vi.fn(() => true),
   readBootConfig: vi.fn(() => ({})),
@@ -945,6 +948,81 @@ describe('db-handlers (core store thin forward)', () => {
       vi.mocked(getDatabase).mockReturnValue({ name: '/tmp/origin.db' } as never);
       const result = await invokeHandler('db:relocateDatabase', {}, 42);
       expect(result).toEqual({ success: false, error: 'Invalid destination directory' });
+    });
+  });
+
+  // ==================== Plan 549 Track A: archive / unarchive handlers ====================
+
+  describe('db:session:archive (Plan 549)', () => {
+    it('returns false for an unknown session id', async () => {
+      mocks.stores.sessions.get.mockReturnValueOnce(undefined);
+      const result = await invokeHandler('db:session:archive', {}, 'missing');
+      expect(result).toBe(false);
+    });
+
+    it('flips status to archived without touching files when rolloutPath is null', async () => {
+      mocks.stores.sessions.get.mockReturnValueOnce({
+        id: 's-1',
+        rolloutPath: null,
+        archivedAt: null,
+        archivedPath: null,
+      });
+      mocks.stores.sessions.getRolloutPath.mockReturnValueOnce(null);
+
+      const result = await invokeHandler('db:session:archive', {}, 's-1');
+      expect(result).toBe(true);
+      expect(mocks.stores.sessions.update).toHaveBeenCalledWith('s-1', {
+        status: 'archived',
+        archivedAt: expect.any(Number),
+        archivedPath: null,
+      });
+    });
+
+    it('is idempotent — second archive call does not re-update SQL', async () => {
+      mocks.stores.sessions.get.mockReturnValueOnce({
+        id: 's-1',
+        status: 'archived',
+        rolloutPath: 'sessions/2026/09/18/rollout-s-1.jsonl',
+        archivedAt: 100,
+        archivedPath: 'archived/2026-09-18/rollout-s-1.jsonl',
+      });
+      const result = await invokeHandler('db:session:archive', {}, 's-1');
+      expect(result).toBe(true);
+      expect(mocks.stores.sessions.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('session:unarchive (Plan 549)', () => {
+    it('returns false for an unknown session id', async () => {
+      mocks.stores.sessions.get.mockReturnValueOnce(undefined);
+      const result = await invokeHandler('session:unarchive', {}, 'missing');
+      expect(result).toBe(false);
+    });
+
+    it('flips back to active and clears archive metadata when archivedPath is null', async () => {
+      mocks.stores.sessions.get.mockReturnValueOnce({
+        id: 's-2',
+        status: 'archived',
+        archivedPath: null,
+      });
+      const result = await invokeHandler('session:unarchive', {}, 's-2');
+      expect(result).toBe(true);
+      expect(mocks.stores.sessions.update).toHaveBeenCalledWith('s-2', {
+        status: 'active',
+        archivedAt: null,
+        archivedPath: null,
+      });
+    });
+
+    it('is idempotent — unarchive on an already-active session is a no-op', async () => {
+      mocks.stores.sessions.get.mockReturnValueOnce({
+        id: 's-3',
+        status: 'active',
+        archivedPath: null,
+      });
+      const result = await invokeHandler('session:unarchive', {}, 's-3');
+      expect(result).toBe(true);
+      expect(mocks.stores.sessions.update).not.toHaveBeenCalled();
     });
   });
 });
