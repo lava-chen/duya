@@ -1,16 +1,19 @@
 /**
  * projects-store.test.ts — Unit tests for the projects entity store
- * (Plan 530 Phase 2.2).
+ * (Plan 530 Phase 2.2 + Plan 547 Phase 2a cross-platform path normalizer).
  *
  * Covers the degradation contract pinned in plan 530 §5.3:
  *   - IPC failure / missing preload API → empty list + hydrated, no throw
  *   - getByWorkingDirectory matches trailing-separator variants
  *   - invalidate forces re-hydration
+ *
+ * Plan 547 adds a normalizeWorkingDirectoryForCompare suite — single source of
+ * truth for cross-platform path comparison shared by all project-action helpers.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { useProjectsStore } from '../projects-store';
+import { useProjectsStore, normalizeWorkingDirectoryForCompare } from '../projects-store';
 
 const PROJECT_A = {
   project_id: 'uuid-a',
@@ -140,6 +143,16 @@ describe('projects-store — Plan 530 Phase 2.2', () => {
     it('returns null for empty input', () => {
       expect(useProjectsStore.getState().getByWorkingDirectory('')).toBeNull();
     });
+
+    it('cross-platform: matches backslash input via normalizer', () => {
+      const found = useProjectsStore.getState().getByWorkingDirectory('E:\\Projects\\duya');
+      expect(found?.project_id).toBe('uuid-a');
+    });
+
+    it('cross-platform: lowercases drive letter before matching', () => {
+      const found = useProjectsStore.getState().getByWorkingDirectory('e:/Projects/duya');
+      expect(found?.project_id).toBe('uuid-a');
+    });
   });
 
   it('invalidate clears cache and forces re-hydration on next load', async () => {
@@ -155,5 +168,68 @@ describe('projects-store — Plan 530 Phase 2.2', () => {
     useProjectsStore.setState({ projects: [] });
     await useProjectsStore.getState().loadProjects();
     expect(list).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('normalizeWorkingDirectoryForCompare — Plan 547 / Plan 537', () => {
+  it('replaces backslashes with forward slashes', () => {
+    expect(normalizeWorkingDirectoryForCompare('E:\\Projects\\duya')).toBe(
+      'e:/Projects/duya',
+    );
+  });
+
+  it('lowercases the Windows drive letter only', () => {
+    expect(normalizeWorkingDirectoryForCompare('D:/Foo/Bar')).toBe('d:/Foo/Bar');
+    expect(normalizeWorkingDirectoryForCompare('e:/Projects/d')).toBe('e:/Projects/d');
+  });
+
+  it('preserves case for everything after the drive letter', () => {
+    expect(normalizeWorkingDirectoryForCompare('E:/Projects/Duya')).toBe(
+      'e:/Projects/Duya',
+    );
+  });
+
+  it('strips a single trailing slash', () => {
+    expect(normalizeWorkingDirectoryForCompare('E:/Projects/duya/')).toBe(
+      'e:/Projects/duya',
+    );
+  });
+
+  it('strips multiple trailing separators', () => {
+    expect(normalizeWorkingDirectoryForCompare('E:/Projects/duya///')).toBe(
+      'e:/Projects/duya',
+    );
+    expect(normalizeWorkingDirectoryForCompare('E:/Projects/duya\\\\')).toBe(
+      'e:/Projects/duya',
+    );
+  });
+
+  it('returns empty string for empty input', () => {
+    expect(normalizeWorkingDirectoryForCompare('')).toBe('');
+  });
+
+  it('handles UNC / linux paths without mangling', () => {
+    expect(normalizeWorkingDirectoryForCompare('/home/user/Code')).toBe(
+      '/home/user/Code',
+    );
+    expect(normalizeWorkingDirectoryForCompare('//server/share/folder')).toBe(
+      '//server/share/folder',
+    );
+  });
+
+  it('lowercases the drive letter when followed by : only', () => {
+    expect(normalizeWorkingDirectoryForCompare('E:')).toBe('e:');
+  });
+
+  it('idempotent — running twice yields the same result', () => {
+    const once = normalizeWorkingDirectoryForCompare('E:\\Projects\\duya\\');
+    const twice = normalizeWorkingDirectoryForCompare(once);
+    expect(twice).toBe(once);
+  });
+
+  it('cross-platform: e:\\foo === E:/foo/ === E:/FOO (after drive-letter normalization)', () => {
+    const a = normalizeWorkingDirectoryForCompare('e:\\foo\\bar');
+    const b = normalizeWorkingDirectoryForCompare('E:/foo/bar/');
+    expect(a).toBe(b);
   });
 });
