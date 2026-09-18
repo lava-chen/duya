@@ -11,7 +11,7 @@
 > - `docs/references/harness-comparison/loop-control.md` (待办)
 > - `docs/exec-plans/active/429-harness-gap-closure.md` (并行 P0/P1 工程)
 
-## Progress (2026-09-19, end of session)
+## Progress (2026-09-19, end of session 2)
 
 | Step | Commit | Status |
 |---|---|---|
@@ -22,19 +22,30 @@
 | 1d Drop dead TS imports from generalConfig | `1e86dd49` | ✅ done |
 | 3a ToolDependencyDeclaration schema | `d92c1dce` | ✅ done |
 | 3b DependencyGraphOrchestrator (topo-sort) | `96968f11` | ✅ done |
-| **改造 2 (TurnAssembler / ToolExecutionPipeline / CompactionCoordinator / PermissionsGate / VisualAnalysis)** | — | ⏳ next session |
+| 2a-1 TurnContext value type | `40cb6e92` | ✅ done |
+| 2a-2 TurnAssembler + AgentRuntime interface | `a3d7f001` | ✅ done |
+| 2a-3 duyaAgent implements AgentRuntime | `8ccd574b` | ✅ done |
+| **改造 2 — remaining** (2a-4 streamChat wiring, 2b ToolExecutionPipeline, 2c CompactionCoordinator, 2d PermissionsGate/VisualAnalysis, 2e DuyaAgent facade) | — | ⏳ next session |
 | 1d-rest 8 remaining dynamic sections + gateway/code/research configs + delete `general/sections/*.ts` | — | ⏳ follow-up PR |
 | 3c StreamingToolExecutor wiring | — | ⏳ next session |
 | 3d end-to-end coverage | — | ⏳ next session |
 
 ## Next-session starting points
 
-- **改造 2a**: `packages/agent/src/agent/DuyaAgent.ts:195` — extract `TurnAssembler`
-  class (~200-400 lines) by pulling `streamChat`'s turn-initialisation block.
-- **改造 3c**: `packages/agent/src/tool/StreamingToolExecutor.ts` — replace the
-  legacy batch-by-batch execution in `runBatch` with a `planExecution` +
-  wave-by-wave loop. The orchestrator is pure (3b); wiring is the only
-  remaining mechanical work.
+- **改造 2a-4**: `packages/agent/src/agent/DuyaAgent.ts:760` — wire
+  `TurnAssembler.build(this, options, prompt)` into the top of
+  `streamChat`. The 9 `readXxx` getters added in 2a-3 are the entry
+  points; the assembler output is then used in place of the local
+  field reads scattered through the function body (~50-100 lines).
+- **改造 3c**: `packages/agent/src/tool/StreamingToolExecutor.ts` —
+  replace the legacy batch-by-batch execution in `runBatch` with a
+  `planExecution` + wave-by-wave loop. The orchestrator is pure (3b);
+  wiring is the only remaining mechanical work.
+- **改造 2b/2c/2d/2e**: extract `ToolExecutionPipeline` / `CompactionCoordinator` /
+  PermissionsGate / VisualAnalysis from DuyaAgent.ts in that order; end
+  with `DuyaAgent` reduced to a facade.
+- **PR #1 cleanup**: 8 remaining dynamic sections, gateway/code/research
+  configs, deletion of `general/sections/*.ts`.
 
 ## Background
 
