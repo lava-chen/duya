@@ -134,8 +134,12 @@ describe('live context-usage emission (stateless, plan 443)', () => {
     expect(est.usedTokens).toBe(3100);
   });
 
-  it('cumulative totals accumulate across turns with the same cache guard as seeding', () => {
+  it('cumulative totals accumulate ONLY-NEW per call, never the re-read cache hit', () => {
     // Mirrors the worker's totals loop (seed from DB + accumulate results):
+    // the session "t" total counts input + cache_creation per call (only-new).
+    // cache_hit is a re-read of an already-counted prefix and must NOT
+    // accumulate across fully-cached rounds (MiniMax re-reports the whole
+    // prefix → N× inflation). Raw fields still accumulate for CH% / cost.
     let totalInput = 0;
     let totalOutput = 0;
     let totalCacheHit = 0;
@@ -146,22 +150,23 @@ describe('live context-usage emission (stateless, plan 443)', () => {
       const rawInput = u.input_tokens ?? 0;
       const hit = u.cache_hit_tokens ?? 0;
       const write = u.cache_creation_tokens ?? 0;
-      return hit > rawInput || write > rawInput ? rawInput + hit + write : rawInput;
+      return hit > rawInput || write > rawInput ? rawInput + write : rawInput;
     };
     totalInput += normalize(seedBlock);
     totalOutput += seedBlock.output_tokens;
     totalCacheHit += seedBlock.cache_hit_tokens ?? 0;
     totalCacheCreation += seedBlock.cache_creation_tokens ?? 0;
 
-    // Turn-2 result: fully-cached request (input=0, hits=5000).
+    // Turn-2 result: fully-cached request (input=0, hits=5000). Only-new = 0
+    // (no new input, no new cache write) — the 5000 re-read hit is skipped.
     totalInput += normalize({ input_tokens: 0, cache_hit_tokens: 5000 });
     totalOutput += 120;
     totalCacheHit += 5000;
 
-    expect(totalInput).toBe(27_300 + 5000);
+    expect(totalInput).toBe(3300);
     expect(totalOutput).toBe(720);
     expect(totalCacheHit).toBe(29_000);
-    // Sanity: the same guard lives in normalizePromptTokens (@duya/ai).
+    // Sanity: the RESIDENT prompt (ring/compaction) still counts cache_hit.
     expect(normalizePromptTokens({ input_tokens: 0, output_tokens: 5, cache_hit_tokens: 5000 })).toEqual({
       prompt: 5000,
       output: 5,

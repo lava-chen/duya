@@ -161,6 +161,26 @@ export function normalizeInputTokens(
     : input;
 }
 
+/**
+ * ONLY-NEW (non-resident) prompt volume for the session "t" total. This is
+ * the uncached delta plus the newly-written cache; `cacheHit` (cache-read) is
+ * a RE-READ of an already-counted prefix and must never accumulate across
+ * calls on cache-exclusive providers (MiniMax re-reports the whole cached
+ * prefix every call → N× inflation of the session total). Same cache-guard
+ * convention as `normalizeInputTokens`; the RESIDENT value (ring/compaction)
+ * is NOT what this returns.
+ */
+export function onlyNewInputTokens(
+  inputTokens: number,
+  cacheHitTokens: number,
+  cacheWriteTokens: number = 0,
+): number {
+  const input = inputTokens || 0;
+  const hit = cacheHitTokens || 0;
+  const write = cacheWriteTokens || 0;
+  return hit > input || write > input ? input + write : input;
+}
+
 /** Per-model pricing (USD per million tokens), resolved from the
  *  provider_model_capabilities table — the same source the usage dashboard
  *  aggregates with. Shape mirrors ModelCapabilityDTO['pricing']. */

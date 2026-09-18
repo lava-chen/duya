@@ -155,10 +155,11 @@ describe('seedTokenUsageFromHistory (plan 546)', () => {
     });
   });
 
-  it('applies the cache-convention guard identical to the result handler', () => {
-    // rawInput=0 with cache_hit > rawInput → normalized = rawInput +
-    // cacheHit + cacheCreation. This mirrors the live `result` handler
-    // so seed + result produce consistent totals.
+  it('applies the ONLY-NEW cache-convention guard identical to the result handler', () => {
+    // rawInput=0 with cache_hit > rawInput → cache-exclusive; the session "t"
+    // totals count ONLY-NEW volume = rawInput + cacheCreation = 0 + 10 (the
+    // re-read 50 cache_hit is NOT accumulated — it would inflate N× across
+    // repeated fully-cached rounds). Mirrors the live `result` handler.
     const c: TokenUsage = {
       input_tokens: 0,
       output_tokens: 1,
@@ -170,7 +171,7 @@ describe('seedTokenUsageFromHistory (plan 546)', () => {
 
     const totals = seedTokenUsageFromHistory([msg(c)]);
 
-    expect(totals.totalInput).toBe(0 + 50 + 10); // normalized = 60
+    expect(totals.totalInput).toBe(0 + 10); // only-new = 10
     expect(totals.totalInputRaw).toBe(0); // raw stays 0
     expect(totals.totalCacheHit).toBe(50);
     expect(totals.totalCacheCreation).toBe(10);

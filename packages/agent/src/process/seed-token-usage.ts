@@ -87,19 +87,24 @@ const emptyTotals: SeededTokenTotals = {
 };
 
 /**
- * Apply the cache-convention guard identical to the `result` handler:
- * when cache hits or writes exceed raw input, the provider clearly
- * omitted cache from input — add cache back to recover the true prompt
- * volume (pi parity). Otherwise treat raw input as already
- * cache-inclusive.
+ * ONLY-NEW (non-resident) prompt volume per call, backing the session "t"
+ * total. This is the uncached delta plus the newly-written cache; `cacheHit`
+ * is a RE-READ of an already-counted prefix and must never accumulate across
+ * calls on cache-exclusive providers (MiniMax re-reports the whole prefix
+ * each call → N× inflation of the session total). The cache-convention guard
+ * mirrors the `result` handler: when cache hits/writes exceed raw input the
+ * provider clearly omitted cache from input, so the new prompt volume is
+ * `input + cacheCreation`; otherwise treat input as already cache-inclusive
+ * (`input`). The RESIDENT prompt (ring/compaction) is
+ * `input + cacheHit + cacheCreation` — that is NOT what this helper returns.
  */
-function normalizeInput(
+function normalizeOnlyNewInput(
   rawInput: number,
   cacheHit: number,
   cacheCreation: number,
 ): number {
   if (cacheHit > rawInput || cacheCreation > rawInput) {
-    return rawInput + cacheHit + cacheCreation;
+    return rawInput + cacheCreation;
   }
   return rawInput;
 }
@@ -115,7 +120,7 @@ function accumulateCall(totals: SeededTokenTotals, call: UsageCall): void {
   const output = call.output_tokens;
   const cacheHit = call.cache_hit_tokens ?? 0;
   const cacheCreation = call.cache_creation_tokens ?? 0;
-  const normalized = normalizeInput(rawInput, cacheHit, cacheCreation);
+  const normalized = normalizeOnlyNewInput(rawInput, cacheHit, cacheCreation);
   totals.totalInput += normalized;
   totals.totalInputRaw += rawInput;
   totals.totalOutput += output;
@@ -145,7 +150,7 @@ function accumulateMessage(
     const output = u.last_call.output_tokens ?? 0;
     const cacheHit = u.last_call.cache_hit_tokens ?? 0;
     const cacheCreation = u.last_call.cache_creation_tokens ?? 0;
-    const normalized = normalizeInput(rawInput, cacheHit, cacheCreation);
+    const normalized = normalizeOnlyNewInput(rawInput, cacheHit, cacheCreation);
     totals.totalInput += normalized;
     totals.totalInputRaw += rawInput;
     totals.totalOutput += output;
@@ -158,12 +163,13 @@ function accumulateMessage(
   const output = u.output_tokens ?? 0;
   const cacheHit = u.cache_hit_tokens ?? 0;
   const cacheCreation = u.cache_creation_tokens ?? 0;
-  const normalized = normalizeInput(rawInput, cacheHit, cacheCreation);
+  const normalized = normalizeOnlyNewInput(rawInput, cacheHit, cacheCreation);
   totals.totalInput += normalized;
   totals.totalInputRaw += rawInput;
   totals.totalOutput += output;
   totals.totalCacheHit += cacheHit;
   totals.totalCacheCreation += cacheCreation;
+  return;
 }
 
 /**

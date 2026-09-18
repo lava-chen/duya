@@ -50,11 +50,12 @@ describe('useContextUsage', () => {
     );
     const usage = result.current;
     expect(usage.hasData).toBe(true);
-    // normalizedInput = rawInput + cacheHit (8000 > 1000) = 9000; used =
-    // input + output + trailing = 9200.
+    // normalizedInput (ring input) = rawInput + cacheHit (8000 > 1000) = 9000;
+    // used = input + output + trailing = 9200. The session "t" total counts
+    // ONLY-NEW volume (input + cacheWrite), never the re-read cacheHit → 1000.
     expect(usage.inputTokens).toBe(9000);
     expect(usage.used).toBe(9200);
-    expect(usage.totalInput).toBe(9000);
+    expect(usage.totalInput).toBe(1000);
   });
 
   it('prefers the live worker snapshot when present', () => {
@@ -162,10 +163,10 @@ describe('useContextUsage', () => {
     // at turn start.
     expect(result.current.inputTokens).toBe(9100);
     expect(result.current.used).toBe(9300);
-    // Cumulative totals keep summing the whole block with the same 3-field
-    // cache guard as the worker's seeding/result accumulation:
-    // 3000 + 24000 + 300 = 27300.
-    expect(result.current.totalInput).toBe(27_300);
+    // Cumulative totals keep summing ONLY-NEW (input + cacheWrite) per call,
+    // never cacheHit: 3000 + 300 = 3300. NOT the resident 27300 that would
+    // accumulate the re-read 24000 prefix across every call.
+    expect(result.current.totalInput).toBe(3300);
   });
 
   it('ignores unanchored live frames — the ring shows "?" instead of a guess', () => {

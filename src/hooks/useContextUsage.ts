@@ -19,6 +19,7 @@ import { findModelById } from '@duya/ai';
 import { computeContextEstimate } from '@duya/ai';
 import {
   normalizeInputTokens,
+  onlyNewInputTokens,
   estimateCost,
   type ModelPricing,
 } from '@/lib/context-usage-utils';
@@ -173,7 +174,7 @@ function scanTotals(
     const output = msg.tokenUsage.output_tokens || 0;
     const cacheRead = msg.tokenUsage.cache_hit_tokens || 0;
     const cacheWrite = msg.tokenUsage.cache_creation_tokens || 0;
-    totalInput += normalizeInputTokens(rawInput, cacheRead, cacheWrite);
+    totalInput += onlyNewInputTokens(rawInput, cacheRead, cacheWrite);
     totalInputRaw += rawInput;
     totalOutput += output;
     totalCacheRead += cacheRead;
