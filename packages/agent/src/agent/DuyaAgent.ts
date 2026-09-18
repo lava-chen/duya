@@ -837,7 +837,7 @@ export class duyaAgent implements AgentRuntime {
     // so the diff stays reviewable. Until then the local store is
     // the source of truth.
     const turnContext = this.assembleTurnContext(options, prompt);
-    logger.info(`[Agent] streamChat started, sessionId=${this.sessionId}, model=${this._model}, provider=${this.provider}, turnId=${this.currentTurnId ?? 'null'}`);
+    logger.info(`[Agent] streamChat started, sessionId=${turnContext.sessionId ?? 'null'}, model=${this._model}, provider=${this.provider}, turnId=${this.currentTurnId ?? 'null'}`);
 
     // Plan 426 follow-up: configured [hooks] events dispatched outside the
     // loop bus (SessionStart / UserPromptSubmit / PreToolUse / Stop / 鈥?.
