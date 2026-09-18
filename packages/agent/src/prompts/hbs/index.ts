@@ -14,3 +14,5 @@ export type {
   HbsHelper,
   HandlebarsTemplateDelegate,
 } from './types.js';
+export { HbsPromptSystem, mapPromptContextToHbs } from './HbsPromptSystem.js';
+export type { HbsPromptSystemOptions } from './HbsPromptSystem.js';
