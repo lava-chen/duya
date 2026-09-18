@@ -73,6 +73,8 @@ import type { ToolPermissionCheckContext } from '../permissions/permissions.js';
 import type { ToolPermissionContext, PermissionMode, ToolPermissionRulesBySource, AdditionalWorkingDirectory, PermissionRuleSource, LocalToolPermission } from '../permissions/types.js';
 import type { CommunicationPlatform } from '../prompts/types.js';
 import type { AgentRuntime } from './AgentRuntime.js';
+import { TurnAssembler } from './TurnAssembler.js';
+import type { TurnContext } from './TurnContext.js';
 import { permissionModeFromString } from '../permissions/policy.js';
 import { deriveSingleCallUsage } from '../process/seed-token-usage.js';
 import { settingsJsonToRules } from '../permissions/rules.js';
@@ -231,6 +233,21 @@ export class duyaAgent implements AgentRuntime {
   }
   readTurnAlwaysAllowTools(): readonly string[] {
     return Array.from(this._turnAlwaysAllowTools);
+  }
+
+  /**
+   * Plan 550 step 2a-4: assemble a `TurnContext` from the live agent
+   * state. Public so tests can pin the assembly contract without
+   * driving a full `streamChat` invocation. The wiring commit
+   * (2a-4 follow-up) calls this at the top of `streamChat` and
+   * substitutes the returned fields for the corresponding local
+   * reads inside the generator body.
+   */
+  assembleTurnContext(
+    options: ChatOptions | undefined,
+    prompt: string | MessageContent[],
+  ): TurnContext {
+    return TurnAssembler.build(this, options, prompt);
   }
 
   private llmClient: AIClient;
