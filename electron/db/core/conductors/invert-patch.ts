@@ -126,7 +126,7 @@ export function invertPatch(
     // the old one under patch.prevMetadata; both are JSON objects with a
     // parentId field. We forward the previous parentId.
     case 'element.reparent':
-      return { parentId: (patch as any).prevMetadata?.parentId ?? patch.metadata?.parentId };
+      return { parentId: (patch as any).prevMetadata?.parentId ?? (patch as any).metadata?.parentId };
 
     default:
       return {};
