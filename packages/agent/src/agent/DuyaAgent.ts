@@ -2146,7 +2146,7 @@ export class duyaAgent implements AgentRuntime {
             const preCtx = yield* dispatchHooks(
               'PreToolUse',
               {
-                session_id: this.sessionId ?? '',
+                session_id: turnContext.sessionId ?? '',
                 cwd: this.workingDirectory ?? '',
                 hook_event_name: 'PreToolUse',
                 tool_name: event.data.name,
@@ -2436,7 +2436,7 @@ export class duyaAgent implements AgentRuntime {
                     yield* dispatchHooks(
                       'PostToolUseFailure',
                       {
-                        session_id: this.sessionId ?? '',
+                        session_id: turnContext.sessionId ?? '',
                         cwd: this.workingDirectory ?? '',
                         hook_event_name: 'PostToolUseFailure',
                         tool_name: failedToolName,
@@ -2720,7 +2720,7 @@ export class duyaAgent implements AgentRuntime {
             const candidateVolume = resultPromptVolume(usage);
             const prevVolume = roundResultUsage ? candidateVolume : 0;
             logger.tokenTrace('observedPromptTokens', {
-              sessionId: this.sessionId,
+              sessionId: turnContext.sessionId ?? undefined,
               turnEvent: 'result',
               observed: observedPrompt,
               candidate: candidateVolume,
@@ -2832,7 +2832,7 @@ export class duyaAgent implements AgentRuntime {
           // Plan 426 follow-up: SessionEnd 鈥?fired on the natural run
           // completion boundary (fail-open; never blocks the final answer).
           yield* dispatchHooks('SessionEnd', {
-            session_id: this.sessionId ?? '',
+            session_id: turnContext.sessionId ?? '',
             cwd: this.workingDirectory ?? '',
             hook_event_name: 'SessionEnd',
             reason: 'user_exit',
