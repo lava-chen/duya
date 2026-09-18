@@ -18,6 +18,7 @@ import { getLogger, LogComponent } from '../logging/logger';
 import { setBrowserMaxTabs } from '../services/browser/daemon';
 import { getCoreStores } from '../db/core-connection';
 import { getChannelManager } from '../messaging/port-manager';
+import { invertPatch } from '../db/core/conductors/invert-patch';
 import { updateDatabasePath, readBootConfig } from '../config/boot-config';
 import { emitGatewayConfigChanged, isGatewayConfigKey } from '../gateway/config-events';
 import { notifyMcpConfigChanged } from '../services/mcp-write-reload';
@@ -588,10 +589,6 @@ export function registerDbHandlers(): void {
       return storedEventsToIpcMessages(events);
     },
   );
-    const { messageLog } = getCoreStores();
-    const events = messageLog.listBySession(sessionId);
-    return storedEventsToIpcMessages(events);
-  });
 
   // Plan 489 P0.3: bot-direct transcript — the DATA-LAYER projection the
   // BotDirectChatView requires. The source allowlist is applied inside
@@ -3004,41 +3001,10 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function invertPatch(patch: Record<string, unknown>, actionType: string): Record<string, unknown> {
-  switch (actionType) {
-    case 'canvas.rename':
-      return { name: patch.prevName || 'Untitled' };
-    case 'widget.create':
-      return {};
-    case 'widget.move':
-    case 'widget.resize':
-      return { position: (patch as any).prevPosition || patch.position };
-    case 'widget.update_config':
-      return { config: (patch as any).prevConfig || patch.config };
-    case 'widget.update_data':
-      return { data: (patch as any).prevData || patch.data };
-    case 'widget.delete':
-      return {};
-    case 'widget.restore':
-      return {};
-    case 'element.create':
-      return {};
-    case 'element.move':
-      return { position: (patch as any).prevPosition || patch.position };
-    case 'element.update':
-      return {
-        config: (patch as any).prevConfig || patch.config,
-        vizSpec: (patch as any).prevVizSpec ?? patch.vizSpec,
-        position: (patch as any).prevPosition || patch.position,
-      };
-    case 'element.delete':
-      return {};
-    case 'element.arrange':
-      return {};
-    default:
-      return {};
-  }
-}
+// Local invertPatch replaced by the extracted pure function — see
+// electron/db/core/conductors/invert-patch.ts (plan 534 Phase 3.7.a).
+// Kept no local copy here so the action handler, undo handler, and redo
+// handler all consume one shared, unit-tested implementation.
 
 // ==================== Mailbox Handlers (core store thin forward) ====================
 // Plan 328 Phase 3: all mailbox IPC handlers forward to the Mailbox core store
