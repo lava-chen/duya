@@ -1651,6 +1651,32 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       }
     }
 
+    // Plan 525 / 408 follow-up: lightweight cwd -> projectId reverse-lookup that also returns the project's entity home directory (~/.duya/projects/<projectId>/). The agent subprocess consumes projectHome from this response to feed the agentsmd loader as the 'Project entity' source. Best-effort - null on miss.
+    case 'projects:resolveProject': {
+      const sessionCwd = typeof p.workingDirectory === 'string' ? p.workingDirectory.trim() : '';
+      if (!sessionCwd) return { projectId: null, paths: null };
+      try {
+        const hit = await resolveProjectByCwd(sessionCwd);
+        if (!hit) return { projectId: null, paths: null };
+        // paths is the canonical list of registered working paths; the agent server derives the writable-roots fan-out from it. projectHome is the per-project duya-internal storage root that owns the project's AGENTS.md and plans/. The agent subprocess uses projectHome independently of paths because the entity home lives outside any user code subtree.
+        // Resolve the duya projects base via the same path the storage side uses (Plan 536 L3); the per-project entity home lives at `<base>/<projectId>/` and is the directory the agentsmd loader reads `<home>/AGENTS.md` from. The base honors DUYA_TEST and DUYA_TEST_NAMESPACE so unit tests get isolated roots.
+        const memoryStateMod = await import('../memory-state');
+        const projectHome = path.join(memoryStateMod.resolveProjectsRoot(), hit.projectId);
+        return {
+          projectId: hit.projectId,
+          paths: hit.paths,
+          projectHome,
+        };
+      } catch (error) {
+        getLogger().warn(
+          'projects:resolveProject failed',
+          { error: error instanceof Error ? error.message : String(error) },
+          LogComponent.AgentCommunicator
+        );
+        return { projectId: null, paths: null };
+      }
+    }
+
     case 'config:provider:upsert': {
       getProviderStore().upsertLlmProvider(migrateLegacyApiProvider(p as unknown as ApiProvider));
       return { ok: true };

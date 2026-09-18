@@ -285,6 +285,12 @@ export async function* runAgent({
     language: toolUseContext.options.language,
     enabledTools: new Set(toolsToUse.map(tool => tool.name)),
     omitAgentsMd,
+    // Plan 525 / 408 follow-up: pass the project-entity home into the
+    // sub-agent's promptSystem.buildContext so the preBuildHook can
+    // load `<projectHome>/AGENTS.md` as a `'Project entity'` source.
+    // Read from the parent's ToolUseContext.options when available;
+    // undefined when the session is not bound to a registered duya project.
+    projectHome: toolUseContext.options.projectHome,
   })
   const systemPromptResult = await promptSystem.buildSystemPrompt(context)
   const harnessPrompt = [...systemPromptResult].join('\n\n')
@@ -301,6 +307,12 @@ export async function* runAgent({
     systemPrompt,
     workingDirectory,
     sessionId,
+    // Plan 525 / 408 follow-up: project-entity home directory
+    // propagated into the sub-agent instance so any further
+    // _buildSystemPrompt call inside the sub-agent (e.g. for further
+    // sub-spawns) keeps the entity-home binding. Undefined when the
+    // parent has no projectHome.
+    projectHome: toolUseContext.options.projectHome,
     omitAgentsMd,
   })
 

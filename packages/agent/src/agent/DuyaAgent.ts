@@ -239,6 +239,15 @@ export class duyaAgent {
    * project.
    */
   private currentProjectId?: string | null;
+  /**
+   * Plan 525 / 408 follow-up: project-entity home directory
+   * (`~/.duya/projects/<projectId>/`). Set from `AgentOptions.projectHome`
+   * at construction; threaded into `promptSystem.buildContext` so the
+   * AGENTS.md loader can read `<projectHome>/AGENTS.md` as a
+   * `'Project entity'` source. Undefined when the session is not bound
+   * to any registered duya project.
+   */
+  private projectHome?: string;
   private defaultWorkspaceDirectory?: string; // Default workspace directory for permission checking
   private communicationPlatform?: import('../prompts/types.js').CommunicationPlatform; // Communication platform for prompt injection
   private language?: string; // Language preference for agent responses
@@ -506,6 +515,14 @@ export class duyaAgent {
     // to every ctx.options so project-scoped tools (plan tool, etc.)
     // can use it without the model having to pass projectId explicitly.
     this.currentProjectId = options.currentProjectId ?? null;
+    // Plan 525 / 408 follow-up: project-entity home directory
+    // (`~/.duya/projects/<projectId>/`). When the agent server resolves a
+    // project from the cwd, `projects:resolveProject` returns
+    // `paths.projectHome` and the main process passes it through here so
+    // the agentsmd loader can read `<projectHome>/AGENTS.md` as a
+    // `'Project entity'` source. Threaded into `promptSystem.buildContext`
+    // in `_buildSystemPrompt`. Undefined when no project is bound.
+    this.projectHome = options.projectHome;
     this.defaultWorkspaceDirectory = options.defaultWorkspaceDirectory;
     this.sessionInfo = {
       id: crypto.randomUUID(),
@@ -1561,6 +1578,12 @@ export class duyaAgent {
           // Plan 481: bot identity for identity-bound tools (update_state).
           agentProfileId: options?.agentProfileId ?? null,
           workingDirectory: this.workingDirectory, // Pass working directory for tool execution
+          // Plan 525 / 408 follow-up: project-entity home directory
+          // propagated into the ToolUseContext so sub-agents spawned
+          // from this turn (via the SubagentTool) can hand it down
+          // into their own promptSystem.buildContext → preBuildHook →
+          // initializeAgentsMd. Undefined when no project is bound.
+          projectHome: this.projectHome,
           language: this.language, // Propagate language preference to sub-agents
           agentDefinitions: {
             activeAgents: agentDefinitions,
@@ -3429,6 +3452,12 @@ export class duyaAgent {
         researchProjectId: options?.researchProjectId,
         communicationPlatform: this.communicationPlatform,
         language: this.language,
+        // Plan 525 / 408 follow-up: feed the project-entity home into
+        // the agentsmd loader via `preBuildHook` so the project's seeded
+        // home AGENTS.md joins the cwd ancestor walk in the first-turn
+        // system prompt. Undefined when the session is not bound to a
+        // registered duya project.
+        projectHome: this.projectHome,
       });
       const systemPromptResult = await promptSystem.buildSystemPrompt(context);
       systemPromptContent = [...systemPromptResult].join('\n\n');

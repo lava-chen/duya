@@ -137,6 +137,16 @@ interface InitMessage {
    * the cwd is outside any registered project.
    */
   currentProjectId?: string | null;
+  /**
+   * Plan 525 / 408 follow-up: project-entity home directory
+   * (`~/.duya/projects/<projectId>/`). Resolved by the agent server's
+   * `projects:resolveProject` IPC from `workingDirectory`; threaded into
+   * the subprocess so `promptSystem.buildContext` →
+   * `preBuildHook` → `initializeAgentsMd` can read
+   * `<projectHome>/AGENTS.md` as a `'Project entity'` source.
+   * Undefined when the cwd is outside any registered duya project.
+   */
+  projectHome?: string;
   defaultWorkspaceDirectory?: string;
   systemPrompt?: string;
   skillPaths?: string[];
@@ -1581,6 +1591,12 @@ async function initAgent(
   // session's workingDirectory. Forwarded into the agent as
   // `currentProjectId` so it lands in every ctx.options.currentProjectId.
   currentProjectId?: string | null,
+  // Plan 525 / 408 follow-up: project-entity home directory
+  // (`~/.duya/projects/<projectId>/`). Forwarded into the agent as
+  // `projectHome` so the agentsmd loader can read
+  // `<projectHome>/AGENTS.md` as a `'Project entity'` source. Undefined
+  // when no project is bound.
+  projectHome?: string,
 ): Promise<void> {
   // Store system prompt for use in chat
   sessionSystemPrompt = sysPrompt;
@@ -1628,6 +1644,10 @@ async function initAgent(
     workingDirectory: workDir,
     // Plan 536 L1: project ID resolved by the agent server.
     currentProjectId: currentProjectId ?? null,
+    // Plan 525 / 408 follow-up: project-entity home directory
+    // resolved by the agent server. Undefined when no project is bound
+    // to the session's workingDirectory.
+    projectHome,
     visionConfig: config.visionConfig,
     compactModelConfig: config.compactModelConfig,
     blockedDomains,
@@ -2907,6 +2927,16 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
             cacheHitTokens > rawInput || cacheCreationTokens > rawInput
               ? rawInput + cacheHitTokens + cacheCreationTokens
               : rawInput;
+          // ONLY-NEW session-total volume: the uncached delta + newly-written
+          // cache. cache_hit is a RE-READ of an already-counted prefix and
+          // must NOT accumulate into the session "t" total (MiniMax re-reports
+          // the whole cached prefix every call → N×/quadratic inflation). The
+          // RESIDENT volume (normalizedInput above) still drives the RING via
+          // liveLatestObserved so the anchor shows real resident context.
+          const onlyNewInput =
+            cacheHitTokens > rawInput || cacheCreationTokens > rawInput
+              ? rawInput + cacheCreationTokens
+              : rawInput;
           // Accumulate across ALL result events in this turn — one fires per
           // LLM API call, so a tool-heavy turn emits many. Keeping only the
           // last event (the old behavior) lost every earlier round's tokens,
@@ -2988,7 +3018,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           // Without this the ring flickers (anchor lags by one call).
           liveLatestObserved = normalizedInput + outputTokens;
           // Accumulate session-cumulative totals for the ring's stats line.
-          liveTotalInput += normalizedInput;
+          liveTotalInput += onlyNewInput;
           liveTotalInputRaw += rawInput;
           liveTotalOutput += outputTokens;
           liveTotalCacheHit += cacheHitTokens;
@@ -3728,6 +3758,10 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
               initMsg.permissionRules,
               // Plan 536 L1: thread resolved projectId into the agent.
               initMsg.currentProjectId,
+              // Plan 525 / 408 follow-up: thread the project-entity home
+              // into the agent so the agentsmd loader can read
+              // `<projectHome>/AGENTS.md` as a `'Project entity'` source.
+              initMsg.projectHome,
             );
 
             try {

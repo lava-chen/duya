@@ -87,7 +87,10 @@ export const generalConfig: PromptSystemConfig = {
   preBuildHook: async (ctx) => {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.
     if (ctx.omitAgentsMd) return
-    if (await initializeAgentsMd(ctx.workingDirectory)) {
+    // Plan 525 / 408 follow-up: thread the project-entity home into the
+    // loader so it can read `<projectHome>/AGENTS.md` as a `'Project entity'`
+    // source. Absent when cwd is outside any registered duya project.
+    if (await initializeAgentsMd(ctx.workingDirectory, ctx.projectHome)) {
       return { invalidateCacheKeys: ['project'] }
     }
   },

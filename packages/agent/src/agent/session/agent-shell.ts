@@ -55,6 +55,13 @@ import type { ModeModifier, ModeModifierContext, OrchestratorDeps, ToolRegistrat
 export interface AgentShellContext {
   sessionId?: string;
   workingDirectory?: string;
+  /**
+   * Plan 525 / 408 follow-up: project-entity home directory
+   * (`~/.duya/projects/<projectId>/`). Threaded from the parent
+   * DuyaAgent into the sub-agent shell so the agentsmd loader sees the
+   * same `'Project entity'` AGENTS.md the parent prompt is built from.
+   */
+  projectHome?: string;
   defaultWorkspaceDirectory?: string;
   communicationPlatform?: import('../../prompts/types.js').CommunicationPlatform;
   language?: string;
@@ -187,6 +194,11 @@ export async function buildSystemPrompt(
       researchProjectId: options?.researchProjectId,
       communicationPlatform: ctx.communicationPlatform,
       language: ctx.language,
+      // Plan 525 / 408 follow-up: pass the project-entity home into the
+      // sub-agent's promptSystem.buildContext → preBuildHook →
+      // initializeAgentsMd so sub-agents (when omitClaudeMd is not set)
+      // share the parent's project-entity AGENTS.md.
+      projectHome: ctx.projectHome,
     });
     const systemPromptResult = await promptSystem.buildSystemPrompt(context);
     systemPromptContent = [...systemPromptResult].join('\n\n');

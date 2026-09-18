@@ -160,6 +160,18 @@ export interface AgentOptions {
    * project root, or cwd outside any project).
    */
   currentProjectId?: string | null;
+  /**
+   * Plan 525 / 408 follow-up: project-entity home directory
+   * (`~/.duya/projects/<projectId>/`). When the agent server's session
+   * bootstrap resolves a `currentProjectId` from the cwd, the
+   * `projects:resolveProject` IPC returns the matching `projectHome` and
+   * the main process threads it into this option so `promptSystem.
+   * buildContext` can hand it to `initializeAgentsMd` → agentsmd loader.
+   * Absent when no project is bound (CLI, headless, cwd outside any
+   * registered project). Optional — agents that opt to read AGENTS.md
+   * only from the cwd ancestor walk may leave this unset.
+   */
+  projectHome?: string;
   systemPrompt?: string;
   maxTokens?: number;
   temperature?: number;
@@ -773,6 +785,15 @@ export interface ToolUseContextOptions {
   agentProfileId?: string | null;
   // Working directory for tool execution (e.g., BashTool)
   workingDirectory?: string;
+  /**
+   * Plan 525 / 408 follow-up: project-entity home directory
+   * (`~/.duya/projects/<projectId>/`). Propagated into the
+   * ToolUseContext so sub-agents (when spawned) can hand the home down
+   * to `promptSystem.buildContext` → `preBuildHook` →
+   * `initializeAgentsMd` → agentsmd loader. Undefined when the session
+   * is not bound to any registered duya project.
+   */
+  projectHome?: string;
   // Language preference for agent responses (propagated to sub-agents)
   language?: string;
   // API configuration for sub-agent execution

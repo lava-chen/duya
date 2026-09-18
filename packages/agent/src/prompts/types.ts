@@ -231,6 +231,15 @@ export interface PromptContext {
    * already interprets.
    */
   omitAgentsMd?: boolean
+  /**
+   * Project-entity home directory (`~/.duya/projects/<projectId>/`) for
+   * the AGENTS.md loader's `'Project entity'` source. Mirrors
+   * `PromptBuildContextOptions.projectHome`. Read by `initializeAgentsMd`
+   * inside `preBuildHook` so the agent's first-turn system prompt includes
+   * the project's seeded home AGENTS.md alongside the cwd ancestor walk.
+   * Optional — absent when the cwd is outside any registered duya project.
+   */
+  projectHome?: string
 }
 
 // ============================================================
@@ -335,6 +344,17 @@ export interface PromptBuildContextOptions {
   researchIntent?: import('./research/types.js').ResearchTaskIntent
   researchProjectId?: string
   omitAgentsMd?: boolean
+  /**
+   * Plan 525 / 408 follow-up: optional project-entity home directory
+   * (`~/.duya/projects/<projectId>/`). When supplied, the agentsmd loader
+   * reads `<projectHome>/AGENTS.md` as a `'Project entity'` source — the
+   * project's seeded instruction file. Threaded from the agent server's
+   * session bootstrap (cwd → `projects:resolveProject` IPC → projectHome
+   * → InitMessage → `promptSystem.buildContext` → `preBuildHook` →
+   * `initializeAgentsMd`). Null when the cwd is outside any registered
+   * duya project (no entity home to inject).
+   */
+  projectHome?: string
 }
 
 // ============================================================

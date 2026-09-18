@@ -602,14 +602,29 @@ export const projectDb = {
    * the writable-root fan-out. This is the canonical answer for the
    * L1 session bootstrap injection and any CLI/runtime caller that
    * only needs to know "which project is this cwd in?".
+   *
+   * Plan 525 / 408 follow-up: the response now also carries
+   * `projectHome` (the project's entity home directory
+   * `~/.duya/projects/<projectId>/`). The agent subprocess consumes it
+   * to feed the agentsmd loader's `'Project entity'` source. Same
+   * null-on-miss semantics as the rest of the payload.
    */
   resolveProject: (workingDirectory: string): Promise<{
     projectId: string | null;
     paths: string[] | null;
+    /**
+     * Project-entity home directory (`~/.duya/projects/<projectId>/`).
+     * Null when no project is bound to the cwd. When set, the agent
+     * subprocess uses this string to feed the agentsmd loader via
+     * `promptSystem.buildContext({ projectHome })` →
+     * `preBuildHook` → `initializeAgentsMd`.
+     */
+    projectHome: string | null;
   }> =>
     sendDbRequest('projects:resolveProject', { workingDirectory }) as Promise<{
       projectId: string | null;
       paths: string[] | null;
+      projectHome: string | null;
     }>,
 };
 

@@ -236,7 +236,7 @@ export async function resolveProjectAdditionalRootsViaDbRequest(
  * only needs to know "which project is this cwd in?". Mirrors
  * `resolveProjectAdditionalRootsViaDbRequest` (which keeps the
  * writable-roots fan-out) but consumes the `projects:resolveProject`
- * IPC channel that returns `{ projectId, paths }`.
+ * IPC channel that returns `{ projectId, paths, projectHome }`.
  *
  * Best-effort: returns `null` for any miss (no dbRequest, no cwd, IPC
  * error, or malformed payload) so callers can treat `null` as
@@ -245,16 +245,20 @@ export async function resolveProjectAdditionalRootsViaDbRequest(
 export async function resolveProjectViaDbRequest(
   dbRequest: ((action: string, payload: Record<string, unknown>) => Promise<unknown>) | undefined,
   workingDirectory: string | undefined,
-): Promise<{ projectId: string; paths: string[] } | null> {
+): Promise<{ projectId: string; paths: string[]; projectHome: string | null } | null> {
   if (!dbRequest || !workingDirectory) return null;
   try {
     const result = await dbRequest('projects:resolveProject', {
       workingDirectory,
-    }) as { projectId?: unknown; paths?: unknown } | null;
+    }) as { projectId?: unknown; paths?: unknown; projectHome?: unknown } | null;
     if (!result || typeof result.projectId !== 'string') return null;
     if (!Array.isArray(result.paths)) return null;
     const paths = result.paths.filter((p): p is string => typeof p === 'string');
-    return { projectId: result.projectId, paths };
+    // Plan 525 / 408 follow-up: projectHome is optional in the IPC payload;
+    // absent means the legacy server (pre-Plan 525) handled the request.
+    // We pass through whatever we got so the caller can distinguish.
+    const projectHome = typeof result.projectHome === 'string' ? result.projectHome : null;
+    return { projectId: result.projectId, paths, projectHome };
   } catch {
     return null;
   }
@@ -982,6 +986,12 @@ async function handlePostChat(
         // scoped tools (plan tool, etc.) can pick it up from the
         // session context instead of forcing the agent to pass it.
         currentProjectId: resolvedProject?.projectId ?? null,
+        // Plan 525 / 408 follow-up: project-entity home directory
+        // resolved from the cwd → project binding. The agent subprocess
+        // feeds it into `promptSystem.buildContext` → preBuildHook →
+        // initializeAgentsMd so the project's seeded AGENTS.md joins
+        // the first-turn system prompt as a `'Project entity'` source.
+        projectHome: resolvedProject?.projectHome ?? undefined,
       });
 
       // Plan 476 P0-A: mirror "this session is running a chat" into

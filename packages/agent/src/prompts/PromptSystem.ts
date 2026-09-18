@@ -179,6 +179,11 @@ export class PromptSystem {
       researchIntent: options.researchIntent,
       researchProjectId: options.researchProjectId,
       omitAgentsMd: options.omitAgentsMd,
+      // Plan 525 / 408 follow-up: project-entity home directory. Forwarded
+      // into the PromptContext so preBuildHook (initializeAgentsMd) can
+      // read it and feed it into the agentsmd loader as the
+      // `'Project entity'` source. Optional — caller may leave it absent.
+      projectHome: options.projectHome,
     }
 
     if (this.config.contextExtender) {
