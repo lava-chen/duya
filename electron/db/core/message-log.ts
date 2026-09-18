@@ -448,10 +448,34 @@ export class MessageLog {
    * entries WITHOUT a source (legacy rows) are dropped when a filter is
    * active — pre-P0.1 data stays bot-direct hidden. Non-message entries
    * (compaction / rebase / rotation audit rows) bypass the filter.
+   *
+   * Plan 548: `options.includeSuperseded` controls whether compaction /
+   * edit-resend rebases fold superseded raw messages out of the
+   * projection (default `false`, current LLM-visible behavior).
+   *
+   *   `false` (default): runs `applyRebases` so the projection matches
+   *     the agent core's view — superseded messages drop, rebase
+   *     newMessages (compaction summary + retained tail) appear in
+   *     place. LLM context consumers, CLI, recap, next-step, and most
+   *     IPC handlers stay here.
+   *
+   *   `true`: keeps every raw message row (including the originals that
+   *     a later rebase superseded) so the chat UI can render the full
+   *     pre-compaction history. Rebase events are still consulted so
+   *     their newMessages — chiefly the compaction summary with
+   *     `isCompactSummary: true` — are inserted at the rebase point,
+   *     producing the visual break that separates historical turns
+   *     from the retained tail. Duplicate-id dedup still applies (first
+   *     emission wins), so rebase-emitted tails that share an id with
+   *     an original row do not double-render.
+   *
+   * This is purely a read-side projection split. Compaction strategy,
+   * the compaction controller, and the append-only rollout file are
+   * untouched — LLM context semantics do not change.
    */
   listBySession(
     sessionId: string,
-    options?: { source?: readonly string[] },
+    options?: { source?: readonly string[]; includeSuperseded?: boolean },
   ): StoredEvent[] {
     let relativePath = this.getRolloutPath(sessionId);
     if (!relativePath) return [];
@@ -573,7 +597,9 @@ export class MessageLog {
       timelineRows.push({ entry, seq: row.seq });
     }
 
-    const projected = repairInterruptedToolCalls(applyRebases(timelineRows));
+    const projected = options?.includeSuperseded
+      ? repairInterruptedToolCalls(emitRebaseNewMessages(timelineRows))
+      : repairInterruptedToolCalls(applyRebases(timelineRows));
 
     return this.applySourceFilter(projected, options?.source).map((projectedRow) => {
       const entry = projectedRow.entry;
@@ -610,7 +636,7 @@ export class MessageLog {
   private listBySessionMultiFile(
     sessionId: string,
     sessionsDir: string,
-    options?: { source?: readonly string[] },
+    options?: { source?: readonly string[]; includeSuperseded?: boolean },
   ): StoredEvent[] {
     const activeAbs = path.join(sessionsDir, 'active.jsonl');
     const activeExists = fs.existsSync(activeAbs);
@@ -778,7 +804,9 @@ export class MessageLog {
       (r) => r.entry.type !== 'rotation',
     );
 
-    const projected = repairInterruptedToolCalls(applyRebases(filtered));
+    const projected = options?.includeSuperseded
+      ? repairInterruptedToolCalls(emitRebaseNewMessages(filtered))
+      : repairInterruptedToolCalls(applyRebases(filtered));
 
     // applyRebases preserves the rebase rows in its output so audit
     // consumers (timeline()) can still see them. listBySession is the
@@ -2405,6 +2433,65 @@ export function applyRebases(rows: TimelineEntryRow[]): TimelineEntryRow[] {
       // no more durable than a raw row with the same seq.
       for (const m of entry.newMessages) {
         if (supersededByLaterRebase(row.seq)) continue;
+        emittedMessageIds.add(m.id);
+        result.push({ entry: m, seq: row.seq });
+      }
+      continue;
+    }
+
+    // Compaction + RolloutProcessEvent pass through untouched.
+    result.push(row);
+  }
+
+  return result;
+}
+
+/**
+ * Plan 548: read-side projection used when the caller wants the full
+ * raw timeline PLUS the visual summary markers at each rebase point —
+ * i.e. the chat UI history view.
+ *
+ * `applyRebases` drops every raw message a later rebase superseded, so
+ * the renderer loses the pre-compaction turns. `emitRebaseNewMessages`
+ * instead:
+ *   - emits every raw message row verbatim (no supersede check),
+ *   - still emits each rebase event's `newMessages` so the compaction
+ *     summary with `isCompactSummary: true` becomes a visual break in
+ *     the timeline,
+ *   - drops the rebase event rows themselves (they are not user-visible),
+ *   - dedups by id with first-emission-wins so rebase-emitted tails that
+ *     share an id with an already-seen raw row do not double-render.
+ *
+ * The summary has a deterministic id (`journal-rebase:<session>:<turn>:0:<ts>`,
+ * see `Journal.toMessageEntries`) that never collides with the original
+ * raw row ids, so the summary itself always survives the dedup pass and
+ * reaches the IPC adapter. Tail entries that share an id with a raw
+ * row are dropped because the raw row was emitted first (lower seq).
+ *
+ * Companion to `applyRebases`; both are pure projection transforms and
+ * share the same `emittedMessageIds` first-wins contract.
+ */
+export function emitRebaseNewMessages(rows: TimelineEntryRow[]): TimelineEntryRow[] {
+  const result: TimelineEntryRow[] = [];
+  const emittedMessageIds = new Set<string>();
+  for (const row of rows) {
+    const entry = row.entry;
+
+    if (entry.type === 'message') {
+      if (emittedMessageIds.has(entry.id)) continue;
+      emittedMessageIds.add(entry.id);
+      result.push(row);
+      continue;
+    }
+
+    if (entry.type === 'rebase') {
+      // Do NOT emit the rebase event row itself — it is an internal
+      // audit marker, not a user-visible turn. Its `newMessages` carry
+      // the compaction summary + retained tail, which we DO want to
+      // surface so the renderer can show the CompactSummary card and
+      // the post-compaction tail.
+      for (const m of entry.newMessages) {
+        if (emittedMessageIds.has(m.id)) continue;
         emittedMessageIds.add(m.id);
         result.push({ entry: m, seq: row.seq });
       }

@@ -566,7 +566,28 @@ export function registerDbHandlers(): void {
     return stored ? storedEventToIpcMessage(stored) : null;
   });
 
-  ipcMain.handle('db:message:getBySession', (_event, sessionId: string) => {
+  // Plan 548: `includeSuperseded` (default `true`) plumbs the chat-UI history
+  // view down to `MessageLog.listBySession`. When `true`, the projection
+  // keeps every raw message row plus a CompactSummary card at each
+  // compaction point. When `false`, the projection falls back to the
+  // historical LLM-visible view (folded superseded rows). The default
+  // is `true` here so any caller that hasn't been updated still sees
+  // the full history — the renderer reads from this handler and there
+  // is no caller today that wants the folded view from this endpoint.
+  ipcMain.handle(
+    'db:message:getBySession',
+    (
+      _event,
+      sessionId: string,
+      options?: { includeSuperseded?: boolean },
+    ) => {
+      const { messageLog } = getCoreStores();
+      const events = messageLog.listBySession(sessionId, {
+        includeSuperseded: options?.includeSuperseded ?? true,
+      });
+      return storedEventsToIpcMessages(events);
+    },
+  );
     const { messageLog } = getCoreStores();
     const events = messageLog.listBySession(sessionId);
     return storedEventsToIpcMessages(events);

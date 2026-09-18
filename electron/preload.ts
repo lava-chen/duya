@@ -181,7 +181,10 @@ export interface SearchAPI {
 
 export interface MessageAPI {
   add: (data: Record<string, unknown>) => Promise<unknown>
-  getBySession: (sessionId: string) => Promise<unknown[]>
+  getBySession: (
+    sessionId: string,
+    options?: { includeSuperseded?: boolean },
+  ) => Promise<unknown[]>
   /** Plan 489 P0.3: bot-direct transcript (data-layer source projection). */
   botDirectGetTranscript?: (sessionId: string) => Promise<unknown[]>
   replace: (sessionId: string, messages: unknown[], generation: number) => Promise<unknown>
@@ -2209,7 +2212,10 @@ const electronAPI: ElectronAPI = {
   },
   message: {
     add: (data: Record<string, unknown>) => ipcRenderer.invoke('db:message:add', data),
-    getBySession: (sessionId: string) => ipcRenderer.invoke('db:message:getBySession', sessionId),
+    getBySession: (
+      sessionId: string,
+      options?: { includeSuperseded?: boolean },
+    ) => ipcRenderer.invoke('db:message:getBySession', sessionId, options),
     // Plan 489 P0.3: bot-direct transcript (data-layer source projection).
     botDirectGetTranscript: (sessionId: string) =>
       ipcRenderer.invoke('db:message:botDirectGetTranscript', sessionId),

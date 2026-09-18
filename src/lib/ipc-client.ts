@@ -468,7 +468,14 @@ export async function getUsageSummaryIPC(): Promise<UsageSummary> {
 export async function getThreadIPC(id: string): Promise<{ thread: Thread; messages: Message[] } | null> {
   const dbThread = await window.electronAPI!.thread!.get(id) as DbThread | undefined
   if (!dbThread) return null
-  const dbMessages = await window.electronAPI!.message!.getBySession(id) as DbMessage[]
+  // Plan 548: chat UI history view keeps pre-compaction turns visible.
+  // The IPC handler defaults to `includeSuperseded: true` already, so we
+  // pass it explicitly here to lock the contract at the call site: if
+  // a future handler refactor flips the default, the renderer still gets
+  // the full history.
+  const dbMessages = await window.electronAPI!.message!.getBySession(id, {
+    includeSuperseded: true,
+  }) as DbMessage[]
   return {
     thread: dbThreadToThread(dbThread)!,
     messages: dbMessages.map(dbMessageToMessage),
