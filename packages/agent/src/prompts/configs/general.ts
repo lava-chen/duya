@@ -76,12 +76,12 @@ export const generalConfig: PromptSystemConfig = {
   ],
   dynamicSections: [
     // Global preferences
-    { name: 'language', compute: getLanguageSection, description: 'Language preference' },
-    { name: 'outputStyle', compute: getOutputStyleSection, description: 'Custom output style' },
+    { name: 'language', compute: getLanguageSection, template: 'dynamic/language.hbs', description: 'Language preference' },
+    { name: 'outputStyle', compute: getOutputStyleSection, template: 'dynamic/output-style.hbs', description: 'Custom output style' },
     // Environment state
-    { name: 'platform', compute: getPlatformSection, description: 'Communication platform-specific guidance' },
+    { name: 'platform', compute: getPlatformSection, template: 'dynamic/platform.hbs', description: 'Communication platform-specific guidance' },
     { name: 'environment', compute: getEnvironmentSection, description: 'Current directory state' },
-    { name: 'mcp', compute: getMcpInstructionsSection, description: 'MCP servers can change' },
+    { name: 'mcp', compute: getMcpInstructionsSection, template: 'dynamic/mcp-instructions.hbs', description: 'MCP servers can change' },
     { name: 'skills', compute: getSkillsMetadataSection, description: 'Skills can be loaded/unloaded' },
     { name: 'scratchpad', compute: getScratchpadSection, description: 'Scratchpad directory' },
     { name: 'memory', compute: getMemorySection, description: 'Persistent memory projection files may have been updated since last turn' },
@@ -89,7 +89,7 @@ export const generalConfig: PromptSystemConfig = {
     { name: 'recentSessions', compute: getRecentSessionsSection, description: 'Recent session metadata can change between turns' },
     // Task-level constraints
     { name: 'sessionGuidance', compute: getSessionGuidanceSection, description: 'Session-specific guidance' },
-    { name: 'visionGuidelines', compute: getVisionGuidelinesSection, description: 'Vision tool guidelines' },
+    { name: 'visionGuidelines', compute: getVisionGuidelinesSection, template: 'dynamic/vision-guidelines.hbs', description: 'Vision tool guidelines' },
     { name: 'visualVerification', compute: getVisualVerificationSection, description: 'Visual tasks require rendered-output verification' },
   ],
   preBuildHook: async (ctx) => {

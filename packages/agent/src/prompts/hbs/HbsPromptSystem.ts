@@ -27,6 +27,8 @@ import { fileURLToPath } from 'node:url';
 
 import type { PromptContext, SystemPrompt } from '../types.js';
 import { asSystemPrompt, CYBER_RISK_INSTRUCTION, SYSTEM_PROMPT_DYNAMIC_BOUNDARY, TOOL_NAMES } from '../types.js';
+import { buildLanguageGuidance } from '../language-guidance.js';
+import { getPlatformHint } from '../platformHints.js';
 import { HbsPromptRenderer } from './HandlebarsRenderer.js';
 
 const ASSETS_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../assets');
@@ -86,6 +88,28 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
       ? 'according to your "Output Style" below, which describes how you should respond to user queries. '
       : 'with a wide range of tasks including answering questions, providing explanations, creative work, analysis, and executing actions. ';
 
+  // Dynamic-section inputs (Plan 550 1c). Each is the precomputed string
+  // the .hbs templates need; empty strings cause the `{{#if}}` blocks to
+  // skip their body, matching the legacy `return null` short-circuits.
+  const languageGuidance = ctx.language ? buildLanguageGuidance(ctx.language) : '';
+  const platformHint = getPlatformHint(ctx.communicationPlatform) ?? '';
+  const outputStylePrompt =
+    ctx.outputStyleConfig && ctx.outputStyleConfig.prompt && ctx.outputStyleConfig.prompt.trim()
+      ? ctx.outputStyleConfig.prompt
+      : '';
+  const outputStyleName = ctx.outputStyleConfig?.name ?? '';
+  const mcpInstructionBlocks =
+    ctx.mcpServers && ctx.mcpServers.length > 0
+      ? ctx.mcpServers
+          .filter(
+            (server): server is { name: string; instructions?: string } =>
+              'instructions' in server && server.instructions !== undefined,
+          )
+          .map(server => `## ${server.name}\n${server.instructions}`)
+          .join('\n\n')
+      : '';
+  const hasVisionTool = ctx.enabledTools.has(TOOL_NAMES.VISION);
+
   return {
     ctx,
     outputStyleConfig,
@@ -107,6 +131,14 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
     fileLinkExample,
     spacedExample,
     imageRule,
+    // Plan 550 1c — dynamic-section variables
+    language_guidance: languageGuidance,
+    platform_hint: platformHint,
+    output_style_prompt: outputStylePrompt,
+    output_style_name: outputStyleName,
+    mcp_instruction_blocks: mcpInstructionBlocks,
+    has_vision_tool: hasVisionTool,
+    vision_tool_name: TOOL_NAMES.VISION,
     TOOL_NAMES,
   };
 }

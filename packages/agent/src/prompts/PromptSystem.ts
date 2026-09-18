@@ -55,6 +55,24 @@ function getSharedHbsPromptSystem(): HbsPromptSystem {
 }
 
 /**
+ * Render a single section through either its .hbs template (Plan 550 1c)
+ * or its TS `compute` function. The template path takes priority when
+ * both are present so a config can declare a .hbs override while keeping
+ * the TS function around for unit tests.
+ */
+async function renderSectionCompute(
+  def: SectionDef,
+  context: PromptContext,
+): Promise<string | null> {
+  if (def.template) {
+    const hbsSystem = getSharedHbsPromptSystem()
+    const out = hbsSystem.renderStaticTemplate(def.template, context).trim()
+    return out === '' ? null : out
+  }
+  return await Promise.resolve(def.compute(context))
+}
+
+/**
  * A section definition in a PromptSystemConfig.
  */
 export interface SectionDef {
@@ -62,6 +80,15 @@ export interface SectionDef {
   name: string
   /** Compute the section content. Return null to omit. */
   compute: (context: PromptContext) => string | null | Promise<string | null>
+  /**
+   * Optional: when set, render the section via the HbsPromptSystem instead
+   * of calling `compute`. Plan 550 1c uses this to migrate individual
+   * dynamic sections to .hbs without forcing the whole config over. The
+   * template receives the same `mapPromptContextToHbs` context as the
+   * static-template path; `compute` is kept as a reference but never
+   * invoked when `template` is present.
+   */
+  template?: string
   /**
    * If true, skip isSectionEnabled filtering — this section always renders.
    * Used by research for sections that exist outside the generic
@@ -220,12 +247,19 @@ export class PromptSystem {
   /**
    * Get static sections (cached across turns).
    * Filters by isSectionEnabled unless section declares bypassProfile.
+   *
+   * When a section declares `template`, the HbsPromptSystem renders the
+   * section content from the .hbs asset instead of calling `compute`.
+   * The `compute` function is kept as the legacy reference and never
+   * invoked at runtime in that case.
    */
   getStaticSections(context: PromptContext): PromptSection[] {
     const sections: PromptSection[] = []
     for (const def of this.config.staticSections) {
       if (!def.bypassProfile && !isSectionEnabled(this.profile, def.name)) continue
-      sections.push(cachedPromptSection(def.name, () => def.compute(context)))
+      sections.push(
+        cachedPromptSection(def.name, () => renderSectionCompute(def, context)),
+      )
     }
     return sections
   }
@@ -233,13 +267,19 @@ export class PromptSystem {
   /**
    * Get dynamic sections (recomputed every turn).
    * Filters by isSectionEnabled unless section declares bypassProfile.
+   *
+   * Same template-routing contract as getStaticSections.
    */
   getDynamicSections(context: PromptContext): PromptSection[] {
     const sections: PromptSection[] = []
     for (const def of this.config.dynamicSections) {
       if (!def.bypassProfile && !isSectionEnabled(this.profile, def.name)) continue
       sections.push(
-        volatilePromptSection(def.name, () => def.compute(context), def.description ?? 'Dynamic section'),
+        volatilePromptSection(
+          def.name,
+          () => renderSectionCompute(def, context),
+          def.description ?? 'Dynamic section',
+        ),
       )
     }
     return sections

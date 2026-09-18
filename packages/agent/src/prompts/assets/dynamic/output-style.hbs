@@ -1,0 +1,15 @@
+{{!--
+  Output Style section — Plan 550 1c.
+
+  Renders only when the user has selected a non-empty Output Style
+  (mirrors the "skip when prompt is empty" branch of the legacy
+  `getOutputStyleSection`). When absent, empty.
+
+  Body shape matches `getOutputStyleSection` verbatim:
+    # Output Style: <name>
+    <prompt>
+--}}
+{{#if output_style_prompt}}
+# Output Style: {{{output_style_name}}}
+{{{output_style_prompt}}}
+{{/if}}
