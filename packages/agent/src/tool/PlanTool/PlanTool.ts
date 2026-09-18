@@ -9,12 +9,15 @@
  * Returns markdown-formatted results for human readability.
  */
 
+import os from 'os';
+import path from 'path';
 import type { Tool, ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolExecutor } from '../registry.js';
 import {
   planStatus,
   planSearch,
   planComplete,
+  resolveProjectsRoot,
   type PlanStatusResult,
   type PlanSearchResult,
   type PlanCompleteResult,
@@ -70,6 +73,8 @@ function formatStatus(result: PlanStatusResult, filter: 'active' | 'all'): strin
     lines.push('> ⚠️ ' + idHealth.warning);
   }
 
+  lines.push('');
+  lines.push(`> Plans directory: \`${projectPlansDir(result.projectId)}\``);
   return lines.join('\n');
 }
 
@@ -100,6 +105,9 @@ function formatSearch(result: PlanSearchResult, query: string): string {
   lines.push('');
   lines.push(`_Showing up to 50 results. Refine your query to narrow results._`);
 
+  lines.push('');
+  const projectIds = [...new Set(results.map((r) => r.projectId))];
+  lines.push(`> Plans directories:\n${projectIds.map((p) => `>   \`${projectPlansDir(p)}\``).join('\n')}`);
   return lines.join('\n');
 }
 
@@ -112,11 +120,22 @@ function formatComplete(result: PlanCompleteResult, projectId: string, planId: n
   lines.push(`> New location: \`${escapeMd(result.newFile)}\``);
   lines.push('');
   lines.push(`Use \`plan({ action: 'status', projectId: '${projectId}', status: 'all' })\` to verify.`);
+  lines.push('');
+  lines.push(`> Plans directory: \`${projectPlansDir(projectId)}\``);
   return lines.join('\n');
 }
 
 function escapeMd(text: string): string {
   return text.replace(/([|\\`])/g, '\\$1');
+}
+
+/** Resolve `~/.duya/projects/<projectId>/plans` for human/markdown display. */
+function projectPlansDir(projectId: string): string {
+  const root = resolveProjectsRoot();
+  const home = os.homedir();
+  const full = path.join(root, projectId, 'plans');
+  const tilde = full.startsWith(home) ? '~' + full.slice(home.length) : full;
+  return tilde.split(path.sep).join('/');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
