@@ -937,6 +937,27 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       if (!sessionId || !channelAddress || !outbound) {
         return { success: false, reason: 'invalid_channel_deliver_payload' };
       }
+      // Validate the address token shape (`platform:chatId`) here so the
+      // downstream ChannelBackgroundWakes.deliverToChannel failure path
+      // never has to fall back to a defensive null-check on
+      // parseChannelAddress. channelDelivery validates the same shape, but
+      // surfacing it as an explicit IPC error keeps the failure reason
+      // honest instead of bubbling up an `Invalid channel address token`
+      // thrown from deep inside the connector stack.
+      {
+        const probe = channelAddress;
+        if (
+          typeof probe !== 'string' ||
+          probe.indexOf(':') <= 0 ||
+          probe.indexOf(':') === probe.length - 1
+        ) {
+          return {
+            success: false,
+            reason: 'invalid_channel_address',
+            detail: `channelAddress must be "platform:chatId"; got: ${JSON.stringify(channelAddress)}`,
+          };
+        }
+      }
 
       try {
         const kind: 'text' | 'attachment' = outbound.url ? 'attachment' : 'text';

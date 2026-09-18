@@ -266,15 +266,23 @@ export class DefaultChannelBackgroundWakes implements ChannelBackgroundWakes {
         LogComponent.AgentProcess,
       );
 
-      // Queue the failure for later `[channel-delivery-failed]` wake
-      const failure: DeliveryFailure = {
-        sessionId,
-        address: address!, // parseAddress always returns for valid tokens
-        outbound,
-        reason,
-        failedAt: Date.now(),
-      };
-      queueChannelDeliveryFailure(failure);
+      // Queue the failure for later `[channel-delivery-failed]` wake.
+      // channelDelivery validates the token and throws on malformed input,
+      // but defensively guard against the address still being null here —
+      // otherwise the failure record gets lost (and the original delivery
+      // error masks as a TypeError) when the IPC caller passes a token that
+      // a future channelDelivery relaxation accepts but parseChannelAddress
+      // does not.
+      const failure: DeliveryFailure | null = address
+        ? {
+            sessionId,
+            address,
+            outbound,
+            reason,
+            failedAt: Date.now(),
+          }
+        : null;
+      if (failure) queueChannelDeliveryFailure(failure);
 
       // Fire the failure wake without awaiting it: the wake runs its own turn
       // (it acquires the session lock internally), and blocking here would
