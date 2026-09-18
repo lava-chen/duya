@@ -37,6 +37,22 @@ import type { PromptProfile } from './modes/types.js'
 import { DEFAULT_PROMPT_PROFILE, isSectionEnabled } from './modes/index.js'
 import { cachedPromptSection, volatilePromptSection } from './constants/promptSections.js'
 import { getShellForPrompt } from '../utils/shellDetector.js'
+import { HbsPromptSystem } from './hbs/HbsPromptSystem.js'
+
+/**
+ * Process-wide HbsPromptSystem singleton. Plan 550: keeping a single
+ * instance lets every PromptSystem share the compile cache, so the
+ * first-turn cost of `Handlebars.compile` is amortised across the whole
+ * agent lifetime. Construction is lazy so test code can mock the assets
+ * root via `HbsPromptSystem` directly.
+ */
+let sharedHbsPromptSystem: HbsPromptSystem | undefined
+function getSharedHbsPromptSystem(): HbsPromptSystem {
+  if (!sharedHbsPromptSystem) {
+    sharedHbsPromptSystem = new HbsPromptSystem()
+  }
+  return sharedHbsPromptSystem
+}
 
 /**
  * A section definition in a PromptSystemConfig.
@@ -89,6 +105,15 @@ export interface PromptSystemConfig {
   staticSections: SectionDef[]
   /** Dynamic (volatile) sections. */
   dynamicSections: SectionDef[]
+  /**
+   * Optional: when set, replaces the static-section chain with a single
+   * Handlebars template rendered via `HbsPromptSystem`. The dynamic
+   * sections still run through the TS path; only the static half is
+   * swapped. Plan 550 step 1b/1c lands this flag; defaults stay unset so
+   * legacy configs (code / research / gateway) keep their TS sections
+   * until they migrate.
+   */
+  staticTemplate?: string
   /** Optional: extend PromptContext with extra fields after base mapping. */
   contextExtender?: ContextExtender
   /** Optional: async side-effect before buildSystemPrompt. */
@@ -223,6 +248,11 @@ export class PromptSystem {
   /**
    * Build the complete system prompt.
    * Template method: preBuildHook → getSections → resolve → combine.
+   *
+   * If `config.staticTemplate` is set (Plan 550 1b+), the static half is
+   * rendered via `HbsPromptSystem` and the TS static-sections chain is
+   * skipped. The dynamic half is still TS-driven; only the static half
+   * is swapped in this commit.
    */
   async buildSystemPrompt(context: PromptContext): Promise<SystemPrompt> {
     // Pre-build hook: async side-effects + cache invalidation.
@@ -235,12 +265,33 @@ export class PromptSystem {
       }
     }
 
-    const staticSections = this.getStaticSections(context)
     const dynamicSections = this.getDynamicSections(context)
+    const dynamicResults = await Promise.all(
+      dynamicSections.map(section => Promise.resolve(section.compute())),
+    )
+    const dynamicContent = dynamicResults.filter(
+      (c): c is string => c !== null,
+    )
 
-    const { staticContent, dynamicContent } = await this.resolveSections(
+    if (this.config.staticTemplate) {
+      // Plan 550 1b: render the static half through HbsPromptSystem.
+      const hbsSystem = getSharedHbsPromptSystem()
+      const staticPart = hbsSystem.buildStaticSections(
+        this.config.staticTemplate,
+        context,
+      )
+      const staticContent = staticPart === null ? [] : [staticPart]
+      return asSystemPrompt([
+        ...staticContent,
+        SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+        ...dynamicContent,
+      ])
+    }
+
+    const staticSections = this.getStaticSections(context)
+    const { staticContent } = await this.resolveSections(
       staticSections,
-      dynamicSections,
+      [], // dynamic handled above to share a single render path
     )
 
     return asSystemPrompt([

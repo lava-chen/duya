@@ -50,7 +50,15 @@ import { getMemorySection } from '../sections/dynamic/memorySection.js'
 
 export const generalConfig: PromptSystemConfig = {
   name: 'general',
+  // Plan 550 1b: render the static half via Handlebars. The dynamic
+  // sections below stay on the TS path until 1c migrates them.
+  staticTemplate: 'general/system-prompt.md.hbs',
   staticSections: [
+    // These entries are intentionally empty when `staticTemplate` is set;
+    // the buildSystemPrompt path routes around them. They remain so the
+    // section names still show up in cache-key introspection tools and
+    // future migrations can re-introduce partial TS overrides per
+    // section without rewiring PromptSystemConfig.
     { name: 'identity', compute: getIdentitySection },
     { name: 'communication', compute: getCommunicationSection },
     { name: 'finalAnswer', compute: getFinalAnswerSection },
