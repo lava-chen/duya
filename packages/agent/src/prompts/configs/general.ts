@@ -5,10 +5,13 @@
  *   identity → communication → finalAnswer → system → tasks →
  *   destructiveActions → tools → skillUsage → project → duyaDesktopContext
  *
- * Static sections (cached, stable across turns) are followed by
- * dynamic sections (recomputed every turn). Dynamic ordering groups
- * by volatility: global preferences first, then environment state,
- * then task-level constraints.
+ * Plan 550 1b: the static half is rendered through a single .hbs
+ * template (`general/system-prompt.md.hbs`). The legacy per-section
+ * TS getters under `general/sections/*` are intentionally NOT imported
+ * here any more — they are still re-exported by other configs (code /
+ * gateway / research) that have not migrated yet, so the .ts files
+ * stay on disk until 1d sweeps them. Dynamic sections still run through
+ * the TS path; 1c migrates the five smallest.
  *
  * Memory section: guides the agent to read auto-generated memory
  * projection files under ~/.duya/memory/ and to request updates via
@@ -17,21 +20,7 @@
  */
 
 import type { PromptSystemConfig } from '../PromptSystem.js'
-import { TOOL_NAMES } from '../types.js'
 import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
-
-// Static sections
-import { getIdentitySection } from '../general/sections/identity.js'
-import { getCommunicationSection } from '../general/sections/communication.js'
-import { getFinalAnswerSection } from '../general/sections/finalAnswer.js'
-import { getSystemSection } from '../general/sections/system.js'
-import { getTasksSection } from '../general/sections/tasks.js'
-import { getDestructiveActionsSection } from '../general/sections/destructiveActions.js'
-import { getConfigProtectionSection } from '../general/sections/configProtection.js'
-import { getToolsSection } from '../general/sections/tools.js'
-import { getSkillUsageSection } from '../general/sections/skillUsage.js'
-import { getProjectSection } from '../general/sections/project.js'
-import { getDuyaDesktopContextSection } from '../sections/duyaDesktopContext.js'
 
 // Dynamic sections — shared across most profiles via the sections/dynamic/ tree
 import { getLanguageSection } from '../sections/dynamic/language.js'
@@ -50,30 +39,16 @@ import { getMemorySection } from '../sections/dynamic/memorySection.js'
 
 export const generalConfig: PromptSystemConfig = {
   name: 'general',
-  // Plan 550 1b: render the static half via Handlebars. The dynamic
-  // sections below stay on the TS path until 1c migrates them.
+  // Plan 550 1b: render the static half via Handlebars. The .hbs
+  // template hosts all 11 static sections inlined; see
+  // assets/general/system-prompt.md.hbs for the canonical body.
   staticTemplate: 'general/system-prompt.md.hbs',
-  staticSections: [
-    // These entries are intentionally empty when `staticTemplate` is set;
-    // the buildSystemPrompt path routes around them. They remain so the
-    // section names still show up in cache-key introspection tools and
-    // future migrations can re-introduce partial TS overrides per
-    // section without rewiring PromptSystemConfig.
-    { name: 'identity', compute: getIdentitySection },
-    { name: 'communication', compute: getCommunicationSection },
-    { name: 'finalAnswer', compute: getFinalAnswerSection },
-    { name: 'system', compute: getSystemSection },
-    { name: 'tasks', compute: getTasksSection },
-    { name: 'destructiveActions', compute: getDestructiveActionsSection },
-    { name: 'configProtection', compute: getConfigProtectionSection },
-    { name: 'tools', compute: getToolsSection },
-    {
-      name: 'skillUsage',
-      compute: (ctx) => ctx.enabledTools.has(TOOL_NAMES.SKILL) ? getSkillUsageSection(ctx) : null,
-    },
-    { name: 'project', compute: getProjectSection },
-    { name: 'duyaDesktopContext', compute: getDuyaDesktopContextSection },
-  ],
+  // Static sections live entirely in the .hbs template above. The
+  // empty array is required by the type — `staticSections` is a
+  // general-purpose field for configs that have not migrated yet, and
+  // keeping it empty here documents that there is nothing left to
+  // resolve on the TS path for the General config.
+  staticSections: [],
   dynamicSections: [
     // Global preferences
     { name: 'language', compute: getLanguageSection, template: 'dynamic/language.hbs', description: 'Language preference' },
