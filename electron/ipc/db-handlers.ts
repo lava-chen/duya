@@ -20,6 +20,7 @@ import { getCoreStores } from '../db/core-connection';
 import { getChannelManager } from '../messaging/port-manager';
 import { invertPatch } from '../db/core/conductors/invert-patch';
 import { createConductorUndoRedoHandlers } from './conductor-handlers/conductor-undo-redo-handlers';
+import { createConductorCaptureHandlers } from '../conductor/capture-bridge';
 import { updateDatabasePath, readBootConfig } from '../config/boot-config';
 import { emitGatewayConfigChanged, isGatewayConfigKey } from '../gateway/config-events';
 import { notifyMcpConfigChanged } from '../services/mcp-write-reload';
@@ -1932,6 +1933,11 @@ export function registerConductorHandlers(): void {
     getChannelManager,
   });
 
+  // Plan 534 Phase 3.7.e: capture handlers (asset upload, link snapshot) live in
+  // electron/conductor/capture-bridge.ts. They share getDb() access but do not
+  // need the channel manager.
+  const conductorCaptureHandlers = createConductorCaptureHandlers({ getDb });
+
   ipcMain.handle('conductor:canvas:list', () => {
     return getCoreStores().conductor.listCanvases();
   });
@@ -2534,57 +2540,11 @@ export function registerConductorHandlers(): void {
     return conductorUndoRedoHandlers.redo(_event, canvasId);
   });
 
-  ipcMain.handle('conductor:asset:upload', (_event, payload: { canvasId: string; buffer: ArrayBuffer; fileName: string; mimeType?: string }) => {
-    const { canvasId, buffer, fileName, mimeType } = payload;
-    if (!canvasId || !buffer || !fileName) {
-      throw new Error('canvasId, buffer, and fileName are required');
-    }
-    return conductorUploadAsset(canvasId, buffer, fileName, mimeType);
-  });
+  ipcMain.handle('conductor:asset:upload', conductorCaptureHandlers.upload);
 
   ipcMain.handle(
     'conductor:link:captureSnapshot',
-    async (
-      _event,
-      payload: {
-        canvasId: string;
-        elementId: string;
-        url: string;
-        mode: import('../../packages/conductor/src/renderer/types/canvas-node').LinkSnapshotMode;
-      },
-    ) => {
-      const { canvasId, elementId, url, mode } = payload;
-      if (!canvasId || !elementId || !url || !mode) {
-        throw new Error('canvasId, elementId, url, and mode are required');
-      }
-      if (mode === 'none') {
-        throw new Error('Cannot capture snapshot for mode "none"');
-      }
-
-      const normalizedUrl = /^https?:\/\//.test(url) ? url : `https://${url}`;
-      const canvasRow = getDb()
-        .prepare('SELECT project_path FROM conductor_canvases WHERE id = ?')
-        .get(canvasId) as {
-        project_path: string | null;
-      } | undefined;
-      const projectPath = canvasRow?.project_path ?? null;
-
-      const capture = await captureWebsiteSnapshot(normalizedUrl, mode);
-      const asset = conductorUploadProjectAsset(
-        canvasId,
-        projectPath,
-        capture.buffer,
-        `snapshot-${mode}-${Date.now()}.png`,
-        'image/png',
-      );
-
-      return {
-        assetId: asset.assetId,
-        url: asset.url,
-        width: capture.width,
-        height: capture.height,
-      };
-    },
+    conductorCaptureHandlers.captureLinkSnapshot,
   );
 
   dbLogger.info('Conductor handlers registered', undefined, LogComponent.DB);
