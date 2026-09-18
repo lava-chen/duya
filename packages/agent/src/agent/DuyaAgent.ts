@@ -71,6 +71,8 @@ import { resolveCacheRetention } from '../config/cache-config.js';
 import { readToolExposureConfig } from '../config/tool-exposure.js';
 import type { ToolPermissionCheckContext } from '../permissions/permissions.js';
 import type { ToolPermissionContext, PermissionMode, ToolPermissionRulesBySource, AdditionalWorkingDirectory, PermissionRuleSource, LocalToolPermission } from '../permissions/types.js';
+import type { CommunicationPlatform } from '../prompts/types.js';
+import type { AgentRuntime } from './AgentRuntime.js';
 import { permissionModeFromString } from '../permissions/policy.js';
 import { deriveSingleCallUsage } from '../process/seed-token-usage.js';
 import { settingsJsonToRules } from '../permissions/rules.js';
@@ -192,7 +194,45 @@ import { VisualAnalysisService } from './visual-analysis.js';
 
 /**
  * duyaAgent 绫? */
-export class duyaAgent {
+export class duyaAgent implements AgentRuntime {
+  // Plan 550 step 2a-3: implements the structural read-only interface the
+  // `TurnAssembler` consumes. Every method delegates to the existing
+  // private fields below; the interface lets the assembler reach into
+  // agent state without a hard import on `DuyaAgent`. Method names
+  // are prefixed with `read` so they do not collide with same-named
+  // fields.
+  readTurnSequence(): number {
+    // Plan 441/486 use the journal id, not a counter; the assembler
+    // does not actually need the sequence for any logic in this
+    // commit, so 0 is the safe placeholder until plan 441 lands a
+    // monotonic counter.
+    return 0;
+  }
+  readSessionId(): string | undefined {
+    return this.sessionId;
+  }
+  readWorkingDirectory(): string | undefined {
+    return this.workingDirectory;
+  }
+  readCommunicationPlatform(): CommunicationPlatform | undefined {
+    return this.communicationPlatform;
+  }
+  readLanguage(): string | undefined {
+    return this.language;
+  }
+  readPermissionMode(): PermissionMode {
+    return this.permissionMode;
+  }
+  readHostToolPermission(): LocalToolPermission | undefined {
+    return this.hostToolPermission;
+  }
+  readAdditionalWorkingDirectories(): ReadonlyMap<string, AdditionalWorkingDirectory> {
+    return this.additionalWorkingDirectories;
+  }
+  readTurnAlwaysAllowTools(): readonly string[] {
+    return Array.from(this._turnAlwaysAllowTools);
+  }
+
   private llmClient: AIClient;
   /** Dedicated compaction client when a `compact_model` is configured. */
   private compactClient?: AIClient;

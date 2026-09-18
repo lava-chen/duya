@@ -22,24 +22,33 @@ import type { LocalToolPermission, PermissionMode } from '../permissions/types.j
  * return `undefined` for optional fields so the assembler can spread
  * them into `TurnContextShape` without conditional clauses scattered
  * across the build path.
+ *
+ * Method names are prefixed with `read` to avoid colliding with the
+ * existing `duyaAgent` private fields of the same logical name
+ * (`sessionId`, `workingDirectory`, `language`, `permissionMode`,
+ * `hostToolPermission`, `communicationPlatform`,
+ * `additionalWorkingDirectories`, `_turnAlwaysAllowTools`). A field
+ * and a method with the same name are different symbols in TS, but
+ * the interface-vs-class structural check needs the method to be
+ * unambiguously declared.
  */
 export interface AgentRuntime {
   /** Per-session monotonically-increasing turn sequence. */
-  turnSequence(): number;
+  readTurnSequence(): number;
   /** Session id used in journal + SSE events. */
-  sessionId(): string | undefined;
+  readSessionId(): string | undefined;
   /** Workspace directory for tool execution. */
-  workingDirectory(): string | undefined;
+  readWorkingDirectory(): string | undefined;
   /** Communication platform (CLI, IM, ...) when one is configured. */
-  communicationPlatform(): CommunicationPlatform | undefined;
+  readCommunicationPlatform(): CommunicationPlatform | undefined;
   /** User-preferred response language. */
-  language(): string | undefined;
+  readLanguage(): string | undefined;
   /** Permission mode for tool execution. */
-  permissionMode(): PermissionMode;
+  readPermissionMode(): PermissionMode;
   /** Per-tool local permission overrides when configured. */
-  hostToolPermission(): LocalToolPermission | undefined;
+  readHostToolPermission(): LocalToolPermission | undefined;
   /** Additional working directories permitted for tool use. */
-  additionalWorkingDirectories(): ReadonlyMap<string, unknown>;
+  readAdditionalWorkingDirectories(): ReadonlyMap<string, unknown>;
   /** Per-turn always-allow tool names (reset by every `streamChat`). */
-  turnAlwaysAllowTools(): readonly string[];
+  readTurnAlwaysAllowTools(): readonly string[];
 }

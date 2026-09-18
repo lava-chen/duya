@@ -21,15 +21,15 @@ import type { CommunicationPlatform } from '../../../src/prompts/types.js';
 
 function fakeAgent(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
   return {
-    turnSequence: () => 7,
-    sessionId: () => 'session-1',
-    workingDirectory: () => 'E:\\Projects\\duya',
-    communicationPlatform: () => undefined,
-    language: () => undefined,
-    permissionMode: () => 'default',
-    hostToolPermission: () => undefined,
-    additionalWorkingDirectories: () => new Map(),
-    turnAlwaysAllowTools: () => [],
+    readTurnSequence: () => 7,
+    readSessionId: () => 'session-1',
+    readWorkingDirectory: () => 'E:\\Projects\\duya',
+    readCommunicationPlatform: () => undefined,
+    readLanguage: () => undefined,
+    readPermissionMode: () => 'default',
+    readHostToolPermission: () => undefined,
+    readAdditionalWorkingDirectories: () => new Map(),
+    readTurnAlwaysAllowTools: () => [],
     ...overrides,
   };
 }
@@ -38,9 +38,9 @@ describe('TurnAssembler.build', () => {
   it('returns a TurnContext with the flattened prompt and per-turn fields', () => {
     const ctx = TurnAssembler.build(
       fakeAgent({
-        sessionId: () => 'session-abc',
-        language: () => 'zh-CN',
-        communicationPlatform: () => 'cli' as CommunicationPlatform,
+        readSessionId: () => 'session-abc',
+        readLanguage: () => 'zh-CN',
+        readCommunicationPlatform: () => 'cli' as CommunicationPlatform,
       }),
       undefined,
       'hello world',
@@ -67,7 +67,7 @@ describe('TurnAssembler.build', () => {
 
   it('honours options.turnId when the caller supplies one', () => {
     const ctx = TurnAssembler.build(
-      fakeAgent({ turnSequence: () => 42 }),
+      fakeAgent({ readTurnSequence: () => 42 }),
       { turnId: 'turn-xyz' },
       'hi',
     );
@@ -93,7 +93,7 @@ describe('TurnAssembler.build', () => {
 
   it('captures always-allow grants from the agent when no options', () => {
     const ctx = TurnAssembler.build(
-      fakeAgent({ turnAlwaysAllowTools: () => ['EditTool'] }),
+      fakeAgent({ readTurnAlwaysAllowTools: () => ['EditTool'] }),
       undefined,
       'hi',
     );
@@ -134,7 +134,7 @@ describe('TurnAssembler.build', () => {
 
   it('reads permission mode from the agent runtime', () => {
     const ctx = TurnAssembler.build(
-      fakeAgent({ permissionMode: () => 'bypassPermissions' }),
+      fakeAgent({ readPermissionMode: () => 'bypassPermissions' }),
       undefined,
       'hi',
     );
@@ -147,7 +147,7 @@ describe('TurnAssembler.build', () => {
       ['C:/extra/two', { reason: 'scratch' }],
     ]);
     const ctx = TurnAssembler.build(
-      fakeAgent({ additionalWorkingDirectories: () => dirs }),
+      fakeAgent({ readAdditionalWorkingDirectories: () => dirs }),
       undefined,
       'hi',
     );

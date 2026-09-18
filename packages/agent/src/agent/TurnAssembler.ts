@@ -43,11 +43,7 @@ function flattenPrompt(prompt: string | MessageContent[]): string {
  * private state of `duyaAgent`.
  */
 function readTurnSequence(agent: AgentRuntime): number {
-  // Plan 441/486: the agent exposes `currentTurnId` so the journal can
-  // propagate the id without each call site threading it through.
-  // When the caller supplied one in `options.turnId`, the assembler
-  // mirrors the legacy behaviour and skips incrementing.
-  return agent.turnSequence();
+  return agent.readTurnSequence();
 }
 
 /**
@@ -76,17 +72,17 @@ export class TurnAssembler {
       turnId: options?.turnId
         ? { sequence: readTurnSequence(agent), id: options.turnId }
         : null,
-      sessionId: agent.sessionId() ?? null,
-      workingDirectory: agent.workingDirectory() ?? null,
-      ...(agent.communicationPlatform() !== undefined
-        ? { communicationPlatform: agent.communicationPlatform() }
+      sessionId: agent.readSessionId() ?? null,
+      workingDirectory: agent.readWorkingDirectory() ?? null,
+      ...(agent.readCommunicationPlatform() !== undefined
+        ? { communicationPlatform: agent.readCommunicationPlatform() }
         : {}),
-      ...(agent.language() !== undefined ? { language: agent.language() } : {}),
-      permissionMode: agent.permissionMode(),
-      ...(agent.hostToolPermission() !== undefined
-        ? { hostToolPermission: agent.hostToolPermission() }
+      ...(agent.readLanguage() !== undefined ? { language: agent.readLanguage() } : {}),
+      permissionMode: agent.readPermissionMode(),
+      ...(agent.readHostToolPermission() !== undefined
+        ? { hostToolPermission: agent.readHostToolPermission() }
         : {}),
-      additionalWorkingDirectories: agent.additionalWorkingDirectories(),
+      additionalWorkingDirectories: agent.readAdditionalWorkingDirectories(),
       approval: buildApprovalLedger(options, agent),
       mentions: buildMentions(options, agent),
       promptText: flattenPrompt(prompt),
@@ -107,7 +103,7 @@ function buildApprovalLedger(
   agent: AgentRuntime,
 ) {
   const alwaysAllowTools = new Set<string>(
-    options?.approvedAlwaysAllowTools ?? agent.turnAlwaysAllowTools(),
+    options?.approvedAlwaysAllowTools ?? agent.readTurnAlwaysAllowTools(),
   );
   if (alwaysAllowTools.size === 0 && !options?.consumeApprovedEffect) {
     return NO_APPROVAL_LEDGER;
