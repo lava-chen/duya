@@ -2983,13 +2983,13 @@ export class duyaAgent implements AgentRuntime {
     // (user interrupt). Fail-open: a broken hook never blocks the done
     // event.
     yield* dispatchHooks('Stop', {
-      session_id: this.sessionId ?? '',
+      session_id: turnContext.sessionId ?? '',
       cwd: this.workingDirectory ?? '',
       hook_event_name: 'Stop',
       reason: 'user_request',
     });
     yield* dispatchHooks('SessionEnd', {
-      session_id: this.sessionId ?? '',
+      session_id: turnContext.sessionId ?? '',
       cwd: this.workingDirectory ?? '',
       hook_event_name: 'SessionEnd',
       reason: 'user_exit',
