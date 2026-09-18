@@ -49,6 +49,18 @@ export type ConductorActionType =
  * - `prevXxx` fields in the patch carry the pre-action value; if absent we
  *   fall back to `xxx` itself, which means "undo a no-op" — the patch is a
  *   no-op identity that still produces a transaction log entry.
+ *
+ * Patch shape (must match what conductor:action writes — see db-handlers.ts):
+ *   - canvas.rename:    { name, prevName }
+ *   - widget.*:         { prevPosition, prevConfig, prevData, deletedWidget, restoredWidget, ... }
+ *   - element.create:   { element }
+ *   - element.move:     { position, prevPosition }
+ *   - element.update:   { config, vizSpec, position, prevConfig, prevVizSpec, prevPosition }
+ *   - element.delete:   { deletedElement }
+ *   - element.create_native: { element }
+ *   - connector.create:  { element }  (rows share the conductor_elements table)
+ *   - element.update_content: { config, prevConfig }
+ *   - element.reparent:  { metadata, prevMetadata }
  */
 export function invertPatch(
   patch: Record<string, unknown>,
@@ -90,23 +102,31 @@ export function invertPatch(
       return {};
 
     // element.create_native — undo = delete the native node by id.
-    // The action handler stores the new element's id under patch.element.id;
-    // we return it so the undo branch can DELETE FROM conductor_elements.
+    // The action handler stores the new element's row under patch.element;
+    // we forward its id so the undo branch can DELETE FROM conductor_elements.
     case 'element.create_native':
       return { elementId: (patch as any).element?.id };
 
-    // connector.create — undo = delete the connector. The patch stores the
-    // connector row under patch.connector; we forward its id.
+    // connector.create — undo = delete the connector row. Connectors are
+    // also stored in conductor_elements (kind=native/connector) so the
+    // patch shape matches element.create_native exactly: the row lives
+    // under patch.element with an element.id.
     case 'connector.create':
-      return { connectorId: (patch as any).connector?.id };
+      return { elementId: (patch as any).element?.id };
 
-    // element.update_content — undo restores prevContent if present.
+    // element.update_content — undo restores the previous config.
+    // The action handler writes the new config under patch.config and the
+    // old one under patch.prevConfig; we forward prevConfig so the undo
+    // branch can UPDATE conductor_elements.config back to the previous JSON.
     case 'element.update_content':
-      return { content: (patch as any).prevContent ?? patch.content };
+      return { content: (patch as any).prevConfig ?? patch.config };
 
-    // element.reparent — undo restores prevParentId if present.
+    // element.reparent — undo restores the previous parentId.
+    // The action handler writes the new metadata under patch.metadata and
+    // the old one under patch.prevMetadata; both are JSON objects with a
+    // parentId field. We forward the previous parentId.
     case 'element.reparent':
-      return { parentId: (patch as any).prevParentId ?? patch.parentId };
+      return { parentId: (patch as any).prevMetadata?.parentId ?? (patch as any).metadata?.parentId };
 
     default:
       return {};

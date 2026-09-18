@@ -19,6 +19,8 @@ import { setBrowserMaxTabs } from '../services/browser/daemon';
 import { getCoreStores } from '../db/core-connection';
 import { getChannelManager } from '../messaging/port-manager';
 import { invertPatch } from '../db/core/conductors/invert-patch';
+import { createConductorUndoRedoHandlers } from './conductor-handlers/conductor-undo-redo-handlers';
+import { createConductorCaptureHandlers } from '../conductor/capture-bridge';
 import { updateDatabasePath, readBootConfig } from '../config/boot-config';
 import { emitGatewayConfigChanged, isGatewayConfigKey } from '../gateway/config-events';
 import { notifyMcpConfigChanged } from '../services/mcp-write-reload';
@@ -1925,6 +1927,17 @@ export function registerDbHandlers(): void {
 export function registerConductorHandlers(): void {
   if (!getDatabase()) return;
 
+  // Plan 534 Phase 3.7.d: undo/redo are thin delegators over runConductorUndo/Redo.
+  const conductorUndoRedoHandlers = createConductorUndoRedoHandlers({
+    getDb,
+    getChannelManager,
+  });
+
+  // Plan 534 Phase 3.7.e: capture handlers (asset upload, link snapshot) live in
+  // electron/conductor/capture-bridge.ts. They share getDb() access but do not
+  // need the channel manager.
+  const conductorCaptureHandlers = createConductorCaptureHandlers({ getDb });
+
   ipcMain.handle('conductor:canvas:list', () => {
     return getCoreStores().conductor.listCanvases();
   });
@@ -2520,318 +2533,18 @@ export function registerConductorHandlers(): void {
   });
 
   ipcMain.handle('conductor:undo', (_event, canvasId: string) => {
-    const d = getDb();
-    const now = Date.now();
-
-    const lastAction = d.prepare(
-      "SELECT * FROM conductor_actions WHERE canvas_id = ? AND reversible = 1 AND undone_at IS NULL ORDER BY ts DESC LIMIT 1"
-    ).get(canvasId) as any;
-    if (!lastAction) return { success: false, reason: 'No reversible action to undo' };
-
-    const patch = lastAction.result_patch ? JSON.parse(lastAction.result_patch) : null;
-    if (!patch) return { success: false, reason: 'No result patch to invert' };
-
-    const inverted = invertPatch(patch, lastAction.action_type);
-
-    const txn = d.transaction(() => {
-      d.prepare('UPDATE conductor_actions SET undone_at = ? WHERE id = ?').run(now, lastAction.id);
-
-      switch (lastAction.action_type) {
-        case 'canvas.rename': {
-          d.prepare('UPDATE conductor_canvases SET name = ?, updated_at = ? WHERE id = ?').run(inverted.name, now, canvasId);
-          break;
-        }
-        case 'widget.create': {
-          d.prepare('DELETE FROM conductor_widgets WHERE id = ?').run(lastAction.widget_id);
-          d.prepare('DELETE FROM conductor_elements WHERE id = ?').run(lastAction.widget_id);
-          break;
-        }
-        case 'widget.move':
-        case 'widget.resize': {
-          d.prepare('UPDATE conductor_widgets SET position = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(inverted.position), now, lastAction.widget_id);
-          const widgetPos = inverted.position as any;
-          const canvasPos = { x: widgetPos.x ?? 0, y: widgetPos.y ?? 0, w: widgetPos.w ?? 4, h: widgetPos.h ?? 3, zIndex: 0, rotation: 0 };
-          d.prepare('UPDATE conductor_elements SET position = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(canvasPos), now, lastAction.widget_id);
-          break;
-        }
-        case 'widget.update_config': {
-          d.prepare('UPDATE conductor_widgets SET config = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(inverted.config), now, lastAction.widget_id);
-          d.prepare('UPDATE conductor_elements SET config = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(inverted.config), now, lastAction.widget_id);
-          break;
-        }
-        case 'widget.update_data': {
-          d.prepare('UPDATE conductor_widgets SET data = ?, data_version = data_version - 1, updated_at = ? WHERE id = ?').run(JSON.stringify(inverted.data), now, lastAction.widget_id);
-          d.prepare('UPDATE conductor_elements SET config = ?, data_version = data_version - 1, updated_at = ? WHERE id = ?').run(JSON.stringify(inverted.data), now, lastAction.widget_id);
-          break;
-        }
-        case 'widget.delete': {
-          const delWidget = patch.deletedWidget;
-          if (delWidget) {
-            d.prepare(
-              `INSERT INTO conductor_widgets (id, canvas_id, kind, type, position, config, data, data_version, source_code, state, permissions, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'idle', ?, ?, ?)`
-            ).run(
-              delWidget.id, canvasId, delWidget.kind, delWidget.type,
-              JSON.stringify(delWidget.position), JSON.stringify(delWidget.config), JSON.stringify(delWidget.data),
-              delWidget.dataVersion, JSON.stringify(delWidget.permissions), now, now
-            );
-            const dwPos = delWidget.position;
-            const ecPos = { x: dwPos.x ?? 0, y: dwPos.y ?? 0, w: dwPos.w ?? 4, h: dwPos.h ?? 3, zIndex: 0, rotation: 0 };
-            const mgConfig = { ...delWidget.data, ...delWidget.config };
-            const ecMeta = { label: `${delWidget.kind}:${delWidget.type}`, tags: [], createdBy: 'user' };
-            d.prepare(
-              `INSERT OR IGNORE INTO conductor_elements (id, canvas_id, element_kind, position, config, viz_spec, source_code, state, data_version, permissions, metadata, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, NULL, NULL, 'idle', ?, ?, ?, ?, ?)`
-            ).run(delWidget.id, canvasId, `widget/${delWidget.type}`, JSON.stringify(ecPos), JSON.stringify(mgConfig), delWidget.dataVersion, JSON.stringify(delWidget.permissions), JSON.stringify(ecMeta), now, now);
-          }
-          break;
-        }
-        case 'widget.restore': {
-          d.prepare('DELETE FROM conductor_widgets WHERE id = ?').run(lastAction.widget_id);
-          d.prepare('DELETE FROM conductor_elements WHERE id = ?').run(lastAction.widget_id);
-          break;
-        }
-        case 'element.create': {
-          d.prepare('DELETE FROM conductor_elements WHERE id = ?').run(lastAction.widget_id);
-          break;
-        }
-        case 'element.move': {
-          d.prepare('UPDATE conductor_elements SET position = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(inverted.position), now, lastAction.widget_id);
-          break;
-        }
-        case 'element.update': {
-          if (inverted.config !== undefined) {
-            d.prepare('UPDATE conductor_elements SET config = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(inverted.config), now, lastAction.widget_id);
-          }
-          if (inverted.vizSpec !== undefined) {
-            d.prepare('UPDATE conductor_elements SET viz_spec = ?, updated_at = ? WHERE id = ?').run(inverted.vizSpec ? JSON.stringify(inverted.vizSpec) : null, now, lastAction.widget_id);
-          }
-          if (inverted.position !== undefined) {
-            d.prepare('UPDATE conductor_elements SET position = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(inverted.position), now, lastAction.widget_id);
-          }
-          break;
-        }
-        case 'element.delete': {
-          const delElement = patch.deletedElement;
-          if (delElement) {
-            d.prepare(
-              `INSERT INTO conductor_elements (id, canvas_id, element_kind, position, config, viz_spec, source_code, state, data_version, permissions, metadata, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`
-            ).run(
-              delElement.id, canvasId, delElement.elementKind,
-              JSON.stringify(delElement.position), JSON.stringify(delElement.config),
-              delElement.vizSpec ? JSON.stringify(delElement.vizSpec) : null,
-              delElement.state, delElement.dataVersion,
-              JSON.stringify(delElement.permissions), JSON.stringify(delElement.metadata),
-              now, now
-            );
-          }
-          break;
-        }
-        case 'element.arrange': {
-          break;
-        }
-      }
-
-      const channelManager = getChannelManager();
-      channelManager?.sendToChannel('conductor', { type: 'conductor:state:patch', _v2: true, canvasId, undoActionId: lastAction.id, inverted });
-    });
-
-    txn();
-    return { success: true, actionId: lastAction.id, inverted };
+    return conductorUndoRedoHandlers.undo(_event, canvasId);
   });
 
   ipcMain.handle('conductor:redo', (_event, canvasId: string) => {
-    const d = getDb();
-    const now = Date.now();
-
-    const undoneAction = d.prepare(
-      "SELECT * FROM conductor_actions WHERE canvas_id = ? AND undone_at IS NOT NULL ORDER BY undone_at DESC LIMIT 1"
-    ).get(canvasId) as any;
-    if (!undoneAction) return { success: false, reason: 'No action to redo' };
-
-    const patch = undoneAction.result_patch ? JSON.parse(undoneAction.result_patch) : null;
-    if (!patch) return { success: false, reason: 'No result patch to redo' };
-
-    const txn = d.transaction(() => {
-      d.prepare('UPDATE conductor_actions SET undone_at = NULL WHERE id = ?').run(undoneAction.id);
-
-      switch (undoneAction.action_type) {
-        case 'canvas.rename': {
-          d.prepare('UPDATE conductor_canvases SET name = ?, updated_at = ? WHERE id = ?').run(patch.name, now, canvasId);
-          break;
-        }
-        case 'widget.create': {
-          const widget = patch.widget;
-          d.prepare(
-            `INSERT INTO conductor_widgets (id, canvas_id, kind, type, position, config, data, data_version, source_code, state, permissions, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'idle', ?, ?, ?)`
-          ).run(
-            widget.id, canvasId, widget.kind, widget.type,
-            JSON.stringify(widget.position), JSON.stringify(widget.config), JSON.stringify(widget.data),
-            widget.dataVersion, JSON.stringify(widget.permissions), widget.createdAt, now
-          );
-          const element = patch.element;
-          if (element) {
-            d.prepare(
-              `INSERT OR IGNORE INTO conductor_elements (id, canvas_id, element_kind, position, config, viz_spec, source_code, state, data_version, permissions, metadata, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, NULL, NULL, 'idle', ?, ?, ?, ?, ?)`
-            ).run(
-              element.id, canvasId, element.elementKind,
-              JSON.stringify(element.position), JSON.stringify(element.config),
-              element.dataVersion ?? 1,
-              JSON.stringify(element.permissions), JSON.stringify(element.metadata),
-              element.createdAt ?? now, now
-            );
-          }
-          break;
-        }
-        case 'widget.move':
-        case 'widget.resize': {
-          d.prepare('UPDATE conductor_widgets SET position = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(patch.position), now, undoneAction.widget_id);
-          const wPos = patch.position as any;
-          const cPos = { x: wPos.x ?? 0, y: wPos.y ?? 0, w: wPos.w ?? 4, h: wPos.h ?? 3, zIndex: 0, rotation: 0 };
-          d.prepare('UPDATE conductor_elements SET position = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(cPos), now, undoneAction.widget_id);
-          break;
-        }
-        case 'widget.update_config': {
-          d.prepare('UPDATE conductor_widgets SET config = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(patch.config), now, undoneAction.widget_id);
-          d.prepare('UPDATE conductor_elements SET config = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(patch.config), now, undoneAction.widget_id);
-          break;
-        }
-        case 'widget.update_data': {
-          d.prepare('UPDATE conductor_widgets SET data = ?, data_version = data_version + 1, updated_at = ? WHERE id = ?').run(JSON.stringify(patch.data), now, undoneAction.widget_id);
-          d.prepare('UPDATE conductor_elements SET config = ?, data_version = data_version + 1, updated_at = ? WHERE id = ?').run(JSON.stringify(patch.data), now, undoneAction.widget_id);
-          break;
-        }
-        case 'widget.delete': {
-          d.prepare('DELETE FROM conductor_widgets WHERE id = ?').run(undoneAction.widget_id);
-          d.prepare('DELETE FROM conductor_elements WHERE id = ?').run(undoneAction.widget_id);
-          break;
-        }
-        case 'widget.restore': {
-          const restoredWidget = patch.restoredWidget;
-          if (restoredWidget) {
-            d.prepare(
-              `INSERT INTO conductor_widgets (id, canvas_id, kind, type, position, config, data, data_version, source_code, state, permissions, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'idle', ?, ?, ?)`
-            ).run(
-              restoredWidget.id, canvasId, restoredWidget.kind, restoredWidget.type,
-              JSON.stringify(restoredWidget.position), JSON.stringify(restoredWidget.config), JSON.stringify(restoredWidget.data),
-              restoredWidget.dataVersion, JSON.stringify(restoredWidget.permissions), now, now
-            );
-            const rsPos = restoredWidget.position;
-            const rsCPos = { x: rsPos.x ?? 0, y: rsPos.y ?? 0, w: rsPos.w ?? 4, h: rsPos.h ?? 3, zIndex: 0, rotation: 0 };
-            const rsConfig = { ...restoredWidget.data, ...restoredWidget.config };
-            const rsMeta = { label: `${restoredWidget.kind}:${restoredWidget.type}`, tags: [], createdBy: 'user' };
-            d.prepare(
-              `INSERT OR IGNORE INTO conductor_elements (id, canvas_id, element_kind, position, config, viz_spec, source_code, state, data_version, permissions, metadata, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, NULL, NULL, 'idle', ?, ?, ?, ?, ?)`
-            ).run(restoredWidget.id, canvasId, `widget/${restoredWidget.type}`, JSON.stringify(rsCPos), JSON.stringify(rsConfig), restoredWidget.dataVersion, JSON.stringify(restoredWidget.permissions), JSON.stringify(rsMeta), now, now);
-          }
-          break;
-        }
-        case 'element.create': {
-          const element = patch.element;
-          if (element) {
-            d.prepare(
-              `INSERT INTO conductor_elements (id, canvas_id, element_kind, position, config, viz_spec, source_code, state, data_version, permissions, metadata, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`
-            ).run(
-              element.id, canvasId, element.elementKind,
-              JSON.stringify(element.position), JSON.stringify(element.config),
-              element.vizSpec ? JSON.stringify(element.vizSpec) : null,
-              element.state, element.dataVersion,
-              JSON.stringify(element.permissions), JSON.stringify(element.metadata),
-              element.createdAt, now
-            );
-          }
-          break;
-        }
-        case 'element.move': {
-          d.prepare('UPDATE conductor_elements SET position = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(patch.position), now, undoneAction.widget_id);
-          break;
-        }
-        case 'element.update': {
-          if (patch.config !== undefined) {
-            d.prepare('UPDATE conductor_elements SET config = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(patch.config), now, undoneAction.widget_id);
-          }
-          if (patch.vizSpec !== undefined) {
-            d.prepare('UPDATE conductor_elements SET viz_spec = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(patch.vizSpec), now, undoneAction.widget_id);
-          }
-          if (patch.position !== undefined) {
-            d.prepare('UPDATE conductor_elements SET position = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(patch.position), now, undoneAction.widget_id);
-          }
-          break;
-        }
-        case 'element.delete': {
-          d.prepare('DELETE FROM conductor_elements WHERE id = ?').run(undoneAction.widget_id);
-          break;
-        }
-        case 'element.arrange': {
-          break;
-        }
-      }
-
-      const channelManager = getChannelManager();
-      channelManager?.sendToChannel('conductor', { type: 'conductor:state:patch', _v2: true, canvasId, redoActionId: undoneAction.id, patch });
-    });
-
-    txn();
-    return { success: true, actionId: undoneAction.id, patch };
+    return conductorUndoRedoHandlers.redo(_event, canvasId);
   });
 
-  ipcMain.handle('conductor:asset:upload', (_event, payload: { canvasId: string; buffer: ArrayBuffer; fileName: string; mimeType?: string }) => {
-    const { canvasId, buffer, fileName, mimeType } = payload;
-    if (!canvasId || !buffer || !fileName) {
-      throw new Error('canvasId, buffer, and fileName are required');
-    }
-    return conductorUploadAsset(canvasId, buffer, fileName, mimeType);
-  });
+  ipcMain.handle('conductor:asset:upload', conductorCaptureHandlers.upload);
 
   ipcMain.handle(
     'conductor:link:captureSnapshot',
-    async (
-      _event,
-      payload: {
-        canvasId: string;
-        elementId: string;
-        url: string;
-        mode: import('../../packages/conductor/src/renderer/types/canvas-node').LinkSnapshotMode;
-      },
-    ) => {
-      const { canvasId, elementId, url, mode } = payload;
-      if (!canvasId || !elementId || !url || !mode) {
-        throw new Error('canvasId, elementId, url, and mode are required');
-      }
-      if (mode === 'none') {
-        throw new Error('Cannot capture snapshot for mode "none"');
-      }
-
-      const normalizedUrl = /^https?:\/\//.test(url) ? url : `https://${url}`;
-      const canvasRow = getDb()
-        .prepare('SELECT project_path FROM conductor_canvases WHERE id = ?')
-        .get(canvasId) as {
-        project_path: string | null;
-      } | undefined;
-      const projectPath = canvasRow?.project_path ?? null;
-
-      const capture = await captureWebsiteSnapshot(normalizedUrl, mode);
-      const asset = conductorUploadProjectAsset(
-        canvasId,
-        projectPath,
-        capture.buffer,
-        `snapshot-${mode}-${Date.now()}.png`,
-        'image/png',
-      );
-
-      return {
-        assetId: asset.assetId,
-        url: asset.url,
-        width: capture.width,
-        height: capture.height,
-      };
-    },
+    conductorCaptureHandlers.captureLinkSnapshot,
   );
 
   dbLogger.info('Conductor handlers registered', undefined, LogComponent.DB);
