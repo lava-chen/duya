@@ -223,7 +223,7 @@ export async function readCliApiRuntime(): Promise<RuntimeLookupResult> {
       return { kind: 'malformed', reason: 'runtime file root is not an object', runtimePath };
     }
     const { port, token, pid, startedAt } = parsed;
-    if (typeof port !== 'number' || !Number.isInteger(port) || port < 0 || port > 65535) {
+    if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) {
       return { kind: 'malformed', reason: 'runtime file has invalid port', runtimePath };
     }
     if (typeof token !== 'string' || token.length === 0) {
