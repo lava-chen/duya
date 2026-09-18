@@ -340,10 +340,16 @@ export function useSettings(): {
             await window.electronAPI.vision?.set({ enabled: value as boolean });
           } else if (key === 'mcpServers') {
             const mcpServers = Array.isArray(value) ? value as MCPServerConfig[] : [];
-            if (window.electronAPI.settings?.setMcpServers) {
-              const result = await window.electronAPI.settings.setMcpServers(mcpServers);
-              if (!result.success) throw new Error(result.error || 'Failed to write mcp.toml');
+            // The mcpServers key has dedicated persistence (mcp.toml, not
+            // settingsDb). Without this guard, a missing setMcpServers API
+            // would silently no-op the user's save — the await resolves
+            // and the UI thinks the change persisted, but nothing reached
+            // disk. Surface it as an explicit failure.
+            if (!window.electronAPI.settings?.setMcpServers) {
+              throw new Error('MCP server persistence is unavailable in this build');
             }
+            const result = await window.electronAPI.settings.setMcpServers(mcpServers);
+            if (!result.success) throw new Error(result.error || 'Failed to write mcp.toml');
         } else if (key === 'permissionMode' && typeof value === 'string') {
           await window.electronAPI.settingsDb.set(key, uiPermissionModeToSettings(value as Parameters<typeof uiPermissionModeToSettings>[0]));
         } else if (key === 'cronPermissionMode' && typeof value === 'string') {
