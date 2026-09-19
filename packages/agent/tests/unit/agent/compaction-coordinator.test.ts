@@ -245,7 +245,9 @@ describe('CompactionCoordinator.runPreTurn — failure path', () => {
     });
     expect(result.didCompact).toBe(false);
     // compact:start still surfaces even on failure so the renderer can
-    // pair it with the (missing) compact:done.
-    expect(result.events.map((e) => e.type)).toEqual(['compact:start']);
+    // pair it with the (missing) compact:done. The coordinator also
+    // emits compact:error so the renderer can explain why compaction
+    // failed without re-running the LLM stream.
+    expect(result.events.map((e) => e.type)).toEqual(['compact:start', 'compact:error']);
   });
 });

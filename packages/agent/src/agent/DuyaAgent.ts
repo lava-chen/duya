@@ -64,6 +64,7 @@ import {
 } from './stream-retry.js';
 import { stripPastedContentMarkers } from '../utils/pasted-content.js';
 import { StreamingToolExecutor } from '../tool/StreamingToolExecutor.js';
+import { ToolExecutionPipeline } from '../tool/ToolExecutionPipeline.js';
 import type { CanUseToolFn } from '../tool/StreamingToolExecutor.js';
 import type { WidgetStyleSignature, CanvasFreshnessState } from '../types.js';
 import { createHasPermissionsToUseTool } from '../permissions/permissions.js';
@@ -1757,7 +1758,7 @@ export class duyaAgent implements AgentRuntime {
           : undefined,
       };
 
-      const executor = new StreamingToolExecutor(
+      const executor = new ToolExecutionPipeline(
         registry,
         guardedCanUseTool,
         toolUseContext
