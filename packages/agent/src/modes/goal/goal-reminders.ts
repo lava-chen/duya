@@ -27,7 +27,7 @@ export const GOAL_CONTINUATION_SENTINEL =
  * Render the `<goal-state>` block. Mirrors grok's `GoalStateBlock`:
  * objective + coarse status + token high-water + elapsed time.
  * Pure — reads only the tracker's public accessors, scoped to `sessionId`
- * (plan 552: the tracker singleton is shared per worker process).
+ * (plan 553: the tracker singleton is shared per worker process).
  */
 export function renderGoalState(tracker: GoalTracker, sessionId?: string): string {
   const createdAt = tracker.createdAt(sessionId);

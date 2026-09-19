@@ -36,7 +36,7 @@ import { getGoalConfig } from './goal-config.js';
  * profile prompt.
  */
 function buildGoalPrefix(ctx: ModeModifierContext): string {
-  // Session-scoped reads (plan 552): the tracker singleton is shared per
+  // Session-scoped reads (plan 553): the tracker singleton is shared per
   // worker process; a bystander session must not render another session's
   // objective into its prompt.
   const sessionId = ctx.sessionId;

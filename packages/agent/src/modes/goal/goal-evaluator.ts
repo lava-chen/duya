@@ -50,7 +50,7 @@ export interface GoalVerificationResult {
   /** Strategist proposal, when a strategist round fired (Phase 3). */
   strategyProposal?: string;
   /**
-   * Structured pause reason for `blocked` verdicts (plan 552) — e.g.
+   * Structured pause reason for `blocked` verdicts (plan 553) — e.g.
    * `verifier_timeout` when the panel blew its budget, `verifier_unavailable`
    * when no verification agent exists. Mapped onto the goal tracker's
    * closed pause-reason catalog by the tool layer.
@@ -80,7 +80,7 @@ export interface GoalVerificationParams {
   /** Max consecutive not-achieved rounds before auto-pausing (stall guard). */
   maxNotAchievedRounds?: number;
   /**
-   * Hard wall-clock budget for the whole verification stage (plan 552).
+   * Hard wall-clock budget for the whole verification stage (plan 553).
    * Defaults to `[goal] verify_timeout_seconds` * 1000; a timeout settles
    * as `blocked(verifier_timeout)` before any tracker side effects fire.
    */
@@ -102,7 +102,7 @@ export const DEFAULT_STRATEGIST_EVERY = 3;
 export const DEFAULT_MAX_NOT_ACHIEVED_ROUNDS = 5;
 
 /**
- * Which verification backend to run for this completion report (plan 552 —
+ * Which verification backend to run for this completion report (plan 553 —
  * minimax `verificationModeForRoute` parity). `panel` always verifies;
  * `auto` skips the panel for local runtimes (ollama) where a sub-agent
  * panel would double a free-but-slow model's work; `none` skips for every
@@ -135,7 +135,7 @@ function rejectAfter(ms: number, label: string): Promise<never> {
  * a slightly different stance so the panel covers more attack surface
  * (grok's adversarial panel). Verdicts aggregate conservatively.
  *
- * Plan 552: the whole verification stage runs under a hard wall-clock
+ * Plan 553: the whole verification stage runs under a hard wall-clock
  * budget (`verifyTimeoutSeconds`). A timeout settles as
  * `blocked(verifier_timeout)` BEFORE any tracker side effects fire — the
  * goal pauses for the user instead of hanging the blocking `update_goal`

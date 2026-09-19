@@ -1,5 +1,5 @@
 /**
- * Plan 552 goal behaviors — pause reasons, session ownership, reply
+ * Plan 553 goal behaviors — pause reasons, session ownership, reply
  * fingerprint breaker, verification panel timeout, and the builtin
  * goal-continuation / reply-breaker loop hooks.
  */
@@ -17,7 +17,7 @@ function freshGoal(objective = 'Ship the thing', sessionId?: string): void {
   goalModeTracker.transition({ type: 'start', objective }, sessionId);
 }
 
-describe('pause reason catalog (plan 552)', () => {
+describe('pause reason catalog (plan 553)', () => {
   beforeEach(() => freshGoal());
 
   it('exposes the closed catalog', () => {
@@ -62,7 +62,7 @@ describe('pause reason catalog (plan 552)', () => {
   });
 });
 
-describe('session ownership (plan 552)', () => {
+describe('session ownership (plan 553)', () => {
   it('start binds the owning session; other sessions read idle', () => {
     freshGoal('A goal', 'session-a');
     expect(goalModeTracker.boundSession()).toBe('session-a');
@@ -96,7 +96,7 @@ describe('session ownership (plan 552)', () => {
   });
 });
 
-describe('reply fingerprint breaker (plan 552)', () => {
+describe('reply fingerprint breaker (plan 553)', () => {
   beforeEach(() => freshGoal());
 
   it('first reply records, second nudges, third pauses', () => {
@@ -132,7 +132,7 @@ describe('reply fingerprint breaker (plan 552)', () => {
   });
 });
 
-describe('restart fold (plan 552)', () => {
+describe('restart fold (plan 553)', () => {
   it('restore folds active to user_paused with the restart reason', () => {
     freshGoal('Long goal', 's1');
     goalModeTracker.recordWorkerRound('s1');
@@ -148,7 +148,7 @@ describe('restart fold (plan 552)', () => {
   });
 });
 
-describe('verification panel timeout (plan 552)', () => {
+describe('verification panel timeout (plan 553)', () => {
   beforeEach(() => freshGoal());
 
   it('a slow panel settles blocked(verifier_timeout) without tracker side effects', async () => {

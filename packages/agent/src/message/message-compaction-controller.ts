@@ -294,17 +294,13 @@ export class MessageCompactionController {
       (m) => m.id && realMessageIds.has(m.id),
     )?.id;
 
-    // The legacy manager reinjects file/skill/tool/working-directory context
-    // immediately after its summary marker. Keep that system context on the
-    // checkpoint so it survives both the current projection and a restart.
-    // It must not be appended as a user history turn.
-    const firstRealRetainedIndex = retainedResultMessages.findIndex(
-      (m) => m.id && realMessageIds.has(m.id),
-    );
-    const reinjectedSystemMessages = retainedResultMessages
-      .slice(0, firstRealRetainedIndex < 0 ? retainedResultMessages.length : firstRealRetainedIndex)
-      .filter((message) => message.role === 'system')
-      .map((message) => message.content);
+    // Plan 552: the reinjector's restored context arrives on the result
+    // (`result.reinjection.systemMessages`) — the result no longer embeds
+    // system-role messages that had to be re-scanned here. It joins the
+    // legacy_system capture and the bot sections in the entry's single
+    // `reinjectedSystemMessages` channel.
+    const reinjectedSystemMessages: (string | readonly MessageContent[])[] =
+      result.reinjection?.systemMessages ? [...result.reinjection.systemMessages] : []
 
     const { firstKeptIndex, firstKeptMessageId } = this.resolveSafeBoundary(
       realInputAgentMessages,
@@ -405,12 +401,12 @@ export class MessageCompactionController {
    * Resolves a safe `firstKeptMessageId` from the strategy's first retained
    * message id.
    *
-   * The strategies already call `adjustSliceBoundary` to avoid orphaned
-   * `tool_result` blocks. This method applies the framework-level
-   * {@link findSafeCompactionBoundary} as an additional guarantee: if the
-   * strategy's boundary lands on a non-user turn, the boundary walks backwards
-   * to the nearest user message so the model never receives a dangling
-   * `tool_result` / `tool_use` half-pair.
+   * The strategy's own `findCutPoint` never splits a tool_use/tool_result
+   * pair. This method applies the framework-level
+   * {@link findSafeCompactionBoundary} as the single additional guarantee: if
+   * the strategy's boundary lands on a non-user turn, the boundary walks
+   * backwards to the nearest user message so the model never receives a
+   * dangling `tool_result` / `tool_use` half-pair.
    *
    * If the walk would collapse all the way back to index 0 for a non-trivial
    * proposed boundary (meaning there is no user turn to anchor on), the

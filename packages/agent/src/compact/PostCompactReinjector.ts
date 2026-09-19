@@ -11,6 +11,7 @@
 
 import type { Message } from '../types.js'
 import type { FileChangeRecord } from './strategies/SessionMemoryCompactStrategy.js'
+import { estimateContextTextTokens } from '@duya/ai'
 
 /**
  * File state captured from Read tool calls before compaction, so the reinjector
@@ -120,7 +121,16 @@ export interface ToolState {
  * Result of the reinjection process
  */
 export interface ReinjectResult {
+  /**
+   * Plan 552: the input messages, unchanged. Reinjected context no longer
+   * rides inside the message array as system-role rows — it travels via
+   * {@link systemSegments} into `CompactionEntry.reinjectedSystemMessages`,
+   * the single reinjection channel (sole reader:
+   * `extractLegacySystemSegments`).
+   */
   messages: Message[]
+  /** Reinjected context sections, in injection order (files → skills → tools → cwd → custom). */
+  systemSegments: string[]
   filesReinjected: FileStateEntry[]
   skillsReinjected: SkillContextEntry[]
   toolsRestored: ToolState[]
@@ -199,8 +209,10 @@ export class PostCompactReinjector {
   /**
    * Perform reinjection after compaction
    *
-   * This should be called with the compressed message array from compaction.
-   * It will add back essential context that was lost during compression.
+   * This is called with the compressed message array from compaction.
+   * Plan 552: it no longer splices system-role messages into the array —
+   * the restored context comes back as `systemSegments` and the host routes
+   * it into `CompactionEntry.reinjectedSystemMessages` (single channel).
    */
   async reinject(
     compressedMessages: Message[],
@@ -210,7 +222,7 @@ export class PostCompactReinjector {
       customContext?: string
     },
   ): Promise<ReinjectResult> {
-    const injectionMessages: Message[] = []
+    const segments: string[] = []
     let totalTokensAdded = 0
 
     // 1. Reinject file state
@@ -218,52 +230,46 @@ export class PostCompactReinjector {
       const filesToReinject = this.selectFilesToReinject()
 
       if (filesToReinject.length > 0) {
-        const fileMessage = await this.createFileReinjectMessage(filesToReinject)
-        injectionMessages.push(fileMessage)
-        totalTokensAdded += this.estimateTokenCount(fileMessage.content as string)
+        const fileSegment = await this.createFileReinjectSegment(filesToReinject)
+        segments.push(fileSegment)
+        totalTokensAdded += this.estimateTokenCount(fileSegment)
       }
     }
 
     // 2. Reinject skill context
     if (this.config.includeSkillContext && this.cachedSkillContext.size > 0) {
-      const skillMessage = this.createSkillReinjectMessage()
-      if (skillMessage) {
-        injectionMessages.push(skillMessage)
-        totalTokensAdded += this.estimateTokenCount(skillMessage.content as string)
+      const skillSegment = this.createSkillReinjectSegment()
+      if (skillSegment !== null) {
+        segments.push(skillSegment)
+        totalTokensAdded += this.estimateTokenCount(skillSegment)
       }
     }
 
     // 3. Reinject tool state
     if (this.cachedToolStates.size > 0) {
-      const toolMessage = this.createToolStateMessage()
-      if (toolMessage) {
-        injectionMessages.push(toolMessage)
-        totalTokensAdded += this.estimateTokenCount(toolMessage.content as string)
+      const toolSegment = this.createToolStateSegment()
+      if (toolSegment !== null) {
+        segments.push(toolSegment)
+        totalTokensAdded += this.estimateTokenCount(toolSegment)
       }
     }
 
     // 4. Add working directory info
     if (this.config.includeWorkingDirectory && options?.workingDirectory) {
-      const dirMessage = this.createWorkingDirMessage(options.workingDirectory, options.recentChanges)
-      injectionMessages.push(dirMessage)
-      totalTokensAdded += this.estimateTokenCount(dirMessage.content as string)
+      const dirSegment = this.createWorkingDirSegment(options.workingDirectory, options.recentChanges)
+      segments.push(dirSegment)
+      totalTokensAdded += this.estimateTokenCount(dirSegment)
     }
 
     // 5. Add custom context if provided
     if (options?.customContext) {
-      injectionMessages.push({
-        role: 'system',
-        content: options.customContext,
-        timestamp: Date.now(),
-      })
+      segments.push(options.customContext)
       totalTokensAdded += this.estimateTokenCount(options.customContext)
     }
 
-    // Insert injection messages after the summary but before recent messages
-    const finalMessages = this.insertInjectionMessages(compressedMessages, injectionMessages)
-
     return {
-      messages: finalMessages,
+      messages: compressedMessages,
+      systemSegments: segments,
       filesReinjected: Array.from(this.selectFilesToReinject()),
       skillsReinjected: Array.from(this.cachedSkillContext.values()),
       toolsRestored: Array.from(this.cachedToolStates.values()),
@@ -282,9 +288,9 @@ export class PostCompactReinjector {
   }
 
   /**
-   * Create a message containing file state for reinjection
+   * Create the recently-accessed-files segment for reinjection
    */
-  private async createFileReinjectMessage(files: FileStateEntry[]): Promise<Message> {
+  private async createFileReinjectSegment(files: FileStateEntry[]): Promise<string> {
     let content = `## Recently Accessed Files\n\n`
 
     for (const file of files) {
@@ -306,21 +312,13 @@ export class PostCompactReinjector {
       }
     }
 
-    return {
-      role: 'system',
-      content,
-      timestamp: Date.now(),
-      metadata: {
-        type: 'reinject_files',
-        fileCount: files.length,
-      },
-    } as Message
+    return content
   }
 
   /**
-   * Create a message containing skill context for reinjection
+   * Create the active-skills context segment for reinjection
    */
-  private createSkillReinjectMessage(): Message | null {
+  private createSkillReinjectSegment(): string | null {
     const skills = Array.from(this.cachedSkillContext.values())
 
     if (skills.length === 0) return null
@@ -334,21 +332,13 @@ export class PostCompactReinjector {
       }
     }
 
-    return {
-      role: 'system',
-      content,
-      timestamp: Date.now(),
-      metadata: {
-        type: 'reinject_skills',
-        skillCount: skills.length,
-      },
-    } as Message
+    return content
   }
 
   /**
-   * Create a message containing tool state for reinjection
+   * Create the tool-state segment for reinjection
    */
-  private createToolStateMessage(): Message | null {
+  private createToolStateSegment(): string | null {
     const tools = Array.from(this.cachedToolStates.values())
       .filter(t => t.status === 'active')
 
@@ -365,21 +355,13 @@ export class PostCompactReinjector {
       }
     }
 
-    return {
-      role: 'system',
-      content,
-      timestamp: Date.now(),
-      metadata: {
-        type: 'reinject_tools',
-        toolCount: tools.length,
-      },
-    } as Message
+    return content
   }
 
   /**
-   * Create a working directory context message
+   * Create the working-directory context segment
    */
-  private createWorkingDirMessage(workingDir: string, recentChanges?: FileChangeRecord[]): Message {
+  private createWorkingDirSegment(workingDir: string, recentChanges?: FileChangeRecord[]): string {
     let content = `## Working Directory\n\nCurrent working directory: \`${workingDir}\`\n\n`
 
     if (recentChanges && recentChanges.length > 0) {
@@ -391,52 +373,7 @@ export class PostCompactReinjector {
       content += '\n'
     }
 
-    return {
-      role: 'system',
-      content,
-      timestamp: Date.now(),
-      metadata: {
-        type: 'reinject_working_dir',
-        path: workingDir,
-      },
-    } as Message
-  }
-
-  /**
-   * Insert injection messages at the right position in compressed messages
-   * (after summary, before recent conversation)
-   */
-  private insertInjectionMessages(
-    compressedMessages: Message[],
-    injectionMessages: Message[],
-  ): Message[] {
-    // Find the insertion point (after system/summary messages, before user messages)
-    let insertIndex = 0
-
-    for (let i = 0; i < compressedMessages.length; i++) {
-      const msg = compressedMessages[i]
-
-      // Skip system messages and continuation summaries
-      if (
-        msg.role === 'system' ||
-        (typeof msg.content === 'string' &&
-          (msg.content.includes('session is being continued') ||
-            msg.content.includes('Recently Accessed') ||
-            msg.content.includes('Active Skills') ||
-            msg.content.includes('Working Directory')))
-      ) {
-        insertIndex = i + 1
-      } else {
-        break
-      }
-    }
-
-    // Insert at the found position
-    return [
-      ...compressedMessages.slice(0, insertIndex),
-      ...injectionMessages,
-      ...compressedMessages.slice(insertIndex),
-    ]
+    return content
   }
 
   /**
@@ -452,11 +389,11 @@ export class PostCompactReinjector {
   }
 
   /**
-   * Rough token count estimation
+   * Token count estimation (plan 552: shared CJK-aware estimator in @duya/ai).
+   * Reporting only — feeds `totalTokensAdded`.
    */
   private estimateTokenCount(text: string): number {
-    // Rough estimation: ~4 chars per token
-    return Math.ceil(text.length / 4)
+    return estimateContextTextTokens(text)
   }
 
   /**

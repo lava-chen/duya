@@ -1,5 +1,5 @@
 /**
- * Deterministic `/goal` command handling (plan 552).
+ * Deterministic `/goal` command handling (plan 553).
  *
  * Goal CONTROL (status / pause / resume / clear) must not depend on the
  * model choosing to interpret a chat message: the streamChat entry point

@@ -1,6 +1,6 @@
 /**
  * GoalTracker — 10-state goal mode state machine (plan 411 Phase 1,
- * session-aware + pause reasons + reply breaker per plan 552).
+ * session-aware + pause reasons + reply breaker per plan 553).
  *
  * A TypeScript port of grok's `GoalTracker` (`goal_tracker.rs`), adapted
  * to duya's ModeTracker contract (plan 413). It is the single
@@ -28,9 +28,9 @@
  * `active` states to `user_paused` (grok safety model, tagged with the
  * `restart` pause reason) so a restart never silently resurrects an
  * unsupervised goal; the coordinator re-resumes it when `[goal]
- * auto_resume` is on (plan 552).
+ * auto_resume` is on (plan 553).
  *
- * Plan 552 additions:
+ * Plan 553 additions:
  *  - `pauseReason` — closed `GOAL_PAUSE_REASONS` catalog carried by pause /
  *    stall / infra events, surfaced through snapshots and `goal_updated`
  *    events so the UI can show WHY a goal stopped (minimax statusReason).
@@ -64,7 +64,7 @@ export type GoalState =
 export type GoalPhase = 'idle' | 'planning' | 'executing';
 
 /**
- * Closed catalog of pause reasons (plan 552 — minimax `statusReason`
+ * Closed catalog of pause reasons (plan 553 — minimax `statusReason`
  * parity). Orthogonal to the coarse state: the state says the goal is not
  * running, the reason says WHY, and the UI renders it verbatim. `budget`
  * needs no reason (the `budget_limited` state already says it).
@@ -130,7 +130,7 @@ export interface GoalSnapshot {
   lastStrategistFiredAt?: number;
   planFile?: string;
   changesBaselineCommit?: string;
-  /** Owning session (plan 552). Undefined for legacy snapshots / CLI runs. */
+  /** Owning session (plan 553). Undefined for legacy snapshots / CLI runs. */
   boundSession?: string;
   /** Normalized final-reply fingerprint of the last breaker observation. */
   replyFingerprint?: string | null;
@@ -213,7 +213,7 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
   private goalNoProgressStreak = 0;
 
   /**
-   * Session view guard (plan 552): `sessionId` callers only see the goal
+   * Session view guard (plan 553): `sessionId` callers only see the goal
    * when they own it. An unbound tracker (legacy snapshot / CLI run) is
    * visible to everyone; a caller WITHOUT a session id is allowed through
    * (tests, engine-internal calls) — every production call site passes the
@@ -255,7 +255,7 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
    * Transition table (plan 411 §2.4). Returns whether the state actually
    * changed; illegal/no-op events return false without throwing. Every
    * real migration is logged so the state machine is observable.
-   * Session-aware (plan 552): a session that does not own the goal is a
+   * Session-aware (plan 553): a session that does not own the goal is a
    * no-op.
    */
   transition(event: GoalEvent, sessionId?: string): boolean {
@@ -491,7 +491,7 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
     // from_snapshot): a restart cannot resume an in-flight verification
     // panel or an unsupervised active goal. Everything else is a durable
     // user/terminal decision and restores verbatim. The fold carries the
-    // `restart` reason so the coordinator can auto-resume it (plan 552)
+    // `restart` reason so the coordinator can auto-resume it (plan 553)
     // and the UI can say "paused after restart".
     const folded = state === 'active' || state === 'verifying' ? 'user_paused' : state;
     this.currentState = folded;
@@ -642,7 +642,7 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
   }
 
   /**
-   * Reply fingerprint breaker (plan 552 — minimax `replyFingerprint`
+   * Reply fingerprint breaker (plan 553 — minimax `replyFingerprint`
    * parity). Feeds the turn-final assistant text; consecutive identical
    * normalized replies raise `noProgressStreak` (streak counts repeats
    * AFTER the first, so occurrences = streak + 1). Decision:
@@ -705,7 +705,7 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
     if (!trimmed) return false;
     this.currentState = 'active';
     this.currentPhase = 'planning';
-    // The starting session becomes the owner (plan 552). A sessionless
+    // The starting session becomes the owner (plan 553). A sessionless
     // caller (CLI scratch / tests) leaves any previous binding untouched.
     if (sessionId) this.goalBoundSession = sessionId;
     this.goalObjective = trimmed;

@@ -1,5 +1,5 @@
 /**
- * Deterministic /goal command handling tests (plan 552).
+ * Deterministic /goal command handling tests (plan 553).
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';

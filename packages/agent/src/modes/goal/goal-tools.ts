@@ -1,19 +1,19 @@
 /**
- * Goal mode tools (plan 411 Phase 1 + Phase 2 + plan 552).
+ * Goal mode tools (plan 411 Phase 1 + Phase 2 + plan 553).
  *
  * Three model-facing tools are injected by goal mode:
  *
  *  - `goal_start`: enter goal mode with an objective. Transitions the
- *    tracker to `active`, records the owning session (plan 552), and
+ *    tracker to `active`, records the owning session (plan 553), and
  *    captures the git baseline commit + plan file for later verification.
  *  - `update_goal`: report goal progress — mark the objective complete
  *    (triggers independent verification per the `verification` policy) or
  *    report a blocker.
- *  - `get_goal` (plan 552, codex-parity): read the current goal state so
+ *  - `get_goal` (plan 553, codex-parity): read the current goal state so
  *    the model can re-ground itself (recovery prompts, status checks)
  *    instead of relying on prompt-injected state alone.
  *
- * Plan 552 session ownership: the tracker is a process singleton, so every
+ * Plan 553 session ownership: the tracker is a process singleton, so every
  * tool validates that the calling session owns the goal before acting — a
  * mismatched session gets a stable rejection (`goal_update_no_goal`) or a
  * `goal: null` read instead of mutating another session's state.
@@ -53,7 +53,7 @@ export function planPathFor(workingDirectory: string | undefined): string | unde
 }
 
 /**
- * Session ownership guard (plan 552). The tracker is shared per worker
+ * Session ownership guard (plan 553). The tracker is shared per worker
  * process; a goal started in session A must not be readable/mutable from
  * session B. A caller without a session id (CLI scratch / tests) and an
  * unbound goal both pass for backward compatibility.
@@ -64,7 +64,7 @@ function ownsGoal(sessionId: string | undefined): boolean {
   return bound === sessionId;
 }
 
-/** Stable error codes for goal tool rejections (plan 411 Phase 3 + 552). */
+/** Stable error codes for goal tool rejections (plan 411 Phase 3 + 553). */
 export const GOAL_ERROR_CODES = {
   INVALID_INPUT: 'goal_update_invalid_input',
   NO_GOAL: 'goal_update_no_goal',
@@ -73,7 +73,7 @@ export const GOAL_ERROR_CODES = {
   VERIFIER_UNAVAILABLE: 'goal_update_verifier_unavailable',
   /** A previous `completed: true` is still being verified — do not re-report. */
   IN_FLIGHT: 'goal_update_in_flight',
-  /** The calling session does not own the active goal (plan 552). */
+  /** The calling session does not own the active goal (plan 553). */
   SESSION_MISMATCH: 'goal_update_session_mismatch',
 } as const;
 
@@ -98,7 +98,7 @@ function toolOk(name: string, payload: Record<string, unknown>): ToolResult {
 
 /**
  * Full goal-state payload shared by every tool result and `goal_updated`
- * event (plan 552: adds turn counters, elapsed, pause reason, plan file).
+ * event (plan 553: adds turn counters, elapsed, pause reason, plan file).
  */
 function goalPayload(sessionId: string | undefined): Record<string, unknown> {
   const elapsedMs =
@@ -130,7 +130,7 @@ function goalPayload(sessionId: string | undefined): Record<string, unknown> {
  * Emit a `chat:goal_updated` worker event for the renderer (plan 411
  * Phase 3 goal status card). No-op when running outside the worker
  * protocol (unit tests / CLI harness) — sendEvent guards internally.
- * Exported for the builtin loop hooks (plan 552 breakers emit their own
+ * Exported for the builtin loop hooks (plan 553 breakers emit their own
  * transitions).
  */
 export function emitGoalUpdatedEvent(
@@ -275,7 +275,7 @@ const updateGoalExecutor: ToolExecutor = {
           GOAL_ERROR_CODES.VERIFIER_UNAVAILABLE,
         );
       }
-      // Verification policy (plan 552): `none` — or `auto` on local
+      // Verification policy (plan 553): `none` — or `auto` on local
       // runtimes — settles the worker proposal verbatim instead of burning
       // a verifier panel (minimax BYOK cost protection).
       const provider = (context.options as { provider?: string }).provider;
@@ -306,7 +306,7 @@ const updateGoalExecutor: ToolExecutor = {
       // concurrent second completed=true is deduped (goal_update_in_flight).
       goalModeTracker.transition({ type: 'report_completed' }, sessionId);
       // Surface the in-flight wait to the UI so a multi-minute panel does
-      // not read as a stuck goal (plan 552 — minimax executionWait).
+      // not read as a stuck goal (plan 553 — minimax executionWait).
       emitGoalUpdated(sessionId, { executionWait: 'verification' });
       const result = await verifyGoalCompletion({
         objective: goalModeTracker.objective(sessionId),
@@ -363,7 +363,7 @@ const updateGoalExecutor: ToolExecutor = {
 
     if (blocked_reason && blocked_reason.trim().length > 0) {
       // Model-reported blocker: the goal pauses for the user with the
-      // structured `blocked_worker` reason (plan 552) so the UI can
+      // structured `blocked_worker` reason (plan 553) so the UI can
       // distinguish "the agent gave up" from "the verifier said no".
       goalModeTracker.transition(
         { type: 'pause', message: blocked_reason, reason: 'blocked_worker' },
@@ -433,7 +433,7 @@ const goalStartExecutor: ToolExecutor = {
     const { objective, budget } = parseResult.data;
     const sessionId = context?.options.sessionId;
 
-    // Cross-session guard (plan 552): another session's goal must not be
+    // Cross-session guard (plan 553): another session's goal must not be
     // silently replaced by a new start.
     if (!ownsGoal(sessionId)) {
       return toolError(
@@ -482,7 +482,7 @@ const goalStartExecutor: ToolExecutor = {
   },
 };
 
-// ─── get_goal (plan 552, codex parity) ──────────────────────────────────────
+// ─── get_goal (plan 553, codex parity) ──────────────────────────────────────
 
 const getGoalDefinition: Tool = {
   name: GET_GOAL_TOOL_NAME,
@@ -514,7 +514,7 @@ const getGoalExecutor: ToolExecutor = {
   },
 };
 
-/** ToolRegistration pairs injected by goal mode (plan 411 §4.3 + plan 552). */
+/** ToolRegistration pairs injected by goal mode (plan 411 §4.3 + plan 553). */
 export function getGoalTools(): Array<{ definition: Tool; executor: ToolExecutor }> {
   return [
     { definition: goalStartDefinition, executor: goalStartExecutor },

@@ -25,7 +25,7 @@
  * `DUYA_GOAL_MAX_AUTO_CONTINUES`, `DUYA_GOAL_VERIFICATION`,
  * `DUYA_GOAL_VERIFY_TIMEOUT_SECONDS`.
  *
- * Plan 552 semantics:
+ * Plan 553 semantics:
  *  - `auto_resume`    — after a restart the coordinator auto-resumes a goal
  *                       folded to `user_paused(restart)` instead of waiting
  *                       for an explicit user resume.

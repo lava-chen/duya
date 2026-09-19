@@ -125,7 +125,7 @@ describe('update_goal tool', () => {
     expect(parsed.state).toBe('user_paused');
     expect(goalModeTracker.state()).toBe('user_paused');
     expect(goalModeTracker.pauseMessage()).toBe('missing API key');
-    // Plan 552: model-reported blockers carry the closed-catalog reason.
+    // Plan 553: model-reported blockers carry the closed-catalog reason.
     expect(goalModeTracker.pauseReason()).toBe('blocked_worker');
   });
 
@@ -207,7 +207,7 @@ describe('goal_start tool', () => {
   });
 });
 
-describe('get_goal tool (plan 552)', () => {
+describe('get_goal tool (plan 553)', () => {
   beforeEach(() => {
     goalModeTracker.transition({ type: 'clear' });
   });
@@ -238,7 +238,7 @@ describe('get_goal tool (plan 552)', () => {
   });
 });
 
-describe('goal session ownership (plan 552)', () => {
+describe('goal session ownership (plan 553)', () => {
   beforeEach(() => {
     goalModeTracker.transition({ type: 'clear' });
   });
@@ -285,7 +285,7 @@ describe('goal session ownership (plan 552)', () => {
   });
 });
 
-describe('verification policy settle (plan 552)', () => {
+describe('verification policy settle (plan 553)', () => {
   beforeEach(() => {
     goalModeTracker.transition({ type: 'clear' });
   });

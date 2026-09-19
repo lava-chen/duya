@@ -11,11 +11,19 @@ export {
   estimateTextTokens as estimateContextTextTokens,
   normalizePromptTokens,
   IMAGE_TOKEN_FLOOR,
+  CJK_CHARS_PER_TOKEN,
+  ASCII_CHARS_PER_TOKEN,
   type ContextUsageBlock,
   type ContextEstimateMessage,
   type ContextEstimateOptions,
   type ContextEstimate,
 } from './utils/context-estimate.js';
+export {
+  DEFAULT_CONTEXT_WINDOW,
+  resolveContextWindow,
+  type ContextWindowSource,
+  type ResolvedContextWindow,
+} from './utils/context-window.js';
 export { createOpenAICompletionsClient } from './api/openai-completions.js';
 export { transformMessages, isSameModel } from './api/transform-messages.js';
 export { ThinkTagParser } from './utils/think-tag-parser.js';

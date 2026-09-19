@@ -30,12 +30,12 @@ vi.mock('../../../ipc/db-client.js', () => ({
 
 import { sendMessageTool } from '../SendMessageTool.js';
 
-type ExecResult = { id: string; name: string; result: string; error?: boolean };
+type ToolRunResult = { id: string; name: string; result: string; error?: boolean };
 
-function exec(input: Record<string, unknown>): Promise<ExecResult> {
+function runTool(input: Record<string, unknown>): Promise<ToolRunResult> {
   return sendMessageTool.execute(input, undefined, {
     options: { sessionId: 'bot:test:abc' },
-  } as never) as Promise<ExecResult>;
+  } as never) as Promise<ToolRunResult>;
 }
 
 describe('SendMessageTool validation (grok self-teaching errors)', () => {
@@ -45,7 +45,7 @@ describe('SendMessageTool validation (grok self-teaching errors)', () => {
   });
 
   it('rejects a field riding the wrong type with recovery instructions', async () => {
-    const res = await exec({ type: 'text', content: 'hi', widget: { prompt: 'x' } });
+    const res = await runTool({ type: 'text', content: 'hi', widget: { prompt: 'x' } });
     expect(res.error).toBe(true);
     expect(res.result).toContain('widget is only valid with type:widget');
     expect(res.result).toContain('it would be silently dropped');
@@ -55,7 +55,7 @@ describe('SendMessageTool validation (grok self-teaching errors)', () => {
   });
 
   it('rejects images on non-text types with the attach-to-text guidance', async () => {
-    const res = await exec({
+    const res = await runTool({
       type: 'attachment',
       url: 'file:///C:/tmp/a.png',
       images: [{ url: 'file:///C:/tmp/b.png' }],
@@ -65,7 +65,7 @@ describe('SendMessageTool validation (grok self-teaching errors)', () => {
   });
 
   it('rejects channel on widget types', async () => {
-    const res = await exec({
+    const res = await runTool({
       type: 'widget',
       widget: { prompt: 'go?', options: [{ label: 'Yes' }] },
       channel: 'slack:C1',
@@ -75,19 +75,19 @@ describe('SendMessageTool validation (grok self-teaching errors)', () => {
   });
 
   it('rejects a text message without content', async () => {
-    const res = await exec({ type: 'text' });
+    const res = await runTool({ type: 'text' });
     expect(res.error).toBe(true);
     expect(res.result).toContain('content is required when type is text');
   });
 
   it('rejects attachment urls without file:// or https:// scheme', async () => {
-    const res = await exec({ type: 'attachment', url: 'http://example.com/a.png' });
+    const res = await runTool({ type: 'attachment', url: 'http://example.com/a.png' });
     expect(res.error).toBe(true);
     expect(res.result).toContain('url must include a file:// or https:// scheme');
   });
 
   it('rejects image urls without file:// or https:// scheme', async () => {
-    const res = await exec({
+    const res = await runTool({
       type: 'text',
       content: 'look',
       images: [{ url: 'ftp://example.com/a.png' }],
@@ -97,13 +97,13 @@ describe('SendMessageTool validation (grok self-teaching errors)', () => {
   });
 
   it('rejects a widget without options', async () => {
-    const res = await exec({ type: 'widget', widget: { prompt: 'go?' } });
+    const res = await runTool({ type: 'widget', widget: { prompt: 'go?' } });
     expect(res.error).toBe(true);
     expect(res.result).toContain('widget.options requires 1-6 real, verified choices');
   });
 
   it('rejects secret-request without field', async () => {
-    const res = await exec({
+    const res = await runTool({
       type: 'secret-request',
       secret: { label: 'Token', connector: 'slack' },
     });
@@ -112,7 +112,7 @@ describe('SendMessageTool validation (grok self-teaching errors)', () => {
   });
 
   it('delivers a valid text message (source=send_message)', async () => {
-    const res = await exec({ type: 'text', content: 'hello' });
+    const res = await runTool({ type: 'text', content: 'hello' });
     expect(res.error).toBeUndefined();
     expect(res.result).toContain('Message sent to user');
     expect(mocks.append).toHaveBeenCalledTimes(1);
@@ -121,7 +121,7 @@ describe('SendMessageTool validation (grok self-teaching errors)', () => {
   });
 
   it('persists widget interaction state after append (Plan 489 P0.2)', async () => {
-    const res = await exec({
+    const res = await runTool({
       type: 'widget',
       widget: { prompt: 'Deploy?', options: [{ label: 'Yes' }, { label: 'No' }] },
     });
@@ -141,7 +141,7 @@ describe('SendMessageTool validation (grok self-teaching errors)', () => {
   });
 
   it('persists cursor-agent run state after append (Plan 489 P0.2)', async () => {
-    const res = await exec({ type: 'cursor-agent', bcId: 'bc-123' });
+    const res = await runTool({ type: 'cursor-agent', bcId: 'bc-123' });
     expect(res.error).toBeUndefined();
     expect(mocks.state.upsertCursorAgentRun).toHaveBeenCalledTimes(1);
     const call = mocks.state.upsertCursorAgentRun.mock.calls[0][0] as {
@@ -155,7 +155,7 @@ describe('SendMessageTool validation (grok self-teaching errors)', () => {
   });
 
   it('persists secret-request state after append (Plan 489 P0.2)', async () => {
-    const res = await exec({
+    const res = await runTool({
       type: 'secret-request',
       secret: { label: 'Token', connector: 'slack', field: 'bot_token' },
     });
@@ -174,7 +174,7 @@ describe('SendMessageTool validation (grok self-teaching errors)', () => {
   });
 
   it('does not persist side state for plain text sends', async () => {
-    await exec({ type: 'text', content: 'hi' });
+    await runTool({ type: 'text', content: 'hi' });
     expect(mocks.state.createWidgetPending).not.toHaveBeenCalled();
     expect(mocks.state.upsertCursorAgentRun).not.toHaveBeenCalled();
     expect(mocks.state.createSecretPending).not.toHaveBeenCalled();
