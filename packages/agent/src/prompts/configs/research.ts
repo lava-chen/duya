@@ -52,6 +52,7 @@ export const researchConfig: PromptSystemConfig = {
     {
       name: 'visualVerification',
       compute: getVisualVerificationSection,
+      template: 'dynamic/visual-verification.hbs',
       description: 'Visual tasks require rendered-output verification',
     },
     {

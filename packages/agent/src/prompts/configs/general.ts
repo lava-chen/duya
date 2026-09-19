@@ -65,7 +65,7 @@ export const generalConfig: PromptSystemConfig = {
     // Task-level constraints
     { name: 'sessionGuidance', compute: getSessionGuidanceSection, description: 'Session-specific guidance' },
     { name: 'visionGuidelines', compute: getVisionGuidelinesSection, template: 'dynamic/vision-guidelines.hbs', description: 'Vision tool guidelines' },
-    { name: 'visualVerification', compute: getVisualVerificationSection, description: 'Visual tasks require rendered-output verification' },
+    { name: 'visualVerification', compute: getVisualVerificationSection, template: 'dynamic/visual-verification.hbs', description: 'Visual tasks require rendered-output verification' },
   ],
   preBuildHook: async (ctx) => {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.

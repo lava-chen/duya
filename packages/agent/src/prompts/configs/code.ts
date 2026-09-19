@@ -71,7 +71,7 @@ export const codeConfig: PromptSystemConfig = {
     { name: 'memory', compute: getMemorySection, description: 'Persistent memory projection files may have been updated since last turn' },
     { name: 'sessionSearch', compute: getSessionSearchSection, description: 'Past-session decisions may be relevant to the current task' },
     { name: 'recentSessions', compute: getRecentSessionsSection, description: 'Recent session metadata can change between turns' },
-    { name: 'visualVerification', compute: getVisualVerificationSection, description: 'Visual tasks require rendered-output verification' },
+    { name: 'visualVerification', compute: getVisualVerificationSection, template: 'dynamic/visual-verification.hbs', description: 'Visual tasks require rendered-output verification' },
   ],
   preBuildHook: async (ctx) => {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.

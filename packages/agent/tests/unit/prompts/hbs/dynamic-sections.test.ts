@@ -21,6 +21,7 @@ import { getOutputStyleSection } from '../../../../src/prompts/sections/dynamic/
 import { getPlatformSection } from '../../../../src/prompts/sections/dynamic/platform.js';
 import { getMcpInstructionsSection } from '../../../../src/prompts/sections/dynamic/mcpInstructions.js';
 import { getVisionGuidelinesSection } from '../../../../src/prompts/sections/dynamic/visionGuidelines.js';
+import { getVisualVerificationSection } from '../../../../src/prompts/sections/dynamic/visualVerification.js';
 
 const ASSETS_ROOT = resolve(__dirname, '../../../../src/prompts/assets');
 
@@ -177,6 +178,26 @@ describe('dynamic sections hbs byte-level parity', () => {
     await parity(
       'dynamic/vision-guidelines.hbs',
       getVisionGuidelinesSection,
+      baseContext({
+        enabledTools: new Set<string>(['Read', 'Edit', 'Write']),
+      }),
+    );
+  });
+
+  it('visual-verification section matches when vision tool is enabled', async () => {
+    await parity(
+      'dynamic/visual-verification.hbs',
+      getVisualVerificationSection,
+      baseContext({
+        enabledTools: new Set<string>(['Read', 'Edit', 'Write', 'vision']),
+      }),
+    );
+  });
+
+  it('visual-verification section matches when vision tool is absent', async () => {
+    await parity(
+      'dynamic/visual-verification.hbs',
+      getVisualVerificationSection,
       baseContext({
         enabledTools: new Set<string>(['Read', 'Edit', 'Write']),
       }),
