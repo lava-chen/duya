@@ -26,11 +26,22 @@
  * @see docs/exec-plans/active/551-prompt-module-flatten.md
  */
 
+import type { PromptContext } from '../types.js'
+
 export interface PromptModuleDef {
   /** Asset path relative to the prompts assets root. */
   path: string
   /** One-line description of the content block. */
   description: string
+  /**
+   * Per-render context slots for modules whose content depends on runtime
+   * state (tool availability, platform names, AGENTS.md index). The slot
+   * provider is the module's mapper home (plan 551 D2): it precomputes
+   * template variables so `.hbs` files branch on precomputed booleans and
+   * prebuilt strings instead of new Handlebars helpers (plan 551 D3).
+   * Pure-authored modules omit this field.
+   */
+  slots?: (context: PromptContext) => Record<string, unknown>
 }
 
 /**
@@ -112,6 +123,14 @@ export interface StaticModuleRef {
    * Handlebars helpers (plan 551 D3).
    */
   params?: Record<string, unknown>
+  /**
+   * Optional config-side content gate evaluated per render, before the
+   * module renders. Returning false collapses the section to null (same
+   * as a legacy `compute` returning null), e.g. the gateway skill-usage
+   * section only renders when the SKILL tool is enabled. Profile-level
+   * gating (`isSectionEnabled`) stays separate and keeps working.
+   */
+  enabledWhen?: (context: PromptContext) => boolean
   /** Skip isSectionEnabled filtering (same semantics as SectionDef). */
   bypassProfile?: boolean
 }

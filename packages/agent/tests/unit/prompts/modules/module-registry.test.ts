@@ -181,6 +181,20 @@ describe('PromptSystem staticModules normalization', () => {
     const sections = system.getStaticSections(baseContext());
     expect(sections.map(s => s.name)).toEqual(['tasksAlias', 'duyaDesktopContext']);
   });
+
+  it('honours enabledWhen config gates by collapsing to null', async () => {
+    const system = new PromptSystem({
+      name: 'module-gate-test',
+      staticSections: [],
+      staticModules: [
+        { module: 'system', enabledWhen: ctx => ctx.enabledTools.has('duya_cli') },
+      ],
+      dynamicSections: [],
+    });
+    const off = system.getStaticSections(context());
+    expect(off.map(s => s.name)).toEqual(['system']);
+    expect(await Promise.resolve(off[0].compute())).toBeNull();
+  });
 });
 
 describe('module split parity vs monolith', () => {

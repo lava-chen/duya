@@ -39,7 +39,7 @@ import { cachedPromptSection, volatilePromptSection } from './constants/promptSe
 import { getShellForPrompt } from '../utils/shellDetector.js'
 import { HbsPromptSystem } from './hbs/HbsPromptSystem.js'
 import { MODULES } from './modules/registry.js'
-import type { StaticModuleRef } from './modules/registry.js'
+import type { PromptModuleDef, StaticModuleRef } from './modules/registry.js'
 
 /**
  * Process-wide HbsPromptSystem singleton. Plan 550: keeping a single
@@ -315,16 +315,43 @@ export class PromptSystem {
   /**
    * Static-half section definitions in render order: registry-assembled
    * modules first (Plan 551 `staticModules`), then legacy `staticSections`
-   * entries. Module references resolve their asset path through the module
-   * registry so a template rename fails at compile time.
+   * entries.
+   *
+   * Module references always normalize onto a `compute` function (never the
+   * `template` field) so the config-side `enabledWhen` gate, the module's
+   * `slots` mapper, and static `params` merge in one place: slots first,
+   * params win, render collapses empty output to null exactly like the
+   * template path. The asset path resolves through the module registry so
+   * a template rename fails at compile time.
    */
   private getStaticSectionDefs(): SectionDef[] {
-    const moduleDefs: SectionDef[] = (this.config.staticModules ?? []).map((ref) => ({
-      name: ref.name ?? ref.module,
-      template: MODULES[ref.module].path,
-      params: ref.params,
-      bypassProfile: ref.bypassProfile,
-    }))
+    const moduleDefs: SectionDef[] = (this.config.staticModules ?? []).map((ref) => {
+      // Widen the literal entry union to the interface so the optional
+      // `slots` mapper is visible; the literal path types still protect
+      // config-side references.
+      const def: PromptModuleDef = MODULES[ref.module]
+      const slots = def.slots
+      const enabledWhen = ref.enabledWhen
+      const hasContract = Boolean(enabledWhen || slots || ref.params)
+      const compute = hasContract
+        ? (ctx: PromptContext) => {
+            if (enabledWhen && !enabledWhen(ctx)) return null
+            const extra = { ...(slots?.(ctx) ?? {}), ...(ref.params ?? {}) }
+            const out = getSharedHbsPromptSystem()
+              .renderModule(ref.module, ctx, Object.keys(extra).length > 0 ? extra : undefined)
+              .trim()
+            return out === '' ? null : out
+          }
+        : (ctx: PromptContext) => {
+            const out = getSharedHbsPromptSystem().renderModule(ref.module, ctx).trim()
+            return out === '' ? null : out
+          }
+      return {
+        name: ref.name ?? ref.module,
+        compute,
+        bypassProfile: ref.bypassProfile,
+      }
+    })
     return [...moduleDefs, ...this.config.staticSections]
   }
 
