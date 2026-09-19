@@ -5,10 +5,13 @@
  *   identity → communication → finalAnswer → system → tasks →
  *   destructiveActions → tools → skillUsage → project → duyaDesktopContext
  *
- * Static sections (cached, stable across turns) are followed by
- * dynamic sections (recomputed every turn). Dynamic ordering groups
- * by volatility: global preferences first, then environment state,
- * then task-level constraints.
+ * Plan 550 1b: the static half is rendered through a single .hbs
+ * template (`general/system-prompt.md.hbs`). The legacy per-section
+ * TS getters under `general/sections/*` are intentionally NOT imported
+ * here any more — they are still re-exported by other configs (code /
+ * gateway / research) that have not migrated yet, so the .ts files
+ * stay on disk until 1d sweeps them. Dynamic sections still run through
+ * the TS path; 1c migrates the five smallest.
  *
  * Memory section: guides the agent to read auto-generated memory
  * projection files under ~/.duya/memory/ and to request updates via
@@ -17,21 +20,7 @@
  */
 
 import type { PromptSystemConfig } from '../PromptSystem.js'
-import { TOOL_NAMES } from '../types.js'
 import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
-
-// Static sections
-import { getIdentitySection } from '../general/sections/identity.js'
-import { getCommunicationSection } from '../general/sections/communication.js'
-import { getFinalAnswerSection } from '../general/sections/finalAnswer.js'
-import { getSystemSection } from '../general/sections/system.js'
-import { getTasksSection } from '../general/sections/tasks.js'
-import { getDestructiveActionsSection } from '../general/sections/destructiveActions.js'
-import { getConfigProtectionSection } from '../general/sections/configProtection.js'
-import { getToolsSection } from '../general/sections/tools.js'
-import { getSkillUsageSection } from '../general/sections/skillUsage.js'
-import { getProjectSection } from '../general/sections/project.js'
-import { getDuyaDesktopContextSection } from '../sections/duyaDesktopContext.js'
 
 // Dynamic sections — shared across most profiles via the sections/dynamic/ tree
 import { getLanguageSection } from '../sections/dynamic/language.js'
@@ -50,30 +39,24 @@ import { getMemorySection } from '../sections/dynamic/memorySection.js'
 
 export const generalConfig: PromptSystemConfig = {
   name: 'general',
-  staticSections: [
-    { name: 'identity', compute: getIdentitySection },
-    { name: 'communication', compute: getCommunicationSection },
-    { name: 'finalAnswer', compute: getFinalAnswerSection },
-    { name: 'system', compute: getSystemSection },
-    { name: 'tasks', compute: getTasksSection },
-    { name: 'destructiveActions', compute: getDestructiveActionsSection },
-    { name: 'configProtection', compute: getConfigProtectionSection },
-    { name: 'tools', compute: getToolsSection },
-    {
-      name: 'skillUsage',
-      compute: (ctx) => ctx.enabledTools.has(TOOL_NAMES.SKILL) ? getSkillUsageSection(ctx) : null,
-    },
-    { name: 'project', compute: getProjectSection },
-    { name: 'duyaDesktopContext', compute: getDuyaDesktopContextSection },
-  ],
+  // Plan 550 1b: render the static half via Handlebars. The .hbs
+  // template hosts all 11 static sections inlined; see
+  // assets/general/system-prompt.md.hbs for the canonical body.
+  staticTemplate: 'general/system-prompt.md.hbs',
+  // Static sections live entirely in the .hbs template above. The
+  // empty array is required by the type — `staticSections` is a
+  // general-purpose field for configs that have not migrated yet, and
+  // keeping it empty here documents that there is nothing left to
+  // resolve on the TS path for the General config.
+  staticSections: [],
   dynamicSections: [
     // Global preferences
-    { name: 'language', compute: getLanguageSection, description: 'Language preference' },
-    { name: 'outputStyle', compute: getOutputStyleSection, description: 'Custom output style' },
+    { name: 'language', compute: getLanguageSection, template: 'dynamic/language.hbs', description: 'Language preference' },
+    { name: 'outputStyle', compute: getOutputStyleSection, template: 'dynamic/output-style.hbs', description: 'Custom output style' },
     // Environment state
-    { name: 'platform', compute: getPlatformSection, description: 'Communication platform-specific guidance' },
+    { name: 'platform', compute: getPlatformSection, template: 'dynamic/platform.hbs', description: 'Communication platform-specific guidance' },
     { name: 'environment', compute: getEnvironmentSection, description: 'Current directory state' },
-    { name: 'mcp', compute: getMcpInstructionsSection, description: 'MCP servers can change' },
+    { name: 'mcp', compute: getMcpInstructionsSection, template: 'dynamic/mcp-instructions.hbs', description: 'MCP servers can change' },
     { name: 'skills', compute: getSkillsMetadataSection, description: 'Skills can be loaded/unloaded' },
     { name: 'scratchpad', compute: getScratchpadSection, description: 'Scratchpad directory' },
     { name: 'memory', compute: getMemorySection, description: 'Persistent memory projection files may have been updated since last turn' },
@@ -81,7 +64,7 @@ export const generalConfig: PromptSystemConfig = {
     { name: 'recentSessions', compute: getRecentSessionsSection, description: 'Recent session metadata can change between turns' },
     // Task-level constraints
     { name: 'sessionGuidance', compute: getSessionGuidanceSection, description: 'Session-specific guidance' },
-    { name: 'visionGuidelines', compute: getVisionGuidelinesSection, description: 'Vision tool guidelines' },
+    { name: 'visionGuidelines', compute: getVisionGuidelinesSection, template: 'dynamic/vision-guidelines.hbs', description: 'Vision tool guidelines' },
     { name: 'visualVerification', compute: getVisualVerificationSection, description: 'Visual tasks require rendered-output verification' },
   ],
   preBuildHook: async (ctx) => {

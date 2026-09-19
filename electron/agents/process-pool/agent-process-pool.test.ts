@@ -79,18 +79,24 @@ describe('AgentProcessPool.waitForReady', () => {
 
   it('resolves when the worker emits ready without an error', async () => {
     const ready = pool.waitForReady('sess-ok');
-    pool.router.broadcast('sess-ok', { type: 'ready', sessionId: 'sess-ok' });
+    (pool as unknown as { router: { broadcast: (id: string, msg: unknown) => void } }).router.broadcast(
+      'sess-ok',
+      { type: 'ready', sessionId: 'sess-ok' },
+    );
     await expect(ready).resolves.toBeUndefined();
   });
 
   it('rejects with the real init error when ready carries status:error', async () => {
     const ready = pool.waitForReady('sess-err');
-    pool.router.broadcast('sess-err', {
-      type: 'ready',
-      sessionId: 'sess-err',
-      status: 'error',
-      error: 'Model "foo" is not available on this provider',
-    });
+    (pool as unknown as { router: { broadcast: (id: string, msg: unknown) => void } }).router.broadcast(
+      'sess-err',
+      {
+        type: 'ready',
+        sessionId: 'sess-err',
+        status: 'error',
+        error: 'Model "foo" is not available on this provider',
+      },
+    );
     await expect(ready).rejects.toThrow('Model "foo" is not available on this provider');
   });
 });

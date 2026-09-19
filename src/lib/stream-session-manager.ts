@@ -819,10 +819,13 @@ function buildSnapshot(state: SessionState): SessionStreamSnapshot {
 }
 
 function extractNestedProviderErrorMessage(message: string): string | null {
-  // Strip a leading HTTP status prefix ("429 ") — provider SDKs often
-  // stringify `status + JSON body` into error.message, and JSON.parse would
+  // Strip a leading HTTP status prefix — provider SDKs often stringify
+  // `status + JSON body` into error.message, and JSON.parse would
   // otherwise fail before we even get to the nested fields (Plan 462).
-  let current = message.trim().replace(/^\d{3}\s+/, '');
+  // Accept both "429 {…}" (raw) and "HTTP 429 {…}" (Anthropic / OpenAI
+  // style). Without the optional "HTTP " the unparser would leave a
+  // dangling "HTTP" prefix and the JSON.parse branch would never fire.
+  let current = message.trim().replace(/^(?:HTTP\s+)?\d{3}\s+/, '');
   for (let depth = 0; depth < 3; depth++) {
     if (!current.startsWith('{')) break;
     try {

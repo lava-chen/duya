@@ -19,7 +19,8 @@ import Database from 'better-sqlite3';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { SessionStore, SpawnEdgeStore } from '../../db/core/stores';
+import { SessionStore } from '../../db/core/session-store';
+import { SpawnEdgeStore } from '../../db/core/stores';
 import { Mailbox } from '../../db/core/mailbox';
 import { ipcSessionToCoreCreate } from '../../ipc/core-db-adapters';
 

@@ -12,6 +12,7 @@ import type { ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolPermissionContext } from '../../permissions/types.js';
 import type { ToolExecutor } from '../registry.js';
 import { BaseTool } from '../BaseTool.js';
+import { UNKNOWN_PATHS, type ToolDependencyDeclaration } from '../dependencies.js';
 import type {
   ToolContext,
   ToolValidationResult,
@@ -283,6 +284,22 @@ export class BashTool extends BaseTool implements ToolExecutor {
   isConcurrencySafe(): boolean {
     return false;
   }
+
+  /**
+   * Plan 550 step 3a — bash can read/write arbitrary filesystem paths
+   * depending on the command, so we cannot resolve a precise path set.
+   * The orchestrator treats the unknown sentinel as "any other tool
+   * that touches any path must serialise against this one", which is
+   * the safe default. Tools that override `extractWritePaths` /
+   * `extractReadPaths` (none yet) opt into precise serialisation.
+   */
+  readonly dependencies: ToolDependencyDeclaration = Object.freeze({
+    readPaths: [...UNKNOWN_PATHS],
+    writePaths: [...UNKNOWN_PATHS],
+    requires: [],
+    produces: [],
+    consumes: [],
+  });
 
   async execute(
     input: Record<string, unknown>,

@@ -48,9 +48,9 @@ import { notifySessionIdle, advanceUserTurn } from '../wake/wake-dispatcher';
  * own LLM config instead of the defaults — the single source the foreground
  * chat path derives its providerConfig from.
  */
-function botAgentConfigFor(agentId: string): { providerId?: string; model?: string } {
+async function botAgentConfigFor(agentId: string): Promise<{ providerId?: string; model?: string }> {
   try {
-    const agents = readConfigAgents();
+    const agents = await readConfigAgents();
     const cfg = agents[agentId];
     if (!cfg) return {};
     return { providerId: cfg.provider, model: cfg.model };
@@ -79,7 +79,7 @@ import {
   ipcTaskToCoreCreate,
   ipcTaskToUpdate,
   coreTaskToIpcRow,
-  ipcPermissionToCreate,
+  ipcPermissionToCoreCreate,
   ipcPermissionToResolve,
   corePermissionToIpcRow,
   coreMailboxToIpcRow,
@@ -345,7 +345,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       if (existing) {
         // Backfill the agent's configured provider/model when an older row was
         // created before per-agent config landed (it stored the defaults).
-        const cfg = botAgentConfigFor(agentId);
+        const cfg = await botAgentConfigFor(agentId);
         if (cfg.model && !existing.model) {
           sessions.update(sessionId, { model: cfg.model, providerId: cfg.providerId ?? existing.providerId });
           const backfilled = sessions.get(sessionId);
@@ -353,7 +353,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         }
         return { ok: true, created: false, session: coreSessionToIpcRow(existing) };
       }
-      const cfg = botAgentConfigFor(agentId);
+      const cfg = await botAgentConfigFor(agentId);
       const created = sessions.create({
         id: sessionId,
         title: agentId,
@@ -936,6 +936,27 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
 
       if (!sessionId || !channelAddress || !outbound) {
         return { success: false, reason: 'invalid_channel_deliver_payload' };
+      }
+      // Validate the address token shape (`platform:chatId`) here so the
+      // downstream ChannelBackgroundWakes.deliverToChannel failure path
+      // never has to fall back to a defensive null-check on
+      // parseChannelAddress. channelDelivery validates the same shape, but
+      // surfacing it as an explicit IPC error keeps the failure reason
+      // honest instead of bubbling up an `Invalid channel address token`
+      // thrown from deep inside the connector stack.
+      {
+        const probe = channelAddress;
+        if (
+          typeof probe !== 'string' ||
+          probe.indexOf(':') <= 0 ||
+          probe.indexOf(':') === probe.length - 1
+        ) {
+          return {
+            success: false,
+            reason: 'invalid_channel_address',
+            detail: `channelAddress must be "platform:chatId"; got: ${JSON.stringify(channelAddress)}`,
+          };
+        }
       }
 
       try {

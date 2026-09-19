@@ -530,6 +530,7 @@ question you're asking.
 - `better-sqlite3` is a V8-ABI native module: the Electron runtime (ABI 119) and the local Node used by Vitest (ABI 137) need different builds, so a single `build/Release/better_sqlite3.node` can only serve one runtime at a time. Switching is now automatic: `scripts/ensure-sqlite-abi.mjs` runs as the `pre`-hook of the DB-touching entry points (`pretest*` → node, `preelectron:*` / e2e → electron) and swaps in the matching **prebuilt** binary (fast copy/download via `prebuild-install`, no source compile) when the current one doesn't load. If you ever see `NODE_MODULE_VERSION` mismatch, just re-run the command — it self-heals; or run `npm run rebuild:node` (node) / `npm run rebuild` (electron) manually. Don't run `npm test` and `npm run electron:dev` at the same time (they share the binary, and a running Electron locks the `.node` file on Windows).
 - Electron window blank: check DevTools console, verify `http://localhost:3000` reachable
 - NEVER `rm -rf` a worktree on Windows ⚠️: GNU rm does not treat NTFS junctions as symlinks — it recurses THROUGH them. Worktrees contain junctioned `node_modules`, and npm workspaces makes `node_modules/@duya/*` junction back into `packages/*`, so one `rm -rf .claude/worktrees/<name>` can wipe every workspace package's sources in the primary checkout (incident 2026-08-25, 7 packages lost). Remove junctions first with `cmd //c rmdir <junction>` (no `/s` — deletes the link only), or just use `scripts/remove-worktree.sh <name>`, which unlinks all reparse points, verifies none remain, and only then deletes.
+- Bug hunt: when looking for defects, cross-check new diffs against `docs/exec-plans/completed/2026-09-bug-sweep.md` first — it catalogs the recurring shapes (async-as-value, non-null assertion, silent API fallthrough, fractional-cell math, port 0, etc.) with concrete duya examples and detection rules.
 
 ## Docs Structure
 
@@ -541,7 +542,6 @@ question you're asking.
 | `docs/exec-plans/`    | Execution plans (active/, completed/, tech-debt-tracker.md) |
 | `docs/generated/`     | Auto-generated docs                                         |
 | `docs/product-specs/` | Product specifications and onboarding                       |
-| `docs/references/`    | Tooling references optimized for LLMs                       |
 
 ## Principles
 

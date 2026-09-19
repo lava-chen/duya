@@ -5,6 +5,7 @@
 
 import type { z } from 'zod';
 import type { ToolUseContext } from '../types.js';
+import type { ToolDependencyDeclaration } from './dependencies.js';
 
 // ============================================================
 // Enums
@@ -103,6 +104,11 @@ export interface Tool extends BaseTool {
   // Interrupt behavior
   interruptBehavior: ToolInterruptBehavior;
 
+  // Plan 550 step 3a — instance-level dependency declaration. Tools that
+  // override this getter get precise orchestrator serialisation;
+  // tools that omit it inherit the legacy batch behaviour.
+  readonly dependencies?: ToolDependencyDeclaration;
+
   // Rendering
   renderToolResultMessage(result: ToolResult): RenderedToolMessage;
   renderToolUseProgressMessage?(progress: ToolProgress): RenderedToolMessage;
@@ -181,6 +187,13 @@ export interface ToolDefinition {
   examples?: Array<{ input: Record<string, unknown>; output: unknown }>;
   category?: ToolCategory;
   tags?: string[];
+  /**
+   * Plan 550 step 3a — declarative dependencies the new
+   * DependencyGraphOrchestrator consumes. Omit (or pass undefined) to
+   * inherit the legacy `isConcurrencySafe()` + three-batch behaviour.
+   * See `tool/dependencies.ts` for the contract.
+   */
+  dependencies?: ToolDependencyDeclaration;
 }
 
 export type ToolCategory =

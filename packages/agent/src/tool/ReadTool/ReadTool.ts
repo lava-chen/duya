@@ -21,6 +21,8 @@ import * as os from 'node:os';
 import { join, sep } from 'node:path';
 import type { ToolResult } from '../../types.js';
 import { BaseTool } from '../BaseTool.js';
+import type { ToolDependencyDeclaration } from '../dependencies.js';
+import { UNKNOWN_PATHS } from '../dependencies.js';
 import type {
   ToolContext,
   RenderedToolMessage,
@@ -233,6 +235,29 @@ export class ReadTool extends BaseTool {
 
   isConcurrencySafe(): boolean {
     return true;
+  }
+
+  /**
+   * Plan 550 step 3a — declarative read-side metadata. The new
+   * DependencyGraphOrchestrator uses the resolved `path` set to serialise
+   * this read against any writer that targets the same path. Reads
+   * against disjoint paths remain parallel.
+   */
+  readonly dependencies: ToolDependencyDeclaration = Object.freeze({
+    readPaths: ['__from_input__'],
+    writePaths: [],
+    requires: [],
+    produces: [],
+    consumes: [],
+  });
+
+  extractReadPaths(input: Record<string, unknown>): readonly string[] {
+    const path = input.path;
+    return typeof path === 'string' && path.length > 0 ? [path] : UNKNOWN_PATHS;
+  }
+
+  extractWritePaths(): readonly string[] {
+    return [];
   }
 
   checkPermissions(input: unknown, context: ToolContext): PermissionCheckResult {

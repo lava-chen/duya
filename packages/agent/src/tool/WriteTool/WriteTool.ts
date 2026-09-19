@@ -9,6 +9,7 @@ import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { ToolResult } from '../../types.js';
 import { BaseTool } from '../BaseTool.js';
+import { UNKNOWN_PATHS, type ToolDependencyDeclaration } from '../dependencies.js';
 import type {
   ToolContext,
   RenderedToolMessage,
@@ -118,6 +119,28 @@ export class WriteTool extends BaseTool {
 
   isConcurrencySafe(): boolean {
     return false;
+  }
+
+  /**
+   * Plan 550 step 3a — write-path metadata. The orchestrator serialises
+   * any tool_use that targets the same `path` input, so two parallel
+   * WriteTool calls with disjoint paths stay parallel.
+   */
+  readonly dependencies: ToolDependencyDeclaration = Object.freeze({
+    writePaths: ['__from_input__'],
+    readPaths: [],
+    requires: [],
+    produces: [],
+    consumes: [],
+  });
+
+  extractWritePaths(input: Record<string, unknown>): readonly string[] {
+    const path = input.path;
+    return typeof path === 'string' && path.length > 0 ? [path] : UNKNOWN_PATHS;
+  }
+
+  extractReadPaths(): readonly string[] {
+    return [];
   }
 
   checkPermissions(input: unknown, context: ToolContext): PermissionCheckResult {

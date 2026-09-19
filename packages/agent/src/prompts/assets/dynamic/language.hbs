@@ -1,0 +1,14 @@
+{{!--
+  Language preference section — Plan 550 1c.
+
+  Renders only when the user has set a non-empty `language` preference;
+  otherwise produces an empty body so the caller treats the section as
+  omitted (the renderer maps empty → null).
+
+  Mirrors the previous `getLanguageSection` (sections/dynamic/language.ts)
+  verbatim: the body is exactly `buildLanguageGuidance(ctx.language)`.
+  The Handlebars runtime here is just a string passthrough; the actual
+  guidance string is computed upstream by `mapPromptContextToHbs` and
+  injected as `language_guidance`.
+--}}
+{{language_guidance}}
