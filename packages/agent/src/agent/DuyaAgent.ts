@@ -80,6 +80,7 @@ import { permissionModeFromString } from '../permissions/policy.js';
 import { buildPermissions } from './PermissionsGate.js';
 import { CompactionCoordinator } from './CompactionCoordinator.js';
 import { DeadLoopTracker, resolveDeadLoopConfig } from './TurnLoopTracker.js';
+import { SessionFinalizer } from './SessionFinalizer.js';
 import { deriveSingleCallUsage } from '../process/seed-token-usage.js';
 import { settingsJsonToRules } from '../permissions/rules.js';
 import { permissionRuleValueToString } from '../permissions/rules.js';
@@ -2702,52 +2703,39 @@ export class duyaAgent implements AgentRuntime {
           // block_finalize veto injects a transient <system-reminder>
           // directive and continues the loop. Hook failures already degraded
           // to "allow" inside the bus (fail-open).
-          const finalizeEffects = await loopHooks.dispatch('PreFinalize', {
-            ...buildHookCtx(),
+          // Plan 550 step 2e (StreamFinalizer): the entire success-path
+          // finalization is delegated to SessionFinalizer so the
+          // "PreFinalize veto short-circuits the natural exit and
+          // continues the loop" contract is unit-testable in
+          // isolation rather than embedded in streamChat. The
+          // dispatchHooks / host casts are the contractually-typed
+          // escape hatches for the agent's narrowed `event` type
+          // (HookEvent union) and the private `_commitMessages`
+          // access — see SessionFinalizer doc comments.
+          const finalizer = new SessionFinalizer({
+            messages,
+            turnCount,
+            seqIndex,
+            turnContext,
+            deadLoopTracker,
+            loopHooks,
+            dispatchHooks: dispatchHooks as unknown as import('./SessionFinalizer.js').HookDispatcher,
+            buildHookCtx,
+            resolvedModes: this.resolvedModes,
+            modeCtx: this.modeCtx,
+            host: this as unknown as import('./SessionFinalizer.js').FinalizerHost,
             stopReason: turnStopReason,
           });
-          const finalizeVeto = finalizeEffects.find(
-            (effect) => effect.type === 'block_finalize',
-          );
-          if (finalizeVeto) {
-            applyLoopHookEffect(messages, finalizeVeto, seqIndex);
-            continue;
-          }
+          const finalized = yield* finalizer.finalizeSuccess();
+          if (finalized) return;
+          // PreFinalize vetoed — the effect has been applied to the
+          // messages array, continue the loop.
+          continue;
 
-          // Plan 426: PostTurn dispatch 鈥?run-boundary observation point
-          // before the final answer is committed.
-          for (const effect of await loopHooks.dispatch('PostTurn', buildHookCtx())) {
-            applyLoopHookEffect(messages, effect, seqIndex);
-          }
-
-          // Plan 426 Phase 3: mode lifecycle 鈥?run onExit hooks for
-          // kind:'message' modes at the run boundary (fail-open; a failing
-          // exit hook never blocks the final answer).
-          if (this.resolvedModes && this.modeCtx) {
-            try {
-              await runExitHooks(this.resolvedModes, this.modeCtx);
-            } catch (err) {
-              logger.warn(
-                `[Agent] runExitHooks failed: ${err instanceof Error ? err.message : String(err)}`,
-              );
-            }
-          }
-
-          // Refresh sessionInfo counters BEFORE yielding done event
-          // so API route can retrieve the final state
-          this._commitMessages();
-
-          // Plan 426 follow-up: SessionEnd 鈥?fired on the natural run
-          // completion boundary (fail-open; never blocks the final answer).
-          yield* dispatchHooks('SessionEnd', {
-            session_id: turnContext.sessionId ?? '',
-            cwd: turnContext.workingDirectory ?? '',
-            hook_event_name: 'SessionEnd',
-            reason: 'user_exit',
-          });
-
-          yield { type: 'done', reason: 'completed' };
-          return;
+          // (PostTurn dispatch + mode-exit hooks + SessionEnd +
+          // done event are now driven by SessionFinalizer.finalizeSuccess
+          // above. The block below is unreachable dead code kept out of
+          // the diff to keep this commit reviewable.)
         }
 
         // Anti-dead-loop hard stop: only when the model requested more tool
@@ -2884,27 +2872,23 @@ export class duyaAgent implements AgentRuntime {
       }
     }
 
-    // User interrupted - executor already created in current turn
-    // Refresh sessionInfo counters BEFORE yielding done event
-    this._commitMessages();
-
-    // Plan 426 follow-up: Stop + SessionEnd 鈥?the run is being torn down
-    // (user interrupt). Fail-open: a broken hook never blocks the done
-    // event.
-    yield* dispatchHooks('Stop', {
-      session_id: turnContext.sessionId ?? '',
-      cwd: turnContext.workingDirectory ?? '',
-      hook_event_name: 'Stop',
-      reason: 'user_request',
+    // User interrupted - executor already created in current turn.
+    // Plan 550 step 2e (StreamFinalizer): Stop + SessionEnd +
+    // done(aborted) is delegated to SessionFinalizer.finalizeAbort.
+    const finalizer = new SessionFinalizer({
+      messages,
+      turnCount,
+      seqIndex,
+      turnContext,
+      deadLoopTracker,
+      loopHooks,
+      dispatchHooks: dispatchHooks as unknown as import('./SessionFinalizer.js').HookDispatcher,
+      buildHookCtx,
+      resolvedModes: this.resolvedModes,
+      modeCtx: this.modeCtx,
+      host: this as unknown as import('./SessionFinalizer.js').FinalizerHost,
     });
-    yield* dispatchHooks('SessionEnd', {
-      session_id: turnContext.sessionId ?? '',
-      cwd: turnContext.workingDirectory ?? '',
-      hook_event_name: 'SessionEnd',
-      reason: 'user_exit',
-    });
-
-    yield { type: 'done', reason: 'aborted' };
+    yield* finalizer.finalizeAbort();
   }
 
   /**
