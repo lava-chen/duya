@@ -32,6 +32,7 @@ import { readPluginManifest } from '../plugins/manifest';
 import { resolvePermissionProfile } from '../db/permission-resolver';
 import type { PermissionProfile } from '../lib/permission-profile';
 import { getCoreStores } from '../db/core-connection';
+import type { WorkflowRunSnapshot, WorkflowRunStatus, WorkflowTriggerKind } from '../db/core/workflow-store';
 import {
   createWidgetPending,
   updateWidgetResponse,
@@ -2658,6 +2659,89 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         captured_at: typeof p.capturedAt === 'number' ? p.capturedAt : now,
       });
       return true;
+    }
+
+    // ─── Workflow runs (plan 552 Phase 4) ───
+    case 'workflowRun:create': {
+      const { workflowRuns } = getCoreStores();
+      return workflowRuns.createRun({
+        id: p.id as string | undefined,
+        workflowName: p.workflowName as string,
+        workflowVersionId: (p.workflowVersionId as string | undefined) ?? null,
+        status: p.status as WorkflowRunStatus | undefined,
+        triggerKind: p.triggerKind as WorkflowTriggerKind | null | undefined,
+        dedupKey: (p.dedupKey as string | undefined) ?? null,
+        params: (p.params as Record<string, unknown> | undefined) ?? {},
+        retryOf: (p.retryOf as string | undefined) ?? null,
+      });
+    }
+    case 'workflowRun:get': {
+      const { workflowRuns } = getCoreStores();
+      return workflowRuns.getRun(p.id as string);
+    }
+    case 'workflowRun:getByDedupKey': {
+      const { workflowRuns } = getCoreStores();
+      return workflowRuns.getRunByDedupKey(p.dedupKey as string);
+    }
+    case 'workflowRun:list': {
+      const { workflowRuns } = getCoreStores();
+      return workflowRuns.listRuns({
+        status: p.status as WorkflowRunStatus | undefined,
+        workflowName: p.workflowName as string | undefined,
+        limit: p.limit as number | undefined,
+        offset: p.offset as number | undefined,
+      });
+    }
+    case 'workflowRun:updateStatus': {
+      const { workflowRuns } = getCoreStores();
+      return workflowRuns.updateStatus(
+        p.id as string,
+        p.status as WorkflowRunStatus,
+        p.pauseMessage as string | null | undefined,
+      );
+    }
+    case 'workflowRun:setWaitTill': {
+      const { workflowRuns } = getCoreStores();
+      return workflowRuns.setWaitTill(p.id as string, (p.waitTill as number | null | undefined) ?? null);
+    }
+    case 'workflowRun:setVersionId': {
+      const { workflowRuns } = getCoreStores();
+      return workflowRuns.setVersionId(p.id as string, p.versionId as string);
+    }
+    case 'workflowRun:listWaitingPast': {
+      const { workflowRuns } = getCoreStores();
+      return workflowRuns.listWaitingPast(p.now as number);
+    }
+    case 'workflowRun:reconcileStale': {
+      const { workflowRuns } = getCoreStores();
+      return workflowRuns.reconcileStaleRuns(new Set((p.activeRunIds as string[]) ?? []));
+    }
+    case 'workflowRun:saveSnapshot': {
+      const { workflowRuns } = getCoreStores();
+      workflowRuns.saveSnapshot({
+        runId: p.runId as string,
+        definition: p.definition,
+        nodeStack: (p.nodeStack as WorkflowRunSnapshot['nodeStack']) ?? [],
+        journal: (p.journal as WorkflowRunSnapshot['journal']) ?? [],
+      });
+      return true;
+    }
+    case 'workflowRun:loadSnapshot': {
+      const { workflowRuns } = getCoreStores();
+      return workflowRuns.loadSnapshot(p.runId as string);
+    }
+    case 'workflowRun:appendJournal': {
+      const { workflowRuns } = getCoreStores();
+      workflowRuns.appendJournalRecord(p.runId as string, p.record as WorkflowRunSnapshot['journal'][number]);
+      return true;
+    }
+    case 'workflowRun:loadJournal': {
+      const { workflowRuns } = getCoreStores();
+      return workflowRuns.loadJournal(p.runId as string);
+    }
+    case 'workflowRun:delete': {
+      const { workflowRuns } = getCoreStores();
+      return workflowRuns.deleteRun(p.id as string);
     }
 
     default:
