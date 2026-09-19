@@ -395,6 +395,18 @@ export function interpolate(template: string, scope: ExprScope): unknown {
 }
 
 /**
+ * Interpolate a template that MUST yield a string (prompts, labels):
+ * exact-hole object/array results are JSON-stringified.
+ */
+export function interpolateString(template: string, scope: ExprScope): string {
+  const value = interpolate(template, scope);
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+/**
  * Deep-interpolate a node's input/prompt structure: strings become
  * templates; objects/arrays recurse; everything else passes through.
  */

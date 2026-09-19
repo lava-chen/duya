@@ -63,8 +63,10 @@ function loopVarsOf(node: WorkflowNode): Set<string> {
 /**
  * Dependencies of a node: node ids it references. Returns them together
  * with per-reference errors (unparseable expressions / templates).
+ * Exported for the engine's topological ordering (same extractor —
+ * validation and execution can never disagree about edges).
  */
-function nodeDependencies(node: WorkflowNode): { deps: Set<string>; errors: ValidationError[] } {
+export function nodeDependencies(node: WorkflowNode): { deps: Set<string>; errors: ValidationError[] } {
   const deps = new Set<string>();
   const errors: ValidationError[] = [];
 
