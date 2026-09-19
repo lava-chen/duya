@@ -115,6 +115,24 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
   // `return null` short-circuit in getScratchpadSection.
   const scratchpadDir = ctx.scratchpadDir ?? '';
   const hasSessionSearchTool = ctx.enabledTools.has(TOOL_NAMES.SESSION_SEARCH);
+  // Plan 550 1d-rest — session-guidance precomputed booleans / strings.
+  // Each conditional paragraph in getSessionGuidanceSection becomes a
+  // `{{#if}}` block in the .hbs; the boolean fields gate visibility and
+  // the string fields carry the tool-name / search-tools label so a tool
+  // rename propagates via TOOL_NAMES.
+  const hasAskUserQuestion = ctx.enabledTools.has(TOOL_NAMES.ASK_USER_QUESTION);
+  const hasAgentTool = ctx.enabledTools.has(TOOL_NAMES.SUBAGENT);
+  const hasSkills = ctx.enabledTools.has(TOOL_NAMES.SKILL);
+  const isNonInteractiveSession = ctx.isNonInteractiveSession ?? false;
+  const isForkSubagentEnabled = ctx.isForkSubagentEnabled ?? false;
+  const searchTools = hasEmbeddedSearchTools
+    ? `\`find\` or \`grep\` via the ${TOOL_NAMES.BASH} tool`
+    : `the ${TOOL_NAMES.GLOB} or ${TOOL_NAMES.GREP}`;
+  const isSkillSearchEnabled = ctx.isSkillSearchEnabled ?? false;
+  const hasDiscoverSkillsTool = ctx.enabledTools.has(TOOL_NAMES.DISCOVER_SKILLS);
+  const showDiscoverSkillsGuidance = isSkillSearchEnabled && hasDiscoverSkillsTool;
+  const isVerificationAgentEnabled = ctx.isVerificationAgentEnabled ?? false;
+  const showVerificationAgentSection = isVerificationAgentEnabled && hasAgentTool;
 
   return {
     ctx,
@@ -147,6 +165,16 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
     vision_tool_name: TOOL_NAMES.VISION,
     scratchpad_dir: scratchpadDir,
     has_session_search_tool: hasSessionSearchTool,
+    // session-guidance
+    has_ask_user_question: hasAskUserQuestion,
+    has_agent_tool: hasAgentTool,
+    has_skills: hasSkills,
+    is_non_interactive_session: isNonInteractiveSession,
+    has_embedded_search_tools: hasEmbeddedSearchTools,
+    is_fork_subagent_enabled: isForkSubagentEnabled,
+    search_tools: searchTools,
+    show_discover_skills_guidance: showDiscoverSkillsGuidance,
+    show_verification_agent_section: showVerificationAgentSection,
     TOOL_NAMES,
   };
 }

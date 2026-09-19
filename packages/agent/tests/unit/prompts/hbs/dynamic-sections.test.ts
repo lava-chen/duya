@@ -24,6 +24,7 @@ import { getVisionGuidelinesSection } from '../../../../src/prompts/sections/dyn
 import { getVisualVerificationSection } from '../../../../src/prompts/sections/dynamic/visualVerification.js';
 import { getScratchpadSection } from '../../../../src/prompts/sections/dynamic/scratchpad.js';
 import { getSessionSearchSection } from '../../../../src/prompts/sections/dynamic/sessionSearchSection.js';
+import { getSessionGuidanceSection } from '../../../../src/prompts/sections/dynamic/sessionGuidance.js';
 
 const ASSETS_ROOT = resolve(__dirname, '../../../../src/prompts/assets');
 
@@ -238,6 +239,32 @@ describe('dynamic sections hbs byte-level parity', () => {
       getSessionSearchSection,
       baseContext({
         enabledTools: new Set<string>(['Read', 'Edit', 'Write']),
+      }),
+    );
+  });
+
+  it('session-guidance section matches when no relevant tools (omitted)', async () => {
+    await parity(
+      'dynamic/session-guidance.hbs',
+      async (ctx) => await getSessionGuidanceSection(ctx),
+      baseContext({
+        enabledTools: new Set<string>(['Read', 'Edit', 'Write']),
+        isForkSubagentEnabled: false,
+        isVerificationAgentEnabled: false,
+        isSkillSearchEnabled: false,
+      }),
+    );
+  });
+
+  it('session-guidance section matches when fork subagent enabled', async () => {
+    await parity(
+      'dynamic/session-guidance.hbs',
+      async (ctx) => await getSessionGuidanceSection(ctx),
+      baseContext({
+        enabledTools: new Set<string>(['Read', 'Edit', 'Write', 'AskUserQuestion', 'Subagent']),
+        isForkSubagentEnabled: true,
+        isVerificationAgentEnabled: false,
+        isSkillSearchEnabled: false,
       }),
     );
   });

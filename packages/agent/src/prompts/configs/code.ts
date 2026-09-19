@@ -63,7 +63,7 @@ export const codeConfig: PromptSystemConfig = {
     { name: 'platform', compute: getPlatformSection, description: 'Communication platform-specific guidance' },
     { name: 'environment', compute: getEnvironmentSection, description: 'Current directory state' },
     { name: 'mcp', compute: getMcpInstructionsSection, description: 'MCP servers can change' },
-    { name: 'sessionGuidance', compute: getSessionGuidanceSection, description: 'Session-specific guidance' },
+    { name: 'sessionGuidance', compute: getSessionGuidanceSection, template: 'dynamic/session-guidance.hbs', description: 'Session-specific guidance' },
     { name: 'skills', compute: getSkillsMetadataSection, description: 'Skills can be loaded/unloaded' },
     { name: 'language', compute: getLanguageSection, description: 'Language preference' },
     { name: 'outputStyle', compute: getOutputStyleSection, description: 'Custom output style' },

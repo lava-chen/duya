@@ -53,7 +53,7 @@ export const botConfig: PromptSystemConfig = {
     { name: 'skills', compute: getSkillsMetadataSection, description: 'Skills can be loaded/unloaded' },
     { name: 'scratchpad', compute: getScratchpadSection, template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },
     // Task-level constraints
-    { name: 'sessionGuidance', compute: getSessionGuidanceSection, description: 'Session-specific guidance' },
+    { name: 'sessionGuidance', compute: getSessionGuidanceSection, template: 'dynamic/session-guidance.hbs', description: 'Session-specific guidance' },
   ],
   preBuildHook: async (ctx) => {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.

@@ -74,7 +74,7 @@ export const gatewayConfig: PromptSystemConfig = {
     { name: 'sessionSearch', compute: getSessionSearchSection, template: 'dynamic/session-search.hbs', description: 'Past-session decisions may be relevant to the current task' },
     { name: 'recentSessions', compute: getRecentSessionsSection, description: 'Recent session metadata can change between turns' },
     // Task-level constraints
-    { name: 'sessionGuidance', compute: getSessionGuidanceSection, description: 'Session-specific guidance' },
+    { name: 'sessionGuidance', compute: getSessionGuidanceSection, template: 'dynamic/session-guidance.hbs', description: 'Session-specific guidance' },
     { name: 'visionGuidelines', compute: getVisionGuidelinesSection, description: 'Vision tool guidelines' },
     { name: 'visualVerification', compute: getVisualVerificationSection, template: 'dynamic/visual-verification.hbs', description: 'Visual tasks require rendered-output verification' },
   ],
