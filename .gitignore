@@ -104,10 +104,11 @@ scripts/_scratch-*.js
 scripts/probe-*.cjs
 test-results/
 
-# Docs (keep only product-specs and release-notes)
+# Docs (keep only product-specs, release-notes, and recovered-plans)
 docs/*/
 !docs/product-specs/
 !docs/release-notes/
+!docs/recovered-plans/
 docs/*.md
 
 # Tests
