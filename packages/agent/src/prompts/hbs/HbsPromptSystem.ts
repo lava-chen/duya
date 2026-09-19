@@ -29,6 +29,9 @@ import type { PromptContext, SystemPrompt } from '../types.js';
 import { asSystemPrompt, CYBER_RISK_INSTRUCTION, SYSTEM_PROMPT_DYNAMIC_BOUNDARY, TOOL_NAMES } from '../types.js';
 import { buildLanguageGuidance } from '../language-guidance.js';
 import { getPlatformHint } from '../platformHints.js';
+import { buildEnvironmentItems } from '../sections/dynamic/environment.js';
+import { serializeSerializedGroup } from '../sections/dynamic/recentSessionsSection.js';
+import { getSkillsMetadataSection } from '../sections/dynamic/skillsMetadata.js';
 import { HbsPromptRenderer } from './HandlebarsRenderer.js';
 
 const ASSETS_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../assets');
@@ -109,6 +112,37 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
           .join('\n\n')
       : '';
   const hasVisionTool = ctx.enabledTools.has(TOOL_NAMES.VISION);
+  // Plan 550 1d-rest — scratchpad_dir is the precomputed string the
+  // dynamic/scratchpad.hbs template needs; empty string causes the
+  // `{{#if}}` block to skip its body, matching the legacy
+  // `return null` short-circuit in getScratchpadSection.
+  const scratchpadDir = ctx.scratchpadDir ?? '';
+  const hasSessionSearchTool = ctx.enabledTools.has(TOOL_NAMES.SESSION_SEARCH);
+  // Plan 550 1d-rest — memory section fields are precomputed by
+  // createMemoryPreBuildHook (sections/dynamic/memoryPreBuildHook.ts)
+  // and surfaced here as the seven `memory_*` slots. The hook reads
+  // summary.md synchronously once per buildSystemPrompt call so the
+  // .hbs template can render the layout paths + inline summary body
+  // without touching fs.
+  const memorySummaryBody = ctx.memorySummaryBody ?? '';
+  // Plan 550 1d-rest — session-guidance precomputed booleans / strings.
+  // Each conditional paragraph in getSessionGuidanceSection becomes a
+  // `{{#if}}` block in the .hbs; the boolean fields gate visibility and
+  // the string fields carry the tool-name / search-tools label so a tool
+  // rename propagates via TOOL_NAMES.
+  const hasAskUserQuestion = ctx.enabledTools.has(TOOL_NAMES.ASK_USER_QUESTION);
+  const hasAgentTool = ctx.enabledTools.has(TOOL_NAMES.SUBAGENT);
+  const hasSkills = ctx.enabledTools.has(TOOL_NAMES.SKILL);
+  const isNonInteractiveSession = ctx.isNonInteractiveSession ?? false;
+  const isForkSubagentEnabled = ctx.isForkSubagentEnabled ?? false;
+  const searchTools = hasEmbeddedSearchTools
+    ? `\`find\` or \`grep\` via the ${TOOL_NAMES.BASH} tool`
+    : `the ${TOOL_NAMES.GLOB} or ${TOOL_NAMES.GREP}`;
+  const isSkillSearchEnabled = ctx.isSkillSearchEnabled ?? false;
+  const hasDiscoverSkillsTool = ctx.enabledTools.has(TOOL_NAMES.DISCOVER_SKILLS);
+  const showDiscoverSkillsGuidance = isSkillSearchEnabled && hasDiscoverSkillsTool;
+  const isVerificationAgentEnabled = ctx.isVerificationAgentEnabled ?? false;
+  const showVerificationAgentSection = isVerificationAgentEnabled && hasAgentTool;
 
   return {
     ctx,
@@ -139,6 +173,60 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
     mcp_instruction_blocks: mcpInstructionBlocks,
     has_vision_tool: hasVisionTool,
     vision_tool_name: TOOL_NAMES.VISION,
+    scratchpad_dir: scratchpadDir,
+    has_session_search_tool: hasSessionSearchTool,
+    // environment section (Plan 550 1d-rest) — mapper builds the
+    // `env_items` string[] via the same helper the legacy TS path uses,
+    // so the .hbs body's `{{#each env_items}}` produces a byte-identical
+    // render to `getEnvironmentSection`. The preBuildHook populates
+    // ctx.isGitRepo / ctx.nowMs / ctx.unameSr / ctx.marketingName /
+    // ctx.knowledgeCutoff; mapper always runs after preBuildHook so
+    // those overrides are present in production. Tests inject them
+    // directly when calling `renderStaticTemplate` for parity checks.
+    env_items: buildEnvironmentItems(ctx),
+    // recent-sessions section (Plan 550 1d-rest) — mapper joins the
+    // already-serialised JSON entry arrays using the same ` - ${entry}\n`
+    // pattern the legacy `serializeSerializedGroup` helper uses. Empty
+    // arrays map to `- none`, matching the TS source. The
+    // `messaging_guidance` line is computed from `enabledTools` so it
+    // is in lock-step with the legacy function's `canMessageSession`
+    // branch. `section_enabled` gates the entire .hbs body so the
+    // empty-directory case renders `''` (matches the legacy `null`
+    // short-circuit via `renderSectionCompute`'s `out === '' ? null : out`).
+    section_enabled: (ctx.recentSessionsSameProject?.length ?? 0) > 0
+      || (ctx.recentSessionsOtherProjects?.length ?? 0) > 0,
+    same_project_block: serializeSerializedGroup(ctx.recentSessionsSameProject ?? []),
+    other_project_block: serializeSerializedGroup(ctx.recentSessionsOtherProjects ?? []),
+    messaging_guidance: ctx.enabledTools.has(TOOL_NAMES.MESSAGE_SESSION)
+      ? `If a search summary is still insufficient and one session is clearly relevant, use \`MessageSession\` with one focused question in \`minimal\` mode. Do not contact a session merely because it is recent, do not fan out to several sessions unless the user explicitly asks, and never treat a dormant session as an already-running agent.`
+      : 'The `MessageSession` tool is unavailable. Do not imply that you contacted another session or agent.',
+    // skills-metadata section (Plan 550 1d-rest) — pass-through. The
+    // legacy `formatSkillCatalog(skills)` builds the entire body (XML
+    // `<available_skills>` block + optional `### Skill roots` table +
+    // trailing usage line), and `pickCatalogTier` chooses the tier
+    // against the 1500-token budget. Mapper calls
+    // `getSkillsMetadataSection(ctx)` synchronously; the .hbs body is a
+    // thin wrapper that substitutes `{{skill_catalog_body}}` only when
+    // non-empty. Empty / omitted sections render `''` so
+    // `renderSectionCompute` collapses them to `null`.
+    skill_catalog_body: getSkillsMetadataSection(ctx) ?? '',
+    // session-guidance
+    has_ask_user_question: hasAskUserQuestion,
+    has_agent_tool: hasAgentTool,
+    has_skills: hasSkills,
+    is_non_interactive_session: isNonInteractiveSession,
+    has_embedded_search_tools: hasEmbeddedSearchTools,
+    is_fork_subagent_enabled: isForkSubagentEnabled,
+    search_tools: searchTools,
+    show_discover_skills_guidance: showDiscoverSkillsGuidance,
+    show_verification_agent_section: showVerificationAgentSection,
+    // memory section (preBuildHook populates these)
+    memory_root_path: ctx.memoryRootPath ?? '',
+    memory_summary_path: ctx.memorySummaryPath ?? '',
+    memory_path: ctx.memoryPath ?? '',
+    memory_rollout_summaries_dir: ctx.memoryRolloutSummariesDir ?? '',
+    memory_ad_hoc_dir: ctx.memoryAdHocDir ?? '',
+    memory_summary_body: memorySummaryBody,
     TOOL_NAMES,
   };
 }

@@ -21,6 +21,10 @@ import { getOutputStyleSection } from '../../../../src/prompts/sections/dynamic/
 import { getPlatformSection } from '../../../../src/prompts/sections/dynamic/platform.js';
 import { getMcpInstructionsSection } from '../../../../src/prompts/sections/dynamic/mcpInstructions.js';
 import { getVisionGuidelinesSection } from '../../../../src/prompts/sections/dynamic/visionGuidelines.js';
+import { getVisualVerificationSection } from '../../../../src/prompts/sections/dynamic/visualVerification.js';
+import { getScratchpadSection } from '../../../../src/prompts/sections/dynamic/scratchpad.js';
+import { getSessionSearchSection } from '../../../../src/prompts/sections/dynamic/sessionSearchSection.js';
+import { getSessionGuidanceSection } from '../../../../src/prompts/sections/dynamic/sessionGuidance.js';
 
 const ASSETS_ROOT = resolve(__dirname, '../../../../src/prompts/assets');
 
@@ -179,6 +183,88 @@ describe('dynamic sections hbs byte-level parity', () => {
       getVisionGuidelinesSection,
       baseContext({
         enabledTools: new Set<string>(['Read', 'Edit', 'Write']),
+      }),
+    );
+  });
+
+  it('visual-verification section matches when vision tool is enabled', async () => {
+    await parity(
+      'dynamic/visual-verification.hbs',
+      getVisualVerificationSection,
+      baseContext({
+        enabledTools: new Set<string>(['Read', 'Edit', 'Write', 'vision']),
+      }),
+    );
+  });
+
+  it('visual-verification section matches when vision tool is absent', async () => {
+    await parity(
+      'dynamic/visual-verification.hbs',
+      getVisualVerificationSection,
+      baseContext({
+        enabledTools: new Set<string>(['Read', 'Edit', 'Write']),
+      }),
+    );
+  });
+
+  it('scratchpad section matches when scratchpadDir is set', async () => {
+    await parity(
+      'dynamic/scratchpad.hbs',
+      getScratchpadSection,
+      baseContext({ scratchpadDir: 'C:\\Users\\tester\\.duya\\scratch\\session-1' }),
+    );
+  });
+
+  it('scratchpad section matches when scratchpadDir is absent', async () => {
+    await parity(
+      'dynamic/scratchpad.hbs',
+      getScratchpadSection,
+      baseContext({ scratchpadDir: undefined }),
+    );
+  });
+
+  it('session-search section matches when SessionSearch tool is enabled', async () => {
+    await parity(
+      'dynamic/session-search.hbs',
+      getSessionSearchSection,
+      baseContext({
+        enabledTools: new Set<string>(['Read', 'Edit', 'Write', 'SessionSearch']),
+      }),
+    );
+  });
+
+  it('session-search section matches when SessionSearch tool is absent', async () => {
+    await parity(
+      'dynamic/session-search.hbs',
+      getSessionSearchSection,
+      baseContext({
+        enabledTools: new Set<string>(['Read', 'Edit', 'Write']),
+      }),
+    );
+  });
+
+  it('session-guidance section matches when no relevant tools (omitted)', async () => {
+    await parity(
+      'dynamic/session-guidance.hbs',
+      async (ctx) => await getSessionGuidanceSection(ctx),
+      baseContext({
+        enabledTools: new Set<string>(['Read', 'Edit', 'Write']),
+        isForkSubagentEnabled: false,
+        isVerificationAgentEnabled: false,
+        isSkillSearchEnabled: false,
+      }),
+    );
+  });
+
+  it('session-guidance section matches when fork subagent enabled', async () => {
+    await parity(
+      'dynamic/session-guidance.hbs',
+      async (ctx) => await getSessionGuidanceSection(ctx),
+      baseContext({
+        enabledTools: new Set<string>(['Read', 'Edit', 'Write', 'AskUserQuestion', 'Subagent']),
+        isForkSubagentEnabled: true,
+        isVerificationAgentEnabled: false,
+        isSkillSearchEnabled: false,
       }),
     );
   });

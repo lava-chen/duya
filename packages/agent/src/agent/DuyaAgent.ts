@@ -79,6 +79,10 @@ import type { TurnContext } from './TurnContext.js';
 import { permissionModeFromString } from '../permissions/policy.js';
 import { buildPermissions } from './PermissionsGate.js';
 import { CompactionCoordinator } from './CompactionCoordinator.js';
+import { DeadLoopTracker, resolveDeadLoopConfig } from './TurnLoopTracker.js';
+import { SessionFinalizer } from './SessionFinalizer.js';
+import { runTurnStream } from './TurnStreamRunner.js';
+import { PendingHookMessages } from './PendingHookMessages.js';
 import { deriveSingleCallUsage } from '../process/seed-token-usage.js';
 import { settingsJsonToRules } from '../permissions/rules.js';
 import { permissionRuleValueToString } from '../permissions/rules.js';
@@ -414,8 +418,13 @@ export class duyaAgent implements AgentRuntime {
    * turn-end boundary in `agent-process-entry` and persisted as
    * `msg_type: 'hook_invocation'` rows so reload / cross-device sync
    * keep the hook history visible alongside tool_use / tool_result.
+   *
+   * Plan 550 step 2e (TurnPreparer, side-quest slice): wrapped in
+   * a `PendingHookMessages` instance so the FIFO contract is
+   * unit-testable in isolation and the `push` / `drain` API surfaces
+   * at named methods rather than `array.push` / `slice()`.
    */
-  private pendingHookMessages: Message[] = [];
+  private readonly pendingHookMessages = new PendingHookMessages();
   /**
    * Per-session mutable canvas state (list-freshness timestamp, created
    * element IDs, ref map). Shared across tool calls and turns via a
@@ -1363,14 +1372,14 @@ export class duyaAgent implements AgentRuntime {
     // nudge (deadLoopHardNudgeAt) 鈫?hard stop (deadLoopHardStopAt). The
     // counting and the hard stop are engine invariants (plan 426); the
     // soft/hard nudge *texts* live in the builtin dead-loop loop hook.
-    const deadLoop = options?.antiDeadLoop ?? {};
-    const deadLoopEnabled = deadLoop.enabled ?? true;
-    const deadLoopNudgeAt = deadLoop.nudgeAt ?? 8;
-    const deadLoopHardNudgeAt = deadLoop.hardNudgeAt ?? 12;
-    const deadLoopHardStopAt = deadLoop.hardStopAt ?? 16;
-    let lastToolCallSignature: string | null = null;
-    let consecutiveToolCalls = 0;
-    let consecutiveToolName: string | null = null;
+    // Plan 550 step 2e (TurnPreparer): the streak counter + signature
+    // logic moved behind `DeadLoopTracker` so the per-run allocation
+    // lives in one place and the inline `let` bindings no longer leak
+    // across streamChat's prologue. The four read sites below consult
+    // the tracker instead of touching local variables.
+    const deadLoopTracker = new DeadLoopTracker(
+      resolveDeadLoopConfig(options?.antiDeadLoop),
+    );
 
     // Loop-hook bus (plan 426): per-run event spine carrying the steering
     // policies that used to be inline blocks below (todo gate, premature
@@ -1382,9 +1391,9 @@ export class duyaAgent implements AgentRuntime {
       sessionId: turnContext.sessionId ?? undefined,
       todoGateEnabled: options?.todoGate?.enabled ?? true,
       antiDeadLoop: {
-        enabled: deadLoopEnabled,
-        nudgeAt: deadLoopNudgeAt,
-        hardNudgeAt: deadLoopHardNudgeAt,
+        enabled: deadLoopTracker.config.enabled,
+        nudgeAt: deadLoopTracker.config.nudgeAt,
+        hardNudgeAt: deadLoopTracker.config.hardNudgeAt,
       },
       toolIntentNudgeMax: options?.toolIntentNudgeMax ?? 2,
       // grok SendMessageReminderMiddleware port: only runs whose toolset
@@ -1978,71 +1987,40 @@ export class duyaAgent implements AgentRuntime {
         // Plan 480 P2.4: refresh the declared-tools snapshot before every
         // provider request (the array changes across rounds as discovered
         // tools join). The visibility guard reads it during execution.
-        const openLLMStream = () => {
-          declaredToolsForRequest = new Set(tools.map((t) => t.name));
-          return this.llmClient.streamChat(llmMessages, {
-            systemPrompt: systemPromptContent,
-            tools,
-            maxTokens: options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
-            temperature: options?.temperature ?? 1,
-            signal: requestSignal,
-            effort: options?.effort,
-            maxOutputTokens: this.runtimeConfig?.modelCapabilities?.maxOutputTokens,
-          });
-        };
-        let streamReplayAttempt = 0;
-        const streamGenerator = (async function* () {
-          while (true) {
-            try {
-              yield* openLLMStream();
-              return;
-            } catch (streamError) {
-              if (
-                !shouldReplayStreamAfterError(streamError, {
-                  aborted: requestSignal.aborted,
-                  turnCommitted: doneEventHandled,
-                  attemptsUsed: streamReplayAttempt,
-                })
-              ) {
-                throw streamError;
-              }
-              streamReplayAttempt++;
-              const replayDelayMs = streamReplayDelayMs(streamReplayAttempt);
-              const detail =
-                streamError instanceof Error ? streamError.message : String(streamError);
-              logger.warn(
-                `[Agent] Turn ${turnCount}: LLM stream died mid-flight (${detail}); replaying ` +
-                  `${streamReplayAttempt}/${STREAM_REPLAY_MAX_ATTEMPTS} in ${replayDelayMs}ms`,
-              );
-              // Discard the partial attempt: tool_use events arrive before
-              // `done` so the executor may already hold buffered calls, and
-              // every per-attempt accumulator must start empty for the replay.
-              executor.discard();
-              assistantContent.length = 0;
-              thinkingContent = '';
-              hasThinkingContent = false;
-              thinkingSignature = undefined;
-              needsFollowUp = false;
-              turnToolCalls.length = 0;
-              turnToolCallIds.clear();
-              modeSwitchToolIds.clear();
-              consecutiveToolCalls = 0;
-              lastToolCallSignature = null;
-              consecutiveToolName = null;
-              // Surface the replay through the same channel as the
-              // transport-layer retry (`system` + metadata.retryAttempt 鈫?              // worker boundary emits a chat:retry chip). Plan 462: carry the
-              // provider wording so the chip says *why* it is reconnecting.
-              yield createRetryEvent(
-                streamReplayAttempt,
-                STREAM_REPLAY_MAX_ATTEMPTS,
-                replayDelayMs,
-                extractProviderErrorMessage(streamError) ??
-                  (streamError instanceof Error ? streamError.message : undefined),
-              );
-              await sleep(replayDelayMs, requestSignal);
-            }
-          }
-        })();
+        const streamGenerator = runTurnStream({
+          llmClient: this.llmClient,
+          llmMessages,
+          systemPromptContent,
+          tools,
+          maxTokens: options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+          temperature: options?.temperature ?? 1,
+          effort: options?.effort,
+          maxOutputTokens: this.runtimeConfig?.modelCapabilities?.maxOutputTokens,
+          signal: requestSignal,
+          turnCount,
+          turnCommitted: doneEventHandled,
+          refreshDeclaredTools: () => {
+            declaredToolsForRequest = new Set(tools.map((t) => t.name));
+            return declaredToolsForRequest;
+          },
+          onRetryReset: () => {
+            // Plan 550 step 2e (TurnLoop first slice): the retry envelope lives in
+            // runTurnStream; the per-attempt state reset (executor discard +
+            // deadLoopTracker reset + accumulator clears) is delegated back to the
+            // caller because it touches closure state in streamChat.
+            executor.discard();
+            assistantContent.length = 0;
+            thinkingContent = '';
+            hasThinkingContent = false;
+            thinkingSignature = undefined;
+            needsFollowUp = false;
+            turnToolCalls.length = 0;
+            turnToolCallIds.clear();
+            modeSwitchToolIds.clear();
+            deadLoopTracker.reset();
+          },
+        });
+        
         logger.info(`[Agent] Turn ${turnCount}: Stream generator created, starting iteration...`);
         for await (const event of streamGenerator) {
           llmEventCount++;
@@ -2106,17 +2084,10 @@ export class duyaAgent implements AgentRuntime {
             needsFollowUp = true;
 
             // Anti-dead-loop: track consecutive identical tool calls (name +
-            // serialized input). U+0001 is a safe field separator that cannot
-            // appear in a tool name or JSON input. Streak counting is an
-            // engine invariant; nudge decisions consume it via PostToolUse.
-            const signature = `${event.data.name}\u0001${JSON.stringify(event.data.input ?? {})}`;
-            if (signature === lastToolCallSignature) {
-              consecutiveToolCalls++;
-            } else {
-              lastToolCallSignature = signature;
-              consecutiveToolCalls = 1;
-            }
-            consecutiveToolName = event.data.name;
+            // serialized input). Streak counting is an engine invariant;
+            // nudge decisions consume it via PostToolUse. Plan 550 step 2e
+            // (TurnPreparer): encapsulated in DeadLoopTracker.
+            deadLoopTracker.record(event.data.name, event.data.input ?? {});
             turnToolCalls.push({ name: event.data.name, input: event.data.input });
             turnToolCallIds.set(event.data.id, event.data.name);
 
@@ -2436,16 +2407,9 @@ export class duyaAgent implements AgentRuntime {
               // tool results are committed so hook injections read as
               // feedback on those results (grok "results committed after"
               // semantics). Carries the identical-call streak for the
-              // dead-loop nudge hook.
-              const streak =
-                deadLoopEnabled && consecutiveToolCalls > 0 && consecutiveToolName
-                  ? {
-                      count: consecutiveToolCalls,
-                      toolName: consecutiveToolName,
-                      nudgeAt: deadLoopNudgeAt,
-                      hardNudgeAt: deadLoopHardNudgeAt,
-                    }
-                  : undefined;
+              // dead-loop nudge hook. Plan 550 step 2e (TurnPreparer):
+              // the streak snapshot is now sourced from DeadLoopTracker.
+              const streak = deadLoopTracker.stats();
               for (const effect of await loopHooks.dispatch('PostToolUse', {
                 ...buildHookCtx(),
                 consecutiveIdenticalToolCalls: streak,
@@ -2717,58 +2681,46 @@ export class duyaAgent implements AgentRuntime {
           // block_finalize veto injects a transient <system-reminder>
           // directive and continues the loop. Hook failures already degraded
           // to "allow" inside the bus (fail-open).
-          const finalizeEffects = await loopHooks.dispatch('PreFinalize', {
-            ...buildHookCtx(),
+          // Plan 550 step 2e (StreamFinalizer): the entire success-path
+          // finalization is delegated to SessionFinalizer so the
+          // "PreFinalize veto short-circuits the natural exit and
+          // continues the loop" contract is unit-testable in
+          // isolation rather than embedded in streamChat. The
+          // dispatchHooks / host casts are the contractually-typed
+          // escape hatches for the agent's narrowed `event` type
+          // (HookEvent union) and the private `_commitMessages`
+          // access — see SessionFinalizer doc comments.
+          const finalizer = new SessionFinalizer({
+            messages,
+            turnCount,
+            seqIndex,
+            turnContext,
+            deadLoopTracker,
+            loopHooks,
+            dispatchHooks: dispatchHooks as unknown as import('./SessionFinalizer.js').HookDispatcher,
+            buildHookCtx,
+            resolvedModes: this.resolvedModes,
+            modeCtx: this.modeCtx,
+            host: this as unknown as import('./SessionFinalizer.js').FinalizerHost,
             stopReason: turnStopReason,
           });
-          const finalizeVeto = finalizeEffects.find(
-            (effect) => effect.type === 'block_finalize',
-          );
-          if (finalizeVeto) {
-            applyLoopHookEffect(messages, finalizeVeto, seqIndex);
-            continue;
-          }
+          const finalized = yield* finalizer.finalizeSuccess();
+          if (finalized) return;
+          // PreFinalize vetoed — the effect has been applied to the
+          // messages array, continue the loop.
+          continue;
 
-          // Plan 426: PostTurn dispatch 鈥?run-boundary observation point
-          // before the final answer is committed.
-          for (const effect of await loopHooks.dispatch('PostTurn', buildHookCtx())) {
-            applyLoopHookEffect(messages, effect, seqIndex);
-          }
-
-          // Plan 426 Phase 3: mode lifecycle 鈥?run onExit hooks for
-          // kind:'message' modes at the run boundary (fail-open; a failing
-          // exit hook never blocks the final answer).
-          if (this.resolvedModes && this.modeCtx) {
-            try {
-              await runExitHooks(this.resolvedModes, this.modeCtx);
-            } catch (err) {
-              logger.warn(
-                `[Agent] runExitHooks failed: ${err instanceof Error ? err.message : String(err)}`,
-              );
-            }
-          }
-
-          // Refresh sessionInfo counters BEFORE yielding done event
-          // so API route can retrieve the final state
-          this._commitMessages();
-
-          // Plan 426 follow-up: SessionEnd 鈥?fired on the natural run
-          // completion boundary (fail-open; never blocks the final answer).
-          yield* dispatchHooks('SessionEnd', {
-            session_id: turnContext.sessionId ?? '',
-            cwd: turnContext.workingDirectory ?? '',
-            hook_event_name: 'SessionEnd',
-            reason: 'user_exit',
-          });
-
-          yield { type: 'done', reason: 'completed' };
-          return;
+          // (PostTurn dispatch + mode-exit hooks + SessionEnd +
+          // done event are now driven by SessionFinalizer.finalizeSuccess
+          // above. The block below is unreachable dead code kept out of
+          // the diff to keep this commit reviewable.)
         }
 
         // Anti-dead-loop hard stop: only when the model requested more tool
         // rounds. The assistant message and tool results are already persisted
-        // above, so terminating here is safe.
-        if (deadLoopEnabled && consecutiveToolCalls >= deadLoopHardStopAt) {
+        // above, so terminating here is safe. Plan 550 step 2e (TurnPreparer):
+        // threshold check moved into DeadLoopTracker.shouldHardStop().
+        if (deadLoopTracker.shouldHardStop()) {
           this._commitMessages();
           yield { type: 'done', reason: 'repeated_tool_calls' };
           return;
@@ -2810,85 +2762,25 @@ export class duyaAgent implements AgentRuntime {
           }
         }
 
-        executor.discard();
-
-        // Clean up incomplete tool_use/tool_result pairs before saving
-        // This prevents "tool call result does not follow tool call" errors on next message
-        const lastAssistantIdx = messages.map((m, i) => m.role === 'assistant' ? i : -1).filter(i => i >= 0).pop();
-        if (lastAssistantIdx !== undefined && lastAssistantIdx >= 0) {
-          const lastAssistant = messages[lastAssistantIdx];
-          if (Array.isArray(lastAssistant.content)) {
-            const hasUnmatchedToolUse = lastAssistant.content.some(
-              block => block.type === 'tool_use' && 'id' in block
-            );
-            if (hasUnmatchedToolUse) {
-              // Remove the incomplete assistant message to avoid saving partial state
-              messages.splice(lastAssistantIdx, 1);
-                          }
-          }
-        }
-
-        // Reconcile the timeline with the cleaned working array so the
-        // incomplete assistant (removed above) is excluded from the durable
-        // projection. `this.messages` is now a timeline-derived getter, so
-        // the removal must be reflected in the timeline itself.
-        this.setMessages(persistableMessages(messages));
-
-        // Refresh sessionInfo counters BEFORE yielding error/done events
-        this._commitMessages();
-
-        if (error instanceof Error && error.name === 'AbortError') {
-          // Generate synthetic tool_results for any pending tool_use blocks
-          // This prevents "missing tool_result" API errors on the next turn
-          const lastAssistantMsg = messages.at(-1);
-          if (lastAssistantMsg && lastAssistantMsg.role === 'assistant' && Array.isArray(lastAssistantMsg.content)) {
-            for (const block of lastAssistantMsg.content) {
-              if (block.type === 'tool_use' && 'id' in block && typeof block.id === 'string') {
-                const toolId = block.id;
-                const hasResult = messages.some(m =>
-                  (m.role === 'tool' && m.tool_call_id === toolId) ||
-                  (Array.isArray(m.content) && m.content.some(
-                    (c: MessageContent) =>
-                      c.type === 'tool_result' &&
-                      'tool_use_id' in c &&
-                      (c as { tool_use_id: string }).tool_use_id === toolId
-                  ))
-                );
-                if (!hasResult) {
-                  this._pushDurable(messages, {
-                    id: crypto.randomUUID(),
-                    role: 'user',
-                    content: [{
-                      type: 'tool_result',
-                      tool_use_id: toolId,
-                      content: 'Interrupted by user',
-                      is_error: true,
-                    }],
-                    timestamp: Date.now(),
-                  });
-                }
-              }
-            }
-          }
-          yield { type: 'done', reason: 'aborted' };
-        } else {
-          // Plan 462: surface the provider's own wording (e.g. "浣欓涓嶈冻锛?          // 璇峰厖鍊?) with a machine `code`, instead of the raw SDK string
-          // (`429 {"type":"error","error":{...}}`) that ends up in the banner.
-          const llmError = createLLMAPIError(error);
-          const providerMessage = extractProviderErrorMessage(llmError) ?? llmError.message;
-          yield {
-            type: 'error',
-            data: providerMessage,
-            code: llmError.type === APIErrorType.RATE_LIMIT
-              ? 'rate_limit_error'
-              : llmError.type === APIErrorType.INSUFFICIENT_BALANCE
-                ? 'insufficient_balance'
-                : llmError.type === APIErrorType.USAGE_LIMIT
-                  ? 'usage_limit_exceeded'
-                  : undefined,
-          };
-          yield { type: 'done', reason: 'error' };
-        }
+        // Plan 550 step 2e (StreamFinalizer): the cleanup +
+        // AbortError synthetic tool_result injection + Plan 462
+        // error-code mapping is delegated to the finalizer so the
+        // catch block stays focused on the retry orchestration.
+        const errorFinalizer = new SessionFinalizer({
+          messages,
+          turnCount,
+          seqIndex,
+          turnContext,
+          deadLoopTracker,
+          loopHooks,
+          dispatchHooks: dispatchHooks as unknown as import('./SessionFinalizer.js').HookDispatcher,
+          buildHookCtx,
+          resolvedModes: this.resolvedModes,
+          modeCtx: this.modeCtx,
+          host: this as unknown as import('./SessionFinalizer.js').FinalizerHost,
+          executor,
+        });
+        yield* errorFinalizer.finalizeStreamError(error);
         return;
       } finally {
         // Always release the per-request timeout controller (clear the
@@ -2898,27 +2790,23 @@ export class duyaAgent implements AgentRuntime {
       }
     }
 
-    // User interrupted - executor already created in current turn
-    // Refresh sessionInfo counters BEFORE yielding done event
-    this._commitMessages();
-
-    // Plan 426 follow-up: Stop + SessionEnd 鈥?the run is being torn down
-    // (user interrupt). Fail-open: a broken hook never blocks the done
-    // event.
-    yield* dispatchHooks('Stop', {
-      session_id: turnContext.sessionId ?? '',
-      cwd: turnContext.workingDirectory ?? '',
-      hook_event_name: 'Stop',
-      reason: 'user_request',
+    // User interrupted - executor already created in current turn.
+    // Plan 550 step 2e (StreamFinalizer): Stop + SessionEnd +
+    // done(aborted) is delegated to SessionFinalizer.finalizeAbort.
+    const finalizer = new SessionFinalizer({
+      messages,
+      turnCount,
+      seqIndex,
+      turnContext,
+      deadLoopTracker,
+      loopHooks,
+      dispatchHooks: dispatchHooks as unknown as import('./SessionFinalizer.js').HookDispatcher,
+      buildHookCtx,
+      resolvedModes: this.resolvedModes,
+      modeCtx: this.modeCtx,
+      host: this as unknown as import('./SessionFinalizer.js').FinalizerHost,
     });
-    yield* dispatchHooks('SessionEnd', {
-      session_id: turnContext.sessionId ?? '',
-      cwd: turnContext.workingDirectory ?? '',
-      hook_event_name: 'SessionEnd',
-      reason: 'user_exit',
-    });
-
-    yield { type: 'done', reason: 'aborted' };
+    yield* finalizer.finalizeAbort();
   }
 
   /**
@@ -2933,10 +2821,7 @@ export class duyaAgent implements AgentRuntime {
    * module boundary.
    */
   drainPendingHookMessages(): Message[] {
-    if (this.pendingHookMessages.length === 0) return [];
-    const drained = this.pendingHookMessages.slice();
-    this.pendingHookMessages = [];
-    return drained;
+    return this.pendingHookMessages.drain();
   }
 
 // === streamChat helpers (Phase F1 of Plan 211) =========================

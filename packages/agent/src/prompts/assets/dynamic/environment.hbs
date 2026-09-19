@@ -1,0 +1,19 @@
+{{!--
+  Environment section — Plan 550 1d-rest.
+
+  Renders the `# Environment` header and ` - ` prefixed items.
+  The mapper in hbs/HbsPromptSystem.ts builds `env_items` via
+  `buildEnvironmentItems(ctx)` (same array used by the legacy
+  `getEnvironmentSection` after its `.map(item => ' - ' + item).join('\n')`
+  step), so the .hbs body is byte-identical to the TS path.
+
+  Trailing newline from the `{{/each}}` line is stripped by the
+  renderer's `.trim()` in `buildStaticSections` /
+  `renderSectionCompute`, matching the TS template-literal's lack of
+  trailing newline.
+--}}
+# Environment
+
+You have been invoked in the following environment:
+{{#each env_items}} - {{this}}
+{{/each}}

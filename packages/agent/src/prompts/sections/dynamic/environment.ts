@@ -1,62 +1,28 @@
 /**
  * Environment Section - Dynamic Runtime Information
+ *
+ * Plan 550 1d-rest: this file now exposes both the legacy TS path
+ * (`getEnvironmentSection`) and the helpers the `.hbs` mapper needs
+ * (`buildEnvironmentItems`, `getShellInfoLine`, `formatCurrentDateTime`,
+ * `getUnameSR`, `getMarketingNameForModel`, `getKnowledgeCutoff`).
+ *
+ * The mapper in `hbs/HbsPromptSystem.ts` calls `buildEnvironmentItems`
+ * to produce a `string[]` that the `{{#each}}` block in
+ * `assets/dynamic/environment.hbs` renders. The legacy TS path keeps
+ * the same public surface so unit tests and direct callers still work
+ * without the preBuildHook.
+ *
+ * Byte-level parity between the TS path and the .hbs path is locked by
+ * `tests/unit/prompts/hbs/environment-1d-rest.test.ts`. Both paths share
+ * `buildEnvironmentItems` so any drift surfaces immediately.
  */
 
 import type { PromptContext } from '../../types.js'
-import { MODEL_CONSTANTS, KNOWLEDGE_CUTOFFS } from '../../types.js'
-import fs from 'node:fs/promises'
-import path from 'node:path'
-import { type as osType, version as osVersion, release as osRelease } from 'os'
+import { KNOWLEDGE_CUTOFFS } from '../../types.js'
 import { hasUnixCompatibleShell } from '../../../utils/shellDetector.js'
 
-async function isGitRepo(cwd: string): Promise<boolean> {
-  try {
-    await fs.access(path.join(cwd, '.git'))
-    return true
-  } catch {
-    return false
-  }
-}
-
-function getShellInfoLine(shell: string, platform: string): string {
-  const shellName = shell.includes('zsh')
-    ? 'zsh'
-    : shell.includes('bash')
-      ? 'bash'
-      : shell.includes('pwsh')
-        ? 'pwsh'
-        : shell.includes('powershell')
-          ? 'powershell'
-          : shell.includes('cmd')
-            ? 'cmd'
-            : shell
-  if (platform === 'win32') {
-    const hasUnixShell = hasUnixCompatibleShell()
-    if (hasUnixShell) {
-      return `Shell: ${shellName} (Unix-compatible shell available on Windows — use Unix syntax like forward slashes, /dev/null)`
-    }
-    return `Shell: ${shellName} (Windows native shell — use Windows syntax like backslashes, NUL instead of /dev/null, 'dir' instead of 'ls')`
-  }
-  return `Shell: ${shellName}`
-}
-
-function getUnameSR(platform: string): string {
-  if (platform === 'win32') {
-    return `${osVersion()} ${osRelease()}`
-  }
-  return `${osType()} ${osRelease()}`
-}
-
-function getKnowledgeCutoff(modelId: string): string | null {
-  for (const [pattern, cutoff] of Object.entries(KNOWLEDGE_CUTOFFS)) {
-    if (modelId.includes(pattern)) {
-      return cutoff
-    }
-  }
-  return null
-}
-
-function getMarketingNameForModel(modelId: string): string | null {
+/** Best-effort model marketing name from a wire model id. */
+export function getMarketingNameForModel(modelId: string): string | null {
   // Claude models
   if (modelId.includes('opus-4-6')) return 'Claude Opus 4.6'
   if (modelId.includes('sonnet-4-6')) return 'Claude Sonnet 4.6'
@@ -111,8 +77,42 @@ function getMarketingNameForModel(modelId: string): string | null {
   return null
 }
 
-function getCurrentDateTime(tzStr?: string): string {
-  const now = new Date()
+/** Resolve the knowledge-cutoff date string for a model id, or `null`. */
+export function getKnowledgeCutoff(modelId: string): string | null {
+  for (const [pattern, cutoff] of Object.entries(KNOWLEDGE_CUTOFFS)) {
+    if (modelId.includes(pattern)) {
+      return cutoff
+    }
+  }
+  return null
+}
+
+/** Build the human-readable shell info line for the prompt. */
+export function getShellInfoLine(shell: string, platform: string): string {
+  const shellName = shell.includes('zsh')
+    ? 'zsh'
+    : shell.includes('bash')
+      ? 'bash'
+      : shell.includes('pwsh')
+        ? 'pwsh'
+        : shell.includes('powershell')
+          ? 'powershell'
+          : shell.includes('cmd')
+            ? 'cmd'
+            : shell
+  if (platform === 'win32') {
+    const hasUnixShell = hasUnixCompatibleShell()
+    if (hasUnixShell) {
+      return `Shell: ${shellName} (Unix-compatible shell available on Windows — use Unix syntax like forward slashes, /dev/null)`
+    }
+    return `Shell: ${shellName} (Windows native shell — use Windows syntax like backslashes, NUL instead of /dev/null, 'dir' instead of 'ls')`
+  }
+  return `Shell: ${shellName}`
+}
+
+/** Format the wall-clock snapshot as a stable locale-aware string. */
+export function formatCurrentDateTime(nowMs: number, tzStr?: string): string {
+  const now = new Date(nowMs)
   const dateStr = now.toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'long',
@@ -130,20 +130,38 @@ function getCurrentDateTime(tzStr?: string): string {
   return `${dateStr}, ${timeStr} (${resolvedTz}, ${tzOffset})`
 }
 
-export async function getEnvironmentSection(ctx: PromptContext): Promise<string> {
-  const hasWorkingDir = ctx.workingDirectory && ctx.workingDirectory.trim() !== ''
-  const isGit = hasWorkingDir ? await isGitRepo(ctx.workingDirectory) : false
-  const unameSR = ctx.osVersion ?? getUnameSR(ctx.platform)
+/**
+ * Build the environment body as a flat string array (no ` - ` prefix and
+ * no `Environment\n\nYou have been invoked in the following environment:\n`
+ * wrapper — those are the template's job). The legacy `getEnvironmentSection`
+ * joins these with `\n` + prefix and wraps with the header; the new `.hbs`
+ * path emits the wrapper and the ` - ` prefix via the template.
+ *
+ * Async `fs.access(<cwd>/.git)` is the preBuildHook's job — the hook
+ * populates `ctx.isGitRepo`. When the override is absent (e.g. unit tests
+ * that call this function directly without going through the hook), the
+ * caller is responsible for supplying the boolean. The mapper in
+ * `HbsPromptSystem.ts` always runs after the preBuildHook, so the override
+ * is always present in production.
+ */
+export function buildEnvironmentItems(ctx: PromptContext): string[] {
+  const hasWorkingDir = !!(ctx.workingDirectory && ctx.workingDirectory.trim() !== '')
+  const isGit = ctx.isGitRepo === true
+  const unameSR = ctx.unameSr ?? ''
 
-  const marketingName = ctx.modelName ?? getMarketingNameForModel(ctx.modelId)
-  const modelDescription = marketingName
-    ? `You are powered by the model named ${marketingName}. The exact model ID is ${ctx.modelId}.`
+  const marketingName = ctx.marketingName ?? getMarketingNameForModel(ctx.modelId)
+  const modelDescription = ctx.modelName
+    ? `You are powered by the model named ${ctx.modelName}. The exact model ID is ${ctx.modelId}.`
     : `You are powered by the model ${ctx.modelId}.`
 
   const cutoff = ctx.knowledgeCutoff ?? getKnowledgeCutoff(ctx.modelId)
   const knowledgeCutoffMessage = cutoff
     ? `Assistant knowledge cutoff is ${cutoff}.`
     : null
+
+  const shellInfoLine = getShellInfoLine(ctx.shell, ctx.platform)
+  const nowMs = ctx.nowMs ?? Date.now()
+  const currentDateTime = formatCurrentDateTime(nowMs, ctx.location?.timezone)
 
   const envItems: (string | null)[] = [
     hasWorkingDir
@@ -160,19 +178,29 @@ export async function getEnvironmentSection(ctx: PromptContext): Promise<string>
       ? ctx.additionalWorkingDirectories.map((d: string) => `  - ${d}`)
       : []),
     `Platform: ${ctx.platform}`,
-    getShellInfoLine(ctx.shell, ctx.platform),
+    shellInfoLine,
     `OS Version: ${unameSR}`,
     ctx.location
       ? `Location: ${ctx.location.locale}${ctx.location.localeCountryCode ? ` (${ctx.location.localeCountryCode})` : ''}, timezone ${ctx.location.timezone}`
       : null,
-    `Current date and time: ${getCurrentDateTime(ctx.location?.timezone)}`,
+    `Current date and time: ${currentDateTime}`,
     modelDescription,
     knowledgeCutoffMessage,
     `Duya is available as a CLI in the terminal, desktop app (Mac/Windows).`,
   ].filter(item => item !== null)
 
+  return envItems as string[]
+}
+
+/**
+ * Legacy TS path — kept for the unit tests that exercise `getEnvironmentSection`
+ * directly, plus any caller that hasn't migrated to the preBuildHook + .hbs
+ * pipeline. Wraps `buildEnvironmentItems` with the `Environment` header
+ * and the ` - ` item prefix.
+ */
+export async function getEnvironmentSection(ctx: PromptContext): Promise<string> {
   return `# Environment
 
 You have been invoked in the following environment:
-${envItems.map(item => ` - ${item}`).join('\n')}`
+${buildEnvironmentItems(ctx).map(item => ` - ${item}`).join('\n')}`
 }

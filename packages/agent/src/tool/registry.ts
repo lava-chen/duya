@@ -46,6 +46,29 @@ export interface ToolExecutor {
   ): Promise<ToolResult>;
   /** Optional tool-specific usage guide injected after on-demand discovery. */
   getPrompt?(): string;
+  /**
+   * Optional Plan 550 step 3a dependency declaration. The
+   * `ToolExecutionPipeline` reads this to build a per-batch execution
+   * plan via `DependencyGraphOrchestrator.planExecution`. Tools that
+   * omit the declaration fall back to the legacy READ/WRITE/SYSTEM
+   * batch semantics — kept so the dependency feature is opt-in per
+   * tool and never silently changes existing behaviour.
+   */
+  dependencies?: import('./dependencies.js').ToolDependencyDeclaration;
+  /**
+   * Optional Plan 550 step 3c input-to-path resolver. Tools that
+   * mutate the filesystem can expose the concrete path set so the
+   * orchestrator serialises against other writers touching the same
+   * path, instead of falling back to the conservative
+   * batch-wide serialisation.
+   */
+  extractWritePaths?: (input: Record<string, unknown>) => readonly string[];
+  /**
+   * Optional Plan 550 step 3c input-to-path resolver. Mirrors
+   * `extractWritePaths` for read paths; lets the orchestrator
+   * parallelise reads with non-overlapping writes.
+   */
+  extractReadPaths?: (input: Record<string, unknown>) => readonly string[];
 }
 
 /**

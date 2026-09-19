@@ -179,8 +179,8 @@ export interface PromptContext {
   modelId: string
   /** Marketing name for the model */
   modelName?: string
-  /** Knowledge cutoff date for the model */
-  knowledgeCutoff?: string
+  /** Knowledge cutoff date for the model. `null` when the model id does not match any entry in `KNOWLEDGE_CUTOFFS` (set by the environment preBuildHook). */
+  knowledgeCutoff?: string | null
   /** Set of enabled tool names */
   enabledTools: Set<string>
   /** Connected MCP servers with their instructions */
@@ -211,6 +211,45 @@ export interface PromptContext {
   isSkillSearchEnabled?: boolean
   /** Scratchpad directory path */
   scratchpadDir?: string
+  // Plan 550 1d-rest (memory section) — populated by the `memory`
+  // preBuildHook so the dynamic/memory.hbs template can read the
+  // summary file body and the four layout paths synchronously. The hook
+  // runs once per `buildSystemPrompt`; the read is `fs.readFileSync` so
+  // it stays synchronous at the mapper layer.
+  /** Absolute path to `~/.duya/memory/` (or $DUYA_MEMORY_ROOT). */
+  memoryRootPath?: string;
+  /** Absolute path to `summary.md` (the inline-attached memory snapshot). */
+  memorySummaryPath?: string;
+  /** Absolute path to `MEMORY.md` (the searchable registry). */
+  memoryPath?: string;
+  /** Absolute path to `rollout_summaries/` (per-rollout recaps). */
+  memoryRolloutSummariesDir?: string;
+  /** Absolute path to `extensions/ad_hoc/` (one-shot memory update notes). */
+  memoryAdHocDir?: string;
+  /** Inline body of `summary.md`, truncated to 12 000 chars. Empty / missing file maps to the literal `_(summary.md not yet generated)_`. */
+  memorySummaryBody?: string;
+  // Plan 550 1d-rest (environment section) — populated by the
+  // `environment` preBuildHook so the dynamic/environment.hbs template
+  // can render async + non-deterministic fields (git repo detection,
+  // wall-clock snapshot, marketing-name / cutoff lookup) synchronously.
+  /** Result of async `fs.access(<cwd>/.git)` — null when cwd is empty or the check threw. */
+  isGitRepo?: boolean | null;
+  /** Wall-clock snapshot in ms. Captured once per `buildSystemPrompt` so the cache entry stays stable. */
+  nowMs?: number;
+  /** OS uname -sr equivalent. Windows uses `osVersion() osRelease()`; others use `osType() osRelease()`. */
+  unameSr?: string;
+  /** Best-effort marketing name for the model (claude / openai / gemini / etc.). `null` when the model id has no recognised prefix. */
+  marketingName?: string | null;
+  // Plan 550 1d-rest (recent-sessions section) — populated by the
+  // `recentSessions` preBuildHook so the dynamic/recent-sessions.hbs
+  // template can render the JSON entry lists synchronously. The hook
+  // runs `loadRecentSessionDirectory(...)` once per `buildSystemPrompt`
+  // and emits already-serialised JSON strings; the mapper joins them
+  // with ` - ${entry}\n` (matching the legacy `serializeSerializedGroup`).
+  /** Same-project scope entries (already JSON-serialised via `serializeEntry`). */
+  recentSessionsSameProject?: string[];
+  /** Other-projects scope entries (already JSON-serialised via `serializeEntry`). */
+  recentSessionsOtherProjects?: string[];
   /** User type (for conditional prompt sections) */
   userType?: 'ant' | 'external'
   /** Output style configuration */

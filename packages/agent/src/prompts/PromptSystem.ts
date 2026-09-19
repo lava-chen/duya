@@ -69,6 +69,14 @@ async function renderSectionCompute(
     const out = hbsSystem.renderStaticTemplate(def.template, context).trim()
     return out === '' ? null : out
   }
+  // Plan 550 1d-delete: `compute` is optional when `template` is set, so
+  // sections that have migrated exclusively to .hbs don't need a stub.
+  // When only `compute` is present, fall through to the legacy path.
+  if (!def.compute) {
+    throw new Error(
+      `PromptSystem section '${def.name}' has neither 'template' nor 'compute' — at least one is required.`,
+    )
+  }
   return await Promise.resolve(def.compute(context))
 }
 
@@ -78,8 +86,16 @@ async function renderSectionCompute(
 export interface SectionDef {
   /** Unique section name within this PromptSystem. */
   name: string
-  /** Compute the section content. Return null to omit. */
-  compute: (context: PromptContext) => string | null | Promise<string | null>
+  /**
+   * Compute the section content. Return null to omit.
+   *
+   * Plan 550 1d-delete: optional when `template` is set — a section can
+   * render exclusively through its `.hbs` template without keeping the
+   * legacy TS function around. When both are present, the template path
+   * takes priority (see `renderSectionCompute` below) so `compute` is
+   * only used as a fallback when the `.hbs` is missing.
+   */
+  compute?: (context: PromptContext) => string | null | Promise<string | null>
   /**
    * Optional: when set, render the section via the HbsPromptSystem instead
    * of calling `compute`. Plan 550 1c uses this to migrate individual
@@ -110,12 +126,24 @@ export type ContextExtender = (
 
 /**
  * Hook: async side-effect before buildSystemPrompt resolves sections.
- * Returns cache keys to invalidate. Used by general/code/research to
- * call initializeAgentsMd and invalidate the project/agentsMd cache entry.
+ * Returns cache keys to invalidate and an optional context-extension
+ * delta that gets merged into `PromptContext` before section rendering.
+ *
+ * Used by general/code/research to:
+ *   - call `initializeAgentsMd` and invalidate the project/agentsMd cache entry
+ *     (the `invalidateCacheKeys` half of the contract);
+ *   - pre-compute Plan 550 1d-rest dynamic-section inputs (memory
+ *     summary file, recent-session directory, environment git detection,
+ *     skills registry snapshot) and inject them as `promptContextExtension`.
+ *     The preBuildHook runs once per `buildSystemPrompt`; the section
+ *     templates then read the injected fields synchronously.
  */
 export type PreBuildHook = (
   context: PromptContext,
-) => Promise<{ invalidateCacheKeys?: string[] } | void>
+) => Promise<{
+  invalidateCacheKeys?: string[];
+  promptContextExtension?: Partial<PromptContext>;
+} | void>
 
 /**
  * Hook: parallel prompt generators that don't go through buildSystemPrompt.
@@ -302,6 +330,9 @@ export class PromptSystem {
         for (const key of result.invalidateCacheKeys) {
           this.cache.delete(key)
         }
+      }
+      if (result?.promptContextExtension) {
+        context = { ...context, ...result.promptContextExtension }
       }
     }
 
