@@ -24,6 +24,7 @@ const statusIcons: Record<BashTaskStatus, React.ReactNode> = {
   killed: <StopIcon size={12} className="text-red-500" />,
   error: <WarningIcon size={12} className="text-red-500" />,
   disk_limit: <WarningIcon size={12} className="text-orange-500" />,
+  lost: <WarningIcon size={12} className="text-muted-foreground/60" />,
 };
 
 const statusColors: Record<BashTaskStatus, string> = {
@@ -32,6 +33,7 @@ const statusColors: Record<BashTaskStatus, string> = {
   killed: 'text-red-500/80',
   error: 'text-red-500/80',
   disk_limit: 'text-orange-500/80',
+  lost: 'text-muted-foreground/60 line-through',
 };
 
 export interface BashTaskSectionProps {
@@ -70,6 +72,9 @@ function BashTaskRow({ task }: { task: BashBackgroundTaskSnapshot }) {
     }
     if (task.status === 'error') {
       return `exit ${task.exitCode ?? -1} · ${formatElapsed(elapsed(task))}`;
+    }
+    if (task.status === 'lost') {
+      return `lost on restart · ${formatElapsed(elapsed(task))}`;
     }
     return `disk limit · ${formatElapsed(elapsed(task))}`;
   })();

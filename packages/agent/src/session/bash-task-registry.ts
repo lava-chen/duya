@@ -3,12 +3,19 @@
  *
  * Tracks background/bash commands that have been detached from foreground
  * execution. Provides querying, output reading, and lifecycle management.
+ *
+ * Durability: every state mutation is also persisted via {@link BashTaskStore}
+ * (write-through). On startup, the agent process should call
+ * {@link initializeBashTaskRegistryFromStore} to rehydrate from disk so
+ * previously-running tasks are recovered (with liveness reconciliation:
+ * tasks whose PID is no longer alive are marked `lost`).
  */
 
 import { readFileSync, statSync } from 'fs';
 import { killProcessTree } from '../utils/processTreeKill.js';
+import { getBashTaskStore } from './bash-task-store.js';
 
-export type BashTaskStatus = 'running' | 'completed' | 'killed' | 'disk_limit' | 'error';
+export type BashTaskStatus = 'running' | 'completed' | 'killed' | 'disk_limit' | 'error' | 'lost';
 
 export interface BashTaskProgress {
   bytes: number;
@@ -38,10 +45,31 @@ export class BashTaskRegistry {
   private tasks = new Map<string, BashBackgroundTask>();
   private listeners = new Map<string, Set<ProgressListener>>();
   private anyChangeListeners = new Set<AnyChangeListener>();
+  private rehydrated = false;
+
+  /**
+   * Schedule a coalesced write to the durability store. Fire-and-forget
+   * so the hot path is not blocked on filesystem I/O — write errors are
+   * logged by the store and never bubble up to the caller.
+   */
+  private schedulePersist(): void {
+    void getBashTaskStore().persist(this.listTasks());
+  }
+
+  /**
+   * Replace a task entry, mutating the underlying Map so iteration order
+   * is preserved. Mutators always go through this helper so the persisted
+   * snapshot never observes a partial state.
+   */
+  private upsert(task: BashBackgroundTask): void {
+    this.tasks.set(task.id, task);
+    this.schedulePersist();
+  }
 
   register(task: BashBackgroundTask): void {
     this.tasks.set(task.id, { ...task });
     this.notifyAnyChange();
+    this.schedulePersist();
   }
 
   updateProgress(taskId: string, progress: BashTaskProgress): void {
@@ -58,6 +86,7 @@ export class BashTaskRegistry {
     this.tasks.set(taskId, task);
     this.notifyListeners(taskId, task);
     this.notifyAnyChange();
+    this.schedulePersist();
   }
 
   markCompleted(taskId: string, exitCode: number, error?: string): void {
@@ -72,6 +101,7 @@ export class BashTaskRegistry {
     this.tasks.set(taskId, task);
     this.notifyListeners(taskId, task);
     this.notifyAnyChange();
+    this.schedulePersist();
     // Terminal tasks are kept briefly so the UI/agent can read the final
     // status, then evicted to bound memory growth of the tasks Map.
     this.scheduleCleanup(taskId);
@@ -88,6 +118,7 @@ export class BashTaskRegistry {
     this.tasks.set(taskId, task);
     this.notifyListeners(taskId, task);
     this.notifyAnyChange();
+    this.schedulePersist();
     this.scheduleCleanup(taskId);
   }
 
@@ -120,8 +151,41 @@ export class BashTaskRegistry {
     if (existed) {
       this.listeners.delete(taskId);
       this.notifyAnyChange();
+      this.schedulePersist();
     }
     return existed;
+  }
+
+  /**
+   * Rehydrate the in-memory map from the durability store. Intended to be
+   * called once per agent process on startup. Tasks whose PID is no longer
+   * alive are left as `running` here — the store reconciles them before
+   * they reach the registry. Idempotent: subsequent calls are no-ops once
+   * {@link rehydrated} flips to `true`.
+   */
+  async rehydrateFromStore(): Promise<void> {
+    if (this.rehydrated) return;
+    this.rehydrated = true;
+    const tasks = await getBashTaskStore().rehydrate();
+    for (const task of tasks) {
+      // Don't clobber anything added since this promise started — register
+      // only if we don't already have an entry.
+      if (!this.tasks.has(task.id)) {
+        this.tasks.set(task.id, task);
+      }
+    }
+    this.notifyAnyChange();
+  }
+
+  /**
+   * Test-only: reset the rehydrated flag so {@link rehydrateFromStore} can
+   * be called again. Not used in production.
+   */
+  resetForTest(): void {
+    this.rehydrated = false;
+    this.tasks.clear();
+    this.listeners.clear();
+    this.anyChangeListeners.clear();
   }
 
   /**

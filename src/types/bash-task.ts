@@ -10,7 +10,8 @@ export type BashTaskStatus =
   | 'completed'
   | 'killed'
   | 'disk_limit'
-  | 'error';
+  | 'error'
+  | 'lost';
 
 export interface BashTaskProgress {
   bytes: number;
