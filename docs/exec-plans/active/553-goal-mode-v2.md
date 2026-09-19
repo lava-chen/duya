@@ -1,4 +1,4 @@
-# Plan 552: Goal Mode v2 — 跨会话续跑 + 时间线 UI + minimax 对比缺陷补全
+# Plan 553: Goal Mode v2 — 跨会话续跑 + 时间线 UI + minimax 对比缺陷补全
 
 > **Status**: ✅ Implemented (2026-09-19)；Electron 真机冒烟待办（Playwright 不可用，验证=typecheck + 475 vitest 绿）
 > **Priority**: P1
