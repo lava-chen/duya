@@ -109,6 +109,11 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
           .join('\n\n')
       : '';
   const hasVisionTool = ctx.enabledTools.has(TOOL_NAMES.VISION);
+  // Plan 550 1d-rest — scratchpad_dir is the precomputed string the
+  // dynamic/scratchpad.hbs template needs; empty string causes the
+  // `{{#if}}` block to skip its body, matching the legacy
+  // `return null` short-circuit in getScratchpadSection.
+  const scratchpadDir = ctx.scratchpadDir ?? '';
 
   return {
     ctx,
@@ -139,6 +144,7 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
     mcp_instruction_blocks: mcpInstructionBlocks,
     has_vision_tool: hasVisionTool,
     vision_tool_name: TOOL_NAMES.VISION,
+    scratchpad_dir: scratchpadDir,
     TOOL_NAMES,
   };
 }

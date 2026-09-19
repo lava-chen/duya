@@ -22,6 +22,7 @@ import { getPlatformSection } from '../../../../src/prompts/sections/dynamic/pla
 import { getMcpInstructionsSection } from '../../../../src/prompts/sections/dynamic/mcpInstructions.js';
 import { getVisionGuidelinesSection } from '../../../../src/prompts/sections/dynamic/visionGuidelines.js';
 import { getVisualVerificationSection } from '../../../../src/prompts/sections/dynamic/visualVerification.js';
+import { getScratchpadSection } from '../../../../src/prompts/sections/dynamic/scratchpad.js';
 
 const ASSETS_ROOT = resolve(__dirname, '../../../../src/prompts/assets');
 
@@ -201,6 +202,22 @@ describe('dynamic sections hbs byte-level parity', () => {
       baseContext({
         enabledTools: new Set<string>(['Read', 'Edit', 'Write']),
       }),
+    );
+  });
+
+  it('scratchpad section matches when scratchpadDir is set', async () => {
+    await parity(
+      'dynamic/scratchpad.hbs',
+      getScratchpadSection,
+      baseContext({ scratchpadDir: 'C:\\Users\\tester\\.duya\\scratch\\session-1' }),
+    );
+  });
+
+  it('scratchpad section matches when scratchpadDir is absent', async () => {
+    await parity(
+      'dynamic/scratchpad.hbs',
+      getScratchpadSection,
+      baseContext({ scratchpadDir: undefined }),
     );
   });
 });

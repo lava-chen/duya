@@ -51,7 +51,7 @@ export const botConfig: PromptSystemConfig = {
     { name: 'environment', compute: getEnvironmentSection, description: 'Current directory state' },
     { name: 'mcp', compute: getMcpInstructionsSection, description: 'MCP servers can change' },
     { name: 'skills', compute: getSkillsMetadataSection, description: 'Skills can be loaded/unloaded' },
-    { name: 'scratchpad', compute: getScratchpadSection, description: 'Scratchpad directory' },
+    { name: 'scratchpad', compute: getScratchpadSection, template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },
     // Task-level constraints
     { name: 'sessionGuidance', compute: getSessionGuidanceSection, description: 'Session-specific guidance' },
   ],

@@ -1,0 +1,27 @@
+{{!--
+  Scratchpad directory section — Plan 550 1d-rest.
+
+  Renders only when `scratchpad_dir` is non-empty (otherwise empty →
+  null via renderSectionCompute's `out === '' ? null : out`
+  short-circuit, matching the legacy `return null` short-circuit in
+  getScratchpadSection). Body shape mirrors
+  sections/dynamic/scratchpad.ts verbatim so the byte-level parity
+  test in tests/unit/prompts/hbs/dynamic-sections.test.ts passes.
+--}}
+{{#if scratchpad_dir}}
+# Scratchpad Directory
+
+IMPORTANT: Always use this scratchpad directory for temporary files instead of `/tmp` or other system temp directories:
+`{{scratchpad_dir}}`
+
+Use this directory for ALL temporary file needs:
+- Storing intermediate results or data during multi-step tasks
+- Writing temporary scripts or configuration files
+- Saving outputs that don't belong in the user's project
+- Creating working files during analysis or processing
+- Any file that would otherwise go to `/tmp`
+
+Only use `/tmp` if the user explicitly requests it.
+
+The scratchpad directory is session-specific, isolated from the user's project, and can be used freely without permission prompts.
+{{/if}}
