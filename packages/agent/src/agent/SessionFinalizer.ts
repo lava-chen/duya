@@ -41,6 +41,7 @@ import { applyLoopHookEffect } from '../hooks/loop.js';
 import { logger } from '../utils/logger.js';
 import type { Message, MessageContent, SSEEvent } from '../types.js';
 import { APIErrorType, createLLMAPIError, extractProviderErrorMessage } from '@duya/ai';
+import { persistableMessages } from './utils/agent-helpers.js';
 
 import type { DeadLoopTracker } from './TurnLoopTracker.js';
 import type { TurnContext } from './TurnContext.js';
@@ -397,28 +398,14 @@ export class SessionFinalizer {
   }
 }
 
-// Local mirror of `persistableMessages` from DuyaAgent helpers.
-// The full helper lives in agent-helpers.ts and is imported in
-// DuyaAgent; pulling it in here would create a circular import
-// (`agent-helpers.ts` references `DuyaAgent` types). The local
-// version is intentionally minimal — it strips journal messages
-// and runtime-context envelopes that should never reach the DB.
-function persistableMessages(messages: readonly Message[]): Message[] {
-  return messages.filter((m) => {
-    if (m.role !== 'user' && m.role !== 'assistant' && m.role !== 'tool') {
-      return false;
-    }
-    if (m.role === 'user' && Array.isArray(m.content)) {
-      // Strip runtime-context envelopes from the durable projection.
-      // The hook system injects these as `user` messages with a
-      // single `tool_result` content; the legacy inline cleanup
-      // did not project these either, so we keep parity.
-      const firstBlock = m.content[0];
-      if (firstBlock && firstBlock.type === 'tool_result') return true;
-    }
-    return true;
-  });
-}
+// `persistableMessages` is imported from `./utils/agent-helpers` — the
+// canonical implementation. An earlier draft of this finalizer held
+// a *partial* local copy that only filtered by role, missing the
+// `runtimeContext` filter that drops transient mailbox /
+// background-notification / dead-loop-nudge envelopes from the
+// durable timeline. Plan 550 2e StreamFinalizer fixup: revert to the
+// canonical helper so the error-path `host.setMessages(...)` call
+// behaves byte-identically with the legacy inline code.
 
 // The `HookDispatcher` and `HookCtxBuilder` types are already
 // exported at the top of this file; no re-export needed.

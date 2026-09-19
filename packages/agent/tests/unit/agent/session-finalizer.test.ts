@@ -302,6 +302,56 @@ describe('SessionFinalizer.finalizeStreamError (Plan 550 2e)', () => {
     expect(doneEvent).toEqual({ type: 'done', reason: 'error' });
   });
 
+  it('strips transient runtime-context envelopes (mailbox / dead-loop-nudge) before setMessages', async () => {
+    // Regression: an earlier draft of `finalizeStreamError` used a local
+    // mirror of `persistableMessages` that only filtered by role. The
+    // canonical helper drops transient runtime-context envelopes
+    // (mailbox, background_notification, custom, todo_gate,
+    // auto_continue, dead_loop_nudge, premature_stop, tool_intent) so
+    // they never reach the durable timeline. This test pins that the
+    // fixup uses the canonical helper.
+    const messages: Message[] = [
+      { id: 'a-real', role: 'assistant', content: 'real', timestamp: 1 },
+      {
+        id: 'b-runtime',
+        role: 'user',
+        content: 'should be dropped',
+        timestamp: 2,
+        metadata: { runtimeContext: true, source: 'mailbox' },
+      } as Message,
+      {
+        id: 'c-runtime',
+        role: 'user',
+        content: 'should be dropped',
+        timestamp: 3,
+        metadata: { runtimeContext: true, source: 'dead_loop_nudge' },
+      } as Message,
+    ];
+
+    let persisted: Message[] = [];
+    const setMessages = vi.fn((msgs: Message[]) => {
+      persisted = msgs;
+    });
+
+    const f = new SessionFinalizer(
+      makeDeps({
+        messages,
+        host: {
+          _commitMessages: () => undefined,
+          _pushDurable: () => undefined,
+          setMessages,
+        },
+        executor: { discard: () => undefined },
+      }),
+    );
+
+    await drain(f.finalizeStreamError(new Error('stream died')));
+
+    expect(persisted.find((m) => m.id === 'a-real')).toBeDefined();
+    expect(persisted.find((m) => m.id === 'b-runtime')).toBeUndefined();
+    expect(persisted.find((m) => m.id === 'c-runtime')).toBeUndefined();
+  });
+
   it('removes a trailing assistant message with unmatched tool_use blocks before persisting', async () => {
     const toolUseBlock: ToolUseContent = {
       type: 'tool_use',
