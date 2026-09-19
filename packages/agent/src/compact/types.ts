@@ -18,10 +18,6 @@ export type { Message, ToolUse }
 export interface CompactionStats {
   totalTokens: number
   maxTokens: number
-  /** Always 0 — kept for interface compatibility. */
-  messageCount: 0
-  /** Always 0 — kept for interface compatibility. */
-  toolCallCount: 0
   sessionAge: number
   lastCompactionAt?: number
 }

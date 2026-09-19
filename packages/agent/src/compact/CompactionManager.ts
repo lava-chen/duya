@@ -6,8 +6,9 @@
  *   Priority: observedPromptTokens (API anchor) > computeContextEstimate > 0.
  * - Threshold: totalTokens > maxTokens - reserveTokens  (Pi style).
  * - Suppression: lightweight — remember the last failure type and when to retry.
- *   No 5-state machine. Failures: auth (cleared on login), size (cleared on
- *   compaction), other (cleared on next turn).
+ *   No 5-state machine. Failures: auth (time-windowed, plan 552), size (cleared
+ *   on compaction / budget change), other (cleared on next turn). Failure
+ *   classification is single-sourced in compactErrors.classifySuppressReason.
  * - No prefire. No iterative summary. No suppression cooldown constants.
  * - Flat delegation: one class, one shouldCompact() call.
  */
@@ -23,6 +24,16 @@ import { BackgroundPrefire } from './BackgroundPrefire.js'
 import { PostCompactReinjector, type ReinjectorConfig, type SkillContextEntry } from './PostCompactReinjector.js'
 import type { FileChangeRecord as SessionMemoryFileChangeRecord } from './strategies/SessionMemoryCompactStrategy.js'
 import { fitCompactedToBudget, validateCompactedHistory } from './historySanitize.js'
+import { classifySuppressReason, suppressReasonMessage, type SuppressReason } from './compactErrors.js'
+
+/**
+ * How long an 'auth' failure blocks auto-compaction (plan 552). The old
+ * design waited for onAuthRefresh(), which had zero production callers —
+ * one 401 during an auto compaction permanently disabled proactive
+ * compaction for the rest of the session. A bounded window keeps the
+ * "don't hammer a failing endpoint" property while guaranteeing recovery.
+ */
+const AUTH_SUPPRESS_WINDOW_MS = 5 * 60_000
 
 // ─── Adapters ─────────────────────────────────────────────────────────────────
 
@@ -46,7 +57,8 @@ function toContextEstimateMessage(msg: Message): ContextEstimateMessage {
  * - whether to block 'auto' compactions at all
  *
  * Failure types:
- *   'auth'   → blocked until onAuthRefresh() is called
+ *   'auth'   → blocked for AUTH_SUPPRESS_WINDOW_MS (plan 552: self-healing —
+ *              the previous onAuthRefresh() clear trigger had no callers)
  *   'size'   → blocked until next successful compaction (clearOnBudgetChange)
  *   'other'  → blocked until next turn start (clearOnTurnStart)
  *   null     → not suppressed
@@ -69,15 +81,13 @@ class Suppression {
 
   suppress(type: FailureType): void {
     this.failure = type
-    this.suppressedUntil = 0
+    this.suppressedUntil = type === 'auth' ? Date.now() + AUTH_SUPPRESS_WINDOW_MS : 0
   }
 
   /**
    * Plan 517 P2.2: idempotent suppress — apply `type` only when no
-   * suppression is currently active. Mirrors the 5-state
-   * `CompactSuppression.trySuppress` semantics but for the legacy
-   * 3-state machine. Returns true when the suppression was applied,
-   * false when an existing suppression kept precedence (so callers
+   * suppression is currently active. Returns true when the suppression was
+   * applied, false when an existing suppression kept precedence (so callers
    * can avoid double-firing).
    */
   trySuppress(type: FailureType): boolean {
@@ -96,13 +106,6 @@ class Suppression {
 
   clearOnTurnStart(): void {
     if (this.failure === 'other') {
-      this.failure = null
-      this.suppressedUntil = 0
-    }
-  }
-
-  clearOnAuthRefresh(): void {
-    if (this.failure === 'auth') {
       this.failure = null
       this.suppressedUntil = 0
     }
@@ -136,7 +139,15 @@ export interface CompactionManagerConfig {
 export type CompactionManagerEvent =
   | { type: 'compaction_start'; strategy: string }
   | { type: 'compaction_complete'; result: CompactionResult }
-  | { type: 'compaction_error'; error: string; suppressed?: boolean }
+  | {
+      type: 'compaction_error'
+      error: string
+      suppressed?: boolean
+      /** Plan 552: classified failure reason (classifySuppressReason). */
+      reason?: SuppressReason
+      /** Plan 552: user-facing one-liner for the reason. */
+      userMessage?: string
+    }
   | { type: 'reinject_complete'; files: number; skills: number }
   /**
    * Plan 517 P3: lifecycle step boundaries emitted during compact() so the
@@ -221,11 +232,9 @@ export class CompactionManager {
   // ─── Public API ─────────────────────────────────────────────────────────────
 
   setSummarizer(fn: (text: string, prompt: string) => Promise<string>): void {
+    // Plan 552: strategies instantiate per compact()/prefire call and take the
+    // summarizer there — no eager allocation at wiring time.
     this.summarizer = fn
-    const strategy = new SessionMemoryCompactStrategy({
-      keepRecentTokens: this.config.keepRecentTokens,
-    })
-    strategy.setSummarizer(fn)
   }
 
   setMemoryFlushFn(fn: (summary: string) => Promise<void>): void {
@@ -254,8 +263,6 @@ export class CompactionManager {
     return {
       totalTokens,
       maxTokens: this.budget.maxTokens,
-      messageCount: 0,
-      toolCallCount: 0,
       sessionAge: this.lastCompactionAt ? Date.now() - this.lastCompactionAt : 0,
       lastCompactionAt: this.lastCompactionAt,
     }
@@ -321,11 +328,6 @@ export class CompactionManager {
   /** Called at the start of each turn — clears 'other' suppression. */
   onTurnStart(): void {
     this.suppression.clearOnTurnStart()
-  }
-
-  /** Called when auth/token is refreshed — clears 'auth' suppression. */
-  onAuthRefresh(): void {
-    this.suppression.clearOnAuthRefresh()
   }
 
   cacheSkillContext(skills: SkillContextEntry[]): void {
@@ -603,20 +605,14 @@ export class CompactionManager {
       return result
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error))
-      const isSizeError =
-        err.message.includes('context_length_exceeded') ||
-        err.message.includes('max_tokens') ||
-        err.message.includes('token limit')
-      const isAuthError =
-        err.message.includes('auth') ||
-        err.message.includes('401') ||
-        err.message.includes('unauthorized')
-
-      if (trigger === 'auto') {
-        this.suppression.suppress(isSizeError ? 'size' : isAuthError ? 'auth' : 'other')
-        this.emitError(err, trigger, true)
+      // Plan 552: single failure classifier (grok classify_suppress_reason)
+      // instead of inline keyword checks — one place to add a new marker.
+      const reason = classifySuppressReason(err)
+      if (trigger === 'auto' && reason !== null) {
+        this.suppression.suppress(suppressReasonToFailureType(reason))
+        this.emitError(err, trigger, true, reason)
       } else {
-        this.emitError(err, trigger, false)
+        this.emitError(err, trigger, false, reason ?? undefined)
       }
       throw error
     }
@@ -639,8 +635,32 @@ export class CompactionManager {
     }
   }
 
-  private emitError(err: Error, trigger: string, suppressed: boolean): void {
-    this.emit({ type: 'compaction_error', error: err.message, suppressed })
+  private emitError(err: Error, trigger: string, suppressed: boolean, reason?: SuppressReason): void {
+    this.emit({
+      type: 'compaction_error',
+      error: err.message,
+      suppressed,
+      ...(reason ? { reason, userMessage: suppressReasonMessage(reason) } : {}),
+    })
+  }
+}
+
+/**
+ * Map a classified failure reason onto the live 3-scope suppression machine.
+ * `schema` shares `size`'s STICKY scope (cleared on the next budget change);
+ * `credit` shares `other`'s TURN scope (quota windows are usually short, and
+ * a turn boundary re-evaluates with fresh context anyway).
+ */
+function suppressReasonToFailureType(reason: SuppressReason): Exclude<FailureType, null> {
+  switch (reason) {
+    case 'size':
+    case 'schema':
+      return 'size'
+    case 'auth':
+      return 'auth'
+    case 'credit':
+    case 'other':
+      return 'other'
   }
 }
 

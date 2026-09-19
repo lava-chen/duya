@@ -17,7 +17,6 @@
 
 import type { CompactOptions, CompactionResult, CompactionStats, CompactionStrategy, Message } from '../types.js'
 import { estimateMessagesTokens } from '../tokenBudget.js'
-import { adjustSliceBoundary } from '../compact.js'
 import { sanitizeCompactedHistory } from '../historySanitize.js'
 import { cleanSummaryText, isDegenerateSummary } from '../summaryGuard.js'
 import { summarizeWithRetryLadder } from '../summaryRetry.js'

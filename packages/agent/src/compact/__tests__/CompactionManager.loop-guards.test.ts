@@ -4,7 +4,8 @@
  * - 'other' suppression clears at the next turn start (onTurnStart)
  * - 'size' suppression survives onTurnStart and clears only on a successful
  *   compaction — the budget change it was waiting for (see updateMaxTokens)
- * - 'auth' suppression clears only on auth refresh (onAuthRefresh)
+ * - 'auth' suppression is time-windowed and self-heals (plan 552 — the old
+ *   onAuthRefresh clear trigger had no production callers)
  * - non-auto triggers (manual / emergency / model_switch) call compact()
  *   directly and never consult shouldCompact(), so the gate does not apply
  * - runtime model-switch wiring: updateMaxTokens rewrites the budget
@@ -128,16 +129,28 @@ describe('CompactionManager loop guards', () => {
       expect(manager.isSuppressed()).toBe(false)
     })
 
-    it("'auth' failures clear only on auth refresh", async () => {
+    it("'auth' failures self-heal after the suppression window (plan 552)", async () => {
       const messages = makeMessages(OVER_THRESHOLD_CHARS)
       mockSummarizer.mockRejectedValueOnce(new Error('HTTP 401 unauthorized'))
       await expect(manager.compact(messages, { trigger: 'auto' })).rejects.toThrow()
       expect(manager.getSuppressionType()).toBe('auth')
 
+      // onTurnStart does not clear 'auth'.
       manager.onTurnStart()
       expect(manager.isSuppressed()).toBe(true)
 
-      manager.onAuthRefresh()
+      // Plan 552: the error event carries the classified reason so the
+      // renderer can explain the pause to the user.
+      const errorEvent = events.find(
+        (e): e is Extract<CompactionManagerEvent, { type: 'compaction_error' }> =>
+          e.type === 'compaction_error',
+      )
+      expect(errorEvent?.reason).toBe('auth')
+      expect(errorEvent?.userMessage).toContain('re-authenticate')
+
+      // The old design waited for onAuthRefresh(), which had zero callers —
+      // one 401 permanently disabled auto-compaction. The window now heals.
+      vi.advanceTimersByTime(5 * 60_000 + 1)
       expect(manager.isSuppressed()).toBe(false)
     })
 

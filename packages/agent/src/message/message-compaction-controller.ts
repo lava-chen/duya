@@ -405,12 +405,12 @@ export class MessageCompactionController {
    * Resolves a safe `firstKeptMessageId` from the strategy's first retained
    * message id.
    *
-   * The strategies already call `adjustSliceBoundary` to avoid orphaned
-   * `tool_result` blocks. This method applies the framework-level
-   * {@link findSafeCompactionBoundary} as an additional guarantee: if the
-   * strategy's boundary lands on a non-user turn, the boundary walks backwards
-   * to the nearest user message so the model never receives a dangling
-   * `tool_result` / `tool_use` half-pair.
+   * The strategy's own `findCutPoint` never splits a tool_use/tool_result
+   * pair. This method applies the framework-level
+   * {@link findSafeCompactionBoundary} as the single additional guarantee: if
+   * the strategy's boundary lands on a non-user turn, the boundary walks
+   * backwards to the nearest user message so the model never receives a
+   * dangling `tool_result` / `tool_use` half-pair.
    *
    * If the walk would collapse all the way back to index 0 for a non-trivial
    * proposed boundary (meaning there is no user turn to anchor on), the
