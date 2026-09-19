@@ -621,3 +621,21 @@ These three were already tracked as Plan 486 / Plan 408 follow-ups and are unrel
 
 - **1d delete pass** (decoupled ✅ `ec4ebcd9`): removed `compute:` field from the 8 migrated section entries in 5 configs; made `SectionDef.compute` optional in `PromptSystem.ts`. Production paths are now `.hbs`-only; the legacy `getXxxSection` functions live on only as parity-test references. **Sweep the legacy `.ts` files entirely is deferred** — it would require rewriting 8 parity tests + 2 non-parity tests (`recentSessionsSection.test.ts` / `projectContinuity.test.ts`) to compare against hardcoded expected strings, which is a larger refactor that deserves its own commit.
 - **改造 2e TurnEventDispatcher**: 700-1100 lines of `streamChat` body between the LLM stream subscription (already extracted into `TurnStreamRunner`) and the final SSE yield (`SessionFinalizer`). Multi-commit refactor. Suggested decomposition: **2e-1** mode dispatch + dead-loop guard (~300 lines), **2e-2** per-turn message persistence + reply/fork resolution (~400 lines), **2e-3** tool-use loop control + `tool_use`/`tool_result` event sequencing (~400 lines). Each commit lands with a parity test that locks in the SSE event shape end-to-end via `streamChat`'s collected output.
+
+## Session 9 (2026-09-19, 2e infra foundation)
+
+| Commit | Step | 内容 |
+|---|---|---|
+| `96001a4f` | 2e infra | Add `TurnEventDispatcher` foundation class + 5 unit tests. The dispatcher wraps SSE event sequencing with monotonic `seq_index` stamping, per-turn id mirroring via `attachTurnId(turnId)`, and an optional `recordLog` mode for tests. The class is a no-op addition to `streamChat` today — the 13 inline `yield { type: ... }` sites (lines 1081 / 1813 / 1851-1852 / 2266 / 2311 / 2371 / 2644 / 2725 / 3702 / 3714) keep emitting inline objects; subsequent commits (2e-2 / 2e-3) migrate each site to `dispatcher.dispatch(...)` calls one at a time. Five unit tests pin the dispatcher's contract: empty-defaults, single-dispatch no-mutation, monotonic multi-dispatch + log ordering, `attachTurnId` mid-stream stamping, and `recordLog: false` null-return. `streamChat` is unchanged; no PR-merging or SSE-shape impact yet. |
+
+**Bug reflections** (in commit body):
+
+1. The original sketch considered free functions (`dispatch(event, ctx)`) but the dispatcher's per-streamChat state (`seqIndex` / `turnId` / optional log) is naturally encapsulated in an instance, so a class keeps the lifecycle (construct → sequence of dispatches → read final seq → dispose) explicit.
+2. `dispatch` returns a *new* decorated object rather than mutating the input — verified by the test that mutates the output's nested `data` and confirms subsequent dispatches are unaffected. The legacy inline `yield { type: ... }` sites sometimes emit the same event object twice (e.g. for debug logging); the dispatcher path would silently corrupt that flow if it mutated in place.
+3. `seq_index` starts at `0` (matching the convention in the existing event payload) rather than `1` — the first event a client receives already has `seq_index: 0` today. Migrating to a different convention would force a coordinated client-side bump.
+4. `recordLog` is **off by default** because the production path yields events directly to the AsyncGenerator consumer; capturing a parallel log array would double the per-turn allocation pressure. Tests opt in via `recordLog: true`. This is the same trade-off the existing `ToolExecutionPipeline` makes with its internal `pendingEvents` array (kept off the hot path).
+
+**Next session entry points (session 10+, 2e-2 / 2e-3)**:
+
+- **2e-2**: migrate the 4 high-volume sites (`turn_start` / `done` / `tool_use` / `tool_result`) to call `dispatcher.dispatch(...)`. Wire `attachTurnId` at the per-turn boundary. Assert the captured `seq_index` sequence against the existing test fixtures that record `streamChat` output. ~1 commit.
+- **2e-3**: migrate the remaining 9 sites (`mode_changed` / `hook_event` / `tool_intent` / etc.) + integrate `attachTurnId` into the `turn_start` event payload itself. Run the full prompt + agent test suites to confirm SSE event shape is unchanged end-to-end. ~1-2 commits.
