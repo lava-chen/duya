@@ -1,0 +1,16 @@
+{{!--
+  Skill catalog — Plan 550 1d-rest.
+
+  The full body (XML `<available_skills>` block + optional
+  `### Skill roots` table + trailing usage line) is produced by
+  `formatSkillCatalog(skills)` in `sections/dynamic/skillsMetadata.ts`,
+  with the tier (`full` / `compact` / `alias-only`) selected via
+  `pickCatalogTier` against the 1500-token budget.
+
+  The .hbs is a thin pass-through: the mapper calls
+  `getSkillsMetadataSection(ctx)` synchronously and substitutes the
+  result. Empty / omitted sections render `''`, and
+  `renderSectionCompute`'s `out === '' ? null : out` collapses that to
+  `null`, matching the legacy short-circuit.
+--}}
+{{#if skill_catalog_body}}{{skill_catalog_body}}{{/if}}

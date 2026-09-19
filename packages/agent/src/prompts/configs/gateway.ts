@@ -71,7 +71,7 @@ export const gatewayConfig: PromptSystemConfig = {
     { name: 'platform', compute: getPlatformSection, description: 'Communication platform-specific guidance' },
     { name: 'environment', compute: getEnvironmentSection, template: 'dynamic/environment.hbs', description: 'Current directory state' },
     { name: 'mcp', compute: getMcpInstructionsSection, description: 'MCP servers can change' },
-    { name: 'skills', compute: getSkillsMetadataSection, description: 'Skills can be loaded/unloaded' },
+    { name: 'skills', compute: getSkillsMetadataSection, template: 'dynamic/skills-metadata.hbs', description: 'Skills can be loaded/unloaded' },
     { name: 'scratchpad', compute: getScratchpadSection, template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },
     { name: 'memory', compute: getMemorySection, template: 'dynamic/memory.hbs', description: 'Persistent memory projection files may have been updated since last turn' },
     { name: 'sessionSearch', compute: getSessionSearchSection, template: 'dynamic/session-search.hbs', description: 'Past-session decisions may be relevant to the current task' },

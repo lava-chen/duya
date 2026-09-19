@@ -67,7 +67,7 @@ export const codeConfig: PromptSystemConfig = {
     { name: 'environment', compute: getEnvironmentSection, template: 'dynamic/environment.hbs', description: 'Current directory state' },
     { name: 'mcp', compute: getMcpInstructionsSection, description: 'MCP servers can change' },
     { name: 'sessionGuidance', compute: getSessionGuidanceSection, template: 'dynamic/session-guidance.hbs', description: 'Session-specific guidance' },
-    { name: 'skills', compute: getSkillsMetadataSection, description: 'Skills can be loaded/unloaded' },
+    { name: 'skills', compute: getSkillsMetadataSection, template: 'dynamic/skills-metadata.hbs', description: 'Skills can be loaded/unloaded' },
     { name: 'language', compute: getLanguageSection, description: 'Language preference' },
     { name: 'outputStyle', compute: getOutputStyleSection, description: 'Custom output style' },
     { name: 'scratchpad', compute: getScratchpadSection, template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },

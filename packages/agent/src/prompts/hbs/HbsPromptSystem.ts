@@ -31,6 +31,7 @@ import { buildLanguageGuidance } from '../language-guidance.js';
 import { getPlatformHint } from '../platformHints.js';
 import { buildEnvironmentItems } from '../sections/dynamic/environment.js';
 import { serializeSerializedGroup } from '../sections/dynamic/recentSessionsSection.js';
+import { getSkillsMetadataSection } from '../sections/dynamic/skillsMetadata.js';
 import { HbsPromptRenderer } from './HandlebarsRenderer.js';
 
 const ASSETS_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../assets');
@@ -199,6 +200,16 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
     messaging_guidance: ctx.enabledTools.has(TOOL_NAMES.MESSAGE_SESSION)
       ? `If a search summary is still insufficient and one session is clearly relevant, use \`MessageSession\` with one focused question in \`minimal\` mode. Do not contact a session merely because it is recent, do not fan out to several sessions unless the user explicitly asks, and never treat a dormant session as an already-running agent.`
       : 'The `MessageSession` tool is unavailable. Do not imply that you contacted another session or agent.',
+    // skills-metadata section (Plan 550 1d-rest) — pass-through. The
+    // legacy `formatSkillCatalog(skills)` builds the entire body (XML
+    // `<available_skills>` block + optional `### Skill roots` table +
+    // trailing usage line), and `pickCatalogTier` chooses the tier
+    // against the 1500-token budget. Mapper calls
+    // `getSkillsMetadataSection(ctx)` synchronously; the .hbs body is a
+    // thin wrapper that substitutes `{{skill_catalog_body}}` only when
+    // non-empty. Empty / omitted sections render `''` so
+    // `renderSectionCompute` collapses them to `null`.
+    skill_catalog_body: getSkillsMetadataSection(ctx) ?? '',
     // session-guidance
     has_ask_user_question: hasAskUserQuestion,
     has_agent_tool: hasAgentTool,

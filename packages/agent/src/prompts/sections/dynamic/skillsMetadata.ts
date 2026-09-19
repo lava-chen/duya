@@ -215,7 +215,10 @@ export function formatSkillCatalog(
 Load a skill by reading its <location> with the read tool; the \`Skill\` tool is a fallback that loads the same instructions by name. This index is not a substitute for the selected skill's SKILL.md.`
 }
 
-export function getSkillsMetadataSection(context: PromptContext): string | null {
+export function getSkillsMetadataSection(
+  context: PromptContext,
+  options: { skills?: PromptSkill[] } = {},
+): string | null {
   // The catalog is only useful when the model can actually load a skill:
   // either via the read tool (primary, pi-style) or the Skill tool
   // (fallback). If neither is available, omit the section.
@@ -223,6 +226,6 @@ export function getSkillsMetadataSection(context: PromptContext): string | null 
     || context.enabledTools.has(TOOL_NAMES.SKILL)
   if (!canLoad) return null
 
-  const skills = getSkillRegistry().listModelInvocable()
+  const skills = options.skills ?? getSkillRegistry().listModelInvocable()
   return skills.length > 0 ? formatSkillCatalog(skills) : null
 }
