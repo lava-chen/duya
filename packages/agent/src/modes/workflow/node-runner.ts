@@ -24,6 +24,7 @@ import { computeReqHash, type JournalKind } from './journal.js';
 import { interpolateDeep, interpolate, interpolateString, type ExprScope } from './expr.js';
 import { classifyError, SuspensionSignal, RETRYABLE_CLASSES, type WorkflowErrorClass } from './error-class.js';
 import { runHumanNode, type HumanNodeResult } from './human-runner.js';
+import { runGuiNode, type GuiRunPorts, type GuiNodeOutcome } from './gui-runner.js';
 import {
   WorkflowDecisionAdapter,
   uncertainOutcomeFor,
@@ -42,6 +43,8 @@ export interface NodeRunContext {
   approvalMode: 'await' | 'suspend';
   /** Dry-run: plan but never call the host (§10.3 baseline). */
   dryRun?: boolean;
+  /** Gui node ports (backend + artifacts + optional decide channel). */
+  gui?: GuiRunPorts;
   /** Map fan-out item context (the loop variable is already in scope). */
   item?: { index: number; as: string };
 }
@@ -365,5 +368,35 @@ async function runNodeOnce(ctx: NodeRunContext): Promise<NodeRunResult> {
   if (node.agent) return runAgentNode(ctx, node.map ? node.map.prompt : undefined, ctx.item?.index);
   if (node.decision) return runDecisionNode(ctx);
   if (node.human) return runHumanNodeSafe(ctx);
-  return failResult('gui nodes require the Phase 3 gui-runner', 'tool_missing');
+  if (node.gui) return runGuiNodeSafe(ctx);
+  return failResult('node declares no executable kind', 'tool_missing');
+}
+
+// ─── gui node (② RPA — Phase 3) ───
+
+async function runGuiNodeSafe(ctx: NodeRunContext): Promise<NodeRunResult> {
+  if (!ctx.gui) {
+    return failResult('gui node requires a computer-use backend port', 'tool_missing');
+  }
+  try {
+    const result: GuiNodeOutcome = await runGuiNode({
+      nodeId: ctx.node.id,
+      gui: ctx.node.gui!,
+      scope: ctx.scope,
+      host: ctx.host,
+      journal: ctx.journal,
+      budget: ctx.budget,
+      ports: ctx.gui,
+      approvalMode: ctx.approvalMode,
+      runId: ctx.runId,
+      dryRun: ctx.dryRun,
+    });
+    if (result.status === 'failed') {
+      return failResult(result.error ?? 'gui node failed', result.errorClass ?? 'tool_error');
+    }
+    return { status: result.status, output: result.output, verification: result.verification };
+  } catch (err) {
+    if (err instanceof SuspensionSignal) throw err;
+    return failResult(err instanceof Error ? err.message : String(err), classifyError(err));
+  }
 }

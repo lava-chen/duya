@@ -33,6 +33,8 @@ export const RETRYABLE_CLASSES: ReadonlySet<WorkflowErrorClass> = new Set([
 
 const PATTERNS: ReadonlyArray<[RegExp, WorkflowErrorClass]> = [
   [/USER_REJECTED|APPROVAL_DENIED|denied by user/i, 'approval_denied'],
+  // computer-use refusals-as-policy (plan 454): APP_BLOCKED / REDACTED_FIELD / BLOCKED.
+  [/APP_BLOCKED|REDACTED_FIELD|\bBLOCKED\b/i, 'approval_denied'],
   [/APPROVAL_TIMEOUT|approval timed out/i, 'approval_timeout'],
   [/rate.?limit|429|503|ECONNRESET|ETIMEDOUT|socket hang up|overloaded/i, 'transient'],
   [/timed? ?out|deadline exceeded/i, 'timeout'],

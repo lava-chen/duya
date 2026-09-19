@@ -30,12 +30,13 @@ import type { WorkflowHost } from './host.js';
 import { BudgetLedger, BudgetExceededError, Semaphore, defaultConcurrency } from './host.js';
 import { Journal, computeReqHash, type JournalRecord } from './journal.js';
 import { NOT_FOUND, evaluateExpr, type ExprScope } from './expr.js';
-import { runNode } from './node-runner.js';
+import { runNode, type NodeRunContext } from './node-runner.js';
 import { runMapNode } from './map-runner.js';
 import { applyTimeout } from './human-runner.js';
 import { SuspensionSignal } from './error-class.js';
 import { nodeDependencies } from './validate.js';
 import { WorkflowDecisionAdapter } from './decision-adapter.js';
+import type { GuiRunPorts } from './gui-runner.js';
 import type { DecisionService } from '../../decisions/index.js';
 import { createResumeToken, verifyResumeToken } from './resume-token.js';
 
@@ -58,6 +59,8 @@ export interface EngineOptions {
   agentBudget?: number;
   hostCallCap?: number;
   concurrency?: number;
+  /** Gui node ports (computer-use backend + artifact store + decide). */
+  gui?: GuiRunPorts;
   signal?: AbortSignal;
 }
 
@@ -171,7 +174,7 @@ export class WorkflowEngine {
       this.options.hostCallCap ?? WORKFLOW_BUDGET_DEFAULTS.hostCallCap,
     );
 
-    const baseCtx = {
+    const baseCtx: Omit<NodeRunContext, 'node'> = {
       runId,
       host: this.options.host,
       journal,
@@ -180,6 +183,7 @@ export class WorkflowEngine {
       approvalMode,
       dryRun,
       scope,
+      gui: this.options.gui,
     };
 
     for (let phaseIndex = 0; phaseIndex < def.phases.length; phaseIndex++) {
