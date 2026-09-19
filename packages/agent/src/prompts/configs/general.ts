@@ -1,17 +1,13 @@
 /**
  * General PromptSystem config.
  *
- * Section ordering follows the proven Codex baseline:
- *   identity → communication → finalAnswer → system → tasks →
- *   destructiveActions → tools → skillUsage → project → duyaDesktopContext
- *
- * Plan 550 1b: the static half is rendered through a single .hbs
- * template (`general/system-prompt.md.hbs`). The legacy per-section
- * TS getters under `general/sections/*` are intentionally NOT imported
- * here any more — they are still re-exported by other configs (code /
- * gateway / research) that have not migrated yet, so the .ts files
- * stay on disk until 1d sweeps them. Dynamic sections still run through
- * the TS path; 1c migrates the five smallest.
+ * Plan 551: the static half is a declarative assembly list over the shared
+ * module registry (`assets/modules/*.hbs`) — one entry per authored content
+ * module, no per-profile section tree. Legacy plan-550 references:
+ * `general/sections/*.ts` are still re-exported by other configs (code /
+ * gateway / research) that have not migrated yet, so those files stay on
+ * disk until plan 551 Phase 2 sweeps them. Dynamic sections render through
+ * their `.hbs` templates (Plan 550 1c/1d-rest).
  *
  * Memory section: guides the agent to read auto-generated memory
  * projection files under ~/.duya/memory/ and to request updates via
@@ -40,15 +36,26 @@ import { getVisionGuidelinesSection } from '../sections/dynamic/visionGuidelines
 
 export const generalConfig: PromptSystemConfig = {
   name: 'general',
-  // Plan 550 1b: render the static half via Handlebars. The .hbs
-  // template hosts all 11 static sections inlined; see
-  // assets/general/system-prompt.md.hbs for the canonical body.
-  staticTemplate: 'general/system-prompt.md.hbs',
-  // Static sections live entirely in the .hbs template above. The
+  // Plan 551: the static half is an assembly list over the shared module
+  // registry (assets/modules/*.hbs). Order mirrors the former monolith
+  // template (assets/general/system-prompt.md.hbs), which stays on disk
+  // as the split-parity reference until the Phase 3 retirement commit.
+  staticModules: [
+    { module: 'identity' },
+    { module: 'system' },
+    { module: 'destructiveActions' },
+    { module: 'configProtection' },
+    { module: 'communication' },
+    { module: 'tools' },
+    { module: 'tasks' },
+    { module: 'skillUsage' },
+    { module: 'duyaDesktopContext' },
+    { module: 'finalAnswer' },
+  ],
+  // Static content lives entirely in the registry modules above. The
   // empty array is required by the type — `staticSections` is a
-  // general-purpose field for configs that have not migrated yet, and
-  // keeping it empty here documents that there is nothing left to
-  // resolve on the TS path for the General config.
+  // general-purpose field that Phase 3 removes once every profile has
+  // migrated to `staticModules`.
   staticSections: [],
   dynamicSections: [
     // Global preferences
