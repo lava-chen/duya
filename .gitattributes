@@ -1,0 +1,10 @@
+# Line ending policy — Plan 550 fixup.
+
+# Force LF for Handlebars prompt templates regardless of core.autocrlf.
+# Without this, on Windows checkouts with core.autocrlf=true, every .hbs
+# file gets rewritten with CRLF, which then leaks through Handlebars.render
+# and breaks byte-level parity tests against the TS source-of-truth. See
+# docs/exec-plans/active/550-prompt-hbs-and-agent-decomposition.md for the
+# pre-existing failure set this resolves.
+*.hbs        text eol=lf
+*.md.hbs     text eol=lf
