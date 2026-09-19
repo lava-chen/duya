@@ -13,7 +13,7 @@
  * - Flat delegation: one class, one shouldCompact() call.
  */
 
-import type { Message } from '../types.js'
+import type { Message, MessageContent } from '../types.js'
 import type { CompactionResult, CompactionStats, CompactionStrategy, CompactOptions } from './types.js'
 import { DEFAULT_CONTEXT_WINDOW } from './types.js'
 import { TokenBudgetManager } from './tokenBudget.js'
@@ -216,6 +216,12 @@ export interface EnhancedCompactionResult extends CompactionResult {
     skillsReinjected: number
     toolsRestored: number
     totalTokensAdded: number
+    /**
+     * Plan 552: the restored context sections. Producers write into the
+     * compaction entry's `reinjectedSystemMessages` — the single channel —
+     * instead of embedding system-role messages in {@link CompactionResult.messages}.
+     */
+    systemMessages?: (string | readonly MessageContent[])[]
   }
   overThresholdAfterCompact?: boolean
 }
@@ -529,6 +535,11 @@ export class CompactionManager {
 
       let finalMessages = baseResult.messages
       let reinjectionInfo: EnhancedCompactionResult['reinjection'] | undefined
+      // Plan 552: restored context now travels as result segments, not as
+      // embedded system messages — its cost is added back to the threshold
+      // accounting so the over-threshold loop brake sees the same total the
+      // pre-552 message-embedded layout produced.
+      let reinjectedTokens = 0
 
       const cachedFiles = this.reinjector?.getCacheStats().filesCached ?? 0
       if (cachedFiles > 0) {
@@ -543,15 +554,17 @@ export class CompactionManager {
             customContext: options?.customReinjectContext,
           })
           finalMessages = reinjectResult.messages
+          reinjectedTokens = reinjectResult.totalTokensAdded
           reinjectionInfo = {
             filesReinjected: reinjectResult.filesReinjected.length,
             skillsReinjected: reinjectResult.skillsReinjected.length,
             toolsRestored: reinjectResult.toolsRestored.length,
             totalTokensAdded: reinjectResult.totalTokensAdded,
+            systemMessages: reinjectResult.systemSegments,
           }
           emitStep('reinjecting', 'finished', {
             messageCount: finalMessages.length,
-            tokensEstimated: this.contextSize(finalMessages),
+            tokensEstimated: this.contextSize(finalMessages) + reinjectedTokens,
           })
           this.emit({ type: 'reinject_complete', files: reinjectionInfo.filesReinjected, skills: reinjectionInfo.skillsReinjected })
         } catch (reinjectError) {
@@ -597,7 +610,7 @@ export class CompactionManager {
       // post-compact projection compared against the same threshold remains
       // consistent — over-budget after compression triggers further trim.
       const available = this.budget.maxTokens - this.budget.reservedTokens
-      const tokensBeforeTrim = this.contextSize(finalMessages)
+      const tokensBeforeTrim = this.contextSize(finalMessages) + reinjectedTokens
       if (tokensBeforeTrim > available) {
         emitStep('trimming', 'started', {
           messageCount: finalMessages.length,
@@ -607,7 +620,7 @@ export class CompactionManager {
         finalMessages = fitCompactedToBudget(finalMessages, available)
         emitStep('trimming', 'finished', {
           messageCount: finalMessages.length,
-          tokensEstimated: this.contextSize(finalMessages),
+          tokensEstimated: this.contextSize(finalMessages) + reinjectedTokens,
         })
       }
 
@@ -616,7 +629,7 @@ export class CompactionManager {
         this.memoryFlush(baseResult.summaryText).catch(() => {})
       }
 
-      const finalTokens = this.contextSize(finalMessages)
+      const finalTokens = this.contextSize(finalMessages) + reinjectedTokens
       const overThresholdAfterCompact = finalTokens > this.budget.maxTokens - this.budget.reservedTokens
 
       // Plan 517 P2.2: activate the dead-code `overThresholdAfterCompact`
@@ -644,7 +657,7 @@ export class CompactionManager {
       const result: EnhancedCompactionResult = {
         ...baseResult,
         messages: finalMessages,
-        tokensRetained: this.contextSize(finalMessages),
+        tokensRetained: finalTokens,
         reinjection: reinjectionInfo,
         overThresholdAfterCompact,
       }

@@ -184,30 +184,30 @@ describe('PostCompactReinjector', () => {
   })
 
   describe('reinject', () => {
-    it('returns the input unchanged when no caches are populated', async () => {
+    it('returns the input unchanged (no embedded messages) when no caches are populated', async () => {
       const compressed: Message[] = [makeSummaryMessage(), makeRecentUserTurn()]
       const result = await reinjector.reinject(compressed)
+      // Plan 552: messages are echoed verbatim; context rides systemSegments.
       expect(result.messages).toEqual(compressed)
+      expect(result.systemSegments).toEqual([])
       expect(result.filesReinjected).toEqual([])
       expect(result.skillsReinjected).toEqual([])
       expect(result.toolsRestored).toEqual([])
       expect(result.totalTokensAdded).toBe(0)
     })
 
-    it('inserts file-reinject message after the summary and before the recent turn', async () => {
+    it('emits a file-reinject segment (and no embedded message) for cached file state', async () => {
       reinjector.cacheFileState(makeReadRoundTrip('src/a.ts', 'content of A'))
       const summary = makeSummaryMessage()
       const recent = makeRecentUserTurn()
       const result = await reinjector.reinject([summary, recent])
 
-      // Result layout: [summary, file-reinject, recent]
-      expect(result.messages).toHaveLength(3)
-      expect(result.messages[0]).toBe(summary)
-      expect(result.messages[2]).toBe(recent)
-      const injected = result.messages[1]!
-      expect(injected.role).toBe('system')
-      expect(String(injected.content)).toContain('src/a.ts')
-      expect(String(injected.content)).toContain('content of A')
+      expect(result.messages).toEqual([summary, recent])
+      expect(result.systemSegments).toHaveLength(1)
+      const segment = result.systemSegments[0]!
+      expect(segment).toContain('## Recently Accessed Files')
+      expect(segment).toContain('src/a.ts')
+      expect(segment).toContain('content of A')
       expect(result.filesReinjected).toHaveLength(1)
     })
 
@@ -221,10 +221,9 @@ describe('PostCompactReinjector', () => {
       r.cacheFileState(makeReadRoundTrip('new.ts', 'NEW', 'tu_new'))
 
       const result = await r.reinject([makeSummaryMessage(), makeRecentUserTurn()])
-      const injected = result.messages.find((m) =>
-        typeof m.content === 'string' && m.content.includes('## Recently Accessed Files'))
-      expect(injected).toBeDefined()
-      const text = String(injected!.content)
+      const fileSegment = result.systemSegments.find((s) => s.includes('## Recently Accessed Files'))
+      expect(fileSegment).toBeDefined()
+      const text = fileSegment!
       // new.ts should appear before old.ts (most-recent-first ordering)
       const newIdx = text.indexOf('new.ts')
       const midIdx = text.indexOf('mid.ts')
@@ -234,38 +233,36 @@ describe('PostCompactReinjector', () => {
       expect(oldIdx).toBe(-1) // dropped by maxFilesToReinject=2
     })
 
-    it('emits a skill-reinject message after the file message', async () => {
+    it('emits a skill-reinject segment', async () => {
       reinjector.cacheFileState(makeReadRoundTrip('src/a.ts', 'A'))
       reinjector.cacheSkillContext([{ name: 'foo', description: 'does foo', invokedAt: 1 }])
 
       const result = await reinjector.reinject([makeSummaryMessage(), makeRecentUserTurn()])
-      const skillsMsg = result.messages.find((m) =>
-        typeof m.content === 'string' && m.content.includes('## Active Skills Context'))
-      expect(skillsMsg).toBeDefined()
-      expect(String(skillsMsg!.content)).toContain('foo')
+      const skillSegment = result.systemSegments.find((s) => s.includes('## Active Skills Context'))
+      expect(skillSegment).toBeDefined()
+      expect(skillSegment).toContain('foo')
       expect(result.skillsReinjected).toHaveLength(1)
     })
 
-    it('emits a tool-state message only for active tools (filters out completed/error)', async () => {
+    it('emits a tool-state segment only for active tools (filters out completed/error)', async () => {
       reinjector.cacheToolState('Task1', { status: 'active', lastOutput: 'live' })
       reinjector.cacheToolState('Task2', { status: 'completed', lastOutput: 'done' })
       reinjector.cacheToolState('Task3', { status: 'error', lastOutput: 'crashed' })
 
       const result = await reinjector.reinject([makeSummaryMessage(), makeRecentUserTurn()])
-      const toolMsg = result.messages.find((m) =>
-        typeof m.content === 'string' && m.content.includes('## Active Tool States'))
-      expect(toolMsg).toBeDefined()
-      const text = String(toolMsg!.content)
+      const toolSegment = result.systemSegments.find((s) => s.includes('## Active Tool States'))
+      expect(toolSegment).toBeDefined()
+      const text = toolSegment!
       expect(text).toContain('Task1')
       expect(text).not.toContain('Task2')
       expect(text).not.toContain('Task3')
       // toolsRestored returns ALL cached tools (so the host can mark the
       // completed/error ones as restored regardless of whether they were in
-      // the active-only visible section). The visible message filters to active.
+      // the active-only visible section).
       expect(result.toolsRestored).toHaveLength(3)
     })
 
-    it('emits a working-directory message with recentChanges when provided', async () => {
+    it('emits a working-directory segment with recentChanges when provided', async () => {
       const result = await reinjector.reinject(
         [makeSummaryMessage(), makeRecentUserTurn()],
         {
@@ -276,27 +273,22 @@ describe('PostCompactReinjector', () => {
           ],
         },
       )
-      const dirMsg = result.messages.find((m) =>
-        typeof m.content === 'string' && m.content.includes('## Working Directory'))
-      expect(dirMsg).toBeDefined()
-      const text = String(dirMsg!.content)
-      expect(text).toContain('/tmp/proj')
-      expect(text).toContain('a.ts')
-      expect(text).toContain('b.ts')
+      const dirSegment = result.systemSegments.find((s) => s.includes('## Working Directory'))
+      expect(dirSegment).toBeDefined()
+      expect(dirSegment).toContain('/tmp/proj')
+      expect(dirSegment).toContain('a.ts')
+      expect(dirSegment).toContain('b.ts')
     })
 
-    it('appends customContext as a final system message', async () => {
+    it('appends customContext as the final segment', async () => {
       const result = await reinjector.reinject(
         [makeSummaryMessage(), makeRecentUserTurn()],
         { customContext: 'remember: project uses tabs not spaces' },
       )
-      const customMsg = result.messages.find((m) =>
-        typeof m.content === 'string' && m.content.includes('remember: project uses tabs'))
-      expect(customMsg).toBeDefined()
-      expect(customMsg!.role).toBe('system')
+      expect(result.systemSegments.at(-1)).toContain('remember: project uses tabs')
     })
 
-    it('orders injected messages [summary → files → skills → tools → cwd → custom → recent]', async () => {
+    it('orders segments [files → skills → tools → cwd → custom]', async () => {
       reinjector.cacheFileState(makeReadRoundTrip('src/a.ts', 'A'))
       reinjector.cacheSkillContext([{ name: 'foo', description: 'foo', invokedAt: 1 }])
       reinjector.cacheToolState('T', { status: 'active', lastOutput: 'live' })
@@ -306,33 +298,29 @@ describe('PostCompactReinjector', () => {
         { workingDirectory: '/proj', customContext: 'extra' },
       )
 
-      // Extract the "section headers" from each injected message to verify order.
       const sectionOrder: string[] = []
-      for (const m of result.messages) {
-        if (typeof m.content !== 'string') continue
-        if (m.content.includes('## Recently Accessed Files')) sectionOrder.push('files')
-        else if (m.content.includes('## Active Skills Context')) sectionOrder.push('skills')
-        else if (m.content.includes('## Active Tool States')) sectionOrder.push('tools')
-        else if (m.content.includes('## Working Directory')) sectionOrder.push('cwd')
-        else if (m.content.includes('extra')) sectionOrder.push('custom')
+      for (const segment of result.systemSegments) {
+        if (segment.includes('## Recently Accessed Files')) sectionOrder.push('files')
+        else if (segment.includes('## Active Skills Context')) sectionOrder.push('skills')
+        else if (segment.includes('## Active Tool States')) sectionOrder.push('tools')
+        else if (segment.includes('## Working Directory')) sectionOrder.push('cwd')
+        else if (segment.includes('extra')) sectionOrder.push('custom')
       }
       expect(sectionOrder).toEqual(['files', 'skills', 'tools', 'cwd', 'custom'])
     })
 
-    it('skips the file section entirely when includeFileContent is false', async () => {
+    it('skips the file segment entirely when includeFileContent is false', async () => {
       // includeFileContent: false short-circuits the file reinject branch in
-      // `reinject()` — no '## Recently Accessed Files' message is produced.
+      // `reinject()` — no '## Recently Accessed Files' segment is produced.
       const r = new PostCompactReinjector({ includeFileContent: false })
       r.cacheFileState(makeReadRoundTrip('src/a.ts', 'A'))
       const result = await r.reinject([makeSummaryMessage(), makeRecentUserTurn()])
-      const fileMsg = result.messages.find((m) =>
-        typeof m.content === 'string' && m.content.includes('## Recently Accessed Files'))
-      expect(fileMsg).toBeUndefined()
-      // filesReinjected reflects the populated cache regardless of includeFileContent
+      expect(result.systemSegments.some((s) => s.includes('## Recently Accessed Files'))).toBe(false)
+      // filesReinforced reflects the populated cache regardless of includeFileContent
       expect(result.filesReinjected).toHaveLength(1)
     })
 
-    it('skips file content when cacheFileState has not populated content (use_input only)', async () => {
+    it('emits the content-available-on-request note when cacheFileState has no content', async () => {
       // Read tool_use with no matching tool_result → entry exists but content=''
       const messages: Message[] = [
         { role: 'user', content: 'read' },
@@ -348,11 +336,9 @@ describe('PostCompactReinjector', () => {
       ]
       reinjector.cacheFileState(messages)
       const result = await reinjector.reinject([makeSummaryMessage(), makeRecentUserTurn()])
-      const injected = result.messages.find((m) =>
-        typeof m.content === 'string' && m.content.includes('src/x.ts'))
-      expect(injected).toBeDefined()
-      const text = String(injected!.content)
-      expect(text).toContain('content available on request')
+      const segment = result.systemSegments.find((s) => s.includes('src/x.ts'))
+      expect(segment).toBeDefined()
+      expect(segment).toContain('content available on request')
     })
 
     it('truncates very long file content to roughly maxTokensPerFile * 4 chars', async () => {
@@ -360,22 +346,19 @@ describe('PostCompactReinjector', () => {
       const huge = 'x'.repeat(1000)
       r.cacheFileState(makeReadRoundTrip('src/big.ts', huge))
       const result = await r.reinject([makeSummaryMessage(), makeRecentUserTurn()])
-      const injected = result.messages.find((m) =>
-        typeof m.content === 'string' && m.content.includes('src/big.ts'))
-      const text = String(injected!.content)
-      expect(text).toContain('[truncated')
-      expect(text.length).toBeLessThan(huge.length)
+      const segment = result.systemSegments.find((s) => s.includes('src/big.ts'))
+      expect(segment).toContain('[truncated')
+      expect(segment!.length).toBeLessThan(huge.length)
     })
 
-    it('totalTokensAdded reflects the bytes the reinjector inserted', async () => {
+    it('totalTokensAdded reflects the bytes the reinjector restored', async () => {
       reinjector.cacheFileState(makeReadRoundTrip('src/a.ts', 'a'.repeat(40)))
       reinjector.cacheSkillContext([{ name: 's', description: 'd', invokedAt: 1 }])
       reinjector.cacheToolState('T', { status: 'active', lastOutput: 'o'.repeat(80) })
       const result = await reinjector.reinject([makeSummaryMessage(), makeRecentUserTurn()])
-      // 40 chars (file) + ~16 chars (skill) + ~80 chars (tool) = ~136 chars
-      // → ~34 tokens at chars/4
+      // 40 chars (file) + ~16 chars (skill) + ~80 chars (tool) — all three
+      // segments contribute to the reported token cost.
       expect(result.totalTokensAdded).toBeGreaterThan(0)
-      // Each injected section's content contributes — order-independent sanity check
       expect(result.totalTokensAdded).toBeLessThan(200)
     })
   })
@@ -394,25 +377,9 @@ describe('PostCompactReinjector', () => {
     })
   })
 
-  describe('regression: insertInjectionMessages ordering with mixed system prefixes', () => {
-    it('inserts after a chain of summary + working-dir system messages', async () => {
+  describe('regression: the message array is never mutated (plan 552 single channel)', () => {
+    it('echoes the input — including system rows — without splicing segments into it', async () => {
       const summary = makeSummaryMessage()
-      const recent = makeRecentUserTurn()
-      reinjector.cacheFileState(makeReadRoundTrip('src/a.ts', 'A'))
-
-      const result = await reinjector.reinject([summary, recent])
-      // The file-injection message should come between summary and recent
-      const idx = result.messages.findIndex((m) =>
-        typeof m.content === 'string' && m.content.includes('## Recently Accessed Files'))
-      expect(idx).toBe(1)
-      expect(result.messages[idx - 1]).toBe(summary)
-      expect(result.messages[idx + 1]).toBe(recent)
-    })
-
-    it('does not skip past an unrelated system message that does not match the prefix heuristics', async () => {
-      const summary = makeSummaryMessage()
-      // An unrelated system message (not a continuation / reinject prefix) — should
-      // NOT be treated as a reinject anchor by insertInjectionMessages.
       const unrelatedSystem: Message = {
         role: 'system',
         content: 'Some arbitrary system note (not a compact summary).',
@@ -422,14 +389,10 @@ describe('PostCompactReinjector', () => {
       reinjector.cacheFileState(makeReadRoundTrip('src/a.ts', 'A'))
 
       const result = await reinjector.reinject([summary, unrelatedSystem, recent])
-      // File injection should land right after the unrelated system message,
-      // because insertInjectionMessages walks past every system message until
-      // the first non-system message.
-      const idx = result.messages.findIndex((m) =>
-        typeof m.content === 'string' && m.content.includes('## Recently Accessed Files'))
-      expect(idx).toBe(2)
-      expect(result.messages[idx - 1]).toBe(unrelatedSystem)
-      expect(result.messages[idx + 1]).toBe(recent)
+      expect(result.messages).toEqual([summary, unrelatedSystem, recent])
+      // The restored context lives exclusively in systemSegments.
+      expect(result.systemSegments).toHaveLength(1)
+      expect(result.systemSegments[0]).toContain('## Recently Accessed Files')
     })
   })
 })
