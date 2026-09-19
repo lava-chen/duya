@@ -52,11 +52,6 @@ export const generalConfig: PromptSystemConfig = {
     { module: 'duyaDesktopContext' },
     { module: 'finalAnswer' },
   ],
-  // Static content lives entirely in the registry modules above. The
-  // empty array is required by the type — `staticSections` is a
-  // general-purpose field that Phase 3 removes once every profile has
-  // migrated to `staticModules`.
-  staticSections: [],
   dynamicSections: [
     // Global preferences
     { name: 'language', compute: getLanguageSection, template: 'dynamic/language.hbs', description: 'Language preference' },

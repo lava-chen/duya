@@ -51,7 +51,6 @@ export const gatewayConfig: PromptSystemConfig = {
     },
     { module: 'project', name: 'project' },
   ],
-  staticSections: [],
   dynamicSections: [
     // Global preferences
     { name: 'language', compute: getLanguageSection, description: 'Language preference' },

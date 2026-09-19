@@ -38,7 +38,11 @@ import { getMcpInstructionsSection } from '../sections/dynamic/mcpInstructions.j
 
 export const botConfig: PromptSystemConfig = {
   name: 'bot',
-  staticSections: [],
+  // Plan 551: the bot's stable behavioral baseline stays the distilled
+  // `basicPrompt.ts` prepended by `_buildSystemPrompt` (byte-stable,
+  // KV-cache friendly) — it is not assembled through PromptSystem, so the
+  // static module list is empty.
+  staticModules: [],
   dynamicSections: [
     // Global preferences
     { name: 'language', compute: getLanguageSection, description: 'Language preference' },

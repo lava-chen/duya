@@ -1,32 +1,28 @@
 /**
- * HbsPromptSystem — Plan 550.
+ * HbsPromptSystem — Plan 550 / 551.
  *
- * Thin wrapper that pairs the `HbsPromptRenderer` with the static-section
- * boundary token so the existing `PromptSystem` can defer to a `.hbs`
- * template. Designed as a one-shot replacement for the
- * `general/sections/*.ts` chain when a config sets `staticTemplate`.
+ * Owns the Handlebars renderer (and its compile cache) for the prompt
+ * asset tree plus the standard context mapper. Plan 551: `renderModule`
+ * is the single correct entry for authored content modules — it resolves
+ * the asset path through the module registry and applies the module's
+ * `slots` mapper and the caller's `params`.
  *
- * Behaviour contract (locked by the byte-level diff test in
- * `tests/unit/prompts/hbs/general-prompt-byte-diff.test.ts`):
+ * Behaviour contract:
  *
  *   - The renderer is bound to `<packages/agent/src/prompts/assets>` so
  *     templates can be referenced by short relative paths (e.g.
- *     `general/system-prompt.md.hbs`).
- *   - `buildStaticSections(context)` returns an array of string segments
- *     matching what the legacy `PromptSystem` would have produced, joined
- *     with a leading newline so the
- *     `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` token sits cleanly between the
- *     static and dynamic halves.
- *   - Dynamic sections are out of scope here — 1c owns that path.
+ *     `modules/identity.hbs`).
+ *   - Assembly of the static half (profile gating, prompt-cache keying,
+ *     empty-collapse) lives in `PromptSystem.getStaticSections`.
  *
- * @see docs/exec-plans/active/550-prompt-hbs-and-agent-decomposition.md
+ * @see docs/exec-plans/active/551-prompt-module-flatten.md
  */
 
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { PromptContext, SystemPrompt } from '../types.js';
-import { asSystemPrompt, CYBER_RISK_INSTRUCTION, SYSTEM_PROMPT_DYNAMIC_BOUNDARY, TOOL_NAMES } from '../types.js';
+import type { PromptContext } from '../types.js';
+import { CYBER_RISK_INSTRUCTION, TOOL_NAMES } from '../types.js';
 import { buildLanguageGuidance } from '../language-guidance.js';
 import { getPlatformHint } from '../platformHints.js';
 import { buildEnvironmentItems } from '../sections/dynamic/environment.js';
@@ -294,39 +290,6 @@ export class HbsPromptSystem {
       context,
       Object.keys(extra).length > 0 ? extra : undefined,
     );
-  }
-
-  /**
-   * Build the static half of the system prompt as a single string. The
-   * caller (`PromptSystem`) is expected to insert the dynamic boundary
-   * token between this string and the dynamic sections.
-   *
-   * Returns `null` when the rendered template is empty (matches the
-   * `PromptSection` contract that returns `null` for omitted content).
-   */
-  buildStaticSections(
-    relativePath: string,
-    context: PromptContext,
-  ): string | null {
-    const rendered = this.renderStaticTemplate(relativePath, context).trim();
-    return rendered === '' ? null : rendered;
-  }
-
-  /** Compose the full system prompt with a dynamic half joined via the boundary token. */
-  buildSystemPrompt(
-    relativePath: string,
-    context: PromptContext,
-    dynamicSections: string[],
-  ): SystemPrompt {
-    const staticPart = this.buildStaticSections(relativePath, context);
-    if (staticPart === null) {
-      return asSystemPrompt([...dynamicSections]);
-    }
-    return asSystemPrompt([
-      staticPart,
-      SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
-      ...dynamicSections,
-    ]);
   }
 
   /** Invalidate the renderer's compile cache (e.g. after a template hot-reload). */

@@ -7,7 +7,8 @@
  *
  * A PromptSystemConfig declares:
  *   - name: identifier ('general' / 'code' / 'research' / 'gateway')
- *   - staticSections: cached across buildSystemPrompt calls
+ *   - staticModules: registry-assembled static half, cached across
+ *     buildSystemPrompt calls (Plan 551)
  *   - dynamicSections: recomputed on every buildSystemPrompt call
  *     (note: buildSystemPrompt is called once per streamChat, not per turn;
  *     mid-stream skill load/unload will not refresh the catalog until the
@@ -165,29 +166,17 @@ export type ExtraPromptGenerators = Record<string, (...args: unknown[]) => strin
 export interface PromptSystemConfig {
   /** System name ('general' / 'code' / 'research' / 'gateway'). */
   name: string
-  /** Static (cached) sections. */
-  staticSections: SectionDef[]
   /**
-   * Optional: authored content modules assembled from the shared registry
-   * (Plan 551). Each reference normalizes onto the `SectionDef` machinery —
-   * profile gating, prompt-cache keying, and empty-collapse are inherited —
-   * with the module's `.hbs` render as the content source. Configs that set
-   * this field declare their static half purely as an assembly list instead
-   * of per-profile section trees. Mutually exclusive with `staticTemplate`
-   * in practice; when both are set, `staticTemplate` wins (monolith path).
+   * Static half assembly list over the module registry (Plan 551). The
+   * only static surface: each reference normalizes onto the SectionDef
+   * machinery (profile gating, prompt-cache keying, empty-collapse) with
+   * the module's `.hbs` render as the content source. The former
+   * `staticSections` TS chain and the Plan 550 `staticTemplate` monolith
+   * path are retired.
    */
-  staticModules?: StaticModuleRef[]
+  staticModules: StaticModuleRef[]
   /** Dynamic (volatile) sections. */
   dynamicSections: SectionDef[]
-  /**
-   * Optional: when set, replaces the static-section chain with a single
-   * Handlebars template rendered via `HbsPromptSystem`. The dynamic
-   * sections still run through the TS path; only the static half is
-   * swapped. Plan 550 step 1b/1c lands this flag; defaults stay unset so
-   * legacy configs (code / research / gateway) keep their TS sections
-   * until they migrate.
-   */
-  staticTemplate?: string
   /** Optional: extend PromptContext with extra fields after base mapping. */
   contextExtender?: ContextExtender
   /** Optional: async side-effect before buildSystemPrompt. */
@@ -313,18 +302,15 @@ export class PromptSystem {
   }
 
   /**
-   * Static-half section definitions in render order: registry-assembled
-   * modules first (Plan 551 `staticModules`), then legacy `staticSections`
-   * entries.
-   *
-   * Module references always normalize onto a `compute` function (never the
-   * `template` field) so the config-side `enabledWhen` gate collapses to
-   * null exactly like a legacy `compute` returning null; `renderModule`
+   * Static-half section definitions in render order. Module references
+   * always normalize onto a `compute` function (never the `template`
+   * field) so the config-side `enabledWhen` gate collapses to null
+   * exactly like a legacy `compute` returning null; `renderModule`
    * applies the module's own `slots` mapper plus static `params` and the
    * empty-output collapse matches the template path.
    */
   private getStaticSectionDefs(): SectionDef[] {
-    const moduleDefs: SectionDef[] = (this.config.staticModules ?? []).map((ref) => {
+    return (this.config.staticModules ?? []).map((ref) => {
       const enabledWhen = ref.enabledWhen
       return {
         name: ref.name ?? ref.module,
@@ -338,7 +324,6 @@ export class PromptSystem {
         },
       }
     })
-    return [...moduleDefs, ...this.config.staticSections]
   }
 
   /**
@@ -365,11 +350,8 @@ export class PromptSystem {
   /**
    * Build the complete system prompt.
    * Template method: preBuildHook → getSections → resolve → combine.
-   *
-   * If `config.staticTemplate` is set (Plan 550 1b+), the static half is
-   * rendered via `HbsPromptSystem` and the TS static-sections chain is
-   * skipped. The dynamic half is still TS-driven; only the static half
-   * is swapped in this commit.
+   * The static half is the `staticModules` assembly (Plan 551); the
+   * dynamic half renders through its section templates/compute.
    */
   async buildSystemPrompt(context: PromptContext): Promise<SystemPrompt> {
     // Pre-build hook: async side-effects + cache invalidation.
@@ -392,21 +374,6 @@ export class PromptSystem {
     const dynamicContent = dynamicResults.filter(
       (c): c is string => c !== null,
     )
-
-    if (this.config.staticTemplate) {
-      // Plan 550 1b: render the static half through HbsPromptSystem.
-      const hbsSystem = getSharedHbsPromptSystem()
-      const staticPart = hbsSystem.buildStaticSections(
-        this.config.staticTemplate,
-        context,
-      )
-      const staticContent = staticPart === null ? [] : [staticPart]
-      return asSystemPrompt([
-        ...staticContent,
-        SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
-        ...dynamicContent,
-      ])
-    }
 
     const staticSections = this.getStaticSections(context)
     const { staticContent } = await this.resolveSections(

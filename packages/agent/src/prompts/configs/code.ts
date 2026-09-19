@@ -46,7 +46,6 @@ export const codeConfig: PromptSystemConfig = {
     { module: 'configProtection', name: 'configProtection' },
     { module: 'projectInstructions', name: 'projectInstructions' },
   ],
-  staticSections: [],
   dynamicSections: [
     { name: 'platform', compute: getPlatformSection, description: 'Communication platform-specific guidance' },
     { name: 'environment', template: 'dynamic/environment.hbs', description: 'Current directory state' },

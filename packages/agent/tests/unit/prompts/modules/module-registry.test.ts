@@ -1,19 +1,19 @@
 /**
- * Module registry + split-parity tests — Plan 551 Phase 1.
+ * Module registry + PromptSystem normalization tests — Plan 551.
  *
  * Locks the contract introduced by the prompt module registry:
  *
- *  1. Registry integrity — every `MODULES[*].path` loads and renders.
+ *  1. Registry integrity — the core general module set exists and every
+ *     `MODULES[*].path` loads and renders.
  *  2. Params merge — `renderModule` params override the base mapper slots.
  *  3. `staticModules` normalization — module references flow through the
- *     legacy `SectionDef` machinery (profile gating, cache keying).
- *  4. Split parity — the 10 content modules joined with '\n\n' reproduce
- *     the monolith `general/system-prompt.md.hbs` render byte-for-byte for
- *     every context variant. The `duyaDesktopContext` and Repl-mode tools
- *     blocks collapse to '' in the module path when their `{{#if}}` gates
- *     are off, while the monolith leaves stray blank-line residue behind;
- *     those two variants are compared after blank-line normalization
- *     (documented Phase 1 whitespace artifact, content still locked).
+ *     SectionDef machinery: profile gating, config-side enabledWhen gates,
+ *     prompt-cache keying, and empty-collapse.
+ *
+ * Byte-level parity against the Plan 550 monolith was locked during the
+ * Phase 1/2 migrations; the monolith is retired, and content is now
+ * pinned by the per-profile suites (general assembly, code, gateway,
+ * research, project modules).
  *
  * @see docs/exec-plans/active/551-prompt-module-flatten.md
  */
@@ -29,22 +29,6 @@ import { PromptSystem } from '../../../../src/prompts/PromptSystem.js';
 import type { PromptContext } from '../../../../src/prompts/types.js';
 
 const ASSETS_ROOT = resolve(__dirname, '../../../../src/prompts/assets');
-
-/** General config's static assembly order (mirrors the monolith layout). */
-const GENERAL_ORDER: ModuleName[] = [
-  'identity',
-  'system',
-  'destructiveActions',
-  'configProtection',
-  'communication',
-  'tools',
-  'tasks',
-  'skillUsage',
-  'duyaDesktopContext',
-  'finalAnswer',
-];
-
-const MONOLITH = 'general/system-prompt.md.hbs';
 
 function context(
   overrides: Partial<{
@@ -71,24 +55,6 @@ function context(
     hasEmbeddedSearchTools: overrides.hasEmbeddedSearchTools ?? false,
     isReplModeEnabled: overrides.isReplModeEnabled ?? false,
   } as PromptContext;
-}
-
-/** Render the monolith (Plan 550 1b path). */
-function renderMonolith(system: HbsPromptSystem, ctx: PromptContext): string {
-  return system.renderStaticTemplate(MONOLITH, ctx).trim();
-}
-
-/** Render the module assembly (Plan 551 staticModules path semantics). */
-function renderModules(system: HbsPromptSystem, ctx: PromptContext): string {
-  return GENERAL_ORDER
-    .map(name => system.renderModule(name, ctx).trim())
-    .filter(rendered => rendered !== '')
-    .join('\n\n');
-}
-
-/** Collapse 3+ consecutive newlines so blank-line residue does not matter. */
-function normalizeBlankLines(text: string): string {
-  return text.replace(/\n{3,}/g, '\n\n');
 }
 
 describe('prompt module registry', () => {
@@ -153,7 +119,6 @@ describe('PromptSystem staticModules normalization', () => {
     return new PromptSystem(
       {
         name: 'module-test',
-        staticSections: [],
         staticModules: [
           { module: 'system' },
           { module: 'tasks', name: 'tasksAlias' },
@@ -189,7 +154,6 @@ describe('PromptSystem staticModules normalization', () => {
   it('honours enabledWhen config gates by collapsing to null', async () => {
     const system = new PromptSystem({
       name: 'module-gate-test',
-      staticSections: [],
       staticModules: [
         { module: 'system', enabledWhen: ctx => ctx.enabledTools.has('duya_cli') },
       ],
@@ -199,62 +163,4 @@ describe('PromptSystem staticModules normalization', () => {
     expect(off.map(s => s.name)).toEqual(['system']);
     expect(await Promise.resolve(off[0].compute())).toBeNull();
   });
-});
-
-describe('module split parity vs monolith', () => {
-  let system: HbsPromptSystem;
-
-  beforeEach(() => {
-    system = new HbsPromptSystem({ assetsRoot: ASSETS_ROOT });
-  });
-
-  const parityCases: Array<[string, ReturnType<typeof context>]> = [
-    ['desktop on (win32, repl off)', context({
-      enabledTools: new Set(['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash', 'TodoWrite', 'duya_cli']),
-    })],
-    ['desktop on, repl on with todo tool', context({
-      enabledTools: new Set(['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash', 'TodoWrite', 'duya_cli']),
-      isReplModeEnabled: true,
-    })],
-    ['desktop on, posix platform', context({
-      platform: 'linux',
-      enabledTools: new Set(['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash', 'TodoWrite', 'duya_cli']),
-    })],
-    ['desktop on, output style active', context({
-      outputStyleConfig: { name: 'concise' },
-      enabledTools: new Set(['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash', 'TodoWrite', 'duya_cli']),
-    })],
-    ['desktop on, embedded search tools', context({
-      hasEmbeddedSearchTools: true,
-      enabledTools: new Set(['Read', 'Edit', 'Write', 'Bash', 'TodoWrite', 'duya_cli']),
-    })],
-  ];
-
-  for (const [label, ctx] of parityCases) {
-    it(`reproduces the monolith render byte-for-byte: ${label}`, () => {
-      expect(renderModules(system, ctx)).toBe(renderMonolith(system, ctx));
-    });
-  }
-
-  const residueCases: Array<[string, ReturnType<typeof context>]> = [
-    // Desktop gate off: the monolith keeps one stray blank line where the
-    // gated block vanished; the module path drops the empty element.
-    ['desktop gate off (no duya_cli)', context()],
-    // Repl mode without a todo tool: the tools module collapses to '' while
-    // the monolith keeps the surrounding blank-line residue.
-    ['repl on without todo tool', context({
-      isReplModeEnabled: true,
-      enabledTools: new Set(['Read', 'Bash', 'duya_cli']),
-    })],
-  ];
-
-  for (const [label, ctx] of residueCases) {
-    it(`matches the monolith modulo blank-line residue: ${label}`, () => {
-      const monolith = renderMonolith(system, ctx);
-      const modules = renderModules(system, ctx);
-      // Content is identical; only the monolith's stray blank lines where
-      // the gated block vanished differ (Phase 1 whitespace artifact).
-      expect(normalizeBlankLines(modules)).toBe(normalizeBlankLines(monolith));
-    });
-  }
 });

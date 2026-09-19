@@ -34,7 +34,6 @@ export const researchConfig: PromptSystemConfig = {
     // toneAndStyle IS a generic section name; respect the profile gate.
     { module: 'toneAndStyle', name: 'toneAndStyle' },
   ],
-  staticSections: [],
   dynamicSections: [
     {
       name: 'outputFormat',
