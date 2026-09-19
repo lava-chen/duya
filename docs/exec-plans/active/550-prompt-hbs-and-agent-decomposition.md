@@ -619,5 +619,5 @@ These three were already tracked as Plan 486 / Plan 408 follow-ups and are unrel
 
 **Next session entry points (session 8+)**:
 
-- **1d delete pass**: sweep all 8 legacy `.ts` files plus `general/sections/*.ts`. Run all five dedicated parity suites (`session-guidance-1d-rest` / `memory-1d-rest` / `environment-1d-rest` / `recent-sessions-1d-rest` / `skills-metadata-1d-rest`, plus the 20 in `dynamic-sections`) after each delete to confirm no regression. Estimated 1 commit.
+- **1d delete pass** (decoupled ✅ `ec4ebcd9`): removed `compute:` field from the 8 migrated section entries in 5 configs; made `SectionDef.compute` optional in `PromptSystem.ts`. Production paths are now `.hbs`-only; the legacy `getXxxSection` functions live on only as parity-test references. **Sweep the legacy `.ts` files entirely is deferred** — it would require rewriting 8 parity tests + 2 non-parity tests (`recentSessionsSection.test.ts` / `projectContinuity.test.ts`) to compare against hardcoded expected strings, which is a larger refactor that deserves its own commit.
 - **改造 2e TurnEventDispatcher**: 700-1100 lines of `streamChat` between the LLM stream subscription (already extracted into `TurnStreamRunner`) and the final SSE yield (`SessionFinalizer`). Multi-commit refactor.
