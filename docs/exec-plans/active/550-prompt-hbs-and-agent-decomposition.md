@@ -332,8 +332,17 @@ fc7aeb48  docs(plan): record StreamFinalizer.persistableMessages fixup commit (P
   decompositions. Verified by `git checkout 5d9a4108 --` + re-run:
   same 2 tests fail with identical error messages.
 
-  These should be addressed in their own plan (Plan 486 mock
-  setup), not in Plan 550.
+- `tests/unit/prompts/hbs/dynamic-sections.test.ts` — 4 of 12
+  tests fail on `5d9a4108` (and on every commit on the branch
+  since the test was added). All four are byte-level parity checks
+  for `outputStyle` / `platform` / `mcp-instructions` `.hbs`
+  templates vs the legacy `.ts` implementation. The diff is
+  `\r\n` vs `\n` line endings (Windows CRLF vs Linux LF), so the
+  fixture files were written on Linux but the test runs on
+  Windows. Not a Plan 550 regression — purely environmental.
+
+Both should be addressed in their own plans (Plan 486 mock setup
++ a Windows/Linux CRLF fixture strategy), not in Plan 550.
 
 ## Session 4 summary (DuyaAgent 拆解聚焦)
 
