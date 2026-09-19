@@ -30,6 +30,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@duya/ai": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@nut-tree-fork/nut-js": "^4.2.6",
     "sharp": "^0.33.5"

@@ -51,8 +51,10 @@ describe('computerUseMode — registration', () => {
 
   it('prepends a system prompt teaching the SOM workflow', () => {
     const prefix = computerUseMode.prompt?.prefix;
-    expect(typeof prefix).toBe('string');
-    const text = prefix as string;
+    // plan 551 Phase 3: prefix is a PromptBuilder — the decide section is
+    // appended only when a decision backend is configured. Without one
+    // (unit-test default) the prompt is the plain vision-loop manual.
+    const text = typeof prefix === 'function' ? prefix({} as never, '') : (prefix ?? '');
     expect(text).toContain('capture(somMode=true)');
     expect(text).toContain('suspected_noop');
     expect(text).toContain('APP_BLOCKED');
