@@ -71,7 +71,20 @@ export interface GoalUpdatedEvent {
   gapsSummary?: string;
   strategyProposal?: string;
   pauseMessage?: string;
-  history?: ReadonlyArray<{ at: number; event: string; detail?: string }>;
+  /** Closed-catalog pause reason (plan 552) — why the goal is not running. */
+  pauseReason?: string;
+  /** Worker rounds completed toward the objective (the UI "Turn N"). */
+  totalWorkerRounds?: number;
+  /** Independent verification rounds run so far. */
+  totalVerifyRounds?: number;
+  /** Wall-clock ms since the goal started. */
+  elapsedMs?: number;
+  /** Epoch ms the goal was started. */
+  createdAt?: number;
+  /** Set while the goal is active but parked on a known wait (plan 552). */
+  executionWait?: 'verification';
+  planFile?: string;
+  history?: ReadonlyArray<{ at: number; event: string; detail?: string; reason?: string }>;
 }
 
 /**

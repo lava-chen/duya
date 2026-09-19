@@ -49,6 +49,15 @@ export interface GoalVerificationResult {
   skepticVerdicts?: Array<{ skeptic: number; verdict: GoalVerdict }>;
   /** Strategist proposal, when a strategist round fired (Phase 3). */
   strategyProposal?: string;
+  /**
+   * Structured pause reason for `blocked` verdicts (plan 552) — e.g.
+   * `verifier_timeout` when the panel blew its budget, `verifier_unavailable`
+   * when no verification agent exists. Mapped onto the goal tracker's
+   * closed pause-reason catalog by the tool layer.
+   */
+  pauseReason?: string;
+  /** True when the panel was skipped entirely (verification policy `none`/`auto`). */
+  skipped?: boolean;
 }
 
 export interface GoalVerificationParams {
@@ -70,6 +79,12 @@ export interface GoalVerificationParams {
   strategistEvery?: number;
   /** Max consecutive not-achieved rounds before auto-pausing (stall guard). */
   maxNotAchievedRounds?: number;
+  /**
+   * Hard wall-clock budget for the whole verification stage (plan 552).
+   * Defaults to `[goal] verify_timeout_seconds` * 1000; a timeout settles
+   * as `blocked(verifier_timeout)` before any tracker side effects fire.
+   */
+  verifyTimeoutMs?: number;
 }
 
 const VERIFICATION_AGENT_TYPE = 'verification';
@@ -87,9 +102,46 @@ export const DEFAULT_STRATEGIST_EVERY = 3;
 export const DEFAULT_MAX_NOT_ACHIEVED_ROUNDS = 5;
 
 /**
+ * Which verification backend to run for this completion report (plan 552 —
+ * minimax `verificationModeForRoute` parity). `panel` always verifies;
+ * `auto` skips the panel for local runtimes (ollama) where a sub-agent
+ * panel would double a free-but-slow model's work; `none` skips for every
+ * route (BYOK cost protection — the worker's proposal settles verbatim).
+ * Pure — unit-testable.
+ */
+export function shouldRunVerificationPanel(
+  mode: 'panel' | 'none' | 'auto',
+  provider?: string,
+): boolean {
+  if (mode === 'panel') return true;
+  if (mode === 'none') return false;
+  return provider !== 'ollama';
+}
+
+/** Rejects after `ms` milliseconds so `Promise.race` can bound a stage. */
+function rejectAfter(ms: number, label: string): Promise<never> {
+  return new Promise<never>((_, reject) => {
+    const handle = setTimeout(() => reject(new Error(`${label} after ${ms}ms`)), ms);
+    // Unref when available (Node) so a pending bound cannot keep the worker
+    // process alive; browser/jsdom timers are numbers without it.
+    if (typeof handle === 'object' && handle !== null && 'unref' in handle) {
+      (handle as { unref: () => void }).unref();
+    }
+  });
+}
+
+/**
  * Run the verifier panel and map the aggregate verdict. Each skeptic gets
  * a slightly different stance so the panel covers more attack surface
  * (grok's adversarial panel). Verdicts aggregate conservatively.
+ *
+ * Plan 552: the whole verification stage runs under a hard wall-clock
+ * budget (`verifyTimeoutSeconds`). A timeout settles as
+ * `blocked(verifier_timeout)` BEFORE any tracker side effects fire — the
+ * goal pauses for the user instead of hanging the blocking `update_goal`
+ * tool call forever. Skeptic sub-agents that are already in flight are
+ * discarded (runAgentSync exposes no abort); their late results are
+ * ignored and their rejections swallowed.
  */
 export async function verifyGoalCompletion(
   params: GoalVerificationParams,
@@ -108,6 +160,7 @@ export async function verifyGoalCompletion(
     verifierCount = cfg.verifierCount,
     strategistEvery = cfg.strategistEvery,
     maxNotAchievedRounds = cfg.maxNotAchievedRounds,
+    verifyTimeoutMs = cfg.verifyTimeoutSeconds * 1000,
   } = params;
 
   const definition = findVerificationAgent(agentDefinitions);
@@ -116,7 +169,11 @@ export async function verifyGoalCompletion(
     // conservative "blocked" so the goal pauses for user input instead of
     // silently completing or spinning.
     logger.warn('[GoalEvaluator] no verification agent found; goal marked blocked', undefined, 'GoalEvaluator');
-    return { verdict: 'blocked', gapsSummary: 'Verifier unavailable — verification agent not found.' };
+    return {
+      verdict: 'blocked',
+      gapsSummary: 'Verifier unavailable — verification agent not found.',
+      pauseReason: 'verifier_unavailable',
+    };
   }
 
   // Serialize the repo changes vs the goal baseline once for the whole
@@ -136,6 +193,7 @@ export async function verifyGoalCompletion(
   // panel runs CONCURRENTLY via Promise.all — the verification stage is the
   // goal's slowest path, and skeptics are read-only so no shared-state
   // hazards (grok goal_classifier.rs).
+  const startedAt = Date.now();
   const skepticRuns = Array.from({ length: count }, (_, i) =>
     runOneSkeptic({
       skepticIndex: i,
@@ -150,7 +208,29 @@ export async function verifyGoalCompletion(
       maxTurns,
     }),
   );
-  const results = await Promise.all(skepticRuns);
+  const panelPromise = Promise.all(skepticRuns);
+  // A crash after the timeout won the race must not surface as an
+  // unhandledRejection — the timeout path has already settled the verdict.
+  panelPromise.catch(() => {});
+
+  let results: Awaited<typeof panelPromise>;
+  try {
+    results = await Promise.race([
+      panelPromise,
+      rejectAfter(verifyTimeoutMs, 'goal verification panel timed out'),
+    ]);
+  } catch {
+    logger.warn(
+      `[GoalEvaluator] verification panel exceeded ${verifyTimeoutMs}ms; goal blocked (verifier_timeout)`,
+      undefined,
+      'GoalEvaluator',
+    );
+    return {
+      verdict: 'blocked',
+      gapsSummary: `Verification timed out after ${Math.round(verifyTimeoutMs / 1000)}s — resume to retry.`,
+      pauseReason: 'verifier_timeout',
+    };
+  }
 
   const skepticVerdicts: Array<{ skeptic: number; verdict: GoalVerdict }> = [];
   const reports: string[] = [];
@@ -165,11 +245,18 @@ export async function verifyGoalCompletion(
   const fingerprint = gapsSummary ? fingerprintOf(gapsSummary) : undefined;
 
   // ── Stall detection (Phase 3) ───────────────────────────────────────────
-  const stallCount = goalModeTracker.setGaps(gapsSummary ?? '', fingerprint);
-  const rounds = goalModeTracker.consecutiveNotAchieved();
+  const stallCount = goalModeTracker.setGaps(
+    gapsSummary ?? '',
+    fingerprint,
+    context.options.sessionId,
+  );
+  const rounds = goalModeTracker.consecutiveNotAchieved(context.options.sessionId);
   const stalled = stallCount >= 2 && rounds >= 2;
   if (stalled) {
-    goalModeTracker.transition({ type: 'stall' });
+    goalModeTracker.transition(
+      { type: 'stall', reason: 'no_progress_gaps' },
+      context.options.sessionId,
+    );
     logger.warn(
       `[GoalEvaluator] stall detected (fingerprint unchanged ${stallCount}x); goal paused`,
       undefined,
@@ -179,13 +266,14 @@ export async function verifyGoalCompletion(
 
   // ── Strategist (Phase 3) ────────────────────────────────────────────────
   let strategyProposal: string | undefined;
-  const lastStrategist = goalModeTracker.lastStrategistFiredAt() ?? 0;
+  const lastStrategist = goalModeTracker.lastStrategistFiredAt(context.options.sessionId) ?? 0;
   const dueForStrategist =
     rounds >= strategistEvery &&
     Date.now() - lastStrategist > 60_000 && // throttle: once per minute
     !stalled;
   if (dueForStrategist) {
-    strategyProposal = await runStrategist({
+    const remaining = Math.max(30_000, verifyTimeoutMs - (Date.now() - startedAt));
+    const strategistPromise = runStrategist({
       objective,
       finalSummary,
       gapsSummary: gapsSummary ?? '',
@@ -193,14 +281,31 @@ export async function verifyGoalCompletion(
       agentDefinitions,
       maxTurns,
     });
+    // Same unhandled-rejection guard as the panel.
+    strategistPromise.catch(() => {});
+    try {
+      strategyProposal = await Promise.race([
+        strategistPromise,
+        rejectAfter(remaining, 'goal strategist timed out'),
+      ]);
+    } catch {
+      logger.warn(
+        `[GoalEvaluator] strategist exceeded its budget; skipping proposal`,
+        undefined,
+        'GoalEvaluator',
+      );
+    }
     if (strategyProposal) {
-      goalModeTracker.recordStrategistFired();
+      goalModeTracker.recordStrategistFired(context.options.sessionId);
     }
   }
 
   // ── Stall guard: pause instead of spinning forever ─────────────────────
   if (!stalled && rounds >= maxNotAchievedRounds) {
-    goalModeTracker.transition({ type: 'stall' });
+    goalModeTracker.transition(
+      { type: 'stall', reason: 'no_progress_gaps' },
+      context.options.sessionId,
+    );
     logger.warn(
       `[GoalEvaluator] ${rounds} consecutive not-achieved rounds; goal paused`,
       undefined,

@@ -12,6 +12,7 @@ import { resolve } from 'path';
 import { existsSync, statSync } from 'fs';
 import type { duyaAgent } from '../agent/DuyaAgent.js';
 import { getActiveCliProvider } from './config/db-config.js';
+import { handleGoalCommand, isGoalControlCommand } from '../modes/goal/goal-commands.js';
 
 export interface SlashCommandContext {
   agent?: duyaAgent;
@@ -201,6 +202,7 @@ export const COMMAND_REGISTRY: CommandDef[] = [
   { name: 'compress', description: 'Manually compress conversation context', category: 'Session', argsHint: '[focus topic]' },
   { name: 'agents', description: 'Show active agents and running tasks', category: 'Session', aliases: ['tasks'] },
   { name: 'plan', description: 'Create or view an execution plan', category: 'Session', argsHint: '[description|open]' },
+  { name: 'goal', description: 'Goal mode: start an objective / status / pause / resume / clear', category: 'Session', argsHint: '[<objective>|status|pause|resume|clear]' },
 
   // Configuration commands
   { name: 'config', description: 'Show current configuration', category: 'Configuration', cliOnly: true },
@@ -287,6 +289,34 @@ export function getGatewayHelpLines(platform: SlashCommandContext['platform'] = 
 
 // Initialize default slash commands
 export function initSlashCommands(): void {
+  // Goal mode (plan 552): deterministic control verbs; `/goal <objective>`
+  // returns false so it falls through to the model (which starts the goal
+  // and begins working in the same turn).
+  registerSlashCommand({
+    name: 'goal',
+    description: 'Goal mode: start an objective / status / pause / resume / clear',
+    category: 'Session',
+    argsHint: '[<objective>|status|pause|resume|clear]',
+    handler: async (args, context) => {
+      const input = args.trim() ? `/goal ${args.trim()}` : '/goal';
+      if (!isGoalControlCommand(input)) {
+        return false; // an objective — let the model start it
+      }
+      const result = await handleGoalCommand(input, {
+        sessionId: context?.sessionId,
+      });
+      const platform = context?.platform ?? 'cli';
+      if (platform === 'cli') {
+        for (const line of result.reply.split('\n')) {
+          console.log(color(line, Colors.CYAN));
+        }
+      } else {
+        console.log(result.reply);
+      }
+      return true;
+    },
+  });
+
   // Session commands
   registerSlashCommand({
     name: 'new',

@@ -352,7 +352,20 @@ export interface GoalUpdatedEvent {
   gapsSummary?: string;
   strategyProposal?: string;
   pauseMessage?: string;
-  history?: ReadonlyArray<{ at: number; event: string; detail?: string }>;
+  /** Closed-catalog pause reason (plan 552) — why the goal is not running. */
+  pauseReason?: string;
+  /** Worker rounds completed toward the objective (the UI "Turn N"). */
+  totalWorkerRounds?: number;
+  /** Independent verification rounds run so far. */
+  totalVerifyRounds?: number;
+  /** Wall-clock ms since the goal started. */
+  elapsedMs?: number;
+  /** Epoch ms the goal was started. */
+  createdAt?: number;
+  /** Set while the goal is active but parked on a known wait (plan 552). */
+  executionWait?: 'verification';
+  planFile?: string;
+  history?: ReadonlyArray<{ at: number; event: string; detail?: string; reason?: string }>;
 }
 
 /** Build the worker goal_updated payload from explicit tracker state. */
@@ -367,9 +380,15 @@ export function buildGoalUpdatedEvent(
     consecutiveNotAchieved: number;
     gapsSummary?: string;
     pauseMessage?: string;
-    history?: ReadonlyArray<{ at: number; event: string; detail?: string }>;
+    pauseReason?: string;
+    totalWorkerRounds?: number;
+    totalVerifyRounds?: number;
+    elapsedMs?: number;
+    createdAt?: number;
+    planFile?: string;
+    history?: ReadonlyArray<{ at: number; event: string; detail?: string; reason?: string }>;
   },
-  extra?: { gapsSummary?: string; strategyProposal?: string },
+  extra?: { gapsSummary?: string; strategyProposal?: string; executionWait?: 'verification' },
 ): GoalUpdatedEvent {
   return {
     type: 'chat:goal_updated',
@@ -383,6 +402,13 @@ export function buildGoalUpdatedEvent(
     gapsSummary: state.gapsSummary ?? extra?.gapsSummary,
     strategyProposal: extra?.strategyProposal,
     pauseMessage: state.pauseMessage,
+    pauseReason: state.pauseReason,
+    totalWorkerRounds: state.totalWorkerRounds,
+    totalVerifyRounds: state.totalVerifyRounds,
+    elapsedMs: state.elapsedMs,
+    createdAt: state.createdAt,
+    executionWait: extra?.executionWait,
+    planFile: state.planFile,
     history: state.history,
   };
 }

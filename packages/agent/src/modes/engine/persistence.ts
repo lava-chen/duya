@@ -20,11 +20,20 @@ export function serializeSnapshot(
   sessionId: string,
   now: number,
 ): ModeStateSnapshot {
+  // Session-scoped read (plan 552): session-aware trackers (goal) return
+  // the idle snapshot for a session that does not own the state, so a
+  // bystander session can never clobber another session's row with live
+  // state — nor persist live state under its own key.
+  const data = tracker.snapshot(sessionId) as { state?: unknown } | unknown;
+  const dataState =
+    data && typeof data === 'object' && 'state' in (data as Record<string, unknown>)
+      ? (data as Record<string, unknown>).state
+      : undefined;
   return {
     mode: tracker.id,
     sessionId,
-    status: tracker.state(),
-    data: tracker.snapshot(),
+    status: typeof dataState === 'string' ? dataState : tracker.state(),
+    data,
     updatedAt: now,
   };
 }

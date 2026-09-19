@@ -4,12 +4,13 @@
  * fixed PreFinalize priority order (premature-stop → tool-intent → todo-gate).
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { createBuiltinLoopHooks, buildTodoGateInjection } from '../builtin.js';
 import { LoopHookBus, type LoopHookRegistration } from '../loop.js';
 import type { LoopHookEffect } from '../loop.js';
 import type { Task } from '../../session/task-store.js';
 import type { Message } from '../../types.js';
+import { goalModeTracker } from '../../modes/goal/goal-tracker.js';
 
 // ─── fixtures ──────────────────────────────────────────────────────────────
 
@@ -274,10 +275,12 @@ describe('disabled loop hooks', () => {
       disabled,
     });
 
-  it('registers all four builtin hooks by default', () => {
+  it('registers all builtin hooks by default (plan 552 adds the goal pair)', () => {
     const ids = make().map((r) => r.id).sort();
     expect(ids).toEqual([
       'builtin.dead-loop-nudge',
+      'builtin.goal-continuation',
+      'builtin.goal-reply-fingerprint',
       'builtin.premature-stop',
       'builtin.todo-gate',
       'builtin.tool-intent',
@@ -301,5 +304,136 @@ describe('disabled loop hooks', () => {
     })
       .map((r) => r.id);
     expect(ids).not.toContain('builtin.todo-gate');
+  });
+});
+
+// ─── goal reply-fingerprint + auto-continuation (plan 552) ─────────────────
+
+const REPLY = 'The work is finished, nothing left to do.';
+
+function startGoalFor(sessionId: string, objective = 'Drive the objective'): void {
+  goalModeTracker.transition({ type: 'clear' });
+  goalModeTracker.transition({ type: 'start', objective }, sessionId);
+}
+
+describe('builtin goal reply-fingerprint hook (plan 552)', () => {
+  beforeEach(() => {
+    goalModeTracker.transition({ type: 'clear' });
+  });
+
+  it('first identical reply is silent, second nudges, third auto-pauses', async () => {
+    startGoalFor('s1');
+    const f = makeFixture();
+    const messages = [assistantMsg(REPLY)];
+    // 1st identical reply: the breaker is silent, but the continuation hook
+    // (priority 12, runs after) still vetoes the natural stop.
+    const first = await finalize(f, { messages, sessionId: 's1' });
+    expect(first[0]).toMatchObject({ source: 'goal_continuation' });
+    // 2nd identical reply: the nudge veto (priority 11) short-circuits the bus.
+    const nudge = await finalize(f, { messages, sessionId: 's1' });
+    expect(nudge).toHaveLength(1);
+    expect(nudge[0]).toMatchObject({ type: 'block_finalize', source: 'goal_reply_fingerprint' });
+    // 3rd identical reply: the breaker pauses the goal.
+    const pause = await finalize(f, { messages, sessionId: 's1' });
+    expect(pause).toHaveLength(1);
+    expect(pause[0]).toMatchObject({ type: 'block_finalize', source: 'goal_reply_fingerprint' });
+    expect(goalModeTracker.state('s1')).toBe('no_progress_paused');
+    expect(goalModeTracker.pauseReason('s1')).toBe('no_progress');
+    // Paused goal is no longer active — nothing vetoes the next stop.
+    expect(await finalize(f, { messages, sessionId: 's1' })).toEqual([]);
+  });
+
+  it('stays silent when the goal belongs to another session', async () => {
+    startGoalFor('session-owner');
+    const f = makeFixture();
+    expect(
+      await finalize(f, { messages: [assistantMsg(REPLY)], sessionId: 's1' }),
+    ).toEqual([]);
+    expect(goalModeTracker.state('session-owner')).toBe('active');
+  });
+
+  it('a changed reply resets the streak instead of escalating', async () => {
+    startGoalFor('s1');
+    const f = makeFixture();
+    await finalize(f, { messages: [assistantMsg(REPLY)], sessionId: 's1' });
+    await finalize(f, { messages: [assistantMsg(REPLY)], sessionId: 's1' });
+    // A different reply resets the streak — no fingerprint veto (the
+    // continuation hook may still veto on its own, so filter by source).
+    const effects = await finalize(f, {
+      messages: [assistantMsg('A completely different summary.')],
+      sessionId: 's1',
+    });
+    expect(
+      effects.some((e) => (e as { source?: string }).source === 'goal_reply_fingerprint'),
+    ).toBe(false);
+  });
+});
+
+describe('builtin goal continuation hook (plan 552)', () => {
+  beforeEach(() => {
+    goalModeTracker.transition({ type: 'clear' });
+  });
+
+  it('vetoes finalize while the goal is active', async () => {
+    startGoalFor('s1');
+    const f = makeFixture();
+    const effects = await finalize(f, { messages: [assistantMsg('The fix is complete and verified.')], sessionId: 's1' });
+    expect(effects).toHaveLength(1);
+    expect(effects[0]).toMatchObject({ type: 'block_finalize', source: 'goal_continuation' });
+    const effect = effects[0] as { injection: string };
+    expect(effect.injection).toContain('Drive the objective');
+    expect(effect.injection).toContain('NOT a new user question');
+  });
+
+  it('stops vetoing once the goal completes', async () => {
+    startGoalFor('s1');
+    goalModeTracker.transition({ type: 'complete' }, 's1');
+    const f = makeFixture();
+    expect(
+      await finalize(f, { messages: [assistantMsg('Done.')], sessionId: 's1' }),
+    ).toEqual([]);
+  });
+
+  it('does not veto another session\'s active goal', async () => {
+    startGoalFor('session-owner');
+    const f = makeFixture();
+    expect(
+      await finalize(f, { messages: [assistantMsg('Done.')], sessionId: 's1' }),
+    ).toEqual([]);
+  });
+
+  it('honors the maxContinues cap per run', async () => {
+    startGoalFor('s1');
+    const registrations = createBuiltinLoopHooks({
+      sessionId: 's1',
+      todoGateEnabled: false,
+      antiDeadLoop: { enabled: true, nudgeAt: 3, hardNudgeAt: 6 },
+      toolIntentNudgeMax: 0,
+      goalContinuation: { enabled: true, maxContinues: 1 },
+    });
+    const bus = new LoopHookBus();
+    for (const registration of registrations) bus.register(registration);
+    const dispatch = () =>
+      bus.dispatch('PreFinalize', {
+        sessionId: 's1',
+        turnCount: 1,
+        seqIndex: 1,
+        messages: [assistantMsg('Progress note.')],
+      });
+    const first = await dispatch();
+    expect(first[0]).toMatchObject({ source: 'goal_continuation' });
+    const second = await dispatch();
+    expect(second.find((e) => e.type === 'block_finalize' && (e as { source?: string }).source === 'goal_continuation')).toBeUndefined();
+  });
+
+  it('is not registered when auto-continuation is disabled', () => {
+    const registrations = createBuiltinLoopHooks({
+      sessionId: 's1',
+      todoGateEnabled: false,
+      antiDeadLoop: { enabled: true, nudgeAt: 3, hardNudgeAt: 6 },
+      toolIntentNudgeMax: 2,
+      goalContinuation: { enabled: false, maxContinues: 0 },
+    });
+    expect(registrations.some((r) => r.id === 'builtin.goal-continuation')).toBe(false);
   });
 });

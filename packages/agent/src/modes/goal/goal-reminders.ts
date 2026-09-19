@@ -26,17 +26,19 @@ export const GOAL_CONTINUATION_SENTINEL =
 /**
  * Render the `<goal-state>` block. Mirrors grok's `GoalStateBlock`:
  * objective + coarse status + token high-water + elapsed time.
- * Pure — reads only the tracker's public accessors.
+ * Pure — reads only the tracker's public accessors, scoped to `sessionId`
+ * (plan 552: the tracker singleton is shared per worker process).
  */
-export function renderGoalState(tracker: GoalTracker): string {
-  const elapsedMs = tracker.createdAt() > 0 ? Math.max(0, Date.now() - tracker.createdAt()) : 0;
-  const budget = tracker.tokenBudget();
-  const tokens = tracker.tokensUsedHighWater();
+export function renderGoalState(tracker: GoalTracker, sessionId?: string): string {
+  const createdAt = tracker.createdAt(sessionId);
+  const elapsedMs = createdAt > 0 ? Math.max(0, Date.now() - createdAt) : 0;
+  const budget = tracker.tokenBudget(sessionId);
+  const tokens = tracker.tokensUsedHighWater(sessionId);
   const budgetText = budget > 0 ? `${tokens}/${budget}` : `${tokens}`;
   return [
     '<goal-state>',
-    `Objective: ${tracker.objective()}`,
-    `Status: ${tracker.state()} | Tokens: ${budgetText} | Elapsed: ${Math.floor(elapsedMs / 1000)}s`,
+    `Objective: ${tracker.objective(sessionId)}`,
+    `Status: ${tracker.state(sessionId)} | Tokens: ${budgetText} | Elapsed: ${Math.floor(elapsedMs / 1000)}s`,
     '</goal-state>',
   ].join('\n');
 }
@@ -53,16 +55,16 @@ export function renderGoalState(tracker: GoalTracker): string {
  *     unchecked item;
  *  4. working guidance.
  */
-export function renderGoalContinuation(tracker: GoalTracker): string {
+export function renderGoalContinuation(tracker: GoalTracker, sessionId?: string): string {
   const parts: string[] = [];
-  parts.push(renderGoalState(tracker));
+  parts.push(renderGoalState(tracker, sessionId));
   parts.push('');
   parts.push(GOAL_CONTINUATION_SENTINEL);
 
-  const nextStep = mineNextStep(tracker.planFile());
+  const nextStep = mineNextStep(tracker.planFile(sessionId));
   parts.push(nextStep ?? 'Continue working toward the objective; keep your todo list current.');
 
-  const gaps = tracker.gapsSummary();
+  const gaps = tracker.gapsSummary(sessionId);
   if (gaps && gaps.trim().length > 0) {
     parts.push('');
     parts.push('Verifier gaps to address (these outrank the plan checklist):');

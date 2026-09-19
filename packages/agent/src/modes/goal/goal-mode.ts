@@ -36,9 +36,12 @@ import { getGoalConfig } from './goal-config.js';
  * profile prompt.
  */
 function buildGoalPrefix(ctx: ModeModifierContext): string {
-  void ctx;
-  const objective = goalModeTracker.objective();
-  const state = goalModeTracker.state();
+  // Session-scoped reads (plan 552): the tracker singleton is shared per
+  // worker process; a bystander session must not render another session's
+  // objective into its prompt.
+  const sessionId = ctx.sessionId;
+  const objective = goalModeTracker.objective(sessionId);
+  const state = goalModeTracker.state(sessionId);
   const objectiveLine =
     objective && state !== 'idle'
       ? `\n\nCurrent objective: ${objective}`

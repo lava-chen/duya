@@ -1,11 +1,12 @@
 /**
- * GoalStatusChip — plan 420.
+ * GoalStatusChip — plan 420, extended in plan 552.
  *
  * Compact chip shown above the chat composer while a goal is active.
  * Driven by `goal_updated` SSE events; on session cold-load seeds from
  * the persisted goal snapshot via `modeState.get(sessionId, 'goal')`.
- * The chip exposes an `open` state reserved for the upcoming panel; the
- * panel itself is not rendered yet.
+ * The chip shows the lifecycle label (with pause reason / verification
+ * wait parity to the minimax TUI banner) plus the turn counter and token
+ * usage; clicking opens the timeline panel.
  */
 
 import { useEffect, useState } from 'react';
@@ -29,6 +30,11 @@ const STATE_LABELS: Record<string, string> = {
   budget_limited: 'Budget limited',
   complete: 'Complete',
   idle: 'Idle',
+};
+
+/** minimax banner parity: an active wait replaces the status label. */
+const WAIT_LABELS: Record<string, string> = {
+  verification: 'Verifying',
 };
 
 export function GoalStatusChip({ sessionId, onSendCommand }: GoalStatusChipProps) {
@@ -75,7 +81,13 @@ export function GoalStatusChip({ sessionId, onSendCommand }: GoalStatusChipProps
             consecutiveNotAchieved?: number;
             gapsSummary?: string;
             pauseMessage?: string;
-            history?: ReadonlyArray<{ at: number; event: string; detail?: string }>;
+            pauseReason?: string;
+            totalWorkerRounds?: number;
+            totalVerifyRounds?: number;
+            elapsedMs?: number;
+            createdAt?: number;
+            planFile?: string;
+            history?: ReadonlyArray<{ at: number; event: string; detail?: string; reason?: string }>;
           };
         };
         const snap = parsed?.data;
@@ -89,6 +101,12 @@ export function GoalStatusChip({ sessionId, onSendCommand }: GoalStatusChipProps
           consecutiveNotAchieved: snap.consecutiveNotAchieved ?? 0,
           gapsSummary: snap.gapsSummary,
           pauseMessage: snap.pauseMessage,
+          pauseReason: snap.pauseReason,
+          totalWorkerRounds: snap.totalWorkerRounds ?? 0,
+          totalVerifyRounds: snap.totalVerifyRounds ?? 0,
+          elapsedMs: snap.elapsedMs ?? 0,
+          createdAt: snap.createdAt ?? 0,
+          planFile: snap.planFile,
           history: snap.history ?? [],
         });
       })
@@ -103,7 +121,10 @@ export function GoalStatusChip({ sessionId, onSendCommand }: GoalStatusChipProps
   // Idle / cleared goals don't render a chip.
   if (goal.state === 'idle') return null;
 
-  const label = STATE_LABELS[goal.state] ?? goal.state;
+  let label = STATE_LABELS[goal.state] ?? goal.state;
+  if (goal.state === 'active' && goal.executionWait && WAIT_LABELS[goal.executionWait]) {
+    label = WAIT_LABELS[goal.executionWait];
+  }
   const tokens = goal.tokenBudget > 0
     ? `${goal.tokensUsed}/${goal.tokenBudget}`
     : `${goal.tokensUsed}`;
@@ -121,7 +142,9 @@ export function GoalStatusChip({ sessionId, onSendCommand }: GoalStatusChipProps
       >
         <span className="goal-chip-dot" data-state={goal.state} />
         <span className="goal-chip-label">{label}</span>
-        <span className="goal-chip-tokens">{tokens}</span>
+        <span className="goal-chip-tokens">
+          Turn {goal.totalWorkerRounds ?? 0} · {tokens}
+        </span>
       </button>
       {open && (
         <GoalStatusPanel goal={goal} onClose={() => setOpen(false)} onSendCommand={onSendCommand} />

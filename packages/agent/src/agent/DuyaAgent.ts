@@ -29,6 +29,7 @@ import type {
   AppState,
 } from '../types.js';
 import { asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile, PromptsRegistry, resolvePromptSystemName } from '../prompts/index.js';
+import { handleGoalCommand, isGoalControlCommand } from '../modes/goal/goal-commands.js';
 import type { PromptSystem } from '../prompts/index.js';
 import {
   createBotPromptAssembly,
@@ -93,7 +94,7 @@ import { readConfigAgents, toAgentProfile } from '../agent-profile/config-agents
 import { parseAgentMentions, buildMentionedAgentsContext } from './dm/index.js';
 import type { AgentProfile } from '../agent-profile/types.js';
 import { isToolVisible, type ToolVisibilityConstraints } from '../agent-profile/ToolFilter.js';
-import { mailboxDb, pluginDb } from '../ipc/db-client.js';
+import { mailboxDb, modeStateDb, pluginDb } from '../ipc/db-client.js';
 import { MCPManager } from '../mcp/index.js';
 import { buildMCPCapabilityCatalog } from '../mcp/capability-catalog.js';
 import type { MailboxRow } from '../session/db.js';
@@ -890,6 +891,19 @@ export class duyaAgent implements AgentRuntime {
     // hot-reload on the next run. Fail-open: a throwing/failing hook never
     // breaks the run (each dispatch is individually wrapped below).
     const promptText = typeof prompt === 'string' ? prompt : '';
+    // Plan 552: deterministic /goal control commands (status/pause/resume/
+    // clear) never reach the LLM — the tracker is mutated directly and the
+    // turn is answered synthetically. `/goal <objective>` (start) still
+    // falls through so the model calls goal_start and begins working.
+    if (promptText.startsWith('/goal') && isGoalControlCommand(promptText)) {
+      const goalResult = await handleGoalCommand(promptText, {
+        sessionId: turnContext.sessionId ?? undefined,
+        workingDirectory: turnContext.workingDirectory ?? undefined,
+      });
+      yield { type: 'text', data: goalResult.reply };
+      yield { type: 'done', reason: 'completed' };
+      return;
+    }
     // Plan 437: build a self-referential emitter so the runner can fire
     // `agent_progress` SSE events with `type: 'hook_invoked'`. The
     // emitter queues events into a buffer that's flushed alongside the
@@ -1341,6 +1355,24 @@ export class duyaAgent implements AgentRuntime {
     for (const tracker of modeTrackerEngine.list()) {
       if (tracker.id === 'plan-task' && planModeTracker.state() === 'active') {
         activeTrackerIds.add(tracker.id);
+      }
+    }
+    // Plan 552: persisted tracker state is authoritative for goal mode —
+    // a goal started in a previous run (or before a restart) re-enters the
+    // active set from its `mode_state_snapshots` row even when the frontend
+    // did not re-select the mode, so continuation reminders, budget
+    // cut-off and the auto-resume path all keep working across sessions.
+    if (!activeTrackerIds.has('goal') && turnContext.sessionId) {
+      try {
+        const goalRow = await modeStateDb.get(turnContext.sessionId, 'goal');
+        if (goalRow?.snapshotJson) {
+          const parsed = JSON.parse(goalRow.snapshotJson) as { status?: string };
+          if (parsed?.status && parsed.status !== 'idle') {
+            activeTrackerIds.add('goal');
+          }
+        }
+      } catch {
+        // DB/IPC hiccup — degrade to mode-selection-only scoping.
       }
     }
     this.modeCoordinator =

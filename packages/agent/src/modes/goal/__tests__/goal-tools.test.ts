@@ -9,7 +9,12 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { getGoalTools, UPDATE_GOAL_TOOL_NAME, GOAL_START_TOOL_NAME } from '../goal-tools.js';
+import {
+  getGoalTools,
+  UPDATE_GOAL_TOOL_NAME,
+  GOAL_START_TOOL_NAME,
+  GET_GOAL_TOOL_NAME,
+} from '../goal-tools.js';
 import { goalModeTracker } from '../goal-tracker.js';
 
 function execute(input: Record<string, unknown>) {
@@ -33,9 +38,13 @@ describe('update_goal tool', () => {
     goalModeTracker.transition({ type: 'start', objective: 'Fix the pipeline' });
   });
 
-  it('exposes goal_start and update_goal tool registrations', () => {
+  it('exposes goal_start, update_goal and get_goal tool registrations', () => {
     const tools = getGoalTools();
-    expect(tools.map((t) => t.definition.name)).toEqual([GOAL_START_TOOL_NAME, UPDATE_GOAL_TOOL_NAME]);
+    expect(tools.map((t) => t.definition.name)).toEqual([
+      GOAL_START_TOOL_NAME,
+      UPDATE_GOAL_TOOL_NAME,
+      GET_GOAL_TOOL_NAME,
+    ]);
     expect(tools[1]!.definition.input_schema).toMatchObject({
       type: 'object',
       required: ['completed'],
@@ -44,6 +53,7 @@ describe('update_goal tool', () => {
       type: 'object',
       required: ['objective'],
     });
+    expect(tools[2]!.definition.input_schema).toMatchObject({ type: 'object' });
   });
 
   it('rejects completed=true without a tool-use context (no stranded verifying)', async () => {
@@ -115,6 +125,8 @@ describe('update_goal tool', () => {
     expect(parsed.state).toBe('user_paused');
     expect(goalModeTracker.state()).toBe('user_paused');
     expect(goalModeTracker.pauseMessage()).toBe('missing API key');
+    // Plan 552: model-reported blockers carry the closed-catalog reason.
+    expect(goalModeTracker.pauseReason()).toBe('blocked_worker');
   });
 
   it('status-only updates leave the state unchanged', async () => {
@@ -192,5 +204,98 @@ describe('goal_start tool', () => {
     const r = await executeStart({ objective: '' });
     expect(r.error).toBe(true);
     expect(goalModeTracker.state()).toBe('idle');
+  });
+});
+
+describe('get_goal tool (plan 552)', () => {
+  beforeEach(() => {
+    goalModeTracker.transition({ type: 'clear' });
+  });
+
+  function executeGet() {
+    const [, , getTool] = getGoalTools();
+    return getTool.executor.execute({});
+  }
+
+  it('returns goal: null when no goal is active', async () => {
+    const r = await executeGet();
+    const parsed = resultOf(r);
+    expect(parsed.goal).toBeNull();
+  });
+
+  it('returns the full goal payload when a goal is active', async () => {
+    goalModeTracker.transition({ type: 'start', objective: 'Ship it', budget: 1000 });
+    goalModeTracker.recordWorkerRound();
+    goalModeTracker.recordWorkerRound();
+    const r = await executeGet();
+    const parsed = resultOf(r);
+    const goal = parsed.goal as Record<string, unknown>;
+    expect(goal.state).toBe('active');
+    expect(goal.objective).toBe('Ship it');
+    expect(goal.totalWorkerRounds).toBe(2);
+    expect(goal.tokenBudget).toBe(1000);
+    expect(Array.isArray(goal.history)).toBe(true);
+  });
+});
+
+describe('goal session ownership (plan 552)', () => {
+  beforeEach(() => {
+    goalModeTracker.transition({ type: 'clear' });
+  });
+
+  it('update_goal from another session is rejected as no_goal', async () => {
+    goalModeTracker.transition({ type: 'start', objective: 'Session A goal' }, 'session-a');
+    const [, updateTool] = getGoalTools();
+    const r = await updateTool.executor.execute(
+      { completed: false, message: 'peeking' },
+      undefined,
+      { options: { sessionId: 'session-b', tools: [] } } as never,
+    );
+    const parsed = resultOf(r);
+    expect(parsed.error_code).toBe('goal_update_no_goal');
+    // The owner still sees the goal untouched.
+    expect(goalModeTracker.state('session-a')).toBe('active');
+  });
+
+  it('goal_start from another session cannot clobber the owner goal', async () => {
+    goalModeTracker.transition({ type: 'start', objective: 'Session A goal' }, 'session-a');
+    const [startTool] = getGoalTools();
+    const r = await startTool.executor.execute(
+      { objective: 'Session B goal' },
+      undefined,
+      { options: { sessionId: 'session-b', tools: [] } } as never,
+    );
+    const parsed = resultOf(r);
+    expect(parsed.error_code).toBe('goal_update_session_mismatch');
+    expect(goalModeTracker.objective('session-a')).toBe('Session A goal');
+  });
+
+  it('a bystander session reads idle state and snapshots idle data', () => {
+    goalModeTracker.transition({ type: 'start', objective: 'Session A goal' }, 'session-a');
+    expect(goalModeTracker.state('session-b')).toBe('idle');
+    expect(goalModeTracker.snapshot('session-b').state).toBe('idle');
+    expect(goalModeTracker.snapshot('session-a').objective).toBe('Session A goal');
+  });
+
+  it('resume from another session is a no-op', async () => {
+    goalModeTracker.transition({ type: 'start', objective: 'A' }, 'session-a');
+    goalModeTracker.transition({ type: 'pause', reason: 'user_requested' }, 'session-a');
+    goalModeTracker.transition({ type: 'resume' }, 'session-b');
+    expect(goalModeTracker.state('session-a')).toBe('user_paused');
+  });
+});
+
+describe('verification policy settle (plan 552)', () => {
+  beforeEach(() => {
+    goalModeTracker.transition({ type: 'clear' });
+  });
+
+  it('verification policy matrix picks the right backend (decision is pure)', async () => {
+    const { shouldRunVerificationPanel } = await import('../goal-evaluator.js');
+    expect(shouldRunVerificationPanel('auto', 'ollama')).toBe(false);
+    expect(shouldRunVerificationPanel('auto', 'anthropic')).toBe(true);
+    expect(shouldRunVerificationPanel('auto', undefined)).toBe(true);
+    expect(shouldRunVerificationPanel('panel', 'ollama')).toBe(true);
+    expect(shouldRunVerificationPanel('none', 'anthropic')).toBe(false);
   });
 });

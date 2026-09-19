@@ -576,6 +576,77 @@
   color: var(--muted);
   white-space: pre-wrap;
 }
+/* Plan 552 — status reason + live meta row (Turn N · Verify M · elapsed). */
+.goal-panel-reason {
+  color: var(--muted);
+  font-size: 11px;
+}
+.goal-panel-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary, var(--muted));
+  font-variant-numeric: tabular-nums;
+}
+.goal-panel-meta-sep {
+  color: var(--muted);
+}
+.goal-panel-meta-elapsed {
+  font-variant-numeric: tabular-nums;
+}
+/* Vertical event timeline (minimax TUI goal banner parity): a rail of
+   dots connected by a hairline, event label + relative time per row. */
+.goal-panel-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 180px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.goal-panel-tl-item {
+  display: flex;
+  gap: 8px;
+  min-height: 18px;
+}
+.goal-panel-tl-rail {
+  flex: none;
+  width: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.goal-panel-tl-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  opacity: 0.85;
+  margin-top: 4px;
+}
+.goal-panel-tl-line {
+  flex: 1;
+  width: 1px;
+  background: var(--border);
+  min-height: 6px;
+}
+.goal-panel-tl-body {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex: 1;
+  padding-bottom: 4px;
+}
+.goal-panel-tl-event {
+  color: var(--text-secondary, var(--muted));
+  overflow-wrap: anywhere;
+}
+.goal-panel-tl-time {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
 .goal-panel-action-row {
   display: flex;
   gap: 6px;

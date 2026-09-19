@@ -1,5 +1,6 @@
 /**
- * GoalTracker — 10-state goal mode state machine (plan 411 Phase 1).
+ * GoalTracker — 10-state goal mode state machine (plan 411 Phase 1,
+ * session-aware + pause reasons + reply breaker per plan 552).
  *
  * A TypeScript port of grok's `GoalTracker` (`goal_tracker.rs`), adapted
  * to duya's ModeTracker contract (plan 413). It is the single
@@ -14,7 +15,7 @@
  *                         independently verifies it (Phase 2 evaluator).
  *  - `user_paused`      : explicit user pause.
  *  - `backoff_paused`   : cap/rate-limit hit — automatic pause.
- *  - `no_progress_paused`: gap fingerprint shows no progress — auto pause.
+ *  - `no_progress_paused`: breaker fired — auto pause.
  *  - `infra_paused`     : turn-level infrastructure error — auto pause.
  *  - `blocked`          : verification verdict — cannot proceed without
  *                         user input.
@@ -24,8 +25,23 @@
  * Transitions are pure (no async I/O), idempotent, and return whether a
  * transition actually happened so the coordinator can decide whether to
  * persist. Snapshot restore folds the transient `verifying` and self-driving
- * `active` states to `user_paused` (grok safety model) so a restart never
- * resurrects an unsupervised goal.
+ * `active` states to `user_paused` (grok safety model, tagged with the
+ * `restart` pause reason) so a restart never silently resurrects an
+ * unsupervised goal; the coordinator re-resumes it when `[goal]
+ * auto_resume` is on (plan 552).
+ *
+ * Plan 552 additions:
+ *  - `pauseReason` — closed `GOAL_PAUSE_REASONS` catalog carried by pause /
+ *    stall / infra events, surfaced through snapshots and `goal_updated`
+ *    events so the UI can show WHY a goal stopped (minimax statusReason).
+ *  - `boundSession` — the tracker is a process singleton shared by every
+ *    session in the worker; starting a goal records the owning session and
+ *    every session-aware accessor/mutator treats a mismatched session as
+ *    `idle` (no cross-session contamination).
+ *  - reply fingerprint breaker — `recordReply` tracks consecutive
+ *    identical final replies (normalized); the builtin PreFinalize hook
+ *    maps the decision to a nudge veto or an automatic no-progress pause
+ *    without ever running the verifier.
  */
 
 import type { ModeTracker } from '../engine/tracker.js';
@@ -47,6 +63,28 @@ export type GoalState =
 /** Coarse-grained stage, orthogonal to state (Idle / Planning / Executing). */
 export type GoalPhase = 'idle' | 'planning' | 'executing';
 
+/**
+ * Closed catalog of pause reasons (plan 552 — minimax `statusReason`
+ * parity). Orthogonal to the coarse state: the state says the goal is not
+ * running, the reason says WHY, and the UI renders it verbatim. `budget`
+ * needs no reason (the `budget_limited` state already says it).
+ */
+export const GOAL_PAUSE_REASONS = [
+  'user_requested',
+  'blocked_worker',
+  'no_progress',
+  'no_progress_gaps',
+  'verifier_timeout',
+  'verifier_unavailable',
+  'backoff',
+  'infra',
+  'restart',
+] as const;
+
+export type GoalPauseReason = (typeof GOAL_PAUSE_REASONS)[number];
+
+const GOAL_PAUSE_REASON_SET = new Set<string>(GOAL_PAUSE_REASONS);
+
 /** One lifecycle event entry in the goal history log (cap 64 entries). */
 export interface GoalHistoryEntry {
   /** Epoch millis when the event happened. */
@@ -55,6 +93,8 @@ export interface GoalHistoryEntry {
   event: string;
   /** Optional human-readable detail (pause message, objective, gaps…). */
   detail?: string;
+  /** Structured pause reason, when the event is a pause-like transition. */
+  reason?: string;
 }
 
 /**
@@ -77,6 +117,8 @@ export interface GoalSnapshot {
   /** Lifecycle log, capped at 64 entries. */
   history: GoalHistoryEntry[];
   pauseMessage?: string;
+  /** Why the goal is currently paused (closed catalog). */
+  pauseReason?: string;
   gapsSummary?: string;
   gapFingerprint?: string;
   consecutiveNotAchieved: number;
@@ -88,21 +130,28 @@ export interface GoalSnapshot {
   lastStrategistFiredAt?: number;
   planFile?: string;
   changesBaselineCommit?: string;
+  /** Owning session (plan 552). Undefined for legacy snapshots / CLI runs. */
+  boundSession?: string;
+  /** Normalized final-reply fingerprint of the last breaker observation. */
+  replyFingerprint?: string | null;
+  /** Consecutive identical-reply repeats AFTER the first (minimax semantics). */
+  noProgressStreak: number;
 }
 
 /**
  * Events that drive goal transitions. `start`/`verdict` carry payloads;
- * the rest are plain signals. `transition` is idempotent — illegal or
- * no-op events return false without throwing.
+ * pause-like events carry an optional structured `reason` from the
+ * {@link GOAL_PAUSE_REASONS} catalog. `transition` is idempotent — illegal
+ * or no-op events return false without throwing.
  */
 export type GoalEvent =
   | { type: 'start'; objective: string; budget?: number }
   | { type: 'report_completed' }
-  | { type: 'verdict'; verdict: 'achieved' | 'not_achieved' | 'blocked' }
+  | { type: 'verdict'; verdict: 'achieved' | 'not_achieved' | 'blocked'; reason?: string }
   | { type: 'budget_limit' }
-  | { type: 'stall' }
-  | { type: 'infra_error' }
-  | { type: 'pause'; message?: string }
+  | { type: 'stall'; reason?: string }
+  | { type: 'infra_error'; reason?: string }
+  | { type: 'pause'; message?: string; reason?: string }
   | { type: 'resume'; budget?: number }
   | { type: 'complete' }
   | { type: 'clear' };
@@ -150,6 +199,7 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
   private verifyRounds = 0;
   private historyLog: GoalHistoryEntry[] = [];
   private goalPauseMessage?: string;
+  private goalPauseReason?: string;
   private goalGapsSummary?: string;
   private goalGapFingerprint?: string;
   private notAchievedStreak = 0;
@@ -158,49 +208,77 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
   private strategistFiredAt?: number;
   private goalPlanFile?: string;
   private goalBaselineCommit?: string;
+  private goalBoundSession?: string;
+  private goalReplyFingerprint?: string | null;
+  private goalNoProgressStreak = 0;
 
-  state(): GoalState {
-    return this.currentState;
+  /**
+   * Session view guard (plan 552): `sessionId` callers only see the goal
+   * when they own it. An unbound tracker (legacy snapshot / CLI run) is
+   * visible to everyone; a caller WITHOUT a session id is allowed through
+   * (tests, engine-internal calls) — every production call site passes the
+   * session id explicitly.
+   */
+  private sees(sessionId?: string): boolean {
+    if (!this.goalBoundSession) return true;
+    if (sessionId === undefined) return true;
+    return sessionId === this.goalBoundSession;
+  }
+
+  state(sessionId?: string): GoalState {
+    return this.sees(sessionId) ? this.currentState : 'idle';
   }
 
   /** Phase — coarse stage orthogonal to state. */
-  phase(): GoalPhase {
-    return this.currentPhase;
+  phase(sessionId?: string): GoalPhase {
+    return this.sees(sessionId) ? this.currentPhase : 'idle';
+  }
+
+  /** The session that started the active goal, when known. */
+  boundSession(): string | undefined {
+    return this.goalBoundSession;
   }
 
   /** Runtime tool gating is live while the goal is active or verifying (plan 411 §4.4b). */
-  canGateTools(): boolean {
-    return this.currentState === 'active' || this.currentState === 'verifying';
+  canGateTools(sessionId?: string): boolean {
+    const s = this.state(sessionId);
+    return s === 'active' || s === 'verifying';
   }
 
   /** A per-round continuation reminder is due while active (or verifying, awaiting the next round). */
-  shouldInjectReminder(): boolean {
-    return this.currentState === 'active' || this.currentState === 'verifying';
+  shouldInjectReminder(sessionId?: string): boolean {
+    const s = this.state(sessionId);
+    return s === 'active' || s === 'verifying';
   }
 
   /**
    * Transition table (plan 411 §2.4). Returns whether the state actually
    * changed; illegal/no-op events return false without throwing. Every
    * real migration is logged so the state machine is observable.
+   * Session-aware (plan 552): a session that does not own the goal is a
+   * no-op.
    */
-  transition(event: GoalEvent): boolean {
+  transition(event: GoalEvent, sessionId?: string): boolean {
+    if (!this.sees(sessionId)) return false;
     const before = this.currentState;
-    const changed = this.applyTransition(event);
+    const changed = this.applyTransition(event, sessionId);
     if (changed) {
       logger.info(`[Goal] state ${before} -> ${this.currentState}`, {
         event: event.type,
         objective: this.goalObjective || undefined,
         phase: this.currentPhase,
+        reason: this.goalPauseReason,
+        session: this.goalBoundSession,
       });
     }
     return changed;
   }
 
-  private applyTransition(event: GoalEvent): boolean {
+  private applyTransition(event: GoalEvent, sessionId?: string): boolean {
     switch (this.currentState) {
       case 'idle':
         if (event.type === 'start') {
-          return this.start(event.objective, event.budget);
+          return this.start(event.objective, event.budget, sessionId);
         }
         return false;
 
@@ -211,11 +289,12 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
           case 'budget_limit':
             return this.move('budget_limited', 'budget_limit');
           case 'stall':
-            return this.move('no_progress_paused', 'stall');
+            return this.stallPause(event.reason);
           case 'infra_error':
+            this.goalPauseReason = normalizeReason(event.reason) ?? 'infra';
             return this.move('infra_paused', 'infra_error');
           case 'pause':
-            return this.pause(event.message);
+            return this.pause(event.message, event.reason);
           case 'complete':
             return this.move('complete', 'complete');
           case 'clear':
@@ -237,11 +316,12 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
               this.move('active', 'verdict:not_achieved');
             } else {
               this.recordVerifyRound();
+              this.goalPauseReason = normalizeReason(event.reason);
               this.move('blocked', 'verdict:blocked');
             }
             return true;
           case 'pause':
-            return this.pause(event.message);
+            return this.pause(event.message, event.reason);
           case 'complete':
             return this.move('complete', 'complete');
           case 'clear':
@@ -264,15 +344,19 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
             // immediately re-pause on the same fingerprint. Budget carried over
             // unchanged; `budget_limited` resume (below) can raise it.
             this.stallCount = 0;
+            this.resetBreakersInternal();
+            this.goalPauseReason = undefined;
+            this.goalPauseMessage = undefined;
             return this.move('active', 'resume');
           case 'pause':
             // Already user_paused: idempotent no-op (message is refreshed
             // for convenience but no transition occurs).
             if (this.currentState === 'user_paused') {
               if (event.message) this.goalPauseMessage = event.message;
+              if (event.reason) this.goalPauseReason = normalizeReason(event.reason);
               return false;
             }
-            return this.pause(event.message);
+            return this.pause(event.message, event.reason);
           case 'complete':
             return this.move('complete', 'complete');
           case 'clear':
@@ -293,16 +377,19 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
           // next usage report — that is the correct defense; the user must
           // actually raise the budget to continue burning tokens.
           this.stallCount = 0;
+          this.resetBreakersInternal();
+          this.goalPauseReason = undefined;
+          this.goalPauseMessage = undefined;
           return this.move('active', 'resume');
         }
         if (event.type === 'clear') return this.clear();
-        if (event.type === 'start') return this.start(event.objective, event.budget);
+        if (event.type === 'start') return this.start(event.objective, event.budget, sessionId);
         return false;
 
       case 'complete':
         // Terminal — `clear` or a fresh `start`.
         if (event.type === 'clear') return this.clear();
-        if (event.type === 'start') return this.start(event.objective, event.budget);
+        if (event.type === 'start') return this.start(event.objective, event.budget, sessionId);
         return false;
 
       default:
@@ -310,7 +397,29 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
     }
   }
 
-  snapshot(): GoalSnapshot {
+  snapshot(sessionId?: string): GoalSnapshot {
+    if (!this.sees(sessionId)) {
+      // A non-owning session snapshots the idle state — persisting it would
+      // clobber the owner's row under that session's key, which is exactly
+      // the isolation the binding exists for.
+      return {
+        state: 'idle',
+        phase: 'idle',
+        objective: '',
+        tokenBudget: 0,
+        tokenBaseline: 0,
+        tokensUsedHighWater: 0,
+        elapsedMs: 0,
+        createdAt: 0,
+        totalWorkerRounds: 0,
+        totalVerifyRounds: 0,
+        history: [],
+        consecutiveNotAchieved: 0,
+        classifierRunsAttempted: 0,
+        classifierStallCount: 0,
+        noProgressStreak: 0,
+      };
+    }
     return {
       state: this.currentState,
       phase: this.currentPhase,
@@ -324,6 +433,7 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
       totalVerifyRounds: this.verifyRounds,
       history: [...this.historyLog],
       pauseMessage: this.goalPauseMessage,
+      pauseReason: this.goalPauseReason,
       gapsSummary: this.goalGapsSummary,
       gapFingerprint: this.goalGapFingerprint,
       consecutiveNotAchieved: this.notAchievedStreak,
@@ -332,17 +442,21 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
       lastStrategistFiredAt: this.strategistFiredAt,
       planFile: this.goalPlanFile,
       changesBaselineCommit: this.goalBaselineCommit,
+      boundSession: this.goalBoundSession,
+      replyFingerprint: this.goalReplyFingerprint ?? null,
+      noProgressStreak: this.goalNoProgressStreak,
     };
   }
 
   /**
    * Restore from a snapshot with grok `from_snapshot` fold semantics.
    *
-   * Safety model (grok goal_tracker.rs): a restart must NEVER resurrect a
-   * self-driving goal. `Active` and the transient `verifying` both fold to
-   * `user_paused` so the user explicitly resumes after a crash — the goal
-   * never auto-continues burning tokens unsupervised. Other paused / blocked
-   * / terminal states restore verbatim (they are durable decisions).
+   * Safety model (grok goal_tracker.rs): a restart must NEVER silently
+   * resurrect a self-driving goal. `Active` and the transient `verifying`
+   * both fold to `user_paused` with the `restart` pause reason so the user
+   * (or the coordinator, when `[goal] auto_resume` is on) explicitly
+   * resumes after a crash. Other paused / blocked / terminal states restore
+   * verbatim (they are durable decisions).
    *
    * Same-process guard: `coordinator.restore()` runs at the START of every
    * streamChat call, but this tracker is a process singleton whose in-memory
@@ -376,11 +490,15 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
     // Fold self-driving / in-flight states to a resumable pause (grok
     // from_snapshot): a restart cannot resume an in-flight verification
     // panel or an unsupervised active goal. Everything else is a durable
-    // user/terminal decision and restores verbatim.
-    const folded =
-      state === 'active' || state === 'verifying' ? 'user_paused' : state;
+    // user/terminal decision and restores verbatim. The fold carries the
+    // `restart` reason so the coordinator can auto-resume it (plan 552)
+    // and the UI can say "paused after restart".
+    const folded = state === 'active' || state === 'verifying' ? 'user_paused' : state;
     this.currentState = folded;
     this.currentPhase = this.currentState === 'idle' ? 'idle' : phase;
+    if (folded !== state) {
+      this.goalPauseReason = 'restart';
+    }
     this.goalObjective = typeof raw.objective === 'string' ? raw.objective : '';
     this.goalTokenBudget = numberOr(raw.tokenBudget, 0);
     this.goalTokenBaseline = numberOr(raw.tokenBaseline, 0);
@@ -396,78 +514,91 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
       ? raw.history.slice(-GOAL_HISTORY_CAP)
       : [];
     this.goalPauseMessage = strOr(raw.pauseMessage);
+    if (folded === state) this.goalPauseReason = strOr(raw.pauseReason);
     this.goalGapsSummary = strOr(raw.gapsSummary);
     this.goalGapFingerprint = strOr(raw.gapFingerprint);
     this.goalPlanFile = strOr(raw.planFile);
     this.goalBaselineCommit = strOr(raw.changesBaselineCommit);
+    this.goalBoundSession = strOr(raw.boundSession);
+    this.goalReplyFingerprint =
+      raw.replyFingerprint === null || raw.replyFingerprint === undefined
+        ? undefined
+        : String(raw.replyFingerprint);
+    this.goalNoProgressStreak = numberOr(raw.noProgressStreak, 0);
   }
 
   // ─── Read accessors (for the coordinator / update_goal tool) ───
+  // All session-aware: a non-owning session reads the idle defaults.
 
-  objective(): string {
-    return this.goalObjective;
+  objective(sessionId?: string): string {
+    return this.sees(sessionId) ? this.goalObjective : '';
   }
 
-  tokenBudget(): number {
-    return this.goalTokenBudget;
+  tokenBudget(sessionId?: string): number {
+    return this.sees(sessionId) ? this.goalTokenBudget : 0;
   }
 
-  tokensUsedHighWater(): number {
-    return this.goalTokensHighWater;
+  tokensUsedHighWater(sessionId?: string): number {
+    return this.sees(sessionId) ? this.goalTokensHighWater : 0;
   }
 
-  createdAt(): number {
-    return this.goalCreatedAt;
+  createdAt(sessionId?: string): number {
+    return this.sees(sessionId) ? this.goalCreatedAt : 0;
   }
 
-  totalWorkerRounds(): number {
-    return this.workerRounds;
+  totalWorkerRounds(sessionId?: string): number {
+    return this.sees(sessionId) ? this.workerRounds : 0;
   }
 
-  totalVerifyRounds(): number {
-    return this.verifyRounds;
+  totalVerifyRounds(sessionId?: string): number {
+    return this.sees(sessionId) ? this.verifyRounds : 0;
   }
 
-  consecutiveNotAchieved(): number {
-    return this.notAchievedStreak;
+  consecutiveNotAchieved(sessionId?: string): number {
+    return this.sees(sessionId) ? this.notAchievedStreak : 0;
   }
 
-  pauseMessage(): string | undefined {
-    return this.goalPauseMessage;
+  pauseMessage(sessionId?: string): string | undefined {
+    return this.sees(sessionId) ? this.goalPauseMessage : undefined;
   }
 
-  gapsSummary(): string | undefined {
-    return this.goalGapsSummary;
+  pauseReason(sessionId?: string): string | undefined {
+    return this.sees(sessionId) ? this.goalPauseReason : undefined;
   }
 
-  gapFingerprint(): string | undefined {
-    return this.goalGapFingerprint;
+  gapsSummary(sessionId?: string): string | undefined {
+    return this.sees(sessionId) ? this.goalGapsSummary : undefined;
   }
 
-  classifierRunsAttempted(): number {
-    return this.classifierRuns;
+  gapFingerprint(sessionId?: string): string | undefined {
+    return this.sees(sessionId) ? this.goalGapFingerprint : undefined;
   }
 
-  classifierStallCount(): number {
-    return this.stallCount;
+  classifierRunsAttempted(sessionId?: string): number {
+    return this.sees(sessionId) ? this.classifierRuns : 0;
   }
 
-  lastStrategistFiredAt(): number | undefined {
-    return this.strategistFiredAt;
+  classifierStallCount(sessionId?: string): number {
+    return this.sees(sessionId) ? this.stallCount : 0;
   }
 
-  planFile(): string | undefined {
-    return this.goalPlanFile;
+  lastStrategistFiredAt(sessionId?: string): number | undefined {
+    return this.sees(sessionId) ? this.strategistFiredAt : undefined;
   }
 
-  history(): GoalHistoryEntry[] {
-    return [...this.historyLog];
+  planFile(sessionId?: string): string | undefined {
+    return this.sees(sessionId) ? this.goalPlanFile : undefined;
+  }
+
+  history(sessionId?: string): GoalHistoryEntry[] {
+    return this.sees(sessionId) ? [...this.historyLog] : [];
   }
 
   // ─── Coordinator helpers (pure state updates, called by Phase 2+ wiring) ───
 
   /** Record a worker round; advances planning → executing on the first round. */
-  recordWorkerRound(): void {
+  recordWorkerRound(sessionId?: string): void {
+    if (!this.sees(sessionId)) return;
     this.workerRounds++;
     if (this.currentPhase === 'planning') {
       this.currentPhase = 'executing';
@@ -480,7 +611,8 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
   }
 
   /** Update the token high-water mark. Returns true when over budget. */
-  updateTokenUsage(used: number): boolean {
+  updateTokenUsage(used: number, sessionId?: string): boolean {
+    if (!this.sees(sessionId)) return false;
     if (used > this.goalTokensHighWater) {
       this.goalTokensHighWater = used;
     }
@@ -494,7 +626,8 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
    * coming back → likely whack-a-mole). A changed fingerprint resets
    * the stall counter. Returns the updated stall count.
    */
-  setGaps(summary: string, fingerprint?: string): number {
+  setGaps(summary: string, fingerprint?: string, sessionId?: string): number {
+    if (!this.sees(sessionId)) return this.stallCount;
     this.classifierRuns++;
     this.goalGapsSummary = summary;
     if (fingerprint !== undefined) {
@@ -508,28 +641,73 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
     return this.stallCount;
   }
 
+  /**
+   * Reply fingerprint breaker (plan 552 — minimax `replyFingerprint`
+   * parity). Feeds the turn-final assistant text; consecutive identical
+   * normalized replies raise `noProgressStreak` (streak counts repeats
+   * AFTER the first, so occurrences = streak + 1). Decision:
+   *  - streak ≥ 2 (3rd identical reply) → `'pause'`
+   *  - streak === 1 (2nd identical reply) → `'nudge'`
+   *  - otherwise → `'none'`
+   *
+   * An empty reply never writes a fingerprint and never clears the streak
+   * (an observation gap must not reset the breaker), mirroring minimax
+   * `store-breaker.ts`.
+   */
+  recordReply(text: string, sessionId?: string): 'none' | 'nudge' | 'pause' {
+    if (!this.sees(sessionId)) return 'none';
+    const normalized = (text ?? '').trim().replace(/\s+/g, ' ').slice(0, 4000);
+    if (!normalized) return 'none';
+    if (this.goalReplyFingerprint && normalized === this.goalReplyFingerprint) {
+      this.goalNoProgressStreak++;
+    } else {
+      this.goalNoProgressStreak = 0;
+      this.goalReplyFingerprint = normalized;
+    }
+    if (this.goalNoProgressStreak >= 2) return 'pause';
+    if (this.goalNoProgressStreak === 1) return 'nudge';
+    return 'none';
+  }
+
+  /** Clear the reply breaker (fresh signal after a user decision / restart). */
+  resetBreakers(sessionId?: string): void {
+    if (!this.sees(sessionId)) return;
+    this.resetBreakersInternal();
+  }
+
+  private resetBreakersInternal(): void {
+    this.goalReplyFingerprint = undefined;
+    this.goalNoProgressStreak = 0;
+  }
+
   /** Mark a strategist run (throttled by `strategistEvery` in the evaluator). */
-  recordStrategistFired(): void {
+  recordStrategistFired(sessionId?: string): void {
+    if (!this.sees(sessionId)) return;
     this.strategistFiredAt = Date.now();
   }
 
   /** Pin the plan file the goal is executing against. */
-  setPlanFile(path: string): void {
+  setPlanFile(path: string, sessionId?: string): void {
+    if (!this.sees(sessionId)) return;
     this.goalPlanFile = path;
   }
 
   /** Pin the git baseline commit captured at goal start (verification diff base). */
-  setBaselineCommit(commit: string): void {
+  setBaselineCommit(commit: string, sessionId?: string): void {
+    if (!this.sees(sessionId)) return;
     this.goalBaselineCommit = commit;
   }
 
   // ─── Private transition helpers ───
 
-  private start(objective: string, budget?: number): boolean {
+  private start(objective: string, budget?: number, sessionId?: string): boolean {
     const trimmed = typeof objective === 'string' ? objective.trim() : '';
     if (!trimmed) return false;
     this.currentState = 'active';
     this.currentPhase = 'planning';
+    // The starting session becomes the owner (plan 552). A sessionless
+    // caller (CLI scratch / tests) leaves any previous binding untouched.
+    if (sessionId) this.goalBoundSession = sessionId;
     this.goalObjective = trimmed;
     this.goalTokenBudget = typeof budget === 'number' && budget > 0 ? budget : 0;
     this.goalTokenBaseline = 0;
@@ -542,21 +720,30 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
     this.stallCount = 0;
     this.strategistFiredAt = undefined;
     this.goalPauseMessage = undefined;
+    this.goalPauseReason = undefined;
     this.goalGapsSummary = undefined;
     this.goalGapFingerprint = undefined;
     this.goalPlanFile = undefined;
     this.goalBaselineCommit = undefined;
+    this.resetBreakersInternal();
     this.pushHistory('start', trimmed);
     return true;
   }
 
   /** Enter `user_paused`, recording the human-readable reason. */
-  private pause(message?: string): boolean {
+  private pause(message?: string, reason?: string): boolean {
     if (this.currentState === 'user_paused') return false;
     this.currentState = 'user_paused';
     this.goalPauseMessage = typeof message === 'string' ? message : undefined;
-    this.pushHistory('pause', message);
+    this.goalPauseReason = normalizeReason(reason) ?? 'user_requested';
+    this.pushHistory('pause', this.goalPauseMessage, this.goalPauseReason);
     return true;
+  }
+
+  /** Enter `no_progress_paused` (breaker / stall), tagging the reason. */
+  private stallPause(reason?: string): boolean {
+    this.goalPauseReason = normalizeReason(reason) ?? 'no_progress_gaps';
+    return this.move('no_progress_paused', 'stall');
   }
 
   private clear(): boolean {
@@ -575,10 +762,13 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
     this.stallCount = 0;
     this.strategistFiredAt = undefined;
     this.goalPauseMessage = undefined;
+    this.goalPauseReason = undefined;
     this.goalGapsSummary = undefined;
     this.goalGapFingerprint = undefined;
     this.goalPlanFile = undefined;
     this.goalBaselineCommit = undefined;
+    this.goalBoundSession = undefined;
+    this.resetBreakersInternal();
     this.historyLog = [];
     return true;
   }
@@ -587,12 +777,12 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
   private move(next: GoalState, eventLabel: string): boolean {
     if (next === this.currentState) return false;
     this.currentState = next;
-    this.pushHistory(eventLabel);
+    this.pushHistory(eventLabel, undefined, this.goalPauseReason);
     return true;
   }
 
-  private pushHistory(event: string, detail?: string): void {
-    this.historyLog.push({ at: Date.now(), event, detail });
+  private pushHistory(event: string, detail?: string, reason?: string): void {
+    this.historyLog.push({ at: Date.now(), event, detail, ...(reason ? { reason } : {}) });
     if (this.historyLog.length > GOAL_HISTORY_CAP) {
       this.historyLog.splice(0, this.historyLog.length - GOAL_HISTORY_CAP);
     }
@@ -608,4 +798,12 @@ function numberOr(v: unknown, fallback: number): number {
 
 function strOr(v: unknown): string | undefined {
   return typeof v === 'string' ? v : undefined;
+}
+
+/** Keep only reasons from the closed catalog; anything else degrades to undefined. */
+function normalizeReason(reason?: string): GoalPauseReason | undefined {
+  if (typeof reason === 'string' && GOAL_PAUSE_REASON_SET.has(reason)) {
+    return reason as GoalPauseReason;
+  }
+  return undefined;
 }

@@ -61,8 +61,13 @@ export interface ModeTracker<State extends string, Event, Snapshot> {
   /** Whether the current state needs a per-turn reminder (plan 413d). */
   shouldInjectReminder(): boolean;
 
-  /** Full snapshot payload for persistence. */
-  snapshot(): Snapshot;
+  /**
+   * Full snapshot payload for persistence. The optional session id scopes
+   * the read for session-aware trackers (plan 552): the goal tracker
+   * returns the idle snapshot for a session that does not own the goal.
+   * Single-session trackers ignore the argument.
+   */
+  snapshot(sessionId?: string): Snapshot;
 
   /** Restore from a snapshot (crash recovery; called by plan 413c/413d).
    *

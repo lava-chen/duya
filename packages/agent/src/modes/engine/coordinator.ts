@@ -25,10 +25,12 @@ import {
 } from '../plan/reminders.js';
 import { renderGoalContinuation } from '../goal/goal-reminders.js';
 import type { GoalTracker } from '../goal/goal-tracker.js';
+import { getGoalConfig } from '../goal/goal-config.js';
 import { renderResearchContinuation } from '../research-mode/research-reminders.js';
 import type { ResearchTracker } from '../research-mode/research-tracker.js';
 import { getResearchConfig } from '../research-mode/research-config.js';
 import { persistSnapshot, restoreTracker } from './persistence.js';
+import { logger } from '../../utils/logger.js';
 import {
   adaptGoalSummaryContext,
   adaptResearchContinuationContext,
@@ -71,11 +73,16 @@ function isPlanReminderTracker(
  * Duck-typed view of the goal tracker (`GoalTracker`, plan 411). The goal
  * branch is orthogonal to the plan branch: goal injects a continuation
  * reminder each round while active, and persists on round-end so a restart
- * resumes the objective.
+ * resumes the objective. Plan 552: the goal tracker is a process singleton
+ * shared across sessions, so every call is scoped to THIS coordinator's
+ * session id — a goal owned by another session reads as idle here.
  */
 interface GoalReminderTracker extends ModeTracker<string, string, unknown> {
-  recordWorkerRound(): void;
-  updateTokenUsage(used: number): boolean;
+  recordWorkerRound(sessionId?: string): void;
+  updateTokenUsage(used: number, sessionId?: string): boolean;
+  state(sessionId?: string): string;
+  shouldInjectReminder(sessionId?: string): boolean;
+  pauseReason(sessionId?: string): string | undefined;
 }
 
 function isGoalReminderTracker(
@@ -191,12 +198,12 @@ export class ModeCoordinator {
       // self-activates via `start` (triggered by the /goal command or tool), so
       // no enter-path nudge is needed here. Persists on round-end, not here.
       if (isGoalReminderTracker(tracker)) {
-        if (tracker.shouldInjectReminder()) {
+        if (tracker.shouldInjectReminder(this.sessionId)) {
           this.pushRuntimeContext(
             messages,
             seqIndex,
             'goal_summary',
-            renderReminder(renderGoalContinuation(asGoalTracker(tracker))),
+            renderReminder(renderGoalContinuation(asGoalTracker(tracker), this.sessionId)),
           );
         }
         continue;
@@ -277,9 +284,9 @@ export class ModeCoordinator {
       if (!this.isActive(tracker)) continue;
       if (!isGoalReminderTracker(tracker)) continue;
       const goal = asGoalTracker(tracker);
-      const over = goal.updateTokenUsage(used);
-      if (over && goal.state() === 'active') {
-        goal.transition({ type: 'budget_limit' });
+      const over = goal.updateTokenUsage(used, this.sessionId);
+      if (over && goal.state(this.sessionId) === 'active') {
+        goal.transition({ type: 'budget_limit' }, this.sessionId);
         await persistSnapshot(tracker, this.sessionId);
       }
     }
@@ -300,10 +307,11 @@ export class ModeCoordinator {
         // verifier-driven transitions land via the evaluator / tool wiring
         // (plan 411 Phase 2). This checkpoint keeps the snapshot durable.
         // Idle goals are skipped (no need to write a fresh idle snapshot).
-        if (tracker.state() === 'active') {
-          tracker.recordWorkerRound();
+        // All reads/writes are scoped to this coordinator's session (plan 552).
+        if (tracker.state(this.sessionId) === 'active') {
+          tracker.recordWorkerRound(this.sessionId);
         }
-        if (tracker.state() !== 'idle') {
+        if (tracker.state(this.sessionId) !== 'idle') {
           await persistSnapshot(tracker, this.sessionId);
         }
         continue;
@@ -462,7 +470,12 @@ export class ModeCoordinator {
   resolveTurnMode(_origin: 'user' | 'synthetic'): string[] {
     return this.engine
       .list()
-      .filter((t) => this.isActive(t) && t.shouldInjectReminder())
+      .filter((t) =>
+        this.isActive(t) &&
+        (isGoalReminderTracker(t)
+          ? t.shouldInjectReminder(this.sessionId)
+          : t.shouldInjectReminder()),
+      )
       .map((t) => t.id);
   }
 
@@ -477,6 +490,30 @@ export class ModeCoordinator {
   async restore(): Promise<void> {
     for (const tracker of this.engine.list()) {
       if (!this.isActive(tracker)) continue;
+      if (isGoalReminderTracker(tracker)) {
+        const goal = asGoalTracker(tracker);
+        await restoreTracker(tracker, this.sessionId);
+        // Plan 552: a restart folds a self-driving goal to
+        // `user_paused(restart)` (grok safety model). When `[goal]
+        // auto_resume` is on, the fold is immediately undone on the next
+        // streamChat so the goal keeps working across restarts — the
+        // continuation reminder below then re-drives it without any user
+        // action. With `auto_resume = false` the fold stands and the user
+        // must resume explicitly.
+        if (
+          getGoalConfig().autoResume &&
+          goal.state(this.sessionId) === 'user_paused' &&
+          goal.pauseReason(this.sessionId) === 'restart'
+        ) {
+          if (goal.transition({ type: 'resume' }, this.sessionId)) {
+            logger.info(
+              `[ModeCoordinator] goal auto-resumed after restart (auto_resume=true) for ${this.sessionId}`,
+            );
+            await persistSnapshot(tracker, this.sessionId);
+          }
+        }
+        continue;
+      }
       await restoreTracker(tracker, this.sessionId);
     }
   }

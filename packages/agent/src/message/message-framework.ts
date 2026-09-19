@@ -22,6 +22,8 @@ export type RuntimeContextSource =
   | 'premature_stop'
   | 'tool_intent'
   | 'send_message_reminder'
+  | 'goal_reply_fingerprint'
+  | 'goal_continuation'
   | 'custom';
 
 /**
@@ -260,6 +262,8 @@ export const STARTS_PROMPT_TURN: Record<RuntimeContextSource, boolean> = {
   premature_stop: false,
   tool_intent: false,
   send_message_reminder: false,
+  goal_reply_fingerprint: false,
+  goal_continuation: false,
   custom: false,
 };
 
