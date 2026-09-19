@@ -2,13 +2,35 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { useConversationStore, type Thread, type ProjectGroup } from "@/stores/conversation-store";
-import { ThreadListItem } from "./ThreadListItem";
-import { FolderIcon, FolderOpenIcon, ArchiveIcon, DotsThreeIcon, FolderOpenIcon as OpenFolderIcon, CopyIcon, PlusIcon, CaretRightIcon, XIcon } from "@/components/icons";
+import { ThreadListItem } from "../../shared/ThreadListItem";
+import {
+  FolderIcon,
+  FolderOpenIcon,
+  ArchiveIcon,
+  DotsThreeIcon,
+  FolderOpenIcon as OpenFolderIcon,
+  CopyIcon,
+  PlusIcon,
+  CaretRightIcon,
+  TrashIcon,
+  XIcon,
+} from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
 import { Button } from "@/components/ui/Button";
 import { DropdownMenu, type MenuAction } from "@/components/ui/DropdownMenu";
 import { useSidebarSectionsStore } from "@/stores/sidebar-sections-store";
 import { InputDialog } from "@/components/ui/InputDialog";
+import {
+  useProjectsStore,
+  type ProjectEntity,
+} from "@/stores/projects-store";
+import {
+  archiveSessionsUnderProject,
+  deleteSessionsUnderProject,
+  openProjectFolder,
+  copyProjectPath,
+} from "@/lib/project-actions";
+import { RemoveProjectConfirm } from "@/components/projects/RemoveProjectConfirm";
 
 interface ProjectGroupItemProps {
   project: ProjectGroup;
@@ -20,7 +42,7 @@ const THREAD_COLLAPSE_THRESHOLD = 5;
 
 export function ProjectGroupItem({ project, threads, activeThreadId }: ProjectGroupItemProps) {
   const { t } = useTranslation();
-  const { deleteThread, startNewChat, collapsedProjects, toggleProjectExpanded } = useConversationStore();
+  const { startNewChat, collapsedProjects, toggleProjectExpanded } = useConversationStore();
   // Plan 471: project ↔ section assignment. The selector subscribes to the
   // store so the right-click menu label flips to "添加 / 移动" the moment a
   // project is assigned via the sidebar UI. Reading via getState() (the
@@ -46,6 +68,11 @@ export function ProjectGroupItem({ project, threads, activeThreadId }: ProjectGr
   // DropdownMenu's own click handler; the right-click path forces `true`
   // after computing `menuAnchor`.
   const [menuOpen, setMenuOpen] = useState(false);
+  // Plan 547: the shared RemoveProjectConfirm dialog state. Replaces the
+  // old `handleDeleteProject` which looped `deleteThread` over the project's
+  // sessions and left the project entity in place (the bug behind the
+  // "删除项目" label doing the wrong thing).
+  const [removeDialogProject, setRemoveDialogProject] = useState<ProjectEntity | null>(null);
 
   // Sort threads by updatedAt, most recent first
   const sortedThreads = [...threads].sort((a, b) => b.updatedAt - a.updatedAt);
@@ -97,58 +124,101 @@ export function ProjectGroupItem({ project, threads, activeThreadId }: ProjectGr
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
-    // Plan 535: anchor the shared DropdownMenu to the cursor. The shared
-    // component handles its own viewport clamping and the submenu flip-left
-    // behavior (Plan 471 v4) — we no longer compute it here.
     setMenuAnchor({ x: e.clientX, y: e.clientY });
     setMenuOpen(true);
   }, []);
 
+  // Plan 547: project entity lookup. The sidebar's ProjectGroup is the legacy
+  // shape (workingDirectory + projectName). Project actions consume the
+  // new ProjectEntity shape (multi-path + name + icon + color). The lookup
+  // falls back to a minimal synthetic entity when the project is path-only
+  // (recent folder, no entity registered yet), so the menu still works.
+  const resolveProjectEntity = useCallback((): ProjectEntity | null => {
+    const found = useProjectsStore
+      .getState()
+      .getByWorkingDirectory(project.workingDirectory);
+    if (found) return found;
+    if (!project.workingDirectory) return null;
+    return {
+      project_id: `path:${project.workingDirectory}`,
+      canonical_root: project.workingDirectory,
+      name: project.projectName,
+      description: null,
+      paths: [{ path: project.workingDirectory, description: null }],
+      icon: null,
+      color: null,
+      created_at: project.createdAt,
+      last_seen_at: project.lastActivity,
+    };
+  }, [project.workingDirectory, project.projectName, project.createdAt, project.lastActivity]);
+
   const handleOpenFolder = useCallback(() => {
-    if (project.workingDirectory && window.electronAPI?.shell?.openPath) {
-      window.electronAPI.shell.openPath(project.workingDirectory);
-    }
-  }, [project.workingDirectory]);
+    void openProjectFolder({
+      project_id: project.workingDirectory,
+      canonical_root: project.workingDirectory,
+      name: project.projectName,
+      description: null,
+      paths: [{ path: project.workingDirectory, description: null }],
+      icon: null,
+      color: null,
+      created_at: project.createdAt,
+      last_seen_at: project.lastActivity,
+    });
+  }, [project.workingDirectory, project.projectName, project.createdAt, project.lastActivity]);
 
   const handleCopyPath = useCallback(() => {
-    if (project.workingDirectory) {
-      navigator.clipboard.writeText(project.workingDirectory);
-    }
-  }, [project.workingDirectory]);
+    void copyProjectPath({
+      project_id: project.workingDirectory,
+      canonical_root: project.workingDirectory,
+      name: project.projectName,
+      description: null,
+      paths: [{ path: project.workingDirectory, description: null }],
+      icon: null,
+      color: null,
+      created_at: project.createdAt,
+      last_seen_at: project.lastActivity,
+    });
+  }, [project.workingDirectory, project.projectName, project.createdAt, project.lastActivity]);
+
+  // Plan 547: the old `handleDeleteProject` is gone. The three project-scoped
+  // danger operations are now split into explicit, well-labeled handlers
+  // composed from `project-actions.ts` (the shared adapter). All three
+  // surface the same verbs as the Projects page.
+  const handleArchiveAllSessions = useCallback(() => {
+    const entity = resolveProjectEntity();
+    if (entity) void archiveSessionsUnderProject(entity);
+  }, [resolveProjectEntity]);
+
+  const handleDeleteAllSessions = useCallback(() => {
+    const entity = resolveProjectEntity();
+    if (entity) void deleteSessionsUnderProject(entity);
+  }, [resolveProjectEntity]);
 
   const handleDeleteProject = useCallback(() => {
-    // Delete all threads in this project
-    for (const thread of sortedThreads) {
-      deleteThread(thread.id);
-    }
-  }, [deleteThread, sortedThreads]);
+    const entity = resolveProjectEntity();
+    if (entity) setRemoveDialogProject(entity);
+  }, [resolveProjectEntity]);
 
   const handleNewThread = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    // Unify with the sidebar "new chat" entry: open the lazy NewChatView
-    // composer with this project preselected instead of eagerly creating a
-    // thread. The real session appears in the sidebar only after the user
-    // sends, so an unsent draft never pollutes the project group.
     startNewChat({
       workingDirectory: project.workingDirectory,
       projectName: project.projectName,
     });
   }, [startNewChat, project.workingDirectory, project.projectName]);
 
-  // Plan 535: the shared DropdownMenu now owns click-outside, Esc,
-  // submenu hover-intent (150ms), and viewport clamping. All of the
-  // above plumbing is gone.
-
   // Plan 535: build the project context menu as MenuActions so the shared
   // DropdownMenu can render it. The "section" item is a submenu that mirrors
-  // Plan 471 v4's "Move to / Add to section" flow, including the
-  // `.project-dropdown-submenu` look-and-feel (flip-left, is-current dot).
+  // Plan 471 v4's "Move to / Add to section" flow. Plan 547 splits the previous
+  // single "delete project" item into three explicit danger-labeled operations
+  // (archive all sessions / delete all sessions / delete project entity),
+  // each composed from `project-actions.ts`.
   const projectMenuItems: MenuAction[] = [
     {
       kind: "action",
       id: "open-folder",
       label: t("project.openFolder"),
-        className: "project-dropdown-item",
+      className: "project-dropdown-item",
       iconLeft: <OpenFolderIcon size={14} />,
       onSelect: handleOpenFolder,
     },
@@ -156,7 +226,7 @@ export function ProjectGroupItem({ project, threads, activeThreadId }: ProjectGr
       kind: "action",
       id: "copy-path",
       label: t("project.copyFolderPath"),
-        className: "project-dropdown-item",
+      className: "project-dropdown-item",
       iconLeft: <CopyIcon size={14} />,
       onSelect: handleCopyPath,
     },
@@ -173,7 +243,7 @@ export function ProjectGroupItem({ project, threads, activeThreadId }: ProjectGr
           kind: "action",
           id: "section-new",
           label: t("sidebar.section.newSection"),
-        className: "project-dropdown-item",
+          className: "project-dropdown-item",
           iconLeft: <PlusIcon size={14} />,
           onSelect: handleNewSection,
         },
@@ -193,7 +263,7 @@ export function ProjectGroupItem({ project, threads, activeThreadId }: ProjectGr
                 kind: "action" as const,
                 id: "section-remove",
                 label: t("sidebar.section.removeFromSection"),
-        className: "project-dropdown-item",
+                className: "project-dropdown-item",
                 iconLeft: <XIcon size={14} />,
                 danger: true,
                 onSelect: handleRemoveFromSection,
@@ -202,13 +272,30 @@ export function ProjectGroupItem({ project, threads, activeThreadId }: ProjectGr
           : []),
       ],
     },
-    { kind: "divider", id: "delete-sep" },
+    { kind: "divider", id: "danger-sep" },
+    {
+      kind: "action",
+      id: "archive-sessions",
+      label: t("project.archiveProjectSessions"),
+      className: "project-dropdown-item",
+      iconLeft: <ArchiveIcon size={14} />,
+      onSelect: handleArchiveAllSessions,
+    },
+    {
+      kind: "action",
+      id: "delete-sessions",
+      label: t("project.deleteProjectSessions"),
+      className: "project-dropdown-item",
+      iconLeft: <TrashIcon size={14} />,
+      danger: true,
+      onSelect: handleDeleteAllSessions,
+    },
     {
       kind: "action",
       id: "delete-project",
-      label: t("project.removeProject"),
-        className: "project-dropdown-item",
-      iconLeft: <ArchiveIcon size={14} />,
+      label: t("projects.removeProject"),
+      className: "project-dropdown-item",
+      iconLeft: <TrashIcon size={14} />,
       danger: true,
       onSelect: handleDeleteProject,
     },
@@ -295,9 +382,6 @@ export function ProjectGroupItem({ project, threads, activeThreadId }: ProjectGr
         )}
       </div>
 
-      {/* Plan 471: dialog for creating a section on the fly from the
-          project context menu. The new section is committed and then the
-          current project is assigned to it in one shot. */}
       <InputDialog
         isOpen={isNewSectionDialogOpen}
         title={t('sidebar.dialog.newSection.title')}
@@ -305,6 +389,12 @@ export function ProjectGroupItem({ project, threads, activeThreadId }: ProjectGr
         placeholder={t('sidebar.dialog.newSection.placeholder')}
         onConfirm={handleNewSectionConfirm}
         onCancel={() => setIsNewSectionDialogOpen(false)}
+      />
+
+      <RemoveProjectConfirm
+        open={removeDialogProject !== null}
+        project={removeDialogProject}
+        onCancel={() => setRemoveDialogProject(null)}
       />
     </>
   );

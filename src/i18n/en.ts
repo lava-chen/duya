@@ -25,6 +25,24 @@ const en = {
   'projects.empty': 'No projects yet',
   'projects.noSearchMatch': 'No matching projects',
   'projects.removeConfirm': 'Removing a project only unlinks it — files and chat history on disk are kept. Continue?',
+  // Plan 547 — explicit confirm dialog for the "delete project" menu action.
+
+  'projects.removeProjectConfirm': 'Permanently remove project "{{name}}" ({{pathsCount}} paths, {{sessionsCount}} sessions)? This cannot be undone.',
+
+  'projects.removeProjectDeleteSessions': 'Also delete all sessions under this project (cannot be undone)',
+
+  'projects.removeProjectSessionsHint': 'Keep the project entry, only delete the {{count}} sessions below',
+
+  'projects.removeProjectHint': 'Permanently delete the project entry',
+
+  // Plan 547 — sidebar project menu split into three explicit danger items.
+
+  'project.archiveProjectSessions': 'Archive all sessions under this project',
+
+  'project.deleteProjectSessions': 'Delete all sessions under this project',
+
+  'project.removeProjectSessionsHint': 'Keep the project entry, only delete the {{count}} sessions below',
+
   'projects.selectAll': 'Select all',
   'projects.select': 'Select',
   'projects.deselect': 'Deselect',

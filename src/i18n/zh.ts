@@ -27,6 +27,24 @@ const zh: Record<TranslationKey, string> = {
   'projects.empty': '还没有项目',
   'projects.noSearchMatch': '没有匹配的项目',
   'projects.removeConfirm': '移除项目只解除关联，不会删除磁盘上的文件和聊天记录。继续？',
+  // Plan 547 — 删除项目确认对话框的明确文案。
+
+  'projects.removeProjectConfirm': '永久移除项目「{{name}}」（{{pathsCount}} 个挂载路径，{{sessionsCount}} 个会话）？此操作不可撤销。',
+
+  'projects.removeProjectDeleteSessions': '同时删除项目下所有会话（不可恢复）',
+
+  'projects.removeProjectSessionsHint': '保留项目实体，仅删除下方 {{count}} 个会话',
+
+  'projects.removeProjectHint': '永久删除项目实体',
+
+  // Plan 547 — 侧栏项目菜单拆分为三个明确的危险操作。
+
+  'project.archiveProjectSessions': '归档项目下所有会话',
+
+  'project.deleteProjectSessions': '删除项目下所有会话',
+
+  'project.removeProjectSessionsHint': '保留项目实体，仅删除下方 {{count}} 个会话',
+
   'projects.selectAll': '全选',
   'projects.select': '选择',
   'projects.deselect': '取消选择',

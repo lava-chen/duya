@@ -40,6 +40,29 @@ interface ProjectsState {
   invalidate: () => void;
 }
 
+/**
+ * Cross-platform path normalizer (Plan 547 / plan 537 §3).
+ *
+ * - Lowercases the Windows drive letter so `E:\foo` and `e:/foo` compare equal.
+ * - Replaces backslashes with forward slashes.
+ * - Strips trailing path separators.
+ *
+ * We deliberately do NOT lowercase the rest of the path — on Windows, NTFS is
+ * case-insensitive by default, but macOS / Linux paths are case-sensitive, and
+ * `ProjectEntity.paths[]` is the canonical source of truth (always written by
+ * the renderer in canonical case). Mixed-case input from the user is matched
+ * case-insensitively only on the drive letter.
+ */
+export function normalizeWorkingDirectoryForCompare(dir: string): string {
+  if (!dir) return '';
+  let out = dir.replace(/\\/g, '/');
+  out = out.replace(/\/+$/, '');
+  out = out.replace(/^([A-Za-z])(?=:(\/|$))/, (_, letter: string) =>
+    letter.toLowerCase(),
+  );
+  return out;
+}
+
 export const useProjectsStore = create<ProjectsState>((set, get) => ({
   projects: [],
   hydrated: false,
@@ -73,9 +96,12 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
 
   getByWorkingDirectory: (dir: string) => {
     if (!dir) return null;
-    const normalized = dir.replace(/[\\/]+$/, '');
+    const normalized = normalizeWorkingDirectoryForCompare(dir);
+    if (!normalized) return null;
     const found = get().projects.find((p) =>
-      p.paths.some((entry) => entry.path.replace(/[\\/]+$/, '') === normalized),
+      p.paths.some(
+        (entry) => normalizeWorkingDirectoryForCompare(entry.path) === normalized,
+      ),
     );
     return found ?? null;
   },

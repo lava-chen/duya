@@ -18,6 +18,12 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { PageFrame, PageHeader } from "@/components/ui/page";
 import { DropdownMenu, type MenuAction } from "@/components/ui/DropdownMenu";
+import { ThreadListItem } from "@/components/shared/ThreadListItem";
+import { RemoveProjectConfirm } from "@/components/projects/RemoveProjectConfirm";
+import {
+  archiveSessionsUnderProject,
+  deleteProject,
+} from "@/lib/project-actions";
 import {
   CreateProjectDialog,
   PROJECT_ICON_REGISTRY,
@@ -103,11 +109,14 @@ export function ProjectsView() {
     { kind: "success" | "warning" | "error"; message: string } | null
   >(null);
 
+  // Plan 547: shared RemoveProjectConfirm dialog state.
+  const [removeProjectTarget, setRemoveProjectTarget] = useState<ProjectEntity | null>(null);
+
   const threads = useConversationStore((s) => s.threads);
   const { projects, loadProjects, invalidate } = useProjectsStore();
   const createThread = useConversationStore((s) => s.createThread);
   const setActiveThread = useConversationStore((s) => s.setActiveThread);
-  const archiveThread = useConversationStore((s) => s.archiveThread);
+  const activeThreadId = useConversationStore((s) => s.activeThreadId);
   const setCurrentView = useConversationStore((s) => s.setCurrentView);
 
   const pathKey = useCallback((p: string) => p.replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase(), []);
@@ -191,16 +200,26 @@ export function ProjectsView() {
     });
   }, [filtered]);
 
-  const handleBatchArchive = useCallback(() => {
+  const handleBatchArchive = useCallback(async () => {
     let archivedCount = 0;
     for (const key of selected) {
       const row = filtered.find((r) => r.key === key);
-      if (row) {
-        for (const session of row.sessions) {
-          archiveThread(session.id);
-          archivedCount += 1;
-        }
-      }
+      if (!row) continue;
+      const entity = row.projectId
+        ? projects.find((p) => p.project_id === row.projectId)
+        : null;
+      const target = entity ?? {
+        project_id: row.key,
+        canonical_root: row.paths[0] ?? "",
+        name: row.name,
+        description: null,
+        paths: row.paths.map((p) => ({ path: p, description: null })),
+        icon: row.icon,
+        color: row.color,
+        created_at: 0,
+        last_seen_at: row.lastActivity,
+      };
+      archivedCount += await archiveSessionsUnderProject(target);
     }
     setSelected(new Set());
     if (archivedCount > 0) {
@@ -209,7 +228,7 @@ export function ProjectsView() {
         message: t("projects.batchArchiveSuccess", { count: archivedCount }),
       });
     }
-  }, [selected, filtered, archiveThread]);
+  }, [selected, filtered, projects]);
 
   const handleBatchRemove = useCallback(async () => {
     if (selected.size === 0) return;
@@ -266,26 +285,36 @@ export function ProjectsView() {
     }
   }, [selected, filtered, invalidate, loadProjects, recentFolders]);
 
-  const handleSingleRemove = useCallback(async (row: ProjectRowModel) => {
-    if (row.kind === "entity") {
-      const ok = window.confirm(t("projects.removeConfirm"));
-      if (!ok) return;
-      const result = await window.electronAPI?.projects?.delete?.(row.projectId!);
-      if (!result?.success) {
-        setBanner({ kind: "error", message: t("projects.removeFailed") });
-        return;
-      }
-      invalidate();
-      void loadProjects();
-      setBanner({ kind: "success", message: t("projects.removeSuccess", { name: row.name }) });
-    } else {
-      const folders = await window.electronAPI?.projects?.removeRecentFolder?.(row.paths[0]);
-      if (Array.isArray(folders)) {
-        setRecentFolders(folders);
-        setBanner({ kind: "success", message: t("projects.removeSuccess", { name: row.name }) });
-      }
+  const openRemoveConfirm = useCallback((row: ProjectRowModel) => {
+    if (row.kind === "path") {
+      // Recent-folder (path-only) rows are still unlinked via the legacy IPC;
+      // they have no entity to confirm deletion of.
+      void window.electronAPI?.projects?.removeRecentFolder?.(row.paths[0]).then((folders) => {
+        if (Array.isArray(folders)) {
+          setRecentFolders(folders);
+          setBanner({ kind: "success", message: t("projects.removeSuccess", { name: row.name }) });
+        }
+      });
+      return;
     }
-  }, [invalidate, loadProjects]);
+    const entity = projects.find((p) => p.project_id === row.projectId);
+    if (!entity) return;
+    setRemoveProjectTarget(entity);
+  }, [projects]);
+
+  const handleRemoveConfirmed = useCallback((alsoDeletedSessions: number) => {
+    setBanner({
+      kind: "success",
+      message: t("projects.removeSuccess", { name: removeProjectTarget?.name ?? "" }),
+    });
+    void alsoDeletedSessions;
+  }, [removeProjectTarget]);
+
+  const handleRemoveFailed = useCallback((reason: string) => {
+    if (reason === "project-delete-failed") {
+      setBanner({ kind: "error", message: t("projects.removeFailed") });
+    }
+  }, []);
 
   const isAllSelected = filtered.length > 0 && selected.size === filtered.length;
 
@@ -335,14 +364,26 @@ export function ProjectsView() {
     }
   };
 
-  const handleArchiveChats = (row: ProjectRowModel) => {
-    for (const session of row.sessions) {
-      archiveThread(session.id);
-    }
+  const handleArchiveChats = async (row: ProjectRowModel) => {
+    const entity = row.projectId
+      ? projects.find((p) => p.project_id === row.projectId)
+      : null;
+    const target = entity ?? {
+      project_id: row.key,
+      canonical_root: row.paths[0] ?? "",
+      name: row.name,
+      description: null,
+      paths: row.paths.map((p) => ({ path: p, description: null })),
+      icon: row.icon,
+      color: row.color,
+      created_at: 0,
+      last_seen_at: row.lastActivity,
+    };
+    await archiveSessionsUnderProject(target);
   };
 
   const handleRemove = (row: ProjectRowModel) => {
-    void handleSingleRemove(row);
+    openRemoveConfirm(row);
   };
 
   const handleEditSubmit = async (input: CreateProjectDialogSubmit) => {
@@ -640,7 +681,11 @@ export function ProjectsView() {
                     </div>
                   ) : (
                     visibleSessions.map((session) => (
-                      <SessionRowItem key={session.id} thread={session} />
+                      <ThreadListItem
+                        key={session.id}
+                        thread={session}
+                        isActive={session.id === activeThreadId}
+                      />
                     ))
                   )}
                   {row.sessions.length > SESSION_PREVIEW && !showAll && (
@@ -698,6 +743,13 @@ export function ProjectsView() {
           }
         }}
       />
+          <RemoveProjectConfirm
+        open={removeProjectTarget !== null}
+        project={removeProjectTarget}
+        onCancel={() => setRemoveProjectTarget(null)}
+        onSuccess={handleRemoveConfirmed}
+        onFailure={handleRemoveFailed}
+      />
     </PageFrame>
   );
 
@@ -732,31 +784,4 @@ export function ProjectsView() {
       setCurrentView("chat");
     }
   }
-}
-
-function SessionRowItem({ thread }: SessionRowItemProps) {
-  const setActiveThread = useConversationStore((s) => s.setActiveThread);
-  const setCurrentView = useConversationStore((s) => s.setCurrentView);
-  return (
-    <button
-      type="button"
-      onClick={() => {
-        setActiveThread(thread.id);
-        setCurrentView("chat");
-      }}
-      className="w-full flex items-center gap-2 px-4 py-2 text-left transition-colors hover:bg-[var(--surface-hover)]"
-      style={{ paddingLeft: 58 }}
-    >
-      <span className="text-xs flex-1 truncate" style={{ color: "var(--text)" }} title={thread.title}>
-        {thread.title || thread.id}
-      </span>
-      <span className="text-xs shrink-0" style={{ color: "var(--muted)" }}>
-        {formatTimeAgo(thread.updatedAt)}
-      </span>
-    </button>
-  );
-}
-
-interface SessionRowItemProps {
-  thread: Thread;
 }
