@@ -14,6 +14,7 @@ import {
   WifiHighIcon,
   LightningIcon,
   ClockCounterClockwiseIcon,
+  RepeatIcon,
   ChromeIcon,
   ShieldCheckIcon,
   ChartBarIcon as BarChartIcon,
@@ -1112,6 +1113,18 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
               </button>
             );
           })}
+          {/* Plan 552 Phase 7: workflow console — panel page, not a view. */}
+          <button
+            type="button"
+            onClick={() => openOrActivatePage('workflow')}
+            data-testid="nav-workflow"
+            className="sidebar-primary-link"
+          >
+            <span className="nav-icon">
+              <RepeatIcon size={16} />
+            </span>
+            <span>{t('panel.workflow.title')}</span>
+          </button>
         </nav>
           </>
         )}

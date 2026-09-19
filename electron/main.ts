@@ -74,6 +74,7 @@ import { registerBrowserCookieHandlers } from './ipc/browser-cookie-handlers';
 import { registerProjectDatabaseHandlers } from './ipc/project-database-handlers';
 import { registerProjectEntityHandlers } from './ipc/project-entity-handlers';
 import { registerGitHandlers } from './ipc/git-handlers';
+import { registerWorkflowHandlers } from './ipc/workflow-handlers';
 import { registerVoiceHandlers } from './ipc/voice-handlers';
 import { registerHooksHandlers } from './ipc/hooks-handlers';
 import { registerMcpReloadIpcHandler } from './ipc/mcp-handlers';
@@ -1248,6 +1249,8 @@ registerLazyIpcHandlers({
 registerBrowserWebviewHandlers();
 registerBrowserCookieHandlers();
 registerGitHandlers();
+// Plan 552 Phase 7: workflow console reads (run list / journal).
+registerWorkflowHandlers();
 registerBotChannelHandlers();
 registerGroupHandlers();
 registerBotHandlers();

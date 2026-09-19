@@ -10,6 +10,7 @@ import {
   ChalkboardIcon,
   TerminalIcon,
   GearSixIcon,
+  RepeatIcon,
   type IconProps,
 } from "@/components/icons";
 import type { TranslationKey } from "@/i18n";
@@ -30,8 +31,11 @@ const SidebarConductorView = lazy(() =>
 const CodeReviewPanel = lazy(() =>
   import("./CodeReviewPanel").then((m) => ({ default: m.CodeReviewPanel }))
 );
+const WorkflowPanel = lazy(() =>
+  import("./WorkflowPanel").then((m) => ({ default: m.WorkflowPanel }))
+);
 
-export type PageId = "files" | "preview" | "review" | "conductor" | "terminal" | "browser" | "bot-settings" | "room-settings";
+export type PageId = "files" | "preview" | "review" | "workflow" | "conductor" | "terminal" | "browser" | "bot-settings" | "room-settings";
 
 export interface PageTab {
   id: string;
@@ -107,6 +111,17 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     maxWidth: null,
     defaultExpanded: false,
     component: CodeReviewPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
+  },
+  workflow: {
+    id: "workflow",
+    labelKey: "panel.workflow.title",
+    icon: RepeatIcon,
+    multiInstance: false,
+    available: true,
+    minWidth: 380,
+    widthRatio: 0.5,
+    defaultExpanded: false,
+    component: WorkflowPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   conductor: {
     id: "conductor",
