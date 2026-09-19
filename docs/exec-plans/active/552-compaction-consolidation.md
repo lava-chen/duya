@@ -36,61 +36,67 @@ mcode v2 的参照形态：单一 `beforeLlmCall` hook 探测 → 单一算法 �
 - 不动 plan 517/523 的 UI/i18n 范围；523 落地时改为扩展活机（CompactionManager.Suppression）而非复活五态机。
 - 不引入 mcode 的 BPE tokenizer / 远程 count_tokens（provider 锚点 + canonical 估算已够，属 444 后续）。
 
-## Phase 0 — 死代码与抑制机收敛
+## Phase 0 — 死代码与抑制机收敛 ✅
 
-- [ ] `compact/compactErrors.ts` 收缩：保留 `SummaryDegenerateError` / `SuppressReason` /
+- [x] `compact/compactErrors.ts` 收缩：保留 `SummaryDegenerateError` / `SuppressReason` /
       `classifySuppressReason` / `suppressReasonMessage`；删 `SUPPRESS_*` / `SuppressState` /
       `CompactSuppression` / `classifyCompactFailure` / `isRetryableCompactFailure` /
       `reasonToSuppressState` / `suppressReasonToString` / `suppressStateToString` / `SUPPRESS_WINDOW_MS`
       （408 → ~140 LOC）。同步 barrel + 测试。
-- [ ] `CompactionManager.compact()` 错误分类改走 `classifySuppressReason`（替换内联
+- [x] `CompactionManager.compact()` 错误分类改走 `classifySuppressReason`（替换内联
       isSizeError/isAuthError），`compaction_error` 事件附 `reason` + `userMessage`。
-- [ ] auth 抑制时间窗（`AUTH_SUPPRESS_WINDOW_MS`），修"一次 401 → 本会话自动压缩永久失效"。
-- [ ] 删 `compact/compact.ts`（`adjustSliceBoundary` 仅被 import 从未调用）；清 strategy 死 import
+- [x] auth 抑制时间窗（`AUTH_SUPPRESS_WINDOW_MS`），修"一次 401 → 本会话自动压缩永久失效"。
+- [x] 删 `compact/compact.ts`（`adjustSliceBoundary` 仅被 import 从未调用）；清 strategy 死 import
       与 controller 过时注释。
-- [ ] 删 `agent/session/compaction.ts`（CompactionStore，零调用方）。
-- [ ] 删 `session/index.ts` + `session/store.ts`（SessionManager/SessionStoreManager，全仓零引用）。
-- [ ] `CompactionManager.setSummarizer` 去掉无意义 strategy 分配；删 `onAuthRefresh` 死方法改由
+- [x] 删 `agent/session/compaction.ts`（CompactionStore，零调用方）。
+- [x] 删 `session/index.ts` + `session/store.ts`（SessionManager/SessionStoreManager，全仓零引用）。
+- [x] `CompactionManager.setSummarizer` 去掉无意义 strategy 分配；删 `onAuthRefresh` 死方法改由
       时间窗语义接管；`CompactionStats` 删恒 0 的 `messageCount`/`toolCallCount`。
 
-## Phase 1 — Token 估算统一
+## Phase 1 — Token 估算统一 ✅
 
-- [ ] `@duya/ai` 新增 `utils/context-window.ts`：`DEFAULT_CONTEXT_WINDOW` + `resolveContextWindow()`
+- [x] `@duya/ai` 新增 `utils/context-window.ts`：`DEFAULT_CONTEXT_WINDOW` + `resolveContextWindow()`
       （capability → catalog → default，带 source），index 导出。
-- [ ] agent `compact/contextWindow.ts` 改为薄转发（内部 import 路径不变）。
-- [ ] renderer `useContextUsage.ts` 删本地 resolver/常量，改用共享实现。
-- [ ] `DuyaAgent._estimateSystemAndToolsTokens` 改委托 `estimateContextTextTokens`。
-- [ ] `PostCompactReinjector.estimateTokenCount` → `estimateContextTextTokens`（仅报表用途）。
-- [ ] `hooks/injection.ts estimateTokens` → `estimateContextTextTokens`（保留导出名）。
-- [ ] `memory-rollout/compactMessages.ts` `CHARS_PER_TOKEN=3` 收敛到 canonical 常量。
-- [ ] `os-context/fragment.ts` 常量改 import canonical。
-- [ ] `stripImagesFromMessages` 实修：用户消息图片块剥离 + 占位文本（mcode "[image]" 形态）。
+- [x] agent `compact/contextWindow.ts` 改为薄转发（内部 import 路径不变）。
+- [x] renderer `useContextUsage.ts` 删本地 resolver/常量，改用共享实现。
+- [x] `DuyaAgent._estimateSystemAndToolsTokens` 改委托 `estimateContextTextTokens`。
+- [x] `PostCompactReinjector.estimateTokenCount` → `estimateContextTextTokens`（仅报表用途）。
+- [x] `hooks/injection.ts estimateTokens` → `estimateContextTextTokens`（保留导出名）。
+- [x] `memory-rollout/compactMessages.ts` `CHARS_PER_TOKEN=3` 收敛到 canonical 估算
+      （enforceBudget 按实测密度折算 targetChars，CJK/ASCII 混合内容均不再系统性偏差）。
+- [x] `os-context/fragment.ts` 常量改 import canonical `ASCII_CHARS_PER_TOKEN`。
+- [x] `stripImagesFromMessages` 实修：用户消息图片块剥离 + 占位文本（mcode "[image]" 形态）。
 
-## Phase 2 — 触发探测统一
+## Phase 2 — 触发探测统一 ✅
 
-- [ ] `CompactionManager` 新增 `probeCompaction(messages)`：单函数产出
+- [x] `CompactionManager` 新增 `probeCompaction(messages)`：单函数产出
       `{ tokens, imageCount, imageTriggered, overTriggerLine, overHardLimit }` +
       `getTriggerLine()` / `getHardLimit()`。
-- [ ] `CompactionCoordinator.runPreTurn` 改用 probe（保留 517 冷却门）。
-- [ ] DuyaAgent 中环 preflight 改用 probe 的 `overHardLimit`（删本地 `contextWindow` 比较漂移面）。
-- [ ] 触发拓扑文档化：soft(runPreTurn, 带冷却) / hard(中环, 不带冷却) / emergency / manual /
+- [x] `CompactionCoordinator.runPreTurn` 改用 probe（保留 517 冷却门与抑制语义）。
+- [x] DuyaAgent 中环 preflight 改用 probe 的 `overHardLimit`（删本地 `contextWindow` 比较漂移面）。
+- [x] 触发拓扑文档化：soft(runPreTurn, 带冷却) / hard(中环, 不带冷却) / emergency / manual /
       model-switch 五种语义触发，共享同一线缆来源。
 
-## Phase 3 — 重注入单通道
+## Phase 3 — 重注入单通道 ✅
 
-- [ ] `PostCompactReinjector.reinject` 返回 `systemSegments`，不再注入 `role:'system'` 到
+- [x] `PostCompactReinjector.reinject` 返回 `systemSegments`，不再注入 `role:'system'` 到
       result.messages。
-- [ ] `EnhancedCompactionResult.reinjection.systemMessages` 承载；controller 直接读取，
+- [x] `EnhancedCompactionResult.reinjection.systemMessages` 承载；controller 直接读取，
       删"扫 result.messages 找 system-role"的脆弱启发式。
-- [ ] 通道契约文档化：producer（reinjector/legacy_system 捕获/bot postSummarySections）→
-      `CompactionEntry.reinjectedSystemMessages` → 唯一读者 `extractLegacySystemSegments`。
+- [x] 通道契约文档化：producer（reinjector/legacy_system 捕获/bot postSummarySections）→
+      `CompactionEntry.reinjectedSystemMessages` → 唯一读者 `extractLegacySystemSegments`；
+      over-threshold 会计把恢复段 token 加回，保持 517 loop-brake 语义。
 
 ## Phase 4 — 持久化收口
 
-- [ ] 核验 `session/db.ts` 附件函数（getAttachmentsForSession / rehydrateContentWithAttachments）
-      在 IPC 模式确有转发分支；有则记录证据收口，无则补分支。
-- [ ] ARCHITECTURE.md 压缩/持久化段落纠偏（反映 timeline 唯一真相 + rebase 内联 checkpoint 现状）。
-- [ ] 过时注释清理（controller adjustSliceBoundary 引用等）。
+- [x] 核验 `session/db.ts` 附件读路径：parsed-document 三函数已有 IPC 分支；原始附件行
+      （getAttachmentsForMessage / getAttachmentsForSession / deleteAttachmentsForSession）
+      **刻意保持直连** —— pre-329 数据仍在 legacy `message_attachments` 表（plan 329 迁移
+      未落地），改读 core stores 会静默丢失旧会话附件。已在源码加 audit note，
+      收口动作归属 plan 329。
+- [x] ARCHITECTURE.md 压缩段落纠偏：删除重复的 Plan 517 段落（既有文档 bug）、更新 422
+      Robustness 行、新增 Plan 552 收敛章节。
+- [x] 过时注释清理（controller adjustSliceBoundary 引用等，Phase 0 已完成）。
 
 ## 验收门禁
 
