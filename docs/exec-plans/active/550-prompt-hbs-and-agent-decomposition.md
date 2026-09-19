@@ -47,7 +47,8 @@
 | 2b ToolExecutionPipeline wire (duyaAgent.streamChat uses facade) | `7eae6bdf` | ✅ done |
 | 2b-internals ToolExecutionPipeline routes batches via DependencyGraphOrchestrator.planExecution (wave scheduling) | `a5590d71` | ✅ done (session 5) |
 | 2e TurnPreparer (partial) — DeadLoopTracker extracted from streamChat | `b20f90bb` | ✅ done (session 5) |
-| **改造 2 — remaining** (2e TurnLoop + StreamFinalizer extraction, 3c StreamingToolExecutor wiring) | — | ⏳ session 6 |
+| 2e StreamFinalizer (partial) — SessionFinalizer success + abort paths extracted | `1a57e4b0` | ✅ done (session 5) |
+| **改造 2 — remaining** (2e TurnLoop extraction, StreamFinalizer error path, 3c StreamingToolExecutor wiring) | — | ⏳ session 6 |
 | 1d-rest 8 remaining dynamic sections + gateway/code/research configs + delete `general/sections/*.ts` | — | ⏳ follow-up PR (out of session-4 scope) |
 | 3c StreamingToolExecutor wiring | — | ⏳ next session |
 | 3d end-to-end coverage | — | ⏳ next session |
@@ -93,14 +94,15 @@ extend anything.
   defaults are bit-identical to the legacy inline implementation.
   `DuyaAgent.ts` shrinks 4356 → 4342 (`-14`).
 
-**DuyaAgent.ts line count**: `4619` (end of session 4) → `4342`
-(end of session 5) — `-277 lines` cumulative since session 4 start.
-Four new modules since session 4 began:
+**DuyaAgent.ts line count**: `4619` (end of session 4) → `4332`
+(end of session 5) — `-287 lines` cumulative since session 4 start.
+Five new modules since session 4 began:
 
 - `packages/agent/src/agent/PermissionsGate.ts` (232 lines, 12 tests)
 - `packages/agent/src/agent/CompactionCoordinator.ts` (272 lines, 6 tests)
 - `packages/agent/src/tool/ToolExecutionPipeline.ts` (now 224 lines — wave-scheduler wiring, 8 tests)
 - `packages/agent/src/agent/TurnLoopTracker.ts` (181 lines, 12 tests)
+- `packages/agent/src/agent/SessionFinalizer.ts` (238 lines, 8 tests)
 
 ## Next-session starting points (session 5)
 
@@ -151,11 +153,12 @@ sub-modules, wiring the orchestrator into StreamingToolExecutor)
 and naturally splits across multiple follow-up sessions — none of
 those follow-ups needs to re-touch the design work done here.
 
-## Session 5 summary (wave scheduler + dead-loop tracker)
+## Session 5 summary (wave scheduler + dead-loop tracker + session finalizer)
 
 Session 5 closed out the 2b-internals wave-scheduler and pulled
-the first slice of 2e (TurnPreparer) out of `streamChat`. Two
-commits, ~700 lines added, ~30 deleted.
+the first slice of 2e (TurnPreparer) and the success/abort slices
+of 2e (StreamFinalizer) out of `streamChat`. Three commits, ~1500
+lines added, ~150 deleted.
 
 1. **`ToolExecutionPipeline` wave scheduler** (`a5590d71`) — the
    pipeline now buffers `addTool` calls and, on first drain,
@@ -176,6 +179,17 @@ commits, ~700 lines added, ~30 deleted.
    separator, same JSON-serialised input, same threshold defaults
    (nudgeAt=8 / hardNudgeAt=12 / hardStopAt=16), same
    `reset()` semantics on stream replay.
+3. **`SessionFinalizer`** (`1a57e4b0`) — owns the success path
+   (PreFinalize veto / PostTurn / mode-exit / SessionEnd /
+   `done(reason='completed')`) and the abort path (Stop +
+   SessionEnd + `done(reason='aborted')`). The third path
+   (stream error / context-length retry / abort mid-flight) is
+   left inline for session 6 because it mutates the per-turn loop
+   body — extracting it would require passing the entire loop's
+   mutable state into the finalizer. The success + abort paths
+   alone move ~64 lines out of streamChat and give the
+   "PreFinalize veto short-circuits the natural exit and
+   continues the loop" contract a unit-test surface.
 
 **Diff review** (per user "反思是否改的正确"):
 
@@ -197,12 +211,19 @@ commits, ~700 lines added, ~30 deleted.
   `count >= hardStopAt` — matches the legacy
   `deadLoopEnabled && consecutiveToolCalls >= deadLoopHardStopAt`
   predicate exactly.
+- `SessionFinalizer.finalizeSuccess` threads `stopReason` into
+  the PreFinalize context only — matches the legacy inline
+  `{...buildHookCtx(), stopReason: turnStopReason}` block which
+  applied it to the PreFinalize call only, not PostTurn.
+- `SessionFinalizer` is fail-open at the lifecycle seam: a
+  throwing `runExitHooks` does not block the SessionEnd dispatch
+  or the final `done` event. Verified by a unit test.
 
-**Remaining 2e slices**: TurnLoop (~1410 lines) and
-StreamFinalizer (~305 lines) extraction. The current `streamChat`
-body is now ~2090 lines (4356 → 4342, but pre-extraction TurnLoop
-was the larger chunk and remains inline). StreamFinalizer is the
-next smallest target and can land in session 6 first.
+**Remaining 2e slices**: TurnLoop (~1410 lines) and the
+StreamFinalizer error path. `streamChat` body is now ~2090 lines
+(4619 → 4332); the inline `for await (const event of streamGenerator)`
+loop and the tool-execution dispatch are the next largest target
+for session 6.
 
 ## Session 4 summary (DuyaAgent 拆解聚焦)
 
