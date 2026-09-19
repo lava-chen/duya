@@ -319,6 +319,17 @@ Modes are declarative `ModeModifier` objects:
 
 Registration: `packages/agent/src/modes/index.ts`
 
+### Prompt System (Plans 550/551)
+
+The system prompt is fully template-driven (Handlebars, `packages/agent/src/prompts/`):
+
+- **Module registry** (`prompts/modules/registry.ts`): one entry per authored content module under `assets/modules/*.hbs` (identity, system, destructive-actions, config-protection, communication, tools, tasks, skill-usage, duya-desktop-context, final-answer, plus profile-specific `*-coding` / gateway / research modules). Keys double as the section name for profile gating (`isSectionEnabled`) and prompt-cache keys. Config references are type-checked (`ModuleName`) so a template rename is a compile error, not a runtime render throw.
+- **Assembly** (`PromptSystemConfig.staticModules`): each profile config is a declarative list of `StaticModuleRef` (`module` + optional `name`/`params`/`enabledWhen`). References normalize onto `SectionDef.compute`, inheriting profile gating, prompt-cache keying, and empty-collapse; `HbsPromptSystem.renderModule` is the single render entry (registry path + module `slots` mapper + params).
+- **Two render contracts** (plan 551 D1): *authored* modules are pure text with assembly-time params; *context-fed* sections live under `assets/dynamic/*.hbs` and use preBuildHooks + `promptContextExtension` for async I/O (memory, environment, recent sessions) — the legacy per-profile `sections/` TS trees and the Plan 550 monolith template are retired.
+- **Variants** (plan 551 D3): no custom Handlebars helpers — mappers precompute booleans (`identity_style_clause`, `tone_never_analysis`, `system_capability_*`) and templates branch with plain `{{#if}}`.
+- **Prompt caching**: static modules cache per section name; dynamic sections are volatile; `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` separates the halves; downstream `DuyaAgent` joins with `'\n\n'`.
+- **Byte-discipline**: every migration landed with byte-level parity tests; the remaining known whitespace artifacts (stray blank lines where gated blocks collapsed in the old monolith/legacy paths) are documented in plan 551.
+
 ### Context Compaction (Plan 422)
 
 Single grok-style strategy in `packages/agent/src/compact/` (`micro`/`snip`/`reactive` deleted; only `SessionMemoryCompactStrategy` remains):
