@@ -251,6 +251,55 @@ describe('WorkflowManager — kill -9 recovery (plan 552 Phase 4 gate)', () => {
     expect(run?.status).toBe('failed'); // on_timeout: fail beats a leaking suspension
   });
 
+  it('high-risk plan stops at awaiting_confirm until confirmLaunch (Phase 5)', async () => {
+    const store = new MemoryRunStore();
+    const host = fixtureHost();
+    let wokeWith: { runId: string; status: string } | undefined;
+    const manager = new WorkflowManager({
+      host,
+      store,
+      secret: SECRET,
+      approvalMode: 'await',
+      onRunFinished: (runId, outcome) => {
+        wokeWith = { runId, status: outcome.status };
+      },
+    });
+
+    const plan = {
+      def: WF_DEF,
+      highRiskNodes: ['gate'],
+      warnings: [],
+    };
+    const gated = await manager.launchFromPlan(plan, { params: {} });
+    expect(gated.status).toBe('awaiting_confirm');
+    if (gated.status !== 'awaiting_confirm') return;
+    expect((await store.getRun(gated.runId))?.status).toBe('awaiting_confirm');
+    expect(host.agentCalls).toEqual([]); // nothing executed
+
+    // Confirm → executes → completes → auto-wake hook fired.
+    const done = await manager.confirmLaunch(gated.runId);
+    expect(done.status).toBe('complete');
+    expect(host.agentCalls).toEqual(['step one', 'step two']);
+    expect(wokeWith).toMatchObject({ runId: gated.runId, status: 'complete' });
+  });
+
+  it('verify stage annotates the completed run (Phase 5)', async () => {
+    const store = new MemoryRunStore();
+    const host = fixtureHost();
+    const manager = new WorkflowManager({
+      host,
+      store,
+      secret: SECRET,
+      approvalMode: 'await',
+      verify: { acceptanceCriteria: 'steps one and two ran' },
+    });
+    const result = await manager.launch({ def: WF_DEF, params: {} });
+    expect(result.status).toBe('complete');
+    if (result.status !== 'complete') return;
+    expect(result.verification).toBeDefined();
+    expect(result.verification?.verification).toBe('verified');
+  });
+
   it('cancel marks an idle parked run cancelled', async () => {
     const store = new MemoryRunStore();
     const host = fixtureHost();

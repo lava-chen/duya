@@ -27,6 +27,8 @@ import { Journal, type JournalRecord, type JournalSink } from './journal.js';
 import { verifyResumeToken, createResumeToken } from './resume-token.js';
 import type { WorkflowHost } from './host.js';
 import type { GuiRunPorts } from './gui-runner.js';
+import { runVerifyStage, type VerifyVerdict } from './verify.js';
+import type { PlannerResult } from './planner.js';
 
 // ─── store port ───
 
@@ -92,12 +94,13 @@ export interface LaunchInput {
 }
 
 export type LaunchResult =
-  | { status: 'complete'; runId: string; outputs: Record<string, unknown> }
+  | { status: 'complete'; runId: string; outputs: Record<string, unknown>; verification?: VerifyVerdict }
   | { status: 'failed'; runId: string; errorClass: string; error: string }
   | { status: 'waiting'; runId: string; nodeId: string; resumeToken: string; waitTill: number }
   | { status: 'cancelled'; runId: string }
   | { status: 'deduped'; runId: string }
-  | { status: 'invalid'; errors: Array<{ path: string; message: string }> };
+  | { status: 'invalid'; errors: Array<{ path: string; message: string }> }
+  | { status: 'awaiting_confirm'; runId: string; highRiskNodes: string[] };
 
 // ─── manager ───
 
@@ -113,6 +116,14 @@ export interface WorkflowManagerOptions {
   concurrency?: number;
   /** Live progress tap (SSE) — receives every journal record. */
   onProgress?: (record: JournalRecord, runId: string) => void;
+  /** Fresh-eyes verify stage after a complete outcome (plan 552 Phase 5). */
+  verify?: { acceptanceCriteria?: string };
+  /**
+   * Completion auto-wake (552 ruling 3): inject a continuation prompt
+   * into the host session via the existing mailbox/wake machinery.
+   * The production wiring (Phase 6) binds the wake bus here.
+   */
+  onRunFinished?: (runId: string, outcome: EngineOutcome, verification?: VerifyVerdict) => void;
 }
 
 export class WorkflowManager {
@@ -161,12 +172,59 @@ export class WorkflowManager {
     const abort = new AbortController();
     this.inFlight.set(run.id, abort);
     try {
-      const outcome = await this.executeRun(run.id, def, input.params ?? {}, {
+      const { outcome, verification } = await this.executeRun(run.id, def, input.params ?? {}, {
         signal: input.signal ?? abort.signal,
       });
-      return this.toLaunchResult(outcome);
+      return this.toLaunchResult(outcome, verification);
     } finally {
       this.inFlight.delete(run.id);
+    }
+  }
+
+  /**
+   * High-risk gate (415 §7 + 552 §5 落点⑤): a plan with flagged nodes
+   * NEVER auto-executes — the run is created in `awaiting_confirm` and
+   * only `confirmLaunch` starts it.
+   */
+  async launchFromPlan(plan: PlannerResult, input: Omit<LaunchInput, 'def'> & { def?: WorkflowDef }): Promise<LaunchResult> {
+    const def = input.def ?? plan.def;
+    if (plan.highRiskNodes.length === 0) {
+      return this.launch({ ...input, def });
+    }
+    const validation = validateWorkflow(def);
+    if (!validation.ok || !validation.def) {
+      return { status: 'invalid', errors: validation.errors };
+    }
+    const run = await this.options.store.createRun({
+      workflowName: def.name,
+      workflowVersionId: `${def.name}@${Date.now()}`,
+      status: 'awaiting_confirm',
+      triggerKind: input.triggerKind ?? 'manual',
+      dedupKey: input.dedupKey ?? null,
+      params: input.params ?? {},
+      retryOf: input.retryOf ?? null,
+    });
+    await this.options.store.saveSnapshot({ runId: run.id, definition: def, nodeStack: [], journal: [] });
+    return { status: 'awaiting_confirm', runId: run.id, highRiskNodes: plan.highRiskNodes };
+  }
+
+  /** User confirmed the high-risk plan → execute from the stored def. */
+  async confirmLaunch(runId: string): Promise<LaunchResult> {
+    const snap = await this.options.store.loadSnapshot(runId);
+    const run = await this.options.store.getRun(runId);
+    if (!snap || !run || run.status !== 'awaiting_confirm') {
+      return { status: 'failed', runId, errorClass: 'unknown', error: 'run is not awaiting confirmation' };
+    }
+    await this.options.store.updateStatus(runId, 'active', null);
+    const abort = new AbortController();
+    this.inFlight.set(runId, abort);
+    try {
+      const { outcome, verification } = await this.executeRun(runId, snap.definition as WorkflowDef, run.params, {
+        signal: abort.signal,
+      });
+      return this.toLaunchResult(outcome, verification);
+    } finally {
+      this.inFlight.delete(runId);
     }
   }
 
@@ -192,8 +250,12 @@ export class WorkflowManager {
     const journal = this.journalFrom(snap.journal as JournalRecord[]);
 
     await this.options.store.updateStatus(runId, 'active', null);
-    const outcome = await this.executeRun(runId, def, run.params, { journal, token: resume.token, decision: resume.decision });
-    return this.toLaunchResult(outcome);
+    const { outcome, verification } = await this.executeRun(runId, def, run.params, {
+      journal,
+      token: resume.token,
+      decision: resume.decision,
+    });
+    return this.toLaunchResult(outcome, verification);
   }
 
   /** User cancel — journal-free terminal (§6.4: replayable semantics). */
@@ -283,7 +345,7 @@ export class WorkflowManager {
       token?: string;
       decision?: 'approve' | 'deny' | 'timeout';
     },
-  ): Promise<EngineOutcome> {
+  ): Promise<{ outcome: EngineOutcome; verification?: VerifyVerdict }> {
     const records: JournalRecord[] = [];
     let journal: Journal;
     if (opts.journal) {
@@ -317,10 +379,28 @@ export class WorkflowManager {
 
     // Terminal statuses → run row (journal-free stops already skipped
     // the engine's journal writes; here we only mirror the outcome).
+    let verification: VerifyVerdict | undefined;
     switch (outcome.status) {
       case 'complete':
         await this.options.store.updateStatus(runId, 'complete', null);
         await this.options.store.setWaitTill(runId, null);
+        // Fresh-eyes verify stage (plan 552 Phase 5) — annotation lands
+        // in the journal; synthesis MUST present verified/unconfirmed.
+        if (this.options.verify) {
+          try {
+            verification = await runVerifyStage({
+              def,
+              outputs: outcome.outputs,
+              journal,
+              runId,
+              host: this.options.host,
+              decisionService: this.options.decisionService,
+              acceptanceCriteria: this.options.verify.acceptanceCriteria,
+            });
+          } catch {
+            verification = undefined; // verify must never fail the run
+          }
+        }
         break;
       case 'failed':
         await this.options.store.updateStatus(runId, 'failed', outcome.error);
@@ -334,13 +414,19 @@ export class WorkflowManager {
         await this.options.store.updateStatus(runId, 'cancelled', 'cancelled');
         break;
     }
-    return outcome;
+    this.options.onRunFinished?.(runId, outcome, verification);
+    return { outcome, verification };
   }
 
-  private toLaunchResult(outcome: EngineOutcome): LaunchResult {
+  private toLaunchResult(outcome: EngineOutcome, verification?: VerifyVerdict): LaunchResult {
     switch (outcome.status) {
       case 'complete':
-        return { status: 'complete', runId: outcome.runId, outputs: outcome.outputs };
+        return {
+          status: 'complete',
+          runId: outcome.runId,
+          outputs: outcome.outputs,
+          verification,
+        };
       case 'failed':
         return { status: 'failed', runId: outcome.runId, errorClass: outcome.errorClass, error: outcome.error };
       case 'waiting':
