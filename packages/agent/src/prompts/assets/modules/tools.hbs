@@ -6,8 +6,11 @@
 {{/if}}
 {{else}}
 # Using your tools
+{{#if tools_bash_warning}}
+ - Do NOT use Bash when a relevant dedicated tool is provided. This helps the user understand and review your work:
+{{/if}}
 {{#each providedToolSubitems}}
- - {{this}}
+{{#if @root.tools_legacy_indent}}  - {{this}}{{else}} - {{this}}{{/if}}
 {{/each}}
 {{#if hasTodoTool}}
  - Break down and manage your work with the {{todo_tool_name}} tool.

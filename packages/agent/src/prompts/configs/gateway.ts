@@ -1,10 +1,12 @@
 /**
  * Gateway PromptSystem config.
  *
- * Full-capability channel agent. Composition mirrors the general desktop
- * agent (identity replaced by the channel intro, plus the gateway-unique
- * gatewayRole / toneAndStyle sections). No duyaDesktopContext — that
- * section explicitly self-excludes IM channels.
+ * Full-capability channel agent. Plan 551: the static half is a
+ * declarative assembly list over the shared module registry — identity is
+ * replaced by the channel intro, plus the gateway-unique gatewayRole and
+ * toneAndStyle (which adds the never-analysis paragraph via `params`).
+ * No duyaDesktopContext — that section explicitly self-excludes IM
+ * channels.
  */
 
 import type { PromptSystemConfig } from '../PromptSystem.js'
@@ -13,21 +15,6 @@ import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
 import { createMemoryPreBuildHook } from '../sections/dynamic/memoryPreBuildHook.js'
 import { createEnvironmentPreBuildHook } from '../sections/dynamic/environmentPreBuildHook.js'
 import { createRecentSessionsPreBuildHook } from '../sections/dynamic/recentSessionsPreBuildHook.js'
-
-// Gateway-specific sections
-import { getGatewayIntroSection, getGatewayRoleSection } from '../gateway/sections/index.js'
-import { getToneAndStyleSection } from '../gateway/sections/toneAndStyle.js'
-
-// Reused sections from the general system
-import { getSystemSection } from '../general/sections/system.js'
-import { getCommunicationSection } from '../general/sections/communication.js'
-import { getFinalAnswerSection } from '../general/sections/finalAnswer.js'
-import { getTasksSection } from '../general/sections/tasks.js'
-import { getDestructiveActionsSection } from '../general/sections/destructiveActions.js'
-import { getConfigProtectionSection } from '../general/sections/configProtection.js'
-import { getToolsSection } from '../general/sections/tools.js'
-import { getSkillUsageSection } from '../general/sections/skillUsage.js'
-import { getProjectSection } from '../general/sections/project.js'
 
 // Reused dynamic sections
 import { getLanguageSection } from '../sections/dynamic/language.js'
@@ -38,23 +25,33 @@ import { getVisionGuidelinesSection } from '../sections/dynamic/visionGuidelines
 
 export const gatewayConfig: PromptSystemConfig = {
   name: 'gateway',
-  staticSections: [
-    { name: 'intro', compute: getGatewayIntroSection },
-    { name: 'gatewayRole', compute: getGatewayRoleSection },
-    { name: 'communication', compute: getCommunicationSection },
-    { name: 'finalAnswer', compute: getFinalAnswerSection },
-    { name: 'toneAndStyle', compute: getToneAndStyleSection },
-    { name: 'system', compute: getSystemSection },
-    { name: 'tasks', compute: getTasksSection },
-    { name: 'destructiveActions', compute: getDestructiveActionsSection },
-    { name: 'configProtection', compute: getConfigProtectionSection },
-    { name: 'tools', compute: getToolsSection },
+  staticModules: [
+    { module: 'intro', name: 'intro' },
+    { module: 'gatewayRole', name: 'gatewayRole' },
+    { module: 'communication', name: 'communication' },
+    { module: 'finalAnswer', name: 'finalAnswer' },
+    { module: 'toneAndStyle', name: 'toneAndStyle', params: { tone_never_analysis: true } },
+    { module: 'system', name: 'system' },
+    { module: 'tasks', name: 'tasks' },
+    { module: 'destructiveActions', name: 'destructiveActions' },
+    { module: 'configProtection', name: 'configProtection' },
     {
-      name: 'skillUsage',
-      compute: (ctx) => ctx.enabledTools.has(TOOL_NAMES.SKILL) ? getSkillUsageSection(ctx) : null,
+      // The gateway tools section predates the general rework: it keeps
+      // the "Do NOT use Bash" lead bullet and the two-space subitem
+      // indent. Params preserve that divergence until a reviewed
+      // content-unification commit.
+      module: 'tools',
+      name: 'tools',
+      params: { tools_bash_warning: true, tools_legacy_indent: true },
     },
-    { name: 'project', compute: getProjectSection },
+    {
+      module: 'skillUsage',
+      name: 'skillUsage',
+      enabledWhen: (ctx) => ctx.enabledTools.has(TOOL_NAMES.SKILL),
+    },
+    { module: 'project', name: 'project' },
   ],
+  staticSections: [],
   dynamicSections: [
     // Global preferences
     { name: 'language', compute: getLanguageSection, description: 'Language preference' },

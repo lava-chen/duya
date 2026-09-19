@@ -32,6 +32,7 @@ import { mapIdentityCodingSlots } from './mappers/identityCoding.js'
 import { mapSystemCodingSlots } from './mappers/systemCoding.js'
 import { mapRulesSlots } from './mappers/rules.js'
 import { mapDuyaDesktopContextCodeSlots } from './mappers/duyaDesktopContextCode.js'
+import { mapGatewayIntroSlots } from './mappers/gatewayIntro.js'
 
 export interface PromptModuleDef {
   /** Asset path relative to the prompts assets root. */
@@ -139,6 +140,19 @@ export const MODULES = {
     path: 'modules/duya-desktop-context-code.hbs',
     description: 'Code-profile desktop context (legacy hard-wrapped wording)',
     slots: mapDuyaDesktopContextCodeSlots,
+  },
+  intro: {
+    path: 'modules/intro.hbs',
+    description: 'Gateway channel identity opener (platform-name aware)',
+    slots: mapGatewayIntroSlots,
+  },
+  gatewayRole: {
+    path: 'modules/gateway-role.hbs',
+    description: 'Gateway channel-agent behavioural constraints',
+  },
+  toneAndStyle: {
+    path: 'modules/tone-and-style.hbs',
+    description: 'Tone and style; gateway adds the never-analysis paragraph via params',
   },
 } as const satisfies Record<string, PromptModuleDef>
 
