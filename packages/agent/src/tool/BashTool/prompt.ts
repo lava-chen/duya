@@ -5,7 +5,12 @@
  */
 
 import { prependBullets } from '../../prompts/constants/promptSections.js'
-import { BASH_DEFAULT_TIMEOUT_MS, BASH_MAX_TIMEOUT_MS } from './constants.js'
+import {
+  BASH_DEFAULT_TIMEOUT_MS,
+  BASH_MAX_FOREGROUND_TIMEOUT_MS,
+  BASH_MAX_TIMEOUT_MS,
+  BASH_SOFT_YIELD_MS,
+} from './constants.js'
 
 export const BASH_TOOL_NAME = 'Bash'
 
@@ -24,18 +29,46 @@ export function getDefaultTimeoutMs(): number {
 }
 
 /**
- * Maximum timeout in milliseconds
+ * Maximum timeout in milliseconds. Kept as the absolute floor (background-only);
+ * foreground is capped tighter via {@link BASH_MAX_FOREGROUND_TIMEOUT_MS}.
  */
 export function getMaxTimeoutMs(): number {
   return BASH_MAX_TIMEOUT_MS
+}
+
+/**
+ * Foreground command ceiling. Pushed into the model-facing prompt so the
+ * runtime cap is mirrored in the model-facing contract.
+ */
+export function getMaxForegroundTimeoutMs(): number {
+  return BASH_MAX_FOREGROUND_TIMEOUT_MS
+}
+
+/**
+ * Soft-yield window (ms). Foreground commands that exceed this are
+ * auto-promoted to a managed background task without restarting the process.
+ */
+export function getSoftYieldMs(): number {
+  return BASH_SOFT_YIELD_MS
 }
 
 // ============================================================
 // Background Commands
 // ============================================================
 
+/**
+ * Model-facing guidance for when to use `run_in_background`. Updated to
+ * reflect the 15s auto-promotion behaviour: foreground commands that do not
+ * finish within `BASH_SOFT_YIELD_MS` are auto-promoted, but the model still
+ * gets a cleaner return shape if it opts in explicitly for any command it
+ * knows will be long. Mirrors mcode's LocalBashToolDef guidance.
+ */
 function getBackgroundUsageNote(): string | null {
-  return "You can use the `run_in_background` parameter to run the command in the background. Only use this if you don't need the result immediately and are OK being notified when the command completes later. You do not need to check the output right away - you'll be notified when it finishes. Use `get_task_output` with the returned task ID to fetch results on demand, and `kill_task` to terminate a background task if needed. You do not need to use '&' at the end of the command when using this parameter."
+  return [
+    `You can use the \`run_in_background\` parameter to run the command in the background. Only use this if you don't need the result immediately and are OK being notified when the command completes later. You do not need to check the output right away — you'll be notified when it finishes. Use \`get_task_output\` with the returned task ID to fetch results on demand, and \`kill_task\` to terminate a background task if needed. You do not need to use '&' at the end of the command when using this parameter.`,
+    `Foreground commands that don't finish within ${BASH_SOFT_YIELD_MS}ms are auto-promoted to a managed background task and the tool call returns a task id — the process is not restarted, but the conversation is unblocked immediately.`,
+    `Do not increase \`timeout\` to mask a hung foreground command. The foreground ceiling is ${BASH_MAX_FOREGROUND_TIMEOUT_MS}ms (${BASH_MAX_FOREGROUND_TIMEOUT_MS / 60_000} minutes); for anything longer, opt into \`run_in_background: true\` and let the runtime watchdog handle it.`,
+  ].join(' ')
 }
 
 // ============================================================
@@ -171,13 +204,14 @@ export function getBashPrompt(): string {
   const windowsEncodingItems = getWindowsEncodingItems()
 
   const maxTimeout = getMaxTimeoutMs()
+  const maxForegroundTimeout = getMaxForegroundTimeoutMs()
   const defaultTimeout = getDefaultTimeoutMs()
 
   const instructionItems: Array<string | string[]> = [
     'If your command will create new directories or files, first use this tool to run `ls` to verify the parent directory exists.',
     'Always quote file paths that contain spaces with double quotes (e.g., cd "path with spaces/file.txt")',
     'Try to maintain your current working directory by using absolute paths and avoiding `cd`. Use `cd` only if the user explicitly requests it.',
-    `You may specify an optional timeout in milliseconds (up to ${maxTimeout}ms / ${maxTimeout / 60000} minutes). Default timeout is ${defaultTimeout}ms (${defaultTimeout / 60000} minutes).`,
+    `You may specify an optional timeout in milliseconds. Foreground: default ${defaultTimeout}ms, ceiling ${maxForegroundTimeout}ms (${maxForegroundTimeout / 60000} minutes). Background (run_in_background=true): up to ${maxTimeout}ms (${maxTimeout / 60000} minutes).`,
     ...(backgroundNote !== null ? [backgroundNote] : []),
     'When issuing multiple commands:',
     multipleCommandsSubitems,
@@ -221,13 +255,14 @@ export function getSimplePrompt(): string {
   const windowsEncodingItems = getWindowsEncodingItems()
 
   const maxTimeout = getMaxTimeoutMs()
+  const maxForegroundTimeout = getMaxForegroundTimeoutMs()
   const defaultTimeout = getDefaultTimeoutMs()
 
   const instructionItems: Array<string | string[]> = [
     'If your command will create new directories or files, first verify the parent directory exists.',
     'Always quote file paths that contain spaces.',
     'Use absolute paths to maintain your current working directory.',
-    `Timeout: up to ${maxTimeout}ms. Default: ${defaultTimeout}ms.`,
+    `Timeout: foreground default ${defaultTimeout}ms, ceiling ${maxForegroundTimeout}ms; background up to ${maxTimeout}ms.`,
     ...(backgroundNote !== null ? [backgroundNote] : []),
     'For git commands:',
     gitSubitems,

@@ -1,7 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { BashTool, validateBashInput } from '../src/tool/BashTool/BashTool.js';
-import { BASH_DEFAULT_TIMEOUT_MS, BASH_MAX_TIMEOUT_MS } from '../src/tool/BashTool/constants.js';
-import { getBashPrompt, getDefaultTimeoutMs, getMaxTimeoutMs } from '../src/tool/BashTool/prompt.js';
+import {
+  BASH_DEFAULT_TIMEOUT_MS,
+  BASH_MAX_FOREGROUND_TIMEOUT_MS,
+  BASH_MAX_TIMEOUT_MS,
+  BASH_SOFT_YIELD_MS,
+} from '../src/tool/BashTool/constants.js';
+import {
+  getBashPrompt,
+  getDefaultTimeoutMs,
+  getMaxForegroundTimeoutMs,
+  getMaxTimeoutMs,
+  getSoftYieldMs,
+} from '../src/tool/BashTool/prompt.js';
 import { PowerShellTool } from '../src/tool/PowerShellTool/PowerShellTool.js';
 import {
   formatWorkerFailureContent,
@@ -12,10 +23,66 @@ describe('BashTool contract', () => {
   it('keeps prompt timeout values aligned with runtime constants', () => {
     expect(getDefaultTimeoutMs()).toBe(BASH_DEFAULT_TIMEOUT_MS);
     expect(getMaxTimeoutMs()).toBe(BASH_MAX_TIMEOUT_MS);
+    expect(getMaxForegroundTimeoutMs()).toBe(BASH_MAX_FOREGROUND_TIMEOUT_MS);
+    expect(getSoftYieldMs()).toBe(BASH_SOFT_YIELD_MS);
 
     const prompt = getBashPrompt();
-    expect(prompt).toContain(`Default timeout is ${BASH_DEFAULT_TIMEOUT_MS}ms`);
+    expect(prompt).toContain(`default ${BASH_DEFAULT_TIMEOUT_MS}ms`);
+    expect(prompt).toContain(`ceiling ${BASH_MAX_FOREGROUND_TIMEOUT_MS}ms`);
     expect(prompt).toContain(`up to ${BASH_MAX_TIMEOUT_MS}ms`);
+    expect(prompt).toContain(`${BASH_SOFT_YIELD_MS}ms`);
+  });
+
+  it('advertises the new soft-yield and foreground ceiling in input_schema', () => {
+    const tool = new BashTool();
+
+    expect(tool.input_schema).toMatchObject({
+      properties: {
+        run_in_background: {
+          type: 'boolean',
+        },
+        timeout: {
+          type: 'number',
+        },
+      },
+    });
+
+    const schemaJson = JSON.stringify(tool.input_schema);
+    expect(schemaJson).toContain(String(BASH_MAX_FOREGROUND_TIMEOUT_MS));
+    expect(schemaJson).toContain(String(BASH_SOFT_YIELD_MS));
+  });
+
+  it('caps foreground timeout at the foreground ceiling', () => {
+    const toolLong = validateBashInput({
+      command: 'npm run dev',
+      timeout: BASH_MAX_FOREGROUND_TIMEOUT_MS + 1,
+    });
+    expect(toolLong.valid).toBe(false);
+    if (!toolLong.valid) {
+      expect(toolLong.error).toContain('foreground');
+    }
+
+    const toolOk = validateBashInput({
+      command: 'npm run dev',
+      timeout: BASH_MAX_FOREGROUND_TIMEOUT_MS,
+    });
+    expect(toolOk.valid).toBe(true);
+  });
+
+  it('keeps the historical 10-min ceiling for background commands', () => {
+    const toolBgOk = validateBashInput({
+      command: 'npm run dev',
+      run_in_background: true,
+      timeout: BASH_MAX_TIMEOUT_MS,
+    });
+    expect(toolBgOk.valid).toBe(true);
+
+    const toolBgTooLong = validateBashInput({
+      command: 'npm run dev',
+      run_in_background: true,
+      timeout: BASH_MAX_TIMEOUT_MS + 1,
+    });
+    expect(toolBgTooLong.valid).toBe(false);
   });
 
   it('advertises and validates run_in_background consistently', () => {

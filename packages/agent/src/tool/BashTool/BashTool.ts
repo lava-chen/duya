@@ -4,8 +4,8 @@
  */
 
 import { execa, ExecaError, type Options } from 'execa';
-import { spawn } from 'child_process';
-import { open } from 'fs/promises';
+import { spawn, type ChildProcess } from 'child_process';
+import { open, readFile } from 'fs/promises';
 import { writeFileSync } from 'fs';
 import { join } from 'path';
 import type { ToolResult, ToolUseContext } from '../../types.js';
@@ -30,7 +30,12 @@ import {
   normalizeShellCommandForExecution,
   resolveShellExecutionPlan,
 } from '../../utils/shell/intelligence.js';
-import { BASH_DEFAULT_TIMEOUT_MS, BASH_MAX_TIMEOUT_MS } from './constants.js';
+import {
+  BASH_DEFAULT_TIMEOUT_MS,
+  BASH_MAX_FOREGROUND_TIMEOUT_MS,
+  BASH_MAX_TIMEOUT_MS,
+  BASH_SOFT_YIELD_MS,
+} from './constants.js';
 import { buildGitReminder } from './git-reminder.js';
 import { getBashTaskRegistry } from '../../session/bash-task-registry.js';
 import { buildTaskNotificationXml } from '../../lifecycle/buildTaskNotification.js';
@@ -126,6 +131,26 @@ export function truncateShellOutput(content: string): TruncatedShellOutput {
 // Input Validation
 // ============================================================
 
+/**
+ * Build the env block for a foreground bash subprocess. Strips any var whose
+ * name matches a sensitive-token regex (TOKEN/KEY/SECRET/PASSWORD/PASSPHRASE/
+ * PRIVATE/CREDENTIAL), then layers in the Windows UTF-8 fixups on top.
+ * Exported for unit-test coverage of the sanitisation policy.
+ */
+export function buildSanitizedBashEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...getWindowsEncodingEnv(),
+  };
+  const sensitivePattern = /TOKEN|KEY|SECRET|PASSWORD|PASSPHRASE|PRIVATE|CREDENTIAL/i;
+  for (const key of Object.keys(env)) {
+    if (sensitivePattern.test(key)) {
+      delete env[key];
+    }
+  }
+  return env;
+}
+
 export interface BashToolInput {
   command: string;
   timeout?: number;
@@ -161,6 +186,15 @@ const DEFAULT_BASH_TOOL_CONFIG: ShellCommandToolConfig = {
 };
 
 /**
+ * Whether the input asks for explicit background execution. Used by
+ * validateBashInput to pick the right `timeout` ceiling before the rest of
+ * the input has been normalised.
+ */
+function isExplicitBackground(obj: Record<string, unknown>): boolean {
+  return obj.run_in_background === true || obj.background === true;
+}
+
+/**
  * Validates BashTool input
  */
 export function validateBashInput(input: unknown): { valid: true; data: BashToolInput } | { valid: false; error: string } {
@@ -182,8 +216,20 @@ export function validateBashInput(input: unknown): { valid: true; data: BashTool
     if (typeof obj.timeout !== 'number' || obj.timeout <= 0) {
       return { valid: false, error: 'timeout must be a positive number' };
     }
-    if (obj.timeout > BASH_MAX_TIMEOUT_MS) {
-      return { valid: false, error: `timeout cannot exceed ${BASH_MAX_TIMEOUT_MS}ms (${BASH_MAX_TIMEOUT_MS / 60000} minutes)` };
+    // Foreground and background have different ceilings — foreground is capped
+    // tighter (5 min) to force long commands to opt into run_in_background.
+    // Background keeps the historical 10-min ceiling so existing long-running
+    // background flows are not broken by this change.
+    const maxAllowed = isExplicitBackground(obj)
+      ? BASH_MAX_TIMEOUT_MS
+      : BASH_MAX_FOREGROUND_TIMEOUT_MS;
+    if (obj.timeout > maxAllowed) {
+      return {
+        valid: false,
+        error: isExplicitBackground(obj)
+          ? `timeout cannot exceed ${BASH_MAX_TIMEOUT_MS}ms (${BASH_MAX_TIMEOUT_MS / 60000} minutes) for background commands`
+          : `timeout cannot exceed ${BASH_MAX_FOREGROUND_TIMEOUT_MS}ms (${BASH_MAX_FOREGROUND_TIMEOUT_MS / 60000} minutes) for foreground commands; use run_in_background=true for longer commands`,
+      };
     }
   }
 
@@ -255,7 +301,13 @@ export class BashTool extends BaseTool implements ToolExecutor {
         },
         timeout: {
           type: 'number',
-          description: `Timeout in milliseconds (default: ${BASH_DEFAULT_TIMEOUT_MS}, max: ${BASH_MAX_TIMEOUT_MS})`,
+          description:
+            `Timeout in milliseconds. Foreground: default ${BASH_DEFAULT_TIMEOUT_MS}, ` +
+            `max ${BASH_MAX_FOREGROUND_TIMEOUT_MS}. ` +
+            `Background: up to ${BASH_MAX_TIMEOUT_MS}. ` +
+            `Foreground commands that do not finish within ${BASH_SOFT_YIELD_MS}ms ` +
+            `are auto-promoted to a managed background task and the tool call ` +
+            `returns a task id without restarting the process.`,
         },
         description: {
           type: 'string',
@@ -263,7 +315,10 @@ export class BashTool extends BaseTool implements ToolExecutor {
         },
         run_in_background: {
           type: 'boolean',
-          description: 'Whether to run the command in the background',
+          description:
+            'Start in the background and return a task id immediately. ' +
+            `Foreground commands may also return a task id after ${BASH_SOFT_YIELD_MS}ms ` +
+            'without restarting the process.',
         },
         background: {
           type: 'boolean',
@@ -300,6 +355,187 @@ export class BashTool extends BaseTool implements ToolExecutor {
     produces: [],
     consumes: [],
   });
+
+  /**
+   * Spawn a foreground bash command with stdio redirected to an output file.
+   * Returns the live subprocess plus a promise that resolves with the captured
+   * output once the process exits. The caller is responsible for either
+   * awaiting the promise (normal foreground completion) or detaching the
+   * subprocess via `proc.unref()` and registering it for background tracking
+   * (soft-yield promotion).
+   *
+   * Using a file instead of execa's in-memory capture is what makes the
+   * soft-yield race safe: when the timer wins we abandon the foreground
+   * promise but the output is still preserved on disk for the background
+   * task to read back later.
+   */
+  private async spawnForegroundProcess(params: {
+    finalCommand: string;
+    shellInfo: import('../../utils/shellDetector.js').ShellInfo;
+    shellArgs: string[];
+    cwd: string;
+    timeoutMs: number;
+    abortSignal: AbortSignal | undefined;
+    taskIdHint: string;
+  }): Promise<{
+    proc: ChildProcess;
+    outputFile: string;
+    exitPromise: Promise<{ exitCode: number | null; signal: NodeJS.Signals | null; output: string }>;
+  }> {
+    const outputFile = join(getBashOutputDir(), `duya-bash-fg-${params.taskIdHint}.log`);
+    const fd = await open(outputFile, 'w', 0o644);
+    const env = buildSanitizedBashEnv();
+
+    const proc = spawn(params.shellInfo.path, params.shellArgs, {
+      cwd: params.cwd,
+      env,
+      stdio: ['ignore', fd.fd, fd.fd],
+      windowsHide: true,
+    });
+
+    // Abort before soft-yield: kill the process tree so the foreground tool
+    // call truly ends. After the soft-yield race resolves (either side) this
+    // listener is removed and the foreground path's own close handlers take
+    // over — see register for a soft-yield for the background side.
+    let treeKillOnAbort: (() => void) | undefined;
+    if (params.abortSignal) {
+      treeKillOnAbort = () => {
+        const pid = proc.pid;
+        if (pid) {
+          void killProcessTree(pid);
+        }
+      };
+      params.abortSignal.addEventListener('abort', treeKillOnAbort, { once: true });
+    }
+
+    const exitPromise = new Promise<{
+      exitCode: number | null;
+      signal: NodeJS.Signals | null;
+      output: string;
+    }>((resolve) => {
+      proc.on('close', async (exitCode, signal) => {
+        if (treeKillOnAbort && params.abortSignal) {
+          params.abortSignal.removeEventListener('abort', treeKillOnAbort);
+        }
+        try { await fd.close(); } catch { /* already closed */ }
+        let output = '';
+        try {
+          output = await readFile(outputFile, 'utf-8');
+        } catch {
+          output = '';
+        }
+        resolve({ exitCode, signal, output });
+      });
+      proc.on('error', async (err) => {
+        if (treeKillOnAbort && params.abortSignal) {
+          params.abortSignal.removeEventListener('abort', treeKillOnAbort);
+        }
+        try { await fd.close(); } catch { /* already closed */ }
+        resolve({ exitCode: -1, signal: null, output: err.message });
+      });
+    });
+
+    // Honour the user's overall timeout as a hard kill. If soft-yield fires
+    // first we let the process keep running (it becomes a background task).
+    const hardKillTimer = setTimeout(() => {
+      const pid = proc.pid;
+      if (pid) void killProcessTree(pid);
+    }, params.timeoutMs);
+
+    proc.once('close', () => clearTimeout(hardKillTimer));
+    proc.once('error', () => clearTimeout(hardKillTimer));
+
+    return { proc, outputFile, exitPromise };
+  }
+
+  /**
+   * Promote a foreground subprocess that has outlived the soft-yield window
+   * to a managed background task. The subprocess stays running, the registry
+   * is updated, and a completion notification is queued via the mailbox so
+   * the LLM can resume the conversation once the process actually exits.
+   */
+  private promoteForegroundToBackground(params: {
+    proc: ChildProcess;
+    outputFile: string;
+    taskId: string;
+    sessionId: string | undefined;
+    originalCommand: string;
+    softYieldMs: number;
+    startTime: number;
+    securityWarnings: SecurityWarning[];
+    executionPlanReason?: string;
+  }): ToolResult {
+    const { proc, outputFile, taskId, sessionId, originalCommand, startTime } = params;
+    const registry = getBashTaskRegistry();
+    const pid = proc.pid ?? -1;
+
+    registry.register({
+      id: taskId,
+      pid,
+      outputFile,
+      command: originalCommand.slice(0, 200),
+      status: 'running',
+      startTime,
+    });
+
+    // Once we hand off to the background registry, the foreground tool call's
+    // abort signal no longer kills the process. The user can still stop the
+    // task via kill_task / the TaskDrawer UI, which goes through registry.stopTask.
+    proc.unref();
+
+    proc.on('close', (exitCode) => {
+      registry.markCompleted(taskId, exitCode ?? -1);
+      if (!sessionId) return;
+      const completedTask = registry.getTask(taskId);
+      const status = exitCode === 0 ? 'completed' : 'failed';
+      const finalMessage = `Background command (auto-promoted after ${params.softYieldMs}ms) completed with exit code ${exitCode ?? -1}.`;
+      const xml = buildTaskNotificationXml({
+        taskId,
+        status,
+        agentType: 'bash',
+        agentName: originalCommand.slice(0, 200),
+        description: originalCommand.slice(0, 200),
+        outputFilePath: outputFile,
+        finalMessage,
+        totalDurationMs: completedTask?.endTime && completedTask?.startTime
+          ? completedTask.endTime - completedTask.startTime
+          : undefined,
+      });
+      void sendBackgroundNotification({ sessionId, xml, taskId });
+    });
+
+    proc.on('error', (err) => {
+      registry.markCompleted(taskId, -1, err.message);
+    });
+
+    const lines: string[] = [
+      `[Background] Foreground command did not complete within ${params.softYieldMs}ms and was auto-promoted to a managed background task (no process restart).`,
+      `[Background] Task ID: ${taskId}`,
+      `[Background] PID: ${pid}`,
+      `[Background] Output file: ${outputFile}`,
+      `You will be notified automatically when it completes. Do not wait or poll for it.`,
+      `Use ${GET_TASK_OUTPUT_TOOL_NAME} only for a quick status/output snapshot; it never blocks.`,
+      `Use kill_task to terminate the task if needed.`,
+    ];
+    if (params.executionPlanReason) lines.unshift(`[Shell] ${params.executionPlanReason}`);
+    const nonCritical = params.securityWarnings.filter(w => w.severity !== 'critical' && w.severity !== 'high');
+    if (nonCritical.length > 0) {
+      lines.unshift(`[Warning] ${nonCritical.map(w => w.message).join('; ')}`);
+    }
+
+    return {
+      id: crypto.randomUUID(),
+      name: this.name,
+      result: lines.join('\n'),
+      metadata: {
+        autoPromoted: true,
+        pid,
+        outputFile,
+        taskId,
+        softYieldMs: params.softYieldMs,
+      },
+    };
+  }
 
   async execute(
     input: Record<string, unknown>,
@@ -452,75 +688,67 @@ export class BashTool extends BaseTool implements ToolExecutor {
         }
       }
 
-      // Non-Docker path: wrap command (bubblewrap or none) then execa
+      // Non-Docker path: wrap command (bubblewrap or none) then spawn with
+      // stdio redirected to a file so we can detach on the soft-yield race.
       const finalCommand = await wrapCommand(normalizedCommand, cwd);
-
-      const sanitizedEnv = {
-        ...process.env,
-        ...getWindowsEncodingEnv(),
-      };
-      // Match env var names containing sensitive tokens so we catch keys
-      // the previous hard-coded list missed (GITHUB_TOKEN, GITLAB_TOKEN,
-      // AWS_SECRET_ACCESS_KEY, PRIVATE_KEY, PASSPHRASE, ...). The regex
-      // runs against the var NAME, not its value.
-      const sensitivePattern = /TOKEN|KEY|SECRET|PASSWORD|PASSPHRASE|PRIVATE|CREDENTIAL/i;
-      for (const key of Object.keys(sanitizedEnv)) {
-        if (sensitivePattern.test(key)) {
-          delete sanitizedEnv[key];
-        }
-      }
-
-      const options: Options = {
-        timeout: resolvedTimeout,
-        env: sanitizedEnv,
-        preferLocal: true,
-        cwd: workingDirectory,
-        cancelSignal: context?.abortController?.signal,
-      };
 
       const nonCriticalWarnings = securityResult.warnings.filter(
         w => w.severity !== 'critical' && w.severity !== 'high'
       );
 
-      // execa's default kill only terminates the direct shell child.
-      // On Windows that is `TerminateProcess(pid)` — it does NOT reach
-      // bash's grandchildren (cargo / rustc / link.exe / MSYS2 subshells),
-      // which then run as orphans holding file handles and keeping the
-      // foreground tool call from truly ending. Wire up our own
-      // process-tree kill that runs alongside execa's default. On Unix,
-      // bash was not spawned with `detached: true` so we fall back to
-      // SIGKILL on the direct PID — still better than execa's no-op when
-      // the child has already been replaced by another shell layer.
-      const subprocess = execa(
-        shellInfo.path,
-        shellProvider.buildArgs(finalCommand),
-        options,
-      );
-      const treeKillAbort = () => {
-        const pid = subprocess.pid;
-        if (pid) {
-          void killProcessTree(pid);
-        }
-      };
-      context?.abortController?.signal.addEventListener('abort', treeKillAbort, { once: true });
+      const taskIdHint = context?.toolUseId ?? crypto.randomUUID();
+      const startTime = Date.now();
+      const spawned = await this.spawnForegroundProcess({
+        finalCommand,
+        shellInfo,
+        shellArgs: shellProvider.buildArgs(finalCommand),
+        cwd,
+        timeoutMs: resolvedTimeout,
+        abortSignal: context?.abortController?.signal,
+        taskIdHint,
+      });
 
-      let result;
-      try {
-        result = await subprocess;
-      } catch (err) {
-        // Belt-and-suspenders: if execa reported the child as gone but the
-        // tree is still alive (Windows MSYS2 / cargo chain), make sure
-        // we tear it down before propagating.
-        treeKillAbort();
-        throw err;
-      } finally {
-        context?.abortController?.signal.removeEventListener('abort', treeKillAbort);
+      // Soft-yield race: wait up to BASH_SOFT_YIELD_MS for the command to
+      // finish naturally. If it does not, promote it to a managed background
+      // task — the process keeps running, the foreground tool call returns
+      // a task id, and the LLM is notified on completion via the mailbox.
+      let softYieldTimer: NodeJS.Timeout | undefined;
+      const softYieldWin = new Promise<{ kind: 'soft_yield' }>((resolve) => {
+        softYieldTimer = setTimeout(() => resolve({ kind: 'soft_yield' }), BASH_SOFT_YIELD_MS);
+        softYieldTimer.unref?.();
+      });
+
+      const completed = await Promise.race<{
+        kind: 'completed';
+        value: Awaited<typeof spawned.exitPromise>;
+      } | { kind: 'soft_yield' }>([
+        spawned.exitPromise.then((value) => ({ kind: 'completed' as const, value })),
+        softYieldWin,
+      ]);
+
+      if (completed.kind === 'soft_yield') {
+        // Promote without restarting: proc keeps running, registry tracks it.
+        return this.promoteForegroundToBackground({
+          proc: spawned.proc,
+          outputFile: spawned.outputFile,
+          taskId: taskIdHint,
+          sessionId: context?.options.sessionId,
+          originalCommand: command,
+          softYieldMs: BASH_SOFT_YIELD_MS,
+          startTime,
+          securityWarnings: securityResult.warnings,
+          executionPlanReason: executionPlan.reason,
+        });
       }
 
-      let output = [result.stdout, result.stderr]
-        .filter(Boolean)
-        .join('\n')
-        .trim();
+      // Process finished inside the soft-yield window — clear the timer and
+      // return the captured output the same way the old execa path did.
+      if (softYieldTimer) clearTimeout(softYieldTimer);
+
+      const { exitCode, output: rawOutput } = completed.value;
+      const durationMs = Date.now() - startTime;
+
+      let output = rawOutput.trim();
 
       if (nonCriticalWarnings.length > 0) {
         const warningMsg = `[Warning] ${nonCriticalWarnings.map(w => w.message).join('; ')}`;
@@ -540,9 +768,10 @@ export class BashTool extends BaseTool implements ToolExecutor {
         id: crypto.randomUUID(),
         name: this.name,
         result: boundedOutput || '(no output)',
+        error: exitCode !== 0 && exitCode !== null,
         metadata: {
-          exitCode: result.exitCode,
-          durationMs: result.durationMs,
+          exitCode: exitCode ?? undefined,
+          durationMs,
           ...(fullOutputPath ? { fullOutputPath } : {}),
         },
       };
