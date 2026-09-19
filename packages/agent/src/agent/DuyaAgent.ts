@@ -1648,7 +1648,7 @@ export class duyaAgent implements AgentRuntime {
           // into their own promptSystem.buildContext → preBuildHook →
           // initializeAgentsMd. Undefined when no project is bound.
           projectHome: this.projectHome,
-          language: this.language, // Propagate language preference to sub-agents
+          language: turnContext.language ?? undefined, // Propagate language preference to sub-agents
           agentDefinitions: {
             activeAgents: agentDefinitions,
             allAgents: agentDefinitions,
