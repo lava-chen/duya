@@ -193,10 +193,16 @@ export class CompactionCoordinator {
 
     // Plan 552: the token path keeps shouldCompact's suppression semantics
     // (gate + threshold); the image trigger keeps bypassing both cooldown
-    // and suppression, exactly as before the probe consolidation.
+    // and suppression, exactly as before the probe consolidation. The
+    // fallback stays lazy so the cooldown gate still short-circuits before
+    // the compaction engine is consulted when no probe is available.
     const suppressed = this.deps.compactionManager.isSuppressed();
-    const overTriggerLine = probe ? probe.overTriggerLine : this.deps.compactionController.shouldCompact();
-    if (!cooldownActive && (imageTriggered || (!suppressed && overTriggerLine))) {
+    if (
+      !cooldownActive &&
+      (imageTriggered ||
+        (!suppressed &&
+          (probe ? probe.overTriggerLine : this.deps.compactionController.shouldCompact())))
+    ) {
       return await this.executeCompaction(
         turnCount,
         systemPromptContent,
