@@ -49,10 +49,6 @@ import { isNestedAgentsMdEnabled } from '../config/feature-flags.js';
 import { getCachedAppConnectionDescriptors } from '../tool/AppConnectionTool/index.js';
 import { buildAppsSystemSection, collectConnectorActivationInjection, collectPluginInjections, collectSkillInjections } from '../mentions/index.js';
 import { compressProjectedToolMessages } from '../compact/projectionCompress.js';
-import {
-  IMAGE_COMPACTION_TRIGGER_COUNT,
-  countImagePartsInMessages,
-} from '../compact/imageParts.js';
 import { createAIClient, createAIClientWithRetry, inferProvider, findModelCompat, estimateContextTextTokens } from '@duya/ai';
 import type { AIClient, AIClientOptions, RetryConfig, ApiFormat } from '@duya/ai';
 import { resolveDefaultBaseURL, resolveLlmClientDiscriminator } from '@duya/ai';
@@ -2479,21 +2475,18 @@ export class duyaAgent implements AgentRuntime {
             if (toolResultMessageCount > 0) {
               const projectionForOverflow =
                 this.compactionController.projectInputMessages();
-              // Plan 495 G2: mid-loop image trigger — a computer-use /
-              // screenshot-heavy run can pile up images within one turn, so
-              // the count is checked here too, not only at turn start.
-              const imageCountOverflow =
-                countImagePartsInMessages(projectionForOverflow) >=
-                IMAGE_COMPACTION_TRIGGER_COUNT;
-              if (
-                imageCountOverflow ||
-                this.compactionManager.getContextTokens(projectionForOverflow) >
-                  contextWindow
-              ) {
+              // Plan 552: one probe owns both lines — the mid-loop overflow
+              // now compares against the manager's hard limit (full window)
+              // instead of a local `contextWindow` copy that could drift
+              // from the budget. Plan 495 G2: the image trigger is checked
+              // here too, not only at turn start.
+              const overflowProbe =
+                this.compactionManager.probeCompaction(projectionForOverflow);
+              if (overflowProbe.imageTriggered || overflowProbe.overHardLimit) {
                 try {
                   const compactEntry =
                     await this.compactionController.compactProactive({
-                      ...(imageCountOverflow
+                      ...(overflowProbe.imageTriggered
                         ? { trigger: 'auto' as const, force: true }
                         : { trigger: 'preflight_overflow' as const }),
                     });

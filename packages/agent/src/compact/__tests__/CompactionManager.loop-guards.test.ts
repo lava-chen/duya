@@ -171,6 +171,52 @@ describe('CompactionManager loop guards', () => {
     })
   })
 
+  describe('Plan 552: probeCompaction (single measurement point)', () => {
+    it('measures both lines from the same budget', () => {
+      manager.updateMaxTokens(1_000_000);
+      const messages = makeMessages(OVER_THRESHOLD_CHARS);
+      const probe = manager.probeCompaction(messages);
+
+      // tokens is the same number every consumer (ring, triggers) sees.
+      expect(probe.tokens).toBe(manager.getContextTokens(messages));
+      expect(probe.overTriggerLine).toBe(true);
+      expect(probe.overHardLimit).toBe(probe.tokens > 1_000_000);
+
+      // getTriggerLine / getHardLimit are budget-derived, not call-site math.
+      expect(manager.getTriggerLine()).toBe(1_000_000 - 16_384);
+      expect(manager.getHardLimit()).toBe(1_000_000);
+    });
+
+    it('flags imageTriggered at the shared image trigger count', () => {
+      const imageBlock = {
+        type: 'image' as const,
+        source: { type: 'base64' as const, media_type: 'image/png', data: '' },
+      };
+      const messages: Message[] = [
+        { role: 'user', content: 'tiny' },
+        { role: 'user', content: [imageBlock] },
+      ];
+      const probe = manager.probeCompaction(messages);
+      expect(probe.imageCount).toBe(1);
+      expect(probe.imageTriggered).toBe(false);
+
+      const many = Array.from({ length: 85 }, () => ({
+        role: 'user' as const,
+        content: [{ ...imageBlock, source: { ...imageBlock.source } }],
+      }));
+      expect(manager.probeCompaction(many).imageTriggered).toBe(true);
+    });
+
+    it('probe is pure measurement — suppression does not affect it', async () => {
+      const messages = makeMessages(OVER_THRESHOLD_CHARS);
+      mockSummarizer.mockRejectedValueOnce(new Error('context_length_exceeded'));
+      await expect(manager.compact(messages, { trigger: 'auto' })).rejects.toThrow();
+      expect(manager.isSuppressed()).toBe(true);
+      // The probe still measures; the CALLER decides what to do with it.
+      expect(manager.probeCompaction(messages).overTriggerLine).toBe(true);
+    });
+  });
+
   describe('runtime model-switch wiring', () => {
     it('updateMaxTokens rewrites the budget', () => {
       manager.updateMaxTokens(1_000_000)

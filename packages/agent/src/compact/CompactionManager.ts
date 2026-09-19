@@ -25,6 +25,25 @@ import { PostCompactReinjector, type ReinjectorConfig, type SkillContextEntry } 
 import type { FileChangeRecord as SessionMemoryFileChangeRecord } from './strategies/SessionMemoryCompactStrategy.js'
 import { fitCompactedToBudget, validateCompactedHistory } from './historySanitize.js'
 import { classifySuppressReason, suppressReasonMessage, type SuppressReason } from './compactErrors.js'
+import { countImagePartsInMessages, IMAGE_COMPACTION_TRIGGER_COUNT } from './imageParts.js'
+
+/**
+ * Plan 552: result of {@link CompactionManager.probeCompaction} — the single
+ * measurement all trigger sites consume. Lines are owned by the manager's
+ * budget; gating (suppression / cooldown) belongs to the callers.
+ */
+export interface CompactionProbe {
+  /** Estimated / provider-anchored context size in tokens. */
+  tokens: number
+  /** Image blocks present in the projected context. */
+  imageCount: number
+  /** `imageCount >= IMAGE_COMPACTION_TRIGGER_COUNT` (grok image trigger). */
+  imageTriggered: boolean
+  /** `tokens > triggerLine` — the pre-turn proactive line (max − reserve). */
+  overTriggerLine: boolean
+  /** `tokens > hardLimit` — the mid-loop overflow line (full window). */
+  overHardLimit: boolean
+}
 
 /**
  * How long an 'auth' failure blocks auto-compaction (plan 552). The old
@@ -251,6 +270,35 @@ export class CompactionManager {
     if (this.suppression.isActive()) return false
     const totalTokens = this.contextSize(messages)
     return totalTokens > this.budget.maxTokens - this.budget.reservedTokens
+  }
+
+  /**
+   * Plan 552: single measurement point for every trigger site. Both decision
+   * lines are derived from this manager's budget, so the pre-turn proactive
+   * check, the mid-loop overflow check and the renderer ring can no longer
+   * disagree about where the lines are. Pure measurement — suppression /
+   * cooldown gates stay with the callers.
+   */
+  probeCompaction(messages: readonly Message[]): CompactionProbe {
+    const tokens = this.contextSize(messages)
+    const imageCount = countImagePartsInMessages(messages)
+    return {
+      tokens,
+      imageCount,
+      imageTriggered: imageCount >= IMAGE_COMPACTION_TRIGGER_COUNT,
+      overTriggerLine: tokens > this.getTriggerLine(),
+      overHardLimit: tokens > this.getHardLimit(),
+    }
+  }
+
+  /** Soft line: proactive compaction fires above it (max − reserve). */
+  getTriggerLine(): number {
+    return this.budget.maxTokens - this.budget.reservedTokens
+  }
+
+  /** Hard line: the full window — mid-loop overflow fires at it. */
+  getHardLimit(): number {
+    return this.budget.maxTokens
   }
 
   /** Token count for the context ring (same algorithm, always consistent). */
