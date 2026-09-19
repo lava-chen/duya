@@ -45,7 +45,9 @@
 | 2c CompactionCoordinator wire + delete 146 lines | `eaba10ff` | ✅ done |
 | 2b ToolExecutionPipeline facade (thin wrapper over StreamingToolExecutor) | `a6b5878b` | ✅ done |
 | 2b ToolExecutionPipeline wire (duyaAgent.streamChat uses facade) | `7eae6bdf` | ✅ done |
-| **改造 2 — remaining** (2b-internals: orchestrator planExecution wiring inside facade, 2e DuyaAgent streamChat loop extraction) | — | ⏳ next session |
+| 2b-internals ToolExecutionPipeline routes batches via DependencyGraphOrchestrator.planExecution (wave scheduling) | `a5590d71` | ✅ done (session 5) |
+| 2e TurnPreparer (partial) — DeadLoopTracker extracted from streamChat | `b20f90bb` | ✅ done (session 5) |
+| **改造 2 — remaining** (2e TurnLoop + StreamFinalizer extraction, 3c StreamingToolExecutor wiring) | — | ⏳ session 6 |
 | 1d-rest 8 remaining dynamic sections + gateway/code/research configs + delete `general/sections/*.ts` | — | ⏳ follow-up PR (out of session-4 scope) |
 | 3c StreamingToolExecutor wiring | — | ⏳ next session |
 | 3d end-to-end coverage | — | ⏳ next session |
@@ -60,6 +62,45 @@
 All three are state-free wrappers around the session-scope deps,
 exposed through duck-typed interfaces so `duyaAgent` never has to
 extend anything.
+
+## Progress (2026-09-19, session 5)
+
+| Step | Commit | Status |
+|---|---|---|
+| 2b-internals ToolExecutionPipeline dependency-graph wiring | `a5590d71` | ✅ done |
+| 2b-internals tests (8 wave-scheduling cases) | `a5590d71` | ✅ done |
+| 2e TurnPreparer partial — DeadLoopTracker extracted (181 lines, 12 tests) | `b20f90bb` | ✅ done |
+
+**Session 5 progress**:
+
+- **2b-internals** — `ToolExecutionPipeline` now buffers `addTool`
+  calls and, on first `getRemainingResults`, runs
+  `DependencyGraphOrchestrator.planExecution()` over the buffered
+  batch. The pipeline drains each wave before submitting the next;
+  per-wave concurrency still falls back to the executor's batch
+  limits when no `requires` / `writePaths` declaration is present.
+  Tools that opt in via the new `ToolExecutor.dependencies` /
+  `extractWritePaths` / `extractReadPaths` fields get precise path-
+  level serialisation without any agent-layer wiring. 8 tests cover
+  legacy mode, required chains, disjoint write paths, write-path
+  collision, cyclic dependencies, missing prerequisites, discard, and
+  introspection-via-registry.
+- **2e TurnPreparer partial** — `DeadLoopTracker` extracted as
+  a stand-alone class (181 lines, 12 tests). The streak counter +
+  signature logic that previously lived as four inline `let` bindings
+  is now behind `record()` / `stats()` / `shouldHardStop()` /
+  `reset()`. The U+0001 separator, JSON serialisation, and threshold
+  defaults are bit-identical to the legacy inline implementation.
+  `DuyaAgent.ts` shrinks 4356 → 4342 (`-14`).
+
+**DuyaAgent.ts line count**: `4619` (end of session 4) → `4342`
+(end of session 5) — `-277 lines` cumulative since session 4 start.
+Four new modules since session 4 began:
+
+- `packages/agent/src/agent/PermissionsGate.ts` (232 lines, 12 tests)
+- `packages/agent/src/agent/CompactionCoordinator.ts` (272 lines, 6 tests)
+- `packages/agent/src/tool/ToolExecutionPipeline.ts` (now 224 lines — wave-scheduler wiring, 8 tests)
+- `packages/agent/src/agent/TurnLoopTracker.ts` (181 lines, 12 tests)
 
 ## Next-session starting points (session 5)
 
@@ -109,6 +150,59 @@ remaining work is mechanical (substituting field reads, extracting
 sub-modules, wiring the orchestrator into StreamingToolExecutor)
 and naturally splits across multiple follow-up sessions — none of
 those follow-ups needs to re-touch the design work done here.
+
+## Session 5 summary (wave scheduler + dead-loop tracker)
+
+Session 5 closed out the 2b-internals wave-scheduler and pulled
+the first slice of 2e (TurnPreparer) out of `streamChat`. Two
+commits, ~700 lines added, ~30 deleted.
+
+1. **`ToolExecutionPipeline` wave scheduler** (`a5590d71`) — the
+   pipeline now buffers `addTool` calls and, on first drain,
+   computes an `ExecutionPlan` via `DependencyGraphOrchestrator`.
+   The plan drives wave-by-wave submission: each wave's tools are
+   forwarded to the wrapped executor, drained to completion, then
+   the next wave starts. Cycle detection surfaces a synthetic
+   `<tool_use_error>` for the culprit tool; the rest of the batch
+   proceeds. Tools opt in by attaching `dependencies` /
+   `extractWritePaths` / `extractReadPaths` to their `ToolExecutor`;
+   tools without a declaration fall back to the legacy
+   READ/WRITE/SYSTEM batch concurrency unchanged.
+2. **`DeadLoopTracker`** (`b20f90bb`) — engine invariant for the
+   consecutive-identical-tool-call streak. Encapsulates the
+   signature, count, name, and threshold checks that used to be
+   four inline `let` bindings + four update sites + three read
+   sites in `streamChat`. Behaviour is bit-identical: same U+0001
+   separator, same JSON-serialised input, same threshold defaults
+   (nudgeAt=8 / hardNudgeAt=12 / hardStopAt=16), same
+   `reset()` semantics on stream replay.
+
+**Diff review** (per user "反思是否改的正确"):
+
+- Legacy-mode test (no resolver) collapses to a single wave in
+  arrival order — verified that within-wave concurrency is
+  preserved (READ:5 / WRITE:1).
+- Wave boundary detection uses `message.tool_call_id` from
+  `MessageUpdate`. Verified that progress messages don't carry
+  `tool_call_id` (only the final tool_result does), so a partial
+  progress event can't prematurely mark a wave complete.
+- `pendingExtraResult` re-emission (synthetic second tool_result
+  per Plan 308) uses the same `tool_call_id` as the original —
+  the second emission is a no-op delete on the wave's
+  `pendingIds` set.
+- `discard()` clears both the pipeline buffer and the executor
+  state; the max_tokens fail-fast path can no longer accidentally
+  run truncated tools.
+- `DeadLoopTracker.shouldHardStop()` checks both `enabled` AND
+  `count >= hardStopAt` — matches the legacy
+  `deadLoopEnabled && consecutiveToolCalls >= deadLoopHardStopAt`
+  predicate exactly.
+
+**Remaining 2e slices**: TurnLoop (~1410 lines) and
+StreamFinalizer (~305 lines) extraction. The current `streamChat`
+body is now ~2090 lines (4356 → 4342, but pre-extraction TurnLoop
+was the larger chunk and remains inline). StreamFinalizer is the
+next smallest target and can land in session 6 first.
 
 ## Session 4 summary (DuyaAgent 拆解聚焦)
 
