@@ -79,6 +79,7 @@ import type { TurnContext } from './TurnContext.js';
 import { permissionModeFromString } from '../permissions/policy.js';
 import { buildPermissions } from './PermissionsGate.js';
 import { CompactionCoordinator } from './CompactionCoordinator.js';
+import { DeadLoopTracker, resolveDeadLoopConfig } from './TurnLoopTracker.js';
 import { deriveSingleCallUsage } from '../process/seed-token-usage.js';
 import { settingsJsonToRules } from '../permissions/rules.js';
 import { permissionRuleValueToString } from '../permissions/rules.js';
@@ -1363,14 +1364,14 @@ export class duyaAgent implements AgentRuntime {
     // nudge (deadLoopHardNudgeAt) 鈫?hard stop (deadLoopHardStopAt). The
     // counting and the hard stop are engine invariants (plan 426); the
     // soft/hard nudge *texts* live in the builtin dead-loop loop hook.
-    const deadLoop = options?.antiDeadLoop ?? {};
-    const deadLoopEnabled = deadLoop.enabled ?? true;
-    const deadLoopNudgeAt = deadLoop.nudgeAt ?? 8;
-    const deadLoopHardNudgeAt = deadLoop.hardNudgeAt ?? 12;
-    const deadLoopHardStopAt = deadLoop.hardStopAt ?? 16;
-    let lastToolCallSignature: string | null = null;
-    let consecutiveToolCalls = 0;
-    let consecutiveToolName: string | null = null;
+    // Plan 550 step 2e (TurnPreparer): the streak counter + signature
+    // logic moved behind `DeadLoopTracker` so the per-run allocation
+    // lives in one place and the inline `let` bindings no longer leak
+    // across streamChat's prologue. The four read sites below consult
+    // the tracker instead of touching local variables.
+    const deadLoopTracker = new DeadLoopTracker(
+      resolveDeadLoopConfig(options?.antiDeadLoop),
+    );
 
     // Loop-hook bus (plan 426): per-run event spine carrying the steering
     // policies that used to be inline blocks below (todo gate, premature
@@ -1382,9 +1383,9 @@ export class duyaAgent implements AgentRuntime {
       sessionId: turnContext.sessionId ?? undefined,
       todoGateEnabled: options?.todoGate?.enabled ?? true,
       antiDeadLoop: {
-        enabled: deadLoopEnabled,
-        nudgeAt: deadLoopNudgeAt,
-        hardNudgeAt: deadLoopHardNudgeAt,
+        enabled: deadLoopTracker.config.enabled,
+        nudgeAt: deadLoopTracker.config.nudgeAt,
+        hardNudgeAt: deadLoopTracker.config.hardNudgeAt,
       },
       toolIntentNudgeMax: options?.toolIntentNudgeMax ?? 2,
       // grok SendMessageReminderMiddleware port: only runs whose toolset
@@ -2026,9 +2027,7 @@ export class duyaAgent implements AgentRuntime {
               turnToolCalls.length = 0;
               turnToolCallIds.clear();
               modeSwitchToolIds.clear();
-              consecutiveToolCalls = 0;
-              lastToolCallSignature = null;
-              consecutiveToolName = null;
+              deadLoopTracker.reset();
               // Surface the replay through the same channel as the
               // transport-layer retry (`system` + metadata.retryAttempt 鈫?              // worker boundary emits a chat:retry chip). Plan 462: carry the
               // provider wording so the chip says *why* it is reconnecting.
@@ -2106,17 +2105,10 @@ export class duyaAgent implements AgentRuntime {
             needsFollowUp = true;
 
             // Anti-dead-loop: track consecutive identical tool calls (name +
-            // serialized input). U+0001 is a safe field separator that cannot
-            // appear in a tool name or JSON input. Streak counting is an
-            // engine invariant; nudge decisions consume it via PostToolUse.
-            const signature = `${event.data.name}\u0001${JSON.stringify(event.data.input ?? {})}`;
-            if (signature === lastToolCallSignature) {
-              consecutiveToolCalls++;
-            } else {
-              lastToolCallSignature = signature;
-              consecutiveToolCalls = 1;
-            }
-            consecutiveToolName = event.data.name;
+            // serialized input). Streak counting is an engine invariant;
+            // nudge decisions consume it via PostToolUse. Plan 550 step 2e
+            // (TurnPreparer): encapsulated in DeadLoopTracker.
+            deadLoopTracker.record(event.data.name, event.data.input ?? {});
             turnToolCalls.push({ name: event.data.name, input: event.data.input });
             turnToolCallIds.set(event.data.id, event.data.name);
 
@@ -2436,16 +2428,9 @@ export class duyaAgent implements AgentRuntime {
               // tool results are committed so hook injections read as
               // feedback on those results (grok "results committed after"
               // semantics). Carries the identical-call streak for the
-              // dead-loop nudge hook.
-              const streak =
-                deadLoopEnabled && consecutiveToolCalls > 0 && consecutiveToolName
-                  ? {
-                      count: consecutiveToolCalls,
-                      toolName: consecutiveToolName,
-                      nudgeAt: deadLoopNudgeAt,
-                      hardNudgeAt: deadLoopHardNudgeAt,
-                    }
-                  : undefined;
+              // dead-loop nudge hook. Plan 550 step 2e (TurnPreparer):
+              // the streak snapshot is now sourced from DeadLoopTracker.
+              const streak = deadLoopTracker.stats();
               for (const effect of await loopHooks.dispatch('PostToolUse', {
                 ...buildHookCtx(),
                 consecutiveIdenticalToolCalls: streak,
@@ -2767,8 +2752,9 @@ export class duyaAgent implements AgentRuntime {
 
         // Anti-dead-loop hard stop: only when the model requested more tool
         // rounds. The assistant message and tool results are already persisted
-        // above, so terminating here is safe.
-        if (deadLoopEnabled && consecutiveToolCalls >= deadLoopHardStopAt) {
+        // above, so terminating here is safe. Plan 550 step 2e (TurnPreparer):
+        // threshold check moved into DeadLoopTracker.shouldHardStop().
+        if (deadLoopTracker.shouldHardStop()) {
           this._commitMessages();
           yield { type: 'done', reason: 'repeated_tool_calls' };
           return;
