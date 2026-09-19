@@ -17,7 +17,6 @@
 
 import type { CompactOptions, CompactionResult, CompactionStats, CompactionStrategy, Message } from '../types.js'
 import { estimateMessagesTokens } from '../tokenBudget.js'
-import { adjustSliceBoundary } from '../compact.js'
 import { sanitizeCompactedHistory } from '../historySanitize.js'
 import { cleanSummaryText, isDegenerateSummary } from '../summaryGuard.js'
 import { summarizeWithRetryLadder } from '../summaryRetry.js'
@@ -457,14 +456,28 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
   }
 
   /**
-   * Strip images from messages
+   * Strip image blocks from messages so they never ride into the
+   * summarizer input (plan 552 — the previous implementation was a no-op
+   * and images silently consumed summarizer context). Each removed image
+   * is replaced by a one-line text note so the summary can still mention
+   * that an image existed. Mirrors mcode's "[image]" flattening.
    */
   private stripImagesFromMessages(messages: Message[]): Message[] {
     return messages.map(message => {
-      if (message.role !== 'user') {
+      if (message.role !== 'user' || !Array.isArray(message.content)) {
         return message
       }
-      return message
+      let imageCount = 0
+      const content = message.content.map(block => {
+        if ((block as { type?: string }).type !== 'image') return block
+        imageCount += 1
+        return {
+          type: 'text' as const,
+          text: '[image omitted from summarization input]',
+        }
+      })
+      if (imageCount === 0) return message
+      return { ...message, content }
     })
   }
 

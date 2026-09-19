@@ -1162,6 +1162,13 @@ export function storeAttachments(attachments: ExtractedAttachment[], sessionId: 
 
 /**
  * Get all attachments for a specific message.
+ *
+ * Plan 552 audit note: these three raw-row attachment reads intentionally
+ * have NO IPC branch, unlike the parsed-document functions below. The
+ * pre-plan-329 data still lives in the legacy `message_attachments` table
+ * (new writes go to the core `attachments` store, plan 332), so routing
+ * these reads through the electron core stores would silently hide
+ * pre-migration rows. Revisit when plan 329 (legacy import) lands.
  */
 export function getAttachmentsForMessage(messageId: string): AttachmentRow[] {
   const db = getDb();
@@ -1171,6 +1178,7 @@ export function getAttachmentsForMessage(messageId: string): AttachmentRow[] {
 
 /**
  * Get all attachments for a session (for bulk rehydration).
+ * See the plan 552 audit note on {@link getAttachmentsForMessage}.
  */
 export function getAttachmentsForSession(sessionId: string): Map<string, AttachmentRow[]> {
   const db = getDb();
@@ -1187,6 +1195,7 @@ export function getAttachmentsForSession(sessionId: string): Map<string, Attachm
 
 /**
  * Delete attachments for a session.
+ * See the plan 552 audit note on {@link getAttachmentsForMessage}.
  */
 export function deleteAttachmentsForSession(sessionId: string): void {
   const db = getDb();
