@@ -1,0 +1,117 @@
+/**
+ * Prompt module registry — Plan 551.
+ *
+ * One registry entry per authored content module under
+ * `assets/modules/*.hbs`. A module is a profile-independent block of
+ * prompt content; profiles assemble them via `PromptSystemConfig.staticModules`
+ * instead of maintaining per-profile section trees.
+ *
+ * Two contracts live side by side in the prompt asset tree (plan 551 D1):
+ *  - authored modules (`assets/modules/`): human-written text, rendered with
+ *    assembly-time params (e.g. identity variants). The render is a pure
+ *    function of PromptContext + params.
+ *  - context-fed modules (`assets/dynamic/`): runtime-computed sections that
+ *    need preBuildHook plumbing. Those stay registered in configs by their
+ *    asset path; a physical directory merge is an optional Phase 4 cleanup
+ *    and is intentionally deferred.
+ *
+ * The registry exists so that:
+ *  - config references are type-checked (`ModuleName`), turning a template
+ *    rename into a compile error instead of a runtime render throw;
+ *  - module params have a typed home (`StaticModuleRef.params`);
+ *  - per-module mapper logic has a place to live when a module carries
+ *    contract logic (plan 551 D2: TS follows the contract, not the module
+ *    count — pure-authored modules get no TS file beyond this registry).
+ *
+ * @see docs/exec-plans/active/551-prompt-module-flatten.md
+ */
+
+export interface PromptModuleDef {
+  /** Asset path relative to the prompts assets root. */
+  path: string
+  /** One-line description of the content block. */
+  description: string
+}
+
+/**
+ * Registry of authored content modules.
+ *
+ * Keys double as the section name used for profile gating
+ * (`isSectionEnabled`) and prompt-cache keys, so they intentionally match
+ * the legacy `staticSections` names the agent profiles already reference
+ * (e.g. `duyaDesktopContext` in agent-profile enable/disable lists).
+ */
+export const MODULES = {
+  identity: {
+    path: 'modules/identity.hbs',
+    description: 'Agent identity, self-management, and multi-agent network posture',
+  },
+  system: {
+    path: 'modules/system.hbs',
+    description: 'System-surface rules (output visibility, permissions, untrusted data)',
+  },
+  destructiveActions: {
+    path: 'modules/destructive-actions.hbs',
+    description: 'Guardrails for destructive commands and API calls',
+  },
+  configProtection: {
+    path: 'modules/config-protection.hbs',
+    description: 'Protection of ~/.duya/config.toml and secrets.json',
+  },
+  communication: {
+    path: 'modules/communication.hbs',
+    description: 'Output efficiency, writing, and technical communication style',
+  },
+  tools: {
+    path: 'modules/tools.hbs',
+    description: 'Tool-usage guidance (REPL-aware, todo-tool aware)',
+  },
+  tasks: {
+    path: 'modules/tasks.hbs',
+    description: 'Doing-tasks guidance (read before editing, background work)',
+  },
+  skillUsage: {
+    path: 'modules/skill-usage.hbs',
+    description: 'How to discover and load skills',
+  },
+  duyaDesktopContext: {
+    path: 'modules/duya-desktop-context.hbs',
+    description: 'Desktop-app-only capabilities (media, widgets, automations)',
+  },
+  finalAnswer: {
+    path: 'modules/final-answer.hbs',
+    description: 'Final-answer formatting, version-control links, visualizations',
+  },
+} as const satisfies Record<string, PromptModuleDef>
+
+/** Registry key of an authored content module. */
+export type ModuleName = keyof typeof MODULES
+
+/**
+ * A static-module assembly reference in a `PromptSystemConfig`.
+ *
+ * Normalizes onto the legacy `SectionDef` machinery (profile gating,
+ * prompt-cache keying, empty-collapse) with the module's .hbs render as the
+ * content source, so switching a config from `staticSections` to
+ * `staticModules` preserves cache-invalidation and agent-profile gating
+ * semantics exactly.
+ */
+export interface StaticModuleRef {
+  /** Registry key of the module to render. */
+  module: ModuleName
+  /**
+   * Section name used for profile gating and prompt-cache keys.
+   * Defaults to the module name; set it explicitly only when a config
+   * needs a legacy gating name that differs from the module key.
+   */
+  name?: string
+  /**
+   * Extra template variables merged over the base mapper output.
+   * Variant params live here (e.g. `{ variant: 'compact' }`); templates
+   * branch on precomputed booleans supplied by mapper/params, not on new
+   * Handlebars helpers (plan 551 D3).
+   */
+  params?: Record<string, unknown>
+  /** Skip isSectionEnabled filtering (same semantics as SectionDef). */
+  bypassProfile?: boolean
+}

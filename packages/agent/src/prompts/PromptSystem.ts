@@ -38,6 +38,8 @@ import { DEFAULT_PROMPT_PROFILE, isSectionEnabled } from './modes/index.js'
 import { cachedPromptSection, volatilePromptSection } from './constants/promptSections.js'
 import { getShellForPrompt } from '../utils/shellDetector.js'
 import { HbsPromptSystem } from './hbs/HbsPromptSystem.js'
+import { MODULES } from './modules/registry.js'
+import type { StaticModuleRef } from './modules/registry.js'
 
 /**
  * Process-wide HbsPromptSystem singleton. Plan 550: keeping a single
@@ -66,7 +68,7 @@ async function renderSectionCompute(
 ): Promise<string | null> {
   if (def.template) {
     const hbsSystem = getSharedHbsPromptSystem()
-    const out = hbsSystem.renderStaticTemplate(def.template, context).trim()
+    const out = hbsSystem.renderStaticTemplate(def.template, context, def.params).trim()
     return out === '' ? null : out
   }
   // Plan 550 1d-delete: `compute` is optional when `template` is set, so
@@ -105,6 +107,13 @@ export interface SectionDef {
    * invoked when `template` is present.
    */
   template?: string
+  /**
+   * Optional: extra template variables merged over the base mapper output
+   * when the section renders via `template` (Plan 551). Assembly-time
+   * variant flags a config passes per module reference, e.g.
+   * `{ variant: 'compact' }`. Ignored on the `compute` path.
+   */
+  params?: Record<string, unknown>
   /**
    * If true, skip isSectionEnabled filtering — this section always renders.
    * Used by research for sections that exist outside the generic
@@ -158,6 +167,16 @@ export interface PromptSystemConfig {
   name: string
   /** Static (cached) sections. */
   staticSections: SectionDef[]
+  /**
+   * Optional: authored content modules assembled from the shared registry
+   * (Plan 551). Each reference normalizes onto the `SectionDef` machinery —
+   * profile gating, prompt-cache keying, and empty-collapse are inherited —
+   * with the module's `.hbs` render as the content source. Configs that set
+   * this field declare their static half purely as an assembly list instead
+   * of per-profile section trees. Mutually exclusive with `staticTemplate`
+   * in practice; when both are set, `staticTemplate` wins (monolith path).
+   */
+  staticModules?: StaticModuleRef[]
   /** Dynamic (volatile) sections. */
   dynamicSections: SectionDef[]
   /**
@@ -282,14 +301,31 @@ export class PromptSystem {
    * invoked at runtime in that case.
    */
   getStaticSections(context: PromptContext): PromptSection[] {
+    const defs = this.getStaticSectionDefs()
     const sections: PromptSection[] = []
-    for (const def of this.config.staticSections) {
+    for (const def of defs) {
       if (!def.bypassProfile && !isSectionEnabled(this.profile, def.name)) continue
       sections.push(
         cachedPromptSection(def.name, () => renderSectionCompute(def, context)),
       )
     }
     return sections
+  }
+
+  /**
+   * Static-half section definitions in render order: registry-assembled
+   * modules first (Plan 551 `staticModules`), then legacy `staticSections`
+   * entries. Module references resolve their asset path through the module
+   * registry so a template rename fails at compile time.
+   */
+  private getStaticSectionDefs(): SectionDef[] {
+    const moduleDefs: SectionDef[] = (this.config.staticModules ?? []).map((ref) => ({
+      name: ref.name ?? ref.module,
+      template: MODULES[ref.module].path,
+      params: ref.params,
+      bypassProfile: ref.bypassProfile,
+    }))
+    return [...moduleDefs, ...this.config.staticSections]
   }
 
   /**

@@ -32,6 +32,8 @@ import { getPlatformHint } from '../platformHints.js';
 import { buildEnvironmentItems } from '../sections/dynamic/environment.js';
 import { serializeSerializedGroup } from '../sections/dynamic/recentSessionsSection.js';
 import { getSkillsMetadataSection } from '../sections/dynamic/skillsMetadata.js';
+import { MODULES } from '../modules/registry.js';
+import type { ModuleName } from '../modules/registry.js';
 import { HbsPromptRenderer } from './HandlebarsRenderer.js';
 
 const ASSETS_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../assets');
@@ -253,9 +255,37 @@ export class HbsPromptSystem {
     this.renderer = new HbsPromptRenderer({ assetsRoot: this.assetsRoot });
   }
 
-  /** Render a static template by relative path (e.g. `general/system-prompt.md.hbs`). */
-  renderStaticTemplate(relativePath: string, context: PromptContext): string {
-    return this.renderer.render(relativePath, mapPromptContextToHbs(context));
+  /**
+   * Render a static template by relative path (e.g. `general/system-prompt.md.hbs`).
+   *
+   * `params` are extra template variables merged over the base mapper
+   * output (Plan 551): assembly-time variant flags a config passes per
+   * module reference, e.g. `{ variant: 'compact' }`.
+   */
+  renderStaticTemplate(
+    relativePath: string,
+    context: PromptContext,
+    params?: Record<string, unknown>,
+  ): string {
+    const vars = params
+      ? { ...mapPromptContextToHbs(context), ...params }
+      : mapPromptContextToHbs(context);
+    return this.renderer.render(relativePath, vars);
+  }
+
+  /**
+   * Render an authored content module by registry key (Plan 551).
+   *
+   * Resolves the asset path through the module registry so a template
+   * rename surfaces as a compile error at the config site rather than a
+   * runtime render throw.
+   */
+  renderModule(
+    module: ModuleName,
+    context: PromptContext,
+    params?: Record<string, unknown>,
+  ): string {
+    return this.renderStaticTemplate(MODULES[module].path, context, params);
   }
 
   /**

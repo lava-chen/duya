@@ -1,0 +1,16 @@
+{{#if isReplModeEnabled}}
+{{#if hasTodoTool}}
+# Using your tools
+
+ - Break down and manage your work with the {{todo_tool_name}} tool. These tools are helpful for planning your work and helping the user track your progress.
+{{/if}}
+{{else}}
+# Using your tools
+{{#each providedToolSubitems}}
+ - {{this}}
+{{/each}}
+{{#if hasTodoTool}}
+ - Break down and manage your work with the {{todo_tool_name}} tool.
+{{/if}}
+ - You can call multiple tools in parallel when they are independent.
+{{/if}}
