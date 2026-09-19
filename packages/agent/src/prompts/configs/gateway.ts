@@ -10,6 +10,7 @@
 import type { PromptSystemConfig } from '../PromptSystem.js'
 import { TOOL_NAMES } from '../types.js'
 import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
+import { createMemoryPreBuildHook } from '../sections/dynamic/memoryPreBuildHook.js'
 
 // Gateway-specific sections
 import { getGatewayIntroSection, getGatewayRoleSection } from '../gateway/sections/index.js'
@@ -70,7 +71,7 @@ export const gatewayConfig: PromptSystemConfig = {
     { name: 'mcp', compute: getMcpInstructionsSection, description: 'MCP servers can change' },
     { name: 'skills', compute: getSkillsMetadataSection, description: 'Skills can be loaded/unloaded' },
     { name: 'scratchpad', compute: getScratchpadSection, template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },
-    { name: 'memory', compute: getMemorySection, description: 'Persistent memory projection files may have been updated since last turn' },
+    { name: 'memory', compute: getMemorySection, template: 'dynamic/memory.hbs', description: 'Persistent memory projection files may have been updated since last turn' },
     { name: 'sessionSearch', compute: getSessionSearchSection, template: 'dynamic/session-search.hbs', description: 'Past-session decisions may be relevant to the current task' },
     { name: 'recentSessions', compute: getRecentSessionsSection, description: 'Recent session metadata can change between turns' },
     // Task-level constraints
@@ -81,11 +82,17 @@ export const gatewayConfig: PromptSystemConfig = {
   preBuildHook: async (ctx) => {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.
     if (ctx.omitAgentsMd) return
+    const memoryHook = createMemoryPreBuildHook()
+    const memoryResult = await memoryHook(ctx)
     // Plan 525 / 408 follow-up: thread the project-entity home into the
     // loader so it can read `<projectHome>/AGENTS.md` as a `'Project entity'`
     // source. Absent when cwd is outside any registered duya project.
     if (await initializeAgentsMd(ctx.workingDirectory, ctx.projectHome)) {
-      return { invalidateCacheKeys: ['project'] }
+      return {
+        invalidateCacheKeys: ['project'],
+        promptContextExtension: memoryResult?.promptContextExtension,
+      }
     }
+    return memoryResult
   },
 }

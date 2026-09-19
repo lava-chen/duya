@@ -110,12 +110,24 @@ export type ContextExtender = (
 
 /**
  * Hook: async side-effect before buildSystemPrompt resolves sections.
- * Returns cache keys to invalidate. Used by general/code/research to
- * call initializeAgentsMd and invalidate the project/agentsMd cache entry.
+ * Returns cache keys to invalidate and an optional context-extension
+ * delta that gets merged into `PromptContext` before section rendering.
+ *
+ * Used by general/code/research to:
+ *   - call `initializeAgentsMd` and invalidate the project/agentsMd cache entry
+ *     (the `invalidateCacheKeys` half of the contract);
+ *   - pre-compute Plan 550 1d-rest dynamic-section inputs (memory
+ *     summary file, recent-session directory, environment git detection,
+ *     skills registry snapshot) and inject them as `promptContextExtension`.
+ *     The preBuildHook runs once per `buildSystemPrompt`; the section
+ *     templates then read the injected fields synchronously.
  */
 export type PreBuildHook = (
   context: PromptContext,
-) => Promise<{ invalidateCacheKeys?: string[] } | void>
+) => Promise<{
+  invalidateCacheKeys?: string[];
+  promptContextExtension?: Partial<PromptContext>;
+} | void>
 
 /**
  * Hook: parallel prompt generators that don't go through buildSystemPrompt.
@@ -302,6 +314,9 @@ export class PromptSystem {
         for (const key of result.invalidateCacheKeys) {
           this.cache.delete(key)
         }
+      }
+      if (result?.promptContextExtension) {
+        context = { ...context, ...result.promptContextExtension }
       }
     }
 

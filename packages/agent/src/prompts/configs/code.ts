@@ -10,6 +10,7 @@
 
 import type { PromptSystemConfig } from '../PromptSystem.js'
 import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
+import { createMemoryPreBuildHook } from '../sections/dynamic/memoryPreBuildHook.js'
 
 // Code-specific static sections
 import { getIdentitySection } from '../code/sections/identity.js'
@@ -68,7 +69,7 @@ export const codeConfig: PromptSystemConfig = {
     { name: 'language', compute: getLanguageSection, description: 'Language preference' },
     { name: 'outputStyle', compute: getOutputStyleSection, description: 'Custom output style' },
     { name: 'scratchpad', compute: getScratchpadSection, template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },
-    { name: 'memory', compute: getMemorySection, description: 'Persistent memory projection files may have been updated since last turn' },
+    { name: 'memory', compute: getMemorySection, template: 'dynamic/memory.hbs', description: 'Persistent memory projection files may have been updated since last turn' },
     { name: 'sessionSearch', compute: getSessionSearchSection, template: 'dynamic/session-search.hbs', description: 'Past-session decisions may be relevant to the current task' },
     { name: 'recentSessions', compute: getRecentSessionsSection, description: 'Recent session metadata can change between turns' },
     { name: 'visualVerification', compute: getVisualVerificationSection, template: 'dynamic/visual-verification.hbs', description: 'Visual tasks require rendered-output verification' },
@@ -76,11 +77,17 @@ export const codeConfig: PromptSystemConfig = {
   preBuildHook: async (ctx) => {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.
     if (ctx.omitAgentsMd) return
+    const memoryHook = createMemoryPreBuildHook()
+    const memoryResult = await memoryHook(ctx)
     // Plan 525 / 408 follow-up: thread the project-entity home into the
     // loader so it can read `<projectHome>/AGENTS.md` as a `'Project entity'`
     // source. Absent when cwd is outside any registered duya project.
     if (await initializeAgentsMd(ctx.workingDirectory, ctx.projectHome)) {
-      return { invalidateCacheKeys: ['projectInstructions'] }
+      return {
+        invalidateCacheKeys: ['projectInstructions'],
+        promptContextExtension: memoryResult?.promptContextExtension,
+      }
     }
+    return memoryResult
   },
 }

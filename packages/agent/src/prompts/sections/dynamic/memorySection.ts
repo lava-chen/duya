@@ -17,21 +17,32 @@ import { getDuyaMemoryRoot } from '../../../memory-state/memory_paths.js'
 
 const MAX_INLINE_SUMMARY_CHARS = 12_000
 
-export function getMemorySection(_ctx: PromptContext): string {
-  const memoryRoot = getDuyaMemoryRoot() ?? path.join(os.homedir(), '.duya', 'memory')
-  const summaryPath = path.join(memoryRoot, 'summary.md')
-  const memoryPath = path.join(memoryRoot, 'MEMORY.md')
-  const rolloutSummariesDir = path.join(memoryRoot, 'rollout_summaries')
-  const adHocDir = path.join(memoryRoot, 'extensions', 'ad_hoc')
+export function getMemorySection(ctx: PromptContext): string {
+  // Plan 550 1d-rest: prefer the precomputed memory fields populated
+  // by `createMemoryPreBuildHook` so the .hbs path can render without
+  // re-reading the file. The hook always injects the same five layout
+  // paths the legacy body computed locally, so the rendered string is
+  // byte-identical to the disk-read path (verified by the parity test
+  // in tests/unit/prompts/hbs/memory-1d-rest.test.ts).
+  const memoryRoot = ctx.memoryRootPath ?? getDuyaMemoryRoot() ?? path.join(os.homedir(), '.duya', 'memory')
+  const summaryPath = ctx.memorySummaryPath ?? path.join(memoryRoot, 'summary.md')
+  const memoryPath = ctx.memoryPath ?? path.join(memoryRoot, 'MEMORY.md')
+  const rolloutSummariesDir = ctx.memoryRolloutSummariesDir ?? path.join(memoryRoot, 'rollout_summaries')
+  const adHocDir = ctx.memoryAdHocDir ?? path.join(memoryRoot, 'extensions', 'ad_hoc')
 
   let summaryBody: string
-  try {
-    summaryBody = fs.readFileSync(summaryPath, 'utf8')
-    if (summaryBody.length > MAX_INLINE_SUMMARY_CHARS) {
-      summaryBody = `${summaryBody.slice(0, MAX_INLINE_SUMMARY_CHARS).trimEnd()}\n... [truncated]`
+  if (ctx.memorySummaryBody !== undefined) {
+    // Already-truncated body from the preBuildHook — use verbatim.
+    summaryBody = ctx.memorySummaryBody
+  } else {
+    try {
+      summaryBody = fs.readFileSync(summaryPath, 'utf8')
+      if (summaryBody.length > MAX_INLINE_SUMMARY_CHARS) {
+        summaryBody = `${summaryBody.slice(0, MAX_INLINE_SUMMARY_CHARS).trimEnd()}\n... [truncated]`
+      }
+    } catch {
+      summaryBody = '_(summary.md not yet generated)_'
     }
-  } catch {
-    summaryBody = '_(summary.md not yet generated)_'
   }
 
   return `## Memory

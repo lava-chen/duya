@@ -211,6 +211,23 @@ export interface PromptContext {
   isSkillSearchEnabled?: boolean
   /** Scratchpad directory path */
   scratchpadDir?: string
+  // Plan 550 1d-rest (memory section) — populated by the `memory`
+  // preBuildHook so the dynamic/memory.hbs template can read the
+  // summary file body and the four layout paths synchronously. The hook
+  // runs once per `buildSystemPrompt`; the read is `fs.readFileSync` so
+  // it stays synchronous at the mapper layer.
+  /** Absolute path to `~/.duya/memory/` (or $DUYA_MEMORY_ROOT). */
+  memoryRootPath?: string;
+  /** Absolute path to `summary.md` (the inline-attached memory snapshot). */
+  memorySummaryPath?: string;
+  /** Absolute path to `MEMORY.md` (the searchable registry). */
+  memoryPath?: string;
+  /** Absolute path to `rollout_summaries/` (per-rollout recaps). */
+  memoryRolloutSummariesDir?: string;
+  /** Absolute path to `extensions/ad_hoc/` (one-shot memory update notes). */
+  memoryAdHocDir?: string;
+  /** Inline body of `summary.md`, truncated to 12 000 chars. Empty / missing file maps to the literal `_(summary.md not yet generated)_`. */
+  memorySummaryBody?: string;
   /** User type (for conditional prompt sections) */
   userType?: 'ant' | 'external'
   /** Output style configuration */

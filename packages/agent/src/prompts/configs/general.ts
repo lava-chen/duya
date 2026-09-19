@@ -21,6 +21,7 @@
 
 import type { PromptSystemConfig } from '../PromptSystem.js'
 import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
+import { createMemoryPreBuildHook } from '../sections/dynamic/memoryPreBuildHook.js'
 
 // Dynamic sections — shared across most profiles via the sections/dynamic/ tree
 import { getLanguageSection } from '../sections/dynamic/language.js'
@@ -59,7 +60,7 @@ export const generalConfig: PromptSystemConfig = {
     { name: 'mcp', compute: getMcpInstructionsSection, template: 'dynamic/mcp-instructions.hbs', description: 'MCP servers can change' },
     { name: 'skills', compute: getSkillsMetadataSection, description: 'Skills can be loaded/unloaded' },
     { name: 'scratchpad', compute: getScratchpadSection, template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },
-    { name: 'memory', compute: getMemorySection, description: 'Persistent memory projection files may have been updated since last turn' },
+    { name: 'memory', compute: getMemorySection, template: 'dynamic/memory.hbs', description: 'Persistent memory projection files may have been updated since last turn' },
     { name: 'sessionSearch', compute: getSessionSearchSection, template: 'dynamic/session-search.hbs', description: 'Past-session decisions may be relevant to the current task' },
     { name: 'recentSessions', compute: getRecentSessionsSection, description: 'Recent session metadata can change between turns' },
     // Task-level constraints
@@ -70,11 +71,23 @@ export const generalConfig: PromptSystemConfig = {
   preBuildHook: async (ctx) => {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.
     if (ctx.omitAgentsMd) return
+    // Plan 550 1d-rest (memory section): the .hbs template reads
+    // `memory_summary_body` etc. via mapPromptContextToHbs, so the
+    // preBuildHook must pre-populate them before the section renders.
+    // The memory hook only injects when summary.md is readable — empty
+    // preBuildHook return when there is no memory directory, matching
+    // the legacy `if (skills.length === 0) return null` short-circuit.
+    const memoryHook = createMemoryPreBuildHook()
+    const memoryResult = await memoryHook(ctx)
     // Plan 525 / 408 follow-up: thread the project-entity home into the
     // loader so it can read `<projectHome>/AGENTS.md` as a `'Project entity'`
     // source. Absent when cwd is outside any registered duya project.
     if (await initializeAgentsMd(ctx.workingDirectory, ctx.projectHome)) {
-      return { invalidateCacheKeys: ['project'] }
+      return {
+        invalidateCacheKeys: ['project'],
+        promptContextExtension: memoryResult?.promptContextExtension,
+      }
     }
+    return memoryResult
   },
 }

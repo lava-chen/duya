@@ -115,6 +115,13 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
   // `return null` short-circuit in getScratchpadSection.
   const scratchpadDir = ctx.scratchpadDir ?? '';
   const hasSessionSearchTool = ctx.enabledTools.has(TOOL_NAMES.SESSION_SEARCH);
+  // Plan 550 1d-rest — memory section fields are precomputed by
+  // createMemoryPreBuildHook (sections/dynamic/memoryPreBuildHook.ts)
+  // and surfaced here as the seven `memory_*` slots. The hook reads
+  // summary.md synchronously once per buildSystemPrompt call so the
+  // .hbs template can render the layout paths + inline summary body
+  // without touching fs.
+  const memorySummaryBody = ctx.memorySummaryBody ?? '';
   // Plan 550 1d-rest — session-guidance precomputed booleans / strings.
   // Each conditional paragraph in getSessionGuidanceSection becomes a
   // `{{#if}}` block in the .hbs; the boolean fields gate visibility and
@@ -175,6 +182,13 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
     search_tools: searchTools,
     show_discover_skills_guidance: showDiscoverSkillsGuidance,
     show_verification_agent_section: showVerificationAgentSection,
+    // memory section (preBuildHook populates these)
+    memory_root_path: ctx.memoryRootPath ?? '',
+    memory_summary_path: ctx.memorySummaryPath ?? '',
+    memory_path: ctx.memoryPath ?? '',
+    memory_rollout_summaries_dir: ctx.memoryRolloutSummariesDir ?? '',
+    memory_ad_hoc_dir: ctx.memoryAdHocDir ?? '',
+    memory_summary_body: memorySummaryBody,
     TOOL_NAMES,
   };
 }

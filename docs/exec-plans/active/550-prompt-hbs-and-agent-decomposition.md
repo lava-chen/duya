@@ -56,8 +56,10 @@
 | **1c deps fixup** — add `handlebars` + `@types/handlebars` to `package.json` (Plan 550 1c missed declaring these — fresh checkouts failed to resolve the module) | `0e175896` | ✅ done (session 6) |
 | **1c CRLF fixup** — add `.gitattributes` to force LF line endings for `.hbs` (pre-existing byte-parity regression on Windows checkouts) | `8301765e` | ✅ done (session 6) |
 | 1d-rest 1/9 — visualVerification migrated to `.hbs` (general / code / gateway / research) + 2 byte-level parity tests | `3c5b965e` | ✅ done (session 6) |
-| **改造 2 — remaining** (2e TurnLoop event dispatcher, 3c StreamingToolExecutor wiring) | — | ⏳ session 7 |
+| **改造 2 — remaining** (2e TurnLoop event dispatcher) | — | ⏳ session 7 |
 | 1d-rest 8 remaining dynamic sections + gateway/code/research configs + delete `general/sections/*.ts` | — | ⏳ session 7+ (in progress) |
+| **3c StreamingToolExecutor wired to dependency graph** — superseded by 2b-internals (`a5590d71`): the pipeline wrapper approach delivers wave-by-wave scheduling without rewriting the 2055-line `StreamingToolExecutor`. Internal batch logic stays as a per-wave fallback when tools opt out of dependency declaration. | `a5590d71` | ✅ done (session 5) — see "Plan 550 3c/3d status" below |
+| **3d e2e batch coverage** — `tests/unit/tool/orchestration/dependency-graph-orchestrator.test.ts` (10 tests across 6 describe blocks: independent reads / disjoint writes / same-path writes / requires / UNKNOWN_PATHS / empty input / DEFAULT_MAX_CONCURRENCY) + `tests/unit/tool/tool-execution-pipeline.test.ts` (8 tests: legacy mode / required chains / disjoint writes / collision / cyclic / missing prereq / introspection / discard). Covers all 4 scenarios from the 3d table. | session 5 (alongside 2b-internals) | ✅ done |
 
 **DuyaAgent.ts line count**: `4812` (start of session 4) → `4619`
 (end of session 4) — `-193 lines`. Three new modules:
