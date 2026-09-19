@@ -38,6 +38,7 @@ import {
 } from './constants.js';
 import { buildGitReminder } from './git-reminder.js';
 import { getBashTaskRegistry } from '../../session/bash-task-registry.js';
+import { getBashAdmission, type BashAdmissionToken } from '../../session/bash-admission.js';
 import { buildTaskNotificationXml } from '../../lifecycle/buildTaskNotification.js';
 import { sendBackgroundNotification } from '../../lifecycle/mailboxBackgroundNotification.js';
 import { GET_TASK_OUTPUT_TOOL_NAME } from '../BackgroundTaskTool/GetTaskOutputTool.js';
@@ -469,6 +470,14 @@ export class BashTool extends BaseTool implements ToolExecutor {
     const registry = getBashTaskRegistry();
     const pid = proc.pid ?? -1;
 
+    // Soft-yield promotion cannot refuse admission: the subprocess is already
+    // running and we either keep tracking it (overflow token, no slot taken)
+    // or we silently lose visibility into a live process. acquireOverflow()
+    // returns immediately either way; overflow=true means we are above the
+    // configured concurrency cap and the agent should aim to stop or finish
+    // other tasks soon.
+    const admission = getBashAdmission().acquireOverflow();
+
     registry.register({
       id: taskId,
       pid,
@@ -483,8 +492,16 @@ export class BashTool extends BaseTool implements ToolExecutor {
     // task via kill_task / the TaskDrawer UI, which goes through registry.stopTask.
     proc.unref();
 
+    let admissionReleased = false;
+    const releaseAdmission = () => {
+      if (admissionReleased) return;
+      admissionReleased = true;
+      admission.release();
+    };
+
     proc.on('close', (exitCode) => {
       registry.markCompleted(taskId, exitCode ?? -1);
+      releaseAdmission();
       if (!sessionId) return;
       const completedTask = registry.getTask(taskId);
       const status = exitCode === 0 ? 'completed' : 'failed';
@@ -506,6 +523,7 @@ export class BashTool extends BaseTool implements ToolExecutor {
 
     proc.on('error', (err) => {
       registry.markCompleted(taskId, -1, err.message);
+      releaseAdmission();
     });
 
     const lines: string[] = [
@@ -517,6 +535,13 @@ export class BashTool extends BaseTool implements ToolExecutor {
       `Use ${GET_TASK_OUTPUT_TOOL_NAME} only for a quick status/output snapshot; it never blocks.`,
       `Use kill_task to terminate the task if needed.`,
     ];
+    if (admission.overflow) {
+      lines.unshift(
+        `[Admission] Bash concurrency cap reached (${getBashAdmission().capacity}). ` +
+          `This soft-yield promotion is running as an overflow slot. ` +
+          `Finish or stop other background commands to free a regular slot.`,
+      );
+    }
     if (params.executionPlanReason) lines.unshift(`[Shell] ${params.executionPlanReason}`);
     const nonCritical = params.securityWarnings.filter(w => w.severity !== 'critical' && w.severity !== 'high');
     if (nonCritical.length > 0) {
@@ -533,6 +558,8 @@ export class BashTool extends BaseTool implements ToolExecutor {
         outputFile,
         taskId,
         softYieldMs: params.softYieldMs,
+        admissionOverflow: admission.overflow,
+        admissionSlot: admission.slot,
       },
     };
   }
@@ -602,6 +629,7 @@ export class BashTool extends BaseTool implements ToolExecutor {
         sessionId: context?.options.sessionId,
         securityWarnings: securityResult.warnings,
         executionPlanReason: executionPlan.reason,
+        abortSignal: context?.abortController?.signal,
       });
     }
 
@@ -889,6 +917,7 @@ export class BashTool extends BaseTool implements ToolExecutor {
     sessionId?: string;
     securityWarnings: SecurityWarning[];
     executionPlanReason?: string;
+    abortSignal?: AbortSignal;
   }): Promise<ToolResult> {
     const {
       command,
@@ -900,7 +929,35 @@ export class BashTool extends BaseTool implements ToolExecutor {
       sessionId,
       securityWarnings,
       executionPlanReason,
+      abortSignal,
     } = params;
+
+    // Admission gate: explicit run_in_background requests are subject to the
+    // configured concurrency cap (DEFAULT_BASH_ADMISSION_SLOTS = 8). When the
+    // cap is reached, fail fast with a clear message — the model should
+    // wait for an existing task to finish (use get_task_output / task list
+    // to see what is running) instead of stacking more. Mirrors mcode's
+    // controller.abort semantics.
+    const admissionController = getBashAdmission();
+    let admission: BashAdmissionToken | null = null;
+    try {
+      admission = await admissionController.acquire(abortSignal);
+    } catch (admissionError) {
+      const reason = admissionError instanceof Error ? admissionError.message : String(admissionError);
+      return {
+        id: crypto.randomUUID(),
+        name: this.name,
+        result:
+          `Bash admission denied: ${reason}. ` +
+          `The concurrency cap is ${admissionController.capacity} background task(s) and ` +
+          `all slots are in use. Wait for an existing background task to finish ` +
+          `(${GET_TASK_OUTPUT_TOOL_NAME} to peek, kill_task to terminate) and retry.`,
+        error: true,
+        metadata: { admissionDenied: true, capacity: admissionController.capacity },
+      };
+    }
+    // admission is now non-null — narrowed for the rest of the function.
+    const admissionToken = admission;
 
     const outputFile = join(getBashOutputDir(), `duya-bash-${toolUseId}.log`);
 
@@ -944,9 +1001,17 @@ export class BashTool extends BaseTool implements ToolExecutor {
         startTime,
       });
 
+      let admissionReleased = false;
+      const releaseAdmission = () => {
+        if (admissionReleased) return;
+        admissionReleased = true;
+        admissionToken.release();
+      };
+
       // close handler: mark complete and notify the parent conversation.
       proc.on('close', (exitCode) => {
         registry.markCompleted(toolUseId, exitCode ?? -1);
+        releaseAdmission();
         void fd.close().catch(() => { /* already closed */ });
 
         if (!sessionId) return;
@@ -975,6 +1040,7 @@ export class BashTool extends BaseTool implements ToolExecutor {
 
       proc.on('error', (err) => {
         registry.markCompleted(toolUseId, -1, err.message);
+        releaseAdmission();
         void fd.close().catch(() => { /* already closed */ });
       });
 
@@ -1001,9 +1067,13 @@ export class BashTool extends BaseTool implements ToolExecutor {
           pid,
           outputFile,
           taskId: toolUseId,
+          admissionSlot: admissionToken.slot,
         },
       };
     } catch (error) {
+      // Spawn failed before the subprocess was registered — release the slot
+      // we acquired above so the cap does not leak.
+      admissionToken.release();
       const message = error instanceof Error ? error.message : 'Unknown error';
       return {
         id: crypto.randomUUID(),
