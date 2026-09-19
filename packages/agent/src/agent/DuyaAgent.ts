@@ -2543,7 +2543,7 @@ export class duyaAgent implements AgentRuntime {
                 try {
                   const triggerPaths = extractTriggerPaths(
                     turnToolCalls,
-                    this.workingDirectory ?? process.cwd(),
+                    turnContext.workingDirectory ?? process.cwd(),
                   );
                   if (triggerPaths.length > 0) {
                     const nestedFiles = await getAgentsMdManager().collectNestedMemory(triggerPaths);
