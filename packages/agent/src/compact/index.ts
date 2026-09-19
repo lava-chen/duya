@@ -58,23 +58,11 @@ export {
   countImagePartsInMessages,
 } from './imageParts.js'
 
-// Failure classification + suppression (grok-aligned 5-state machine)
+// Failure classification (plan 552: classification only — the suppression
+// machine lives in CompactionManager.Suppression)
 export {
-  classifyCompactFailure,
   classifySuppressReason,
-  CompactSuppression,
-  isRetryableCompactFailure,
-  reasonToSuppressState,
   suppressReasonMessage,
-  suppressReasonToString,
-  suppressStateToString,
-  SUPPRESS_NONE,
-  SUPPRESS_TURN,
-  SUPPRESS_STICKY,
-  SUPPRESS_UNTIL_SUCCESS,
-  SUPPRESS_AUTH,
-  SUPPRESS_WINDOW_MS,
-  type CompactFailureKind,
+  SummaryDegenerateError,
   type SuppressReason,
-  type SuppressState,
 } from './compactErrors.js'

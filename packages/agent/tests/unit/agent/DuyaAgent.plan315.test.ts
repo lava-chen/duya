@@ -246,14 +246,22 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
       }
       const manager = {
         compact: vi.fn(async (input: Message[]): Promise<EnhancedCompactionResult> => ({
+          // Plan 552 contract: restored context travels via
+          // `reinjection.systemMessages`, not embedded system rows.
           messages: [
             { role: 'system', content: 'checkpoint summary', isCompactSummary: true },
-            { role: 'system', content: 'reinject file state' },
             ...input.slice(2),
           ],
           tokensRemoved: 10,
           tokensRetained: 5,
           strategy: 'test',
+          reinjection: {
+            filesReinjected: 0,
+            skillsReinjected: 0,
+            toolsRestored: 0,
+            totalTokensAdded: 4,
+            systemMessages: ['reinject file state'],
+          },
         })),
         updateContextTokens: vi.fn(),
         shouldCompact: vi.fn(() => true),

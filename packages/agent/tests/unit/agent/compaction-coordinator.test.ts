@@ -42,6 +42,9 @@ function makeDeps(overrides: Partial<CompactionCoordinatorDeps> = {}): Compactio
       maybeStartPrefire: () => undefined,
       getObservedPromptTokens: () => undefined,
       addEventHandler: () => undefined,
+      // Plan 552: runPreTurn consults the suppression gate explicitly on the
+      // token path (probeCompaction is pure measurement).
+      isSuppressed: () => false,
     } as never,
     projectModelMessages,
     onMessagesCompacted: undefined,
@@ -144,6 +147,7 @@ describe('CompactionCoordinator.runPreTurn — successful compaction', () => {
         maybeStartPrefire: () => undefined,
         getObservedPromptTokens: () => 80_000,
         addEventHandler: () => undefined,
+        isSuppressed: () => false,
       } as never,
       projectModelMessages,
       getLastCompactionTurn: () => 0,
@@ -210,6 +214,7 @@ describe('CompactionCoordinator.runPreTurn — successful compaction', () => {
         maybeStartPrefire: () => undefined,
         getObservedPromptTokens: () => 0,
         addEventHandler: () => undefined,
+        isSuppressed: () => false,
       } as never,
       setLastCompactionObservedTokens,
     });

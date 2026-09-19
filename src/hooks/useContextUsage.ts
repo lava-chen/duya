@@ -16,7 +16,7 @@
 import { useMemo } from 'react';
 import type { Message } from '@/types/message';
 import { findModelById } from '@duya/ai';
-import { computeContextEstimate } from '@duya/ai';
+import { computeContextEstimate, resolveContextWindow } from '@duya/ai';
 import {
   normalizeInputTokens,
   onlyNewInputTokens,
@@ -57,7 +57,6 @@ export interface ContextUsage {
   state: ContextState;
 }
 
-const DEFAULT_CONTEXT_WINDOW = 200_000;
 /** Prediction margin so "one more message" trips warning/critical early. */
 const NEXT_TURN_MARGIN = 200;
 /** Thresholds for the ring color states (effective ratio = with margin). */
@@ -67,13 +66,10 @@ const CRITICAL_RATIO = 0.95;
 /**
  * Resolve the context window for a given model id.
  *
- * Order of preference:
- * 1. Caller-supplied `contextWindow` (sourced from the
- *    `provider_model_capabilities` SQLite table — what the user toggled via
- *    the 200K/1M buttons in the provider edit view, or populated by model
- *    sync when the gateway reports it).
- * 2. The @duya/ai built-in catalog (`findModelById`).
- * 3. The 200K default (matches Claude 3.x / Sonnet 4.x base context).
+ * Plan 552: delegates to the shared `resolveContextWindow` in @duya/ai —
+ * the same precedence chain (capability window → catalog → 200K default)
+ * the agent's compaction budget uses, so the ring and auto-compaction can
+ * no longer disagree about the window size.
  *
  * NOTE: do not add substring-matching fallbacks here. Unknown ids
  * intentionally fall through to the default — pinning the window in the
@@ -83,11 +79,10 @@ export function getContextWindowForModel(
   modelName?: string,
   contextWindow?: number,
 ): number {
-  if (typeof contextWindow === 'number' && contextWindow > 0) {
-    return contextWindow;
-  }
-  if (!modelName) return DEFAULT_CONTEXT_WINDOW;
-  return findModelById(modelName)?.contextWindow || DEFAULT_CONTEXT_WINDOW;
+  return resolveContextWindow({
+    capabilityContextWindow: contextWindow,
+    modelId: modelName,
+  }).contextWindow;
 }
 
 /**
