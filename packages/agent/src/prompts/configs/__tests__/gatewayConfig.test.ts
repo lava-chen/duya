@@ -8,23 +8,29 @@ import '../../registry.js'; // side-effect: register general/code/research/gatew
  *
  * The gateway prompt must stay a full-capability composition (parity with
  * the desktop general agent) while keeping its channel-unique sections.
- * These assertions lock the section list so regressions like
+ * These assertions lock the assembly list so regressions like
  * "section added to config but suppressed by profile disableSections" are
- * caught at the config layer.
+ * caught at the config layer. Plan 551: the static half is a staticModules
+ * assembly list; the ref name (falling back to the module key) is the
+ * profile-gating / cache-key surface.
  */
+function moduleNames(): string[] {
+  return (gatewayConfig.staticModules ?? []).map((ref) => ref.name ?? ref.module);
+}
 describe('gatewayConfig', () => {
   it('keeps the gateway-unique sections (intro / gatewayRole / toneAndStyle)', () => {
-    const names = gatewayConfig.staticSections.map((s) => s.name);
+    const names = moduleNames();
     expect(names).toContain('intro');
     expect(names).toContain('gatewayRole');
     expect(names).toContain('toneAndStyle');
   });
 
   it('composes the full general static section set in order', () => {
-    expect(gatewayConfig.staticSections.map((s) => s.name)).toEqual([
+    expect(moduleNames()).toEqual([
       'intro', 'gatewayRole',
       'communication', 'finalAnswer', 'toneAndStyle', 'system',
-      'tasks', 'destructiveActions', 'tools', 'skillUsage', 'project',
+      'tasks', 'destructiveActions', 'configProtection', 'tools',
+      'skillUsage', 'project',
     ]);
   });
 
@@ -39,9 +45,9 @@ describe('gatewayConfig', () => {
 
   it('excludes duyaDesktopContext (self-described as inapplicable to IM channels)', () => {
     const names = [
-      ...gatewayConfig.staticSections,
-      ...gatewayConfig.dynamicSections,
-    ].map((s) => s.name);
+      ...moduleNames(),
+      ...gatewayConfig.dynamicSections.map((s) => s.name),
+    ];
     expect(names).not.toContain('duyaDesktopContext');
   });
 

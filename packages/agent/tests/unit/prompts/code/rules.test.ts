@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { getRulesSection } from '../../../../src/prompts/code/sections/rules.js'
+import { resolve } from 'node:path'
+import { HbsPromptSystem } from '../../../../src/prompts/hbs/HbsPromptSystem.js'
 import { TOOL_NAMES } from '../../../../src/prompts/types.js'
 import type { PromptContext } from '../../../../src/prompts/types.js'
+
+const hbs = new HbsPromptSystem({
+  assetsRoot: resolve(__dirname, '../../../../src/prompts/assets'),
+})
 
 function makeCtx(enabledTools: string[] = []): PromptContext {
   return {
@@ -13,6 +18,8 @@ function makeCtx(enabledTools: string[] = []): PromptContext {
     sessionStartTime: Date.now(),
   } as PromptContext
 }
+
+const getRulesSection = (ctx: PromptContext) => hbs.renderModule('rules', ctx).trim()
 
 describe('getRulesSection (code)', () => {
   it('keeps the essential work, tools, editing, safety, and autonomy sections', () => {

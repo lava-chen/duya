@@ -31,7 +31,8 @@ import {
 } from '../memory/tierReader.js'
 import { BOT_MEMORY_OWN_SECTION, BOT_MEMORY_USAGE_SECTION, BOT_MEMORY_USER_SECTION, BOT_MEMORY_PROJECT_SECTION } from '../memory/sections.js'
 import { createBotPromptAssembly, computeBotContentHash, type BotPromptContext } from '../index.js'
-import { getMemorySection } from '../../sections/dynamic/memorySection.js'
+import { createMemoryPreBuildHook } from '../../sections/dynamic/memoryPreBuildHook.js'
+import { HbsPromptSystem } from '../../hbs/HbsPromptSystem.js'
 import type { BotMemoryContext, TierMemoryEntry } from '../memory/types.js'
 
 function entry(overrides: Partial<TierMemoryEntry>): TierMemoryEntry {
@@ -354,13 +355,22 @@ describe('dual-key frozen snapshot (P2.2)', () => {
 })
 
 describe('plain (non-bot) session regression (P2.2)', () => {
-  it('legacy memorySection still renders summary.md — untouched by 479', () => {
+  it('memory.hbs still renders summary.md through the preBuildHook path', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'legacy-mem-'))
     const prev = process.env.DUYA_MEMORY_ROOT
     process.env.DUYA_MEMORY_ROOT = root
     try {
       fs.writeFileSync(path.join(root, 'summary.md'), '# Summary\n- prefers terse answers')
-      const out = getMemorySection(undefined as never)
+      // Plan 551: the memory section renders through dynamic/memory.hbs;
+      // the preBuildHook reads summary.md and injects the memory_* slots.
+      const hook = createMemoryPreBuildHook()
+      const base = { enabledTools: new Set<string>(), sessionStartTime: 0 } as never
+      const extension = await hook(base)
+      const enriched = extension?.promptContextExtension
+        ? { ...(base as object), ...extension.promptContextExtension }
+        : base
+      const system = new HbsPromptSystem()
+      const out = system.renderStaticTemplate('dynamic/memory.hbs', enriched as never).trim()
       expect(out).toContain('prefers terse answers')
     } finally {
       if (prev === undefined) delete process.env.DUYA_MEMORY_ROOT

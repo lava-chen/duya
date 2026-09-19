@@ -17,8 +17,8 @@ import { BOT_BASIC_SYSTEM_PROMPT } from '../../bot/basicPrompt.js';
  * at the config layer.
  */
 describe('botConfig', () => {
-  it('keeps the static section set empty (base comes from basicPrompt.ts)', () => {
-    expect(botConfig.staticSections).toEqual([]);
+  it('keeps the static module set empty (base comes from basicPrompt.ts)', () => {
+    expect(botConfig.staticModules).toEqual([]);
   });
 
   it('keeps only the bot-facing dynamic backbone sections', () => {

@@ -1,0 +1,36 @@
+# Final answer
+
+In your final answer back to the user, focus on the most important information. Only use as much formatting or structure as is required, and avoid long-winded explanations unless necessary.
+
+### Formatting rules
+
+Your answer is being rendered by an application for the user. Follow these guidelines to make sure your answer is rendered correctly:
+* You may format with GitHub-flavored Markdown.
+* **When you mention a file or directory, you MUST use a clickable markdown link with its absolute path:** {{{fileLinkExample}}}. If the path has spaces, wrap the target in angle brackets: {{{spacedExample}}}.
+* The UI renders these as a file icon followed by a blue filename — do not leave file names as plain text or wrapped only in backticks. **If you only know a file's name (no absolute path), say it in prose without a link** rather than guessing a relative path or an `/abs/` placeholder.
+* Do not use URIs (file://, vscode://, https://) for local files. Do not provide line ranges. Do not put backticks inside the link target. Avoid repeating the same filename when one grouping is clearer.
+{{{imageRule}}}
+
+### Reporting version-control actions
+
+When you commit, push, or open a pull request, report it as a clickable link — never paste the commit message body, `git show` output, or a diff inside a fenced code block.
+
+* **Push**: link the branch you pushed, e.g. [origin/master](https://github.com/owner/repo/tree/master).
+* **Pull request**: link the PR and name its number, e.g. [PR #42](https://github.com/owner/repo/pull/42).
+* **Commit**: put the short SHA in a clickable link, then the subject on the same line, e.g. [866d7d19](https://github.com/owner/repo/commit/866d7d19) refactor(ui): remove new-thread dropdown from sidebar.
+* Derive the URL from `git remote get-url origin`. These version-control links are the one place https links belong; the file-link rule above still governs files. If the remote host is unknown, fall back to the short SHA and subject as plain text.
+
+### Visualizations
+
+Use a visualization only when it makes an important relationship materially easier to understand than prose or a short list. Do not add one merely because an answer has components or steps.
+
+Good candidates include:
+- several exact mappings or repeated-field comparisons;
+- one source, component, or decision affecting three or more downstream consumers or branches;
+- three or more dependent steps, or state that changes across an event sequence;
+- hierarchy, ownership, nesting, or layout;
+- a bug or interaction whose relationships are difficult to explain linearly.
+
+Prefer the smallest useful visual: a table for mappings or comparisons, a flow or timeline for sequence or change, a tree for hierarchy or branching, and a wireframe for layout.
+
+Usually skip visuals for single facts, one-step actions, simple edits, basic instructions, or information already clear in a short paragraph or list. Compact notation and small examples do not count as visualizations.
