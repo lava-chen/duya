@@ -179,8 +179,8 @@ export interface PromptContext {
   modelId: string
   /** Marketing name for the model */
   modelName?: string
-  /** Knowledge cutoff date for the model */
-  knowledgeCutoff?: string
+  /** Knowledge cutoff date for the model. `null` when the model id does not match any entry in `KNOWLEDGE_CUTOFFS` (set by the environment preBuildHook). */
+  knowledgeCutoff?: string | null
   /** Set of enabled tool names */
   enabledTools: Set<string>
   /** Connected MCP servers with their instructions */
@@ -228,6 +228,18 @@ export interface PromptContext {
   memoryAdHocDir?: string;
   /** Inline body of `summary.md`, truncated to 12 000 chars. Empty / missing file maps to the literal `_(summary.md not yet generated)_`. */
   memorySummaryBody?: string;
+  // Plan 550 1d-rest (environment section) — populated by the
+  // `environment` preBuildHook so the dynamic/environment.hbs template
+  // can render async + non-deterministic fields (git repo detection,
+  // wall-clock snapshot, marketing-name / cutoff lookup) synchronously.
+  /** Result of async `fs.access(<cwd>/.git)` — null when cwd is empty or the check threw. */
+  isGitRepo?: boolean | null;
+  /** Wall-clock snapshot in ms. Captured once per `buildSystemPrompt` so the cache entry stays stable. */
+  nowMs?: number;
+  /** OS uname -sr equivalent. Windows uses `osVersion() osRelease()`; others use `osType() osRelease()`. */
+  unameSr?: string;
+  /** Best-effort marketing name for the model (claude / openai / gemini / etc.). `null` when the model id has no recognised prefix. */
+  marketingName?: string | null;
   /** User type (for conditional prompt sections) */
   userType?: 'ant' | 'external'
   /** Output style configuration */

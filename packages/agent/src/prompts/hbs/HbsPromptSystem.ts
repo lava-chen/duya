@@ -29,6 +29,7 @@ import type { PromptContext, SystemPrompt } from '../types.js';
 import { asSystemPrompt, CYBER_RISK_INSTRUCTION, SYSTEM_PROMPT_DYNAMIC_BOUNDARY, TOOL_NAMES } from '../types.js';
 import { buildLanguageGuidance } from '../language-guidance.js';
 import { getPlatformHint } from '../platformHints.js';
+import { buildEnvironmentItems } from '../sections/dynamic/environment.js';
 import { HbsPromptRenderer } from './HandlebarsRenderer.js';
 
 const ASSETS_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../assets');
@@ -172,6 +173,15 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
     vision_tool_name: TOOL_NAMES.VISION,
     scratchpad_dir: scratchpadDir,
     has_session_search_tool: hasSessionSearchTool,
+    // environment section (Plan 550 1d-rest) — mapper builds the
+    // `env_items` string[] via the same helper the legacy TS path uses,
+    // so the .hbs body's `{{#each env_items}}` produces a byte-identical
+    // render to `getEnvironmentSection`. The preBuildHook populates
+    // ctx.isGitRepo / ctx.nowMs / ctx.unameSr / ctx.marketingName /
+    // ctx.knowledgeCutoff; mapper always runs after preBuildHook so
+    // those overrides are present in production. Tests inject them
+    // directly when calling `renderStaticTemplate` for parity checks.
+    env_items: buildEnvironmentItems(ctx),
     // session-guidance
     has_ask_user_question: hasAskUserQuestion,
     has_agent_tool: hasAgentTool,

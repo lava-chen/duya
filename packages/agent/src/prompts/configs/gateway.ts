@@ -11,6 +11,7 @@ import type { PromptSystemConfig } from '../PromptSystem.js'
 import { TOOL_NAMES } from '../types.js'
 import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
 import { createMemoryPreBuildHook } from '../sections/dynamic/memoryPreBuildHook.js'
+import { createEnvironmentPreBuildHook } from '../sections/dynamic/environmentPreBuildHook.js'
 
 // Gateway-specific sections
 import { getGatewayIntroSection, getGatewayRoleSection } from '../gateway/sections/index.js'
@@ -67,7 +68,7 @@ export const gatewayConfig: PromptSystemConfig = {
     { name: 'outputStyle', compute: getOutputStyleSection, description: 'Custom output style' },
     // Environment state
     { name: 'platform', compute: getPlatformSection, description: 'Communication platform-specific guidance' },
-    { name: 'environment', compute: getEnvironmentSection, description: 'Current directory state' },
+    { name: 'environment', compute: getEnvironmentSection, template: 'dynamic/environment.hbs', description: 'Current directory state' },
     { name: 'mcp', compute: getMcpInstructionsSection, description: 'MCP servers can change' },
     { name: 'skills', compute: getSkillsMetadataSection, description: 'Skills can be loaded/unloaded' },
     { name: 'scratchpad', compute: getScratchpadSection, template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },
@@ -84,15 +85,26 @@ export const gatewayConfig: PromptSystemConfig = {
     if (ctx.omitAgentsMd) return
     const memoryHook = createMemoryPreBuildHook()
     const memoryResult = await memoryHook(ctx)
+    // Plan 550 1d-rest (environment section): pre-populate isGitRepo /
+    // nowMs / unameSr / marketingName / knowledgeCutoff so the .hbs
+    // template can render them synchronously. Merged with the memory
+    // extension; later fields win on collision but the two surfaces
+    // never overlap.
+    const envHook = createEnvironmentPreBuildHook()
+    const envResult = await envHook(ctx)
+    const mergedExtension = {
+      ...memoryResult?.promptContextExtension,
+      ...envResult?.promptContextExtension,
+    }
     // Plan 525 / 408 follow-up: thread the project-entity home into the
     // loader so it can read `<projectHome>/AGENTS.md` as a `'Project entity'`
     // source. Absent when cwd is outside any registered duya project.
     if (await initializeAgentsMd(ctx.workingDirectory, ctx.projectHome)) {
       return {
         invalidateCacheKeys: ['project'],
-        promptContextExtension: memoryResult?.promptContextExtension,
+        promptContextExtension: mergedExtension,
       }
     }
-    return memoryResult
+    return { promptContextExtension: mergedExtension }
   },
 }

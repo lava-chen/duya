@@ -28,6 +28,7 @@
 
 import type { PromptSystemConfig } from '../PromptSystem.js'
 import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
+import { createEnvironmentPreBuildHook } from '../sections/dynamic/environmentPreBuildHook.js'
 
 // Dynamic sections — reuse the same renderers `general` uses.
 import { getLanguageSection } from '../sections/dynamic/language.js'
@@ -48,7 +49,7 @@ export const botConfig: PromptSystemConfig = {
     { name: 'outputStyle', compute: getOutputStyleSection, description: 'Custom output style' },
     // Environment state
     { name: 'platform', compute: getPlatformSection, description: 'Communication platform-specific guidance' },
-    { name: 'environment', compute: getEnvironmentSection, description: 'Current directory state' },
+    { name: 'environment', compute: getEnvironmentSection, template: 'dynamic/environment.hbs', description: 'Current directory state' },
     { name: 'mcp', compute: getMcpInstructionsSection, description: 'MCP servers can change' },
     { name: 'skills', compute: getSkillsMetadataSection, description: 'Skills can be loaded/unloaded' },
     { name: 'scratchpad', compute: getScratchpadSection, template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },
@@ -58,11 +59,22 @@ export const botConfig: PromptSystemConfig = {
   preBuildHook: async (ctx) => {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.
     if (ctx.omitAgentsMd) return
+    // Plan 550 1d-rest (environment section): pre-populate isGitRepo /
+    // nowMs / unameSr / marketingName / knowledgeCutoff so the .hbs
+    // template can render them synchronously. Bot config has no memory
+    // hook (botMemory tiers replace it), so the extension is solely the
+    // env one here.
+    const envHook = createEnvironmentPreBuildHook()
+    const envResult = await envHook(ctx)
     // Plan 525 / 408 follow-up: thread the project-entity home into the
     // loader so it can read `<projectHome>/AGENTS.md` as a `'Project entity'`
     // source. Absent when cwd is outside any registered duya project.
     if (await initializeAgentsMd(ctx.workingDirectory, ctx.projectHome)) {
-      return { invalidateCacheKeys: ['project'] }
+      return {
+        invalidateCacheKeys: ['project'],
+        promptContextExtension: envResult?.promptContextExtension,
+      }
     }
+    return envResult
   },
 }
