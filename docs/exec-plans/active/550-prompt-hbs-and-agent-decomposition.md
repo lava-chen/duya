@@ -43,44 +43,59 @@
 | 2d VisualAnalysis — already independent (visual-analysis.ts) | — | ✅ done |
 | 2c CompactionCoordinator (module + tests) | `2a20c20d` | ✅ done |
 | 2c CompactionCoordinator wire + delete 146 lines | `eaba10ff` | ✅ done |
-| **改造 2 — remaining** (2b ToolExecutionPipeline, 2e DuyaAgent facade) | — | ⏳ next session |
+| 2b ToolExecutionPipeline facade (thin wrapper over StreamingToolExecutor) | `a6b5878b` | ✅ done |
+| 2b ToolExecutionPipeline wire (duyaAgent.streamChat uses facade) | `7eae6bdf` | ✅ done |
+| **改造 2 — remaining** (2b-internals: orchestrator planExecution wiring inside facade, 2e DuyaAgent streamChat loop extraction) | — | ⏳ next session |
 | 1d-rest 8 remaining dynamic sections + gateway/code/research configs + delete `general/sections/*.ts` | — | ⏳ follow-up PR (out of session-4 scope) |
 | 3c StreamingToolExecutor wiring | — | ⏳ next session |
 | 3d end-to-end coverage | — | ⏳ next session |
 
 **DuyaAgent.ts line count**: `4812` (start of session 4) → `4619`
-(end of session 4) — `-193 lines`. Two new modules:
+(end of session 4) — `-193 lines`. Three new modules:
 
 - `packages/agent/src/agent/PermissionsGate.ts` (232 lines, 12 tests)
 - `packages/agent/src/agent/CompactionCoordinator.ts` (272 lines, 6 tests)
+- `packages/agent/src/tool/ToolExecutionPipeline.ts` (123 lines, 7 tests)
 
-Both modules are state-free wrappers around the session-scope deps
-(`PermissionsGateDeps`, `CompactionCoordinatorDeps`), exposed through a
-duck-typed `duyaAgent` so the agent class never has to extend anything.
+All three are state-free wrappers around the session-scope deps,
+exposed through duck-typed interfaces so `duyaAgent` never has to
+extend anything.
 
 ## Next-session starting points (session 5)
 
-- **改造 2b ToolExecutionPipeline**: pull the LLM stream + tool dispatch
-  loop out of `streamChat` (lines ~1830–2900, ~2000 lines) into a
-  dedicated module. The pipeline owns:
-  - the LLM stream subscription + per-event yield mapping
-  - the post-result proactive-compaction wiring (already delegated to
-    CompactionCoordinator)
-  - the `StreamingToolExecutor.runBatch` invocation + tool-result
-    back-projection
-  - the `compact:start`/`compact:done`/`compact:error` event forwarding
-  - the per-turn abort signal propagation
-- **改造 2e DuyaAgent 收 facade**: once 2b lands, `DuyaAgent.streamChat`
-  reduces to < 100 lines of orchestration: assemble turn context,
-  resolve tools + system prompt + permissions, delegate to
-  ToolExecutionPipeline, yield the wrapper events. Move remaining
-  helper methods into the appropriate sub-modules and end with
-  DuyaAgent < 800 lines.
-- **改造 3c StreamingToolExecutor**: `StreamingToolExecutor.runBatch`
-  currently uses `TOOL_BATCH_MAP` (legacy plan 550 step 3a already
-  shipped `ToolDependencyDeclaration` + `DependencyGraphOrchestrator`).
-  This is the wiring commit that lets the orchestrator schedule the
-  tool batch. ~200-400 lines, ~one commit.
+- **改造 2b-internals (within ToolExecutionPipeline)**: the facade
+  currently forwards `addTool` directly to the wrapped executor. The
+  follow-up commit routes tool batches through
+  `DependencyGraphOrchestrator.planExecution()` so write/write races
+  serialise and read/read pairs still run in parallel. ~150-300 lines
+  + 8-12 unit tests covering the wave-by-wave scheduler.
+- **改造 2e DuyaAgent 收 facade**: `streamChat` body is still
+  ~1700 lines (LLM stream subscription, hook dispatch, mid-loop
+  compaction check, anti-dead-loop, error replay, post-loop
+  PreFinalize / PostTurn dispatch, final compaction check, done event).
+  Strategy for session 5: extract three sub-modules in order
+  1. **TurnPreparer** (lines 1238–1530, ~290 lines): mode apply +
+     loop-hook bus registration + dead-loop tracker + seq-index
+     allocation + tool-list re-projection. Public surface:
+     `prepareTurn(turnContext, options): PreparedTurn` where
+     `PreparedTurn` carries the system prompt, tools, hook bus,
+     dead-loop state, and the `dispatchHooks` / `buildHookCtx`
+     closures.
+  2. **TurnLoop** (lines 1530–2680, ~1150 lines): the per-turn LLM
+     stream subscription, tool result back-projection, post-tool
+     hooks, and tool-use bookkeeping. Pure functional: takes
+     `PreparedTurn`, runs to completion, yields `SSEEvent`s.
+  3. **StreamFinalizer** (lines 2680–2940, ~260 lines): post-loop
+     PreFinalize / PostTurn / SessionEnd hooks, context-length retry
+     re-projection, synthetic tool_results, error event surface.
+  End state: `duyaAgent.streamChat` < 100 lines that just calls
+  `prepareTurn → turnLoop → finalizer` and forwards the yielded
+  events to the wire.
+- **改造 3c StreamingToolExecutor**: same as the 2b-internals
+  follow-up; the `runBatch` method currently uses `TOOL_BATCH_MAP`
+  (legacy). The follow-up replaces the static scheduler with a
+  `DependencyGraphOrchestrator` instance and a wave-by-wave loop.
+  ~200-400 lines.
 - **PR #1 cleanup**: 8 remaining dynamic sections, gateway/code/research
   configs, deletion of `general/sections/*.ts`. Independent of session 4
   work; can run in parallel.
@@ -126,20 +141,34 @@ per the user's "完整不丢东西 + 合理优秀" requirement, and shipped:
    surface (`compact:error`).
 4. **`VisualAnalysis`** (2d): the existing `visual-analysis.ts`
    module already meets the spec — no further work needed.
-5. `DuyaAgent.ts`: `4812` → `4619` lines (`-193`), with a clean
-   facade-friendly boundary at the top of `streamChat`.
+5. **`ToolExecutionPipeline`** (2b): thin facade over
+   `StreamingToolExecutor` so `duyaAgent.streamChat` never
+   instantiates the streaming executor directly. The facade
+   establishes the seam for the upcoming step 2b-internals —
+   `DependencyGraphOrchestrator.planExecution()` slots between
+   `addTool` and `getRemainingResults` without any caller-side
+   changes. 7 unit tests pin the public surface (constructor
+   signature, addTool, getRemainingResults async-iterable, setCallbacks,
+   discard / dispose idempotency, getMemoryUsageMB).
+6. `DuyaAgent.ts`: `4812` → `4619` lines (`-193`), with a clean
+   facade-friendly boundary at the top of `streamChat` and the
+   `toolExecutionPipeline` import substituting for the streaming
+   executor at the wire site.
 
-Net: two new modules, 18 new atomic commits, and `DuyaAgent.ts` is
-now within ~5× of the plan target (< 800 lines) while every
-commit keeps behaviour identical to baseline (verified by running
-the agent test surface before and after each refactor).
+Net: three new modules, 20 new atomic commits (19 code + 1 plan
+update), and `DuyaAgent.ts` is now within ~5× of the plan target
+(< 800 lines) while every commit keeps behaviour identical to
+baseline (verified by running the agent test surface before and
+after each refactor; pre-existing plan-486 test failures unchanged
+across all commits).
 
 The user's original goal — "针对和 mcode 对比之后发现的
 需要duyaagent.ts分层拆解的部分下功夫做到好的拆解工程 完整
 不丢东西但是合理优秀的拆解" — is materially advanced but not
-finished: `streamChat` still owns the LLM+tool loop (~2000 lines
+finished: `streamChat` still owns the LLM+tool loop (~1700 lines
 of mixed-mode dispatch, hook dispatch, error handling). Session 5
-will land 2b + 2e.
+will land 2b-internals + 2e (TurnPreparer / TurnLoop /
+StreamFinalizer).
 
 ## Background
 
