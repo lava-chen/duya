@@ -50,7 +50,8 @@
 | 2e StreamFinalizer (partial) — SessionFinalizer success + abort paths extracted | `1a57e4b0` | ✅ done (session 5) |
 | 2e StreamFinalizer error path — finalizeStreamError extracts cleanup + synthetic tool_result + Plan 462 error mapping | `7d9bd06b` | ✅ done (session 5) |
 | 2e StreamFinalizer plan doc sync (session-5 close-out) | `51aba8c8` | ✅ done (session 5) |
-| **改造 2 — remaining** (2e TurnLoop extraction, 3c StreamingToolExecutor wiring) | — | ⏳ session 6 |
+| 2e TurnLoop first slice — TurnStreamRunner wraps openLLMStream + retry IIFE | `b17384b2` | ✅ done (session 5+) |
+| **改造 2 — remaining** (2e TurnLoop event dispatcher, 3c StreamingToolExecutor wiring) | — | ⏳ session 6 |
 | 1d-rest 8 remaining dynamic sections + gateway/code/research configs + delete `general/sections/*.ts` | — | ⏳ follow-up PR (out of session-4 scope) |
 | 3c StreamingToolExecutor wiring | — | ⏳ next session |
 | 3d end-to-end coverage | — | ⏳ next session |
@@ -96,15 +97,16 @@ extend anything.
   defaults are bit-identical to the legacy inline implementation.
   `DuyaAgent.ts` shrinks 4356 → 4342 (`-14`).
 
-**DuyaAgent.ts line count**: `4619` (end of session 4) → `4276`
-(end of session 5) — `-343 lines` cumulative since session 4 start.
-Five new modules since session 4 began:
+**DuyaAgent.ts line count**: `4619` (end of session 4) → `4248`
+(end of session 5+) — `-371 lines` cumulative since session 4 start.
+Six new modules since session 4 began:
 
 - `packages/agent/src/agent/PermissionsGate.ts` (232 lines, 12 tests)
 - `packages/agent/src/agent/CompactionCoordinator.ts` (272 lines, 6 tests)
 - `packages/agent/src/tool/ToolExecutionPipeline.ts` (now 224 lines — wave-scheduler wiring, 8 tests)
 - `packages/agent/src/agent/TurnLoopTracker.ts` (181 lines, 12 tests)
 - `packages/agent/src/agent/SessionFinalizer.ts` (~410 lines — success + abort + error paths, 12 tests)
+- `packages/agent/src/agent/TurnStreamRunner.ts` (217 lines — runTurnStream generator + retry envelope, 7 tests)
 
 ## Next-session starting points (session 5)
 
@@ -233,27 +235,29 @@ lines added, ~150 deleted.
   matches the legacy behaviour byte-for-byte; tests pin it
   explicitly so a future reordering does not regress it.
 
-**Remaining 2e slice**: TurnLoop (~1410 lines) — the per-turn
-LLM stream subscription + tool dispatch + retry handling +
-anti-dead-loop counter. `streamChat` body is now ~2035 lines
-(4619 → 4276, then a further 2095 lines after TurnPreparer +
-StreamFinalizer landed; the inline loop body and tool dispatch
-are the next largest target).
+**Remaining 2e slice**: TurnLoop event dispatcher (~1100 lines) —
+   the per-turn `for await (const event of streamGenerator)` body
+   that handles `tool_use_started` / `tool_use_delta` / `tool_use`
+   / `text` / `thinking` / `done` and dispatches tool_use blocks to
+   the executor. The retry envelope is already extracted into
+   `TurnStreamRunner.runTurnStream`; the next slice peels off the
+   event dispatch into a `TurnEventDispatcher.dispatch(event)`
+   helper.
 
 ## Session 6+ scope
 
 The remaining Plan 550 work needs more than one session. The
 following are session-6+ targets, in priority order:
 
-1. **2e TurnLoop** — extract the inner LLM stream subscription
-   (`openLLMStream` + `streamGenerator` IIFE + retry handler) as
-   a `TurnStreamRunner` class, then progressively peel off the
-   event-dispatch handlers (`tool_use_started`, `tool_use_delta`,
-   `tool_use`, `text`, `thinking`, `done`) into a separate
-   `TurnEventDispatcher`. Both extractions require multi-commit
-   sequences because the generator body has multiple `yield*`
-   points that the caller (`streamChat`) interleaves with
-   per-turn state mutation.
+1. **2e TurnLoop event dispatcher** — extract the
+   `tool_use_started` / `tool_use_delta` / `tool_use` / `text` /
+   `thinking` / `done` event handlers from streamChat into a
+   `TurnEventDispatcher.dispatch(event)` helper. This is the
+   largest remaining single extraction (~1100 lines). Multi-commit
+   sequence because the dispatch interacts with the per-turn
+   closure state (`assistantContent`, `thinkingContent`,
+   `modeSwitchToolIds`, `turnToolCallIds`, `textSignature`,
+   `thinkingBlock`).
 2. **3c StreamingToolExecutor** — replace the static
    `TOOL_BATCH_MAP` + `BATCH_STRATEGY` + `classifyTool` scheduling
    inside `processQueue()` / `canExecuteTool()` with a
@@ -270,15 +274,14 @@ following are session-6+ targets, in priority order:
 4. **1d-rest** — independent PR. 8 dynamic sections + gateway /
    code / research configs + delete `general/sections/*.ts`.
 
-**Session 5 close-out metrics**:
+**Session 5+ close-out metrics**:
 
-- `DuyaAgent.ts`: `4473` (master) → `4276` (PR #59 head)
-  = **-197 lines, 4.4% reduction**
-- `streamChat` body: `4356` → `~2035` lines = **-2321 lines, 53% reduction**
+- `DuyaAgent.ts`: `4473` (master) → `4248` (PR #59 head)
+  = **-225 lines, 5.0% reduction**
+- `streamChat` body: `4356` → `~1990` lines = **-2366 lines, 54% reduction**
 - 6 new modules since session 4 (PermissionsGate, CompactionCoordinator,
-  ToolExecutionPipeline, TurnLoopTracker, SessionFinalizer + the
-  orchestrator + TurnContext + TurnAssembler from earlier sessions).
-- 52 new unit tests across the 5 plan-550 modules.
+  ToolExecutionPipeline, TurnLoopTracker, SessionFinalizer, TurnStreamRunner).
+- 59 new unit tests across the 6 plan-550 modules.
 
 ## Session 4 summary (DuyaAgent 拆解聚焦)
 
