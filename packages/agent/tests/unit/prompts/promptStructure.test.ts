@@ -1,16 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { resolve } from 'node:path'
 import type { AgentsFileInfo } from '../../../src/agentsmd/types.js'
 import { getAgentsMdManager } from '../../../src/agentsmd/index.js'
 import type { PromptSkill } from '../../../src/skills/types.js'
 import { getSkillRegistry, resetSkillRegistry } from '../../../src/skills/registry.js'
 import { PromptsRegistry } from '../../../src/prompts/registry.js'
-import { getProjectInstructionsSection } from '../../../src/prompts/general/sections/project.js'
-import { getSystemSection } from '../../../src/prompts/code/sections/system.js'
+import { HbsPromptSystem } from '../../../src/prompts/hbs/HbsPromptSystem.js'
 import {
   formatSkillCatalog,
   getSkillsMetadataSection,
 } from '../../../src/prompts/sections/dynamic/skillsMetadata.js'
 import type { PromptContext } from '../../../src/prompts/types.js'
+
+const hbs = new HbsPromptSystem({
+  assetsRoot: resolve(__dirname, '../../../src/prompts/assets'),
+})
+// Project-instructions index and the code system section render through
+// their modules (Plan 551); the AgentsMd manager spy below still drives
+// the index because the mapper reads the same singleton at render time.
+const getProjectInstructionsSection = () =>
+  hbs.renderModule('projectInstructions', context()).trim()
+const getSystemSection = (ctx: PromptContext) =>
+  hbs.renderModule('systemCoding', ctx).trim()
 
 function context(enabledTools: string[] = []): PromptContext {
   return {

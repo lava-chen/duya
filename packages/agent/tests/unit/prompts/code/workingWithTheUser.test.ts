@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { getWorkingWithTheUserSection } from '../../../../src/prompts/code/sections/workingWithTheUser.js'
+import { resolve } from 'node:path'
+import { HbsPromptSystem } from '../../../../src/prompts/hbs/HbsPromptSystem.js'
 import type { PromptContext } from '../../../../src/prompts/types.js'
+
+const hbs = new HbsPromptSystem({
+  assetsRoot: resolve(__dirname, '../../../../src/prompts/assets'),
+})
 
 function makeCtx(): PromptContext {
   return {
@@ -12,6 +17,9 @@ function makeCtx(): PromptContext {
     sessionStartTime: Date.now(),
   } as PromptContext
 }
+
+const getWorkingWithTheUserSection = (ctx: PromptContext) =>
+  hbs.renderModule('workingWithTheUser', ctx).trim()
 
 describe('getWorkingWithTheUserSection (code)', () => {
   it('keeps the two-channel contract and self-contained final answer', () => {

@@ -51,9 +51,9 @@ export {
 export type { PromptProfile } from './modes/types.js'
 export type { ResearchTaskIntent, ResearchPromptRuntimeContext } from './research/types.js'
 
-// Shared sections (used by multiple configs)
-export { getProjectContinuitySection } from './sections/projectContinuity.js'
-export { getConfigProtectionSection } from './general/sections/configProtection.js'
+// Shared sections
+// (Plan 551: the static section trees were swept — authored content lives
+// in the module registry, `prompts/modules/registry.ts`.)
 
 // Dynamic Sections
 export { getEnvironmentSection } from './sections/dynamic/environment.js'
