@@ -53,10 +53,11 @@
 | 2e TurnLoop first slice — TurnStreamRunner wraps openLLMStream + retry IIFE | `b17384b2` | ✅ done (session 5+) |
 | 2e StreamFinalizer fixup — revert persistableMessages to canonical helper (drops transient runtime-context envelopes) | `2e37a37c` | ✅ done (session 5+) |
 | 2e side-quest — extract PendingHookMessages FIFO queue from DuyaAgent | `a61523f6` | ✅ done (session 5+) |
-| **改造 2 — remaining** (2e TurnLoop event dispatcher, 3c StreamingToolExecutor wiring) | — | ⏳ session 6 |
-| 1d-rest 8 remaining dynamic sections + gateway/code/research configs + delete `general/sections/*.ts` | — | ⏳ follow-up PR (out of session-4 scope) |
-| 3c StreamingToolExecutor wiring | — | ⏳ next session |
-| 3d end-to-end coverage | — | ⏳ next session |
+| **1c deps fixup** — add `handlebars` + `@types/handlebars` to `package.json` (Plan 550 1c missed declaring these — fresh checkouts failed to resolve the module) | `0e175896` | ✅ done (session 6) |
+| **1c CRLF fixup** — add `.gitattributes` to force LF line endings for `.hbs` (pre-existing byte-parity regression on Windows checkouts) | `8301765e` | ✅ done (session 6) |
+| 1d-rest 1/9 — visualVerification migrated to `.hbs` (general / code / gateway / research) + 2 byte-level parity tests | `3c5b965e` | ✅ done (session 6) |
+| **改造 2 — remaining** (2e TurnLoop event dispatcher, 3c StreamingToolExecutor wiring) | — | ⏳ session 7 |
+| 1d-rest 8 remaining dynamic sections + gateway/code/research configs + delete `general/sections/*.ts` | — | ⏳ session 7+ (in progress) |
 
 **DuyaAgent.ts line count**: `4812` (start of session 4) → `4619`
 (end of session 4) — `-193 lines`. Three new modules:
@@ -434,6 +435,24 @@ duya 暴露了三个**架构层短板**,让 "干活多说话少 + 并行强 + �
 ## Atomic Commits
 
 每个改造拆 3-5 个原子 commit,每个 commit 前跑 `npm run typecheck:all`。
+
+## Session 6 (2026-09-19, Plan 550 1c fixups + 1d-rest 1/9)
+
+Three commits, all on `feat/550-decompose-session6` from `8d410d0b` (session-5+ final). No source changes to `DuyaAgent.ts`, `PromptSystem.ts`, or any of the prompt-section `.ts` files beyond what is needed for the migration itself.
+
+| Commit | Step | 内容 |
+|---|---|---|
+| `0e175896` | 1c deps fixup | `package.json` + `package-lock.json` add `handlebars@^4.7.9` + `@types/handlebars@^4.0.40`. The 1c commit `1a9d51e3` added `HandlebarsRenderer.ts` that imports `'handlebars'` but never declared the dep — fresh checkouts failed to resolve the module, and `package-lock.json` had also drifted out of sync with the `0.8.1` `package.json` bump. Single `npm install --ignore-scripts` (the puppeteer post-install was failing on this Windows runner) fixed both. |
+| `8301765e` | 1c CRLF fixup | `.gitattributes` with `*.hbs text eol=lf` + `*.md.hbs text eol=lf`. Plan 550 1c shipped LF `.hbs` files; on Windows checkouts with `core.autocrlf=true` (the default), every `.hbs` was being silently rewritten to CRLF, which then leaked through `Handlebars.render` and broke byte-level parity tests against the TS source-of-truth. This was logged in `451545b0` as a pre-existing Plan 550 regression but never fixed. After this commit, 14/14 parity tests pass (previously 6/14 — every non-empty section — failed). |
+| `3c5b965e` | 1d-rest 1/9 | Migrate `getVisualVerificationSection` to `assets/dynamic/visual-verification.hbs`. The four configs that declare it (general / code / gateway / research) each gain `template: 'dynamic/visual-verification.hbs'` next to the existing `compute:` reference. Two byte-level parity tests added (vision-enabled / vision-absent). `getVisualVerificationSection` stays on disk as the parity reference for now; the 1d delete pass will sweep it alongside the other eight sections in a follow-up commit. |
+
+**Session 6 takeaway**: Plan 550 1c was a multi-file commit that landed visible work (5 `.hbs` files, `HandlebarsRenderer.ts`) plus two silent regressions (missing deps + CRLF on Windows). Session 6 closed both regressions as discrete, minimal commits so the remaining 1d-rest sections can land without re-introducing either bug pattern. The same `1d-rest 1/9` shape (1 `.hbs` + N config edits + N parity tests) is the right size for the other eight sections — they're independent because each section has its own precomputed `mapPromptContextToHbs` slot.
+
+**Next session entry points (session 7)**:
+
+- **1d-rest 2-9/9**: agentsMdSection / environment / memorySection / recentSessionsSection / scratchpad / sessionGuidance / sessionSearchSection / skillsMetadata. Each follows the same shape as commit `3c5b965e` — 1 new `.hbs`, 1-N config edits, 0-N parity tests. Estimated 6-9 commits, ~150 lines total.
+- **1d delete**: sweep all 9 legacy `.ts` files plus the `general/sections/*.ts` tree in one atomic commit. Single byte-level parity regression test must remain passing before the sweep (re-run `dynamic-sections.test.ts` after the delete).
+- **改造 2e TurnLoop event dispatcher**: still pending from session 5; 700-1100 lines of `streamChat` between the LLM stream subscription and the final SSE yield. Plan to extract into a `TurnEventDispatcher` that the `streamChat` body wires in front of `TurnStreamRunner` (see `2e TurnLoop first slice` in `b17384b2` for the consumer seam).
 
 ### PR #1: Prompt → Handlebars
 
