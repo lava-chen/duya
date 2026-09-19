@@ -277,12 +277,29 @@ following are session-6+ targets, in priority order:
 
 **Session 5+ close-out metrics**:
 
-- `DuyaAgent.ts`: `4473` (master) → `4248` (PR #59 head)
-  = **-225 lines, 5.0% reduction**
-- `streamChat` body: `4356` → `~1990` lines = **-2366 lines, 54% reduction**
+- `DuyaAgent.ts`: `4473` (master at session-5+ start) → `4498`
+  (PR #59 head) = **+25 lines net** (master moved up to `4630`
+  in parallel from PR #56 archive-parity merge). Plan 550
+  baseline `4812` → head `4498` = **-314 lines, 6.5% reduction**.
+- `streamChat` body: `4356` → `~1990` lines = **-2366 lines, 54% reduction**.
 - 6 new modules since session 4 (PermissionsGate, CompactionCoordinator,
   ToolExecutionPipeline, TurnLoopTracker, SessionFinalizer, TurnStreamRunner).
-- 59 new unit tests across the 6 plan-550 modules.
+- 60 new unit tests across the 6 plan-550 modules.
+
+**Bug discovered and fixed (cross-reference pass)**:
+
+- `SessionFinalizer` (`7d9bd06b`) originally held a *partial* local
+  mirror of `persistableMessages` that only filtered by role. The
+  canonical helper (`utils/agent-helpers.ts:133`) also drops transient
+  `runtimeContext` envelopes (mailbox, background_notification,
+  custom, todo_gate, auto_continue, dead_loop_nudge,
+  premature_stop, tool_intent) so they never reach the durable
+  timeline. The inline streamChat always used the canonical version
+  via `this.setMessages(persistableMessages(messages))`, so the
+  partial mirror was a regression. Fixed in `2e37a37c` by deleting
+  the local mirror and importing the canonical helper. Pin in
+  `tests/unit/agent/session-finalizer.test.ts` (regression test
+  for `mailbox` + `dead_loop_nudge` filtering).
 
 **Pre-existing failures (NOT introduced by Plan 550)**:
 
