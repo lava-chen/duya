@@ -80,8 +80,8 @@ export interface ContextEstimate {
 /** CJK scripts cost ~2.5 chars/token under BPE tokenizers. */
 const CJK_REGEX =
   /[\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g;
-const CJK_CHARS_PER_TOKEN = 2.5;
-const ASCII_CHARS_PER_TOKEN = 4;
+export const CJK_CHARS_PER_TOKEN = 2.5;
+export const ASCII_CHARS_PER_TOKEN = 4;
 
 /** Vision-encoded floor per image block. Pi parity (4800 chars / 4 = 1200);
  *  Anthropic documents ~1.6K tokens for moderate-resolution images, so a

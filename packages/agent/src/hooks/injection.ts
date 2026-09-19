@@ -29,12 +29,10 @@ import { randomUUID } from 'node:crypto';
 
 import { logger } from '../utils/logger.js';
 import { resolveConfigRoot } from './config.js';
+import { estimateContextTextTokens, ASCII_CHARS_PER_TOKEN } from '@duya/ai';
 
 /** Default per-hook injection budget (codex `additional_context_limit` parity). */
 export const DEFAULT_HOOK_CONTEXT_LIMIT_TOKENS = 2500;
-
-/** Rough chars-per-token factor. Deliberately conservative (over-estimates). */
-const CHARS_PER_TOKEN = 4;
 
 /** Fraction of the character budget kept as head preview when spilling. */
 const SPILL_HEAD_FRACTION = 0.7;
@@ -91,9 +89,9 @@ export function renderHookContextEnvelope(info: HookContextInfo, content: string
 // Budget: estimate / truncate / spill
 // ============================================================================
 
-/** Rough token estimate (chars / 4, rounded up). Good enough for budgets. */
+/** Token estimate (plan 552: shared CJK-aware estimator in @duya/ai). */
 export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / CHARS_PER_TOKEN);
+  return estimateContextTextTokens(text);
 }
 
 /** Where spilled hook outputs land. Namespace keeps sessions isolated. */
@@ -165,7 +163,7 @@ export function governHookContext(
 
   // `0` explicitly disables spilling — hard truncate only.
   if (limitTokens === 0 || opts.disableSpill === true) {
-    const content = headTail(raw, limitTokens * CHARS_PER_TOKEN);
+    const content = headTail(raw, limitTokens * ASCII_CHARS_PER_TOKEN);
     logger.debug('[HookInject] hard-truncated (spilling disabled)', {
       ...logMeta, tokens: estimated, action: 'hard-truncated',
     });
@@ -175,7 +173,7 @@ export function governHookContext(
   try {
     const file = spillFilePath(opts.sessionId, info, opts.spillDir);
     fs.writeFileSync(file, raw, 'utf-8');
-    const previewChars = limitTokens * CHARS_PER_TOKEN;
+    const previewChars = limitTokens * ASCII_CHARS_PER_TOKEN;
     const content =
       `[hook output ${estimated} tokens > limit ${limitTokens}; full output saved to ${file} — read it with the Read tool if needed]\n`
       + headTail(raw, previewChars);
@@ -188,7 +186,7 @@ export function governHookContext(
       `[HookInject] spill write failed (${err instanceof Error ? err.message : String(err)}); falling back to hard truncate`,
       logMeta,
     );
-    const content = headTail(raw, limitTokens * CHARS_PER_TOKEN);
+    const content = headTail(raw, limitTokens * ASCII_CHARS_PER_TOKEN);
     return { content, action: 'hard-truncated', estimatedTokens: estimateTokens(content) };
   }
 }

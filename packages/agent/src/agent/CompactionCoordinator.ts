@@ -23,11 +23,7 @@
  * @see docs/exec-plans/active/550-prompt-hbs-and-agent-decomposition.md
  */
 
-import {
-  IMAGE_COMPACTION_TRIGGER_COUNT,
-  countImagePartsInMessages,
-} from '../compact/imageParts.js';
-import type { CompactionManager } from '../compact/CompactionManager.js';
+import type { CompactionManager, CompactionProbe } from '../compact/CompactionManager.js';
 import type { MessageCompactionController } from '../message/message-compaction-controller.js';
 import type { Message, SSEEvent } from '../types.js';
 import { logger } from '../utils/logger.js';
@@ -158,12 +154,15 @@ export class CompactionCoordinator {
     // Plan 495 G2: image-volume trigger (grok
     // IMAGE_SUMMARIZATION_TRIGGER_COUNT) — force compaction even when the
     // token budget has not been crossed yet.
+    // Plan 552: one probe measures both triggers against the manager's
+    // budget instead of separate threshold checks here and mid-loop.
     let imageTriggered = false;
+    let probe: CompactionProbe | null = null;
     try {
       const checkpointProjection = this.deps.compactionController.projectInputMessages();
       this.deps.compactionManager.maybeStartPrefire(checkpointProjection);
-      imageTriggered =
-        countImagePartsInMessages(checkpointProjection) >= IMAGE_COMPACTION_TRIGGER_COUNT;
+      probe = this.deps.compactionManager.probeCompaction(checkpointProjection);
+      imageTriggered = probe.imageTriggered;
     } catch {
       // Checkpoint projection is best-effort; shouldCompact() below still
       // runs its own projection.
@@ -192,7 +191,18 @@ export class CompactionCoordinator {
       );
     }
 
-    if (!cooldownActive && (imageTriggered || this.deps.compactionController.shouldCompact())) {
+    // Plan 552: the token path keeps shouldCompact's suppression semantics
+    // (gate + threshold); the image trigger keeps bypassing both cooldown
+    // and suppression, exactly as before the probe consolidation. The
+    // fallback stays lazy so the cooldown gate still short-circuits before
+    // the compaction engine is consulted when no probe is available.
+    const suppressed = this.deps.compactionManager.isSuppressed();
+    if (
+      !cooldownActive &&
+      (imageTriggered ||
+        (!suppressed &&
+          (probe ? probe.overTriggerLine : this.deps.compactionController.shouldCompact())))
+    ) {
       return await this.executeCompaction(
         turnCount,
         systemPromptContent,
