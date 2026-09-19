@@ -283,6 +283,18 @@ following are session-6+ targets, in priority order:
   ToolExecutionPipeline, TurnLoopTracker, SessionFinalizer, TurnStreamRunner).
 - 59 new unit tests across the 6 plan-550 modules.
 
+**Pre-existing failures (NOT introduced by Plan 550)**:
+
+- `tests/unit/agent/DuyaAgent.plan486.test.ts` — 2 of 5 tests fail
+  on the parent commit `5d9a4108` (before session-5+ work). The
+  failures stem from missing test mocks (`modeStateDb`,
+  `AgentsMd.collectNestedMemory`), not from the Plan 550
+  decompositions. Verified by `git checkout 5d9a4108 --` + re-run:
+  same 2 tests fail with identical error messages.
+
+  These should be addressed in their own plan (Plan 486 mock
+  setup), not in Plan 550.
+
 ## Session 4 summary (DuyaAgent 拆解聚焦)
 
 Session 4 re-scoped onto Plan 550 direction 2 (`DuyaAgent` 分层拆解)
