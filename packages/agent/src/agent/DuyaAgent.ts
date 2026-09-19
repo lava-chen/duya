@@ -81,6 +81,7 @@ import { buildPermissions } from './PermissionsGate.js';
 import { CompactionCoordinator } from './CompactionCoordinator.js';
 import { DeadLoopTracker, resolveDeadLoopConfig } from './TurnLoopTracker.js';
 import { SessionFinalizer } from './SessionFinalizer.js';
+import { runTurnStream } from './TurnStreamRunner.js';
 import { deriveSingleCallUsage } from '../process/seed-token-usage.js';
 import { settingsJsonToRules } from '../permissions/rules.js';
 import { permissionRuleValueToString } from '../permissions/rules.js';
@@ -1980,69 +1981,40 @@ export class duyaAgent implements AgentRuntime {
         // Plan 480 P2.4: refresh the declared-tools snapshot before every
         // provider request (the array changes across rounds as discovered
         // tools join). The visibility guard reads it during execution.
-        const openLLMStream = () => {
-          declaredToolsForRequest = new Set(tools.map((t) => t.name));
-          return this.llmClient.streamChat(llmMessages, {
-            systemPrompt: systemPromptContent,
-            tools,
-            maxTokens: options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
-            temperature: options?.temperature ?? 1,
-            signal: requestSignal,
-            effort: options?.effort,
-            maxOutputTokens: this.runtimeConfig?.modelCapabilities?.maxOutputTokens,
-          });
-        };
-        let streamReplayAttempt = 0;
-        const streamGenerator = (async function* () {
-          while (true) {
-            try {
-              yield* openLLMStream();
-              return;
-            } catch (streamError) {
-              if (
-                !shouldReplayStreamAfterError(streamError, {
-                  aborted: requestSignal.aborted,
-                  turnCommitted: doneEventHandled,
-                  attemptsUsed: streamReplayAttempt,
-                })
-              ) {
-                throw streamError;
-              }
-              streamReplayAttempt++;
-              const replayDelayMs = streamReplayDelayMs(streamReplayAttempt);
-              const detail =
-                streamError instanceof Error ? streamError.message : String(streamError);
-              logger.warn(
-                `[Agent] Turn ${turnCount}: LLM stream died mid-flight (${detail}); replaying ` +
-                  `${streamReplayAttempt}/${STREAM_REPLAY_MAX_ATTEMPTS} in ${replayDelayMs}ms`,
-              );
-              // Discard the partial attempt: tool_use events arrive before
-              // `done` so the executor may already hold buffered calls, and
-              // every per-attempt accumulator must start empty for the replay.
-              executor.discard();
-              assistantContent.length = 0;
-              thinkingContent = '';
-              hasThinkingContent = false;
-              thinkingSignature = undefined;
-              needsFollowUp = false;
-              turnToolCalls.length = 0;
-              turnToolCallIds.clear();
-              modeSwitchToolIds.clear();
-              deadLoopTracker.reset();
-              // Surface the replay through the same channel as the
-              // transport-layer retry (`system` + metadata.retryAttempt 鈫?              // worker boundary emits a chat:retry chip). Plan 462: carry the
-              // provider wording so the chip says *why* it is reconnecting.
-              yield createRetryEvent(
-                streamReplayAttempt,
-                STREAM_REPLAY_MAX_ATTEMPTS,
-                replayDelayMs,
-                extractProviderErrorMessage(streamError) ??
-                  (streamError instanceof Error ? streamError.message : undefined),
-              );
-              await sleep(replayDelayMs, requestSignal);
-            }
-          }
-        })();
+        const streamGenerator = runTurnStream({
+          llmClient: this.llmClient,
+          llmMessages,
+          systemPromptContent,
+          tools,
+          maxTokens: options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+          temperature: options?.temperature ?? 1,
+          effort: options?.effort,
+          maxOutputTokens: this.runtimeConfig?.modelCapabilities?.maxOutputTokens,
+          signal: requestSignal,
+          turnCount,
+          turnCommitted: doneEventHandled,
+          refreshDeclaredTools: () => {
+            declaredToolsForRequest = new Set(tools.map((t) => t.name));
+            return declaredToolsForRequest;
+          },
+          onRetryReset: () => {
+            // Plan 550 step 2e (TurnLoop first slice): the retry envelope lives in
+            // runTurnStream; the per-attempt state reset (executor discard +
+            // deadLoopTracker reset + accumulator clears) is delegated back to the
+            // caller because it touches closure state in streamChat.
+            executor.discard();
+            assistantContent.length = 0;
+            thinkingContent = '';
+            hasThinkingContent = false;
+            thinkingSignature = undefined;
+            needsFollowUp = false;
+            turnToolCalls.length = 0;
+            turnToolCallIds.clear();
+            modeSwitchToolIds.clear();
+            deadLoopTracker.reset();
+          },
+        });
+        
         logger.info(`[Agent] Turn ${turnCount}: Stream generator created, starting iteration...`);
         for await (const event of streamGenerator) {
           llmEventCount++;
