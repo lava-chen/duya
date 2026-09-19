@@ -413,6 +413,22 @@ export function buildGoalUpdatedEvent(
   };
 }
 
+/**
+ * Plan 554: ask the renderer to write text to the clipboard. Emitted by the
+ * deterministic `/copy` intercept — the worker process has no clipboard, so
+ * the write happens renderer-side (navigator.clipboard). Forwarded by
+ * router.ts as the SSE `clipboard_write` event.
+ */
+export interface ClipboardWriteEvent {
+  type: 'chat:clipboard_write';
+  sessionId: string;
+  text: string;
+}
+
+export function buildClipboardWriteEvent(sessionId: string, text: string): ClipboardWriteEvent {
+  return { type: 'chat:clipboard_write', sessionId, text };
+}
+
 export interface AgentRetryEvent {
   type: 'chat:retry';
   sessionId: string;

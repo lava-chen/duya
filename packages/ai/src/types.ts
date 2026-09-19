@@ -358,6 +358,8 @@ export type SSEEvent =
         strategyProposal?: string;
       };
     }
+  /** Plan 554: deterministic /copy — the renderer writes this to the clipboard. */
+  | { type: 'clipboard_write'; data: { text: string } }
   /**
    * Plan 517 P2.2 + P3: compact lifecycle events surfaced to the renderer.
    * `compact:start` / `compact:done` / `compact:error` are the legacy

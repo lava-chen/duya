@@ -2074,6 +2074,22 @@ export class StreamSessionManager {
           );
           break;
 
+        case 'clipboard_write': {
+          // Plan 554: deterministic /copy — the worker cannot write the
+          // clipboard, so the renderer does it here. Best-effort: a denied
+          // clipboard permission just logs; the synthetic text reply already
+          // told the user what happened.
+          const payload = (event.data ?? {}) as { text?: unknown };
+          if (typeof payload.text === 'string' && payload.text.length > 0) {
+            void navigator.clipboard
+              ?.writeText(payload.text)
+              .catch((err: unknown) =>
+                console.warn('[StreamSession] clipboard write failed:', err),
+              );
+          }
+          break;
+        }
+
         case 'research_updated':
           this.handleResearchUpdatedEvent(
             sessionId,

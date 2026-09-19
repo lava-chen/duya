@@ -47,6 +47,9 @@ export interface BuildTaskNotificationInput {
   /** Final assistant text. Long values are replaced by an output-file
    * pointer when `maxResultChars` is exceeded. */
   finalMessage?: string
+  /** Mechanically parsed VERDICT line from the final text (plan 554).
+   * Absent when the child did not end with a well-formed verdict. */
+  modelVerdict?: string
   totalToolUseCount?: number
   totalDurationMs?: number
   /** Total token usage. duya's TaskRecord doesn't track this yet — leave
@@ -73,6 +76,9 @@ export function buildTaskNotificationXml(input: BuildTaskNotificationInput): str
   sections.push(`<${OUTPUT_FILE_TAG}>${escape(input.outputFilePath)}</${OUTPUT_FILE_TAG}>`)
   sections.push(`<${STATUS_TAG}>${input.status}</${STATUS_TAG}>`)
   sections.push(`<${SUMMARY_TAG}>${escape(summaryText)}</${SUMMARY_TAG}>`)
+  if (input.modelVerdict) {
+    sections.push(`<model_verdict>${escape(input.modelVerdict)}</model_verdict>`)
+  }
   const resultXml = buildResultXml(input)
   if (resultXml) {
     sections.push(resultXml)

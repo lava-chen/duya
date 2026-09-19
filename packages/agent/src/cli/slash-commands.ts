@@ -13,6 +13,7 @@ import { existsSync, statSync } from 'fs';
 import type { duyaAgent } from '../agent/DuyaAgent.js';
 import { getActiveCliProvider } from './config/db-config.js';
 import { handleGoalCommand, isGoalControlCommand } from '../modes/goal/goal-commands.js';
+import { handleTranscriptCommand } from '../session/transcript-commands.js';
 
 export interface SlashCommandContext {
   agent?: duyaAgent;
@@ -218,6 +219,9 @@ export const COMMAND_REGISTRY: CommandDef[] = [
   // Info
   { name: 'help', description: 'Show available commands', category: 'Info' },
   { name: 'usage', description: 'Show token usage and rate limits', category: 'Info' },
+  { name: 'export', description: 'Export the session transcript to a Markdown file', category: 'Transcript', argsHint: '[path.md]' },
+  { name: 'copy', description: 'Copy the last assistant reply to the clipboard', category: 'Transcript' },
+  { name: 'transcript', description: 'Show transcript stats and export hints', category: 'Transcript' },
 
   // Exit
   { name: 'quit', description: 'Exit the CLI', category: 'Exit', aliases: ['exit', 'q'], cliOnly: true },
@@ -313,6 +317,84 @@ export function initSlashCommands(): void {
       } else {
         console.log(result.reply);
       }
+      return true;
+    },
+  });
+
+  // Transcript commands (plan 554 — minimax /export /copy /transcript parity)
+  registerSlashCommand({
+    name: 'export',
+    description: 'Export the session transcript to a Markdown file',
+    category: 'Transcript',
+    argsHint: '[path.md]',
+    handler: async (args, context) => {
+      if (!context?.agent) {
+        console.log(color('[ERR] No agent context available', Colors.RED));
+        return true;
+      }
+      const result = handleTranscriptCommand(`/export ${args}`.trim(), {
+        messages: context.agent.getMessages(),
+        sessionId: context.sessionId,
+      });
+      console.log(color(result.reply, result.reply.startsWith('Transcript exported') ? Colors.GREEN : Colors.YELLOW));
+      return true;
+    },
+  });
+
+  registerSlashCommand({
+    name: 'copy',
+    description: 'Copy the last assistant reply to the clipboard',
+    category: 'Transcript',
+    handler: async (_args, context) => {
+      if (!context?.agent) {
+        console.log(color('[ERR] No agent context available', Colors.RED));
+        return true;
+      }
+      const { getLastReplyText } = await import('../session/transcript-md.js');
+      const text = getLastReplyText(context.agent.getMessages());
+      if (!text) {
+        console.log(color('[INFO] No assistant reply to copy yet', Colors.YELLOW));
+        return true;
+      }
+      const platform = process.platform;
+      try {
+        const { execFileSync } = await import('child_process');
+        if (platform === 'win32') {
+          execFileSync('clip', { input: text, stdio: ['pipe', 'ignore', 'ignore'] });
+        } else if (platform === 'darwin') {
+          execFileSync('pbcopy', { input: text, stdio: ['pipe', 'ignore', 'ignore'] });
+        } else {
+          execFileSync('wl-copy', { input: text, stdio: ['pipe', 'ignore', 'ignore'] });
+        }
+        console.log(color('[OK] Last reply copied to the clipboard', Colors.GREEN));
+      } catch {
+        // No clipboard helper available — print instead of failing silently.
+        console.log(color('[INFO] Clipboard unavailable — last reply:', Colors.YELLOW));
+        console.log(text);
+      }
+      return true;
+    },
+  });
+
+  registerSlashCommand({
+    name: 'transcript',
+    description: 'Show transcript stats and export hints',
+    category: 'Transcript',
+    handler: async (_args, context) => {
+      if (!context?.agent) {
+        console.log(color('[ERR] No agent context available', Colors.RED));
+        return true;
+      }
+      const messages = context.agent.getMessages();
+      const byRole = messages.reduce<Record<string, number>>((acc, m) => {
+        acc[m.role] = (acc[m.role] ?? 0) + 1;
+        return acc;
+      }, {});
+      console.log(color(`Transcript: ${messages.length} message(s)`, Colors.CYAN));
+      for (const [role, count] of Object.entries(byRole)) {
+        console.log(color(`  ${role}: ${count}`, Colors.DIM));
+      }
+      console.log(color('Use /export [path.md] to write the full transcript to a Markdown file.', Colors.DIM));
       return true;
     },
   });

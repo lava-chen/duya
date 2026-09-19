@@ -461,6 +461,13 @@ function normalizeWorkerEvent(event: Record<string, unknown>): Record<string, un
     // carries objective/state/tokens at the top level); drop the `type` field.
     const { type: _t, ...rest } = event;
     sseEvent = { type: 'goal_updated', data: rest };
+  } else if (msgType === 'chat:clipboard_write') {
+    // Plan 554: deterministic /copy — the renderer performs the clipboard
+    // write (the worker process has none). Payload carries the text only.
+    sseEvent = {
+      type: 'clipboard_write',
+      data: { text: typeof event.text === 'string' ? event.text : '' },
+    };
   } else if (msgType === 'chat:agent_progress') {
     sseEvent = {
       type: msgType.replace('chat:', ''),

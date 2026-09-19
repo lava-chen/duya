@@ -30,6 +30,11 @@ import type {
 } from '../types.js';
 import { asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile, PromptsRegistry, resolvePromptSystemName } from '../prompts/index.js';
 import { handleGoalCommand, isGoalControlCommand } from '../modes/goal/goal-commands.js';
+import {
+  handleTranscriptCommand,
+  isTranscriptControlCommand,
+} from '../session/transcript-commands.js';
+import { sendEvent, buildClipboardWriteEvent } from '../process/worker-protocol.js';
 import type { PromptSystem } from '../prompts/index.js';
 import {
   createBotPromptAssembly,
@@ -897,6 +902,25 @@ export class duyaAgent implements AgentRuntime {
         workingDirectory: turnContext.workingDirectory ?? undefined,
       });
       yield { type: 'text', data: goalResult.reply };
+      yield { type: 'done', reason: 'completed' };
+      return;
+    }
+    // Plan 554: deterministic /export /copy /transcript — transcript
+    // plumbing never reaches the LLM. /copy rides the chat:clipboard_write
+    // SSE event so the renderer performs the clipboard write.
+    if (isTranscriptControlCommand(promptText)) {
+      const transcriptResult = handleTranscriptCommand(promptText, {
+        messages: this.getMessages(),
+        sessionId: turnContext.sessionId ?? undefined,
+        workingDirectory: turnContext.workingDirectory ?? undefined,
+      });
+      if (transcriptResult.clipboardText && turnContext.sessionId) {
+        sendEvent(buildClipboardWriteEvent(
+          turnContext.sessionId,
+          transcriptResult.clipboardText,
+        ) as unknown as Record<string, unknown>);
+      }
+      yield { type: 'text', data: transcriptResult.reply };
       yield { type: 'done', reason: 'completed' };
       return;
     }

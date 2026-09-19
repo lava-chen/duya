@@ -11,6 +11,7 @@ import { join } from 'path';
 import type { ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolPermissionContext } from '../../permissions/types.js';
 import type { ToolExecutor } from '../registry.js';
+import { moveToRecycleBin, parsePlainRmCommand } from './safe-rm.js';
 import { BaseTool } from '../BaseTool.js';
 import { UNKNOWN_PATHS, type ToolDependencyDeclaration } from '../dependencies.js';
 import type {
@@ -322,6 +323,41 @@ export class BashTool extends BaseTool implements ToolExecutor {
     const resolvedTimeout = timeout ?? BASH_DEFAULT_TIMEOUT_MS;
     const cwd = workingDirectory || process.cwd();
     const isBackground = validation.data.run_in_background === true || validation.data.background === true;
+
+    // Plan 554: a plain top-level `rm` on Windows recycles instead of
+    // unlinking, so an over-eager deletion stays recoverable. Anything
+    // compound (shell operators, globs) or non-Windows runs through the
+    // shell unchanged — see safe-rm.ts for the conservative interception
+    // rules.
+    if (process.platform === 'win32') {
+      const plainRm = parsePlainRmCommand(command);
+      if (plainRm) {
+        const outcome = await moveToRecycleBin(plainRm.targets, cwd);
+        const lines: string[] = [];
+        if (outcome.trashed.length > 0) {
+          lines.push(`Moved ${outcome.trashed.length} path(s) to the Recycle Bin (recoverable):`);
+          for (const p of outcome.trashed) lines.push(`  - ${p}`);
+        }
+        if (outcome.missing.length > 0) {
+          lines.push('Not found (left unchanged):');
+          for (const p of outcome.missing) lines.push(`  - ${p}`);
+        }
+        for (const f of outcome.failed) {
+          lines.push(`Failed to recycle ${f.path}: ${f.error}`);
+        }
+        return {
+          id: crypto.randomUUID(),
+          name: this.name,
+          result: lines.join('\n') || 'rm: nothing to delete',
+          error: outcome.failed.length > 0,
+          metadata: {
+            safeRm: true,
+            trashed: outcome.trashed.length,
+            failed: outcome.failed.length,
+          },
+        };
+      }
+    }
 
     // Resolve shell
     const shellInfo = resolveShellInfo(this.config.providerKind);

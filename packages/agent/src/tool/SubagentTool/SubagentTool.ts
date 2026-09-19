@@ -22,6 +22,14 @@ import type { AgentDefinition } from './loadAgentsDir.js';
 import { getBuiltInAgents } from './builtInAgents.js';
 import { formatAgentLine, getPrompt } from './prompt.js';
 import { runAgent, runAgentSync, type AgentProgressEvent } from './runAgent.js';
+import {
+  VERDICT_CONTRACT,
+  buildSubagentParentReport,
+  captureGitFileChanges,
+  diffFileChanges,
+  parseModelVerdict,
+  wantsVerdictContract,
+} from '../task-verification.js';
 import { sessionDb, messageDb } from '../../ipc/db-client.js';
 import { sendEvent } from '../../process/worker-protocol.js';
 import { buildChatAgentProgressPayload, type AgentProgressPayloadMeta } from './subagentLifecycleBridge.js';
@@ -344,13 +352,24 @@ export class SubagentTool extends BaseTool {
         }
       }
 
+      // Plan 554: delegated work tasks (not read-only explorers) carry the
+      // VERDICT completion contract so the parent gets a mechanical verdict
+      // line instead of having to interpret prose.
+      const verdictRequired = wantsVerdictContract(agentDefinition.agentType);
       const promptMessages = [
         {
           role: 'user' as const,
-          content: agentInput.prompt,
+          content: verdictRequired
+            ? `${agentInput.prompt}\n${VERDICT_CONTRACT}`
+            : agentInput.prompt,
           timestamp: Date.now(),
         },
       ];
+
+      // Best-effort file-change observation for this child run (plan 554):
+      // a porcelain snapshot now, diffed against one taken when the child
+      // finishes. Undefined outside a git repo — no observation then.
+      const fileChangeBefore = await captureGitFileChanges(context.options.workingDirectory);
 
       const subAgentSessionId = crypto.randomUUID();
       try {
@@ -623,6 +642,17 @@ export class SubagentTool extends BaseTool {
         resultText = String(result.content);
       }
 
+      // Plan 554: attach the mechanical parent report — parsed verdict plus
+      // the best-effort file-change diff — so the parent model reads the
+      // facts alongside the child's prose.
+      const verdict = verdictRequired ? parseModelVerdict(resultText) : undefined;
+      const fileChange = diffFileChanges(
+        fileChangeBefore,
+        await captureGitFileChanges(context.options.workingDirectory),
+      );
+      const parentReport = buildSubagentParentReport({ verdict, fileChange });
+      const finalContent = parentReport ? `${resultText}\n\n${parentReport}` : resultText;
+
       return {
         id: crypto.randomUUID(),
         name: this.name,
@@ -630,7 +660,8 @@ export class SubagentTool extends BaseTool {
           agentType: requestedAgentType,
           resolvedAgentType: agentDefinition.agentType,
           description: agentInput.description || agentInput.name,
-          content: resultText,
+          content: finalContent,
+          modelVerdict: verdict,
           sessionId: subAgentSessionId,
         }),
       };

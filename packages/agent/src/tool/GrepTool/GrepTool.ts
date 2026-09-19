@@ -26,6 +26,43 @@ const execAsync = promisify(exec);
 const MAX_LINE_LENGTH = 500;
 const LONG_LINE_SUFFIX = ' ...(line truncated)';
 
+/**
+ * Sensitive files whose contents must never enter the model context through
+ * grep (plan 554 — minimax parity: ".env/ssh 恒排除"). Credential material
+ * has no reason to appear in search results, and one leaked secret can end
+ * up in a prompt, a log, or a transcript. Excluded by default in BOTH
+ * engines; `include_sensitive: true` opts back in for the rare legitimate
+ * case (e.g. checking which var names an .env defines — values still should
+ * not be exfiltrated).
+ */
+const SENSITIVE_FILE_GLOBS = [
+  '.env',
+  '.env.*',
+  '*.pem',
+  '*.key',
+  '*.p12',
+  '*.pfx',
+  '*.jks',
+  '*.keystore',
+  'id_rsa*',
+  'id_dsa*',
+  'id_ecdsa*',
+  'id_ed25519*',
+] as const;
+
+/**
+ * Match a file NAME against the sensitive list for the Node fallback engine
+ * (which walks the tree itself and cannot use ripgrep globs). Kept in sync
+ * with {@link SENSITIVE_FILE_GLOBS} — basename matching only, same set.
+ */
+export function isSensitiveFilename(name: string): boolean {
+  const lower = name.toLowerCase();
+  if (lower === '.env' || lower.startsWith('.env.')) return true;
+  if (/\.(pem|key|p12|pfx|jks|keystore)$/.test(lower)) return true;
+  if (/^id_(rsa|dsa|ecdsa|ed25519)/.test(lower)) return true;
+  return false;
+}
+
 // Wall-clock budget for the pure-Node fallback search (used when ripgrep is
 // unavailable). The fallback reads every file it walks, which on a large
 // repo can stall a turn for minutes; past the budget the search returns
@@ -45,6 +82,7 @@ export interface GrepInput {
   file_pattern?: string;
   literal?: boolean;
   context?: number;
+  include_sensitive?: boolean;
   [key: string]: unknown;
 }
 
@@ -199,6 +237,10 @@ export function validateGrepInput(input: unknown): { valid: true; data: GrepInpu
     return { valid: false, error: 'file_pattern must be a string' };
   }
 
+  if (obj.include_sensitive !== undefined && typeof obj.include_sensitive !== 'boolean') {
+    return { valid: false, error: 'include_sensitive must be a boolean' };
+  }
+
   return {
     valid: true,
     data: {
@@ -209,6 +251,7 @@ export function validateGrepInput(input: unknown): { valid: true; data: GrepInpu
       file_pattern: obj.file_pattern as string | undefined,
       literal: obj.literal as boolean | undefined,
       context: obj.context as number | undefined,
+      include_sensitive: obj.include_sensitive as boolean | undefined,
     },
   };
 }
@@ -222,7 +265,7 @@ export function validateGrepInput(input: unknown): { valid: true; data: GrepInpu
  */
 export class GrepTool extends BaseTool {
   readonly name = 'grep';
-  readonly description = 'Search file contents for a pattern in the specified directory. Returns matching lines with file paths and line numbers. Supports regular expressions or literal strings (literal=true), and optional context lines. Respects .gitignore. Output is capped at `max_results` matches (default 100); long matching lines are truncated to 500 characters — use read to see a full line. The result includes `total` (the true number of matching lines across all files) and `truncated` (true when more matches exist than were returned) so you know whether the result was cut off and can narrow the search or page through with a file_pattern.';
+  readonly description = 'Search file contents for a pattern in the specified directory. Returns matching lines with file paths and line numbers. Supports regular expressions or literal strings (literal=true), and optional context lines. Respects .gitignore. Sensitive files (.env*, key/keystore/certificate files, ssh key pairs) are EXCLUDED unless include_sensitive=true. Output is capped at `max_results` matches (default 100); long matching lines are truncated to 500 characters — use read to see a full line. The result includes `total` (the true number of matching lines across all files) and `truncated` (true when more matches exist than were returned) so you know whether the result was cut off and can narrow the search or page through with a file_pattern.';
   readonly input_schema: Record<string, unknown> = {
     type: 'object',
     properties: {
@@ -238,6 +281,11 @@ export class GrepTool extends BaseTool {
       case_sensitive: {
         type: 'boolean',
         description: 'Whether to match case, defaults to false',
+      },
+      include_sensitive: {
+        type: 'boolean',
+        description:
+          'Include sensitive files (.env*, *.pem/*.key/*.p12/*.pfx/*.jks/*.keystore, id_rsa/id_ed25519 ssh keys) in the search. Excluded by default so credential material never enters the context; set true only when the user explicitly asked to inspect those files.',
       },
       max_results: {
         type: 'number',
@@ -322,7 +370,8 @@ export class GrepTool extends BaseTool {
     filePattern?: string,
     maxResults?: number,
     literal = false,
-    context = 0
+    context = 0,
+    includeSensitive = false
   ): Promise<GrepSearchResult> {
     // Directories to skip (common heavy directories that are unlikely to contain relevant code)
     const skipDirs = [
@@ -345,6 +394,11 @@ export class GrepTool extends BaseTool {
       ...skipDirs.flatMap(dir => ['--glob', `!${dir}`]),
       // Exclude hidden directories
       '--glob', '!.*/',
+      // Sensitive files never enter the context (plan 554) unless the caller
+      // explicitly opted in. The `!.*/` hidden-dir glob above does NOT cover
+      // them — `.env` is a hidden FILE, and key material may live in
+      // non-hidden names (id_rsa, server.pem).
+      ...(includeSensitive ? [] : SENSITIVE_FILE_GLOBS.flatMap(glob => ['--glob', `!${glob}`])),
       filePattern ? '--glob' : '',
       filePattern || '',
       ...(context > 0 ? ['--context', String(context)] : []),
@@ -529,7 +583,8 @@ export class GrepTool extends BaseTool {
     caseSensitive: boolean,
     maxResults?: number,
     literal = false,
-    context = 0
+    context = 0,
+    includeSensitive = false
   ): Promise<GrepSearchResult> {
     const matches: GrepMatch[] = [];
     let total = 0;
@@ -548,6 +603,9 @@ export class GrepTool extends BaseTool {
           timedOut = true;
           return;
         }
+        // Sensitive-file filter for the fallback engine (plan 554) — the
+        // ripgrep path does this with --glob; the walker must match it.
+        if (!includeSensitive && isSensitiveFilename(basename(filePath))) return;
 
         try {
           const content = await readFile(filePath, 'utf-8');
@@ -687,7 +745,7 @@ export class GrepTool extends BaseTool {
       };
     }
 
-    const { pattern, path, case_sensitive = false, max_results, file_pattern, literal = false, context = 0 } = validation.data;
+    const { pattern, path, case_sensitive = false, max_results, file_pattern, literal = false, context = 0, include_sensitive = false } = validation.data;
     const effectiveMaxResults = max_results ?? this.defaultMaxResults;
 
     // Per-call working directory: prefer the live one passed in from the
@@ -762,8 +820,8 @@ export class GrepTool extends BaseTool {
     try {
       const hasRipgrep = await this.isRipgrepAvailable();
       const searchResult = hasRipgrep
-        ? await this.searchWithRipgrep(pattern, searchPath, case_sensitive, file_pattern, effectiveMaxResults, literal, context)
-        : await this.searchWithNode(pattern, searchPath, case_sensitive, effectiveMaxResults, literal, context);
+        ? await this.searchWithRipgrep(pattern, searchPath, case_sensitive, file_pattern, effectiveMaxResults, literal, context, include_sensitive)
+        : await this.searchWithNode(pattern, searchPath, case_sensitive, effectiveMaxResults, literal, context, include_sensitive);
 
       const { matches: results, total, truncated, warning } = searchResult;
 
@@ -776,6 +834,7 @@ export class GrepTool extends BaseTool {
             matches: [],
             total,
             truncated,
+            ...(include_sensitive ? {} : { sensitiveExcluded: true }),
             ...(warning ? { warning } : {}),
             message: warning ? 'Search incomplete — see warning' : 'No matches found',
           }),
@@ -805,6 +864,7 @@ export class GrepTool extends BaseTool {
           matches: formattedResults,
           total,
           truncated,
+          ...(include_sensitive ? {} : { sensitiveExcluded: true }),
           ...(warning ? { warning } : {}),
           searchPath,
           engine: hasRipgrep ? 'ripgrep' : 'node',

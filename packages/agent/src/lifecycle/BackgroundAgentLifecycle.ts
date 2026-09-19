@@ -8,6 +8,7 @@ import { logger } from '../utils/logger.js'
 import type { AgentProgressEvent } from '../tool/SubagentTool/runAgent.js'
 import type { Message } from '../types.js'
 import { buildTaskNotificationXml, DEFAULT_MAX_RESULT_CHARS, type BuildTaskNotificationInput } from './buildTaskNotification.js'
+import { parseModelVerdict } from '../tool/task-verification.js'
 import { sendBackgroundNotification } from './mailboxBackgroundNotification.js'
 
 export interface RegisterInput {
@@ -273,6 +274,9 @@ export class BackgroundAgentLifecycle {
         this.complete(taskId, result)
         await this.enqueueTaskNotification(taskId, 'completed', {
           finalMessage: extractFinalText(result),
+          // Plan 554: mechanical verdict parsed from the child's final reply
+          // (undefined when the child did not end with a well-formed line).
+          modelVerdict: parseModelVerdict(extractFinalText(result)),
           totalToolUseCount: result.totalToolUseCount,
           totalDurationMs: result.totalDurationMs,
         })
@@ -306,7 +310,7 @@ export class BackgroundAgentLifecycle {
   private async enqueueTaskNotification(
     taskId: string,
     status: 'completed' | 'failed' | 'killed',
-    extras: { finalMessage?: string; error?: string; totalToolUseCount?: number; totalDurationMs?: number }
+    extras: { finalMessage?: string; error?: string; totalToolUseCount?: number; totalDurationMs?: number; modelVerdict?: string }
   ): Promise<void> {
     if (this.notified.has(taskId)) {
       logger.debug('[SubAgent] task notification already enqueued, skipping', { taskId, status }, 'SubAgent')
