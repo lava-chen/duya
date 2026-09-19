@@ -40,5 +40,11 @@ export type {
 } from './controller.js';
 export { createBridgeConfirmGate, createExecutorConfirmGate } from './confirm-gate.js';
 export type { DecideConfirmGate } from './confirm-gate.js';
+export { createUnattendedConfirmGate } from './unattended.js';
+export type {
+  UnattendedApprovalPolicy,
+  UnattendedAuditRecord,
+  UnattendedConfirmGateOptions,
+} from './unattended.js';
 export { DEFAULT_VERDICT_BRIDGE_THRESHOLDS, assessVerdict } from './verdict-bridge.js';
 export type { VerdictAssessment, VerdictBridgeThresholds } from './verdict-bridge.js';

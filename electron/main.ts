@@ -589,7 +589,7 @@ if (gotTheLock) {
         } else {
           logger.info(
             'ComputerUseDaemon entry not found; skipping spawn. ' +
-              'Build the daemon (cd E:\\Projects\\computer-use-demo && npm run build) or run it externally.',
+              'Set DUYA_COMPUTER_USE_DEMO_ENTRY or place the daemon as a sibling checkout (../computer-use-demo).',
             undefined,
             'Main',
           );
@@ -1347,14 +1347,17 @@ async function ensureMemoryConfigDir(configRoot: string): Promise<void> {
  * Resolve the computer-use-demo daemon entry point.
  *
  * Order of attempts:
- *   1. Production: `process.resourcesPath/computer-use-demo/dist/main.js`
- *      (set up by electron-builder extraResources in a later phase).
- *   2. Dev: `E:/Projects/computer-use-demo/src/main.ts` paired with
- *      the bundled `tsx` from the repo's `node_modules`.
+ *   1. `DUYA_COMPUTER_USE_DEMO_ENTRY` env override (explicit, wins).
+ *   2. Production: `process.resourcesPath/computer-use-demo/dist/main.js`
+ *      (set up by electron-builder extraResources).
+ *   3. Dev: `../computer-use-demo/src/main.ts` sibling checkout, resolved
+ *      against `app.getAppPath()` and `process.cwd()` (no machine-specific
+ *      absolute paths — plan 552 Phase 0), paired with the bundled `tsx`
+ *      from the repo's `node_modules`.
  *
- * Returns `{ entry, runtime }` on success, null when neither path
- * resolves. Callers should log a "daemon not available" message and
- * skip spawn rather than crashing startup.
+ * Returns `{ entry, runtime }` on success, null when no path resolves.
+ * Callers should log a "daemon not available" message and skip spawn
+ * rather than crashing startup.
  */
 async function resolveComputerUseDaemonEntry(): Promise<
   { entry: string; runtime: string } | null
@@ -1362,7 +1365,25 @@ async function resolveComputerUseDaemonEntry(): Promise<
   const fs = await import('node:fs/promises');
   const pathMod = await import('node:path');
 
-  // 1. Production packaged path.
+  // 1. Explicit env override (dev / custom installs).
+  const envEntry = process.env.DUYA_COMPUTER_USE_DEMO_ENTRY;
+  if (envEntry) {
+    try {
+      await fs.access(envEntry);
+      const runtime = /\.js$/.test(envEntry)
+        ? process.execPath
+        : pathMod.join(process.cwd(), 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx');
+      return { entry: envEntry, runtime };
+    } catch {
+      logger.warn(
+        `DUYA_COMPUTER_USE_DEMO_ENTRY="${envEntry}" does not resolve; falling back to discovery`,
+        undefined,
+        'Main',
+      );
+    }
+  }
+
+  // 2. Production packaged path.
   const prodEntry = pathMod.join(
     process.resourcesPath ?? '',
     'computer-use-demo',
@@ -1376,17 +1397,17 @@ async function resolveComputerUseDaemonEntry(): Promise<
     // not packaged; fall through
   }
 
-  // 2. Dev path: tsx + daemon source. We honor a few common locations.
+  // 3. Dev path: tsx + daemon source. Sibling-checkout relative only.
   const tsxBin = pathMod.join(
     process.cwd(),
     'node_modules',
     '.bin',
     process.platform === 'win32' ? 'tsx.cmd' : 'tsx',
   );
-  const candidates = [
-    'E:/Projects/computer-use-demo/src/main.ts',
-    pathMod.join(process.cwd(), '..', 'computer-use-demo', 'src', 'main.ts'),
-  ];
+  const appRoots = [app.getAppPath(), process.cwd()];
+  const candidates = appRoots.flatMap((root) => [
+    pathMod.join(root, '..', 'computer-use-demo', 'src', 'main.ts'),
+  ]);
   for (const c of candidates) {
     try {
       await fs.access(c);

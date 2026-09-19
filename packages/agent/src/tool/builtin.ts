@@ -58,6 +58,7 @@ import {
 import { manageRoutineTool } from './ManageRoutineTool/index.js';
 import { listAppConnectorsTool, connectAppTool } from './AppConnectorManageTool/index.js';
 import { planTool } from './PlanTool/index.js';
+import { getComputerUseToolsWithDecide } from './OSTool/index.js';
 
 /**
  * BashTool instance
@@ -305,6 +306,19 @@ export function createBuiltinRegistry(
   // the previous MCP-server-based implementation. Exposed as hint level to reduce
   // token overhead while keeping it on the initial tool surface.
   registry.register(planTool.toTool(), planTool, { exposeMode: 'hint' });
+
+  // Plan 552 Phase 0: computer-use tools registered so the workflow
+  // engine (tool / gui nodes) can enumerate and execute them through the
+  // ToolRegistry even when Computer Use mode is off. `hidden` keeps them
+  // out of every LLM-facing surface (tool list, tool_search, tool_invoke)
+  // — the LLM sees them only via computer-use-mode's inject, so normal
+  // chats are byte-identical to pre-552 behavior.
+  for (const tr of getComputerUseToolsWithDecide(false)) {
+    registry.register(tr.definition, tr.executor, {
+      exposeMode: 'hidden',
+      inputSchemaSummary: 'computer-use actions (capture/click/type/key/scroll/drag/set_value/wait/zoom + delegated decide loop)',
+    });
+  }
 
   return registry;
 }
