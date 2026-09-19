@@ -854,10 +854,10 @@ export class duyaAgent implements AgentRuntime {
     // call site into its own helper, which we avoid here for diff size.
     const pendingHookEvents: SSEEvent[] = [];
     const configHooks = new ConfigHooksRunner({
-      cwd: this.workingDirectory ?? process.cwd(),
+      cwd: turnContext.workingDirectory ?? process.cwd(),
       vars: {
         sessionId: turnContext.sessionId ?? '',
-        cwd: this.workingDirectory ?? '',
+        cwd: turnContext.workingDirectory ?? '',
         prompt: promptText,
       },
       onHookInvoked: (hookEvent) => {
@@ -916,7 +916,7 @@ export class duyaAgent implements AgentRuntime {
     // Without this, the memory-RAG hook output is logged and discarded 鈥?    // the model never sees the retrieved memories on its first turn.
     const submitCtx = yield* dispatchHooks(
       'UserPromptSubmit',
-      { session_id: turnContext.sessionId ?? '', cwd: this.workingDirectory ?? '', hook_event_name: 'UserPromptSubmit', prompt: promptText },
+      { session_id: turnContext.sessionId ?? '', cwd: turnContext.workingDirectory ?? '', hook_event_name: 'UserPromptSubmit', prompt: promptText },
     );
     if (submitCtx && submitCtx.contexts.length > 0) {
       this.promptContexts = submitCtx.contexts.slice();
@@ -930,7 +930,7 @@ export class duyaAgent implements AgentRuntime {
     // since this sits ahead of the mode dispatch below).
     const startCtx = yield* dispatchHooks(
       'SessionStart',
-      { session_id: turnContext.sessionId ?? '', cwd: this.workingDirectory ?? '', hook_event_name: 'SessionStart', source: 'startup' },
+      { session_id: turnContext.sessionId ?? '', cwd: turnContext.workingDirectory ?? '', hook_event_name: 'SessionStart', source: 'startup' },
     );
     if (startCtx && startCtx.contexts.length > 0) {
       logger.info(`[Hooks] SessionStart produced ${startCtx.contexts.length} context line(s)`);
@@ -2147,7 +2147,7 @@ export class duyaAgent implements AgentRuntime {
               'PreToolUse',
               {
                 session_id: turnContext.sessionId ?? '',
-                cwd: this.workingDirectory ?? '',
+                cwd: turnContext.workingDirectory ?? '',
                 hook_event_name: 'PreToolUse',
                 tool_name: event.data.name,
                 tool_input: event.data.input ?? {},
@@ -2437,7 +2437,7 @@ export class duyaAgent implements AgentRuntime {
                       'PostToolUseFailure',
                       {
                         session_id: turnContext.sessionId ?? '',
-                        cwd: this.workingDirectory ?? '',
+                        cwd: turnContext.workingDirectory ?? '',
                         hook_event_name: 'PostToolUseFailure',
                         tool_name: failedToolName,
                         tool_input: {},
@@ -2833,7 +2833,7 @@ export class duyaAgent implements AgentRuntime {
           // completion boundary (fail-open; never blocks the final answer).
           yield* dispatchHooks('SessionEnd', {
             session_id: turnContext.sessionId ?? '',
-            cwd: this.workingDirectory ?? '',
+            cwd: turnContext.workingDirectory ?? '',
             hook_event_name: 'SessionEnd',
             reason: 'user_exit',
           });
@@ -2984,13 +2984,13 @@ export class duyaAgent implements AgentRuntime {
     // event.
     yield* dispatchHooks('Stop', {
       session_id: turnContext.sessionId ?? '',
-      cwd: this.workingDirectory ?? '',
+      cwd: turnContext.workingDirectory ?? '',
       hook_event_name: 'Stop',
       reason: 'user_request',
     });
     yield* dispatchHooks('SessionEnd', {
       session_id: turnContext.sessionId ?? '',
-      cwd: this.workingDirectory ?? '',
+      cwd: turnContext.workingDirectory ?? '',
       hook_event_name: 'SessionEnd',
       reason: 'user_exit',
     });
