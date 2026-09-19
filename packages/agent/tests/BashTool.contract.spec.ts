@@ -4,14 +4,12 @@ import {
   BASH_DEFAULT_TIMEOUT_MS,
   BASH_MAX_FOREGROUND_TIMEOUT_MS,
   BASH_MAX_TIMEOUT_MS,
-  BASH_SOFT_YIELD_MS,
 } from '../src/tool/BashTool/constants.js';
 import {
   getBashPrompt,
   getDefaultTimeoutMs,
   getMaxForegroundTimeoutMs,
   getMaxTimeoutMs,
-  getSoftYieldMs,
 } from '../src/tool/BashTool/prompt.js';
 import { PowerShellTool } from '../src/tool/PowerShellTool/PowerShellTool.js';
 import {
@@ -24,16 +22,14 @@ describe('BashTool contract', () => {
     expect(getDefaultTimeoutMs()).toBe(BASH_DEFAULT_TIMEOUT_MS);
     expect(getMaxTimeoutMs()).toBe(BASH_MAX_TIMEOUT_MS);
     expect(getMaxForegroundTimeoutMs()).toBe(BASH_MAX_FOREGROUND_TIMEOUT_MS);
-    expect(getSoftYieldMs()).toBe(BASH_SOFT_YIELD_MS);
 
     const prompt = getBashPrompt();
     expect(prompt).toContain(`default ${BASH_DEFAULT_TIMEOUT_MS}ms`);
     expect(prompt).toContain(`ceiling ${BASH_MAX_FOREGROUND_TIMEOUT_MS}ms`);
     expect(prompt).toContain(`up to ${BASH_MAX_TIMEOUT_MS}ms`);
-    expect(prompt).toContain(`${BASH_SOFT_YIELD_MS}ms`);
   });
 
-  it('advertises the new soft-yield and foreground ceiling in input_schema', () => {
+  it('advertises the foreground and background ceilings in input_schema', () => {
     const tool = new BashTool();
 
     expect(tool.input_schema).toMatchObject({
@@ -49,7 +45,7 @@ describe('BashTool contract', () => {
 
     const schemaJson = JSON.stringify(tool.input_schema);
     expect(schemaJson).toContain(String(BASH_MAX_FOREGROUND_TIMEOUT_MS));
-    expect(schemaJson).toContain(String(BASH_SOFT_YIELD_MS));
+    expect(schemaJson).toContain(String(BASH_MAX_TIMEOUT_MS));
   });
 
   it('caps foreground timeout at the foreground ceiling', () => {
@@ -59,7 +55,7 @@ describe('BashTool contract', () => {
     });
     expect(toolLong.valid).toBe(false);
     if (!toolLong.valid) {
-      expect(toolLong.error).toContain('foreground');
+      expect(toolLong.error).toContain(String(BASH_MAX_FOREGROUND_TIMEOUT_MS));
     }
 
     const toolOk = validateBashInput({

@@ -88,7 +88,6 @@ const CHECKS = {
 
   // Agent bundle (extraResources)
   'agent-bundle/agent-process-entry.js': [path.join(RESOURCES, 'agent-bundle', 'agent-process-entry.js'), false],
-  'agent-bundle/BashTool/BashWorker.js': [path.join(RESOURCES, 'agent-bundle', 'BashTool', 'BashWorker.js'), false],
 
   // Agent skills (extraResources)
   'agent/skills/ directory': [path.join(RESOURCES, 'agent', 'skills'), true],

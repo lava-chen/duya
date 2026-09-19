@@ -387,18 +387,6 @@ module.exports = async function afterPack(context) {
   const agentBundleStats = fs.statSync(agentBundlePath);
   console.log(`[afterPack] Agent bundle verified: ${agentBundlePath} (${(agentBundleStats.size / 1024 / 1024).toFixed(2)} MB)`);
 
-  // Verify BashWorker.js exists — AGENTS.md pre-release checklist requires:
-  //   release/win-unpacked/resources/agent-bundle/BashTool/BashWorker.js
-  const bashWorkerPath = path.join(RESOURCES_DIR, 'agent-bundle', 'BashTool', 'BashWorker.js');
-  if (!fs.existsSync(bashWorkerPath)) {
-    throw new Error(
-      `[afterPack] FATAL: BashWorker.js not found at ${bashWorkerPath}. ` +
-      'The Bash tool cannot execute commands without this worker file. ' +
-      'Run `npm run bundle:agent` before packaging.'
-    );
-  }
-  console.log(`[afterPack] BashWorker.js verified at ${bashWorkerPath}`);
-
   // Step 4: Copy playwright package to agent-bundle node_modules
   // Playwright is marked as external in esbuild config, so it needs to be available at runtime
   console.log('[afterPack] Step 4: Copying playwright to agent-bundle...');

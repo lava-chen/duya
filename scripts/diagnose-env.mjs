@@ -120,11 +120,9 @@ function diagnoseEntryPoints() {
 function diagnoseAgentBundle() {
   const devAgentProcess = path.join(PROJECT_ROOT, 'packages', 'agent', 'dist', 'process', 'agent-process-entry.js');
   const bundleAgentProcess = path.join(PROJECT_ROOT, 'packages', 'agent', 'bundle', 'agent-process-entry.js');
-  const bashWorker = path.join(PROJECT_ROOT, 'packages', 'agent', 'bundle', 'BashTool', 'BashWorker.js');
 
   addResult('Agent Bundle', 'Dev dist (tsc)', checkFile(devAgentProcess, 'agent-process-entry.js').detail, '—', '—', checkFile(devAgentProcess, 'agent-process-entry.js').status);
   addResult('Agent Bundle', 'Bundle (esbuild)', '—', checkFile(bundleAgentProcess, 'agent-process-entry.js').detail, `resources/agent-bundle/agent-process-entry.js`, checkFile(bundleAgentProcess, 'agent-process-entry.js').status);
-  addResult('Agent Bundle', 'BashWorker.js', '—', checkFile(bashWorker, 'BashWorker.js').detail, `resources/agent-bundle/BashTool/BashWorker.js`, checkFile(bashWorker, 'BashWorker.js').status);
 }
 
 // =============================================================================

@@ -9,7 +9,6 @@ import {
   BASH_DEFAULT_TIMEOUT_MS,
   BASH_MAX_FOREGROUND_TIMEOUT_MS,
   BASH_MAX_TIMEOUT_MS,
-  BASH_SOFT_YIELD_MS,
 } from './constants.js'
 
 export const BASH_TOOL_NAME = 'Bash'
@@ -44,29 +43,18 @@ export function getMaxForegroundTimeoutMs(): number {
   return BASH_MAX_FOREGROUND_TIMEOUT_MS
 }
 
-/**
- * Soft-yield window (ms). Foreground commands that exceed this are
- * auto-promoted to a managed background task without restarting the process.
- */
-export function getSoftYieldMs(): number {
-  return BASH_SOFT_YIELD_MS
-}
-
 // ============================================================
 // Background Commands
 // ============================================================
 
 /**
- * Model-facing guidance for when to use `run_in_background`. Updated to
- * reflect the 15s auto-promotion behaviour: foreground commands that do not
- * finish within `BASH_SOFT_YIELD_MS` are auto-promoted, but the model still
- * gets a cleaner return shape if it opts in explicitly for any command it
- * knows will be long. Mirrors mcode's LocalBashToolDef guidance.
+ * Model-facing guidance for when to use `run_in_background`. Foreground
+ * commands block until they finish or hit the timeout ceiling, so anything
+ * known to be long-running should opt in explicitly.
  */
 function getBackgroundUsageNote(): string | null {
   return [
     `You can use the \`run_in_background\` parameter to run the command in the background. Only use this if you don't need the result immediately and are OK being notified when the command completes later. You do not need to check the output right away — you'll be notified when it finishes. Use \`get_task_output\` with the returned task ID to fetch results on demand, and \`kill_task\` to terminate a background task if needed. You do not need to use '&' at the end of the command when using this parameter.`,
-    `Foreground commands that don't finish within ${BASH_SOFT_YIELD_MS}ms are auto-promoted to a managed background task and the tool call returns a task id — the process is not restarted, but the conversation is unblocked immediately.`,
     `Do not increase \`timeout\` to mask a hung foreground command. The foreground ceiling is ${BASH_MAX_FOREGROUND_TIMEOUT_MS}ms (${BASH_MAX_FOREGROUND_TIMEOUT_MS / 60_000} minutes); for anything longer, opt into \`run_in_background: true\` and let the runtime watchdog handle it.`,
   ].join(' ')
 }

@@ -1,15 +1,13 @@
 /**
- * Tests for BashTool's foreground soft-yield auto-promotion behaviour.
+ * Tests for BashTool's timeout contract (foreground/background ceilings).
  *
  * Verifies the contract documented in `BashTool/constants.ts`:
  *   - Default foreground timeout stays at BASH_DEFAULT_TIMEOUT_MS (120s).
  *   - Foreground ceiling is BASH_MAX_FOREGROUND_TIMEOUT_MS (300s, 5 min).
  *   - Background ceiling stays at BASH_MAX_TIMEOUT_MS (600s, 10 min).
- *   - The soft-yield window is BASH_SOFT_YIELD_MS (15s).
  *
  * We exercise `validateBashInput` (pure) and `BashTool.input_schema` (model-
- * facing contract) but skip live subprocess execution — the BashWorker
- * tests cover the spawn path.
+ * facing contract) but skip live subprocess execution.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -18,7 +16,6 @@ import {
   BASH_DEFAULT_TIMEOUT_MS,
   BASH_MAX_FOREGROUND_TIMEOUT_MS,
   BASH_MAX_TIMEOUT_MS,
-  BASH_SOFT_YIELD_MS,
 } from '../../../src/tool/BashTool/constants.js';
 import {
   BashTool,
@@ -26,16 +23,12 @@ import {
 } from '../../../src/tool/BashTool/BashTool.js';
 import {
   getBashPrompt,
+  getDefaultTimeoutMs,
   getMaxForegroundTimeoutMs,
-  getSoftYieldMs,
+  getMaxTimeoutMs,
 } from '../../../src/tool/BashTool/prompt.js';
 
-describe('BashTool — soft-yield constants', () => {
-  it('keeps the soft-yield window at 15s', () => {
-    expect(BASH_SOFT_YIELD_MS).toBe(15_000);
-    expect(getSoftYieldMs()).toBe(BASH_SOFT_YIELD_MS);
-  });
-
+describe('BashTool — timeout constants', () => {
   it('caps foreground timeout at 5 minutes', () => {
     expect(BASH_MAX_FOREGROUND_TIMEOUT_MS).toBe(300_000);
     expect(getMaxForegroundTimeoutMs()).toBe(BASH_MAX_FOREGROUND_TIMEOUT_MS);
@@ -43,14 +36,16 @@ describe('BashTool — soft-yield constants', () => {
 
   it('keeps the default foreground timeout at 120s', () => {
     expect(BASH_DEFAULT_TIMEOUT_MS).toBe(120_000);
+    expect(getDefaultTimeoutMs()).toBe(BASH_DEFAULT_TIMEOUT_MS);
   });
 
   it('keeps the background ceiling at the historical 10 minutes', () => {
     expect(BASH_MAX_TIMEOUT_MS).toBe(600_000);
+    expect(getMaxTimeoutMs()).toBe(BASH_MAX_TIMEOUT_MS);
   });
 });
 
-describe('BashTool — foreground timeout validation', () => {
+describe('BashTool — timeout validation', () => {
   it('accepts the foreground ceiling exactly', () => {
     const result = validateBashInput({
       command: 'npm run dev',
@@ -59,15 +54,14 @@ describe('BashTool — foreground timeout validation', () => {
     expect(result.valid).toBe(true);
   });
 
-  it('rejects a foreground timeout above the ceiling with a hint to use background', () => {
+  it('rejects a foreground timeout above the ceiling', () => {
     const result = validateBashInput({
       command: 'npm run dev',
       timeout: BASH_MAX_FOREGROUND_TIMEOUT_MS + 1,
     });
     expect(result.valid).toBe(false);
     if (!result.valid) {
-      expect(result.error).toContain('foreground');
-      expect(result.error).toContain('run_in_background');
+      expect(result.error).toContain(String(BASH_MAX_FOREGROUND_TIMEOUT_MS));
     }
   });
 
@@ -103,32 +97,41 @@ describe('BashTool — foreground timeout validation', () => {
   });
 });
 
-describe('BashTool — schema advertises soft-yield', () => {
-  it('mentions the foreground ceiling and soft-yield window in timeout description', () => {
+describe('BashTool — schema advertises the timeout contract', () => {
+  it('mentions the foreground and background ceilings in timeout description', () => {
     const tool = new BashTool();
     const schema = JSON.stringify(tool.input_schema);
     expect(schema).toContain(String(BASH_MAX_FOREGROUND_TIMEOUT_MS));
-    expect(schema).toContain(String(BASH_SOFT_YIELD_MS));
+    expect(schema).toContain(String(BASH_MAX_TIMEOUT_MS));
   });
 
-  it('tells the model a foreground command may return a task id after 15s', () => {
+  it('tells the model an explicit run_in_background returns a task id', () => {
     const tool = new BashTool();
     const schema = JSON.stringify(tool.input_schema);
     expect(schema).toContain('task id');
-    expect(schema).toContain(String(BASH_SOFT_YIELD_MS));
+  });
+
+  it('no longer claims foreground soft-yield auto-promotion', () => {
+    const tool = new BashTool();
+    const schema = JSON.stringify(tool.input_schema);
+    expect(schema).not.toContain('auto-promot');
   });
 });
 
-describe('BashTool — prompt advertises soft-yield', () => {
-  it('mentions the soft-yield window and the foreground ceiling', () => {
+describe('BashTool — prompt timeout guidance', () => {
+  it('mentions the foreground and background ceilings', () => {
     const prompt = getBashPrompt();
-    expect(prompt).toContain(String(BASH_SOFT_YIELD_MS));
     expect(prompt).toContain(String(BASH_MAX_FOREGROUND_TIMEOUT_MS));
-    expect(prompt).toContain('auto-promoted');
+    expect(prompt).toContain(String(BASH_MAX_TIMEOUT_MS));
   });
 
   it('warns against inflating timeout to mask hung commands', () => {
     const prompt = getBashPrompt();
     expect(prompt.toLowerCase()).toContain('do not increase');
+  });
+
+  it('no longer claims foreground soft-yield auto-promotion', () => {
+    const prompt = getBashPrompt();
+    expect(prompt).not.toContain('auto-promot');
   });
 });
