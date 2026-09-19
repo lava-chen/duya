@@ -52,6 +52,7 @@
 | 2e StreamFinalizer plan doc sync (session-5 close-out) | `51aba8c8` | ✅ done (session 5) |
 | 2e TurnLoop first slice — TurnStreamRunner wraps openLLMStream + retry IIFE | `b17384b2` | ✅ done (session 5+) |
 | 2e StreamFinalizer fixup — revert persistableMessages to canonical helper (drops transient runtime-context envelopes) | `2e37a37c` | ✅ done (session 5+) |
+| 2e side-quest — extract PendingHookMessages FIFO queue from DuyaAgent | `a61523f6` | ✅ done (session 5+) |
 | **改造 2 — remaining** (2e TurnLoop event dispatcher, 3c StreamingToolExecutor wiring) | — | ⏳ session 6 |
 | 1d-rest 8 remaining dynamic sections + gateway/code/research configs + delete `general/sections/*.ts` | — | ⏳ follow-up PR (out of session-4 scope) |
 | 3c StreamingToolExecutor wiring | — | ⏳ next session |
@@ -108,6 +109,7 @@ Six new modules since session 4 began:
 - `packages/agent/src/agent/TurnLoopTracker.ts` (181 lines, 12 tests)
 - `packages/agent/src/agent/SessionFinalizer.ts` (~410 lines — success + abort + error paths, 12 tests)
 - `packages/agent/src/agent/TurnStreamRunner.ts` (217 lines — runTurnStream generator + retry envelope, 7 tests)
+- `packages/agent/src/agent/PendingHookMessages.ts` (66 lines — FIFO queue with `push`/`drain`/`size`, 6 tests)
 
 ## Next-session starting points (session 5)
 
