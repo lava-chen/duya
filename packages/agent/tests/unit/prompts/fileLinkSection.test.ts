@@ -15,12 +15,12 @@
 import { describe, expect, it } from 'vitest';
 import { resolve } from 'node:path';
 
-import { HbsPromptSystem } from '../src/prompts/hbs/HbsPromptSystem.js';
-import { BOT_BASIC_SYSTEM_PROMPT } from '../src/prompts/bot/basicPrompt.js';
-import type { PromptContext } from '../src/prompts/types.js';
+import { HbsPromptSystem } from '../../../src/prompts/hbs/HbsPromptSystem.js';
+import { BOT_BASIC_SYSTEM_PROMPT } from '../../../src/prompts/bot/basicPrompt.js';
+import type { PromptContext } from '../../../src/prompts/types.js';
 
 const hbs = new HbsPromptSystem({
-  assetsRoot: resolve(__dirname, '../src/prompts/assets'),
+  assetsRoot: resolve(__dirname, '../../../src/prompts/assets'),
 });
 const getFinalAnswerSection = (ctx: PromptContext) =>
   hbs.renderModule('finalAnswer', ctx).trim();
