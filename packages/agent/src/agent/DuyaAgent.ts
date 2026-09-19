@@ -77,6 +77,7 @@ import { TurnAssembler } from './TurnAssembler.js';
 import type { TurnContext } from './TurnContext.js';
 import { permissionModeFromString } from '../permissions/policy.js';
 import { buildPermissions } from './PermissionsGate.js';
+import { CompactionCoordinator } from './CompactionCoordinator.js';
 import { deriveSingleCallUsage } from '../process/seed-token-usage.js';
 import { settingsJsonToRules } from '../permissions/rules.js';
 import { permissionRuleValueToString } from '../permissions/rules.js';
@@ -385,6 +386,13 @@ export class duyaAgent implements AgentRuntime {
    * consider compacting again.
    */
   private lastCompactionTurn = -Infinity;
+  /**
+   * Plan 550 step 2c: per-session CompactionCoordinator handle. Built
+   * once at construction (the deps are all session-scope); `streamChat`
+   * calls `runPreTurn` once per turn and forwards the resulting SSE
+   * events back to the renderer.
+   */
+  private compactionCoordinator: CompactionCoordinator;
   /**
    * Plan 517 P2.3: token-based cooldown. `lastCompactionObservedTokens`
    * captures the `observedPromptTokens` value at the most recent
@@ -768,6 +776,32 @@ export class duyaAgent implements AgentRuntime {
     this.compactionController = new MessageCompactionController({
       timeline: this.timeline,
       compactionManager: this.compactionManager,
+    });
+
+    // Plan 550 step 2c: per-session CompactionCoordinator wraps the
+    // proactive-compaction lifecycle that previously lived inline in
+    // `streamChat`. Built once at construction; the agent hands it the
+    // (turnCount, systemPromptContent, messages) triple at the top of
+    // each turn and receives back the projected pair plus the SSE
+    // events the renderer expects to see in lifecycle order.
+    this.compactionCoordinator = new CompactionCoordinator({
+      compactionController: this.compactionController,
+      compactionManager: this.compactionManager,
+      projectModelMessages: (systemPrompt, options) =>
+        this._projectModelMessages(systemPrompt, options),
+      onMessagesCompacted: this.onMessagesCompacted,
+      getMessages: () => this.messages,
+      getLastCompactionTurn: () => this.lastCompactionTurn,
+      setLastCompactionTurn: (turn) => {
+        this.lastCompactionTurn = turn;
+      },
+      getLastCompactionObservedTokens: () => this.lastCompactionObservedTokens,
+      setLastCompactionObservedTokens: (tokens) => {
+        this.lastCompactionObservedTokens = tokens;
+      },
+      getMinTurnsSinceCompact: () => duyaAgent.MIN_TURNS_SINCE_COMPACT,
+      getMinTokensGrowthSinceCompact: () =>
+        duyaAgent.MIN_TOKENS_GROWTH_SINCE_COMPACT,
     });
   }
 
@@ -1770,153 +1804,22 @@ export class duyaAgent implements AgentRuntime {
 
       // Lightweight tool result cleanup before each turn
 
-      // Proactive context compaction before each LLM call.
-      // Plan 495 G1: kick the background pass1 prefire when approaching the
-      // threshold — best-effort, never blocks or fails this turn. The seed
-      // is harvested inside compactProactive when a real compaction fires.
-      // Plan 495 G2: image-volume trigger (grok
-      // IMAGE_SUMMARIZATION_TRIGGER_COUNT) — force compaction even when the
-      // token budget has not been crossed yet.
-      let imageTriggered = false;
-      try {
-        const checkpointProjection = this.compactionController.projectInputMessages();
-        this.compactionManager.maybeStartPrefire(checkpointProjection);
-        imageTriggered =
-          countImagePartsInMessages(checkpointProjection) >= IMAGE_COMPACTION_TRIGGER_COUNT;
-      } catch {
-        // Checkpoint projection is best-effort; shouldCompact() below still
-        // runs its own projection.
+      // Proactive context compaction before each LLM call. Plan 550 step 2c:
+      // delegate to the per-session CompactionCoordinator (it owns the
+      // prefire kick, cooldown gate, event buffer, and post-compact re-projection).
+      const compactionRun = await this.compactionCoordinator.runPreTurn({
+        turnCount,
+        systemPromptContent,
+        messages,
+      });
+      for (const ev of compactionRun.events) yield ev;
+      systemPromptContent = compactionRun.systemPromptContent;
+      messages = compactionRun.messages;
+      if (compactionRun.didCompact) {
+        // Plan 480 P3.2: compaction summarizes the tail away, so the
+        // discovered tools return to the persistent tool list from here on.
+        discoveredPromotedToToolList = true;
       }
-      // Plan 517 P2.1 + P2.3: turn-based + token-based cooldown to break
-      // the compaction-loop bug. After a successful compaction, the next
-      // MIN_TURNS_SINCE_COMPACT turns skip the proactive checkpoint even
-      // when shouldCompact() returns true, AND the new turns must have
-      // grown the context by at least MIN_TOKENS_GROWTH_SINCE_COMPACT
-      // tokens. Image-volume triggers (grok style) bypass the gate so
-      // multimodal floods are still handled immediately.
-      const turnsSinceLastCompact = turnCount - this.lastCompactionTurn;
-      const currentObservedTokens = this.compactionManager.getObservedPromptTokens?.();
-      const tokensGrowthSinceCompact =
-        currentObservedTokens !== undefined && this.lastCompactionObservedTokens !== undefined
-          ? currentObservedTokens - this.lastCompactionObservedTokens
-          : Number.POSITIVE_INFINITY;
-      const cooldownActive =
-        !imageTriggered &&
-        (turnsSinceLastCompact < duyaAgent.MIN_TURNS_SINCE_COMPACT ||
-          tokensGrowthSinceCompact < duyaAgent.MIN_TOKENS_GROWTH_SINCE_COMPACT);
-      if (cooldownActive) {
-        logger.debug(
-          `[Agent] Turn ${turnCount}: Skipping proactive compaction (cooldown: ` +
-            `turnsSinceLast=${turnsSinceLastCompact}/${duyaAgent.MIN_TURNS_SINCE_COMPACT}, ` +
-            `tokensGrowth=${Number.isFinite(tokensGrowthSinceCompact) ? tokensGrowthSinceCompact : 'unknown'}` +
-            `/${duyaAgent.MIN_TOKENS_GROWTH_SINCE_COMPACT})`,
-        );
-      }
-      if (!cooldownActive && (imageTriggered || this.compactionController.shouldCompact())) {
-        if (imageTriggered) {
-          logger.info(`[Agent] Turn ${turnCount}: Image-count compaction trigger fired`);
-        }
-        logger.info(`[Agent] Turn ${turnCount}: Proactive compaction triggered`);
-        yield { type: 'compact:start' } as unknown as SSEEvent;
-        // Plan 517 P3: subscribe to CompactionManager events for the
-        // duration of this compaction. Step + over-threshold events are
-        // pushed into a buffer that we drain synchronously after the
-        // await completes — order is preserved by emit order, and the
-        // single buffering point keeps the agent loop free of nested
-        // event handlers.
-        const stepBuffer: Array<SSEEvent> = []
-        const unsubscribe = this.compactionManager.addEventHandler((event) => {
-          if (event.type === 'compaction_step') {
-            stepBuffer.push({
-              type: 'compact:step',
-              data: {
-                step: event.step,
-                phase: event.phase,
-                messageCount: event.messageCount,
-                tokensBefore: event.tokensBefore,
-                tokensEstimated: event.tokensEstimated,
-                filesCached: event.filesCached,
-              },
-            } as unknown as SSEEvent)
-          } else if (event.type === 'compaction_over_threshold') {
-            stepBuffer.push({
-              type: 'compact:over_threshold',
-              data: {
-                tokensRetained: event.tokensRetained,
-                available: event.available,
-              },
-            } as unknown as SSEEvent)
-          } else if (event.type === 'compaction_summary_outcome') {
-            // Plan 523 P6: surface per-attempt summary outcomes over SSE so
-            // the renderer can explain why a compaction failed/retried.
-            stepBuffer.push({
-              type: 'compact:summary_outcome',
-              data: {
-                attempt: event.attempt,
-                outcome: event.outcome,
-                errorKind: event.errorKind,
-                chars: event.chars,
-              },
-            } as unknown as SSEEvent)
-          }
-        })
-        try {
-          const compactEntry = await this.compactionController.compactProactive({
-            trigger: 'auto',
-            ...(imageTriggered ? { force: true } : {}),
-          });
-          // Drain buffered step + over-threshold events before yielding
-          // compact:done so the renderer sees the lifecycle in order.
-          for (const ev of stepBuffer) yield ev
-          if (compactEntry) {
-            // Plan 480 P3.2: compaction summarizes the tail away, so the
-            // discovered tools return to the persistent tool list from here on.
-            discoveredPromotedToToolList = true;
-            logger.info(`[Agent] Turn ${turnCount}: Compacted with strategy=${compactEntry.strategy}, removed=${compactEntry.tokensBefore} tokens, retained=${compactEntry.tokensAfter ?? 0} tokens`);
-            // Plan 517 P2.1 + P2.3: pin the cooldown baseline. The next
-            // MIN_TURNS_SINCE_COMPACT turns skip the proactive checkpoint
-            // unless the agent has grown the context by at least
-            // MIN_TOKENS_GROWTH_SINCE_COMPACT tokens OR an image-volume
-            // trigger fires (handled inside the gate).
-            this.lastCompactionTurn = turnCount;
-            // CompactionManager.clearObservedPromptTokens() runs at the end
-            // of compact(); capture the post-compaction observed value as
-            // the new baseline. If the projection hasn't surfaced a real
-            // anchor yet, leave undefined so the cooldown defers to
-            // turn-based protection only.
-            const postCompactObserved = this.compactionManager.getObservedPromptTokens?.();
-            if (typeof postCompactObserved === 'number' && postCompactObserved > 0) {
-              this.lastCompactionObservedTokens = postCompactObserved;
-            } else {
-              this.lastCompactionObservedTokens = undefined;
-            }
-            // The controller appended a checkpoint entry to the timeline
-            // instead of mutating history in place; `this.messages` is a
-            // timeline-derived getter, so it already reflects the compaction.
-            // Notify external listener so it can persist the compacted
-            // message list and update its baseline count.
-            this.onMessagesCompacted?.(this.messages.length);
-            // Re-project model messages from the updated timeline.
-            const reProjected = this._projectModelMessages(systemPromptContent, { injectHookContexts: true });
-            systemPromptContent = reProjected.systemPromptContent;
-            messages = reProjected.messages;
-            yield {
-              type: 'compact:done',
-              data: {
-                strategy: compactEntry.strategy,
-                tokensRemoved: compactEntry.tokensBefore,
-                tokensRetained: compactEntry.tokensAfter ?? 0,
-              },
-            } as unknown as SSEEvent;
-          }
-        } catch (compactError) {
-          const compactErrorMsg = compactError instanceof Error ? compactError.message : String(compactError);
-          logger.error(`[Agent] Turn ${turnCount}: Proactive compaction failed: ${compactErrorMsg}`);
-          yield { type: 'compact:error', data: { message: compactErrorMsg } } as unknown as SSEEvent;
-          // Continue anyway 鈥?let the API call fail if truly over limit
-        }
-      }
-
       const mailboxDecision = await this._claimMailboxAtCheckpoint(
         runId,
         messages,

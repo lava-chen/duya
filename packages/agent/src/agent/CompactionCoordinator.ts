@@ -278,6 +278,10 @@ export class CompactionCoordinator {
         `[Agent] Turn ${turnCount}: Proactive compaction failed: ${compactErrorMsg}`,
       );
       events.push(...buffer);
+      events.push({
+        type: 'compact:error',
+        data: { message: compactErrorMsg },
+      } as unknown as SSEEvent);
       return { didCompact: false, imageTriggered, systemPromptContent, messages, events };
     }
   }
