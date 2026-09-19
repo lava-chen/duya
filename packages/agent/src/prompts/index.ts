@@ -51,23 +51,15 @@ export {
 export type { PromptProfile } from './modes/types.js'
 export type { ResearchTaskIntent, ResearchPromptRuntimeContext } from './research/types.js'
 
-// Shared sections (used by multiple configs)
-export { getProjectContinuitySection } from './sections/projectContinuity.js'
-export { getConfigProtectionSection } from './general/sections/configProtection.js'
+// Shared sections
+// (Plan 551: the static section trees were swept — authored content lives
+// in the module registry, `prompts/modules/registry.ts`.)
 
 // Dynamic Sections
 export { getEnvironmentSection } from './sections/dynamic/environment.js'
-export { getMcpInstructionsSection } from './sections/dynamic/mcpInstructions.js'
-export { getSessionGuidanceSection } from './sections/dynamic/sessionGuidance.js'
 export { getSkillsMetadataSection } from './sections/dynamic/skillsMetadata.js'
-export { getLanguageSection } from './sections/dynamic/language.js'
-export { getScratchpadSection } from './sections/dynamic/scratchpad.js'
-export { getOutputStyleSection } from './sections/dynamic/outputStyle.js'
-export { getRecentSessionsSection } from './sections/dynamic/recentSessionsSection.js'
 export { initializeAgentsMd } from './sections/dynamic/agentsMdSection.js'
-
-// Vision Guidelines
-export { getVisionGuidelinesSection } from './sections/dynamic/visionGuidelines.js'
+export { getRecentSessionsSection } from './sections/dynamic/recentSessionsSection.js'
 
 // Platform Hints
 export { getPlatformHint, PLATFORM_HINTS } from './platformHints.js'

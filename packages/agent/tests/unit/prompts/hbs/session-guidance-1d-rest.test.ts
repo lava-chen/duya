@@ -1,15 +1,14 @@
 /**
- * Session guidance .hbs byte-level parity test — Plan 550 1d-rest.
+ * Session guidance .hbs behavior tests — Plan 550 1d-rest → Plan 551.
  *
- * Companion to dynamic-sections.test.ts; runs independently because
- * sessionGuidance.ts has 5 conditional paragraphs and a 5-paragraph
- * `{{#if}}` chain in the .hbs template, so a divergence here is more
- * likely than the simpler 1d-rest migrations.
+ * sessionGuidance has 5 conditional paragraphs behind an `{{#if}}` chain
+ * in the template, so the conditional matrix is locked per fixture: each
+ * scenario asserts the paragraphs that must (not) appear. Byte-level
+ * parity against the legacy TS function was locked before the sweep.
  */
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { HbsPromptSystem } from '../../../../src/prompts/hbs/HbsPromptSystem.js';
-import { getSessionGuidanceSection } from '../../../../src/prompts/sections/dynamic/sessionGuidance.js';
 
 const ASSETS_ROOT = resolve(__dirname, '../../../../src/prompts/assets');
 
@@ -21,7 +20,7 @@ function ctxWith(overrides: any = {}) {
     modelId: 'test-model',
     enabledTools: new Set<string>([
       'Read', 'Edit', 'Write',
-      'AskUserQuestion', 'Subagent', 'Skill', 'DiscoverSkills',
+      'AskUserQuestion', 'task', 'Skill', 'DiscoverSkills',
       'Glob', 'Grep', 'Bash',
     ]),
     sessionStartTime: 0,
@@ -34,43 +33,64 @@ function ctxWith(overrides: any = {}) {
   };
 }
 
-describe('session-guidance hbs byte-level parity (Plan 550 1d-rest)', () => {
+describe('session-guidance hbs conditional matrix (Plan 551)', () => {
   const system = new HbsPromptSystem({ assetsRoot: ASSETS_ROOT });
 
-  async function check(ctx: any) {
-    const ts = await getSessionGuidanceSection(ctx as any);
-    const hbs = system.renderStaticTemplate('dynamic/session-guidance.hbs', ctx as any).trim();
-    const hbsNorm = hbs === '' ? null : hbs;
-    expect(hbsNorm).toBe(ts);
+  function render(ctx: any): string | null {
+    const out = system.renderStaticTemplate('dynamic/session-guidance.hbs', ctx).trim();
+    return out === '' ? null : out;
   }
 
-  it('matches when most paragraphs apply', async () => {
-    await check(ctxWith());
+  it('renders most paragraphs when the matching tools exist', () => {
+    const out = render(ctxWith());
+    expect(out).toContain('# Session-specific guidance');
+    expect(out).toContain('Use AskUserQuestion to ask the user questions');
+    expect(out).toContain('with specialized agents');
+    expect(out).toContain('/<skill-name>');
+    expect(out).toContain('DiscoverSkills');
+    expect(out).toContain('independent adversarial verification');
+    expect(out).toContain('the Glob or Grep directly');
   });
 
-  it('matches when no relevant tools are available (section omitted)', async () => {
-    await check(ctxWith({ enabledTools: new Set<string>(['Read', 'Edit', 'Write']) }));
+  it('renders only the shell-suggestion paragraph when no relevant tools exist', () => {
+    const out = render(ctxWith({ enabledTools: new Set<string>(['Read', 'Edit', 'Write']) }));
+    expect(out).toContain('`! <command>`');
+    expect(out).not.toContain('AskUserQuestion');
+    expect(out).not.toContain('task');
+    expect(out).not.toContain('/<skill-name>');
   });
 
-  it('matches when fork subagent is enabled (different fork paragraph)', async () => {
-    await check(ctxWith({ isForkSubagentEnabled: true }));
+  it('switches to the fork paragraph when fork subagent is enabled', () => {
+    const forked = render(ctxWith({ isForkSubagentEnabled: true }));
+    expect(forked).toContain('without a subagent_type creates a fork');
+    expect(forked).not.toContain('with specialized agents');
+    // The directed-search bullet is non-fork-only.
+    expect(forked).not.toContain('For simple, directed codebase searches');
   });
 
-  it('matches when embedded search tools are enabled (different search label)', async () => {
-    await check(ctxWith({ hasEmbeddedSearchTools: true }));
+  it('switches the search label when embedded search tools are enabled', () => {
+    const embedded = render(ctxWith({ hasEmbeddedSearchTools: true }));
+    expect(embedded).toContain('`find` or `grep` via the Bash tool directly');
+    expect(render(ctxWith())).toContain('the Glob or Grep directly');
   });
 
-  it('matches when session is non-interactive (omits shell-suggestion paragraph)', async () => {
-    await check(ctxWith({ isNonInteractiveSession: true }));
+  it('omits the shell-suggestion paragraph for non-interactive sessions', () => {
+    const out = render(ctxWith({ isNonInteractiveSession: true }));
+    expect(out).toContain('Use AskUserQuestion to ask the user questions');
+    expect(out).not.toContain('`! <command>`');
   });
 
-  it('matches when DiscoverSkills is unavailable (omits discover paragraph)', async () => {
-    await check(ctxWith({
-      enabledTools: new Set<string>(['Read', 'Edit', 'Write', 'AskUserQuestion', 'Subagent', 'Skill']),
+  it('omits the discover paragraph when DiscoverSkills is unavailable', () => {
+    const out = render(ctxWith({
+      enabledTools: new Set<string>(['Read', 'Edit', 'Write', 'AskUserQuestion', 'task', 'Skill']),
     }));
+    expect(out).toContain('/<skill-name>');
+    expect(out).not.toContain('DiscoverSkills');
   });
 
-  it('matches when verification agent is disabled (omits verification paragraph)', async () => {
-    await check(ctxWith({ isVerificationAgentEnabled: false }));
+  it('omits the verification paragraph when verification agent is disabled', () => {
+    const out = render(ctxWith({ isVerificationAgentEnabled: false }));
+    expect(out).toContain('/<skill-name>');
+    expect(out).not.toContain('independent adversarial verification');
   });
 });
