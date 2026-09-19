@@ -315,9 +315,21 @@ Modes are declarative `ModeModifier` objects:
 - `plan-task` - Plan + task execution
 - `research` - Deep research (Plan 423)
 - `conductor` - Orchestration
-- `goal` - Goal tracking (Plan 411)
+- `goal` - Goal tracking (Plan 411, v2 in Plan 552)
 
 Registration: `packages/agent/src/modes/index.ts`
+
+#### Goal Mode v2 (Plan 552)
+
+`packages/agent/src/modes/goal/` — grok-lineage self-driving objective tracker with independent verification, hardened after the minimax Thread Goal comparison:
+
+- **10-state machine** (`GoalTracker`, process singleton): `idle → active ⇄ verifying → complete | blocked`, plus `user_paused` / `backoff_paused` / `no_progress_paused` / `infra_paused` / `budget_limited`. Closed `GOAL_PAUSE_REASONS` catalog (`user_requested`, `blocked_worker`, `no_progress`, `no_progress_gaps`, `verifier_timeout`, `verifier_unavailable`, `backoff`, `infra`, `restart`) carries the WHY orthogonally to the state; surfaced in snapshots, `goal_updated` history rows, and the UI.
+- **Session ownership**: the tracker records `boundSession` at `start`; every accessor/mutator takes an optional sessionId and a mismatched session reads `idle` / snapshots idle data, so a bystander session can neither read nor clobber another session's goal.
+- **Verification**: `update_goal(completed:true)` is a blocking ack that runs an N-skeptic adversarial panel (1–5 parallel sub-agents, JSON verdicts, conservative aggregation, strategist + closing summarizer) under `verifyTimeoutSeconds` — a timeout settles `blocked(verifier_timeout)` before any tracker side effects. `[goal] verification = "panel" | "none" | "auto"` skips the panel (`none` everywhere; `auto` on ollama local runtimes) and settles the worker proposal verbatim (minimax BYOK cost parity). `get_goal` lets the model read the durable state.
+- **Self-driving loop**: builtin PreFinalize hooks — `goal-reply-fingerprint` (priority 11: normalized final-reply streak, ≥2 occurrences nudge veto, ≥3 auto `no_progress_paused`) and `goal-continuation` (priority 12: veto the natural stop while the goal is active, bounded by `max_auto_continues`; engine invariants still outrank it). Bail endings are intercepted earlier by the priority-10 premature-stop detector.
+- **Cross-session**: the goal persists in `mode_state_snapshots`; a restart folds `active/verifying → user_paused(restart)` (grok safety fold) and `[goal] auto_resume` (default on) re-resumes it in `ModeCoordinator.restore()`. DuyaAgent self-adds `goal` to the turn's activeTrackerIds from the persisted snapshot, so any next message re-drives the goal without re-selecting the mode. Deterministic `/goal status|pause|resume|clear` control is intercepted at streamChat entry (`goal-commands.ts`, also registered as a CLI/gateway slash command) — no LLM turn spent; `/goal <objective>` still flows to the model so work starts immediately.
+- **UI**: `GoalStatusChip` + timeline-style `GoalStatusPanel` (Turn N · Verify M · tokens · live elapsed, vertical event timeline, Pause/Resume/Clear buttons sending the deterministic commands), fed by the extended `chat:goal_updated` event (`totalWorkerRounds`, `totalVerifyRounds`, `elapsedMs`, `pauseReason`, `executionWait`).
+
 
 ### Context Compaction (Plan 422)
 
