@@ -523,4 +523,33 @@ Three commits, all on `feat/550-decompose-session6` from `8d410d0b` (session-5+ 
 - `E:\cloned-projects\minimax-code\packages\local-runtime-v2\src\service\agent\builtin\prompt-renderer.ts` — mcode 的 Handlebars 渲染器实现
 - `packages/agent/src/prompts/PromptSystem.ts:35-37` — duya 自警告"will break prompt caching"
 - `packages/agent/src/tool/orchestration/types.ts:12-31` — duya 当前 batch 调度策略
+
+## Session 6+ (2026-09-19, 1d-rest 2/9 → 4/9)
+
+Three follow-up commits on `feat/550-decompose-session6` after the initial PR #60 head (`05bdf5a0`), all on top of `a3d4d237` / `71bc3134` / `41b3f4e6`.
+
+| Commit | Step | 内容 |
+|---|---|---|
+| `a3d4d237` | 1d-rest 2/9 | Migrate `getScratchpadSection` to `assets/dynamic/scratchpad.hbs`. The four configs that declare it (general / code / gateway / bot) each gain `template: 'dynamic/scratchpad.hbs'`. `mapPromptContextToHbs` adds `scratchpad_dir` (default `''`). 2 byte-level parity tests (set / absent). |
+| `71bc3134` | 1d-rest 3/9 | Migrate `getSessionSearchSection` to `assets/dynamic/session-search.hbs`. Three configs (general / code / gateway) gain the `template:` slot. Mapper adds `has_session_search_tool`. 2 byte-level parity tests (tool enabled / tool absent). |
+| `41b3f4e6` | 1d-rest 4/9 | Migrate `getSessionGuidanceSection` to `assets/dynamic/session-guidance.hbs`. **First non-trivial 1d-rest case**: five conditional paragraphs joined with a ` - ` prefix, with an any-empty short-circuit. Mapper adds nine new slots (5 conditional booleans + `search_tools` label + 2 derived visibility flags). Four configs (general / code / gateway / bot) updated. 9 byte-level parity tests (split: 2 in dynamic-sections.test.ts covering omitted/fork; 7 in session-guidance-1d-rest.test.ts covering most-paragraphs / fork / embedded / non-interactive / DiscoverSkills / verification-disabled / hasSkills-only). |
+
+**Session 6+ takeaway**: 4 of 9 1d-rest sections migrated (visualVerification / scratchpad / sessionSearch / sessionGuidance). The remaining 5 sections all hit the same architectural wall — they have async work or filesystem reads that the current `mapPromptContextToHbs` (sync) cannot host:
+
+| Section | Why it blocks |
+|---|---|
+| `environment` (157 lines) | Async `fs.access(.git)` for git-repo detection; date/time formatting with `Intl.DateTimeFormat`; 50+-branch `getMarketingNameForModel` lookup; OS-info via `os` module |
+| `memorySection` (74 lines) | `fs.readFileSync` on `~/.duya/memory/summary.md` with 12k-char truncation and a `_not yet generated_` fallback |
+| `recentSessionsSection` (59 lines) | Async directory loader (`loadRecentSessionDirectory`); JSON entry serialization with date formatting |
+| `skillsMetadata` (204 lines) | Tier-selection algorithm (`pickCatalogTier` against 3 budgets × N skills); XML escape + system-skill grouping; optional `### Skill roots` table |
+| `agentsMdSection` | Originally listed in 1d-rest inventory but is actually a `preBuildHook` side-effect (`initializeAgentsMd`), not a prompt section. **Drop from 1d-rest inventory** — 1d-rest reduces to 8 sections, not 9. |
+
+**Required redesign before 1d-rest 5-9/9 can land**: the PromptSystem contract assumes `renderSectionCompute` is sync. Migrating these sections requires either (a) making `buildSystemPrompt` async-aware so `mapPromptContextToHbs` can `await fs.readFile` / `loadRecentSessionDirectory`, or (b) extracting the I/O into a pre-build hook that runs before `buildSystemPrompt` (analogous to `initializeAgentsMd`) and pre-populates a side-channel that `mapPromptContextToHbs` reads. Option (b) is the lower-risk shape: it preserves the sync render path, matches the existing `preBuildHook` precedent, and keeps byte-level parity tests honest (the I/O can be stubbed in tests just like the agentsmd pre-build hook is stubbed in `omitAgentsMdPreBuildHook.test.ts`).
+
+**Next session entry points (session 7+)**:
+
+- **改造 2e TurnLoop event dispatcher**: 700-1100 lines of `streamChat` between the LLM stream subscription and the final SSE yield. Plan to extract into a `TurnEventDispatcher` that the `streamChat` body wires in front of `TurnStreamRunner` (see `2e TurnLoop first slice` in `b17384b2` for the consumer seam).
+- **改造 3c/3d**: route `StreamingToolExecutor.runBatch` through `DependencyGraphOrchestrator.planExecution`; add 4 e2e batch tests (all-read / read+write independent / write+write same path / write+write different paths).
+- **1d-rest 5-9/9 (after redesign)**: pick the easiest of the 4 blockers and prove out option (b) above with a thin pre-build hook that pre-populates one or two mapper slots. The shape that works for environment's git detection is the same shape that works for everything else.
+- **1d delete pass**: sweep all 8 legacy `.ts` files (1d-rest inventory after dropping `agentsMdSection` is 8) plus the `general/sections/*.ts` tree in one atomic commit. Single byte-level parity regression test must remain passing before the sweep.
 - `packages/agent/src/agent/DuyaAgent.ts` — duya 4473 行主类(将拆层)
