@@ -21,19 +21,6 @@ import { createMemoryPreBuildHook } from '../sections/dynamic/memoryPreBuildHook
 import { createEnvironmentPreBuildHook } from '../sections/dynamic/environmentPreBuildHook.js'
 import { createRecentSessionsPreBuildHook } from '../sections/dynamic/recentSessionsPreBuildHook.js'
 
-// Dynamic sections — shared across most profiles via the sections/dynamic/ tree.
-// 1d-rest inventory: the eight sections whose `compute:` references are listed
-// below render exclusively through their `.hbs` template (see Plan 550 1d-rest);
-// the legacy TS functions live on as parity-test references only. Sections
-// outside the 1d-rest inventory (language / outputStyle / platform / mcp /
-// visionGuidelines) keep their `compute:` field so the static-template path
-// can still fall back when a `.hbs` is missing.
-import { getLanguageSection } from '../sections/dynamic/language.js'
-import { getOutputStyleSection } from '../sections/dynamic/outputStyle.js'
-import { getPlatformSection } from '../sections/dynamic/platform.js'
-import { getMcpInstructionsSection } from '../sections/dynamic/mcpInstructions.js'
-import { getVisionGuidelinesSection } from '../sections/dynamic/visionGuidelines.js'
-
 export const generalConfig: PromptSystemConfig = {
   name: 'general',
   // Plan 551: the static half is an assembly list over the shared module
@@ -54,12 +41,12 @@ export const generalConfig: PromptSystemConfig = {
   ],
   dynamicSections: [
     // Global preferences
-    { name: 'language', compute: getLanguageSection, template: 'dynamic/language.hbs', description: 'Language preference' },
-    { name: 'outputStyle', compute: getOutputStyleSection, template: 'dynamic/output-style.hbs', description: 'Custom output style' },
+    { name: 'language', template: 'dynamic/language.hbs', description: 'Language preference' },
+    { name: 'outputStyle', template: 'dynamic/output-style.hbs', description: 'Custom output style' },
     // Environment state
-    { name: 'platform', compute: getPlatformSection, template: 'dynamic/platform.hbs', description: 'Communication platform-specific guidance' },
+    { name: 'platform', template: 'dynamic/platform.hbs', description: 'Communication platform-specific guidance' },
     { name: 'environment', template: 'dynamic/environment.hbs', description: 'Current directory state' },
-    { name: 'mcp', compute: getMcpInstructionsSection, template: 'dynamic/mcp-instructions.hbs', description: 'MCP servers can change' },
+    { name: 'mcp', template: 'dynamic/mcp-instructions.hbs', description: 'MCP servers can change' },
     { name: 'skills', template: 'dynamic/skills-metadata.hbs', description: 'Skills can be loaded/unloaded' },
     { name: 'scratchpad', template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },
     { name: 'memory', template: 'dynamic/memory.hbs', description: 'Persistent memory projection files may have been updated since last turn' },
@@ -67,7 +54,7 @@ export const generalConfig: PromptSystemConfig = {
     { name: 'recentSessions', template: 'dynamic/recent-sessions.hbs', description: 'Recent session metadata can change between turns' },
     // Task-level constraints
     { name: 'sessionGuidance', template: 'dynamic/session-guidance.hbs', description: 'Session-specific guidance' },
-    { name: 'visionGuidelines', compute: getVisionGuidelinesSection, template: 'dynamic/vision-guidelines.hbs', description: 'Vision tool guidelines' },
+    { name: 'visionGuidelines', template: 'dynamic/vision-guidelines.hbs', description: 'Vision tool guidelines' },
     { name: 'visualVerification', template: 'dynamic/visual-verification.hbs', description: 'Visual tasks require rendered-output verification' },
   ],
   preBuildHook: async (ctx) => {

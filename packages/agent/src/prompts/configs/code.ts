@@ -19,11 +19,6 @@ import { createEnvironmentPreBuildHook } from '../sections/dynamic/environmentPr
 import { createRecentSessionsPreBuildHook } from '../sections/dynamic/recentSessionsPreBuildHook.js'
 
 // Dynamic sections
-import { getPlatformSection } from '../sections/dynamic/platform.js'
-import { getMcpInstructionsSection } from '../sections/dynamic/mcpInstructions.js'
-import { getLanguageSection } from '../sections/dynamic/language.js'
-import { getOutputStyleSection } from '../sections/dynamic/outputStyle.js'
-
 export const codeConfig: PromptSystemConfig = {
   name: 'code',
   staticModules: [
@@ -47,13 +42,13 @@ export const codeConfig: PromptSystemConfig = {
     { module: 'projectInstructions', name: 'projectInstructions' },
   ],
   dynamicSections: [
-    { name: 'platform', compute: getPlatformSection, description: 'Communication platform-specific guidance' },
+    { name: 'platform', template: 'dynamic/platform.hbs', description: 'Communication platform-specific guidance' },
     { name: 'environment', template: 'dynamic/environment.hbs', description: 'Current directory state' },
-    { name: 'mcp', compute: getMcpInstructionsSection, description: 'MCP servers can change' },
+    { name: 'mcp', template: 'dynamic/mcp-instructions.hbs', description: 'MCP servers can change' },
     { name: 'sessionGuidance', template: 'dynamic/session-guidance.hbs', description: 'Session-specific guidance' },
     { name: 'skills', template: 'dynamic/skills-metadata.hbs', description: 'Skills can be loaded/unloaded' },
-    { name: 'language', compute: getLanguageSection, description: 'Language preference' },
-    { name: 'outputStyle', compute: getOutputStyleSection, description: 'Custom output style' },
+    { name: 'language', template: 'dynamic/language.hbs', description: 'Language preference' },
+    { name: 'outputStyle', template: 'dynamic/output-style.hbs', description: 'Custom output style' },
     { name: 'scratchpad', template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },
     { name: 'memory', template: 'dynamic/memory.hbs', description: 'Persistent memory projection files may have been updated since last turn' },
     { name: 'sessionSearch', template: 'dynamic/session-search.hbs', description: 'Past-session decisions may be relevant to the current task' },
