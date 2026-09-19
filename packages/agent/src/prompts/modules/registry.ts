@@ -28,6 +28,10 @@
 
 import type { PromptContext } from '../types.js'
 import { mapProjectInstructionSlots } from './mappers/project.js'
+import { mapIdentityCodingSlots } from './mappers/identityCoding.js'
+import { mapSystemCodingSlots } from './mappers/systemCoding.js'
+import { mapRulesSlots } from './mappers/rules.js'
+import { mapDuyaDesktopContextCodeSlots } from './mappers/duyaDesktopContextCode.js'
 
 export interface PromptModuleDef {
   /** Asset path relative to the prompts assets root. */
@@ -107,6 +111,34 @@ export const MODULES = {
     path: 'modules/project.hbs',
     description: 'Composite: continuity + AGENTS.md index (gateway assembly)',
     slots: mapProjectInstructionSlots,
+  },
+  identityCoding: {
+    path: 'modules/identity-coding.hbs',
+    description: 'Code-profile identity paragraph with inline output-style clause',
+    slots: mapIdentityCodingSlots,
+  },
+  systemCoding: {
+    path: 'modules/system-coding.hbs',
+    description: 'Code-profile operating rules with capability bullets (regex pass)',
+    slots: mapSystemCodingSlots,
+  },
+  personality: {
+    path: 'modules/personality.hbs',
+    description: 'Code-profile voice and rhythm (gated by keepCodingInstructions)',
+  },
+  workingWithTheUser: {
+    path: 'modules/working-with-the-user.hbs',
+    description: 'Code-profile multi-channel output and final-answer contract',
+  },
+  rules: {
+    path: 'modules/rules.hbs',
+    description: 'Code-profile operating rules (todo-tool and search-tool aware)',
+    slots: mapRulesSlots,
+  },
+  duyaDesktopContextCode: {
+    path: 'modules/duya-desktop-context-code.hbs',
+    description: 'Code-profile desktop context (legacy hard-wrapped wording)',
+    slots: mapDuyaDesktopContextCodeSlots,
   },
 } as const satisfies Record<string, PromptModuleDef>
 

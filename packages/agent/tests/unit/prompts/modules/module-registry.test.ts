@@ -98,24 +98,25 @@ describe('prompt module registry', () => {
     system = new HbsPromptSystem({ assetsRoot: ASSETS_ROOT });
   });
 
-  it('exposes one entry per authored module with a loadable asset path', () => {
-    expect(Object.keys(MODULES).sort()).toEqual(
-      [
-        'communication',
-        'configProtection',
-        'destructiveActions',
-        'duyaDesktopContext',
-        'finalAnswer',
-        'identity',
-        'project',
-        'projectContinuity',
-        'projectInstructions',
-        'skillUsage',
-        'system',
-        'tasks',
-        'tools',
-      ].sort(),
-    );
+  it('exposes the core general module set, and every entry loads', () => {
+    // The general assembly depends on these ten; the registry may hold
+    // additional profile-specific modules (identityCoding, rules, …).
+    const core = [
+      'communication',
+      'configProtection',
+      'destructiveActions',
+      'duyaDesktopContext',
+      'finalAnswer',
+      'identity',
+      'skillUsage',
+      'system',
+      'tasks',
+      'tools',
+    ];
+    const keys = Object.keys(MODULES);
+    for (const name of core) {
+      expect(keys, name).toContain(name);
+    }
     for (const [name, def] of Object.entries(MODULES)) {
       expect(def.path, name).toMatch(/^modules\/[a-z-]+\.hbs$/);
       // loadHbsAssetSync throws when the asset is missing — this asserts

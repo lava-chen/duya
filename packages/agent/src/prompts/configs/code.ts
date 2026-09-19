@@ -1,11 +1,15 @@
 /**
  * Code PromptSystem config.
  *
- * Replaces the previous CodePromptSystem subclass (~263 lines).
+ * Plan 551: the static half is a declarative assembly list over the shared
+ * module registry (`assets/modules/*.hbs`). The code profile's identity /
+ * system / desktop-context modules carry the profile's own wording, so
+ * they are separate registry entries from their general-profile cousins;
+ * section names stay stable for profile gating and cache invalidation.
  *
  * keepCodingInstructions logic: when outputStyleConfig is set and doesn't
  * explicitly request keeping coding instructions, the 'personality' section
- * is omitted. Implemented via a conditional section entry.
+ * is omitted. Implemented via the module ref's `enabledWhen` gate.
  */
 
 import type { PromptSystemConfig } from '../PromptSystem.js'
@@ -13,17 +17,6 @@ import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
 import { createMemoryPreBuildHook } from '../sections/dynamic/memoryPreBuildHook.js'
 import { createEnvironmentPreBuildHook } from '../sections/dynamic/environmentPreBuildHook.js'
 import { createRecentSessionsPreBuildHook } from '../sections/dynamic/recentSessionsPreBuildHook.js'
-
-// Code-specific static sections
-import { getIdentitySection } from '../code/sections/identity.js'
-import { getSystemSection } from '../code/sections/system.js'
-import { getPersonalitySection } from '../code/sections/personality.js'
-import { getWorkingWithTheUserSection } from '../code/sections/workingWithTheUser.js'
-import { getRulesSection } from '../code/sections/rules.js'
-import { getProjectContinuitySection } from '../sections/projectContinuity.js'
-import { getDuyaDesktopContextSection } from '../sections/duyaDesktopContext.js'
-import { getProjectInstructionsSection } from '../general/sections/project.js'
-import { getConfigProtectionSection } from '../general/sections/configProtection.js'
 
 // Dynamic sections
 import { getPlatformSection } from '../sections/dynamic/platform.js'
@@ -33,27 +26,27 @@ import { getOutputStyleSection } from '../sections/dynamic/outputStyle.js'
 
 export const codeConfig: PromptSystemConfig = {
   name: 'code',
-  staticSections: [
-    { name: 'identity', compute: getIdentitySection },
-    { name: 'system', compute: getSystemSection },
-    { name: 'duyaDesktopContext', compute: getDuyaDesktopContextSection },
-    { name: 'projectContinuity', compute: getProjectContinuitySection },
+  staticModules: [
+    { module: 'identityCoding', name: 'identity' },
+    { module: 'systemCoding', name: 'system' },
+    { module: 'duyaDesktopContextCode', name: 'duyaDesktopContext' },
+    { module: 'projectContinuity', name: 'projectContinuity' },
     // keepCodingInstructions: omit personality when an output style is active
     // and the style doesn't explicitly request keeping coding instructions.
     {
+      module: 'personality',
       name: 'personality',
-      compute: (ctx) => {
-        const keepCodingInstructions = ctx.outputStyleConfig == null
+      enabledWhen: (ctx) =>
+        ctx.outputStyleConfig == null
           ? true
-          : ctx.outputStyleConfig.keepCodingInstructions === true
-        return keepCodingInstructions ? getPersonalitySection(ctx) : null
-      },
+          : ctx.outputStyleConfig.keepCodingInstructions === true,
     },
-    { name: 'workingWithTheUser', compute: getWorkingWithTheUserSection },
-    { name: 'rules', compute: getRulesSection },
-    { name: 'configProtection', compute: getConfigProtectionSection },
-    { name: 'projectInstructions', compute: getProjectInstructionsSection },
+    { module: 'workingWithTheUser', name: 'workingWithTheUser' },
+    { module: 'rules', name: 'rules' },
+    { module: 'configProtection', name: 'configProtection' },
+    { module: 'projectInstructions', name: 'projectInstructions' },
   ],
+  staticSections: [],
   dynamicSections: [
     { name: 'platform', compute: getPlatformSection, description: 'Communication platform-specific guidance' },
     { name: 'environment', template: 'dynamic/environment.hbs', description: 'Current directory state' },
