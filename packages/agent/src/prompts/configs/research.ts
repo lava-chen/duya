@@ -15,8 +15,6 @@ import type { PromptSystemConfig } from '../PromptSystem.js'
 import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
 import { createRecentSessionsPreBuildHook } from '../sections/dynamic/recentSessionsPreBuildHook.js'
 import { getProjectContinuitySection } from '../sections/projectContinuity.js'
-import { getVisualVerificationSection } from '../sections/dynamic/visualVerification.js'
-import { getRecentSessionsSection } from '../sections/dynamic/recentSessionsSection.js'
 import { getProjectInstructionsSection } from '../general/sections/project.js'
 import { getConfigProtectionSection } from '../general/sections/configProtection.js'
 
@@ -52,13 +50,11 @@ export const researchConfig: PromptSystemConfig = {
     },
     {
       name: 'visualVerification',
-      compute: getVisualVerificationSection,
       template: 'dynamic/visual-verification.hbs',
       description: 'Visual tasks require rendered-output verification',
     },
     {
       name: 'recentSessions',
-      compute: getRecentSessionsSection,
       template: 'dynamic/recent-sessions.hbs',
       description: 'Recent session metadata can change between turns',
     },

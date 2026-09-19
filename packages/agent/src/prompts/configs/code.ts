@@ -22,22 +22,14 @@ import { getWorkingWithTheUserSection } from '../code/sections/workingWithTheUse
 import { getRulesSection } from '../code/sections/rules.js'
 import { getProjectContinuitySection } from '../sections/projectContinuity.js'
 import { getDuyaDesktopContextSection } from '../sections/duyaDesktopContext.js'
-import { getMemorySection } from '../sections/dynamic/memorySection.js'
 import { getProjectInstructionsSection } from '../general/sections/project.js'
 import { getConfigProtectionSection } from '../general/sections/configProtection.js'
 
 // Dynamic sections
 import { getPlatformSection } from '../sections/dynamic/platform.js'
-import { getEnvironmentSection } from '../sections/dynamic/environment.js'
 import { getMcpInstructionsSection } from '../sections/dynamic/mcpInstructions.js'
-import { getSessionGuidanceSection } from '../sections/dynamic/sessionGuidance.js'
-import { getSkillsMetadataSection } from '../sections/dynamic/skillsMetadata.js'
 import { getLanguageSection } from '../sections/dynamic/language.js'
 import { getOutputStyleSection } from '../sections/dynamic/outputStyle.js'
-import { getScratchpadSection } from '../sections/dynamic/scratchpad.js'
-import { getSessionSearchSection } from '../sections/dynamic/sessionSearchSection.js'
-import { getRecentSessionsSection } from '../sections/dynamic/recentSessionsSection.js'
-import { getVisualVerificationSection } from '../sections/dynamic/visualVerification.js'
 
 export const codeConfig: PromptSystemConfig = {
   name: 'code',
@@ -64,17 +56,17 @@ export const codeConfig: PromptSystemConfig = {
   ],
   dynamicSections: [
     { name: 'platform', compute: getPlatformSection, description: 'Communication platform-specific guidance' },
-    { name: 'environment', compute: getEnvironmentSection, template: 'dynamic/environment.hbs', description: 'Current directory state' },
+    { name: 'environment', template: 'dynamic/environment.hbs', description: 'Current directory state' },
     { name: 'mcp', compute: getMcpInstructionsSection, description: 'MCP servers can change' },
-    { name: 'sessionGuidance', compute: getSessionGuidanceSection, template: 'dynamic/session-guidance.hbs', description: 'Session-specific guidance' },
-    { name: 'skills', compute: getSkillsMetadataSection, template: 'dynamic/skills-metadata.hbs', description: 'Skills can be loaded/unloaded' },
+    { name: 'sessionGuidance', template: 'dynamic/session-guidance.hbs', description: 'Session-specific guidance' },
+    { name: 'skills', template: 'dynamic/skills-metadata.hbs', description: 'Skills can be loaded/unloaded' },
     { name: 'language', compute: getLanguageSection, description: 'Language preference' },
     { name: 'outputStyle', compute: getOutputStyleSection, description: 'Custom output style' },
-    { name: 'scratchpad', compute: getScratchpadSection, template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },
-    { name: 'memory', compute: getMemorySection, template: 'dynamic/memory.hbs', description: 'Persistent memory projection files may have been updated since last turn' },
-    { name: 'sessionSearch', compute: getSessionSearchSection, template: 'dynamic/session-search.hbs', description: 'Past-session decisions may be relevant to the current task' },
-    { name: 'recentSessions', compute: getRecentSessionsSection, template: 'dynamic/recent-sessions.hbs', description: 'Recent session metadata can change between turns' },
-    { name: 'visualVerification', compute: getVisualVerificationSection, template: 'dynamic/visual-verification.hbs', description: 'Visual tasks require rendered-output verification' },
+    { name: 'scratchpad', template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },
+    { name: 'memory', template: 'dynamic/memory.hbs', description: 'Persistent memory projection files may have been updated since last turn' },
+    { name: 'sessionSearch', template: 'dynamic/session-search.hbs', description: 'Past-session decisions may be relevant to the current task' },
+    { name: 'recentSessions', template: 'dynamic/recent-sessions.hbs', description: 'Recent session metadata can change between turns' },
+    { name: 'visualVerification', template: 'dynamic/visual-verification.hbs', description: 'Visual tasks require rendered-output verification' },
   ],
   preBuildHook: async (ctx) => {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.

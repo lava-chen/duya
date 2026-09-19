@@ -34,11 +34,7 @@ import { createEnvironmentPreBuildHook } from '../sections/dynamic/environmentPr
 import { getLanguageSection } from '../sections/dynamic/language.js'
 import { getOutputStyleSection } from '../sections/dynamic/outputStyle.js'
 import { getPlatformSection } from '../sections/dynamic/platform.js'
-import { getEnvironmentSection } from '../sections/dynamic/environment.js'
 import { getMcpInstructionsSection } from '../sections/dynamic/mcpInstructions.js'
-import { getSkillsMetadataSection } from '../sections/dynamic/skillsMetadata.js'
-import { getScratchpadSection } from '../sections/dynamic/scratchpad.js'
-import { getSessionGuidanceSection } from '../sections/dynamic/sessionGuidance.js'
 
 export const botConfig: PromptSystemConfig = {
   name: 'bot',
@@ -49,12 +45,12 @@ export const botConfig: PromptSystemConfig = {
     { name: 'outputStyle', compute: getOutputStyleSection, description: 'Custom output style' },
     // Environment state
     { name: 'platform', compute: getPlatformSection, description: 'Communication platform-specific guidance' },
-    { name: 'environment', compute: getEnvironmentSection, template: 'dynamic/environment.hbs', description: 'Current directory state' },
+    { name: 'environment', template: 'dynamic/environment.hbs', description: 'Current directory state' },
     { name: 'mcp', compute: getMcpInstructionsSection, description: 'MCP servers can change' },
-    { name: 'skills', compute: getSkillsMetadataSection, template: 'dynamic/skills-metadata.hbs', description: 'Skills can be loaded/unloaded' },
-    { name: 'scratchpad', compute: getScratchpadSection, template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },
+    { name: 'skills', template: 'dynamic/skills-metadata.hbs', description: 'Skills can be loaded/unloaded' },
+    { name: 'scratchpad', template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },
     // Task-level constraints
-    { name: 'sessionGuidance', compute: getSessionGuidanceSection, template: 'dynamic/session-guidance.hbs', description: 'Session-specific guidance' },
+    { name: 'sessionGuidance', template: 'dynamic/session-guidance.hbs', description: 'Session-specific guidance' },
   ],
   preBuildHook: async (ctx) => {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.

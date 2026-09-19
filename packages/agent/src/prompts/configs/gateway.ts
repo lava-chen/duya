@@ -33,16 +33,8 @@ import { getProjectSection } from '../general/sections/project.js'
 import { getLanguageSection } from '../sections/dynamic/language.js'
 import { getOutputStyleSection } from '../sections/dynamic/outputStyle.js'
 import { getPlatformSection } from '../sections/dynamic/platform.js'
-import { getEnvironmentSection } from '../sections/dynamic/environment.js'
 import { getMcpInstructionsSection } from '../sections/dynamic/mcpInstructions.js'
-import { getSkillsMetadataSection } from '../sections/dynamic/skillsMetadata.js'
-import { getScratchpadSection } from '../sections/dynamic/scratchpad.js'
-import { getMemorySection } from '../sections/dynamic/memorySection.js'
-import { getSessionSearchSection } from '../sections/dynamic/sessionSearchSection.js'
-import { getRecentSessionsSection } from '../sections/dynamic/recentSessionsSection.js'
-import { getSessionGuidanceSection } from '../sections/dynamic/sessionGuidance.js'
 import { getVisionGuidelinesSection } from '../sections/dynamic/visionGuidelines.js'
-import { getVisualVerificationSection } from '../sections/dynamic/visualVerification.js'
 
 export const gatewayConfig: PromptSystemConfig = {
   name: 'gateway',
@@ -69,17 +61,17 @@ export const gatewayConfig: PromptSystemConfig = {
     { name: 'outputStyle', compute: getOutputStyleSection, description: 'Custom output style' },
     // Environment state
     { name: 'platform', compute: getPlatformSection, description: 'Communication platform-specific guidance' },
-    { name: 'environment', compute: getEnvironmentSection, template: 'dynamic/environment.hbs', description: 'Current directory state' },
+    { name: 'environment', template: 'dynamic/environment.hbs', description: 'Current directory state' },
     { name: 'mcp', compute: getMcpInstructionsSection, description: 'MCP servers can change' },
-    { name: 'skills', compute: getSkillsMetadataSection, template: 'dynamic/skills-metadata.hbs', description: 'Skills can be loaded/unloaded' },
-    { name: 'scratchpad', compute: getScratchpadSection, template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },
-    { name: 'memory', compute: getMemorySection, template: 'dynamic/memory.hbs', description: 'Persistent memory projection files may have been updated since last turn' },
-    { name: 'sessionSearch', compute: getSessionSearchSection, template: 'dynamic/session-search.hbs', description: 'Past-session decisions may be relevant to the current task' },
-    { name: 'recentSessions', compute: getRecentSessionsSection, template: 'dynamic/recent-sessions.hbs', description: 'Recent session metadata can change between turns' },
+    { name: 'skills', template: 'dynamic/skills-metadata.hbs', description: 'Skills can be loaded/unloaded' },
+    { name: 'scratchpad', template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },
+    { name: 'memory', template: 'dynamic/memory.hbs', description: 'Persistent memory projection files may have been updated since last turn' },
+    { name: 'sessionSearch', template: 'dynamic/session-search.hbs', description: 'Past-session decisions may be relevant to the current task' },
+    { name: 'recentSessions', template: 'dynamic/recent-sessions.hbs', description: 'Recent session metadata can change between turns' },
     // Task-level constraints
-    { name: 'sessionGuidance', compute: getSessionGuidanceSection, template: 'dynamic/session-guidance.hbs', description: 'Session-specific guidance' },
+    { name: 'sessionGuidance', template: 'dynamic/session-guidance.hbs', description: 'Session-specific guidance' },
     { name: 'visionGuidelines', compute: getVisionGuidelinesSection, description: 'Vision tool guidelines' },
-    { name: 'visualVerification', compute: getVisualVerificationSection, template: 'dynamic/visual-verification.hbs', description: 'Visual tasks require rendered-output verification' },
+    { name: 'visualVerification', template: 'dynamic/visual-verification.hbs', description: 'Visual tasks require rendered-output verification' },
   ],
   preBuildHook: async (ctx) => {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.

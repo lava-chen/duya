@@ -69,6 +69,14 @@ async function renderSectionCompute(
     const out = hbsSystem.renderStaticTemplate(def.template, context).trim()
     return out === '' ? null : out
   }
+  // Plan 550 1d-delete: `compute` is optional when `template` is set, so
+  // sections that have migrated exclusively to .hbs don't need a stub.
+  // When only `compute` is present, fall through to the legacy path.
+  if (!def.compute) {
+    throw new Error(
+      `PromptSystem section '${def.name}' has neither 'template' nor 'compute' — at least one is required.`,
+    )
+  }
   return await Promise.resolve(def.compute(context))
 }
 
@@ -78,8 +86,16 @@ async function renderSectionCompute(
 export interface SectionDef {
   /** Unique section name within this PromptSystem. */
   name: string
-  /** Compute the section content. Return null to omit. */
-  compute: (context: PromptContext) => string | null | Promise<string | null>
+  /**
+   * Compute the section content. Return null to omit.
+   *
+   * Plan 550 1d-delete: optional when `template` is set — a section can
+   * render exclusively through its `.hbs` template without keeping the
+   * legacy TS function around. When both are present, the template path
+   * takes priority (see `renderSectionCompute` below) so `compute` is
+   * only used as a fallback when the `.hbs` is missing.
+   */
+  compute?: (context: PromptContext) => string | null | Promise<string | null>
   /**
    * Optional: when set, render the section via the HbsPromptSystem instead
    * of calling `compute`. Plan 550 1c uses this to migrate individual
