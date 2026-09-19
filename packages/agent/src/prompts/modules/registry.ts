@@ -33,6 +33,7 @@ import { mapSystemCodingSlots } from './mappers/systemCoding.js'
 import { mapRulesSlots } from './mappers/rules.js'
 import { mapDuyaDesktopContextCodeSlots } from './mappers/duyaDesktopContextCode.js'
 import { mapGatewayIntroSlots } from './mappers/gatewayIntro.js'
+import { mapResearchProfileSlots } from './mappers/researchProfile.js'
 
 export interface PromptModuleDef {
   /** Asset path relative to the prompts assets root. */
@@ -153,6 +154,23 @@ export const MODULES = {
   toneAndStyle: {
     path: 'modules/tone-and-style.hbs',
     description: 'Tone and style; gateway adds the never-analysis paragraph via params',
+  },
+  researchProfile: {
+    path: 'modules/research-profile.hbs',
+    description: 'Research agent identity and evidence discipline (language-aware)',
+    slots: mapResearchProfileSlots,
+  },
+  taskIntent: {
+    path: 'modules/task-intent.hbs',
+    description: 'Research task-intent routing policy',
+  },
+  evidencePolicy: {
+    path: 'modules/evidence-policy.hbs',
+    description: 'Research evidence policy and fabrication ban',
+  },
+  memoryWriteProposal: {
+    path: 'modules/memory-write-proposal.hbs',
+    description: 'Research memory write policy (hypothesis auto-update procedure)',
   },
 } as const satisfies Record<string, PromptModuleDef>
 

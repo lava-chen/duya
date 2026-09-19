@@ -1,46 +1,40 @@
 /**
  * Research PromptSystem config.
  *
- * Replaces the previous ResearchPromptSystem subclass (~146 lines).
+ * Plan 551: the static half is a declarative assembly list over the shared
+ * module registry. Research-specific modules (researchProfile / taskIntent /
+ * evidencePolicy / memoryWriteProposal) use `bypassProfile: true` because
+ * they exist outside the generic section registry and must always render.
+ * The shared toneAndStyle module renders without the gateway-only
+ * never-analysis param.
  *
- * Research-specific sections (researchProfile / taskIntent / literaturePluginToolPolicy /
- * evidencePolicy / memoryWriteProposal) use `bypassProfile: true` because they
- * exist outside the generic section registry and must always render.
- *
- * The `outputFormat` section depends on `resolveResearchIntent(context)` —
- * the compute function calls it inline (cheap: just a context field fallback).
+ * The `outputFormat` dynamic section depends on `resolveResearchIntent(context)`
+ * — the compute function calls it inline (cheap: just a context field fallback).
  */
 
 import type { PromptSystemConfig } from '../PromptSystem.js'
 import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
 import { createRecentSessionsPreBuildHook } from '../sections/dynamic/recentSessionsPreBuildHook.js'
-import { getProjectContinuitySection } from '../sections/projectContinuity.js'
-import { getProjectInstructionsSection } from '../general/sections/project.js'
-import { getConfigProtectionSection } from '../general/sections/configProtection.js'
 
-// Research-specific sections
+// Research-specific dynamic sections
 import { resolveResearchIntent } from '../research/intentRouter.js'
-import { getResearchProfileSection } from '../research/sections/profile.js'
-import { getTaskIntentPromptSection } from '../research/sections/taskIntent.js'
-import { getEvidencePolicyPromptSection } from '../research/sections/evidencePolicy.js'
 import { getOutputFormatPromptSection } from '../research/sections/outputFormat.js'
-import { getMemoryWriteProposalPromptSection } from '../research/sections/memoryWriteProposal.js'
-import { getToneAndStylePromptSection } from '../research/sections/toneAndStyle.js'
 
 export const researchConfig: PromptSystemConfig = {
   name: 'research',
-  staticSections: [
-    { name: 'projectContinuity', compute: getProjectContinuitySection },
-    { name: 'projectInstructions', compute: getProjectInstructionsSection },
-    { name: 'configProtection', compute: getConfigProtectionSection },
-    // Research-specific sections — bypass profile gating (always render).
-    { name: 'researchProfile', compute: getResearchProfileSection, bypassProfile: true },
-    { name: 'taskIntent', compute: getTaskIntentPromptSection, bypassProfile: true },
-    { name: 'evidencePolicy', compute: getEvidencePolicyPromptSection, bypassProfile: true },
-    { name: 'memoryWriteProposal', compute: getMemoryWriteProposalPromptSection, bypassProfile: true },
+  staticModules: [
+    { module: 'projectContinuity', name: 'projectContinuity' },
+    { module: 'projectInstructions', name: 'projectInstructions' },
+    { module: 'configProtection', name: 'configProtection' },
+    // Research-specific modules — bypass profile gating (always render).
+    { module: 'researchProfile', name: 'researchProfile', bypassProfile: true },
+    { module: 'taskIntent', name: 'taskIntent', bypassProfile: true },
+    { module: 'evidencePolicy', name: 'evidencePolicy', bypassProfile: true },
+    { module: 'memoryWriteProposal', name: 'memoryWriteProposal', bypassProfile: true },
     // toneAndStyle IS a generic section name; respect the profile gate.
-    { name: 'toneAndStyle', compute: getToneAndStylePromptSection },
+    { module: 'toneAndStyle', name: 'toneAndStyle' },
   ],
+  staticSections: [],
   dynamicSections: [
     {
       name: 'outputFormat',
