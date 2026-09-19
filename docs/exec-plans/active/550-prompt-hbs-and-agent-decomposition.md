@@ -272,8 +272,30 @@ following are session-6+ targets, in priority order:
 3. **3d end-to-end coverage** — exercise 3c with LLM-emitted
    batches (all-read, read+write independent paths, write+write
    same path, write+write different paths).
-4. **1d-rest** — independent PR. 8 dynamic sections + gateway /
-   code / research configs + delete `general/sections/*.ts`.
+4. **1d-rest** — independent PR. 9 dynamic sections (vs the 8 the
+   plan estimated; new count: agentsMdSection, environment,
+   memorySection, recentSessionsSection, scratchpad,
+   sessionGuidance, sessionSearchSection, skillsMetadata,
+   visualVerification — 5 already migrated to .hbs as
+   `assets/dynamic/{language,mcp-instructions,output-style,platform,vision-guidelines}.hbs`)
+   + gateway / code / research configs + delete `general/sections/dynamic/*.ts`.
+
+**session-5+ final commit list (PR #59 头 `5b7ed4c5`)**:
+
+```
+a5590d71  refactor(agent): wire DependencyGraphOrchestrator into ToolExecutionPipeline (Plan 550 2b-internals)
+b20f90bb  refactor(agent): extract DeadLoopTracker from streamChat (Plan 550 2e TurnPreparer)
+1a57e4b0  refactor(agent): extract SessionFinalizer (success + abort) from streamChat (Plan 550 2e StreamFinalizer)
+7d9bd06b  refactor(agent): extract SessionFinalizer.finalizeStreamError (Plan 550 2e StreamFinalizer error path)
+51aba8c8  docs(plan): reflect session 5 progress (Plan 550)
+5d9a4108  docs(plan): reflect session 4 final — 2b facade landed, 2e next (Plan 550)
+b17384b2  refactor(agent): extract TurnStreamRunner from streamChat (Plan 550 2e TurnLoop first slice)
+7b1ad271  docs(plan): reflect session-5+ TurnStreamRunner (Plan 550 2e TurnLoop first slice)
+70a65c05  docs(plan): record pre-existing Plan 486 test failures (NOT Plan 550 regressions)
+2e37a37c  fix(agent): revert SessionFinalizer.persistableMessages to canonical helper (Plan 550 2e)
+fc7aeb48  docs(plan): record StreamFinalizer.persistableMessages fixup commit (Plan 550)
+5b7ed4c5  docs(plan): session-5+ closeout metrics + 1 bug fixup record (Plan 550)
+```
 
 **Session 5+ close-out metrics**:
 
