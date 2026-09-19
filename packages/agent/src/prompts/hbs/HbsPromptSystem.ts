@@ -114,6 +114,7 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
   // `{{#if}}` block to skip its body, matching the legacy
   // `return null` short-circuit in getScratchpadSection.
   const scratchpadDir = ctx.scratchpadDir ?? '';
+  const hasSessionSearchTool = ctx.enabledTools.has(TOOL_NAMES.SESSION_SEARCH);
 
   return {
     ctx,
@@ -145,6 +146,7 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
     has_vision_tool: hasVisionTool,
     vision_tool_name: TOOL_NAMES.VISION,
     scratchpad_dir: scratchpadDir,
+    has_session_search_tool: hasSessionSearchTool,
     TOOL_NAMES,
   };
 }

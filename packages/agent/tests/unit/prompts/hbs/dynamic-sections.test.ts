@@ -23,6 +23,7 @@ import { getMcpInstructionsSection } from '../../../../src/prompts/sections/dyna
 import { getVisionGuidelinesSection } from '../../../../src/prompts/sections/dynamic/visionGuidelines.js';
 import { getVisualVerificationSection } from '../../../../src/prompts/sections/dynamic/visualVerification.js';
 import { getScratchpadSection } from '../../../../src/prompts/sections/dynamic/scratchpad.js';
+import { getSessionSearchSection } from '../../../../src/prompts/sections/dynamic/sessionSearchSection.js';
 
 const ASSETS_ROOT = resolve(__dirname, '../../../../src/prompts/assets');
 
@@ -218,6 +219,26 @@ describe('dynamic sections hbs byte-level parity', () => {
       'dynamic/scratchpad.hbs',
       getScratchpadSection,
       baseContext({ scratchpadDir: undefined }),
+    );
+  });
+
+  it('session-search section matches when SessionSearch tool is enabled', async () => {
+    await parity(
+      'dynamic/session-search.hbs',
+      getSessionSearchSection,
+      baseContext({
+        enabledTools: new Set<string>(['Read', 'Edit', 'Write', 'SessionSearch']),
+      }),
+    );
+  });
+
+  it('session-search section matches when SessionSearch tool is absent', async () => {
+    await parity(
+      'dynamic/session-search.hbs',
+      getSessionSearchSection,
+      baseContext({
+        enabledTools: new Set<string>(['Read', 'Edit', 'Write']),
+      }),
     );
   });
 });

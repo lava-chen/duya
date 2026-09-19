@@ -71,7 +71,7 @@ export const gatewayConfig: PromptSystemConfig = {
     { name: 'skills', compute: getSkillsMetadataSection, description: 'Skills can be loaded/unloaded' },
     { name: 'scratchpad', compute: getScratchpadSection, template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },
     { name: 'memory', compute: getMemorySection, description: 'Persistent memory projection files may have been updated since last turn' },
-    { name: 'sessionSearch', compute: getSessionSearchSection, description: 'Past-session decisions may be relevant to the current task' },
+    { name: 'sessionSearch', compute: getSessionSearchSection, template: 'dynamic/session-search.hbs', description: 'Past-session decisions may be relevant to the current task' },
     { name: 'recentSessions', compute: getRecentSessionsSection, description: 'Recent session metadata can change between turns' },
     // Task-level constraints
     { name: 'sessionGuidance', compute: getSessionGuidanceSection, description: 'Session-specific guidance' },
