@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import { resolve } from 'node:path'
 import { PromptsRegistry } from '../../../src/prompts/registry.js'
 import { HbsPromptSystem } from '../../../src/prompts/hbs/HbsPromptSystem.js'
-import { getSessionSearchSection } from '../../../src/prompts/sections/dynamic/sessionSearchSection.js'
 import type { PromptContext } from '../../../src/prompts/types.js'
 import { composeSubagentSystemPrompt } from '../../../src/tool/SubagentTool/promptComposition.js'
 
@@ -46,10 +45,11 @@ describe('project harness prompt', () => {
   })
 
   it('only emits past-session recovery guidance when SessionSearch exists', () => {
-    expect(getSessionSearchSection(makeContext())).toBeNull()
-    const section = getSessionSearchSection(makeContext(['SessionSearch']))
-    expect(section).toContain('long-running task or handoff')
-    expect(section).toContain('not as a ritual on every task')
+    const off = hbs.renderStaticTemplate('dynamic/session-search.hbs', makeContext()).trim()
+    expect(off).toBe('')
+    const on = hbs.renderStaticTemplate('dynamic/session-search.hbs', makeContext(['SessionSearch'])).trim()
+    expect(on).toContain('long-running task or handoff')
+    expect(on).toContain('not as a ritual on every task')
   })
 
   it('composes role instructions with the shared subagent harness', () => {
