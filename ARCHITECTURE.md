@@ -265,6 +265,15 @@ Separate SQLite file (`memory-state.db`, next to `duya-main.db` in the same boot
 | gemini | Google Gemini (P2) |
 | vertex | Google Vertex (P2) |
 
+### System One Decision Client (Plan 551)
+
+决策形态 ≠ chat 形态——Jev（TypeSafe "System One" 模型）接入独立于 `providers/` chat 抽象：
+
+- `packages/ai/src/system-one/` — `DecisionClient` 接口 + `SystemOneClient`（state + 多问题单请求 → choice/score/noul typed 决策；timeout 预算 + 瞬态重试；基数 255 校验）。`DecisionClient` 是可替换后端抽象（未来：LLM structured-output / 本地 SemIf）。
+- `packages/agent/src/decisions/` — `DecisionService`（降级链 Jev → LLM fallback → 抛上层规则）、`policy.ts` 阈值策略（灰区 → `uncertain`，绝不静默猜）、`calibration.ts` (p, outcome) 校准日志、`config.ts` 读 `config.toml [system_one]`。419 权限总线预筛通道默认关闭（`prescreen.permissions`，只产建议不改语义）。
+- `packages/computer-use/src/decide/` — "LLM plans, Jev decides" 内循环：describe（代码可算摘要全进 state）→ 每轮一次 fan-out（target/value/done/error/blocked/irreversible）→ 代码门控 → act；status 契约 `done | likely_done | needs_confirmation | error | stuck | ambiguous | blocked | max_actions`。agent 侧 `computer_use_decide` 工具经既有 `computer-use:execute` IPC 驱动，审批复用主进程审批卡。
+- **零行为破坏**：无 key / 未启用时所有路径与现状一致——`computer_use_decide` 不注入，419 预筛不触发。
+
 ## @duya/agent - Agent Core
 
 ### Entry Points

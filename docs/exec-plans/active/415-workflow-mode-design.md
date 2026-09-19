@@ -4,7 +4,7 @@
 > 优先级：P1
 > 定位：**独立的后台 run 管理系统**（对齐 grok `xai-grok-shell/src/session/workflow`），
 > 经 Slash Command 启动，拥有自己的 run 级状态机，**不是 mode**。
-> 关联：对比 grok-build `xai-workflow`（命令式 Rhai）与 pi-dag（声明式 YAML）
+> 关联：**RPA 节点体系与整体设计修订 → companion plan [552](./552-workflow-rpa-agent-design.md)（评审通过后 §3.2 节点 schema 与 §8 落地步骤以 552 为准）**；对比 grok-build `xai-workflow`（命令式 Rhai）与 pi-dag（声明式 YAML）
 > 复用地基：`SubagentTool` / `BackgroundAgentLifecycle` / `AIClient` / `chat:agent_progress` SSE
 > 参考实现报告：`docs/references/grok-workflow-implementation.md`
 
@@ -275,6 +275,12 @@ packages/agent/src/modes/workflow/
 > 仅 4 态，是旧的简化版），现已修正：**复用对象是 `GoalTracker`，不是 `session_goals` 表**。
 
 ### 6.2 抽基类 `RunLifecycleTracker`（新增，从 `GoalTracker` 提炼）
+
+> **修正（2026-09-20，grok-build 官方源码核证）**：grok 的 goal_tracker 与 workflow_tracker 实为
+> **复制式平行实现**——无共享 trait/基类，仅共享 `PauseKind` 词汇枚举（`xai-workflow/lib.rs:43`），
+> 状态结构体互不引用。据此 companion plan [552](./552-workflow-rpa-agent-design.md) 已裁决：不抽
+> 强类型抽象基类，改抽**小内核**（状态枚举 + paused 族判定 + revision + history cap + elapsed 折叠 +
+> 快照消毒，共享词汇不共享结构体），goal/workflow 各自持有专属字段。以下基类骨架**降级为参考实现**。
 
 `GoalTracker` 已把"通用 run 生命周期"与"goal 专属语义"（objective/gaps/planFile/baselineCommit/
 verify rounds）耦合在一个类里。Workflow 需要同构的生命周期，但不需要 goal 专属字段。因此抽取
@@ -602,6 +608,38 @@ inactive → planning → [high_risk] awaiting_confirm → active → verifying
   重新规划），仅按需更新 Context 阶段。
 - **权限**：复用入口复用现有 Slash Command 权限模型（gateway 分组绑定）。
 - **校验**：固化 YAML 每次触发前仍过 `validate.ts` 静态校验，防文件被篡改 / 版本升级破坏 schema。
+
+### 7.2 decide 通道与工作流节点（plan 551 Phase 4 设计增补，实施归 415）
+
+> 来源：plan 551（Jev / System One 决策模型基础设施）。本节只是设计增补——415 实施时合入，
+> plan 551 不写引擎代码。基础设施已落地：`@duya/ai` `DecisionClient`（`packages/ai/src/system-one/`）、
+> `@duya/agent` `DecisionService`（`packages/agent/src/decisions/`）、
+> `@duya/computer-use` decide 通道（`packages/computer-use/src/decide/`）。
+
+**tool 节点内循环**：desktop 自动化类 tool 节点的执行体直接复用 computer-use decide 通道的
+内循环（settle → describe → 一次 fan-out → act），status 契约（`done | likely_done |
+needs_confirmation | error | stuck | ambiguous | blocked | max_actions`）映射为 tool 节点的
+成功 / 失败 / `awaiting_confirm`。规划只归 LLM，感知决策归 DecisionClient（"LLM plans, Jev decides"）。
+
+**可选 `decide` 节点原语**：在 agent / tool / noop 之外新增第四种节点：
+
+```yaml
+- id: risk_gate
+  type: decide
+  ask:                     # 每个问题一个 noul / score，引用 context 的 state
+    risky: { kind: noul, instructions: "…" }
+  policy: { done_at: 0.85, reject_at: 0.45 }   # 可配置；灰区 → uncertain
+```
+
+- `decide` 节点的答案写入 `context.decide.<node_id>`，noul/score 值可直接进 `when` 表达式求值
+  （如 `when: "decide.risk_gate.risky < 0.6"`）；灰区（uncertain）行为由 `on_uncertain` 决定
+  （`fail` / `skip` / `awaiting_confirm`）。
+- 无决策后端（未配 key）时 `decide` 节点按 `on_uncertain` 降级，Workflow 其余部分不受影响。
+
+**§7 规划器高风险判定的增强**：节点级 risk noul 预筛作为 `awaiting_confirm` 的触发依据之一——
+规划器对每个 tool 节点的动作描述跑一次 risk noul（419 预筛通道同款语义：只产出建议），
+`p ≥ irreversible_at` 的节点置 `awaiting_confirm`。现有规则标记（写文件 / 外部副作用等）
+仍是第一道，Jev 预筛是补充，不替代。
 
 ---
 
