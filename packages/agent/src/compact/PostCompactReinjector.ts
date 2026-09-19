@@ -11,6 +11,7 @@
 
 import type { Message } from '../types.js'
 import type { FileChangeRecord } from './strategies/SessionMemoryCompactStrategy.js'
+import { estimateContextTextTokens } from '@duya/ai'
 
 /**
  * File state captured from Read tool calls before compaction, so the reinjector
@@ -452,11 +453,11 @@ export class PostCompactReinjector {
   }
 
   /**
-   * Rough token count estimation
+   * Token count estimation (plan 552: shared CJK-aware estimator in @duya/ai).
+   * Reporting only — feeds `totalTokensAdded`.
    */
   private estimateTokenCount(text: string): number {
-    // Rough estimation: ~4 chars per token
-    return Math.ceil(text.length / 4)
+    return estimateContextTextTokens(text)
   }
 
   /**

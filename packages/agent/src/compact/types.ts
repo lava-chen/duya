@@ -47,7 +47,9 @@ export interface CompactionStrategy {
 // Defaults
 // ============================================================
 
-export const DEFAULT_CONTEXT_WINDOW = 200_000
+// Plan 552: single source in @duya/ai — re-exported so agent-internal
+// `./types.js` imports keep working.
+export { DEFAULT_CONTEXT_WINDOW } from '@duya/ai'
 
 // ============================================================
 // Options

@@ -25,6 +25,8 @@
 // Public types
 // ---------------------------------------------------------------------------
 
+import { estimateContextTextTokens } from '@duya/ai';
+
 export interface MessageEvent {
   message_id: string;
   role: 'user' | 'assistant' | 'tool' | 'system';
@@ -66,7 +68,6 @@ export interface CompactOpts {
 // ---------------------------------------------------------------------------
 
 export const DEFAULT_BUDGET_TOKENS = 50_000;
-const CHARS_PER_TOKEN = 3;
 const INPUT_SIGNATURE_CHARS = 200;
 const TOOL_OUTPUT_EXCERPT_CHARS = 1024;
 const ASSISTANT_CONTENT_LIMIT = 2048;
@@ -173,14 +174,14 @@ export function compactMessages(
   const survivors = indexed.filter((e) => !e.dropped);
   const lines: string[] = [];
   const indexByMessageId = new Map<string, number>();
-  let totalChars = 0;
+  let estimatedTokens = 0;
   let extractedThroughSeq: number | null = null;
 
   for (const s of survivors) {
     const lineIndex = lines.length;
     const line = s.line ?? renderLine(s, preserve.exitCodes);
     lines.push(line);
-    totalChars += line.length;
+    estimatedTokens += estimateContextTextTokens(line);
     indexByMessageId.set(s.event.message_id, lineIndex);
     const seq = s.event.seq_index;
     if (seq != null && (extractedThroughSeq === null || seq > extractedThroughSeq)) {
@@ -194,7 +195,7 @@ export function compactMessages(
 
   return {
     lines,
-    estimatedTokens: Math.ceil(totalChars / CHARS_PER_TOKEN),
+    estimatedTokens,
     indexByMessageId,
     sourceUpdatedAt,
     sourceContentHash,
@@ -404,11 +405,11 @@ function renderLine(e: IndexedEvent, keepExitCodes: boolean): string {
 // ---------------------------------------------------------------------------
 
 function estimateTokens(indexed: IndexedEvent[]): number {
-  let totalChars = 0;
+  let total = 0;
   for (const e of indexed) {
-    if (!e.dropped && e.line !== null) totalChars += e.line.length;
+    if (!e.dropped && e.line !== null) total += estimateContextTextTokens(e.line);
   }
-  return Math.ceil(totalChars / CHARS_PER_TOKEN);
+  return total;
 }
 
 /**
@@ -437,13 +438,21 @@ function enforceBudget(indexed: IndexedEvent[], budgetTokens: number): void {
     victim.dropped = true;
   }
 
-  // Phase 2: truncate non-pinned lines to fit.
-  const targetChars = budgetTokens * CHARS_PER_TOKEN;
+  // Phase 2: truncate non-pinned lines to fit. The char target is derived
+  // from the measured density (chars per token) of the surviving content, so
+  // the clamp tracks the shared estimator for CJK-heavy and ASCII-heavy
+  // transcripts alike instead of a flat divisor.
   let totalChars = 0;
+  let totalTokens = 0;
   for (const e of indexed) {
-    if (!e.dropped && e.line !== null) totalChars += e.line.length;
+    if (!e.dropped && e.line !== null) {
+      totalChars += e.line.length;
+      totalTokens += estimateContextTextTokens(e.line);
+    }
   }
-  if (totalChars <= targetChars) return;
+  if (totalTokens <= budgetTokens) return;
+
+  const targetChars = Math.floor((totalChars * budgetTokens) / totalTokens);
 
   let excess = totalChars - targetChars;
   for (let i = indexed.length - 1; i >= 0 && excess > 0; i--) {

@@ -53,7 +53,7 @@ import {
   IMAGE_COMPACTION_TRIGGER_COUNT,
   countImagePartsInMessages,
 } from '../compact/imageParts.js';
-import { createAIClient, createAIClientWithRetry, inferProvider, findModelCompat } from '@duya/ai';
+import { createAIClient, createAIClientWithRetry, inferProvider, findModelCompat, estimateContextTextTokens } from '@duya/ai';
 import type { AIClient, AIClientOptions, RetryConfig, ApiFormat } from '@duya/ai';
 import { resolveDefaultBaseURL, resolveLlmClientDiscriminator } from '@duya/ai';
 import { sleep, createRetryEvent, createLLMAPIError, extractProviderErrorMessage, APIErrorType } from '@duya/ai';
@@ -4364,10 +4364,10 @@ export class duyaAgent implements AgentRuntime {
   }
 
   /**
-   * Rough character鈫抰oken estimate for the system prompt + tool-definition
-   * surface, using the same CJK-aware heuristic as tokenBudget
-   * (CJK 鈮?2.5 chars/token, ASCII 鈮?4 chars/token). Only the provider
-   * contract fields (name/description/input_schema) are counted.
+   * Character→token estimate for the system prompt + tool-definition surface
+   * (plan 552: delegates to the shared CJK-aware estimator in @duya/ai
+   * instead of a private copy). Only the provider contract fields
+   * (name/description/input_schema) are counted.
    */
   private _estimateSystemAndToolsTokens(systemPrompt: string, tools: Tool[]): number {
     const contract = tools.map(({ name, description, input_schema }) => ({
@@ -4377,10 +4377,7 @@ export class duyaAgent implements AgentRuntime {
     }));
     const text = `${systemPrompt}\n${JSON.stringify(contract)}`;
     if (!text) return 0;
-    const cjkRegex = /[\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g;
-    const cjkCount = (text.match(cjkRegex) || []).length;
-    const otherCount = text.length - cjkCount;
-    return Math.ceil(cjkCount / 2.5) + Math.ceil(otherCount / 4);
+    return estimateContextTextTokens(text);
   }
 
   /**

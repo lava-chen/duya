@@ -22,6 +22,7 @@ import {
 } from '../contextual-user-fragment.js';
 import { getOSContextBridge } from './bridge.js';
 import type { OSContext } from './types.js';
+import { ASCII_CHARS_PER_TOKEN } from '@duya/ai';
 
 /** Minimal message shape that the injection helper needs. Compatible
  *  with both `Message` (provider type) and any subclassed variant. */
@@ -32,9 +33,6 @@ interface InjectableMessage {
 
 /** Plan-mandated token budget. 1800 ≈ 7.2KB plain text @ 4 chars/token. */
 export const OS_CONTEXT_FRAGMENT_TOKEN_BUDGET = 1800;
-
-/** Conservative char estimate when no tokenizer is available. */
-const APPROX_CHARS_PER_TOKEN = 4;
 
 /**
  * Marker pair wrapping the OS context body. Plain XML so a
@@ -242,7 +240,7 @@ export function truncateMiddleWithTokenBudget(
   text: string,
   tokenBudget: number,
 ): string {
-  const charBudget = tokenBudget * APPROX_CHARS_PER_TOKEN;
+  const charBudget = tokenBudget * ASCII_CHARS_PER_TOKEN;
   if (text.length <= charBudget) return text;
 
   // Reserve 5% for the truncation indicator + safety margin.
