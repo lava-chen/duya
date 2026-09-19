@@ -12,6 +12,7 @@ import type { PromptSystemConfig } from '../PromptSystem.js'
 import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
 import { createMemoryPreBuildHook } from '../sections/dynamic/memoryPreBuildHook.js'
 import { createEnvironmentPreBuildHook } from '../sections/dynamic/environmentPreBuildHook.js'
+import { createRecentSessionsPreBuildHook } from '../sections/dynamic/recentSessionsPreBuildHook.js'
 
 // Code-specific static sections
 import { getIdentitySection } from '../code/sections/identity.js'
@@ -72,7 +73,7 @@ export const codeConfig: PromptSystemConfig = {
     { name: 'scratchpad', compute: getScratchpadSection, template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },
     { name: 'memory', compute: getMemorySection, template: 'dynamic/memory.hbs', description: 'Persistent memory projection files may have been updated since last turn' },
     { name: 'sessionSearch', compute: getSessionSearchSection, template: 'dynamic/session-search.hbs', description: 'Past-session decisions may be relevant to the current task' },
-    { name: 'recentSessions', compute: getRecentSessionsSection, description: 'Recent session metadata can change between turns' },
+    { name: 'recentSessions', compute: getRecentSessionsSection, template: 'dynamic/recent-sessions.hbs', description: 'Recent session metadata can change between turns' },
     { name: 'visualVerification', compute: getVisualVerificationSection, template: 'dynamic/visual-verification.hbs', description: 'Visual tasks require rendered-output verification' },
   ],
   preBuildHook: async (ctx) => {
@@ -87,9 +88,15 @@ export const codeConfig: PromptSystemConfig = {
     // never overlap.
     const envHook = createEnvironmentPreBuildHook()
     const envResult = await envHook(ctx)
+    // Plan 550 1d-rest (recent-sessions section): pre-populate the two
+    // JSON-serialised entry arrays so the .hbs template can render
+    // them without touching the session database.
+    const recentHook = createRecentSessionsPreBuildHook()
+    const recentResult = await recentHook(ctx)
     const mergedExtension = {
       ...memoryResult?.promptContextExtension,
       ...envResult?.promptContextExtension,
+      ...recentResult?.promptContextExtension,
     }
     // Plan 525 / 408 follow-up: thread the project-entity home into the
     // loader so it can read `<projectHome>/AGENTS.md` as a `'Project entity'`

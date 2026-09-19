@@ -30,6 +30,7 @@ import { asSystemPrompt, CYBER_RISK_INSTRUCTION, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
 import { buildLanguageGuidance } from '../language-guidance.js';
 import { getPlatformHint } from '../platformHints.js';
 import { buildEnvironmentItems } from '../sections/dynamic/environment.js';
+import { serializeSerializedGroup } from '../sections/dynamic/recentSessionsSection.js';
 import { HbsPromptRenderer } from './HandlebarsRenderer.js';
 
 const ASSETS_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../assets');
@@ -182,6 +183,22 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
     // those overrides are present in production. Tests inject them
     // directly when calling `renderStaticTemplate` for parity checks.
     env_items: buildEnvironmentItems(ctx),
+    // recent-sessions section (Plan 550 1d-rest) — mapper joins the
+    // already-serialised JSON entry arrays using the same ` - ${entry}\n`
+    // pattern the legacy `serializeSerializedGroup` helper uses. Empty
+    // arrays map to `- none`, matching the TS source. The
+    // `messaging_guidance` line is computed from `enabledTools` so it
+    // is in lock-step with the legacy function's `canMessageSession`
+    // branch. `section_enabled` gates the entire .hbs body so the
+    // empty-directory case renders `''` (matches the legacy `null`
+    // short-circuit via `renderSectionCompute`'s `out === '' ? null : out`).
+    section_enabled: (ctx.recentSessionsSameProject?.length ?? 0) > 0
+      || (ctx.recentSessionsOtherProjects?.length ?? 0) > 0,
+    same_project_block: serializeSerializedGroup(ctx.recentSessionsSameProject ?? []),
+    other_project_block: serializeSerializedGroup(ctx.recentSessionsOtherProjects ?? []),
+    messaging_guidance: ctx.enabledTools.has(TOOL_NAMES.MESSAGE_SESSION)
+      ? `If a search summary is still insufficient and one session is clearly relevant, use \`MessageSession\` with one focused question in \`minimal\` mode. Do not contact a session merely because it is recent, do not fan out to several sessions unless the user explicitly asks, and never treat a dormant session as an already-running agent.`
+      : 'The `MessageSession` tool is unavailable. Do not imply that you contacted another session or agent.',
     // session-guidance
     has_ask_user_question: hasAskUserQuestion,
     has_agent_tool: hasAgentTool,
