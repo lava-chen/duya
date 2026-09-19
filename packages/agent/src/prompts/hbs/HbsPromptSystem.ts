@@ -33,7 +33,7 @@ import { buildEnvironmentItems } from '../sections/dynamic/environment.js';
 import { serializeSerializedGroup } from '../sections/dynamic/recentSessionsSection.js';
 import { getSkillsMetadataSection } from '../sections/dynamic/skillsMetadata.js';
 import { MODULES } from '../modules/registry.js';
-import type { ModuleName } from '../modules/registry.js';
+import type { ModuleName, PromptModuleDef } from '../modules/registry.js';
 import { HbsPromptRenderer } from './HandlebarsRenderer.js';
 
 const ASSETS_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../assets');
@@ -276,16 +276,24 @@ export class HbsPromptSystem {
   /**
    * Render an authored content module by registry key (Plan 551).
    *
-   * Resolves the asset path through the module registry so a template
-   * rename surfaces as a compile error at the config site rather than a
-   * runtime render throw.
+   * This is the single correct render entry for a module: it resolves the
+   * asset path through the registry (so a rename is a compile error) and
+   * applies the module's own `slots` mapper before the caller-supplied
+   * `params`, which win on collision.
    */
   renderModule(
     module: ModuleName,
     context: PromptContext,
     params?: Record<string, unknown>,
   ): string {
-    return this.renderStaticTemplate(MODULES[module].path, context, params);
+    const def: PromptModuleDef = MODULES[module];
+    const slots = def.slots?.(context);
+    const extra = { ...slots, ...params };
+    return this.renderStaticTemplate(
+      def.path,
+      context,
+      Object.keys(extra).length > 0 ? extra : undefined,
+    );
   }
 
   /**

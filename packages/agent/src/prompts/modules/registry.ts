@@ -27,6 +27,7 @@
  */
 
 import type { PromptContext } from '../types.js'
+import { mapProjectInstructionSlots } from './mappers/project.js'
 
 export interface PromptModuleDef {
   /** Asset path relative to the prompts assets root. */
@@ -92,6 +93,20 @@ export const MODULES = {
   finalAnswer: {
     path: 'modules/final-answer.hbs',
     description: 'Final-answer formatting, version-control links, visualizations',
+  },
+  projectContinuity: {
+    path: 'modules/project-continuity.hbs',
+    description: 'Long-horizon project continuity guidance',
+  },
+  projectInstructions: {
+    path: 'modules/project-instructions.hbs',
+    description: 'AGENTS.md instruction-file index (user-layer context)',
+    slots: mapProjectInstructionSlots,
+  },
+  project: {
+    path: 'modules/project.hbs',
+    description: 'Composite: continuity + AGENTS.md index (gateway assembly)',
+    slots: mapProjectInstructionSlots,
   },
 } as const satisfies Record<string, PromptModuleDef>
 
