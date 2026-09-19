@@ -43,6 +43,13 @@ export interface Thread {
   goalModeEnabled?: number
   /** Plan 331 Phase 4: 1 = pinned to sidebar top, 0 = normal. */
   pinned?: number
+  // Plan 549 (Track A/B): archive metadata. `null` for active rows;
+  // populated for rows returned from `db:session:listArchived`. Kept
+  // optional so the existing Thread shape doesn't force every Thread
+  // construction site to thread through three more fields.
+  archivedAt?: number | null
+  archivedPath?: string | null
+  rolloutPath?: string | null
 }
 
 export interface Message {
@@ -198,6 +205,11 @@ interface DbThread {
   plan_mode_enabled?: number
   goal_mode_enabled?: number
   pinned: number
+  // Plan 549 (Track A): archive metadata returned from
+  // `db:session:listArchived` so the sidebar can render "归档于 X 天前".
+  rollout_path?: string | null
+  archived_at?: number | null
+  archived_path?: string | null
 }
 
 export interface DbMessage {
@@ -323,6 +335,12 @@ function dbThreadToThread(db: DbThread | null | undefined): Thread | null {
     planModeEnabled: db.plan_mode_enabled,
     goalModeEnabled: db.goal_mode_enabled,
     pinned: db.pinned,
+    // Plan 549 (Track A/B): archive metadata only meaningful when
+    // the row comes from `db:session:listArchived`. Active threads
+    // coming through the normal list path have `undefined` here.
+    rolloutPath: db.rollout_path ?? null,
+    archivedAt: db.archived_at ?? null,
+    archivedPath: db.archived_path ?? null,
   }
 }
 
@@ -571,6 +589,25 @@ export async function archiveThreadIPC(sessionId: string): Promise<boolean> {
 
 export async function unarchiveThreadIPC(sessionId: string): Promise<boolean> {
   return window.electronAPI!.session!.unarchive(sessionId)
+}
+
+/**
+ * Plan 549 (Track B): fetch the archived-session roster from the main
+ * process. The renderer keeps its own copy in `conversation_store` so the
+ * sidebar can render the section without re-issuing the IPC on every
+ * render. Returns rows shaped like `Thread` so the section can render
+ * with the existing `ThreadListItem` after re-mapping the optional
+ * `archivedAt` / `archivedPath` columns.
+ */
+export async function listArchivedThreadsIPC(): Promise<Thread[]> {
+  // The listArchived IPC returns rows shaped like a stripped-down
+  // DbThread (only id, title, working_directory, project_name, status,
+  // timestamps, archived_*); missing fields default to safe zeros via
+  // the `DbThread | null | undefined` overload of dbThreadToThread.
+  const rows = (await window.electronAPI!.session!.listArchived()) as unknown[];
+  return rows
+    .map((r) => dbThreadToThread(r as Partial<DbThread> as DbThread))
+    .filter((t): t is Thread => t !== null);
 }
 
 /** Plan 506 (A1): export one session's complete rollout as a single JSONL. */

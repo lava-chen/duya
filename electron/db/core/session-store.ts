@@ -32,6 +32,20 @@ export interface CoreSession {
   draft: string | null;
   extensions: Record<string, unknown>;
   rolloutPath: string | null;
+  /**
+   * Plan 549 (Track A): unix-ms timestamp set when the session was archived.
+   * Null while the session is active or deleted. Used to render the
+   * "Archived X days ago" label in the sidebar and to gate purge-by-age
+   * future work.
+   */
+  archivedAt: number | null;
+  /**
+   * Plan 549 (Track A): rollout-relative path where the JSONL lives after
+   * archive. The format is `<rolloutRoot>/archived/<YYYY-MM-DD>/<basename>`
+   * — see `resolveArchivedPath` in archive-paths.ts. Null while the
+   * session is active or when there is no rollout file to move.
+   */
+  archivedPath: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -53,6 +67,8 @@ export interface SessionCreateInput {
   draft?: string | null;
   extensions?: Record<string, unknown>;
   rolloutPath?: string | null;
+  archivedAt?: number | null;
+  archivedPath?: string | null;
   createdAt?: number;
   updatedAt?: number;
 }
@@ -72,6 +88,8 @@ export interface SessionPatch {
   agentName?: string;
   draft?: string | null;
   rolloutPath?: string | null;
+  archivedAt?: number | null;
+  archivedPath?: string | null;
 }
 
 export interface SessionListFilter {
@@ -130,6 +148,27 @@ export class SessionStore {
         `);
       },
     },
+    {
+      // Plan 549 (Track A): add archive metadata columns. Both nullable so
+      // pre-existing rows stay valid; the values only get populated when a
+      // session actually transitions to status='archived' via the handler.
+      // Idempotent via PRAGMA table_info — see the same pattern used by
+      // MessageLog id=13 for `agent_id`.
+      id: 26,
+      name: 'add_archived_at_and_archived_path_to_sessions',
+      up: (db) => {
+        const cols = db
+          .prepare('PRAGMA table_info(sessions)')
+          .all() as Array<{ name: string }>;
+        const colSet = new Set(cols.map((c) => c.name));
+        if (!colSet.has('archived_at')) {
+          db.exec('ALTER TABLE sessions ADD COLUMN archived_at INTEGER');
+        }
+        if (!colSet.has('archived_path')) {
+          db.exec('ALTER TABLE sessions ADD COLUMN archived_path TEXT');
+        }
+      },
+    },
   ];
 
   private readonly db: SqliteDatabase;
@@ -149,11 +188,13 @@ export class SessionStore {
         `INSERT INTO sessions (
           id, title, working_directory, project_name, status, model, provider_id,
           mode, permission_mode, agent_profile_id, parent_session_id, agent_type,
-          agent_name, draft, extensions, rollout_path, created_at, updated_at
+          agent_name, draft, extensions, rollout_path, archived_at, archived_path,
+          created_at, updated_at
         ) VALUES (
           @id, @title, @working_directory, @project_name, @status, @model, @provider_id,
           @mode, @permission_mode, @agent_profile_id, @parent_session_id, @agent_type,
-          @agent_name, @draft, @extensions, @rollout_path, @created_at, @updated_at
+          @agent_name, @draft, @extensions, @rollout_path, @archived_at, @archived_path,
+          @created_at, @updated_at
         )`,
       )
       .run({
@@ -173,6 +214,8 @@ export class SessionStore {
         draft: input.draft ?? null,
         extensions: JSON.stringify(input.extensions ?? {}),
         rollout_path: input.rolloutPath ?? null,
+        archived_at: input.archivedAt ?? null,
+        archived_path: input.archivedPath ?? null,
         created_at: createdAt,
         updated_at: updatedAt,
       });
@@ -201,6 +244,8 @@ export class SessionStore {
     if (patch.agentName !== undefined) { sets.push('agent_name = @agent_name'); params.agent_name = patch.agentName; }
     if (patch.draft !== undefined) { sets.push('draft = @draft'); params.draft = patch.draft; }
     if (patch.rolloutPath !== undefined) { sets.push('rollout_path = @rollout_path'); params.rollout_path = patch.rolloutPath; }
+    if (patch.archivedAt !== undefined) { sets.push('archived_at = @archived_at'); params.archived_at = patch.archivedAt; }
+    if (patch.archivedPath !== undefined) { sets.push('archived_path = @archived_path'); params.archived_path = patch.archivedPath; }
     if (sets.length === 0) return;
     sets.push('updated_at = @updated_at');
     params.updated_at = Date.now();
@@ -498,6 +543,8 @@ interface SessionRow {
   draft: string | null;
   extensions: string;
   rollout_path: string | null;
+  archived_at: number | null;
+  archived_path: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -520,6 +567,8 @@ function rowToSession(row: SessionRow): CoreSession {
     draft: row.draft,
     extensions: safeParse(row.extensions),
     rolloutPath: row.rollout_path,
+    archivedAt: row.archived_at,
+    archivedPath: row.archived_path,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

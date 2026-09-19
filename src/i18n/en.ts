@@ -1196,6 +1196,9 @@ const en = {
   'thread.running': 'Agent is running...',
   'thread.options': 'Thread options',
   'thread.archiveThread': 'Archive Thread',
+  // Plan 549 (Track B): unarchive + archive-time sub-line.
+  'thread.unarchiveThread': 'Unarchive',
+  'thread.archivedAt': 'Archived',
   'thread.exportRollout': 'Export Session Rollout',
   'thread.exportDoneTitle': 'Rollout exported',
   'thread.exportDoneBody': 'Exported {lines} lines — path copied to clipboard',
@@ -1424,6 +1427,8 @@ const en = {
   'sidebar.section.gateway': 'Gateway',
   'sidebar.section.wakeup': 'Wake',
   'sidebar.section.pinned': 'Pinned',
+  // Plan 549 (Track B): archived-section label.
+  'sidebar.section.archived': 'Archived',
   // Plan 483 — sidebar Bots section
   'sidebar.section.bots': 'Bots',
   'sidebar.tab.work': 'Work',

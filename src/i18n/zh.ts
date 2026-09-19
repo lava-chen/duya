@@ -1181,6 +1181,9 @@ const zh: Record<TranslationKey, string> = {
   'thread.running': 'Agent 运行中...',
   'thread.options': '对话选项',
   'thread.archiveThread': '归档对话',
+  // Plan 549 (Track B): unarchive + archive-time sub-line.
+  'thread.unarchiveThread': '取消归档',
+  'thread.archivedAt': '归档于',
   'thread.exportRollout': '导出会话 Rollout',
   'thread.exportDoneTitle': 'Rollout 已导出',
   'thread.exportDoneBody': '已导出 {lines} 行，路径已复制到剪贴板',
@@ -1409,6 +1412,8 @@ const zh: Record<TranslationKey, string> = {
   'sidebar.section.gateway': '网关',
   'sidebar.section.wakeup': '唤醒',
   'sidebar.section.pinned': '置顶',
+  // Plan 549 (Track B): archived-section label.
+  'sidebar.section.archived': '已归档',
   // Plan 483 — sidebar Bots section
   'sidebar.section.bots': 'Bots',
   'sidebar.tab.work': '工作',

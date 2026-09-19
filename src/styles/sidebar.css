@@ -753,6 +753,32 @@ html[data-glass-repair] .attachment-preview-overlay {
   justify-content: center;
 }
 
+/* Plan 549 (Track B): archived rows dim the title text and use a
+ * muted sub-line for the archive timestamp. The archived-at sub-line
+ * reuses the same font-size as .thread-item-time so layout stays stable. */
+.thread-item.archived {
+  opacity: 0.62;
+}
+
+.thread-item.archived .thread-item-title {
+  font-style: italic;
+}
+
+.thread-item.archived:hover {
+  opacity: 0.92;
+}
+
+.thread-item-archived-at {
+  font-size: 0.75rem;
+  color: var(--muted);
+  flex-shrink: 0;
+  transition: opacity 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-style: italic;
+}
+
 /* Running indicator in thread item */
 .thread-item-running-indicator {
   display: flex;

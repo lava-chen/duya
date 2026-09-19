@@ -17,11 +17,16 @@ import type { CreateAutomationCronInput, UpdateAutomationCronInput } from '../au
 import { getLogger, LogComponent } from '../logging/logger';
 import { setBrowserMaxTabs } from '../services/browser/daemon';
 import { getCoreStores } from '../db/core-connection';
+import {
+  resolveArchivedPath,
+  resolveUnarchivedPath,
+} from '../db/core/archive-paths';
 import { getChannelManager } from '../messaging/port-manager';
 import { invertPatch } from '../db/core/conductors/invert-patch';
 import { createConductorUndoRedoHandlers } from './conductor-handlers/conductor-undo-redo-handlers';
 import { createConductorCaptureHandlers } from '../conductor/capture-bridge';
 import { updateDatabasePath, readBootConfig } from '../config/boot-config';
+import { resolveRolloutRoot } from '../config/boot-config';
 import { emitGatewayConfigChanged, isGatewayConfigKey } from '../gateway/config-events';
 import { notifyMcpConfigChanged } from '../services/mcp-write-reload';
 import { readUserMcpToml, writeUserMcpToml } from '../services/mcp-config';
@@ -486,22 +491,152 @@ export function registerDbHandlers(): void {
   });
 
   /**
-   * Plan 506 (C2): archive a session — status flip only, files untouched
-   * (rollback = session:unarchive). Archived sessions leave the default
-   * active list and appear via session:listArchived.
+   * Plan 549 (Track A): archive a session — moves the rollout JSONL from
+   * its active path to `<rolloutRoot>/archived/<YYYY-MM-DD>/<basename>`
+   * AND flips status='archived'. Status-only fallback when there is no
+   * rollout file (sessions created without a chat history) or when the
+   * rollout is already gone from disk — matches the codex archive_thread
+   * pattern of "best effort: move what we can, never block on disk".
+   *
+   * Failure modes (Windows file lock, cross-volume rename) surface as
+   * `false` so the renderer can show a toast; the SQL is unchanged in
+   * that case so the next user attempt finds a consistent state.
    */
   ipcMain.handle('db:session:archive', (_event, sessionId: string) => {
     const { sessions } = getCoreStores();
-    if (!sessions.get(sessionId)) return false;
-    sessions.update(sessionId, { status: 'archived' });
+    const session = sessions.get(sessionId);
+    if (!session) return false;
+    if (session.status === 'archived') return true; // idempotent
+
+    const now = Date.now();
+    const currentRel = session.rolloutPath ?? sessions.getRolloutPath(sessionId);
+
+    // No rollout file to move — fall back to status flip only.
+    if (!currentRel) {
+      sessions.update(sessionId, {
+        status: 'archived',
+        archivedAt: now,
+        archivedPath: null,
+      });
+      return true;
+    }
+
+    const rolloutRoot = resolveRolloutRoot();
+    const srcAbs = path.join(rolloutRoot, currentRel);
+    if (!fs.existsSync(srcAbs)) {
+      // File already gone (manual delete / cross-volume crash). The
+      // session is still in the DB, so we archive the metadata only.
+      sessions.update(sessionId, {
+        status: 'archived',
+        archivedAt: now,
+        archivedPath: null,
+      });
+      return true;
+    }
+
+    const archivedRel = resolveArchivedPath(currentRel, now);
+    const archivedAbs = path.join(rolloutRoot, archivedRel);
+
+    // Plan 549 (Track C): pre-check the source for an exclusive lock
+    // before attempting the rename. On Windows, fs.renameSync against a
+    // file held open by another process returns EBUSY mid-flight, after
+    // which the rename may have partially completed. We open the file
+    // first; if that throws, abort before mutating disk. The probe is
+    // intentionally narrow -- we only need to know the file is not held
+    // in a way that blocks rename. The actual safety net is the rename's
+    // atomic-on-same-volume guarantee.
+    let srcHandle: number | undefined;
+    try {
+      srcHandle = fs.openSync(srcAbs, 'r');
+    } catch (err) {
+      getLogger().warn(
+        'archive: source file is locked, refusing to rename',
+        { sessionId, src: srcAbs, err: String(err) },
+        LogComponent.DB,
+      );
+      return false;
+    }
+    try {
+      fs.closeSync(srcHandle);
+    } catch {
+      // Closing the probe handle is best-effort; even if it fails the
+      // file is still in whatever state the OS left it in.
+    }
+
+    try {
+      fs.mkdirSync(path.dirname(archivedAbs), { recursive: true });
+      fs.renameSync(srcAbs, archivedAbs);
+    } catch (err) {
+      getLogger().warn(
+        'archive: rename failed, SQL state unchanged',
+        { sessionId, src: srcAbs, dst: archivedAbs, err: String(err) },
+        LogComponent.DB,
+      );
+      return false;
+    }
+
+    sessions.update(sessionId, {
+      status: 'archived',
+      archivedAt: now,
+      archivedPath: archivedRel,
+    });
     return true;
   });
-
-  /** Plan 506 (C2): unarchive — the one-click rollback for session:archive. */
+  /**
+   * Plan 549 (Track A): unarchive — reverse the rename and reset the
+   * archive metadata. Mirrors codex's `unarchive_thread.rs` semantics:
+   * the file moves back into `sessions/<basename>` (relative to the
+   * rollout root) and `archived_at` clears.
+   */
   ipcMain.handle('session:unarchive', (_event, sessionId: string) => {
     const { sessions } = getCoreStores();
-    if (!sessions.get(sessionId)) return false;
-    sessions.update(sessionId, { status: 'active' });
+    const session = sessions.get(sessionId);
+    if (!session) return false;
+    if (session.status !== 'archived') return true; // idempotent
+    const archivedRel = session.archivedPath;
+    if (!archivedRel) {
+      // Archived metadata-only — just flip the status.
+      sessions.update(sessionId, {
+        status: 'active',
+        archivedAt: null,
+        archivedPath: null,
+      });
+      return true;
+    }
+    const rolloutRoot = resolveRolloutRoot();
+    const archivedAbs = path.join(rolloutRoot, archivedRel);
+    if (!fs.existsSync(archivedAbs)) {
+      // Archive file already gone — drop the metadata, leave status flipped.
+      sessions.update(sessionId, {
+        status: 'active',
+        archivedAt: null,
+        archivedPath: null,
+      });
+      return true;
+    }
+    // Restore to a sensible active path. `resolveUnarchivedPath` derives
+    // `sessions/<basename>` from the archived layout; we then ask the
+    // session store for the current rollout_path so a future append goes
+    // to the right day bucket.
+    const restoredRel = resolveUnarchivedPath(archivedRel);
+    const restoredAbs = path.join(rolloutRoot, restoredRel);
+    try {
+      fs.mkdirSync(path.dirname(restoredAbs), { recursive: true });
+      fs.renameSync(archivedAbs, restoredAbs);
+    } catch (err) {
+      getLogger().warn(
+        'unarchive: rename failed, SQL state unchanged',
+        { sessionId, src: archivedAbs, dst: restoredAbs, err: String(err) },
+        LogComponent.DB,
+      );
+      return false;
+    }
+    sessions.update(sessionId, {
+      status: 'active',
+      archivedAt: null,
+      archivedPath: null,
+      rolloutPath: restoredRel,
+    });
     return true;
   });
 

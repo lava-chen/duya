@@ -9,6 +9,8 @@ import {
   createThreadIPC,
   deleteThreadIPC,
   archiveThreadIPC,
+  unarchiveThreadIPC,
+  listArchivedThreadsIPC,
   getProjectGroupsIPC,
   getNoProjectWorkspaceIPC,
   addRecentFolderIPC,
@@ -56,6 +58,17 @@ export interface Thread {
   goalModeEnabled?: number;
   /** Plan 331 Phase 4: 1 = pinned to sidebar top, 0 = normal. */
   pinned?: number;
+  /**
+   * Plan 549 (Track A/B): archive lifecycle. `archivedAt` is set when the
+   * session row reaches status='archived'; `archivedPath` is the
+   * rollout-relative destination of the JSONL after the rename. Both
+   * fields are renderer-only — they shadow the SQL columns and are not
+   * persisted to any localStorage snapshot. UI uses `archivedAt` to
+   * render "归档于 X 天前" in the sidebar section.
+   */
+  archivedAt?: number | null;
+  archivedPath?: string | null;
+  rolloutPath?: string | null;
 }
 
 // Project group for sidebar display
@@ -130,6 +143,14 @@ interface ConversationState {
 
   // Existing state
   threads: Thread[];
+  /**
+   * Plan 549 (Track B): cached copy of the archived-session roster
+   * returned by `db:session:listArchived`. Kept separate from `threads`
+   * so active and archived never mix in the same render path. Populated
+   * lazily by `loadArchivedThreads` after first mount; the sidebar
+   * section only renders when this is non-empty.
+   */
+  archivedThreads: Thread[];
   activeThreadId: string | null;
   messages: Record<string, Message[]>;
   isHydrated: boolean;
@@ -174,6 +195,15 @@ interface ConversationState {
   /** Plan 506 (C2): archive a session — drops it from the active list via a
    *  status flip; the rollout files stay on disk (unarchive restores it). */
   archiveThread: (id: string) => void;
+  /** Plan 549 (Track A/B): unarchive — restores a session to the active
+   *  list. Backend also reverses the file rename; the row disappears
+   *  from `archivedThreads` and re-appears on the next `loadThreads`
+   *  (we don't synthesize a row here to avoid divergent state). */
+  unarchiveThread: (id: string) => Promise<void>;
+  /** Plan 549 (Track B): fetch the archived roster from the main process
+   *  and stash it in `archivedThreads`. Idempotent; safe to call on
+   *  mount and after any archive/unarchive round-trip. */
+  loadArchivedThreads: () => Promise<void>;
   setActiveThread: (id: string) => void;
   goToParentSession: () => void;
   addMessage: (threadId: string, message: Message, options?: { persist?: boolean }) => void;
@@ -534,6 +564,9 @@ export const useConversationStore = create<ConversationState>()(
 
       // Existing state
       threads: [],
+      // Plan 549 (Track B): empty until `loadArchivedThreads` resolves;
+      // the sidebar section hides itself when this is empty.
+      archivedThreads: [],
       activeThreadId: null,
       messages: {},
       isHydrated: false,
@@ -725,8 +758,48 @@ export const useConversationStore = create<ConversationState>()(
         archiveThreadIPC(id)
           .then(() => {
             notifyThreadsChanged();
+            // Plan 549 (Track B): keep the archived-section roster fresh
+            // after every archive. Fire-and-forget — a stale cache is
+            // less bad than blocking the UI on a sidebar refetch.
+            void get().loadArchivedThreads();
           })
           .catch(console.error);
+      },
+
+      unarchiveThread: async (id) => {
+        // Plan 549 (Track A/B): reverse the archive. The backend reverses
+        // the file rename and clears `archived_at`/`archived_path`. We
+        // optimistically drop the row from the local archive cache, then
+        // re-fetch so the active list reflects the freshly-restored
+        // session without us having to fabricate a Thread row here
+        // (which would drift from the SQL truth).
+        set((state) => ({
+          archivedThreads: state.archivedThreads.filter((t) => t.id !== id),
+        }));
+        try {
+          const ok = await unarchiveThreadIPC(id);
+          if (!ok) {
+            console.error('[Store] unarchiveThreadIPC returned false for', id);
+          }
+        } catch (err) {
+          console.error('[Store] unarchiveThreadIPC threw', err);
+        }
+        // Refresh the active list so the restored session appears; refresh
+        // the archive cache so a failed unarchive re-surfaces the row.
+        await get().loadFromDatabase();
+        await get().loadArchivedThreads();
+      },
+
+      loadArchivedThreads: async () => {
+        // Plan 549 (Track B): cache the archived-session roster. We
+        // catch+log rather than rethrow so a transient IPC failure
+        // doesn't take the whole sidebar down with it.
+        try {
+          const rows = await listArchivedThreadsIPC();
+          set({ archivedThreads: rows });
+        } catch (err) {
+          console.error('[Store] loadArchivedThreads failed', err);
+        }
       },
 
       setActiveThread: async (id) => {

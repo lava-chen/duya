@@ -272,6 +272,11 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
 
     const {
       threads,
+      // Plan 549 (Track B): the archived-section roster lives in its
+      // own state field so it never accidentally mixes into the active
+      // filter below.
+      archivedThreads,
+      loadArchivedThreads,
       activeThreadId,
       loadFromDatabase,
       isHydrated,
@@ -373,8 +378,12 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         // the conversations store — sections render even when threads are
         // empty (you can build the structure first, sessions later).
         void loadUserSectionsFromDb();
+        // Plan 549 (Track B): kick off the archive roster fetch in
+        // parallel — we want the sidebar to render the section
+        // immediately after the first active-list paint.
+        void loadArchivedThreads();
       }
-    }, [isHydrated, loadFromDatabase, loadUserSectionsFromDb]);
+    }, [isHydrated, loadFromDatabase, loadUserSectionsFromDb, loadArchivedThreads]);
 
     // Apply resolved theme to <html> and keep localStorage in sync as a boot-time hint.
     useEffect(() => {
@@ -867,8 +876,20 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           collapsed: collapsedSystemSections.has('__system__:pinned'),
           items: threadItems(pinnedThreads),
         },
+        // Plan 549 (Track B): the archived-session section. Always
+        // appended last; collapses by default; disappears entirely when
+        // the archive roster is empty (see isEmpty branch in the render
+        // loop). Threads here are ungrouped — each row gets its own
+        // `ThreadListItem` so the per-row unarchive action can hook in.
+        {
+          id: '__system__:archived',
+          kind: 'archived' as SectionKind,
+          name: '__ARCHIVED_SECTION__',
+          collapsed: collapsedSystemSections.has('__system__:archived'),
+          items: threadItems(archivedThreads),
+        },
       ];
-    }, [threads, projectSortBy, projectGroupBy, collapsedProjects, noProjectWorkspace, userSections, sectionProjects, collapsedSystemSections, flatListVisibleCount]);
+    }, [threads, archivedThreads, projectSortBy, projectGroupBy, collapsedProjects, noProjectWorkspace, userSections, sectionProjects, collapsedSystemSections, flatListVisibleCount]);
 
     // Plan 471: "all collapsed" controls the ↕ toggle in the sidebar header.
     // Treat every section (user or system) as collapsed only when there is
@@ -1307,6 +1328,11 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                   return 'sidebar.section.wakeup';
                 case '__system__:pinned':
                   return 'sidebar.section.pinned';
+                case '__system__:archived':
+                  // Plan 549 (Track B): the archived-session section uses
+                  // its own i18n key so the renderer doesn't have to
+                  // import the section-name string at the store layer.
+                  return 'sidebar.section.archived';
                 case '__system__:project':
                   // Plan 471 v9: in singleList (… menu → 在一个列表中) mode the project hierarchy
                   // is suppressed and the section is rendered as a flat session list.

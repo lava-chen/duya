@@ -347,4 +347,63 @@ describe('SessionStore', () => {
     expect(store.get('s-1')!.status).toBe('active');
     expect(store.list().map((s) => s.id)).toEqual(['s-1']);
   });
+
+  // ─── Plan 549 Track A: archived_at / archived_path columns ───
+
+  it('create round-trips archivedAt and archivedPath', () => {
+    const session = store.create(
+      createInput('s-549-1', {
+        archivedAt: 1726656000000,
+        archivedPath: 'archived/2026-09-18/rollout-stamp-s-549-1.jsonl',
+      }),
+    );
+    expect(session.archivedAt).toBe(1726656000000);
+    expect(session.archivedPath).toBe(
+      'archived/2026-09-18/rollout-stamp-s-549-1.jsonl',
+    );
+
+    const fetched = store.get('s-549-1')!;
+    expect(fetched.archivedAt).toBe(1726656000000);
+    expect(fetched.archivedPath).toBe(
+      'archived/2026-09-18/rollout-stamp-s-549-1.jsonl',
+    );
+  });
+
+  it('defaults archivedAt and archivedPath to null on create', () => {
+    const session = store.create(createInput('s-549-2'));
+    expect(session.archivedAt).toBeNull();
+    expect(session.archivedPath).toBeNull();
+  });
+
+  it('update can set, overwrite, and clear archive metadata', () => {
+    store.create(createInput('s-549-3'));
+
+    store.update('s-549-3', {
+      archivedAt: 1000,
+      archivedPath: 'archived/2026-09-18/foo.jsonl',
+    });
+    let s = store.get('s-549-3')!;
+    expect(s.archivedAt).toBe(1000);
+    expect(s.archivedPath).toBe('archived/2026-09-18/foo.jsonl');
+
+    store.update('s-549-3', { archivedAt: null, archivedPath: null });
+    s = store.get('s-549-3')!;
+    expect(s.archivedAt).toBeNull();
+    expect(s.archivedPath).toBeNull();
+  });
+
+  it('list with status: "archived" returns only archived rows', () => {
+    store.create(createInput('a'));
+    store.create(createInput('b'));
+    store.update('b', { status: 'archived' });
+
+    const archived = store.list({ status: 'archived' }).map((s) => s.id);
+    expect(archived).toEqual(['b']);
+  });
+
+  it('migration id=26 is idempotent (PRAGMA table_info guard)', () => {
+    const m = SessionStore.migrations.find((x) => x.id === 26)!;
+    expect(() => m.up(db)).not.toThrow();
+    expect(() => m.up(db)).not.toThrow();
+  });
 });
