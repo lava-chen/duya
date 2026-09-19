@@ -100,13 +100,23 @@ mcode v2 的参照形态：单一 `beforeLlmCall` hook 探测 → 单一算法 �
 
 ## 验收门禁
 
-- [ ] `npm run typecheck:all` 绿。
-- [ ] `npx vitest run`（packages/agent compact/message/agent 相关 + 全量 src）绿。
-- [ ] `npm run build:agent && npm run bundle:agent` 成功。
-- [ ] 触发 → 压缩 → 持久化 → 重启重建 全链路单测覆盖（既有 27+ 压缩测试文件全绿）。
+- [x] `npm run typecheck:all` 绿（web/agent/cli/conductor/voice 全绿）。
+- [x] `npx vitest run` 全仓：8099 通过；剩余失败经与 master 基线逐一比对为既有/偶发
+      （anthropic-thinking 6、bedrock 1、tests/unit/Compact 旧 API 桩 12、AgentTool/
+      agent-profile/plan486/plan315-deferred 等），本分支改动区域 0 失败。
+- [x] `npm run build:agent && npm run bundle:agent` 成功（4.99 MB bundle）。
+- [x] `npm run electron:build` 完整构建成功（触及 @duya/ai 导出面，按 build gate 要求执行）。
+- [x] 触发 → 压缩 → 持久化 → 重启重建 全链路单测覆盖（compact/message/agent 目录
+      245+ 测试全绿；coordinator 冷却契约、plan315 checkpoint 重启重建用例更新为新契约）。
 
 ## 决策日志
 
+- 2026-09-19: 全部 Phase 0-4 + 门禁完成（7 commits）。执行中发现并修复两处自引入回归：
+  coordinator 冷却门内的 shouldCompact 兜底被急切求值（plan 517 契约回归，改回惰性短路）；
+  coordinator 测试桩缺 isSuppressed。plan315 checkpoint fixture 按 552 新契约更新。
+- 2026-09-19: 全仓 vitest 存在 master 上同样存在的既有失败（anthropic-thinking、bedrock、
+  tests/unit/Compact 旧 API 桩、AgentTool/agent-profile 等），经逐一基线比对确认与本分支无关；
+  tests/unit/Compact/CompactionManager.test.ts 整体过期（调用 59e9cbd8 重写前的 API），建议另立清理项。
 - 2026-09-19: 初版对比报告称"7 个持久化面/双写/5 触发点全活"——侦察证伪双写与 checkpoint 部分，
   计划范围据此收窄；死代码清单（五态机/adjustSliceBoundary/CompactionStore/SessionManager）经 grep 证实。
 - 2026-09-19: 采纳 mcode 三点优点：单源触发线、摘要输入图片剥离、失败分类单一函数；
