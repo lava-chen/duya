@@ -1,24 +1,16 @@
 /**
  * SessionFinalizer unit tests — Plan 550 step 2e (StreamFinalizer).
  *
- * Pin the contracts callers downstream of `streamChat` depend on:
+ * Covers all three exit paths the finalizer owns:
  *
- *   - `finalizeSuccess` runs PreFinalize, PostTurn, mode exit hooks,
- *     SessionEnd, then yields done(reason='completed'); a
- *     `block_finalize` veto short-circuits the natural exit and the
- *     caller receives `false` so it can `continue` the loop.
- *   - `finalizeAbort` refreshes counters and yields Stop,
- *     SessionEnd, done(reason='aborted') in that order.
- *   - `stopReason` is threaded into the PreFinalize context but NOT
- *     the PostTurn context — matches the legacy inline behaviour
- *     (`{...buildHookCtx(), stopReason: turnStopReason}` was only
- *     applied to the PreFinalize call).
- *   - A failing mode exit hook does not block the SessionEnd
- *     dispatch; the finalizer is fail-open at the lifecycle seam.
- *   - The hook dispatcher closure is invoked with the exact event
- *     names the agent-side dispatch uses (`SessionEnd`,
- *     `Stop`), with `reason: 'user_exit'` for SessionEnd and
- *     `reason: 'user_request'` for Stop.
+ *   - `finalizeSuccess` — PreFinalize veto check, PostTurn dispatch,
+ *     mode exit hooks, SessionEnd, yield done(reason='completed').
+ *   - `finalizeAbort`   — Stop + SessionEnd + done(reason='aborted').
+ *   - `finalizeStreamError` — log, executor.discard, cleanup
+ *     incomplete `tool_use`, persist cleaned array, refresh
+ *     counters, inject synthetic `tool_result` for unmatched
+ *     tool_use on AbortError, wrap non-Abort errors with Plan 462
+ *     codes, yield error + done(reason='error').
  *
  * @see docs/exec-plans/active/550-prompt-hbs-and-agent-decomposition.md
  */
@@ -26,28 +18,29 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { SessionFinalizer } from '../../../src/agent/SessionFinalizer.js';
-import { LoopHookBus, applyLoopHookEffect, type LoopHookDispatchContext } from '../../../src/hooks/loop.js';
-import { runExitHooks } from '../../../src/modes/apply-modes.js';
-import type { Message, SSEEvent } from '../../../src/types.js';
-import { resolveDeadLoopConfig } from '../../../src/agent/TurnLoopTracker.js';
-import { DeadLoopTracker } from '../../../src/agent/TurnLoopTracker.js';
+import { DeadLoopTracker, resolveDeadLoopConfig } from '../../../src/agent/TurnLoopTracker.js';
 import type { TurnContext } from '../../../src/agent/TurnContext.js';
+import { LoopHookBus, applyLoopHookEffect } from '../../../src/hooks/loop.js';
+import type { LoopHookDispatchContext } from '../../../src/hooks/loop.js';
+import { runExitHooks } from '../../../src/modes/apply-modes.js';
+import type {
+  Message,
+  MessageContent,
+  SSEEvent,
+  ToolUseContent,
+} from '../../../src/types.js';
 
 vi.mock('../../../src/hooks/loop.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/hooks/loop.js')>();
-  return {
-    ...actual,
-    applyLoopHookEffect: vi.fn(actual.applyLoopHookEffect),
-  };
+  return { ...actual, applyLoopHookEffect: vi.fn(actual.applyLoopHookEffect) };
 });
 
 vi.mock('../../../src/modes/apply-modes.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/modes/apply-modes.js')>();
-  return {
-    ...actual,
-    runExitHooks: vi.fn(actual.runExitHooks),
-  };
+  return { ...actual, runExitHooks: vi.fn(actual.runExitHooks) };
 });
+
+type FinalizerDepsForTest = ConstructorParameters<typeof SessionFinalizer>[0];
 
 function makeContext(): TurnContext {
   return {
@@ -56,27 +49,23 @@ function makeContext(): TurnContext {
   } as unknown as TurnContext;
 }
 
-function makeBus(): LoopHookBus {
-  return new LoopHookBus();
-}
-
-function makeDeps(overrides: Partial<{
-  messages: Message[];
-  loopHooks: LoopHookBus;
-  dispatchHooks: SessionFinalizerDepsForTest['dispatchHooks'];
-  buildHookCtx: () => Omit<LoopHookDispatchContext, 'event'>;
-  resolvedModes: unknown;
-  modeCtx: unknown;
-  stopReason: string | undefined;
-  host: { _commitMessages: () => void };
-}> = {}): SessionFinalizerDepsForTest {
-  const messages: Message[] = overrides.messages ?? [];
-  const loopHooks = overrides.loopHooks ?? makeBus();
+function makeDeps(overrides: {
+  messages?: Message[];
+  loopHooks?: LoopHookBus;
+  dispatchHooks?: FinalizerDepsForTest['dispatchHooks'];
+  buildHookCtx?: () => Omit<LoopHookDispatchContext, 'event'>;
+  resolvedModes?: unknown;
+  modeCtx?: unknown;
+  stopReason?: string;
+  host?: FinalizerDepsForTest['host'];
+  executor?: { discard: () => void };
+} = {}): FinalizerDepsForTest {
+  const messages = overrides.messages ?? [];
+  const loopHooks = overrides.loopHooks ?? new LoopHookBus();
   const dispatchHooks =
     overrides.dispatchHooks ??
-    (async function* (event: string, _input: Record<string, unknown>) {
-      // Default: emit nothing; tests override when they care.
-      void event;
+    (async function* () {
+      // default noop
     });
   const buildHookCtx =
     overrides.buildHookCtx ??
@@ -98,12 +87,15 @@ function makeDeps(overrides: Partial<{
     buildHookCtx,
     resolvedModes: overrides.resolvedModes as never,
     modeCtx: overrides.modeCtx as never,
-    host: overrides.host ?? { _commitMessages: () => undefined },
+    host: overrides.host ?? {
+      _commitMessages: () => undefined,
+      _pushDurable: () => undefined,
+      setMessages: () => undefined,
+    },
     stopReason: overrides.stopReason,
+    executor: overrides.executor,
   };
 }
-
-type SessionFinalizerDepsForTest = ConstructorParameters<typeof SessionFinalizer>[0];
 
 async function drain<T>(gen: AsyncGenerator<T, unknown, unknown>): Promise<T[]> {
   const out: T[] = [];
@@ -114,7 +106,7 @@ async function drain<T>(gen: AsyncGenerator<T, unknown, unknown>): Promise<T[]> 
 describe('SessionFinalizer.finalizeSuccess (Plan 550 2e)', () => {
   it('yields done(reason=completed) when no hook vetoes', async () => {
     const dispatchCalls: Array<{ event: string; input: Record<string, unknown> }> = [];
-    const dispatchHooks: SessionFinalizerDepsForTest['dispatchHooks'] = async function* (
+    const dispatchHooks: FinalizerDepsForTest['dispatchHooks'] = async function* (
       event,
       input,
     ) {
@@ -129,44 +121,32 @@ describe('SessionFinalizer.finalizeSuccess (Plan 550 2e)', () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toEqual({ type: 'done', reason: 'completed' });
     expect(host._commitMessages).toHaveBeenCalledOnce();
-    // SessionEnd must run before done.
     expect(dispatchCalls.map((c) => c.event)).toEqual(['SessionEnd']);
     expect(dispatchCalls[0].input.reason).toBe('user_exit');
   });
 
   it('returns false and applies the block_finalize effect when PreFinalize vetoes', async () => {
-    const messages: Message[] = [
-      { id: 'a', role: 'assistant', content: [], timestamp: 1 },
-    ];
-    const loopHooks = makeBus();
-    const injectText = 'prefinalize-veto-system-reminder';
+    const messages: Message[] = [{ id: 'a', role: 'assistant', content: [], timestamp: 1 }];
+    const loopHooks = new LoopHookBus();
     loopHooks.register({
       id: 'veto-hook',
       events: ['PreFinalize'],
       handler: () => ({
-        type: 'block_finalize',
-        injection: injectText,
-        source: 'custom',
+        type: 'block_finalize' as const,
+        injection: 'prefinalize-veto-system-reminder',
+        source: 'custom' as const,
       }),
     });
 
     const f = new SessionFinalizer(makeDeps({ loopHooks, messages }));
-
     const events = await drain(f.finalizeSuccess());
 
-    // No SSE events yielded when vetoed.
     expect(events).toEqual([]);
-    // applyLoopHookEffect must be called so the loop knows about the
-    // injected system-reminder before the next iteration.
     expect(vi.mocked(applyLoopHookEffect)).toHaveBeenCalledWith(
       messages,
       expect.objectContaining({ type: 'block_finalize' }),
       0,
     );
-    // The agent-side caller uses the boolean return to `continue`.
-    // We can't observe the AsyncGenerator return value here directly;
-    // assert via `f.finalizeSuccess().next()` returning
-    // `{ value: false, done: true }`.
     const ret = await f.finalizeSuccess().next();
     expect(ret).toEqual({ value: false, done: true });
   });
@@ -174,7 +154,7 @@ describe('SessionFinalizer.finalizeSuccess (Plan 550 2e)', () => {
   it('threads stopReason into PreFinalize but NOT PostTurn', async () => {
     const preFinalizeCtxs: Array<Omit<LoopHookDispatchContext, 'event'>> = [];
     const postTurnCtxs: Array<Omit<LoopHookDispatchContext, 'event'>> = [];
-    const loopHooks = makeBus();
+    const loopHooks = new LoopHookBus();
     loopHooks.register({
       id: 'capture-pre',
       events: ['PreFinalize'],
@@ -201,19 +181,17 @@ describe('SessionFinalizer.finalizeSuccess (Plan 550 2e)', () => {
 
   it('does not dispatch PostTurn, mode-exit hooks, or SessionEnd when PreFinalize vetoes', async () => {
     const dispatchCalls: string[] = [];
-    const dispatchHooks: SessionFinalizerDepsForTest['dispatchHooks'] = async function* (
-      event,
-    ) {
+    const dispatchHooks: FinalizerDepsForTest['dispatchHooks'] = async function* (event) {
       dispatchCalls.push(event);
     };
-    const loopHooks = makeBus();
+    const loopHooks = new LoopHookBus();
     loopHooks.register({
       id: 'veto',
       events: ['PreFinalize'],
       handler: () => ({
-        type: 'block_finalize',
+        type: 'block_finalize' as const,
         injection: 'veto',
-        source: 'custom',
+        source: 'custom' as const,
       }),
     });
 
@@ -229,17 +207,13 @@ describe('SessionFinalizer.finalizeSuccess (Plan 550 2e)', () => {
     vi.mocked(runExitHooks).mockImplementationOnce(async () => {
       order.push('runExitHooks');
     });
-    const dispatchHooks: SessionFinalizerDepsForTest['dispatchHooks'] = async function* (
-      event,
-    ) {
+    const dispatchHooks: FinalizerDepsForTest['dispatchHooks'] = async function* (event) {
       order.push(`dispatch:${event}`);
     };
     const resolvedModes = { modes: [{}] } as never;
     const modeCtx = { sessionId: 'sess-1' } as never;
 
-    const f = new SessionFinalizer(
-      makeDeps({ dispatchHooks, resolvedModes, modeCtx }),
-    );
+    const f = new SessionFinalizer(makeDeps({ dispatchHooks, resolvedModes, modeCtx }));
     await drain(f.finalizeSuccess());
 
     expect(order).toEqual(['runExitHooks', 'dispatch:SessionEnd']);
@@ -250,17 +224,13 @@ describe('SessionFinalizer.finalizeSuccess (Plan 550 2e)', () => {
       throw new Error('mode exit hook crashed');
     });
     const dispatchCalls: string[] = [];
-    const dispatchHooks: SessionFinalizerDepsForTest['dispatchHooks'] = async function* (
-      event,
-    ) {
+    const dispatchHooks: FinalizerDepsForTest['dispatchHooks'] = async function* (event) {
       dispatchCalls.push(event);
     };
     const resolvedModes = { modes: [{}] } as never;
     const modeCtx = { sessionId: 'sess-1' } as never;
 
-    const f = new SessionFinalizer(
-      makeDeps({ dispatchHooks, resolvedModes, modeCtx }),
-    );
+    const f = new SessionFinalizer(makeDeps({ dispatchHooks, resolvedModes, modeCtx }));
     const events = await drain(f.finalizeSuccess());
 
     expect(events).toHaveLength(1);
@@ -272,7 +242,7 @@ describe('SessionFinalizer.finalizeSuccess (Plan 550 2e)', () => {
 describe('SessionFinalizer.finalizeAbort (Plan 550 2e)', () => {
   it('yields done(reason=aborted) and dispatches Stop + SessionEnd in order', async () => {
     const dispatchCalls: Array<{ event: string; input: Record<string, unknown> }> = [];
-    const dispatchHooks: SessionFinalizerDepsForTest['dispatchHooks'] = async function* (
+    const dispatchHooks: FinalizerDepsForTest['dispatchHooks'] = async function* (
       event,
       input,
     ) {
@@ -284,9 +254,6 @@ describe('SessionFinalizer.finalizeAbort (Plan 550 2e)', () => {
     const events = await drain(f.finalizeAbort());
 
     expect(host._commitMessages).toHaveBeenCalledOnce();
-    // dispatchHooks yields nothing in this test, so only the done
-    // event is yielded; but the order of dispatchHooks calls must
-    // be Stop, SessionEnd, and the done event last.
     expect(events).toEqual([{ type: 'done', reason: 'aborted' }]);
     expect(dispatchCalls.map((c) => c.event)).toEqual(['Stop', 'SessionEnd']);
     expect(dispatchCalls[0].input.reason).toBe('user_request');
@@ -294,9 +261,7 @@ describe('SessionFinalizer.finalizeAbort (Plan 550 2e)', () => {
   });
 
   it('forwards any agent_progress events the dispatcher yields between Stop and SessionEnd', async () => {
-    const dispatchHooks: SessionFinalizerDepsForTest['dispatchHooks'] = async function* (
-      event,
-    ) {
+    const dispatchHooks: FinalizerDepsForTest['dispatchHooks'] = async function* (event) {
       if (event === 'Stop') {
         yield {
           type: 'agent_progress',
@@ -309,5 +274,152 @@ describe('SessionFinalizer.finalizeAbort (Plan 550 2e)', () => {
     expect(events).toHaveLength(2);
     expect((events[0] as { type: string }).type).toBe('agent_progress');
     expect((events[1] as { type: string }).type).toBe('done');
+  });
+});
+
+describe('SessionFinalizer.finalizeStreamError (Plan 550 2e)', () => {
+  it('discards the executor, cleans up, commits, and yields a Plan 462 error + done(error)', async () => {
+    const discard = vi.fn();
+    const commit = vi.fn();
+    const setMessages = vi.fn();
+    const pushDurable = vi.fn();
+
+    const f = new SessionFinalizer(
+      makeDeps({
+        host: { _commitMessages: commit, _pushDurable: pushDurable, setMessages },
+        executor: { discard },
+      }),
+    );
+
+    const events = await drain(f.finalizeStreamError(new Error('provider returned 500')));
+
+    expect(discard).toHaveBeenCalledOnce();
+    expect(commit).toHaveBeenCalledOnce();
+    expect(pushDurable).not.toHaveBeenCalled();
+    expect(events).toHaveLength(2);
+    const [errEvent, doneEvent] = events;
+    expect(errEvent).toMatchObject({ type: 'error', data: expect.any(String) });
+    expect(doneEvent).toEqual({ type: 'done', reason: 'error' });
+  });
+
+  it('removes a trailing assistant message with unmatched tool_use blocks before persisting', async () => {
+    const toolUseBlock: ToolUseContent = {
+      type: 'tool_use',
+      id: 'orphan-tool-1',
+      name: 'read',
+      input: { path: '/tmp/x' },
+    };
+    const messages: Message[] = [
+      { id: 'a1', role: 'user', content: 'hi', timestamp: 1 },
+      {
+        id: 'a2',
+        role: 'assistant',
+        content: [toolUseBlock],
+        timestamp: 2,
+      },
+    ];
+
+    const setMessagesCalls: Message[][] = [];
+    const setMessages = vi.fn((msgs: Message[]) => {
+      setMessagesCalls.push(msgs);
+    });
+
+    const f = new SessionFinalizer(
+      makeDeps({
+        messages,
+        host: { _commitMessages: () => undefined, _pushDurable: () => undefined, setMessages },
+        executor: { discard: () => undefined },
+      }),
+    );
+
+    await drain(f.finalizeStreamError(new Error('stream died')));
+
+    const persisted = setMessagesCalls[0];
+    expect(persisted.find((m) => m.id === 'a2')).toBeUndefined();
+    expect(persisted.find((m) => m.id === 'a1')).toBeDefined();
+  });
+
+  it('skips synthetic tool_result injection when the trailing assistant is spliced out by cleanup (parity with legacy behaviour)', async () => {
+    // The pre-refactor inline code spliced the trailing assistant
+    // before the AbortError branch's synthetic-injection loop could
+    // see it, so injection was a no-op for fully-orphan trailing
+    // assistants. `finalizeStreamError` preserves that ordering.
+    const toolUseBlock: ToolUseContent = {
+      type: 'tool_use',
+      id: 'orphan-abort-1',
+      name: 'read',
+      input: { path: '/tmp/x' },
+    };
+    const messages: Message[] = [
+      {
+        id: 'a-trailing',
+        role: 'assistant',
+        content: [toolUseBlock],
+        timestamp: 1,
+      },
+    ];
+
+    const pushDurable = vi.fn();
+    const f = new SessionFinalizer(
+      makeDeps({
+        messages,
+        host: {
+          _commitMessages: () => undefined,
+          _pushDurable: pushDurable,
+          setMessages: () => undefined,
+        },
+        executor: { discard: () => undefined },
+      }),
+    );
+
+    const events = await drain(
+      f.finalizeStreamError(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+    );
+
+    expect(pushDurable).not.toHaveBeenCalled();
+    expect(events).toEqual([{ type: 'done', reason: 'aborted' }]);
+  });
+
+  it('skips synthetic injection when a tool_result already exists for the tool_use', async () => {
+    const toolUseBlock: ToolUseContent = {
+      type: 'tool_use',
+      id: 'paired-1',
+      name: 'read',
+      input: { path: '/tmp/x' },
+    };
+    const messages: Message[] = [
+      {
+        id: 'a-mid',
+        role: 'assistant',
+        content: [toolUseBlock],
+        timestamp: 1,
+      },
+      {
+        id: 't-mid',
+        role: 'tool',
+        content: 'done',
+        tool_call_id: 'paired-1',
+        timestamp: 2,
+      },
+    ];
+
+    const pushDurable = vi.fn();
+    const f = new SessionFinalizer(
+      makeDeps({
+        messages,
+        host: {
+          _commitMessages: () => undefined,
+          _pushDurable: pushDurable,
+          setMessages: () => undefined,
+        },
+        executor: { discard: () => undefined },
+      }),
+    );
+
+    await drain(
+      f.finalizeStreamError(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+    );
+
+    expect(pushDurable).not.toHaveBeenCalled();
   });
 });

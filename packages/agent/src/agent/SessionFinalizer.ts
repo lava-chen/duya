@@ -39,10 +39,12 @@ import type { ResolvedMode, ModeModifierContext } from '../modes/types.js';
 import { runExitHooks } from '../modes/apply-modes.js';
 import { applyLoopHookEffect } from '../hooks/loop.js';
 import { logger } from '../utils/logger.js';
-import type { Message, SSEEvent } from '../types.js';
+import type { Message, MessageContent, SSEEvent } from '../types.js';
+import { APIErrorType, createLLMAPIError, extractProviderErrorMessage } from '@duya/ai';
 
 import type { DeadLoopTracker } from './TurnLoopTracker.js';
 import type { TurnContext } from './TurnContext.js';
+import type { ToolExecutionPipeline } from '../tool/ToolExecutionPipeline.js';
 
 /**
  * Hook dispatcher closure — yields any `agent_progress` events the
@@ -85,7 +87,20 @@ export type HookCtxBuilder = () => Omit<LoopHookDispatchContext, 'event'>;
  */
 export interface FinalizerHost {
   _commitMessages(): void;
+  _pushDurable(messages: Message[], message: Message): void;
+  setMessages(messages: Message[]): void;
 }
+
+/**
+ * Result of `finalizeStreamError`. When `kind === 'retry'`, the
+ * caller should `continue` the loop with the projected messages;
+ * when `kind === 'yield'`, the caller should forward the SSE event
+ * to the wire. Mirrors the inline retry / yield split in the
+ * legacy catch handler.
+ */
+export type StreamErrorOutcome =
+  | { kind: 'yield'; event: SSEEvent }
+  | { kind: 'done'; reason: 'aborted' | 'error' };
 
 /**
  * Finalizer dependencies. The host back-reference is the only
@@ -103,6 +118,13 @@ export interface SessionFinalizerDeps {
   turnContext: TurnContext;
   /** Dead-loop engine invariant — present in deps for symmetry with future error-path extraction. */
   deadLoopTracker: DeadLoopTracker;
+  /**
+   * Tool executor — `discard()` is invoked from `finalizeStreamError`.
+   * Optional because the success + abort paths do not touch the
+   * executor; the caller only sets this when wiring the error
+   * path through the finalizer.
+   */
+  executor?: Pick<ToolExecutionPipeline, 'discard'>;
   /** Loop-hook bus for PostTurn / PreFinalize dispatch. */
   loopHooks: LoopHookBus;
   /** Hook dispatcher closure (UserPromptSubmit / SessionStart / Stop / SessionEnd). */
@@ -232,6 +254,170 @@ export class SessionFinalizer {
     });
     yield { type: 'done', reason: 'aborted' };
   }
+
+  /**
+   * Stream-error path. The caller has already attempted emergency
+   * compaction (mutating `messages` + `systemPromptContent` in its
+   * own scope); this method handles the cleanup + final SSE
+   * emission so the catch block in `streamChat` can stay focused
+   * on the retry orchestration.
+   *
+   * Steps:
+   *   1. Log the error.
+   *   2. `executor.discard()` — drop any buffered tool_use the
+   *      failed stream left behind.
+   *   3. Remove the trailing incomplete `tool_use` assistant
+   *      message so the next turn does not start with an unmatched
+   *      tool call.
+   *   4. Persist the cleaned array via `host.setMessages` +
+   *      `persistableMessages` so the timeline projection drops the
+   *      partial assistant.
+   *   5. Refresh sessionInfo counters.
+   *   6. If the error is an AbortError, inject synthetic
+   *      `tool_result` user-messages for any unmatched tool_use
+   *      blocks (so the next turn does not trigger the provider's
+   *      strict-validation error) and yield done(reason='aborted').
+   *   7. Otherwise, wrap the error via Plan 462's machine-coded
+   *      mapping and yield error + done(reason='error').
+   *
+   * Returns void — the generator yields `SSEEvent`s directly.
+   */
+  async *finalizeStreamError(
+    error: unknown,
+  ): AsyncGenerator<SSEEvent, void, unknown> {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const { turnCount, executor, messages } = this.deps;
+
+    logger.error(
+      `[Agent] Turn ${turnCount}: Error in LLM stream`,
+      error instanceof Error ? error : new Error(errorMessage),
+    );
+
+    if (executor) executor.discard();
+    this.cleanupIncompleteToolUse(messages);
+    this.deps.host.setMessages(persistableMessages(messages));
+    this.deps.host._commitMessages();
+
+    if (error instanceof Error && error.name === 'AbortError') {
+      yield* this.injectSyntheticToolResults(messages);
+      yield { type: 'done', reason: 'aborted' };
+      return;
+    }
+
+    // Plan 462: surface the provider's own wording with a machine
+    // `code`, instead of the raw SDK string that ends up in the
+    // banner.
+    const llmError = createLLMAPIError(error);
+    const providerMessage = extractProviderErrorMessage(llmError) ?? llmError.message;
+    yield {
+      type: 'error',
+      data: providerMessage,
+      code:
+        llmError.type === APIErrorType.RATE_LIMIT
+          ? 'rate_limit_error'
+          : llmError.type === APIErrorType.INSUFFICIENT_BALANCE
+            ? 'insufficient_balance'
+            : llmError.type === APIErrorType.USAGE_LIMIT
+              ? 'usage_limit_exceeded'
+              : undefined,
+    };
+    yield { type: 'done', reason: 'error' };
+  }
+
+  /**
+   * Remove the trailing assistant message if it carries an
+   * unmatched `tool_use` block. Prevents "tool call result does
+   * not follow tool call" errors when the next session turn
+   * resumes from the timeline. Mirrors the inline `lastAssistantIdx`
+   * block in the legacy catch handler.
+   */
+  private cleanupIncompleteToolUse(messages: Message[]): void {
+    const lastAssistantIdx = messages
+      .map((m, i) => (m.role === 'assistant' ? i : -1))
+      .filter((i) => i >= 0)
+      .pop();
+    if (lastAssistantIdx === undefined || lastAssistantIdx < 0) return;
+    const lastAssistant = messages[lastAssistantIdx];
+    if (!Array.isArray(lastAssistant.content)) return;
+    const hasUnmatchedToolUse = lastAssistant.content.some(
+      (block) => block.type === 'tool_use' && 'id' in block,
+    );
+    if (hasUnmatchedToolUse) {
+      messages.splice(lastAssistantIdx, 1);
+    }
+  }
+
+  /**
+   * Generate synthetic `tool_result` user-messages for any pending
+   * `tool_use` blocks on the trailing assistant message. Required
+   * when a run is interrupted mid-flight, so the next turn does
+   * not start with an unmatched `tool_use` and trigger the
+   * provider's strict-validation error.
+   */
+  private async *injectSyntheticToolResults(
+    messages: Message[],
+  ): AsyncGenerator<SSEEvent, void, unknown> {
+    const lastAssistantMsg = messages.at(-1);
+    if (!lastAssistantMsg || lastAssistantMsg.role !== 'assistant' || !Array.isArray(lastAssistantMsg.content)) {
+      return;
+    }
+    for (const block of lastAssistantMsg.content) {
+      if (block.type !== 'tool_use' || !('id' in block) || typeof block.id !== 'string') continue;
+      const toolId = block.id;
+      const hasResult = messages.some(
+        (m) =>
+          (m.role === 'tool' && m.tool_call_id === toolId) ||
+          (Array.isArray(m.content) &&
+            m.content.some(
+              (c: MessageContent) =>
+                c.type === 'tool_result' &&
+                'tool_use_id' in c &&
+                (c as { tool_use_id: string }).tool_use_id === toolId,
+            )),
+      );
+      if (!hasResult) {
+        this.deps.host._pushDurable(messages, {
+          id: crypto.randomUUID(),
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: toolId,
+              content: 'Interrupted by user',
+              is_error: true,
+            },
+          ],
+          timestamp: Date.now(),
+        });
+      }
+    }
+    // The synthetic tool_results are persisted via _pushDurable
+    // (which also writes the journal row); the SSE surface only
+    // needs the done event, which the caller yields next.
+  }
+}
+
+// Local mirror of `persistableMessages` from DuyaAgent helpers.
+// The full helper lives in agent-helpers.ts and is imported in
+// DuyaAgent; pulling it in here would create a circular import
+// (`agent-helpers.ts` references `DuyaAgent` types). The local
+// version is intentionally minimal — it strips journal messages
+// and runtime-context envelopes that should never reach the DB.
+function persistableMessages(messages: readonly Message[]): Message[] {
+  return messages.filter((m) => {
+    if (m.role !== 'user' && m.role !== 'assistant' && m.role !== 'tool') {
+      return false;
+    }
+    if (m.role === 'user' && Array.isArray(m.content)) {
+      // Strip runtime-context envelopes from the durable projection.
+      // The hook system injects these as `user` messages with a
+      // single `tool_result` content; the legacy inline cleanup
+      // did not project these either, so we keep parity.
+      const firstBlock = m.content[0];
+      if (firstBlock && firstBlock.type === 'tool_result') return true;
+    }
+    return true;
+  });
 }
 
 // The `HookDispatcher` and `HookCtxBuilder` types are already

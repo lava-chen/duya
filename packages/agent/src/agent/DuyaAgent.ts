@@ -2784,85 +2784,25 @@ export class duyaAgent implements AgentRuntime {
           }
         }
 
-        executor.discard();
-
-        // Clean up incomplete tool_use/tool_result pairs before saving
-        // This prevents "tool call result does not follow tool call" errors on next message
-        const lastAssistantIdx = messages.map((m, i) => m.role === 'assistant' ? i : -1).filter(i => i >= 0).pop();
-        if (lastAssistantIdx !== undefined && lastAssistantIdx >= 0) {
-          const lastAssistant = messages[lastAssistantIdx];
-          if (Array.isArray(lastAssistant.content)) {
-            const hasUnmatchedToolUse = lastAssistant.content.some(
-              block => block.type === 'tool_use' && 'id' in block
-            );
-            if (hasUnmatchedToolUse) {
-              // Remove the incomplete assistant message to avoid saving partial state
-              messages.splice(lastAssistantIdx, 1);
-                          }
-          }
-        }
-
-        // Reconcile the timeline with the cleaned working array so the
-        // incomplete assistant (removed above) is excluded from the durable
-        // projection. `this.messages` is now a timeline-derived getter, so
-        // the removal must be reflected in the timeline itself.
-        this.setMessages(persistableMessages(messages));
-
-        // Refresh sessionInfo counters BEFORE yielding error/done events
-        this._commitMessages();
-
-        if (error instanceof Error && error.name === 'AbortError') {
-          // Generate synthetic tool_results for any pending tool_use blocks
-          // This prevents "missing tool_result" API errors on the next turn
-          const lastAssistantMsg = messages.at(-1);
-          if (lastAssistantMsg && lastAssistantMsg.role === 'assistant' && Array.isArray(lastAssistantMsg.content)) {
-            for (const block of lastAssistantMsg.content) {
-              if (block.type === 'tool_use' && 'id' in block && typeof block.id === 'string') {
-                const toolId = block.id;
-                const hasResult = messages.some(m =>
-                  (m.role === 'tool' && m.tool_call_id === toolId) ||
-                  (Array.isArray(m.content) && m.content.some(
-                    (c: MessageContent) =>
-                      c.type === 'tool_result' &&
-                      'tool_use_id' in c &&
-                      (c as { tool_use_id: string }).tool_use_id === toolId
-                  ))
-                );
-                if (!hasResult) {
-                  this._pushDurable(messages, {
-                    id: crypto.randomUUID(),
-                    role: 'user',
-                    content: [{
-                      type: 'tool_result',
-                      tool_use_id: toolId,
-                      content: 'Interrupted by user',
-                      is_error: true,
-                    }],
-                    timestamp: Date.now(),
-                  });
-                }
-              }
-            }
-          }
-          yield { type: 'done', reason: 'aborted' };
-        } else {
-          // Plan 462: surface the provider's own wording (e.g. "浣欓涓嶈冻锛?          // 璇峰厖鍊?) with a machine `code`, instead of the raw SDK string
-          // (`429 {"type":"error","error":{...}}`) that ends up in the banner.
-          const llmError = createLLMAPIError(error);
-          const providerMessage = extractProviderErrorMessage(llmError) ?? llmError.message;
-          yield {
-            type: 'error',
-            data: providerMessage,
-            code: llmError.type === APIErrorType.RATE_LIMIT
-              ? 'rate_limit_error'
-              : llmError.type === APIErrorType.INSUFFICIENT_BALANCE
-                ? 'insufficient_balance'
-                : llmError.type === APIErrorType.USAGE_LIMIT
-                  ? 'usage_limit_exceeded'
-                  : undefined,
-          };
-          yield { type: 'done', reason: 'error' };
-        }
+        // Plan 550 step 2e (StreamFinalizer): the cleanup +
+        // AbortError synthetic tool_result injection + Plan 462
+        // error-code mapping is delegated to the finalizer so the
+        // catch block stays focused on the retry orchestration.
+        const errorFinalizer = new SessionFinalizer({
+          messages,
+          turnCount,
+          seqIndex,
+          turnContext,
+          deadLoopTracker,
+          loopHooks,
+          dispatchHooks: dispatchHooks as unknown as import('./SessionFinalizer.js').HookDispatcher,
+          buildHookCtx,
+          resolvedModes: this.resolvedModes,
+          modeCtx: this.modeCtx,
+          host: this as unknown as import('./SessionFinalizer.js').FinalizerHost,
+          executor,
+        });
+        yield* errorFinalizer.finalizeStreamError(error);
         return;
       } finally {
         // Always release the per-request timeout controller (clear the
