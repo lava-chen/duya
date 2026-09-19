@@ -82,6 +82,7 @@ import { CompactionCoordinator } from './CompactionCoordinator.js';
 import { DeadLoopTracker, resolveDeadLoopConfig } from './TurnLoopTracker.js';
 import { SessionFinalizer } from './SessionFinalizer.js';
 import { runTurnStream } from './TurnStreamRunner.js';
+import { PendingHookMessages } from './PendingHookMessages.js';
 import { deriveSingleCallUsage } from '../process/seed-token-usage.js';
 import { settingsJsonToRules } from '../permissions/rules.js';
 import { permissionRuleValueToString } from '../permissions/rules.js';
@@ -417,8 +418,13 @@ export class duyaAgent implements AgentRuntime {
    * turn-end boundary in `agent-process-entry` and persisted as
    * `msg_type: 'hook_invocation'` rows so reload / cross-device sync
    * keep the hook history visible alongside tool_use / tool_result.
+   *
+   * Plan 550 step 2e (TurnPreparer, side-quest slice): wrapped in
+   * a `PendingHookMessages` instance so the FIFO contract is
+   * unit-testable in isolation and the `push` / `drain` API surfaces
+   * at named methods rather than `array.push` / `slice()`.
    */
-  private pendingHookMessages: Message[] = [];
+  private readonly pendingHookMessages = new PendingHookMessages();
   /**
    * Per-session mutable canvas state (list-freshness timestamp, created
    * element IDs, ref map). Shared across tool calls and turns via a
@@ -2815,10 +2821,7 @@ export class duyaAgent implements AgentRuntime {
    * module boundary.
    */
   drainPendingHookMessages(): Message[] {
-    if (this.pendingHookMessages.length === 0) return [];
-    const drained = this.pendingHookMessages.slice();
-    this.pendingHookMessages = [];
-    return drained;
+    return this.pendingHookMessages.drain();
   }
 
 // === streamChat helpers (Phase F1 of Plan 211) =========================
