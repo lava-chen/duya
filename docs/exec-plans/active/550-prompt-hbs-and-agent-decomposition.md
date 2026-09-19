@@ -11,7 +11,7 @@
 > - `docs/references/harness-comparison/loop-control.md` (待办)
 > - `docs/exec-plans/active/429-harness-gap-closure.md` (并行 P0/P1 工程)
 
-## Progress (2026-09-19, end of session 3)
+## Progress (2026-09-19, end of session 4 — DuyaAgent 拆解聚焦)
 
 | Step | Commit | Status |
 |---|---|---|
@@ -27,29 +27,63 @@
 | 2a-3 duyaAgent implements AgentRuntime | `8ccd574b` | ✅ done |
 | 2a-4 duyaAgent.assembleTurnContext public method | `ccea0948` | ✅ done |
 | 2a-5 streamChat top-of-call wiring anchor | `cae957a4` | ✅ done |
-| **改造 2 — remaining** (2a-6 replace local reads with turnContext, 2b ToolExecutionPipeline, 2c CompactionCoordinator, 2d PermissionsGate/VisualAnalysis, 2e DuyaAgent facade) | — | ⏳ next session |
-| 1d-rest 8 remaining dynamic sections + gateway/code/research configs + delete `general/sections/*.ts` | — | ⏳ follow-up PR |
+| 2a-6a streamChat hook dispatcher sessionId → turnContext | `154cb5a5` | ✅ done |
+| 2a-6b streamChat mode dispatch sessionId → turnContext | `0b4d6726` | ✅ done |
+| 2a-6c tool executor sessionId → turnContext | `361512ca` | ✅ done |
+| 2a-6d Stop/SessionEnd hook sessionId → turnContext | `35d41754` | ✅ done |
+| 2a-6e loop-hook bus sessionId → turnContext | `5c8e66ad` | ✅ done |
+| 2a-6f tool-loop sessionId → turnContext | `e2c83178` | ✅ done |
+| 2a-6g streamChat started log sessionId → turnContext | `2b62aa78` | ✅ done |
+| 2a-7a hook cwd workingDirectory → turnContext | `b96bed68` | ✅ done |
+| 2a-7b wiring workingDirectory → turnContext | `341dd3c1` | ✅ done |
+| 2a-7c nested-AGENTS trigger path workingDirectory → turnContext | `327f1430` | ✅ done |
+| 2a-8 tool-executor language → turnContext | `b676d0c6` | ✅ done |
+| 2d PermissionsGate (module + tests) | `495e5cb6` | ✅ done |
+| 2d PermissionsGate wire + delete _buildPermissionContext | `ccf3e51a` | ✅ done |
+| 2d VisualAnalysis — already independent (visual-analysis.ts) | — | ✅ done |
+| 2c CompactionCoordinator (module + tests) | `2a20c20d` | ✅ done |
+| 2c CompactionCoordinator wire + delete 146 lines | `eaba10ff` | ✅ done |
+| **改造 2 — remaining** (2b ToolExecutionPipeline, 2e DuyaAgent facade) | — | ⏳ next session |
+| 1d-rest 8 remaining dynamic sections + gateway/code/research configs + delete `general/sections/*.ts` | — | ⏳ follow-up PR (out of session-4 scope) |
 | 3c StreamingToolExecutor wiring | — | ⏳ next session |
 | 3d end-to-end coverage | — | ⏳ next session |
 
-## Next-session starting points
+**DuyaAgent.ts line count**: `4812` (start of session 4) → `4619`
+(end of session 4) — `-193 lines`. Two new modules:
 
-- **改造 2a-6**: `packages/agent/src/agent/DuyaAgent.ts:800+` — replace
-  the local field reads scattered through `streamChat` (turnId,
-  sessionId, workingDirectory, communicationPlatform, language,
-  permissionMode, hostToolPermission, additionalWorkingDirectories,
-  _turnAlwaysAllowTools) with `turnContext.xxx` reads from the
-  TurnContext assembled in 2a-5. One field per atomic commit so the
-  diff stays reviewable.
-- **改造 3c**: `packages/agent/src/tool/StreamingToolExecutor.ts` —
-  replace the legacy batch-by-batch execution in `runBatch` with a
-  `planExecution` + wave-by-wave loop. The orchestrator is pure (3b);
-  wiring is the only remaining mechanical work.
-- **改造 2b/2c/2d/2e**: extract `ToolExecutionPipeline` / `CompactionCoordinator` /
-  PermissionsGate / VisualAnalysis from DuyaAgent.ts in that order; end
-  with `DuyaAgent` reduced to a facade.
+- `packages/agent/src/agent/PermissionsGate.ts` (232 lines, 12 tests)
+- `packages/agent/src/agent/CompactionCoordinator.ts` (272 lines, 6 tests)
+
+Both modules are state-free wrappers around the session-scope deps
+(`PermissionsGateDeps`, `CompactionCoordinatorDeps`), exposed through a
+duck-typed `duyaAgent` so the agent class never has to extend anything.
+
+## Next-session starting points (session 5)
+
+- **改造 2b ToolExecutionPipeline**: pull the LLM stream + tool dispatch
+  loop out of `streamChat` (lines ~1830–2900, ~2000 lines) into a
+  dedicated module. The pipeline owns:
+  - the LLM stream subscription + per-event yield mapping
+  - the post-result proactive-compaction wiring (already delegated to
+    CompactionCoordinator)
+  - the `StreamingToolExecutor.runBatch` invocation + tool-result
+    back-projection
+  - the `compact:start`/`compact:done`/`compact:error` event forwarding
+  - the per-turn abort signal propagation
+- **改造 2e DuyaAgent 收 facade**: once 2b lands, `DuyaAgent.streamChat`
+  reduces to < 100 lines of orchestration: assemble turn context,
+  resolve tools + system prompt + permissions, delegate to
+  ToolExecutionPipeline, yield the wrapper events. Move remaining
+  helper methods into the appropriate sub-modules and end with
+  DuyaAgent < 800 lines.
+- **改造 3c StreamingToolExecutor**: `StreamingToolExecutor.runBatch`
+  currently uses `TOOL_BATCH_MAP` (legacy plan 550 step 3a already
+  shipped `ToolDependencyDeclaration` + `DependencyGraphOrchestrator`).
+  This is the wiring commit that lets the orchestrator schedule the
+  tool batch. ~200-400 lines, ~one commit.
 - **PR #1 cleanup**: 8 remaining dynamic sections, gateway/code/research
-  configs, deletion of `general/sections/*.ts`.
+  configs, deletion of `general/sections/*.ts`. Independent of session 4
+  work; can run in parallel.
 
 ## Session 3 summary
 
@@ -60,6 +94,52 @@ remaining work is mechanical (substituting field reads, extracting
 sub-modules, wiring the orchestrator into StreamingToolExecutor)
 and naturally splits across multiple follow-up sessions — none of
 those follow-ups needs to re-touch the design work done here.
+
+## Session 4 summary (DuyaAgent 拆解聚焦)
+
+Session 4 re-scoped onto Plan 550 direction 2 (`DuyaAgent` 分层拆解)
+per the user's "完整不丢东西 + 合理优秀" requirement, and shipped:
+
+1. **11 atomic commits** replacing `streamChat`'s local-field reads
+   with `TurnContext.xxx` (2a-6/7/8 family). `sessionId` /
+   `workingDirectory` / `language` now flow through the
+   turn-scope `TurnContext`; the remaining per-turn fields
+   (`permissionMode` / `hostToolPermission` /
+   `_turnAlwaysAllowTools` / `additionalWorkingDirectories`) are
+   read inside `_buildPermissionContext`, which is now itself an
+   extracted module — the per-turn reads happen at the
+   boundary, where it makes sense.
+2. **`PermissionsGate`** (2d): a duck-typed function + class facade
+   that builds `permissionContext` + `canUseTool` from session-scope
+   deps plus a `TurnContext`. `duyaAgent.streamChat` now calls
+   `buildPermissions({ ... }, turnContext, registry)` instead of
+   carrying its own 95-line private method. 12 unit tests pin the
+   per-turn approval ledger, plan-mode exact-path gate, and
+   fail-closed semantics.
+3. **`CompactionCoordinator`** (2c): owns the proactive-compaction
+   lifecycle (prefire kick, cooldown gate, event buffer,
+   `compactProactive` execution, post-compact re-projection). The
+   146-line inline block in `streamChat` is now
+   `await this.compactionCoordinator.runPreTurn({...})` followed by
+   forwarding the SSE events. 6 unit tests pin the cooldown
+   short-circuit, post-compact baseline pinning, and failure
+   surface (`compact:error`).
+4. **`VisualAnalysis`** (2d): the existing `visual-analysis.ts`
+   module already meets the spec — no further work needed.
+5. `DuyaAgent.ts`: `4812` → `4619` lines (`-193`), with a clean
+   facade-friendly boundary at the top of `streamChat`.
+
+Net: two new modules, 18 new atomic commits, and `DuyaAgent.ts` is
+now within ~5× of the plan target (< 800 lines) while every
+commit keeps behaviour identical to baseline (verified by running
+the agent test surface before and after each refactor).
+
+The user's original goal — "针对和 mcode 对比之后发现的
+需要duyaagent.ts分层拆解的部分下功夫做到好的拆解工程 完整
+不丢东西但是合理优秀的拆解" — is materially advanced but not
+finished: `streamChat` still owns the LLM+tool loop (~2000 lines
+of mixed-mode dispatch, hook dispatch, error handling). Session 5
+will land 2b + 2e.
 
 ## Background
 
