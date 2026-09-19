@@ -1104,7 +1104,7 @@ export class duyaAgent implements AgentRuntime {
     toolInvokeTool.setDispatcher(
       createToolInvokeDispatcherFromRegistry({
         registry,
-        workingDirectory: this.workingDirectory,
+        workingDirectory: turnContext.workingDirectory ?? undefined,
         checkPermission: async (toolName, args) => {
           const decision = await this.hasPermissionsToUseTool(
             toolName,
@@ -1210,7 +1210,7 @@ export class duyaAgent implements AgentRuntime {
       //  - widgetStyleHistory: the agent's rolling anti-slop history
       this.modeCtx = {
         sessionId: turnContext.sessionId ?? '',
-        workingDirectory: this.workingDirectory ?? '',
+        workingDirectory: turnContext.workingDirectory ?? '',
         state: {
           conductorCanvasId: options?.conductorCanvasId,
           widgetStyleHistory: this.widgetStyleHistory,
@@ -1641,7 +1641,7 @@ export class duyaAgent implements AgentRuntime {
           sessionId: turnContext.sessionId ?? undefined, // Pass sessionId for task persistence
           // Plan 481: bot identity for identity-bound tools (update_state).
           agentProfileId: options?.agentProfileId ?? null,
-          workingDirectory: this.workingDirectory, // Pass working directory for tool execution
+          workingDirectory: turnContext.workingDirectory ?? undefined, // Pass working directory for tool execution
           // Plan 525 / 408 follow-up: project-entity home directory
           // propagated into the ToolUseContext so sub-agents spawned
           // from this turn (via the SubagentTool) can hand it down
