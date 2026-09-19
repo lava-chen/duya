@@ -76,6 +76,7 @@ import type { AgentRuntime } from './AgentRuntime.js';
 import { TurnAssembler } from './TurnAssembler.js';
 import type { TurnContext } from './TurnContext.js';
 import { permissionModeFromString } from '../permissions/policy.js';
+import { buildPermissions } from './PermissionsGate.js';
 import { deriveSingleCallUsage } from '../process/seed-token-usage.js';
 import { settingsJsonToRules } from '../permissions/rules.js';
 import { permissionRuleValueToString } from '../permissions/rules.js';
@@ -1074,7 +1075,25 @@ export class duyaAgent implements AgentRuntime {
     // eslint-disable-next-line no-console
     console.error(`[Agent-Process] canvas tools: ${tools.filter(t => t.name.startsWith('canvas_')).map(t => t.name).join(', ') || '(none)'}`);
     let systemPromptContent = await this._buildSystemPrompt(tools, options, appliedProfile);
-    const { permissionContext, canUseTool } = this._buildPermissionContext(registry);
+    const { permissionContext, canUseTool } = buildPermissions(
+      {
+        getPermissionMode: () => this.getPermissionMode(),
+        hostToolPermission: this.hostToolPermission,
+        alwaysAllowRules: this.alwaysAllowRules,
+        alwaysDenyRules: this.alwaysDenyRules,
+        alwaysAskRules: this.alwaysAskRules,
+        additionalWorkingDirectories: this.additionalWorkingDirectories,
+        defaultWorkspaceDirectory: this.defaultWorkspaceDirectory,
+        getAbortController: () => this.abortController,
+        llmClient: this.llmClient,
+        model: this.model,
+        getMessages: () => this.messages,
+        hasPermissionsToUseTool: this.hasPermissionsToUseTool,
+        getModeCoordinator: () => this.modeCoordinator,
+      },
+      turnContext,
+      registry,
+    );
     // Declared-tools visibility guard. Snapshot of the tools declared on
     // the current provider request (filled before each openLLMStream). Any
     // model call to a tool name outside that set is rejected — the only
@@ -3735,112 +3754,6 @@ export class duyaAgent implements AgentRuntime {
     return grouped;
   }
 
-  /**
-   * Build the permission context and `canUseTool` closure for this turn.
-   *
-   * `canUseTool` is fail-closed: when the permission check itself throws
-   * (e.g. abort, classifier glitch) we return `deny`. Returning `allow`
-   * would let a tool execute when the permission system is in an unknown
-   * state, which is the wrong default for a security boundary.
-   */
-  private _buildPermissionContext(registry?: ToolRegistry): {
-    permissionContext: ToolPermissionCheckContext;
-    canUseTool: CanUseToolFn;
-  } {
-    const permissionContext: ToolPermissionCheckContext = {
-      getAppState: () => ({
-        toolPermissionContext: {
-          // Single canonical mode read path: `this.permissionMode` is the sole
-          // permission-mode field; `getPermissionMode()` is its accessor. MCP
-          // (apply.ts) reads the same live value, so built-in and MCP tools
-          // always agree on the effective mode.
-          mode: this.getPermissionMode(),
-          additionalWorkingDirectories: this.additionalWorkingDirectories,
-          alwaysAllowRules: this.alwaysAllowRules,
-          alwaysDenyRules: this.alwaysDenyRules,
-          alwaysAskRules: this.alwaysAskRules,
-          isBypassPermissionsModeAvailable: true,
-          defaultWorkspaceDirectory: this.defaultWorkspaceDirectory,
-          // Plan 312 Phase 4: wire risk-tier lookup to the tool registry
-          // so connector tools are gated by their declared tier.
-          getToolRiskTier: registry
-            ? (toolName: string) => registry.getMeta(toolName)?.riskTier
-            : undefined,
-          // Plan 487: host-level standing permission switch (mirrors
-          // `setHostToolPermission`). Undefined 鈫?defaults to 'ask'.
-          hostToolPermission: this.hostToolPermission,
-        } as ToolPermissionContext,
-      }),
-      abortController: this.abortController!,
-      llmClient: this.llmClient,
-      classifierModel: this.model,
-      messages: this.messages,
-    };
-
-    const canUseTool: CanUseToolFn = async (
-      toolName: string,
-      toolInput?: Record<string, unknown>,
-    ) => {
-      try {
-        // Plan 498 one-shot approval ledger: a persisted approval card that
-        // was granted ('approved') and not yet consumed authorizes exactly
-        // this (toolName, toolInput) pair. Consume is a CAS — a replay can
-        // never double-execute an approval.
-        if (this._consumeApprovedEffect) {
-          const preApproved = await this._consumeApprovedEffect(toolName, toolInput);
-          if (preApproved) {
-            return { allowed: true, behavior: 'allow' as const };
-          }
-        }
-        // Plan 498: "Always allow this tool" grants from persisted approval
-        // cards (per bot/session scope, seeded by the worker per turn).
-        if (this._turnAlwaysAllowTools.has(toolName)) {
-          return { allowed: true, behavior: 'allow' as const };
-        }
-
-        // Plan-mode exact-path gating: when a plan tracker is active, write
-        // tools are only allowed when they target the session plan file.
-        // `'allow'`/`'deny'` are authoritative; `null` falls through to the
-        // normal permission flow below. The coordinator is rebuilt per
-        // streamChat before the turn loop runs, so reading it lazily here
-        // picks up the current turn's instance.
-        const gate = this.modeCoordinator?.gateWriteTool(
-          toolName,
-          toolInput ?? {},
-          this.workingDirectory ?? '',
-        );
-        if (gate === 'deny') {
-          return { allowed: false, behavior: 'deny' };
-        }
-        if (gate === 'allow') {
-          return { allowed: true, behavior: 'allow' };
-        }
-
-        const decision = await this.hasPermissionsToUseTool(
-          toolName,
-          toolInput ?? {},
-          permissionContext,
-        );
-        // Return detailed decision so StreamingToolExecutor can skip checkPermissions
-        // when permission is already granted (behavior === 'allow')
-        return {
-          allowed: decision.behavior !== 'deny',
-          behavior: decision.behavior,
-        };
-      } catch (err) {
-        // Fail-closed: if the permission system itself breaks, do not let
-        // the tool run. Log the failure so operators can detect it.
-        const reason = err instanceof Error ? err.message : String(err);
-        logger.warn(`[Agent] canUseTool check threw for ${toolName}, fail-closed with deny: ${reason}`);
-        return {
-          allowed: false,
-          behavior: 'deny',
-        };
-      }
-    };
-
-    return { permissionContext, canUseTool };
-  }
 
   /**
    * Inject runtime context at each LLM turn.
