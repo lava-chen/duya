@@ -49,6 +49,7 @@
 | 2e TurnPreparer (partial) — DeadLoopTracker extracted from streamChat | `b20f90bb` | ✅ done (session 5) |
 | 2e StreamFinalizer (partial) — SessionFinalizer success + abort paths extracted | `1a57e4b0` | ✅ done (session 5) |
 | 2e StreamFinalizer error path — finalizeStreamError extracts cleanup + synthetic tool_result + Plan 462 error mapping | `7d9bd06b` | ✅ done (session 5) |
+| 2e StreamFinalizer plan doc sync (session-5 close-out) | `51aba8c8` | ✅ done (session 5) |
 | **改造 2 — remaining** (2e TurnLoop extraction, 3c StreamingToolExecutor wiring) | — | ⏳ session 6 |
 | 1d-rest 8 remaining dynamic sections + gateway/code/research configs + delete `general/sections/*.ts` | — | ⏳ follow-up PR (out of session-4 scope) |
 | 3c StreamingToolExecutor wiring | — | ⏳ next session |
@@ -238,6 +239,46 @@ anti-dead-loop counter. `streamChat` body is now ~2035 lines
 (4619 → 4276, then a further 2095 lines after TurnPreparer +
 StreamFinalizer landed; the inline loop body and tool dispatch
 are the next largest target).
+
+## Session 6+ scope
+
+The remaining Plan 550 work needs more than one session. The
+following are session-6+ targets, in priority order:
+
+1. **2e TurnLoop** — extract the inner LLM stream subscription
+   (`openLLMStream` + `streamGenerator` IIFE + retry handler) as
+   a `TurnStreamRunner` class, then progressively peel off the
+   event-dispatch handlers (`tool_use_started`, `tool_use_delta`,
+   `tool_use`, `text`, `thinking`, `done`) into a separate
+   `TurnEventDispatcher`. Both extractions require multi-commit
+   sequences because the generator body has multiple `yield*`
+   points that the caller (`streamChat`) interleaves with
+   per-turn state mutation.
+2. **3c StreamingToolExecutor** — replace the static
+   `TOOL_BATCH_MAP` + `BATCH_STRATEGY` + `classifyTool` scheduling
+   inside `processQueue()` / `canExecuteTool()` with a
+   `DependencyGraphOrchestrator` instance driven by per-tool
+   `ToolDependencyDeclaration` declarations. The 2b-internals
+   wave scheduler already proved the orchestrator handles
+   `requires` / `writePaths` correctly; 3c mirrors that pattern at
+   the executor level so duplicate writes against the same path
+   serialise even when the agent adds them via `executor.addTool`
+   directly (not through the pipeline).
+3. **3d end-to-end coverage** — exercise 3c with LLM-emitted
+   batches (all-read, read+write independent paths, write+write
+   same path, write+write different paths).
+4. **1d-rest** — independent PR. 8 dynamic sections + gateway /
+   code / research configs + delete `general/sections/*.ts`.
+
+**Session 5 close-out metrics**:
+
+- `DuyaAgent.ts`: `4473` (master) → `4276` (PR #59 head)
+  = **-197 lines, 4.4% reduction**
+- `streamChat` body: `4356` → `~2035` lines = **-2321 lines, 53% reduction**
+- 6 new modules since session 4 (PermissionsGate, CompactionCoordinator,
+  ToolExecutionPipeline, TurnLoopTracker, SessionFinalizer + the
+  orchestrator + TurnContext + TurnAssembler from earlier sessions).
+- 52 new unit tests across the 5 plan-550 modules.
 
 ## Session 4 summary (DuyaAgent 拆解聚焦)
 
