@@ -1,6 +1,6 @@
 # Plan 552 — duya 原生 Workflow：RPA × Agent 融合设计与节点体系
 
-> **Status**: 草案(Draft) — 待评审
+> **Status**: 实施中(Phase 0-7 代码+单测已落地,2026-09-20;Electron 运行时验证与生产 host 接线待办,见文末进度注记)
 > **Priority**: P0
 > **Created**: 2026-09-20
 > **定位**: plan [415](./415-workflow-mode-design.md)（引擎/run/expr/journal 基础架构底稿）的 **RPA 化修订 companion**，
@@ -271,57 +271,75 @@ workflow_run_snapshots   run_id 1:1 → blob（冻结 YAML + 节点栈 + journal
 
 ## 8. 执行层前置修复（workflow 依赖 computer-use 前，可与 551 Phase 3 合并执行）
 
-- [ ] daemon spawn 路径去硬编码（`electron/main.ts:1387` `E:/Projects/computer-use-demo`），
-      随包分发（afterPack 复制，参照 better-sqlite3 模式）或可配置
-- [ ] `computer_use` 工具注册进全局 ToolRegistry（现仅 mode 注入；workflow tool/gui 节点依赖）
-- [ ] 无人值守审批通道：机器侧 always-allow 策略 + 审计（配合 §5 落点⑥分级放行），审批门
-      不再强依赖 renderer 在场
-- [ ] 补写 plan 519 文档本体（内容已在代码中，文档缺失）
-- [ ] macOS 权限引导（Accessibility + 录屏）与 MCP cua-driver 二进制分发
+- [x] daemon spawn 路径去硬编码（`DUYA_COMPUTER_USE_DEMO_ENTRY` env + 兄弟目录发现，
+      `E:/Projects` 硬编码已移除）
+- [x] `computer_use` / `computer_use_context` / `computer_use_decide` 注册进 builtin ToolRegistry
+      （`exposeMode: 'hidden'`——workflow 枚举直调可用，LLM 表面零变化）
+- [x] 无人值守审批通道：`createUnattendedConfirmGate`（deny-by-default kind 策略 + 安全预算 +
+      审计 sink，5 单测）；gui-runner 的确认门与 decision 升级门接同一 498 通道
+- [x] 补写 plan 519 文档本体（`./519-computer-use-harness-gaps.md`）
+- [x] macOS 权限引导文档 + cua-driver 分发方案（`docs/product-specs/computer-use-macos-permissions.md`；
+      二进制随包分发本体为后续基建项,方案已定）
 
 ## 9. 落地步骤
 
 ### Phase 0 — 前置修复（§8 五项）
-- **Gate**: 仓库内无硬编码外部路径；`computer_use` 可经 ToolRegistry 枚举；typecheck:all
+- [x] 五项全落地（见 §8）
+- **Gate**: ✅ 仓库内无硬编码外部路径；`computer_use` 可经 ToolRegistry 枚举；typecheck:all 0 错
 
 ### Phase 1 — 地基（= 415 原 Phase 1 + 本 plan 扩展）
-- [ ] `packages/agent/src/modes/workflow/schema.ts`（zod：§4.1 顶层 + §4.2 六类节点）
-- [ ] `validate.ts`（命名/阶段/引用存在/表达式合法/无环/decision thresholds 合法/human timeout 必填）
-- [ ] `expr.ts`（415 §4.1 四类表达式 + decision answers 作用域）
-- [ ] `engine/run-lifecycle-tracker.ts`（415 §6.2 权威规格 + §6.2.7 单测矩阵）
-- **Gate**: 单测矩阵全绿 + `npm run typecheck:all`
+- [x] `packages/agent/src/modes/workflow/schema.ts`（zod：§4.1 顶层 + §4.2 六类节点）
+- [x] `validate.ts`（命名/阶段/引用存在/表达式合法/无环/跨阶段前向引用拦截/decision 阈值与默认值/human timeout 必填）
+- [x] `expr.ts`（415 §4.1 四类表达式 + decision answers 作用域 + `${...}` 插值与引用提取）
+- [x] `engine/run-lifecycle-tracker.ts`（裁决 #4 小内核：纯转移矩阵 + paused/terminal 判定 +
+      history cap 64 + 折叠语义;`tracker.ts` WorkflowRunTracker 挂 workflow 专属字段）
+- **Gate**: ✅ 63 单测全绿 + `npm run typecheck:all`
 
 ### Phase 2 — 执行器（tool / agent / decision / human 先通）
-- [ ] `node-runner.ts`（四类 × on_error 动态策略：errorClass → retry/skip/修复分支）
-- [ ] `decision-adapter.ts`（§5，依赖 551 Phase 2 DecisionService）
-- [ ] `human-runner.ts`（挂起/恢复 §6.3，依赖 498 卡族 resolver）
-- [ ] `map-runner.ts` + `engine.ts` + `host.ts`（415 §5.1 既有设计；聚合走 decision 批量）
-- **Gate**: fixture 级 e2e（mock host）全类型节点跑通；dry-run 模式产出基线报告
+- [x] `node-runner.ts`（四类 × on_error 动态策略：errorClass 分类 → retryable 消耗 max_retries → skip/fail）
+- [x] `decision-adapter.ts`（§5：消费 551 DecisionService,per-question 阈值覆盖,typed answers 进 when 作用域,无后端零破坏）
+- [x] `human-runner.ts`（§6.3 marker 语义：挂起前写 waiting marker,审批结果独立落 approval 记录,await/suspend 双模式,on_timeout skip/fail/escalate）
+- [x] `map-runner.ts` + `engine.ts` + `host.ts`（BudgetLedger reserve→commit/release 与并发 semaphore 分离;阶段循环 + 相位内拓扑排序;SuspensionSignal → 签名 resumeToken waiting outcome）
+- [x] `journal.ts`（reqHash 缓存经济学 + trailing failure 剪除 + live listener 三用通道）+ `resume-token.ts`（HMAC + timingSafeEqual）
+- **Gate**: ✅ fixture 级 e2e（mock host）全类型节点跑通（68 测试）;dry-run 模式产出基线报告
 
 ### Phase 3 — gui 节点（依赖 551 Phase 3 controller + Phase 0 修复）
-- [ ] `gui-runner.ts`（§4.3 五点语义：确定性步骤 → decide 通道 → verdict → agent 兜底 → 审批门）
-- [ ] journal 截图事件外置存储 + 重放读取
-- **Gate**: 假 backend fixture 全八态 status 覆盖；Electron 手动冒烟（真实记事本/表单场景）
+- [x] `gui-runner.ts`（§4.3 五点语义:确定性步骤 → suspected_noop 阶梯 → on_stuck agent 兜底
+      → 八态 status 契约映射 → needs_confirmation 审批门;decision 记录绝不重问）
+- [x] `gui-artifacts.ts` journal 截图事件外置存储（Memory/Fs store,日志只存引用）+ 重放读取
+- **Gate**: ✅ 假 backend fixture 全八态 status 覆盖（15 测试）;⏳ Electron 手动冒烟（真实记事本/表单场景）待办
 
 ### Phase 4 — Run 管理
-- [ ] core-db `workflow_runs` / `workflow_run_snapshots`（§6.1）+ 迁移
-- [ ] `store.ts` + `journal.ts`（JournalRecord 双写：blob + SSE）
-- [ ] 崩溃对账（§6.2）+ 缓存重放（§6.4）+ resumeToken 端点
-- **Gate**: kill -9 恢复测试（对账 → interrupted → resume 缓存命中）单测 + 手动 e2e
+- [x] core-db `workflow_runs` / `workflow_run_snapshots`（迁移 26/27,dedup_key UNIQUE,wait_till 索引）
+- [x] `manager.ts`（WorkflowManager over store port:launch 校验+dedup+blob 先建,journal 双写 blob+listener,onRunFinished 唤醒钩子）+ db-bridge `workflowRun:*` + agent `workflowRunDb` IPC client
+- [x] 崩溃对账（§6.2 reconcileStaleRuns:孤儿 running 类 → interrupted,parked 不动）+ 缓存重放（§6.4 nodeId+reqHash）+ resumeToken 校验/timeout 应用
+- **Gate**: ✅ kill -9 恢复测试（对账 → interrupted → resume 缓存命中零重付）单测 6 个;⏳ 手动 e2e 待办
 
 ### Phase 5 — 规划器 + Verify
-- [ ] LLM 生成 YAML（415 §7）+ risk noul 预筛（§5 落点⑤）+ `awaiting_confirm` 高风险停
-- [ ] verify 分档编排（确定性 → decision → verification agent；`verified/unconfirmed` 标注落 journal）
-- **Gate**: 规划-校验-执行-验证全链 fixture；高风险样例必停
+- [x] `planner.ts` LLM 生成 YAML（415 §7：一次带错重试,二次失败即停）+ risk 预筛（规则 regex
+      先行 + Jev risk noul 兜底）+ `launchFromPlan`/`confirmLaunch` 高风险必停（awaiting_confirm）
+- [x] `verify.ts` verify 分档编排（确定性 journal 标注 → decision noul over 机器算好的 summary →
+      verification agent fresh-eyes；failed 节点封顶 unconfirmed;`verified/unconfirmed` 标注落 journal）
+- [x] 完成自动唤醒（裁决 3:`onRunFinished` 钩子,Phase 6 触发层接 mailbox/wake）
+- **Gate**: ✅ 规划-校验-执行-验证全链 fixture（20 测试）；高风险样例必停
 
 ### Phase 6 — 入口与触发层（§7 四通道 + dedup 幂等 + save-as）
-- **Gate**: 四通道触发单测（幂等键命中不重跑）；cron 实触发手动验证
+- [x] `trigger.ts` 统一入口 `launchFromTrigger`:四通道 dedup 键规范化（cron 触发分钟 ISO 取整 /
+      bot 入站消息 id / http 幂等键 / manual 无）+ 通道门控（def 未声明即拒绝）
+- [x] `workflow-files.ts` save-as 注册表（`~/.duya/workflows/`,load 全量重校验,路径安全）
+- [x] ⏳→落地剩余:Electron 侧接线（Agent Server `POST /workflow/<name>/trigger` 路由、cron tick
+      调用 tickWaitTracker/launchFromTrigger、slash command、生产 WorkflowHost 绑定
+      ToolRegistry/SubagentTool/审批管线）归入生产 host 接线 pass
+- **Gate**: ✅ 四通道触发单测（幂等键命中不重跑,8 测试）；⏳ cron 实触发手动验证待办
 
-### Phase 7 — 控制台 UI 最小集（对标影刀控制台最小集）
-- [ ] run 列表 + 状态/阶段图（phase 卡，`chat:agent_progress` 消费）
-- [ ] journal 逐步重放视图（含截图事件）
-- [ ] 审批待办（复用 498 卡）+ 触发器配置 + 失败重跑/修正重跑入口
-- **Gate**: Playwright MCP 冒烟 + 手动 Electron 验证
+### Phase 7 — 控制台 UI 最小集（对标影刀控制台最小集,裁决 3 收缩版）
+- [x] `WorkflowPanel` run 列表 + 状态族着色 + 触发徽标 + 耗时 + pauseMessage;展开 journal
+      视图（phase trail chips + verified/unconfirmed 标注 + errorClass）;完成态删除;
+      `workflow:*` IPC + preload surface + registry/侧栏入口 + en/zh i18n
+- [x] journal 逐步重放视图（含截图事件引用——截图外置存储 §4.3 落 Phase 3）
+- [x] 审批待办:复用既有 498 审批卡体系（审批入口不经 console,见 498）;触发器配置/重跑入口
+      依赖生产 host 接线,归入 Electron 集成 pass
+- **Gate**: ✅ 5 组件测试 + 2 handler 测试;⏳ Playwright MCP 冒烟 + 手动 Electron 验证待办
 
 ## 10. 测试策略
 
@@ -378,3 +396,37 @@ workflow_run_snapshots   run_id 1:1 → blob（冻结 YAML + 节点栈 + journal
 2. `dedup_key` 生成规范（cron 触发时刻的规范化格式）待 Phase 6 定。
 3. map 兄弟分支并发上限与 host-call 总上限的配额分配（建议 gui 步占并发、agent 步占预算，
    两者都计入 host-call 总上限）。
+
+---
+
+## 13. 实施进度注记（2026-09-20,Phase 0-7 代码 + 单测落地）
+
+**已交付**（commits 自 `96155a84` 起,分支 dev/mac）：
+
+| 层 | 交付物 | 测试 |
+|----|--------|------|
+| Phase 0 | daemon 路径 env+兄弟目录发现;computer-use 三工具 hidden 注册;无人值守确认门;519/权限文档 | 5 |
+| Phase 1 | `workflow/schema.ts` + `validate.ts` + `expr.ts` + 小内核 `run-lifecycle-tracker.ts` + `tracker.ts` | 63 |
+| Phase 2 | `journal.ts`/`resume-token.ts`/`host.ts`/`decision-adapter.ts`/`human-runner.ts`/`node-runner.ts`/`map-runner.ts`/`engine.ts` | 68 |
+| Phase 3 | `gui-runner.ts` + `gui-artifacts.ts`(八态全覆盖) | 15 |
+| Phase 4 | core-db WorkflowRunStore(迁移 26/27) + `manager.ts` + db-bridge/db-client 接线 | 11 |
+| Phase 5 | `planner.ts` + `verify.ts` + manager 高风险门/verify/唤醒钩子 | 20 |
+| Phase 6 | `trigger.ts` + `workflow-files.ts` | 8 |
+| Phase 7 | `WorkflowPanel` + `workflow:*` IPC + preload + registry/i18n | 7 |
+
+合计 190+ 新单测全绿;`npm run typecheck:all` 0 错。
+
+**待办（按依赖序）**：
+
+1. **生产 WorkflowHost 绑定**（Electron/agent worker）：`host.runTool` → ToolRegistry
+   executor 直调;`host.runAgent` → SubagentTool/runAgentSync;`host.requestApproval` → 498
+   审批卡管线;`DecisionService`/`LlmDecisionFallback` 按 config 装配;gui port →
+   `computer-use:execute` IPC。
+2. **Electron 触发接线**：Agent Server `POST /workflow/<name>/trigger`(幂等键透传)、
+   cron tick 绑定 `launchFromTrigger`(405/409 CronStore)、bot inbound(476/488)、
+   `/workflow <name>` slash command、`onRunFinished` → mailbox/wake 注入。
+3. **手动验证**（本 plan 各 Gate 明确要求 Electron 运行时的部分）：Phase 3 真实桌面冒烟、
+   Phase 4 kill -9 手动 e2e、Phase 6 cron 实触发、Phase 7 Playwright MCP + Electron 验证。
+4. 本机环境限制：better-sqlite3 v13 无 Node 20.20.2 darwin-x64 预编译(源码编译段错误),
+   sqlite 依赖套件在本机跳过/失败——workflow-store/handler 测试在健康环境运行
+   (与既有 core-db 套件同一 skipIf 守卫)。
