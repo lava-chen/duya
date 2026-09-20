@@ -295,12 +295,12 @@ export function getSkillsMetadataSection(
   context: PromptContext,
   options: { skills?: PromptSkill[] } = {},
 ): string | null {
-  // The catalog is only useful when the model can actually load a skill:
-  // either via the read tool (primary, pi-style) or the Skill tool
-  // (fallback). If neither is available, omit the section.
-  const canLoad = context.enabledTools.has(TOOL_NAMES.READ)
-    || context.enabledTools.has(TOOL_NAMES.SKILL)
-  if (!canLoad) return null
+  // Presence gating (Read/Skill tool availability) is handled centrally by
+  // PromptSystem via `SectionDef.requiresTools` (plan 557 phase 3); the
+  // `context` parameter stays for interface compatibility with the section
+  // compute signature. What remains here is pure data availability: an
+  // empty registry renders nothing.
+  void context
 
   const skills = options.skills ?? getSkillRegistry().listModelInvocable()
   if (skills.length === 0) return null

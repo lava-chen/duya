@@ -43,7 +43,7 @@ export const botConfig: PromptSystemConfig = {
     { module: 'platform', cachePolicy: 'every-call' },
     { module: 'environment', cachePolicy: 'every-call' },
     { module: 'mcp', cachePolicy: 'every-call' },
-    { module: 'skills', cachePolicy: 'every-call' },
+    { module: 'skills', cachePolicy: 'every-call', requiresTools: ['Skill', 'Read'] },
     { module: 'scratchpad', cachePolicy: 'every-call' },
     { module: 'sessionGuidance', cachePolicy: 'every-call' },
   ],

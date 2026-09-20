@@ -52,6 +52,7 @@ export const researchConfig: PromptSystemConfig = {
       name: 'recentSessions',
       template: 'dynamic/recent-sessions.hbs',
       cachePolicy: 'every-call',
+      requiresTools: ['SessionSearch'],
       description: 'Recent session metadata can change between turns',
     },
   ],

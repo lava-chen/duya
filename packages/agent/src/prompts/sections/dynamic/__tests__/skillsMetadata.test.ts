@@ -118,10 +118,13 @@ describe('skillsMetadata (pi-style <available_skills> catalog)', () => {
     expect(catalog).not.toMatch(/<skill>[\s\S]*?<location>[\s\S]*?<\/skill>/);
   });
 
-  it('returns null when neither Skill nor read is available', () => {
+  it('ignores tool availability — presence gating lives in PromptSystem.requiresTools (plan 557 phase 3)', () => {
     getSkillRegistry().register(makeSkill());
-    expect(getSkillsMetadataSection(context([]))).toBeNull();
-    expect(getSkillsMetadataSection(context(['Bash']))).toBeNull();
+    // Plan 557 moved the Read/Skill presence gate to SectionDef.requiresTools
+    // (checked centrally, case-insensitively). The function itself now only
+    // reflects data availability.
+    expect(getSkillsMetadataSection(context([]))).not.toBeNull();
+    expect(getSkillsMetadataSection(context(['Bash']))).not.toBeNull();
   });
 
   it('injects the catalog when only read is available (pi-style loading)', () => {

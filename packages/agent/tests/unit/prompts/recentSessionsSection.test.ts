@@ -43,11 +43,15 @@ describe('getRecentSessionsSection', () => {
       makeContext([TOOL_NAMES.SESSION_SEARCH], { sessionId: undefined }),
       loader,
     )).toBeNull()
+    expect(loader).not.toHaveBeenCalled()
+    // Plan 557 phase 3: SessionSearch presence gating moved to
+    // PromptSystem.requiresTools. The function itself no longer consults
+    // enabledTools — empty tools with a valid session context renders.
     expect(await getRecentSessionsSection(
       makeContext([], {}),
       loader,
-    )).toBeNull()
-    expect(loader).not.toHaveBeenCalled()
+    )).not.toBeNull()
+    expect(loader).toHaveBeenCalledTimes(1)
   })
 
   it('renders bounded discovery metadata and safe search-first guidance', async () => {

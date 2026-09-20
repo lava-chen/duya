@@ -32,7 +32,7 @@ function makeConfig(name: string): PromptSystemConfig {
   } as PromptSystemConfig;
 }
 
-function context(): PromptContext {
+function context(overrides: Partial<PromptContext> = {}): PromptContext {
   return {
     workingDirectory: 'E:\\Projects\\duya',
     platform: 'win32',
@@ -41,6 +41,7 @@ function context(): PromptContext {
     enabledTools: new Set<string>(['Read', 'Skill']),
     sessionStartTime: 0,
     omitAgentsMd: true,
+    ...overrides,
   } as PromptContext;
 }
 
@@ -138,5 +139,69 @@ describe('DUYA_DUMP_PROMPT (plan 557 phase 1)', () => {
     const system = new PromptSystem(makeConfig('dump-off'));
     await system.buildSystemPrompt(context());
     expect(readdirSync(dir)).toEqual([]);
+  });
+});
+
+describe('requiresTools central gating (plan 557 phase 3)', () => {
+  let infoSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    infoSpy = vi.spyOn(logger, 'info').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function makeToolGatedConfig(): PromptSystemConfig {
+    return {
+      name: 'gated',
+      sections: [
+        {
+          name: 'skills',
+          compute: () => 'SKILLS-CONTENT',
+          cachePolicy: 'every-call',
+          requiresTools: ['Skill', 'Read'],
+        },
+        {
+          name: 'recentSessions',
+          compute: () => 'RECENT-CONTENT',
+          cachePolicy: 'every-call',
+          requiresTools: ['SessionSearch'],
+        },
+      ],
+    } as PromptSystemConfig;
+  }
+
+  it('keeps the section when a required tool matches case-insensitively', async () => {
+    // Dead-leg regression: the real Read tool registers as lowercase
+    // `read` while TOOL_NAMES.READ is `Read` — the gate must survive that.
+    const system = new PromptSystem(makeToolGatedConfig());
+    const prompt = await system.buildSystemPrompt(context({
+      enabledTools: new Set<string>(['read']),
+    }));
+    const text = [...prompt].join('\n\n');
+    expect(text).toContain('SKILLS-CONTENT');
+  });
+
+  it('skips the section and logs the attribution when tools are missing', async () => {
+    const system = new PromptSystem(makeToolGatedConfig());
+    const prompt = await system.buildSystemPrompt(context({
+      enabledTools: new Set<string>(['Bash']),
+    }));
+    const text = [...prompt].join('\n\n');
+    expect(text).not.toContain('SKILLS-CONTENT');
+    expect(text).not.toContain('RECENT-CONTENT');
+
+    const logLine = infoSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(logLine).toContain('2 section(s) skipped for missing tools: skills(requires Skill|Read), recentSessions(requires SessionSearch)');
+  });
+
+  it('treats an empty enabledTools set as no tools', async () => {
+    const system = new PromptSystem(makeToolGatedConfig());
+    const prompt = await system.buildSystemPrompt(context({
+      enabledTools: new Set<string>(),
+    }));
+    expect([...prompt].join('\n\n')).not.toContain('SKILLS-CONTENT');
   });
 });

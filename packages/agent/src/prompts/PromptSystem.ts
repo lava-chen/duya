@@ -61,6 +61,22 @@ function getSharedHbsPromptSystem(): HbsPromptSystem {
 }
 
 /**
+ * Any-of tool check for `SectionDef.requiresTools` (plan 557 phase 3).
+ *
+ * Case-insensitive on purpose: TOOL_NAMES constants (`Read`) and the wire
+ * names tool classes actually register (`read`) differ in casing, and a
+ * case-sensitive lookup silently dead-legs the gate.
+ */
+function hasAnyEnabledTool(
+  enabledTools: Set<string> | undefined,
+  required: string[],
+): boolean {
+  if (!enabledTools || enabledTools.size === 0) return false
+  const lower = new Set([...enabledTools].map((t) => t.toLowerCase()))
+  return required.some((t) => lower.has(t.toLowerCase()))
+}
+
+/**
  * Render a single section through either its .hbs template (Plan 550 1c)
  * or its TS `compute` function. The template path takes priority when
  * both are present so a config can declare a .hbs override while keeping
@@ -149,6 +165,17 @@ export interface SectionDef {
    * profile gating (e.g. researchProfile, evidencePolicy).
    */
   bypassProfile?: boolean
+  /**
+   * Tool wire names (any-of semantics) that must be present in
+   * `context.enabledTools` for this section to render. Compared
+   * case-insensitively — TOOL_NAMES constants and real wire names differ
+   * in casing (e.g. `Read` vs `read`), which is what silently dead-legged
+   * the skills catalog gate before plan 557 phase 3.
+   *
+   * Replaces ad-hoc `enabledTools.has(...)` checks buried inside section
+   * computeds, so presence gating is centralized and logged in one place.
+   */
+  requiresTools?: string[]
   /** Optional description for debugging. */
   description?: string
   /**
@@ -402,13 +429,26 @@ export class PromptSystem {
    */
   getAllSections(context: PromptContext): PromptSection[] {
     const sections: PromptSection[] = []
+    const toolGated: string[] = []
 
     for (const def of this.config.sections) {
       const sectionName = def.name ?? def.module ?? 'anonymous'
       if (!def.bypassProfile && !isSectionEnabled(this.profile, sectionName)) continue
+      if (def.requiresTools && def.requiresTools.length > 0) {
+        if (!hasAnyEnabledTool(context.enabledTools, def.requiresTools)) {
+          toolGated.push(`${sectionName}(requires ${def.requiresTools.join('|')})`)
+          continue
+        }
+      }
 
       const section = this.buildSectionFromDef(def, context)
       if (section) sections.push(section)
+    }
+
+    if (toolGated.length > 0) {
+      logger.info(
+        `[PromptSystem] '${this.config.name}' build: ${toolGated.length} section(s) skipped for missing tools: ${toolGated.join(', ')}`,
+      )
     }
 
     return sections

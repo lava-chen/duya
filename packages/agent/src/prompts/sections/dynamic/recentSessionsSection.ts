@@ -46,11 +46,11 @@ export async function getRecentSessionsSection(
   ctx: PromptContext,
   loadDirectory: RecentSessionDirectoryLoader = loadRecentSessionDirectory,
 ): Promise<string | null> {
-  if (
-    !ctx.sessionId ||
-    !ctx.workingDirectory ||
-    !ctx.enabledTools.has(TOOL_NAMES.SESSION_SEARCH)
-  ) {
+  // SessionSearch presence gating is handled centrally by PromptSystem via
+  // `SectionDef.requiresTools` (plan 557 phase 3). What remains here:
+  // session identity / working directory availability, plus the
+  // MessageSession content conditional below (text variation, not presence).
+  if (!ctx.sessionId || !ctx.workingDirectory) {
     return null
   }
 
