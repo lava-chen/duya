@@ -54,6 +54,7 @@ import { extractTriggerPaths } from '../agentsmd/nested-loader.js';
 import { isNestedAgentsMdEnabled } from '../config/feature-flags.js';
 import { getCachedAppConnectionDescriptors } from '../tool/AppConnectionTool/index.js';
 import { buildAppsSystemSection, collectConnectorActivationInjection, collectPluginInjections, collectSkillInjections } from '../mentions/index.js';
+import { matchSkillsForPrompt, buildSkillSuggestionInjection } from '../skills/index.js';
 import { compressProjectedToolMessages } from '../compact/projectionCompress.js';
 import { createAIClient, createAIClientWithRetry, inferProvider, findModelCompat, estimateContextTextTokens } from '@duya/ai';
 import type { AIClient, AIClientOptions, RetryConfig, ApiFormat } from '@duya/ai';
@@ -1051,6 +1052,25 @@ export class duyaAgent implements AgentRuntime {
       }
       if (skillInjections.length > 0) {
         logger.info(`[Agent] Skill injection: ${skillInjections.length} skill fragment(s) queued`);
+      }
+    }
+
+    // Plan 535 Phase A-4: per-turn skill-match reminder (mcode matcher
+    // parity). Scans the prompt for path-like tokens and skill names and
+    // suggests up to five relevant installed skills the user never
+    // explicitly mentioned. Fail-closed: hidden / disabled /
+    // conditional-pending skills are never suggested, and skills already
+    // injected via the popover above are excluded.
+    if (promptText) {
+      const excludeSkills = new Set(options?.mentionedSkills ?? []);
+      const skillHits = matchSkillsForPrompt(promptText, {
+        workingDirectory: turnContext.workingDirectory ?? undefined,
+        exclude: excludeSkills,
+      });
+      const skillSuggestion = buildSkillSuggestionInjection(skillHits);
+      if (skillSuggestion) {
+        this.promptContexts.push(`<${skillSuggestion.envelope}>\n${skillSuggestion.body}\n</${skillSuggestion.envelope}>`);
+        logger.info(`[Agent] Skill suggestion: ${skillHits.length} skill(s) matched (${skillHits.map((h) => h.skill.name).join(', ')})`);
       }
     }
 

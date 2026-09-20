@@ -40,8 +40,11 @@ export function registerConditionalSkill(skill: PromptSkill): void {
 /**
  * Check if a file path matches a glob pattern
  * Simple glob matching: * matches any characters except /
+ *
+ * Exported for the per-turn skill matcher (skillMatch.ts) so prompt-text
+ * path tokens use the exact same glob semantics as tool-driven activation.
  */
-function matchGlob(filePath: string, pattern: string): boolean {
+export function matchGlob(filePath: string, pattern: string): boolean {
   // Normalize pattern: remove leading ./
   const normalizedPattern = pattern.replace(/^\.\//, '');
 

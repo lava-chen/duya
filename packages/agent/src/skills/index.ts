@@ -26,6 +26,22 @@ export {
   isConditionalSkill,
 } from './conditionalSkills.js';
 export {
+  SkillDiagnosticCollector,
+  errorCode,
+  sameSkillStat,
+  type SkillDiagnostic,
+  type SkillDiagnosticCode,
+  type SkillDiagnosticLevel,
+} from './diagnostics.js';
+export {
+  matchSkillsForPrompt,
+  buildSkillSuggestionInjection,
+  extractPathLikeTokens,
+  type SkillMatchHit,
+  type SkillMatchOptions,
+  type SkillMatchSuggestion,
+} from './skillMatch.js';
+export {
   loadEnvFile,
   saveEnvVar,
   isEnvVarSet,
