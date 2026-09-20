@@ -38,9 +38,12 @@ import type { PromptProfile } from './modes/types.js'
 import { DEFAULT_PROMPT_PROFILE, isSectionEnabled } from './modes/index.js'
 import { cachedPromptSection, volatilePromptSection } from './constants/promptSections.js'
 import { getShellForPrompt } from '../utils/shellDetector.js'
+import { logger } from '../utils/logger.js'
 import { HbsPromptSystem } from './hbs/HbsPromptSystem.js'
 import { MODULES } from './modules/registry.js'
 import type { StaticModuleRef, ModuleName } from './modules/registry.js'
+import * as fs from 'fs'
+import * as path from 'path'
 
 /**
  * Process-wide HbsPromptSystem singleton. Plan 550: keeping a single
@@ -239,6 +242,67 @@ export class PromptSystem {
     this.config = config
     this.cache = createPromptCache()
     this.profile = profile ?? DEFAULT_PROMPT_PROFILE
+    this.logSectionLedger()
+  }
+
+  /**
+   * Construction-time section ledger (plan 556 phase 1).
+   *
+   * Section presence is decided by several independent layers (profile
+   * whitelist/denylist, section-internal tool gates, data availability),
+   * and every one of them fails silently — a missing section used to be
+   * unattributable (the plan 535 A-6 regression hid the skills catalog
+   * behind a preset whitelist for its entire lifetime). This ledger answers
+   * the first diagnostic question: which sections did the profile filter
+   * out, and by which mechanism?
+   *
+   * Logged once per (config, profile) instance — PromptsRegistry caches
+   * instances, so production cost is one INFO line per profile per process.
+   */
+  private logSectionLedger(): void {
+    const enable = this.profile.enableSections
+    if (enable && enable.length > 0) {
+      logger.warn(
+        `[PromptSystem] '${this.config.name}' profile uses enableSections (strict whitelist) — deprecated in favor of disableSections; sections added to the config later default to invisible`,
+      )
+    }
+    const dropped: string[] = []
+    for (const def of this.config.sections) {
+      const name = def.name ?? def.module ?? 'anonymous'
+      if (def.bypassProfile) continue
+      if (!isSectionEnabled(this.profile, name)) {
+        const reason = enable && enable.length > 0 ? 'whitelist' : 'denylist'
+        dropped.push(`${name}(${reason})`)
+      }
+    }
+    if (dropped.length > 0) {
+      logger.info(
+        `[PromptSystem] '${this.config.name}' section ledger: ${this.config.sections.length - dropped.length}/${this.config.sections.length} sections enabled; dropped by profile: ${dropped.join(', ')}`,
+      )
+    }
+  }
+
+  /**
+   * Best-effort dump of the final assembled prompt (plan 556 phase 1).
+   *
+   * Set `DUYA_DUMP_PROMPT` to a directory path to capture exactly what the
+   * model sees — the ground truth for "why did the model behave as if
+   * section X did not exist".
+   */
+  private maybeDumpPrompt(prompt: readonly string[]): void {
+    const dir = process.env.DUYA_DUMP_PROMPT
+    if (!dir) return
+    try {
+      fs.mkdirSync(dir, { recursive: true })
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      const file = path.join(dir, `${this.config.name}-${stamp}.txt`)
+      fs.writeFileSync(file, prompt.join('\n\n'), 'utf-8')
+      logger.info(`[PromptSystem] Dumped system prompt to ${file}`)
+    } catch (error) {
+      logger.warn(
+        `[PromptSystem] Failed to dump system prompt: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
   }
 
   /** Returns the system name (e.g., 'general', 'code'). */
@@ -265,6 +329,7 @@ export class PromptSystem {
   setProfile(profile: PromptProfile): void {
     this.profile = profile
     this.clearCache()
+    this.logSectionLedger()
   }
 
   /** Access extra prompt generators. */
@@ -423,11 +488,13 @@ export class PromptSystem {
     // Cached sections: consult cache, populate on miss.
     const { staticContent } = await this.resolveSections(cachedSections)
 
-    return asSystemPrompt([
+    const prompt = asSystemPrompt([
       ...staticContent,
       SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
       ...volatileContent,
     ])
+    this.maybeDumpPrompt(prompt)
+    return prompt
   }
 
   /**
