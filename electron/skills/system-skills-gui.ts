@@ -4,7 +4,7 @@
  * System-level skills (`.system`) surfacing for the GUI skills list.
  *
  * Plan 434 (user-directed): the built-in `.system` skills
- * (`memory-search` / `self-config` / `self-knowledge` / `plugin-mcp-builder`)
+ * (`memory-search` / `self-config` / `self-knowledge` / `plugin-mcp-builder` / `workflow`)
  * are synced into the user skills directory (`~/.duya/skills/.system/`) so
  * they are ordinary visible files, and the GUI `skills:list` handler reads
  * them from there — visible with full content preview, always enabled, and
