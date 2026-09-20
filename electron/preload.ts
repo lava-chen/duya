@@ -1363,6 +1363,11 @@ export interface ElectronAPI {
     journal: (runId: string) => Promise<unknown[]>
     snapshot: (runId: string) => Promise<unknown>
     delete: (id: string) => Promise<boolean>
+    cancel: (id: string) => Promise<{ ok: boolean; reason?: string }>
+    defs: {
+      list: (projectDir?: string) => Promise<unknown[]>
+      get: (payload: { name: string; projectDir?: string }) => Promise<unknown>
+    }
   }
   project: ProjectAPI
   lock: LockAPI
@@ -2327,6 +2332,11 @@ const electronAPI: ElectronAPI = {
     journal: (runId: string) => ipcRenderer.invoke('workflow:journal', runId),
     snapshot: (runId: string) => ipcRenderer.invoke('workflow:snapshot', runId),
     delete: (id: string) => ipcRenderer.invoke('workflow:delete', id),
+    cancel: (id: string) => ipcRenderer.invoke('workflow:cancel', id),
+    defs: {
+      list: (projectDir?: string) => ipcRenderer.invoke('workflow:defs:list', projectDir),
+      get: (payload: { name: string; projectDir?: string }) => ipcRenderer.invoke('workflow:defs:get', payload),
+    },
   },
   toolApproval: {
     listBySession: (sessionId: string) =>

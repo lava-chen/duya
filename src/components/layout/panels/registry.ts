@@ -121,7 +121,7 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     minWidth: 380,
     widthRatio: 0.5,
     defaultExpanded: false,
-    component: WorkflowPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
+    component: WorkflowPanel as unknown as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   conductor: {
     id: "conductor",

@@ -13,6 +13,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type BetterSqlite3 from 'better-sqlite3';
+import * as osMod from 'node:os';
 import { CoreDatabase, WorkflowRunStore } from '../../db/core';
 import { _setCoreStoresForTesting } from '../../db/core-connection';
 import { registerWorkflowHandlers } from '../workflow-handlers';
@@ -65,9 +66,37 @@ describe.skipIf(!nativeSqliteAvailable)('workflow console handlers', () => {
 
   it('registers exactly the console channels', () => {
     expect(registered.sort()).toEqual(
-      ['workflow:delete', 'workflow:get', 'workflow:journal', 'workflow:list', 'workflow:snapshot'].sort(),
+      [
+        'workflow:cancel',
+        'workflow:defs:get',
+        'workflow:defs:list',
+        'workflow:delete',
+        'workflow:get',
+        'workflow:journal',
+        'workflow:list',
+        'workflow:snapshot',
+      ].sort(),
     );
   });
+
+  it('cancel refuses terminal runs and clears wait_till for parked ones', () => {
+    const store = (require('../../db/core-connection') as {
+      getCoreStores: () => { workflowRuns: WorkflowRunStore };
+    }).getCoreStores().workflowRuns;
+
+    const done = store.createRun({ workflowName: 'a', status: 'complete' });
+    expect(handlers.get('workflow:cancel')!(undefined, done.id)).toEqual({ ok: false, reason: 'terminal' });
+
+    const parked = store.createRun({ workflowName: 'b', status: 'blocked' });
+    store.setWaitTill(parked.id, Date.now() + 60_000);
+    expect(handlers.get('workflow:cancel')!(undefined, parked.id)).toEqual({ ok: true });
+    const after = store.getRun(parked.id)!;
+    expect(after.status).toBe('cancelled');
+    expect(after.waitTill).toBeNull();
+
+    expect(handlers.get('workflow:cancel')!(undefined, 'ghost')).toEqual({ ok: false, reason: 'not_found' });
+  });
+
 
   it('list → get → journal → delete round-trip', () => {
     const store = (require('../../db/core-connection') as {
@@ -101,4 +130,56 @@ describe.skipIf(!nativeSqliteAvailable)('workflow console handlers', () => {
     expect(handlers.get('workflow:delete')!(undefined, run.id)).toBe(true);
     expect(handlers.get('workflow:get')!(undefined, run.id)).toBeNull();
   });
+});
+
+// ─── definition library (no native sqlite needed) ───
+
+describe('workflow definition library handlers', () => {
+  beforeEach(() => {
+    registered.length = 0;
+    handlers.clear();
+    registerWorkflowHandlers();
+  });
+
+it('defs:list reads the definition library for a project directory', () => {
+  const projectDir = fs.mkdtempSync(path.join(osMod.tmpdir(), 'wf-defs-'));
+  try {
+    const defsDir = path.join(projectDir, '.duya', 'workflows');
+    fs.mkdirSync(defsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(defsDir, 'repo-digest.yaml'),
+      [
+        'name: repo-digest',
+        'description: Digest the repo',
+        'phases:',
+        '  - phase: work',
+        '    title: Work',
+        '    nodes:',
+        '      - id: a',
+        '        noop: true',
+      ].join('\n'),
+      'utf8',
+    );
+    const defs = handlers.get('workflow:defs:list')!(undefined, projectDir) as Array<{
+      name: string;
+      scope: string;
+      valid: boolean;
+      phaseCount: number;
+    }>;
+    expect(defs).toHaveLength(1);
+    expect(defs[0]).toMatchObject({ name: 'repo-digest', scope: 'project', valid: true, phaseCount: 1 });
+
+    const one = handlers.get('workflow:defs:get')!(undefined, { name: 'repo-digest', projectDir }) as {
+      summary: { description: string };
+      definition: { name: string };
+    };
+    expect(one.summary.description).toBe('Digest the repo');
+    expect(one.definition.name).toBe('repo-digest');
+
+    expect(handlers.get('workflow:defs:get')!(undefined, { name: 'ghost', projectDir })).toBeNull();
+  } finally {
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
 });
