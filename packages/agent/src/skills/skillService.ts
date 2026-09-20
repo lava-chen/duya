@@ -18,6 +18,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { readSkillProvenance } from './skillsSync.js';
 import { parseSkillFrontmatter } from './frontmatter.js';
+import type { SkillSource } from './types.js';
 import {
   resolveAvailable,
   effectivePrecedenceOf,
@@ -32,7 +33,11 @@ function parseAllowedTools(v: unknown): string[] {
   return [];
 }
 
-export type SkillSource = 'bundled' | 'user' | 'project' | 'custom' | 'plugin' | 'system' | 'agent';
+// SkillSource is imported from ./types.js — the canonical union (this file
+// previously carried a drifted duplicate that lacked 'mcp' and was the only
+// place 'custom' existed). Re-exported so deep importers of this module keep
+// resolving the name.
+export type { SkillSource } from './types.js';
 
 export interface SkillListItem {
   id: string;

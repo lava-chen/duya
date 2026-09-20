@@ -18,7 +18,8 @@ export type SkillSource =
   | 'mcp'
   | 'plugin'
   | 'system'
-  | 'agent';
+  | 'agent'
+  | 'custom';
 
 /**
  * Skill category (Hermes-inspired classification)

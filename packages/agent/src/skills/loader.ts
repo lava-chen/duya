@@ -12,6 +12,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { ToolUseContext } from '../types.js';
 import type { PromptSkill, SkillArgument, SkillCategory, SkillSource, RequiredEnvVar } from './types.js';
 import { getSkillRegistry } from './registry.js';
+import {
+  SkillDiagnosticCollector,
+  errorCode,
+  sameSkillStat,
+} from './diagnostics.js';
 import { scanSkillFile, shouldAllowInstall, type SkillFinding } from '../security/skillScanner.js';
 import { registerConditionalSkill, separateConditionalSkills } from './conditionalSkills.js';
 import { normalizeRequiredEnvVars } from './envVarCollector.js';
@@ -38,16 +43,140 @@ type SkillEnabledOverrides = Record<string, boolean>;
 const MAX_SKILL_NAME_CHARS = 64;
 const MAX_SKILL_DESCRIPTION_CHARS = 1024;
 
-function validateSkillSpec(name: string, description: string, source: SkillSource): void {
+function validateSkillSpec(
+  name: string,
+  description: string,
+  source: SkillSource,
+  collector?: SkillDiagnosticCollector,
+  locationUri?: string,
+): void {
   if (name.length > MAX_SKILL_NAME_CHARS) {
     console.warn(
       `[Skills] Diagnostic: skill name '${name.slice(0, 32)}…' (${source}) exceeds ${MAX_SKILL_NAME_CHARS} chars (${name.length}); rename the directory to comply with the Agent Skills spec`,
     );
+    collector?.collect({
+      level: 'warning',
+      code: 'name_exceeds_spec',
+      name,
+      locationUri: locationUri ?? name,
+      message: `Skill name exceeds ${MAX_SKILL_NAME_CHARS} chars (${name.length})`,
+    });
   }
   if (description.length > MAX_SKILL_DESCRIPTION_CHARS) {
     console.warn(
       `[Skills] Diagnostic: skill '${name}' (${source}) description exceeds ${MAX_SKILL_DESCRIPTION_CHARS} chars (${description.length}); only the first 250 chars reach the model-facing catalog`,
     );
+    collector?.collect({
+      level: 'warning',
+      code: 'description_exceeds_spec',
+      name,
+      locationUri: locationUri ?? name,
+      message: `Skill description exceeds ${MAX_SKILL_DESCRIPTION_CHARS} chars (${description.length})`,
+    });
+  }
+}
+
+/**
+ * Read a SKILL.md with stat-stability checks (mcode `readStableSkillFile`
+ * parity): stat before open, stat after open, re-stat after read. A file
+ * that changes under us yields a `skill_changed_during_read` diagnostic
+ * and is skipped — the next refresh re-reads it cleanly.
+ *
+ * A missing file is NOT a diagnostic: `loadSkillsFromDirectory` relies on
+ * "no SKILL.md here" to recurse into nested category trees, so ENOENT
+ * returns silently.
+ */
+async function readStableSkillFile(
+  fileLocation: string,
+  skillName: string,
+  collector?: SkillDiagnosticCollector,
+): Promise<{ content?: string }> {
+  let preStat: import('node:fs').Stats | null = null;
+  try {
+    preStat = await fs.stat(fileLocation);
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return {};
+    collector?.collect({
+      level: 'error',
+      code: 'skill_read_failed',
+      name: skillName,
+      locationUri: fileLocation,
+      message: `Unable to stat SKILL.md: ${error instanceof Error ? error.message : String(error)}`,
+    });
+    return {};
+  }
+
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    handle = await fs.open(fileLocation, 'r');
+  } catch (error) {
+    if (errorCode(error) === 'ELOOP') {
+      collector?.collect({
+        level: 'warning',
+        code: 'skill_symlink_rejected',
+        name: skillName,
+        locationUri: fileLocation,
+        message: 'SKILL.md symlinks are not allowed inside skill roots',
+      });
+      return {};
+    }
+    collector?.collect({
+      level: 'error',
+      code: 'skill_read_failed',
+      name: skillName,
+      locationUri: fileLocation,
+      message: `Unable to read SKILL.md: ${error instanceof Error ? error.message : String(error)}`,
+    });
+    return {};
+  }
+
+  try {
+    const openStat = await handle.stat();
+    if (!openStat.isFile()) {
+      collector?.collect({
+        level: 'warning',
+        code: 'skill_file_not_file',
+        name: skillName,
+        locationUri: fileLocation,
+        message: 'Skill path is no longer a file',
+      });
+      return {};
+    }
+    if (preStat && !sameSkillStat(preStat, openStat)) {
+      collector?.collect({
+        level: 'warning',
+        code: 'skill_changed_during_read',
+        name: skillName,
+        locationUri: fileLocation,
+        message: 'SKILL.md changed between stat and open; retry on next refresh',
+      });
+      return {};
+    }
+    const content = await handle.readFile({ encoding: 'utf8' });
+    // Post-read re-stat catches writes that landed between open and read.
+    const postStat = await handle.stat().catch(() => null);
+    if (postStat && !sameSkillStat(openStat, postStat)) {
+      collector?.collect({
+        level: 'warning',
+        code: 'skill_changed_during_read',
+        name: skillName,
+        locationUri: fileLocation,
+        message: 'SKILL.md changed during read; retry on next refresh',
+      });
+      return {};
+    }
+    return { content };
+  } catch (error) {
+    collector?.collect({
+      level: 'error',
+      code: 'skill_read_failed',
+      name: skillName,
+      locationUri: fileLocation,
+      message: `Unable to read SKILL.md: ${error instanceof Error ? error.message : String(error)}`,
+    });
+    return {};
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
 }
 
@@ -137,15 +266,33 @@ async function createSkillFromDirectory(
   inheritedCategory?: SkillCategory,
   securityBypassSkills?: string[],
   skipSecurityScan?: boolean,
+  collector?: SkillDiagnosticCollector,
 ): Promise<PromptSkill | null> {
   const skillFilePath = path.join(skillDir, 'SKILL.md');
 
-  let content: string;
+  // Symlink rejection (mcode parity): a symlinked SKILL.md can point
+  // anywhere, so it is not trusted inside skill roots. The lstat check is
+  // deterministic; the ELOOP catch in readStableSkillFile is the fallback.
   try {
-    content = await fs.readFile(skillFilePath, 'utf-8');
+    const lstat = await fs.lstat(skillFilePath);
+    if (lstat.isSymbolicLink()) {
+      collector?.collect({
+        level: 'warning',
+        code: 'skill_symlink_rejected',
+        name: skillName,
+        locationUri: skillFilePath,
+        message: 'SKILL.md symlinks are not allowed inside skill roots',
+      });
+      return null;
+    }
   } catch {
-    return null;
+    // Fall through to readStableSkillFile, which reports real errors
+    // (and stays silent on ENOENT so category recursion still works).
   }
+
+  const read = await readStableSkillFile(skillFilePath, skillName, collector);
+  if (read.content === undefined) return null;
+  const content = read.content;
 
   // Parse frontmatter and content
   const { frontmatter, content: markdownContent } = parseSkillFrontmatter(content);
@@ -202,7 +349,7 @@ async function createSkillFromDirectory(
   const whenToUse = frontmatter['when-to-use'] as string | undefined;
   const description = (frontmatter.description as string) || skillName;
 
-  validateSkillSpec(skillName, description, source);
+  validateSkillSpec(skillName, description, source, collector, skillFilePath);
 
   const argumentHint = frontmatter['argument-hint'] as string | undefined;
   const model = frontmatter.model as string | undefined;
@@ -343,6 +490,7 @@ async function resolveSkillDirCached(
   securityBypassSkills?: string[],
   bundledSkillNames?: Set<string>,
   skipSecurityScan?: boolean,
+  collector?: SkillDiagnosticCollector,
 ): Promise<PromptSkill[]> {
   const configKey = buildSnapshotConfigKey(source, skipSecurityScan, securityBypassSkills, bundledSkillNames);
   return getRootSnapshotCache().get(entryPath, configKey, async () => {
@@ -353,6 +501,7 @@ async function resolveSkillDirCached(
       inheritedCategory,
       securityBypassSkills,
       skipSecurityScan,
+      collector,
     );
     if (skill) return [skill];
     // Not a SKILL.md leaf — recurse as a (possibly nested-category) tree.
@@ -367,6 +516,7 @@ async function resolveSkillDirCached(
       securityBypassSkills,
       bundledSkillNames,
       skipSecurityScan,
+      collector,
     );
   });
 }
@@ -388,6 +538,7 @@ export async function loadSkillsFromDirectory(
   securityBypassSkills?: string[],
   bundledSkillNames?: Set<string>,
   skipSecurityScan?: boolean,
+  collector?: SkillDiagnosticCollector,
 ): Promise<PromptSkill[]> {
   const skills: PromptSkill[] = [];
 
@@ -441,6 +592,8 @@ export async function loadSkillsFromDirectory(
 
     // Per-child snapshot resolution (plan 445): a SKILL.md leaf resolves to
     // [skill] or []; anything else recurses as a nested-category tree.
+    // Note: diagnostics only fire on cache misses — a snapshot-cached skill
+    // was already diagnosed when first discovered.
     const childSkills = await resolveSkillDirCached(
       entryPath,
       entry,
@@ -449,6 +602,7 @@ export async function loadSkillsFromDirectory(
       securityBypassSkills,
       bundledSkillNames,
       skipSecurityScan,
+      collector,
     );
     skills.push(...childSkills);
   }
@@ -588,7 +742,10 @@ export function getSystemSkillsDir(): string {
  * a user skill. System skills are trusted and must never be gated by the
  * `skillEnabledOverrides` filter or conditional activation.
  */
-export async function loadSystemSkills(skipSecurityScan?: boolean): Promise<PromptSkill[]> {
+export async function loadSystemSkills(
+  skipSecurityScan?: boolean,
+  collector?: SkillDiagnosticCollector,
+): Promise<PromptSkill[]> {
   const systemDir = getSystemSkillsDir();
   const skills = await loadSkillsFromDirectory(
     systemDir,
@@ -597,6 +754,7 @@ export async function loadSystemSkills(skipSecurityScan?: boolean): Promise<Prom
     undefined,
     undefined,
     skipSecurityScan,
+    collector,
   );
 
   for (const skill of skills) {
@@ -632,6 +790,9 @@ export async function loadSkills(cwd: string, options?: SkillLoadOptions): Promi
 
   const allSkills: PromptSkill[] = [];
   const securityBypassSkills = options?.securityBypassSkills;
+  // One typed collector for the whole pass; stored on the registry at the
+  // end so the catalog can render a bounded failure count.
+  const collector = new SkillDiagnosticCollector();
 
   // Get bundled skill names upfront so we can pass them to loadSkillsFromDirectory
   // This allows bundled skills synced to user dir to skip security scans
@@ -666,7 +827,7 @@ export async function loadSkills(cwd: string, options?: SkillLoadOptions): Promi
   // Load all skills from user directory (~/.duya/skills/)
   // This includes synced built-in skills AND user-added skills
   // bundledSkillNames is passed so that synced bundled skills use source='bundled' to skip security scans
-  const userSkills = await loadSkillsFromDirectory(user, 'user', undefined, securityBypassSkills, bundledSkillNames, skipSecurityScan);
+  const userSkills = await loadSkillsFromDirectory(user, 'user', undefined, securityBypassSkills, bundledSkillNames, skipSecurityScan, collector);
 
   if (bundledSkillNames.size > 0) {
     console.log(`[Skills] ${bundledSkillNames.size} bundled skills loaded with security bypass`);
@@ -675,7 +836,7 @@ export async function loadSkills(cwd: string, options?: SkillLoadOptions): Promi
 
   // Load project-level skills (both the cross-agent standard and duya's own)
   for (const projectDir of project) {
-    const projectSkills = await loadSkillsFromDirectory(projectDir, 'project', undefined, securityBypassSkills, bundledSkillNames, skipSecurityScan);
+    const projectSkills = await loadSkillsFromDirectory(projectDir, 'project', undefined, securityBypassSkills, bundledSkillNames, skipSecurityScan, collector);
     allSkills.push(...projectSkills);
   }
 
@@ -686,7 +847,7 @@ export async function loadSkills(cwd: string, options?: SkillLoadOptions): Promi
       const resolvedPath = path.isAbsolute(additionalPath)
         ? additionalPath
         : path.join(cwd, additionalPath);
-      const additionalSkills = await loadSkillsFromDirectory(resolvedPath, 'user', undefined, securityBypassSkills, bundledSkillNames, skipSecurityScan);
+      const additionalSkills = await loadSkillsFromDirectory(resolvedPath, 'user', undefined, securityBypassSkills, bundledSkillNames, skipSecurityScan, collector);
       allSkills.push(...additionalSkills);
     }
   }
@@ -695,7 +856,7 @@ export async function loadSkills(cwd: string, options?: SkillLoadOptions): Promi
   // directory shadows any same-named global user/project skill (the registry
   // Map keeps the last registration).
   if (options?.agentSkillsDir) {
-    const agentSkills = await loadSkillsFromDirectory(options.agentSkillsDir, 'agent', undefined, securityBypassSkills, bundledSkillNames, skipSecurityScan);
+    const agentSkills = await loadSkillsFromDirectory(options.agentSkillsDir, 'agent', undefined, securityBypassSkills, bundledSkillNames, skipSecurityScan, collector);
     allSkills.push(...agentSkills);
   }
 
@@ -734,7 +895,18 @@ export async function loadSkills(cwd: string, options?: SkillLoadOptions): Promi
   // user overrides. Registered last so they win any name collision with a
   // user skill. They are not part of `effectiveSkills` (which went through
   // disabled filtering and conditional separation).
-  const systemSkills = await loadSystemSkills(skipSecurityScan);
+  const systemSkills = await loadSystemSkills(skipSecurityScan, collector);
+
+  // Publish this pass's typed diagnostics for downstream consumers (catalog
+  // count line, tests, GUI). `takeAll` resets the collector — loadSkills is
+  // a pass boundary, nothing after this point collects into it.
+  const diagnostics = collector.takeAll();
+  getSkillRegistry().setLastLoadDiagnostics(diagnostics);
+  const errorCount = diagnostics.filter((d) => d.level === 'error').length;
+  const warnCount = diagnostics.length - errorCount;
+  if (diagnostics.length > 0) {
+    console.warn(`[Skills] Load diagnostics: ${errorCount} error(s), ${warnCount} warning(s)`);
+  }
 
   return [...effectiveSkills, ...systemSkills];
 }

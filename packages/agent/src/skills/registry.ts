@@ -4,6 +4,7 @@
  */
 
 import type { PromptSkill, SkillCategory, SkillCategoryInfo, SkillMetadata, SkillSource, CategoryDescription } from './types.js';
+import type { SkillDiagnostic } from './diagnostics.js';
 import { resetRootSnapshotCache } from './rootSnapshotCache.js';
 
 const CATEGORY_LABELS: Record<SkillCategory, string> = {
@@ -47,6 +48,8 @@ export class SkillRegistry {
   private skills: Map<string, PromptSkill> = new Map();
   private aliases: Map<string, string> = new Map();
   private categoryDescriptions: Map<string, CategoryDescription> = new Map();
+  /** Typed diagnostics from the most recent `loadSkills` pass. */
+  private lastLoadDiagnostics: SkillDiagnostic[] = [];
 
   /**
    * Register a skill
@@ -181,6 +184,23 @@ export class SkillRegistry {
     this.skills.clear();
     this.aliases.clear();
     this.categoryDescriptions.clear();
+    this.lastLoadDiagnostics = [];
+  }
+
+  /**
+   * Store the typed diagnostics gathered by the most recent load pass.
+   *
+   * The skill catalog renders a bounded count line from this (never paths
+   * or messages — prompt-injection hardening); logs and tests get the full
+   * detail.
+   */
+  setLastLoadDiagnostics(diags: SkillDiagnostic[]): void {
+    this.lastLoadDiagnostics = diags;
+  }
+
+  /** Diagnostics from the most recent load pass (empty before first load). */
+  getLastLoadDiagnostics(): SkillDiagnostic[] {
+    return this.lastLoadDiagnostics;
   }
 
   /**
