@@ -33,6 +33,18 @@ describe('PRESET_AGENT_PROFILES', () => {
     expect(disabled).toContain('rules');
   });
 
+  it('general-purpose enableSections whitelists the skills catalog (plan 535 A-6)', () => {
+    // The desktop General sessions run on this preset. Its enableSections
+    // is a strict whitelist (isSectionEnabled), so a missing entry means
+    // the section never renders — this regression is what silently dropped
+    // the <available_skills> catalog and made the model answer skill
+    // inventory questions via `duya skill list` CLI discovery.
+    const general = PRESET_AGENT_PROFILES.find((p) => p.id === 'general-purpose')!;
+    const enabled = general.promptProfile?.enableSections ?? [];
+    expect(enabled).toContain('skills');
+    expect(enabled).toContain('skillUsage');
+  });
+
   it('resolveAllowedTools whitelists exactly the 5 file tools for memory-curator', () => {
     const curator = PRESET_AGENT_PROFILES.find((p) => p.id === 'memory-curator')!;
     const allTools = [

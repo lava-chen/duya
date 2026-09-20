@@ -20,6 +20,7 @@ import { SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '../../../../src/prompts/types.js
 import type { PromptContext } from '../../../../src/prompts/types.js';
 import { getSkillRegistry, resetSkillRegistry } from '../../../../src/skills/registry.js';
 import type { PromptSkill } from '../../../../src/skills/types.js';
+import { PRESET_AGENT_PROFILES } from '../../../../src/agent-profile/types.js';
 
 const ASSETS_ROOT = resolve(__dirname, '../../../../src/prompts/assets');
 
@@ -160,5 +161,21 @@ describe('general profile skills catalog (plan 535)', () => {
     const text = [...prompt].join('\n\n');
     expect(text).not.toContain('## Available skills');
     expect(text).not.toContain('<name>pdf</name>');
+  });
+
+  it('renders the catalog through the real general-purpose preset profile', async () => {
+    // Locks the actual desktop General path: PromptSystem binds the profile
+    // at construction time and promptProfile.enableSections is a strict
+    // whitelist (isSectionEnabled), so the preset MUST include 'skills' or
+    // the catalog silently disappears — the regression that made the model
+    // answer inventory questions via CLI discovery.
+    const preset = PRESET_AGENT_PROFILES.find((p) => p.id === 'general-purpose')!;
+    getSkillRegistry().register(makeSkill());
+    const system = new PromptSystem(generalConfig, preset.promptProfile);
+    const prompt = await system.buildSystemPrompt(context());
+    const text = [...prompt].join('\n\n');
+    expect(text).toContain('## Available skills');
+    expect(text).toContain('<name>pdf</name>');
+    expect(text).toContain('complete, authoritative list of installed skills');
   });
 });

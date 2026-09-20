@@ -132,11 +132,16 @@ export const MAIN_AGENT_PROFILES: AgentProfile[] = [
     // conductor mode.
     promptProfile: {
       // General sessions need core operating guidance, but must not inherit
-      // every volatile capability, skill, and session-history section.
+      // every volatile capability and session-history section. `skills` (the
+      // model-facing <available_skills> catalog) and `skillUsage` (how to
+      // load skills) ARE part of the core contract: without them the model
+      // cannot see the skill inventory and falls back to CLI discovery when
+      // asked what it can do (plan 535 A-6).
       enableSections: [
         'identity', 'communication', 'finalAnswer', 'system', 'tasks',
-        'destructiveActions', 'tools', 'project', 'duyaDesktopContext',
-        'language', 'platform', 'environment', 'memory',
+        'destructiveActions', 'tools', 'skillUsage', 'project',
+        'duyaDesktopContext', 'language', 'platform', 'environment',
+        'memory', 'skills',
       ],
       disableSections: ['rules', 'memoryContent'],
     },

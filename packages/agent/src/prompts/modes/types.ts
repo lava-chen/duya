@@ -4,8 +4,11 @@
  * Previous design: base ('full'|'minimal'|'bare') + overlays[] + overrides{enable,disable} — 3 layers.
  * Current design: flat enableSections / disableSections — 1 layer.
  *
- * Each PromptSystem config declares its own section universe. A profile's
- * enabled set = (config's all section names) ∪ enableSections − disableSections.
+ * Each PromptSystem config declares its own section universe. Section
+ * enablement (see `isSectionEnabled` in modes/index.ts — the
+ * implementation, not this comment, is authoritative):
+ *   - `enableSections` non-empty → strict whitelist
+ *   - otherwise → everything enabled minus `disableSections`
  * Subagent types still map to a default profile via SUBAGENT_TYPE_PROFILE_MAP.
  */
 
