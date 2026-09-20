@@ -52,7 +52,9 @@ export {
 } from './catalog.js'
 export { prepareBotIdentityContext } from './identity.js'
 export { renderBotRoster, BOT_ROSTER_MAX_ENTRIES } from './roster.js'
+export type { BotRosterContext } from './roster.js'
 export { prepareChannelsContext, type BotChannelsContext } from './channels.js'
+export { prepareAutomationsContext, type BotAutomationsContext } from './automations.js'
 export { loadBotPromptContext, isBotAgentProfile, loadBotMemoryContext } from './loader.js'
 export type { TierMemoryEntry, BotMemoryContext } from './memory/types.js'
 export {

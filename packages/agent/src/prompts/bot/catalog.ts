@@ -44,8 +44,8 @@ import { prepareBotIdentityContext } from './identity.js'
 import { prepareBotCommsRulesContext } from './commsRules.js'
 import { prepareChannelsContext } from './channels.js'
 import { prepareBotTaskDelegationContext } from './delegation.js'
-import { renderBotRoster } from './roster.js'
-import { renderBotAutomations } from './automations.js'
+import { prepareBotRosterContext, type BotRosterContext } from './roster.js'
+import { prepareAutomationsContext, type BotAutomationsContext } from './automations.js'
 import {
   BOT_MEMORY_OWN_SECTION,
   BOT_MEMORY_USAGE_SECTION,
@@ -80,7 +80,7 @@ export const BOT_AUTOMATIONS_SECTION: BotSectionDef = {
     'Routines bound to this bot (cronjob.toml agent binding, 476 P2.3b): wake-cue conduct + current inventory with ids. Renderer reads the cron file directly.',
   budgetChars: 2800,
   templatePath: 'bot/automations.hbs',
-  compute: renderBotAutomations,
+  prepare: prepareAutomationsContext,
   volatile: true,
 }
 
@@ -99,7 +99,7 @@ export const BOT_ROSTER_SECTION: BotSectionDef = {
     'Inter-agent messaging contract (async, judgment, privacy relay, fan-out, capability) + teammate directory (492 P1.2; group rooms via 478).',
   budgetChars: 8000,
   templatePath: 'bot/roster.hbs',
-  compute: renderBotRoster,
+  prepare: prepareBotRosterContext,
 }
 
 export const BOT_TASK_DELEGATION_SECTION: BotSectionDef = {
