@@ -53,7 +53,7 @@ import { getAgentsMdManager } from '../agentsmd/index.js';
 import { extractTriggerPaths } from '../agentsmd/nested-loader.js';
 import { isNestedAgentsMdEnabled } from '../config/feature-flags.js';
 import { getCachedAppConnectionDescriptors } from '../tool/AppConnectionTool/index.js';
-import { buildAppsSystemSection, collectConnectorActivationInjection, collectPluginInjections, collectSkillInjections } from '../mentions/index.js';
+import { buildAppsSystemSection, collectConnectorActivationInjection, collectPluginInjections, collectSkillInjections, extractExplicitSkillMentions, mergeSkillMentionSources } from '../mentions/index.js';
 import { matchSkillsForPrompt, buildSkillSuggestionInjection } from '../skills/index.js';
 import { compressProjectedToolMessages } from '../compact/projectionCompress.js';
 import { createAIClient, createAIClientWithRetry, inferProvider, findModelCompat, estimateContextTextTokens } from '@duya/ai';
@@ -1045,8 +1045,17 @@ export class duyaAgent implements AgentRuntime {
     // model executes the skill immediately instead of having to notice the
     // catalog entry and load it with a read round-trip. Resolution happens
     // against the agent's own skill registry (see collectSkillInjections).
-    if (options?.mentionedSkills?.length) {
-      const skillInjections = await collectSkillInjections(options.mentionedSkills);
+    // Plan 535 Phase B: handwritten `$name` and `skill://name` references in
+    // the raw prompt join the popover selection (deduped, popover first);
+    // unresolvable tokens ($20-style prices, unknown names) drop out in the
+    // extractor, and fail-closed rules stay with collectSkillInjections.
+    if (options?.mentionedSkills?.length || promptText) {
+      const explicitSkills = extractExplicitSkillMentions(promptText);
+      const mergedMentionedSkills = mergeSkillMentionSources(
+        options?.mentionedSkills ?? [],
+        explicitSkills,
+      );
+      const skillInjections = await collectSkillInjections(mergedMentionedSkills);
       for (const injection of skillInjections) {
         this.promptContexts.push(`<${injection.envelope}>\n${injection.body}\n</${injection.envelope}>`);
       }

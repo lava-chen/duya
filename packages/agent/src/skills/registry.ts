@@ -87,6 +87,28 @@ export class SkillRegistry {
   }
 
   /**
+   * Resolve a mention to a canonical skill name (case-insensitive).
+   *
+   * Used by explicit mention extraction (plan 535 Phase B): `$name` and
+   * `skill://name` tokens are matched case-insensitively against registered
+   * names and aliases, so `$PDF`, `$pdf`, and `$Pdf` all resolve to the
+   * `pdf` skill. Returns the canonical registered name, or undefined when
+   * nothing matches (prices like `$20` fall out here).
+   */
+  resolveName(input: string): string | undefined {
+    const direct = this.get(input);
+    if (direct) return direct.name;
+    const lower = input.toLowerCase();
+    for (const [name] of this.skills) {
+      if (name.toLowerCase() === lower) return name;
+    }
+    for (const [alias, target] of this.aliases) {
+      if (alias.toLowerCase() === lower) return target;
+    }
+    return undefined;
+  }
+
+  /**
    * Check if a skill exists
    */
   has(name: string): boolean {

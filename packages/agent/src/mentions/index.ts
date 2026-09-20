@@ -169,6 +169,90 @@ function escapeXml(value: string): string {
 }
 
 /**
+ * Extract explicitly-referenced skill names from the raw prompt text
+ * (plan 535 Phase B — codex `collect_explicit_skill_mentions` parity).
+ *
+ * Two recognition sources, in priority order:
+ *   1. `$name` exact syntax — the codex-style handwritten reference. The
+ *      token charset is `[A-Za-z0-9_-]{2,64}` and must not be preceded by
+ *      another word character or `$`, so `$5`/`$10`-style prices and
+ *      `foo$bar` identifiers are ignored; anything that does not resolve
+ *      against the registry (prices, unknown skills) drops out silently.
+ *   2. `skill://name` targets — both the renderer-rewritten markdown form
+ *      `[/name](skill://name)` and bare URIs.
+ *
+ * Handwritten `/name` stays with the popover path (options.mentionedSkills),
+ * which is the established injection form — no new `/name` parsing here.
+ *
+ * Names are resolved case-insensitively through the skill registry and
+ * returned as canonical registered names, deduplicated. Visibility rules
+ * (hidden / disabled / conditional-pending) remain with
+ * `collectSkillInjections` — the single fail-closed choke point.
+ */
+export function extractExplicitSkillMentions(promptText: string): string[] {
+  if (!promptText || promptText.trim().length === 0) return [];
+
+  const registry = getSkillRegistry();
+  const resolved = new Set<string>();
+  const add = (token: string): void => {
+    const canonical = registry.resolveName(token);
+    if (canonical) resolved.add(canonical);
+  };
+
+  // 1. `$name` exact syntax.
+  const dollar = /\$([A-Za-z0-9_-]{2,64})/g;
+  for (const match of promptText.matchAll(dollar)) {
+    // Lookbehind guard: not preceded by a word char or another `$`
+    // (rejects `foo$bar`, `$$name`), and must contain at least one letter
+    // (rejects pure-numeric prices like `$20` even if a skill were
+    // named "20" — a numeric skill name is not addressable by design).
+    const start = match.index ?? 0;
+    const prev = start > 0 ? promptText[start - 1] : '';
+    if (prev && /[A-Za-z0-9_$]/.test(prev)) continue;
+    const token = match[1]!;
+    if (!/[A-Za-z]/.test(token)) continue;
+    add(token);
+  }
+
+  // 2a. Renderer-rewritten markdown form: `[/name](skill://name)`.
+  const markdownLink = /\[[^\]]*\]\(\s*skill:\/\/([^)\s]+)\s*\)/g;
+  for (const match of promptText.matchAll(markdownLink)) {
+    add(match[1]!);
+  }
+
+  // 2b. Bare `skill://name` URIs.
+  const bareUri = /(?<![A-Za-z0-9_/-])skill:\/\/([A-Za-z0-9_-]+)/g;
+  for (const match of promptText.matchAll(bareUri)) {
+    add(match[1]!);
+  }
+
+  return Array.from(resolved);
+}
+
+/**
+ * Merge popover-mentioned skills with explicitly-extracted ones (plan 535
+ * Phase B wiring). Popover names come first (explicit UI selection is the
+ * highest-signal source), extracted names follow in registry-resolution
+ * order; dedupe is case-insensitive on the raw name so `$PDF` and a
+ * popover `PDF` collapse to one entry.
+ */
+export function mergeSkillMentionSources(
+  popoverNames: readonly string[],
+  explicitNames: readonly string[],
+): string[] {
+  const merged: string[] = [];
+  const seen = new Set<string>();
+  for (const name of [...popoverNames, ...explicitNames]) {
+    if (typeof name !== 'string' || name.trim().length === 0) continue;
+    const key = name.trim().toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(name.trim());
+  }
+  return merged;
+}
+
+/**
  * Collect `<skill>` fragment injections for the `/name` skills mentioned
  * this turn (Plan 450 Phase H) — codex `UserInput::Skill` +
  * `load_skill_prompts` parity.
