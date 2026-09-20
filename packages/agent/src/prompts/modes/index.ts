@@ -40,7 +40,7 @@ export function isSectionEnabled(profile: PromptProfile, sectionName: string): b
  */
 export function resolveEnabledSections(profile: PromptProfile): Set<string> {
   // Note: this can only resolve "explicitly enabled" — the implicit default
-  // (everything not disabled) is handled by PromptSystem.getStaticSections
+  // (everything not disabled) is handled by PromptSystem.getAllSections
   // via isSectionEnabled(). This function is kept for backward-compat
   // callers that just want the explicit enable list minus disable list.
   const enabled = new Set<string>(profile.enableSections ?? [])

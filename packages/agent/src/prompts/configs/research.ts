@@ -22,21 +22,22 @@ import { getOutputFormatPromptSection } from '../research/sections/outputFormat.
 
 export const researchConfig: PromptSystemConfig = {
   name: 'research',
-  staticModules: [
-    { module: 'projectContinuity', name: 'projectContinuity' },
-    { module: 'projectInstructions', name: 'projectInstructions' },
-    { module: 'configProtection', name: 'configProtection' },
+  sections: [
+    // Cached registry modules (static half)
+    { module: 'projectContinuity', name: 'projectContinuity', cachePolicy: 'once' },
+    { module: 'projectInstructions', name: 'projectInstructions', cachePolicy: 'once' },
+    { module: 'configProtection', name: 'configProtection', cachePolicy: 'once' },
     // Research-specific modules — bypass profile gating (always render).
-    { module: 'researchProfile', name: 'researchProfile', bypassProfile: true },
-    { module: 'taskIntent', name: 'taskIntent', bypassProfile: true },
-    { module: 'evidencePolicy', name: 'evidencePolicy', bypassProfile: true },
-    { module: 'memoryWriteProposal', name: 'memoryWriteProposal', bypassProfile: true },
+    { module: 'researchProfile', name: 'researchProfile', bypassProfile: true, cachePolicy: 'once' },
+    { module: 'taskIntent', name: 'taskIntent', bypassProfile: true, cachePolicy: 'once' },
+    { module: 'evidencePolicy', name: 'evidencePolicy', bypassProfile: true, cachePolicy: 'once' },
+    { module: 'memoryWriteProposal', name: 'memoryWriteProposal', bypassProfile: true, cachePolicy: 'once' },
     // toneAndStyle IS a generic section name; respect the profile gate.
-    { module: 'toneAndStyle', name: 'toneAndStyle' },
-  ],
-  dynamicSections: [
+    { module: 'toneAndStyle', name: 'toneAndStyle', cachePolicy: 'once' },
+    // Volatile inline sections (dynamic half — recomputed every call)
     {
       name: 'outputFormat',
+      cachePolicy: 'every-call',
       // Compute intent inline — resolveResearchIntent is a cheap context fallback.
       compute: (ctx) => getOutputFormatPromptSection(resolveResearchIntent(ctx)),
       description: 'Intent-specific output format',
@@ -44,11 +45,13 @@ export const researchConfig: PromptSystemConfig = {
     {
       name: 'visualVerification',
       template: 'dynamic/visual-verification.hbs',
+      cachePolicy: 'every-call',
       description: 'Visual tasks require rendered-output verification',
     },
     {
       name: 'recentSessions',
       template: 'dynamic/recent-sessions.hbs',
+      cachePolicy: 'every-call',
       description: 'Recent session metadata can change between turns',
     },
   ],

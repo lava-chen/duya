@@ -9,13 +9,12 @@
  *   + the bot section catalog (botIdentity / comms / memory tiers / channels /
  *     roster / … via BotPromptAssembly.renderSections).
  *
- * Unlike `general`, `staticSections` is intentionally empty: the stable
- * behavioral baseline is the distilled `basicPrompt.ts`, which is prepended
- * directly by `_buildSystemPrompt` rather than re-rendered through PromptCache
- * (keeps it KV-cache friendly and single-sourced).
+ * The stable behavioral baseline is the distilled `basicPrompt.ts`, which is
+ * prepended directly by `_buildSystemPrompt` rather than re-rendered through
+ * PromptCache (byte-stable, KV-cache friendly, single-sourced).
  *
- * `dynamicSections` reuses the general dynamic renderers, keeping only what a
- * bot session actually needs:
+ * Bot sessions reuse the general dynamic renderers via the registry, keeping
+ * only what a bot actually needs:
  *   keep    language / outputStyle / platform / environment / mcp / skills /
  *           scratchpad / sessionGuidance
  *   cut     memory          — superseded by the bot memory tiers
@@ -30,26 +29,23 @@ import type { PromptSystemConfig } from '../PromptSystem.js'
 import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
 import { createEnvironmentPreBuildHook } from '../sections/dynamic/environmentPreBuildHook.js'
 
-// Dynamic sections — render through the same .hbs templates `general` uses.
+// Dynamic sections — recomputed every call via registry module refs.
 export const botConfig: PromptSystemConfig = {
   name: 'bot',
-  // Plan 551: the bot's stable behavioral baseline stays the distilled
-  // `basicPrompt.ts` prepended by `_buildSystemPrompt` (byte-stable,
-  // KV-cache friendly) — it is not assembled through PromptSystem, so the
-  // static module list is empty.
-  staticModules: [],
-  dynamicSections: [
-    // Global preferences
-    { name: 'language', template: 'dynamic/language.hbs', description: 'Language preference' },
-    { name: 'outputStyle', template: 'dynamic/output-style.hbs', description: 'Custom output style' },
-    // Environment state
-    { name: 'platform', template: 'dynamic/platform.hbs', description: 'Communication platform-specific guidance' },
-    { name: 'environment', template: 'dynamic/environment.hbs', description: 'Current directory state' },
-    { name: 'mcp', template: 'dynamic/mcp-instructions.hbs', description: 'MCP servers can change' },
-    { name: 'skills', template: 'dynamic/skills-metadata.hbs', description: 'Skills can be loaded/unloaded' },
-    { name: 'scratchpad', template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },
-    // Task-level constraints
-    { name: 'sessionGuidance', template: 'dynamic/session-guidance.hbs', description: 'Session-specific guidance' },
+  // The bot's stable behavioral baseline stays the distilled `basicPrompt.ts`
+  // prepended by `_buildSystemPrompt` (byte-stable, KV-cache friendly) — it
+  // is not assembled through PromptSystem, so the sections list contains only
+  // the volatile runtime sections.
+  sections: [
+    // Dynamic sections — recomputed every call via .hbs templates
+    { module: 'language', cachePolicy: 'every-call' },
+    { module: 'outputStyle', cachePolicy: 'every-call' },
+    { module: 'platform', cachePolicy: 'every-call' },
+    { module: 'environment', cachePolicy: 'every-call' },
+    { module: 'mcp', cachePolicy: 'every-call' },
+    { module: 'skills', cachePolicy: 'every-call' },
+    { module: 'scratchpad', cachePolicy: 'every-call' },
+    { module: 'sessionGuidance', cachePolicy: 'every-call' },
   ],
   preBuildHook: async (ctx) => {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.

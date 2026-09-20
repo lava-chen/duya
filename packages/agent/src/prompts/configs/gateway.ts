@@ -18,16 +18,17 @@ import { createRecentSessionsPreBuildHook } from '../sections/dynamic/recentSess
 
 export const gatewayConfig: PromptSystemConfig = {
   name: 'gateway',
-  staticModules: [
-    { module: 'intro', name: 'intro' },
-    { module: 'gatewayRole', name: 'gatewayRole' },
-    { module: 'communication', name: 'communication' },
-    { module: 'finalAnswer', name: 'finalAnswer' },
-    { module: 'toneAndStyle', name: 'toneAndStyle', params: { tone_never_analysis: true } },
-    { module: 'system', name: 'system' },
-    { module: 'tasks', name: 'tasks' },
-    { module: 'destructiveActions', name: 'destructiveActions' },
-    { module: 'configProtection', name: 'configProtection' },
+  sections: [
+    // Cached registry modules (static half)
+    { module: 'intro', name: 'intro', cachePolicy: 'once' },
+    { module: 'gatewayRole', name: 'gatewayRole', cachePolicy: 'once' },
+    { module: 'communication', name: 'communication', cachePolicy: 'once' },
+    { module: 'finalAnswer', name: 'finalAnswer', cachePolicy: 'once' },
+    { module: 'toneAndStyle', name: 'toneAndStyle', cachePolicy: 'once', params: { tone_never_analysis: true } },
+    { module: 'system', name: 'system', cachePolicy: 'once' },
+    { module: 'tasks', name: 'tasks', cachePolicy: 'once' },
+    { module: 'destructiveActions', name: 'destructiveActions', cachePolicy: 'once' },
+    { module: 'configProtection', name: 'configProtection', cachePolicy: 'once' },
     {
       // The gateway tools section predates the general rework: it keeps
       // the "Do NOT use Bash" lead bullet and the two-space subitem
@@ -35,32 +36,30 @@ export const gatewayConfig: PromptSystemConfig = {
       // content-unification commit.
       module: 'tools',
       name: 'tools',
+      cachePolicy: 'once',
       params: { tools_bash_warning: true, tools_legacy_indent: true },
     },
     {
       module: 'skillUsage',
       name: 'skillUsage',
+      cachePolicy: 'once',
       enabledWhen: (ctx) => ctx.enabledTools.has(TOOL_NAMES.SKILL),
     },
-    { module: 'project', name: 'project' },
-  ],
-  dynamicSections: [
-    // Global preferences
-    { name: 'language', template: 'dynamic/language.hbs', description: 'Language preference' },
-    { name: 'outputStyle', template: 'dynamic/output-style.hbs', description: 'Custom output style' },
-    // Environment state
-    { name: 'platform', template: 'dynamic/platform.hbs', description: 'Communication platform-specific guidance' },
-    { name: 'environment', template: 'dynamic/environment.hbs', description: 'Current directory state' },
-    { name: 'mcp', template: 'dynamic/mcp-instructions.hbs', description: 'MCP servers can change' },
-    { name: 'skills', template: 'dynamic/skills-metadata.hbs', description: 'Skills can be loaded/unloaded' },
-    { name: 'scratchpad', template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },
-    { name: 'memory', template: 'dynamic/memory.hbs', description: 'Persistent memory projection files may have been updated since last turn' },
-    { name: 'sessionSearch', template: 'dynamic/session-search.hbs', description: 'Past-session decisions may be relevant to the current task' },
-    { name: 'recentSessions', template: 'dynamic/recent-sessions.hbs', description: 'Recent session metadata can change between turns' },
-    // Task-level constraints
-    { name: 'sessionGuidance', template: 'dynamic/session-guidance.hbs', description: 'Session-specific guidance' },
-    { name: 'visionGuidelines', template: 'dynamic/vision-guidelines.hbs', description: 'Vision tool guidelines' },
-    { name: 'visualVerification', template: 'dynamic/visual-verification.hbs', description: 'Visual tasks require rendered-output verification' },
+    { module: 'project', name: 'project', cachePolicy: 'once' },
+    // Volatile inline sections (dynamic half — recomputed every call)
+    { name: 'language', template: 'dynamic/language.hbs', cachePolicy: 'every-call', description: 'Language preference' },
+    { name: 'outputStyle', template: 'dynamic/output-style.hbs', cachePolicy: 'every-call', description: 'Custom output style' },
+    { name: 'platform', template: 'dynamic/platform.hbs', cachePolicy: 'every-call', description: 'Communication platform-specific guidance' },
+    { name: 'environment', template: 'dynamic/environment.hbs', cachePolicy: 'every-call', description: 'Current directory state' },
+    { name: 'mcp', template: 'dynamic/mcp-instructions.hbs', cachePolicy: 'every-call', description: 'MCP servers can change' },
+    { name: 'skills', template: 'dynamic/skills-metadata.hbs', cachePolicy: 'every-call', description: 'Skills can be loaded/unloaded' },
+    { name: 'scratchpad', template: 'dynamic/scratchpad.hbs', cachePolicy: 'every-call', description: 'Scratchpad directory' },
+    { name: 'memory', template: 'dynamic/memory.hbs', cachePolicy: 'every-call', description: 'Persistent memory projection files may have been updated since last turn' },
+    { name: 'sessionSearch', template: 'dynamic/session-search.hbs', cachePolicy: 'every-call', description: 'Past-session decisions may be relevant to the current task' },
+    { name: 'recentSessions', template: 'dynamic/recent-sessions.hbs', cachePolicy: 'every-call', description: 'Recent session metadata can change between turns' },
+    { name: 'sessionGuidance', template: 'dynamic/session-guidance.hbs', cachePolicy: 'every-call', description: 'Session-specific guidance' },
+    { name: 'visionGuidelines', template: 'dynamic/vision-guidelines.hbs', cachePolicy: 'every-call', description: 'Vision tool guidelines' },
+    { name: 'visualVerification', template: 'dynamic/visual-verification.hbs', cachePolicy: 'every-call', description: 'Visual tasks require rendered-output verification' },
   ],
   preBuildHook: async (ctx) => {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.

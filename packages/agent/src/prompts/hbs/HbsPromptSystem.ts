@@ -13,12 +13,13 @@
  *     templates can be referenced by short relative paths (e.g.
  *     `modules/identity.hbs`).
  *   - Assembly of the static half (profile gating, prompt-cache keying,
- *     empty-collapse) lives in `PromptSystem.getStaticSections`.
+ *     empty-collapse) lives in `PromptSystem.getAllSections`.
  *
  * @see docs/exec-plans/active/551-prompt-module-flatten.md
  */
 
-import { dirname, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { PromptContext } from '../types.js';
@@ -32,7 +33,28 @@ import { MODULES } from '../modules/registry.js';
 import type { ModuleName, PromptModuleDef } from '../modules/registry.js';
 import { HbsPromptRenderer } from './HandlebarsRenderer.js';
 
-const ASSETS_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../assets');
+/**
+ * Locate the prompt asset tree at runtime. Which candidate wins depends on
+ * how this module was loaded:
+ *   - `../assets` — tsc output (`dist/prompts/hbs/`) and src (vitest).
+ *   - `./assets` — the esbuild CJS bundle (`bundle/agent-process-entry.js`,
+ *     which is also what the packaged app ships as
+ *     `resources/agent-bundle/`); `scripts/build-agent-bundle.mjs` copies
+ *     the tree there.
+ */
+function resolveAssetsRoot(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const candidates = [resolve(here, '../assets'), resolve(here, 'assets')];
+  for (const candidate of candidates) {
+    if (existsSync(join(candidate, 'dynamic', 'language.hbs'))) return candidate;
+  }
+  // Keep the historical default when nothing matches; the renderer fails
+  // with the raw ENOENT on first render, which is easier to trace than a
+  // wrong-but-existing directory.
+  return candidates[0];
+}
+
+const ASSETS_ROOT = resolveAssetsRoot();
 
 /**
  * Map a `PromptContext` to the variables a `.hbs` template expects.

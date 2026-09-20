@@ -21,39 +21,40 @@ import { createRecentSessionsPreBuildHook } from '../sections/dynamic/recentSess
 // Dynamic sections
 export const codeConfig: PromptSystemConfig = {
   name: 'code',
-  staticModules: [
-    { module: 'identityCoding', name: 'identity' },
-    { module: 'systemCoding', name: 'system' },
-    { module: 'duyaDesktopContextCode', name: 'duyaDesktopContext' },
-    { module: 'projectContinuity', name: 'projectContinuity' },
+  sections: [
+    // Cached registry modules (static half)
+    { module: 'identityCoding', name: 'identity', cachePolicy: 'once' },
+    { module: 'systemCoding', name: 'system', cachePolicy: 'once' },
+    { module: 'duyaDesktopContextCode', name: 'duyaDesktopContext', cachePolicy: 'once' },
+    { module: 'projectContinuity', name: 'projectContinuity', cachePolicy: 'once' },
     // keepCodingInstructions: omit personality when an output style is active
     // and the style doesn't explicitly request keeping coding instructions.
     {
       module: 'personality',
       name: 'personality',
+      cachePolicy: 'once',
       enabledWhen: (ctx) =>
         ctx.outputStyleConfig == null
           ? true
           : ctx.outputStyleConfig.keepCodingInstructions === true,
     },
-    { module: 'workingWithTheUser', name: 'workingWithTheUser' },
-    { module: 'rules', name: 'rules' },
-    { module: 'configProtection', name: 'configProtection' },
-    { module: 'projectInstructions', name: 'projectInstructions' },
-  ],
-  dynamicSections: [
-    { name: 'platform', template: 'dynamic/platform.hbs', description: 'Communication platform-specific guidance' },
-    { name: 'environment', template: 'dynamic/environment.hbs', description: 'Current directory state' },
-    { name: 'mcp', template: 'dynamic/mcp-instructions.hbs', description: 'MCP servers can change' },
-    { name: 'sessionGuidance', template: 'dynamic/session-guidance.hbs', description: 'Session-specific guidance' },
-    { name: 'skills', template: 'dynamic/skills-metadata.hbs', description: 'Skills can be loaded/unloaded' },
-    { name: 'language', template: 'dynamic/language.hbs', description: 'Language preference' },
-    { name: 'outputStyle', template: 'dynamic/output-style.hbs', description: 'Custom output style' },
-    { name: 'scratchpad', template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },
-    { name: 'memory', template: 'dynamic/memory.hbs', description: 'Persistent memory projection files may have been updated since last turn' },
-    { name: 'sessionSearch', template: 'dynamic/session-search.hbs', description: 'Past-session decisions may be relevant to the current task' },
-    { name: 'recentSessions', template: 'dynamic/recent-sessions.hbs', description: 'Recent session metadata can change between turns' },
-    { name: 'visualVerification', template: 'dynamic/visual-verification.hbs', description: 'Visual tasks require rendered-output verification' },
+    { module: 'workingWithTheUser', name: 'workingWithTheUser', cachePolicy: 'once' },
+    { module: 'rules', name: 'rules', cachePolicy: 'once' },
+    { module: 'configProtection', name: 'configProtection', cachePolicy: 'once' },
+    { module: 'projectInstructions', name: 'projectInstructions', cachePolicy: 'once' },
+    // Volatile inline sections (dynamic half — recomputed every call)
+    { name: 'platform', template: 'dynamic/platform.hbs', cachePolicy: 'every-call', description: 'Communication platform-specific guidance' },
+    { name: 'environment', template: 'dynamic/environment.hbs', cachePolicy: 'every-call', description: 'Current directory state' },
+    { name: 'mcp', template: 'dynamic/mcp-instructions.hbs', cachePolicy: 'every-call', description: 'MCP servers can change' },
+    { name: 'sessionGuidance', template: 'dynamic/session-guidance.hbs', cachePolicy: 'every-call', description: 'Session-specific guidance' },
+    { name: 'skills', template: 'dynamic/skills-metadata.hbs', cachePolicy: 'every-call', description: 'Skills can be loaded/unloaded' },
+    { name: 'language', template: 'dynamic/language.hbs', cachePolicy: 'every-call', description: 'Language preference' },
+    { name: 'outputStyle', template: 'dynamic/output-style.hbs', cachePolicy: 'every-call', description: 'Custom output style' },
+    { name: 'scratchpad', template: 'dynamic/scratchpad.hbs', cachePolicy: 'every-call', description: 'Scratchpad directory' },
+    { name: 'memory', template: 'dynamic/memory.hbs', cachePolicy: 'every-call', description: 'Persistent memory projection files may have been updated since last turn' },
+    { name: 'sessionSearch', template: 'dynamic/session-search.hbs', cachePolicy: 'every-call', description: 'Past-session decisions may be relevant to the current task' },
+    { name: 'recentSessions', template: 'dynamic/recent-sessions.hbs', cachePolicy: 'every-call', description: 'Recent session metadata can change between turns' },
+    { name: 'visualVerification', template: 'dynamic/visual-verification.hbs', cachePolicy: 'every-call', description: 'Visual tasks require rendered-output verification' },
   ],
   preBuildHook: async (ctx) => {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.

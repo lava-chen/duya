@@ -40,7 +40,7 @@ import { cachedPromptSection, volatilePromptSection } from './constants/promptSe
 import { getShellForPrompt } from '../utils/shellDetector.js'
 import { HbsPromptSystem } from './hbs/HbsPromptSystem.js'
 import { MODULES } from './modules/registry.js'
-import type { StaticModuleRef } from './modules/registry.js'
+import type { StaticModuleRef, ModuleName } from './modules/registry.js'
 
 /**
  * Process-wide HbsPromptSystem singleton. Plan 550: keeping a single
@@ -84,11 +84,29 @@ async function renderSectionCompute(
 }
 
 /**
+ * Cache policy for a prompt section.
+ *
+ * - `'once'`: compute once and cache for the lifetime of the PromptSystem
+ *            instance (within a streamChat call). Corresponds to the legacy
+ *            "static" semantics.
+ * - `'every-call'`: recompute on every buildSystemPrompt call. Corresponds
+ *                   to the legacy "dynamic" semantics.
+ */
+export type SectionCachePolicy = 'once' | 'every-call'
+
+/**
  * A section definition in a PromptSystemConfig.
  */
 export interface SectionDef {
-  /** Unique section name within this PromptSystem. */
-  name: string
+  /** Unique section name within this PromptSystem. Defaults to `module` when a registry ref is given. */
+  name?: string
+  /**
+   * Registry module to render for this section. When set, the section
+   * content is produced by HbsPromptSystem.renderModule(module, ctx, params).
+   * The `enabledWhen` gate (if present) is evaluated before rendering.
+   * Cannot be combined with `compute` or `template`.
+   */
+  module?: ModuleName
   /**
    * Compute the section content. Return null to omit.
    *
@@ -116,6 +134,13 @@ export interface SectionDef {
    */
   params?: Record<string, unknown>
   /**
+   * Optional config-side content gate evaluated per render, before the
+   * section renders. Returning false collapses the section to null (same
+   * as a legacy `compute` returning null). Applied both to registry module
+   * refs and inline section defs.
+   */
+  enabledWhen?: (context: PromptContext) => boolean
+  /**
    * If true, skip isSectionEnabled filtering — this section always renders.
    * Used by research for sections that exist outside the generic
    * profile gating (e.g. researchProfile, evidencePolicy).
@@ -123,6 +148,16 @@ export interface SectionDef {
   bypassProfile?: boolean
   /** Optional description for debugging. */
   description?: string
+  /**
+   * Cache policy for this section. Defaults to `'once'` for registry module
+   * references and `'every-call'` for inline section definitions.
+   *
+   * `'once'`: cached across buildSystemPrompt calls within the same
+   *           PromptSystem instance (same as legacy "static" semantics).
+   * `'every-call'`: recomputed every buildSystemPrompt call (same as legacy
+   *                 "dynamic" semantics).
+   */
+  cachePolicy?: SectionCachePolicy
 }
 
 /**
@@ -167,16 +202,21 @@ export interface PromptSystemConfig {
   /** System name ('general' / 'code' / 'research' / 'gateway'). */
   name: string
   /**
-   * Static half assembly list over the module registry (Plan 551). The
-   * only static surface: each reference normalizes onto the SectionDef
-   * machinery (profile gating, prompt-cache keying, empty-collapse) with
-   * the module's `.hbs` render as the content source. The former
-   * `staticSections` TS chain and the Plan 550 `staticTemplate` monolith
-   * path are retired.
+   * Unified section list. Each entry is either a registry-module reference
+   * (with `module` key) or an inline section definition (with `compute` and/or
+   * `template`). The `cachePolicy` field (defaults to `'once'` for registry
+   * refs, `'every-call'` for inline defs) determines whether the section is
+   * cached across buildSystemPrompt calls or recomputed every call.
+   *
+   * Previously split into `staticModules` (registry refs, cached) and
+   * `dynamicSections` (inline defs, uncached). The distinction is now
+   * expressed purely via `cachePolicy` on each entry.
    */
-  staticModules: StaticModuleRef[]
-  /** Dynamic (volatile) sections. */
-  dynamicSections: SectionDef[]
+  sections: SectionDef[]
+  /** @deprecated Use `sections` instead. Kept for incremental migration. */
+  staticModules?: StaticModuleRef[]
+  /** @deprecated Use `sections` instead. Kept for incremental migration. */
+  dynamicSections?: SectionDef[]
   /** Optional: extend PromptContext with extra fields after base mapping. */
   contextExtender?: ContextExtender
   /** Optional: async side-effect before buildSystemPrompt. */
@@ -281,77 +321,69 @@ export class PromptSystem {
   }
 
   /**
-   * Get static sections (cached across turns).
+   * Get all sections (both cached and volatile) in render order.
    * Filters by isSectionEnabled unless section declares bypassProfile.
    *
-   * When a section declares `template`, the HbsPromptSystem renders the
-   * section content from the .hbs asset instead of calling `compute`.
-   * The `compute` function is kept as the legacy reference and never
-   * invoked at runtime in that case.
+   * Registry module references (def.module set) are resolved to their
+   * .hbs render through the shared HbsPromptSystem. Inline sections
+   * (def.compute / def.template) are rendered directly.
+   *
+   * The `cachePolicy` field on each section controls caching:
+   *   'once'       → wrapped in cachedPromptSection (cached across calls)
+   *   'every-call' → wrapped in volatilePromptSection (never cached)
+   *
+   * When `cachePolicy` is absent the default is 'once' for registry refs
+   * and 'every-call' for inline defs.
    */
-  getStaticSections(context: PromptContext): PromptSection[] {
-    const defs = this.getStaticSectionDefs()
+  getAllSections(context: PromptContext): PromptSection[] {
     const sections: PromptSection[] = []
-    for (const def of defs) {
-      if (!def.bypassProfile && !isSectionEnabled(this.profile, def.name)) continue
-      sections.push(
-        cachedPromptSection(def.name, () => renderSectionCompute(def, context)),
-      )
+
+    for (const def of this.config.sections) {
+      const sectionName = def.name ?? def.module ?? 'anonymous'
+      if (!def.bypassProfile && !isSectionEnabled(this.profile, sectionName)) continue
+
+      const section = this.buildSectionFromDef(def, context)
+      if (section) sections.push(section)
     }
+
     return sections
   }
 
   /**
-   * Static-half section definitions in render order. Module references
-   * always normalize onto a `compute` function (never the `template`
-   * field) so the config-side `enabledWhen` gate collapses to null
-   * exactly like a legacy `compute` returning null; `renderModule`
-   * applies the module's own `slots` mapper plus static `params` and the
-   * empty-output collapse matches the template path.
+   * Build a PromptSection from a SectionDef.
+   * Registry module refs resolve via HbsPromptSystem; inline defs
+   * resolve via renderSectionCompute.
    */
-  private getStaticSectionDefs(): SectionDef[] {
-    return (this.config.staticModules ?? []).map((ref) => {
-      const enabledWhen = ref.enabledWhen
-      return {
-        name: ref.name ?? ref.module,
-        bypassProfile: ref.bypassProfile,
-        compute: (ctx: PromptContext) => {
-          if (enabledWhen && !enabledWhen(ctx)) return null
-          const out = getSharedHbsPromptSystem()
-            .renderModule(ref.module, ctx, ref.params)
-            .trim()
-          return out === '' ? null : out
-        },
+  private buildSectionFromDef(def: SectionDef, context: PromptContext): PromptSection | null {
+    const cachePolicy = def.cachePolicy ?? (def.module ? 'once' : 'every-call')
+    const sectionName = def.name ?? def.module ?? 'anonymous'
+    const compute = () => {
+      if (def.module) {
+        // Registry module reference — resolve via the shared HbsPromptSystem.
+        if (def.enabledWhen && !def.enabledWhen(context)) return null
+        const out = getSharedHbsPromptSystem()
+          .renderModule(def.module, context, def.params)
+          .trim()
+        return out === '' ? null : out
       }
-    })
-  }
+      return renderSectionCompute(def, context)
+    }
 
-  /**
-   * Get dynamic sections (recomputed every turn).
-   * Filters by isSectionEnabled unless section declares bypassProfile.
-   *
-   * Same template-routing contract as getStaticSections.
-   */
-  getDynamicSections(context: PromptContext): PromptSection[] {
-    const sections: PromptSection[] = []
-    for (const def of this.config.dynamicSections) {
-      if (!def.bypassProfile && !isSectionEnabled(this.profile, def.name)) continue
-      sections.push(
-        volatilePromptSection(
-          def.name,
-          () => renderSectionCompute(def, context),
-          def.description ?? 'Dynamic section',
-        ),
+    if (cachePolicy === 'once') {
+      return cachedPromptSection(sectionName, compute)
+    } else {
+      return volatilePromptSection(
+        sectionName,
+        compute,
+        def.description ?? 'Dynamic section',
       )
     }
-    return sections
   }
 
   /**
    * Build the complete system prompt.
-   * Template method: preBuildHook → getSections → resolve → combine.
-   * The static half is the `staticModules` assembly (Plan 551); the
-   * dynamic half renders through its section templates/compute.
+   * Template method: preBuildHook → getAllSections → resolve cached →
+   * recompute volatile → combine.
    */
   async buildSystemPrompt(context: PromptContext): Promise<SystemPrompt> {
     // Pre-build hook: async side-effects + cache invalidation.
@@ -367,45 +399,52 @@ export class PromptSystem {
       }
     }
 
-    const dynamicSections = this.getDynamicSections(context)
-    const dynamicResults = await Promise.all(
-      dynamicSections.map(section => Promise.resolve(section.compute())),
+    const allSections = this.getAllSections(context)
+
+    // Partition into cached ('once') and volatile ('every-call') sections.
+    const cachedSections: PromptSection[] = []
+    const volatileSections: PromptSection[] = []
+    for (const section of allSections) {
+      if (section.volatile) {
+        volatileSections.push(section)
+      } else {
+        cachedSections.push(section)
+      }
+    }
+
+    // Volatile sections: always recompute (parallel).
+    const volatileResults = await Promise.all(
+      volatileSections.map(section => Promise.resolve(section.compute())),
     )
-    const dynamicContent = dynamicResults.filter(
+    const volatileContent = volatileResults.filter(
       (c): c is string => c !== null,
     )
 
-    const staticSections = this.getStaticSections(context)
-    const { staticContent } = await this.resolveSections(
-      staticSections,
-      [], // dynamic handled above to share a single render path
-    )
+    // Cached sections: consult cache, populate on miss.
+    const { staticContent } = await this.resolveSections(cachedSections)
 
     return asSystemPrompt([
       ...staticContent,
       SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
-      ...dynamicContent,
+      ...volatileContent,
     ])
   }
 
   /**
-   * Resolve static and dynamic sections.
-   * Static: consult cache, populate on miss.
-   * Dynamic: always recompute.
+   * Resolve cached sections: consult cache, populate on miss.
+   * Volatile sections are handled separately in buildSystemPrompt.
    */
   private async resolveSections(
-    staticSections: PromptSection[],
-    dynamicSections: PromptSection[],
-  ): Promise<{ staticContent: string[]; dynamicContent: string[] }> {
-    // Static: consult cache first (in order), collect misses, then compute misses in parallel.
-    const staticSlots: (string | null)[] = new Array(staticSections.length).fill(null)
+    cachedSections: PromptSection[],
+  ): Promise<{ staticContent: string[] }> {
+    const slots: (string | null)[] = new Array(cachedSections.length).fill(null)
     const missIndices: number[] = []
     const missSections: PromptSection[] = []
-    staticSections.forEach((section, i) => {
+    cachedSections.forEach((section, i) => {
       const cached = this.cache.get(section.name)
       if (cached !== undefined) {
         if (cached !== null) {
-          staticSlots[i] = cached
+          slots[i] = cached
         }
       } else {
         missIndices.push(i)
@@ -422,27 +461,13 @@ export class PromptSystem {
         const originalIdx = missIndices[idx]
         this.cache.set(section.name, content)
         if (content !== null) {
-          staticSlots[originalIdx] = content
+          slots[originalIdx] = content
         }
       })
     }
 
-    const staticContent = staticSlots.filter(
-      (c): c is string => c !== null,
-    )
-
-    // Dynamic: always recompute, run in parallel, preserve original order.
-    const dynamicResults = await Promise.all(
-      dynamicSections.map(section => Promise.resolve(section.compute())),
-    )
-    const dynamicContent: string[] = []
-    for (const content of dynamicResults) {
-      if (content !== null) {
-        dynamicContent.push(content)
-      }
-    }
-
-    return { staticContent, dynamicContent }
+    const staticContent = slots.filter((c): c is string => c !== null)
+    return { staticContent }
   }
 
   /**

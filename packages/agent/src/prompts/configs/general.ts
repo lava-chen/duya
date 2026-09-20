@@ -23,39 +23,36 @@ import { createRecentSessionsPreBuildHook } from '../sections/dynamic/recentSess
 
 export const generalConfig: PromptSystemConfig = {
   name: 'general',
-  // Plan 551: the static half is an assembly list over the shared module
-  // registry (assets/modules/*.hbs). Order mirrors the former monolith
-  // template (assets/general/system-prompt.md.hbs), which stays on disk
-  // as the split-parity reference until the Phase 3 retirement commit.
-  staticModules: [
-    { module: 'identity' },
-    { module: 'system' },
-    { module: 'destructiveActions' },
-    { module: 'configProtection' },
-    { module: 'communication' },
-    { module: 'tools' },
-    { module: 'tasks' },
-    { module: 'skillUsage' },
-    { module: 'duyaDesktopContext' },
-    { module: 'finalAnswer' },
-  ],
-  dynamicSections: [
-    // Global preferences
-    { name: 'language', template: 'dynamic/language.hbs', description: 'Language preference' },
-    { name: 'outputStyle', template: 'dynamic/output-style.hbs', description: 'Custom output style' },
-    // Environment state
-    { name: 'platform', template: 'dynamic/platform.hbs', description: 'Communication platform-specific guidance' },
-    { name: 'environment', template: 'dynamic/environment.hbs', description: 'Current directory state' },
-    { name: 'mcp', template: 'dynamic/mcp-instructions.hbs', description: 'MCP servers can change' },
-    { name: 'skills', template: 'dynamic/skills-metadata.hbs', description: 'Skills can be loaded/unloaded' },
-    { name: 'scratchpad', template: 'dynamic/scratchpad.hbs', description: 'Scratchpad directory' },
-    { name: 'memory', template: 'dynamic/memory.hbs', description: 'Persistent memory projection files may have been updated since last turn' },
-    { name: 'sessionSearch', template: 'dynamic/session-search.hbs', description: 'Past-session decisions may be relevant to the current task' },
-    { name: 'recentSessions', template: 'dynamic/recent-sessions.hbs', description: 'Recent session metadata can change between turns' },
-    // Task-level constraints
-    { name: 'sessionGuidance', template: 'dynamic/session-guidance.hbs', description: 'Session-specific guidance' },
-    { name: 'visionGuidelines', template: 'dynamic/vision-guidelines.hbs', description: 'Vision tool guidelines' },
-    { name: 'visualVerification', template: 'dynamic/visual-verification.hbs', description: 'Visual tasks require rendered-output verification' },
+  // Unified sections list. Registry module refs use cachePolicy: 'once' (cached
+  // across buildSystemPrompt calls); inline section defs use cachePolicy:
+  // 'every-call' (recomputed every call). Order mirrors the former staticModules
+  // + dynamicSections split.
+  sections: [
+    // Cached registry modules (static half)
+    { module: 'identity', cachePolicy: 'once' },
+    { module: 'system', cachePolicy: 'once' },
+    { module: 'destructiveActions', cachePolicy: 'once' },
+    { module: 'configProtection', cachePolicy: 'once' },
+    { module: 'communication', cachePolicy: 'once' },
+    { module: 'tools', cachePolicy: 'once' },
+    { module: 'tasks', cachePolicy: 'once' },
+    { module: 'skillUsage', cachePolicy: 'once' },
+    { module: 'duyaDesktopContext', cachePolicy: 'once' },
+    { module: 'finalAnswer', cachePolicy: 'once' },
+    // Volatile inline sections (dynamic half — recomputed every call)
+    { name: 'language', template: 'dynamic/language.hbs', cachePolicy: 'every-call', description: 'Language preference' },
+    { name: 'outputStyle', template: 'dynamic/output-style.hbs', cachePolicy: 'every-call', description: 'Custom output style' },
+    { name: 'platform', template: 'dynamic/platform.hbs', cachePolicy: 'every-call', description: 'Communication platform-specific guidance' },
+    { name: 'environment', template: 'dynamic/environment.hbs', cachePolicy: 'every-call', description: 'Current directory state' },
+    { name: 'mcp', template: 'dynamic/mcp-instructions.hbs', cachePolicy: 'every-call', description: 'MCP servers can change' },
+    { name: 'skills', template: 'dynamic/skills-metadata.hbs', cachePolicy: 'every-call', description: 'Skills can be loaded/unloaded' },
+    { name: 'scratchpad', template: 'dynamic/scratchpad.hbs', cachePolicy: 'every-call', description: 'Scratchpad directory' },
+    { name: 'memory', template: 'dynamic/memory.hbs', cachePolicy: 'every-call', description: 'Persistent memory projection files may have been updated since last turn' },
+    { name: 'sessionSearch', template: 'dynamic/session-search.hbs', cachePolicy: 'every-call', description: 'Past-session decisions may be relevant to the current task' },
+    { name: 'recentSessions', template: 'dynamic/recent-sessions.hbs', cachePolicy: 'every-call', description: 'Recent session metadata can change between turns' },
+    { name: 'sessionGuidance', template: 'dynamic/session-guidance.hbs', cachePolicy: 'every-call', description: 'Session-specific guidance' },
+    { name: 'visionGuidelines', template: 'dynamic/vision-guidelines.hbs', cachePolicy: 'every-call', description: 'Vision tool guidelines' },
+    { name: 'visualVerification', template: 'dynamic/visual-verification.hbs', cachePolicy: 'every-call', description: 'Visual tasks require rendered-output verification' },
   ],
   preBuildHook: async (ctx) => {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.

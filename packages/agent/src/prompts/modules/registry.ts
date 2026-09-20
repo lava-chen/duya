@@ -172,6 +172,41 @@ export const MODULES = {
     path: 'modules/memory-write-proposal.hbs',
     description: 'Research memory write policy (hypothesis auto-update procedure)',
   },
+  // Dynamic sections — runtime-computed, recomputed every call (every-call).
+  // Kept in the registry for type-safe reference and consistent config style.
+  // Slots are not needed: these templates receive PromptContext directly.
+  language: {
+    path: 'dynamic/language.hbs',
+    description: 'Language preference',
+  },
+  outputStyle: {
+    path: 'dynamic/output-style.hbs',
+    description: 'Custom output style',
+  },
+  platform: {
+    path: 'dynamic/platform.hbs',
+    description: 'Communication platform-specific guidance',
+  },
+  environment: {
+    path: 'dynamic/environment.hbs',
+    description: 'Current directory state',
+  },
+  mcp: {
+    path: 'dynamic/mcp-instructions.hbs',
+    description: 'MCP servers can change',
+  },
+  skills: {
+    path: 'dynamic/skills-metadata.hbs',
+    description: 'Skills can be loaded/unloaded',
+  },
+  scratchpad: {
+    path: 'dynamic/scratchpad.hbs',
+    description: 'Scratchpad directory',
+  },
+  sessionGuidance: {
+    path: 'dynamic/session-guidance.hbs',
+    description: 'Session-specific guidance',
+  },
 } as const satisfies Record<string, PromptModuleDef>
 
 /** Registry key of an authored content module. */
