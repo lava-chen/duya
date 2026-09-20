@@ -235,6 +235,7 @@ export function formatSkillCatalog(
     '<available_skills>\n</available_skills>'.length
     + '## Available skills\n\n'.length
     + 'Load a skill by reading its <location> with the read tool; the `Skill` tool is a fallback that loads the same instructions by name. This index is not a substitute for the selected skill\'s SKILL.md.'.length
+    + '\nThis catalog is the complete, authoritative list of installed skills for this session. When the user asks what skills you have, what you can do, or which skill fits a task, answer directly from it — do not run CLI commands (such as `duya skill list`), enumerate skill directories, or query any other source to re-discover skills. CLI skill commands exist for the user\'s terminal-side management (install / enable / disable), not for your inventory answers.'.length
     + '\n\n### Skill roots\n\nWhen the catalog drops a `<location>` to fit the token budget, look it up here. Reading the path with the read tool is preferred over the `Skill` tool (fallback).\n\n| Skill | Source |\n|---|---|\n'.length
 
   const tier = pickCatalogTier(orderedSkills, budget, fixedOverhead)
@@ -286,7 +287,8 @@ export function formatSkillCatalog(
 
   return `${sections.join('\n\n')}
 
-Load a skill by reading its <location> with the read tool; the \`Skill\` tool is a fallback that loads the same instructions by name. This index is not a substitute for the selected skill's SKILL.md.`
+Load a skill by reading its <location> with the read tool; the \`Skill\` tool is a fallback that loads the same instructions by name. This index is not a substitute for the selected skill's SKILL.md.
+This catalog is the complete, authoritative list of installed skills for this session. When the user asks what skills you have, what you can do, or which skill fits a task, answer directly from it — do not run CLI commands (such as \`duya skill list\`), enumerate skill directories, or query any other source to re-discover skills. CLI skill commands exist for the user's terminal-side management (install / enable / disable), not for your inventory answers.`
 }
 
 export function getSkillsMetadataSection(

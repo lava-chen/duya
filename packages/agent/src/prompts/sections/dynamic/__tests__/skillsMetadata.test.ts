@@ -63,6 +63,16 @@ describe('skillsMetadata (pi-style <available_skills> catalog)', () => {
     expect(catalog).toContain('</available_skills>');
   });
 
+  it('declares the catalog as the authoritative inventory source (plan 535 A-5)', () => {
+    const catalog = formatSkillCatalog([makeSkill()]);
+
+    // The model must answer "what skills do you have" from this block
+    // instead of running discovery commands like `duya skill list`.
+    expect(catalog).toContain('complete, authoritative list of installed skills');
+    expect(catalog).toContain('do not run CLI commands (such as `duya skill list`)');
+    expect(catalog).toContain('answer directly from it');
+  });
+
   it('sorts system skills (DUYA itself) before all other skills', () => {
     const catalog = formatSkillCatalog([
       makeSkill({ name: 'pdf' }),
@@ -184,13 +194,14 @@ describe('skillsMetadata (pi-style <available_skills> catalog)', () => {
     // Build a skill list whose full-tier estimate exceeds the 70% headroom
     // threshold but stays under 100% — exercises the compact branch.
     // 4 skills × ~340 chars compact (name + 250 desc + wrapper) = ~1360 chars
-    // + ~510 fixed overhead ≈ 1870 chars compact. Budget 500 tokens =
-    // 2000 chars → 70% threshold 1400 (compact crosses it → not full),
-    // 100% threshold 2000 (compact fits → compact tier fires).
+    // + ~990 fixed overhead (incl. the authoritative-inventory usage line)
+    // ≈ 2370 chars compact. Budget 700 tokens = 2800 chars →
+    // 70% threshold 1960 (full crosses it → not full),
+    // 100% threshold 2800 (compact fits → compact tier fires).
     const skills = Array.from({ length: 4 }, (_, i) =>
       makeSkill({ name: `s${i}`, description: 'x'.repeat(250) }),
     );
-    const catalog = formatSkillCatalog(skills, { tokens: 500, charsPerToken: 0.25 });
+    const catalog = formatSkillCatalog(skills, { tokens: 700, charsPerToken: 0.25 });
 
     expect(catalog).not.toMatch(/<skill>[\s\S]*?<location>[\s\S]*?<\/skill>/);
     expect(catalog).toContain('<description>');
