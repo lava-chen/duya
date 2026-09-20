@@ -1,17 +1,19 @@
 /**
  * Bot Prompt Framework.
  *
- * Assembly skeleton for the bot system-prompt layer (Plan 474 §7). The
- * *stable* behavioral baseline lives in one distilled file (basicPrompt.ts).
- * Everything that varies per runtime (identity, user+timezone, memory,
- * automations, channels, agent roster, MCP instructions, remote box) is a
- * *section*: it declares a name, an optional per-section char budget and a
- * `compute(ctx)` that returns rendered text or null to omit itself.
+ * Assembly skeleton for the bot system-prompt layer (Plan 474 §7). Plan
+ * 558: every section template now lives under `prompts/assets/bot/*.hbs`
+ * and renders through `HbsPromptSystem` — the same engine the host
+ * prompt uses — so there is exactly one template path, one compile
+ * cache, and one dump format across host and bot.
  *
- * Today only the framework + baseline exist. As the surrounding systems
- * land (476 wake/channels, 477 DM, 479 memory tiers, 485 profile.json,
- * 481 tools), each section module registers itself via `register` and the
- * assembly starts emitting it — no other caller changes.
+ * The *stable* behavioral baseline still lives in one distilled file
+ * (`assets/bot/basic-prompt.md.hbs`, loader: `basicPrompt.ts`). Everything
+ * that varies per runtime (identity, user+timezone, memory, automations,
+ * channels, agent roster, MCP instructions, remote box) is a *section*:
+ * it declares a name, an optional `budgetChars`, an optional
+ * `templatePath`, and an optional `compute(ctx)` that returns rendered
+ * text or null to omit itself.
  *
  * Sections are deliberately *not* tied to the legacy PromptSystem section
  * enum: bot sections live in a self-contained, keyed space (474 §6.1) so
@@ -22,8 +24,12 @@
 
 import { BOT_BASIC_SYSTEM_PROMPT } from './basicPrompt.js'
 import { botSectionCacheKey } from './epoch.js'
-import type { BotMemoryContext } from './memory/types.js'
+import { HbsPromptSystem } from '../hbs/HbsPromptSystem.js'
+import type { HbsPromptSystemOptions } from '../hbs/HbsPromptSystem.js'
+import type { PromptContext } from '../types.js'
+import { TOOL_NAMES } from '../types.js'
 import type { ChannelSnapshot } from '../../channels/types.js'
+import type { BotMemoryContext } from './memory/types.js'
 
 /** One row of the bot roster (agent directory). */
 export interface BotRosterEntry {
@@ -127,7 +133,18 @@ export interface BotPromptContext {
   promptConfig?: BotPromptConfig
 }
 
-/** A registered, ordered bot prompt section. */
+/**
+ * A registered, ordered bot prompt section.
+ *
+ * Plan 558 migration: a section is one of three shapes:
+ *   1. `templatePath` only — render via `HbsPromptSystem` (the new default).
+ *   2. `compute` only — legacy TS renderer, kept for transitional sections.
+ *   3. both — the framework tries the template first, falls back to
+ *      `compute` on render error (single source of truth, gradual rollout).
+ *
+ * Either path is acceptable during the migration. Phase 2 collapses all
+ * real sections to template-only and deletes `compute` for good.
+ */
 export interface BotSectionDef {
   /** Stable unique id (also used for the future epoch cache key suffix). */
   name: string
@@ -139,7 +156,15 @@ export interface BotSectionDef {
    * cannot render with the available context return null.
    */
   budgetChars?: number
-  compute: (ctx: BotPromptContext) => string | null | Promise<string | null>
+  /** Path to a `.hbs` template relative to the shared assets root. */
+  templatePath?: string
+  /** Optional params passed to the template alongside `ctx`. */
+  templateParams?: Record<string, unknown>
+  /**
+   * Optional TS renderer. Pre-plan-558 sections used this exclusively;
+   * kept for migration. Phase 2 deletes it from every catalog entry.
+   */
+  compute?: (ctx: BotPromptContext) => string | null | Promise<string | null>
   /**
    * Plan 501 L1: volatile sections render from data that changes during
    * normal operation (memory writes, connector state, routine edits). They
@@ -190,14 +215,30 @@ export interface BotRenderOptions {
 /** Upper bound on cached section snapshots (FIFO eviction). */
 const SNAPSHOT_CACHE_MAX_ENTRIES = 256
 
+/** Options accepted by the assembly constructor. */
+export interface BotAssemblyOptions {
+  /**
+   * Optional override for the HbsPromptSystem used to render section
+   * templates. Defaults to a fresh instance with the shared assets root.
+   * Tests can pass a custom instance to assert against a known fixture.
+   */
+  hbs?: HbsPromptSystem
+}
+
 /** Single ordered assembly of bot sections. */
 export class BotPromptAssembly {
   private readonly sections = new Map<string, BotSectionDef>()
   private order: string[] = []
   /** Frozen per-section renders, keyed by `bot:<id>:<hash>:<epoch>:<section>`. */
   private readonly snapshotCache = new Map<string, string | null>()
+  private readonly hbs: HbsPromptSystem
 
-  constructor(private readonly basicPrompt: string = BOT_BASIC_SYSTEM_PROMPT) {}
+  constructor(
+    private readonly basicPrompt: string = BOT_BASIC_SYSTEM_PROMPT,
+    options: BotAssemblyOptions = {},
+  ) {
+    this.hbs = options.hbs ?? new HbsPromptSystem()
+  }
 
   /** Register (or replace) a section. Replacement keeps the original slot. */
   register(section: BotSectionDef): void {
@@ -327,23 +368,60 @@ export class BotPromptAssembly {
       return this.snapshotCache.get(cacheKey) ?? null
     }
 
-    let raw: string | null | undefined
+    let content: string | null = null
     let failed = false
     try {
-      raw = await def.compute(ctx)
+      content = await this.renderBody(def, ctx)
     } catch (err) {
       // A failing section must never break the whole prompt.
       failed = true
     }
     if (failed) return null
 
-    let content: string | null = raw ?? null
     if (content !== null && def.budgetChars !== undefined) {
       const fitted = fitToBudget(content, def.budgetChars)
       if (fitted.truncated) content = `${fitted.text}\n…`
     }
     if (cacheKey !== undefined) this.storeSnapshot(cacheKey, content)
     return content
+  }
+
+  /**
+   * Body rendering per Plan 558 — `templatePath` first, `compute` fallback.
+   * Both paths run through the same HbsPromptSystem instance so there is
+   * exactly one compile cache for the assembly.
+   */
+  private async renderBody(
+    def: BotSectionDef,
+    ctx: BotPromptContext,
+  ): Promise<string | null> {
+    if (def.templatePath) {
+      // BotPromptContext is a strictly lean superset of the host PromptContext
+      // shape that HbsPromptSystem.mapPromptContextToHbs reads. Spreading
+      // fills the optional fields HbsPromptSystem needs without dragging in
+      // host-only fields (mcpServers, sessionId, etc.) the bot doesn't carry.
+      const out = this.hbs.renderStaticTemplate(
+        def.templatePath,
+        {
+          workingDirectory: ctx.workingDirectory ?? '',
+          platform: process.platform,
+          shell: '' as string,
+          modelId: '' as string,
+          enabledTools: new Set<string>([
+            ...(ctx.mcpTools ? ctx.mcpTools.map((t) => t.name) : []),
+            'Read', 'Skill', 'SessionSearch', 'TodoWrite', 'Task',
+            TOOL_NAMES.MESSAGE_SESSION,
+          ]),
+          sessionStartTime: 0,
+        },
+        { ...ctx, ...def.templateParams },
+      )
+      return out === '' ? null : out
+    }
+    if (def.compute) {
+      return (await def.compute(ctx)) ?? null
+    }
+    return null
   }
 
   private storeSnapshot(key: string, value: string | null): void {
@@ -371,3 +449,6 @@ export interface BotSectionSnapshot {
   /** True when the budget marker was appended (rendered longer than budget). */
   truncated: boolean
 }
+
+/** Re-export the HbsPromptSystem options type for callers that pass one in. */
+export type { HbsPromptSystemOptions }
