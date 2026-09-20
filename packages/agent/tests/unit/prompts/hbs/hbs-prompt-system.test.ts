@@ -11,13 +11,15 @@
 
 import { resolve } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { HbsPromptSystem } from '../../../../src/prompts/hbs/HbsPromptSystem.js';
 import { PromptSystem } from '../../../../src/prompts/PromptSystem.js';
 import { generalConfig } from '../../../../src/prompts/configs/general.js';
 import { SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '../../../../src/prompts/types.js';
 import type { PromptContext } from '../../../../src/prompts/types.js';
+import { getSkillRegistry, resetSkillRegistry } from '../../../../src/skills/registry.js';
+import type { PromptSkill } from '../../../../src/skills/types.js';
 
 const ASSETS_ROOT = resolve(__dirname, '../../../../src/prompts/assets');
 
@@ -92,5 +94,71 @@ describe('general profile assembly (staticModules)', () => {
     system.renderModule('identity', context());
     expect(system.cacheMisses()).toBe(1);
     expect(system.cacheHits()).toBe(1);
+  });
+});
+
+describe('general profile skills catalog (plan 535)', () => {
+  beforeEach(() => {
+    resetSkillRegistry();
+  });
+
+  afterEach(() => {
+    resetSkillRegistry();
+  });
+
+  function makeSkill(overrides: Partial<PromptSkill> = {}): PromptSkill {
+    return {
+      type: 'prompt',
+      name: 'pdf',
+      description: 'Create and inspect PDF documents.',
+      source: 'bundled',
+      skillRoot: 'E:\\skills\\pdf',
+      getPromptForCommand: async () => 'instructions',
+      ...overrides,
+    };
+  }
+
+  it('renders the <available_skills> catalog into the assembled prompt', async () => {
+    getSkillRegistry().register(makeSkill());
+    const system = new PromptSystem(generalConfig);
+    const prompt = await system.buildSystemPrompt(context());
+
+    // End-to-end proof of the runtime('skills') chain: config entry →
+    // runtimeSections factory → dynamic/skills-metadata.hbs →
+    // getSkillsMetadataSection → the rendered catalog, inside the dynamic
+    // half of the final prompt. NOTE: the skill-usage module prose also
+    // mentions `<available_skills>` literally, so catalog assertions key on
+    // the catalog's own section header / body markers, not the bare tag.
+    const text = [...prompt].join('\n\n');
+    expect(text).toContain('<available_skills>');
+    expect(text).toContain('## Available skills');
+    expect(text).toContain('<name>pdf</name>');
+    expect(text).toContain('<description>Create and inspect PDF documents.</description>');
+    expect(text).toContain('<location>');
+    expect(text).toContain('complete, authoritative list of installed skills');
+    // The catalog belongs to the volatile (dynamic) half — the first
+    // `<available_skills>` hit is the skill-usage prose in the static half,
+    // so anchor on the rendered section header instead.
+    expect(text.indexOf('## Available skills'))
+      .toBeGreaterThan(text.indexOf(SYSTEM_PROMPT_DYNAMIC_BOUNDARY));
+  });
+
+  it('omits the catalog when the skill registry is empty', async () => {
+    const system = new PromptSystem(generalConfig);
+    const prompt = await system.buildSystemPrompt(context());
+    const text = [...prompt].join('\n\n');
+    expect(text).not.toContain('## Available skills');
+    expect(text).not.toContain('<name>pdf</name>');
+  });
+
+  it('omits the catalog when neither Read nor Skill is enabled', async () => {
+    getSkillRegistry().register(makeSkill());
+    const system = new PromptSystem(generalConfig);
+    const prompt = await system.buildSystemPrompt(context({
+      enabledTools: new Set<string>(['Bash']),
+    }));
+    const text = [...prompt].join('\n\n');
+    expect(text).not.toContain('## Available skills');
+    expect(text).not.toContain('<name>pdf</name>');
   });
 });
