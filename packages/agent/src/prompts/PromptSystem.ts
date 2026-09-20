@@ -246,7 +246,7 @@ export class PromptSystem {
   }
 
   /**
-   * Construction-time section ledger (plan 556 phase 1).
+   * Construction-time section ledger (plan 557 phase 1).
    *
    * Section presence is decided by several independent layers (profile
    * whitelist/denylist, section-internal tool gates, data availability),
@@ -283,7 +283,7 @@ export class PromptSystem {
   }
 
   /**
-   * Best-effort dump of the final assembled prompt (plan 556 phase 1).
+   * Best-effort dump of the final assembled prompt (plan 557 phase 1).
    *
    * Set `DUYA_DUMP_PROMPT` to a directory path to capture exactly what the
    * model sees — the ground truth for "why did the model behave as if

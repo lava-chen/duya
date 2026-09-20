@@ -44,7 +44,7 @@ function context(): PromptContext {
   } as PromptContext;
 }
 
-describe('PromptSystem section ledger (plan 556 phase 1)', () => {
+describe('PromptSystem section ledger (plan 557 phase 1)', () => {
   let infoSpy: ReturnType<typeof vi.spyOn>;
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
@@ -109,7 +109,7 @@ describe('PromptSystem section ledger (plan 556 phase 1)', () => {
   });
 });
 
-describe('DUYA_DUMP_PROMPT (plan 556 phase 1)', () => {
+describe('DUYA_DUMP_PROMPT (plan 557 phase 1)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     delete process.env.DUYA_DUMP_PROMPT;
