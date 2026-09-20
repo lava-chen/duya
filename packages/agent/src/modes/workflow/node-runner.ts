@@ -20,7 +20,7 @@ import type { WorkflowNode } from './schema.js';
 import type { WorkflowHost, HostCallContext, HostCallResult } from './host.js';
 import { BudgetLedger, BudgetExceededError } from './host.js';
 import type { Journal } from './journal.js';
-import { computeReqHash, type JournalKind } from './journal.js';
+import { computeReqHash, type JournalKind, type JournalNodeKind } from './journal.js';
 import { interpolateDeep, interpolate, interpolateString, type ExprScope } from './expr.js';
 import { classifyError, SuspensionSignal, RETRYABLE_CLASSES, type WorkflowErrorClass } from './error-class.js';
 import { runHumanNode, type HumanNodeResult } from './human-runner.js';
@@ -71,20 +71,35 @@ export function failResult(error: string, errorClass: WorkflowErrorClass): NodeR
 }
 
 /** Journal + execute one host call with cache economics. */
+/** Evidence metadata cachedHostCall stamps onto the journal record. */
+interface CallEvidence {
+  nodeKind?: JournalNodeKind;
+  action?: string;
+}
+
+/** Host-call outcome + evidence the record needs beyond the value. */
+interface CallOutcome<T> {
+  value: T;
+  meta?: { childSessionId?: string; exitCode?: number | null; usage?: { inputTokens: number; outputTokens: number } };
+}
+
 async function cachedHostCall<T>(
   ctx: NodeRunContext,
   kind: JournalKind,
   nodeId: string,
   payload: unknown,
   attempt: number,
-  execute: () => Promise<T>,
+  execute: () => Promise<CallOutcome<T>>,
+  evidence: CallEvidence = {},
 ): Promise<{ cached: boolean; value: T }> {
   const reqHash = computeReqHash(kind, payload);
   const hit = ctx.journal.hit(nodeId, reqHash);
   if (hit && hit.result !== undefined) {
     return { cached: true, value: hit.result as T };
   }
-  const value = await execute();
+  const startedAt = Date.now();
+  const outcome = await execute();
+  const value = outcome.value;
   ctx.journal.append({
     kind,
     nodeId,
@@ -92,8 +107,33 @@ async function cachedHostCall<T>(
     reqHash,
     status: 'succeeded',
     result: value === undefined ? null : value,
+    // Evidence never enters the reqHash payload — display-only (§7 replay view).
+    ...evidence,
+    durationMs: Date.now() - startedAt,
+    outputSize: safeJsonSize(value),
+    ...(outcome.meta?.childSessionId !== undefined ? { childSessionId: outcome.meta.childSessionId } : {}),
+    ...(outcome.meta?.exitCode !== undefined ? { exitCode: outcome.meta.exitCode } : {}),
+    ...(outcome.meta?.usage !== undefined ? { usage: outcome.meta.usage } : {}),
   });
   return { cached: false, value };
+}
+
+function safeJsonSize(value: unknown): number {
+  try {
+    return JSON.stringify(value)?.length ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Node kind for journal annotation (drives console stats/icons). */
+export function nodeKindOf(node: WorkflowNode): JournalNodeKind {
+  if (node.tool) return 'tool';
+  if (node.agent) return 'agent';
+  if (node.decision) return 'decision';
+  if (node.human) return 'human';
+  if (node.gui) return 'gui';
+  return 'noop';
 }
 
 function hostFailure(result: HostCallResult, fallbackClass: WorkflowErrorClass): NodeRunResult {
@@ -121,8 +161,15 @@ async function runToolNode(ctx: NodeRunContext): Promise<NodeRunResult> {
       (err as Error & { errorClass?: WorkflowErrorClass }).errorClass = failure.errorClass;
       throw err;
     }
-    return result.output ?? null;
-  });
+    return {
+      value: result.output ?? null,
+      meta: {
+        ...(result.childSessionId !== undefined ? { childSessionId: result.childSessionId } : {}),
+        ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
+        ...(result.usage !== undefined ? { usage: result.usage } : {}),
+      },
+    };
+  }, { nodeKind: 'tool', action: toolName });
   return { status: 'succeeded', output: value };
 }
 
@@ -167,12 +214,18 @@ async function runAgentNode(ctx: NodeRunContext, promptOverride?: string, itemIn
           (result.errorClass as WorkflowErrorClass | undefined) ?? classifyError(result.error);
         throw err;
       }
-      return result.output ?? null;
+      return {
+        value: result.output ?? null,
+        meta: {
+          ...(result.childSessionId !== undefined ? { childSessionId: result.childSessionId } : {}),
+          ...(result.usage !== undefined ? { usage: result.usage } : {}),
+        },
+      };
     } catch (err) {
       ctx.budget.release(ticket); // failed spawn refunds — no double billing
       throw err;
     }
-  });
+  }, { nodeKind: 'agent', action: node.agent! });
   return { status: 'succeeded', output: value };
 }
 
@@ -218,6 +271,9 @@ async function runDecisionNode(ctx: NodeRunContext): Promise<NodeRunResult> {
       reqHash,
       status: 'succeeded',
       result: outcome,
+      nodeKind: 'decision',
+      action: 'decide',
+      outputSize: safeJsonSize(outcome),
     });
   }
 
@@ -337,6 +393,8 @@ export async function runNode(ctx: NodeRunContext): Promise<NodeRunResult> {
         status: 'failed',
         result: null,
         errorClass,
+        nodeKind: nodeKindOf(node),
+        action: node.tool ?? node.agent ?? nodeKindOf(node),
       });
       if (attempt <= maxRetries && RETRYABLE_CLASSES.has(errorClass)) {
         continue;
@@ -361,6 +419,8 @@ async function runNodeOnce(ctx: NodeRunContext): Promise<NodeRunResult> {
       reqHash: computeReqHash('node_result', { noop: true }),
       status: 'succeeded',
       result: null,
+      nodeKind: 'noop',
+      action: 'noop',
     });
     return { status: 'succeeded', output: null };
   }

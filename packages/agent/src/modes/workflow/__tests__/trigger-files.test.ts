@@ -215,6 +215,81 @@ describe('WorkflowFileRegistry (save-as)', () => {
     }
   });
 
+  it('dual scope: project shadows global on lookup, both are listed', () => {
+    const globalDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-global-'));
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-project-'));
+    try {
+      const registry = new WorkflowFileRegistry(globalDir, projectDir);
+      // Same name in both scopes; different descriptions.
+      registry.save({ ...CRON_DEF, description: 'global version' }, 'global');
+      registry.save({ ...CRON_DEF, description: 'project version' }, 'project');
+      registry.save(
+        parseWorkflowDef({
+          name: 'project-only',
+          description: 'lives in the repo',
+          phases: [{ phase: 'p', title: 'P', nodes: [{ id: 'a', noop: true }] }],
+        }),
+        'project',
+      );
+
+      expect(registry.list()).toEqual(['morning-digest', 'project-only']);
+      expect(registry.scopeOf('morning-digest')).toBe('project'); // shadows
+      expect(registry.scopeOf('project-only')).toBe('project');
+      expect(registry.load('morning-digest').description).toBe('project version');
+
+      // Scope-aware delete removes only the named scope.
+      expect(registry.delete('morning-digest', 'project')).toBe(true);
+      expect(registry.load('morning-digest').description).toBe('global version');
+      expect(registry.delete('morning-digest', 'global')).toBe(true);
+      expect(registry.exists('morning-digest')).toBe(false);
+    } finally {
+      fs.rmSync(globalDir, { recursive: true, force: true });
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('project scope requires a project directory', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-solo-'));
+    try {
+      const registry = new WorkflowFileRegistry(dir);
+      expect(() => registry.save(CRON_DEF, 'project')).toThrow(/project directory/);
+      expect(registry.save(CRON_DEF, 'global')).toContain('morning-digest.yaml');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('listDetailed returns console-ready summaries (params/triggers/counts/validity)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-detailed-'));
+    try {
+      const registry = new WorkflowFileRegistry(dir);
+      registry.save({
+        ...CRON_DEF,
+        params: [{ name: 'limit', type: 'number', required: true, default: 5 }],
+      });
+      // A tampered file shows invalid with an error string, not a throw.
+      fs.writeFileSync(path.join(dir, 'broken.yaml'), 'name: broken\nphases: []\n', 'utf8');
+
+      const summaries = registry.listDetailed();
+      const digest = summaries.find((s) => s.name === 'morning-digest')!;
+      expect(digest).toMatchObject({
+        scope: 'global',
+        valid: true,
+        phaseCount: 1,
+        nodeCount: 1,
+        triggers: ['cron', 'http'],
+      });
+      expect(digest.params[0]).toMatchObject({ name: 'limit', type: 'number', required: true, default: 5 });
+      expect(digest.file).toContain('morning-digest.yaml');
+
+      const broken = summaries.find((s) => s.name === 'broken')!;
+      expect(broken.valid).toBe(false);
+      expect(broken.error).toBeTruthy();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('rejects invalid names (path safety)', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-registry-'));
     try {

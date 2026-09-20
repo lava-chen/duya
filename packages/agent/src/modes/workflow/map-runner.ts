@@ -14,6 +14,14 @@ import { computeReqHash } from './journal.js';
 import { classifyError } from './error-class.js';
 import { failResult, ctxFor, type NodeRunContext, type NodeRunResult } from './node-runner.js';
 
+function safeSize(value: unknown): number {
+  try {
+    return JSON.stringify(value)?.length ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
 /** Scope with the loop variable bound (item refs resolve into the element). */
 export function itemScope(base: ExprScope, as: string, value: unknown): ExprScope {
   return {
@@ -82,6 +90,7 @@ export async function runMapNode(ctx: NodeRunContext, semaphore: Semaphore): Pro
         const hit = ctx.journal.hit(itemNodeId, reqHash);
         if (hit) return hit.result ?? null;
         ctx.budget.countHostCall();
+        const startedTool = Date.now();
         const result = await ctx.host.runTool(node.tool, input, ctxFor(ctx, node.id, index));
         if (!result.ok) {
           ctx.journal.append({
@@ -92,6 +101,9 @@ export async function runMapNode(ctx: NodeRunContext, semaphore: Semaphore): Pro
             status: 'failed',
             result: null,
             errorClass: result.errorClass ?? classifyError(result.error),
+            nodeKind: 'tool',
+            action: node.tool,
+            durationMs: Date.now() - startedTool,
           });
           return null; // soft-fail: item null, siblings continue
         }
@@ -103,6 +115,13 @@ export async function runMapNode(ctx: NodeRunContext, semaphore: Semaphore): Pro
           reqHash,
           status: 'succeeded',
           result: output,
+          nodeKind: 'tool',
+          action: node.tool,
+          durationMs: Date.now() - startedTool,
+          outputSize: safeSize(output),
+          ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
+          ...(result.childSessionId !== undefined ? { childSessionId: result.childSessionId } : {}),
+          ...(result.usage !== undefined ? { usage: result.usage } : {}),
         });
         return output;
       }
@@ -113,6 +132,7 @@ export async function runMapNode(ctx: NodeRunContext, semaphore: Semaphore): Pro
       const hit = ctx.journal.hit(itemNodeId, reqHash);
       if (hit) return hit.result ?? null;
       const ticket = ctx.budget.reserveAgent();
+      const startedAgent = Date.now();
       try {
         const result = await ctx.host.runAgent(
           { agent: node.agent!, prompt, model: node.model, outputSchema: node.output_schema },
@@ -128,6 +148,12 @@ export async function runMapNode(ctx: NodeRunContext, semaphore: Semaphore): Pro
           status: result.ok ? 'succeeded' : 'failed',
           result: output,
           errorClass: result.ok ? undefined : result.errorClass ?? classifyError(result.error),
+          nodeKind: 'agent',
+          action: node.agent,
+          durationMs: Date.now() - startedAgent,
+          outputSize: result.ok ? safeSize(output) : undefined,
+          ...(result.childSessionId !== undefined ? { childSessionId: result.childSessionId } : {}),
+          ...(result.usage !== undefined ? { usage: result.usage } : {}),
         });
         return output;
       } catch (err) {

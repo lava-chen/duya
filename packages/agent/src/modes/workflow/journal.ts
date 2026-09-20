@@ -22,6 +22,9 @@ export type JournalKind = 'node_result' | 'decision' | 'approval' | 'artifact' |
 
 export type JournalStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'waiting';
 
+/** Node kind annotation — drives console stats (agent count) and icons. */
+export type JournalNodeKind = 'tool' | 'agent' | 'decision' | 'human' | 'gui' | 'noop';
+
 export interface JournalRecord {
   seq: number;
   kind: JournalKind;
@@ -38,6 +41,24 @@ export interface JournalRecord {
   /** Failure taxonomy (Skyvern-style classes; regex first). */
   errorClass?: string;
   atMs: number;
+  /**
+   * Step-evidence metadata (plan 552 Phase 7 console, ZCode replay-view
+   * analogue). Display/audit only — NEVER part of the reqHash payload,
+   * so populating these can never invalidate the replay cache.
+   */
+  nodeKind?: JournalNodeKind;
+  /** What ran: tool name, agent type, gui action (`click`/`capture`), `decide`. */
+  action?: string;
+  /** Process exit code when the host surfaces one (bash-family tools). */
+  exitCode?: number | null;
+  /** Wall time of the host call (cache hits carry no duration). */
+  durationMs?: number;
+  /** Serialized size of `result` in bytes (output evidence weight). */
+  outputSize?: number;
+  /** Sub-agent DB session (plan 504 lineage) — console links to the transcript. */
+  childSessionId?: string;
+  /** Token usage when the host reports it (summed into run stats). */
+  usage?: { inputTokens: number; outputTokens: number };
 }
 
 /** Canonical JSON: sorted keys, stable float formatting. */

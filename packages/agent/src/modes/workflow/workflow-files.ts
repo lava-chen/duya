@@ -19,17 +19,74 @@ export function defaultWorkflowRoot(): string {
   return path.join(os.homedir(), '.duya', 'workflows');
 }
 
+/**
+ * Workflow scope (ZCode parity): `project` definitions live inside the
+ * repository (`<project>/.duya/workflows/`) and travel with git; `global`
+ * ones live under `~/.duya/workflows/` and are available from any project.
+ * Lookup order: project wins over global on a name collision.
+ */
+export type WorkflowScope = 'project' | 'global';
+
+export interface WorkflowDefinitionSummary {
+  name: string;
+  scope: WorkflowScope;
+  description: string;
+  whenToUse?: string;
+  /** File path — the authoritative source (console shows it verbatim). */
+  file: string;
+  params: Array<{ name: string; type: string; required: boolean; default?: unknown }>;
+  /** Trigger channels the definition declares (manual is implicit). */
+  triggers: Array<'cron' | 'bot' | 'http'>;
+  phaseCount: number;
+  nodeCount: number;
+  /** Only present when the file parsed AND validated. */
+  valid: boolean;
+  error?: string;
+}
+
+/** Classify a declared trigger object into its channel (or undefined). */
+function triggerChannelOf(trigger: Record<string, unknown>): 'cron' | 'bot' | 'http' | undefined {
+  if (typeof trigger.cron === 'string') return 'cron';
+  if (trigger.bot && typeof trigger.bot === 'object') return 'bot';
+  if (trigger.http && typeof trigger.http === 'object') return 'http';
+  return undefined;
+}
+
 export class WorkflowFileRegistry {
   private readonly root: string;
+  /** Optional project scope root (`<project>/.duya/workflows`); null = global only. */
+  private readonly projectRoot: string | null;
 
-  constructor(root?: string) {
+  constructor(root?: string, projectDir?: string) {
     this.root = root ?? defaultWorkflowRoot();
+    this.projectRoot = projectDir ? path.join(projectDir, '.duya', 'workflows') : null;
     fs.mkdirSync(this.root, { recursive: true });
+    if (this.projectRoot) fs.mkdirSync(this.projectRoot, { recursive: true });
   }
 
-  /** Save (or overwrite) a def as `<name>.yaml`. Returns the file path. */
-  save(def: WorkflowDef): string {
-    const file = this.pathFor(def.name);
+  private rootsFor(scope: WorkflowScope): string {
+    return scope === 'project' ? (this.projectRoot ?? this.root) : this.root;
+  }
+
+  /** Which scope a name resolves to (project shadows global). */
+  scopeOf(name: string): WorkflowScope | undefined {
+    if (this.projectRoot && fs.existsSync(path.join(this.projectRoot, `${name}.yaml`))) return 'project';
+    if (fs.existsSync(path.join(this.root, `${name}.yaml`))) return 'global';
+    return undefined;
+  }
+
+  /**
+   * Save (or overwrite) a def as `<name>.yaml`. Scope defaults to
+   * `global`; `project` requires the registry to have a project root.
+   * Returns the file path.
+   */
+  save(def: WorkflowDef, scope: WorkflowScope = 'global'): string {
+    const dir = this.rootsFor(scope);
+    if (scope === 'project' && !this.projectRoot) {
+      throw new Error('project scope requires a project directory');
+    }
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `${assertName(def.name)}.yaml`);
     fs.writeFileSync(file, stringifyYaml(def), 'utf8');
     return file;
   }
@@ -40,7 +97,7 @@ export class WorkflowFileRegistry {
    * — the YAML is authoritative).
    */
   load(name: string): WorkflowDef {
-    const file = this.pathFor(name);
+    const file = this.resolveFile(name);
     const raw = fs.readFileSync(file, 'utf8');
     const parsed = parseYaml(raw);
     const result = validateWorkflow(parsed);
@@ -53,33 +110,109 @@ export class WorkflowFileRegistry {
 
   /** Raw parse without semantic validation — for previews. */
   loadRaw(name: string): unknown {
-    return parseYaml(fs.readFileSync(this.pathFor(name), 'utf8'));
+    return parseYaml(fs.readFileSync(this.resolveFile(name), 'utf8'));
   }
 
   exists(name: string): boolean {
-    return fs.existsSync(this.pathFor(name));
+    return this.scopeOf(name) !== undefined;
   }
 
+  /** Names from both scopes, project first; project shadows global. */
   list(): string[] {
-    if (!fs.existsSync(this.root)) return [];
-    return fs
-      .readdirSync(this.root)
-      .filter((f) => f.endsWith('.yaml') || f.endsWith('.yml'))
-      .map((f) => f.replace(/\.ya?ml$/, ''))
-      .sort();
+    const names = new Set<string>();
+    for (const dir of [this.projectRoot, this.root]) {
+      if (!dir || !fs.existsSync(dir)) continue;
+      for (const f of fs.readdirSync(dir)) {
+        if (f.endsWith('.yaml') || f.endsWith('.yml')) names.add(f.replace(/\.ya?ml$/, ''));
+      }
+    }
+    return [...names].sort();
   }
 
-  delete(name: string): boolean {
-    const file = this.pathFor(name);
+  /** Read-only summaries for the console definition library. */
+  listDetailed(): WorkflowDefinitionSummary[] {
+    return this.list().map((name) => {
+      const scope = this.scopeOf(name) ?? 'global';
+      const file = this.resolveFile(name);
+      const base: WorkflowDefinitionSummary = {
+        name,
+        scope,
+        description: '',
+        file,
+        params: [],
+        triggers: [],
+        phaseCount: 0,
+        nodeCount: 0,
+        valid: false,
+      };
+      try {
+        const parsed = this.loadRaw(name);
+        const result = validateWorkflow(parsed);
+        if (parsed && typeof parsed === 'object') {
+          const raw = parsed as {
+            description?: unknown;
+            when_to_use?: unknown;
+            params?: unknown;
+            triggers?: unknown;
+            phases?: unknown;
+          };
+          base.description = typeof raw.description === 'string' ? raw.description : '';
+          base.whenToUse = typeof raw.when_to_use === 'string' ? raw.when_to_use : undefined;
+          if (Array.isArray(raw.params)) {
+            base.params = (raw.params as Array<Record<string, unknown>>).map((p) => ({
+              name: String(p.name ?? ''),
+              type: String(p.type ?? 'string'),
+              required: p.required === true,
+              default: p.default,
+            }));
+          }
+          if (Array.isArray(raw.triggers)) {
+            base.triggers = (raw.triggers as Array<Record<string, unknown>>)
+              .map(triggerChannelOf)
+              .filter((c): c is 'cron' | 'bot' | 'http' => c !== undefined);
+          }
+          if (Array.isArray(raw.phases)) {
+            base.phaseCount = raw.phases.length;
+            for (const phase of raw.phases as Array<{ nodes?: unknown[] }>) {
+              base.nodeCount += Array.isArray(phase.nodes) ? phase.nodes.length : 0;
+            }
+          }
+        }
+        base.valid = result.ok;
+        if (!result.ok) {
+          base.error = result.errors.map((e) => `${e.path || '(root)'}: ${e.message}`).join('; ');
+        }
+      } catch (err) {
+        base.error = err instanceof Error ? err.message : String(err);
+      }
+      return base;
+    });
+  }
+
+  delete(name: string, scope?: WorkflowScope): boolean {
+    const target = scope ?? this.scopeOf(name);
+    if (!target) return false;
+    const file = path.join(this.rootsFor(target), `${assertName(name)}.yaml`);
     if (!fs.existsSync(file)) return false;
     fs.unlinkSync(file);
     return true;
   }
 
-  private pathFor(name: string): string {
-    if (!/^[a-z][a-z0-9-]*$/.test(name)) throw new Error(`invalid workflow name: ${name}`);
-    return path.join(this.root, `${name}.yaml`);
+  /** Resolve a name to a file: project first (shadows), then global. */
+  private resolveFile(name: string): string {
+    const safe = assertName(name);
+    if (this.projectRoot) {
+      const projectFile = path.join(this.projectRoot, `${safe}.yaml`);
+      if (fs.existsSync(projectFile)) return projectFile;
+    }
+    return path.join(this.root, `${safe}.yaml`);
   }
+}
+
+/** Path-safety guard: only kebab-case names may become file names. */
+function assertName(name: string): string {
+  if (!/^[a-z][a-z0-9-]*$/.test(name)) throw new Error(`invalid workflow name: ${name}`);
+  return name;
 }
 
 /** Serialize a def to YAML text (used by save-as flows and previews). */

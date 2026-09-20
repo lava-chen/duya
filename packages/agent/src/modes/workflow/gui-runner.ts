@@ -133,6 +133,9 @@ export async function runGuiNode(options: GuiRunOptions): Promise<GuiNodeOutcome
           attempt: 1,
           status: 'succeeded',
           result: { kind: 'screenshot', step: i, ref },
+          nodeKind: 'gui',
+          action: 'capture',
+          outputSize: shot.base64.length,
         });
       }
     } catch {
@@ -149,6 +152,7 @@ export async function runGuiNode(options: GuiRunOptions): Promise<GuiNodeOutcome
     if (hit) continue;
 
     budget.countHostCall();
+    const stepStartedAt = Date.now();
     const result = await ports.backend.step(
       { ...step, ...(text !== undefined ? { text } : {}) } as GuiStep,
       ctx,
@@ -162,6 +166,10 @@ export async function runGuiNode(options: GuiRunOptions): Promise<GuiNodeOutcome
       status: stepStatus,
       result: { do: step.do, effect: result.effect ?? null, error: result.error ?? null },
       errorClass: result.ok ? undefined : classifyError(result.error),
+      nodeKind: 'gui',
+      action: step.do,
+      durationMs: Date.now() - stepStartedAt,
+      outputSize: result.effect ? result.effect.length : 0,
     });
 
     if (!result.ok) {
@@ -180,6 +188,8 @@ export async function runGuiNode(options: GuiRunOptions): Promise<GuiNodeOutcome
             status: 'failed',
             result: { reason: 'suspected_noop ladder reached' },
             errorClass: 'tool_error',
+            nodeKind: 'gui',
+            action: 'escalate',
           });
           return enterLadder(options, 'stuck', `no on-screen change after ${suspectedNoopStreak} verified steps`);
         }
@@ -272,6 +282,8 @@ async function decideHandoff(
       reqHash,
       status: 'succeeded',
       result: { status: result.status, reason: result.reason ?? null, candidates: result.candidates ?? null },
+      nodeKind: 'decision',
+      action: 'decide',
     });
   }
 
@@ -333,6 +345,8 @@ async function gateConfirmation(options: GuiRunOptions, reason: string): Promise
     reqHash: markerHash,
     status: 'waiting',
     result: null,
+    nodeKind: 'gui',
+    action: 'confirm-gate',
   });
 
   if (options.approvalMode === 'suspend') {
@@ -350,6 +364,8 @@ async function gateConfirmation(options: GuiRunOptions, reason: string): Promise
     reqHash: markerHash,
     status: 'succeeded',
     result: { decision: res.decision },
+    nodeKind: 'gui',
+    action: 'confirm-gate',
   });
   return {
     status: res.decision === 'approve' ? 'succeeded' : 'skipped',

@@ -34,6 +34,12 @@ export interface HostCallResult {
   output?: unknown;
   error?: string;
   errorClass?: string;
+  /** Process exit code when the host surfaces one (bash-family tools). */
+  exitCode?: number | null;
+  /** Sub-agent DB session id (plan 504 lineage) — journal evidence link. */
+  childSessionId?: string;
+  /** Token usage when the host tracks it (agent/LLM calls). */
+  usage?: { inputTokens: number; outputTokens: number };
 }
 
 export interface HostApprovalSpec {

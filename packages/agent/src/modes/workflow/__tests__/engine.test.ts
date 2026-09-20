@@ -16,6 +16,9 @@ import {
   parseWorkflowDef,
   createResumeToken,
   verifyResumeToken,
+  runGuiNode,
+  MemoryArtifactStore,
+  BudgetLedger,
   type WorkflowHost,
   type HostCallContext,
   type HostCallResult,
@@ -562,5 +565,92 @@ describe('BudgetLedger', () => {
     const t1 = ledger.reserveAgent();
     ledger.commit(t1);
     expect(() => ledger.reserveAgent()).toThrow(/budget exceeded/i);
+  });
+});
+
+// ─── step-evidence annotations (plan 552 Phase 7 console) ───
+
+describe('journal step evidence', () => {
+  it('tool/agent records carry nodeKind, action, timing and output size', async () => {
+    const host = fixtureHost({
+      tools: { 'excel.write': () => ({ written: 3 }) },
+      agents: { 'general-purpose': (prompt) => ({ prompt }) },
+    });
+    const journal = new Journal(new MemoryJournalSink());
+    const engine = new WorkflowEngine({ host });
+    await engine.execute(SIMPLE_DEF, { rows: [1] }, { journal });
+
+    const toolRecord = journal.all().find((r) => r.nodeId === 'export')!;
+    expect(toolRecord.nodeKind).toBe('tool');
+    expect(toolRecord.action).toBe('excel.write');
+    expect(typeof toolRecord.durationMs).toBe('number');
+    expect(toolRecord.outputSize).toBeGreaterThan(0);
+
+    const agentRecord = journal.all().find((r) => r.nodeId === 'report')!;
+    expect(agentRecord.nodeKind).toBe('agent');
+    expect(agentRecord.action).toBe('general-purpose');
+
+    // Evidence never rides the cache key: a re-run still hits the cache.
+    const before = host.calls.length;
+    await engine.execute(SIMPLE_DEF, { rows: [1] }, { journal });
+    expect(host.calls.length).toBe(before);
+  });
+
+  it('human records are annotated as human/approval', async () => {
+    const host = fixtureHost({ approval: 'approve' });
+    const journal = new Journal(new MemoryJournalSink());
+    const engine = new WorkflowEngine({ host });
+    await engine.execute(PAY_DEF, { amount: 1 }, { journal });
+    const approval = journal.all().find((r) => r.kind === 'approval' && r.status === 'succeeded')!;
+    expect(approval.nodeKind).toBe('human');
+    expect(approval.action).toBe('approval');
+  });
+
+  it('host exitCode / childSessionId / usage ride the record', async () => {
+    const host = fixtureHost({
+      tools: {
+        'excel.write': () => ({ written: 1 }),
+      },
+    });
+    const wrapped: WorkflowHost = {
+      ...host,
+      async runTool(tool, input, ctx) {
+        const r = await host.runTool(tool, input, ctx);
+        return { ...r, exitCode: 0, childSessionId: 'child-sess-1', usage: { inputTokens: 10, outputTokens: 4 } };
+      },
+    };
+    const journal = new Journal(new MemoryJournalSink());
+    const engine = new WorkflowEngine({ host: wrapped });
+    await engine.execute(SIMPLE_DEF, { rows: [] }, { journal });
+    const record = journal.all().find((r) => r.nodeId === 'export')!;
+    expect(record.exitCode).toBe(0);
+    expect(record.childSessionId).toBe('child-sess-1');
+    expect(record.usage).toEqual({ inputTokens: 10, outputTokens: 4 });
+  });
+
+  it('gui step + screenshot records carry gui evidence', async () => {
+    const journal = new Journal(new MemoryJournalSink());
+    const outcome = await runGuiNode({
+      nodeId: 'fill',
+      gui: { target_app: 'ERP*', steps: [{ do: 'click', element: 'som:1', verify: true }], on_stuck: 'fail' },
+      scope: { resolve: () => undefined },
+      host: fixtureHost({}),
+      journal,
+      budget: new BudgetLedger(4, 100),
+      ports: {
+        backend: { step: async () => ({ ok: true, effect: 'confirmed' }), capture: async () => ({ base64: 'PNG' }) },
+        artifacts: new MemoryArtifactStore(),
+      },
+      approvalMode: 'await',
+      runId: 'r-gui',
+    });
+    expect(outcome.status).toBe('succeeded');
+    const stepRecord = journal.all().find((r) => r.kind === 'node_result' && r.status === 'succeeded')!;
+    expect(stepRecord.nodeKind).toBe('gui');
+    expect(stepRecord.action).toBe('click');
+    expect(typeof stepRecord.durationMs).toBe('number');
+    const shot = journal.all().find((r) => r.kind === 'artifact')!;
+    expect(shot.action).toBe('capture');
+    expect(shot.outputSize).toBe(3);
   });
 });

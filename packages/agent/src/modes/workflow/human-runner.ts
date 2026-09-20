@@ -78,6 +78,8 @@ export async function runHumanNode(options: HumanRunOptions): Promise<HumanNodeR
       reqHash: markerHash,
       status: 'waiting',
       result: null,
+      nodeKind: 'human',
+      action: 'approval',
     });
   }
 
@@ -127,6 +129,8 @@ export async function runHumanNode(options: HumanRunOptions): Promise<HumanNodeR
     reqHash: markerHash,
     status: 'succeeded',
     result: { decision, escalated },
+    nodeKind: 'human',
+    action: 'approval',
   });
   return { status: 'succeeded', output: { approved: decision === 'approve', timedOut: false, escalated } };
 }
@@ -151,6 +155,8 @@ export function applyTimeout(
         reqHash: markerHash,
         status: 'skipped',
         result: { decision: 'timeout', onTimeout: 'skip' },
+        nodeKind: 'human',
+        action: 'approval',
       });
       return { status: 'skipped', output: { approved: false, timedOut: true, escalated } };
     case 'fail':
@@ -166,6 +172,8 @@ export function applyTimeout(
         status: 'failed',
         result: { decision: 'timeout', onTimeout: human.timeout.on_timeout },
         errorClass: 'approval_timeout',
+        nodeKind: 'human',
+        action: 'approval',
       });
       return {
         status: 'failed',
