@@ -33,8 +33,8 @@
 import type { ModeModifier } from './types.js';
 import {
   clearComputerUseContextTrigger,
-  getComputerUseTools,
-  getComputerUseToolsWithContext,
+  getComputerUseToolsWithDecide,
+  isComputerUseDecideAvailable,
   shouldInjectComputerUseContext,
 } from '../tool/OSTool/index.js';
 
@@ -77,6 +77,18 @@ You drive the host desktop through the \`computer_use\` tool only (screenshot + 
 - One action per step; after launching/menu/form, \`wait\` 1–3s and re-capture. If a goal eludes you after ~3 attempts, stop and report what you see instead of guessing.`;
 
 /**
+ * plan 551 Phase 3 — decide-channel section, appended to the prompt only
+ * when the `computer_use_decide` tool is actually injected (no decision
+ * backend → no tool → no prompt mention of a phantom tool).
+ */
+const COMPUTER_USE_DECIDE_PROMPT = `
+
+## Delegated sub-goals (computer_use_decide)
+- For a bounded sub-goal ("log in", "open settings", "fill this form"), state the outcome once and let \`computer_use_decide\` run the look-decide-act loop — it is far cheaper than reading every screen yourself.
+- Pass exact field texts via \`values\`; the channel never invents text.
+- \`status=done\` → continue your plan. \`likely_done\` → verify yourself. \`needs_confirmation\` → the user must approve a risky action. \`error | stuck | ambiguous | blocked | max_actions\` → take over with the vision loop above (ambiguous lists top candidates).`;
+
+/**
  * Computer Use Mode modifier — session-level, exclusive with every
  * other mode. Injects the `computer_use` tool and wires OSContext.
  */
@@ -91,26 +103,28 @@ export const computerUseMode: ModeModifier = {
   },
 
   tools: {
-    // plan 519 §3.2 (D2) — function-form inject so the tool list is
-    // decided per run. The `computer_use` vision tool (9-action enum,
-    // Phase 2 decision, never widened) is always present; the
-    // `computer_use_context` escape hatch (list_apps / focus_app) is
-    // appended only when its sticky trigger registry is armed for the
-    // session: 0-element SOM capture, suspected_noop click, or an
-    // explicit prior call (see OSTool/context-tool.ts).
+    // plan 519 §3.2 (D2) + plan 551 Phase 3 — function-form inject so the
+    // tool list is decided per run. The `computer_use` vision tool
+    // (9-action enum, never widened) is always present; the
+    // `computer_use_context` escape hatch is appended when its sticky
+    // trigger registry is armed; the `computer_use_decide` delegated-goal
+    // tool is appended only when a decision backend is configured (no
+    // key → the list is byte-identical to pre-plan-551).
     inject: (ctx) =>
-      shouldInjectComputerUseContext(ctx.sessionId)
-        ? getComputerUseToolsWithContext()
-        : getComputerUseTools(),
+      getComputerUseToolsWithDecide(shouldInjectComputerUseContext(ctx.sessionId)),
     // Computer Use tools must survive profile filtering — even the
     // `code` profile should see them when this mode is on.
     overrideFilter: true,
   },
 
   prompt: {
-    // Prepended to the system prompt (same channel as plan-task /
-    // research / goal). Static content — no per-turn refresh needed.
-    prefix: COMPUTER_USE_PROMPT,
+    // plan 551 Phase 3: the decide section rides along only when the
+    // decide tool is actually injected. PromptBuilder contract: return
+    // the FULL prompt (prefix + incoming base).
+    prefix: (_ctx, base) =>
+      (isComputerUseDecideAvailable()
+        ? COMPUTER_USE_PROMPT + COMPUTER_USE_DECIDE_PROMPT
+        : COMPUTER_USE_PROMPT) + base,
   },
 
   hooks: {

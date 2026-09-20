@@ -1356,6 +1356,19 @@ export interface ElectronAPI {
   outputStyle: OutputStyleAPI
   permission: PermissionAPI
   toolApproval: ToolApprovalAPI
+  /** Plan 552 Phase 7: workflow console reads. */
+  workflow: {
+    list: (filter?: { status?: string; workflowName?: string; limit?: number; offset?: number }) => Promise<unknown[]>
+    get: (id: string) => Promise<unknown>
+    journal: (runId: string) => Promise<unknown[]>
+    snapshot: (runId: string) => Promise<unknown>
+    delete: (id: string) => Promise<boolean>
+    cancel: (id: string) => Promise<{ ok: boolean; reason?: string }>
+    defs: {
+      list: (projectDir?: string) => Promise<unknown[]>
+      get: (payload: { name: string; projectDir?: string }) => Promise<unknown>
+    }
+  }
   project: ProjectAPI
   lock: LockAPI
   net: NetAPI
@@ -2312,6 +2325,19 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('db:permission:resolve', id, status, extra),
   },
   // Plan 498: durable tool-approval cards (bot DM + crash fallback).
+  workflow: {
+    list: (filter?: { status?: string; workflowName?: string; limit?: number; offset?: number }) =>
+      ipcRenderer.invoke('workflow:list', filter),
+    get: (id: string) => ipcRenderer.invoke('workflow:get', id),
+    journal: (runId: string) => ipcRenderer.invoke('workflow:journal', runId),
+    snapshot: (runId: string) => ipcRenderer.invoke('workflow:snapshot', runId),
+    delete: (id: string) => ipcRenderer.invoke('workflow:delete', id),
+    cancel: (id: string) => ipcRenderer.invoke('workflow:cancel', id),
+    defs: {
+      list: (projectDir?: string) => ipcRenderer.invoke('workflow:defs:list', projectDir),
+      get: (payload: { name: string; projectDir?: string }) => ipcRenderer.invoke('workflow:defs:get', payload),
+    },
+  },
   toolApproval: {
     listBySession: (sessionId: string) =>
       ipcRenderer.invoke('db:toolApproval:listBySession', sessionId),

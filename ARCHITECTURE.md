@@ -265,6 +265,30 @@ Separate SQLite file (`memory-state.db`, next to `duya-main.db` in the same boot
 | gemini | Google Gemini (P2) |
 | vertex | Google Vertex (P2) |
 
+### System One Decision Client (Plan 551)
+
+决策形态 ≠ chat 形态——Jev（TypeSafe "System One" 模型）接入独立于 `providers/` chat 抽象：
+
+- `packages/ai/src/system-one/` — `DecisionClient` 接口 + `SystemOneClient`（state + 多问题单请求 → choice/score/noul typed 决策；timeout 预算 + 瞬态重试；基数 255 校验）。`DecisionClient` 是可替换后端抽象（未来：LLM structured-output / 本地 SemIf）。
+- `packages/agent/src/decisions/` — `DecisionService`（降级链 Jev → LLM fallback → 抛上层规则）、`policy.ts` 阈值策略（灰区 → `uncertain`，绝不静默猜）、`calibration.ts` (p, outcome) 校准日志、`config.ts` 读 `config.toml [system_one]`。419 权限总线预筛通道默认关闭（`prescreen.permissions`，只产建议不改语义）。
+- `packages/computer-use/src/decide/` — "LLM plans, Jev decides" 内循环：describe（代码可算摘要全进 state）→ 每轮一次 fan-out（target/value/done/error/blocked/irreversible）→ 代码门控 → act；status 契约 `done | likely_done | needs_confirmation | error | stuck | ambiguous | blocked | max_actions`。agent 侧 `computer_use_decide` 工具经既有 `computer-use:execute` IPC 驱动，审批复用主进程审批卡。
+- **零行为破坏**：无 key / 未启用时所有路径与现状一致——`computer_use_decide` 不注入，419 预筛不触发。
+
+### Workflow Engine (Plans 415 + 552)
+
+独立后台 run 管理系统（非 mode,不进 popover、不套 413 检查点）。代码位于
+`packages/agent/src/modes/workflow/`：
+
+- **定义层**：`schema.ts`（zod:六类节点 tool/gui/decision/human/agent/noop + map/when 原语 + params/triggers）、`validate.ts`（引用存在/无环/跨阶段前向引用拦截/decision 阈值/human timeout 必填）、`workflow-files.ts`（`~/.duya/workflows/` save-as 注册表,load 全量重校验）。
+- **表达式**：`expr.ts` 受限四类表达式（引用/比较/逻辑/聚合）+ decision answers 进 when 作用域 + `${...}` 插值;无 eval、无时钟/随机（§6.5 确定性铁律）。
+- **状态机**：`engine/run-lifecycle-tracker.ts` 小内核（纯转移矩阵 + paused/terminal 判定 + history cap 64 + from_snapshot 折叠,与 GoalTracker 共享词汇不共享结构体）;`tracker.ts` WorkflowRunTracker 挂 phase/epoch/预算/journal 字段。
+- **执行器**：`engine.ts`（阶段 → 拓扑 → journal;SuspensionSignal → 签名 resumeToken waiting outcome）、`node-runner.ts`（reqHash 缓存 + on_error 动态策略 + output_schema 校验重试）、`map-runner.ts`（per-item 缓存 + soft-fail null）、`gui-runner.ts`（确定性步骤 → suspected_noop 阶梯 → decide 通道八态契约 → 498 审批门）、`human-runner.ts`（§6.3 marker 语义）、`decision-adapter.ts`（551 DecisionService,阈值覆盖 + 灰区 → on_low_confidence）。
+- **可靠性**：`journal.ts`（`nodeId+reqHash` 缓存命中即跳过 = "可复跑/可修正";BudgetExceeded/Cancelled 不落 journal;trailing failure 剪除;live listener 三用:持久化=SSE=审计）、`resume-token.ts`（HMAC + timingSafeEqual）、`host.ts`（BudgetLedger reserve→commit/release 与 Semaphore 分离）、`manager.ts`（dedup 幂等 launch、崩溃对账 reconcileStaleRuns → interrupted 绝不盲目重跑、wait-tracker tick 应用 on_timeout、`onRunFinished` 完成自动唤醒钩子）。
+- **触发层**：`trigger.ts` 统一入口 `launchFromTrigger`（cron 触发分钟 / bot 消息 id / http 幂等键 / manual 无——dedup 命中返回既有 run）。
+- **存储**：core-db `workflow_runs`（元数据行,dedup_key UNIQUE,wait_till 索引,迁移 26/27）+ `workflow_run_snapshots`（1:1 blob:冻结 YAML + 节点栈 + journal;截图外置于 artifact store,日志只存引用）。渲染端经 `workflow:*` IPC 只读（`WorkflowPanel` 控制台）。
+- **控制台（ZCode 交互对齐）**：`WorkflowPanel` 双 tab——定义库（双 scope:项目 `.duya/workflows/` shadows 全局 `~/.duya/workflows/`;卡片含参数/触发器/阶段节点数/可复制权威路径;定义只读,修改走对话）+ 运行（进行中/已结束双区计数;活跃可停止、结束可删除）。run 详情渐进披露:血缘(`retry_of`)、四格统计（时间/tokens/子代理/阶段,纯代码从 journal 推导）、阶段 trail N/M、逐步证据行（`nodeKind`/`action`/`exitCode`/`durationMs`/`outputSize`/`childSessionId` + 可展开缓存结果）、产物区、逐条 verified/unconfirmed 标注。journal 证据字段为**展示专用**,不进 reqHash payload（缓存经济学不受影响）。
+- **规划器**：`planner.ts`（LLM 生成 YAML + 一次带错重试;规则 regex + Jev risk noul 预筛;高风险 → awaiting_confirm 必停）、`verify.ts`（确定性标注 → decision over 机器摘要 → verification agent 三档 fresh-eyes;`verified/unconfirmed` 标注落 journal）。
+
 ## @duya/agent - Agent Core
 
 ### Entry Points

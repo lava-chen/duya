@@ -209,6 +209,34 @@ export {
   type CatalogModel,
 } from './providers/catalog.js';
 
+// ─── System One decision client (plan 551 Phase 1) ───
+export {
+  SystemOneClient,
+  resolveSystemOneConfig,
+  DEFAULT_SYSTEM_ONE_CONFIG,
+  DEFAULT_SYSTEM_ONE_BASE_URL,
+  DEFAULT_SYSTEM_ONE_MODEL,
+  DEFAULT_SYSTEM_ONE_TIMEOUT_MS,
+  MAX_CARDINALITY,
+  DecisionProtocolError,
+  validateDecisionRequest,
+  parseDecisionResponse,
+  type DecisionClient,
+  type SystemOneClientOptions,
+  type SystemOneConfig,
+  type DecisionKind,
+  type DecisionRequest,
+  type DecisionResponse,
+  type DecisionAnswer,
+  type ChoiceQuestion,
+  type ChoiceAnswer,
+  type ScoreQuestion,
+  type ScoreAnswer,
+  type NoulQuestion,
+  type NoulAnswer,
+  type Question,
+} from './system-one/index.js';
+
 import type { AIClient, AIClientOptions } from './types.js';
 
 /**

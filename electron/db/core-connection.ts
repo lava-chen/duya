@@ -31,6 +31,7 @@ import {
   ProjectStore,
   ResearchStore,
   ConductorStore,
+  WorkflowRunStore,
   LegacyImport,
   type SqliteCtor,
   type Migration,
@@ -57,6 +58,8 @@ export interface CoreStores {
   research: ResearchStore;
   /** Conductor subsystem store (canvas/groups/widgets/elements/actions). */
   conductor: ConductorStore;
+  /** Workflow run store (plan 552 Phase 4 — run metadata + snapshot blobs). */
+  workflowRuns: WorkflowRunStore;
 }
 
 let stores: CoreStores | null = null;
@@ -126,6 +129,7 @@ function collectMigrations(): Migration[] {
     ...ProjectStore.migrations,
     ...ResearchStore.migrations,
     ...ConductorStore.migrations,
+    ...WorkflowRunStore.migrations,
   ].sort((a, b) => a.id - b.id);
 }
 
@@ -176,6 +180,7 @@ export function initCoreDatabase(sqlite: SqliteCtor): CoreStores | null {
       projects: new ProjectStore(db),
       research: new ResearchStore(db),
       conductor: new ConductorStore(db),
+      workflowRuns: new WorkflowRunStore(db),
     };
 
     // Plan 329: auto-run the legacy import on first boot. Runs before any

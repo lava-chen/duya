@@ -15,6 +15,7 @@
 import type { ToolRegistration } from '../../modes/types.js';
 import { definition, executor } from './ComputerUseTool.js';
 import { contextDefinition, contextExecutor } from './context-tool.js';
+import { decideDefinition, decideExecutor, isComputerUseDecideAvailable } from './ComputerUseDecideTool.js';
 
 export {
   definition as computerUseDefinition,
@@ -34,6 +35,7 @@ export {
   CONFIRM_REQUIRED_ACTIONS,
   COMPUTER_USE_CONTEXT_TOOL_NAME,
   COMPUTER_USE_CONTEXT_ACTIONS,
+  COMPUTER_USE_DECIDE_TOOL_NAME,
   type ComputerUseAction,
   type ComputerUseContextAction,
   type ComputerUseExecuteAction,
@@ -49,6 +51,13 @@ export {
   getComputerUseContextTriggers,
   clearComputerUseContextTrigger,
 } from './context-tool.js';
+
+export {
+  decideDefinition as computerUseDecideDefinition,
+  decideExecutor as computerUseDecideExecutor,
+  isComputerUseDecideAvailable,
+  type ComputerUseDecideEnvelope,
+} from './ComputerUseDecideTool.js';
 
 export { computerUseInputSchema } from './schema.js';
 
@@ -72,4 +81,18 @@ export function getComputerUseToolsWithContext(): ToolRegistration[] {
     { definition, executor },
     { definition: contextDefinition, executor: contextExecutor },
   ];
+}
+
+/**
+ * plan 551 Phase 3: the vision tool(s) plus the conditional
+ * `computer_use_decide` delegated-goal tool, appended only when a
+ * decision backend is configured (no key → identical to
+ * getComputerUseTools / getComputerUseToolsWithContext).
+ */
+export function getComputerUseToolsWithDecide(includeContext: boolean): ToolRegistration[] {
+  const registrations = includeContext ? getComputerUseToolsWithContext() : getComputerUseTools();
+  if (isComputerUseDecideAvailable()) {
+    registrations.push({ definition: decideDefinition, executor: decideExecutor });
+  }
+  return registrations;
 }

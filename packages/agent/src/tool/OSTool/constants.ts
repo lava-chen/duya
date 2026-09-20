@@ -61,6 +61,16 @@ export const COMPUTER_USE_CONTEXT_ACTIONS = ['list_apps', 'focus_app'] as const;
 export type ComputerUseContextAction = (typeof COMPUTER_USE_CONTEXT_ACTIONS)[number];
 
 /**
+ * plan 551 Phase 3 — the delegated-goal sibling tool ("LLM plans, Jev
+ * decides"). Like `computer_use_context`, it is NOT part of the
+ * 9-action enum: it is a separately-schematized tool injected only
+ * when a decision backend is configured (no key → never injected →
+ * zero behavior change). It dispatches no new main-process action —
+ * the inner loop reuses the existing 9-action IPC surface.
+ */
+export const COMPUTER_USE_DECIDE_TOOL_NAME = 'computer_use_decide';
+
+/**
  * Union of every action string the `computer-use:execute` IPC channel
  * can carry — the 9-action vision enum plus the conditional context
  * actions. Tool-level schemas stay separate; only the main-process

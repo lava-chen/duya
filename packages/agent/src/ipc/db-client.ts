@@ -1131,3 +1131,88 @@ export function closeDbClient(): void {
     pendingRequests.delete(id);
   }
 }
+
+// ==================== Workflow Run Operations (plan 552 Phase 4) ====================
+
+/** Structural mirror of the core-db WorkflowRun row (workflow-store.ts). */
+export interface WorkflowRunRowLike {
+  id: string;
+  workflowName: string;
+  workflowVersionId: string | null;
+  status: string;
+  triggerKind: string | null;
+  dedupKey: string | null;
+  params: Record<string, unknown>;
+  waitTill: number | null;
+  retryOf: string | null;
+  pauseMessage: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export const workflowRunDb = {
+  create: (input: {
+    id?: string;
+    workflowName: string;
+    workflowVersionId?: string | null;
+    status?: string;
+    triggerKind?: string | null;
+    dedupKey?: string | null;
+    params?: Record<string, unknown>;
+    retryOf?: string | null;
+  }): Promise<WorkflowRunRowLike> =>
+    sendDbRequest('workflowRun:create', input) as Promise<WorkflowRunRowLike>,
+
+  get: (id: string): Promise<WorkflowRunRowLike | null> =>
+    sendDbRequest('workflowRun:get', { id }) as Promise<WorkflowRunRowLike | null>,
+
+  getByDedupKey: (dedupKey: string): Promise<WorkflowRunRowLike | null> =>
+    sendDbRequest('workflowRun:getByDedupKey', { dedupKey }) as Promise<WorkflowRunRowLike | null>,
+
+  list: (filter?: { status?: string; workflowName?: string; limit?: number; offset?: number }): Promise<WorkflowRunRowLike[]> =>
+    sendDbRequest('workflowRun:list', filter ?? {}) as Promise<WorkflowRunRowLike[]>,
+
+  updateStatus: (id: string, status: string, pauseMessage?: string | null): Promise<boolean> =>
+    sendDbRequest('workflowRun:updateStatus', { id, status, pauseMessage }) as Promise<boolean>,
+
+  setWaitTill: (id: string, waitTill: number | null): Promise<boolean> =>
+    sendDbRequest('workflowRun:setWaitTill', { id, waitTill }) as Promise<boolean>,
+
+  setVersionId: (id: string, versionId: string): Promise<boolean> =>
+    sendDbRequest('workflowRun:setVersionId', { id, versionId }) as Promise<boolean>,
+
+  listWaitingPast: (now: number): Promise<WorkflowRunRowLike[]> =>
+    sendDbRequest('workflowRun:listWaitingPast', { now }) as Promise<WorkflowRunRowLike[]>,
+
+  reconcileStale: (activeRunIds: string[]): Promise<WorkflowRunRowLike[]> =>
+    sendDbRequest('workflowRun:reconcileStale', { activeRunIds }) as Promise<WorkflowRunRowLike[]>,
+
+  saveSnapshot: (input: {
+    runId: string;
+    definition: unknown;
+    nodeStack: Array<{ nodeId: string; status: string; output?: unknown }>;
+    journal: unknown[];
+  }): Promise<boolean> => sendDbRequest('workflowRun:saveSnapshot', input) as Promise<boolean>,
+
+  loadSnapshot: (runId: string): Promise<{
+    runId: string;
+    definition: unknown;
+    nodeStack: Array<{ nodeId: string; status: string; output?: unknown }>;
+    journal: unknown[];
+    updatedAt: number;
+  } | null> => sendDbRequest('workflowRun:loadSnapshot', { runId }) as Promise<{
+    runId: string;
+    definition: unknown;
+    nodeStack: Array<{ nodeId: string; status: string; output?: unknown }>;
+    journal: unknown[];
+    updatedAt: number;
+  } | null>,
+
+  appendJournal: (runId: string, record: unknown): Promise<boolean> =>
+    sendDbRequest('workflowRun:appendJournal', { runId, record }) as Promise<boolean>,
+
+  loadJournal: (runId: string): Promise<unknown[]> =>
+    sendDbRequest('workflowRun:loadJournal', { runId }) as Promise<unknown[]>,
+
+  delete: (id: string): Promise<boolean> => sendDbRequest('workflowRun:delete', { id }) as Promise<boolean>,
+};

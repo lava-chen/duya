@@ -57,6 +57,8 @@ import {
 import { isSessionApproved } from '../tool/AppConnectionTool/approvals.js'
 import { renderConnectorApprovalFromDescriptor } from '../tool/AppConnectionTool/approval-message.js'
 import { getCachedAppConnectionDescriptors } from '../tool/AppConnectionTool/index.js'
+import { getPermissionPrescreener } from '../decisions/index.js'
+import { logger } from '../utils/logger.js'
 
 const PERMISSION_RULE_SOURCES = [
   'userSettings',
@@ -507,13 +509,41 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
     const sessionModeIsExplicitBypass =
       appState.toolPermissionContext.mode === 'bypassPermissions' ||
       appState.toolPermissionContext.mode === 'dontAsk';
+    // Step 5's mode short-circuit, hoisted so the pre-screen below can see
+    // whether the pipeline is about to auto-allow (identical predicate).
+    const shouldBypassPermissions =
+      appState.toolPermissionContext.mode === 'bypassPermissions' ||
+      appState.toolPermissionContext.mode === 'dontAsk' ||
+      (appState.toolPermissionContext.mode === 'plan' &&
+        appState.toolPermissionContext.isBypassPermissionsModeAvailable)
+
+    // 4.75 Plan 551 — System One risk pre-screen (infra channel, default
+    // off). Fires ONLY when the pipeline is about to auto-allow (host
+    // switch 'always' or session-mode bypass); ordinary prompt paths never
+    // wait on it. The result is a SUGGESTION: the decision below is
+    // unchanged either way (plan 551 Non-Goals — Jev 只产出建议), the note
+    // lands in decisionReason + the log for audit and calibration.
+    let prescreenNote = ''
+    if (
+      shouldBypassPermissions ||
+      (hostPermission === 'always' && !sessionModeIsExplicitBypass)
+    ) {
+      const prescreener = getPermissionPrescreener()
+      if (prescreener) {
+        const suggestion = await prescreener(toolName, input)
+        if (suggestion?.suggestion === 'gate') {
+          prescreenNote = ` [jev:suggest_gate p=${suggestion.p.toFixed(2)}]`
+        }
+      }
+    }
+
     if (!sessionModeIsExplicitBypass) {
       if (hostPermission === 'always') {
         return {
           behavior: 'allow',
           decisionReason: {
             type: 'safetyCheck',
-            reason: `${HOST_PERMISSION_GRANTED}: host-level permission switch is set to 'always'; auto-allowed without prompt.`,
+            reason: `${HOST_PERMISSION_GRANTED}: host-level permission switch is set to 'always'; auto-allowed without prompt.${prescreenNote}`,
             classifierApprovable: false,
           },
         };
@@ -537,13 +567,12 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
     // background read-only mode used by the CLI and automation surfaces,
     // where automated commands and app-internal tools must not block on a
     // permission dialog nobody can answer.
-    const shouldBypassPermissions =
-      appState.toolPermissionContext.mode === 'bypassPermissions' ||
-      appState.toolPermissionContext.mode === 'dontAsk' ||
-      (appState.toolPermissionContext.mode === 'plan' &&
-        appState.toolPermissionContext.isBypassPermissionsModeAvailable)
-
     if (shouldBypassPermissions) {
+      if (prescreenNote) {
+        // Pre-screen suggestion on the bypass path: decision unchanged
+        // (the 'mode' reason shape carries no free-text field), audit-only.
+        logger.warn(`permission prescreen suggests gate${prescreenNote}`, { toolName })
+      }
       return {
         behavior: 'allow',
         decisionReason: {
