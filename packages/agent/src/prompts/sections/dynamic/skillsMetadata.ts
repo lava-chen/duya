@@ -12,20 +12,51 @@
 import { join } from 'node:path'
 import { getSkillRegistry } from '../../../skills/registry.js'
 import type { PromptSkill } from '../../../skills/types.js'
+import type { SkillSource } from '../../../skills/types.js'
+import type { SkillDiagnostic } from '../../../skills/diagnostics.js'
 import { TOOL_NAMES } from '../../types.js'
 import type { PromptContext } from '../../types.js'
 
 /**
- * Per-skill description cap for the catalog listing (aligned with
- * claude-code-haha's MAX_LISTING_DESC_CHARS). The catalog exists only for
- * discovery — the full SKILL.md is loaded on demand — so verbose descriptions
- * waste first-turn cache_creation tokens without improving match rate.
+ * Per-skill description caps for the catalog listing.
+ *
+ * Internal skills (`bundled` / `system`) get the wider 250-char cap because
+ * the author owns the prose and we trust it to be high-signal for the model.
+ * External skills (`user` / `project` / `mcp` / `plugin` / `agent`) get the
+ * tighter 120-char cap (matching mcode's `DEFAULT_EXTERNAL_DESCRIPTION_CHARS`
+ * in `@mavis/skills/registry.ts:82`) — the description is third-party text
+ * that may be padded, so we surface the first line as a one-liner preview.
+ *
+ * The catalog exists only for discovery — the full SKILL.md is loaded on
+ * demand — so verbose descriptions waste first-turn cache_creation tokens
+ * without improving match rate.
  */
-const MAX_LISTING_DESC_CHARS = 250
+const INTERNAL_DESCRIPTION_CHARS = 250
+const EXTERNAL_DESCRIPTION_CHARS = 120
 
 /**
- * Token budget for the whole catalog block. Aligned with codex's
- * SkillMetadataBudget (see codex-rs/ext/skills/src/render.rs).
+ * Classify a skill source as external for catalog-budget purposes.
+ *
+ * Mirrors mcode's `sourceExternal` (`@mavis/skills/registry.ts:728`):
+ * anything not built into the agent binary is treated as external so its
+ * description gets the tighter 120-char cap.
+ *
+ *   bundled / system     → internal (250 chars)
+ *   user / project /
+ *   mcp / plugin / agent → external (120 chars)
+ */
+export function isSkillSourceExternal(source: SkillSource): boolean {
+  return source !== 'bundled' && source !== 'system'
+}
+
+/**
+ * Token budget for the whole catalog block.
+ *
+ * Phase A-2 of plan 535: aligned with mcode's
+ * `DEFAULT_RENDER_BUDGET_CHARS = 20_000` (`@mavis/skills/registry.ts:81`).
+ * At 4 chars/token the budget is 5000 tokens — enough to render the 22
+ * bundled skills at full tier (name + description + location) without
+ * dropping to compact.
  *
  * Three render tiers, picked per-section by estimated size vs. budget:
  *   full       — every skill has name + description + location
@@ -36,7 +67,8 @@ const MAX_LISTING_DESC_CHARS = 250
  * would push ~3.3 chars/token for English); using 0.25 means we err on the
  * side of falling back earlier, which is safer for cache_creation cost.
  */
-const DEFAULT_CATALOG_BUDGET_TOKENS = 1500
+const DEFAULT_CATALOG_BUDGET_CHARS = 20_000
+const DEFAULT_CATALOG_BUDGET_TOKENS = DEFAULT_CATALOG_BUDGET_CHARS / 4
 const CATALOG_CHARS_PER_TOKEN = 0.25
 
 export type CatalogTier = 'full' | 'compact' | 'alias-only'
@@ -51,9 +83,38 @@ const DEFAULT_BUDGET: CatalogBudget = {
   charsPerToken: CATALOG_CHARS_PER_TOKEN,
 }
 
-function clampDescription(value: string): string {
-  if (value.length <= MAX_LISTING_DESC_CHARS) return value;
-  return `${value.slice(0, MAX_LISTING_DESC_CHARS - 1).trimEnd()}…`;
+function clampDescription(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, maxChars - 1).trimEnd()}…`;
+}
+
+/**
+ * First non-empty line of a description (mcode `firstNonEmptyLine` parity).
+ * External skill descriptions are third-party text, often multi-line YAML
+ * blobs; the catalog surfaces only the first line as a one-liner preview.
+ */
+function firstNonEmptyLine(value: string): string {
+  for (const line of value.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed) return trimmed;
+  }
+  return '';
+}
+
+/**
+ * The description text the catalog renders for a skill.
+ *
+ *   internal (bundled / system) → full description clamped to 250 chars
+ *   external                    → first non-empty line clamped to 120 chars
+ *                                 (mcode `firstDescriptionLine || description`
+ *                                 + `truncate(..., 120)` parity)
+ */
+function displayDescription(skill: PromptSkill): string {
+  if (isSkillSourceExternal(skill.source)) {
+    const first = firstNonEmptyLine(skill.description);
+    return clampDescription(first || skill.description, EXTERNAL_DESCRIPTION_CHARS);
+  }
+  return clampDescription(skill.description, INTERNAL_DESCRIPTION_CHARS);
 }
 
 function escapeXml(value: string): string {
@@ -86,7 +147,7 @@ function estimateCatalogChars(
   for (const skill of skills) {
     chars += skill.name.length + 1
     if (tier === 'full' || tier === 'compact') {
-      chars += clampDescription(skill.description).length + 1
+      chars += displayDescription(skill).length + 1
     }
     if (tier === 'full') {
       const location = skillLocation(skill)
@@ -156,6 +217,7 @@ ${rows.join('\n')}`
 export function formatSkillCatalog(
   skills: PromptSkill[],
   budget: CatalogBudget = DEFAULT_BUDGET,
+  options: { loadDiagnostics?: SkillDiagnostic[] } = {},
 ): string {
   const byName = (list: PromptSkill[]): PromptSkill[] =>
     [...list].sort((left, right) => left.name.localeCompare(right.name))
@@ -182,7 +244,7 @@ export function formatSkillCatalog(
     lines.push('  <skill>')
     lines.push(`    <name>${escapeXml(skill.name)}</name>`)
     if (renderTier === 'full' || renderTier === 'compact') {
-      lines.push(`    <description>${escapeXml(clampDescription(skill.description))}</description>`)
+      lines.push(`    <description>${escapeXml(displayDescription(skill))}</description>`)
     }
     if (renderTier === 'full') {
       const location = skillLocation(skill)
@@ -203,6 +265,18 @@ export function formatSkillCatalog(
     for (const skill of otherSkills) {
       renderSkill(skill, tier)
     }
+  }
+  // Load diagnostics count line (plan 535 A-3). Deliberately minimal: a
+  // single count with no paths or messages, so third-party skill text can
+  // never leak into the prompt. Full detail lives in the agent logs.
+  const diagnostics = options.loadDiagnostics
+  if (diagnostics && diagnostics.length > 0) {
+    const errors = diagnostics.filter((d) => d.level === 'error').length
+    const warnings = diagnostics.length - errors
+    const parts: string[] = []
+    if (errors > 0) parts.push(`${errors} skill load error(s)`)
+    if (warnings > 0) parts.push(`${warnings} skill load warning(s)`)
+    lines.push(`  <!-- ${parts.join(', ')} occurred while scanning skill directories; some skills may be missing — see agent logs. -->`)
   }
   lines.push('</available_skills>')
 
@@ -227,5 +301,8 @@ export function getSkillsMetadataSection(
   if (!canLoad) return null
 
   const skills = options.skills ?? getSkillRegistry().listModelInvocable()
-  return skills.length > 0 ? formatSkillCatalog(skills) : null
+  if (skills.length === 0) return null
+  return formatSkillCatalog(skills, DEFAULT_BUDGET, {
+    loadDiagnostics: getSkillRegistry().getLastLoadDiagnostics(),
+  })
 }

@@ -16,6 +16,7 @@ import { getSkillRegistry, resetSkillRegistry } from '../../../../skills/registr
 import {
   formatSkillCatalog,
   getSkillsMetadataSection,
+  isSkillSourceExternal,
 } from '../skillsMetadata.js';
 import type { PromptContext } from '../../../types.js';
 
@@ -227,5 +228,212 @@ describe('skillsMetadata (pi-style <available_skills> catalog)', () => {
 
     expect(memoryIndex).toBeLessThan(pdfIndex);
     expect(memoryIndex).toBeLessThan(arxivIndex);
+  });
+
+  // --- Phase A-2: mcode-aligned budget + external/internal split ---
+
+  describe('isSkillSourceExternal (mcode sourceExternal parity)', () => {
+    it('treats bundled and system as internal', () => {
+      expect(isSkillSourceExternal('bundled')).toBe(false);
+      expect(isSkillSourceExternal('system')).toBe(false);
+    });
+
+    it('treats user / project / mcp / plugin / agent as external', () => {
+      expect(isSkillSourceExternal('user')).toBe(true);
+      expect(isSkillSourceExternal('project')).toBe(true);
+      expect(isSkillSourceExternal('mcp')).toBe(true);
+      expect(isSkillSourceExternal('plugin')).toBe(true);
+      expect(isSkillSourceExternal('agent')).toBe(true);
+    });
+
+    it('treats custom (additional skill_path) as external', () => {
+      expect(isSkillSourceExternal('custom')).toBe(true);
+    });
+  });
+
+  describe('first-line preview for external descriptions (mcode firstDescriptionLine)', () => {
+    it('renders only the first non-empty line for external skills', () => {
+      const catalog = formatSkillCatalog([
+        makeSkill({
+          name: 'ext',
+          source: 'plugin',
+          description: 'First line here.\nSecond line with more details.\nThird line.',
+        }),
+      ]);
+
+      expect(catalog).toContain('<description>First line here.</description>');
+      expect(catalog).not.toContain('Second line');
+    });
+
+    it('keeps the full (250-clamped) description for internal skills', () => {
+      const catalog = formatSkillCatalog([
+        makeSkill({
+          name: 'int',
+          source: 'bundled',
+          description: 'First line here.\nSecond line with more details.',
+        }),
+      ]);
+
+      expect(catalog).toContain('<description>First line here.\nSecond line with more details.</description>');
+    });
+
+    it('falls back to the full description when every line is blank', () => {
+      const catalog = formatSkillCatalog([
+        makeSkill({ name: 'ext', source: 'user', description: '\n \nplain\n' }),
+      ]);
+      expect(catalog).toContain('<description>plain</description>');
+    });
+
+    it('clamps a long first line to the external 120-char cap', () => {
+      const first = 'x'.repeat(300);
+      const catalog = formatSkillCatalog([
+        makeSkill({ name: 'ext', source: 'plugin', description: `${first}\nsecond` }),
+      ]);
+      const expected = 'x'.repeat(119) + '…';
+      expect(catalog).toContain(`<description>${expected}</description>`);
+      expect(catalog).not.toContain('second');
+    });
+  });
+
+  describe('load diagnostics count line (plan 535 A-3)', () => {
+    it('renders a bounded count comment when diagnostics exist', () => {
+      const diagnostics = [
+        { level: 'error' as const, code: 'skill_read_failed' as const, name: 'a', locationUri: 'E:\\x\\a\\SKILL.md', message: 'boom' },
+        { level: 'warning' as const, code: 'skill_symlink_rejected' as const, name: 'b', locationUri: 'E:\\x\\b\\SKILL.md', message: 'symlink' },
+      ];
+      const catalog = formatSkillCatalog([makeSkill()], undefined, { loadDiagnostics: diagnostics });
+
+      expect(catalog).toContain('<!-- 1 skill load error(s), 1 skill load warning(s)');
+      // Prompt-injection hardening: no paths, no messages, no codes.
+      expect(catalog).not.toContain('E:\\x');
+      expect(catalog).not.toContain('boom');
+      expect(catalog).not.toContain('symlink');
+      expect(catalog).not.toContain('skill_read_failed');
+    });
+
+    it('renders no comment when diagnostics are empty', () => {
+      const catalog = formatSkillCatalog([makeSkill()], undefined, { loadDiagnostics: [] });
+      expect(catalog).not.toContain('<!-- 1 skill load');
+      expect(catalog).not.toMatch(/load (error|warning)\(s\)/);
+    });
+
+    it('surfaces registry-stored diagnostics through getSkillsMetadataSection', () => {
+      getSkillRegistry().register(makeSkill());
+      getSkillRegistry().setLastLoadDiagnostics([
+        { level: 'error', code: 'skill_read_failed', locationUri: 'E:\\x', message: 'boom' },
+      ]);
+      const section = getSkillsMetadataSection(context(['Read']));
+      expect(section).not.toBeNull();
+      expect(section).toContain('1 skill load error(s)');
+
+      getSkillRegistry().setLastLoadDiagnostics([]);
+      const clean = getSkillsMetadataSection(context(['Read']));
+      expect(clean).not.toBeNull();
+      expect(clean).not.toMatch(/skill load (error|warning)\(s\)/);
+    });
+  });
+
+  describe('description cap differentiation', () => {
+    it('truncates external skill descriptions at 120 chars (mcode DEFAULT_EXTERNAL_DESCRIPTION_CHARS)', () => {
+      const long = 'x'.repeat(400);
+      const catalog = formatSkillCatalog([
+        makeSkill({ name: 'ext', source: 'plugin', description: long }),
+      ]);
+
+      // Clamped to 120 incl. ellipsis, XML-escaped.
+      const expected = 'x'.repeat(119) + '…';
+      expect(catalog).toContain(`<description>${expected}</description>`);
+      expect(catalog).not.toContain('x'.repeat(120));
+    });
+
+    it('keeps internal (bundled) skill descriptions at 250 chars', () => {
+      const long = 'x'.repeat(400);
+      const catalog = formatSkillCatalog([
+        makeSkill({ name: 'int', source: 'bundled', description: long }),
+      ]);
+
+      // Clamped to 250 incl. ellipsis, XML-escaped.
+      const expected = 'x'.repeat(249) + '…';
+      expect(catalog).toContain(`<description>${expected}</description>`);
+      expect(catalog).not.toContain('x'.repeat(250));
+    });
+
+    it('applies the per-source cap independently in a mixed list', () => {
+      // Use distinct fill chars so the substring counts are unambiguous:
+      // 'A' for internal caps and 'E' for external caps.
+      const longA = 'A'.repeat(400);
+      const longE = 'E'.repeat(400);
+      const catalog = formatSkillCatalog([
+        makeSkill({ name: 'int', source: 'bundled', description: longA }),
+        makeSkill({ name: 'sys', source: 'system', description: longA }),
+        makeSkill({ name: 'usr', source: 'user', description: longE }),
+        makeSkill({ name: 'plg', source: 'plugin', description: longE }),
+        makeSkill({ name: 'ag', source: 'agent', description: longE }),
+      ]);
+
+      const expected250 = 'A'.repeat(249) + '…';
+      const expected120 = 'E'.repeat(119) + '…';
+
+      // Per-skill <description> blocks: extract each block and verify the
+      // truncation that the renderer chose for its source.
+      const blocks = catalog.match(/<skill>[\s\S]*?<\/skill>/g) ?? [];
+      const blockFor = (name: string) =>
+        blocks.find(b => b.includes(`<name>${name}</name>`)) ?? '';
+
+      expect(blockFor('int')).toContain(`<description>${expected250}</description>`);
+      expect(blockFor('sys')).toContain(`<description>${expected250}</description>`);
+      expect(blockFor('usr')).toContain(`<description>${expected120}</description>`);
+      expect(blockFor('plg')).toContain(`<description>${expected120}</description>`);
+      expect(blockFor('ag')).toContain(`<description>${expected120}</description>`);
+    });
+
+    it('keeps short external descriptions untouched', () => {
+      const catalog = formatSkillCatalog([
+        makeSkill({ name: 'ext', source: 'user', description: 'short' }),
+      ]);
+      expect(catalog).toContain('<description>short</description>');
+    });
+  });
+
+  describe('mcode-aligned budget (5000 tokens / 20000 chars)', () => {
+    it('renders 22 bundled skills at full tier under default budget', () => {
+      // Phase A budget (1500 tokens) forced these to compact; Phase A-2
+      // (5000 tokens, mcode-aligned) keeps every skill at full tier with
+      // name + description + location.
+      const skills = Array.from({ length: 22 }, (_, i) =>
+        makeSkill({ name: `bundled-${i}`, description: 'A bundled skill.' }),
+      );
+      const catalog = formatSkillCatalog(skills);
+
+      // Each skill renders name + description + location at full tier.
+      const skillBlocks = catalog.match(/<skill>[\s\S]*?<\/skill>/g) ?? [];
+      expect(skillBlocks.length).toBe(22);
+      for (const block of skillBlocks) {
+        expect(block).toContain('<name>');
+        expect(block).toContain('<description>');
+        expect(block).toContain('<location>');
+      }
+    });
+
+    it('does not regress the old 1500-token tier behavior when budget is forced low', () => {
+      // Same input as above but force the budget back to Phase A's 1500
+      // tokens AND pad each description so full tier exceeds the 70%
+      // headroom threshold. This forces compact (no <location>) and
+      // proves the new default budget is what unlocks full tier, not the
+      // per-skill cap.
+      const skills = Array.from({ length: 22 }, (_, i) =>
+        makeSkill({ name: `bundled-${i}`, description: 'A bundled skill. '.repeat(20) }),
+      );
+      const catalog = formatSkillCatalog(skills, {
+        tokens: 1500,
+        charsPerToken: 0.25,
+      });
+
+      const skillBlocks = catalog.match(/<skill>[\s\S]*?<\/skill>/g) ?? [];
+      expect(skillBlocks.length).toBe(22);
+      for (const block of skillBlocks) {
+        expect(block).not.toContain('<location>');
+      }
+    });
   });
 });
