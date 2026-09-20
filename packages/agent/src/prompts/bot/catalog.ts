@@ -39,13 +39,13 @@
  *                        one-line runtime note may be added later
  */
 
-import type { BotSectionDef, BotPromptContext } from './framework.js'
-import { renderBotIdentity } from './identity.js'
+import type { BotSectionDef } from './framework.js'
+import { prepareBotIdentityContext } from './identity.js'
+import { prepareBotCommsRulesContext } from './commsRules.js'
+import { prepareChannelsContext } from './channels.js'
+import { prepareBotTaskDelegationContext } from './delegation.js'
 import { renderBotRoster } from './roster.js'
-import { renderBotCommsRules } from './commsRules.js'
-import { renderBotChannels } from './channels.js'
 import { renderBotAutomations } from './automations.js'
-import { renderBotTaskDelegation } from './delegation.js'
 import {
   BOT_MEMORY_OWN_SECTION,
   BOT_MEMORY_USAGE_SECTION,
@@ -53,18 +53,12 @@ import {
   BOT_MEMORY_PROJECT_SECTION,
 } from './memory/sections.js'
 
-/**
- * Placeholder compute: always null (omit). Swapped for a real renderer by
- * the owning plan; kept as a named stub so the framework output is stable
- * and the section slot is discoverable.
- */
-const pending = (_ctx: BotPromptContext): null => null
-
 export const BOT_IDENTITY_SECTION: BotSectionDef = {
   name: 'botIdentity',
   description: 'Bot persona: name/description + self-edit hint (485 P2.2 adds avatar/title).',
   budgetChars: 800,
-  compute: renderBotIdentity,
+  templatePath: 'bot/identity.hbs',
+  prepare: prepareBotIdentityContext,
 }
 
 export const BOT_COMMS_RULES_SECTION: BotSectionDef = {
@@ -72,22 +66,8 @@ export const BOT_COMMS_RULES_SECTION: BotSectionDef = {
   description:
     'Messaging rules: user voice (SendMessage cadence, ack≠delivery, reply length/shape style) + wakes/quiet-work silence (inter-agent contract lives in botRoster since 492 P1).',
   budgetChars: 4600,
-  compute: renderBotCommsRules,
-}
-
-export const BOT_SPOTLIGHT_SECTION: BotSectionDef = {
-  name: 'spotlight',
-  description: 'Runtime feature-switch state hints (476).',
-  budgetChars: 400,
-  compute: pending,
-  volatile: true,
-}
-
-export const BOT_USER_IDENTITY_SECTION: BotSectionDef = {
-  name: 'userIdentity',
-  description: 'User display name + timezone (P2.0 init payload).',
-  budgetChars: 400,
-  compute: pending,
+  templatePath: 'bot/comms-rules.hbs',
+  prepare: prepareBotCommsRulesContext,
 }
 
 export const BOT_MEMORY_OWN_DEF = BOT_MEMORY_OWN_SECTION
@@ -99,6 +79,7 @@ export const BOT_AUTOMATIONS_SECTION: BotSectionDef = {
   description:
     'Routines bound to this bot (cronjob.toml agent binding, 476 P2.3b): wake-cue conduct + current inventory with ids. Renderer reads the cron file directly.',
   budgetChars: 2800,
+  templatePath: 'bot/automations.hbs',
   compute: renderBotAutomations,
   volatile: true,
 }
@@ -107,7 +88,8 @@ export const BOT_CHANNELS_SECTION: BotSectionDef = {
   name: 'botChannels',
   description: 'Connected message channels + connector manifests (P2.5/476).',
   budgetChars: 1600,
-  compute: renderBotChannels,
+  templatePath: 'bot/channels.hbs',
+  prepare: prepareChannelsContext,
   volatile: true,
 }
 
@@ -116,6 +98,7 @@ export const BOT_ROSTER_SECTION: BotSectionDef = {
   description:
     'Inter-agent messaging contract (async, judgment, privacy relay, fan-out, capability) + teammate directory (492 P1.2; group rooms via 478).',
   budgetChars: 8000,
+  templatePath: 'bot/roster.hbs',
   compute: renderBotRoster,
 }
 
@@ -124,29 +107,14 @@ export const BOT_TASK_DELEGATION_SECTION: BotSectionDef = {
   description:
     'Coordinator/hands split: prefer spawning child sessions via the `session` tool for project-scoped engineering work; stay the coordinator with the user and other agents (soft preference).',
   budgetChars: 1200,
-  compute: renderBotTaskDelegation,
-}
-
-export const BOT_MCP_SECTION: BotSectionDef = {
-  name: 'botMCP',
-  description: 'MCP server-declared usage preferences / discovery status.',
-  budgetChars: 1200,
-  compute: pending,
-}
-
-export const BOT_REMOTE_BOX_SECTION: BotSectionDef = {
-  name: 'botRemoteBox',
-  description: 'Runtime environment note (mostly covered by environment section).',
-  budgetChars: 600,
-  compute: pending,
+  templatePath: 'bot/delegation.hbs',
+  prepare: prepareBotTaskDelegationContext,
 }
 
 /** Canonical assembly order of bot sections (after the basic prompt). */
 export const BOT_SECTION_CATALOG: readonly BotSectionDef[] = [
   BOT_IDENTITY_SECTION,
   BOT_COMMS_RULES_SECTION,
-  BOT_SPOTLIGHT_SECTION,
-  BOT_USER_IDENTITY_SECTION,
   BOT_MEMORY_USAGE_SECTION,
   BOT_MEMORY_OWN_SECTION,
   BOT_MEMORY_USER_SECTION,
@@ -155,8 +123,6 @@ export const BOT_SECTION_CATALOG: readonly BotSectionDef[] = [
   BOT_CHANNELS_SECTION,
   BOT_ROSTER_SECTION,
   BOT_TASK_DELEGATION_SECTION,
-  BOT_MCP_SECTION,
-  BOT_REMOTE_BOX_SECTION,
 ]
 
 /** Register the full catalog as placeholders on an assembly. */
