@@ -20,6 +20,12 @@
  * that a parent profile disabled.
  */
 export interface PromptProfile {
+  /**
+   * @deprecated Plan 557 phase 2: a non-empty list acts as a strict
+   * whitelist that silently hides sections added to the config later.
+   * Prefer `disableSections`. Still honored for DB-persisted custom
+   * profiles; presets must not use it.
+   */
   enableSections?: string[]
   disableSections?: string[]
 }

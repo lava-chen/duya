@@ -165,9 +165,8 @@ describe('general profile skills catalog (plan 535)', () => {
 
   it('renders the catalog through the real general-purpose preset profile', async () => {
     // Locks the actual desktop General path: PromptSystem binds the profile
-    // at construction time and promptProfile.enableSections is a strict
-    // whitelist (isSectionEnabled), so the preset MUST include 'skills' or
-    // the catalog silently disappears — the regression that made the model
+    // at construction time, so the preset MUST keep 'skills' enabled or the
+    // catalog silently disappears — the regression that made the model
     // answer inventory questions via CLI discovery.
     const preset = PRESET_AGENT_PROFILES.find((p) => p.id === 'general-purpose')!;
     getSkillRegistry().register(makeSkill());
@@ -177,5 +176,29 @@ describe('general profile skills catalog (plan 535)', () => {
     expect(text).toContain('## Available skills');
     expect(text).toContain('<name>pdf</name>');
     expect(text).toContain('complete, authoritative list of installed skills');
+  });
+
+  it('general-purpose denylist preserves the post-A-6 section set (plan 557 phase 2)', () => {
+    // Golden parity: the denylist must cut exactly the nine sections the old
+    // whitelist cut (minus the skills fix) — nothing more, nothing less.
+    const preset = PRESET_AGENT_PROFILES.find((p) => p.id === 'general-purpose')!;
+    const system = new PromptSystem(generalConfig, preset.promptProfile);
+    const names = system.getAllSections(context()).map((s) => s.name);
+
+    const expectedEnabled = [
+      'identity', 'system', 'destructiveActions', 'communication',
+      'tools', 'tasks', 'skillUsage', 'duyaDesktopContext', 'finalAnswer',
+      'language', 'platform', 'environment', 'memory', 'skills',
+    ];
+    for (const name of expectedEnabled) {
+      expect(names).toContain(name);
+    }
+    for (const cut of [
+      'configProtection', 'outputStyle', 'mcp', 'scratchpad',
+      'sessionSearch', 'recentSessions', 'sessionGuidance',
+      'visionGuidelines', 'visualVerification',
+    ]) {
+      expect(names).not.toContain(cut);
+    }
   });
 });

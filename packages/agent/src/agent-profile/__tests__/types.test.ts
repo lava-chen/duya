@@ -33,16 +33,20 @@ describe('PRESET_AGENT_PROFILES', () => {
     expect(disabled).toContain('rules');
   });
 
-  it('general-purpose enableSections whitelists the skills catalog (plan 535 A-6)', () => {
-    // The desktop General sessions run on this preset. Its enableSections
-    // is a strict whitelist (isSectionEnabled), so a missing entry means
-    // the section never renders — this regression is what silently dropped
-    // the <available_skills> catalog and made the model answer skill
-    // inventory questions via `duya skill list` CLI discovery.
+  it('general-purpose cuts volatile sections via denylist, not a whitelist (plan 557 phase 2)', () => {
+    // The desktop General sessions run on this preset. The old
+    // enableSections whitelist silently dropped the skills catalog for its
+    // entire lifetime (plan 535 A-6); the preset now uses a denylist so new
+    // sections default to visible.
     const general = PRESET_AGENT_PROFILES.find((p) => p.id === 'general-purpose')!;
-    const enabled = general.promptProfile?.enableSections ?? [];
-    expect(enabled).toContain('skills');
-    expect(enabled).toContain('skillUsage');
+    const disabled = general.promptProfile?.disableSections ?? [];
+    expect(disabled).toEqual(expect.arrayContaining([
+      'configProtection', 'outputStyle', 'mcp', 'scratchpad',
+      'sessionSearch', 'recentSessions', 'sessionGuidance',
+      'visionGuidelines', 'visualVerification',
+    ]));
+    // Whitelist removed — it must never come back for main presets.
+    expect(general.promptProfile?.enableSections).toBeUndefined();
   });
 
   it('resolveAllowedTools whitelists exactly the 5 file tools for memory-curator', () => {

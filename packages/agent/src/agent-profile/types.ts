@@ -11,7 +11,12 @@
 export interface PromptProfileOverride {
   /** Disable specific prompt sections */
   disableSections?: string[];
-  /** Enable specific prompt sections (useful for re-enabling after base profile excludes them) */
+  /**
+   * @deprecated Plan 557 phase 2: a non-empty list acts as a strict
+   * whitelist that silently hides sections added to the config later.
+   * Prefer `disableSections`. Still honored for DB-persisted custom
+   * profiles; presets must not use it.
+   */
   enableSections?: string[];
 }
 
@@ -132,18 +137,19 @@ export const MAIN_AGENT_PROFILES: AgentProfile[] = [
     // conductor mode.
     promptProfile: {
       // General sessions need core operating guidance, but must not inherit
-      // every volatile capability and session-history section. `skills` (the
-      // model-facing <available_skills> catalog) and `skillUsage` (how to
-      // load skills) ARE part of the core contract: without them the model
-      // cannot see the skill inventory and falls back to CLI discovery when
-      // asked what it can do (plan 535 A-6).
-      enableSections: [
-        'identity', 'communication', 'finalAnswer', 'system', 'tasks',
-        'destructiveActions', 'tools', 'skillUsage', 'project',
-        'duyaDesktopContext', 'language', 'platform', 'environment',
-        'memory', 'skills',
+      // every volatile session-history section. Expressed as a DENYLIST, not
+      // the old enableSections whitelist: sections added to the config later
+      // default to visible for General — the safe failure direction (the
+      // whitelist silently hid the skills catalog for its entire lifetime,
+      // plan 535 A-6 / plan 557 phase 2). Cut sections:
+      //   configProtection / outputStyle / mcp / scratchpad /
+      //   sessionSearch / recentSessions / sessionGuidance /
+      //   visionGuidelines / visualVerification
+      disableSections: [
+        'configProtection', 'outputStyle', 'mcp', 'scratchpad',
+        'sessionSearch', 'recentSessions', 'sessionGuidance',
+        'visionGuidelines', 'visualVerification',
       ],
-      disableSections: ['rules', 'memoryContent'],
     },
     promptSystem: 'general',
     userVisible: true,
