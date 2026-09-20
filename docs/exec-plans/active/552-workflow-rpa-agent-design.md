@@ -332,14 +332,28 @@ workflow_run_snapshots   run_id 1:1 → blob（冻结 YAML + 节点栈 + journal
       ToolRegistry/SubagentTool/审批管线）归入生产 host 接线 pass
 - **Gate**: ✅ 四通道触发单测（幂等键命中不重跑,8 测试）；⏳ cron 实触发手动验证待办
 
-### Phase 7 — 控制台 UI 最小集（对标影刀控制台最小集,裁决 3 收缩版）
-- [x] `WorkflowPanel` run 列表 + 状态族着色 + 触发徽标 + 耗时 + pauseMessage;展开 journal
-      视图（phase trail chips + verified/unconfirmed 标注 + errorClass）;完成态删除;
-      `workflow:*` IPC + preload surface + registry/侧栏入口 + en/zh i18n
-- [x] journal 逐步重放视图（含截图事件引用——截图外置存储 §4.3 落 Phase 3）
-- [x] 审批待办:复用既有 498 审批卡体系（审批入口不经 console,见 498）;触发器配置/重跑入口
-      依赖生产 host 接线,归入 Electron 集成 pass
-- **Gate**: ✅ 5 组件测试 + 2 handler 测试;⏳ Playwright MCP 冒烟 + 手动 Electron 验证待办
+### Phase 7 — 控制台 UI（对标影刀/ZCode 控制台;裁决 3 收缩版 + ZCode 交互对齐 pass）
+- [x] `WorkflowPanel` 双 tab（定义 | 运行）;运行 tab 分「进行中 · N / 已结束 · N」双区,
+      活跃行给「停止运行」、结束行给删除;定义 tab 按 scope 分组（项目 shadows 全局）,
+      卡片带 描述/参数数/触发器/阶段+节点数/可复制权威文件路径,无效定义显示错误
+- [x] run 详情渐进披露:血缘(`retry_of` 调整自 run …) + 四格统计（时间 / tokens /
+      子代理 / 阶段,**纯代码从 journal 推导**）+ 阶段 trail 带 N/M 步进计数 +
+      逐步证据行（action + 退出码 + 耗时 + 输出大小 + 子代理会话引用 + 可展开缓存结果）
+      + 产物区;每条结果带 verified/unconfirmed 标注
+- [x] `workflow:cancel`（store 级:终态拒绝,parked 清 wait_till）+ `workflow:defs:list/get`
+      + preload surface + PanelZone 项目目录接线 + en/zh i18n
+- [x] journal 证据字段（nodeKind/action/exitCode/durationMs/outputSize/childSessionId/usage）
+      由四个 runner 填充,**不进 reqHash payload**（缓存命中不受影响,有测试断言）
+- [x] 定义库双 scope:项目 `.duya/workflows/`（随 git 走）shadows 全局 `~/.duya/workflows/`;
+      `listDetailed()` 产出控制台直接可用的摘要
+- **Gate**: ✅ 16 组件测试 + 4 handler 测试（定义库测试不需原生产物）;⏳ Playwright MCP 冒烟
+      + 手动 Electron 验证待办;定义页只读（修改走对话）——与 ZCode 的权责边界一致
+
+> **ZCode 调研落点对照**（2026-09-20 交互审计）:已吸收 定义/运行双 tab、进行中/已结束分组、
+> 停止运行、四格统计、阶段 N/M、血缘、产物区、步骤证据行（命令/退出码/耗时/大小 + 展开）、
+> 双 scope、脚本只读 + 参数表。**未吸收**:子代理转录 tab（duya 已有会话血缘,journal 记录
+> `childSessionId`,渲染端 tab 化归后续）、确认前展示完整命令集（依赖生产 host 绑定后才有完整
+> tool 面）、「通过对话创建」按钮（依赖 Phase 5 planner 的 chat 入口接线）。
 
 ## 10. 测试策略
 
