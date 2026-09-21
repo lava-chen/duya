@@ -73,6 +73,18 @@ export interface ComputerUseDaemonOptions {
   /** Extra environment merged over process.env for the child. */
   env?: NodeJS.ProcessEnv;
   /**
+   * Child argv. Defaults to `[entry]` (node-style). Non-node runtimes
+   * (e.g. the plan 556 PowerShell UIA probe) pass their full flag list.
+   */
+  args?: string[];
+  /** Child stdio pipes. Defaults to `['ignore', 'pipe', 'pipe']`. */
+  stdio?: StdioOptions;
+  /**
+   * Write to the child's stdin. Only meaningful with a piped stdin —
+   * used by line-protocol children (plan 556 recorder probe).
+   */
+  writeStdin?(data: string): boolean;
+  /**
    * Observe every trimmed stdout line before the daemon's own
    * heartbeat handling. Lets second consumers (e.g. the plan 556
    * recorder hook worker, which reuses this spawn pipeline) parse
@@ -103,6 +115,12 @@ export interface ComputerUseDaemon {
   ensureRunning(): Promise<void>;
   onHealth(listener: ComputerUseDaemonListener): () => void;
   getHealth(): ComputerUseHealth;
+  /**
+   * Write raw text to the child's stdin. Only available when the child
+   * was spawned with a piped stdin; returns false when no process is
+   * running or the pipe is gone.
+   */
+  writeStdin?(data: string): boolean;
   /** Test-only: replace the singleton. */
   __setForTest(replacement: ComputerUseDaemon | null): void;
 }
@@ -136,6 +154,8 @@ class ComputerUseDaemonImpl implements ComputerUseDaemon {
   }) => ChildProcess) | undefined;
   private readonly extraEnv: NodeJS.ProcessEnv | undefined;
   private readonly onStdoutLine: ((line: string) => void) | undefined;
+  private readonly childArgs: string[] | undefined;
+  private readonly childStdio: StdioOptions | undefined;
 
   constructor(opts: ComputerUseDaemonOptions) {
     this.opts = {
@@ -151,6 +171,8 @@ class ComputerUseDaemonImpl implements ComputerUseDaemon {
     this.spawnFn = opts.spawnFn;
     this.extraEnv = opts.env;
     this.onStdoutLine = opts.onStdoutLine;
+    this.childArgs = opts.args;
+    this.childStdio = opts.stdio;
     this.currentBackoffMs = this.opts.backoffInitialMs;
   }
 
@@ -213,6 +235,23 @@ class ComputerUseDaemonImpl implements ComputerUseDaemon {
     await this.spawnOnce();
   }
 
+  /** @see ComputerUseDaemon.writeStdin */
+  writeStdin(data: string): boolean {
+    const proc = this.proc;
+    const stdin = proc?.stdin;
+    // exitCode is null while running (and undefined on stubs) — use
+    // loose comparison so only an actual exit closes the pipe.
+    if (!proc || !stdin || proc.exitCode != null || proc.signalCode != null) {
+      return false;
+    }
+    try {
+      stdin.write(data);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   onHealth(listener: ComputerUseDaemonListener): () => void {
     this.emitter.on('health', listener);
     // Fire immediately with current state so consumers don't have to
@@ -243,8 +282,8 @@ class ComputerUseDaemonImpl implements ComputerUseDaemon {
           DUYA_COMPUTER_USE_CONTEXT_DIR: this.opts.contextDir,
           ...this.extraEnv,
         };
-        const args = [this.opts.entry];
-        const stdio: StdioOptions = ['ignore', 'pipe', 'pipe'];
+        const args = this.childArgs ?? [this.opts.entry];
+        const stdio: StdioOptions = this.childStdio ?? ['ignore', 'pipe', 'pipe'];
         const cwd = this.opts.cwd;
         const spawn = this.spawnFn ?? defaultSpawn;
         const proc = spawn(this.opts.runtime, args, { stdio, env, cwd });

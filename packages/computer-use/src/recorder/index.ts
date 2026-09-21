@@ -72,3 +72,11 @@ export {
   WHEEL_DEBOUNCE_MS,
 } from './aggregators.js';
 export type { AggregatorOptions, FeedContext } from './aggregators.js';
+
+export {
+  buildRequestLine,
+  elementToDescriptor,
+  isBrowserProcess,
+  parseUiaProbeLine,
+} from './uia-probe-protocol.js';
+export type { UiaProbeRequest, UiaProbeResponse } from './uia-probe-protocol.js';

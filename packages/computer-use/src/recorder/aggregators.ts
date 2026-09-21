@@ -57,6 +57,12 @@ export interface FeedContext {
    * this on the next click / app change.
    */
   redact?: boolean;
+  /**
+   * Best-effort browser URL for the current window (design §4.3). When
+   * present it rides on click/type events; scroll events have no slot
+   * for it in the schema.
+   */
+  browserUrl?: string;
 }
 
 export interface AggregatorOptions {
@@ -268,6 +274,9 @@ export class RecorderAggregator {
       text: ctx.redact === true ? REDACTED_TEXT : text,
       element: NO_ELEMENT,
     };
+    if (ctx.browserUrl !== undefined) {
+      event.browserUrl = ctx.browserUrl;
+    }
     return [event];
   }
 
@@ -300,6 +309,9 @@ export class RecorderAggregator {
       click: { x: pending.x, y: pending.y, button, count },
       element: NO_ELEMENT,
     };
+    if (ctx.browserUrl !== undefined) {
+      clickEvent.browserUrl = ctx.browserUrl;
+    }
     return [...flush, clickEvent];
   }
 

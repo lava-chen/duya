@@ -26,6 +26,7 @@ import {
   RecorderAggregator,
   SessionStore,
   getDefaultRecorderRootDir,
+  isBrowserProcess,
   shouldDropEventForApp,
   type AppRef,
   type ElementDescriptor,
@@ -37,6 +38,7 @@ import {
 import { getLogger, LogComponent } from '../../logging/logger.js';
 import { RecorderHookWorker } from './hook-worker.js';
 import { RecorderFocusTracker } from './focus-tracker.js';
+import { createSharedUiaProbeAdapter } from './uia-probe.js';
 
 const logger = getLogger();
 
@@ -62,7 +64,18 @@ export interface RecorderStatusSnapshot {
   degraded: boolean;
 }
 
-export type RecorderProbe = (x: number, y: number) => Promise<ElementDescriptor>;
+/**
+ * UIA element probe surface (Phase 2 wires the shared UiaProbeClient;
+ * Phase 1 ran without one). `at` is called on the click-attach path and
+ * must never throw; `warmup` lets the service start the probe process
+ * at recording start, outside the click budget; `readUrl` fetches the
+ * browser address-bar value on focus changes.
+ */
+export interface RecorderProbe {
+  at(x: number, y: number): Promise<ElementDescriptor>;
+  warmup?(): Promise<void>;
+  readUrl?(hwnd: number): Promise<string | null>;
+}
 
 type HookWorkerCallbacks = ConstructorParameters<typeof RecorderHookWorker>[0];
 
@@ -107,6 +120,7 @@ export class RecorderService {
   private tracker: RecorderFocusTracker | null = null;
 
   private currentApp: AppRef | null = null;
+  private browserUrl: string | undefined = undefined;
   private redactHint = false;
   private droppedNoApp = 0;
   private droppedFiltered = 0;
@@ -195,6 +209,7 @@ export class RecorderService {
     this.droppedFiltered = 0;
     this.appendErrors = 0;
     this.currentApp = null;
+    this.browserUrl = undefined;
     this.redactHint = false;
 
     const sessionId = `${Date.now()}-${randomUUID().slice(0, 8)}`;
@@ -212,6 +227,10 @@ export class RecorderService {
       onChange: (prev, next) => this.handleFocusChange(prev, next),
     });
     this.tracker.start();
+
+    // Warm the UIA probe process now (first spawn compiles the C# helper
+    // and must not land inside the click-attach budget).
+    void this.opts.probe?.warmup?.()?.catch(() => undefined);
 
     const workerCallbacks: HookWorkerCallbacks = {
       onEvent: (event) => this.handleWorkerEvent(event),
@@ -286,6 +305,7 @@ export class RecorderService {
     this.sessionId = null;
     this.startedAt = null;
     this.currentApp = null;
+    this.browserUrl = undefined;
     this.setStatus('idle');
     logger.info(
       'recorder session stopped',
@@ -312,6 +332,20 @@ export class RecorderService {
     }
     this.redactHint = false;
     this.currentApp = nextApp;
+
+    // Browser URL: refresh on every focus change INTO a supported
+    // browser; clear immediately when leaving one (no stale URLs).
+    if (isBrowserProcess(nextApp.processName) && this.opts.probe?.readUrl) {
+      const hwnd = next.hwnd;
+      void this.opts.probe
+        .readUrl(hwnd)
+        .then((url) => {
+          this.browserUrl = url ?? undefined;
+        })
+        .catch(() => undefined);
+    } else {
+      this.browserUrl = undefined;
+    }
 
     // app_focus for duya's own windows is intentionally not recorded.
     if (this.isSelfPid(nextApp.pid) || shouldDropEventForApp(nextApp)) {
@@ -370,6 +404,7 @@ export class RecorderService {
     return {
       app: this.currentApp ?? { name: '', title: '', processName: '', pid: 0 },
       redact: this.redactHint,
+      browserUrl: this.browserUrl,
     };
   }
 
@@ -401,7 +436,9 @@ export class RecorderService {
 
   /**
    * Attach the UIA element to click events (async attach within the
-   * probe budget; Phase 2 provides the probe, Phase 1 runs without one).
+   * probe budget). The main-side race (300ms) sits above the probe's
+   * own 200ms internal budget — the design's "double insurance"; every
+   * failure leaves `source:'none'` and never blocks recording.
    */
   private async enrich(event: RecorderEvent): Promise<RecorderEvent> {
     if (event.type !== 'click' || !this.opts.probe) {
@@ -409,9 +446,9 @@ export class RecorderService {
     }
     try {
       const element = await Promise.race([
-        this.opts.probe(event.click.x, event.click.y),
+        this.opts.probe.at(event.click.x, event.click.y),
         new Promise<null>((resolve) => {
-          const t = setTimeout(() => resolve(null), 200);
+          const t = setTimeout(() => resolve(null), 300);
           t.unref?.();
         }),
       ]);
@@ -482,7 +519,9 @@ let _singleton: RecorderService | null = null;
 
 export function getRecorderService(): RecorderService {
   if (!_singleton) {
-    _singleton = new RecorderService();
+    _singleton = new RecorderService({
+      probe: createSharedUiaProbeAdapter(),
+    });
   }
   return _singleton;
 }

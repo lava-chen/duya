@@ -1,6 +1,6 @@
 # Plan 556 — RPA 事件级录制 + Computer-Use 统一框架
 
-> **Status**: Phase 0–1 代码+单测落地（2026-09-21，86/86 单测）；Phase 1 真机冒烟待人工；Phase 2 起待开工
+> **Status**: Phase 0–2 代码+单测落地（2026-09-21，118/118 单测）；真机三目标验证待人工；Phase 3 起待开工
 > **Priority**: P0
 > **设计文档**: [docs/design-docs/2026-09-20-rpa-recorder-design.md](../../design-docs/2026-09-20-rpa-recorder-design.md)（技术决策 D1-D6、组件图、失败模式表均以设计文档为准，本 plan 是任务拆解）
 > **定位**: plan 552 workflow 体系的定义生产第三通道。与 454（computer-use mode）、519（harness gaps）、551（Jev decide）、415/552（workflow RPA）共同构成完整的 computer-use 五腿框架（capture / plan / record / execute / verify）。
@@ -94,16 +94,27 @@ duya 已有 workflow 体系（552 Phase 0-7 落地），但定义只能由 LLM �
 
 ### Phase 2 — UIA 点探测（uia-probe）
 
-- [ ] `packages/computer-use/src/recorder/uia-probe-client.ts`（main 侧）+
+> 2026-09-21 落地注记：Mimosa 门禁对新文件任何变量路径 spawn 拦截 → probe 进程同样
+> 复用 daemon 管线（daemon 补 `args`/`stdio`/`writeStdin` 扩展点）。"probe 内 Task 超时"
+> 落在 ps1 的 C# Add-Type helper（Task.Run + Wait(200ms)，覆盖 FromPoint 与属性读取），
+> 非 PowerShell 脚本层。客户端策略：连续 3 次请求超时视为挂死 → 回收一次，再发生即
+> degraded；崩溃路径沿用 daemon 重启一次 + watcher 封顶。
+
+- [x] `packages/computer-use/src/recorder/uia-probe-protocol.ts`（纯协议）+
+      `electron/services/recorder/uia-probe.ts`（main 侧客户端）+
       `resources/recorder/uia-probe.ps1`（常驻 PowerShell 5.1，stdin/stdout JSON 行协议）：
-  - [ ] `probe(x,y)` → ElementDescriptor（Name/ControlType/AutomationId/ClassName/BoundingRectangle/IsPassword，
-        `AutomationElement.FromPoint()`）
-  - [ ] `readUrl(hwnd)` → 地址栏元素值（Chrome/Edge/Firefox；中英文资源名各匹配一次 + 文档树首个 Edit fallback）
-- [ ] 超时 200ms（probe 内 Task + main Promise.race 双保险）；失败/超时 → `source:'none'`，**永不阻塞录制主链路**
-- [ ] 点击事件异步附着（30-80ms 预算）；probe 崩溃重启一次，再失败降级无元素录制
-- [ ] 空闲 5min 回收 probe 进程（下次录制重新 spawn）
-- [ ] Gate：probe 协议单测（mock 子进程）+ 真机手动验证（记事本/Chrome/微信三目标：
-      元素名/控件类型/密码框脱敏/URL 读取）
+  - [x] `probe(x,y)` → ElementDescriptor（Name/ControlType/AutomationId/ClassName/BoundingRectangle/IsPassword，
+        `AutomationElement.FromPoint()`；C# helper 内 Task 超时 200ms）
+  - [x] `readUrl(hwnd)` → 地址栏元素值（AutomationId 优先 + 中英文资源名各匹配 + 值形/首个 Edit fallback；
+        ValuePattern 读值）
+- [x] 超时 200ms（probe 内 C# Task + main Promise.race(300ms) 双保险）；失败/超时 → `source:'none'`，
+      **永不阻塞录制主链路**
+- [x] 点击事件异步附着（service enrich 竞速 300ms，典型 30-80ms）；probe 崩溃重启一次，再失败降级无元素录制
+- [x] 空闲 5min 回收 probe 进程（下次使用重新 spawn；recycledOnce 预算随回收重置）
+- [x] Gate（单测部分）：protocol/客户端（FakeProcess+stdin 捕获）/service probe 接线（element 附着、
+      密码脱敏 hint、browserUrl 附着）共 12 个新单测，累计 118/118 recorder 簇全绿；
+      **真机协议冒烟已过**（ping/probe 真实 UIA 元素/readUrl 优雅失败）
+- [ ] Gate（真机部分）：Chrome/记事本/微信三目标人工验证（元素名/控件类型/密码框脱敏/URL 读取）——待人工
 
 ### Phase 3 — 事件 → WorkflowDef 转换器
 

@@ -97,6 +97,11 @@ extraResources:
   - from: node_modules/uiohook-napi/
     to: computer-use/node_modules/uiohook-napi/
     filter: ["**/*"]
+  # Plan 556 phase 2: persistent PowerShell UIA probe spawned by the
+  # recorder service (resources/recorder/ → resources/recorder/).
+  - from: resources/recorder/
+    to: recorder/
+    filter: ["**/*"]
   - from: packages/agent/skills/
     to: agent/skills/
     filter: ["**/*"]

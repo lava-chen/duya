@@ -244,3 +244,118 @@ describe('RecorderService', () => {
     expect(DEFAULT_MAX_DURATION_MS).toBe(10 * 60_000);
   });
 });
+
+describe('RecorderService — probe wiring (phase 2)', () => {
+  function mouseDown(ts: number) {
+    return { kind: 'mousedown', ts, x: 50, y: 60, button: 1, clicks: 1 };
+  }
+  function mouseUp(ts: number) {
+    return { kind: 'mouseup', ts, x: 50, y: 60, button: 1 };
+  }
+
+  it('attaches the probed element to click events', async () => {
+    const service = makeService({
+      probe: {
+        at: async () => ({
+          name: '确定',
+          controlType: 'Button',
+          className: 'Button',
+          isPassword: false,
+          source: 'uia-probe',
+        }),
+      },
+    });
+    await service.start();
+    tracker().onChange(null, CHROME);
+    workerCbs!.onEvent(mouseDown(900));
+    workerCbs!.onEvent(mouseUp(910));
+    await service.stop();
+
+    const { events } = await readEvents();
+    const click = events.find((e) => e.type === 'click');
+    expect(click).toBeDefined();
+    if (click?.type === 'click') {
+      expect(click.element).toMatchObject({ name: '确定', source: 'uia-probe' });
+    }
+  });
+
+  it('a password element flips redaction for the typing that follows', async () => {
+    const service = makeService({
+      probe: {
+        at: async () => ({ name: 'pw', controlType: 'Edit', isPassword: true, source: 'uia-probe' }),
+      },
+    });
+    await service.start();
+    tracker().onChange(null, CHROME);
+    workerCbs!.onEvent(mouseDown(900));
+    workerCbs!.onEvent(mouseUp(910));
+    // Real timeline: the probe result lands within its budget, BEFORE
+    // the user starts typing into the (password) field. The enrich
+    // chain resolves across real I/O ticks, so poll for it.
+    for (let i = 0; i < 40 && (service as unknown as { redactHint: boolean }).redactHint !== true; i++) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    workerCbs!.onEvent(keydown(30, 'a', 920));
+    workerCbs!.onEvent(keydown(30, 'b', 930));
+    tracker().onChange(CHROME, NOTEPAD); // flush trigger
+    await service.stop();
+
+    const { events } = await readEvents();
+    const clickEvent = events.find((e) => e.type === 'click');
+    expect(clickEvent).toBeDefined();
+    if (clickEvent?.type === 'click') {
+      // sanity: the probe result must have attached, proving enrich ran
+      expect(clickEvent.element).toMatchObject({ name: 'pw', isPassword: true });
+    }
+    const typeEvent = events.find((e) => e.type === 'type');
+    expect(typeEvent).toBeDefined();
+    if (typeEvent?.type === 'type') {
+      expect(typeEvent.text).toBe('<redacted>');
+    }
+  });
+
+  it('attaches browserUrl to click events while a browser is foreground', async () => {
+    const service = makeService({
+      probe: {
+        at: async () => ({ source: 'none' }),
+        readUrl: async () => 'https://example.com/page',
+      },
+    });
+    await service.start();
+    tracker().onChange(null, CHROME);
+    // let the async readUrl resolve before feeding events
+    await new Promise((r) => setImmediate(r));
+    workerCbs!.onEvent(mouseDown(900));
+    workerCbs!.onEvent(mouseUp(910));
+    await service.stop();
+
+    const { events } = await readEvents();
+    const click = events.find((e) => e.type === 'click');
+    expect(click).toBeDefined();
+    if (click?.type === 'click') {
+      expect(click.browserUrl).toBe('https://example.com/page');
+    }
+  });
+
+  it('does not attach browserUrl outside browser apps', async () => {
+    const service = makeService({
+      probe: {
+        at: async () => ({ source: 'none' }),
+        readUrl: async () => 'https://example.com/page',
+      },
+    });
+    await service.start();
+    tracker().onChange(null, NOTEPAD);
+    await new Promise((r) => setImmediate(r));
+    workerCbs!.onEvent(mouseDown(900));
+    workerCbs!.onEvent(mouseUp(910));
+    await service.stop();
+
+    const { events } = await readEvents();
+    const click = events.find((e) => e.type === 'click');
+    expect(click).toBeDefined();
+    if (click?.type === 'click') {
+      expect(click.browserUrl).toBeUndefined();
+    }
+  });
+});
