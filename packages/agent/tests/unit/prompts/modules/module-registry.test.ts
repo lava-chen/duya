@@ -84,7 +84,10 @@ describe('prompt module registry', () => {
       expect(keys, name).toContain(name);
     }
     for (const [name, def] of Object.entries(MODULES)) {
-      expect(def.path, name).toMatch(/^modules\/[a-z-]+\.hbs$/);
+      // Plan 550 1c: dynamic sections are also reachable via the registry
+      // (per-module render with the same handlebars infra as authored
+      // content), so the path regex accepts either tree.
+      expect(def.path, name).toMatch(/^(modules|dynamic)\/[a-z-]+\.hbs$/);
       // loadHbsAssetSync throws when the asset is missing — this asserts
       // every registry entry points at a real file.
       expect(() => system.renderModule(name as ModuleName, context()), name).not.toThrow();
@@ -114,17 +117,16 @@ describe('prompt module registry', () => {
   });
 });
 
-describe('PromptSystem staticModules normalization', () => {
+describe('PromptSystem module reference normalization', () => {
   function buildSystem(profile?: { disableSections?: string[] }): PromptSystem {
     return new PromptSystem(
       {
         name: 'module-test',
-        staticModules: [
+        sections: [
           { module: 'system' },
           { module: 'tasks', name: 'tasksAlias' },
           { module: 'duyaDesktopContext' },
         ],
-        dynamicSections: [],
       },
       profile,
     );
@@ -136,7 +138,7 @@ describe('PromptSystem staticModules normalization', () => {
 
   it('normalizes module references into named cached sections', async () => {
     const system = buildSystem();
-    const sections = system.getStaticSections(baseContext());
+    const sections = system.getAllSections(baseContext());
     expect(sections.map(s => s.name)).toEqual(['system', 'tasksAlias', 'duyaDesktopContext']);
     const resolved = await Promise.all(sections.map(s => Promise.resolve(s.compute())));
     expect(resolved[0]).toContain('# System');
@@ -147,19 +149,18 @@ describe('PromptSystem staticModules normalization', () => {
 
   it('respects profile gating via isSectionEnabled', () => {
     const system = buildSystem({ disableSections: ['system'] });
-    const sections = system.getStaticSections(baseContext());
+    const sections = system.getAllSections(baseContext());
     expect(sections.map(s => s.name)).toEqual(['tasksAlias', 'duyaDesktopContext']);
   });
 
   it('honours enabledWhen config gates by collapsing to null', async () => {
     const system = new PromptSystem({
       name: 'module-gate-test',
-      staticModules: [
+      sections: [
         { module: 'system', enabledWhen: ctx => ctx.enabledTools.has('duya_cli') },
       ],
-      dynamicSections: [],
     });
-    const off = system.getStaticSections(context());
+    const off = system.getAllSections(context());
     expect(off.map(s => s.name)).toEqual(['system']);
     expect(await Promise.resolve(off[0].compute())).toBeNull();
   });

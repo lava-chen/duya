@@ -1,12 +1,12 @@
 /**
  * PromptSystem - Single concrete class (config-driven, no subclasses).
  *
- * Previous design: abstract base class + 4 subclasses (General/Code/Research/
- *                  Gateway), each ~150-370 lines of boilerplate.
+ * Previous design: abstract base class + subclasses, each ~150-370 lines
+ *                  of boilerplate.
  * Current design:  one PromptSystem class + declarative PromptSystemConfig.
  *
  * A PromptSystemConfig declares:
- *   - name: identifier ('general' / 'code' / 'research' / 'gateway')
+ *   - name: identifier ('general' / 'code' / 'research')
  *   - staticModules: registry-assembled static half, cached across
  *     buildSystemPrompt calls (Plan 551)
  *   - dynamicSections: recomputed on every buildSystemPrompt call
@@ -229,7 +229,7 @@ export type ExtraPromptGenerators = Record<string, (...args: unknown[]) => strin
  * Declarative configuration for a PromptSystem.
  */
 export interface PromptSystemConfig {
-  /** System name ('general' / 'code' / 'research' / 'gateway'). */
+  /** System name ('general' / 'code' / 'research'). */
   name: string
   /**
    * Unified section list. Each entry is either a registry-module reference

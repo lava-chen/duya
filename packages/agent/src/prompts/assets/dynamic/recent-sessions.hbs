@@ -1,24 +1,3 @@
-{{!--
-  Recent session directory section — Plan 550 1d-rest.
-
-  Body shape mirrors `sections/dynamic/recentSessionsSection.ts`
-  verbatim so the byte-level parity test in
-  `tests/unit/prompts/hbs/recent-sessions-1d-rest.test.ts` passes.
-
-  The two `{{same_project_block}}` / `{{other_project_block}}` slots
-  are precomputed by the `recentSessions` preBuildHook + mapper. The
-  hook loads `loadRecentSessionDirectory(...)` once per buildSystemPrompt
-  and emits already-serialised JSON entry strings; the mapper joins
-  them with the same ` - ${entry}\n` pattern the legacy TS path uses.
-  The empty case (`- none`) is rendered by the mapper when the array
-  is empty, matching `serializeSerializedGroup` in the TS source.
-
-  When both scopes are empty, the legacy TS path returns `null` so
-  the section is omitted. The .hbs body wraps everything in
-  `{{#if section_enabled}}...{{/if}}` and the mapper sets that flag
-  to `false` in the empty case; `renderSectionCompute` sees an empty
-  trimmed body and returns `null`, matching the TS short-circuit.
---}}
 {{#if section_enabled}}
 # Recent session directory
 

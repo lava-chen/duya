@@ -15,7 +15,7 @@
  *
  * Bot sessions reuse the general dynamic renderers via the registry, keeping
  * only what a bot actually needs:
- *   keep    language / outputStyle / platform / environment / mcp / skills /
+ *   keep    language / platform / environment / mcp / skills /
  *           scratchpad / sessionGuidance
  *   cut     memory          — superseded by the bot memory tiers
  *                            (botMemoryOwn/User/Project)
@@ -38,8 +38,6 @@ export const botConfig: PromptSystemConfig = {
   // the volatile runtime sections.
   sections: [
     // Dynamic sections — recomputed every call via .hbs templates
-    { module: 'language', cachePolicy: 'every-call' },
-    { module: 'outputStyle', cachePolicy: 'every-call' },
     { module: 'platform', cachePolicy: 'every-call' },
     { module: 'environment', cachePolicy: 'every-call' },
     { module: 'mcp', cachePolicy: 'every-call' },

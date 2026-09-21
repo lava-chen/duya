@@ -30,7 +30,7 @@ import type { ChannelSnapshot } from '../../channels/types.js'
 /**
  * Is this profile a config-driven bot? A "bot" session is one running a
  * custom agent declared under `[agents.<id>]` in config.toml (Plan 424):
- * built-in presets (general/code/research/gateway/cron) are all
+ * built-in presets (general/code/research/cron) are all
  * `isPreset: true`, whereas config agents are produced with
  * `isPreset: false` and `kind: 'main'` (see config-agents.ts
  * `toAgentProfile`). The tail append in DuyaAgent._buildSystemPrompt uses

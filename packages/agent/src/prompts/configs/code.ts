@@ -6,10 +6,6 @@
  * system / desktop-context modules carry the profile's own wording, so
  * they are separate registry entries from their general-profile cousins;
  * section names stay stable for profile gating and cache invalidation.
- *
- * keepCodingInstructions logic: when outputStyleConfig is set and doesn't
- * explicitly request keeping coding instructions, the 'personality' section
- * is omitted. Implemented via the module ref's `enabledWhen` gate.
  */
 
 import type { PromptSystemConfig } from '../PromptSystem.js'
@@ -27,17 +23,7 @@ export const codeConfig: PromptSystemConfig = {
     { module: 'systemCoding', name: 'system', cachePolicy: 'once' },
     { module: 'duyaDesktopContextCode', name: 'duyaDesktopContext', cachePolicy: 'once' },
     { module: 'projectContinuity', name: 'projectContinuity', cachePolicy: 'once' },
-    // keepCodingInstructions: omit personality when an output style is active
-    // and the style doesn't explicitly request keeping coding instructions.
-    {
-      module: 'personality',
-      name: 'personality',
-      cachePolicy: 'once',
-      enabledWhen: (ctx) =>
-        ctx.outputStyleConfig == null
-          ? true
-          : ctx.outputStyleConfig.keepCodingInstructions === true,
-    },
+    { module: 'personality', name: 'personality', cachePolicy: 'once' },
     { module: 'workingWithTheUser', name: 'workingWithTheUser', cachePolicy: 'once' },
     { module: 'rules', name: 'rules', cachePolicy: 'once' },
     { module: 'configProtection', name: 'configProtection', cachePolicy: 'once' },
@@ -48,11 +34,8 @@ export const codeConfig: PromptSystemConfig = {
     { name: 'mcp', template: 'dynamic/mcp-instructions.hbs', cachePolicy: 'every-call', description: 'MCP servers can change' },
     { name: 'sessionGuidance', template: 'dynamic/session-guidance.hbs', cachePolicy: 'every-call', description: 'Session-specific guidance' },
     { name: 'skills', template: 'dynamic/skills-metadata.hbs', cachePolicy: 'every-call', requiresTools: ['Skill', 'Read'], description: 'Skills can be loaded/unloaded' },
-    { name: 'language', template: 'dynamic/language.hbs', cachePolicy: 'every-call', description: 'Language preference' },
-    { name: 'outputStyle', template: 'dynamic/output-style.hbs', cachePolicy: 'every-call', description: 'Custom output style' },
     { name: 'scratchpad', template: 'dynamic/scratchpad.hbs', cachePolicy: 'every-call', description: 'Scratchpad directory' },
     { name: 'memory', template: 'dynamic/memory.hbs', cachePolicy: 'every-call', description: 'Persistent memory projection files may have been updated since last turn' },
-    { name: 'sessionSearch', template: 'dynamic/session-search.hbs', cachePolicy: 'every-call', description: 'Past-session decisions may be relevant to the current task' },
     { name: 'recentSessions', template: 'dynamic/recent-sessions.hbs', cachePolicy: 'every-call', requiresTools: ['SessionSearch'], description: 'Recent session metadata can change between turns' },
     { name: 'visualVerification', template: 'dynamic/visual-verification.hbs', cachePolicy: 'every-call', description: 'Visual tasks require rendered-output verification' },
   ],

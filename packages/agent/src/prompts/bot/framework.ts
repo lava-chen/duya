@@ -161,6 +161,16 @@ export interface BotSectionDef {
   /** Optional params passed to the template alongside `ctx`. */
   templateParams?: Record<string, unknown>
   /**
+   * Optional prep step run before `templatePath` render. Lets a section
+   * pre-format data into the context (e.g. turn a `ChannelSnapshot[]` into
+   * the bullet list the template iterates over) without leaking logic into
+   * the .hbs. Mutates a shallow clone of `ctx`; the framework keeps the
+   * original untouched.
+   */
+  prepare?: (
+    ctx: BotPromptContext,
+  ) => BotPromptContext | null | Promise<BotPromptContext | null>
+  /**
    * Optional TS renderer. Pre-plan-558 sections used this exclusively;
    * kept for migration. Phase 2 deletes it from every catalog entry.
    */
@@ -395,11 +405,24 @@ export class BotPromptAssembly {
     def: BotSectionDef,
     ctx: BotPromptContext,
   ): Promise<string | null> {
+    // Prepare first — some sections pre-format data into a template-friendly
+    // shape (e.g. mapping channels/manifests into the bullet array the .hbs
+    // iterates). A null return aborts the section without falling through.
+    let renderCtx: BotPromptContext
+    if (def.prepare) {
+      let prepared: BotPromptContext | null
+      try {
+        prepared = await def.prepare(ctx)
+      } catch {
+        return null
+      }
+      if (!prepared) return null
+      renderCtx = prepared
+    } else {
+      renderCtx = ctx
+    }
+
     if (def.templatePath) {
-      // BotPromptContext is a strictly lean superset of the host PromptContext
-      // shape that HbsPromptSystem.mapPromptContextToHbs reads. Spreading
-      // fills the optional fields HbsPromptSystem needs without dragging in
-      // host-only fields (mcpServers, sessionId, etc.) the bot doesn't carry.
       const out = this.hbs.renderStaticTemplate(
         def.templatePath,
         {
@@ -414,12 +437,12 @@ export class BotPromptAssembly {
           ]),
           sessionStartTime: 0,
         },
-        { ...ctx, ...def.templateParams },
+        { ...renderCtx, ...def.templateParams },
       )
       return out === '' ? null : out
     }
     if (def.compute) {
-      return (await def.compute(ctx)) ?? null
+      return (await def.compute(renderCtx)) ?? null
     }
     return null
   }

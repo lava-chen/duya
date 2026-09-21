@@ -54,7 +54,10 @@ describe('Plan 408 Phase 2 — preBuildHook omitAgentsMd short-circuit', () => {
       it('still refreshes AGENTS.md when omitAgentsMd is unset', async () => {
         await cfg.preBuildHook!({ ...baseCtx });
 
-        expect(initSpy.fn).toHaveBeenCalledWith('/tmp');
+        // initializeAgentsMd(workingDirectory, projectHome) — projectHome
+        // is optional (undefined when cwd is outside any registered duya
+        // project), so the test baseCtx only supplies the first arg.
+        expect(initSpy.fn).toHaveBeenCalledWith('/tmp', undefined);
       });
     });
   }

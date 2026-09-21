@@ -188,15 +188,20 @@ describe('general profile skills catalog (plan 535)', () => {
     const expectedEnabled = [
       'identity', 'system', 'destructiveActions', 'communication',
       'tools', 'tasks', 'skillUsage', 'duyaDesktopContext', 'finalAnswer',
-      'language', 'platform', 'environment', 'memory', 'skills',
+      'platform', 'environment', 'memory', 'skills',
     ];
     for (const name of expectedEnabled) {
       expect(names).toContain(name);
     }
     for (const cut of [
-      'configProtection', 'outputStyle', 'mcp', 'scratchpad',
+      'configProtection', 'mcp', 'scratchpad',
       'sessionSearch', 'recentSessions', 'sessionGuidance',
       'visionGuidelines', 'visualVerification',
+      // Plan 558 phase 2: `language` and `outputStyle` modules were
+      // deleted alongside their .hbs files, so neither appears in the
+      // general-purpose section set any more. The catalog still controls
+      // language policy via `language.hbs` directly.
+      'language', 'outputStyle',
     ]) {
       expect(names).not.toContain(cut);
     }

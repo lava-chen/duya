@@ -24,7 +24,6 @@ import { fileURLToPath } from 'node:url';
 
 import type { PromptContext } from '../types.js';
 import { CYBER_RISK_INSTRUCTION, TOOL_NAMES } from '../types.js';
-import { buildLanguageGuidance } from '../language-guidance.js';
 import { getPlatformHint } from '../platformHints.js';
 import { buildEnvironmentItems } from '../sections/dynamic/environment.js';
 import { serializeSerializedGroup } from '../sections/dynamic/recentSessionsSection.js';
@@ -64,7 +63,6 @@ const ASSETS_ROOT = resolveAssetsRoot();
  * template world. Tests under `tests/unit/prompts/hbs/` pin the names.
  */
 export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknown> {
-  const outputStyleConfig = ctx.outputStyleConfig;
   const isWindows = ctx.platform === 'win32';
   const hasTodoTool =
     ctx.enabledTools.has(TOOL_NAMES.TODO) ||
@@ -106,21 +104,10 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
     `Reserve using ${shellToolsLabel} for system commands that require shell execution. Use ${TOOL_NAMES.BASH} for Unix-style shell commands and ${TOOL_NAMES.POWERSHELL} for Windows-native PowerShell commands when available.`,
   ];
 
-  const outputStyleClause =
-    outputStyleConfig !== null && outputStyleConfig !== undefined
-      ? 'according to your "Output Style" below, which describes how you should respond to user queries. '
-      : 'with a wide range of tasks including answering questions, providing explanations, creative work, analysis, and executing actions. ';
-
   // Dynamic-section inputs (Plan 550 1c). Each is the precomputed string
   // the .hbs templates need; empty strings cause the `{{#if}}` blocks to
   // skip their body, matching the legacy `return null` short-circuits.
-  const languageGuidance = ctx.language ? buildLanguageGuidance(ctx.language) : '';
   const platformHint = getPlatformHint(ctx.communicationPlatform) ?? '';
-  const outputStylePrompt =
-    ctx.outputStyleConfig && ctx.outputStyleConfig.prompt && ctx.outputStyleConfig.prompt.trim()
-      ? ctx.outputStyleConfig.prompt
-      : '';
-  const outputStyleName = ctx.outputStyleConfig?.name ?? '';
   const mcpInstructionBlocks =
     ctx.mcpServers && ctx.mcpServers.length > 0
       ? ctx.mcpServers
@@ -137,7 +124,6 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
   // `{{#if}}` block to skip its body, matching the legacy
   // `return null` short-circuit in getScratchpadSection.
   const scratchpadDir = ctx.scratchpadDir ?? '';
-  const hasSessionSearchTool = ctx.enabledTools.has(TOOL_NAMES.SESSION_SEARCH);
   // Plan 550 1d-rest — memory section fields are precomputed by
   // createMemoryPreBuildHook (sections/dynamic/memoryPreBuildHook.ts)
   // and surfaced here as the seven `memory_*` slots. The hook reads
@@ -166,8 +152,6 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
 
   return {
     ctx,
-    outputStyleConfig,
-    outputStyleClause,
     cyber_risk_instruction: CYBER_RISK_INSTRUCTION,
     isWindows,
     platform: ctx.platform,
@@ -185,16 +169,11 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
     fileLinkExample,
     spacedExample,
     imageRule,
-    // Plan 550 1c — dynamic-section variables
-    language_guidance: languageGuidance,
     platform_hint: platformHint,
-    output_style_prompt: outputStylePrompt,
-    output_style_name: outputStyleName,
     mcp_instruction_blocks: mcpInstructionBlocks,
     has_vision_tool: hasVisionTool,
     vision_tool_name: TOOL_NAMES.VISION,
     scratchpad_dir: scratchpadDir,
-    has_session_search_tool: hasSessionSearchTool,
     // environment section (Plan 550 1d-rest) — mapper builds the
     // `env_items` string[] via the same helper the legacy TS path uses,
     // so the .hbs body's `{{#each env_items}}` produces a byte-identical

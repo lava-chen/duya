@@ -5,8 +5,8 @@
  * module registry. Research-specific modules (researchProfile / taskIntent /
  * evidencePolicy / memoryWriteProposal) use `bypassProfile: true` because
  * they exist outside the generic section registry and must always render.
- * The shared toneAndStyle module renders without the gateway-only
- * never-analysis param.
+ * The shared toneAndStyle module renders without the
+ * never-analysis param that the gateway composition passes.
  *
  * The `outputFormat` dynamic section depends on `resolveResearchIntent(context)`
  * — the compute function calls it inline (cheap: just a context field fallback).

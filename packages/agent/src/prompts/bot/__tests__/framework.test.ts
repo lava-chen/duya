@@ -50,7 +50,11 @@ describe('BotPromptAssembly', () => {
   it('renders a registered section after the basic prompt', async () => {
     const assembly = createBotPromptAssembly()
     assembly.register({
+      // Drop the catalog's templatePath so the section falls through to
+      // its custom compute (plan 558: the framework tries template first,
+      // compute fallback).
       ...BOT_IDENTITY_SECTION,
+      templatePath: undefined,
       compute: (ctx) => `## Bot\n\nYou are ${ctx.botName ?? 'unnamed'}.`,
     })
     const out = await assembly.render({ botName: 'Alpha' })

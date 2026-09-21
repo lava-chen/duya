@@ -12,13 +12,11 @@ import { PromptsRegistry } from './PromptsRegistry.js'
 import { generalConfig } from './configs/general.js'
 import { codeConfig } from './configs/code.js'
 import { researchConfig } from './configs/research.js'
-import { gatewayConfig } from './configs/gateway.js'
 import { botConfig } from './configs/bot.js'
 
 PromptsRegistry.register('general', generalConfig)
 PromptsRegistry.register('code', codeConfig)
 PromptsRegistry.register('research', researchConfig)
-PromptsRegistry.register('gateway', gatewayConfig)
 PromptsRegistry.register('bot', botConfig)
 
 /**
@@ -30,7 +28,7 @@ PromptsRegistry.register('bot', botConfig)
  * their promptProfile.disableSections to suppress irrelevant sections.
  */
 export function resolvePromptSystemName(
-  promptSystem?: 'general' | 'code' | 'research' | 'gateway' | string,
+  promptSystem?: 'general' | 'code' | 'research' | string,
 ): string {
   return promptSystem ?? 'general'
 }

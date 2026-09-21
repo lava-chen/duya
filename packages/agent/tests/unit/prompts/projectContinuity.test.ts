@@ -9,7 +9,7 @@ const hbs = new HbsPromptSystem({
   assetsRoot: resolve(__dirname, '../../../src/prompts/assets'),
 })
 
-function makeContext(enabledTools: string[] = []): PromptContext {
+function makeContext(enabledTools: string[] = [], overrides: Partial<PromptContext> = {}): PromptContext {
   return {
     workingDirectory: process.cwd(),
     platform: process.platform,
@@ -17,6 +17,7 @@ function makeContext(enabledTools: string[] = []): PromptContext {
     modelId: 'test-model',
     enabledTools: new Set(enabledTools),
     sessionStartTime: Date.now(),
+    ...overrides,
   }
 }
 
@@ -33,23 +34,40 @@ describe('project harness prompt', () => {
   it('keeps continuity in the code config static assembly', () => {
     const context = makeContext()
     const promptSystem = PromptsRegistry.getOrCreate('code')!
-    const staticNames = promptSystem.getStaticSections(context).map(section => section.name)
+    // Plan 557 unified the section list — `sections` is now the single
+    // source of truth for both static modules and dynamic inline defs,
+    // filtered through profile gating. The legacy `getStaticSections`
+    // name was retired.
+    const allNames = promptSystem.getAllSections(context).map(section => section.name)
 
-    expect(staticNames).toContain('projectContinuity')
+    expect(allNames).toContain('projectContinuity')
     // AGENTS.md refresh is a preBuildHook side effect (Plan 408), not a
-    // static section — the hook contract is what invalidates the cached
+    // section — the hook contract is what invalidates the cached
     // projectInstructions module after a refresh walk.
     expect(typeof promptSystem.buildSystemPrompt).toBe('function')
-    const codeConfig = promptSystem.getProfile()
-    expect(codeConfig).toBeDefined()
+    const codeProfile = promptSystem.getProfile()
+    expect(codeProfile).toBeDefined()
   })
 
   it('only emits past-session recovery guidance when SessionSearch exists', () => {
-    const off = hbs.renderStaticTemplate('dynamic/session-search.hbs', makeContext()).trim()
+    // Plan 558 phase 2: the standalone session-search.hbs template was
+    // removed; past-session recovery guidance moved inline to
+    // recent-sessions.hbs (gated by SessionSearch via the plan 557
+    // declarative `requiresTools` mechanism). Verify the gate keeps the
+    // recent-sessions body empty when SessionSearch is absent, and that
+    // the populated body still references SessionSearch once it's in
+    // scope.
+    const off = hbs.renderStaticTemplate('dynamic/recent-sessions.hbs', makeContext()).trim()
     expect(off).toBe('')
-    const on = hbs.renderStaticTemplate('dynamic/session-search.hbs', makeContext(['SessionSearch'])).trim()
-    expect(on).toContain('long-running task or handoff')
-    expect(on).toContain('not as a ritual on every task')
+    const populated = makeContext(['SessionSearch'], {
+      recentSessionsSameProject: [
+        '{"sessionId":"a","title":"A","project":"duya","updatedAt":"2026-01-10T12:00:00.000Z","childSessions":0}',
+      ],
+      recentSessionsOtherProjects: [],
+    })
+    const on = hbs.renderStaticTemplate('dynamic/recent-sessions.hbs', populated).trim()
+    expect(on).toContain('Recent session directory')
+    expect(on).toContain('SessionSearch')
   })
 
   it('composes role instructions with the shared subagent harness', () => {

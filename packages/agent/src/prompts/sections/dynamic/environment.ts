@@ -22,7 +22,8 @@ import { KNOWLEDGE_CUTOFFS } from '../../types.js'
 import { hasUnixCompatibleShell } from '../../../utils/shellDetector.js'
 
 /** Best-effort model marketing name from a wire model id. */
-export function getMarketingNameForModel(modelId: string): string | null {
+export function getMarketingNameForModel(modelId: string | undefined): string | null {
+  if (!modelId) return null
   // Claude models
   if (modelId.includes('opus-4-6')) return 'Claude Opus 4.6'
   if (modelId.includes('sonnet-4-6')) return 'Claude Sonnet 4.6'
@@ -78,7 +79,8 @@ export function getMarketingNameForModel(modelId: string): string | null {
 }
 
 /** Resolve the knowledge-cutoff date string for a model id, or `null`. */
-export function getKnowledgeCutoff(modelId: string): string | null {
+export function getKnowledgeCutoff(modelId: string | undefined): string | null {
+  if (!modelId) return null
   for (const [pattern, cutoff] of Object.entries(KNOWLEDGE_CUTOFFS)) {
     if (modelId.includes(pattern)) {
       return cutoff
@@ -88,19 +90,21 @@ export function getKnowledgeCutoff(modelId: string): string | null {
 }
 
 /** Build the human-readable shell info line for the prompt. */
-export function getShellInfoLine(shell: string, platform: string): string {
-  const shellName = shell.includes('zsh')
+export function getShellInfoLine(shell: string | undefined, platform: string | undefined): string {
+  const safeShell = shell ?? ''
+  const safePlatform = platform ?? ''
+  const shellName = safeShell.includes('zsh')
     ? 'zsh'
-    : shell.includes('bash')
+    : safeShell.includes('bash')
       ? 'bash'
-      : shell.includes('pwsh')
+      : safeShell.includes('pwsh')
         ? 'pwsh'
-        : shell.includes('powershell')
+        : safeShell.includes('powershell')
           ? 'powershell'
-          : shell.includes('cmd')
+          : safeShell.includes('cmd')
             ? 'cmd'
-            : shell
-  if (platform === 'win32') {
+            : safeShell
+  if (safePlatform === 'win32') {
     const hasUnixShell = hasUnixCompatibleShell()
     if (hasUnixShell) {
       return `Shell: ${shellName} (Unix-compatible shell available on Windows — use Unix syntax like forward slashes, /dev/null)`

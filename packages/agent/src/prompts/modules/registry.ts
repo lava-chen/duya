@@ -32,7 +32,6 @@ import { mapIdentityCodingSlots } from './mappers/identityCoding.js'
 import { mapSystemCodingSlots } from './mappers/systemCoding.js'
 import { mapRulesSlots } from './mappers/rules.js'
 import { mapDuyaDesktopContextCodeSlots } from './mappers/duyaDesktopContextCode.js'
-import { mapGatewayIntroSlots } from './mappers/gatewayIntro.js'
 import { mapResearchProfileSlots } from './mappers/researchProfile.js'
 
 export interface PromptModuleDef {
@@ -109,14 +108,9 @@ export const MODULES = {
     description: 'AGENTS.md instruction-file index (user-layer context)',
     slots: mapProjectInstructionSlots,
   },
-  project: {
-    path: 'modules/project.hbs',
-    description: 'Composite: continuity + AGENTS.md index (gateway assembly)',
-    slots: mapProjectInstructionSlots,
-  },
   identityCoding: {
     path: 'modules/identity-coding.hbs',
-    description: 'Code-profile identity paragraph with inline output-style clause',
+    description: 'Code-profile identity paragraph',
     slots: mapIdentityCodingSlots,
   },
   systemCoding: {
@@ -142,18 +136,9 @@ export const MODULES = {
     description: 'Code-profile desktop context (legacy hard-wrapped wording)',
     slots: mapDuyaDesktopContextCodeSlots,
   },
-  intro: {
-    path: 'modules/intro.hbs',
-    description: 'Gateway channel identity opener (platform-name aware)',
-    slots: mapGatewayIntroSlots,
-  },
-  gatewayRole: {
-    path: 'modules/gateway-role.hbs',
-    description: 'Gateway channel-agent behavioural constraints',
-  },
   toneAndStyle: {
     path: 'modules/tone-and-style.hbs',
-    description: 'Tone and style; gateway adds the never-analysis paragraph via params',
+    description: 'Tone and style',
   },
   researchProfile: {
     path: 'modules/research-profile.hbs',
@@ -175,14 +160,6 @@ export const MODULES = {
   // Dynamic sections — runtime-computed, recomputed every call (every-call).
   // Kept in the registry for type-safe reference and consistent config style.
   // Slots are not needed: these templates receive PromptContext directly.
-  language: {
-    path: 'dynamic/language.hbs',
-    description: 'Language preference',
-  },
-  outputStyle: {
-    path: 'dynamic/output-style.hbs',
-    description: 'Custom output style',
-  },
   platform: {
     path: 'dynamic/platform.hbs',
     description: 'Communication platform-specific guidance',

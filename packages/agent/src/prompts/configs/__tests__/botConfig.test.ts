@@ -9,32 +9,35 @@ import { BOT_BASIC_SYSTEM_PROMPT } from '../../bot/basicPrompt.js';
  *
  * A config-driven bot session assembles a self-contained system prompt:
  *   BOT_BASIC_SYSTEM_PROMPT (injected separately as the stable static base)
- *   + this config's dynamic sections (the runtime backbone a bot still needs)
+ *   + this config's volatile sections (the runtime backbone a bot still needs)
  *   + the bot section catalog (via BotPromptAssembly.renderSections).
  *
- * These assertions lock the dynamic-section selection so regressions like
+ * These assertions lock the volatile-section selection so regressions like
  * "a cut section re-added" or "the static set silently populated" are caught
- * at the config layer.
+ * at the config layer. The static half lives in BOT_BASIC_SYSTEM_PROMPT, so
+ * the unified `sections` list contains only every-call (volatile) entries.
  */
 describe('botConfig', () => {
-  it('keeps the static module set empty (base comes from basicPrompt.ts)', () => {
-    expect(botConfig.staticModules).toEqual([]);
-  });
-
-  it('keeps only the bot-facing dynamic backbone sections', () => {
-    expect(botConfig.dynamicSections.map((s) => s.name)).toEqual([
-      'language', 'outputStyle',
+  it('keeps the unified sections list scoped to volatile runtime backbone only', () => {
+    const everyCall = botConfig.sections.filter((s) => s.cachePolicy === 'every-call');
+    expect(everyCall.map((s) => s.name ?? s.module)).toEqual([
       'platform', 'environment', 'mcp', 'skills', 'scratchpad',
       'sessionGuidance',
     ]);
   });
 
+  it('contains no static / once-cached entries (base comes from basicPrompt.ts)', () => {
+    const cached = botConfig.sections.filter((s) => s.cachePolicy === 'once');
+    expect(cached).toEqual([]);
+  });
+
   it('excludes general memory (superseded by bot memory tiers)', () => {
-    expect(botConfig.dynamicSections.some((s) => s.name === 'memory')).toBe(false);
+    const names = botConfig.sections.map((s) => s.name ?? s.module);
+    expect(names).not.toContain('memory');
   });
 
   it('excludes host-side / vision dynamic sections not applicable to bots', () => {
-    const names = botConfig.dynamicSections.map((s) => s.name);
+    const names = botConfig.sections.map((s) => s.name ?? s.module);
     for (const cut of ['sessionSearch', 'recentSessions', 'visionGuidelines', 'visualVerification']) {
       expect(names).not.toContain(cut);
     }

@@ -73,6 +73,12 @@ describe('project modules', () => {
   });
 
   it('composites the gateway project module as continuity + index', () => {
+    // Plan 558 phase 2: the composite `project` module was deleted; the
+    // gateway config now lists `projectContinuity` and `projectInstructions`
+    // as separate entries in `sections`, so they render in declared order
+    // without needing a wrapper module. This test exercises the same
+    // contract at the registry level: both modules exist and the index
+    // module collapses to empty when no files are loaded.
     mocks.getAgentsMdManager.mockReturnValue({
       getLoadedFiles: () => [
         { type: 'project', path: 'E:/Projects/duya/AGENTS.md' },
@@ -80,13 +86,14 @@ describe('project modules', () => {
     });
     const continuity = system.renderModule('projectContinuity', baseContext()).trim();
     const instructions = system.renderModule('projectInstructions', baseContext()).trim();
-    expect(system.renderModule('project', baseContext()).trim())
-      .toBe([continuity, instructions].join('\n\n'));
+    expect(continuity).toContain('# Long-horizon project continuity');
+    expect(instructions).toContain('E:/Projects/duya/AGENTS.md');
   });
 
   it('composites the gateway project module as continuity-only when the index is empty', () => {
     mocks.getAgentsMdManager.mockReturnValue({ getLoadedFiles: () => [] });
     const continuity = system.renderModule('projectContinuity', baseContext()).trim();
-    expect(system.renderModule('project', baseContext()).trim()).toBe(continuity);
+    expect(continuity).toContain('# Long-horizon project continuity');
+    expect(system.renderModule('projectInstructions', baseContext()).trim()).toBe('');
   });
 });

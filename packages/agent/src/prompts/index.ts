@@ -82,8 +82,11 @@ export {
   botSectionCacheKey,
   countTimelineCompactions,
 } from './bot/index.js'
-export { renderBotCommsRules } from './bot/index.js'
+export { BOT_MEMORY_USAGE_SECTION, BOT_MEMORY_OWN_SECTION, BOT_MEMORY_USER_SECTION, BOT_MEMORY_PROJECT_SECTION } from './bot/memory/sections.js'
+export { loadBotPromptContext, isBotAgentProfile, loadBotMemoryContext } from './bot/loader.js'
 export {
+  PROFILE_UPDATE_ENVELOPE_TAG,
+  PROFILE_UPDATE_ENVELOPE_VERSION,
   buildProfileUpdateEnvelope,
   parseProfileUpdateEnvelope,
   detectProfileUpdate,
@@ -97,7 +100,4 @@ export {
   registerBotSectionCatalog,
   BOT_SECTION_CATALOG,
 } from './bot/index.js'
-export { renderBotIdentity } from './bot/index.js'
 export { renderBotRoster, BOT_ROSTER_MAX_ENTRIES } from './bot/index.js'
-export { renderBotChannels } from './bot/index.js'
-export { loadBotPromptContext, isBotAgentProfile } from './bot/index.js'
