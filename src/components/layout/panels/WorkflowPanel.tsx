@@ -84,14 +84,19 @@ export interface WorkflowJournalRecord {
   usage?: { inputTokens: number; outputTokens: number };
 }
 
-type WorkflowApi = {
+export type WorkflowApi = {
   list: (filter?: { status?: string; workflowName?: string; limit?: number; offset?: number }) => Promise<unknown[]>;
   journal: (runId: string) => Promise<unknown[]>;
+  snapshot: (runId: string) => Promise<unknown>;
   delete: (id: string) => Promise<boolean>;
   cancel: (id: string) => Promise<{ ok: boolean; reason?: string }>;
+  run: (payload: { name: string; params?: Record<string, unknown>; projectDir?: string }) => Promise<{ ok: boolean; error?: string; runId?: string }>;
   defs: {
     list: (projectDir?: string) => Promise<unknown[]>;
     get: (payload: { name: string; projectDir?: string }) => Promise<unknown>;
+    create: (payload: { def: unknown; scope?: string; projectDir?: string }) => Promise<{ ok: boolean; file?: string; name?: string; error?: string }>;
+    update: (payload: { name: string; def: unknown; scope?: string; projectDir?: string }) => Promise<{ ok: boolean; file?: string; name?: string; error?: string }>;
+    delete: (payload: { name: string; scope?: string; projectDir?: string }) => Promise<{ ok: boolean; error?: string }>;
   };
 };
 
@@ -345,7 +350,7 @@ export function DefinitionCard({ def }: { def: WorkflowDefinitionSummary }) {
   );
 }
 
-function DefinitionsTab({ projectDir }: { projectDir?: string }) {
+export function DefinitionsTab({ projectDir }: { projectDir?: string }) {
   const { t } = useTranslation();
   const [defs, setDefs] = useState<WorkflowDefinitionSummary[] | null>(null);
 
@@ -565,7 +570,7 @@ export function RunRow({ run, runs, expanded, onToggle, onDelete, onCancel }: Ru
   );
 }
 
-function RunsTab() {
+export function RunsTab() {
   const { t } = useTranslation();
   const [runs, setRuns] = useState<WorkflowRunRow[] | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);

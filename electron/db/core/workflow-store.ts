@@ -101,14 +101,23 @@ interface SnapshotRow {
 }
 
 export class WorkflowRunStore {
-  /** Migration id=26/27: workflow run metadata + snapshot blobs (plan 552 Phase 4). */
+  /** Migration id=28/29: workflow run metadata + snapshot blobs (plan 552 Phase 4).
+   *  IDs 26/27 are taken by SessionStore (add_archived_at_and_archived_path_to_sessions)
+   *  so we shifted up to avoid the duplicate-id collision that the migrator
+   *  otherwise silently swallows — see "Duplicate core migration id 26".
+   */
   static readonly migrations: Migration[] = [
     {
-      id: 26,
+      id: 28,
       name: 'create_workflow_runs',
       up: (db) => {
+        // `IF NOT EXISTS` defends against the duplicate-id legacy where an
+        // earlier build (id 26/27, before this rename) may have left the
+        // table around — without it, migration 29's CREATE TABLE on an
+        // already-populated DB aborts initCoreDatabase and every renderer
+        // IPC handler explodes with "Core stores not initialized".
         db.exec(`
-          CREATE TABLE workflow_runs (
+          CREATE TABLE IF NOT EXISTS workflow_runs (
             id                  TEXT PRIMARY KEY,
             workflow_name       TEXT NOT NULL,
             workflow_version_id TEXT,
@@ -122,18 +131,19 @@ export class WorkflowRunStore {
             created_at          INTEGER NOT NULL,
             updated_at          INTEGER NOT NULL
           );
-          CREATE INDEX idx_workflow_runs_status ON workflow_runs(status);
-          CREATE INDEX idx_workflow_runs_name ON workflow_runs(workflow_name, created_at);
-          CREATE INDEX idx_workflow_runs_wait_till ON workflow_runs(wait_till);
+          CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status);
+          CREATE INDEX IF NOT EXISTS idx_workflow_runs_name ON workflow_runs(workflow_name, created_at);
+          CREATE INDEX IF NOT EXISTS idx_workflow_runs_wait_till ON workflow_runs(wait_till);
         `);
       },
     },
     {
-      id: 27,
+      id: 29,
       name: 'create_workflow_run_snapshots',
       up: (db) => {
+        // Same idempotency rationale as migration 28.
         db.exec(`
-          CREATE TABLE workflow_run_snapshots (
+          CREATE TABLE IF NOT EXISTS workflow_run_snapshots (
             run_id        TEXT PRIMARY KEY,
             snapshot_json TEXT NOT NULL,
             updated_at    INTEGER NOT NULL
