@@ -276,9 +276,15 @@ export async function getForegroundWindowInfo(): Promise<ForegroundWindowInfo | 
   try {
     const stdout = await runPowerShell(
       '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; ' +
-      '$t = Add-Type -MemberDefinition "[DllImport(\'user32.dll\')] ' +
+      // The C# member definition is a PowerShell SINGLE-quoted string so the
+      // DLL name can keep C# double quotes. With single quotes around the
+      // DLL name (`DllImport(\'user32.dll\')`) Add-Type fails to compile with
+      // "too many characters in character literal" — `'user32.dll'` is a
+      // char literal in C#, not a string — and the helper silently returned
+      // null via the catch below.
+      '$t = Add-Type -MemberDefinition \'[DllImport("user32.dll")] ' +
       'public static extern IntPtr GetForegroundWindow(); ' +
-      '[DllImport(\'user32.dll\')] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);" ' +
+      '[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);\' ' +
       '-Name WinFg -Namespace Native -PassThru; ' +
       '$h = $t::GetForegroundWindow(); ' +
       'if ($h -eq [IntPtr]::Zero) { return; } ' +
@@ -315,9 +321,9 @@ async function focusWindowViaPowerShell(pid: number): Promise<boolean> {
   try {
     const stdout = await runPowerShell(
       '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; ' +
-      '$t = Add-Type -MemberDefinition "[DllImport(\'user32.dll\')] ' +
+      '$t = Add-Type -MemberDefinition \'[DllImport("user32.dll")] ' +
       'public static extern bool SetForegroundWindow(IntPtr hWnd); ' +
-      '[DllImport(\'user32.dll\')] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);" ' +
+      '[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);\' ' +
       '-Name Win -Namespace Native -PassThru; ' +
       '$p = Get-Process -Id ' + Number(pid) + ' -ErrorAction Stop; ' +
       '$r1 = $t::ShowWindow($p.MainWindowHandle, 9); ' +
@@ -340,8 +346,8 @@ async function showWindowWithoutFocus(pid: number): Promise<boolean> {
   try {
     const stdout = await runPowerShell(
       '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; ' +
-      '$t = Add-Type -MemberDefinition "[DllImport(\'user32.dll\')] ' +
-      'public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow); " ' +
+      '$t = Add-Type -MemberDefinition \'[DllImport("user32.dll")] ' +
+      'public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow); \' ' +
       '-Name Win -Namespace Native -PassThru; ' +
       '$p = Get-Process -Id ' + Number(pid) + ' -ErrorAction Stop; ' +
       '$r = $t::ShowWindow($p.MainWindowHandle, 4); ' +
