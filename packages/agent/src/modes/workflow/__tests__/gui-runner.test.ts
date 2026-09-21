@@ -280,3 +280,191 @@ describe('dry-run', () => {
     expect(outcome.output).toMatchObject({ dryRun: true, steps: 1 });
   });
 });
+
+// ─── plan 556 Phase 4: recorded som refs through the element-matcher ───
+
+/** Recorder annotation for one `som:1` click on a "Submit" button. */
+function recorderAnnotation(overrides?: { name?: string; point?: { x: number; y: number } }) {
+  return {
+    source: 'recorder' as const,
+    app: 'chrome',
+    windowTitle: 'Invoice portal',
+    som: {
+      'som:1': {
+        ts: 1,
+        element: {
+          source: 'uia-probe' as const,
+          name: overrides?.name ?? 'Submit',
+          controlType: 'Button',
+        },
+        point: overrides?.point ?? { x: 105, y: 105 },
+      },
+    },
+  };
+}
+
+/** Backend whose capture publishes a fixed fresh SOM index space. */
+function somBackend(elements: unknown, seen: GuiStep[] = []): GuiBackendPort {
+  return {
+    step: async (s) => {
+      seen.push(s);
+      return { ok: true, effect: 'confirmed' };
+    },
+    capture: async () => ({ base64: 'PNG', width: 1000, height: 1000, elements }),
+  };
+}
+
+describe('recorded element matching (plan 556 phase 4)', () => {
+  it('L1 rewrites the recorded ref to the fresh SOM index and stays verified', async () => {
+    const seen: GuiStep[] = [];
+    const journal = new Journal(new MemoryJournalSink());
+    const outcome = await runGuiNode(
+      baseOptions({
+        gui: { target_app: 'chrome', steps: [{ do: 'capture' }, { do: 'click', element: 'som:1' }], on_stuck: 'agent' },
+        annotation: recorderAnnotation(),
+        journal,
+        ports: {
+          backend: somBackend(
+            [
+              { index: 1, bbox: { x: 0, y: 0, w: 30, h: 30 }, label: 'Cancel' },
+              { index: 5, bbox: { x: 95, y: 98, w: 40, h: 20 }, label: 'Submit', axSource: 'uia' },
+            ],
+            seen,
+          ),
+          artifacts: new MemoryArtifactStore(),
+        },
+      }),
+    );
+    expect(outcome.status).toBe('succeeded');
+    expect(outcome.verification).toBe('verified');
+    expect(seen[1]).toMatchObject({ do: 'click', element: 'som:5' });
+
+    const evidence = journal.all().filter((r) => r.kind === 'node_result' && r.action === 'match');
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0]!.verification).toBe('verified');
+    expect(evidence[0]!.result).toMatchObject({ match: { ref: 'som:1', somIndex: 5, confidence: 'exact', layer: 'L1' } });
+  });
+
+  it('L3 routes the step through on_stuck: agent and downgrades to unconfirmed', async () => {
+    const decide = decidePort(['done']);
+    const journal = new Journal(new MemoryJournalSink());
+    const outcome = await runGuiNode(
+      baseOptions({
+        gui: { target_app: 'chrome', steps: [{ do: 'capture' }, { do: 'click', element: 'som:1' }], on_stuck: 'agent' },
+        annotation: recorderAnnotation({ name: 'Renamed by hand' }),
+        journal,
+        ports: {
+          backend: somBackend([{ index: 5, bbox: { x: 900, y: 900, w: 10, h: 10 }, label: 'Something else' }]),
+          artifacts: new MemoryArtifactStore(),
+          decide,
+        },
+      }),
+    );
+    expect(decide.calls).toBe(1);
+    expect(outcome.status).toBe('succeeded');
+    // The agent recovered the step, but not exactly as recorded.
+    expect(outcome.verification).toBe('unconfirmed');
+    const evidence = journal.all().find((r) => r.action === 'match');
+    expect(evidence?.result).toMatchObject({ match: { confidence: 'agent-fallback', layer: 'none', somIndex: null } });
+  });
+
+  it('L3 with on_stuck: fail fails the node instead of guessing', async () => {
+    const outcome = await runGuiNode(
+      baseOptions({
+        gui: { target_app: 'chrome', steps: [{ do: 'click', element: 'som:1' }], on_stuck: 'fail' },
+        annotation: recorderAnnotation({ name: 'Renamed by hand' }),
+        ports: {
+          backend: somBackend([{ index: 5, bbox: { x: 900, y: 900, w: 10, h: 10 }, label: 'Something else' }]),
+          artifacts: new MemoryArtifactStore(),
+        },
+      }),
+    );
+    expect(outcome.status).toBe('failed');
+    expect(outcome.error).toContain('element-matcher');
+  });
+
+  it('L2 accepts a positional match but marks the node unconfirmed', async () => {
+    const seen: GuiStep[] = [];
+    const outcome = await runGuiNode(
+      baseOptions({
+        gui: { target_app: 'chrome', steps: [{ do: 'capture' }, { do: 'click', element: 'som:1' }], on_stuck: 'agent' },
+        annotation: recorderAnnotation({ name: 'Label changed' }),
+        ports: {
+          // Point (105,105) lands inside this bbox — L2 "contains".
+          backend: somBackend([{ index: 4, bbox: { x: 95, y: 95, w: 40, h: 40 }, label: 'Whatever' }], seen),
+          artifacts: new MemoryArtifactStore(),
+        },
+      }),
+    );
+    expect(outcome.status).toBe('succeeded');
+    expect(outcome.verification).toBe('unconfirmed');
+    expect(seen[1]).toMatchObject({ element: 'som:4' });
+  });
+
+  it('a fresh capture re-publishes the index space between steps', async () => {
+    const seen: GuiStep[] = [];
+    let call = 0;
+    const outcome = await runGuiNode(
+      baseOptions({
+        gui: { target_app: 'chrome', steps: [{ do: 'capture' }, { do: 'click', element: 'som:1' }], on_stuck: 'agent' },
+        annotation: recorderAnnotation(),
+        ports: {
+          backend: {
+            step: async (s) => {
+              seen.push(s);
+              return { ok: true, effect: 'confirmed' };
+            },
+            capture: async () => {
+              call++;
+              // First capture has the button at index 2 — irrelevant; by
+              // the time the click runs the SECOND capture owns index 9.
+              return {
+                base64: 'PNG',
+                width: 1000,
+                height: 1000,
+                elements: [
+                  { index: call === 1 ? 2 : 9, bbox: { x: 100, y: 100, w: 30, h: 30 }, label: 'Submit', axSource: 'uia' },
+                ],
+              };
+            },
+          },
+          artifacts: new MemoryArtifactStore(),
+        },
+      }),
+    );
+    expect(outcome.status).toBe('succeeded');
+    expect(seen[1]).toMatchObject({ element: 'som:9' });
+  });
+
+  it('refs without recorder provenance keep their legacy meaning', async () => {
+    const seen: GuiStep[] = [];
+    const outcome = await runGuiNode(
+      baseOptions({
+        gui: { target_app: 'chrome', steps: [{ do: 'capture' }, { do: 'click', element: 'som:3' }], on_stuck: 'agent' },
+        ports: {
+          backend: somBackend([{ index: 1, bbox: { x: 0, y: 0, w: 10, h: 10 }, label: 'Submit' }], seen),
+          artifacts: new MemoryArtifactStore(),
+        },
+      }),
+    );
+    expect(outcome.status).toBe('succeeded');
+    expect(outcome.verification).toBe('verified');
+    expect(seen[1]).toMatchObject({ element: 'som:3' });
+  });
+
+  it('a foreign annotation shape never runs the matcher', async () => {
+    const seen: GuiStep[] = [];
+    const outcome = await runGuiNode(
+      baseOptions({
+        gui: { target_app: 'chrome', steps: [{ do: 'capture' }, { do: 'click', element: 'som:3' }], on_stuck: 'agent' },
+        annotation: { something: 'else' },
+        ports: {
+          backend: somBackend([{ index: 1, bbox: { x: 0, y: 0, w: 10, h: 10 }, label: 'Submit' }], seen),
+          artifacts: new MemoryArtifactStore(),
+        },
+      }),
+    );
+    expect(outcome.status).toBe('succeeded');
+    expect(seen[1]).toMatchObject({ element: 'som:3' });
+  });
+});

@@ -18,6 +18,17 @@
  *   5. Every step's capture and result lands a journal record; screenshot
  *      bytes are externalized to the ArtifactStore (ref in the journal).
  *
+ * Plan 556 Phase 4 adds the RECORDED case: when the node carries a
+ * recorder annotation (`annotation.som`, producer = converter.ts), each
+ * `som:<n>` ref is a recording-session counter, not a live index — it
+ * is resolved against the freshest capture's SOM elements through
+ * `element-matcher.ts` before the backend ever sees it. A resolved ref
+ * keeps its `som:<k>` shape (the backend contract does not move); an
+ * unresolved ref is a genuine "I cannot find this control" and rides
+ * the node's existing `on_stuck` ladder. Matching precision is honest:
+ * 'exact' keeps the node `verified`, 'approx' / 'agent-fallback'
+ * downgrade it to `unconfirmed`.
+ *
  * The backend and decide loop are PORTS — production wires the Electron
  * `computer-use` pipeline (Phase 4); fixtures cover the eight statuses.
  */
@@ -29,6 +40,15 @@ import { computeReqHash } from './journal.js';
 import type { BudgetLedger } from './host.js';
 import { SuspensionSignal, classifyError, type WorkflowErrorClass } from './error-class.js';
 import { interpolateString, interpolateDeep, type ExprScope } from './expr.js';
+import {
+  isSomRef,
+  matchRecordedElement,
+  toSomCandidates,
+  type MatchFrame,
+  type MatchResult,
+  type SomCandidate,
+} from './element-matcher.js';
+import { RecorderNodeAnnotationSchema, type RecorderSomRefAnnotation } from './converter.js';
 
 /** One deterministic step's backend result. */
 export interface GuiStepResult {
@@ -36,13 +56,33 @@ export interface GuiStepResult {
   /** Verdict effect from the backend (454 ladder) when surfaced. */
   effect?: 'confirmed' | 'unverifiable' | 'suspected_noop';
   error?: string;
+  /** Post-step capture frame — a `capture` step publishes the new index space. */
+  frame?: CaptureFrame;
+}
+
+/**
+ * What a capture hands back beyond the pixels. `elements` is the fresh
+ * SOM index space (`backend/types.ts` SomElement); the matcher resolves
+ * recorded refs against it. All fields optional — a backend that cannot
+ * produce SOM still satisfies the port, and the matcher simply falls
+ * back to L3.
+ */
+export interface CaptureFrame {
+  width?: number;
+  height?: number;
+  elements?: unknown;
+}
+
+/** Capture payload: bytes for the artifact store + the index space. */
+export interface GuiCaptureResult extends CaptureFrame {
+  base64: string | null;
 }
 
 /** Port onto the DesktopBackend (production: Electron computer-use IPC). */
 export interface GuiBackendPort {
   step(step: GuiStep, ctx: HostCallContext): Promise<GuiStepResult>;
   /** Capture the screen; bytes go to the store, the ref to the journal. */
-  capture(ctx: HostCallContext): Promise<{ base64: string | null }>;
+  capture(ctx: HostCallContext): Promise<GuiCaptureResult>;
 }
 
 /** The 551 decide loop's honest status contract (controller.ts). */
@@ -91,6 +131,13 @@ export interface GuiRunOptions {
   values?: string[];
   runId: string;
   dryRun?: boolean;
+  /**
+   * Producer provenance (plan 556 §4.6). A converter-produced node
+   * carries `{ source: 'recorder', som: { 'som:1': {...} } }`; anything
+   * that does not parse leaves the node on the LLM-authored path where
+   * `som:<n>` already means "index from my own last capture".
+   */
+  annotation?: Record<string, unknown>;
 }
 
 const SUSPECTED_NOOP_LIMIT = 2;
@@ -116,6 +163,15 @@ export async function runGuiNode(options: GuiRunOptions): Promise<GuiNodeOutcome
   const ctx: HostCallContext = { runId: options.runId, nodeId };
   let suspectedNoopStreak = 0;
 
+  // Recorder provenance (plan 556 Phase 4). Absent/unparsable → empty,
+  // and every `som:<n>` keeps the legacy "index of my own last capture"
+  // meaning.
+  const recordedSom = readRecordedSom(options.annotation);
+  /** Freshest capture's SOM index space. */
+  let freshFrame: FreshFrame | null = null;
+  /** Set when a match was anything less than exact. */
+  let degraded = false;
+
   // ── Phase A: deterministic declared steps (code owns the loop) ──
   for (let i = 0; i < gui.steps.length; i++) {
     const rawStep = gui.steps[i];
@@ -138,12 +194,13 @@ export async function runGuiNode(options: GuiRunOptions): Promise<GuiNodeOutcome
           outputSize: shot.base64.length,
         });
       }
+      freshFrame = readFrame(shot, freshFrame);
     } catch {
       // Capture failure must not abort a declared step sequence.
     }
 
     // Interpolate caller-provided text (rule #1: the channel never invents).
-    const step = interpolateDeep(rawStep, options.scope) as GuiStep;
+    let step = interpolateDeep(rawStep, options.scope) as GuiStep;
     const text = 'text' in step && typeof step.text === 'string' ? interpolateString(step.text, options.scope) : undefined;
     const reqHash = stepReqHash(nodeId, i, rawStep, text);
 
@@ -151,12 +208,49 @@ export async function runGuiNode(options: GuiRunOptions): Promise<GuiNodeOutcome
     const hit = journal.hit(stepId, reqHash);
     if (hit) continue;
 
+    // Recorded refs are recording-session counters — translate them into
+    // the fresh index space before the backend sees the step.
+    const resolved = resolveStepElement(step, recordedSom, freshFrame);
+    if (resolved) {
+      journal.append({
+        kind: 'node_result',
+        nodeId: stepId,
+        attempt: 1,
+        // No reqHash: evidence is not a replay cache entry, and the
+        // resolved index legitimately changes between runs.
+        status: 'succeeded',
+        result: {
+          match: {
+            ref: resolved.ref,
+            somIndex: resolved.result.somIndex,
+            confidence: resolved.result.confidence,
+            layer: resolved.result.layer,
+            reason: resolved.result.reason,
+            label: resolved.result.matched?.label ?? null,
+          },
+        },
+        verification: resolved.result.verification,
+        nodeKind: 'gui',
+        action: 'match',
+      });
+      if (resolved.result.somIndex === null) {
+        // L3: no such control in the fresh capture. The framework's
+        // existing agent fallback owns what happens next.
+        degraded = true;
+        return applyDegraded(await enterLadder(options, 'stuck', `element-matcher ${resolved.result.reason}`));
+      }
+      if (resolved.result.verification === 'unconfirmed') degraded = true;
+      step = { ...step, element: resolved.result.ref } as GuiStep;
+    }
+
     budget.countHostCall();
     const stepStartedAt = Date.now();
     const result = await ports.backend.step(
       { ...step, ...(text !== undefined ? { text } : {}) } as GuiStep,
       ctx,
     );
+    // A `capture` step re-publishes the index space.
+    if (result.frame) freshFrame = readFrame(result.frame, freshFrame);
     const stepStatus = result.ok ? 'succeeded' : 'failed';
     journal.append({
       kind: 'node_result',
@@ -191,14 +285,90 @@ export async function runGuiNode(options: GuiRunOptions): Promise<GuiNodeOutcome
             nodeKind: 'gui',
             action: 'escalate',
           });
-          return enterLadder(options, 'stuck', `no on-screen change after ${suspectedNoopStreak} verified steps`);
+          return applyDegraded(
+            await enterLadder(options, 'stuck', `no on-screen change after ${suspectedNoopStreak} verified steps`),
+            degraded,
+          );
         }
       }
       // 'unverifiable' → keep going; the next capture sees the truth.
     }
   }
 
-  return { status: 'succeeded', output: { steps: gui.steps.length }, verification: 'verified' };
+  return {
+    status: 'succeeded',
+    output: { steps: gui.steps.length },
+    verification: degraded ? 'unconfirmed' : 'verified',
+  };
+}
+
+/** Fresh capture index space handed to the matcher. */
+interface FreshFrame {
+  elements: SomCandidate[];
+  frame?: MatchFrame;
+}
+
+/** Capture result → index space (a capture WITHOUT elements keeps the previous one). */
+function readFrame(source: CaptureFrame, previous: FreshFrame | null): FreshFrame | null {
+  if (source.elements === undefined) {
+    // Keep the previous elements but refresh the geometry when reported.
+    const frame = toFrame(source);
+    if (previous && frame) return { elements: previous.elements, frame };
+    return previous;
+  }
+  return {
+    elements: toSomCandidates(source.elements),
+    ...(toFrame(source) ? { frame: toFrame(source)! } : {}),
+  };
+}
+
+function toFrame(source: CaptureFrame): MatchFrame | undefined {
+  if (typeof source.width !== 'number' || typeof source.height !== 'number') return undefined;
+  if (source.width <= 0 || source.height <= 0) return undefined;
+  return { width: source.width, height: source.height };
+}
+
+/**
+ * Parse the converter annotation into its `som` map. Never throws — a
+ * non-recorder annotation (or a future schema) yields `{}`, which is
+ * exactly the legacy behaviour.
+ */
+function readRecordedSom(annotation: Record<string, unknown> | undefined): Record<string, RecorderSomRefAnnotation> {
+  if (!annotation) return {};
+  const parsed = RecorderNodeAnnotationSchema.safeParse(annotation);
+  return parsed.success ? parsed.data.som : {};
+}
+
+/**
+ * Resolve a step's `element` ref when (and only when) the recorded
+ * annotation owns it. Returns null for steps without an element, refs
+ * the recording never produced, or a node with no recorder provenance —
+ * all of which keep their existing meaning.
+ */
+function resolveStepElement(
+  step: GuiStep,
+  recordedSom: Record<string, RecorderSomRefAnnotation>,
+  fresh: FreshFrame | null,
+): { ref: string; result: MatchResult } | null {
+  if (!('element' in step) || !isSomRef(step.element)) return null;
+  const ref = step.element;
+  const recorded = recordedSom[ref];
+  if (!recorded) return null;
+  const result = matchRecordedElement(
+    {
+      element: recorded.element,
+      ...(recorded.point ? { point: recorded.point } : {}),
+    },
+    fresh?.elements ?? [],
+    fresh?.frame ? { frame: fresh.frame } : {},
+  );
+  return { ref, result };
+}
+
+/** Downgrade 'verified' to 'unconfirmed' when the run lost exactness. */
+function applyDegraded(outcome: GuiNodeOutcome, degraded = true): GuiNodeOutcome {
+  if (!degraded || outcome.verification !== 'verified') return outcome;
+  return { ...outcome, verification: 'unconfirmed' };
 }
 
 function mapStepFailure(nodeId: string, error?: string): GuiNodeOutcome {

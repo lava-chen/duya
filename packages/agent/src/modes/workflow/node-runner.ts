@@ -450,6 +450,8 @@ async function runGuiNodeSafe(ctx: NodeRunContext): Promise<NodeRunResult> {
       approvalMode: ctx.approvalMode,
       runId: ctx.runId,
       dryRun: ctx.dryRun,
+      // Plan 556 Phase 4: recorder provenance drives som:<n> resolution.
+      ...(ctx.node.annotation ? { annotation: ctx.node.annotation } : {}),
     });
     if (result.status === 'failed') {
       return failResult(result.error ?? 'gui node failed', result.errorClass ?? 'tool_error');

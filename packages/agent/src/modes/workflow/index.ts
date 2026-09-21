@@ -25,6 +25,7 @@ export * from './gui-artifacts.js';
 export * from './gui-runner.js';
 export * from './planner.js';
 export * from './converter.js';
+export * from './element-matcher.js';
 export * from './verify.js';
 export * from './engine.js';
 export * from './manager.js';
