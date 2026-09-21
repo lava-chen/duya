@@ -70,6 +70,15 @@ export interface ComputerUseDaemonOptions {
   cwd?: string;
   /** Override context directory (the daemon writes here). */
   contextDir?: string;
+  /** Extra environment merged over process.env for the child. */
+  env?: NodeJS.ProcessEnv;
+  /**
+   * Observe every trimmed stdout line before the daemon's own
+   * heartbeat handling. Lets second consumers (e.g. the plan 556
+   * recorder hook worker, which reuses this spawn pipeline) parse
+   * their own JSON-line protocol off the same pipe.
+   */
+  onStdoutLine?: (line: string) => void;
   /** Override heartbeat timeout (default 90s). */
   heartbeatTimeoutMs?: number;
   /** Override initial backoff (default 1000ms). */
@@ -125,6 +134,8 @@ class ComputerUseDaemonImpl implements ComputerUseDaemon {
     env: NodeJS.ProcessEnv;
     cwd?: string;
   }) => ChildProcess) | undefined;
+  private readonly extraEnv: NodeJS.ProcessEnv | undefined;
+  private readonly onStdoutLine: ((line: string) => void) | undefined;
 
   constructor(opts: ComputerUseDaemonOptions) {
     this.opts = {
@@ -138,6 +149,8 @@ class ComputerUseDaemonImpl implements ComputerUseDaemon {
       backoffMultiplier: opts.backoffMultiplier ?? BACKOFF_MULTIPLIER,
     };
     this.spawnFn = opts.spawnFn;
+    this.extraEnv = opts.env;
+    this.onStdoutLine = opts.onStdoutLine;
     this.currentBackoffMs = this.opts.backoffInitialMs;
   }
 
@@ -228,6 +241,7 @@ class ComputerUseDaemonImpl implements ComputerUseDaemon {
         const env: NodeJS.ProcessEnv = {
           ...process.env,
           DUYA_COMPUTER_USE_CONTEXT_DIR: this.opts.contextDir,
+          ...this.extraEnv,
         };
         const args = [this.opts.entry];
         const stdio: StdioOptions = ['ignore', 'pipe', 'pipe'];
@@ -288,6 +302,15 @@ class ComputerUseDaemonImpl implements ComputerUseDaemon {
     for (const line of text.split(/\r?\n/)) {
       const trimmed = line.trim();
       if (!trimmed) continue;
+      // Second consumers first: they may parse a different protocol off
+      // the same pipe (recorder hook worker, plan 556).
+      if (this.onStdoutLine) {
+        try {
+          this.onStdoutLine(trimmed);
+        } catch {
+          // observer errors must not disturb the daemon loop
+        }
+      }
       let parsed: unknown;
       try {
         parsed = JSON.parse(trimmed);
@@ -365,6 +388,9 @@ class ComputerUseDaemonImpl implements ComputerUseDaemon {
       nextRestartInMs: delay,
       lastError: reason,
     });
+    // A health listener may have called stop() synchronously (the
+    // recorder restart cap does exactly that) — re-check before arming.
+    if (this.stopping || this.stopped) return;
     logger.info(
       'ComputerUseDaemon scheduling restart',
       { delayMs: delay, restartCount: this.health.restartCount },
@@ -421,6 +447,17 @@ function defaultSpawn(
 }
 
 let _singleton: ComputerUseDaemon | null = null;
+
+/**
+ * Create a standalone daemon instance (not the app singleton) for a
+ * second consumer of the same spawn/heartbeat/restart pipeline —
+ * currently the plan 556 recorder hook worker.
+ */
+export function createComputerUseDaemon(
+  opts: ComputerUseDaemonOptions,
+): ComputerUseDaemon {
+  return new ComputerUseDaemonImpl(opts);
+}
 
 export function getComputerUseDaemon(): ComputerUseDaemon {
   if (!_singleton) {

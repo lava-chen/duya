@@ -84,6 +84,19 @@ extraResources:
   - from: packages/voice/dist/
     to: voice/
     filter: ["**/*"]
+  # Plan 556 recorder hook worker: uiohook-napi child entry (ESM) plus its
+  # native dependency, laid out under resources/computer-use/ so the
+  # sibling node_modules/ resolves. The package.json marker (type: module)
+  # keeps the entry loading as ESM outside the workspace.
+  - from: packages/computer-use/dist/recorder/hook-worker-entry.js
+    to: computer-use/hook-worker-entry.js
+  - from: packages/computer-use/dist/recorder/keymap.js
+    to: computer-use/keymap.js
+  - from: packages/computer-use/recorder-worker.package.json
+    to: computer-use/package.json
+  - from: node_modules/uiohook-napi/
+    to: computer-use/node_modules/uiohook-napi/
+    filter: ["**/*"]
   - from: packages/agent/skills/
     to: agent/skills/
     filter: ["**/*"]

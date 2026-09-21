@@ -260,6 +260,53 @@ async function listWindowsViaPowerShell(): Promise<NativeAppWindow[]> {
 }
 
 /**
+ * Foreground window snapshot for the plan 556 recorder focus tracker.
+ * Returns null when PowerShell is unavailable, the query fails, or no
+ * window is foreground — callers treat that as "keep previous state".
+ */
+export interface ForegroundWindowInfo {
+  /** Top-level window handle (fits in a JS number). */
+  hwnd: number;
+  pid: number;
+  processName: string;
+  title: string;
+}
+
+export async function getForegroundWindowInfo(): Promise<ForegroundWindowInfo | null> {
+  try {
+    const stdout = await runPowerShell(
+      '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; ' +
+      '$t = Add-Type -MemberDefinition "[DllImport(\'user32.dll\')] ' +
+      'public static extern IntPtr GetForegroundWindow(); ' +
+      '[DllImport(\'user32.dll\')] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);" ' +
+      '-Name WinFg -Namespace Native -PassThru; ' +
+      '$h = $t::GetForegroundWindow(); ' +
+      'if ($h -eq [IntPtr]::Zero) { return; } ' +
+      '$procId = 0; ' +
+      '$null = $t::GetWindowThreadProcessId($h, [ref]$procId); ' +
+      '$p = Get-Process -Id $procId -ErrorAction SilentlyContinue; ' +
+      '"{0}`t{1}`t{2}`t{3}" -f $h, $procId, $p.ProcessName, $p.MainWindowTitle',
+    );
+    const line = stdout.trim().split(/\r?\n/).pop() ?? '';
+    if (!line) return null;
+    // Title may itself contain tabs — everything after the third tab is title.
+    const parts = line.split('\t');
+    if (parts.length < 4) return null;
+    const hwnd = Number(parts[0]);
+    const pid = Number(parts[1]);
+    if (!Number.isFinite(hwnd) || !Number.isFinite(pid)) return null;
+    return {
+      hwnd,
+      pid,
+      processName: parts[2] ?? '',
+      title: parts.slice(3).join('\t'),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Bring a window to the foreground by PID via user32 P/Invoke.
  * ShowWindow(SW_RESTORE) un-minimizes first — SetForegroundWindow
  * alone refuses minimized windows.
