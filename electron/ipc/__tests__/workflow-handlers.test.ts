@@ -15,7 +15,7 @@ import * as path from 'node:path';
 import type BetterSqlite3 from 'better-sqlite3';
 import * as osMod from 'node:os';
 import { CoreDatabase, WorkflowRunStore } from '../../db/core';
-import { _setCoreStoresForTesting } from '../../db/core-connection';
+import { _setCoreStoresForTesting, getCoreStores } from '../../db/core-connection';
 import { registerWorkflowHandlers } from '../workflow-handlers';
 
 let nativeSqliteAvailable = true;
@@ -37,17 +37,33 @@ vi.mock('electron', () => ({
       handlers.set(channel, fn);
     },
   },
+  // The handler transitively imports `agent-server-lifecycle` →
+  // `core/window-manager` → `core/bootstrap`, whose module-level
+  // `isDev = !app?.isPackaged` reads `app`. Under vitest a named import that
+  // the factory omits throws at module-eval time, so `app` (plus the
+  // BrowserWindow surface window-manager touches while loading) must exist
+  // even though this suite never drives them.
+  app: {
+    isPackaged: false,
+    getPath: vi.fn(() => '/tmp'),
+    getAppPath: vi.fn(() => '/tmp'),
+  },
+  BrowserWindow: Object.assign(vi.fn(), {
+    getAllWindows: vi.fn(() => []),
+    fromWebContents: vi.fn(() => null),
+  }),
 }));
 
 describe.skipIf(!nativeSqliteAvailable)('workflow console handlers', () => {
   let tmpDir: string;
+  let coreDb: CoreDatabase;
 
   beforeEach(() => {
     registered.length = 0;
     handlers.clear();
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-handlers-test-'));
     const BetterSqlite3 = require('better-sqlite3') as typeof BetterSqlite3;
-    const coreDb = new CoreDatabase({
+    coreDb = new CoreDatabase({
       filename: path.join(tmpDir, 'core.db'),
       sqlite: BetterSqlite3,
       migrations: [...WorkflowRunStore.migrations],
@@ -61,7 +77,21 @@ describe.skipIf(!nativeSqliteAvailable)('workflow console handlers', () => {
 
   afterEach(() => {
     _setCoreStoresForTesting(null);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    // `_setCoreStoresForTesting(null)` only drops the reference — the SQLite
+    // handle stays open and Windows refuses to unlink a locked file
+    // (EBUSY). POSIX tolerates unlinking an open file, which is why this
+    // only ever failed on Windows. Close the connection first, and keep the
+    // cleanup non-fatal so the real assertion failure stays visible.
+    try {
+      coreDb.close();
+    } catch {
+      /* already closed — nothing to release */
+    }
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      /* Windows may still hold a brief handle on the -wal/-shm siblings */
+    }
   });
 
   it('registers exactly the console channels', () => {
@@ -85,9 +115,7 @@ describe.skipIf(!nativeSqliteAvailable)('workflow console handlers', () => {
   });
 
   it('cancel refuses terminal runs and clears wait_till for parked ones', () => {
-    const store = (require('../../db/core-connection') as {
-      getCoreStores: () => { workflowRuns: WorkflowRunStore };
-    }).getCoreStores().workflowRuns;
+    const store = getCoreStores().workflowRuns;
 
     const done = store.createRun({ workflowName: 'a', status: 'complete' });
     expect(handlers.get('workflow:cancel')!(undefined, done.id)).toEqual({ ok: false, reason: 'terminal' });
@@ -104,9 +132,7 @@ describe.skipIf(!nativeSqliteAvailable)('workflow console handlers', () => {
 
 
   it('list → get → journal → delete round-trip', () => {
-    const store = (require('../../db/core-connection') as {
-      getCoreStores: () => { workflowRuns: WorkflowRunStore };
-    }).getCoreStores().workflowRuns;
+    const store = getCoreStores().workflowRuns;
     const run = store.createRun({
       workflowName: 'invoice-sync',
       status: 'complete',
@@ -171,8 +197,14 @@ it('defs:list reads the definition library for a project directory', () => {
       valid: boolean;
       phaseCount: number;
     }>;
-    expect(defs).toHaveLength(1);
-    expect(defs[0]).toMatchObject({ name: 'repo-digest', scope: 'project', valid: true, phaseCount: 1 });
+    // `WorkflowFileRegistry.list()` deliberately merges two roots: the
+    // project scope the handler was given AND the real global library at
+    // `~/.duya/workflows`. Asserting a total length therefore depended on
+    // the developer's own home directory (any global def made it 2). Scope
+    // the assertion to the project root this test created.
+    const projectDefs = defs.filter((d) => d.scope === 'project');
+    expect(projectDefs).toHaveLength(1);
+    expect(projectDefs[0]).toMatchObject({ name: 'repo-digest', scope: 'project', valid: true, phaseCount: 1 });
 
     const one = handlers.get('workflow:defs:get')!(undefined, { name: 'repo-digest', projectDir }) as {
       summary: { description: string };

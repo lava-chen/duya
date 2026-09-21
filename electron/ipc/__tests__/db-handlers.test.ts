@@ -609,7 +609,13 @@ describe('db-handlers (core store thin forward)', () => {
         's1',
       )) as unknown[];
 
-      expect(mocks.stores.messageLog.listBySession).toHaveBeenCalledWith('s1');
+      // 9477e278 ("keep superseded messages visible in chat UI history") made
+      // the handler default `includeSuperseded` to true, so the options bag is
+      // now always forwarded. Assert the full call shape rather than the
+      // legacy single-argument form.
+      expect(mocks.stores.messageLog.listBySession).toHaveBeenCalledWith('s1', {
+        includeSuperseded: true,
+      });
       expect(mocks.adapters.storedEventsToIpcMessages).toHaveBeenCalledWith(
         events,
       );

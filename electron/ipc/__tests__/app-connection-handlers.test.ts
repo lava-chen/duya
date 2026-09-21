@@ -42,6 +42,19 @@ vi.mock('electron', () => ({
       mocks.captured.handle.set(channel, fn);
     },
   },
+  // The handler's import graph reaches `core/bootstrap`, which reads
+  // `app.isPackaged` at module scope. Vitest throws when a named import is
+  // missing from the factory, so provide the minimum electron surface here
+  // even though this suite never exercises it.
+  app: {
+    isPackaged: false,
+    getPath: vi.fn(() => '/tmp'),
+    getAppPath: vi.fn(() => '/tmp'),
+  },
+  BrowserWindow: Object.assign(vi.fn(), {
+    getAllWindows: vi.fn(() => []),
+    fromWebContents: vi.fn(() => null),
+  }),
 }));
 
 vi.mock('../../logging/logger', () => ({
