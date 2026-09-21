@@ -93,17 +93,22 @@ function foregroundApp() {
   }
 }
 
-/** Bare left-Shift press/release pairs: no text, no shortcut, cursor unmoved. */
-function synthShift(times) {
-  const tmp = path.join(os.tmpdir(), `duya-shift-${process.pid}.ps1`);
+/**
+ * Synthesize a semantic input event without disturbing the desktop: three
+ * wheel notches down followed by three up, so the focused view ends exactly
+ * where it started while the hook sees real wheel events (which the
+ * aggregator debounces into `scroll`). A bare modifier key would NOT do:
+ * the aggregator drops modifier-only presses, so a passive user would look
+ * like a broken pipeline.
+ */
+function synthWheel() {
+  const tmp = path.join(os.tmpdir(), `duya-wheel-${process.pid}.ps1`);
   const body = [
-    '$t = Add-Type -MemberDefinition \'[DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, System.UIntPtr dwExtraInfo);\' -Name Kb -Namespace Native -PassThru',
-    `for ($i=0; $i -lt ${times}; $i++) {`,
-    '$t::keybd_event(0xA0,0,0,[System.UIntPtr]::Zero)',
-    'Start-Sleep -Milliseconds 80',
-    '$t::keybd_event(0xA0,0,2,[System.UIntPtr]::Zero)',
-    'Start-Sleep -Milliseconds 200',
-    '}',
+    '$t = Add-Type -MemberDefinition \'[DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, System.UIntPtr dwExtraInfo);\' -Name Ms -Namespace Native -PassThru',
+    // MOUSEEVENTF_WHEEL = 0x0800, WHEEL_DELTA = 120.
+    'for ($i=0; $i -lt 3; $i++) { $t::mouse_event(0x0800,0,0,120,[System.UIntPtr]::Zero); Start-Sleep -Milliseconds 60 }',
+    'Start-Sleep -Milliseconds 700',
+    'for ($i=0; $i -lt 3; $i++) { $t::mouse_event(0x0800,0,0,4294967176,[System.UIntPtr]::Zero); Start-Sleep -Milliseconds 60 }',
   ].join('\r\n');
   try {
     fs.writeFileSync(tmp, body, 'utf8');
@@ -178,7 +183,7 @@ function synthShift(times) {
 
   console.log(`recording ${DURATION_MS}ms — use the computer normally now\n`);
   await sleep(Math.max(1200, Math.round(DURATION_MS / 3)));
-  const synth = synthShift(5);
+  const synth = synthWheel();
   await sleep(Math.max(1200, DURATION_MS - Math.round(DURATION_MS / 3)));
 
   clearInterval(pollTimer);
@@ -194,7 +199,6 @@ function synthShift(times) {
   console.log(`summary.apps        : ${JSON.stringify(summary.apps)}`);
   console.log(`session dir         : ${path.join(root, 'sessions', sessionId)}`);
   if (!synth) console.log('[warn] synthetic input failed — a passive window proves nothing');
-
   const loaded = await REC.loadSession(root, sessionId);
   const kinds = loaded.events.reduce((a, e) => ((a[e.type] = (a[e.type] || 0) + 1), a), {});
   console.log(`reloaded            : ${loaded.events.length} (dropped ${loaded.dropped.length})`);
