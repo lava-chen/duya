@@ -1,6 +1,9 @@
 # Plan 556 — RPA 事件级录制 + Computer-Use 统一框架
 
-> **Status**: Phase 0–3 代码+单测落地（2026-09-21，recorder 118/118 + workflow 簇 135/135）；真机三目标验证待人工；Phase 4 起待开工
+> **Status**: Phase 0–5 代码+单测全部落地（2026-09-21：recorder 簇 118/118、workflow 簇含
+> element-matcher 全绿、IPC 簇 494/494）。**plan 内的 phase 已无待开工项**，剩余只有三处
+> 「真机 Gate」待人工：Phase 1 真机冒烟、Phase 2 Chrome/记事本/微信三目标验证、
+> Phase 4/5 Playwright MCP UI 冒烟 + Electron 全链路（录 → 转 → 存 → 执行 → 命中/兜底）。
 > **Priority**: P0
 > **设计文档**: [docs/design-docs/2026-09-20-rpa-recorder-design.md](../../design-docs/2026-09-20-rpa-recorder-design.md)（技术决策 D1-D6、组件图、失败模式表均以设计文档为准，本 plan 是任务拆解）
 > **定位**: plan 552 workflow 体系的定义生产第三通道。与 454（computer-use mode）、519（harness gaps）、551（Jev decide）、415/552（workflow RPA）共同构成完整的 computer-use 五腿框架（capture / plan / record / execute / verify）。
@@ -140,26 +143,63 @@ duya 已有 workflow 体系（552 Phase 0-7 落地），但定义只能由 LLM �
 
 ### Phase 4 — 回放匹配 element-matcher
 
-- [ ] `packages/agent/src/modes/workflow/element-matcher.ts`：
-  - [ ] L1：ElementDescriptor.name ↔ fresh SOM label 精确匹配（axSource='uia'/'msaa' 优先；
+> 2026-09-21 落地注记：matcher 是纯函数（无 IO），三层按 L1→L2→L3 短路，命中即停。
+> 关键语义：converter 发的 `som:<n>` 是**录制会话内**的全局计数器，而 fresh capture 的
+> SOM 索引只在本次 capture 内有效（`backend/types.ts`：新 capture 让旧索引失效）——
+> 所以 matcher 的职责是把「录制期 ref」重新解析为「本次 capture 的索引」，逐 capture
+> 重解析，不跨 capture 复用。L1 只用大小写/空白归一（不做模糊/同义词，"一键" ≠ "一 键"
+> 之外的猜测交给 L3 agent，避免假精确）；L2 用帧对角线比例做预算（两帧都已知才投影，
+> 未知则退化为绝对 120px 阈值）。L3 不自行兜底，而是把节点送回既有的 `on_stuck` 阶梯，
+> 复用 552 的 agent 接管路径。
+
+- [x] `packages/agent/src/modes/workflow/element-matcher.ts`：
+  - [x] L1：ElementDescriptor.name ↔ fresh SOM label 精确匹配（axSource='uia'/'msaa' 优先；
         多命中取 rect 中心距录制坐标最近）→ confidence 'exact'
-  - [ ] L2：窗口归一化比例位置最近邻 → 'approx'
-  - [ ] L3：失败 → `on_stuck: 'agent'` 路由 + 'agent-fallback'
-- [ ] gui-runner 接入：phase 首个 capture 后，后续 `som:<n>` 引用先过 matcher 解析
-- [ ] matcher 结果进 evidence（confidence 映射 552 的 verified/unconfirmed 标注）
-- [ ] Gate：matcher 命中矩阵单测（三层全路径）；gui-runner 回归测试绿
+  - [x] L2：窗口归一化比例位置最近邻 → 'approx'
+  - [x] L3：失败 → `on_stuck: 'agent'` 路由 + 'agent-fallback'
+- [x] gui-runner 接入：phase 首个 capture 后，后续 `som:<n>` 引用先过 matcher 解析
+- [x] matcher 结果进 evidence（confidence 映射 552 的 verified/unconfirmed 标注）
+- [x] Gate：matcher 命中矩阵单测（三层全路径）；gui-runner 回归测试绿
+
+实现要点（超出原 plan 的部分）：
+- `GuiBackendPort.capture` 返回值从纯 base64 扩成 `GuiCaptureResult { base64, width?, height?, elements? }`
+  —— matcher 需要同帧的元素表与帧尺寸才能做 L1/L2；这是接口形状变更，已同步
+  `GuiStepResult.frame` 与 gui-runner 的 `readFrame`。
+- `GuiRunOptions.annotation` 承载 recorder 注入的 `som` 映射（由 `node-runner` 从
+  `ctx.node.annotation` 透传）；`RecorderNodeAnnotationSchema.safeParse` 校验，脏 annotation
+  当「无录制溯源」处理而不是抛错——旧 workflow 定义（无 annotation）走原有历史路径不变。
+- L3 与 `degraded`（后端降级）都不会静默通过：L3 走 `enterLadder(on_stuck)`，
+  degraded 把 verification 强制降为 unconfirmed，两者都写 `match` evidence 行留痕。
 
 ### Phase 5 — IPC + UI 接线
 
-- [ ] `electron/ipc/recorder.ts`：`recorder:start/stop/status/get-session/list-sessions/delete-session`
+> 2026-09-21 落地注记：文件名按既有约定落在 `electron/ipc/recorder-handlers.ts`
+> （plan 写的是 `recorder.ts`，与 `workflow-handlers.ts` / `logger-handlers.ts` 的
+> `-handlers` 后缀对齐，避免同一目录两套命名）。UI 没有新开独立管理窗口，而是把
+> `AutomationPage` 改成 tab 外壳（定义库 | 录制会话），复用 `PageFrame/PageHeader/
+> PageTabs/PageCard/EmptyState` —— 与「主窗口统一 UI 框架」的既定方向一致，
+> 也符合 552「定义只读、编辑走对话」的原则（转换产物经 YAML 预览确认后才经
+> `workflow:defs:create` 入库，recorder handler 自己不写盘）。
+
+- [x] `electron/ipc/recorder-handlers.ts`：`recorder:start/stop/status/get-session/list-sessions/delete-session`
       （跟随 `workflow:*` 风格；preload / `src/lib` renderer 类型三处同步 —— CodeReviewPanel 的教训）
-- [ ] 录制 badge：独立置顶 overlay（时长 + 事件计数 + 停止/取消），非对话框
-- [ ] 落点接 workflow 管理界面（552 WorkflowPanel 重设计方向，独立管理界面而非侧栏 tab）：
-  - [ ] 会话列表 + 事件时间线（渐进披露：行 → 元素详情，交互范式与 run 详情一致）
-  - [ ] 「转换为 workflow 定义」→ converter → YAML 预览 → 确认入库
+- [x] 录制 badge：独立置顶 overlay（时长 + 事件计数 + 停止/取消），非对话框
+- [x] 落点接 workflow 管理界面（552 WorkflowPanel 重设计方向，独立管理界面而非侧栏 tab）：
+  - [x] 会话列表 + 事件时间线（渐进披露：行 → 元素详情，交互范式与 run 详情一致）
+  - [x] 「转换为 workflow 定义」→ converter → YAML 预览 → 确认入库
 - [ ] Gate：handler 单测（`electron/ipc/__tests__/`，mock 模式对齐 logger-handlers.test.ts）
       + Playwright MCP UI 冒烟 + Electron 真机全链路手动验证
       （录 → 转 → 存 → 执行 → ≥1 步 verified + 1 步人为改名后 agent 兜底 unconfirmed）
+
+Gate 明细：handler 单测 `recorder-handlers.test.ts`（12 测，mock 对齐 logger-handlers 模式，
+含 `vi.hoisted` 共享 mock 与 `importOriginal` 局部 mock 以保留真实 schema）、
+UI 测试 `src/components/recorder/RecorderView.test.tsx`（6 测）均绿；
+**Playwright MCP UI 冒烟与 Electron 真机全链路验证待人工执行**（需真实桌面与
+uiohook 钩子，无法在无头环境自动化）。
+
+额外接线：`recorder:cancel`（plan 未列，但 badge 的「取消」按钮需要——语义是
+stop 后连会话一起丢弃）、`recorder:convert`（转 YAML 预览，不落盘）、
+`electron/services/recorder/badge.ts`、graceful-shutdown 释放 recorder 服务与 badge。
 
 ## 5. 依赖与风险
 
