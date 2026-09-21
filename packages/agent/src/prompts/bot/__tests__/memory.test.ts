@@ -31,7 +31,7 @@ import {
 } from '../memory/tierReader.js'
 import { BOT_MEMORY_OWN_SECTION, BOT_MEMORY_USAGE_SECTION, BOT_MEMORY_USER_SECTION, BOT_MEMORY_PROJECT_SECTION } from '../memory/sections.js'
 import { createBotPromptAssembly, computeBotContentHash, type BotPromptContext } from '../index.js'
-import { createMemoryPreBuildHook } from '../../sections/dynamic/memoryPreBuildHook.js'
+import { createMemoryPreBuildHook } from '../../dynamic/memoryPreBuildHook.js'
 import { HbsPromptSystem } from '../../hbs/HbsPromptSystem.js'
 import type { BotMemoryContext, TierMemoryEntry } from '../memory/types.js'
 

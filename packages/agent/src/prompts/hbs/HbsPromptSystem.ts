@@ -25,9 +25,17 @@ import { fileURLToPath } from 'node:url';
 import type { PromptContext } from '../types.js';
 import { CYBER_RISK_INSTRUCTION, TOOL_NAMES } from '../types.js';
 import { getPlatformHint } from '../platformHints.js';
-import { buildEnvironmentItems } from '../sections/dynamic/environment.js';
-import { serializeSerializedGroup } from '../sections/dynamic/recentSessionsSection.js';
-import { getSkillsMetadataSection } from '../sections/dynamic/skillsMetadata.js';
+import { buildEnvironmentItems } from '../dynamic/environment.js';
+import { serializeSerializedGroup } from '../dynamic/recentSessionsSection.js';
+import { getSkillRegistry } from '../../skills/registry.js';
+import {
+  buildCatalogSkillEntry,
+  buildLoadDiagnosticsLine,
+  DEFAULT_BUDGET,
+  pickCatalogTier,
+  SKILLS_CATALOG_FIXED_OVERHEAD_CHARS,
+  type CatalogSkillEntry,
+} from '../dynamic/skillsMetadata.js';
 import { MODULES } from '../modules/registry.js';
 import type { ModuleName, PromptModuleDef } from '../modules/registry.js';
 import { HbsPromptRenderer } from './HandlebarsRenderer.js';
@@ -54,6 +62,54 @@ function resolveAssetsRoot(): string {
 }
 
 const ASSETS_ROOT = resolveAssetsRoot();
+
+/**
+ * Build the structured vars the `dynamic/skills-metadata.hbs` template
+ * iterates over. Plan 560: every prompt-text literal lives in the
+ * template; this helper is the data side of that contract.
+ *
+ * Returns an empty `skill_catalog_enabled` when the registry is empty
+ * (the .hbs `{{#if}}` collapses the body so the section is omitted,
+ * matching `renderSectionCompute`'s `out === '' ? null : out`).
+ */
+function buildSkillsCatalogContext(ctx: PromptContext): Record<string, unknown> {
+  // `ctx` reserved for future per-call overrides (parity with the previous
+  // `getSkillsMetadataSection(ctx, { skills: options.skills })` signature);
+  // currently the registry is global and `ctx` carries no extra signal.
+  void ctx
+  const skills = getSkillRegistry().listModelInvocable()
+  if (skills.length === 0) {
+    return { skill_catalog_enabled: false }
+  }
+  const sorted = [...skills].sort((left, right) => {
+    if (left.source === 'system' && right.source !== 'system') return -1
+    if (left.source !== 'system' && right.source === 'system') return 1
+    return left.name.localeCompare(right.name)
+  })
+  const tier = pickCatalogTier(sorted, DEFAULT_BUDGET, SKILLS_CATALOG_FIXED_OVERHEAD_CHARS)
+  const showDescription = tier === 'full' || tier === 'compact'
+  const showLocation = tier === 'full'
+  const systemSkills = sorted.filter(skill => skill.source === 'system')
+  const otherSkills = sorted.filter(skill => skill.source !== 'system')
+  const decorate = (skill: typeof sorted[number]): CatalogSkillEntry => ({
+    ...buildCatalogSkillEntry(skill),
+    show_description: showDescription,
+    show_location: showLocation,
+  })
+  const allEntries: CatalogSkillEntry[] = sorted.map(decorate)
+  return {
+    skill_catalog_enabled: true,
+    system_skills: systemSkills.map(decorate),
+    other_skills: otherSkills.map(decorate),
+    has_system_skills: systemSkills.length > 0,
+    has_other_skills: otherSkills.length > 0,
+    show_skill_roots: tier !== 'full',
+    skill_roots: allEntries.filter(entry => entry.location !== undefined),
+    load_diagnostics_line: buildLoadDiagnosticsLine(
+      getSkillRegistry().getLastLoadDiagnostics(),
+    ),
+  }
+}
 
 /**
  * Map a `PromptContext` to the variables a `.hbs` template expects.
@@ -199,16 +255,18 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
     messaging_guidance: ctx.enabledTools.has(TOOL_NAMES.MESSAGE_SESSION)
       ? `If a search summary is still insufficient and one session is clearly relevant, use \`MessageSession\` with one focused question in \`minimal\` mode. Do not contact a session merely because it is recent, do not fan out to several sessions unless the user explicitly asks, and never treat a dormant session as an already-running agent.`
       : 'The `MessageSession` tool is unavailable. Do not imply that you contacted another session or agent.',
-    // skills-metadata section (Plan 550 1d-rest) — pass-through. The
-    // legacy `formatSkillCatalog(skills)` builds the entire body (XML
-    // `<available_skills>` block + optional `### Skill roots` table +
-    // trailing usage line), and `pickCatalogTier` chooses the tier
-    // against the 1500-token budget. Mapper calls
-    // `getSkillsMetadataSection(ctx)` synchronously; the .hbs body is a
-    // thin wrapper that substitutes `{{skill_catalog_body}}` only when
-    // non-empty. Empty / omitted sections render `''` so
-    // `renderSectionCompute` collapses them to `null`.
-    skill_catalog_body: getSkillsMetadataSection(ctx) ?? '',
+    // skills-metadata section (Plan 550 1d-rest → Plan 560 native .hbs).
+    // The mapper precomputes the per-skill `CatalogSkillEntry` records
+    // (clamped description, absolute SKILL.md path, XML-safe escapes),
+    // the tier chosen by `pickCatalogTier` against the budget, and the
+    // diagnostic + skill-roots sidebar that survive the catalog body. The
+    // .hbs is plain markup — it iterates `system_skills` / `other_skills`
+    // and gates each field on the mapper-computed `show_description` /
+    // `show_location` booleans (decorated onto every entry because
+    // `{{#each}}` creates a new context that can't see the outer var).
+    // `skill_catalog_enabled` collapses to `''` when the registry is empty
+    // so `renderSectionCompute` returns `null`.
+    ...buildSkillsCatalogContext(ctx),
     // session-guidance
     has_ask_user_question: hasAskUserQuestion,
     has_agent_tool: hasAgentTool,

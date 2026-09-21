@@ -9,10 +9,10 @@
  */
 
 import type { PromptSystemConfig } from '../PromptSystem.js'
-import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
-import { createMemoryPreBuildHook } from '../sections/dynamic/memoryPreBuildHook.js'
-import { createEnvironmentPreBuildHook } from '../sections/dynamic/environmentPreBuildHook.js'
-import { createRecentSessionsPreBuildHook } from '../sections/dynamic/recentSessionsPreBuildHook.js'
+import { initializeAgentsMd } from '../dynamic/agentsMdSection.js'
+import { createMemoryPreBuildHook } from '../dynamic/memoryPreBuildHook.js'
+import { createEnvironmentPreBuildHook } from '../dynamic/environmentPreBuildHook.js'
+import { createRecentSessionsPreBuildHook } from '../dynamic/recentSessionsPreBuildHook.js'
 
 // Dynamic sections
 export const codeConfig: PromptSystemConfig = {

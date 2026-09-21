@@ -15,7 +15,7 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { getDuyaMemoryRoot } from '../../../memory-state/memory_paths.js'
+import { getDuyaMemoryRoot } from '../../memory-state/memory_paths.js'
 
 export const MAX_INLINE_SUMMARY_CHARS = 12_000
 
@@ -62,7 +62,7 @@ function defaultReadSummary(summaryPath: string): string | undefined {
  */
 export function buildMemoryContext(
   options: MemoryPreBuildOptions = {},
-): Partial<import('../../types.js').PromptContext> {
+): Partial<import('../types.js').PromptContext> {
   const resolveMemoryRoot = options.resolveMemoryRoot ?? getDuyaMemoryRoot
   const readSummary = options.readSummary ?? defaultReadSummary
 
@@ -99,7 +99,7 @@ export function buildMemoryContext(
  */
 export function createMemoryPreBuildHook(
   options: MemoryPreBuildOptions = {},
-): import('../../PromptSystem.js').PreBuildHook {
+): import('../PromptSystem.js').PreBuildHook {
   return async () => {
     const extension = buildMemoryContext(options)
     return { promptContextExtension: extension }

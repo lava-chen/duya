@@ -15,7 +15,7 @@
  */
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createMemoryPreBuildHook } from '../../../../src/prompts/sections/dynamic/memoryPreBuildHook.js';
+import { createMemoryPreBuildHook } from '../../../../src/prompts/dynamic/memoryPreBuildHook.js';
 import { HbsPromptSystem } from '../../../../src/prompts/hbs/HbsPromptSystem.js';
 import type { PromptContext } from '../../../../src/prompts/types.js';
 

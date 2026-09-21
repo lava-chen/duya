@@ -26,8 +26,8 @@
  */
 
 import type { PromptSystemConfig } from '../PromptSystem.js'
-import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
-import { createEnvironmentPreBuildHook } from '../sections/dynamic/environmentPreBuildHook.js'
+import { initializeAgentsMd } from '../dynamic/agentsMdSection.js'
+import { createEnvironmentPreBuildHook } from '../dynamic/environmentPreBuildHook.js'
 
 // Dynamic sections — recomputed every call via registry module refs.
 export const botConfig: PromptSystemConfig = {

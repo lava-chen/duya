@@ -6,10 +6,6 @@ import type { PromptSkill } from '../../../src/skills/types.js'
 import { getSkillRegistry, resetSkillRegistry } from '../../../src/skills/registry.js'
 import { PromptsRegistry } from '../../../src/prompts/registry.js'
 import { HbsPromptSystem } from '../../../src/prompts/hbs/HbsPromptSystem.js'
-import {
-  formatSkillCatalog,
-  getSkillsMetadataSection,
-} from '../../../src/prompts/sections/dynamic/skillsMetadata.js'
 import type { PromptContext } from '../../../src/prompts/types.js'
 
 const hbs = new HbsPromptSystem({
@@ -22,6 +18,13 @@ const getProjectInstructionsSection = () =>
   hbs.renderModule('projectInstructions', context()).trim()
 const getSystemSection = (ctx: PromptContext) =>
   hbs.renderModule('systemCoding', ctx).trim()
+// Plan 560: the skills catalog body is fully owned by `dynamic/skills-metadata.hbs`.
+// The mapper (`buildSkillsCatalogContext` in `hbs/HbsPromptSystem.ts`) reads
+// the registry synchronously and feeds the template precomputed per-skill
+// fields. Routing the section through `renderStaticTemplate` exercises the
+// production path end-to-end.
+const renderSkillsSection = (ctx: PromptContext = context()) =>
+  hbs.renderStaticTemplate('dynamic/skills-metadata.hbs', ctx).trim()
 
 function context(enabledTools: string[] = []): PromptContext {
   return {
@@ -76,13 +79,20 @@ describe('prompt structure regressions', () => {
       description: 'A'.repeat(180),
       skillRoot: 'E:\\skills\\long-skill',
     } as PromptSkill
+    getSkillRegistry().register(skill)
 
-    const catalog = formatSkillCatalog([skill])
+    const catalog = renderSkillsSection(context())
+    expect(catalog).toContain('<available_skills>')
     expect(catalog).toContain('<name>long-skill</name>')
     expect(catalog).toContain('<description>')
-    expect(catalog).toContain('<location>E:\\skills\\long-skill\\SKILL.md</location>')
-    expect(catalog).toContain('<available_skills>')
-    expect(getSkillsMetadataSection(context())).toBeNull()
+    // `path.join` is platform-aware; on Windows the `E:\\skills\\...`
+    // input becomes `E:\\skills\\long-skill\\SKILL.md`. Match the
+    // structural path components rather than the exact separator.
+    expect(catalog).toMatch(/<location>E:.*long-skill[\\\/]+SKILL\.md<\/location>/)
+
+    // Empty registry → section body collapses to '' → omitted.
+    resetSkillRegistry()
+    expect(renderSkillsSection(context())).toBe('')
   })
 
   it('lists only skills the model can load through the exposed Skill or read tool', () => {
@@ -98,7 +108,7 @@ describe('prompt structure regressions', () => {
     registry.register({ ...base, name: 'manual-only', disableModelInvocation: true })
     registry.register({ ...base, name: 'disabled', isEnabled: () => false })
 
-    const catalog = getSkillsMetadataSection(context(['Skill']))
+    const catalog = renderSkillsSection(context(['Skill']))
 
     expect(catalog).toContain('<name>available</name>')
     expect(catalog).not.toContain('<name>hidden</name>')

@@ -23,12 +23,18 @@
  * parity test never touches the real session database.
  */
 
-import type { PromptContext } from '../../types.js'
-import type { PreBuildHook } from '../../PromptSystem.js'
-import { loadRecentSessionDirectory } from '../../../session/recent-session-directory.js'
-import type { RecentSessionDirectory } from '../../../session/recent-session-directory.js'
+import type { PromptContext } from '../types.js'
+import type { PreBuildHook } from '../PromptSystem.js'
+import { loadRecentSessionDirectory } from '../../session/recent-session-directory.js'
+import type { RecentSessionDirectory } from '../../session/recent-session-directory.js'
 import { serializeEntry } from './recentSessionsSection.js'
-import type { RecentSessionDirectoryLoader } from './recentSessionsSection.js'
+
+/** Shape of the directory loader the preBuildHook accepts; matches
+ * `loadRecentSessionDirectory` (Plan 560: the type used to live next to
+ * `getRecentSessionsSection`, which is gone now). */
+export type RecentSessionDirectoryLoader = (
+  input: Parameters<typeof loadRecentSessionDirectory>[0],
+) => Promise<RecentSessionDirectory>
 
 export interface RecentSessionsPreBuildOptions {
   /** Override the directory loader. Default: `loadRecentSessionDirectory`. */

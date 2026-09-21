@@ -1,16 +1,76 @@
 {{!--
-  Skill catalog — Plan 550 1d-rest.
+  Skill catalog — Plan 550 1d-rest → Plan 560 (hbs-native).
 
-  The full body (XML `<available_skills>` block + optional
-  `### Skill roots` table + trailing usage line) is produced by
-  `formatSkillCatalog(skills)` in `sections/dynamic/skillsMetadata.ts`,
-  with the tier (`full` / `compact` / `alias-only`) selected via
-  `pickCatalogTier` against the 1500-token budget.
+  The whole body lives here. The mapper in `HbsPromptSystem.ts` precomputes
+  per-skill fields (clamped description, location, group / tier booleans) and
+  the budget-driven `show_description` / `show_location` flags so this
+  template stays pure markup — no `{{#if}}` logic other than "render this
+  field or omit it". Plan 551 D3: templates branch on precomputed booleans
+  supplied by the mapper, not on new Handlebars helpers.
 
-  The .hbs is a thin pass-through: the mapper calls
-  `getSkillsMetadataSection(ctx)` synchronously and substitutes the
-  result. Empty / omitted sections render `''`, and
-  `renderSectionCompute`'s `out === '' ? null : out` collapses that to
-  `null`, matching the legacy short-circuit.
+  Tier selection (`full` / `compact` / `alias-only`) lives in
+  `dynamic/skillsMetadata.ts`'s `pickCatalogTier`; the mapper applies it
+  to every skill and feeds the matching booleans here.
+
+  Skill-roots table is a fallback for the alias-only tier: when the body
+  drops `<location>` to fit the budget, the table gives the model an
+  absolute-path → name index so it can resolve names via the read tool
+  without invoking the Skill tool.
 --}}
-{{#if skill_catalog_body}}{{skill_catalog_body}}{{/if}}
+{{#if skill_catalog_enabled}}
+## Available skills
+
+<available_skills>
+{{#if has_system_skills}}
+  <!-- System (DUYA itself) -->
+{{#each system_skills}}
+  <skill>
+    <name>{{name}}</name>
+{{#if show_description}}
+    <description>{{description}}</description>
+{{/if}}
+{{#if show_location}}
+{{#if location}}
+    <location>{{location}}</location>
+{{/if}}
+{{/if}}
+  </skill>
+{{/each}}
+{{/if}}
+{{#if has_other_skills}}
+  <!-- Other skills -->
+{{#each other_skills}}
+  <skill>
+    <name>{{name}}</name>
+{{#if show_description}}
+    <description>{{description}}</description>
+{{/if}}
+{{#if show_location}}
+{{#if location}}
+    <location>{{location}}</location>
+{{/if}}
+{{/if}}
+  </skill>
+{{/each}}
+{{/if}}
+{{#if load_diagnostics_line}}
+  {{{load_diagnostics_line}}}
+{{/if}}
+</available_skills>
+{{#if show_skill_roots}}
+
+### Skill roots
+
+When the catalog drops a `<location>` to fit the token budget, look it up here. Reading the path with the read tool is preferred over the `Skill` tool (fallback).
+
+| Skill | Source |
+|---|---|
+{{#each skill_roots}}
+| {{name}} | {{location}} |
+{{/each}}
+{{/if}}
+
+Load a skill by reading its <location> with the read tool; the `Skill` tool is a fallback that loads the same instructions by name. This index is not a substitute for the selected skill's SKILL.md.
+
+This catalog is the complete, authoritative list of installed skills for this session. When the user asks what skills you have, what you can do, or which skill fits a task, answer directly from it — do not run CLI commands (such as `duya skill list`), enumerate skill directories, or query any other source to re-discover skills. CLI skill commands exist for the user's terminal-side management (install / enable / disable), not for your inventory answers.
+{{/if}}

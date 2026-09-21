@@ -1,25 +1,21 @@
 /**
- * Environment Section - Dynamic Runtime Information
+ * Environment section — Plan 560 utilities only.
  *
- * Plan 550 1d-rest: this file now exposes both the legacy TS path
- * (`getEnvironmentSection`) and the helpers the `.hbs` mapper needs
- * (`buildEnvironmentItems`, `getShellInfoLine`, `formatCurrentDateTime`,
- * `getUnameSR`, `getMarketingNameForModel`, `getKnowledgeCutoff`).
+ * The full body (header + ` - `-prefixed items) is rendered by
+ * `assets/dynamic/environment.hbs` through the mapper in
+ * `hbs/HbsPromptSystem.ts` (which calls `buildEnvironmentItems` here to
+ * produce the `{{#each env_items}}` array). This module is purely the
+ * data-builder + per-line helpers the mapper needs; no prose lives here.
  *
- * The mapper in `hbs/HbsPromptSystem.ts` calls `buildEnvironmentItems`
- * to produce a `string[]` that the `{{#each}}` block in
- * `assets/dynamic/environment.hbs` renders. The legacy TS path keeps
- * the same public surface so unit tests and direct callers still work
- * without the preBuildHook.
- *
- * Byte-level parity between the TS path and the .hbs path is locked by
- * `tests/unit/prompts/hbs/environment-1d-rest.test.ts`. Both paths share
- * `buildEnvironmentItems` so any drift surfaces immediately.
+ * Plan 550 1d-rest produced both a TS path (`getEnvironmentSection`) and
+ * an .hbs path with a byte-parity test between them. Plan 560 deletes
+ * the TS path because every prompt text belongs in `assets/`, leaving
+ * only the shared utilities the mapper + preBuildHook call.
  */
 
-import type { PromptContext } from '../../types.js'
-import { KNOWLEDGE_CUTOFFS } from '../../types.js'
-import { hasUnixCompatibleShell } from '../../../utils/shellDetector.js'
+import type { PromptContext } from '../types.js'
+import { KNOWLEDGE_CUTOFFS } from '../types.js'
+import { hasUnixCompatibleShell } from '../../utils/shellDetector.js'
 
 /** Best-effort model marketing name from a wire model id. */
 export function getMarketingNameForModel(modelId: string | undefined): string | null {
@@ -194,17 +190,4 @@ export function buildEnvironmentItems(ctx: PromptContext): string[] {
   ].filter(item => item !== null)
 
   return envItems as string[]
-}
-
-/**
- * Legacy TS path — kept for the unit tests that exercise `getEnvironmentSection`
- * directly, plus any caller that hasn't migrated to the preBuildHook + .hbs
- * pipeline. Wraps `buildEnvironmentItems` with the `Environment` header
- * and the ` - ` item prefix.
- */
-export async function getEnvironmentSection(ctx: PromptContext): Promise<string> {
-  return `# Environment
-
-You have been invoked in the following environment:
-${buildEnvironmentItems(ctx).map(item => ` - ${item}`).join('\n')}`
 }

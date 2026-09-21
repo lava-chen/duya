@@ -7,7 +7,7 @@
  * on the system-prefix cache breakpoint.
  */
 
-import { getAgentsMdManager } from '../../../agentsmd/index.js'
+import { getAgentsMdManager } from '../../agentsmd/index.js'
 
 /**
  * Refresh AGENTS.md at a task/prompt-build boundary.

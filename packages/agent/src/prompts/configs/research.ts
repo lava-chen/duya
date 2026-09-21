@@ -13,8 +13,8 @@
  */
 
 import type { PromptSystemConfig } from '../PromptSystem.js'
-import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
-import { createRecentSessionsPreBuildHook } from '../sections/dynamic/recentSessionsPreBuildHook.js'
+import { initializeAgentsMd } from '../dynamic/agentsMdSection.js'
+import { createRecentSessionsPreBuildHook } from '../dynamic/recentSessionsPreBuildHook.js'
 
 // Research-specific dynamic sections
 import { resolveResearchIntent } from '../research/intentRouter.js'

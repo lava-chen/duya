@@ -14,7 +14,7 @@ const initSpy = vi.hoisted(() => ({
   fn: vi.fn(async () => false),
 }));
 
-vi.mock('../../../src/prompts/sections/dynamic/agentsMdSection.js', () => ({
+vi.mock('../../../src/prompts/dynamic/agentsMdSection.js', () => ({
   initializeAgentsMd: initSpy.fn,
 }));
 

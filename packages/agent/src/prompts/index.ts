@@ -56,10 +56,9 @@ export type { ResearchTaskIntent, ResearchPromptRuntimeContext } from './researc
 // in the module registry, `prompts/modules/registry.ts`.)
 
 // Dynamic Sections
-export { getEnvironmentSection } from './sections/dynamic/environment.js'
-export { getSkillsMetadataSection } from './sections/dynamic/skillsMetadata.js'
-export { initializeAgentsMd } from './sections/dynamic/agentsMdSection.js'
-export { getRecentSessionsSection } from './sections/dynamic/recentSessionsSection.js'
+// Plan 560: every section's prompt text lives in `assets/dynamic/*.hbs`;
+// the TS side only exposes precompute hooks (preBuildHooks, utilities).
+export { initializeAgentsMd } from './dynamic/agentsMdSection.js'
 
 // Platform Hints
 export { getPlatformHint, PLATFORM_HINTS } from './platformHints.js'

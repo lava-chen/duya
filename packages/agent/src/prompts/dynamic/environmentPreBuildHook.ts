@@ -29,8 +29,8 @@
 
 import * as fs from 'node:fs/promises'
 import { type as osType, version as osVersion, release as osRelease } from 'node:os'
-import type { PromptContext } from '../../types.js'
-import type { PreBuildHook } from '../../PromptSystem.js'
+import type { PromptContext } from '../types.js'
+import type { PreBuildHook } from '../PromptSystem.js'
 import { getMarketingNameForModel, getKnowledgeCutoff } from './environment.js'
 
 export interface EnvironmentPreBuildOptions {
