@@ -137,6 +137,22 @@ export async function performGracefulShutdown(): Promise<void> {
     logger.error('Error shutting down memory worker', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
   }
 
+  // 6.7 Stop an in-flight recording and release the badge window
+  // (Plan 556 Phase 5). A recording left running would keep its hook
+  // worker and UIA probe alive past shutdown and never write the
+  // session's endedAt.
+  try {
+    const [{ getRecorderService }, { hideRecorderBadge }] = await Promise.all([
+      import('../services/recorder/service'),
+      import('../services/recorder/badge'),
+    ]);
+    await getRecorderService().dispose();
+    hideRecorderBadge();
+    logger.info('Recorder stopped', undefined, 'Main');
+  } catch (err) {
+    logger.error('Error stopping recorder', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
+
   // 7. ConfigStore needs no explicit shutdown — set() persists atomically
   // and there is no auto-save timer to stop. (The legacy ConfigManager's
   // shutdown() closed its subscription ports; that code path is gone.)

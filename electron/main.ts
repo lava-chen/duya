@@ -75,6 +75,8 @@ import { registerProjectDatabaseHandlers } from './ipc/project-database-handlers
 import { registerProjectEntityHandlers } from './ipc/project-entity-handlers';
 import { registerGitHandlers } from './ipc/git-handlers';
 import { registerWorkflowHandlers } from './ipc/workflow-handlers';
+// Plan 556 Phase 5: event recorder IPC + recording badge.
+import { registerRecorderHandlers } from './ipc/recorder-handlers';
 import { registerVoiceHandlers } from './ipc/voice-handlers';
 import { registerHooksHandlers } from './ipc/hooks-handlers';
 import { registerMcpReloadIpcHandler } from './ipc/mcp-handlers';
@@ -1251,6 +1253,8 @@ registerBrowserCookieHandlers();
 registerGitHandlers();
 // Plan 552 Phase 7: workflow console reads (run list / journal).
 registerWorkflowHandlers();
+// Plan 556 Phase 5: recorder control + session library + badge overlay.
+registerRecorderHandlers();
 registerBotChannelHandlers();
 registerGroupHandlers();
 registerBotHandlers();

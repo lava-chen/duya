@@ -1374,6 +1374,18 @@ export interface ElectronAPI {
       delete: (payload: { name: string; scope?: string; projectDir?: string }) => Promise<{ ok: boolean; error?: string }>
     }
   }
+  /** Plan 556 Phase 5: event recorder control + session library. */
+  recorder: {
+    start: () => Promise<{ ok: boolean; status?: unknown; error?: string }>
+    stop: () => Promise<{ ok: boolean; summary?: unknown; error?: string }>
+    cancel: () => Promise<{ ok: boolean; error?: string }>
+    status: () => Promise<unknown>
+    listSessions: () => Promise<unknown[]>
+    getSession: (sessionId: string) => Promise<unknown>
+    deleteSession: (sessionId: string) => Promise<{ ok: boolean; error?: string }>
+    convert: (payload: { sessionId: string; name?: string; description?: string }) => Promise<unknown>
+    onStatusChanged: (callback: (snapshot: unknown) => void) => () => void
+  }
   project: ProjectAPI
   lock: LockAPI
   net: NetAPI
@@ -2351,6 +2363,24 @@ const electronAPI: ElectronAPI = {
         ipcRenderer.invoke('workflow:defs:update', payload),
       delete: (payload: { name: string; scope?: string; projectDir?: string }) =>
         ipcRenderer.invoke('workflow:defs:delete', payload),
+    },
+  },
+  recorder: {
+    start: () => ipcRenderer.invoke('recorder:start'),
+    stop: () => ipcRenderer.invoke('recorder:stop'),
+    cancel: () => ipcRenderer.invoke('recorder:cancel'),
+    status: () => ipcRenderer.invoke('recorder:status'),
+    listSessions: () => ipcRenderer.invoke('recorder:list-sessions'),
+    getSession: (sessionId: string) => ipcRenderer.invoke('recorder:get-session', sessionId),
+    deleteSession: (sessionId: string) => ipcRenderer.invoke('recorder:delete-session', sessionId),
+    convert: (payload: { sessionId: string; name?: string; description?: string }) =>
+      ipcRenderer.invoke('recorder:convert', payload),
+    onStatusChanged: (callback: (snapshot: unknown) => void) => {
+      const listener = (_event: unknown, snapshot: unknown) => callback(snapshot);
+      ipcRenderer.on('recorder:status-changed', listener);
+      return () => {
+        ipcRenderer.removeListener('recorder:status-changed', listener);
+      };
     },
   },
   toolApproval: {

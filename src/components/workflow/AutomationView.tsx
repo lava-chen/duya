@@ -193,6 +193,13 @@ export interface AutomationViewProps {
   onOpenDetail?: (name: string, scope: 'global' | 'project', projectDir?: string) => void;
   /** Optional project display name for the project group. */
   projectName?: string;
+  /**
+   * Render only the content, without the PageFrame/PageHeader shell —
+   * used when a parent page (AutomationPage) owns the header and the
+   * tab bar. Vertical rhythm matches `.page-frame-inner` so the switch
+   * is visually seamless.
+   */
+  embedded?: boolean;
 }
 
 export function AutomationView({
@@ -200,6 +207,7 @@ export function AutomationView({
   onCreateViaConversation,
   onOpenDetail,
   projectName,
+  embedded = false,
 }: AutomationViewProps) {
   const { t } = useTranslation();
   const [defs, setDefs] = useState<WorkflowDefinitionSummary[]>([]);
@@ -306,38 +314,8 @@ export function AutomationView({
     );
   };
 
-  return (
-    <PageFrame>
-      <PageHeader
-        title={
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2, 8px)' }}>
-            <RepeatIcon size={18} />
-            {t('nav.workflow')}
-          </span>
-        }
-        actions={
-          <button
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '4px',
-              padding: '6px 10px',
-              background: 'transparent',
-              color: 'var(--text-faint)',
-              border: '1px solid var(--border-weak)',
-              borderRadius: '6px',
-              cursor: 'pointer',
-            }}
-            onClick={reload}
-            aria-label="refresh"
-          >
-            <IconRefresh size={14} />
-          </button>
-        }
-      />
-
-      <div style={mottoStyle}>{t('automation.motto')}</div>
-
+  const content = (
+    <>
       {error && (
         <PageCard>
           <EmptyState
@@ -430,6 +408,53 @@ export function AutomationView({
           <div style={cardGridStyle}>{projectDefs.map(renderCard)}</div>
         </div>
       )}
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div
+        data-testid="automation-view-embedded"
+        style={{ display: 'flex', flexDirection: 'column', gap: 'var(--page-gap, 16px)' }}
+      >
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <PageFrame>
+      <PageHeader
+        title={
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2, 8px)' }}>
+            <RepeatIcon size={18} />
+            {t('nav.workflow')}
+          </span>
+        }
+        actions={
+          <button
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '6px 10px',
+              background: 'transparent',
+              color: 'var(--text-faint)',
+              border: '1px solid var(--border-weak)',
+              borderRadius: '6px',
+              cursor: 'pointer',
+            }}
+            onClick={reload}
+            aria-label="refresh"
+          >
+            <IconRefresh size={14} />
+          </button>
+        }
+      />
+
+      <div style={mottoStyle}>{t('automation.motto')}</div>
+
+      {content}
     </PageFrame>
   );
 }
