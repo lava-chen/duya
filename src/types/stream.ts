@@ -104,6 +104,46 @@ export interface ResearchUpdatedEvent {
   history?: ReadonlyArray<{ at: number; event: string; detail?: string }>;
 }
 
+/** Lifecycle kind of a workflow-run SSE frame (plan 552 ZCode parity). */
+export type WorkflowRunEventKind = 'start' | 'progress' | 'done' | 'error';
+
+/**
+ * Renderer-facing snapshot of a workflow run. Deliberately shallow and
+ * honest-to-source: every numeric field is only present when the runner has a
+ * real value (see "数字诚实" — renderers draw "—" for absent numbers, never a
+ * fabricated 0).
+ */
+export interface WorkflowRunSse {
+  runId: string;
+  workflowName: string;
+  /** ManagedRun status: active | complete | failed | cancelled | interrupted. */
+  status: string;
+  /** Current stage label (e.g. "planning", "executing <node>"). */
+  phase?: string;
+  startedAt: number;
+  finishedAt?: number;
+  /** Running token total, if the runner tracks usage. */
+  tokens?: number;
+  subagents?: number;
+  /** Number of phases the definition declared / executed. */
+  phases?: number;
+  /** Present on a terminal non-success status. */
+  stoppedReason?: string;
+  /** True when the run can be resumed (waiting/paused). */
+  resumable?: boolean;
+  error?: string;
+}
+
+/**
+ * Payload delivered to the renderer's `workflow_run` SSE dispatch (router.ts
+ * strips the worker `chat:workflow_run` transport type and forwards the flat
+ * `{ event, run }` snapshot as `{ type:'workflow_run', data: { event, run } }`).
+ */
+export interface WorkflowRunSseEvent {
+  event: WorkflowRunEventKind;
+  run: WorkflowRunSse;
+}
+
 /**
  * Permission request event sent via SSE
  */

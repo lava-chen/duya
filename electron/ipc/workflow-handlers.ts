@@ -176,7 +176,7 @@ export function registerWorkflowHandlers(): void {
    */
   ipcMain.handle(
     'workflow:run',
-    async (_e, payload: { name: string; params?: Record<string, unknown>; projectDir?: string }) => {
+    async (_e, payload: { name: string; sessionId?: string; params?: Record<string, unknown>; projectDir?: string }) => {
       const logger = getLogger();
       const port = getAgentServerPort();
       if (!port) {
@@ -186,6 +186,10 @@ export function registerWorkflowHandlers(): void {
       return new Promise((resolve) => {
         const body = JSON.stringify({
           name: payload.name,
+          // Anchor the ZCode run card into the launching session's stream: the
+          // agent server routes the run to that session's worker, whose
+          // chat:workflow_run frames reach the same SSE channel as chat:* text.
+          sessionId: payload.sessionId,
           params: payload.params ?? {},
           projectDir: payload.projectDir,
         });

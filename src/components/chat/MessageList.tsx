@@ -9,6 +9,7 @@ import { StreamingMessage } from './StreamingMessage';
 import { NextStepSuggestions } from './NextStepSuggestions';
 import { Button } from '@/components/ui/Button';
 import { ChevronDownIcon } from '@/components/icons';
+import { WorkflowRunStream } from '@/components/workflow/WorkflowRunCard';
 import { useFocusModeStore, selectFocusEnabled } from '@/stores/focus-mode-store';
 
 export interface MessageListRef {
@@ -1188,6 +1189,11 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
             isFinalizing={isFinalizing}
           />
         )}
+
+        {/* Live workflow run cards — plan 552: rendered inline at the tail of
+            the current turn so a run launched by the assistant shows its
+            ZCode-style card in-stream. Renders nothing when no run is active. */}
+        <WorkflowRunStream sessionId={sessionId} />
 
         {/* Compaction status is rendered inline where it happened via the
             live streaming `compact` action row (and durably via the

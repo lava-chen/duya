@@ -15,7 +15,7 @@ import type {
   ResearchPersistedSource,
   ResearchReportArtifact,
 } from '@/types/research';
-import type { PermissionRequestEvent, ModeChangedEvent, GoalUpdatedEvent, ResearchUpdatedEvent } from '@/types/stream';
+import type { PermissionRequestEvent, ModeChangedEvent, GoalUpdatedEvent, ResearchUpdatedEvent, WorkflowRunSseEvent } from '@/types/stream';
 import { STREAM_IDLE_TIMEOUT_MS } from './constants';
 import { extractPartialToolFields } from './streaming-tool-input';
 import { showMessageCompletionNotification } from './notification';
@@ -663,6 +663,8 @@ interface SessionState {
   goalUpdatedListeners: Set<(event: GoalUpdatedEvent) => void>;
   /** Plan 423 Phase 3: listeners for research tracker state broadcasts. */
   researchUpdatedListeners: Set<(event: ResearchUpdatedEvent) => void>;
+  /** Plan 552: listeners for workflow-run SSE frames (`{ event, run }`). */
+  workflowRunListeners: Set<(data: WorkflowRunSseEvent) => void>;
   /**
    * Current research lifecycle state (e.g. clarifying / planning / gathering /
    * evaluating / synthesizing). Updated whenever a `research_updated` event
@@ -762,7 +764,7 @@ interface ResearchSessionState extends ResearchSessionSnapshot {
   listeners: Set<(snapshot: ResearchSessionSnapshot) => void>;
 }
 
-function createInitialState(sessionId: string): Omit<SessionState, 'listeners' | 'fieldListeners' | 'streamingEventsListeners' | 'permissionListeners' | 'authRequiredListeners' | 'modeChangedListeners' | 'goalUpdatedListeners' | 'researchUpdatedListeners' | 'dbPersistedListeners' | 'idleTimeout' | 'textEmitTimeout' | 'pendingTextEmit' | 'partialToolInputRaw' | 'partialInputFlushTimer' | 'sendRetryMessage' | 'thinkingEmitTimeout' | 'pendingThinkingEmit'> {
+function createInitialState(sessionId: string): Omit<SessionState, 'listeners' | 'fieldListeners' | 'streamingEventsListeners' | 'permissionListeners' | 'authRequiredListeners' | 'modeChangedListeners' | 'goalUpdatedListeners' | 'researchUpdatedListeners' | 'workflowRunListeners' | 'dbPersistedListeners' | 'idleTimeout' | 'textEmitTimeout' | 'pendingTextEmit' | 'partialToolInputRaw' | 'partialInputFlushTimer' | 'sendRetryMessage' | 'thinkingEmitTimeout' | 'pendingThinkingEmit'> {
   return {
     sessionId,
     currentStreamId: null,
@@ -1113,6 +1115,7 @@ export class StreamSessionManager {
         modeChangedListeners: new Set(),
         goalUpdatedListeners: new Set(),
         researchUpdatedListeners: new Set(),
+        workflowRunListeners: new Set(),
         dbPersistedListeners: new Set(),
         idleTimeout: null,
         textEmitTimeout: null,
@@ -2098,6 +2101,14 @@ export class StreamSessionManager {
           );
           break;
 
+        case 'workflow_run':
+          this.handleWorkflowRunEvent(
+            sessionId,
+            streamId,
+            (event.data ?? event) as unknown as WorkflowRunSseEvent | undefined,
+          );
+          break;
+
         case 'db:request':
           // Forward DB requests to agent server via IPC - don't handle here
           this.handleAgentServerEvent(s, streamId, event);
@@ -2827,6 +2838,29 @@ export class StreamSessionManager {
     });
   }
 
+  /**
+   * Plan 552 §14: workflow-run SSE bridge (start / progress / done / error).
+   * Notifies registered listeners so the store can upsert / finalize the run
+   * snapshot and the message stream can render the ZCode-style workflow card.
+   * The event is the router-forwarded `{ event, run }` payload.
+   */
+  private handleWorkflowRunEvent(
+    sessionId: string,
+    streamId: string,
+    data: WorkflowRunSseEvent | undefined
+  ): void {
+    if (!data?.run?.runId) return;
+    const s = this.sessions.get(sessionId);
+    if (!s || !this.isCurrentStream(sessionId, streamId)) return;
+    s.workflowRunListeners.forEach((listener) => {
+      try {
+        listener(data as WorkflowRunSseEvent);
+      } catch (error) {
+        console.error(`[stream-session-manager] Workflow run listener error for ${sessionId}:`, error);
+      }
+    });
+  }
+
   private handleDoneEvent(sessionId: string, streamId: string, data?: { reason?: string }): void {
     console.log(`[stream-session-manager] handleDoneEvent: ${sessionId.slice(0, 8)}, streamId=${streamId.slice(0, 8)}, reason=${data?.reason ?? 'completed'}`);
     const s = this.sessions.get(sessionId);
@@ -3355,6 +3389,21 @@ export class StreamSessionManager {
     };
   }
 
+  /**
+   * Plan 552 §14: subscribe to workflow-run SSE broadcasts (ZCode-style card).
+   * Events are transient — a re-mount simply waits for the next frame.
+   */
+  subscribeToWorkflowRun(
+    sessionId: string,
+    listener: (data: WorkflowRunSseEvent) => void
+  ): () => void {
+    const state = this.getOrCreateState(sessionId);
+    state.workflowRunListeners.add(listener);
+    return () => {
+      state.workflowRunListeners.delete(listener);
+    };
+  }
+
   subscribeToDbPersisted(
     sessionId: string,
     listener: (event: PersistEvent) => void
@@ -3407,6 +3456,7 @@ export class StreamSessionManager {
       modeChangedListeners: new Set(),
       goalUpdatedListeners: new Set(),
         researchUpdatedListeners: new Set(),
+      workflowRunListeners: new Set(),
       dbPersistedListeners: new Set(),
       idleTimeout: null,
       textEmitTimeout: null,
@@ -4551,6 +4601,8 @@ export const subscribeToGoalUpdated = (sessionId: string, listener: (event: Goal
   streamSessionManager.subscribeToGoalUpdated(sessionId, listener);
 export const subscribeToResearchUpdated = (sessionId: string, listener: (event: ResearchUpdatedEvent) => void) =>
   streamSessionManager.subscribeToResearchUpdated(sessionId, listener);
+export const subscribeToWorkflowRun = (sessionId: string, listener: (data: WorkflowRunSseEvent) => void) =>
+  streamSessionManager.subscribeToWorkflowRun(sessionId, listener);
 export const subscribeToDbPersisted = (sessionId: string, listener: (event: PersistEvent) => void) =>
   streamSessionManager.subscribeToDbPersisted(sessionId, listener);
 export const getSnapshot = (sessionId: string) => streamSessionManager.getSnapshot(sessionId);

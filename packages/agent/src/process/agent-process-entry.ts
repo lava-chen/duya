@@ -79,7 +79,8 @@ import { browserTool } from '../tool/builtin.js';
 import { getBashTaskRegistry } from '../session/bash-task-registry.js';
 import { hookTaskRegistry } from '../hooks/task-registry.js';
 import { backgroundAgentLifecycle } from '../lifecycle/BackgroundAgentLifecycle.js';
-import { sendEvent, parseStdin, type WorkerCommand } from './worker-protocol.js';
+import { sendEvent, parseStdin, type WorkerCommand, buildWorkflowRunEvent } from './worker-protocol.js';
+import { runWorkflow, type WorkflowRunRequest } from './workflow-runner.js';
 import { resolveChatStartAgentMode } from './permission-profile-bridge.js';
 import { applyMCPConfiguration, type MCPApplyResult } from '../mcp/apply.js';
 import { storePendingAnswer } from '../tool/AskUserQuestionTool/AskUserQuestionTool.js';
@@ -4145,6 +4146,42 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
           // (inventory + issues + active keys) goes out as a
           // single `mcp:status:snapshot` event.
           sendToMain(buildMcpStatusSnapshot());
+          break;
+        }
+
+        case 'workflow:run': {
+          // Plan 552 §14: worker-side workflow SSE bridge. Dispatched by the
+          // agent server's POST /workflow/:name/trigger route targeting THIS
+          // session's worker. Fire-and-forget; every lifecycle frame flows out
+          // through the same worker→router→SSE channel as goal_updated, so the
+          // renderer's `workflow_run` case slots the card into this session.
+          const wf = msg as unknown as WorkflowRunRequest & { sessionId: string };
+          log('[Agent-Process] Received workflow:run', { sessionId, runId: wf.runId, workflowName: wf.workflowName });
+          void runWorkflow(
+            { sessionId: wf.sessionId, emit: sendToMain as (msg: unknown) => void },
+            {
+              runId: wf.runId,
+              workflowName: wf.workflowName,
+              phases: wf.phases,
+              tokens: wf.tokens,
+              subagents: wf.subagents,
+              failAt: wf.failAt,
+              resumable: wf.resumable,
+            },
+          ).catch((err) => {
+            warn('[Agent-Process] workflow:run failed:', err);
+            sendToMain(
+              buildWorkflowRunEvent(wf.sessionId, 'error', {
+                runId: wf.runId ?? 'unstarted',
+                workflowName: wf.workflowName ?? 'unknown',
+                status: 'failed',
+                startedAt: Date.now(),
+                finishedAt: Date.now(),
+                error: err instanceof Error ? err.message : String(err),
+                stoppedReason: 'unknown',
+              }) as unknown as Record<string, unknown>,
+            );
+          });
           break;
         }
 

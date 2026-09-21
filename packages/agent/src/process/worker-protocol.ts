@@ -425,6 +425,59 @@ export interface ClipboardWriteEvent {
   text: string;
 }
 
+/** Lifecycle kind of a workflow-run SSE frame (plan 552 ZCode parity). */
+export type WorkflowRunEventKind = 'start' | 'progress' | 'done' | 'error';
+
+/**
+ * Renderer-facing snapshot of a workflow run. Deliberately shallow and
+ * honest-to-source: every numeric field is only present when the runner has
+ * a real value (see "数字诚实" — renderers draw "—" for absent numbers, never
+ * a fabricated 0).
+ */
+export interface WorkflowRunSse {
+  runId: string;
+  workflowName: string;
+  /** ManagedRun status: active | complete | failed | cancelled | interrupted. */
+  status: string;
+  /** Current stage label (e.g. "planning", "executing <node>"). */
+  phase?: string;
+  startedAt: number;
+  finishedAt?: number;
+  /** Running token total, if the runner tracks usage. */
+  tokens?: number;
+  subagents?: number;
+  /** Number of phases the definition declared / executed. */
+  phases?: number;
+  /** Present on a terminal non-success status. */
+  stoppedReason?: string;
+  /** True when the run can be resumed (waiting/paused). */
+  resumable?: boolean;
+  error?: string;
+}
+
+/**
+ * Plan 552 §14: emitted by the worker's workflow runner (SSE bridge) on a
+ * run's start / progress / done / error. Carrying the run snapshot + slot
+ * on the launching session anchors the ZCode-style card in that session's
+ * assistant stream. Forwarded by router.ts as the SSE `workflow_run` event
+ * (via the `chat:workflow_run` branch).
+ */
+export interface WorkflowRunEvent {
+  type: 'chat:workflow_run';
+  sessionId: string;
+  event: WorkflowRunEventKind;
+  run: WorkflowRunSse;
+}
+
+/** Build the worker `chat:workflow_run` payload. */
+export function buildWorkflowRunEvent(
+  sessionId: string,
+  event: WorkflowRunEventKind,
+  run: WorkflowRunSse,
+): WorkflowRunEvent {
+  return { type: 'chat:workflow_run', sessionId, event, run };
+}
+
 export function buildClipboardWriteEvent(sessionId: string, text: string): ClipboardWriteEvent {
   return { type: 'chat:clipboard_write', sessionId, text };
 }

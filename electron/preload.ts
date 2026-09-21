@@ -1356,7 +1356,7 @@ export interface ElectronAPI {
   outputStyle: OutputStyleAPI
   permission: PermissionAPI
   toolApproval: ToolApprovalAPI
-  /** Plan 552 Phase 7: workflow console reads. */
+  /** Plan 552 Phase 7: workflow console. */
   workflow: {
     list: (filter?: { status?: string; workflowName?: string; limit?: number; offset?: number }) => Promise<unknown[]>
     get: (id: string) => Promise<unknown>
@@ -1364,9 +1364,13 @@ export interface ElectronAPI {
     snapshot: (runId: string) => Promise<unknown>
     delete: (id: string) => Promise<boolean>
     cancel: (id: string) => Promise<{ ok: boolean; reason?: string }>
+    run: (payload: { name: string; params?: Record<string, unknown>; projectDir?: string }) => Promise<{ ok: boolean; runId?: string; error?: string }>
     defs: {
       list: (projectDir?: string) => Promise<unknown[]>
       get: (payload: { name: string; projectDir?: string }) => Promise<unknown>
+      create: (payload: { def: unknown; scope?: string; projectDir?: string }) => Promise<{ ok: boolean; file?: string; name?: string; error?: string }>
+      update: (payload: { name: string; def: unknown; scope?: string; projectDir?: string }) => Promise<{ ok: boolean; file?: string; name?: string; error?: string }>
+      delete: (payload: { name: string; scope?: string; projectDir?: string }) => Promise<{ ok: boolean; error?: string }>
     }
   }
   project: ProjectAPI
@@ -2333,9 +2337,17 @@ const electronAPI: ElectronAPI = {
     snapshot: (runId: string) => ipcRenderer.invoke('workflow:snapshot', runId),
     delete: (id: string) => ipcRenderer.invoke('workflow:delete', id),
     cancel: (id: string) => ipcRenderer.invoke('workflow:cancel', id),
+    run: (payload: { name: string; sessionId?: string; params?: Record<string, unknown>; projectDir?: string }) =>
+      ipcRenderer.invoke('workflow:run', payload),
     defs: {
       list: (projectDir?: string) => ipcRenderer.invoke('workflow:defs:list', projectDir),
       get: (payload: { name: string; projectDir?: string }) => ipcRenderer.invoke('workflow:defs:get', payload),
+      create: (payload: { def: unknown; scope?: string; projectDir?: string }) =>
+        ipcRenderer.invoke('workflow:defs:create', payload),
+      update: (payload: { name: string; def: unknown; scope?: string; projectDir?: string }) =>
+        ipcRenderer.invoke('workflow:defs:update', payload),
+      delete: (payload: { name: string; scope?: string; projectDir?: string }) =>
+        ipcRenderer.invoke('workflow:defs:delete', payload),
     },
   },
   toolApproval: {

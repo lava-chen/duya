@@ -489,6 +489,13 @@ function normalizeWorkerEvent(event: Record<string, unknown>): Record<string, un
     // chat:* path.
     const { type: _t, ...rest } = event;
     sseEvent = { type: msgType.replace('chat:', ''), data: rest };
+  } else if (msgType === 'chat:workflow_run') {
+    // Plan 552 §14: worker workflow-run SSE bridge. Strip the transport
+    // `type` and forward the flat `{ event, run }` snapshot so the renderer's
+    // stream dispatcher can slot the ZCode-style card into the launching
+    // session (+slot). Ship verbatim — the renderer owns digestion.
+    const { type: _t, ...rest } = event;
+    sseEvent = { type: 'workflow_run', data: rest };
   } else if (msgType === 'chat:done') {
     sseEvent = { type: 'done', data: event };
   } else if (msgType === 'chat:error') {
@@ -2868,6 +2875,58 @@ export function createHandleRequest(
         dispatch(sessionId);
       }).catch(() => {
         dispatch(undefined);
+      });
+      return;
+    }
+
+    // Plan 552 §14: workflow run trigger. Anchored to the launching session:
+    // the body MUST carry the anchor channel's sessionId — the card is
+    // inserted into THAT session's assistant stream, so the runner lives in
+    // that session's worker and its chat:workflow_run frames ride the same
+    // worker→router→SSE path every other chat:* event uses. Mirrors the
+    // /mcp/status (targeted worker: sendCommand) pattern above.
+    if (parts[0] === 'workflow' && parts.length >= 3 && parts[2] === 'trigger' && method === 'POST') {
+      const dispatch = (sessionId: string | undefined, payload: { name?: string; params?: Record<string, unknown> }): void => {
+        const name = payload.name ?? parts[1];
+        if (!sessionId || !name) {
+          sendJson(res, 400, { ok: false, error: 'workflow trigger requires a sessionId and a workflow name' });
+          return;
+        }
+        const runId = randomUUID();
+        const sent = deps.workerManager.sendCommand(sessionId, {
+          type: 'workflow:run',
+          sessionId,
+          runId,
+          workflowName: name,
+          phases: payload.params?.phases as string[] | undefined,
+          tokens: payload.params?.tokens as number | undefined,
+          subagents: payload.params?.subagents as number | undefined,
+          failAt: payload.params?.failAt as number | undefined,
+          resumable: payload.params?.resumable as boolean | undefined,
+        });
+        if (!sent) {
+          sendJson(res, 409, { ok: false, error: 'anchor session worker unavailable', sessionId, runId });
+          return;
+        }
+        httpLogger.info('Workflow run dispatched to session', { sessionId, runId, workflowName: name });
+        sendJson(res, 200, { ok: true, runId, sessionId });
+      };
+      readRequestBody(req).then((body) => {
+        let sessionId: string | undefined;
+        let payload: { name?: string; params?: Record<string, unknown> } = {};
+        if (body) {
+          try {
+            const parsed = JSON.parse(body) as { sessionId?: unknown; name?: unknown; params?: unknown };
+            if (typeof parsed.sessionId === 'string') sessionId = parsed.sessionId;
+            if (typeof parsed.name === 'string') payload.name = parsed.name;
+            if (parsed.params && typeof parsed.params === 'object') payload.params = parsed.params as Record<string, unknown>;
+          } catch {
+            // Malformed JSON: reply 400 below.
+          }
+        }
+        dispatch(sessionId, payload);
+      }).catch(() => {
+        dispatch(undefined, {});
       });
       return;
     }
