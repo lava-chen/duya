@@ -1,6 +1,6 @@
 # Plan 556 — RPA 事件级录制 + Computer-Use 统一框架
 
-> **Status**: Phase 0–2 代码+单测落地（2026-09-21，118/118 单测）；真机三目标验证待人工；Phase 3 起待开工
+> **Status**: Phase 0–3 代码+单测落地（2026-09-21，recorder 118/118 + workflow 簇 135/135）；真机三目标验证待人工；Phase 4 起待开工
 > **Priority**: P0
 > **设计文档**: [docs/design-docs/2026-09-20-rpa-recorder-design.md](../../design-docs/2026-09-20-rpa-recorder-design.md)（技术决策 D1-D6、组件图、失败模式表均以设计文档为准，本 plan 是任务拆解）
 > **定位**: plan 552 workflow 体系的定义生产第三通道。与 454（computer-use mode）、519（harness gaps）、551（Jev decide）、415/552（workflow RPA）共同构成完整的 computer-use 五腿框架（capture / plan / record / execute / verify）。
@@ -118,15 +118,25 @@ duya 已有 workflow 体系（552 Phase 0-7 落地），但定义只能由 LLM �
 
 ### Phase 3 — 事件 → WorkflowDef 转换器
 
-- [ ] `packages/agent/src/modes/workflow/converter.ts`（与 planner.ts 并列的定义生产者）：
-  - [ ] `app_focus` app 变化切 phase（≤8 由 schema 约束，超出 warning + 合并尾部）
-  - [ ] 每 phase 首个交互前注入 `{ do: 'capture' }`
-  - [ ] click → `{ do: 'click', element: 'som:<n>' }` + 节点 annotation 携带 ElementDescriptor
-  - [ ] type → `type_text`（密码脱敏文本照录 + `paramHint: true` 标注）；组合键 → `key`；scroll → `scroll`
-  - [ ] 不可逆检测：元素名/文本命中 planner 同款 `RULE_RISK_RE` 或 controlType ∈ {MenuItem} 命中 → 前插
-        `human` 审批节点（timeout.on_timeout 必填）
-- [ ] 产物走 `validateWorkflow`（与 planner 产物同权、同校验）
-- [ ] Gate：converter 单测（fixture 事件流 → YAML 结构断言 + schema 校验通过 + human 节点插入 case）
+> 2026-09-21 落地注记：schema.ts 节点新增可选 `annotation` 字段（producer 溯源载荷；
+> validate.ts 刻意不扫描它——录制文本是字面量，不是模板）。`RULE_RISK_RE` 从 planner
+> 导出共享（两个定义生产者同一风险分类）。som ref 为 converter 发的全局计数器
+> （som:1, som:2 …），ElementDescriptor 按注 `annotation.som['som:<n>']`（Phase 4
+> matcher 的输入）。附带两处超出映射表的防御：(1) 录入文本含 `${...}` 模板语法时
+> validateWorkflow 会放行 `params.*` 形态（白名单 root）但回放时被静默插值损坏——
+> converter 自带 guard 显式 fail（def 仍返回供预览）；(2) 同 app 焦点往返（alt-tab
+> 瞬游）合并回同一段，无交互的 transit 段丢弃（warning 计数）。17 个新单测，
+> workflow 簇累计 135/135。
+
+- [x] `packages/agent/src/modes/workflow/converter.ts`（与 planner.ts 并列的定义生产者）：
+  - [x] `app_focus` app 变化切 phase（≤8 由 schema 约束，超出 warning + 合并尾部）
+  - [x] 每 phase 首个交互前注入 `{ do: 'capture' }`（browserUrl 变化同样注入，去重防背靠背）
+  - [x] click → `{ do: 'click', element: 'som:<n>' }` + 节点 annotation 携带 ElementDescriptor
+  - [x] type → `type_text`（密码脱敏文本照录 + `paramHint: true` 标注）；组合键 → `key`；scroll → `scroll`
+  - [x] 不可逆检测：元素名/文本命中 planner 同款 `RULE_RISK_RE` 或 controlType ∈ {MenuItem} 命中 → 前插
+        `human` 审批节点（timeout.on_timeout 必填，`fail`）
+- [x] 产物走 `validateWorkflow`（与 planner 产物同权、同校验）
+- [x] Gate：converter 单测（fixture 事件流 → YAML 结构断言 + schema 校验通过 + human 节点插入 case）
 
 ### Phase 4 — 回放匹配 element-matcher
 

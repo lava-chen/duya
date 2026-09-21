@@ -38,7 +38,13 @@ export interface PlannerResult {
   warnings: string[];
 }
 
-const RULE_RISK_RE =
+/**
+ * Irreversible-shaped words in tool names / element labels / typed text.
+ * Shared by the planner's rule prescreen and the recorder converter's
+ * human-node insertion (plan 556 §4.6) so both producers classify risk
+ * identically.
+ */
+export const RULE_RISK_RE =
   /\b(pay|payment|send|post|publish|delete|drop|truncate|write|push|deploy|purchase|transfer|email|message)\b/i;
 
 export const PLANNER_SYSTEM_PROMPT = `You translate an automation goal into a duya workflow definition (strict YAML).

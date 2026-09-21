@@ -200,6 +200,14 @@ const NodeBase = {
   max_retries: z.number().int().min(0).max(3).optional(),
   /** Verification annotation target (plan 552 §2 principle 4). */
   map: MapPrimitiveSchema.optional(),
+  /**
+   * Producer-provenance payload (plan 556 §4.6): definition producers
+   * attach metadata here — the recorder converter stores per-`som:<n>`
+   * recorded ElementDescriptors for the replay-time element-matcher.
+   * Never executed (engine/runners ignore it) and deliberately NOT
+   * template/ref-scanned by validate.ts — recorded text is literal.
+   */
+  annotation: z.record(z.string(), z.unknown()).optional(),
 };
 
 export const WorkflowNodeSchema = z
