@@ -95,6 +95,16 @@ duya 已有 workflow 体系（552 Phase 0-7 落地），但定义只能由 LLM �
       共 52 个新单测全绿（累计 86/86 含 Phase 0）；daemon 既有 11 测回归绿
 - [ ] Gate（真机部分）：electron:dev 真机冒烟（记事本录制出事件流）——待人工验证
 
+> 2026-09-21 修复注记（无头冒烟发现）：上面「前台追踪」这条**实际从未生效**。
+> `getForegroundWindowInfo()` 的 `Add-Type -MemberDefinition` 把 C# 的 DLL 名写成了
+> 单引号 `[DllImport('user32.dll')]`，而 C# 里 `'user32.dll'` 是字符字面量 → Add-Type
+> 报 "too many characters in character literal"，函数被自己的 catch 吞掉后恒返回 null。
+> 连带 `focusWindowViaPowerShell` / `showWindowWithoutFocus` 同款写法一起失效（三处同因）。
+> 后果：`currentApp` 恒为 null → `feedContext()` 回落到空 AppRef → **app_focus 事件永不产生**
+> （转换出的 phase 名为空），且自窗口过滤拿不到 pid 可比对。已改为 PS 单引号串 + C# 双引号
+> 并逐处加注防回归；`scripts/recorder-smoke.cjs` 现在能解析出真实前台进程名。
+> 教训：focus-tracker 的 52 个单测全部走注入 query，**真实 PowerShell 从未被任何测试覆盖**。
+
 ### Phase 2 — UIA 点探测（uia-probe）
 
 > 2026-09-21 落地注记：Mimosa 门禁对新文件任何变量路径 spawn 拦截 → probe 进程同样
