@@ -47,9 +47,9 @@ import { AgentDmGroupChip } from "./bot/AgentDmGroupChip";
 import {
   buildAgentDmChipGroups,
   isAgentDmMarkerMessage,
+  isBotDirectDisplayable,
   type AgentDmChipGroup,
 } from "./bot/agent-dm-pair";
-import { isBotDirectVisibleSource } from "@/lib/ipc-client";
 import { ChevronDownIcon } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { Message } from "@/types/message";
@@ -686,13 +686,13 @@ export function BotDirectChatView({
     const result: BubbleRow[] = [];
     let previousRole: string | null = null;
     for (const message of messages) {
-      if (message.isTaskNotification) continue;
-      // Plan 497 — defense-in-depth mirror of the ingestion filter (App's
-      // message:new handler): hidden-source rows (wake prompts, tool_use,
-      // scratchpad, …) never render, even if a stale store still holds one.
-      if (message.source != null && !isBotDirectVisibleSource(message.source)) {
-        continue;
-      }
+      // Canonical bot-direct display predicate (agent-dm-pair): enforces the
+      // visible-source allowlist AND drops every internal/system row (task
+      // notifications, compaction summary/boundary markers, agent-DM wake
+      // cues) in one place. This row builder, the transcript hook, and the
+      // realtime merge all branch on the same predicate — the earlier four
+      // divergent filters are gone.
+      if (!isBotDirectDisplayable(message)) continue;
       // Plan 477 P4.4: DM marker rows render as their own card type — they
       // do not participate in bubble grouping (previousRole unchanged).
       if (isAgentDmMarkerMessage(message)) {

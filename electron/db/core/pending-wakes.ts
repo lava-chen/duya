@@ -63,7 +63,7 @@ export class PendingWakeStore {
       name: 'create_pending_wakes',
       up: (db) => {
         db.exec(`
-          CREATE TABLE pending_wakes (
+          CREATE TABLE IF NOT EXISTS pending_wakes (
             kind             TEXT NOT NULL,
             work_id          TEXT NOT NULL,
             agent_id         TEXT NOT NULL,
@@ -73,8 +73,8 @@ export class PendingWakeStore {
             quiet_origin_json TEXT,
             PRIMARY KEY (kind, work_id)
           );
-          CREATE INDEX idx_pending_wakes_marked ON pending_wakes(marked_at_ms);
-          CREATE INDEX idx_pending_wakes_agent ON pending_wakes(agent_id);
+          CREATE INDEX IF NOT EXISTS idx_pending_wakes_marked ON pending_wakes(marked_at_ms);
+          CREATE INDEX IF NOT EXISTS idx_pending_wakes_agent ON pending_wakes(agent_id);
         `);
       },
     },

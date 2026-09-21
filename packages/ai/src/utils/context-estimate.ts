@@ -188,13 +188,20 @@ export function estimateMessageTokens(message: {
  * Anthropic reports `input_tokens` EXCLUDING cache read/write; many
  * OpenAI-compatible gateways map `prompt_tokens` (which INCLUDES cached
  * tokens) onto the same field names, so field names alone cannot
- * distinguish the conventions. Heuristic: if any cache counter is at least
- * as large as raw input, the input cannot already contain it — add all
+ * distinguish the conventions. Heuristic: if any cache counter is strictly
+ * larger than raw input, the input cannot already contain it — add all
  * cache tokens back; otherwise assume they are included.
  *
- * The `>=` guard (not `>`) also catches the pure-cache-write first request
- * where input=0 and cache_creation>0: the 0>=0 branch adds cache_write
- * back rather than returning 0.
+ * Use `>` (not `>=`): the equality boundary is the near-full-cache hit on an
+ * OpenAI-compatible gateway where `input_tokens` already includes the cached
+ * prefix AND the gateway reports `cache_hit_tokens` separately. There
+ * `cache_hit_tokens ≈ input_tokens` (miss→0), so `>=` misfires and reports
+ * `input + cacheHit` ≈ 2× the real prompt — the ring reads "over 1M right
+ * after a short chat". Strict `>` keeps the inclusive convention correct
+ * there while `input=0 / cache>0` still trips the excluded branch (0 < cache).
+ * This matches the renderer utils (context-usage-utils.ts normalizeInputTokens
+ * / onlyNewInputTokens) and the worker ledger (seed-token-usage.ts
+ * normalizeOnlyNewInput), all of which already use `>`.
  *
  * The persisted turn-cumulative blocks carry `last_call` (the final single
  * request); prefer it — the cumulative sum inflates tool-heavy turns ~N×.
@@ -209,7 +216,7 @@ export function normalizePromptTokens(
   const cacheHit = src.cache_hit_tokens || 0;
   const cacheWrite = src.cache_creation_tokens || 0;
   const prompt =
-    cacheHit >= input || cacheWrite >= input
+    cacheHit > input || cacheWrite > input
       ? input + cacheHit + cacheWrite
       : input;
   return { prompt, output };

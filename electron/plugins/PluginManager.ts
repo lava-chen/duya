@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { getLogger, LogComponent } from '../logging/logger';
-import { getPluginCatalog, getPluginCatalogEntry, getLocalPluginPaths, resolveIconUrl } from './catalog';
+import { getPluginCatalog, getPluginCatalogEntry, getLocalPluginPaths, getBuiltinPluginsSourceDir, resolveIconUrl } from './catalog';
 import { listCapabilityKinds, readPluginManifest } from './manifest';
 import { clonePluginFromGit } from './marketplace/git-source';
 import { PluginRegistryStore } from './PluginRegistryStore';
@@ -70,6 +70,19 @@ function copyDirectoryRecursive(src: string, dest: string): void {
     } else {
       fs.copyFileSync(srcPath, destPath);
     }
+  }
+}
+
+/**
+ * Check if a plugin directory contains a valid plugin manifest.
+ * Returns true if the directory has at least one valid plugin.json file.
+ */
+function hasPluginManifest(pluginDir: string): boolean {
+  try {
+    readPluginManifest(pluginDir);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -390,7 +403,30 @@ export class PluginManager {
         // its (containment-fenced) marketplace clone into the versioned
         // cache. Installed plugins stay independent of later marketplace
         // refreshes; upgrades are an explicit re-install (decision D5).
-        copyDirectoryRecursive(catalogEntry.marketplacePluginDir, stagingPath);
+        if (hasPluginManifest(catalogEntry.marketplacePluginDir)) {
+          copyDirectoryRecursive(catalogEntry.marketplacePluginDir, stagingPath);
+        } else {
+          // Marketplace clone is empty/missing; fall back to builtin source if available
+          const builtinSourceDir = getBuiltinPluginsSourceDir();
+          const builtinPluginDir = path.join(builtinSourceDir, catalogEntry.name);
+          if (fs.existsSync(builtinPluginDir) && hasPluginManifest(builtinPluginDir)) {
+            this.logger.info('Marketplace plugin dir empty, falling back to builtin source', {
+              pluginId: catalogEntry.id,
+              marketplaceDir: catalogEntry.marketplacePluginDir,
+              builtinDir: builtinPluginDir,
+            }, LogComponent.Main);
+            copyDirectoryRecursive(builtinPluginDir, stagingPath);
+          } else {
+            // Neither marketplace nor builtin source available; write manifest only
+            this.logger.warn('Marketplace plugin dir empty and no builtin source found', {
+              pluginId: catalogEntry.id,
+              marketplaceDir: catalogEntry.marketplacePluginDir,
+              builtinDir: builtinPluginDir,
+            }, LogComponent.Main);
+            const manifestPath = path.join(stagingPath, 'plugin.json');
+            fs.writeFileSync(manifestPath, JSON.stringify(catalogEntry.manifest, null, 2), 'utf8');
+          }
+        }
       } else if (catalogEntry.source === 'local') {
         const localPaths = getLocalPluginPaths();
         const sourceDir = localPaths.get(catalogEntry.name) || localPaths.get(pluginId);

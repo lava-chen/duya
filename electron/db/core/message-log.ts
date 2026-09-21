@@ -151,7 +151,7 @@ export class MessageLog {
       name: 'create_message_index',
       up: (db) => {
         db.exec(`
-          CREATE TABLE message_index (
+          CREATE TABLE IF NOT EXISTS message_index (
             id          TEXT PRIMARY KEY,
             session_id  TEXT NOT NULL,
             seq         INTEGER NOT NULL,
@@ -162,7 +162,7 @@ export class MessageLog {
             byte_len    INTEGER NOT NULL,
             UNIQUE (session_id, seq)
           );
-          CREATE INDEX idx_index_session ON message_index(session_id, seq);
+          CREATE INDEX IF NOT EXISTS idx_index_session ON message_index(session_id, seq);
         `);
       },
     },

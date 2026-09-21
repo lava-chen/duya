@@ -486,8 +486,10 @@ question you're asking.
 - Self-contained: no `node_modules` copying in `afterPack`.
 - `better-sqlite3`: packaged to `resources/better-sqlite3/`, shared by main and agent. Agent receives `DUYA_BETTER_SQLITE3_PATH` env var.
 - `BashWorker.js`: bundled to `resources/agent-bundle/BashTool/`. Worker uses `process.execPath` as Node.js runtime in production.
+- Prompt `.hbs` assets: copied to `resources/agent-bundle/assets/` by `scripts/build-agent-bundle.mjs` (HbsPromptSystem resolves `./assets` relative to the bundle; tsc dist gets its own copy in `packages/agent` build).
 - Pre-release checks:
   - `release/win-unpacked/resources/agent-bundle/agent-process-entry.js` exists
+  - `release/win-unpacked/resources/agent-bundle/assets/dynamic/language.hbs` exists
   - `release/win-unpacked/resources/agent-bundle/BashTool/BashWorker.js` exists
   - `release/win-unpacked/resources/better-sqlite3/build/Release/better_sqlite3.node` exists
   - First packaged chat turn reaches Agent `ready` (no timeout)

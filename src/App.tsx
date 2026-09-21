@@ -22,6 +22,7 @@ import { NewChatView } from "@/components/chat/NewChatView";
 import { WelcomeView } from "@/components/home/WelcomeView";
 import { SkillsView } from "@/components/skills/SkillsView";
 import { AutomationView } from "@/components/automation/AutomationView";
+import { AutomationPage } from "@/components/workflow/AutomationPage";
 import { ProjectsView } from "@/components/projects/ProjectsView";
 import { ExtensionsPage } from "@/components/extensions/ExtensionsPage";
 import { ConductorView } from "@duya/conductor/renderer/components/ConductorView";
@@ -815,6 +816,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
           )}
           {currentView === 'skills' && <SkillsView />}
           {currentView === 'automation' && <AutomationView />}
+          {currentView === 'workflow' && <AutomationPage />}
           {currentView === 'projects' && <ProjectsView />}
           {currentView === 'conductor' && <ConductorView />}
           {currentView === 'settings' && <SettingsView />}
@@ -831,6 +833,8 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
         return <SkillsView />;
       case 'automation':
         return <AutomationView />;
+      case 'workflow':
+        return <AutomationPage />;
       case 'projects':
         // Plan 525 Phase 2: Projects page must be reachable even when no
         // session has ever been mounted (chatEverMountedRef stays false on

@@ -54,6 +54,16 @@ describe('normalizePromptTokens', () => {
       output: 10,
     });
   });
+
+  it('does NOT double-count a near-full-cache hit where input already includes cache', () => {
+    // Gateway convention: `input_tokens` already includes the cached prefix,
+    // and cache_hit_tokens is reported separately at ≈ input (miss→0). A
+    // `cacheHit >= input` heuristic would report input+cacheHit ≈ 2× the real
+    // prompt (ring "over 1M" after a short chat). `>` keeps it inclusive.
+    expect(
+      normalizePromptTokens({ input_tokens: 14000, output_tokens: 10, cache_hit_tokens: 14000, cache_creation_tokens: 0 }),
+    ).toEqual({ prompt: 14000, output: 10 });
+  });
 });
 
 describe('estimateMessageTokens (block-aware extraction)', () => {

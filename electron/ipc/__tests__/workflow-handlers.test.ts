@@ -68,12 +68,17 @@ describe.skipIf(!nativeSqliteAvailable)('workflow console handlers', () => {
     expect(registered.sort()).toEqual(
       [
         'workflow:cancel',
+        'workflow:defs:create',
+        'workflow:defs:delete',
         'workflow:defs:get',
         'workflow:defs:list',
+        'workflow:defs:update',
         'workflow:delete',
         'workflow:get',
         'workflow:journal',
         'workflow:list',
+        'workflow:run',
+        'workflow:runBackground',
         'workflow:snapshot',
       ].sort(),
     );

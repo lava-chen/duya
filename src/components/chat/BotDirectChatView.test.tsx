@@ -373,6 +373,9 @@ describe('BotDirectChatView', () => {
       message: { getBySession: fetchTranscript },
       // Plan 497-era view also lists persisted tool approvals on mount.
       toolApproval: { listBySession: () => Promise.resolve([]), onUpdated: () => () => {} },
+      // Connector-auth effect subscribes on mount; jsdom has no preload, so stub
+      // it so the wired hook path actually runs (otherwise it throws on render).
+      appConnection: { onConnected: () => () => {} },
       onMessageNew: () => () => {},
     };
     try {

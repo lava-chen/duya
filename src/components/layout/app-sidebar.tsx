@@ -77,11 +77,12 @@ import { createConfigAgent, deleteConfigAgent } from "@/lib/agent-profile-ipc";
 type ThemeMode = "light" | "dark";
 
 // Type-safe label keys
-type NavLabelKey = 'nav.automation' | 'nav.conductor' | 'nav.extensions' | 'nav.projects';
+type NavLabelKey = 'nav.automation' | 'nav.workflow' | 'nav.conductor' | 'nav.extensions' | 'nav.projects';
 
 const mainNavItems: { view: ViewType; labelKey: NavLabelKey; icon: React.ComponentType<{ size?: number; className?: string }> }[] = [
   { view: 'conductor', labelKey: 'nav.conductor', icon: ChalkboardIcon },
   { view: 'automation', labelKey: 'nav.automation', icon: ClockCounterClockwiseIcon },
+  { view: 'workflow', labelKey: 'nav.workflow', icon: RepeatIcon },
   { view: 'projects', labelKey: 'nav.projects', icon: FolderIcon },
 ];
 
@@ -1113,18 +1114,6 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
               </button>
             );
           })}
-          {/* Plan 552 Phase 7: workflow console — panel page, not a view. */}
-          <button
-            type="button"
-            onClick={() => openOrActivatePage('workflow')}
-            data-testid="nav-workflow"
-            className="sidebar-primary-link"
-          >
-            <span className="nav-icon">
-              <RepeatIcon size={16} />
-            </span>
-            <span>{t('panel.workflow.title')}</span>
-          </button>
         </nav>
           </>
         )}

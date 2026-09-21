@@ -55,6 +55,15 @@ fs.writeFileSync(
   JSON.stringify(packageJson, null, 2)
 );
 
+// Copy the prompt .hbs asset tree next to the bundle. HbsPromptSystem
+// resolves `./assets` relative to the bundle file, and electron-builder
+// ships the whole `packages/agent/bundle/` directory as
+// `resources/agent-bundle/`, so this copy serves both dev and packaged runs.
+const promptsAssetsSrc = path.join('packages', 'agent', 'src', 'prompts', 'assets');
+const promptsAssetsOut = path.join(outdir, 'assets');
+fs.cpSync(promptsAssetsSrc, promptsAssetsOut, { recursive: true });
+console.log(`[build-agent-bundle] Copied prompt assets to ${promptsAssetsOut}`);
+
 // Build standalone CLI bundle (duya shell wrapper target).
 // Plan 99: the CLI bundle is now built separately by
 // `scripts/build-cli-bundle.mjs` into `packages/cli/bundle/cli.cjs`.

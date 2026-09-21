@@ -122,7 +122,7 @@ export class SessionStore {
       name: 'create_sessions',
       up: (db) => {
         db.exec(`
-          CREATE TABLE sessions (
+          CREATE TABLE IF NOT EXISTS sessions (
             id                TEXT PRIMARY KEY,
             title             TEXT NOT NULL DEFAULT 'New Chat',
             working_directory TEXT NOT NULL DEFAULT '',
@@ -142,9 +142,9 @@ export class SessionStore {
             created_at        INTEGER NOT NULL,
             updated_at        INTEGER NOT NULL
           );
-          CREATE INDEX idx_sessions_working_dir ON sessions(working_directory, updated_at);
-          CREATE INDEX idx_sessions_parent ON sessions(parent_session_id);
-          CREATE INDEX idx_sessions_updated ON sessions(updated_at);
+          CREATE INDEX IF NOT EXISTS idx_sessions_working_dir ON sessions(working_directory, updated_at);
+          CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
+          CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at);
         `);
       },
     },

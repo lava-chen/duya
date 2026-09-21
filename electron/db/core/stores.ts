@@ -91,7 +91,7 @@ export class TaskStore {
       name: 'create_tasks',
       up: (db) => {
         db.exec(`
-          CREATE TABLE tasks (
+          CREATE TABLE IF NOT EXISTS tasks (
             id          TEXT PRIMARY KEY,
             session_id  TEXT NOT NULL,
             subject     TEXT NOT NULL,
@@ -105,8 +105,8 @@ export class TaskStore {
             created_at  INTEGER NOT NULL,
             updated_at  INTEGER NOT NULL
           );
-          CREATE INDEX idx_tasks_session ON tasks(session_id, created_at);
-          CREATE INDEX idx_tasks_owner ON tasks(session_id, owner);
+          CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id, created_at);
+          CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(session_id, owner);
         `);
       },
     },
@@ -311,7 +311,7 @@ export class PermissionLedger {
       name: 'create_permission_requests',
       up: (db) => {
         db.exec(`
-          CREATE TABLE permission_requests (
+          CREATE TABLE IF NOT EXISTS permission_requests (
             id                  TEXT PRIMARY KEY,
             session_id          TEXT,
             tool_name           TEXT NOT NULL,
@@ -324,8 +324,8 @@ export class PermissionLedger {
             created_at          INTEGER NOT NULL,
             resolved_at         INTEGER
           );
-          CREATE INDEX idx_permission_session ON permission_requests(session_id);
-          CREATE INDEX idx_permission_status ON permission_requests(status);
+          CREATE INDEX IF NOT EXISTS idx_permission_session ON permission_requests(session_id);
+          CREATE INDEX IF NOT EXISTS idx_permission_status ON permission_requests(status);
         `);
       },
     },
@@ -433,7 +433,7 @@ export class LockStore {
       name: 'create_session_runtime_locks',
       up: (db) => {
         db.exec(`
-          CREATE TABLE session_runtime_locks (
+          CREATE TABLE IF NOT EXISTS session_runtime_locks (
             session_id TEXT PRIMARY KEY,
             lock_id    TEXT NOT NULL,
             owner      TEXT NOT NULL,
@@ -606,7 +606,7 @@ export class GoalStore {
       name: 'create_session_goals',
       up: (db) => {
         db.exec(`
-          CREATE TABLE session_goals (
+          CREATE TABLE IF NOT EXISTS session_goals (
             id               TEXT PRIMARY KEY,
             session_id       TEXT NOT NULL,
             goal_text        TEXT,
@@ -620,7 +620,7 @@ export class GoalStore {
             completed_at     INTEGER,
             UNIQUE(session_id)
           );
-          CREATE INDEX idx_goals_session ON session_goals(session_id);
+          CREATE INDEX IF NOT EXISTS idx_goals_session ON session_goals(session_id);
         `);
       },
     },
@@ -761,7 +761,7 @@ export class ModeStateStore {
       name: 'create_mode_state_snapshots',
       up: (db) => {
         db.exec(`
-          CREATE TABLE mode_state_snapshots (
+          CREATE TABLE IF NOT EXISTS mode_state_snapshots (
             session_id     TEXT NOT NULL,
             mode           TEXT NOT NULL,
             status         TEXT NOT NULL,
@@ -770,7 +770,7 @@ export class ModeStateStore {
             updated_at     INTEGER NOT NULL,
             PRIMARY KEY (session_id, mode)
           );
-          CREATE INDEX idx_mode_state_mode ON mode_state_snapshots(mode);
+          CREATE INDEX IF NOT EXISTS idx_mode_state_mode ON mode_state_snapshots(mode);
         `);
       },
     },
@@ -898,7 +898,7 @@ export class SpawnEdgeStore {
       name: 'create_session_spawn_edges',
       up: (db) => {
         db.exec(`
-          CREATE TABLE session_spawn_edges (
+          CREATE TABLE IF NOT EXISTS session_spawn_edges (
             id                TEXT PRIMARY KEY,
             parent_session_id TEXT NOT NULL,
             child_session_id  TEXT NOT NULL,
@@ -907,8 +907,8 @@ export class SpawnEdgeStore {
             spawn_type        TEXT NOT NULL DEFAULT 'subagent',
             spawned_at        INTEGER NOT NULL
           );
-          CREATE INDEX idx_spawn_parent ON session_spawn_edges(parent_session_id);
-          CREATE INDEX idx_spawn_child ON session_spawn_edges(child_session_id);
+          CREATE INDEX IF NOT EXISTS idx_spawn_parent ON session_spawn_edges(parent_session_id);
+          CREATE INDEX IF NOT EXISTS idx_spawn_child ON session_spawn_edges(child_session_id);
         `);
       },
     },
@@ -1035,7 +1035,7 @@ export class AttachmentStore {
       name: 'create_attachments',
       up: (db) => {
         db.exec(`
-          CREATE TABLE attachments (
+          CREATE TABLE IF NOT EXISTS attachments (
             id              TEXT PRIMARY KEY,
             message_id      TEXT,
             session_id      TEXT NOT NULL,
@@ -1045,8 +1045,8 @@ export class AttachmentStore {
             original_url    TEXT,
             created_at      INTEGER NOT NULL
           );
-          CREATE INDEX idx_attach_session ON attachments(session_id);
-          CREATE INDEX idx_attach_message ON attachments(message_id);
+          CREATE INDEX IF NOT EXISTS idx_attach_session ON attachments(session_id);
+          CREATE INDEX IF NOT EXISTS idx_attach_message ON attachments(message_id);
         `);
       },
     },

@@ -1365,6 +1365,7 @@ export interface ElectronAPI {
     delete: (id: string) => Promise<boolean>
     cancel: (id: string) => Promise<{ ok: boolean; reason?: string }>
     run: (payload: { name: string; params?: Record<string, unknown>; projectDir?: string }) => Promise<{ ok: boolean; runId?: string; error?: string }>
+    runBackground: (payload: { name: string; params?: Record<string, unknown>; projectDir?: string }) => Promise<{ ok: boolean; runId?: string; error?: string }>
     defs: {
       list: (projectDir?: string) => Promise<unknown[]>
       get: (payload: { name: string; projectDir?: string }) => Promise<unknown>
@@ -2339,6 +2340,8 @@ const electronAPI: ElectronAPI = {
     cancel: (id: string) => ipcRenderer.invoke('workflow:cancel', id),
     run: (payload: { name: string; sessionId?: string; params?: Record<string, unknown>; projectDir?: string }) =>
       ipcRenderer.invoke('workflow:run', payload),
+    runBackground: (payload: { name: string; params?: Record<string, unknown>; projectDir?: string }) =>
+      ipcRenderer.invoke('workflow:runBackground', payload),
     defs: {
       list: (projectDir?: string) => ipcRenderer.invoke('workflow:defs:list', projectDir),
       get: (payload: { name: string; projectDir?: string }) => ipcRenderer.invoke('workflow:defs:get', payload),

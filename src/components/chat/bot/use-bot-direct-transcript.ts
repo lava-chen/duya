@@ -26,18 +26,15 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { getMessagesBySessionIPC, dbMessageToMessage, type DbMessage as DbMessageRow, type Message as IpcMessage } from '@/lib/ipc-client';
 import type { Message } from '@/types/message';
+import { isBotDirectDisplayable } from './agent-dm-pair';
 
-const BOT_DIRECT_VISIBLE_SOURCES: ReadonlySet<string> = new Set([
-  'send_message',
-  'user',
-  // Plan 477 P4.4: bot→bot DM marker cards (sent + received directions).
-  'agent_dm',
-]);
-
-function isBotDirectVisible(source: string | null | undefined): boolean {
-  if (!source) return false;
-  return BOT_DIRECT_VISIBLE_SOURCES.has(source);
-}
+/**
+ * A compaction summary is projected back to a `user` row (`source: 'user'`,
+ * `isCompactSummary: true`) so the workspace history can render its CompactSummary
+ * card. The bot-direct surface must NOT surface that summary body as a bubble —
+ * the canonical `isBotDirectDisplayable` (agent-dm-pair) hides any compaction /
+ * wake-cue row in addition to enforcing the visible-source allowlist.
+ */
 
 /**
  * Bridge the IPC Message shape (camelCase, `createdAt`) into the UI
@@ -73,6 +70,9 @@ function ipcMessageToUiMessage(m: IpcMessage): Message {
     source: m.source ?? null,
     sendMessageMeta: m.sendMessageMeta ?? null,
     agentDmMeta: m.agentDmMeta ?? null,
+    isCompactSummary: m.isCompactSummary ?? undefined,
+    compactBoundaryId: m.compactBoundaryId ?? undefined,
+    compactedMessageCount: m.compactedMessageCount ?? undefined,
   };
 }
 
@@ -125,7 +125,7 @@ export function useBotDirectTranscript(
       setUsageMessages(full);
       // Defense in depth: drop non-visible sources so the renderer
       // surface stays source-safe too.
-      setMessages(full.filter((m) => isBotDirectVisible(m.source)));
+      setMessages(full.filter((m) => isBotDirectDisplayable(m)));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
@@ -162,7 +162,7 @@ export function useBotDirectTranscript(
         // undefined and the row later crashes Intl date separators.
         const m = ipcMessageToUiMessage(dbMessageToMessage(raw as DbMessageRow));
         incomingAll.push(m);
-        if (isBotDirectVisible(m.source)) incoming.push(m);
+        if (isBotDirectDisplayable(m)) incoming.push(m);
       }
       if (incomingAll.length === 0) return;
       // Plan 491 P1.2: track lastSeq from incoming messages. The IPC wire

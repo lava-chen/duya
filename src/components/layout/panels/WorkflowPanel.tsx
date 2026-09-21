@@ -91,6 +91,7 @@ export type WorkflowApi = {
   delete: (id: string) => Promise<boolean>;
   cancel: (id: string) => Promise<{ ok: boolean; reason?: string }>;
   run: (payload: { name: string; params?: Record<string, unknown>; projectDir?: string }) => Promise<{ ok: boolean; error?: string; runId?: string }>;
+  runBackground: (payload: { name: string; params?: Record<string, unknown>; projectDir?: string }) => Promise<{ ok: boolean; error?: string; runId?: string }>;
   defs: {
     list: (projectDir?: string) => Promise<unknown[]>;
     get: (payload: { name: string; projectDir?: string }) => Promise<unknown>;
@@ -314,8 +315,37 @@ export function EvidenceRow({ record }: { record: WorkflowJournalRecord }) {
 
 // ─── definitions tab ───
 
-export function DefinitionCard({ def }: { def: WorkflowDefinitionSummary }) {
+/** Default param values gathered from a definition summary. */
+export function definitionParams(def: WorkflowDefinitionSummary): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const p of def.params) {
+    if (p.default !== undefined) out[p.name] = p.default;
+  }
+  return out;
+}
+
+export function DefinitionCard({
+  def,
+  projectDir,
+  onRun,
+}: {
+  def: WorkflowDefinitionSummary;
+  projectDir?: string;
+  onRun?: () => void;
+}) {
   const { t } = useTranslation();
+  const [running, setRunning] = useState(false);
+
+  const run = useCallback(async () => {
+    setRunning(true);
+    try {
+      await api()?.runBackground({ name: def.name, params: definitionParams(def), projectDir });
+      onRun?.();
+    } finally {
+      setRunning(false);
+    }
+  }, [def, projectDir, onRun]);
+
   return (
     <div className="rounded-lg border border-[var(--border)] p-3" data-testid={`workflow-def-${def.name}`}>
       <div className="flex items-center gap-2">
@@ -343,7 +373,17 @@ export function DefinitionCard({ def }: { def: WorkflowDefinitionSummary }) {
           </span>
         )}
       </div>
-      <div className="pt-2">
+      <div className="flex items-center gap-2 pt-2">
+        <button
+          type="button"
+          disabled={running}
+          data-testid={`workflow-run-${def.name}`}
+          className="flex items-center gap-1 rounded border border-[var(--border)] px-2 py-0.5 text-[10px] text-[var(--text)] hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={() => void run()}
+        >
+          {running && <IconRefresh className="h-3 w-3 animate-spin" />}
+          {running ? t("panel.workflow.pending") : t("panel.workflow.run")}
+        </button>
         <CopyablePath path={def.file} />
       </div>
     </div>
@@ -394,7 +434,7 @@ export function DefinitionsTab({ projectDir }: { projectDir?: string }) {
           </div>
           <div className="flex flex-col gap-2">
             {project.map((d) => (
-              <DefinitionCard key={`p-${d.name}`} def={d} />
+              <DefinitionCard key={`p-${d.name}`} def={d} projectDir={projectDir} onRun={refresh} />
             ))}
           </div>
         </>
@@ -406,7 +446,7 @@ export function DefinitionsTab({ projectDir }: { projectDir?: string }) {
           </div>
           <div className="flex flex-col gap-2">
             {global.map((d) => (
-              <DefinitionCard key={`g-${d.name}`} def={d} />
+              <DefinitionCard key={`g-${d.name}`} def={d} projectDir={projectDir} onRun={refresh} />
             ))}
           </div>
         </>
@@ -586,6 +626,19 @@ export function RunsTab() {
     refresh();
   }, [refresh]);
 
+  const live = runs?.filter((r) => isRunning(r.status)) ?? [];
+  const hasLive = live.length > 0;
+
+  // Poll while a run is live so background / engine runs surface in the
+  // list in near-real-time and settle into the finished section once done.
+  useEffect(() => {
+    if (!hasLive) return;
+    const id = window.setInterval(refresh, 3000);
+    return () => window.clearInterval(id);
+  }, [hasLive, refresh]);
+
+  const finished = runs?.filter((r) => !isRunning(r.status)) ?? [];
+
   const onDelete = useCallback(
     (id: string) => {
       void api()?.delete(id).then(() => refresh());
@@ -603,9 +656,6 @@ export function RunsTab() {
   const onToggle = useCallback((id: string) => {
     setExpandedId((cur) => (cur === id ? null : id));
   }, []);
-
-  const live = runs?.filter((r) => isRunning(r.status)) ?? [];
-  const finished = runs?.filter((r) => !isRunning(r.status)) ?? [];
 
   return (
     <div className="px-3 py-2">

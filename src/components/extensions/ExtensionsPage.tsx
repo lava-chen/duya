@@ -957,6 +957,7 @@ export function ExtensionsPage() {
       />
 
       <PageTabs
+        variant="pill"
         tabs={[
           {
             id: "marketplace",
@@ -1004,6 +1005,19 @@ export function ExtensionsPage() {
           busyPluginId={busyPluginId}
           onOpenInstall={setInstallDialogPlugin}
           onOpenDetail={(pluginId) => setDetailPluginId(pluginId)}
+          onManageInstalled={() => setActiveTab("installed")}
+          onPluginToggle={(pluginId, enabled) =>
+            void runPluginAction(pluginId, () =>
+              enabled
+                ? pluginApi!.registry.enable(pluginId)
+                : pluginApi!.registry.disable(pluginId)
+            )
+          }
+          onPluginRemove={(pluginId) =>
+            void runPluginAction(pluginId, () =>
+              pluginApi!.registry.remove({ pluginId, deleteData: false })
+            )
+          }
         />
       )}
 

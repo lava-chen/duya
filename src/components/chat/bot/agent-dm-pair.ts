@@ -35,7 +35,57 @@ export function parseBotSessionAgentId(sessionId: string): string | null {
 
 /** Plan 477 P4.4: bot→bot DM marker row (source agent_dm + card payload). */
 export function isAgentDmMarkerMessage(message: DmMarkerRowLike): boolean {
-  return message.source === "agent_dm" && message.agentDmMeta != null;
+  return message.source === "agent_dm";
+}
+
+/**
+ * Canonical bot-direct display set (single source of truth for what renders
+ * as a chat row in the bot surface). Deliberately excludes `reaction` (that
+ * source only feeds the ingest store, never chat bubbles) and every hidden
+ * source (`tool_use` / `thinking` / `system` / `scratchpad` / wake prompts).
+ */
+export const BOT_DIRECT_VISIBLE_SOURCES: ReadonlySet<string> = new Set([
+  'send_message',
+  'user',
+  'agent_dm',
+]);
+
+/**
+ * Plan 477 inbound agent-DM wake cue: `buildAgentInboundWakePrompt` opens with
+ * this exact bootstrap line. A row carrying it is internal orchestration, not
+ * chat content — hide it regardless of how the copy arrived.
+ */
+export function isInboundAgentWakeCue(message: DmMarkerRowLike): boolean {
+  const text =
+    typeof message.content === "string"
+      ? message.content
+      : Array.isArray(message.content)
+        ? message.content
+            .filter((b) => b.type === "text")
+            .map((b) => b.text ?? "")
+            .join("")
+        : "";
+  return text.trimStart().startsWith(
+    "[agent] A message just arrived from another of your user's agents:",
+  );
+}
+
+/**
+ * THE single bot-direct display predicate. Every surface (hook projection,
+ * realtime merge, row builder) must branch on this alone — four separate
+ * filters with divergent source sets are what let system/internal rows (agent
+ * DM wake cues, compaction summaries) leak in as bubbles.
+ */
+export function isBotDirectDisplayable(m: DmMarkerRowLike): boolean {
+  if (m.isTaskNotification) return false;
+  if (m.isCompactSummary || m.isCompactBoundary) return false;
+  if (isInboundAgentWakeCue(m)) return false;
+  // Legacy unclassified rows (persisted before the source classifier, or fed
+  // through the `messages` prop) carry no source yet still render as normal
+  // bubbles — the internal-row guards above keep real leaks (wake cues,
+  // compaction summaries) out regardless of source.
+  if (m.source == null) return true;
+  return BOT_DIRECT_VISIBLE_SOURCES.has(m.source);
 }
 
 /**
@@ -53,6 +103,9 @@ export interface DmMarkerRowLike {
   createdAt?: number;
   source?: string | null;
   agentDmMeta?: AgentDmCardMeta | null;
+  isTaskNotification?: boolean;
+  isCompactSummary?: boolean;
+  isCompactBoundary?: boolean;
 }
 
 /**
@@ -141,7 +194,8 @@ export function buildAgentDmChipGroups(messages: readonly DmMarkerRowLike[]): Ag
       flush();
       continue;
     }
-    const meta = message.agentDmMeta as AgentDmCardMeta;
+    const meta = message.agentDmMeta;
+    if (!meta) continue;
     const sent = meta.direction === "sent";
     const peerId = normalizePeerId(meta.peerId);
     const peerName = meta.peerName || peerId;
@@ -226,7 +280,8 @@ export function buildAgentDmPairMessages(
   const take = (messages: readonly DmMarkerRowLike[], senderAgentId: string) => {
     for (const message of messages) {
       if (!isAgentDmMarkerMessage(message)) continue;
-      const meta = message.agentDmMeta as AgentDmCardMeta;
+      const meta = message.agentDmMeta;
+      if (!meta) continue;
       if (meta.direction !== "sent") continue;
       const markerPeerId = normalizePeerId(meta.peerId);
       if (markerPeerId !== peerAgentId && markerPeerId !== selfAgentId) continue;

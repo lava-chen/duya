@@ -208,7 +208,7 @@ export class Mailbox {
       name: 'create_mailbox_items',
       up: (db) => {
         db.exec(`
-          CREATE TABLE mailbox_items (
+          CREATE TABLE IF NOT EXISTS mailbox_items (
             id                     TEXT PRIMARY KEY,
             session_id             TEXT NOT NULL,
             kind                   TEXT NOT NULL
@@ -240,11 +240,11 @@ export class Mailbox {
             meta                   TEXT NOT NULL DEFAULT '{}',
             created_at             INTEGER NOT NULL
           );
-          CREATE INDEX idx_mailbox_claim_ready
+          CREATE INDEX IF NOT EXISTS idx_mailbox_claim_ready
             ON mailbox_items(session_id, status, priority, created_at)
             WHERE status = 'pending'
                OR (observed_at IS NOT NULL AND claim_expires_at IS NOT NULL);
-          CREATE UNIQUE INDEX uq_mailbox_client_msg
+          CREATE UNIQUE INDEX IF NOT EXISTS uq_mailbox_client_msg
             ON mailbox_items(session_id, client_msg_id)
             WHERE client_msg_id IS NOT NULL;
         `);
