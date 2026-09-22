@@ -1347,10 +1347,11 @@
   50% { opacity: 1; }
 }
 
-/* BotActivityIndicator — rolling "current activity" line. A single pill
-   that always shows exactly what the bot is doing right now (thinking tail
-   or the current tool call); the inner line remounts on every activity
-   change and slides in — the previous line is replaced, never stacked.
+/* BotActivityIndicator — rolling "current activity" line. The pill is
+   PERMANENT while the turn is busy; only the inner line changes, rolling
+   upward: the outgoing line slides out the top while the incoming line
+   slides in from below (both stack in one grid cell of the viewport, so
+   the swap is a continuous roll — the bubble never blinks mid-turn).
    Kind modifier recolors the spinner only; text stays neutral so long
    tool chains don't strobe. */
 .bot-chat-activity {
@@ -1395,23 +1396,53 @@
   to { transform: rotate(360deg); }
 }
 
+/* The viewport stacks every line in the same grid cell, so the pill keeps
+   one stable single-line height across swaps and the two phases overlap. */
+.bot-chat-activity__viewport {
+  display: grid;
+  min-width: 0;
+  min-height: 1.45em;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .bot-chat-activity__line {
+  grid-area: 1 / 1;
   display: inline-flex;
   align-items: baseline;
   gap: 8px;
   min-width: 0;
   white-space: nowrap;
-  animation: bot-chat-activity__slide-in 0.22s ease-out;
 }
 
-@keyframes bot-chat-activity__slide-in {
+.bot-chat-activity__line--in {
+  animation: bot-chat-activity__roll-in 0.24s ease-out;
+}
+
+.bot-chat-activity__line--out {
+  animation: bot-chat-activity__roll-out 0.24s ease-in forwards;
+  pointer-events: none;
+}
+
+@keyframes bot-chat-activity__roll-in {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(100%);
   }
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes bot-chat-activity__roll-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-100%);
   }
 }
 
@@ -1420,6 +1451,21 @@
   font-size: 12px;
   font-weight: 500;
   color: var(--text);
+}
+
+/* The kind drives a subtle label tint so state reads at a glance without
+   strobing: reply/thinking lean muted, waiting/error keep their semantics. */
+.bot-chat-activity--thinking .bot-chat-activity__label,
+.bot-chat-activity--reply .bot-chat-activity__label {
+  color: var(--muted);
+}
+
+.bot-chat-activity--waiting .bot-chat-activity__label {
+  color: var(--warning, #f59e0b);
+}
+
+.bot-chat-activity--error .bot-chat-activity__label {
+  color: var(--error, #ef4444);
 }
 
 .bot-chat-activity__detail {
