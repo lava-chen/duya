@@ -22,14 +22,6 @@ export const PLATFORM_HINTS: Partial<Record<CommunicationPlatform, string>> = {
     'created or changed, just state its absolute path in plain text.'
   ),
 
-  'duya-app': (
-    'You are running in the Duya desktop application. ' +
-    'Markdown formatting is fully supported and will be rendered beautifully. ' +
-    'You can use all GitHub-flavored markdown features including code blocks with syntax highlighting, ' +
-    'tables, task lists, and inline formatting. ' +
-    'The application supports rich media display and interactive elements.'
-  ),
-
   weixin: (
     'You are on Weixin/WeChat platform. ' +
     'Markdown formatting is supported, so you may use it when it improves readability, ' +

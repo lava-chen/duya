@@ -14,7 +14,6 @@
 
 import type { PromptSystemConfig } from '../PromptSystem.js'
 import { initializeAgentsMd } from '../dynamic/agentsMdSection.js'
-import { createRecentSessionsPreBuildHook } from '../dynamic/recentSessionsPreBuildHook.js'
 
 // Research-specific dynamic sections
 import { resolveResearchIntent } from '../research/intentRouter.js'
@@ -48,31 +47,15 @@ export const researchConfig: PromptSystemConfig = {
       cachePolicy: 'every-call',
       description: 'Visual tasks require rendered-output verification',
     },
-    {
-      name: 'recentSessions',
-      template: 'dynamic/recent-sessions.hbs',
-      cachePolicy: 'every-call',
-      requiresTools: ['SessionSearch'],
-      description: 'Recent session metadata can change between turns',
-    },
   ],
   preBuildHook: async (ctx) => {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.
     if (ctx.omitAgentsMd) return
-    // Plan 550 1d-rest (recent-sessions section): pre-populate the two
-    // JSON-serialised entry arrays so the .hbs template can render
-    // them without touching the session database.
-    const recentHook = createRecentSessionsPreBuildHook()
-    const recentResult = await recentHook(ctx)
     // Plan 525 / 408 follow-up: thread the project-entity home into the
     // loader so it can read `<projectHome>/AGENTS.md` as a `'Project entity'`
     // source. Absent when cwd is outside any registered duya project.
     if (await initializeAgentsMd(ctx.workingDirectory, ctx.projectHome)) {
-      return {
-        invalidateCacheKeys: ['projectInstructions'],
-        promptContextExtension: recentResult?.promptContextExtension,
-      }
+      return { invalidateCacheKeys: ['projectInstructions'] }
     }
-    return recentResult
   },
 }

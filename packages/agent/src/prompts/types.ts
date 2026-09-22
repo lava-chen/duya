@@ -240,16 +240,6 @@ export interface PromptContext {
   unameSr?: string;
   /** Best-effort marketing name for the model (claude / openai / gemini / etc.). `null` when the model id has no recognised prefix. */
   marketingName?: string | null;
-  // Plan 550 1d-rest (recent-sessions section) — populated by the
-  // `recentSessions` preBuildHook so the dynamic/recent-sessions.hbs
-  // template can render the JSON entry lists synchronously. The hook
-  // runs `loadRecentSessionDirectory(...)` once per `buildSystemPrompt`
-  // and emits already-serialised JSON strings; the mapper joins them
-  // with ` - ${entry}\n` (matching the legacy `serializeSerializedGroup`).
-  /** Same-project scope entries (already JSON-serialised via `serializeEntry`). */
-  recentSessionsSameProject?: string[];
-  /** Other-projects scope entries (already JSON-serialised via `serializeEntry`). */
-  recentSessionsOtherProjects?: string[];
   /** User type (for conditional prompt sections) */
   userType?: 'ant' | 'external'
   /** Output style configuration */

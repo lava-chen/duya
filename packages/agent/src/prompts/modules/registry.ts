@@ -75,10 +75,6 @@ export const MODULES = {
     path: 'modules/config-protection.hbs',
     description: 'Protection of ~/.duya/config.toml and secrets.json',
   },
-  communication: {
-    path: 'modules/communication.hbs',
-    description: 'Output efficiency, writing, and technical communication style',
-  },
   tools: {
     path: 'modules/tools.hbs',
     description: 'Tool-usage guidance (REPL-aware, todo-tool aware)',

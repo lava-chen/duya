@@ -19,7 +19,7 @@
  *           scratchpad / sessionGuidance
  *   cut     memory          — superseded by the bot memory tiers
  *                            (botMemoryOwn/User/Project)
- *           sessionSearch / recentSessions   — host-side UX, not bot-facing
+ *           sessionSearch            — host-side UX, not bot-facing
  *           visionGuidelines / visualVerification — bots render text, no
  *                            vision pipeline in the agent run
  * Cut sections are re-added here if a bot surface needs them later.
@@ -38,12 +38,12 @@ export const botConfig: PromptSystemConfig = {
   // the volatile runtime sections.
   sections: [
     // Dynamic sections — recomputed every call via .hbs templates
-    { module: 'platform', cachePolicy: 'every-call' },
-    { module: 'environment', cachePolicy: 'every-call' },
-    { module: 'mcp', cachePolicy: 'every-call' },
-    { module: 'skills', cachePolicy: 'every-call', requiresTools: ['Skill', 'Read'] },
-    { module: 'scratchpad', cachePolicy: 'every-call' },
-    { module: 'sessionGuidance', cachePolicy: 'every-call' },
+    { name: 'platform', template: 'dynamic/platform.hbs', cachePolicy: 'every-call' },
+    { name: 'environment', template: 'dynamic/environment.hbs', cachePolicy: 'every-call' },
+    { name: 'mcp', template: 'dynamic/mcp-instructions.hbs', cachePolicy: 'every-call' },
+    { name: 'skills', template: 'dynamic/skills-metadata.hbs', cachePolicy: 'every-call', requiresTools: ['Skill', 'Read'] },
+    { name: 'scratchpad', template: 'dynamic/scratchpad.hbs', cachePolicy: 'every-call' },
+    { name: 'sessionGuidance', template: 'dynamic/session-guidance.hbs', cachePolicy: 'every-call' },
   ],
   preBuildHook: async (ctx) => {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.

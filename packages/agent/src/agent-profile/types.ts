@@ -143,11 +143,11 @@ export const MAIN_AGENT_PROFILES: AgentProfile[] = [
       // whitelist silently hid the skills catalog for its entire lifetime,
       // plan 535 A-6 / plan 557 phase 2). Cut sections:
       //   configProtection / outputStyle / mcp / scratchpad /
-      //   sessionSearch / recentSessions / sessionGuidance /
+      //   sessionSearch / sessionGuidance /
       //   visionGuidelines / visualVerification
       disableSections: [
         'configProtection', 'outputStyle', 'mcp', 'scratchpad',
-        'sessionSearch', 'recentSessions', 'sessionGuidance',
+        'sessionSearch', 'sessionGuidance',
         'visionGuidelines', 'visualVerification',
       ],
     },

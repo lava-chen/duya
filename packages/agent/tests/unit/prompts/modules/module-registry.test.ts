@@ -68,7 +68,6 @@ describe('prompt module registry', () => {
     // The general assembly depends on these ten; the registry may hold
     // additional profile-specific modules (identityCoding, rules, …).
     const core = [
-      'communication',
       'configProtection',
       'destructiveActions',
       'duyaDesktopContext',

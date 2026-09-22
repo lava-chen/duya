@@ -49,27 +49,6 @@ describe('project harness prompt', () => {
     expect(codeProfile).toBeDefined()
   })
 
-  it('only emits past-session recovery guidance when SessionSearch exists', () => {
-    // Plan 558 phase 2: the standalone session-search.hbs template was
-    // removed; past-session recovery guidance moved inline to
-    // recent-sessions.hbs (gated by SessionSearch via the plan 557
-    // declarative `requiresTools` mechanism). Verify the gate keeps the
-    // recent-sessions body empty when SessionSearch is absent, and that
-    // the populated body still references SessionSearch once it's in
-    // scope.
-    const off = hbs.renderStaticTemplate('dynamic/recent-sessions.hbs', makeContext()).trim()
-    expect(off).toBe('')
-    const populated = makeContext(['SessionSearch'], {
-      recentSessionsSameProject: [
-        '{"sessionId":"a","title":"A","project":"duya","updatedAt":"2026-01-10T12:00:00.000Z","childSessions":0}',
-      ],
-      recentSessionsOtherProjects: [],
-    })
-    const on = hbs.renderStaticTemplate('dynamic/recent-sessions.hbs', populated).trim()
-    expect(on).toContain('Recent session directory')
-    expect(on).toContain('SessionSearch')
-  })
-
   it('composes role instructions with the shared subagent harness', () => {
     const prompt = composeSubagentSystemPrompt(
       'You are a verification agent.',

@@ -46,19 +46,19 @@ export const DEFAULT_PROMPT_PROFILE: PromptProfile = {}
  */
 export const SUBAGENT_TYPE_PROFILE_MAP: Record<string, PromptProfile> = {
   Explore: {
-    disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'recentSessions', 'widgetGuidelines', 'visionGuidelines'],
+    disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'widgetGuidelines', 'visionGuidelines'],
   },
   explore: {
-    disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'recentSessions', 'widgetGuidelines', 'visionGuidelines'],
+    disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'widgetGuidelines', 'visionGuidelines'],
   },
   research: {
-    disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'recentSessions', 'widgetGuidelines'],
+    disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'widgetGuidelines'],
   },
   // verification: full profile (no disable) — keeps governance constraints
   verification: {},
   // fork: bare — drop conversation/governance, keep safety + project + environment
   fork: {
-    disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'recentSessions', 'personality', 'widgetGuidelines', 'visionGuidelines'],
+    disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'personality', 'widgetGuidelines', 'visionGuidelines'],
   },
 }
 
@@ -66,5 +66,5 @@ export const SUBAGENT_TYPE_PROFILE_MAP: Record<string, PromptProfile> = {
  * Default profile for unknown subagent types.
  */
 export const DEFAULT_SUBAGENT_PROFILE: PromptProfile = {
-  disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'recentSessions', 'widgetGuidelines'],
+  disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'widgetGuidelines'],
 }

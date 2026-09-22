@@ -53,10 +53,6 @@ describe('general profile assembly (staticModules)', () => {
       '# System',
       '# Destructive actions',
       '# Config file protection',
-      '# Communication style',
-      '## Output efficiency',
-      '## Writing',
-      '## Technical communication',
       '# Using your tools',
       '# Doing tasks',
       '# Using skills',
@@ -186,7 +182,7 @@ describe('general profile skills catalog (plan 535)', () => {
     const names = system.getAllSections(context()).map((s) => s.name);
 
     const expectedEnabled = [
-      'identity', 'system', 'destructiveActions', 'communication',
+      'identity', 'system', 'destructiveActions',
       'tools', 'tasks', 'skillUsage', 'duyaDesktopContext', 'finalAnswer',
       'platform', 'environment', 'memory', 'skills',
     ];
@@ -195,7 +191,7 @@ describe('general profile skills catalog (plan 535)', () => {
     }
     for (const cut of [
       'configProtection', 'mcp', 'scratchpad',
-      'sessionSearch', 'recentSessions', 'sessionGuidance',
+      'sessionSearch', 'sessionGuidance',
       'visionGuidelines', 'visualVerification',
       // Plan 558 phase 2: `language` and `outputStyle` modules were
       // deleted alongside their .hbs files, so neither appears in the

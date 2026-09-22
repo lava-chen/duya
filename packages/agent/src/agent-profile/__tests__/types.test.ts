@@ -42,7 +42,7 @@ describe('PRESET_AGENT_PROFILES', () => {
     const disabled = general.promptProfile?.disableSections ?? [];
     expect(disabled).toEqual(expect.arrayContaining([
       'configProtection', 'outputStyle', 'mcp', 'scratchpad',
-      'sessionSearch', 'recentSessions', 'sessionGuidance',
+      'sessionSearch', 'sessionGuidance',
       'visionGuidelines', 'visualVerification',
     ]));
     // Whitelist removed — it must never come back for main presets.

@@ -12,7 +12,7 @@ import type { PromptSystemConfig } from '../PromptSystem.js'
 import { initializeAgentsMd } from '../dynamic/agentsMdSection.js'
 import { createMemoryPreBuildHook } from '../dynamic/memoryPreBuildHook.js'
 import { createEnvironmentPreBuildHook } from '../dynamic/environmentPreBuildHook.js'
-import { createRecentSessionsPreBuildHook } from '../dynamic/recentSessionsPreBuildHook.js'
+
 
 // Dynamic sections
 export const codeConfig: PromptSystemConfig = {
@@ -36,7 +36,6 @@ export const codeConfig: PromptSystemConfig = {
     { name: 'skills', template: 'dynamic/skills-metadata.hbs', cachePolicy: 'every-call', requiresTools: ['Skill', 'Read'], description: 'Skills can be loaded/unloaded' },
     { name: 'scratchpad', template: 'dynamic/scratchpad.hbs', cachePolicy: 'every-call', description: 'Scratchpad directory' },
     { name: 'memory', template: 'dynamic/memory.hbs', cachePolicy: 'every-call', description: 'Persistent memory projection files may have been updated since last turn' },
-    { name: 'recentSessions', template: 'dynamic/recent-sessions.hbs', cachePolicy: 'every-call', requiresTools: ['SessionSearch'], description: 'Recent session metadata can change between turns' },
     { name: 'visualVerification', template: 'dynamic/visual-verification.hbs', cachePolicy: 'every-call', description: 'Visual tasks require rendered-output verification' },
   ],
   preBuildHook: async (ctx) => {
@@ -51,15 +50,9 @@ export const codeConfig: PromptSystemConfig = {
     // never overlap.
     const envHook = createEnvironmentPreBuildHook()
     const envResult = await envHook(ctx)
-    // Plan 550 1d-rest (recent-sessions section): pre-populate the two
-    // JSON-serialised entry arrays so the .hbs template can render
-    // them without touching the session database.
-    const recentHook = createRecentSessionsPreBuildHook()
-    const recentResult = await recentHook(ctx)
     const mergedExtension = {
       ...memoryResult?.promptContextExtension,
       ...envResult?.promptContextExtension,
-      ...recentResult?.promptContextExtension,
     }
     // Plan 525 / 408 follow-up: thread the project-entity home into the
     // loader so it can read `<projectHome>/AGENTS.md` as a `'Project entity'`
