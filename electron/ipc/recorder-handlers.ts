@@ -11,13 +11,13 @@
  *   recorder:list-sessions  → session metadata, newest first
  *   recorder:get-session    → one session: metadata + events + dropped lines
  *   recorder:delete-session → remove a session directory
- *   recorder:convert        → events → WorkflowDef + YAML (NO write)
+ *   recorder:convert        → events → dwf source (NO write)
  *
  * `recorder:convert` deliberately does not persist anything: the
- * converter is a pure function, the user reviews the YAML, and the
- * existing `workflow:defs:create` channel performs the write — one
- * write path for definitions no matter which producer made them
- * (556 §2: plan and record converge on `validateWorkflow`).
+ * conversion is pure (converter.ts → defToDwfSource), the user reviews
+ * the generated `.dwf.ts` source, and saving travels the exact same
+ * `workflow:dwf:save` path as a hand-written script — a failed
+ * conversion can never leave a half-written workflow behind.
  *
  * Main → renderer: `recorder:status-changed` carries the same snapshot
  * `recorder:status` returns, pushed on every state transition so the
@@ -48,7 +48,7 @@ import {
   updateRecorderBadge,
 } from '../services/recorder/badge.js';
 import { convertEventsToWorkflow } from '../../packages/agent/src/modes/workflow/converter';
-import { toYaml } from '../../packages/agent/src/modes/workflow/workflow-files';
+import { defToDwfSource } from '../../packages/agent/src/modes/workflow/dwf/def-to-dwf';
 import { getLogger, LogComponent } from '../logging/logger';
 
 const logger = getLogger();
@@ -177,7 +177,14 @@ export function registerRecorderHandlers(): void {
   ipcMain.handle('recorder:get-session', async (_e, sessionId: string) => {
     if (typeof sessionId !== 'string' || sessionId.length === 0) return null;
     try {
-      return await loadSession(getDefaultRecorderRootDir(), sessionId);
+      const loaded = await loadSession(getDefaultRecorderRootDir(), sessionId);
+      // Absolute paths so the renderer can hand the files to an agent
+      // (skill-driven conversion) without recomputing the layout.
+      return {
+        ...loaded,
+        eventsPath: `${getDefaultRecorderRootDir()}/sessions/${sessionId}/events.jsonl`,
+        sessionPath: `${getDefaultRecorderRootDir()}/sessions/${sessionId}/session.json`,
+      };
     } catch {
       return null;
     }
@@ -196,9 +203,11 @@ export function registerRecorderHandlers(): void {
   });
 
   /**
-   * Events → WorkflowDef. Pure conversion: the caller previews the YAML
-   * and saves through `workflow:defs:create`, so a failed conversion
-   * can never leave a half-written definition behind.
+   * Events → dwf source. Pure conversion: the caller previews the
+   * generated `.dwf.ts` and saves through `workflow:dwf:save`, so a
+   * failed conversion can never leave a half-written workflow behind.
+   * meta/script come back split so the renderer can save without
+   * re-parsing the source.
    */
   ipcMain.handle(
     'recorder:convert',
@@ -215,14 +224,17 @@ export function registerRecorderHandlers(): void {
         if (!result.def) {
           return { ok: false, errors: result.errors, warnings: result.warnings };
         }
+        const dwf = defToDwfSource(result.def);
         return {
           ok: result.ok,
           def: result.def,
-          // YAML is what the user reviews — the same serializer the
-          // registry writes with (workflow-files.ts toYaml).
-          yaml: toYaml(result.def),
+          meta: dwf.meta,
+          script: dwf.script,
+          // The full .dwf.ts source is what the user reviews — the same
+          // bytes `workflow:dwf:save` will persist.
+          source: dwf.source,
           errors: result.errors,
-          warnings: result.warnings,
+          warnings: [...result.warnings, ...dwf.warnings],
           eventCount: loaded.events.length,
           droppedLines: loaded.dropped.length,
         };

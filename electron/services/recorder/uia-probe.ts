@@ -12,16 +12,25 @@
  *                    recording pipeline is never blocked or thrown at.
  *   readUrl(hwnd) → address-bar value for supported browsers (zh/en
  *                    name match + first-Edit fallback, §4.3).
+ *   enumerate(hwnd) → full interactive-element tree with real rects
+ *                    (plan 562): 1500ms walk budget inside the probe,
+ *                    3s main-side race; partial trees survive budget
+ *                    hits (truncated:true). (hwnd,title) caching keeps
+ *                    an unchanged application from being re-scanned.
  *
- * Failure policy (design §5):
+ * Failure policy (design §5 + plan 562 D5):
  *   - per-request timeout   → consecutive counter; LIMIT consecutive
  *                             stalls ⇒ the probe is considered hung:
  *                             recycled once, degraded if it happens again
  *   - probe crash           → the daemon restarts once; a second crash
  *                             ⇒ degraded (element-less recording)
  *   - idle 5min             ⇒ process recycled; next use respawns
- *   - degraded              ⇒ probe()/readUrl() short-circuit until the
- *                             idle recycle resets the client
+ *   - degraded              ⇒ probe()/readUrl() short-circuit, BUT the
+ *                             degrade is no longer permanent (562 D5):
+ *                             after DEGRADED_RETRY_MS the next call
+ *                             respawns the probe instead of short-
+ *                             circuiting — a transient UIA stall must
+ *                             not disable enumeration for the session.
  */
 
 import { createComputerUseDaemon, type ComputerUseDaemon } from '../computer-use-daemon.js';
@@ -34,6 +43,7 @@ import {
   elementToDescriptor,
   parseUiaProbeLine,
   type ElementDescriptor,
+  type EnumeratedElementDescriptor,
   type UiaProbeRequest,
   type UiaProbeResponse,
 } from '@duya/computer-use';
@@ -44,6 +54,22 @@ const logger = getLogger();
 export const UIA_PROBE_TIMEOUT_MS = 400;
 /** Main-side race for readUrl(): the probe's internal budget is 500ms. */
 export const UIA_READURL_TIMEOUT_MS = 800;
+/**
+ * Main-side race for fg(): a warm process answers in ~1ms; the budget
+ * only bounds queueing behind an in-flight enumerate (fg is best-effort
+ * and does NOT count toward the stall/recycle counter).
+ */
+export const UIA_FG_TIMEOUT_MS = 1200;
+/** Main-side race for enumerate(): the probe's internal walk budget is 1500ms. */
+export const UIA_ENUMERATE_TIMEOUT_MS = 3_000;
+
+/**
+ * Degraded auto-retry window (plan 562 D5): after this long in the
+ * degraded state the next call respawns the probe instead of short-
+ * circuiting, so a transient UIA stall cannot disable enumeration for
+ * the rest of the session.
+ */
+export const DEGRADED_RETRY_MS = 60_000;
 
 /** {"ready":true} must arrive within this window (Add-Type compile). */
 const READY_TIMEOUT_MS = 15_000;
@@ -56,13 +82,43 @@ const SCRIPT_BASENAME = 'uia-probe.ps1';
 
 export type UiaProbeState = 'idle' | 'starting' | 'running' | 'degraded';
 
+/** enumerate() outcome — `null` (from the caller's view) is a value, not a throw. */
+export interface UiaEnumerateResult {
+  elements: EnumeratedElementDescriptor[];
+  /** True when a node/time budget hit ended the walk early (partial tree). */
+  truncated: boolean;
+  /** Success qualifier, e.g. "elevated" (UIPI skip — the window is unreadable). */
+  reason: string | null;
+}
+
+/** fg() outcome — foreground window snapshot (shape-compatible with ForegroundWindowInfo). */
+export interface UiaForegroundInfo {
+  hwnd: number;
+  pid: number;
+  processName: string;
+  title: string;
+}
+
+/** Cache entry for enumerateCached (plan 562 D5: unchanged app → no re-scan). */
+interface EnumerateCacheEntry {
+  title: string;
+  result: UiaEnumerateResult;
+  at: number;
+}
+
 export interface UiaProbeClientOptions {
   scriptPath?: string;
   probeTimeoutMs?: number;
   readUrlTimeoutMs?: number;
+  fgTimeoutMs?: number;
+  enumerateTimeoutMs?: number;
   readyTimeoutMs?: number;
   idleRecycleMs?: number;
   consecutiveTimeoutLimit?: number;
+  /** Degraded auto-retry window (plan 562 D5). */
+  degradedRetryMs?: number;
+  /** Enumerate cache TTL (ms); an older entry is re-scanned. */
+  enumerateCacheTtlMs?: number;
   /** Test hook: forwarded to the daemon spawnFn. */
   spawnFn?: Parameters<typeof createComputerUseDaemon>[0]['spawnFn'];
 }
@@ -85,6 +141,9 @@ interface PendingRequest {
   timer: NodeJS.Timeout;
 }
 
+/** Cache TTL default (plan 562 D5): re-scan after 5min even if unchanged. */
+const ENUMERATE_CACHE_TTL_MS = 5 * 60_000;
+
 export class UiaProbeClient {
   private daemon: ComputerUseDaemon | null = null;
   private state: UiaProbeState = 'idle';
@@ -96,13 +155,20 @@ export class UiaProbeClient {
   private consecutiveTimeouts = 0;
   private lastActivityAt = 0;
   private idleTimer: NodeJS.Timeout | null = null;
+  /** When the client entered the degraded state (0 = never). */
+  private degradedAt = 0;
+  private readonly enumerateCache = new Map<number, EnumerateCacheEntry>();
   private readonly opts: {
     scriptPath: string;
     probeTimeoutMs: number;
     readUrlTimeoutMs: number;
+    fgTimeoutMs: number;
+    enumerateTimeoutMs: number;
     readyTimeoutMs: number;
     idleRecycleMs: number;
     consecutiveTimeoutLimit: number;
+    degradedRetryMs: number;
+    enumerateCacheTtlMs: number;
     spawnFn?: UiaProbeClientOptions['spawnFn'];
   };
 
@@ -111,9 +177,13 @@ export class UiaProbeClient {
       scriptPath: opts.scriptPath ?? resolveUiaProbeScriptPath(),
       probeTimeoutMs: opts.probeTimeoutMs ?? UIA_PROBE_TIMEOUT_MS,
       readUrlTimeoutMs: opts.readUrlTimeoutMs ?? UIA_READURL_TIMEOUT_MS,
+      fgTimeoutMs: opts.fgTimeoutMs ?? UIA_FG_TIMEOUT_MS,
+      enumerateTimeoutMs: opts.enumerateTimeoutMs ?? UIA_ENUMERATE_TIMEOUT_MS,
       readyTimeoutMs: opts.readyTimeoutMs ?? READY_TIMEOUT_MS,
       idleRecycleMs: opts.idleRecycleMs ?? IDLE_RECYCLE_MS,
       consecutiveTimeoutLimit: opts.consecutiveTimeoutLimit ?? CONSECUTIVE_TIMEOUT_LIMIT,
+      degradedRetryMs: opts.degradedRetryMs ?? DEGRADED_RETRY_MS,
+      enumerateCacheTtlMs: opts.enumerateCacheTtlMs ?? ENUMERATE_CACHE_TTL_MS,
       spawnFn: opts.spawnFn,
     };
   }
@@ -127,11 +197,24 @@ export class UiaProbeClient {
   }
 
   /**
-   * Spawn the probe if needed and wait for {"ready":true}. Idempotent;
-   * a degraded client returns immediately (callers get source:'none').
+   * Spawn the probe if needed and wait for {"ready":true}. Idempotent.
+   * A degraded client short-circuits — but only for DEGRADED_RETRY_MS
+   * (plan 562 D5): after that the next call re-arms the lifecycle and
+   * tries a fresh spawn, so a transient stall cannot disable the probe
+   * for the whole session.
    */
   async ensureStarted(): Promise<void> {
-    if (this.state === 'degraded' || this.state === 'running') {
+    if (this.state === 'degraded') {
+      if (Date.now() - this.degradedAt < this.opts.degradedRetryMs) {
+        return;
+      }
+      // Retry window elapsed: give the probe one more lifecycle.
+      this.state = 'idle';
+      this.recycledOnce = false;
+      this.consecutiveTimeouts = 0;
+      logger.info('uia probe degraded retry window elapsed; respawning', undefined, LogComponent.ComputerUse);
+    }
+    if (this.state === 'running') {
       return;
     }
     if (this.startInFlight) {
@@ -164,6 +247,85 @@ export class UiaProbeClient {
     return response.url;
   }
 
+  /**
+   * Foreground window snapshot via the persistent probe (plan 562
+   * phase 5). One line on an already-warm process — replaces the
+   * focus tracker's per-poll powershell spawn + Add-Type compile that
+   * measured ~3.4s per query and swallowed short-lived foreground
+   * states. Best-effort: timeouts do NOT count toward the stall
+   * counter (an fg racing an in-flight enumerate must not recycle
+   * the probe); callers fall back to the spawn query on null.
+   */
+  async foreground(): Promise<UiaForegroundInfo | null> {
+    const response = await this.request((id) => ({ id, op: 'fg' }), this.opts.fgTimeoutMs, {
+      countsTowardStall: false,
+    });
+    if (response === null || response.kind !== 'response' || !response.ok || !response.fg) {
+      return null;
+    }
+    return response.fg;
+  }
+
+  /**
+   * Enumerate the interactive-element tree of a window with real
+   * BoundingRectangles (plan 562 Phase 1). Never throws: null = the
+   * probe could not answer (timeout/degraded), an empty result with
+   * reason 'elevated' = UIPI skip, truncated:true = partial tree kept.
+   */
+  async enumerate(hwnd: number, opts: { maxNodes?: number; maxDepth?: number } = {}): Promise<UiaEnumerateResult | null> {
+    const response = await this.request(
+      (id) => ({
+        id,
+        op: 'enumerate',
+        hwnd,
+        ...(opts.maxNodes !== undefined ? { maxNodes: opts.maxNodes } : {}),
+        ...(opts.maxDepth !== undefined ? { maxDepth: opts.maxDepth } : {}),
+      }),
+      this.opts.enumerateTimeoutMs,
+    );
+    if (response === null || response.kind !== 'response' || !response.ok) {
+      return null;
+    }
+    return {
+      elements: response.elements ?? [],
+      truncated: response.truncated,
+      reason: response.reason,
+    };
+  }
+
+  /**
+   * enumerate() with the (hwnd, title) cache from plan 562 D5: while
+   * the window handle AND title are unchanged, the cached tree is
+   * returned without touching the probe. A title change or an expired
+   * entry triggers a re-scan. Pass title='' to force a scan.
+   */
+  async enumerateCached(hwnd: number, title: string, opts: { maxNodes?: number; maxDepth?: number } = {}): Promise<UiaEnumerateResult | null> {
+    const cached = this.enumerateCache.get(hwnd);
+    const fresh = cached && Date.now() - cached.at < this.opts.enumerateCacheTtlMs;
+    if (cached && fresh && cached.title === title && title.length > 0) {
+      return cached.result;
+    }
+    const result = await this.enumerate(hwnd, opts);
+    if (result === null) {
+      // Keep any previous entry: a failed scan must not flush a good tree.
+      return null;
+    }
+    this.enumerateCache.set(hwnd, { title, result, at: Date.now() });
+    if (this.enumerateCache.size > 16) {
+      // Bounded: drop the oldest entry (insertion-ordered Map).
+      const oldest = this.enumerateCache.keys().next();
+      if (!oldest.done) {
+        this.enumerateCache.delete(oldest.value);
+      }
+    }
+    return result;
+  }
+
+  /** Test/IPC: drop cached enumerate results (e.g. after a forced refresh). */
+  clearEnumerateCache(): void {
+    this.enumerateCache.clear();
+  }
+
   /** Stop the probe process and tear down timers. */
   async dispose(): Promise<void> {
     if (this.idleTimer) {
@@ -171,6 +333,7 @@ export class UiaProbeClient {
       this.idleTimer = null;
     }
     this.failAllPending('disposed');
+    this.enumerateCache.clear();
     await this.stopDaemon();
     this.state = 'idle';
   }
@@ -262,6 +425,7 @@ export class UiaProbeClient {
   private async request(
     build: (id: number) => UiaProbeRequest,
     timeoutMs: number,
+    opts: { countsTowardStall?: boolean } = {},
   ): Promise<UiaProbeResponse | null> {
     await this.ensureStarted();
     if (this.state !== 'running' || !this.daemon) {
@@ -283,6 +447,9 @@ export class UiaProbeClient {
       }
     });
     if (response === null) {
+      if (opts.countsTowardStall === false) {
+        return response;
+      }
       this.consecutiveTimeouts += 1;
       logger.debug(
         'uia probe request timed out',
@@ -318,6 +485,7 @@ export class UiaProbeClient {
     this.failAllPending(reason);
     await this.stopDaemon();
     this.state = 'degraded';
+    this.degradedAt = Date.now();
     logger.warn('uia probe degraded; element-less recording', { reason }, LogComponent.ComputerUse);
   }
 
@@ -374,6 +542,10 @@ export interface RecorderProbeAdapter {
   at(x: number, y: number): Promise<ElementDescriptor>;
   warmup(): Promise<void>;
   readUrl(hwnd: number): Promise<string | null>;
+  /** Plan 562: full interactive-tree enumeration with (hwnd,title) caching. */
+  enumerate(hwnd: number, title: string): Promise<UiaEnumerateResult | null>;
+  /** Plan 562 phase 5: foreground snapshot from the persistent process. */
+  foreground(): Promise<UiaForegroundInfo | null>;
 }
 
 let _shared: UiaProbeClient | null = null;
@@ -393,6 +565,8 @@ export function createSharedUiaProbeAdapter(): RecorderProbeAdapter {
     at: (x, y) => client.probe(x, y),
     warmup: () => client.ensureStarted(),
     readUrl: (hwnd) => client.readUrl(hwnd),
+    enumerate: (hwnd, title) => client.enumerateCached(hwnd, title),
+    foreground: () => client.foreground(),
   };
 }
 

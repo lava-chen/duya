@@ -74,9 +74,17 @@ export {
 export type { AggregatorOptions, FeedContext } from './aggregators.js';
 
 export {
+  DEFAULT_INTERACTIVE_CONTROL_TYPES,
   buildRequestLine,
   elementToDescriptor,
+  enumeratedElementToDescriptor,
+  isInteractiveOverlayElement,
   isBrowserProcess,
   parseUiaProbeLine,
 } from './uia-probe-protocol.js';
-export type { UiaProbeRequest, UiaProbeResponse } from './uia-probe-protocol.js';
+export type {
+  EnumeratedElement,
+  EnumeratedElementDescriptor,
+  UiaProbeRequest,
+  UiaProbeResponse,
+} from './uia-probe-protocol.js';

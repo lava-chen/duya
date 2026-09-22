@@ -199,6 +199,20 @@ describe('candidate parsing', () => {
     expect(parsed[1]!.axSource).toBeUndefined();
   });
 
+  it('preserves plan 562 tree sources through toSomCandidates', () => {
+    const parsed = toSomCandidates([
+      { index: 1, bbox: { x: 0, y: 0, w: 10, h: 10 }, label: 'OK', kind: 'Button', axSource: 'uia-tree' },
+      { index: 2, bbox: { x: 0, y: 0, w: 10, h: 10 }, label: 'tab', axSource: 'ax-tree' },
+      { index: 3, bbox: { x: 0, y: 0, w: 10, h: 10 }, label: 'bogus', axSource: 'bogus' },
+    ]);
+    expect(parsed[0]!.axSource).toBe('uia-tree');
+    expect(parsed[1]!.axSource).toBe('ax-tree');
+    // unknown sources are dropped (element kept) — the closed-union guard
+    // must never silently discard a candidate wholesale
+    expect(parsed[2]!.axSource).toBeUndefined();
+    expect(parsed.map((c) => c.index)).toEqual([1, 2, 3]);
+  });
+
   it('returns [] for a non-array payload', () => {
     expect(toSomCandidates(undefined)).toEqual([]);
     expect(toSomCandidates({ elements: [] })).toEqual([]);

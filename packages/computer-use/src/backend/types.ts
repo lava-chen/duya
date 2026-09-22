@@ -80,10 +80,12 @@ export interface SomElement {
     | 'Unknown';
   /**
    * Where this element's metadata came from (plan 519 §3.4). Lets the
-   * model judge the reliability of the label: UIA/MSAA carry a real
-   * `name`/`controlType`; focused-entity and heuristic are best-effort.
+   * model judge the reliability of the label: tree-enumerated and
+   * UIA/MSAA elements carry a real `name`/`controlType` (tree sources
+   * also carry real coordinates — plan 562 Phase 2); focused-entity
+   * and heuristic are best-effort.
    */
-  axSource?: 'uia' | 'msaa' | 'focused-entity' | 'heuristic';
+  axSource?: 'uia-tree' | 'ax-tree' | 'uia' | 'msaa' | 'focused-entity' | 'heuristic';
 }
 
 /**

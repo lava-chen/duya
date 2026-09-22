@@ -12,8 +12,9 @@
  * Three layers, first hit wins:
  *
  *   L1  name ↔ SOM label exact match. Candidates are ranked by
- *       accessibility provenance (axSource uia/msaa beat
- *       focused-entity/heuristic), then by controlType agreement, then
+ *       accessibility provenance (axSource uia-tree/ax-tree beat
+ *       uia/msaa, which beat focused-entity/heuristic), then by
+ *       controlType agreement, then
  *       by the distance between the fresh bbox centre and the recorded
  *       click point — the design's "多命中取 rect 中心距录制坐标最近者".
  *       → confidence 'exact' → verification 'verified'
@@ -50,12 +51,21 @@ import { SOM_ELEMENT_RE } from './schema.js';
  * non-Electron backends can build one without the computer-use build.
  */
 export interface SomCandidate {
-  /** 1-based index inside the capture that produced this element. */
+  /**
+   * 1-based index inside the capture that produced this element.
+   */
   index: number;
   bbox: Bbox;
   label: string;
   kind?: string;
-  axSource?: 'uia' | 'msaa' | 'focused-entity' | 'heuristic';
+  /**
+   * Plan 562 Phase 2 added the tree sources ('uia-tree' | 'ax-tree') —
+   * candidates with REAL coordinates from full-tree enumeration. Keep
+   * this union in sync with `SomElement.axSource`
+   * (packages/computer-use backend/types.ts) and with `isAxSource`
+   * below, or toSomCandidates silently drops the new values.
+   */
+  axSource?: 'uia-tree' | 'ax-tree' | 'uia' | 'msaa' | 'focused-entity' | 'heuristic';
 }
 
 /** A capture frame — logical pixels, top-left origin. */
@@ -116,11 +126,19 @@ export interface MatchOptions {
 /** L2 acceptance threshold, as a fraction of the frame diagonal. */
 export const MAX_APPROX_DISTANCE_RATIO = 0.12;
 
+/**
+ * Provenance ranking. Tree sources (plan 562 Phase 2) carry real
+ * coordinates AND real metadata, so they outrank the coordinate-less
+ * UIA/MSAA sidecars; heuristic stays last. Must stay in sync with the
+ * `SomCandidate['axSource']` union above.
+ */
 const AX_SOURCE_RANK: Record<NonNullable<SomCandidate['axSource']>, number> = {
-  uia: 0,
-  msaa: 1,
-  'focused-entity': 2,
-  heuristic: 3,
+  'uia-tree': 0,
+  'ax-tree': 1,
+  uia: 2,
+  msaa: 3,
+  'focused-entity': 4,
+  heuristic: 5,
 };
 
 // ─── entry point ───
@@ -281,7 +299,7 @@ function rankByName(
 }
 
 function axRank(candidate: SomCandidate): number {
-  return candidate.axSource ? AX_SOURCE_RANK[candidate.axSource] : 4;
+  return candidate.axSource ? AX_SOURCE_RANK[candidate.axSource] : 6;
 }
 
 function kindAgreement(candidate: SomCandidate, wantKind: string): number {
@@ -387,7 +405,14 @@ function fallback(reason: string): MatchResult {
 }
 
 function isAxSource(value: unknown): value is NonNullable<SomCandidate['axSource']> {
-  return value === 'uia' || value === 'msaa' || value === 'focused-entity' || value === 'heuristic';
+  return (
+    value === 'uia-tree' ||
+    value === 'ax-tree' ||
+    value === 'uia' ||
+    value === 'msaa' ||
+    value === 'focused-entity' ||
+    value === 'heuristic'
+  );
 }
 
 function truncate(value: string): string {

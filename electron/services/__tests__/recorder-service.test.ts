@@ -45,6 +45,8 @@ vi.mock('../recorder/focus-tracker.js', () => {
 
 import { RecorderService, DEFAULT_MAX_DURATION_MS } from '../recorder/service';
 import { listSessions, loadSession } from '@duya/computer-use';
+import type { AppRef } from '@duya/computer-use';
+import type { UiaEnumerateResult } from '../recorder/uia-probe.js';
 
 const mockModule = (await import('../recorder/focus-tracker.js')) as unknown as {
   __mockInstances: Array<Record<string, unknown>>;
@@ -357,5 +359,149 @@ describe('RecorderService — probe wiring (phase 2)', () => {
     if (click?.type === 'click') {
       expect(click.browserUrl).toBeUndefined();
     }
+  });
+});
+
+describe('RecorderService — app_focus enumerate snapshot (plan 562 phase 5)', () => {
+  it('fires an async enumerate on focus change and delivers a non-empty snapshot', async () => {
+    const enumerate = vi.fn(async (_hwnd: number, _title: string) => ({
+      elements: [{ name: 'OK', controlType: 'Button', rect: { x: 1, y: 2, w: 3, h: 4 }, interactive: true, source: 'uia-probe' }],
+      truncated: false,
+      reason: null,
+    }));
+    const snapshots: Array<{ hwnd: number; title: string; elements: unknown[] }> = [];
+    const service = makeService({
+      probe: {
+        at: async () => ({ source: 'none' }),
+        enumerate: (hwnd: number, title: string) => enumerate(hwnd, title),
+      },
+      onEnumerateSnapshot: (result: UiaEnumerateResult, app: AppRef) => {
+        snapshots.push({ hwnd: app.pid, title: app.title, elements: result.elements });
+      },
+    });
+    await service.start();
+    tracker().onChange(null, CHROME);
+    await new Promise((r) => setImmediate(r));
+    expect(enumerate).toHaveBeenCalledWith(CHROME.hwnd, CHROME.title);
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]!.title).toBe('Docs');
+    expect(snapshots[0]!.elements).toHaveLength(1);
+    await service.stop();
+  });
+
+  it('suppresses the callback for empty trees and self/blocked apps', async () => {
+    const enumerate = vi.fn(async () => ({ elements: [], truncated: false, reason: null }));
+    const onSnapshot = vi.fn();
+    const service = makeService({
+      probe: {
+        at: async () => ({ source: 'none' }),
+        enumerate: () => enumerate(),
+      },
+      onEnumerateSnapshot: onSnapshot,
+    });
+    await service.start();
+    // Empty tree → no callback.
+    tracker().onChange(null, CHROME);
+    await new Promise((r) => setImmediate(r));
+    expect(onSnapshot).not.toHaveBeenCalled();
+    // Self window → enumerate not even attempted.
+    const SELF = { hwnd: 3, pid: process.pid, processName: 'DUYA', title: 'duya' };
+    tracker().onChange(CHROME, SELF);
+    await new Promise((r) => setImmediate(r));
+    expect(enumerate).toHaveBeenCalledTimes(1);
+    // Blocked app → enumerate not attempted either.
+    const KEEPASS = { hwnd: 4, pid: 300, processName: 'keepass', title: 'KeePass' };
+    tracker().onChange(SELF, KEEPASS);
+    await new Promise((r) => setImmediate(r));
+    expect(enumerate).toHaveBeenCalledTimes(1);
+    await service.stop();
+  });
+
+  it('enumerate failures never break the append chain', async () => {
+    const service = makeService({
+      probe: {
+        at: async () => ({ source: 'none' }),
+        enumerate: async () => {
+          throw new Error('probe dead');
+        },
+      },
+      onEnumerateSnapshot: () => undefined,
+    });
+    await service.start();
+    tracker().onChange(null, CHROME);
+    await new Promise((r) => setTimeout(r, 20));
+    workerCbs!.onEvent(keydown(48, 'o', 1000));
+    tracker().onChange(CHROME, NOTEPAD);
+    await service.stop();
+    const { events } = await readEvents();
+    // The type event still landed — the failed snapshot was swallowed.
+    expect(events.some((e) => e.type === 'type')).toBe(true);
+  });
+});
+
+describe('RecorderService — click-driven browserUrl refresh (plan 562 §7)', () => {
+  function mouseDown(ts: number, button = 1) {
+    return { kind: 'mousedown', ts, x: 50, y: 60, button, clicks: 1 };
+  }
+  function mouseUp(ts: number, button = 1) {
+    return { kind: 'mouseup', ts, x: 50, y: 60, button };
+  }
+
+  it('a left mouseup in a browser triggers a throttled readUrl refresh', async () => {
+    const readUrl = vi.fn(async () => 'https://old.example/a');
+    const service = makeService({
+      probe: { at: async () => ({ source: 'none' }), readUrl },
+      urlRefreshIntervalMs: 50,
+    });
+    await service.start();
+    // Focus-change refresh (#1) → browserUrl = old/a.
+    tracker().onChange(null, CHROME);
+    await new Promise((r) => setImmediate(r));
+    expect(readUrl).toHaveBeenCalledTimes(1);
+    expect((service as unknown as { browserUrl?: string }).browserUrl).toBe('https://old.example/a');
+
+    // Simulated navigation completes, then the click lands → refresh (#2).
+    readUrl.mockResolvedValue('https://new.example/b');
+    await new Promise((r) => setTimeout(r, 60));
+    workerCbs!.onEvent(mouseDown(900));
+    workerCbs!.onEvent(mouseUp(910));
+    await new Promise((r) => setImmediate(r));
+    expect(readUrl).toHaveBeenCalledTimes(2);
+    expect(readUrl).toHaveBeenLastCalledWith(CHROME.hwnd);
+    expect((service as unknown as { browserUrl?: string }).browserUrl).toBe('https://new.example/b');
+
+    // Throttle: an immediate second click does not re-read.
+    workerCbs!.onEvent(mouseDown(920));
+    workerCbs!.onEvent(mouseUp(930));
+    await new Promise((r) => setImmediate(r));
+    expect(readUrl).toHaveBeenCalledTimes(2);
+    await service.stop();
+  });
+
+  it('right-button mouseups and non-browser foregrounds never refresh', async () => {
+    const readUrl = vi.fn(async () => 'https://old.example/a');
+    const service = makeService({
+      probe: { at: async () => ({ source: 'none' }), readUrl },
+    });
+    await service.start();
+    // Non-browser: no readUrl on focus change, none on left click either.
+    tracker().onChange(null, NOTEPAD);
+    await new Promise((r) => setImmediate(r));
+    workerCbs!.onEvent(mouseDown(900));
+    workerCbs!.onEvent(mouseUp(910));
+    await new Promise((r) => setImmediate(r));
+    expect(readUrl).not.toHaveBeenCalled();
+
+    // Browser focus change fires readUrl (#1).
+    tracker().onChange(NOTEPAD, CHROME);
+    await new Promise((r) => setImmediate(r));
+    expect(readUrl).toHaveBeenCalledTimes(1);
+
+    // Right-button click is not a navigation click: no refresh.
+    workerCbs!.onEvent(mouseDown(920, 2));
+    workerCbs!.onEvent(mouseUp(930, 2));
+    await new Promise((r) => setImmediate(r));
+    expect(readUrl).toHaveBeenCalledTimes(1);
+    await service.stop();
   });
 });

@@ -14,6 +14,7 @@
  */
 
 import type { FocusedEntity } from '@duya/computer-use-demo';
+import type { ElementDescriptor } from '../recorder/events.js';
 import type { SomElement } from '../backend/types.js';
 
 /**
@@ -57,6 +58,20 @@ export interface ElementDetectorInput {
    * are a heuristic grid — prefer focused-entity markers for precision.
    */
   axInfo?: AxInfo | null;
+  /**
+   * Full-tree enumerated element descriptors WITH real bounding
+   * rectangles (plan 562 Phase 2 — uia-probe `enumerate` output, later
+   * the macOS AX helper). Takes priority over the `axInfo` heuristic
+   * grid: when non-empty, grid elements are not emitted. Entries
+   * without a usable `rect` are skipped (they cannot be placed).
+   */
+  axElements?: ElementDescriptor[] | null;
+  /**
+   * Which tree `axElements` came from — tags the emitted `axSource`.
+   * Defaults to `'uia-tree'`; the macOS AX helper (plan 562 Phase 4)
+   * passes `'ax-tree'`.
+   */
+  axElementsSource?: 'uia-tree' | 'ax-tree';
 }
 
 /**
@@ -68,9 +83,12 @@ export interface ElementDetectorInput {
  *
  * Sources, in priority order:
  *   1. focusedEntity   → one element at its bbox, `axSource: 'focused-entity'`
- *   2. UIA inputs      → labeled elements, `axSource: 'uia'`
- *   3. MSAA inputs     → labeled elements, `axSource: 'msaa'`
- *   4. centered fallback → one 'primary' element, `axSource: 'heuristic'`
+ *   2. axElements      → tree-enumerated elements at their REAL rects
+ *                        (plan 562 Phase 2), `axSource: 'uia-tree'|'ax-tree'`;
+ *                        when non-empty the AxInfo grid below is skipped
+ *   3. UIA inputs      → labeled elements, `axSource: 'uia'`
+ *   4. MSAA inputs     → labeled elements, `axSource: 'msaa'`
+ *   5. centered fallback → one 'primary' element, `axSource: 'heuristic'`
  *      (only when none of the above produced anything)
  */
 export function detectSomElements(input: ElementDetectorInput): SomElement[] {
@@ -91,7 +109,21 @@ export function detectSomElements(input: ElementDetectorInput): SomElement[] {
     }
   }
 
-  // 2 + 3. AX tree → labeled elements filling an otherwise element-poor
+  // 2. Tree enumeration → elements with REAL coordinates. When it
+  //    yields anything, the coordinate-less AxInfo grid is not emitted
+  //    (the grid is the no-coordinate degradation path).
+  const treeElements = axElementsToSom(
+    input.axElements ?? null,
+    input.axElementsSource ?? 'uia-tree',
+    nextIndex,
+  );
+  if (treeElements.length > 0) {
+    for (const el of treeElements) elements.push(el);
+    nextIndex = lastIndex(elements) + 1;
+    return elements;
+  }
+
+  // 3 + 4. AX tree → labeled elements filling an otherwise element-poor
   // capture. bboxes are a heuristic grid (AX carries no coordinates);
   // `axSource` lets the model weigh label confidence.
   const ax = input.axInfo;
@@ -116,7 +148,7 @@ export function detectSomElements(input: ElementDetectorInput): SomElement[] {
     for (const el of msaaElements) elements.push(el);
   }
 
-  // 4. Primary action fallback — a centered square that always exists so
+  // 5. Primary action fallback — a centered square that always exists so
   //    the LLM has a "safe" target when nothing else is detectable.
   if (elements.length === 0 && input.width > 0 && input.height > 0) {
     const size = Math.min(120, Math.floor(input.width / 6));
@@ -135,6 +167,47 @@ export function detectSomElements(input: ElementDetectorInput): SomElement[] {
   }
 
   return elements;
+}
+
+/**
+ * Map tree-enumerated descriptors (plan 562 Phase 2) to SOM elements at
+ * their REAL bounding rectangles. Entries without a usable rect are
+ * skipped — they cannot be placed, and the coordinate-less grid path
+ * stays the degradation for that case.
+ *
+ * Labels use the raw accessible name (not the grid's `Type: 'name'`
+ * wrapper): the matcher's L1 compares the recorded element name against
+ * this label, so a raw name is what makes exact matches land on
+ * real-coordinate candidates.
+ */
+function axElementsToSom(
+  descriptors: ElementDescriptor[] | null,
+  source: 'uia-tree' | 'ax-tree',
+  startIndex: number,
+): SomElement[] {
+  if (!descriptors || descriptors.length === 0) return [];
+  const result: SomElement[] = [];
+  let index = startIndex;
+  for (const d of descriptors) {
+    const rect = d.rect;
+    if (
+      !rect ||
+      rect.w <= 0 ||
+      rect.h <= 0
+    ) {
+      continue;
+    }
+    const controlType = d.controlType ?? 'Control';
+    const name = (d.name ?? '').trim();
+    result.push({
+      index: index++,
+      bbox: { x: rect.x, y: rect.y, w: rect.w, h: rect.h },
+      label: (name.length > 0 ? name : controlType).slice(0, 48),
+      kind: kindFromControlType(controlType),
+      axSource: source,
+    });
+  }
+  return result;
 }
 
 /**

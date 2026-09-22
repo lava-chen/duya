@@ -308,4 +308,103 @@ describe('detectSomElements', () => {
       expect(elements.length).toBeGreaterThan(0);
     });
   });
+
+  // Plan 562 Phase 2: full-tree enumerated descriptors with REAL rects
+  // take priority over the heuristic grid.
+  describe('with axElements (plan 562 phase 2)', () => {
+    function descriptor(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+      return { source: 'uia-probe', name: 'Sign In', controlType: 'Button', rect: { x: 100, y: 200, w: 80, h: 32 }, ...overrides };
+    }
+
+    it('emits one element per descriptor at its REAL bbox tagged axSource=uia-tree', () => {
+      const elements = detectSomElements({
+        width: 1920,
+        height: 1080,
+        axElements: [
+          descriptor() as never,
+          descriptor({ name: 'url bar', controlType: 'Edit', rect: { x: 10, y: 10, w: 300, h: 24 } }) as never,
+          descriptor({ name: 'tab 1', controlType: 'TabItem', rect: { x: 400, y: 0, w: 120, h: 28 } }) as never,
+        ],
+      });
+      expect(elements.length).toBe(3);
+      expect(elements.map((e) => e.axSource)).toEqual(['uia-tree', 'uia-tree', 'uia-tree']);
+      expect(elements[0]?.bbox).toEqual({ x: 100, y: 200, w: 80, h: 32 });
+      expect(elements[1]?.bbox).toEqual({ x: 10, y: 10, w: 300, h: 24 });
+      expect(elements[0]?.label).toBe('Sign In');
+      expect(elements[1]?.label).toBe('url bar');
+      expect(elements.map((e) => e.kind)).toEqual(['Button', 'Edit', 'Tab']);
+      expect(elements.map((e) => e.index)).toEqual([1, 2, 3]);
+    });
+
+    it('keeps the focused-entity element ahead of tree elements', () => {
+      const entity: FocusedEntity = {
+        kind: 'Button',
+        name: 'submit',
+        bbox: { x: 0, y: 0, w: 80, h: 40 },
+        redaction: { redacted: false, reasons: [] },
+      } as unknown as FocusedEntity;
+      const elements = detectSomElements({
+        width: 1920,
+        height: 1080,
+        focusedEntity: entity,
+        axElements: [descriptor() as never],
+      });
+      expect(elements[0]?.axSource).toBe('focused-entity');
+      expect(elements[0]?.index).toBe(1);
+      expect(elements[1]?.axSource).toBe('uia-tree');
+      expect(elements[1]?.index).toBe(2);
+    });
+
+    it('skips descriptors without a usable rect', () => {
+      const elements = detectSomElements({
+        width: 1920,
+        height: 1080,
+        axElements: [
+          descriptor({ rect: undefined }) as never,
+          descriptor({ name: 'Close', rect: { x: 5, y: 5, w: 30, h: 30 } }) as never,
+          descriptor({ rect: { x: 0, y: 0, w: 0, h: 0 } }) as never,
+        ],
+      });
+      expect(elements.length).toBe(1);
+      expect(elements[0]?.label).toBe('Close');
+    });
+
+    it('degrades to the AxInfo grid when axElements is empty or absent', () => {
+      const gridOnly = detectSomElements({
+        width: 1920,
+        height: 1080,
+        axInfo: { uia: [{ name: 'field', controlType: 'Edit' }], msaa: [] },
+      });
+      expect(gridOnly.map((e) => e.axSource)).toEqual(['uia']);
+
+      const emptyThenGrid = detectSomElements({
+        width: 1920,
+        height: 1080,
+        axElements: [],
+        axInfo: { uia: [{ name: 'field', controlType: 'Edit' }], msaa: [] },
+      });
+      expect(emptyThenGrid.map((e) => e.axSource)).toEqual(['uia']);
+    });
+
+    it('suppresses the grid when real-coordinate elements exist', () => {
+      const elements = detectSomElements({
+        width: 1920,
+        height: 1080,
+        axElements: [descriptor() as never],
+        axInfo: { uia: [{ name: 'field', controlType: 'Edit' }], msaa: [] },
+      });
+      expect(elements.length).toBe(1);
+      expect(elements[0]?.axSource).toBe('uia-tree');
+    });
+
+    it('honors axElementsSource=ax-tree for the macOS helper', () => {
+      const elements = detectSomElements({
+        width: 1920,
+        height: 1080,
+        axElements: [descriptor() as never],
+        axElementsSource: 'ax-tree',
+      });
+      expect(elements[0]?.axSource).toBe('ax-tree');
+    });
+  });
 });

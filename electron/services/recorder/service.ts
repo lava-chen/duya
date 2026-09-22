@@ -38,7 +38,9 @@ import {
 import { getLogger, LogComponent } from '../../logging/logger.js';
 import { RecorderHookWorker } from './hook-worker.js';
 import { RecorderFocusTracker } from './focus-tracker.js';
-import { createSharedUiaProbeAdapter } from './uia-probe.js';
+import { createSharedUiaProbeAdapter, type UiaEnumerateResult, type UiaForegroundInfo } from './uia-probe.js';
+import { getForegroundWindowInfo } from '../computer-use-backend.js';
+import { showOverlayElements } from '../overlay/index.js';
 
 const logger = getLogger();
 
@@ -47,6 +49,9 @@ export const DEFAULT_MAX_DURATION_MS = 10 * 60_000;
 
 /** Aggregator poll cadence for silence flushes. */
 const POLL_INTERVAL_MS = 1_000;
+
+/** Min interval between click-driven browserUrl refreshes (plan 562 §7). */
+const URL_REFRESH_INTERVAL_MS = 2_000;
 
 export type RecorderStatus =
   | 'idle'
@@ -69,12 +74,17 @@ export interface RecorderStatusSnapshot {
  * Phase 1 ran without one). `at` is called on the click-attach path and
  * must never throw; `warmup` lets the service start the probe process
  * at recording start, outside the click budget; `readUrl` fetches the
- * browser address-bar value on focus changes.
+ * browser address-bar value on focus changes; `enumerate` feeds the
+ * plan 562 element overlay + app_focus snapshots (optional — absent
+ * means no overlay / no snapshot, recording is unaffected).
  */
 export interface RecorderProbe {
   at(x: number, y: number): Promise<ElementDescriptor>;
   warmup?(): Promise<void>;
   readUrl?(hwnd: number): Promise<string | null>;
+  enumerate?(hwnd: number, title: string): Promise<UiaEnumerateResult | null>;
+  /** Plan 562 phase 5: fast foreground query via the persistent probe. */
+  foreground?(): Promise<UiaForegroundInfo | null>;
 }
 
 type HookWorkerCallbacks = ConstructorParameters<typeof RecorderHookWorker>[0];
@@ -87,6 +97,17 @@ export interface RecorderServiceOptions {
   maxDurationMs?: number;
   /** UIA element probe (Phase 2 wires this; Phase 1 runs without). */
   probe?: RecorderProbe;
+  /**
+   * Plan 562 §7: throttle window for click-driven browserUrl refreshes.
+   * Defaults to URL_REFRESH_INTERVAL_MS; tests shrink it.
+   */
+  urlRefreshIntervalMs?: number;
+  /**
+   * Plan 562 Phase 5: called with each async app_focus enumerate
+   * snapshot (only when the tree is non-empty). Fire-and-forget — the
+   * snapshot must never block or fail the append chain.
+   */
+  onEnumerateSnapshot?: (result: UiaEnumerateResult, app: AppRef) => void;
   /** Test hook: replace hook worker construction. */
   createWorker?: (callbacks: HookWorkerCallbacks) => WorkerLike;
 }
@@ -121,6 +142,10 @@ export class RecorderService {
 
   private currentApp: AppRef | null = null;
   private browserUrl: string | undefined = undefined;
+  /** Foreground hwnd of the current app (click-driven readUrl refresh). */
+  private currentHwnd = 0;
+  /** Last browserUrl refresh (throttle for click-driven refreshes). */
+  private lastUrlRefreshAt = 0;
   private redactHint = false;
   private droppedNoApp = 0;
   private droppedFiltered = 0;
@@ -140,6 +165,8 @@ export class RecorderService {
     rootDir: string;
     maxDurationMs: number;
     probe?: RecorderProbe;
+    urlRefreshIntervalMs: number;
+    onEnumerateSnapshot?: RecorderServiceOptions['onEnumerateSnapshot'];
     createWorker?: RecorderServiceOptions['createWorker'];
   };
 
@@ -148,6 +175,8 @@ export class RecorderService {
       rootDir: opts.rootDir ?? getDefaultRecorderRootDir(),
       maxDurationMs: opts.maxDurationMs ?? DEFAULT_MAX_DURATION_MS,
       probe: opts.probe,
+      urlRefreshIntervalMs: opts.urlRefreshIntervalMs ?? URL_REFRESH_INTERVAL_MS,
+      onEnumerateSnapshot: opts.onEnumerateSnapshot,
       createWorker: opts.createWorker,
     };
   }
@@ -222,9 +251,31 @@ export class RecorderService {
     this.aggregator = new RecorderAggregator();
 
     // Focus tracker first: the immediate query gives the aggregator an
-    // app snapshot before the first keystroke arrives.
+    // app snapshot before the first keystroke arrives. Query path (plan
+    // 562 phase 5): the persistent probe's `fg` op when available — one
+    // line on a warm process. The previous per-poll powershell spawn +
+    // Add-Type compile measured ~3.4s per query, so short-lived
+    // foreground states (e.g. a quick explorer visit) were swallowed.
+    // When the probe is absent/degraded the spawn query keeps recording
+    // alive at its slower cadence.
+    const probeForeground = this.opts.probe?.foreground;
     this.tracker = new RecorderFocusTracker({
       onChange: (prev, next) => this.handleFocusChange(prev, next),
+      ...(probeForeground
+        ? {
+            query: async () => {
+              try {
+                const viaProbe = await probeForeground();
+                if (viaProbe) {
+                  return viaProbe;
+                }
+              } catch {
+                // probe hiccup: fall through to the spawn query
+              }
+              return getForegroundWindowInfo();
+            },
+          }
+        : {}),
     });
     this.tracker.start();
 
@@ -332,11 +383,13 @@ export class RecorderService {
     }
     this.redactHint = false;
     this.currentApp = nextApp;
+    this.currentHwnd = next.hwnd;
 
     // Browser URL: refresh on every focus change INTO a supported
     // browser; clear immediately when leaving one (no stale URLs).
     if (isBrowserProcess(nextApp.processName) && this.opts.probe?.readUrl) {
       const hwnd = next.hwnd;
+      this.lastUrlRefreshAt = Date.now();
       void this.opts.probe
         .readUrl(hwnd)
         .then((url) => {
@@ -351,6 +404,26 @@ export class RecorderService {
     if (this.isSelfPid(nextApp.pid) || shouldDropEventForApp(nextApp)) {
       return;
     }
+
+    // Plan 562 Phase 5: async element-tree snapshot on focus changes.
+    // (hwnd,title) caching keeps an unchanged application from being
+    // re-scanned. Fire-and-forget: the snapshot must never block the
+    // append chain, and a null/empty result simply leaves the overlay
+    // as-is (cleared on recorder stop).
+    const enumerate = this.opts.probe?.enumerate;
+    const onSnapshot = this.opts.onEnumerateSnapshot;
+    if (enumerate && onSnapshot) {
+      const hwnd = next.hwnd;
+      const title = next.title;
+      void enumerate(hwnd, title)
+        .then((result) => {
+          if (result && result.elements.length > 0) {
+            onSnapshot(result, nextApp);
+          }
+        })
+        .catch(() => undefined);
+    }
+
     const focusEvent: RecorderEvent = {
       type: 'app_focus',
       ts: Date.now(),
@@ -373,9 +446,41 @@ export class RecorderService {
       this.droppedFiltered += 1;
       return;
     }
+    this.maybeRefreshBrowserUrl(event, app);
     for (const out of aggregator.feed(event, this.feedContext())) {
       this.enqueueAppend(out);
     }
+  }
+
+  /**
+   * Plan 562 §7: keep browserUrl fresh during browsing. readUrl used to
+   * fire only on focus changes, so an in-window navigation (click a
+   * link, never leave the browser) left every later event carrying the
+   * stale URL. A click inside a browser now triggers a throttled
+   * re-read. The click event itself keeps the pre-click URL — correct
+   * semantics, the click happened on that page — while later events
+   * pick up the post-navigation one from feedContext.
+   */
+  private maybeRefreshBrowserUrl(event: WorkerEvent, app: AppRef): void {
+    const readUrl = this.opts.probe?.readUrl;
+    if (!readUrl) {
+      return;
+    }
+    if (
+      !(event.kind === 'mouseup' && event.button === 1) ||
+      !isBrowserProcess(app.processName) ||
+      this.currentHwnd === 0 ||
+      Date.now() - this.lastUrlRefreshAt <= this.opts.urlRefreshIntervalMs
+    ) {
+      return;
+    }
+    this.lastUrlRefreshAt = Date.now();
+    const hwnd = this.currentHwnd;
+    void readUrl(hwnd)
+      .then((url) => {
+        this.browserUrl = url ?? undefined;
+      })
+      .catch(() => undefined);
   }
 
   private handleWorkerFailed(reason: string): void {
@@ -521,6 +626,14 @@ export function getRecorderService(): RecorderService {
   if (!_singleton) {
     _singleton = new RecorderService({
       probe: createSharedUiaProbeAdapter(),
+      // Plan 562 Phase 5: focus-change snapshots feed the element
+      // overlay. Empty trees (custom-drawn windows, UIPI skips) draw
+      // nothing — the overlay stays cleared.
+      onEnumerateSnapshot: (result) => {
+        if (result.elements.length > 0) {
+          showOverlayElements(result.elements as unknown as Record<string, unknown>[]);
+        }
+      },
     });
   }
   return _singleton;
