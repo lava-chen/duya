@@ -126,6 +126,8 @@ export interface GitAPI {
   reviewTurnHistory: (sessionId: string, cwd: string, limit?: number) => Promise<GitTurnHistoryResult>;
   /** Load one persisted turn review by its row id (see reviewTurnHistory). */
   reviewTurnDetail: (cwd: string, reviewId: string) => Promise<GitLatestTurnReviewResult>;
+  /** Load the most recent persisted turn review for a given turnId. */
+  reviewTurnByTurnId: (sessionId: string, cwd: string, turnId: string) => Promise<GitLatestTurnReviewResult>;
   /** Unified scoped review: unstaged / staged / uncommitted / commit. */
   reviewScoped: (cwd: string, scope: ReviewScopeParams) => Promise<GitReviewResult>;
   reviewScopedDiff: (cwd: string, scope: ReviewScopeParams, filePath: string) => Promise<GitReviewDiffResult>;

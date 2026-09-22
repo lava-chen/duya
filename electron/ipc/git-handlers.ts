@@ -418,6 +418,22 @@ function readTurnDetail(reviewId: string): GitLatestTurnReviewResult {
   return { isGitRepo: true, review };
 }
 
+function readTurnReviewByTurnId(sessionId: string, turnId: string): GitLatestTurnReviewResult {
+  const db = getDatabase();
+  if (!db) return { isGitRepo: true, error: 'Review history is unavailable.' };
+  const row = db.prepare(`
+    SELECT ${TURN_REVIEW_COLUMNS}
+    FROM chat_turn_reviews
+    WHERE session_id = ? AND turn_id = ?
+    ORDER BY captured_at DESC
+    LIMIT 1
+  `).get(sessionId, turnId) as TurnReviewRow | undefined;
+  if (!row) return { isGitRepo: true };
+  const review = rowToTurnReview(row);
+  if (!review) return { isGitRepo: true, error: 'Stored review history is invalid.' };
+  return { isGitRepo: true, review };
+}
+
 // ── Scoped review helpers (plan 227) ──────────────────────────────
 
 const COMMIT_HASH_RE = /^[0-9a-f]{7,40}$/i;
@@ -629,6 +645,25 @@ export function registerGitHandlers(): void {
     }
     try {
       return readTurnDetail(reviewId);
+    } catch {
+      return { isGitRepo: true, error: 'Unable to load review history.' };
+    }
+  });
+
+  ipcMain.handle('git:review-turn-by-turn-id', async (_event, sessionId: unknown, cwd: unknown, turnId: unknown): Promise<GitLatestTurnReviewResult> => {
+    if (
+      typeof sessionId !== 'string'
+      || sessionId.length === 0
+      || typeof cwd !== 'string'
+      || cwd.length === 0
+      || !isGitRepoDir(cwd)
+      || typeof turnId !== 'string'
+      || turnId.length === 0
+    ) {
+      return { isGitRepo: false };
+    }
+    try {
+      return readTurnReviewByTurnId(sessionId, turnId);
     } catch {
       return { isGitRepo: true, error: 'Unable to load review history.' };
     }

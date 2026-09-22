@@ -126,6 +126,10 @@ export async function getGitTurnDetail(cwd: string, reviewId: string): Promise<G
   return window.electronAPI?.git?.reviewTurnDetail(cwd, reviewId) ?? { isGitRepo: false };
 }
 
+export async function getGitTurnReviewByTurnId(sessionId: string, cwd: string, turnId: string): Promise<GitLatestTurnReviewResult> {
+  return window.electronAPI?.git?.reviewTurnByTurnId(sessionId, cwd, turnId) ?? { isGitRepo: false };
+}
+
 // ── Scoped review (plan 227) ──────────────────────────────────────
 
 export type ReviewScopeType = 'uncommitted' | 'unstaged' | 'staged' | 'commit';
