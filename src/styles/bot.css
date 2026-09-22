@@ -1347,6 +1347,90 @@
   50% { opacity: 1; }
 }
 
+/* BotActivityIndicator — rolling "current activity" line. A single pill
+   that always shows exactly what the bot is doing right now (thinking tail
+   or the current tool call); the inner line remounts on every activity
+   change and slides in — the previous line is replaced, never stacked.
+   Kind modifier recolors the spinner only; text stays neutral so long
+   tool chains don't strobe. */
+.bot-chat-activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 22px;
+  padding: 8px 14px;
+  border-radius: 16px;
+  background: var(--bot-bubble-assistant-bg);
+  border: 1px solid var(--border);
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.bot-chat-transcript > .bot-chat-activity {
+  width: fit-content;
+}
+
+.bot-chat-activity__spinner {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border);
+  border-top-color: var(--accent, #3b82f6);
+  animation: bot-chat-activity__spin 0.9s linear infinite;
+}
+
+.bot-chat-activity--error .bot-chat-activity__spinner {
+  border-top-color: var(--error, #ef4444);
+  animation: none;
+}
+
+.bot-chat-activity--waiting .bot-chat-activity__spinner {
+  border-top-color: var(--warning, #f59e0b);
+  animation: none;
+}
+
+@keyframes bot-chat-activity__spin {
+  to { transform: rotate(360deg); }
+}
+
+.bot-chat-activity__line {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
+  animation: bot-chat-activity__slide-in 0.22s ease-out;
+}
+
+@keyframes bot-chat-activity__slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.bot-chat-activity__label {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.bot-chat-activity__detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  color: var(--muted);
+}
+
 /* Bottom fade (2026-09-05): dissolves the scroll boundary while scrolled
    up instead of hard-cutting the next message at the edge. Sibling of the
    scroll container — pinned to the visible bottom edge, never scrolls,

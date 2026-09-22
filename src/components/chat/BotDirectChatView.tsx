@@ -42,7 +42,7 @@ import { ContextUsageRing } from "./ContextUsageRing";
 import { BotBubbleRow } from "./BotBubbleRow";
 import { BotToolCallRow } from "./BotToolCallRow";
 import { BotThinkingRow } from "./BotThinkingRow";
-import { BotTypingIndicator } from "./BotTypingIndicator";
+import { BotActivityIndicator } from "./BotActivityIndicator";
 import { AgentDmGroupChip } from "./bot/AgentDmGroupChip";
 import {
   buildAgentDmChipGroups,
@@ -1208,7 +1208,12 @@ export function BotDirectChatView({
           </div>
         )}
 
-        {busy && <BotTypingIndicator />}
+        {/* Rolling "current activity" line (Plan: bot-chat live activity):
+            replaces the static typing pill - shows exactly what the bot is
+            doing right now (thinking line / current tool), slides to the
+            new line on every new tool call, hides once the bot streams its
+            reply text. */}
+        {busy && <BotActivityIndicator sessionId={sessionId} />}
         </div>
 
         {/* Bottom fade — dissolves the scroll boundary while scrolled up.
