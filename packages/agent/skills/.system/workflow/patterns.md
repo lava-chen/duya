@@ -1,140 +1,133 @@
-# duya workflow 节点编排模式
+# duya dwf 脚本编排模式
 
-一套「节点拓扑目录」。每条说明何时选这种形状，然后用正确的 YAML 展示。
+一套「脚本形状目录」。每条说明何时选这种形状，然后用正确的 dwf.ts 片段展示。
 片段是**碎片**，不是完整可跑的 workflow——完整样例在 `examples.md`。
+原语面只有七个：`wf.tool / decide / approve / agent / map / publish / log`(以 `runtime.ts` 的 `DwfApi` 为准)。
 
-## 1. RPA 骨架：抓→填→交(全部 gui，零 LLM)
+## 1. 确定性优先骨架：先 tool 后判断
 
-**何时**：对固定桌面应用做确定性的「截图定位→点击→输入」，例如填 ERP 表单。
+**何时**：流程的主体是确定性操作(读文件、算数、调 API 工具)，只有分支点需要判断。
 
-```yaml
-phases:
-  - phase: fill-form
-    title: 填写 ERP 表单
-    nodes:
-      - id: open-app
-        gui:
-          target_app: "ERP*"
-          steps: [{ do: capture }]
-          on_stuck: agent
-      - id: fill-fields
-        gui:
-          target_app: "ERP*"
-          steps:
-            - { do: click, element: "som:2" }
-            - { do: type_text, text: "${params.invoice_id}", verify: true }
-            - { do: click, element: "som:4" }
-            - { do: type_text, text: "${extract.amount}", verify: true }
-            - { do: key, key: "enter" }
-          max_actions: 20
+```ts
+export default async function (wf) {
+  const data = await wf.tool("excel.read", { file: args.file });   // 零 LLM
+  const sum = await wf.tool("calc.sum", { rows: data.rows });      // 零 LLM
+  wf.log("汇总完成: " + sum);
+  return sum;
+}
 ```
 
-关键点：**第一步永远是 `capture`**(截图拿 SOM)，之后所有 `click`/`type_text` 用 `som:<1-based>` 引用屏幕元素。`verify: true` 走 verdict 阶梯。**不写 wait**(落定时机归宿主)。无 LLM。
+关键点：**能串成普通变量的绝不问模型**。`wf.tool` 结果直接 `await` 接住，
+类型由你自己的代码约定；每一步都进 journal，resume 时零成本命中。
 
-## 2. 路由 / 分类(decision 先行，别用 agent)
+## 2. 路由 / 分类(decide 先行，别用 agent)
 
-**何时**：把流程按**结构化**标准(部门、优先级、是否紧急)分派。这是 decision 的主场。
+**何时**：把流程按**结构化**标准(部门、优先级、是否紧急)分派。这是 `wf.decide` 的主场。
 
-```yaml
-# 前置:一个 tool 已产出 Read。state/output 来自它的输出。
-- id: route-ticket
-  decision:
-    state: { output: "${read.output}" }
-    questions:
-      department:
-        type: choice
-        criteria:
-          billing: "与费用/账单/发票相关"
-          tech: "与故障/报错/技术相关"
-      urgent:
-        type: noul
-        instructions: "工单是否表达紧迫/时限压力"
-    thresholds: { urgent: 0.65 }
-    on_low_confidence: ask           # 低置信 → 交人类，绝不静默猜
+```ts
+// 前置:一个 tool 已产出 read。state 是决策面可见的上下文。
+const route = await wf.decide(
+  {
+    department: {
+      type: "choice",
+      criteria: { billing: "与费用/账单/发票相关", tech: "与故障/报错/技术相关" },
+    },
+    urgent: { type: "noul", instructions: "工单是否表达紧迫/时限压力" },
+  },
+  { state: { output: read }, thresholds: { urgent: 0.65 } },
+);
 
-- id: billing-path
-  when: "route-ticket.department == 'billing'"
-  agent: general-purpose
-  prompt: "推进计费工单，依据:${read.output}"
-
-- id: tech-path
-  when: "route-ticket.department == 'tech' && route-ticket.urgent > 0.65"
-  agent: general-purpose
-  prompt: "紧急处理技术工单"
+// decide 返回 Record<string, string|number>:choice 问 → label,noul/score 问 → 置信数值。
+if (route.department === "billing") {
+  await wf.agent("general-purpose", "推进计费工单,依据:" + read);
+} else if (route.department === "tech" && route.urgent > 0.65) {
+  await wf.agent("general-purpose", "紧急处理技术工单");
+}
 ```
 
-decision 的 typed answers(`route-ticket.department`)可**直接进 `when` 求值**。灰区由 `thresholds` 与 `on_low_confidence` 决定。
+灰区由 `thresholds` 与 `onLowConfidenceDefault` 决定——**低置信绝不静默猜**，
+不传 `onLowConfidenceDefault` 时低置信走 uncertain 路径交人类。
 
-## 3. 人在环门控(不可逆副作用唯一去处)
+## 3. 人在环门控(不可逆副作用唯一闸门)
 
-**何时**：付钱、发消息、删除、发布——有不可逆副作用。这是 `human` 节点唯一合法去所。
+**何时**：付钱、发消息、删除、发布——有不可逆副作用，`wf.approve` 是唯一合法闸门。
 
-```yaml
-- id: approve-payment
-  when: "calculate.total > 0"
-  human:
-    via: approval_card
-    prompt: "放行 ${calculate.total} 元付款给 ${extract.vendor}？"
-    timeout: { hours: 24, on_timeout: escalate }   # 必填,防挂起泄漏
+```ts
+if (total > 0) {
+  // 拒绝(deny)或 onTimeout: fail/escalate 的超时 → 抛 DwfApprovalDeniedError 终止。
+  // onTimeout: skip 的超时 → 返回 null,脚本继续(语义 = 放行但没等到人)。
+  await wf.approve("放行 " + total + " 元付款给 " + vendor + "?", {
+    timeoutHours: 24,
+    onTimeout: "escalate",        // fail | skip | escalate,必填
+  });
+  await wf.tool("pay.send", { amount: total, to: vendor });
+}
 ```
 
-`timeout.on_timeout` 三选一(`escalate|skip|fail`)，schema 强制必填。审批结果作为 `approval` journal 独立记录，由后续 decision/agent 节点读取；**不给暂停节点回传载荷**。
+`onTimeout` 三选一必填。审批结果作为独立 journal 记录，resume 时宿主用既有决定
+直接放行(不重问)。**approve 之后才发真正的副作用调用**——闸门在调用之前。
 
-## 4. 条件扇出(map)：逐元素 agent 或 tool
+## 4. 扇出(map)：逐元素并行处理
 
 **何时**：同一问题作用在一组元素上(一批文件、一批记录)，想并行处理。
 
-```yaml
-- id: extract-files
-  tool: glob.list
-  input: { pattern: "src/**/*.ts" }
+```ts
+const files = await wf.tool("glob.list", { pattern: "src/**/*.ts" });
 
-- id: audit-each
-  when: "count(extract-files.files) > 0"
-  map:
-    over: "${extract-files.files}"   # 取其实在的数组字段
-    as: f
-    parallel: true
-    concurrency: 4
-  agent: general-purpose
-  prompt: "审计 ${f.path} 的正确性问题;只报真问题"
+const findings = await wf.map(
+  files,
+  async (f) => {
+    const r = await wf.agent("general-purpose",
+      "审计 " + f.path + " 的正确性问题;只报真问题");
+    return { path: f.path, r };
+  },
+  { concurrency: 4 },             // 上限 16;缺省取宿主配置
+);
+// findings 保序,与 files 一一对应
 ```
 
-`map.over` 必须是一个数组表达式。用 `${as}` / `${as.field}` 引用元素。带 `when`/`count()` 兜底，避免空数组空跑或超大扇出失控。`map` **只包一个 agent 或 tool**。
+`wf.map` 的回调可以是 tool/decide/agent 的任意组合；空数组自然零跑。
+返回值**保序**，不需要额外索引对账。
 
 ## 5. 两档校验(机器能算的归代码，别让 agent 自证)
 
-**何时**：流程的验收是可机器检查的(构建过、测试绿、字段值对)，就该由 `tool`/`decision` 决定，而不是 agent 一句"通过了"。
+**何时**：流程的验收是可机器检查的(构建过、测试绿、字段值对)，就该由 `wf.tool`/`wf.decide` 决定。
 
-```yaml
-- id: build-check
-  tool: shell.build
-  input: { target: "release" }
-  on_error: retry
-  max_retries: 2
+```ts
+const build = await wf.tool("shell.build", { target: "release" });
 
-- id: report-result
-  decision:
-    state: { output: "${build-check.output}" }
-    questions:
-      ok: { type: noul, instructions: "构建产物是否成功产出且可分发" }
-    on_low_confidence: ask
+const verdict = await wf.decide(
+  { ok: { type: "noul", instructions: "构建产物是否成功产出且可分发" } },
+  { state: { output: build } },
+);
+
+if (verdict.ok > 0.5) {
+  await wf.publish("release-notes", build.summary);
+} else {
+  // 真无解才升级 agent
+  await wf.agent("general-purpose", "诊断构建失败:" + build.output);
+}
 ```
 
-退出码/产物存在性就是确认本身——做了就没必要再塞一个验证 agent。真无解才升级。
+退出码/产物存在性就是确认本身——做了就没必要再塞一个验证 agent。
 
-## 6. 阶段化叙事(把流程呈现给用户)
+## 6. 进度叙事(log + publish 把流程呈现给用户)
 
-**何时**：任何有多个阶段、且用户要看进度的 workflow。阶段数 ≤8，每个阶段一个 `title`(用户读)，节点归组进阶段。分支不入新阶段，`when` 就是分支。
+**何时**：任何多步骤、且用户要看进度的 workflow。`wf.log` 随做随报(进 SSE/journal)，
+阶段性交付物用 `wf.publish` 落成 artifact。
 
-```yaml
-phases:               # ≤8
-  - phase: ingest
-    title: 抓取对账单
-  - phase: transform
-    title: 核对并清洗
-  - phase: deliver
-    title: 生成并交付报表
+```ts
+export default async function (wf) {
+  wf.log("阶段 1/3: 抓取对账单");
+  const raw = await wf.tool("excel.read", { file: args.src });
+
+  wf.log("阶段 2/3: 核对并清洗");
+  const clean = await wf.tool("calc.normalize", { rows: raw.rows });
+
+  wf.log("阶段 3/3: 生成报表");
+  await wf.publish("monthly-report", clean, "text/csv");
+}
 ```
 
-阶段好比故事的章节：用户看到的进度 = 阶段序列 + 每阶段内的节点，别一次铺满二十个无组织的卡片。
+用户看到的进度 = log 序列 + publish 的 artifact。长流程**每个阶段至少一条 log**，
+别让 run 静默跑十分钟毫无输出。

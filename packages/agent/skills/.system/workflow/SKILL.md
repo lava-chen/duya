@@ -1,185 +1,142 @@
 ---
 name: workflow
-title: workflow — duya 原生 Workflow 编排
-description: "用于编写、校验、调试和重新提交 duya 原生 workflow：把 RPA(gui 节点)与 tool/decision/human/agent 节点组合成声明式 YAML，并用 map/when 原语编排——选择节点类型、设计 when 表达式、处理确定性 RPA、把不可逆副作用关进 human 节点、设计 params 以获得可复跑缓存、在保存前做 dry-run 校验。当用户提到 workflow/工作流/自动化流程编排、或要求把"按步干活的流程固化"时使用。"
-when-to-use: "仅用于编写/修改 duya workflow 定义(YAML)。单一委托或几个独立查询属于普通 Agent 调用，不应套 workflow。"
+title: workflow — duya dwf 脚本工作流
+description: "用于编写、校验、调试和重新提交 duya dwf 工作流：把流程写成 <name>.dwf.ts 脚本——frontmatter 元数据 + TypeScript 本体，在沙箱里调用 wf.tool/wf.decide/wf.approve/wf.agent/wf.map/wf.publish 宿主原语——选择原语、处理确定性、把不可逆副作用关进 wf.approve、设计 args 以获得可复跑缓存、保存前做编译级校验。当用户提到 workflow/工作流/自动化流程编排、或要求把\"按步干活的流程固化\"时使用。"
+when-to-use: "仅用于编写/修改 duya dwf 工作流(.dwf.ts)。单一委托或几个独立查询属于普通 Agent 调用，不应套 workflow。"
 ---
 
-# 编写 duya 原生 workflow
+# 编写 duya dwf 工作流
 
-duya 的 Workflow 引擎把「人一步步干活的流程」固化成**可审计、可复跑、可修正**的声明式 YAML 资产(plan 552)。
-作者写的是一份 YAML 定义，不是脚本——引擎负责解析、校验、调度、缓存和重放。
+duya 的 dwf 工作流把「人一步步干活的流程」固化成**可审计、可复跑、可修正**的 TypeScript 脚本资产。
+一个 workflow 就是一个 `.dwf.ts` 文件：块注释 frontmatter 声明元数据，脚本本体是普通 TS——
+引擎负责沙箱执行、journal 记账、缓存与断点续跑。
 
-> 与 ZCode/Codex 的 `CreateWorkflow`(TS 命令式脚本,subagent()/world.run())是**两套不同的心智模型**。
-> 本 skill 是 duya YAML 版的判断层。两套名字在 duya 内部不同：duya 引擎叫 workflow(声明式 YAML)，
-> 不要套用 Codex 的 TS 脚本 API。
+> 心智模型：**命令式脚本，不是声明式节点图**。你写的是一段按顺序执行的代码，
+> 用普通变量传递中间结果；没有 phases/nodes/模板插值——那些是旧 YAML 引擎的概念。
 
 权威规格在源码里，**以代码为准**：
-- 顶层/节点 schema：`packages/agent/src/modes/workflow/schema.ts`
-- 静态校验规则：`packages/agent/src/modes/workflow/validate.ts`
-- 受限 `when` 表达式：`packages/agent/src/modes/workflow/expr.ts`
-- 生成侧权威 system prompt：`planner.ts` 的 `PLANNER_SYSTEM_PROMPT`(模型生成 YAML 时应严格照此)
-- 定义库/双 scope：`packages/agent/src/modes/workflow/workflow-files.ts`
-- 设计文档：`docs/exec-plans/active/552-workflow-rpa-agent-design.md`
+- 文件契约/名字规则/args schema：`packages/agent/src/modes/workflow/dwf/contracts.ts`
+- frontmatter 编解码：`packages/agent/src/modes/workflow/dwf/frontmatter.ts`
+- 沙箱运行时/原语实现：`packages/agent/src/modes/workflow/dwf/runtime.ts`
+- 存储与双 scope：`packages/agent/src/modes/workflow/dwf/store.ts`
+- 生成侧权威 system prompt：`dwf/planner-dwf.ts` 的 `PLANNER_DWF_SYSTEM_PROMPT`(模型生成时应严格照此)
 
 ## 分流原则(一页答案)
 
-四种角色节点 = 融合公式。**能用代码决定的绝不问模型；能用决策模型分类的绝不劳 LLM；只有开放式任务才进 agent；有不可逆副作用的一律过人。**
+**能用代码决定的绝不问模型；能用决策模型分类的绝不劳 LLM；只有开放式任务才进 agent；有不可逆副作用的一律先过 wf.approve。**
 
-| 节点 | 干什么 | 成本/审计 |
+| 原语 | 干什么 | 成本/审计 |
 | --- | --- | --- |
-| `tool` | 确定性指令，零 LLM，直调 ToolRegistry | 便宜、可重放 |
-| `gui` | RPA：computer-use 确定性步骤序列(桌面自动化) | 确定性步不占 LLM 预算 |
-| `decision` | 结构化分类/打分/是非，System One 决策 | ~0.1s，比 LLM 便宜 2-3 个量级 |
-| `human` | 人在环——**不可逆副作用(付钱/发消息/删除)的唯一通道** | 审批卡，权责边界 |
-| `agent` | 开放式子任务(SubagentTool) | 贵但能干 |
+| `wf.tool(name, input)` | 确定性指令，零 LLM，直调 ToolRegistry | 便宜、可重放 |
+| `wf.decide(questions, opts)` | 结构化分类/打分/是非，System One 决策 | ~0.1s，比 LLM 便宜 2-3 个量级 |
+| `wf.approve(prompt, opts)` | 人在环——**不可逆副作用(付钱/发消息/删除)的唯一闸门** | 审批卡，拒绝即抛错 |
+| `wf.agent(type, prompt, opts?)` | 开放式子任务(SubagentTool) | 贵但能干 |
+| `wf.map(items, fn, opts?)` | 对一组元素扇出并行处理 | 并发上限 16 |
+| `wf.publish(name, content)` | 用户可见的交付物 artifact | 产出侧 |
 
-原语：`map`(对一组元素扇出，必须是 agent 或 tool) / `when`(条件边，按节点求值)。
+## 文件骨架
 
-## 顶层与节点骨架
+```ts
+/* duya-workflow
+description: 核对发票并按部门路由          # 必填,一行
+whenToUse: 需要按金额/部门分派并走审批时     # 可选
+args:
+  invoice_id: { type: string, required: true }
+  amount_limit: { type: number, default: 10000 }
+*/
+export default async function (wf) {
+  wf.log("开始核对 " + args.invoice_id);
 
-```yaml
-name: invoice-sync          # kebab-case, <=64, 必填
-description: "..."          # <=1024, 必填
-when_to_use: "..."          # 可选, <=2048
-params:                     # 可变参数(是 resume 缓存键的一部分)
-  - name: invoice_id
-    type: string            # string | number | boolean | json
-    required: true
-triggers:                   # 可选;缺省 = 仅手动/Slash 启动
-  - cron: "0 9 * * 1-5"
-phases:                     # 1..8
-  - phase: ingest          # kebab-case
-    title: 抓取对账单        # <=128, 展示给用户
-    detail: "..."          # 可选
-    nodes:
-      - id: fetch          # kebab-case;同一个 phase 内唯一,且全流程唯一
-        tool: excel.read
-        input: { file: "${params.invoice_id}.xlsx" }
+  // 1. 确定性读取(零 LLM)
+  const invoice = await wf.tool("excel.read", { file: args.invoice_id + ".xlsx" });
+
+  // 2. 结构化决策(~0.1s,结果带置信度)
+  const route = await wf.decide(
+    {
+      department: { type: "choice", criteria: { billing: "费用相关", ops: "运维相关" } },
+      over_limit: { type: "noul", instructions: "金额超过阈值吗" },
+    },
+    { state: { output: invoice } },
+  );
+
+  // 3. 不可逆副作用前必须过审批闸门;拒绝会抛错终止
+  if (route.over_limit.p > 0.65) {
+    await wf.approve("放行该笔付款(" + args.invoice_id + ")?", {
+      timeoutHours: 24,
+      onTimeout: "escalate",          // fail | skip | escalate
+    });
+  }
+
+  // 4. 中间结果用普通变量;交付物走 publish
+  await wf.publish("invoice-report", "核对结论: " + route.department.p);
+}
 ```
 
-每个节点**恰好声明一种类型**(`tool` / `gui` / `decision` / `human` / `agent` / `noop`);
-`map` 只允许包一个 agent 或 tool。公共字段：`when`、`on_error`(`skip|fail|retry`)、`max_retries`(0..3)。
+frontmatter 是**块注释**——整个文件仍是合法 TS，编辑器高亮/格式化照常；YAML body 里
+`args` 是 record(不是数组)，`type: string|number|boolean`，`required`/`default` 可选。
 
-## 六类节点怎么写
+## 沙箱与确定性铁律
 
-```yaml
-# tool —— 确定性指令(零 LLM)
-- id: write-rows
-  tool: excel.write
-  input: { rows: "${extract.output.rows}" }
+- 脚本在 node:vm 沙箱执行，**唯一外联通道是 `wf`**：没有 fetch/fs/process/require/定时器，
+  控制流里禁止 Math.random——否则断点续跑必 divergence。
+- `args` 是注入的全局(如 `args.invoice_id`)；前面步骤的结果用**普通变量**接。
+- `wf.decide` 是 host-call，结果**入 journal 且绝不重问**(分类器有随机性，重问破坏重放)。
+- `wf.tool`/`wf.decide` 零 LLM；只有 `wf.agent` 占 LLM 预算。
+- **RPA(桌面自动化)目前没有独立原语**：通过 `wf.tool` 调用已注册的 computer-use 工具链；
+  原语面以 `runtime.ts` 的 `DwfApi` 为准，不要臆造 `wf.gui`。
 
-# gui —— RPA 确定性步骤序列 + 兜底
-- id: fill-erp
-  gui:
-    target_app: "ERP*"            # app 策略白名单
-    steps:
-      - { do: capture }                            # 先截图拿 SOM
-      - { do: click, element: "som:3" }            # SOM 索引 1-based
-      - { do: type_text, text: "${params.invoice_id}", verify: true }
-    max_actions: 20
-    on_stuck: agent               # stuck/ambiguous → 升级 GUI agent 兜底
+## 断点续跑(缓存经济学)
 
-# decision —— 结构化决策(默认绝不静默猜)
-- id: route
-  decision:
-    state: { output: "${read.output}" }
-    questions:
-      department:
-        type: choice
-        criteria: { billing: "...", tech: "..." }
-      urgent:
-        type: noul                 # 表达紧迫/时限压力吗
-        instructions: "..."
-    thresholds: { urgent: 0.65 }
-    on_low_confidence: ask         # ask(转 human) | skip | default:<label>
+每次成功的 `wf.*` 调用按 (runId, 调用参数哈希) 记入 journal。挂起(approve/低置信 decide)
+或崩溃后 resume = **重跑整个脚本 + 已成功调用命中缓存**——已花的钱不重付，失败的调用
+不进缓存，重跑会真正重试。所以：
 
-# human —— 不可逆副作用唯一通道;timeout.on_timeout 必填
-- id: approve
-  human:
-    via: approval_card
-    prompt: "放行 ${params.amount} 元付款？"
-    timeout: { hours: 24, on_timeout: escalate }   # escalate|skip|fail
-
-# agent —— 开放式子任务
-- id: investigate
-  agent: general-purpose
-  prompt: "调查 ${read.output.path} 的根因"
-  output_schema: { }              # 可选的 JSON schema;宿主校验 + 1 次重试
-
-# noop —— 占位/汇合
-- id: join
-  when: "route.department == 'billing'"
-  noop: true
-
-# map —— 对数组扇出(包 agent 或 tool);用 ${as} / ${as.field} 引用元素
-- id: audit-files
-  when: "count(extract.files) > 0"
-  map:
-    over: "${extract.files}"
-    as: f
-    parallel: true
-    concurrency: 4
-  agent: general-purpose
-  prompt: "审计 ${f.path} 的安全问题"
-```
-
-## when 表达式(受限)
-
-`when` 求值结果 false → 该节点被跳过(记录，不阻塞)。表达式**只能**用：
-引用 `node.output` / `node.succeeded` / `params.x` / `nodeId.<decisionQuestion>`、
-比较 `== != > < >= <=`、逻辑 `&& || !`、聚合 `any() all() count()`。
-**没有函数、没有时钟、没有随机源**。examples.md 里有路由写法，patterns.md 有 `map`+`when` 组合。
-
-## 确定性铁律
-
-- YAML 里**禁止 timestamp / 随机 / sleep / Date.now()**——否则断点续跑必 divergence。
-- gui 步骤**没有 `wait`**：落定时机由宿主循环掌握，不写进 YAML。
-- decision 是 host-call，结果**必须入 journal 且绝不重问**(分类器有随机性，重问破坏确定性重放)。
-- tool/decision 节点零 LLM；gui 确定性步骤也不占 LLM 预算(只占并发与 host-call 上限)。
+- 脚本必须是**幂等重入**的：同样的 args + 缓存命中 ⇒ 同样的路径。
+- 不要把可变值揉进 prompt 字面量——放进 frontmatter 的 `args`，改参数只影响受影响调用。
+- `wf.approve` 拒绝会**抛错终止**(不是 skip)；想继续就 catch 后走替代路径。
 
 ## 保存前必须做
 
-1. **文件放对位置**(`workflow-files.ts` 双 scope，项目 shadow 全局)：
-   - 项目(随 git 走)：`<项目>/.duya/workflows/<name>.yaml`
-   - 全局：`~/.duya/workflows/<name>.yaml`
-   - 文件名 = kebab-case 的 `name`，必须以 `.yaml` 结尾。
-2. **重校验**(validate.ts)：命名/阶段数/引用存在/when 表达式合法/无环/跨阶段前向引用/decision 阈值/human `timeout.on_timeout` 必填。加载时每读必校验，坏文件**fail loud**，不静默执行。
-3. **节点输出引用(模板插值 `\${...}`)**：只能引用**前面**(同 phase 或更早)节点的 output；表达式越界就不得引用。把可变值放进 `params`，由 `${params.x}` 引用——不要把它们揉进 description/prompt 字面量(否则改参数会打废整条缓存链)。
-4. **先烤验再上线**：拿一小段(YAML 片段)先跑 `validateWorkflow` 的 rule 档得基线，再接真实断言。改动流程前先过校验，别靠跑真实 run 试错。
-
-## 风险预筛与权责
-
-- planner 先用**规则正则**预筛高风险 tool 名：`pay|payment|send|post|publish|delete|drop|truncate|write|push|deploy|purchase|transfer|email|message` → 命中即 `awaiting_confirm`；`gui` 节点默认保守也先停一停确认(Jev 兜底)。
-- **human 节点就是那道闸，不标记为风险**——设计时把不可逆副作用**主动放进去**，不要靠工具本身放假。
-- 低置信 decision 返回 `uncertain` **上交给人类，绝不静默猜测**；不一致信号(如 judged done 高置信但有动作提议)追加严格确认。
+1. **文件放对位置**(`dwf/store.ts` 双 scope，项目 shadow 全局)：
+   - 项目(随 git 走)：`<项目>/.duya/workflows/<name>.dwf.ts`
+   - 全局：`~/.duya/workflows/<name>.dwf.ts`
+   - 文件名 = kebab-case 的 `name`，必须以 `.dwf.ts` 结尾(名字规则本身就是路径穿越防线)。
+2. **双门校验**(planner-dwf 的 `validateSource`)：frontmatter 过 `SavedWorkflowMetaSchema`
+   (strict，拼错键成可见错误而非静默丢弃) + 脚本过 esbuild 编译。坏文件 fail loud，不静默执行。
+3. **先烤验再上线**：改动后先跑 `validateSource`(纯确定性)，别靠跑真实 run 试错。
+4. **风险预筛是自动的**：脚本里 `wf.tool("...")` 字面量命中不可逆词表
+   (`pay|send|post|publish|delete|drop|...`) → run 从 `awaiting_confirm` 起步；
+   有不可逆调用却没有任何 `wf.approve` 会出告警。**主动把 approve 放进脚本**，别靠预筛兜底。
 
 ## 生成与重提(用 code 裁决，别全文重贴)
 
-- 生成：把目标 + 可用 agent 列表 + 权威 schema(见 `PLANNER_SYSTEM_PROMPT`)交给 LLM 产一份 YAML，再让 `validateWorkflow` 裁决；**错一次带整个错误列表回喂一次，二次仍失真就停**，绝不产半吊子的 plan。
-- 校验失败时，**按 `path: message` 定位改那一个字段**再重提——不要整段重写。
-- 修订重跑：改动会让部分节点 `reqHash` 变化；保持 `params` 分离、名称稳定，未受影响节点零成本命中缓存(改参数重跑只重付受影响节点)。
+- 生成：把目标 + 可用 agent/tool 列表交给 LLM 按 `PLANNER_DWF_SYSTEM_PROMPT` 产一份完整
+  `.dwf.ts`，再让 frontmatter+compile 双门裁决；**错一次带整个错误列表回喂一次，二次仍失
+  败就停**，绝不产半成品。
+- 校验失败时，**按错误定位改那一处**再重提——不要整段重写。
+- 修订重跑：改动会让部分调用的 reqHash 变化；保持 args 分离、命名稳定，未受影响调用零成
+  本命中缓存(改参数重跑只重付受影响的调用)。
 
 ## 运行语义(透明交付)
 
-- 每个结果带 `verified / unconfirmed` 标注；机器能算的(计数/指标/页面 state)由代码算好再进 decision/验证，不靠 agent 自证。
-- 挂起(human/低置信 decision)只 park 所在分支，`map` 兄弟分支继续；崩溃对账把孤儿 `running` 标 `interrupted`，**绝不自动重跑副作用重的 run**。
-- journal 事件一次写入三用(持久化记录 = SSE 进度 = 审计轨迹)，「随做随报」，run 断了已报的也不丢。
+- journal 事件一次写入三用(持久化记录 = SSE 进度 = 审计轨迹)，`wf.log` 随做随报，run 断了已报的也不丢。
+- 挂起(approve/低置信 decide)只 park 当前 await 链，`wf.map` 的兄弟分支继续跑。
+- **绝不自动重跑副作用重的 run**——崩溃对账把孤儿 run 标 `interrupted`，恢复要人确认。
 
 ## 反模式
 
 | 你写了 | 代价 |
 | --- | --- |
-| 该用 `decision` 却塞了个 `agent` 去分类 | 为 0.1s 能搞定的分类付一整个 LLM 会话 |
-| 不可逆副作用用了 `tool` 而不是 `human` | 越过了引擎唯一的人权通道，无审批就执行 |
-| gui 步骤里写 `wait` / sleep | 违反确定性铁律，断点续跑 divergence |
-| 把可变值揉进 description/prompt 字面量而非 params | 改那一个参数重写所有提及它的文本→缓存全废 |
-| `when` 里用了函数/时钟/随机 | 校验/replay 直接失败 |
-| 写了带 star 的泛化 `map`(无 `when`/`count` 兜底) | 空数组扇出空跑，或超大扇出失控 |
-| 靠跑真实 run 试一个解析函数/表达式的正误 | 校验器与 dry-run 本来能同步回答 |
-| 低置信 decision 处静默猜一个默认 | 违反"绝不静默猜"，结果进 journal 无法重放 |
+| 该用 `wf.decide` 却塞了个 `wf.agent` 去分类 | 为 0.1s 能搞定的分类付一整个 LLM 会话 |
+| 不可逆副作用没包 `wf.approve` 直接 `wf.tool` | 越过了引擎唯一的人权通道，无审批就执行 |
+| 脚本里用 fetch/fs/Date.now()/Math.random | 沙箱里根本没有；控制流里用会让 resume divergence |
+| 把可变值揉进 prompt 字面量而非 frontmatter args | 改一个参数重写所有提及它的文本 → 缓存全废 |
+| 把 `wf.approve` 的拒绝当 skip(不 catch 也不终止) | 拒绝即抛错；吞掉异常会让后续副作用失去闸门 |
+| 脚本依赖执行顺序外的隐藏状态(模块级可变量) | 重跑 = 重新执行整个脚本，隐藏状态破坏幂等重入 |
+| 臆造 `wf.gui`/`wf.wait` 等原语 | 原语面只有 runtime.ts 的 `DwfApi` 七个，多一个都不存在 |
+| 靠跑真实 run 试语法/类型正误 | `validateSource` 双门本来能同步回答 |
 
 ## 参考
 
-- `packages/agent/src/modes/workflow/patterns.md`(本 skill 同目录)——节点拓扑目录：RPA 骨架、路由/分类、条件扇出、人在环门控、两档校验。
-- `packages/agent/src/modes/workflow/examples.md`(本 skill 同目录)——完整可跑的 YAML 工作流。
+- `examples.md`(本 skill 同目录)——完整可跑的 dwf 脚本工作流。
+- `patterns.md`(本 skill 同目录)——编排模式目录：RPA 骨架、路由/分类、人在环门控、扇出、两档校验。
