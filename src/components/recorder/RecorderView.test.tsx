@@ -14,10 +14,11 @@
  */
 
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 import { RecorderView } from './RecorderView';
 
+import { useConversationStore } from '@/stores/conversation-store';
 import type {
   LoadedRecorderSession,
   RecorderSessionSummary,
@@ -52,6 +53,8 @@ const session: LoadedRecorderSession = {
     },
   ],
   dropped: [],
+  eventsPath: '/u/.duya/recorder/sessions/sess-1/events.jsonl',
+  sessionPath: '/u/.duya/recorder/sessions/sess-1/session.json',
 };
 
 const idle: RecorderStatusSnapshot = {
@@ -77,7 +80,7 @@ const api = {
 
 Object.defineProperty(window, 'electronAPI', {
   configurable: true,
-  value: { recorder: api, workflow: { defs: { create: vi.fn() } } },
+  value: { recorder: api, workflow: { defs: { create: vi.fn() }, dwf: { save: vi.fn() } } },
 });
 
 /** Render + wait for the list, then open the only session. */
@@ -86,6 +89,12 @@ async function openSession() {
   await waitFor(() => expect(api.listSessions).toHaveBeenCalled());
   fireEvent.click(await screen.findByRole('button', { name: /recorder\.view/ }));
   return screen.findByTestId('recorder-event-1');
+}
+
+/** Click 转为工作流, then pick one of the two conversion routes. */
+async function pickConvertRoute(testId: 'recorder-convert-oneclick' | 'recorder-convert-agent') {
+  fireEvent.click(screen.getByRole('button', { name: /recorder\.convert\.action/ }));
+  fireEvent.click(await screen.findByTestId(testId));
 }
 
 beforeEach(() => {
@@ -98,9 +107,19 @@ beforeEach(() => {
   api.deleteSession.mockReset().mockResolvedValue({ ok: true });
   api.convert.mockReset();
   api.onStatusChanged.mockReset().mockReturnValue(() => {});
-  (window.electronAPI as unknown as { workflow: { defs: { create: ReturnType<typeof vi.fn> } } }).workflow = {
+  (window.electronAPI as unknown as { workflow: { defs: { create: ReturnType<typeof vi.fn> }; dwf: { save: ReturnType<typeof vi.fn> } } }).workflow = {
     defs: { create: vi.fn() },
+    dwf: { save: vi.fn() },
   };
+});
+
+afterEach(() => {
+  // The agent-convert route flips the real conversation store into the
+  // new-chat draft state; restore it so other tests (and persist) see a
+  // clean slate.
+  const state = useConversationStore.getState();
+  state.exitNewChatDraft();
+  state.clearNewChatDraft();
 });
 
 describe('RecorderView', () => {
@@ -135,52 +154,76 @@ describe('RecorderView', () => {
     expect(screen.getByText('btn-submit')).toBeTruthy();
   });
 
-  it('converts a session, previews the YAML and saves under the chosen name', async () => {
+  it('one-click converts a session, previews the dwf source and saves via workflow:dwf:save', async () => {
     api.convert.mockResolvedValue({
       ok: true,
       def: { name: 'recorded-chrome', phases: [{ phase: 'app-1', title: 'Chrome', nodes: [] }] },
-      yaml: 'name: recorded-chrome\nphases: []\n',
+      meta: { description: 'Recorded human demonstration' },
+      script: 'export default async function (wf) {\n  await wf.gui({ target_app: "chrome", steps: [{ do: "capture" }] });\n}\n',
+      source: '/* duya-workflow\ndescription: Recorded human demonstration\n*/\nexport default async function (wf) {\n}\n',
       warnings: ['1 app focus transit(s) without interaction dropped'],
       errors: [],
       eventCount: 3,
       droppedLines: 0,
     });
-    const create = vi.fn().mockResolvedValue({ ok: true, file: '/u/.duya/workflows/x.yaml', name: 'my-flow' });
-    (window.electronAPI as unknown as { workflow: { defs: { create: typeof create } } }).workflow = {
-      defs: { create },
-    };
+    const save = vi.fn().mockResolvedValue({ ok: true, file: '/u/.duya/workflows/my-flow.dwf.ts', shadowing: null });
+    (window.electronAPI as unknown as { workflow: { dwf: { save: typeof save } } }).workflow.dwf.save = save;
 
     await openSession();
-    fireEvent.click(screen.getByRole('button', { name: /recorder\.convert\.action/ }));
+    await pickConvertRoute('recorder-convert-oneclick');
     await waitFor(() => expect(api.convert).toHaveBeenCalledWith({ sessionId: 'sess-1' }));
 
-    // YAML preview + the auto-generated name, ready to be adjusted.
-    await waitFor(() => expect(screen.getByText(/name: recorded-chrome/)).toBeTruthy());
+    // dwf.ts source preview + the auto-generated name, ready to be adjusted.
+    await waitFor(() => expect(screen.getByText(/duya-workflow/)).toBeTruthy());
     const nameInput = screen.getByTestId('recorder-def-name') as HTMLInputElement;
     expect(nameInput.value).toBe('recorded-chrome');
     expect(screen.getByText(/transit\(s\) without interaction/).textContent).toContain('dropped');
 
     fireEvent.change(nameInput, { target: { value: 'my-flow' } });
     fireEvent.click(screen.getByTestId('recorder-convert-save'));
-    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
-    expect(create.mock.calls[0]![0]).toMatchObject({ scope: 'global', def: { name: 'my-flow' } });
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save.mock.calls[0]![0]).toMatchObject({
+      scope: 'global',
+      name: 'my-flow',
+      meta: { description: 'Recorded human demonstration' },
+    });
+    expect(
+      (window.electronAPI as unknown as { workflow: { defs: { create: ReturnType<typeof vi.fn> } } }).workflow.defs.create,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('agent convert opens a new-chat draft whose prompt pins the jsonl path and the skill', async () => {
+    await openSession();
+    await pickConvertRoute('recorder-convert-agent');
+
+    const state = useConversationStore.getState();
+    expect(state.isNewChatDrafting).toBe(true);
+    expect(state.currentView).toBe('chat');
+    expect(state.newChatDraft.text).toContain('/u/.duya/recorder/sessions/sess-1/events.jsonl');
+    expect(state.newChatDraft.text).toContain('workflow skill');
+    expect(state.newChatDraft.hasContent).toBe(true);
   });
 
   it('refuses to save an invalid definition name', async () => {
-    api.convert.mockResolvedValue({ ok: true, def: { name: 'recorded-chrome' }, yaml: 'name: x\n', errors: [] });
-    const create = vi.fn();
-    (window.electronAPI as unknown as { workflow: { defs: { create: typeof create } } }).workflow = {
-      defs: { create },
-    };
+    api.convert.mockResolvedValue({
+      ok: true,
+      def: { name: 'recorded-chrome' },
+      meta: { description: 'x' },
+      script: 'export default async function (wf) {}\n',
+      source: '/* duya-workflow */\n',
+      errors: [],
+    });
+    const save = vi.fn();
+    (window.electronAPI as unknown as { workflow: { dwf: { save: typeof save } } }).workflow.dwf.save = save;
 
     await openSession();
-    fireEvent.click(screen.getByRole('button', { name: /recorder\.convert\.action/ }));
+    await pickConvertRoute('recorder-convert-oneclick');
     await waitFor(() => expect(api.convert).toHaveBeenCalled());
 
     fireEvent.change(screen.getByTestId('recorder-def-name'), { target: { value: 'Bad Name' } });
     fireEvent.click(screen.getByTestId('recorder-convert-save'));
     await waitFor(() => expect(screen.getByText('recorder.convert.needName')).toBeTruthy());
-    expect(create).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
   });
 
   it('deletes a session only after confirmation', async () => {

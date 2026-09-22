@@ -13,11 +13,16 @@
  *                   the converter turns into a phase. Rows expand into
  *                   the recorded ElementDescriptor (progressive
  *                   disclosure, mirroring the run-evidence rows).
- *   convert panel   events → WorkflowDef → YAML preview → save. The
- *                   definition is NOT written until the user confirms;
- *                   saving reuses `workflow:defs:create`, so a recorded
- *                   definition travels the exact same validated path as
- *                   an LLM-planned one.
+ *   convert panel   two conversion routes behind one button:
+ *                     — one-click: events → dwf source (deterministic
+ *                       converter), preview, save through the exact
+ *                       same `workflow:dwf:save` path as a hand-written
+ *                       script;
+ *                     — agent: opens a NEW chat session with a prompt
+ *                       that pins the recorded jsonl paths and the
+ *                       workflow skill, so the agent performs the
+ *                       conversion itself (intent-aware, follows the
+ *                       skill's「从录制会话转 dwf.ts」rules).
  *
  * Privacy note surfaced in the UI: password fields arrive already
  * redacted (`<redacted>`) — the recorder redacts on the way to disk, so
@@ -40,6 +45,7 @@ import {
   KeyIcon,
   ListChecksIcon,
   MousePointerClickIcon,
+  SparkleIcon,
   StopIcon,
   TextAaIcon,
   TrashIcon,
@@ -57,7 +63,8 @@ import {
   startRecordingIPC,
   stopRecordingIPC,
 } from "@/lib/recorder-ipc";
-import { createWorkflowDefIPC } from "@/lib/workflow-ipc";
+import { saveDwfWorkflowIPC } from "@/lib/workflow-ipc";
+import { useConversationStore } from "@/stores/conversation-store";
 import type {
   LoadedRecorderSession,
   RecorderConvertResult,
@@ -95,6 +102,8 @@ export function RecorderView({ projectDir, onDefinitionSaved }: RecorderViewProp
   const [name, setName] = useState("");
   const [scope, setScope] = useState<"global" | "project">("global");
   const [savedTo, setSavedTo] = useState<string | null>(null);
+  /** The convert button first asks WHICH conversion route to take. */
+  const [pickMode, setPickMode] = useState(false);
 
   const recording = status?.status === "recording" || status?.status === "starting";
 
@@ -177,6 +186,7 @@ export function RecorderView({ projectDir, onDefinitionSaved }: RecorderViewProp
     setConverted(null);
     setSavedTo(null);
     setExpandedRow(null);
+    setPickMode(false);
     setName("");
     setError(null);
     const loaded = await getRecorderSessionIPC(sessionId);
@@ -192,6 +202,7 @@ export function RecorderView({ projectDir, onDefinitionSaved }: RecorderViewProp
     setDetail(null);
     setConverted(null);
     setSavedTo(null);
+    setPickMode(false);
   };
 
   const handleDelete = async (sessionId: string) => {
@@ -215,24 +226,44 @@ export function RecorderView({ projectDir, onDefinitionSaved }: RecorderViewProp
     setBusy(null);
   };
 
+  /**
+   * Agent route: open a NEW chat session with the conversion prompt
+   * pre-filled — it pins the recorded jsonl paths and hands the job to
+   * the workflow skill. The thread is only created when the user sends
+   * (the standard new-chat pipeline), so the stream wiring is untouched.
+   */
+  const handleAgentConvert = () => {
+    if (!detail) return;
+    const store = useConversationStore.getState();
+    store.startNewChat();
+    store.updateNewChatDraft({
+      text: buildAgentConvertPrompt(detail),
+      attachments: [],
+      hasContent: true,
+    });
+    closeSession();
+  };
+
   const handleSave = async () => {
-    if (!converted?.def) return;
+    if (!converted?.meta || converted.script === undefined) return;
     if (!NAME_RE.test(name)) {
       setError(t("recorder.convert.needName"));
       return;
     }
     setBusy("save");
     setError(null);
-    const result = await createWorkflowDefIPC({
-      def: { ...(converted.def as Record<string, unknown>), name },
+    const result = await saveDwfWorkflowIPC({
+      name,
+      meta: converted.meta,
+      script: converted.script,
       scope,
       projectDir,
     });
     if (!result.ok) {
       setError(result.error ?? t("recorder.convert.invalid"));
     } else {
-      setSavedTo(result.file ?? name);
-      onDefinitionSaved?.(result.name ?? name);
+      setSavedTo(result.file ?? `${name}.dwf.ts`);
+      onDefinitionSaved?.(name);
     }
     setBusy(null);
   };
@@ -383,7 +414,7 @@ export function RecorderView({ projectDir, onDefinitionSaved }: RecorderViewProp
               <Button
                 variant="primary"
                 size="sm"
-                onClick={() => void handleConvert()}
+                onClick={() => setPickMode((v) => !v)}
                 disabled={busy !== null || !detail}
               >
                 <CursorClickIcon size={14} />
@@ -400,6 +431,42 @@ export function RecorderView({ projectDir, onDefinitionSaved }: RecorderViewProp
               </IconButton>
             </div>
           </PageCard>
+
+          {/* ── conversion route picker ── */}
+          {pickMode && (
+            <PageCard padding="md" className="flex flex-wrap items-center gap-3">
+              <span className="text-xs text-muted-foreground">{t("recorder.convert.pickMode")}</span>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  setPickMode(false);
+                  void handleConvert();
+                }}
+                disabled={busy !== null}
+                data-testid="recorder-convert-oneclick"
+              >
+                <MousePointerClickIcon size={14} />
+                {t("recorder.convert.oneClick")}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  setPickMode(false);
+                  handleAgentConvert();
+                }}
+                disabled={busy !== null}
+                data-testid="recorder-convert-agent"
+              >
+                <SparkleIcon size={14} />
+                {t("recorder.convert.agent")}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setPickMode(false)}>
+                {t("recorder.convert.pickCancel")}
+              </Button>
+            </PageCard>
+          )}
 
           {detail?.dropped.length ? (
             <PageCard padding="sm">
@@ -491,11 +558,11 @@ export function RecorderView({ projectDir, onDefinitionSaved }: RecorderViewProp
                 </div>
               </div>
 
-              {converted.yaml && (
+              {converted.source && (
                 <div className="flex flex-col gap-1">
-                  <span className="text-xs font-semibold text-muted-foreground">{t("recorder.convert.yaml")}</span>
+                  <span className="text-xs font-semibold text-muted-foreground">{t("recorder.convert.source")}</span>
                   <pre className="max-h-80 overflow-auto rounded-lg border border-border bg-[var(--surface)] p-3 text-[11px] leading-5 text-foreground">
-                    {converted.yaml}
+                    {converted.source}
                   </pre>
                 </div>
               )}
@@ -565,6 +632,29 @@ function buildTimeline(events: RecorderEventView[]): TimelineGroup[] {
     }
   });
   return groups;
+}
+
+/**
+ * Pre-filled prompt for the agent conversion route. It pins the
+ * recorded files (main-provided absolute paths) and delegates the HOW
+ * to the workflow skill's「从录制会话转 dwf.ts」section — the prompt
+ * only frames the WHAT, the skill owns the rules.
+ */
+function buildAgentConvertPrompt(detail: LoadedRecorderSession): string {
+  const eventsPath = detail.eventsPath || "(events.jsonl path unavailable)";
+  const sessionPath = detail.sessionPath || "(session.json path unavailable)";
+  return [
+    "请把一个屏幕录制会话转换成 duya dwf 工作流脚本（.dwf.ts）。",
+    "",
+    "录制文件：",
+    `- 事件流（每行一个 JSON 事件）：${eventsPath}`,
+    `- 会话元数据：${sessionPath}`,
+    "",
+    "请使用内置的 workflow skill 完成转换，严格遵循其「从录制会话转 dwf.ts」一节的转换守则：",
+    "先通读 events.jsonl 再动手；按 app 分段映射为 wf.gui 调用；不可逆动作前插入 wf.approve；",
+    "可变文本提升为 frontmatter args；丢弃纯导航噪音。完成后把脚本保存到合适的作用域",
+    "（项目 .duya/workflows/ 或全局 ~/.duya/workflows/），并按该 skill 的「保存前必须做」自查。",
+  ].join("\n");
 }
 
 function EventRow({

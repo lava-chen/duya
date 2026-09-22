@@ -6,16 +6,37 @@
 import type {
   WorkflowApi,
   WorkflowRunRow,
-  WorkflowDefinitionSummary,
   WorkflowJournalRecord,
 } from '@/components/layout/panels/WorkflowPanel';
 
 // Re-export shared shapes from WorkflowPanel
 export type {
   WorkflowRunRow,
-  WorkflowDefinitionSummary,
   WorkflowJournalRecord,
 } from '@/components/layout/panels/WorkflowPanel';
+
+/**
+ * Console summary of a YAML workflow definition (`workflow:defs:list/get`).
+ * Mirrors `WorkflowDefinitionSummary` in `packages/agent/src/modes/workflow/
+ * workflow-files.ts` — duplicated here because @duya/agent exposes no subpath
+ * for it. Keep in sync if the source shape changes.
+ */
+export interface WorkflowDefinitionSummary {
+  name: string;
+  scope: 'project' | 'global';
+  description: string;
+  whenToUse?: string;
+  /** File path — the authoritative source (console shows it verbatim). */
+  file: string;
+  params: Array<{ name: string; type: string; required: boolean; default?: unknown }>;
+  /** Trigger channels the definition declares (manual is implicit). */
+  triggers: Array<'cron' | 'bot' | 'http'>;
+  phaseCount: number;
+  nodeCount: number;
+  /** Only present when the file parsed AND validated. */
+  valid: boolean;
+  error?: string;
+}
 
 // ─── definition CRUD ─────────────────────────────────────────────────────────
 
@@ -53,13 +74,28 @@ export async function deleteWorkflowDefIPC(
   return api?.defs.delete(payload) as Promise<{ ok: boolean; error?: string }>;
 }
 
+/**
+ * Save a dwf workflow (.dwf.ts) through `workflow:dwf:save` — the same
+ * validated store path a hand-written script travels. The recorder
+ * convert panel and any other producer converge here.
+ */
+export async function saveDwfWorkflowIPC(
+  payload: { name: string; meta: unknown; script: string; scope?: string; projectDir?: string },
+) {
+  const api = window.electronAPI?.workflow as WorkflowApi | undefined;
+  if (!api?.dwf?.save) {
+    return { ok: false, error: 'workflow bridge unavailable' } as { ok: boolean; file?: string; shadowing?: string; error?: string };
+  }
+  return api.dwf.save(payload) as Promise<{ ok: boolean; file?: string; shadowing?: string; error?: string }>;
+}
+
 // ─── run operations ──────────────────────────────────────────────────────────
 
 export async function triggerWorkflowRunIPC(
   payload: { name: string; params?: Record<string, unknown>; projectDir?: string },
 ) {
   const api = window.electronAPI?.workflow as WorkflowApi | undefined;
-  return api?.run(payload) as Promise<{ ok: boolean; runId?: string; error?: string }>;
+  return api?.run(payload) as Promise<{ ok: boolean; runId?: string; sessionId?: string; error?: string }>;
 }
 
 export async function listWorkflowRunsIPC(

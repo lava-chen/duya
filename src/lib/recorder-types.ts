@@ -89,6 +89,9 @@ export interface LoadedRecorderSession {
   events: RecorderEventView[];
   /** Lines the reader discarded (crash-truncated / schema drift). */
   dropped: RecorderDroppedLine[];
+  /** Absolute paths (main-provided) for skill-driven agent conversion. */
+  eventsPath?: string;
+  sessionPath?: string;
 }
 
 export interface RecorderConvertError {
@@ -100,8 +103,12 @@ export interface RecorderConvertResult {
   ok: boolean;
   /** Present even when `ok` is false so the UI can preview/hand-edit. */
   def?: unknown;
-  /** YAML text — the reviewable artifact before saving. */
-  yaml?: string;
+  /** Frontmatter metadata — pass through to `workflow:dwf:save`. */
+  meta?: unknown;
+  /** Script body (after the terminator line) — pairs with `meta`. */
+  script?: string;
+  /** Full `.dwf.ts` source (frontmatter + script) — the reviewable artifact. */
+  source?: string;
   errors?: RecorderConvertError[];
   warnings?: string[];
   eventCount?: number;
