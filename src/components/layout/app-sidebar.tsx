@@ -1090,7 +1090,14 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           </div>
         </div>
         {sidebarTab === "work" && (
-          <>
+          /* The "新对话" action and the primary nav are one visual list.
+             They share a single flex child (gap 0 internally) so the
+             sidebar's column gap applies only *above* the group; inside,
+             the buttons keep the same row pitch as the nav items, whose
+             padding (not a gap) provides the spacing. Without the wrapper
+             the column gap made 新对话 sit one gap further from 画布 than
+             the nav rows sit from each other. */
+          <div className="sidebar-primary-group">
             <button
               type="button"
               onClick={() => startNewChat()}
@@ -1128,7 +1135,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
             );
           })}
         </nav>
-          </>
+          </div>
         )}
 
         <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">

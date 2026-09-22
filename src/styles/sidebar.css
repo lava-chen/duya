@@ -107,6 +107,17 @@ html[data-glass-repair] .attachment-preview-overlay {
   box-shadow: 0 8px 20px -12px #3e4ee0;
 }
 
+/* "新对话" + primary nav behave as ONE list, so the .app-sidebar column gap
+   (0.95rem) must not fall between them — it would push 新对话 an extra gap
+   away from 画布, breaking the uniform row pitch the nav rows share. The
+   buttons carry their own padding, so gap: 0 here reproduces exactly the
+   nav's internal rhythm. */
+.sidebar-primary-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
 .sidebar-primary-nav {
   display: flex;
   flex-direction: column;
