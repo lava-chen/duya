@@ -28,6 +28,7 @@ import {
   getGitLatestTurnReview,
   getGitTurnHistory,
   getGitTurnDetail,
+  getGitTurnReviewByTurnId,
   getGitReviewScoped,
   getGitCommits,
   type GitReviewFile,
@@ -317,6 +318,16 @@ function ReviewContextMenu({
 export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const workingDirectory = typeof tab.params?.workingDirectory === "string" ? tab.params.workingDirectory : "";
   const sessionId = typeof tab.params?.sessionId === "string" ? tab.params.sessionId : "";
+  // Plan 566: a turn-scoped caller (the transcript's file-change card) can pin
+  // this tab to ONE round instead of the session's latest. `reviewTurnId` is
+  // the id of the user message that opened that round, which is also what the
+  // agent stores as `chat_turn_reviews.turn_id`. Empty = follow the latest
+  // round, i.e. the panel's original behaviour.
+  const reviewTurnId = typeof tab.params?.reviewTurnId === "string" ? tab.params.reviewTurnId : "";
+  // File to reveal once the round's diff loads. Turn-scoped callers pass the
+  // row the user actually clicked; without it the panel would select the
+  // first file (alphabetical/git order) and bury the interesting one.
+  const reviewFilePath = typeof tab.params?.reviewFilePath === "string" ? tab.params.reviewFilePath : "";
   const panel = useOptionalPanel();
   const workspaceExpanded = panel?.workspaceExpanded ?? false;
   const [review, setReview] = useState<GitReviewResult>(EMPTY_REVIEW);
@@ -384,9 +395,13 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           return;
         }
         // Plan 308 Phase 2: load the session's turn list for the history
-        // selector alongside the latest review.
+        // selector alongside the latest review. The history list is fetched
+        // even for a pinned turn so the dropdown stays a usable escape hatch
+        // back to other rounds.
         const [latest, history] = await Promise.all([
-          getGitLatestTurnReview(sessionId, workingDirectory),
+          reviewTurnId
+            ? getGitTurnReviewByTurnId(sessionId, workingDirectory, reviewTurnId)
+            : getGitLatestTurnReview(sessionId, workingDirectory),
           getGitTurnHistory(sessionId, workingDirectory, 50),
         ]);
         if (history.turns) setTurns(history.turns);
@@ -396,7 +411,7 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
         setSelectedTurnId(stored?.id ?? "");
         setReview({
           isGitRepo: latest.isGitRepo,
-          branch: stored ? "上一轮对话" : undefined,
+          branch: stored ? (reviewTurnId ? "本轮对话" : "上一轮对话") : undefined,
           baseRef: stored ? "开始 → 结束" : undefined,
           files: stored?.files ?? [],
           totals: stored?.totals,
@@ -425,7 +440,7 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     } finally {
       setLoading(false);
     }
-  }, [scope, sessionId, workingDirectory, commitFrom, commitTo]);
+  }, [scope, sessionId, workingDirectory, commitFrom, commitTo, reviewTurnId]);
 
   useEffect(() => {
     void refresh();
@@ -448,9 +463,38 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   }, [scope, workingDirectory]);
 
   const files = review.files ?? [];
+  // A pending "reveal this file" request from the caller. Consumed once, as
+  // soon as the round's file list actually contains it — the diff arrives
+  // asynchronously, so the request routinely lands before the files exist.
+  const pendingFocusPathRef = useRef(reviewFilePath);
   useEffect(() => {
+    const wanted = pendingFocusPathRef.current;
+    if (wanted && files.some((file) => file.path === wanted)) {
+      pendingFocusPathRef.current = "";
+      setSelectedPath(wanted);
+      return;
+    }
     setSelectedPath((current) => files.some((file) => file.path === current) ? current : files[0]?.path ?? null);
   }, [files]);
+
+  // A second click on the same round's card (another file row, or the same one
+  // after the tab was reused) must re-target the already-open tab — the tab's
+  // params never change, so the event is the only channel. Mirrors the
+  // `duya:preview-focus-lines` contract used by the file preview panel.
+  const filesRef = useRef(files);
+  useEffect(() => { filesRef.current = files; }, [files]);
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ filePath?: string }>).detail;
+      const target = typeof detail?.filePath === "string" ? detail.filePath : "";
+      if (!target || !filesRef.current.some((file) => file.path === target)) return;
+      setSelectedPath(target);
+      // Let the section element mount/select before scrolling to it.
+      requestAnimationFrame(() => scrollToFileRef.current?.(target));
+    };
+    window.addEventListener("duya:review-focus-file", handler as EventListener);
+    return () => window.removeEventListener("duya:review-focus-file", handler as EventListener);
+  }, []);
 
   useEffect(() => {
     if (!workspaceExpanded && layout === "split") setLayout("unified");
@@ -541,6 +585,11 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     if (!element || !container) return;
     container.scrollTo({ top: element.offsetTop - container.offsetTop, behavior: "smooth" });
   }, []);
+
+  // The focus event that re-targets an already-open tab is wired up before
+  // this callback exists, so it reaches the latest one through a ref.
+  const scrollToFileRef = useRef(scrollToFile);
+  useEffect(() => { scrollToFileRef.current = scrollToFile; }, [scrollToFile]);
 
   const handleSelectFile = useCallback((filePath: string) => {
     setSelectedPath(filePath);
@@ -677,9 +726,20 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
       ) : files.length === 0 ? (
         <div className="code-review-state code-review-state-empty">
           <IconGitCompare size={26} aria-hidden="true" />
-          <div className="code-review-state-title">尚无文件更改</div>
+          <div className="code-review-state-title">
+            {scope === "latest-turn" && reviewTurnId ? "尚无变更记录" : "尚无文件更改"}
+          </div>
           <div className="code-review-state-sub">
-            {scope === "latest-turn" ? "上一轮对话没有产生文件变更。" : "所选范围内没有文件变更。"}
+            {scope !== "latest-turn"
+              ? "所选范围内没有文件变更。"
+              : reviewTurnId
+                // A pinned round has no row in two very different situations,
+                // and the panel cannot tell them apart from the lookup alone:
+                // the round really changed nothing, or the agent never captured
+                // a baseline (workspace is not a git repo). Say both instead of
+                // asserting the round was empty.
+                ? "本轮没有可用的变更记录：可能确实没有文件变更，或工作区不是 Git 仓库。"
+                : "上一轮对话没有产生文件变更。"}
           </div>
           {scope === "latest-turn" && (
             <Button type="button" variant="secondary" size="sm" onClick={() => setScope("uncommitted")}>

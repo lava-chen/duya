@@ -128,3 +128,89 @@ describe("clampWidthToBounds", () => {
     expect(clampWidthToBounds(900, { minWidth: 300, maxWidth: 800 }, WORKSPACE)).toBe(800);
   });
 });
+
+// The transcript's file-change card cannot call `usePanel()` directly (it also
+// renders outside the provider), so it opens rounds through
+// `duya:open-review-panel`. These cases pin the tab lifecycle that event
+// drives: one tab per round, reused when the same round is clicked again.
+describe("PanelProvider turn-scoped review opens", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    useConversationStore.setState({ activeThreadId: null });
+  });
+
+  function openRound(detail: Record<string, unknown>): void {
+    act(() => {
+      window.dispatchEvent(new CustomEvent("duya:open-review-panel", { detail }));
+    });
+  }
+
+  it("opens a review tab pinned to the round named in the event", () => {
+    const { result } = renderHook(() => usePanel(), { wrapper });
+
+    openRound({
+      workingDirectory: "E:/repo",
+      sessionId: "session-1",
+      turnId: "turn-9",
+      filePath: "src/a.ts",
+      title: "本轮变更",
+    });
+
+    expect(result.current.tabs).toHaveLength(1);
+    expect(result.current.tabs[0]?.pageId).toBe("review");
+    expect(result.current.tabs[0]?.params).toMatchObject({
+      workingDirectory: "E:/repo",
+      sessionId: "session-1",
+      reviewTurnId: "turn-9",
+      reviewFilePath: "src/a.ts",
+      title: "本轮变更",
+    });
+    expect(result.current.activeTabId).toBe(result.current.tabs[0]?.id);
+  });
+
+  it("reuses one tab when a second file of the same round is clicked", () => {
+    const { result } = renderHook(() => usePanel(), { wrapper });
+
+    openRound({ workingDirectory: "E:/repo", sessionId: "session-1", turnId: "turn-9", filePath: "src/a.ts" });
+    openRound({ workingDirectory: "E:/repo", sessionId: "session-1", turnId: "turn-9", filePath: "src/b.ts" });
+
+    // One tab, still holding the params of the FIRST open: the panel receives
+    // the new file through `duya:review-focus-file`, not through params.
+    expect(result.current.tabs).toHaveLength(1);
+    expect(result.current.tabs[0]?.params).toMatchObject({ reviewFilePath: "src/a.ts" });
+  });
+
+  it("opens a separate tab for a different round", () => {
+    const { result } = renderHook(() => usePanel(), { wrapper });
+
+    openRound({ workingDirectory: "E:/repo", sessionId: "session-1", turnId: "turn-9", filePath: "src/a.ts" });
+    openRound({ workingDirectory: "E:/repo", sessionId: "session-1", turnId: "turn-10", filePath: "src/a.ts" });
+
+    // Two rounds are two different diffs; sharing a tab would show the wrong
+    // round under the newer card.
+    expect(result.current.tabs).toHaveLength(2);
+  });
+
+  it("keeps a pinned round distinct from the launcher's session-wide review", () => {
+    const { result } = renderHook(() => usePanel(), { wrapper });
+
+    act(() => {
+      result.current.openOrActivatePage("review", {
+        workingDirectory: "E:/repo",
+        sessionId: "session-1",
+      });
+    });
+    openRound({ workingDirectory: "E:/repo", sessionId: "session-1", turnId: "turn-9", filePath: "src/a.ts" });
+
+    expect(result.current.tabs).toHaveLength(2);
+  });
+
+  it("ignores an open request that names no workspace or session", () => {
+    const { result } = renderHook(() => usePanel(), { wrapper });
+
+    openRound({ turnId: "turn-9", filePath: "src/a.ts" });
+    openRound({ workingDirectory: "E:/repo", sessionId: "  ", turnId: "turn-9" });
+
+    expect(result.current.tabs).toHaveLength(0);
+  });
+});

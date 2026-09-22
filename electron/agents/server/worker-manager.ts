@@ -411,6 +411,25 @@ export class WorkerManager {
   }
 
   /**
+   * ZCode-parity workflow anchor fallback: the most recently active live
+   * worker session id. Panel-triggered workflow runs (POST
+   * /workflow/:name/trigger) may arrive without a sessionId — the run card
+   * needs SOME live worker to execute in, so the router falls back to the
+   * session the user touched last. null when no worker is alive.
+   */
+  mostRecentWorkerSessionId(): string | null {
+    let best: string | null = null;
+    let bestAt = -1;
+    for (const [sessionId, at] of this.lastActivity) {
+      if (at > bestAt && this.workers.has(sessionId)) {
+        best = sessionId;
+        bestAt = at;
+      }
+    }
+    return best;
+  }
+
+  /**
    * Plan 426 Phase 2.3: per-session exemption from idle reaping. Use for
    * sessions whose worker must survive idle periods (cron/shared sessions,
    * long-lived subagent parents). The mark is cleared automatically when

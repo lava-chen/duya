@@ -1,24 +1,25 @@
 /**
  * WorkflowGraph — read-only node-graph view for a workflow definition
- * (plan 552 Phase 9). Renders the YAML phases + nodes as a vertical
- * timeline in the style of ZCode's run-execution view:
+ * (plan 552 Phase 9). Renders the phases + nodes as a vertical timeline in
+ * the style of ZCode's run-execution view:
  *
  *   • one emerald vertical line running top-to-bottom (#10b981 / #4ADE80)
- *   • nodes strung in order on the line, each a compact single row
- *   • left status dot sitting on the line, accent icon block + title in the
- *     middle, a glyph badge + run counter + collapse chevron on the right
- *   • expanding a row unfolds its inline preview text
- *
- * The `def` path is a plain definition browser. Run-derived facades
- * (summary / result / artifacts) are optional props: pass them only when a
- * run data source is available, otherwise they render as nothing so the
- * component still reads cleanly as a definition view.
+ *   • each PHASE is a single row on the line (the "step"): left status lamp
+ *     sitting on the spine, bold phase title in the middle, and a right-aligned
+ *     status block — a colored sub-agent avatar square + N/M counter for
+ *     agent phases, or a `>_` glyph + N/M counter for script phases — plus a
+ *     collapsible chevron
+ *   • expanding a phase row reveals its sub-nodes, indented under the row
+ *     (each a compact single row with its own kind icon + counter)
+ *   • the summary bar / result block / artifacts footer render when a run
+ *     data source is wired in; otherwise the graph reads cleanly as a static
+ *     definition view
  *
  * Editing always goes through the agent conversation; this component only
  * renders the structure for human inspection.
  */
 
-import { useState, Fragment, type CSSProperties, type ReactNode } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
 import {
   TerminalIcon,
   UserIcon,
@@ -76,84 +77,131 @@ const summaryOkDotStyle: CSSProperties = {
 };
 
 // The single continuous timeline. The emerald vertical line is this element's
-// left border; every node row parks its status dot centered on it.
+// left border; every phase row parks its status lamp centered on it.
 const lineStyle: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: '10px',
+  gap: '6px',
   borderLeft: '2px solid var(--accent-emerald, #4ade80)',
   paddingLeft: '22px',
   paddingTop: '4px',
   paddingBottom: '4px',
 };
 
-/** Muted per-phase group heading. Deliberately small so the node line is the focal axis. */
-const phaseHeaderStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'baseline',
-  gap: '8px',
-  fontSize: '11px',
-  color: 'var(--text-faint)',
-  textTransform: 'uppercase',
-  letterSpacing: '0.05em',
-  marginTop: '4px',
-};
-
-const phaseHeaderTitleStyle: CSSProperties = {
-  fontWeight: 600,
-  color: 'var(--text)',
-  textTransform: 'none',
-  letterSpacing: 'normal',
-};
-
-const phaseCountStyle: CSSProperties = {
-  fontSize: '11px',
-  color: 'var(--text-faint)',
-  fontVariantNumeric: 'tabular-nums',
-};
-
-const nodeStackItemStyle: CSSProperties = {
-  position: 'relative',
-};
-
-const nodeRowStyle: CSSProperties = {
-  position: 'relative',
-  display: 'flex',
-  alignItems: 'center',
-  gap: '8px',
-  minHeight: '30px',
-  padding: '4px 8px',
-  borderRadius: '6px',
-  cursor: 'pointer',
-  userSelect: 'none',
-  transition: 'background 120ms ease',
-};
-
-const nodeRowSelectedStyle: CSSProperties = {
-  background: 'var(--bg-surface-1, transparent)',
-};
-
 /**
- * Status dot centered exactly on the timeline's left border.
+ * Status lamp centered exactly on the timeline's left border.
  * Timeline: border(2) + paddingLeft(22) = content starts 24px in; the 2px
- * border sits at x=0..2 (center x=1). A 10px dot needs left of -28px relative
+ * border sits at x=0..2 (center x=1). A 10px lamp needs left of -28px relative
  * to the row's content edge to land its center on the border.
  */
-const nodeDotStyle: CSSProperties = {
+const phaseLampStyle: CSSProperties = {
   position: 'absolute',
   left: '-28px',
-  top: '10px',
+  top: '50%',
+  transform: 'translateY(-50%)',
   width: '10px',
   height: '10px',
   borderRadius: '50%',
   background: 'var(--accent-emerald, #4ade80)',
   boxShadow: '0 0 0 3px color-mix(in srgb, var(--accent-emerald) 18%, transparent)',
   pointerEvents: 'none',
+  flexShrink: 0,
+};
+
+const phaseRowStyle: CSSProperties = {
+  position: 'relative',
+  display: 'flex',
+  alignItems: 'center',
+  gap: '10px',
+  minHeight: '38px',
+  padding: '6px 10px',
+  borderRadius: '8px',
+  cursor: 'pointer',
+  userSelect: 'none',
+  transition: 'background 120ms ease',
+};
+
+const phaseRowOpenStyle: CSSProperties = {
+  background: 'var(--bg-surface-1, transparent)',
+};
+
+const phaseTitleBlockStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '1px',
+};
+
+const phaseTitleStyle: CSSProperties = {
+  fontSize: '13px',
+  fontWeight: 600,
+  color: 'var(--text)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const phaseDetailStyle: CSSProperties = {
+  fontSize: '11px',
+  color: 'var(--text-faint)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+/** Right-aligned status block: [avatar | glyph] + N/M counter. */
+const phaseStatusBlockStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '6px',
+  flexShrink: 0,
+};
+
+/** Colored rounded-square avatar badge for agent-containing phases. */
+const avatarSquareStyle = (accent: string): CSSProperties => ({
+  width: '20px',
+  height: '20px',
+  borderRadius: '6px',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  color: '#fff',
+  background: accent,
+});
+
+/** Monospace `>_` script glyph for non-agent phases. */
+const scriptGlyphStyle = (accent: string): CSSProperties => ({
+  fontSize: '11px',
+  fontWeight: 700,
+  color: accent,
+  fontFamily: 'var(--font-mono, ui-monospace, "SF Mono", monospace)',
+});
+
+const nodeCountStyle: CSSProperties = {
+  fontSize: '11px',
+  color: 'var(--text-faint)',
+  fontVariantNumeric: 'tabular-nums',
+};
+
+const phaseChevronStyle: CSSProperties = {
+  color: 'var(--text-faint)',
+  flexShrink: 0,
+};
+
+/** Indented sub-node stack revealed under an expanded phase row. */
+const subStackStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '2px',
+  marginLeft: '10px',
+  paddingLeft: '10px',
+  borderLeft: '1px solid var(--border-weak)',
 };
 
 const nodeIconBoxStyle = (accent: string): CSSProperties => ({
-  width: '20px',
-  height: '20px',
+  width: '18px',
+  height: '18px',
   borderRadius: '5px',
   flexShrink: 0,
   display: 'flex',
@@ -163,52 +211,15 @@ const nodeIconBoxStyle = (accent: string): CSSProperties => ({
   background: `color-mix(in srgb, ${accent} 14%, transparent)`,
 });
 
-const nodeTitleStyle: CSSProperties = {
-  flex: 1,
-  minWidth: 0,
-  fontSize: '13px',
-  fontWeight: 500,
-  color: 'var(--text)',
-  fontFamily: 'var(--font-mono, ui-monospace, "SF Mono", monospace)',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-};
-
-const nodeBadgeStyle = (accent: string): CSSProperties => ({
-  minWidth: '26px',
-  textAlign: 'center',
-  padding: '1px 6px',
-  borderRadius: '4px',
-  fontSize: '11px',
-  fontWeight: 600,
-  color: accent,
-  background: `color-mix(in srgb, ${accent} 14%, transparent)`,
-  border: `1px solid color-mix(in srgb, ${accent} 30%, transparent)`,
-  fontFamily: 'var(--font-mono, ui-monospace, "SF Mono", monospace)',
-  whiteSpace: 'nowrap',
-});
-
-/**
- * N/M run counter. The definition source carries no run counters, so this is
- * an honest 1/1 placeholder rather than a fabricated status — swap in real
- * `done/total` values from a run data source when one is wired up.
- */
-const nodeCountStyle: CSSProperties = {
-  fontSize: '11px',
-  color: 'var(--text-faint)',
-  fontVariantNumeric: 'tabular-nums',
-};
-
 const nodeChevronStyle: CSSProperties = {
   color: 'var(--text-faint)',
   flexShrink: 0,
 };
 
-/** Expanded inline preview body, indented under the collapsed row. */
+/** Expanded inline preview body, indented under the collapsed node row. */
 const nodePreviewBodyStyle: CSSProperties = {
   marginTop: '2px',
-  marginLeft: '28px',
+  marginLeft: '38px',
   padding: '6px 10px',
   borderRadius: '6px',
   fontSize: '12px',
@@ -286,17 +297,91 @@ const artifactSizeStyle: CSSProperties = {
   flexShrink: 0,
 };
 
-// ─── kind glyphs ───────────────────────────────────────────────────────────
+// ─── sub-node step card styles ─────────────────────────────────────────────
 
-/** Short monospace glyph shown in the right-side kind badge (ZCode `>_` style). */
-const KIND_GLYPH: Record<WorkflowNodeKind, string> = {
-  tool: '>_',
-  agent: '@',
-  decision: '?',
-  human: '✎',
-  gui: '◎',
-  noop: '·',
+const stepCardStyle: CSSProperties = {
+  position: 'relative',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '4px',
+  padding: '8px 10px',
+  borderRadius: '8px',
+  background: 'var(--bg-surface-1, transparent)',
+  border: '1px solid var(--border-weak)',
+  transition: 'border-color 120ms ease, background 120ms ease',
 };
+
+const stepCardOpenStyle: CSSProperties = {
+  ...stepCardStyle,
+  background: 'var(--bg-surface-2, rgba(255,255,255,0.04))',
+};
+
+const stepMainRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '8px',
+  cursor: 'pointer',
+  userSelect: 'none',
+};
+
+const stepTextBlockStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '1px',
+};
+
+const stepActionStyle: CSSProperties = {
+  fontSize: '12px',
+  fontFamily: 'var(--font-mono, ui-monospace, "SF Mono", monospace)',
+  color: 'var(--text)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const stepSubStyle: CSSProperties = {
+  fontSize: '11px',
+  color: 'var(--text-faint)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const stepMetaRowStyle: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '6px',
+  paddingLeft: '26px',
+};
+
+const metricChipStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '3px',
+  padding: '1px 7px',
+  borderRadius: '4px',
+  fontSize: '11px',
+  color: 'var(--text-faint)',
+  background: 'var(--bg-surface-2, rgba(255,255,255,0.05))',
+  fontFamily: 'var(--font-mono, ui-monospace, "SF Mono", monospace)',
+  fontVariantNumeric: 'tabular-nums',
+};
+
+const statusDotInlineStyle = (bg: string): CSSProperties => ({
+  width: '8px',
+  height: '8px',
+  borderRadius: '50%',
+  background: bg,
+  flexShrink: 0,
+});
+
+const stepStatusChipStyle = (color: string): CSSProperties => ({
+  ...metricChipStyle,
+  color,
+  background: 'transparent',
+});
 
 // ─── icon mapping ──────────────────────────────────────────────────────────
 
@@ -317,46 +402,114 @@ function NodeIcon({ kind, size = 12 }: { kind: WorkflowNodeKind; size?: number }
   }
 }
 
-// ─── node row ──────────────────────────────────────────────────────────────
+// ─── phase aggregate status ────────────────────────────────────────────────
 
-function NodeRow({
-  node,
-  runStep,
-  position,
-  total,
-}: {
-  node: WorkflowNodeView;
-  runStep?: RunStepView;
-  position?: number;
-  total?: number;
-}) {
+type PhaseStatus = 'success' | 'running' | 'failed' | 'pending';
+
+function phaseStatus(nodes: WorkflowNodeView[], runSteps?: Record<string, RunStepView>): PhaseStatus {
+  if (!runSteps) return 'pending';
+  let hasRunning = false;
+  for (const n of nodes) {
+    const s = runSteps[n.id];
+    if (!s) continue;
+    if (s.status === 'failed') return 'failed';
+    if (s.status === 'success') continue;
+    hasRunning = true;
+  }
+  return hasRunning ? 'running' : 'success';
+}
+
+// ─── sub-agent avatar / script glyph helper ────────────────────────────────
+
+/** Picks one accent for the phase's status badge: agent wins, else tool. */
+function phaseAccent(nodes: WorkflowNodeView[]): string {
+  for (const n of nodes) {
+    if (deriveNodeKind(n) === 'agent') return NODE_KIND_ACCENT.agent;
+  }
+  return NODE_KIND_ACCENT.tool;
+}
+
+function appearsAgentPhase(nodes: WorkflowNodeView[]): boolean {
+  return nodes.some((n) => deriveNodeKind(n) === 'agent');
+}
+
+// ─── sub-node helpers & step card ──────────────────────────────────────────
+
+/** Primary mono action line and a faint sub-label for a node (definition data). */
+function nodeAction(node: WorkflowNodeView): { text: string; sub: string | null } {
+  const kind = deriveNodeKind(node);
+  switch (kind) {
+    case 'tool': {
+      const cmd = (node.input?.cmd ?? node.input?.command ?? node.input?.command_text) as string | undefined;
+      if (typeof cmd === 'string') return { text: cmd, sub: node.tool ?? 'shell' };
+      const path = (node.input?.file_path ?? node.input?.path) as string | undefined;
+      if (typeof path === 'string') return { text: path, sub: node.tool ?? 'read' };
+      return { text: node.id, sub: node.tool ?? 'tool' };
+    }
+    case 'agent':
+      return { text: node.agent ?? node.id, sub: node.model ? `model ${node.model}` : 'subagent' };
+    case 'decision': {
+      const q = node.decision?.questions ? Object.keys(node.decision.questions).length : 0;
+      return { text: node.id, sub: q ? `${q} question${q === 1 ? '' : 's'}` : 'decision' };
+    }
+    case 'human':
+      return { text: node.human?.prompt ?? node.id, sub: 'human' };
+    case 'gui':
+      return { text: node.gui?.target_app ?? node.id, sub: 'gui' };
+    default:
+      return { text: node.id, sub: 'noop' };
+  }
+}
+
+/** Definition-level metadata chips shown under a step's action line. */
+function nodeMetaChips(node: WorkflowNodeView): string[] {
+  const chips: string[] = [];
+  if (node.max_retries !== undefined) chips.push(`retry x${node.max_retries}`);
+  if (node.on_error) chips.push(`on_error ${node.on_error}`);
+  if (node.when) chips.push(`when ${node.when}`);
+  if (node.output_schema) chips.push('schema');
+  return chips;
+}
+
+const STEP_STATUS_COLOR: Record<RunStepView['status'], string> = {
+  success: 'var(--accent-emerald, #4ade80)',
+  running: 'var(--accent)',
+  failed: 'var(--red-500, #ef4444)',
+};
+
+function formatMs(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function SubNodeRow({ node, runStep }: { node: WorkflowNodeView; runStep?: RunStepView }) {
   const [expanded, setExpanded] = useState(false);
   const kind = deriveNodeKind(node);
   const accent = NODE_KIND_ACCENT[kind];
   const preview = nodeInlinePreview(node);
-  const label = kind === 'tool' && node.tool ? node.tool : NODE_KIND_LABEL[kind];
-
-  // Status lamp follows the live run step when one is wired in; else the
-  // neutral emerald of a static definition view.
-  const dotStyle: CSSProperties =
-    runStep === undefined || runStep.status === 'success'
-      ? nodeDotStyle
+  const { text, sub } = nodeAction(node);
+  const chips = nodeMetaChips(node);
+  const statusColor = runStep ? STEP_STATUS_COLOR[runStep.status] : null;
+  const statusLabel = runStep
+    ? runStep.status === 'success'
+      ? 'done'
       : runStep.status === 'failed'
-        ? { ...nodeDotStyle, background: 'var(--red-500, #ef4444)' }
-        : { ...nodeDotStyle, background: 'var(--accent)' };
-  const counter =
-    runStep === undefined
-      ? '1/1'
-      : `${position ?? 1}${total !== undefined && total > 0 ? `/${total}` : ''}`;
+        ? 'failed'
+        : 'running'
+    : null;
+  const durationMs =
+    runStep?.finishedAt !== undefined && runStep.startedAt !== undefined
+      ? runStep.finishedAt - runStep.startedAt
+      : undefined;
 
   return (
-    <div style={nodeStackItemStyle}>
+    <div style={expanded ? stepCardOpenStyle : stepCardStyle}>
       <div
-        style={{ ...nodeRowStyle, ...(preview ? nodeRowSelectedStyle : undefined) }}
+        style={stepMainRowStyle}
         role="button"
         aria-expanded={expanded}
         tabIndex={0}
-        onClick={() => preview && setExpanded((v) => !v)}
+        onClick={() => (preview ? setExpanded((v) => !v) : undefined)}
         onKeyDown={(e) => {
           if (preview && (e.key === 'Enter' || e.key === ' ')) {
             e.preventDefault();
@@ -364,66 +517,120 @@ function NodeRow({
           }
         }}
       >
-        <span style={dotStyle} />
         <span style={nodeIconBoxStyle(accent)}>
           <NodeIcon kind={kind} />
         </span>
-        <span style={nodeTitleStyle}>{node.id}</span>
-        <span style={nodeBadgeStyle(accent)} title={label}>
-          {KIND_GLYPH[kind]}
+        <span style={stepTextBlockStyle}>
+          <span style={stepActionStyle}>{text}</span>
+          {sub ? <span style={stepSubStyle}>{sub}</span> : null}
         </span>
-        <span
-          style={nodeCountStyle}
-          title={
-            runStep !== undefined
-              ? runStep.status
-              : 'run counters are placeholders (definition has no run data)'
-          }
-        >
-          {counter}
-        </span>
+        {statusColor && statusLabel ? (
+          <span style={stepStatusChipStyle(statusColor)}>
+            <span style={statusDotInlineStyle(statusColor)} />
+            {statusLabel}
+          </span>
+        ) : null}
         {preview ? (
           <span style={nodeChevronStyle}>
             {expanded ? <CaretDownIcon size={12} /> : <CaretRightIcon size={12} />}
           </span>
         ) : null}
       </div>
-      {expanded && preview && <div style={nodePreviewBodyStyle}>{preview}</div>}
+
+      {chips.length > 0 || durationMs !== undefined ? (
+        <div style={stepMetaRowStyle}>
+          {chips.map((c) => (
+            <span key={c} style={metricChipStyle}>
+              {c}
+            </span>
+          ))}
+          {durationMs !== undefined ? <span style={metricChipStyle}>{formatMs(durationMs)}</span> : null}
+        </div>
+      ) : null}
+
+      {expanded && preview ? (
+        <div style={{ ...nodePreviewBodyStyle, marginLeft: 0, marginTop: 8 }}>{preview}</div>
+      ) : null}
     </div>
   );
 }
 
-// ─── phase group ───────────────────────────────────────────────────────────
+// ─── phase row (the timeline "step") ───────────────────────────────────────
 
-function PhaseGroup({
+function PhaseRow({
   phase,
   runSteps,
-  position,
-  total,
 }: {
   phase: WorkflowPhaseView;
   runSteps?: Record<string, RunStepView>;
-  position: (id: string) => number;
-  total?: number;
 }) {
+  const [open, setOpen] = useState(false);
+  const hasPreview = phase.detail !== undefined;
+  const accent = phaseAccent(phase.nodes);
+  const isAgent = appearsAgentPhase(phase.nodes);
+  const status = phaseStatus(phase.nodes, runSteps);
+  const n = phase.nodes.length;
+
+  const lampStyle: CSSProperties =
+    status === 'failed'
+      ? { ...phaseLampStyle, background: 'var(--red-500, #ef4444)' }
+      : status === 'running'
+        ? {
+            ...phaseLampStyle,
+            background: 'var(--accent)',
+            animation: 'duya-pulse 1.6s ease-in-out infinite',
+          }
+        : phaseLampStyle;
+
   return (
-    <Fragment>
-      <div style={phaseHeaderStyle}>
-        <span style={phaseHeaderTitleStyle}>{phase.title || phase.phase}</span>
-        <span style={phaseCountStyle}>
-          {phase.nodes.length} {phase.nodes.length === 1 ? 'step' : 'steps'}
+    <div>
+      <div
+        style={{ ...phaseRowStyle, ...(hasPreview || n > 0 ? phaseRowOpenStyle : undefined) }}
+        role="button"
+        aria-expanded={open}
+        tabIndex={0}
+        onClick={() => (n > 0 ? setOpen((v) => !v) : undefined)}
+        onKeyDown={(e) => {
+          if (n > 0 && (e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault();
+            setOpen((v) => !v);
+          }
+        }}
+      >
+        <span style={lampStyle} />
+        <span style={phaseTitleBlockStyle}>
+          <span style={phaseTitleStyle}>{phase.title || phase.phase}</span>
+          {phase.detail ? <span style={phaseDetailStyle}>{phase.detail}</span> : null}
         </span>
+        <span style={phaseStatusBlockStyle}>
+          {isAgent ? (
+            <span style={avatarSquareStyle(accent)} title={NODE_KIND_LABEL.agent}>
+              <UserIcon size={12} />
+            </span>
+          ) : (
+            <span style={scriptGlyphStyle(accent)} title={NODE_KIND_LABEL.tool}>
+              {'>_'}
+            </span>
+          )}
+          <span style={nodeCountStyle}>
+            {runSteps !== undefined ? `${status === 'success' ? n : status === 'running' ? 0 : 0}/${n}` : `${n}/${n}`}
+          </span>
+        </span>
+        {n > 0 ? (
+          <span style={phaseChevronStyle}>
+            {open ? <CaretDownIcon size={13} /> : <CaretRightIcon size={13} />}
+          </span>
+        ) : null}
       </div>
-      {phase.nodes.map((node) => (
-        <NodeRow
-          key={node.id}
-          node={node}
-          runStep={runSteps?.[node.id]}
-          position={position(node.id)}
-          total={total}
-        />
-      ))}
-    </Fragment>
+
+      {open && n > 0 && (
+        <div style={subStackStyle}>
+          {phase.nodes.map((node) => (
+            <SubNodeRow key={node.id} node={node} runStep={runSteps?.[node.id]} />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -446,12 +653,7 @@ function ArtifactsBlock({ items }: { items: WorkflowArtifactView[] }) {
   const [open, setOpen] = useState(true);
   return (
     <div>
-      <div
-        style={artifactsHeaderStyle}
-        role="button"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
+      <div style={artifactsHeaderStyle} role="button" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
         <FileMdIcon size={14} />
         <span>Artifacts</span>
         <span style={nodeCountStyle}>{items.length}</span>
@@ -498,36 +700,13 @@ export interface WorkflowGraphProps {
   resultMessage?: ReactNode;
   /**
    * Optional live per-node step status (keyed by node id). When present, each
-   * node's lamp + counter reflect the run; when absent, nodes stay the plain
-   * 1/1 definition placeholders.
+   * phase row's lamp + counter reflect the run; when absent, the graph stays
+   * the plain definition placeholders (N/N from the static node counts).
    */
   runSteps?: Record<string, RunStepView>;
-  /** Declared total steps for the n/M counter; falls back to def node count when omitted. */
-  total?: number;
 }
 
-export function WorkflowGraph({
-  def,
-  summary,
-  artifacts,
-  resultMessage,
-  runSteps,
-  total: totalProp,
-}: WorkflowGraphProps) {
-  // Global 1-based ordinal per node id, across all phases, for the n/M counter.
-  const { position, nodeCount } = (() => {
-    const map = new Map<string, number>();
-    let i = 0;
-    for (const phase of def.phases) {
-      for (const node of phase.nodes) {
-        i += 1;
-        map.set(node.id, i);
-      }
-    }
-    return { position: (id: string): number => map.get(id) ?? 0, nodeCount: i };
-  })();
-  const resolvedTotal =
-    totalProp ?? (runSteps !== undefined ? nodeCount : undefined) ?? undefined;
+export function WorkflowGraph({ def, summary, artifacts, resultMessage, runSteps }: WorkflowGraphProps) {
   if (!def.phases.length) {
     return (
       <div
@@ -550,13 +729,7 @@ export function WorkflowGraph({
 
       <div style={lineStyle}>
         {def.phases.map((phase) => (
-          <PhaseGroup
-            key={phase.phase}
-            phase={phase}
-            runSteps={runSteps}
-            position={position}
-            total={resolvedTotal}
-          />
+          <PhaseRow key={phase.phase} phase={phase} runSteps={runSteps} />
         ))}
         {resultMessage ? <div style={resultBlockStyle}>{resultMessage}</div> : null}
       </div>

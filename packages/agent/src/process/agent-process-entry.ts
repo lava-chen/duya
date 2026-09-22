@@ -79,8 +79,8 @@ import { browserTool } from '../tool/builtin.js';
 import { getBashTaskRegistry } from '../session/bash-task-registry.js';
 import { hookTaskRegistry } from '../hooks/task-registry.js';
 import { backgroundAgentLifecycle } from '../lifecycle/BackgroundAgentLifecycle.js';
-import { sendEvent, parseStdin, type WorkerCommand, buildWorkflowRunEvent } from './worker-protocol.js';
-import { runWorkflow, type WorkflowRunRequest } from './workflow-runner.js';
+import { sendEvent, parseStdin, type WorkerCommand, buildWorkflowRunEvent, type WorkflowRunCommand } from './worker-protocol.js';
+import { launchSavedWorkflow } from './workflow-runner.js';
 import { resolveChatStartAgentMode } from './permission-profile-bridge.js';
 import { applyMCPConfiguration, type MCPApplyResult } from '../mcp/apply.js';
 import { storePendingAnswer } from '../tool/AskUserQuestionTool/AskUserQuestionTool.js';
@@ -4150,23 +4150,51 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
         }
 
         case 'workflow:run': {
-          // Plan 552 §14: worker-side workflow SSE bridge. Dispatched by the
+          // ZCode parity: real saved-workflow execution. Dispatched by the
           // agent server's POST /workflow/:name/trigger route targeting THIS
-          // session's worker. Fire-and-forget; every lifecycle frame flows out
-          // through the same worker→router→SSE channel as goal_updated, so the
-          // renderer's `workflow_run` case slots the card into this session.
-          const wf = msg as unknown as WorkflowRunRequest & { sessionId: string };
+          // session's worker. The dwf script runs in-process via
+          // launchSavedWorkflow (saved-store resolve → run row → journal →
+          // vm sandbox) and every lifecycle frame flows out through the same
+          // worker→router→SSE channel as goal_updated, so the renderer's
+          // `workflow_run` case slots the card into this session.
+          const wf = msg as unknown as WorkflowRunCommand;
           log('[Agent-Process] Received workflow:run', { sessionId, runId: wf.runId, workflowName: wf.workflowName });
-          void runWorkflow(
-            { sessionId: wf.sessionId, emit: sendToMain as (msg: unknown) => void },
+          if (!agent) {
+            sendToMain(
+              buildWorkflowRunEvent(wf.sessionId, 'error', {
+                runId: wf.runId ?? 'unstarted',
+                workflowName: wf.workflowName ?? 'unknown',
+                status: 'failed',
+                startedAt: Date.now(),
+                finishedAt: Date.now(),
+                error: 'agent worker not initialized (no init command received)',
+                stoppedReason: 'not_initialized',
+              }) as unknown as Record<string, unknown>,
+            );
+            break;
+          }
+          void launchSavedWorkflow(
+            {
+              sessionId: wf.sessionId,
+              emit: sendToMain as (msg: unknown) => void,
+              // Same interactive ask pipeline the chat turn uses — approval
+              // cards render in the anchored session and resolve via
+              // permission:resolve.
+              requestPermission: createPermissionHandler(wf.sessionId),
+              llm: {
+                apiKey: agent.apiKey ?? '',
+                baseURL: agent.baseURL,
+                provider: agent.provider ?? 'openai',
+                model: agent.model ?? '',
+                authStyle: agent.authStyle,
+              },
+              workingDirectory: wf.projectDir || agent.workingDirectory || process.cwd(),
+            },
             {
               runId: wf.runId,
               workflowName: wf.workflowName,
-              phases: wf.phases,
-              tokens: wf.tokens,
-              subagents: wf.subagents,
-              failAt: wf.failAt,
-              resumable: wf.resumable,
+              params: wf.params,
+              projectDir: wf.projectDir,
             },
           ).catch((err) => {
             warn('[Agent-Process] workflow:run failed:', err);

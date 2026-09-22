@@ -251,6 +251,93 @@ export function computePhaseTrail(journal: WorkflowJournalRecord[]): PhaseProgre
   return out;
 }
 
+export interface PhaseDetailStep {
+  nodeId: string;
+  label: string;
+  nodeKind?: string;
+  status: string;
+  usage?: { inputTokens: number; outputTokens: number };
+  result?: unknown;
+  errorClass?: string;
+  durationMs?: number;
+  outputSize?: number;
+  childSessionId?: string;
+  exitCode?: number | null;
+  verification?: string;
+}
+
+export interface PhaseDetail {
+  phaseId: string;
+  label: string;
+  nodeKind?: string;
+  status: "running" | "succeeded" | "failed" | "pending";
+  done: number;
+  total: number;
+  steps: PhaseDetailStep[];
+}
+
+/** Map a raw journal status to a timeline status lamp family. Honest: picks the
+ *  closest of running/succeeded/failed/pending, nothing fabricated. */
+function mapPhaseStatus(status: string): PhaseDetail["status"] {
+  if (status === "succeeded") return "succeeded";
+  if (status === "failed" || status === "interrupted" || status === "stopped" || status === "cancelled")
+    return "failed";
+  if (RUNNING_STATUSES.has(status) || status === "running") return "running";
+  return "pending";
+}
+
+/** Per-phase vertical-timeline model: phase records open a group, the journal
+ *  records beneath (node_result / decision / approval, in emission order) become
+ *  the phase's steps. Mirrors `computePhaseTrail` grouping but keeps the rows. */
+export function computePhaseDetail(journal: WorkflowJournalRecord[]): PhaseDetail[] {
+  const phases: PhaseDetail[] = [];
+  const byId = new Map<string, PhaseDetail>();
+  let current: PhaseDetail | undefined;
+  for (const r of journal) {
+    if (r.kind === "phase") {
+      // A node emits start + end phase records; merge into one timeline node.
+      let ph = byId.get(r.nodeId);
+      if (!ph) {
+        ph = {
+          phaseId: r.nodeId,
+          label: r.action || r.nodeId,
+          nodeKind: r.nodeKind,
+          status: mapPhaseStatus(r.status),
+          done: 0,
+          total: 0,
+          steps: [],
+        };
+        byId.set(r.nodeId, ph);
+        phases.push(ph);
+      } else {
+        ph.status = mapPhaseStatus(r.status);
+        if (r.action) ph.label = r.action;
+        if (r.nodeKind) ph.nodeKind = r.nodeKind;
+      }
+      current = ph;
+      continue;
+    }
+    if (!current || (r.kind !== "node_result" && r.kind !== "decision" && r.kind !== "approval")) continue;
+    current.steps.push({
+      nodeId: r.nodeId,
+      label: r.action ?? r.nodeId,
+      nodeKind: r.nodeKind,
+      status: r.status,
+      usage: r.usage,
+      result: r.result,
+      errorClass: r.errorClass,
+      durationMs: r.durationMs,
+      outputSize: r.outputSize,
+      childSessionId: r.childSessionId,
+      exitCode: r.exitCode,
+      verification: r.verification,
+    });
+    current.total++;
+    if (r.status === "succeeded" || r.status === "skipped") current.done++;
+  }
+  return phases;
+}
+
 /** Artifact records (screenshots / files) for the artifacts section. */
 export function computeArtifacts(journal: WorkflowJournalRecord[]): WorkflowJournalRecord[] {
   return journal.filter((r) => r.kind === "artifact");
@@ -281,15 +368,6 @@ function CopyablePath({ path }: { path: string }) {
       <span className="truncate font-mono">{path}</span>
       {copied ? <CheckIcon className="h-3 w-3 shrink-0" /> : <CopyIcon className="h-3 w-3 shrink-0" />}
     </button>
-  );
-}
-
-function StatCell({ value, label }: { value: string; label: string }) {
-  return (
-    <div className="flex flex-col">
-      <span className="text-sm font-semibold text-[var(--text)]">{value}</span>
-      <span className="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">{label}</span>
-    </div>
   );
 }
 
@@ -351,6 +429,103 @@ export function EvidenceRow({
           {typeof record.result === "string" ? record.result : JSON.stringify(record.result, null, 2)}
         </pre>
       )}
+    </div>
+  );
+}
+
+// ─── ZCode-style phase timeline (Runs detail) ───
+
+/** Small glyph per node type, mirroring the dwf node kinds. */
+const NODE_GLYPH: Record<string, string> = {
+  script: ">_",
+  agent: "✧",
+  approval: "👤",
+  decision: "◇",
+  edit: "✎",
+  publish: "🚀",
+};
+
+/** Distinct avatar fills for sub-agent clusters, cycled by index within a phase. */
+const AVATAR_COLORS = [
+  "bg-teal-500",
+  "bg-orange-500",
+  "bg-purple-500",
+  "bg-cyan-500",
+  "bg-rose-500",
+];
+
+function nodeGlyph(nodeKind: string | undefined, nodeId: string, label: string): string {
+  return (nodeKind && NODE_GLYPH[nodeKind]) || NODE_GLYPH[label] || nodeId[0] || "•";
+}
+
+function phaseLamp(status: PhaseDetail["status"]): string {
+  if (status === "succeeded") return "bg-emerald-500";
+  if (status === "failed") return "bg-red-500";
+  if (status === "running") return "bg-[var(--accent)] animate-pulse";
+  // Pending — hollow node on the connector line.
+  return "border border-[var(--text-muted)]";
+}
+
+function runStatusLamp(status: string): string {
+  if (status === "complete") return "bg-emerald-500";
+  if (status === "failed" || status === "cancelled" || status === "interrupted") return "bg-red-500";
+  if (isRunning(status)) return "bg-[var(--accent)] animate-pulse";
+  return "bg-[var(--text-muted)]";
+}
+
+export function PhaseTimeline({ phases }: { phases: PhaseDetail[] }) {
+  const { t } = useTranslation();
+  const [openId, setOpenId] = useState<string | null>(null);
+  if (phases.length === 0) return null;
+
+  return (
+    <div className="space-y-2 border-l-2 border-emerald-500/60 pl-3" data-testid="workflow-phase-line">
+      {phases.map((phase) => {
+        const expanded = openId === phase.phaseId;
+        // Sub-agent clusters: agent-kind steps under this phase, tinted by index.
+        const agents = phase.steps.filter((s) => s.nodeKind === "agent");
+        return (
+          <div key={phase.phaseId}>
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 text-left"
+              aria-expanded={expanded}
+              onClick={() => setOpenId(expanded ? null : phase.phaseId)}
+            >
+              <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${phaseLamp(phase.status)}`} />
+              <span className="shrink-0 text-xs text-[var(--text-muted)]">{nodeGlyph(phase.nodeKind, phase.phaseId, phase.label)}</span>
+              <span className="flex-1 truncate text-xs font-medium text-[var(--text)]">{phase.label}</span>
+              {agents.length > 0 && (
+                <span className="flex shrink-0 items-center -space-x-1">
+                  {agents.map((a, i) => (
+                    <span
+                      key={a.nodeId}
+                      title={a.label}
+                      className={`h-3.5 w-3.5 rounded-full ${AVATAR_COLORS[i % AVATAR_COLORS.length]} ${
+                        a.status === "succeeded" ? "" : "opacity-50"
+                      }`}
+                    />
+                  ))}
+                </span>
+              )}
+              <span className="shrink-0 text-[10px] tabular-nums text-[var(--text-muted)]">{phase.done}/{phase.total}</span>
+              {phase.steps.length > 0 && (expanded ? <CaretDownIcon className="h-3 w-3" /> : <CaretRightIcon className="h-3 w-3" />)}
+            </button>
+            {expanded && (
+              <div className="ml-3 mt-1 border-b border-[var(--border)]/30 pb-1" data-testid={`workflow-evidence-${phase.phaseId}`}>
+                {phase.steps.map((s, i) => (
+                  <EvidenceRow
+                    key={`${phase.phaseId}-${s.nodeId}`}
+                    record={s as unknown as WorkflowJournalRecord}
+                    index={i}
+                    total={phase.total}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -751,9 +926,10 @@ export function RunRow({ run, runs, expanded, onToggle, onDelete, onCancel }: Ru
   }, [expanded, journal, journalError, run.id]);
 
   const stats = useMemo(() => computeRunStats(run, journal ?? []), [run, journal]);
-  const trail = useMemo(() => computePhaseTrail(journal ?? []), [journal]);
+  const detail = useMemo(() => computePhaseDetail(journal ?? []), [journal]);
+  const stepTotal = detail.reduce((n, p) => n + p.total, 0);
+  const stepDone = detail.reduce((n, p) => n + p.done, 0);
   const artifacts = useMemo(() => computeArtifacts(journal ?? []), [journal]);
-  const rows = useMemo(() => evidenceRows(journal ?? []), [journal]);
   const lineage = run.retryOf ? runs.find((r) => r.id === run.retryOf) : undefined;
   const live = isRunning(run.status);
 
@@ -770,7 +946,10 @@ export function RunRow({ run, runs, expanded, onToggle, onDelete, onCancel }: Ru
           {expanded ? <CaretDownIcon className="h-3.5 w-3.5" /> : <CaretRightIcon className="h-3.5 w-3.5" />}
         </button>
         <span className="font-medium text-[var(--text)]">{run.workflowName}</span>
-        <span className={`text-xs font-semibold ${statusClass(run.status)}`}>{run.status}</span>
+        <span className="flex items-center gap-1.5">
+          <span className={`h-2 w-2 rounded-full ${runStatusLamp(run.status)}`} />
+          <span className={`text-xs font-semibold ${statusClass(run.status)}`}>{run.status}</span>
+        </span>
         {run.triggerKind && (
           <span className="rounded bg-[var(--bg-surface)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]">
             {run.triggerKind}
@@ -801,6 +980,19 @@ export function RunRow({ run, runs, expanded, onToggle, onDelete, onCancel }: Ru
         )}
       </div>
 
+      {expanded && journal && (
+        <div className="flex items-center gap-3 px-7 pt-1 text-[10px] text-[var(--text-muted)]">
+          <span>
+            {t("panel.workflow.summaryLine", {
+              subAgents: stats.subAgents,
+              done: stepDone,
+              total: stepTotal,
+              tokens: formatCount(stats.tokens),
+            })}
+          </span>
+        </div>
+      )}
+
       {run.pauseMessage && <div className="px-7 pt-1 text-xs text-[var(--text-muted)]">{run.pauseMessage}</div>}
 
       {expanded && (
@@ -810,45 +1002,12 @@ export function RunRow({ run, runs, expanded, onToggle, onDelete, onCancel }: Ru
               {t("panel.workflow.adjustedFrom")} <span className="font-mono">{lineage.id.slice(0, 12)}</span>
             </div>
           )}
-          <div className="flex flex-wrap gap-4 rounded-md bg-[var(--bg-surface)] px-3 py-2">
-            <StatCell value={formatDuration(0, stats.durationMs)} label={t("panel.workflow.statTime")} />
-            <StatCell value={formatCount(stats.tokens)} label={t("panel.workflow.statTokens")} />
-            <StatCell value={String(stats.subAgents)} label={t("panel.workflow.statSubAgents")} />
-            <StatCell value={String(stats.phases)} label={t("panel.workflow.statPhases")} />
-          </div>
 
           {journalError && <div className="pt-2 text-[var(--text-muted)]">{t("panel.workflow.journalUnavailable")}</div>}
 
-          {trail.length > 0 && (
-            <ol className="flex flex-wrap gap-1 pt-2" data-testid={`workflow-phase-trail-${run.id}`}>
-              {trail.map((p) => (
-                <li
-                  key={p.phaseId}
-                  className={`flex items-center gap-1 rounded bg-[var(--bg-surface)] px-1.5 py-0.5 ${
-                    p.status === "succeeded" ? statusClass("complete") : statusClass(p.status)
-                  }`}
-                >
-                  <span>{p.phaseId}</span>
-                  {p.total > 0 && (
-                    <span className="text-[10px] text-[var(--text-muted)]">
-                      {p.done}/{p.total}
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ol>
-          )}
-
-          {rows.length > 0 && (
-            <div className="pt-2" data-testid={`workflow-evidence-${run.id}`}>
-              <div className="pb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
-                {t("panel.workflow.steps")} · {rows.length}
-              </div>
-              {rows.map((r, i) => (
-                <EvidenceRow key={r.seq} record={r} index={i} total={rows.length} />
-              ))}
-            </div>
-          )}
+          <div className="pt-1" data-testid={`workflow-phase-line-${run.id}`}>
+            <PhaseTimeline phases={detail} />
+          </div>
 
           {artifacts.length > 0 && (
             <div className="pt-2" data-testid={`workflow-artifacts-${run.id}`}>

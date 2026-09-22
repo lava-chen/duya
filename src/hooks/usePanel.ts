@@ -188,6 +188,16 @@ function dedupKey(pageId: PageId, params?: Record<string, unknown>): string {
       return `conductor::${(params?.canvasId as string | undefined) ?? "__active__"}`;
     case "preview":
       return `preview::${(params?.filePath as string | undefined) ?? "__picker__"}`;
+    case "review":
+      // The review panel is a singleton view of one round of work. Keying on
+      // the round rather than on the whole params blob means clicking two
+      // different files of the same round reuses one tab; the file is
+      // re-targeted through `duya:review-focus-file`, because a reused tab
+      // keeps its original params. `__scoped__` is the launcher's
+      // session-wide review, which is a different view from a pinned round.
+      return `review::${(params?.workingDirectory as string | undefined) ?? ""}`
+        + `::${(params?.sessionId as string | undefined) ?? ""}`
+        + `::${(params?.reviewTurnId as string | undefined) ?? "__scoped__"}`;
     case "browser":
       // Agent tabs dedup by sessionId; manual tabs dedup by url.
       if (params?.kind === "agent") {
@@ -636,6 +646,42 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     window.addEventListener("duya:open-file-preview-panel", handleOpenFilePreview as EventListener);
     return () => {
       window.removeEventListener("duya:open-file-preview-panel", handleOpenFilePreview as EventListener);
+    };
+  }, [openOrActivatePage]);
+
+  // Turn-scoped review opens. The transcript's file-change card dispatches
+  // this so a file row or its 审查 button lands in the side panel instead of
+  // expanding a diff inside the message — same split ZCode makes with its
+  // code-viewer pane. `turnId` pins the panel to that round; without it the
+  // panel follows the session's latest round.
+  useEffect(() => {
+    const handleOpenReviewPanel = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        workingDirectory?: string;
+        sessionId?: string;
+        turnId?: string;
+        filePath?: string;
+        title?: string;
+      }>).detail;
+      const workingDirectory = typeof detail?.workingDirectory === "string" ? detail.workingDirectory : "";
+      const sessionId = typeof detail?.sessionId === "string" ? detail.sessionId : "";
+      if (!workingDirectory.trim() || !sessionId.trim()) return;
+      const params: Record<string, unknown> = { workingDirectory, sessionId };
+      if (typeof detail?.turnId === "string" && detail.turnId.trim()) {
+        params.reviewTurnId = detail.turnId.trim();
+      }
+      if (typeof detail?.filePath === "string" && detail.filePath.trim()) {
+        params.reviewFilePath = detail.filePath.trim();
+      }
+      if (typeof detail?.title === "string" && detail.title.trim()) {
+        params.title = detail.title.trim();
+      }
+      openOrActivatePage("review", params);
+    };
+
+    window.addEventListener("duya:open-review-panel", handleOpenReviewPanel as EventListener);
+    return () => {
+      window.removeEventListener("duya:open-review-panel", handleOpenReviewPanel as EventListener);
     };
   }, [openOrActivatePage]);
 

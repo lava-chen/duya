@@ -1,9 +1,9 @@
 /**
- * AutomationPage — the workflow management surface (plan 552 Phase 9 +
+ * WorkflowPage — the workflow management surface (plan 552 Phase 9 +
  * plan 556 Phase 5). Owns the page shell and switches between its three
  * views:
  *
- *   定义库   the saved library (AutomationView) → detail page
+ *   定义库   the saved library (WorkflowLibraryView) → detail page
  *   录制     recorded demonstrations (RecorderView) → convert to a definition
  *
  * The shell owns the PageFrame / PageHeader / PageTabs, so the two tab
@@ -23,10 +23,10 @@ import { IconRefresh, RepeatIcon } from '@/components/icons';
 import { IconButton } from '@/components/ui/IconButton';
 import { PageFrame, PageHeader, PageTabs } from '@/components/ui/page';
 import { RecorderView } from '@/components/recorder/RecorderView';
-import { AutomationView } from './AutomationView';
-import { AutomationDetailView } from './AutomationDetailView';
+import { WorkflowLibraryView } from './WorkflowLibraryView';
+import { WorkflowDetailView } from './WorkflowDetailView';
 
-export interface AutomationPageProps {
+export interface WorkflowPageProps {
   projectDir?: string;
   projectName?: string;
   onCreateViaConversation?: (scope: 'global' | 'project', projectDir?: string) => void;
@@ -36,12 +36,12 @@ export interface AutomationPageProps {
 type DetailState = { name: string; scope: 'global' | 'project' } | null;
 type TabId = 'definitions' | 'recordings';
 
-export function AutomationPage({
+export function WorkflowPage({
   projectDir,
   projectName,
   onCreateViaConversation,
   onAmendInChat,
-}: AutomationPageProps) {
+}: WorkflowPageProps) {
   const { t } = useTranslation();
   const [detail, setDetail] = useState<DetailState>(null);
   const [tab, setTab] = useState<TabId>('definitions');
@@ -50,7 +50,7 @@ export function AutomationPage({
 
   if (detail) {
     return (
-      <AutomationDetailView
+      <WorkflowDetailView
         name={detail.name}
         scope={detail.scope}
         projectDir={projectDir}
@@ -92,7 +92,7 @@ export function AutomationPage({
       />
 
       {tab === 'definitions' ? (
-        <AutomationView
+        <WorkflowLibraryView
           key={reloadKey}
           embedded
           projectDir={projectDir}

@@ -864,6 +864,8 @@ const zh: Record<TranslationKey, string> = {
   'settings.general.busyMessageModeDesc': '运行中发送消息的默认处理方式：立即引导当前运行，或排队等运行结束后投递',
   'settings.general.busyMessageModeFollowup': '立即引导当前运行',
   'settings.general.busyMessageModeQueued': '排队到运行结束',
+  'settings.general.turnChangesCard': '显示轮次变更卡片',
+  'settings.general.turnChangesCardDesc': '在每轮回复末尾汇总本轮更改的文件并提供撤销与审查入口；关闭后不再显示该卡片',
   'settings.general.notifications': '通知',
   'settings.general.notificationsDesc': '配置通知偏好设置',
   'settings.general.enableNotifications': '启用通知',
@@ -1227,6 +1229,7 @@ const zh: Record<TranslationKey, string> = {
   'panel.workflow.statTime': '时间',
   'panel.workflow.statTokens': 'tokens',
   'panel.workflow.statSubAgents': '子代理',
+  'panel.workflow.summaryLine': '{{subAgents}} 子代理 · {{done}}/{{total}} 步 · {{tokens}} tokens',
   'panel.workflow.statPhases': '阶段',
   'panel.workflow.paramsShort': '参数',
   'panel.workflow.run': '运行',
@@ -1386,6 +1389,25 @@ const zh: Record<TranslationKey, string> = {
   'taskDrawer.blocked': '被阻塞',
   'taskDrawer.delete': '删除',
   'taskDrawer.dismissRecap': '关闭摘要',
+
+  // Plan 566: turn-scoped file change card rendered at the end of every
+  // assistant round. The summary counts are aggregated across every mutating
+  // tool call of that single turn (one card per round, never one per tool).
+  'turnChanges.title': '{count} 个文件已更改',
+  'turnChanges.undo': '撤销',
+  'turnChanges.undoing': '正在撤销…',
+  'turnChanges.undoDone': '已撤销 {count} 个文件',
+  'turnChanges.undoPartial': '已撤销 {count} 个，{failed} 个未撤销',
+  'turnChanges.undoFailed': '撤销失败',
+  'turnChanges.review': '审查',
+  'turnChanges.reviewTitle': '本轮变更',
+  'turnChanges.open': '打开',
+  'turnChanges.revealInFolder': '在文件管理器中显示',
+  'turnChanges.copyPath': '复制路径',
+  'turnChanges.copied': '已复制',
+  'turnChanges.expand': '展开文件列表',
+  'turnChanges.collapse': '收起文件列表',
+  'turnChanges.ariaLabel': '本轮文件改动',
 
   'update.downloading': '下载更新中',
   'update.ready': '{version} 已就绪，点击重启安装',

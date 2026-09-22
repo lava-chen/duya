@@ -2880,45 +2880,48 @@ export function createHandleRequest(
     }
 
     // Plan 552 §14: workflow run trigger. Anchored to the launching session:
-    // the body MUST carry the anchor channel's sessionId — the card is
-    // inserted into THAT session's assistant stream, so the runner lives in
-    // that session's worker and its chat:workflow_run frames ride the same
-    // worker→router→SSE path every other chat:* event uses. Mirrors the
-    // /mcp/status (targeted worker: sendCommand) pattern above.
+    // the card is inserted into THAT session's assistant stream, so the
+    // runner lives in that session's worker and its chat:workflow_run frames
+    // ride the same worker→router→SSE path every other chat:* event uses.
+    // ZCode parity: when the body carries no sessionId (panel launches),
+    // fall back to the most recently active live worker — a run needs SOME
+    // live worker to execute in.
     if (parts[0] === 'workflow' && parts.length >= 3 && parts[2] === 'trigger' && method === 'POST') {
-      const dispatch = (sessionId: string | undefined, payload: { name?: string; params?: Record<string, unknown> }): void => {
+      const dispatch = (
+        sessionId: string | undefined,
+        payload: { name?: string; params?: Record<string, unknown>; projectDir?: string },
+      ): void => {
         const name = payload.name ?? parts[1];
-        if (!sessionId || !name) {
-          sendJson(res, 400, { ok: false, error: 'workflow trigger requires a sessionId and a workflow name' });
+        const anchor = sessionId ?? deps.workerManager.mostRecentWorkerSessionId() ?? undefined;
+        if (!anchor || !name) {
+          sendJson(res, 400, { ok: false, error: 'workflow trigger requires a workflow name and an anchorable session (no live worker found)' });
           return;
         }
         const runId = randomUUID();
-        const sent = deps.workerManager.sendCommand(sessionId, {
+        const sent = deps.workerManager.sendCommand(anchor, {
           type: 'workflow:run',
-          sessionId,
+          sessionId: anchor,
           runId,
           workflowName: name,
-          phases: payload.params?.phases as string[] | undefined,
-          tokens: payload.params?.tokens as number | undefined,
-          subagents: payload.params?.subagents as number | undefined,
-          failAt: payload.params?.failAt as number | undefined,
-          resumable: payload.params?.resumable as boolean | undefined,
+          params: payload.params,
+          projectDir: payload.projectDir,
         });
         if (!sent) {
-          sendJson(res, 409, { ok: false, error: 'anchor session worker unavailable', sessionId, runId });
+          sendJson(res, 409, { ok: false, error: 'anchor session worker unavailable', sessionId: anchor, runId });
           return;
         }
-        httpLogger.info('Workflow run dispatched to session', { sessionId, runId, workflowName: name });
-        sendJson(res, 200, { ok: true, runId, sessionId });
+        deps.httpLogger.info('Workflow run dispatched to session', { sessionId: anchor, runId, workflowName: name });
+        sendJson(res, 200, { ok: true, runId, sessionId: anchor });
       };
       readRequestBody(req).then((body) => {
         let sessionId: string | undefined;
-        let payload: { name?: string; params?: Record<string, unknown> } = {};
+        let payload: { name?: string; params?: Record<string, unknown>; projectDir?: string } = {};
         if (body) {
           try {
-            const parsed = JSON.parse(body) as { sessionId?: unknown; name?: unknown; params?: unknown };
+            const parsed = JSON.parse(body) as { sessionId?: unknown; name?: unknown; params?: unknown; projectDir?: unknown };
             if (typeof parsed.sessionId === 'string') sessionId = parsed.sessionId;
             if (typeof parsed.name === 'string') payload.name = parsed.name;
+            if (typeof parsed.projectDir === 'string') payload.projectDir = parsed.projectDir;
             if (parsed.params && typeof parsed.params === 'object') payload.params = parsed.params as Record<string, unknown>;
           } catch {
             // Malformed JSON: reply 400 below.

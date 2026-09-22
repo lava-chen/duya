@@ -9,6 +9,10 @@ import {
 } from "@/stores/busy-message-mode-store";
 import { useIPC } from "@/hooks/useIPC";
 import {
+  setTurnChangesCard,
+  useTurnChangesCardEnabled,
+} from "@/stores/turn-changes-card-store";
+import {
   SpinnerGapIcon,
   FolderIcon,
   XIcon,
@@ -50,6 +54,7 @@ export function GeneralSection() {
   const { settings, loading, error, save, saving } = useSettings();
   const { openLinksInExternalBrowser, setOpenLinksInExternalBrowser } = useLinkOpener();
   const busyMessageMode = useBusyMessageModeValue();
+  const turnChangesCard = useTurnChangesCardEnabled();
   const { listProviders } = useIPC();
 
   const [autoStart, setAutoStart] = useState(false);
@@ -535,6 +540,12 @@ export function GeneralSection() {
               { value: "followup", label: t("settings.general.busyMessageModeFollowup") },
               { value: "queued", label: t("settings.general.busyMessageModeQueued") },
             ]}
+          />
+          <SettingsToggle
+            label={t("settings.general.turnChangesCard")}
+            description={t("settings.general.turnChangesCardDesc")}
+            checked={turnChangesCard}
+            onCheckedChange={setTurnChangesCard}
           />
           </SettingsCard>
       </SettingsSection>

@@ -21,6 +21,7 @@ import {
   EvidenceRow,
   computeRunStats,
   computePhaseTrail,
+  computePhaseDetail,
   computeArtifacts,
   evidenceRows,
   statusClass,
@@ -220,6 +221,34 @@ describe("console helpers", () => {
     expect(trail[0]).toMatchObject({ phaseId: "collect", done: 2, total: 2, status: "succeeded" });
   });
 
+  it("phase detail merges start/end records into one node and groups its steps", () => {
+    const detail = computePhaseDetail(journal);
+    expect(detail).toHaveLength(1);
+    expect(detail[0]).toMatchObject({
+      phaseId: "collect",
+      status: "succeeded",
+      done: 3,
+      total: 3,
+    });
+    expect(detail[0]!.steps.map((s) => s.nodeId)).toEqual(["fetch-tags", "review", "route"]);
+    // Sub-agent climb: the agent-kind step is surfaced for the avatar cluster.
+    const agents = detail[0]!.steps.filter((s) => s.nodeKind === "agent");
+    expect(agents.map((a) => a.nodeId)).toEqual(["review"]);
+  });
+
+  it("phase detail maps failed and pending statuses honestly", () => {
+    const failed: WorkflowJournalRecord[] = [
+      { seq: 0, kind: "phase", nodeId: "p", status: "running" },
+      { seq: 1, kind: "node_result", nodeId: "s1", status: "failed" },
+      { seq: 2, kind: "phase", nodeId: "p", status: "failed" },
+      { seq: 3, kind: "phase", nodeId: "q", status: "running" },
+    ];
+    const detail = computePhaseDetail(failed);
+    expect(detail).toHaveLength(2);
+    expect(detail[0]).toMatchObject({ phaseId: "p", status: "failed", done: 0, total: 1 });
+    expect(detail[1]).toMatchObject({ phaseId: "q", status: "running", total: 0 });
+  });
+
   it("artifacts and evidence rows are separated by kind", () => {
     expect(computeArtifacts(journal)).toHaveLength(1);
     const rows = evidenceRows(journal);
@@ -338,7 +367,7 @@ describe("runs tab", () => {
     expect(within(finishedRow).getByRole("button", { name: /panel\.workflow\.delete/ })).toBeTruthy();
   });
 
-  it("expanding a run shows lineage, stats, phase N/M, evidence rows and artifacts", async () => {
+  it("expanding a run shows lineage, summary, phase timeline, per-step evidence and artifacts", async () => {
     await openRuns();
     fireEvent.click(
       within(screen.getByTestId("workflow-run-run-2")).getByRole("button", {
@@ -351,19 +380,18 @@ describe("runs tab", () => {
     await waitFor(() => expect(screen.getByTestId("workflow-lineage-run-2")).toBeTruthy());
     expect(screen.getByTestId("workflow-lineage-run-2").textContent).toContain("run-live-1".slice(0, 12));
 
-    // Stats strip: time / tokens / sub-agents / phases.
+    // Summary line (sub-agents · done/total steps · tokens).
     const statsText = screen.getByTestId("workflow-run-run-2").textContent ?? "";
-    expect(statsText).toContain("panel.workflow.statTime");
-    expect(statsText).toContain("1.0k"); // 1020 tokens → compact count
-    expect(statsText).toContain("panel.workflow.statSubAgents");
+    expect(statsText).toContain("panel.workflow.summaryLine");
 
-    // Phase trail with N/M progress.
-    const trail = screen.getByTestId("workflow-phase-trail-run-2");
-    expect(trail.textContent).toContain("collect");
-    expect(trail.textContent).toContain("2/2");
+    // Phase timeline: merged 'collect' node with N/M progress + agent lamp.
+    const timeline = screen.getByTestId("workflow-phase-line-run-2");
+    expect(timeline.textContent).toContain("collect");
+    expect(timeline.textContent).toContain("3/3");
 
-    // Per-step evidence rows: exit code, ms, size, verification.
-    const evidence = screen.getByTestId("workflow-evidence-run-2");
+    // Phase expands into its per-step evidence rows.
+    fireEvent.click(within(timeline).getByRole("button", { name: /collect/ }));
+    const evidence = screen.getByTestId("workflow-evidence-collect");
     expect(evidence.textContent).toContain("fetch-tags");
     expect(evidence.textContent).toContain("exit 0");
     expect(evidence.textContent).toContain("12ms");

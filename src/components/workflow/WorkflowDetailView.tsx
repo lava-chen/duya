@@ -1,5 +1,5 @@
 /**
- * AutomationDetailView — full-screen definition detail page (plan 552 Phase 9).
+ * WorkflowDetailView — full-screen definition detail page (plan 552 Phase 9).
  *
  * Layout (matches the user's preferred design):
  *   面包屑  自动化 > 全局 > <workflow-name>
@@ -276,7 +276,7 @@ function coerceDef(raw: unknown): WorkflowDefView | null {
 
 // ─── component ─────────────────────────────────────────────────────────────
 
-export interface AutomationDetailViewProps {
+export interface WorkflowDetailViewProps {
   name: string;
   scope?: 'global' | 'project';
   /** Path to navigate back to the library. */
@@ -288,13 +288,13 @@ export interface AutomationDetailViewProps {
 
 type TabKey = 'definition' | 'history';
 
-export function AutomationDetailView({
+export function WorkflowDetailView({
   name,
   scope = 'global',
   onBack,
   projectDir,
   onAmendInChat,
-}: AutomationDetailViewProps) {
+}: WorkflowDetailViewProps) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<TabKey>('definition');
   const [def, setDef] = useState<WorkflowDefView | null>(null);

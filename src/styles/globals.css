@@ -58,3 +58,14 @@
 .project-row .project-row-action-btn:hover {
   color: var(--text);
 }
+
+/* Running phase lamp pulse in the workflow timeline (WorkflowGraph). */
+@keyframes duya-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}

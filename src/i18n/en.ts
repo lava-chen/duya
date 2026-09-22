@@ -873,6 +873,8 @@ const en = {
   'settings.general.busyMessageModeDesc': 'Default handling for mid-run messages: follow up immediately or queue until the run finishes',
   'settings.general.busyMessageModeFollowup': 'Follow up immediately',
   'settings.general.busyMessageModeQueued': 'Queue until the run finishes',
+  'settings.general.turnChangesCard': 'Show turn changes card',
+  'settings.general.turnChangesCardDesc': 'Summarize the files changed in each round below the reply, with undo and review actions. Turning this off hides the card',
   'settings.general.notifications': 'Notifications',
   'settings.general.notificationsDesc': 'Configure notification preferences',
   'settings.general.enableNotifications': 'Enable notifications',
@@ -1242,6 +1244,7 @@ const en = {
   'panel.workflow.statTime': 'time',
   'panel.workflow.statTokens': 'tokens',
   'panel.workflow.statSubAgents': 'sub-agents',
+  'panel.workflow.summaryLine': '{{subAgents}} sub-agents · {{done}}/{{total}} steps · {{tokens}} tokens',
   'panel.workflow.statPhases': 'phases',
   'panel.workflow.paramsShort': 'params',
   'panel.workflow.run': 'Run',
@@ -1401,6 +1404,25 @@ const en = {
   'taskDrawer.blocked': 'blocked',
   'taskDrawer.delete': 'Delete',
   'taskDrawer.dismissRecap': 'Dismiss recap',
+
+  // Plan 566: turn-scoped file change card rendered at the end of every
+  // assistant round. The summary counts are aggregated across every mutating
+  // tool call of that single turn (one card per round, never one per tool).
+  'turnChanges.title': 'Files changed: {count}',
+  'turnChanges.undo': 'Undo',
+  'turnChanges.undoing': 'Undoing...',
+  'turnChanges.undoDone': 'Undo complete: {count} files',
+  'turnChanges.undoPartial': 'Undone {count}, {failed} not reverted',
+  'turnChanges.undoFailed': 'Undo failed',
+  'turnChanges.review': 'Review',
+  'turnChanges.reviewTitle': 'Changes this turn',
+  'turnChanges.open': 'Open',
+  'turnChanges.revealInFolder': 'Reveal in file explorer',
+  'turnChanges.copyPath': 'Copy path',
+  'turnChanges.copied': 'Copied',
+  'turnChanges.expand': 'Expand file list',
+  'turnChanges.collapse': 'Collapse file list',
+  'turnChanges.ariaLabel': 'File changes this turn',
 
   'update.downloading': 'Downloading update...',
   'update.ready': '{version} ready — click to restart and install',

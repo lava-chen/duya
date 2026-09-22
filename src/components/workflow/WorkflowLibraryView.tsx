@@ -1,5 +1,5 @@
 /**
- * AutomationView — full-screen automation library (plan 552 Phase 9).
+ * WorkflowLibraryView — full-screen workflow library (plan 552 Phase 9).
  *
  * Page motto: "保存在已打开项目里的工作流，填好参数就能再跑一次"
  *
@@ -10,7 +10,7 @@
  *      - Cards: name + description + last run status + ▶ run + ··· menu
  *      - Group title with count
  *
- * Click a card → AutomationDetailView
+ * Click a card → WorkflowDetailView
  */
 
 import { useEffect, useState, useCallback, useMemo, type CSSProperties } from 'react';
@@ -184,7 +184,7 @@ const runButtonStyle: CSSProperties = {
 
 // ─── component ─────────────────────────────────────────────────────────────
 
-export interface AutomationViewProps {
+export interface WorkflowLibraryViewProps {
   /** Optional project dir to also show project-scoped workflows. */
   projectDir?: string;
   /** Open a chat session to create a workflow via conversation. */
@@ -195,20 +195,20 @@ export interface AutomationViewProps {
   projectName?: string;
   /**
    * Render only the content, without the PageFrame/PageHeader shell —
-   * used when a parent page (AutomationPage) owns the header and the
+   * used when a parent page (WorkflowPage) owns the header and the
    * tab bar. Vertical rhythm matches `.page-frame-inner` so the switch
    * is visually seamless.
    */
   embedded?: boolean;
 }
 
-export function AutomationView({
+export function WorkflowLibraryView({
   projectDir,
   onCreateViaConversation,
   onOpenDetail,
   projectName,
   embedded = false,
-}: AutomationViewProps) {
+}: WorkflowLibraryViewProps) {
   const { t } = useTranslation();
   const [defs, setDefs] = useState<WorkflowDefinitionSummary[]>([]);
   const [runs, setRuns] = useState<WorkflowRunRow[]>([]);
@@ -414,7 +414,7 @@ export function AutomationView({
   if (embedded) {
     return (
       <div
-        data-testid="automation-view-embedded"
+        data-testid="workflow-library-embedded"
         style={{ display: 'flex', flexDirection: 'column', gap: 'var(--page-gap, 16px)' }}
       >
         {content}
