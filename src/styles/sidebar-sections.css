@@ -26,6 +26,14 @@
   opacity: 0.95;
 }
 .sidebar-section-item .sidebar-section-header {
+  /* Plan 471 v10 / 549: the base rule in `sidebar.css` sets
+     `justify-content: space-between`, which pushed the collapse chevron to
+     the far right of any header without a trailing slot (cron, archived) —
+     it only looked "glued" on 项目 because that section's trailing `⋯ +`
+     carries `margin-left: auto` and absorbs the free space. The intended
+     geometry (see the caret rule below) is chevron-right-after-the-label for
+     every section, so pin the axis here. */
+  justify-content: flex-start;
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -41,12 +49,13 @@
 .sidebar-section-item .sidebar-section-header:hover {
   background: var(--surface-hover);
 }
-/* Plan 471 v10: "项目" and "定时任务" keep a flat resting look — no
-   hover background wash (user feedback). The chevron + trailing buttons
-   still fade in on hover; only the header's background highlight is
-   suppressed so these two system sections read as static titles. */
+/* Plan 471 v10 / 549: "项目", "定时任务" and "已归档" keep a flat resting
+   look — no hover background wash (user feedback). The chevron + trailing
+   buttons still fade in on hover; only the header's background highlight is
+   suppressed so these system sections read as static titles. */
 .sidebar-section-item[data-section-id="__system__:project"] .sidebar-section-header:hover,
-.sidebar-section-item[data-section-id="__system__:cron"] .sidebar-section-header:hover {
+.sidebar-section-item[data-section-id="__system__:cron"] .sidebar-section-header:hover,
+.sidebar-section-item[data-section-id="__system__:archived"] .sidebar-section-header:hover {
   background: transparent;
 }
 .sidebar-section-item .sidebar-section-header:focus-visible {

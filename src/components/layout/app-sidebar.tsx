@@ -265,6 +265,13 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     // resets when the user toggles the view mode or a section collapse.
     const FLAT_LIST_THRESHOLD = 20;
     const [flatListVisibleCount, setFlatListVisibleCount] = useState(FLAT_LIST_THRESHOLD);
+    // Plan 549 (Track B): the archived roster only ever grows, so it reveals
+    // in batches like the other unbounded sections. 10 per click (smaller
+    // than the flat singleList batch) because the archived section is a
+    // "find that one session" surface — dumping hundreds of rows buries the
+    // active list above it.
+    const ARCHIVED_REVEAL_STEP = 10;
+    const [archivedVisibleCount, setArchivedVisibleCount] = useState(ARCHIVED_REVEAL_STEP);
     // Plan 471: cap how many cron / etc. system sessions render in the
     // sidebar at once. The automation page owns the full history; the
     // sidebar just needs a quick "what's recent?" overview. Picking 8 →
@@ -320,13 +327,15 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       () => {
         // Default-collapse system sections with high cardinality (cron can
         // easily reach hundreds of runs; gateway and wakeup are similarly
-        // noisy). The user can open them on demand. Pinned stays expanded
-        // because it is bounded by user choice. The project section starts
-        // open so the user sees their work without an extra click.
+        // noisy; the archived roster only ever grows). The user can open
+        // them on demand. Pinned stays expanded because it is bounded by
+        // user choice. The project section starts open so the user sees
+        // their work without an extra click.
         const initialCollapsed = new Set<string>();
         initialCollapsed.add('__system__:cron');
         initialCollapsed.add('__system__:gateway');
         initialCollapsed.add('__system__:wakeup');
+        initialCollapsed.add('__system__:archived');
         return initialCollapsed;
       },
     );
@@ -883,15 +892,19 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         // the archive roster is empty (see isEmpty branch in the render
         // loop). Threads here are ungrouped — each row gets its own
         // `ThreadListItem` so the per-row unarchive action can hook in.
+        // The roster is sliced to `archivedVisibleCount` so the section
+        // reveals 10 rows at a time instead of dumping the whole archive
+        // into the sidebar.
         {
           id: '__system__:archived',
           kind: 'archived' as SectionKind,
           name: '__ARCHIVED_SECTION__',
           collapsed: collapsedSystemSections.has('__system__:archived'),
-          items: threadItems(archivedThreads),
+          items: threadItems(archivedThreads.slice(0, archivedVisibleCount)),
+          archivedHiddenCount: Math.max(0, archivedThreads.length - archivedVisibleCount),
         },
       ];
-    }, [threads, archivedThreads, projectSortBy, projectGroupBy, collapsedProjects, noProjectWorkspace, userSections, sectionProjects, collapsedSystemSections, flatListVisibleCount]);
+    }, [threads, archivedThreads, projectSortBy, projectGroupBy, collapsedProjects, noProjectWorkspace, userSections, sectionProjects, collapsedSystemSections, flatListVisibleCount, archivedVisibleCount]);
 
     // Plan 471: "all collapsed" controls the ↕ toggle in the sidebar header.
     // Treat every section (user or system) as collapsed only when there is
@@ -1378,6 +1391,11 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                     if (section.id === '__system__:project') {
                       setFlatListVisibleCount(FLAT_LIST_THRESHOLD);
                     }
+                    // Plan 549 (Track B): same contract for the archived
+                    // roster — reopening the section shows the newest batch.
+                    if (section.id === '__system__:archived') {
+                      setArchivedVisibleCount(ARCHIVED_REVEAL_STEP);
+                    }
                     toggleSystemSectionCollapsed(section.id);
                   },
               tone: section.id === '__system__:project' ? 'soft' as const : 'bold' as const,
@@ -1440,9 +1458,10 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                 ))}
                 {(() => {
                   // "View all N more" link — for cron (routes to the
-                  // Automation page for full history) and for the flat
-                  // singleList session list (reveals 5 more inline, mirroring
-                  // ProjectGroupItem's THREAD_COLLAPSE_THRESHOLD reveal).
+                  // Automation page for full history), for the flat
+                  // singleList session list (reveals 20 more inline, mirroring
+                  // ProjectGroupItem's THREAD_COLLAPSE_THRESHOLD reveal), and
+                  // for the archived roster (reveals 10 more inline).
                   const cronHidden = (section as { hiddenCount?: number }).hiddenCount;
                   if (cronHidden) {
                     return (
@@ -1464,6 +1483,23 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                         type="button"
                         className="sidebar-section-view-all"
                         onClick={() => setFlatListVisibleCount((c) => c + FLAT_LIST_THRESHOLD)}
+                      >
+                        <CaretRightIcon size={10} />
+                        <span>{t('common.showAll', { count: reveal })}</span>
+                      </button>
+                    );
+                  }
+                  // Plan 549 (Track B): the archived roster reveals inline
+                  // (unlike cron, which hands off to the automation page) —
+                  // the archived rows ARE the archive UI.
+                  const archivedHidden = (section as { archivedHiddenCount?: number }).archivedHiddenCount;
+                  if (archivedHidden) {
+                    const reveal = Math.min(ARCHIVED_REVEAL_STEP, archivedHidden);
+                    return (
+                      <button
+                        type="button"
+                        className="sidebar-section-view-all"
+                        onClick={() => setArchivedVisibleCount((c) => c + ARCHIVED_REVEAL_STEP)}
                       >
                         <CaretRightIcon size={10} />
                         <span>{t('common.showAll', { count: reveal })}</span>
