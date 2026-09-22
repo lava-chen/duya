@@ -38,7 +38,7 @@ describe('botConfig', () => {
 
   it('excludes host-side / vision dynamic sections not applicable to bots', () => {
     const names = botConfig.sections.map((s) => s.name ?? s.module);
-    for (const cut of ['sessionSearch', 'visionGuidelines', 'visualVerification']) {
+    for (const cut of ['sessionSearch', 'vision']) {
       expect(names).not.toContain(cut);
     }
   });

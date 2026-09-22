@@ -42,10 +42,10 @@ export const researchConfig: PromptSystemConfig = {
       description: 'Intent-specific output format',
     },
     {
-      name: 'visualVerification',
-      template: 'dynamic/visual-verification.hbs',
+      name: 'vision',
+      template: 'dynamic/vision.hbs',
       cachePolicy: 'every-call',
-      description: 'Visual tasks require rendered-output verification',
+      description: 'Vision capability and visual verification',
     },
   ],
   preBuildHook: async (ctx) => {
