@@ -1,0 +1,53 @@
+# Duya Commercial License
+
+Duya is dual-licensed. In addition to the open-source
+GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later),
+it is available under a paid proprietary commercial license for
+organizations that cannot or do not want to comply with AGPL terms.
+
+## When you need a commercial license
+
+You need one if any of the following applies and you do not wish to
+release your own source code under the AGPL:
+
+- You embed Duya (or a derivative of it) into closed-source products or services.
+- You offer Duya, modified or unmodified, as part of a hosted/SaaS offering
+  and do not provide the complete corresponding source code to your users
+  under AGPL-3.0-or-later.
+- You distribute Duya-based products without complying with the AGPL's
+  source-disclosure obligations.
+- You require an indemnification or support commitment.
+
+## What the commercial license provides
+
+- Permission to use, modify, and distribute Duya in proprietary products
+  without AGPL source-disclosure obligations.
+- A defined scope: named entities, seat counts, deployment instances,
+  and/or OEM/redistribution rights, as agreed in the signed agreement.
+- Optional maintenance, updates, and support terms.
+
+## How to obtain one
+
+Contact the copyright holder:
+
+- GitHub: https://github.com/lava-chen
+- Email: (add your licensing contact email before publishing)
+
+## Terms
+
+The commercial license is granted by a signed written agreement between
+the copyright holder and the licensee. The agreement defines the license
+scope, term, fees, audit rights, warranty disclaimers, liability limits,
+and termination consequences. Upon termination for breach, all rights
+granted under the commercial license cease, and the licensee's remaining
+rights are limited to those under AGPL-3.0-or-later.
+
+## Note
+
+This file is a summary for identification purposes only and does not
+itself grant any rights. Binding terms are set exclusively in the
+signed commercial license agreement.
+
+Except for code under the commercial license as described above,
+Duya is licensed under AGPL-3.0-or-later. See the LICENSE file for
+the full license text.
