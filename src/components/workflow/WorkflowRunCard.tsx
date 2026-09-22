@@ -24,6 +24,7 @@ import {
   ClockIcon,
   PlayIcon,
 } from '@/components/icons';
+import type { RunStepView } from '@/types/stream';
 
 interface WorkflowRunCardProps {
   runId: string;
@@ -104,6 +105,60 @@ function GridCell({ label, animated }: { label: string; animated: string | undef
       <span className="text-[10px] uppercase tracking-wider text-muted-foreground truncate max-w-full">
         {label}
       </span>
+    </div>
+  );
+}
+
+/**
+ * RunSteps — a live vertical step timeline for an in-flight run (ZCode run-view
+ * style): one emerald connector line, a per-step status lamp (accent=pulse
+ * running / emerald=success / red=failed), the step label, an n/total counter,
+ * and a chevron that expands the step's observed timing. Only renders what the
+ * runner actually reported — no fabricated steps.
+ */
+function RunSteps({ steps, total }: { steps: RunStepView[]; total?: number }) {
+  const [openId, setOpenId] = useState<string | null>(null);
+  if (steps.length === 0) return null;
+  return (
+    <div className="space-y-1 border-l-2 border-emerald-500/60 pl-3">
+      {steps.map((step, i) => {
+        const expanded = openId === step.id;
+        const lampClass =
+          step.status === 'success'
+            ? 'bg-emerald-500'
+            : step.status === 'failed'
+              ? 'bg-red-500'
+              : 'bg-[var(--accent)] animate-pulse';
+        const counter = total !== undefined && total > 0 ? `${i + 1}/${total}` : String(i + 1);
+        return (
+          <div key={step.id}>
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 py-0.5 text-left"
+              onClick={() => setOpenId(expanded ? null : step.id)}
+              aria-expanded={expanded}
+            >
+              <span className={`h-2 w-2 shrink-0 rounded-full ${lampClass}`} />
+              <span className="flex-1 truncate text-xs text-[var(--text)]">{step.label ?? step.id}</span>
+              <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">{counter}</span>
+              <ChevronDownIcon
+                className={`shrink-0 text-muted-foreground transition-transform ${expanded ? 'rotate-180' : ''}`}
+                size={12}
+              />
+            </button>
+            {expanded ? (
+              <div className="ml-4 space-y-0.5 px-1 py-0.5 text-[10px] text-muted-foreground">
+                {step.startedAt !== undefined ? (
+                  <div>started {new Date(step.startedAt).toLocaleTimeString()}</div>
+                ) : null}
+                {step.finishedAt !== undefined ? (
+                  <div>finished {new Date(step.finishedAt).toLocaleTimeString()}</div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -197,15 +252,19 @@ export function WorkflowRunCard({ runId }: WorkflowRunCardProps) {
               </span>
               {run.phase ? <span className="truncate text-[var(--text)]">{run.phase}</span> : null}
             </div>
-            <div className="flex items-center gap-1.5">
-              {Array.from({ length: pillCount }, (_, i) => (
-                <span
-                  key={i}
-                  className="h-1.5 flex-1 rounded-full bg-[var(--border)]"
-                  style={i === 0 && isActive ? { background: 'var(--accent)' } : undefined}
-                />
-              ))}
-            </div>
+            {run.steps && run.steps.length > 0 ? (
+              <RunSteps steps={run.steps} total={run.total} />
+            ) : (
+              <div className="flex items-center gap-1.5">
+                {Array.from({ length: pillCount }, (_, i) => (
+                  <span
+                    key={i}
+                    className="h-1.5 flex-1 rounded-full bg-[var(--border)]"
+                    style={i === 0 && isActive ? { background: 'var(--accent)' } : undefined}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         ) : (
           /* Completion receipt: result area + 4-cell stats grid. */

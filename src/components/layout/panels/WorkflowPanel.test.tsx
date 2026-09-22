@@ -29,7 +29,7 @@ import {
   formatCount,
   formatBytes,
   type WorkflowRunRow,
-  type WorkflowDefinitionSummary,
+  type DwfWorkflowEntry,
   type WorkflowJournalRecord,
 } from "./WorkflowPanel";
 
@@ -126,53 +126,47 @@ const journal: WorkflowJournalRecord[] = [
   },
 ];
 
-const defs: WorkflowDefinitionSummary[] = [
+const dwfEntries: DwfWorkflowEntry[] = [
   {
     name: "repo-digest",
     scope: "project",
     description: "Digest the repo",
-    file: "/repo/.duya/workflows/repo-digest.yaml",
-    params: [{ name: "days", type: "number", required: true }],
-    triggers: ["cron"],
-    phaseCount: 2,
-    nodeCount: 5,
-    valid: true,
+    path: "/repo/.duya/workflows/repo-digest.dwf.ts",
+    args: {
+      days: { type: "number", required: true, description: "lookback window" },
+      tag: { type: "string", default: "latest" },
+    },
   },
   {
     name: "release-tag-recommendation",
     scope: "global",
     description: "Recommend the next tag",
-    file: "/home/u/.duya/workflows/release-tag-recommendation.yaml",
-    params: [],
-    triggers: ["http", "bot"],
-    phaseCount: 3,
-    nodeCount: 8,
-    valid: true,
+    path: "/home/u/.duya/workflows/release-tag-recommendation.dwf.ts",
   },
-  {
-    name: "broken",
-    scope: "global",
-    description: "",
-    file: "/home/u/.duya/workflows/broken.yaml",
-    params: [],
-    triggers: [],
-    phaseCount: 0,
-    nodeCount: 0,
-    valid: false,
-    error: "phases: Array must contain at least 1 element(s)",
-  },
+];
+
+const dwfInvalid = [
+  { path: "/repo/.duya/workflows/broken.dwf.ts", reason: "frontmatter: missing description" },
 ];
 
 const list = vi.fn();
 const journalFn = vi.fn();
 const del = vi.fn();
 const cancel = vi.fn();
-const defsList = vi.fn();
+const dwfList = vi.fn();
+const run = vi.fn();
 
 Object.defineProperty(window, "electronAPI", {
   configurable: true,
   value: {
-    workflow: { list, journal: journalFn, delete: del, cancel, defs: { list: defsList, get: vi.fn() } },
+    workflow: {
+      list,
+      journal: journalFn,
+      delete: del,
+      cancel,
+      run,
+      dwf: { list: dwfList },
+    },
   },
 });
 
@@ -181,7 +175,8 @@ beforeEach(() => {
   journalFn.mockReset().mockResolvedValue(journal);
   del.mockReset().mockResolvedValue(true);
   cancel.mockReset().mockResolvedValue({ ok: true });
-  defsList.mockReset().mockResolvedValue(defs);
+  dwfList.mockReset().mockResolvedValue({ entries: dwfEntries, invalid: dwfInvalid, dirs: [] });
+  run.mockReset().mockResolvedValue({ ok: true, runId: "new-run-1" });
 });
 
 // ─── pure helpers ───
@@ -232,37 +227,90 @@ describe("console helpers", () => {
   });
 });
 
-// ─── shell + definitions tab ───
+// ─── shell + definitions tab (dwf library) ───
 
 describe("WorkflowPanel shell", () => {
   it("defaults to the definitions tab and renders scope groups", async () => {
     render(<WorkflowPanel />);
-    await waitFor(() => expect(defsList).toHaveBeenCalled());
+    await waitFor(() => expect(dwfList).toHaveBeenCalled());
     expect(screen.getByTestId("workflow-tab-definitions").getAttribute("aria-selected")).toBe("true");
 
     await waitFor(() => expect(screen.getByTestId("workflow-def-repo-digest")).toBeTruthy());
     expect(screen.getByTestId("workflow-def-release-tag-recommendation")).toBeTruthy();
     // Scope group headers carry counts.
     expect(screen.getByText(/panel\.workflow\.scopeProject · 1/)).toBeTruthy();
-    expect(screen.getByText(/panel\.workflow\.scopeGlobal · 2/)).toBeTruthy();
-    // Invalid definitions surface their error instead of throwing.
-    expect(screen.getByTestId("workflow-def-broken").textContent).toContain("panel.workflow.invalid");
-    expect(screen.getByTestId("workflow-def-broken").textContent).toContain("Array must contain at least 1");
+    expect(screen.getByText(/panel\.workflow\.scopeGlobal · 1/)).toBeTruthy();
+    // Unreadable files are named, not silently dropped.
+    expect(screen.getByText(/panel\.workflow\.invalidFiles · 1/)).toBeTruthy();
+    expect(screen.getByText(/broken\.dwf\.ts/)).toBeTruthy();
+    expect(screen.getByText(/frontmatter: missing description/)).toBeTruthy();
   });
 
-  it("definition cards show the authoritative file path and metadata", async () => {
+  it("definition cards show the authoritative file path and arg metadata", async () => {
     render(<WorkflowPanel />);
     await waitFor(() => expect(screen.getByTestId("workflow-def-repo-digest")).toBeTruthy());
     const card = screen.getByTestId("workflow-def-repo-digest");
-    expect(card.textContent).toContain("/repo/.duya/workflows/repo-digest.yaml");
-    expect(card.textContent).toContain("2 phases");
-    expect(card.textContent).toContain("5 nodes");
-    expect(card.textContent).toContain("cron");
+    expect(card.textContent).toContain("/repo/.duya/workflows/repo-digest.dwf.ts");
+    expect(card.textContent).toContain("panel.workflow.paramsShort · 2");
   });
 
   it("passes the project directory through to the definition library", async () => {
     render(<WorkflowPanel tab={{ params: { workingDirectory: "/repo" } }} />);
-    await waitFor(() => expect(defsList).toHaveBeenCalledWith("/repo"));
+    await waitFor(() => expect(dwfList).toHaveBeenCalledWith("/repo"));
+  });
+
+  it("the launch dialog fills declared args and runs against the chosen project", async () => {
+    render(<WorkflowPanel tab={{ params: { workingDirectory: "/repo" } }} />);
+    await waitFor(() => expect(screen.getByTestId("workflow-def-repo-digest")).toBeTruthy());
+
+    // Run opens the 实参窗 (project + args), it does not fire immediately.
+    fireEvent.click(within(screen.getByTestId("workflow-def-repo-digest")).getByTestId("workflow-run-repo-digest"));
+    expect(screen.getByTestId("workflow-launch-repo-digest")).toBeTruthy();
+
+    // Declared default is seeded into the string arg.
+    const tagInput = within(screen.getByTestId("workflow-launch-arg-tag")).getByRole("textbox") as HTMLInputElement;
+    expect(tagInput.value).toBe("latest");
+
+    // Fill the required number arg + confirm.
+    const daysInput = within(screen.getByTestId("workflow-launch-arg-days")).getByRole("spinbutton");
+    fireEvent.change(daysInput, { target: { value: "7" } });
+    fireEvent.change(screen.getByTestId("workflow-launch-project"), { target: { value: "/other" } });
+    fireEvent.click(screen.getByTestId("workflow-launch-confirm"));
+
+    await waitFor(() =>
+      expect(window.electronAPI.workflow.run).toHaveBeenCalledWith({
+        name: "repo-digest",
+        params: { days: 7, tag: "latest" },
+        projectDir: "/other",
+      }),
+    );
+  });
+
+  it("a missing required arg blocks the launch with an inline error", async () => {
+    render(<WorkflowPanel tab={{ params: { workingDirectory: "/repo" } }} />);
+    await waitFor(() => expect(screen.getByTestId("workflow-def-repo-digest")).toBeTruthy());
+    fireEvent.click(within(screen.getByTestId("workflow-def-repo-digest")).getByTestId("workflow-run-repo-digest"));
+
+    fireEvent.click(screen.getByTestId("workflow-launch-confirm"));
+    await waitFor(() => expect(screen.getByTestId("workflow-launch-error")).toBeTruthy());
+    expect(screen.getByTestId("workflow-launch-error").textContent).toContain("days");
+
+    const runFn = window.electronAPI.workflow.run as unknown as ReturnType<typeof vi.fn>;
+    expect(runFn).not.toHaveBeenCalled();
+  });
+
+  it("a successful launch flips the panel to the runs tab", async () => {
+    render(<WorkflowPanel tab={{ params: { workingDirectory: "/repo" } }} />);
+    await waitFor(() => expect(screen.getByTestId("workflow-def-repo-digest")).toBeTruthy());
+    fireEvent.click(within(screen.getByTestId("workflow-def-repo-digest")).getByTestId("workflow-run-repo-digest"));
+    fireEvent.change(screen.getByTestId("workflow-launch-arg-days").querySelector("input")!, {
+      target: { value: "7" },
+    });
+    fireEvent.click(screen.getByTestId("workflow-launch-confirm"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("workflow-tab-runs").getAttribute("aria-selected")).toBe("true"),
+    );
   });
 });
 

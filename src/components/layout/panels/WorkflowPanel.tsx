@@ -7,11 +7,13 @@
  *
  * Two tabs on one surface, mirroring ZCode's 定义 | 运行历史 split:
  *
- *   Definitions — the saved library, grouped by scope (project shadows
- *     global). Cards carry name + description + param/trigger/phase
- *     metadata. The definition text is authoritative and READ-ONLY here:
- *     authoring and edits happen in chat (the planner generates, code
- *     validates), never in this panel.
+ *   Definitions — the dwf saved library (.dwf.ts frontmatter + script),
+ *     grouped by scope (project shadows global). Cards carry name +
+ *     description + arg metadata. The script body is authoritative and
+ *     READ-ONLY here: authoring and edits happen in chat. Running pops
+ *     ZCode's 实参窗: a launch dialog to pick the target project and fill
+ *     the declared args before the run is created (workflow:run → the
+ *     anchor session's worker executes the real script).
  *
  *   Runs — live vs finished, counted separately. A run row expands into
  *     the evidence view: lineage (retry_of), the four-cell stats strip
@@ -20,11 +22,12 @@
  *     size + expandable cached result), artifacts, and the
  *     verified/unconfirmed annotation on every result.
  *
- * Reads only. Launching/resuming belongs to the agent-side trigger layer;
+ * Reads only, except for launch + cancel. Launching pops the dialog above;
  * cancelling is a store-level action exposed through `workflow:cancel`.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "@/hooks/useTranslation";
 import {
   RepeatIcon,
@@ -53,18 +56,33 @@ export interface WorkflowRunRow {
   updatedAt: number;
 }
 
-export interface WorkflowDefinitionSummary {
+/** dwf frontmatter arg declaration (mirrors SavedWorkflowArgDeclaration). */
+export interface DwfArgDeclaration {
+  type: "string" | "number" | "boolean" | "json";
+  description?: string;
+  required?: boolean;
+  default?: unknown;
+}
+
+/** dwf saved-workflow list entry (mirrors SavedWorkflowEntry — no script body). */
+export interface DwfWorkflowEntry {
   name: string;
-  scope: "project" | "global";
   description: string;
   whenToUse?: string;
-  file: string;
-  params: Array<{ name: string; type: string; required: boolean; default?: unknown }>;
-  triggers: Array<"cron" | "bot" | "http">;
-  phaseCount: number;
-  nodeCount: number;
-  valid: boolean;
-  error?: string;
+  args?: Record<string, DwfArgDeclaration>;
+  scope: "project" | "global";
+  path: string;
+}
+
+export interface DwfInvalidEntry {
+  path: string;
+  reason: string;
+}
+
+export interface DwfListResult {
+  entries: DwfWorkflowEntry[];
+  invalid: DwfInvalidEntry[];
+  dirs: string[];
 }
 
 export interface WorkflowJournalRecord {
@@ -90,14 +108,19 @@ export type WorkflowApi = {
   snapshot: (runId: string) => Promise<unknown>;
   delete: (id: string) => Promise<boolean>;
   cancel: (id: string) => Promise<{ ok: boolean; reason?: string }>;
-  run: (payload: { name: string; params?: Record<string, unknown>; projectDir?: string }) => Promise<{ ok: boolean; error?: string; runId?: string }>;
-  runBackground: (payload: { name: string; params?: Record<string, unknown>; projectDir?: string }) => Promise<{ ok: boolean; error?: string; runId?: string }>;
+  run: (payload: { name: string; sessionId?: string; params?: Record<string, unknown>; projectDir?: string }) => Promise<{ ok: boolean; error?: string; runId?: string; sessionId?: string }>;
   defs: {
     list: (projectDir?: string) => Promise<unknown[]>;
     get: (payload: { name: string; projectDir?: string }) => Promise<unknown>;
     create: (payload: { def: unknown; scope?: string; projectDir?: string }) => Promise<{ ok: boolean; file?: string; name?: string; error?: string }>;
     update: (payload: { name: string; def: unknown; scope?: string; projectDir?: string }) => Promise<{ ok: boolean; file?: string; name?: string; error?: string }>;
     delete: (payload: { name: string; scope?: string; projectDir?: string }) => Promise<{ ok: boolean; error?: string }>;
+  };
+  dwf: {
+    list: (projectDir?: string) => Promise<unknown>;
+    get: (payload: { name: string; projectDir?: string; homeDir?: string }) => Promise<unknown>;
+    save: (payload: { name: string; meta: unknown; script: string; scope?: string; projectDir?: string; homeDir?: string }) => Promise<{ ok: boolean; path?: string; scope?: string; shadowing?: unknown; error?: string }>;
+    delete: (payload: { name: string; scope?: string; projectDir?: string; homeDir?: string }) => Promise<{ ok: boolean; error?: string }>;
   };
 };
 
@@ -271,10 +294,25 @@ function StatCell({ value, label }: { value: string; label: string }) {
 }
 
 /** One journal row: action + outcome evidence (ZCode replay-row parity). */
-export function EvidenceRow({ record }: { record: WorkflowJournalRecord }) {
+export function EvidenceRow({
+  record,
+  index,
+  total,
+}: {
+  record: WorkflowJournalRecord;
+  index?: number;
+  total?: number;
+}) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const hasDetail = record.result !== undefined && record.result !== null;
+
+  const lampClass =
+    record.status === "succeeded"
+      ? "bg-emerald-500"
+      : record.status === "failed"
+        ? "bg-red-500"
+        : "bg-[var(--accent)] animate-pulse";
 
   return (
     <div className="border-b border-[var(--border)]/50 py-1 last:border-b-0" data-testid={`evidence-${record.seq}`}>
@@ -284,6 +322,7 @@ export function EvidenceRow({ record }: { record: WorkflowJournalRecord }) {
         aria-expanded={open}
         onClick={() => hasDetail && setOpen((v) => !v)}
       >
+        <span className={`h-2 w-2 shrink-0 rounded-full ${lampClass}`} />
         <span className="w-28 shrink-0 truncate font-mono text-[var(--text)]">{record.nodeId}</span>
         {record.action && <span className="w-24 shrink-0 truncate text-[var(--text-muted)]">{record.action}</span>}
         <span className={`w-20 shrink-0 ${statusClass(record.status === "succeeded" ? "complete" : record.status)}`}>
@@ -298,6 +337,9 @@ export function EvidenceRow({ record }: { record: WorkflowJournalRecord }) {
         )}
         {record.errorClass && <span className="shrink-0 text-red-500">{record.errorClass}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-2 text-[10px] text-[var(--text-muted)]">
+          {index !== undefined && (
+            <span className="tabular-nums">{total !== undefined && total > 0 ? `${index + 1}/${total}` : index + 1}</span>
+          )}
           {record.durationMs !== undefined && <span>{record.durationMs}ms</span>}
           {record.outputSize !== undefined && <span>{formatBytes(record.outputSize)}</span>}
           {record.childSessionId && <span className="font-mono">{record.childSessionId.slice(0, 8)}</span>}
@@ -313,106 +355,314 @@ export function EvidenceRow({ record }: { record: WorkflowJournalRecord }) {
   );
 }
 
-// ─── definitions tab ───
+// ─── definitions tab (dwf saved workflows) ───
 
-/** Default param values gathered from a definition summary. */
-export function definitionParams(def: WorkflowDefinitionSummary): Record<string, unknown> {
+/** Default param values gathered from a dwf entry's arg declarations. */
+export function dwfDefaultParams(entry: DwfWorkflowEntry): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const p of def.params) {
-    if (p.default !== undefined) out[p.name] = p.default;
+  for (const [name, decl] of Object.entries(entry.args ?? {})) {
+    if (decl.default !== undefined) out[name] = decl.default;
   }
   return out;
 }
 
-export function DefinitionCard({
-  def,
-  projectDir,
-  onRun,
+const LAUNCH_INPUT_CLS =
+  "w-full rounded border border-[var(--border)] bg-[var(--bg-canvas)] px-2 py-1 text-xs text-[var(--text)] focus:border-[var(--accent)] focus:outline-none";
+
+function ArgInput({
+  decl,
+  value,
+  onChange,
 }: {
-  def: WorkflowDefinitionSummary;
-  projectDir?: string;
-  onRun?: () => void;
+  decl: DwfArgDeclaration;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  if (decl.type === "boolean") {
+    return (
+      <input
+        type="checkbox"
+        checked={value === "true"}
+        onChange={(e) => onChange(e.target.checked ? "true" : "false")}
+        className="h-3.5 w-3.5 accent-[var(--accent)]"
+      />
+    );
+  }
+  if (decl.type === "json") {
+    return (
+      <textarea
+        value={value}
+        rows={3}
+        placeholder={decl.default !== undefined ? JSON.stringify(decl.default) : undefined}
+        onChange={(e) => onChange(e.target.value)}
+        className={`${LAUNCH_INPUT_CLS} font-mono`}
+      />
+    );
+  }
+  return (
+    <input
+      type={decl.type === "number" ? "number" : "text"}
+      value={value}
+      placeholder={decl.default !== undefined ? String(decl.default) : undefined}
+      onChange={(e) => onChange(e.target.value)}
+      className={LAUNCH_INPUT_CLS}
+    />
+  );
+}
+
+/**
+ * ZCode's 实参窗: pick the target project, fill the declared args, then
+ * launch. Absent args fall back to the declared defaults worker-side.
+ */
+export function WorkflowLaunchDialog({
+  entry,
+  defaultProjectDir,
+  onClose,
+  onLaunched,
+}: {
+  entry: DwfWorkflowEntry;
+  defaultProjectDir?: string;
+  onClose: () => void;
+  onLaunched: () => void;
 }) {
   const { t } = useTranslation();
-  const [running, setRunning] = useState(false);
-
-  const run = useCallback(async () => {
-    setRunning(true);
-    try {
-      await api()?.runBackground({ name: def.name, params: definitionParams(def), projectDir });
-      onRun?.();
-    } finally {
-      setRunning(false);
+  const [projectDir, setProjectDir] = useState(defaultProjectDir ?? "");
+  const [values, setValues] = useState<Record<string, string>>(() => {
+    const seed: Record<string, string> = {};
+    for (const [name, decl] of Object.entries(entry.args ?? {})) {
+      if (decl.default !== undefined) {
+        seed[name] = decl.type === "json" ? JSON.stringify(decl.default) : String(decl.default);
+      } else if (decl.type === "boolean") {
+        seed[name] = "false";
+      } else {
+        seed[name] = "";
+      }
     }
-  }, [def, projectDir, onRun]);
+    return seed;
+  });
+  const [error, setError] = useState<string | null>(null);
+  const [launching, setLaunching] = useState(false);
 
-  return (
-    <div className="rounded-lg border border-[var(--border)] p-3" data-testid={`workflow-def-${def.name}`}>
-      <div className="flex items-center gap-2">
-        <span className="font-medium text-[var(--text)]">{def.name}</span>
-        <span className="rounded bg-[var(--bg-surface)] px-1.5 py-0.5 text-[10px] uppercase text-[var(--text-muted)]">
-          {def.scope === "project" ? t("panel.workflow.scopeProject") : t("panel.workflow.scopeGlobal")}
-        </span>
-        {!def.valid && <span className="text-[10px] font-semibold text-red-500">{t("panel.workflow.invalid")}</span>}
-        <div className="ml-auto flex items-center gap-2 text-[10px] text-[var(--text-muted)]">
-          {def.phaseCount > 0 && <span>{def.phaseCount} phases</span>}
-          {def.nodeCount > 0 && <span>{def.nodeCount} nodes</span>}
+  const argEntries = useMemo(() => Object.entries(entry.args ?? {}), [entry]);
+
+  const submit = useCallback(async () => {
+    const params: Record<string, unknown> = {};
+    for (const [name, decl] of argEntries) {
+      const raw = (values[name] ?? "").trim();
+      if (raw === "" || (decl.type === "boolean" && raw === "false")) {
+        if (decl.required === true && raw === "") {
+          setError(`${name}: ${t("panel.workflow.argRequired")}`);
+          return;
+        }
+        continue; // absent → declared default applies worker-side
+      }
+      if (decl.type === "number") {
+        const n = Number(raw);
+        if (!Number.isFinite(n)) {
+          setError(`${name}: not a number`);
+          return;
+        }
+        params[name] = n;
+      } else if (decl.type === "boolean") {
+        params[name] = raw === "true";
+      } else if (decl.type === "json") {
+        try {
+          params[name] = JSON.parse(raw);
+        } catch {
+          setError(`${name}: invalid JSON`);
+          return;
+        }
+      } else {
+        params[name] = raw;
+      }
+    }
+    if (!projectDir.trim()) {
+      setError(t("panel.workflow.launchProject"));
+      return;
+    }
+    setLaunching(true);
+    setError(null);
+    try {
+      const res = await api()?.run({ name: entry.name, params, projectDir: projectDir.trim() });
+      if (res && res.ok === false) {
+        setError(res.error ?? t("panel.workflow.launchFailed"));
+        return;
+      }
+      onLaunched();
+      onClose();
+    } finally {
+      setLaunching(false);
+    }
+  }, [argEntries, values, projectDir, entry.name, onLaunched, onClose, t]);
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      data-testid={`workflow-launch-${entry.name}`}
+      onClick={onClose}
+    >
+      <div
+        className="w-[420px] max-w-[90vw] rounded-lg border border-[var(--border)] bg-[var(--bg-canvas)] shadow-lg"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="border-b border-[var(--border)] px-4 py-2.5 text-sm font-semibold text-[var(--text)]">
+          {t("panel.workflow.launchTitle")} · {entry.name}
+        </div>
+        <div className="flex flex-col gap-3 px-4 py-3 text-xs">
+          <div>
+            <label className="block pb-1 text-[var(--text-muted)]">{t("panel.workflow.launchProject")}</label>
+            <input
+              value={projectDir}
+              onChange={(e) => setProjectDir(e.target.value)}
+              data-testid="workflow-launch-project"
+              className={LAUNCH_INPUT_CLS}
+            />
+            <p className="pt-1 text-[10px] text-[var(--text-muted)]">{t("panel.workflow.launchProjectHint")}</p>
+          </div>
+          {argEntries.length > 0 && (
+            <div>
+              <div className="pb-1 text-[var(--text-muted)]">{t("panel.workflow.launchArgs")}</div>
+              <div className="flex flex-col gap-2">
+                {argEntries.map(([name, decl]) => (
+                  <div key={name} className="flex flex-col gap-0.5" data-testid={`workflow-launch-arg-${name}`}>
+                    <label className="flex items-center gap-1.5 text-[var(--text)]">
+                      <span className="font-mono">{name}</span>
+                      <span className="text-[10px] text-[var(--text-muted)]">{decl.type}</span>
+                      {decl.required === true && (
+                        <span className="text-[10px] text-amber-500">{t("panel.workflow.argRequired")}</span>
+                      )}
+                    </label>
+                    <ArgInput
+                      decl={decl}
+                      value={values[name] ?? ""}
+                      onChange={(v) => setValues((cur) => ({ ...cur, [name]: v }))}
+                    />
+                    {decl.description && <span className="text-[10px] text-[var(--text-muted)]">{decl.description}</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {error && (
+            <div className="text-red-500" data-testid="workflow-launch-error">
+              {error}
+            </div>
+          )}
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t border-[var(--border)] px-4 py-2.5">
+          <button
+            type="button"
+            className="rounded border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] hover:text-[var(--text)]"
+            onClick={onClose}
+            data-testid="workflow-launch-cancel"
+          >
+            {t("panel.workflow.dialogCancel")}
+          </button>
+          <button
+            type="button"
+            disabled={launching}
+            className="rounded border border-[var(--accent)] px-2.5 py-1 text-xs text-[var(--accent)] hover:bg-[var(--bg-surface)] disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={() => void submit()}
+            data-testid="workflow-launch-confirm"
+          >
+            {launching ? t("panel.workflow.pending") : t("panel.workflow.launch")}
+          </button>
         </div>
       </div>
-      {def.description && <p className="pt-1 text-xs text-[var(--text-muted)]">{def.description}</p>}
-      {def.error && <p className="pt-1 text-xs text-red-500">{def.error}</p>}
-      <div className="flex flex-wrap items-center gap-2 pt-2">
-        {def.triggers.map((tr) => (
-          <span key={tr} className="rounded bg-[var(--bg-surface)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]">
-            {tr}
-          </span>
-        ))}
-        {def.params.length > 0 && (
-          <span className="text-[10px] text-[var(--text-muted)]">
-            {t("panel.workflow.paramsShort")} · {def.params.length}
-          </span>
-        )}
+    </div>,
+    document.body,
+  );
+}
+
+export function DefinitionCard({
+  entry,
+  projectDir,
+  onLaunched,
+}: {
+  entry: DwfWorkflowEntry;
+  projectDir?: string;
+  onLaunched?: () => void;
+}) {
+  const { t } = useTranslation();
+  const [launching, setLaunching] = useState(false);
+  const argCount = Object.keys(entry.args ?? {}).length;
+
+  return (
+    <div className="rounded-lg border border-[var(--border)] p-3" data-testid={`workflow-def-${entry.name}`}>
+      <div className="flex items-center gap-2">
+        <span className="font-medium text-[var(--text)]">{entry.name}</span>
+        <span className="rounded bg-[var(--bg-surface)] px-1.5 py-0.5 text-[10px] uppercase text-[var(--text-muted)]">
+          {entry.scope === "project" ? t("panel.workflow.scopeProject") : t("panel.workflow.scopeGlobal")}
+        </span>
+        <div className="ml-auto flex items-center gap-2 text-[10px] text-[var(--text-muted)]">
+          {argCount > 0 && (
+            <span>
+              {t("panel.workflow.paramsShort")} · {argCount}
+            </span>
+          )}
+        </div>
       </div>
+      {entry.description && <p className="pt-1 text-xs text-[var(--text-muted)]">{entry.description}</p>}
       <div className="flex items-center gap-2 pt-2">
         <button
           type="button"
-          disabled={running}
-          data-testid={`workflow-run-${def.name}`}
-          className="flex items-center gap-1 rounded border border-[var(--border)] px-2 py-0.5 text-[10px] text-[var(--text)] hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
-          onClick={() => void run()}
+          data-testid={`workflow-run-${entry.name}`}
+          className="flex items-center gap-1 rounded border border-[var(--border)] px-2 py-0.5 text-[10px] text-[var(--text)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
+          onClick={() => setLaunching(true)}
         >
-          {running && <IconRefresh className="h-3 w-3 animate-spin" />}
-          {running ? t("panel.workflow.pending") : t("panel.workflow.run")}
+          {t("panel.workflow.run")}
         </button>
-        <CopyablePath path={def.file} />
+        <CopyablePath path={entry.path} />
       </div>
+      {launching && (
+        <WorkflowLaunchDialog
+          entry={entry}
+          defaultProjectDir={projectDir}
+          onClose={() => setLaunching(false)}
+          onLaunched={onLaunched ?? (() => {})}
+        />
+      )}
     </div>
   );
 }
 
-export function DefinitionsTab({ projectDir }: { projectDir?: string }) {
+export function DefinitionsTab({
+  projectDir,
+  onLaunched,
+}: {
+  projectDir?: string;
+  onLaunched?: () => void;
+}) {
   const { t } = useTranslation();
-  const [defs, setDefs] = useState<WorkflowDefinitionSummary[] | null>(null);
+  const [entries, setEntries] = useState<DwfWorkflowEntry[] | null>(null);
+  const [invalid, setInvalid] = useState<DwfInvalidEntry[]>([]);
 
   const refresh = useCallback(() => {
     api()
-      ?.defs.list(projectDir)
-      .then((rows) => setDefs(rows as WorkflowDefinitionSummary[]))
-      .catch(() => setDefs([]));
+      ?.dwf.list(projectDir)
+      .then((res) => {
+        const list = (res ?? { entries: [], invalid: [] }) as DwfListResult;
+        setEntries(list.entries ?? []);
+        setInvalid(list.invalid ?? []);
+      })
+      .catch(() => {
+        setEntries([]);
+        setInvalid([]);
+      });
   }, [projectDir]);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
 
-  const project = defs?.filter((d) => d.scope === "project") ?? [];
-  const global = defs?.filter((d) => d.scope === "global") ?? [];
+  const project = entries?.filter((d) => d.scope === "project") ?? [];
+  const global = entries?.filter((d) => d.scope === "global") ?? [];
 
   return (
     <div className="px-3 py-2">
       <div className="flex items-center gap-2 pb-2">
         <span className="text-xs text-[var(--text-muted)]">
-          {t("panel.workflow.savedCount")} · {defs?.length ?? 0}
+          {t("panel.workflow.savedCount")} · {entries?.length ?? 0}
         </span>
         <button
           type="button"
@@ -423,8 +673,8 @@ export function DefinitionsTab({ projectDir }: { projectDir?: string }) {
           <IconRefresh className="h-3 w-3" />
         </button>
       </div>
-      {defs === null && <div className="py-2 text-xs text-[var(--text-muted)]">…</div>}
-      {defs?.length === 0 && (
+      {entries === null && <div className="py-2 text-xs text-[var(--text-muted)]">…</div>}
+      {entries?.length === 0 && (
         <div className="py-2 text-xs text-[var(--text-muted)]">{t("panel.workflow.noDefinitions")}</div>
       )}
       {project.length > 0 && (
@@ -434,7 +684,7 @@ export function DefinitionsTab({ projectDir }: { projectDir?: string }) {
           </div>
           <div className="flex flex-col gap-2">
             {project.map((d) => (
-              <DefinitionCard key={`p-${d.name}`} def={d} projectDir={projectDir} onRun={refresh} />
+              <DefinitionCard key={`p-${d.name}`} entry={d} projectDir={projectDir} onLaunched={onLaunched} />
             ))}
           </div>
         </>
@@ -446,10 +696,22 @@ export function DefinitionsTab({ projectDir }: { projectDir?: string }) {
           </div>
           <div className="flex flex-col gap-2">
             {global.map((d) => (
-              <DefinitionCard key={`g-${d.name}`} def={d} projectDir={projectDir} onRun={refresh} />
+              <DefinitionCard key={`g-${d.name}`} entry={d} projectDir={projectDir} onLaunched={onLaunched} />
             ))}
           </div>
         </>
+      )}
+      {invalid.length > 0 && (
+        <div className="pt-3">
+          <div className="pb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+            {t("panel.workflow.invalidFiles")} · {invalid.length}
+          </div>
+          {invalid.map((row) => (
+            <div key={row.path} className="py-0.5 text-[10px] text-[var(--text-muted)]">
+              <span className="font-mono">{row.path}</span> — {row.reason}
+            </div>
+          ))}
+        </div>
       )}
       <p className="pt-3 text-[10px] text-[var(--text-muted)]">{t("panel.workflow.definitionsHint")}</p>
     </div>
@@ -582,8 +844,8 @@ export function RunRow({ run, runs, expanded, onToggle, onDelete, onCancel }: Ru
               <div className="pb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
                 {t("panel.workflow.steps")} · {rows.length}
               </div>
-              {rows.map((r) => (
-                <EvidenceRow key={r.seq} record={r} />
+              {rows.map((r, i) => (
+                <EvidenceRow key={r.seq} record={r} index={i} total={rows.length} />
               ))}
             </div>
           )}
@@ -748,7 +1010,11 @@ export function WorkflowPanel({ projectDir, tab: tabDesc }: WorkflowPanelProps =
         ))}
       </div>
       <div className="flex-1 overflow-y-auto">
-        {tab === "definitions" ? <DefinitionsTab projectDir={resolvedProjectDir} /> : <RunsTab />}
+        {tab === "definitions" ? (
+          <DefinitionsTab projectDir={resolvedProjectDir} onLaunched={() => setTab("runs")} />
+        ) : (
+          <RunsTab />
+        )}
       </div>
     </div>
   );

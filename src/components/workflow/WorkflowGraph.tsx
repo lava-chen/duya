@@ -43,6 +43,7 @@ import {
   NODE_KIND_LABEL,
   NODE_KIND_ACCENT,
 } from '@/lib/workflow-types';
+import type { RunStepView } from '@/types/stream';
 
 // ─── styles ────────────────────────────────────────────────────────────────
 
@@ -318,12 +319,35 @@ function NodeIcon({ kind, size = 12 }: { kind: WorkflowNodeKind; size?: number }
 
 // ─── node row ──────────────────────────────────────────────────────────────
 
-function NodeRow({ node }: { node: WorkflowNodeView }) {
+function NodeRow({
+  node,
+  runStep,
+  position,
+  total,
+}: {
+  node: WorkflowNodeView;
+  runStep?: RunStepView;
+  position?: number;
+  total?: number;
+}) {
   const [expanded, setExpanded] = useState(false);
   const kind = deriveNodeKind(node);
   const accent = NODE_KIND_ACCENT[kind];
   const preview = nodeInlinePreview(node);
   const label = kind === 'tool' && node.tool ? node.tool : NODE_KIND_LABEL[kind];
+
+  // Status lamp follows the live run step when one is wired in; else the
+  // neutral emerald of a static definition view.
+  const dotStyle: CSSProperties =
+    runStep === undefined || runStep.status === 'success'
+      ? nodeDotStyle
+      : runStep.status === 'failed'
+        ? { ...nodeDotStyle, background: 'var(--red-500, #ef4444)' }
+        : { ...nodeDotStyle, background: 'var(--accent)' };
+  const counter =
+    runStep === undefined
+      ? '1/1'
+      : `${position ?? 1}${total !== undefined && total > 0 ? `/${total}` : ''}`;
 
   return (
     <div style={nodeStackItemStyle}>
@@ -340,7 +364,7 @@ function NodeRow({ node }: { node: WorkflowNodeView }) {
           }
         }}
       >
-        <span style={nodeDotStyle} />
+        <span style={dotStyle} />
         <span style={nodeIconBoxStyle(accent)}>
           <NodeIcon kind={kind} />
         </span>
@@ -348,8 +372,15 @@ function NodeRow({ node }: { node: WorkflowNodeView }) {
         <span style={nodeBadgeStyle(accent)} title={label}>
           {KIND_GLYPH[kind]}
         </span>
-        <span style={nodeCountStyle} title="run counters are placeholders (definition has no run data)">
-          1/1
+        <span
+          style={nodeCountStyle}
+          title={
+            runStep !== undefined
+              ? runStep.status
+              : 'run counters are placeholders (definition has no run data)'
+          }
+        >
+          {counter}
         </span>
         {preview ? (
           <span style={nodeChevronStyle}>
@@ -364,7 +395,17 @@ function NodeRow({ node }: { node: WorkflowNodeView }) {
 
 // ─── phase group ───────────────────────────────────────────────────────────
 
-function PhaseGroup({ phase }: { phase: WorkflowPhaseView }) {
+function PhaseGroup({
+  phase,
+  runSteps,
+  position,
+  total,
+}: {
+  phase: WorkflowPhaseView;
+  runSteps?: Record<string, RunStepView>;
+  position: (id: string) => number;
+  total?: number;
+}) {
   return (
     <Fragment>
       <div style={phaseHeaderStyle}>
@@ -374,7 +415,13 @@ function PhaseGroup({ phase }: { phase: WorkflowPhaseView }) {
         </span>
       </div>
       {phase.nodes.map((node) => (
-        <NodeRow key={node.id} node={node} />
+        <NodeRow
+          key={node.id}
+          node={node}
+          runStep={runSteps?.[node.id]}
+          position={position(node.id)}
+          total={total}
+        />
       ))}
     </Fragment>
   );
@@ -449,9 +496,38 @@ export interface WorkflowGraphProps {
   artifacts?: WorkflowArtifactView[];
   /** Optional result message block rendered after the node line. */
   resultMessage?: ReactNode;
+  /**
+   * Optional live per-node step status (keyed by node id). When present, each
+   * node's lamp + counter reflect the run; when absent, nodes stay the plain
+   * 1/1 definition placeholders.
+   */
+  runSteps?: Record<string, RunStepView>;
+  /** Declared total steps for the n/M counter; falls back to def node count when omitted. */
+  total?: number;
 }
 
-export function WorkflowGraph({ def, summary, artifacts, resultMessage }: WorkflowGraphProps) {
+export function WorkflowGraph({
+  def,
+  summary,
+  artifacts,
+  resultMessage,
+  runSteps,
+  total: totalProp,
+}: WorkflowGraphProps) {
+  // Global 1-based ordinal per node id, across all phases, for the n/M counter.
+  const { position, nodeCount } = (() => {
+    const map = new Map<string, number>();
+    let i = 0;
+    for (const phase of def.phases) {
+      for (const node of phase.nodes) {
+        i += 1;
+        map.set(node.id, i);
+      }
+    }
+    return { position: (id: string): number => map.get(id) ?? 0, nodeCount: i };
+  })();
+  const resolvedTotal =
+    totalProp ?? (runSteps !== undefined ? nodeCount : undefined) ?? undefined;
   if (!def.phases.length) {
     return (
       <div
@@ -474,7 +550,13 @@ export function WorkflowGraph({ def, summary, artifacts, resultMessage }: Workfl
 
       <div style={lineStyle}>
         {def.phases.map((phase) => (
-          <PhaseGroup key={phase.phase} phase={phase} />
+          <PhaseGroup
+            key={phase.phase}
+            phase={phase}
+            runSteps={runSteps}
+            position={position}
+            total={resolvedTotal}
+          />
         ))}
         {resultMessage ? <div style={resultBlockStyle}>{resultMessage}</div> : null}
       </div>
