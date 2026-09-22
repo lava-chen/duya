@@ -13,6 +13,13 @@ import * as http from 'node:http';
 import { getCoreStoresOrNull } from '../db/core-connection';
 import { WorkflowFileRegistry, type WorkflowScope } from '../../packages/agent/src/modes/workflow/workflow-files';
 import { validateWorkflow } from '../../packages/agent/src/modes/workflow/validate';
+import {
+  SavedWorkflowStore,
+  SavedWorkflowMetaSchema,
+  isValidSavedWorkflowName,
+  type SavedWorkflowScope,
+  type SavedWorkflowMeta,
+} from '../../packages/agent/src/modes/workflow/dwf';
 import type { WorkflowRunStatus, WorkflowRunStore } from '../db/core/workflow-store';
 import type { JournalRecord } from '../../packages/agent/src/modes/workflow/journal';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
@@ -164,6 +171,87 @@ export function registerWorkflowHandlers(): void {
         return { ok: true };
       } catch (err) {
         logger.error('Failed to delete workflow definition', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+  );
+
+  // ─── dwf saved workflows (.dwf.ts — Phase 4 surface) ───
+  // 与旧 defs 通道平行：文件是 frontmatter + TS 脚本本体，脚本是权威源，
+  // 渲染层只读展示 + 元数据编辑；脚本编辑永远走 agent 对话（ZCode parity）。
+
+  ipcMain.handle('workflow:dwf:list', (_e, projectDir?: string) => {
+    try {
+      return new SavedWorkflowStore().list(projectDir ?? process.cwd());
+    } catch {
+      return { entries: [], invalid: [], dirs: [] };
+    }
+  });
+
+  ipcMain.handle(
+    'workflow:dwf:get',
+    (_e, payload: { name: string; projectDir?: string; homeDir?: string }) => {
+      try {
+        if (!isValidSavedWorkflowName(payload.name)) {
+          return { ok: false as const, reason: 'invalid_name' as const, detail: payload.name };
+        }
+        const resolved = new SavedWorkflowStore().resolve(payload.projectDir ?? process.cwd(), payload.name, {
+          homeDir: payload.homeDir,
+        });
+        // resolve 的失败四态原样透传（渲染层按 reason 分支提示）。
+        return resolved;
+      } catch (err) {
+        return { ok: false as const, reason: 'read_error' as const, detail: err instanceof Error ? err.message : String(err) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'workflow:dwf:save',
+    (_e, payload: { name: string; meta: unknown; script: string; scope?: SavedWorkflowScope; projectDir?: string; homeDir?: string }) => {
+      const logger = getLogger();
+      try {
+        if (!isValidSavedWorkflowName(payload.name)) {
+          return { ok: false, error: `invalid workflow name: ${payload.name}` };
+        }
+        // meta 在主进程再过一次 schema——渲染层是不可信边界。
+        const meta = SavedWorkflowMetaSchema.parse(payload.meta) as SavedWorkflowMeta;
+        const store = new SavedWorkflowStore();
+        const saved = store.save(
+          payload.projectDir ?? process.cwd(),
+          payload.name,
+          meta,
+          payload.script,
+          payload.scope ?? 'project',
+          { homeDir: payload.homeDir },
+        );
+        logger.info('dwf workflow saved', { name: payload.name, file: saved.path, scope: payload.scope ?? 'project' }, LogComponent.Main);
+        return { ok: true, file: saved.path, shadowing: saved.shadowing };
+      } catch (err) {
+        logger.error('Failed to save dwf workflow', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'workflow:dwf:delete',
+    (_e, payload: { name: string; scope?: SavedWorkflowScope; projectDir?: string; homeDir?: string }) => {
+      const logger = getLogger();
+      try {
+        const deleted = new SavedWorkflowStore().delete(
+          payload.projectDir ?? process.cwd(),
+          payload.name,
+          payload.scope ?? 'project',
+          { homeDir: payload.homeDir },
+        );
+        if (!deleted) {
+          return { ok: false, error: `workflow "${payload.name}" not found in ${payload.scope ?? 'project'} scope` };
+        }
+        logger.info('dwf workflow deleted', { name: payload.name, scope: payload.scope ?? 'project' }, LogComponent.Main);
+        return { ok: true };
+      } catch (err) {
+        logger.error('Failed to delete dwf workflow', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
         return { ok: false, error: err instanceof Error ? err.message : String(err) };
       }
     },

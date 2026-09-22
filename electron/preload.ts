@@ -1373,6 +1373,13 @@ export interface ElectronAPI {
       update: (payload: { name: string; def: unknown; scope?: string; projectDir?: string }) => Promise<{ ok: boolean; file?: string; name?: string; error?: string }>
       delete: (payload: { name: string; scope?: string; projectDir?: string }) => Promise<{ ok: boolean; error?: string }>
     }
+    /** dwf saved workflows (.dwf.ts) — frontmatter + script body, script is authoritative. */
+    dwf: {
+      list: (projectDir?: string) => Promise<unknown>
+      get: (payload: { name: string; projectDir?: string; homeDir?: string }) => Promise<unknown>
+      save: (payload: { name: string; meta: unknown; script: string; scope?: string; projectDir?: string; homeDir?: string }) => Promise<{ ok: boolean; path?: string; scope?: string; shadowing?: unknown; error?: string }>
+      delete: (payload: { name: string; scope?: string; projectDir?: string; homeDir?: string }) => Promise<{ ok: boolean; error?: string }>
+    }
   }
   /** Plan 556 Phase 5: event recorder control + session library. */
   recorder: {
@@ -1385,6 +1392,11 @@ export interface ElectronAPI {
     deleteSession: (sessionId: string) => Promise<{ ok: boolean; error?: string }>
     convert: (payload: { sessionId: string; name?: string; description?: string }) => Promise<unknown>
     onStatusChanged: (callback: (snapshot: unknown) => void) => () => void
+  }
+  /** Plan 562 Phase 3: element-tree visualization overlay. */
+  overlay: {
+    showElements: (elements: unknown[]) => Promise<{ ok: boolean; error?: string }>
+    clear: () => Promise<{ ok: boolean }>
   }
   project: ProjectAPI
   lock: LockAPI
@@ -2364,6 +2376,16 @@ const electronAPI: ElectronAPI = {
       delete: (payload: { name: string; scope?: string; projectDir?: string }) =>
         ipcRenderer.invoke('workflow:defs:delete', payload),
     },
+    // dwf saved workflows (.dwf.ts)：frontmatter + TS 脚本本体，脚本为权威源。
+    dwf: {
+      list: (projectDir?: string) => ipcRenderer.invoke('workflow:dwf:list', projectDir),
+      get: (payload: { name: string; projectDir?: string; homeDir?: string }) =>
+        ipcRenderer.invoke('workflow:dwf:get', payload),
+      save: (payload: { name: string; meta: unknown; script: string; scope?: string; projectDir?: string; homeDir?: string }) =>
+        ipcRenderer.invoke('workflow:dwf:save', payload),
+      delete: (payload: { name: string; scope?: string; projectDir?: string; homeDir?: string }) =>
+        ipcRenderer.invoke('workflow:dwf:delete', payload),
+    },
   },
   recorder: {
     start: () => ipcRenderer.invoke('recorder:start'),
@@ -2382,6 +2404,11 @@ const electronAPI: ElectronAPI = {
         ipcRenderer.removeListener('recorder:status-changed', listener);
       };
     },
+  },
+  /** Plan 562 Phase 3: element-tree visualization overlay. */
+  overlay: {
+    showElements: (elements: unknown[]) => ipcRenderer.invoke('overlay:show-elements', elements),
+    clear: () => ipcRenderer.invoke('overlay:clear'),
   },
   toolApproval: {
     listBySession: (sessionId: string) =>
@@ -2485,9 +2512,17 @@ const electronAPI: ElectronAPI = {
     reviewLatestTurn: (sessionId: string, cwd: string) => ipcRenderer.invoke('git:review-latest-turn', sessionId, cwd),
     reviewTurnHistory: (sessionId: string, cwd: string, limit?: number) => ipcRenderer.invoke('git:review-turn-history', sessionId, cwd, limit),
     reviewTurnDetail: (cwd: string, reviewId: string) => ipcRenderer.invoke('git:review-turn-detail', cwd, reviewId),
+    reviewTurnByTurnId: (sessionId: string, cwd: string, turnId: string) => ipcRenderer.invoke('git:review-turn-by-turn-id', sessionId, cwd, turnId),
     reviewScoped: (cwd: string, scope: unknown) => ipcRenderer.invoke('git:review-scoped', cwd, scope),
     reviewScopedDiff: (cwd: string, scope: unknown, filePath: string) => ipcRenderer.invoke('git:review-scoped-diff', cwd, scope, filePath),
-    listCommits: (cwd: string, count?: number) => ipcRenderer.invoke('git:list-commits', cwd, count),
+    listCommits: (cwd: string, options?: unknown) => ipcRenderer.invoke('git:list-commits', cwd, options),
+    commitDetail: (cwd: string, sha: string) => ipcRenderer.invoke('git:commit-detail', cwd, sha),
+    listBranches: (cwd: string) => ipcRenderer.invoke('git:list-branches', cwd),
+    repoState: (cwd: string) => ipcRenderer.invoke('git:repo-state', cwd),
+    switchBranch: (cwd: string, branchName: string) => ipcRenderer.invoke('git:switch-branch', cwd, branchName),
+    createBranch: (cwd: string, branchName: string, startPoint?: string) => ipcRenderer.invoke('git:create-branch', cwd, branchName, startPoint),
+    commit: (cwd: string, request: unknown) => ipcRenderer.invoke('git:commit', cwd, request),
+    push: (cwd: string, request?: unknown) => ipcRenderer.invoke('git:push', cwd, request),
   },
   references: {
     list: (workingDirectory: string) => ipcRenderer.invoke('references:list', workingDirectory),
