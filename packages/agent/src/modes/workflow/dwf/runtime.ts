@@ -25,7 +25,8 @@ import { computeReqHash } from '../journal.js';
 import { BudgetLedger, Semaphore, type HostAgentSpec, type HostCallContext, type HostCallResult } from '../host.js';
 import { classifyError, type WorkflowErrorClass } from '../error-class.js';
 import { uncertainOutcomeFor, type DecisionRunOutcome } from '../decision-adapter.js';
-import type { DecisionQuestionSpec } from '../schema.js';
+import type { DecisionQuestionSpec, GuiNodeSpec } from '../schema.js';
+import type { GuiNodeOutcome } from '../gui-runner.js';
 import type { Question } from '@duya/ai';
 
 // ─── 宿主端口（与 WorkflowHost 同构，decide/publish 为脚本专有扩展） ───
@@ -46,6 +47,11 @@ export interface DwfDecisionPort {
 export interface DwfHostPorts {
   runTool(tool: string, input: unknown, ctx: HostCallContext): Promise<HostCallResult>;
   runAgent(spec: HostAgentSpec, ctx: HostCallContext): Promise<HostCallResult>;
+  /**
+   * RPA 步骤序列执行（gui-runner 的 runGuiNode 语义由宿主绑定层包装）。
+   * 缺席时 wf.gui 抛明确错误——录制转换的脚本必须绑定此端口才有意义。
+   */
+  runGui(spec: GuiNodeSpec, annotation: Record<string, unknown> | undefined, ctx: HostCallContext): Promise<GuiNodeOutcome>;
   /** Human approval（498 卡管线）。resolve approve/deny/timeout。 */
   requestApproval(spec: { prompt: string; timeoutMs?: number }, ctx: HostCallContext): Promise<{ decision: 'approve' | 'deny' | 'timeout' }>;
   /** 551 DecisionService 桥。缺席 = 决策面不可用（走 onLowConfidence 路径）。 */
@@ -143,6 +149,12 @@ export async function compileDwfScript(
 export interface DwfApi {
   /** 零 LLM 的确定性工具调用（ToolRegistry 直达）。 */
   tool(tool: string, input?: Record<string, unknown>): Promise<unknown>;
+  /**
+   * RPA：对目标应用执行确定性步骤序列（capture/click/type_text/key/scroll）。
+   * `som:<n>` 引用 annotation.som 里记录的元素（录制转换产物）或自己上一次
+   * capture 的新索引。失败抛错；skipped resolve null；成功 resolve outcome.output。
+   */
+  gui(spec: GuiNodeSpec, opts?: { annotation?: Record<string, unknown> }): Promise<unknown>;
   /** 开放式子任务（SubagentTool）。opts.outputSchema 走宿主校验+一次重试。 */
   agent(agentType: string, prompt: string, opts?: { model?: string; outputSchema?: Record<string, unknown> }): Promise<unknown>;
   /** 人在环审批。deny 抛错；timeout 按 onTimeout：fail=抛错、skip=返回 null、escalate=抛 escalate。 */
@@ -235,7 +247,7 @@ export function createDwfApi(ports: DwfHostPorts, opts: DwfRunOptions): DwfApi {
   async function cachedCall<T>(
     kind: 'node_result' | 'decision' | 'approval',
     action: string,
-    nodeKind: 'tool' | 'agent' | 'decision' | 'human',
+    nodeKind: 'tool' | 'gui' | 'agent' | 'decision' | 'human',
     payload: unknown,
     execute: () => Promise<{ value: T; meta?: { childSessionId?: string; exitCode?: number | null; usage?: { inputTokens: number; outputTokens: number } } }>,
   ): Promise<{ value: T; cached: boolean }> {
@@ -287,6 +299,19 @@ export function createDwfApi(ports: DwfHostPorts, opts: DwfRunOptions): DwfApi {
         const res = await ports.runTool(tool, input ?? {}, ctx);
         if (!res.ok) throw new Error(res.error ?? `tool "${tool}" failed`);
         return { value: res.output, meta: { exitCode: res.exitCode ?? null } };
+      });
+      return value;
+    },
+
+    async gui(spec, guiOpts) {
+      const { value } = await cachedCall('node_result', `gui:${spec.target_app}`, 'gui', { spec, annotation: guiOpts?.annotation }, async () => {
+        budget.countHostCall();
+        const outcome = await ports.runGui(spec, guiOpts?.annotation, ctx);
+        if (outcome.status === 'failed') {
+          throw new Error(outcome.error ?? `gui "${spec.target_app}" failed`);
+        }
+        if (outcome.status === 'skipped') return { value: null };
+        return { value: outcome.output ?? null };
       });
       return value;
     },

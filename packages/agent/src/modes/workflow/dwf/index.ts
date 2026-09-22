@@ -78,3 +78,7 @@ export {
 } from './planner-dwf.js';
 
 export type { DwfPlannerLlm, DwfPlannerInput, DwfPlannerResult } from './planner-dwf.js';
+
+export { defToDwfSource } from './def-to-dwf.js';
+
+export type { DefToDwfResult } from './def-to-dwf.js';

@@ -35,14 +35,17 @@ function fakePorts(overrides: Partial<DwfHostPorts> = {}): DwfHostPorts & {
   toolCalls: string[];
   agentCalls: string[];
   approvals: string[];
+  guiCalls: string[];
 } {
   const toolCalls: string[] = [];
   const agentCalls: string[] = [];
   const approvals: string[] = [];
+  const guiCalls: string[] = [];
   return {
     toolCalls,
     agentCalls,
     approvals,
+    guiCalls,
     async runTool(tool: string, input: unknown) {
       toolCalls.push(`${tool}:${JSON.stringify(input)}`);
       return { ok: true, output: { echoed: input, tool } } satisfies HostCallResult;
@@ -50,6 +53,10 @@ function fakePorts(overrides: Partial<DwfHostPorts> = {}): DwfHostPorts & {
     async runAgent(spec: HostAgentSpec) {
       agentCalls.push(`${spec.agent}:${spec.prompt}`);
       return { ok: true, output: { done: true, prompt: spec.prompt } } satisfies HostCallResult;
+    },
+    async runGui(spec) {
+      guiCalls.push(`${spec.target_app}:${spec.steps.length}`);
+      return { status: 'succeeded', output: { app: spec.target_app, steps: spec.steps.length } };
     },
     async requestApproval(spec) {
       approvals.push(spec.prompt);
@@ -141,6 +148,71 @@ describe('dwf runtime — wf primitives', () => {
     const ports2 = fakePorts();
     await runDwfScript(SIMPLE_SCRIPT, ports2, { runId: 'r1', journal: new Journal(sink), resuming: true });
     expect(ports2.toolCalls).toHaveLength(0); // 缓存命中，宿主零调用
+  });
+
+  it('wf.gui resolves with the outcome output and journals a gui record', async () => {
+    const sink = new MemoryJournalSink();
+    const script = `
+      export default async function (wf) {
+        return await wf.gui(
+          { target_app: "ERP*", steps: [{ do: "capture" }, { do: "click", element: "som:1" }], on_stuck: "agent" },
+          { annotation: { source: "recorder", app: "ERP", windowTitle: "w", som: {} } },
+        );
+      }`;
+    const result = await runDwfScript(script, fakePorts(), { runId: 'r1', journal: new Journal(sink) });
+    expect(result).toMatchObject({ app: 'ERP*', steps: 2 });
+    const guiRecord = sink.readAll().find((r) => r.nodeKind === 'gui');
+    expect(guiRecord?.status).toBe('succeeded');
+    expect(guiRecord?.action).toBe('gui:ERP*');
+  });
+
+  it('wf.gui resume hits the journal cache — runGui is not called twice', async () => {
+    const sink = new MemoryJournalSink();
+    const script = `
+      export default async function (wf) {
+        return await wf.gui({ target_app: "ERP*", steps: [{ do: "capture" }], on_stuck: "agent" });
+      }`;
+    await runDwfScript(script, fakePorts(), { runId: 'r1', journal: new Journal(sink) });
+    const ports2 = fakePorts();
+    await runDwfScript(script, ports2, { runId: 'r1', journal: new Journal(sink), resuming: true });
+    expect(ports2.guiCalls).toHaveLength(0);
+  });
+
+  it('wf.gui failure throws with the outcome error and journals the failure class', async () => {
+    const sink = new MemoryJournalSink();
+    const script = `
+      export default async function (wf) {
+        try {
+          await wf.gui({ target_app: "ERP*", steps: [{ do: "capture" }], on_stuck: "agent" });
+          return 'no-throw';
+        } catch (e) {
+          return { threw: e.message };
+        }
+      }`;
+    const ports = fakePorts({
+      async runGui() {
+        return { status: 'failed', error: 'element som:1 not found', verification: 'unconfirmed' };
+      },
+    });
+    const result = (await runDwfScript(script, ports, { runId: 'r1', journal: new Journal(sink) })) as Record<string, unknown>;
+    expect(result.threw).toBe('element som:1 not found');
+    const failed = sink.readAll().find((r) => r.nodeKind === 'gui');
+    expect(failed?.status).toBe('failed');
+    expect(failed?.errorClass).toBeTruthy();
+  });
+
+  it('wf.gui skipped outcome resolves null and keeps the script going', async () => {
+    const script = `
+      export default async function (wf) {
+        const out = await wf.gui({ target_app: "ERP*", steps: [{ do: "capture" }], on_stuck: "agent" });
+        return { out };
+      }`;
+    const result = await runDwfScript(
+      script,
+      fakePorts({ async runGui() { return { status: 'skipped' }; } }),
+      { runId: 'r1', journal: Journal.memory() },
+    );
+    expect(result).toEqual({ out: null });
   });
 
   it('approve resolves on approve; deny throws; timeout+skip returns null', async () => {
