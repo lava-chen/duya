@@ -300,6 +300,33 @@ if (gotTheLock) {
       logger.warn('Skipping core database init — better-sqlite3 not loaded', undefined, 'Main');
     }
 
+    // Plan 560 §6.2 — crash reconciliation. This process has just booted, so no
+    // workflow engine is running anything yet (neither the session-anchored
+    // workers nor the run-anchored runtime). Any row still sitting in a
+    // RUNNING-class status is therefore stale and was left behind by a crash or
+    // a hard quit. Mark them `interrupted` — never auto-resume; replaying a
+    // journal is the user's explicit decision.
+    try {
+      const { getCoreStoresOrNull } = await import('./db/core-connection');
+      const coreForReconcile = getCoreStoresOrNull();
+      if (coreForReconcile) {
+        const stale = coreForReconcile.workflowRuns.reconcileStaleRuns(new Set());
+        if (stale.length > 0) {
+          logger.info(
+            `Workflow crash reconciliation: ${stale.length} stale run(s) marked interrupted`,
+            undefined,
+            'Main',
+          );
+        }
+      }
+    } catch (err) {
+      logger.warn(
+        'Workflow crash reconciliation failed',
+        { error: err instanceof Error ? err.message : String(err) },
+        'Main',
+      );
+    }
+
     registerDbHandlers();
     registerConductorHandlers();
     registerSidebarSectionsHandlers();
@@ -692,15 +719,23 @@ if (gotTheLock) {
     // Shadow mode: writes only to memory-state.db and ~/.duya/memory
     // projection files. Never touches packages/agent/src/memory/.
     //
-    // Dev default-on: in development, the worker starts automatically
-    // to accumulate shadow data for the 4-week validation window
-    // required by Plan 305 before promoting to default-on in prod.
-    // Explicit opt-out via DUYA_MEMORY_ENABLED=0 still honored.
+    // Memory worker: reads from config.toml via ConfigStore first (user setting),
+    // with env var override for development/testing.
+    // DUYA_MEMORY_ENABLED env var takes precedence over config.toml for explicit opt-in/opt-out.
     const memoryExplicitOff = process.env.DUYA_MEMORY_ENABLED === '0' || process.env.DUYA_MEMORY_ENABLED === 'false'
       || process.env.DUYA_MEMORY_V2_ENABLED === '0' || process.env.DUYA_MEMORY_V2_ENABLED === 'false';
     const memoryExplicitOn = process.env.DUYA_MEMORY_ENABLED === '1' || process.env.DUYA_MEMORY_ENABLED === 'true'
       || process.env.DUYA_MEMORY_V2_ENABLED === '1' || process.env.DUYA_MEMORY_V2_ENABLED === 'true';
-    const memoryEnabled = memoryExplicitOn || (isDev && !memoryExplicitOff);
+    let memoryEnabled = false;
+    if (memoryExplicitOn) {
+      memoryEnabled = true;
+    } else if (memoryExplicitOff) {
+      memoryEnabled = false;
+    } else {
+      // No env override: read from config.toml via ConfigStore (default false per schema)
+      const configStore = getConfigStore();
+      memoryEnabled = configStore.getByPath('memory.memory_enabled') === true;
+    }
     if (memoryEnabled) {
       try {
         const { bootstrap } = await import('./memory-state');

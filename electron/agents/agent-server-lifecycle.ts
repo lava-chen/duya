@@ -102,6 +102,15 @@ export function spawnAgentServer(): Promise<number> {
       if (value !== undefined && env[key] === undefined) env[key] = value;
     }
 
+    // Memory setting forwarded to the agent server so isMemoryEnabled() in
+    // the agent subprocess respects the user's config.toml setting.
+    // Explicit DUYA_MEMORY_ENABLED env var (set in main.ts for the memory
+    // worker) still wins; otherwise the config value controls.
+    const memoryEnabled = getConfigStore().getByPath('memory.memory_enabled');
+    if (env.DUYA_MEMORY_ENABLED === undefined) {
+      env.DUYA_MEMORY_ENABLED = memoryEnabled ? '1' : '0';
+    }
+
     let command: string;
     let args: string[];
 

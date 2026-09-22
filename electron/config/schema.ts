@@ -484,7 +484,7 @@ export const DEFAULT_CONFIG: DuyaConfig = {
   model: { default: '', provider: '', base_url: '' },
   providers: {},
   memory: {
-    memory_enabled: true,
+    memory_enabled: false,
     user_profile_enabled: true,
     provider: '',
     model: '',

@@ -7,6 +7,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { app } from 'electron';
+import { getConfigStore } from '../../config/store';
 
 export interface RunningProcess {
   child: ChildProcess;
@@ -104,6 +105,11 @@ export function getAgentRuntimeCommand(
       // Dev-only flag: lets agent internals (e.g. API traffic logger) know it is
       // safe to enable expensive diagnostics. Never set in packaged builds.
       DUYA_DEV: '1',
+      // Memory setting from config.toml so isMemoryEnabled() respects user choice.
+      // Only set if not already inherited from parent (explicit env var wins).
+      ...(env.DUYA_MEMORY_ENABLED === undefined
+        ? { DUYA_MEMORY_ENABLED: getConfigStore().getByPath('memory.memory_enabled') ? '1' : '0' }
+        : {}),
     },
   };
 }

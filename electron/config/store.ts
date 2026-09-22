@@ -115,6 +115,7 @@ const FLAT_TO_PATH: Record<string, string> = {
   defaultProviderId: 'model.provider',
   memoryProviderId: 'memory.provider',
   memoryModelId: 'memory.model',
+  memoryEnabled: 'memory.memory_enabled',
   memoryRag: 'memory.rag',
   agentSettings: 'agent',
   uiPreferences: 'display',
