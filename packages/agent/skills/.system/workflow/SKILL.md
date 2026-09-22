@@ -14,10 +14,6 @@ duya 的 dwf 工作流把「人一步步干活的流程」固化成**可审计�
 > 心智模型：**命令式脚本，不是声明式节点图**。你写的是一段按顺序执行的代码，
 > 用普通变量传递中间结果；没有 phases/nodes/模板插值——那些是旧 YAML 引擎的概念。
 
-**本 skill 即权威**：原语签名、frontmatter 契约、args 规则全部以下方文档为准。
-(duya 仓库贡献者可对照源码校对：`packages/agent/src/modes/workflow/dwf/`——注意打包
-发布的 app 里**没有**这份源码，别在工作会话里尝试去读它们。)
-
 ## 分流原则(一页答案)
 
 **能用代码决定的绝不问模型；能用决策模型分类的绝不劳 LLM；只有开放式任务才进 agent；有不可逆副作用的一律先过 wf.approve。**
@@ -111,7 +107,7 @@ frontmatter 是**块注释**——整个文件仍是合法 TS，编辑器高亮/
 - **RPA(桌面自动化)走 `wf.gui` 原语**：`{ target_app, steps, max_actions?, on_stuck? }`，
   step 只有 `capture / click / type_text / set_value / key / scroll` 六种——**没有 `wait`**
   (等待节奏归宿主循环，脚本里等 = 确定性破洞)。元素引用一律 `som:<n>`，语义见
-  下文「从录制会话转 dwf.ts」。原语面以本 skill 列出的八个为准，不要臆造 `wf.wait`。
+  下文「从录制会话转 dwf.ts」。原语面只有八个，不要臆造 `wf.wait`。
 
 ## 断点续跑(缓存经济学)
 
@@ -174,7 +170,7 @@ frontmatter 是**块注释**——整个文件仍是合法 TS，编辑器高亮/
 2. **逐项自查**(保存通道会对 frontmatter 再过一次 strict schema——拼错键被拒收而非
    静默丢弃；脚本语法错误会在 run 启动时暴露)：
    - frontmatter 三键拼写、args 的 `type` 四选一、`default` 与 `type` 相符；
-   - 原语拼写只在本 skill 列出的八个之内，gui step 只在六种之内；
+   - 原语拼写只在八个之内(`wf.tool/gui/decide/approve/agent/map/publish/log`)，gui step 只在六种之内；
    - 引用的节点变量都在前面 `await` 接住过，没有超前引用。
 3. **别靠跑真实 run 试错**：上面的自查是纯确定性的，比一次真实 run 便宜得多。
 4. **风险预筛是自动的**：脚本里 `wf.tool("...")` 字面量命中不可逆词表
@@ -183,7 +179,7 @@ frontmatter 是**块注释**——整个文件仍是合法 TS，编辑器高亮/
 
 ## 生成与重提(用 code 裁决，别全文重贴)
 
-- 生成：按本 skill 的规则直接写一份完整 `.dwf.ts`(意图 → 原语选择 → frontmatter →
+- 生成：按上文规则直接写一份完整 `.dwf.ts`(意图 → 原语选择 → frontmatter →
   脚本体)；**校验错一次带整个错误列表回喂一次，二次仍失败就停**，绝不产半成品。
 - 校验失败时，**按错误定位改那一处**再重提——不要整段重写。
 - 修订重跑：改动会让部分调用的 reqHash 变化；保持 args 分离、命名稳定，未受影响调用零成
@@ -205,10 +201,10 @@ frontmatter 是**块注释**——整个文件仍是合法 TS，编辑器高亮/
 | 把可变值揉进 prompt 字面量而非 frontmatter args | 改一个参数重写所有提及它的文本 → 缓存全废 |
 | 把 `wf.approve` 的拒绝当 skip(不 catch 也不终止) | 拒绝即抛错；吞掉异常会让后续副作用失去闸门 |
 | 脚本依赖执行顺序外的隐藏状态(模块级可变量) | 重跑 = 重新执行整个脚本，隐藏状态破坏幂等重入 |
-| 臆造 `wf.wait`/`wf.sleep` 等原语 | 原语面只有本 skill 列出的八个，多一个都不存在；等待节奏归宿主循环 |
+| 臆造 `wf.wait`/`wf.sleep` 等原语 | 原语面只有八个，多一个都不存在；等待节奏归宿主循环 |
 | 靠跑真实 run 试语法/类型正误 | `validateSource` 双门本来能同步回答 |
 
 ## 参考
 
-- `examples.md`(本 skill 同目录)——完整可跑的 dwf 脚本工作流。
-- `patterns.md`(本 skill 同目录)——编排模式目录：RPA 骨架、路由/分类、人在环门控、扇出、两档校验。
+- `examples.md`(同目录)——完整可跑的 dwf 脚本工作流。
+- `patterns.md`(同目录)——编排模式目录：RPA 骨架、路由/分类、人在环门控、扇出、两档校验。

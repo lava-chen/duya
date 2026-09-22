@@ -2,7 +2,7 @@
 
 一套「脚本形状目录」。每条说明何时选这种形状，然后用正确的 dwf.ts 片段展示。
 片段是**碎片**，不是完整可跑的 workflow——完整样例在 `examples.md`。
-原语面只有八个：`wf.tool / gui / decide / approve / agent / map / publish / log`(以 SKILL.md 的原语表为准)。
+原语面只有八个：`wf.tool / gui / decide / approve / agent / map / publish / log`。
 
 ## 1. 确定性优先骨架：先 tool 后判断
 
