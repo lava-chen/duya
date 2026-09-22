@@ -20,6 +20,17 @@ import { subscribeToWorkflowRun } from '@/lib/stream-session-manager';
 
 const TERMINAL_KINDS: ReadonlySet<WorkflowRunEventKind> = new Set(['done', 'error']);
 
+/**
+ * Merge a newer workflow snapshot onto an existing one for the same runId.
+ * Scalar fields from `next` win; the running steps list sticks to whichever
+ * frame last carried it — the runner always sends the full accumulated array,
+ * but a digest `start` frame may omit it, in which case the earlier view lives on.
+ */
+function mergeRun(prev: WorkflowRunSse, next: WorkflowRunSse): WorkflowRunSse {
+  const steps = next.steps ?? prev.steps;
+  return { ...prev, ...next, steps };
+}
+
 export interface WorkflowRunEntry {
   run: WorkflowRunSse;
   /** Most recent event kind seen for this run. */
@@ -39,12 +50,16 @@ interface WorkflowStoreState {
 export const useWorkflowStore = create<WorkflowStoreState>((set) => ({
   runs: {},
   upsert: (sessionId, event, run) =>
-    set((state) => ({
-      runs: {
-        ...state.runs,
-        [run.runId]: { run, event, sessionId, terminal: false },
-      },
-    })),
+    set((state) => {
+      const existing = state.runs[run.runId];
+      const mergedRun = existing ? mergeRun(existing.run, run) : run;
+      return {
+        runs: {
+          ...state.runs,
+          [run.runId]: { run: mergedRun, event, sessionId, terminal: false },
+        },
+      };
+    }),
   finalize: (sessionId, event, run) =>
     set((state) => ({
       runs: {

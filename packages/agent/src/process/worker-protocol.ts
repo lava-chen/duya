@@ -206,6 +206,23 @@ export interface InteragentEventMessage {
   event: WorkerEvent;      // target worker's stdout event (chat:text, chat:tool_use, chat:done, chat:error, ...)
 }
 
+/**
+ * ZCode-parity saved-workflow launch. Dispatched by the agent server's
+ * POST /workflow/:name/trigger route; executed by the worker's
+ * launchSavedWorkflow (workflow-runner.ts). Real fields only — the
+ * fabricated phases/tokens/failAt seeds of the synthetic bridge are gone.
+ */
+export interface WorkflowRunCommand {
+  type: 'workflow:run';
+  sessionId: string;
+  runId: string;
+  workflowName: string;
+  /** Script args; declared frontmatter defaults are applied worker-side. */
+  params?: Record<string, unknown>;
+  /** Project scope root for saved-workflow resolution. */
+  projectDir?: string;
+}
+
 export type WorkerCommand =
   | InitCommand
   | ChatStartCommand
@@ -218,6 +235,7 @@ export type WorkerCommand =
   | DbResponseCommand
   | InteragentInvokeCommand
   | InteragentEventMessage
+  | WorkflowRunCommand
   | { type: string; [key: string]: unknown };
 
 export interface CheckpointEvent {
@@ -434,6 +452,24 @@ export type WorkflowRunEventKind = 'start' | 'progress' | 'done' | 'error';
  * a real value (see "数字诚实" — renderers draw "—" for absent numbers, never
  * a fabricated 0).
  */
+/** Per-step status in a workflow run (plan 552 step progression). */
+export type RunStepStatus = 'running' | 'success' | 'failed';
+
+/**
+ * One executed step of a workflow run. Carried (accumulated) on progress/done/
+ * error frames so the renderer can draw a growing vertical timeline — every
+ * field is optional and only present when the runner has a real value.
+ */
+export interface RunStepView {
+  /** Node id (matches journal.nodeId). */
+  id: string;
+  /** Display label (phase / action name). */
+  label?: string;
+  status: RunStepStatus;
+  startedAt?: number;
+  finishedAt?: number;
+}
+
 export interface WorkflowRunSse {
   runId: string;
   workflowName: string;
@@ -448,6 +484,13 @@ export interface WorkflowRunSse {
   subagents?: number;
   /** Number of phases the definition declared / executed. */
   phases?: number;
+  /**
+   * Accumulated per-step view, growing as the run executes. Absent on a
+   * digest `start` frame; carried on `progress` / `done` / `error`.
+   */
+  steps?: RunStepView[];
+  /** Declared total steps, when the runner knows it; unknown → renderer draws "—". */
+  total?: number;
   /** Present on a terminal non-success status. */
   stoppedReason?: string;
   /** True when the run can be resumed (waiting/paused). */

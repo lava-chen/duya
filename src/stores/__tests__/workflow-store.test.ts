@@ -57,6 +57,25 @@ describe('workflow-store', () => {
     expect(absent.finishedAt).toBe(5000);
   });
 
+  it('accumulates steps by id across frames and preserves them on terminal', () => {
+    push('start', makeRun({ phase: 'planning' }));
+    expect(useWorkflowStore.getState().runs['run-1'].run.steps).toBeUndefined();
+
+    push('progress', makeRun({ phase: 'collect', steps: [{ id: 'a', status: 'running', startedAt: 1100 }] }));
+    push('progress', makeRun({ status: 'active', phase: 'collect', steps: [{ id: 'a', status: 'success', startedAt: 1100, finishedAt: 1200 }] }));
+    const mid = useWorkflowStore.getState().runs['run-1'].run;
+    expect(mid.steps).toEqual([{ id: 'a', status: 'success', startedAt: 1100, finishedAt: 1200 }]);
+
+    push('done', makeRun({ status: 'complete', finishedAt: 2000, steps: [{ id: 'a', status: 'success', startedAt: 1100, finishedAt: 1200 }] }));
+    expect(useWorkflowStore.getState().runs['run-1'].run.steps).toHaveLength(1);
+  });
+
+  it('keeps previous steps when a later frame omits them', () => {
+    push('progress', makeRun({ steps: [{ id: 'a', status: 'success' }] }));
+    push('progress', makeRun({ phase: 'next' }));
+    expect(useWorkflowStore.getState().runs['run-1'].run.steps).toEqual([{ id: 'a', status: 'success' }]);
+  });
+
   it('clears only the target session', () => {
     // Session B run must survive a Session A clear.
     useWorkflowStore.getState().upsert('session-B', 'start', makeRun({ runId: 'run-b' }));

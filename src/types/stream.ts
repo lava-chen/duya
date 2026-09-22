@@ -113,6 +113,23 @@ export type WorkflowRunEventKind = 'start' | 'progress' | 'done' | 'error';
  * real value (see "数字诚实" — renderers draw "—" for absent numbers, never a
  * fabricated 0).
  */
+/** Per-step status in a workflow run (plan 552 step progression). */
+export type RunStepStatus = 'running' | 'success' | 'failed';
+
+/**
+ * One executed step of a workflow run. Carried (accumulated) on progress/done/
+ * error frames so the renderer can draw a growing vertical timeline.
+ */
+export interface RunStepView {
+  /** Node id (matches journal.nodeId). */
+  id: string;
+  /** Display label (phase / action name). */
+  label?: string;
+  status: RunStepStatus;
+  startedAt?: number;
+  finishedAt?: number;
+}
+
 export interface WorkflowRunSse {
   runId: string;
   workflowName: string;
@@ -127,6 +144,10 @@ export interface WorkflowRunSse {
   subagents?: number;
   /** Number of phases the definition declared / executed. */
   phases?: number;
+  /** Accumulated per-step view, growing as the run executes. */
+  steps?: RunStepView[];
+  /** Declared total steps, when the runner knows it; unknown → renderer draws "—". */
+  total?: number;
   /** Present on a terminal non-success status. */
   stoppedReason?: string;
   /** True when the run can be resumed (waiting/paused). */
