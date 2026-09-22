@@ -2,7 +2,7 @@
 
 一套「脚本形状目录」。每条说明何时选这种形状，然后用正确的 dwf.ts 片段展示。
 片段是**碎片**，不是完整可跑的 workflow——完整样例在 `examples.md`。
-原语面只有七个：`wf.tool / decide / approve / agent / map / publish / log`(以 `runtime.ts` 的 `DwfApi` 为准)。
+原语面只有八个：`wf.tool / gui / decide / approve / agent / map / publish / log`(以 `runtime.ts` 的 `DwfApi` 为准)。
 
 ## 1. 确定性优先骨架：先 tool 后判断
 
@@ -131,3 +131,40 @@ export default async function (wf) {
 
 用户看到的进度 = log 序列 + publish 的 artifact。长流程**每个阶段至少一条 log**，
 别让 run 静默跑十分钟毫无输出。
+
+## 7. RPA 骨架(gui)：确定性桌面操作序列
+
+**何时**：流程主体是对一个桌面/浏览器应用的确定性操作(填表、导出、菜单导航)。
+一次 `wf.gui` = 对 `target_app` 的一段步骤序列，零 LLM、逐 step 进 journal。
+
+```ts
+export default async function (wf) {
+  await wf.approve("将在 ERP 里提交这张报销单，继续吗?", { timeoutHours: 24, onTimeout: "escalate" });
+
+  const outcome = await wf.gui(
+    {
+      target_app: "erp",                     // processName，与匹配器约定一致
+      max_actions: 30,                       // 熔断：步骤数上限(≤200)
+      on_stuck: "agent",                     // 卡住时 agent 介入 | fail | skip
+      steps: [
+        { do: "capture" },                   // 枚举可交互元素 → som 索引
+        { do: "click", element: "som:3" },   // 点「新建报销单」
+        { do: "type_text", text: args.amount, element: "som:7", verify: true },
+        { do: "click", element: "som:12" },  // 提交
+      ],
+    },
+  );
+
+  wf.log("ERP 提交完成: " + (outcome ? "ok" : "skipped"));
+}
+```
+
+要点：
+
+- step 只有六种：`capture / click / type_text / set_value / key / scroll`——**没有
+  `wait`**，等待节奏归宿主循环。
+- `som:<n>` 两种语义二选一：跟了 `{ annotation: { source: "recorder", som: {...} } }`
+  时指录制时记录的元素(转换产物)；以 `{ do: "capture" }` 开头时指本次枚举的索引。
+- `element.name`/语境命中不可逆词表的操作(提交/删除/发送/支付)必须在 gui 之前过
+  `wf.approve`——预筛是兜底，不是闸门。
+- 从录制会话转换的完整守则在 `SKILL.md` 的「从录制会话转 dwf.ts」一节。

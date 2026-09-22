@@ -78,6 +78,7 @@ export default async function (wf) {
 
 The frontmatter is a block comment with a YAML body (description, optional whenToUse, optional args record). The body after the comment is plain TypeScript executed in a sandbox with EXACTLY these host primitives:
 - wf.tool(name, input) — deterministic zero-LLM tool call. Resolve with the tool's output.
+- wf.gui(spec, opts?) — deterministic RPA step sequence against a target app. spec = { target_app, steps, max_actions?, on_stuck? }; steps are { do: 'capture' } | { do: 'click', element: 'som:<n>' } | { do: 'type_text', text, element?, verify? } | { do: 'set_value', text, element?, verify? } | { do: 'key', key } | { do: 'scroll', direction?, amount? } — there is NO wait step. opts.annotation = { source: 'recorder', som: { 'som:<n>': <element descriptor> } } locates recorded elements; without it som:<n> indexes the latest capture. Resolve with the outcome output; failure THROWS.
 - wf.agent(type, prompt, opts?) — subagent task; opts = { model?, outputSchema? }. Resolve with the agent's final output.
 - wf.approve(prompt, { timeoutHours?, onTimeout }) — human approval. onTimeout: 'fail' | 'skip' | 'escalate'. Denial THROWS. REQUIRED before any irreversible side effect (payments, sending, deletion).
 - wf.decide(questions, { state?, thresholds?, onLowConfidenceDefault? }) — typed classification over the decision backend. Question shapes: { type: 'choice', criteria: {option: description}, instructions? } | { type: 'noul', instructions } | { type: 'score', levels: [..], instructions }.

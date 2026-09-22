@@ -30,6 +30,13 @@ import type { SavedWorkflowMeta } from './contracts.js';
 export interface DefToDwfResult {
   /** 完整 .dwf.ts 源码（frontmatter + 脚本），保存即落盘的那一份。 */
   source: string;
+  /**
+   * frontmatter 元数据。与 source 一起返回，保存链路（`workflow:dwf:save`
+   * 收 name/meta/script 三元）就不用把 source 重新解析一遍。
+   */
+  meta: SavedWorkflowMeta;
+  /** 脚本本体（终止行之后的部分），与 meta 配对提交给 store.save。 */
+  script: string;
   /** 非致命降级（triggers 丢弃、无法表达的结构等）——逐条人类可读。 */
   warnings: string[];
 }
@@ -360,6 +367,7 @@ export function defToDwfSource(def: WorkflowDef): DefToDwfResult {
     '',
   ].join('\n');
 
-  const source = serializeSavedWorkflow(metaForDef(def), script);
-  return { source, warnings };
+  const meta = metaForDef(def);
+  const source = serializeSavedWorkflow(meta, script);
+  return { source, meta, script, warnings };
 }
