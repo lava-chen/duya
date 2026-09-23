@@ -10,6 +10,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildChannelInboundWakePrompt,
+  buildChannelAckRedrivePrompt,
+  CHANNEL_ACK_REDRIVE_WAKE_CUE,
   CHANNEL_INBOUND_REPLY_HINT,
   CHANNEL_INBOUND_WAKE_CUE,
   MAX_INBOUND_TEXT_CHARS,
@@ -215,5 +217,23 @@ describe('buildChannelInboundWakePrompt — attachments (plan 507 P2.1)', () => 
       '  [attachment saved to: /tmp/g.bin (g.bin, application/octet-stream, 5 B)]',
     );
     expect(prompt).not.toContain('truncated');
+  });
+});
+
+describe('buildChannelAckRedrivePrompt — silent inbound run recovery', () => {
+  it('returns empty for no envelopes', () => {
+    expect(buildChannelAckRedrivePrompt([])).toBe('');
+  });
+
+  it('instructs the bot to reply via SendMessage and lists the senders', () => {
+    const prompt = buildChannelAckRedrivePrompt([
+      makeEnvelope({ sender: 'alice', text: 'are you there?' }),
+      makeEnvelope({ address: { platform: 'feishu', chat: 'oc_1' }, sender: 'bob', text: '' }),
+    ]);
+    expect(prompt.startsWith(CHANNEL_ACK_REDRIVE_WAKE_CUE)).toBe(true);
+    expect(prompt).toContain('WITHOUT calling SendMessage');
+    expect(prompt).toContain('from alice on telegram:12345: are you there?');
+    expect(prompt).toContain('from bob on feishu:oc_1: (media only)');
+    expect(prompt).toContain('Invoke SendMessage now');
   });
 });

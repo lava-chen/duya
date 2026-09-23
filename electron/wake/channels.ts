@@ -34,11 +34,12 @@
  */
 
 import { enqueueInboundWake, notifySessionIdle } from './wake-dispatcher';
-import { runWakePromptInExistingSession } from './wake-run';
+import { runWakePromptInExistingSession, type WakeRunOutcome } from './wake-run';
 import { parseChannelAddress } from '../../packages/agent/src/channels/types';
 import type { ChannelAddress, ChannelInboundEnvelope, ChannelOutboundMessage, DeliveryFailure } from '../../packages/agent/src/channels/types';
-import { buildChannelInboundWakePrompt, buildChannelDeliveryFailureWakePrompt, CHANNEL_INBOUND_WAKE_CUE, CHANNEL_DELIVERY_FAILED_WAKE_CUE } from '../../packages/agent/src/channels/prompts';
+import { buildChannelInboundWakePrompt, buildChannelDeliveryFailureWakePrompt, buildChannelAckRedrivePrompt, CHANNEL_INBOUND_WAKE_CUE, CHANNEL_DELIVERY_FAILED_WAKE_CUE } from '../../packages/agent/src/channels/prompts';
 import { getCoreStores } from '../db/core-connection';
+import { parseAgentIdFromBotSession } from './bot-session-id';
 import { getLogger, LogComponent } from '../logging/logger';
 import { openChannelStore } from '../channels/channel-store';
 import { getConnectorSecretStore } from '../channels/connector-secret-store';
@@ -119,6 +120,104 @@ export function restoreInboundEnvelopes(sessionId: string, envelopes: ChannelInb
 }
 
 // =============================================================================
+// Inbound ack redrive (grok ack-obligations parity)
+//
+// A channel message that wakes the bot but produces NO SendMessage leaves
+// the external sender waiting forever — the run is hidden and its final
+// text does not reach the channel. Like grok's ack obligations, the run is
+// re-driven a bounded number of times with an explicit "invoke SendMessage
+// NOW" instruction. The counter is in-memory and per session: a NEW inbound
+// message resets the budget, and a restart drops it (best-effort recovery).
+// =============================================================================
+
+const ACK_REDRIVE_MAX = 3;
+const ACK_REDRIVE_IDLE_DELAY_MS = 5_000;
+const ackRedriveCounts = new Map<string, number>();
+const ackRedriveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** True when the run's SSE events contain at least one SendMessage call. */
+export function runUsedChannelDelivery(events: ReadonlyArray<{ type: string; data?: unknown }>): boolean {
+  return events.some(
+    (event) =>
+      event.type === 'tool_use' &&
+      (event.data as { name?: unknown } | undefined)?.name === 'SendMessage',
+  );
+}
+
+/** Test seam — clear redrive bookkeeping between tests. */
+export function _resetChannelAckRedriveForTest(): void {
+  for (const timer of ackRedriveTimers.values()) clearTimeout(timer);
+  ackRedriveTimers.clear();
+  ackRedriveCounts.clear();
+}
+
+/**
+ * After an inbound wake run: clear the redrive budget on delivery, otherwise
+ * schedule a hidden ack-redrive run (up to ACK_REDRIVE_MAX per message).
+ */
+function settleInboundAck(
+  sessionId: string,
+  envelopes: ChannelInboundEnvelope[],
+  outcome: WakeRunOutcome | undefined,
+): void {
+  if (runUsedChannelDelivery(outcome?.events ?? [])) {
+    const pending = ackRedriveTimers.get(sessionId);
+    if (pending) {
+      clearTimeout(pending);
+      ackRedriveTimers.delete(sessionId);
+    }
+    ackRedriveCounts.delete(sessionId);
+    return;
+  }
+
+  const attempt = (ackRedriveCounts.get(sessionId) ?? 0) + 1;
+  ackRedriveCounts.set(sessionId, attempt);
+  if (attempt > ACK_REDRIVE_MAX) {
+    logger.warn('Channel ack redrive exhausted: inbound run still produced no SendMessage', {
+      sessionId,
+      envelopeCount: envelopes.length,
+    }, LogComponent.Automation);
+    return;
+  }
+
+  const existing = ackRedriveTimers.get(sessionId);
+  if (existing) clearTimeout(existing);
+  ackRedriveTimers.set(
+    sessionId,
+    setTimeout(() => {
+      ackRedriveTimers.delete(sessionId);
+      void runChannelAckRedrive(sessionId, envelopes, attempt).catch((err) => {
+        logger.warn('Channel ack redrive run failed', {
+          sessionId,
+          attempt,
+          error: err instanceof Error ? err.message : String(err),
+        }, LogComponent.Automation);
+      });
+    }, ACK_REDRIVE_IDLE_DELAY_MS),
+  );
+}
+
+/** Run one hidden ack-redrive turn and re-arm if it still ends in silence. */
+async function runChannelAckRedrive(
+  sessionId: string,
+  envelopes: ChannelInboundEnvelope[],
+  attempt: number,
+): Promise<void> {
+  const prompt = buildChannelAckRedrivePrompt(envelopes);
+  if (!prompt) return;
+  logger.info('Channel ack redrive: re-running silent inbound wake', {
+    sessionId,
+    attempt,
+    envelopeCount: envelopes.length,
+  }, LogComponent.Automation);
+  const outcome = await runWakePromptInExistingSession(sessionId, prompt, {
+    agentProfileId: parseAgentIdFromBotSession(sessionId) ?? undefined,
+    lane: 'background',
+  });
+  settleInboundAck(sessionId, envelopes, outcome);
+}
+
+// =============================================================================
 // Delivery failure queue
 // =============================================================================
 
@@ -175,8 +274,10 @@ export function wakeForInbound(
   inboundEnvelopeStore.get(sessionId)!.push(envelope);
 
   // Durably record the envelope so a restart can re-wake with the full
-  // payload (the in-memory store above dies with the process).
+  // payload (the in-memory store above dies with the process). A NEW message
+  // also resets the ack-redrive budget for this session.
   persistInboundEnvelope(sessionId, envelope);
+  ackRedriveCounts.delete(sessionId);
 
   // Enqueue the connector.inbound wake
   const envelopeId = `${agentId}:${envelope.address.platform}:${envelope.address.chat}`;
@@ -217,8 +318,10 @@ export interface ChannelBackgroundWakes {
    * sessionId; we look up the stored envelopes per agent.
    *
    * @param sessionId - The session to run the wake in
+   * @returns the run outcome when a wake run executed, void when there was
+   *          nothing stored to revive
    */
-  reviveForInbound(sessionId: string): Promise<void>;
+  reviveForInbound(sessionId: string): Promise<WakeRunOutcome | void>;
 
   /**
    * Deliver an outbound channel message via the connector transport.
@@ -277,8 +380,10 @@ export class DefaultChannelBackgroundWakes implements ChannelBackgroundWakes {
     }
     inboundEnvelopeStore.get(key)!.push(envelope);
 
-    // Durably record the envelope (same contract as the module-level path).
+    // Durably record the envelope (same contract as the module-level path);
+    // a NEW message resets the ack-redrive budget.
     persistInboundEnvelope(sessionId, envelope);
+    ackRedriveCounts.delete(sessionId);
 
     // Enqueue the inbound wake with the dispatcher
     const result = enqueueInboundWake(sessionId, {
@@ -297,7 +402,7 @@ export class DefaultChannelBackgroundWakes implements ChannelBackgroundWakes {
     notifySessionIdle(sessionId);
   }
 
-  async reviveForInbound(sessionId: string): Promise<void> {
+  async reviveForInbound(sessionId: string): Promise<WakeRunOutcome | void> {
     // Delegate to the module-level function (used by wake-dispatcher.ts integration)
     return reviveForInbound(sessionId);
   }
@@ -395,7 +500,7 @@ export class DefaultChannelBackgroundWakes implements ChannelBackgroundWakes {
  * Does NOT hold the session lock — runWakePromptInExistingSession acquires it
  * internally, so this is safe to call without deadlock risk.
  */
-export async function reviveForInbound(sessionId: string): Promise<void> {
+export async function reviveForInbound(sessionId: string): Promise<WakeRunOutcome | void> {
   const envelopes = inboundEnvelopeStore.get(sessionId) ?? [];
   if (!envelopes.length) return;
 
@@ -417,9 +522,16 @@ export async function reviveForInbound(sessionId: string): Promise<void> {
   }, LogComponent.AgentProcess);
 
   try {
-    await runWakePromptInExistingSession(sessionId, prompt);
+    const outcome = await runWakePromptInExistingSession(sessionId, prompt, {
+      agentProfileId: parseAgentIdFromBotSession(sessionId) ?? undefined,
+      lane: 'background',
+    });
     // Only clear after successful completion
     inboundEnvelopeStore.delete(sessionId);
+    // Grok ack-obligation parity: a run that ends without a single
+    // SendMessage re-drives so the external sender is not left waiting.
+    settleInboundAck(sessionId, envelopes, outcome);
+    return outcome;
   } catch (err) {
     logger.warn('ChannelBackgroundWakes: reviveForInbound failed — envelopes NOT cleared', {
       sessionId,

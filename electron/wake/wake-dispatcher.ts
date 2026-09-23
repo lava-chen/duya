@@ -1030,18 +1030,42 @@ async function drain(sessionId: string): Promise<void> {
       }
 
       // 488 Plan B: connector.inbound items are handled by the channel system
-      // via reviveForInbound which builds the rich [inbound] prompt from stored
-      // envelopes. Fire-and-forget — reviveForInbound acquires its own lock via
-      // runWakePromptInExistingSession (no deadlock risk). Errors are logged
-      // inside reviveForInbound and do not wedge the drain loop.
+      // via reviveForInbound, which builds the rich [inbound] prompt from
+      // stored envelopes. The run is awaited as a dispatcher-owned run (like
+      // a DM batch) so preemption, the watchdog and the epoch tail guard all
+      // cover channel runs; reviveForInbound acquires its own lock via
+      // runWakePromptInExistingSession (no deadlock risk).
       if (dequeued.item.source === 'connector.inbound') {
-        void reviveForInbound(sessionId).catch((err) => {
-          getLogger().warn('WakeDispatcher: reviveForInbound threw', {
+        state.runningItem = dequeued.item
+        const inboundGen = state.drainGeneration
+        try {
+          const outcome = await reviveForInbound(sessionId)
+          if (inboundGen !== state.drainGeneration) {
+            // Zombie run returned after its escape — the queue moved on.
+            getLogger().info('Zombie connector.inbound run returned after escape; ignoring', {
+              sessionId,
+            }, LogComponent.Automation)
+            return
+          }
+          state.runningItem = undefined
+          resolveTurnWaiters(sessionId, dequeued.item.id, outcome ?? { output: '', events: [] })
+          if (state.redrivePending?.id === dequeued.item.id) {
+            state.redrivePending = undefined
+            requeueRedriven(sessionId, dequeued.item)
+          }
+        } catch (err) {
+          if (inboundGen !== state.drainGeneration) return
+          state.runningItem = undefined
+          resolveTurnWaiters(sessionId, dequeued.item.id, { output: '', events: [] })
+          if (state.redrivePending?.id === dequeued.item.id) {
+            state.redrivePending = undefined
+            requeueRedriven(sessionId, dequeued.item)
+          }
+          getLogger().warn('Connector.inbound revive failed', {
             sessionId,
             error: err instanceof Error ? err.message : String(err),
-          }, LogComponent.AgentProcess)
-        })
-        resolveTurnWaiters(sessionId, dequeued.item.id, { output: '', events: [] })
+          }, LogComponent.Automation)
+        }
         continue
       }
 

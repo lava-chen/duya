@@ -40,6 +40,13 @@ export const CHANNEL_INBOUND_REPLY_HINT =
 /** Cue prepended to delivery-failure wake prompts. */
 export const CHANNEL_DELIVERY_FAILED_WAKE_CUE = '[channel-delivery-failed]';
 
+/**
+ * Cue prepended to ack-redrive wake prompts (grok ack-obligation parity):
+ * fired when an inbound wake run finished without a single SendMessage, so
+ * the external sender is left waiting with no visible reply.
+ */
+export const CHANNEL_ACK_REDRIVE_WAKE_CUE = '[channel-ack-redrive]';
+
 // =============================================================================
 // Limits
 // =============================================================================
@@ -175,6 +182,31 @@ export function buildChannelDeliveryFailureWakePrompt(
     blocks.push(content);
   }
 
+  return blocks.join('\n');
+}
+
+/**
+ * Build the hidden ack-redrive wake prompt: the inbound run finished without
+ * any SendMessage, so the external sender never saw a reply. The bot is
+ * re-prompted to acknowledge or answer via SendMessage (grok
+ * buildAckRedrivePrompt parity — a short hidden instruction, not a full
+ * replay of the original message).
+ */
+export function buildChannelAckRedrivePrompt(
+  envelopes: ChannelInboundEnvelope[],
+  cue = CHANNEL_ACK_REDRIVE_WAKE_CUE,
+): string {
+  if (!envelopes.length) return '';
+
+  const blocks: string[] = [
+    cue,
+    'Your previous run on the inbound message(s) below finished WITHOUT calling SendMessage, so the sender on the external channel is still waiting. Invoke SendMessage now with the channel address shown to acknowledge or answer — even a one-line ack counts. Do not repeat work you already completed; if a reply already went out, simply confirm the sender was answered.',
+  ];
+  for (const env of envelopes) {
+    const addr = formatAddress(env.address);
+    const text = env.text ? truncate(env.text, 200) : '(media only)';
+    blocks.push(`- from ${env.sender} on ${addr}: ${text}`);
+  }
   return blocks.join('\n');
 }
 
