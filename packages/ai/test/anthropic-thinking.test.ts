@@ -17,8 +17,11 @@ import { anthropicModels } from '../src/providers/anthropic.models.js';
 import { minimaxModels } from '../src/providers/minimax.models.js';
 
 describe('resolveAnthropicThinking', () => {
-  const claudeSonnet4 = anthropicModels[0]; // reasoning: true, maxTokens: 16000
-  const claude35 = anthropicModels[1]; // reasoning: false
+  // Look models up BY ID — positional indexing broke when the catalog
+  // gained new entries (claude-3.5 was removed upstream entirely).
+  const claudeSonnet4 = anthropicModels.find(m => m.id === 'claude-sonnet-5')
+    ?? anthropicModels.find(m => m.reasoning === true)!; // reasoning: true
+  const claude35 = anthropicModels.find(m => m.reasoning === false)!; // non-reasoning
   const minimaxM3 = minimaxModels[0]; // forceAdaptiveThinking: true
 
   describe('effort "off" → undefined', () => {
@@ -67,13 +70,15 @@ describe('resolveAnthropicThinking', () => {
   });
 
   describe('standard reasoning models → { type: "enabled", budget_tokens }', () => {
-    // Claude Sonnet 4: maxTokens = 16000, so budget is clamped to 15999.
+    // Synthetic small-cap model so clamp behavior is exercised regardless of
+    // the real catalog values (real Claude caps are 128000 and never clamp).
     // BUDGET map: minimal=1024, low=1024, medium=4096, high=16384,
     //             xhigh=24576, max=32000.
     // Clamp rule: budget_tokens = Math.min(BUDGET[effort], maxTokens - 1).
-    const maxBudget = claudeSonnet4.maxTokens - 1; // 15999
+    const clampModel = { ...claudeSonnet4, maxTokens: 16000 };
+    const maxBudget = clampModel.maxTokens - 1; // 15999
 
-    it('Claude Sonnet 4 is a reasoning model without forceAdaptiveThinking', () => {
+    it('Claude Sonnet 5 is a reasoning model without forceAdaptiveThinking', () => {
       expect(claudeSonnet4.reasoning).toBe(true);
       expect(claudeSonnet4.compat?.forceAdaptiveThinking).toBeFalsy();
     });
@@ -108,21 +113,21 @@ describe('resolveAnthropicThinking', () => {
 
     it('clamps "high" (16384) to maxTokens - 1 when maxTokens is smaller', () => {
       // 16384 > 15999 → clamped to 15999
-      expect(resolveAnthropicThinking(claudeSonnet4, 'high')).toEqual({
+      expect(resolveAnthropicThinking(clampModel, 'high')).toEqual({
         type: 'enabled',
         budget_tokens: maxBudget,
       });
     });
 
     it('clamps "xhigh" (24576) to maxTokens - 1', () => {
-      expect(resolveAnthropicThinking(claudeSonnet4, 'xhigh')).toEqual({
+      expect(resolveAnthropicThinking(clampModel, 'xhigh')).toEqual({
         type: 'enabled',
         budget_tokens: maxBudget,
       });
     });
 
     it('clamps "max" (32000) to maxTokens - 1', () => {
-      expect(resolveAnthropicThinking(claudeSonnet4, 'max')).toEqual({
+      expect(resolveAnthropicThinking(clampModel, 'max')).toEqual({
         type: 'enabled',
         budget_tokens: maxBudget,
       });
@@ -131,7 +136,7 @@ describe('resolveAnthropicThinking', () => {
     it('never exceeds maxTokens - 1 for any effort', () => {
       const efforts = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
       for (const effort of efforts) {
-        const result = resolveAnthropicThinking(claudeSonnet4, effort);
+        const result = resolveAnthropicThinking(clampModel, effort);
         expect(result).toBeDefined();
         if (result && result.type === 'enabled') {
           expect(result.budget_tokens).toBeLessThanOrEqual(maxBudget);

@@ -500,6 +500,8 @@ export type OpenAIThinkingFormat =
   | 'glm-style'
   /** DeepSeek V4+ hybrid-thinking toggle: `thinking: {type: enabled|disabled}`. */
   | 'deepseek-style'
+  /** OpenRouter aggregator: `reasoning: {effort}` ('none' disables). */
+  | 'openrouter-style'
   | 'think-tag-fallback';
 
 /**

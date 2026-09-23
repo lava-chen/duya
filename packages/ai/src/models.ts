@@ -143,7 +143,16 @@ export function findModelCompat(
   );
   // Prefer a match that has compat flags defined
   const withCompat = matches.find(m => m.compat !== undefined);
-  const builtIn = withCompat?.compat ?? matches[0]?.compat;
+  const source = withCompat ?? matches[0];
+  let builtIn = source?.compat ? { ...source.compat } : undefined;
+
+  // Model-targeted default (pi-mono governance): the catalog's output
+  // ceiling flows to every consumer (agent turns, compaction, title, vision)
+  // so a known model always runs at full output capability instead of the
+  // 8192 protocol fallback. Explicit compat.maxOutputTokens wins.
+  if (source?.maxTokens && builtIn?.maxOutputTokens === undefined) {
+    builtIn = { maxOutputTokens: source.maxTokens, ...builtIn };
+  }
 
   if (!overrides) return builtIn;
   if (!builtIn) return overrides;

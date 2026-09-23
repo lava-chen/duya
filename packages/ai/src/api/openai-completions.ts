@@ -140,6 +140,14 @@ export function detectOpenAICompatDefaults(
   if (provider === 'glm' || url.includes('bigmodel.cn')) {
     return { openAIThinkingFormat: 'glm-style' };
   }
+  // Moonshot K-series models are always-thinking; reasoning arrives in the
+  // reasoning_content field with no request-side toggle.
+  if (provider === 'kimi' || url.includes('moonshot')) {
+    return { openAIThinkingFormat: 'reasoning-content' };
+  }
+  if (provider === 'openrouter' || url.includes('openrouter.ai')) {
+    return { openAIThinkingFormat: 'openrouter-style' };
+  }
   return {};
 }
 
@@ -165,6 +173,7 @@ export function detectOpenAICompatDefaults(
  *   - glm-style:         thinking { type: enabled|disabled } (Zhipu API only
  *                        documents `type`; no budget_tokens).
  *   - deepseek-style:    thinking { type: enabled|disabled }.
+ *   - openrouter-style:  reasoning { effort } ('none' disables).
  *   - think-tag-fallback: no param; reasoning arrives in <think> tags.
  */
 export function resolveOpenAIThinking(
@@ -185,6 +194,8 @@ export function resolveOpenAIThinking(
         return { thinking: { type: 'disabled' } };
       case 'qwen-style':
         return { enable_thinking: false };
+      case 'openrouter-style':
+        return { reasoning: { effort: 'none' } };
       default:
         return undefined;
     }
@@ -221,6 +232,10 @@ export function resolveOpenAIThinking(
     case 'deepseek-style':
       // DeepSeek V4+ hybrid thinking: enabled/disabled toggle.
       return { thinking: { type: 'enabled' } };
+    case 'openrouter-style':
+      // OpenRouter aggregates reasoning behind one param; 'none' disables it
+      // for hybrid models (official-harness parity).
+      return { reasoning: { effort: mappedEffort } };
     case 'think-tag-fallback':
       // No special parameter, thinking comes in <think> tags in content
       return undefined;

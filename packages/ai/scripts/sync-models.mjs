@@ -58,6 +58,11 @@ const SHARD_HEADER = `// Model data. Sourced from https://openrouter.ai/api/v1/m
  * the direct endpoint serves only a subset); `idMap` renames an upstream id to
  * the vendor's native id. `write: false` marks hand-curated shards that must
  * not be regenerated wholesale.
+ *
+ * `compat` is the provider-level default emitted into every generated entry
+ * (pi-mono governance: thinking config must survive a sync). Per-model
+ * `compat` / `thinkingLevelMap` already present in a checked-in shard are
+ * preserved verbatim and take precedence over these defaults.
  */
 const PROVIDERS = {
   anthropic: { prefix: 'anthropic', api: 'anthropic', baseUrl: 'https://api.anthropic.com' },
@@ -72,13 +77,20 @@ const PROVIDERS = {
       'deepseek-v4.1-flash': 'deepseek-flash',
       'deepseek-v4-pro-0813': 'deepseek-v4-pro',
     },
+    compat: "compat: { openAIThinkingFormat: 'deepseek-style', requiresReasoningContentOnAssistantMessages: true },",
   },
   qwen: {
     prefix: 'qwen',
     api: 'openai-chat',
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    compat: "compat: { openAIThinkingFormat: 'qwen-style' },",
   },
-  kimi: { prefix: 'moonshotai', api: 'openai-chat', baseUrl: 'https://api.moonshot.ai/v1' },
+  kimi: {
+    prefix: 'moonshotai',
+    api: 'openai-chat',
+    baseUrl: 'https://api.moonshot.ai/v1',
+    compat: "compat: { openAIThinkingFormat: 'reasoning-content' },",
+  },
   minimax: {
     prefix: 'minimax',
     api: 'anthropic',
@@ -186,8 +198,41 @@ function selectOpenRouter(provider, all) {
   });
 }
 
-function modelBlock(m) {
-  return [
+/**
+ * Extract governance-critical fields (`compat`, `thinkingLevelMap`) from a
+ * checked-in model block so a sync refresh can re-emit them verbatim. This is
+ * what prevents `--write`/`--merge` from silently stripping thinking config
+ * (the root cause of "every new model needs its compat re-added by hand").
+ */
+function extractExtras(block) {
+  const extras = [];
+  for (const key of ['compat', 'thinkingLevelMap']) {
+    const startMatch = block.match(new RegExp(`\\n    ${key}: `));
+    if (!startMatch) continue;
+    let depth = 0;
+    let started = false;
+    let end = -1;
+    for (let i = startMatch.index + 1; i < block.length; i++) {
+      const c = block[i];
+      if (c === '{') {
+        depth++;
+        started = true;
+      } else if (c === '}') {
+        depth--;
+        if (started && depth === 0) {
+          const comma = block.indexOf(',', i);
+          end = comma === -1 ? i : comma;
+          break;
+        }
+      }
+    }
+    if (end !== -1) extras.push(block.slice(startMatch.index + 1, end + 1));
+  }
+  return extras;
+}
+
+function modelBlock(m, extras = []) {
+  const lines = [
     '  {',
     `    id: '${m.id}',`,
     `    name: ${JSON.stringify(m.name)},`,
@@ -204,8 +249,11 @@ function modelBlock(m) {
     `      cacheRead: ${m.cost.cacheRead},`,
     `      cacheWrite: ${m.cost.cacheWrite},`,
     '    },',
-    '  },',
-  ].join('\n');
+  ];
+  // Governance extras (compat / thinkingLevelMap) go before the closing brace.
+  lines.push(...extras.map((e) => e.replace(/\n$/, '')));
+  lines.push('  },');
+  return lines.join('\n');
 }
 
 function renderShard(slug, api, blocks) {
@@ -314,12 +362,19 @@ async function main() {
     }
 
     let blocks;
+    // Per-model extras preserved verbatim; provider-level defaults fill in
+    // for new/unknown ids so thinking config never regresses on sync.
+    const extrasFor = (m) => {
+      const preserved = checkedIn.has(m.id) ? extractExtras(checkedIn.get(m.id)) : [];
+      if (preserved.length) return preserved;
+      return provider.compat ? [provider.compat] : [];
+    };
     if (MODE === 'merge') {
-      const merged = new Map(models.map((m) => [m.id, modelBlock(m)]));
+      const merged = new Map(models.map((m) => [m.id, modelBlock(m, extrasFor(m))]));
       for (const [id, block] of checkedIn) if (!merged.has(id)) merged.set(id, block);
       blocks = [...merged.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([, b]) => b);
     } else {
-      blocks = models.map(modelBlock);
+      blocks = models.map((m) => modelBlock(m, extrasFor(m)));
     }
     writeFileSync(shardPath(slug), eol === '\r\n' ? renderShard(slug, provider.api, blocks).replace(/\n/g, '\r\n') : renderShard(slug, provider.api, blocks));
     console.log(`   wrote src/providers/${slug}.models.ts (${blocks.length} models)`);
