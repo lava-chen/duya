@@ -24,10 +24,31 @@ export function emitSSE(internalEvent: AssistantMessageEvent): SSEEvent | null {
       return { type: 'text', data: internalEvent.delta };
     case 'text_end':
       return null;
-    case 'thinking_delta':
-      return { type: 'thinking', data: internalEvent.delta };
-    case 'thinking_end':
+    case 'thinking_delta': {
+      // Forward the accumulated thinking signature (Anthropic signature_delta
+      // content, or the openai wire-field marker recorded at block creation)
+      // so consumers can rebuild a native signed thinking block. Without this
+      // the agent loop's reconstructed message is unsigned and
+      // transformMessages.isSameModel downgrades thinking to plain text.
+      const block = internalEvent.partial.content[internalEvent.contentIndex];
+      const signature =
+        block && block.type === 'thinking' ? block.thinkingSignature : undefined;
+      return signature
+        ? { type: 'thinking', data: internalEvent.delta, signature }
+        : { type: 'thinking', data: internalEvent.delta };
+    }
+    case 'thinking_end': {
+      // The signature frequently arrives via signature_delta right before
+      // content_block_stop, so this is the last chance to hand it to
+      // consumers. Emit an empty-data thinking event carrying only the
+      // signature (content was already streamed incrementally); consumers
+      // must treat empty data as "no content" and only read `signature`.
+      const block = internalEvent.partial.content[internalEvent.contentIndex];
+      if (block && block.type === 'thinking' && block.thinkingSignature) {
+        return { type: 'thinking', data: '', signature: block.thinkingSignature };
+      }
       return null;
+    }
     case 'toolcall_start': {
       const block = internalEvent.partial.content[internalEvent.contentIndex];
       if (block && block.type === 'tool_use') {

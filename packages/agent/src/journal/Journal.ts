@@ -299,4 +299,12 @@ const JOURNAL_MESSAGE_FIELDS: readonly string[] = [
   // SendMessageTool's 'send_message') must survive the journal emit; absent
   // values are inferred at the IPC boundary (inferMessageSource).
   'source',
+  // Per-message model attribution (providerId/model/api). The DB write path
+  // (messageToIpcRow) derives provider_state from these fields so a reloaded
+  // session passes transformMessages.isSameModel and replays thinking blocks
+  // natively instead of downgraded text. Already preserved by pickKnown
+  // (LEGACY_KNOWN_KEYS) on both the ipcMessageToNewEvent and projection sides.
+  'providerId',
+  'model',
+  'api',
 ];

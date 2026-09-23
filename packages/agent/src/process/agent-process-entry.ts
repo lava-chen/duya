@@ -1851,8 +1851,13 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
   switch (event.type) {
     case 'text':
       return { type: 'chat:text', content: event.data as string };
-    case 'thinking':
-      return { type: 'chat:thinking', content: event.data as string };
+    case 'thinking': {
+      // Signature-only thinking events (empty data) carry no renderable
+      // content — emitting them would create empty chat:thinking rows.
+      const content = typeof event.data === 'string' ? event.data : '';
+      if (!content) return null;
+      return { type: 'chat:thinking', content };
+    }
     case 'tool_use_started':
       return { type: 'chat:tool_use_started', id: (event.data as { id: string }).id, name: (event.data as { name: string }).name, input: (event.data as { input?: unknown }).input };
     // Plan 461: incremental argument fragment for a tool call still being

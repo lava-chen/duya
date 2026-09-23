@@ -243,6 +243,62 @@ describe.skipIf(!nativeSqliteAvailable)('core-db-adapters', () => {
       expect(parsed.last_call.input_tokens).toBe(10);
     });
 
+    it('assistant thinking signature and provider attribution round-trip', () => {
+      const t = Date.now();
+      // Journal form: content is the in-memory block array and attribution
+      // rides as camelCase @duya/ai Message fields (Journal.fire).
+      const dto = {
+        id: 'm-sig',
+        session_id: 'sess-1',
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'step by step', thinkingSignature: 'sig-abc' },
+          { type: 'tool_use', id: 'tc-sig', name: 'BashTool', input: { command: 'echo hi' } },
+        ],
+        msg_type: 'text',
+        status: 'done',
+        created_at: t,
+        model: 'glm-5.3',
+        providerId: 'zai',
+        api: 'anthropic',
+      };
+      const event = ipcMessageToNewEvent('sess-1', dto as never);
+      messageLog.appendBatch([event]);
+
+      const stored = messageLog.listBySession('sess-1');
+      const row = storedEventToIpcMessage(stored.find((e) => e.id === 'm-sig')!)!;
+
+      expect(row.thinking_signature).toBe('sig-abc');
+      expect(row.tool_signature).toBeNull();
+      // provider_state derived from the attribution triple so a reloaded
+      // session passes transformMessages.isSameModel and replays thinking
+      // natively instead of downgraded text.
+      expect(JSON.parse(row.provider_state!)).toEqual({
+        api: 'anthropic',
+        providerId: 'zai',
+        model: 'glm-5.3',
+      });
+    });
+
+    it('legacy Claude-imported signature blocks still extract via fallback', () => {
+      const t = Date.now();
+      const dto = {
+        id: 'm-legacy-sig',
+        session_id: 'sess-1',
+        role: 'assistant',
+        content: [{ type: 'thinking', thinking: 'imported', signature: 'legacy-sig' }],
+        msg_type: 'text',
+        status: 'done',
+        created_at: t,
+      };
+      const event = ipcMessageToNewEvent('sess-1', dto as never);
+      messageLog.appendBatch([event]);
+
+      const stored = messageLog.listBySession('sess-1');
+      const row = storedEventToIpcMessage(stored.find((e) => e.id === 'm-legacy-sig')!)!;
+      expect(row.thinking_signature).toBe('legacy-sig');
+    });
+
     it('tool message round-trips tool_name, tool_input, parent_tool_call_id', () => {
       const t = Date.now();
       // Plan 441 read-side repair drops orphan tool_results (providers 400 on

@@ -49,14 +49,55 @@ describe('emitSSE', () => {
     expect(emitSSE(event)).toEqual({ type: 'thinking', data: 'thinking...' });
   });
 
-  it('suppresses thinking_end (content already streamed via thinking_delta)', () => {
-    const event: AssistantMessageEvent = {
-      type: 'thinking_end',
-      contentIndex: 0,
-      content: 'full thought',
-      partial: baseMsg,
-    };
-    expect(emitSSE(event)).toBeNull();
+  describe('thinking signature forwarding', () => {
+    const msgWithSignature = (): AssistantMessage => ({
+      ...baseMsg,
+      content: [{ type: 'thinking', thinking: 'thought', thinkingSignature: 'sig-123' }],
+    });
+
+    it('forwards the signature on thinking_delta when the block carries one', () => {
+      const event: AssistantMessageEvent = {
+        type: 'thinking_delta',
+        contentIndex: 0,
+        delta: 'more',
+        partial: msgWithSignature(),
+      };
+      expect(emitSSE(event)).toEqual({
+        type: 'thinking',
+        data: 'more',
+        signature: 'sig-123',
+      });
+    });
+
+    it('omits the signature on thinking_delta when the block is unsigned', () => {
+      const event: AssistantMessageEvent = {
+        type: 'thinking_delta',
+        contentIndex: 0,
+        delta: 'thinking...',
+        partial: { ...baseMsg, content: [{ type: 'thinking', thinking: '', thinkingSignature: '' }] },
+      };
+      expect(emitSSE(event)).toEqual({ type: 'thinking', data: 'thinking...' });
+    });
+
+    it('emits an empty-data thinking event carrying the signature on thinking_end', () => {
+      const event: AssistantMessageEvent = {
+        type: 'thinking_end',
+        contentIndex: 0,
+        content: 'full thought',
+        partial: msgWithSignature(),
+      };
+      expect(emitSSE(event)).toEqual({ type: 'thinking', data: '', signature: 'sig-123' });
+    });
+
+    it('still suppresses thinking_end when the block is unsigned', () => {
+      const event: AssistantMessageEvent = {
+        type: 'thinking_end',
+        contentIndex: 0,
+        content: 'full thought',
+        partial: { ...baseMsg, content: [{ type: 'thinking', thinking: 'full thought' }] },
+      };
+      expect(emitSSE(event)).toBeNull();
+    });
   });
 
   it('maps toolcall_end to SSEEvent.tool_use', () => {

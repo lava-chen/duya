@@ -380,6 +380,12 @@ interface IpcMessageDTO {
   /** Token-accounting: provider id that produced this message (per-message,
    *  first-class — NOT metadata). Empty string when unknown/legacy. */
   provider_id?: string;
+  /** Per-message attribution, camelCase journal form: Journal.fire copies
+   *  the @duya/ai Message field names verbatim. */
+  providerId?: string;
+  /** Per-message provider API format ('anthropic' | 'openai-chat' | ...);
+   *  part of the provider_state triple used for thinking replay. */
+  api?: string;
   attachments?: unknown[];
   /**
    * Plan 489 P0.1: explicit origin classifier. Honored when it is a known
@@ -501,8 +507,11 @@ export function ipcMessageToNewEvent(
     sub_agent_id: data.sub_agent_id,
     // Token-accounting: per-message model/provider_id ride as first-class
     // Message fields (not metadata), round-tripping through the rollout.
+    // providerId/api accept both snake_case (legacy DB rows) and camelCase
+    // (journal DTO copies the @duya/ai Message field names verbatim).
     model: data.model || undefined,
-    providerId: data.provider_id || undefined,
+    providerId: data.provider_id || data.providerId || undefined,
+    api: (data.api as Message['api']) || undefined,
     attachments: data.attachments,
     source,
     displayContent: displayContent ?? undefined,
@@ -662,33 +671,48 @@ function messageToIpcRow(
   const displayContent = serializeDisplayContent(msg.displayContent, msg.role);
   const attachments = msg.attachments ? JSON.stringify(msg.attachments) : null;
 
-  // Extract signatures from content blocks (if present)
+  // Extract signatures from content blocks (if present). duya-native blocks
+  // carry thinkingSignature / thoughtSignature / textSignature; the bare
+  // `signature` fallback covers Claude-imported blocks.
   let thinkingSignature: string | null = null;
   let toolSignature: string | null = null;
   let textSignature: string | null = null;
   if (Array.isArray(msg.content)) {
     for (const block of msg.content) {
       if (typeof block === 'object' && block !== null) {
-        if (block.type === 'thinking' && 'signature' in block && block.signature) {
-          thinkingSignature = block.signature as string;
+        const record = block as unknown as Record<string, unknown>;
+        if (block.type === 'thinking') {
+          const sig = record.thinkingSignature ?? record.signature;
+          if (typeof sig === 'string' && sig) thinkingSignature = sig;
         }
-        if (block.type === 'tool_use' && 'signature' in block && block.signature) {
-          toolSignature = block.signature as string;
+        if (block.type === 'tool_use') {
+          const sig = record.thoughtSignature ?? record.signature;
+          if (typeof sig === 'string' && sig) toolSignature = sig;
         }
-        if (block.type === 'text' && 'signature' in block && block.signature) {
-          textSignature = block.signature as string;
+        if (block.type === 'text') {
+          const sig = record.textSignature ?? record.signature;
+          if (typeof sig === 'string' && sig) textSignature = sig;
         }
       }
     }
   }
 
-  // Extract provider_state from metadata (if present)
+  // Extract provider_state from metadata (if present). When absent, derive
+  // it from the Message's own per-message attribution fields (set by the
+  // agent loop at push time): a reloaded session needs {api, providerId,
+  // model} so transformMessages.isSameModel recognizes same-model history
+  // and replays thinking blocks natively instead of downgraded text.
   const metadata = msg.metadata as Record<string, unknown> | undefined;
-  const providerState = metadata?.provider_state
+  const metadataProviderState = metadata?.provider_state
     ? (typeof metadata.provider_state === 'string'
         ? metadata.provider_state
         : JSON.stringify(metadata.provider_state))
     : null;
+  const derivedProviderState =
+    msg.api || msg.providerId || msg.model
+      ? JSON.stringify({ api: msg.api, providerId: msg.providerId, model: msg.model })
+      : null;
+  const providerState = metadataProviderState ?? derivedProviderState;
   // token_usage round-trips through metadata (journal write path), but the
   // timeline projection also restores the top-level `tokenUsage` field
   // (LEGACY_KNOWN_KEYS) for in-memory/replayed messages — read both.

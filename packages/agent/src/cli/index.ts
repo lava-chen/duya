@@ -243,7 +243,10 @@ async function handleStreamEvents(
         break;
 
       case 'thinking':
-        thinkingBuffer = event.data;
+        // Signature-only events carry empty data — don't clobber the buffer.
+        if (event.data) {
+          thinkingBuffer = event.data;
+        }
         break;
 
       case 'tool_use':

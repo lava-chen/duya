@@ -479,6 +479,19 @@ export class duyaAgent implements AgentRuntime {
   readonly runtimeConfig?: AgentOptions['runtimeConfig'];
 
   /**
+   * Model attribution carried on every assistant message pushed by the
+   * streaming loop. Values mirror the llmClientOptions below exactly (same
+   * apiFormat/providerId/model expressions the @duya/ai client resolves),
+   * so transformMessages.isSameModel keeps thinking blocks native (signed)
+   * on mid-run replays instead of downgrading them to plain text.
+   */
+  private readonly modelAttribution: {
+    providerId: string;
+    model: string;
+    api: ApiFormat;
+  };
+
+  /**
    * Optional callback invoked after a proactive compaction replaces
    * this.messages with a compressed set. The argument is the new
    * message count. The caller (agent-process-entry) uses this to
@@ -585,6 +598,12 @@ export class duyaAgent implements AgentRuntime {
       logger.debug('[duyaAgent] Using standard LLM client (retry disabled)');
       this.llmClient = createAIClient(llmClientOptions);
     }
+
+    this.modelAttribution = {
+      providerId: llmClientOptions.providerId,
+      model: llmClientOptions.model,
+      api: llmClientOptions.apiFormat,
+    };
 
     this.apiKey = options.apiKey;
     this.baseURL = options.baseURL;
@@ -2272,7 +2291,11 @@ export class duyaAgent implements AgentRuntime {
             finalAssistantContent.push(...assistantContent);
 
             if (finalAssistantContent.length > 0 || needsFollowUp) {
-              const pushed: Message = { id: crypto.randomUUID(), role: 'assistant', content: finalAssistantContent.length > 0 ? finalAssistantContent : assistantContent, timestamp: Date.now(), duration_ms: Date.now() - streamStartTime, seq_index: seqIndex };
+              // Per-message model attribution: lets transformMessages
+              // recognize this message as same-model on the next round's
+              // request and replay its thinking block natively (with the
+              // signature captured above) instead of downgrading to text.
+              const pushed: Message = { id: crypto.randomUUID(), role: 'assistant', content: finalAssistantContent.length > 0 ? finalAssistantContent : assistantContent, timestamp: Date.now(), duration_ms: Date.now() - streamStartTime, seq_index: seqIndex, ...this.modelAttribution };
               // Plan 445: prefer the turn-cumulative tokenUsage (with
               // `last_call` sub-block) supplied by the caller via
               // `cumulativeTokenUsageRef`. Falls back to the single-call
