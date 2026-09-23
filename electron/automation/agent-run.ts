@@ -27,6 +27,7 @@ import { getLogger, LogComponent } from '../logging/logger';
 import { resolveCronProvider } from './provider';
 import { buildCronProviderConfig } from './provider-config';
 import type { CronProviderConfig } from './provider-config';
+import { resolveCompactModelConfig } from './compact-config';
 export type { CronProviderConfig } from './provider-config';
 import { prepareAutomationWorkspace } from './workspace';
 import type { AutomationCron } from './types.js';
@@ -162,9 +163,16 @@ export function runPromptInSession(opts: RunPromptInSessionOptions): Promise<Run
   if (!port) throw new Error('agent server not running');
   const timeoutMs = opts.timeoutMs ?? RUN_TIMEOUT_MS;
   const startedAt = Date.now();
+  // Renderer parity: interactive runs inject `compactModelConfig` from the
+  // same auxiliary.compact settings, so a configured compact (summarization)
+  // model applies to wake/cron/bot runs too — not only interactive chats.
+  const compactModelConfig = resolveCompactModelConfig();
+  const providerConfig: CronProviderConfig = compactModelConfig
+    ? { ...opts.providerConfig, compactModelConfig }
+    : opts.providerConfig;
   const body = JSON.stringify({
     prompt: opts.prompt,
-    providerConfig: opts.providerConfig,
+    providerConfig,
     workingDirectory: opts.workingDirectory,
     defaultWorkspaceDirectory: opts.workingDirectory,
     options: opts.options ?? {},

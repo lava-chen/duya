@@ -11,6 +11,7 @@
 
 import { toLLMProvider } from '../config/provider-types';
 import type { ApiProvider } from '../../src/lib/providers/types';
+import type { CompactModelConfig } from '../../packages/agent/src/types';
 import type { ResolvedCronProvider } from './provider';
 
 export interface CronProviderConfig {
@@ -19,6 +20,11 @@ export interface CronProviderConfig {
   model: string;
   provider: string;
   authStyle: 'api_key';
+  /**
+   * Dedicated summarization model (renderer parity) — optional so pure
+   * builders stay unchanged; agent-run injects it for every main-side run.
+   */
+  compactModelConfig?: CompactModelConfig;
 }
 
 /**
