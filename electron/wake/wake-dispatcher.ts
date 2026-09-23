@@ -486,6 +486,26 @@ function persistQueuedItem(sessionId: string, item: WakeItem): void {
           },
         }),
       })
+    } else if (item.source === 'automation.fire' && item.payload.kind === 'automation') {
+      // One row per fire: workId is `<jobKey>:<fireKey>` so distinct queued
+      // fires never collide (upsert would otherwise keep only the newest),
+      // and the rearm can restore the real fireKey instead of collapsing to
+      // 'rearm'. fireKey is a UUID (Scheduler), so the ':' separator is safe.
+      wakes.persist({
+        kind: 'automation.fire',
+        workId: `${item.payload.jobKey}:${item.payload.fireKey}`,
+        agentId: item.agentId,
+        lane: 'background',
+        title: item.payload.name ?? null,
+        quietOriginJson: JSON.stringify({
+          fire: {
+            trigger: item.payload.trigger ?? 'schedule',
+            ...(item.payload.quiet ? { quiet: true } : {}),
+            ...(item.payload.eventSummary ? { eventSummary: item.payload.eventSummary } : {}),
+            ...(item.payload.eventContext ? { eventContext: item.payload.eventContext } : {}),
+          },
+        }),
+      })
     }
   } catch (err) {
     getLogger().debug('Pending-wake persist skipped', {
@@ -509,6 +529,8 @@ function clearPersistedItem(item: WakeItem): void {
       // wake item — the revive consumes ALL stored envelopes, so the row is
       // cleared at dequeue like every other self-contained payload.
       wakes.clear('connector.inbound', item.agentId)
+    } else if (item.source === 'automation.fire' && item.payload.kind === 'automation') {
+      wakes.clear('automation.fire', `${item.payload.jobKey}:${item.payload.fireKey}`)
     }
   } catch {
     // Best-effort; the stale horizon prunes orphans.

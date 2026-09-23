@@ -141,29 +141,44 @@ function pendingWakeRowToWakeItem(row: ReturnType<typeof getCoreStores>['wakes']
         payload: { kind: 'completion', taskId: row.work_id, title: row.title ?? undefined },
       }
 
-    case 'automation.fire':
-      // automation fire rows store jobKey as work_id; fireKey is not recoverable
-      // from the row alone. For now, re-enqueue with the jobKey as the id.
-      // The dispatcher will dedupe by auto:<jobKey>:<fireKey> but fireKey is
-      // absent — this means repeated fires of the same job within the dedupe
-      // window will collapse. Acceptable for restart-recovery use case.
+    case 'automation.fire': {
+      // Rows persist one fire each: workId is `<jobKey>:<fireKey>` (fireKey
+      // is a Scheduler UUID, so the ':' separator is unambiguous) and the
+      // fire payload (trigger / event context / quiet) rides
+      // quiet_origin_json. Legacy rows without the separator fall back to
+      // the old collapse-to-'rearm' behaviour.
+      const sep = row.work_id.lastIndexOf(':')
+      const jobKey = sep > 0 ? row.work_id.slice(0, sep) : row.work_id
+      const fireKey = sep > 0 ? row.work_id.slice(sep + 1) : 'rearm'
+      let fire: { trigger?: string; eventSummary?: string; eventContext?: string; quiet?: boolean } = {}
+      try {
+        const parsed = row.quiet_origin_json ? (JSON.parse(row.quiet_origin_json) as { fire?: typeof fire }) : null
+        if (parsed && typeof parsed === 'object' && parsed.fire) fire = parsed.fire
+      } catch {
+        // Malformed JSON → defaults below.
+      }
       return {
-        id: `auto:${row.work_id}:?`,
+        id: `auto:${jobKey}:${fireKey}`,
         source: 'automation.fire',
         lane: row.lane as WakeItem['lane'],
         agentId: row.agent_id,
         enqueuedAtMs: now,
-        quietOrigin: row.quiet_origin_json ? JSON.parse(row.quiet_origin_json) : undefined,
+        ...(fire.quiet ? { quietOrigin: { automation: { id: jobKey, name: row.title ?? '' } } } : {}),
         payload: {
           kind: 'automation',
-          jobKey: row.work_id,
-          fireKey: 'rearm',
+          jobKey,
+          fireKey,
           name: row.title ?? undefined,
-          // Restart-rearm replays are always scheduled fires; manual/event
-          // fires are transient and never persisted as pending wakes.
-          trigger: 'schedule',
+          // Restore the fire's own trigger so a queued manual/event fire
+          // wakes with the right prompt opening; unknown shapes fall back
+          // to a scheduled fire.
+          trigger: fire.trigger === 'manual' || fire.trigger === 'event' ? fire.trigger : 'schedule',
+          ...(fire.quiet ? { quiet: true } : {}),
+          ...(fire.eventSummary ? { eventSummary: fire.eventSummary } : {}),
+          ...(fire.eventContext ? { eventContext: fire.eventContext } : {}),
         },
       }
+    }
 
     case 'broadcast':
       // title stores the broadcast text for re-arm purposes
