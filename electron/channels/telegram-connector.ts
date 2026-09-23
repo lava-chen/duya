@@ -23,6 +23,12 @@ import type {
   ChannelInboundAttachment,
   ChannelInboundEnvelope,
 } from '../../packages/agent/src/channels/types';
+import {
+  filterInboundMessage,
+  isGroupChatType,
+  telegramTextMentionsBot,
+  type InboundFilterConfig,
+} from './inbound-filter';
 import { getLogger, LogComponent } from '../logging/logger';
 import { persistInboundAttachment } from './attachment-store';
 
@@ -50,8 +56,8 @@ interface TelegramUpdate {
     text?: string;
     /** Caption accompanying a media message (Bot API). */
     caption?: string;
-    from?: { username?: string; first_name?: string };
-    chat?: { id?: number | string };
+    from?: { id?: number; username?: string; first_name?: string };
+    chat?: { id?: number | string; type?: string; title?: string };
     photo?: TelegramPhotoSize[];
     document?: { file_id: string; file_name?: string; mime_type?: string; file_size?: number };
     video?: { file_id: string; file_size?: number };
@@ -87,6 +93,12 @@ export interface TelegramConnectorOptions {
   /** The bot's own token (from the per-agent connector-secret store). */
   token: string;
   onInbound: (agentId: string, envelope: ChannelInboundEnvelope) => void;
+  /**
+   * Optional inbound gating (allowedUsers / allowedChats / groupPolicy),
+   * parsed from the channel's connection.json by the connector runtime.
+   * Null keeps the legacy allow-all behaviour.
+   */
+  filter?: InboundFilterConfig | null;
   /** Injectable fetch for tests. Defaults to globalThis.fetch. */
   fetchFn?: typeof fetch;
   /** Telegram long-poll timeout in seconds. */
@@ -102,6 +114,12 @@ export class TelegramChannelConnector {
   private offset = 0;
   private loopPromise: Promise<void> | null = null;
   private abortController: AbortController | null = null;
+  /**
+   * The bot's own @username, resolved once via getMe and needed by the
+   * 'mention' group policy. null until the first successful getMe; the loop
+   * retries cheaply each cycle until it lands.
+   */
+  private botUsername: string | null = null;
   /**
    * Consecutive poll failures in the current outage streak. The first failure
    * logs at WARN; every further failure is demoted to DEBUG so a long network
@@ -209,25 +227,36 @@ export class TelegramChannelConnector {
     const msg = update.message;
     if (!msg || msg.chat?.id === undefined) return;
 
+    const chatId = String(msg.chat.id);
+    const sender =
+      msg.from?.username ??
+      (msg.from?.id !== undefined ? String(msg.from.id) : undefined) ??
+      msg.from?.first_name ??
+      'unknown';
+    const text = msg.text ?? msg.caption ?? '';
+
+    // Inbound gating (grok-gap hardening): allowlists + group mention policy.
+    if (!(await this.filterAllows(chatId, msg.chat.type, sender, text))) return;
+
     const media = this.pickMedia(msg);
-    let text = msg.text ?? msg.caption ?? '';
     // Route text messages as before; route media messages even when the
     // caption is empty (the attachments carry the payload).
     if (!text && !media) return;
 
     const attachments: ChannelInboundAttachment[] = [];
+    let routedText = text;
     if (media) {
       const outcome = await this.downloadMediaAttachment(media);
       if (outcome.attachment) attachments.push(outcome.attachment);
       if (outcome.skippedNote) {
-        text = text ? `${text}\n${outcome.skippedNote}` : outcome.skippedNote;
+        routedText = routedText ? `${routedText}\n${outcome.skippedNote}` : outcome.skippedNote;
       }
     }
 
     const envelope: ChannelInboundEnvelope = {
       address: { platform: 'telegram', chat: String(msg.chat.id) },
       sender: msg.from?.username ?? msg.from?.first_name ?? 'unknown',
-      text,
+      text: routedText,
       reaction: null,
       ...(attachments.length > 0 ? { attachments } : {}),
     };
@@ -237,6 +266,63 @@ export class TelegramChannelConnector {
       sender: envelope.sender,
     }, LogComponent.Gateway);
     this.opts.onInbound(this.opts.agentId, envelope);
+  }
+
+  /**
+   * Resolve the bot's own @username via getMe (needed by the 'mention'
+   * group policy). Best-effort: failures log at DEBUG and leave the cached
+   * username null, so the mention gate fails open. Called lazily — only
+   * when a group message needs the mention decision — so unfiltered setups
+   * never pay the extra API call.
+   */
+  private async resolveBotUsername(): Promise<void> {
+    const fetchFn = this.opts.fetchFn ?? fetch;
+    try {
+      const res = await fetchFn(`${TELEGRAM_API_BASE}/bot${this.opts.token}/getMe`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = (await res.json()) as { ok?: boolean; result?: { username?: string } };
+      if (body.ok && body.result?.username) {
+        this.botUsername = body.result.username;
+        return;
+      }
+      logger.debug('Telegram connector: getMe returned no username', {
+        agentId: this.opts.agentId,
+      }, LogComponent.Gateway);
+    } catch (err) {
+      logger.debug('Telegram connector: getMe failed (mention gate fails open)', {
+        agentId: this.opts.agentId,
+        error: err instanceof Error ? err.message : String(err),
+      }, LogComponent.Gateway);
+    }
+  }
+
+  /**
+   * Apply the inbound filter (allowlists + group policy). Rejections log at
+   * INFO — the sender is invisible to the bot, so this is the only trace.
+   */
+  private async filterAllows(chatId: string, chatType: string | undefined, sender: string, text: string): Promise<boolean> {
+    const isGroup = isGroupChatType(chatType);
+    if (isGroup && !this.botUsername) {
+      // The mention decision needs the bot's own handle; resolve it once
+      // and cache. Private chats skip this entirely.
+      await this.resolveBotUsername();
+    }
+    const verdict = filterInboundMessage({
+      chatId,
+      chatType,
+      sender,
+      isBotMentioned: telegramTextMentionsBot(text, this.botUsername),
+      config: this.opts.filter ?? null,
+      botUsername: this.botUsername,
+    });
+    if (verdict.allow) return true;
+    logger.info('Telegram connector: inbound message filtered', {
+      agentId: this.opts.agentId,
+      chat: chatId,
+      sender,
+      reason: verdict.reason,
+    }, LogComponent.Gateway);
+    return false;
   }
 
   /**

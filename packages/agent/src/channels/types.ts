@@ -280,6 +280,19 @@ export interface ChannelConnectionConfig {
   label: string;
   /** ISO timestamp of when the channel was first connected. */
   connectedAt: string;
+  /**
+   * Inbound gating (grok-gap hardening: previously ANY sender woke the bot).
+   * When unset, the connector keeps its legacy permissive behaviour and logs
+   * a one-time warning recommending configuration.
+   */
+  allowedUsers?: string[];
+  /** Chat ids allowed to wake the bot (private and group). Empty/unset = all. */
+  allowedChats?: string[];
+  /**
+   * Group-chat policy: 'mention' (default) only wakes when the bot is
+   * @mentioned, 'all' wakes for every group message, 'off' drops groups.
+   */
+  groupPolicy?: 'mention' | 'all' | 'off';
 }
 
 /**

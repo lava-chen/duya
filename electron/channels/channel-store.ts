@@ -25,6 +25,10 @@ import {
   KNOWN_PLATFORMS,
 } from '../../packages/agent/src/channels/types';
 import { getSharedAgentsRoot } from '../config/agent-paths';
+import { getLogger, LogComponent } from '../logging/logger';
+import { isFilterUnconfigured, type InboundFilterConfig } from './inbound-filter';
+
+const logger = getLogger();
 
 // =============================================================================
 // Path resolution
@@ -82,6 +86,12 @@ export interface ChannelStore {
    * Returns null for platforms that are known but not yet connected.
    */
   readLabel(platform: string): string | null;
+
+  /**
+   * Full connection config (label + optional inbound gating), or null when
+   * the platform is not configured or the file is malformed.
+   */
+  readConnectionConfig(platform: string): ChannelConnectionConfig | null;
 
   /**
    * Full list of configured channels (platform + label + 'configured' status).
@@ -197,6 +207,14 @@ export class FileChannelStore implements ChannelStore {
     return config?.label ?? null;
   }
 
+  /**
+   * Full connection config (label + optional inbound gating), or null when
+   * the platform is not configured or the file is malformed.
+   */
+  readConnectionConfig(platform: string): ChannelConnectionConfig | null {
+    return this._readConfig(platform);
+  }
+
   listConnections(): Array<{ platform: string; label: string; status: 'configured' }> {
     return this.listPlatforms().map((platform) => {
       const config = this._readConfig(platform)!; // listPlatforms guarantees existence
@@ -205,9 +223,15 @@ export class FileChannelStore implements ChannelStore {
   }
 
   writeMetadata(platform: string, label: string): void {
+    // Preserve fields the user may have hand-configured (inbound gating) —
+    // a label rename must not silently wipe the allowlist.
+    const existing = this._readConfig(platform);
     const config: ChannelConnectionConfig = {
       label,
-      connectedAt: new Date().toISOString(),
+      connectedAt: existing?.connectedAt ?? new Date().toISOString(),
+      ...(existing?.allowedUsers ? { allowedUsers: existing.allowedUsers } : {}),
+      ...(existing?.allowedChats ? { allowedChats: existing.allowedChats } : {}),
+      ...(existing?.groupPolicy ? { groupPolicy: existing.groupPolicy } : {}),
     };
     this._writeConfig(platform, config);
   }
@@ -255,4 +279,48 @@ export function listAgentChannelAddresses(agentId: string): ChannelAddress[] {
       chat: label ?? platform, // chat field is currently the label in our model; platform-level ID is resolved by the connector transport
     } as ChannelAddress;
   });
+}
+
+// =============================================================================
+// Inbound filter (connection.json gating, grok-gap hardening)
+// =============================================================================
+
+const inboundFilterWarned = new Set<string>();
+
+/**
+ * Read the inbound gating config for one (agent, platform) binding.
+ *
+ * Returns the normalized filter (undefined fields omitted) and emits a
+ * ONE-TIME warning per binding when nothing is configured — the legacy
+ * behaviour is allow-all, which is worth surfacing once rather than
+ * silently keeping an unsecured bot.
+ */
+export function readChannelInboundFilter(agentId: string, platform: string): InboundFilterConfig {
+  const store = openChannelStore(agentId);
+  const config = store.readConnectionConfig(platform);
+  if (!config || isFilterUnconfigured(config)) {
+    const key = `${agentId}:${platform}`;
+    if (!inboundFilterWarned.has(key)) {
+      inboundFilterWarned.add(key);
+      logger.warn(
+        `Channel "${platform}" on agent "${agentId}" has no inbound allowlist — ANY sender can wake the bot. ` +
+          'Add allowedUsers / allowedChats / groupPolicy to ' +
+          `agents/${agentId}/channels/${platform}/connection.json to restrict access.`,
+        { agentId, platform },
+        LogComponent.Gateway,
+      );
+    }
+    return {};
+  }
+  const filter: InboundFilterConfig = {};
+  if (Array.isArray(config.allowedUsers) && config.allowedUsers.length > 0) {
+    filter.allowedUsers = config.allowedUsers.filter((u): u is string => typeof u === 'string');
+  }
+  if (Array.isArray(config.allowedChats) && config.allowedChats.length > 0) {
+    filter.allowedChats = config.allowedChats.filter((c): c is string => typeof c === 'string');
+  }
+  if (config.groupPolicy === 'mention' || config.groupPolicy === 'all' || config.groupPolicy === 'off') {
+    filter.groupPolicy = config.groupPolicy;
+  }
+  return filter;
 }

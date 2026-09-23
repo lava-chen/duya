@@ -171,6 +171,67 @@ describe('TelegramChannelConnector', () => {
     expect(connector.isRunning).toBe(false);
   });
 
+  it('filters inbound messages by allowlist and group mention policy', async () => {
+    let polls = 0;
+    const filteredFetch = (async (input: string) => {
+      if (input.includes('/getMe')) {
+        return new Response(JSON.stringify({ ok: true, result: { username: 'duyabot' } }), { status: 200 });
+      }
+      if (input.includes('/getUpdates')) {
+        polls += 1;
+        if (polls === 1) {
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              result: [
+                // Stranger DM — not on allowedUsers → dropped.
+                {
+                  update_id: 30,
+                  message: { message_id: 10, text: 'hi', from: { username: 'stranger' }, chat: { id: 1, type: 'private' } },
+                },
+                // Group message without a mention → dropped by default policy.
+                {
+                  update_id: 31,
+                  message: { message_id: 11, text: 'anyone there?', from: { username: 'member' }, chat: { id: -100, type: 'supergroup' } },
+                },
+                // Group message @mentioning the bot → allowed.
+                {
+                  update_id: 32,
+                  message: { message_id: 12, text: '@duyabot help me', from: { username: 'member' }, chat: { id: -100, type: 'supergroup' } },
+                },
+                // Owner DM → allowed by the sender allowlist.
+                {
+                  update_id: 33,
+                  message: { message_id: 13, text: 'hello bot', from: { username: 'owner' }, chat: { id: 2, type: 'private' } },
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response(JSON.stringify({ ok: true, result: [] }), { status: 200 });
+      }
+      throw new Error(`unexpected url: ${input}`);
+    }) as unknown as typeof fetch;
+
+    const connector = new TelegramChannelConnector({
+      agentId: 'bot-x',
+      token: 'tok',
+      onInbound,
+      fetchFn: filteredFetch,
+      filter: { allowedUsers: ['owner'] },
+      pollTimeoutSec: 0,
+      errorBackoffMs: 1,
+    });
+    connector.start();
+    await waitFor(() => onInbound.mock.calls.length >= 2);
+    await connector.stop();
+
+    expect(onInbound).toHaveBeenCalledTimes(2);
+    const chats = onInbound.mock.calls.map(([, e]) => (e as ChannelInboundEnvelope).address.chat);
+    expect(chats).toEqual(['-100', '2']);
+  });
+
   it('persists a photo update as an inbound attachment', async () => {
     let getUpdatesCalls = 0;
     const mediaFetch = (async (input: string) => {

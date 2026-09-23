@@ -37,6 +37,7 @@ import { WeixinConnector } from './weixin-connector';
 import { getChannelBackgroundWakes } from '../wake/channels';
 import { defaultBotSessionCreator } from '../wake/agent-dm-dispatcher';
 import { getBotSessionId } from '../wake/bot-session-id';
+import { readChannelInboundFilter } from './channel-store';
 import { getSharedAgentsRoot } from '../config/agent-paths';
 
 const logger = getLogger();
@@ -291,7 +292,12 @@ class BotConnectorManager {
       case 'telegram': {
         const token = getConnectorCredential(agentId, 'telegram', 'token');
         if (!token) return null;
-        return new TelegramChannelConnector({ agentId, token, onInbound: routeInboundToBot });
+        return new TelegramChannelConnector({
+          agentId,
+          token,
+          onInbound: routeInboundToBot,
+          filter: readChannelInboundFilter(agentId, 'telegram'),
+        });
       }
       case 'feishu': {
         const connector = new FeishuChannelConnector({ agentId, onInbound: routeInboundToBot });
