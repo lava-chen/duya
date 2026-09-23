@@ -3,6 +3,19 @@
  *
  * Keep prompt, schema, foreground execution, and worker execution aligned so
  * the model sees the same contract the runtime enforces.
+ *
+ * Lifetime policy (implemented in managed-bash.ts / BashTool.ts):
+ *   1. every command is spawned as a managed background task up front;
+ *   2. a foreground call waits at most {@link BASH_SOFT_YIELD_MS} before
+ *      handing the still-running task id back to the model (no restart);
+ *   3. while the call is still foreground, `timeout` (default
+ *      {@link BASH_DEFAULT_TIMEOUT_MS}, ceiling
+ *      {@link BASH_MAX_FOREGROUND_TIMEOUT_MS}) is the kill watchdog;
+ *   4. once promoted, the command leaves the foreground ceiling and is bounded
+ *      by {@link BASH_MAX_TIMEOUT_MS} instead — the model stopped waiting, so
+ *      killing a two-minute build mid-flight would be strictly worse than
+ *      letting it finish and reporting the result. Anything longer than that
+ *      must be started with `run_in_background: true`, which is unbounded.
  */
 
 /**

@@ -1,11 +1,15 @@
 /**
  * BashTool - Simplified shell command execution tool
- * ~250 lines: direct execa/spawn, no Worker, no Docker sandbox, no complex background system
+ * Direct spawn, no Worker, no Docker sandbox, no complex background system.
+ *
+ * Every command is started as a managed background task (see managed-bash.ts);
+ * the tool call only decides how long to wait for it:
+ *   - `run_in_background: true` → return the task id immediately (unbounded)
+ *   - foreground                 → wait up to BASH_SOFT_YIELD_MS, then hand the
+ *     still-running task back to the model instead of blocking the conversation
+ *     until the hard timeout. The child process is never restarted.
  */
 
-import { execa, ExecaError } from 'execa';
-import { spawn, type ChildProcess } from 'child_process';
-import { open, readFile } from 'fs/promises';
 import { writeFileSync } from 'fs';
 import { join } from 'path';
 import type { ToolResult, ToolUseContext } from '../../types.js';
@@ -23,17 +27,16 @@ import type {
 } from '../types.js';
 import { detectShellForFamily, type ShellInfo } from '../../utils/shellDetector.js';
 import { getBashOutputDir } from '../../utils/duyaRoot.js';
-import { killProcessTree } from '../../utils/processTreeKill.js';
 import { normalizeShellCommandForExecution } from '../../utils/shell/intelligence.js';
 import {
   BASH_DEFAULT_TIMEOUT_MS,
   BASH_MAX_FOREGROUND_TIMEOUT_MS,
   BASH_MAX_TIMEOUT_MS,
+  BASH_SOFT_YIELD_MS,
 } from './constants.js';
 import { buildGitReminder } from './git-reminder.js';
-import { getBashTaskRegistry } from '../../session/bash-task-registry.js';
-import { buildTaskNotificationXml } from '../../lifecycle/buildTaskNotification.js';
-import { sendBackgroundNotification } from '../../lifecycle/mailboxBackgroundNotification.js';
+import { startManagedBash, type ManagedBashCompletion, type ManagedBashHandle } from './managed-bash.js';
+import { raceCompletionWithSoftYield } from './soft-yield.js';
 import { GET_TASK_OUTPUT_TOOL_NAME } from '../BackgroundTaskTool/GetTaskOutputTool.js';
 import { analyzeCommandSafety, isReadOnlyCommand } from '../../permissions/policy.js';
 import type { SecurityCheckResult, SecurityWarning } from '../../permissions/policy.js';
@@ -139,6 +142,12 @@ export interface ShellCommandToolConfig {
   securityCheck?: (command: string) => SecurityCheckResult;
   readOnlyCheck?: (command: string) => boolean;
   normalizeCommandForExecution?: (command: string) => string;
+  /**
+   * How long a foreground call waits before yielding a still-running command to
+   * the background. Defaults to {@link BASH_SOFT_YIELD_MS}; `0` disables
+   * yielding (strictly foreground behavior) and is used by tests.
+   */
+  softYieldMs?: number;
 }
 
 const DEFAULT_BASH_TOOL_CONFIG: ShellCommandToolConfig = {
@@ -147,7 +156,9 @@ const DEFAULT_BASH_TOOL_CONFIG: ShellCommandToolConfig = {
     'Execute a bash command and return its stdout + stderr output. ' +
     'Quote arguments correctly: single quotes (\'...\') prevent all expansion, ' +
     'double quotes ("...") allow variable and backtick expansion. ' +
-    'For long-running commands, set run_in_background=true and you will be notified on completion.',
+    `A foreground command that outlives ${BASH_SOFT_YIELD_MS}ms is handed off to a ` +
+    'background task without restarting it and you are given its task id — do not re-run it. ' +
+    'For known long-running commands, set run_in_background=true and you will be notified on completion.',
   providerKind: 'bash',
   commandLabel: 'bash command',
   securityCheck: analyzeCommandSafety,
@@ -254,10 +265,11 @@ function buildShellArgs(providerKind: 'bash' | 'powershell', shellInfo: ShellInf
 // ============================================================================
 
 export class BashTool extends BaseTool implements ToolExecutor {
-  constructor(
-    private readonly config: ShellCommandToolConfig = DEFAULT_BASH_TOOL_CONFIG,
-  ) {
+  private readonly config: ShellCommandToolConfig;
+
+  constructor(config: Partial<ShellCommandToolConfig> = {}) {
     super();
+    this.config = { ...DEFAULT_BASH_TOOL_CONFIG, ...config };
   }
 
   get name(): string { return this.config.name; }
@@ -273,7 +285,12 @@ export class BashTool extends BaseTool implements ToolExecutor {
         },
         timeout: {
           type: 'number',
-          description: `Timeout in milliseconds. Default: ${BASH_DEFAULT_TIMEOUT_MS}, max: ${BASH_MAX_FOREGROUND_TIMEOUT_MS} for foreground, ${BASH_MAX_TIMEOUT_MS} for background.`,
+          description:
+            `How long a foreground call waits before yielding, in milliseconds. ` +
+            `Default: ${BASH_DEFAULT_TIMEOUT_MS}, max: ${BASH_MAX_FOREGROUND_TIMEOUT_MS} for foreground, ` +
+            `${BASH_MAX_TIMEOUT_MS} for background. A foreground command still running after ` +
+            `${BASH_SOFT_YIELD_MS}ms is auto-promoted to a background task (no restart): the call returns ` +
+            'its task id and you are notified when it finishes.',
         },
         description: {
           type: 'string',
@@ -375,194 +392,183 @@ export class BashTool extends BaseTool implements ToolExecutor {
       ? this.config.normalizeCommandForExecution(command)
       : normalizeShellCommandForExecution(this.config.providerKind, command);
 
-    // Background execution path
+    const taskId = context?.toolUseId ?? crypto.randomUUID();
+    const shellArgs = buildShellArgs(this.config.providerKind, shellInfo, normalizedCommand);
+
+    // Explicit background: start the managed task and return its id immediately.
     if (isBackground) {
-      return this.executeBackground({
-        command: normalizedCommand,
-        originalCommand: command,
-        shellInfo,
+      return this.startDetached({ taskId, command, shellInfo, shellArgs, cwd, context });
+    }
+
+    // Foreground: start the task, then race its completion against the soft-yield
+    // window. Starting first (rather than execa-ing in the foreground and
+    // re-running on timeout) is what makes the hand-off free: the process is
+    // live before the race, so yielding only stops *waiting*, never the command.
+    let handle: ManagedBashHandle;
+    try {
+      handle = await startManagedBash({
+        taskId,
+        command,
+        shellPath: shellInfo.path,
+        shellArgs,
         cwd,
-        timeout: resolvedTimeout,
-        toolUseId: context?.toolUseId ?? crypto.randomUUID(),
+        env: buildSanitizedBashEnv(),
+        foregroundTimeoutMs: resolvedTimeout,
         sessionId: context?.options.sessionId,
         abortSignal: context?.abortController?.signal,
       });
-    }
-
-    // Foreground execution with execa
-    try {
-      const shellArgs = buildShellArgs(this.config.providerKind, shellInfo, normalizedCommand);
-      const result = await execa(shellInfo.path, shellArgs, {
-        cwd,
-        env: buildSanitizedBashEnv(),
-        timeout: resolvedTimeout,
-        windowsHide: true,
-        cleanup: true,
-      });
-
-      let output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
-      const gitReminder = buildGitReminder(command);
-      if (gitReminder) output = `${output}\n\n${gitReminder}`;
-
-      const { output: boundedOutput, fullOutputPath } = truncateShellOutput(output);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
       return {
         id: crypto.randomUUID(),
         name: this.name,
-        result: boundedOutput || '(no output)',
-        error: result.exitCode !== 0,
-        metadata: {
-          exitCode: result.exitCode,
-          ...(fullOutputPath ? { fullOutputPath } : {}),
-        },
-      };
-    } catch (error: unknown) {
-      if (error instanceof ExecaError) {
-        const output = [error.stdout, error.stderr].filter(Boolean).join('\n').trim();
-
-        if (error.timedOut) {
-          return {
-            id: crypto.randomUUID(),
-            name: this.name,
-            result: `Command timed out (${resolvedTimeout}ms): ${command}\n\n${output}`,
-            error: true,
-            metadata: { timeout: true, durationMs: resolvedTimeout },
-          };
-        }
-
-        if (error.isCanceled) {
-          return {
-            id: crypto.randomUUID(),
-            name: this.name,
-            result: `Command was cancelled: ${output || error.message}`,
-            error: true,
-            metadata: { cancelled: true },
-          };
-        }
-
-        // Provide helpful error context for Windows users
-        let finalOutput = output || error.message;
-        if (process.platform === 'win32' && error.exitCode !== 0) {
-          const isCommandNotFound = output.includes('is not recognized') ||
-            output.includes('not found') ||
-            output.includes('not internal or external command');
-          if (isCommandNotFound) {
-            const looksUnixSpecific = /\b(cat|head|tail|ls|grep|sed|awk|curl|wget|touch|chmod|chown|rm|cp|mv)\b|\/dev\/null|~\//.test(command);
-            if (looksUnixSpecific && !shellInfo.supportsUnixCommands) {
-              finalOutput = `${finalOutput}\n\n[Note] The current shell (${shellInfo.name}) does not support Unix commands. Consider installing Git Bash for Windows.`;
-            }
-          }
-        }
-
-        const gitReminder = buildGitReminder(command);
-        if (gitReminder) finalOutput = `${finalOutput}\n\n${gitReminder}`;
-
-        const { output: boundedError, fullOutputPath } = truncateShellOutput(finalOutput);
-        return {
-          id: crypto.randomUUID(),
-          name: this.name,
-          result: boundedError,
-          error: true,
-          metadata: {
-            exitCode: error.exitCode,
-            ...(fullOutputPath ? { fullOutputPath } : {}),
-          },
-        };
-      }
-
-      return {
-        id: crypto.randomUUID(),
-        name: this.name,
-        result: error instanceof Error ? error.message : 'Unknown error',
+        result: `Failed to start command: ${message}`,
         error: true,
       };
     }
+
+    const completion = await raceCompletionWithSoftYield(handle.settled, this.softYieldMs);
+
+    // Soft yield: the command outlived the wait window. Hand the task back and
+    // let it keep running under the background ceiling.
+    if (!completion) {
+      handle.promoteToBackground();
+      return {
+        id: crypto.randomUUID(),
+        name: this.name,
+        result: [
+          `Command still running after ${this.softYieldMs}ms — handed off to background task ${handle.taskId} (PID: ${handle.pid}) without restarting it.`,
+          `Output file: ${handle.outputFile}`,
+          'You will be notified automatically when it finishes. Do NOT re-run this command.',
+          `Use ${GET_TASK_OUTPUT_TOOL_NAME} for a status/output snapshot (never blocks) and kill_task to stop it.`,
+          `It is terminated automatically after ${BASH_MAX_TIMEOUT_MS}ms if it has not finished by then.`,
+        ].join('\n'),
+        metadata: {
+          autoPromoted: true,
+          taskId: handle.taskId,
+          pid: handle.pid,
+          outputFile: handle.outputFile,
+          softYieldMs: this.softYieldMs,
+        },
+      };
+    }
+
+    return this.buildForegroundResult({ completion, command, outputFile: handle.outputFile, timeoutMs: resolvedTimeout, shellInfo });
   }
 
-  private async executeBackground(params: {
+  /** Soft-yield window used by this tool; `0` disables yielding. */
+  private get softYieldMs(): number {
+    return this.config.softYieldMs ?? BASH_SOFT_YIELD_MS;
+  }
+
+  /**
+   * Build the tool result for a command that finished inside the wait window.
+   * Mirrors the historical execa-path shape (output + git reminder + bounded
+   * output) so the model-facing contract is unchanged for fast commands.
+   */
+  private buildForegroundResult(params: {
+    completion: ManagedBashCompletion;
     command: string;
-    originalCommand: string;
+    outputFile: string;
+    timeoutMs: number;
     shellInfo: ShellInfo;
+  }): ToolResult {
+    const { completion, command, outputFile, timeoutMs, shellInfo } = params;
+    const base = { id: crypto.randomUUID(), name: this.name };
+
+    if (completion.status === 'timeout') {
+      const output = completion.text ? `\n\n${completion.text}` : '';
+      return {
+        ...base,
+        result: `Command timed out (${timeoutMs}ms): ${command}${output}`,
+        error: true,
+        metadata: { timeout: true, durationMs: completion.durationMs, taskId: completion.taskId, outputFile },
+      };
+    }
+
+    if (completion.status === 'canceled') {
+      return {
+        ...base,
+        result: `Command was cancelled: ${completion.text || '(no output)'}`,
+        error: true,
+        metadata: { cancelled: true, taskId: completion.taskId, outputFile },
+      };
+    }
+
+    let output = completion.text || completion.error || '';
+
+    // Provide helpful error context for Windows users
+    if (process.platform === 'win32' && completion.exitCode !== 0) {
+      const isCommandNotFound = output.includes('is not recognized') ||
+        output.includes('not found') ||
+        output.includes('not internal or external command');
+      if (isCommandNotFound) {
+        const looksUnixSpecific = /\b(cat|head|tail|ls|grep|sed|awk|curl|wget|touch|chmod|chown|rm|cp|mv)\b|\/dev\/null|~\//.test(command);
+        if (looksUnixSpecific && !shellInfo.supportsUnixCommands) {
+          output = `${output}\n\n[Note] The current shell (${shellInfo.name}) does not support Unix commands. Consider installing Git Bash for Windows.`;
+        }
+      }
+    }
+
+    const gitReminder = buildGitReminder(command);
+    if (gitReminder) output = `${output}\n\n${gitReminder}`;
+
+    const { output: boundedOutput, fullOutputPath } = truncateShellOutput(output);
+    return {
+      ...base,
+      result: boundedOutput || '(no output)',
+      error: completion.status !== 'completed',
+      metadata: {
+        exitCode: completion.exitCode,
+        durationMs: completion.durationMs,
+        taskId: completion.taskId,
+        outputFile,
+        ...(fullOutputPath ? { fullOutputPath } : {}),
+      },
+    };
+  }
+
+  /**
+   * Explicit `run_in_background`: register the task and return immediately.
+   * Unbounded by design (see constants.ts) — no watchdog is armed.
+   */
+  private async startDetached(params: {
+    taskId: string;
+    command: string;
+    shellInfo: ShellInfo;
+    shellArgs: string[];
     cwd: string;
-    timeout: number;
-    toolUseId: string;
-    sessionId?: string;
-    abortSignal?: AbortSignal;
+    context?: ToolUseContext;
   }): Promise<ToolResult> {
-    const { command, originalCommand, shellInfo, cwd, timeout, toolUseId, sessionId, abortSignal } = params;
-    const outputFile = join(getBashOutputDir(), `duya-bash-${toolUseId}.log`);
+    const { taskId, command, shellInfo, shellArgs, cwd, context } = params;
 
     try {
-      const fd = await open(outputFile, 'w', 0o644);
-      const shellArgs = buildShellArgs(this.config.providerKind, shellInfo, command);
-
-      const proc = spawn(shellInfo.path, shellArgs, {
+      const handle = await startManagedBash({
+        taskId,
+        command,
+        shellPath: shellInfo.path,
+        shellArgs,
         cwd,
         env: buildSanitizedBashEnv(),
-        stdio: ['ignore', fd.fd, fd.fd],
-        windowsHide: true,
+        foregroundTimeoutMs: null,
+        sessionId: context?.options.sessionId,
+        abortSignal: context?.abortController?.signal,
       });
-
-      proc.unref();
-      const startTime = Date.now();
-      const pid = proc.pid ?? -1;
-
-      // Register task
-      const registry = getBashTaskRegistry();
-      registry.register({
-        id: toolUseId,
-        pid,
-        outputFile,
-        command: originalCommand.slice(0, 200),
-        status: 'running',
-        startTime,
-      });
-
-      // Handle completion
-      proc.on('close', (exitCode) => {
-        registry.markCompleted(toolUseId, exitCode ?? -1);
-        void fd.close().catch(() => { /* already closed */ });
-
-        if (!sessionId) return;
-
-        const status = exitCode === 0 ? 'completed' : 'failed';
-        const xml = buildTaskNotificationXml({
-          taskId: toolUseId,
-          status,
-          agentType: 'bash',
-          agentName: originalCommand.slice(0, 200),
-          description: originalCommand.slice(0, 200),
-          outputFilePath: outputFile,
-          finalMessage: `Background command completed with exit code ${exitCode ?? -1}.`,
-        });
-        void sendBackgroundNotification({ sessionId, xml, taskId: toolUseId });
-      });
-
-      proc.on('error', (err) => {
-        registry.markCompleted(toolUseId, -1, err.message);
-        void fd.close().catch(() => { /* already closed */ });
-      });
-
-      // Abort handling
-      if (abortSignal) {
-        abortSignal.addEventListener('abort', () => {
-          if (pid) void killProcessTree(pid);
-        }, { once: true });
-      }
 
       return {
         id: crypto.randomUUID(),
         name: this.name,
         result: [
-          `Background process started (PID: ${pid})`,
-          `Output file: ${outputFile}`,
-          `You will be notified automatically when it completes.`,
+          `Background process started (PID: ${handle.pid})`,
+          `Output file: ${handle.outputFile}`,
+          'You will be notified automatically when it completes.',
           `Use ${GET_TASK_OUTPUT_TOOL_NAME} for status/output snapshot (never blocks).`,
         ].join('\n'),
         metadata: {
           backgrounded: true,
-          pid,
-          outputFile,
-          taskId: toolUseId,
+          taskId: handle.taskId,
+          pid: handle.pid,
+          outputFile: handle.outputFile,
         },
       };
     } catch (error) {

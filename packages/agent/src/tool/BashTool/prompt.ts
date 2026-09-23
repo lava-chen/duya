@@ -9,6 +9,7 @@ import {
   BASH_DEFAULT_TIMEOUT_MS,
   BASH_MAX_FOREGROUND_TIMEOUT_MS,
   BASH_MAX_TIMEOUT_MS,
+  BASH_SOFT_YIELD_MS,
 } from './constants.js'
 
 export const BASH_TOOL_NAME = 'Bash'
@@ -55,6 +56,7 @@ export function getMaxForegroundTimeoutMs(): number {
 function getBackgroundUsageNote(): string | null {
   return [
     `You can use the \`run_in_background\` parameter to run the command in the background. Only use this if you don't need the result immediately and are OK being notified when the command completes later. You do not need to check the output right away — you'll be notified when it finishes. Use \`get_task_output\` with the returned task ID to fetch results on demand, and \`kill_task\` to terminate a background task if needed. You do not need to use '&' at the end of the command when using this parameter.`,
+    `A foreground command that is still running after ${BASH_SOFT_YIELD_MS}ms (${BASH_SOFT_YIELD_MS / 1000}s) is auto-promoted to a background task without being restarted: the call returns its task ID and you are notified when it finishes. Do not re-run a command that was auto-promoted — check it with \`get_task_output\` or wait for the notification. A promoted command is bounded by ${BASH_MAX_TIMEOUT_MS}ms (${BASH_MAX_TIMEOUT_MS / 60_000} minutes).`,
     `Do not increase \`timeout\` to mask a hung foreground command. The foreground ceiling is ${BASH_MAX_FOREGROUND_TIMEOUT_MS}ms (${BASH_MAX_FOREGROUND_TIMEOUT_MS / 60_000} minutes); for anything longer, opt into \`run_in_background: true\` and let the runtime watchdog handle it.`,
   ].join(' ')
 }
