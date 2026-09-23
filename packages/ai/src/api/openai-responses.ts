@@ -39,6 +39,15 @@ import { localRuntimeApiKeyOrPlaceholder } from './local-runtime.js';
 /** Internal accumulator type for streaming JSON arguments. */
 type ToolUseWithRaw = ToolUseContent & { _rawInput?: string };
 
+/**
+ * Wrapper tags for thinking content downgraded to text on replay
+ * (official-harness parity — the official harness wraps portable thinking
+ * replay in the same tags so the model can delimit prior reasoning from
+ * answer text).
+ */
+const PRIOR_THINKING_OPEN = '<|prior-thinking|>';
+const PRIOR_THINKING_CLOSE = '<|/prior-thinking|>';
+
 // =============================================================================
 // Reasoning resolver
 // =============================================================================
@@ -127,8 +136,12 @@ function cachedTokensFromResponse(usage: unknown): number | undefined {
  * System messages are skipped (passed separately via `instructions`).
  * Tool results become `function_call_output` items.
  * Tool calls in assistant history become `function_call` items.
- * Thinking blocks are dropped — the Responses API manages reasoning
- * server-side via previous_response_id.
+ * Thinking blocks are downgraded to wrapped text on full-history sends —
+ * duya cannot re-emit native `reasoning` items (the encrypted payload is not
+ * retained in ThinkingContent), so the reasoning is preserved as
+ * `<|prior-thinking|>`-wrapped text instead of being dropped. When
+ * `previous_response_id` is used, `extractNewMessages` has already trimmed
+ * the prior turns server-side and thinking never reaches this converter.
  */
 // Exported for tests (same seam rationale as parseAnthropicEvent).
 export function toResponsesInput(messages: Message[]): OpenAI.Responses.ResponseInputItem[] {
@@ -234,8 +247,16 @@ export function toResponsesInput(messages: Message[]): OpenAI.Responses.Response
           // payloads is deliberately deferred until verified live; a text
           // summary is always wire-valid.
           textParts.push(summarizeProviderBlock(block));
+        } else if (block.type === 'thinking') {
+          // Preserve reasoning on full-history sends (official-harness
+          // parity: thinking is downgraded to tagged text, never silently
+          // dropped). The wrapper lets the model tell prior reasoning apart
+          // from answer text — same mechanism the official harness uses for
+          // portable cross-model thinking replay.
+          if (block.thinking && block.thinking.trim()) {
+            textParts.push(`${PRIOR_THINKING_OPEN}\n${block.thinking}\n${PRIOR_THINKING_CLOSE}`);
+          }
         }
-        // Skip thinking blocks — Responses API handles reasoning server-side.
       }
       if (textParts.length > 0) {
         result.push({

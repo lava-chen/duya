@@ -205,4 +205,42 @@ describe('outbound round-trip (plan 440 phase 1)', () => {
     expect(toResponsesInput(history)).toHaveLength(2);
     expect(toAnthropicMessages(history, ANTHROPIC_MODEL)).toHaveLength(2);
   });
+
+  it('downgrades thinking to wrapped text in toResponsesInput (official-harness parity)', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'q1' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'step 1' },
+          { type: 'text', text: 'a1' },
+        ],
+      },
+    ];
+    const out = toResponsesInput(history);
+    expect(out).toHaveLength(2);
+    const assistantItem = out[1] as { type: string; role: string; content: string };
+    expect(assistantItem.role).toBe('assistant');
+    expect(assistantItem.content).toContain('<|prior-thinking|>');
+    expect(assistantItem.content).toContain('step 1');
+    expect(assistantItem.content).toContain('<|/prior-thinking|>');
+    expect(assistantItem.content).toContain('a1');
+  });
+
+  it('drops empty thinking blocks in toResponsesInput without creating empty text', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'q1' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: '   ' },
+          { type: 'text', text: 'a1' },
+        ],
+      },
+    ];
+    const out = toResponsesInput(history);
+    expect(out).toHaveLength(2);
+    const assistantItem = out[1] as { content: string };
+    expect(assistantItem.content).toBe('a1');
+  });
 });

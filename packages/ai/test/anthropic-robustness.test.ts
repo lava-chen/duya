@@ -314,37 +314,34 @@ describe('handleThinkingBlocks', () => {
     { role: 'assistant', content: [thinking('sig2'), text('a2')] },
   ];
 
-  it('strips ALL thinking blocks for non-MiniMax third-party endpoints', () => {
+  it('keeps signed thinking as native blocks on third-party endpoints (official-harness parity)', () => {
     const out = handleThinkingBlocks(conversation, otherThirdPartyModel);
-    for (const m of out) {
-      if (m.role !== 'assistant' || !Array.isArray(m.content)) continue;
-      for (const b of m.content) {
-        expect(['thinking', 'redacted_thinking']).not.toContain((b as { type: string }).type);
-      }
-    }
-    // text content survives
-    expect(blockTypes(out[1])).toEqual(['text']);
-    expect(blockTypes(out[3])).toEqual(['text']);
+    expect(blockTypes(out[1])).toEqual(['thinking', 'text', 'redacted_thinking']);
+    expect(blockTypes(out[3])).toEqual(['thinking', 'text']);
+    const kept = (out[1].content as ContentBlockParam[])[0] as unknown as { signature?: string };
+    expect(kept.signature).toBe('sig1');
   });
 
-  it('strips ALL thinking blocks for MiniMax Anthropic-compatible endpoints', () => {
+  it('keeps signed thinking for MiniMax Anthropic-compatible endpoints', () => {
     const out = handleThinkingBlocks(conversation, minimaxModel);
-    expect(blockTypes(out[1])).toEqual(['text']);
-    expect(blockTypes(out[3])).toEqual(['text']);
+    expect(blockTypes(out[1])).toEqual(['thinking', 'text', 'redacted_thinking']);
+    expect(blockTypes(out[3])).toEqual(['thinking', 'text']);
   });
 
-  it('strips unsigned thinking blocks for MiniMax Anthropic-compatible endpoints', () => {
+  it('downgrades unsigned thinking to text for MiniMax Anthropic-compatible endpoints', () => {
     const input: MessageParam[] = [
       { role: 'user', content: [text('q')] },
       { role: 'assistant', content: [thinking(), text('answer')] },
     ];
     const out = handleThinkingBlocks(input, minimaxModel);
-    expect(blockTypes(out[1])).toEqual(['text']);
+    const blocks = out[1].content as ContentBlockParam[];
+    expect(blocks.map(b => (b as { type: string }).type)).toEqual(['text', 'text']);
+    expect((blocks[0] as { text: string }).text).toBe('deep thought');
   });
 
-  it('strips thinking from non-last assistant messages on direct Anthropic', () => {
+  it('keeps signed thinking on non-last assistant messages on direct Anthropic', () => {
     const out = handleThinkingBlocks(conversation, anthropicModel);
-    expect(blockTypes(out[1])).toEqual(['text']);
+    expect(blockTypes(out[1])).toEqual(['thinking', 'text', 'redacted_thinking']);
   });
 
   it('keeps signed thinking on the last assistant message on direct Anthropic', () => {
@@ -377,11 +374,11 @@ describe('handleThinkingBlocks', () => {
 
 // ─── toAnthropicMessages thinking handling ──────────────────────────────────
 
-describe('toAnthropicMessages drops MiniMax thinking blocks', () => {
+describe('toAnthropicMessages preserves thinking blocks', () => {
   const minimaxModel = minimaxModels[0];
   const anthropicModel = anthropicModels[0];
 
-  it('drops unsigned thinking blocks for MiniMax Anthropic-compatible endpoint', () => {
+  it('downgrades unsigned thinking to text for MiniMax Anthropic-compatible endpoint', () => {
     const messages: Message[] = [
       { role: 'user', content: 'q1' },
       {
@@ -399,11 +396,12 @@ describe('toAnthropicMessages drops MiniMax thinking blocks', () => {
     const out = toAnthropicMessages(messages, minimaxModel);
     expect(out).toHaveLength(2);
     const assistantContent = out[1].content as ContentBlockParam[];
-    expect(assistantContent.map(b => (b as { type: string }).type)).toEqual(['text']);
-    expect((assistantContent[0] as { text: string }).text).toBe('a1');
+    expect(assistantContent.map(b => (b as { type: string }).type)).toEqual(['text', 'text']);
+    expect((assistantContent[0] as { text: string }).text).toBe('step 1');
+    expect((assistantContent[1] as { text: string }).text).toBe('a1');
   });
 
-  it('drops unsigned thinking blocks for direct Anthropic endpoint', () => {
+  it('downgrades unsigned thinking to text for direct Anthropic endpoint', () => {
     const messages: Message[] = [
       { role: 'user', content: 'q1' },
       {
@@ -420,7 +418,28 @@ describe('toAnthropicMessages drops MiniMax thinking blocks', () => {
 
     const out = toAnthropicMessages(messages, anthropicModel);
     const assistantContent = out[1].content as ContentBlockParam[];
-    expect(assistantContent.map(b => (b as { type: string }).type)).toEqual(['text']);
+    expect(assistantContent.map(b => (b as { type: string }).type)).toEqual(['text', 'text']);
+  });
+
+  it('keeps signed thinking as a native block for MiniMax same-model replay', () => {
+    const messages: Message[] = [
+      { role: 'user', content: 'q1' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'step 1', thinkingSignature: 'sig-1' },
+          { type: 'text', text: 'a1' },
+        ],
+        providerId: 'minimax',
+        model: 'MiniMax-M3',
+        api: 'anthropic',
+      },
+    ];
+
+    const out = toAnthropicMessages(messages, minimaxModel);
+    const assistantContent = out[1].content as ContentBlockParam[];
+    expect(assistantContent.map(b => (b as { type: string }).type)).toEqual(['thinking', 'text']);
+    expect((assistantContent[0] as unknown as { signature: string }).signature).toBe('sig-1');
   });
 });
 

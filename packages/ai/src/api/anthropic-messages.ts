@@ -439,83 +439,64 @@ function stripOrphanToolResults(messages: MessageParam[]): MessageParam[] {
 }
 
 /**
- * Handle thinking blocks according to endpoint type:
- * - MiniMax Anthropic-compatible: strip ALL thinking blocks. MiniMax does not
- *   validate thinking signatures, and replaying unsigned historical thinking
- *   blocks can cause the model to emit reasoning without any text reply.
- * - Other third-party: strip ALL thinking blocks (can't validate signatures)
- * - Direct Anthropic, non-last assistant: strip ALL thinking blocks
- * - Direct Anthropic, last assistant: keep signed thinking, downgrade unsigned to text
- * - Strip cache_control from remaining thinking blocks
+ * Handle thinking blocks in assistant history (uniform, all endpoints):
+ * - Signed `thinking` → keep the native block (provider can validate the
+ *   signature; MiniMax-M3 returns signature_delta, and this is exactly what
+ *   the official MiniMax harness replays).
+ * - Unsigned `thinking` → downgrade to a `text` block so the reasoning stays
+ *   in context WITHOUT being replayed as an unsigned thinking block.
+ *   (Replaying unsigned thinking *blocks* caused MiniMax to emit reasoning
+ *   without any text reply — downgrading to text preserves the context while
+ *   avoiding that failure mode. Same policy as the official harness.)
+ * - `redacted_thinking` → keep only when it carries its opaque `data`.
+ * - Strip cache_control from remaining thinking/redacted_thinking blocks.
+ *
+ * Previously MiniMax and other third-party endpoints stripped ALL thinking
+ * blocks (and direct Anthropic stripped all but the last assistant turn).
+ * That discarded the model's own reasoning from context on every turn after
+ * the first, which made interleaved-thinking models re-derive (and leak)
+ * reasoning into the text channel. Content-preserving replay matches the
+ * official MiniMax harness (pi-ai transformMessages: same-model keep,
+ * unsigned → portable text).
  *
  * Adapted from packages/agent/src/llm/anthropic-client.ts.
  */
 export function handleThinkingBlocks(
   messages: MessageParam[],
-  model: Model<'anthropic'>,
+  _model: Model<'anthropic'>,
 ): MessageParam[] {
-  const isThirdParty = isThirdPartyEndpoint(model.baseUrl);
-  const isMiniMax = isMiniMaxEndpoint(model.baseUrl) || !!model.compat?.forceAdaptiveThinking;
-
-  // Find the index of the last assistant message
-  let lastAssistantIdx = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'assistant') {
-      lastAssistantIdx = i;
-      break;
-    }
-  }
-
-  return messages.map((m, idx) => {
+  return messages.map((m) => {
     if (m.role !== 'assistant' || !Array.isArray(m.content)) {
       return m;
     }
 
     let newContent: ContentBlockParam[];
-
-    if (isMiniMax || isThirdParty) {
-      // MiniMax and other third-party endpoints: strip ALL thinking blocks.
-      // MiniMax cannot validate signatures, and preserving unsigned thinking
-      // in history breaks multi-turn text generation.
-      newContent = m.content.filter(b => {
-        if (typeof b !== 'object' || b === null) return true;
-        return !THINKING_TYPES.has((b as { type?: string }).type || '');
-      });
-    } else if (idx !== lastAssistantIdx) {
-      // Direct Anthropic, non-last assistant: strip ALL thinking blocks
-      newContent = m.content.filter(b => {
-        if (typeof b !== 'object' || b === null) return true;
-        return !THINKING_TYPES.has((b as { type?: string }).type || '');
-      });
-    } else {
-      // Direct Anthropic, last assistant: selective handling
-      newContent = [];
-      for (const b of m.content) {
-        if (typeof b !== 'object' || b === null) {
+    newContent = [];
+    for (const b of m.content) {
+      if (typeof b !== 'object' || b === null) {
+        newContent.push(b as ContentBlockParam);
+        continue;
+      }
+      const blockType = (b as { type?: string }).type || '';
+      if (!THINKING_TYPES.has(blockType)) {
+        newContent.push(b as ContentBlockParam);
+        continue;
+      }
+      // Handle thinking/redacted_thinking blocks
+      if (blockType === 'redacted_thinking') {
+        // Keep redacted_thinking only if it has a signature (data field)
+        if ((b as { data?: unknown }).data) {
           newContent.push(b as ContentBlockParam);
-          continue;
         }
-        const blockType = (b as { type?: string }).type || '';
-        if (!THINKING_TYPES.has(blockType)) {
-          newContent.push(b as ContentBlockParam);
-          continue;
-        }
-        // Handle thinking/redacted_thinking blocks
-        if (blockType === 'redacted_thinking') {
-          // Keep redacted_thinking only if it has a signature (data field)
-          if ((b as { data?: unknown }).data) {
-            newContent.push(b as ContentBlockParam);
-          }
-          // else: drop — no data means it can't be validated
-        } else if ((b as { signature?: unknown }).signature) {
-          // Signed thinking block — keep it
-          newContent.push(b as ContentBlockParam);
-        } else {
-          // Unsigned thinking — downgrade to text so it's not lost
-          const thinkingText = (b as { thinking?: string }).thinking || '';
-          if (thinkingText) {
-            newContent.push({ type: 'text', text: thinkingText } as ContentBlockParam);
-          }
+        // else: drop — no data means it can't be validated
+      } else if ((b as { signature?: unknown }).signature) {
+        // Signed thinking block — keep it
+        newContent.push(b as ContentBlockParam);
+      } else {
+        // Unsigned thinking — downgrade to text so the reasoning is not lost
+        const thinkingText = (b as { thinking?: string }).thinking || '';
+        if (thinkingText) {
+          newContent.push({ type: 'text', text: thinkingText } as ContentBlockParam);
         }
       }
     }
@@ -1638,10 +1619,12 @@ export function toAnthropicMessages(
  * Convert a single duya MessageContent block to an Anthropic ContentBlockParam.
  * Returns null for blocks that should be filtered out.
  *
- * Thinking blocks are intentionally dropped for MiniMax Anthropic-compatible
- * endpoints; replaying unsigned historical thinking blocks causes the model to
- * emit reasoning without any text reply. Signed thinking blocks are kept for
- * direct Anthropic replay. For cross-model cases, unsigned thinking was already
+ * Thinking blocks are replayed with the official-harness policy: signed
+ * thinking stays a native block, unsigned thinking is downgraded to text so
+ * the reasoning remains in context without replaying unvalidated blocks.
+ * (The old behavior dropped all thinking for MiniMax, which starved the
+ * model of its own prior reasoning and encouraged reasoning leaks into the
+ * text channel.) For cross-model cases, unsigned thinking was already
  * downgraded to text by transformMessages.
  */
 function convertContentBlock(
@@ -1700,13 +1683,8 @@ function convertContentBlock(
     } as unknown as ContentBlockParam;
   }
   if (block.type === 'thinking') {
-    const isMiniMax = isMiniMaxEndpoint(model.baseUrl) || !!model.compat?.forceAdaptiveThinking;
-    // Drop all thinking blocks for MiniMax; the endpoint cannot validate
-    // signatures and replaying them breaks multi-turn text generation.
-    if (isMiniMax) {
-      return null;
-    }
-    // Include signed thinking blocks for direct Anthropic same-model replay.
+    // Signed thinking blocks are kept for native same-model replay (the
+    // provider validates the signature — official-harness parity).
     if (block.thinkingSignature) {
       return {
         type: 'thinking',
@@ -1714,7 +1692,13 @@ function convertContentBlock(
         signature: block.thinkingSignature,
       } as ContentBlockParam;
     }
-    // Unsigned thinking for direct Anthropic cannot be validated, so drop it.
+    // Unsigned thinking cannot be replayed as a thinking block (providers
+    // reject unvalidated signatures, and replaying it as a block made MiniMax
+    // emit reasoning without any text reply). Downgrade to text so the
+    // reasoning stays in context — official-harness parity.
+    if (block.thinking) {
+      return { type: 'text', text: block.thinking } as ContentBlockParam;
+    }
     return null;
   }
   if (block.type === 'provider_block') {
@@ -1905,6 +1889,19 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
         }
       }
 
+      // Official-harness parity: MiniMax adaptive-thinking endpoints take the
+      // effort level through `output_config` in addition to
+      // `thinking: { type: 'adaptive' }` (MCode
+      // local-runtime/src/model-provider/thinking.ts sends both). Only
+      // adaptive-shape requests carry it — duya sets forceAdaptiveThinking
+      // exclusively on MiniMax models, and direct Anthropic uses
+      // budget_tokens instead. `effort: 'off'` already disabled thinking
+      // above, so any surviving effort value is a real level.
+      const outputConfig =
+        thinking?.type === 'adaptive' && effectiveEffort
+          ? { effort: effectiveEffort }
+          : undefined;
+
       // 5. Build request params. Tool names can originate in MCP servers,
       // so reject names the provider cannot represent before serializing.
       const requestedTools = chatOptions?.tools ?? [];
@@ -1986,6 +1983,11 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
         ...(thinking ? { thinking } : {}),
         stream: true,
       };
+      // `output_config` post-dates the pinned SDK types; the SDK serializes
+      // params verbatim, so the extra field passes through to the wire.
+      if (outputConfig) {
+        (params as unknown as Record<string, unknown>).output_config = outputConfig;
+      }
 
       // 6. Initialize assistant message accumulator.
       const assistantMsg: AssistantMessage = {

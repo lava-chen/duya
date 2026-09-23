@@ -275,9 +275,13 @@ function toBedrockMessages(messages: Message[]): BedrockConverseRequest['message
         for (const b of m.content) {
           if (b.type === 'text') content.push({ text: b.text });
           else if (b.type === 'thinking') {
-            // Bedrock expects reasoning content as additionalModelRequestFields;
-            // for now skip — providers handle via additionalModelRequestFields.
-            continue;
+            // Preserve reasoning as wrapped text (official-harness parity).
+            // Re-emitting native reasoningContent blocks would need the
+            // provider-specific signature round-trip; dropping the content
+            // instead starves the model of its own prior reasoning.
+            if (b.thinking && b.thinking.trim()) {
+              content.push({ text: `<|prior-thinking|>\n${b.thinking}\n<|/prior-thinking|>` });
+            }
           } else if (b.type === 'tool_use') {
             content.push({
               toolUse: {
