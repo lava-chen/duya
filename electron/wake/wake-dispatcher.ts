@@ -442,8 +442,10 @@ export function enqueueWakeItemForSession(
   // payloads are self-contained (user turns, DM envelopes). `outcome` here
   // is only 'added' | 'merged' — the dedupe path returned earlier.
   persistQueuedItem(sessionId, stamped)
-  // Plan 500 P5.1: a queued user turn arms the wedged-run watchdog.
-  if (stamped.lane === 'user') armUserTurnWatchdog(sessionId)
+  // Plan 500 P5.1 + grok per-queue watchdog: ANY queued item arms the
+  // watchdog, not only user turns — a wedged run must be detected no matter
+  // which lane is waiting behind it.
+  armQueueWatchdog(sessionId)
   kick(sessionId)
   // Plan 495 G3 / 476 §2.2: preemption is decided at enqueue time — the
   // drain loop is blocked awaiting the in-flight runWake, so a preempting
@@ -868,6 +870,16 @@ let userTurnWatchdogMs = USER_TURN_WATCHDOG_DEFAULT_MS
 const WATCHDOG_ESCAPE_DEFAULT_MS = envPositiveInt('DUYA_BOT_WATCHDOG_ESCAPE_MS') ?? 30_000
 let watchdogEscapeMs = WATCHDOG_ESCAPE_DEFAULT_MS
 
+/**
+ * Grok watchdogs every lane's queue: a queued item that waits far longer
+ * than any legitimate run means the ACTIVE run is wedged, even when the
+ * waiting head cannot preempt it (background behind background). This is
+ * the wedge threshold — deliberately much larger than the user-lane
+ * interrupt so long but legitimate automations are not killed.
+ */
+const WEDGE_WATCHDOG_DEFAULT_MS = envPositiveInt('DUYA_BOT_WEDGE_WATCHDOG_MS') ?? 600_000
+let wedgeWatchdogMs = WEDGE_WATCHDOG_DEFAULT_MS
+
 /** Test seam — override the watchdog escape grace (Plan 501 L3). */
 export function _setWatchdogEscapeMsForTest(ms: number): void {
   watchdogEscapeMs = ms
@@ -878,40 +890,75 @@ export function _setUserTurnWatchdogMsForTest(ms: number): void {
   userTurnWatchdogMs = ms
 }
 
+/** Test seam — override the wedged-run threshold (any-lane wedge check). */
+export function _setWedgeWatchdogMsForTest(ms: number): void {
+  wedgeWatchdogMs = ms
+}
+
 /**
- * Arm (once) the watchdog while a user-lane item parks behind a busy
- * session. When it fires: if a user item is STILL at the queue head and the
- * session is STILL locked, the active run is wedged — interrupt it (the
- * redrive decision is applied for dispatcher-owned runs; the lock TTL
- * remains the ultimate correctness backstop).
+ * Arm (once) the queue watchdog while an item parks behind a busy session.
+ * Grok parity (per-queue watchdog, run-lifecycle): the check runs in two
+ * stages — see {@link runQueueWatchdogCheck}.
  */
-function armUserTurnWatchdog(sessionId: string): void {
+function armQueueWatchdog(sessionId: string, delayMs: number = userTurnWatchdogMs): void {
   const state = getState(sessionId)
   if (state.watchdogTimer) return
   state.watchdogTimer = setTimeout(() => {
     state.watchdogTimer = undefined
-    const head = peekNextWake(state.queue)
-    if (!head || head.lane !== 'user') return
-    if (!currentDeps().isLocked(sessionId)) return
-    getLogger().warn('Bot run watchdog: user turn waited too long; interrupting wedged run', {
-      sessionId,
-      waitedMs: userTurnWatchdogMs,
-      headSource: head.source,
-    }, LogComponent.Automation)
-    const running = state.runningItem
-    if (running && !state.redrivePending) {
-      const decision = decidePreemption(head, runOriginOf(running))
-      if (decision.action === 'preempt' && decision.redrive) {
-        state.redrivePending = running
-      }
+    runQueueWatchdogCheck(sessionId)
+  }, Math.max(delayMs, 1))
+}
+
+/**
+ * Watchdog check. When a queued head waits behind a locked session:
+ *  - if the head OUTRANKS the running origin (user message / priority DM,
+ *    via decidePreemption), interrupt after userTurnWatchdogMs — the
+ *    Plan 500 P5.1 behaviour, unchanged;
+ *  - otherwise (a legitimate wait, e.g. background behind user) re-arm and
+ *    interrupt only once the head has waited the full wedge window — the
+ *    running item is wedged. The wedged run's work is re-queued
+ *    (redrivePending) so parked work is never silently lost.
+ */
+function runQueueWatchdogCheck(sessionId: string): void {
+  const state = getState(sessionId)
+  const head = peekNextWake(state.queue)
+  if (!head) return
+  if (!currentDeps().isLocked(sessionId)) return
+  const running = state.runningItem
+  const decision = running
+    ? decidePreemption(head, runOriginOf(running))
+    : { action: 'preempt' as const, redrive: true }
+  const preempting = decision.action === 'preempt'
+  const waitedMs = Date.now() - head.enqueuedAtMs
+
+  if (!preempting && waitedMs < wedgeWatchdogMs) {
+    // Legitimate wait — re-check when the wedge window expires for this head.
+    armQueueWatchdog(sessionId, wedgeWatchdogMs - waitedMs)
+    return
+  }
+
+  getLogger().warn('Bot run watchdog: interrupting run blocking a queued wake', {
+    sessionId,
+    waitedMs,
+    headSource: head.source,
+    headLane: head.lane,
+    runningSource: running?.source,
+    wedgeInterrupt: !preempting,
+  }, LogComponent.Automation)
+  if (running) {
+    if (preempting && decision.redrive) {
+      state.redrivePending = running
+    } else if (!preempting) {
+      // Wedged run: interrupting loses the work unless it re-runs.
+      state.redrivePending = running
     }
-    turnEpochs.maybeAdvanceForItem(sessionId, head)
-    interruptSafely(sessionId)
-    // Plan 501 L3 (grok zombie escape): the interrupt is best-effort — if
-    // the wedged run still holds the lock after the grace period, escape it
-    // instead of waiting forever.
-    if (running) armWatchdogEscape(sessionId, running)
-  }, userTurnWatchdogMs)
+  }
+  turnEpochs.maybeAdvanceForItem(sessionId, head)
+  interruptSafely(sessionId)
+  // Plan 501 L3 (grok zombie escape): the interrupt is best-effort — if
+  // the wedged run still holds the lock after the grace period, escape it
+  // instead of waiting forever.
+  if (running) armWatchdogEscape(sessionId, running)
 }
 
 /**
@@ -947,7 +994,7 @@ function armWatchdogEscape(sessionId: string, item: WakeItem): void {
   }, watchdogEscapeMs)
 }
 
-function disarmUserTurnWatchdog(sessionId: string): void {
+function disarmQueueWatchdog(sessionId: string): void {
   const state = getState(sessionId)
   if (state.watchdogTimer) {
     clearTimeout(state.watchdogTimer)
@@ -998,10 +1045,12 @@ async function drain(sessionId: string): Promise<void> {
       const dequeued = dequeueNextWake(state.queue)
       if (!dequeued) break
       state.queue = dequeued.queue
-      // Plan 500: the item left the queue — clear its durable marker and
-      // disarm the watchdog that was waiting on it.
+      // Plan 500: the item left the queue — clear its durable marker. The
+      // watchdog re-arms for the next waiting head (any lane) or disarms
+      // when the queue is empty.
       clearPersistedItem(dequeued.item)
-      if (dequeued.item.lane === 'user') disarmUserTurnWatchdog(sessionId)
+      if (peekNextWake(state.queue)) armQueueWatchdog(sessionId)
+      else disarmQueueWatchdog(sessionId)
 
       // 476 P2.5: skip background wakes that a newer user turn superseded
       // while they were parked. item.turnEpoch was stamped at enqueue; once
