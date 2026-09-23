@@ -16,10 +16,13 @@
  *   4. Rejection collector — replays a simulated session the way the agent
  *      loop does and reports the undeclared direct-call rate via
  *      `readUndeclaredCallStats()`.
+ *   5. Built-in context plumbing — a `hint` built-in invoked through
+ *      `tool_invoke` must receive the turn's `ToolUseContext` from
+ *      `contextProvider`; without it `options.sessionId` is dropped.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import type { Tool, ToolResult } from '../../types.js';
+import type { Tool, ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolExecutor } from '../registry.js';
 import { ToolRegistry } from '../registry.js';
 import {
@@ -30,7 +33,7 @@ import {
   resetUndeclaredCallStats,
 } from '../visibility-guard.js';
 import { toolSchemaTool } from '../ToolSchemaTool/ToolSchemaTool.js';
-import { createToolSchemaProviderFromRegistry } from '../ToolSchemaTool/catalogFromRegistry.js';
+import { createToolSchemaProviderFromRegistry, BUILTIN_TOOLS_NAMESPACE } from '../ToolSchemaTool/catalogFromRegistry.js';
 import { toolInvokeTool } from '../ToolInvokeTool/ToolInvokeTool.js';
 import { createToolInvokeDispatcherFromRegistry } from '../ToolInvokeTool/dispatcherFromRegistry.js';
 
@@ -222,5 +225,131 @@ describe('undeclared direct-call collector (rejection telemetry)', () => {
     simulateSession(['mcp__fakeserver__ping']);
     resetUndeclaredCallStats();
     expect(readUndeclaredCallStats()).toEqual({});
+  });
+});
+
+/**
+ * Regression guard for the Chrome tab-grouping bug.
+ *
+ * `browser` is registered as a `hint` built-in (`tool/builtin.ts:166`), so the
+ * model can only reach it through `tool_invoke`. DuyaAgent wires the
+ * dispatcher once per `streamChat` — BEFORE the turn's ToolUseContext is
+ * built — so the context has to arrive through `contextProvider`. When that
+ * wiring was missing, every built-in invoked this way ran with
+ * `context === undefined`, `options.sessionId` was silently dropped, and
+ * BrowserTool minted a throwaway `session_<ts>_<rand>` id per call: one
+ * session became N sessions and the extension opened one Chrome tab group
+ * per page.
+ */
+describe('builtin context plumbing through tool_invoke', () => {
+  /** A `hint` built-in whose executor records the context it was handed. */
+  function makeHintRegistry(): {
+    registry: ToolRegistry;
+    seen: Array<ToolUseContext | undefined>;
+  } {
+    const registry = new ToolRegistry();
+    const seen: Array<ToolUseContext | undefined> = [];
+    const probe: Tool = {
+      name: 'probe_hint_tool',
+      description: 'records the ToolUseContext it was executed with',
+      input_schema: { type: 'object', properties: {} },
+    };
+    const executor: ToolExecutor = {
+      async execute(_input, _workingDirectory, context): Promise<ToolResult> {
+        seen.push(context);
+        return { id: 'probe', name: 'probe_hint_tool', result: 'ok' };
+      },
+    };
+    registry.register(probe, executor, { exposeMode: 'hint' });
+    return { registry, seen };
+  }
+
+  afterEach(() => {
+    toolInvokeTool.setDispatcher({ dispatch: async () => ({ result: '', error: true }) });
+  });
+
+  it('forwards options.sessionId down to the executor', async () => {
+    const { registry, seen } = makeHintRegistry();
+    const context = {
+      options: { sessionId: 'sess-group-me' },
+    } as unknown as ToolUseContext;
+    toolInvokeTool.setDispatcher(
+      createToolInvokeDispatcherFromRegistry({
+        registry,
+        checkPermission: async () => ({ behavior: 'allow' }),
+        contextProvider: () => context,
+      }),
+    );
+
+    const res = await toolInvokeTool.execute({
+      namespace: BUILTIN_TOOLS_NAMESPACE,
+      tool: 'probe_hint_tool',
+      arguments: {},
+    });
+
+    expect(res.error).toBeFalsy();
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.options?.sessionId).toBe('sess-group-me');
+  });
+
+  it('executes context-less without a contextProvider (the hazard this guards against)', async () => {
+    const { registry, seen } = makeHintRegistry();
+    toolInvokeTool.setDispatcher(
+      createToolInvokeDispatcherFromRegistry({
+        registry,
+        checkPermission: async () => ({ behavior: 'allow' }),
+      }),
+    );
+
+    const res = await toolInvokeTool.execute({
+      namespace: BUILTIN_TOOLS_NAMESPACE,
+      tool: 'probe_hint_tool',
+      arguments: {},
+    });
+
+    expect(res.error).toBeFalsy();
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toBeUndefined();
+  });
+
+  it('never hands the built-in context to an MCP tool', async () => {
+    const registry = makeFakeMcpRegistry();
+    const seen: Array<ToolUseContext | undefined> = [];
+    registry.registerWithKey(
+      'mcp__fakeserver__ctx',
+      {
+        name: 'mcp__fakeserver__ctx',
+        description: 'records its context',
+        input_schema: { type: 'object' },
+        mcpInfo: { serverName: 'fakeserver', toolName: 'ctx', source: 'unknown' },
+      },
+      {
+        async execute(_input, _workingDirectory, context): Promise<ToolResult> {
+          seen.push(context);
+          return { id: 'ctx', name: 'mcp__fakeserver__ctx', result: 'ok' };
+        },
+      },
+      'mcp',
+      { exposeMode: 'hint' },
+    );
+    toolInvokeTool.setDispatcher(
+      createToolInvokeDispatcherFromRegistry({
+        registry,
+        checkPermission: async () => ({ behavior: 'allow' }),
+        contextProvider: () => ({
+          options: { sessionId: 'sess-group-me' },
+        }) as unknown as ToolUseContext,
+      }),
+    );
+
+    const res = await toolInvokeTool.execute({
+      namespace: 'fakeserver',
+      tool: 'ctx',
+      arguments: {},
+    });
+
+    expect(res.error).toBeFalsy();
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toBeUndefined();
   });
 });

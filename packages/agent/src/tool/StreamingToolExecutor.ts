@@ -552,9 +552,9 @@ export class StreamingToolExecutor {
       maxOutputSizeBytes: config?.maxOutputSizeBytes ?? 5 * 1024 * 1024, // 5MB default
       memoryWarningThresholdMB: config?.memoryWarningThresholdMB ?? 500,
       // WorkerPool delegation disabled: bash/powershell now run via
-      // BashTool.execute() directly (temporary spawn per command, killed
-      // on completion). Background commands are handled inside
-      // BashTool.executeBackground() via spawn + unref + BashTaskRegistry.
+      // BashTool.execute() directly (managed spawn per command — see
+      // BashTool/managed-bash.ts). Background commands, including foreground
+      // calls yielded at the soft-yield window, live in BashTaskRegistry.
       // Pass workerTools explicitly to opt back into the worker pool.
       workerTools: config?.workerTools ?? [],
       workerThresholdMs: config?.workerThresholdMs ?? 5000,

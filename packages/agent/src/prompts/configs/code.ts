@@ -12,6 +12,7 @@ import type { PromptSystemConfig } from '../PromptSystem.js'
 import { initializeAgentsMd } from '../dynamic/agentsMdSection.js'
 import { createMemoryPreBuildHook } from '../dynamic/memoryPreBuildHook.js'
 import { createEnvironmentPreBuildHook } from '../dynamic/environmentPreBuildHook.js'
+import { isMemoryEnabled } from '../../memory-rollout/wakeup.js'
 
 
 // Dynamic sections
@@ -41,8 +42,12 @@ export const codeConfig: PromptSystemConfig = {
   preBuildHook: async (ctx) => {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.
     if (ctx.omitAgentsMd) return
+    // Memory toggle gating: when the user disabled the memory system
+    // (DUYA_MEMORY_ENABLED=0 forwarded from config.toml by the Electron
+    // main process), skip the summary injection so the `memory` section
+    // never renders (memory_summary_body stays undefined → .hbs no-op).
     const memoryHook = createMemoryPreBuildHook()
-    const memoryResult = await memoryHook(ctx)
+    const memoryResult = isMemoryEnabled() ? await memoryHook(ctx) : undefined
     // Plan 550 1d-rest (environment section): pre-populate isGitRepo /
     // nowMs / unameSr / marketingName / knowledgeCutoff so the .hbs
     // template can render them synchronously. Merged with the memory

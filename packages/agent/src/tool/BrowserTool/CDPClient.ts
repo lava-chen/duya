@@ -580,6 +580,20 @@ export class ExtensionCDPClient extends EventEmitter implements ICDPClient {
     this.emit('closed');
   }
 
+  /**
+   * Close the whole extension session (daemon `close_session` → the
+   * extension's closeSessionTab). Unlike close(), this actually recycles
+   * the session tab in the user's Chrome — used by the workflow browser
+   * node (plan 564) to honour the `close_tab` contract.
+   */
+  async closeSession(): Promise<void> {
+    await this.sendCommand({
+      action: 'close_session',
+      sessionId: this.sessionId,
+    });
+    this.tabId = null;
+  }
+
   async closeWindow(): Promise<void> {
     await this.sendCommand({
       action: 'close_window',

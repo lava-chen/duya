@@ -19,6 +19,7 @@ import type { PromptSystemConfig } from '../PromptSystem.js'
 import { initializeAgentsMd } from '../dynamic/agentsMdSection.js'
 import { createMemoryPreBuildHook } from '../dynamic/memoryPreBuildHook.js'
 import { createEnvironmentPreBuildHook } from '../dynamic/environmentPreBuildHook.js'
+import { isMemoryEnabled } from '../../memory-rollout/wakeup.js'
 
 
 export const generalConfig: PromptSystemConfig = {
@@ -58,8 +59,10 @@ export const generalConfig: PromptSystemConfig = {
     // The memory hook only injects when summary.md is readable — empty
     // preBuildHook return when there is no memory directory, matching
     // the legacy `if (skills.length === 0) return null` short-circuit.
+    // Memory toggle gating: skip entirely when DUYA_MEMORY_ENABLED=0
+    // (user disabled the memory system in settings).
     const memoryHook = createMemoryPreBuildHook()
-    const memoryResult = await memoryHook(ctx)
+    const memoryResult = isMemoryEnabled() ? await memoryHook(ctx) : undefined
     // Plan 550 1d-rest (environment section): pre-populate isGitRepo /
     // nowMs / unameSr / marketingName / knowledgeCutoff so the .hbs
     // template can render them synchronously. Merged with the memory

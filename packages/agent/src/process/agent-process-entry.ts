@@ -81,6 +81,8 @@ import { hookTaskRegistry } from '../hooks/task-registry.js';
 import { backgroundAgentLifecycle } from '../lifecycle/BackgroundAgentLifecycle.js';
 import { sendEvent, parseStdin, type WorkerCommand, buildWorkflowRunEvent, type WorkflowRunCommand } from './worker-protocol.js';
 import { launchSavedWorkflow } from './workflow-runner.js';
+import { runWorkflowRuntimeChild } from './workflow-runtime-child.js';
+import { MemoryArtifactStore } from '../modes/workflow/gui-artifacts.js';
 import { resolveChatStartAgentMode } from './permission-profile-bridge.js';
 import { applyMCPConfiguration, type MCPApplyResult } from '../mcp/apply.js';
 import { storePendingAnswer } from '../tool/AskUserQuestionTool/AskUserQuestionTool.js';
@@ -4189,6 +4191,17 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
                 authStyle: agent.authStyle,
               },
               workingDirectory: wf.projectDir || agent.workingDirectory || process.cwd(),
+              // Plan 556 Phase 4: wf.gui rides the same worker→main
+              // computer-use bridge the computer_use tool uses. Captures
+              // stay in memory on the session-anchored path — the run-
+              // anchored runtime child binds the durable FsArtifactStore.
+              computerUseRequest: (action, payload, options) =>
+                computerUseIpcRequest(
+                  'computer-use:execute',
+                  { action, payload, sessionId: wf.sessionId },
+                  options,
+                ),
+              guiArtifactStore: new MemoryArtifactStore(),
             },
             {
               runId: wf.runId,
@@ -4590,6 +4603,25 @@ async function handleCompactMessage(msg: unknown): Promise<void> {
 async function main(): Promise<void> {
   log('Process started, session:', process.env.SESSION_ID);
   log('cwd:', process.cwd());
+
+  // Plan 560 D2: the same bundle serves two roles. `workflow-runtime` is the
+  // run-anchored executor — one process, one run, no init handshake, no chat
+  // session, no agent. It owns stdin/stdout itself (the command loop in
+  // workflow-runtime-child.ts), so this branch must return before the chat
+  // command loop below installs a second consumer on the same pipe.
+  if (process.env.DUYA_AGENT_ROLE === 'workflow-runtime') {
+    try {
+      await runWorkflowRuntimeChild();
+    } catch (err) {
+      // A throw here means the child died before it could report the failure
+      // on stdout. Exit non-zero so the manager settles the run as failed.
+      warn('[Workflow-Runtime] child failed:', err);
+      exitAfterCleanup(1);
+      return;
+    }
+    exitAfterCleanup(0);
+    return;
+  }
 
   // Handle IPC messages from AgentProcessPool (cronjob, conductor, etc.)
   // Agent Server uses stdin/stdout, but AgentProcessPool uses IPC child.send()

@@ -211,6 +211,17 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
 
   private connectLocked = async (sessionId?: string): Promise<void> => {
     const resolvedSessionId = sessionId || `session_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    if (!sessionId) {
+      // A caller that reaches the browser tool without `context.options.sessionId`
+      // gets a brand-new id on every call. Downstream that means a new agent
+      // session: the extension opens a new tab and mints a new Chrome tab
+      // group per page, so the leak is worth a WARN rather than silence.
+      logger.warn(
+        `[BrowserTool] no sessionId in the tool context — minting ephemeral browser session (${resolvedSessionId}); agent pages will not be grouped with the owning session`,
+        undefined,
+        'BrowserTool'
+      );
+    }
 
     // If the session has changed, tear down the existing connection so the
     // next command targets the correct webview / extension tab.

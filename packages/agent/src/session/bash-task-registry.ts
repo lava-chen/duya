@@ -35,6 +35,14 @@ export interface BashBackgroundTask {
   exitCode?: number;
   error?: string;
   lastProgress?: BashTaskProgress;
+  /**
+   * Set when a foreground call yielded the command to the background instead of
+   * waiting for it (soft-yield auto-promotion). The process is NOT restarted —
+   * only the wait ended — so PID/outputFile stay valid.
+   */
+  autoPromoted?: boolean;
+  /** The foreground timeout the call was released from, when autoPromoted. */
+  foregroundTimeoutMs?: number;
 }
 
 export type ProgressListener = (task: BashBackgroundTask) => void;
@@ -120,6 +128,26 @@ export class BashTaskRegistry {
     this.notifyAnyChange();
     this.schedulePersist();
     this.scheduleCleanup(taskId);
+  }
+
+  /**
+   * Mark a still-running task as auto-promoted: a foreground tool call stopped
+   * waiting for it after the soft-yield window and handed the task id back to
+   * the model. Purely observational — the child process keeps running.
+   */
+  markAutoPromoted(taskId: string, foregroundTimeoutMs?: number | null): void {
+    const task = this.tasks.get(taskId);
+    if (!task || task.status !== 'running') return;
+
+    task.autoPromoted = true;
+    if (typeof foregroundTimeoutMs === 'number') {
+      task.foregroundTimeoutMs = foregroundTimeoutMs;
+    }
+
+    this.tasks.set(taskId, task);
+    this.notifyListeners(taskId, task);
+    this.notifyAnyChange();
+    this.schedulePersist();
   }
 
   /**

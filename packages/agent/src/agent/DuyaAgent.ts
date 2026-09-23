@@ -692,7 +692,15 @@ export class duyaAgent implements AgentRuntime {
         ? createChildAbortController(this.abortController)
         : new AbortController();
       const stream = (this.compactClient ?? this.llmClient).streamChat(summaryMessages, {
-        systemPrompt: prompt,
+        // Do NOT pass `prompt` here. The prompt already carries the full
+        // <conversation> transcript + instructions, and Plan 523 P4.2 puts it
+        // in the user message (summaryMessages above) so gateways that weaken
+        // the `system` field still see the contract. Duplicating it into
+        // `system` doubled the summarizer request size (~2x the conversation),
+        // so near the window limit the summarizer itself failed with
+        // context_length_exceeded on every attempt — compaction could never
+        // succeed and the session wedged at usage_limited (bot:duya, 2026-09-23).
+        systemPrompt: 'You are a summarization assistant. Follow the instructions embedded in the user message.',
         // Plan 523 P4.1: disable tool calling so the summarizer cannot emit
         // DSML/tool-call tokens instead of a summary.
         toolChoice: 'none',
@@ -1227,10 +1235,19 @@ export class duyaAgent implements AgentRuntime {
     // runs on the RESOLVED real tool name 鈥?routing through the meta tool can
     // never bypass the permission policy. ask decisions are not executed (see
     // dispatcherFromRegistry.ts); deny carries the decision message back.
+    // Per-turn context handle for the meta-tool dispatcher. The dispatcher is
+    // wired HERE — before the turn loop builds its `toolUseContext` — so it
+    // takes a getter instead of the object. Without it, every built-in tool
+    // reached through `tool_invoke` executed with `context === undefined`:
+    // sessionId / apiKey / ipcRequest were all silently dropped (the browser
+    // tool then minted a fresh ephemeral session per call, one Chrome tab
+    // group per page).
+    let turnToolUseContext: ToolUseContext | undefined;
     toolInvokeTool.setDispatcher(
       createToolInvokeDispatcherFromRegistry({
         registry,
         workingDirectory: turnContext.workingDirectory ?? undefined,
+        contextProvider: () => turnToolUseContext,
         checkPermission: async (toolName, args) => {
           const decision = await this.hasPermissionsToUseTool(
             toolName,
@@ -1847,6 +1864,11 @@ export class duyaAgent implements AgentRuntime {
             }
           : undefined,
       };
+
+      // Hand this turn's context to the meta-tool dispatcher wired above.
+      // Reassigned every turn so `tool_invoke` always sees the CURRENT
+      // context (abortController, appState and sessionId are per-turn).
+      turnToolUseContext = toolUseContext;
 
       const executor = new ToolExecutionPipeline(
         registry,

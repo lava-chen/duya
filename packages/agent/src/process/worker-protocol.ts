@@ -459,15 +459,29 @@ export type RunStepStatus = 'running' | 'success' | 'failed';
  * One executed step of a workflow run. Carried (accumulated) on progress/done/
  * error frames so the renderer can draw a growing vertical timeline — every
  * field is optional and only present when the runner has a real value.
+ *
+ * `nodeKind` mirrors the journal's node-kind annotation. A step whose
+ * nodeKind is `'phase'` is a stage divider (`wf.phase(name)`), not work: the
+ * run card cuts the step list into stage columns at these markers (plan 560
+ * §6.2) and never renders them as a row of their own.
  */
+export type RunStepNodeKind = 'tool' | 'agent' | 'gui' | 'browser' | 'decision' | 'human' | 'noop' | 'phase';
+
 export interface RunStepView {
   /** Node id (matches journal.nodeId). */
   id: string;
   /** Display label (phase / action name). */
   label?: string;
   status: RunStepStatus;
+  /** Journal node-kind annotation (display only — drives icons + stage cuts). */
+  nodeKind?: RunStepNodeKind;
   startedAt?: number;
   finishedAt?: number;
+}
+
+/** Name-only artifact reference carried on digest frames (display only). */
+export interface RunArtifactNameView {
+  name: string;
 }
 
 export interface WorkflowRunSse {
@@ -487,8 +501,15 @@ export interface WorkflowRunSse {
   /**
    * Accumulated per-step view, growing as the run executes. Absent on a
    * digest `start` frame; carried on `progress` / `done` / `error`.
+   * Includes `nodeKind:'phase'` divider entries — the renderer cuts stage
+   * columns at them.
    */
   steps?: RunStepView[];
+  /**
+   * Published artifacts (name only), accumulated as `wf.publish` lands.
+   * Carried like `steps` so the terminal card can render artifact chips.
+   */
+  artifacts?: RunArtifactNameView[];
   /** Declared total steps, when the runner knows it; unknown → renderer draws "—". */
   total?: number;
   /** Present on a terminal non-success status. */

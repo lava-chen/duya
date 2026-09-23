@@ -1146,6 +1146,15 @@ export interface WorkflowRunRowLike {
   waitTill: number | null;
   retryOf: string | null;
   pauseMessage: string | null;
+  // ─── plan 560 run anchoring ───
+  origin?: 'library' | 'session' | 'agent' | 'cron';
+  scope?: 'project' | 'global' | null;
+  projectDir?: string | null;
+  parentSessionId?: string | null;
+  artifacts?: Array<{ id: string; name: string; contentType: string; bytes: number; relPath: string }>;
+  summary?: string | null;
+  finishedAt?: number | null;
+  spentTokens?: number | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -1160,6 +1169,11 @@ export const workflowRunDb = {
     dedupKey?: string | null;
     params?: Record<string, unknown>;
     retryOf?: string | null;
+    /** Plan 560: run anchoring — the session-anchored runner sends 'session'. */
+    origin?: 'library' | 'session' | 'agent' | 'cron';
+    scope?: 'project' | 'global' | null;
+    projectDir?: string | null;
+    parentSessionId?: string | null;
   }): Promise<WorkflowRunRowLike> =>
     sendDbRequest('workflowRun:create', input) as Promise<WorkflowRunRowLike>,
 
@@ -1169,11 +1183,22 @@ export const workflowRunDb = {
   getByDedupKey: (dedupKey: string): Promise<WorkflowRunRowLike | null> =>
     sendDbRequest('workflowRun:getByDedupKey', { dedupKey }) as Promise<WorkflowRunRowLike | null>,
 
-  list: (filter?: { status?: string; workflowName?: string; limit?: number; offset?: number }): Promise<WorkflowRunRowLike[]> =>
+  list: (filter?: { status?: string; workflowName?: string; origin?: 'library' | 'session' | 'agent' | 'cron'; limit?: number; offset?: number }): Promise<WorkflowRunRowLike[]> =>
     sendDbRequest('workflowRun:list', filter ?? {}) as Promise<WorkflowRunRowLike[]>,
 
   updateStatus: (id: string, status: string, pauseMessage?: string | null): Promise<boolean> =>
     sendDbRequest('workflowRun:updateStatus', { id, status, pauseMessage }) as Promise<boolean>,
+
+  /** Plan 560 terminal write: status + summary + artifacts + tokens in one statement. */
+  finish: (
+    id: string,
+    outcome: {
+      status: string;
+      summary?: string | null;
+      artifacts?: Array<{ id: string; name: string; contentType: string; bytes: number; relPath: string }>;
+      spentTokens?: number | null;
+    },
+  ): Promise<boolean> => sendDbRequest('workflowRun:finish', { id, ...outcome }) as Promise<boolean>,
 
   setWaitTill: (id: string, waitTill: number | null): Promise<boolean> =>
     sendDbRequest('workflowRun:setWaitTill', { id, waitTill }) as Promise<boolean>,
@@ -1213,6 +1238,14 @@ export const workflowRunDb = {
 
   loadJournal: (runId: string): Promise<unknown[]> =>
     sendDbRequest('workflowRun:loadJournal', { runId }) as Promise<unknown[]>,
+
+  /** Highest persisted `seq` for a run — the SSE `afterSeq` seed (plan 560 D5). */
+  latestEventSeq: (runId: string): Promise<number | null> =>
+    sendDbRequest('workflowRun:latestEventSeq', { runId }) as Promise<number | null>,
+
+  /** Journal events with `seq > afterSeq`, ascending (plan 560 D5). */
+  listEvents: (runId: string, afterSeq?: number): Promise<unknown[]> =>
+    sendDbRequest('workflowRun:listEvents', { runId, afterSeq }) as Promise<unknown[]>,
 
   delete: (id: string): Promise<boolean> => sendDbRequest('workflowRun:delete', { id }) as Promise<boolean>,
 };

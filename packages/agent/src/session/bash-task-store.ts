@@ -46,6 +46,8 @@ interface PersistedTask {
   exitCode?: number;
   error?: string;
   lastProgress?: BashBackgroundTask['lastProgress'];
+  autoPromoted?: boolean;
+  foregroundTimeoutMs?: number;
 }
 
 interface PersistedSnapshot {
@@ -70,6 +72,8 @@ function toPersisted(task: BashBackgroundTask): PersistedTask {
     ...(task.exitCode !== undefined ? { exitCode: task.exitCode } : {}),
     ...(task.error !== undefined ? { error: task.error } : {}),
     ...(task.lastProgress !== undefined ? { lastProgress: task.lastProgress } : {}),
+    ...(task.autoPromoted ? { autoPromoted: true } : {}),
+    ...(task.foregroundTimeoutMs !== undefined ? { foregroundTimeoutMs: task.foregroundTimeoutMs } : {}),
   };
 }
 
@@ -85,6 +89,8 @@ function fromPersisted(record: PersistedTask): BashBackgroundTask {
     ...(record.exitCode !== undefined ? { exitCode: record.exitCode } : {}),
     ...(record.error !== undefined ? { error: record.error } : {}),
     ...(record.lastProgress !== undefined ? { lastProgress: record.lastProgress } : {}),
+    ...(record.autoPromoted ? { autoPromoted: true } : {}),
+    ...(record.foregroundTimeoutMs !== undefined ? { foregroundTimeoutMs: record.foregroundTimeoutMs } : {}),
   };
 }
 
