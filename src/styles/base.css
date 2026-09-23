@@ -151,6 +151,15 @@
    * Never hard-code rgba/hex border colors or ad-hoc color-mix. */
   --border-weak: color-mix(in srgb, var(--border) 60%, transparent);
   --border-strong: color-mix(in srgb, var(--text) 22%, var(--border));
+  /* Aliases used by the automation / workflow surfaces (plan 552 + 556):
+   * they name the same two ideas the canonical tokens already carry, so
+   * pointing them at --muted / --surface keeps those files from drifting
+   * into undefined custom properties (which silently render as inherited
+   * text colour). Derived from the canonical tokens, so both themes work
+   * with this single declaration. */
+  --text-faint: var(--muted);
+  --bg-surface-1: var(--surface);
+  --bg-surface-2: var(--surface-hover);
   --border-width: 1px;
   --grid-dot: rgba(0, 0, 0, 0.06);
   /* Rakazo-style bot roster tokens (light, ported from @rakazo/ui-tokens). */
@@ -172,6 +181,13 @@
   --warning-soft: rgba(245, 158, 11, 0.2);
   --error: #ef4444;
   --error-soft: rgba(239, 68, 68, 0.1);
+  /* Node-kind accent palette (workflow graph / run cards). Light theme. */
+  --accent-emerald: #10b981;
+  --accent-teal: #14b8a6;
+  --accent-amber: #f59e0b;
+  --accent-violet: #8b5cf6;
+  --accent-rose: #f43f5e;
+  --accent-sky: #0ea5e9;
 
   /* Conductor Apple-native visual system */
   --canvas-bg: #ffffff;
@@ -285,6 +301,14 @@
   --warning-soft: rgba(245, 158, 11, 0.2);
   --error: #ef4444;
   --error-soft: rgba(239, 68, 68, 0.1);
+  /* Node-kind accent palette (workflow graph / run cards). Dark theme — one
+   * step lighter so solid avatar fills keep contrast on dark surfaces. */
+  --accent-emerald: #34d399;
+  --accent-teal: #2dd4bf;
+  --accent-amber: #fbbf24;
+  --accent-violet: #a78bfa;
+  --accent-rose: #fb7185;
+  --accent-sky: #38bdf8;
 
   /* Conductor Apple-native visual system (dark) */
   --canvas-bg: #1c1c1e;

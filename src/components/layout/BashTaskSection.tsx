@@ -62,7 +62,10 @@ function BashTaskRow({ task }: { task: BashBackgroundTaskSnapshot }) {
   const meta = (() => {
     if (task.status === 'running') {
       const elapsedMs = task.lastProgress?.elapsed ?? (Date.now() - task.startTime);
-      return `PID ${task.pid} · ${formatElapsed(elapsedMs)}`;
+      const base = `PID ${task.pid} · ${formatElapsed(elapsedMs)}`;
+      // autoPromoted: the agent stopped waiting for this command and it was
+      // handed off to the background task list (process not restarted).
+      return task.autoPromoted ? `${base} · auto-promoted` : base;
     }
     if (task.status === 'completed') {
       return `exit ${task.exitCode ?? 0} · ${formatElapsed(elapsed(task))}`;

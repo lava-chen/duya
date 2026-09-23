@@ -15,7 +15,7 @@ import {
   SettingsRow,
   SettingsToggle,
 } from "@/components/settings/ui";
-import { listMemoryIPC, listMemorySystemLogIPC, type MemorySystemLogEntry } from "@/lib/ipc-client";
+import { listMemoryIPC, listMemorySystemLogIPC, setMemoryEnabledIPC, type MemorySystemLogEntry } from "@/lib/ipc-client";
 import type { MemoryEntry } from "@/types";
 import { MemoryRagCard } from "./MemoryRagCard";
 
@@ -92,7 +92,18 @@ export function MemorySection() {
   }, [entries]);
 
   const handleToggleMemory = async (checked: boolean) => {
+    // Two-part persist: save() mirrors the value into the SQLite settings
+    // table (useSettings read-back), while setMemoryEnabledIPC writes
+    // config.toml `memory.memory_enabled` — the value the memory worker
+    // gate and the agent-process env bridges actually read — and hot
+    // pauses/resumes the running worker. Historically only the SQLite
+    // mirror was written, so the toggle never reached the worker.
     await save({ memoryEnabled: checked });
+    try {
+      await setMemoryEnabledIPC(checked);
+    } catch (err) {
+      console.error("Failed to apply memory toggle to config/worker:", err);
+    }
   };
 
   const handleImport = () => {

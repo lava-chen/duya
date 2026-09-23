@@ -135,4 +135,8 @@ export interface AppSettings {
   // ON so existing users see the new feature; toggle lives in Settings
   // → Hooks.
   showHookInvocations: boolean;
+  // When true, the context ring below the input box shows detailed stats
+  // by default and clicking the ring hides them. When false (default),
+  // the ring shows collapsed and hovering/pin expands the stats.
+  contextRingReversed?: boolean;
 }

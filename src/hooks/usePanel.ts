@@ -751,6 +751,22 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     };
   }, [openOrActivatePage]);
 
+  // Workflow run cards' ↗ lands the run in the side panel's workflow page.
+  // The page's own component also listens for this event to expand the run
+  // row, because reused panel tabs do not receive updated params.
+  useEffect(() => {
+    const handleOpenWorkflowRunPanel = (event: Event) => {
+      const runId = (event as CustomEvent<{ runId?: string }>).detail?.runId;
+      if (typeof runId !== "string" || !runId.trim()) return;
+      openOrActivatePage("workflow", { runId: runId.trim() });
+    };
+
+    window.addEventListener("duya:open-workflow-run-panel", handleOpenWorkflowRunPanel as EventListener);
+    return () => {
+      window.removeEventListener("duya:open-workflow-run-panel", handleOpenWorkflowRunPanel as EventListener);
+    };
+  }, [openOrActivatePage]);
+
   const closePanel = useCallback<PanelContextValue["closePanel"]>((tabId) => {
     const closingTab = tabsRef.current.find((tab) => tab.id === tabId);
     if (

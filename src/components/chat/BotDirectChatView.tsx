@@ -85,6 +85,7 @@ import { BotAskCard } from "./bot/BotAskCard";
 import { BotPermissionCard } from "./bot/BotPermissionCard";
 import { compactContext } from "@/lib/agent-sse-client";
 import { useContextUsageStore } from "@/stores/context-usage-store";
+import { useSettings } from "@/hooks/useSettings";
 
 export interface BotDirectSendPayload {
   text: string;
@@ -421,6 +422,7 @@ export function BotDirectChatView({
   // the header button then just stays inert instead of crashing the view.
   const panel = useOptionalPanel() ?? null;
   const openOrActivatePage = panel?.openOrActivatePage ?? null;
+  const { settings } = useSettings();
   const agentId = resolveBotAgentId(sessionId);
 
   // The bot-settings panel saves through its own contact list; this event
@@ -1260,6 +1262,7 @@ export function BotDirectChatView({
               modelName={contact?.model}
               onCompress={handleCompact}
               isCompacting={isCompacting}
+              reversed={settings.contextRingReversed ?? false}
             />
           ) : undefined
         }

@@ -31,4 +31,9 @@ export interface BashBackgroundTaskSnapshot {
   exitCode?: number;
   error?: string;
   lastProgress?: BashTaskProgress;
+  /** True when a foreground call yielded this command to the background at the
+   *  soft-yield window instead of waiting for it (process not restarted). */
+  autoPromoted?: boolean;
+  /** The foreground timeout the call was released from, when autoPromoted. */
+  foregroundTimeoutMs?: number;
 }

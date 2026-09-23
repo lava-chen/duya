@@ -23,6 +23,9 @@ interface ContextUsageRingProps {
    *   composer, ring sits next to the send button with no room to slide).
    */
   variant?: 'line' | 'popup';
+  /** When true, the stats are shown by default and clicking the ring hides
+   *  them. Hover has no effect in reversed mode. Default false. */
+  reversed?: boolean;
 }
 
 /**
@@ -42,6 +45,7 @@ export function ContextUsageRing({
   onCompress,
   isCompacting = false,
   variant = 'line',
+  reversed = false,
 }: ContextUsageRingProps) {
   const usage = useContextUsage(messages, modelName, contextWindow, sessionId, pricing);
   const [hovered, setHovered] = useState(false);
@@ -105,7 +109,7 @@ export function ContextUsageRing({
     ? (usage.ratio * 100).toFixed(1)
     : '?';
 
-  const expanded = hovered || pinned;
+  const expanded = reversed ? !pinned : (hovered || pinned);
 
   // Popup-variant rows (bot composer): label/value pairs over the same
   // live `usage` data the line variant slides out.

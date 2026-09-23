@@ -1109,6 +1109,23 @@ export async function getAllSettingsIPC(): Promise<Record<string, string>> {
   return window.electronAPI!.settingsDb.getAll() as Promise<Record<string, string>>
 }
 
+// Memory system toggle: persists config.toml `memory.memory_enabled` and
+// hot-pauses/resumes (or hot-starts) the memory worker. Use alongside
+// useSettings.save({ memoryEnabled }) which only writes the SQLite mirror.
+export async function setMemoryEnabledIPC(
+  enabled: boolean,
+): Promise<{ ok: boolean; worker?: string; error?: string }> {
+  return window.electronAPI!.settings.setMemoryEnabled(enabled)
+}
+
+export async function getMemoryEnabledIPC(): Promise<{
+  success: boolean
+  enabled: boolean
+  error?: string
+}> {
+  return window.electronAPI!.settings.getMemoryEnabled()
+}
+
 // Permission operations
 export async function createPermissionRequestIPC(data: {
   id: string

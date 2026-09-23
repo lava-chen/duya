@@ -41,7 +41,7 @@ import { MailboxPanel } from './MailboxPanel';
 import { compactContext } from '@/lib/agent-sse-client';
 import { projectMessageTranscript } from '@/lib/project-message-transcript';
 import { getProfileIdForMode } from './AgentModeSelector';
-import { AgentProfileBadge } from './AgentProfileBadge';
+import { BackgroundTasksIndicator } from './BackgroundTasksIndicator';
 import { ContextUsageRing } from './ContextUsageRing';
 import { ArrowLeftIcon } from '@/components/icons';
 import { SessionSelector } from '@/components/home/SessionSelector';
@@ -1562,9 +1562,11 @@ export function ChatView({
                     turnReview={isStreaming ? null : lastTurnReview}
                   />
 
-                  {/* Bottom toolbar - outside input box */}
+                  {/* Bottom toolbar - outside input box. Left slot hosts the
+                      live background-task chip (replaces the read-only agent
+                      profile badge); it self-hides when nothing is running. */}
                   <div className="flex items-center justify-between mt-2 px-1">
-                    <AgentProfileBadge profileId={agentProfileId} />
+                    <BackgroundTasksIndicator sessionId={sessionId} />
                   </div>
                 </div>
                 </WorkspaceComposerLayer>
@@ -1678,22 +1680,28 @@ export function ChatView({
               />
             )}
 
-            {/* Bottom toolbar - outside input box */}
+            {/* Bottom toolbar - outside input box. Left slot hosts the live
+                background-task chip (replaces the read-only agent profile
+                badge); the context usage ring stays pinned to the right edge. */}
             <div className="flex items-center justify-between mt-2 px-1">
-              {/* Left: session-bound Agent Profile Badge (no in-session switching) */}
-              <AgentProfileBadge profileId={agentProfileId} />
+              <BackgroundTasksIndicator sessionId={sessionId} />
 
-              {/* Right: Context Usage Ring */}
+              {/* `ml-auto` keeps the ring pinned to the right edge even when
+                  the chip renders nothing (it self-hides when idle, and
+                  justify-between alone would then slide the ring left). */}
               {messages.length > 0 && (
-                <ContextUsageRing
-                  messages={messages}
-                  sessionId={sessionId}
-                  modelName={sessionModel}
-                  contextWindow={capabilityContextWindow}
-                  pricing={capabilityPricing}
-                  onCompress={handleCompact}
-                  isCompacting={isCompacting}
-                />
+                <div className="ml-auto flex items-center min-w-0">
+                  <ContextUsageRing
+                    messages={messages}
+                    sessionId={sessionId}
+                    modelName={sessionModel}
+                    contextWindow={capabilityContextWindow}
+                    pricing={capabilityPricing}
+                    onCompress={handleCompact}
+                    isCompacting={isCompacting}
+                    reversed={settings.contextRingReversed ?? false}
+                  />
+                </div>
               )}
             </div>
           </div>

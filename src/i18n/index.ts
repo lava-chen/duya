@@ -25,7 +25,10 @@ export function translate(
 
   if (params) {
     for (const [k, v] of Object.entries(params)) {
-      text = text.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v));
+      // Both placeholder conventions exist in the dictionaries (`{{count}}`
+      // and `{count}`); the double-brace form must win the alternation or it
+      // degrades to `{5}`-style leftovers.
+      text = text.replace(new RegExp(`\\{\\{${k}\\}\\}|\\{${k}\\}`, 'g'), String(v));
     }
   }
 

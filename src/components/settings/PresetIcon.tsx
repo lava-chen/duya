@@ -23,10 +23,15 @@ import { GlobeIcon, ServerIcon } from "@/components/icons";
 interface PresetIconProps {
   iconKey: string;
   size?: number;
+  className?: string;
 }
 
-export function PresetIcon({ iconKey, size = 18 }: PresetIconProps) {
-  const iconProps = { size };
+// Brand marks come from @lobehub/icons: they render with currentColor, so they
+// follow the active theme. Hand-rolled simple-icons SVG was dropped because its
+// paths carry no fill (always black) and several providers shared placeholder
+// shapes that did not match the brand at all.
+export function PresetIcon({ iconKey, size = 18, className }: PresetIconProps) {
+  const iconProps = { size, className };
 
   switch (iconKey) {
     case "anthropic":
@@ -66,8 +71,8 @@ export function PresetIcon({ iconKey, size = 18 }: PresetIconProps) {
     case "qwen":
       return <Qwen {...iconProps} />;
     case "server":
-      return <ServerIcon size={size} className="text-muted-foreground" />;
+      return <ServerIcon size={size} className={className ?? "text-muted-foreground"} />;
     default:
-      return <GlobeIcon size={size} className="text-muted-foreground" />;
+      return <GlobeIcon size={size} className={className ?? "text-muted-foreground"} />;
   }
 }

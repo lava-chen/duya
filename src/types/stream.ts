@@ -119,15 +119,29 @@ export type RunStepStatus = 'running' | 'success' | 'failed';
 /**
  * One executed step of a workflow run. Carried (accumulated) on progress/done/
  * error frames so the renderer can draw a growing vertical timeline.
+ *
+ * `nodeKind` mirrors the journal annotation (worker-protocol's
+ * `RunStepNodeKind`). A step with nodeKind `'phase'` is a stage divider
+ * (`wf.phase(name)`), not work — the run card cuts stage columns at these
+ * markers and never renders them as a row of their own.
  */
+export type RunStepNodeKind = 'tool' | 'agent' | 'gui' | 'browser' | 'decision' | 'human' | 'noop' | 'phase';
+
 export interface RunStepView {
   /** Node id (matches journal.nodeId). */
   id: string;
   /** Display label (phase / action name). */
   label?: string;
   status: RunStepStatus;
+  /** Journal node-kind annotation (display only — drives icons + stage cuts). */
+  nodeKind?: RunStepNodeKind;
   startedAt?: number;
   finishedAt?: number;
+}
+
+/** Name-only artifact reference carried on digest frames (display only). */
+export interface RunArtifactNameView {
+  name: string;
 }
 
 export interface WorkflowRunSse {
@@ -146,6 +160,8 @@ export interface WorkflowRunSse {
   phases?: number;
   /** Accumulated per-step view, growing as the run executes. */
   steps?: RunStepView[];
+  /** Published artifacts (name only), accumulated as `wf.publish` lands. */
+  artifacts?: RunArtifactNameView[];
   /** Declared total steps, when the runner knows it; unknown → renderer draws "—". */
   total?: number;
   /** Present on a terminal non-success status. */

@@ -485,3 +485,42 @@ html.compact .app-content:has(.page-frame) {
 html.compact .page-frame-inner {
   padding: 1.25rem 1.25rem 2.5rem;
 }
+
+/* ─── Workflow detail page (inline styles can't express :hover / :focus) ─── */
+
+.wf-detail-run {
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.wf-detail-run:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+.wf-detail-ghost {
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.wf-detail-ghost:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.wf-detail-ghost:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Metadata editor fields (说明 / 使用时机 / 参数格). The boxed surface comes
+   from the inline style; the focus ring lives here. */
+.wf-detail-field:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.wf-detail-field:hover:not(:focus) {
+  border-color: var(--border-strong);
+}
+

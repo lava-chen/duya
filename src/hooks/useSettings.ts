@@ -67,6 +67,9 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
     // new feature is visible to existing users; toggle lives in Settings
     // → Hooks.
     showHookInvocations: true,
+    // Context ring below the input box: when true, show detailed stats by
+    // default and click to hide; when false, show collapsed and expand on hover.
+    contextRingReversed: false,
   };
 
   try {
