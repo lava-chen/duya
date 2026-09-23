@@ -102,6 +102,13 @@ export class TelegramChannelConnector {
   private offset = 0;
   private loopPromise: Promise<void> | null = null;
   private abortController: AbortController | null = null;
+  /**
+   * Consecutive poll failures in the current outage streak. The first failure
+   * logs at WARN; every further failure is demoted to DEBUG so a long network
+   * outage (e.g. Telegram unreachable without a proxy) cannot flood the
+   * console. Recovery logs once at INFO.
+   */
+  private consecutiveFailures = 0;
 
   constructor(opts: TelegramConnectorOptions) {
     this.opts = opts;
@@ -141,13 +148,38 @@ export class TelegramChannelConnector {
           this.offset = update.update_id + 1;
           await this.handleUpdate(update);
         }
+        if (this.consecutiveFailures > 0) {
+          logger.info(
+            `Telegram connector: poll recovered after ${this.consecutiveFailures} failed attempt(s)`,
+            { agentId: this.opts.agentId },
+            LogComponent.Gateway,
+          );
+          this.consecutiveFailures = 0;
+        }
       } catch (err) {
         if (!this.running || this.abortController.signal.aborted) break;
-        logger.warn(
-          `Telegram connector poll failed, backing off: ${err instanceof Error ? err.message : String(err)}`,
-          { agentId: this.opts.agentId, backoffMs },
-          LogComponent.Gateway,
-        );
+        this.consecutiveFailures++;
+        const message = err instanceof Error ? err.message : String(err);
+        const context = {
+          agentId: this.opts.agentId,
+          backoffMs,
+          failures: this.consecutiveFailures,
+        };
+        if (this.consecutiveFailures === 1) {
+          logger.warn(
+            `Telegram connector poll failed, backing off: ${message}`,
+            context,
+            LogComponent.Gateway,
+          );
+        } else {
+          // Repeated failures of the same outage: keep a file-only trace so
+          // the console is not flooded while the network is down.
+          logger.debug(
+            `Telegram connector poll still failing: ${message}`,
+            context,
+            LogComponent.Gateway,
+          );
+        }
         await this.sleep(backoffMs);
       }
       // Yield to the macrotask queue. Long polling against a stubbed or very
