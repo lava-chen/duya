@@ -498,6 +498,8 @@ export type OpenAIThinkingFormat =
   | 'reasoning-content'
   | 'qwen-style'
   | 'glm-style'
+  /** DeepSeek V4+ hybrid-thinking toggle: `thinking: {type: enabled|disabled}`. */
+  | 'deepseek-style'
   | 'think-tag-fallback';
 
 /**
@@ -516,6 +518,13 @@ export type ToolResultTransport = 'tool-result-block' | 'text-user-message' | 'n
 
 export interface ModelCompat {
   openAIThinkingFormat?: OpenAIThinkingFormat;
+  /**
+   * DeepSeek thinking mode: every assistant message in history must carry a
+   * `reasoning_content` field (empty string when that turn had no thinking),
+   * otherwise the endpoint 400s when the request also carries tools.
+   * Official-harness parity (pi-mono openai-completions detectCompat).
+   */
+  requiresReasoningContentOnAssistantMessages?: boolean;
   forceAdaptiveThinking?: boolean;
   fixedTemperature?: number;
   ignoredParameters?: string[];

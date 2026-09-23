@@ -58,7 +58,10 @@ export const glmAnthropicModels: Model<'anthropic'>[] = [
     thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high', max: 'max' },
     input: ['text', 'image'],
     contextWindow: 200000,
-    maxTokens: 8192,
+    // Same endpoint already ships 131072 on glm-5.3/5.3-flash; the coding-plan
+    // Anthropic endpoint accepts the same output ceiling.
+    maxTokens: 131072,
+    compat: { maxOutputTokens: 131072 },
     cost: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
   },
   {
@@ -71,7 +74,10 @@ export const glmAnthropicModels: Model<'anthropic'>[] = [
     thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high', max: 'max' },
     input: ['text', 'image'],
     contextWindow: 200000,
-    maxTokens: 8192,
+    // Same endpoint already ships 131072 on glm-5.3/5.3-flash; the coding-plan
+    // Anthropic endpoint accepts the same output ceiling.
+    maxTokens: 131072,
+    compat: { maxOutputTokens: 131072 },
     cost: { input: 1, output: 3.2, cacheRead: 0.2, cacheWrite: 0 },
   },
   {
@@ -84,7 +90,10 @@ export const glmAnthropicModels: Model<'anthropic'>[] = [
     thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high', max: 'max' },
     input: ['text', 'image'],
     contextWindow: 200000,
-    maxTokens: 8192,
+    // Same endpoint already ships 131072 on glm-5.3/5.3-flash; the coding-plan
+    // Anthropic endpoint accepts the same output ceiling.
+    maxTokens: 131072,
+    compat: { maxOutputTokens: 131072 },
     cost: { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0 },
   },
   {

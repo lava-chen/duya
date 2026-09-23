@@ -26,6 +26,13 @@ export const deepseekModels: Model<'openai-chat'>[] = [
     providerId: 'deepseek',
     baseUrl: 'https://api.deepseek.com/v1',
     reasoning: true,
+    // DeepSeek V4.1 hybrid thinking: explicit enabled/disabled toggle, and
+    // every assistant history message must carry reasoning_content (empty
+    // string when the turn had none) when tools are present.
+    compat: {
+      openAIThinkingFormat: 'deepseek-style',
+      requiresReasoningContentOnAssistantMessages: true,
+    },
     input: ['text', 'image'],
     contextWindow: 1048576,
     maxTokens: 384000,
@@ -43,6 +50,10 @@ export const deepseekModels: Model<'openai-chat'>[] = [
     providerId: 'deepseek',
     baseUrl: 'https://api.deepseek.com/v1',
     reasoning: true,
+    compat: {
+      openAIThinkingFormat: 'deepseek-style',
+      requiresReasoningContentOnAssistantMessages: true,
+    },
     input: ['text'],
     contextWindow: 1048576,
     maxTokens: 384000,

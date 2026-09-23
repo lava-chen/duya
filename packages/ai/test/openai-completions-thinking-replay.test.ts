@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toOpenAIMessages } from '../src/api/openai-completions.js';
+import { toOpenAIMessages, resolveOpenAIThinking, detectOpenAICompatDefaults } from '../src/api/openai-completions.js';
 import { transformMessages } from '../src/api/transform-messages.js';
 import type { Message, MessageContent, Model } from '../src/types.js';
 
@@ -129,5 +129,78 @@ describe('toOpenAIMessages thinking replay (DeepSeek reasoning_content passback)
   it('passes a no-thinking assistant message through unchanged', () => {
     const out = toOpenAIMessages([{ role: 'assistant', content: 'plain' }]);
     expect(out[0]).toEqual({ role: 'assistant', content: 'plain' });
+  });
+});
+
+describe('empty reasoning_content filler (DeepSeek thinking + tools)', () => {
+  it('adds reasoning_content:"" to assistant messages that had no thinking', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'hi' },
+      sameModelAssistant([
+        { type: 'tool_use', id: 'call_9', name: 'ls', input: {} },
+      ]),
+      { role: 'tool', tool_call_id: 'call_9', name: 'ls', content: 'ok' },
+    ];
+    const out = toOpenAIMessages(history, { requiresEmptyReasoningContent: true });
+    const assistant = asRecord(out.find((m) => m.role === 'assistant'));
+    expect(assistant.reasoning_content).toBe('');
+  });
+
+  it('does not overwrite real reasoning_content and stays off by default', () => {
+    const history: Message[] = [
+      sameModelAssistant([
+        { type: 'thinking', thinking: 'real', thinkingSignature: 'reasoning_content' },
+        { type: 'text', text: 'done' },
+      ]),
+    ];
+    const withFiller = toOpenAIMessages(history, { requiresEmptyReasoningContent: true });
+    expect(asRecord(withFiller[0]).reasoning_content).toBe('real');
+
+    // Default (no filler): a no-thinking assistant message carries no
+    // reasoning_content field at all.
+    const plain = toOpenAIMessages([{ role: 'assistant', content: 'plain' }]);
+    expect(asRecord(plain[0]).reasoning_content).toBeUndefined();
+  });
+});
+
+describe('resolveOpenAIThinking format toggles', () => {
+  const mk = (compat: Record<string, unknown>): Model<'openai-chat'> => ({
+    ...(deepseekModel as unknown as Record<string, unknown>),
+    compat,
+  } as unknown as Model<'openai-chat'>);
+
+  it('deepseek-style: effort present → thinking enabled', () => {
+    const params = resolveOpenAIThinking(mk({ openAIThinkingFormat: 'deepseek-style' }), 'high');
+    expect(params).toEqual({ thinking: { type: 'enabled' } });
+  });
+
+  it('deepseek-style: effort off → thinking disabled (explicit toggle)', () => {
+    const params = resolveOpenAIThinking(mk({ openAIThinkingFormat: 'deepseek-style' }), 'off');
+    expect(params).toEqual({ thinking: { type: 'disabled' } });
+  });
+
+  it('glm-style: enabled without budget_tokens; off → disabled', () => {
+    const on = resolveOpenAIThinking(mk({ openAIThinkingFormat: 'glm-style' }), 'high');
+    expect(on).toEqual({ thinking: { type: 'enabled' } });
+    const off = resolveOpenAIThinking(mk({ openAIThinkingFormat: 'glm-style' }), 'off');
+    expect(off).toEqual({ thinking: { type: 'disabled' } });
+  });
+
+  it('qwen-style: off → enable_thinking:false; auto → enabled with budget', () => {
+    const off = resolveOpenAIThinking(mk({ openAIThinkingFormat: 'qwen-style' }), 'off');
+    expect(off).toEqual({ enable_thinking: false });
+    const auto = resolveOpenAIThinking(mk({ openAIThinkingFormat: 'qwen-style' }), undefined);
+    expect(auto).toEqual({ enable_thinking: true, thinking_budget: expect.any(Number) });
+  });
+
+  it('detects deepseek/qwen/glm defaults from providerId when compat is absent', () => {
+    expect(detectOpenAICompatDefaults({ providerId: 'deepseek', baseUrl: 'https://api.deepseek.com/v1' }))
+      .toEqual({ openAIThinkingFormat: 'deepseek-style', requiresReasoningContentOnAssistantMessages: true });
+    expect(detectOpenAICompatDefaults({ providerId: 'qwen', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1' }))
+      .toEqual({ openAIThinkingFormat: 'qwen-style' });
+    expect(detectOpenAICompatDefaults({ providerId: 'glm', baseUrl: 'https://open.bigmodel.cn/api/paas/v4' }))
+      .toEqual({ openAIThinkingFormat: 'glm-style' });
+    expect(detectOpenAICompatDefaults({ providerId: 'openai', baseUrl: 'https://api.openai.com/v1' }))
+      .toEqual({});
   });
 });

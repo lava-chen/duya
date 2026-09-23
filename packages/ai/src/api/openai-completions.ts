@@ -16,7 +16,7 @@
 import OpenAI from 'openai';
 import type {
   AIClient, AIClientOptions, AssistantMessage, AssistantMessageEvent,
-  Message, Model, SSEEvent,
+  Message, Model, ModelCompat, SSEEvent,
   TextContent, ThinkingContent, ToolUseContent,
 } from '../types.js';
 import { transformMessages } from './transform-messages.js';
@@ -111,6 +111,39 @@ function cachedTokensFrom(usage: unknown): number | undefined {
 type ToolUseWithRaw = ToolUseContent & { _rawInput?: string };
 
 // =============================================================================
+// Compat resolution (defaults layer, official-harness parity)
+// =============================================================================
+
+/**
+ * Per-provider compat defaults detected from providerId/baseUrl, following
+ * pi-mono's detectCompat pattern: a model catalog entry only needs explicit
+ * `compat` when it deviates from its provider's norm, and user-configured
+ * custom endpoints get sane behavior with zero configuration.
+ *
+ * Explicit `model.compat` fields always win over these defaults.
+ */
+export function detectOpenAICompatDefaults(
+  model: Pick<Model<'openai-chat'>, 'providerId' | 'baseUrl'>,
+): Partial<Pick<ModelCompat, 'openAIThinkingFormat' | 'requiresReasoningContentOnAssistantMessages'>> {
+  const provider = model.providerId;
+  const url = model.baseUrl ?? '';
+
+  if (provider === 'deepseek' || url.includes('deepseek.com')) {
+    return {
+      openAIThinkingFormat: 'deepseek-style',
+      requiresReasoningContentOnAssistantMessages: true,
+    };
+  }
+  if (provider === 'qwen' || url.includes('dashscope.aliyuncs.com')) {
+    return { openAIThinkingFormat: 'qwen-style' };
+  }
+  if (provider === 'glm' || url.includes('bigmodel.cn')) {
+    return { openAIThinkingFormat: 'glm-style' };
+  }
+  return {};
+}
+
+// =============================================================================
 // Thinking resolver
 // =============================================================================
 
@@ -119,13 +152,19 @@ type ToolUseWithRaw = ToolUseContent & { _rawInput?: string };
  * user-requested effort level.
  *
  * - Non-reasoning models → undefined.
- * - effort 'off' → undefined.
+ * - effort 'off': hybrid-thinking formats (deepseek-style / glm-style /
+ *   qwen-style) send an EXPLICIT disable toggle so the model actually stops
+ *   thinking; other formats → undefined (official-harness parity: Z.ai,
+ *   DeepSeek and Qwen hybrid models default to thinking ON when the toggle
+ *   is absent).
  * - effort undefined (auto) → treated as 'medium' for reasoning models.
  * - model.compat?.openAIThinkingFormat selects the wire shape:
  *   - openai-standard:   reasoning_effort parameter (OpenAI o1/o3).
  *   - reasoning-content: no param; reasoning arrives in reasoning_content.
- *   - qwen-style:        enable_thinking + thinking_budget.
- *   - glm-style:         thinking { type, budget_tokens }.
+ *   - qwen-style:        enable_thinking (+ thinking_budget when enabled).
+ *   - glm-style:         thinking { type: enabled|disabled } (Zhipu API only
+ *                        documents `type`; no budget_tokens).
+ *   - deepseek-style:    thinking { type: enabled|disabled }.
  *   - think-tag-fallback: no param; reasoning arrives in <think> tags.
  */
 export function resolveOpenAIThinking(
@@ -133,12 +172,25 @@ export function resolveOpenAIThinking(
   effort?: string,
 ): Record<string, unknown> | undefined {
   if (!model.reasoning) return undefined;
-  if (effort === 'off') return undefined;
+
+  const compat = { ...detectOpenAICompatDefaults(model), ...model.compat };
+  const format = compat.openAIThinkingFormat;
+  if (!format) return undefined;
+
+  // effort 'off' — only formats with an explicit toggle can honor it.
+  if (effort === 'off') {
+    switch (format) {
+      case 'deepseek-style':
+      case 'glm-style':
+        return { thinking: { type: 'disabled' } };
+      case 'qwen-style':
+        return { enable_thinking: false };
+      default:
+        return undefined;
+    }
+  }
 
   const effectiveEffort = effort ?? 'medium';
-
-  const format = model.compat?.openAIThinkingFormat;
-  if (!format) return undefined;
 
   // Map effort to intensity strings understood by different providers.
   const EFFORT_MAP: Record<string, string> = {
@@ -164,8 +216,11 @@ export function resolveOpenAIThinking(
       // Qwen: enable_thinking parameter
       return { enable_thinking: true, thinking_budget: getBudgetForEffort(effectiveEffort) };
     case 'glm-style':
-      // GLM: thinking parameter
-      return { thinking: { type: 'enabled', budget_tokens: getBudgetForEffort(effectiveEffort) } };
+      // GLM/Zhipu: thinking toggle only — the API does not accept budget_tokens.
+      return { thinking: { type: 'enabled' } };
+    case 'deepseek-style':
+      // DeepSeek V4+ hybrid thinking: enabled/disabled toggle.
+      return { thinking: { type: 'enabled' } };
     case 'think-tag-fallback':
       // No special parameter, thinking comes in <think> tags in content
       return undefined;
@@ -313,10 +368,16 @@ type AssistantWireMessage = OpenAI.Chat.ChatCompletionAssistantMessageParam &
  * ignored by endpoints that don't accept the field. Cross-model thinking has
  * already been downgraded to plain text by transformMessages, and 'think-tag'
  * thinking (extracted from content tags) stays dropped.
+ *
+ * When `opts.requiresEmptyReasoningContent` is set (DeepSeek), assistant
+ * messages that carried no thinking get `reasoning_content: ''` so the
+ * field is always present — the endpoint rejects thinking-mode requests
+ * with tools otherwise (official-harness parity).
  */
 // Exported for tests (same seam rationale as parseAnthropicEvent).
 export function toOpenAIMessages(
   messages: Message[],
+  opts?: { requiresEmptyReasoningContent?: boolean },
 ): OpenAI.Chat.ChatCompletionMessageParam[] {
   // Repair orphaned tool_use/tool_result pairs before conversion so the
   // request never carries a tool call without its result (provider 400).
@@ -421,6 +482,14 @@ export function toOpenAIMessages(
         }
         if (thinkingReplay.reasoning_text !== undefined) {
           assistantMsg.reasoning_text = thinkingReplay.reasoning_text;
+        }
+        // DeepSeek thinking mode: the reasoning_content field must be present
+        // on every assistant message (empty string when the turn had none).
+        if (
+          opts?.requiresEmptyReasoningContent &&
+          assistantMsg.reasoning_content === undefined
+        ) {
+          assistantMsg.reasoning_content = '';
         }
         result.push(assistantMsg);
       }
@@ -670,7 +739,11 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
       const transformed = transformMessages(messages, model);
 
       // 3. Convert to OpenAI format.
-      const openaiMessages = toOpenAIMessages(transformed);
+      const resolvedCompat = { ...detectOpenAICompatDefaults(model), ...model.compat };
+      const openaiMessages = toOpenAIMessages(transformed, {
+        requiresEmptyReasoningContent:
+          !!resolvedCompat.requiresReasoningContentOnAssistantMessages,
+      });
 
       // Add system message if provided.
       if (chatOptions?.systemPrompt) {
@@ -684,7 +757,7 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
       const thinkingParams = resolveOpenAIThinking(model, effectiveEffort);
 
       // 5. Setup think-tag parser if format requires it.
-      const useThinkTagParser = model.compat?.openAIThinkingFormat === 'think-tag-fallback';
+      const useThinkTagParser = resolvedCompat.openAIThinkingFormat === 'think-tag-fallback';
       const thinkParser = useThinkTagParser ? new ThinkTagParser() : null;
 
       // 6. Build request params.
