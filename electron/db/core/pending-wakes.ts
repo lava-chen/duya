@@ -111,6 +111,16 @@ export class PendingWakeStore {
       )
   }
 
+  /** Fetch one marker by key, or null when absent. */
+  get(kind: PendingWakeKind, workId: string): PendingWakeRow | null {
+    const row = this.db
+      .prepare(
+        'SELECT kind, work_id, agent_id, lane, marked_at_ms, title, quiet_origin_json FROM pending_wakes WHERE kind = ? AND work_id = ?',
+      )
+      .get(kind, workId) as unknown as PendingWakeRow | undefined
+    return row ?? null
+  }
+
   /** Remove a consumed wake. Returns true when a row was actually deleted. */
   clear(kind: PendingWakeKind, workId: string): boolean {
     const result = this.db

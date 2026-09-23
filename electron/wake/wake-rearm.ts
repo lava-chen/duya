@@ -16,16 +16,18 @@
  */
 
 import { getCoreStores } from '../db/core-connection'
-import { enqueueWakeItemForSession } from './wake-dispatcher'
+import { enqueueInboundWake, enqueueWakeItemForSession, notifySessionIdle } from './wake-dispatcher'
+import { loadPersistedInboundEnvelopes, restoreInboundEnvelopes } from './channels'
 import type { WakeItem } from '../../packages/agent/src/wake/types'
 import { getLogger, LogComponent } from '../logging/logger'
+
+const logger = getLogger()
 
 /**
  * Re-arm all surviving pending wakes after a restart.
  * Idempotent — safe to call more than once.
  */
 export async function rearmPendingWakes(): Promise<void> {
-  const logger = getLogger()
   const { wakes } = getCoreStores()
 
   // Step 1: prune stale entries (48 h horizon).
@@ -45,6 +47,15 @@ export async function rearmPendingWakes(): Promise<void> {
 
   for (const row of rows) {
     try {
+      // connector.inbound rows carry the session's undelivered envelopes in
+      // quiet_origin_json — restore them into the in-memory envelope store
+      // and re-enqueue one wake per platform:chat group. Handled here rather
+      // than in pendingWakeRowToWakeItem because one row fans out to N items.
+      if (row.kind === 'connector.inbound') {
+        rearmConnectorInboundRow(row)
+        continue
+      }
+
       const item = pendingWakeRowToWakeItem(row)
       if (!item) {
         logger.debug('Pending wakes rearm: unsupported kind, skipping', {
@@ -70,6 +81,44 @@ export async function rearmPendingWakes(): Promise<void> {
       }, LogComponent.Automation)
     }
   }
+}
+
+/**
+ * Restore a durable connector.inbound row (workId = sessionId). The
+ * envelopes are re-seeded into the channel system's in-memory store and one
+ * `connector.inbound` wake is re-enqueued per platform:chat group — the
+ * dispatcher's dedupe collapses repeats, and the drain's revive replays the
+ * full `[inbound]` prompt (grok `wakeForInbound` restart parity).
+ */
+function rearmConnectorInboundRow(row: ReturnType<typeof getCoreStores>['wakes']['listAll'][number]): void {
+  const sessionId = row.work_id
+  const envelopes = loadPersistedInboundEnvelopes(row)
+  if (envelopes.length === 0) {
+    logger.debug('Pending wakes rearm: connector.inbound row has no envelopes; skipping', {
+      workId: sessionId,
+    }, LogComponent.Automation)
+    return
+  }
+
+  restoreInboundEnvelopes(sessionId, envelopes)
+
+  const groups = new Map<string, { platform: string; chat: string; text: string }>()
+  for (const envelope of envelopes) {
+    const key = `${envelope.address.platform}:${envelope.address.chat}`
+    if (!groups.has(key)) {
+      groups.set(key, { platform: envelope.address.platform, chat: envelope.address.chat, text: envelope.text })
+    }
+  }
+  for (const [key, group] of groups) {
+    const envelopeId = `${sessionId}:${group.platform}:${group.chat}`
+    const outcome = enqueueInboundWake(sessionId, { envelopeId, text: group.text })
+    logger.debug('Pending wakes rearm: re-enqueued connector.inbound', {
+      sessionId,
+      envelopeId: key,
+      outcome,
+    }, LogComponent.Automation)
+  }
+  notifySessionIdle(sessionId)
 }
 
 /**
@@ -114,16 +163,6 @@ function pendingWakeRowToWakeItem(row: ReturnType<typeof getCoreStores>['wakes']
           // fires are transient and never persisted as pending wakes.
           trigger: 'schedule',
         },
-      }
-
-    case 'connector.inbound':
-      return {
-        id: `inbound:${row.work_id}`,
-        source: 'connector.inbound',
-        lane: row.lane as WakeItem['lane'],
-        agentId: row.agent_id,
-        enqueuedAtMs: now,
-        payload: { kind: 'inbound', envelopeId: row.work_id },
       }
 
     case 'broadcast':

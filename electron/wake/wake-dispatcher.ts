@@ -504,6 +504,11 @@ function clearPersistedItem(item: WakeItem): void {
       wakes.clear('user.message', item.payload.messageId ?? item.id)
     } else if (item.source === 'agent.dm' && item.payload.kind === 'dm') {
       wakes.clear('agent.dm', item.payload.clientMsgId)
+    } else if (item.source === 'connector.inbound') {
+      // The session's durable envelope row (workId = sessionId) rides the
+      // wake item — the revive consumes ALL stored envelopes, so the row is
+      // cleared at dequeue like every other self-contained payload.
+      wakes.clear('connector.inbound', item.agentId)
     }
   } catch {
     // Best-effort; the stale horizon prunes orphans.

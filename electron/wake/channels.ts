@@ -38,6 +38,7 @@ import { runWakePromptInExistingSession } from './wake-run';
 import { parseChannelAddress } from '../../packages/agent/src/channels/types';
 import type { ChannelAddress, ChannelInboundEnvelope, ChannelOutboundMessage, DeliveryFailure } from '../../packages/agent/src/channels/types';
 import { buildChannelInboundWakePrompt, buildChannelDeliveryFailureWakePrompt, CHANNEL_INBOUND_WAKE_CUE, CHANNEL_DELIVERY_FAILED_WAKE_CUE } from '../../packages/agent/src/channels/prompts';
+import { getCoreStores } from '../db/core-connection';
 import { getLogger, LogComponent } from '../logging/logger';
 import { openChannelStore } from '../channels/channel-store';
 import { getConnectorSecretStore } from '../channels/connector-secret-store';
@@ -50,9 +51,72 @@ import { getConnectorSecretStore } from '../channels/connector-secret-store';
  * In-memory storage for inbound envelopes, keyed by sessionId.
  * Used by reviveForInbound to reconstruct the prompt.
  *
- * TODO: Replace with pending_wakes persistence (Phase 1 P1.3).
+ * Durability: every envelope is also appended to the session's durable
+ * `connector.inbound` pending-wake row (persistInboundEnvelope) and the row
+ * is cleared when the wake item is consumed, so a restart re-seeds this
+ * store from wake-rearm instead of silently dropping the messages.
  */
 export const inboundEnvelopeStore = new Map<string, ChannelInboundEnvelope[]>();
+
+// =============================================================================
+// Durable envelope persistence (grok-gap: the store above is memory-only, so
+// a restart dropped undelivered channel messages even though the durable
+// connector.inbound wake marker survived — the marker now carries the
+// envelopes themselves, per session).
+// =============================================================================
+
+/** Pending-wake row workId for connector.inbound — one row per session. */
+const INBOUND_WAKE_KIND = 'connector.inbound' as const;
+
+/**
+ * Append an inbound envelope to the session's durable pending-wake row so a
+ * restart can restore it into {@link inboundEnvelopeStore} (see wake-rearm).
+ * Best-effort: failures log and keep the in-memory path authoritative.
+ */
+function persistInboundEnvelope(sessionId: string, envelope: ChannelInboundEnvelope): void {
+  try {
+    const { wakes } = getCoreStores();
+    const envelopes = loadPersistedInboundEnvelopes(wakes.get(INBOUND_WAKE_KIND, sessionId));
+    envelopes.push(envelope);
+    wakes.persist({
+      kind: INBOUND_WAKE_KIND,
+      workId: sessionId,
+      agentId: sessionId,
+      lane: 'background',
+      title: envelope.text.slice(0, 200),
+      quietOriginJson: JSON.stringify({ envelopes }),
+    });
+  } catch (err) {
+    logger.warn('wakeForInbound: durable envelope persist failed', {
+      sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    }, LogComponent.Automation);
+  }
+}
+
+/** Parse the envelope list out of a connector.inbound row (defensively). */
+export function loadPersistedInboundEnvelopes(
+  row: { quietOriginJson?: string | null; quiet_origin_json?: string | null } | null | undefined,
+): ChannelInboundEnvelope[] {
+  const raw = row ? (row.quietOriginJson ?? row.quiet_origin_json ?? null) : null;
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as { envelopes?: unknown };
+    return Array.isArray(parsed?.envelopes) ? (parsed.envelopes as ChannelInboundEnvelope[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Re-seed the in-memory envelope store from the durable row (restart rearm).
+ * Appends so envelopes that arrived between the persist and the rearm are
+ * never lost.
+ */
+export function restoreInboundEnvelopes(sessionId: string, envelopes: ChannelInboundEnvelope[]): void {
+  const existing = inboundEnvelopeStore.get(sessionId) ?? [];
+  inboundEnvelopeStore.set(sessionId, [...existing, ...envelopes]);
+}
 
 // =============================================================================
 // Delivery failure queue
@@ -109,6 +173,10 @@ export function wakeForInbound(
     inboundEnvelopeStore.set(sessionId, []);
   }
   inboundEnvelopeStore.get(sessionId)!.push(envelope);
+
+  // Durably record the envelope so a restart can re-wake with the full
+  // payload (the in-memory store above dies with the process).
+  persistInboundEnvelope(sessionId, envelope);
 
   // Enqueue the connector.inbound wake
   const envelopeId = `${agentId}:${envelope.address.platform}:${envelope.address.chat}`;
@@ -208,6 +276,9 @@ export class DefaultChannelBackgroundWakes implements ChannelBackgroundWakes {
       inboundEnvelopeStore.set(key, []);
     }
     inboundEnvelopeStore.get(key)!.push(envelope);
+
+    // Durably record the envelope (same contract as the module-level path).
+    persistInboundEnvelope(sessionId, envelope);
 
     // Enqueue the inbound wake with the dispatcher
     const result = enqueueInboundWake(sessionId, {
