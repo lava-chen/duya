@@ -2,7 +2,10 @@
 import { parseFeishuContent, isBotMentioned } from './message-utils.js';
 
 export function isGroupChat(chatType: string): boolean {
-  return chatType === 'group' || chatType === 'open_chat' || chatType === 'p2p' || chatType.startsWith('group');
+  // `p2p` is Feishu's DIRECT MESSAGE chat type — it must NOT be treated as a
+  // group, otherwise every DM is mention-gated and silently dropped
+  // (regression introduced in a44d41b6).
+  return chatType === 'group' || chatType === 'open_chat' || chatType.startsWith('group');
 }
 
 export function isPrivateChat(chatType: string): boolean {

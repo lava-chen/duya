@@ -52,6 +52,8 @@ import type {
   FeishuAppAccessTokenResponse,
   FeishuSendMessageResponse,
   FeishuErrorResponse,
+  FeishuUploadImageResponse,
+  FeishuUploadFileResponse,
   FeishuCardAction,
   FeishuUserInfo,
   FeishuAdapterOptions,
@@ -81,6 +83,25 @@ const DEFAULT_MAX_CONCURRENT_RUNS = 4;
 const MAX_INBOUND_RESOURCE_BYTES = 25 * 1024 * 1024;
 /** Temp cache for inbound media downloads (mirrors telegram/weixin adapters). */
 const MEDIA_CACHE_DIR = path.join(os.tmpdir(), 'duya-feishu-media');
+/** Outbound upload limits per the im/v1/images and im/v1/files APIs. */
+const MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_UPLOAD_FILE_BYTES = 30 * 1024 * 1024;
+
+/**
+ * Map a file extension to the file_type accepted by POST /im/v1/files.
+ * Unknown extensions fall back to 'stream' (generic binary).
+ */
+function feishuFileTypeFromExt(ext: string): 'opus' | 'mp4' | 'pdf' | 'doc' | 'xls' | 'ppt' | 'stream' {
+  switch (ext.toLowerCase().replace(/^\./, '')) {
+    case 'opus': return 'opus';
+    case 'mp4': return 'mp4';
+    case 'pdf': return 'pdf';
+    case 'doc': case 'docx': return 'doc';
+    case 'xls': case 'xlsx': return 'xls';
+    case 'ppt': case 'pptx': return 'ppt';
+    default: return 'stream';
+  }
+}
 
 /**
  * Map a resource response content-type to a file extension ('' when unknown).
@@ -412,7 +433,9 @@ export class FeishuChannel extends EventEmitter {
           await this._options.onBotRemoved?.(chatId, sender?.sender_id?.open_id || '');
           break;
       }
-    } catch {}
+    } catch (err) {
+      console.warn(`[Feishu] Event handling failed for ${eventType}: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   private async _handleMessageReceive(
@@ -424,24 +447,38 @@ export class FeishuChannel extends EventEmitter {
     if (!message || !chatId) return;
 
     const userId = sender ? this._getUserId(sender) : '';
-    const msgType = (message.msg_type || 'unknown') as FeishuMsgType;
+    const msgType = (message.message_type || message.msg_type || 'unknown') as FeishuMsgType;
     const threadId = message.thread_id || message.root_id || message.parent_id;
     const content = parseFeishuContent(message.content);
 
     if (!userId) return;
+
+    // Terminal-visible trace (console prints regardless of the app logger's
+    // WARN console level): proves the event pipeline itself works. If this
+    // line never appears, events are not reaching the app (e.g. the open
+    // platform app has not subscribed to im.message.receive_v1, or the
+    // process predates a gateway code change — electron:dev builds the main
+    // bundle once and does not watch it).
+    console.log(`[Feishu] Message received: type=${msgType}, chatType=${message.chat_type || 'unknown'}`);
 
     const userAllowed = checkUserAllowed(userId, this._config.allowedUsers);
     const isGroup = isGroupChat(message.chat_type || '');
     const isFree = isFreeResponseChat(chatId, this._config.freeResponseChatIds);
 
     if (isGroup) {
-      if (!userAllowed && this._config.allowedUsers && this._config.allowedUsers.length > 0) return;
+      if (!userAllowed && this._config.allowedUsers && this._config.allowedUsers.length > 0) {
+        console.warn(`[Feishu] Group message ignored: sender ${userId} not in allowedUsers (chat=${chatId})`);
+        return;
+      }
       if (!isFree) {
         const botOpenId = this._botInfo?.open_id || '';
         const botMentioned = content
           ? isBotMentioned(botOpenId, content, message.mentions)
           : checkMentionRequirement(message.content, botOpenId);
-        if (!botMentioned) return;
+        if (!botMentioned) {
+          console.warn(`[Feishu] Group message ignored: bot not mentioned (chat=${chatId})`);
+          return;
+        }
       }
     } else {
       if (!userAllowed && this._config.allowedUsers && this._config.allowedUsers.length > 0) {
@@ -495,6 +532,16 @@ export class FeishuChannel extends EventEmitter {
           const localPath = await this.downloadMessageResource(message.message_id, audioKey, 'file', '.ogg');
           await this._options.onAudioMessage(chatId, userId, audioKey, content?.duration || 0, message.message_id, localPath ?? undefined);
         }
+        break;
+      }
+      case 'media':
+      case 'sticker':
+      case 'share_chat':
+      case 'share_user': {
+        // No handling path yet (video/sticker/group-share callbacks do not
+        // exist on the adapter options). Log explicitly instead of falling
+        // through the switch silently (todo #3).
+        console.warn(`[Feishu] Inbound message type "${msgType}" is not supported yet, dropped (chat=${chatId}, msg=${message.message_id})`);
         break;
       }
     }
@@ -573,16 +620,12 @@ export class FeishuChannel extends EventEmitter {
 
   async setProcessingStatus(type: 'start' | 'done', messageId: string, chatId: string): Promise<void> {
     if (!type || !messageId || !chatId) return;
+    // Feishu has no typing/processing indicator API. This used to call the
+    // urgent_app (bot notice) API here — a strong-interruption notification
+    // with a daily quota, clearly not a processing indicator — so the call
+    // was removed (todo #2). Processing state is only forwarded to the
+    // onProcessingStatus callback now.
     try {
-      const token = await this._getTenantAccessToken();
-      const base = this._getApiBase();
-      if (type === 'start') {
-        await fetch(`${base}/open-apis/im/v1/messages/${messageId}/urgent_app`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ urgent_app: 'bot_notice' }),
-        });
-      }
       await this._options.onProcessingStatus?.(type, messageId, chatId);
     } catch {}
   }
@@ -616,21 +659,29 @@ export class FeishuChannel extends EventEmitter {
             const fileName = reply.filePath.split(/[\\/]/).pop() || reply.filePath;
             let msgId = '';
             switch (reply.mediaType) {
-              case 'photo':
-                msgId = await this.sendImageMessage(chatId, reply.filePath, replyTo);
+              case 'photo': {
+                // Feishu requires multipart upload first; the send API takes
+                // an image_key, never a local path (todo #1).
+                const imageKey = await this.uploadImage(reply.filePath);
+                msgId = await this.sendImageMessage(chatId, imageKey, replyTo);
                 break;
-              case 'document':
-                msgId = await this.sendFileMessage(chatId, reply.filePath, fileName, replyTo);
+              }
+              case 'voice': {
+                // Audio messages require an opus file; non-opus uploads are
+                // rejected by the send API and fall back to text below.
+                const audioKey = await this.uploadFile(reply.filePath, fileName);
+                msgId = await this.sendAudioMessage(chatId, audioKey, 0, replyTo);
                 break;
-              case 'voice':
-                msgId = await this.sendAudioMessage(chatId, reply.filePath, 0, replyTo);
-                break;
+              }
               case 'video':
-                // No sendVideoMessage helper; fall back to file message
-                msgId = await this.sendFileMessage(chatId, reply.filePath, fileName, replyTo);
+              case 'document':
+              default: {
+                // No native video message support here; videos go out as
+                // generic files (same as before, now with a real upload).
+                const fileKey = await this.uploadFile(reply.filePath, fileName);
+                msgId = await this.sendFileMessage(chatId, fileKey, fileName, replyTo);
                 break;
-              default:
-                msgId = await this.sendFileMessage(chatId, reply.filePath, fileName, replyTo);
+              }
             }
             return { ok: true, platformMsgId: msgId };
           } catch (err) {
@@ -948,6 +999,69 @@ export class FeishuChannel extends EventEmitter {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Upload a local image and return an `image_key` usable by the
+   * `msg_type: 'image'` send API (outbound media, todo #1).
+   *
+   * Endpoint: POST /im/v1/images (multipart: image_type=message + image).
+   * Images are capped at 10 MB per the Feishu API.
+   */
+  async uploadImage(filePath: string): Promise<string> {
+    const buffer = fs.readFileSync(filePath);
+    if (buffer.length === 0) throw new Error(`feishu image upload: empty file ${filePath}`);
+    if (buffer.length > MAX_UPLOAD_IMAGE_BYTES) {
+      throw new Error(`feishu image upload: ${filePath} exceeds the 10 MB image limit`);
+    }
+    const token = await this._getTenantAccessToken();
+    const base = this._getApiBase();
+    const form = new FormData();
+    form.append('image_type', 'message');
+    form.append('image', new Blob([buffer]), path.basename(filePath));
+    const res = await fetch(`${base}/open-apis/im/v1/images`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    });
+    const data = await res.json() as FeishuUploadImageResponse;
+    if (data.code !== 0 || !data.data?.image_key) {
+      throw new Error(`feishu image upload failed: code=${data.code} msg=${data.msg}`);
+    }
+    return data.data.image_key;
+  }
+
+  /**
+   * Upload a local file and return a `file_key` usable by the
+   * `msg_type: 'file' / 'audio'` send APIs (outbound media, todo #1).
+   *
+   * Endpoint: POST /im/v1/files (multipart: file_type, file_name, file).
+   * file_type is derived from the extension ('stream' fallback); files are
+   * capped at 30 MB per the Feishu API.
+   */
+  async uploadFile(filePath: string, fileName?: string): Promise<string> {
+    const buffer = fs.readFileSync(filePath);
+    if (buffer.length === 0) throw new Error(`feishu file upload: empty file ${filePath}`);
+    if (buffer.length > MAX_UPLOAD_FILE_BYTES) {
+      throw new Error(`feishu file upload: ${filePath} exceeds the 30 MB file limit`);
+    }
+    const token = await this._getTenantAccessToken();
+    const base = this._getApiBase();
+    const name = fileName || path.basename(filePath);
+    const form = new FormData();
+    form.append('file_type', feishuFileTypeFromExt(path.extname(name)));
+    form.append('file_name', name);
+    form.append('file', new Blob([buffer]), name);
+    const res = await fetch(`${base}/open-apis/im/v1/files`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    });
+    const data = await res.json() as FeishuUploadFileResponse;
+    if (data.code !== 0 || !data.data?.file_key) {
+      throw new Error(`feishu file upload failed: code=${data.code} msg=${data.msg}`);
+    }
+    return data.data.file_key;
   }
 
   private async _sendMediaMessage(

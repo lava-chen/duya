@@ -61,6 +61,9 @@ export interface FeishuMessage {
   parent_id?: string;
   thread_id?: string;
   msg_type: FeishuMsgType;
+  // v2 event payloads (im.message.receive_v1) use `message_type`; the field
+  // above is the v1 name kept for the send-message API and legacy payloads.
+  message_type?: FeishuMsgType;
   content: string;
   create_time?: string;
   update_time?: string;
