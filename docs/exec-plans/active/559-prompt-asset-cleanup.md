@@ -137,7 +137,12 @@ with their `.hbs` paths.
   `packages/agent/bundle/assets/dynamic/` and the new bot /
   roster / automations hbs present in `packages/agent/bundle/assets/bot/`.
 
-## Deferred to plan 560
+## Deferred（编号待定 — 原写 "plan 560" 已被占用）
+
+> 抢号说明：下面这条重构当初被 defer 给 "plan 560"，但
+> `docs/exec-plans/active/560-workflow-independent-runtime.md`
+> （Workflow 独立 Runtime）先占了这个编号。本重构与它无关，
+> 需在下次触碰 `packages/agent/src/prompts/` 时重新指派编号。
 
 - Directory-naming restructure: `basicPrompt.ts` →
   `basicPromptLoader.ts`, flatten `bot/memory/`, rename

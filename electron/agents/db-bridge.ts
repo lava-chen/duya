@@ -2673,6 +2673,15 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         dedupKey: (p.dedupKey as string | undefined) ?? null,
         params: (p.params as Record<string, unknown> | undefined) ?? {},
         retryOf: (p.retryOf as string | undefined) ?? null,
+        // Plan 560: run anchoring always crosses the bridge explicitly. The
+        // session-anchored runner sends 'session' — relying on the column
+        // default would label it 'library' and corrupt the origin filter.
+        ...(p.origin !== undefined
+          ? { origin: p.origin as 'library' | 'session' | 'agent' | 'cron' }
+          : {}),
+        scope: (p.scope as 'project' | 'global' | null | undefined) ?? null,
+        projectDir: (p.projectDir as string | null | undefined) ?? null,
+        parentSessionId: (p.parentSessionId as string | null | undefined) ?? null,
       });
     }
     case 'workflowRun:get': {
@@ -2688,6 +2697,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       return workflowRuns.listRuns({
         status: p.status as WorkflowRunStatus | undefined,
         workflowName: p.workflowName as string | undefined,
+        origin: p.origin as 'library' | 'session' | 'agent' | 'cron' | undefined,
         limit: p.limit as number | undefined,
         offset: p.offset as number | undefined,
       });
@@ -2699,6 +2709,36 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         p.status as WorkflowRunStatus,
         p.pauseMessage as string | null | undefined,
       );
+    }
+    case 'workflowRun:finish': {
+      // Plan 560 terminal write. Optional keys are only forwarded when the
+      // caller actually sent them, so a partial outcome never clobbers an
+      // earlier summary / artifact list.
+      const { workflowRuns } = getCoreStores();
+      return workflowRuns.finishRun(p.id as string, {
+        status: p.status as WorkflowRunStatus,
+        ...(p.summary !== undefined ? { summary: p.summary as string | null } : {}),
+        ...(p.artifacts !== undefined
+          ? {
+              artifacts: p.artifacts as Array<{
+                id: string;
+                name: string;
+                contentType: string;
+                bytes: number;
+                relPath: string;
+              }>,
+            }
+          : {}),
+        ...(p.spentTokens !== undefined ? { spentTokens: p.spentTokens as number | null } : {}),
+      });
+    }
+    case 'workflowRun:latestEventSeq': {
+      const { workflowRuns } = getCoreStores();
+      return workflowRuns.latestEventSeq(p.runId as string);
+    }
+    case 'workflowRun:listEvents': {
+      const { workflowRuns } = getCoreStores();
+      return workflowRuns.listEvents(p.runId as string, (p.afterSeq as number | undefined) ?? -1);
     }
     case 'workflowRun:setWaitTill': {
       const { workflowRuns } = getCoreStores();

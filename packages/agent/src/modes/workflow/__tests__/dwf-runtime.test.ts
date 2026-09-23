@@ -215,6 +215,99 @@ describe('dwf runtime — wf primitives', () => {
     expect(result).toEqual({ out: null });
   });
 
+  // ─── wf.browser（plan 564）───
+
+  function fakePortsWithBrowser(overrides: Partial<DwfHostPorts> = {}): DwfHostPorts & {
+    browserCalls: string[];
+  } {
+    const browserCalls: string[] = [];
+    return {
+      browserCalls,
+      async runBrowser(spec) {
+        browserCalls.push(spec.start_url ?? spec.steps[0]?.do ?? 'browser');
+        return {
+          status: 'succeeded',
+          output: { url: spec.start_url, steps: spec.steps.length },
+        };
+      },
+      ...overrides,
+    } as DwfHostPorts & { browserCalls: string[] };
+  }
+
+  it('wf.browser resolves the outcome output and journals nodeKind browser', async () => {
+    const sink = new MemoryJournalSink();
+    const script = `
+      export default async function (wf) {
+        return await wf.browser({
+          start_url: "https://example.com",
+          steps: [{ do: "click", selector: "#login" }],
+        });
+      }`;
+    const ports = fakePortsWithBrowser();
+    const result = await runDwfScript(script, ports, { runId: 'r1', journal: new Journal(sink) });
+    expect(result).toMatchObject({ url: 'https://example.com', steps: 1 });
+    const record = sink.readAll().find((r) => r.nodeKind === 'browser');
+    expect(record?.status).toBe('succeeded');
+    expect(record?.action).toBe('browser:https://example.com');
+    // inputSummary 是卡片步骤行那一行（§6.1 display-only）：start_url 前缀 + 首步。
+    expect(record?.inputSummary).toBe('https://example.com: click #login');
+  });
+
+  it('wf.browser resume hits the journal cache — runBrowser is not called twice', async () => {
+    const sink = new MemoryJournalSink();
+    const script = `
+      export default async function (wf) {
+        return await wf.browser({ steps: [{ do: "click", selector: "#a" }] });
+      }`;
+    await runDwfScript(script, fakePortsWithBrowser(), { runId: 'r1', journal: new Journal(sink) });
+    const ports2 = fakePortsWithBrowser();
+    await runDwfScript(script, ports2, { runId: 'r1', journal: new Journal(sink), resuming: true });
+    expect(ports2.browserCalls).toHaveLength(0);
+  });
+
+  it('wf.browser failure throws with the outcome error; skipped resolves null', async () => {
+    const sink = new MemoryJournalSink();
+    const script = `
+      export default async function (wf) {
+        try {
+          await wf.browser({ steps: [{ do: "click", selector: "#a" }] });
+          return 'no-throw';
+        } catch (e) {
+          return { threw: e.message };
+        }
+      }`;
+    const ports = fakePortsWithBrowser({
+      async runBrowser() {
+        return { status: 'failed', error: 'browser step 1 (click #a) failed: boom' };
+      },
+    });
+    const result = (await runDwfScript(script, ports, { runId: 'r1', journal: new Journal(sink) })) as Record<string, unknown>;
+    expect(result.threw).toBe('browser step 1 (click #a) failed: boom');
+    const failed = sink.readAll().find((r) => r.nodeKind === 'browser');
+    expect(failed?.status).toBe('failed');
+
+    const skipped = await runDwfScript(
+      'export default async function (wf) { return await wf.browser({ on_stuck: "skip", steps: [] }); }',
+      fakePortsWithBrowser({ async runBrowser() { return { status: 'skipped', output: { steps: 0 } }; } }),
+      { runId: 'r2', journal: Journal.memory() },
+    );
+    expect(skipped).toBe(null);
+  });
+
+  it('wf.browser without a bound port fails loudly', async () => {
+    const script = `
+      export default async function (wf) {
+        try {
+          await wf.browser({ steps: [] });
+          return 'no-throw';
+        } catch (e) {
+          return { threw: e.message };
+        }
+      }`;
+    const result = (await runDwfScript(script, fakePorts(), { runId: 'r1', journal: Journal.memory() })) as Record<string, unknown>;
+    expect(result.threw).toContain('wf.browser is not bound');
+  });
+
   it('approve resolves on approve; deny throws; timeout+skip returns null', async () => {
     const script = (decision: string) => `
       export default async function (wf) {

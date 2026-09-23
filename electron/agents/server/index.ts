@@ -1,6 +1,7 @@
 import * as http from 'http';
 import { SessionManager } from './session-store';
 import { WorkerManager } from './worker-manager';
+import { WorkflowRuntimeManager } from './workflow-runtime-manager';
 import { CheckpointBatcher } from './checkpoint-batcher';
 import { logger, httpLogger, sessionLogger, workerLogger } from './logger';
 import { createHandleRequest, RouterDeps } from './router';
@@ -294,6 +295,16 @@ const deps: RouterDeps = {
   httpLogger,
   sessionLogger,
   dbRequest,
+  // Plan 560: run-anchored workflow runtime. Same bundle as the chat workers,
+  // different role — a library run needs no session and no WorkerManager slot.
+  workflowRuntimeManager: new WorkflowRuntimeManager({
+    workerPath: workerManager.resolveWorkerPath(),
+    betterSqlite3Path: workerManager.resolveBetterSqlite3Path(),
+    dbRequest,
+    workerDbRequests,
+    logger,
+    httpLogger,
+  }),
 };
 
 const handleRequest = createHandleRequest(deps, workerDbRequests, activeConnections, () => isShuttingDown);
@@ -327,6 +338,10 @@ function gracefulShutdown(): void {
   checkpointBatcher.stop();
   workerManager.stopIdleReaper();
   workerManager.killAll();
+  // Plan 560: run-anchored workflow children are not in the workers map, so
+  // they need their own shutdown — otherwise a SIGTERM leaves a workflow
+  // executing against a closed server.
+  deps.workflowRuntimeManager?.killAll();
 
   // server.timeout = 0（SSE 保活）移除了 Node 的隐式套接字回收器，挂死的
   // SSE 连接会一直占着 server.close()，使其回调永不触发。这里显式销毁所有

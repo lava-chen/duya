@@ -1,171 +1,93 @@
-// WorkflowRunCard — ZCode-style inline run card for the chat transcript
-// (plan 552 §14). Fed by `workflow_run` SSE frames via the workflow store; the
-// store keys runs by `runId` and the card subscribes with `useWorkflowRun`.
+// WorkflowRunCard — inline run card for the chat transcript (plan 552 §14,
+// restyled to the stage-rail design). Fed by `workflow_run` SSE frames via the
+// workflow store; the store keys runs by `runId` and the card subscribes with
+// `useWorkflowRun`.
 //
-// Two states:
-//   - Active: a digest card — one header line (workflow icon + running kind +
-//     name, with a right-side status lamp, mono detail and a chevron). Default
-//     expanded; clicking the chevron collapses to a timeline pill track.
-//   - Terminal: a completion receipt — header, then a result area, then a
-//     4-cell numeric grid (elapsed / tokens / subagents / phases) with a 640ms
-//     easeOutCubic count-up. Missing numbers render "—", never a fabricated 0.
+// Anatomy (one card, two moods):
+//   - Header: workflow icon + status title (工作流运行中 / 已完成 / 已停止…)
+//     + workflow name, then on the right the stage·subagent census, a rerun
+//     button (terminal non-success only) and a ↗ that lands in the workflow
+//     panel's run detail.
+//   - Body: the stage rail (阶段轨) — one column per `wf.phase` divider with
+//     status dot, name and an honest n/m step counter, and under it the chips
+//     (one 「脚本」 chip per column for tool work, one chip per agent). Terminal
+//     cards add artifact chips and the 4-cell numeric grid (elapsed / tokens /
+//     subagents / phases) with a 640ms easeOutCubic count-up. Missing numbers
+//     render "—", never a fabricated 0.
 
 'use client';
 
-import { useMemo, useState, useEffect, useRef } from 'react';
+import { useMemo, useState } from 'react';
 import { useWorkflowRun, useSessionWorkflowRuns, useWorkflowRunFeed } from '@/stores/workflow-store';
 import {
+  ArrowsClockwiseIcon,
+  ArrowSquareOutIcon,
+  FileIcon,
   GitBranchIcon,
   CircleNotchIcon,
-  CheckCircleIcon,
-  XCircleIcon,
-  ChevronDownIcon,
-  ChevronUpIcon,
-  ClockIcon,
-  PlayIcon,
+  StopIcon,
 } from '@/components/icons';
-import type { RunStepView } from '@/types/stream';
+import { useTranslation } from '@/hooks/useTranslation';
+import {
+  runUiStatus,
+  type WorkflowRunUiStatus,
+} from '@/components/workflow/run-display/run-status';
+import {
+  formatCompact,
+  formatDuration,
+  useCountUp,
+  GridCell,
+} from '@/components/workflow/run-display/primitives';
+import { buildStageColumns, StageColumns } from '@/components/workflow/run-display/stage-columns';
+import {
+  cancelWorkflowRunIPC,
+  getWorkflowRunRecordIPC,
+  triggerWorkflowRunIPC,
+} from '@/lib/workflow-ipc';
+import type { WorkflowRunSse } from '@/types/stream';
 
 interface WorkflowRunCardProps {
-  runId: string;
+  /** Store key — the live chat card. Omitted when `run` is passed directly. */
+  runId?: string;
+  /**
+   * Pre-built view for history surfaces (workflow panel runs tab): the same
+   * shape the SSE frames carry, assembled from the durable row + journal.
+   * When given, the store is bypassed entirely.
+   */
+  run?: WorkflowRunSse;
 }
 
-const STATUS_LABELS: Record<string, string> = {
-  active: 'Running',
-  complete: 'Completed',
-  failed: 'Failed',
-  cancelled: 'Cancelled',
-  interrupted: 'Interrupted',
+/** i18n suffix per UI state — the titles live under `workflow.card.title.*`. */
+const TITLE_KEY_BY_UI: Record<WorkflowRunUiStatus, string> = {
+  running: 'workflow.card.title.running',
+  paused: 'workflow.card.title.paused',
+  complete: 'workflow.card.title.complete',
+  failed: 'workflow.card.title.failed',
+  cancelled: 'workflow.card.title.cancelled',
+  interrupted: 'workflow.card.title.interrupted',
+  unknown: 'workflow.card.title.unknown',
 };
 
-/** 640ms easeOutCubic count-up. Returns undefined until `target` is a value;
- *  once defined it animates toward it, restarting if the target changes. */
-function useCountUp(target: number | undefined): number | undefined {
-  const [value, setValue] = useState<number | undefined>(undefined);
-  const valueRef = useRef(0);
-
-  useEffect(() => {
-    if (target === undefined) {
-      valueRef.current = 0;
-      setValue(undefined);
-      return;
-    }
-    let raf = 0;
-    const start = performance.now();
-    const from = valueRef.current;
-    const delta = target - from;
-    const easeOutCubic = (t: number) => 1 - (1 - t) ** 3;
-    const tick = (now: number) => {
-      const progress = Math.min(1, (now - start) / 640);
-      const next = from + delta * easeOutCubic(progress);
-      valueRef.current = next;
-      if (progress < 1) {
-        raf = requestAnimationFrame(tick);
-      }
-      setValue(next);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [target]);
-
-  return value;
-}
-
-/** Compact number formatting — 1_234_567 → "1.23M", 386_400 → "386.4k". */
-function formatCompact(value: number | undefined): string {
-  if (value === undefined || Number.isNaN(value)) return '—';
-  if (value < 1000) return String(Math.round(value));
-  const units = ['k', 'M', 'B', 'T'];
-  let scaled = value;
-  let unitIndex = -1;
-  while (scaled >= 1000 && unitIndex < units.length - 1) {
-    scaled /= 1000;
-    unitIndex += 1;
-  }
-  const digits = scaled.toFixed(scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2);
-  return `${digits}${units[unitIndex]}`;
-}
-
-/** Human duration string from seconds (mm:ss / h:mm:ss). */
-function formatDuration(totalSeconds: number): string {
-  const s = Math.max(0, Math.floor(totalSeconds));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const ss = String(s % 60).padStart(2, '0');
-  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${ss}`;
-  return `${String(m).padStart(2, '0')}:${ss}`;
-}
-
-function GridCell({ label, animated }: { label: string; animated: string | undefined }) {
-  return (
-    <div className="flex flex-col items-center justify-center gap-0.5 py-3 px-2 min-w-0">
-      <span className="text-lg leading-tight font-mono tabular-nums text-[var(--text)]">
-        {animated !== undefined ? animated : <span className="text-muted-foreground">—</span>}
-      </span>
-      <span className="text-[10px] uppercase tracking-wider text-muted-foreground truncate max-w-full">
-        {label}
-      </span>
-    </div>
-  );
-}
-
 /**
- * RunSteps — a live vertical step timeline for an in-flight run (ZCode run-view
- * style): one emerald connector line, a per-step status lamp (accent=pulse
- * running / emerald=success / red=failed), the step label, an n/total counter,
- * and a chevron that expands the step's observed timing. Only renders what the
- * runner actually reported — no fabricated steps.
+ * Attempted subagent count straight off the step list — a run that launched
+ * four agents and had three of them fail still launched four. Falls back to
+ * the runner's success-only tally when no steps arrived.
  */
-function RunSteps({ steps, total }: { steps: RunStepView[]; total?: number }) {
-  const [openId, setOpenId] = useState<string | null>(null);
-  if (steps.length === 0) return null;
-  return (
-    <div className="space-y-1 border-l-2 border-emerald-500/60 pl-3">
-      {steps.map((step, i) => {
-        const expanded = openId === step.id;
-        const lampClass =
-          step.status === 'success'
-            ? 'bg-emerald-500'
-            : step.status === 'failed'
-              ? 'bg-red-500'
-              : 'bg-[var(--accent)] animate-pulse';
-        const counter = total !== undefined && total > 0 ? `${i + 1}/${total}` : String(i + 1);
-        return (
-          <div key={step.id}>
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 py-0.5 text-left"
-              onClick={() => setOpenId(expanded ? null : step.id)}
-              aria-expanded={expanded}
-            >
-              <span className={`h-2 w-2 shrink-0 rounded-full ${lampClass}`} />
-              <span className="flex-1 truncate text-xs text-[var(--text)]">{step.label ?? step.id}</span>
-              <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">{counter}</span>
-              <ChevronDownIcon
-                className={`shrink-0 text-muted-foreground transition-transform ${expanded ? 'rotate-180' : ''}`}
-                size={12}
-              />
-            </button>
-            {expanded ? (
-              <div className="ml-4 space-y-0.5 px-1 py-0.5 text-[10px] text-muted-foreground">
-                {step.startedAt !== undefined ? (
-                  <div>started {new Date(step.startedAt).toLocaleTimeString()}</div>
-                ) : null}
-                {step.finishedAt !== undefined ? (
-                  <div>finished {new Date(step.finishedAt).toLocaleTimeString()}</div>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        );
-      })}
-    </div>
-  );
+function countAttemptedAgents(run: WorkflowRunSse): number | undefined {
+  const attempted = (run.steps ?? []).filter((s) => s.nodeKind === 'agent').length;
+  if (attempted > 0) return attempted;
+  return typeof run.subagents === 'number' && run.subagents > 0 ? run.subagents : undefined;
 }
 
-export function WorkflowRunCard({ runId }: WorkflowRunCardProps) {
-  const run = useWorkflowRun(runId);
-  const [open, setOpen] = useState(true);
+export function WorkflowRunCard({ runId, run: runProp }: WorkflowRunCardProps) {
+  // Hook stays unconditional: with a pre-built view the store key is empty and
+  // simply yields undefined.
+  const storeRun = useWorkflowRun(runId ?? '');
+  const run = runProp ?? storeRun;
+  const { t } = useTranslation();
+  const [restarting, setRestarting] = useState(false);
+  const [restartError, setRestartError] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
 
   // Hooks at the top level only. Terminal runs are stable, so each count-up
   // animates once; active runs are re-driven on every progress frame.
@@ -175,22 +97,72 @@ export function WorkflowRunCard({ runId }: WorkflowRunCardProps) {
   );
   const durationAnim = useCountUp(durationTarget !== undefined ? durationTarget / 1000 : undefined);
   const tokensAnim = useCountUp(run?.tokens);
-  const subagentsAnim = useCountUp(run?.subagents);
-  const phasesAnim = useCountUp(run?.phases);
+  const attemptedAgents = run ? countAttemptedAgents(run) : undefined;
+  const subagentsAnim = useCountUp(attemptedAgents);
+  const stageCount = useMemo(
+    () => (run && run.steps && run.steps.length > 0 ? buildStageColumns(run.steps).length : null),
+    [run],
+  );
+  const phasesAnim = useCountUp(stageCount ?? undefined);
 
   if (!run) return null;
 
-  const isActive = run.status === 'active';
-  const statusLabel = STATUS_LABELS[run.status] ?? run.status;
+  // History views pass the run pre-built (prop `runId` undefined) — the run's
+  // own id is the single source of truth for open-detail and rerun.
+  const effectiveRunId = run.runId || runId || '';
 
-  const phaseCount = typeof run.phases === 'number' && run.phases > 0 ? run.phases : null;
-  const pillCount = phaseCount !== null ? Math.min(phaseCount, 12) : 1;
+  const ui = runUiStatus(run.status);
+  const isActive = ui === 'running';
+  const hasSteps = run.steps !== undefined && run.steps.length > 0;
+  const showRestart = ui === 'failed' || ui === 'cancelled' || ui === 'interrupted' || ui === 'paused';
+  // A live card must be stoppable where it stands — waiting for the user to
+  // find the detail view's stop button (which is behind this very click) is
+  // how runs end up feeling unstoppable. Paused runs are still cancellable
+  // store-side (only terminal statuses are refused), so they get one too.
+  const showStop = ui === 'running' || ui === 'paused';
 
-  const receipt = run.status === 'complete'
-    ? 'Workflow finished'
-    : run.error ?? run.stoppedReason ?? 'Workflow stopped';
+  const openDetail = () => {
+    if (!effectiveRunId) return;
+    window.dispatchEvent(new CustomEvent('duya:open-workflow-run-panel', { detail: { runId: effectiveRunId } }));
+  };
 
-  const toggle = () => setOpen((v) => !v);
+  const stop = async () => {
+    if (stopping || !effectiveRunId) return;
+    setStopping(true);
+    setRestartError(null);
+    try {
+      const res = await cancelWorkflowRunIPC(effectiveRunId);
+      if (!res || res.ok === false) {
+        setRestartError(res?.error ?? t('workflow.card.stopFailed'));
+      }
+    } catch (err) {
+      setRestartError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setStopping(false);
+    }
+  };
+
+  const restart = async () => {
+    if (restarting) return;
+    setRestarting(true);
+    setRestartError(null);
+    try {
+      // A rerun is a fresh launch with the recorded params — resume is not
+      // wired runner-side, so the button never claims otherwise.
+      const record = await getWorkflowRunRecordIPC(effectiveRunId);
+      if (!record) throw new Error('run record not found');
+      const result = await triggerWorkflowRunIPC({
+        name: record.workflowName,
+        params: record.params,
+        projectDir: record.projectDir ?? undefined,
+      });
+      if (!result?.ok) throw new Error(result?.error ?? 'launch failed');
+    } catch (err) {
+      setRestartError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRestarting(false);
+    }
+  };
 
   return (
     <div
@@ -199,103 +171,135 @@ export function WorkflowRunCard({ runId }: WorkflowRunCardProps) {
       data-status={run.status}
       data-workflow-card
     >
-      {/* Header — single row: icon + kind + name, then lamp + detail + chevron. */}
-      <div className="flex items-center gap-2 px-3 py-2">
+      {/* Header — icon + status title + name, then census + rerun + expand.
+          The whole header opens the run detail (the ↗ stays as the explicit,
+          keyboard-accessible affordance; inner buttons stop propagation). */}
+      <div
+        className="flex cursor-pointer items-center gap-2 px-3 py-2"
+        onClick={openDetail}
+      >
         <GitBranchIcon className="text-muted-foreground shrink-0" size={16} />
         <span
           className={`shrink-0 text-xs font-medium ${
-            isActive ? 'shimmer-text text-[var(--accent)]' : 'text-muted-foreground'
+            isActive ? 'shimmer-text text-[var(--accent)]' : 'text-[var(--text)]'
           }`}
         >
-          {statusLabel}
+          {t(TITLE_KEY_BY_UI[ui] as never)}
         </span>
-        <span className="flex-1 truncate text-sm font-medium min-w-0">
-          {run.workflowName || 'Workflow run'}
+        <span className="flex-1 truncate text-sm font-medium min-w-0 text-[var(--text)]">
+          {run.workflowName || 'Workflow'}
         </span>
 
-        <span className="inline-flex items-center gap-1.5 shrink-0">
-          {isActive ? (
-            <CircleNotchIcon className="animate-spin text-[var(--accent)]" size={14} />
-          ) : run.status === 'complete' ? (
-            <CheckCircleIcon className="text-emerald-600 dark:text-emerald-400" size={14} />
-          ) : (
-            <XCircleIcon className="text-red-500" size={14} />
-          )}
-          <span className="text-muted-foreground text-xs tabular-nums min-w-[3.5rem] text-right">
-            {isActive
-              ? (run.phase || 'running')
-              : run.finishedAt
-                ? formatDuration((run.finishedAt - run.startedAt) / 1000)
-                : '—'}
+        {(stageCount !== null || attemptedAgents !== undefined) && (
+          <span className="hidden sm:inline shrink-0 text-xs tabular-nums text-muted-foreground">
+            {stageCount !== null && attemptedAgents !== undefined
+              ? t('workflow.card.stageAgentCount', { stages: stageCount, agents: attemptedAgents })
+              : stageCount !== null
+                ? t('workflow.card.stageCountOnly', { stages: stageCount })
+                : t('workflow.card.agentCountOnly', { agents: attemptedAgents ?? 0 })}
           </span>
-        </span>
+        )}
+
+        {showStop && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); void stop(); }}
+            disabled={stopping}
+            className="shrink-0 inline-flex items-center gap-1 rounded-md border border-[var(--border)] px-2 py-1 text-xs text-[var(--text-muted)] hover:border-red-500 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+            aria-label={t('workflow.card.stop')}
+            title={t('workflow.card.stop')}
+          >
+            {stopping ? (
+              <CircleNotchIcon className="animate-spin" size={12} />
+            ) : (
+              <StopIcon size={12} />
+            )}
+            {stopping ? t('workflow.card.stopping') : t('workflow.card.stop')}
+          </button>
+        )}
+
+        {showRestart && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); void restart(); }}
+            disabled={restarting}
+            className="shrink-0 inline-flex items-center gap-1 rounded-md border border-[var(--border)] px-2 py-1 text-xs text-[var(--text)] hover:bg-[var(--surface-hover)] disabled:opacity-50 transition-colors"
+          >
+            {restarting ? (
+              <CircleNotchIcon className="animate-spin" size={12} />
+            ) : (
+              <ArrowsClockwiseIcon size={12} />
+            )}
+            {t('workflow.card.restart')}
+          </button>
+        )}
 
         <button
           type="button"
-          onClick={(e) => { e.stopPropagation(); toggle(); }}
+          onClick={(e) => { e.stopPropagation(); openDetail(); }}
           className="shrink-0 inline-flex items-center justify-center text-muted-foreground hover:text-[var(--text)] transition-colors"
-          aria-expanded={open}
-          aria-label={open ? 'Collapse workflow run' : 'Expand workflow run'}
+          aria-label={t('workflow.card.openDetail')}
+          title={t('workflow.card.openDetail')}
         >
-          {open ? <ChevronUpIcon size={14} /> : <ChevronDownIcon size={14} />}
+          <ArrowSquareOutIcon size={14} />
         </button>
       </div>
 
-      {open ? (
-        isActive ? (
-          /* Digest body. */
-          <div className="px-3 pb-3 pt-0.5 space-y-2">
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <ClockIcon size={12} />
-              <span className="tabular-nums">
-                {formatDuration((Date.now() - run.startedAt) / 1000)}
-              </span>
-              {run.phase ? <span className="truncate text-[var(--text)]">{run.phase}</span> : null}
-            </div>
-            {run.steps && run.steps.length > 0 ? (
-              <RunSteps steps={run.steps} total={run.total} />
-            ) : (
-              <div className="flex items-center gap-1.5">
-                {Array.from({ length: pillCount }, (_, i) => (
-                  <span
-                    key={i}
-                    className="h-1.5 flex-1 rounded-full bg-[var(--border)]"
-                    style={i === 0 && isActive ? { background: 'var(--accent)' } : undefined}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        ) : (
-          /* Completion receipt: result area + 4-cell stats grid. */
-          <div className="border-t border-[var(--border)]">
-            <div className="px-3 py-2 flex items-center gap-2 text-xs">
-              <span className="text-muted-foreground shrink-0">Result</span>
-              <span className="flex-1 min-w-0 truncate text-[var(--text)]">{receipt}</span>
-              {run.resumable ? (
-                <span className="inline-flex items-center gap-1 text-muted-foreground shrink-0">
-                  <PlayIcon size={12} /> Resumable
-                </span>
-              ) : null}
-            </div>
-            <div className="grid grid-cols-4 border-t border-[var(--border)] divide-x divide-[var(--border)]">
-              <GridCell label="Elapsed" animated={durationAnim !== undefined ? formatDuration(durationAnim) : undefined} />
-              <GridCell label="Tokens" animated={tokensAnim !== undefined ? formatCompact(tokensAnim) : undefined} />
-              <GridCell label="Subagents" animated={subagentsAnim !== undefined ? String(Math.round(subagentsAnim)) : undefined} />
-              <GridCell label="Phases" animated={phasesAnim !== undefined ? String(Math.round(phasesAnim)) : undefined} />
-            </div>
-          </div>
-        )
-      ) : (
-        /* Collapsed — a slim timeline pill rail keeps the run legible. */
-        <div className="flex items-center gap-1.5 px-3 pb-3 pt-0.5">
-          {Array.from({ length: pillCount }, (_, i) => (
+      {restartError && (
+        <div className="px-3 pb-2 text-[11px] text-[var(--error)]">
+          {t('workflow.card.restartFailed', { error: restartError })}
+        </div>
+      )}      {/* Body — the stage rail; terminal cards append artifacts + stats. */}
+      {isActive && !hasSteps ? (
+        <div className="flex items-center gap-2 px-3 pb-3 pt-0.5 text-xs text-muted-foreground">
+          <CircleNotchIcon className="animate-spin text-[var(--accent)]" size={13} />
+          {t('workflow.card.preparing')}
+        </div>
+      ) : hasSteps ? (
+        <div className="px-3 pb-3 pt-0.5">
+          <StageColumns steps={run.steps!} />
+        </div>
+      ) : null}
+
+      {!isActive && (run.artifacts?.length ?? 0) > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2">
+          {run.artifacts!.map((artifact) => (
             <span
-              key={i}
-              className="h-1.5 flex-1 rounded-full bg-[var(--border)]"
-              style={i === 0 && isActive ? { background: 'var(--accent)' } : undefined}
-            />
+              key={artifact.name}
+              className="inline-flex max-w-full items-center gap-1.5 rounded-lg bg-[var(--surface-hover)] px-2 py-1 text-xs text-[var(--text)]"
+              title={artifact.name}
+            >
+              <FileIcon className="shrink-0 text-[var(--accent)]" size={12} />
+              <span className="min-w-0 truncate">{artifact.name}</span>
+            </span>
           ))}
+        </div>
+      )}
+
+      {!isActive && (run.error || run.stoppedReason) && (
+        <div className="px-3 pb-2 text-[11px] text-muted-foreground">
+          {run.error ?? run.stoppedReason}
+        </div>
+      )}
+
+      {!isActive && (
+        <div className="grid grid-cols-4 border-t border-[var(--border)] divide-x divide-[var(--border)]">
+          <GridCell
+            label={t('workflow.card.statTime')}
+            animated={durationAnim !== undefined ? formatDuration(durationAnim) : undefined}
+          />
+          <GridCell
+            label={t('workflow.card.statTokens')}
+            animated={tokensAnim !== undefined ? formatCompact(tokensAnim) : undefined}
+          />
+          <GridCell
+            label={t('workflow.card.statSubagents')}
+            animated={subagentsAnim !== undefined ? String(Math.round(subagentsAnim)) : undefined}
+          />
+          <GridCell
+            label={t('workflow.card.statPhases')}
+            animated={phasesAnim !== undefined ? String(Math.round(phasesAnim)) : undefined}
+          />
         </div>
       )}
     </div>

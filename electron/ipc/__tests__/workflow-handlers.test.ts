@@ -16,7 +16,7 @@ import type BetterSqlite3 from 'better-sqlite3';
 import * as osMod from 'node:os';
 import { CoreDatabase, WorkflowRunStore } from '../../db/core';
 import { _setCoreStoresForTesting, getCoreStores } from '../../db/core-connection';
-import { registerWorkflowHandlers } from '../workflow-handlers';
+import { registerWorkflowHandlers, _setWorkflowRuntimeHttpForTesting } from '../workflow-handlers';
 
 let nativeSqliteAvailable = true;
 try {
@@ -109,28 +109,55 @@ describe.skipIf(!nativeSqliteAvailable)('workflow console handlers', () => {
         'workflow:dwf:list',
         'workflow:dwf:save',
         'workflow:get',
+        'workflow:get-events',
         'workflow:journal',
         'workflow:list',
+        'workflow:list-runs',
+        'workflow:permission-resolve',
         'workflow:run',
         'workflow:snapshot',
+        'workflow:status',
+        'workflow:trigger',
       ].sort(),
     );
   });
 
-  it('cancel refuses terminal runs and clears wait_till for parked ones', () => {
+  it('cancel keeps session-anchored runs on the store-level path', async () => {
     const store = getCoreStores().workflowRuns;
 
-    const done = store.createRun({ workflowName: 'a', status: 'complete' });
-    expect(handlers.get('workflow:cancel')!(undefined, done.id)).toEqual({ ok: false, reason: 'terminal' });
+    const done = store.createRun({ workflowName: 'a', status: 'complete', origin: 'session' });
+    await expect(handlers.get('workflow:cancel')!(undefined, done.id)).resolves.toEqual({ ok: false, reason: 'terminal' });
 
-    const parked = store.createRun({ workflowName: 'b', status: 'blocked' });
+    const parked = store.createRun({ workflowName: 'b', status: 'blocked', origin: 'session' });
     store.setWaitTill(parked.id, Date.now() + 60_000);
-    expect(handlers.get('workflow:cancel')!(undefined, parked.id)).toEqual({ ok: true });
+    await expect(handlers.get('workflow:cancel')!(undefined, parked.id)).resolves.toEqual({ ok: true });
     const after = store.getRun(parked.id)!;
     expect(after.status).toBe('cancelled');
     expect(after.waitTill).toBeNull();
 
-    expect(handlers.get('workflow:cancel')!(undefined, 'ghost')).toEqual({ ok: false, reason: 'not_found' });
+    await expect(handlers.get('workflow:cancel')!(undefined, 'ghost')).resolves.toEqual({ ok: false, reason: 'not_found' });
+  });
+
+  it('cancel forwards a library run to the runtime and does not lie about its status', async () => {
+    const store = getCoreStores().workflowRuns;
+    // `origin` defaults to 'library', so a run only reaches the store-level
+    // path when the session anchor stamps itself explicitly.
+    const run = store.createRun({ workflowName: 'lib', status: 'active' });
+    expect(run.origin).toBe('library');
+
+    const calls: Array<{ path: string; payload: unknown }> = [];
+    _setWorkflowRuntimeHttpForTesting(async (path, payload) => {
+      calls.push({ path, payload });
+      return { status: 200, body: { ok: true } };
+    });
+    try {
+      await expect(handlers.get('workflow:cancel')!(undefined, run.id)).resolves.toEqual({ ok: true });
+      expect(calls).toEqual([{ path: `/workflow-runtime/${run.id}/cancel`, payload: {} }]);
+      // Only the process that actually stopped the child may mark it terminal.
+      expect(store.getRun(run.id)!.status).toBe('active');
+    } finally {
+      _setWorkflowRuntimeHttpForTesting(null);
+    }
   });
 
 
@@ -163,6 +190,115 @@ describe.skipIf(!nativeSqliteAvailable)('workflow console handlers', () => {
 
     expect(handlers.get('workflow:delete')!(undefined, run.id)).toBe(true);
     expect(handlers.get('workflow:get')!(undefined, run.id)).toBeNull();
+  });
+
+  // ─── plan 560: run-anchored surface ────────────────────────────────────────
+
+  it('trigger posts the launch-dialog payload to the run-anchored endpoint', async () => {
+    const calls: Array<{ path: string; payload: unknown }> = [];
+    _setWorkflowRuntimeHttpForTesting(async (path, payload) => {
+      calls.push({ path, payload });
+      return { status: 201, body: { ok: true, runId: 'run-9' } };
+    });
+    try {
+      await expect(
+        handlers.get('workflow:trigger')!(undefined, {
+          name: 'digest',
+          projectDir: 'E:/proj',
+          params: { day: 'mon' },
+        }),
+      ).resolves.toEqual({ ok: true, runId: 'run-9' });
+
+      // §7.5: the dialog's directory is the run's cwd — it has to survive the
+      // whole trip, because the manager turns it into the agent nodes'
+      // workingDirectory.
+      expect(calls).toEqual([
+        {
+          path: '/workflow-runtime/trigger',
+          payload: { name: 'digest', projectDir: 'E:/proj', params: { day: 'mon' }, scope: null },
+        },
+      ]);
+    } finally {
+      _setWorkflowRuntimeHttpForTesting(null);
+    }
+  });
+
+  it('trigger surfaces a refusal verbatim instead of a fake runId', async () => {
+    _setWorkflowRuntimeHttpForTesting(async () => ({
+      status: 503,
+      body: { ok: false, error: 'no active LLM provider configured' },
+    }));
+    try {
+      await expect(handlers.get('workflow:trigger')!(undefined, { name: 'digest' })).resolves.toEqual({
+        ok: false,
+        error: 'no active LLM provider configured',
+      });
+    } finally {
+      _setWorkflowRuntimeHttpForTesting(null);
+    }
+  });
+
+  it('reads the run record, history and journal backfill from the core store', () => {
+    const store = getCoreStores().workflowRuns;
+    const run = store.createRun({ workflowName: 'digest', status: 'active' });
+    store.appendJournalRecord(run.id, {
+      seq: 0, kind: 'phase', nodeId: 'p0', attempt: 1, status: 'running', action: 'collect', atMs: 1,
+    });
+    store.appendJournalRecord(run.id, {
+      seq: 1, kind: 'node_result', nodeId: 'n1', attempt: 1, status: 'succeeded', atMs: 2,
+    });
+    const other = store.createRun({ workflowName: 'other', status: 'complete' });
+
+    const record = handlers.get('workflow:status')!(undefined, run.id) as {
+      workflowName: string;
+      origin: string;
+    };
+    expect(record).toMatchObject({ workflowName: 'digest', origin: 'library' });
+
+    const library = handlers.get('workflow:list-runs')!(undefined, { origin: 'library' }) as Array<{
+      id: string;
+    }>;
+    expect(library.map((r) => r.id).sort()).toEqual([run.id, other.id].sort());
+
+    const scoped = handlers.get('workflow:list-runs')!(undefined, { workflowName: 'digest' }) as Array<{
+      id: string;
+    }>;
+    expect(scoped.map((r) => r.id)).toEqual([run.id]);
+
+    // `afterSeq` is the backfill cursor: replay only what the client missed.
+    const tail = handlers.get('workflow:get-events')!(undefined, { runId: run.id, afterSeq: 0 }) as Array<{
+      seq: number;
+    }>;
+    expect(tail.map((e) => e.seq)).toEqual([1]);
+    const all = handlers.get('workflow:get-events')!(undefined, { runId: run.id }) as Array<{
+      seq: number;
+    }>;
+    expect(all.map((e) => e.seq)).toEqual([0, 1]);
+  });
+
+  it('permission-resolve forwards the answer for the blocked child', async () => {
+    const calls: Array<{ path: string; payload: unknown }> = [];
+    _setWorkflowRuntimeHttpForTesting(async (path, payload) => {
+      calls.push({ path, payload });
+      return { status: 200, body: { ok: true } };
+    });
+    try {
+      await expect(
+        handlers.get('workflow:permission-resolve')!(undefined, {
+          runId: 'run-1',
+          requestId: 'req-7',
+          decision: 'deny',
+        }),
+      ).resolves.toEqual({ ok: true });
+      expect(calls).toEqual([
+        {
+          path: '/workflow-runtime/run-1/permission',
+          payload: { requestId: 'req-7', decision: 'deny' },
+        },
+      ]);
+    } finally {
+      _setWorkflowRuntimeHttpForTesting(null);
+    }
   });
 });
 

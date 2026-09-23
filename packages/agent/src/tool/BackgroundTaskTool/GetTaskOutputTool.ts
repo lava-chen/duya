@@ -21,6 +21,11 @@ import type { Tool, ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolExecutor } from '../registry.js';
 import type { TaskRecord, TaskStatus } from '../../lifecycle/TaskState.js';
 import { getBackgroundAgentLifecycle } from '../../lifecycle/BackgroundAgentLifecycle.js';
+import {
+  getBashTaskRegistry,
+  type BashBackgroundTask,
+  type BashTaskStatus,
+} from '../../session/bash-task-registry.js';
 
 export const GET_TASK_OUTPUT_TOOL_NAME = 'get_task_output';
 /** Max task ids accepted in a single snapshot call. */
@@ -32,6 +37,47 @@ export const DEFAULT_WAIT_TIMEOUT_MS = 60_000;
 
 export function isTerminalStatus(s: TaskStatus): boolean {
   return s === 'completed' || s === 'failed' || s === 'killed';
+}
+
+/**
+ * Background shell commands live in BashTaskRegistry rather than
+ * BackgroundAgentLifecycle (sub-agents only). Map the registry vocabulary onto
+ * the shared TaskStatus so both task kinds answer through one tool — without
+ * this, a promoted or `run_in_background` bash task id returned by BashTool
+ * would come back as `not_found`.
+ */
+export function mapBashTaskStatus(status: BashTaskStatus): TaskStatus {
+  switch (status) {
+    case 'running':
+      return 'running';
+    case 'completed':
+      return 'completed';
+    case 'killed':
+      return 'killed';
+    // error | disk_limit | lost
+    default:
+      return 'failed';
+  }
+}
+
+/**
+ * Snapshot text for a background shell command. Unlike a sub-agent (whose
+ * output only exists once it finishes), a bash task streams into its output
+ * file, so the live tail is useful while it is still running.
+ */
+export function formatBashTaskOutput(
+  task: BashBackgroundTask,
+  maxBytes: number = DEFAULT_TOOL_OUTPUT_BYTES,
+): string {
+  const tail = getBashTaskRegistry().readOutput(task.id, maxBytes)?.text.trim() ?? '';
+
+  if (mapBashTaskStatus(task.status) === 'running') {
+    const lead = `${task.status} (pid ${task.pid}). You will be notified automatically when this task completes — do not poll for it.`;
+    return tail ? `${lead}\n\n${tail}` : lead;
+  }
+
+  const header = task.exitCode !== undefined ? `[exit ${task.exitCode}]` : '';
+  return [task.error, header, tail].filter(Boolean).join('\n') || '(no output)';
 }
 
 function toResult(
@@ -74,9 +120,9 @@ interface TaskOutputResult {
 
 export class GetTaskOutputTool implements Tool, ToolExecutor {
   readonly name = GET_TASK_OUTPUT_TOOL_NAME;
-  readonly description = `Fetch the current output or status snapshot of one or more background sub-agent tasks.
+  readonly description = `Fetch the current output or status snapshot of one or more background tasks (sub-agents and background shell commands).
 
-- Completed tasks return their output; still-running tasks report their status.
+- Completed tasks return their output; still-running tasks report their status (and, for shell commands, the live output tail).
 - Non-blocking: this tool NEVER waits for a task to finish. When a background task completes you will be notified automatically with a <task-notification> containing its result — do not poll or wait for it, do not call this tool repeatedly. Use this only to take a quick look, or to fetch the full output of a task that has already completed.
 - For a running task that looks stuck or looping, use kill_task to terminate it.`;
 
@@ -86,7 +132,7 @@ export class GetTaskOutputTool implements Tool, ToolExecutor {
       task_ids: {
         type: 'array',
         items: { type: 'string' },
-        description: 'One or more subagent task ids.',
+        description: 'One or more subagent or background shell task ids.',
       },
     },
     required: ['task_ids'],
@@ -107,9 +153,18 @@ export class GetTaskOutputTool implements Tool, ToolExecutor {
     const ids = task_ids as string[];
 
     const lifecycle = getBackgroundAgentLifecycle();
+    const bashRegistry = getBashTaskRegistry();
     const results: TaskOutputResult[] = ids.map((id) => {
       const rec = lifecycle.getSnapshot(id);
-      if (!rec) return { task_id: id, status: 'not_found' as TaskStatus, output: '' };
+      if (!rec) {
+        const bashTask = bashRegistry.getTask(id);
+        if (!bashTask) return { task_id: id, status: 'not_found' as TaskStatus, output: '' };
+        return {
+          task_id: id,
+          status: mapBashTaskStatus(bashTask.status),
+          output: formatBashTaskOutput(bashTask),
+        };
+      }
       if (!isTerminalStatus(rec.status)) {
         return {
           task_id: id,

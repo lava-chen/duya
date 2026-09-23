@@ -7,6 +7,11 @@ import { join } from 'path';
 import { SessionManager } from './session-store';
 import { SessionState } from './types';
 import { WorkerManager } from './worker-manager';
+import {
+  WorkflowRuntimeManager,
+  type WorkflowRunSummary,
+  type WorkflowRuntimeSseFrame,
+} from './workflow-runtime-manager';
 import { CheckpointBatcher } from './checkpoint-batcher';
 import { Logger } from './logger';
 import { toLLMProvider, type ApiProvider } from '../../config/provider-types';
@@ -16,6 +21,7 @@ import { parseAgentIdFromBotSession } from '../../wake/bot-session-id';
 import { buildCronProviderConfig, resolveCronModel } from '../../automation/provider-config';
 import { readConfigAgents } from '../../../packages/agent/src/agent-profile/config-agents.js';
 import { normalizePath } from '../../memory-state/pathUtils';
+import type { JournalRecord } from '../../../packages/agent/src/modes/workflow/journal';
 
 /**
  * Detect whether the project has a `.duya/references/` directory.
@@ -206,6 +212,53 @@ export async function resolveRuntimeConfigViaDbRequest(
 }
 
 /**
+ * LLM config for a run-anchored workflow (plan 560 D5). Unlike the chat paths
+ * there is no session row to read a model from, so the active provider is the
+ * only source: `provider.options.defaultModel` / `model`, then the first
+ * `enabled_models` entry as a last resort.
+ *
+ * Returns `null` when no provider is configured at all — the caller answers
+ * 503 rather than spawning a child that cannot make a single LLM call.
+ */
+export async function resolveRunLlmConfig(
+  dbRequest: ((action: string, payload: Record<string, unknown>) => Promise<unknown>) | undefined,
+): Promise<{
+  apiKey: string;
+  baseURL?: string;
+  provider: 'anthropic' | 'openai' | 'ollama';
+  model: string;
+  authStyle?: 'api_key' | 'auth_token';
+} | null> {
+  if (!dbRequest) return null;
+  let provider: ApiProvider | undefined;
+  try {
+    provider = (await dbRequest('config:provider:getActive', {})) as ApiProvider | undefined;
+  } catch {
+    return null;
+  }
+  const base = buildInitProviderConfig({}, provider ?? undefined);
+  if (!base) return null;
+
+  const opts = (provider?.options ?? {}) as Record<string, unknown>;
+  const enabled = Array.isArray(opts.enabled_models) ? (opts.enabled_models as unknown[]) : [];
+  const model =
+    (typeof base.model === 'string' ? base.model.trim() : '') ||
+    (typeof enabled[0] === 'string' ? (enabled[0] as string).trim() : '');
+  if (!model) return null;
+
+  return {
+    apiKey: typeof base.apiKey === 'string' ? base.apiKey : '',
+    ...(typeof base.baseURL === 'string' && base.baseURL ? { baseURL: base.baseURL } : {}),
+    provider: (base.provider as 'anthropic' | 'openai' | 'ollama' | undefined) ?? 'openai',
+    model,
+    ...(base.authStyle ? { authStyle: base.authStyle as 'api_key' | 'auth_token' } : {}),
+  };
+}
+
+/** Statuses that will never change again — an SSE replay can close after them. */
+const TERMINAL_RUN_STATUSES = new Set(['complete', 'failed', 'cancelled', 'interrupted']);
+
+/**
  * Resolve the multi-path project roots for a session's working directory
  * (Plan 525, codex workspace_roots semantics): the session's cwd stays the
  * PRIMARY root; every other `projects.paths` entry of the owning project
@@ -353,6 +406,12 @@ export interface RouterDeps {
   httpLogger: Logger;
   sessionLogger: Logger;
   dbRequest: (action: string, payload: Record<string, unknown>) => Promise<unknown>;
+  /**
+   * Plan 560 run-anchored workflow runtime. Optional so existing tests and any
+   * embedder that never triggers a library run keep constructing deps as
+   * before; the routes answer 503 when it is absent.
+   */
+  workflowRuntimeManager?: WorkflowRuntimeManager;
 }
 
 export function sendJson(res: http.ServerResponse, statusCode: number, data: unknown): void {
@@ -2887,16 +2946,184 @@ export function createHandleRequest(
     // fall back to the most recently active live worker — a run needs SOME
     // live worker to execute in.
     if (parts[0] === 'workflow' && parts.length >= 3 && parts[2] === 'trigger' && method === 'POST') {
-      const dispatch = (
+      // eslint-disable-next-line @typescript-eslint/no-misused-promises
+      const dispatch = async (
         sessionId: string | undefined,
         payload: { name?: string; params?: Record<string, unknown>; projectDir?: string },
-      ): void => {
+      ): Promise<void> => {
         const name = payload.name ?? parts[1];
-        const anchor = sessionId ?? deps.workerManager.mostRecentWorkerSessionId() ?? undefined;
-        if (!anchor || !name) {
-          sendJson(res, 400, { ok: false, error: 'workflow trigger requires a workflow name and an anchorable session (no live worker found)' });
+        if (!name) {
+          sendJson(res, 400, { ok: false, error: 'workflow trigger requires a workflow name' });
           return;
         }
+
+        let anchor = sessionId ?? deps.workerManager.mostRecentWorkerSessionId() ?? undefined;
+
+        // No anchor session and no live worker: lazily create a session and spawn a
+        // worker for it, mirroring the lazySpawnWorkerForCompact pattern used by
+        // compact mode.  This covers the panel-trigger case where the renderer has
+        // no persistent session context at trigger time.
+        if (!anchor) {
+          const newSessionId = randomUUID();
+          deps.sessionManager.createSession(newSessionId);
+
+          // Load session row + provider config from DB (required for worker init).
+          let sessionRow: Record<string, unknown> | null = null;
+          let providerConfig: Record<string, unknown> | undefined;
+          try {
+            const rowResult = await deps.dbRequest('session:get', { id: newSessionId });
+            sessionRow = (rowResult && typeof rowResult === 'object') ? rowResult as Record<string, unknown> : null;
+            if (sessionRow) {
+              const providerId = typeof sessionRow.provider_id === 'string' ? sessionRow.provider_id : '';
+              let apiProvider: ApiProvider | undefined;
+              if (providerId && providerId !== 'env') {
+                try {
+                  apiProvider = await deps.dbRequest('config:provider:get', { id: providerId }) as ApiProvider | undefined;
+                } catch {
+                  // fall through to active provider
+                }
+              }
+              if (!apiProvider) {
+                try {
+                  apiProvider = await deps.dbRequest('config:provider:getActive', {}) as ApiProvider | undefined;
+                } catch {
+                  // no provider available; buildInitProviderConfig handles undefined
+                }
+              }
+              providerConfig = buildInitProviderConfig(sessionRow, apiProvider);
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            deps.httpLogger.warn('Workflow trigger: failed to load session/provider', { sessionId: newSessionId, error: msg });
+            sendJson(res, 503, { error: `Failed to load session config: ${msg}` });
+            return;
+          }
+
+          if (!sessionRow) {
+            deps.httpLogger.warn('Workflow trigger: session not in DB after create', { sessionId: newSessionId });
+            sendJson(res, 404, { error: 'Session not found' });
+            return;
+          }
+
+          // Resolve runtime config (capability merge) so the lazy-spawned worker
+          // gets the same compaction budget as a chat-spawned one.
+          if (providerConfig && !providerConfig.runtimeConfig) {
+            const runtimeConfig = await resolveRuntimeConfigViaDbRequest(deps.dbRequest, {
+              providerId: typeof providerConfig.providerId === 'string' ? providerConfig.providerId : undefined,
+              model: typeof providerConfig.model === 'string' ? providerConfig.model : undefined,
+            });
+            if (runtimeConfig) providerConfig = { ...providerConfig, runtimeConfig };
+          }
+
+          const init: ChatInitParams = {
+            providerConfig,
+            workingDirectory: typeof sessionRow.working_directory === 'string' ? sessionRow.working_directory : undefined,
+            systemPrompt: typeof sessionRow.system_prompt === 'string' ? sessionRow.system_prompt : undefined,
+          };
+
+          // Spawn the worker.
+          const child = deps.workerManager.spawnWorker(newSessionId);
+          const workerPid = child.pid;
+          deps.httpLogger.info('Workflow trigger: lazy-spawned worker', { sessionId: newSessionId, pid: workerPid });
+
+          // Wire up stdout logging.
+          child.stdout?.setEncoding('utf8');
+          child.stdout?.on('data', (data: string) => {
+            const text = data.toString();
+            deps.httpLogger.debug('Worker stdout (workflow-trigger-lazy)', { sessionId: newSessionId, preview: text.substring(0, 300) });
+          });
+
+          // Wire up message handlers for IPC routing.
+          child.on('message', (msg: Record<string, unknown>) => {
+            if (msg.type === 'db:request' && typeof msg.id === 'string' && process.send) {
+              workerDbRequests.set(msg.id, child);
+              process.send(msg);
+              return;
+            }
+            if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string' && process.send) {
+              workerDbRequests.set(`rpc:${msg.requestId}`, child);
+              process.send(msg);
+              return;
+            }
+            if (msg.type === 'appConnection:invoke' && typeof msg.requestId === 'string' && process.send) {
+              workerDbRequests.set(`rpc:${msg.requestId}`, child);
+              process.send(msg);
+              return;
+            }
+            if (msg.type === 'appConnection:listDescriptors' && typeof msg.requestId === 'string' && process.send) {
+              workerDbRequests.set(`rpc:${msg.requestId}`, child);
+              process.send(msg);
+              return;
+            }
+            if (msg.type === 'appConnection:catalog' && typeof msg.requestId === 'string' && process.send) {
+              workerDbRequests.set(`rpc:${msg.requestId}`, child);
+              process.send(msg);
+              return;
+            }
+            if (msg.type === 'computer-use:execute' && typeof msg.requestId === 'string' && process.send) {
+              workerDbRequests.set(`rpc:${msg.requestId}`, child);
+              process.send(msg);
+              return;
+            }
+            if (msg.type === 'memory-tier:rpc' && typeof msg.requestId === 'string' && process.send) {
+              workerDbRequests.set(`rpc:${msg.requestId}`, child);
+              process.send(msg);
+              return;
+            }
+            if (msg.type === 'bot-identity:rpc' && typeof msg.requestId === 'string' && process.send) {
+              workerDbRequests.set(`rpc:${msg.requestId}`, child);
+              process.send(msg);
+              return;
+            }
+          });
+
+          child.on('error', (err) => {
+            deps.logger.error('Workflow trigger lazy-spawn: worker error', err, { sessionId: newSessionId });
+          });
+
+          child.on('exit', (code, signal) => {
+            const session = deps.sessionManager.getSession(newSessionId);
+            if (session?.state === SessionState.COMPLETED) return;
+            if (code === 0) {
+              try {
+                deps.sessionManager.transitionState(newSessionId, SessionState.COMPLETED);
+              } catch {
+                // state transition may be invalid; safe to ignore
+              }
+            } else {
+              deps.sessionManager.setExitInfo(newSessionId, code || 0, signal || undefined);
+            }
+          });
+
+          // Send init and wait for ready.
+          deps.workerManager.sendCommand(newSessionId, {
+            type: 'init',
+            sessionId: newSessionId,
+            providerConfig: init.providerConfig,
+            workingDirectory: init.workingDirectory || '',
+            defaultWorkspaceDirectory: '',
+            systemPrompt: init.systemPrompt,
+            language: 'zh',
+            referencesEnabled: detectReferencesEnabled(init.workingDirectory),
+          });
+
+          const readyResult = await waitForWorkerReady(child, 30000);
+          if (!readyResult.ok) {
+            deps.logger.error(
+              'Workflow trigger lazy-spawn: worker ready failed',
+              new Error(readyResult.message),
+              { sessionId: newSessionId, reason: readyResult.reason },
+            );
+            const status = readyResult.reason === 'timeout' ? 504
+              : readyResult.reason === 'error' ? 503
+              : 409;
+            sendJson(res, status, { error: readyResult.message });
+            return;
+          }
+          deps.httpLogger.info('Workflow trigger: lazy-spawned worker ready', { sessionId: newSessionId });
+          anchor = newSessionId;
+        }
+
         const runId = randomUUID();
         const sent = deps.workerManager.sendCommand(anchor, {
           type: 'workflow:run',
@@ -2927,10 +3154,236 @@ export function createHandleRequest(
             // Malformed JSON: reply 400 below.
           }
         }
-        dispatch(sessionId, payload);
+        void dispatch(sessionId, payload);
       }).catch(() => {
-        dispatch(undefined, {});
+        void dispatch(undefined, {});
       });
+      return;
+    }
+
+    // ─── Plan 560: run-anchored workflow runtime ───
+    //
+    // A library run never touches a chat session: the run row is created here,
+    // one child process executes it (`WorkflowRuntimeManager`), and progress is
+    // served on its own SSE stream keyed by runId. The session-anchored
+    // `/workflow/:name/trigger` route above is untouched.
+    if (parts[0] === 'workflow-runtime') {
+      const runtime = deps.workflowRuntimeManager;
+      if (!runtime) {
+        sendJson(res, 503, { error: 'workflow runtime is not wired into this agent server' });
+        return;
+      }
+
+      // GET /workflow-runtime/runs — diagnostics only; the UI reads run history
+      // from the database, not from this process's memory.
+      if (method === 'GET' && parts.length === 2 && parts[1] === 'runs') {
+        sendJson(res, 200, { ok: true, runs: runtime.listRuns() });
+        return;
+      }
+
+      // POST /workflow-runtime/trigger {name, params, projectDir, scope, llm?}
+      if (method === 'POST' && parts.length === 2 && parts[1] === 'trigger') {
+        const trigger = async (body: string | undefined): Promise<void> => {
+          let payload: {
+            name?: string;
+            params?: Record<string, unknown>;
+            projectDir?: string;
+            scope?: 'project' | 'global' | null;
+            llm?: Record<string, unknown>;
+          } = {};
+          if (body) {
+            try {
+              payload = JSON.parse(body) as typeof payload;
+            } catch {
+              sendJson(res, 400, { ok: false, error: 'invalid JSON body' });
+              return;
+            }
+          }
+          if (typeof payload.name !== 'string' || !payload.name.trim()) {
+            sendJson(res, 400, { ok: false, error: 'workflow-runtime trigger requires a workflow name' });
+            return;
+          }
+
+          const llm =
+            (payload.llm as Awaited<ReturnType<typeof resolveRunLlmConfig>>) ??
+            (await resolveRunLlmConfig(deps.dbRequest));
+          if (!llm) {
+            sendJson(res, 503, { ok: false, error: 'no active LLM provider configured' });
+            return;
+          }
+
+          const result = await runtime.trigger({
+            name: payload.name,
+            params: payload.params,
+            projectDir: payload.projectDir,
+            scope: payload.scope ?? null,
+            llm,
+          });
+          if (result.ok) {
+            sendJson(res, 201, { ok: true, runId: result.runId });
+            return;
+          }
+          sendJson(res, result.status, {
+            ok: false,
+            error: result.error,
+            ...(result.runId !== undefined ? { runId: result.runId } : {}),
+          });
+        };
+        readRequestBody(req)
+          .then((body) => trigger(body ?? undefined))
+          .catch(() => trigger(undefined));
+        return;
+      }
+
+      // POST /workflow-runtime/:runId/cancel
+      if (method === 'POST' && parts.length === 3 && parts[2] === 'cancel') {
+        const result = runtime.cancel(parts[1]);
+        sendJson(res, result.ok ? 200 : 404, result.ok ? { ok: true } : { ok: false, error: result.error });
+        return;
+      }
+
+      // POST /workflow-runtime/:runId/permission {requestId, decision}
+      //
+      // The return leg of an approval (D6): the request reached the run panel on
+      // the SSE stream, the answer comes back here and is written to the child
+      // that is blocked waiting on it.
+      if (method === 'POST' && parts.length === 3 && parts[2] === 'permission') {
+        void (async () => {
+          let payload: { requestId?: string; decision?: string } = {};
+          try {
+            const raw = await readRequestBody(req);
+            if (raw) payload = JSON.parse(raw) as typeof payload;
+          } catch {
+            sendJson(res, 400, { ok: false, error: 'invalid JSON body' });
+            return;
+          }
+          if (typeof payload.requestId !== 'string' || !payload.requestId) {
+            sendJson(res, 400, { ok: false, error: 'permission resolve requires a requestId' });
+            return;
+          }
+          // Anything that is not an explicit allow is a deny: an approval that
+          // fails open would be worse than the run stalling.
+          const decision = payload.decision === 'allow' ? 'allow' : 'deny';
+          const result = runtime.resolvePermission(parts[1], payload.requestId, decision);
+          sendJson(res, result.ok ? 200 : 404, result.ok ? { ok: true } : { ok: false, error: result.error });
+        })();
+        return;
+      }
+
+      // GET /workflow-runtime/:runId/events?afterSeq=N — the run's event stream.
+      //
+      // Two sources, one frame contract: a live run replays from the manager's
+      // in-memory log (and then streams), a finished one replays from the
+      // events table. `afterSeq` is the journal cursor, so a client can always
+      // recover from a missed frame by asking for what it has not seen.
+      if (method === 'GET' && parts.length === 3 && parts[2] === 'events') {
+        const runId = parts[1];
+        let afterSeq = -1;
+        try {
+          const url = new URL(req.url || '/', 'http://127.0.0.1');
+          const raw = url.searchParams.get('afterSeq');
+          if (raw !== null && raw.trim() !== '') {
+            const parsed = Number(raw);
+            if (Number.isFinite(parsed)) afterSeq = parsed;
+          }
+        } catch {
+          // Malformed URL: replay from the beginning.
+        }
+
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+          'Access-Control-Allow-Origin': '*',
+          'X-Accel-Buffering': 'no',
+        });
+        // Send the preamble now rather than waiting for the first frame. A run
+        // can sit idle between steps for minutes, and `writeHead` alone keeps
+        // the headers buffered until the first `write` — so an attached client
+        // would see no response at all until the next event, and `EventSource`
+        // would never fire `open`.
+        res.flushHeaders();
+        startSSEKeepAlive(req, res);
+        deps.httpLogger.info('Workflow runtime SSE opened', { runId, afterSeq });
+
+        const writeFrame = (frame: WorkflowRuntimeSseFrame): void => {
+          if (res.writableEnded) return;
+          const id = frame.seq !== undefined ? `id: ${frame.seq}\n` : '';
+          res.write(`event: ${frame.frame}\n${id}data: ${JSON.stringify(frame)}\n\n`);
+          // A terminal frame is the end of the story; close so the client does
+          // not hold a dead subscription open for the life of the app.
+          if (frame.frame === 'done') res.end();
+        };
+
+        const detach = runtime.attach(runId, afterSeq, writeFrame);
+        if (detach === null) {
+          void (async () => {
+            try {
+              const row = (await deps.dbRequest('workflowRun:get', { id: runId })) as
+                | Record<string, unknown>
+                | null;
+              if (!row) {
+                res.write(`event: error\ndata: ${JSON.stringify({ error: 'run not found' })}\n\n`);
+                res.end();
+                return;
+              }
+              const events = (await deps.dbRequest('workflowRun:listEvents', {
+                runId,
+                afterSeq,
+              })) as JournalRecord[] | undefined;
+              for (const record of events ?? []) {
+                writeFrame({
+                  frame: 'record',
+                  runId,
+                  seq: typeof record.seq === 'number' ? record.seq : undefined,
+                  record,
+                });
+                if (res.writableEnded) return;
+              }
+              const status = typeof row.status === 'string' ? row.status : 'unknown';
+              writeFrame({
+                frame: 'done',
+                runId,
+                summary: {
+                  runId,
+                  workflowName: typeof row.workflowName === 'string' ? row.workflowName : '',
+                  status,
+                  startedAt: typeof row.createdAt === 'number' ? row.createdAt : 0,
+                  finishedAt:
+                    typeof row.finishedAt === 'number'
+                      ? row.finishedAt
+                      : typeof row.updatedAt === 'number'
+                        ? row.updatedAt
+                        : Date.now(),
+                  artifacts: Array.isArray(row.artifacts)
+                    ? (row.artifacts as WorkflowRunSummary['artifacts'])
+                    : [],
+                  ...(typeof row.spentTokens === 'number' ? { tokens: row.spentTokens } : {}),
+                  ...(typeof row.pauseMessage === 'string' && row.pauseMessage
+                    ? { error: row.pauseMessage }
+                    : {}),
+                },
+              });
+              // Non-terminal rows are drains/uncertain states with no live
+              // process; close rather than leave a silent stream open.
+              if (!res.writableEnded && !TERMINAL_RUN_STATUSES.has(status)) res.end();
+            } catch (err) {
+              deps.logger.warn('Workflow runtime SSE replay failed', {
+                runId,
+                error: err instanceof Error ? err.message : String(err),
+              });
+              if (!res.writableEnded) res.end();
+            }
+          })();
+        }
+
+        req.on('close', () => {
+          detach?.();
+        });
+        return;
+      }
+
+      sendJson(res, 404, { error: 'Not Found' });
       return;
     }
 

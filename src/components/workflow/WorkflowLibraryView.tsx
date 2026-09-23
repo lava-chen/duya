@@ -28,12 +28,15 @@ import {
 } from '@/components/icons';
 import { PageFrame, PageHeader, PageCard, EmptyState } from '@/components/ui/page';
 import {
-  listWorkflowDefsIPC,
-  triggerWorkflowRunIPC,
-  deleteWorkflowDefIPC,
-  type WorkflowDefinitionSummary,
-  type WorkflowRunRow,
+  listDwfWorkflowsIPC,
+  deleteDwfWorkflowIPC,
+  listWorkflowRunsIPC,
 } from '@/lib/workflow-ipc';
+import type { WorkflowRunRow } from '@/components/layout/panels/WorkflowPanel';
+import { WorkflowLaunchDialog } from '@/components/workflow/WorkflowLaunchDialog';
+
+/** One entry of the dwf library list — what a card renders and the dialog needs. */
+type LibraryEntry = Awaited<ReturnType<typeof listDwfWorkflowsIPC>>['entries'][number];
 
 // ─── styles ────────────────────────────────────────────────────────────────
 
@@ -210,20 +213,26 @@ export function WorkflowLibraryView({
   embedded = false,
 }: WorkflowLibraryViewProps) {
   const { t } = useTranslation();
-  const [defs, setDefs] = useState<WorkflowDefinitionSummary[]>([]);
-  const [runs, setRuns] = useState<WorkflowRunRow[]>([]);
+  const [entries, setEntries] = useState<Awaited<ReturnType<typeof listDwfWorkflowsIPC>>['entries']>([]);
+  const [runs, setRuns] = useState<Awaited<ReturnType<typeof listWorkflowRunsIPC>>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Plan 560 §7.5: ▶ opens the 实参窗 — it picks the run's working directory and
+   * the argument values before anything is launched. Firing straight from the
+   * card would leave the agent nodes with no working directory at all.
+   */
+  const [launching, setLaunching] = useState<LibraryEntry | null>(null);
 
   const reload = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [list, runsList] = await Promise.all([
-        listWorkflowDefsIPC(projectDir),
-        import('@/lib/workflow-ipc').then((m) => m.listWorkflowRunsIPC({ limit: 200 })),
+      const [listResult, runsList] = await Promise.all([
+        listDwfWorkflowsIPC(projectDir),
+        listWorkflowRunsIPC({ limit: 200 }),
       ]);
-      setDefs(list ?? []);
+      setEntries(listResult?.entries ?? []);
       setRuns(runsList ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -236,9 +245,9 @@ export function WorkflowLibraryView({
     reload();
   }, [reload]);
 
-  // Group defs by scope
-  const globalDefs = useMemo(() => defs.filter((d) => d.scope === 'global'), [defs]);
-  const projectDefs = useMemo(() => defs.filter((d) => d.scope === 'project'), [defs]);
+  // Group entries by scope
+  const globalEntries = useMemo(() => entries.filter((d) => d.scope === 'global'), [entries]);
+  const projectEntries = useMemo(() => entries.filter((d) => d.scope === 'project'), [entries]);
 
   // Last-run status lookup by workflow name
   const lastRunByName = useMemo(() => {
@@ -249,7 +258,7 @@ export function WorkflowLibraryView({
     return map;
   }, [runs]);
 
-  const renderCard = (def: WorkflowDefinitionSummary) => {
+  const renderCard = (def: typeof entries[number]) => {
     const lastRun = lastRunByName.get(def.name);
     const status = lastRun?.status ?? null;
     const statusColor =
@@ -288,9 +297,7 @@ export function WorkflowLibraryView({
           <div style={cardActionsStyle} onClick={(e) => e.stopPropagation()}>
             <button
               style={runButtonStyle}
-              onClick={async () => {
-                await triggerWorkflowRunIPC({ name: def.name, projectDir });
-              }}
+              onClick={() => setLaunching(def)}
               aria-label={t('workflow.action.run')}
               title={t('workflow.action.run')}
             >
@@ -300,7 +307,7 @@ export function WorkflowLibraryView({
               style={iconButtonStyle}
               onClick={async () => {
                 if (!window.confirm(`Delete workflow "${def.name}"?`)) return;
-                await deleteWorkflowDefIPC({ name: def.name, scope: def.scope, projectDir });
+                await deleteDwfWorkflowIPC({ name: def.name, scope: def.scope, projectDir });
                 reload();
               }}
               aria-label={t('workflow.action.delete')}
@@ -332,7 +339,7 @@ export function WorkflowLibraryView({
         </PageCard>
       )}
 
-      {!error && !loading && defs.length === 0 && (
+      {!error && !loading && entries.length === 0 && (
         <PageCard>
           <EmptyState
             icon={<ChatCirclePlusIcon size={32} />}
@@ -364,13 +371,13 @@ export function WorkflowLibraryView({
       )}
 
       {/* Global group */}
-      {!error && !loading && globalDefs.length > 0 && (
+      {!error && !loading && globalEntries.length > 0 && (
         <div style={scopeGroupStyle}>
           <div style={scopeHeaderStyle}>
             <div style={scopeTitleStyle}>
               <GlobeIcon size={14} />
               {t('workflow.scopeGlobal')}
-              <span style={scopeCountStyle}>{globalDefs.length}</span>
+              <span style={scopeCountStyle}>{globalEntries.length}</span>
             </div>
             {onCreateViaConversation && (
               <button
@@ -382,18 +389,18 @@ export function WorkflowLibraryView({
               </button>
             )}
           </div>
-          <div style={cardGridStyle}>{globalDefs.map(renderCard)}</div>
+          <div style={cardGridStyle}>{globalEntries.map(renderCard)}</div>
         </div>
       )}
 
       {/* Project group */}
-      {!error && !loading && projectDefs.length > 0 && projectDir && (
+      {!error && !loading && projectEntries.length > 0 && projectDir && (
         <div style={scopeGroupStyle}>
           <div style={scopeHeaderStyle}>
             <div style={scopeTitleStyle}>
               <FolderIcon size={14} />
               {projectName ?? projectDir.split(/[\\/]/).pop() ?? 'Project'}
-              <span style={scopeCountStyle}>{projectDefs.length}</span>
+              <span style={scopeCountStyle}>{projectEntries.length}</span>
             </div>
             {onCreateViaConversation && (
               <button
@@ -405,8 +412,16 @@ export function WorkflowLibraryView({
               </button>
             )}
           </div>
-          <div style={cardGridStyle}>{projectDefs.map(renderCard)}</div>
+          <div style={cardGridStyle}>{projectEntries.map(renderCard)}</div>
         </div>
+      )}
+      {launching && (
+        <WorkflowLaunchDialog
+          entry={launching}
+          defaultProjectDir={projectDir}
+          onClose={() => setLaunching(null)}
+          onLaunched={() => void reload()}
+        />
       )}
     </>
   );

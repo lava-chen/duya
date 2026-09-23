@@ -501,7 +501,13 @@ export class WorkerManager {
     return this.workers.size;
   }
 
-  private resolveWorkerPath(): string {
+  /**
+   * Absolute path of the agent process bundle. Public because the run-anchored
+   * workflow runtime (plan 560 D2) spawns the SAME bundle under a different
+   * `DUYA_AGENT_ROLE` rather than duplicating the packaged/dev resolution
+   * rules here.
+   */
+  resolveWorkerPath(): string {
     const isPackaged = !!process.resourcesPath && !process.defaultApp;
 
     if (isPackaged) {
@@ -538,7 +544,8 @@ export class WorkerManager {
     return devBundle;
   }
 
-  private resolveBetterSqlite3Path(): string {
+  /** Public for the same reason as `resolveWorkerPath` (plan 560 D2). */
+  resolveBetterSqlite3Path(): string {
     const isPackaged = !!process.resourcesPath && !process.defaultApp;
     if (isPackaged) {
       return path.join(process.resourcesPath, 'better-sqlite3');

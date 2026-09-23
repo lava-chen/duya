@@ -30,7 +30,8 @@ export interface WorkflowPageProps {
   projectDir?: string;
   projectName?: string;
   onCreateViaConversation?: (scope: 'global' | 'project', projectDir?: string) => void;
-  onAmendInChat?: (name: string, scope: 'global' | 'project') => void;
+  /** Amend a saved workflow through a chat session (carries the user's own brief). */
+  onAmendInChat?: (name: string, scope: 'global' | 'project', requirements: string) => void;
 }
 
 type DetailState = { name: string; scope: 'global' | 'project' } | null;

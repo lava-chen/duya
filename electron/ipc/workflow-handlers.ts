@@ -1,18 +1,16 @@
 /**
- * workflow-handlers.ts — IPC handlers for workflow definition management
- * and run store access (plan 552 Phase 7 minimal console + Phase 8
- * definition CRUD).
+ * workflow-handlers.ts — IPC handlers for dwf (.dwf.ts) saved workflow
+ * management and run store access.
  *
- * Definition file operations (create/update/delete) are direct file
- * system writes via WorkflowFileRegistry. Run triggering is delegated
- * to the agent server HTTP endpoint (POST /workflow/:name/trigger).
+ * Saved workflow file operations are direct file system writes via
+ * SavedWorkflowStore (frontmatter + TypeScript script). Run triggering
+ * is delegated to the agent server HTTP endpoint
+ * (POST /workflow/:name/trigger).
  */
 
 import { ipcMain } from 'electron';
 import * as http from 'node:http';
 import { getCoreStoresOrNull } from '../db/core-connection';
-import { WorkflowFileRegistry, type WorkflowScope } from '../../packages/agent/src/modes/workflow/workflow-files';
-import { validateWorkflow } from '../../packages/agent/src/modes/workflow/validate';
 import {
   SavedWorkflowStore,
   SavedWorkflowMetaSchema,
@@ -20,9 +18,83 @@ import {
   type SavedWorkflowScope,
   type SavedWorkflowMeta,
 } from '../../packages/agent/src/modes/workflow/dwf';
-import type { WorkflowRunStatus } from '../db/core/workflow-store';
+import {
+  WorkflowFileRegistry,
+  parseWorkflowDef,
+  type WorkflowScope,
+} from '../../packages/agent/src/modes/workflow/workflow-files';
+import type { WorkflowRunOrigin, WorkflowRunStatus } from '../db/core/workflow-store';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
 import { getLogger, LogComponent } from '../logging/logger';
+
+// ─── agent server HTTP bridge (plan 560) ─────────────────────────────────────
+//
+// Run-anchored runs are executed by the AGENT SERVER, not by main: the runtime
+// manager and its child processes live in that process. So trigger / cancel /
+// permission-resolve are HTTP calls to it — the same shape `workflow:run`
+// already uses for the session anchor. Reads (status / list-runs / get-events)
+// stay local: the row and the events table are main's own database.
+
+export interface WorkflowRuntimeHttpResult {
+  status: number;
+  body: Record<string, unknown>;
+}
+
+export type WorkflowRuntimeHttpClient = (
+  path: string,
+  payload: unknown,
+) => Promise<WorkflowRuntimeHttpResult>;
+
+function defaultRuntimeHttpClient(): WorkflowRuntimeHttpClient {
+  return (path, payload) =>
+    new Promise<WorkflowRuntimeHttpResult>((resolve, reject) => {
+      const port = getAgentServerPort();
+      if (!port) {
+        reject(new Error('agent server not running'));
+        return;
+      }
+      const body = JSON.stringify(payload ?? {});
+      const req = http.request(
+        {
+          hostname: '127.0.0.1',
+          port,
+          path,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(body),
+          },
+        },
+        (res) => {
+          let data = '';
+          res.on('data', (chunk) => (data += chunk));
+          res.on('end', () => {
+            let parsed: Record<string, unknown> = {};
+            try {
+              parsed = data ? (JSON.parse(data) as Record<string, unknown>) : {};
+            } catch {
+              parsed = { error: `invalid response: ${data}` };
+            }
+            resolve({ status: res.statusCode ?? 0, body: parsed });
+          });
+        },
+      );
+      req.on('error', reject);
+      req.write(body);
+      req.end();
+    });
+}
+
+let runtimeHttp: WorkflowRuntimeHttpClient = defaultRuntimeHttpClient();
+
+/**
+ * Injection seam for tests. A unit test cannot bind the agent server socket, so
+ * this swaps only the transport — the payload shape, which is what the tests
+ * actually assert, still comes from the handlers below.
+ */
+export function _setWorkflowRuntimeHttpForTesting(client: WorkflowRuntimeHttpClient | null): void {
+  runtimeHttp = client ?? defaultRuntimeHttpClient();
+}
 
 export function registerWorkflowHandlers(): void {
   // Read handlers must tolerate "core not yet ready" — the renderer may
@@ -62,16 +134,48 @@ export function registerWorkflowHandlers(): void {
   });
 
   /**
-   * Cancel from the console. Store-level: terminal runs are refused, a
-   * parked/waiting run is marked cancelled. Live-abort of an in-flight
-   * engine run needs the agent worker's in-flight map and lands with the
-   * production host-binding pass (see plan 552 §13).
+   * Cancel from the console, dispatched by anchor (plan 560 D1).
+   *
+   * A `library` run belongs to a dedicated runtime child inside the agent
+   * server — only that process can actually stop it, so the call is forwarded.
+   * Every other anchor is handled here, store-level: terminal runs are refused,
+   * a parked/waiting run is marked cancelled. (Live-abort of an in-flight
+   * session-anchored engine run still needs the worker's in-flight map and
+   * lands with the production host-binding pass — see plan 552 §13.)
    */
-  ipcMain.handle('workflow:cancel', (_e, id: string) => {
+  ipcMain.handle('workflow:cancel', async (_e, id: string) => {
     const core = safeStores();
     if (!core) return { ok: false, reason: 'not_ready' as const };
     const run = core.workflowRuns.getRun(id);
     if (!run) return { ok: false, reason: 'not_found' as const };
+
+    if (run.origin === 'library') {
+      try {
+        const { status, body } = await runtimeHttp(
+          `/workflow-runtime/${encodeURIComponent(id)}/cancel`,
+          {},
+        );
+        if (status >= 200 && status < 300) return { ok: true };
+        // A library run's terminal state is written only by the runtime child
+        // that owns it. A 404 here means that child is gone (crash, restart,
+        // lost manager entry) and nobody will ever write the terminal row —
+        // the run card would stay "running" forever and refuse every stop.
+        // Reconcile store-side instead, with the same semantics as
+        // `reconcileStaleRuns` (mark cancelled, never auto-rerun).
+        if (status === 404) {
+          core.workflowRuns.updateStatus(id, 'cancelled', 'runtime not active — reconciled on cancel');
+          core.workflowRuns.setWaitTill(id, null);
+          return { ok: true };
+        }
+        return {
+          ok: false,
+          error: typeof body.error === 'string' ? body.error : `cancel failed (${status})`,
+        };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
     const terminal = ['complete', 'failed', 'cancelled', 'interrupted'];
     if (terminal.includes(run.status)) return { ok: false, reason: 'terminal' as const };
     core.workflowRuns.updateStatus(id, 'cancelled', 'cancelled from console');
@@ -79,50 +183,65 @@ export function registerWorkflowHandlers(): void {
     return { ok: true };
   });
 
-  // ─── Definition library (plan 552 Phase 7, ZCode parity) ───
+  // ─── definition library (YAML .yaml) ───────────────────────────────────────
+  //
+  // Parallel to dwf: these serve the legacy YAML-based workflow definitions
+  // that WorkflowFileRegistry manages. WorkflowDetailView reads them here;
+  // editing always goes through the agent conversation.
 
   ipcMain.handle('workflow:defs:list', (_e, projectDir?: string) => {
     try {
-      const registry = new WorkflowFileRegistry(undefined, projectDir);
-      return registry.listDetailed();
+      const reg = new WorkflowFileRegistry(undefined, projectDir);
+      return reg.listDetailed().map((d) => ({
+        name: d.name,
+        scope: d.scope,
+        valid: d.valid,
+        phaseCount: d.phaseCount,
+        nodeCount: d.nodeCount,
+        description: d.description,
+        whenToUse: d.whenToUse,
+        triggers: d.triggers,
+        params: d.params,
+        file: d.file,
+      }));
     } catch {
       return [];
     }
   });
 
-  ipcMain.handle('workflow:defs:get', (_e, payload: { name: string; projectDir?: string }) => {
-    try {
-      const registry = new WorkflowFileRegistry(undefined, payload.projectDir);
-      if (!registry.exists(payload.name)) return null;
-      // definition text is the authoritative source — the console shows it
-      // read-only and never edits it (ZCode parity: changes go through chat).
-      return {
-        summary: registry.listDetailed().find((d) => d.name === payload.name) ?? null,
-        definition: registry.loadRaw(payload.name),
-      };
-    } catch (err) {
-      return { error: err instanceof Error ? err.message : String(err) };
-    }
-  });
-
-  // ─── Definition CRUD (plan 552 Phase 8) ───
+  ipcMain.handle(
+    'workflow:defs:get',
+    (_e, payload: { name: string; projectDir?: string }) => {
+      try {
+        const reg = new WorkflowFileRegistry(undefined, payload.projectDir);
+        if (!reg.exists(payload.name)) return null;
+        const def = reg.load(payload.name);
+        const raw = reg.loadRaw(payload.name) as Record<string, unknown>;
+        const summary = {
+          name: def.name,
+          description: def.description,
+          when_to_use: def.when_to_use,
+          file: reg.scopeOf(payload.name) === 'project'
+            ? `${payload.projectDir}/.duya/workflows/${payload.name}.yaml`
+            : `~/.duya/workflows/${payload.name}.yaml`,
+          scope: (reg.scopeOf(payload.name) ?? 'global') as WorkflowScope,
+        };
+        return { summary, definition: raw };
+      } catch (err) {
+        return null;
+      }
+    },
+  );
 
   ipcMain.handle(
     'workflow:defs:create',
-    (_e, payload: { def: unknown; scope?: WorkflowScope; projectDir?: string }) => {
-      const logger = getLogger();
+    (_e, payload: { def: unknown; scope?: string; projectDir?: string }) => {
       try {
-        const validation = validateWorkflow(payload.def);
-        if (!validation.ok || !validation.def) {
-          const errors = validation.errors.map((e) => `${e.path || '(root)'}: ${e.message}`).join('; ');
-          return { ok: false, error: `validation failed: ${errors}` };
-        }
-        const registry = new WorkflowFileRegistry(undefined, payload.projectDir);
-        const file = registry.save(validation.def, payload.scope ?? 'global');
-        logger.info('Workflow definition created', { name: validation.def.name, file, scope: payload.scope ?? 'global' }, LogComponent.Main);
-        return { ok: true, file, name: validation.def.name };
+        const def = parseWorkflowDef(payload.def);
+        const reg = new WorkflowFileRegistry(undefined, payload.projectDir);
+        const file = reg.save(def, (payload.scope as WorkflowScope) ?? 'global');
+        return { ok: true, name: def.name, file };
       } catch (err) {
-        logger.error('Failed to create workflow definition', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
         return { ok: false, error: err instanceof Error ? err.message : String(err) };
       }
     },
@@ -130,27 +249,15 @@ export function registerWorkflowHandlers(): void {
 
   ipcMain.handle(
     'workflow:defs:update',
-    (_e, payload: { name: string; def: unknown; scope?: WorkflowScope; projectDir?: string }) => {
-      const logger = getLogger();
+    (_e, payload: { name: string; def: unknown; scope?: string; projectDir?: string }) => {
       try {
-        const validation = validateWorkflow(payload.def);
-        if (!validation.ok || !validation.def) {
-          const errors = validation.errors.map((e) => `${e.path || '(root)'}: ${e.message}`).join('; ');
-          return { ok: false, error: `validation failed: ${errors}` };
-        }
-        // Name in payload must match the def's name (file is named by def.name)
-        if (payload.name !== validation.def.name) {
-          return { ok: false, error: `name mismatch: payload has "${payload.name}" but def has "${validation.def.name}"` };
-        }
-        const registry = new WorkflowFileRegistry(undefined, payload.projectDir);
-        if (!registry.exists(payload.name)) {
-          return { ok: false, error: `workflow "${payload.name}" does not exist` };
-        }
-        const file = registry.save(validation.def, payload.scope);
-        logger.info('Workflow definition updated', { name: validation.def.name, file, scope: payload.scope ?? 'global' }, LogComponent.Main);
-        return { ok: true, file, name: validation.def.name };
+        const def = parseWorkflowDef(payload.def);
+        const reg = new WorkflowFileRegistry(undefined, payload.projectDir);
+        const currentScope = reg.scopeOf(payload.name);
+        if (!currentScope) return { ok: false, error: `workflow "${payload.name}" not found` };
+        const file = reg.save(def, currentScope);
+        return { ok: true, name: def.name, file };
       } catch (err) {
-        logger.error('Failed to update workflow definition', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
         return { ok: false, error: err instanceof Error ? err.message : String(err) };
       }
     },
@@ -158,24 +265,18 @@ export function registerWorkflowHandlers(): void {
 
   ipcMain.handle(
     'workflow:defs:delete',
-    (_e, payload: { name: string; scope?: WorkflowScope; projectDir?: string }) => {
-      const logger = getLogger();
+    (_e, payload: { name: string; scope?: string; projectDir?: string }) => {
       try {
-        const registry = new WorkflowFileRegistry(undefined, payload.projectDir);
-        const deleted = registry.delete(payload.name, payload.scope);
-        if (!deleted) {
-          return { ok: false, error: `workflow "${payload.name}" not found` };
-        }
-        logger.info('Workflow definition deleted', { name: payload.name, scope: payload.scope ?? 'auto' }, LogComponent.Main);
-        return { ok: true };
+        const reg = new WorkflowFileRegistry(undefined, payload.projectDir);
+        const deleted = reg.delete(payload.name, payload.scope as WorkflowScope | undefined);
+        return { ok: deleted };
       } catch (err) {
-        logger.error('Failed to delete workflow definition', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
         return { ok: false, error: err instanceof Error ? err.message : String(err) };
       }
     },
   );
 
-  // ─── dwf saved workflows (.dwf.ts — Phase 4 surface) ───
+  // ─── dwf saved workflows (.dwf.ts) ───
   // 与旧 defs 通道平行：文件是 frontmatter + TS 脚本本体，脚本是权威源，
   // 渲染层只读展示 + 元数据编辑；脚本编辑永远走 agent 对话（ZCode parity）。
 
@@ -320,6 +421,106 @@ export function registerWorkflowHandlers(): void {
         req.write(body);
         req.end();
       });
+    },
+  );
+
+  // ─── plan 560: run-anchored runtime surface ────────────────────────────────
+
+  /**
+   * Library-anchor trigger (§5.1). No session is involved: the agent server
+   * creates the run row, spawns a dedicated child process and streams progress
+   * on its own SSE channel keyed by runId. The renderer learns the runId here
+   * and then subscribes to the stream directly (D5).
+   */
+  ipcMain.handle(
+    'workflow:trigger',
+    async (
+      _e,
+      payload: {
+        name: string;
+        params?: Record<string, unknown>;
+        projectDir?: string;
+        scope?: 'project' | 'global' | null;
+      },
+    ) => {
+      try {
+        const { status, body } = await runtimeHttp('/workflow-runtime/trigger', {
+          name: payload.name,
+          params: payload.params ?? {},
+          projectDir: payload.projectDir,
+          scope: payload.scope ?? null,
+        });
+        if (status >= 200 && status < 300 && typeof body.runId === 'string') {
+          return { ok: true, runId: body.runId };
+        }
+        return {
+          ok: false,
+          error: typeof body.error === 'string' ? body.error : `trigger failed (${status})`,
+        };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+  );
+
+  /** One run's row. Null while the core stores are still booting. */
+  ipcMain.handle('workflow:status', (_e, runId: string) => {
+    const core = safeStores();
+    if (!core) return null;
+    return core.workflowRuns.getRun(runId);
+  });
+
+  /**
+   * Run history for the library, `origin`-filterable so a panel can show only
+   * library runs without the console's session-anchored ones.
+   */
+  ipcMain.handle(
+    'workflow:list-runs',
+    (
+      _e,
+      filter?: {
+        workflowName?: string;
+        origin?: WorkflowRunOrigin;
+        status?: WorkflowRunStatus;
+        limit?: number;
+        offset?: number;
+      },
+    ) => {
+      const core = safeStores();
+      if (!core) return [];
+      return core.workflowRuns.listRuns(filter);
+    },
+  );
+
+  /**
+   * Journal replay / backfill (§5.3). The renderer merges this with the live
+   * SSE stream by `seq` — which is exactly what makes a missed frame
+   * recoverable instead of permanently lost.
+   */
+  ipcMain.handle('workflow:get-events', (_e, payload: { runId: string; afterSeq?: number }) => {
+    const core = safeStores();
+    if (!core) return [];
+    return core.workflowRuns.listEvents(payload.runId, payload.afterSeq ?? -1);
+  });
+
+  /** Forward an approval answer to the child that is blocked on it (D6). */
+  ipcMain.handle(
+    'workflow:permission-resolve',
+    async (_e, payload: { runId: string; requestId: string; decision: 'allow' | 'deny' }) => {
+      try {
+        const { status, body } = await runtimeHttp(
+          `/workflow-runtime/${encodeURIComponent(payload.runId)}/permission`,
+          { requestId: payload.requestId, decision: payload.decision },
+        );
+        if (status >= 200 && status < 300) return { ok: true };
+        return {
+          ok: false,
+          error:
+            typeof body.error === 'string' ? body.error : `permission resolve failed (${status})`,
+        };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
     },
   );
 }

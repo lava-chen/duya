@@ -27,6 +27,7 @@ import { classifyError, type WorkflowErrorClass } from '../error-class.js';
 import { uncertainOutcomeFor, type DecisionRunOutcome } from '../decision-adapter.js';
 import type { DecisionQuestionSpec, GuiNodeSpec } from '../schema.js';
 import type { GuiNodeOutcome } from '../gui-runner.js';
+import type { BrowserNodeOutcome, BrowserNodeSpec, BrowserStep } from '../browser-runner.js';
 import type { Question } from '@duya/ai';
 
 // ─── 宿主端口（与 WorkflowHost 同构，decide/publish 为脚本专有扩展） ───
@@ -52,6 +53,11 @@ export interface DwfHostPorts {
    * 缺席时 wf.gui 抛明确错误——录制转换的脚本必须绑定此端口才有意义。
    */
   runGui(spec: GuiNodeSpec, annotation: Record<string, unknown> | undefined, ctx: HostCallContext): Promise<GuiNodeOutcome>;
+  /**
+   * 浏览器插件步骤序列（plan 564，browser-runner 的 runBrowserNode 语义由宿主
+   * 绑定层包装）。缺席时 wf.browser 抛明确错误——扩展驱动的脚本必须绑定此端口。
+   */
+  runBrowser?(spec: BrowserNodeSpec, ctx: HostCallContext): Promise<BrowserNodeOutcome>;
   /** Human approval（498 卡管线）。resolve approve/deny/timeout。 */
   requestApproval(spec: { prompt: string; timeoutMs?: number }, ctx: HostCallContext): Promise<{ decision: 'approve' | 'deny' | 'timeout' }>;
   /** 551 DecisionService 桥。缺席 = 决策面不可用（走 onLowConfidence 路径）。 */
@@ -155,6 +161,12 @@ export interface DwfApi {
    * capture 的新索引。失败抛错；skipped resolve null；成功 resolve outcome.output。
    */
   gui(spec: GuiNodeSpec, opts?: { annotation?: Record<string, unknown> }): Promise<unknown>;
+  /**
+   * 浏览器插件节点（plan 564）：对真实浏览器执行确定性步骤序列（navigate/
+   * click/type/set_value/key/scroll/wait/screenshot，CSS selector 定位）。
+   * 需要 DUYA Browser Bridge 扩展在线；失败抛错；on_stuck:'skip' 时 resolve null。
+   */
+  browser(spec: BrowserNodeSpec): Promise<unknown>;
   /** 开放式子任务（SubagentTool）。opts.outputSchema 走宿主校验+一次重试。 */
   agent(agentType: string, prompt: string, opts?: { model?: string; outputSchema?: Record<string, unknown> }): Promise<unknown>;
   /** 人在环审批。deny 抛错；timeout 按 onTimeout：fail=抛错、skip=返回 null、escalate=抛 escalate。 */
@@ -167,6 +179,14 @@ export interface DwfApi {
   publish(name: string, content: unknown, contentType?: string): Promise<void>;
   /** 结构化进度日志（journal，不进对话流）。 */
   log(message: string): void;
+  /**
+   * 阶段分隔（plan 560 §6.2，第 9 个原语）。落一条 `kind:'phase'` 的 journal
+   * 记录，渲染层据此**按 seq 切段**：首个 phase 之前的记录归隐式阶段「准备」，
+   * 其后所有记录归该阶段。不返回任何值，也不参与缓存经济学。
+   *
+   * 存量脚本没有 phase → 渲染成单个隐式阶段，不报错。
+   */
+  phase(name: string): void;
 }
 
 // ─── 运行 ───
@@ -191,6 +211,137 @@ function safeJsonSize(value: unknown): number {
     return JSON.stringify(value ?? null)?.length ?? 0;
   } catch {
     return 0;
+  }
+}
+
+// ─── 输入摘要（plan 560 §6.1：display-only，绝不进 reqHash） ───
+
+/** 最像「一行命令」的键，按优先级取第一个非空字符串。 */
+const SUMMARY_KEYS = [
+  'cmd',
+  'command',
+  'command_text',
+  'file_path',
+  'path',
+  'pattern',
+  'query',
+  'url',
+  'prompt',
+  'text',
+  'name',
+  'title',
+] as const;
+
+/** 一行输入摘要；压平空白并截断。绝不参与任何哈希。 */
+function pickSummaryText(value: unknown, max = 200): string {
+  let text = '';
+  if (typeof value === 'string') {
+    text = value;
+  } else if (value !== null && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    for (const key of SUMMARY_KEYS) {
+      const candidate = obj[key];
+      if (typeof candidate === 'string' && candidate.trim() !== '') {
+        text = candidate.trim();
+        break;
+      }
+    }
+    if (text === '') {
+      try {
+        text = JSON.stringify(value) ?? '';
+      } catch {
+        text = '';
+      }
+    }
+  } else if (value !== undefined) {
+    text = String(value);
+  }
+  text = text.replace(/\s+/g, ' ').trim();
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+/** 单个 RPA 步骤的一行摘要（`click som:3`、`capture`…）。 */
+function describeGuiStep(
+  step: { do?: string; element?: string; key?: string; direction?: string } | undefined,
+): string {
+  if (!step) return 'no steps';
+  const element = typeof step.element === 'string' && step.element !== '' ? ` ${step.element}` : '';
+  switch (step.do) {
+    case 'capture':
+      return 'capture';
+    case 'click':
+      return `click${element}`;
+    case 'type_text':
+      return `type_text${element}`;
+    case 'set_value':
+      return `set_value${element}`;
+    case 'key':
+      return `key ${step.key ?? ''}`.trim();
+    case 'scroll':
+      return `scroll ${step.direction ?? 'down'}`;
+    default:
+      return step.do ?? 'step';
+  }
+}
+
+/** 单个 browser 步骤的一行摘要（`navigate https://…`、`click #submit`…）。 */
+function describeBrowserStep(step: BrowserStep | undefined): string {
+  if (!step) return 'no steps';
+  switch (step.do) {
+    case 'navigate':
+      return `navigate ${step.url}`;
+    case 'click':
+      return `click ${step.selector}`;
+    case 'click_text':
+      return `click_text ${step.text}`;
+    case 'type':
+      return `type ${step.selector}`;
+    case 'set_value':
+      return `set_value ${step.selector}`;
+    case 'key':
+      return `key ${step.key}`;
+    case 'scroll':
+      return `scroll ${step.direction ?? 'down'}`;
+    case 'wait':
+      return step.selector ? `wait ${step.selector}` : step.text ? `wait text:${step.text}` : 'wait';
+    case 'screenshot':
+      return `screenshot${step.name ? ` ${step.name}` : ''}`;
+  }
+}
+
+/**
+ * cachedCall 的输入摘要 —— run 卡片步骤行显示的那一行（plan 560 §7.2）。
+ * 由 payload 推导而不是各原语手传，保证「同一个 payload → 同一个摘要」，
+ * 也让新增原语不必记得补这个字段。
+ */
+function summarizeCall(action: string, nodeKind: string, payload: unknown): string {
+  const obj = (payload ?? {}) as Record<string, unknown>;
+  switch (nodeKind) {
+    case 'tool':
+      return pickSummaryText(obj.input);
+    case 'gui': {
+      const spec = obj.spec as GuiNodeSpec | undefined;
+      const steps = spec?.steps ?? [];
+      const head = describeGuiStep(steps[0]);
+      const rest = steps.length > 1 ? ` +${steps.length - 1}` : '';
+      return `${spec?.target_app ?? 'gui'}: ${head}${rest}`;
+    }
+    case 'browser': {
+      const spec = obj.spec as BrowserNodeSpec | undefined;
+      const steps = spec?.steps ?? [];
+      const head = describeBrowserStep(steps[0]);
+      const rest = steps.length > 1 ? ` +${steps.length - 1}` : '';
+      return `${spec?.start_url ?? 'browser'}: ${head}${rest}`;
+    }
+    case 'agent':
+    case 'human':
+      return pickSummaryText(obj.prompt);
+    case 'decision': {
+      const ids = Object.keys((obj.questions ?? {}) as Record<string, unknown>);
+      return ids.length > 0 ? `decide ${ids.join(', ')}` : 'decide';
+    }
+    default:
+      return action;
   }
 }
 
@@ -247,15 +398,17 @@ export function createDwfApi(ports: DwfHostPorts, opts: DwfRunOptions): DwfApi {
   async function cachedCall<T>(
     kind: 'node_result' | 'decision' | 'approval',
     action: string,
-    nodeKind: 'tool' | 'gui' | 'agent' | 'decision' | 'human',
+    nodeKind: 'tool' | 'gui' | 'browser' | 'agent' | 'decision' | 'human',
     payload: unknown,
     execute: () => Promise<{ value: T; meta?: { childSessionId?: string; exitCode?: number | null; usage?: { inputTokens: number; outputTokens: number } } }>,
   ): Promise<{ value: T; cached: boolean }> {
     const nodeId = callNodeId(callSeq++, action);
     const reqHash = computeReqHash(kind, payload);
+    // 同样的 payload 必得同样的摘要（§6.1）——它只服务显示，从不进 reqHash。
+    const inputSummary = summarizeCall(action, nodeKind, payload);
     const hit = journal.hit(nodeId, reqHash);
     if (hit && hit.result !== undefined) {
-      journal.append({ kind, nodeId, attempt: 1, status: 'succeeded', result: hit.result, nodeKind, action, durationMs: 0 });
+      journal.append({ kind, nodeId, attempt: 1, status: 'succeeded', result: hit.result, nodeKind, action, inputSummary, replayed: true, durationMs: 0 });
       return { value: hit.result as T, cached: true };
     }
     const startedAt = Date.now();
@@ -270,6 +423,7 @@ export function createDwfApi(ports: DwfHostPorts, opts: DwfRunOptions): DwfApi {
         result: outcome.value === undefined ? null : outcome.value,
         nodeKind,
         action,
+        inputSummary,
         durationMs: Date.now() - startedAt,
         outputSize: safeJsonSize(outcome.value),
         ...(outcome.meta?.childSessionId !== undefined ? { childSessionId: outcome.meta.childSessionId } : {}),
@@ -285,6 +439,7 @@ export function createDwfApi(ports: DwfHostPorts, opts: DwfRunOptions): DwfApi {
         status: 'failed',
         nodeKind,
         action,
+        inputSummary,
         errorClass: classifyError(err),
         durationMs: Date.now() - startedAt,
       });
@@ -309,6 +464,22 @@ export function createDwfApi(ports: DwfHostPorts, opts: DwfRunOptions): DwfApi {
         const outcome = await ports.runGui(spec, guiOpts?.annotation, ctx);
         if (outcome.status === 'failed') {
           throw new Error(outcome.error ?? `gui "${spec.target_app}" failed`);
+        }
+        if (outcome.status === 'skipped') return { value: null };
+        return { value: outcome.output ?? null };
+      });
+      return value;
+    },
+
+    async browser(spec) {
+      const { value } = await cachedCall('node_result', `browser:${spec.start_url ?? spec.steps[0]?.do ?? 'browser'}`, 'browser', { spec }, async () => {
+        budget.countHostCall();
+        if (!ports.runBrowser) {
+          throw new Error('wf.browser is not bound in this worker — no browser bridge port');
+        }
+        const outcome = await ports.runBrowser(spec, ctx);
+        if (outcome.status === 'failed') {
+          throw new Error(outcome.error ?? 'browser node failed');
         }
         if (outcome.status === 'skipped') return { value: null };
         return { value: outcome.output ?? null };
@@ -395,6 +566,7 @@ export function createDwfApi(ports: DwfHostPorts, opts: DwfRunOptions): DwfApi {
         result: { name, contentType: contentType ?? 'text/plain', content },
         nodeKind: 'noop',
         action: 'publish',
+        inputSummary: name,
         outputSize: safeJsonSize(content),
       });
     },
@@ -409,6 +581,21 @@ export function createDwfApi(ports: DwfHostPorts, opts: DwfRunOptions): DwfApi {
         result: message,
         nodeKind: 'noop',
         action: 'log',
+        inputSummary: pickSummaryText(message),
+      });
+    },
+
+    phase(name) {
+      // §6.2：`JournalKind` 早就有 'phase'，此前从没有生产者。落下这条记录，
+      // 渲染层按 seq 切段即可得到阶段列表；不返回、不缓存、不进预算。
+      journal.append({
+        kind: 'phase',
+        nodeId: callNodeId(callSeq++, `phase:${name}`),
+        attempt: 1,
+        status: 'running',
+        action: name,
+        nodeKind: 'noop',
+        inputSummary: name,
       });
     },
   };

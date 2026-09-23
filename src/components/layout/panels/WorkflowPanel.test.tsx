@@ -156,6 +156,10 @@ const del = vi.fn();
 const cancel = vi.fn();
 const dwfList = vi.fn();
 const run = vi.fn();
+// Plan 560: the 实参窗 submits to the run anchor, not the session anchor.
+const trigger = vi.fn();
+// Run detail sub-view fetches the row by id.
+const statusFn = vi.fn();
 
 Object.defineProperty(window, "electronAPI", {
   configurable: true,
@@ -166,6 +170,8 @@ Object.defineProperty(window, "electronAPI", {
       delete: del,
       cancel,
       run,
+      trigger,
+      status: statusFn,
       dwf: { list: dwfList },
     },
   },
@@ -178,6 +184,8 @@ beforeEach(() => {
   cancel.mockReset().mockResolvedValue({ ok: true });
   dwfList.mockReset().mockResolvedValue({ entries: dwfEntries, invalid: dwfInvalid, dirs: [] });
   run.mockReset().mockResolvedValue({ ok: true, runId: "new-run-1" });
+  trigger.mockReset().mockResolvedValue({ ok: true, runId: "new-run-1" });
+  statusFn.mockReset().mockImplementation(async (id: string) => runs.find((r) => r.id === id) ?? null);
 });
 
 // ─── pure helpers ───
@@ -307,12 +315,16 @@ describe("WorkflowPanel shell", () => {
     fireEvent.click(screen.getByTestId("workflow-launch-confirm"));
 
     await waitFor(() =>
-      expect(window.electronAPI.workflow.run).toHaveBeenCalledWith({
+      expect(window.electronAPI.workflow.trigger).toHaveBeenCalledWith({
         name: "repo-digest",
         params: { days: 7, tag: "latest" },
         projectDir: "/other",
+        scope: "project",
       }),
     );
+    // The run anchor is the only path taken: the session-anchored trigger must
+    // not also fire (that would run the workflow twice, in two places).
+    expect(window.electronAPI.workflow.run).not.toHaveBeenCalled();
   });
 
   it("a missing required arg blocks the launch with an inline error", async () => {
@@ -324,8 +336,8 @@ describe("WorkflowPanel shell", () => {
     await waitFor(() => expect(screen.getByTestId("workflow-launch-error")).toBeTruthy());
     expect(screen.getByTestId("workflow-launch-error").textContent).toContain("days");
 
-    const runFn = window.electronAPI.workflow.run as unknown as ReturnType<typeof vi.fn>;
-    expect(runFn).not.toHaveBeenCalled();
+    const triggerFn = window.electronAPI.workflow.trigger as unknown as ReturnType<typeof vi.fn>;
+    expect(triggerFn).not.toHaveBeenCalled();
   });
 
   it("a successful launch flips the panel to the runs tab", async () => {
@@ -343,7 +355,7 @@ describe("WorkflowPanel shell", () => {
   });
 });
 
-// ─── runs tab ───
+// ─── runs tab (stage-rail cards + sidebar detail) ───
 
 describe("runs tab", () => {
   async function openRuns() {
@@ -352,39 +364,42 @@ describe("runs tab", () => {
     await waitFor(() => expect(screen.getByTestId("workflow-run-run-live-1")).toBeTruthy());
   }
 
+  async function openDetail(id: string) {
+    await openRuns();
+    fireEvent.click(within(screen.getByTestId(`workflow-run-${id}`)).getByText("invoice-sync"));
+    await waitFor(() => expect(screen.getByTestId("workflow-run-detail")).toBeTruthy());
+  }
+
   it("splits in-progress from finished with counts", async () => {
     await openRuns();
     expect(screen.getByText(/panel\.workflow\.running · 2/)).toBeTruthy(); // active + blocked
     expect(screen.getByText(/panel\.workflow\.finished · 1/)).toBeTruthy(); // complete
+    // Blocked run's pause message surfaces on the card itself.
     expect(screen.getByText("awaiting approval at approve-payment")).toBeTruthy();
   });
 
-  it("live runs offer stop; finished runs offer delete", async () => {
+  it("history cards render the stage rail from the journal", async () => {
     await openRuns();
-    const liveRow = screen.getByTestId("workflow-run-run-live-1");
-    expect(within(liveRow).getByRole("button", { name: /panel\.workflow\.stop/ })).toBeTruthy();
-    const finishedRow = screen.getByTestId("workflow-run-run-2");
-    expect(within(finishedRow).getByRole("button", { name: /panel\.workflow\.delete/ })).toBeTruthy();
+    await waitFor(() => expect(journalFn).toHaveBeenCalledWith("run-2"));
+    const card = screen.getByTestId("workflow-run-run-2");
+    await waitFor(() => expect(card.querySelector('[data-testid="workflow-stage-rail"]')).toBeTruthy());
+    // The rail shows the phase name and step counts derived from the journal.
+    expect(card.textContent).toContain("collect");
+    expect(card.textContent).toContain("3/3");
   });
 
-  it("expanding a run shows lineage, summary, phase timeline, per-step evidence and artifacts", async () => {
-    await openRuns();
-    fireEvent.click(
-      within(screen.getByTestId("workflow-run-run-2")).getByRole("button", {
-        name: /panel\.workflow\.(expand|collapse)/,
-      }),
-    );
+  it("clicking a card opens the run detail sub-view with lineage, summary, timeline, evidence and artifacts", async () => {
+    await openDetail("run-2");
     await waitFor(() => expect(journalFn).toHaveBeenCalledWith("run-2"));
 
-    // Lineage (retry_of → the source run).
-    await waitFor(() => expect(screen.getByTestId("workflow-lineage-run-2")).toBeTruthy());
+    // Lineage (retry_of → the source run id).
     expect(screen.getByTestId("workflow-lineage-run-2").textContent).toContain("run-live-1".slice(0, 12));
 
     // Summary line (sub-agents · done/total steps · tokens).
-    const statsText = screen.getByTestId("workflow-run-run-2").textContent ?? "";
-    expect(statsText).toContain("panel.workflow.summaryLine");
+    const detail = screen.getByTestId("workflow-run-detail");
+    expect(detail.textContent).toContain("panel.workflow.summaryLine");
 
-    // Phase timeline: merged 'collect' node with N/M progress + agent lamp.
+    // Phase timeline: merged 'collect' node with N/M progress.
     const timeline = screen.getByTestId("workflow-phase-line-run-2");
     expect(timeline.textContent).toContain("collect");
     expect(timeline.textContent).toContain("3/3");
@@ -405,22 +420,30 @@ describe("runs tab", () => {
     expect(artifacts.textContent).toContain("2.0 KB");
   });
 
-  it("stops a live run and refreshes", async () => {
-    await openRuns();
-    fireEvent.click(
-      within(screen.getByTestId("workflow-run-run-live-1")).getByRole("button", { name: /panel\.workflow\.stop/ }),
-    );
+  it("a live run's detail offers stop and refreshes; a finished one offers delete and returns on delete", async () => {
+    await openDetail("run-live-1");
+    fireEvent.click(screen.getByRole("button", { name: /panel\.workflow\.stop/ }));
     await waitFor(() => expect(cancel).toHaveBeenCalledWith("run-live-1"));
-    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(statusFn).toHaveBeenCalledTimes(2));
+
+    // Back to the list, then open the finished run's detail from its card.
+    fireEvent.click(screen.getByRole("button", { name: /panel\.workflow\.back/ }));
+    await waitFor(() => expect(screen.queryByTestId("workflow-run-detail")).toBeNull());
+    fireEvent.click(within(screen.getByTestId("workflow-run-run-2")).getByText("invoice-sync"));
+    await waitFor(() => expect(screen.getByTestId("workflow-run-detail")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: /panel\.workflow\.delete/ }));
+    await waitFor(() => expect(del).toHaveBeenCalledWith("run-2"));
+    // Deleting returns to the list, which refetches.
+    await waitFor(() => expect(screen.queryByTestId("workflow-run-detail")).toBeNull());
+    await waitFor(() => expect(screen.getByTestId("workflow-run-run-live-1")).toBeTruthy());
   });
 
-  it("deletes a finished run and refreshes", async () => {
-    await openRuns();
-    fireEvent.click(
-      within(screen.getByTestId("workflow-run-run-2")).getByRole("button", { name: /panel\.workflow\.delete/ }),
-    );
-    await waitFor(() => expect(del).toHaveBeenCalledWith("run-2"));
-    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+  it("the back button returns from the detail to the card list", async () => {
+    await openDetail("run-2");
+    fireEvent.click(screen.getByRole("button", { name: /panel\.workflow\.back/ }));
+    await waitFor(() => expect(screen.queryByTestId("workflow-run-detail")).toBeNull());
+    expect(screen.getByTestId("workflow-run-run-2")).toBeTruthy();
   });
 });
 

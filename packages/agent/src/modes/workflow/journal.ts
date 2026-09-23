@@ -23,7 +23,7 @@ export type JournalKind = 'node_result' | 'decision' | 'approval' | 'artifact' |
 export type JournalStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'waiting';
 
 /** Node kind annotation — drives console stats (agent count) and icons. */
-export type JournalNodeKind = 'tool' | 'agent' | 'decision' | 'human' | 'gui' | 'noop';
+export type JournalNodeKind = 'tool' | 'agent' | 'decision' | 'human' | 'gui' | 'browser' | 'noop';
 
 export interface JournalRecord {
   seq: number;
@@ -59,6 +59,24 @@ export interface JournalRecord {
   childSessionId?: string;
   /** Token usage when the host reports it (summed into run stats). */
   usage?: { inputTokens: number; outputTokens: number };
+  /**
+   * Display-only one-line input digest (plan 560 §6.1), e.g.
+   * `git tag --list v*`. The record otherwise carries only `reqHash`, so the
+   * run card has nothing readable to print for a step. Truncated by the
+   * producer (~200 chars).
+   *
+   * Display/audit only — NEVER part of the reqHash payload, so populating it
+   * can never invalidate the replay cache.
+   */
+  inputSummary?: string;
+  /**
+   * This call was served from the replay cache — the host was never invoked
+   * (plan 560 §6.1). The run card renders it as the `重放` badge; it is NOT a
+   * re-run control.
+   *
+   * Display/audit only — NEVER part of the reqHash payload.
+   */
+  replayed?: boolean;
 }
 
 /** Canonical JSON: sorted keys, stable float formatting. */

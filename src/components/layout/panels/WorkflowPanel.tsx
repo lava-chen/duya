@@ -38,7 +38,15 @@ import {
   CopyIcon,
   CheckIcon,
   IconRefresh,
+  ArrowLeftIcon,
 } from "@/components/icons";
+import { WorkflowLaunchDialog } from "@/components/workflow/WorkflowLaunchDialog";
+import { WorkflowRunCard } from "@/components/workflow/WorkflowRunCard";
+import {
+  journalToArtifacts,
+  journalToSteps,
+} from "@/components/workflow/run-display/journal-steps";
+import type { WorkflowRunSse } from "@/types/stream";
 
 // ─── shapes mirrored from the core store / journal ───
 
@@ -100,6 +108,14 @@ export interface WorkflowJournalRecord {
   outputSize?: number;
   childSessionId?: string;
   usage?: { inputTokens: number; outputTokens: number };
+  /**
+   * Plan 560 §6.1: one-line digest of what the node was asked to do (e.g.
+   * `git tag --list v*`). Display-only — the record otherwise carries only
+   * `reqHash`, so a step row would have nothing readable to print.
+   */
+  inputSummary?: string;
+  /** This call was served from the replay cache — the host was never invoked. */
+  replayed?: boolean;
 }
 
 export type WorkflowApi = {
@@ -107,20 +123,27 @@ export type WorkflowApi = {
   journal: (runId: string) => Promise<unknown[]>;
   snapshot: (runId: string) => Promise<unknown>;
   delete: (id: string) => Promise<boolean>;
-  cancel: (id: string) => Promise<{ ok: boolean; reason?: string }>;
+  cancel: (id: string) => Promise<{ ok: boolean; reason?: string; error?: string }>;
   run: (payload: { name: string; sessionId?: string; params?: Record<string, unknown>; projectDir?: string }) => Promise<{ ok: boolean; error?: string; runId?: string; sessionId?: string }>;
-  defs: {
-    list: (projectDir?: string) => Promise<unknown[]>;
-    get: (payload: { name: string; projectDir?: string }) => Promise<unknown>;
-    create: (payload: { def: unknown; scope?: string; projectDir?: string }) => Promise<{ ok: boolean; file?: string; name?: string; error?: string }>;
-    update: (payload: { name: string; def: unknown; scope?: string; projectDir?: string }) => Promise<{ ok: boolean; file?: string; name?: string; error?: string }>;
-    delete: (payload: { name: string; scope?: string; projectDir?: string }) => Promise<{ ok: boolean; error?: string }>;
-  };
+  /** Plan 560 run-anchored surface — a library run needs no chat session. */
+  trigger: (payload: { name: string; params?: Record<string, unknown>; projectDir?: string; scope?: "project" | "global" | null }) => Promise<{ ok: boolean; runId?: string; error?: string }>;
+  status: (runId: string) => Promise<WorkflowRunRow | null>;
+  listRuns: (filter?: { workflowName?: string; origin?: "library" | "session" | "agent" | "cron"; status?: string; limit?: number; offset?: number }) => Promise<WorkflowRunRow[]>;
+  getEvents: (payload: { runId: string; afterSeq?: number }) => Promise<WorkflowJournalRecord[]>;
+  resolvePermission: (payload: { runId: string; requestId: string; decision: "allow" | "deny" }) => Promise<{ ok: boolean; error?: string }>;
   dwf: {
     list: (projectDir?: string) => Promise<unknown>;
     get: (payload: { name: string; projectDir?: string; homeDir?: string }) => Promise<unknown>;
     save: (payload: { name: string; meta: unknown; script: string; scope?: string; projectDir?: string; homeDir?: string }) => Promise<{ ok: boolean; path?: string; scope?: string; shadowing?: unknown; error?: string }>;
     delete: (payload: { name: string; scope?: string; projectDir?: string; homeDir?: string }) => Promise<{ ok: boolean; error?: string }>;
+  };
+  /** YAML definition library (legacy, parallel to dwf). */
+  defs: {
+    list: (projectDir?: string) => Promise<unknown>;
+    get: (payload: { name: string; projectDir?: string }) => Promise<unknown>;
+    create: (payload: { def: unknown; scope?: string; projectDir?: string }) => Promise<{ ok: boolean; file?: string; name?: string; error?: string }>;
+    update: (payload: { name: string; def: unknown; scope?: string; projectDir?: string }) => Promise<{ ok: boolean; file?: string; name?: string; error?: string }>;
+    delete: (payload: { name: string; scope?: string; projectDir?: string }) => Promise<{ ok: boolean; error?: string }>;
   };
 };
 
@@ -443,6 +466,7 @@ const NODE_GLYPH: Record<string, string> = {
   decision: "◇",
   edit: "✎",
   publish: "🚀",
+  browser: "🌐",
 };
 
 /** Distinct avatar fills for sub-agent clusters, cycled by index within a phase. */
@@ -539,214 +563,6 @@ export function dwfDefaultParams(entry: DwfWorkflowEntry): Record<string, unknow
     if (decl.default !== undefined) out[name] = decl.default;
   }
   return out;
-}
-
-const LAUNCH_INPUT_CLS =
-  "w-full rounded border border-[var(--border)] bg-[var(--bg-canvas)] px-2 py-1 text-xs text-[var(--text)] focus:border-[var(--accent)] focus:outline-none";
-
-function ArgInput({
-  decl,
-  value,
-  onChange,
-}: {
-  decl: DwfArgDeclaration;
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  if (decl.type === "boolean") {
-    return (
-      <input
-        type="checkbox"
-        checked={value === "true"}
-        onChange={(e) => onChange(e.target.checked ? "true" : "false")}
-        className="h-3.5 w-3.5 accent-[var(--accent)]"
-      />
-    );
-  }
-  if (decl.type === "json") {
-    return (
-      <textarea
-        value={value}
-        rows={3}
-        placeholder={decl.default !== undefined ? JSON.stringify(decl.default) : undefined}
-        onChange={(e) => onChange(e.target.value)}
-        className={`${LAUNCH_INPUT_CLS} font-mono`}
-      />
-    );
-  }
-  return (
-    <input
-      type={decl.type === "number" ? "number" : "text"}
-      value={value}
-      placeholder={decl.default !== undefined ? String(decl.default) : undefined}
-      onChange={(e) => onChange(e.target.value)}
-      className={LAUNCH_INPUT_CLS}
-    />
-  );
-}
-
-/**
- * ZCode's 实参窗: pick the target project, fill the declared args, then
- * launch. Absent args fall back to the declared defaults worker-side.
- */
-export function WorkflowLaunchDialog({
-  entry,
-  defaultProjectDir,
-  onClose,
-  onLaunched,
-}: {
-  entry: DwfWorkflowEntry;
-  defaultProjectDir?: string;
-  onClose: () => void;
-  onLaunched: () => void;
-}) {
-  const { t } = useTranslation();
-  const [projectDir, setProjectDir] = useState(defaultProjectDir ?? "");
-  const [values, setValues] = useState<Record<string, string>>(() => {
-    const seed: Record<string, string> = {};
-    for (const [name, decl] of Object.entries(entry.args ?? {})) {
-      if (decl.default !== undefined) {
-        seed[name] = decl.type === "json" ? JSON.stringify(decl.default) : String(decl.default);
-      } else if (decl.type === "boolean") {
-        seed[name] = "false";
-      } else {
-        seed[name] = "";
-      }
-    }
-    return seed;
-  });
-  const [error, setError] = useState<string | null>(null);
-  const [launching, setLaunching] = useState(false);
-
-  const argEntries = useMemo(() => Object.entries(entry.args ?? {}), [entry]);
-
-  const submit = useCallback(async () => {
-    const params: Record<string, unknown> = {};
-    for (const [name, decl] of argEntries) {
-      const raw = (values[name] ?? "").trim();
-      if (raw === "" || (decl.type === "boolean" && raw === "false")) {
-        if (decl.required === true && raw === "") {
-          setError(`${name}: ${t("panel.workflow.argRequired")}`);
-          return;
-        }
-        continue; // absent → declared default applies worker-side
-      }
-      if (decl.type === "number") {
-        const n = Number(raw);
-        if (!Number.isFinite(n)) {
-          setError(`${name}: not a number`);
-          return;
-        }
-        params[name] = n;
-      } else if (decl.type === "boolean") {
-        params[name] = raw === "true";
-      } else if (decl.type === "json") {
-        try {
-          params[name] = JSON.parse(raw);
-        } catch {
-          setError(`${name}: invalid JSON`);
-          return;
-        }
-      } else {
-        params[name] = raw;
-      }
-    }
-    if (!projectDir.trim()) {
-      setError(t("panel.workflow.launchProject"));
-      return;
-    }
-    setLaunching(true);
-    setError(null);
-    try {
-      const res = await api()?.run({ name: entry.name, params, projectDir: projectDir.trim() });
-      if (res && res.ok === false) {
-        setError(res.error ?? t("panel.workflow.launchFailed"));
-        return;
-      }
-      onLaunched();
-      onClose();
-    } finally {
-      setLaunching(false);
-    }
-  }, [argEntries, values, projectDir, entry.name, onLaunched, onClose, t]);
-
-  return createPortal(
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-      data-testid={`workflow-launch-${entry.name}`}
-      onClick={onClose}
-    >
-      <div
-        className="w-[420px] max-w-[90vw] rounded-lg border border-[var(--border)] bg-[var(--bg-canvas)] shadow-lg"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="border-b border-[var(--border)] px-4 py-2.5 text-sm font-semibold text-[var(--text)]">
-          {t("panel.workflow.launchTitle")} · {entry.name}
-        </div>
-        <div className="flex flex-col gap-3 px-4 py-3 text-xs">
-          <div>
-            <label className="block pb-1 text-[var(--text-muted)]">{t("panel.workflow.launchProject")}</label>
-            <input
-              value={projectDir}
-              onChange={(e) => setProjectDir(e.target.value)}
-              data-testid="workflow-launch-project"
-              className={LAUNCH_INPUT_CLS}
-            />
-            <p className="pt-1 text-[10px] text-[var(--text-muted)]">{t("panel.workflow.launchProjectHint")}</p>
-          </div>
-          {argEntries.length > 0 && (
-            <div>
-              <div className="pb-1 text-[var(--text-muted)]">{t("panel.workflow.launchArgs")}</div>
-              <div className="flex flex-col gap-2">
-                {argEntries.map(([name, decl]) => (
-                  <div key={name} className="flex flex-col gap-0.5" data-testid={`workflow-launch-arg-${name}`}>
-                    <label className="flex items-center gap-1.5 text-[var(--text)]">
-                      <span className="font-mono">{name}</span>
-                      <span className="text-[10px] text-[var(--text-muted)]">{decl.type}</span>
-                      {decl.required === true && (
-                        <span className="text-[10px] text-amber-500">{t("panel.workflow.argRequired")}</span>
-                      )}
-                    </label>
-                    <ArgInput
-                      decl={decl}
-                      value={values[name] ?? ""}
-                      onChange={(v) => setValues((cur) => ({ ...cur, [name]: v }))}
-                    />
-                    {decl.description && <span className="text-[10px] text-[var(--text-muted)]">{decl.description}</span>}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          {error && (
-            <div className="text-red-500" data-testid="workflow-launch-error">
-              {error}
-            </div>
-          )}
-        </div>
-        <div className="flex items-center justify-end gap-2 border-t border-[var(--border)] px-4 py-2.5">
-          <button
-            type="button"
-            className="rounded border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] hover:text-[var(--text)]"
-            onClick={onClose}
-            data-testid="workflow-launch-cancel"
-          >
-            {t("panel.workflow.dialogCancel")}
-          </button>
-          <button
-            type="button"
-            disabled={launching}
-            className="rounded border border-[var(--accent)] px-2.5 py-1 text-xs text-[var(--accent)] hover:bg-[var(--bg-surface)] disabled:cursor-not-allowed disabled:opacity-50"
-            onClick={() => void submit()}
-            data-testid="workflow-launch-confirm"
-          >
-            {launching ? t("panel.workflow.pending") : t("panel.workflow.launch")}
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body,
-  );
 }
 
 export function DefinitionCard({
@@ -893,24 +709,45 @@ export function DefinitionsTab({
   );
 }
 
-// ─── runs tab ───
+// ─── runs tab (stage-rail cards) ───
 
-interface RunRowProps {
-  run: WorkflowRunRow;
-  runs: WorkflowRunRow[];
-  expanded: boolean;
-  onToggle: (id: string) => void;
-  onDelete: (id: string) => void;
-  onCancel: (id: string) => void;
+/**
+ * Row + journal → the exact view the run card renders. The card was built for
+ * the live SSE shape; history surfaces assemble the same shape from the
+ * durable row + its journal, so a historical run and its live twin look
+ * identical. Until the journal lands the card renders honest "—" stats and no
+ * rail — it fills in the moment the query resolves.
+ */
+export function rowToRunView(
+  row: WorkflowRunRow,
+  journal: WorkflowJournalRecord[] | null,
+): WorkflowRunSse {
+  const steps = journal ? journalToSteps(journal) : undefined;
+  const artifacts = journal ? journalToArtifacts(journal) : undefined;
+  const stats = journal ? computeRunStats(row, journal) : null;
+  const live = isRunning(row.status);
+  return {
+    runId: row.id,
+    workflowName: row.workflowName,
+    status: row.status,
+    startedAt: row.createdAt,
+    ...(live ? {} : { finishedAt: row.updatedAt }),
+    ...(stats && stats.tokens > 0 ? { tokens: stats.tokens } : {}),
+    ...(steps && steps.length > 0 ? { steps } : {}),
+    ...(artifacts && artifacts.length > 0 ? { artifacts } : {}),
+    ...(row.pauseMessage ? { stoppedReason: row.pauseMessage } : {}),
+  };
 }
 
-export function RunRow({ run, runs, expanded, onToggle, onDelete, onCancel }: RunRowProps) {
-  const { t } = useTranslation();
+/**
+ * One history entry: the stage-rail card fed from the DB. The journal loads on
+ * mount (local SQLite — cheap), and the card's clickable header opens the run
+ * detail via `duya:open-workflow-run-panel`, which this panel listens for.
+ */
+function RunHistoryCard({ run }: { run: WorkflowRunRow }) {
   const [journal, setJournal] = useState<WorkflowJournalRecord[] | null>(null);
-  const [journalError, setJournalError] = useState(false);
 
   useEffect(() => {
-    if (!expanded || journal || journalError) return;
     let alive = true;
     api()
       ?.journal(run.id)
@@ -918,115 +755,17 @@ export function RunRow({ run, runs, expanded, onToggle, onDelete, onCancel }: Ru
         if (alive) setJournal(records as WorkflowJournalRecord[]);
       })
       .catch(() => {
-        if (alive) setJournalError(true);
+        /* journal unavailable — the card keeps its header-only view */
       });
     return () => {
       alive = false;
     };
-  }, [expanded, journal, journalError, run.id]);
+  }, [run.id]);
 
-  const stats = useMemo(() => computeRunStats(run, journal ?? []), [run, journal]);
-  const detail = useMemo(() => computePhaseDetail(journal ?? []), [journal]);
-  const stepTotal = detail.reduce((n, p) => n + p.total, 0);
-  const stepDone = detail.reduce((n, p) => n + p.done, 0);
-  const artifacts = useMemo(() => computeArtifacts(journal ?? []), [journal]);
-  const lineage = run.retryOf ? runs.find((r) => r.id === run.retryOf) : undefined;
-  const live = isRunning(run.status);
-
+  const view = useMemo(() => rowToRunView(run, journal), [run, journal]);
   return (
-    <div className="border-b border-[var(--border)] py-2" data-testid={`workflow-run-${run.id}`}>
-      <div className="flex items-center gap-2 px-1">
-        <button
-          type="button"
-          className="text-[var(--text-muted)] hover:text-[var(--text)]"
-          aria-expanded={expanded}
-          aria-label={expanded ? t("panel.workflow.collapse") : t("panel.workflow.expand")}
-          onClick={() => onToggle(run.id)}
-        >
-          {expanded ? <CaretDownIcon className="h-3.5 w-3.5" /> : <CaretRightIcon className="h-3.5 w-3.5" />}
-        </button>
-        <span className="font-medium text-[var(--text)]">{run.workflowName}</span>
-        <span className="flex items-center gap-1.5">
-          <span className={`h-2 w-2 rounded-full ${runStatusLamp(run.status)}`} />
-          <span className={`text-xs font-semibold ${statusClass(run.status)}`}>{run.status}</span>
-        </span>
-        {run.triggerKind && (
-          <span className="rounded bg-[var(--bg-surface)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]">
-            {run.triggerKind}
-          </span>
-        )}
-        <span className="ml-auto text-xs text-[var(--text-muted)]">
-          {formatDuration(run.createdAt, run.updatedAt)}
-        </span>
-        {live ? (
-          <button
-            type="button"
-            className="flex items-center gap-1 rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)] hover:text-red-500"
-            aria-label={t("panel.workflow.stop")}
-            onClick={() => onCancel(run.id)}
-          >
-            <StopIcon className="h-3 w-3" />
-            {t("panel.workflow.stop")}
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="text-[var(--text-muted)] hover:text-red-500"
-            aria-label={t("panel.workflow.delete")}
-            onClick={() => onDelete(run.id)}
-          >
-            <TrashIcon className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
-
-      {expanded && journal && (
-        <div className="flex items-center gap-3 px-7 pt-1 text-[10px] text-[var(--text-muted)]">
-          <span>
-            {t("panel.workflow.summaryLine", {
-              subAgents: stats.subAgents,
-              done: stepDone,
-              total: stepTotal,
-              tokens: formatCount(stats.tokens),
-            })}
-          </span>
-        </div>
-      )}
-
-      {run.pauseMessage && <div className="px-7 pt-1 text-xs text-[var(--text-muted)]">{run.pauseMessage}</div>}
-
-      {expanded && (
-        <div className="px-7 pt-2 text-xs">
-          {lineage && (
-            <div className="pb-1 text-[10px] text-[var(--text-muted)]" data-testid={`workflow-lineage-${run.id}`}>
-              {t("panel.workflow.adjustedFrom")} <span className="font-mono">{lineage.id.slice(0, 12)}</span>
-            </div>
-          )}
-
-          {journalError && <div className="pt-2 text-[var(--text-muted)]">{t("panel.workflow.journalUnavailable")}</div>}
-
-          <div className="pt-1" data-testid={`workflow-phase-line-${run.id}`}>
-            <PhaseTimeline phases={detail} />
-          </div>
-
-          {artifacts.length > 0 && (
-            <div className="pt-2" data-testid={`workflow-artifacts-${run.id}`}>
-              <div className="pb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
-                {t("panel.workflow.artifacts")} · {artifacts.length}
-              </div>
-              {artifacts.map((a) => {
-                const ref = (a.result as { ref?: string } | undefined)?.ref ?? "";
-                return (
-                  <div key={a.seq} className="flex items-center gap-2 py-0.5 text-[10px] text-[var(--text-muted)]">
-                    <span className="truncate font-mono">{ref}</span>
-                    {a.outputSize !== undefined && <span>{formatBytes(a.outputSize)}</span>}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
+    <div data-testid={`workflow-run-${run.id}`}>
+      <WorkflowRunCard run={view} />
     </div>
   );
 }
@@ -1034,7 +773,6 @@ export function RunRow({ run, runs, expanded, onToggle, onDelete, onCancel }: Ru
 export function RunsTab() {
   const { t } = useTranslation();
   const [runs, setRuns] = useState<WorkflowRunRow[] | null>(null);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     api()
@@ -1060,26 +798,8 @@ export function RunsTab() {
 
   const finished = runs?.filter((r) => !isRunning(r.status)) ?? [];
 
-  const onDelete = useCallback(
-    (id: string) => {
-      void api()?.delete(id).then(() => refresh());
-    },
-    [refresh],
-  );
-
-  const onCancel = useCallback(
-    (id: string) => {
-      void api()?.cancel(id).then(() => refresh());
-    },
-    [refresh],
-  );
-
-  const onToggle = useCallback((id: string) => {
-    setExpandedId((cur) => (cur === id ? null : id));
-  }, []);
-
   return (
-    <div className="px-3 py-2">
+    <div className="flex flex-col gap-2 px-3 py-2">
       <div className="flex items-center gap-2 pb-1">
         <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
           {t("panel.workflow.running")} · {live.length}
@@ -1096,33 +816,188 @@ export function RunsTab() {
       {runs === null && <div className="py-2 text-xs text-[var(--text-muted)]">…</div>}
       {live.length === 0 && <div className="py-1 text-xs text-[var(--text-muted)]">{t("panel.workflow.noRunning")}</div>}
       {live.map((run) => (
-        <RunRow
-          key={run.id}
-          run={run}
-          runs={runs ?? []}
-          expanded={expandedId === run.id}
-          onToggle={onToggle}
-          onDelete={onDelete}
-          onCancel={onCancel}
-        />
+        <RunHistoryCard key={run.id} run={run} />
       ))}
-      <div className="pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+      <div className="pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
         {t("panel.workflow.finished")} · {finished.length}
       </div>
       {finished.length === 0 && (
         <div className="py-1 text-xs text-[var(--text-muted)]">{t("panel.workflow.noFinished")}</div>
       )}
       {finished.map((run) => (
-        <RunRow
-          key={run.id}
-          run={run}
-          runs={runs ?? []}
-          expanded={expandedId === run.id}
-          onToggle={onToggle}
-          onDelete={onDelete}
-          onCancel={onCancel}
-        />
+        <RunHistoryCard key={run.id} run={run} />
       ))}
+    </div>
+  );
+}
+
+// ─── run detail (sidebar sub-view) ───
+
+/**
+ * RunDetailView — the evidence view for one run, opened inside this panel when
+ * a history card is clicked (or a chat card's ↗ lands here). Owns the
+ * stop/delete affordances that used to live on the list rows, the lineage
+ * note, the summary strip, the phase timeline with per-step evidence rows and
+ * the artifacts section.
+ */
+export function RunDetailView({ runId, onBack }: { runId: string; onBack: () => void }) {
+  const { t } = useTranslation();
+  const [row, setRow] = useState<WorkflowRunRow | null>(null);
+  const [missing, setMissing] = useState(false);
+  const [journal, setJournal] = useState<WorkflowJournalRecord[] | null>(null);
+  const [journalError, setJournalError] = useState(false);
+
+  const refresh = useCallback(() => {
+    api()
+      ?.status(runId)
+      .then((r) => {
+        if (r) setRow(r);
+        else setMissing(true);
+      })
+      .catch(() => setMissing(true));
+    api()
+      ?.journal(runId)
+      .then((records) => setJournal(records as WorkflowJournalRecord[]))
+      .catch(() => setJournalError(true));
+  }, [runId]);
+
+  useEffect(() => {
+    setRow(null);
+    setMissing(false);
+    setJournal(null);
+    setJournalError(false);
+    refresh();
+  }, [refresh]);
+
+  const live = row ? isRunning(row.status) : false;
+
+  // Poll while the run is live, mirroring the list's cadence.
+  useEffect(() => {
+    if (!live) return;
+    const id = window.setInterval(refresh, 3000);
+    return () => window.clearInterval(id);
+  }, [live, refresh]);
+
+  const stats = useMemo(() => (row ? computeRunStats(row, journal ?? []) : null), [row, journal]);
+  const detail = useMemo(() => computePhaseDetail(journal ?? []), [journal]);
+  const stepTotal = detail.reduce((n, p) => n + p.total, 0);
+  const stepDone = detail.reduce((n, p) => n + p.done, 0);
+  const artifacts = useMemo(() => computeArtifacts(journal ?? []), [journal]);
+
+  const onDelete = useCallback(() => {
+    void api()?.delete(runId).then(() => onBack());
+  }, [runId, onBack]);
+
+  const onCancel = useCallback(() => {
+    void api()?.cancel(runId).then(() => refresh());
+  }, [runId, refresh]);
+
+  return (
+    <div className="flex flex-col px-3 py-2" data-testid="workflow-run-detail">
+      <div className="flex items-center gap-2 pb-1">
+        <button
+          type="button"
+          className="flex items-center gap-1 rounded px-1 py-0.5 text-xs text-[var(--text-muted)] hover:text-[var(--text)]"
+          aria-label={t("panel.workflow.back")}
+          onClick={onBack}
+        >
+          <ArrowLeftIcon className="h-3.5 w-3.5" />
+          {t("panel.workflow.back")}
+        </button>
+        {row && (
+          <span className="ml-auto flex items-center gap-2">
+            <span className="text-xs text-[var(--text-muted)]">
+              {formatDuration(row.createdAt, row.updatedAt)}
+            </span>
+            {live ? (
+              <button
+                type="button"
+                className="flex items-center gap-1 rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)] hover:text-red-500"
+                aria-label={t("panel.workflow.stop")}
+                onClick={onCancel}
+              >
+                <StopIcon className="h-3 w-3" />
+                {t("panel.workflow.stop")}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="text-[var(--text-muted)] hover:text-red-500"
+                aria-label={t("panel.workflow.delete")}
+                onClick={onDelete}
+              >
+                <TrashIcon className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </span>
+        )}
+      </div>
+
+      {missing && (
+        <div className="py-2 text-xs text-[var(--text-muted)]">{t("panel.workflow.runDetailUnavailable")}</div>
+      )}
+
+      {row && (
+        <>
+          <div className="flex items-center gap-2 py-1">
+            <span className={`h-2 w-2 rounded-full ${runStatusLamp(row.status)}`} />
+            <span className="min-w-0 truncate font-medium text-[var(--text)]">{row.workflowName}</span>
+            <span className={`text-xs font-semibold ${statusClass(row.status)}`}>{row.status}</span>
+            {row.triggerKind && (
+              <span className="rounded bg-[var(--bg-surface)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]">
+                {row.triggerKind}
+              </span>
+            )}
+          </div>
+          {row.pauseMessage && (
+            <div className="pb-1 text-xs text-[var(--text-muted)]">{row.pauseMessage}</div>
+          )}
+
+          <div className="flex items-center gap-3 pt-1 text-[10px] text-[var(--text-muted)]">
+            {stats && (
+              <span>
+                {t("panel.workflow.summaryLine", {
+                  subAgents: stats.subAgents,
+                  done: stepDone,
+                  total: stepTotal,
+                  tokens: formatCount(stats.tokens),
+                })}
+              </span>
+            )}
+          </div>
+
+          {row.retryOf && (
+            <div className="pb-1 pt-1 text-[10px] text-[var(--text-muted)]" data-testid={`workflow-lineage-${runId}`}>
+              {t("panel.workflow.adjustedFrom")} <span className="font-mono">{row.retryOf.slice(0, 12)}</span>
+            </div>
+          )}
+
+          {journalError && (
+            <div className="pt-2 text-[var(--text-muted)]">{t("panel.workflow.journalUnavailable")}</div>
+          )}
+
+          <div className="pt-1" data-testid={`workflow-phase-line-${runId}`}>
+            <PhaseTimeline phases={detail} />
+          </div>
+
+          {artifacts.length > 0 && (
+            <div className="pt-2" data-testid={`workflow-artifacts-${runId}`}>
+              <div className="pb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                {t("panel.workflow.artifacts")} · {artifacts.length}
+              </div>
+              {artifacts.map((a) => {
+                const ref = (a.result as { ref?: string } | undefined)?.ref ?? "";
+                return (
+                  <div key={a.seq} className="flex items-center gap-2 py-0.5 text-[10px] text-[var(--text-muted)]">
+                    <span className="truncate font-mono">{ref}</span>
+                    {a.outputSize !== undefined && <span>{formatBytes(a.outputSize)}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -1141,7 +1016,27 @@ export function WorkflowPanel({ projectDir, tab: tabDesc }: WorkflowPanelProps =
   const resolvedProjectDir =
     projectDir ??
     (typeof tabDesc?.params?.workingDirectory === "string" ? tabDesc.params.workingDirectory : undefined);
-  const [tab, setTab] = useState<"definitions" | "runs">("definitions");
+  // A run card's click / ↗ lands here: the panel switches to the runs tab and
+  // opens the run detail sub-view (`params.runId` seeds it on a fresh tab;
+  // panel-tab params are frozen on reuse, so the same
+  // `duya:open-workflow-run-panel` event also drives re-open below).
+  const paramRunId =
+    typeof tabDesc?.params?.runId === "string" ? tabDesc.params.runId.trim() : "";
+  const [tab, setTab] = useState<"definitions" | "runs">(paramRunId ? "runs" : "definitions");
+  const [detailRunId, setDetailRunId] = useState<string>(paramRunId);
+
+  useEffect(() => {
+    const handleOpenRunPanel = (event: Event) => {
+      const runId = (event as CustomEvent<{ runId?: string }>).detail?.runId;
+      if (typeof runId !== "string" || !runId.trim()) return;
+      setTab("runs");
+      setDetailRunId(runId.trim());
+    };
+    window.addEventListener("duya:open-workflow-run-panel", handleOpenRunPanel as EventListener);
+    return () => {
+      window.removeEventListener("duya:open-workflow-run-panel", handleOpenRunPanel as EventListener);
+    };
+  }, []);
 
   return (
     <div className="flex h-full flex-col bg-[var(--bg-canvas)] text-[var(--text)]">
@@ -1171,6 +1066,8 @@ export function WorkflowPanel({ projectDir, tab: tabDesc }: WorkflowPanelProps =
       <div className="flex-1 overflow-y-auto">
         {tab === "definitions" ? (
           <DefinitionsTab projectDir={resolvedProjectDir} onLaunched={() => setTab("runs")} />
+        ) : detailRunId ? (
+          <RunDetailView runId={detailRunId} onBack={() => setDetailRunId("")} />
         ) : (
           <RunsTab />
         )}

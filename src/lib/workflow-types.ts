@@ -8,7 +8,7 @@
  * only edits the metadata header (params + when_to_use + description).
  */
 
-export type WorkflowNodeKind = 'tool' | 'gui' | 'decision' | 'human' | 'agent' | 'noop';
+export type WorkflowNodeKind = 'tool' | 'gui' | 'browser' | 'decision' | 'human' | 'agent' | 'noop';
 
 export type WorkflowParamType = 'string' | 'number' | 'boolean' | 'json';
 
@@ -63,6 +63,8 @@ export interface WorkflowDefView {
   params: WorkflowParamView[];
   triggers?: Array<'cron' | 'bot' | 'http'>;
   phases: WorkflowPhaseView[];
+  /** Raw script body for .dwf.ts workflows (phases will be empty). */
+  script?: string;
 }
 
 /**
@@ -111,6 +113,7 @@ export function nodeInlinePreview(node: WorkflowNodeView): string | null {
 export const NODE_KIND_LABEL: Record<WorkflowNodeKind, string> = {
   tool: 'Tool',
   gui: 'GUI',
+  browser: 'Browser',
   decision: 'Decision',
   human: 'Human',
   agent: 'Subagent',
@@ -124,5 +127,6 @@ export const NODE_KIND_ACCENT: Record<WorkflowNodeKind, string> = {
   decision: 'var(--accent-amber)',
   human: 'var(--accent-rose)',
   gui: 'var(--accent-violet)',
+  browser: 'var(--accent-sky)',
   noop: 'var(--text-faint)',
 };

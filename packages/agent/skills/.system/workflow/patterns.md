@@ -139,23 +139,30 @@ export default async function (wf) {
 
 ```ts
 export default async function (wf) {
-  await wf.approve("将在 ERP 里提交这张报销单，继续吗?", { timeoutHours: 24, onTimeout: "escalate" });
-
+  await wf.phase("填写报销单");
   const outcome = await wf.gui(
     {
       target_app: "erp",                     // processName，与匹配器约定一致
       max_actions: 30,                       // 熔断：步骤数上限(≤200)
-      on_stuck: "agent",                     // 卡住时 agent 介入 | fail | skip
+      on_stuck: "fail",                      // 卡住时终止。skip = 该调用整体跳过(resolve null)；
+                                             // "agent"(AI 兜底)档位尚未接线，写了会报错
       steps: [
-        { do: "capture" },                   // 枚举可交互元素 → som 索引
+        { do: "capture" },                   // 枚举可交互元素 → som 索引(点击/输入前必须有)
         { do: "click", element: "som:3" },   // 点「新建报销单」
         { do: "type_text", text: args.amount, element: "som:7", verify: true },
         { do: "click", element: "som:12" },  // 提交
       ],
     },
   );
+  if (!outcome) wf.log("报销单填写被跳过(on_stuck: skip)");
 
-  wf.log("ERP 提交完成: " + (outcome ? "ok" : "skipped"));
+  await wf.phase("提交审批");
+  // 副作用步骤：approve 的 onTimeout 禁用 "skip"(= 无人确认也自动放行)
+  await wf.approve("将在 ERP 里提交这张报销单，继续吗?", { timeoutHours: 24, onTimeout: "escalate" });
+  await wf.gui({
+    target_app: "erp",
+    steps: [{ do: "capture" }, { do: "click", element: "som:提交按钮" }],
+  });
 }
 ```
 
@@ -165,6 +172,14 @@ export default async function (wf) {
   `wait`**，等待节奏归宿主循环。
 - `som:<n>` 两种语义二选一：跟了 `{ annotation: { source: "recorder", som: {...} } }`
   时指录制时记录的元素(转换产物)；以 `{ do: "capture" }` 开头时指本次枚举的索引。
+- **on_stuck 防御**：可能不出现的弹窗、纯装饰性的可选项(主题色/标签)单独拆一个
+  `wf.gui` 调用并配 `on_stuck: "skip"`——页面变体上元素不在场时 run 不该死。可用
+  档位只有 `"fail"`/`"skip"`(`"agent"` 未接线)。
+- **annotation descriptor 质量**：回放按 L1 name 精确匹配 → L2 录制坐标投影
+  (unconfirmed) → L3 on_stuck 的顺序兜底。`name` 为空或 className 冒充 name 的
+  descriptor 必落 L1 之外——转换时换 name 唯一的元素或标注风险。
 - `element.name`/语境命中不可逆词表的操作(提交/删除/发送/支付)必须在 gui 之前过
-  `wf.approve`——预筛是兜底，不是闸门。
-- 从录制会话转换的完整守则在 `SKILL.md` 的「从录制会话转 dwf.ts」一节。
+  `wf.approve`，且 `onTimeout` 禁用 `"skip"`——预筛是兜底，不是闸门。
+- 长流程用 `wf.phase("阶段名")` 分段——运行卡片按它切阶段列，不分段全塌进「准备」列。
+- 从录制会话转换的完整守则(含起点导航、descriptor 红线)在 `SKILL.md` 的
+  「从录制会话转 dwf.ts」一节。
