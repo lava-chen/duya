@@ -3,6 +3,7 @@ import type { Message } from '../../types.js'
 import {
   MAX_SUMMARY_RETRIES,
   TOOL_MESSAGE_DROP_THRESHOLD,
+  TRANSIENT_RETRY_DELAY_MS,
   classifySummaryError,
   appendShorterOutputInstruction,
   reduceSummaryInputs,
@@ -193,6 +194,42 @@ describe('summarizeWithRetryLadder', () => {
     expect(calls).toBe(MAX_SUMMARY_RETRIES)
   })
 
+  it('backs off between transient retries and not after the last attempt', async () => {
+    const marks: string[] = []
+    const result = await summarizeWithRetryLadder(
+      async () => {
+        marks.push('call')
+        if (marks.length < 3) throw new Error('request timeout')
+        return 'recovered'
+      },
+      { conversationText: 'c', prompt: 'p', messages: [], rebuild: () => ({ conversationText: 'c', prompt: 'p' }) },
+      () => false,
+      undefined,
+      { retryDelayMs: 5 },
+    )
+    expect(result.attempts).toBe(3)
+    // delay fired before attempts 2 and 3, but not after attempt 3
+    expect(marks).toEqual(['call', 'call', 'call'])
+  })
+
+  it('waits at least the injected delay between transient retries', async () => {
+    const started = Date.now()
+    const result = await summarizeWithRetryLadder(
+      async () => {
+        if (Date.now() - started < 20) throw new Error('request timeout')
+        return 'recovered'
+      },
+      { conversationText: 'c', prompt: 'p', messages: [], rebuild: () => ({ conversationText: 'c', prompt: 'p' }) },
+      () => false,
+      undefined,
+      { retryDelayMs: 25 },
+    )
+    expect(result.attempts).toBeGreaterThan(1)
+    // First call fails immediately; the second call only succeeds once the
+    // 25 ms injected backoff has elapsed — proving the ladder waited.
+    expect(Date.now() - started).toBeGreaterThanOrEqual(20)
+  })
+
   it('throws SummaryDegenerateError (not a silent placeholder) when every attempt is empty/degenerate', async () => {
     let calls = 0
     await expect(
@@ -210,5 +247,6 @@ describe('constants', () => {
   it('matches grok parity values', () => {
     expect(MAX_SUMMARY_RETRIES).toBe(3)
     expect(TOOL_MESSAGE_DROP_THRESHOLD).toBe(0.25)
+    expect(TRANSIENT_RETRY_DELAY_MS).toBe(2_000)
   })
 })

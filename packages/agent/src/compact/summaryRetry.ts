@@ -17,6 +17,13 @@ import { SummaryDegenerateError } from './compactErrors.js'
 export const MAX_SUMMARY_RETRIES = 3
 
 /**
+ * Backoff before a retry after a transient (network / 5xx / rate-limit)
+ * failure. Grok: TRANSIENT_SELF_SUMMARY_RETRY_DELAY_MS = 2_000 — without it
+ * the ladder hammers a failing endpoint three times back-to-back.
+ */
+export const TRANSIENT_RETRY_DELAY_MS = 2_000
+
+/**
  * Tool-message share above which the input reduction drops tool traffic
  * wholesale instead of cutting the middle half. Grok: 0.25.
  */
@@ -178,7 +185,9 @@ export async function summarizeWithRetryLadder(
   ctx: SummaryRetryContext,
   isDegenerate: (text: string) => boolean,
   onAttempt?: (report: SummaryAttemptReport) => void,
+  opts?: { retryDelayMs?: number },
 ): Promise<SummaryRetryOutcome> {
+  const retryDelayMs = opts?.retryDelayMs ?? TRANSIENT_RETRY_DELAY_MS
   let currentText = ctx.conversationText
   let currentPrompt = ctx.prompt
   let currentMessages: readonly Message[] = ctx.messages
@@ -209,6 +218,11 @@ export async function summarizeWithRetryLadder(
       const kind = classifySummaryError(err)
       onAttempt?.({ attempt, outcome: 'error', errorKind: kind, chars: 0 })
       if (kind === 'fatal') throw err
+      if (kind === 'transient' && attempt < MAX_SUMMARY_RETRIES) {
+        // Grok backs off before retrying a transient failure; only the last
+        // attempt skips the wait (nothing follows it to back off for).
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs))
+      }
       if (kind === 'output_length' && !shorterOutputRequested) {
         currentPrompt = appendShorterOutputInstruction(currentPrompt)
         shorterOutputRequested = true
