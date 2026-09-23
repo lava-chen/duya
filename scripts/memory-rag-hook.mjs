@@ -75,7 +75,26 @@ function parseInput(raw) {
   }
 }
 
+/**
+ * Mirror packages/agent/src/memory-rollout/wakeup.ts `isMemoryEnabled()`:
+ * explicit '0'/'false' disables, '1'/'true' enables, unset falls back to
+ * the dev default (enabled only under DUYA_DEV=1). The Electron main
+ * process forwards the settings toggle into this env var; hook mode exits
+ * silently (empty stdout, exit 0 = no injection) when disabled.
+ */
+function isMemoryDisabled() {
+  const v = process.env.DUYA_MEMORY_ENABLED ?? process.env.DUYA_MEMORY_V2_ENABLED;
+  if (v === '0' || v === 'false') return true;
+  if (v === '1' || v === 'true') return false;
+  return process.env.DUYA_DEV !== '1';
+}
+
 async function main() {
+  // Memory toggle off → exit before touching stdin (the hook executor
+  // swallows EPIPE for hooks that never read it).
+  if (isMemoryDisabled()) {
+    process.exit(0);
+  }
   const input = await readStdin();
   const rawPrompt = typeof input?.prompt === 'string' ? input.prompt : '';
   const prompt = filterPrompt(rawPrompt);

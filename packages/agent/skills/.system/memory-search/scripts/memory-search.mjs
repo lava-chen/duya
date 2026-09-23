@@ -107,6 +107,25 @@ function parseInput(raw) {
 }
 
 // ============================================================================
+// Memory toggle gating (settings → config.toml → DUYA_MEMORY_ENABLED)
+// ============================================================================
+
+/**
+ * Mirror packages/agent/src/memory-rollout/wakeup.ts `isMemoryEnabled()`:
+ * explicit '0'/'false' disables, '1'/'true' enables, and unset falls back
+ * to the dev default (enabled only under DUYA_DEV=1). The Electron main
+ * process forwards the user's settings toggle into this env var for both
+ * the agent server and worker processes, so the hook subprocess inherits
+ * it via the executor's `...process.env` spawn.
+ */
+function isMemoryDisabled() {
+  const v = process.env.DUYA_MEMORY_ENABLED ?? process.env.DUYA_MEMORY_V2_ENABLED;
+  if (v === '0' || v === 'false') return true;
+  if (v === '1' || v === 'true') return false;
+  return process.env.DUYA_DEV !== '1';
+}
+
+// ============================================================================
 // CLI mode
 // ============================================================================
 
@@ -207,6 +226,12 @@ async function main() {
   }
 
   // Hook mode: plan-87 stdin JSON contract.
+  // Memory toggle off → exit silently (empty stdout, exit 0 = no injection).
+  // Exit before touching stdin: the hook executor swallows EPIPE for hooks
+  // that never read it. CLI mode above stays available for manual lookups.
+  if (isMemoryDisabled()) {
+    process.exit(0);
+  }
   const input = await readStdin();
   const rawPrompt = typeof input?.prompt === 'string' ? input.prompt : '';
   const prompt = filterPrompt(rawPrompt);

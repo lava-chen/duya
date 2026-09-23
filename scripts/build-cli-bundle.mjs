@@ -50,6 +50,7 @@ await build({
     'better-sqlite3',
     'fsevents',
     'playwright',
+    'esbuild',
   ],
   banner: {
     js: importMetaUrlPolyfill,

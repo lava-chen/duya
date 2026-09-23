@@ -1258,6 +1258,10 @@ export interface ElectronAPI {
     // Plan 487: host-level standing permission switch.
     getHostToolPermission: () => Promise<{ success: boolean; value: 'ask' | 'always' | 'never'; error?: string }>
     setHostToolPermission: (value: 'ask' | 'always' | 'never') => Promise<{ success: boolean; value?: 'ask' | 'always' | 'never'; error?: string }>
+    // Memory system toggle: writes config.toml + hot pause/resume/start
+    // of the memory worker (see settings-handlers.ts).
+    getMemoryEnabled: () => Promise<{ success: boolean; enabled: boolean; error?: string }>
+    setMemoryEnabled: (enabled: boolean) => Promise<{ ok: boolean; worker?: string; error?: string }>
   }
   // Functions to get port APIs (called dynamically, not getters)
   getConfigPort: () => ConfigPortAPI | null
@@ -1363,8 +1367,14 @@ export interface ElectronAPI {
     journal: (runId: string) => Promise<unknown[]>
     snapshot: (runId: string) => Promise<unknown>
     delete: (id: string) => Promise<boolean>
-    cancel: (id: string) => Promise<{ ok: boolean; reason?: string }>
+    cancel: (id: string) => Promise<{ ok: boolean; reason?: string; error?: string }>
     run: (payload: { name: string; sessionId?: string; params?: Record<string, unknown>; projectDir?: string }) => Promise<{ ok: boolean; runId?: string; sessionId?: string; error?: string }>
+    /** Plan 560 run-anchored surface — a library run needs no chat session. */
+    trigger: (payload: { name: string; params?: Record<string, unknown>; projectDir?: string; scope?: 'project' | 'global' | null }) => Promise<{ ok: boolean; runId?: string; error?: string }>
+    status: (runId: string) => Promise<unknown>
+    listRuns: (filter?: { workflowName?: string; origin?: 'library' | 'session' | 'agent' | 'cron'; status?: string; limit?: number; offset?: number }) => Promise<unknown[]>
+    getEvents: (payload: { runId: string; afterSeq?: number }) => Promise<unknown[]>
+    resolvePermission: (payload: { runId: string; requestId: string; decision: 'allow' | 'deny' }) => Promise<{ ok: boolean; error?: string }>
     defs: {
       list: (projectDir?: string) => Promise<unknown[]>
       get: (payload: { name: string; projectDir?: string }) => Promise<unknown>
@@ -2061,6 +2071,19 @@ const electronAPI: ElectronAPI = {
         value?: 'ask' | 'always' | 'never';
         error?: string;
       }>,
+    // Memory system toggle: config.toml + worker hot control.
+    getMemoryEnabled: () =>
+      ipcRenderer.invoke('settings:get-memory-enabled') as Promise<{
+        success: boolean;
+        enabled: boolean;
+        error?: string;
+      }>,
+    setMemoryEnabled: (enabled: boolean) =>
+      ipcRenderer.invoke('settings:set-memory-enabled', enabled) as Promise<{
+        ok: boolean;
+        worker?: string;
+        error?: string;
+      }>,
     getMcpServers: async () => {
       try {
         const data = await ipcRenderer.invoke('mcp:config:list');
@@ -2363,6 +2386,16 @@ const electronAPI: ElectronAPI = {
     cancel: (id: string) => ipcRenderer.invoke('workflow:cancel', id),
     run: (payload: { name: string; sessionId?: string; params?: Record<string, unknown>; projectDir?: string }) =>
       ipcRenderer.invoke('workflow:run', payload),
+    // Plan 560: run-anchored surface (no chat session involved).
+    trigger: (payload: { name: string; params?: Record<string, unknown>; projectDir?: string; scope?: 'project' | 'global' | null }) =>
+      ipcRenderer.invoke('workflow:trigger', payload),
+    status: (runId: string) => ipcRenderer.invoke('workflow:status', runId),
+    listRuns: (filter?: { workflowName?: string; origin?: 'library' | 'session' | 'agent' | 'cron'; status?: string; limit?: number; offset?: number }) =>
+      ipcRenderer.invoke('workflow:list-runs', filter),
+    getEvents: (payload: { runId: string; afterSeq?: number }) =>
+      ipcRenderer.invoke('workflow:get-events', payload),
+    resolvePermission: (payload: { runId: string; requestId: string; decision: 'allow' | 'deny' }) =>
+      ipcRenderer.invoke('workflow:permission-resolve', payload),
     defs: {
       list: (projectDir?: string) => ipcRenderer.invoke('workflow:defs:list', projectDir),
       get: (payload: { name: string; projectDir?: string }) => ipcRenderer.invoke('workflow:defs:get', payload),

@@ -223,6 +223,53 @@ export function registerSettingsHandlers(): void {
     }
   });
 
+  // Memory system toggle (settings → Memory section).
+  // Writes config.toml `memory.memory_enabled` (the value every consumer
+  // reads: boot worker gate, agent-server lifecycle env, process-pool env)
+  // AND hot-pauses/resumes/hot-starts the running worker, so the toggle
+  // takes effect immediately without an app restart. The renderer still
+  // mirrors the value into the SQLite settings table via useSettings.save
+  // for its own read-back; boot alignment (syncMemoryToggleFromSettingsDb)
+  // treats SQLite as the intent source when the stores ever disagree.
+  ipcMain.handle('settings:get-memory-enabled', async () => {
+    try {
+      return {
+        success: true,
+        enabled: getConfigStore().getByPath('memory.memory_enabled') === true,
+      };
+    } catch (error) {
+      return { success: false, enabled: false, error: String(error) };
+    }
+  });
+
+  ipcMain.handle('settings:set-memory-enabled', async (_event, enabled: boolean) => {
+    try {
+      const configStore = getConfigStore();
+      configStore.set('memory.memory_enabled', enabled === true);
+
+      const { getMemoryWorkerHandle } = await import('../memory/memory-worker');
+      const handle = getMemoryWorkerHandle();
+      if (enabled) {
+        if (handle) {
+          if (handle.isPaused()) handle.resume();
+          return { ok: true, worker: 'resumed' };
+        }
+        const { startMemoryWorkerFromConfig } = await import('../memory/worker-bootstrap');
+        const outcome = await startMemoryWorkerFromConfig();
+        return { ok: true, worker: outcome };
+      }
+      if (handle) {
+        handle.pause();
+        return { ok: true, worker: 'paused' };
+      }
+      return { ok: true, worker: 'not-running' };
+    } catch (error) {
+      const logger = getLogger();
+      logger.error('Failed to set memory enabled', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Settings);
+      return { ok: false, error: String(error) };
+    }
+  });
+
   // Agent re-initialization with new provider
   ipcMain.handle('agent:reinit-provider', async () => {
     try {

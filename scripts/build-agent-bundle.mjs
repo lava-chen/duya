@@ -30,6 +30,11 @@ await build({
     'better-sqlite3',
     'fsevents',
     'playwright',
+    // dwf/runtime.ts does a dynamic import('esbuild') at runtime to transpile
+    // workflow scripts. esbuild's JS API resolves its platform binary via a
+    // relative path, so bundling it breaks — keep it external (loadEsbuild
+    // already degrades gracefully to DwfCompileError when require fails).
+    'esbuild',
     'chromium-bidi/lib/cjs/bidiMapper/BidiMapper',
     'chromium-bidi/lib/cjs/cdp/CdpConnection',
   ],

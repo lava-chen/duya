@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "DUYA Browser Bridge",
   "short_name": "DUYA Bridge",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "Browser automation bridge for DUYA AI Agent – drives agent-owned tabs grouped inside your browser window.",
   "minimum_chrome_version": "120",
   "author": "lava-chen",

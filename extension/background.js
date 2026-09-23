@@ -44,7 +44,6 @@ const IDLE_TIMEOUT = 60000; // 60s idle timeout
  * @typedef {{
  *   tabId: number;
  *   tabIds: Set<number>;
- *   groupId: number | null;
  *   idleTimer: ReturnType<typeof setTimeout> | null
  * }} SessionState
  */
@@ -58,10 +57,8 @@ function groupsSupported() {
   return typeof chrome.tabGroups !== 'undefined' && typeof chrome.tabs.group === 'function';
 }
 
-function shortSessionLabel(sessionId) {
-  const s = String(sessionId);
-  return s.length > 12 ? s.slice(0, 12) : s;
-}
+/** Chars of a session key kept in a group title (tail, not head). */
+const GROUP_LABEL_CHARS = 6;
 
 function groupColorFor(sessionId) {
   let hash = 0;
@@ -70,6 +67,97 @@ function groupColorFor(sessionId) {
     hash = (hash * 31 + s.charCodeAt(i)) & 0x7fffffff;
   }
   return GROUP_COLORS[hash % GROUP_COLORS.length];
+}
+
+// ─── session → group identity ─────────────────────────────────────────
+// The agent hands us several id families for what the user sees as ONE
+// session: the agent session id, `<sessionId>::op<n>` for concurrency-
+// isolated pages (BrowserTool), and `session_<ts>_<rand>` when a caller
+// passed no sessionId at all. Only the `::op<n>` suffix is ours to fold
+// away — the rest are genuinely distinct identities.
+
+const EPHEMERAL_OP_SUFFIX = /::op\d+$/;
+
+function groupKeyFor(sessionId) {
+  return String(sessionId ?? '').replace(EPHEMERAL_OP_SUFFIX, '');
+}
+
+/**
+ * Short, DISTINGUISHABLE label for a group key.
+ *
+ * Deliberately the TAIL of the key, not the head: the entropy of both UUIDs
+ * and `session_<ts>_<rand>` ids sits at the end, so a head slice rendered
+ * every group as the same opaque prefix (`DUYA · session_1790`) and made
+ * sibling groups impossible to tell apart.
+ */
+function shortGroupLabel(key) {
+  const s = String(key);
+  return s.length <= GROUP_LABEL_CHARS ? s : s.slice(-GROUP_LABEL_CHARS);
+}
+
+function groupTitleFor(sessionId) {
+  return `DUYA · ${shortGroupLabel(groupKeyFor(sessionId))}`;
+}
+
+/**
+ * session key → groupId. Mirrored into chrome.storage.session: an MV3
+ * service worker is evicted after ~30s idle, and losing this map used to
+ * mean "a brand-new group the next time a page opens". storage.session
+ * survives SW restarts and is cleared when the browser exits.
+ */
+const SESSION_GROUPS_STORAGE_KEY = 'duyaSessionGroups';
+
+/** @type {Map<string, number>} */
+const sessionGroups = new Map();
+let sessionGroupsLoaded = false;
+
+async function loadStoredSessionGroups() {
+  try {
+    const stored = await chrome.storage.session.get(SESSION_GROUPS_STORAGE_KEY);
+    const entries = stored?.[SESSION_GROUPS_STORAGE_KEY];
+    if (entries && typeof entries === 'object') {
+      for (const [key, groupId] of Object.entries(entries)) {
+        if (typeof groupId === 'number') sessionGroups.set(key, groupId);
+      }
+    }
+  } catch (error) {
+    // Old Chromium forks without storage.session: in-memory map still works.
+    console.warn(`[DUYA Bridge] Could not restore tab-group registry: ${error?.message ?? error}`);
+  } finally {
+    sessionGroupsLoaded = true;
+  }
+}
+
+function persistSessionGroups() {
+  const entries = {};
+  for (const [key, groupId] of sessionGroups) entries[key] = groupId;
+  try {
+    chrome.storage.session.set({ [SESSION_GROUPS_STORAGE_KEY]: entries }).catch(() => {});
+  } catch {
+    // Unavailable (old runtime) — the in-memory map is still authoritative
+    // for the life of this service worker.
+  }
+}
+
+/** Forget a dissolved group so the next tab re-resolves by title. */
+function forgetGroup(groupId) {
+  let changed = false;
+  for (const [key, known] of sessionGroups) {
+    if (known === groupId) {
+      sessionGroups.delete(key);
+      changed = true;
+    }
+  }
+  if (changed) persistSessionGroups();
+}
+
+async function tabWindowId(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    return typeof tab?.windowId === 'number' ? tab.windowId : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -93,32 +181,63 @@ async function resolveSessionWindowId() {
 }
 
 /**
- * Assign a session tab to the session's tab group, creating the group on
- * first use. If the group was dissolved by the user, a fresh group is
- * created so the session keeps a visible identity.
+ * Assign a session tab to its group, creating the group only when neither the
+ * remembered id nor a live group carrying the same title exists.
+ *
+ * Three lookups, cheapest first:
+ *   1. the remembered group (in-memory cache, restored from storage.session);
+ *   2. a live group titled for THIS session inside the tab's own window —
+ *      this is what keeps one session in one group across idle auto-closes
+ *      and service-worker restarts: an emptied group is gone for good, but
+ *      the next tab rejoins by title instead of starting a new group;
+ *   3. create + label.
+ *
+ * The window is always the tab's own window: `tabs.group` MOVES a tab, so
+ * matching a same-titled group elsewhere would drag the page across windows.
  */
 async function ensureSessionGroup(sessionId, tabId) {
-  const session = sessionTabs.get(sessionId);
-  if (!session || !groupsSupported()) return;
+  if (!groupsSupported()) return;
+  if (!sessionGroupsLoaded) await loadStoredSessionGroups();
 
-  try {
-    if (session.groupId !== null) {
-      await chrome.tabs.group({ tabIds: [tabId], groupId: session.groupId });
+  const key = groupKeyFor(sessionId);
+  const title = groupTitleFor(sessionId);
+  const windowId = await tabWindowId(tabId);
+
+  const remembered = sessionGroups.get(key);
+  if (remembered !== undefined) {
+    try {
+      await chrome.tabs.group({ tabIds: [tabId], groupId: remembered });
       return;
+    } catch {
+      // Stale (group dissolved, SW restart, browser restart) — re-resolve.
+      sessionGroups.delete(key);
+      persistSessionGroups();
     }
-  } catch {
-    // Stale groupId (group dissolved or SW restart) — recreate below.
-    session.groupId = null;
+  }
+
+  if (windowId !== null) {
+    try {
+      const matches = await chrome.tabGroups.query({ title, windowId });
+      if (matches.length > 0) {
+        const existing = matches[0];
+        await chrome.tabs.group({ tabIds: [tabId], groupId: existing.id });
+        sessionGroups.set(key, existing.id);
+        persistSessionGroups();
+        console.log(`[DUYA Bridge] Rejoined tab group ${existing.id} ("${title}")`);
+        return;
+      }
+    } catch (error) {
+      console.warn(`[DUYA Bridge] Tab group lookup failed: ${error?.message ?? error}`);
+    }
   }
 
   try {
-    session.groupId = await chrome.tabs.group({ tabIds: [tabId] });
-    await chrome.tabGroups.update(session.groupId, {
-      title: `DUYA · ${shortSessionLabel(sessionId)}`,
-      color: groupColorFor(sessionId),
-    });
+    const groupId = await chrome.tabs.group({ tabIds: [tabId] });
+    await chrome.tabGroups.update(groupId, { title, color: groupColorFor(sessionId) });
+    sessionGroups.set(key, groupId);
+    persistSessionGroups();
   } catch (error) {
-    session.groupId = null;
+    sessionGroups.delete(key);
     console.warn(`[DUYA Bridge] Tab grouping unavailable, continuing ungrouped: ${error.message}`);
   }
 }
@@ -206,7 +325,7 @@ async function getOrCreateSessionTab(sessionId) {
     throw new Error('Failed to create session tab: no tab id');
   }
 
-  sessionTabs.set(sessionId, { tabId, tabIds: new Set([tabId]), groupId: null, idleTimer: null });
+  sessionTabs.set(sessionId, { tabId, tabIds: new Set([tabId]), idleTimer: null });
 
   console.log(`[DUYA Bridge] Created session tab ${tabId} for session "${sessionId}"`);
 
@@ -399,22 +518,20 @@ chrome.windows.onRemoved.addListener((windowId) => {
       for (const tabId of session.tabIds) attachedTabs.delete(String(tabId));
     }
     sessionTabs.clear();
+    sessionGroups.clear();
+    persistSessionGroups();
     automationWindowId = null;
     console.log('[DUYA Bridge] Automation window closed by user, all sessions cleaned up');
   }
 });
 
-// If the user dissolves a session's tab group, drop the stale groupId so
-// the next tab for that session creates a fresh group. Tabs that the user
-// closed along with the group are cleaned up by the tabs.onRemoved handler.
+// If the user dissolves a session's tab group, forget the mapping so the
+// next tab for that session re-resolves by title (or starts a new group).
+// Tabs the user closed along with the group are cleaned up by tabs.onRemoved.
 if (groupsSupported()) {
   chrome.tabGroups.onRemoved.addListener((group) => {
-    for (const session of sessionTabs.values()) {
-      if (session.groupId === group.id) {
-        session.groupId = null;
-        console.log(`[DUYA Bridge] Tab group ${group.id} dissolved by user; session will regroup on next tab`);
-      }
-    }
+    forgetGroup(group.id);
+    console.log(`[DUYA Bridge] Tab group ${group.id} dissolved; session will regroup on next tab`);
   });
 }
 

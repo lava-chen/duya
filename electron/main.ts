@@ -36,7 +36,7 @@ import { subscribeMcpConfigHotReload } from './services/mcp-config';
 import { initPerformanceMonitor } from './services/performance-monitor';
 import { sweepUnreferencedSnapshots } from './services/snapshot-gc';
 import { resolveRolloutRoot } from './config/boot-config';
-import { initLowPower, isLowPowerEnabled } from './services/low-power';
+import { initLowPower } from './services/low-power';
 import { initSessionManager, getSessionManager } from './agents/session-manager';
 import { RecapService } from './services/recap/recap-service';
 import { registerRecapHandlers } from './ipc/recap-handlers';
@@ -49,9 +49,6 @@ import { initRoutineListenerHub } from './automation/listener-hub';
 import { initLogger, getLogger, LogComponent } from './logging/index';
 import { initUpdater, checkForUpdates, downloadUpdate, installUpdate, getUpdaterState, cleanupUpdater } from './services/updater';
 import { scanSkillFile, type SkillFinding, type SkillScanResult } from '../packages/agent/src/security/skillScanner.js';
-import { resolveMemoryModel } from './services/providers/memory-model-resolution';
-import { createRagIndexExecutor, type RagRefreshResult } from './memory/rag_refresh';
-import { toLegacyApiProvider } from '../src/lib/providers/legacy';
 
 // IPC handlers (extracted from main.ts)
 import { registerSystemHandlers } from './ipc/system-handlers';
@@ -736,158 +733,18 @@ if (gotTheLock) {
       const configStore = getConfigStore();
       memoryEnabled = configStore.getByPath('memory.memory_enabled') === true;
     }
+    // Memory toggle boot alignment: legacy builds wrote the toggle only to
+    // the SQLite settings table while every consumer reads config.toml —
+    // align the two (SQLite wins as the user's latest intent) before the
+    // gate reads it. No-op when they already agree. (worker-bootstrap.ts)
+    const { syncMemoryToggleFromSettingsDb, startMemoryWorkerFromConfig } = await import('./memory/worker-bootstrap');
+    syncMemoryToggleFromSettingsDb();
     if (memoryEnabled) {
-      try {
-        const { bootstrap } = await import('./memory-state');
-        const { startMemoryWorker, applyLowPowerOverrides } = await import('./memory/memory-worker');
-        const { createAIClientWithRetry } = await import('@duya/ai');
-        const { getDatabasePath } = await import('./config/boot-config');
-        const { toLLMProvider } = await import('./config/provider-types');
-        const { toRuntimeConfigFromLegacy } = await import('@duya/ai');
-
-        const mainDb = getDatabase();
-        if (!mainDb) {
-          throw new Error('Main DB not available for memory worker');
-        }
-        const memoryDb = bootstrap({ bootJsonDatabaseDir: path.dirname(getDatabasePath()) });
-
-        // Plan 328 Phase 5: catalogSync now reads from the core DB
-        // (`duya-core.db` sessions + message_index tables). Pull the
-        // singleton CoreStores so the worker's catalogSync uses the
-        // same handle the rest of the main process uses.
-        const { getCoreStoresOrNull } = await import('./db/core-connection');
-        const coreStores = getCoreStoresOrNull();
-        if (!coreStores) {
-          throw new Error(
-            'Core stores not initialized — memory worker requires core DB (plan 328)',
-          );
-        }
-
-        // Construct LLM client from the memory worker provider. When
-        // memoryProviderId is unset, getMemoryProvider() falls back to
-        // the default provider. Falls back gracefully if no provider is
-        // configured — the worker will still run reconcile + outbox,
-        // just no extraction.
-        let llmClient = null;
-        let curationProviderConfig = null;
-        try {
-          const providerStore = getProviderStore();
-          const activeLlm = providerStore.getMemoryLlmProvider();
-          const provider = activeLlm ? toLegacyApiProvider(activeLlm) : undefined;
-          if (provider) {
-            const memoryModel = providerStore.getMemoryModel();
-            const llmProvider = toLLMProvider(provider.providerType, provider.baseUrl);
-            const model = resolveMemoryModel(
-              provider,
-              memoryModel,
-              llmProvider === 'anthropic' || llmProvider === 'openai' || llmProvider === 'ollama'
-                ? llmProvider
-                : 'ollama',
-            );
-            logger.info('Memory worker: model resolved', { model, providerId: provider.id, memoryModelId: memoryModel }, LogComponent.DB);
-            // Build a ProviderRuntimeConfig from the legacy ApiProvider so
-            // domestic providers (MiniMax, DeepSeek, Qwen, GLM, Kimi) get
-            // the correct apiFormat + modelCompat flags. Without these,
-            // the Stage 1 extractor may misparse reasoning content.
-            const runtime = toRuntimeConfigFromLegacy(provider, model);
-            llmClient = createAIClientWithRetry({
-              apiKey: provider.apiKey,
-              baseURL: provider.baseUrl,
-              model,
-              apiFormat: runtime.apiFormat,
-              providerId: runtime.providerId,
-              modelCapabilities: runtime.modelCompat,
-            });
-            // Credentials for the Phase 2 curator subprocess (orchestrator
-            // spawns it via the shared agent process pool).
-            curationProviderConfig = {
-              apiKey: provider.apiKey,
-              model,
-              baseUrl: provider.baseUrl,
-              provider: llmProvider,
-            };
-          }
-        } catch (llmErr) {
-          logger.warn('Memory worker: LLM client construction failed; extraction disabled', { error: llmErr instanceof Error ? llmErr.message : String(llmErr) }, LogComponent.DB);
-        }
-
-        if (llmClient) {
-          // Phase 2 curation wiring (Plan 406): without these deps every
-          // curation tick is silently skipped (skipped_no_curation_deps).
-          // The curator works directly on the live memory root (simplified
-          // flow, 2026-08-09); a git backup is taken before each run.
-          const os = await import('os');
-          const memoryRoot = path.join(os.homedir(), '.duya', 'memory');
-
-          // RAG index refresh (plan 428): rebuild the retrievable memory
-          // index after each successful curation run. Enabled via
-          // `[memory.rag].enabled`; the embedding client resolves through
-          // the provider framework (falling back to keyword-only when the
-          // provider has no embeddings endpoint). Shared executor built in
-          // `memory/rag_refresh.ts` (also used by CLI / Settings rebuild).
-          let ragRefresh: ((memoryRoot: string) => Promise<RagRefreshResult | undefined>) | undefined;
-          try {
-            ragRefresh = createRagIndexExecutor()?.refresh;
-          } catch (ragErr) {
-            logger.warn(
-              'RAG index refresh setup failed; disabled',
-              { error: ragErr instanceof Error ? ragErr.message : String(ragErr) },
-              LogComponent.DB,
-            );
-          }
-
-          const curation = curationProviderConfig
-            ? {
-                configRoot: path.join(memoryRoot, 'memory-config'),
-                providerConfig: curationProviderConfig,
-                ragRefresh,
-              }
-            : undefined;
-
-          // Ensure the curation config root exists with default files. Without
-          // `memory-config/`, the memory_write tool and the Stage 1 extractor
-          // have no policy to read.
-          if (curation) {
-            try {
-              await ensureMemoryConfigDir(curation.configRoot);
-            } catch (initErr) {
-              logger.warn(
-                'Memory worker: config root init failed; curation may be skipped',
-                { error: initErr instanceof Error ? initErr.message : String(initErr) },
-                LogComponent.DB,
-              );
-            }
-          }
-
-          startMemoryWorker(
-            {
-              memoryDb,
-              mainDb,
-              coreDb: coreStores.coreDb,
-              sessions: coreStores.sessions,
-              // Main process has no `process.send` — read messages from the
-              // core store MessageLog directly (mirror of the db-bridge
-              // `message:getBySession` case).
-              readMessageRows: async (sessionId: string) => {
-                const { storedEventsToIpcMessages } = await import('./ipc/core-db-adapters');
-                return storedEventsToIpcMessages(coreStores.messageLog.listBySession(sessionId));
-              },
-              llmClient,
-              curation,
-            },
-            // Phase 1 sweep every 5 min; low-power mode raises the tick
-            // floor to 5s and throttles catalogSync to 5min.
-            applyLowPowerOverrides(
-              { extractEveryMs: 5 * 60_000, concurrency: 2 },
-              isLowPowerEnabled(),
-            ),
-          );
-          logger.info('Memory worker started (shadow mode)', { curation: curation ? 'wired' : 'disabled' }, LogComponent.DB);
-        } else {
-          logger.warn('Memory worker: no LLM client; worker not started', undefined, LogComponent.DB);
-        }
-      } catch (error) {
-        logger.warn('Failed to start memory worker', { error: error instanceof Error ? error.message : String(error) }, LogComponent.DB);
+      const outcome = await startMemoryWorkerFromConfig();
+      if (outcome === 'started') {
+        logger.info('Memory worker started (shadow mode)', undefined, LogComponent.DB);
+      } else if (outcome !== 'no-llm') {
+        logger.warn('Memory worker boot start outcome', { outcome }, LogComponent.DB);
       }
     }
 
@@ -1352,38 +1209,6 @@ app.on('before-quit', (event) => {
     });
   }
 });
-
-/**
- * Ensure the memory curation config root exists with default files.
- *
- * The curation staging step copies `<configRoot>` into the staging workspace,
- * so a missing `memory-config/` dir makes createStaging throw (ENOENT on
- * readdir) and fail every curation cycle. This creates the directory and
- * writes default `stage1_policy.md` + `memory_layout.json` when absent.
- * Idempotent — existing files are never overwritten.
- */
-async function ensureMemoryConfigDir(configRoot: string): Promise<void> {
-  fs.mkdirSync(configRoot, { recursive: true });
-
-  const policyPath = path.join(configRoot, 'stage1_policy.md');
-  if (!fs.existsSync(policyPath)) {
-    // Empty policy — the full Stage 1 system prompt is just the hard contract.
-    fs.writeFileSync(policyPath, '');
-  }
-
-  const layoutPath = path.join(configRoot, 'memory_layout.json');
-  if (!fs.existsSync(layoutPath)) {
-    const { DEFAULT_LAYOUT } = await import('../packages/agent/src/memory-state/memory_layout.js');
-    const entities: Record<string, unknown> = {};
-    for (const [claimType, cfg] of DEFAULT_LAYOUT.entities) {
-      entities[claimType] = cfg;
-    }
-    fs.writeFileSync(
-      layoutPath,
-      JSON.stringify({ schema_version: DEFAULT_LAYOUT.schema_version, entities }, null, 2),
-    );
-  }
-}
 
 /**
  * Resolve the computer-use-demo daemon entry point.
