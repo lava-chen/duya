@@ -239,6 +239,46 @@ describe('FeishuChannel outbound media upload (todo #1)', () => {
     expect(calls.some((c) => c.url.includes('/im/v1/messages'))).toBe(false);
   });
 
+  it('sendReply(media) surfaces the real send-API error, not [object Object]', async () => {
+    const calls: FetchCall[] = [];
+    stubFetch((url) => {
+      if (url.includes('/auth/v3/tenant_access_token/internal')) return tokenResponse();
+      if (url.endsWith('/im/v1/images')) {
+        return new Response(JSON.stringify({ code: 0, msg: 'ok', data: { image_key: 'img_v2_ok' } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url.includes('/im/v1/messages')) {
+        return new Response(JSON.stringify({
+          code: 230002,
+          msg: 'Bot/User can NOT be out of the chat',
+          error: { log_id: 'test-log-id' },
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response('unexpected', { status: 404 });
+    }, calls);
+
+    const channel = makeChannel();
+    const imagePath = writeTempFile('sendfail.png', [0x89, 0x50]);
+    const reply = {
+      type: 'media',
+      mediaType: 'photo',
+      filePath: imagePath,
+    } as unknown as NormalizedReply;
+
+    const result = await channel.sendReply('oc_chat', reply);
+
+    expect(result.ok).toBe(false);
+    // The thrown FeishuApiError must be a real Error carrying code + msg +
+    // log_id in the message (regression: used to be a plain object that
+    // upper layers rendered as "[object Object]").
+    expect(String(result.error)).toContain('feishu api error 230002');
+    expect(String(result.error)).toContain('Bot/User can NOT be out of the chat');
+    expect(String(result.error)).toContain('test-log-id');
+    expect(String(result.error)).not.toContain('[object Object]');
+  });
+
   it('uploadImage rejects files over the 10 MB image limit without a request', async () => {
     const calls: FetchCall[] = [];
     stubFetch((url) => {

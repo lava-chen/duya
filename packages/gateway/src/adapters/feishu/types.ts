@@ -274,6 +274,28 @@ export interface FeishuErrorResponse {
   error?: { type?: string; log_id?: string; helps?: string[]; troubleshooting?: string };
 }
 
+/**
+ * Error thrown when a Feishu API call returns a non-zero code.
+ *
+ * The adapter used to `throw { code, msg, response }` — a plain object that
+ * upper layers stringified as "[object Object]", masking the real API
+ * rejection (e.g. 230002 "Bot/User can NOT be out of the chat"). This class
+ * carries the same `code`/`msg` fields (isRetryableFeishuError stays
+ * compatible) while being a real Error with a readable message.
+ */
+export class FeishuApiError extends Error {
+  readonly code: number;
+  readonly msg: string;
+  readonly logId?: string;
+  constructor(code: number, msg: string, logId?: string) {
+    super(`feishu api error ${code}: ${msg}${logId ? ` (log_id=${logId})` : ''}`);
+    this.name = 'FeishuApiError';
+    this.code = code;
+    this.msg = msg;
+    this.logId = logId;
+  }
+}
+
 export interface FeishuWebhookConfig {
   port?: number; host?: string; path?: string;
   verificationToken?: string; encryptKey?: string;

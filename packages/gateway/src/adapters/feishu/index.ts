@@ -61,6 +61,7 @@ import type {
   PairingSession,
   FeishuWebhookConfig,
 } from './types.js';
+import { FeishuApiError } from './types.js';
 import type { PlatformType, PlatformConfig, AdapterHealth } from '../../types.js';
 import type { PlatformAdapter } from '../base.js';
 import type { NormalizedMessage, NormalizedReply, SendResult } from '../../types.js';
@@ -727,7 +728,7 @@ export class FeishuChannel extends EventEmitter {
       body: JSON.stringify(body),
     });
     const data = await res.json() as FeishuSendMessageResponse;
-    if (data.code !== 0) throw { code: data.code, msg: data.msg, response: data };
+    if (data.code !== 0) throw new FeishuApiError(data.code, data.msg, (data as FeishuErrorResponse).error?.log_id);
     return data.data?.message_id || '';
   }
 
@@ -753,7 +754,7 @@ export class FeishuChannel extends EventEmitter {
           body: JSON.stringify(body),
         });
         const data = await res.json() as FeishuSendMessageResponse;
-        if (data.code !== 0) throw { code: data.code, msg: data.msg, response: data };
+        if (data.code !== 0) throw new FeishuApiError(data.code, data.msg, (data as FeishuErrorResponse).error?.log_id);
         return data.data?.message_id || '';
       });
       if (messageId) messageIds.push(messageId);
@@ -783,7 +784,7 @@ export class FeishuChannel extends EventEmitter {
         body: JSON.stringify(body),
       });
       const data = await res.json() as FeishuSendMessageResponse;
-      if (data.code !== 0) throw { code: data.code, msg: data.msg, response: data };
+      if (data.code !== 0) throw new FeishuApiError(data.code, data.msg, (data as FeishuErrorResponse).error?.log_id);
       return data.data?.message_id || '';
     });
   }
@@ -805,7 +806,7 @@ export class FeishuChannel extends EventEmitter {
         body: JSON.stringify(body),
       });
       const data = await res.json() as FeishuSendMessageResponse;
-      if (data.code !== 0) throw { code: data.code, msg: data.msg, response: data };
+      if (data.code !== 0) throw new FeishuApiError(data.code, data.msg, (data as FeishuErrorResponse).error?.log_id);
       return data.data?.message_id || '';
     });
   }
@@ -827,7 +828,7 @@ export class FeishuChannel extends EventEmitter {
         body: JSON.stringify(body),
       });
       const data = await res.json() as FeishuSendMessageResponse;
-      if (data.code !== 0) throw { code: data.code, msg: data.msg, response: data };
+      if (data.code !== 0) throw new FeishuApiError(data.code, data.msg, (data as FeishuErrorResponse).error?.log_id);
       return data.data?.message_id || '';
     });
   }
@@ -849,7 +850,7 @@ export class FeishuChannel extends EventEmitter {
         body: JSON.stringify(body),
       });
       const data = await res.json() as FeishuSendMessageResponse;
-      if (data.code !== 0) throw { code: data.code, msg: data.msg, response: data };
+      if (data.code !== 0) throw new FeishuApiError(data.code, data.msg, (data as FeishuErrorResponse).error?.log_id);
       return data.data?.message_id || '';
     });
   }
@@ -1153,7 +1154,7 @@ class FeishuCardClient implements CardStreamClient {
     });
     const data = await res.json() as { code: number; msg: string };
     if (data.code !== 0) {
-      throw { code: data.code, msg: data.msg, response: data };
+      throw new FeishuApiError(data.code, data.msg, (data as FeishuErrorResponse).error?.log_id);
     }
   }
 
