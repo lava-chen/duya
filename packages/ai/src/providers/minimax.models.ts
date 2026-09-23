@@ -13,15 +13,16 @@
 //   max_tokens ceiling is 204_800 per the API contract noted in
 //   `packages/ai/src/api/anthropic-messages.ts:67-68`.
 //
-// max_tokens ceiling notes (applied here as the model's hard `maxTokens`):
-// - M3: 524_288 (line 69 of anthropic-messages.ts). The runtime ceiling is
-//   the larger of this or the configured max; duya will let the request go
-//   up to 524K output, and MiniMax itself will reject beyond that.
-// - M2.7-highspeed: 196_608. Listed below to cover the highspeed branch in
-//   `getMiniMaxAnthropicMaxTokens` (anthropic-messages.ts:213-218), which
-//   checks `highspeed` before the generic `minimax-m` prefix and would
-//   otherwise return MINIMAX_DEFAULT_MAX_TOKENS (204_800) — overshooting the
-//   real ceiling and triggering MiniMax 2013 rejections.
+// max_tokens notes:
+// - `maxTokens` / `compat.maxOutputTokens` are the REQUEST default (what we
+//   ask the model to generate), aligned with the official harness catalog:
+//   M2.7 family = 131_072, M3 = 128_000. Adaptive thinking spends from this
+//   budget, so a small value (the old 8192) starves the answer and truncates
+//   turns with stop_reason=max_tokens.
+// - The wire value is additionally clamped by `getMiniMaxAnthropicMaxTokens`
+//   (anthropic-messages.ts): M3 524_288 / highspeed 196_608 / default 204_800.
+//   Those are hard API ceilings; the clamp exists to avoid MiniMax 2013
+//   rejections when a caller requests more.
 import type { Model } from '../types.js';
 
 export const minimaxModels: Model<'anthropic'>[] = [
@@ -33,10 +34,10 @@ export const minimaxModels: Model<'anthropic'>[] = [
     baseUrl: 'https://api.minimax.io/anthropic',
     reasoning: true,
     thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high', max: 'max' },
-    compat: { forceAdaptiveThinking: true },
+    compat: { forceAdaptiveThinking: true, maxOutputTokens: 128000 },
     input: ['text', 'image'],
     contextWindow: 1000000,
-    maxTokens: 8192,
+    maxTokens: 128000,
     cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0, tiers: [{ inputTokensAbove: 512000, input: 0.6, output: 2.4, cacheRead: 0.12, cacheWrite: 0 }] },
   },
   {
@@ -47,10 +48,10 @@ export const minimaxModels: Model<'anthropic'>[] = [
     baseUrl: 'https://api.minimax.io/anthropic',
     reasoning: true,
     thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high', max: 'max' },
-    compat: { forceAdaptiveThinking: true },
+    compat: { forceAdaptiveThinking: true, maxOutputTokens: 131072 },
     input: ['text', 'image'],
     contextWindow: 200000,
-    maxTokens: 8192,
+    maxTokens: 131072,
     cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
   },
   {
@@ -61,10 +62,10 @@ export const minimaxModels: Model<'anthropic'>[] = [
     baseUrl: 'https://api.minimax.io/anthropic',
     reasoning: true,
     thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high', max: 'max' },
-    compat: { forceAdaptiveThinking: true },
+    compat: { forceAdaptiveThinking: true, maxOutputTokens: 131072 },
     input: ['text', 'image'],
     contextWindow: 200000,
-    maxTokens: 8192,
+    maxTokens: 131072,
     cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
   },
   {
@@ -75,10 +76,10 @@ export const minimaxModels: Model<'anthropic'>[] = [
     baseUrl: 'https://api.minimax.io/anthropic',
     reasoning: true,
     thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high', max: 'max' },
-    compat: { forceAdaptiveThinking: true },
+    compat: { forceAdaptiveThinking: true, maxOutputTokens: 131072 },
     input: ['text', 'image'],
     contextWindow: 200000,
-    maxTokens: 8192,
+    maxTokens: 131072,
     cost: { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.375 },
   },
   {
@@ -89,10 +90,10 @@ export const minimaxModels: Model<'anthropic'>[] = [
     baseUrl: 'https://api.minimax.io/anthropic',
     reasoning: true,
     thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high', max: 'max' },
-    compat: { forceAdaptiveThinking: true },
+    compat: { forceAdaptiveThinking: true, maxOutputTokens: 131072 },
     input: ['text', 'image'],
     contextWindow: 200000,
-    maxTokens: 8192,
+    maxTokens: 131072,
     cost: { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.375 },
   },
   {
@@ -103,10 +104,10 @@ export const minimaxModels: Model<'anthropic'>[] = [
     baseUrl: 'https://api.minimax.io/anthropic',
     reasoning: true,
     thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high', max: 'max' },
-    compat: { forceAdaptiveThinking: true },
+    compat: { forceAdaptiveThinking: true, maxOutputTokens: 131072 },
     input: ['text', 'image'],
     contextWindow: 200000,
-    maxTokens: 8192,
+    maxTokens: 131072,
     cost: { input: 0.3, output: 1.2, cacheRead: 0, cacheWrite: 0 },
   },
 ];

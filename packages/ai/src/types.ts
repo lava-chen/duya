@@ -551,6 +551,13 @@ export interface ModelCompat {
    * thinking and leaving zero visible output.
    */
   supportsThinkingTokenBudget?: boolean;
+  /**
+   * Default max output tokens the endpoint accepts for this model, surfaced
+   * through findModelCompat so the agent layer requests a sane `max_tokens`
+   * instead of falling back to the global 8192 default. Official-harness
+   * parity: MiniMax advertises 131072 (M2.x) / 128000 (M3).
+   */
+  maxOutputTokens?: number;
 }
 
 // ─── Model pricing (per million tokens, USD) ───
@@ -681,8 +688,10 @@ export interface AIClient {
       tools?: Array<{ name: string; description: string; input_schema: Record<string, unknown> }>;
       /** Plan 523 P4: explicitly disable tool calling for this request (e.g.
        *  a compaction summarizer). When 'none', the tools field is omitted
-       *  from the wire payload so the model cannot invoke tools. */
-      toolChoice?: 'none';
+       *  from the wire payload so the model cannot invoke tools. Official-
+       *  harness parity: 'auto'/'any'/named-tool forward the native
+       *  tool_choice shape (anthropic protocol). */
+      toolChoice?: 'none' | 'auto' | 'any' | { type: 'tool'; name: string };
       maxTokens?: number;
       temperature?: number;
       disableThinking?: boolean;

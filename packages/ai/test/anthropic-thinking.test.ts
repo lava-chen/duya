@@ -33,7 +33,7 @@ describe('resolveAnthropicThinking', () => {
 
   describe('forceAdaptiveThinking on auto → { type: "adaptive" }', () => {
     it('returns { type: "adaptive" } for undefined effort on forceAdaptiveThinking models', () => {
-      expect(resolveAnthropicThinking(minimaxM3, undefined)).toEqual({ type: 'adaptive' });
+      expect(resolveAnthropicThinking(minimaxM3, undefined)).toEqual({ type: 'adaptive', display: 'summarized' });
     });
   });
 
@@ -43,26 +43,26 @@ describe('resolveAnthropicThinking', () => {
     });
 
     it('returns { type: "adaptive" } for "low"', () => {
-      expect(resolveAnthropicThinking(minimaxM3, 'low')).toEqual({ type: 'adaptive' });
+      expect(resolveAnthropicThinking(minimaxM3, 'low')).toEqual({ type: 'adaptive', display: 'summarized' });
     });
 
     it('returns { type: "adaptive" } for "medium"', () => {
-      expect(resolveAnthropicThinking(minimaxM3, 'medium')).toEqual({ type: 'adaptive' });
+      expect(resolveAnthropicThinking(minimaxM3, 'medium')).toEqual({ type: 'adaptive', display: 'summarized' });
     });
 
     it('returns { type: "adaptive" } for "high"', () => {
-      expect(resolveAnthropicThinking(minimaxM3, 'high')).toEqual({ type: 'adaptive' });
+      expect(resolveAnthropicThinking(minimaxM3, 'high')).toEqual({ type: 'adaptive', display: 'summarized' });
     });
 
     it('returns { type: "adaptive" } for "max"', () => {
-      expect(resolveAnthropicThinking(minimaxM3, 'max')).toEqual({ type: 'adaptive' });
+      expect(resolveAnthropicThinking(minimaxM3, 'max')).toEqual({ type: 'adaptive', display: 'summarized' });
     });
 
     it('returns { type: "adaptive" } regardless of effort value (no budget mapping)', () => {
       // The adaptive branch short-circuits before the BUDGET map lookup,
       // so any non-off effort yields the same shape.
-      expect(resolveAnthropicThinking(minimaxM3, 'minimal')).toEqual({ type: 'adaptive' });
-      expect(resolveAnthropicThinking(minimaxM3, 'xhigh')).toEqual({ type: 'adaptive' });
+      expect(resolveAnthropicThinking(minimaxM3, 'minimal')).toEqual({ type: 'adaptive', display: 'summarized' });
+      expect(resolveAnthropicThinking(minimaxM3, 'xhigh')).toEqual({ type: 'adaptive', display: 'summarized' });
     });
   });
 

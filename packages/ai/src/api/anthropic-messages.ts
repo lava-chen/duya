@@ -37,6 +37,7 @@ import { transformMessages, textifyToolResults } from './transform-messages.js';
 import { resolveProviderBlockOutbound, summarizeProviderBlock } from './degrade.js';
 import { getDeferredToolNames, splitDeferredTools } from '../utils/deferred-tools.js';
 import { emitSSE } from './emit-sse.js';
+import { sanitizeSurrogates } from '../utils/sanitize-unicode.js';
 import { collectDiagnostics } from '../utils/simple-options.js';
 import { checkCacheEligibility, applyCacheControl, applyCacheControlToSystem, applyCacheControlToTools } from '../utils/prompt-caching.js';
 import { sortToolsByName } from '../utils/tool-order.js';
@@ -995,15 +996,17 @@ function renameDuplicateToolIds(result: MessageParam[]): MessageParam[] {
 export function resolveAnthropicThinking(
   model: Model<'anthropic'>,
   effort?: string,
-): { type: 'enabled'; budget_tokens: number } | { type: 'adaptive' } | undefined {
+): { type: 'enabled'; budget_tokens: number } | { type: 'adaptive'; display: 'summarized' } | undefined {
   if (!model.reasoning) return undefined;
   if (effort === 'off') return undefined;
 
   const effectiveEffort = effort ?? 'medium';
 
   // MiniMax M3 and similar third-party endpoints accept only the adaptive shape.
+  // `display: 'summarized'` matches the official harness default (the endpoint
+  // summarizes reasoning for replay instead of returning it verbatim).
   if (model.compat?.forceAdaptiveThinking) {
-    return { type: 'adaptive' };
+    return { type: 'adaptive', display: 'summarized' };
   }
 
   if (effectiveEffort === undefined) return undefined;
@@ -1484,7 +1487,7 @@ export function toAnthropicMessages(
       // text for non-vision models, so here we can pass image blocks through.
       let toolContent: string | ContentBlockParam[];
       if (typeof msg.content === 'string') {
-        toolContent = msg.content;
+        toolContent = sanitizeSurrogates(msg.content);
       } else if (Array.isArray(msg.content)) {
         toolContent = msg.content
           .map((block) => convertContentBlock(block, model))
@@ -1540,9 +1543,11 @@ export function toAnthropicMessages(
     let content: ContentBlockParam[] = [];
 
     if (typeof msg.content === 'string') {
-      // Plain string content — preserve as a single text block. Empty strings
-      // are dropped at the merge step if adjacent to another message.
-      content.push({ type: 'text', text: msg.content });
+      // Plain string content — preserve as a single text block. Whitespace-only
+      // strings are dropped (blocks vanish → empty-user-turn fallback below).
+      if (msg.content.trim()) {
+        content.push({ type: 'text', text: sanitizeSurrogates(msg.content) });
+      }
     } else if (Array.isArray(msg.content)) {
       for (const block of msg.content) {
         const converted = convertContentBlock(block, model);
@@ -1632,7 +1637,10 @@ function convertContentBlock(
   model: Model<'anthropic'>,
 ): ContentBlockParam | null {
   if (block.type === 'text') {
-    return { type: 'text', text: block.text } as ContentBlockParam;
+    // Official-harness parity: whitespace-only text blocks are dropped and
+    // unpaired surrogates are stripped (lone surrogates break strict JSON).
+    if (!block.text.trim()) return null;
+    return { type: 'text', text: sanitizeSurrogates(block.text) } as ContentBlockParam;
   }
   if (block.type === 'image') {
     if (block.source.type === 'base64') {
@@ -1688,7 +1696,7 @@ function convertContentBlock(
     if (block.thinkingSignature) {
       return {
         type: 'thinking',
-        thinking: block.thinking,
+        thinking: sanitizeSurrogates(block.thinking),
         signature: block.thinkingSignature,
       } as ContentBlockParam;
     }
@@ -1697,7 +1705,7 @@ function convertContentBlock(
     // emit reasoning without any text reply). Downgrade to text so the
     // reasoning stays in context — official-harness parity.
     if (block.thinking) {
-      return { type: 'text', text: block.thinking } as ContentBlockParam;
+      return { type: 'text', text: sanitizeSurrogates(block.thinking) } as ContentBlockParam;
     }
     return null;
   }
@@ -1933,6 +1941,18 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
       // Plan 523 P4: `toolChoice: 'none'` omits the tools field entirely so the
       // summarizer model cannot invoke tools (the DSML/tool-call leak guard).
       const requestTools = chatOptions?.toolChoice === 'none' ? [] : requestToolsBase;
+      // Official-harness parity: forward explicit tool_choice. 'none' keeps the
+      // omit-tools semantics above; 'auto'/'any'/named-tool map to the native
+      // shapes (only meaningful when tools are present).
+      let toolChoiceParam: { type: 'auto' | 'any' } | { type: 'tool'; name: string } | undefined;
+      const toolChoiceOpt = chatOptions?.toolChoice;
+      if (toolChoiceOpt === 'auto') {
+        toolChoiceParam = { type: 'auto' };
+      } else if (toolChoiceOpt === 'any') {
+        toolChoiceParam = { type: 'any' };
+      } else if (toolChoiceOpt && typeof toolChoiceOpt === 'object' && 'name' in toolChoiceOpt) {
+        toolChoiceParam = { type: 'tool', name: toolChoiceOpt.name };
+      }
       // Plan 480 P0.1: when the native Anthropic surface supports it, mark the
       // final tool with a cache breakpoint. sortToolsByName above already
       // established the deterministic byte order, so the marker lands on a
@@ -1976,11 +1996,15 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
       const params: Anthropic.MessageCreateParams = {
         model: options.model,
         max_tokens: maxTokens,
-        temperature: chatOptions?.temperature ?? 1,
+        // Temperature is incompatible with extended/adaptive thinking on the
+        // Anthropic protocol (the official harness omits it whenever thinking
+        // is active) — only send it for non-thinking requests.
+        ...(thinking ? {} : { temperature: chatOptions?.temperature ?? 1 }),
         system: systemForRequest,
         messages: anthropicMessages,
         tools: requestTools.length ? toolsForRequest : undefined,
         ...(thinking ? { thinking } : {}),
+        ...(toolChoiceParam && requestTools.length ? { tool_choice: toolChoiceParam } : {}),
         stream: true,
       };
       // `output_config` post-dates the pinned SDK types; the SDK serializes
