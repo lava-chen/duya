@@ -19,6 +19,7 @@ import {
 import type { FeishuAdapterOptions, FeishuConfig } from './gateway-adapters';
 import { getConnectorCredential } from './agent-session-channels';
 import { persistInboundAttachment } from './attachment-store';
+import type { InboundFilterConfig } from './inbound-filter';
 
 const logger = getLogger();
 
@@ -36,6 +37,14 @@ function mediaNameFromTempExt(fallbackName: string, localPath: string): string {
 export interface FeishuConnectorOptions {
   agentId: string;
   onInbound: (agentId: string, envelope: ChannelInboundEnvelope) => void;
+  /**
+   * Optional inbound gating parsed from connection.json. The deep Feishu
+   * adapter already mention-gates groups and filters senders by
+   * `allowedUsers`, so this only feeds those knobs through (groupPolicy
+   * 'all' bypasses the mention gate via freeResponseChatIds; 'off' has no
+   * adapter knob and stays mention-gated).
+   */
+  filter?: InboundFilterConfig | null;
 }
 
 /**
@@ -46,12 +55,14 @@ export interface FeishuConnectorOptions {
 export class FeishuChannelConnector {
   private readonly agentId: string;
   private readonly onInbound: (agentId: string, envelope: ChannelInboundEnvelope) => void;
+  private readonly filter: InboundFilterConfig | null;
   private channel: FeishuChannel | null = null;
   private running = false;
 
   constructor(opts: FeishuConnectorOptions) {
     this.agentId = opts.agentId;
     this.onInbound = opts.onInbound;
+    this.filter = opts.filter ?? null;
   }
 
   get platform(): string {
@@ -97,10 +108,13 @@ export class FeishuChannelConnector {
       appSecret,
       domain: 'feishu',
       connectionMode: 'websocket',
-      allowedUsers: undefined,
+      // Grok-gap hardening: feed the connection.json inbound gate through to
+      // the adapter's own filtering (sender allowlist; group mention gate is
+      // always on unless groupPolicy 'all' frees every chat).
+      allowedUsers: this.filter?.allowedUsers,
       groupPolicy: undefined,
       webhook: undefined,
-      freeResponseChatIds: undefined,
+      freeResponseChatIds: this.filter?.groupPolicy === 'all' ? ['*'] : undefined,
       verbose: false,
     };
 

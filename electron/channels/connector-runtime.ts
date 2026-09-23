@@ -300,7 +300,11 @@ class BotConnectorManager {
         });
       }
       case 'feishu': {
-        const connector = new FeishuChannelConnector({ agentId, onInbound: routeInboundToBot });
+        const connector = new FeishuChannelConnector({
+          agentId,
+          onInbound: routeInboundToBot,
+          filter: readChannelInboundFilter(agentId, 'feishu'),
+        });
         registerLiveOutbound(agentId, platform, async (chatId, outbound) => {
           const result = await connector.getChannel().sendReply(
             chatId,
