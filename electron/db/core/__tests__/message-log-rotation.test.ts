@@ -28,7 +28,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { SqliteDatabase } from '../database';
-import { MessageLog, type NewEvent } from '../message-log';
+import { MessageLog, enforceBotArchiveCap, type NewEvent } from '../message-log';
 
 // ─── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -861,5 +861,29 @@ describe('MessageLog non-bot rotation (Plan 506 C1)', () => {
     expect(ids[0]).toBe('gen-0');
     expect(ids[59]).toBe('gen-59');
     expect(ids[60]).toBe('gen-active');
+  });
+
+  it('enforceBotArchiveCap prunes oldest archives past the soft cap and keeps active', () => {
+    const agentId = 'fatbot';
+    const sessionsDir = path.join(rootDir, 'agents', agentId, 'sessions');
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    // 3 archives of 40 bytes each; soft cap 100 bytes → prune until <= 100.
+    for (let g = 0; g < 3; g++) {
+      fs.writeFileSync(path.join(sessionsDir, `archive-${g}.jsonl`), 'x'.repeat(40), 'utf8');
+    }
+    fs.writeFileSync(path.join(sessionsDir, 'active.jsonl'), 'x'.repeat(40), 'utf8');
+
+    const pruned = enforceBotArchiveCap(agentId, rootDir, { force: true, softLimitBytes: 100 });
+    // 120 bytes total -> prune the single oldest segment -> 80 bytes (under
+    // the cap; the newest archive is always retained alongside active).
+    expect(pruned).toBe(1);
+    expect(fs.existsSync(path.join(sessionsDir, 'archive-0.jsonl'))).toBe(false);
+    expect(fs.existsSync(path.join(sessionsDir, 'archive-1.jsonl'))).toBe(true);
+    expect(fs.existsSync(path.join(sessionsDir, 'archive-2.jsonl'))).toBe(true);
+    // The active file is never touched.
+    expect(fs.existsSync(path.join(sessionsDir, 'active.jsonl'))).toBe(true);
+
+    // Under the cap → no pruning.
+    expect(enforceBotArchiveCap(agentId, rootDir, { force: true, softLimitBytes: 100 })).toBe(0);
   });
 });

@@ -42,7 +42,7 @@ import {
 } from './rollout-events';
 import { repairInterruptedToolCalls } from './message-repair';
 import { BOT_SESSION_ID_PREFIX, parseAgentIdFromBotSession } from '../../wake/bot-session-id';
-import { getBotSessionLogPath } from '../../config/agent-paths';
+import { getBotSessionLogPath, getBotSessionsDir } from '../../config/agent-paths';
 
 const logger = getLogger();
 
@@ -133,6 +133,111 @@ function warnArchiveCountOnce(sessionsDir: string, count: number): void {
     { sessionsDir, count },
     LogComponent.AgentProcess,
   );
+}
+
+// ─── Bot storage cap (grok conversation-size-limits parity) ──────────────────
+//
+// Bot sessions rotate on every compaction and the archive segments
+// accumulate forever; grok gates every turn against a per-bot storage
+// budget (256 MB soft → blob GC, 1 GB hard → error). duya's rollout JSONL
+// is the only copy of a bot's history (no server re-sync), so the adapted
+// posture is: past the soft cap the OLDEST archive segments are pruned
+// (the active file is never touched), and past the hard cap the same prune
+// runs with an ERROR log — appending and history reads never break.
+
+export const BOT_ARCHIVE_SOFT_LIMIT_BYTES = 256 * 1024 * 1024;
+export const BOT_ARCHIVE_HARD_LIMIT_BYTES = 1024 * 1024 * 1024;
+/** Minimum interval between cap scans for one agent (grok SOFT_GC_MIN_INTERVAL_MS). */
+const BOT_ARCHIVE_GC_MIN_INTERVAL_MS = 30 * 60 * 1000;
+
+const botArchiveGcLastRun = new Map<string, number>();
+
+/**
+ * Prune a bot session's oldest archive segments while the sessions
+ * directory exceeds the soft byte cap. Best-effort: never throws, never
+ * touches active.jsonl. Scans are throttled to one per 30 min per agent
+ * (post-rotation growth is the only realistic trigger); `force` bypasses
+ * the throttle for tests.
+ */
+export function enforceBotArchiveCap(
+  agentId: string,
+  rootDir: string,
+  opts: { force?: boolean; softLimitBytes?: number } = {},
+): number {
+  const softLimit = opts.softLimitBytes ?? BOT_ARCHIVE_SOFT_LIMIT_BYTES;
+  const lastRun = botArchiveGcLastRun.get(agentId);
+  if (!opts.force && lastRun !== undefined && Date.now() - lastRun < BOT_ARCHIVE_GC_MIN_INTERVAL_MS) {
+    return 0;
+  }
+  botArchiveGcLastRun.set(agentId, Date.now());
+
+  const sessionsDir = getBotSessionsDir(agentId, rootDir);
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(sessionsDir);
+  } catch {
+    return 0;
+  }
+
+  const archives: Array<{ generation: number; abs: string; bytes: number }> = [];
+  let totalBytes = 0;
+  for (const entry of entries) {
+    const match = entry.match(/^archive-(\d+)\.jsonl$/);
+    if (!match) continue;
+    const abs = path.join(sessionsDir, entry);
+    try {
+      const bytes = fs.statSync(abs).size;
+      archives.push({ generation: Number(match[1]), abs, bytes });
+      totalBytes += bytes;
+    } catch {
+      // Vanished mid-scan — ignore this segment.
+    }
+  }
+  if (archives.length === 0 || totalBytes <= softLimit) return 0;
+
+  const overHard = totalBytes > BOT_ARCHIVE_HARD_LIMIT_BYTES;
+  logger.warn(
+    `Bot rollout storage over cap: pruning oldest archive segments` +
+      (overHard ? ' (over the HARD limit — history beyond the retained archives is gone)' : ''),
+    { agentId, totalBytes, softLimit, hardLimit: BOT_ARCHIVE_HARD_LIMIT_BYTES },
+    LogComponent.AgentProcess,
+  );
+  if (overHard) {
+    logger.error(
+      'Bot rollout storage exceeded the hard limit; oldest archives pruned. ' +
+        'The remaining history no longer covers every generation.',
+      { agentId, totalBytes },
+      LogComponent.AgentProcess,
+    );
+  }
+
+  archives.sort((a, b) => a.generation - b.generation);
+  let pruned = 0;
+  let remaining = totalBytes;
+  // Prune oldest-first; the newest archive and the active file always survive.
+  while (remaining > softLimit && archives.length > 1) {
+    const oldest = archives.shift()!;
+    try {
+      fs.rmSync(oldest.abs, { force: true });
+      remaining -= oldest.bytes;
+      pruned += 1;
+    } catch (err) {
+      logger.warn('Bot archive cap: failed to prune segment', {
+        agentId,
+        segment: path.basename(oldest.abs),
+        error: err instanceof Error ? err.message : String(err),
+      }, LogComponent.AgentProcess);
+      break;
+    }
+  }
+  if (pruned > 0) {
+    logger.info('Bot archive cap: pruned old rollout segments', {
+      agentId,
+      pruned,
+      remainingBytes: remaining,
+    }, LogComponent.AgentProcess);
+  }
+  return pruned;
 }
 
 /** Plan 506 (A1): export result for one session's portable rollout file. */
@@ -400,6 +505,18 @@ export class MessageLog {
               error: err instanceof Error ? err.message : String(err),
             },
           );
+        }
+        // Grok conversation-size-limits parity: rotation is when a bot's
+        // rollout grows a generation — the moment to check the per-bot
+        // storage cap and prune the oldest archives. Best-effort; never
+        // blocks the append (same fail-open posture as rotateArchive).
+        const capAgentId = parseAgentIdFromBotSession(sessionId);
+        if (capAgentId) {
+          try {
+            enforceBotArchiveCap(capAgentId, this.rootDir);
+          } catch {
+            // enforceBotArchiveCap already swallows; belt-and-braces.
+          }
         }
       }
 
