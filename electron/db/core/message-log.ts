@@ -113,6 +113,28 @@ export interface RotationOptions {
  */
 export const NON_BOT_ROTATION_THRESHOLD_BYTES = 4 * 1024 * 1024;
 
+/**
+ * Archive segments per session above which the discovery logs a one-time
+ * operational warning. Not a truncation bound — the directory scan finds
+ * every generation — just a heads-up that a session is accumulating an
+ * unusual amount of rotated history (bot sessions rotate per compaction).
+ */
+const ARCHIVE_DISCOVERY_WARN_COUNT = 50;
+
+const archiveCountWarned = new Set<string>();
+
+function warnArchiveCountOnce(sessionsDir: string, count: number): void {
+  if (archiveCountWarned.has(sessionsDir)) return;
+  archiveCountWarned.add(sessionsDir);
+  logger.warn(
+    `Session rollout dir has ${count} archive segments — rotated history is piling up ` +
+      `(bot sessions rotate per compaction). History is still fully readable; consider ` +
+      `archiving the session or pruning old segments.`,
+    { sessionsDir, count },
+    LogComponent.AgentProcess,
+  );
+}
+
 /** Plan 506 (A1): export result for one session's portable rollout file. */
 export interface RolloutExportResult {
   absolutePath: string;
@@ -940,17 +962,32 @@ export class MessageLog {
    * followed by `active.jsonl`. Shared by the projection, export, and
    * archive listing paths.
    *
-   * We probe a bounded range (0..50) — beyond 50 rotations a single
-   * session is a pathological case worth operator intervention. Real
-   * production sessions rotate every few hundred turns; 50 archives is
-   * a generous safety margin.
+   * Discovery lists the sessions directory instead of probing a bounded
+   * range: the old `0..50` probe silently truncated history for long-lived
+   * bot sessions, which rotate on EVERY compaction and outlive 50
+   * generations easily. A directory scan finds all generations (numeric
+   * order, gaps tolerated) and logs a one-time operational warning when a
+   * session accumulates an unusual number of them.
    */
   private collectSessionGenerationFiles(sessionsDir: string): string[] {
     const files: string[] = [];
-    for (let g = 0; g <= 50; g++) {
-      const archiveAbs = path.join(sessionsDir, `archive-${g}.jsonl`);
-      if (fs.existsSync(archiveAbs)) files.push(archiveAbs);
-      else break; // archives are dense starting at 0 — first gap means end of history
+    if (fs.existsSync(sessionsDir)) {
+      const archives: Array<{ generation: number; abs: string }> = [];
+      try {
+        for (const entry of fs.readdirSync(sessionsDir)) {
+          const match = entry.match(/^archive-(\d+)\.jsonl$/);
+          if (match) {
+            archives.push({ generation: Number(match[1]), abs: path.join(sessionsDir, entry) });
+          }
+        }
+      } catch {
+        // Unreadable directory — fall back to the active file below.
+      }
+      archives.sort((a, b) => a.generation - b.generation);
+      if (archives.length > ARCHIVE_DISCOVERY_WARN_COUNT) {
+        warnArchiveCountOnce(sessionsDir, archives.length);
+      }
+      for (const archive of archives) files.push(archive.abs);
     }
     const activeAbs = path.join(sessionsDir, 'active.jsonl');
     if (fs.existsSync(activeAbs)) files.push(activeAbs);

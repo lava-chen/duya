@@ -829,4 +829,37 @@ describe('MessageLog non-bot rotation (Plan 506 C1)', () => {
       true,
     );
   });
+
+  it('projection discovers archive generations beyond the old 50-probe bound', () => {
+    // A long-lived bot session rotates on EVERY compaction and outlives the
+    // old `0..50` probe — generation 51+ silently vanished from the
+    // projection. Discovery now lists the directory, so all 61 segments
+    // (60 archives + active) must be present in the projection.
+    const agentId = 'longlived';
+    const sessionId = `bot:${agentId}`;
+    const t = Date.UTC(2026, 8, 7, 4, 0, 0);
+    insertSessionFixture(db, sessionId, t);
+    const sessionsDir = path.join(rootDir, 'agents', agentId, 'sessions');
+    fs.mkdirSync(sessionsDir, { recursive: true });
+
+    for (let g = 0; g <= 59; g++) {
+      fs.writeFileSync(
+        path.join(sessionsDir, `archive-${g}.jsonl`),
+        JSON.stringify({ type: 'message', id: `gen-${g}` }) + '\n',
+        'utf8',
+      );
+    }
+    fs.writeFileSync(
+      path.join(sessionsDir, 'active.jsonl'),
+      JSON.stringify({ type: 'message', id: 'gen-active' }) + '\n',
+      'utf8',
+    );
+
+    const rows = log.project(sessionId);
+    expect(rows).toHaveLength(61);
+    const ids = rows.map((r) => (r.entry as { id?: string }).id);
+    expect(ids[0]).toBe('gen-0');
+    expect(ids[59]).toBe('gen-59');
+    expect(ids[60]).toBe('gen-active');
+  });
 });
