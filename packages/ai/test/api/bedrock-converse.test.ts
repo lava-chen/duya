@@ -140,10 +140,14 @@ describe('createBedrockConverseClient — end-to-end with mocked fetch', () => {
     }
     finalAssistant = next.value;
 
-    // Expected public SSE events (after emit-sse downgrade).
+    // Expected public SSE events (after emit-sse downgrade). Bedrock's wire
+    // order is messageStop → metadata, but `result` is held to precede
+    // `done` so the agent loop stamps usage onto the assistant message
+    // (previously Bedrock turns persisted with no usage at all).
     expect(events).toEqual([
       { type: 'text', data: 'Hello ' },
       { type: 'text', data: 'world' },
+      { type: 'result', data: { input_tokens: 12, output_tokens: 5 } },
       { type: 'done', reason: 'end_turn' },
     ]);
     expect(finalAssistant).toBeDefined();
@@ -160,6 +164,48 @@ describe('createBedrockConverseClient — end-to-end with mocked fetch', () => {
     expect(headers?.Authorization).toMatch(/^AWS4-HMAC-SHA256 /);
     expect(headers?.['x-amz-date']).toMatch(/^\d{8}T\d{6}Z$/);
     expect(headers?.['x-amz-content-sha256']).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('captures redactedThinking and forwards the encrypted payload on the wire', async () => {
+    const redactedClient = createBedrockConverseClient({
+      accessKeyId: 'AKID',
+      secretAccessKey: 'SECRET',
+      region: 'us-east-1',
+      model: 'anthropic.claude-sonnet-4-20250514-v1:0',
+      fetchImpl: (async () =>
+        makeSseResponse([
+          { event: 'messageStart', data: JSON.stringify({ messageStart: { role: 'assistant' } }) },
+          { event: 'contentBlockStart', data: JSON.stringify({ contentBlockStart: { start: {}, contentBlockIndex: 0 } }) },
+          { event: 'contentBlockDelta', data: JSON.stringify({
+            contentBlockDelta: { delta: { reasoningContent: { redactedThinking: 'bedrock-enc' } }, contentBlockIndex: 0 },
+          }) },
+          { event: 'contentBlockStop', data: JSON.stringify({ contentBlockStop: { contentBlockIndex: 0 } }) },
+          { event: 'messageStop', data: JSON.stringify({ messageStop: { stopReason: 'end_turn' } }) },
+          { event: 'metadata', data: JSON.stringify({ metadata: { usage: { inputTokens: 3, outputTokens: 2 } } }) },
+        ])
+      ) as typeof fetch,
+    });
+    const events: SSEEvent[] = [];
+    let finalAssistant: unknown;
+    const gen = redactedClient.streamChat([{ role: 'user', content: 'hi' }]);
+    let next = await gen.next();
+    while (!next.done) {
+      events.push(next.value);
+      next = await gen.next();
+    }
+    finalAssistant = next.value;
+
+    // The encrypted payload must reach the wire event (empty data) so the
+    // agent loop can persist it — otherwise the next Converse round loses
+    // the reasoning chain.
+    expect(events).toContainEqual({
+      type: 'thinking',
+      data: '',
+      redacted: true,
+      encrypted: 'bedrock-enc',
+    });
+    const blocks = (finalAssistant as { content: Array<{ type: string; redacted?: boolean; encrypted?: string }> }).content;
+    expect(blocks[0]).toMatchObject({ type: 'thinking', redacted: true, encrypted: 'bedrock-enc' });
   });
 
   it('maps tool_use start / stop correctly (deltas are accumulated, not emitted)', async () => {
@@ -203,11 +249,12 @@ describe('createBedrockConverseClient — end-to-end with mocked fetch', () => {
       next = await gen.next();
     }
     final = next.value;
-    // Public SSE events: tool_use_started (from toolcall_start) + tool_use
-    // (from toolcall_end) + done. The two input deltas are accumulated
-    // internally by emit-sse (toolcall_delta returns null).
+    // Public SSE events: tool_use_started, the raw-JSON argument fragments
+    // (plan 461 tool_use_delta forwarding), tool_use, then done.
     expect(events).toEqual([
       { type: 'tool_use_started', data: { id: 'tool_1', name: 'Bash', input: {} } },
+      { type: 'tool_use_delta', data: { id: 'tool_1', name: 'Bash', delta: '{"command":"ls' } },
+      { type: 'tool_use_delta', data: { id: 'tool_1', name: 'Bash', delta: '"}' } },
       { type: 'tool_use', data: { id: 'tool_1', name: 'Bash', input: { command: 'ls' } } },
       { type: 'done', reason: 'tool_use' },
     ]);

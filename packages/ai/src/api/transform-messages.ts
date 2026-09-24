@@ -180,6 +180,15 @@ export function transformMessages(
       ...msg,
       content: msg.content.map((block: MessageContent): MessageContent => {
         if (block.type === 'thinking') {
+          // Redacted reasoning: the encrypted payload is provider-specific
+          // and can never replay on a foreign endpoint — swap in a
+          // placeholder so the turn shape survives without leaking an
+          // unvalidatable block.
+          if (block.redacted) {
+            return same
+              ? block
+              : { type: 'text', text: '[reasoning redacted by provider]' };
+          }
           if (same) {
             // Keep thinking + signature for replay
             return block;

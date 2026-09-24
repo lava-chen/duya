@@ -689,6 +689,24 @@ export class duyaAgent implements AgentRuntime {
             `auto-compaction suppressed until next successful shrink`,
         );
       }
+      // Plan 567 §C: compaction drops the injected one-shot nested AGENTS.md
+      // user-role messages from history, but the manager's session-level
+      // loaded set would keep blocking re-injection forever. Release the set
+      // on compaction completion so the next file-touching turn re-injects
+      // the dropped reminders through the normal trigger-path channel (the
+      // content-hash dedup prevents double injection within one request).
+      if (event.type === 'compaction_complete') {
+        const released = getAgentsMdManager().releaseNestedMemoryForReinject(
+          this.workingDirectory,
+        );
+        if (released > 0) {
+          logger.info(
+            `[Agent] Compaction released ${released} nested AGENTS.md path(s) for re-injection`,
+            undefined,
+            'AgentsMd',
+          );
+        }
+      }
     });
 
     // Wire up the LLM summarizer so strategies can generate summaries
@@ -1901,6 +1919,11 @@ export class duyaAgent implements AgentRuntime {
       let thinkingContent = '';  // Accumulate thinking content for this turn
       let hasThinkingContent = false;  // Track if we have any thinking content
       let thinkingSignature: string | undefined = undefined;  // Anthropic extended-thinking signature for this turn
+      // Anthropic redacted_thinking: the encrypted payload arrives on a
+      // signature-only SSE thinking event. It must reach the pushed message
+      // verbatim or the next request's assistant turn loses its thinking
+      // prefix and thinking-mode continuations 400.
+      let redactedEncrypted: string | undefined = undefined;
       // Guard against providers that emit more than one `done` event per
       // stream (a protocol-layer bug duplicated every assistant message).
       // One LLM stream produces exactly one assistant message push.
@@ -2195,7 +2218,7 @@ export class duyaAgent implements AgentRuntime {
               applyHookInjection(
                 messages as unknown as InjectableMessage[],
                 `PreToolUse:${event.data.name}`,
-                renderSystemReminder(advisory),
+                renderSystemReminder(advisory, 'pre_tool_use_advisory'),
                 'custom',
                 { id: crypto.randomUUID(), now: Date.now() },
               );
@@ -2219,6 +2242,9 @@ export class duyaAgent implements AgentRuntime {
               id: event.data.id,
               name: event.data.name,
               input: event.data.input,
+              // Gemini thought signatures must be replayed with the
+              // function call they were issued for.
+              ...(event.data.signature ? { thoughtSignature: event.data.signature } : {}),
             });
 
             // Plan 224 follow-up: remember mode-switch tool_use ids so we
@@ -2277,6 +2303,17 @@ export class duyaAgent implements AgentRuntime {
 
             // Build final assistant content including thinking block if present
             const finalAssistantContent: MessageContent[] = [];
+
+            // Redacted reasoning goes first: the encrypted payload must lead
+            // the assistant turn for Anthropic thinking-mode validation.
+            if (redactedEncrypted) {
+              finalAssistantContent.push({
+                type: 'thinking',
+                thinking: '',
+                redacted: true,
+                encrypted: redactedEncrypted,
+              });
+            }
 
             // Add thinking block first if we have thinking content
             if (hasThinkingContent && thinkingContent) {
@@ -2561,12 +2598,15 @@ export class duyaAgent implements AgentRuntime {
                   if (triggerPaths.length > 0) {
                     const nestedFiles = await getAgentsMdManager().collectNestedMemory(triggerPaths);
                     if (nestedFiles.length > 0) {
+                      // Plan 567 §B: renderNestedMemoryBlock returns the inner
+                      // <project_instructions_spec> body only — the outer
+                      // <system-reminder> envelope is applied exactly once here.
                       const block = getAgentsMdManager().renderNestedMemoryBlock(nestedFiles);
                       if (block) {
                         const action = applyHookInjection(
                           messages as unknown as InjectableMessage[],
                           undefined,
-                          renderSystemReminder(block),
+                          renderSystemReminder(block, 'nested_agents_md'),
                           'nested-agents-md',
                           { id: crypto.randomUUID(), now: Date.now() },
                         );
@@ -2685,6 +2725,11 @@ export class duyaAgent implements AgentRuntime {
             // "The content[].thinking in the thinking mode must be passed back to the API."
             if (event.signature) {
               thinkingSignature = event.signature;
+            }
+            // Redacted reasoning: no content follows — record the encrypted
+            // payload for the push site below.
+            if (event.redacted && typeof event.encrypted === 'string') {
+              redactedEncrypted = event.encrypted;
             }
             hasThinkingContent = true;
             yield event;
@@ -4392,7 +4437,7 @@ export class duyaAgent implements AgentRuntime {
         const action = applyHookInjection(
           messages as unknown as InjectableMessage[],
           undefined,
-          renderSystemReminder(this.promptContextBlocks[i]),
+          renderSystemReminder(this.promptContextBlocks[i], 'hook_context_rail'),
           'custom',
           { now: Date.now() },
         );

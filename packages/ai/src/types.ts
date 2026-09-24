@@ -325,11 +325,11 @@ export type SSEEvent =
    *  can render a tool call's arguments while the model is still
    *  producing them (Codex/pi TUI parity). */
   | { type: 'tool_use_delta'; data: { id: string; name: string; delta: string } }
-  | { type: 'tool_use'; data: ToolUse }
+  | { type: 'tool_use'; data: ToolUse & { /** Provider thought signature (Gemini functionCall thoughtSignature) for replay continuity. */ signature?: string } }
   | { type: 'tool_result'; data: ToolResult }
   | { type: 'tool_progress'; data: { toolName: string; elapsedSeconds: number } }
   | { type: 'tool_timeout'; data: { toolName: string; elapsedSeconds: number } }
-  | { type: 'thinking'; data: string; signature?: string }
+  | { type: 'thinking'; data: string; signature?: string; /** True when the provider redacted the reasoning (Anthropic redacted_thinking) — data is empty. */ redacted?: boolean; /** Opaque encrypted reasoning payload to replay as redacted_thinking. */ encrypted?: string }
   | { type: 'done'; reason?: StopReason }
   | { type: 'error'; data: string; code?: string; metadata?: { errorType?: string; statusCode?: number; isRetryable?: boolean } }
   | { type: 'result'; data: TokenUsage }

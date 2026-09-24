@@ -1108,6 +1108,12 @@ export function parseAnthropicEvent(
           thinking: '',
           thinkingSignature: '',
           redacted: true,
+          // The encrypted payload is what Anthropic requires back on replay;
+          // without it the block cannot be re-sent and the thinking chain
+          // breaks at the next tool round.
+          encrypted: typeof (block as { data?: unknown }).data === 'string'
+            ? (block as { data: string }).data
+            : undefined,
         };
         assistantMsg.content.push(thinkingBlock);
         return { type: 'thinking_start', contentIndex: state.currentBlockIdx, partial: assistantMsg };
@@ -1636,6 +1642,13 @@ function convertContentBlock(
   block: MessageContent,
   model: Model<'anthropic'>,
 ): ContentBlockParam | null {
+  // Redacted reasoning: replay the opaque encrypted payload verbatim
+  // (Anthropic validates it server-side). Blocks without a payload cannot
+  // be re-sent — drop them rather than emitting an invalid empty block.
+  if (block.type === 'thinking' && block.redacted) {
+    if (!block.encrypted) return null;
+    return { type: 'redacted_thinking', data: block.encrypted } as ContentBlockParam;
+  }
   if (block.type === 'text') {
     // Official-harness parity: whitespace-only text blocks are dropped and
     // unpaired surrogates are stripped (lone surrogates break strict JSON).

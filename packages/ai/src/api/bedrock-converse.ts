@@ -473,6 +473,23 @@ class StreamAccumulator {
     }
     if ('reasoningContent' in delta) {
       const rc = delta.reasoningContent;
+      // Redacted reasoning: an opaque payload with no text. Capture it on
+      // the thinking block so it can replay as redacted_thinking — dropping
+      // it breaks the reasoning chain on the next Converse round.
+      if (rc.redactedThinking != null && typeof rc.redactedThinking !== 'string') {
+        // Non-string payloads cannot be replayed verbatim; treat as absent.
+        return [];
+      }
+      if (typeof rc.redactedThinking === 'string' && rc.redactedThinking) {
+        const redactedBlock: ThinkingContent = {
+          type: 'thinking',
+          thinking: '',
+          redacted: true,
+          encrypted: rc.redactedThinking,
+        };
+        this.partial.content[index] = redactedBlock;
+        return [];
+      }
       const block = (this.partial.content[index] as ThinkingContent | undefined) ?? {
         type: 'thinking',
         thinking: '',
@@ -537,11 +554,15 @@ class StreamAccumulator {
     this.partial.usage = {
       input_tokens: usage.inputTokens ?? 0,
       output_tokens: usage.outputTokens ?? 0,
+      ...(usage.totalTokens !== undefined ? { total_tokens: usage.totalTokens } : {}),
+      // TokenUsage canonical field names — DuyaAgent and the usage ledger
+      // read cache_hit_tokens / cache_creation_tokens; private names
+      // silently zero the cache accounting for this provider.
       ...(usage.cacheReadInputTokens !== undefined
-        ? { cacheReadTokens: usage.cacheReadInputTokens }
+        ? { cache_hit_tokens: usage.cacheReadInputTokens }
         : {}),
       ...(usage.cacheWriteInputTokens !== undefined
-        ? { cacheWriteTokens: usage.cacheWriteInputTokens }
+        ? { cache_creation_tokens: usage.cacheWriteInputTokens }
         : {}),
     };
   }
@@ -667,6 +688,14 @@ export function createBedrockConverseClient(opts: BedrockConverseClientOptions):
       //   event: messageStart / contentBlockStart / contentBlockDelta /
       //          contentBlockStop / messageStop / metadata / error
       // Data payload is JSON for each event type.
+      //
+      // Bedrock sends messageStop (done) BEFORE metadata (usage) on the
+      // wire, but DuyaAgent stamps the assistant message from the `result`
+      // event when it processes `done` — so the done event is held until
+      // usage has landed and result is emitted ahead of it.
+      let bufferedDone: SSEEvent | null = null;
+      let sawDone = false;
+      let resultEmitted = false;
       for await (const ev of parseSSE(response.body)) {
         const raw = ev.data;
         if (!raw) continue;
@@ -679,12 +708,38 @@ export function createBedrockConverseClient(opts: BedrockConverseClientOptions):
         const events = mapBedrockEvent(acc, parsed);
         for (const e of events) {
           const sse = emitSSE(e);
-          if (sse) yield sse;
+          if (!sse) continue;
+          if (sse.type === 'done') {
+            bufferedDone = sse;
+            sawDone = true;
+            continue;
+          }
+          yield sse;
+        }
+        // The metadata frame completes the round: flush result + done.
+        if (
+          bufferedDone && !resultEmitted && acc.partial.usage
+          && (acc.partial.usage.input_tokens > 0 || acc.partial.usage.output_tokens > 0)
+        ) {
+          resultEmitted = true;
+          yield { type: 'result', data: acc.partial.usage };
+          yield bufferedDone;
+          bufferedDone = null;
         }
       }
 
+      // Surface the usage on the wire (SSE `result`) even when no metadata
+      // frame followed the held done (or done never arrived).
+      if (!resultEmitted && acc.partial.usage && (acc.partial.usage.input_tokens > 0 || acc.partial.usage.output_tokens > 0)) {
+        resultEmitted = true;
+        yield { type: 'result', data: acc.partial.usage };
+      }
+      if (bufferedDone) {
+        yield bufferedDone;
+        bufferedDone = null;
+      }
       // If we never saw a `done` event, emit one with the current stopReason.
-      if (acc.partial.stopReason === 'completed') {
+      if (!sawDone && acc.partial.stopReason === 'completed') {
         const doneEv = acc.done('end_turn');
         const sse = emitSSE(doneEv);
         if (sse) yield sse;

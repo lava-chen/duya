@@ -38,6 +38,19 @@ export function emitSSE(internalEvent: AssistantMessageEvent): SSEEvent | null {
         : { type: 'thinking', data: internalEvent.delta };
     }
     case 'thinking_end': {
+      // Redacted reasoning (Anthropic redacted_thinking): the encrypted
+      // payload must survive to the durable message or the next request's
+      // assistant turn starts with tool_use and Anthropic thinking mode
+      // rejects the chain. Emit an empty-data event carrying the payload.
+      const endBlock = internalEvent.partial.content[internalEvent.contentIndex];
+      if (endBlock && endBlock.type === 'thinking' && endBlock.redacted) {
+        return {
+          type: 'thinking',
+          data: '',
+          redacted: true,
+          ...(endBlock.encrypted ? { encrypted: endBlock.encrypted } : {}),
+        };
+      }
       // The signature frequently arrives via signature_delta right before
       // content_block_stop, so this is the last chance to hand it to
       // consumers. Emit an empty-data thinking event carrying only the
@@ -84,6 +97,12 @@ export function emitSSE(internalEvent: AssistantMessageEvent): SSEEvent | null {
           id: internalEvent.toolCall.id,
           name: internalEvent.toolCall.name,
           input: internalEvent.toolCall.input,
+          // Gemini thought signatures ride the functionCall part; forward
+          // them so the durable tool_use block can replay the reasoning
+          // chain on the next round.
+          ...(internalEvent.toolCall.thoughtSignature
+            ? { signature: internalEvent.toolCall.thoughtSignature }
+            : {}),
         },
       };
     case 'done':

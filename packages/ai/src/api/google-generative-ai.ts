@@ -132,7 +132,12 @@ function toGeminiContents(messages: Message[]): GeminiContent[] {
             if (b.thinkingSignature) part.thoughtSignature = b.thinkingSignature;
             parts.push(part);
           } else if (b.type === 'tool_use') {
-            parts.push({ functionCall: { name: b.name, args: (b.input ?? {}) as Record<string, unknown> } });
+            parts.push({
+              functionCall: { name: b.name, args: (b.input ?? {}) as Record<string, unknown> },
+              // Replay the thought signature that accompanied this call —
+              // Gemini validates reasoning continuity through it.
+              ...(b.thoughtSignature ? { thoughtSignature: b.thoughtSignature } : {}),
+            });
           }
         }
       }
@@ -256,6 +261,11 @@ class GeminiStreamAccumulator {
           id: `gemini-call-${idx}`,
           name: part.functionCall.name,
           input: part.functionCall.args ?? {},
+          // Thought signatures accompany function calls (Gemini 2.5+);
+          // capture so the signature can replay on the next round.
+          ...(typeof part.thoughtSignature === 'string' && part.thoughtSignature
+            ? { thoughtSignature: part.thoughtSignature }
+            : {}),
         };
         this.blocks[idx] = toolBlock;
         this.partial.content[idx] = toolBlock;
@@ -335,8 +345,12 @@ class GeminiStreamAccumulator {
     this.partial.usage = {
       input_tokens: u.promptTokenCount ?? 0,
       output_tokens: u.candidatesTokenCount ?? 0,
+      ...(u.totalTokenCount !== undefined ? { total_tokens: u.totalTokenCount } : {}),
+      // TokenUsage canonical field name — DuyaAgent and the usage ledger
+      // read cache_hit_tokens; a private field name silently zeroes the
+      // cache-hit accounting for this provider.
       ...(u.cachedContentTokenCount !== undefined
-        ? { cacheReadTokens: u.cachedContentTokenCount }
+        ? { cache_hit_tokens: u.cachedContentTokenCount }
         : {}),
     };
   }
@@ -440,6 +454,27 @@ export function createGoogleGenerativeAiClient(
       }
 
       const acc = new GeminiStreamAccumulator(opts.model, 'google');
+      // DuyaAgent stamps the assistant message from the `result` event when
+      // it processes `done`, so `result` must precede `done` on the wire.
+      // finishReason can arrive in the same (or an earlier) frame than
+      // usageMetadata, so the done event is held until usage has landed.
+      let bufferedDone: SSEEvent | null = null;
+      let resultEmitted = false;
+      const readyUsage = (): { input_tokens: number; output_tokens: number } | null => {
+        const u = acc.partial.usage;
+        return u && (u.input_tokens > 0 || u.output_tokens > 0) ? u : null;
+      };
+      const flushHeldDone = function* (): Generator<SSEEvent, void, unknown> {
+        const held = readyUsage();
+        if (bufferedDone && !resultEmitted && held) {
+          resultEmitted = true;
+          yield { type: 'result', data: held };
+        }
+        if (bufferedDone) {
+          yield bufferedDone;
+          bufferedDone = null;
+        }
+      };
       for await (const ev of parseSSE(response.body)) {
         let parsed: GeminiResponse;
         try {
@@ -451,14 +486,40 @@ export function createGoogleGenerativeAiClient(
           const events = acc.apply(candidate);
           for (const e of events) {
             const sse = emitSSE(e);
-            if (sse) yield sse;
+            if (!sse) continue;
+            if (sse.type === 'done') {
+              bufferedDone = sse;
+              continue;
+            }
+            // Content after a held done (should not happen on Gemini, but
+            // stay safe): flush result + done first to preserve ordering.
+            if (bufferedDone) {
+              yield* flushHeldDone();
+            }
+            yield sse;
           }
         }
         if (parsed.usageMetadata) {
           acc.usage(parsed.usageMetadata);
+          if (bufferedDone) {
+            yield* flushHeldDone();
+          }
         }
       }
+      // Usage without a finishReason frame (or usage after the done frame):
+      // emit result first, then the held done.
+      const tailUsage = readyUsage();
+      if (!resultEmitted && tailUsage) {
+        resultEmitted = true;
+        yield { type: 'result', data: tailUsage };
+      }
+      if (bufferedDone) {
+        yield bufferedDone;
+        bufferedDone = null;
+      }
       if (acc.partial.stopReason === 'completed') {
+        // No finishReason frame ever surfaced (stopReason 'completed' is the
+        // untouched default) — synthesize the done event as before.
         const doneEv = acc.done('STOP');
         const sse = emitSSE(doneEv);
         if (sse) yield sse;

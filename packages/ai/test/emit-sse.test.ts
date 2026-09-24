@@ -98,6 +98,57 @@ describe('emitSSE', () => {
       };
       expect(emitSSE(event)).toBeNull();
     });
+
+    it('emits an empty-data thinking event carrying redacted flag and encrypted payload', () => {
+      const event: AssistantMessageEvent = {
+        type: 'thinking_end',
+        contentIndex: 0,
+        content: '',
+        partial: {
+          ...baseMsg,
+          content: [{ type: 'thinking', thinking: '', redacted: true, encrypted: 'enc-payload' }],
+        },
+      };
+      expect(emitSSE(event)).toEqual({
+        type: 'thinking',
+        data: '',
+        redacted: true,
+        encrypted: 'enc-payload',
+      });
+    });
+
+    it('forwards the redacted flag even without a payload (block dropped at replay)', () => {
+      const event: AssistantMessageEvent = {
+        type: 'thinking_end',
+        contentIndex: 0,
+        content: '',
+        partial: {
+          ...baseMsg,
+          content: [{ type: 'thinking', thinking: '', redacted: true }],
+        },
+      };
+      expect(emitSSE(event)).toEqual({ type: 'thinking', data: '', redacted: true });
+    });
+  });
+
+  it('forwards thoughtSignature on toolcall_end', () => {
+    const toolCall: ToolUseContent = {
+      type: 'tool_use',
+      id: 't1',
+      name: 'search',
+      input: { q: 'x' },
+      thoughtSignature: 'thought-sig-1',
+    };
+    const event: AssistantMessageEvent = {
+      type: 'toolcall_end',
+      contentIndex: 0,
+      toolCall,
+      partial: baseMsg,
+    };
+    expect(emitSSE(event)).toEqual({
+      type: 'tool_use',
+      data: { id: 't1', name: 'search', input: { q: 'x' }, signature: 'thought-sig-1' },
+    });
   });
 
   it('maps toolcall_end to SSEEvent.tool_use', () => {

@@ -56,9 +56,13 @@ describe('createGoogleGenerativeAiClient — end-to-end with mocked fetch', () =
     finalAssistant = next.value;
 
     // Public events (text deltas downgrade to type:'text' via emit-sse).
+    // `result` precedes `done` so the agent loop can anchor usage accounting
+    // on real API numbers (previously missing — Gemini turns persisted with
+    // no usage at all).
     expect(events).toEqual([
       { type: 'text', data: 'Hello ' },
       { type: 'text', data: 'world' },
+      { type: 'result', data: { input_tokens: 12, output_tokens: 5 } },
       { type: 'done', reason: 'end_turn' },
     ]);
     expect((finalAssistant as { usage: { input_tokens: number } }).usage.input_tokens).toBe(12);
@@ -100,9 +104,12 @@ describe('createGoogleGenerativeAiClient — end-to-end with mocked fetch', () =
     }
     finalAssistant = next.value;
     // Thinking text and final text both yield type:'thinking' and type:'text'
-    // respectively (emit-sse maps them).
+    // respectively (emit-sse maps them). Since the signature fix, the delta
+    // carries the thoughtSignature and a signature-only empty-data event
+    // closes the block.
     expect(events).toEqual([
-      { type: 'thinking', data: 'reasoning step' },
+      { type: 'thinking', data: 'reasoning step', signature: 'sig-A' },
+      { type: 'thinking', data: '', signature: 'sig-A' },
       { type: 'text', data: ' final answer' },
       { type: 'done', reason: 'end_turn' },
     ]);
@@ -177,5 +184,42 @@ describe('createGoogleGenerativeAiClient — end-to-end with mocked fetch', () =
     expect(String(capturedUrl)).toBe(
       'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse',
     );
+  });
+
+  it('captures functionCall thoughtSignature onto the tool_use SSE event and the final message', async () => {
+    const client = createGoogleGenerativeAiClient({
+      apiKey: 'GEM-KEY',
+      model: 'gemini-2.5-pro',
+      fetchImpl: (async () =>
+        makeSseResponse([
+          { data: JSON.stringify({
+            candidates: [{ content: { role: 'model', parts: [
+              { functionCall: { name: 'search', args: { q: 'x' } }, thoughtSignature: 'thought-sig-9' },
+            ] }, index: 0 }],
+          }) },
+          { data: JSON.stringify({
+            candidates: [{ finishReason: 'STOP', index: 0 }],
+          }) },
+        ])
+      ) as typeof fetch,
+    });
+    const events: SSEEvent[] = [];
+    let finalAssistant: unknown;
+    const gen = client.streamChat([{ role: 'user', content: 'search for x' }]);
+    let next = await gen.next();
+    while (!next.done) {
+      events.push(next.value);
+      next = await gen.next();
+    }
+    finalAssistant = next.value;
+
+    // The signature rides the tool_use wire event so the agent loop can
+    // stamp it onto the durable block (previously dropped entirely).
+    expect(events).toContainEqual({
+      type: 'tool_use',
+      data: { id: 'gemini-call-0', name: 'search', input: { q: 'x' }, signature: 'thought-sig-9' },
+    });
+    const blocks = (finalAssistant as { content: Array<{ type: string; thoughtSignature?: string }> }).content;
+    expect(blocks[0]).toMatchObject({ type: 'tool_use', thoughtSignature: 'thought-sig-9' });
   });
 });
