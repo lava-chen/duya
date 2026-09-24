@@ -485,18 +485,24 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
    * Execute session memory compaction with token budget cut point and iterative summary updates
    */
   async compact(messages: Message[], stats: CompactionStats, options?: CompactOptions): Promise<CompactionResult> {
-    const SYSTEM_MESSAGE_PREFIXES = ['system', 'instruction', 'You are', 'You are a', 'This session is being continued']
-
-    // Separate system messages from conversation
+    // Separate system-role rows (and re-fed compaction summaries) from
+    // conversation. The input comes from projectInputMessages(), which
+    // never contains role:'system' rows — but a legacy summary message
+    // re-fed through a checkpoint restore can still appear here and must
+    // not be summarized again.
+    //
+    // NOTE: do NOT classify by text prefix (e.g. "You are…", "instruction").
+    // A prefix heuristic swallowed REAL user turns whose text happened to
+    // start with those words: they were excluded from the summarizer input
+    // and folded away by the compaction boundary, so the user's message
+    // silently vanished from context without ever being summarized.
     const systemMessages: Message[] = []
     const conversationMessages: Message[] = []
 
     for (const msg of messages) {
       const isSystem =
         msg.role === 'system' ||
-        SYSTEM_MESSAGE_PREFIXES.some(prefix =>
-          typeof msg.content === 'string' && msg.content.startsWith(prefix)
-        )
+        (msg as { isCompactSummary?: boolean }).isCompactSummary === true
 
       if (isSystem) {
         systemMessages.push(msg)

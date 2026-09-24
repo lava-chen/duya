@@ -149,6 +149,13 @@ export function validateCompactedHistory(messages: readonly Message[]): string[]
  * Keeps the leading summary/prefix and the most recent tool round-trip;
  * drops intermediate messages until the budget is met. Assumes the input is
  * already sanitized (no orphaned tool results).
+ *
+ * The trim itself can SPLIT a tool round anywhere — an assistant tool_use
+ * whose results fell past the budget line, or a kept result whose tool_use
+ * was dropped. Both halves are unpairable and providers reject the request,
+ * so the trim repairs itself: dangling assistant tool_use messages and the
+ * results orphaned by their removal are dropped until every kept use has
+ * its result and vice versa.
  */
 export function fitCompactedToBudget(
   messages: Message[],
@@ -158,7 +165,6 @@ export function fitCompactedToBudget(
 
   // Always keep the head (summary + system prefix) and the last message.
   const head: Message[] = []
-  const tail: Message[] = []
   let headTokens = 0
   for (let i = 0; i < messages.length; i += 1) {
     const tok = estimateMessagesTokens([messages[i]])
@@ -169,11 +175,64 @@ export function fitCompactedToBudget(
       break
     }
   }
-  tail.push(messages[messages.length - 1])
+  const tailMsg = messages[messages.length - 1]
 
-  let result = [...head, ...tail]
+  const toolUseIdsOf = (msg: Message): string[] => {
+    if (!Array.isArray(msg.content)) return []
+    const ids: string[] = []
+    for (const block of msg.content as unknown as ContentBlock[]) {
+      if (block.type === 'tool_use' && typeof block.id === 'string') ids.push(block.id)
+    }
+    return ids
+  }
+  const toolResultIdsOf = (msg: Message): string[] => {
+    if (msg.role === 'tool' && typeof msg.tool_call_id === 'string') {
+      return [msg.tool_call_id]
+    }
+    if (!Array.isArray(msg.content)) return []
+    const ids: string[] = []
+    for (const block of msg.content as unknown as ContentBlock[]) {
+      if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+        ids.push(block.tool_use_id)
+      }
+    }
+    return ids
+  }
+
+  const result: Message[] = [...head, tailMsg]
+
+  // Repair split rounds until pairing is closed: drop assistant messages
+  // whose tool_use lost its result, then results orphaned by those drops.
+  // (Dropping a use can orphan its result; iterate until stable.)
+  for (;;) {
+    let changed = false
+
+    const keptResults = new Set(result.flatMap(toolResultIdsOf))
+    for (let i = result.length - 1; i >= 0; i -= 1) {
+      const uses = toolUseIdsOf(result[i])
+      if (uses.length === 0) continue
+      if (uses.every((id) => keptResults.has(id))) continue
+      result.splice(i, 1)
+      changed = true
+      break
+    }
+    if (changed) continue
+
+    const keptUses = new Set(result.flatMap(toolUseIdsOf))
+    for (let i = result.length - 1; i >= 0; i -= 1) {
+      const rids = toolResultIdsOf(result[i])
+      if (rids.length === 0) continue
+      if (rids.every((id) => keptUses.has(id))) continue
+      result.splice(i, 1)
+      changed = true
+      break
+    }
+
+    if (!changed) break
+  }
+
   if (estimateMessagesTokens(result) <= maxTokens) return result
 
-  // Last resort: keep only the head.
-  return head
+  // Last resort: keep only the head, repaired the same way.
+  return fitCompactedToBudget(head, maxTokens)
 }
