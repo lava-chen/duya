@@ -13,7 +13,7 @@ import type { AIClient } from '@duya/ai';
 import type { Message, MessageContent } from '../types.js';
 
 const MAX_INPUT_LENGTH = 300;
-const TITLE_MAX_LENGTH = 50; // Allow 5-15 Chinese chars or 5-15 English words
+const TITLE_MAX_LENGTH = 35; // Aligned with validateTitle's hard cap
 const TITLE_MIN_LENGTH = 4;
 const TITLE_TIMEOUT_MS = 10000; // 10s timeout, generous for slow models
 
@@ -39,10 +39,15 @@ function isMeaningfulFirstMessage(msg: Message | null): boolean {
   }
   const text = extractTextFromMessage(msg).trim();
   // Only consider it meaningless if it's JUST a greeting (no other content)
-  // Pattern matches: standalone greetings with optional punctuation, but nothing else
+  // Pattern matches: standalone greetings with optional punctuation, but nothing else.
+  // Also catches "hello there" / "hi everyone" where the message is greeting + 1
+  // extra word - these are not real conversation starters.
   const standaloneGreetingPattern = /^(?:hi|hello|你好|嗨|hey|yo|您好)[\s,.!]*$/i;
+  const greetingPlusWordPattern = /^(?:hi|hello|你好|嗨|hey|yo|您好)\s+[a-z]{1,15}[\s,.!]*$/i;
   const emptyPattern = /^[\s,.!]*$/;
-  return !standaloneGreetingPattern.test(text) && !emptyPattern.test(text);
+  return !standaloneGreetingPattern.test(text)
+    && !greetingPlusWordPattern.test(text)
+    && !emptyPattern.test(text);
 }
 
 /** Max characters for a message to be considered potentially low-signal. */
@@ -118,8 +123,17 @@ function looksLikeTitleArtifact(text: string): boolean {
   // Parenthetical explanations indicate reasoning
   if (/[（(][^）)]*[是因为|由于|因此|所以|这个|那]/u.test(text)) return true;
 
-  // Starts with lowercase (real titles usually start with uppercase or Chinese)
-  if (/^[a-z]/.test(trimmed) && !/^[a-z][a-z]+$/.test(trimmed)) return true;
+  // Emoji present - real titles are plain prose. Sanitizer should have
+  // caught this, but if it slipped through (e.g. via a code-fence strip
+  // path) treat as artifact.
+  if (HAS_EMOJI.test(trimmed)) return true;
+
+  // NOTE: we intentionally do NOT reject titles that start with a lowercase
+  // letter. Title-casing is a UI concern, not a quality signal - a
+  // legitimate title like "fix the login bug" should not be filtered.
+
+  // Pure punctuation / symbols / whitespace - no signal.
+  if (/^[\s\p{P}\p{S}]+$/u.test(trimmed)) return true;
 
   return false;
 }
@@ -221,10 +235,30 @@ function validateTitle(title: string | null | undefined): string | null {
 
   cleaned = cleaned.trim();
 
-  // Reject empty, too long, or too many words (likely preamble leakage)
-  const MAX_TITLE_WORDS = 15;
-  if (cleaned.length === 0 || cleaned.length >= 100) return null;
-  if (cleaned.split(/\s+/).length > MAX_TITLE_WORDS) return null;
+  // Strip emojis, residual markdown markers, and CJK bracket residue.
+  // Models occasionally leak these through (especially ``-quoted code
+  // spans and decorative emoji "icons"). Defense in depth.
+  cleaned = sanitizeTitle(cleaned);
+
+  // Re-strip surrounding quotes in case sanitize removed only one side.
+  if (
+    (cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+    (cleaned.startsWith("'") && cleaned.endsWith("'"))
+  ) {
+    cleaned = cleaned.slice(1, -1);
+  }
+
+  cleaned = cleaned.trim();
+
+  // CJK-safe length check (code points, not UTF-16 units).
+  if (cleaned.length === 0 || charLength(cleaned) >= 60) return null;
+  if (cleaned.split(/\s+/).length > 15) return null;
+
+  // Reject pure-noise outputs (reasoning-model artifacts, JSON leakage, etc.)
+  if (looksLikeTitleArtifact(cleaned)) {
+    console.log(`[TitleGenerator] validateTitle: rejected artifact "${cleaned}"`);
+    return null;
+  }
 
   // Final check for bad responses after cleaning
   if (badResponses.includes(cleaned.toLowerCase())) {
@@ -232,7 +266,11 @@ function validateTitle(title: string | null | undefined): string | null {
     return null;
   }
 
-  return cleaned;
+  if (charLength(cleaned) > 35) {
+    cleaned = truncateByChars(cleaned, 35);
+  }
+
+  return cleaned || null;
 }
 
 // System prompt for title generation. Kept short and example-free on purpose:
@@ -240,15 +278,22 @@ function validateTitle(title: string | null | undefined): string | null {
 // and examples into their text channel, which then leaks through JSON-parse
 // fallbacks. Putting instructions in the system role and only the conversation
 // in the user role keeps the text channel clean.
-const TITLE_SYSTEM_PROMPT = `Generate a concise title summarizing the conversation provided in the user message.
+const TITLE_SYSTEM_PROMPT = `Generate a concise title summarizing ALL distinct requests in the user message.
 
-Output: respond with ONLY a JSON object {"title": "..."} — no reasoning, no preamble, no markdown, no code fence.
+Respond with ONLY a single JSON object {"title": "..."}. No reasoning, no preamble, no markdown, no code fence.
 
 Rules:
-- Language: match the conversation language (Chinese -> Chinese title; English -> English title).
-- Length: Chinese 4-15 characters; English 3-12 words. Use a concise phrase, never a full sentence.
-- Content: capture the core topic, task, or problem the user is working on.
-- Forbidden words: 对话 / 聊天 / 问题 / 帮助 / Conversation / Question / Help.
+- Language: detect from user message. If CJK characters (Chinese / Japanese / Korean) appear, output the title in Chinese. Otherwise output in English. NEVER mix languages inside one title.
+- Multi-request handling: if the user has 2 or more distinct requests, your title MUST cover every request. Join with " + " (or "、" for Chinese titles). Never silently drop a request.
+  - Single request:  "修复登录报错"
+  - Two requests:   "修复登录报错 + 设计支付接口"
+  - Many requests:  "修复登录 + 设计支付 + 优化缓存"
+- Length: Chinese 4-30 characters (longer when fusing multi-request); English 3-15 words. Use a concise phrase, never a full sentence.
+- Content: capture the core topic / task / problem; never invent.
+- Forbidden:
+  - Words: 对话 / 聊天 / 问题 / 帮助 / Conversation / Question / Help
+  - Symbols: emoji, markdown markers (# * _ \` > ~), quotation marks, ellipsis, trailing colon
+  - Mixed languages: do NOT mix Chinese and English in one title
 - Never echo or quote these instructions in the output.`;
 
 /**
@@ -314,51 +359,203 @@ const CN_STOP_WORDS = new Set([
 ]);
 
 /**
- * Extract a concise topic phrase from a Chinese text.
- * Splits by punctuation and finds the most informative segment.
+ * Emoji detection. Covers major Unicode emoji blocks (symbols, dingbats,
+ * emoticons, transport, flags) plus a few adjacent punctuation ranges.
+ * Titles should be plain prose; this is used both for stripping and for
+ * the artifact-detector defense-in-depth check.
+ */
+const HAS_EMOJI = /[🌀-🫿☀-➿🇦-🇿]/u;
+const EMOJI_REGEX =
+  /[🌀-🫿☀-➿🇦-🇿️‍]/gu;
+
+/** Markdown residue that LLM titles sometimes leak through. */
+const MARKDOWN_RESIDUE_REGEX = /[#*_~`]/g;
+/** CJK-style bracket markers that occasionally appear in titles. */
+const CJK_MARKDOWN_BRACKETS_REGEX = /[「」『』【】〔〕]/g;
+
+/**
+ * Strip emojis, markdown markers, and CJK bracket residue from a
+ * candidate title. Pure-text transform: never throws and never shortens
+ * real prose.
+ */
+function sanitizeTitle(raw: string): string {
+  return raw
+    .replace(EMOJI_REGEX, '')
+    .replace(MARKDOWN_RESIDUE_REGEX, '')
+    .replace(CJK_MARKDOWN_BRACKETS_REGEX, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+/** CJK-safe character count: counts Unicode code points, not UTF-16 units. */
+function charLength(s: string): number {
+  return [...s].length;
+}
+
+/** CJK-safe truncation: never splits an emoji or surrogate pair. */
+function truncateByChars(s: string, maxChars: number): string {
+  if (charLength(s) <= maxChars) return s;
+  return [...s].slice(0, maxChars).join('');
+}
+
+type TitleLanguage = 'zh' | 'en' | 'mixed';
+
+/**
+ * Detect dominant language of user text so we can pin title output to
+ * the same language and forbid mid-title mixing. CJK-heavy -> Chinese;
+ * pure Latin -> English; mixed (typical for Chinese text with English
+ * code terms) falls back to Chinese.
+ */
+function detectLanguage(text: string): TitleLanguage {
+  const cjkChars = (text.match(/[一-鿿㐀-䶿]/g) ?? []).length;
+  const latinChars = (text.match(/[A-Za-z]/g) ?? []).length;
+  if (cjkChars === 0 && latinChars === 0) return 'en';
+  if (cjkChars >= 2 && latinChars <= 1) return 'zh';
+  if (latinChars >= 3 && cjkChars === 0) return 'en';
+  if (cjkChars >= latinChars) return 'zh';
+  return 'en';
+}
+
+/** Discourse prefixes the user often opens with; stripped before extraction. */
+const EN_DISCOURSE_PREFIX = /^(please\s+|can\s+you\s+|could\s+you\s+|help\s+me\s+|i\s+want\s+to\s+|i\s+need\s+to\s+|i\s+need\s+|i\s+have\s+a\s+question\s+about\s+|how\s+do\s+i\s+|how\s+to\s+|i\s+would\s+like\s+to\s+|let's\s+|what\s+is\s+|why\s+is\s+|why\s+does\s+|explain\s+|tell\s+me\s+about\s+)/i;
+
+/**
+ * English stop words for topic scoring. Kept conservative; common but
+ * uninformative tokens that should not bias scoring.
+ */
+const EN_STOPWORDS = new Set([
+  'a','an','and','or','but','if','then','so','to','of','the','is','are','was','were',
+  'be','been','being','have','has','had','do','does','did','will','would','should',
+  'could','can','may','might','must','shall','need','i','you','he','she','it','we',
+  'they','me','him','her','us','them','my','your','his','its','our','their','this',
+  'that','these','those','about','with','for','from','on','in','at','by','as','into',
+  'out','up','down','over','under','again','further','once','here','there',
+  'when','where','why','how','what','which','who','whom','please','thanks','thank',
+  'hi','hello','hey','yeah','ok','okay','some','any','much','many','few','just',
+]);
+
+/** Max combined length for a multi-request title (in characters). */
+const MULTI_TOPIC_MAX_CHARS = 30;
+/** Max number of segments to merge for a multi-request title. */
+const MULTI_TOPIC_MAX_SEGMENTS = 3;
+/** Threshold ratio for "close enough to best" - segments at or above
+ *  this fraction of the top score are kept for multi-request merging. */
+const MULTI_TOPIC_SCORE_RATIO = 0.3;
+
+/**
+ * English equivalent of extractChineseTopic: splits on sentence
+ * boundaries, scores by stopword-free ratio, and keeps top-N
+ * close-scoring segments joined with " + ".
+ */
+function extractEnglishTopic(text: string): string | null {
+  const sentences = text
+    .split(/[.!?\n\r,;]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 4)
+    .map((s) => s.replace(EN_DISCOURSE_PREFIX, ''))
+    .filter((s) => s.length >= 4);
+
+  if (sentences.length === 0) return null;
+
+  const scored = sentences.map((seg, idx) => {
+    const words = seg.split(/\s+/).filter(Boolean);
+    if (words.length === 0) return { seg, score: 0, idx };
+    const infoCount = words.filter((w) => !EN_STOPWORDS.has(w.toLowerCase())).length;
+    const ratio = infoCount / words.length;
+    return { seg, score: ratio * words.length + infoCount * 0.5, idx };
+  });
+  const positive = scored.filter((s) => s.score > 0);
+  if (positive.length === 0) return null;
+
+  positive.sort((a, b) => b.score - a.score);
+  const best = positive[0]!;
+  const kept = positive
+    .filter((s) => s.score >= best.score * MULTI_TOPIC_SCORE_RATIO)
+    .slice(0, MULTI_TOPIC_MAX_SEGMENTS)
+    .sort((a, b) => a.idx - b.idx);
+
+  // English titles can be a touch longer than Chinese ones since they
+  // are tokenized by words, not characters.
+  const EN_MAX = 60;
+
+  // Greedy cap: when multi-segment join overflows, drop the longest
+  // segment first (it contributes the most characters with the least
+  // diversity) until it fits or only one segment remains.
+  let survivors = kept.slice().sort((a, b) => a.idx - b.idx);
+  const joinSurvivors = () => survivors.map((k) => k.seg).join(' + ');
+  while (charLength(joinSurvivors()) > EN_MAX && survivors.length > 1) {
+    let longestIdx = 0;
+    for (let i = 1; i < survivors.length; i++) {
+      if (survivors[i].seg.length > survivors[longestIdx].seg.length) {
+        longestIdx = i;
+      }
+    }
+    survivors.splice(longestIdx, 1);
+  }
+  const joined = joinSurvivors();
+  if (charLength(joined) > EN_MAX) {
+    return truncateByChars(joined, EN_MAX);
+  }
+  return joined;
+}
+
+/**
+ * Dispatcher: extract a topic using the language-appropriate extractor,
+ * falling back to the other language when the primary one yields
+ * nothing (e.g. a Chinese prompt with an English-only technical term).
+ */
+function extractTopic(text: string, lang: TitleLanguage): string | null {
+  if (lang === 'zh') return extractChineseTopic(text) ?? extractEnglishTopic(text);
+  if (lang === 'en') return extractEnglishTopic(text) ?? extractChineseTopic(text);
+  return extractChineseTopic(text) ?? extractEnglishTopic(text);
+}
+
+
+/**
+ * Multi-request-aware Chinese topic extraction.
+ * Splits on CJK punctuation, scores each segment, and keeps the top-N
+ * segments whose score is at least MULTI_TOPIC_SCORE_RATIO × the best
+ * score. Segments are joined with " + " in original order so a single
+ * user utterance with several distinct requests no longer silently drops
+ * all but one of them.
  */
 function extractChineseTopic(text: string): string | null {
   const segments = text
     .split(/[，。！？；：、\n\r]/)
     .map((s) => s.trim())
+    .filter((s) => s.length >= 3)
+    .map((s) =>
+      s.replace(/^(我想|我需要|我要|我想问|我想知道|请问|想一下|想问下|帮忙|帮我看|帮我)\s*/i, ''),
+    )
     .filter((s) => s.length >= 3);
 
   if (segments.length === 0) return null;
 
-  // Remove common prefixes from each segment
-  const cleaned = segments.map((s) =>
-    s.replace(/^(我想|我需要|我要|我想问|我想知道|请问|想问一下|想问下|帮忙|帮我看|帮我)\s*/i, '')
-  );
-
-  // Score segments by informativeness: fewer stop words = more informative
-  const scored = cleaned.map((seg, idx) => {
-    if (seg.length === 0) return { seg, score: -999, idx };
+  const scored = segments.map((seg, idx) => {
+    if (seg.length === 0) return { seg, score: -9999, idx };
     const chars = [...seg];
     const contentChars = chars.filter((c) => !CN_STOP_WORDS.has(c));
-    const ratio = contentChars.length / chars.length;
-    // Prefer segments that start with key content (not function words)
+    const ratio = contentChars.length / Math.max(chars.length, 1);
     const startsWithContent = contentChars.length > 0 && chars[0] === contentChars[0];
     return { seg, score: ratio * seg.length + (startsWithContent ? 2 : 0), idx };
   });
 
-  scored.sort((a, b) => b.score - a.score);
+  const positive = scored.filter((s) => s.score > 0);
+  if (positive.length === 0) return null;
 
-  // Take the best segment, but prefer first if scores are close
-  const best = scored[0];
-  if (best.score <= 0) return null;
+  positive.sort((a, b) => b.score - a.score);
+  const best = positive[0]!;
+  const kept = positive
+    .filter((s) => s.score >= best.score * MULTI_TOPIC_SCORE_RATIO)
+    .slice(0, MULTI_TOPIC_MAX_SEGMENTS)
+    .sort((a, b) => a.idx - b.idx);
 
-  // If there's a close second segment, try combining
-  const TARGET_MAX = 20;
-  if (best.seg.length < TARGET_MAX - 5 && scored.length > 1 && scored[1].score > best.score * 0.6) {
-    // Sort back by original order
-    const candidates = [best, scored[1]].sort((a, b) => a.idx - b.idx);
-    const combined = candidates.map((c) => c.seg).join('，');
-    if (combined.length <= TARGET_MAX) return combined;
+  const joined = kept.map((k) => k.seg).join(' + ');
+  if (charLength(joined) > MULTI_TOPIC_MAX_CHARS) {
+    return truncateByChars(joined, MULTI_TOPIC_MAX_CHARS).replace(/\s*\+\s*$/, '');
   }
-
-  return best.seg.length > TARGET_MAX ? best.seg.slice(0, TARGET_MAX) : best.seg;
+  return joined;
 }
-
 /**
  * Heuristic title extraction when LLM is unavailable or fails.
  * For Chinese: extracts the most informative topic phrase.
@@ -381,28 +578,36 @@ export function generateHeuristicTitle(messages: readonly Message[]): string | n
   // Remove common prefixes
   text = text
     .replace(/^(请|帮忙|帮我|能不能|能否|可以|请帮我|能否帮我|我想|我需要|我要|我想问|我想知道|请问|想问一下|想问下)\s*/i, '')
-    .replace(/^(please\s+|can\s+you\s+|could\s+you\s+|help\s+me\s+|i\s+want\s+to\s+|i\s+need\s+to\s+|how\s+do\s+i\s+|how\s+to\s+)/i, '');
+    .replace(EN_DISCOURSE_PREFIX, '');
 
-  const isChinese = /[\u4e00-\u9fa5]/.test(text);
-
-  if (isChinese && text.length > 15) {
-    const topic = extractChineseTopic(text);
-    if (topic && topic.length >= 4 && topic.length <= 30) {
-      return topic;
+  // Pick extractor based on detected language. The dispatcher keeps
+  // multiple distinct requests in the title instead of silently
+  // dropping all but the highest-scoring one.
+  const lang = detectLanguage(text);
+  const topic = extractTopic(text, lang);
+  if (topic) {
+    const cleaned = sanitizeTitle(topic);
+    const len = charLength(cleaned);
+    // English extractor caps at 60 chars; Chinese caps at 30. Accept
+    // either so long as the result is not noise.
+    if (len >= 4 && len <= 60 && !looksLikeTitleArtifact(cleaned)) {
+      return cleaned;
     }
   }
 
-  // Fallback: truncate to reasonable length
-  if (text.length > TITLE_MAX_LENGTH) {
-    text = text.slice(0, TITLE_MAX_LENGTH);
-    const lastSpace = text.lastIndexOf(' ');
+  // Fallback: CJK-safe truncation to a reasonable length.
+  if (charLength(text) > TITLE_MAX_LENGTH) {
+    let cut = truncateByChars(text, TITLE_MAX_LENGTH);
+    const lastSpace = cut.lastIndexOf(' ');
     if (lastSpace > TITLE_MIN_LENGTH) {
-      text = text.slice(0, lastSpace);
+      cut = cut.slice(0, lastSpace);
     }
-    text = text + '...';
+    return cut.trim() || null;
   }
-
-  return text || null;
+  // Short fallback: require at least 4 chars. Anything shorter (or pure
+  // noise) returns null so the caller keeps the default title.
+  if (charLength(text) < 4) return null;
+  return text.trim() || null;
 }
 
 /**
