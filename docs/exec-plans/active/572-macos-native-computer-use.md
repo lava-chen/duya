@@ -294,6 +294,18 @@ Windows 侧 computer-use 栈已落地：capture（desktopCapturer + SOM）、exe
 - 无 IsOffscreen 等价属性 → 以 position/minimized 推算（未实现，tech-debt）。
 - dev 模式 TCC 归属 Terminal/IDE（授权行为与 packaged 分叉，验收只认 packaged）。
 
+### 追加实测（2026-09-27 第四批）：上游破损 —— master 的 renderer 构建在 HEAD 即失败
+
+17. `npm run build:web` 在 HEAD 失败：`src/components/agent-face/AgentFace` 不存在（ENOENT），而
+    master 的 20beb534（bot avatar editor）在 BotCharacterAvatar.tsx / WorkflowGraph.tsx /
+    run-display/stage-columns.tsx 三处 import 它。全 refs 搜索（所有远端分支 ls-tree + 全历史
+    diff-filter=A）确认该目录**从未被提交** —— 上游漏提交，与本 plan 无关（tsc 基线里那 3 个
+    TS2307 同根因）。**后果**：Phase 6 的产物五项检查在上游修复前即使换 macOS 13+ 机器也无法执行
+    （renderer 编不出，打包产物无效）。**修复路径**（上游动作）：找 20beb534 作者补交
+    `src/components/agent-face/*`，或三处 import 降级为本地实现。
+18. 连带结论：Phase 6 五项检查 = 双重阻塞（本机 Electron 44↔macOS 12 环境死锁 + 上游缺模块）。
+    已把 agent-face 缺失记入 tsc 基线说明；pack 侧不再重试，等两项中任一解除。
+
 ### 决策待办：Electron 44 vs macOS 12 开发机（用户裁定项，2026-09-27 提交事实）
 
 **事实**（本会话实测）：master 合并把 `electron` 依赖从 36 升到 **44.2.0**（AGENTS.md 记载的 28 早已过期）。
