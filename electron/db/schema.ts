@@ -1,5 +1,6 @@
 import { getLogger, LogComponent } from '../logging/logger';
 import { ensureToolApprovalTables } from './toolApprovalState';
+import { ensureWorkbenchTables } from '../conductor/workbench-store';
 import { createSendMessageStateTables } from './sendMessageState';
 
 // Use type-only import to avoid bundling better-sqlite3 in the schema module
@@ -501,6 +502,8 @@ export function initializeSchema(db: BetterSqlite3Db): void {
   // Plan 498: module-owned side tables, self-repaired on every boot so a
   // partially-migrated database heals without waiting for the migration gate.
   ensureToolApprovalTables(db);
+  // Plan 570: canvas workbench runtime (data sources + handler code).
+  ensureWorkbenchTables(db);
 }
 
 /**

@@ -1303,6 +1303,11 @@ export interface ElectronAPI {
       url: string
       mode: 'desktop-head' | 'desktop-full' | 'mobile-head' | 'mobile-full'
     }) => Promise<unknown>
+    widgetAction: (payload: {
+      canvasId: string
+      elementId: string
+      action: { kind: 'refresh'; sourceId?: string }
+    }) => Promise<unknown>
   }
   /**
    * Plan 471: user-defined sidebar sections. Sections wrap one or more
@@ -2197,6 +2202,12 @@ const electronAPI: ElectronAPI = {
       url: string;
       mode: 'desktop-head' | 'desktop-full' | 'mobile-head' | 'mobile-full';
     }) => ipcRenderer.invoke('conductor:link:captureSnapshot', payload),
+    // Plan 570: widget iframe actions (strategy buttons) → main-process runtime.
+    widgetAction: (payload: {
+      canvasId: string;
+      elementId: string;
+      action: { kind: 'refresh'; sourceId?: string };
+    }) => ipcRenderer.invoke('conductor:widget:action', payload),
   },
   sidebarSections: {
     list: () => ipcRenderer.invoke('sidebar-sections:list'),

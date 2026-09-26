@@ -285,4 +285,23 @@ export async function captureLinkSnapshot(
   return api.captureLinkSnapshot({ canvasId, elementId, url, mode });
 }
 
+export interface WidgetActionRequest {
+  canvasId: string;
+  elementId: string;
+  action: {
+    kind: "refresh";
+    sourceId?: string;
+  };
+}
+
+/**
+ * Plan 570: forward a widget iframe action (strategy button press) to the
+ * main-process workbench runtime. Returns { success, data? | error? }.
+ */
+export async function widgetAction(request: WidgetActionRequest): Promise<unknown> {
+  const api = getConductorAPI();
+  if (!api) throw new Error("Conductor IPC is unavailable. Open the canvas in the DUYA desktop app.");
+  return (api as unknown as { widgetAction: (payload: WidgetActionRequest) => Promise<unknown> }).widgetAction(request);
+}
+
 export { ConductorCanvas, ConductorCanvasGroup, ConductorWidget, ConductorSnapshot, ConductorActionRequest, CanvasElement, ConductorV2Snapshot };

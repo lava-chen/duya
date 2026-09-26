@@ -24,6 +24,7 @@ import { getChannelManager } from '../messaging/port-manager';
 import { invertPatch } from '../db/core/conductors/invert-patch';
 import { createConductorUndoRedoHandlers } from './conductor-handlers/conductor-undo-redo-handlers';
 import { createConductorCaptureHandlers } from '../conductor/capture-bridge';
+import { workbenchService } from '../conductor/workbench-service';
 import { updateDatabasePath, readBootConfig } from '../config/boot-config';
 import { resolveRolloutRoot } from '../config/boot-config';
 import { emitGatewayConfigChanged, isGatewayConfigKey } from '../gateway/config-events';
@@ -2649,6 +2650,32 @@ export function registerConductorHandlers(): void {
   ipcMain.handle('conductor:redo', (_event, canvasId: string) => {
     return conductorUndoRedoHandlers.redo(_event, canvasId);
   });
+
+  // Plan 570: widget iframe actions (strategy buttons) routed into the
+  // main-process workbench runtime. The service validates element→canvas
+  // ownership and rate-limits per element.
+  ipcMain.handle(
+    'conductor:widget:action',
+    async (
+      _event,
+      request: { canvasId: string; elementId: string; action: { kind: 'refresh'; sourceId?: string } },
+    ) => {
+      try {
+        return await workbenchService.handleWidgetAction({
+          canvasId: request?.canvasId,
+          elementId: request?.elementId,
+          action: request?.action,
+        });
+      } catch (error) {
+        dbLogger.warn(
+          'conductor:widget:action failed',
+          { error: error instanceof Error ? error.message : String(error) },
+          LogComponent.Conductor,
+        );
+        return { success: false, error: { code: 'INTERNAL', message: error instanceof Error ? error.message : String(error) } };
+      }
+    },
+  );
 
   ipcMain.handle('conductor:asset:upload', conductorCaptureHandlers.upload);
 

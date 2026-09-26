@@ -1,7 +1,7 @@
 /**
  * Canvas Conductor tools — registration entry point.
  *
- * Fifteen tools for main-agent control of the conductor canvas:
+ * Sixteen tools for main-agent control of the conductor canvas:
  *   - canvas_manage             : identify/list/create/switch/rename canvases
  *   - canvas_create_element     : create one native element at a time
  *   - canvas_delete_element     : delete an element by ID
@@ -17,6 +17,7 @@
  *   - canvas_capture            : screenshot for vision analysis
  *   - canvas_get_knowledge      : fetch design knowledge section on-demand (no canvas needed)
  *   - database_manage           : manage durable project-local structured records
+ *   - canvas_data_source        : plan 570 — register/refresh canvas data sources (workbench)
  *
  * The canvasId is injected via ToolUseContext.conductorCanvasId —
  * the LLM never needs to track canvas state. Register conditionally
@@ -43,6 +44,7 @@ import { definition as getKnowledgeDefinition, executor as getKnowledgeExecutor 
 import { definition as autoLayoutDefinition, executor as autoLayoutExecutor } from './CanvasAutoLayoutTool.js';
 import { definition as applyLayoutDefinition, executor as applyLayoutExecutor } from './CanvasApplyLayoutTool.js';
 import { definition as databaseDefinition, executor as databaseExecutor } from './DatabaseTool.js';
+import { definition as dataSourceDefinition, executor as dataSourceExecutor } from './CanvasDataSourceTool.js';
 
 /**
  * The fifteen canvas conductor tools as {@link ToolRegistration} pairs.
@@ -74,6 +76,7 @@ export function getCanvasConductorTools(): ToolRegistration[] {
     { definition: captureDefinition, executor: captureExecutor },
     { definition: getKnowledgeDefinition, executor: getKnowledgeExecutor },
     { definition: databaseDefinition, executor: databaseExecutor },
+    { definition: dataSourceDefinition, executor: dataSourceExecutor },
   ];
 }
 

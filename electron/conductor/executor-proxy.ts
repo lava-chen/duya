@@ -11,6 +11,7 @@
  */
 
 import { ConductorDbService } from './db-service';
+import { workbenchService } from './workbench-service';
 import type {
   ExecutorRpcRequest,
   ExecutorRpcResponse,
@@ -404,6 +405,57 @@ export class ConductorExecutorProxy {
     return canvas.projectPath === sessionProjectPath;
   }
 
+  /**
+   * Plan 570: data-source registry management for the agent
+   * (`data_source.manage` executor action). Operations:
+   * register / list / update / delete.
+   */
+  private manageWorkbenchDataSources(payload: Record<string, unknown>): ExecutorRpcResponse {
+    const operation = payload.operation as string;
+    switch (operation) {
+      case 'register': {
+        const result = workbenchService.createSource({
+          canvasId: payload.canvasId as string,
+          name: payload.name as string,
+          type: payload.type as never,
+          config: payload.config as never,
+          refreshIntervalSec: payload.refreshIntervalSec as number | undefined,
+        });
+        return result.success
+          ? { success: true, result: result.data }
+          : { success: false, error: { code: result.error.code, message: result.error.message } };
+      }
+      case 'list': {
+        const result = workbenchService.listSources(payload.canvasId as string);
+        return result.success
+          ? { success: true, result: result.data }
+          : { success: false, error: { code: result.error.code, message: result.error.message } };
+      }
+      case 'update': {
+        const result = workbenchService.updateSource(payload.sourceId as string, {
+          name: payload.name as string | undefined,
+          config: payload.config as never,
+          refreshIntervalSec: payload.refreshIntervalSec as number | undefined,
+          enabled: payload.enabled as boolean | undefined,
+        });
+        return result.success
+          ? { success: true, result: result.data }
+          : { success: false, error: { code: result.error.code, message: result.error.message } };
+      }
+      case 'delete': {
+        const result = workbenchService.deleteSource(payload.sourceId as string);
+        return result.success
+          ? { success: true, result: result.data }
+          : { success: false, error: { code: result.error.code, message: result.error.message } };
+      }
+      default:
+        return {
+          success: false,
+          error: { code: 'INVALID_ACTION', message: `Unknown data_source.manage operation: ${String(operation)}` },
+        };
+    }
+  }
+
   async execute(request: ExecutorRpcRequest): Promise<ExecutorRpcResponse> {
     const { action, payload } = request;
 
@@ -519,6 +571,23 @@ export class ConductorExecutorProxy {
           return this.dbService.findEmptySpace(payload);
         case 'canvas.auto_layout':
           return this.dbService.autoLayout(payload);
+
+        // --------------------------------------------------------
+        // Plan 570: Canvas Workbench Runtime (data sources)
+        // --------------------------------------------------------
+        case 'data_source.manage':
+          return this.manageWorkbenchDataSources(payload);
+
+        case 'data_source.refresh': {
+          const sourceId = typeof payload.sourceId === 'string' ? payload.sourceId : '';
+          if (!sourceId) {
+            return { success: false, error: { code: 'INVALID_INPUT', message: 'sourceId is required' } };
+          }
+          const result = await workbenchService.refreshSource(sourceId, { actor: 'agent' });
+          return result.success
+            ? { success: true, result: { sourceId, snapshot: result.data.snapshot } }
+            : { success: false, error: { code: result.error.code, message: result.error.message } };
+        }
 
         default:
           return {

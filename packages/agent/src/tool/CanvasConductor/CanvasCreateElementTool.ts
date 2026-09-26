@@ -103,6 +103,13 @@ export const definition: Tool = {
     '  - native/connector:  { source, target, routingMode?: "elbow"|"curve", label?, labelFontSize?:14..22, color?, strokeStyle?, startMarker?, endMarker? } — see CONNECTOR PREREQUISITES below\n' +
     '  - native/sticky:     LEGACY — do not create; use native/shape instead\n' +
     '  - widget/dynamic:    LAST RESORT only — one compact secondary mini component; never for a whole guide/plan/diagram/dashboard. Requires top-level `sourceCode` field (NOT in config).\n\n' +
+    '## WORKBENCH WIDGETS (live data + strategy buttons, plan 570)\n' +
+    'A widget/dynamic element can be a LIVE workbench card. Pair it with canvas_data_source:\n' +
+    '  1. Register a data source (e.g. http stock quote, refreshIntervalSec 30). The app refreshes it in the background and pushes snapshots into every widget automatically.\n' +
+    '  2. In `sourceCode`, render from `window.duya.data[sourceId]` and subscribe with `window.duya.onData(cb)` — the canvas pushes updates live; do NOT hardcode a static snapshot as final content.\n' +
+    '  3. Add strategy buttons WITHOUT JS via attributes: <button data-duya-refresh="SOURCE_ID">Refresh</button>. ' +
+    'Inline <script> blocks in sourceCode ARE executed in the widget sandbox (after the runtime) — use them for derived indicators/strategy logic; no network access is available (connect-src none).\n' +
+    '  4. Changing the strategy later = rewrite sourceCode via canvas_fill_content; changing the data source = canvas_data_source update. No element recreation needed.\n\n' +
     '## COLOR CONSTRAINTS (apply to native/shape and native/sticky)\n' +
     'config.color MUST be one of these 6 enum keys (NOT hex): ' +
     'yellow, blue, green, pink, purple, gray. ' +
