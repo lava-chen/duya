@@ -293,3 +293,19 @@ Windows 侧 computer-use 栈已落地：capture（desktopCapturer + SOM）、exe
 - IME 中文录制盲区（与 Windows 同现状）。
 - 无 IsOffscreen 等价属性 → 以 position/minimized 推算（未实现，tech-debt）。
 - dev 模式 TCC 归属 Terminal/IDE（授权行为与 packaged 分叉，验收只认 packaged）。
+
+### 决策待办：Electron 44 vs macOS 12 开发机（用户裁定项，2026-09-27 提交事实）
+
+**事实**（本会话实测）：master 合并把 `electron` 依赖从 36 升到 **44.2.0**（AGENTS.md 记载的 28 早已过期）。
+Electron 44 的 framework 引用 macOS 13+ 专属符号 `SMAppService` → 在 macOS 12.7.6 上 dyld abort：
+`electron:dev` 起不来、e2e `electron.launch` 即死、`electron:pack:mac` 在 `ensure-sqlite-abi` 探测步死锁
+（better-sqlite3 无 Electron 44 的 prebuilt；`electron-rebuild` 可编译但绕不过探测步）。Electron 39 起官方
+最低 macOS 版本升到 13（38.x 为最后支持 Monterey 的版本线，待核实：electron/electron releases 页）。
+
+| 选项 | 内容 | 代价 |
+|---|---|---|
+| A（建议） | 保持 44，plan 572 剩余真机 Gate 在 macOS 13+ 机器上执行 | 需要一台 Ventura+ 机器；本机继续可跑 vitest/tsc/swiftc/helper 全套非 GUI 验证 |
+| B | pin 回 Electron 38.x（最后支持 macOS 12 的版本线） | 偏离 master 依赖决策；better-sqlite3/node-pty ABI 重验；放弃 Chromium 新特性与安全更新；36→44 间的 API 变更需回归 |
+| C | macOS 13+ 虚拟机跑 GUI Gate | AX/TCC 在 VM 里的行为未验证，授权链路本身就是要测的对象，自证困难 |
+
+**裁定后动作**：选 A → 本 plan 剩余 Gate 在 13+ 机器按 §7 清单执行；选 B → 单独立小 plan 做 pin + ABI/启动回归。
