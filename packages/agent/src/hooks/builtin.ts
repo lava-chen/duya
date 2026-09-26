@@ -2,13 +2,13 @@
  * First-party loop hooks (plan 426): the steering policies that previously
  * lived as inline blocks in `DuyaAgent.streamChat`, extracted onto the
  * {@link LoopHookBus}. One factory per nudge family; per-run latch state
- * (todo-gate prompted, tool-intent count) lives in closures, mirroring the
+ * (todo-gate prompted, goal-continuation count) lives in closures, mirroring the
  * streamChat locals they replace.
  *
  * Ordering contract (PreFinalize priorities): premature-stop (10) →
- * tool-intent (20) → send-message-delivery (25) → todo-gate (30). The bus
- * short-circuits at the first veto, preserving the fixed decision order the
- * loop had before extraction.
+ * send-message-delivery (25) → todo-gate (30). The bus short-circuits at
+ * the first veto, preserving the fixed decision order the loop had before
+ * extraction.
  */
 
 import type { LoopHookRegistration } from './loop.js';
@@ -17,7 +17,6 @@ import { matchedStopPattern, prematureStopNudge } from '../modes/goal/goal-stop-
 import { goalModeTracker } from '../modes/goal/goal-tracker.js';
 import { emitGoalUpdatedEvent } from '../modes/goal/goal-tools.js';
 import { getGoalConfig } from '../modes/goal/goal-config.js';
-import { matchedToolIntent, toolIntentNudge } from '../agent/tool-intent-detector.js';
 import { getDatabaseTaskStore, type Task } from '../session/task-store.js';
 import { logger } from '../utils/logger.js';
 import { createSendMessageReminderHook, type SendMessageReminderOptions } from './send-message-reminder.js';
@@ -30,7 +29,6 @@ import {
 export const PREMATURE_STOP_PRIORITY = 10;
 export const REPLY_FINGERPRINT_PRIORITY = 11;
 export const GOAL_CONTINUATION_PRIORITY = 12;
-export const TOOL_INTENT_PRIORITY = 20;
 export const SEND_MESSAGE_DELIVERY_PRIORITY = 25;
 export const TODO_GATE_PRIORITY = 30;
 
@@ -38,12 +36,11 @@ export interface BuiltinLoopHookOptions {
   sessionId?: string;
   todoGateEnabled: boolean;
   antiDeadLoop: { enabled: boolean; nudgeAt: number; hardNudgeAt: number };
-  toolIntentNudgeMax: number;
   /**
    * Ids of builtin loop hooks to skip for this run (e.g. "builtin.todo-gate").
    * An id in this set is simply not registered, so it cannot fire. Union with
-   * the dedicated knobs above (todoGateEnabled / antiDeadLoop.enabled /
-   * toolIntentNudgeMax=0 still short-circuit the same hooks).
+   * the dedicated knobs above (todoGateEnabled / antiDeadLoop.enabled still
+   * short-circuit the same hooks).
    */
   disabled?: ReadonlySet<string> | string[];
   /**
@@ -155,8 +152,8 @@ function replyFingerprintHook(): LoopHookRegistration {
       // silent.
       const goalState = goalModeTracker.state(ctx.sessionId);
       if (goalState !== 'active' && goalState !== 'verifying') return;
-      // Only judge deliberate conclusions (same guard as the tool-intent
-      // hook): a max_tokens truncation is not a "reply" the model chose.
+      // Only judge deliberate conclusions (same guard as other PreFinalize
+      // hooks): a max_tokens truncation is not a "reply" the model chose.
       const natural =
         ctx.stopReason === undefined ||
         ctx.stopReason === 'end_turn' ||
@@ -241,44 +238,6 @@ function goalContinuationHook(deps: {
           'Do not stop again until the objective is achieved (report via update_goal), you are truly blocked, or the user pauses the goal.',
         ].join('\n\n'),
         source: 'goal_continuation',
-      };
-    },
-  };
-}
-
-/**
- * Tool-intent / action-consistency guard (plan 418 L2): the model announced
- * a tool action but ended its turn without emitting any tool_use (lossy
- * third-party endpoints / weak tool generation). Capped so a model that
- * keeps announcing without acting cannot spin forever.
- */
-function toolIntentHook(deps: { nudgeMax: number }): LoopHookRegistration {
-  let nudgeCount = 0;
-  return {
-    id: 'builtin.tool-intent',
-    events: ['PreFinalize'],
-    priority: TOOL_INTENT_PRIORITY,
-    handler: (ctx) => {
-      // Only steer when the model explicitly concluded; a max_tokens turn,
-      // for example, should fall through to the engine's truncation handling.
-      const natural =
-        ctx.stopReason === undefined ||
-        ctx.stopReason === 'end_turn' ||
-        ctx.stopReason === 'completed' ||
-        ctx.stopReason === 'stop_sequence';
-      if (!natural || nudgeCount >= deps.nudgeMax) return;
-      const lastAssistantText = lastAssistantTextOf(ctx.messages);
-      if (!lastAssistantText) return;
-      const intent = matchedToolIntent(lastAssistantText);
-      if (!intent) return;
-      nudgeCount++;
-      logger.info(
-        `[Agent] Turn ${ctx.turnCount}: Tool intent without tool_use (intent=${intent}); nudging to continue (${nudgeCount}/${deps.nudgeMax})`,
-      );
-      return {
-        type: 'block_finalize',
-        injection: toolIntentNudge(intent),
-        source: 'tool_intent',
       };
     },
   };
@@ -380,7 +339,6 @@ export function createBuiltinLoopHooks(options: BuiltinLoopHookOptions): LoopHoo
 
   const hooks: LoopHookRegistration[] = [
     prematureStopHook({ isGoalActive }),
-    toolIntentHook({ nudgeMax: options.toolIntentNudgeMax }),
     deadLoopNudgeHook(),
   ];
   // Plan 552 goal breakers: a disabled hook is not registered at all, so it

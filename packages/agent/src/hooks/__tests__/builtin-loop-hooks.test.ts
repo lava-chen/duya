@@ -1,7 +1,7 @@
 /**
  * Builtin loop-hook tests (plan 426 Phase 2): each steering policy's
  * trigger / no-trigger / disabled / fail-open / latch behavior, plus the
- * fixed PreFinalize priority order (premature-stop → tool-intent → todo-gate).
+ * fixed PreFinalize priority order (premature-stop → todo-gate).
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -38,7 +38,6 @@ interface HookFixture {
 function makeFixture(overrides?: {
   isGoalActive?: () => boolean;
   todoGateEnabled?: boolean;
-  nudgeMax?: number;
 }): HookFixture {
   let taskResponse: Task[] = [];
   let taskThrows = false;
@@ -51,7 +50,6 @@ function makeFixture(overrides?: {
     sessionId: 's1',
     todoGateEnabled: overrides?.todoGateEnabled ?? true,
     antiDeadLoop: { enabled: true, nudgeAt: 3, hardNudgeAt: 6 },
-    toolIntentNudgeMax: overrides?.nudgeMax ?? 2,
     isGoalActive: overrides?.isGoalActive ?? (() => false),
     listTasks: listTasksImpl,
   });
@@ -99,7 +97,6 @@ async function postToolUse(f: HookFixture, streak?: DispatchOpts['streak']): Pro
 
 // Straight ASCII apostrophe: the bail regex only matches `can't`.
 const BAIL_TEXT = "Progress so far is solid.\n\nI can't proceed without the credentials.";
-const INTENT_TEXT = 'Let me read the config file and continue.';
 
 // ─── premature-stop ────────────────────────────────────────────────────────
 
@@ -119,35 +116,6 @@ describe('builtin premature-stop hook', () => {
   it('does not fire on normal closing text', async () => {
     const f = makeFixture({ isGoalActive: () => true });
     expect(await finalize(f, { messages: [assistantMsg('The fix is complete and verified.')] })).toEqual([]);
-  });
-});
-
-// ─── tool-intent ───────────────────────────────────────────────────────────
-
-describe('builtin tool-intent hook', () => {
-  it('vetoes finalize when intent was announced but no tool_use followed', async () => {
-    const f = makeFixture();
-    const effects = await finalize(f, { messages: [assistantMsg(INTENT_TEXT)] });
-    expect(effects).toHaveLength(1);
-    expect(effects[0]).toMatchObject({ type: 'block_finalize', source: 'tool_intent' });
-  });
-
-  it('is capped: stops nudging after nudgeMax vetoes', async () => {
-    const f = makeFixture({ nudgeMax: 2 });
-    const messages = [assistantMsg(INTENT_TEXT)];
-    expect((await finalize(f, { messages })).length).toBe(1);
-    expect((await finalize(f, { messages })).length).toBe(1);
-    expect(await finalize(f, { messages })).toEqual([]);
-  });
-
-  it('does not steer on non-natural stop reasons (e.g. max_tokens)', async () => {
-    const f = makeFixture();
-    expect(await finalize(f, { messages: [assistantMsg(INTENT_TEXT)], stopReason: 'max_tokens' })).toEqual([]);
-  });
-
-  it('does not fire on text without a credible intent+action pair', async () => {
-    const f = makeFixture();
-    expect(await finalize(f, { messages: [assistantMsg('The work is done.')] })).toEqual([]);
   });
 });
 
@@ -198,7 +166,7 @@ describe('builtin todo-gate hook', () => {
     const f = makeFixture({ todoGateEnabled: false });
     expect(f.registrations.map((r) => r.id)).not.toContain('builtin.todo-gate');
     expect(f.registrations.map((r) => r.id)).toEqual(
-      expect.arrayContaining(['builtin.premature-stop', 'builtin.tool-intent', 'builtin.dead-loop-nudge']),
+      expect.arrayContaining(['builtin.premature-stop', 'builtin.dead-loop-nudge']),
     );
   });
 });
@@ -235,23 +203,15 @@ describe('builtin dead-loop nudge hook', () => {
 // ─── fixed PreFinalize priority order ─────────────────────────────────────
 
 describe('PreFinalize priority order (first veto wins)', () => {
-  it('premature-stop (10) beats tool-intent (20) on the same turn', async () => {
-    // Last paragraph starts with the bail line AND carries an intent+action
-    // pair, so both hooks have grounds to veto.
-    const bothTriggers = "Progress so far is solid.\n\nI can't proceed further. Let me check the config.";
+  it('premature-stop (10) beats todo-gate (30) on the same turn', async () => {
     const f = makeFixture({ isGoalActive: () => true });
-    const effects = await finalize(f, { messages: [assistantMsg(bothTriggers)] });
+    f.listTasks([task('Write tests', 'pending')]);
+    const effects = await finalize(f, {
+      messages: [userMsg('Fix it'), assistantMsg(BAIL_TEXT)],
+      prompt: 'Fix it',
+    });
     expect(effects).toHaveLength(1);
     expect(effects[0]).toMatchObject({ type: 'block_finalize', source: 'premature_stop' });
-  });
-
-  it('tool-intent (20) beats todo-gate (30) when no goal is active', async () => {
-    const f = makeFixture({ isGoalActive: () => false });
-    f.listTasks([task('Write tests', 'pending')]);
-    const messages = [userMsg('Fix it'), assistantMsg(INTENT_TEXT)];
-    const effects = await finalize(f, { messages });
-    expect(effects).toHaveLength(1);
-    expect(effects[0]).toMatchObject({ type: 'block_finalize', source: 'tool_intent' });
   });
 });
 
@@ -271,7 +231,6 @@ describe('disabled loop hooks', () => {
       sessionId: 's1',
       todoGateEnabled: true,
       antiDeadLoop: { enabled: true, nudgeAt: 3, hardNudgeAt: 6 },
-      toolIntentNudgeMax: 2,
       disabled,
     });
 
@@ -283,7 +242,6 @@ describe('disabled loop hooks', () => {
       'builtin.goal-reply-fingerprint',
       'builtin.premature-stop',
       'builtin.todo-gate',
-      'builtin.tool-intent',
     ]);
   });
 
@@ -291,7 +249,6 @@ describe('disabled loop hooks', () => {
     const ids = make(['builtin.todo-gate', 'builtin.premature-stop']).map((r) => r.id);
     expect(ids).not.toContain('builtin.todo-gate');
     expect(ids).not.toContain('builtin.premature-stop');
-    expect(ids).toContain('builtin.tool-intent');
     expect(ids).toContain('builtin.dead-loop-nudge');
   });
 
@@ -300,7 +257,6 @@ describe('disabled loop hooks', () => {
       sessionId: 's1',
       todoGateEnabled: false,
       antiDeadLoop: { enabled: true, nudgeAt: 3, hardNudgeAt: 6 },
-      toolIntentNudgeMax: 2,
     })
       .map((r) => r.id);
     expect(ids).not.toContain('builtin.todo-gate');
@@ -408,7 +364,6 @@ describe('builtin goal continuation hook (plan 552)', () => {
       sessionId: 's1',
       todoGateEnabled: false,
       antiDeadLoop: { enabled: true, nudgeAt: 3, hardNudgeAt: 6 },
-      toolIntentNudgeMax: 0,
       goalContinuation: { enabled: true, maxContinues: 1 },
     });
     const bus = new LoopHookBus();
@@ -431,7 +386,6 @@ describe('builtin goal continuation hook (plan 552)', () => {
       sessionId: 's1',
       todoGateEnabled: false,
       antiDeadLoop: { enabled: true, nudgeAt: 3, hardNudgeAt: 6 },
-      toolIntentNudgeMax: 2,
       goalContinuation: { enabled: false, maxContinues: 0 },
     });
     expect(registrations.some((r) => r.id === 'builtin.goal-continuation')).toBe(false);

@@ -8,7 +8,6 @@
  * ```toml
  * [steering]
  * todo_gate = true
- * tool_intent_nudge_max = 2
  *
  * [steering.anti_dead_loop]
  * enabled = true
@@ -17,8 +16,8 @@
  * hard_stop_at = 16
  *
  * # Loop-steering policies that are skipped for this run (union with the
- * # dedicated knobs above: todo_gate / anti_dead_loop.enabled /
- * # tool_intent_nudge_max=0 all still work and map to the same hooks).
+ * # dedicated knobs above: todo_gate / anti_dead_loop.enabled all still work
+ * # and map to the same hooks).
  * disabled_loop_hooks = ["builtin.premature-stop"]
  *
  * # User hooks are declared in hook.json files (the ecosystem shape shared
@@ -34,7 +33,7 @@
  *
  * Env overrides: `DUYA_STEERING_TODO_GATE`, `DUYA_STEERING_ANTI_DEAD_LOOP`,
  * `DUYA_STEERING_DEAD_LOOP_NUDGE_AT`, `DUYA_STEERING_DEAD_LOOP_HARD_NUDGE_AT`,
- * `DUYA_STEERING_DEAD_LOOP_HARD_STOP_AT`, `DUYA_STEERING_TOOL_INTENT_NUDGE_MAX`.
+ * `DUYA_STEERING_DEAD_LOOP_HARD_STOP_AT`.
  *
  * No module-level cache: every `streamChat` reads fresh so config edits take
  * effect on the next run without a process restart (hot reload semantics,
@@ -68,8 +67,6 @@ export interface SteeringConfig {
   /** Todo gate: veto finalize while pending/in-progress tasks remain. */
   todoGateEnabled: boolean;
   antiDeadLoop: AntiDeadLoopConfig;
-  /** Per-run cap of tool-intent nudges (plan 418). */
-  toolIntentNudgeMax: number;
   /**
    * Builtin loop-hook ids skipped for this run (e.g. "builtin.premature-stop").
    * Union with the dedicated knobs above — a hook fires only when neither the
@@ -81,7 +78,6 @@ export interface SteeringConfig {
 const DEFAULTS: SteeringConfig = {
   todoGateEnabled: true,
   antiDeadLoop: { enabled: true, nudgeAt: 8, hardNudgeAt: 12, hardStopAt: 16 },
-  toolIntentNudgeMax: 2,
   disabledLoopHooks: [],
 };
 
@@ -97,7 +93,6 @@ export function resolveConfigRoot(): string {
 
 interface SteeringToml {
   todo_gate?: unknown;
-  tool_intent_nudge_max?: unknown;
   disabled_loop_hooks?: unknown;
   anti_dead_loop?: {
     enabled?: unknown;
@@ -116,7 +111,6 @@ export function readSteeringConfig(): SteeringConfig {
   const config: SteeringConfig = {
     todoGateEnabled: DEFAULTS.todoGateEnabled,
     antiDeadLoop: { ...DEFAULTS.antiDeadLoop },
-    toolIntentNudgeMax: DEFAULTS.toolIntentNudgeMax,
     disabledLoopHooks: [...DEFAULTS.disabledLoopHooks],
   };
 
@@ -149,11 +143,6 @@ export function readSteeringConfig(): SteeringConfig {
             100,
           );
         }
-        config.toolIntentNudgeMax = clamp(
-          numberOr(steering.tool_intent_nudge_max, DEFAULTS.toolIntentNudgeMax),
-          0,
-          10,
-        );
         if (Array.isArray(steering.disabled_loop_hooks)) {
           config.disabledLoopHooks = steering.disabled_loop_hooks.filter(
             (x): x is string => typeof x === 'string',
@@ -184,8 +173,6 @@ export function readSteeringConfig(): SteeringConfig {
   if (envHardStopAt !== undefined) {
     config.antiDeadLoop.hardStopAt = clamp(envHardStopAt, 2, 100);
   }
-  const envToolIntent = envInt('DUYA_STEERING_TOOL_INTENT_NUDGE_MAX');
-  if (envToolIntent !== undefined) config.toolIntentNudgeMax = clamp(envToolIntent, 0, 10);
 
   return config;
 }

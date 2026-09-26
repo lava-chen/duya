@@ -15,8 +15,8 @@
  * - PreTurn (`builtin.send-message-reply-reminder`): on the first model
  *   round of a run, when the newest message is a real user turn, inject the
  *   reply reminder so even a two-token "hi" carries the delivery contract.
- * - PreFinalize (`builtin.send-message-delivery`, priority 25, between
- *   tool-intent (20) and todo-gate (30)): before the run may finalize,
+ * - PreFinalize (`builtin.send-message-delivery`, priority 25, before
+ *   todo-gate (30)): before the run may finalize,
  *   check delivery owed — no SendMessage call since the last real user
  *   turn — and veto with the reply nudge, capped at `MAX_SEND_MESSAGE_
  *   NUDGES` per run; if a send happened earlier but the turn is ending on

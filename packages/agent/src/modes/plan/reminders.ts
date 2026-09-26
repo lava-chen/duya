@@ -13,9 +13,19 @@
  * convention `agentsmd/loader.ts` uses for AGENTS.md injection, plan 408).
  */
 
-// Shared wrapper lives in `agent/reminders.ts`; re-exported here so existing
-// plan/goal/coordinator importers keep working under one canonical source.
-export { renderSystemReminder as renderReminder } from '../../agent/reminders.js';
+// Shared wrapper lives in `agent/reminders.ts`. `renderReminder` stays as a
+// compatibility alias defaulting to the `plan_mode` source (plan 567): the
+// coordinator injects goal/research continuations with their own sources via
+// `renderSystemReminder`, while tests and any remaining callers keep the
+// one-argument shape.
+export { renderSystemReminder } from '../../agent/reminders.js';
+
+import { renderSystemReminder as _render } from '../../agent/reminders.js';
+
+/** Compatibility alias — plan-mode source by default (plan 567). */
+export function renderReminder(inner: string): string {
+  return _render(inner, 'plan_mode');
+}
 
 /** Full template — injected on activation or on even reminder counts. */
 export function fullReminder(planPath: string): string {

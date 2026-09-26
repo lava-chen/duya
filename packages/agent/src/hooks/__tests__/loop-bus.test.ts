@@ -160,14 +160,14 @@ describe('LoopHookBus', () => {
 describe('applyLoopHookEffect (single injection channel)', () => {
   it('pushes a projected provider user turn wrapped in <system-reminder>', () => {
     const messages: Message[] = [];
-    applyLoopHookEffect(messages, { type: 'inject', injection: 'steer now', source: 'tool_intent' }, 7);
+    applyLoopHookEffect(messages, { type: 'inject', injection: 'steer now', source: 'dead_loop_nudge' }, 7);
 
     expect(messages).toHaveLength(1);
     const pushed = messages[0];
     expect(pushed.role).toBe('user');
     expect(pushed.content).toBe('<system-reminder>\nsteer now\n</system-reminder>');
     expect((pushed.metadata as Record<string, unknown>).runtimeContext).toBe(true);
-    expect((pushed.metadata as Record<string, unknown>).source).toBe('tool_intent');
+    expect((pushed.metadata as Record<string, unknown>).source).toBe('dead_loop_nudge');
   });
 
   it('produces nudges that are never persisted (persistableMessages filter)', () => {

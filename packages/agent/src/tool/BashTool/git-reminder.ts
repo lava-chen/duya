@@ -7,8 +7,14 @@
  * the BashTool system prompt; injecting it only on git invocations saves
  * ~800 tokens of static prompt prefix per non-git turn.
  */
-const GIT_REMINDER = `<system-reminder>
-You are about to execute a git command. Follow these rules exactly:
+
+import { renderSystemReminder } from '../../agent/reminders.js';
+
+/**
+ * Git-safety body — wrapped by `renderSystemReminder` (plan 567: source
+ * `git_safety`) so the envelope comes from the single canonical wrapper.
+ */
+const GIT_REMINDER_BODY = `You are about to execute a git command. Follow these rules exactly:
 
 **Identity (most important):** NEVER update the git config (user.name, user.email, etc.). Commit using whatever identity is already configured on this repository. If a commit would be authored under an unexpected identity, stop and ask the user.
 
@@ -22,8 +28,7 @@ You are about to execute a git command. Follow these rules exactly:
 
 **No auto-commit:** NEVER commit unless the user explicitly asks.
 
-If any rule above conflicts with the user's request, surface the conflict and ask before proceeding.
-</system-reminder>`;
+If any rule above conflicts with the user's request, surface the conflict and ask before proceeding.`;
 
 /**
  * Tokenize a shell command into argv-style tokens. Handles simple quoting;
@@ -92,5 +97,5 @@ export function buildGitReminder(cmd: string): string | null {
   if (!isGitCommand(cmd)) {
     return null;
   }
-  return GIT_REMINDER;
+  return renderSystemReminder(GIT_REMINDER_BODY, 'git_safety');
 }

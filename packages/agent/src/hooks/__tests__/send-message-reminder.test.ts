@@ -217,7 +217,6 @@ describe('createSendMessageReminderHook', () => {
     const withHook = createBuiltinLoopHooks({
       todoGateEnabled: false,
       antiDeadLoop: { enabled: false, nudgeAt: 8, hardNudgeAt: 12 },
-      toolIntentNudgeMax: 0,
       sendMessageReminder: { enabled: true },
     });
     expect(withHook.some((h) => h.id === 'builtin.send-message-reminder')).toBe(true);
@@ -225,7 +224,6 @@ describe('createSendMessageReminderHook', () => {
     const withoutHook = createBuiltinLoopHooks({
       todoGateEnabled: false,
       antiDeadLoop: { enabled: false, nudgeAt: 8, hardNudgeAt: 12 },
-      toolIntentNudgeMax: 0,
       sendMessageReminder: { enabled: false },
     });
     expect(withoutHook.some((h) => h.id === 'builtin.send-message-reminder')).toBe(false);

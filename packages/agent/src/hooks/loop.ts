@@ -148,8 +148,8 @@ export class LoopHookBus {
    * Dispatch an event in priority order. Collects `inject` effects; at
    * PreFinalize the first `block_finalize` wins and short-circuits the
    * remaining handlers (veto exclusivity mirrors the fixed
-   * premature-stop → tool-intent → todo-gate ordering the loop had before
-   * plan 426). Throws inside a handler are isolated (fail-open).
+   * premature-stop → goal-continuation → todo-gate ordering the loop had
+   * before plan 426). Throws inside a handler are isolated (fail-open).
    */
   async dispatch(event: LoopHookEvent, ctx: Omit<LoopHookDispatchContext, 'event'>): Promise<LoopHookEffect[]> {
     const valid = VALID_EFFECTS[event];
@@ -196,7 +196,7 @@ export function applyLoopHookEffect(
   seqIndex: number,
 ): void {
   const projected = projectRuntimeContextToProviderMessage(
-    adaptLoopNudgeContext(renderSystemReminder(effect.injection), effect.source, {
+    adaptLoopNudgeContext(renderSystemReminder(effect.injection, 'loop_nudge'), effect.source, {
       seqIndex,
     }),
   );

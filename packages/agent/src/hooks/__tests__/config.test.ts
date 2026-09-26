@@ -51,7 +51,6 @@ describe('readSteeringConfig', () => {
     const cfg = readSteeringConfig();
     expect(cfg.todoGateEnabled).toBe(true);
     expect(cfg.antiDeadLoop).toEqual({ enabled: true, nudgeAt: 8, hardNudgeAt: 12, hardStopAt: 16 });
-    expect(cfg.toolIntentNudgeMax).toBe(2);
   });
 
   it('reads the [steering] section from config.toml', () => {
@@ -59,7 +58,6 @@ describe('readSteeringConfig', () => {
     writeConfigToml([
       '[steering]',
       'todo_gate = false',
-      'tool_intent_nudge_max = 3',
       'disabled_loop_hooks = ["builtin.premature-stop", "builtin.todo-gate"]',
       '',
       '[steering.anti_dead_loop]',
@@ -72,7 +70,6 @@ describe('readSteeringConfig', () => {
     const cfg = readSteeringConfig();
     expect(cfg.todoGateEnabled).toBe(false);
     expect(cfg.antiDeadLoop).toEqual({ enabled: false, nudgeAt: 5, hardNudgeAt: 9, hardStopAt: 13 });
-    expect(cfg.toolIntentNudgeMax).toBe(3);
     expect(cfg.disabledLoopHooks).toEqual(['builtin.premature-stop', 'builtin.todo-gate']);
   });
 
@@ -89,14 +86,12 @@ describe('readSteeringConfig', () => {
     const cfg = readSteeringConfig();
     expect(cfg.todoGateEnabled).toBe(false);
     expect(cfg.antiDeadLoop).toEqual({ enabled: true, nudgeAt: 8, hardNudgeAt: 12, hardStopAt: 16 });
-    expect(cfg.toolIntentNudgeMax).toBe(2);
   });
 
   it('clamps out-of-range values to sane ranges', () => {
     stubTestNamespace();
     writeConfigToml([
       '[steering]',
-      'tool_intent_nudge_max = 99',
       '',
       '[steering.anti_dead_loop]',
       'nudge_at = 500',
@@ -105,46 +100,40 @@ describe('readSteeringConfig', () => {
       '',
     ].join('\n'));
     const cfg = readSteeringConfig();
-    // nudgeAt 2-50, hardNudgeAt 2-50, hardStopAt 2-100, toolIntentNudgeMax 0-10.
+    // nudgeAt 2-50, hardNudgeAt 2-50, hardStopAt 2-100.
     expect(cfg.antiDeadLoop.nudgeAt).toBe(50);
     expect(cfg.antiDeadLoop.hardNudgeAt).toBe(2);
     expect(cfg.antiDeadLoop.hardStopAt).toBe(2);
-    expect(cfg.toolIntentNudgeMax).toBe(10);
   });
 
   it('non-numeric TOML values fall back to defaults', () => {
     stubTestNamespace();
-    writeConfigToml('[steering]\ntodo_gate = "yes"\ntool_intent_nudge_max = "many"\n');
+    writeConfigToml('[steering]\ntodo_gate = "yes"\n');
     const cfg = readSteeringConfig();
     expect(cfg.todoGateEnabled).toBe(true);
-    expect(cfg.toolIntentNudgeMax).toBe(2);
   });
 
   it('env overrides beat the config file', () => {
     stubTestNamespace();
-    writeConfigToml('[steering]\ntodo_gate = true\ntool_intent_nudge_max = 4\n');
+    writeConfigToml('[steering]\ntodo_gate = true\n');
     vi.stubEnv('DUYA_STEERING_TODO_GATE', '0');
     vi.stubEnv('DUYA_STEERING_ANTI_DEAD_LOOP', '0');
     vi.stubEnv('DUYA_STEERING_DEAD_LOOP_NUDGE_AT', '5');
     vi.stubEnv('DUYA_STEERING_DEAD_LOOP_HARD_NUDGE_AT', '7');
     vi.stubEnv('DUYA_STEERING_DEAD_LOOP_HARD_STOP_AT', '9');
-    vi.stubEnv('DUYA_STEERING_TOOL_INTENT_NUDGE_MAX', '3');
     const cfg = readSteeringConfig();
     expect(cfg.todoGateEnabled).toBe(false);
     expect(cfg.antiDeadLoop.enabled).toBe(false);
     expect(cfg.antiDeadLoop.nudgeAt).toBe(5);
     expect(cfg.antiDeadLoop.hardNudgeAt).toBe(7);
     expect(cfg.antiDeadLoop.hardStopAt).toBe(9);
-    expect(cfg.toolIntentNudgeMax).toBe(3);
   });
 
   it('env overrides are clamped too', () => {
     stubTestNamespace();
     vi.stubEnv('DUYA_STEERING_DEAD_LOOP_NUDGE_AT', '999');
-    vi.stubEnv('DUYA_STEERING_TOOL_INTENT_NUDGE_MAX', '-4');
     const cfg = readSteeringConfig();
     expect(cfg.antiDeadLoop.nudgeAt).toBe(50);
-    expect(cfg.toolIntentNudgeMax).toBe(0);
   });
 
   it('tolerates a malformed config file', () => {
@@ -157,13 +146,13 @@ describe('readSteeringConfig', () => {
 
   it('has no module-level cache — re-reads on every call (hot reload)', () => {
     stubTestNamespace();
-    writeConfigToml('[steering]\ntool_intent_nudge_max = 1\n');
-    expect(readSteeringConfig().toolIntentNudgeMax).toBe(1);
+    writeConfigToml('[steering.anti_dead_loop]\nnudge_at = 5\n');
+    expect(readSteeringConfig().antiDeadLoop.nudgeAt).toBe(5);
     // Rewrite the file; the next read must pick the new value up immediately.
-    writeConfigToml('[steering]\ntool_intent_nudge_max = 6\n');
-    expect(readSteeringConfig().toolIntentNudgeMax).toBe(6);
+    writeConfigToml('[steering.anti_dead_loop]\nnudge_at = 9\n');
+    expect(readSteeringConfig().antiDeadLoop.nudgeAt).toBe(9);
     // getSteeringConfig is a fresh-read alias, not a cached singleton.
-    expect(getSteeringConfig().toolIntentNudgeMax).toBe(6);
+    expect(getSteeringConfig().antiDeadLoop.nudgeAt).toBe(9);
   });
 });
 
