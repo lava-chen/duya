@@ -28,6 +28,7 @@ export interface JournalRecordLike {
   nodeKind?: string;
   action?: string;
   result?: unknown;
+  childSessionId?: string;
 }
 
 /** Journal status → the card's 3-lamp vocabulary. */
@@ -45,7 +46,16 @@ export function journalStatusToStepStatus(status: string): RunStepStatus {
 }
 
 function journalNodeKind(nodeKind: string | undefined, kind: string): RunStepNodeKind {
-  if (nodeKind === 'tool' || nodeKind === 'agent' || nodeKind === 'gui' || nodeKind === 'decision' || nodeKind === 'human' || nodeKind === 'noop') {
+  if (
+    nodeKind === 'tool' ||
+    nodeKind === 'agent' ||
+    nodeKind === 'gui' ||
+    nodeKind === 'browser' ||
+    nodeKind === 'decision' ||
+    nodeKind === 'human' ||
+    nodeKind === 'ask' ||
+    nodeKind === 'noop'
+  ) {
     return nodeKind;
   }
   // Records whose kind already is the node kind (decision / approval rows).
@@ -58,31 +68,46 @@ function journalNodeKind(nodeKind: string | undefined, kind: string): RunStepNod
  * Fold the journal into the card's step list. Phase start/end pairs collapse
  * into a single divider (the first occurrence wins — its end record only
  * updates status, which the divider never renders anyway).
+ *
+ * Plan 568: node records are folded by nodeId — a `running` record followed by
+ * its terminal record collapse to one step (last wins), matching the live
+ * runner's `upsertStep` folding. Without this, a node that started while the
+ * card rehydrates from history would render twice.
  */
 export function journalToSteps(records: JournalRecordLike[]): RunStepView[] {
-  const steps: RunStepView[] = [];
+  const byNodeId = new Map<string, RunStepView>();
+  const order: string[] = [];
   const seenPhases = new Set<string>();
   for (const r of records) {
     if (r.kind === 'phase') {
       if (seenPhases.has(r.nodeId)) continue;
       seenPhases.add(r.nodeId);
-      steps.push({
+      byNodeId.set(r.nodeId, {
         id: r.nodeId,
         label: r.action ?? r.nodeId,
         nodeKind: 'phase',
         status: 'success',
       });
+      order.push(r.nodeId);
       continue;
     }
     if (r.kind !== 'node_result' && r.kind !== 'decision' && r.kind !== 'approval') continue;
-    steps.push({
+    const existing = byNodeId.get(r.nodeId);
+    if (existing !== undefined) {
+      existing.status = journalStatusToStepStatus(r.status);
+      if (r.childSessionId !== undefined) existing.childSessionId = r.childSessionId;
+      continue;
+    }
+    byNodeId.set(r.nodeId, {
       id: r.nodeId,
       label: r.action ?? r.nodeId,
       nodeKind: journalNodeKind(r.nodeKind, r.kind),
       status: journalStatusToStepStatus(r.status),
+      ...(r.childSessionId !== undefined ? { childSessionId: r.childSessionId } : {}),
     });
+    order.push(r.nodeId);
   }
-  return steps;
+  return order.map((id) => byNodeId.get(id)!);
 }
 
 /** `r1/capture-0.png` → `capture-0.png` (chips name the file, not the path). */
@@ -91,7 +116,8 @@ export function artifactRefToName(ref: string): string {
   return base;
 }
 
-/** Artifact records → the card's name-only chips, in emission order. */
+/** Artifact records → the card's name chips, in emission order. The store
+ * ref rides along so the renderer can open the bytes in the preview panel. */
 export function journalToArtifacts(records: JournalRecordLike[]): RunArtifactNameView[] {
   const out: RunArtifactNameView[] = [];
   for (const r of records) {
@@ -101,7 +127,7 @@ export function journalToArtifacts(records: JournalRecordLike[]): RunArtifactNam
         ? (r.result as { ref: string }).ref
         : undefined;
     const name = ref ? artifactRefToName(ref) : r.action ?? r.nodeId;
-    if (name && !out.some((a) => a.name === name)) out.push({ name });
+    if (name && !out.some((a) => a.name === name)) out.push({ name, ...(ref !== undefined ? { ref } : {}) });
   }
   return out;
 }

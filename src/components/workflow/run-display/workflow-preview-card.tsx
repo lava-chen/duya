@@ -3,21 +3,47 @@
 // Sits in WorkflowDetailView's definition tab for raw .dwf.ts scripts (which
 // carry no declarative phases and would otherwise show only the source text).
 // Steps come from parseDwfPreviewSteps — never-run, hence all 'pending'.
+// The `typescript` module is lazy-imported (plan 565 Phase B) so the AST
+// scanner's weight stays out of the main chunk; until it lands the card
+// renders nothing, matching the old "no preview" behaviour.
 
 'use client';
 
-import { useMemo } from 'react';
-import { parseDwfPreviewSteps } from './dwf-preview';
+import { useEffect, useState } from 'react';
+import type * as Ts from 'typescript';
+import { parseDwfPreviewSteps, type DwfPreviewResult } from './dwf-preview';
 import { StageColumns } from './stage-columns';
 import { useTranslation } from '@/hooks/useTranslation';
 
 export function WorkflowPreviewCard({ script }: { script: string }) {
   const { t } = useTranslation();
-  const steps = useMemo(() => parseDwfPreviewSteps(script), [script]);
+  const [result, setResult] = useState<DwfPreviewResult | null>(null);
 
-  // Nothing parseable (no wf.* calls, or a stripped/foreign script) — show
-  // nothing rather than an empty card.
-  if (steps.length === 0) return null;
+  useEffect(() => {
+    let alive = true;
+    if (!script) {
+      setResult(null);
+      return;
+    }
+    import('typescript')
+      .then((ts) => {
+        if (alive) setResult(parseDwfPreviewSteps(script, ts));
+      })
+      .catch(() => {
+        if (alive) setResult(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [script]);
+
+  if (!result) return null;
+  const { steps, diagnostics } = result;
+
+  // Nothing parseable AND nothing to complain about — show nothing rather
+  // than an empty card. Diagnostics alone (syntax error, unknown primitive)
+  // still render: "broken" is information the author needs before launching.
+  if (steps.length === 0 && diagnostics.length === 0) return null;
 
   return (
     <div
@@ -32,7 +58,21 @@ export function WorkflowPreviewCard({ script }: { script: string }) {
           {t('workflow.preview.hint')}
         </span>
       </div>
-      <StageColumns steps={steps} />
+      {steps.length > 0 && <StageColumns steps={steps} />}
+      {diagnostics.length > 0 && (
+        <div className={steps.length > 0 ? 'pt-2' : ''} data-testid="workflow-preview-diagnostics">
+          {diagnostics.slice(0, 8).map((d, i) => (
+            <div key={i} className="text-[11px] leading-5 text-[var(--warning, #b45309)]">
+              {t('workflow.preview.diagnosticLine', { line: d.line, message: d.message })}
+            </div>
+          ))}
+          {diagnostics.length > 8 && (
+            <div className="text-[10px] text-[var(--muted)]">
+              {t('workflow.preview.diagnosticMore', { count: diagnostics.length - 8 })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

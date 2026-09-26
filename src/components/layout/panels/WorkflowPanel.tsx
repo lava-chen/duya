@@ -42,6 +42,8 @@ import {
 } from "@/components/icons";
 import { WorkflowLaunchDialog } from "@/components/workflow/WorkflowLaunchDialog";
 import { WorkflowRunCard } from "@/components/workflow/WorkflowRunCard";
+import { openWorkflowArtifactIPC } from "@/lib/workflow-ipc";
+import { dispatchOpenSessionPanel } from "@/lib/open-session-panel-event";
 import {
   journalToArtifacts,
   journalToSteps,
@@ -124,15 +126,19 @@ export type WorkflowApi = {
   snapshot: (runId: string) => Promise<unknown>;
   delete: (id: string) => Promise<boolean>;
   cancel: (id: string) => Promise<{ ok: boolean; reason?: string; error?: string }>;
-  run: (payload: { name: string; sessionId?: string; params?: Record<string, unknown>; projectDir?: string }) => Promise<{ ok: boolean; error?: string; runId?: string; sessionId?: string }>;
+  run: (payload: { name: string; sessionId?: string; params?: Record<string, unknown>; projectDir?: string; resumeFromRunId?: string }) => Promise<{ ok: boolean; error?: string; runId?: string; sessionId?: string }>;
   /** Plan 560 run-anchored surface — a library run needs no chat session. */
-  trigger: (payload: { name: string; params?: Record<string, unknown>; projectDir?: string; scope?: "project" | "global" | null }) => Promise<{ ok: boolean; runId?: string; error?: string }>;
+  trigger: (payload: { name: string; params?: Record<string, unknown>; projectDir?: string; scope?: "project" | "global" | null; resumeFromRunId?: string }) => Promise<{ ok: boolean; runId?: string; error?: string }>;
   status: (runId: string) => Promise<WorkflowRunRow | null>;
-  listRuns: (filter?: { workflowName?: string; origin?: "library" | "session" | "agent" | "cron"; status?: string; limit?: number; offset?: number }) => Promise<WorkflowRunRow[]>;
+  listRuns: (filter?: { workflowName?: string; origin?: "library" | "session" | "agent" | "cron"; status?: string; parentSessionId?: string; limit?: number; offset?: number }) => Promise<WorkflowRunRow[]>;
   getEvents: (payload: { runId: string; afterSeq?: number }) => Promise<WorkflowJournalRecord[]>;
   resolvePermission: (payload: { runId: string; requestId: string; decision: "allow" | "deny" }) => Promise<{ ok: boolean; error?: string }>;
+  /** Resolve an artifact ref (`<runId>/<name><ext>`) to an absolute path. */
+  artifactPath?: (ref: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
   dwf: {
     list: (projectDir?: string) => Promise<unknown>;
+    /** Subscribe to watched-directory change pushes; returns unsubscribe. */
+    onChanged?: (callback: (payload: { dir: string }) => void) => () => void;
     get: (payload: { name: string; projectDir?: string; homeDir?: string }) => Promise<unknown>;
     save: (payload: { name: string; meta: unknown; script: string; scope?: string; projectDir?: string; homeDir?: string }) => Promise<{ ok: boolean; path?: string; scope?: string; shadowing?: unknown; error?: string }>;
     delete: (payload: { name: string; scope?: string; projectDir?: string; homeDir?: string }) => Promise<{ ok: boolean; error?: string }>;
@@ -261,6 +267,8 @@ export function computePhaseTrail(journal: WorkflowJournalRecord[]): PhaseProgre
     entry.status = r.status === "succeeded" ? "succeeded" : r.status === "failed" ? "failed" : "running";
   }
   // Step counts: node-results grouped under the phase boundaries in order.
+  // Plan 568: a node's `running` record is provisional — it is not a step
+  // until its terminal record lands, so skip it here to keep n/m honest.
   let current: PhaseProgress | undefined;
   for (const r of journal) {
     if (r.kind === "phase") {
@@ -268,6 +276,7 @@ export function computePhaseTrail(journal: WorkflowJournalRecord[]): PhaseProgre
       continue;
     }
     if (!current || r.kind !== "node_result") continue;
+    if (r.status === "running") continue;
     current.total++;
     if (r.status === "succeeded" || r.status === "skipped") current.done++;
   }
@@ -341,7 +350,12 @@ export function computePhaseDetail(journal: WorkflowJournalRecord[]): PhaseDetai
       continue;
     }
     if (!current || (r.kind !== "node_result" && r.kind !== "decision" && r.kind !== "approval")) continue;
-    current.steps.push({
+    // Plan 568: a node's `running` record is the live placeholder for its
+    // terminal record — same nodeId replaces in place (concurrent fan-out
+    // interleaves records, so the search is by nodeId, not by "last row"),
+    // and running never counts toward done/total.
+    const runningIdx = current.steps.findIndex((s) => s.nodeId === r.nodeId && s.status === "running");
+    const toRow = (): PhaseDetailStep => ({
       nodeId: r.nodeId,
       label: r.action ?? r.nodeId,
       nodeKind: r.nodeKind,
@@ -355,8 +369,15 @@ export function computePhaseDetail(journal: WorkflowJournalRecord[]): PhaseDetai
       exitCode: r.exitCode,
       verification: r.verification,
     });
-    current.total++;
-    if (r.status === "succeeded" || r.status === "skipped") current.done++;
+    if (runningIdx !== -1) {
+      current.steps[runningIdx] = toRow();
+    } else {
+      current.steps.push(toRow());
+    }
+    if (r.status !== "running") {
+      current.total++;
+      if (r.status === "succeeded" || r.status === "skipped") current.done++;
+    }
   }
   return phases;
 }
@@ -366,9 +387,20 @@ export function computeArtifacts(journal: WorkflowJournalRecord[]): WorkflowJour
   return journal.filter((r) => r.kind === "artifact");
 }
 
-/** Evidence rows: the per-step view, phases and artifacts excluded. */
+/** Evidence rows: the per-step view, phases and artifacts excluded. Plan 568:
+ *  a node's `running` record is dropped once its terminal record exists —
+ *  the terminal row is the evidence, the running row was the live placeholder. */
 export function evidenceRows(journal: WorkflowJournalRecord[]): WorkflowJournalRecord[] {
-  return journal.filter((r) => r.kind === "node_result" || r.kind === "decision" || r.kind === "approval");
+  const terminalNodes = new Set<string>();
+  for (const r of journal) {
+    if (r.kind !== "node_result" && r.kind !== "decision" && r.kind !== "approval") continue;
+    if (r.status !== "running") terminalNodes.add(r.nodeId);
+  }
+  return journal.filter(
+    (r) =>
+      (r.kind === "node_result" || r.kind === "decision" || r.kind === "approval") &&
+      !(r.status === "running" && terminalNodes.has(r.nodeId)),
+  );
 }
 
 // ─── small pieces ───
@@ -443,7 +475,32 @@ export function EvidenceRow({
           )}
           {record.durationMs !== undefined && <span>{record.durationMs}ms</span>}
           {record.outputSize !== undefined && <span>{formatBytes(record.outputSize)}</span>}
-          {record.childSessionId && <span className="font-mono">{record.childSessionId.slice(0, 8)}</span>}
+          {record.childSessionId && (
+            // A span, not a button — this row already IS a button, and
+            // nested interactive elements are invalid HTML. Clicking opens
+            // the node's subagent session in the sidebar (ZCode-parity
+            // actor-session pane); stopPropagation keeps the row's own
+            // expand/collapse toggle out of the way.
+            <span
+              role="button"
+              tabIndex={0}
+              className="cursor-pointer font-mono text-[var(--text-muted)] hover:text-[var(--accent)]"
+              title={t("panel.workflow.viewSession")}
+              onClick={(e) => {
+                e.stopPropagation();
+                dispatchOpenSessionPanel(record.childSessionId!, record.action ?? record.nodeId);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  dispatchOpenSessionPanel(record.childSessionId!, record.action ?? record.nodeId);
+                }
+              }}
+            >
+              {record.childSessionId.slice(0, 8)}
+            </span>
+          )}
           {hasDetail && (open ? <CaretDownIcon className="h-3 w-3" /> : <CaretRightIcon className="h-3 w-3" />)}
         </span>
       </button>
@@ -463,6 +520,7 @@ const NODE_GLYPH: Record<string, string> = {
   script: ">_",
   agent: "✧",
   approval: "👤",
+  ask: "❓",
   decision: "◇",
   edit: "✎",
   publish: "🚀",
@@ -765,6 +823,8 @@ function RunHistoryCard({ run }: { run: WorkflowRunRow }) {
   const view = useMemo(() => rowToRunView(run, journal), [run, journal]);
   return (
     <div data-testid={`workflow-run-${run.id}`}>
+      {/* Same click semantics as the chat card: a plain click toggles the
+          per-node chips; the ↗ (or a chip) is the path into the run detail. */}
       <WorkflowRunCard run={view} />
     </div>
   );
@@ -955,12 +1015,17 @@ export function RunDetailView({ runId, onBack }: { runId: string; onBack: () => 
 
           <div className="flex items-center gap-3 pt-1 text-[10px] text-[var(--text-muted)]">
             {stats && (
+              // The run card no longer carries the numeric figures — this
+              // summary line is their only home (duration / sub-agents /
+              // steps / tokens / phases).
               <span>
                 {t("panel.workflow.summaryLine", {
+                  duration: formatDuration(row.createdAt, row.updatedAt),
                   subAgents: stats.subAgents,
                   done: stepDone,
                   total: stepTotal,
                   tokens: formatCount(stats.tokens),
+                  phases: stats.phases,
                 })}
               </span>
             )}
@@ -987,8 +1052,29 @@ export function RunDetailView({ runId, onBack }: { runId: string; onBack: () => 
               </div>
               {artifacts.map((a) => {
                 const ref = (a.result as { ref?: string } | undefined)?.ref ?? "";
+                const open = ref
+                  ? () => void openWorkflowArtifactIPC(ref).catch(() => {})
+                  : undefined;
                 return (
-                  <div key={a.seq} className="flex items-center gap-2 py-0.5 text-[10px] text-[var(--text-muted)]">
+                  <div
+                    key={a.seq}
+                    role={open ? "button" : undefined}
+                    tabIndex={open ? 0 : undefined}
+                    onClick={open}
+                    onKeyDown={
+                      open
+                        ? (e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              open();
+                            }
+                          }
+                        : undefined
+                    }
+                    className={`flex items-center gap-2 py-0.5 text-[10px] text-[var(--text-muted)] ${
+                      open ? "cursor-pointer hover:text-[var(--text)]" : ""
+                    }`}
+                  >
                     <span className="truncate font-mono">{ref}</span>
                     {a.outputSize !== undefined && <span>{formatBytes(a.outputSize)}</span>}
                   </div>

@@ -125,7 +125,7 @@ export type RunStepStatus = 'running' | 'success' | 'failed';
  * (`wf.phase(name)`), not work — the run card cuts stage columns at these
  * markers and never renders them as a row of their own.
  */
-export type RunStepNodeKind = 'tool' | 'agent' | 'gui' | 'browser' | 'decision' | 'human' | 'noop' | 'phase';
+export type RunStepNodeKind = 'tool' | 'agent' | 'gui' | 'browser' | 'decision' | 'human' | 'ask' | 'noop' | 'phase';
 
 export interface RunStepView {
   /** Node id (matches journal.nodeId). */
@@ -137,11 +137,20 @@ export interface RunStepView {
   nodeKind?: RunStepNodeKind;
   startedAt?: number;
   finishedAt?: number;
+  /**
+   * Sub-agent DB session id (plan 568) — the run card's agent chip opens the
+   * watch pane through it. Present on agent steps once the child session is
+   * created (including failed agents).
+   */
+  childSessionId?: string;
 }
 
-/** Name-only artifact reference carried on digest frames (display only). */
+/** Artifact reference carried on digest frames. `ref` is the store-relative
+ * path (`<runId>/<name><ext>`) — present when the run published bytes, and
+ * the key the renderer resolves to a previewable absolute path. */
 export interface RunArtifactNameView {
   name: string;
+  ref?: string;
 }
 
 export interface WorkflowRunSse {

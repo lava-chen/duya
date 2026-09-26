@@ -9,16 +9,21 @@
 //     button (terminal non-success only) and a ↗ that lands in the workflow
 //     panel's run detail.
 //   - Body: the stage rail (阶段轨) — one column per `wf.phase` divider with
-//     status dot, name and an honest n/m step counter, and under it the chips
-//     (one 「脚本」 chip per column for tool work, one chip per agent). Terminal
-//     cards add artifact chips and the 4-cell numeric grid (elapsed / tokens /
-//     subagents / phases) with a 640ms easeOutCubic count-up. Missing numbers
-//     render "—", never a fabricated 0.
+//     status dot, name and an honest n/m step counter. The per-node chips
+//     (「脚本」 per column for tool work, one per agent) stay collapsed by
+//     default; one click on the rail reveals them, clicking again hides them.
+//     Chips are interactive: click / ↗ opens the run in the side panel.
+//     Terminal cards add artifact chips and, when the run failed or was
+//     stopped, the reason line. The four numeric figures (elapsed / tokens /
+//     subagents / phases) deliberately live in the side panel's run detail
+//     only (2026-09-23 feedback) — the card carries the outcome, the panel
+//     carries the numbers. Missing numbers render "—" there, never a
+//     fabricated 0.
 
 'use client';
 
-import { useMemo, useState } from 'react';
-import { useWorkflowRun, useSessionWorkflowRuns, useWorkflowRunFeed } from '@/stores/workflow-store';
+import { useMemo, useState, useEffect, type SyntheticEvent } from 'react';
+import { useWorkflowRun, useSessionWorkflowRuns, useWorkflowRunFeed, useWorkflowStore } from '@/stores/workflow-store';
 import {
   ArrowsClockwiseIcon,
   ArrowSquareOutIcon,
@@ -28,21 +33,22 @@ import {
   StopIcon,
 } from '@/components/icons';
 import { useTranslation } from '@/hooks/useTranslation';
+import { dispatchOpenSessionPanel } from '@/lib/open-session-panel-event';
 import {
   runUiStatus,
   type WorkflowRunUiStatus,
 } from '@/components/workflow/run-display/run-status';
-import {
-  formatCompact,
-  formatDuration,
-  useCountUp,
-  GridCell,
-} from '@/components/workflow/run-display/primitives';
 import { buildStageColumns, StageColumns } from '@/components/workflow/run-display/stage-columns';
+import { journalToArtifacts, journalToSteps } from '@/components/workflow/run-display/journal-steps';
 import {
   cancelWorkflowRunIPC,
+  getWorkflowRunJournalIPC,
   getWorkflowRunRecordIPC,
+  listWorkflowRunRecordsIPC,
+  openWorkflowArtifactIPC,
+  resumeWorkflowRunIPC,
   triggerWorkflowRunIPC,
+  type WorkflowJournalRecord,
 } from '@/lib/workflow-ipc';
 import type { WorkflowRunSse } from '@/types/stream';
 
@@ -88,22 +94,18 @@ export function WorkflowRunCard({ runId, run: runProp }: WorkflowRunCardProps) {
   const [restarting, setRestarting] = useState(false);
   const [restartError, setRestartError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
+  // Progressive disclosure: the rail's per-node chips start collapsed; one
+  // click on the rail reveals them (2026-09-23 feedback).
+  const [chipsExpanded, setChipsExpanded] = useState(false);
 
-  // Hooks at the top level only. Terminal runs are stable, so each count-up
-  // animates once; active runs are re-driven on every progress frame.
-  const durationTarget = useMemo(
-    () => (run ? (run.finishedAt ?? Date.now()) - run.startedAt : undefined),
-    [run],
-  );
-  const durationAnim = useCountUp(durationTarget !== undefined ? durationTarget / 1000 : undefined);
-  const tokensAnim = useCountUp(run?.tokens);
-  const attemptedAgents = run ? countAttemptedAgents(run) : undefined;
-  const subagentsAnim = useCountUp(attemptedAgents);
+  // Hooks at the top level only. The stage census (header right side) counts
+  // straight off the step list — no count-up machinery, since the numeric
+  // figures moved to the side panel's run detail.
   const stageCount = useMemo(
     () => (run && run.steps && run.steps.length > 0 ? buildStageColumns(run.steps).length : null),
     [run],
   );
-  const phasesAnim = useCountUp(stageCount ?? undefined);
+  const attemptedAgents = run ? countAttemptedAgents(run) : undefined;
 
   if (!run) return null;
 
@@ -124,6 +126,20 @@ export function WorkflowRunCard({ runId, run: runProp }: WorkflowRunCardProps) {
   const openDetail = () => {
     if (!effectiveRunId) return;
     window.dispatchEvent(new CustomEvent('duya:open-workflow-run-panel', { detail: { runId: effectiveRunId } }));
+  };
+
+  // Plan 568 (ZCode actor-pane parity): an agent chip with a child session
+  // opens the subagent's watch pane (the read-only SessionMessagesPanel);
+  // every other chip keeps opening the run detail.
+  // Plan 568 (ZCode actor-pane parity): an agent chip with a child session
+  // opens the subagent's watch pane (the read-only SessionMessagesPanel);
+  // every other chip keeps opening the run detail.
+  const openChip = (chip: { childSessionId?: string; name?: string }) => {
+    if (chip.childSessionId) {
+      dispatchOpenSessionPanel(chip.childSessionId, chip.name);
+      return;
+    }
+    openDetail();
   };
 
   const stop = async () => {
@@ -147,8 +163,7 @@ export function WorkflowRunCard({ runId, run: runProp }: WorkflowRunCardProps) {
     setRestarting(true);
     setRestartError(null);
     try {
-      // A rerun is a fresh launch with the recorded params — resume is not
-      // wired runner-side, so the button never claims otherwise.
+      // A rerun is a fresh launch with the recorded params — no cache reuse.
       const record = await getWorkflowRunRecordIPC(effectiveRunId);
       if (!record) throw new Error('run record not found');
       const result = await triggerWorkflowRunIPC({
@@ -164,20 +179,48 @@ export function WorkflowRunCard({ runId, run: runProp }: WorkflowRunCardProps) {
     }
   };
 
+  // Plan 565 Phase A: cache-hit resume. The fresh run seeds its replay cache
+  // from this run's journal — unchanged calls replay instantly, edited or
+  // failed ones re-execute. Session runs relaunch inside their parent chat.
+  const [resuming, setResuming] = useState(false);
+  const resume = async () => {
+    if (resuming || !effectiveRunId) return;
+    setResuming(true);
+    setRestartError(null);
+    try {
+      const result = await resumeWorkflowRunIPC(effectiveRunId);
+      if (!result?.ok) throw new Error(result?.error ?? 'resume failed');
+    } catch (err) {
+      setRestartError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setResuming(false);
+    }
+  };
+
   return (
     <div
       className="rounded-xl border border-[var(--border)] overflow-hidden w-full"
       style={{ background: 'color-mix(in srgb, var(--surface-solid) 70%, transparent)' }}
       data-status={run.status}
       data-workflow-card
+      title={
+        hasSteps
+          ? chipsExpanded
+            ? t('workflow.card.chipsCollapse')
+            : t('workflow.card.chipsExpand')
+          : undefined
+      }
+      // Progressive disclosure lives on the whole card, chat and panel alike:
+      // a plain click anywhere that isn't an inner control toggles the
+      // per-node chips. Opening the run detail stays with the explicit ↗
+      // affordances (header button and chips), so a casual click never yanks
+      // the user into the side panel.
+      onClick={hasSteps ? () => setChipsExpanded((v) => !v) : undefined}
     >
       {/* Header — icon + status title + name, then census + rerun + expand.
-          The whole header opens the run detail (the ↗ stays as the explicit,
-          keyboard-accessible affordance; inner buttons stop propagation). */}
-      <div
-        className="flex cursor-pointer items-center gap-2 px-3 py-2"
-        onClick={openDetail}
-      >
+          The ↗ is the explicit, keyboard-accessible path into the run detail;
+          inner buttons stop propagation so they never toggle the chips. */}
+      <div className="flex items-center gap-2 px-3 py-2">
         <GitBranchIcon className="text-muted-foreground shrink-0" size={16} />
         <span
           className={`shrink-0 text-xs font-medium ${
@@ -234,6 +277,23 @@ export function WorkflowRunCard({ runId, run: runProp }: WorkflowRunCardProps) {
           </button>
         )}
 
+        {showRestart && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); void resume(); }}
+            disabled={resuming}
+            className="shrink-0 inline-flex items-center gap-1 rounded-md border border-[var(--border)] px-2 py-1 text-xs text-[var(--text)] hover:bg-[var(--surface-hover)] disabled:opacity-50 transition-colors"
+            title={t('workflow.card.resumeHint')}
+          >
+            {resuming ? (
+              <CircleNotchIcon className="animate-spin" size={12} />
+            ) : (
+              <ArrowsClockwiseIcon size={12} />
+            )}
+            {t('workflow.card.resume')}
+          </button>
+        )}
+
         <button
           type="button"
           onClick={(e) => { e.stopPropagation(); openDetail(); }}
@@ -256,23 +316,59 @@ export function WorkflowRunCard({ runId, run: runProp }: WorkflowRunCardProps) {
           {t('workflow.card.preparing')}
         </div>
       ) : hasSteps ? (
+        // Plain rail — the expand toggle lives on the whole card, not here.
+        // Chip clicks stop propagation and open the run in the side panel.
         <div className="px-3 pb-3 pt-0.5">
-          <StageColumns steps={run.steps!} />
+          <StageColumns
+            steps={run.steps!}
+            showChips={chipsExpanded}
+            onChipOpen={openChip}
+          />
         </div>
       ) : null}
 
       {!isActive && (run.artifacts?.length ?? 0) > 0 && (
         <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2">
-          {run.artifacts!.map((artifact) => (
-            <span
-              key={artifact.name}
-              className="inline-flex max-w-full items-center gap-1.5 rounded-lg bg-[var(--surface-hover)] px-2 py-1 text-xs text-[var(--text)]"
-              title={artifact.name}
-            >
-              <FileIcon className="shrink-0 text-[var(--accent)]" size={12} />
-              <span className="min-w-0 truncate">{artifact.name}</span>
-            </span>
-          ))}
+          {run.artifacts!.map((artifact) => {
+            // An artifact with a store ref opens the bytes in the file-preview
+            // panel (falling back to the run detail when the ref no longer
+            // resolves); a name-only artifact has nothing to open.
+            const open = artifact.ref
+              ? (e: SyntheticEvent) => {
+                  e.stopPropagation();
+                  void openWorkflowArtifactIPC(artifact.ref!).then((res) => {
+                    if (!res.ok) openDetail();
+                  });
+                }
+              : undefined;
+            const clickable = open !== undefined;
+            return (
+              <span
+                key={artifact.name}
+                role={clickable ? 'button' : undefined}
+                tabIndex={clickable ? 0 : undefined}
+                onClick={open}
+                onKeyDown={
+                  clickable
+                    ? (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          open(e);
+                        }
+                      }
+                    : undefined
+                }
+                title={artifact.name}
+                className={`inline-flex max-w-full items-center gap-1.5 rounded-lg bg-[var(--surface-hover)] px-2 py-1 text-xs text-[var(--text)] ${
+                  clickable ? 'cursor-pointer transition-colors hover:bg-[var(--chip)]' : ''
+                }`}
+                data-artifact-ref={artifact.ref ?? undefined}
+              >
+                <FileIcon className="shrink-0 text-[var(--accent)]" size={12} />
+                <span className="min-w-0 truncate">{artifact.name}</span>
+              </span>
+            );
+          })}
         </div>
       )}
 
@@ -281,40 +377,91 @@ export function WorkflowRunCard({ runId, run: runProp }: WorkflowRunCardProps) {
           {run.error ?? run.stoppedReason}
         </div>
       )}
-
-      {!isActive && (
-        <div className="grid grid-cols-4 border-t border-[var(--border)] divide-x divide-[var(--border)]">
-          <GridCell
-            label={t('workflow.card.statTime')}
-            animated={durationAnim !== undefined ? formatDuration(durationAnim) : undefined}
-          />
-          <GridCell
-            label={t('workflow.card.statTokens')}
-            animated={tokensAnim !== undefined ? formatCompact(tokensAnim) : undefined}
-          />
-          <GridCell
-            label={t('workflow.card.statSubagents')}
-            animated={subagentsAnim !== undefined ? String(Math.round(subagentsAnim)) : undefined}
-          />
-          <GridCell
-            label={t('workflow.card.statPhases')}
-            animated={phasesAnim !== undefined ? String(Math.round(phasesAnim)) : undefined}
-          />
-        </div>
-      )}
     </div>
   );
+}
+
+/**
+ * Durable row + journal → the exact view the live SSE frames carry, so a
+ * rehydrated card and its live twin are indistinguishable. The journal load
+ * is best-effort: until it lands (or if it fails) the card renders its
+ * header-only honest view.
+ */
+function historyRunView(
+  row: {
+    id: string;
+    workflowName: string;
+    status: string;
+    createdAt: number;
+    updatedAt: number;
+    finishedAt?: number | null;
+    pauseMessage?: string | null;
+  },
+  journal: WorkflowJournalRecord[],
+): WorkflowRunSse {
+  const steps = journalToSteps(journal);
+  const artifacts = journalToArtifacts(journal);
+  const terminal = !['active', 'verifying', 'planning', 'awaiting_confirm'].includes(row.status);
+  return {
+    runId: row.id,
+    workflowName: row.workflowName,
+    status: row.status,
+    startedAt: row.createdAt,
+    ...(terminal ? { finishedAt: row.finishedAt ?? row.updatedAt } : {}),
+    ...(steps.length > 0 ? { steps } : {}),
+    ...(artifacts.length > 0 ? { artifacts } : {}),
+    ...(row.pauseMessage ? { stoppedReason: row.pauseMessage } : {}),
+  };
+}
+
+/**
+ * Rehydration (plan 565): the transcript's run cards must survive a reload.
+ * Runs anchored to this session are durable rows, so on mount we read them
+ * and seed the store — entries already present (a live run still in flight)
+ * always win, and the live SSE feed keeps working on top.
+ */
+function useSessionRunRehydration(sessionId: string): void {
+  const upsert = useWorkflowStore((s) => s.upsert);
+  useEffect(() => {
+    if (!sessionId) return;
+    let alive = true;
+    void (async () => {
+      try {
+        const rows = await listWorkflowRunRecordsIPC({ parentSessionId: sessionId, limit: 10 });
+        if (!alive || !rows || rows.length === 0) return;
+        for (const row of rows) {
+          if (useWorkflowStore.getState().runs[row.id]) continue;
+          let journal: WorkflowJournalRecord[] = [];
+          try {
+            journal = ((await getWorkflowRunJournalIPC(row.id)) ?? []) as WorkflowJournalRecord[];
+          } catch {
+            // Journal unavailable — the card keeps its header-only view.
+          }
+          if (!alive) return;
+          upsert(sessionId, 'start', historyRunView(row, journal));
+        }
+      } catch {
+        // History unavailable — live cards still work.
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [sessionId, upsert]);
 }
 
 /**
  * WorkflowRunStream — mounts the live workflow cards for a session into the
  * assistant transcript. Bridges this session's `workflow_run` SSE frames into
  * the store (via `useWorkflowRunFeed`) and renders one card per launched run,
- * oldest first. Renders nothing while no run is active, so it is safe to inline
+ * oldest first. Session-anchored history is rehydrated from the durable rows
+ * (plan 565), so the cards live IN the message list across reloads. Renders
+ * nothing while the session has no runs, so it is safe to inline
  * unconditionally at the tail of the stream.
  */
 export function WorkflowRunStream({ sessionId }: { sessionId: string }) {
   useWorkflowRunFeed(sessionId);
+  useSessionRunRehydration(sessionId);
   const runs = useSessionWorkflowRuns(sessionId);
   if (runs.length === 0) return null;
   return (

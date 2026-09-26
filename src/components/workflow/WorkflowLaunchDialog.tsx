@@ -203,6 +203,9 @@ export function WorkflowLaunchDialog({
   });
   const [error, setError] = useState<string | null>(null);
   const [launching, setLaunching] = useState(false);
+  // Plan 568 (ZCode subagentModel parity): run-level agent model override.
+  // Empty = inherit the active provider's default (the router-resolved llm).
+  const [model, setModel] = useState('');
 
   useEffect(() => {
     void loadProjects();
@@ -267,6 +270,7 @@ export function WorkflowLaunchDialog({
         params,
         projectDir: projectDir.trim(),
         scope: entry.scope ?? null,
+        ...(model.trim() !== '' ? { model: model.trim() } : {}),
       });
       if (!res || res.ok === false || !res.runId) {
         setError(res?.error ?? t('panel.workflow.launchFailed'));
@@ -285,7 +289,7 @@ export function WorkflowLaunchDialog({
     } finally {
       setLaunching(false);
     }
-  }, [argEntries, values, projectDir, entry.name, entry.scope, onLaunched, onClose, t]);
+  }, [argEntries, values, projectDir, model, entry.name, entry.scope, onLaunched, onClose, t]);
 
   const scopeLabel =
     entry.scope === 'project'
@@ -366,6 +370,18 @@ export function WorkflowLaunchDialog({
               />
             )}
             <p className="pt-1 text-[10px] text-[var(--muted)]">{t('panel.workflow.launchProjectHint')}</p>
+          </div>
+
+          {/* Plan 568 (ZCode subagentModel parity): run-level agent model override. */}
+          <div data-testid="workflow-launch-model">
+            <label className="block pb-1 text-[var(--text)]">{t('panel.workflow.launchModel')}</label>
+            <input
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder={t('panel.workflow.launchModelPlaceholder')}
+              className={LAUNCH_INPUT_CLS}
+            />
+            <p className="pt-1 text-[10px] text-[var(--muted)]">{t('panel.workflow.launchModelHint')}</p>
           </div>
 
           {argEntries.length > 0 && (

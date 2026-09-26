@@ -32,6 +32,7 @@ import {
   FileIcon,
   FileMdIcon,
 } from '@/components/icons';
+import { AgentFace, type AgentFaceStatus } from '@/components/agent-face/AgentFace';
 import type {
   WorkflowDefView,
   WorkflowNodeView,
@@ -158,17 +159,13 @@ const phaseStatusBlockStyle: CSSProperties = {
   flexShrink: 0,
 };
 
-/** Colored rounded-square avatar badge for agent-containing phases. */
-const avatarSquareStyle = (accent: string): CSSProperties => ({
-  width: '20px',
-  height: '20px',
-  borderRadius: '6px',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  color: '#fff',
-  background: accent,
-});
+/** Phase status -> the animated face's four statuses. */
+function faceStatusOf(status: PhaseStatus): AgentFaceStatus {
+  if (status === 'success') return 'done';
+  if (status === 'failed') return 'failed';
+  if (status === 'pending') return 'pending';
+  return 'running';
+}
 
 /** Monospace `>_` script glyph for non-agent phases. */
 const scriptGlyphStyle = (accent: string): CSSProperties => ({
@@ -604,9 +601,7 @@ function PhaseRow({
         </span>
         <span style={phaseStatusBlockStyle}>
           {isAgent ? (
-            <span style={avatarSquareStyle(accent)} title={NODE_KIND_LABEL.agent}>
-              <UserIcon size={12} />
-            </span>
+            <AgentFace size={20} status={faceStatusOf(status)} color={accent} />
           ) : (
             <span style={scriptGlyphStyle(accent)} title={NODE_KIND_LABEL.tool}>
               {'>_'}

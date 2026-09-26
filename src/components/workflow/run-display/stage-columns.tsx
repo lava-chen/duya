@@ -16,6 +16,7 @@
 
 import { useMemo } from 'react';
 import {
+  ArrowSquareOutIcon,
   CheckCircleIcon,
   CircleNotchIcon,
   QuestionIcon,
@@ -25,6 +26,7 @@ import {
   UserIcon,
   XCircleIcon,
 } from '@/components/icons';
+import { AgentFace, type AgentFaceStatus } from '@/components/agent-face/AgentFace';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { RunStepNodeKind, RunStepStatus } from '@/types/stream';
 
@@ -42,6 +44,8 @@ export interface StageStep {
   label?: string;
   status: StageStepStatus;
   nodeKind?: RunStepNodeKind;
+  /** Plan 568: agent steps carry their sub-session id — the chip opens the watch pane. */
+  childSessionId?: string;
 }
 
 export interface RunChipView {
@@ -50,6 +54,8 @@ export interface RunChipView {
   /** Display name; only agents carry one (stripped of the `agent:` prefix). */
   name?: string;
   status: StageStepStatus;
+  /** Plan 568: agent chip → `dispatchOpenSessionPanel(childSessionId)` watch pane. */
+  childSessionId?: string;
 }
 
 export interface StageColumn {
@@ -141,6 +147,7 @@ export function buildStageColumns(steps: StageStep[]): StageColumn[] {
       key: step.id,
       kind,
       ...(kind === 'agent' ? { name: agentChipName(step.label) || 'agent' } : {}),
+      ...(step.childSessionId !== undefined ? { childSessionId: step.childSessionId } : {}),
       status: step.status,
     });
   }
@@ -155,6 +162,9 @@ function chipKindOf(nodeKind: RunStepNodeKind | undefined): RunChipView['kind'] 
     case 'decision':
       return 'decision';
     case 'human':
+    case 'ask':
+      // Plan 565 Phase D: an escalation ask is a human-in-the-loop row too —
+      // it renders with the human chip vocabulary.
       return 'human';
     case 'browser':
       // Browser-extension nodes get their own chip (plan 564) — collapsing
@@ -193,6 +203,14 @@ function StepStatusIcon({ status }: { status: StageStepStatus }) {
   return <CircleNotchIcon className="shrink-0 animate-spin text-[var(--warning)]" size={12} />;
 }
 
+/** Stage chip status -> the animated face's four statuses. */
+function faceStatusOf(status: StageStepStatus): AgentFaceStatus {
+  if (status === 'success') return 'done';
+  if (status === 'failed') return 'failed';
+  if (status === 'pending') return 'pending';
+  return 'running';
+}
+
 function ColumnDot({ status }: { status: StageStepStatus }) {
   const bg =
     status === 'success'
@@ -211,7 +229,22 @@ function ColumnDot({ status }: { status: StageStepStatus }) {
   );
 }
 
-function RunChip({ chip, accent }: { chip: RunChipView; accent?: string }) {
+/**
+ * One chip in the stage rail. When `onOpen` is given the chip is interactive:
+ * clicking it (or its hover-revealed ↗) opens the node's destination — an
+ * agent chip with a child session opens the watch pane
+ * (`duya:open-session-panel`), everything else opens the run detail
+ * (`onChipOpen` receives the chip so the caller can decide).
+ */
+function RunChip({
+  chip,
+  accent,
+  onOpen,
+}: {
+  chip: RunChipView;
+  accent?: string;
+  onOpen?: (chip: RunChipView) => void;
+}) {
   const { t } = useTranslation();
   const name =
     chip.kind === 'agent'
@@ -233,28 +266,77 @@ function RunChip({ chip, accent }: { chip: RunChipView; accent?: string }) {
           : chip.kind === 'browser'
             ? ChromeIcon
             : TerminalIcon;
+  const interactive = onOpen !== undefined;
   return (
     <span
-      className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface-hover)] py-1 pl-1 pr-1.5"
+      className={`group inline-flex max-w-full items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface-hover)] py-1 pl-1 pr-1.5 ${
+        interactive ? 'cursor-pointer transition-colors hover:border-[var(--accent)]' : ''
+      }`}
       data-chip-kind={chip.kind}
       data-chip-status={chip.status}
+      {...(interactive
+        ? {
+            role: 'button',
+            tabIndex: 0,
+            title: name,
+            onClick: (e) => {
+              e.stopPropagation();
+              onOpen?.(chip);
+            },
+            onKeyDown: (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onOpen?.(chip);
+              }
+            },
+          }
+        : { title: name })}
     >
-      <span
-        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-white"
-        style={accent ? { background: accent } : { background: 'var(--chip)', color: 'var(--text)' }}
-        aria-hidden
-      >
-        <Icon size={12} />
-      </span>
-      <span className="min-w-0 truncate text-xs leading-none text-[var(--text)]" title={name}>
-        {name}
-      </span>
+      {/* agent chips wear the animated face — the status mark at the end stays
+          as the at-a-glance glyph, the face carries the life */}
+      {chip.kind === 'agent' && accent ? (
+        <AgentFace size={20} status={faceStatusOf(chip.status)} color={accent} />
+      ) : (
+        <span
+          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-white"
+          style={accent ? { background: accent } : { background: 'var(--chip)', color: 'var(--text)' }}
+          aria-hidden
+        >
+          <Icon size={12} />
+        </span>
+      )}
+      <span className="min-w-0 truncate text-xs leading-none text-[var(--text)]">{name}</span>
+      {interactive && (
+        <ArrowSquareOutIcon
+          className="shrink-0 text-[var(--muted)] opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+          size={11}
+        />
+      )}
       <StepStatusIcon status={chip.status} />
     </span>
   );
 }
 
-export function StageColumns({ steps }: { steps: StageStep[] }) {
+export function StageColumns({
+  steps,
+  showChips = true,
+  onChipOpen,
+}: {
+  steps: StageStep[];
+  /**
+   * Progressive disclosure (2026-09-23 feedback): the live run card keeps the
+   * chips collapsed by default — the rail headers + honest n/m counters are
+   * the at-a-glance view, one click reveals the per-node chips. The preview
+   * card and any surface that wants the full picture pass true (the default).
+   */
+  showChips?: boolean;
+  /**
+   * When given, chips become interactive. The callback receives the chip — an
+   * agent chip with a `childSessionId` opens the watch pane, the rest open
+   * the run detail.
+   */
+  onChipOpen?: (chip: RunChipView) => void;
+}) {
   const { t } = useTranslation();
   const columns = useMemo(() => buildStageColumns(steps), [steps]);
   if (columns.length === 0) return null;
@@ -278,19 +360,21 @@ export function StageColumns({ steps }: { steps: StageStep[] }) {
                 {column.done}/{column.total}
               </span>
             </div>
-            {column.chips.map((chip) => (
-              <RunChip
-                key={chip.key}
-                chip={chip}
-                accent={
-                  chip.kind === 'agent'
-                    ? agentAccentOf(agentIndex++)
-                    : chip.kind === 'browser'
-                      ? 'var(--accent-sky)'
-                      : undefined
-                }
-              />
-            ))}
+            {showChips &&
+              column.chips.map((chip) => (
+                <RunChip
+                  key={chip.key}
+                  chip={chip}
+                  onOpen={onChipOpen}
+                  accent={
+                    chip.kind === 'agent'
+                      ? agentAccentOf(agentIndex++)
+                      : chip.kind === 'browser'
+                        ? 'var(--accent-sky)'
+                        : undefined
+                  }
+                />
+              ))}
           </div>
         </div>
       ))}

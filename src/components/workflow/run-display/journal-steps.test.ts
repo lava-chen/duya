@@ -81,9 +81,9 @@ describe('journalToSteps', () => {
 });
 
 describe('journalToArtifacts', () => {
-  it('basenames the ref, dedupes, and skips non-artifact records', () => {
+  it('basenames the ref, keeps it for preview resolution, dedupes, and skips non-artifact records', () => {
     const artifacts = journalToArtifacts(JOURNAL);
-    expect(artifacts).toEqual([{ name: 'capture-0.png' }]);
+    expect(artifacts).toEqual([{ name: 'capture-0.png', ref: 'r1/capture-0.png' }]);
   });
 
   it('falls back to action then nodeId when no ref is present', () => {

@@ -308,9 +308,14 @@ describe("WorkflowPanel shell", () => {
     const tagInput = within(screen.getByTestId("workflow-launch-arg-tag")).getByRole("textbox") as HTMLInputElement;
     expect(tagInput.value).toBe("latest");
 
-    // Fill the required number arg + confirm.
+    // Fill the required number arg + confirm. The dialog owns a project
+    // option for repo-digest, so the location renders as a select — picking
+    // the custom option swaps in the raw path input.
     const daysInput = within(screen.getByTestId("workflow-launch-arg-days")).getByRole("spinbutton");
     fireEvent.change(daysInput, { target: { value: "7" } });
+    fireEvent.change(screen.getByTestId("workflow-launch-project-select"), {
+      target: { value: "__custom__" },
+    });
     fireEvent.change(screen.getByTestId("workflow-launch-project"), { target: { value: "/other" } });
     fireEvent.click(screen.getByTestId("workflow-launch-confirm"));
 
@@ -366,9 +371,31 @@ describe("runs tab", () => {
 
   async function openDetail(id: string) {
     await openRuns();
-    fireEvent.click(within(screen.getByTestId(`workflow-run-${id}`)).getByText("invoice-sync"));
+    // The card's plain click toggles the per-node chips (progressive
+    // disclosure, same as the chat card); the run detail opens through the
+    // card's explicit ↗ affordance.
+    fireEvent.click(
+      within(screen.getByTestId(`workflow-run-${id}`)).getByRole("button", {
+        name: "workflow.card.openDetail",
+      }),
+    );
     await waitFor(() => expect(screen.getByTestId("workflow-run-detail")).toBeTruthy());
   }
+
+  it("a run card's plain click expands the per-node chips instead of opening the detail", async () => {
+    await openRuns();
+    const row = screen.getByTestId("workflow-run-run-live-1");
+    // The journal lands asynchronously — the toggle only arms once the run
+    // view carries steps.
+    await waitFor(() => expect(within(row).getByText("collect")).toBeTruthy());
+    // Collapsed first: the rail headers show, no node chips anywhere.
+    expect(within(row).queryByText("workflow.nodeKind.tool")).toBeNull();
+    // One plain click on the card reveals the chips…
+    fireEvent.click(within(row).getByText("invoice-sync"));
+    expect(within(row).getByText("workflow.nodeKind.tool")).toBeTruthy();
+    // …and never yanks the user into the run detail.
+    expect(screen.queryByTestId("workflow-run-detail")).toBeNull();
+  });
 
   it("splits in-progress from finished with counts", async () => {
     await openRuns();
@@ -426,10 +453,14 @@ describe("runs tab", () => {
     await waitFor(() => expect(cancel).toHaveBeenCalledWith("run-live-1"));
     await waitFor(() => expect(statusFn).toHaveBeenCalledTimes(2));
 
-    // Back to the list, then open the finished run's detail from its card.
+    // Back to the list, then open the finished run's detail from its ↗.
     fireEvent.click(screen.getByRole("button", { name: /panel\.workflow\.back/ }));
     await waitFor(() => expect(screen.queryByTestId("workflow-run-detail")).toBeNull());
-    fireEvent.click(within(screen.getByTestId("workflow-run-run-2")).getByText("invoice-sync"));
+    fireEvent.click(
+      within(screen.getByTestId("workflow-run-run-2")).getByRole("button", {
+        name: "workflow.card.openDetail",
+      }),
+    );
     await waitFor(() => expect(screen.getByTestId("workflow-run-detail")).toBeTruthy());
 
     fireEvent.click(screen.getByRole("button", { name: /panel\.workflow\.delete/ }));

@@ -20,17 +20,22 @@ import {
   DotsThreeIcon,
   IconRefresh,
   RepeatIcon,
-  ChatCirclePlusIcon,
   TrashIcon,
   FolderIcon,
   GlobeIcon,
   PlusIcon,
+  CheckCircleIcon,
+  XCircleIcon,
+  CircleNotchIcon,
+  CircleIcon,
 } from '@/components/icons';
+import { DropdownMenu, type MenuAction } from '@/components/ui/DropdownMenu';
 import { PageFrame, PageHeader, PageCard, EmptyState } from '@/components/ui/page';
 import {
   listDwfWorkflowsIPC,
   deleteDwfWorkflowIPC,
   listWorkflowRunsIPC,
+  onDwfWorkflowsChangedIPC,
 } from '@/lib/workflow-ipc';
 import type { WorkflowRunRow } from '@/components/layout/panels/WorkflowPanel';
 import { WorkflowLaunchDialog } from '@/components/workflow/WorkflowLaunchDialog';
@@ -56,19 +61,17 @@ const scopeHeaderStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
-  padding: '6px 0',
-  borderBottom: '1px solid var(--border-weak)',
+  padding: '0',
 };
 
 const scopeTitleStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 'var(--space-2, 8px)',
+  gap: '8px',
   fontSize: '13px',
   fontWeight: 500,
-  color: 'var(--text-faint)',
-  textTransform: 'uppercase',
-  letterSpacing: '0.04em',
+  lineHeight: '20px',
+  color: 'var(--text)',
 };
 
 const scopeCountStyle: CSSProperties = {
@@ -79,111 +82,206 @@ const scopeCountStyle: CSSProperties = {
   borderRadius: '999px',
 };
 
+/** Group-header create button: solid primary, ZCode Button size="lg" metrics (h-8, rounded-lg, 14px). */
 const createButtonStyle: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
-  gap: '4px',
-  padding: '4px 10px',
-  background: 'transparent',
-  color: 'var(--accent)',
+  gap: '6px',
+  height: '32px',
+  padding: '0 12px',
+  background: 'var(--accent)',
+  color: 'var(--accent-on, #fff)',
   border: 'none',
-  borderRadius: '6px',
+  borderRadius: '8px',
   cursor: 'pointer',
-  fontSize: '12px',
+  fontSize: '13px',
+  lineHeight: '20px',
+  whiteSpace: 'nowrap',
 };
 
+/** ZCode-style empty card: large bordered container, centered title + hint + primary CTA. */
+const emptyCardStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: '20px',
+  minHeight: '226px',
+  width: '100%',
+  border: '1px solid var(--border-weak)',
+  borderRadius: '16px',
+  background: 'transparent',
+  padding: '0 16px',
+  textAlign: 'center',
+};
+
+const emptyTextStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: '6px',
+};
+
+const emptyTitleStyle: CSSProperties = {
+  margin: 0,
+  fontSize: '14px',
+  fontWeight: 500,
+  lineHeight: '20px',
+  color: 'var(--text-faint)',
+};
+
+const emptyHintStyle: CSSProperties = {
+  margin: 0,
+  fontSize: '14px',
+  lineHeight: '20px',
+  color: 'var(--text-faint)',
+  maxWidth: '420px',
+};
+
+const primaryButtonStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '6px',
+  height: '32px',
+  padding: '0 12px',
+  background: 'var(--accent)',
+  color: 'var(--accent-on, #fff)',
+  border: 'none',
+  borderRadius: '8px',
+  cursor: 'pointer',
+  fontSize: '13px',
+  lineHeight: '20px',
+  whiteSpace: 'nowrap',
+};
+
+/**
+ * Card metrics follow the compact grid: fixed 132px row, 12px padding,
+ * 20px line-height text. 12 + 20 + 12 + 40 + 12 + 24 + 12 = 132.
+ */
 const cardGridStyle: CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
-  gap: 'var(--space-3, 12px)',
+  gridAutoRows: '132px',
+  gap: '16px',
 };
 
 const cardStyle: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 'var(--space-2, 8px)',
-  padding: '14px',
-  background: 'var(--bg-surface-1, transparent)',
+  gap: '12px',
+  padding: '12px',
+  // Flat card: same base as the page, separated by border only (ZCode bg-background + card-border).
+  background: 'transparent',
   border: '1px solid var(--border-weak)',
-  borderRadius: '8px',
+  borderRadius: '12px',
   cursor: 'pointer',
   transition: 'border-color 120ms ease, background 120ms ease',
   position: 'relative',
-};
-
-const cardHeaderStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'flex-start',
-  justifyContent: 'space-between',
-  gap: 'var(--space-2, 8px)',
+  overflow: 'hidden',
+  minHeight: 0,
 };
 
 const cardNameStyle: CSSProperties = {
   fontSize: '14px',
   fontWeight: 500,
+  lineHeight: '20px',
   color: 'var(--text)',
-  fontFamily: 'var(--font-mono, ui-monospace, "SF Mono", monospace)',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  minWidth: 0,
+  // Reserve room for the absolutely-positioned run + ⋯ actions (ZCode uses pr-28).
+  paddingRight: '104px',
 };
 
 const cardDescriptionStyle: CSSProperties = {
-  fontSize: '12px',
+  fontSize: '14px',
+  lineHeight: '20px',
+  height: '40px',
   color: 'var(--text-faint)',
   display: '-webkit-box',
   WebkitLineClamp: 2,
   WebkitBoxOrient: 'vertical',
   overflow: 'hidden',
-  lineHeight: 1.4,
+};
+
+const cardActionsStyle: CSSProperties = {
+  position: 'absolute',
+  top: '12px',
+  right: '12px',
+  display: 'flex',
+  alignItems: 'center',
+  gap: '4px',
+};
+
+const runButtonStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '4px',
+  padding: '3px 10px',
+  background: 'transparent',
+  color: 'var(--text)',
+  border: '1px solid var(--border-weak)',
+  borderRadius: '6px',
+  cursor: 'pointer',
+  fontSize: '12px',
+  lineHeight: '18px',
+};
+
+const menuTriggerStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: '24px',
+  height: '24px',
+  padding: 0,
+  background: 'transparent',
+  color: 'var(--text-faint)',
+  border: 'none',
+  borderRadius: '6px',
+  cursor: 'pointer',
 };
 
 const cardFooterStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
-  gap: 'var(--space-2, 8px)',
-  marginTop: 'var(--space-2, 8px)',
+  gap: '8px',
+  marginTop: 'auto',
+  minHeight: 0,
 };
 
-const statusStyle = (color: string): CSSProperties => ({
+/** Last-run badge: tinted pill (bg = status color at 10% alpha), icon + "状态 · N 前" (ZCode style). */
+const statusStyle = (color: string, pill: boolean): CSSProperties => ({
   display: 'inline-flex',
   alignItems: 'center',
-  gap: '6px',
-  fontSize: '11px',
+  gap: '4px',
+  fontSize: '14px',
+  lineHeight: '20px',
   color,
+  minWidth: 0,
+  overflow: 'hidden',
+  whiteSpace: 'nowrap',
+  textOverflow: 'ellipsis',
+  ...(pill
+    ? {
+        padding: '1px 8px 1px 6px',
+        borderRadius: '8px',
+        background: `color-mix(in srgb, ${color} 10%, transparent)`,
+      }
+    : {}),
 });
 
-const statusDotStyle = (bg: string): CSSProperties => ({
-  width: '6px',
-  height: '6px',
-  borderRadius: '50%',
-  background: bg,
-});
-
-const cardActionsStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 'var(--space-1, 4px)',
-};
-
-const iconButtonStyle: CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  width: '28px',
-  height: '28px',
-  padding: 0,
-  background: 'transparent',
-  color: 'var(--text-faint)',
-  border: '1px solid var(--border-weak)',
-  borderRadius: '6px',
-  cursor: 'pointer',
-};
-
-const runButtonStyle: CSSProperties = {
-  ...iconButtonStyle,
-  background: 'var(--accent)',
-  color: 'var(--accent-on, #fff)',
-  borderColor: 'transparent',
-};
+/** Relative "N 分钟/小时/天前" suffix for the last-run badge (zh strings, repo precedent in CodeReviewPanel). */
+function relativeTimeSuffix(ts: number): string {
+  const diff = Date.now() - ts;
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 1) return '刚刚';
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(diff / 3_600_000);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${Math.floor(diff / 86_400_000)} 天前`;
+}
 
 // ─── component ─────────────────────────────────────────────────────────────
 
@@ -214,6 +312,7 @@ export function WorkflowLibraryView({
 }: WorkflowLibraryViewProps) {
   const { t } = useTranslation();
   const [entries, setEntries] = useState<Awaited<ReturnType<typeof listDwfWorkflowsIPC>>['entries']>([]);
+  const [invalidFiles, setInvalidFiles] = useState<Awaited<ReturnType<typeof listDwfWorkflowsIPC>>['invalid']>([]);
   const [runs, setRuns] = useState<Awaited<ReturnType<typeof listWorkflowRunsIPC>>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -233,6 +332,7 @@ export function WorkflowLibraryView({
         listWorkflowRunsIPC({ limit: 200 }),
       ]);
       setEntries(listResult?.entries ?? []);
+      setInvalidFiles(listResult?.invalid ?? []);
       setRuns(runsList ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -243,6 +343,15 @@ export function WorkflowLibraryView({
 
   useEffect(() => {
     reload();
+  }, [reload]);
+
+  // Auto-refresh when a watched library directory changes on disk (files
+  // created outside the UI: agent-authored workflows, manual edits). The
+  // main process already debounces the fs events.
+  useEffect(() => {
+    return onDwfWorkflowsChangedIPC(() => {
+      void reload();
+    });
   }, [reload]);
 
   // Group entries by scope
@@ -261,14 +370,44 @@ export function WorkflowLibraryView({
   const renderCard = (def: typeof entries[number]) => {
     const lastRun = lastRunByName.get(def.name);
     const status = lastRun?.status ?? null;
+    const running = status === 'running';
     const statusColor =
       status === 'complete'
         ? 'var(--accent-emerald, #10b981)'
         : status === 'failed'
           ? 'var(--accent-rose, #f43f5e)'
-          : 'var(--text-faint)';
-    const statusDotBg = statusColor;
-    const statusLabel = status ? (t(`workflow.runStatus.${status}` as never) ?? status) : t('workflow.neverRun');
+          : running
+            ? 'var(--accent)'
+            : 'var(--text-faint)';
+    const statusLabel = status
+      ? (t(`workflow.runStatus.${status}` as never) ?? status)
+      : t('workflow.neverRun');
+    const badgeLabel =
+      lastRun && !running ? `${statusLabel} · ${relativeTimeSuffix(lastRun.updatedAt)}` : statusLabel;
+    const statusIcon =
+      status === 'complete' ? (
+        <CheckCircleIcon size={14} />
+      ) : status === 'failed' ? (
+        <XCircleIcon size={14} />
+      ) : running ? (
+        <CircleNotchIcon size={14} />
+      ) : status ? (
+        <CircleIcon size={14} />
+      ) : null;
+
+    const cardMenu: MenuAction[] = [
+      {
+        kind: 'action',
+        id: 'delete',
+        label: t('workflow.action.delete'),
+        iconLeft: <TrashIcon size={14} />,
+        danger: true,
+        onSelect: () => {
+          if (!window.confirm(`Delete workflow "${def.name}"?`)) return;
+          void deleteDwfWorkflowIPC({ name: def.name, scope: def.scope, projectDir }).then(reload);
+        },
+      },
+    ];
 
     return (
       <div
@@ -276,46 +415,39 @@ export function WorkflowLibraryView({
         style={cardStyle}
         onClick={() => onOpenDetail?.(def.name, def.scope, projectDir)}
       >
-        <div style={cardHeaderStyle}>
-          <div style={cardNameStyle}>{def.name}</div>
-          <button
-            style={{ ...iconButtonStyle, border: 'none' }}
-            onClick={(e) => {
-              e.stopPropagation();
-            }}
-            aria-label="more"
-          >
-            <DotsThreeIcon size={14} />
-          </button>
-        </div>
+        <div style={cardNameStyle}>{def.name}</div>
         <div style={cardDescriptionStyle}>{def.description || '—'}</div>
         <div style={cardFooterStyle}>
-          <span style={statusStyle(statusColor)}>
-            <span style={statusDotStyle(statusDotBg)} />
-            {statusLabel}
+          <span style={statusStyle(statusColor, status !== null)}>
+            {statusIcon}
+            {badgeLabel}
           </span>
-          <div style={cardActionsStyle} onClick={(e) => e.stopPropagation()}>
-            <button
-              style={runButtonStyle}
-              onClick={() => setLaunching(def)}
-              aria-label={t('workflow.action.run')}
-              title={t('workflow.action.run')}
-            >
-              <PlayIcon size={12} />
-            </button>
-            <button
-              style={iconButtonStyle}
-              onClick={async () => {
-                if (!window.confirm(`Delete workflow "${def.name}"?`)) return;
-                await deleteDwfWorkflowIPC({ name: def.name, scope: def.scope, projectDir });
-                reload();
-              }}
-              aria-label={t('workflow.action.delete')}
-              title={t('workflow.action.delete')}
-            >
-              <TrashIcon size={12} />
-            </button>
-          </div>
+        </div>
+
+        {/* Card-face actions layer above the whole-card click, mirroring ZCode's top-right run + ⋯. */}
+        <div
+          style={cardActionsStyle}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          <button
+            style={runButtonStyle}
+            onClick={() => setLaunching(def)}
+            aria-label={t('workflow.action.run')}
+            title={t('workflow.action.run')}
+          >
+            <PlayIcon size={12} />
+            {t('workflow.action.run')}
+          </button>
+          <DropdownMenu
+            trigger={
+              <button style={menuTriggerStyle} aria-label="more" title="more">
+                <DotsThreeIcon size={14} />
+              </button>
+            }
+            items={cardMenu}
+            align="end"
+          />
         </div>
       </div>
     );
@@ -339,35 +471,49 @@ export function WorkflowLibraryView({
         </PageCard>
       )}
 
-      {!error && !loading && entries.length === 0 && (
+      {/* Files that exist on disk but fail to parse: show them loudly instead of
+          letting them silently vanish from the list (a typo'd frontmatter key
+          would otherwise look like the workflow never got created). */}
+      {!error && invalidFiles.length > 0 && (
         <PageCard>
-          <EmptyState
-            icon={<ChatCirclePlusIcon size={32} />}
-            title={t('automation.empty.title')}
-            description={t('automation.empty.description')}
-            action={
-              onCreateViaConversation ? (
-                <button
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    padding: '8px 14px',
-                    background: 'var(--accent)',
-                    color: 'var(--accent-on, #fff)',
-                    border: 'none',
-                    borderRadius: '6px',
-                    cursor: 'pointer',
-                  }}
-                  onClick={() => onCreateViaConversation('global', projectDir)}
-                >
-                  <ChatCirclePlusIcon size={14} />
-                  {t('automation.create.viaConversation')}
-                </button>
-              ) : undefined
-            }
-          />
+          <div style={{ padding: '10px 14px', display: 'grid', gap: 6 }}>
+            <div style={{ ...emptyTitleStyle, fontSize: 13 }}>
+              {invalidFiles.length} 个 workflow 文件无法识别（不会出现在列表中）
+            </div>
+            {invalidFiles.map((item) => {
+              const raw = item as { path?: string; error?: string; reason?: string; detail?: string };
+              const why = raw.error ?? raw.reason ?? '未知原因';
+              const detail = raw.detail ? ` — ${raw.detail}` : '';
+              return (
+                <div key={raw.path} style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                  <span style={{ color: 'var(--accent-rose, #f43f5e)' }}>●</span>{' '}
+                  <code>{raw.path}</code>
+                  <div style={{ color: 'var(--text-faint)' }}>{why}{detail}</div>
+                </div>
+              );
+            })}
+          </div>
         </PageCard>
+      )}
+
+      {/* Global-only surface with nothing at all: general empty card. When a project is
+          present the project-empty card below carries the CTA instead (ZCode behavior). */}
+      {!error && !loading && entries.length === 0 && !projectDir && (
+        <div style={emptyCardStyle}>
+          <div style={emptyTextStyle}>
+            <p style={emptyTitleStyle}>{t('automation.empty.title')}</p>
+            <p style={emptyHintStyle}>{t('automation.empty.description')}</p>
+          </div>
+          {onCreateViaConversation && (
+            <button
+              style={primaryButtonStyle}
+              onClick={() => onCreateViaConversation('global', projectDir)}
+            >
+              <PlusIcon size={14} />
+              {t('automation.create.viaConversation')}
+            </button>
+          )}
+        </div>
       )}
 
       {/* Global group */}
@@ -384,7 +530,7 @@ export function WorkflowLibraryView({
                 style={createButtonStyle}
                 onClick={() => onCreateViaConversation('global', projectDir)}
               >
-                <PlusIcon size={12} />
+                <PlusIcon size={14} />
                 {t('automation.create.viaConversation')}
               </button>
             )}
@@ -393,8 +539,8 @@ export function WorkflowLibraryView({
         </div>
       )}
 
-      {/* Project group */}
-      {!error && !loading && projectEntries.length > 0 && projectDir && (
+      {/* Project group, or the ZCode-style "no saved workflows in this project" card */}
+      {!error && !loading && projectDir && projectEntries.length > 0 && (
         <div style={scopeGroupStyle}>
           <div style={scopeHeaderStyle}>
             <div style={scopeTitleStyle}>
@@ -407,12 +553,29 @@ export function WorkflowLibraryView({
                 style={createButtonStyle}
                 onClick={() => onCreateViaConversation('project', projectDir)}
               >
-                <PlusIcon size={12} />
+                <PlusIcon size={14} />
                 {t('automation.create.viaConversation')}
               </button>
             )}
           </div>
           <div style={cardGridStyle}>{projectEntries.map(renderCard)}</div>
+        </div>
+      )}
+      {!error && !loading && projectDir && projectEntries.length === 0 && (
+        <div style={emptyCardStyle}>
+          <div style={emptyTextStyle}>
+            <p style={emptyTitleStyle}>{t('workflow.projectEmpty.title')}</p>
+            <p style={emptyHintStyle}>{t('workflow.projectEmpty.hint')}</p>
+          </div>
+          {onCreateViaConversation && (
+            <button
+              style={primaryButtonStyle}
+              onClick={() => onCreateViaConversation('project', projectDir)}
+            >
+              <PlusIcon size={14} />
+              {t('automation.create.viaConversation')}
+            </button>
+          )}
         </div>
       )}
       {launching && (
@@ -440,12 +603,7 @@ export function WorkflowLibraryView({
   return (
     <PageFrame>
       <PageHeader
-        title={
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2, 8px)' }}>
-            <RepeatIcon size={18} />
-            {t('nav.workflow')}
-          </span>
-        }
+        title={t('nav.workflow')}
         actions={
           <button
             style={{

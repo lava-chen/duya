@@ -19,7 +19,7 @@
 import { useState } from 'react';
 
 import { useTranslation } from '@/hooks/useTranslation';
-import { IconRefresh, RepeatIcon } from '@/components/icons';
+import { IconRefresh } from '@/components/icons';
 import { IconButton } from '@/components/ui/IconButton';
 import { PageFrame, PageHeader, PageTabs } from '@/components/ui/page';
 import { RecorderView } from '@/components/recorder/RecorderView';
@@ -64,12 +64,7 @@ export function WorkflowPage({
   return (
     <PageFrame>
       <PageHeader
-        title={
-          <span className="inline-flex items-center gap-2">
-            <RepeatIcon size={18} />
-            {t('nav.workflow')}
-          </span>
-        }
+        title={t('nav.workflow')}
         subtitle={tab === 'definitions' ? t('automation.motto') : t('recorder.motto')}
         actions={
           <IconButton
