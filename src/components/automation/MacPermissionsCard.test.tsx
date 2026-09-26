@@ -32,8 +32,8 @@ const baseSnapshot: PermissionsSnapshot = {
   secureInputPid: null,
 };
 
-const getMock = vi.fn<[], Promise<PermissionsSnapshot>>();
-const openPaneMock = vi.fn<[], Promise<boolean>>();
+const getMock = vi.fn<() => Promise<PermissionsSnapshot>>();
+const openPaneMock = vi.fn<(pane: 'accessibility' | 'screen' | 'listen') => Promise<boolean>>();
 
 Object.defineProperty(window, 'electronAPI', {
   configurable: true,
