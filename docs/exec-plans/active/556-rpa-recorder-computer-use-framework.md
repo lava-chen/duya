@@ -225,7 +225,7 @@ stop 后连会话一起丢弃）、`recorder:convert`（转 YAML 预览，不落
 
 ## 6. 明确不做（out of scope）
 
-- macOS / Linux 捕获层（框架接口留 `platform` 字段）
+- macOS / Linux 捕获层（框架接口留 `platform` 字段）—— macOS 已于 2026-09-27 由 [plan 572](./572-macos-native-computer-use.md) 单独立项（Swift AX helper + CGEvent 注入 + 录制通道 mac 化）
 - 可视化流程编辑器（定义只读，编辑走对话 —— 552 原则）
 - 录屏视频流（Grok Bot 路线，非事件级）
 - 参数模板化（常量文本自动抽 params）→ MVP 只标注 `paramHint`
