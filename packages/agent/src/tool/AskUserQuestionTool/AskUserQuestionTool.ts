@@ -143,6 +143,18 @@ export function clearPendingAnswer(permissionId: string): void {
   pendingAnswers.delete(permissionId);
 }
 
+/**
+ * Read-and-delete answers for a permission request id (plan 565 Phase D):
+ * the workflow ask port resolves through the same permission pipeline as
+ * AskUserQuestion, so it consumes the stored answer the same way the tool's
+ * Phase-2 retry does. One-shot — a second call gets undefined.
+ */
+export function takePendingAnswer(permissionId: string): Record<string, string> | undefined {
+  const answers = pendingAnswers.get(permissionId);
+  if (answers) pendingAnswers.delete(permissionId);
+  return answers;
+}
+
 // ============================================================
 // Legacy JSON Schema (for SDK / wire-format consumers)
 // ============================================================

@@ -36,7 +36,6 @@ interface RoomMember {
   name: string;
   description?: string;
   avatarColor?: string;
-  avatarUrl?: string;
 }
 
 interface RoomMeta {
@@ -340,7 +339,6 @@ export function GroupRoomChatView({ sessionId }: GroupRoomChatViewProps) {
                           name={row.speaker.name}
                           agentId={row.speaker.id}
                           avatarColor={row.speaker.avatarColor}
-                          avatarUrl={row.speaker.avatarUrl}
                           size={18}
                         />
                       )}

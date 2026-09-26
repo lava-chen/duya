@@ -146,6 +146,47 @@ describe('MessageList', () => {
   });
 
   // =========================================================================
+  // System-injected user rows (regression: 2026-09-24 transcript split)
+  // =========================================================================
+
+  describe('system-injected user rows', () => {
+    it('does not let runtime notifications split the assistant round into segments', () => {
+      // Live-run shape: the runtime streams <task-notification> envelopes and
+      // wake prompts as role 'user' rows between think→tool cycles. They are
+      // model context — grouping must merge straight through them, and they
+      // must not render as their own rows.
+      const messages: Message[] = [
+        createMockMessage({ id: 'u1', role: 'user', content: 'Run the workflow', timestamp: 1000 }),
+        createMockMessage({ id: 'a1', role: 'assistant', content: '', msgType: 'tool_use', toolName: 'bash', tool_call_id: 't1', timestamp: 2000 }),
+        createMockMessage({ id: 'n1', role: 'user', content: '<task-notification><task_id>x</task_id></task-notification>', timestamp: 2500 }),
+        createMockMessage({ id: 'a2', role: 'assistant', content: '', msgType: 'tool_use', toolName: 'read', tool_call_id: 't2', timestamp: 3000 }),
+        createMockMessage({ id: 'n2', role: 'user', content: '[system] The user APPROVED the pending "bash" tool call (approval a1).', timestamp: 3500 }),
+        createMockMessage({ id: 'n3', role: 'user', content: '[agent] A message just arrived from another of your user\'s agents: 幕僚长', timestamp: 3700 }),
+        createMockMessage({ id: 'a3', role: 'assistant', content: 'All done.', timestamp: 4000 }),
+      ];
+      render(<MessageList messages={messages} sessionId="session-1" />);
+
+      const items = screen.getAllByTestId('message-item');
+      // One user row (the real prompt) + ONE merged assistant round — the
+      // notifications neither break the round nor appear as bubbles.
+      expect(items.map((item) => item.getAttribute('data-message-id'))).toEqual(['u1', 'a1']);
+    });
+
+    it('keeps real user messages as round boundaries', () => {
+      const messages: Message[] = [
+        createMockMessage({ id: 'u1', role: 'user', content: 'First', timestamp: 1000 }),
+        createMockMessage({ id: 'a1', role: 'assistant', content: 'Reply 1', timestamp: 2000 }),
+        createMockMessage({ id: 'u2', role: 'user', content: 'Second', timestamp: 3000 }),
+        createMockMessage({ id: 'a2', role: 'assistant', content: 'Reply 2', timestamp: 4000 }),
+      ];
+      render(<MessageList messages={messages} sessionId="session-1" />);
+
+      const items = screen.getAllByTestId('message-item');
+      expect(items).toHaveLength(4);
+    });
+  });
+
+  // =========================================================================
   // Streaming
   // =========================================================================
 

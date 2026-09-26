@@ -33,7 +33,6 @@ import type { FileAttachment } from '@/types/message';
 export interface MentionableMember {
   id: string;
   name: string;
-  avatarUrl?: string;
   avatarColor?: string;
 }
 
@@ -244,7 +243,6 @@ export function Composer({
                   name={member.name}
                   agentId={member.id}
                   avatarColor={member.avatarColor}
-                  avatarUrl={member.avatarUrl}
                   size={20}
                 />
                 <span className="text-[13px] text-[var(--text)]">{member.name}</span>

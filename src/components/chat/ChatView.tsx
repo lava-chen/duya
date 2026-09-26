@@ -951,9 +951,10 @@ export function ChatView({
           sessionId,
           content,
           // Default in-run handling comes from the busyMessageMode setting
-          // (agent.busy_message_mode): 'queued' rows are absorbed right
-          // before the agent finalises (before_final_answer); 'followup'
-          // rows inject immediately at the next before_model_turn
+          // (agent.busy_message_mode): 'queued' rows survive the run's exit
+          // boundary (plan 570 — no longer absorbed at before_final_answer)
+          // and are promoted to a fresh user turn once the run ends;
+          // 'followup' rows inject immediately at the next before_model_turn
           // checkpoint. The mailbox bubble's "Guide" button can still flip
           // an individual queued row to followup mid-run.
           kind: busyMessageMode,

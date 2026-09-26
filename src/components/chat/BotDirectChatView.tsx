@@ -869,7 +869,7 @@ export function BotDirectChatView({
           group={row.dmGroup}
           resolvePeer={(peerId) => {
             const c = contacts.find((x) => x.agentId === peerId);
-            return { name: c?.name, avatarUrl: c?.avatarUrl, avatarColor: c?.avatarColor };
+            return { name: c?.name, avatarColor: c?.avatarColor };
           }}
           onOpenPeer={(peerId, peerName) => onOpenDmPair?.(peerId, peerName)}
         />
@@ -1122,9 +1122,7 @@ export function BotDirectChatView({
             <BotCharacterAvatar
               name={botName}
               agentId={agentId ?? sessionId}
-              avatarUrl={contact?.avatarUrl}
               avatarColor={contact?.avatarColor}
-              avatarEmoji={contact?.avatarEmoji}
               size={28}
             />
           </span>
@@ -1148,9 +1146,7 @@ export function BotDirectChatView({
             <BotCharacterAvatar
               name={botName}
               agentId={agentId ?? sessionId}
-              avatarUrl={contact?.avatarUrl}
               avatarColor={contact?.avatarColor}
-              avatarEmoji={contact?.avatarEmoji}
               size={72}
             />
             <div className="bot-chat-empty__name">{botName}</div>

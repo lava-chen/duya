@@ -22,7 +22,6 @@ interface AgentDmPairViewProps {
   selfAgentId: string;
   sessionId: string;
   selfName: string;
-  selfAvatarUrl?: string;
   selfAvatarColor?: string;
   peerId: string;
   peerName: string;
@@ -51,7 +50,6 @@ export function AgentDmPairView({
   selfAgentId,
   sessionId,
   selfName,
-  selfAvatarUrl,
   selfAvatarColor,
   peerId,
   peerName,
@@ -76,7 +74,6 @@ export function AgentDmPairView({
     resolveContactFor(contacts, agentId, {
       selfAgentId,
       selfName,
-      selfAvatarUrl,
       selfAvatarColor,
       fallbackPeerName: peerName,
     });
@@ -113,14 +110,12 @@ export function AgentDmPairView({
           <BotCharacterAvatar
             name={self.name}
             agentId={self.agentId}
-            avatarUrl={self.avatarUrl}
             avatarColor={self.avatarColor}
             size={26}
           />
           <BotCharacterAvatar
             name={peer.name}
             agentId={peer.agentId}
-            avatarUrl={peer.avatarUrl}
             avatarColor={peer.avatarColor}
             size={26}
           />
@@ -151,7 +146,6 @@ export function AgentDmPairView({
                   <BotCharacterAvatar
                     name={sender.name}
                     agentId={sender.agentId}
-                    avatarUrl={sender.avatarUrl}
                     avatarColor={sender.avatarColor}
                     size={20}
                   />

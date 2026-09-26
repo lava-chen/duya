@@ -254,6 +254,8 @@ import {
   IconBrain as TablerIconBrain,
   IconRobot as TablerIconRobot,
   IconLayoutSidebarRight as TablerIconLayoutSidebarRight,
+  IconLayoutSidebarLeftCollapse as TablerIconLayoutSidebarLeftCollapse,
+  IconLayoutSidebarLeftExpand as TablerIconLayoutSidebarLeftExpand,
   IconAlertCircle as TablerIconAlertCircle,
   IconColumns2 as TablerIconColumns2,
   IconFileDiff as TablerIconFileDiff,
@@ -655,6 +657,12 @@ export const SpinnerIcon = wrapLucide(Loader);
 export const DocumentTextIcon = wrapLucide(FileText);
 export const ClockIcon = wrapLucide(History);
 export const SidebarRightIcon = wrapTabler(TablerIconLayoutSidebarRight);
+// Mirror ZCode's `WorkspaceSidebarCollapsedRail` semantics: the toggle
+// points one way when the panel is open (click to collapse) and the
+// other when it is closed (click to expand). Used by PanelZone's
+// `panel-edge-toggle`.
+export const SidebarLeftCollapseIcon = wrapTabler(TablerIconLayoutSidebarLeftCollapse);
+export const SidebarLeftExpandIcon = wrapTabler(TablerIconLayoutSidebarLeftExpand);
 
 // File type fallbacks — no good lucide equivalent
 export const FilePyIcon = wrapTabler(TablerIconFileCode); // no Python glyph

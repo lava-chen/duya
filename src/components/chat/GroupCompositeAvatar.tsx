@@ -20,7 +20,6 @@ export interface GroupAvatarMember {
   id: string;
   name: string;
   avatarColor?: string;
-  avatarUrl?: string;
 }
 
 interface GroupAvatarSlot {
@@ -93,7 +92,6 @@ export function GroupCompositeAvatar({
               name={member.name}
               agentId={member.id}
               avatarColor={member.avatarColor}
-              avatarUrl={member.avatarUrl}
               size={slot.size}
             />
           </span>

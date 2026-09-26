@@ -91,6 +91,33 @@ function hasRenderableAssistantContent(message: Message): boolean {
   return estimateContentLength(message.content) > 0;
 }
 
+/**
+ * System-injected user rows — background task notifications, wake-run
+ * prompts, approval decision echoes, routine dues, agent DM wake cues,
+ * spawned-session completion notices (`[session:completed]` / `[session:failed]`,
+ * written by notifySpawnCompletion) — are model context, not user chat.
+ * The runtime pushes them onto the streamed message array as role 'user'
+ * (they are never durable; the persistence filter drops them), and
+ * MessageItem hides the notification shapes. Grouping must treat them the
+ * same way: they neither break the current assistant round nor render as
+ * their own row. Letting them through produced the "one collapsed 已处理
+ * segment per think→tool cycle" transcript bug (2026-09-24): every injected
+ * notification cut the single continuous round into a separate group with
+ * its own timestamp footer.
+ */
+function isSystemInjectedUserMessage(message: Message): boolean {
+  if (message.isTaskNotification) return true;
+  if (message.source === 'system') return true;
+  const text = textFromContent(message.content).trimStart();
+  return (
+    text.startsWith('<task-notification>')
+    || text.startsWith('[system] ')
+    || text.startsWith('[agent] ')
+    || text.startsWith('[routine] ')
+    || text.startsWith('[session:')
+  );
+}
+
 function toolResultsEqual(
   a: import('@/types').ToolResultInfo[],
   b: import('@/types').ToolResultInfo[],
@@ -165,6 +192,12 @@ function buildGroupedMessages(orderedMessages: Message[]): GroupedMessage[] {
     if (msg.msgType === 'tool_result') continue;
     if (msg.role === 'tool') continue;
 
+    // Skip system-injected user rows (task notifications, wake prompts,
+    // approval echoes): model context that must neither break the current
+    // assistant round nor render as a user bubble. See
+    // isSystemInjectedUserMessage for the full rationale.
+    if (msg.role === 'user' && isSystemInjectedUserMessage(msg)) continue;
+
     if (msg.role === 'user') {
       // End current assistant group if any
       if (currentAssistantGroup) {
@@ -208,22 +241,31 @@ function buildGroupedMessages(orderedMessages: Message[]): GroupedMessage[] {
           matchedToolResultIds.add(msg.tool_call_id);
         }
       } else {
-        const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
-        try {
-          const blocks = JSON.parse(content);
-          if (Array.isArray(blocks)) {
-            for (const block of blocks) {
-              if (block.type === 'tool_use' && block.id) {
-                const toolResult = toolResultMap.get(block.id);
+        // Array content is the common case — iterate blocks directly
+        // instead of the previous JSON.stringify → JSON.parse round trip,
+        // which re-serialized every assistant message on each re-group.
+        const blocks = Array.isArray(msg.content)
+          ? msg.content
+          : (() => {
+              try {
+                return JSON.parse(msg.content as string) as unknown;
+              } catch {
+                return null;
+              }
+            })();
+        if (Array.isArray(blocks)) {
+          for (const block of blocks) {
+            if (block && typeof block === 'object' && (block as Record<string, unknown>).type === 'tool_use') {
+              const blockId = (block as Record<string, unknown>).id;
+              if (typeof blockId === 'string') {
+                const toolResult = toolResultMap.get(blockId);
                 if (toolResult) {
                   currentAssistantGroup.toolResults.push(toolResult);
-                  matchedToolResultIds.add(block.id);
+                  matchedToolResultIds.add(blockId);
                 }
               }
             }
           }
-        } catch {
-          // Content is not JSON, skip
         }
       }
     }
@@ -271,18 +313,18 @@ function buildGroupedMessages(orderedMessages: Message[]): GroupedMessage[] {
 }
 
 /**
- * True when `next` equals `prev` plus one-or-more trailing messages, where
- * every element of `prev` is reference-identical in `next`. Message objects
- * are only ever replaced in-place by the store on an edit (rewind, edit-and-
- * resend, session switch), so reference equality is a safe append test.
+ * Length of the reference-identical prefix shared by the cached sorted list
+ * and the freshly sorted one. Message objects are only ever replaced
+ * in-place by the store on an edit (rewind, edit-and-resend, session
+ * switch); streaming updates swap the tail message object for a new
+ * reference while keeping everything before it identical, so a long common
+ * prefix means only the tail round needs re-grouping.
  */
-function isStrictAppend(prev: Message[], next: Message[]): boolean {
-  if (prev.length === 0) return false;
-  if (next.length <= prev.length) return false;
-  for (let index = 0; index < prev.length; index += 1) {
-    if (prev[index] !== next[index]) return false;
-  }
-  return true;
+function commonPrefixLength(prev: Message[], next: Message[]): number {
+  const n = Math.min(prev.length, next.length);
+  let index = 0;
+  while (index < n && prev[index] === next[index]) index += 1;
+  return index;
 }
 
 /** Index of the last user message in an already-sorted list, or -1. */
@@ -581,7 +623,9 @@ function findAssistantGroupForUser(groupedMessages: GroupedMessage[], startIndex
   return null;
 }
 
-function buildNavigatorItems(groupedMessages: GroupedMessage[]): MessageNavigatorItem[] {
+type NavigatorCache = Map<string, { deps: Message[]; item: MessageNavigatorItem }>;
+
+function buildNavigatorItems(groupedMessages: GroupedMessage[], cache?: NavigatorCache): MessageNavigatorItem[] {
   const items: MessageNavigatorItem[] = [];
 
   for (let index = 0; index < groupedMessages.length; index += 1) {
@@ -592,6 +636,21 @@ function buildNavigatorItems(groupedMessages: GroupedMessage[]): MessageNavigato
     const assistantMessages = nextAssistantGroup
       ? [nextAssistantGroup.message, ...(nextAssistantGroup.mergedMessages || [])]
       : [];
+
+    // Frozen rounds keep message references stable across tail re-groups,
+    // so a reference-identical deps check lets every historical turn reuse
+    // its preview instead of re-running the regex/recursive file walk over
+    // the whole transcript on each streaming update.
+    const cachedEntry = cache?.get(group.message.id);
+    if (
+      cachedEntry
+      && cachedEntry.deps.length === assistantMessages.length + 1
+      && cachedEntry.deps[0] === group.message
+      && assistantMessages.every((msg, i) => cachedEntry.deps[i + 1] === msg)
+    ) {
+      items.push(cachedEntry.item);
+      continue;
+    }
     const files = new Set<string>();
     const toolNames: string[] = [];
 
@@ -614,14 +673,16 @@ function buildNavigatorItems(groupedMessages: GroupedMessage[]): MessageNavigato
 
     const allFiles = Array.from(files).filter(Boolean);
 
-    items.push({
+    const item: MessageNavigatorItem = {
       id: group.message.id,
       targetMessageId: group.message.id,
       userPreview: compactPreview(textFromContent(userSource), 'User message'),
       assistantPreview: compactPreview(assistantText, assistantFallback),
       files: allFiles.slice(0, 3),
       hiddenFileCount: Math.max(0, allFiles.length - 3),
-    });
+    };
+    cache?.set(group.message.id, { deps: [group.message, ...assistantMessages], item });
+    items.push(item);
   }
 
   return items;
@@ -847,30 +908,45 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   const groupedMessages = useMemo<GroupedMessage[]>(() => {
     const cached = groupCacheRef.current;
 
-    // Append-only fast path: when only new messages were added to the tail,
-    // the last user message is the only grouping boundary, so every row
-    // before it is frozen (an appended assistant message merges into the round
-    // that follows the last user message — never earlier ones). Reuse those
-    // rows and re-group only the tail, keeping the common streaming append
-    // O(new messages) instead of re-serializing every tool result across the
-    // whole transcript.
-    if (cached && isStrictAppend(cached.sorted, sortedMessages)) {
+    // Tail-only fast path: when every message before the last user message
+    // is reference-identical to the cached run, those rows are frozen (an
+    // appended or content-updated assistant message only ever merges into
+    // the round that follows the last user message — never earlier ones).
+    // Reuse those rows and re-group only the tail, keeping the common
+    // streaming update O(tail round) instead of re-serializing every tool
+    // result across the whole transcript. Unlike a strict append test, the
+    // common-prefix check also covers in-place tail content updates, which
+    // keep the array length constant and previously forced a full re-group
+    // on every streaming tick (the "laggy transcript" bug, 2026-09-25).
+    if (cached) {
       const lastUserIndex = lastUserIndexSorted(sortedMessages);
-      if (lastUserIndex >= 0) {
+      if (lastUserIndex > 0 && commonPrefixLength(cached.sorted, sortedMessages) >= lastUserIndex) {
+        const indexOfMsg = new Map<Message, number>();
+        sortedMessages.forEach((msg, index) => indexOfMsg.set(msg, index));
         let keepCount = 0;
+        let reusable = true;
         for (const group of cached.groups) {
-          if (sortedMessages.indexOf(group.message) >= lastUserIndex) break;
+          const index = indexOfMsg.get(group.message);
+          if (index === undefined) {
+            // Synthetic orphan rows are regenerated per re-group; bail out
+            // rather than risk dropping or duplicating them.
+            reusable = false;
+            break;
+          }
+          if (index >= lastUserIndex) break;
           keepCount += 1;
         }
-        const tailGroups = buildGroupedMessages(sortedMessages.slice(lastUserIndex));
-        const groups = [...cached.groups.slice(0, keepCount), ...tailGroups];
-        groupCacheRef.current = { sorted: sortedMessages, groups };
-        return groups;
+        if (reusable) {
+          const tailGroups = buildGroupedMessages(sortedMessages.slice(lastUserIndex));
+          const groups = [...cached.groups.slice(0, keepCount), ...tailGroups];
+          groupCacheRef.current = { sorted: sortedMessages, groups };
+          return groups;
+        }
       }
     }
 
-    // Any non-trivial change (rewind, edit-and-resend, session switch, or a
-    // non-tail insertion such as a queued turn) disappears the cache and
+    // Any non-trivial change (rewind, edit-and-resend, session switch, or an
+    // insertion before the last user message such as a queued turn)
     // re-groups everything from scratch.
     const groups = buildGroupedMessages(sortedMessages);
     groupCacheRef.current = { sorted: sortedMessages, groups };
@@ -887,7 +963,11 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     return null;
   }, [groupedMessages]);
 
-  const navigatorItems = useMemo(() => buildNavigatorItems(groupedMessages), [groupedMessages]);
+  const navigatorCacheRef = useRef<NavigatorCache>(new Map());
+  const navigatorItems = useMemo(
+    () => buildNavigatorItems(groupedMessages, navigatorCacheRef.current),
+    [groupedMessages],
+  );
 
   const shouldRenderStreamingMessage = isStreaming;
 
@@ -948,6 +1028,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
       hasScrolledOnMountRef.current = false;
       autoScrollRef.current = true;
       rowHeightsRef.current.clear();
+      navigatorCacheRef.current.clear();
       lastActiveNavUpdateRef.current = 0;
       lastSeenUserCountRef.current = 0;
       setUnreadTurns(0);

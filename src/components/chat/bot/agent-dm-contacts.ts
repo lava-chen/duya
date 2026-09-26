@@ -10,9 +10,7 @@ import type { BotContact } from "@/components/layout/sidebar/bot-contacts";
 export interface ContactSummaryLike {
   agentId: string;
   name: string;
-  avatarUrl?: string;
   avatarColor?: string;
-  avatarEmoji?: string;
 }
 
 /**
@@ -26,7 +24,6 @@ export function resolveContactFor(
   fallbacks: {
     selfAgentId: string;
     selfName: string;
-    selfAvatarUrl?: string;
     selfAvatarColor?: string;
     fallbackPeerName: string;
   },
@@ -36,7 +33,6 @@ export function resolveContactFor(
     return {
       agentId,
       name: contact.name,
-      avatarUrl: contact.avatarUrl,
       avatarColor: contact.avatarColor,
     };
   }
@@ -44,7 +40,6 @@ export function resolveContactFor(
     return {
       agentId,
       name: fallbacks.selfName,
-      avatarUrl: fallbacks.selfAvatarUrl,
       avatarColor: fallbacks.selfAvatarColor,
     };
   }

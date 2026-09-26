@@ -11,7 +11,6 @@ interface AgentDmGroupChipProps {
   /** Resolve display identity for a peer (name/avatar from the roster). */
   resolvePeer: (peerId: string) => {
     name?: string;
-    avatarUrl?: string;
     avatarColor?: string;
   };
   /** Open the read-only 1:1 pair overlay for one peer of the burst. */
@@ -109,7 +108,6 @@ export function AgentDmGroupChip({ group, resolvePeer, onOpenPeer }: AgentDmGrou
                     <BotCharacterAvatar
                       name={identity.name || peer.peerName}
                       agentId={peer.peerId}
-                      avatarUrl={identity.avatarUrl}
                       avatarColor={identity.avatarColor}
                       size={16}
                     />
@@ -121,7 +119,6 @@ export function AgentDmGroupChip({ group, resolvePeer, onOpenPeer }: AgentDmGrou
             <BotCharacterAvatar
               name={primaryName}
               agentId={primary.peerId}
-              avatarUrl={primaryIdentity.avatarUrl}
               avatarColor={primaryIdentity.avatarColor}
               size={16}
             />
@@ -160,7 +157,6 @@ export function AgentDmGroupChip({ group, resolvePeer, onOpenPeer }: AgentDmGrou
                 <BotCharacterAvatar
                   name={name}
                   agentId={peer.peerId}
-                  avatarUrl={identity.avatarUrl}
                   avatarColor={identity.avatarColor}
                   size={18}
                 />

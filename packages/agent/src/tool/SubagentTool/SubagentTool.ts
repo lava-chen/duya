@@ -279,6 +279,10 @@ export class SubagentTool extends BaseTool {
       };
     }
 
+    // Plan 568: hoisted so the catch can attach it to the error result —
+    // a failed agent's sub-session id is the watch-pane link.
+    let subAgentSessionId: string | undefined;
+
     try {
       const agentDefinitions = context.options.agentDefinitions?.allAgents ?? [];
       const requestedAgentType = agentInput.subagent_type || 'general-purpose';
@@ -371,7 +375,7 @@ export class SubagentTool extends BaseTool {
       // finishes. Undefined outside a git repo — no observation then.
       const fileChangeBefore = await captureGitFileChanges(context.options.workingDirectory);
 
-      const subAgentSessionId = crypto.randomUUID();
+      subAgentSessionId = crypto.randomUUID();
       try {
         await sessionDb.create({
           id: subAgentSessionId,
@@ -542,10 +546,15 @@ export class SubagentTool extends BaseTool {
             error: snapshot?.error,
           }, 'SubAgent')
           try {
-            await sessionDb.update(subAgentSessionId, {
-              status: snapshot?.status === 'completed' ? 'completed' : 'error',
-              updated_at: Date.now(),
-            })
+            // Plan 568: subAgentSessionId is `string | undefined` since the
+            // hoist — it is always assigned by here, but the closure loses
+            // the narrowing, so guard before the DB write.
+            if (subAgentSessionId !== undefined) {
+              await sessionDb.update(subAgentSessionId, {
+                status: snapshot?.status === 'completed' ? 'completed' : 'error',
+                updated_at: Date.now(),
+              });
+            }
           } catch (err) {
             logger.warn('[SubAgent] failed to update session status', {
               taskId,
@@ -674,7 +683,13 @@ export class SubagentTool extends BaseTool {
       return {
         id: crypto.randomUUID(),
         name: this.name,
-        result: JSON.stringify({ error: `Agent execution failed: ${errorMessage}` }),
+        // Plan 568: the sub-session id rides along on failures too — the
+        // workflow runtime journals it so the agent chip still opens the
+        // watch pane for a failed run.
+        result: JSON.stringify({
+          error: `Agent execution failed: ${errorMessage}`,
+          ...(subAgentSessionId !== undefined ? { sessionId: subAgentSessionId } : {}),
+        }),
         error: true,
       };
     }

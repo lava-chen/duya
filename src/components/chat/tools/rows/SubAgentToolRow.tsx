@@ -10,6 +10,7 @@ import { ActionRowChrome } from '../chrome/ActionRowChrome';
 import { getRenderer } from '../registry';
 import { parseSubAgentToolResult } from '@/lib/subagent-result';
 import { useConversationStore } from '@/stores/conversation-store';
+import { dispatchOpenSessionPanel } from '@/lib/open-session-panel-event';
 import { useStreamingAgentProgress, type AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
 import type { ToolAction } from '../types';
 
@@ -332,7 +333,14 @@ export function SubAgentToolRow({ tool, agentProgressEvents }: SubAgentToolRowPr
 
   const handleClick = () => {
     if (!targetSessionId) return;
-    useConversationStore.getState().setActiveThread(targetSessionId);
+    // ZCode-parity: a subagent row opens the sub-agent's session as a
+    // read-only view in the sidebar panel instead of yanking the main
+    // column away from the parent transcript. The panel's header offers
+    // "open in main view" for the old jump-into behavior.
+    dispatchOpenSessionPanel(
+      targetSessionId,
+      `${prefix}${description ? ` · ${description}` : ''}`,
+    );
   };
 
   const status = isError ? 'error' : isRunning ? 'running' : 'success';
