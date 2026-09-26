@@ -71,6 +71,7 @@ import { registerBrowserCookieHandlers } from './ipc/browser-cookie-handlers';
 import { registerProjectDatabaseHandlers } from './ipc/project-database-handlers';
 import { registerProjectEntityHandlers } from './ipc/project-entity-handlers';
 import { registerGitHandlers } from './ipc/git-handlers';
+import { registerBashTaskHandlers } from './ipc/bash-task-handlers';
 import { registerWorkflowHandlers } from './ipc/workflow-handlers';
 // Plan 556 Phase 5: event recorder IPC + recording badge.
 import { registerRecorderHandlers } from './ipc/recorder-handlers';
@@ -1157,6 +1158,8 @@ registerMemoryWakeupHandlers();
 registerVoiceHandlers();
 registerHooksHandlers();
 registerMcpReloadIpcHandler();
+// Plan 566: background bash task output reads for the side panel viewer.
+registerBashTaskHandlers();
 
 // =============================================================================
 // Graceful Shutdown

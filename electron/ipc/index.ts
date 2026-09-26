@@ -34,6 +34,7 @@ import { registerBotChannelHandlers } from './bot-channel-handlers';
 import { registerGroupHandlers } from './group-handlers';
 import { registerBotHandlers } from './bot-handlers';
 import { registerSessionCardHandlers } from './session-card-handlers';
+import { registerBashTaskHandlers } from './bash-task-handlers';
 import {
   registerSidebarSectionsHandlers,
 } from './db-handlers';
@@ -69,5 +70,6 @@ export {
   registerGroupHandlers,
   registerBotHandlers,
   registerSessionCardHandlers,
+  registerBashTaskHandlers,
   registerExtensionInstallerHandlers,
 };
