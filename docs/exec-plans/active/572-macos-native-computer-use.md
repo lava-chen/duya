@@ -101,8 +101,10 @@ Windows 侧 computer-use 栈已落地：capture（desktopCapturer + SOM）、exe
 ### Phase 5 — 窗口级 capture 增强（ScreenCaptureKit）
 
 - [x] helper `screenshotWindow(windowId)`（SDK≥14 才编入；低版本 helper 回 `unsupported`）：`SCContentFilter(desktopIndependentWindow:)` + `SCScreenshotManager.captureImage`（macOS 14+，低版本显式 unsupported）；`AXUIElementGetWindow` 打通 enumerate 窗口 → CGWindowID → 截图定向
-- [ ] `CaptureOptions` 增 `windowId` 路径 + 排除自身 overlay —— **deferred**（等 SDK 14 真机联调时随
-      helper op 一起接线，见 §7）
+- [x] `CaptureOptions` 增 `windowId` 路径（2026-09-27 接线）：backend 增 injectable
+      `windowCaptureProvider`，生产 darwin 侧经 helper `screenshotWindow`；provider 缺席/null/抛错一律
+      降级全屏路径（5 测锁定契约）。「排除自身 overlay」仅对全屏 SCK filter 有意义，单窗捕获
+      （desktopIndependentWindow）天然不含 overlay，无需排除
 - [x] Gate（单测部分）：低版本降级路径由 helper 冒烟覆盖（`unsupported`）
 - [ ] Gate（真机部分）：遮挡窗口捕获——**需 macOS 14+ 人工验证**
 
@@ -113,7 +115,14 @@ Windows 侧 computer-use 栈已落地：capture（desktopCapturer + SOM）、exe
       （hook-worker 打包接线沿用 556 既有 extraResources）
 - [x] Info.plist：`NSAppleEventsUsageDescription`（缺失 10.14+ 直接 crash）+ AppleScript 通道文案
 - [x] `tccutil reset` 开发脚本（`scripts/reset-mac-tcc.sh`）（Accessibility/ScreenCapture/ListenEvent 一键重置，dev/packaged 双模式验收工具）
-- [ ] Gate：`npm run electron:pack:mac` 产物五项检查——**待人工**（ax-helper 存在并可执行、uiohook prebuild 装载、权限卡片在 packaged 产物上全流程、录制 + computer-use 各一回合、app.log 无输入内容泄漏）
+- [x] Gate（静态部分 ①②，2026-09-27 实测）：agent-face 恢复后 `build:web` 通过 →
+      `electron-builder --mac --dir`（CSC_IDENTITY_AUTO_DISCOVERY=false，未签名）产物
+      `release/mac/DUYA.app`：① `Contents/Resources/ax-helper/ax-helper` 存在、可执行、universal
+      （x86_64+arm64，与 dev 产物 sha1 一致，bundle 内 ping 冒烟过）；② `computer-use/node_modules/
+      uiohook-napi/prebuilds/darwin-{x64,arm64}/uiohook-napi.node` 齐全；相邻资源（agent-bundle 入口、
+      recorder/uia-probe.ps1）均在位
+- [ ] Gate（运行部分 ③④⑤）：packaged 产物上权限卡片全流程、录制+computer-use 各一回合、app.log 无泄漏
+      ——**待 macOS 13+ 机器**（Electron 44 在 12.7.6 上 dyld abort，见 §7.15）（ax-helper 存在并可执行、uiohook prebuild 装载、权限卡片在 packaged 产物上全流程、录制 + computer-use 各一回合、app.log 无输入内容泄漏）
 
 ### Phase 7 — 端到端验收与能力矩阵对照
 
@@ -305,6 +314,18 @@ Windows 侧 computer-use 栈已落地：capture（desktopCapturer + SOM）、exe
     `src/components/agent-face/*`，或三处 import 降级为本地实现。
 18. 连带结论：Phase 6 五项检查 = 双重阻塞（本机 Electron 44↔macOS 12 环境死锁 + 上游缺模块）。
     已把 agent-face 缺失记入 tsc 基线说明；pack 侧不再重试，等两项中任一解除。
+
+### 追加落地（2026-09-27 第五批）：上游缺件修复 + 打包静态门通过
+
+19. **agent-face 恢复**：按三个存活调用点（BotCharacterAvatar / WorkflowGraph / stage-columns）反推
+    契约实现 `src/components/agent-face/AgentFace.tsx`（包装既有 bloub orb 引擎：status→state 映射、
+    hex→palette 最近色、superellipse tile、paper 同色防瞳孔色差），6 组件测试锁定契约、注明上游原件
+    浮出后可 drop-in 替换。**`build:web` 自 20beb534 起首次恢复通过**（需 6GB heap，9m11s）。
+20. **Phase 5 deferred 收口**：`CaptureOptions.windowId` 接线落地（见 Phase 5 勾选）。
+21. **Phase 6 静态门 ①② 通过**（证据见 Phase 6 勾选）；③④⑤ 仍需 macOS 13+ 运行机器。
+22. **AGENTS.md 顺序勘正两处过期记载**：Electron 28 → 44.2.0（macOS 13+）；预发布检查清单的
+    `assets/dynamic/language.hbs` 已被 551/559 prompt 资产清理移除（bundle 现存
+    bot/dynamic/modules 三目录，源码零引用），非缺陷。
 
 ### 决策待办：Electron 44 vs macOS 12 开发机（用户裁定项，2026-09-27 提交事实）
 
