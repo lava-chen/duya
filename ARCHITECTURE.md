@@ -290,6 +290,31 @@ Separate SQLite file (`memory-state.db`, next to `duya-main.db` in the same boot
 - **规划器**：`planner.ts`（LLM 生成 YAML + 一次带错重试;规则 regex + Jev risk noul 预筛;高风险 → awaiting_confirm 必停）、`verify.ts`（确定性标注 → decision over 机器摘要 → verification agent 三档 fresh-eyes;`verified/unconfirmed` 标注落 journal）。
 - **执行接线（ZCode 同构,worker 是唯一 runner）**：renderer `WorkflowPanel` 定义库 run 按钮 → `WorkflowLaunchDialog` 实参窗（项目目录 + frontmatter args 表单,required/number/JSON 校验）→ `workflow.run` IPC → router `POST /:session/workflow/:name/trigger`（锚点 `sessionId ?? mostRecentWorkerSessionId()`,sendCommand false → 409 不自动 spawn）→ worker 命令 `{type:'workflow:run'}` → `packages/agent/src/process/workflow-runner.ts` `launchSavedWorkflow`：SavedWorkflowStore.resolve → args 默认值+required 校验（建行前 fail）→ `workflowRunDb.create`（id=runId,SSE 卡片==DB 行）+ snapshot 播种 → journal listener 进度帧（`chat:workflow_run` start/progress/done/error 走 worker→router→SSE）→ `runDwfScript` → complete。DwfHostPorts 生产绑定：runTool=fresh builtin registry、runAgent=SubagentTool executor（子会话+进度,token 省略）、requestApproval=worker `chat:permission`（5 分钟 deny 上限）、runGui=loud-failure stub。v1 边界：resume 未接、runTool 无 MCP。`workflow:runBackground` 主进程模拟已删除。
 
+### Computer-Use Native Backends (Plans 454/519/552/556/562/572)
+
+五腿框架（capture / plan / record / execute / verify）在 `packages/computer-use/` 平台无关地组装，
+两个平台后端按 `backend/factory.ts` 路由（`DUYA_CUA_DRIVER` 环境变量可强制 MCP `cua-driver` 兜底）：
+
+- **Windows（UIA 栈）**：`ElectronDesktopBackend`（desktopCapturer + nut.js + sharp，文件名 `win32.ts`
+  实为跨平台）+ `resources/recorder/uia-probe.ps1` 常驻 PowerShell 探测（probe/readUrl/enumerate/fg，
+  JSON 行协议）+ `win32-injection.ts` 后台点击梯 + recorder（uiohook hook-worker / converter /
+  element-matcher L1–L3）。三消费者共用 `createComputerUseDaemon` 管线（spawn/心跳/重启/recycle）。
+- **macOS（AX 栈，plan 572）**：Swift CLI helper `resources/ax-helper/`（`scripts/build-ax-helper.sh`
+  编 universal binary）经同一条 daemon 管线常驻——`enumerate/probe`（快照句柄制元素 + 真实坐标，
+  `AXUIElementSetMessagingTimeout(0.5s)` 防阻塞）→ element-detector `axElements`(`axSource:'ax-tree'`)；
+  注入梯 **AX action → CGEventPostToPid（键盘/滚动，不抢焦点）→ 前台 nut.js**（Chromium 过滤 pid
+  鼠标事件，无 pid 点击梯）；AXManualAccessibility 配方唤醒 Chromium/Electron 树；AppleScript 词典
+  读浏览器 URL；`AXSecureField` 脱敏；TCC 四权限面（`computer-use:permissions:*` IPC + Automation 页
+  `MacPermissionsCard`）+ recorder 权限门/Secure Input 显性化；`capture({windowId})` 经
+  ScreenCaptureKit 单窗捕获（SDK 14+ 门控，低版本回 unsupported 降级全屏）。客户端
+  `electron/services/recorder/ax-helper.ts` 对齐 uia-probe 客户端语义（竞速超时/回收/降级重试/pid 缓存）。
+- **坐标铁律**：AX/CGEvent/CGWindow 全 points（左上原点），截图像素 ↔ points 换算集中在
+  `capturePxPerPoint`（检测侧）与 `computer-use-coords.ts`（点击侧 darwin 分支）——Retina 半坐标是
+  第一大正确性风险。技术底稿 `docs/references/macos-accessibility-research.md`（本地不入库）。
+- **机器门执行器**：`node scripts/mac-gate.mjs` —— TCC 检查 + Finder/Safari/Chrome 覆盖矩阵 +
+  注入两梯读回验证一键跑（plan 572 §7）；`scripts/reset-mac-tcc.sh` 重置授权。剩余真机 Gate
+  依赖 macOS 13+（Electron 44 硬性要求）与 TCC 授权。
+
 ## @duya/agent - Agent Core
 
 ### Entry Points
