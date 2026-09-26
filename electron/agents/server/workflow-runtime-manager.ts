@@ -83,6 +83,18 @@ export interface WorkflowRuntimeTriggerInput {
     model: string;
     authStyle?: 'api_key' | 'auth_token';
   };
+  /**
+   * Plan 565 Phase A: seed the child's replay cache from this prior run's
+   * journal. The child loads it itself over the forwarded `db:request`
+   * channel (read-only — D3's "main is the only writer" is untouched).
+   */
+  resumeFromRunId?: string;
+  /**
+   * Plan 568: run-level agent model override (launch dialog). When present it
+   * overrides `llm.model` for this run AND is recorded on the run row
+   * (`agent_model`) so 重跑 / 续跑 reuse the same model.
+   */
+  model?: string;
 }
 
 export type WorkflowRuntimeTriggerResult =
@@ -258,6 +270,9 @@ export class WorkflowRuntimeManager {
     const runId = randomUUID();
     const projectDir = input.projectDir?.trim() ? input.projectDir.trim() : '';
     const startedAt = Date.now();
+    // Plan 568: the launch dialog's model override wins over the router's
+    // provider-resolved default for every agent node in this run.
+    const llm = input.model && input.model.trim() !== '' ? { ...input.llm, model: input.model.trim() } : input.llm;
 
     try {
       // D3: main owns the row from the very first moment. The child only ever
@@ -271,6 +286,7 @@ export class WorkflowRuntimeManager {
         scope: input.scope ?? null,
         projectDir: projectDir || null,
         params: input.params ?? {},
+        ...(input.model && input.model.trim() !== '' ? { agentModel: input.model.trim() } : {}),
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -298,9 +314,12 @@ export class WorkflowRuntimeManager {
           params: input.params,
           projectDir: projectDir || undefined,
           scope: input.scope ?? null,
-          llm: input.llm,
+          llm,
           workingDirectory: projectDir || process.cwd(),
           artifactsRoot: this.artifactsRoot,
+          ...(input.resumeFromRunId !== undefined
+            ? { resumeFromRunId: input.resumeFromRunId }
+            : {}),
         }) + '\n',
       );
     } catch (err) {
@@ -370,6 +389,7 @@ export class WorkflowRuntimeManager {
     runId: string,
     requestId: string,
     decision: 'allow' | 'deny',
+    answers?: Record<string, string>,
   ): { ok: boolean; error?: string } {
     const entry = this.runs.get(runId);
     if (!entry) {
@@ -380,7 +400,13 @@ export class WorkflowRuntimeManager {
     }
     try {
       entry.child.stdin?.write(
-        JSON.stringify({ type: 'workflow:permission-resolve', requestId, decision }) + '\n',
+        JSON.stringify({
+          type: 'workflow:permission-resolve',
+          requestId,
+          decision,
+          // AskUserQuestion-shaped answers (plan 565 Phase D wf.ask).
+          ...(answers && Object.keys(answers).length > 0 ? { answers } : {}),
+        }) + '\n',
       );
     } catch (err) {
       return {

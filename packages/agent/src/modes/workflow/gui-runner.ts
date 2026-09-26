@@ -108,6 +108,13 @@ export interface GuiRunPorts {
   backend: GuiBackendPort;
   artifacts: import('./gui-artifacts.js').ArtifactStore;
   decide?: GuiDecidePort;
+  /**
+   * Plan 565 Phase D escalation: when the 551 decide channel is absent, the
+   * on_stuck:'agent' ladder can still ask the anchored session (AskUserQuestion
+   * pipeline). Answer "retry" → the ladder reports a retryable outcome;
+   * anything else lands on the skip side.
+   */
+  ask?: (question: string) => Promise<string | null>;
 }
 
 export interface GuiNodeOutcome {
@@ -410,11 +417,44 @@ async function enterLadder(
     if (gui.on_stuck === 'skip') {
       return { status: 'skipped', error: `gui ${entry}: ${reason}` };
     }
-    // on_stuck: agent (default) — needs the decide port.
-    if (!options.ports.decide) {
-      return { status: 'failed', errorClass: 'tool_error', error: `gui ${entry} without a decide channel: ${reason}` };
+    // on_stuck: agent (default) — decide channel first (551 loop).
+    if (options.ports.decide) {
+      return decideHandoff(options, entry, reason);
     }
-    return decideHandoff(options, entry, reason);
+    // Plan 565 Phase D fallback: no decide channel, but the anchored session
+    // is reachable via the ask port. The answer is journaled (nodeKind 'ask')
+    // so resume replays it; "skip" lands on the skip side, any other answer
+    // fails the node WITH the guidance text attached (a deterministic step
+    // list cannot re-plan mid-node — the journal answer still informs the
+    // script author and the resume run).
+    if (options.ports.ask) {
+      const question = `GUI node "${nodeId}" is ${entry}: ${reason}. How should it proceed?`;
+      let answer: string | null = null;
+      try {
+        answer = await options.ports.ask(question);
+      } catch {
+        answer = null;
+      }
+      journal.append({
+        kind: 'approval',
+        nodeId: `${nodeId}:ask`,
+        attempt: 1,
+        status: 'succeeded',
+        result: answer,
+        nodeKind: 'ask',
+        action: 'gui-escalate',
+        inputSummary: question.length > 120 ? `${question.slice(0, 120)}…` : question,
+      });
+      if (answer && /skip|跳过/i.test(answer)) {
+        return { status: 'skipped', error: `gui ${entry}: skipped by escalation answer` };
+      }
+      return {
+        status: 'failed',
+        errorClass: 'tool_error',
+        error: `gui ${entry}: ${reason}${answer ? ` (escalation answer: ${answer})` : ' (no answer)'}`,
+      };
+    }
+    return { status: 'failed', errorClass: 'tool_error', error: `gui ${entry} without a decide channel: ${reason}` };
   }
   return { status: 'failed', errorClass: 'tool_error', error: reason };
 }

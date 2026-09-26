@@ -10,11 +10,15 @@
 
 import { ipcMain } from 'electron';
 import * as http from 'node:http';
+import { existsSync } from 'node:fs';
+import { resolve as resolvePath, sep } from 'node:path';
 import { getCoreStoresOrNull } from '../db/core-connection';
 import {
   SavedWorkflowStore,
   SavedWorkflowMetaSchema,
   isValidSavedWorkflowName,
+  compileDwfScript,
+  DwfCompileError,
   type SavedWorkflowScope,
   type SavedWorkflowMeta,
 } from '../../packages/agent/src/modes/workflow/dwf';
@@ -25,7 +29,9 @@ import {
 } from '../../packages/agent/src/modes/workflow/workflow-files';
 import type { WorkflowRunOrigin, WorkflowRunStatus } from '../db/core/workflow-store';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
+import { defaultArtifactsRoot } from '../agents/server/workflow-runtime-manager';
 import { getLogger, LogComponent } from '../logging/logger';
+import { createDefWatcherManager, defaultWatchDir } from './workflow-def-watcher';
 
 // ─── agent server HTTP bridge (plan 560) ─────────────────────────────────────
 //
@@ -95,6 +101,11 @@ let runtimeHttp: WorkflowRuntimeHttpClient = defaultRuntimeHttpClient();
 export function _setWorkflowRuntimeHttpForTesting(client: WorkflowRuntimeHttpClient | null): void {
   runtimeHttp = client ?? defaultRuntimeHttpClient();
 }
+
+// Library auto-refresh: watch the dirs `workflow:dwf:list` returns and push
+// `workflow:dwf:changed` to renderers so the library view reloads without a
+// manual refresh (external file creation, agent-authored workflows, …).
+const defWatcher = createDefWatcherManager({ watchDir: defaultWatchDir });
 
 export function registerWorkflowHandlers(): void {
   // Read handlers must tolerate "core not yet ready" — the renderer may
@@ -282,7 +293,12 @@ export function registerWorkflowHandlers(): void {
 
   ipcMain.handle('workflow:dwf:list', (_e, projectDir?: string) => {
     try {
-      return new SavedWorkflowStore().list(projectDir ?? process.cwd());
+      const result = new SavedWorkflowStore().list(projectDir ?? process.cwd());
+      // Watch what we just scanned and register this renderer for change
+      // pushes — both are idempotent. Tests may invoke without a real event.
+      defWatcher.ensureWatchers(result.dirs);
+      if (_e?.sender) defWatcher.addSender(_e.sender);
+      return result;
     } catch {
       return { entries: [], invalid: [], dirs: [] };
     }
@@ -308,7 +324,7 @@ export function registerWorkflowHandlers(): void {
 
   ipcMain.handle(
     'workflow:dwf:save',
-    (_e, payload: { name: string; meta: unknown; script: string; scope?: SavedWorkflowScope; projectDir?: string; homeDir?: string }) => {
+    async (_e, payload: { name: string; meta: unknown; script: string; scope?: SavedWorkflowScope; projectDir?: string; homeDir?: string }) => {
       const logger = getLogger();
       try {
         if (!isValidSavedWorkflowName(payload.name)) {
@@ -316,6 +332,21 @@ export function registerWorkflowHandlers(): void {
         }
         // meta 在主进程再过一次 schema——渲染层是不可信边界。
         const meta = SavedWorkflowMetaSchema.parse(payload.meta) as SavedWorkflowMeta;
+        // Compile gate (plan 565 Phase B): a script that cannot compile never
+        // reaches disk — the renderer gets the esbuild diagnostic instead of a
+        // saved-but-broken workflow that only fails at launch time.
+        try {
+          await compileDwfScript(payload.script);
+        } catch (compileErr) {
+          const detail =
+            compileErr instanceof DwfCompileError
+              ? compileErr.message
+              : compileErr instanceof Error
+                ? compileErr.message
+                : String(compileErr);
+          logger.warn('dwf workflow save rejected: script does not compile', { name: payload.name, detail }, LogComponent.Main);
+          return { ok: false, error: `script compile failed: ${detail}` };
+        }
         const store = new SavedWorkflowStore();
         const saved = store.save(
           payload.projectDir ?? process.cwd(),
@@ -370,7 +401,7 @@ export function registerWorkflowHandlers(): void {
    */
   ipcMain.handle(
     'workflow:run',
-    async (_e, payload: { name: string; sessionId?: string; params?: Record<string, unknown>; projectDir?: string }) => {
+    async (_e, payload: { name: string; sessionId?: string; params?: Record<string, unknown>; projectDir?: string; resumeFromRunId?: string }) => {
       const logger = getLogger();
       const port = getAgentServerPort();
       if (!port) {
@@ -386,6 +417,10 @@ export function registerWorkflowHandlers(): void {
           sessionId: payload.sessionId,
           params: payload.params ?? {},
           projectDir: payload.projectDir,
+          // Plan 565 Phase A: cache-hit resume from a prior run's journal.
+          ...(payload.resumeFromRunId !== undefined
+            ? { resumeFromRunId: payload.resumeFromRunId }
+            : {}),
         });
 
         const req = http.request(
@@ -441,6 +476,8 @@ export function registerWorkflowHandlers(): void {
         params?: Record<string, unknown>;
         projectDir?: string;
         scope?: 'project' | 'global' | null;
+        /** Plan 568: run-level agent model override (launch dialog). */
+        model?: string;
       },
     ) => {
       try {
@@ -449,6 +486,7 @@ export function registerWorkflowHandlers(): void {
           params: payload.params ?? {},
           projectDir: payload.projectDir,
           scope: payload.scope ?? null,
+          ...(payload.model !== undefined && payload.model.trim() !== '' ? { model: payload.model.trim() } : {}),
         });
         if (status >= 200 && status < 300 && typeof body.runId === 'string') {
           return { ok: true, runId: body.runId };
@@ -482,6 +520,8 @@ export function registerWorkflowHandlers(): void {
         workflowName?: string;
         origin?: WorkflowRunOrigin;
         status?: WorkflowRunStatus;
+        /** Plan 565: rehydrate the session transcript's run cards. */
+        parentSessionId?: string;
         limit?: number;
         offset?: number;
       },
@@ -503,14 +543,38 @@ export function registerWorkflowHandlers(): void {
     return core.workflowRuns.listEvents(payload.runId, payload.afterSeq ?? -1);
   });
 
-  /** Forward an approval answer to the child that is blocked on it (D6). */
+  /**
+   * Resolve an artifact ref (`<runId>/<name><ext>`, the FsArtifactStore's own
+   * contract) to an absolute path under the artifact root so the renderer can
+   * hand it to the file-preview panel. Read-only, traversal-guarded: a ref is
+   * root-relative by construction, anything absolute or climbing out of the
+   * root is refused before the disk is touched.
+   */
+  ipcMain.handle('workflow:artifact-path', (_e, ref: unknown) => {
+    if (typeof ref !== 'string' || !ref.trim()) return { ok: false, error: 'missing ref' };
+    if (/^(?:[A-Za-z]:)?[\\/]/.test(ref) || ref.split(/[\\/]/).includes('..')) {
+      return { ok: false, error: 'invalid ref' };
+    }
+    const root = defaultArtifactsRoot();
+    const abs = resolvePath(root, ref);
+    if (!abs.startsWith(resolvePath(root) + sep)) return { ok: false, error: 'invalid ref' };
+    if (!existsSync(abs)) return { ok: false, error: 'not_found' };
+    return { ok: true, path: abs };
+  });
+
+  /** Forward an approval / ask answer to the child that is blocked on it (D6 / plan 565 D). */
   ipcMain.handle(
     'workflow:permission-resolve',
-    async (_e, payload: { runId: string; requestId: string; decision: 'allow' | 'deny' }) => {
+    async (_e, payload: { runId: string; requestId: string; decision: 'allow' | 'deny'; answers?: Record<string, string> }) => {
       try {
         const { status, body } = await runtimeHttp(
           `/workflow-runtime/${encodeURIComponent(payload.runId)}/permission`,
-          { requestId: payload.requestId, decision: payload.decision },
+          {
+            requestId: payload.requestId,
+            decision: payload.decision,
+            // AskUserQuestion-shaped answers (wf.ask, plan 565 Phase D).
+            ...(payload.answers ? { answers: payload.answers } : {}),
+          },
         );
         if (status >= 200 && status < 300) return { ok: true };
         return {

@@ -400,8 +400,8 @@ export function spawnAgentServer(): Promise<number> {
         return;
       }
 
-      // Plan 481 amendment: bot-identity:rpc (update_state profile.set /
-      // avatar.set / avatar.clear). The main process owns profile.json and
+      // Plan 481 amendment: bot-identity:rpc (update_state profile.set).
+      // The main process owns profile.json and
       // binds the subaction to the SESSION'S bot identity — the payload's
       // actorAgentId is never trusted alone: a mismatched binding is
       // rejected so a bot can only ever edit its own identity.

@@ -116,6 +116,12 @@ export async function runBrowserNode(opts: {
   backend: BrowserBackendPort;
   /** 截图字节落盘处。缺席 → 截图结果只带 {saved:false}，不内联 base64。 */
   artifacts?: ArtifactStore;
+  /**
+   * on_stuck:'agent' 升级问询（plan 565 Phase D）：把卡住的上下文投给锚定
+   * 会话，答复含 retry/重试 → 当步重跑一次；其余答复视为跳过。缺席 →
+   * 'agent' 档维持原状（fail，错误信息注明未接线）。
+   */
+  ask?: (question: string) => Promise<string | null>;
   runId: string;
 }): Promise<BrowserNodeOutcome> {
   const { browser, backend } = opts;
@@ -136,11 +142,19 @@ async function runBrowserSteps(opts: {
   browser: BrowserNodeSpec;
   backend: BrowserBackendPort;
   artifacts?: ArtifactStore;
+  ask?: (question: string) => Promise<string | null>;
   runId: string;
 }): Promise<BrowserNodeOutcome> {
   const { browser, backend } = opts;
   const onStuck = browser.on_stuck ?? 'fail';
   const maxActions = browser.max_actions ?? DEFAULT_MAX_ACTIONS;
+  // Phase D escalation verdict: answer mentions retry → re-run once; anything
+  // else (skip / silence / dismiss) lands on the skip side of the ladder.
+  const escalate = async (question: string): Promise<'retry' | 'skip'> => {
+    if (!opts.ask) return 'skip';
+    const answer = await opts.ask(question);
+    return answer && /retry|重试/i.test(answer) ? 'retry' : 'skip';
+  };
   const fail = (error: string, errorClass: string, steps: number): BrowserNodeOutcome => ({
     status: 'failed',
     error,
@@ -162,13 +176,26 @@ async function runBrowserSteps(opts: {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (onStuck === 'skip') return { status: 'skipped', output: { steps: 0 } };
-    return fail(
-      onStuck === 'agent'
-        ? `${message} (on_stuck:'agent' fallback is not wired yet — treated as 'fail')`
-        : message,
-      'tool_missing',
-      0,
-    );
+    if (onStuck === 'agent' && opts.ask) {
+      if ((await escalate(`Browser connect failed: ${message}. Retry the connection?`)) === 'retry') {
+        try {
+          await backend.connect();
+        } catch (retryErr) {
+          const retryMessage = retryErr instanceof Error ? retryErr.message : String(retryErr);
+          return fail(`browser connect failed after ask-retry: ${retryMessage}`, 'tool_missing', 0);
+        }
+      } else {
+        return { status: 'skipped', output: { steps: 0 } };
+      }
+    } else {
+      return fail(
+        onStuck === 'agent'
+          ? `${message} (on_stuck:'agent' has no ask port — treated as 'fail')`
+          : message,
+        'tool_missing',
+        0,
+      );
+    }
   }
 
   let url: string | undefined;
@@ -191,6 +218,18 @@ async function runBrowserSteps(opts: {
 
   for (const step of browser.steps) {
     let res: BrowserStepResult = await backend.run(step);
+    // on_stuck:'agent' escalation (plan 565 Phase D): one ask + one retry.
+    let askedSkip = false;
+    if (!res.ok && !step.optional && onStuck === 'agent' && opts.ask) {
+      const verdict = await escalate(
+        `Browser step ${done + 1} (${describeBrowserStep(step)}) failed: ${res.error ?? 'unknown error'}. Retry this step?`,
+      );
+      if (verdict === 'retry') {
+        res = await backend.run(step);
+      } else {
+        askedSkip = true;
+      }
+    }
 
     // 截图：字节进 artifact store，journal 只留引用（gui capture 同纪律）。
     if (res.ok && step.do === 'screenshot') {
@@ -213,9 +252,9 @@ async function runBrowserSteps(opts: {
     if (!res.ok) {
       // optional 步骤：失败即视为缺席（引导弹窗没弹、色块没渲染），继续走。
       if (step.optional) continue;
-      if (onStuck === 'skip') continue;
+      if (onStuck === 'skip' || askedSkip) continue;
       const note =
-        onStuck === 'agent' ? " (on_stuck:'agent' fallback is not wired yet — treated as 'fail')" : '';
+        onStuck === 'agent' ? " (on_stuck:'agent' has no ask port — treated as 'fail')" : '';
       return fail(
         `browser step ${done + 1} (${describeBrowserStep(step)}) failed: ${res.error ?? 'unknown error'}${note}`,
         classifyBrowserError(res.error),

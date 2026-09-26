@@ -221,6 +221,13 @@ export interface WorkflowRunCommand {
   params?: Record<string, unknown>;
   /** Project scope root for saved-workflow resolution. */
   projectDir?: string;
+  /**
+   * Plan 568: run-level agent model override (`wf.agent` calls without an
+   * explicit model run on this). Absent = inherit the worker's main model.
+   */
+  model?: string;
+  /** Plan 565 Phase A: seed the replay cache from this prior run's journal. */
+  resumeFromRunId?: string;
 }
 
 export type WorkerCommand =
@@ -465,7 +472,7 @@ export type RunStepStatus = 'running' | 'success' | 'failed';
  * run card cuts the step list into stage columns at these markers (plan 560
  * §6.2) and never renders them as a row of their own.
  */
-export type RunStepNodeKind = 'tool' | 'agent' | 'gui' | 'browser' | 'decision' | 'human' | 'noop' | 'phase';
+export type RunStepNodeKind = 'tool' | 'agent' | 'gui' | 'browser' | 'decision' | 'human' | 'ask' | 'noop' | 'phase';
 
 export interface RunStepView {
   /** Node id (matches journal.nodeId). */
@@ -477,11 +484,20 @@ export interface RunStepView {
   nodeKind?: RunStepNodeKind;
   startedAt?: number;
   finishedAt?: number;
+  /**
+   * Sub-agent DB session id (plan 568) — the run card's agent chip opens the
+   * watch pane through it. Present on agent steps once the child session is
+   * created (including failed agents).
+   */
+  childSessionId?: string;
 }
 
 /** Name-only artifact reference carried on digest frames (display only). */
 export interface RunArtifactNameView {
   name: string;
+  /** Store-relative path (`<runId>/<name><ext>`) — the artifact chip's click
+   * key. Present when the run published bytes. */
+  ref?: string;
 }
 
 export interface WorkflowRunSse {

@@ -31,6 +31,17 @@ export interface WorkflowDefinitionSummary {
 // ─── dwf saved workflow wrappers ─────────────────────────────────────────────
 
 /**
+ * Subscribe to library-directory change pushes (main watches the dirs the
+ * list handler returns). Returns an unsubscribe function. No-op when the
+ * preload surface predates the watcher.
+ */
+export function onDwfWorkflowsChangedIPC(callback: (payload: { dir: string }) => void): () => void {
+  const api = window.electronAPI?.workflow as WorkflowApi | undefined;
+  const unsub = api?.dwf?.onChanged?.(callback);
+  return unsub ?? (() => {});
+}
+
+/**
  * List saved workflows (.dwf.ts) via the dwf surface.
  * Returns { entries, invalid, dirs } grouped by project + global scope.
  */
@@ -242,10 +253,28 @@ export async function deleteDwfWorkflowIPC(
  * the in-session path.
  */
 export async function triggerWorkflowRunIPC(
-  payload: { name: string; params?: Record<string, unknown>; projectDir?: string },
+  payload: { name: string; sessionId?: string; params?: Record<string, unknown>; projectDir?: string; resumeFromRunId?: string },
 ) {
   const api = window.electronAPI?.workflow as WorkflowApi | undefined;
   return api?.run(payload) as Promise<{ ok: boolean; runId?: string; sessionId?: string; error?: string }>;
+}
+
+/**
+ * Plan 565 Phase A: resume a prior run. Launches a fresh run that seeds its
+ * replay cache from the prior run's journal — unchanged calls replay from
+ * cache, edited/new ones re-execute. Session-anchored runs relaunch inside
+ * their parent chat so the new card lands in the same transcript.
+ */
+export async function resumeWorkflowRunIPC(runId: string) {
+  const record = await getWorkflowRunRecordIPC(runId);
+  if (!record) return { ok: false, error: 'run record not found' };
+  return triggerWorkflowRunIPC({
+    name: record.workflowName,
+    params: record.params,
+    ...(record.projectDir ? { projectDir: record.projectDir } : {}),
+    ...(record.parentSessionId ? { sessionId: record.parentSessionId } : {}),
+    resumeFromRunId: runId,
+  });
 }
 
 export async function listWorkflowRunsIPC(
@@ -317,6 +346,9 @@ export async function triggerLibraryRunIPC(payload: {
   params?: Record<string, unknown>;
   projectDir?: string;
   scope?: 'project' | 'global' | null;
+  resumeFromRunId?: string;
+  /** Plan 568: run-level agent model override (empty = inherit provider default). */
+  model?: string;
 }) {
   const api = window.electronAPI?.workflow as WorkflowApi | undefined;
   if (!api?.trigger) {
@@ -338,6 +370,7 @@ export async function listWorkflowRunRecordsIPC(filter?: {
   workflowName?: string;
   origin?: WorkflowRunOrigin;
   status?: string;
+  parentSessionId?: string;
   limit?: number;
   offset?: number;
 }) {
@@ -360,4 +393,26 @@ export async function resolveWorkflowPermissionIPC(payload: {
   const api = window.electronAPI?.workflow as WorkflowApi | undefined;
   if (!api?.resolvePermission) return { ok: false, error: 'workflow bridge unavailable' };
   return api.resolvePermission(payload);
+}
+
+/**
+ * Open a published artifact in the file-preview panel. The chip only carries
+ * the store-relative ref (`<runId>/<name><ext>`), so main resolves it to the
+ * absolute path under `~/.duya/workflow-artifacts` first; a ref that fails to
+ * resolve (pre-ref runs, evicted bytes) returns `{ ok: false }` and the caller
+ * decides the fallback.
+ */
+export async function openWorkflowArtifactIPC(ref: string): Promise<{ ok: boolean; error?: string }> {
+  const api = window.electronAPI?.workflow as WorkflowApi | undefined;
+  if (!api?.artifactPath) return { ok: false, error: 'workflow bridge unavailable' };
+  const res = await api.artifactPath(ref);
+  if (!res?.ok || !res.path) return { ok: false, error: res?.error ?? 'resolve failed' };
+  window.dispatchEvent(
+    new CustomEvent('duya:open-file-preview-panel', {
+      // Artifacts live under `~/.duya/workflow-artifacts` — outside any
+      // session workspace, so the preview opens standalone (no project tree).
+      detail: { filePath: res.path, standalone: true },
+    }),
+  );
+  return { ok: true };
 }

@@ -27,6 +27,7 @@ const { workflowRunDbMocks, registryExecute } = vi.hoisted(() => ({
     appendJournal: vi.fn(),
     updateStatus: vi.fn(),
     finish: vi.fn(),
+    loadJournal: vi.fn(),
   },
   registryExecute: vi.fn(),
 }));
@@ -112,7 +113,11 @@ interface Harness {
   artifactsRoot: string;
 }
 
-function startChild(script: string, runId = 'run-1'): Harness {
+function startChild(
+  script: string,
+  runId = 'run-1',
+  extraInit?: Record<string, unknown>,
+): Harness {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-wf-child-'));
   const artifactsRoot = path.join(dir, 'artifacts');
   fs.mkdirSync(artifactsRoot, { recursive: true });
@@ -133,6 +138,7 @@ function startChild(script: string, runId = 'run-1'): Harness {
     llm: { apiKey: 'k', provider: 'openai', model: 'm' },
     workingDirectory: dir,
     artifactsRoot,
+    ...(extraInit ?? {}),
   });
 
   return { frames, push, run, dir, artifactsRoot };
@@ -148,11 +154,14 @@ export default async function (wf) {
 `;
 
 beforeEach(() => {
+  // Per-run text logs must not land in the real home during tests.
+  process.env.DUYA_WORKFLOW_LOGS_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-run-logs-'));
   workflowRunDbMocks.create.mockReset();
   workflowRunDbMocks.saveSnapshot.mockReset();
   workflowRunDbMocks.appendJournal.mockReset();
   workflowRunDbMocks.updateStatus.mockReset();
   workflowRunDbMocks.finish.mockReset();
+  workflowRunDbMocks.loadJournal.mockReset().mockResolvedValue([]);
   registryExecute.mockReset().mockResolvedValue({ result: 'v0.9.0\n', metadata: { exitCode: 0 } });
 });
 
@@ -185,18 +194,24 @@ describe('runWorkflowRuntimeChild — pure executor', () => {
     expect(ready.definition.args).toEqual(META.args);
 
     // Every journal record rides its own frame, in order, with its seq:
-    // phase → tool result → published artifact.
+    // phase → tool running (plan 568 live node) → tool result → published artifact.
     const records = h.frames.filter((f) => f.type === 'workflow:run-event');
-    expect(records.map((f) => f.seq)).toEqual([0, 1, 2]);
+    expect(records.map((f) => f.seq)).toEqual([0, 1, 2, 3]);
     const first = records[0] as { record: { kind: string; action: string } };
     expect(first.record.kind).toBe('phase');
     expect(first.record.action).toBe('collect');
-    const toolRecord = (records[1] as { record: { kind: string; action: string; inputSummary?: string } }).record;
+    const runningRecord = (records[1] as { record: { kind: string; status: string; action: string } }).record;
+    expect(runningRecord.kind).toBe('node_result');
+    expect(runningRecord.status).toBe('running');
+    const toolRecord = (records[2] as { record: { kind: string; action: string; inputSummary?: string } }).record;
     expect(toolRecord.kind).toBe('node_result');
+    expect(toolRecord.status).toBe('succeeded');
     // `inputSummary` is what lets the step row read `已执行 git tag --list v*`.
     expect(toolRecord.inputSummary).toContain('git tag --list v*');
-    const artifactRecord = (records[2] as { record: { kind: string } }).record;
+    const artifactRecord = (records[3] as { record: { kind: string } }).record;
     expect(artifactRecord.kind).toBe('artifact');
+    // Plan 568: the publish record carries the store ref — artifact chips click through it.
+    expect((artifactRecord as { result?: { ref?: string } }).result?.ref).toBeTruthy();
 
     const finished = h.frames[h.frames.length - 1] as {
       status: string;
@@ -266,9 +281,12 @@ export default async function (wf) {
 
     const finished = h.frames[h.frames.length - 1] as { status: string };
     expect(finished.status).toBe('complete');
-    const approval = h.frames.find(
+    // Plan 568: the approval node journals a running record first — the
+    // terminal (last) approval record carries the answer.
+    const approvalRecords = h.frames.filter(
       (f) => f.type === 'workflow:run-event' && (f.record as { kind: string }).kind === 'approval',
-    ) as { record: { status: string; result: unknown } };
+    ) as Array<{ record: { status: string; result: unknown } }>;
+    const approval = approvalRecords[approvalRecords.length - 1];
     expect(approval.record.status).toBe('succeeded');
   });
 
@@ -302,5 +320,52 @@ export default async function (wf) {
     })();
     await runWorkflowRuntimeChild({ emit: (f) => frames.push(f), commands: stream });
     expect(frames).toEqual([]);
+  });
+
+  it('resume: seeds the replay cache from the init-declared prior run', async () => {
+    // Run 1 — fresh: capture the tool call's real journal record (it carries
+    // the nodeId + reqHash the replay cache keys on). Plan 568: the node also
+    // journals a running record first — the cache keys on the SUCCEEDED one.
+    const first = startChild(SCRIPT, 'run-1');
+    await waitFor(
+      () => first.frames.some((f) => f.type === 'workflow:finished'),
+      'run-1 finished frame',
+      () => first.frames.map((f) => f.type as string),
+    );
+    await first.run;
+    const toolRecord = first.frames.find(
+      (f) =>
+        f.type === 'workflow:run-event' &&
+        (f.record as { kind?: string; nodeKind?: string })?.kind === 'node_result' &&
+        (f.record as { nodeKind?: string })?.nodeKind === 'tool' &&
+        (f.record as { status?: string })?.status === 'succeeded',
+    ) as { record: Record<string, unknown> } | undefined;
+    expect(toolRecord).toBeDefined();
+
+    // Run 2 — init declares run-1 as the cache seed: the identical call
+    // replays and the host is never invoked.
+    workflowRunDbMocks.loadJournal.mockResolvedValue([toolRecord!.record]);
+    registryExecute.mockClear();
+    const h = startChild(SCRIPT, 'run-2', { resumeFromRunId: 'run-1' });
+    await waitFor(
+      () => h.frames.some((f) => f.type === 'workflow:finished'),
+      'run-2 finished frame',
+      () => h.frames.map((f) => f.type as string),
+    );
+    await h.run;
+
+    // The seed load is a READ — the write mocks stay untouched (D3).
+    expect(workflowRunDbMocks.loadJournal).toHaveBeenCalledWith('run-1');
+    expect(workflowRunDbMocks.create).not.toHaveBeenCalled();
+    expect(workflowRunDbMocks.appendJournal).not.toHaveBeenCalled();
+
+    // The host was never invoked: the call replayed from the cache.
+    expect(registryExecute).not.toHaveBeenCalled();
+    const replayed = h.frames.find(
+      (f) => f.type === 'workflow:run-event' && (f.record as { replayed?: boolean })?.replayed === true,
+    );
+    expect(replayed).toBeDefined();
+    const finished = h.frames[h.frames.length - 1] as { status: string };
+    expect(finished.status).toBe('complete');
   });
 });

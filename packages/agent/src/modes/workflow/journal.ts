@@ -23,7 +23,7 @@ export type JournalKind = 'node_result' | 'decision' | 'approval' | 'artifact' |
 export type JournalStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'waiting';
 
 /** Node kind annotation — drives console stats (agent count) and icons. */
-export type JournalNodeKind = 'tool' | 'agent' | 'decision' | 'human' | 'gui' | 'browser' | 'noop';
+export type JournalNodeKind = 'tool' | 'agent' | 'decision' | 'human' | 'gui' | 'browser' | 'ask' | 'noop';
 
 export interface JournalRecord {
   seq: number;

@@ -57,13 +57,17 @@ export interface WorkflowRuntimeInitCommand {
    * `<runId>/` itself, so the per-run directory is `<root>/<runId>/`.
    */
   artifactsRoot: string;
+  /** Plan 565 Phase A: seed the replay cache from this prior run's journal. */
+  resumeFromRunId?: string;
 }
 
-/** main → child: resolve one approval asked by `wf.approve`. */
+/** main → child: resolve one approval / ask asked by `wf.approve` / `wf.ask`. */
 export interface WorkflowRuntimePermissionResolveCommand {
   type: 'workflow:permission-resolve';
   requestId: string;
   decision: 'allow' | 'deny';
+  /** AskUserQuestion-style answers (plan 565 Phase D wf.ask). Absent for plain approvals. */
+  answers?: Record<string, string>;
 }
 
 /** main → child: abort between journal records (the hard stop is SIGTERM). */
@@ -121,6 +125,9 @@ export async function runWorkflowRuntimeChild(
 
   // Approval round-trips (plan 560 D6): main relays these to the run panel.
   const pendingPermissions = new Map<string, (decision: 'allow' | 'deny') => void>();
+  // Plan 565 Phase D: answers carried by AskUserQuestion-shaped permission
+  // resolves, keyed by request id — one-shot read via deps.takePendingAnswer.
+  const pendingAskAnswers = new Map<string, Record<string, string>>();
   const abort = new AbortController();
 
   let resolveInit: (init: WorkflowRuntimeInitCommand | null) => void = () => {};
@@ -146,8 +153,12 @@ export async function runWorkflowRuntimeChild(
         continue;
       }
       if (type === 'workflow:permission-resolve') {
-        const { requestId, decision } = msg as unknown as WorkflowRuntimePermissionResolveCommand;
+        const { requestId, decision, answers } = msg as unknown as WorkflowRuntimePermissionResolveCommand;
         if (typeof requestId === 'string') {
+          // Plan 565 Phase D: AskUserQuestion-shaped resolves carry the answer
+          // text; keep it for the ask port's one-shot read, mirroring
+          // agent-process-entry's storePendingAnswer contract.
+          if (answers) pendingAskAnswers.set(requestId, answers);
           const resolve = pendingPermissions.get(requestId);
           pendingPermissions.delete(requestId);
           resolve?.(decision === 'allow' ? 'allow' : 'deny');
@@ -299,6 +310,11 @@ export async function runWorkflowRuntimeChild(
       },
       llm: init.llm,
       workingDirectory: init.projectDir ?? init.workingDirectory,
+      takePendingAnswer: (permissionId) => {
+        const answers = pendingAskAnswers.get(permissionId);
+        if (answers) pendingAskAnswers.delete(permissionId);
+        return answers;
+      },
       transport,
       // Plan 556 Phase 4: gui nodes execute through the main-process
       // computer-use dispatcher; captures land next to wf.publish
@@ -328,6 +344,7 @@ export async function runWorkflowRuntimeChild(
       projectDir: init.projectDir,
       // The run-anchored path is the library anchor by definition (D1).
       origin: 'library',
+      ...(init.resumeFromRunId !== undefined ? { resumeFromRunId: init.resumeFromRunId } : {}),
     },
     abort.signal,
   );

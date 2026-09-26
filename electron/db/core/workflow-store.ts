@@ -95,6 +95,8 @@ export interface WorkflowRun {
   summary: string | null;
   finishedAt: number | null;
   spentTokens: number | null;
+  /** Plan 568: run-level agent model override recorded for 重跑/续跑复用. */
+  agentModel: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -114,6 +116,8 @@ export interface WorkflowRunCreateInput {
   projectDir?: string | null;
   parentSessionId?: string | null;
   summary?: string | null;
+  /** Plan 568: run-level agent model override. */
+  agentModel?: string | null;
 }
 
 /** Terminal outcome written once, at the end of a run (plan 560). */
@@ -177,6 +181,7 @@ interface WorkflowRunRow {
   summary: string | null;
   finished_at: number | null;
   spent_tokens: number | null;
+  agent_model: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -361,6 +366,20 @@ export class WorkflowRunStore {
         txn();
       },
     },
+    {
+      id: 32,
+      name: 'add_agent_model_to_workflow_runs',
+      up: (db) => {
+        // Plan 568: run-level agent model override, recorded at create time so
+        // 重跑 / 续跑 reuse the same model instead of silently falling back to
+        // the current provider default. Idempotent column probe (migration 30
+        // pattern).
+        const existing = tableColumns(db, 'workflow_runs');
+        if (!existing.has('agent_model')) {
+          db.exec(`ALTER TABLE workflow_runs ADD COLUMN agent_model TEXT`);
+        }
+      },
+    },
   ];
 
   private readonly db: SqliteDatabase;
@@ -378,12 +397,14 @@ export class WorkflowRunStore {
           id, workflow_name, workflow_version_id, status, trigger_kind,
           dedup_key, params_json, wait_till, retry_of, pause_message,
           created_at, updated_at, origin, scope, project_dir,
-          parent_session_id, artifacts_json, summary, finished_at, spent_tokens
+          parent_session_id, artifacts_json, summary, finished_at, spent_tokens,
+          agent_model
         ) VALUES (
           @id, @workflow_name, @workflow_version_id, @status, @trigger_kind,
           @dedup_key, @params_json, NULL, @retry_of, NULL,
           @created_at, @updated_at, @origin, @scope, @project_dir,
-          @parent_session_id, '[]', @summary, NULL, NULL
+          @parent_session_id, '[]', @summary, NULL, NULL,
+          @agent_model
         )`,
       )
       .run({
@@ -402,6 +423,7 @@ export class WorkflowRunStore {
         project_dir: input.projectDir ?? null,
         parent_session_id: input.parentSessionId ?? null,
         summary: input.summary ?? null,
+        agent_model: input.agentModel ?? null,
       });
     return this.getRun(id)!;
   }
@@ -423,6 +445,8 @@ export class WorkflowRunStore {
     status?: WorkflowRunStatus;
     workflowName?: string;
     origin?: WorkflowRunOrigin;
+    /** Plan 565: session transcript rehydration (runs anchored to one chat). */
+    parentSessionId?: string;
     limit?: number;
     offset?: number;
   }): WorkflowRun[] {
@@ -439,6 +463,10 @@ export class WorkflowRunStore {
     if (filter?.origin) {
       conditions.push('origin = @origin');
       args.origin = filter.origin;
+    }
+    if (filter?.parentSessionId) {
+      conditions.push('parent_session_id = @parentSessionId');
+      args.parentSessionId = filter.parentSessionId;
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const limit = Math.min(filter?.limit ?? 50, 500);
@@ -708,6 +736,7 @@ function rowToRun(row: WorkflowRunRow): WorkflowRun {
     summary: row.summary,
     finishedAt: row.finished_at,
     spentTokens: row.spent_tokens,
+    agentModel: row.agent_model ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

@@ -243,14 +243,16 @@ describe('workflow-runtime routes', () => {
       body: JSON.stringify({ requestId: 'req-7', decision: 'allow' }),
     });
     expect(ok.status).toBe(200);
-    expect(active.runtime.resolvePermission).toHaveBeenCalledWith('run-1', 'req-7', 'allow');
+    // Plan 565 Phase D: the route forwards an optional answers map (wf.ask);
+    // a plain approval resolves with answers === undefined.
+    expect(active.runtime.resolvePermission).toHaveBeenCalledWith('run-1', 'req-7', 'allow', undefined);
 
     // A decision that is not an explicit allow must not become one.
     await fetch(`${active.url}/workflow-runtime/run-1/permission`, {
       method: 'POST',
       body: JSON.stringify({ requestId: 'req-8', decision: 'maybe' }),
     });
-    expect(active.runtime.resolvePermission).toHaveBeenLastCalledWith('run-1', 'req-8', 'deny');
+    expect(active.runtime.resolvePermission).toHaveBeenLastCalledWith('run-1', 'req-8', 'deny', undefined);
 
     const nameless = await fetch(`${active.url}/workflow-runtime/run-1/permission`, {
       method: 'POST',

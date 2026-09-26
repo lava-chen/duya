@@ -151,7 +151,7 @@ describe('runBrowserNode — on_stuck ladder', () => {
     expect(backend.calls).toEqual(['click #login', 'type #user', 'key Enter']);
   });
 
-  it("on_stuck:'agent' is not wired — loud fail with the note, same as fail", async () => {
+  it("on_stuck:'agent' without an ask port — loud fail with the no-port note, same as fail", async () => {
     const backend = fakeBackend({
       failWhen: () => 'element not found: #x',
     });
@@ -161,7 +161,55 @@ describe('runBrowserNode — on_stuck ladder', () => {
       runId: 'r1',
     });
     expect(outcome.status).toBe('failed');
-    expect(outcome.error).toContain("on_stuck:'agent' fallback is not wired yet");
+    expect(outcome.error).toContain("on_stuck:'agent' has no ask port");
+  });
+
+  it("on_stuck:'agent' with ask: answer retry re-runs the step once and succeeds", async () => {
+    // First type invocation fails, the ask-retry second invocation succeeds.
+    let typeCalls = 0;
+    const backend = fakeBackend({
+      failWhen: (step) => {
+        if (step.do !== 'type') return undefined;
+        typeCalls += 1;
+        return typeCalls === 1 ? 'Element not found: #user' : undefined;
+      },
+    });
+    const questions: string[] = [];
+    const outcome = await runBrowserNode({
+      browser: {
+        on_stuck: 'agent',
+        steps: [{ do: 'type', selector: '#user', text: 'ada' }],
+      },
+      backend,
+      ask: async (q) => {
+        questions.push(q);
+        return 'retry';
+      },
+      runId: 'r1',
+    });
+    // fakeBackend failWhen keyed on invocation parity: first type call fails,
+    // the ask-retry second call succeeds.
+    expect(questions).toHaveLength(1);
+    expect(questions[0]).toContain('type #user');
+    expect(outcome.status).toBe('succeeded');
+    expect(outcome.output?.steps).toBe(1);
+  });
+
+  it("on_stuck:'agent' with ask: a skip answer (or silence) skips the failing step", async () => {
+    const backend = fakeBackend({
+      failWhen: (step) => (step.do === 'type' ? 'Element not found: #user' : undefined),
+    });
+    const outcome = await runBrowserNode({
+      browser: {
+        on_stuck: 'agent',
+        steps: [{ do: 'type', selector: '#user', text: 'ada' }, { do: 'key', key: 'Enter' }],
+      },
+      backend,
+      ask: async () => null, // dismissed card — lands on the skip side
+      runId: 'r1',
+    });
+    expect(outcome.status).toBe('succeeded');
+    expect(outcome.output?.steps).toBe(1); // key ran, type skipped
   });
 
   it('connect failure → failed with tool_missing class and the bridge message', async () => {

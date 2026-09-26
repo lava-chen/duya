@@ -2949,7 +2949,7 @@ export function createHandleRequest(
       // eslint-disable-next-line @typescript-eslint/no-misused-promises
       const dispatch = async (
         sessionId: string | undefined,
-        payload: { name?: string; params?: Record<string, unknown>; projectDir?: string },
+        payload: { name?: string; params?: Record<string, unknown>; projectDir?: string; resumeFromRunId?: string },
       ): Promise<void> => {
         const name = payload.name ?? parts[1];
         if (!name) {
@@ -3132,6 +3132,9 @@ export function createHandleRequest(
           workflowName: name,
           params: payload.params,
           projectDir: payload.projectDir,
+          ...(payload.resumeFromRunId !== undefined
+            ? { resumeFromRunId: payload.resumeFromRunId }
+            : {}),
         });
         if (!sent) {
           sendJson(res, 409, { ok: false, error: 'anchor session worker unavailable', sessionId: anchor, runId });
@@ -3142,13 +3145,19 @@ export function createHandleRequest(
       };
       readRequestBody(req).then((body) => {
         let sessionId: string | undefined;
-        let payload: { name?: string; params?: Record<string, unknown>; projectDir?: string } = {};
+        let payload: {
+          name?: string;
+          params?: Record<string, unknown>;
+          projectDir?: string;
+          resumeFromRunId?: string;
+        } = {};
         if (body) {
           try {
-            const parsed = JSON.parse(body) as { sessionId?: unknown; name?: unknown; params?: unknown; projectDir?: unknown };
+            const parsed = JSON.parse(body) as { sessionId?: unknown; name?: unknown; params?: unknown; projectDir?: unknown; resumeFromRunId?: unknown };
             if (typeof parsed.sessionId === 'string') sessionId = parsed.sessionId;
             if (typeof parsed.name === 'string') payload.name = parsed.name;
             if (typeof parsed.projectDir === 'string') payload.projectDir = parsed.projectDir;
+            if (typeof parsed.resumeFromRunId === 'string') payload.resumeFromRunId = parsed.resumeFromRunId;
             if (parsed.params && typeof parsed.params === 'object') payload.params = parsed.params as Record<string, unknown>;
           } catch {
             // Malformed JSON: reply 400 below.
@@ -3190,6 +3199,9 @@ export function createHandleRequest(
             projectDir?: string;
             scope?: 'project' | 'global' | null;
             llm?: Record<string, unknown>;
+            resumeFromRunId?: string;
+            /** Plan 568: run-level agent model override (launch dialog). */
+            model?: string;
           } = {};
           if (body) {
             try {
@@ -3218,6 +3230,12 @@ export function createHandleRequest(
             projectDir: payload.projectDir,
             scope: payload.scope ?? null,
             llm,
+            ...(payload.resumeFromRunId !== undefined
+              ? { resumeFromRunId: payload.resumeFromRunId }
+              : {}),
+            ...(typeof payload.model === 'string' && payload.model.trim() !== ''
+              ? { model: payload.model }
+              : {}),
           });
           if (result.ok) {
             sendJson(res, 201, { ok: true, runId: result.runId });
@@ -3249,7 +3267,7 @@ export function createHandleRequest(
       // that is blocked waiting on it.
       if (method === 'POST' && parts.length === 3 && parts[2] === 'permission') {
         void (async () => {
-          let payload: { requestId?: string; decision?: string } = {};
+          let payload: { requestId?: string; decision?: string; answers?: Record<string, string> } = {};
           try {
             const raw = await readRequestBody(req);
             if (raw) payload = JSON.parse(raw) as typeof payload;
@@ -3264,7 +3282,13 @@ export function createHandleRequest(
           // Anything that is not an explicit allow is a deny: an approval that
           // fails open would be worse than the run stalling.
           const decision = payload.decision === 'allow' ? 'allow' : 'deny';
-          const result = runtime.resolvePermission(parts[1], payload.requestId, decision);
+          const answers =
+            payload.answers && typeof payload.answers === 'object'
+              ? (Object.fromEntries(
+                  Object.entries(payload.answers).filter(([, v]) => typeof v === 'string'),
+                ) as Record<string, string>)
+              : undefined;
+          const result = runtime.resolvePermission(parts[1], payload.requestId, decision, answers);
           sendJson(res, result.ok ? 200 : 404, result.ok ? { ok: true } : { ok: false, error: result.error });
         })();
         return;

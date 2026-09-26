@@ -28,13 +28,14 @@
  *                 the daemon is localhost HTTP so the worker dials it
  *                 directly, no worker→main RPC hop.
  *
- * Resume is NOT wired in this cut: every launch is a fresh run. The journal
- * is persisted record-by-record (workflowRun:appendJournal) for console
- * evidence and for a future cache-hit resume — the §6.4 economics need an
- * async journal load which the sync JournalSink cannot express yet.
+ * Resume IS wired (plan 565 Phase A): `req.resumeFromRunId` names a prior
+ * run whose journal seeds this run's replay cache before the script starts —
+ * a re-run / amended re-run replays every unchanged call from cache (§6.4)
+ * and only re-executes new or changed nodes.
  */
 
 import { randomUUID } from 'node:crypto';
+import * as fs from 'node:fs';
 
 import {
   buildWorkflowRunEvent,
@@ -46,7 +47,7 @@ import {
   type WorkflowRunSse,
 } from './worker-protocol.js';
 import { SavedWorkflowStore } from '../modes/workflow/dwf/store.js';
-import { runDwfScript, type DwfHostPorts } from '../modes/workflow/dwf/runtime.js';
+import { runDwfScript, compileDwfScript, DwfCompileError, type DwfHostPorts } from '../modes/workflow/dwf/runtime.js';
 import { Journal, type JournalRecord, type JournalSink } from '../modes/workflow/journal.js';
 import {
   runGuiNode,
@@ -59,6 +60,7 @@ import {
   type ArtifactStore,
 } from '../modes/workflow/gui-artifacts.js';
 import { BudgetLedger, type WorkflowHost } from '../modes/workflow/host.js';
+import { openRunLog, type RunLog } from '../modes/workflow/run-log.js';
 import type { SavedWorkflowArgDeclaration } from '../modes/workflow/dwf/contracts.js';
 import { workflowRunDb } from '../ipc/db-client.js';
 import { createBuiltinRegistry } from '../tool/builtin.js';
@@ -165,6 +167,13 @@ export interface WorkflowRunnerDeps {
     toolInput: Record<string, unknown>;
     expiresAt: number;
   }) => Promise<'allow' | 'deny'>;
+  /**
+   * Plan 565 Phase D: one-shot read of the answers stored by
+   * `permission:resolve` for an AskUserQuestion-shaped request. Bound only on
+   * paths whose worker owns the pendingAnswers map (agent-process-entry); the
+   * run-anchored child may omit it — `wf.ask` then reports the miss honestly.
+   */
+  takePendingAnswer?: (permissionId: string) => Record<string, string> | undefined;
   /** LLM config captured from the worker's init (agent calls inherit it). */
   llm: WorkflowRunnerLlmConfig;
   /** Default execution cwd — overridden per-run by `req.projectDir`. */
@@ -215,6 +224,21 @@ export interface WorkflowLaunchRequest {
   origin?: 'library' | 'session' | 'agent' | 'cron';
   /** Only meaningful for `agent` / `session` origins. */
   parentSessionId?: string | null;
+  /**
+   * Plan 565 Phase A: resume the replay cache from a prior run. The prior
+   * run's journal seeds this run's cache before the script executes, so every
+   * unchanged call (same call order + same payload → same nodeId + reqHash)
+   * replays instantly instead of re-paying; changed/new nodes re-execute.
+   * The prior run is NOT touched — this is a fresh run row that starts from
+   * its predecessor's results.
+   */
+  resumeFromRunId?: string;
+  /**
+   * Plan 568: run-level agent model override — `wf.agent` calls without an
+   * explicit model run on this (ZCode subagentModel parity). Absent =
+   * inherit the worker's main model.
+   */
+  model?: string;
 }
 
 // ─── journal sink: memory + write-through to the transport ───
@@ -223,8 +247,10 @@ export interface WorkflowLaunchRequest {
  * The Journal cache must rebuild synchronously from the sink (constructor
  * contract), so the durable copy is write-through: every appended record is
  * handed to the transport (fire-and-forget) while the in-memory array stays
- * the read side. Fresh runs start empty; a future resume flow seeds a sink
- * from the transport's history before constructing the Journal.
+ * the read side. Fresh runs start empty; a resume run (plan 565 Phase A)
+ * seeds the read side from the prior run's journal BEFORE constructing the
+ * Journal — seeded records are never re-appended to the new run's event
+ * stream, they only rebuild the replay cache.
  */
 class TransportJournalSink implements JournalSink {
   private readonly records: JournalRecord[] = [];
@@ -232,7 +258,10 @@ class TransportJournalSink implements JournalSink {
   constructor(
     private readonly transport: WorkflowRunnerTransport,
     private readonly runId: string,
-  ) {}
+    seed?: JournalRecord[],
+  ) {
+    if (seed) this.records.push(...seed);
+  }
 
   append(record: JournalRecord): void {
     this.records.push(record);
@@ -383,6 +412,50 @@ function buildToolUseContext(
   };
 }
 
+/**
+ * Workflow ask (plan 565 Phase D): route a free-text question through the
+ * EXISTING interactive permission pipeline as an AskUserQuestion-shaped
+ * request — the renderer already renders that card with options plus a free
+ * text field, and the answer returns via permission:resolve's
+ * updatedInput.answers → storePendingAnswer. No new protocol frame. The
+ * stored answer is one-shot (takePendingAnswer), exactly like the tool's own
+ * Phase-2 retry. Deny / 5-minute pipeline timeout → no answer (null); the
+ * caller (wf.ask / the on_stuck ladders) decides what a silent session means.
+ */
+async function runWorkflowAsk(
+  deps: WorkflowRunnerDeps,
+  question: string,
+): Promise<{ answer: string | null }> {
+  const id = randomUUID();
+  const decision = await deps.requestPermission({
+    id,
+    toolName: 'AskUserQuestion',
+    toolInput: {
+      questions: [
+        {
+          question,
+          header: 'Workflow',
+          multiSelect: false,
+          options: [
+            { label: 'Retry', description: 'Re-run the failed step / node once' },
+            { label: 'Skip', description: 'Skip it and continue the run' },
+          ],
+        },
+      ],
+    },
+    expiresAt: Date.now() + 600_000,
+  });
+  if (decision !== 'allow') return { answer: null };
+  const answers = deps.takePendingAnswer?.(id);
+  const answer = answers
+    ? Object.values(answers)
+        .filter((v) => typeof v === 'string' && v.trim().length > 0)
+        .join(' ')
+        .trim()
+    : '';
+  return { answer: answer.length > 0 ? answer : null };
+}
+
 function buildHostPorts(
   deps: WorkflowRunnerDeps,
   cwd: string,
@@ -402,6 +475,9 @@ function buildHostPorts(
       if (!sink) return;
       const descriptor = await sink(name, content, contentType);
       if (descriptor) onArtifact?.(descriptor);
+      // Plan 568: the descriptor (with its store `ref`) flows back so the dwf
+      // runtime journals it — the renderer's artifact chips click through it.
+      return descriptor;
     },
 
     async runTool(tool, input) {
@@ -448,7 +524,14 @@ function buildHostPorts(
         parsed = { content: res.result };
       }
       if (res.error || parsed.error) {
-        return { ok: false, error: parsed.error ?? res.result };
+        // Plan 568: a failed agent may still have created its sub-session
+        // (schema mismatch, mid-run error) — carry the id so the journal's
+        // failed record links the watch pane.
+        return {
+          ok: false,
+          error: parsed.error ?? res.result,
+          ...(parsed.sessionId !== undefined ? { childSessionId: parsed.sessionId } : {}),
+        };
       }
       return {
         ok: true,
@@ -488,6 +571,11 @@ function buildHostPorts(
       const ports: GuiRunPorts = {
         backend: createIpcGuiBackend(deps.computerUseRequest),
         artifacts: deps.guiArtifactStore ?? new MemoryArtifactStore(),
+        // on_stuck:'agent' escalation fallback (plan 565 Phase D) — see
+        // enterLadder in gui-runner.ts.
+        ...(deps.takePendingAnswer
+          ? { ask: (question: string) => runWorkflowAsk(deps, question).then((r) => r.answer) }
+          : {}),
       };
 
       // Minimal WorkflowHost for the needs_confirmation gate — approvals
@@ -534,7 +622,19 @@ function buildHostPorts(
       return runBrowserWithExtensionBackend(`wf-${gui.runId}-${browserSeq++}`, spec, {
         runId: gui.runId,
         ...(deps.guiArtifactStore ? { artifacts: deps.guiArtifactStore } : {}),
+        // on_stuck:'agent' escalation (plan 565 Phase D): the ladder asks the
+        // anchored session whether to retry; absent port → fail-as-before.
+        ...(deps.takePendingAnswer
+          ? {
+              ask: (question: string) =>
+                runWorkflowAsk(deps, question).then((r) => r.answer),
+            }
+          : {}),
       });
+    },
+
+    async runAsk(question) {
+      return runWorkflowAsk(deps, question);
     },
 
     async requestApproval(spec) {
@@ -567,6 +667,13 @@ export async function launchSavedWorkflow(
 ): Promise<void> {
   const transport = deps.transport ?? legacyTransport(deps);
   const startedAt = Date.now();
+  // Per-run text log (best-effort, no-op on fs failure): launch args, every
+  // journal record in seq order and the terminal error land in
+  // ~/.duya/workflow-logs/<workflow>-<runId>.log for post-mortem analysis.
+  const runLog: RunLog = openRunLog(fs, req.runId, req.workflowName, {
+    origin: req.origin ?? 'library',
+    ...(req.projectDir !== undefined ? { projectDir: req.projectDir } : {}),
+  });
   const frame = (event: WorkflowRunEventKind, run: WorkflowRunSse): void => {
     transport.emit(event, run);
   };
@@ -588,6 +695,7 @@ export async function launchSavedWorkflow(
    * the row `active` forever.
    */
   const failFrame = async (error: string, status: 'failed' | 'cancelled' = 'failed'): Promise<void> => {
+    runLog.line('error', `run ${status}: ${error}`);
     try {
       await transport.finishRun(req.runId, {
         status,
@@ -608,6 +716,7 @@ export async function launchSavedWorkflow(
       error,
       stoppedReason: status === 'cancelled' ? 'cancelled' : 'run failed',
     });
+    runLog.close();
   };
 
   // 1. Resolve the saved definition (project scope shadows global).
@@ -627,9 +736,31 @@ export async function launchSavedWorkflow(
 
   // 2. Merge declared arg defaults + validate required args up front.
   const args = applyArgDefaults(resolved.meta.args, req.params);
+  runLog.line(
+    'info',
+    `launch workflow="${resolved.name}" scope=${resolved.scope} cwd=${cwd} args=${JSON.stringify(args)}`,
+  );
   const missing = findMissingRequiredArgs(resolved.meta.args, args);
   if (missing.length > 0) {
     await failFrame(`missing required args: ${missing.join(', ')}`);
+    return;
+  }
+
+  // 2.5 Compile gate (plan 565 Phase B): syntax/shape errors fail fast HERE,
+  //     before any run row or journal record exists — the same "编不过不启动"
+  //     semantics ZCode applies at CreateWorkflow. Without this, a broken
+  //     script surfaced only when the runtime's own esbuild transform blew up
+  //     mid-run, leaving a failed row and partial journal behind.
+  try {
+    await compileDwfScript(resolved.script);
+  } catch (err) {
+    const detail =
+      err instanceof DwfCompileError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    await failFrame(`script compile failed: ${detail}`);
     return;
   }
 
@@ -665,8 +796,35 @@ export async function launchSavedWorkflow(
   }
 
   // 4. Journal + live progress tap. Journal.append persists via the sink BEFORE
-  //    the listener fires, so durability always precedes progress.
-  const journal = new Journal(new TransportJournalSink(transport, req.runId));
+  //    the listener fires, so durability always precedes progress. A resume run
+  //    (plan 565 Phase A) loads the prior run's journal first and seeds the
+  //    sink's read side so the constructor rebuilds the replay cache — the
+  //    prior run's records are cache keys only, never re-persisted here.
+  let resumeSeed: JournalRecord[] | undefined;
+  if (req.resumeFromRunId) {
+    try {
+      const raw = await workflowRunDb.loadJournal(req.resumeFromRunId);
+      // Shape guard: only well-formed records with a numeric seq may seed the
+      // cache — a corrupt or foreign payload degrades to a cold start, never
+      // to a crash or a poisoned cache.
+      resumeSeed = (Array.isArray(raw) ? raw : []).filter(
+        (r): r is JournalRecord =>
+          !!r && typeof r === 'object' && typeof (r as JournalRecord).seq === 'number',
+      );
+      runLog.line(
+        'info',
+        `resume from ${req.resumeFromRunId}: ${resumeSeed.length} seeded journal records`,
+      );
+    } catch (err) {
+      // Seeding is best-effort: a missing/unreadable predecessor means the
+      // run simply pays full price, which is exactly a fresh launch.
+      runLog.line(
+        'warn',
+        `resume seed unavailable (${err instanceof Error ? err.message : String(err)}) — starting cold`,
+      );
+    }
+  }
+  const journal = new Journal(new TransportJournalSink(transport, req.runId, resumeSeed));
 
   // Fold each reaching step record into the shared step view: match by node id,
   // flip running→success/failed in place, else append. Honest — only materialize
@@ -685,12 +843,16 @@ export async function launchSavedWorkflow(
     if (existing !== undefined) {
       existing.status = status;
       if (status !== 'running') existing.finishedAt = record.atMs;
+      // Plan 568: the child-session link lands with whichever record carries
+      // it (a failed agent's session id arrives on the failed record).
+      if (record.childSessionId !== undefined) existing.childSessionId = record.childSessionId;
     } else {
       steps.push({
         id: record.nodeId,
         label: record.action ?? record.nodeId,
         status,
         ...(record.nodeKind !== undefined ? { nodeKind: record.nodeKind } : {}),
+        ...(record.childSessionId !== undefined ? { childSessionId: record.childSessionId } : {}),
         startedAt: status === 'running' ? record.atMs : undefined,
         finishedAt: status !== 'running' ? record.atMs : undefined,
       });
@@ -698,13 +860,21 @@ export async function launchSavedWorkflow(
   };
 
   journal.listener = (record) => {
+    runLog.record(record);
     if (record.usage) stats.tokens += record.usage.inputTokens + record.usage.outputTokens;
     if (record.nodeKind === 'agent' && record.status === 'succeeded') stats.subagents++;
     if (record.kind === 'artifact') {
       // wf.publish — an output, not a step: fold the name into the artifact
-      // chips and let the card show it on the terminal receipt.
+      // chips and let the card show it on the terminal receipt. The ref rides
+      // along so the renderer can resolve the bytes to a previewable path.
       const name = record.inputSummary ?? readArtifactName(record.result);
-      if (name && !artifactsView.some((a) => a.name === name)) artifactsView.push({ name });
+      const ref =
+        record.result && typeof record.result === 'object' && typeof (record.result as { ref?: unknown }).ref === 'string'
+          ? (record.result as { ref: string }).ref
+          : undefined;
+      if (name && !artifactsView.some((a) => a.name === name)) {
+        artifactsView.push({ name, ...(ref !== undefined ? { ref } : {}) });
+      }
     }
     if (
       record.kind === 'node_result' ||
@@ -751,12 +921,17 @@ export async function launchSavedWorkflow(
       runId: req.runId,
       journal,
       args,
+      ...(req.model !== undefined ? { agentModel: req.model } : {}),
     });
     await transport.finishRun(req.runId, {
       status: 'complete',
       ...(artifacts.length > 0 ? { artifacts } : {}),
       ...(stats.tokens > 0 ? { spentTokens: stats.tokens } : {}),
     });
+    runLog.line(
+      'info',
+      `run complete: steps=${steps.length} artifacts=${artifacts.length} tokens=${stats.tokens} duration=${Date.now() - startedAt}ms`,
+    );
     frame('done', {
       runId: req.runId,
       workflowName: req.workflowName,
@@ -768,6 +943,7 @@ export async function launchSavedWorkflow(
       tokens: stats.tokens > 0 ? stats.tokens : undefined,
       subagents: stats.subagents > 0 ? stats.subagents : undefined,
     });
+    runLog.close();
   } catch (err) {
     const cancelled = signal?.aborted === true;
     const message = err instanceof Error ? err.message : String(err);

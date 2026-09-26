@@ -202,12 +202,18 @@ export function createExtensionBrowserBackend(sessionId: string): BrowserBackend
 export async function runBrowserWithExtensionBackend(
   sessionId: string,
   spec: BrowserNodeSpec,
-  deps: { artifacts?: ArtifactStore; runId: string },
+  deps: {
+    artifacts?: ArtifactStore;
+    runId: string;
+    /** on_stuck:'agent' escalation (plan 565 Phase D). Absent → ladder fails as before. */
+    ask?: (question: string) => Promise<string | null>;
+  },
 ): Promise<BrowserNodeOutcome> {
   return runBrowserNode({
     browser: spec,
     backend: createExtensionBrowserBackend(sessionId),
     ...(deps.artifacts ? { artifacts: deps.artifacts } : {}),
+    ...(deps.ask ? { ask: deps.ask } : {}),
     runId: deps.runId,
   });
 }

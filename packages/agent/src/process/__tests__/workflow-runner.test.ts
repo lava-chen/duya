@@ -27,6 +27,7 @@ const { workflowRunDbMocks, registryExecute } = vi.hoisted(() => ({
     appendJournal: vi.fn(),
     updateStatus: vi.fn(),
     finish: vi.fn(),
+    loadJournal: vi.fn(),
   },
   registryExecute: vi.fn(),
 }));
@@ -145,6 +146,8 @@ function writeSavedWorkflow(dir: string, name: string, meta: SavedWorkflowMeta, 
 }
 
 beforeEach(() => {
+  // Per-run text logs must not land in the real home during tests.
+  process.env.DUYA_WORKFLOW_LOGS_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-run-logs-'));
   workflowRunDbMocks.create.mockReset().mockImplementation(async (input: { id?: string }) => ({
     id: input.id ?? 'row',
     workflowName: 'x',
@@ -163,6 +166,7 @@ beforeEach(() => {
   workflowRunDbMocks.appendJournal.mockReset().mockResolvedValue(true);
   workflowRunDbMocks.updateStatus.mockReset().mockResolvedValue(true);
   workflowRunDbMocks.finish.mockReset().mockResolvedValue(true);
+  workflowRunDbMocks.loadJournal.mockReset().mockResolvedValue([]);
   registryExecute.mockReset().mockResolvedValue({ result: 'ok', metadata: {} });
 });
 
@@ -201,6 +205,11 @@ describe('launchSavedWorkflow', () => {
       'r1',
       expect.objectContaining({ status: 'failed' }),
     );
+    // The per-run text log exists and carries the terminal error, even for a
+    // launch that never reached the script (run-log.ts, plan 564 follow-up).
+    const logPath = path.join(process.env.DUYA_WORKFLOW_LOGS_ROOT!, 'ghost-r1.log');
+    expect(fs.existsSync(logPath)).toBe(true);
+    expect(fs.readFileSync(logPath, 'utf8')).toContain('[error] run failed:');
   });
 
   it('fails before creating a run row when a required arg is missing', async () => {
@@ -304,6 +313,79 @@ describe('launchSavedWorkflow', () => {
       expect(workflowRunDbMocks.create).toHaveBeenCalledWith(
         expect.objectContaining({ origin: 'session' }),
       );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('resume: seeds the replay cache from the prior run — unchanged calls replay, changed ones re-execute', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-resume-'));
+    try {
+      writeSavedWorkflow(
+        dir,
+        'resumable',
+        { description: 'resumable' },
+        `
+export default async function (wf) {
+  await wf.tool("Bash", { cmd: "echo " + String(args.label) });
+  return "ok";
+}
+`,
+      );
+
+      // Run 1 — fresh: the host executes once and the journal persists the
+      // result record-by-record.
+      registryExecute.mockResolvedValue({ result: 'first', metadata: {} });
+      const persisted1: JournalRecord[] = [];
+      workflowRunDbMocks.appendJournal.mockImplementation(
+        (_runId: string, record: JournalRecord) => {
+          persisted1.push(record);
+          return Promise.resolve(true);
+        },
+      );
+      const run1 = makeDeps();
+      await launchSavedWorkflow(run1.deps, {
+        runId: 'rA',
+        workflowName: 'resumable',
+        projectDir: dir,
+        params: { label: 'v1' },
+      });
+      expect(registryExecute).toHaveBeenCalledTimes(1);
+      expect(persisted1.length).toBeGreaterThan(0);
+
+      // Run 2 — resume with identical script + args: the call replays from
+      // the seeded cache and the host is never invoked.
+      workflowRunDbMocks.loadJournal.mockResolvedValue(persisted1);
+      registryExecute.mockClear();
+      const run2 = makeDeps();
+      await launchSavedWorkflow(run2.deps, {
+        runId: 'rB',
+        workflowName: 'resumable',
+        projectDir: dir,
+        params: { label: 'v1' },
+        resumeFromRunId: 'rA',
+      });
+      expect(workflowRunDbMocks.loadJournal).toHaveBeenCalledWith('rA');
+      expect(registryExecute).not.toHaveBeenCalled();
+      const done2 = run2.frames[run2.frames.length - 1]!;
+      expect(done2.event).toBe('done');
+      expect(done2.run.status).toBe('complete');
+      const toolStep2 = done2.run.steps?.find((s) => s.id.endsWith('-tool:Bash'));
+      expect(toolStep2?.status).toBe('success');
+
+      // Run 3 — resume with a changed arg: the changed call re-executes.
+      registryExecute.mockClear();
+      registryExecute.mockResolvedValue({ result: 'second', metadata: {} });
+      const run3 = makeDeps();
+      await launchSavedWorkflow(run3.deps, {
+        runId: 'rC',
+        workflowName: 'resumable',
+        projectDir: dir,
+        params: { label: 'v2' },
+        resumeFromRunId: 'rA',
+      });
+      expect(registryExecute).toHaveBeenCalledTimes(1);
+      expect(run3.frames[run3.frames.length - 1]!.run.status).toBe('complete');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

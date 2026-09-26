@@ -85,7 +85,7 @@ import { runWorkflowRuntimeChild } from './workflow-runtime-child.js';
 import { MemoryArtifactStore } from '../modes/workflow/gui-artifacts.js';
 import { resolveChatStartAgentMode } from './permission-profile-bridge.js';
 import { applyMCPConfiguration, type MCPApplyResult } from '../mcp/apply.js';
-import { storePendingAnswer } from '../tool/AskUserQuestionTool/AskUserQuestionTool.js';
+import { storePendingAnswer, takePendingAnswer } from '../tool/AskUserQuestionTool/AskUserQuestionTool.js';
 import { isCDNImageUrl } from '../utils/urlSafety.js';
 import { resizeImageBuffer, needsResizing, TARGET_IMAGE_SIZE_BYTES } from '../utils/imageResizer.js';
 import { isModelLikelyMultimodal } from '../utils/multimodal-detection.js';
@@ -2845,7 +2845,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       clientMsgId: msg.options?.clientMsgId,
       todoGate: { enabled: steering.todoGateEnabled },
       antiDeadLoop: { ...steering.antiDeadLoop },
-      toolIntentNudgeMax: steering.toolIntentNudgeMax,
       disabledLoopHooks: steering.disabledLoopHooks,
       // Plan 445: agent loop reads this mutable reference at the `done`
       // boundary to know the turn-cumulative tokenUsage (with `last_call`
@@ -4188,6 +4187,10 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
               // cards render in the anchored session and resolve via
               // permission:resolve.
               requestPermission: createPermissionHandler(wf.sessionId),
+              // Plan 565 Phase D: wf.ask resolves through the same
+              // permission pipeline — the answers stored by permission:resolve
+              // are read back one-shot here.
+              takePendingAnswer,
               llm: {
                 apiKey: agent.apiKey ?? '',
                 baseURL: agent.baseURL,
@@ -4213,6 +4216,7 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
               workflowName: wf.workflowName,
               params: wf.params,
               projectDir: wf.projectDir,
+              ...(wf.resumeFromRunId !== undefined ? { resumeFromRunId: wf.resumeFromRunId } : {}),
             },
           ).catch((err) => {
             warn('[Agent-Process] workflow:run failed:', err);

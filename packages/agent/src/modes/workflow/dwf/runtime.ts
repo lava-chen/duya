@@ -24,6 +24,7 @@ import type { Journal } from '../journal.js';
 import { computeReqHash } from '../journal.js';
 import { BudgetLedger, Semaphore, type HostAgentSpec, type HostCallContext, type HostCallResult } from '../host.js';
 import { classifyError, type WorkflowErrorClass } from '../error-class.js';
+import { validateLooseJsonSchema, type LooseSchema } from '../output-schema.js';
 import { uncertainOutcomeFor, type DecisionRunOutcome } from '../decision-adapter.js';
 import type { DecisionQuestionSpec, GuiNodeSpec } from '../schema.js';
 import type { GuiNodeOutcome } from '../gui-runner.js';
@@ -58,12 +59,18 @@ export interface DwfHostPorts {
    * 绑定层包装）。缺席时 wf.browser 抛明确错误——扩展驱动的脚本必须绑定此端口。
    */
   runBrowser?(spec: BrowserNodeSpec, ctx: HostCallContext): Promise<BrowserNodeOutcome>;
+  /**
+   * 升级问询（plan 565 Phase D）：把问题投给锚定会话（AskUserQuestion 管线，
+   * 复用 chat:permission 帧），受控答复后继续。缺席时 wf.ask 抛明确错误、
+   * gui/browser 的 on_stuck:'agent' 档按既有降级路径走。
+   */
+  runAsk?(question: string, ctx: HostCallContext): Promise<{ answer: string | null }>;
   /** Human approval（498 卡管线）。resolve approve/deny/timeout。 */
   requestApproval(spec: { prompt: string; timeoutMs?: number }, ctx: HostCallContext): Promise<{ decision: 'approve' | 'deny' | 'timeout' }>;
   /** 551 DecisionService 桥。缺席 = 决策面不可用（走 onLowConfidence 路径）。 */
   decide?: DwfDecisionPort;
-  /** 产物通道。缺席时 publish 只落 journal。 */
-  publishArtifact?(name: string, content: unknown, contentType: string): Promise<void> | void;
+  /** 产物通道。缺席时 publish 只落 journal；返回 descriptor 时其 ref/relPath 进 journal（产物可点）。 */
+  publishArtifact?(name: string, content: unknown, contentType: string): Promise<{ ref?: string; relPath?: string } | void> | { ref?: string; relPath?: string } | void;
   /** Per-record 进度挂钩（SSE 频道）——Journal.listener 的透传位。 */
   onJournalEvent?(record: Parameters<Journal['append']>[0]): void;
   /** agent 调用预算（默认走 WORKFLOW_BUDGET_DEFAULTS）。 */
@@ -152,6 +159,21 @@ export async function compileDwfScript(
 
 // ─── wf API 形状（脚本作者视角；实现在 createDwfApi） ───
 
+/**
+ * wf.agent 的对象调用形态（与位置参数 `wf.agent(agentType, prompt, opts?)`
+ * 二选一，不可混用）。脚本作者常把 opts 与定位参数记混，这里把整个对象
+ * 当第一参的写法也接住——历史 rpa 脚本就是这么写的。
+ */
+export interface DwfAgentObjectSpec {
+  /** 也可以写别名 `type`。 */
+  agentType?: string;
+  type?: string;
+  prompt: string;
+  model?: string;
+  outputSchema?: Record<string, unknown>;
+  sticky?: string;
+}
+
 export interface DwfApi {
   /** 零 LLM 的确定性工具调用（ToolRegistry 直达）。 */
   tool(tool: string, input?: Record<string, unknown>): Promise<unknown>;
@@ -167,10 +189,25 @@ export interface DwfApi {
    * 需要 DUYA Browser Bridge 扩展在线；失败抛错；on_stuck:'skip' 时 resolve null。
    */
   browser(spec: BrowserNodeSpec): Promise<unknown>;
-  /** 开放式子任务（SubagentTool）。opts.outputSchema 走宿主校验+一次重试。 */
-  agent(agentType: string, prompt: string, opts?: { model?: string; outputSchema?: Record<string, unknown> }): Promise<unknown>;
+  /**
+   * 开放式子任务（SubagentTool）。
+   * - opts.outputSchema：宿主校验 + 一次同上下文 nudge 重试（plan 565 Phase C；
+   *   此前该参数被静默丢弃，注释承诺的校验从未存在）。二次仍不符抛
+   *   schema_mismatch，交由节点 on_stuck 阶梯裁决。
+   * - opts.sticky：run 内 actor 键。同键的后续调用把上轮结果摘要拼进 prompt
+   *   （v1 降级实现——SubagentTool 的 resume_from 是宣传未实现的死参数，真续
+   *   会话需要动执行器，超出 dwf 范围）。sticky 轮的 reqHash 含拼入的上轮
+   *   摘要，天然不与首轮撞缓存。
+   */
+  agent(agentType: string | DwfAgentObjectSpec, prompt?: string, opts?: { model?: string; outputSchema?: Record<string, unknown>; sticky?: string }): Promise<unknown>;
   /** 人在环审批。deny 抛错；timeout 按 onTimeout：fail=抛错、skip=返回 null、escalate=抛 escalate。 */
   approve(prompt: string, opts: { timeoutHours?: number; onTimeout: 'fail' | 'skip' | 'escalate' }): Promise<null | undefined>;
+  /**
+   * 升级问询（plan 565 Phase D，ZCode escalate 的对应物）：把自由文本问题投给
+   * 锚定会话的问询卡（AskUserQuestion 管线），答案落 journal（nodeKind 'ask'，
+   * resume 重放不再打扰）。卡片被拒/超时 → resolve null，脚本自行裁决。
+   */
+  ask(question: string): Promise<string | null>;
   /** System One 类型化决策。决策面缺席且无 default 时抛错。 */
   decide(questions: Record<string, DecisionQuestionSpec>, opts?: { state?: unknown; thresholds?: Record<string, number>; onLowConfidenceDefault?: string | number | boolean }): Promise<Record<string, string | number>>;
   /** fan-out：items 逐项调 fn，Semaphore 限并发。 */
@@ -199,6 +236,12 @@ export interface DwfRunOptions {
   args?: Record<string, unknown>;
   /** resume 判定：true 时 approve 走宿主的既有决定（缓存/已批准）直接放行。 */
   resuming?: boolean;
+  /**
+   * Run 级 agent 模型（plan 568）：`wf.agent` 未显式传 `opts.model` 时的默认。
+   * launch 链路从启动对话框的覆盖字段贯通而来；缺省 = 继承 worker 主模型
+   * （SubagentTool 的 `model || definition.model || mainLoopModel` 链）。
+   */
+  agentModel?: string;
 }
 
 /** 调用计数 → 稳定 nodeId（同一脚本同一执行序 → 同一 id，缓存键的前提）。 */
@@ -212,6 +255,42 @@ function safeJsonSize(value: unknown): number {
   } catch {
     return 0;
   }
+}
+
+/**
+ * 从模型的字符串输出里提取 JSON 候选（plan 568）。模型经常把 JSON 包进
+ * ```json fence 或前后缀 prose——schema 校验直接看到 string，报
+ * "expected type object, got string" 假阳性（实测 rpa-news-digest 两个
+ * agent 均此死法）。提取顺序：整串 parse → fenced block → 首个平衡的
+ * {…}/[…] 片段。提取失败返回 undefined（调用方回落原值）。
+ */
+export function extractJsonCandidate(output: unknown): unknown {
+  if (typeof output !== 'string') return undefined;
+  const text = output.trim();
+  if (text === '') return undefined;
+  const tryParse = (s: string): unknown | undefined => {
+    try {
+      return JSON.parse(s) as unknown;
+    } catch {
+      return undefined;
+    }
+  };
+  const direct = tryParse(text);
+  if (direct !== undefined) return direct;
+  const fenced = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+  if (fenced) {
+    const inner = tryParse(fenced[1].trim());
+    if (inner !== undefined) return inner;
+  }
+  for (const [open, close] of [['{', '}'], ['[', ']']] as const) {
+    const start = text.indexOf(open);
+    const end = text.lastIndexOf(close);
+    if (start !== -1 && end > start) {
+      const parsed = tryParse(text.slice(start, end + 1));
+      if (parsed !== undefined) return parsed;
+    }
+  }
+  return undefined;
 }
 
 // ─── 输入摘要（plan 560 §6.1：display-only，绝不进 reqHash） ───
@@ -393,12 +472,20 @@ export function createDwfApi(ports: DwfHostPorts, opts: DwfRunOptions): DwfApi {
   const budget = opts.budget ?? new BudgetLedger(ports.agentBudget);
   const ctx: HostCallContext = { runId: opts.runId, nodeId: '' };
   let callSeq = 0;
+  // Sticky actor notebook (plan 565 Phase C): sticky key → last result text.
+  // Populated on BOTH fresh execution and cache hits, so a resumed run (the
+  // first sticky call replaying from the seeded journal) still hands the
+  // previous answer to the second sticky turn.
+  const stickyLast = new Map<string, string>();
+
+  /** Cap the carried-over answer so one huge turn cannot bloat every later prompt. */
+  const STICKY_CARRY_MAX = 4_000;
 
   /** 共享的「缓存优先宿主调用」。返回 [值, 是否缓存命中]。 */
   async function cachedCall<T>(
     kind: 'node_result' | 'decision' | 'approval',
     action: string,
-    nodeKind: 'tool' | 'gui' | 'browser' | 'agent' | 'decision' | 'human',
+    nodeKind: 'tool' | 'gui' | 'browser' | 'agent' | 'decision' | 'human' | 'ask',
     payload: unknown,
     execute: () => Promise<{ value: T; meta?: { childSessionId?: string; exitCode?: number | null; usage?: { inputTokens: number; outputTokens: number } } }>,
   ): Promise<{ value: T; cached: boolean }> {
@@ -411,6 +498,10 @@ export function createDwfApi(ports: DwfHostPorts, opts: DwfRunOptions): DwfApi {
       journal.append({ kind, nodeId, attempt: 1, status: 'succeeded', result: hit.result, nodeKind, action, inputSummary, replayed: true, durationMs: 0 });
       return { value: hit.result as T, cached: true };
     }
+    // Plan 568: 节点启动即落一条 running 记录——「one write, three uses」的
+    // 实时面。cache 只认 succeeded，resume 语义不变；崩溃残留的 trailing
+    // running 记录由 UI 侧 last-wins 折叠，不影响重放。
+    journal.append({ kind, nodeId, attempt: 1, status: 'running', nodeKind, action, inputSummary });
     const startedAt = Date.now();
     try {
       const outcome = await execute();
@@ -442,6 +533,11 @@ export function createDwfApi(ports: DwfHostPorts, opts: DwfRunOptions): DwfApi {
         inputSummary,
         errorClass: classifyError(err),
         durationMs: Date.now() - startedAt,
+        // 失败的 agent 也可能已经建了子会话（schema_mismatch / 中途出错）——
+        // 带上它，运行卡片的 agent chip 才能点进实时界面。
+        ...((err as { childSessionId?: string } | null)?.childSessionId
+          ? { childSessionId: (err as { childSessionId: string }).childSessionId }
+          : {}),
       });
       throw err;
     }
@@ -488,18 +584,114 @@ export function createDwfApi(ports: DwfHostPorts, opts: DwfRunOptions): DwfApi {
     },
 
     async agent(agentType, prompt, agentOpts) {
-      const { value } = await cachedCall('node_result', `agent:${agentType}`, 'agent', { agentType, prompt, ...agentOpts }, async () => {
-        const ticket = budget.reserveAgent();
-        try {
-          const res = await ports.runAgent({ agent: agentType, prompt, ...(agentOpts?.model !== undefined ? { model: agentOpts.model } : {}), ...(agentOpts?.outputSchema !== undefined ? { outputSchema: agentOpts.outputSchema } : {}) }, ctx);
-          if (!res.ok) throw new Error(res.error ?? `agent "${agentType}" failed`);
-          budget.commit(ticket);
-          return { value: res.output, meta: { childSessionId: res.childSessionId, usage: res.usage } };
-        } catch (err) {
-          budget.release(ticket);
-          throw err;
+      // 对象形态归一化：wf.agent({ agentType, prompt, model?, outputSchema?, sticky? })
+      // 等价于 wf.agent(agentType, prompt, opts)。两种写法二选一，混用即抛。
+      // （此前对象被原样当成 agentType 传给 SubagentTool 的 subagent_type，
+      // 在 .trim() 上爆出无从理解的 "o.trim is not a function"。）
+      if (agentType !== null && typeof agentType === 'object') {
+        if (prompt !== undefined || agentOpts !== undefined) {
+          throw new TypeError(
+            'wf.agent: object form and positional form cannot be mixed — use wf.agent({agentType, prompt, ...}) OR wf.agent(agentType, prompt, opts?)',
+          );
         }
-      });
+        const spec = agentType as DwfAgentObjectSpec;
+        agentOpts = {
+          ...(spec.model !== undefined ? { model: spec.model } : {}),
+          ...(spec.outputSchema !== undefined ? { outputSchema: spec.outputSchema } : {}),
+          ...(spec.sticky !== undefined ? { sticky: spec.sticky } : {}),
+        };
+        prompt = spec.prompt;
+        agentType = spec.agentType ?? spec.type ?? '';
+      }
+      if (typeof agentType !== 'string' || agentType.trim() === '') {
+        throw new TypeError(
+          `wf.agent: agentType must be a non-empty string (got ${agentType === null ? 'null' : typeof agentType}) — usage: wf.agent('general-purpose', prompt, opts?) or wf.agent({agentType, prompt, ...})`,
+        );
+      }
+      if (typeof prompt !== 'string' || prompt.trim() === '') {
+        throw new TypeError('wf.agent: prompt must be a non-empty string');
+      }
+      const stickyKey = agentOpts?.sticky;
+      // Sticky continuation: bake the actor's previous answer into the prompt.
+      // The embedded summary changes the payload → a different reqHash than
+      // the first turn's, so sticky turns never collide with (or suppress)
+      // each other in the journal replay cache.
+      const prev = stickyKey ? stickyLast.get(stickyKey) : undefined;
+      const effectivePrompt =
+        prev !== undefined
+          ? `<sticky_context>\nThe previous turn of this actor produced:\n${prev.length > STICKY_CARRY_MAX ? `${prev.slice(0, STICKY_CARRY_MAX)}…` : prev}\n</sticky_context>\n\n${prompt}`
+          : prompt;
+
+      const { value } = await cachedCall(
+        'node_result',
+        `agent:${agentType}`,
+        'agent',
+        { agentType, prompt: effectivePrompt, ...(agentOpts?.model !== undefined ? { model: agentOpts.model } : {}), ...(agentOpts?.outputSchema !== undefined ? { outputSchema: agentOpts.outputSchema } : {}) },
+        async () => {
+          const ticket = budget.reserveAgent();
+          try {
+            const runSpec = {
+              agent: agentType,
+              prompt: effectivePrompt,
+              // 显式 opts.model > run 级 agentModel（plan 568）> 子代理自身默认。
+              ...(agentOpts?.model !== undefined
+                ? { model: agentOpts.model }
+                : opts.agentModel !== undefined
+                  ? { model: opts.agentModel }
+                  : {}),
+              ...(agentOpts?.outputSchema !== undefined ? { outputSchema: agentOpts.outputSchema } : {}),
+            };
+            let res = await ports.runAgent(runSpec, ctx);
+            // 模型常把 JSON 包进 fence/prose——先提取再校验（plan 568），否则
+            // "expected type object, got string" 假阳性。提取结果同时作为最终
+            // 输出，脚本拿到的就是结构化对象。
+            if (res.ok) {
+              const extracted = extractJsonCandidate(res.output);
+              if (extracted !== undefined) res = { ...res, output: extracted };
+            }
+            // Host-side outputSchema contract + ONE same-context nudge retry
+            // (plan 565 Phase C). The retry reuses the effective prompt (with
+            // its sticky context) — economically the ZCode "reject → repair
+            // in the same turn" slot, minus a persisted sub-session.
+            const schema = agentOpts?.outputSchema as LooseSchema | undefined;
+            if (schema && res.ok) {
+              const reason = validateLooseJsonSchema(res.output, schema);
+              if (reason) {
+                const nudgePrompt = `${effectivePrompt}\n\nYour previous answer failed schema validation: ${reason}. Return the answer again as JSON matching the schema — raw JSON only, no markdown fences or prose.`;
+                res = await ports.runAgent({ ...runSpec, prompt: nudgePrompt }, ctx);
+                if (res.ok) {
+                  const retryExtracted = extractJsonCandidate(res.output);
+                  if (retryExtracted !== undefined) res = { ...res, output: retryExtracted };
+                }
+                const retryReason = res.ok ? validateLooseJsonSchema(res.output, schema) : 'agent failed';
+                if (retryReason) {
+                  const err = new Error(`output_schema mismatch: ${retryReason}`);
+                  (err as Error & { errorClass?: string }).errorClass = 'schema_mismatch';
+                  if (res.childSessionId) (err as { childSessionId?: string }).childSessionId = res.childSessionId;
+                  throw err;
+                }
+              }
+            }
+            if (!res.ok) {
+              const err = new Error(res.error ?? `agent "${agentType}" failed`);
+              // 失败也可能已有子会话——带上传给 journal，chip 才能点进观看。
+              if (res.childSessionId) (err as { childSessionId?: string }).childSessionId = res.childSessionId;
+              throw err;
+            }
+            budget.commit(ticket);
+            return { value: res.output, meta: { childSessionId: res.childSessionId, usage: res.usage } };
+          } catch (err) {
+            budget.release(ticket);
+            throw err;
+          }
+        },
+      );
+      if (stickyKey) {
+        stickyLast.set(
+          stickyKey,
+          typeof value === 'string' ? value : JSON.stringify(value) ?? String(value),
+        );
+      }
       return value;
     },
 
@@ -517,6 +709,20 @@ export function createDwfApi(ports: DwfHostPorts, opts: DwfRunOptions): DwfApi {
       });
       // skip 的 timeout 在 journal 里是 succeeded('skipped')，对脚本呈现为 null。
       return value === 'skipped' ? null : undefined;
+    },
+
+    async ask(question) {
+      const { value } = await cachedCall('approval', 'ask', 'ask', { question }, async () => {
+        if (!ports.runAsk) {
+          // 与 runGui/runBrowser 缺端口的语义同构：明确报错，而非静默 null。
+          throw new Error('wf.ask is not bound in this worker — no ask port on the host ports');
+        }
+        const outcome = await ports.runAsk(question, ctx);
+        // 卡片拒绝/超时 → { answered: false }：journal 里是 succeeded(null)，
+        // 与 approve skip 同一经济学——已完成的问询不再重付。
+        return { value: outcome.answer ?? null };
+      });
+      return value as string | null;
     },
 
     async decide(questions, decideOpts) {
@@ -557,13 +763,23 @@ export function createDwfApi(ports: DwfHostPorts, opts: DwfRunOptions): DwfApi {
 
     async publish(name, content, contentType) {
       const nodeId = callNodeId(callSeq++, `publish:${name}`);
-      if (ports.publishArtifact) await ports.publishArtifact(name, content, contentType ?? 'text/plain');
+      // Plan 568: descriptor.ref 落进 journal result——运行卡片 / 面板靠它
+      // 把产物芯片变成可点击（此前 descriptor 被丢弃，产物永远点不开）。
+      const descriptor = ports.publishArtifact
+        ? await ports.publishArtifact(name, content, contentType ?? 'text/plain')
+        : undefined;
+      // ref 与 relPath 同值（`<runId>/<name><ext>`）——renderer 的点击键。
+      const ref =
+        descriptor && typeof descriptor === 'object'
+          ? ((descriptor as { ref?: unknown }).ref ?? (descriptor as { relPath?: unknown }).relPath)
+          : undefined;
+      const refStr = typeof ref === 'string' && ref !== '' ? ref : undefined;
       journal.append({
         kind: 'artifact',
         nodeId,
         attempt: 1,
         status: 'succeeded',
-        result: { name, contentType: contentType ?? 'text/plain', content },
+        result: { name, contentType: contentType ?? 'text/plain', content, ...(refStr !== undefined ? { ref: refStr } : {}) },
         nodeKind: 'noop',
         action: 'publish',
         inputSummary: name,
