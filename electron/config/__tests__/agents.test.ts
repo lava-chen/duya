@@ -4,7 +4,7 @@ import os from 'os';
 import path from 'path';
 import { ConfigStore } from '../store';
 import { _setConfigStoreForTest } from '../store-instance';
-import { listConfigAgents, listBots, upsertConfigAgent, deleteConfigAgent, allocateBotId, collectTakenBotIds, createConfigAgentUnique, softDeleteConfigAgent, updateBotProfileIdentity, clearBotAvatarTokens, setBotAvatarImage, clearBotAvatarImage } from '../agents';
+import { listConfigAgents, listBots, upsertConfigAgent, deleteConfigAgent, allocateBotId, collectTakenBotIds, createConfigAgentUnique, softDeleteConfigAgent, updateBotProfileIdentity } from '../agents';
 import { getConfigStore } from '../store-instance';
 import { readBotProfile, writeBotProfile } from '../bot-profile';
 import { getBotProfilePath, getDuyaAgentsRoot, getBotDeletedDir } from '../agent-paths';
@@ -131,37 +131,6 @@ describe('config agents write module', () => {
     expect(bots[0]!.title).toBe('Researcher');
     expect(bots[0]!.description).toBe('runtime desc');
     expect(bots[0]!.avatarColor).toBe('blue');
-    expect(bots[0]!.avatarUrl).toBeUndefined(); // no image avatar installed
-  });
-
-  it('listBots surfaces a duya-file avatarUrl when an avatar image exists', () => {
-    upsertConfigAgent('alpha', { name: 'Alpha' });
-    writeBotProfile(getBotProfilePath('alpha', dir), {
-      name: 'Alpha',
-      title: '',
-      description: '',
-      avatarImage: 'avatar.png',
-      avatarColor: 'blue',
-    });
-    const agentDir = path.dirname(getBotProfilePath('alpha', dir));
-    fs.writeFileSync(path.join(agentDir, 'avatar.png'), Buffer.from([0x89, 0x50]));
-
-    const bots = listBots();
-    expect(bots[0]!.avatarUrl).toMatch(/^duya-file:\/\/\//);
-    expect(bots[0]!.avatarUrl).toContain('/avatar.png?v=');
-    expect(bots[0]!.avatarVersion).toBeGreaterThan(0);
-  });
-
-  it('listBots omits avatarUrl when the recorded image file is missing', () => {
-    upsertConfigAgent('alpha', { name: 'Alpha' });
-    writeBotProfile(getBotProfilePath('alpha', dir), {
-      name: 'Alpha',
-      title: '',
-      description: '',
-      avatarImage: 'avatar.png',
-    });
-    const bots = listBots();
-    expect(bots[0]!.avatarUrl).toBeUndefined();
   });
 
   it('listBots falls back to config when no profile exists', () => {
@@ -171,82 +140,12 @@ describe('config agents write module', () => {
     expect(bots[0]!.name).toBe('Beta');
     expect(bots[0]!.description).toBe('no profile');
     expect(bots[0]!.title).toBe('');
-    expect(bots[0]!.avatarUrl).toBeUndefined();
   });
 
   it('first creation seeds the avatar color from the upsert input', () => {
     upsertConfigAgent('gamma', { name: 'Gamma', avatarColor: 'orange' });
     const profile = readBotProfile(getBotProfilePath('gamma', dir));
     expect(profile!.avatarColor).toBe('orange');
-  });
-
-  // Plan 481 amendment: update_state avatar.clear support.
-  it('clearBotAvatarTokens removes color + image reference and keeps the rest', () => {
-    upsertConfigAgent('delta', { name: 'Delta', description: 'keep me' });
-    updateBotProfileIdentity('delta', { avatarColor: 'cyan' });
-    const cleared = clearBotAvatarTokens('delta');
-    expect(cleared?.avatarColor).toBeUndefined();
-    expect(cleared?.avatarImage).toBeUndefined();
-    const reread = readBotProfile(getBotProfilePath('delta', dir));
-    expect(reread?.name).toBe('Delta');
-    expect(reread?.description).toBe('keep me');
-  });
-
-  it('setBotAvatarImage copies into the agent dir, records the filename, and replaces the old file', () => {
-    upsertConfigAgent('eps', { name: 'Eps' });
-
-    const pngSource = path.join(dir, 'src.png');
-    fs.writeFileSync(pngSource, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-    const first = setBotAvatarImage('eps', pngSource);
-    expect(first.avatarImage).toBe('avatar.png');
-    expect(first.avatarUrl).toMatch(/^duya-file:\/\/\//);
-    const agentDir = path.dirname(getBotProfilePath('eps', dir));
-    expect(fs.existsSync(path.join(agentDir, 'avatar.png'))).toBe(true);
-    expect(readBotProfile(getBotProfilePath('eps', dir))?.avatarImage).toBe('avatar.png');
-
-    // A different extension replaces (not stacks onto) the previous file.
-    const svgSource = path.join(dir, 'src.svg');
-    fs.writeFileSync(svgSource, '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
-    const second = setBotAvatarImage('eps', svgSource);
-    expect(second.avatarImage).toBe('avatar.svg');
-    expect(fs.existsSync(path.join(agentDir, 'avatar.png'))).toBe(false);
-    expect(fs.existsSync(path.join(agentDir, 'avatar.svg'))).toBe(true);
-  });
-
-  it('setBotAvatarImage rejects oversized and wrong-content files', () => {
-    upsertConfigAgent('zeta', { name: 'Zeta' });
-
-    const notPng = path.join(dir, 'not.png');
-    fs.writeFileSync(notPng, 'plain text');
-    expect(() => setBotAvatarImage('zeta', notPng)).toThrow(/does not match/);
-
-    const big = path.join(dir, 'big.png');
-    fs.writeFileSync(big, Buffer.alloc(5 * 1024 * 1024 + 1, 0x89));
-    expect(() => setBotAvatarImage('zeta', big)).toThrow(/too large/);
-  });
-
-  it('clearBotAvatarImage deletes the file and drops the profile field, keeping color', () => {
-    upsertConfigAgent('eta', { name: 'Eta' });
-    const src = path.join(dir, 'src.png');
-    fs.writeFileSync(src, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-    setBotAvatarImage('eta', src);
-    updateBotProfileIdentity('eta', { avatarColor: 'green' });
-
-    const cleared = clearBotAvatarImage('eta');
-    expect(cleared.avatarImage).toBe('');
-    const agentDir = path.dirname(getBotProfilePath('eta', dir));
-    expect(fs.existsSync(path.join(agentDir, 'avatar.png'))).toBe(false);
-    const profile = readBotProfile(getBotProfilePath('eta', dir));
-    expect(profile?.avatarImage).toBeUndefined();
-    expect(profile?.avatarColor).toBe('green');
-  });
-
-  it('clearBotAvatarTokens returns null when no profile exists on disk', () => {
-    // A config entry with no seeded profile.json (e.g. pre-485 data): the
-    // upsert path always seeds on first creation, so write the config map
-    // directly.
-    getConfigStore().set('agents.zeta', { name: 'Zeta', description: '' });
-    expect(clearBotAvatarTokens('zeta')).toBeNull();
   });
 });
 

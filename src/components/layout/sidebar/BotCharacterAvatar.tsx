@@ -3,83 +3,40 @@
 /**
  * BotCharacterAvatar — bot avatar renderer.
  *
- * Priority:
- *   1. `avatarUrl` — an uploaded / agent-generated image file served over
- *      the `duya-file://` protocol (URL prebuilt by the main process,
- *      `?v=<mtime>` cache-busted).
- *   2. Otherwise a colored circle with a deterministic emoji — each agent
- *      id maps to a stable emoji from a bot-themed palette, on the color
- *      token (or deterministic-hue) background.
+ * The avatar is the animated agent face (`@/components/agent-face`):
+ * a fixed superellipse tile driven by the bloub character engine. Identity is
+ * the body color — explicit token color first, else the deterministic per-agent
+ * hue. An idle bot dozes (somnolent); a working one collapses into the
+ * thinking dots, so the streaming state reads straight off the avatar.
  */
 
+import { AgentFace } from "@/components/agent-face/AgentFace";
 import { botAvatarColorHex } from "@/lib/bot-avatar";
 import { deriveBotContactHue } from "./bot-contacts";
 
 export interface BotCharacterAvatarProps {
   name: string;
   agentId: string;
-  /** `duya-file://` URL of the bot's avatar image (main-process built). */
-  avatarUrl?: string;
-  /** Color token id for the emoji tile background (used when no image). */
+  /** Color token id for the face body (explicit token wins over hue). */
   avatarColor?: string;
-  /** User-picked emoji for the colored circle (wins over the deterministic one). */
-  avatarEmoji?: string;
   size?: number;
-  /** Kept for call-site compatibility (streaming indicator is row-level). */
+  /** While true the face runs the thinking animation. */
   working?: boolean;
 }
 
-/** Bot-themed emoji palette — seeded by the agent id so each bot keeps a
-    stable face without an extra config field. */
-const BOT_EMOJI_PALETTE = [
-  "🤖", "🦾", "👾", "🧠", "💡", "✨", "🚀", "🔮",
-  "📊", "🎯", "📝", "🛠️", "🧩", "🗂️", "📈", "🎨",
-  "🔬", "🤝", "🧭", "⚙️", "🦉", "🐙", "🌐", "🔥",
-];
-
 export function BotCharacterAvatar({
   agentId,
-  avatarUrl,
   avatarColor,
-  avatarEmoji,
   size = 38,
+  working,
 }: BotCharacterAvatarProps) {
-  if (avatarUrl) {
-    return (
-      <img
-        src={avatarUrl}
-        width={size}
-        height={size}
-        alt=""
-        aria-hidden="true"
-        className="bot-character-avatar"
-        style={{ width: size, height: size }}
-      />
-    );
-  }
-
-  // Emoji tile: explicit token color, else the deterministic per-agent
-  // hue converted to hex (legacy config agents / unset color).
-  const backgroundColor = botContactColorHex(agentId, avatarColor) ?? "#777777";
   return (
-    <span
-      className="bot-contact-avatar"
-      style={{
-        backgroundColor,
-        width: size,
-        height: size,
-        fontSize: Math.round(size * 0.63),
-      }}
-      aria-hidden="true"
-    >
-      {/* The glyph is a dedicated inner box so it can be nudged for optical
-          centering WITHOUT moving the parent circle out of place — the
-          streaming ring centers itself on the wrap, so the circle must stay
-          concentric with it. */}
-      <span className="bot-contact-avatar-glyph">
-        {avatarEmoji?.trim() || botEmojiFor(agentId)}
-      </span>
-    </span>
+    <AgentFace
+      size={size}
+      color={botContactColorHex(agentId, avatarColor) ?? "#777777"}
+      status={working ? "running" : undefined}
+      className="bot-character-avatar"
+    />
   );
 }
 
@@ -94,16 +51,6 @@ export function botContactColorHex(
 ): string | null {
   const tokenHex = botAvatarColorHex(avatarColor);
   return tokenHex ?? hslToHex(deriveBotContactHue(agentId), 42, 46);
-}
-
-/** Stable emoji for an agent id (hash into the bot-themed palette). */
-function botEmojiFor(agentId: string): string {
-  let hash = 0;
-  for (let i = 0; i < agentId.length; i++) {
-    hash = (hash << 5) - hash + agentId.charCodeAt(i);
-    hash |= 0;
-  }
-  return BOT_EMOJI_PALETTE[Math.abs(hash) % BOT_EMOJI_PALETTE.length];
 }
 
 /** hsl(h, s%, l%) → #rrggbb (matches the legacy `hsl(hue 42% 46%)` fallback). */

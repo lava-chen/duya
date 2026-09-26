@@ -5,7 +5,6 @@ import {
   resolveDuyaAgentDir,
   getBotProfilePath,
   getBotSettingsPath,
-  getBotAvatarFilePath,
   getBotStateDir,
   getBotMemoryDir,
 } from '../agent-paths';
@@ -23,29 +22,12 @@ describe('agent-paths (Plan 485 P1.1)', () => {
     );
   });
 
-  it('derives profile/settings/avatar/state/memory paths under the agent dir', () => {
+  it('derives profile/settings/state/memory paths under the agent dir', () => {
     const agentDir = path.join(ROOT, 'agents', 'alpha');
     expect(getBotProfilePath('alpha', ROOT)).toBe(path.join(agentDir, 'profile.json'));
     expect(getBotSettingsPath('alpha', ROOT)).toBe(path.join(agentDir, 'settings.json'));
-    expect(getBotAvatarFilePath('alpha', 'avatar.png', ROOT)).toBe(path.join(agentDir, 'avatar.png'));
-    expect(getBotAvatarFilePath('alpha', 'avatar.svg', ROOT)).toBe(path.join(agentDir, 'avatar.svg'));
     expect(getBotStateDir('alpha', ROOT)).toBe(path.join(agentDir, 'state'));
     expect(getBotMemoryDir('alpha', ROOT)).toBe(path.join(agentDir, 'memory'));
-  });
-
-  it('rejects non-whitelisted avatar filenames (no traversal, no arbitrary files)', () => {
-    for (const bad of [
-      'avatar.exe',
-      'profile.json',
-      'avatar.png.exe',
-      '../avatar.png',
-      'sub/avatar.png',
-      'avatar.png.bak',
-      'Avatar.PNG.bat',
-      '',
-    ]) {
-      expect(() => getBotAvatarFilePath('alpha', bad, ROOT)).toThrow(/Invalid bot avatar filename/);
-    }
   });
 
   it('rejects ids that would escape the agents root', () => {

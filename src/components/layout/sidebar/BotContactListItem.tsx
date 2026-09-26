@@ -439,9 +439,7 @@ export function BotContactListItem({
         <BotCharacterAvatar
           name={contact.name}
           agentId={contact.agentId}
-          avatarUrl={contact.avatarUrl}
           avatarColor={contact.avatarColor}
-          avatarEmoji={contact.avatarEmoji}
           size={32}
           working={activeIsBusy}
         />

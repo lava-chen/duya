@@ -2,18 +2,13 @@
 
 /**
  * use-bot-contact-form — shared edit-form state for a bot's runtime
- * identity (name, description, avatar, model).
+ * identity (name, description, color, model).
  *
  * Extracted from EditBotDialog so the dialog and the bot-settings side
  * panel (plan 483 P2.1c) render the same fields over the same save path:
  * identity → `agents/<id>/profile.json` (updateBotIdentity), then model →
  * config.toml (updateConfigAgent) — the runtime identity source from
  * plan 485 §2.4.
- *
- * The avatar image is NOT part of the form save: upload/remove are
- * immediate main-process actions (dialog + copy + profile write) exposed
- * through `uploadAvatar` / `removeAvatar`, which refresh the contact via
- * `onSaved` when they succeed.
  *
  * The form seeds once per contact id while `active`. It deliberately does
  * NOT re-seed when the contact object identity changes: merged contact
@@ -22,12 +17,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import {
-  updateBotIdentity,
-  updateConfigAgent,
-  uploadBotAvatar,
-  clearBotAvatar,
-} from "@/lib/agent-profile-ipc";
+import { updateBotIdentity, updateConfigAgent } from "@/lib/agent-profile-ipc";
 import { listProvidersIPC } from "@/lib/ipc-client";
 import {
   buildBotModelGroups,
@@ -42,7 +32,7 @@ export interface UseBotContactFormOptions {
   active: boolean;
   /** The bot being edited (null until the host resolves it). */
   contact: BotContact | null;
-  /** Called after a successful save / avatar change (hosts reload their contact lists). */
+  /** Called after a successful save (hosts reload their contact lists). */
   onSaved?: (agentId: string) => void;
 }
 
@@ -52,11 +42,6 @@ export function useBotContactForm({ active, contact, onSaved }: UseBotContactFor
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [color, setColor] = useState("blue");
-  /** User-picked emoji for the colored circle ('' = auto-assigned). */
-  const [emoji, setEmoji] = useState("");
-  /** Current avatar image URL (live state; seeds from the contact). */
-  const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined);
-  const [avatarBusy, setAvatarBusy] = useState(false);
   const [model, setModel] = useState("");
   /** Provider store id the configured `model` belongs to ('' = none). */
   const [provider, setProvider] = useState("");
@@ -84,8 +69,6 @@ export function useBotContactForm({ active, contact, onSaved }: UseBotContactFor
     setTitle(contact.title ?? "");
     setDescription(contact.description ?? "");
     setColor(contact.avatarColor ?? "blue");
-    setEmoji(contact.avatarEmoji ?? "");
-    setAvatarUrl(contact.avatarUrl);
     setModel(contact.model ?? "");
     setProvider(contact.provider ?? "");
     setReasoning(contact.reasoning);
@@ -129,7 +112,6 @@ export function useBotContactForm({ active, contact, onSaved }: UseBotContactFor
         title: title.trim() || undefined,
         description: description.trim() || undefined,
         avatarColor: color,
-        avatarEmoji: emoji.trim() || undefined,
       });
       await updateConfigAgent(contact.agentId, {
         name: name.trim(),
@@ -148,44 +130,6 @@ export function useBotContactForm({ active, contact, onSaved }: UseBotContactFor
     }
   };
 
-  /** Open the file dialog and install the picked image as the bot's avatar. */
-  const uploadAvatar = async (): Promise<boolean> => {
-    if (!contact || avatarBusy) return false;
-    setAvatarBusy(true);
-    setError(null);
-    try {
-      const result = await uploadBotAvatar(contact.agentId);
-      if (result) {
-        setAvatarUrl(result.avatarUrl);
-        onSaved?.(contact.agentId);
-      }
-      return true;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      return false;
-    } finally {
-      setAvatarBusy(false);
-    }
-  };
-
-  /** Remove the avatar image; the colored initial circle takes over. */
-  const removeAvatar = async (): Promise<boolean> => {
-    if (!contact || avatarBusy) return false;
-    setAvatarBusy(true);
-    setError(null);
-    try {
-      await clearBotAvatar(contact.agentId);
-      setAvatarUrl(undefined);
-      onSaved?.(contact.agentId);
-      return true;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      return false;
-    } finally {
-      setAvatarBusy(false);
-    }
-  };
-
   return {
     name,
     setName,
@@ -195,12 +139,6 @@ export function useBotContactForm({ active, contact, onSaved }: UseBotContactFor
     setDescription,
     color,
     setColor,
-    emoji,
-    setEmoji,
-    avatarUrl,
-    avatarBusy,
-    uploadAvatar,
-    removeAvatar,
     model,
     provider,
     /** Thinking level bound to the model (undefined → runtime default medium). */

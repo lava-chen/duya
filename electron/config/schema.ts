@@ -118,8 +118,9 @@ export interface AgentConfig {
   /**
    * Default handling for a chat message sent while the agent is already
    * running. 'followup' injects it at the next model-turn boundary
-   * (steering); 'queued' holds it until just before the final answer, or
-   * promotes it to a fresh user turn when the run ends. Mirrors the
+   * (steering); 'queued' holds it until the run ends, then the delivery
+   * layer promotes it to a fresh user turn (plan 570 — it is no longer
+   * absorbed at the before_final_answer exit boundary). Mirrors the
    * mailbox row `kind` vocabulary.
    */
   busy_message_mode: 'followup' | 'queued';
@@ -635,7 +636,6 @@ export const DEFAULT_CONFIG: DuyaConfig = {
   steering: {
     todo_gate: true,
     anti_dead_loop: { enabled: true, nudge_at: 8, hard_nudge_at: 12, hard_stop_at: 16 },
-    tool_intent_nudge_max: 2,
   },
   hooks: { files: [] },
 };

@@ -8,7 +8,6 @@
  * Layout (Plan 485 §2.2):
  *   <duyaRoot>/agents/<agentId>/profile.json   — runtime identity source
  *   <duyaRoot>/agents/<agentId>/settings.json  — mutable settings (host)
- *   <duyaRoot>/agents/<agentId>/avatar.<ext>   — avatar file
  *   <duyaRoot>/agents/<agentId>/state/         — reserved (476/477/484)
  *   <duyaRoot>/agents/<agentId>/memory/        — reserved (479)
  *
@@ -20,7 +19,6 @@
 import path from 'path';
 import { resolveConfigRoot } from './compass.js';
 import { assertValidBotId } from './agent-id.js';
-import { isValidAvatarImageFilename } from './bot-avatar.js';
 import { getConfigStore } from './store-instance';
 
 /** `~/.duya/agents` — root of all bot identity directories. */
@@ -55,24 +53,6 @@ export function getBotProfilePath(agentId: string, duyaRoot?: string): string {
 /** `<agentDir>/settings.json` — host-managed mutable settings. */
 export function getBotSettingsPath(agentId: string, duyaRoot?: string): string {
   return path.join(resolveDuyaAgentDir(agentId, duyaRoot), 'settings.json');
-}
-
-/**
- * Canonical avatar image filename stem; the actual extension comes from the
- * uploaded file (`avatar.png`, `avatar.svg`, … per the bot-avatar.ts whitelist).
- */
-export const BOT_AVATAR_STEM = 'avatar';
-
-/**
- * `<agentDir>/<filename>` — avatar image path. `filename` must pass
- * `isValidAvatarImageFilename` (canonical stem + whitelisted extension) so
- * nothing outside the agent directory can be addressed.
- */
-export function getBotAvatarFilePath(agentId: string, filename: string, duyaRoot?: string): string {
-  if (!isValidAvatarImageFilename(filename)) {
-    throw new Error(`Invalid bot avatar filename: '${filename}'`);
-  }
-  return path.join(resolveDuyaAgentDir(agentId, duyaRoot), filename);
 }
 
 /** `<agentDir>/state` — reserved for 476 wake markers / 477 binding / 484 resume. */

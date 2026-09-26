@@ -51,13 +51,12 @@ describe('buildBotContacts (plan 483 P1.2)', () => {
     expect(reviewer?.boundThreadId).toBeNull();
   });
 
-  it('carries avatar color and image url through', () => {
+  it('carries avatar color through', () => {
     const contacts = buildBotContacts(
-      [{ id: 'fe', name: 'FE', title: 'UI', description: '', avatarColor: 'blue', avatarUrl: 'duya-file:///a/avatar.png?v=1' }],
+      [{ id: 'fe', name: 'FE', title: 'UI', description: '', avatarColor: 'blue' }],
       [],
     );
     expect(contacts[0].avatarColor).toBe('blue');
-    expect(contacts[0].avatarUrl).toBe('duya-file:///a/avatar.png?v=1');
     expect(contacts[0].title).toBe('UI');
   });
 

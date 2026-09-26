@@ -22,7 +22,6 @@ import type { CustomAgentConfig } from './schema.js';
 import { getConfigStore } from './store-instance.js';
 import { assertValidBotId, isSafeBotId } from './agent-id.js';
 import {
-  getBotAvatarFilePath,
   getBotDeletedAgentDir,
   getBotDeletedDir,
   getBotProfilePath,
@@ -30,11 +29,6 @@ import {
   resolveDuyaAgentDir,
 } from './agent-paths.js';
 import { readBotProfile, writeBotProfile, type BotProfile, type BotProfileInput } from './bot-profile.js';
-import {
-  BOT_AVATAR_MAX_BYTES,
-  avatarSourceExtension,
-  isValidAvatarImageFilename,
-} from './bot-avatar.js';
 
 export interface AgentUpsertInput {
   name: string;
@@ -132,10 +126,6 @@ export interface BotListItem {
   reasoning?: 'off' | 'low' | 'medium' | 'high';
   workspace?: string;
   avatarColor?: string;
-  /** `duya-file://` URL of the bot's avatar image, with `?v=<mtime>` cache-buster (absent when no image). */
-  avatarUrl?: string;
-  /** Avatar image mtime (ms) backing `avatarUrl`; renderer-side change detection. */
-  avatarVersion?: number;
 }
 
 /**
@@ -174,35 +164,9 @@ export function listBots(): BotListItem[] {
       workspace: cfg.workspace,
       reasoning: cfg.reasoning,
       avatarColor: profile?.avatarColor,
-      avatarEmoji: profile?.avatarEmoji,
-      ...buildBotAvatarEntry(id, profile?.avatarImage, duyaRoot),
     });
   }
   return out;
-}
-
-/**
- * Resolve a bot's avatar image into renderer-facing fields. Returns
- * `{ avatarUrl, avatarVersion }` when the profile names a whitelisted
- * avatar file that actually exists on disk; `{}` otherwise (renderer falls
- * back to the color circle). The `duya-file://` protocol handler in main.ts
- * serves the bytes; `?v=<mtime>` busts its 1h cache after an upload.
- */
-function buildBotAvatarEntry(
-  id: string,
-  avatarImage: string | undefined,
-  duyaRoot: string,
-): { avatarUrl?: string; avatarVersion?: number } {
-  if (!avatarImage || !isValidAvatarImageFilename(avatarImage) || !isSafeBotId(id)) return {};
-  try {
-    const filePath = getBotAvatarFilePath(id, avatarImage, duyaRoot);
-    const stat = fs.statSync(filePath);
-    if (!stat.isFile()) return {};
-    const url = `duya-file:///${filePath.replace(/\\/g, '/')}?v=${stat.mtimeMs}`;
-    return { avatarUrl: url, avatarVersion: stat.mtimeMs };
-  } catch {
-    return {};
-  }
 }
 
 export function upsertConfigAgent(id: string, input: AgentUpsertInput): CustomAgentConfig {
@@ -248,7 +212,7 @@ export function upsertConfigAgent(id: string, input: AgentUpsertInput): CustomAg
   agents[id] = next;
   store.set('agents', agents);
   if (isNewAgent) {
-    seedBotProfileIfMissing(id, next, store, input.avatarColor, input.title, input.avatarEmoji);
+    seedBotProfileIfMissing(id, next, store, input.avatarColor, input.title);
   }
   return next;
 }
@@ -397,14 +361,12 @@ export function slugifyBotIdFromName(name: string): string {
 export function createConfigAgentFromName(
   name: string,
   description?: string,
-  avatarEmoji?: string,
 ): CreatedConfigAgent {
   const trimmed = name.trim();
   if (!trimmed) throw new Error('agent name is required');
   return createConfigAgentUnique(slugifyBotIdFromName(trimmed), {
     name: trimmed,
     description: description?.trim() || undefined,
-    avatarEmoji: avatarEmoji?.trim() || undefined,
   });
 }
 
@@ -412,7 +374,6 @@ export function createConfigAgentFromName(
 export interface AgentIdentityPatch {
   name?: string;
   description?: string;
-  avatarEmoji?: string;
 }
 
 /**
@@ -437,10 +398,6 @@ export function patchConfigAgentIdentity(id: string, patch: AgentIdentityPatch):
       patch.description !== undefined && patch.description.trim()
         ? patch.description.trim()
         : existing.description,
-    avatarEmoji:
-      patch.avatarEmoji !== undefined && patch.avatarEmoji.trim()
-        ? patch.avatarEmoji.trim()
-        : readBotProfile(getBotProfilePath(id, getConfigStore().getConfigDir()))?.avatarEmoji,
     model: existing.model,
     workspace: existing.workspace,
     agents_md: existing.agents_md,
@@ -750,7 +707,6 @@ export interface BotIdentityInput {
   title?: string;
   description?: string;
   avatarColor?: string;
-  avatarEmoji?: string;
 }
 
 export function updateBotProfileIdentity(
@@ -777,182 +733,6 @@ export function updateBotProfileIdentity(
         ? input.description.trim()
         : (existing?.description ?? cfg.description ?? ''),
     avatarColor: input.avatarColor?.trim() || existing?.avatarColor,
-    avatarEmoji: input.avatarEmoji?.trim() || existing?.avatarEmoji,
-    // Avatar image filename is managed by setBotAvatarImage/clearBotAvatarImage
-    // (upload / update_state avatar.set) — an identity edit never drops it.
-    avatarImage: existing?.avatarImage,
   };
   return writeBotProfile(profilePath, next);
-}
-
-/**
- * Plan 481 amendment: clear a bot's avatar (update_state avatar.clear).
- * `updateBotProfileIdentity` cannot express removal (empty string falls
- * back to the existing token), so this writes the profile with the color
- * token and avatar image explicitly absent, and deletes the avatar image
- * file. Returns null when no profile exists (nothing to clear — already
- * default).
- */
-export function clearBotAvatarTokens(id: string): BotProfile | null {
-  const store = getConfigStore();
-  const agents = (store.getByPath('agents') ?? {}) as Record<string, CustomAgentConfig>;
-  const cfg = agents[id];
-  if (!cfg) throw new Error(`agent '${id}' not found`);
-  if (!isSafeBotId(id)) {
-    throw new Error(`agent id '${id}' cannot host a runtime profile`);
-  }
-  const duyaRoot = store.getConfigDir();
-  const profilePath = getBotProfilePath(id, duyaRoot);
-  const existing = readBotProfile(profilePath);
-  if (!existing) return null;
-  deleteBotAvatarImageFile(id, existing.avatarImage, duyaRoot);
-  return writeBotProfile(profilePath, {
-    name: existing.name || cfg.name || id,
-    title: existing.title,
-    description: existing.description,
-    avatarColor: undefined,
-    avatarImage: undefined,
-  });
-}
-
-/**
- * Delete a bot's avatar image file (best-effort). Caller has already
- * validated the filename shape; a missing file is not an error.
- */
-function deleteBotAvatarImageFile(id: string, avatarImage: string | undefined, duyaRoot: string): void {
-  if (!avatarImage || !isValidAvatarImageFilename(avatarImage)) return;
-  try {
-    fs.rmSync(getBotAvatarFilePath(id, avatarImage, duyaRoot), { force: true });
-  } catch {
-    // Best-effort: the profile no longer references it either way.
-  }
-}
-
-/** Result of a successful avatar image upload / clear. */
-export interface BotAvatarImageResult {
-  /** Stored filename inside the agent directory (e.g. `avatar.png`). */
-  avatarImage: string;
-  /** mtime (ms) of the stored file; 0 after a clear. */
-  avatarVersion: number;
-  /** `duya-file://` URL with cache-buster; absent after a clear. */
-  avatarUrl?: string;
-}
-
-/**
- * Install an avatar image for a bot: validate, copy into the bot's agent
- * directory as `avatar.<ext>` (replacing any previous avatar file), and
- * record the filename in profile.json. `sourcePath` is an absolute path to
- * an already-on-disk image — either the user's picked file (UI upload IPC)
- * or a file the model itself produced (update_state avatar.set +
- * ImageGenerateTool output). Throws on validation failure; callers map
- * errors to their own surface (IPC error / structured RPC code).
- */
-export function setBotAvatarImage(id: string, sourcePath: string): BotAvatarImageResult {
-  const store = getConfigStore();
-  const agents = (store.getByPath('agents') ?? {}) as Record<string, CustomAgentConfig>;
-  if (!agents[id]) throw new Error(`agent '${id}' not found`);
-  if (!isSafeBotId(id)) {
-    throw new Error(`agent id '${id}' cannot host a runtime profile`);
-  }
-  const ext = avatarSourceExtension(path.basename(sourcePath));
-  if (!ext) {
-    throw new Error(
-      `Unsupported avatar file: expected avatar.(png|jpg|jpeg|webp|gif|svg) source, got '${path.basename(sourcePath)}'`,
-    );
-  }
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(sourcePath);
-  } catch {
-    throw new Error(`Avatar source file not found: '${sourcePath}'`);
-  }
-  if (!stat.isFile()) throw new Error(`Avatar source is not a file: '${sourcePath}'`);
-  if (stat.size > BOT_AVATAR_MAX_BYTES) {
-    throw new Error(`Avatar file too large (${stat.size} bytes; limit ${BOT_AVATAR_MAX_BYTES})`);
-  }
-  const buf = fs.readFileSync(sourcePath);
-  sniffAvatarMagic(buf, ext, sourcePath);
-
-  const duyaRoot = store.getConfigDir();
-  const filename = `avatar.${ext}`;
-  const targetPath = getBotAvatarFilePath(id, filename, duyaRoot);
-  const profilePath = getBotProfilePath(id, duyaRoot);
-  const existing = readBotProfile(profilePath);
-
-  // Remove a previous avatar stored under a different extension.
-  if (existing?.avatarImage && existing.avatarImage !== filename) {
-    deleteBotAvatarImageFile(id, existing.avatarImage, duyaRoot);
-  }
-  fs.mkdirSync(resolveDuyaAgentDir(id, duyaRoot), { recursive: true });
-  fs.writeFileSync(targetPath, buf);
-
-  writeBotProfile(profilePath, {
-    name: existing?.name || agents[id].name || id,
-    title: existing?.title ?? '',
-    description: existing?.description ?? agents[id].description ?? '',
-    avatarColor: existing?.avatarColor,
-    avatarImage: filename,
-  });
-  const mtime = fs.statSync(targetPath).mtimeMs;
-  return {
-    avatarImage: filename,
-    avatarVersion: mtime,
-    avatarUrl: `duya-file:///${targetPath.replace(/\\/g, '/')}?v=${mtime}`,
-  };
-}
-
-/**
- * Verify the first bytes of an uploaded avatar match its claimed extension.
- * SVG is text-based — accepted when it starts with an XML declaration or an
- * `<svg` tag. Everything else must match its binary magic number.
- */
-function sniffAvatarMagic(buf: Buffer, ext: string, sourcePath: string): void {
-  const ok =
-    (ext === 'png' && buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50) ||
-    (ext === 'jpg' && buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) ||
-    (ext === 'jpeg' && buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) ||
-    (ext === 'gif' && buf.length >= 6 && buf.toString('latin1', 0, 6) === 'GIF8') ||
-    (ext === 'webp' &&
-      buf.length >= 12 &&
-      buf.toString('latin1', 0, 4) === 'RIFF' &&
-      buf.toString('latin1', 8, 12) === 'WEBP') ||
-    (ext === 'svg' && matchesSvgText(buf));
-  if (!ok) {
-    throw new Error(`Avatar file content does not match its .${ext} extension: '${sourcePath}'`);
-  }
-}
-
-function matchesSvgText(buf: Buffer): boolean {
-  const head = buf.toString('utf8', 0, Math.min(buf.length, 256)).trimStart().toLowerCase();
-  return head.startsWith('<?xml') || head.startsWith('<svg');
-}
-
-/**
- * Remove a bot's avatar image: delete the file and drop the profile
- * field. The color token (if any) is left untouched — clearing the image
- * falls the avatar back to the colored initial circle.
- */
-export function clearBotAvatarImage(id: string): BotAvatarImageResult {
-  const store = getConfigStore();
-  const agents = (store.getByPath('agents') ?? {}) as Record<string, CustomAgentConfig>;
-  if (!agents[id]) throw new Error(`agent '${id}' not found`);
-  if (!isSafeBotId(id)) {
-    throw new Error(`agent id '${id}' cannot host a runtime profile`);
-  }
-  const duyaRoot = store.getConfigDir();
-  const profilePath = getBotProfilePath(id, duyaRoot);
-  const existing = readBotProfile(profilePath);
-  if (!existing) {
-    return { avatarImage: '', avatarVersion: 0 };
-  }
-  deleteBotAvatarImageFile(id, existing.avatarImage, duyaRoot);
-  writeBotProfile(profilePath, {
-    name: existing.name || agents[id].name || id,
-    title: existing.title,
-    description: existing.description,
-    avatarColor: existing.avatarColor,
-    avatarEmoji: existing.avatarEmoji,
-    avatarImage: undefined,
-  });
-  return { avatarImage: '', avatarVersion: 0 };
 }

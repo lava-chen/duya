@@ -37,10 +37,6 @@ export interface BotSource {
   reasoning?: 'off' | 'low' | 'medium' | 'high';
   workspace?: string;
   avatarColor?: string;
-  /** User-picked emoji for the colored circle (absent → deterministic per-agent emoji). */
-  avatarEmoji?: string;
-  /** `duya-file://` URL of the bot's avatar image (main-process built). */
-  avatarUrl?: string;
 }
 
 export interface BotContact {
@@ -56,12 +52,8 @@ export interface BotContact {
   provider?: string;
   /** Thinking level bound to the model ('off'|'low'|'medium'|'high'); absent → runtime default medium. */
   reasoning?: 'off' | 'low' | 'medium' | 'high';
-  /** Color token for the initial-circle avatar (image wins when present). */
+  /** Color token for the animated agent face body. */
   avatarColor?: string;
-  /** User-picked emoji for the colored circle (wins over the deterministic one). */
-  avatarEmoji?: string;
-  /** `duya-file://` URL of the bot's avatar image; empty → colored circle. */
-  avatarUrl?: string;
   /**
    * Thread id of the bot's bound persistent session
    * (`bot:<agentId>:<sessionId>`, plan 477 convention), or null while
@@ -303,8 +295,6 @@ export function buildBotContacts(
       provider: bot.provider?.trim() || undefined,
       reasoning: bot.reasoning,
       avatarColor: bot.avatarColor,
-      avatarEmoji: bot.avatarEmoji,
-      avatarUrl: bot.avatarUrl,
       boundThreadId,
       lastActivity,
       status: statusForThread?.(boundThreadId),

@@ -12,11 +12,10 @@
  *   - title        — display subtitle / role line. UI/roster metadata; the
  *                    model does NOT change title directly (485 §2.4)
  *   - description  — one-line role; the model may change it
- *   - avatarColor   — optional color token (colored initial-circle avatar)
- *   - avatarImage   — optional avatar image filename inside the agent dir
- *                     (e.g. `avatar.png`); supersedes the removed geometric
- *                     avatarShape field, which legacy files may still carry
- *                     (ignored on read)
+ *   - avatarColor  — optional color token; the animated agent face body.
+ *                    Legacy avatarEmoji/avatarImage keys in old files are
+ *                    simply dropped on the next write (the avatar is the
+ *                    face now — the image/emoji pipeline was removed).
  *   - schemaVersion — reserved for migrations; `migrate` hook fires when a
  *                     file with a newer/older version is read
  *
@@ -38,14 +37,8 @@ export interface BotProfile {
   title: string;
   /** One-line role description (model-updatable via update_state). */
   description: string;
-  /** Optional color token for the colored initial-circle avatar. */
+  /** Optional color token for the animated agent face body. */
   avatarColor?: string;
-  /**
-   * Optional avatar image filename inside the agent directory
-   * (`avatar.png` etc., validated against the whitelist in bot-avatar.ts).
-   * When present it renders instead of the color circle.
-   */
-  avatarImage?: string;
 }
 
 /** Input accepted from callers (update_state / UI); defaults applied on write. */
@@ -97,8 +90,6 @@ export function readBotProfile(
     title: str(parsed.title).trim(),
     description: str(parsed.description),
     avatarColor: str(parsed.avatarColor).trim() || undefined,
-    avatarEmoji: str(parsed.avatarEmoji).trim() || undefined,
-    avatarImage: str(parsed.avatarImage).trim() || undefined,
   };
 
   if (profile.schemaVersion !== BOT_PROFILE_SCHEMA_VERSION) {
@@ -115,8 +106,6 @@ export function writeBotProfile(filePath: string, profile: BotProfileInput): Bot
     title: profile.title?.trim() ?? '',
     description: profile.description,
     avatarColor: profile.avatarColor?.trim() || undefined,
-    avatarImage: profile.avatarImage?.trim() || undefined,
-    avatarEmoji: profile.avatarEmoji?.trim() || undefined,
   };
 
   const serialized = `${JSON.stringify(normalized, null, 2)}\n`;

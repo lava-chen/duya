@@ -240,7 +240,6 @@ export function RoomSettingsPanel({ tab }: { tab: PageTab; embedded: boolean }) 
                 name={bot.name}
                 agentId={bot.id}
                 avatarColor={bot.avatarColor}
-                avatarUrl={bot.avatarUrl}
                 size={32}
               />
               <span className="flex-1 truncate text-[13.5px]" style={{ color: "var(--text)" }}>

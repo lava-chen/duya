@@ -5,7 +5,7 @@ import { useCallback, useState, type DragEvent as ReactDragEvent, type ReactNode
 import { PlusIcon, XIcon } from "@/components/icons";
 import { DropdownMenu, type MenuAction } from "@/components/ui/DropdownMenu";
 import { useTranslation } from "@/hooks/useTranslation";
-import { usePanel } from "@/hooks/usePanel";
+import { useOptionalPanel } from "@/hooks/usePanel";
 import { getPageDescriptor, PAGE_REGISTRY, type PageId, type PageTab } from "./panels/registry";
 import { fileExtensionFromName, getFileTypeIcon } from "@/components/file-tree/file-type-icon";
 import { useConversationStore } from "@/stores/conversation-store";
@@ -15,6 +15,20 @@ interface DragState {
   overId: string | null;
   position: "before" | "after";
 }
+
+// Fallback when the surrounding <PanelProvider /> is missing (defensive:
+// `PanelHeader` always renders under `PanelZone` → `AppShell` →
+// `PanelProvider` in production, but a stale HMR module or a one-off render
+// path could surface it without a provider). Empty / no-op keeps the rest of
+// the side panel alive rather than crashing the whole React tree.
+const EMPTY_PANEL_ACTIONS = {
+  tabs: [] as PageTab[],
+  activeTabId: null,
+  activateTab: () => {},
+  closePanel: () => {},
+  openOrActivatePage: () => "",
+  reorderTabs: () => {},
+};
 
 /**
  * Header bar inside the side panel. Renders one of three shapes:
@@ -26,6 +40,12 @@ interface DragState {
  */
 export function PanelHeader() {
   const { t } = useTranslation();
+  // Soft dependency: the header only ever renders inside <PanelZone />, which
+  // sits under <PanelProvider /> in <AppShell />, but a stray hot-reload or a
+  // future mount path (tests, Storybook, embedded preview) could surface this
+  // component without a provider. Rendering nothing in that case keeps the
+  // surrounding panel usable instead of crashing the whole tree.
+  const panel = useOptionalPanel();
   const {
     tabs,
     activeTabId,
@@ -33,7 +53,7 @@ export function PanelHeader() {
     closePanel,
     openOrActivatePage,
     reorderTabs,
-  } = usePanel();
+  } = panel ?? EMPTY_PANEL_ACTIONS;
   const activeThreadId = useConversationStore((s) => s.activeThreadId);
   const threads = useConversationStore((s) => s.threads);
 
@@ -59,7 +79,12 @@ export function PanelHeader() {
     [openOrActivatePage, paramsFor]
   );
 
-  const entries = Object.values(PAGE_REGISTRY).filter((entry) => entry.id !== "preview");
+  const entries = Object.values(PAGE_REGISTRY).filter(
+    // `preview` is event-driven (opens with a filePath) and
+    // `session-messages` is event-driven (opens with a sessionId) — neither
+    // has a meaningful empty-state, so both stay out of the add-page menu.
+    (entry) => entry.id !== "preview" && entry.id !== "session-messages",
+  );
 
   const menuItems: MenuAction[] = entries.map((entry) => ({
     kind: "action",

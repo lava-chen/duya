@@ -62,7 +62,6 @@ function toContact(item: BotListItem): BotContact {
     model: item.model,
     provider: item.provider,
     avatarColor: item.avatarColor,
-    avatarUrl: item.avatarUrl,
     boundThreadId: null,
     lastActivity: 0,
   };
@@ -451,12 +450,6 @@ export function BotSettingsPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     setDescription,
     color,
     setColor,
-    emoji,
-    setEmoji,
-    avatarUrl,
-    avatarBusy,
-    uploadAvatar,
-    removeAvatar,
     model,
     provider,
     selectorModelId,
@@ -480,7 +473,6 @@ export function BotSettingsPanel({ tab }: { tab: PageTab; embedded: boolean }) {
       title === (contact.title ?? "") &&
       description === (contact.description ?? "") &&
       color === (contact.avatarColor ?? "blue") &&
-      emoji === (contact.avatarEmoji ?? "") &&
       model === (contact.model ?? "") &&
       provider === (contact.provider ?? "");
     if (unchanged || !name.trim()) return;
@@ -491,7 +483,6 @@ export function BotSettingsPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           title: title.trim() || undefined,
           description: description.trim() || undefined,
           avatarColor: color,
-          avatarEmoji: emoji.trim() || undefined,
         });
         await updateConfigAgent(contact.agentId, {
           name: name.trim(),
@@ -529,26 +520,14 @@ export function BotSettingsPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           </span>
         </div>
 
-        {/* Avatar editor on top (upload / emoji / color), then identity fields. */}
+        {/* Face preview + body-color swatches, then identity fields. */}
         <div className="mb-4">
           <BotAvatarEditor
             name={name || "?"}
             agentId={agentId}
-            emoji={emoji}
-            onEmojiChange={setEmoji}
             color={color}
             onColorChange={setColor}
-            avatarUrl={avatarUrl}
-            avatarBusy={avatarBusy}
-            onUpload={() => void uploadAvatar()}
           />
-          {avatarUrl && (
-            <div className="mt-2 flex justify-center">
-              <Button variant="secondary" size="sm" disabled={avatarBusy} onClick={() => void removeAvatar()}>
-                {t("bot.avatar.remove")}
-              </Button>
-            </div>
-          )}
         </div>
 
         <div className="mb-1" style={{ color: "var(--text-muted)", fontSize: 13 }}>

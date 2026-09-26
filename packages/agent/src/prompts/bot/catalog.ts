@@ -14,7 +14,7 @@
  * Data-source status (2026-09-02, see plan 474 §7.1):
  *   botIdentity        — ✅ REAL (P2.1): name/description via
  *                        [agents.<id>] (424 read side, loader.ts);
- *                        avatar/title/update_state wait on 485/481
+ *                        title/update_state wait on 485/481
  *   botCommsRules      — ✅ REAL (P2.2): messaging rules with duya
  *                        terminology; send_to_agent tool name referenced
  *                        from SendToAgentTool's constant (477 placeholder)
@@ -55,7 +55,7 @@ import {
 
 export const BOT_IDENTITY_SECTION: BotSectionDef = {
   name: 'botIdentity',
-  description: 'Bot persona: name/description + self-edit hint (485 P2.2 adds avatar/title).',
+  description: 'Bot persona: name/description + self-edit hint (485 P2.2 adds title).',
   budgetChars: 800,
   templatePath: 'bot/identity.hbs',
   prepare: prepareBotIdentityContext,

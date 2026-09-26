@@ -11,8 +11,6 @@ vi.mock('@/lib/agent-profile-ipc', () => ({
   listBots: () => listBotsMock(),
   updateBotIdentity: (...args: unknown[]) => updateIdentity(...args),
   updateConfigAgent: (...args: unknown[]) => updateConfig(...args),
-  uploadBotAvatar: vi.fn(),
-  clearBotAvatar: vi.fn(),
 }));
 
 vi.mock('@/lib/ipc-client', async (importOriginal) => ({

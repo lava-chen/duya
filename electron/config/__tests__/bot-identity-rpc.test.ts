@@ -1,11 +1,12 @@
 /**
- * Plan 481 amendment — bot-identity:rpc handler tests (profile.set /
- * avatar.set / avatar.clear main-process side).
+ * Plan 481 amendment — bot-identity:rpc handler tests (profile.set,
+ * main-process side).
  *
  * Isolation mirrors electron/config/__tests__/agents.test.ts: a temp
  * ConfigStore per test + the namespace-free duya root. The security
  * binding tests are the core of the suite — a bot may only ever edit its
- * own profile.json.
+ * own profile.json. (The avatar image upload path was removed: the avatar
+ * is the animated agent face, and only its color token is configurable.)
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
@@ -120,21 +121,9 @@ describe('profile.set', () => {
     expect(profile?.description).toBe('born from config');
   });
 
-  it('rejects an empty patch', async () => {
+  it('writes a valid avatar color token', async () => {
     const result = await handleBotIdentityRpc({
       subaction: 'profile.set',
-      payload: { actorAgentId: 'night-ops' },
-      sessionId: 'bot:night-ops',
-    });
-    expect(result.success).toBe(false);
-    expect(result.error?.code).toBe('INVALID_PAYLOAD');
-  });
-});
-
-describe('avatar.set / avatar.clear', () => {
-  it('writes a valid color token', async () => {
-    const result = await handleBotIdentityRpc({
-      subaction: 'avatar.set',
       payload: { actorAgentId: 'night-ops', avatarColor: 'violet' },
       sessionId: 'bot:night-ops',
     });
@@ -143,66 +132,9 @@ describe('avatar.set / avatar.clear', () => {
     expect(profile?.avatarColor).toBe('violet');
   });
 
-  it('installs an image avatar from an absolute path and clears it again', async () => {
-    // A real PNG: 1x1 pixel magic header — enough for the sniff check.
-    const sourcePath = path.join(dir, 'generated.png');
-    fs.writeFileSync(
-      sourcePath,
-      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]),
-    );
-
+  it('rejects an unknown avatar color token', async () => {
     const result = await handleBotIdentityRpc({
-      subaction: 'avatar.set',
-      payload: { actorAgentId: 'night-ops', avatarImagePath: sourcePath, avatarColor: 'blue' },
-      sessionId: 'bot:night-ops',
-    });
-    expect(result.success).toBe(true);
-
-    const agentDir = path.dirname(getBotProfilePath('night-ops', dir));
-    expect(fs.existsSync(path.join(agentDir, 'avatar.png'))).toBe(true);
-    const profile = profileOf('night-ops');
-    expect(profile?.avatarImage).toBe('avatar.png');
-    expect(profile?.avatarColor).toBe('blue');
-
-    const cleared = await handleBotIdentityRpc({
-      subaction: 'avatar.clear',
-      payload: { actorAgentId: 'night-ops' },
-      sessionId: 'bot:night-ops',
-    });
-    expect(cleared.success).toBe(true);
-    expect(fs.existsSync(path.join(agentDir, 'avatar.png'))).toBe(false);
-    const clearedProfile = profileOf('night-ops');
-    expect(clearedProfile?.avatarImage).toBeUndefined();
-    expect(clearedProfile?.avatarColor).toBeUndefined();
-  });
-
-  it('rejects an image whose content does not match its extension', async () => {
-    const sourcePath = path.join(dir, 'fake.png');
-    fs.writeFileSync(sourcePath, 'definitely not a png');
-
-    const result = await handleBotIdentityRpc({
-      subaction: 'avatar.set',
-      payload: { actorAgentId: 'night-ops', avatarImagePath: sourcePath },
-      sessionId: 'bot:night-ops',
-    });
-    expect(result.success).toBe(false);
-    expect(result.error?.code).toBe('WRITE_FAILED');
-    expect(result.error?.message).toMatch(/does not match/);
-  });
-
-  it('rejects a relative avatarImagePath', async () => {
-    const result = await handleBotIdentityRpc({
-      subaction: 'avatar.set',
-      payload: { actorAgentId: 'night-ops', avatarImagePath: 'generated.png' },
-      sessionId: 'bot:night-ops',
-    });
-    expect(result.success).toBe(false);
-    expect(result.error?.code).toBe('INVALID_AVATAR_IMAGE');
-  });
-
-  it('rejects an unknown color token', async () => {
-    const result = await handleBotIdentityRpc({
-      subaction: 'avatar.set',
+      subaction: 'profile.set',
       payload: { actorAgentId: 'night-ops', avatarColor: 'chartreuse' },
       sessionId: 'bot:night-ops',
     });
@@ -210,29 +142,9 @@ describe('avatar.set / avatar.clear', () => {
     expect(result.error?.code).toBe('INVALID_AVATAR_COLOR');
   });
 
-  it('clear removes color and image from profile.json', async () => {
-    writeBotProfile(getBotProfilePath('night-ops', dir), {
-      name: 'Night Ops',
-      title: '',
-      description: 'd',
-      avatarImage: 'avatar.png',
-      avatarColor: 'red',
-    });
+  it('rejects an empty patch', async () => {
     const result = await handleBotIdentityRpc({
-      subaction: 'avatar.clear',
-      payload: { actorAgentId: 'night-ops' },
-      sessionId: 'bot:night-ops',
-    });
-    expect(result.success).toBe(true);
-    const profile = profileOf('night-ops');
-    expect(profile?.avatarImage).toBeUndefined();
-    expect(profile?.avatarColor).toBeUndefined();
-    expect(profile?.name).toBe('Night Ops');
-  });
-
-  it('rejects avatar.set with no tokens', async () => {
-    const result = await handleBotIdentityRpc({
-      subaction: 'avatar.set',
+      subaction: 'profile.set',
       payload: { actorAgentId: 'night-ops' },
       sessionId: 'bot:night-ops',
     });
@@ -250,6 +162,18 @@ describe('envelope validation', () => {
     });
     expect(result.success).toBe(false);
     expect(result.error?.code).toBe('INVALID_ACTION');
+  });
+
+  it('rejects the removed avatar subactions', async () => {
+    for (const subaction of ['avatar.set', 'avatar.clear']) {
+      const result = await handleBotIdentityRpc({
+        subaction,
+        payload: { actorAgentId: 'night-ops' },
+        sessionId: 'bot:night-ops',
+      });
+      expect(result.success).toBe(false);
+      expect(result.error?.code).toBe('INVALID_ACTION');
+    }
   });
 
   it('rejects an actor that does not exist in config', async () => {

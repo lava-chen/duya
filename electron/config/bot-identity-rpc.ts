@@ -1,7 +1,6 @@
 /**
  * bot-identity-rpc.ts — Plan 481 amendment: main-process handler for the
- * `bot-identity:rpc` channel (update_state profile.set / avatar.set /
- * avatar.clear).
+ * `bot-identity:rpc` channel (update_state profile.set).
  *
  * The agent subprocess forwards the subaction envelope here
  * (agent-server-lifecycle.ts). This module:
@@ -11,10 +10,10 @@
  *      actorAgentId is only accepted when it matches that binding, so a bot
  *      can never edit another agent's profile.json (the tool schema has no
  *      agentId parameter; this is the server-side enforcement of that).
- *   2. Validates the avatar color token against the canonical set and the
- *      avatar image (extension whitelist + size cap + magic bytes, via
- *      setBotAvatarImage) — unknown tokens / bad images are structured
- *      errors, not silent coercion.
+ *   2. Validates the avatar color token against the canonical set — unknown
+ *      tokens are structured errors, not silent coercion. (The avatar image
+ *      upload path was removed: the avatar is the animated agent face, and
+ *      only its color is configurable.)
  *   3. Writes the runtime identity through `updateBotProfileIdentity`
  *      (agents.ts), the same path the UI edit dialog uses. config.toml
  *      name/description are seed/fallback only (Plan 485 §2.4); title is
@@ -24,15 +23,9 @@
  * with a structured code, mirroring the memory-tier-rpc contract.
  */
 
-import path from 'path';
 import { getLogger, LogComponent } from '../logging/logger';
 import { parseAgentIdFromBotSession } from '../wake/bot-session-id';
-import {
-  clearBotAvatarTokens,
-  setBotAvatarImage,
-  updateBotProfileIdentity,
-  type BotIdentityInput,
-} from './agents';
+import { updateBotProfileIdentity, type BotIdentityInput } from './agents';
 import { isValidAvatarColor } from './bot-avatar';
 import { notifyBotsChanged } from './bot-change-notifier';
 
@@ -48,7 +41,7 @@ export interface BotIdentityRpcResult {
   error?: { code: string; message: string };
 }
 
-const SUBACTIONS = new Set(['profile.set', 'avatar.set', 'avatar.clear']);
+const SUBACTIONS = new Set(['profile.set']);
 
 /** Strip control characters / clamp string fields from the payload. */
 function cleanString(value: unknown, maxLen: number): string {
@@ -99,84 +92,34 @@ function handleSync(request: BotIdentityRpcRequest): BotIdentityRpcResult {
   }
 
   // ── Build the patch for the runtime identity writer ──
-  let patch: BotIdentityInput;
-  let avatarImagePath: string | null = null;
-  if (request.subaction === 'profile.set') {
-    const name = cleanString(request.payload.name, 64);
-    const description = cleanString(request.payload.description, 300);
-    if (!name && !description) {
-      return {
-        success: false,
-        error: { code: 'INVALID_PAYLOAD', message: 'profile.set requires a name and/or description.' },
-      };
-    }
-    patch = {
-      ...(name ? { name } : {}),
-      ...(description ? { description } : {}),
-    };
-  } else if (request.subaction === 'avatar.clear') {
-    try {
-      clearBotAvatarTokens(sessionAgentId);
-    } catch (err) {
-      return {
-        success: false,
-        error: {
-          code: 'WRITE_FAILED',
-          message: err instanceof Error ? err.message : String(err),
-        },
-      };
-    }
-    getLogger().info(
-      `Bot identity updated via update_state avatar.clear: '${sessionAgentId}'`,
-      { agentId: sessionAgentId },
-      LogComponent.AgentProcess,
-    );
-    notifyBotsChanged();
+  const name = cleanString(request.payload.name, 64);
+  const description = cleanString(request.payload.description, 300);
+  const color = cleanString(request.payload.avatarColor, 32);
+  if (!name && !description && !color) {
     return {
-      success: true,
-      outcome: { agentId: sessionAgentId, avatarColor: '', avatarImage: '' },
+      success: false,
+      error: {
+        code: 'INVALID_PAYLOAD',
+        message: 'profile.set requires a name, description, and/or avatarColor.',
+      },
     };
-  } else {
-    // avatar.set — color token and/or image source path (e.g. the model's
-    // own image_generate output). At least one must be present.
-    const color = cleanString(request.payload.avatarColor, 32);
-    const imagePath = cleanString(request.payload.avatarImagePath, 1024);
-    if (!color && !imagePath) {
-      return {
-        success: false,
-        error: { code: 'INVALID_PAYLOAD', message: 'avatar.set requires avatarColor and/or avatarImagePath.' },
-      };
-    }
-    if (color && !isValidAvatarColor(color)) {
-      return {
-        success: false,
-        error: {
-          code: 'INVALID_AVATAR_COLOR',
-          message: `Unknown avatarColor '${color}'. Valid: black|brown|red|orange|yellow|green|cyan|blue|violet|magenta|gray.`,
-        },
-      };
-    }
-    if (imagePath && !path.isAbsolute(imagePath)) {
-      return {
-        success: false,
-        error: {
-          code: 'INVALID_AVATAR_IMAGE',
-          message: `avatarImagePath must be an absolute path to an image file (e.g. the path returned by image_generate), got '${imagePath}'.`,
-        },
-      };
-    }
-    patch = {
-      ...(color ? { avatarColor: color } : {}),
-    };
-    avatarImagePath = imagePath || null;
   }
+  if (color && !isValidAvatarColor(color)) {
+    return {
+      success: false,
+      error: {
+        code: 'INVALID_AVATAR_COLOR',
+        message: `Unknown avatarColor '${color}'. Valid: black|brown|red|orange|yellow|green|cyan|blue|violet|magenta|gray.`,
+      },
+    };
+  }
+  const patch: BotIdentityInput = {
+    ...(name ? { name } : {}),
+    ...(description ? { description } : {}),
+    ...(color ? { avatarColor: color } : {}),
+  };
 
   try {
-    if (avatarImagePath) {
-      // Copy the image into the bot's agent directory first — it validates
-      // extension/size/magic bytes and throws with a descriptive message.
-      setBotAvatarImage(sessionAgentId, avatarImagePath);
-    }
     const updated = updateBotProfileIdentity(sessionAgentId, patch);
     getLogger().info(
       `Bot identity updated via update_state ${request.subaction}: '${sessionAgentId}'`,
@@ -191,7 +134,6 @@ function handleSync(request: BotIdentityRpcRequest): BotIdentityRpcResult {
         name: updated?.name ?? sessionAgentId,
         description: updated?.description ?? '',
         avatarColor: updated?.avatarColor ?? '',
-        avatarImage: updated?.avatarImage ?? '',
       },
     };
   } catch (err) {

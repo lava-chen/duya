@@ -2,11 +2,11 @@
 
 /**
  * EditBotDialog — bot identity editing (Plan 483 P2; avatar revised
- * 2026-09-05: image upload + color circle, shape tokens removed).
+ * 2026-09-24: the animated agent face replaced the uploaded image + emoji
+ * tile, only the body color token stays editable).
  *
- * Edits the runtime identity of an existing bot: name, description, avatar
- * (uploaded image via the main-process file dialog, or a color token for
- * the initial circle). Form state and the save path live in
+ * Edits the runtime identity of an existing bot: name, description, and
+ * the face's color token. Form state and the save path live in
  * `useBotContactForm` (shared with the bot-settings side panel, P2.1c);
  * this component owns the modal chrome and the Escape/overlay dismissal.
  */
@@ -50,12 +50,6 @@ export function EditBotDialog({ isOpen, contact, onCancel, onSaved }: EditBotDia
     setDescription,
     color,
     setColor,
-    emoji,
-    setEmoji,
-    avatarUrl,
-    avatarBusy,
-    uploadAvatar,
-    removeAvatar,
     selectorModelId,
     handleModelSelect,
     modelGroups,
@@ -94,18 +88,13 @@ export function EditBotDialog({ isOpen, contact, onCancel, onSaved }: EditBotDia
         </>
       }
     >
-      {/* Top: centered avatar editor (upload / emoji / color). */}
+      {/* Top: centered face preview + body-color swatches. */}
       <div className="mb-4">
         <BotAvatarEditor
           name={name || "?"}
           agentId={contact?.agentId ?? "preview"}
-          emoji={emoji}
-          onEmojiChange={setEmoji}
           color={color}
           onColorChange={setColor}
-          avatarUrl={avatarUrl}
-          avatarBusy={avatarBusy}
-          onUpload={() => void uploadAvatar()}
         />
       </div>
 
@@ -149,14 +138,6 @@ export function EditBotDialog({ isOpen, contact, onCancel, onSaved }: EditBotDia
         reasoning={reasoning}
         onReasoningChange={setReasoning}
       />
-
-      {avatarUrl && (
-        <div className="mt-3 flex justify-center">
-          <Button variant="secondary" size="sm" disabled={avatarBusy} onClick={() => void removeAvatar()}>
-            {t("bot.avatar.remove")}
-          </Button>
-        </div>
-      )}
 
       {error && (
         <div className="text-sm mb-3" style={{ color: "var(--error, #ef4444)" }}>

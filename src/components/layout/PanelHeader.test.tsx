@@ -8,6 +8,14 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/usePanel", () => ({
+  useOptionalPanel: () => ({
+    tabs: mocks.tabs,
+    activeTabId: "tab-one",
+    activateTab: vi.fn(),
+    closePanel: vi.fn(),
+    openOrActivatePage: vi.fn(),
+    reorderTabs: vi.fn(),
+  }),
   usePanel: () => ({
     tabs: mocks.tabs,
     activeTabId: "tab-one",

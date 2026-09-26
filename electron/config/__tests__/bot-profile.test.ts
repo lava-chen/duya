@@ -40,13 +40,11 @@ describe('bot-profile (Plan 485 P1.3)', () => {
       name: 'Frontend Expert',
       title: '  前端架构与 React 专家  ',
       description: 'desc',
-      avatarImage: 'avatar.png',
       avatarColor: '#1a73e8',
     });
     expect(written.schemaVersion).toBe(BOT_PROFILE_SCHEMA_VERSION);
     // title/avatar tokens are trimmed on write.
     expect(written.title).toBe('前端架构与 React 专家');
-    expect(written.avatarImage).toBe('avatar.png');
 
     const read = readBotProfile(file);
     expect(read).toEqual(written);
@@ -62,25 +60,35 @@ describe('bot-profile (Plan 485 P1.3)', () => {
     expect(read!.schemaVersion).toBe(BOT_PROFILE_SCHEMA_VERSION); // missing → current
   });
 
-  it('ignores the legacy avatarShape field on read (shape tokens removed)', () => {
+  it('ignores the legacy avatarShape/avatarImage/avatarEmoji fields on read', () => {
     fs.writeFileSync(
       file,
-      JSON.stringify({ name: 'Legacy', title: '', description: '', avatarShape: 'hex', avatarColor: 'blue' }),
+      JSON.stringify({
+        name: 'Legacy',
+        title: '',
+        description: '',
+        avatarShape: 'hex',
+        avatarImage: 'avatar.png',
+        avatarEmoji: '🤖',
+        avatarColor: 'blue',
+      }),
       'utf8',
     );
     const read = readBotProfile(file);
     expect(read!.avatarColor).toBe('blue');
     expect('avatarShape' in read!).toBe(false);
+    expect('avatarImage' in read!).toBe(false);
+    expect('avatarEmoji' in read!).toBe(false);
   });
 
   it('creates the parent directory on write', () => {
     const nested = path.join(dir, 'a', 'b', 'profile.json');
-    writeBotProfile(nested, { name: 'Nested' });
+    writeBotProfile(nested, { name: 'Nested', title: '', description: '' });
     expect(fs.existsSync(nested)).toBe(true);
   });
 
   it('writes atomically (no leftover tmp files)', () => {
-    writeBotProfile(file, { name: 'Atomic' });
+    writeBotProfile(file, { name: 'Atomic', title: '', description: '' });
     const leftovers = fs.readdirSync(dir).filter((f) => f.endsWith('.tmp'));
     expect(leftovers).toEqual([]);
   });

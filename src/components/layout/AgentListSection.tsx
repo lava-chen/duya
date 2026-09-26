@@ -26,7 +26,12 @@ const STATUS_KEY: Record<SubAgentRowInfo['status'], TranslationKey> = {
 
 export interface AgentListSectionProps {
   agents: SubAgentRowInfo[];
-  onOpen: (sessionId: string) => void;
+  /**
+   * Called with the sub-agent's session id (and the row itself, so the host
+   * can label the destination). Opens the sub-agent's session — the TaskDrawer
+   * routes this to the sidebar session panel (ZCode-parity side pane).
+   */
+  onOpen: (sessionId: string, agent: SubAgentRowInfo) => void;
 }
 
 export function AgentListSection({ agents, onOpen }: AgentListSectionProps) {
@@ -39,7 +44,7 @@ export function AgentListSection({ agents, onOpen }: AgentListSectionProps) {
           key={agent.id}
           agent={agent}
           onOpen={() => {
-            if (agent.sessionId) onOpen(agent.sessionId);
+            if (agent.sessionId) onOpen(agent.sessionId, agent);
           }}
         />
       ))}
