@@ -842,4 +842,123 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
       store.compactProactive = realCompactProactive;
     });
   });
+
+  // ---------------------------------------------------------------
+  // Plan 569: finalize-boundary mailbox poll (pollFinalMailbox).
+  // ---------------------------------------------------------------
+  describe('Plan 569 final mailbox poll', () => {
+    function mailboxNotificationRow(id: string, marker: string) {
+      return {
+        id,
+        session_id: 'sess-final-poll',
+        content: `<task-notification><task-id>${marker}</task-id><status>completed</status></task-notification>`,
+        kind: 'background_notification',
+        status: 'observed',
+      } as never;
+    }
+
+    it('absorbs a notification arriving in the finalize window and gives the model another turn', async () => {
+      const agent = newAgent({ sessionId: 'sess-final-poll' });
+
+      const { mailboxDb } = await import('../../../src/ipc/db-client.js');
+      const claimBatchMock = vi.spyOn(mailboxDb, 'claimBatch');
+      // Claim order within the run:
+      //   1. turn-1 before_model_turn    → empty
+      //   2. turn-1 before_final_answer  → empty (existing checkpoint)
+      //   3. turn-1 final poll (finalizeSuccess) → NOTIFICATION (absorbed)
+      //   4. turn-2 before_model_turn    → empty
+      //   5. turn-2 before_final_answer  → empty
+      //   6. turn-2 final poll           → empty
+      // The notification only exists at call #3 so the absorb goes
+      // through the Plan 569 pollFinalMailbox callback, not the
+      // pre-existing before_final_answer checkpoint.
+      claimBatchMock
+        .mockResolvedValueOnce({ rows: [], claimTokens: [] })
+        .mockResolvedValueOnce({ rows: [], claimTokens: [] })
+        .mockResolvedValueOnce({
+          rows: [mailboxNotificationRow('mail-final-1', 'child-final-1')],
+          claimTokens: ['claim-final-1'],
+        })
+        .mockResolvedValue({ rows: [], claimTokens: [] });
+      vi.spyOn(mailboxDb, 'apply').mockResolvedValue({} as never);
+
+      streamState.current = {
+        responses: [
+          [{ type: 'text', data: 'first answer' }, { type: 'done' }],
+          [{ type: 'text', data: 'second answer after notification' }, { type: 'done' }],
+        ],
+      };
+
+      const events = await drainStream(agent, 'start working');
+
+      // The run did NOT terminate after the first final answer — the
+      // finalize-boundary absorb handed the model a second turn.
+      expect(streamState.callCount).toBe(2);
+      expect(events.map((e) => e.type)).toContain('done');
+
+      // The model saw the notification on the second round.
+      const round2 = streamState.seenMessages[1] as Message[];
+      expect(round2.some(
+        (message) => typeof message.content === 'string' && message.content.includes('child-final-1'),
+      )).toBe(true);
+
+      // Transient notification never leaks into the durable timeline.
+      const projected = agent.getMessages() as Message[];
+      expect(projected.some((m) => String(m.content).includes('child-final-1'))).toBe(false);
+    });
+
+    it('caps the finalize-boundary absorb at 3 and lets the run terminate afterwards', async () => {
+      const agent = newAgent({ sessionId: 'sess-final-poll' });
+
+      const { mailboxDb } = await import('../../../src/ipc/db-client.js');
+      const claimBatchMock = vi.spyOn(mailboxDb, 'claimBatch');
+      // Claim rhythm per absorb cycle: before_model_turn (empty) →
+      // before_final_answer (empty) → final poll (absorb). Cycles 1-3
+      // absorb; cycle 4's final poll must be skipped by the cap without
+      // touching claimBatch at all.
+      let claimCall = 0;
+      claimBatchMock.mockImplementation(async () => {
+        claimCall += 1;
+        const absorbCalls = new Set([3, 6, 9]);
+        if (absorbCalls.has(claimCall)) {
+          return {
+            rows: [mailboxNotificationRow(`mail-cap-${claimCall}`, `notif-${claimCall}`)],
+            claimTokens: [`claim-cap-${claimCall}`],
+          };
+        }
+        return { rows: [], claimTokens: [] };
+      });
+      vi.spyOn(mailboxDb, 'apply').mockResolvedValue({} as never);
+
+      streamState.current = {
+        responses: [
+          [{ type: 'text', data: 'answer 1' }, { type: 'done' }],
+          [{ type: 'text', data: 'answer 2' }, { type: 'done' }],
+          [{ type: 'text', data: 'answer 3' }, { type: 'done' }],
+          [{ type: 'text', data: 'answer 4 — final, cap reached' }, { type: 'done' }],
+        ],
+      };
+
+      const events = await drainStream(agent, 'start working');
+
+      // 3 absorbs → 3 extra turns → 4 model calls total, then done.
+      expect(streamState.callCount).toBe(4);
+      const doneEvents = events.filter((e) => e.type === 'done');
+      expect(doneEvents).toHaveLength(1);
+
+      // Claim call count proves the cap: 11 claims happen (2 per turn ×
+      // 4 turns + 3 absorbing final polls); the 4th final poll short-
+      // circuits before claiming. Note the turn-1 before_model_turn claim
+      // of a normal run is claim #1 — the rhythm above accounts for it.
+      expect(claimCall).toBe(11);
+
+      // Rounds 2-4 each saw one absorbed notification.
+      for (const [round, marker] of [[1, 'notif-3'], [2, 'notif-6'], [3, 'notif-9']] as const) {
+        const seen = streamState.seenMessages[round] as Message[];
+        expect(seen.some(
+          (message) => typeof message.content === 'string' && message.content.includes(marker),
+        )).toBe(true);
+      }
+    });
+  });
 });

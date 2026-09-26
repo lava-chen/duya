@@ -281,7 +281,7 @@ export function adaptTodoGateContext(
 
 /**
  * Generic adapter for loop-hook steering effects (plan 426): dead-loop
- * nudges, premature-stop / tool-intent directives, and the max-turns
+ * nudges, premature-stop directives, and the max-turns
  * wrap-up. The hook effect carries its own source so each nudge family stays
  * filterable without parsing content. Defaults to visibility='hidden' like
  * the todo-gate directive — model-only harness steering, never re-rendered

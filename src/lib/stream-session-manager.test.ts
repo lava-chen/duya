@@ -405,6 +405,176 @@ describe('StreamSessionManager State Machine', () => {
     });
   });
 
+  describe('plan 570 — deliverQueuedRow (idle user-message delivery)', () => {
+    interface PromotedRow {
+      content?: string;
+      attachments_json?: string | null;
+    }
+
+    function stubMailboxPromote(
+      impl: (id: string) => Promise<PromotedRow | null>,
+    ) {
+      vi.stubGlobal('window', {
+        electronAPI: {
+          agentServer: { getUrl: vi.fn().mockResolvedValue('http://127.0.0.1:3001') },
+          provider: {
+            getActiveProviderConfig: vi.fn().mockResolvedValue({
+              apiKey: 'test-key',
+              baseUrl: 'https://example.test',
+              provider: 'openai',
+              providerType: 'openai',
+              model: 'test-model',
+              authStyle: 'api_key',
+            }),
+          },
+          mailbox: { promoteQueued: vi.fn(impl) },
+        },
+      });
+    }
+
+    function getPromoteMock() {
+      const win = window as unknown as { electronAPI: { mailbox: { promoteQueued: ReturnType<typeof vi.fn> } } };
+      return win.electronAPI.mailbox.promoteQueued;
+    }
+
+    // Each startStream may also probe GET /sessions/:id/status (the
+    // stream:end reattach fallback) — count only the chat POSTs.
+    function chatCalls(mockFetch: ReturnType<typeof vi.fn>) {
+      return mockFetch.mock.calls.filter((c) => String(c[0]).endsWith('/chat'));
+    }
+
+    it('promotes a pending row and starts a real user turn (not a background resume)', async () => {
+      const { streamSessionManager } = await import('./stream-session-manager');
+      stubMailboxPromote(() =>
+        Promise.resolve({ content: 'Summarize the changes above', attachments_json: null }));
+      const mockFetch = vi.fn().mockResolvedValue(
+        createMockSSEResponse([{ type: 'connected' }, { type: 'done' }]),
+      );
+      vi.stubGlobal('fetch', mockFetch);
+
+      const delivered = await streamSessionManager.deliverQueuedRow('deliver-idle', 'row-1');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(delivered).toBe(true);
+      expect(getPromoteMock()).toHaveBeenCalledWith('row-1');
+      expect(chatCalls(mockFetch)).toHaveLength(1);
+      const request = chatCalls(mockFetch)[0]?.[1] as RequestInit;
+      const body = JSON.parse(String(request.body)) as {
+        prompt: string;
+        options: { backgroundTaskResume?: boolean };
+      };
+      expect(body.prompt).toBe('Summarize the changes above');
+      // A real user turn — must NOT be flagged as a background resume, so the
+      // worker pushes a persistent user message as turn-1.
+      expect(body.options.backgroundTaskResume).toBeFalsy();
+    });
+
+    it('inherits the previous turn configuration via the resume template', async () => {
+      const { streamSessionManager } = await import('./stream-session-manager');
+      stubMailboxPromote(() => Promise.resolve({ content: 'external follow-up' }));
+      const mockFetch = vi.fn().mockResolvedValue(
+        createMockSSEResponse([{ type: 'connected' }, { type: 'done' }]),
+      );
+      vi.stubGlobal('fetch', mockFetch);
+
+      await streamSessionManager.startStream({
+        sessionId: 'deliver-template',
+        content: 'original send',
+        agentProfileId: 'code',
+        mode: 'plan-task',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      await streamSessionManager.deliverQueuedRow('deliver-template', 'row-2');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(chatCalls(mockFetch)).toHaveLength(2);
+      const request = chatCalls(mockFetch)[1]?.[1] as RequestInit;
+      const body = JSON.parse(String(request.body)) as {
+        prompt: string;
+        options: { agentProfileId?: string | null; mode?: string };
+      };
+      expect(body.prompt).toBe('external follow-up');
+      expect(body.options.agentProfileId).toBe('code');
+      expect(body.options.mode).toBe('plan-task');
+    });
+
+    it('is a no-op while the session is busy and never calls promoteQueued', async () => {
+      const { streamSessionManager } = await import('./stream-session-manager');
+      stubMailboxPromote(() => Promise.resolve({ content: 'should not promote' }));
+      let releaseForeground: (() => void) | undefined;
+      vi.stubGlobal('fetch', vi.fn().mockImplementation(() => {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          body: {
+            getReader: () => {
+              const encoder = new TextEncoder();
+              let index = 0;
+              return {
+                read: async () => {
+                  if (index++ === 0) {
+                    return { done: false, value: encoder.encode('event: connected\ndata: \n\n') };
+                  }
+                  if (index === 2) {
+                    await new Promise<void>((resolve) => { releaseForeground = resolve; });
+                  }
+                  return { done: true, value: undefined };
+                },
+                releaseLock: () => {},
+              };
+            },
+          } as ReadableStream<Uint8Array>,
+        } as unknown as Response);
+      }));
+
+      await streamSessionManager.startStream({ sessionId: 'deliver-busy', content: 'keep busy' });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(await streamSessionManager.deliverQueuedRow('deliver-busy', 'row-3')).toBe(false);
+      expect(getPromoteMock()).not.toHaveBeenCalled();
+
+      releaseForeground?.();
+    });
+
+    it('is a no-op when the row was already claimed, cancelled, or empty', async () => {
+      const { streamSessionManager } = await import('./stream-session-manager');
+      // Case A: promoteQueued CAS loses (row claimed by the agent or cancelled).
+      stubMailboxPromote(() => Promise.resolve(null));
+      const mockFetchA = vi.fn();
+      vi.stubGlobal('fetch', mockFetchA);
+      expect(await streamSessionManager.deliverQueuedRow('deliver-lost', 'row-4')).toBe(false);
+      expect(mockFetchA).not.toHaveBeenCalled();
+
+      // Case B: promoted row has empty content — must not become a blank turn.
+      stubMailboxPromote(() => Promise.resolve({ content: '   ' }));
+      const mockFetchB = vi.fn();
+      vi.stubGlobal('fetch', mockFetchB);
+      expect(await streamSessionManager.deliverQueuedRow('deliver-empty', 'row-5')).toBe(false);
+      expect(mockFetchB).not.toHaveBeenCalled();
+    });
+
+    it('parses attachments_json into file attachments for the delivered turn', async () => {
+      const { streamSessionManager } = await import('./stream-session-manager');
+      stubMailboxPromote(() =>
+        Promise.resolve({
+          content: 'review this file',
+          attachments_json: JSON.stringify([{ name: 'a.ts', text: 'export {}' }]),
+        }));
+      const mockFetch = vi.fn().mockResolvedValue(
+        createMockSSEResponse([{ type: 'connected' }, { type: 'done' }]),
+      );
+      vi.stubGlobal('fetch', mockFetch);
+
+      expect(await streamSessionManager.deliverQueuedRow('deliver-files', 'row-6')).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const request = chatCalls(mockFetch)[0]?.[1] as RequestInit;
+      const body = JSON.parse(String(request.body)) as { options: { files?: Array<{ name: string }> } };
+      expect(body.options.files).toEqual([{ name: 'a.ts', text: 'export {}' }]);
+    });
+  });
+
   describe('Stream isolation (streamId correlation)', () => {
     it('prevents old stream events from affecting new stream for same session', async () => {
       const { streamSessionManager } = await import('./stream-session-manager');

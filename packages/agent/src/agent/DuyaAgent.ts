@@ -1000,7 +1000,14 @@ export class duyaAgent implements AgentRuntime {
         // reload / cross-device sync see hook rows in the message flow.
         // The renderer reads them back via MessageItem.messageToActionItems
         // using msgType === 'hook_invocation'.
-        this.pendingHookMessages.push(buildHookMessage(hookEvent, turnContext.sessionId ?? ''));
+        // 2026-09-26: verifier-only hooks carry no additionalContext —
+        // persisting those rows produced blank `role:'system'` entries in
+        // the transcript. Skip them; the live SSE `hook_invoked` progress
+        // event above still surfaces the invocation for the running turn.
+        const hookContext = hookEvent.additionalContext;
+        if (typeof hookContext === 'string' && hookContext.trim().length > 0) {
+          this.pendingHookMessages.push(buildHookMessage(hookEvent, turnContext.sessionId ?? ''));
+        }
       },
     });
     const flushPendingHookEvents = (): SSEEvent[] => {
@@ -1518,7 +1525,7 @@ export class duyaAgent implements AgentRuntime {
 
     // Loop-hook bus (plan 426): per-run event spine carrying the steering
     // policies that used to be inline blocks below (todo gate, premature
-    // stop, tool intent, dead-loop nudges). Engine invariants 鈥?mailbox
+    // stop, dead-loop nudges). Engine invariants 鈥?mailbox
     // checkpoints, max-turns stop, dead-loop hard stop 鈥?stay in this loop
     // and are never delegated.
     const loopHooks = new LoopHookBus();
@@ -1530,7 +1537,6 @@ export class duyaAgent implements AgentRuntime {
         nudgeAt: deadLoopTracker.config.nudgeAt,
         hardNudgeAt: deadLoopTracker.config.hardNudgeAt,
       },
-      toolIntentNudgeMax: options?.toolIntentNudgeMax ?? 2,
       // grok SendMessageReminderMiddleware port: only runs whose toolset
       // actually exposes SendMessage (bot sessions) can go "silently"
       // invisible, so only those get the silence / early-result nudges.
@@ -1609,6 +1615,17 @@ export class duyaAgent implements AgentRuntime {
       toolName: string;
       promise: Promise<unknown>;
     }> = [];
+
+    // Plan 569: run-level counter for the final mailbox poll inside
+    // finalizeSuccess. Each absorb hands the model a fresh turn, and the
+    // model may finish again immediately — a notification storm could
+    // otherwise extend the run indefinitely. After FINAL_POLL_MAX_ABSORBS
+    // absorbs the final poll passes through (returns false) and leftover
+    // notifications fall to the renderer resume path (which has the
+    // 2026-09-26 no-idle-run guard). 3 is the same conservative magnitude
+    // as claimBatch's DEFAULT_LIMIT=10 / DEFAULT_MAX_CLAIM_ATTEMPTS=5.
+    const FINAL_POLL_MAX_ABSORBS = 3;
+    let finalPollAbsorbs = 0;
 
     // Track total elapsed time for the entire stream (including all turns and tool execution)
     const streamStartTime = Date.now();
@@ -1982,6 +1999,22 @@ export class duyaAgent implements AgentRuntime {
         'before_model_turn',
         options?.wakeRun === true,
       );
+      // A `backgroundTaskResume` run has no user prompt (the turn-1 push is
+      // skipped above). If its FIRST checkpoint claim comes back empty, the
+      // notification it was woken for was already absorbed by the run that
+      // was active when it arrived — proceeding would make a bare LLM call
+      // with no new input, wasting a turn and producing a reply with nothing
+      // to reply to (2026-09-26 investigation: empty idle-resume runs).
+      if (
+        options?.backgroundTaskResume === true &&
+        turnCount === 1 &&
+        mailboxDecision.action === 'continue' &&
+        !mailboxDecision.absorbed
+      ) {
+        logger.info('[AgentMailbox] backgroundTaskResume run has no claimable rows — terminating without an LLM call');
+        yield { type: 'done', reason: 'completed' };
+        return;
+      }
       if (mailboxDecision.action === 'soft_stop') {
         const stopMessage = mailboxDecision.summary || 'Stopped as requested.';
         this._pushDurable(messages, {
@@ -2844,7 +2877,7 @@ export class duyaAgent implements AgentRuntime {
 
           // Plan 426: PreFinalize dispatch 鈥?the veto-capable steering point.
           // The model ended its turn naturally; the bus consults the builtin
-          // policies (goal premature-stop 鈫?tool-intent 鈫?todo gate, in that
+          // policies (goal premature-stop 鈫?todo gate, in that
           // fixed priority order) before the run is allowed to finalize. A
           // block_finalize veto injects a transient <system-reminder>
           // directive and continues the loop. Hook failures already degraded
@@ -2871,6 +2904,34 @@ export class duyaAgent implements AgentRuntime {
             modeCtx: this.modeCtx,
             host: this as unknown as import('./SessionFinalizer.js').FinalizerHost,
             stopReason: turnStopReason,
+            // Plan 569: one last mailbox claim at the finalize boundary.
+            // Absorbing here keeps notifications that landed in the
+            // finalize window inside this run (same path as a PreFinalize
+            // veto → continue → next turn's before_model_turn claim is
+            // empty → the LLM sees the notification) instead of leaking
+            // to the renderer's pendingBackgroundResumes resume path.
+            // soft_stop / hard_replace decisions are folded away — a run
+            // about to end neither replays a soft stop nor accepts a
+            // replacement context. `_claimMailboxAtCheckpoint` never
+            // throws (claim failures degrade to continue/absorbed=false).
+            pollFinalMailbox: async () => {
+              if (finalPollAbsorbs >= FINAL_POLL_MAX_ABSORBS) return false;
+              const decision = await this._claimMailboxAtCheckpoint(
+                runId,
+                messages,
+                seqIndex,
+                'before_final_answer',
+                options?.wakeRun === true,
+              );
+              const absorbed = decision.action === 'continue' && decision.absorbed;
+              if (absorbed) {
+                finalPollAbsorbs++;
+                logger.info(
+                  `[AgentMailbox] final poll absorbed #${finalPollAbsorbs}/${FINAL_POLL_MAX_ABSORBS} at finalizeSuccess`,
+                );
+              }
+              return absorbed;
+            },
           });
           const finalized = yield* finalizer.finalizeSuccess();
           if (finalized) return;
@@ -3225,19 +3286,41 @@ export class duyaAgent implements AgentRuntime {
     }
 
     // Plan 497: on a wake run the DM body is already in the wake prompt —
-    // agent_dm rows are consumed above (never re-absorbed) but NOT injected
-    // again, or the model reads the same text twice. Mid-user-turn delivery
-    // (user-driven run) still injects via the guidance block below.
+    // re-injecting an `agent_dm` row would make the model read the same text
+    // twice. In practice `agent_dm` rows are never claimable at any
+    // checkpoint (see claimableKinds in mailbox.ts), so this filter is
+    // belt-and-braces; mid-user-turn delivery still injects other row kinds
+    // via the guidance block below.
     const injectableRows = wakeRun
       ? usableRows.filter((row) => row.kind !== 'agent_dm')
       : usableRows;
 
     const backgroundNotificationRows = injectableRows.filter((row) => row.kind === 'background_notification');
+    // Plan 570: since claimableKinds narrowed `before_final_answer` to
+    // background_notification only, `guidanceRows` is always empty at that
+    // checkpoint — the `<runtime-user-guidance>` fold below now only fires at
+    // `before_model_turn` (followup steering). User messages surviving the
+    // exit boundary are promoted to a real user turn by the renderer.
     const guidanceRows = injectableRows.filter((row) => row.kind !== 'background_notification');
 
     for (const row of backgroundNotificationRows) {
       const ctx = adaptBackgroundNotification(row, { seqIndex });
-      const projected = projectRuntimeContextToProviderMessage(ctx);
+      // Frame the raw `<task-notification>` XML in a `<system-reminder>`
+      // envelope (plan 408/567 convention) so the model treats it as system
+      // context rather than user speech. Injecting it as a bare user turn
+      // made the model adopt the notification as its own conversational
+      // voice and degraded reply quality (2026-09-26 investigation).
+      const wrappedContent = typeof ctx.content === 'string'
+        ? renderSystemReminder(
+          [
+            'Automated background-task notification — system context, not a user message.',
+            'Do not greet the user or announce this notification; silently fold it into the ongoing work where relevant.',
+            ctx.content,
+          ].join('\n'),
+          'background_notification',
+        )
+        : ctx.content;
+      const projected = projectRuntimeContextToProviderMessage({ ...ctx, content: wrappedContent });
       if (projected) messages.push(projected);
     }
 

@@ -20,7 +20,6 @@ export type RuntimeContextSource =
   | 'research_continuation'
   | 'dead_loop_nudge'
   | 'premature_stop'
-  | 'tool_intent'
   | 'send_message_reminder'
   | 'goal_reply_fingerprint'
   | 'goal_continuation'
@@ -260,7 +259,6 @@ export const STARTS_PROMPT_TURN: Record<RuntimeContextSource, boolean> = {
   research_continuation: false,
   dead_loop_nudge: false,
   premature_stop: false,
-  tool_intent: false,
   send_message_reminder: false,
   goal_reply_fingerprint: false,
   goal_continuation: false,

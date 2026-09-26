@@ -193,7 +193,10 @@ describe('AgentsMdManager nested memory facade (plan 408b)', () => {
       expect(files).toHaveLength(1);
 
       const block = manager.renderNestedMemoryBlock(files);
-      expect(block.startsWith('<system-reminder>')).toBe(true);
+      // Plan 567 §B: renderNestedMemoryBlock returns the INNER body only —
+      // the outer <system-reminder> envelope is applied once by the
+      // injection site (renderSystemReminder(inner, 'nested_agents_md')).
+      expect(block.startsWith('<system-reminder>')).toBe(false);
       expect(block).toContain('<project_instructions_spec>');
       expect(block).toContain('nested directory');
       expect(block).toContain('Use barrels sparingly.');

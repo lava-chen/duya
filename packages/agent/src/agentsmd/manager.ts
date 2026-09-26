@@ -13,6 +13,7 @@ import { loadAgentsMdFiles, buildAgentsMdPrompt } from './loader.js'
 import {
   collectNestedMemoryFiles,
 } from './nested-loader.js'
+import { sanitizeSystemReminderBody } from '../agent/reminder-sources.js'
 import { logger } from '../utils/logger.js'
 
 // =============================================================================
@@ -287,9 +288,13 @@ export class AgentsMdManager {
   }
 
   /**
-   * Render one injection block for nested memory files. Same envelope as
-   * `buildAgentsMdPrompt` but without MEMORY_INSTRUCTION_PROMPT — that
-   * preamble belongs to the eager first-load only. Empty input → ''.
+   * Render the inner nested-memory body for one injection block. Plan 567 §B:
+   * returns ONLY the `<project_instructions_spec>` body (sanitized against
+   * nested `<system-reminder>` tags) — the outer `<system-reminder>` envelope
+   * is applied once by the injection site via `renderSystemReminder(inner,
+   * 'nested_agents_md')`. Same content as the pre-567 envelope minus the
+   * double wrapping, and without MEMORY_INSTRUCTION_PROMPT — that preamble
+   * belongs to the eager first-load only. Empty input → ''.
    */
   renderNestedMemoryBlock(files: AgentsFileInfo[]): string {
     if (files.length === 0) return ''
@@ -297,10 +302,42 @@ export class AgentsMdManager {
       .filter((f) => f.content)
       .map(
         (f) =>
-          `Contents of ${f.path} (project instructions, nested directory):\n\n${f.content}`,
+          `Contents of ${f.path} (project instructions, nested directory):\n\n${sanitizeSystemReminderBody(f.content)}`,
       )
     if (memories.length === 0) return ''
-    return `<system-reminder>\n<project_instructions_spec>\n${memories.join('\n\n')}\n</project_instructions_spec>\n</system-reminder>`
+    return `<project_instructions_spec>\n${memories.join('\n\n')}\n</project_instructions_spec>`
+  }
+
+  // ===========================================================================
+  // One-shot reminder lifecycle (plan 567 §C)
+  // ===========================================================================
+
+  /**
+   * Release the session-level nested-memory loaded set so dropped one-shot
+   * reminders can be re-injected. Compaction removes the injected user-role
+   * messages from history; without this release, `_loadedNestedPaths` would
+   * keep blocking re-injection and the rules would be permanently lost.
+   *
+   * `cwd` guard: the manager is a process-wide singleton shared by concurrent
+   * agents; only the session whose project snapshot matches `cwd` may release
+   * the set. Returns the number of released paths (0 when the guard declines
+   * or nothing was loaded).
+   */
+  releaseNestedMemoryForReinject(cwd?: string): number {
+    if (!this._initialized) return 0
+    if (cwd && this._projectPath && this._projectPath !== cwd) {
+      return 0
+    }
+    const released = this._loadedNestedPaths.size
+    this._loadedNestedPaths.clear()
+    if (released > 0) {
+      logger.info(
+        'Nested AGENTS.md loaded set released for re-injection after compaction',
+        { released },
+        'AgentsMd',
+      )
+    }
+    return released
   }
 
   // ===========================================================================

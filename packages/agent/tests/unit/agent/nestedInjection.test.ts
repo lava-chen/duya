@@ -89,7 +89,9 @@ vi.mock('../../../src/agentsmd/index.js', () => ({
         (f) =>
           `Contents of ${f.path} (project instructions, nested directory):\n\n${f.content}`,
       );
-      return `<system-reminder>\n<project_instructions_spec>\n${memories.join('\n\n')}\n</project_instructions_spec>\n</system-reminder>`;
+      // Plan 567 §B: inner body only — DuyaAgent wraps the outer envelope
+      // via renderSystemReminder(inner, 'nested_agents_md').
+      return `<project_instructions_spec>\n${memories.join('\n\n')}\n</project_instructions_spec>`;
     },
   })),
 }));

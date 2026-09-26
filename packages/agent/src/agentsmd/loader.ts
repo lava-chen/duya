@@ -15,6 +15,7 @@ import * as path from 'path'
 import * as os from 'os'
 import { promisify } from 'util'
 import { marked } from 'marked'
+import { sanitizeSystemReminderBody } from '../agent/reminder-sources.js'
 import type {
   AgentsFileInfo,
   AgentsMemoryType,
@@ -672,7 +673,7 @@ export function buildAgentsMdPrompt(files: AgentsFileInfo[]): string {
     if (!file.content) continue
     memories.push(
       `# AGENTS.md instructions for ${file.path}\n\n` +
-        `<INSTRUCTIONS>\n${file.content}\n</INSTRUCTIONS>`,
+        `<INSTRUCTIONS>\n${sanitizeSystemReminderBody(file.content)}\n</INSTRUCTIONS>`,
     )
   }
 

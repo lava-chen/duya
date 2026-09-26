@@ -4,7 +4,7 @@
  * Centralised sequence-number tracking for SSE events emitted from
  * `DuyaAgent.streamChat`. Each event the loop produces
  * (`turn_start` / `text` / `tool_use` / `tool_result` / `done` /
- * `tool_intent` / `mode_changed` / `hook_event`) gets a monotonically
+ * `mode_changed` / `hook_event`) gets a monotonically
  * increasing `seq_index` so the client can reorder late events and
  * detect gaps.
  *

@@ -106,8 +106,8 @@ export type RuntimeMailboxDecision =
 
 /**
  * Text of the last assistant message with non-empty content. Shared by the
- * loop-hook builtin nudges (premature-stop, tool-intent) that pattern-match
- * the model's closing statement before finalize.
+ * loop-hook builtin nudges (premature-stop, reply-fingerprint) that
+ * pattern-match the model's closing statement before finalize.
  */
 export function lastAssistantTextOf(
   messages: ReadonlyArray<{ role?: string; content?: string | readonly unknown[] | null }>,
@@ -146,8 +146,7 @@ export function persistableMessages(messages: Message[]): Message[] {
         source === 'todo_gate' ||
         source === 'auto_continue' ||
         source === 'dead_loop_nudge' ||
-        source === 'premature_stop' ||
-        source === 'tool_intent'
+        source === 'premature_stop'
       ) {
         return false;
       }

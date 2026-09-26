@@ -17,12 +17,12 @@
 import type { ModeTrackerEngine } from './engine.js';
 import type { ModeTracker } from './tracker.js';
 import {
-  renderReminder,
   fullReminder,
   sparseReminder,
   reentryReminder,
   exitReminder,
 } from '../plan/reminders.js';
+import { renderSystemReminder } from '../../agent/reminders.js';
 import { renderGoalContinuation } from '../goal/goal-reminders.js';
 import type { GoalTracker } from '../goal/goal-tracker.js';
 import { getGoalConfig } from '../goal/goal-config.js';
@@ -203,7 +203,10 @@ export class ModeCoordinator {
             messages,
             seqIndex,
             'goal_summary',
-            renderReminder(renderGoalContinuation(asGoalTracker(tracker), this.sessionId)),
+            renderSystemReminder(
+              renderGoalContinuation(asGoalTracker(tracker), this.sessionId),
+              'goal_continuation',
+            ),
           );
         }
         continue;
@@ -219,7 +222,10 @@ export class ModeCoordinator {
             messages,
             seqIndex,
             'research_continuation',
-            renderReminder(renderResearchContinuation(asResearchTracker(tracker))),
+            renderSystemReminder(
+              renderResearchContinuation(asResearchTracker(tracker)),
+              'research_continuation',
+            ),
           );
         }
         continue;
@@ -245,10 +251,11 @@ export class ModeCoordinator {
           this.pushReminder(
             messages,
             seqIndex,
-            renderReminder(
+            renderSystemReminder(
               reentry
                 ? reentryReminder(resolvePlanFilePath(this.sessionId))
                 : fullReminder(resolvePlanFilePath(this.sessionId)),
+              'plan_mode',
             ),
           );
           tracker.recordReminderInjected();
@@ -257,16 +264,17 @@ export class ModeCoordinator {
         this.pushReminder(
           messages,
           seqIndex,
-          renderReminder(
+          renderSystemReminder(
             tracker.shouldUseFullReminder()
               ? fullReminder(resolvePlanFilePath(this.sessionId))
               : sparseReminder(),
+            'plan_mode',
           ),
         );
         tracker.recordReminderInjected();
       }
       if (tracker.hasPendingExitReminder()) {
-        this.pushReminder(messages, seqIndex, renderReminder(exitReminder()));
+        this.pushReminder(messages, seqIndex, renderSystemReminder(exitReminder(), 'plan_mode'));
         tracker.clearPendingExitReminder();
       }
     }

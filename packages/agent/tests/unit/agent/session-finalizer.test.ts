@@ -59,6 +59,7 @@ function makeDeps(overrides: {
   stopReason?: string;
   host?: FinalizerDepsForTest['host'];
   executor?: { discard: () => void };
+  pollFinalMailbox?: () => Promise<boolean>;
 } = {}): FinalizerDepsForTest {
   const messages = overrides.messages ?? [];
   const loopHooks = overrides.loopHooks ?? new LoopHookBus();
@@ -94,6 +95,7 @@ function makeDeps(overrides: {
     },
     stopReason: overrides.stopReason,
     executor: overrides.executor,
+    pollFinalMailbox: overrides.pollFinalMailbox,
   };
 }
 
@@ -235,6 +237,67 @@ describe('SessionFinalizer.finalizeSuccess (Plan 550 2e)', () => {
 
     expect(events).toHaveLength(1);
     expect(events[0]).toEqual({ type: 'done', reason: 'completed' });
+    expect(dispatchCalls).toEqual(['SessionEnd']);
+  });
+
+  // -------------------------------------------------------------
+  // Plan 569: final-poll contract.
+  // -------------------------------------------------------------
+  it('returns false and short-circuits everything when pollFinalMailbox absorbs (Plan 569)', async () => {
+    const dispatchCalls: string[] = [];
+    const dispatchHooks: FinalizerDepsForTest['dispatchHooks'] = async function* (event) {
+      dispatchCalls.push(event);
+    };
+    const commit = vi.fn();
+    const resolvedModes = { modes: [{}] } as never;
+    const modeCtx = { sessionId: 'sess-1' } as never;
+    const pollFinalMailbox = vi.fn(async () => true);
+    vi.mocked(runExitHooks).mockClear();
+
+    const f = new SessionFinalizer(
+      makeDeps({ dispatchHooks, host: { _commitMessages: commit, _pushDurable: () => undefined, setMessages: () => undefined }, resolvedModes, modeCtx, pollFinalMailbox }),
+    );
+    const events = await drain(f.finalizeSuccess());
+
+    // Absorbed → caller must `continue` the loop: no events yielded,
+    // false returned, and nothing downstream of the poll ran.
+    expect(events).toEqual([]);
+    const ret = await f.finalizeSuccess().next();
+    expect(ret).toEqual({ value: false, done: true });
+    expect(pollFinalMailbox).toHaveBeenCalled();
+    expect(dispatchCalls).toEqual([]);
+    expect(vi.mocked(runExitHooks)).not.toHaveBeenCalled();
+    expect(commit).not.toHaveBeenCalled();
+  });
+
+  it('finalizes normally when pollFinalMailbox returns false (Plan 569)', async () => {
+    const dispatchCalls: string[] = [];
+    const dispatchHooks: FinalizerDepsForTest['dispatchHooks'] = async function* (event) {
+      dispatchCalls.push(event);
+    };
+    const commit = vi.fn();
+    const pollFinalMailbox = vi.fn(async () => false);
+
+    const f = new SessionFinalizer(
+      makeDeps({ dispatchHooks, host: { _commitMessages: commit, _pushDurable: () => undefined, setMessages: () => undefined }, pollFinalMailbox }),
+    );
+    const events = await drain(f.finalizeSuccess());
+
+    expect(events).toEqual([{ type: 'done', reason: 'completed' }]);
+    expect(commit).toHaveBeenCalledOnce();
+    expect(dispatchCalls).toEqual(['SessionEnd']);
+  });
+
+  it('never invokes the final poll when the dep is absent (Plan 569 regression lock)', async () => {
+    const dispatchCalls: string[] = [];
+    const dispatchHooks: FinalizerDepsForTest['dispatchHooks'] = async function* (event) {
+      dispatchCalls.push(event);
+    };
+
+    const f = new SessionFinalizer(makeDeps({ dispatchHooks }));
+    const events = await drain(f.finalizeSuccess());
+
+    expect(events).toEqual([{ type: 'done', reason: 'completed' }]);
     expect(dispatchCalls).toEqual(['SessionEnd']);
   });
 });

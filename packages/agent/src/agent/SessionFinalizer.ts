@@ -146,6 +146,13 @@ export interface SessionFinalizerDeps {
    * the legacy body used for PreFinalize only.
    */
   stopReason?: string;
+  /**
+   * Plan 569: Finalize 边界的最后一次 mailbox claim。返回 `true` =
+   * 吸收了至少一行，finalizer 返回 `false` 让调用方 `continue`（与
+   * PreFinalize veto 同路径）。实现方保证不 throw（内部已降级）。
+   * Optional — 未注入时 finalizer 行为与 Plan 550 2e 完全一致。
+   */
+  pollFinalMailbox?: () => Promise<boolean>;
 }
 
 /**
@@ -177,6 +184,23 @@ export class SessionFinalizer {
       messages,
       seqIndex,
     } = this.deps;
+
+    // Plan 569: final-poll — one last mailbox claim at the finalize
+    // boundary, BEFORE the PreFinalize dispatch. Notifications that
+    // arrived after the last `before_final_answer` claim (DuyaAgent)
+    // but before the run actually ends are absorbed here and take the
+    // same "return false → caller continues the loop" path as a
+    // PreFinalize veto: the next loop iteration's `before_model_turn`
+    // claim is empty, so the model sees the notification in the same
+    // run instead of the renderer spinning up a bare resume run.
+    // Placed before PreFinalize because after PostTurn the timeline
+    // is committed by `_commitMessages` — injecting later would
+    // desync the durable history from the live context. Optional dep:
+    // when absent this block is a no-op and behaviour is unchanged.
+    if (this.deps.pollFinalMailbox) {
+      const absorbed = await this.deps.pollFinalMailbox();
+      if (absorbed) return false;
+    }
 
     // PreFinalize: a `block_finalize` veto from any loop hook aborts
     // the natural exit and asks the agent to continue the loop

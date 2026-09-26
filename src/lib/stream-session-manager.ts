@@ -1189,6 +1189,11 @@ export class StreamSessionManager {
 
                 const row = promoted as Record<string, unknown>;
                 if (typeof row.content === 'string') {
+                  // An empty promoted row must not become a blank user turn
+                  // (2026-09-26 investigation) — skip it entirely.
+                  if (!row.content.trim()) {
+                    continue;
+                  }
                   next.content = row.content;
                   next.displayContent = row.content;
                 }
@@ -1317,6 +1322,34 @@ export class StreamSessionManager {
     }
 
     this.pendingBackgroundResumes.delete(sessionId);
+
+    // Skip the wake entirely when the mailbox has no pending background
+    // notification left: the run that was active when the notification
+    // arrived already claimed it at a checkpoint. Starting a resume run
+    // anyway produced an empty "bare" turn with no new model input
+    // (2026-09-26 investigation). If the query fails, fall through and
+    // keep the old always-resume behaviour.
+    try {
+      const listMailbox = typeof window !== 'undefined'
+        ? window.electronAPI?.mailbox?.list
+        : undefined;
+      if (listMailbox) {
+        const pendingRows = (await listMailbox(sessionId, { status: ['pending'] })) as Array<{
+          kind?: string;
+          content?: string;
+        }>;
+        const hasPendingNotification = pendingRows.some(
+          (row) =>
+            row.kind === 'background_notification'
+            && typeof row.content === 'string'
+            && row.content.trim().length > 0,
+        );
+        if (!hasPendingNotification) return false;
+      }
+    } catch {
+      // Mailbox query failed — proceed with the resume (old behaviour).
+    }
+
     const template = this.backgroundResumeTemplates.get(sessionId);
     await this.startStream({
       ...template,
@@ -1326,6 +1359,69 @@ export class StreamSessionManager {
       files: undefined,
       queuedMailboxId: undefined,
       backgroundTaskResume: true,
+    });
+    return true;
+  }
+
+  /**
+   * Plan 570: deliver a pending queued/followup mailbox row as a REAL user
+   * turn when its session is idle (e.g. the row was written externally by
+   * the CLI/bot/cron while no run was active, so no checkpoint will ever
+   * claim it). Busy sessions are a no-op — a running agent claims followup
+   * rows at before_model_turn and the terminal promoteQueued drain handles
+   * queued rows. Idempotency comes from promoteQueued's atomic CAS: if the
+   * row was already claimed/cancelled, it returns falsy and we do nothing.
+   */
+  async deliverQueuedRow(sessionId: string, mailboxId: string): Promise<boolean> {
+    const state = this.getOrCreateState(sessionId);
+    if (isActivePhase(state.phase)) return false;
+
+    const promoteQueued = typeof window !== 'undefined'
+      ? window.electronAPI?.mailbox?.promoteQueued
+      : undefined;
+    if (!promoteQueued) return false;
+
+    // Promote FIRST (atomic CAS): a successful promotion takes the row out
+    // of every checkpoint's claimable set, so this delivery cannot race the
+    // agent loop into a double delivery.
+    let promoted: Record<string, unknown> | null = null;
+    try {
+      promoted = await promoteQueued(mailboxId) as Record<string, unknown> | null;
+    } catch (error) {
+      console.error('[stream-session-manager] deliverQueuedRow promote failed:', error);
+      return false;
+    }
+    if (!promoted) return false;
+
+    const content = typeof promoted.content === 'string' ? promoted.content : '';
+    // An empty promoted row must not become a blank user turn — skip it.
+    if (!content.trim()) return false;
+
+    let files: FileAttachment[] | undefined;
+    if (typeof promoted.attachments_json === 'string') {
+      try {
+        const attachments = JSON.parse(promoted.attachments_json) as FileAttachment[];
+        if (Array.isArray(attachments) && attachments.length > 0) files = attachments;
+      } catch {
+        // Undecodable attachments — deliver the text alone.
+      }
+    }
+
+    // Inherit the session's last manual-send template (model / permission /
+    // profile / ...) so an externally written row streams with the usual
+    // session config, then override the turn content. Not a
+    // backgroundTaskResume: this must push a persistent user message as
+    // turn-1, exactly like a hand-typed send.
+    const template = this.backgroundResumeTemplates.get(sessionId);
+    await this.startStream({
+      ...(template ?? {}),
+      sessionId,
+      content,
+      displayContent: content,
+      files,
+      queuedMailboxId: undefined,
+      clientMsgId: undefined,
+      backgroundTaskResume: undefined,
     });
     return true;
   }
@@ -4575,6 +4671,8 @@ export const subscribeToConnectorAuthRequired = (
 export const clearConnectorAuthRequired = (sessionId: string) =>
   streamSessionManager.clearConnectorAuthRequired(sessionId);
 export const resumeBackgroundTask = (sessionId: string) => streamSessionManager.resumeBackgroundTask(sessionId);
+export const deliverQueuedRow = (sessionId: string, mailboxId: string) =>
+  streamSessionManager.deliverQueuedRow(sessionId, mailboxId);
 export const attachToExistingStream = (sessionId: string) => streamSessionManager.attachToExistingStream(sessionId);
 export const stopStream = (sessionId: string, reason?: string) => streamSessionManager.stopStream(sessionId, reason);
 export const canSend = (sessionId: string) => streamSessionManager.canSend(sessionId);

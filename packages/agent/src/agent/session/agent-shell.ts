@@ -9,6 +9,7 @@
  */
 
 import type { AIClient } from '@duya/ai';
+import { renderSystemReminder } from '../reminders.js';
 import { getAgentsMdManager } from '../../agentsmd/index.js';
 import { getAgentProfileService } from '../../agent-profile/AgentProfileService.js';
 import { isToolVisible, type ToolVisibilityConstraints } from '../../agent-profile/ToolFilter.js';
@@ -244,10 +245,16 @@ export async function buildSystemPrompt(
   // Plan 424: config-driven custom agent global instructions
   // (loaded from `agents_md`). Injected as its own <system-reminder> block
   // so the agent's own rules stay separated from project AGENTS.md.
+  // Plan 567: envelope via the canonical wrapper (source taxonomy entry
+  // `agent_global_instructions`).
   if (appliedProfile?.globalInstructions) {
+    const globalInstructionsBlock = renderSystemReminder(
+      `<agent_global_instructions>\n${appliedProfile.globalInstructions}\n</agent_global_instructions>`,
+      'agent_global_instructions',
+    );
     systemPromptContent = systemPromptContent
-      ? `${systemPromptContent}\n\n<system-reminder>\n<agent_global_instructions>\n${appliedProfile.globalInstructions}\n</agent_global_instructions>\n</system-reminder>`
-      : `<system-reminder>\n<agent_global_instructions>\n${appliedProfile.globalInstructions}\n</agent_global_instructions>\n</system-reminder>`;
+      ? `${systemPromptContent}\n\n${globalInstructionsBlock}`
+      : globalInstructionsBlock;
   }
 
   return systemPromptContent;

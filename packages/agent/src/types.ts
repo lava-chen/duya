@@ -311,13 +311,6 @@ export interface ChatOptions {
     enabled?: boolean;
   };
   /**
-   * Plan 418 L2: tool-intent / action-consistency guard. When the model ends
-   * a turn with a tool-intent statement but emitted no tool_use, a steering
-   * message is injected so the turn continues instead of finalizing. Capped
-   * per streamChat call. Default: 2.
-   */
-  toolIntentNudgeMax?: number;
-  /**
    * Plan 426: ids of builtin loop hooks to skip for this run (e.g.
    * "builtin.premature-stop", "builtin.todo-gate"). Disabled hooks are not
    * registered, so they cannot fire. Default: none.
