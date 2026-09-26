@@ -338,6 +338,17 @@ Windows 侧 computer-use 栈已落地：capture（desktopCapturer + SOM）、exe
     fail-fast 路径正确（exit 1）。**在 macOS 13+ 机器授完三权限后，`node scripts/mac-gate.mjs`
     一条命令跑完 gate0–2**；gate1–3 的录制/packaged ③④⑤/§8 签核仍需 DUYA app UI 与人工确认。
 
+### 追加实测（2026-09-27 第七批）：全仓测试套件的本机边界
+
+24. `npm run test`（全仓 vitest）在本机也无法运行：pretest 的 ensure-sqlite-abi 探测 +
+    DB 层测试都依赖 better-sqlite3 under node，而 **better-sqlite3 在本机 node 20.20.2 下
+    require 即 segfault（139）** —— 首次打包日志的 "does not load under node (exit code null)"
+    证实这是基线状态（CLT 13.1 工具链 × 该 node 版本组合），与 plan 572 无关。已尝试
+    prebuild-install（无匹配 prebuilt）、electron-rebuild（产物为 electron ABI）、源码编译
+    （node-gyp 成功但运行时仍 segfault）三条路，均无法在本机恢复 node 侧加载。plan 572 的
+    测试证据（109+ 单测/回归）全部来自不加载 better-sqlite3 的定向簇，结论不受影响。
+    全仓套件需在 macOS 13+ / 正常 node 工具链的机器上跑 —— 与真机 Gate 同一台机器即可。
+
 ### 决策待办：Electron 44 vs macOS 12 开发机（用户裁定项，2026-09-27 提交事实）
 
 **事实**（本会话实测）：master 合并把 `electron` 依赖从 36 升到 **44.2.0**（AGENTS.md 记载的 28 早已过期）。
