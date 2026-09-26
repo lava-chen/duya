@@ -358,21 +358,39 @@ describe.skipIf(!nativeSqliteAvailable)('Mailbox', () => {
     expect(result.rows.map((r) => r.id)).toEqual(['followup']);
   });
 
-  it('claims queued rows only at before_final_answer, not before_model_turn', () => {
+  it('plan 570: before_final_answer no longer claims queued/followup rows', () => {
     mailbox.enqueue({ id: 'queued-a', sessionId: 's1', submittedRunId: 'r0', content: 'qa', kind: 'queued' });
-    mailbox.enqueue({ id: 'queued-b', sessionId: 's1', submittedRunId: 'r0', content: 'qb', kind: 'queued' });
+    mailbox.enqueue({ id: 'followup-a', sessionId: 's1', submittedRunId: 'r0', content: 'fa', kind: 'followup' });
     db.prepare('UPDATE mailbox_items SET created_at = ? WHERE id = ?').run(1000, 'queued-a');
-    db.prepare('UPDATE mailbox_items SET created_at = ? WHERE id = ?').run(1001, 'queued-b');
-
-    const modelTurn = mailbox.claimBatch({
-      sessionId: 's1', runId: 'run1', checkpoint: 'before_model_turn',
-    });
-    expect(modelTurn.rows).toEqual([]);
+    db.prepare('UPDATE mailbox_items SET created_at = ? WHERE id = ?').run(1001, 'followup-a');
 
     const finalAnswer = mailbox.claimBatch({
       sessionId: 's1', runId: 'run1', checkpoint: 'before_final_answer',
     });
-    expect(finalAnswer.rows.map((r) => r.id)).toEqual(['queued-a', 'queued-b']);
+    // User messages survive the exit boundary — the renderer promotes them
+    // to a real user turn after the run ends (plan 570).
+    expect(finalAnswer.rows).toEqual([]);
+
+    // They are still pending afterwards, so promoteQueued succeeds.
+    expect(mailbox.promoteQueued('s1', 'queued-a')).not.toBeNull();
+
+    // before_model_turn still steers followup rows (queued stays excluded).
+    const modelTurn = mailbox.claimBatch({
+      sessionId: 's1', runId: 'run2', checkpoint: 'before_model_turn',
+    });
+    expect(modelTurn.rows.map((r) => r.id)).toEqual(['followup-a']);
+  });
+
+  it('plan 570: before_final_answer still claims background_notification rows', () => {
+    mailbox.enqueue({
+      id: 'notif-a', sessionId: 's1', submittedRunId: 'r0',
+      content: '<task-notification>done</task-notification>', kind: 'background_notification',
+    });
+
+    const finalAnswer = mailbox.claimBatch({
+      sessionId: 's1', runId: 'run1', checkpoint: 'before_final_answer',
+    });
+    expect(finalAnswer.rows.map((r) => r.id)).toEqual(['notif-a']);
   });
 
   it('reclaims expired observed rows and increments claim_attempts', () => {

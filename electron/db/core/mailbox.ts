@@ -572,9 +572,12 @@ export class Mailbox {
   /**
    * Atomically claim a coalesced batch of pending (or expired observed) rows.
    *
-   * Claimable kinds depend on checkpoint:
-   *  - `before_final_answer` allows followup + queued + background_notification
-   *  - all other checkpoints allow followup + background_notification only
+   * Claimable kinds depend on checkpoint (plan 570):
+   *  - `before_final_answer` allows background_notification only — user
+   *    messages (followup/queued) must NOT be absorbed at the exit boundary;
+   *    they survive the run so the renderer can promote them to a real user
+   *    turn (eliminates the promoteQueued race that silently swallowed them)
+   *  - all other checkpoints allow followup + background_notification
    *
    * Auto-cancels rows hitting `maxClaimAttempts`. CAS-claims each row with a
    * fresh `claim_token` and `claim_expires_at = now + leaseMs`. Reclaiming an
@@ -595,9 +598,15 @@ export class Mailbox {
     const limit = Math.max(1, Math.min(input.limit ?? DEFAULT_LIMIT, LIMIT_HARD_CAP));
     const maxClaimAttempts = Math.max(1, input.maxClaimAttempts ?? DEFAULT_MAX_CLAIM_ATTEMPTS);
 
+    // Plan 570: at the exit boundary (before_final_answer) only system
+    // notifications may be absorbed into the finishing run. User messages
+    // (followup/queued) stay pending so the renderer's promoteQueued /
+    // deliverQueuedRow path can turn them into a visible new user turn —
+    // absorbing them here folded them into transient <runtime-user-guidance>
+    // and raced the renderer's promote, silently swallowing messages.
     const claimableKinds =
       input.checkpoint === 'before_final_answer'
-        ? "'followup','queued','background_notification'"
+        ? "'background_notification'"
         : "'followup','background_notification'";
 
     const txn = this.db.transaction((): ClaimBatchResult => {

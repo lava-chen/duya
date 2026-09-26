@@ -62,7 +62,17 @@ export function MailboxPanel({
 
   const visibleRows = useMemo(
     () =>
-      rows.filter((r) => VISIBLE_STATUSES.includes(r.status)),
+      rows.filter(
+        (r) =>
+          VISIBLE_STATUSES.includes(r.status) &&
+          // background_notification rows (<task-notification> envelopes from
+          // finished sub-agents / background bash) are system queue rows: the
+          // checkpoint claimer absorbs them automatically and the wake
+          // listener resumes the session. They are not user-stashed input,
+          // so rendering them in the guide bar read as if the agent had
+          // "filled the guide once" with a notification (2026-09-24).
+          r.kind !== "background_notification",
+      ),
     [rows],
   );
 
