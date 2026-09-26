@@ -40,8 +40,16 @@ import { detectSomElements, drawSomOverlay } from '@duya/computer-use';
 
 import { getLogger, LogComponent } from '../logging/logger.js';
 import { getOSContextBridge } from '../../packages/agent/dist/context/os-context/index.js';
+import {
+  axEnumeratedToDescriptor,
+  isChromiumProcess,
+  type ElementDescriptor,
+} from '@duya/computer-use';
+import { getSharedAxHelperClient } from './recorder/ax-helper.js';
 
 const logger = getLogger();
+
+const IS_MAC = process.platform === 'darwin';
 
 /**
  * Adapter for Electron's desktopCapturer. Captures the primary display
@@ -273,6 +281,23 @@ export interface ForegroundWindowInfo {
 }
 
 export async function getForegroundWindowInfo(): Promise<ForegroundWindowInfo | null> {
+  // plan 572: on macOS the foreground query rides the persistent AX
+  // helper (`fg` op — CGWindowList topmost, no NSWorkspace cache pitfall);
+  // the windowId doubles as the hwnd slot the recorder tracks.
+  if (IS_MAC) {
+    try {
+      const fg = await getSharedAxHelperClient().foreground();
+      if (!fg) return null;
+      return {
+        hwnd: fg.windowId,
+        pid: fg.pid,
+        processName: fg.processName,
+        title: fg.title,
+      };
+    } catch {
+      return null;
+    }
+  }
   try {
     const stdout = await runPowerShell(
       '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; ' +
@@ -395,6 +420,24 @@ async function listNativeWindows(): Promise<AppInfo[]> {
  *   3. OSContextBridge foreground snapshot — single entry, last resort
  */
 async function listAppsFromContext(): Promise<AppInfo[]> {
+  // plan 572 pass 0 (macOS): NSWorkspace-backed app list from the AX
+  // helper — Unicode-correct localized names + pid. Windows keeps its
+  // PowerShell-first chain untouched.
+  if (IS_MAC) {
+    try {
+      const apps = await getSharedAxHelperClient().apps();
+      if (apps.length > 0) {
+        return apps.map((a) => ({
+          title: a.name,
+          processName: a.name,
+          pid: a.pid,
+        }));
+      }
+    } catch {
+      // helper absent/degraded → fall through to the generic chain
+    }
+  }
+
   const viaPs = await listWindowsViaPowerShell();
   if (viaPs.length > 0) {
     return viaPs.map((w) => ({
@@ -457,6 +500,29 @@ async function focusAppByTitle(
       (targetProcess !== undefined && (p.includes(targetProcess) || t.includes(targetProcess)))
     );
   };
+
+  // Pass 0 (macOS, plan 572): NSRunningApplication.activate + AXRaise
+  // via the AX helper, matched on localized app name. raise=false is
+  // background priority — macOS has no public "show without activating"
+  // primitive, so background focus resolves to a no-op success when the
+  // app exists (the semantics the caller wants: do not steal focus).
+  if (IS_MAC) {
+    try {
+      const client = getSharedAxHelperClient();
+      const apps = await client.apps();
+      const match = apps.find((a) => matches(a.name, a.name));
+      if (match) {
+        if (raise) {
+          const ok = await client.activate(match.pid);
+          if (ok) return true;
+        } else {
+          return true;
+        }
+      }
+    } catch {
+      // helper absent/degraded → fall through to the generic passes
+    }
+  }
 
   // Pass 1: PowerShell enumeration + user32 focus by PID (Windows).
   const viaPs = await listWindowsViaPowerShell();
@@ -529,6 +595,89 @@ async function focusAppByTitle(
 }
 
 /**
+ * plan 572 Phase 2 (macOS): enumerate the focused app's AX tree and
+ * return the recorder-shape descriptors (real rects + snapshot handles)
+ * for the SOM detector's `axElements` path (`axElementsSource:'ax-tree'`
+ * — the path plan 562 Phase 2 reserved for this producer).
+ *
+ * Chromium/Electron targets often have no tree until an assistive
+ * client asks: run the AXManualAccessibility recipe (set → wait → one
+ * retry) on an empty-tree result from a Chromium-family process.
+ */
+/**
+ * px-per-point ratio between the capture bitmap and the display's
+ * point space (plan 572 D8). AX rects arrive in global points; the
+ * SOM detector and click mapping work in capture-bitmap pixels —
+ * on a 2x Retina display an unscaled rect would land at half size
+ * and half position (the Hunch benchmark's #1 correctness trap).
+ */
+function capturePxPerPoint(bitmapWidth: number): number {
+  try {
+    const pointsWidth = screen.getPrimaryDisplay().bounds.width;
+    if (pointsWidth > 0 && bitmapWidth > 0 && bitmapWidth >= pointsWidth) {
+      return bitmapWidth / pointsWidth;
+    }
+  } catch {
+    // display readout unavailable — assume 1x
+  }
+  return 1;
+}
+
+function scaleDescriptorRects(
+  descriptors: ElementDescriptor[],
+  ratio: number,
+): ElementDescriptor[] {
+  if (ratio === 1) return descriptors;
+  return descriptors.map((d) =>
+    d.rect
+      ? { ...d, rect: { x: d.rect.x * ratio, y: d.rect.y * ratio, w: d.rect.w * ratio, h: d.rect.h * ratio } }
+      : d,
+  );
+}
+
+async function detectElementsFromAxTree(
+  bitmapWidth: number,
+): Promise<ElementDescriptor[]> {
+  const client = getSharedAxHelperClient();
+  const fg = await client.foreground();
+  if (!fg || fg.pid <= 0) return [];
+  lastAxTreePid = fg.pid;
+  const ratio = capturePxPerPoint(bitmapWidth);
+  const toDescriptors = (elements: Array<Record<string, unknown>>): ElementDescriptor[] =>
+    scaleDescriptorRects(
+      elements
+        .map((el) => axEnumeratedToDescriptor(el))
+        .filter((el): el is ElementDescriptor => el !== null && el.source !== 'none'),
+      ratio,
+    );
+
+  const result = await client.enumerateCached(fg.pid, fg.title);
+  if (result === null) {
+    lastAxTreePid = null;
+    return [];
+  }
+  if (result.elements.length === 0 && result.reason === 'empty-tree' && isChromiumProcess(fg.processName)) {
+    const ok = await client.manualAccessibility(fg.pid);
+    if (ok) {
+      // The tree grows asynchronously — wait, then one retry (fresh,
+      // not cached, so the empty result is not re-served).
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const retry = await client.enumerate(fg.pid);
+      if (retry !== null && retry.elements.length > 0) {
+        return toDescriptors(retry.elements as unknown as Array<Record<string, unknown>>);
+      }
+    }
+  }
+  if (result.elements.length === 0) {
+    lastAxTreePid = null;
+  }
+  return toDescriptors(result.elements as unknown as Array<Record<string, unknown>>);
+}
+
+/** Pid of the app the last successful AX-tree enumerate came from (SOM click targeting). */
+let lastAxTreePid: number | null = null;
+
+/**
  * Initialize the DesktopBackend. Safe to call multiple times; later
  * calls are no-ops once the backend is set.
  *
@@ -552,7 +701,14 @@ export function initializeComputerUseBackend(): boolean {
       detectElements: async ({ width, height }) => {
         try {
           const ctx = getOSContextBridge().getCurrent();
-          return detectSomElements({
+          // plan 572 Phase 2 (macOS): real-coordinate AX-tree elements
+          // take priority over the coordinate-less daemon inputs; the
+          // detector tags them `axSource:'ax-tree'`. Windows keeps the
+          // uia/msaa sidecar path unchanged.
+          const axElements = IS_MAC
+            ? await detectElementsFromAxTree(width).catch(() => [] as ElementDescriptor[])
+            : null;
+          const detected = detectSomElements({
             width,
             height,
             focusedEntity: ctx?.focusedEntity ?? null,
@@ -564,7 +720,20 @@ export function initializeComputerUseBackend(): boolean {
               uia: ctx?.uiaInputs ?? [],
               msaa: ctx?.msaaInputs ?? [],
             },
+            ...(axElements && axElements.length > 0
+              ? { axElements, axElementsSource: 'ax-tree' as const }
+              : {}),
           });
+          // plan 572: stamp the owning pid onto ax-tree elements so the
+          // IPC click path can target AXUIElementPerformAction directly.
+          if (IS_MAC && lastAxTreePid !== null) {
+            for (const el of detected) {
+              if (el.axHandle) {
+                el.axPid = lastAxTreePid;
+              }
+            }
+          }
+          return detected;
         } catch {
           return detectSomElements({ width, height });
         }

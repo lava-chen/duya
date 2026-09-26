@@ -38,6 +38,55 @@ interface CaptureSize {
 const zoomOrigins = new Map<string, ZoomOrigin>();
 const captureSizes = new Map<string, CaptureSize>();
 
+/**
+ * plan 572: SOM index → AX snapshot handle + owning pid, remembered
+ * after every somMode capture on macOS. The click case resolves an
+ * element reference back to an AXUIElement handle and delivers the
+ * press through the helper's AX-action rung (background, read-backable)
+ * instead of the cursor path. Empty on Windows.
+ */
+interface AxElementRef {
+  handle: string;
+  pid: number;
+}
+const captureAxRefs = new Map<string, Map<number, AxElementRef>>();
+
+export function rememberCaptureAxRefs(
+  sessionId: string | undefined,
+  refs: Array<{ index: number; handle: string; pid: number }>,
+): void {
+  const key = zoomOriginKey(sessionId);
+  if (refs.length === 0) {
+    captureAxRefs.delete(key);
+    return;
+  }
+  const map = new Map<number, AxElementRef>();
+  for (const ref of refs) {
+    if (ref.handle && Number.isFinite(ref.index) && ref.index >= 1 && ref.pid > 0) {
+      map.set(ref.index, { handle: ref.handle, pid: ref.pid });
+    }
+  }
+  if (map.size > 0) {
+    captureAxRefs.set(key, map);
+  } else {
+    captureAxRefs.delete(key);
+  }
+}
+
+/** Resolve an SOM index to its AX handle + pid (macOS), if remembered. */
+export function getCaptureAxRef(
+  sessionId: string | undefined,
+  elementIndex: number | undefined,
+): AxElementRef | null {
+  if (typeof elementIndex !== 'number' || elementIndex < 1) return null;
+  return captureAxRefs.get(zoomOriginKey(sessionId))?.get(elementIndex) ?? null;
+}
+
+/** Forget the remembered AX refs (tests / display change). */
+export function clearCaptureAxRefs(sessionId: string | undefined): void {
+  captureAxRefs.delete(zoomOriginKey(sessionId));
+}
+
 export function zoomOriginKey(sessionId: string | undefined): string {
   return sessionId ?? '(no-session)';
 }

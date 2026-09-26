@@ -27,6 +27,7 @@ import {
   SessionStore,
   getDefaultRecorderRootDir,
   isBrowserProcess,
+  isMacBrowserProcess,
   shouldDropEventForApp,
   type AppRef,
   type ElementDescriptor,
@@ -39,10 +40,20 @@ import { getLogger, LogComponent } from '../../logging/logger.js';
 import { RecorderHookWorker } from './hook-worker.js';
 import { RecorderFocusTracker } from './focus-tracker.js';
 import { createSharedUiaProbeAdapter, type UiaEnumerateResult, type UiaForegroundInfo } from './uia-probe.js';
+import { createSharedAxRecorderAdapter } from './ax-helper.js';
 import { getForegroundWindowInfo } from '../computer-use-backend.js';
 import { showOverlayElements } from '../overlay/index.js';
 
 const logger = getLogger();
+
+const IS_MAC = process.platform === 'darwin';
+
+/** Browser check that covers both vocabularies: Windows executable
+ * names ("chrome", "msedge") and macOS localized app names
+ * ("Google Chrome", "Safari"). */
+function isRecorderBrowserProcess(processName: string): boolean {
+  return isBrowserProcess(processName) || (IS_MAC && isMacBrowserProcess(processName));
+}
 
 /** Default recording cap (design §2, teach-recording parity). */
 export const DEFAULT_MAX_DURATION_MS = 10 * 60_000;
@@ -67,6 +78,8 @@ export interface RecorderStatusSnapshot {
   eventCount: number;
   /** True when the hook worker died through its restart budget. */
   degraded: boolean;
+  /** macOS: Secure Input is on — keyboard listening is blinded (plan 572). */
+  secureInput?: boolean;
 }
 
 /**
@@ -108,6 +121,19 @@ export interface RecorderServiceOptions {
    * snapshot must never block or fail the append chain.
    */
   onEnumerateSnapshot?: (result: UiaEnumerateResult, app: AppRef) => void;
+  /**
+   * plan 572 Phase 4 (macOS): Secure Input probe (kCGSSessionSecureInputPID
+   * via the AX helper). Called on focus changes; true = keyboard
+   * listening is blinded and the UI must surface it.
+   */
+  secureInputQuery?: () => Promise<boolean | null>;
+  /**
+   * plan 572 Phase 4 (macOS): permission gate run before the hook
+   * worker spawns. A denied Accessibility/Input Monitoring grant makes
+   * uiohook silently emit nothing — fail the start with a structured
+   * reason instead so the UI can route to the permission card.
+   */
+  permissionGate?: () => Promise<{ ok: boolean; reason?: string }>;
   /** Test hook: replace hook worker construction. */
   createWorker?: (callbacks: HookWorkerCallbacks) => WorkerLike;
 }
@@ -147,6 +173,7 @@ export class RecorderService {
   /** Last browserUrl refresh (throttle for click-driven refreshes). */
   private lastUrlRefreshAt = 0;
   private redactHint = false;
+  private secureInput = false;
   private droppedNoApp = 0;
   private droppedFiltered = 0;
   private appendErrors = 0;
@@ -240,6 +267,7 @@ export class RecorderService {
     this.currentApp = null;
     this.browserUrl = undefined;
     this.redactHint = false;
+    this.secureInput = false;
 
     const sessionId = `${Date.now()}-${randomUUID().slice(0, 8)}`;
     const store = new SessionStore(this.opts.rootDir, sessionId);
@@ -293,6 +321,27 @@ export class RecorderService {
       },
       onFailed: (reason) => this.handleWorkerFailed(reason),
     };
+    // plan 572 Phase 4 (macOS): the hook tap needs Accessibility +
+    // Input Monitoring. A missing grant would silently produce an
+    // empty event stream — surface a structured failure instead.
+    if (this.opts.permissionGate) {
+      try {
+        const gate = await this.opts.permissionGate();
+        if (!gate.ok) {
+          this.degraded = true;
+          this.setStatus('recording');
+          logger.warn(
+            'recorder started degraded: permissions missing',
+            undefined,
+            LogComponent.ComputerUse,
+          );
+          return; // recording surface exists; worker + tracker skipped
+        }
+      } catch {
+        // gate unavailable → keep going; the hook worker reports its own failures
+      }
+    }
+
     this.worker = this.opts.createWorker
       ? this.opts.createWorker(workerCallbacks)
       : new RecorderHookWorker(workerCallbacks);
@@ -387,7 +436,7 @@ export class RecorderService {
 
     // Browser URL: refresh on every focus change INTO a supported
     // browser; clear immediately when leaving one (no stale URLs).
-    if (isBrowserProcess(nextApp.processName) && this.opts.probe?.readUrl) {
+    if (isRecorderBrowserProcess(nextApp.processName) && this.opts.probe?.readUrl) {
       const hwnd = next.hwnd;
       this.lastUrlRefreshAt = Date.now();
       void this.opts.probe
@@ -403,6 +452,22 @@ export class RecorderService {
     // app_focus for duya's own windows is intentionally not recorded.
     if (this.isSelfPid(nextApp.pid) || shouldDropEventForApp(nextApp)) {
       return;
+    }
+
+    // plan 572 Phase 4 (macOS): refresh the Secure Input flag — while a
+    // password manager / password field holds Secure Input, the session
+    // tap receives NO keyboard events. The flag surfaces in the status
+    // snapshot so the UI can explain missing typing events.
+    const secureInputQuery = this.opts.secureInputQuery;
+    if (secureInputQuery) {
+      void secureInputQuery()
+        .then((on) => {
+          if (typeof on === 'boolean' && on !== this.secureInput) {
+            this.secureInput = on;
+            this.emitStatus();
+          }
+        })
+        .catch(() => undefined);
     }
 
     // Plan 562 Phase 5: async element-tree snapshot on focus changes.
@@ -468,7 +533,7 @@ export class RecorderService {
     }
     if (
       !(event.kind === 'mouseup' && event.button === 1) ||
-      !isBrowserProcess(app.processName) ||
+      !isRecorderBrowserProcess(app.processName) ||
       this.currentHwnd === 0 ||
       Date.now() - this.lastUrlRefreshAt <= this.opts.urlRefreshIntervalMs
     ) {
@@ -598,6 +663,7 @@ export class RecorderService {
       durationMs: this.startedAt !== null ? Date.now() - this.startedAt : null,
       eventCount,
       degraded: this.degraded,
+      ...(IS_MAC ? { secureInput: this.secureInput } : {}),
     };
   }
 
@@ -625,7 +691,43 @@ let _singleton: RecorderService | null = null;
 export function getRecorderService(): RecorderService {
   if (!_singleton) {
     _singleton = new RecorderService({
-      probe: createSharedUiaProbeAdapter(),
+      // plan 572: macOS rides the AX helper adapter (probe/enumerate/
+      // readUrl/foreground all resolve through the persistent helper);
+      // Windows keeps the PowerShell UIA probe.
+      probe: IS_MAC ? createSharedAxRecorderAdapter() : createSharedUiaProbeAdapter(),
+      ...(IS_MAC
+        ? {
+            permissionGate: async () => {
+              try {
+                const { getSharedAxHelperClient } = await import('./ax-helper.js');
+                const helper = getSharedAxHelperClient();
+                await helper.ensureStarted();
+                const permissions = await helper.permissions();
+                if (permissions === null) {
+                  return { ok: false, reason: 'helper-unavailable' };
+                }
+                if (permissions.accessibility !== 'granted') {
+                  return { ok: false, reason: 'accessibility-denied' };
+                }
+                if (permissions.listen !== 'granted') {
+                  return { ok: false, reason: 'input-monitoring-denied' };
+                }
+                return { ok: true };
+              } catch {
+                return { ok: true }; // helper absent → let the worker report
+              }
+            },
+            secureInputQuery: async () => {
+              try {
+                const { getSharedAxHelperClient } = await import('./ax-helper.js');
+                const state = await getSharedAxHelperClient().secureInput();
+                return state ? state.enabled : null;
+              } catch {
+                return null;
+              }
+            },
+          }
+        : {}),
       // Plan 562 Phase 5: focus-change snapshots feed the element
       // overlay. Empty trees (custom-drawn windows, UIPI skips) draw
       // nothing — the overlay stays cleared.

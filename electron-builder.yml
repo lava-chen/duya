@@ -134,6 +134,16 @@ asarUnpack:
 
 mac:
   icon: assets/macos/icon.icns
+  # Plan 572: the AX helper binary ships only on mac builds, and every
+  # osascript-driven AppleScript needs an Apple Events usage string —
+  # apps linked against the 10.14+ SDK are killed without it the first
+  # time they `tell application "Safari" ...`.
+  extendInfo:
+    NSAppleEventsUsageDescription: "DUYA needs to control other apps to read browser URLs and automate actions you request."
+  extraResources:
+    - from: resources/ax-helper/bin/
+      to: ax-helper/
+      filter: ["ax-helper"]
   category: public.app-category.developer-tools
   artifactName: "${productName}-${version}-${arch}.${ext}"
   hardenedRuntime: true

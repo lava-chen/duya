@@ -73,6 +73,7 @@ import { registerProjectEntityHandlers } from './ipc/project-entity-handlers';
 import { registerGitHandlers } from './ipc/git-handlers';
 import { registerBashTaskHandlers } from './ipc/bash-task-handlers';
 import { registerWorkflowHandlers } from './ipc/workflow-handlers';
+import { registerComputerUsePermissionsHandlers } from './ipc/computer-use-permissions';
 // Plan 556 Phase 5: event recorder IPC + recording badge.
 import { registerRecorderHandlers } from './ipc/recorder-handlers';
 import { registerVoiceHandlers } from './ipc/voice-handlers';
@@ -494,6 +495,7 @@ if (gotTheLock) {
     // registered" after 30s — exactly the drift signature reported
     // when this registration was missing.
     registerComputerUseHandlers();
+    registerComputerUsePermissionsHandlers();
 
     // ============================================================
     // Step 4.5: Start Agent Server (HTTP+SSE for Agent communication)

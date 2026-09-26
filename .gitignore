@@ -184,3 +184,7 @@ probe-desktop-capture*.png
 .workbuddy/
 .tmp-diag.ps1
 .tmp-kill.ps1
+
+# Plan 572: Swift AX helper build artifacts (source + build script are committed)
+resources/ax-helper/bin/
+resources/ax-helper/.build/
