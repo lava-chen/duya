@@ -681,9 +681,6 @@ export interface ConfigAgentsAPI {
   update: (id: string, input: Record<string, unknown>) => Promise<unknown>;
   delete: (id: string) => Promise<boolean>;
   updateBotProfile: (id: string, input: Record<string, unknown>) => Promise<unknown>;
-  /** Opens the file dialog in the main process; null when the user canceled. */
-  uploadBotAvatar: (id: string) => Promise<{ avatarImage: string; avatarVersion: number; avatarUrl?: string } | null>;
-  clearBotAvatar: (id: string) => Promise<{ avatarImage: string; avatarVersion: number }>;
   /** Fires after any bot config/identity mutation; returns an unsubscribe function. */
   onBotsChanged: (callback: () => void) => () => void;
 }
@@ -1111,6 +1108,14 @@ export interface TerminalAPI {
   ) => Promise<{ ok: boolean; [key: string]: unknown }>
 }
 
+/** Plan 566: read the tail of a background bash task's output file (main-side bounded fs read). */
+export interface BashTaskAPI {
+  readOutput: (
+    outputFile: string,
+    maxBytes?: number
+  ) => Promise<{ ok: boolean; output?: string; size?: number; truncated?: boolean; error?: string }>
+}
+
 export interface ElectronAPI {
   versions: {
     electron: string
@@ -1368,13 +1373,15 @@ export interface ElectronAPI {
     snapshot: (runId: string) => Promise<unknown>
     delete: (id: string) => Promise<boolean>
     cancel: (id: string) => Promise<{ ok: boolean; reason?: string; error?: string }>
-    run: (payload: { name: string; sessionId?: string; params?: Record<string, unknown>; projectDir?: string }) => Promise<{ ok: boolean; runId?: string; sessionId?: string; error?: string }>
+    run: (payload: { name: string; sessionId?: string; params?: Record<string, unknown>; projectDir?: string; resumeFromRunId?: string }) => Promise<{ ok: boolean; runId?: string; sessionId?: string; error?: string }>
     /** Plan 560 run-anchored surface — a library run needs no chat session. */
-    trigger: (payload: { name: string; params?: Record<string, unknown>; projectDir?: string; scope?: 'project' | 'global' | null }) => Promise<{ ok: boolean; runId?: string; error?: string }>
+    trigger: (payload: { name: string; params?: Record<string, unknown>; projectDir?: string; scope?: 'project' | 'global' | null; resumeFromRunId?: string }) => Promise<{ ok: boolean; runId?: string; error?: string }>
     status: (runId: string) => Promise<unknown>
-    listRuns: (filter?: { workflowName?: string; origin?: 'library' | 'session' | 'agent' | 'cron'; status?: string; limit?: number; offset?: number }) => Promise<unknown[]>
+    listRuns: (filter?: { workflowName?: string; origin?: 'library' | 'session' | 'agent' | 'cron'; status?: string; parentSessionId?: string; limit?: number; offset?: number }) => Promise<unknown[]>
     getEvents: (payload: { runId: string; afterSeq?: number }) => Promise<unknown[]>
     resolvePermission: (payload: { runId: string; requestId: string; decision: 'allow' | 'deny' }) => Promise<{ ok: boolean; error?: string }>
+    /** Resolve an artifact ref (`<runId>/<name><ext>`) to an absolute path. */
+    artifactPath: (ref: string) => Promise<{ ok: boolean; path?: string; error?: string }>
     defs: {
       list: (projectDir?: string) => Promise<unknown[]>
       get: (payload: { name: string; projectDir?: string }) => Promise<unknown>
@@ -1385,6 +1392,8 @@ export interface ElectronAPI {
     /** dwf saved workflows (.dwf.ts) — frontmatter + script body, script is authoritative. */
     dwf: {
       list: (projectDir?: string) => Promise<unknown>
+      /** Push-based refresh: main watches the dirs `list` returns and emits `workflow:dwf:changed`. Returns an unsubscribe function. */
+      onChanged: (callback: (payload: { dir: string }) => void) => () => void
       get: (payload: { name: string; projectDir?: string; homeDir?: string }) => Promise<unknown>
       save: (payload: { name: string; meta: unknown; script: string; scope?: string; projectDir?: string; homeDir?: string }) => Promise<{ ok: boolean; path?: string; scope?: string; shadowing?: unknown; error?: string }>
       delete: (payload: { name: string; scope?: string; projectDir?: string; homeDir?: string }) => Promise<{ ok: boolean; error?: string }>
@@ -1433,6 +1442,7 @@ export interface ElectronAPI {
   plugin: PluginAPI
   appConnection: AppConnectionAPI
   terminal: TerminalAPI
+  bashTasks: BashTaskAPI
   onTerminalOutput: (callback: (event: { id: string; data: string }) => void) => () => void
   onTerminalExit: (callback: (event: { id: string; code: number | null }) => void) => () => void
   recap: RecapAPI
@@ -2387,7 +2397,7 @@ const electronAPI: ElectronAPI = {
     run: (payload: { name: string; sessionId?: string; params?: Record<string, unknown>; projectDir?: string }) =>
       ipcRenderer.invoke('workflow:run', payload),
     // Plan 560: run-anchored surface (no chat session involved).
-    trigger: (payload: { name: string; params?: Record<string, unknown>; projectDir?: string; scope?: 'project' | 'global' | null }) =>
+    trigger: (payload: { name: string; params?: Record<string, unknown>; projectDir?: string; scope?: 'project' | 'global' | null; resumeFromRunId?: string; model?: string }) =>
       ipcRenderer.invoke('workflow:trigger', payload),
     status: (runId: string) => ipcRenderer.invoke('workflow:status', runId),
     listRuns: (filter?: { workflowName?: string; origin?: 'library' | 'session' | 'agent' | 'cron'; status?: string; limit?: number; offset?: number }) =>
@@ -2396,6 +2406,8 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('workflow:get-events', payload),
     resolvePermission: (payload: { runId: string; requestId: string; decision: 'allow' | 'deny' }) =>
       ipcRenderer.invoke('workflow:permission-resolve', payload),
+    artifactPath: (ref: string) =>
+      ipcRenderer.invoke('workflow:artifact-path', ref),
     defs: {
       list: (projectDir?: string) => ipcRenderer.invoke('workflow:defs:list', projectDir),
       get: (payload: { name: string; projectDir?: string }) => ipcRenderer.invoke('workflow:defs:get', payload),
@@ -2409,6 +2421,14 @@ const electronAPI: ElectronAPI = {
     // dwf saved workflows (.dwf.ts)：frontmatter + TS 脚本本体，脚本为权威源。
     dwf: {
       list: (projectDir?: string) => ipcRenderer.invoke('workflow:dwf:list', projectDir),
+      /** 目录变更推送（main 侧 fs.watch + 防抖）；返回取消订阅函数。 */
+      onChanged: (callback: (payload: { dir: string }) => void) => {
+        const listener = (_e: unknown, payload: { dir: string }) => callback(payload);
+        ipcRenderer.on('workflow:dwf:changed', listener);
+        return () => {
+          ipcRenderer.removeListener('workflow:dwf:changed', listener);
+        };
+      },
       get: (payload: { name: string; projectDir?: string; homeDir?: string }) =>
         ipcRenderer.invoke('workflow:dwf:get', payload),
       save: (payload: { name: string; meta: unknown; script: string; scope?: string; projectDir?: string; homeDir?: string }) =>
@@ -2645,8 +2665,6 @@ const electronAPI: ElectronAPI = {
     update: (id: string, input: Record<string, unknown>) => ipcRenderer.invoke('config:agents:update', id, input),
     delete: (id: string) => ipcRenderer.invoke('config:agents:delete', id),
     updateBotProfile: (id: string, input: Record<string, unknown>) => ipcRenderer.invoke('config:agents:updateBotProfile', id, input),
-    uploadBotAvatar: (id: string) => ipcRenderer.invoke('config:agents:uploadBotAvatar', id),
-    clearBotAvatar: (id: string) => ipcRenderer.invoke('config:agents:clearBotAvatar', id),
     // Plan 483: main broadcasts after any bot config/identity mutation
     // (UI dialogs AND a bot's own update_state writes) so the sidebar
     // Bots section can refresh live. Returns an unsubscribe function.
@@ -2864,6 +2882,10 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('terminal:suggest', { prefix, shell, cwd, limit }),
     record: (command, shell, cwd, source = 'user') =>
       ipcRenderer.invoke('terminal:record', { command, shell, cwd, source }),
+  },
+  bashTasks: {
+    readOutput: (outputFile: string, maxBytes?: number) =>
+      ipcRenderer.invoke('bash-task:read-output', { outputFile, maxBytes }),
   },
   onTerminalOutput: (callback) => {
     const handler = (_event: Electron.IpcRendererEvent, data: { id: string; data: string }) => {

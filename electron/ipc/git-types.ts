@@ -132,4 +132,18 @@ export interface GitAPI {
   reviewScoped: (cwd: string, scope: ReviewScopeParams) => Promise<GitReviewResult>;
   reviewScopedDiff: (cwd: string, scope: ReviewScopeParams, filePath: string) => Promise<GitReviewDiffResult>;
   listCommits: (cwd: string, count?: number) => Promise<GitListCommitsResult>;
+  /** Read the detail of a single commit (subject, author, files, stats, diff). */
+  commitDetail: (cwd: string, sha: string) => Promise<unknown>;
+  /** Enumerate local branches (current + others). */
+  listBranches: (cwd: string) => Promise<unknown>;
+  /** Snapshot of the working tree's repo state (HEAD, branch, dirty counts). */
+  repoState: (cwd: string) => Promise<unknown>;
+  /** Switch the working tree to an existing branch. */
+  switchBranch: (cwd: string, branchName: string) => Promise<unknown>;
+  /** Create a new branch at an optional start point. */
+  createBranch: (cwd: string, branchName: string, startPoint?: string) => Promise<unknown>;
+  /** Create a commit from the staged/working tree. */
+  commit: (cwd: string, request: unknown) => Promise<unknown>;
+  /** Push the current branch (or specified refspec) to a remote. */
+  push: (cwd: string, request?: unknown) => Promise<unknown>;
 }
