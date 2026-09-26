@@ -1842,3 +1842,168 @@
     transition: none;
   }
 }
+
+/* ==========================================================================
+   Plan 566 — background-task list popover (composer chip) and the
+   read-only background bash output viewer (terminal page, taskId branch).
+   ========================================================================== */
+
+.bg-tasks-popover {
+  position: absolute;
+  z-index: 30;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: 360px;
+  max-width: min(360px, calc(100vw - 32px));
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-solid);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
+}
+
+.bg-tasks-popover-heading {
+  padding: 6px 8px 4px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.bg-tasks-popover-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.bg-tasks-popover-row:hover {
+  background: var(--surface-hover);
+}
+
+.bg-tasks-popover-row:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.bg-tasks-popover-row-icon {
+  flex-shrink: 0;
+  opacity: 0.65;
+}
+
+.bg-tasks-popover-row-command {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: ltr;
+}
+
+.bg-tasks-popover-row-meta {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+
+.bg-tasks-popover-row-open {
+  flex-shrink: 0;
+  color: var(--accent);
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.bg-tasks-popover-row:hover .bg-tasks-popover-row-open {
+  opacity: 1;
+}
+
+/* Read-only background command output (terminal page, taskId branch). */
+
+.bash-task-output {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.bash-task-output-fullfile {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.bash-task-output-fullfile:hover {
+  color: var(--accent);
+}
+
+.bash-task-output-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.bash-task-output-error button {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.bash-task-output-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 12px 12px;
+}
+
+.bash-task-output-pre {
+  margin: 0;
+  color: var(--text);
+  font-family: "JetBrains Mono", "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.bash-task-output-jump {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-solid);
+  color: var(--text);
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
+}
+
+.bash-task-output-jump:hover {
+  background: var(--surface-hover);
+}

@@ -6,7 +6,7 @@ import { MAX_PANEL_RATIO, MAX_PANEL_WIDTH, MIN_PANEL_WIDTH, clampWidthToBounds, 
 import { PanelHeader } from "./PanelHeader";
 import { PAGE_REGISTRY, getPageDescriptor, type PageDescriptor, type PageId } from "./panels/registry";
 import { ResizeHandle } from "./ResizeHandle";
-import { SidebarRightIcon, CornersInIcon, CornersOutIcon } from "@/components/icons";
+import { SidebarLeftCollapseIcon, SidebarLeftExpandIcon, CornersInIcon, CornersOutIcon } from "@/components/icons";
 import { useConversationStore } from "@/stores/conversation-store";
 import {
   setTaskDrawerOpen,
@@ -72,11 +72,18 @@ export function PanelZone() {
     "--panel-content-width": `${panelWidth}px`,
   } as CSSProperties;
 
+  // The panel is normally anchored to a chat session, so non-session views
+  // force-close it (it would otherwise be open with no toggle in reach).
+  // Exception: `workflow` — its management page renders run cards whose whole
+  // affordance is landing a run detail in the side panel; force-closing here
+  // made the panel flash and vanish on every card click. The panel stays
+  // closable on that view via the edge toggle rendered while it is open.
   useEffect(() => {
     if (isSessionView) return;
+    if (currentView === "workflow") return;
     if (taskDrawerOpen) setTaskDrawerOpen(false);
     if (panelOpen) setPanelOpen(false);
-  }, [isSessionView, panelOpen, setPanelOpen, taskDrawerOpen]);
+  }, [isSessionView, currentView, panelOpen, setPanelOpen, taskDrawerOpen]);
 
   const paramsFor = useCallback(
     (pageId: PageId): Record<string, unknown> | undefined => {
@@ -147,7 +154,7 @@ export function PanelZone() {
       data-page-id={activeTab?.pageId ?? "none"}
       style={zoneStyle}
     >
-      {isSessionView && (
+      {(isSessionView || panelOpen) && (
         <>
           <button
             type="button"
@@ -157,10 +164,12 @@ export function PanelZone() {
             aria-label={panelOpen ? t('panel.closePanel') : t('panel.openPanel')}
             aria-expanded={panelOpen}
           >
-            <SidebarRightIcon size={16} stroke={1.5} />
+            {panelOpen
+              ? <SidebarLeftCollapseIcon size={16} stroke={1.5} />
+              : <SidebarLeftExpandIcon size={16} stroke={1.5} />}
           </button>
 
-          {panelOpen && activeTab && (
+          {isSessionView && panelOpen && activeTab && (
             <button
               type="button"
               className="panel-edge-toggle panel-expand-toggle"

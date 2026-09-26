@@ -39,6 +39,7 @@ import {
   useTerminalAppearanceStore,
 } from "@/stores/terminal-appearance-store";
 import { TERMINAL_THEME_PRESETS, resolveTerminalTheme } from "@/lib/terminal-themes";
+import { BashTaskOutputView } from "./BashTaskOutputView";
 import type { PageTab } from "./registry";
 
 interface Props {
@@ -88,6 +89,16 @@ function applyInputToLine(current: string, data: string): { line: string; submit
 }
 
 export function TerminalPanel({ tab }: Props) {
+  // Plan 566: a tab opened for a background task's output is a read-only
+  // viewer, not a PTY. Branch in a hook-free wrapper so the PTY component's
+  // hooks never see a conditional entry point.
+  if (typeof tab.params?.taskId === "string") {
+    return <BashTaskOutputView tab={tab} />;
+  }
+  return <TerminalPtyPanel tab={tab} />;
+}
+
+function TerminalPtyPanel({ tab }: Props) {
   const { t } = useTranslation();
   const panelRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);

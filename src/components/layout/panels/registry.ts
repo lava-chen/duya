@@ -11,6 +11,7 @@ import {
   TerminalIcon,
   GearSixIcon,
   RepeatIcon,
+  ChatCircleIcon,
   type IconProps,
 } from "@/components/icons";
 import type { TranslationKey } from "@/i18n";
@@ -34,8 +35,11 @@ const CodeReviewPanel = lazy(() =>
 const WorkflowPanel = lazy(() =>
   import("./WorkflowPanel").then((m) => ({ default: m.WorkflowPanel }))
 );
+const SessionMessagesPanel = lazy(() =>
+  import("./SessionMessagesPanel").then((m) => ({ default: m.SessionMessagesPanel }))
+);
 
-export type PageId = "files" | "preview" | "review" | "workflow" | "conductor" | "terminal" | "browser" | "bot-settings" | "room-settings";
+export type PageId = "files" | "preview" | "review" | "workflow" | "conductor" | "terminal" | "browser" | "bot-settings" | "room-settings" | "session-messages";
 
 export interface PageTab {
   id: string;
@@ -170,6 +174,22 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     preferredWidth: 360,
     defaultExpanded: false,
     component: BotSettingsPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
+  },
+  "session-messages": {
+    id: "session-messages",
+    labelKey: "panel.sessionMessages",
+    icon: ChatCircleIcon,
+    // One tab per session: openOrActivatePage dedups on the params sessionId,
+    // so repeated clicks on the same subagent / workflow-node session focus
+    // the existing tab instead of stacking copies. Not in
+    // EMPTY_LAUNCHER_ORDER or the add-page menu — it is only opened
+    // programmatically via `duya:open-session-panel`.
+    multiInstance: true,
+    available: true,
+    minWidth: 320,
+    preferredWidth: 440,
+    defaultExpanded: false,
+    component: SessionMessagesPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   "room-settings": {
     id: "room-settings",

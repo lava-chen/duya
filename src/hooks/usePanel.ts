@@ -4,6 +4,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { useTranslation } from "@/hooks/useTranslation";
 import type { TranslationKey } from "@/i18n";
 import { getPageDescriptor, isPageId, type PageId, type PageTab } from "@/components/layout/panels/registry";
+import { bashTaskOutputTabTitle } from "@/components/layout/panels/BashTaskOutputView";
 import { useConversationStore } from "@/stores/conversation-store";
 
 export type { PageId, PageTab } from "@/components/layout/panels/registry";
@@ -204,6 +205,20 @@ function dedupKey(pageId: PageId, params?: Record<string, unknown>): string {
         return `browser::agent::${(params?.sessionId as string | undefined) ?? ""}`;
       }
       return `browser::${(params?.url as string | undefined) ?? ""}`;
+    case "terminal":
+      // Plan 566: a background-task output viewer keys on the task id so
+      // repeated clicks on the same task reuse one tab while different
+      // tasks get their own. Plain PTY tabs keep the legacy params key.
+      if (typeof params?.taskId === "string") {
+        return `terminal::task::${params.taskId}`;
+      }
+      return `${pageId}::${JSON.stringify(params ?? {})}`;
+    case "session-messages":
+      // One tab per session: repeated opens of the same subagent /
+      // workflow-node session reuse (and focus) the existing tab. The
+      // reused tab keeps its original params, which is fine — the view is
+      // keyed on the immutable session id.
+      return `session::${(params?.sessionId as string | undefined) ?? ""}`;
     default:
       return `${pageId}::${JSON.stringify(params ?? {})}`;
   }
@@ -767,6 +782,66 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     };
   }, [openOrActivatePage]);
 
+  // Plan 566: background-command rows (indicator popover, task drawer)
+  // open the task's output in the side panel's terminal page. The dedup
+  // key folds on taskId, so re-clicking a task activates its tab.
+  useEffect(() => {
+    const handleOpenBashTaskOutput = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        taskId?: string;
+        sessionId?: string;
+        outputFile?: string;
+        command?: string;
+        startTime?: number;
+      }>).detail;
+      const taskId = typeof detail?.taskId === "string" ? detail.taskId : "";
+      const outputFile = typeof detail?.outputFile === "string" ? detail.outputFile : "";
+      if (!taskId.trim() || !outputFile.trim()) return;
+      const command = typeof detail?.command === "string" ? detail.command : "";
+      const params: Record<string, unknown> = {
+        taskId: taskId.trim(),
+        outputFile: outputFile.trim(),
+        command,
+        title: bashTaskOutputTabTitle(command),
+      };
+      if (typeof detail?.sessionId === "string") params.sessionId = detail.sessionId;
+      if (typeof detail?.startTime === "number") params.startTime = detail.startTime;
+      openOrActivatePage("terminal", params);
+    };
+
+    window.addEventListener("duya:open-bash-output-panel", handleOpenBashTaskOutput as EventListener);
+    return () => {
+      window.removeEventListener("duya:open-bash-output-panel", handleOpenBashTaskOutput as EventListener);
+    };
+  }, [openOrActivatePage]);
+
+  // Subagent / workflow-node session viewer (ZCode-parity side pane).
+  // Emitters (workflow evidence rows, subagent tool rows, TaskDrawer rows)
+  // only broadcast { sessionId, title? }; the page dedups on sessionId so a
+  // repeated click focuses the existing tab instead of stacking copies.
+  useEffect(() => {
+    const handleOpenSessionPanel = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionId?: string; title?: string }>).detail;
+      const sessionId = typeof detail?.sessionId === "string" ? detail.sessionId.trim() : "";
+      if (!sessionId) return;
+      const params: Record<string, unknown> = {
+        sessionId,
+        // Always seed a tab title: reused tabs keep their params, and the
+        // generic default-title lookup (`panel.${pageId}`) has no entry for
+        // this page. The panel component refines it from the thread row.
+        title: typeof detail?.title === "string" && detail.title.trim()
+          ? detail.title.trim()
+          : sessionId.slice(0, 8),
+      };
+      openOrActivatePage("session-messages", params);
+    };
+
+    window.addEventListener("duya:open-session-panel", handleOpenSessionPanel as EventListener);
+    return () => {
+      window.removeEventListener("duya:open-session-panel", handleOpenSessionPanel as EventListener);
+    };
+  }, [openOrActivatePage]);
+
   const closePanel = useCallback<PanelContextValue["closePanel"]>((tabId) => {
     const closingTab = tabsRef.current.find((tab) => tab.id === tabId);
     if (
@@ -782,7 +857,13 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       const idx = prev.findIndex((t) => t.id === tabId);
       if (idx === -1) return prev;
       const closing = prev[idx];
-      if (closing.pageId === "terminal" && typeof window !== "undefined") {
+      // Only a real PTY owns a killable shell process; task-output viewer
+      // tabs reuse the terminal page but hold no process.
+      if (
+        closing.pageId === "terminal" &&
+        typeof closing.params?.taskId !== "string" &&
+        typeof window !== "undefined"
+      ) {
         void window.electronAPI?.terminal?.kill?.(tabId).catch(() => {});
       }
       const next = prev.filter((t) => t.id !== tabId);

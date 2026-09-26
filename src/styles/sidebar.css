@@ -1105,14 +1105,13 @@ html[data-glass-repair] .attachment-preview-overlay {
   transform: translateY(-2px);
 }
 
-/* Bot avatar: an uploaded image (img) or legacy SVG token — either way it
-   just needs to participate in flex layout and not shrink. Circular,
-   matching the fallback tile. */
+/* Bot avatar: the animated agent face (SVG). No circular clip — the face
+   draws its own fixed superellipse body, and its motion/arcs may exceed the
+   box, so the element must not round or clip it. */
 .bot-character-avatar {
   display: block;
   flex-shrink: 0;
-  border-radius: 50%;
-  object-fit: cover;
+  overflow: visible;
 }
 
 .bot-contact-item {
@@ -1303,7 +1302,6 @@ html[data-glass-repair] .attachment-preview-overlay {
   position: relative;
   flex-shrink: 0;
   display: inline-flex;
-  border-radius: 50%;
 }
 
 .bot-contact-badge {

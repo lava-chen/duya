@@ -115,8 +115,14 @@
   opacity: 0;
   transition: opacity 0.12s ease;
 }
+/* Keep the caret visible while focus is anywhere inside the header.
+   The caret <svg> itself is not focusable, so a `:focus-visible` on it
+   would never fire (dead selector). `:focus-within` matches the header
+   container when *any* descendant — the caret wrapper, the trailing
+   slot, or the header itself — receives keyboard focus. Pairs with the
+   `:focus-within` rule on `.sidebar-section-trailing` below. */
 .sidebar-section-item .sidebar-section-header:hover .sidebar-section-caret,
-.sidebar-section-item .sidebar-section-caret:focus-visible {
+.sidebar-section-item .sidebar-section-header:focus-within .sidebar-section-caret {
   opacity: 1;
 }
 .sidebar-section-item .sidebar-section-header:hover .sidebar-section-trailing,

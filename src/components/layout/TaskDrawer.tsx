@@ -24,6 +24,7 @@ import { useSessionSources } from '@/hooks/useSessionSources';
 import { useGitStatus } from '@/hooks/useGitStatus';
 import { useBashTasks } from '@/hooks/useBashTasks';
 import { setTaskDrawerOpen, useTaskDrawerOpen } from './task-drawer-store';
+import { dispatchOpenSessionPanel } from '@/lib/open-session-panel-event';
 import { EnvironmentInfoSection } from './EnvironmentInfoSection';
 import { AgentListSection } from './AgentListSection';
 import { BashTaskSection } from './BashTaskSection';
@@ -79,8 +80,8 @@ export function TaskDrawer() {
 
                 <AgentListSection
                   agents={agents}
-                  onOpen={(sessionId) =>
-                    useConversationStore.getState().setActiveThread(sessionId)
+                  onOpen={(sessionId, agent) =>
+                    dispatchOpenSessionPanel(sessionId, agent.name)
                   }
                 />
 

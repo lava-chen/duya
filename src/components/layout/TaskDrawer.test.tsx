@@ -147,15 +147,35 @@ describe('TaskDrawer session-detail panel', () => {
     });
   });
 
-  it('renders running sub-agents and lets the user jump into their session', () => {
+  it('renders running sub-agents and opens their session in the sidebar panel', () => {
     render(<TaskDrawer />);
 
     expect(screen.getByText('Sub-agents')).toBeInTheDocument();
     expect(screen.getByText('Researcher')).toBeInTheDocument();
     expect(screen.getByTestId('agent-spinner')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByTitle('Open Researcher'));
-    expect(mocks.setActiveThread).toHaveBeenCalledWith('sub-session-1');
+    // Clicking a row opens the sub-agent's session as a sidebar panel via
+    // the `duya:open-session-panel` intent (ZCode-parity side pane) — it
+    // no longer yanks the main column away from the parent transcript.
+    const dispatched: Event[] = [];
+    const dispatchSpy = vi
+      .spyOn(window, 'dispatchEvent')
+      .mockImplementation((event) => {
+        dispatched.push(event);
+        return true;
+      });
+    try {
+      fireEvent.click(screen.getByTitle('Open Researcher'));
+      expect(dispatched).toHaveLength(1);
+      const event = dispatched[0] as CustomEvent<{ sessionId: string; title: string }>;
+      expect(event.type).toBe('duya:open-session-panel');
+      expect(event.detail.sessionId).toBe('sub-session-1');
+      expect(event.detail.title).toBe('Researcher');
+      // The main view must stay untouched.
+      expect(mocks.setActiveThread).not.toHaveBeenCalled();
+    } finally {
+      dispatchSpy.mockRestore();
+    }
   });
 
   it('hides empty sections entirely when not a git repo', () => {

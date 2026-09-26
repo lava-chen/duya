@@ -94,8 +94,6 @@ export interface BotListItem {
   reasoning?: 'off' | 'low' | 'medium' | 'high';
   workspace?: string;
   avatarColor?: string;
-  /** `duya-file://` URL of the bot's avatar image (main-process built). */
-  avatarUrl?: string;
 }
 
 /** Merge config + profile.json for bot agents (Plan 483 grok-style bot management). */
@@ -118,10 +116,8 @@ export type AgentUpsertInput = {
   agents_md?: string;
   tools?: { profile?: string; allow?: string[]; deny?: string[] };
   plugins?: string[];
-  /** Color token for the initial-circle avatar, seeded into `agents/<id>/profile.json` on first creation. */
+  /** Color token for the face body, seeded into `agents/<id>/profile.json` on first creation. */
   avatarColor?: string;
-  /** User-picked emoji for the colored circle, seeded into `agents/<id>/profile.json` on first creation. */
-  avatarEmoji?: string;
 };
 
 export interface CreateConfigAgentResult {
@@ -196,23 +192,8 @@ export interface BotIdentityUpdateInput {
   title?: string;
   description?: string;
   avatarColor?: string;
-  avatarEmoji?: string;
 }
 
 export async function updateBotIdentity(id: string, input: BotIdentityUpdateInput): Promise<void> {
   await window.electronAPI.configAgents.updateBotProfile(id, input as unknown as Record<string, unknown>);
-}
-
-/** Upload an avatar image for a bot (file dialog opens in the main process). */
-export async function uploadBotAvatar(id: string): Promise<{
-  avatarImage: string;
-  avatarVersion: number;
-  avatarUrl?: string;
-} | null> {
-  return window.electronAPI.configAgents.uploadBotAvatar(id);
-}
-
-/** Remove a bot's avatar image; the color circle (if configured) takes over. */
-export async function clearBotAvatar(id: string): Promise<void> {
-  await window.electronAPI.configAgents.clearBotAvatar(id);
 }
