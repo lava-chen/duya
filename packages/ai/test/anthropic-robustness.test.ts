@@ -328,15 +328,20 @@ describe('handleThinkingBlocks', () => {
     expect(blockTypes(out[3])).toEqual(['thinking', 'text']);
   });
 
-  it('downgrades unsigned thinking to text for MiniMax Anthropic-compatible endpoints', () => {
+  it('replays unsigned thinking as native signature:"" blocks for MiniMax (allowEmptySignature)', () => {
+    // MiniMax-M3 emits UNSIGNED thinking fragments, so every turn would be
+    // downgraded to text — the model then imitates reasoning-in-text-channel
+    // from its replayed history and reasoning leaks into visible replies
+    // (observed live 2026-09-23). MiniMax endpoints accept signature:"".
     const input: MessageParam[] = [
       { role: 'user', content: [text('q')] },
       { role: 'assistant', content: [thinking(), text('answer')] },
     ];
     const out = handleThinkingBlocks(input, minimaxModel);
     const blocks = out[1].content as ContentBlockParam[];
-    expect(blocks.map(b => (b as { type: string }).type)).toEqual(['text', 'text']);
-    expect((blocks[0] as { text: string }).text).toBe('deep thought');
+    expect(blocks.map(b => (b as { type: string }).type)).toEqual(['thinking', 'text']);
+    expect((blocks[0] as unknown as { signature?: string }).signature).toBe('');
+    expect((blocks[0] as { thinking: string }).thinking).toBe('deep thought');
   });
 
   it('keeps signed thinking on non-last assistant messages on direct Anthropic', () => {
@@ -378,7 +383,7 @@ describe('toAnthropicMessages preserves thinking blocks', () => {
   const minimaxModel = minimaxModels[0];
   const anthropicModel = anthropicModels[0];
 
-  it('downgrades unsigned thinking to text for MiniMax Anthropic-compatible endpoint', () => {
+  it('replays unsigned thinking natively for MiniMax endpoint (allowEmptySignature, anti text-channel contamination)', () => {
     const messages: Message[] = [
       { role: 'user', content: 'q1' },
       {
@@ -396,9 +401,36 @@ describe('toAnthropicMessages preserves thinking blocks', () => {
     const out = toAnthropicMessages(messages, minimaxModel);
     expect(out).toHaveLength(2);
     const assistantContent = out[1].content as ContentBlockParam[];
+    expect(assistantContent.map(b => (b as { type: string }).type)).toEqual(['thinking', 'text']);
+    expect((assistantContent[0] as { thinking: string }).thinking).toBe('step 1');
+    expect((assistantContent[0] as unknown as { signature: string }).signature).toBe('');
+    expect((assistantContent[1] as { text: string }).text).toBe('a1');
+  });
+
+  it('downgrades unsigned thinking to text for third-party endpoints without allowEmptySignature', () => {
+    const thirdParty: Model<'anthropic'> = {
+      ...minimaxModel,
+      baseUrl: 'https://proxy.example.com/anthropic',
+      compat: { ...minimaxModel.compat, allowEmptySignature: undefined },
+    };
+    const messages: Message[] = [
+      { role: 'user', content: 'q1' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'step 1' },
+          { type: 'text', text: 'a1' },
+        ],
+        providerId: 'custom',
+        model: 'some-model',
+        api: 'anthropic',
+      },
+    ];
+
+    const out = toAnthropicMessages(messages, thirdParty);
+    const assistantContent = out[1].content as ContentBlockParam[];
     expect(assistantContent.map(b => (b as { type: string }).type)).toEqual(['text', 'text']);
     expect((assistantContent[0] as { text: string }).text).toBe('step 1');
-    expect((assistantContent[1] as { text: string }).text).toBe('a1');
   });
 
   it('downgrades unsigned thinking to text for direct Anthropic endpoint', () => {

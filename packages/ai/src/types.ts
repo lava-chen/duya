@@ -569,6 +569,22 @@ export interface ModelCompat {
    * parity: MiniMax advertises 131072 (M2.x) / 128000 (M3).
    */
   maxOutputTokens?: number;
+  /**
+   * Whether the endpoint accepts thinking blocks replayed with an empty
+   * `signature`. When true, unsigned thinking from history is replayed as a
+   * NATIVE thinking block (`signature: ""`) instead of being downgraded to
+   * plain text. Official-harness parity (pi-mono compat.allowEmptySignature).
+   *
+   * Why it matters: downgrading unsigned thinking to text puts the model's
+   * own reasoning into the assistant text channel of the replayed history.
+   * Reasoning models imitate the channel distribution they see, so over a
+   * long session the reasoning progressively leaks into the text channel —
+   * observed live on MiniMax-M3 as "thinking paragraph overflow" (reasoning
+   * rendered as visible reply text between tool calls). Verified 2026-09-23:
+   * api.minimaxi.com/anthropic accepts `signature: ""` thinking blocks and
+   * keeps reasoning classification clean when history preserves them.
+   */
+  allowEmptySignature?: boolean;
 }
 
 // ─── Model pricing (per million tokens, USD) ───

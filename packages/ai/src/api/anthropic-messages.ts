@@ -464,8 +464,12 @@ function stripOrphanToolResults(messages: MessageParam[]): MessageParam[] {
  */
 export function handleThinkingBlocks(
   messages: MessageParam[],
-  _model: Model<'anthropic'>,
+  model: Model<'anthropic'>,
 ): MessageParam[] {
+  // Endpoints that accept empty signatures keep native thinking blocks even
+  // when the signature is '' (see convertContentBlock — replaying unsigned
+  // reasoning as native blocks prevents text-channel contamination).
+  const allowEmptySignature = model.compat?.allowEmptySignature === true;
   return messages.map((m) => {
     if (m.role !== 'assistant' || !Array.isArray(m.content)) {
       return m;
@@ -490,9 +494,25 @@ export function handleThinkingBlocks(
           newContent.push(b as ContentBlockParam);
         }
         // else: drop — no data means it can't be validated
-      } else if ((b as { signature?: unknown }).signature) {
-        // Signed thinking block — keep it
-        newContent.push(b as ContentBlockParam);
+      } else if ((b as { signature?: unknown }).signature || allowEmptySignature) {
+        // Signed thinking block — keep it. On allowEmptySignature endpoints,
+        // unsigned thinking was already converted to a `signature: ""` block
+        // by convertContentBlock; keep it native here too and normalize the
+        // signature to '' so the block is always well-formed. An empty-text
+        // block carries nothing replayable — drop it.
+        const thinkingText = (b as { thinking?: string }).thinking || '';
+        if (thinkingText) {
+          if ((b as { signature?: unknown }).signature) {
+            newContent.push(b as ContentBlockParam);
+          } else {
+            newContent.push({
+              ...b,
+              type: 'thinking',
+              thinking: thinkingText,
+              signature: '',
+            } as unknown as ContentBlockParam);
+          }
+        }
       } else {
         // Unsigned thinking — downgrade to text so the reasoning is not lost
         const thinkingText = (b as { thinking?: string }).thinking || '';
@@ -1713,10 +1733,22 @@ function convertContentBlock(
         signature: block.thinkingSignature,
       } as ContentBlockParam;
     }
-    // Unsigned thinking cannot be replayed as a thinking block (providers
-    // reject unvalidated signatures, and replaying it as a block made MiniMax
-    // emit reasoning without any text reply). Downgrade to text so the
-    // reasoning stays in context — official-harness parity.
+    // Unsigned thinking: endpoints that declare allowEmptySignature (pi-mono
+    // compat parity) accept native thinking blocks with `signature: ""`.
+    // Replay the block natively so the model keeps seeing its own reasoning
+    // in the THINKING channel — downgrading to text instead teaches the model
+    // (which imitates the channel distribution of the replayed history) to
+    // emit reasoning in the text channel, the root cause of the "thinking
+    // paragraph overflow" leaks observed on MiniMax-M3 (2026-09-23).
+    if (block.thinking && model.compat?.allowEmptySignature) {
+      return {
+        type: 'thinking',
+        thinking: sanitizeSurrogates(block.thinking),
+        signature: '',
+      } as ContentBlockParam;
+    }
+    // Plain downgrade: reasoning stays in context, but lands in the text
+    // channel of the replayed history (see the contamination note above).
     if (block.thinking) {
       return { type: 'text', text: sanitizeSurrogates(block.thinking) } as ContentBlockParam;
     }
