@@ -57,7 +57,9 @@ if (!existsSync(HELPER)) {
 const proc = spawn(HELPER, [], { stdio: ['pipe', 'pipe', 'inherit'] });
 const waiters = new Map();
 let nextId = 1;
-let ready = null;
+let readyOk = false;
+let resolveReady = null;
+const readyPromise = new Promise((resolve) => { resolveReady = resolve; });
 
 proc.stdout.setEncoding('utf8');
 let buf = '';
@@ -71,7 +73,8 @@ proc.stdout.on('data', (chunk) => {
     let msg;
     try { msg = JSON.parse(line); } catch { continue; }
     if (msg.ready === true) {
-      const r = ready; ready = true; if (r) r();
+      readyOk = true;
+      resolveReady?.();
     } else if (typeof msg.id === 'number' && waiters.has(msg.id)) {
       waiters.get(msg.id)(msg);
       waiters.delete(msg.id);
@@ -89,16 +92,12 @@ function request(op, extra = {}, timeoutMs = 5000) {
 }
 
 async function untilReady() {
-  if (ready === true) return true;
-  await new Promise((resolve) => {
-    const t = setTimeout(() => resolve(false), 10_000);
-    const poll = setInterval(() => {
-      if (ready === true) { clearInterval(t2); clearTimeout(t); resolve(true); }
-      function t2() { /* named no-op */ }
-    }, 50);
-    var t2 = () => { clearInterval(poll); };
-  });
-  return ready === true;
+  if (readyOk) return true;
+  await Promise.race([
+    readyPromise,
+    new Promise((resolve) => setTimeout(resolve, 10_000)),
+  ]);
+  return readyOk;
 }
 
 // --- report helpers ---
@@ -257,8 +256,8 @@ async function extraState() {
 
 // --- main ---
 
-const readyOk = await untilReady();
-if (!readyOk) {
+const ready = await untilReady();
+if (!ready) {
   console.error('[mac-gate] helper never became ready.');
   proc.kill();
   process.exit(3);

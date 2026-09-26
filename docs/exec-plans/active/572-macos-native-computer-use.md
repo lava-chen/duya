@@ -6,6 +6,7 @@
 > NSAppleEventsUsageDescription/tccutil 脚本）；**真机 Gate（AX 授权后的 Finder/Safari 覆盖矩阵、
 > 录制三目标、packaged 产物五项检查、Phase 7 端到端）待人工**。落地注记见 §7
 > **Priority**: P0
+> **真机 Gate 执行入口**: 授权后 `node scripts/mac-gate.mjs` 一键跑 gate 0–2（覆盖矩阵/注入两梯/读回验证），其余手工项清单见 §7
 > **技术底稿**: [docs/references/macos-accessibility-research.md](../../references/macos-accessibility-research.md)（AX API 面、AX↔UIA 能力矩阵、注入/截屏/权限、先例项目教训，全部技术断言以底稿为准）
 > **定位**: computer-use 五腿框架（capture/plan/record/execute/verify）的 macOS 腿 —— 对标并局部超越 Windows UIA 栈。**收编 plan 562 Phase 4**（macOS AX 读树 helper），并解除 plan 556 §6「macOS out of scope」红线的后半句（Linux 仍 out of scope）。
 > **上游依赖**: 454（computer-use mode）、519（harness gaps / 后台优先语义）、552（gui-runner/DesktopBackend）、556（recorder 框架、daemon 扩展点）、562（enumerate 协议、element-detector axElements 路径、overlay）
