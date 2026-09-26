@@ -9,7 +9,7 @@
  */
 
 import { create } from 'zustand';
-import { resumeBackgroundTask } from '@/lib/stream-session-manager';
+import { deliverQueuedRow, resumeBackgroundTask } from '@/lib/stream-session-manager';
 import { getConfigValue } from '@/lib/config-port-bus';
 
 // =============================================================================
@@ -407,6 +407,13 @@ export function initMailboxEventListener(): () => void {
     // normal HTTP+SSE path so the notification becomes a real model follow-up,
     // not merely a row waiting for the user's next input. Only when the session
     // is idle — if it is mid-run, its checkpoint claims the notification.
+    //
+    // Plan 570: queued/followup USER messages written while no run is active
+    // (external CLI/bot/cron writes, or a run that ended between the composer
+    // write and its event) must not sit undelivered until the user's next
+    // manual input. Deliver them immediately as a real user turn. Idle
+    // delivery is a no-op for busy sessions, where the in-run claim (followup)
+    // or the terminal promoteQueued drain (queued) owns the row.
     if (event.type === 'mail:created') {
       const row = dbRowToMailboxRow(event.row);
       if (row.kind === 'background_notification' && row.sessionId) {
@@ -424,6 +431,19 @@ export function initMailboxEventListener(): () => void {
           .catch(() => {
             // Config read failed — fall back to renderer wake (old behaviour).
             void resumeBackgroundTask(row.sessionId);
+          });
+      } else if ((row.kind === 'queued' || row.kind === 'followup') && row.sessionId) {
+        // Same stand-down contract as above: 'main' mode lets the idle
+        // dispatcher own queued/followup wakes. deliverQueuedRow is
+        // internally idempotent (promoteQueued CAS) and skips busy sessions.
+        void getConfigValue('wake.idleDispatch')
+          .then((mode) => {
+            if (mode === 'main') return;
+            void deliverQueuedRow(row.sessionId, row.id);
+          })
+          .catch(() => {
+            // Config read failed — fall back to renderer delivery.
+            void deliverQueuedRow(row.sessionId, row.id);
           });
       }
     }
