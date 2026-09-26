@@ -327,6 +327,16 @@ Windows 侧 computer-use 栈已落地：capture（desktopCapturer + SOM）、exe
     `assets/dynamic/language.hbs` 已被 551/559 prompt 资产清理移除（bundle 现存
     bot/dynamic/modules 三目录，源码零引用），非缺陷。
 
+### 追加落地（2026-09-27 第六批）：机器门一键执行器
+
+23. **`scripts/mac-gate.mjs`**：把 §7 清单里不依赖 DUYA UI 的部分压成一条命令 —— gate0 三权限
+    检查（未授 → 指引 responsible-process 归属 + 深链，fail-fast）；gate1 Finder/Safari/Chrome
+    覆盖矩阵（enumerate 计数/truncated/AXSecureField 见证 + Chromium 的 AXManualAccessibility
+    自动重试）；gate2 注入两梯（TextEdit 抓草稿：activate → AX setValue+读回=confirmed →
+    `CGEventPostToPid` 键击+读回）；secureInput/fg 状态转储。本机验证：协议往返 + 未授权
+    fail-fast 路径正确（exit 1）。**在 macOS 13+ 机器授完三权限后，`node scripts/mac-gate.mjs`
+    一条命令跑完 gate0–2**；gate1–3 的录制/packaged ③④⑤/§8 签核仍需 DUYA app UI 与人工确认。
+
 ### 决策待办：Electron 44 vs macOS 12 开发机（用户裁定项，2026-09-27 提交事实）
 
 **事实**（本会话实测）：master 合并把 `electron` 依赖从 36 升到 **44.2.0**（AGENTS.md 记载的 28 早已过期）。
