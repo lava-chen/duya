@@ -187,8 +187,109 @@ Windows 侧 computer-use 栈已落地：capture（desktopCapturer + SOM）、exe
    useGitRepo/git-ipc/AgentFace 缺失 —— dev/mac 合并 140 commits 的存量）；`recorder-handlers.test.ts`
    convert case 失败（562 §8 已移除 recorder:convert，测试未清）。本 plan 的 tsc diff 为零新增。
 
+
+### 追加落地（2026-09-27 第二批：无 GUI 依赖的真机项）
+
+10. **权限卡片 UI Gate（单测部分）**：`MacPermissionsCard.test.tsx` 5 测 —— 三行权限/授权态无按钮、
+    denied 态深链按钮与 pane 参数、helper 缺失态、非 darwin 隐藏、无 electronAPI（纯浏览器）隐藏。
+11. **真 Electron e2e 已写但本机跑不了**：`e2e/ipc/computer-use-permissions.spec.ts`（get 契约 +
+    openPane 拒绝未知 pane）。失败原因 `dyld: Symbol not found: _OBJC_CLASS_$_SMAppService` ——
+    node_modules 的 Electron 版本要求 macOS 13+，本机 12.7.6；**仓库全部 e2e 在此机器均不可运行**
+    （环境限制，非代码问题），在合格机器上可直接跑。
+12. **替代链路验证**：`ax-helper-live.test.ts` —— AxHelperClient 经真实 spawn 管线驱动真 helper
+    二进制（ready 门/协议/permissions 契约/fg/permission-denied 判定），3 测绿。这是 e2e 想验的
+    「client↔真二进制」半边；「Electron 壳（preload/ipcMain）」半边留待合格机器的 e2e。
+13. **修复**：`backend/index.ts` 桶文件漏再导出 darwin-injection → esbuild 捆绑主进程报
+    "No matching export"。已补显式再导出并回归。
+14. **能力矩阵对照表初稿**落档为 §8（六条超越项 + 七条结构边界），Phase 7 真机验收后定稿。
+
 ### 待人工的真机 Gate（AX 授权是前置）
 
 `scripts/reset-mac-tcc.sh` + Automation 页权限卡片完成三权限授予后：
 ① Phase 1/2 覆盖矩阵（Finder/Safari/Chrome/自绘 Qt/密码框）② Phase 3 后台/前台两梯注入
 ③ Phase 4 Safari/Chrome/备忘录三目标录制 ④ Phase 6 packaged 产物五项检查 ⑤ Phase 7 端到端 + 矩阵对照表落档。
+
+### 追加落地（2026-09-27 第三批：打包与 e2e 的环境边界实测）
+
+15. **本机无法运行/打包任何 Electron 产物 —— 环境事实**：master 合并后 Electron 升至 44.2.0
+    （AGENTS.md 仍记 28，已过期），其 framework 引用 `SMAppService`（macOS 13+）→ 本机
+    macOS 12.7.6 上 dyld 直接 abort。连锁后果：(a) e2e 全部无法启动；(b) `electron:dev` 无法启动；
+    (c) `electron:pack:mac` 在 `ensure-sqlite-abi` 探测步死锁（探测=启动 Electron → dyld abort →
+    误判为 ABI 失配 → prebuilt swap → better-sqlite3 无 Electron 44 预编译）。补充
+    `electron-rebuild`（✔ better-sqlite3/node-pty 编译通过）与 `prebuild-install` 均无法绕过探测步。
+    **Phase 6 五项检查与所有 GUI Gate 需要 macOS 13+ 构建机**（或回 pin Electron ≤ 支持到 12 的版本）。
+16. 已按非 GUI 途径完成：权限卡片组件门（5 测）、client↔真 helper 二进制 live 集成（3 测）、
+    e2e spec 就绪（合格机器可跑）、能力矩阵初稿（§8）。真机 Gate 剩余项全部依赖 macOS 13+ 环境 +
+    TCC 授权，见 §7 清单。
+
+## 8. 能力矩阵对照表（初稿，Phase 7 验收后定稿）
+
+> 逐项对照 Windows UIA 栈的既有能力与 macOS 落点。「✅ 达成」= 代码+单测落地且不依赖真机 Gate；
+> 「🟡 借道」= 语义等价但通道不同；「⏳」= 待真机 Gate；「边界」= 已知结构差异（写进 UI 文案）。
+
+### capture 腿
+
+| Windows 能力项 | macOS 落点 | 状态 |
+|---|---|---|
+| 全屏截图（desktopCapturer） | 同 API 跨平台 | ✅ 达成 |
+| SOM 元素标注（detector） | ax-tree 全树真实坐标（真实 bbox 优先于网格） | ⏳ 真机矩阵 |
+| zoom 区域截取 | 后端跨平台 region 路径原样复用 | ✅ 达成 |
+| 窗口标题读取 | CGWindowList（需 Screen Recording TCC） | ⏳ 授权后 |
+| 单窗/遮挡窗口捕获 | ScreenCaptureKit（SDK 14+ 门控） | ⏳ 需 SDK 14 |
+
+### execute 腿
+
+| Windows 能力项 | macOS 落点 | 状态 |
+|---|---|---|
+| 点探（UIA FromPoint） | `AXUIElementCopyElementAtPosition`（systemwide，points） | ✅ 达成 |
+| 全树枚举（562 enumerate） | AX 递归 + 白名单 + 1500ms/500 节点预算 + truncated 部分树 | ✅ 达成 |
+| 点按钮（InvokePattern） | AXPress（快照句柄直达，后台、可读回） | ⏳ 真机两梯 |
+| 右键/双击/组合键点击 | 坐标路径（nut.js/libnut，前台） | ⏳ 真机 |
+| **后台点击不抢焦点** | Win: PostMessage 梯 → Mac: AXPress（超集：可读回验证） | ⏳ |
+| 后台键盘/滚动注入 | `CGEventPostToPid`（**Windows 无对应能力**，SendInput 仅全局） | ✅ 决策梯落地/⏳ 真机 |
+| 文本输入 | nut.js unicode 路径（前台）+ pid 键盘梯 | ⏳ |
+| set_value | Ctrl/Cmd+A+type（已有）+ `kAXValue` 直写 op | ✅ op 达成 |
+| focus_app raise=true | activate + AXRaise | ⏳ |
+| focus_app raise=false | mac 无公开免激活显示 → no-op success（边界写明） | ✅ 语义达成 |
+| list_apps | NSWorkspace runningApplications（helper） | ✅ 达成 |
+
+### record 腿
+
+| Windows 能力项 | macOS 落点 | 状态 |
+|---|---|---|
+| 全局输入钩子（uiohook-napi） | 同库 darwin tap（需 Accessibility + Input Monitoring） | ⏳ 授权后 |
+| 键码→文本还原 | VC 码空间与 Windows 同表（keymap.ts 复用） | ✅ 达成 |
+| 前台追踪 | helper `fg`（CGWindowList topmost，无 NSWorkspace 缓存坑） | ✅ 达成 |
+| 浏览器 URL | AppleScript 词典（Chrome/Edge/Brave/Arc/Safari 白名单，per-app Apple Events TCC） | ⏳ 授权后 |
+| 密码框脱敏 | `AXSecureField` role → isPassword（Tab 导航缺口同 Windows：probe 章节遗留项） | ✅ role 判定达成 |
+| Secure Input 盲区提示 | `kCGSSessionSecureInputPID` → snapshot 标志（Windows 无此问题也无此检测） | ✅ 达成 |
+| 录制启动权限门 | Accessibility/Input Monitoring 未授 → degraded + 结构化 reason | ✅ 达成 |
+
+### verify / plan / 通用
+
+| Windows 能力项 | macOS 落点 | 状态 |
+|---|---|---|
+| matcher L1/L2/L3 | 平台无关（L1 依赖可读名：AX title/description 兜底） | ✅ 达成 |
+| verdict 读回梯（519） | focusedEntity 读回（mac daemon 无 UIA 数据 → 诚实 unverifiable）；AX 读回未接 | 🟡 tech-debt（§7.8） |
+| overlay 可视化（562） | 通道复用，rect 同为 points→px 换算后坐标 | ⏳ 真机对位 |
+| 审批门 / safety / access policy / audit | 平台无关，零改动 | ✅ 达成 |
+| planner / converter | 平台无关 | ✅ 达成 |
+
+### 超越 Windows 的项（plan「对标并局部超越」的落点）
+
+1. `CGEventPostToPid` 定向键盘/滚动注入（Windows SendInput 无 per-PID 通道）。
+2. `AXUIElementCreateApplication(pid)` 后台应用树 + AX action 后台执行（UIA 无 create-from-PID）。
+3. `AXManualAccessibility` 外部按需开启 Chromium/Electron 树（Windows 需目标进程自己带 `--force-renderer-accessibility`）。
+4. Secure Input 状态可见性（Windows 侧无等价检测需求）。
+5. 菜单栏 AX 全量可读可按（`kAXMenuBarAttribute`，后台可用）—— **op 未接**，列 follow-up。
+6. ScreenCaptureKit 单窗/遮挡捕获 + `excludingApplications`（SDK 14+；Windows 对应 PrintWindow 路径脆弱）。
+
+### 已知边界（结构差异，非缺陷）
+
+- Chromium 过滤 pid 投递的鼠标事件 → 点击无 pid-event 梯（决策 D4）。
+- Secure Input 期间 session tap 键盘静默、密码域注入不可靠。
+- 虚拟化大表：`kAXVisibleChildren` 支持缺口 → 预算 + 滚动重扫。
+- `AXIdentifier` 稀疏（AutomationId 对应物）→ matcher 不依赖。
+- IME 中文录制盲区（与 Windows 同现状）。
+- 无 IsOffscreen 等价属性 → 以 position/minimized 推算（未实现，tech-debt）。
+- dev 模式 TCC 归属 Terminal/IDE（授权行为与 packaged 分叉，验收只认 packaged）。
