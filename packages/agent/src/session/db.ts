@@ -2512,6 +2512,7 @@ export interface MailboxRow {
   observed_at: number | null;
   observed_at_checkpoint: string | null;
   observed_by_run_id: string | null;
+  injected_run_id: string | null;
   claim_attempts: number;
   last_claim_error: string | null;
   edit_locked_at: number | null;
@@ -2581,6 +2582,7 @@ export function mailboxSend(data: CreateMailboxData): MailboxRow {
     observed_at: null,
     observed_at_checkpoint: null,
     observed_by_run_id: null,
+    injected_run_id: null,
     claim_attempts: 0,
     last_claim_error: null,
     edit_locked_at: null,

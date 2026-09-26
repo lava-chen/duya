@@ -401,6 +401,96 @@ describe.skipIf(!nativeSqliteAvailable)('Mailbox', () => {
     expect(row.cancelReason).toBe('max_claim_attempts_exceeded');
   });
 
+  // ─── Plan 571: injected_run_id receipt (at-most-once notifications) ───
+
+  it('migration 33 adds injected_run_id once and is idempotent on replay', () => {
+    const migration = Mailbox.migrations.find((m) => m.id === 33)!;
+    expect(migration).toBeDefined();
+
+    const columns = () =>
+      (db.prepare('PRAGMA table_info(mailbox_items)').all() as Array<{ name: string }>).map(
+        (c) => c.name,
+      );
+
+    expect(columns()).toContain('injected_run_id');
+    // Replaying the migration must not throw or duplicate the column.
+    expect(() => migration.up(db)).not.toThrow();
+    expect(columns().filter((n) => n === 'injected_run_id')).toHaveLength(1);
+  });
+
+  it('claiming a background_notification row reserves it (injected_run_id written)', () => {
+    enqueue({ id: 'bn1', kind: 'background_notification' });
+
+    const result = mailbox.claimBatch({
+      sessionId: 's1', runId: 'runA', checkpoint: 'before_model_turn',
+    });
+
+    expect(result.rows.map((r) => r.id)).toEqual(['bn1']);
+    expect(result.rows[0].injectedRunId).toBe('runA');
+  });
+
+  it('a notification reserved by a crashed run is finalized applied, not re-injected (crash window)', () => {
+    // Run A claims the notification (reserve), then "crashes": lease expires
+    // without an apply.
+    enqueue({ id: 'bn2', kind: 'background_notification', content: 'notify:bn2' });
+    const claimA = mailbox.claimBatch({
+      sessionId: 's1', runId: 'runA', checkpoint: 'before_model_turn',
+    });
+    expect(claimA.rows.map((r) => r.id)).toEqual(['bn2']);
+
+    db.prepare('UPDATE mailbox_items SET claim_expires_at = ? WHERE id = ?').run(
+      Date.now() - 1,
+      'bn2',
+    );
+
+    // Run B re-claims: the row must NOT come back for injection.
+    const claimB = mailbox.claimBatch({
+      sessionId: 's1', runId: 'runB', checkpoint: 'before_model_turn',
+    });
+    expect(claimB.rows).toEqual([]);
+
+    const row = mailbox.get('bn2')!;
+    expect(row.status).toBe('applied');
+    expect(row.appliedSummary).toBe('receipt:reserved-by-earlier-run-crash');
+    expect(row.appliedAtCheckpoint).toBe('before_model_turn');
+    expect(row.injectedRunId).toBe('runA');
+    expect(row.claimExpiresAt).toBeNull();
+  });
+
+  it('a followup row with an expired lease is still re-claimed (at-least-once kept)', () => {
+    enqueue({ id: 'fu1', kind: 'followup', content: 'user:fu1' });
+    mailbox.claimBatch({ sessionId: 's1', runId: 'runA', checkpoint: 'before_model_turn' });
+
+    db.prepare('UPDATE mailbox_items SET claim_expires_at = ? WHERE id = ?').run(
+      Date.now() - 1,
+      'fu1',
+    );
+
+    const claimB = mailbox.claimBatch({
+      sessionId: 's1', runId: 'runB', checkpoint: 'before_model_turn',
+    });
+    expect(claimB.rows.map((r) => r.id)).toEqual(['fu1']);
+    expect(claimB.rows[0].injectedRunId).toBeNull();
+    expect(claimB.rows[0].claimAttempts).toBe(1);
+  });
+
+  it('same-runId reclaim of an expired notification keeps the reservation (run-internal idempotency)', () => {
+    enqueue({ id: 'bn3', kind: 'background_notification', content: 'notify:bn3' });
+    mailbox.claimBatch({ sessionId: 's1', runId: 'runA', checkpoint: 'before_model_turn' });
+
+    db.prepare('UPDATE mailbox_items SET claim_expires_at = ? WHERE id = ?').run(
+      Date.now() - 1,
+      'bn3',
+    );
+
+    const reclaim = mailbox.claimBatch({
+      sessionId: 's1', runId: 'runA', checkpoint: 'after_model_turn',
+    });
+    expect(reclaim.rows.map((r) => r.id)).toEqual(['bn3']);
+    expect(reclaim.rows[0].injectedRunId).toBe('runA');
+    expect(reclaim.rows[0].status).toBe('observed');
+  });
+
   // ─── apply / defer ───
 
   it('apply only succeeds with the active claim token', () => {

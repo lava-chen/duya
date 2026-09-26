@@ -962,6 +962,7 @@ export function coreMailboxToIpcRow(item: MailboxItem): Record<string, unknown> 
     observed_at: item.observedAt,
     observed_at_checkpoint: item.observedAtCheckpoint,
     observed_by_run_id: item.observedByRunId,
+    injected_run_id: item.injectedRunId,
     claim_attempts: item.claimAttempts,
     last_claim_error: item.lastClaimError,
     edit_locked_at: item.editLockedAt,

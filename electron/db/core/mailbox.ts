@@ -65,6 +65,8 @@ export interface MailboxItem {
   observedAt: number | null;
   observedAtCheckpoint: string | null;
   observedByRunId: string | null;
+  /** Plan 571: run that reserved this row for injection (receipt). */
+  injectedRunId: string | null;
   applyMode: MailboxApplyMode | null;
   appliedAt: number | null;
   appliedAtCheckpoint: string | null;
@@ -338,6 +340,23 @@ export class Mailbox {
         `);
       },
     },
+    {
+      id: 33,
+      name: 'mailbox_items_injected_run_id',
+      up: (db) => {
+        // Plan 571: persistent delivery receipt for at-most-once injection of
+        // background_notification rows. Non-null = some run claimed this row
+        // for injection; a later run reclaiming an expired lease skips the
+        // re-injection (crash between claim and apply must not duplicate the
+        // notification into the context). Idempotent guard: skip when the
+        // column already exists (repeated migration replay).
+        const cols = db.prepare('PRAGMA table_info(mailbox_items)').all() as Array<{
+          name: string;
+        }>;
+        if (cols.some((c) => c.name === 'injected_run_id')) return;
+        db.exec('ALTER TABLE mailbox_items ADD COLUMN injected_run_id TEXT');
+      },
+    },
   ];
 
   private readonly db: SqliteDatabase;
@@ -560,6 +579,11 @@ export class Mailbox {
    * Auto-cancels rows hitting `maxClaimAttempts`. CAS-claims each row with a
    * fresh `claim_token` and `claim_expires_at = now + leaseMs`. Reclaiming an
    * expired observed row increments `claim_attempts`.
+   *
+   * Plan 571: `background_notification` rows are reserve-first at-most-once —
+   * claim writes the `injected_run_id` receipt in the same transaction, and an
+   * expired-lease row already reserved by a different run is finalized as
+   * applied (`receipt:reserved-by-earlier-run-crash`) instead of re-claimed.
    */
   claimBatch(input: ClaimBatchInput): ClaimBatchResult {
     const now = Date.now();
@@ -637,6 +661,32 @@ export class Mailbox {
       const rows: MailboxItem[] = [];
       const claimTokens: string[] = [];
       for (const candidate of candidates) {
+        // Plan 571 (at-most-once for notifications): an expired-lease
+        // background_notification row that a DIFFERENT run already reserved
+        // for injection must not be re-injected — the earlier run either
+        // injected it or crashed after claiming. Finalize as applied and
+        // keep it out of this claim result. User-content kinds
+        // (followup/queued) stay at-least-once and are re-claimed normally.
+        if (
+          candidate.status === 'observed' &&
+          candidate.kind === 'background_notification' &&
+          candidate.injected_run_id !== null &&
+          candidate.injected_run_id !== input.runId
+        ) {
+          this.db
+            .prepare(
+              `UPDATE mailbox_items
+               SET status = 'applied',
+                   applied_at = @now,
+                   applied_at_checkpoint = @checkpoint,
+                   applied_summary = 'receipt:reserved-by-earlier-run-crash',
+                   claim_expires_at = NULL
+               WHERE id = @id AND status = 'observed'`,
+            )
+            .run({ id: candidate.id, now, checkpoint: input.checkpoint });
+          continue;
+        }
+
         if (candidate.status === 'observed' && candidate.claim_attempts >= maxClaimAttempts) {
           this.db
             .prepare(
@@ -663,7 +713,12 @@ export class Mailbox {
                  observed_by_run_id = @runId,
                  edit_locked_at = COALESCE(edit_locked_at, @now),
                  claim_attempts = claim_attempts + CASE WHEN status = 'observed' THEN 1 ELSE 0 END,
-                 last_claim_error = NULL
+                 last_claim_error = NULL,
+                 injected_run_id = CASE
+                   WHEN kind = 'background_notification'
+                     THEN COALESCE(injected_run_id, @runId)
+                   ELSE injected_run_id
+                 END
              WHERE id = @id
                AND (
                  status = 'pending'
@@ -830,6 +885,7 @@ interface MailboxRow {
   observed_at: number | null;
   observed_at_checkpoint: string | null;
   observed_by_run_id: string | null;
+  injected_run_id: string | null;
   apply_mode: MailboxApplyMode | null;
   applied_at: number | null;
   applied_at_checkpoint: string | null;
@@ -868,6 +924,7 @@ function rowToItem(row: MailboxRow): MailboxItem {
     observedAt: row.observed_at,
     observedAtCheckpoint: row.observed_at_checkpoint,
     observedByRunId: row.observed_by_run_id,
+    injectedRunId: row.injected_run_id ?? null,
     applyMode: row.apply_mode,
     appliedAt: row.applied_at,
     appliedAtCheckpoint: row.applied_at_checkpoint,

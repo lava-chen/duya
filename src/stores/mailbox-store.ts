@@ -37,6 +37,8 @@ export interface MailboxRow {
   observedAt: number | null;
   observedAtCheckpoint: string | null;
   observedByRunId: string | null;
+  /** Plan 571: injection receipt run id (audit only; renderer does not act on it). */
+  injectedRunId: string | null;
   claimAttempts: number;
   lastClaimError: string | null;
   editLockedAt: number | null;
@@ -90,6 +92,7 @@ function dbRowToMailboxRow(row: Record<string, unknown>): MailboxRow {
     observedAt: row.observed_at as number | null,
     observedAtCheckpoint: row.observed_at_checkpoint as string | null,
     observedByRunId: row.observed_by_run_id as string | null,
+    injectedRunId: (row.injected_run_id as string | null) ?? null,
     claimAttempts: row.claim_attempts as number,
     lastClaimError: row.last_claim_error as string | null,
     editLockedAt: row.edit_locked_at as number | null,
@@ -190,6 +193,7 @@ export const useMailboxStore = create<MailboxState>()((set, get) => ({
       observedAt: null,
       observedAtCheckpoint: null,
       observedByRunId: null,
+      injectedRunId: null,
       claimAttempts: 0,
       lastClaimError: null,
       editLockedAt: null,
