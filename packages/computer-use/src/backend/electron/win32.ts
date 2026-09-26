@@ -186,11 +186,26 @@ export interface ElectronDesktopBackendOptions {
    */
   uiaInvokeProvider?: (opts: UiaInvokeOptions) => Promise<UiaInvokeResult>;
   /**
+   * Single-window capture provider (plan 572 Phase 5). Called for
+   * `capture({ windowId })` — the macOS production wiring answers via
+   * the AX helper's ScreenCaptureKit op (occluded windows OK, macOS
+   * 14+; older SDKs answer null → full-screen fallback). Returning
+   * null/throwing always degrades to the desktopCapturer path.
+   */
+  windowCaptureProvider?: (windowId: number) => Promise<WindowCapture | null> | WindowCapture | null;
+  /**
    * Capture resolution in logical CSS pixels. Defaults to 1920x1080.
    * desktopCapturer returns native pixels; we resize down.
    */
   captureWidth?: number;
   captureHeight?: number;
+}
+
+/** One single-window capture (plan 572 Phase 5): PNG bytes + bitmap size. */
+export interface WindowCapture {
+  base64: string;
+  width: number;
+  height: number;
 }
 
 /**
@@ -221,36 +236,56 @@ export class ElectronDesktopBackend implements DesktopBackend {
     const displayId = opts?.displayId ?? 0;
     const region = opts?.region;
 
-    const sources = await this.opts.electron.desktopCapturer.getSources({
-      types: ['screen'],
-      thumbnailSize: {
-        width: this.opts.captureWidth,
-        height: this.opts.captureHeight,
-      },
-    });
-
-    // Pick the source matching the requested displayId. desktopCapturer
-    // // exposes `display_id` as a string — fall back to the first source
-    // if the lookup misses.
-    let source = sources[displayId];
-    if (!source) {
-      source = sources[0];
-    }
-    if (!source) {
-      // No screen available (CI / headless). Return a 1x1 transparent PNG
-      // with empty element list so callers always get a valid shape.
-      return {
-        base64: '',
-        width: 0,
-        height: 0,
-        elements: [],
-        displayId,
-        capturedAt: new Date().toISOString(),
-      };
+    // plan 572 Phase 5: single-window capture first. The provider is
+    // optional and may answer null (unsupported SDK / missing window /
+    // helper degraded) — every miss degrades to the full-screen path,
+    // so `windowId` never makes a capture fail.
+    let nativeBuffer: Buffer | null = null;
+    let nativeSize = { width: 0, height: 0 };
+    if (opts?.windowId !== undefined && this.opts.windowCaptureProvider) {
+      try {
+        const shot = await Promise.resolve(this.opts.windowCaptureProvider(opts.windowId));
+        if (shot && shot.base64 && shot.width > 0 && shot.height > 0) {
+          nativeBuffer = Buffer.from(shot.base64, 'base64');
+          nativeSize = { width: shot.width, height: shot.height };
+        }
+      } catch {
+        // provider threw → full-screen fallback
+      }
     }
 
-    const nativeBuffer = await source.thumbnail.toPNG();
-    const nativeSize = source.thumbnail.getSize();
+    if (nativeBuffer === null) {
+      const sources = await this.opts.electron.desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: {
+          width: this.opts.captureWidth,
+          height: this.opts.captureHeight,
+        },
+      });
+
+      // Pick the source matching the requested displayId. desktopCapturer
+      // // exposes `display_id` as a string — fall back to the first source
+      // if the lookup misses.
+      let source = sources[displayId];
+      if (!source) {
+        source = sources[0];
+      }
+      if (!source) {
+        // No screen available (CI / headless). Return a 1x1 transparent PNG
+        // with empty element list so callers always get a valid shape.
+        return {
+          base64: '',
+          width: 0,
+          height: 0,
+          elements: [],
+          displayId,
+          capturedAt: new Date().toISOString(),
+        };
+      }
+
+      nativeBuffer = await source.thumbnail.toPNG();
+      nativeSize = source.thumbnail.getSize();
+    }
 
     let elements: SomElement[] = [];
     let renderedBuffer = nativeBuffer;
