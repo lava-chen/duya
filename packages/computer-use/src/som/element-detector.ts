@@ -205,6 +205,10 @@ function axElementsToSom(
       label: (name.length > 0 ? name : controlType).slice(0, 48),
       kind: kindFromControlType(controlType),
       axSource: source,
+      // plan 572: macOS AX snapshot handle rides through so the IPC
+      // layer can resolve an SOM index back to an AXUIElement for
+      // background AX-action delivery. Undefined on Windows paths.
+      ...(d.handle ? { axHandle: d.handle } : {}),
     });
   }
   return result;

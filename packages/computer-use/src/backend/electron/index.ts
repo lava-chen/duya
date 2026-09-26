@@ -24,6 +24,17 @@ export {
   type Win32NativeAdapter,
 } from './win32-injection.js';
 
+export {
+  applyDarwinDecisionToVerdict,
+  decideDarwinClick,
+  decideDarwinKeyDelivery,
+  isChromiumProcess,
+  type DarwinClickDecision,
+  type DarwinClickInput,
+  type DarwinKeyDecision,
+  type DarwinKeyInput,
+} from './darwin-injection.js';
+
 import { ElectronDesktopBackend, type ElectronDesktopBackendOptions } from './win32.js';
 
 /**

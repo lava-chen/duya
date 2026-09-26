@@ -1421,6 +1421,18 @@ export interface ElectronAPI {
     showElements: (elements: unknown[]) => Promise<{ ok: boolean; error?: string }>
     clear: () => Promise<{ ok: boolean }>
   }
+  /** Plan 572: macOS TCC permission surface for the computer-use stack. */
+  computerUsePermissions: {
+    get: () => Promise<{
+      platform: string
+      helperAvailable: boolean
+      accessibility: 'granted' | 'denied' | 'not-determined' | 'unknown'
+      screen: 'granted' | 'denied' | 'not-determined' | 'unknown'
+      listen: 'granted' | 'denied' | 'not-determined' | 'unknown'
+      secureInputPid: number | null
+    }>
+    openPane: (pane: 'accessibility' | 'screen' | 'listen') => Promise<boolean>
+  }
   project: ProjectAPI
   lock: LockAPI
   net: NetAPI
@@ -2470,6 +2482,12 @@ const electronAPI: ElectronAPI = {
   overlay: {
     showElements: (elements: unknown[]) => ipcRenderer.invoke('overlay:show-elements', elements),
     clear: () => ipcRenderer.invoke('overlay:clear'),
+  },
+  /** Plan 572: macOS TCC permission surface for the computer-use stack. */
+  computerUsePermissions: {
+    get: () => ipcRenderer.invoke('computer-use:permissions:get'),
+    openPane: (pane: 'accessibility' | 'screen' | 'listen') =>
+      ipcRenderer.invoke('computer-use:permissions:open', pane),
   },
   toolApproval: {
     listBySession: (sessionId: string) =>
