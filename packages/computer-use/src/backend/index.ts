@@ -64,3 +64,14 @@ export {
   parseActionResult,
   parseListApps,
 } from './mcp/result-parser.js';
+
+export {
+  applyDarwinDecisionToVerdict,
+  decideDarwinClick,
+  decideDarwinKeyDelivery,
+  isChromiumProcess,
+  type DarwinClickDecision,
+  type DarwinClickInput,
+  type DarwinKeyDecision,
+  type DarwinKeyInput,
+} from './electron/darwin-injection.js';
