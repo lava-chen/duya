@@ -213,6 +213,12 @@ interface ConductorState {
   updateWidget: (widgetId: string, patch: Partial<ConductorWidget>) => void;
   removeWidget: (widgetId: string) => void;
 
+  // Plan 570: canvas workbench runtime data. Keyed by canvasId; snapshots
+  // keyed by data-source id or `handler:<name>`.
+  workbenchData: Record<string, { snapshots: Record<string, unknown>; refreshedAt?: number }>;
+  applyWorkbenchData: (canvasId: string, snapshots: Record<string, unknown>, refreshedAt?: number) => void;
+  clearWorkbenchData: (canvasId: string) => void;
+
   // Element operations
   setElements: (elements: CanvasElement[]) => void;
   addElement: (element: CanvasElement) => void;
@@ -444,6 +450,32 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
       widgets: state.widgets.filter((w) => w.id !== widgetId),
     })),
 
+  // Plan 570: workbench runtime data — merge per-source snapshots so a
+  // refresh of one source never blanks the others.
+  workbenchData: {},
+
+  applyWorkbenchData: (canvasId, snapshots, refreshedAt) =>
+    set((state) => {
+      const existing = state.workbenchData[canvasId] ?? { snapshots: {} };
+      return {
+        workbenchData: {
+          ...state.workbenchData,
+          [canvasId]: {
+            snapshots: { ...existing.snapshots, ...snapshots },
+            refreshedAt: refreshedAt ?? existing.refreshedAt,
+          },
+        },
+      };
+    }),
+
+  clearWorkbenchData: (canvasId) =>
+    set((state) => {
+      if (!(canvasId in state.workbenchData)) return state;
+      const next = { ...state.workbenchData };
+      delete next[canvasId];
+      return { workbenchData: next };
+    }),
+
   setElements: (elements) => {
     const normalized = elements.map(normalizeElement);
     set({ elements: normalized });
@@ -494,6 +526,22 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
     const cleanupPatch = ConductorBridge.onStatePatch((patch) => {
       const { widgets } = get();
       const resultPatch = (patch.resultPatch as Record<string, unknown> | undefined) ?? undefined;
+
+      // Plan 570: workbench runtime data — a refreshed data source or a
+      // handler result pushed by the main process. Handled before the
+      // element-patch machinery which would otherwise ignore it.
+      if (patch.type === "conductor:data:update" && typeof patch.canvasId === "string") {
+        const dataPayload = patch as unknown as {
+          canvasId: string;
+          sourceId: string;
+          snapshot: unknown;
+          refreshedAt: number;
+        };
+        get().applyWorkbenchData(dataPayload.canvasId, {
+          [dataPayload.sourceId]: dataPayload.snapshot,
+        }, dataPayload.refreshedAt);
+        return;
+      }
 
       // Full widget list hydration patch
       if (patch.widgets && Array.isArray(patch.widgets)) {

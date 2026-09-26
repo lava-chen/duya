@@ -385,7 +385,7 @@ function nearestByCentre(
  * tolerance applied — everything else would make L1 "fuzzy" and the
  * 'exact' confidence a lie.
  */
-function normalizeLabel(value: string | undefined): string {
+function normalizeLabel(value: string | null | undefined): string {
   return (value ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 

@@ -26,7 +26,9 @@ export type ExecutorAction =
   | 'group.create'
   | 'group.ungroup'
   | 'group.add_members'
-  | 'group.remove_members';
+  | 'group.remove_members'
+  | 'data_source.manage'
+  | 'data_source.refresh';
 
 export interface ExecutorRpcRequest {
   requestId: string;

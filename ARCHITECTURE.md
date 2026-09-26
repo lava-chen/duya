@@ -482,6 +482,42 @@ Multi-bot rooms (≤6 members + user) in one shared transcript. The room is a **
 
 ## Package Workspace
 
+### Canvas Workbench Runtime (Plan 570)
+
+Turns a canvas into a long-running workbench (stock consoles / learning
+dashboards / project boards). The "backend" is the **Electron main process**:
+agent-registered data sources and refreshed snapshots persist in SQLite and
+flow to widgets over the existing conductor MessagePort channel — installed
+apps need nothing extra.
+
+- **Persistence** (`electron/conductor/workbench-store.ts`, schema via
+  `ensureWorkbenchTables` on the legacy main DB): `conductor_data_sources`
+  (id / canvas_id / name / type `http|project_db` / config / refresh_interval /
+  last_snapshot / last_error) + `conductor_handlers` (forward-looking, unused
+  in v1).
+- **Service** (`electron/conductor/workbench-service.ts`, singleton
+  `workbenchService`): CRUD + `refreshSource` — http fetch (main-process, no
+  CORS; headers support `$env:NAME` refs) or project-DB query via
+  `ProjectDatabaseService.invoke` — persisted then broadcast as
+  `conductor:data:update`; scheduler tick every 5s refreshes due interval
+  sources (≥15s, in-flight dedupe, ≤6 concurrent); widget action intake
+  (`conductor:widget:action` IPC) validates element→canvas ownership and rate
+  limits 10/min/element.
+- **Agent tools**: `canvas_data_source`
+  (`packages/agent/src/tool/CanvasConductor/CanvasDataSourceTool.ts`) over
+  executor RPC actions `data_source.manage` / `data_source.refresh`
+  (`electron/conductor/executor-proxy.ts`).
+- **Renderer** (`packages/conductor/src/renderer/elements/workbench-runtime.ts`):
+  dynamic widget srcdocs get the runtime injected — `window.duya.data`,
+  `duya.onData(cb)`, `duya.action('refresh', sourceId)`, attribute-driven
+  buttons (`data-duya-refresh`), and agent-authored inline `<script>` blocks
+  re-enabled after the runtime (same trust model as the chat widget path).
+  `WidgetShell` pushes canvas snapshots into the iframe on load/change and
+  routes `workbench:action` intents to the main process. Store slice:
+  `conductor-store.workbenchData` (per-canvas snapshot map, merged per source).
+
+## Package Workspace
+
 ```
 packages/
 ├── agent/            @duya/agent - Agent core

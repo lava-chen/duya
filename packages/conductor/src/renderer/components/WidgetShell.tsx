@@ -1,14 +1,20 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { ConductorWidget } from "..//types/conductor";
 import { useConductorStore } from "..//stores/conductor-store";
-import { executeAction } from "..//ipc/conductor-ipc";
+import { executeAction, widgetAction } from "..//ipc/conductor-ipc";
 import { widgetRegistry, type DynamicWidgetDefinition } from "..//widgets/registry";
 import { useRefineCaptureTarget } from "..//refine/useRefineCaptureTarget";
 import { RefineToolbarButton } from "..//refine/RefineToolbarButton";
 import { XIcon, WarningIcon, SpinnerGapIcon, RobotIcon } from "@/components/icons";
 import { GRID_PX } from "../domain/canvas/units";
+import {
+  buildWorkbenchSrcdoc,
+  WORKBENCH_ACTION_MESSAGE,
+  WORKBENCH_DATA_MESSAGE,
+  type WorkbenchActionPayload,
+} from "../elements/workbench-runtime";
 
 interface WidgetShellProps {
   widget: ConductorWidget;
@@ -21,6 +27,12 @@ export function WidgetShell({ widget, dynamicDef }: WidgetShellProps) {
   const { editMode, activeCanvasId, removeWidget, agentStatus, updateElement } = useConductorStore();
   const captureRef = useRefineCaptureTarget(widget.id);
   const resizedRef = useRef(false);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+
+  // Plan 570: live workbench snapshots for this widget's canvas.
+  const workbenchSnapshots = useConductorStore((state) =>
+    widget.canvasId ? state.workbenchData[widget.canvasId]?.snapshots : undefined,
+  );
 
   const WidgetContent = widgetRegistry.get(widget.type)?.component;
   const isAgentEditing = agentStatus === "streaming" || agentStatus === "tool_use" || agentStatus === "thinking";
@@ -91,10 +103,65 @@ export function WidgetShell({ widget, dynamicDef }: WidgetShellProps) {
     }).catch(() => {});
   };
 
+  // ------------------------------------------------------------
+  // Plan 570: workbench runtime — data push + action routing.
+  // ------------------------------------------------------------
+
+  // Dynamic widget srcdoc with the workbench runtime injected (recomputed
+  // only when the agent rewrites the source, so iframe reloads stay rare).
+  const workbenchSrcdoc = useMemo(
+    () => (widget.sourceCode ? buildWorkbenchSrcdoc(widget.sourceCode) : null),
+    [widget.sourceCode],
+  );
+
+  // Route action intents from the iframe (strategy buttons) into the
+  // main-process runtime. `event.source` ties the message to THIS iframe —
+  // sandboxed iframes have an opaque origin, so source identity is the only
+  // meaningful check.
+  useEffect(() => {
+    if (!workbenchSrcdoc || !widget.canvasId) return;
+    const handleMessage = (event: MessageEvent) => {
+      if (event.source !== iframeRef.current?.contentWindow) return;
+      const data = event.data as { type?: string; action?: WorkbenchActionPayload } | null;
+      if (!data || data.type !== WORKBENCH_ACTION_MESSAGE || !data.action) return;
+      const action = data.action;
+      if (action.kind !== "refresh" || !action.sourceId) return;
+      void widgetAction({
+        canvasId: widget.canvasId,
+        elementId: widget.id,
+        action: { kind: "refresh", sourceId: action.sourceId },
+      }).catch(() => {});
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [workbenchSrcdoc, widget.canvasId, widget.id]);
+
+  // Push the latest canvas snapshots into the iframe — on every data change
+  // and again when the iframe (re)loads, so late iframes never miss state.
+  const pushWorkbenchData = () => {
+    const win = iframeRef.current?.contentWindow;
+    if (!win) return;
+    try {
+      win.postMessage(
+        { type: WORKBENCH_DATA_MESSAGE, snapshots: workbenchSnapshots ?? {} },
+        "*",
+      );
+    } catch {
+      // iframe not ready — the next push or reload effect will catch up.
+    }
+  };
+
+  useEffect(() => {
+    pushWorkbenchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workbenchSnapshots, workbenchSrcdoc]);
+
   // Dynamic widgets are agent-generated HTML/SVG. They already provide
   // their own visual container (background, borders, title), so we render
-  // them without the builtin widget shell/header.
+  // them without the builtin widget shell/header. The srcdoc carries the
+  // workbench runtime (live data + action bridge) when sourceCode exists.
   if (dynamicDef?.renderMode === "iframe" && dynamicDef.sanitizedHtml) {
+    const srcdoc = workbenchSrcdoc ?? dynamicDef.sanitizedHtml;
     return (
       <div
         ref={captureRef}
@@ -102,10 +169,12 @@ export function WidgetShell({ widget, dynamicDef }: WidgetShellProps) {
         className="w-full h-full overflow-hidden"
       >
         <iframe
-          srcDoc={dynamicDef.sanitizedHtml}
+          ref={iframeRef}
+          srcDoc={srcdoc}
           sandbox="allow-scripts"
           style={{ width: "100%", height: "100%", border: "none", pointerEvents: "auto" }}
           title="widget-dynamic"
+          onLoad={pushWorkbenchData}
         />
       </div>
     );
