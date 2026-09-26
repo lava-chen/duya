@@ -6,11 +6,10 @@
  * lifecycle functions from db/ for backward compatibility.
  */
 
-import { ipcMain, app, dialog } from 'electron';
+import { ipcMain, app } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { randomUUID } from 'crypto';
-import { getMainWindow } from '../core/window-manager';
 import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
 import { getAutomationScheduler } from '../automation/Scheduler';
 import type { CreateAutomationCronInput, UpdateAutomationCronInput } from '../automation/types';
@@ -36,7 +35,7 @@ import {
   readGatewaySettingFromStore,
 } from '../config/gateway-setting-adapter';
 import { getConfigStore } from '../config/store-instance';
-import { listConfigAgents, listBots, upsertConfigAgent, deleteConfigAgent, createConfigAgentUnique, updateBotProfileIdentity, setBotAvatarImage, clearBotAvatarImage, slugifyBotIdFromName } from '../config/agents';
+import { listConfigAgents, listBots, upsertConfigAgent, deleteConfigAgent, createConfigAgentUnique, updateBotProfileIdentity, slugifyBotIdFromName } from '../config/agents';
 import { notifyBotsChanged } from '../config/bot-change-notifier';
 import {
   getWeixinAccounts,
@@ -1916,30 +1915,6 @@ export function registerDbHandlers(): void {
     const updated = updateBotProfileIdentity(id, input as Parameters<typeof updateBotProfileIdentity>[1]);
     notifyBotsChanged();
     return updated;
-  });
-
-  // Avatar image upload: the main process owns the file dialog AND the copy
-  // into the bot's agent directory, so the renderer never touches paths.
-  ipcMain.handle('config:agents:uploadBotAvatar', async (_event, id: string) => {
-    const mainWindow = getMainWindow();
-    if (!mainWindow) throw new Error('no main window');
-    const result = await dialog.showOpenDialog(mainWindow, {
-      title: 'Select bot avatar image',
-      properties: ['openFile'],
-      filters: [
-        { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'] },
-      ],
-    });
-    if (result.canceled || result.filePaths.length === 0) return null;
-    const uploaded = setBotAvatarImage(id, result.filePaths[0]);
-    notifyBotsChanged();
-    return uploaded;
-  });
-
-  ipcMain.handle('config:agents:clearBotAvatar', (_event, id: string) => {
-    const cleared = clearBotAvatarImage(id);
-    notifyBotsChanged();
-    return cleared;
   });
 
   ipcMain.handle('db:agentProfile:update', (_event, id: string, data: Record<string, unknown>) => {

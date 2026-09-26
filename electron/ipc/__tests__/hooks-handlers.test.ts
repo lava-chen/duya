@@ -203,7 +203,6 @@ describe('hooks:overview', () => {
         return {
           todo_gate: false,
           anti_dead_loop: { enabled: false },
-          tool_intent_nudge_max: 0,
           disabled_loop_hooks: ['builtin.premature-stop'],
         };
       }
@@ -216,7 +215,6 @@ describe('hooks:overview', () => {
     const byId = Object.fromEntries(prefinalize.hooks.map((h) => [h.id, h.enabled]));
     expect(byId['builtin.todo-gate']).toBe(false);
     expect(byId['builtin.premature-stop']).toBe(false);
-    expect(byId['builtin.tool-intent']).toBe(false);
     const postToolUse = overview.events.find((g) => g.event === 'PostToolUse')!;
     expect(postToolUse.hooks.find((h) => h.id === 'builtin.dead-loop-nudge')!.enabled).toBe(false);
   });
@@ -236,11 +234,11 @@ describe('hooks:set-disabled', () => {
   it('removes a builtin id when enabling', async () => {
     mocks.configStore.getByPath.mockReturnValue({
       todo_gate: true,
-      disabled_loop_hooks: ['builtin.todo-gate', 'builtin.tool-intent'],
+      disabled_loop_hooks: ['builtin.todo-gate', 'builtin.premature-stop'],
     });
     registerHooksHandlers();
     const handler = mocks.captured.handle.get('hooks:set-disabled')!;
-    await handler({}, 'builtin.tool-intent', true);
+    await handler({}, 'builtin.premature-stop', true);
     expect(mocks.configStore.set).toHaveBeenCalledWith('steering',
       expect.objectContaining({ disabled_loop_hooks: ['builtin.todo-gate'] }));
   });

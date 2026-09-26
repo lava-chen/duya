@@ -68,12 +68,6 @@ const BUILTIN_LOOP_HOOKS: BuiltinHookMeta[] = [
       'Goal premature-stop guard: veto finalize and nudge to continue when the model bails while a goal is still active.',
   },
   {
-    id: 'builtin.tool-intent',
-    events: ['PreFinalize'],
-    command:
-      'Tool-intent guard: veto finalize when the model announced an action but emitted no tool_use (capped per run).',
-  },
-  {
     id: 'builtin.todo-gate',
     events: ['PreFinalize'],
     command:
@@ -305,9 +299,9 @@ function builtinRowsForEvent(
 /**
  * Current enabled state of every builtin loop hook. A hook fires only when
  * it is absent from `[steering] disabled_loop_hooks` AND no dedicated legacy
- * knob disables it (todo_gate=false / anti_dead_loop.enabled=false /
- * tool_intent_nudge_max=0). Mirrors the agent's effective wiring
- * (packages/agent/src/hooks/config.ts + builtin.ts).
+ * knob disables it (todo_gate=false / anti_dead_loop.enabled=false). Mirrors
+ * the agent's effective wiring (packages/agent/src/hooks/config.ts +
+ * builtin.ts).
  */
 function builtinEnabledById(): Map<string, boolean> {
   const enabled = new Map<string, boolean>();
@@ -315,7 +309,6 @@ function builtinEnabledById(): Map<string, boolean> {
     | {
         todo_gate?: unknown;
         anti_dead_loop?: { enabled?: unknown };
-        tool_intent_nudge_max?: unknown;
         disabled_loop_hooks?: unknown;
       }
     | null
@@ -333,8 +326,6 @@ function builtinEnabledById(): Map<string, boolean> {
         return steering?.todo_gate === false;
       case 'builtin.dead-loop-nudge':
         return steering?.anti_dead_loop?.enabled === false;
-      case 'builtin.tool-intent':
-        return steering?.tool_intent_nudge_max === 0;
       default:
         return false;
     }

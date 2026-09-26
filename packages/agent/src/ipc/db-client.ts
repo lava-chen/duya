@@ -1080,10 +1080,10 @@ export const configDb = {
    * create returns the ACTUAL id — the requested name is slugified and
    * allocateBotId may suffix it on collision.
    */
-  agentCreate: (data: { name: string; description?: string; avatarEmoji?: string }) =>
+  agentCreate: (data: { name: string; description?: string }) =>
     sendDbRequest('config:agents:create', data) as Promise<{ id: string; name: string }>,
 
-  agentUpdate: (data: { agentId: string; name?: string; description?: string; avatarEmoji?: string }) =>
+  agentUpdate: (data: { agentId: string; name?: string; description?: string }) =>
     sendDbRequest('config:agents:update', data) as Promise<{ id: string; name: string }>,
   visionGet: () => sendDbRequest('config:vision:get', {}),
   visionSet: (patch: Record<string, unknown>) => sendDbRequest('config:vision:set', patch),

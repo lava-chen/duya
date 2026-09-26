@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useShallow } from "zustand/react/shallow";
 import { useConversationStore } from "@/stores/conversation-store";
+import { useTranslation } from "@/hooks/useTranslation";
 import { initMailboxEventListener } from "@/stores/mailbox-store";
 import { ChatView } from "@/components/chat/ChatView";
 import { BotDirectChatView } from "@/components/chat/BotDirectChatView";
@@ -749,10 +750,32 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
     : null;
   const botDirectIdentity = {
     name: activeBotContact?.name ?? activeBotAgentId ?? '',
-    avatarUrl: activeBotContact?.avatarUrl,
     avatarColor: activeBotContact?.avatarColor,
-    avatarEmoji: activeBotContact?.avatarEmoji,
   };
+
+  // Workflow library「通过对话创建」: prefill a new-chat draft with the creation
+  // prompt (never auto-send, ZCode parity) and land in the new-chat composer,
+  // optionally preset to the owning project so the session runs in its cwd.
+  const { t } = useTranslation();
+  const handleCreateWorkflowViaConversation = useCallback(
+    (scope: 'global' | 'project', projectDir?: string) => {
+      const store = useConversationStore.getState();
+      store.updateNewChatDraft({
+        text: t(scope === 'global' ? 'workflow.create.prompt.global' : 'workflow.create.prompt.project'),
+        attachments: [],
+        hasContent: true,
+      });
+      store.startNewChat(
+        projectDir
+          ? {
+              workingDirectory: projectDir,
+              projectName: projectDir.split(/[\\/]/).pop() || projectDir,
+            }
+          : undefined,
+      );
+    },
+    [t],
+  );
 
   const renderView = () => {
     // Lazy new-chat composer: no backing thread yet. Shown before the user
@@ -773,7 +796,6 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
               selfAgentId={activeBotAgentId}
               sessionId={activeThreadId}
               selfName={botDirectIdentity.name}
-              selfAvatarUrl={botDirectIdentity.avatarUrl}
               selfAvatarColor={botDirectIdentity.avatarColor}
               peerId={botDmPairPeer.peerId}
               peerName={botDmPairPeer.peerName}
@@ -816,7 +838,9 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
           )}
           {currentView === 'skills' && <SkillsView />}
           {currentView === 'automation' && <AutomationView />}
-          {currentView === 'workflow' && <WorkflowPage />}
+          {currentView === 'workflow' && (
+            <WorkflowPage onCreateViaConversation={handleCreateWorkflowViaConversation} />
+          )}
           {currentView === 'projects' && <ProjectsView />}
           {currentView === 'conductor' && <ConductorView />}
           {currentView === 'settings' && <SettingsView />}
@@ -834,7 +858,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       case 'automation':
         return <AutomationView />;
       case 'workflow':
-        return <WorkflowPage />;
+        return <WorkflowPage onCreateViaConversation={handleCreateWorkflowViaConversation} />;
       case 'projects':
         // Plan 525 Phase 2: Projects page must be reachable even when no
         // session has ever been mounted (chatEverMountedRef stays false on

@@ -73,6 +73,18 @@ export default async function (wf) {
   return r;
 }`;
 
+/**
+ * Plan 568: a cached node journals a `running` record BEFORE its terminal
+ * one — assertions mean the terminal (last) record for the predicate.
+ */
+function lastRecord(
+  sink: MemoryJournalSink,
+  pred: (r: JournalRecord) => boolean,
+): JournalRecord | undefined {
+  const all = sink.readAll().filter(pred);
+  return all.length > 0 ? all[all.length - 1] : undefined;
+}
+
 // ─── compile + sandbox ───
 
 describe('dwf runtime — compile & sandbox', () => {
@@ -161,7 +173,7 @@ describe('dwf runtime — wf primitives', () => {
       }`;
     const result = await runDwfScript(script, fakePorts(), { runId: 'r1', journal: new Journal(sink) });
     expect(result).toMatchObject({ app: 'ERP*', steps: 2 });
-    const guiRecord = sink.readAll().find((r) => r.nodeKind === 'gui');
+    const guiRecord = lastRecord(sink, (r) => r.nodeKind === 'gui');
     expect(guiRecord?.status).toBe('succeeded');
     expect(guiRecord?.action).toBe('gui:ERP*');
   });
@@ -196,7 +208,7 @@ describe('dwf runtime — wf primitives', () => {
     });
     const result = (await runDwfScript(script, ports, { runId: 'r1', journal: new Journal(sink) })) as Record<string, unknown>;
     expect(result.threw).toBe('element som:1 not found');
-    const failed = sink.readAll().find((r) => r.nodeKind === 'gui');
+    const failed = lastRecord(sink, (r) => r.nodeKind === 'gui');
     expect(failed?.status).toBe('failed');
     expect(failed?.errorClass).toBeTruthy();
   });
@@ -246,7 +258,7 @@ describe('dwf runtime — wf primitives', () => {
     const ports = fakePortsWithBrowser();
     const result = await runDwfScript(script, ports, { runId: 'r1', journal: new Journal(sink) });
     expect(result).toMatchObject({ url: 'https://example.com', steps: 1 });
-    const record = sink.readAll().find((r) => r.nodeKind === 'browser');
+    const record = lastRecord(sink, (r) => r.nodeKind === 'browser');
     expect(record?.status).toBe('succeeded');
     expect(record?.action).toBe('browser:https://example.com');
     // inputSummary 是卡片步骤行那一行（§6.1 display-only）：start_url 前缀 + 首步。
@@ -283,7 +295,7 @@ describe('dwf runtime — wf primitives', () => {
     });
     const result = (await runDwfScript(script, ports, { runId: 'r1', journal: new Journal(sink) })) as Record<string, unknown>;
     expect(result.threw).toBe('browser step 1 (click #a) failed: boom');
-    const failed = sink.readAll().find((r) => r.nodeKind === 'browser');
+    const failed = lastRecord(sink, (r) => r.nodeKind === 'browser');
     expect(failed?.status).toBe('failed');
 
     const skipped = await runDwfScript(
@@ -439,6 +451,289 @@ describe('dwf runtime — wf primitives', () => {
 });
 
 // ─── planner ───
+
+describe('dwf runtime — sticky actor + schema nudge (plan 565 Phase C)', () => {
+  const STICKY_SCRIPT = `
+    export default async function (wf) {
+      const a = await wf.agent('agent:研究员', 'find facts', { sticky: 'researcher' });
+      const b = await wf.agent('agent:研究员', 'now summarize', { sticky: 'researcher' });
+      return [a, b];
+    }`;
+
+  it('sticky: the second turn carries the first answer in its prompt', async () => {
+    const sink = new MemoryJournalSink();
+    const ports = fakePorts({
+      async runAgent(spec: HostAgentSpec) {
+        ports.agentCalls.push(spec.prompt);
+        return { ok: true, output: `answer-for: ${spec.prompt}` } satisfies HostCallResult;
+      },
+    });
+    const [a, b] = (await runDwfScript(STICKY_SCRIPT, ports, { runId: 'r1', journal: new Journal(sink) })) as string[];
+
+    expect(ports.agentCalls).toHaveLength(2);
+    expect(a).toBe('answer-for: find facts');
+    // The second turn's prompt embeds the first answer — the actor "remembers".
+    expect(b).toContain('<sticky_context>');
+    expect(b).toContain('answer-for: find facts');
+    expect(b.endsWith('now summarize')).toBe(true);
+  });
+
+  it('sticky across a resume: cached first turn still feeds the carried context — zero host calls', async () => {
+    const sink = new MemoryJournalSink();
+    await runDwfScript(STICKY_SCRIPT, fakePorts(), { runId: 'r1', journal: new Journal(sink) });
+
+    // Resume run: BOTH sticky calls replay from the seeded journal — the
+    // first turn populates stickyLast from the cache hit, and the second
+    // turn's payload (with the embedded context) hashes identically to the
+    // original run's, so it hits too.
+    const ports2 = fakePorts();
+    await runDwfScript(STICKY_SCRIPT, ports2, { runId: 'r1', journal: new Journal(sink), resuming: true });
+    expect(ports2.agentCalls).toHaveLength(0);
+  });
+
+  it('outputSchema: first mismatch triggers one same-context nudge, then accepts', async () => {
+    const sink = new MemoryJournalSink();
+    const prompts: string[] = [];
+    const ports = fakePorts({
+      async runAgent(spec: HostAgentSpec) {
+        prompts.push(spec.prompt);
+        return { ok: true, output: prompts.length === 1 ? { nope: 1 } : { ok: true } } satisfies HostCallResult;
+      },
+    });
+    const script = `
+      export default async function (wf) {
+        return await wf.agent('agent:报告员', 'write json', { outputSchema: { type: 'object', required: ['ok'] } });
+      }`;
+    const result = (await runDwfScript(script, ports, { runId: 'r1', journal: new Journal(sink) })) as { ok: boolean };
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain('failed schema validation');
+    expect(prompts[1]).toContain('write json');
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('outputSchema: second mismatch throws schema_mismatch and journals the class', async () => {
+    const sink = new MemoryJournalSink();
+    const ports = fakePorts({
+      async runAgent() {
+        return { ok: true, output: { nope: 1 } } satisfies HostCallResult;
+      },
+    });
+    const script = `
+      export default async function (wf) {
+        return await wf.agent('agent:报告员', 'write json', { outputSchema: { type: 'object', required: ['ok'] } });
+      }`;
+    await expect(runDwfScript(script, ports, { runId: 'r1', journal: new Journal(sink) })).rejects.toThrow(/output_schema mismatch/);
+    const failed = sink.readAll().find((r) => r.status === 'failed');
+    expect(failed?.errorClass).toBe('schema_mismatch');
+  });
+});
+
+describe('dwf runtime — wf.agent object form compat', () => {
+  // Historical rpa scripts call wf.agent({ agentType, prompt, outputSchema }) —
+  // the object used to be passed through as `agentType` and exploded inside
+  // SubagentTool as "o.trim is not a function".
+  const OBJECT_SCRIPT = `
+    export default async function (wf) {
+      return await wf.agent({
+        agentType: 'general-purpose',
+        prompt: 'fetch results',
+        outputSchema: { type: 'object', required: ['ok'] },
+      });
+    }`;
+
+  it('object form normalizes to (agentType, prompt, opts) and honors outputSchema', async () => {
+    const sink = new MemoryJournalSink();
+    const prompts: string[] = [];
+    const agents: string[] = [];
+    const ports = fakePorts({
+      async runAgent(spec: HostAgentSpec) {
+        agents.push(spec.agent);
+        prompts.push(spec.prompt);
+        return { ok: true, output: { ok: true } } satisfies HostCallResult;
+      },
+    });
+    const result = (await runDwfScript(OBJECT_SCRIPT, ports, { runId: 'r1', journal: new Journal(sink) })) as { ok: boolean };
+
+    expect(result).toEqual({ ok: true });
+    expect(agents).toEqual(['general-purpose']);
+    expect(prompts).toEqual(['fetch results']);
+  });
+
+  it('object form accepts the `type` alias', async () => {
+    const ports = fakePorts();
+    const script = `
+      export default async function (wf) {
+        return await wf.agent({ type: 'Explore', prompt: 'scan' });
+      }`;
+    await runDwfScript(script, ports, { runId: 'r1', journal: Journal.memory() });
+    expect(ports.agentCalls).toEqual(['Explore:scan']);
+  });
+
+  it('mixing object form with positional args throws a named TypeError', async () => {
+    const ports = fakePorts();
+    const script = `
+      export default async function (wf) {
+        return await wf.agent({ agentType: 'general-purpose', prompt: 'a' }, 'positional prompt');
+      }`;
+    await expect(runDwfScript(script, ports, { runId: 'r1', journal: Journal.memory() })).rejects.toThrow(
+      /cannot be mixed/,
+    );
+  });
+
+  it('non-string agentType throws an explicit usage error instead of reaching the host', async () => {
+    const ports = fakePorts();
+    const script = `
+      export default async function (wf) {
+        return await wf.agent(42, 'nope');
+      }`;
+    await expect(runDwfScript(script, ports, { runId: 'r1', journal: Journal.memory() })).rejects.toThrow(
+      /agentType must be a non-empty string \(got number\)/,
+    );
+    expect(ports.agentCalls).toHaveLength(0);
+  });
+});
+
+describe('dwf runtime — live running records + agent model + json extraction (plan 568)', () => {
+  it('a node journals a running record before its terminal record', async () => {
+    const sink = new MemoryJournalSink();
+    const script = `
+      export default async function (wf) {
+        return await wf.tool("Bash", { cmd: "echo hi" });
+      }`;
+    await runDwfScript(script, fakePorts(), { runId: 'r1', journal: new Journal(sink) });
+    const toolRecords = sink.readAll().filter((r) => r.nodeKind === 'tool');
+    expect(toolRecords.map((r) => r.status)).toEqual(['running', 'succeeded']);
+    expect(toolRecords[0].reqHash).toBeUndefined();
+    expect(toolRecords[1].reqHash).toBeDefined();
+  });
+
+  it('opts.model wins over the run-level agentModel; agentModel wins over nothing', async () => {
+    const models: Array<string | undefined> = [];
+    const base = fakePorts({
+      async runAgent(spec: HostAgentSpec) {
+        models.push(spec.model);
+        return { ok: true, output: { done: true } } satisfies HostCallResult;
+      },
+    });
+    const script = `
+      export default async function (wf) {
+        await wf.agent('general-purpose', 'inherit run model');
+        await wf.agent('general-purpose', 'explicit wins', { model: 'explicit-model' });
+      }`;
+    await runDwfScript(script, base, { runId: 'r1', journal: Journal.memory(), agentModel: 'run-model' });
+    expect(models).toEqual(['run-model', 'explicit-model']);
+  });
+
+  it('outputSchema validation extracts JSON from fenced/prose output before rejecting', async () => {
+    const sink = new MemoryJournalSink();
+    const ports = fakePorts({
+      async runAgent() {
+        return {
+          ok: true,
+          output: 'Here you go:\n```json\n{"results": [{"title": "t", "url": "u"}]}\n```',
+        } satisfies HostCallResult;
+      },
+    });
+    const script = `
+      export default async function (wf) {
+        return await wf.agent('general-purpose', 'fetch', {
+          outputSchema: { type: 'object', required: ['results'] },
+        });
+      }`;
+    const result = (await runDwfScript(script, ports, { runId: 'r1', journal: new Journal(sink) })) as Record<string, unknown>;
+    expect(result).toEqual({ results: [{ title: 't', url: 'u' }] });
+  });
+
+  it('a failed agent journals childSessionId when the host reports one', async () => {
+    const sink = new MemoryJournalSink();
+    const ports = fakePorts({
+      async runAgent() {
+        return { ok: false, error: 'output_schema mismatch: expected type object, got string', childSessionId: 'child-9' };
+      },
+    });
+    const script = `
+      export default async function (wf) {
+        try { await wf.agent('general-purpose', 'x'); } catch { /* caught */ }
+      }`;
+    await runDwfScript(script, ports, { runId: 'r1', journal: new Journal(sink) });
+    const failed = lastRecord(sink, (r) => r.nodeKind === 'agent' && r.status === 'failed');
+    expect(failed?.childSessionId).toBe('child-9');
+    expect(failed?.errorClass).toBe('schema_mismatch');
+  });
+
+  it('wf.publish journals the artifact store ref so chips are clickable', async () => {
+    const sink = new MemoryJournalSink();
+    const ports = fakePorts({
+      async publishArtifact() {
+        return { ref: 'run-1/report.md' };
+      },
+    });
+    await runDwfScript(
+      'export default async function (wf) { await wf.publish("report.md", "hello", "text/markdown"); }',
+      ports,
+      { runId: 'run-1', journal: new Journal(sink) },
+    );
+    const artifact = sink.readAll().find((r) => r.kind === 'artifact');
+    expect((artifact?.result as { ref?: string })?.ref).toBe('run-1/report.md');
+  });
+});
+
+describe('dwf runtime — wf.ask escalation (plan 565 Phase D)', () => {
+  const ASK_SCRIPT = `
+    export default async function (wf) {
+      const answer = await wf.ask('Which database should I target?');
+      return answer;
+    }`;
+
+  it('ask resolves with the port answer and journals nodeKind ask', async () => {
+    const sink = new MemoryJournalSink();
+    const ports = fakePorts({
+      async runAsk(question: string) {
+        return { answer: `postgres (asked: ${question.slice(0, 8)})` };
+      },
+    });
+    const result = await runDwfScript(ASK_SCRIPT, ports, { runId: 'r1', journal: new Journal(sink) });
+    expect(result).toContain('postgres');
+    const askRecord = lastRecord(sink, (r) => r.nodeKind === 'ask');
+    expect(askRecord?.status).toBe('succeeded');
+    expect(askRecord?.result).toContain('postgres');
+  });
+
+  it('a dismissed ask card resolves null (succeeded, journal keeps the null)', async () => {
+    const sink = new MemoryJournalSink();
+    const ports = fakePorts({
+      async runAsk() {
+        return { answer: null };
+      },
+    });
+    const result = await runDwfScript(ASK_SCRIPT, ports, { runId: 'r1', journal: new Journal(sink) });
+    expect(result).toBeNull();
+    expect(lastRecord(sink, (r) => r.nodeKind === 'ask')?.status).toBe('succeeded');
+  });
+
+  it('ask without a bound port fails loudly — no silent null', async () => {
+    const sink = new MemoryJournalSink();
+    await expect(
+      runDwfScript(ASK_SCRIPT, fakePorts(), { runId: 'r1', journal: new Journal(sink) }),
+    ).rejects.toThrow(/no ask port/);
+  });
+
+  it('resume: the answered ask replays from the journal — the user is never re-asked', async () => {
+    const sink = new MemoryJournalSink();
+    let askCount = 0;
+    const ports = fakePorts({
+      async runAsk() {
+        askCount += 1;
+        return { answer: 'postgres' };
+      },
+    });
+    await runDwfScript(ASK_SCRIPT, ports, { runId: 'r1', journal: new Journal(sink) });
+    const ports2 = fakePorts();
+    await runDwfScript(ASK_SCRIPT, ports2, { runId: 'r1', journal: new Journal(sink), resuming: true });
+    expect(askCount).toBe(1);
+  });
+});
 
 describe('dwf planner', () => {
   const VALID_SOURCE = serializeSavedWorkflow(
