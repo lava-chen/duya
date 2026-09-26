@@ -16,6 +16,7 @@ import {
   WarningIcon,
 } from '@/components/icons';
 import type { BashBackgroundTaskSnapshot, BashTaskStatus } from '@/types';
+import { formatElapsed } from '@/lib/format-elapsed';
 import { DrawerSection } from './DrawerSection';
 
 const statusIcons: Record<BashTaskStatus, React.ReactNode> = {
@@ -99,12 +100,4 @@ function BashTaskRow({ task }: { task: BashBackgroundTaskSnapshot }) {
 function elapsed(task: BashBackgroundTaskSnapshot): number {
   const end = task.endTime ?? Date.now();
   return end - task.startTime;
-}
-
-function formatElapsed(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  const minutes = Math.floor(ms / 60_000);
-  const seconds = Math.floor((ms % 60_000) / 1000);
-  return `${minutes}m${seconds}s`;
 }
