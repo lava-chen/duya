@@ -477,7 +477,7 @@ question you're asking.
 | Component         | Technology                      | Config                       |
 | ----------------- | ------------------------------- | ---------------------------- |
 | Frontend          | Vite 6 + React 19 + Zero Router | `vite.config.ts`             |
-| Desktop Shell     | Electron 28                     | `electron/main.ts`           |
+| Desktop Shell     | Electron 44.2.0 (**requires macOS 13+**; GUI gates run on macOS 13+ hosts) | `electron/main.ts`           |
 | Electron Compiler | esbuild                         | `scripts/build-electron.mjs` |
 | Packager          | electron-builder                | `electron-builder.yml`       |
 | Agent Core        | TypeScript                      | `packages/agent/`            |
