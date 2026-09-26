@@ -743,6 +743,21 @@ export function initializeComputerUseBackend(): boolean {
       },
       listAppsProvider: listAppsFromContext,
       focusAppProvider: focusAppByTitle,
+      // plan 572 Phase 5 (macOS): single-window capture via the AX
+      // helper's ScreenCaptureKit op (occluded windows OK; SDK < 14
+      // answers null -> the backend falls back to the full-screen path).
+      ...(IS_MAC
+        ? {
+            windowCaptureProvider: async (windowId: number) => {
+              try {
+                const shot = await getSharedAxHelperClient().screenshotWindow(windowId);
+                return shot ?? null;
+              } catch {
+                return null;
+              }
+            },
+          }
+        : {}),
       // plan 519 §3.5 / A3: post-action read-back source for Verdicts.
       // Uses the bridge's latest focused entity; resolves to null when the
       // snapshot is unavailable so the verdict ladder always has a signal.
