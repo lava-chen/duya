@@ -170,7 +170,7 @@ export function isCookieExpired(expiresUtc: number): boolean {
   return unixSeconds < Math.floor(Date.now() / 1000);
 }
 
-function browserUserDataPath(browser: 'chrome' | 'edge'): string | null {
+export function browserUserDataPath(browser: 'chrome' | 'edge'): string | null {
   if (process.platform === 'win32') {
     const localAppData = process.env.LOCALAPPDATA;
     if (!localAppData) return null;
@@ -191,7 +191,7 @@ function browserUserDataPath(browser: 'chrome' | 'edge'): string | null {
  * Chromium moved the cookies database under Network/ on Windows (M96+) and
  * later on macOS; older profiles keep it directly under the profile folder.
  */
-function resolveCookieFilePath(profileDir: string): string | null {
+export function resolveCookieFilePath(profileDir: string): string | null {
   for (const relative of [join('Network', 'Cookies'), 'Cookies']) {
     const candidate = join(profileDir, relative);
     if (existsSync(candidate)) return candidate;
@@ -199,7 +199,7 @@ function resolveCookieFilePath(profileDir: string): string | null {
   return null;
 }
 
-function isSafeProfileName(profile: string): boolean {
+export function isSafeProfileName(profile: string): boolean {
   return profile === 'Default' || /^Profile \d+$/.test(profile) || profile === 'Guest Profile';
 }
 

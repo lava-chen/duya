@@ -823,7 +823,15 @@ export interface BrowserWebviewAPI {
   onActivateAgentTab: (callback: (sessionId: string, focus: boolean) => void) => () => void
 }
 
+export interface BrowserCookieProfile {
+  browser: 'chrome' | 'edge';
+  dir: string;
+  name: string;
+  cookieDbExists: boolean;
+}
+
 export interface BrowserCookieAPI {
+  detectProfiles: (browser: 'chrome' | 'edge') => Promise<{ ok: boolean; profiles?: BrowserCookieProfile[]; error?: string }>
   importCookies: (browser: 'chrome' | 'edge', profile?: string) => Promise<{ ok: boolean; count?: number; failed?: number; unsupported?: number; source?: 'extension'; error?: string; errorCode?: 'COOKIE_DATABASE_BUSY' | 'APP_BOUND_EXTENSION_UNAVAILABLE' }>
   clearData: () => Promise<{ ok: boolean; error?: string }>
 }
@@ -2641,6 +2649,8 @@ const electronAPI: ElectronAPI = {
     },
   },
   browserCookie: {
+    detectProfiles: (browser: 'chrome' | 'edge') =>
+      ipcRenderer.invoke('browser:detect-cookie-profiles', browser),
     importCookies: (browser: 'chrome' | 'edge', profile?: string) =>
       ipcRenderer.invoke('browser:import-cookies', browser, profile),
     clearData: () =>
