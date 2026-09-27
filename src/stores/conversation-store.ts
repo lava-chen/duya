@@ -16,6 +16,8 @@ import {
   addRecentFolderIPC,
   addMessageIPC,
   getActiveProviderIPC,
+  getAllSettingsIPC,
+  listProvidersIPC,
   updateThreadIPC,
   truncateMessagesAfterIPC,
   truncateMessagesFromInclusiveIPC,
@@ -658,6 +660,29 @@ export const useConversationStore = create<ConversationState>()(
         let providerId = options?.providerId || undefined;
         let model = options?.model || undefined;
         const agentProfileId = options?.agentProfileId || null;
+
+        // If the caller gave neither provider nor model, prefer the model the
+        // user last picked in a composer (settings.lastSelectedModel, stored
+        // as "[ProviderName] modelId") so new threads carry the user's choice
+        // instead of silently resetting to the provider default. Falls back
+        // to the active provider below when the remembered provider is gone.
+        if (!providerId && !model) {
+          try {
+            const rawSettings = await getAllSettingsIPC();
+            const remembered = rawSettings.lastSelectedModel;
+            const match = remembered?.match(/^\[([^\]]+)\]\s*(.+)$/);
+            if (match) {
+              const providers = await listProvidersIPC();
+              const provider = providers.find((p) => p.name === match[1]);
+              if (provider) {
+                providerId = provider.id;
+                model = match[2].replace(/^"|"$/g, '');
+              }
+            }
+          } catch {
+            // Ignore; fall through to the active provider default.
+          }
+        }
 
         // If not provided, get from active provider
         if (!providerId) {
