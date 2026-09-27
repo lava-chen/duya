@@ -1985,6 +1985,14 @@ const zh: Record<TranslationKey, string> = {
   'browserNewtab.clearHistoryConfirm': '确定清空全部历史浏览记录？',
   'browserNewtab.emptyHint': '开始浏览后，访问过的页面会以卡片形式出现在这里。',
   'browserNewtab.removeFavorite': '移除收藏',
+  'browserMenu.print': '打印',
+  'browserMenu.screenshot': '截取屏幕截图',
+  'browserMenu.importCookies': '导入 Cookie 和密码…',
+  'browserMenu.passwordsAutoFill': '密码和自动填充',
+  'browserMenu.downloads': '下载',
+  'browserMenu.history': '历史记录',
+  'browserMenu.browserSettings': '浏览器设置',
+  'browserMenu.comingSoon': '即将支持',
 
   // ConfigStep
   'configStep.popular': '热门',
