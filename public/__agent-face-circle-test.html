@@ -1,0 +1,36 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>circle test</title>
+<style>
+body { background: #1f2937; color: #d1d5db; font: 13px ui-monospace, monospace; padding: 16px; }
+.row { display: flex; gap: 24px; align-items: center; padding: 12px 0; border-top: 1px solid #374151; }
+.label { width: 96px; color: #9ca3af; }
+.face { background: #111827; padding: 8px; border-radius: 6px; }
+</style></head>
+<body>
+<h2 style="margin-top:0">agent-face circle check</h2>
+<div id="root"></div>
+<script type="module">
+import React from '/node_modules/.vite/deps/react.js?v=e77cab01'
+import ReactDOM from '/node_modules/.vite/deps/react-dom_client.js?v=e77cab01'
+import { AgentFace, AGENT_FACE_COLORS } from '/src/components/agent-face/AgentFace.tsx'
+const e = React.createElement
+const createRoot = ReactDOM.createRoot || ReactDOM.default?.createRoot
+const sizes = [20, 30, 40, 60, 80]
+const statuses = ['pending', 'running', 'done', 'failed']
+function App() {
+  return e('div', null,
+    sizes.flatMap((s) =>
+      statuses.map((st) =>
+        e('div', { className: 'row', key: s + st },
+          e('span', { className: 'label' }, `size=${s} ${st}`),
+          e('div', { className: 'face' },
+            e(AgentFace, { size: s, status: st, color: AGENT_FACE_COLORS[Math.floor(Math.random() * AGENT_FACE_COLORS.length)] })
+          )
+        )
+      )
+    )
+  )
+}
+createRoot(document.getElementById('root')).render(e(App))
+</script>
+</body></html>
