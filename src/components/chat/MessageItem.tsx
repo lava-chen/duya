@@ -939,7 +939,7 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
   if (isUser) {
     return (
       <div data-message-id={message.id} className="flex justify-end py-3 px-4 group">
-        <div className="max-w-[85%] lg:max-w-[75%] flex flex-col items-end">
+        <div className="max-w-full @min-[624px]:max-w-xl flex flex-col items-end">
           {/* File & Image Attachments (PDF, DOCX, PNG, etc.) - Above message bubble */}
           {fileAttachments.length > 0 && (
             <div className="flex flex-wrap justify-end gap-2 mb-2">

@@ -10,6 +10,7 @@ import { useLinkOpener } from '@/hooks/useLinkOpener';
 import { useLinkFavicon } from '@/lib/link-favicon';
 import { parsePluginMentionHref } from '@/lib/plugin-mention-display';
 import { PluginMentionLinkChip } from './PluginMentionChip';
+import { MarkdownTableFrame } from './MarkdownTableFrame';
 
 // Inline media: renders <img> thumbnails that open the lightbox on click,
 // or <video controls> elements for common video extensions so the same
@@ -416,9 +417,7 @@ export const markdownComponents = {
   ),
   hr: () => <hr className="border-border/50 my-3" />,
   table: ({ children }: { children?: React.ReactNode }) => (
-    <div className="markdown-table-scroll scrollbar-thin">
-      <table className="markdown-table">{children}</table>
-    </div>
+    <MarkdownTableFrame>{children}</MarkdownTableFrame>
   ),
   thead: ({ children }: { children?: React.ReactNode }) => <thead>{children}</thead>,
   tbody: ({ children }: { children?: React.ReactNode }) => <tbody>{children}</tbody>,
