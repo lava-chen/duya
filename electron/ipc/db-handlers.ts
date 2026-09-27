@@ -25,6 +25,18 @@ import { invertPatch } from '../db/core/conductors/invert-patch';
 import { createConductorUndoRedoHandlers } from './conductor-handlers/conductor-undo-redo-handlers';
 import { createConductorCaptureHandlers } from '../conductor/capture-bridge';
 import { workbenchService } from '../conductor/workbench-service';
+import {
+  listCanvases,
+  getCanvasByProjectPath,
+  createCanvas,
+  updateCanvas,
+  deleteCanvas,
+  listCanvasGroups,
+  createCanvasGroup,
+  updateCanvasGroup,
+  deleteCanvasGroup,
+  getCanvasSnapshot,
+} from '../db/queries/conductors';
 import { updateDatabasePath, readBootConfig } from '../config/boot-config';
 import { resolveRolloutRoot } from '../config/boot-config';
 import { emitGatewayConfigChanged, isGatewayConfigKey } from '../gateway/config-events';
@@ -2049,53 +2061,59 @@ export function registerConductorHandlers(): void {
   // need the channel manager.
   const conductorCaptureHandlers = createConductorCaptureHandlers({ getDb });
 
+  // Canvas identity + snapshot handlers. These MUST stay on the same
+  // database as conductor:action / undo / redo (the main database) —
+  // conductor_elements carries a FOREIGN KEY to conductor_canvases, so a
+  // canvas that only exists in the core database cannot take any element
+  // writes (SqliteError: FOREIGN KEY constraint failed on shape creation).
+  // Plan 534 will migrate the whole conductor surface to core in one move;
+  // until then identity follows the write path.
   ipcMain.handle('conductor:canvas:list', () => {
-    return getCoreStores().conductor.listCanvases();
+    return listCanvases();
   });
 
   ipcMain.handle('conductor:canvas:getByProjectPath', (_event, projectPath: string) => {
-    return getCoreStores().conductor.getCanvasByProjectPath(projectPath);
+    return getCanvasByProjectPath(projectPath);
   });
 
   ipcMain.handle('conductor:canvas:create', (_event, data: { name: string; description?: string; projectPath?: string | null }) => {
-    return getCoreStores().conductor.createCanvas(data);
+    return createCanvas(data);
   });
 
   ipcMain.handle('conductor:canvas:update', (_event, id: string, data: { name?: string; description?: string | null; layoutConfig?: Record<string, unknown>; sortOrder?: number; isFavorite?: boolean; groupId?: string | null; tags?: string[] }) => {
-    return getCoreStores().conductor.updateCanvas(id, data);
+    try {
+      return updateCanvas(id, data);
+    } catch {
+      // queries/conductors.updateCanvas throws when the canvas is gone;
+      // the previous core-store contract returned null.
+      return null;
+    }
   });
 
   ipcMain.handle('conductor:canvas:delete', (_event, id: string) => {
-    return getCoreStores().conductor.deleteCanvas(id);
+    return deleteCanvas(id);
   });
 
   // --- Canvas group (asset library collection) handlers ---
 
   ipcMain.handle('conductor:canvas:group:list', (_event, projectPath?: string | null) => {
-    return getCoreStores().conductor.listGroups(projectPath);
+    return listCanvasGroups(projectPath);
   });
 
   ipcMain.handle('conductor:canvas:group:create', (_event, data: { name: string; projectPath?: string | null }) => {
-    return getCoreStores().conductor.createGroup(data);
+    return createCanvasGroup(data);
   });
 
   ipcMain.handle('conductor:canvas:group:update', (_event, id: string, data: { name?: string; sortOrder?: number }) => {
-    return getCoreStores().conductor.updateGroup(id, data);
+    return updateCanvasGroup(id, data);
   });
 
   ipcMain.handle('conductor:canvas:group:delete', (_event, id: string) => {
-    return getCoreStores().conductor.deleteGroup(id);
+    return deleteCanvasGroup(id);
   });
 
   ipcMain.handle('conductor:snapshot', (_event, canvasId: string) => {
-    const conductor = getCoreStores().conductor;
-    const canvas = conductor.getCanvas(canvasId);
-    if (!canvas) return null;
-    const elements = conductor.listElementsByCanvas(canvasId);
-    const widgets = conductor.listWidgetsByCanvas(canvasId);
-    const allActions = conductor.listActionsBySession(canvasId);
-    const lastAction = allActions.length > 0 ? Math.max(...allActions.map((a) => a.id)) : 0;
-    return { canvas, elements, widgets, actionCursor: lastAction };
+    return getCanvasSnapshot(canvasId);
   });
 
   ipcMain.handle('conductor:action', (_event, request: Record<string, unknown>) => {
