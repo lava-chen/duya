@@ -35,7 +35,7 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
     }))
   );
   const { t } = useTranslation();
-  const { settings, save: saveSettings } = useSettings();
+  const { settings, save: saveSettings, loading: settingsLoading } = useSettings();
   const [selectedProject, setSelectedProject] = useState<{ workingDirectory: string; projectName: string } | null>(null);
   const [sessionModel, setSessionModel] = useState<string>('');
   const [providerId, setProviderId] = useState<string>('');
@@ -246,6 +246,10 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
   //   0. settings.lastSelectedModel — what the user picked last time, as
   //      long as the named provider still exists in the provider store.
   //   1. active provider's defaultModel / enabled_models[0].
+  // The resolution is gated on settings having loaded: lastSelectedModel
+  // arrives over several IPC round-trips, so seeding the provider default
+  // first would win the race and the `sessionModel` guard would then
+  // reject the remembered model forever.
   // Existing ChatView sessions keep their own per-session model (the
   // thread row is the source of truth there) — this effect never runs
   // for them, so older sessions are unaffected.
@@ -253,6 +257,7 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
     let cancelled = false;
     const resolveDefaultModel = async () => {
       if (sessionModel) return;
+      if (settingsLoading) return;
       // Priority 0: try the remembered model first. We only adopt it when
       // the named provider still exists — otherwise we'd seed the picker
       // with a ghost that the user can never resolve.
@@ -312,7 +317,7 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
       cancelled = true;
       clearTimeout(retryTimer);
     };
-  }, [sessionModel, settings.lastSelectedModel, parseModelName]);
+  }, [sessionModel, settings.lastSelectedModel, settingsLoading, parseModelName]);
 
   const handleModelChange = useCallback((model: string, nextProviderId?: string) => {
     setSessionModel(model);
