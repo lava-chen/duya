@@ -42,23 +42,34 @@ function writeErrorAndExit(err: unknown): never {
 // Read op (`duya mcp list`)
 // ---------------------------------------------------------------------------
 
-function renderListText(servers: UserMcpTomlServer[]): string {
+export function renderListText(servers: UserMcpTomlServer[]): string {
   if (servers.length === 0) {
     return '(no MCP servers configured; use `duya mcp add` to add one)';
   }
   const lines: string[] = [];
   lines.push(`${servers.length} MCP server${servers.length !== 1 ? 's' : ''} configured`);
   // Stable columns: NAME  STATE  TRANSPORT  COMMAND  SCOPE
+  // Rows arrive as unvalidated JSON from `GET /v1/mcps` — the
+  // `UserMcpTomlServer` type describes the happy path, not a
+  // guarantee — so every field is coerced here: one malformed entry
+  // must not take the whole `list` command down (TypeError on
+  // `r.name.length`).
   const rows = servers.map((s) => {
-    const state = s.enabled === false ? 'off' : 'on';
-    const transport = s.transport ?? (s.url ? 'streamable-http' : 'stdio');
-    const command = s.command ?? s.url ?? '';
+    const entry = (s ?? {}) as Partial<UserMcpTomlServer>;
+    const state = entry.enabled === false ? 'off' : 'on';
+    const transport =
+      typeof entry.transport === 'string'
+        ? entry.transport
+        : entry.url
+          ? 'streamable-http'
+          : 'stdio';
+    const command = typeof entry.command === 'string' ? entry.command : (entry.url ?? '');
     const scope =
-      s.allowedAgentIds && s.allowedAgentIds.length > 0
-        ? s.allowedAgentIds.join(',')
+      Array.isArray(entry.allowedAgentIds) && entry.allowedAgentIds.length > 0
+        ? entry.allowedAgentIds.join(',')
         : 'all';
     return {
-      name: s.name,
+      name: typeof entry.name === 'string' && entry.name.length > 0 ? entry.name : '(unnamed)',
       state,
       transport,
       command,
