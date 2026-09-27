@@ -81,7 +81,7 @@ const SEND_MESSAGE_SCHEMA = {
     channel: {
       type: 'string',
       description:
-        'Optional. A connected messaging channel address to deliver this to instead of the in-app chat, shaped platform:chat — the address shown to you in an [inbound] wake. Omit to send to the in-app chat (the default). Only valid with type:text or type:attachment.',
+        'Optional. A connected messaging channel address to deliver this to instead of the in-app chat, shaped platform:chat — the address shown to you in an [inbound] wake. Use it exactly as shown: never append sender or user ids to it (e.g. "feishu:oc_abc" is right, "feishu:oc_abc:ou_def" is not). Omit to send to the in-app chat (the default). Only valid with type:text or type:attachment.',
     },
     widget: {
       type: 'object',

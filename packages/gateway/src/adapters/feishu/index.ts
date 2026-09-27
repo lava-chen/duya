@@ -638,6 +638,12 @@ export class FeishuChannel extends EventEmitter {
 
   async sendReply(chatId: string, reply: NormalizedReply): Promise<SendResult> {
     try {
+      // Defensive: some delivery paths compose compound tokens like
+      // "oc_<chatId>:ou_<userId>" (chat + sender). The feishu receive_id is
+      // only the leading id segment — anything after ':' makes the send API
+      // reject with 230001 invalid receive_id.
+      const colonIdx = chatId.indexOf(':');
+      if (colonIdx > 0) chatId = chatId.slice(0, colonIdx);
       switch (reply.type) {
         case 'text': {
           const result = await this.sendPostMessage(chatId, '', [

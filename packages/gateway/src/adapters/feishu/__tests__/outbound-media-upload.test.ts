@@ -316,3 +316,25 @@ describe('FeishuChannel.setProcessingStatus (todo #2)', () => {
     expect(calls.some((c) => c.url.includes('/urgent'))).toBe(false);
   });
 });
+
+describe('FeishuChannel.sendReply compound chat id trimming', () => {
+  it('sends only the leading oc_ id when the chat token carries a :ou_ suffix', async () => {
+    const calls: FetchCall[] = [];
+    stubFetch((url) => {
+      if (url.includes('/auth/v3/tenant_access_token/internal')) return tokenResponse();
+      if (url.includes('/im/v1/messages')) return sendResponse();
+      return new Response('unexpected', { status: 404 });
+    }, calls);
+
+    const channel = makeChannel();
+    const reply: NormalizedReply = { type: 'text', text: 'compound id probe' } as NormalizedReply;
+
+    const result = await channel.sendReply('oc_78a6abc:ou_1822def', reply);
+
+    expect(result.ok).toBe(true);
+    const sendCall = calls.find((c) => c.url.includes('/im/v1/messages'));
+    expect(sendCall).toBeDefined();
+    const payload = JSON.parse(String(sendCall!.body));
+    expect(payload.receive_id).toBe('oc_78a6abc');
+  });
+});

@@ -452,10 +452,22 @@ export async function channelDelivery(
   addressToken: string,
   outbound: ChannelOutboundMessage,
 ): Promise<void> {
-  const address = parseChannelAddress(addressToken);
-  if (!address) {
+  const parsed = parseChannelAddress(addressToken);
+  if (!parsed) {
     throw new Error(`Invalid channel address token: "${addressToken}". Expected format: "platform:chatId".`);
   }
+
+  // Models occasionally compose compound tokens like "feishu:oc_<id>:ou_<userId>"
+  // (chat + sender) when echoing an inbound wake. Feishu receive ids never
+  // contain ':' — trim to the leading id segment, otherwise the send API
+  // rejects with 230001 invalid receive_id. (Other platforms may intentionally
+  // use structured chat segments, so this is feishu-specific.)
+  let chat = parsed.chat;
+  if (parsed.platform === 'feishu') {
+    const idEnd = chat.indexOf(':');
+    if (idEnd > 0) chat = chat.slice(0, idEnd);
+  }
+  const address: ChannelAddress = { platform: parsed.platform, chat };
 
   // Feishu/WeChat outbound must reuse the SAME live adapter instance that is
   // polling inbound (context_token continuity, batching, stream cards). Prefer
