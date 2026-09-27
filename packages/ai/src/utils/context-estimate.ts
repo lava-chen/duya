@@ -254,8 +254,16 @@ function isUsableAnchor(
   // authoritative anchor when present, but only trust it when it's larger than
   // the cache-normalized prompt — gateways that omit cache from total_tokens
   // would otherwise silently under-count the anchor and miss compaction.
+  //
+  // NEVER trust the top-level total_tokens on a turn-cumulative block (one
+  // carrying `last_call`): there it is the SUM of every LLM call in the turn,
+  // not the prompt volume of the final request. Math.max-ing it against
+  // prompt+output let the cumulative value win, seeding the ring with an
+  // ~N×-inflated anchor (measured 7.67M on a 1M-window model at ~110K real
+  // usage, 2026-09-26) and firing proactive compaction 9 turns early.
+  // `prompt`/`output` above already read `last_call` via normalizePromptTokens.
   let total: number;
-  if (typeof usage.total_tokens === 'number' && usage.total_tokens > 0) {
+  if (!usage.last_call && typeof usage.total_tokens === 'number' && usage.total_tokens > 0) {
     total = Math.max(usage.total_tokens, prompt + output);
   } else {
     total = prompt + output;
