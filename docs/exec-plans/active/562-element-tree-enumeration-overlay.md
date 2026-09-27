@@ -91,6 +91,9 @@ plan 519 的 `element-detector` 虽然消费 AxInfo，但 **AX 输入不带坐�
 
 ### Phase 4 — macOS AX helper（读树）
 
+> 2026-09-27 注记：本 Phase 已收编进 [plan 572](./572-macos-native-computer-use.md)（Phase 2「读树通道」，
+> 随注入/录制/权限一起立项为完整 macOS computer-use 后端）。此处保留原拆解供追溯，实现以 572 为准。
+
 - [ ] Swift CLI helper（`resources/ax-helper/` 源码 + 预编译产物随 extraResources 分发）：
       stdin/stdout JSON 行协议（对齐 uia-probe 惯例）；`enumerate(pid)` =
       `AXUIElementCreateApplication(pid)` → `kAXChildrenAttribute` 递归，

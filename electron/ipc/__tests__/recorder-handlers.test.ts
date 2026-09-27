@@ -10,7 +10,6 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { parse as parseYaml } from 'yaml';
 
 import { validateWorkflow } from '../../../packages/agent/src/modes/workflow/validate';
 
@@ -243,11 +242,13 @@ describe('recorder IPC handlers', () => {
     expect(await invoke('recorder:get-session', '')).toBeNull();
   });
 
-  it('convert produces a schema-valid definition plus its YAML', async () => {
+  it('convert produces a schema-valid definition plus its dwf.ts source (plan 562 §8 contract)', async () => {
     const result = (await invoke('recorder:convert', { sessionId })) as {
       ok: boolean;
       def: unknown;
-      yaml: string;
+      meta: { name: string };
+      script: string;
+      source: string;
       eventCount: number;
       droppedLines: number;
     };
@@ -255,10 +256,12 @@ describe('recorder IPC handlers', () => {
     expect(result.eventCount).toBe(2);
     expect(result.droppedLines).toBe(0);
 
-    // The YAML the user reviews is exactly what the registry would write.
-    const reparsed = parseYaml(result.yaml);
-    expect(reparsed).toEqual(result.def);
-    expect(validateWorkflow(reparsed).ok).toBe(true);
+    // The .dwf.ts source the user reviews is exactly what
+    // `workflow:dwf:save` will persist — frontmatter meta + script body.
+    expect(result.source).toContain(result.meta.name);
+    expect(result.source.length).toBeGreaterThan(0);
+    expect(typeof result.script).toBe('string');
+    expect(validateWorkflow(result.def as never).ok).toBe(true);
 
     const def = result.def as {
       phases: Array<{ nodes: Array<{ gui?: { steps: Array<{ do: string }> } }> }>;

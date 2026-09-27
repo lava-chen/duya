@@ -86,6 +86,20 @@ export interface SomElement {
    * and heuristic are best-effort.
    */
   axSource?: 'uia-tree' | 'ax-tree' | 'uia' | 'msaa' | 'focused-entity' | 'heuristic';
+  /**
+   * macOS AX snapshot handle (plan 572) carried through from the
+   * enumerate descriptor. Present only for `ax-tree` elements; lets the
+   * IPC layer resolve an SOM index back to an AXUIElement for
+   * background AX-action delivery. Never set on Windows paths.
+   */
+  axHandle?: string;
+  /**
+   * PID owning the AX element (plan 572) — resolved once per capture
+   * on macOS so the IPC click path can target
+   * `AXUIElementPerformAction` without a second fg query. Undefined
+   * on Windows paths.
+   */
+  axPid?: number;
 }
 
 /**
@@ -106,6 +120,15 @@ export interface CaptureOptions {
   somMode?: boolean;
   displayId?: number;
   region?: Bbox;
+  /**
+   * Capture a single window instead of the full screen (plan 572
+   * Phase 5). macOS routes this through the AX helper's
+   * ScreenCaptureKit op — works even when the window is occluded.
+   * When no window capture provider is wired, or the platform answers
+   * `unsupported`/null (SDK < 14), the backend falls back to the
+   * full-screen path; the capture never fails for asking.
+   */
+  windowId?: number;
 }
 
 export type MouseButton = 'left' | 'right' | 'middle';

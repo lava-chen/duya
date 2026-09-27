@@ -71,8 +71,14 @@ export interface ElementDescriptor {
    * password fields).
    */
   value?: string | null;
+  /**
+   * Snapshot-scoped element handle (plan 572). Only the macOS AX helper
+   * emits these (`h:<n>`); valid until the next enumerate snapshot for
+   * the same pid. Windows probes never set it.
+   */
+  handle?: string;
   /** Provenance — drives the matcher's confidence scoring downstream. */
-  source: 'uia-probe' | 'none';
+  source: 'uia-probe' | 'ax-helper' | 'none';
 }
 
 export const ElementDescriptorSchema = z.object({
@@ -90,7 +96,8 @@ export const ElementDescriptorSchema = z.object({
     .optional(),
   isPassword: z.boolean().nullish(),
   value: z.string().nullish(),
-  source: z.enum(['uia-probe', 'none']),
+  handle: z.string().optional(),
+  source: z.enum(['uia-probe', 'ax-helper', 'none']),
 });
 
 /** Shared click geometry. `count` covers double-click collapse. */

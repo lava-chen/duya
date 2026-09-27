@@ -3087,6 +3087,12 @@ const zh: Record<TranslationKey, string> = {
   'settings.hostToolPermission.never': '始终禁止',
   'settings.hostToolPermission.warningAlways': '始终允许模式会跳过所有权限确认对话框。灾难性安全边界仍会生效,但其他所有工具调用都会自动执行,请谨慎使用。',
   'settings.hostToolPermission.noteNever': '始终禁止模式将阻止所有工具调用,不论当前会话的权限模式如何。切换为"每次询问"或"始终允许"以恢复工具使用。',
+
+  'macPermissions.title': 'macOS 计算机使用权限',
+  'macPermissions.refresh': '重新检查',
+  'macPermissions.openSettings': '打开设置',
+  'macPermissions.helperMissing': '未找到 macOS AX helper。请先用 scripts/build-ax-helper.sh 编译，然后重新检查。',
+  'macPermissions.grantHint': 'macOS 弹窗本身不授予任何权限 —— 请在打开的设置面板中勾选 DUYA。屏幕录制授权后需完全重启应用才生效。',
 };
 
 export default zh;

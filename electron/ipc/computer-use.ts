@@ -53,11 +53,14 @@ import {
 } from '../services/computer-use-overlay.js';
 import {
   clearZoomOrigin,
+  getCaptureAxRef,
   getRememberedCaptureSize,
   modelPointToScreen,
+  rememberCaptureAxRefs,
   rememberCaptureSize,
   rememberZoomOrigin,
 } from './computer-use-coords.js';
+import { getSharedAxHelperClient } from '../services/recorder/ax-helper.js';
 
 const logger = getLogger();
 
@@ -110,6 +113,14 @@ function getRedactedReason(): string | null {
  * Falls back to 1 when the display readout is unavailable (tests).
  */
 function getScaleFactor(): number {
+  // plan 572 D8 (macOS): nut.js/libnut posts CGEvents in POINTS, not
+  // physical pixels. Reporting 1 here plus logical-bounds "physical"
+  // size below makes modelPointToScreen resolve the image→points
+  // ratio from the remembered capture size instead of multiplying by
+  // scaleFactor (which would double every Retina click).
+  if (process.platform === 'darwin') {
+    return 1;
+  }
   try {
     return screen.getPrimaryDisplay().scaleFactor;
   } catch {
@@ -126,6 +137,11 @@ function getPhysicalDisplaySize(): { width: number; height: number } | undefined
   try {
     const d = screen.getPrimaryDisplay();
     if (!(d.bounds.width > 0 && d.bounds.height > 0)) return undefined;
+    if (process.platform === 'darwin') {
+      // plan 572 D8: the click target space on macOS is points — the
+      // display's logical bounds ARE the far end of the mapping.
+      return { width: d.bounds.width, height: d.bounds.height };
+    }
     return {
       width: Math.round(d.bounds.width * d.scaleFactor),
       height: Math.round(d.bounds.height * d.scaleFactor),
@@ -347,6 +363,12 @@ async function runAction(
         // (observed 1440x810 for a 2048x1152 request), and scaling model
         // coords by scaleFactor alone lands clicks short of the target.
         rememberCaptureSize(sessionId, { width: cap.width, height: cap.height });
+        // plan 572: remember SOM index → AX handle + pid (macOS) so the
+        // click case can deliver AXPress without the cursor path.
+        const axRefs = (cap.elements ?? [])
+          .filter((el) => typeof el.axHandle === 'string' && typeof el.axPid === 'number')
+          .map((el) => ({ index: el.index, handle: el.axHandle as string, pid: el.axPid as number }));
+        rememberCaptureAxRefs(sessionId, axRefs);
         attachSavedCapturePath(cap, saveComputerUseCapture({
           sessionId,
           action: 'capture',
@@ -387,6 +409,45 @@ async function runAction(
           );
         }
         const clickOpts = buildClickOptions(data);
+        // plan 572 D4 (macOS): background-first delivery ladder. A
+        // single left-click on an element that carries an AX snapshot
+        // handle goes through AXUIElementPerformAction — no cursor
+        // movement, no activation, and the effect is read-backable.
+        // Right-click (AXShowMenu), double/triple clicks, and modified
+        // clicks stay on the coordinate path. Chromium never sees
+        // pid-posted mouse events, so there is deliberately NO
+        // pid-event rung for clicks (decideDarwinClick encodes this).
+        const axRef =
+          (clickOpts.button === undefined || clickOpts.button === 'left') &&
+          (clickOpts.count === undefined || clickOpts.count === 'single') &&
+          (!Array.isArray(clickOpts.modifiers) || clickOpts.modifiers.length === 0)
+            ? getCaptureAxRef(sessionId, typeof clickOpts.element === 'number' ? clickOpts.element : undefined)
+            : null;
+        if (axRef) {
+          const helper = getSharedAxHelperClient();
+          const pressError = await helper.performAction(axRef.pid, axRef.handle, 'AXPress');
+          if (pressError === null) {
+            logger.debug(
+              'computer-use: click via AX action',
+              { pid: axRef.pid, handle: axRef.handle, sessionId: sessionId ?? null },
+              LogComponent.ComputerUse,
+            );
+            return {
+              success: true,
+              action,
+              data: { ok: true, via: 'ax-action', durationMs: 0 } as Record<string, unknown>,
+            };
+          }
+          if (pressError === 'permission-denied' || pressError === 'timeout') {
+            logger.warn(
+              'computer-use: AX action click failed; falling back to cursor path',
+              { code: pressError, sessionId: sessionId ?? null },
+              LogComponent.ComputerUse,
+            );
+          }
+          // stale-handle / unsupported / error → fall through to the
+          // coordinate path (the element may still be under the point).
+        }
         if (typeof clickOpts.x === 'number' && typeof clickOpts.y === 'number') {
           const sp = modelPointToScreen(
             { x: clickOpts.x, y: clickOpts.y },
