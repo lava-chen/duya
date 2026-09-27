@@ -153,3 +153,132 @@ export function countContentLines(content: string | undefined): number {
   if (trimmed.length === 0) return 0;
   return trimmed.split('\n').filter((l) => l.trim() !== '').length;
 }
+
+/**
+ * True line-level change stat between two contents, computed by trimming
+ * the common prefix and suffix lines (O(n), ZCode `computeLineChangeStat`
+ * parity). Unlike counting full field line counts, an edit that replaces
+ * one line inside a 20-line block reports +1/-1 instead of +20/-20.
+ *
+ * Empty lines are counted as-is (matching SimpleDiffViewer's raw
+ * split-on-'\n' semantics); a trailing incomplete streaming line counts
+ * as one line.
+ */
+export interface LineChangeStat {
+  additions: number;
+  removals: number;
+}
+
+function splitLogicalLines(text: string): string[] {
+  if (text.length === 0) return [];
+  return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+}
+
+export function computeLineChangeStat(oldText: string | null, newText: string): LineChangeStat {
+  const beforeLines = splitLogicalLines(oldText ?? '');
+  const afterLines = splitLogicalLines(newText);
+
+  let prefixIndex = 0;
+  while (
+    prefixIndex < beforeLines.length &&
+    prefixIndex < afterLines.length &&
+    beforeLines[prefixIndex] === afterLines[prefixIndex]
+  ) {
+    prefixIndex += 1;
+  }
+
+  let beforeTailIndex = beforeLines.length - 1;
+  let afterTailIndex = afterLines.length - 1;
+  while (
+    beforeTailIndex >= prefixIndex &&
+    afterTailIndex >= prefixIndex &&
+    beforeLines[beforeTailIndex] === afterLines[afterTailIndex]
+  ) {
+    beforeTailIndex -= 1;
+    afterTailIndex -= 1;
+  }
+
+  const removedCount = beforeTailIndex - prefixIndex + 1;
+  const addedCount = afterTailIndex - prefixIndex + 1;
+  return {
+    additions: addedCount > 0 ? addedCount : 0,
+    removals: removedCount > 0 ? removedCount : 0,
+  };
+}
+
+/**
+ * Materialization gate for streaming tool inputs (ZCode
+ * `shouldMaterializeZCodeStreamingToolInputPreview` parity).
+ *
+ * Deltas append to a raw buffer for free; only "materializing" — running
+ * the partial-JSON extraction, merging into the row, and notifying
+ * subscribers — is throttled. Without the gate a fast model streaming a
+ * large file write would trigger a full re-parse of the accumulated raw
+ * every coalesce tick.
+ */
+export interface StreamingToolInputGateState {
+  deltaCount: number;
+  lastPreviewAt: number;
+  lastPreviewRawLength: number;
+}
+
+export function createStreamingToolInputGateState(): StreamingToolInputGateState {
+  return { deltaCount: 0, lastPreviewAt: 0, lastPreviewRawLength: 0 };
+}
+
+/** The very first delta always materializes so the card appears immediately. */
+const STREAMING_TOOL_INPUT_EAGER_DELTA_COUNT = 1;
+
+/** File-write tools parse a potentially huge `content` — hard 1s window. */
+const FILE_STREAMING_INPUT_PREVIEW_MIN_INTERVAL_MS = 1_000;
+
+/** Other tools' string args stay small — 750ms interval or 8KB growth. */
+const STREAMING_TOOL_INPUT_PREVIEW_MIN_INTERVAL_MS = 750;
+const STREAMING_TOOL_INPUT_PREVIEW_MIN_RAW_GROWTH = 8 * 1024;
+const STREAMING_TOOL_INPUT_PREVIEW_TIME_BUDGET_MAX_RAW = 8 * 1024;
+
+/** Mirrors FILE_EDIT_TOOLS + FILE_CREATE_TOOLS in
+ *  src/components/chat/tools/classify.ts — keep the two in sync. */
+const FILE_STREAMING_PREVIEW_TOOLS = new Set([
+  'write', 'writefile', 'write_file', 'create_file', 'createfile',
+  'edit', 'edit_file', 'str_replace_editor',
+]);
+
+function isFileStreamingPreviewTool(toolName: string | undefined): boolean {
+  return toolName !== undefined && FILE_STREAMING_PREVIEW_TOOLS.has(toolName.trim().toLowerCase());
+}
+
+export function shouldMaterializeStreamingToolInput(
+  state: StreamingToolInputGateState,
+  rawInput: string,
+  toolName: string | undefined,
+  now: number,
+): boolean {
+  if (state.deltaCount <= STREAMING_TOOL_INPUT_EAGER_DELTA_COUNT) {
+    return true;
+  }
+  if (isFileStreamingPreviewTool(toolName)) {
+    // Big file-write args must not bypass the 1s window, or the faster the
+    // model outputs, the more often the UI re-parses.
+    return now - state.lastPreviewAt >= FILE_STREAMING_INPUT_PREVIEW_MIN_INTERVAL_MS;
+  }
+  if (rawInput.length - state.lastPreviewRawLength >= STREAMING_TOOL_INPUT_PREVIEW_MIN_RAW_GROWTH) {
+    return true;
+  }
+  const intervalElapsed =
+    now - state.lastPreviewAt >= STREAMING_TOOL_INPUT_PREVIEW_MIN_INTERVAL_MS;
+  if (!intervalElapsed) {
+    return false;
+  }
+  // Small inputs keep the time budget; past it only raw growth triggers.
+  return rawInput.length <= STREAMING_TOOL_INPUT_PREVIEW_TIME_BUDGET_MAX_RAW;
+}
+
+export function markStreamingToolInputMaterialized(
+  state: StreamingToolInputGateState,
+  now: number,
+  rawLength: number,
+): void {
+  state.lastPreviewAt = now;
+  state.lastPreviewRawLength = rawLength;
+}

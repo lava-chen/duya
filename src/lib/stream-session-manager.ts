@@ -17,7 +17,13 @@ import type {
 } from '@/types/research';
 import type { PermissionRequestEvent, ModeChangedEvent, GoalUpdatedEvent, ResearchUpdatedEvent, WorkflowRunSseEvent } from '@/types/stream';
 import { STREAM_IDLE_TIMEOUT_MS } from './constants';
-import { extractPartialToolFields } from './streaming-tool-input';
+import {
+  createStreamingToolInputGateState,
+  extractPartialToolFields,
+  markStreamingToolInputMaterialized,
+  shouldMaterializeStreamingToolInput,
+  type StreamingToolInputGateState,
+} from './streaming-tool-input';
 import { showMessageCompletionNotification } from './notification';
 import { getAgentServerClient, type ChatOptions, type AgentEvent } from './agent-http-client';
 import type { PluginMentionCapabilities } from './plugin-mentions';
@@ -687,6 +693,13 @@ interface SessionState {
    * producing them.
    */
   partialToolInputRaw: Map<string, string>;
+  /**
+   * ZCode-parity materialization gate: per-tool bookkeeping for how often
+   * the accumulated raw buffer may be parsed and merged into `toolUses`.
+   * Deltas append for free; extraction/merge/notify runs at most once per
+   * 1s for file-write tools (8KB growth / 750ms for the rest).
+   */
+  partialInputGate: Map<string, StreamingToolInputGateState>;
   /** 50ms coalescing timer for merging partial tool inputs into toolUses. */
   partialInputFlushTimer: ReturnType<typeof setTimeout> | null;
   sendRetryMessage: ((content: string) => void) | null;
@@ -764,7 +777,7 @@ interface ResearchSessionState extends ResearchSessionSnapshot {
   listeners: Set<(snapshot: ResearchSessionSnapshot) => void>;
 }
 
-function createInitialState(sessionId: string): Omit<SessionState, 'listeners' | 'fieldListeners' | 'streamingEventsListeners' | 'permissionListeners' | 'authRequiredListeners' | 'modeChangedListeners' | 'goalUpdatedListeners' | 'researchUpdatedListeners' | 'workflowRunListeners' | 'dbPersistedListeners' | 'idleTimeout' | 'textEmitTimeout' | 'pendingTextEmit' | 'partialToolInputRaw' | 'partialInputFlushTimer' | 'sendRetryMessage' | 'thinkingEmitTimeout' | 'pendingThinkingEmit'> {
+function createInitialState(sessionId: string): Omit<SessionState, 'listeners' | 'fieldListeners' | 'streamingEventsListeners' | 'permissionListeners' | 'authRequiredListeners' | 'modeChangedListeners' | 'goalUpdatedListeners' | 'researchUpdatedListeners' | 'workflowRunListeners' | 'dbPersistedListeners' | 'idleTimeout' | 'textEmitTimeout' | 'pendingTextEmit' | 'partialToolInputRaw' | 'partialInputGate' | 'partialInputFlushTimer' | 'sendRetryMessage' | 'thinkingEmitTimeout' | 'pendingThinkingEmit'> {
   return {
     sessionId,
     currentStreamId: null,
@@ -1124,6 +1137,7 @@ export class StreamSessionManager {
         thinkingEmitTimeout: null,
         pendingThinkingEmit: '',
         partialToolInputRaw: new Map(),
+        partialInputGate: new Map(),
         partialInputFlushTimer: null,
         sendRetryMessage: null,
       };
@@ -2629,6 +2643,12 @@ export class StreamSessionManager {
     if (raw.length >= 4 * 1024 * 1024) return;
     s.partialToolInputRaw.set(delta.id, raw + delta.delta);
 
+    // Gate bookkeeping: count deltas so the flush can apply the eager-first
+    // / interval / raw-growth materialization policy per tool.
+    const gate = s.partialInputGate.get(delta.id) ?? createStreamingToolInputGateState();
+    gate.deltaCount += 1;
+    s.partialInputGate.set(delta.id, gate);
+
     if (s.partialInputFlushTimer !== null) return;
     s.partialInputFlushTimer = setTimeout(() => {
       this.flushPartialToolInputs(sessionId, streamId);
@@ -2641,6 +2661,11 @@ export class StreamSessionManager {
    * and notify subscribers once. Only top-level string fields are merged —
    * numbers/arrays/objects are skipped because a truncated value would
    * corrupt the row's shape.
+   *
+   * Each tool first passes the materialization gate: file-write tools
+   * (huge `content` args) parse at most once per second, other tools by
+   * 8KB raw growth or 750ms. Skipped tools re-arm a catch-up timer so the
+   * tail fragment still lands if no further deltas arrive.
    */
   private flushPartialToolInputs(sessionId: string, streamId: string): void {
     const s = this.sessions.get(sessionId);
@@ -2648,10 +2673,23 @@ export class StreamSessionManager {
     s.partialInputFlushTimer = null;
     if (s.partialToolInputRaw.size === 0) return;
 
+    const now = Date.now();
     let changed = false;
+    let gateSkipped = false;
     for (const [id, raw] of s.partialToolInputRaw) {
       const idx = s.toolUses.findIndex((u) => u.id === id);
       if (idx === -1) continue; // tool_use_started not seen yet — keep raw
+      const gate = s.partialInputGate.get(id);
+      if (!gate) {
+        s.partialInputGate.set(id, createStreamingToolInputGateState());
+        gateSkipped = true;
+        continue;
+      }
+      if (!shouldMaterializeStreamingToolInput(gate, raw, s.toolUses[idx].name, now)) {
+        gateSkipped = true;
+        continue;
+      }
+      markStreamingToolInputMaterialized(gate, now, raw.length);
       const fields = extractPartialToolFields(raw);
       const keys = Object.keys(fields);
       if (keys.length === 0) continue;
@@ -2665,6 +2703,14 @@ export class StreamSessionManager {
       this.notifyToolListeners(sessionId);
       this.notifyStreamingEventsListeners(sessionId);
     }
+    // Catch-up: a gate-skipped tool whose deltas have stopped would never
+    // flush again; poll until the window opens (the authoritative tool_use
+    // normally takes over first).
+    if (gateSkipped && s.partialInputFlushTimer === null) {
+      s.partialInputFlushTimer = setTimeout(() => {
+        this.flushPartialToolInputs(sessionId, streamId);
+      }, 250);
+    }
     this.resetIdleTimeout(sessionId);
   }
 
@@ -2673,8 +2719,10 @@ export class StreamSessionManager {
   private dropPartialToolInput(s: SessionState, id?: string): void {
     if (id !== undefined) {
       s.partialToolInputRaw.delete(id);
+      s.partialInputGate.delete(id);
     } else {
       s.partialToolInputRaw.clear();
+      s.partialInputGate.clear();
     }
     if (s.partialToolInputRaw.size === 0 && s.partialInputFlushTimer !== null) {
       clearTimeout(s.partialInputFlushTimer);
@@ -3156,6 +3204,7 @@ export class StreamSessionManager {
     s.toolResults = [];
     s.agentProgressEvents = [];
     s.partialToolInputRaw.clear();
+    s.partialInputGate.clear();
   }
 
   /**
@@ -3561,6 +3610,7 @@ export class StreamSessionManager {
       thinkingEmitTimeout: null,
       pendingThinkingEmit: '',
       partialToolInputRaw: new Map(),
+      partialInputGate: new Map(),
       partialInputFlushTimer: null,
       sendRetryMessage: null,
     };
