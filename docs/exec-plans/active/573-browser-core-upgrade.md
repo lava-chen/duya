@@ -70,6 +70,28 @@
       存在性标记 / Local State 损坏兜底 / 非法目录名过滤 / edge 源）
 - [ ] 真机冒烟待人工：对话框 profile 列表与真实 Chrome 匹配；导入走通
 
+### Phase 2b — 浏览器界面组件（对齐参考产品）代码落地
+
+按用户指定的参考截图范围：导航按钮组、左上角功能菜单、默认页（收藏栏 + 历史
+浏览卡片）；明确排除工具区和左下角输入框。
+
+- [x] 导航组合按钮 `browser-nav-pill`：后退/前进 | 刷新（分隔线），替换原三枚
+      独立 IconButton；对齐参考产品的分组胶囊形态
+- [x] 功能菜单 `BrowserMenu`：工具栏左端入口 + 下拉（在页面中查找 / 缩放
+      −·百分比(点按重置)·+ / 清除浏览数据），仅列真实能力；点外/Esc 关闭
+- [x] 默认页 `NewTabPage`：无显式 URL 的 browser tab 渲染新标签页（不再落
+      google.com）；收藏栏（chip + hover 删除）+ 历史卡片网格（favicon 圆标 +
+      标题 + host，4 列）+ 空态提示 + 清空（确认）
+- [x] 数据层 `src/lib/browser-newtab.ts`：localStorage 存储（history 60 条
+      去重置顶 / favorites 20 条），`isRecordableUrl` 过滤 about:blank；
+      Phase 3 core-db 历史表落地时按此形状迁移
+- [x] 记录挂点：BrowserPanel `did-stop-loading` 单点写入（favicon 同步捕获）；
+      工具栏星标收藏当前页（与地址栏/标题状态联动）
+- [x] i18n `browserMenu.*` + `browserNewtab.*` 各 9/7 键（zh + en）
+- [x] 单测 `browser-newtab.test.ts` 6 项（URL 过滤 / 去重 / 上限 / 收藏切换 / 清空隔离）
+- [ ] 渲染层真机冒烟待人工：Ctrl+T 无 URL 开面板看新标签页；点卡片导航；
+      星标后回到新标签页看收藏栏
+
 ### Phase 3 — 浏览历史 + 新标签页推荐（P1，未开工）
 
 - [ ] core-db history 表（migration）+ 记录挂点（webview did-navigate 主框架）
