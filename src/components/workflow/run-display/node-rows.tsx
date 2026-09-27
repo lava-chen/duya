@@ -86,7 +86,8 @@ export function formatStepSize(bytes: number | undefined): string | null {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function OutputBlock({ result }: { result: unknown }) {
+/** Shared serialized-output block — collapsed to the tail, one click to the full text. */
+export function OutputBlock({ result }: { result: unknown }) {
   const [expanded, setExpanded] = useState(false);
   const text =
     typeof result === 'string' ? result : result === undefined || result === null ? '' : JSON.stringify(result, null, 2);
@@ -115,7 +116,8 @@ function OutputBlock({ result }: { result: unknown }) {
   );
 }
 
-function StatusLamp({ status }: { status: string }) {
+/** Shared status lamp — succeeded / failed lamp, everything else pulses. */
+export function StatusLamp({ status }: { status: string }) {
   if (status === 'succeeded') {
     return <CheckCircleIcon className="shrink-0 text-[var(--success)]" size={13} />;
   }

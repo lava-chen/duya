@@ -782,6 +782,24 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     };
   }, [openOrActivatePage]);
 
+  // Workflow node chips / evidence rows open one node's dedicated detail view
+  // in the side panel's workflow page — same two-layer listen as the run
+  // panel above (page open + in-page focus, reused tabs keep frozen params).
+  useEffect(() => {
+    const handleOpenWorkflowNodePanel = (event: Event) => {
+      const detail = (event as CustomEvent<{ runId?: string; nodeId?: string }>).detail;
+      const runId = typeof detail?.runId === "string" ? detail.runId.trim() : "";
+      const nodeId = typeof detail?.nodeId === "string" ? detail.nodeId.trim() : "";
+      if (!runId || !nodeId) return;
+      openOrActivatePage("workflow", { runId, nodeId });
+    };
+
+    window.addEventListener("duya:open-workflow-node-panel", handleOpenWorkflowNodePanel as EventListener);
+    return () => {
+      window.removeEventListener("duya:open-workflow-node-panel", handleOpenWorkflowNodePanel as EventListener);
+    };
+  }, [openOrActivatePage]);
+
   // Plan 566: background-command rows (indicator popover, task drawer)
   // open the task's output in the side panel's terminal page. The dedup
   // key folds on taskId, so re-clicking a task activates its tab.

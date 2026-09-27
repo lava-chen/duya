@@ -54,7 +54,7 @@ export interface RunChipView {
   /** Display name; only agents carry one (stripped of the `agent:` prefix). */
   name?: string;
   status: StageStepStatus;
-  /** Plan 568: agent chip → `dispatchOpenSessionPanel(childSessionId)` watch pane. */
+  /** Node-card link upgrade: an agent chip enters the child session's chat view. */
   childSessionId?: string;
 }
 
@@ -232,8 +232,9 @@ function ColumnDot({ status }: { status: StageStepStatus }) {
 /**
  * One chip in the stage rail. When `onOpen` is given the chip is interactive:
  * clicking it (or its hover-revealed ↗) opens the node's destination — an
- * agent chip with a child session opens the watch pane
- * (`duya:open-session-panel`), everything else opens the run detail
+ * agent chip with a child session enters the session chat view
+ * (`setActiveThread`), a per-kind chip opens the node's dedicated detail view
+ * (`duya:open-workflow-node-panel`), everything else opens the run detail
  * (`onChipOpen` receives the chip so the caller can decide).
  */
 function RunChip({

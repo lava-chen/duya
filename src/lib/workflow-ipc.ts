@@ -396,6 +396,18 @@ export async function resolveWorkflowPermissionIPC(payload: {
 }
 
 /**
+ * Resolve a store-relative artifact ref (`<runId>/<name><ext>`) to the
+ * absolute path under `~/.duya/workflow-artifacts`. `null` when the bridge is
+ * unavailable or the ref no longer resolves (pre-ref runs, evicted bytes).
+ */
+export async function resolveWorkflowArtifactPathIPC(ref: string): Promise<string | null> {
+  const api = window.electronAPI?.workflow as WorkflowApi | undefined;
+  if (!api?.artifactPath) return null;
+  const res = await api.artifactPath(ref);
+  return res?.ok && res.path ? res.path : null;
+}
+
+/**
  * Open a published artifact in the file-preview panel. The chip only carries
  * the store-relative ref (`<runId>/<name><ext>`), so main resolves it to the
  * absolute path under `~/.duya/workflow-artifacts` first; a ref that fails to
@@ -403,15 +415,13 @@ export async function resolveWorkflowPermissionIPC(payload: {
  * decides the fallback.
  */
 export async function openWorkflowArtifactIPC(ref: string): Promise<{ ok: boolean; error?: string }> {
-  const api = window.electronAPI?.workflow as WorkflowApi | undefined;
-  if (!api?.artifactPath) return { ok: false, error: 'workflow bridge unavailable' };
-  const res = await api.artifactPath(ref);
-  if (!res?.ok || !res.path) return { ok: false, error: res?.error ?? 'resolve failed' };
+  const path = await resolveWorkflowArtifactPathIPC(ref);
+  if (!path) return { ok: false, error: 'resolve failed' };
   window.dispatchEvent(
     new CustomEvent('duya:open-file-preview-panel', {
       // Artifacts live under `~/.duya/workflow-artifacts` — outside any
       // session workspace, so the preview opens standalone (no project tree).
-      detail: { filePath: res.path, standalone: true },
+      detail: { filePath: path, standalone: true },
     }),
   );
   return { ok: true };

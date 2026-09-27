@@ -12,7 +12,9 @@
 //     status dot, name and an honest n/m step counter. The per-node chips
 //     (「脚本」 per column for tool work, one per agent) stay collapsed by
 //     default; one click on the rail reveals them, clicking again hides them.
-//     Chips are interactive: click / ↗ opens the run in the side panel.
+//     Chips are interactive: an agent chip enters its child session's chat
+//     view in the main column, per-kind chips open the node's dedicated
+//     detail viewer in the side panel, script chips open the run detail.
 //     Terminal cards add artifact chips and, when the run failed or was
 //     stopped, the reason line. The four numeric figures (elapsed / tokens /
 //     subagents / phases) deliberately live in the side panel's run detail
@@ -33,12 +35,13 @@ import {
   StopIcon,
 } from '@/components/icons';
 import { useTranslation } from '@/hooks/useTranslation';
-import { dispatchOpenSessionPanel } from '@/lib/open-session-panel-event';
+import { useConversationStore } from '@/stores/conversation-store';
+import { dispatchOpenWorkflowNodePanel } from '@/lib/open-workflow-node-panel-event';
 import {
   runUiStatus,
   type WorkflowRunUiStatus,
 } from '@/components/workflow/run-display/run-status';
-import { buildStageColumns, StageColumns } from '@/components/workflow/run-display/stage-columns';
+import { buildStageColumns, StageColumns, type RunChipView } from '@/components/workflow/run-display/stage-columns';
 import { journalToArtifacts, journalToSteps } from '@/components/workflow/run-display/journal-steps';
 import {
   cancelWorkflowRunIPC,
@@ -128,15 +131,20 @@ export function WorkflowRunCard({ runId, run: runProp }: WorkflowRunCardProps) {
     window.dispatchEvent(new CustomEvent('duya:open-workflow-run-panel', { detail: { runId: effectiveRunId } }));
   };
 
-  // Plan 568 (ZCode actor-pane parity): an agent chip with a child session
-  // opens the subagent's watch pane (the read-only SessionMessagesPanel);
-  // every other chip keeps opening the run detail.
-  // Plan 568 (ZCode actor-pane parity): an agent chip with a child session
-  // opens the subagent's watch pane (the read-only SessionMessagesPanel);
-  // every other chip keeps opening the run detail.
-  const openChip = (chip: { childSessionId?: string; name?: string }) => {
+  // Node-card link upgrade (2026-09-27, after plan 568): an agent chip with
+  // a child session enters that session's chat view in the main column
+  // (setActiveThread — the read-only side pane remains available from the
+  // subagent tool rows / task drawer). Per-kind chips (decision / human /
+  // browser) open the node's dedicated detail viewer in the workflow panel;
+  // the aggregated script chip has no single node behind it, so it keeps
+  // opening the run detail.
+  const openChip = (chip: RunChipView) => {
     if (chip.childSessionId) {
-      dispatchOpenSessionPanel(chip.childSessionId, chip.name);
+      void useConversationStore.getState().setActiveThread(chip.childSessionId);
+      return;
+    }
+    if (chip.kind !== 'script') {
+      dispatchOpenWorkflowNodePanel(effectiveRunId, chip.key);
       return;
     }
     openDetail();

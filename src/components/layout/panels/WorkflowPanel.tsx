@@ -26,7 +26,7 @@
  * cancelling is a store-level action exposed through `workflow:cancel`.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "@/hooks/useTranslation";
 import {
@@ -42,8 +42,9 @@ import {
 } from "@/components/icons";
 import { WorkflowLaunchDialog } from "@/components/workflow/WorkflowLaunchDialog";
 import { WorkflowRunCard } from "@/components/workflow/WorkflowRunCard";
+import { NodeDetailView } from "@/components/workflow/run-display/node-detail";
 import { openWorkflowArtifactIPC } from "@/lib/workflow-ipc";
-import { dispatchOpenSessionPanel } from "@/lib/open-session-panel-event";
+import { useConversationStore } from "@/stores/conversation-store";
 import {
   journalToArtifacts,
   journalToSteps,
@@ -426,15 +427,20 @@ function CopyablePath({ path }: { path: string }) {
   );
 }
 
-/** One journal row: action + outcome evidence (ZCode replay-row parity). */
+/** One journal row: action + outcome evidence (ZCode replay-row parity).
+ *  When `onOpenNode` is given the row opens the node's dedicated detail
+ *  viewer (node-detail.tsx); without it the row falls back to expanding the
+ *  raw serialized result inline. */
 export function EvidenceRow({
   record,
   index,
   total,
+  onOpenNode,
 }: {
   record: WorkflowJournalRecord;
   index?: number;
   total?: number;
+  onOpenNode?: (nodeId: string) => void;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -452,8 +458,14 @@ export function EvidenceRow({
       <button
         type="button"
         className="flex w-full items-center gap-2 text-left text-xs"
-        aria-expanded={open}
-        onClick={() => hasDetail && setOpen((v) => !v)}
+        aria-expanded={onOpenNode ? undefined : open}
+        onClick={() => {
+          if (onOpenNode) {
+            onOpenNode(record.nodeId);
+            return;
+          }
+          if (hasDetail) setOpen((v) => !v);
+        }}
       >
         <span className={`h-2 w-2 shrink-0 rounded-full ${lampClass}`} />
         <span className="w-28 shrink-0 truncate font-mono text-[var(--text)]">{record.nodeId}</span>
@@ -477,10 +489,10 @@ export function EvidenceRow({
           {record.outputSize !== undefined && <span>{formatBytes(record.outputSize)}</span>}
           {record.childSessionId && (
             // A span, not a button — this row already IS a button, and
-            // nested interactive elements are invalid HTML. Clicking opens
-            // the node's subagent session in the sidebar (ZCode-parity
-            // actor-session pane); stopPropagation keeps the row's own
-            // expand/collapse toggle out of the way.
+            // nested interactive elements are invalid HTML. Clicking enters
+            // the node's subagent session chat view in the main column
+            // (setActiveThread — the same path the run card's agent chip
+            // takes); stopPropagation keeps the row's own handler out.
             <span
               role="button"
               tabIndex={0}
@@ -488,20 +500,20 @@ export function EvidenceRow({
               title={t("panel.workflow.viewSession")}
               onClick={(e) => {
                 e.stopPropagation();
-                dispatchOpenSessionPanel(record.childSessionId!, record.action ?? record.nodeId);
+                void useConversationStore.getState().setActiveThread(record.childSessionId!);
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
                   e.stopPropagation();
-                  dispatchOpenSessionPanel(record.childSessionId!, record.action ?? record.nodeId);
+                  void useConversationStore.getState().setActiveThread(record.childSessionId!);
                 }
               }}
             >
               {record.childSessionId.slice(0, 8)}
             </span>
           )}
-          {hasDetail && (open ? <CaretDownIcon className="h-3 w-3" /> : <CaretRightIcon className="h-3 w-3" />)}
+          {!onOpenNode && hasDetail && (open ? <CaretDownIcon className="h-3 w-3" /> : <CaretRightIcon className="h-3 w-3" />)}
         </span>
       </button>
       {open && hasDetail && (
@@ -555,7 +567,14 @@ function runStatusLamp(status: string): string {
   return "bg-[var(--text-muted)]";
 }
 
-export function PhaseTimeline({ phases }: { phases: PhaseDetail[] }) {
+export function PhaseTimeline({
+  phases,
+  onOpenNode,
+}: {
+  phases: PhaseDetail[];
+  /** When given, evidence rows open the node's dedicated detail viewer. */
+  onOpenNode?: (nodeId: string) => void;
+}) {
   const { t } = useTranslation();
   const [openId, setOpenId] = useState<string | null>(null);
   if (phases.length === 0) return null;
@@ -601,6 +620,7 @@ export function PhaseTimeline({ phases }: { phases: PhaseDetail[] }) {
                     record={s as unknown as WorkflowJournalRecord}
                     index={i}
                     total={phase.total}
+                    onOpenNode={onOpenNode}
                   />
                 ))}
               </div>
@@ -899,13 +919,28 @@ export function RunsTab() {
  * stop/delete affordances that used to live on the list rows, the lineage
  * note, the summary strip, the phase timeline with per-step evidence rows and
  * the artifacts section.
+ *
+ * `focusNodeId` pins ONE node's dedicated detail viewer above the timeline
+ * (node-detail.tsx) — the landing target of per-kind stage-rail chips and
+ * evidence-row clicks.
  */
-export function RunDetailView({ runId, onBack }: { runId: string; onBack: () => void }) {
+export function RunDetailView({
+  runId,
+  onBack,
+  focusNodeId,
+  onFocusNodeChange,
+}: {
+  runId: string;
+  onBack: () => void;
+  focusNodeId?: string;
+  onFocusNodeChange?: (nodeId: string | undefined) => void;
+}) {
   const { t } = useTranslation();
   const [row, setRow] = useState<WorkflowRunRow | null>(null);
   const [missing, setMissing] = useState(false);
   const [journal, setJournal] = useState<WorkflowJournalRecord[] | null>(null);
   const [journalError, setJournalError] = useState(false);
+  const nodeDetailRef = useRef<HTMLDivElement | null>(null);
 
   const refresh = useCallback(() => {
     api()
@@ -943,6 +978,15 @@ export function RunDetailView({ runId, onBack }: { runId: string; onBack: () => 
   const stepTotal = detail.reduce((n, p) => n + p.total, 0);
   const stepDone = detail.reduce((n, p) => n + p.done, 0);
   const artifacts = useMemo(() => computeArtifacts(journal ?? []), [journal]);
+
+  // A chip / evidence-row click lands the node detail at the top of this
+  // view; bring it into sight even when the panel is scrolled deep into the
+  // timeline. The journal may not have the node's records yet (live runs) —
+  // re-scroll on the next journal landing too.
+  useEffect(() => {
+    if (!focusNodeId) return;
+    nodeDetailRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, [focusNodeId, journal]);
 
   const onDelete = useCallback(() => {
     void api()?.delete(runId).then(() => onBack());
@@ -1041,8 +1085,21 @@ export function RunDetailView({ runId, onBack }: { runId: string; onBack: () => 
             <div className="pt-2 text-[var(--text-muted)]">{t("panel.workflow.journalUnavailable")}</div>
           )}
 
+          {focusNodeId && journal && (
+            <div ref={nodeDetailRef} className="pt-2" data-testid={`workflow-node-detail-${focusNodeId}`}>
+              <NodeDetailView
+                records={journal}
+                nodeId={focusNodeId}
+                onClose={() => onFocusNodeChange?.(undefined)}
+              />
+            </div>
+          )}
+
           <div className="pt-1" data-testid={`workflow-phase-line-${runId}`}>
-            <PhaseTimeline phases={detail} />
+            <PhaseTimeline
+              phases={detail}
+              onOpenNode={onFocusNodeChange ? (nodeId) => onFocusNodeChange(nodeId) : undefined}
+            />
           </div>
 
           {artifacts.length > 0 && (
@@ -1106,10 +1163,15 @@ export function WorkflowPanel({ projectDir, tab: tabDesc }: WorkflowPanelProps =
   // opens the run detail sub-view (`params.runId` seeds it on a fresh tab;
   // panel-tab params are frozen on reuse, so the same
   // `duya:open-workflow-run-panel` event also drives re-open below).
+  // `duya:open-workflow-node-panel` additionally focuses ONE node's dedicated
+  // detail viewer inside that run detail (node-card chip links).
   const paramRunId =
     typeof tabDesc?.params?.runId === "string" ? tabDesc.params.runId.trim() : "";
+  const paramNodeId =
+    typeof tabDesc?.params?.nodeId === "string" ? tabDesc.params.nodeId.trim() : "";
   const [tab, setTab] = useState<"definitions" | "runs">(paramRunId ? "runs" : "definitions");
   const [detailRunId, setDetailRunId] = useState<string>(paramRunId);
+  const [focusNodeId, setFocusNodeId] = useState<string>(paramNodeId);
 
   useEffect(() => {
     const handleOpenRunPanel = (event: Event) => {
@@ -1117,10 +1179,22 @@ export function WorkflowPanel({ projectDir, tab: tabDesc }: WorkflowPanelProps =
       if (typeof runId !== "string" || !runId.trim()) return;
       setTab("runs");
       setDetailRunId(runId.trim());
+      setFocusNodeId("");
+    };
+    const handleOpenNodePanel = (event: Event) => {
+      const detail = (event as CustomEvent<{ runId?: string; nodeId?: string }>).detail;
+      const runId = typeof detail?.runId === "string" ? detail.runId.trim() : "";
+      const nodeId = typeof detail?.nodeId === "string" ? detail.nodeId.trim() : "";
+      if (!runId || !nodeId) return;
+      setTab("runs");
+      setDetailRunId(runId);
+      setFocusNodeId(nodeId);
     };
     window.addEventListener("duya:open-workflow-run-panel", handleOpenRunPanel as EventListener);
+    window.addEventListener("duya:open-workflow-node-panel", handleOpenNodePanel as EventListener);
     return () => {
       window.removeEventListener("duya:open-workflow-run-panel", handleOpenRunPanel as EventListener);
+      window.removeEventListener("duya:open-workflow-node-panel", handleOpenNodePanel as EventListener);
     };
   }, []);
 
@@ -1153,7 +1227,12 @@ export function WorkflowPanel({ projectDir, tab: tabDesc }: WorkflowPanelProps =
         {tab === "definitions" ? (
           <DefinitionsTab projectDir={resolvedProjectDir} onLaunched={() => setTab("runs")} />
         ) : detailRunId ? (
-          <RunDetailView runId={detailRunId} onBack={() => setDetailRunId("")} />
+          <RunDetailView
+            runId={detailRunId}
+            onBack={() => setDetailRunId("")}
+            focusNodeId={focusNodeId}
+            onFocusNodeChange={(nodeId) => setFocusNodeId(nodeId ?? "")}
+          />
         ) : (
           <RunsTab />
         )}
