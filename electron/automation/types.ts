@@ -11,6 +11,14 @@
 export type ConcurrencyPolicy = 'skip' | 'parallel' | 'replace';
 export type CronScheduleKind = 'once' | 'every' | 'cron';
 
+/**
+ * Permission profile applied to a standalone cron run's session (plan 574).
+ * Same vocabulary as the session row's `permission_mode`; the worker maps
+ * `full_access` → bypassPermissions. Null/undefined = 'auto' (the legacy
+ * hard-coded default for headless cron sessions).
+ */
+export type CronPermissionMode = 'default' | 'auto' | 'full_access';
+
 export interface CronEverySchedule {
   kind: 'every';
   every: string; // human-friendly duration: "5m", "1h", "1d"
@@ -121,6 +129,10 @@ export interface AutomationCron {
    * event triggers compose (grok group parity) — both fire the same prompt.
    */
   eventTriggers?: RoutineEventTrigger[];
+  /** Session permission profile for standalone runs (plan 574); unset = 'auto'. */
+  permissionMode?: CronPermissionMode | null;
+  /** Reasoning effort for the run; unset = 'off' (legacy default). */
+  effort?: string | null;
   /** Computed on read from (schedule, lastRunAt, now); not persisted. */
   nextRunAt: number | null;
   createdAt: number;
@@ -158,6 +170,10 @@ export interface CreateAutomationCronInput {
   agent?: string;
   /** Event listeners (P2.3d); at least one of schedule/eventTriggers required. */
   eventTriggers?: RoutineEventTrigger[];
+  /** Session permission profile for standalone runs (plan 574); omit = 'auto'. */
+  permissionMode?: CronPermissionMode;
+  /** Reasoning effort for the run (plan 574); omit = 'off'. */
+  effort?: string;
 }
 
 export interface UpdateAutomationCronInput {
@@ -173,6 +189,10 @@ export interface UpdateAutomationCronInput {
   agent?: string | null;
   /** Replace the event listener set (grok update semantics: full list). */
   eventTriggers?: RoutineEventTrigger[];
+  /** Session permission profile for standalone runs (plan 574). */
+  permissionMode?: CronPermissionMode;
+  /** Reasoning effort for the run (plan 574); empty string resets to 'off'. */
+  effort?: string;
 }
 
 export interface AutomationTemplate {

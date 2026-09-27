@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import type {
   AutomationCron,
   AutomationTemplate,
-  ConcurrencyPolicy,
   CreateAutomationCronInput,
   CronRunHandle,
   CronSessionSummary,
@@ -26,12 +25,11 @@ import {
   SpinnerGapIcon,
   SquaresFourIcon,
   ChatCirclePlusIcon,
-  MonitorIcon,
   ClockCounterClockwiseIcon,
   TrashIcon,
-  FolderIcon,
 } from '@/components/icons';
 import { AutomationEmptyState } from './AutomationEmptyState';
+import { CronEditorModal } from './CronEditorModal';
 import { MacPermissionsCard } from './MacPermissionsCard';
 import { QuickCronChatModal } from './QuickCronChatModal';
 import { TemplateMarketModal } from './TemplateMarketModal';
@@ -39,7 +37,6 @@ import { useConversationStore } from '@/stores/conversation-store';
 import { useTranslation } from '@/hooks/useTranslation';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
-import { Input } from '@/components/ui/Input';
 import { Switch } from '@/components/ui/Switch';
 import {
   PageFrame,
@@ -47,17 +44,7 @@ import {
   PageTabs,
   PageCard,
   EmptyState,
-  Modal,
 } from '@/components/ui/page';
-import {
-  createDefaultScheduleDraft,
-  describeScheduleDraft,
-  draftToSchedule,
-  scheduleToDraft,
-  type ScheduleDraft,
-  PRESET_LABELS,
-  WEEKDAYS,
-} from './cron-schedule';
 
 function buildCronCreationPrompt(userPrompt: string, templatePrompt?: string): string {
   const sections = [
@@ -90,30 +77,12 @@ function buildCronCreationPrompt(userPrompt: string, templatePrompt?: string): s
   return sections.join('\n');
 }
 
-type EditorState = {
-  id?: string;
-  name: string;
-  prompt: string;
-  concurrencyPolicy: ConcurrencyPolicy;
-  maxRetries: string;
-  enabled: boolean;
-  model: string;
-  workingDirectory: string;
-  scheduleDraft: ScheduleDraft;
-};
+type TabKey = 'configured' | 'history' | 'templates';
 
 function formatDateShort(value: number | null): string {
   if (!value) return '-';
   const d = new Date(value);
   return `${d.getMonth() + 1}月${d.getDate()}日 ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
-}
-
-function formatInterval(ms: number | null): string {
-  const value = ms ?? 0;
-  if (value >= 86_400_000 && value % 86_400_000 === 0) return `每 ${value / 86_400_000} 天`;
-  if (value >= 3_600_000 && value % 3_600_000 === 0) return `每 ${value / 3_600_000} 小时`;
-  if (value >= 60_000 && value % 60_000 === 0) return `每 ${value / 60_000} 分钟`;
-  return `每 ${Math.max(1, Math.round(value / 1000))} 秒`;
 }
 
 function formatCronSchedule(expression: string | null): string {
@@ -161,33 +130,6 @@ function getFriendlySchedule(cron: AutomationCron): string {
       return '未设置计划';
   }
 }
-
-const DEFAULT_EDITOR: EditorState = {
-  name: '',
-  prompt: '',
-  concurrencyPolicy: 'skip',
-  maxRetries: '3',
-  enabled: true,
-  model: '',
-  workingDirectory: '',
-  scheduleDraft: createDefaultScheduleDraft(),
-};
-
-function editorStateFromCron(cron: AutomationCron): EditorState {
-  return {
-    id: cron.id,
-    name: cron.name,
-    prompt: cron.prompt,
-    concurrencyPolicy: cron.concurrencyPolicy,
-    maxRetries: String(cron.maxRetries),
-    enabled: cron.enabled,
-    model: cron.model,
-    workingDirectory: cron.workingDirectory || '',
-    scheduleDraft: scheduleToDraft(cron),
-  };
-}
-
-type TabKey = 'configured' | 'history' | 'templates';
 
 export function AutomationView() {
   const { t } = useTranslation();
@@ -683,11 +625,15 @@ export function AutomationView() {
       />
 
       {/* Create / Edit Cron Modal */}
-      <CronEditModal
+      <CronEditorModal
         cron={editingCron}
         isOpen={editModalOpen}
         onClose={handleCloseEditModal}
         onSave={handleSaveCron}
+        onDelete={(deleted) => {
+          handleCloseEditModal();
+          void removeCron(deleted);
+        }}
         availableModels={availableModels}
         modelsLoading={modelsLoading}
         saving={saving}
@@ -813,278 +759,3 @@ function CronListItem({
   );
 }
 
-function CronEditModal({
-  cron,
-  isOpen,
-  onClose,
-  onSave,
-  availableModels,
-  modelsLoading,
-  saving,
-}: {
-  cron: AutomationCron | null;
-  isOpen: boolean;
-  onClose: () => void;
-  onSave: (cronId: string | undefined, data: CreateAutomationCronInput) => Promise<void>;
-  availableModels: ModelOption[];
-  modelsLoading: boolean;
-  saving: boolean;
-}) {
-  const { t } = useTranslation();
-  const initial = cron ? editorStateFromCron(cron) : DEFAULT_EDITOR;
-  const [editor, setEditor] = useState<EditorState>(initial);
-  const [modelError, setModelError] = useState<string | null>(null);
-  const [formError, setFormError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (isOpen) {
-      setEditor(initial);
-      setModelError(null);
-      setFormError(null);
-    }
-  }, [isOpen, cron]);
-
-  const handleSubmit = async () => {
-    setModelError(null);
-    setFormError(null);
-
-    if (!editor.name.trim()) {
-      setFormError('请输入任务名称。');
-      return;
-    }
-    if (!editor.prompt.trim()) {
-      setFormError('请输入每次运行时要执行的提示词。');
-      return;
-    }
-    if (!editor.model || !editor.model.trim()) {
-      setModelError(t('automation.modelRequired'));
-      return;
-    }
-
-    try {
-      const maxRetries = Number(editor.maxRetries || '3');
-      const schedule = draftToSchedule(editor.scheduleDraft);
-      if (schedule.kind === 'cron' && !schedule.expr?.trim()) throw new Error('请输入 Cron 表达式。');
-      if (schedule.kind === 'once' && !schedule.at) throw new Error('请选择运行时间。');
-      if (editor.scheduleDraft.endRepeat === 'on' && !editor.scheduleDraft.endAt) throw new Error('请选择结束重复时间。');
-
-      await onSave(cron?.id, {
-        name: editor.name.trim(),
-        schedule,
-        prompt: editor.prompt.trim(),
-        model: editor.model.trim(),
-        workingDirectory: editor.workingDirectory.trim() || undefined,
-        concurrencyPolicy: editor.concurrencyPolicy,
-        maxRetries,
-        enabled: editor.enabled,
-      });
-      onClose();
-    } catch (error) {
-      setFormError(error instanceof Error ? error.message : String(error));
-    }
-  };
-
-  const updateDraft = (patch: Partial<ScheduleDraft>) => {
-    setEditor((prev) => ({ ...prev, scheduleDraft: { ...prev.scheduleDraft, ...patch } }));
-  };
-
-  const scheduleOptions: { value: ScheduleDraft['preset']; label: string }[] = [
-    { value: 'daily', label: PRESET_LABELS.daily },
-    { value: 'weekly', label: PRESET_LABELS.weekly },
-    { value: 'weekdays', label: PRESET_LABELS.weekdays },
-    { value: 'hourly', label: PRESET_LABELS.hourly },
-    { value: 'monthly', label: PRESET_LABELS.monthly },
-    { value: 'once', label: PRESET_LABELS.once },
-    { value: 'custom', label: PRESET_LABELS.custom },
-  ];
-
-  const workingDirDisplay = editor.workingDirectory
-    ? editor.workingDirectory.split(/[/\\]/).pop() || editor.workingDirectory
-    : '默认工作目录';
-
-  const handlePickWorkingDir = async () => {
-    if (!window.electronAPI?.dialog?.openFolder) return;
-    const result = await window.electronAPI.dialog.openFolder({
-      title: t('automation.workingDirectory'),
-      defaultPath: editor.workingDirectory || undefined,
-    });
-    if (!result.canceled && result.filePaths[0]) {
-      setEditor((prev) => ({ ...prev, workingDirectory: result.filePaths[0] }));
-    }
-  };
-
-  if (!isOpen) return null;
-
-  return (
-    <Modal
-      open={isOpen}
-      onClose={onClose}
-      title={cron ? t('automation.editTask') : t('automation.newTask')}
-      maxWidth={672}
-      headerActions={
-        cron ? (
-          <Button type="button" variant="ghost" size="sm" onClick={onClose}>
-            {t('automation.viewHistory')}
-          </Button>
-        ) : undefined
-      }
-      footer={
-        <>
-          <div className="mr-auto flex items-center gap-2 text-xs text-muted-foreground">
-            <MonitorIcon size={14} />
-            <span className="truncate max-w-[220px]">{workingDirDisplay}</span>
-          </div>
-          <Button type="button" variant="ghost" size="md" onClick={onClose}>
-            {t('automation.cancel')}
-          </Button>
-          <Button
-            type="button"
-            variant="primary"
-            size="md"
-            disabled={saving}
-            onClick={() => {
-              void handleSubmit();
-            }}
-          >
-            {saving ? (
-              <>
-                <SpinnerGapIcon size={16} className="animate-spin" />
-                {t('automation.saving')}
-              </>
-            ) : (
-              <>{cron ? t('automation.saveChanges') : t('automation.createAutomation')}</>
-            )}
-          </Button>
-        </>
-      }
-    >
-      <div className="space-y-5">
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground">{t('automation.name')}</label>
-              <Input
-                type="text"
-                size="md"
-                placeholder={t('automation.namePlaceholder')}
-                value={editor.name}
-                onChange={(event) => setEditor((prev) => ({ ...prev, name: event.target.value }))}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground">{t('automation.triggerTime')}</label>
-              <div className="flex items-center gap-3">
-                <select
-                  className="h-10 rounded-lg border border-border/50 bg-chip px-3 text-sm text-foreground outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/50"
-                  value={editor.scheduleDraft.preset}
-                  onChange={(event) => updateDraft({ preset: event.target.value as ScheduleDraft['preset'] })}
-                >
-                  {scheduleOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                {editor.scheduleDraft.preset !== 'once' && editor.scheduleDraft.preset !== 'custom' && (
-                  <Input
-                    type="time"
-                    size="md"
-                    value={editor.scheduleDraft.time}
-                    onChange={(event) => updateDraft({ time: event.target.value })}
-                    className="w-32"
-                  />
-                )}
-                {editor.scheduleDraft.preset === 'weekly' && (
-                  <select
-                    className="h-10 rounded-lg border border-border/50 bg-chip px-3 text-sm text-foreground outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/50"
-                    value={editor.scheduleDraft.weekday}
-                    onChange={(event) => updateDraft({ weekday: Number(event.target.value) })}
-                  >
-                    {WEEKDAYS.map((day) => (
-                      <option key={day.value} value={day.value}>
-                        {day.label}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                {editor.scheduleDraft.preset === 'monthly' && (
-                  <Input
-                    type="number"
-                    size="md"
-                    min={1}
-                    max={31}
-                    value={editor.scheduleDraft.monthDay}
-                    onChange={(event) => updateDraft({ monthDay: Number(event.target.value) })}
-                    className="w-20"
-                  />
-                )}
-                {editor.scheduleDraft.preset === 'custom' && (
-                  <Input
-                    type="text"
-                    size="md"
-                    placeholder="0 9 * * *"
-                    value={editor.scheduleDraft.cronExpr}
-                    onChange={(event) => updateDraft({ cronExpr: event.target.value })}
-                    className="font-mono"
-                  />
-                )}
-                {editor.scheduleDraft.preset === 'once' && (
-                  <Input
-                    type="datetime-local"
-                    size="md"
-                    value={editor.scheduleDraft.at}
-                    onChange={(event) => updateDraft({ at: event.target.value })}
-                  />
-                )}
-              </div>
-              <p className="text-xs text-muted-foreground">{describeScheduleDraft(editor.scheduleDraft)}</p>
-            </div>
-
-            <div className="space-y-2">
-              <textarea
-                className="h-[120px] w-full resize-none rounded-lg border border-border/50 bg-chip px-3 py-2.5 text-sm text-foreground outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/50"
-                placeholder={t('automation.promptPlaceholder')}
-                value={editor.prompt}
-                onChange={(event) => setEditor((prev) => ({ ...prev, prompt: event.target.value }))}
-              />
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">{t('automation.model')}</label>
-                <ModelSelector
-                  models={availableModels}
-                  selectedModelId={editor.model}
-                  onSelect={(modelId) => {
-                    setEditor((prev) => ({ ...prev, model: modelId }));
-                    setModelError(null);
-                  }}
-                  loading={modelsLoading}
-                  variant="full"
-                />
-                {modelError && <p className="text-xs text-error">{modelError}</p>}
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">{t('automation.workingDirectory')}</label>
-                <button
-                  type="button"
-                  onClick={() => void handlePickWorkingDir()}
-                  className="flex h-10 w-full items-center gap-2 rounded-lg border border-border/50 bg-chip px-3 text-sm text-foreground outline-none transition-colors hover:bg-[var(--surface-hover)] focus:border-accent/60 focus:ring-2 focus:ring-accent/50"
-                >
-                  <FolderIcon size={16} className="shrink-0 text-muted-foreground" />
-                  <span className="truncate">{editor.workingDirectory || '默认工作目录'}</span>
-                </button>
-              </div>
-            </div>
-
-            {formError && (
-              <div
-                className="rounded-xl border border-error/40 bg-error-soft px-4 py-3 text-sm text-error"
-                role="alert"
-              >
-                {formError}
-              </div>
-            )}
-      </div>
-    </Modal>
-  );
-}

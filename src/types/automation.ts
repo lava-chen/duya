@@ -9,6 +9,14 @@
 export type ConcurrencyPolicy = 'skip' | 'parallel' | 'replace';
 export type CronScheduleKind = 'once' | 'every' | 'cron';
 
+/**
+ * Permission profile applied to a standalone cron run's session (plan 574).
+ * Same vocabulary as the session row's `permission_mode`; the worker maps
+ * `full_access` → bypassPermissions. Null/undefined = 'auto' (the legacy
+ * hard-coded default for headless cron sessions).
+ */
+export type CronPermissionMode = 'default' | 'auto' | 'full_access';
+
 /** Event listener specs (P2.3d) — shape validated main-side. */
 export interface GithubEventTrigger {
   type: 'github';
@@ -61,6 +69,10 @@ export interface AutomationCron {
    * named bot and fires into its resident session. Null = standalone cron.
    */
   agent?: string | null;
+  /** Session permission profile for standalone runs (plan 574); unset = 'auto'. */
+  permissionMode?: CronPermissionMode | null;
+  /** Reasoning effort for the run; unset = 'off' (legacy default). */
+  effort?: string | null;
   /** Event listeners (P2.3d); at least one of schedule/eventTriggers exists. */
   eventTriggers?: RoutineEventTrigger[];
   /** Computed on read from (schedule, lastRunAt, now); not persisted. */
@@ -97,6 +109,10 @@ export interface CreateAutomationCronInput {
   enabled?: boolean;
   /** Bot binding slug (Plan 476 P2.3b); omit for a standalone cron. */
   agent?: string;
+  /** Session permission profile for standalone runs (plan 574); omit = 'auto'. */
+  permissionMode?: CronPermissionMode;
+  /** Reasoning effort for the run (plan 574); omit = 'off'. */
+  effort?: string;
 }
 
 export interface UpdateAutomationCronInput {
@@ -110,6 +126,10 @@ export interface UpdateAutomationCronInput {
   enabled?: boolean;
   /** Omitted fields (including the bot binding) are preserved on update. */
   agent?: string | null;
+  /** Session permission profile for standalone runs (plan 574). */
+  permissionMode?: CronPermissionMode;
+  /** Reasoning effort for the run (plan 574); empty string resets to 'off'. */
+  effort?: string;
 }
 
 export interface AutomationTemplate {

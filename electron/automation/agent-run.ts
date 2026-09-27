@@ -45,11 +45,20 @@ export interface ChatRunOptions {
   runOrigin?: RunOrigin;
   wakeRun?: boolean;
   wakeless?: boolean;
-  effort?: 'off' | 'low' | 'medium' | 'high';
+  effort?: 'off' | 'low' | 'medium' | 'high' | 'max';
   llmRequestTimeoutMs?: number;
   platform?: string;
   securityScanEnabled?: boolean;
   permissionRules?: unknown;
+}
+
+/**
+ * Validate a per-cron permission profile (plan 574). Anything outside the
+ * session-profile vocabulary falls back to 'auto' — the hard-coded default
+ * cron sessions used before per-cron profiles existed.
+ */
+function normalizeSessionPermissionMode(value: string | null | undefined): string {
+  return value === 'default' || value === 'auto' || value === 'full_access' ? value : 'auto';
 }
 
 export interface RunPromptInSessionOptions {
@@ -87,6 +96,8 @@ export function createCronSessionRow(params: {
   workingDirectory: string;
   cronId: string;
   prompt: string;
+  /** Per-cron permission profile (plan 574); invalid/absent values keep the legacy 'auto'. */
+  permissionMode?: string | null;
 }): void {
   const { sessions, messageLog } = getCoreStores();
   const created = !sessions.get(params.sessionId);
@@ -99,14 +110,14 @@ export function createCronSessionRow(params: {
       workingDirectory: params.workingDirectory,
       status: 'active',
       mode: 'chat',
-      // Cron runs are headless: there is no user to answer an ask-mode
-      // permission prompt, so 'default' would auto-deny every out-of-
-      // workspace edit after the 5-minute prompt timeout (observed:
-      // "Permission denied by user" on edit + eventual "cron run timeout").
-      // 'auto' trusts the workspace and routes workspace escapes through the
-      // LLM classifier, which can approve legitimate scheduled work. Same
-      // model the gateway sessions use (GATEWAY_PERMISSION_PROFILE).
-      permissionMode: 'auto',
+      // Cron runs are headless: there is no user watching the session in
+      // real time, so the profile decides whether tool approvals pause the
+      // run. 'auto' (the default) trusts the workspace and routes workspace
+      // escapes through the LLM classifier — same model the gateway sessions
+      // use (GATEWAY_PERMISSION_PROFILE). 'default' pauses on approvals as
+      // persistent cards (plan 498) the user can answer later; 'full_access'
+      // skips approvals entirely. Per-cron override (plan 574).
+      permissionMode: normalizeSessionPermissionMode(params.permissionMode),
       extensions: {
         source: 'cron',
         cron_job_id: params.cronId,
@@ -284,6 +295,12 @@ export function interruptCronSession(sessionId: string): void {
 export async function runCronInSession(job: AutomationCron, sessionId: string): Promise<RunPromptResult> {
   const { provider, model } = resolveCronProvider(job.model);
   const workingDirectory = prepareAutomationWorkspace(job.workingDirectory);
+  const permissionMode = normalizeSessionPermissionMode(job.permissionMode);
+  // Per-cron reasoning effort (plan 574); unset/empty = legacy 'off'.
+  const effort: ChatRunOptions['effort'] =
+    job.effort === 'low' || job.effort === 'medium' || job.effort === 'high' || job.effort === 'max'
+      ? job.effort
+      : 'off';
   createCronSessionRow({
     sessionId,
     title: `[Cron] ${job.name}`,
@@ -292,6 +309,7 @@ export async function runCronInSession(job: AutomationCron, sessionId: string): 
     workingDirectory,
     cronId: job.id,
     prompt: job.prompt,
+    permissionMode,
   });
 
   getLogger().info('Cron run starting', {
@@ -299,7 +317,8 @@ export async function runCronInSession(job: AutomationCron, sessionId: string): 
     sessionId,
     model,
     provider: provider.id,
-    effort: 'off',
+    effort,
+    permissionMode,
     llmRequestTimeoutMs: 240_000,
   }, LogComponent.Automation);
 
@@ -310,7 +329,7 @@ export async function runCronInSession(job: AutomationCron, sessionId: string): 
     providerConfig: buildCronProviderConfig({ provider, model }),
     options: {
       agentProfileId: 'cron',
-      effort: 'off',
+      effort,
       llmRequestTimeoutMs: 240_000,
       runOrigin: 'background',
     },

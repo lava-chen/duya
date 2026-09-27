@@ -42,6 +42,19 @@ import type { ListenerStateFile, RoutineEventTrigger } from './types.js';
 
 const DEFAULT_MAX_RETRIES = 3;
 
+/** Valid per-cron session permission profiles (plan 574). Unknown values are dropped, not thrown. */
+const CRON_PERMISSION_MODES = new Set(['default', 'auto', 'full_access']);
+/** Valid per-cron reasoning efforts (plan 574). Unknown values are dropped, not thrown. */
+const CRON_EFFORTS = new Set(['off', 'low', 'medium', 'high', 'max']);
+
+function normalizeCronPermissionMode(value: string | null | undefined): string | undefined {
+  return typeof value === 'string' && CRON_PERMISSION_MODES.has(value) ? value : undefined;
+}
+
+function normalizeCronEffort(value: string | null | undefined): string | undefined {
+  return typeof value === 'string' && CRON_EFFORTS.has(value) ? value : undefined;
+}
+
 /**
  * Normalize + validate a bot-binding slug (Plan 476 P2.3a). Returns null
  * for absent/empty input; throws on a syntactically invalid slug so a bad
@@ -104,6 +117,10 @@ export interface CronJobFile {
   schedule?: CronSchedule;
   working_directory?: string;
   model?: string;
+  /** Per-cron session permission profile (plan 574); absent = 'auto' at run time. */
+  permission_mode?: string;
+  /** Per-cron reasoning effort (plan 574); absent = 'off' at run time. */
+  effort?: string;
   /** Bot binding slug (Plan 476 P2.3a). Absent = standalone cron. */
   agent?: string;
   /** Event listeners (P2.3d), persisted as normalized spec objects. */
@@ -282,6 +299,8 @@ export class CronFileStore {
       ...(input.schedule != null ? { schedule: input.schedule } : {}),
       working_directory: workingDirectory,
       model: input.model?.trim() || undefined,
+      permission_mode: normalizeCronPermissionMode(input.permissionMode),
+      effort: normalizeCronEffort(input.effort),
       ...(agent ? { agent } : {}),
       ...(eventTriggers && eventTriggers.length ? { event_triggers: eventTriggers } : {}),
       concurrency: input.concurrencyPolicy ?? 'skip',
@@ -360,6 +379,14 @@ export class CronFileStore {
     }
     if (patch.workingDirectory !== undefined) job.working_directory = resolveAutomationWorkspace(patch.workingDirectory);
     if (patch.model !== undefined) job.model = patch.model.trim() || undefined;
+    if (patch.permissionMode !== undefined) {
+      // Invalid values clear the field (falling back to the run-time default) rather than persisting garbage.
+      job.permission_mode = normalizeCronPermissionMode(patch.permissionMode);
+    }
+    if (patch.effort !== undefined) {
+      // Empty string resets the effort to the legacy default ('off' at run time).
+      job.effort = normalizeCronEffort(patch.effort);
+    }
     if (patch.concurrencyPolicy !== undefined) job.concurrency = patch.concurrencyPolicy;
     if (patch.maxRetries !== undefined) job.max_retries = patch.maxRetries;
     if (patch.enabled !== undefined) job.enabled = patch.enabled;
@@ -447,6 +474,8 @@ export class CronFileStore {
       schedule: job.schedule ?? null,
       workingDirectory: job.working_directory ?? '',
       model: job.model ?? '',
+      permissionMode: (job.permission_mode ?? null) as AutomationCron['permissionMode'],
+      effort: job.effort ?? null,
       enabled: job.enabled !== false,
       concurrencyPolicy: job.concurrency ?? 'skip',
       maxRetries: job.max_retries ?? DEFAULT_MAX_RETRIES,

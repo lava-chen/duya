@@ -184,6 +184,7 @@ export class AutomationScheduler {
       workingDirectory: prepareAutomationWorkspace(job.workingDirectory),
       cronId: job.id,
       prompt: job.prompt,
+      permissionMode: job.permissionMode,
     });
 
     void this.executeCron(job, true, { runId, sessionId }).catch((error) => {
