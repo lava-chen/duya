@@ -2001,6 +2001,14 @@ const en = {
   'browserNewtab.clearHistoryConfirm': 'Clear all browsing history?',
   'browserNewtab.emptyHint': 'Pages you visit will show up here as cards.',
   'browserNewtab.removeFavorite': 'Remove favorite',
+  'browserMenu.print': 'Print',
+  'browserMenu.screenshot': 'Capture screenshot',
+  'browserMenu.importCookies': 'Import Cookies and Passwords…',
+  'browserMenu.passwordsAutoFill': 'Passwords and Autofill',
+  'browserMenu.downloads': 'Downloads',
+  'browserMenu.history': 'History',
+  'browserMenu.browserSettings': 'Browser Settings',
+  'browserMenu.comingSoon': 'Coming soon',
 
   // ConfigStep
   'configStep.popular': 'Popular',

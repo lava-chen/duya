@@ -88,6 +88,10 @@
 - [x] 记录挂点：BrowserPanel `did-stop-loading` 单点写入（favicon 同步捕获）；
       工具栏星标收藏当前页（与地址栏/标题状态联动）
 - [x] i18n `browserMenu.*` + `browserNewtab.*` 各 9/7 键（zh + en）
+- [x] 功能菜单扩至参考全集（2026-09-27 二轮）：查找/打印(webview.print)/缩放/
+      截图(聊天附件)/导入 Cookie(面板内直开 ImportCookiesDialog)/密码和自动填充
+      (disabled 即将支持)/下载(disabled 即将支持)/历史(切回新标签页)/清除浏览
+      数据/浏览器设置(setCurrentView)；分组分隔线 + comingSoon 角标
 - [x] 单测 `browser-newtab.test.ts` 6 项（URL 过滤 / 去重 / 上限 / 收藏切换 / 清空隔离）
 - [ ] 渲染层真机冒烟待人工：Ctrl+T 无 URL 开面板看新标签页；点卡片导航；
       星标后回到新标签页看收藏栏

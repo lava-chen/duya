@@ -433,6 +433,18 @@
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16);
 }
 
+.browser-menu-group + .browser-menu-group {
+  border-top: 1px solid var(--border-weak);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+.browser-menu-coming-soon {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--muted);
+}
+
 .browser-menu-item {
   display: flex;
   align-items: center;
@@ -461,10 +473,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 5px 10px;
-  border-top: 1px solid var(--border-weak);
-  border-bottom: 1px solid var(--border-weak);
-  margin: 4px 0;
+  padding: 5px 0;
 }
 
 .browser-menu-zoom-label {
