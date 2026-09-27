@@ -32,6 +32,9 @@ import {
   type PluginMentionTarget,
 } from '@/lib/message-input-logic';
 import { ModelProviderSelector, type ModelOption, type ProviderModelGroup } from './ModelProviderSelector';
+import { BackgroundTasksIndicator } from './BackgroundTasksIndicator';
+import { ContextUsageRing, ContextUsagePanel } from './ContextUsageRing';
+import type { ModelPricing } from '@/lib/context-usage-utils';
 
 import {
   getEffortOptionsForCapability,
@@ -39,11 +42,16 @@ import {
 } from '@duya/ai';
 import { useAttachments, makeFileTreeRefAttachment } from '@/hooks/useAttachments';
 import { AttachmentBar } from './AttachmentBar';
+import { CodeCommentStrip } from './CodeCommentStrip';
 import {
   dispatchAddAttachment,
   ADD_ATTACHMENT_EVENT,
   type AddAttachmentDetail,
 } from '@/lib/add-attachment-event';
+import {
+  buildCodeCommentsPromptBlock,
+  markCodeCommentsSent,
+} from '@/lib/code-comment-store';
 import { fetchMCPInventorySnapshot } from '@/lib/mcp-inventory-ipc';
 import {
   PREFILL_CHAT_INPUT_EVENT,
@@ -58,7 +66,7 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { SlashCommandPopover } from './SlashCommandPopover';
 import { useFocusModeStore, selectFocusEnabled } from '@/stores/focus-mode-store';
 import { RichTextInput } from './RichTextInput';
-import { VoiceButton } from './VoiceButton';
+import { VoiceButton, useVoiceConfigured } from './VoiceButton';
 import { applyDictation } from '@/lib/voice/dictation';
 import { InlineTaskRow } from './InlineTaskRow';
 import type { UseGitStatusResult } from '@/hooks/useGitStatus';
@@ -157,6 +165,15 @@ interface MessageInputProps {
   onClearMessages?: () => void;
   // Messages for context usage calculation
   messages?: Message[];
+  /**
+   * Embedded context-usage ring + expandable stats panel. The ring lives in
+   * the bottom toolbar next to the model selector; clicking it toggles the
+   * stats panel rendered below the input box (the bottom-anchored composer
+   * pushes the input up — no space is reserved while collapsed). The window
+   * is the model's pinned capability value; pricing feeds the $ figure.
+   */
+  contextWindow?: number;
+  contextPricing?: ModelPricing;
   // Conductor mode toggle state (independent of plan/research modes).
   conductorEnabled?: boolean;
   onConductorChange?: (enabled: boolean) => void;
@@ -410,6 +427,8 @@ export function MessageInput({
   onExecuteCommand,
   onClearMessages,
   messages = [],
+  contextWindow,
+  contextPricing,
   conductorEnabled,
   onConductorChange,
   planModeEnabled,
@@ -461,6 +480,8 @@ export function MessageInput({
   const prevSessionIdRef = useRef<string | undefined>(sessionId);
   const draftLoadedRef = useRef(false);
   const prePasteValueRef = useRef<string>('');
+  // Embedded context-usage panel (toggled by the ring in the toolbar).
+  const [contextPanelOpen, setContextPanelOpen] = useState(false);
 
   useEffect(() => {
     prePasteValueRef.current = inputValue;
@@ -1138,12 +1159,20 @@ export function MessageInput({
   const buildContentWithChips = useCallback(
     (textValue: string): string => {
       const base = buildModelContent(textValue);
-      if (hiddenPrompt && hiddenPrompt.trim()) {
-        return `${hiddenPrompt}\n\n${base}`;
-      }
-      return base;
+      // Review-panel line comments ride after the user's text (ZCode's
+      // `# Code comments:` block); the strip above the input shows what
+      // will be attached and markCodeCommentsSent() flags them after send.
+      const commentsBlock = workingDirectory
+        ? buildCodeCommentsPromptBlock(workingDirectory)
+        : '';
+      const withHidden = hiddenPrompt && hiddenPrompt.trim()
+        ? `${hiddenPrompt}\n\n${base}`
+        : base;
+      return commentsBlock
+        ? `${withHidden}${withHidden ? '\n\n' : ''}${commentsBlock}`
+        : withHidden;
     },
-    [buildModelContent, hiddenPrompt],
+    [buildModelContent, hiddenPrompt, workingDirectory],
   );
 
   const buildDisplayContentWithChips = useCallback(
@@ -1775,6 +1804,11 @@ export function MessageInput({
       const sendMode = pickMessageMode(activeModes);
       const conductorMode = activeModes.has('conductor') || undefined;
       onSend(modelContent, allAttachments, styleOpts, sendMode, displayContentForUser, conductorMode);
+      // The outgoing content carried every pending review-panel comment
+      // (see buildContentWithChips); flag them sent so the strip empties
+      // and the next message doesn't re-attach the same comments. The
+      // inline cards in the review panel stay for ongoing review.
+      if (workingDirectory) markCodeCommentsSent(workingDirectory);
       // Clear message-level modes (plan-task/research) after send; keep conductor (session-level).
       setActiveModes(clearMessageModes);
       setInputValue('');
@@ -1784,7 +1818,7 @@ export function MessageInput({
         textareaRef.current.style.height = 'auto';
       }
     },
-    [inputValue, hiddenPrompt, disabled, isStreaming, isParsing, cliBadge, attachments, hasUnparsedDocs, buildContentWithChips, clearAttachments, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, activeModes, requestRecap],
+    [inputValue, hiddenPrompt, disabled, isStreaming, isParsing, cliBadge, attachments, hasUnparsedDocs, buildContentWithChips, clearAttachments, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, activeModes, requestRecap, workingDirectory],
   );
 
   const handleKeyDown = useCallback(
@@ -1886,8 +1920,27 @@ export function MessageInput({
   const inputValueRef = useRef(inputValue);
   inputValueRef.current = inputValue;
 
+  // `dictating` spans a whole push-to-talk session (not just `recording`):
+  // interim transcripts land in the input while the mic is still held, and
+  // the voice/send button swap must not fire on that transient text.
+  const [dictating, setDictating] = useState(false);
+
+  // Session switches reset both transient composer states — a panel left
+  // open for thread A never bleeds into thread B, and a dictation session
+  // can never outlive its composer's session.
+  useEffect(() => {
+    setContextPanelOpen(false);
+    setDictating(false);
+  }, [sessionId]);
+
   const handleVoiceSessionStart = useCallback(() => {
     voiceBaseTextRef.current = inputValueRef.current;
+    setDictating(true);
+  }, []);
+
+  const handleVoiceSessionEnd = useCallback(() => {
+    voiceBaseTextRef.current = '';
+    setDictating(false);
   }, []);
 
   const handleVoiceTranscription = useCallback((text: string, kind: 'interim' | 'final') => {
@@ -1900,6 +1953,16 @@ export function MessageInput({
   const handleRemoveCliBadge = useCallback(() => {
     setCliBadge(null);
   }, []);
+
+  // STT module configured (enabled + model ready) — gates whether the mic
+  // earns the send-button slot on an empty composer.
+  const voiceConfigured = useVoiceConfigured();
+
+  // Typed intent = text or attachments present. Transient dictation text
+  // (interim transcripts while the mic is held) does not count — the
+  // voice/send swap must stay on the mic for the whole session.
+  const hasTypedContent =
+    (inputValue.trim().length > 0 || attachments.length > 0) && !dictating;
 
   return (
     <div className="flex flex-col">
@@ -2021,6 +2084,10 @@ export function MessageInput({
               </div>
             </div>
           )}
+          {/* ZCode-style per-line code comments from the review panel's
+              preview: pending chips above the attachments, injected into
+              the outgoing model content by buildContentWithChips. */}
+          <CodeCommentStrip workingDirectory={workingDirectory} />
           {/* Plan 220 Phase 4: unified attachment bar above the editor.
               All 5 attachment kinds (file / image / pasted-text /
               terminal-ref / browser-ref / file-tree-ref) render through
@@ -2083,6 +2150,11 @@ export function MessageInput({
           {/* Bottom Toolbar */}
           <div className="mt-1 px-2 flex min-w-0 items-center gap-2">
             <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-visible">
+              {/* Live background-task chip (bash commands + sub-agents).
+                  Moved in from the row below the input box — shares the
+                  toolbar row with the model selector; renders nothing
+                  while nothing runs in the background. */}
+              <BackgroundTasksIndicator sessionId={sessionId} />
               {/* Plus Button — opens the `@` context popup (添加附件 / mode / MCP). The
                   `/` commands are only reachable by typing `/` in the input. */}
               <IconButton
@@ -2169,16 +2241,36 @@ export function MessageInput({
               )}
             </div>
 
-            {/* Right: Send/Stop Button — single toggle. While streaming with an
-                empty input, show Stop; otherwise show Send (a Send during
-                streaming queues the message instead of interrupting). */}
+            {/* Right: one button slot, three states. While streaming with
+                nothing typed, show Stop. Once there is typed content (or
+                attachments), show Send — a Send during streaming queues the
+                message instead of interrupting. With an empty composer and
+                the STT module configured, the mic takes the slot; when voice
+                is not configured, Send keeps it (disabled while empty). */}
             <div className="flex shrink-0 items-center gap-1">
               {hasQueuedMessages && !isStreaming && (
                 <span className="text-xs text-muted-foreground bg-accent/20 px-1.5 py-0.5 rounded-full select-none">
                   +{1}
                 </span>
               )}
-              {/* Model / Provider / Effort selector — next to the voice button */}
+              {/* Context-usage ring — trigger only (variant="panel"): the
+                  stats expand in a panel below the input box. Hidden on
+                  brand-new sessions where there is nothing to measure. */}
+              {messages.length > 0 && (
+                <ContextUsageRing
+                  variant="panel"
+                  expanded={contextPanelOpen}
+                  onToggle={() => setContextPanelOpen((v) => !v)}
+                  messages={messages}
+                  sessionId={sessionId}
+                  modelName={modelName}
+                  contextWindow={contextWindow}
+                  pricing={contextPricing}
+                  onCompress={onCompact}
+                  isCompacting={isCompacting}
+                />
+              )}
+              {/* Model / Provider / Effort selector — next to the send button */}
               {hasProvider && providerGroups.length > 0 && (
                 <ModelProviderSelector
                   providerGroups={providerGroups}
@@ -2191,13 +2283,10 @@ export function MessageInput({
                   loading={modelsLoading}
                 />
               )}
-              <VoiceButton
-                disabled={disabled || isStreaming}
-                onTranscription={handleVoiceTranscription}
-                onNeedsSetup={handleVoiceNeedsSetup}
-                onSessionStart={handleVoiceSessionStart}
-              />
-              {isStreaming && onStop && !inputValue.trim() && attachments.length === 0 ? (
+              {/* While dictating, the mic keeps the slot no matter what —
+                  swapping it for Stop/Send mid-recording would unmount the
+                  capture chain. Stop and Send only contend once it ends. */}
+              {!dictating && isStreaming && onStop ? (
                 <IconButton
                   variant="danger"
                   shape="round"
@@ -2209,7 +2298,7 @@ export function MessageInput({
                 >
                   <StopIcon size={16} />
                 </IconButton>
-              ) : (
+              ) : !dictating && (hasTypedContent || !voiceConfigured) ? (
                 <IconButton
                   type="submit"
                   variant="primary"
@@ -2217,17 +2306,42 @@ export function MessageInput({
                   size="md"
                   aria-label="Send"
                   title="Send"
-                  disabled={disabled || (!inputValue.trim() && attachments.length === 0)}
+                  disabled={disabled || !hasTypedContent}
                   className="bg-[var(--send-btn)] hover:bg-[var(--send-btn-hover)] ml-1"
                 >
                   <ArrowUpIcon size={16} />
                 </IconButton>
+              ) : (
+                <VoiceButton
+                  disabled={disabled || isStreaming}
+                  onTranscription={handleVoiceTranscription}
+                  onNeedsSetup={handleVoiceNeedsSetup}
+                  onSessionStart={handleVoiceSessionStart}
+                  onSessionEnd={handleVoiceSessionEnd}
+                />
               )}
             </div>
           </div>
         </div>
 
       </form>
+
+      {/* Context-usage stats panel — rendered below the input box. The
+          composer column is bottom-anchored, so while it is open the input
+          box shifts up to make room and collapses back to zero height (no
+          reserved space) when the ring is clicked again. */}
+      {messages.length > 0 && (
+        <ContextUsagePanel
+          open={contextPanelOpen}
+          messages={messages}
+          sessionId={sessionId}
+          modelName={modelName}
+          contextWindow={contextWindow}
+          pricing={contextPricing}
+          onCompress={onCompact}
+          isCompacting={isCompacting}
+        />
+      )}
 
     </div>
   );

@@ -21,11 +21,27 @@ interface ContextUsageRingProps {
    *   composer footer).
    * 'popup' — hover/pin opens a small stats CARD above the ring (bot
    *   composer, ring sits next to the send button with no room to slide).
+   * 'panel' — bare trigger only: expansion state is owned by the parent,
+   *   which renders a <ContextUsagePanel> below the composer (the input
+   *   box shifts up; no space is reserved while collapsed).
    */
-  variant?: 'line' | 'popup';
+  variant?: 'line' | 'popup' | 'panel';
   /** When true, the stats are shown by default and clicking the ring hides
    *  them. Hover has no effect in reversed mode. Default false. */
   reversed?: boolean;
+  /** variant='panel' only — controlled expansion state + toggle callback. */
+  expanded?: boolean;
+  onToggle?: () => void;
+}
+
+interface ContextUsageDataProps {
+  messages: Message[];
+  sessionId?: string;
+  modelName?: string;
+  contextWindow?: number;
+  pricing?: ModelPricing;
+  onCompress?: () => void;
+  isCompacting?: boolean;
 }
 
 /**
@@ -35,6 +51,10 @@ interface ContextUsageRingProps {
  * streaming. Clicking the ring once pins the stats line open — it survives
  * mouse-leave and keeps live-updating; only another click on the ring
  * (or Enter/Space on it) unpins.
+ *
+ * variant='panel' renders the ring as a bare controlled trigger: the stats
+ * live in the sibling <ContextUsagePanel> the parent mounts below the
+ * composer, so clicking just flips the parent's open state.
  */
 export function ContextUsageRing({
   messages,
@@ -46,6 +66,8 @@ export function ContextUsageRing({
   isCompacting = false,
   variant = 'line',
   reversed = false,
+  expanded,
+  onToggle,
 }: ContextUsageRingProps) {
   const usage = useContextUsage(messages, modelName, contextWindow, sessionId, pricing);
   const [hovered, setHovered] = useState(false);
@@ -73,6 +95,14 @@ export function ContextUsageRing({
   const togglePin = () => {
     cancelHide();
     setPinned((p) => !p);
+  };
+
+  // Panel variant: the ring is a bare trigger — expansion lives with the
+  // parent (the stats panel renders below the composer, not here).
+  const isPanel = variant === 'panel';
+  const handleTrigger = () => {
+    if (isPanel) onToggle?.();
+    else togglePin();
   };
 
   const size = 18;
@@ -109,7 +139,11 @@ export function ContextUsageRing({
     ? (usage.ratio * 100).toFixed(1)
     : '?';
 
-  const expanded = reversed ? !pinned : (hovered || pinned);
+  const statsExpanded = isPanel
+    ? Boolean(expanded)
+    : reversed
+      ? !pinned
+      : (hovered || pinned);
 
   // Popup-variant rows (bot composer): label/value pairs over the same
   // live `usage` data the line variant slides out.
@@ -142,7 +176,7 @@ export function ContextUsageRing({
     <>
       <div
         className="context-usage-ring-wrap"
-        data-expanded={expanded}
+        data-expanded={statsExpanded}
         onMouseEnter={() => {
           cancelHide();
           setHovered(true);
@@ -150,7 +184,7 @@ export function ContextUsageRing({
         onMouseLeave={scheduleHide}
       >
         {variant === 'popup' ? (
-          <div className="context-usage-popover" role="status" aria-hidden={!expanded}>
+          <div className="context-usage-popover" role="status" aria-hidden={!statsExpanded}>
             {popoverRows.length > 0 ? (
               popoverRows.map((row) => (
                 <div key={row.label} className="context-usage-popover__row">
@@ -180,10 +214,10 @@ export function ContextUsageRing({
               </Button>
             )}
           </div>
-        ) : (
+        ) : variant === 'panel' ? null : (
         <div
           className="context-usage-ring-stats-shell"
-          aria-hidden={!expanded}
+          aria-hidden={!statsExpanded}
         >
           <div className="context-usage-ring-stats">
             {usage.hasData && (
@@ -278,18 +312,18 @@ export function ContextUsageRing({
           className="context-usage-ring-trigger"
           role="button"
           tabIndex={0}
-          aria-pressed={pinned}
+          aria-pressed={isPanel ? Boolean(expanded) : pinned}
           aria-label="Context usage"
-          data-pinned={pinned}
+          data-pinned={isPanel ? Boolean(expanded) : pinned}
           onClick={(e) => {
             e.stopPropagation();
-            togglePin();
+            handleTrigger();
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
               e.stopPropagation();
-              togglePin();
+              handleTrigger();
             }
           }}
         >
@@ -526,5 +560,174 @@ export function ContextUsageRing({
         }
       `}</style>
     </>
+  );
+}
+
+/**
+ * Context-stats panel rendered BELOW the composer input box. MessageInput
+ * owns the open state (the panel-variant ring in the toolbar is just the
+ * trigger): the shell is a 0fr→1fr grid row, so while open it animates open
+ * and the bottom-anchored composer column pushes the input box up, while
+ * closed it reserves no space at all. Content stays mounted through the
+ * collapse animation and is hidden (visibility + aria-hidden) once closed.
+ */
+export function ContextUsagePanel({
+  messages,
+  sessionId,
+  modelName,
+  contextWindow,
+  pricing,
+  onCompress,
+  isCompacting = false,
+  open,
+}: ContextUsageDataProps & { open: boolean }) {
+  const usage = useContextUsage(messages, modelName, contextWindow, sessionId, pricing);
+
+  const effectiveWindow = contextWindow || usage.contextWindow;
+  // `(auto)` — same semantics as the ring's stats line: the window was not
+  // pinned by the user, so the fraction is auto-resolved from the model.
+  const isAutoWindow = !contextWindow;
+  const ctxPercent = usage.hasData ? (usage.ratio * 100).toFixed(1) : '?';
+  const ctxClass =
+    usage.state === 'critical'
+      ? 'context-usage-ring-ctx context-usage-ring-ctx--critical'
+      : usage.state === 'warning'
+        ? 'context-usage-ring-ctx context-usage-ring-ctx--warn'
+        : 'context-usage-ring-ctx';
+
+  const f = formatTokensPi;
+  const hasCache = usage.totalCacheRead > 0 || usage.totalCacheWrite > 0;
+
+  return (
+    <div className="context-usage-panel-shell" data-open={open} aria-hidden={!open}>
+      <div className="context-usage-panel-clip">
+        <div className="context-usage-panel" role="status">
+          {/* Current context state first — the number the ring's color
+              mirrors, emphasized like the ring's primary group. */}
+          <span className="context-usage-panel-item context-usage-panel-item--primary">
+            <span className={ctxClass}>{ctxPercent}%</span>
+            <span className="context-usage-panel-dim">
+              · {f(usage.used)} / {f(effectiveWindow)}
+              {isAutoWindow ? ' (auto)' : ''}
+            </span>
+          </span>
+
+          {/* Session-cumulative traffic — same totals the stats line shows. */}
+          <span className="context-usage-panel-item">
+            <span className="context-usage-panel-arrow">↑</span>
+            {f(usage.totalInput)}
+          </span>
+          <span className="context-usage-panel-item">
+            <span className="context-usage-panel-arrow">↓</span>
+            {f(usage.totalOutput)}
+          </span>
+          {usage.totalCacheRead > 0 && (
+            <span className="context-usage-panel-item">
+              <span className="context-usage-panel-arrow">R</span>
+              {f(usage.totalCacheRead)}
+            </span>
+          )}
+          {usage.totalCacheWrite > 0 && (
+            <span className="context-usage-panel-item">
+              <span className="context-usage-panel-arrow">W</span>
+              {f(usage.totalCacheWrite)}
+            </span>
+          )}
+          {hasCache && usage.cacheHitRate >= 0 && (
+            <span className="context-usage-panel-item">
+              CH {(usage.cacheHitRate * 100).toFixed(1)}%
+            </span>
+          )}
+          {usage.totalCost > 0 && (
+            <span className="context-usage-panel-item">
+              ${usage.totalCost.toFixed(3)}
+            </span>
+          )}
+          {onCompress && usage.hasData && (
+            <button
+              type="button"
+              className="context-usage-panel-compress"
+              onClick={onCompress}
+              disabled={isCompacting}
+              title="Compress context"
+            >
+              {isCompacting ? '…' : 'compress'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      <style>{`
+        .context-usage-panel-shell {
+          display: grid;
+          grid-template-rows: 0fr;
+          opacity: 0;
+          visibility: hidden;
+          transition:
+            grid-template-rows 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+            opacity 0.2s ease,
+            visibility 0s linear 0.24s;
+        }
+        .context-usage-panel-shell[data-open='true'] {
+          grid-template-rows: 1fr;
+          opacity: 1;
+          visibility: visible;
+          transition:
+            grid-template-rows 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+            opacity 0.2s ease;
+        }
+        .context-usage-panel-clip {
+          overflow: hidden;
+          min-height: 0;
+        }
+        .context-usage-panel {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 4px 14px;
+          padding: 4px 10px 6px;
+          font-size: 11px;
+          line-height: 1.5;
+          font-variant-numeric: tabular-nums;
+          color: var(--muted);
+        }
+        .context-usage-panel-item {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          white-space: nowrap;
+        }
+        .context-usage-panel-item--primary {
+          padding: 1px 6px;
+          border-radius: 4px;
+          background: var(--bg-hover);
+        }
+        .context-usage-panel-arrow {
+          font-weight: 600;
+        }
+        .context-usage-panel-dim {
+          opacity: 0.75;
+        }
+        .context-usage-panel-compress {
+          background: transparent;
+          border: 1px solid var(--border);
+          border-radius: 4px;
+          color: var(--warning);
+          cursor: pointer;
+          font-size: 10px;
+          padding: 2px 6px;
+          font-weight: 500;
+          flex: none;
+        }
+        .context-usage-panel-compress:hover:not(:disabled) {
+          background: var(--bg-hover);
+        }
+        .context-usage-panel-compress:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+      `}</style>
+    </div>
   );
 }

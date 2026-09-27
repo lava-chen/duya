@@ -5,7 +5,7 @@
 // `onTranscription`; `onSessionStart` fires when recording actually begins so
 // the host can snapshot the base text for append-style dictation. Degrades
 // to a no-op dimension when voice is unsupported.
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useVoiceInput } from '@/lib/voice/useVoiceInput';
 import { IconButton } from '@/components/ui/IconButton';
 
@@ -16,9 +16,54 @@ export interface VoiceButtonProps {
   onNeedsSetup?: () => void;
   /** Called once per dictation session when recording actually starts. */
   onSessionStart?: () => void;
+  /** Called when a dictation session fully ends (recording released and
+   *  the final transcript committed) so the host can restore its layout. */
+  onSessionEnd?: () => void;
 }
 
-export function VoiceButton({ onTranscription, disabled, onNeedsSetup, onSessionStart }: VoiceButtonProps) {
+/**
+ * Whether the STT module is configured AND ready (`enabled` + model
+ * downloaded). Drives the composer's voice/send button swap: the mic only
+ * earns the send-button slot when dictation is actually usable — the
+ * `window.electronAPI.voice` bridge existing (what `useVoiceInput` calls
+ * "supported") is not enough. Re-checks on window focus so enabling voice
+ * in Settings is picked up without a composer remount.
+ */
+export function useVoiceConfigured(): boolean {
+  const [configured, setConfigured] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      const api =
+        typeof window !== 'undefined' ? window.electronAPI?.voice : undefined;
+      if (!api?.getConfig) {
+        setConfigured(false);
+        return;
+      }
+      try {
+        const cfg = await api.getConfig();
+        if (!cancelled) setConfigured(Boolean(cfg?.enabled && cfg?.modelReady));
+      } catch {
+        if (!cancelled) setConfigured(false);
+      }
+    };
+    void check();
+    window.addEventListener('focus', check);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', check);
+    };
+  }, []);
+  return configured;
+}
+
+export function VoiceButton({
+  onTranscription,
+  disabled,
+  onNeedsSetup,
+  onSessionStart,
+  onSessionEnd,
+}: VoiceButtonProps) {
   const { status, supported, errorCode, errorMessage, start, stop, cancel } = useVoiceInput({
     onText: onTranscription,
     onNeedsSetup,
@@ -29,6 +74,21 @@ export function VoiceButton({ onTranscription, disabled, onNeedsSetup, onSession
 
   useEffect(() => {
     if (status === 'recording') onSessionStartRef.current?.();
+  }, [status]);
+
+  // Session end: the status leaving the active set means the utterance is
+  // fully done (final text committed) or aborted — either way the host
+  // should stop treating the composer as "dictating".
+  const sessionEndRef = useRef(onSessionEnd);
+  sessionEndRef.current = onSessionEnd;
+  const sessionActiveRef = useRef(false);
+  useEffect(() => {
+    const active =
+      status === 'recording' ||
+      status === 'permission-pending' ||
+      status === 'transcribing';
+    if (sessionActiveRef.current && !active) sessionEndRef.current?.();
+    sessionActiveRef.current = active;
   }, [status]);
 
   const recording = status === 'recording' || status === 'permission-pending';
@@ -67,18 +127,23 @@ export function VoiceButton({ onTranscription, disabled, onNeedsSetup, onSession
           ? '松开结束听写'
           : '按住说话，松开转文字';
 
+  // Same solid-disc treatment as the Send button this slot replaces
+  // (round/md, `ml-1` spacing included): swapping mic ↔ send must read as
+  // "only the icon changed", so idle matches the send fill and the active
+  // states tint the same disc.
   const stateClass =
-    status === 'error'
-      ? 'text-destructive bg-destructive/15 hover:bg-destructive/25'
+    'ml-1 ' +
+    (status === 'error'
+      ? 'bg-destructive/15 text-destructive hover:bg-destructive/25'
       : status === 'transcribing'
-        ? 'text-[var(--accent)] bg-[var(--accent)]/15 hover:bg-[var(--accent)]/25 animate-pulse'
+        ? 'bg-[var(--accent)]/25 text-[var(--accent)] animate-pulse'
         : recording
-          ? 'text-red-400 bg-red-500/20 hover:bg-red-500/30'
-          : 'text-muted-foreground hover:text-foreground hover:bg-accent/50';
+          ? 'bg-red-500 text-white hover:bg-red-500/90'
+          : 'bg-[var(--send-btn)] text-white hover:bg-[var(--send-btn-hover)]');
 
   return (
     <IconButton
-      variant="ghost"
+      variant="primary"
       shape="round"
       size="md"
       aria-label="语音输入"

@@ -41,8 +41,6 @@ import { MailboxPanel } from './MailboxPanel';
 import { compactContext } from '@/lib/agent-sse-client';
 import { projectMessageTranscript } from '@/lib/project-message-transcript';
 import { getProfileIdForMode } from './AgentModeSelector';
-import { BackgroundTasksIndicator } from './BackgroundTasksIndicator';
-import { ContextUsageRing } from './ContextUsageRing';
 import { ArrowLeftIcon } from '@/components/icons';
 import { SessionSelector } from '@/components/home/SessionSelector';
 import { InputDialog } from '@/components/ui/InputDialog';
@@ -1518,7 +1516,7 @@ export function ChatView({
         {messages.length === 0 && !isStreaming ? (
           /* Empty state with SessionSelector and centered input */
           <div className="h-full flex flex-col items-center justify-center px-4">
-            <div className="w-full max-w-[800px] flex flex-col items-center">
+            <div className="w-full @min-[864px]:max-w-4xl @min-[1280px]:max-w-6xl flex flex-col items-center">
               <SessionSelector
                 selectedProject={selectedProject}
                 onSelectProject={handleSelectProject}
@@ -1561,14 +1559,9 @@ export function ChatView({
                     workingDirectory={activeThread?.workingDirectory ?? null}
                     showFileChanges={showFileChanges}
                     turnReview={isStreaming ? null : lastTurnReview}
+                    contextWindow={capabilityContextWindow}
+                    contextPricing={capabilityPricing}
                   />
-
-                  {/* Bottom toolbar - outside input box. Left slot hosts the
-                      live background-task chip (replaces the read-only agent
-                      profile badge); it self-hides when nothing is running. */}
-                  <div className="flex items-center justify-between mt-2 px-1">
-                    <BackgroundTasksIndicator sessionId={sessionId} />
-                  </div>
                 </div>
                 </WorkspaceComposerLayer>
               </SessionSelector>
@@ -1597,7 +1590,7 @@ export function ChatView({
       {(messages.length > 0 || isStreaming) && (
         <WorkspaceComposerLayer expanded={workspaceExpanded}>
         <div className={`p-4 pt-0 chat-composer-shell workspace-floating-composer${workspaceExpanded ? ' workspace-floating-composer-expanded' : ''}`}>
-          <div className="max-w-[800px] mx-auto chat-composer-inner">
+          <div className="mx-auto w-full @min-[864px]:max-w-4xl @min-[1280px]:max-w-6xl chat-composer-inner">
             {/* Plan 420: live goal status chip */}
             <GoalStatusChip sessionId={sessionId} />
             {/* Scroll to bottom button - shown when not near bottom, floats above content */}
@@ -1678,33 +1671,10 @@ export function ChatView({
                 workingDirectory={activeThread?.workingDirectory ?? null}
                 showFileChanges={showFileChanges}
                 turnReview={isStreaming ? null : lastTurnReview}
+                contextWindow={capabilityContextWindow}
+                contextPricing={capabilityPricing}
               />
             )}
-
-            {/* Bottom toolbar - outside input box. Left slot hosts the live
-                background-task chip (replaces the read-only agent profile
-                badge); the context usage ring stays pinned to the right edge. */}
-            <div className="flex items-center justify-between mt-2 px-1">
-              <BackgroundTasksIndicator sessionId={sessionId} />
-
-              {/* `ml-auto` keeps the ring pinned to the right edge even when
-                  the chip renders nothing (it self-hides when idle, and
-                  justify-between alone would then slide the ring left). */}
-              {messages.length > 0 && (
-                <div className="ml-auto flex items-center min-w-0">
-                  <ContextUsageRing
-                    messages={messages}
-                    sessionId={sessionId}
-                    modelName={sessionModel}
-                    contextWindow={capabilityContextWindow}
-                    pricing={capabilityPricing}
-                    onCompress={handleCompact}
-                    isCompacting={isCompacting}
-                    reversed={settings.contextRingReversed ?? false}
-                  />
-                </div>
-              )}
-            </div>
           </div>
         </div>
         </WorkspaceComposerLayer>

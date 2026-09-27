@@ -11,7 +11,7 @@
 import { act, fireEvent, render } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ContextUsageRing } from '../ContextUsageRing';
+import { ContextUsageRing, ContextUsagePanel } from '../ContextUsageRing';
 
 const HIDE_DELAY_MS = 150;
 
@@ -132,5 +132,74 @@ describe('ContextUsageRing', () => {
       vi.advanceTimersByTime(HIDE_DELAY_MS + 50);
     });
     expect(popover.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  // panel variant (chat composer): the ring is a bare controlled trigger —
+  // no stats of its own; the parent renders <ContextUsagePanel> below the
+  // composer and flips its `open` state.
+  it('panel variant: click delegates to onToggle and reflects controlled state', () => {
+    const onToggle = vi.fn();
+    const view = render(
+      <ContextUsageRing
+        messages={[]}
+        variant="panel"
+        expanded={false}
+        onToggle={onToggle}
+      />,
+    );
+    const trigger = view.getByRole('button', { name: 'Context usage' });
+    // No slide-out line and no popup — the stats live in the sibling panel.
+    expect(
+      view.container.querySelector('.context-usage-ring-stats-shell'),
+    ).toBeNull();
+    expect(view.container.querySelector('.context-usage-popover')).toBeNull();
+    expect(trigger.getAttribute('aria-pressed')).toBe('false');
+
+    fireEvent.click(trigger);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    expect(onToggle).toHaveBeenCalledTimes(2);
+
+    // Controlled: parent flips `expanded`, the trigger mirrors it.
+    view.rerender(
+      <ContextUsageRing
+        messages={[]}
+        variant="panel"
+        expanded={true}
+        onToggle={onToggle}
+      />,
+    );
+    expect(trigger.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('ContextUsagePanel: closed reserves no content visibility, open shows stats', () => {
+    const onCompress = vi.fn();
+    const view = render(
+      <ContextUsagePanel
+        messages={[]}
+        open={false}
+        onCompress={onCompress}
+      />,
+    );
+    const shell = view.container.querySelector(
+      '.context-usage-panel-shell',
+    ) as HTMLElement;
+    expect(shell.getAttribute('data-open')).toBe('false');
+    expect(shell.getAttribute('aria-hidden')).toBe('true');
+
+    view.rerender(
+      <ContextUsagePanel
+        messages={[]}
+        open={true}
+        onCompress={onCompress}
+      />,
+    );
+    expect(shell.getAttribute('data-open')).toBe('true');
+    expect(shell.getAttribute('aria-hidden')).toBe('false');
+    // No usage data anywhere → "?" placeholder instead of a fake number.
+    const panel = view.container.querySelector(
+      '.context-usage-panel',
+    ) as HTMLElement;
+    expect(panel.textContent).toContain('?');
   });
 });

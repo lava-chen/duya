@@ -50,6 +50,8 @@ vi.mock('@/components/icons', () => ({
   CircleIcon: () => null,
   SpinnerIcon: () => null,
   GitBranchIcon: () => null,
+  // useSlashCommands item icon referenced during render (see PinIcon note).
+  MousePointerClickIcon: () => null,
   // useSlashCommands references PinIcon in a popover item; the
   // popover isn't open in any smoke test, but the icon is referenced
   // during render so it must be in the mock.
@@ -81,6 +83,7 @@ vi.mock('@/components/chat/AttachmentMenu', () => ({
 
 vi.mock('@/components/chat/ContextUsageRing', () => ({
   ContextUsageRing: () => null,
+  ContextUsagePanel: () => null,
 }));
 
 vi.mock('@/components/chat/RichTextInput', () => ({

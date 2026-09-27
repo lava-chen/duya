@@ -47,6 +47,9 @@ vi.mock('@/components/icons', () => ({
   SpinnerIcon: () => null,
   GitBranchIcon: () => null,
   PinIcon: () => null,
+  // useSlashCommands item icons referenced during render.
+  EyeIcon: () => null,
+  MousePointerClickIcon: () => null,
   ChalkboardIcon: () => null,
   TargetArrowIcon: () => null,
   ChatCircleIcon: () => null,
@@ -65,6 +68,7 @@ vi.mock('@/components/chat/AttachmentMenu', () => ({
 
 vi.mock('@/components/chat/ContextUsageRing', () => ({
   ContextUsageRing: () => null,
+  ContextUsagePanel: () => null,
 }));
 
 vi.mock('@/components/chat/FileAttachmentCard', () => ({
