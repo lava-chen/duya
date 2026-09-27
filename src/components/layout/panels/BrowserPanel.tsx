@@ -11,14 +11,24 @@ import {
   CursorClickIcon,
   GlobeIcon,
   MagnifyingGlassIcon,
+  StarIcon,
   WarningCircleIcon,
   XIcon,
 } from "@/components/icons";
 import { usePanel } from "@/hooks/usePanel";
 import { useSettings } from "@/hooks/useSettings";
+import { useTranslation } from "@/hooks/useTranslation";
 import type { PageTab } from "./registry";
 import { AgentBrowserTab } from "./AgentBrowserTab";
 import { IconButton } from "@/components/ui/IconButton";
+import { NewTabPage } from "@/components/browser/NewTabPage";
+import { BrowserMenu } from "@/components/browser/BrowserMenu";
+import {
+  isFavorited,
+  isRecordableUrl,
+  recordVisit,
+  toggleFavorite,
+} from "@/lib/browser-newtab";
 
 type WebviewElement = HTMLElement & {
   canGoBack(): boolean;
@@ -325,6 +335,7 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
   }
 
   const { settings } = useSettings();
+  const { t } = useTranslation();
 
   const initialUrl = useMemo(() => {
     const raw = tab?.params?.url;
@@ -335,11 +346,22 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
     return homeUrl ? normalizeBrowserAddress(homeUrl) : FALLBACK_HOME_URL;
   }, [tab?.params, settings.browserHomeUrl]);
 
+  // A tab opened without an explicit URL lands on the new-tab page
+  // (favorites bar + history cards) instead of loading a search engine.
+  const startsAsNewTab = !tab?.params?.url;
+  const [pendingNewTab, setPendingNewTab] = useState(startsAsNewTab);
+  const [currentSrc, setCurrentSrc] = useState<string | null>(
+    startsAsNewTab ? null : initialUrl,
+  );
+  const [favorited, setFavorited] = useState(false);
+  const [zoomDisplay, setZoomDisplay] = useState(100);
+  const faviconRef = useRef<string | undefined>(undefined);
+
   const webviewRef = useRef<WebviewElement | null>(null);
   const [addressValue, setAddressValue] = useState(initialUrl);
   const [url, setUrl] = useState(initialUrl);
   const [title, setTitle] = useState(labelFromUrl(initialUrl));
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!startsAsNewTab);
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
   const [picking, setPicking] = useState(false);
@@ -376,6 +398,7 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
     } catch {
       // Webview can throw while it is being attached or torn down.
     }
+    setZoomDisplay(Math.round(clamped * 100));
     flashZoom(clamped);
   }, [flashZoom]);
 
@@ -466,6 +489,7 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
       setAddressValue(nextUrl === EMPTY_URL ? "" : nextUrl);
       setCanGoBack(node.canGoBack());
       setCanGoForward(node.canGoForward());
+      setFavorited(isRecordableUrl(nextUrl) ? isFavorited(nextUrl) : false);
       if (tab?.id) {
         updateTabTitle(tab.id, nextTitle);
       }
@@ -480,8 +504,40 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
     setStatus(null);
     setUrl(nextUrl);
     setAddressValue(nextUrl === EMPTY_URL ? "" : nextUrl);
+    if (pendingNewTab) {
+      // Leaving the new-tab page: the webview mounts with this src and
+      // starts loading on attach.
+      setCurrentSrc(nextUrl);
+      setPendingNewTab(false);
+      return;
+    }
     webviewRef.current?.loadURL(nextUrl);
-  }, []);
+  }, [pendingNewTab]);
+
+  const handleToggleFavorite = useCallback(() => {
+    if (!isRecordableUrl(url)) return;
+    const { favorited: next } = toggleFavorite({
+      url,
+      title: title || labelFromUrl(url),
+      favicon: faviconRef.current,
+    });
+    setFavorited(next);
+    setStatus(next ? "Added to favorites" : "Removed from favorites");
+  }, [title, url]);
+
+  const handleClearData = useCallback(async () => {
+    if (!window.confirm(t('browserAdvanced.clearDataConfirm'))) return;
+    try {
+      await window.electronAPI?.browserCookie?.clearData();
+      setStatus("Browser data cleared");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Clear failed");
+    }
+  }, [t]);
+
+  const handleNewTabNavigate = useCallback((raw: string) => {
+    navigate(raw);
+  }, [navigate]);
 
   useEffect(() => {
     const node = webviewRef.current;
@@ -494,6 +550,21 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
     const handleStop = () => {
       setLoading(false);
       syncFromWebview();
+      // Feed the new-tab page's history cards. The webview is the single
+      // record point — main-frame loads only (in-page navigations are
+      // filtered by isRecordableUrl + dedupe in the store).
+      try {
+        const visitUrl = node.getURL() || "";
+        if (isRecordableUrl(visitUrl)) {
+          recordVisit({
+            url: visitUrl,
+            title: node.getTitle() || labelFromUrl(visitUrl),
+            favicon: faviconRef.current,
+          });
+        }
+      } catch {
+        // Webview can throw while it is being attached or torn down.
+      }
     };
     const handleNavigate = (event: WebviewNavigationEvent) => {
       if (event.isMainFrame === false) return;
@@ -502,8 +573,11 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
     const handleTitle = () => syncFromWebview();
     const handleFavicon = (event: Event & { favicons?: string[] }) => {
       const favicons = (event as Event & { favicons?: string[] }).favicons;
-      if (tab?.id && Array.isArray(favicons) && favicons.length > 0) {
-        updateTabFavicon(tab.id, favicons[0]);
+      if (Array.isArray(favicons) && favicons.length > 0) {
+        faviconRef.current = favicons[0];
+        if (tab?.id) {
+          updateTabFavicon(tab.id, favicons[0]);
+        }
       }
     };
     const handleFail = (event: Event & { errorDescription?: string; validatedURL?: string }) => {
@@ -558,7 +632,7 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
       node.removeEventListener("before-input-event", handleBeforeInput as EventListener);
       node.removeEventListener("found-in-page", handleFoundInPage as EventListener);
     };
-  }, [syncFromWebview, tab?.id, updateTabFavicon, handleBrowserShortcut]);
+  }, [syncFromWebview, tab?.id, updateTabFavicon, handleBrowserShortcut, pendingNewTab]);
 
   const handleScreenshot = useCallback(async () => {
     const node = webviewRef.current;
@@ -628,15 +702,47 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
           navigate(addressValue);
         }}
       >
-        <IconButton type="button" variant="default" shape="square" className="browser-panel-icon-btn" aria-label="Back" onClick={() => webviewRef.current?.goBack()} disabled={!canGoBack} title="Back">
-          <ArrowLeftIcon size={14} />
-        </IconButton>
-        <IconButton type="button" variant="default" shape="square" className="browser-panel-icon-btn" aria-label="Forward" onClick={() => webviewRef.current?.goForward()} disabled={!canGoForward} title="Forward">
-          <ArrowRightIcon size={14} />
-        </IconButton>
-        <IconButton type="button" variant="default" shape="square" className="browser-panel-icon-btn" aria-label="Reload" onClick={() => webviewRef.current?.reload()} title="Reload">
-          <ArrowsClockwiseIcon size={14} className={loading ? "animate-spin" : ""} />
-        </IconButton>
+        <BrowserMenu
+          onFindInPage={openFind}
+          onZoomIn={() => stepZoom(1)}
+          onZoomOut={() => stepZoom(-1)}
+          onZoomReset={() => applyZoomFactor(1)}
+          onClearData={() => void handleClearData()}
+          zoomPercent={zoomDisplay}
+        />
+        <div className="browser-nav-pill" role="group" aria-label="Page navigation">
+          <button
+            type="button"
+            className="browser-nav-btn"
+            aria-label="Back"
+            onClick={() => webviewRef.current?.goBack()}
+            disabled={!canGoBack || pendingNewTab}
+            title="Back"
+          >
+            <ArrowLeftIcon size={14} />
+          </button>
+          <button
+            type="button"
+            className="browser-nav-btn"
+            aria-label="Forward"
+            onClick={() => webviewRef.current?.goForward()}
+            disabled={!canGoForward || pendingNewTab}
+            title="Forward"
+          >
+            <ArrowRightIcon size={14} />
+          </button>
+          <span className="browser-nav-divider" aria-hidden="true" />
+          <button
+            type="button"
+            className="browser-nav-btn"
+            aria-label="Reload"
+            onClick={() => webviewRef.current?.reload()}
+            disabled={pendingNewTab}
+            title="Reload"
+          >
+            <ArrowsClockwiseIcon size={14} className={loading ? "animate-spin" : ""} />
+          </button>
+        </div>
         <label className="browser-panel-address">
           <GlobeIcon size={13} />
           <input
@@ -650,9 +756,22 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
           type="button"
           variant="default"
           shape="square"
+          className={`browser-panel-icon-btn${favorited ? " active" : ""}`}
+          aria-label={favorited ? t('browserMenu.removeFavorite') : t('browserMenu.addFavorite')}
+          onClick={handleToggleFavorite}
+          disabled={pendingNewTab || !isRecordableUrl(url)}
+          title={favorited ? t('browserMenu.removeFavorite') : t('browserMenu.addFavorite')}
+        >
+          <StarIcon size={14} />
+        </IconButton>
+        <IconButton
+          type="button"
+          variant="default"
+          shape="square"
           className={`browser-panel-icon-btn${findOpen ? " active" : ""}`}
           aria-label="Find in page"
           onClick={openFind}
+          disabled={pendingNewTab}
           title="Find in page (Cmd/Ctrl+F)"
         >
           <MagnifyingGlassIcon size={14} />
@@ -664,7 +783,7 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
           className={`browser-panel-icon-btn${picking ? " active" : ""}`}
           aria-label="Pick element"
           onClick={handlePickElement}
-          disabled={loading || picking}
+          disabled={loading || picking || pendingNewTab}
           title="Pick element"
         >
           <CursorClickIcon size={14} />
@@ -676,7 +795,7 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
           className="browser-panel-icon-btn"
           aria-label="Screenshot to input"
           onClick={handleScreenshot}
-          disabled={loading}
+          disabled={loading || pendingNewTab}
           title="Screenshot to input"
         >
           <CameraIcon size={14} />
@@ -690,14 +809,18 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
         </div>
       )}
 
-      <div className="browser-panel-frame" data-loading={loading ? "true" : undefined}>
-        <webview
-          ref={(node) => {
-            webviewRef.current = node as WebviewElement | null;
-          }}
-          src={initialUrl}
-          partition={BROWSER_PARTITION}
-        />
+      <div className="browser-panel-frame" data-loading={!pendingNewTab && loading ? "true" : undefined}>
+        {pendingNewTab ? (
+          <NewTabPage onNavigate={handleNewTabNavigate} />
+        ) : (
+          <webview
+            ref={(node) => {
+              webviewRef.current = node as WebviewElement | null;
+            }}
+            src={currentSrc ?? initialUrl}
+            partition={BROWSER_PARTITION}
+          />
+        )}
         {findOpen && (
           <div className="browser-find-bar">
             <MagnifyingGlassIcon size={13} />
