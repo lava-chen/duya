@@ -6,17 +6,14 @@ import {
   TrashIcon,
   SpinnerGapIcon,
   CheckCircleIcon,
-  WarningIcon,
   GlobeIcon,
   FolderOpenIcon,
 } from '@/components/icons';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useSettings } from '@/hooks/useSettings';
-import { useBrowserExtension } from '@/hooks/useBrowserExtension';
 import { SettingsSection, SettingsCard, SettingsRow } from '@/components/settings/ui';
 import { Button } from '@/components/ui/Button';
-
-type CookieBrowser = 'chrome' | 'edge';
+import { ImportCookiesDialog } from './ImportCookiesDialog';
 
 function isValidHttpUrl(raw: string): boolean {
   try {
@@ -30,17 +27,8 @@ function isValidHttpUrl(raw: string): boolean {
 export function BrowserAdvancedSection() {
   const { t } = useTranslation();
   const { settings, saving, save } = useSettings();
-  const { status: extensionStatus, isInstalled: extensionInstalled, checkExtension } = useBrowserExtension({
-    autoCheck: true,
-    interval: 30000,
-  });
 
-  const [importing, setImporting] = useState(false);
-  const [cookieBrowser, setCookieBrowser] = useState<CookieBrowser>('chrome');
-  const [cookieProfile, setCookieProfile] = useState('Default');
-  const [importResult, setImportResult] = useState<{ count: number; failed: number; unsupported: number; source?: 'extension' } | null>(null);
-  const [importError, setImportError] = useState<string | null>(null);
-  const [importErrorCode, setImportErrorCode] = useState<string | null>(null);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [cleared, setCleared] = useState(false);
   const [homeUrlDraft, setHomeUrlDraft] = useState(settings.browserHomeUrl ?? '');
@@ -83,31 +71,6 @@ export function BrowserAdvancedSection() {
     await save({ browserDownloadPath: '' });
   }, [save]);
 
-  const handleImportCookies = useCallback(async () => {
-    setImporting(true);
-    setImportResult(null);
-    setImportError(null);
-    setImportErrorCode(null);
-    try {
-      const result = await window.electronAPI?.browserCookie?.importCookies(cookieBrowser, cookieProfile.trim() || 'Default');
-      if (result?.ok) {
-        setImportResult({
-          count: result.count ?? 0,
-          failed: result.failed ?? 0,
-          unsupported: result.unsupported ?? 0,
-          source: result.source,
-        });
-      } else {
-        setImportError(result?.error ?? 'Unknown error');
-        setImportErrorCode(result?.errorCode ?? null);
-      }
-    } catch (err) {
-      setImportError(err instanceof Error ? err.message : 'Unknown error');
-    } finally {
-      setImporting(false);
-    }
-  }, [cookieBrowser, cookieProfile]);
-
   const handleClearData = useCallback(async () => {
     const confirmed = window.confirm(t('browserAdvanced.clearDataConfirm'));
     if (!confirmed) return;
@@ -125,34 +88,6 @@ export function BrowserAdvancedSection() {
       setClearing(false);
     }
   }, [t]);
-
-  const handleOpenExtensions = useCallback(() => {
-    window.open('chrome://extensions/', '_blank');
-  }, []);
-
-  const handleRefreshExtension = useCallback(async () => {
-    await checkExtension();
-  }, [checkExtension]);
-
-  const extensionActionButtons = (
-    <div className="mt-1.5 flex items-center gap-2">
-      <Button
-        variant="secondary"
-        size="sm"
-        onClick={handleOpenExtensions}
-      >
-        {t('browserAdvanced.openExtensions')}
-      </Button>
-      <Button
-        variant="secondary"
-        size="sm"
-        onClick={handleRefreshExtension}
-        disabled={extensionStatus === 'checking'}
-      >
-        {t('browserAdvanced.refreshExtension')}
-      </Button>
-    </div>
-  );
 
   return (
     <SettingsSection
@@ -270,100 +205,30 @@ export function BrowserAdvancedSection() {
 
         {/* Cookie import */}
         <SettingsCard>
-            <div className="py-3.5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <CookieIcon size={18} className="text-muted-foreground" />
-                  <span className="text-sm font-medium text-foreground">
-                    {t('browserAdvanced.cookieImport')}
-                  </span>
-                </div>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={handleImportCookies}
-                  disabled={importing}
-                >
-                  {importing && <SpinnerGapIcon size={12} className="animate-spin" />}
-                  {importing ? t('browserAdvanced.importing') : t('browserAdvanced.importCookies')}
-                </Button>
+          <div className="py-3.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <CookieIcon size={18} className="text-muted-foreground" />
+                <span className="text-sm font-medium text-foreground">
+                  {t('browserAdvanced.cookieImport')}
+                </span>
               </div>
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <label className="text-xs text-muted-foreground">
-                  {t('browserAdvanced.cookieSource')}
-                  <select
-                    value={cookieBrowser}
-                    onChange={(event) => setCookieBrowser(event.target.value as CookieBrowser)}
-                    disabled={importing}
-                    className="mt-1 w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-foreground"
-                  >
-                    <option value="chrome">Google Chrome</option>
-                    <option value="edge">Microsoft Edge</option>
-                  </select>
-                </label>
-                <label className="text-xs text-muted-foreground">
-                  {t('browserAdvanced.cookieProfile')}
-                  <input
-                    value={cookieProfile}
-                    onChange={(event) => setCookieProfile(event.target.value)}
-                    disabled={importing}
-                    placeholder="Default"
-                    className="mt-1 w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-foreground"
-                  />
-                </label>
-              </div>
-              {!extensionInstalled && (
-                <div className="mt-3 flex items-start gap-2 p-3 rounded-lg bg-accent/5 border border-accent/10 text-xs text-muted-foreground">
-                  <WarningIcon size={14} className="shrink-0 mt-0.5 text-accent" />
-                  <div className="flex-1">
-                    {t('browserAdvanced.importExtensionHint')}
-                    {extensionActionButtons}
-                  </div>
-                </div>
-              )}
-              {importResult && (
-                <div className="mt-2 flex items-center gap-1.5 text-xs text-green-500">
-                  <CheckCircleIcon size={12} />
-                  {t('browserAdvanced.importSuccess', {
-                    count: importResult.count,
-                    failed: importResult.failed + importResult.unsupported,
-                  })}
-                  {importResult.source === 'extension' && ` ${t('browserAdvanced.importLiveSource')}`}
-                </div>
-              )}
-              {(importError || importErrorCode) && (
-                <div className="mt-2 flex items-start gap-1.5 text-xs text-destructive">
-                  <WarningIcon size={12} className="shrink-0 mt-0.5" />
-                  <div className="flex-1">
-                    {importErrorCode === 'COOKIE_DATABASE_BUSY' && (
-                      <>
-                        {t('browserAdvanced.importSourceBusy', {
-                          browser: cookieBrowser === 'chrome' ? 'Google Chrome' : 'Microsoft Edge',
-                        })}
-                        {!extensionInstalled && extensionActionButtons}
-                      </>
-                    )}
-                    {importErrorCode === 'APP_BOUND_EXTENSION_UNAVAILABLE' && (
-                      <>
-                        {t('browserAdvanced.importAppBoundUnavailable')}
-                        {extensionActionButtons}
-                      </>
-                    )}
-                    {!importErrorCode && t('browserAdvanced.importFailed', { error: importError ?? 'Unknown error' })}
-                  </div>
-                </div>
-              )}
-              {importResult && importResult.unsupported > 0 && (
-                <div className="mt-2 flex items-start gap-1.5 text-xs text-amber-500">
-                  <WarningIcon size={12} className="shrink-0 mt-0.5" />
-                  <div className="flex-1">
-                    {t('browserAdvanced.importUnsupported', { count: importResult.unsupported })}
-                    {!extensionInstalled && extensionActionButtons}
-                  </div>
-                </div>
-              )}
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => setImportDialogOpen(true)}
+              >
+                {t('browserImport.title')}
+              </Button>
             </div>
-          </SettingsCard>
+            <p className="mt-2 text-xs text-muted-foreground">{t('browserImport.description')}</p>
+          </div>
+        </SettingsCard>
+
+        <ImportCookiesDialog
+          isOpen={importDialogOpen}
+          onClose={() => setImportDialogOpen(false)}
+        />
 
         {/* Clear data */}
         <SettingsCard>

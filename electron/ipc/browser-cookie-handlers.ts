@@ -8,6 +8,7 @@ import {
   mapLiveBrowserCookies,
   readBrowserCookies,
 } from '../services/browser/cookie-importer.js';
+import { detectCookieProfiles } from '../services/browser/profile-detector.js';
 import { writeCookiesToPartition, clearPartitionData } from '../services/browser/cookie-writer.js';
 import { exportLiveExtensionCookies } from '../services/browser/daemon.js';
 import { getLogger, LogComponent } from '../logging/logger.js';
@@ -15,6 +16,22 @@ import { getLogger, LogComponent } from '../logging/logger.js';
 const logger = getLogger();
 
 export function registerBrowserCookieHandlers(): void {
+  ipcMain.handle('browser:detect-cookie-profiles', (_event, browser: 'chrome' | 'edge') => {
+    if (browser !== 'chrome' && browser !== 'edge') {
+      return { ok: false, error: 'Unsupported browser' };
+    }
+    try {
+      return { ok: true, profiles: detectCookieProfiles(browser) };
+    } catch (err) {
+      logger.error(
+        `Cookie profile detection failed: ${err instanceof Error ? err.message : err}`,
+        {},
+        LogComponent.BrowserDaemon,
+      );
+      return { ok: false, error: err instanceof Error ? err.message : 'Unknown error' };
+    }
+  });
+
   ipcMain.handle('browser:import-cookies', async (_event, browser: 'chrome' | 'edge', profile?: string) => {
     try {
       const { cookies, failed, unsupported } = await readBrowserCookies(browser, profile);
