@@ -398,6 +398,29 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
           : 'auto';
         updateThreadIPC(thread.id, { permissionProfile }).catch(console.error);
 
+        // Plan 413e parity with ChatView: session-level modes picked in the
+        // draft composer must survive the view switch. Persist them into the
+        // session row BEFORE ChatView loads the thread, or the restored chip
+        // (and every later turn) silently loses the mode — `options.mode`
+        // only carries the first turn. Message-level modes (research) stay
+        // per-turn by design.
+        if (mode === 'plan-task') {
+          try {
+            await window.electronAPI?.session?.setPlanMode(thread.id, true);
+            useConversationStore.getState().setThreadPlanMode(thread.id, true);
+          } catch (err) {
+            console.error('[NewChatView] setPlanMode IPC failed', err);
+          }
+        }
+        if (mode === 'goal') {
+          try {
+            await window.electronAPI?.session?.setGoalMode(thread.id, true);
+            useConversationStore.getState().setThreadGoalMode(thread.id, true);
+          } catch (err) {
+            console.error('[NewChatView] setGoalMode IPC failed', err);
+          }
+        }
+
         // Draft consumed — clear it now that a real thread exists.
         clearNewChatDraft();
         // Wait for the session switch to fully settle (it force-reloads the
