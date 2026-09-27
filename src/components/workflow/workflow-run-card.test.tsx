@@ -25,6 +25,13 @@ vi.mock("@/i18n", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
+// Node-card link upgrade: an agent chip with a child session enters the
+// session chat view (setActiveThread) instead of opening the side pane.
+const { setActiveThread } = vi.hoisted(() => ({ setActiveThread: vi.fn() }));
+vi.mock("@/stores/conversation-store", () => ({
+  useConversationStore: { getState: () => ({ setActiveThread }) },
+}));
+
 import { WorkflowRunCard } from "./WorkflowRunCard";
 import {
   WorkflowLaunchDialog,
@@ -88,6 +95,7 @@ beforeEach(() => {
   artifactPath.mockReset().mockResolvedValue({ ok: true, path: "C:/art/run-steps-1/report.md" });
   runWorkflow.mockReset().mockResolvedValue({ ok: true, runId: "new-run-2" });
   statusLookup.mockReset().mockResolvedValue(null);
+  setActiveThread.mockReset();
 });
 
 // ─── run card ───
@@ -193,14 +201,24 @@ describe("WorkflowRunCard", () => {
     expect(screen.queryByText("项目解读员")).toBeNull();
   });
 
-  it("an expanded chip opens the run in the side panel without collapsing", () => {
+  it("an expanded chip without a dedicated destination opens the run detail without collapsing", () => {
+    // A script chip is an aggregate of tool work — no single node sits behind
+    // it, so it keeps landing on the run detail. The point of the test is the
+    // stopPropagation: the chips stay open so the user keeps their place.
     const events: Array<CustomEvent<{ runId?: string }>> = [];
     const listener = (e: Event) => events.push(e as CustomEvent<{ runId?: string }>);
     window.addEventListener("duya:open-workflow-run-panel", listener);
-    const { container } = render(<WorkflowRunCard run={steppedRun} />);
+    const withTool: WorkflowRunSse = {
+      ...steppedRun,
+      steps: [
+        { id: "p1", label: "并行摸底", nodeKind: "phase", status: "success" },
+        { id: "s1", label: "git tag --list v*", nodeKind: "tool", status: "success" },
+      ],
+    };
+    const { container } = render(<WorkflowRunCard run={withTool} />);
     try {
       fireEvent.click(container.querySelector("[data-workflow-card]")!);
-      fireEvent.click(screen.getByRole("button", { name: "项目解读员" }));
+      fireEvent.click(screen.getByRole("button", { name: "workflow.nodeKind.tool" }));
     } finally {
       window.removeEventListener("duya:open-workflow-run-panel", listener);
     }
@@ -208,16 +226,16 @@ describe("WorkflowRunCard", () => {
     expect(events[0]!.detail.runId).toBe("run-steps-1");
     // The chip's stopPropagation keeps the card click from toggling — the
     // chips stay open so the user keeps their place.
-    expect(screen.getByText("项目解读员")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "workflow.nodeKind.tool" })).toBeTruthy();
   });
 
-  it("an agent chip with a child session opens the watch pane instead of the run detail (plan 568)", () => {
+  it("an agent chip with a child session enters the session chat view (setActiveThread)", () => {
     const runEvents: Array<CustomEvent<{ runId?: string }>> = [];
-    const sessionEvents: Array<CustomEvent<{ sessionId?: string; title?: string }>> = [];
+    const nodeEvents: Array<CustomEvent<{ runId?: string; nodeId?: string }>> = [];
     const runListener = (e: Event) => runEvents.push(e as CustomEvent<{ runId?: string }>);
-    const sessionListener = (e: Event) => sessionEvents.push(e as CustomEvent<{ sessionId?: string; title?: string }>);
+    const nodeListener = (e: Event) => nodeEvents.push(e as CustomEvent<{ runId?: string; nodeId?: string }>);
     window.addEventListener("duya:open-workflow-run-panel", runListener);
-    window.addEventListener("duya:open-session-panel", sessionListener);
+    window.addEventListener("duya:open-workflow-node-panel", nodeListener);
     const withChild: WorkflowRunSse = {
       ...steppedRun,
       steps: [
@@ -230,13 +248,33 @@ describe("WorkflowRunCard", () => {
     // stopPropagation keeps them open for the assertion below).
     fireEvent.click(container.querySelector("[data-workflow-card]")!);
     fireEvent.click(screen.getByRole("button", { name: "项目解读员" }));
-    expect(sessionEvents).toHaveLength(1);
-    expect(sessionEvents[0]!.detail.sessionId).toBe("child-1");
-    expect(sessionEvents[0]!.detail.title).toBe("项目解读员");
-    // The run detail must NOT open — the watch pane replaced it.
+    // The agent chip enters the child session's chat view in the main column.
+    expect(setActiveThread).toHaveBeenCalledWith("child-1");
+    // Neither the run detail nor a node detail opens — the chat view replaced them.
     expect(runEvents).toHaveLength(0);
+    expect(nodeEvents).toHaveLength(0);
     window.removeEventListener("duya:open-workflow-run-panel", runListener);
-    window.removeEventListener("duya:open-session-panel", sessionListener);
+    window.removeEventListener("duya:open-workflow-node-panel", nodeListener);
+  });
+
+  it("a per-kind chip (decision) opens the node's dedicated detail view", () => {
+    const nodeEvents: Array<CustomEvent<{ runId?: string; nodeId?: string }>> = [];
+    const listener = (e: Event) => nodeEvents.push(e as CustomEvent<{ runId?: string; nodeId?: string }>);
+    window.addEventListener("duya:open-workflow-node-panel", listener);
+    const withDecision: WorkflowRunSse = {
+      ...steppedRun,
+      steps: [
+        { id: "p1", label: "并行摸底", nodeKind: "phase", status: "success" },
+        { id: "d1", label: "decide", nodeKind: "decision", status: "success" },
+      ],
+    };
+    const { container } = render(<WorkflowRunCard run={withDecision} />);
+    fireEvent.click(container.querySelector("[data-workflow-card]")!);
+    fireEvent.click(screen.getByRole("button", { name: "workflow.nodeKind.decision" }));
+    expect(nodeEvents).toHaveLength(1);
+    expect(nodeEvents[0]!.detail.runId).toBe("run-steps-1");
+    expect(nodeEvents[0]!.detail.nodeId).toBe("d1");
+    window.removeEventListener("duya:open-workflow-node-panel", listener);
   });
 
   it("clicking an artifact chip resolves its ref and opens the file preview", async () => {
