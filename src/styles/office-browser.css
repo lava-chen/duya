@@ -362,7 +362,7 @@
 
 .browser-panel-toolbar {
   display: grid;
-  grid-template-columns: repeat(3, 24px) minmax(120px, 1fr) repeat(2, 24px);
+  grid-template-columns: repeat(3, 24px) minmax(120px, 1fr) repeat(3, 24px);
   gap: 3px;
   padding: 5px 7px;
   border-bottom: 1px solid var(--border);
@@ -511,6 +511,59 @@
   height: 100%;
   display: flex;
   background: #fff;
+}
+
+.browser-find-bar {
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-solid);
+  color: var(--muted);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+}
+
+.browser-find-bar input {
+  width: 180px;
+  height: 22px;
+  padding: 0 6px;
+  border: none;
+  outline: none;
+  border-radius: 5px;
+  background: var(--surface-hover);
+  color: var(--foreground);
+  font-size: 12px;
+}
+
+.browser-find-count {
+  min-width: 34px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.browser-panel-zoom-chip {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-solid);
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: none;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
 }
 
 @keyframes browser-panel-loading {
