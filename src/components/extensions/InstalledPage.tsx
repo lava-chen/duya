@@ -56,6 +56,7 @@ interface InstalledPageProps {
   mcpManual: MCPServerConfig[];
   mcpFromPlugins: MCPPluginDeclaredServerDTO[];
   onMcpToggle: (server: MCPServerConfig, enabled: boolean) => void;
+  onMcpRemove: (serverName: string) => void;
   onMcpPluginToggle: (server: MCPPluginDeclaredServerDTO, enabled: boolean) => void;
   // ── Skills ──
   skills: SkillSummary[];
@@ -258,6 +259,7 @@ export function InstalledPage({
   mcpManual,
   mcpFromPlugins,
   onMcpToggle,
+  onMcpRemove,
   onMcpPluginToggle,
   skills,
   onSkillClick,
@@ -433,6 +435,21 @@ export function InstalledPage({
               icon={<McpTileIcon />}
               title={server.name}
               description={`${server.command} ${(server.args ?? []).join(" ")}`.trim()}
+              hoverAction={
+                <span className="opacity-0 transition-opacity focus-visible:opacity-100 group-hover/row:opacity-100 group-focus-within/row:opacity-100">
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    shape="square"
+                    aria-label={t("extensions.actions.remove")}
+                    title={t("extensions.actions.remove")}
+                    className="text-[var(--error)] hover:bg-[var(--error-soft)]"
+                    onClick={() => onMcpRemove(server.name)}
+                  >
+                    <TrashIcon size={14} />
+                  </IconButton>
+                </span>
+              }
               actions={
                 <Switch
                   checked={server.enabled !== false}

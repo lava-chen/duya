@@ -763,6 +763,19 @@ export function ExtensionsPage() {
     [mcpServers, save, reloadMcp]
   );
 
+  const handleMcpRemove = useCallback(
+    async (serverName: string) => {
+      // Filter the persisted entries directly so removing one server keeps
+      // every other server's full configuration intact.
+      const newServers = (settings.mcpServers ?? []).filter(
+        (server) => server.name !== serverName
+      );
+      await save({ mcpServers: newServers });
+      await reloadMcp();
+    },
+    [settings.mcpServers, save, reloadMcp]
+  );
+
   const handleToggleSkill = useCallback(
     async (skillName: string, enabled: boolean) => {
       const win = window as unknown as {
@@ -1048,6 +1061,7 @@ export function ExtensionsPage() {
           mcpManual={mcpServers}
           mcpFromPlugins={pluginMCPs}
           onMcpToggle={(server, enabled) => void handleMcpToggle(server, enabled)}
+          onMcpRemove={(serverName) => void handleMcpRemove(serverName)}
           onMcpPluginToggle={handleMcpPluginToggle}
           skills={skills}
           onSkillClick={(skill) => {

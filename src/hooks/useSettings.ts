@@ -364,7 +364,14 @@ export function useSettings(): {
           }
         }
         const raw = await getAllSettingsIPC();
-      setSettings(parseAppSettings(raw));
+        const nextSettings = parseAppSettings(raw);
+        // MCP servers have dedicated persistence in mcp.toml. The generic
+        // settings snapshot can lag behind that source, so keep the list that
+        // was just saved instead of briefly replacing it with a stale value.
+        if (Array.isArray(updates.mcpServers)) {
+          nextSettings.mcpServers = updates.mcpServers;
+        }
+        setSettings(nextSettings);
       } else {
         setError('Settings storage not available');
       }
