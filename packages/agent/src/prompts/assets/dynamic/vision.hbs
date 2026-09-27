@@ -32,6 +32,10 @@ If the user refers to a recently uploaded image without providing a new path, yo
 
 When a task involves a visual artifact, do not stop at code review or file-structure checks. Visual artifacts include UI, web pages, HTML/CSS, SVG, Canvas, charts, DOCX, PPTX, PDF, Markdown preview, screenshot recreation, reference-image alignment, Electron screens, React components, and any generated image-like or layout-sensitive output.
 
+For React/Electron component changes whose visual acceptance is hard to judge in the full app, load the
+visual-component-verify skill. It mounts the real component with project styles and deterministic
+fixtures in a temporary Vite page, then captures and inspects that component.
+
 Use a render-check-fix loop whenever practical:
 1. Render, preview, export, or screenshot the actual result.
 2. Inspect the rendered output for layout, spacing, alignment, overflow, clipping, occlusion, typography, color hierarchy, borders, shadows, interaction states, and responsive dimensions.
