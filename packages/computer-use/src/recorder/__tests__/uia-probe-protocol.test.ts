@@ -275,3 +275,82 @@ describe('uia-probe-protocol — fg op (plan 562 phase 5)', () => {
     });
   });
 });
+
+describe('uia-probe-protocol — invoke op (plan 564)', () => {
+  it('builds a minimal auto invoke line', () => {
+    expect(buildRequestLine({ id: 5, op: 'invoke', hwnd: 197144, index: 12 })).toBe(
+      '{"id":5,"op":"invoke","hwnd":197144,"index":12,"method":"auto"}',
+    );
+  });
+
+  it('carries method / value / staleness guards', () => {
+    expect(
+      buildRequestLine({
+        id: 6,
+        op: 'invoke',
+        hwnd: 197144,
+        index: 3,
+        method: 'setValue',
+        value: 'hello',
+        name: '用户名',
+        controlType: 'Edit',
+      }),
+    ).toBe(
+      '{"id":6,"op":"invoke","hwnd":197144,"index":3,"method":"setValue","value":"hello","name":"用户名","controlType":"Edit"}',
+    );
+  });
+
+  it('parses an invoke success with pattern and post-action element', () => {
+    const parsed = parseUiaProbeLine(
+      '{"id":5,"ok":true,"method":"invoke","pattern":"InvokePattern","value":null,' +
+        '"element":{"name":"登录","controlType":"Button","rect":{"x":10,"y":20,"w":30,"h":40},"isPassword":false}}',
+    );
+    expect(parsed).toMatchObject({
+      kind: 'response',
+      id: 5,
+      ok: true,
+      method: 'invoke',
+      pattern: 'InvokePattern',
+      value: null,
+      element: { name: '登录', controlType: 'Button' },
+    });
+  });
+
+  it('parses SetFocus (pattern:null) and a value read-back', () => {
+    expect(
+      parseUiaProbeLine('{"id":7,"ok":true,"method":"focus","pattern":null,"value":null,"element":null}'),
+    ).toMatchObject({ ok: true, method: 'focus', pattern: null, element: null });
+    expect(
+      parseUiaProbeLine('{"id":8,"ok":true,"method":"setValue","pattern":"ValuePattern","value":"done"}'),
+    ).toMatchObject({ ok: true, method: 'setValue', value: 'done' });
+  });
+
+  it('parses invoke failure reasons and non-invoke success maps them to null', () => {
+    expect(parseUiaProbeLine('{"id":5,"ok":false,"reason":"stale-tree"}')).toMatchObject({
+      kind: 'response',
+      ok: false,
+      reason: 'stale-tree',
+    });
+    expect(parseUiaProbeLine('{"id":1,"ok":true}')).toMatchObject({
+      ok: true,
+      method: null,
+      pattern: null,
+      value: null,
+    });
+  });
+
+  it('keeps enumerate elements that carry a value and null name (plan 564 schema widening)', () => {
+    const parsed = parseUiaProbeLine(
+      '{"id":4,"ok":true,"elements":[' +
+        '{"name":null,"controlType":"Edit","value":"pre-filled","rect":{"x":1,"y":2,"w":3,"h":4},"isPassword":false,"interactive":true},' +
+        '{"name":"密码","controlType":"Edit","rect":{"x":5,"y":6,"w":7,"h":8},"isPassword":true,"interactive":true}' +
+        '],"truncated":false,"reason":null,"count":2}',
+    );
+    expect(parsed).toMatchObject({ kind: 'response', ok: true, truncated: false });
+    if (parsed?.kind === 'response' && parsed.ok) {
+      expect(parsed.elements).toHaveLength(2);
+      expect(parsed.elements?.[0]).toMatchObject({ name: null, value: 'pre-filled' });
+      expect(parsed.elements?.[1]).toMatchObject({ name: '密码', isPassword: true });
+    }
+  });
+});

@@ -18,6 +18,8 @@ export const COMPUTER_USE_ACTIONS = [
   'set_value',
   'wait',
   'zoom',
+  'tree',
+  'invoke',
 ] as const;
 
 export type ComputerUseAction = (typeof COMPUTER_USE_ACTIONS)[number];
@@ -28,11 +30,15 @@ export type ComputerUseAction = (typeof COMPUTER_USE_ACTIONS)[number];
  *
  * Mirrors packages/agent/src/tool/OSTool/constants.ts
  * `CONFIRM_REQUIRED_ACTIONS`.
+ *
+ * plan 564: `invoke` is state-changing like `click` — except the
+ * focus-only variant, which the dispatcher exempts from the gate.
  */
 export const CONFIRM_REQUIRED_ACTIONS: ReadonlySet<ComputerUseAction> = new Set([
   'click',
   'drag',
   'set_value',
+  'invoke',
 ]);
 
 /**

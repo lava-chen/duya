@@ -24,6 +24,12 @@ export type {
   SetValueOptions,
   SomElement,
   TypeTextOptions,
+  UiaInvokeMethod,
+  UiaInvokeOptions,
+  UiaInvokeResult,
+  UiaTreeElement,
+  UiaTreeOptions,
+  UiaTreeResult,
 } from './types.js';
 
 export {

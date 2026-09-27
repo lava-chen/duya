@@ -19,3 +19,9 @@ export {
   type AxInput,
   type ElementDetectorInput,
 } from './element-detector.js';
+
+export {
+  formatTreeElement,
+  formatTreeForLlm,
+  emptyTreeHint,
+} from './structural-format.js';

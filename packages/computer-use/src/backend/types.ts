@@ -233,6 +233,112 @@ export interface ActionResult {
   verdict?: Verdict;
 }
 
+// ---------------------------------------------------------------------------
+// Structural (accessibility-tree) channel — plan 564.
+//
+// Windows ships this via the persistent UIA probe (uia-probe.ps1
+// `enumerate` + `invoke` ops). macOS AX-tree parity is plan 562 Phase 4.
+// Every method on DesktopBackend below is OPTIONAL: backends that have
+// no structural channel simply omit them and the tool layer surfaces a
+// structured STRUCTURAL_UNAVAILABLE error so the model falls back to
+// the vision path.
+// ---------------------------------------------------------------------------
+
+/** Structural methods the invoke channel understands. */
+export type UiaInvokeMethod =
+  | 'auto'
+  | 'invoke'
+  | 'toggle'
+  | 'expand'
+  | 'collapse'
+  | 'select'
+  | 'focus'
+  | 'setValue';
+
+/** Options for the `tree` (structural enumeration) channel. */
+export interface UiaTreeOptions {
+  /** Target top-level window. Defaults to the foreground window. */
+  hwnd?: number;
+  /** Emitted-element cap (probe default 500; the LLM-facing cap is lower). */
+  maxNodes?: number;
+  /** TreeWalker recursion depth cap. */
+  maxDepth?: number;
+  /** Interactive ControlType override (probe default when absent). */
+  controlTypes?: string[];
+  /**
+   * Bypass the (hwnd,title) enumerate cache. Default false — the cache
+   * keeps repeat calls cheap; the title guard catches navigation.
+   */
+  fresh?: boolean;
+}
+
+/** One structural element as the LLM-facing `tree` action reports it. */
+export interface UiaTreeElement {
+  /** 1-based index — the value to pass to `invoke` / `set_value.element`. */
+  index: number;
+  /** UIA ControlType ("Button" / "Edit" / ...). */
+  role?: string;
+  /** UIA Name (accessible label). */
+  name?: string;
+  /** Current value for text-bearing controls (masked for passwords). */
+  value?: string;
+  /** UIA AutomationId (developer-set stable id). */
+  automationId?: string;
+  /** UIA ClassName. */
+  className?: string;
+  /** Real bounding rectangle (logical screen pixels). */
+  rect?: Bbox;
+  /** True when UIA flags a password field — `value` is never included. */
+  isPassword?: boolean;
+}
+
+/** `tree` action result. `source: 'unavailable'` = no structural channel. */
+export interface UiaTreeResult {
+  hwnd: number;
+  title?: string;
+  processName?: string;
+  elements: UiaTreeElement[];
+  truncated: boolean;
+  /** Success qualifier (e.g. "elevated") or degradation note. */
+  reason?: string | null;
+  source: 'uia-tree' | 'unavailable';
+}
+
+/** Options for the structural `invoke` channel. */
+export interface UiaInvokeOptions {
+  /** 1-based tree element index (from the `tree` action). */
+  element: number;
+  /** Structural method. Default `auto` picks from the ControlType. */
+  method?: UiaInvokeMethod;
+  /** Payload for `setValue`. */
+  value?: string;
+  /** Staleness guard: expected UIA Name at the given index. */
+  name?: string;
+  /** Staleness guard: expected UIA ControlType at the given index. */
+  controlType?: string;
+}
+
+/** Structural `invoke` result. */
+export interface UiaInvokeResult {
+  ok: boolean;
+  /** Failure reason (stale-tree / no-element / no-pattern / ...). */
+  reason?: string;
+  /** The structural method that actually ran (auto may downgrade to focus). */
+  method?: string;
+  /** UIA pattern used ("InvokePattern", null for SetFocus). */
+  pattern?: string | null;
+  /** ValuePattern read-back after setValue (null otherwise). */
+  value?: string | null;
+  /** Post-action element identity + rect for verification. */
+  element?: {
+    name?: string;
+    controlType?: string;
+    rect?: Bbox;
+    isPassword?: boolean;
+  } | null;
+  durationMs?: number;
+}
+
 /**
  * The core interface every DesktopBackend must satisfy.
  *
@@ -287,6 +393,22 @@ export interface DesktopBackend {
 
   /** Sleep for `ms` milliseconds. Exposed as an action for pacing. */
   wait(opts: { ms: number }): Promise<void>;
+
+  /**
+   * Structural channel (plan 564, OPTIONAL): enumerate the interactive
+   * element tree of a window with real coordinates. Omit when the
+   * platform has no accessibility bridge — the tool layer then
+   * surfaces STRUCTURAL_UNAVAILABLE and the model falls back to vision.
+   */
+  uiaTree?(opts: UiaTreeOptions): Promise<UiaTreeResult>;
+
+  /**
+   * Structural channel (plan 564, OPTIONAL): dispatch a UIA pattern
+   * (invoke / toggle / expand / select / value / focus) against an
+   * element from the last `uiaTree` enumeration. Works on background
+   * windows and never depends on pixels.
+   */
+  uiaInvoke?(opts: UiaInvokeOptions): Promise<UiaInvokeResult>;
 
   /**
    * Identifier of the backend (e.g. `'noop'`, `'electron-win32'`).

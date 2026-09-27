@@ -156,6 +156,47 @@ describe('computerUseInputSchema', () => {
     ).toBe(false);
     expect(computerUseInputSchema.safeParse({ action: 'list_apps' }).success).toBe(false);
   });
+
+  it('tree accepts minimal input and optional knobs', () => {
+    expect(computerUseInputSchema.safeParse({ action: 'tree' }).success).toBe(true);
+    expect(
+      computerUseInputSchema.safeParse({ action: 'tree', hwnd: 197144, maxElements: 50, fresh: true })
+        .success,
+    ).toBe(true);
+  });
+
+  it('invoke requires a 1-based element and rejects setValue without value', () => {
+    expect(computerUseInputSchema.safeParse({ action: 'invoke' }).success).toBe(false);
+    expect(computerUseInputSchema.safeParse({ action: 'invoke', element: 0 }).success).toBe(false);
+    expect(computerUseInputSchema.safeParse({ action: 'invoke', element: 3 }).success).toBe(true);
+    expect(
+      computerUseInputSchema.safeParse({
+        action: 'invoke',
+        element: 3,
+        name: '登录',
+        controlType: 'Button',
+        method: 'invoke',
+      }).success,
+    ).toBe(true);
+    // setValue needs a non-empty payload value.
+    expect(
+      computerUseInputSchema.safeParse({ action: 'invoke', element: 3, method: 'setValue' }).success,
+    ).toBe(false);
+    expect(
+      computerUseInputSchema.safeParse({
+        action: 'invoke',
+        element: 3,
+        method: 'setValue',
+        value: 'hello',
+      }).success,
+    ).toBe(true);
+  });
+
+  it('set_value accepts an optional structural element target', () => {
+    expect(
+      computerUseInputSchema.safeParse({ action: 'set_value', value: 'v', element: 7 }).success,
+    ).toBe(true);
+  });
 });
 
 function minimalValidInput(action: string): Record<string, unknown> {
@@ -178,6 +219,10 @@ function minimalValidInput(action: string): Record<string, unknown> {
       return { action: 'wait', ms: 100 };
     case 'zoom':
       return { action: 'zoom', x: 0, y: 0, w: 100, h: 100 };
+    case 'tree':
+      return { action: 'tree' };
+    case 'invoke':
+      return { action: 'invoke', element: 1 };
     default:
       return { action };
   }

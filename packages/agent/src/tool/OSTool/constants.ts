@@ -30,6 +30,15 @@
 
 export const COMPUTER_USE_TOOL_NAME = 'computer_use';
 
+/**
+ * plan 564 widens the enum with the STRUCTURAL channel: `tree`
+ * (accessibility-tree enumeration with real coordinates) and `invoke`
+ * (UIA pattern dispatch against a tree element). Structural actions
+ * are the PRIMARY operating channel on Windows; capture/click remain
+ * the vision FALLBACK. On platforms without the structural bridge the
+ * dispatcher returns STRUCTURAL_UNAVAILABLE and the model stays on the
+ * vision loop — no behavior change.
+ */
 export const COMPUTER_USE_ACTIONS = [
   'capture',
   'click',
@@ -40,6 +49,8 @@ export const COMPUTER_USE_ACTIONS = [
   'set_value',
   'wait',
   'zoom',
+  'tree',
+  'invoke',
 ] as const;
 
 export const COMPUTER_USE_ACTION_LIST: readonly string[] = COMPUTER_USE_ACTIONS;
@@ -82,11 +93,15 @@ export type ComputerUseExecuteAction = ComputerUseAction | ComputerUseContextAct
  * Actions that require user confirmation before execution. These
  * are destructive / state-changing operations where the LLM could
  * easily misuse them.
+ *
+ * plan 564: `invoke` joins the set (it presses real buttons) — the
+ * dispatcher exempts the focus-only variant from the gate.
  */
 export const CONFIRM_REQUIRED_ACTIONS: ReadonlySet<ComputerUseAction> = new Set([
   'click',
   'drag',
   'set_value',
+  'invoke',
 ]);
 
 /**

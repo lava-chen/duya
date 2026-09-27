@@ -47,29 +47,39 @@ export const AppRefSchema = z.object({
  *
  * `source` is the only required field so that a missing probe result
  * is representable. Every other field is best-effort from UIA.
+ *
+ * Text fields are `| null`-tolerant (plan 564): the probe's C# JSON
+ * emits `"name":null` for unnamed elements — a strict string schema
+ * would silently drop those entries out of every enumerate tree.
  */
 export interface ElementDescriptor {
   /** UIA Name (often the button label / field placeholder). */
-  name?: string;
+  name?: string | null;
   /** UIA ControlType localized string, e.g. "Button" / "Edit". */
-  controlType?: string;
+  controlType?: string | null;
   /** UIA AutomationId (developer-set stable id). */
-  automationId?: string;
+  automationId?: string | null;
   /** UIA ClassName, e.g. "Button", "Edit", "Chrome_RenderWidgetHostHWND". */
-  className?: string;
+  className?: string | null;
   /** Bounding rectangle in logical screen pixels (top-left origin). */
   rect?: Bbox;
   /** True when UIA flags the element as a password input. Forces text redaction. */
-  isPassword?: boolean;
+  isPassword?: boolean | null;
+  /**
+   * Current value for text-bearing controls (plan 564; probe reads the
+   * ValuePattern for Edit/Document/ComboBox and never emits it for
+   * password fields).
+   */
+  value?: string | null;
   /** Provenance — drives the matcher's confidence scoring downstream. */
   source: 'uia-probe' | 'none';
 }
 
 export const ElementDescriptorSchema = z.object({
-  name: z.string().optional(),
-  controlType: z.string().optional(),
-  automationId: z.string().optional(),
-  className: z.string().optional(),
+  name: z.string().nullish(),
+  controlType: z.string().nullish(),
+  automationId: z.string().nullish(),
+  className: z.string().nullish(),
   rect: z
     .object({
       x: z.number(),
@@ -78,7 +88,8 @@ export const ElementDescriptorSchema = z.object({
       h: z.number().nonnegative(),
     })
     .optional(),
-  isPassword: z.boolean().optional(),
+  isPassword: z.boolean().nullish(),
+  value: z.string().nullish(),
   source: z.enum(['uia-probe', 'none']),
 });
 

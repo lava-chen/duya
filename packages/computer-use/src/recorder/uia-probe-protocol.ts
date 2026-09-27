@@ -8,6 +8,11 @@
  *   {"id":3,"op":"ping"}
  *   {"id":4,"op":"enumerate","hwnd":197144,"maxDepth":40,"maxNodes":500,
  *      "controlTypes":["Button","Edit",...]}   (plan 562 — knobs optional)
+ *   {"id":5,"op":"invoke","hwnd":197144,"index":12,"method":"invoke",
+ *      "value":null,"name":"Sign in","controlType":"Button"}
+ *      (plan 564 — structural act op; index is 1-based into the probe's
+ *       last enumerate emission order for that hwnd; name/controlType
+ *       are optional staleness guards)
  *
  * Responses (probe stdout) are one JSON line each:
  *   {"ready":true}                                    — first line after Add-Type
@@ -19,7 +24,17 @@
  *                                                       truncated:true = partial tree
  *                                                       kept after a budget hit,
  *                                                       reason:"elevated" = UIPI skip
+ *   {"id":5,"ok":true,"method":"invoke","pattern":"InvokePattern",  — plan 564:
+ *      "element":{...},"value":null}                   method = what ran, pattern =
+ *                                                       UIA pattern used (null for
+ *                                                       focus), element = post-action
+ *                                                       read-back, value = ValuePattern
+ *                                                       read-back after setValue
  *   {"id":2,"ok":false,"reason":"timeout"}
+ *
+ * invoke failure reasons (plan 564): stale-tree (cached element gone or
+ * verify mismatch — caller should re-enumerate), no-element, no-pattern,
+ * bad-index, no-window, timeout.
  *
  * This module is pure data (zod parse/build helpers only) so both the
  * main-side client and the tests run without electron. Every failure
@@ -35,7 +50,7 @@ import type { ElementDescriptor } from './events.js';
 /** Probe operation payload the main side builds. */
 export interface UiaProbeRequest {
   id: number;
-  op: 'probe' | 'readUrl' | 'ping' | 'enumerate' | 'fg';
+  op: 'probe' | 'readUrl' | 'ping' | 'enumerate' | 'fg' | 'invoke';
   x?: number;
   y?: number;
   hwnd?: number;
@@ -45,6 +60,21 @@ export interface UiaProbeRequest {
   maxNodes?: number;
   /** enumerate: interactive ControlType override (probe default when absent). */
   controlTypes?: string[];
+  /**
+   * invoke (plan 564): 1-based position in the probe's last enumerate
+   * emission order for the target hwnd.
+   */
+  index?: number;
+  /**
+   * invoke: structural method. `auto` picks the pattern from the
+   * element's ControlType (UFO-style default chain).
+   */
+  method?: 'auto' | 'invoke' | 'toggle' | 'expand' | 'collapse' | 'select' | 'focus' | 'setValue';
+  /** invoke: payload for method=setValue. */
+  value?: string;
+  /** invoke: optional staleness guards verified against the cached element. */
+  name?: string;
+  controlType?: string;
 }
 
 /**
@@ -70,6 +100,42 @@ export const DEFAULT_INTERACTIVE_CONTROL_TYPES: readonly string[] = [
   'ListItem',
   'ToggleSwitch',
 ];
+
+/**
+ * Structural invoke methods (plan 564). `auto` lets the probe pick the
+ * pattern from the element's ControlType (UFO²-style default chain:
+ * Button/MenuItem/Hyperlink → InvokePattern, CheckBox/Toggle →
+ * TogglePattern, ComboBox → ExpandCollapse, ListItem → SelectionItem,
+ * Edit → ValuePattern when a value is supplied, else SetFocus).
+ */
+export const UIA_INVOKE_METHODS = [
+  'auto',
+  'invoke',
+  'toggle',
+  'expand',
+  'collapse',
+  'select',
+  'focus',
+  'setValue',
+] as const;
+
+export type UiaInvokeMethod = (typeof UIA_INVOKE_METHODS)[number];
+
+/** Stable failure reason strings the probe emits for `invoke`. */
+export const UIA_INVOKE_FAILURE_REASONS = {
+  /** Cached element is gone or the staleness guard mismatched — re-enumerate. */
+  STALE_TREE: 'stale-tree',
+  /** Nothing cached for the hwnd / slot (call tree/enumerate first). */
+  NO_ELEMENT: 'no-element',
+  /** The element carries none of the requested UIA patterns. */
+  NO_PATTERN: 'no-pattern',
+  /** Index outside the cached tree (1-based). */
+  BAD_INDEX: 'bad-index',
+  /** The hwnd has no live UIA element (window closed). */
+  NO_WINDOW: 'no-window',
+  /** Internal budget blown (UIA call hung). */
+  TIMEOUT: 'timeout',
+} as const;
 
 /**
  * Wire shape of one enumerate element: the recorder's element fields
@@ -107,6 +173,18 @@ export function buildRequestLine(request: UiaProbeRequest): string {
       ...(request.controlTypes !== undefined ? { controlTypes: request.controlTypes } : {}),
     });
   }
+  if (request.op === 'invoke') {
+    return JSON.stringify({
+      id: request.id,
+      op: 'invoke',
+      hwnd: request.hwnd,
+      index: request.index,
+      method: request.method ?? 'auto',
+      ...(request.value !== undefined ? { value: request.value } : {}),
+      ...(request.name !== undefined ? { name: request.name } : {}),
+      ...(request.controlType !== undefined ? { controlType: request.controlType } : {}),
+    });
+  }
   return JSON.stringify({ id: request.id, op: 'ping' });
 }
 
@@ -132,6 +210,12 @@ const successResponseSchema = z.object({
     .optional(),
   /** Success-side qualifier, e.g. "elevated" (window skipped, UIPI). */
   reason: z.string().nullable().optional(),
+  /** invoke (plan 564): the structural method that actually ran. */
+  method: z.string().optional(),
+  /** invoke: UIA pattern used ("InvokePattern", null for SetFocus). */
+  pattern: z.string().nullable().optional(),
+  /** invoke: ValuePattern read-back after setValue (null otherwise). */
+  value: z.string().nullable().optional(),
 });
 
 const failureResponseSchema = z.object({
@@ -160,6 +244,12 @@ export type UiaProbeResponse =
       fg: { hwnd: number; pid: number; processName: string; title: string } | null;
       /** enumerate success qualifier, e.g. "elevated" (window skipped). */
       reason: string | null;
+      /** invoke: structural method that ran; null for other ops. */
+      method: string | null;
+      /** invoke: UIA pattern used ("InvokePattern", null for SetFocus). */
+      pattern: string | null;
+      /** invoke: ValuePattern read-back after setValue. */
+      value: string | null;
     }
   | { kind: 'response'; id: number; ok: false; reason: string };
 
@@ -209,6 +299,9 @@ export function parseUiaProbeLine(line: string): UiaProbeResponse | null {
       truncated: success.data.truncated ?? false,
       fg: success.data.fg ?? null,
       reason: success.data.reason ?? null,
+      method: success.data.method ?? null,
+      pattern: success.data.pattern ?? null,
+      value: success.data.value ?? null,
     };
   }
   return null;

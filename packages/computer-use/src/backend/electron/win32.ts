@@ -34,6 +34,10 @@ import type {
   SetValueOptions,
   SomElement,
   TypeTextOptions,
+  UiaInvokeOptions,
+  UiaInvokeResult,
+  UiaTreeOptions,
+  UiaTreeResult,
 } from '../types.js';
 import type { Verdict } from '../../verdict/types.js';
 import {
@@ -168,6 +172,19 @@ export interface ElectronDesktopBackendOptions {
    * with no injection decision (behavior unchanged on non-Windows).
    */
   win32InputProvider?: Win32NativeAdapter | null;
+  /**
+   * Structural channel provider (plan 564): enumerate the interactive
+   * element tree of a window with real coordinates. Production wires
+   * the persistent UIA probe (`enumerate` op); platforms without an
+   * accessibility bridge leave it unset and `uiaTree` reports
+   * `source: 'unavailable'`.
+   */
+  uiaTreeProvider?: (opts: UiaTreeOptions) => Promise<UiaTreeResult>;
+  /**
+   * Structural channel provider (plan 564): dispatch a UIA pattern
+   * against a 1-based element from the last tree enumeration.
+   */
+  uiaInvokeProvider?: (opts: UiaInvokeOptions) => Promise<UiaInvokeResult>;
   /**
    * Capture resolution in logical CSS pixels. Defaults to 1920x1080.
    * desktopCapturer returns native pixels; we resize down.
@@ -528,6 +545,33 @@ export class ElectronDesktopBackend implements DesktopBackend {
     const ms = Math.max(0, opts.ms);
     if (ms === 0) return;
     await new Promise<void>((resolve) => setTimeout(resolve, ms));
+  }
+
+  // ────────────────────────────────────────────────────────────────────
+  // Structural channel (plan 564). Thin pass-through to the injected
+  // providers — the Electron layer owns the UIA probe client; this class
+  // only reports `unavailable` when no provider is wired so the tool
+  // layer can steer the model back to the vision loop.
+  // ────────────────────────────────────────────────────────────────────
+
+  async uiaTree(opts: UiaTreeOptions): Promise<UiaTreeResult> {
+    if (!this.opts.uiaTreeProvider) {
+      return {
+        hwnd: opts.hwnd ?? -1,
+        elements: [],
+        truncated: false,
+        reason: 'no structural channel on this platform',
+        source: 'unavailable',
+      };
+    }
+    return this.opts.uiaTreeProvider(opts);
+  }
+
+  async uiaInvoke(opts: UiaInvokeOptions): Promise<UiaInvokeResult> {
+    if (!this.opts.uiaInvokeProvider) {
+      return { ok: false, reason: 'no structural channel on this platform' };
+    }
+    return this.opts.uiaInvokeProvider(opts);
   }
 
   // ────────────────────────────────────────────────────────────────────

@@ -140,6 +140,13 @@ const setValueShape = z
   .object({
     action: z.literal('set_value'),
     value: safeText,
+    /**
+     * plan 564: structural target — a 1-based element index from the
+     * `tree` action. When present the value is written through the UIA
+     * ValuePattern (atomic, works on background windows); when absent
+     * the value is typed into the focused field via the keyboard path.
+     */
+    element: nonNegativeInt.optional(),
     delayMs: nonNegativeInt.optional(),
     timeoutMs,
   })
@@ -174,6 +181,45 @@ const zoomShape = z
   );
 
 // ─────────────────────────────────────────────────────────────────────
+// Structural channel (plan 564)
+// ---------------------------------------------------------------------------
+
+const treeShape = z
+  .object({
+    action: z.literal('tree'),
+    /** Target window. Defaults to the foreground window. */
+    hwnd: nonNegativeInt.optional(),
+    /** Emitted-element cap (probe hard cap is 500). */
+    maxElements: nonNegativeInt.optional(),
+    /** Bypass the (hwnd,title) enumerate cache. */
+    fresh: z.boolean().optional(),
+    timeoutMs,
+  })
+  .strict();
+
+const invokeShape = z
+  .object({
+    action: z.literal('invoke'),
+    /** 1-based element index from the `tree` action. */
+    element: nonNegativeInt.refine((n) => n > 0, {
+      message: 'element is 1-based (from the tree action)',
+    }),
+    method: z
+      .enum(['auto', 'invoke', 'toggle', 'expand', 'collapse', 'select', 'focus', 'setValue'])
+      .optional(),
+    value: safeText.optional(),
+    /** Staleness guard: expected UIA Name at that index. */
+    name: z.string().max(200).optional(),
+    /** Staleness guard: expected UIA ControlType at that index. */
+    controlType: z.string().max(64).optional(),
+    timeoutMs,
+  })
+  .strict()
+  .refine((v) => v.method !== 'setValue' || (v.value !== undefined && v.value.length > 0), {
+    message: 'invoke method=setValue requires a non-empty `value`',
+  });
+
+// ─────────────────────────────────────────────────────────────────────
 // Discriminated union
 // ─────────────────────────────────────────────────────────────────────
 
@@ -192,6 +238,8 @@ export const computerUseInputSchema = z.discriminatedUnion(
     setValueShape,
     waitShape,
     zoomShape,
+    treeShape,
+    invokeShape,
   ],
 );
 

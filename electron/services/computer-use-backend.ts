@@ -35,13 +35,29 @@ import {
   type NutAdapter,
   type SharpAdapter,
   type AppInfo,
+  type ElementDescriptor,
+  type UiaInvokeOptions,
+  type UiaInvokeResult,
+  type UiaTreeElement,
+  type UiaTreeOptions,
+  type UiaTreeResult,
 } from '@duya/computer-use';
 import { detectSomElements, drawSomOverlay } from '@duya/computer-use';
 
 import { getLogger, LogComponent } from '../logging/logger.js';
 import { getOSContextBridge } from '../../packages/agent/dist/context/os-context/index.js';
+import { getSharedUiaProbeClient } from './recorder/uia-probe.js';
 
 const logger = getLogger();
+
+/**
+ * SOM-capture tree TTL (plan 564): the capture path enumerates the
+ * foreground window so SOM markers land on REAL coordinates instead of
+ * the heuristic grid. The TTL is deliberately short — a stale tree
+ * makes click targets wrong, so re-scan after 10s even when the title
+ * is unchanged. The `tree` action (LLM-facing) uses the client default.
+ */
+const CAPTURE_TREE_TTL_MS = 10_000;
 
 /**
  * Adapter for Electron's desktopCapturer. Captures the primary display
@@ -529,6 +545,148 @@ async function focusAppByTitle(
 }
 
 /**
+ * plan 564 — structural channel providers.
+ *
+ * The `tree` / `invoke` actions (and set_value's UIA path) ride the
+ * SAME persistent uia-probe.ps1 process the recorder uses — one
+ * Add-Type compile, one spawn, shared (hwnd,title) enumerate cache.
+ * Foreground resolution prefers the probe's cheap `fg` op and falls
+ * back to the spawn-based query so a degraded probe never blocks the
+ * vision loop (structural results just report unavailable).
+ */
+
+interface ResolvedTarget {
+  hwnd: number;
+  title: string;
+  processName?: string;
+}
+
+async function resolveStructuralTarget(
+  hwnd?: number,
+): Promise<ResolvedTarget | null> {
+  if (typeof hwnd === 'number' && hwnd > 0) {
+    // Explicit target: title unknown — the empty title forces the
+    // enumerate cache to re-scan.
+    return { hwnd, title: '' };
+  }
+  try {
+    const fg = getSharedUiaProbeClient().foreground();
+    const info = await Promise.race([fg, new Promise<null>((r) => setTimeout(() => r(null), 1_400))]);
+    if (info) {
+      return { hwnd: info.hwnd, title: info.title, processName: info.processName };
+    }
+  } catch {
+    // probe down — fall through to the spawn query
+  }
+  const psInfo = await getForegroundWindowInfo();
+  if (psInfo) {
+    return { hwnd: psInfo.hwnd, title: psInfo.title, processName: psInfo.processName };
+  }
+  return null;
+}
+
+async function uiaTreeProvider(opts: {
+  hwnd?: number;
+  maxNodes?: number;
+  maxDepth?: number;
+  fresh?: boolean;
+}): Promise<UiaTreeResult> {
+  const probe = getSharedUiaProbeClient();
+  const target = await resolveStructuralTarget(opts.hwnd);
+  if (!target) {
+    return {
+      hwnd: opts.hwnd ?? -1,
+      elements: [],
+      truncated: false,
+      reason: 'no foreground window',
+      source: 'unavailable',
+    };
+  }
+  const enumOpts = {
+    ...(opts.maxNodes !== undefined ? { maxNodes: opts.maxNodes } : {}),
+    ...(opts.maxDepth !== undefined ? { maxDepth: opts.maxDepth } : {}),
+  };
+  const result = opts.fresh
+    ? await probe.enumerate(target.hwnd, enumOpts)
+    : await probe.enumerateCached(target.hwnd, target.title, enumOpts);
+  if (result === null) {
+    return {
+      hwnd: target.hwnd,
+      title: target.title,
+      processName: target.processName,
+      elements: [],
+      truncated: false,
+      reason: 'probe unavailable',
+      source: 'unavailable',
+    };
+  }
+  const elements: UiaTreeElement[] = result.elements.map((el, i) => ({
+    index: i + 1,
+    role: el.controlType ?? undefined,
+    name: el.name ?? undefined,
+    value: el.value ?? undefined,
+    automationId: el.automationId ?? undefined,
+    className: el.className ?? undefined,
+    rect: el.rect,
+    isPassword: el.isPassword === true,
+  }));
+  return {
+    hwnd: target.hwnd,
+    title: target.title,
+    processName: target.processName,
+    elements,
+    truncated: result.truncated,
+    reason: result.reason,
+    source: 'uia-tree',
+  };
+}
+
+async function uiaInvokeProvider(opts: {
+  element: number;
+  method?: UiaInvokeOptions['method'];
+  value?: string;
+  name?: string;
+  controlType?: string;
+}): Promise<UiaInvokeResult> {
+  const start = Date.now();
+  const probe = getSharedUiaProbeClient();
+  const target = await resolveStructuralTarget();
+  if (!target) {
+    return { ok: false, reason: 'no foreground window' };
+  }
+  const outcome = await probe.invoke(target.hwnd, {
+    index: opts.element,
+    method: opts.method,
+    value: opts.value,
+    name: opts.name,
+    controlType: opts.controlType,
+  });
+  if (outcome === null) {
+    return {
+      ok: false,
+      reason: 'probe unavailable',
+      durationMs: Date.now() - start,
+    };
+  }
+  return {
+    ok: outcome.ok,
+    reason: outcome.reason,
+    method: outcome.method,
+    pattern: outcome.pattern ?? null,
+    value: outcome.value ?? null,
+    element: outcome.element
+      ? {
+          name: outcome.element.name ?? undefined,
+          controlType: outcome.element.controlType ?? undefined,
+          rect: outcome.element.rect,
+          isPassword: outcome.element.isPassword === true,
+        }
+      : null,
+    durationMs: Date.now() - start,
+  };
+}
+
+/**
  * Initialize the DesktopBackend. Safe to call multiple times; later
  * calls are no-ops once the backend is set.
  *
@@ -552,10 +710,33 @@ export function initializeComputerUseBackend(): boolean {
       detectElements: async ({ width, height }) => {
         try {
           const ctx = getOSContextBridge().getCurrent();
+          // plan 564: SOM capture enumerates the foreground window so
+          // markers land on REAL bounding rectangles (the tree path)
+          // instead of the coordinate-less heuristic grid. Best-effort:
+          // a degraded / cold probe degrades silently to the axInfo
+          // grid + focused-entity path below.
+          let axElements: ElementDescriptor[] | null = null;
+          try {
+            const target = await resolveStructuralTarget();
+            if (target) {
+              const enumerated = await getSharedUiaProbeClient().enumerateCached(
+                target.hwnd,
+                target.title,
+                { ttlMs: CAPTURE_TREE_TTL_MS },
+              );
+              if (enumerated && enumerated.elements.length > 0) {
+                axElements = enumerated.elements;
+              }
+            }
+          } catch {
+            // structural read failed — grid fallback below
+          }
           return detectSomElements({
             width,
             height,
             focusedEntity: ctx?.focusedEntity ?? null,
+            axElements,
+            axElementsSource: 'uia-tree',
             // plan 519 §3.4: feed the UIA / MSAA accessibility inputs the
             // daemon already captures so SOM is upgraded from "no usable
             // element" to "labeled controls". Empty arrays keep the
@@ -574,6 +755,10 @@ export function initializeComputerUseBackend(): boolean {
       },
       listAppsProvider: listAppsFromContext,
       focusAppProvider: focusAppByTitle,
+      // plan 564: structural channel providers (tree / invoke) — ride
+      // the shared uia-probe.ps1 process the recorder owns.
+      uiaTreeProvider,
+      uiaInvokeProvider,
       // plan 519 §3.5 / A3: post-action read-back source for Verdicts.
       // Uses the bridge's latest focused entity; resolves to null when the
       // snapshot is unavailable so the verdict ladder always has a signal.

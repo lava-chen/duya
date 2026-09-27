@@ -52,20 +52,22 @@ import { recordComputerUseContextTrigger } from './context-tool.js';
 export const definition: Tool = {
   name: COMPUTER_USE_TOOL_NAME,
   description:
-    'Drive the host OS desktop: screenshot, mouse, keyboard.\n' +
-    'Actions: capture (somMode=true adds numbered SOM markers) | click | type | key | scroll | drag | set_value | wait | zoom (crop a region for close inspection).\n\n' +
+    'Drive the host OS desktop. Two channels:\n' +
+    'STRUCTURAL (primary): tree (read the target window\'s accessibility tree — element index, role, name, value, real coordinates) and invoke (press buttons / toggle / expand menus / select / write fields / focus THROUGH the OS accessibility layer — works on background windows, no pixels involved).\n' +
+    'VISION (auxiliary): capture (somMode=true adds numbered SOM markers) | click | scroll | drag | key | type | zoom (crop a region).\n\n' +
     'Workflow:\n' +
-    '  1. capture(somMode=true) — see the full screen\n' +
-    '  2. zoom(x,y,w,h) — when text/buttons are small; coords it returns are relative to the crop\n' +
-    '  3. click(x,y) — one state-changing step at a time\n' +
-    '  4. capture again — verify the result before the next step\n\n' +
+    '  1. tree — enumerate the interactive elements of the target window\n' +
+    '  2. invoke(element=n) for buttons/toggles/menus; set_value(element=n, value) for fields; invoke(element=n, method="focus") + type when a field needs real keystrokes\n' +
+    '  3. tree again (cheap, no pixels) or capture to verify before the next step\n' +
+    '  4. fall back to the vision loop (capture somMode=true → click) ONLY when the tree is empty/unreliable (custom-drawn apps, some browser content) or invoke reports no-pattern\n\n' +
     'Rules:\n' +
-    '  - x/y are pixels in the LAST image you saw (full screen or zoom crop); the backend maps them to screen space\n' +
-    '  - never guess coordinates from memory — re-capture if the screen may have changed\n' +
-    '  - wait 1-3s after launching apps or opening menus before re-capturing\n' +
+    '  - `element` for invoke/set_value is 1-based from the LAST tree call; re-run tree after navigation; on stale-tree, re-run tree (invoke already retried once)\n' +
+    '  - x/y for click/drag/zoom are pixels in the LAST image you saw; never guess coordinates from memory\n' +
+    '  - scroll/key/type are keyboard-level and work either way; click stays for elements the tree misses\n' +
+    '  - STRUCTURAL_UNAVAILABLE means this platform/window has no accessibility bridge: stay on the vision loop\n' +
     '  - APP_BLOCKED / REDACTED_FIELD / BLOCKED / USER_REJECTED refusals are policy: stop and tell the user, do not retry variations\n' +
-    '  - clicking, dragging and set_value pop a 3s user confirmation; a timeout cancels the action\n' +
-    "  - 'verdict.effect' in the result tells you if the action landed (confirmed/unverifiable/suspected_noop); on suspected_noop, re-capture before retrying — never blindly repeat",
+    '  - clicking (invoke/click), dragging and set_value pop a 3s user confirmation; a timeout cancels the action\n' +
+    "  - 'verdict.effect' (vision) / invoke's pattern+element read-back tell you if the action landed; on suspected_noop or stale-tree, re-observe FIRST — never blindly repeat",
   input_schema: {
     type: 'object',
     properties: {
@@ -77,7 +79,25 @@ export const definition: Tool = {
       // Common fields (each branch uses what it needs).
       somMode: { type: 'boolean', description: 'capture: render SOM overlay' },
       displayId: { type: 'number', description: 'capture: target display index' },
-      element: { type: 'number', description: 'click/drag: SOM element index' },
+      element: {
+        type: 'number',
+        description:
+          'invoke: 1-based tree element index | set_value: tree element (UIA ValuePattern write) | click/drag: SOM element index',
+      },
+      hwnd: { type: 'number', description: 'tree: target window handle (default: foreground)' },
+      maxElements: { type: 'number', description: 'tree: emitted-element cap' },
+      fresh: { type: 'boolean', description: 'tree: bypass the enumerate cache' },
+      method: {
+        type: 'string',
+        enum: ['auto', 'invoke', 'toggle', 'expand', 'collapse', 'select', 'focus', 'setValue'],
+        description: 'invoke: structural method (default auto picks from the element role)',
+      },
+      value: {
+        type: 'string',
+        description: 'set_value: replacement value | invoke(method=setValue): value to write',
+      },
+      name: { type: 'string', description: 'invoke: expected element name (staleness guard)' },
+      controlType: { type: 'string', description: 'invoke: expected element role (staleness guard)' },
       fromElement: { type: 'number' },
       toElement: { type: 'number' },
       x: { type: 'number' },
@@ -88,7 +108,6 @@ export const definition: Tool = {
       toY: { type: 'number' },
       steps: { type: 'number', description: 'drag: number of intermediate positions' },
       text: { type: 'string', description: 'type: text to type' },
-      value: { type: 'string', description: 'set_value: replacement value' },
       key: { type: 'string', description: 'key: key name' },
       modifiers: {
         type: 'array',
@@ -138,6 +157,12 @@ export const ComputerUseErrorCode = {
   REDACTED_FIELD: 'REDACTED_FIELD',
   BLOCKED: 'BLOCKED',
   APP_BLOCKED: 'APP_BLOCKED',
+  /**
+   * plan 564: the structural channel (tree/invoke) has no bridge on
+   * this platform or the probe is down — the model should stay on the
+   * vision loop instead of retrying structural actions.
+   */
+  STRUCTURAL_UNAVAILABLE: 'STRUCTURAL_UNAVAILABLE',
   UNKNOWN: 'UNKNOWN',
 } as const;
 

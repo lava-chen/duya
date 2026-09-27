@@ -17,6 +17,14 @@
  *                    3s main-side race; partial trees survive budget
  *                    hits (truncated:true). (hwnd,title) caching keeps
  *                    an unchanged application from being re-scanned.
+ *   invoke(hwnd, i)  → structural act op (plan 564): resolve a 1-based
+ *                    element from the probe's last enumerate cache for
+ *                    the hwnd and dispatch a UIA pattern (Invoke /
+ *                    Toggle / ExpandCollapse / SelectionItem / Value /
+ *                    SetFocus). A `stale-tree` answer triggers ONE
+ *                    auto-recovery (fresh enumerate + retry) before the
+ *                    error is surfaced — the caller re-runs tree when it
+ *                    still fails.
  *
  * Failure policy (design §5 + plan 562 D5):
  *   - per-request timeout   → consecutive counter; LIMIT consecutive
@@ -62,6 +70,49 @@ export const UIA_READURL_TIMEOUT_MS = 800;
 export const UIA_FG_TIMEOUT_MS = 1200;
 /** Main-side race for enumerate(): the probe's internal walk budget is 1500ms. */
 export const UIA_ENUMERATE_TIMEOUT_MS = 3_000;
+/** Main-side race for invoke(): the probe's internal budget is 1000ms. */
+export const UIA_INVOKE_TIMEOUT_MS = 2_500;
+
+/**
+ * Stable invoke failure reasons the probe can return (mirrored in
+ * packages/computer-use uia-probe-protocol.ts UIA_INVOKE_FAILURE_REASONS).
+ * Duplicated as string literals here so the electron tree does not have
+ * to import the package at module-load time in tests.
+ */
+export const UIA_INVOKE_ERRORS = {
+  STALE_TREE: 'stale-tree',
+  NO_ELEMENT: 'no-element',
+  NO_PATTERN: 'no-pattern',
+  BAD_INDEX: 'bad-index',
+  NO_WINDOW: 'no-window',
+} as const;
+
+/** Structural methods the probe's invoke op understands. */
+export type UiaInvokeMethod =
+  | 'auto'
+  | 'invoke'
+  | 'toggle'
+  | 'expand'
+  | 'collapse'
+  | 'select'
+  | 'focus'
+  | 'setValue';
+
+/** invoke() outcome — `null` means the probe could not answer at all. */
+export interface UiaInvokeOutcome {
+  /** True when the structural action dispatched successfully. */
+  ok: boolean;
+  /** Failure reason (stale-tree / no-element / no-pattern / ...). */
+  reason?: string;
+  /** The structural method that actually ran (auto may downgrade to focus). */
+  method?: string;
+  /** UIA pattern used ("InvokePattern", null for SetFocus). */
+  pattern?: string | null;
+  /** ValuePattern read-back after setValue (null otherwise). */
+  value?: string | null;
+  /** Post-action element JSON (provenance stamped downstream). */
+  element?: ElementDescriptor | null;
+}
 
 /**
  * Degraded auto-retry window (plan 562 D5): after this long in the
@@ -112,6 +163,7 @@ export interface UiaProbeClientOptions {
   readUrlTimeoutMs?: number;
   fgTimeoutMs?: number;
   enumerateTimeoutMs?: number;
+  invokeTimeoutMs?: number;
   readyTimeoutMs?: number;
   idleRecycleMs?: number;
   consecutiveTimeoutLimit?: number;
@@ -164,6 +216,7 @@ export class UiaProbeClient {
     readUrlTimeoutMs: number;
     fgTimeoutMs: number;
     enumerateTimeoutMs: number;
+    invokeTimeoutMs: number;
     readyTimeoutMs: number;
     idleRecycleMs: number;
     consecutiveTimeoutLimit: number;
@@ -179,6 +232,7 @@ export class UiaProbeClient {
       readUrlTimeoutMs: opts.readUrlTimeoutMs ?? UIA_READURL_TIMEOUT_MS,
       fgTimeoutMs: opts.fgTimeoutMs ?? UIA_FG_TIMEOUT_MS,
       enumerateTimeoutMs: opts.enumerateTimeoutMs ?? UIA_ENUMERATE_TIMEOUT_MS,
+      invokeTimeoutMs: opts.invokeTimeoutMs ?? UIA_INVOKE_TIMEOUT_MS,
       readyTimeoutMs: opts.readyTimeoutMs ?? READY_TIMEOUT_MS,
       idleRecycleMs: opts.idleRecycleMs ?? IDLE_RECYCLE_MS,
       consecutiveTimeoutLimit: opts.consecutiveTimeoutLimit ?? CONSECUTIVE_TIMEOUT_LIMIT,
@@ -298,10 +352,18 @@ export class UiaProbeClient {
    * the window handle AND title are unchanged, the cached tree is
    * returned without touching the probe. A title change or an expired
    * entry triggers a re-scan. Pass title='' to force a scan.
+   * `ttlMs` overrides the client-level cache TTL for this call (plan
+   * 564: the SOM capture path uses a short TTL so clicking targets are
+   * real coordinates that are never very stale).
    */
-  async enumerateCached(hwnd: number, title: string, opts: { maxNodes?: number; maxDepth?: number } = {}): Promise<UiaEnumerateResult | null> {
+  async enumerateCached(
+    hwnd: number,
+    title: string,
+    opts: { maxNodes?: number; maxDepth?: number; ttlMs?: number } = {},
+  ): Promise<UiaEnumerateResult | null> {
+    const ttl = opts.ttlMs ?? this.opts.enumerateCacheTtlMs;
     const cached = this.enumerateCache.get(hwnd);
-    const fresh = cached && Date.now() - cached.at < this.opts.enumerateCacheTtlMs;
+    const fresh = cached && Date.now() - cached.at < ttl;
     if (cached && fresh && cached.title === title && title.length > 0) {
       return cached.result;
     }
@@ -324,6 +386,73 @@ export class UiaProbeClient {
   /** Test/IPC: drop cached enumerate results (e.g. after a forced refresh). */
   clearEnumerateCache(): void {
     this.enumerateCache.clear();
+  }
+
+  /**
+   * Structural act op (plan 564): dispatch a UIA pattern against the
+   * 1-based element index of the probe's last enumerate cache for
+   * `hwnd`. Never throws; `null` = the probe could not answer
+   * (timeout/degraded). A `stale-tree` answer triggers ONE auto-
+   * recovery — a fresh enumerate re-populates the probe's element
+   * cache, then the invoke is retried with the same slot; if the
+   * staleness guard (name/controlType) still mismatches the caller
+   * gets the error back and must re-run its tree listing.
+   */
+  async invoke(
+    hwnd: number,
+    opts: { index: number; method?: UiaInvokeMethod; value?: string; name?: string; controlType?: string },
+  ): Promise<UiaInvokeOutcome | null> {
+    const attempt = (): Promise<UiaProbeResponse | null> =>
+      this.request(
+        (id) => ({
+          id,
+          op: 'invoke',
+          hwnd,
+          index: opts.index,
+          ...(opts.method !== undefined ? { method: opts.method } : {}),
+          ...(opts.value !== undefined ? { value: opts.value } : {}),
+          ...(opts.name !== undefined ? { name: opts.name } : {}),
+          ...(opts.controlType !== undefined ? { controlType: opts.controlType } : {}),
+        }),
+        this.opts.invokeTimeoutMs,
+      );
+
+    const response = await attempt();
+    if (response === null || response.kind !== 'response') {
+      return null;
+    }
+    if (!response.ok) {
+      if (response.reason !== UIA_INVOKE_ERRORS.STALE_TREE) {
+        return { ok: false, reason: response.reason };
+      }
+      // Auto-recovery: re-enumerate (bypasses the main-side cache — the
+      // probe's OWN element cache is what went stale) and retry once.
+      const refreshed = await this.enumerate(hwnd);
+      if (refreshed === null) {
+        return { ok: false, reason: UIA_INVOKE_ERRORS.STALE_TREE };
+      }
+      const retry = await attempt();
+      if (retry === null || retry.kind !== 'response') {
+        return null;
+      }
+      if (!retry.ok) {
+        return { ok: false, reason: retry.reason };
+      }
+      return {
+        ok: true,
+        method: retry.method ?? undefined,
+        pattern: retry.pattern,
+        value: retry.value,
+        element: retry.element,
+      };
+    }
+    return {
+      ok: true,
+      method: response.method ?? undefined,
+      pattern: response.pattern,
+      value: response.value,
+      element: response.element,
+    };
   }
 
   /** Stop the probe process and tear down timers. */
@@ -549,6 +678,19 @@ export interface RecorderProbeAdapter {
 }
 
 let _shared: UiaProbeClient | null = null;
+
+/**
+ * Shared singleton accessor (plan 564): the computer-use backend's
+ * structural providers (tree / invoke) ride the SAME persistent probe
+ * process the recorder uses — one Add-Type compile, one spawn, one
+ * lifecycle. Lazily creates the client on first use.
+ */
+export function getSharedUiaProbeClient(): UiaProbeClient {
+  if (!_shared) {
+    _shared = new UiaProbeClient();
+  }
+  return _shared;
+}
 
 /**
  * Probe adapter for `RecorderServiceOptions.probe`: lazily starts the

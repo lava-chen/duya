@@ -450,4 +450,136 @@ describe('UiaProbeClient', () => {
     expect(client.currentState).toBe('running');
     await client.dispose();
   });
+
+  // --- structural invoke channel (plan 564) -----------------------------
+
+  /** Advance fake time past the write and return the last request line. */
+  async function readRequest(procs: FakeProcess[]): Promise<Record<string, unknown>> {
+    await vi.advanceTimersByTimeAsync(10);
+    return JSON.parse(procs[0]!.stdin.writes.at(-1)!.trim()) as Record<string, unknown>;
+  }
+
+  /** Answer the given request on the fake stdout. */
+  function respond(
+    procs: FakeProcess[],
+    request: Record<string, unknown>,
+    response: Record<string, unknown>,
+  ): void {
+    procs[0]!.pushStdout(JSON.stringify({ id: request.id, ...response }) + '\n');
+  }
+
+  it('invoke correlates the response and carries method/pattern/value/element', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn, { invokeTimeoutMs: 200 });
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    const invokePromise = client.invoke(197144, { index: 3, method: 'setValue', value: '你好' });
+    const request = await readRequest(procs);
+    expect(request).toMatchObject({
+      op: 'invoke',
+      hwnd: 197144,
+      index: 3,
+      method: 'setValue',
+      value: '你好',
+    });
+
+    respond(procs, request, {
+      ok: true,
+      method: 'setValue',
+      pattern: 'ValuePattern',
+      value: '你好',
+      element: { name: '消息', controlType: 'Edit', rect: { x: 1, y: 2, w: 3, h: 4 }, isPassword: false },
+    });
+    await expect(invokePromise).resolves.toMatchObject({
+      ok: true,
+      method: 'setValue',
+      pattern: 'ValuePattern',
+      value: '你好',
+      element: { name: '消息', controlType: 'Edit' },
+    });
+    await client.dispose();
+  });
+
+  it('invoke maps non-stale failures straight through', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn, { invokeTimeoutMs: 200 });
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    const invokePromise = client.invoke(197144, { index: 9 });
+    const request = await readRequest(procs);
+    respond(procs, request, { ok: false, reason: 'no-pattern' });
+    await expect(invokePromise).resolves.toEqual({ ok: false, reason: 'no-pattern' });
+    await client.dispose();
+  });
+
+  it('invoke auto-recovers once from stale-tree via a fresh enumerate', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn, { invokeTimeoutMs: 200 });
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    const invokePromise = client.invoke(197144, {
+      index: 2,
+      name: '登录',
+      controlType: 'Button',
+    });
+
+    // First attempt goes stale…
+    const first = await readRequest(procs);
+    expect(first).toMatchObject({ op: 'invoke', index: 2, name: '登录' });
+    respond(procs, first, { ok: false, reason: 'stale-tree' });
+
+    // …the recovery re-enumerates (fresh, bypassing the main-side cache)…
+    const refresh = await readRequest(procs);
+    expect(refresh).toMatchObject({ op: 'enumerate', hwnd: 197144 });
+    respond(procs, refresh, {
+      ok: true,
+      elements: [
+        { name: '取消', controlType: 'Button', rect: { x: 0, y: 0, w: 5, h: 5 }, interactive: true },
+        { name: '登录', controlType: 'Button', rect: { x: 6, y: 0, w: 5, h: 5 }, interactive: true },
+      ],
+      truncated: false,
+      reason: null,
+    });
+
+    // …and retries the invoke once more.
+    const retry = await readRequest(procs);
+    expect(retry).toMatchObject({ op: 'invoke', index: 2 });
+    respond(procs, retry, {
+      ok: true,
+      method: 'invoke',
+      pattern: 'InvokePattern',
+      value: null,
+      element: { name: '登录', controlType: 'Button', rect: { x: 6, y: 0, w: 5, h: 5 }, isPassword: false },
+    });
+
+    await expect(invokePromise).resolves.toMatchObject({
+      ok: true,
+      method: 'invoke',
+      pattern: 'InvokePattern',
+    });
+    await client.dispose();
+  });
+
+  it('invoke surfaces stale-tree when the recovery enumerate fails', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn, { invokeTimeoutMs: 200 });
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    const invokePromise = client.invoke(197144, { index: 1 });
+    const first = await readRequest(procs);
+    respond(procs, first, { ok: false, reason: 'stale-tree' });
+    // recovery enumerate fails → stale surfaces without a retry
+    const refresh = await readRequest(procs);
+    respond(procs, refresh, { ok: false, reason: 'timeout' });
+    await expect(invokePromise).resolves.toEqual({ ok: false, reason: 'stale-tree' });
+    await client.dispose();
+  });
 });

@@ -46,35 +46,45 @@ export const COMPUTER_USE_MODE_ID = 'computer-use';
  * imperative sections the model can follow mechanically —
  * operating loop, coordinate rules, refusals-as-policy, recovery.
  *
- * The coordinate section is load-bearing: the capture image is in
- * logical pixels, the mouse in physical pixels, and after a `zoom`
- * coords are relative to the crop. The main-process dispatcher
- * handles the mapping, but the model must know WHICH image its
- * coordinates refer to.
+ * plan 564 re-orders the loop around the STRUCTURAL channel: the
+ * accessibility tree (`tree`) is the primary observation + targeting
+ * surface, `invoke` / `set_value(element=)` are the primary actions —
+ * they work on background windows, bypass IME for text, and never
+ * depend on pixels. The vision loop (capture + coordinate click) is
+ * the AUXILIARY fallback for custom-drawn windows and visual
+ * verification. The coordinate section stays load-bearing for that
+ * fallback: the capture image is in logical pixels, the mouse in
+ * physical pixels, and after a `zoom` coords are relative to the crop.
  */
 const COMPUTER_USE_PROMPT = `# Computer Use Mode
 
-You drive the host desktop through the \`computer_use\` tool only (screenshot + mouse + keyboard). No app/window enumeration, no focus-by-name — navigate by looking. The full manual is in the \`computer-use\` skill.
+You drive the host desktop through the \`computer_use\` tool. Two channels:
+
+- **STRUCTURAL (primary)** — \`tree\` reads the target window's accessibility tree (element index, role, name, value, real coordinates); \`invoke\` presses buttons / toggles / expands menus / selects items / focuses fields through the OS accessibility layer; \`set_value(element=n, ...)\` writes fields atomically. This channel works on **background windows**, needs no pixels, and set_value bypasses the IME (reliable for CJK).
+- **VISION (auxiliary)** — \`capture\` / \`zoom\` + coordinate \`click\` / \`drag\` / \`type\`. Use it when the tree is empty or unreliable (custom-drawn apps, games, some browser content) and to visually verify effects.
 
 ## Operating loop (every step)
-1. **LOOK** — \`capture(somMode=true)\`; never act on a screen state you have not just seen.
-2. **ZOOM when unsure** — small text/dense toolbar/dialog: \`zoom(x, y, w, h)\`, read the crop before clicking.
-3. **ACT** — one state change: \`click\` / \`type\` / \`key\` / \`scroll\` / \`drag\` / \`set_value\`.
-4. **VERIFY** — \`capture(somMode=true)\` again; confirm it landed before the next step. For text, click the field first, then \`type\`; \`set_value\` replaces the whole focused value.
+1. **TARGET** — \`tree\` first. Read roles/names/values, pick the element index. Re-run \`tree\` after navigation or scrolling — indices are only valid for the window state you observed.
+2. **ACT structurally** — \`invoke(element=n)\` for buttons/menu items/tabs/lists; \`set_value(element=n, value=...)\` for text fields; \`invoke(element=n, method="focus")\` + \`type\` when a field needs real keystrokes; \`key\` for shortcuts; \`invoke(element=n, method="setValue", value=...)\` equals set_value(element).
+3. **VERIFY cheaply** — \`tree\` again (no pixels) or read the invoke result's pattern/element read-back. Use \`capture(somMode=true)\` when you need to SEE the effect.
+4. **Fall back to vision** when: \`tree\` returns 0 elements or misses the control; invoke reports \`no-pattern\` twice; or STRUCTURAL_UNAVAILABLE. Then: \`capture(somMode=true)\` → \`zoom\` on dense areas → \`click(x,y)\`, one state change per step. On \`stale-tree\`, re-run \`tree\` (invoke already retried once) — never fire indices from an old listing.
 
-## Coordinates
+## Coordinates (vision fallback only)
 - \`x\`/\`y\` are pixels in the **last image you received** (full screen or zoom crop). After \`zoom\`, coords are relative to the crop (top-left 0,0) until your next full \`capture\`; the backend maps to real screen — do not add offsets. Copy what you see; never guess from memory.
 
-## Verdict (in \`data.verdict.effect\` after state changes)
+## Indexes are per-observation
+- \`invoke\`/\`set_value\` \`element\` = 1-based \`tree\` index. SOM markers on a capture are a DIFFERENT numbering (only valid for \`click element=\`). Do not mix them.
+
+## Verdict (in \`data.verdict.effect\` after vision state changes)
 - \`confirmed\` — it landed; continue.
-- \`unverifiable\` — could not tell; re-capture and read the screen yourself.
-- \`suspected_noop\` — no on-screen change; **re-capture FIRST to see the state, then decide. Never blindly re-issue the same action / don't double-click.**
+- \`unverifiable\` — could not tell; re-observe and judge yourself.
+- \`suspected_noop\` — no on-screen change; **re-observe FIRST (tree or capture), then decide. Never blindly re-issue the same action / don't double-click.**
 
 ## Refusals are policy, not bugs
 - \`APP_BLOCKED\` (app not allow-listed) / \`REDACTED_FIELD\` (password field) / \`BLOCKED\` (safety rule) / \`USER_REJECTED\` (declined) all mean: **stop that approach and tell the user** — no variations, no retries.
 
 ## Pacing & limits
-- One action per step; after launching/menu/form, \`wait\` 1–3s and re-capture. If a goal eludes you after ~3 attempts, stop and report what you see instead of guessing.`;
+- One action per step; after launching/menu/form, \`wait\` 1–3s and re-observe. If a goal eludes you after ~3 attempts, stop and report what you see instead of guessing.`;
 
 /**
  * plan 551 Phase 3 — decide-channel section, appended to the prompt only
@@ -99,7 +109,7 @@ export const computerUseMode: ModeModifier = {
   display: {
     label: 'Computer Use',
     icon: 'MousePointerClick',
-    description: 'Agent 可直接驱动 OS 桌面(截图 + 鼠标 + 键盘)',
+    description: 'Agent 直接驱动 OS 桌面(结构化 UIA 控制为主,截图+鼠标为辅)',
   },
 
   tools: {

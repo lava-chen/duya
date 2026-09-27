@@ -25,6 +25,17 @@
 #                                                               after a budget hit
 #      {"id":4,"ok":true,"elements":[],"reason":"elevated",...} — UIPI skip, no
 #                                                                  budget burned
+#   → {"id":5,"op":"invoke","hwnd":197144,"index":12,"method":"invoke",  — plan 564
+#        "value":null,"name":"Sign in","controlType":"Button"}   structural act op:
+#      {"id":5,"ok":true,"method":"invoke","pattern":"InvokePattern",  resolve the
+#         "element":{...},"value":null}              1-based element from the last
+#      {"id":5,"ok":false,"reason":"stale-tree"}     enumerate for that hwnd, verify
+#                                                    name/controlType when given,
+#                                                    dispatch a UIA pattern, return
+#                                                    the post-action element JSON.
+#                                                    Failure reasons: stale-tree,
+#                                                    no-element, no-pattern,
+#                                                    bad-index, no-window, timeout.
 #
 # The first stdout line is {"ready":true} once Add-Type finished — the
 # main-side client gates ensureStarted() on it. All UIA work (which can
@@ -93,12 +104,37 @@ namespace Duya.Recorder
             string controlType = null;
             if (c.ControlType != null) { controlType = c.ControlType.ProgrammaticName; }
             if (controlType != null) { controlType = controlType.Replace("ControlType.", ""); }
+            // Text-bearing controls carry their current value (plan 564) —
+            // the LLM-facing tree listing needs it to pick fields. Never
+            // emitted for password fields; the key is omitted (not null)
+            // when unsupported so downstream strict readers stay happy.
+            string valueJson = null;
+            if (!c.IsPassword
+                && (c.ControlType == ControlType.Edit
+                    || c.ControlType == ControlType.Document
+                    || c.ControlType == ControlType.ComboBox))
+            {
+                try
+                {
+                    object p;
+                    if (el.TryGetCurrentPattern(ValuePattern.Pattern, out p))
+                    {
+                        ValuePattern vp = p as ValuePattern;
+                        if (vp != null && !string.IsNullOrEmpty(vp.Current.Value))
+                        {
+                            valueJson = Escape(vp.Current.Value);
+                        }
+                    }
+                }
+                catch { }
+            }
             return "{\"name\":" + Escape(c.Name)
                  + ",\"controlType\":" + Escape(controlType)
                  + ",\"automationId\":" + Escape(c.AutomationId)
                  + ",\"className\":" + Escape(c.ClassName)
                  + ",\"rect\":" + rect
                  + ",\"isPassword\":" + (c.IsPassword ? "true" : "false")
+                 + (valueJson == null ? "" : ",\"value\":" + valueJson)
                  + "}";
         }
 
@@ -315,6 +351,9 @@ namespace Duya.Recorder
         private class EnumState
         {
             public readonly List<string> Nodes = new List<string>();
+            // Live element references parallel to Nodes (plan 564) — the
+            // invoke op resolves its 1-based index against this list.
+            public readonly List<AutomationElement> Elements = new List<AutomationElement>();
             public readonly object Gate = new object();
             public readonly HashSet<string> ControlTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             public TreeWalker Walker = TreeWalker.ControlViewWalker;
@@ -334,19 +373,28 @@ namespace Duya.Recorder
                 get { return NodeCount >= MaxNodes || Clock.ElapsedMilliseconds >= TotalMs; }
             }
 
-            public void Add(string json)
+            public void Add(string json, AutomationElement el)
             {
-                lock (Gate) { Nodes.Add(json); }
+                lock (Gate)
+                {
+                    Nodes.Add(json);
+                    Elements.Add(el);
+                }
             }
         }
 
         // Interactive whitelist check + JSON emission for one element.
+        // IsOffscreen elements are skipped (UFO inspector's default
+        // filter): they are invisible to the user, cannot be click
+        // targets, and virtualized lists would otherwise flood the
+        // tree with placeholder rows.
         private static bool TryMakeNode(EnumState st, AutomationElement el, out string json)
         {
             json = null;
             try
             {
                 AutomationElement.AutomationElementInformation c = el.Current;
+                if (c.IsOffscreen) { return false; }
                 if (c.ControlType == null) { return false; }
                 string controlType = c.ControlType.ProgrammaticName;
                 if (controlType == null) { return false; }
@@ -369,7 +417,7 @@ namespace Duya.Recorder
             string json;
             if (TryMakeNode(st, el, out json))
             {
-                st.Add(json);
+                st.Add(json, el);
                 if (st.NodeCount >= st.MaxNodes) { st.Truncated = true; return; }
             }
             if (depth == st.MaxDepth) { return; }
@@ -438,7 +486,7 @@ namespace Duya.Recorder
                     // The root itself is rarely interactive (Window), but a
                     // custom whitelist may include it — check it inline.
                     string rootJson;
-                    if (TryMakeNode(st, root, out rootJson)) { st.Add(rootJson); }
+                    if (TryMakeNode(st, root, out rootJson)) { st.Add(rootJson, root); }
 
                     // Each child of the root walks in its own task with an
                     // independent time slice: one hung subtree cannot eat
@@ -476,6 +524,12 @@ namespace Duya.Recorder
                     {
                         if (st.Nodes.Count > 0) { elements = "[" + string.Join(",", st.Nodes.ToArray()) + "]"; }
                     }
+                    // Remember the live element references for the invoke
+                    // op (plan 564). Emission order == Nodes order == the
+                    // 1-based index the LLM-facing tree listing shows.
+                    List<AutomationElement> snapshot;
+                    lock (st.Gate) { snapshot = new List<AutomationElement>(st.Elements); }
+                    RememberElements(hwnd, snapshot);
                     return "{\"elements\":" + elements
                          + ",\"truncated\":" + (st.Truncated ? "true" : "false")
                          + ",\"reason\":null"
@@ -487,6 +541,254 @@ namespace Duya.Recorder
             // stuck past the internal budget the walk cannot bail anyway.
             Task<string> task = Task.Run(work);
             return task.Wait(totalTimeoutMs + 500) ? task.Result : null;
+        }
+
+        // ------------------------------------------------------------------
+        // Structural act channel (plan 564). The enumerate walk caches the
+        // live AutomationElement references per window; `invoke` resolves
+        // a 1-based index against that cache, verifies optional staleness
+        // guards, then dispatches a UIA pattern — the RPA-style structured
+        // alternative to synthetic mouse events. Pattern actions work on
+        // background windows and never depend on pixels.
+        // ------------------------------------------------------------------
+
+        private static readonly object CacheGate = new object();
+        private static Dictionary<IntPtr, List<AutomationElement>> ElementCache = new Dictionary<IntPtr, List<AutomationElement>>();
+
+        private static void RememberElements(IntPtr hwnd, List<AutomationElement> elements)
+        {
+            if (elements == null || elements.Count == 0) { return; }
+            lock (CacheGate)
+            {
+                // Tiny window-bounded cache: more than four tracked
+                // windows means wholesale replacement (simplest correct
+                // eviction; windows are re-enumerated on demand anyway).
+                if (ElementCache.Count >= 4 && !ElementCache.ContainsKey(hwnd))
+                {
+                    ElementCache = new Dictionary<IntPtr, List<AutomationElement>>();
+                }
+                ElementCache[hwnd] = elements;
+            }
+        }
+
+        // Resolve a 1-based slot out of the window's cached tree and run
+        // the optional staleness guards. Returns "ok", "no-element"
+        // (nothing cached for the hwnd), "bad-index", or "stale-tree"
+        // (the COM element died, or name/controlType no longer match).
+        private static string ResolveCached(IntPtr hwnd, int oneBasedIndex, string verifyName, string verifyType, out AutomationElement el)
+        {
+            el = null;
+            List<AutomationElement> list = null;
+            lock (CacheGate)
+            {
+                if (!ElementCache.TryGetValue(hwnd, out list) || list == null) { return "no-element"; }
+                if (oneBasedIndex < 1 || oneBasedIndex > list.Count) { return "bad-index"; }
+                el = list[oneBasedIndex - 1];
+            }
+            try
+            {
+                AutomationElement.AutomationElementInformation c = el.Current;
+                if (verifyName != null)
+                {
+                    if (!string.Equals(c.Name ?? "", verifyName, StringComparison.OrdinalIgnoreCase)) { return "stale-tree"; }
+                }
+                if (verifyType != null)
+                {
+                    string have = c.ControlType != null ? c.ControlType.ProgrammaticName : null;
+                    if (have != null) { have = have.Replace("ControlType.", ""); }
+                    if (!string.Equals(have ?? "", verifyType, StringComparison.OrdinalIgnoreCase)) { return "stale-tree"; }
+                }
+                return "ok";
+            }
+            catch { return "stale-tree"; }
+        }
+
+        private static object GetPattern(AutomationElement el, AutomationPattern pattern)
+        {
+            try
+            {
+                object p;
+                if (el.TryGetCurrentPattern(pattern, out p)) { return p; }
+            }
+            catch { }
+            return null;
+        }
+
+        // Execute one structural method. Returns the UIA pattern class
+        // name used (null for SetFocus) and sets methodUsed to what
+        // actually ran (auto may downgrade to focus). Throws
+        // InvalidOperationException with a stable error code when the
+        // requested method cannot be performed.
+        private static string ExecuteMethod(AutomationElement el, string method, string value, out string methodUsed)
+        {
+            methodUsed = method;
+            string ct = null;
+            try
+            {
+                ct = el.Current.ControlType != null ? el.Current.ControlType.ProgrammaticName : null;
+                if (ct != null) { ct = ct.Replace("ControlType.", ""); }
+            }
+            catch { }
+
+            if (method == "focus")
+            {
+                el.SetFocus();
+                return null;
+            }
+
+            if (method == "setValue")
+            {
+                ValuePattern vp = GetPattern(el, ValuePattern.Pattern) as ValuePattern;
+                if (vp == null) { throw new InvalidOperationException("no-pattern"); }
+                vp.SetValue(value ?? "");
+                return "ValuePattern";
+            }
+
+            if (method == "invoke")
+            {
+                InvokePattern ip = GetPattern(el, InvokePattern.Pattern) as InvokePattern;
+                if (ip == null) { throw new InvalidOperationException("no-pattern"); }
+                ip.Invoke();
+                return "InvokePattern";
+            }
+
+            if (method == "toggle")
+            {
+                TogglePattern tp = GetPattern(el, TogglePattern.Pattern) as TogglePattern;
+                if (tp == null) { throw new InvalidOperationException("no-pattern"); }
+                tp.Toggle();
+                return "TogglePattern";
+            }
+
+            if (method == "expand" || method == "collapse")
+            {
+                ExpandCollapsePattern ep = GetPattern(el, ExpandCollapsePattern.Pattern) as ExpandCollapsePattern;
+                if (ep == null) { throw new InvalidOperationException("no-pattern"); }
+                if (method == "expand") { ep.Expand(); } else { ep.Collapse(); }
+                return "ExpandCollapsePattern";
+            }
+
+            if (method == "select")
+            {
+                SelectionItemPattern sp = GetPattern(el, SelectionItemPattern.Pattern) as SelectionItemPattern;
+                if (sp == null) { throw new InvalidOperationException("no-pattern"); }
+                sp.Select();
+                return "SelectionItemPattern";
+            }
+
+            // method == "auto": ControlType-driven chain, first supported
+            // pattern wins (UFO-style default chain).
+            if (method == "auto")
+            {
+                if (ct == "Edit" || ct == "Document")
+                {
+                    if (value != null)
+                    {
+                        ValuePattern vp = GetPattern(el, ValuePattern.Pattern) as ValuePattern;
+                        if (vp == null) { throw new InvalidOperationException("no-pattern"); }
+                        methodUsed = "setValue";
+                        vp.SetValue(value);
+                        return "ValuePattern";
+                    }
+                    el.SetFocus();
+                    methodUsed = "focus";
+                    return null;
+                }
+                if (ct == "CheckBox" || ct == "ToggleSwitch")
+                {
+                    TogglePattern tp = GetPattern(el, TogglePattern.Pattern) as TogglePattern;
+                    if (tp != null) { methodUsed = "toggle"; tp.Toggle(); return "TogglePattern"; }
+                    InvokePattern ip = GetPattern(el, InvokePattern.Pattern) as InvokePattern;
+                    if (ip != null) { methodUsed = "invoke"; ip.Invoke(); return "InvokePattern"; }
+                }
+                else if (ct == "ComboBox")
+                {
+                    ExpandCollapsePattern ep = GetPattern(el, ExpandCollapsePattern.Pattern) as ExpandCollapsePattern;
+                    if (ep != null) { methodUsed = "expand"; ep.Expand(); return "ExpandCollapsePattern"; }
+                    InvokePattern ip = GetPattern(el, InvokePattern.Pattern) as InvokePattern;
+                    if (ip != null) { methodUsed = "invoke"; ip.Invoke(); return "InvokePattern"; }
+                }
+                else if (ct == "ListItem" || ct == "RadioButton" || ct == "TabItem")
+                {
+                    SelectionItemPattern sp = GetPattern(el, SelectionItemPattern.Pattern) as SelectionItemPattern;
+                    if (sp != null) { methodUsed = "select"; sp.Select(); return "SelectionItemPattern"; }
+                    InvokePattern ip = GetPattern(el, InvokePattern.Pattern) as InvokePattern;
+                    if (ip != null) { methodUsed = "invoke"; ip.Invoke(); return "InvokePattern"; }
+                }
+                else
+                {
+                    InvokePattern ip = GetPattern(el, InvokePattern.Pattern) as InvokePattern;
+                    if (ip != null) { methodUsed = "invoke"; ip.Invoke(); return "InvokePattern"; }
+                    TogglePattern tp = GetPattern(el, TogglePattern.Pattern) as TogglePattern;
+                    if (tp != null) { methodUsed = "toggle"; tp.Toggle(); return "TogglePattern"; }
+                    SelectionItemPattern sp = GetPattern(el, SelectionItemPattern.Pattern) as SelectionItemPattern;
+                    if (sp != null) { methodUsed = "select"; sp.Select(); return "SelectionItemPattern"; }
+                    ExpandCollapsePattern ep = GetPattern(el, ExpandCollapsePattern.Pattern) as ExpandCollapsePattern;
+                    if (ep != null) { methodUsed = "expand"; ep.Expand(); return "ExpandCollapsePattern"; }
+                }
+                // No pattern supported: focus is the last-resort structural
+                // action so the caller can follow with keyboard input.
+                try { el.SetFocus(); methodUsed = "focus"; return null; }
+                catch { throw new InvalidOperationException("no-pattern"); }
+            }
+
+            throw new InvalidOperationException("bad-method");
+        }
+
+        // Structural invoke entry. Returns "OK:" + post-action JSON
+        // {"method":..,"pattern":..,"value":..[,"element":{..}]},
+        // "ERR:<code>" (stale-tree / no-element / no-pattern / bad-index /
+        // no-window), or null when the whole operation timed out.
+        public static string InvokeElement(IntPtr hwnd, int oneBasedIndex, string method, string verifyName, string verifyType, string value, int timeoutMs)
+        {
+            Func<string> work = delegate
+            {
+                try
+                {
+                    if (hwnd == IntPtr.Zero) { return "ERR:no-window"; }
+                    AutomationElement el2;
+                    string resolveCode = ResolveCached(hwnd, oneBasedIndex, verifyName, verifyType, out el2);
+                    if (resolveCode != "ok") { return "ERR:" + resolveCode; }
+                    string methodUsed;
+                    string pattern = ExecuteMethod(el2, method ?? "auto", value, out methodUsed);
+                    // Post-action read-back: the element JSON after the
+                    // action landed (lets the caller verify name/value),
+                    // plus the ValuePattern value after setValue.
+                    string readBack = "null";
+                    if (methodUsed == "setValue")
+                    {
+                        try
+                        {
+                            ValuePattern vp = GetPattern(el2, ValuePattern.Pattern) as ValuePattern;
+                            if (vp != null) { readBack = Escape(vp.Current.Value); }
+                        }
+                        catch { }
+                    }
+                    string postJson;
+                    try { postJson = ElementJson(el2); } catch { postJson = "null"; }
+                    string inner = postJson == "null" ? "" : postJson.Substring(1, postJson.Length - 2);
+                    return "OK:{\"method\":" + Escape(methodUsed)
+                         + ",\"pattern\":" + (pattern == null ? "null" : Escape(pattern))
+                         + ",\"value\":" + readBack
+                         + (inner.Length > 0 ? ",\"element\":{" + inner + "}" : "")
+                         + "}";
+                }
+                catch (InvalidOperationException err)
+                {
+                    string code = err.Message;
+                    if (string.IsNullOrEmpty(code)) { code = "error"; }
+                    return "ERR:" + code;
+                }
+                catch
+                {
+                    // Any other exception almost always means the element
+                    // reference died mid-action (window closed, UIA COM
+                    // failure) — report stale so the caller re-enumerates.
+                    return "ERR:stale-tree";
+                }
+            };
+            Task<string> task = Task.Run(work);
+            return task.Wait(timeoutMs) ? task.Result : null;
         }
     }
 }
@@ -602,6 +904,35 @@ while ($true) {
             if ($parts.Count -ge 3) { $title = [string]$parts[2] }
             $o = @{ hwnd = [int64]$parts[0]; pid = [int]$parts[1]; processName = $name; title = $title }
             [Console]::Out.WriteLine('{"id":' + $id + ',"ok":true,"fg":' + ($o | ConvertTo-Json -Compress) + '}')
+        }
+    }
+    elseif ($op -eq 'invoke') {
+        # Structural act op (plan 564): resolve a 1-based element from the
+        # last enumerate cache for this hwnd and dispatch a UIA pattern.
+        $hwnd = [IntPtr]::Zero
+        try { $hwnd = [IntPtr][int64]$req.hwnd } catch { }
+        $index = 0
+        try { if ($req.PSObject.Properties['index']) { $index = [int]$req.index } } catch { }
+        $method = 'auto'
+        try { if ($req.PSObject.Properties['method'] -and $req.method) { $method = [string]$req.method } } catch { }
+        $value = $null
+        try { if ($req.PSObject.Properties['value'] -and $null -ne $req.value) { $value = [string]$req.value } } catch { }
+        $vname = $null
+        try { if ($req.PSObject.Properties['name'] -and $null -ne $req.name) { $vname = [string]$req.name } } catch { }
+        $vtype = $null
+        try { if ($req.PSObject.Properties['controlType'] -and $null -ne $req.controlType) { $vtype = [string]$req.controlType } } catch { }
+        $json = [Duya.Recorder.UiaProbe]::InvokeElement($hwnd, $index, $method, $vname, $vtype, $value, 1000)
+        if ($null -eq $json) {
+            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":false,"reason":"timeout"}')
+        }
+        elseif ($json.StartsWith('OK:')) {
+            # Splice the post-action object into the flat response line.
+            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":true,' + $json.Substring(3) + '}')
+        }
+        else {
+            # "ERR:<code>" — the code is a stable ASCII identifier.
+            $code = $json.Substring(4)
+            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":false,"reason":"' + $code + '"}')
         }
     }
     else {

@@ -24,6 +24,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
   COMPUTER_USE_IPC_CHANNEL,
+  type ComputerUseAction,
   type ComputerUseExecuteAction,
 } from '../../packages/agent/dist/tool/OSTool/constants.js';
 import {
@@ -33,6 +34,7 @@ import {
 import {
   buildArgsPreview,
   checkAccess,
+  formatTreeForLlm,
   getDefaultApprovalBridge,
   getDefaultDesktopBackend,
   requiresConfirmation,
@@ -630,6 +632,35 @@ async function runAction(
             approval.reason,
           );
         }
+        // plan 564: a tree `element` target routes through the UIA
+        // ValuePattern — atomic, IME-free (CJK-safe), works on
+        // background windows. Without `element` the legacy keyboard
+        // path (select-all + type into the focused field) runs.
+        if (typeof data.element === 'number' && data.element > 0) {
+          if (typeof backend.uiaInvoke !== 'function') {
+            return envelopeError(
+              action,
+              ComputerUseErrorCode.STRUCTURAL_UNAVAILABLE,
+              'no structural channel on this platform — use type after focusing instead',
+            );
+          }
+          const r = await backend.uiaInvoke({
+            element: data.element,
+            method: 'setValue',
+            value,
+          });
+          return {
+            success: r.ok,
+            action,
+            data: r,
+            error: r.ok
+              ? undefined
+              : {
+                  code: ComputerUseErrorCode.BACKEND_UNAVAILABLE,
+                  message: r.reason ?? 'set_value (structural) failed',
+                },
+          };
+        }
         const r = await backend.setValue({
           value,
           delayMs: typeof data.delayMs === 'number' ? data.delayMs : undefined,
@@ -735,6 +766,135 @@ async function runAction(
             : {
                 code: ComputerUseErrorCode.BACKEND_UNAVAILABLE,
                 message: r.reason ?? 'focus_app failed',
+              },
+        };
+      }
+      // plan 564 — structural channel. `tree` enumerates the target
+      // window's interactive elements with real coordinates (read-only
+      // observation, no approval); `invoke` dispatches a UIA pattern
+      // against a 1-based tree element (state-changing → approval, with
+      // the focus-only variant exempt — it cannot change app state).
+      // Both ride the same access policy gate as the vision actions.
+      case 'tree': {
+        const access = checkForegroundAccess();
+        if (!access.ok) {
+          logger.warn(
+            'computer-use: tree refused — app access policy',
+            { reason: access.reason, sessionId: sessionId ?? null },
+            LogComponent.ComputerUse,
+          );
+          return {
+            success: false,
+            action,
+            error: {
+              code: ComputerUseErrorCode.APP_BLOCKED,
+              message: access.reason ?? 'app blocked by access policy',
+            },
+          };
+        }
+        if (typeof backend.uiaTree !== 'function') {
+          return envelopeError(
+            action,
+            ComputerUseErrorCode.STRUCTURAL_UNAVAILABLE,
+            'no structural channel on this platform — use the vision loop',
+          );
+        }
+        const tree = await backend.uiaTree({
+          hwnd: typeof data.hwnd === 'number' ? data.hwnd : undefined,
+          maxNodes: typeof data.maxElements === 'number' ? data.maxElements : undefined,
+          fresh: data.fresh === true,
+        });
+        const formatted = formatTreeForLlm(tree);
+        logger.debug(
+          'computer-use: tree',
+          {
+            hwnd: tree.hwnd,
+            count: tree.elements.length,
+            truncated: tree.truncated,
+            sessionId: sessionId ?? null,
+          },
+          LogComponent.ComputerUse,
+        );
+        return {
+          success: true,
+          action,
+          data: {
+            ...tree,
+            text: formatted.text,
+            elementCount: formatted.elementCount,
+          },
+        };
+      }
+      case 'invoke': {
+        const access = checkForegroundAccess();
+        if (!access.ok) {
+          logger.warn(
+            'computer-use: invoke refused — app access policy',
+            { reason: access.reason, sessionId: sessionId ?? null },
+            LogComponent.ComputerUse,
+          );
+          return {
+            success: false,
+            action,
+            error: {
+              code: ComputerUseErrorCode.APP_BLOCKED,
+              message: access.reason ?? 'app blocked by access policy',
+            },
+          };
+        }
+        if (typeof backend.uiaInvoke !== 'function') {
+          return envelopeError(
+            action,
+            ComputerUseErrorCode.STRUCTURAL_UNAVAILABLE,
+            'no structural channel on this platform — use the vision loop (capture + click)',
+          );
+        }
+        // Approval gate — structural presses are as state-changing as
+        // clicks. focus-only is exempt (it moves keyboard focus, the
+        // same class of effect as the ungated `key` action).
+        if (data.method !== 'focus') {
+          const approval = await requestApprovalIfNeeded(action, data);
+          if (!approval.ok) {
+            return envelopeError(
+              action,
+              ComputerUseErrorCode.USER_REJECTED,
+              approval.reason,
+            );
+          }
+        }
+        const r = await backend.uiaInvoke({
+          element: Number(data.element),
+          method:
+            typeof data.method === 'string'
+              ? (data.method as 'auto' | 'invoke' | 'toggle' | 'expand' | 'collapse' | 'select' | 'focus' | 'setValue')
+              : undefined,
+          value: typeof data.value === 'string' ? data.value : undefined,
+          name: typeof data.name === 'string' ? data.name : undefined,
+          controlType: typeof data.controlType === 'string' ? data.controlType : undefined,
+        });
+        logger.info(
+          'computer-use: invoke',
+          {
+            element: Number(data.element),
+            method: r.method ?? null,
+            pattern: r.pattern ?? null,
+            ok: r.ok,
+            reason: r.reason ?? null,
+            sessionId: sessionId ?? null,
+          },
+          LogComponent.ComputerUse,
+        );
+        return {
+          success: r.ok,
+          action,
+          data: r,
+          error: r.ok
+            ? undefined
+            : {
+                code: ComputerUseErrorCode.BACKEND_UNAVAILABLE,
+                message:
+                  r.reason ??
+                  'invoke failed — on stale-tree re-run tree; on no-pattern fall back to the vision loop',
               },
         };
       }
