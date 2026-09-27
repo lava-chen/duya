@@ -353,6 +353,28 @@ export function registerAppConnectionHandlers(): void {
     },
   );
 
+  // --- appConnection:remove ---
+  ipcMain.handle(
+    'appConnection:remove',
+    async (_event, connectionId: string): Promise<{ success: boolean; data?: { removed: boolean }; error?: string }> => {
+      if (typeof connectionId !== 'string' || !connectionId) {
+        return { success: false, error: 'connectionId is required' };
+      }
+      try {
+        const removed = await getReadyAppConnectionService().remove(connectionId);
+        return { success: true, data: { removed } };
+      } catch (err) {
+        logger.error(
+          'appConnection:remove failed',
+          err instanceof Error ? err : new Error(String(err)),
+          { connectionId },
+          COMPONENT,
+        );
+        return { success: false, error: 'Failed to remove connection' };
+      }
+    },
+  );
+
   // --- appConnection:approveTool (Plan 449) ---
   // Persist a global "Always allow" decision for provider+tool and refresh
   // worker descriptors so the preApproved stamp reaches the permission gate.

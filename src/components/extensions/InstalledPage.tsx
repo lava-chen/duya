@@ -51,7 +51,9 @@ interface InstalledPageProps {
   connections: AppConnectionStatusDTO[];
   providers: AppConnectionProviderDTO[];
   busyProvider: ProviderId | null;
+  busyConnectionId: string | null;
   onConnectionToggle: (connection: AppConnectionStatusDTO, enabled: boolean) => void;
+  onConnectionRemove: (connectionId: string) => void;
   // ── MCP ──
   mcpManual: MCPServerConfig[];
   mcpFromPlugins: MCPPluginDeclaredServerDTO[];
@@ -255,7 +257,9 @@ export function InstalledPage({
   connections,
   providers,
   busyProvider,
+  busyConnectionId,
   onConnectionToggle,
+  onConnectionRemove,
   mcpManual,
   mcpFromPlugins,
   onMcpToggle,
@@ -404,10 +408,26 @@ export function InstalledPage({
                     ? undefined
                     : conn.lastError ?? t("marketplace.connectors.disconnected")
                 }
+                hoverAction={
+                  <span className="opacity-0 transition-opacity focus-visible:opacity-100 group-hover/row:opacity-100 group-focus-within/row:opacity-100">
+                    <IconButton
+                      variant="ghost"
+                      size="sm"
+                      shape="square"
+                      aria-label={t("extensions.actions.remove")}
+                      title={t("extensions.actions.remove")}
+                      disabled={busyConnectionId === conn.id}
+                      className="text-[var(--error)] hover:bg-[var(--error-soft)]"
+                      onClick={() => onConnectionRemove(conn.id)}
+                    >
+                      <TrashIcon size={14} />
+                    </IconButton>
+                  </span>
+                }
                 actions={
                   <Switch
                     checked={connected}
-                    disabled={busyProvider === conn.provider}
+                    disabled={busyProvider === conn.provider || busyConnectionId === conn.id}
                     ariaLabel={
                       connected
                         ? t("marketplace.connectors.disconnect")

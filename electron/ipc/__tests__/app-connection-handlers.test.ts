@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => {
       getStatus: vi.fn(),
       connect: vi.fn(),
       disconnect: vi.fn(),
+      remove: vi.fn(),
       setReloadHook: vi.fn(),
     },
     captured: {
@@ -92,6 +93,7 @@ describe('appConnection IPC handlers', () => {
     mocks.service.getStatus.mockReset();
     mocks.service.connect.mockReset();
     mocks.service.disconnect.mockReset();
+    mocks.service.remove.mockReset();
     mocks.service.setReloadHook.mockReset();
     registerAppConnectionHandlers();
   });
@@ -259,6 +261,23 @@ describe('appConnection IPC handlers', () => {
 
   it('appConnection:disconnect rejects missing connectionId', async () => {
     const res = (await invoke('appConnection:disconnect')) as { success: boolean; error?: string };
+    expect(res.success).toBe(false);
+    expect(res.error).toMatch(/connectionId/);
+  });
+
+  it('appConnection:remove deletes the stored connection', async () => {
+    mocks.service.remove.mockResolvedValue(true);
+    const res = (await invoke('appConnection:remove', 'c1')) as {
+      success: boolean;
+      data?: { removed: boolean };
+    };
+    expect(res.success).toBe(true);
+    expect(res.data?.removed).toBe(true);
+    expect(mocks.service.remove).toHaveBeenCalledWith('c1');
+  });
+
+  it('appConnection:remove rejects missing connectionId', async () => {
+    const res = (await invoke('appConnection:remove')) as { success: boolean; error?: string };
     expect(res.success).toBe(false);
     expect(res.error).toMatch(/connectionId/);
   });

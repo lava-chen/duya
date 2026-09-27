@@ -401,6 +401,7 @@ export function ExtensionsPage() {
   const [connectionsLoading, setConnectionsLoading] = useState(true);
   const [connectionsError, setConnectionsError] = useState<string | null>(null);
   const [busyProvider, setBusyProvider] = useState<ProviderId | null>(null);
+  const [busyConnectionId, setBusyConnectionId] = useState<string | null>(null);
   const [connectionSetupProvider, setConnectionSetupProvider] = useState<AppConnectionProviderDTO | null>(null);
   const [connectionSetupError, setConnectionSetupError] = useState<string | null>(null);
   const [managedConnectionProvider, setManagedConnectionProvider] = useState<AppConnectionProviderDTO | null>(null);
@@ -675,6 +676,32 @@ export function ExtensionsPage() {
       }
     },
     [appConnectionApi, reloadConnections, t]
+  );
+
+  const handleRemoveConnection = useCallback(
+    async (connectionId: string) => {
+      if (!appConnectionApi) {
+        setConnectionsError(t("extensions.connections.requiresElectron"));
+        return;
+      }
+      setBusyConnectionId(connectionId);
+      setConnectionsError(null);
+      try {
+        const res = await appConnectionApi.remove(connectionId);
+        if (!res.success) {
+          setConnectionsError(res.error ?? t("extensions.actionFailed"));
+          return;
+        }
+        // Apply the confirmed deletion directly so the row disappears without
+        // reloading the whole connections section and flashing its loading UI.
+        setConnections((current) => current.filter((connection) => connection.id !== connectionId));
+      } catch (err) {
+        setConnectionsError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusyConnectionId(null);
+      }
+    },
+    [appConnectionApi, t]
   );
 
   const handleConfigureProvider = useCallback(
@@ -1057,7 +1084,9 @@ export function ExtensionsPage() {
           connections={connections}
           providers={connectionProviders}
           busyProvider={busyProvider}
+          busyConnectionId={busyConnectionId}
           onConnectionToggle={handleConnectionToggle}
+          onConnectionRemove={(id) => void handleRemoveConnection(id)}
           mcpManual={mcpServers}
           mcpFromPlugins={pluginMCPs}
           onMcpToggle={(server, enabled) => void handleMcpToggle(server, enabled)}

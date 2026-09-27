@@ -1077,6 +1077,11 @@ export interface AppConnectionAPI {
     data?: { disconnected: boolean }
     error?: string
   }>
+  remove: (connectionId: string) => Promise<{
+    success: boolean
+    data?: { removed: boolean }
+    error?: string
+  }>
   approveTool: (provider: string, toolAlias: string) => Promise<{ success: boolean; error?: string }>
   revokeToolApproval: (provider: string, toolAlias: string) => Promise<{ success: boolean; error?: string }>
   listToolApprovals: () => Promise<{ success: boolean; data?: string[]; error?: string }>
@@ -2895,6 +2900,7 @@ const electronAPI: ElectronAPI = {
     configureProvider: (payload: { provider: string; clientId: string; clientSecret?: string }) =>
       ipcRenderer.invoke('appConnection:configureProvider', payload),
     disconnect: (connectionId: string) => ipcRenderer.invoke('appConnection:disconnect', connectionId),
+    remove: (connectionId: string) => ipcRenderer.invoke('appConnection:remove', connectionId),
     // Plan 449: global "Always allow" connector tool approvals.
     approveTool: (provider: string, toolAlias: string) =>
       ipcRenderer.invoke('appConnection:approveTool', provider, toolAlias),

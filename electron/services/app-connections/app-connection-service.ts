@@ -431,6 +431,48 @@ export class AppConnectionService {
     return true;
   }
 
+  /**
+   * Remove a connection and its local secrets. Custom-credential providers
+   * store account credentials by provider, so those are cleared as well.
+   * Provider token revocation is best-effort and does not block cleanup.
+   */
+  async remove(connectionId: string): Promise<boolean> {
+    const conn = this._connectionStore.get(connectionId);
+    if (!conn) {
+      return false;
+    }
+
+    // Start provider revocation while the token is still available, but do not
+    // wait for the provider network request before deleting local state.
+    void this.revokeAtProvider(conn.provider, connectionId).catch((err) => {
+      this.logger.warn(
+        'App Connection: revoke failed during removal (non-fatal)',
+        err instanceof Error ? err : new Error(String(err)),
+        { connectionId, provider: conn.provider },
+        COMPONENT,
+      );
+    });
+
+    this.vault.remove(connectionId);
+    this.vault.removeMcpOAuth(connectionId);
+    if (conn.provider === WECOM_PROVIDER || conn.provider === QQ_MAIL_PROVIDER) {
+      this.vault.removeOAuthClient(conn.provider);
+    }
+    const removed = this._connectionStore.remove(connectionId);
+    if (!removed) {
+      return false;
+    }
+
+    this.logger.info(
+      'App Connection: removed',
+      { connectionId, provider: conn.provider },
+      COMPONENT,
+    );
+
+    void this.fireReload();
+    return true;
+  }
+
   /** Best-effort token revocation at the provider. Never throws. */
   private async revokeAtProvider(provider: ProviderId, connectionId: string): Promise<void> {
     const config = getProviderConfig(provider);

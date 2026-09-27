@@ -1,6 +1,6 @@
 # Plan 455: 统一 AppConnector 类 + 插件 .app.json 声明层（适配器出本地代码）
 
-> **Status**: Phase A/B ✅（2026-08-29，分支 `feat/455-app-connector-registry`）；Phase C/D 待开工
+> **Status**: Phase A/B ✅（2026-08-29，分支 `feat/455-app-connector-registry`）；Phase C 进行中，Phase D 待开工
 > **Priority**: P1
 > **Created**: 2026-08-29（同日结合 Plan 460 重写：统一类 + 适配器声明化收口）
 > **前置**: Plan 449/450（审批分级、@激活、目录缓存，已落地）
@@ -86,6 +86,7 @@
 ### Phase C: 接线 + UI
 - [ ] 插件安装/启动时装载 .app.json → registry 合流；卸载下线（连接行保留）
 - [ ] 设置页连接列表 + @ 弹层渲染声明式 connector（category 分组复用 marketplace）
+- [x] 已保存连接可在 Installed 列表中显式移除，并清除连接记录与连接级凭据；插件卸载时保留记录的规则不变
 - [ ] `oauth` 段接线：public client 数据进 OAuth flow（env/user override 优先级不变）
 - [ ] 内置 11 provider **双轨**：registry 常量继续供给，声明式路径并行验证（迁移归 460）
 - [ ] 单测 + typecheck

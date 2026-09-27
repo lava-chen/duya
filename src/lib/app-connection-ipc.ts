@@ -53,6 +53,12 @@ export interface AppConnectionDisconnectResponse {
   error?: string;
 }
 
+export interface AppConnectionRemoveResponse {
+  success: boolean;
+  data?: { removed: boolean };
+  error?: string;
+}
+
 export function getAppConnectionAPI() {
   const api = window.electronAPI;
   if (!api) {
@@ -100,6 +106,9 @@ export function getAppConnectionAPI() {
     },
     disconnect: async (connectionId: string): Promise<AppConnectionDisconnectResponse> => {
       return api.appConnection.disconnect(connectionId) as Promise<AppConnectionDisconnectResponse>;
+    },
+    remove: async (connectionId: string): Promise<AppConnectionRemoveResponse> => {
+      return api.appConnection.remove(connectionId) as Promise<AppConnectionRemoveResponse>;
     },
     approveTool: async (provider: string, toolAlias: string): Promise<{ success: boolean; error?: string }> => {
       return api.appConnection.approveTool(provider, toolAlias);

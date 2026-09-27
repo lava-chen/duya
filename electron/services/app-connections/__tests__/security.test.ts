@@ -17,6 +17,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
 const GOOGLE = asAppConnectorId('google');
 const SLACK = asAppConnectorId('slack');
+const WECOM = asAppConnectorId('wecom');
+const QQ_MAIL = asAppConnectorId('qq-mail');
 
 vi.mock('../../../logging/logger', () => ({
   getLogger: () => ({
@@ -39,7 +41,7 @@ import type { AppConnection } from '../types';
 import { AppConnectionService } from '../app-connection-service';
 import { ConnectionStore } from '../connection-store';
 import { FlowError } from '../oauth/flow';
-import type { TokenSet } from '../types';
+import type { ProviderId, TokenSet } from '../types';
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -47,6 +49,16 @@ import type { TokenSet } from '../types';
 
 class FakeVault {
   private map = new Map<string, TokenSet>();
+  private mcpOAuth = new Set<string>();
+  private oauthClients = new Map<string, { clientId: string; clientSecret?: string }>();
+  removeMcpOAuth = vi.fn((id: string) => this.mcpOAuth.delete(id));
+  removeOAuthClient = vi.fn((provider: string) => this.oauthClients.delete(provider));
+  setMcpOAuth(id: string) { this.mcpOAuth.add(id); }
+  hasMcpOAuth(id: string) { return this.mcpOAuth.has(id); }
+  setOAuthClient(provider: string, value: { clientId: string; clientSecret?: string }) {
+    this.oauthClients.set(provider, value);
+  }
+  hasOAuthClient(provider: string) { return this.oauthClients.has(provider); }
   set(id: string, t: TokenSet) { this.map.set(id, { ...t }); }
   get(id: string): TokenSet | undefined { const v = this.map.get(id); return v ? { ...v } : undefined; }
   remove(id: string) { this.map.delete(id); }
@@ -352,5 +364,71 @@ describe('AppConnectionService.connect with policy gate', () => {
       expect(err).toBeInstanceOf(FlowError);
       expect((err as FlowError).code).toBe('provider_blocked');
     }
+  });
+});
+
+describe('AppConnectionService.remove', () => {
+  it('removes local connection state without waiting for provider revocation', async () => {
+    const connection = makeConnection();
+    const store = {
+      get: vi.fn().mockReturnValue(connection),
+      remove: vi.fn().mockReturnValue(true),
+    } as unknown as ConnectionStore;
+    const vault = new FakeVault();
+    vault.set('c-test', {
+      accessToken: 'access-token',
+      expiresAt: Date.now() + 60_000,
+      tokenType: 'Bearer',
+      scopes: ['openid'],
+    });
+    vault.setMcpOAuth('c-test');
+    let finishRevoke: ((response: Response) => void) | undefined;
+    const fetchImpl = vi.fn(
+      () => new Promise<Response>((resolve) => { finishRevoke = resolve; }),
+    ) as unknown as typeof fetch;
+    const service = new AppConnectionService({ store, vault: vault as never, fetchImpl });
+
+    const result = await service.remove('c-test');
+
+    expect(result).toBe(true);
+    expect(store.remove).toHaveBeenCalledWith('c-test');
+    expect(vault.get('c-test')).toBeUndefined();
+    expect(vault.removeMcpOAuth).toHaveBeenCalledWith('c-test');
+    expect(vault.hasMcpOAuth('c-test')).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    finishRevoke?.(new Response(null, { status: 200 }));
+  });
+
+  it.each([WECOM, QQ_MAIL])('clears provider-scoped custom credentials for %s', async (provider) => {
+    const connection = makeConnection({ id: `connection-${provider}`, provider });
+    const store = {
+      get: vi.fn().mockReturnValue(connection),
+      remove: vi.fn().mockReturnValue(true),
+    } as unknown as ConnectionStore;
+    const vault = new FakeVault();
+    vault.setOAuthClient(provider, { clientId: 'account', clientSecret: 'stale-secret' });
+    const service = new AppConnectionService({ store, vault: vault as never });
+
+    await service.remove(connection.id);
+
+    expect(vault.removeOAuthClient).toHaveBeenCalledWith(provider);
+    expect(vault.hasOAuthClient(provider)).toBe(false);
+  });
+
+  it('preserves reusable OAuth app configuration when removing a normal OAuth connection', async () => {
+    const connection = makeConnection();
+    const store = {
+      get: vi.fn().mockReturnValue(connection),
+      remove: vi.fn().mockReturnValue(true),
+    } as unknown as ConnectionStore;
+    const vault = new FakeVault();
+    vault.setOAuthClient(GOOGLE, { clientId: 'oauth-app', clientSecret: 'app-secret' });
+    const service = new AppConnectionService({ store, vault: vault as never });
+
+    await service.remove(connection.id);
+
+    expect(vault.removeOAuthClient).not.toHaveBeenCalled();
+    expect(vault.hasOAuthClient(GOOGLE)).toBe(true);
   });
 });

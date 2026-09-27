@@ -178,6 +178,15 @@ export class TokenVault {
     return entry ? { ...entry } : undefined;
   }
 
+  /** Remove provider-scoped credentials for custom-credential connectors. */
+  removeOAuthClient(provider: ProviderId): void {
+    this.load();
+    if (provider in this.cache.oauthClients) {
+      delete this.cache.oauthClients[provider];
+      this.flush();
+    }
+  }
+
   getMcpOAuth(connectionId: string): {
     clientInformation?: Record<string, unknown>;
     codeVerifier?: string;

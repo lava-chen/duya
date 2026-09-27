@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import type { ProviderId } from '../types';
 
 let tempDir = '';
 let encryptionAvailable = true;
@@ -78,6 +79,19 @@ describe('TokenVault', () => {
     expect(vault2.get('c1')?.accessToken).toBe('ya29.fake');
     vault.remove('c1');
     expect(vault.get('c1')).toBeUndefined();
+  });
+
+  it('removes provider-scoped OAuth credentials', () => {
+    const vault = new TokenVault();
+    const provider = 'wecom' as ProviderId;
+    vault.setOAuthClient(provider, { clientId: 'corp-id', clientSecret: 'corp-secret' });
+    expect(vault.getOAuthClient(provider)).toEqual({ clientId: 'corp-id', clientSecret: 'corp-secret' });
+
+    vault.removeOAuthClient(provider);
+
+    expect(vault.getOAuthClient(provider)).toBeUndefined();
+    const reloaded = new TokenVault();
+    expect(reloaded.getOAuthClient(provider)).toBeUndefined();
   });
 
   it('clear empties the vault', () => {
