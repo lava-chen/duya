@@ -1,16 +1,18 @@
 /**
  * Imports Chrome/Edge cookies into the Electron browser partition.
  *
- * This supports Chromium's legacy DPAPI records and v10/v11 AES-GCM records.
- * v20 app-bound records deliberately remain unsupported: Chrome binds those
- * records to its installed application and bypassing that protection is not a
- * valid import strategy.
+ * Windows supports Chromium's legacy DPAPI records and v10/v11 AES-GCM records.
+ * macOS supports v10/v11 AES-CBC records keyed by the browser's "Safe Storage"
+ * Keychain secret. v20 app-bound records deliberately remain unsupported:
+ * Chrome binds those records to its installed application and bypassing that
+ * protection is not a valid import strategy.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
 import { copyFile, mkdtemp, rm } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
-import { createDecipheriv } from 'node:crypto';
+import { createDecipheriv, pbkdf2Sync } from 'node:crypto';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -83,6 +85,26 @@ const SAME_SITE_MAP: Record<number, 'no_restriction' | 'lax' | 'strict'> = {
 };
 const CHROME_TO_UNIX_OFFSET = 11644473600000000;
 
+/**
+ * Which cipher a profile's v10/v11 records use. Windows derives an AES-256-GCM
+ * key from Local State; macOS derives an AES-128-CBC key from the Keychain's
+ * "Safe Storage" secret. Defaults to the Windows mode for backwards
+ * compatibility with existing callers.
+ */
+export type CookieCipherMode = 'aes-256-gcm' | 'aes-128-cbc';
+
+/** Keychain generic-password service names holding the "Safe Storage" secret. */
+const MACOS_KEYCHAIN_SERVICES: Record<'chrome' | 'edge', string> = {
+  chrome: 'Chrome Safe Storage',
+  edge: 'Microsoft Edge Safe Storage',
+};
+
+/** Chromium's hardcoded fallback password when the Keychain item is absent. */
+const MACOS_FALLBACK_SECRET = 'peanuts';
+const MACOS_PBKDF2_ITERATIONS = 1003;
+const MACOS_PBKDF2_SALT = 'saltysalt';
+const MACOS_CBC_IV = Buffer.alloc(16, 0x20);
+
 export function mapChromeCookieToElectron(row: ChromeCookieRow, decryptedValue: string): ElectronCookie {
   const secure = row.is_secure === 1;
   return {
@@ -149,11 +171,32 @@ export function isCookieExpired(expiresUtc: number): boolean {
 }
 
 function browserUserDataPath(browser: 'chrome' | 'edge'): string | null {
-  const localAppData = process.env.LOCALAPPDATA;
-  if (!localAppData) return null;
-  return browser === 'chrome'
-    ? join(localAppData, 'Google', 'Chrome', 'User Data')
-    : join(localAppData, 'Microsoft', 'Edge', 'User Data');
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA;
+    if (!localAppData) return null;
+    return browser === 'chrome'
+      ? join(localAppData, 'Google', 'Chrome', 'User Data')
+      : join(localAppData, 'Microsoft', 'Edge', 'User Data');
+  }
+  if (process.platform === 'darwin') {
+    const appSupport = join(homedir(), 'Library', 'Application Support');
+    return browser === 'chrome'
+      ? join(appSupport, 'Google', 'Chrome')
+      : join(appSupport, 'Microsoft Edge');
+  }
+  return null;
+}
+
+/**
+ * Chromium moved the cookies database under Network/ on Windows (M96+) and
+ * later on macOS; older profiles keep it directly under the profile folder.
+ */
+function resolveCookieFilePath(profileDir: string): string | null {
+  for (const relative of [join('Network', 'Cookies'), 'Cookies']) {
+    const candidate = join(profileDir, relative);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
 }
 
 function isSafeProfileName(profile: string): boolean {
@@ -167,9 +210,12 @@ export function getBrowserCookieSource(
   if (!isSafeProfileName(profile)) return null;
   const userDataPath = browserUserDataPath(browser);
   if (!userDataPath) return null;
-  const cookiePath = join(userDataPath, profile, 'Network', 'Cookies');
+  const cookiePath = resolveCookieFilePath(join(userDataPath, profile));
   const localStatePath = join(userDataPath, 'Local State');
-  if (!existsSync(cookiePath) || !existsSync(localStatePath)) return null;
+  // Local State holds the DPAPI-wrapped AES key on Windows only; the macOS
+  // key comes from the Keychain, so its file is not required there.
+  if (!cookiePath) return null;
+  if (process.platform === 'win32' && !existsSync(localStatePath)) return null;
   return { browser, profile, cookiePath, localStatePath };
 }
 
@@ -187,6 +233,35 @@ async function unprotectDpapi(encryptedData: Buffer): Promise<Buffer> {
   return Buffer.from(stdout.trim(), 'base64');
 }
 
+/**
+ * Read the browser's "Safe Storage" secret from the login Keychain. The first
+ * access from a new app triggers a macOS authorization dialog which blocks
+ * until the user answers, hence the generous timeout. Only the trailing
+ * newline added by the `security` CLI is stripped — the secret itself is
+ * used verbatim as PBKDF2 input, mirroring Chromium's os_crypt.
+ */
+async function getMacosKeychainSecret(serviceName: string): Promise<string> {
+  const { stdout } = await execFileAsync(
+    'security',
+    ['find-generic-password', '-w', '-s', serviceName],
+    { timeout: 60_000 },
+  );
+  const secret = stdout.replace(/\r?\n$/, '');
+  if (!secret) throw new Error(`Keychain item ${serviceName} has an empty password`);
+  return secret;
+}
+
+/** Derive the AES-128 key exactly as Chromium's os_crypt_mac.cc does. */
+export function deriveMacosCookieKey(keychainSecret: string): Buffer {
+  return pbkdf2Sync(
+    keychainSecret,
+    MACOS_PBKDF2_SALT,
+    MACOS_PBKDF2_ITERATIONS,
+    16,
+    'sha1',
+  );
+}
+
 async function getChromiumEncryptionKey(localStatePath: string): Promise<Buffer> {
   const localState = JSON.parse(readFileSync(localStatePath, 'utf8')) as {
     os_crypt?: { encrypted_key?: string };
@@ -201,11 +276,27 @@ async function getChromiumEncryptionKey(localStatePath: string): Promise<Buffer>
   return unprotectDpapi(encryptedKey.subarray(dpapiPrefix.length));
 }
 
-export async function decryptCookieValue(encryptedValue: Buffer, encryptionKey: Buffer | null): Promise<string> {
+export async function decryptCookieValue(
+  encryptedValue: Buffer,
+  encryptionKey: Buffer | null,
+  mode: CookieCipherMode = 'aes-256-gcm',
+): Promise<string> {
   const version = encryptedValue.subarray(0, 3).toString('utf8');
   if (version === 'v20') throw new Error('APP_BOUND_ENCRYPTION');
   if (version === 'v10' || version === 'v11') {
     if (!encryptionKey) throw new Error('Missing Chromium AES encryption key');
+    if (mode === 'aes-128-cbc') {
+      if (encryptionKey.length !== 16) throw new Error('macOS cookie key must be 16 bytes');
+      if (encryptedValue.length < 3 + 16) throw new Error('Malformed Chromium AES cookie');
+      const decipher = createDecipheriv('aes-128-cbc', encryptionKey, MACOS_CBC_IV);
+      // Node validates and strips PKCS#7 padding in final(); wrong-key or
+      // corrupted records throw and are reported per-cookie as failed.
+      const decrypted = Buffer.concat([
+        decipher.update(encryptedValue.subarray(3)),
+        decipher.final(),
+      ]);
+      return decrypted.toString('utf8');
+    }
     const nonceLength = 12;
     const tagLength = 16;
     if (encryptedValue.length <= 3 + nonceLength + tagLength) throw new Error('Malformed Chromium AES cookie');
@@ -221,6 +312,9 @@ export async function decryptCookieValue(encryptedValue: Buffer, encryptionKey: 
       decipher.update(encryptedValue.subarray(nonceStart + nonceLength, ciphertextEnd)),
       decipher.final(),
     ]).toString('utf8');
+  }
+  if (process.platform !== 'win32') {
+    throw new Error(`Unsupported cookie encryption prefix '${version}' on ${process.platform}`);
   }
   return (await unprotectDpapi(encryptedValue)).toString('utf8');
 }
@@ -312,10 +406,30 @@ export async function readBrowserCookies(
     }
 
     let encryptionKey: Buffer | null = null;
-    try {
-      encryptionKey = await getChromiumEncryptionKey(source.localStatePath);
-    } catch (err) {
-      logger.warn(`Cookie import could not read Chromium encryption key: ${err instanceof Error ? err.message : err}`, {}, LogComponent.BrowserDaemon);
+    let cipherMode: CookieCipherMode = 'aes-256-gcm';
+    if (process.platform === 'darwin') {
+      cipherMode = 'aes-128-cbc';
+      try {
+        encryptionKey = deriveMacosCookieKey(
+          await getMacosKeychainSecret(MACOS_KEYCHAIN_SERVICES[source.browser]),
+        );
+      } catch (err) {
+        // Chromium falls back to a hardcoded secret when the Keychain item is
+        // unreadable (headless setups); wrong-key records then fail the PKCS#7
+        // check and are reported per-cookie instead of aborting the import.
+        logger.warn(
+          `Cookie import could not read the ${source.browser} Safe Storage keychain secret, using the Chromium default: ${err instanceof Error ? err.message : err}`,
+          {},
+          LogComponent.BrowserDaemon,
+        );
+        encryptionKey = deriveMacosCookieKey(MACOS_FALLBACK_SECRET);
+      }
+    } else if (process.platform === 'win32') {
+      try {
+        encryptionKey = await getChromiumEncryptionKey(source.localStatePath);
+      } catch (err) {
+        logger.warn(`Cookie import could not read Chromium encryption key: ${err instanceof Error ? err.message : err}`, {}, LogComponent.BrowserDaemon);
+      }
     }
 
     const cookies: ElectronCookie[] = [];
@@ -324,7 +438,7 @@ export async function readBrowserCookies(
     for (const row of rows) {
       if (isCookieExpired(row.expires_utc)) continue;
       try {
-        const value = row.value || await decryptCookieValue(row.encrypted_value, encryptionKey);
+        const value = row.value || await decryptCookieValue(row.encrypted_value, encryptionKey, cipherMode);
         cookies.push(mapChromeCookieToElectron(row, value));
       } catch (err) {
         if (err instanceof Error && err.message === 'APP_BOUND_ENCRYPTION') {

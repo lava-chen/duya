@@ -1953,6 +1953,8 @@ const zh: Record<TranslationKey, string> = {
   'browserAdvanced.openExtensions': '打开 Chrome 扩展程序',
   'browserAdvanced.refreshExtension': '刷新扩展状态',
   'browserAdvanced.dataCleared': '浏览器数据已清空',
+  'browserAdvanced.macosKeychainHint': '在 macOS 上首次导入时会弹出 Keychain 授权窗口，请选择"始终允许"以访问 Chrome/Edge Safe Storage 条目。',
+  'browserAdvanced.cookiePlatformUnsupported': 'Cookie 导入当前仅支持 Windows 与 macOS。',
 
   // ConfigStep
   'configStep.popular': '热门',

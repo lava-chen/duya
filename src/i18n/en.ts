@@ -1969,6 +1969,8 @@ const en = {
   'browserAdvanced.openExtensions': 'Open Chrome Extensions',
   'browserAdvanced.refreshExtension': 'Refresh Extension Status',
   'browserAdvanced.dataCleared': 'Browser data cleared',
+  'browserAdvanced.macosKeychainHint': 'On macOS the first import triggers a Keychain authorization dialog. Choose "Always Allow" so the Chrome/Edge Safe Storage item can be read.',
+  'browserAdvanced.cookiePlatformUnsupported': 'Cookie import currently supports Windows and macOS only.',
 
   // ConfigStep
   'configStep.popular': 'Popular',
