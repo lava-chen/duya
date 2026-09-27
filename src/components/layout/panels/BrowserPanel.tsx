@@ -23,6 +23,8 @@ import { AgentBrowserTab } from "./AgentBrowserTab";
 import { IconButton } from "@/components/ui/IconButton";
 import { NewTabPage } from "@/components/browser/NewTabPage";
 import { BrowserMenu } from "@/components/browser/BrowserMenu";
+import { ImportCookiesDialog } from "@/components/settings/ImportCookiesDialog";
+import { useConversationStore } from "@/stores/conversation-store";
 import {
   isFavorited,
   isRecordableUrl,
@@ -41,6 +43,7 @@ type WebviewElement = HTMLElement & {
   goBack(): void;
   goForward(): void;
   loadURL(url: string): void | Promise<void>;
+  print(): void;
   reload(): void;
   setZoomLevel(level: number): void;
   stopFindInPage(action?: "clearSelection" | "keepSelection" | "activateSelection"): void;
@@ -354,6 +357,7 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
     startsAsNewTab ? null : initialUrl,
   );
   const [favorited, setFavorited] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [zoomDisplay, setZoomDisplay] = useState(100);
   const faviconRef = useRef<string | undefined>(undefined);
 
@@ -535,6 +539,29 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
     }
   }, [t]);
 
+  const handlePrint = useCallback(() => {
+    try {
+      webviewRef.current?.print();
+    } catch {
+      // Webview can throw while it is being attached or torn down.
+    }
+  }, []);
+
+  const handleShowHistory = useCallback(() => {
+    // The new-tab page doubles as the history view (localStorage store).
+    setPendingNewTab(true);
+    setFindOpen(false);
+    try {
+      webviewRef.current?.stopFindInPage("clearSelection");
+    } catch {
+      // Webview can throw while it is being attached or torn down.
+    }
+  }, []);
+
+  const handleOpenSettings = useCallback(() => {
+    useConversationStore.getState().setCurrentView("settings");
+  }, []);
+
   const handleNewTabNavigate = useCallback((raw: string) => {
     navigate(raw);
   }, [navigate]);
@@ -704,11 +731,17 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
       >
         <BrowserMenu
           onFindInPage={openFind}
+          onPrint={handlePrint}
           onZoomIn={() => stepZoom(1)}
           onZoomOut={() => stepZoom(-1)}
           onZoomReset={() => applyZoomFactor(1)}
+          onScreenshot={handleScreenshot}
+          onImportCookies={() => setImportOpen(true)}
+          onShowHistory={handleShowHistory}
           onClearData={() => void handleClearData()}
+          onOpenSettings={handleOpenSettings}
           zoomPercent={zoomDisplay}
+          pageBoundDisabled={pendingNewTab}
         />
         <div className="browser-nav-pill" role="group" aria-label="Page navigation">
           <button
@@ -858,6 +891,7 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
           <div className="browser-panel-zoom-chip">{zoomPercent}%</div>
         )}
       </div>
+      <ImportCookiesDialog isOpen={importOpen} onClose={() => setImportOpen(false)} />
     </div>
   );
 }

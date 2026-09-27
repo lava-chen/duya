@@ -130,6 +130,7 @@ import {
   Square,
   CheckSquare,
   Camera,
+  Printer,
   Quote,
   Files,
   ZoomIn,
@@ -613,6 +614,7 @@ export const ChatCircleTextIcon = wrapTabler(TablerIconMessage2);
 export const ChatCirclePlusIcon = wrapTabler(TablerIconMessageCirclePlus);
 export const ImageIcon = wrapTabler(TablerIconPhoto);
 export const CursorClickIcon = wrapTabler(TablerIconHandClick);
+export const PrinterIcon = wrapLucide(Printer);
 export const CookieIcon = wrapTabler(TablerIconCookie);
 // Search — must be a magnifier; previously aliased to a chat bubble, which made
 // every search affordance render the wrong glyph.
