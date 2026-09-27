@@ -6,9 +6,13 @@ import {
   ArrowRightIcon,
   ArrowsClockwiseIcon,
   CameraIcon,
+  CaretDownIcon,
+  CaretUpIcon,
   CursorClickIcon,
   GlobeIcon,
+  MagnifyingGlassIcon,
   WarningCircleIcon,
+  XIcon,
 } from "@/components/icons";
 import { usePanel } from "@/hooks/usePanel";
 import { useSettings } from "@/hooks/useSettings";
@@ -21,12 +25,15 @@ type WebviewElement = HTMLElement & {
   canGoForward(): boolean;
   capturePage(): Promise<{ toDataURL(): string }>;
   executeJavaScript<T = unknown>(code: string, userGesture?: boolean): Promise<T>;
+  findInPage(text: string, options?: { forward?: boolean; findNext?: boolean }): void;
   getTitle(): string;
   getURL(): string;
   goBack(): void;
   goForward(): void;
   loadURL(url: string): void | Promise<void>;
   reload(): void;
+  setZoomLevel(level: number): void;
+  stopFindInPage(action?: "clearSelection" | "keepSelection" | "activateSelection"): void;
 };
 
 type WebviewNavigationEvent = Event & {
@@ -46,6 +53,22 @@ interface BrowserElementSnapshot {
 const EMPTY_URL = "about:blank";
 const FALLBACK_HOME_URL = "https://www.google.com";
 const BROWSER_PARTITION = "persist:duya-local-browser";
+
+/** Zoom presets mirroring Chromium's menu steps. */
+const ZOOM_STEPS = [0.3, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+
+function nearestZoomStepIndex(factor: number): number {
+  let best = 0;
+  for (let i = 1; i < ZOOM_STEPS.length; i++) {
+    if (Math.abs(ZOOM_STEPS[i] - factor) < Math.abs(ZOOM_STEPS[best] - factor)) best = i;
+  }
+  return best;
+}
+
+/** Electron zoom levels are exponential: zoomFactor = 1.2 ^ zoomLevel. */
+function zoomLevelForFactor(factor: number): number {
+  return Math.log(factor) / Math.log(1.2);
+}
 
 function normalizeBrowserAddress(raw: string): string {
   const value = raw.trim();
@@ -323,6 +346,115 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Zoom + find-in-page. Zoom lives per panel instance and resets on remount.
+  // <webview> guests swallow keyboard events, so Cmd/Ctrl shortcuts are
+  // intercepted via the guest's before-input-event and, when focus sits in
+  // the host UI (address bar etc.), via the panel's own onKeyDown.
+  const zoomFactorRef = useRef(1);
+  const [zoomPercent, setZoomPercent] = useState<number | null>(null);
+  const zoomHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [findMatches, setFindMatches] = useState<{ active: number; count: number } | null>(null);
+  const findInputRef = useRef<HTMLInputElement | null>(null);
+
+  const flashZoom = useCallback((factor: number) => {
+    setZoomPercent(Math.round(factor * 100));
+    if (zoomHideTimer.current) clearTimeout(zoomHideTimer.current);
+    zoomHideTimer.current = setTimeout(() => setZoomPercent(null), 1500);
+  }, []);
+
+  useEffect(() => () => {
+    if (zoomHideTimer.current) clearTimeout(zoomHideTimer.current);
+  }, []);
+
+  const applyZoomFactor = useCallback((factor: number) => {
+    const clamped = Math.min(ZOOM_STEPS[ZOOM_STEPS.length - 1], Math.max(ZOOM_STEPS[0], factor));
+    zoomFactorRef.current = clamped;
+    try {
+      webviewRef.current?.setZoomLevel(zoomLevelForFactor(clamped));
+    } catch {
+      // Webview can throw while it is being attached or torn down.
+    }
+    flashZoom(clamped);
+  }, [flashZoom]);
+
+  const stepZoom = useCallback((direction: 1 | -1) => {
+    const index = nearestZoomStepIndex(zoomFactorRef.current);
+    const next = ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, Math.max(0, index + direction))];
+    applyZoomFactor(next);
+  }, [applyZoomFactor]);
+
+  const openFind = useCallback(() => {
+    setFindOpen(true);
+    setFindMatches(null);
+    // Focus once the bar mounts; select any previous query for quick replace.
+    setTimeout(() => {
+      findInputRef.current?.focus();
+      findInputRef.current?.select();
+    }, 0);
+  }, []);
+
+  const closeFind = useCallback(() => {
+    setFindOpen(false);
+    setFindMatches(null);
+    try {
+      webviewRef.current?.stopFindInPage("clearSelection");
+    } catch {
+      // Webview can throw while it is being attached or torn down.
+    }
+  }, []);
+
+  const runFind = useCallback((forward: boolean, findNext: boolean) => {
+    const node = webviewRef.current;
+    const query = findQuery.trim();
+    if (!node || !query) return;
+    try {
+      node.findInPage(query, { forward, findNext });
+    } catch {
+      // Webview can throw while it is being attached or torn down.
+    }
+  }, [findQuery]);
+
+  const handleFindInput = useCallback((value: string) => {
+    setFindQuery(value);
+    const node = webviewRef.current;
+    const query = value.trim();
+    if (!node) return;
+    try {
+      if (query) {
+        node.findInPage(query, { forward: true, findNext: false });
+      } else {
+        node.stopFindInPage("clearSelection");
+        setFindMatches(null);
+      }
+    } catch {
+      // Webview can throw while it is being attached or torn down.
+    }
+  }, []);
+
+  const handleBrowserShortcut = useCallback((key: string, mod: boolean): boolean => {
+    if (!mod) return false;
+    const normalized = key.toLowerCase();
+    if (normalized === "f") {
+      openFind();
+      return true;
+    }
+    if (normalized === "=" || normalized === "+") {
+      stepZoom(1);
+      return true;
+    }
+    if (normalized === "-") {
+      stepZoom(-1);
+      return true;
+    }
+    if (normalized === "0") {
+      applyZoomFactor(1);
+      return true;
+    }
+    return false;
+  }, [applyZoomFactor, openFind, stepZoom]);
+
   const syncFromWebview = useCallback(() => {
     const node = webviewRef.current;
     if (!node) return;
@@ -379,6 +511,32 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
       setError(event.errorDescription || "Failed to load page");
       syncFromWebview();
     };
+    // Guest pages keep their own keyboard events; this is the only reliable
+    // host-side hook for Cmd/Ctrl shortcuts typed while the page has focus.
+    const handleBeforeInput = (event: Event) => {
+      const detail = event as Event & {
+        preventDefault(): void;
+        input?: { type?: string; key?: string; controlKey?: boolean; metaKey?: boolean };
+      };
+      const input = detail.input;
+      if (!input || input.type !== "keyDown") return;
+      const consumed = handleBrowserShortcut(
+        input.key || "",
+        Boolean(input.controlKey || input.metaKey),
+      );
+      if (consumed) detail.preventDefault();
+    };
+    const handleFoundInPage = (event: Event) => {
+      const result = (event as Event & {
+        result?: { activeMatchOrdinal?: number; matches?: number };
+      }).result;
+      if (result) {
+        setFindMatches({
+          active: result.activeMatchOrdinal ?? 0,
+          count: result.matches ?? 0,
+        });
+      }
+    };
 
     node.addEventListener("did-start-loading", handleStart);
     node.addEventListener("did-stop-loading", handleStop);
@@ -387,6 +545,8 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
     node.addEventListener("page-title-updated", handleTitle);
     node.addEventListener("page-favicon-updated", handleFavicon as EventListener);
     node.addEventListener("did-fail-load", handleFail as EventListener);
+    node.addEventListener("before-input-event", handleBeforeInput as EventListener);
+    node.addEventListener("found-in-page", handleFoundInPage as EventListener);
     return () => {
       node.removeEventListener("did-start-loading", handleStart);
       node.removeEventListener("did-stop-loading", handleStop);
@@ -395,8 +555,10 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
       node.removeEventListener("page-title-updated", handleTitle);
       node.removeEventListener("page-favicon-updated", handleFavicon as EventListener);
       node.removeEventListener("did-fail-load", handleFail as EventListener);
+      node.removeEventListener("before-input-event", handleBeforeInput as EventListener);
+      node.removeEventListener("found-in-page", handleFoundInPage as EventListener);
     };
-  }, [syncFromWebview, tab?.id, updateTabFavicon]);
+  }, [syncFromWebview, tab?.id, updateTabFavicon, handleBrowserShortcut]);
 
   const handleScreenshot = useCallback(async () => {
     const node = webviewRef.current;
@@ -446,7 +608,19 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
   }, [picking, title, url]);
 
   return (
-    <div className="browser-panel">
+    <div
+      className="browser-panel"
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && findOpen) {
+          event.preventDefault();
+          closeFind();
+          return;
+        }
+        if (handleBrowserShortcut(event.key, event.metaKey || event.ctrlKey)) {
+          event.preventDefault();
+        }
+      }}
+    >
       <form
         className="browser-panel-toolbar"
         onSubmit={(event) => {
@@ -472,6 +646,17 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
             spellCheck={false}
           />
         </label>
+        <IconButton
+          type="button"
+          variant="default"
+          shape="square"
+          className={`browser-panel-icon-btn${findOpen ? " active" : ""}`}
+          aria-label="Find in page"
+          onClick={openFind}
+          title="Find in page (Cmd/Ctrl+F)"
+        >
+          <MagnifyingGlassIcon size={14} />
+        </IconButton>
         <IconButton
           type="button"
           variant="default"
@@ -513,6 +698,42 @@ export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
           src={initialUrl}
           partition={BROWSER_PARTITION}
         />
+        {findOpen && (
+          <div className="browser-find-bar">
+            <MagnifyingGlassIcon size={13} />
+            <input
+              ref={findInputRef}
+              value={findQuery}
+              onChange={(event) => handleFindInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  runFind(!event.shiftKey, true);
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  closeFind();
+                }
+              }}
+              placeholder="Find in page"
+              spellCheck={false}
+            />
+            <span className="browser-find-count">
+              {findQuery.trim() && findMatches ? `${findMatches.active}/${findMatches.count}` : ""}
+            </span>
+            <IconButton type="button" variant="default" shape="square" className="browser-panel-icon-btn" aria-label="Previous match" onClick={() => runFind(false, true)} title="Previous match">
+              <CaretUpIcon size={12} />
+            </IconButton>
+            <IconButton type="button" variant="default" shape="square" className="browser-panel-icon-btn" aria-label="Next match" onClick={() => runFind(true, true)} title="Next match">
+              <CaretDownIcon size={12} />
+            </IconButton>
+            <IconButton type="button" variant="default" shape="square" className="browser-panel-icon-btn" aria-label="Close find bar" onClick={closeFind} title="Close (Esc)">
+              <XIcon size={12} />
+            </IconButton>
+          </div>
+        )}
+        {zoomPercent !== null && (
+          <div className="browser-panel-zoom-chip">{zoomPercent}%</div>
+        )}
       </div>
     </div>
   );
