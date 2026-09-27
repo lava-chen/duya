@@ -136,7 +136,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 
 | Plan                                                                   | Description                                                                                                                                                                        | Priority | Status                                                |
 | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----------------------------------------------------- |
-| [573-browser-core-upgrade](./active/573-browser-core-upgrade.md)       | 内置浏览器内核升级：Phase 1 macOS cookie 导入（Keychain + AES-CBC，收口 Windows-only 现状）；Phase 2 缩放 + 页内查找（webview before-input-event）；Phase 3 历史表 + 新标签页推荐；Phase 4 safeStorage 密码 vault；Phase 5 清数据分项 + 下载管理器 | P0       | Phase 1-2 代码+单测落地（2026-09-27，14 单测绿 + 0 新增 tsc 错误）；真机冒烟待人工；Phase 3-5 未开工 |
+| [573-browser-core-upgrade](./active/573-browser-core-upgrade.md)       | 内置浏览器内核升级：Phase 1 macOS cookie 导入（Keychain + AES-CBC）；Phase 1b 从浏览器导入对话框（profile 自动枚举 + 数据清单，对齐参考产品）；Phase 2 缩放 + 页内查找；Phase 3 历史表 + 新标签页推荐；Phase 4 safeStorage 密码 vault；Phase 5 清数据分项 + 下载管理器 | P0       | Phase 1/1b/2 代码+单测落地（2026-09-27，45 单测绿 + 0 新增 tsc 错误）；真机冒烟待人工；Phase 3-5 未开工 |
 
 ### Plugin / MCP / App Connection
 

@@ -49,6 +49,27 @@
 - [x] 样式落在 `src/styles/office-browser.css`（沿用 `.browser-panel-*` 命名）
 - [ ] Playwright / Electron 真机验证待人工
 
+### Phase 1b — 导入对话框（对齐参考产品 UI）代码落地
+
+参考 ChatGPT 桌面端「从浏览器导入」对话框（2026-09-27 截图）：profile 自动枚举
+（带显示名）+ 数据类型清单 + 平台提示，取代原手填 profile 输入框。
+
+- [x] `electron/services/browser/profile-detector.ts`：读 Local State
+      `profile.info_cache` 枚举 profile（dir + 显示名），Default 优先排序，
+      逐 dir 探测 cookie 库存在性；info_cache 不可读时仅在磁盘存在 Default 时兜底；
+      目录名经 `isSafeProfileName` 白名单过滤
+- [x] `browser:detect-cookie-profiles` IPC + preload `browserCookie.detectProfiles`
+      （`BrowserCookieProfile` 类型随 preload 导出，渲染层直通）
+- [x] `ImportCookiesDialog`：浏览器选择 + profile 下拉（无 cookie 库的条目禁用）
+      + 重新检测；数据清单 Cookie（锁定开）/ 密码 / 浏览记录（标记"即将支持"，
+      对应 Phase 3/4）；平台提示（mac Keychain 授权 / win 扩展导出路线 / 其他平台不支持）；
+      导入结果与错误码展示（沿用既有 browserAdvanced.* 文案）
+- [x] `BrowserAdvancedSection` 导入卡收敛为一行 + "从浏览器导入"入口，内联控件全数移入对话框
+- [x] i18n `browserImport.*` 14 键（zh + en）
+- [x] 单测 `profile-detector.test.ts` 6 项（命名映射 / 排序 / 无名回退 / cookie 库
+      存在性标记 / Local State 损坏兜底 / 非法目录名过滤 / edge 源）
+- [ ] 真机冒烟待人工：对话框 profile 列表与真实 Chrome 匹配；导入走通
+
 ### Phase 3 — 浏览历史 + 新标签页推荐（P1，未开工）
 
 - [ ] core-db history 表（migration）+ 记录挂点（webview did-navigate 主框架）
@@ -69,9 +90,18 @@
 - [ ] 清除浏览数据：时间范围 + 数据类型勾选（对齐 Chrome ClearBrowsingData 弹窗）
 - [ ] 下载管理器：下载列表 / 进度 / 打开与删除，数据挂 core-db 或内存态
 
+- 2026-09-27: 参考产品（ChatGPT 桌面端）对 Windows App-Bound 走"管理员批准"提权
+  解密路线（对话框明示 + 勾选确认）。duya 维持扩展 live-export 路线不跟：提权解密
+  本质仍是绕过 App-Bound 绑定，且与 plan 573 "不绕过保护"的边界声明冲突；
+  扩展路线用户可感知、可随时撤销，安全叙事更强。
+- 2026-09-27: 数据清单中密码/浏览记录行按参考产品样式展示为"即将支持"——它们对应
+  本 plan Phase 3/4 的真实排期，非占位承诺；扩展程序行不展示（无对应排期）。
+- 2026-09-27: profile 检测对 info_cache 之外的目录一律不采信（isSafeProfileName
+  白名单 + Default 磁盘存在性探测），防止把幽灵目录喂给导入器。
+
 ## Gates
 
-- `npx vitest run electron/services/browser/__tests__/cookie-importer.test.ts`
+- `npx vitest run electron/services/browser/__tests__/`（cookie-importer 14 + profile-detector 6 + 相邻模块）
 - `npm run typecheck:web`（root tsconfig 覆盖 `electron/**` 与 `src/**`，本次改动面全覆盖）
 - 2026-09-27 typecheck:web 实测：HEAD 上存在 12 个与本 plan 无关的存量错误
   （`src/hooks/useGitRepo.ts` 11 个：`GitBranchRef`/`GitRepositoryState` 导出缺失 +
