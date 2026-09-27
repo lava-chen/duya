@@ -41,6 +41,11 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - UI contract: changed-file filter/tree, unified diff by default, split diff
   only in expanded mode, optional context folding and wrapping, and hand off
   the selected file through the existing chat attachment event.
+- Line comments (plan 572): the toolbar's 预览 toggle renders a single file
+  via `code-review-code-viewer.tsx` (`@pierre/diffs`) where hover/click on
+  lines attaches comments. Comments live in `src/lib/code-comment-store.ts`
+  (bucketed per workspace); the composer strip reads the same store and
+  injects pending ones as a `# Code comments:` block on send.
 - Verify parser behavior in
   `src/components/layout/panels/code-review-diff.test.ts`, bridge behavior in
   `electron/ipc/__tests__/git-handlers.test.ts`, then exercise the panel in a

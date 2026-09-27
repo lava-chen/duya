@@ -22,8 +22,12 @@ import {
   IconRoute,
   IconSearch,
   IconTextWrap,
+  FileTextIcon,
 } from "@/components/icons";
 import { dispatchAddAttachment } from "@/lib/add-attachment-event";
+import { useCodeComments } from "@/hooks/use-code-comments";
+import { useTheme } from "@/hooks/useTheme";
+import { CodeViewer } from "./code-review-code-viewer";
 import {
   getGitLatestTurnReview,
   getGitTurnHistory,
@@ -351,6 +355,15 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const [foldUnchanged, setFoldUnchanged] = useState(true);
   const [showFiles, setShowFiles] = useState(true);
   const [showWhitespace, setShowWhitespace] = useState(false);
+  // ZCode-style file preview with per-line comments. "diff" keeps the
+  // historical stacked-patches view; "preview" renders ONE file (the
+  // selected one) as a syntax-highlighted read-only surface where the
+  // user can attach comments to line ranges.
+  const [viewMode, setViewMode] = useState<"diff" | "preview">("diff");
+  const [previewContent, setPreviewContent] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  const [previewTruncated, setPreviewTruncated] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false, x: 0, y: 0, path: "",
   });
@@ -619,6 +632,94 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     dispatchAddAttachment({ kind: "file-tree-ref", path: joinWorkspacePath(workingDirectory, path) });
   }, [workingDirectory]);
 
+  // Per-line comments (ZCode-style). Bucketed by workspace so two project
+  // windows never share comments; the composer reads the same store.
+  const { comments: workspaceComments, addComment, removeComment } = useCodeComments(workingDirectory);
+  const { theme } = useTheme();
+
+  const fileComments = useMemo(
+    () => workspaceComments.filter((comment) => comment.path === selectedPath),
+    [selectedPath, workspaceComments],
+  );
+  const commentCountByPath = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const comment of workspaceComments) {
+      counts.set(comment.path, (counts.get(comment.path) ?? 0) + 1);
+    }
+    return counts;
+  }, [workspaceComments]);
+
+  // Load the selected file's working-tree content for preview mode.
+  useEffect(() => {
+    if (viewMode !== "preview" || !selectedPath || !workingDirectory) return;
+    let cancelled = false;
+    setPreviewLoading(true);
+    setPreviewError("");
+    setPreviewTruncated(false);
+    const previewPromise = window.electronAPI?.files?.preview(
+      joinWorkspacePath(workingDirectory, selectedPath),
+      workingDirectory,
+    );
+    if (!previewPromise) {
+      setPreviewLoading(false);
+      setPreviewError("文件预览桥接不可用（需要在 Electron 中运行）。");
+      return;
+    }
+    void previewPromise
+      .then((result) => {
+        if (cancelled) return;
+        if (!result || !result.success) {
+          setPreviewError(result?.error || "无法读取文件内容。");
+          setPreviewContent(null);
+          return;
+        }
+        if (result.kind !== "text" || typeof result.content !== "string") {
+          setPreviewError("该文件不是文本文件，无法在预览中评论。");
+          setPreviewContent(null);
+          return;
+        }
+        setPreviewContent(result.content);
+        setPreviewTruncated(Boolean(result.truncated));
+      })
+      .catch((cause: unknown) => {
+        if (cancelled) return;
+        setPreviewError(cause instanceof Error ? cause.message : String(cause));
+        setPreviewContent(null);
+      })
+      .finally(() => {
+        if (!cancelled) setPreviewLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [viewMode, selectedPath, workingDirectory]);
+
+  // Commit-to-commit diffs describe historical blobs while the preview shows
+  // the working tree — commenting on mismatched content would mislead both
+  // the user and the model, so keep those scopes diff-only.
+  useEffect(() => {
+    if (scope === "commit" && viewMode === "preview") setViewMode("diff");
+  }, [scope, viewMode]);
+
+  const handleSubmitCodeComment = useCallback(
+    (params: { range: { startLine: number; endLine: number }; selectedText: string; comment: string }) => {
+      if (!selectedPath || !params.comment.trim()) return;
+      addComment({
+        path: selectedPath,
+        startLine: params.range.startLine,
+        endLine: params.range.endLine,
+        selectedText: params.selectedText,
+        comment: params.comment,
+      });
+    },
+    [addComment, selectedPath],
+  );
+
+  const handleDeleteCodeComment = useCallback(
+    (commentId: string) => {
+      removeComment(commentId);
+    },
+    [removeComment],
+  );
+
   return (
     <div className={`code-review-panel${showFiles ? " has-file-tree" : ""}`}>
       <header className="code-review-toolbar">
@@ -675,6 +776,25 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
               </select>
             </div>
           )}
+        </div>
+        <div className="code-review-scope-switch" role="group" aria-label="视图模式">
+          <button
+            type="button"
+            className={viewMode === "diff" ? "is-active" : ""}
+            onClick={() => setViewMode("diff")}
+            disabled={scope === "commit"}
+          >
+            差异
+          </button>
+          <button
+            type="button"
+            className={viewMode === "preview" ? "is-active" : ""}
+            onClick={() => setViewMode("preview")}
+            disabled={scope === "commit"}
+            title={scope === "commit" ? "提交对比仅支持差异视图" : "文件预览 · 可对任意行添加评论"}
+          >
+            预览
+          </button>
         </div>
         <div className="code-review-totals" aria-label={`${files.length} 个变更文件`}>
           <span className="is-add">+{totals?.additions ?? 0}</span>
@@ -751,7 +871,50 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
         <div className="code-review-workspace">
           <main className="code-review-main">
             <div className="code-review-diff-scroll" ref={scrollContainerRef}>
-              {diffLoading ? (
+              {viewMode === "preview" ? (
+                <div className="code-review-preview-wrap">
+                  {selectedPath ? (
+                    <div className="code-review-file-header">
+                      <div className="code-review-file-identity">
+                        {fileLanguageLabel(selectedPath) && (
+                          <span className="code-review-lang-badge">{fileLanguageLabel(selectedPath)}</span>
+                        )}
+                        <span title={selectedPath}>{selectedPath}</span>
+                      </div>
+                      {selectedFile && (
+                        <span className="code-review-file-diffstat" aria-label={`+${selectedFile.additions} −${selectedFile.removals}`}>
+                          <span className="is-add">+{selectedFile.additions}</span>
+                          <span className="is-remove">−{selectedFile.removals}</span>
+                        </span>
+                      )}
+                    </div>
+                  ) : null}
+                  {previewLoading ? (
+                    <div className="code-review-state">正在加载文件…</div>
+                  ) : previewError ? (
+                    <div className="code-review-state code-review-state-error"><IconAlertCircle size={18} />{previewError}</div>
+                  ) : previewContent === null || !selectedPath ? (
+                    <div className="code-review-empty">在右侧选择一个文件进行预览与评论。</div>
+                  ) : (
+                    <>
+                      {previewTruncated && (
+                        <div className="code-review-diff-notice">文件过大，仅显示前一部分。</div>
+                      )}
+                      <CodeViewer
+                        code={previewContent}
+                        fileName={selectedPath.split(/[\\/]/).pop() ?? selectedPath}
+                        showLineNumbers
+                        wrapLongLines={wrapped}
+                        darkMode={theme === "dark"}
+                        comments={fileComments}
+                        enableComments
+                        onSubmitComment={handleSubmitCodeComment}
+                        onDeleteComment={handleDeleteCodeComment}
+                      />
+                    </>
+                  )}
+                </div>
+              ) : diffLoading ? (
                 <div className="code-review-state">正在加载差异…</div>
               ) : diffError && !patch ? (
                 <div className="code-review-state code-review-state-error"><IconAlertCircle size={18} />{diffError}</div>
@@ -870,6 +1033,14 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
                           <StatusIcon status={file.status} />
                         </span>
                         <span className="code-review-file-list-path">{file.path}</span>
+                        {(commentCountByPath.get(file.path) ?? 0) > 0 && (
+                          <span
+                            className="code-review-file-list-comment-count"
+                            title={`${commentCountByPath.get(file.path)} 条行级评论`}
+                          >
+                            {commentCountByPath.get(file.path)}
+                          </span>
+                        )}
                         <span className="code-review-file-list-stats" aria-label={`+${file.additions} −${file.removals}`}>
                           <span className="is-add">+{file.additions}</span>
                           <span className="is-remove">−{file.removals}</span>

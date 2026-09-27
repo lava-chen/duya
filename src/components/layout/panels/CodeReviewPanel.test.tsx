@@ -29,10 +29,12 @@ vi.mock("@/hooks/usePanel", () => ({
 vi.mock("@/components/icons", () => {
   const MockIcon = () => <span />;
   return {
+    FileTextIcon: MockIcon,
     IconAlertCircle: MockIcon,
     IconChevronDown: MockIcon,
     IconColumns2: MockIcon,
     IconCopy: MockIcon,
+    IconDots: MockIcon,
     IconFileCode: MockIcon,
     IconFileDiff: MockIcon,
     IconFileMinus: MockIcon,
@@ -48,6 +50,7 @@ vi.mock("@/components/icons", () => {
     IconRoute: MockIcon,
     IconSearch: MockIcon,
     IconTextWrap: MockIcon,
+    TrashIcon: MockIcon,
   };
 });
 
@@ -187,7 +190,7 @@ describe("CodeReviewPanel", () => {
 
     render(<CodeReviewPanel tab={latestTurnTab()} embedded />);
 
-    const empty = await screen.findByText("上一轮对话没有文件变更。");
+    const empty = await screen.findByText("上一轮对话没有产生文件变更。");
     expect(empty).toBeTruthy();
   });
 
@@ -200,7 +203,7 @@ describe("CodeReviewPanel", () => {
 
     render(<CodeReviewPanel tab={workspaceTab()} embedded />);
 
-    const empty = await screen.findByText("工作区没有相对 HEAD 的未提交改动。");
+    const empty = await screen.findByText("所选范围内没有文件变更。");
     expect(empty).toBeTruthy();
   });
 

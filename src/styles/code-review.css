@@ -799,3 +799,200 @@
   background-color: var(--surface-solid) !important;
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42), 0 0 0 1px var(--border) !important;
 }
+
+/* Fixed-mode composer max-widths above override the Tailwind column tiers on
+ * .chat-composer-inner / .welcome-message-input; re-apply the same tiers here
+ * (56rem at 864px container, 72rem at 1280px container, matching the message
+ * column in MessageList) so the floating composer stays aligned with messages. */
+@container (min-width: 864px) {
+  .chat-view.panel-expanded .chat-composer-shell.workspace-floating-composer > div,
+  .chat-composer-shell.workspace-floating-composer-expanded > div,
+  .chat-view.panel-expanded .welcome-message-input.workspace-floating-composer,
+  .welcome-message-input.workspace-floating-composer-expanded {
+    max-width: 56rem;
+  }
+}
+
+@container (min-width: 1280px) {
+  .chat-view.panel-expanded .chat-composer-shell.workspace-floating-composer > div,
+  .chat-composer-shell.workspace-floating-composer-expanded > div,
+  .chat-view.panel-expanded .welcome-message-input.workspace-floating-composer,
+  .welcome-message-input.workspace-floating-composer-expanded {
+    max-width: 72rem;
+  }
+}
+
+/* ============================================
+   Code Review — file preview with line comments
+   (CodeViewer built on @pierre/diffs)
+   ============================================ */
+
+.code-review-code-viewer {
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+  overflow: auto;
+  background: var(--main-bg);
+}
+
+.code-review-code-viewer diffs-container {
+  min-height: 100%;
+  width: 100%;
+  display: block;
+}
+
+/* Annotation cards are projected into the light DOM via <div slot=...>,
+   so regular page styles apply. */
+.code-review-comment-card {
+  margin: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--main-bg);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.code-review-comment-card-range {
+  margin-bottom: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.code-review-comment-card-body {
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.code-review-comment-card-input {
+  display: block;
+  width: 100%;
+  min-height: 64px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: none;
+}
+
+.code-review-comment-card-input::placeholder {
+  color: var(--text-muted);
+}
+
+.code-review-comment-card-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--main-bg);
+}
+
+.code-review-comment-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+/* Composer chip strip for pending code comments */
+.code-review-comment-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 2px 6px;
+}
+
+.code-review-comment-strip-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 260px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: default;
+}
+
+.code-review-comment-strip-pill-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.code-review-comment-strip-pill-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.code-review-comment-strip-pill-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.code-review-comment-strip-pill-remove:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.code-review-comment-strip-pill:hover {
+  border-color: var(--border-strong);
+}
+
+/* Preview mode (single-file read-only surface with line comments) */
+.code-review-preview-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.code-review-preview-wrap .code-review-file-header {
+  flex: 0 0 auto;
+}
+
+.code-review-preview-wrap .code-review-code-viewer {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.code-review-file-list-comment-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 16px;
+  height: 16px;
+  margin-left: auto;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
