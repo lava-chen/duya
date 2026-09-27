@@ -10,6 +10,7 @@ import {
   manifestCredentialFields,
   isKnownPlatform,
   formatChannelAddress,
+  normalizeChannelAddress,
   parseChannelAddress,
 } from './types';
 
@@ -83,5 +84,22 @@ describe('channel address parsing (multi-channel + long IDs)', () => {
     expect(parseChannelAddress('telegram')).toBeNull();
     expect(parseChannelAddress('telegram:')).toBeNull();
     expect(parseChannelAddress(':123')).toBeNull();
+  });
+});
+
+describe('normalizeChannelAddress (compound model-composed tokens)', () => {
+  it('trims a feishu compound "oc_:ou_" chat to the bare chat id', () => {
+    const addr = { platform: 'feishu', chat: 'oc_78a6abc:ou_1822def' };
+    expect(normalizeChannelAddress(addr)).toEqual({ platform: 'feishu', chat: 'oc_78a6abc' });
+  });
+
+  it('leaves a clean feishu chat id untouched', () => {
+    const addr = { platform: 'feishu', chat: 'oc_78a6abc' };
+    expect(normalizeChannelAddress(addr)).toBe(addr);
+  });
+
+  it('preserves structured chat segments on other platforms (discord "guild=:channel=")', () => {
+    const addr = { platform: 'discord', chat: 'guild=987:channel=654' };
+    expect(normalizeChannelAddress(addr)).toBe(addr);
   });
 });

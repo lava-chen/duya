@@ -35,7 +35,7 @@
 
 import { enqueueInboundWake, notifySessionIdle } from './wake-dispatcher';
 import { runWakePromptInExistingSession, type WakeRunOutcome } from './wake-run';
-import { parseChannelAddress } from '../../packages/agent/src/channels/types';
+import { normalizeChannelAddress, parseChannelAddress } from '../../packages/agent/src/channels/types';
 import type { ChannelAddress, ChannelInboundEnvelope, ChannelOutboundMessage, DeliveryFailure } from '../../packages/agent/src/channels/types';
 import { buildChannelInboundWakePrompt, buildChannelDeliveryFailureWakePrompt, buildChannelAckRedrivePrompt, CHANNEL_INBOUND_WAKE_CUE, CHANNEL_DELIVERY_FAILED_WAKE_CUE } from '../../packages/agent/src/channels/prompts';
 import { getCoreStores } from '../db/core-connection';
@@ -433,7 +433,11 @@ export class DefaultChannelBackgroundWakes implements ChannelBackgroundWakes {
       }, LogComponent.AgentProcess);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
+      // Normalize before queueing: a model-composed compound token like
+      // "feishu:oc_<chatId>:ou_<userId>" must not be echoed back into the
+      // failure wake, or the model keeps reusing the rejected address.
       const address = parseChannelAddress(addressToken);
+      const normalizedAddress = address ? normalizeChannelAddress(address) : null;
 
       logger.error(
         'ChannelBackgroundWakes: deliverToChannel failed',
@@ -449,10 +453,10 @@ export class DefaultChannelBackgroundWakes implements ChannelBackgroundWakes {
       // error masks as a TypeError) when the IPC caller passes a token that
       // a future channelDelivery relaxation accepts but parseChannelAddress
       // does not.
-      const failure: DeliveryFailure | null = address
+      const failure: DeliveryFailure | null = normalizedAddress
         ? {
             sessionId,
-            address,
+            address: normalizedAddress,
             outbound,
             reason,
             failedAt: Date.now(),

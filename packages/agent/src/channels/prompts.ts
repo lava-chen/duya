@@ -35,7 +35,7 @@ export const CHANNEL_INBOUND_WAKE_CUE = '[inbound]';
  * go through SendMessage with the channel address from each line.
  */
 export const CHANNEL_INBOUND_REPLY_HINT =
-  'The messages below arrived from an external messaging channel. The sender cannot see this chat, and your final written reply does not reach them either — to answer, call SendMessage with channel set to the address shown in each line (e.g. channel="telegram:12345"); without channel your reply only lands in the in-app chat.';
+  'The messages below arrived from an external messaging channel. The sender cannot see this chat, and your final written reply does not reach them either — to answer, call SendMessage with channel set to the `from` address shown in each line, copied exactly as written (e.g. channel="telegram:12345"). The `from` address is the reply target and never contains the sender id; the sender shown in parentheses is informational only — never append it to the address. Without channel your reply only lands in the in-app chat.';
 
 /** Cue prepended to delivery-failure wake prompts. */
 export const CHANNEL_DELIVERY_FAILED_WAKE_CUE = '[channel-delivery-failed]';
@@ -118,10 +118,14 @@ export function buildChannelInboundWakePrompt(
  * MAX_INBOUND_TEXT_CHARS budget as part of the combined block.
  *
  * Format variants:
- * - Text message:  `"On <platform>, from <addr>: <sender>: <text>"`
+ * - Text message:  `"On <platform>, from <addr> (sender: <sender>): <text>"`
  * - Media-only:    header line with empty text, then attachment lines
- * - Reaction only: `"On <platform>, from <addr>: <sender> reacted <emoji> to your message: '<quote>'"`
- * - Reaction no quote: `"On <platform>, from <addr>: <sender> reacted <emoji>"`
+ * - Reaction only: `"On <platform>, from <addr> (sender: <sender>) reacted <emoji> to your message: '<quote>'"`
+ * - Reaction no quote: `"On <platform>, from <addr> (sender: <sender>) reacted <emoji>"`
+ *
+ * The `from` address is the reply target; the sender is parenthesised and
+ * labelled so the model never conflates the two (a conflation produces
+ * compound addresses like "feishu:oc_...:ou_..." that the send API rejects).
  */
 function formatInboundEnvelope(env: ChannelInboundEnvelope, addrKey: string): string {
   const platform = env.address.platform;
@@ -135,12 +139,12 @@ function formatInboundEnvelope(env: ChannelInboundEnvelope, addrKey: string): st
       env.reaction.messageQuote !== null
         ? ` to your message: '${truncate(env.reaction.messageQuote, 200)}'`
         : '';
-    return `On ${platform}, from ${addrKey}: ${sender} reacted ${emoji}${quote}`;
+    return `On ${platform}, from ${addrKey} (sender: ${sender}) reacted ${emoji}${quote}`;
   }
 
   // Text case (+ attachment lines, plan 507 P2.1)
   const content = truncate(text, 2000);
-  const lines = [`On ${platform}, from ${addrKey}: ${sender}: ${content}`];
+  const lines = [`On ${platform}, from ${addrKey} (sender: ${sender}): ${content}`];
   for (const attachment of env.attachments ?? []) {
     lines.push(
       `  [attachment saved to: ${attachment.path} ` +

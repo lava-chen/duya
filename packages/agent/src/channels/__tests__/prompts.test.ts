@@ -53,14 +53,14 @@ describe('buildChannelInboundWakePrompt — attachments (plan 507 P2.1)', () => 
   it('renders a text-only envelope exactly as before (no attachments field)', () => {
     const prompt = buildChannelInboundWakePrompt([makeEnvelope()]);
     expect(prompt).toBe(
-      `${PREFIX}\nOn telegram, from telegram:12345: alice: hello`,
+      `${PREFIX}\nOn telegram, from telegram:12345 (sender: alice): hello`,
     );
   });
 
   it('renders an empty attachments array identically to no attachments', () => {
     const prompt = buildChannelInboundWakePrompt([makeEnvelope({ attachments: [] })]);
     expect(prompt).toBe(
-      `${PREFIX}\nOn telegram, from telegram:12345: alice: hello`,
+      `${PREFIX}\nOn telegram, from telegram:12345 (sender: alice): hello`,
     );
   });
 
@@ -70,7 +70,7 @@ describe('buildChannelInboundWakePrompt — attachments (plan 507 P2.1)', () => 
     ]);
     expect(prompt).toBe(
       `${PREFIX}\n` +
-        'On telegram, from telegram:12345: alice: check this report\n' +
+        'On telegram, from telegram:12345 (sender: alice): check this report\n' +
         '  [attachment saved to: ' +
         '/userData/agents/bot1/attachments/inbound/telegram/20260907_120000_000_report.xlsx ' +
         '(report.xlsx, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, 12.3 KB)]',
@@ -103,7 +103,7 @@ describe('buildChannelInboundWakePrompt — attachments (plan 507 P2.1)', () => 
     expect(lines).toHaveLength(5);
     expect(lines[0]).toBe(CHANNEL_INBOUND_WAKE_CUE);
     expect(lines[1]).toBe(CHANNEL_INBOUND_REPLY_HINT);
-    expect(lines[2]).toBe('On telegram, from telegram:12345: alice: two files');
+    expect(lines[2]).toBe('On telegram, from telegram:12345 (sender: alice): two files');
     expect(lines[3]).toBe(
       '  [attachment saved to: /userData/agents/bot1/attachments/inbound/telegram/a.png (a.png, image/png, 800 B)]',
     );
@@ -129,7 +129,7 @@ describe('buildChannelInboundWakePrompt — attachments (plan 507 P2.1)', () => 
     ]);
     const lines = prompt.split('\n');
     expect(lines).toHaveLength(4);
-    expect(lines[2]).toBe('On telegram, from telegram:12345: alice: ');
+    expect(lines[2]).toBe('On telegram, from telegram:12345 (sender: alice): ');
     expect(lines[3]).toBe(
       '  [attachment saved to: /userData/agents/bot1/attachments/inbound/telegram/photo.jpg (photo.jpg, image/jpeg, 2.0 KB)]',
     );
@@ -165,8 +165,20 @@ describe('buildChannelInboundWakePrompt — attachments (plan 507 P2.1)', () => 
     ]);
     expect(prompt).toBe(
       `${PREFIX}\n` +
-        "On telegram, from telegram:12345: alice reacted 👍 to your message: 'nice'",
+        "On telegram, from telegram:12345 (sender: alice) reacted 👍 to your message: 'nice'",
     );
+  });
+
+  it('labels the sender as informational so the reply address stays unambiguous', () => {
+    // Regression: a sender id rendered bare after the address colon led models
+    // to compose compound addresses like "feishu:oc_...:ou_..." (230001
+    // invalid receive_id). The hint must pin the reply target and the
+    // envelope line must separate address from sender.
+    const prompt = buildChannelInboundWakePrompt([makeEnvelope()]);
+    expect(CHANNEL_INBOUND_REPLY_HINT).toContain('copied exactly as written');
+    expect(CHANNEL_INBOUND_REPLY_HINT).toContain('never contains the sender id');
+    expect(CHANNEL_INBOUND_REPLY_HINT).toContain('never append it');
+    expect(prompt).toContain('On telegram, from telegram:12345 (sender: alice): hello');
   });
 
   it('counts attachment lines toward the MAX_INBOUND_TEXT_CHARS budget', () => {

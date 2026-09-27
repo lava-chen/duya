@@ -157,6 +157,25 @@ export function parseChannelAddress(raw: string): ChannelAddress | null {
   return { platform: raw.slice(0, idx), chat: raw.slice(idx + 1) } as ChannelAddress;
 }
 
+/**
+ * Normalize a parsed channel address for delivery.
+ *
+ * Models occasionally compose compound tokens like "feishu:oc_<chatId>:ou_<userId>"
+ * (reply target + sender) when echoing an inbound wake, because the wake line
+ * shows the address and the sender id adjacent to each other. Feishu receive
+ * ids never contain ':' — trim the chat segment to its leading id, otherwise
+ * the send API rejects with 230001 invalid receive_id. Other platforms may
+ * intentionally use structured chat segments (e.g. "discord:guild=1:channel=2"),
+ * so this is feishu-specific for now.
+ */
+export function normalizeChannelAddress(addr: ChannelAddress): ChannelAddress {
+  if (addr.platform === 'feishu') {
+    const idEnd = addr.chat.indexOf(':');
+    if (idEnd > 0) return { platform: addr.platform, chat: addr.chat.slice(0, idEnd) };
+  }
+  return addr;
+}
+
 /** True when the platform is a known (implemented) platform. */
 export function isKnownPlatform(platform: string): platform is KnownPlatform {
   return (KNOWN_PLATFORMS as readonly string[]).includes(platform);
