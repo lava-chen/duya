@@ -4,15 +4,18 @@ import type {
   CronPermissionMode,
   CreateAutomationCronInput,
 } from '@/types/automation';
-import { ModelSelector, type ModelOption } from '@/components/chat/ModelSelector';
+import { ModelProviderSelector } from '@/components/chat/ModelProviderSelector';
+import { PermissionModeSelector, type PermissionModeUi } from '@/components/chat/MessageInput';
+import { listProvidersIPC, type Provider } from '@/lib/ipc-client';
 import {
-  BrainIcon,
+  buildBotModelGroups,
+  fromSelectorModelId,
+  toSelectorModelId,
+} from '@/lib/bot-model-options';
+import {
   CaretDownIcon,
   CheckIcon,
   FolderIcon,
-  HandIcon,
-  ShieldCheckIcon,
-  ShieldWarningIcon,
   SpinnerGapIcon,
   TrashIcon,
   XIcon,
@@ -124,24 +127,18 @@ function MenuChip<V extends string | number>({
   );
 }
 
-/** Permission profile shown in the editor bottom bar (mirrors the composer's modes). */
-const PERMISSION_OPTIONS: Array<{
-  value: CronPermissionMode;
-  labelKey: 'messageInput.permissionAsk' | 'messageInput.permissionAuto' | 'messageInput.permissionBypass';
-  icon: typeof HandIcon;
-}> = [
-  { value: 'default', labelKey: 'messageInput.permissionAsk', icon: HandIcon },
-  { value: 'auto', labelKey: 'messageInput.permissionAuto', icon: ShieldCheckIcon },
-  { value: 'full_access', labelKey: 'messageInput.permissionBypass', icon: ShieldWarningIcon },
-];
+/** Cron permission profile ↔ composer UI mode (`PermissionModeSelector`). */
+function permissionToUi(mode: CronPermissionMode): PermissionModeUi {
+  if (mode === 'default') return 'ask';
+  if (mode === 'full_access') return 'bypass';
+  return 'auto';
+}
 
-const EFFORT_OPTIONS: Array<{ value: string; labelKey: 'messageInput.effortAuto' | 'messageInput.effortLow' | 'messageInput.effortMedium' | 'messageInput.effortHigh' | 'messageInput.effortMax' }> = [
-  { value: '', labelKey: 'messageInput.effortAuto' },
-  { value: 'low', labelKey: 'messageInput.effortLow' },
-  { value: 'medium', labelKey: 'messageInput.effortMedium' },
-  { value: 'high', labelKey: 'messageInput.effortHigh' },
-  { value: 'max', labelKey: 'messageInput.effortMax' },
-];
+function uiToPermission(mode: PermissionModeUi): CronPermissionMode {
+  if (mode === 'ask') return 'default';
+  if (mode === 'bypass') return 'full_access';
+  return 'auto';
+}
 
 /**
  * 自定义重复 dialog (plan 574): repeat count + unit and an end-repeat radio.
@@ -314,8 +311,6 @@ export function CronEditorModal({
   onClose,
   onSave,
   onDelete,
-  availableModels,
-  modelsLoading,
   saving,
 }: {
   cron: AutomationCron | null;
@@ -323,8 +318,6 @@ export function CronEditorModal({
   onClose: () => void;
   onSave: (cronId: string | undefined, data: CreateAutomationCronInput) => Promise<void>;
   onDelete: (cron: AutomationCron) => void;
-  availableModels: ModelOption[];
-  modelsLoading: boolean;
   saving: boolean;
 }) {
   const { t } = useTranslation();
@@ -332,6 +325,8 @@ export function CronEditorModal({
   const [editor, setEditor] = useState<EditorState>(initial);
   const [formError, setFormError] = useState<string | null>(null);
   const [customRepeatOpen, setCustomRepeatOpen] = useState(false);
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [providersLoading, setProvidersLoading] = useState(false);
   const threads = useConversationStore((s) => s.threads);
 
   useEffect(() => {
@@ -342,6 +337,48 @@ export function CronEditorModal({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, cron]);
+
+  // Provider catalog for the composer's ModelProviderSelector — same
+  // grouping the bot forms use (bot-model-options mirrors MessageInput).
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    setProvidersLoading(true);
+    listProvidersIPC()
+      .then((list) => {
+        if (!cancelled) setProviders(list ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setProviders([]);
+      })
+      .finally(() => {
+        if (!cancelled) setProvidersLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
+
+  const providerGroups = useMemo(() => buildBotModelGroups(providers), [providers]);
+
+  // cron.model stores the raw model id; the selector speaks prefixed ids.
+  const selectedSelectorModelId = useMemo(
+    () => toSelectorModelId(editor.model, undefined, providerGroups),
+    [editor.model, providerGroups],
+  );
+
+  // Effort options for the run — same shape as the composer's fallback list
+  // ('' = 自动 follows the runtime default, which for cron runs is 'off').
+  const effortOptions = useMemo(
+    () => [
+      { value: '', label: t('messageInput.effortAuto') },
+      { value: 'low', label: t('messageInput.effortLow') },
+      { value: 'medium', label: t('messageInput.effortMedium') },
+      { value: 'high', label: t('messageInput.effortHigh') },
+      { value: 'max', label: t('messageInput.effortMax') },
+    ],
+    [t],
+  );
 
   const schedule = editor.schedule;
   const patchSchedule = (patch: Partial<CronEditorScheduleDraft>) => {
@@ -463,10 +500,6 @@ export function CronEditorModal({
     }
     return Array.from(seen.entries()).map(([path, label]) => ({ path, label }));
   }, [threads, editor.workingDirectory]);
-
-  const permission = PERMISSION_OPTIONS.find((option) => option.value === editor.permissionMode) ?? PERMISSION_OPTIONS[1];
-  const PermissionIcon = permission.icon;
-  const effortOption = EFFORT_OPTIONS.find((option) => option.value === editor.effort) ?? EFFORT_OPTIONS[0];
 
   if (!isOpen) return null;
 
@@ -613,7 +646,8 @@ export function CronEditorModal({
             onChange={(event) => setEditor((prev) => ({ ...prev, prompt: event.target.value }))}
           />
           {/* Composer-style bottom bar: workspace / approval on the left,
-              model / reasoning effort on the right (plan 574). */}
+              model + reasoning effort on the right. Model/effort and the
+              permission toggle reuse the composer's own components. */}
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1">
               <MenuChip
@@ -633,38 +667,24 @@ export function CronEditorModal({
                   { value: '__pick__', label: t('automation.chooseDirectory') },
                 ]}
               />
-              <MenuChip
-                ariaLabel={t('messageInput.permissionAsk')}
-                icon={<PermissionIcon size={14} className="shrink-0 text-muted-foreground" />}
-                label={t(permission.labelKey)}
-                value={editor.permissionMode}
-                onSelect={(value) => setEditor((prev) => ({ ...prev, permissionMode: value }))}
-                options={PERMISSION_OPTIONS.map((option) => ({
-                  value: option.value,
-                  label: t(option.labelKey),
-                }))}
+              <PermissionModeSelector
+                value={permissionToUi(editor.permissionMode)}
+                onChange={(mode) => setEditor((prev) => ({ ...prev, permissionMode: uiToPermission(mode) }))}
               />
             </div>
-            <div className="flex min-w-0 items-center gap-1">
-              <ModelSelector
-                models={availableModels}
-                selectedModelId={editor.model}
-                onSelect={(modelId) => setEditor((prev) => ({ ...prev, model: modelId }))}
-                loading={modelsLoading}
-                variant="compact"
-              />
-              <MenuChip
-                ariaLabel={t('messageInput.effortAuto')}
-                icon={<BrainIcon size={14} className="shrink-0 text-muted-foreground" />}
-                label={t(effortOption.labelKey)}
-                value={editor.effort}
-                onSelect={(value) => setEditor((prev) => ({ ...prev, effort: value }))}
-                options={EFFORT_OPTIONS.map((option) => ({
-                  value: option.value,
-                  label: t(option.labelKey),
-                }))}
-              />
-            </div>
+            <ModelProviderSelector
+              providerGroups={providerGroups}
+              selectedModelId={selectedSelectorModelId}
+              onSelectModel={(selectorId) =>
+                setEditor((prev) => ({ ...prev, model: fromSelectorModelId(selectorId, providerGroups).raw }))
+              }
+              effortValue={editor.effort}
+              effortOptions={effortOptions}
+              onSelectEffort={(value) => setEditor((prev) => ({ ...prev, effort: value ?? '' }))}
+              loading={providersLoading}
+              portal
+              showManageProviders={false}
+            />
           </div>
         </div>
 

@@ -363,7 +363,7 @@ function EffortSelector({ value, onChange, modelId }: EffortSelectorProps) {
 }
 
 /** User-facing permission mode in the composer (mirrors Conductor's selector). */
-type PermissionModeUi = 'ask' | 'auto' | 'bypass';
+export type PermissionModeUi = 'ask' | 'auto' | 'bypass';
 
 interface PermissionModeSelectorProps {
   value: PermissionModeUi;
@@ -383,8 +383,9 @@ const PERMISSION_MODES: Array<{
 /**
  * Compact permission-mode toggle (Ask → Auto → Bypass → Ask). Shows the
  * current mode's icon + localized label; clicking cycles to the next mode.
+ * Exported for reuse outside the composer (cron editor bottom bar).
  */
-function PermissionModeSelector({ value, onChange }: PermissionModeSelectorProps) {
+export function PermissionModeSelector({ value, onChange }: PermissionModeSelectorProps) {
   const { t } = useTranslation();
   const current = PERMISSION_MODES.find((m) => m.id === value) ?? PERMISSION_MODES[1];
   const Icon = current.icon;

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type {
   AutomationCron,
   AutomationTemplate,
@@ -16,8 +16,6 @@ import {
   updateAutomationCronIPC,
 } from '@/lib/automation-ipc';
 import { CronHistoryPanel } from './CronHistoryPanel';
-import { ModelSelector, type ModelOption } from '@/components/chat/ModelSelector';
-import { listProvidersIPC, getOllamaModelsIPC, type Provider } from '@/lib/ipc-client';
 import {
   PlayIcon,
   ClockIcon,
@@ -155,88 +153,6 @@ export function AutomationView() {
   const setActiveThread = useConversationStore((s) => s.setActiveThread);
   const setCurrentView = useConversationStore((s) => s.setCurrentView);
   const storeThreads = useConversationStore((s) => s.threads);
-
-  // Models state
-  const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
-
-  // Fetch available models from providers
-  const fetchModels = useCallback(async () => {
-    setModelsLoading(true);
-    try {
-      const providers = await listProvidersIPC();
-      if (providers && providers.length > 0) {
-        providers.forEach((p) => {
-          const pAny = p as Provider & Record<string, unknown>;
-          const hasKey = pAny.hasApiKey ?? pAny.has_api_key ?? !!(p.apiKey && p.apiKey.length > 0);
-          if (pAny.hasApiKey === undefined && hasKey) {
-            (p as Provider & { hasApiKey: boolean }).hasApiKey = hasKey;
-          }
-        });
-        const defaultProvider = providers.find((p) => p.isDefault && p.hasApiKey);
-        const activeProvider = defaultProvider ?? providers.find((p) => p.hasApiKey);
-
-        if (activeProvider) {
-          const isOllama =
-            activeProvider.providerType === 'ollama' ||
-            activeProvider.baseUrl?.includes('11434') ||
-            activeProvider.baseUrl?.includes('ollama');
-
-          if (isOllama) {
-            try {
-              const baseUrl = activeProvider.baseUrl || 'http://localhost:11434';
-              const result = await getOllamaModelsIPC(baseUrl);
-              if (result.success && result.models && result.models.length > 0) {
-                setAvailableModels(
-                  result.models.map((m) => ({
-                    id: m.id,
-                    display_name: m.name,
-                  })),
-                );
-                setModelsLoading(false);
-                return;
-              }
-            } catch (err) {
-              console.error('[AutomationView] Error fetching Ollama models:', err);
-            }
-          }
-
-          let enabledModels: string[] = [];
-          try {
-            const opts = JSON.parse(activeProvider.options || '{}');
-            if (opts.enabled_models && Array.isArray(opts.enabled_models) && opts.enabled_models.length > 0) {
-              enabledModels = opts.enabled_models;
-            }
-          } catch {
-            /* ignore */
-          }
-
-          if (enabledModels.length > 0) {
-            setAvailableModels(
-              enabledModels.map((id) => {
-                const cleanId = id.startsWith('"') && id.endsWith('"') ? id.slice(1, -1) : id;
-                return { id: cleanId, display_name: cleanId };
-              }),
-            );
-            setModelsLoading(false);
-            return;
-          }
-
-          setAvailableModels([]);
-        }
-      }
-    } catch (err) {
-      console.error('[AutomationView] Error fetching models:', err);
-    } finally {
-      setModelsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (hasElectronApi) {
-      void fetchModels();
-    }
-  }, [hasElectronApi, fetchModels]);
 
   useEffect(() => {
     if (hasElectronApi) {
@@ -634,8 +550,6 @@ export function AutomationView() {
           handleCloseEditModal();
           void removeCron(deleted);
         }}
-        availableModels={availableModels}
-        modelsLoading={modelsLoading}
         saving={saving}
       />
     </PageFrame>
