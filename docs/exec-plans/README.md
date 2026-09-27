@@ -125,6 +125,8 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [314-tool-catalog-snapshot](./active/314-tool-catalog-snapshot.md)                                       | Tool catalog snapshot design                                                                  | P1       | Planning                                        |
 | [439-canvas-capture-region-canvas-coords](./active/439-canvas-capture-region-canvas-coords.md)           | `canvas_capture` region 鐢ㄧ敾甯?grid 鍧愭爣 + 娓叉煋绔嚜鍔ㄥ彇鏅紙涓存椂骞崇Щ缂╂斁鍚庤繕鍘燂級锛岃鍙ｅ鍖哄煙鍙埅                              | P0       | 浠ｇ爜+鍗曟祴瀹屾垚锛汦lectron 鎵嬪姩楠岃瘉寰呭姙                         |
 
+| [570-canvas-workbench-runtime](./active/570-canvas-workbench-runtime.md)                                 | Canvas Workbench Runtime：主进程数据源（http/project_db）+ 周期刷新实时推送 + widget 策略按钮（`window.duya` 运行时）；服务器端 handler 推迟 | P0       | Phase 1-5 代码+单测落地（53 测试绿）；Electron 手工冒烟待人工            |
+
 ### Chat / Streaming
 
 | Plan                                                                   | Description                                                                                                                                                                              | Priority | Status                                                |

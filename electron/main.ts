@@ -80,6 +80,7 @@ import { registerHooksHandlers } from './ipc/hooks-handlers';
 import { registerMcpReloadIpcHandler } from './ipc/mcp-handlers';
 import { registerLazyIpcHandlers } from './ipc/lazy-ipc-registry';
 import { ConductorExecutorProxy } from './conductor/executor-proxy';
+import { workbenchService } from './conductor/workbench-service';
 import { getJsonSetting } from './db/queries/settings';
 
 // =============================================================================
@@ -965,6 +966,13 @@ if (gotTheLock) {
         ...event,
       });
     });
+
+    // Plan 570: canvas workbench runtime — data-source refresh scheduler +
+    // data/sources broadcast over the same conductor channel.
+    workbenchService.setBroadcastFn((message) => {
+      channelManager.sendToChannel('conductor', message);
+    });
+    workbenchService.startScheduler();
 
     // Inject the proxy into the agent-server lifecycle so the main chat
     // worker can also reach it via the `conductor:executor:rpc` bridge.
