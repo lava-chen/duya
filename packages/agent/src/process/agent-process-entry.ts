@@ -2009,6 +2009,13 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
       return { type: 'compact:done', ...(event.data as object) };
     case 'compact:error':
       return { type: 'compact:error', ...(event.data as object) };
+    // Per-step lifecycle events are now forwarded live (they used to be
+    // buffered agent-side and dropped here, so the renderer never saw
+    // projecting/summarizing verbs in real time).
+    case 'compact:step':
+      return { type: 'compact:step', ...(event.data as object) };
+    case 'compact:over_threshold':
+      return { type: 'compact:over_threshold', ...(event.data as object) };
     default:
         warn('[Agent-Process] Unknown SSE event type:', event.type);
         return null;

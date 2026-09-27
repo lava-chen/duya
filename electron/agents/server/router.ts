@@ -507,6 +507,11 @@ function normalizeWorkerEvent(event: Record<string, unknown>): Record<string, un
     // Forward compact lifecycle events from DuyaAgent's auto-compaction so the
     // renderer can show a compressing indicator.
     sseEvent = { type: msgType, data: event };
+  } else if (msgType === 'compact:step' || msgType === 'compact:over_threshold') {
+    // Per-step compaction lifecycle events, now forwarded live (previously
+    // buffered agent-side and dropped here — the renderer only ever saw
+    // start/done in one burst after the compaction finished).
+    sseEvent = { type: msgType, data: event };
   } else if (msgType === 'chat:mode_changed') {
     // Plan 224 follow-up: agent runtime mode switched (EnterPlanMode /
     // ExitPlanMode / SwitchMode tool). Forward mode + source so the renderer

@@ -81,7 +81,7 @@ import { TurnAssembler } from './TurnAssembler.js';
 import type { TurnContext } from './TurnContext.js';
 import { permissionModeFromString } from '../permissions/policy.js';
 import { buildPermissions } from './PermissionsGate.js';
-import { CompactionCoordinator } from './CompactionCoordinator.js';
+import { CompactionCoordinator, type CompactionRunResult } from './CompactionCoordinator.js';
 import { DeadLoopTracker, resolveDeadLoopConfig } from './TurnLoopTracker.js';
 import { SessionFinalizer } from './SessionFinalizer.js';
 import { runTurnStream } from './TurnStreamRunner.js';
@@ -1979,15 +1979,56 @@ export class duyaAgent implements AgentRuntime {
       // Proactive context compaction before each LLM call. Plan 550 step 2c:
       // delegate to the per-session CompactionCoordinator (it owns the
       // prefire kick, cooldown gate, event buffer, and post-compact re-projection).
-      const compactionRun = await this.compactionCoordinator.runPreTurn({
-        turnCount,
-        systemPromptContent,
-        messages,
-      });
-      for (const ev of compactionRun.events) yield ev;
-      systemPromptContent = compactionRun.systemPromptContent;
-      messages = compactionRun.messages;
-      if (compactionRun.didCompact) {
+      //
+      // Real-time pump: `runPreTurn` used to buffer compact:start/steps/done
+      // and return them only AFTER compaction finished, so the renderer saw
+      // nothing during the (~minutes) summarizer call and then every row at
+      // once. An async generator cannot yield while awaiting a sub-promise,
+      // so the coordinator pushes events into a queue via `onEvent` and this
+      // loop drains it on a short tick until the run settles. When no
+      // compaction fires the promise resolves immediately — the loop exits
+      // without waiting a tick.
+      const compactionQueue: SSEEvent[] = [];
+      let compactionRun: CompactionRunResult | null = null;
+      let compactionFailure: unknown = null;
+      const compactionPromise = this.compactionCoordinator
+        .runPreTurn({
+          turnCount,
+          systemPromptContent,
+          messages,
+          onEvent: (event) => compactionQueue.push(event),
+        })
+        .then(
+          (result) => {
+            compactionRun = result;
+          },
+          (err) => {
+            compactionFailure = err;
+          },
+        );
+      while (compactionRun === null && compactionFailure === null) {
+        if (compactionQueue.length > 0) {
+          yield* compactionQueue.splice(0, compactionQueue.length);
+          continue;
+        }
+        await Promise.race([
+          compactionPromise,
+          new Promise<void>((resolve) => setTimeout(resolve, 50)),
+        ]);
+      }
+      yield* compactionQueue.splice(0, compactionQueue.length);
+      if (compactionFailure !== null) throw compactionFailure;
+      // The while loop can only be exited with the run settled, but TS
+      // cannot see through the closure assignment above — re-check via a
+      // widened local so the narrowing below is sound.
+      const settledRun = compactionRun as CompactionRunResult | null;
+      if (!settledRun) {
+        throw compactionFailure ?? new Error('Compaction run did not settle');
+      }
+      for (const ev of settledRun.events) yield ev;
+      systemPromptContent = settledRun.systemPromptContent;
+      messages = settledRun.messages;
+      if (settledRun.didCompact) {
         // Plan 480 P3.2: compaction summarizes the tail away, so the
         // discovered tools return to the persistent tool list from here on.
         discoveredPromotedToToolList = true;

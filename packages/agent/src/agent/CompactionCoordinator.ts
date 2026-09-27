@@ -17,8 +17,10 @@
  * The coordinator owns the per-turn state that previously lived on
  * `duyaAgent` (`lastCompactionTurn`, `lastCompactionObservedTokens`).
  * It also owns the `compaction_over_threshold` / `compaction_step` event
- * subscription for the duration of one `compactProactive` call. The
- * caller (`streamChat`) forwards the returned SSE events to the wire.
+ * subscription for the duration of one `compactProactive` call. The caller
+ * (`streamChat`) receives events either via the `onEvent` callback (live,
+ * while the compaction is still running) or via the returned `events`
+ * buffer (legacy contract, no `onEvent` provided).
  *
  * @see docs/exec-plans/active/550-prompt-hbs-and-agent-decomposition.md
  */
@@ -81,24 +83,23 @@ export interface CompactionRunResult {
 }
 
 /**
- * Buffers `compaction_step` / `compaction_over_threshold` /
+ * Forwards `compaction_step` / `compaction_over_threshold` /
  * `compaction_summary_outcome` events emitted during a `compactProactive`
- * run so the caller can drain them between `compact:start` and
- * `compact:done`. Order is preserved by emit order.
+ * run to `emit` in engine order.
  *
  * `CompactionManager.addEventHandler` returns `void` (the engine manages
  * subscription lifetime internally for the lifetime of the manager), so
- * the buffer takes no `unsubscribe` parameter. The handler stays
- * registered after the buffer array is drained — the next
- * `compactProactive` call simply reuses the same handler.
+ * the wiring takes no `unsubscribe` parameter. The handler stays
+ * registered after the run — the next `compactProactive` call simply
+ * reuses the same handler.
  */
 function attachCompactionEventBuffer(
   compactionManager: CompactionManager,
-): SSEEvent[] {
-  const events: SSEEvent[] = [];
+  emit: (event: SSEEvent) => void,
+): void {
   compactionManager.addEventHandler((event) => {
     if (event.type === 'compaction_step') {
-      events.push({
+      emit({
         type: 'compact:step',
         data: {
           step: event.step,
@@ -110,7 +111,7 @@ function attachCompactionEventBuffer(
         },
       } as unknown as SSEEvent);
     } else if (event.type === 'compaction_over_threshold') {
-      events.push({
+      emit({
         type: 'compact:over_threshold',
         data: {
           tokensRetained: event.tokensRetained,
@@ -118,7 +119,7 @@ function attachCompactionEventBuffer(
         },
       } as unknown as SSEEvent);
     } else if (event.type === 'compaction_summary_outcome') {
-      events.push({
+      emit({
         type: 'compact:summary_outcome',
         data: {
           attempt: event.attempt,
@@ -129,7 +130,6 @@ function attachCompactionEventBuffer(
       } as unknown as SSEEvent);
     }
   });
-  return events;
 }
 
 export class CompactionCoordinator {
@@ -139,11 +139,18 @@ export class CompactionCoordinator {
    * Decide whether to fire a proactive compaction before the next LLM
    * call, execute it when the cooldown / image gates say so, and emit
    * the renderer-facing SSE events in lifecycle order.
+   *
+   * `onEvent` (optional): invoked the moment each event is produced so a
+   * live caller can stream `compact:*` to the wire DURING the compaction
+   * (the summarizer LLM call takes minutes). When provided, events are
+   * NOT duplicated into the returned `events` buffer. When omitted, the
+   * historical buffered semantics are preserved.
    */
   async runPreTurn(input: {
     turnCount: number;
     systemPromptContent: string;
     messages: Message[];
+    onEvent?: (event: SSEEvent) => void;
   }): Promise<CompactionRunResult> {
     const { turnCount } = input;
     let { systemPromptContent, messages } = input;
@@ -208,6 +215,7 @@ export class CompactionCoordinator {
         systemPromptContent,
         messages,
         imageTriggered,
+        input.onEvent,
       );
     }
 
@@ -225,23 +233,29 @@ export class CompactionCoordinator {
     systemPromptContent: string,
     messages: Message[],
     imageTriggered: boolean,
+    onEvent?: (event: SSEEvent) => void,
   ): Promise<CompactionRunResult> {
     const events: SSEEvent[] = [];
+    // Real-time path: with `onEvent`, events go straight to the caller's
+    // queue as they are produced (live SSE pump in streamChat) and the
+    // returned `events` buffer stays empty to avoid double delivery.
+    // Without `onEvent`, the historical buffer contract is kept.
+    const emit = (event: SSEEvent) => {
+      if (onEvent) onEvent(event);
+      else events.push(event);
+    };
     if (imageTriggered) {
       logger.info(`[Agent] Turn ${turnCount}: Image-count compaction trigger fired`);
     }
     logger.info(`[Agent] Turn ${turnCount}: Proactive compaction triggered`);
-    events.push({ type: 'compact:start' } as unknown as SSEEvent);
+    emit({ type: 'compact:start' } as unknown as SSEEvent);
 
-    const buffer = attachCompactionEventBuffer(this.deps.compactionManager);
+    attachCompactionEventBuffer(this.deps.compactionManager, emit);
     try {
       const compactEntry = await this.deps.compactionController.compactProactive({
         trigger: 'auto',
         ...(imageTriggered ? { force: true } : {}),
       });
-      // Drain buffered step / over-threshold events before compact:done so
-      // the renderer sees the lifecycle in order.
-      events.push(...buffer);
       if (!compactEntry) {
         return { didCompact: false, imageTriggered, systemPromptContent, messages, events };
       }
@@ -271,7 +285,7 @@ export class CompactionCoordinator {
       systemPromptContent = reProjected.systemPromptContent;
       messages = reProjected.messages;
 
-      events.push({
+      emit({
         type: 'compact:done',
         data: {
           strategy: compactEntry.strategy,
@@ -287,8 +301,7 @@ export class CompactionCoordinator {
       logger.error(
         `[Agent] Turn ${turnCount}: Proactive compaction failed: ${compactErrorMsg}`,
       );
-      events.push(...buffer);
-      events.push({
+      emit({
         type: 'compact:error',
         data: { message: compactErrorMsg },
       } as unknown as SSEEvent);

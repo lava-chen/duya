@@ -2538,17 +2538,27 @@ export class StreamSessionManager {
   ): void {
     const s = this.sessions.get(sessionId);
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;
-    s.streamingEvents = [
-      ...s.streamingEvents,
-      {
-        type: 'compact',
-        phase: info.phase,
-        timestamp: Date.now(),
-        compactedMessageCount: info.compactedMessageCount,
-        strategy: info.strategy,
-        errorMessage: info.errorMessage,
-      },
-    ];
+    const event: StreamingEvent = {
+      type: 'compact',
+      phase: info.phase,
+      timestamp: Date.now(),
+      compactedMessageCount: info.compactedMessageCount,
+      strategy: info.strategy,
+      errorMessage: info.errorMessage,
+    };
+    // Merge consecutive compact events into ONE streaming slot. All events
+    // of a compaction episode (start → step verbs → done/error) arrive back
+    // to back, so replacing the trailing compact slot in place renders a
+    // single row whose phase evolves live ("正在压缩上下文…" → step verbs →
+    // "已对上下文进行压缩"). Appending each event used to leave the original
+    // spinner row stranded forever and add a second done row — two rows,
+    // one stuck mid-animation (2026-09-26 renderer bug).
+    const last = s.streamingEvents[s.streamingEvents.length - 1];
+    if (last && last.type === 'compact') {
+      s.streamingEvents = [...s.streamingEvents.slice(0, -1), event];
+    } else {
+      s.streamingEvents = [...s.streamingEvents, event];
+    }
     this.notifyStreamingEventsListeners(sessionId);
     this.notifyListeners(sessionId);
     this.resetIdleTimeout(sessionId);
