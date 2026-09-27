@@ -31,6 +31,7 @@ import type { ToolPermissionCheckContext } from '../permissions/permissions.js';
 import type {
   AdditionalWorkingDirectory,
   LocalToolPermission,
+  PermissionDecisionReason,
   PermissionMode,
   ToolPermissionRulesBySource,
 } from '../permissions/types.js';
@@ -79,7 +80,11 @@ export interface PermissionsGateDeps {
     toolName: string,
     input: Record<string, unknown>,
     ctx: ToolPermissionCheckContext,
-  ) => Promise<{ behavior: 'allow' | 'deny' | 'ask'; message?: string }>;
+  ) => Promise<{
+    behavior: 'allow' | 'deny' | 'ask';
+    message?: string;
+    decisionReason?: PermissionDecisionReason;
+  }>;
   /** Plan-mode exact-path gate; rebuilt per streamChat. */
   getModeCoordinator(): ModeCoordinator | undefined;
 }
@@ -184,11 +189,18 @@ export function buildPermissions(
         toolInput ?? {},
         turn.workingDirectory ?? '',
       );
-      if (gate === 'deny') {
-        return { allowed: false, behavior: 'deny' };
-      }
-      if (gate === 'allow') {
-        return { allowed: true, behavior: 'allow' };
+      if (gate) {
+        if (gate.decision === 'deny') {
+          logger.warn(`[Permissions] tool denied by plan-mode gate: ${toolName}`, {
+            reason: gate.message,
+          });
+          return {
+            allowed: false,
+            behavior: 'deny' as const,
+            ...(gate.message ? { message: gate.message } : {}),
+          };
+        }
+        return { allowed: true, behavior: 'allow' as const };
       }
 
       const decision = await deps.hasPermissionsToUseTool(
@@ -196,8 +208,23 @@ export function buildPermissions(
         toolInput ?? {},
         permissionContext,
       );
+      if (decision.behavior === 'deny') {
+        // Observability: engine denies are otherwise invisible — the executor
+        // only shows the (message-less) result this function returns, so log
+        // the decision reason here or operators can never tell which branch
+        // (deny rule / catastrophic / host switch / classifier) rejected it.
+        logger.warn(`[Permissions] tool denied: ${toolName}`, {
+          reason: decision.message,
+          decisionReason: decision.decisionReason,
+        });
+        return {
+          allowed: false,
+          behavior: 'deny' as const,
+          ...(decision.message ? { message: decision.message } : {}),
+        };
+      }
       return {
-        allowed: decision.behavior !== 'deny',
+        allowed: true,
         behavior: decision.behavior,
       };
     } catch (err) {
@@ -210,6 +237,7 @@ export function buildPermissions(
       return {
         allowed: false,
         behavior: 'deny',
+        message: `Permission check failed (fail-closed): ${reason}`,
       };
     }
   };

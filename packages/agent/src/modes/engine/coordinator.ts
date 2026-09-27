@@ -119,6 +119,17 @@ function asResearchTracker(t: ResearchReminderTracker): ResearchTracker {
 /** Write/execute tools gated out while a tracker is `canGateTools()`-active. */
 const GATED_WRITE_TOOLS = new Set(['edit', 'write', 'bash', 'powershell', 'module']);
 
+/**
+ * Result of `ModeCoordinator.gateWriteTool`. A deny always carries a
+ * human/model-readable message — a bare "cannot be used" gives the model no
+ * way to self-correct (e.g. aim at the plan file instead of retrying blind).
+ */
+export interface GateWriteToolResult {
+  decision: 'allow' | 'deny';
+  /** Present on deny: why plan mode rejected this tool call. */
+  message?: string;
+}
+
 /** Web tools released only in the gathering state (research mode). */
 const GATED_WEB_TOOLS = new Set(['web_search', 'web_fetch', 'browser']);
 
@@ -424,9 +435,12 @@ export class ModeCoordinator {
    * the model reminder points at the same path (see `plan/reminders.ts`).
    *
    * Returns:
-   *   - `'allow'` : the tool targets the plan file — skip the generic
-   *                 permission flow (grok `should_auto_approve_edit`).
-   *   - `'deny'`  : a gated write/execute tool not targeting the plan file.
+   *   - `{ decision: 'allow' }` : the tool targets the plan file — skip the
+   *                 generic permission flow (grok `should_auto_approve_edit`).
+   *   - `{ decision: 'deny', message }` : a gated write/execute tool not
+   *                 targeting the plan file; the message explains the plan-mode
+   *                 boundary so the model can self-correct instead of seeing a
+   *                 bare "cannot be used".
    *   - `null`    : not gated by plan mode (let the normal permission flow
    *                 decide). Covers non-write tools and any turn where no
    *                 tracker is `canGateTools()`-active.
@@ -435,7 +449,7 @@ export class ModeCoordinator {
     toolName: string,
     toolInput: Record<string, unknown>,
     workingDirectory: string,
-  ): 'allow' | 'deny' | null {
+  ): GateWriteToolResult | null {
     // Plan-mode gating applies ONLY when the plan tracker (not a goal or any
     // other tracker) is active this turn. Goal mode's `canGateTools()` is also
     // true while active/verifying — gating on it would lock goal execution's
@@ -456,15 +470,37 @@ export class ModeCoordinator {
     // edit/write carry a file path; gate them by exact path match.
     if (name === 'edit' || name === 'write') {
       const filePath = toolInput?.file_path;
-      if (typeof filePath !== 'string' || filePath.length === 0) return 'deny';
+      if (typeof filePath !== 'string' || filePath.length === 0) {
+        return {
+          decision: 'deny',
+          message:
+            `${toolName} blocked by plan mode: the input carries no file_path. ` +
+            'Only the session plan file may be written while plan mode is active.',
+        };
+      }
       const target = expandPath(filePath, workingDirectory);
       const planFile = resolvePlanFilePath(this.sessionId);
-      return isPlanFileWrite(target, planFile) ? 'allow' : 'deny';
+      if (isPlanFileWrite(target, planFile)) {
+        return { decision: 'allow' };
+      }
+      return {
+        decision: 'deny',
+        message:
+          `${toolName} blocked by plan mode: only the session plan file (${planFile}) ` +
+          'may be written while plan mode is active. Record the plan there, or exit ' +
+          'plan mode (user must approve the plan) to edit other files.',
+      };
     }
 
     // bash/powershell/module cannot be path-gated — reject outright so plan
     // mode stays read-only outside the plan file.
-    return 'deny';
+    return {
+      decision: 'deny',
+      message:
+        `${toolName} blocked by plan mode: shell/module tools cannot be confined to ` +
+        'the plan file, so they are rejected while plan mode is active. Exit plan ' +
+        'mode (user must approve the plan) to run commands.',
+    };
   }
 
   /**
