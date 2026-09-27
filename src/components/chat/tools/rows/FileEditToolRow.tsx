@@ -32,8 +32,12 @@ import {
   XCircleIcon,
 } from '@/components/icons';
 import { useTranslation } from '@/hooks/useTranslation';
+import { useTheme } from '@/hooks/useTheme';
 import { SimpleDiffViewer, calculateDiff } from '@/components/diff/SimpleDiffViewer';
-import { countContentLines } from '@/lib/streaming-tool-input';
+import { SyntaxHighlighter } from '@/lib/prism-languages';
+import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { getLanguageFromPath } from '@/lib/diff/diff-utils';
+import { computeLineChangeStat, countContentLines } from '@/lib/streaming-tool-input';
 import { ActionRowChrome } from '../chrome/ActionRowChrome';
 import { getStatus, getFilePath } from '../registry';
 import { FILE_CREATE_TOOLS, FILE_EDIT_TOOLS } from '../classify';
@@ -48,6 +52,10 @@ interface FileEditToolRowProps {
 /** Tail window for the live streaming preview — keeps diffing/render O(1)
  *  even when the model writes a very large file. */
 const LIVE_PREVIEW_MAX_LINES = 200;
+
+/** ZCode parity: beyond this many chars the highlighted render falls back
+ *  to plain text so syntax highlighting can never stall the stream. */
+const LIVE_PREVIEW_HIGHLIGHT_MAX_CHARS = 120_000;
 
 /**
  * Compute live diff stats for edit / write / create_file tools.
@@ -93,13 +101,19 @@ function computeFileEditStats(tool: ToolAction): FileEditStats {
   }
 
   // 2) Live estimate from `input` while streaming (plan 461: fields grow
-  //    chunk by chunk as the model generates the arguments).
+  //    chunk by chunk as the model generates the arguments). For edits we
+  //    trim the common prefix/suffix lines (ZCode computeLineChangeStat
+  //    parity) so a one-line change inside a 20-line block reads +1/-1
+  //    instead of +20/-20.
   if (isEditTool) {
     const newStr = (inp?.new_string ?? inp?.new_str) as string | undefined;
     const oldStr = (inp?.old_string ?? inp?.old_str) as string | undefined;
     if (typeof newStr === 'string' || typeof oldStr === 'string') {
       return {
-        stats: { additions: countContentLines(newStr), removals: countContentLines(oldStr) },
+        stats: computeLineChangeStat(
+          typeof oldStr === 'string' ? oldStr : null,
+          typeof newStr === 'string' ? newStr : '',
+        ),
         kind: 'edit',
       };
     }
@@ -206,17 +220,26 @@ function StatNumber({ value, tone }: { value: number; tone: 'add' | 'remove' }) 
  * generating the file content. Renders the new content as green additions
  * with line numbers, tail-windowed to the last 200 lines, and auto-scrolls
  * to the bottom as the content grows — a Codex/pi-style editor preview.
+ *
+ * ZCode-parity two-phase rendering: the first frame after mount is plain
+ * text (cheap, no highlighter work on the hot path); once the browser is
+ * idle the preview swaps to the Prism highlighter and stays there — later
+ * content updates re-highlight without flipping back to plain text.
  */
 function StreamingFilePreview({
   newContent,
+  filePath,
   isCreate,
   lineCount,
 }: {
   newContent: string;
+  filePath: string;
   isCreate: boolean;
   lineCount: number;
 }) {
   const { t } = useTranslation();
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const lines = useMemo(() => {
@@ -236,6 +259,44 @@ function StreamingFilePreview({
     const total = newContent.split('\n').length;
     return Math.max(1, total - lines.length + 1);
   }, [newContent, lines.length]);
+
+  const language = useMemo(() => getLanguageFromPath(filePath), [filePath]);
+  const tailText = useMemo(() => lines.join('\n'), [lines]);
+  const canHighlight = tailText.length <= LIVE_PREVIEW_HIGHLIGHT_MAX_CHARS;
+
+  // Phase 1 renders plain rows; after idle we swap to the highlighter and
+  // never flip back on content updates (only when the cap is exceeded or
+  // the language changes). Deps deliberately exclude the content itself.
+  const [highlightReady, setHighlightReady] = useState(false);
+  useEffect(() => {
+    if (!canHighlight) {
+      setHighlightReady(false);
+      return;
+    }
+    setHighlightReady(false);
+    let cancelled = false;
+    let idleHandle: number;
+    const w = window as Window & {
+      requestIdleCallback?: (cb: () => void) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+    if (typeof w.requestIdleCallback === 'function') {
+      idleHandle = w.requestIdleCallback(() => {
+        if (!cancelled) setHighlightReady(true);
+      });
+      return () => {
+        cancelled = true;
+        w.cancelIdleCallback?.(idleHandle);
+      };
+    }
+    idleHandle = window.setTimeout(() => {
+      if (!cancelled) setHighlightReady(true);
+    }, 120);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(idleHandle);
+    };
+  }, [canHighlight, language]);
 
   return (
     <div className="overflow-hidden rounded-md border border-border/60">
@@ -259,16 +320,45 @@ function StreamingFilePreview({
         ref={scrollRef}
         className="max-h-[200px] overflow-y-auto font-mono text-[11px] leading-[1.5] py-1"
       >
-        {lines.map((line, idx) => (
-          <div key={`${startLine + idx}-${line.length}`} className="flex whitespace-pre">
-            <span className="w-8 shrink-0 pr-2 text-right text-muted-foreground/35 select-none">
-              {startLine + idx}
-            </span>
-            <span className="flex-1 text-green-600 dark:text-green-400">{line || ' '}</span>
-          </div>
-        ))}
-        {lines.length === 0 && (
-          <div className="px-2 text-muted-foreground/50">…</div>
+        {highlightReady && canHighlight ? (
+          <SyntaxHighlighter
+            language={language || 'text'}
+            style={isDark ? oneDark : oneLight}
+            showLineNumbers
+            startingLineNumber={startLine}
+            wrapLines
+            lineProps={{
+              style: { display: 'block', backgroundColor: 'rgba(34, 197, 94, 0.08)' },
+            }}
+            customStyle={{
+              margin: 0,
+              padding: 0,
+              background: 'transparent',
+              fontSize: '11px',
+              lineHeight: '1.5',
+            }}
+            codeTagProps={{
+              style: {
+                fontFamily: "'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+              },
+            }}
+          >
+            {tailText}
+          </SyntaxHighlighter>
+        ) : (
+          <>
+            {lines.map((line, idx) => (
+              <div key={`${startLine + idx}-${line.length}`} className="flex whitespace-pre">
+                <span className="w-8 shrink-0 pr-2 text-right text-muted-foreground/35 select-none">
+                  {startLine + idx}
+                </span>
+                <span className="flex-1 text-green-600 dark:text-green-400">{line || ' '}</span>
+              </div>
+            ))}
+            {lines.length === 0 && (
+              <div className="px-2 text-muted-foreground/50">…</div>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -468,6 +558,7 @@ export function FileEditToolRow({ tool }: FileEditToolRowProps) {
                 // Live write preview — renders the new content as it streams.
                 <StreamingFilePreview
                   newContent={liveNewContent}
+                  filePath={filePath}
                   isCreate={isCreate}
                   lineCount={stats.additions}
                 />
