@@ -14,7 +14,7 @@ vi.mock('../../../logging/logger', () => ({
   LogComponent: new Proxy({}, { get: (_t, p) => String(p) }),
 }));
 
-import { decryptCookieValue, mapChromeCookieToElectron, mapLiveBrowserCookies, isCookieExpired } from '../cookie-importer';
+import { decryptCookieValue, deriveMacosCookieKey, mapChromeCookieToElectron, mapLiveBrowserCookies, isCookieExpired } from '../cookie-importer';
 
 describe('mapChromeCookieToElectron', () => {
   it('maps a secure cookie with https url', () => {
@@ -120,5 +120,46 @@ describe('decryptCookieValue', () => {
   it('does not misreport app-bound v20 records as plaintext imports', async () => {
     await expect(decryptCookieValue(Buffer.from('v20not-importable'), null))
       .rejects.toThrow('APP_BOUND_ENCRYPTION');
+  });
+});
+
+describe('decryptCookieValue (macOS AES-CBC)', () => {
+  const MACOS_IV = Buffer.alloc(16, 0x20);
+
+  function encryptMacos(plaintext: string, key: Buffer): Buffer {
+    const cipher = createCipheriv('aes-128-cbc', key, MACOS_IV);
+    return Buffer.concat([cipher.update(Buffer.from(plaintext, 'utf8')), cipher.final()]);
+  }
+
+  it('decrypts macOS v10 AES-CBC records with the derived Safe Storage key', async () => {
+    const key = deriveMacosCookieKey('keychain-secret');
+    const encrypted = Buffer.concat([Buffer.from('v10'), encryptMacos('mac-cookie-value', key)]);
+    await expect(decryptCookieValue(encrypted, key, 'aes-128-cbc')).resolves.toBe('mac-cookie-value');
+  });
+
+  it('derives the key exactly like Chromium os_crypt_mac (known answer)', () => {
+    // PBKDF2(secret='peanuts', salt='saltysalt', 1003 iterations, 16 bytes, sha1)
+    expect(deriveMacosCookieKey('peanuts').toString('hex')).toBe('d9a09d499b4e1b7461f28e67972c6dbd');
+  });
+
+  it('rejects corrupted PKCS#7 padding instead of returning garbage', async () => {
+    const key = deriveMacosCookieKey('peanuts');
+    const body = encryptMacos('hello world', key);
+    const tampered = Buffer.from(body);
+    tampered[tampered.length - 1] ^= 0xff;
+    const encrypted = Buffer.concat([Buffer.from('v10'), tampered]);
+    await expect(decryptCookieValue(encrypted, key, 'aes-128-cbc'))
+      .rejects.toThrow(/bad decrypt/);
+  });
+
+  it('rejects a key length other than 16 bytes in CBC mode', async () => {
+    const encrypted = Buffer.concat([Buffer.from('v10'), encryptMacos('x', deriveMacosCookieKey('peanuts'))]);
+    await expect(decryptCookieValue(encrypted, randomBytes(32), 'aes-128-cbc'))
+      .rejects.toThrow('16 bytes');
+  });
+
+  it('still requires a key for v10 records in the macOS mode', async () => {
+    await expect(decryptCookieValue(Buffer.from('v10xxxx'), null, 'aes-128-cbc'))
+      .rejects.toThrow('Missing Chromium AES encryption key');
   });
 });

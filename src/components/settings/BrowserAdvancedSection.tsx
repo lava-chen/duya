@@ -9,6 +9,7 @@ import {
   WarningIcon,
   GlobeIcon,
   FolderOpenIcon,
+  InfoIcon,
 } from '@/components/icons';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useSettings } from '@/hooks/useSettings';
@@ -25,6 +26,17 @@ function isValidHttpUrl(raw: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Cookie import reads the source browser's own encryption store, which is
+ * implemented per-OS (DPAPI on Windows, Safe Storage Keychain on macOS).
+ */
+function cookieImportPlatformHint<T extends string>(t: (key: T) => string): string | null {
+  const ua = navigator.userAgent;
+  if (ua.includes('Mac')) return t('browserAdvanced.macosKeychainHint' as T);
+  if (!ua.includes('Win')) return t('browserAdvanced.cookiePlatformUnsupported' as T);
+  return null;
 }
 
 export function BrowserAdvancedSection() {
@@ -312,6 +324,12 @@ export function BrowserAdvancedSection() {
                   />
                 </label>
               </div>
+              {cookieImportPlatformHint(t) && (
+                <div className="mt-3 flex items-start gap-2 p-3 rounded-lg bg-surface border border-border/50 text-xs text-muted-foreground">
+                  <InfoIcon size={14} className="shrink-0 mt-0.5" />
+                  <div className="flex-1">{cookieImportPlatformHint(t)}</div>
+                </div>
+              )}
               {!extensionInstalled && (
                 <div className="mt-3 flex items-start gap-2 p-3 rounded-lg bg-accent/5 border border-accent/10 text-xs text-muted-foreground">
                   <WarningIcon size={14} className="shrink-0 mt-0.5 text-accent" />
