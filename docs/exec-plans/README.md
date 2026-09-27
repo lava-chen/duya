@@ -134,6 +134,12 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [447-streaming-durable-dedup](./active/447-streaming-durable-dedup.md) | Session switch-back duplicate rendering + mid-run refresh live-state parity 鈥?subtract durable-covered prefix from streamingEvents; active-turn rounds keep live tool-group presentation | P1       | Phase 1-4 implemented; manual UI verification pending |
 | [511-image-preview-modal-unification](./active/511-image-preview-modal-unification.md) | 鍚堝苟 `ImagePreviewModal` / `AttachmentPreviewModal` / `ToolImagePreviewModal` 涓夊鍥剧墖棰勮涓?`ImagePreview`锛坄lightbox` + `panel` 涓や釜 variant锛夛紝缁熶竴 close 鎸夐挳/overlay/blur/z-index锛涙竻鐞?mailbox.css / skills.css / sidebar.css 涓殑 preview 鍧椼€傜户 Plan 510 涔嬪悗鐨?read-only viewer 缁熶竴銆?| P1       | Planning |
 
+### Browser / 内置浏览器
+
+| Plan                                                                   | Description                                                                                                                                                                        | Priority | Status                                                |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----------------------------------------------------- |
+| [573-browser-core-upgrade](./active/573-browser-core-upgrade.md)       | 内置浏览器内核升级：Phase 1 macOS cookie 导入（Keychain + AES-CBC，收口 Windows-only 现状）；Phase 2 缩放 + 页内查找（webview before-input-event）；Phase 3 历史表 + 新标签页推荐；Phase 4 safeStorage 密码 vault；Phase 5 清数据分项 + 下载管理器 | P0       | Phase 1-2 代码+单测落地（2026-09-27，14 单测绿 + 0 新增 tsc 错误）；真机冒烟待人工；Phase 3-5 未开工 |
+
 ### Plugin / MCP / App Connection
 
 | Plan                                                                                     | Description                                                                                                                                                                                                 | Priority | Status                                    |
