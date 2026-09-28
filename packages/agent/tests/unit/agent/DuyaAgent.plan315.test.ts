@@ -291,10 +291,15 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
       await drainStream(restarted, 'continue');
 
       const providerMessages = streamState.seenMessages[0] as Message[];
-      expect(providerMessages.map((message) => String(message.content))).toEqual(
-        expect.arrayContaining(['retain this', expect.stringContaining('checkpoint summary')]),
-      );
-      expect(providerMessages.map((message) => String(message.content))).not.toContain('discard this');
+      const providerContents = providerMessages.map((message) => String(message.content));
+      // Human turns carry the deterministic sent-at reminder (reconstructed
+      // from the persisted timestamp after restart)…
+      expect(providerContents.some((content) => content.startsWith('retain this\n\n<system-reminder>\nMessage sent at '))).toBe(true);
+      // …while the compaction-summary continuation is harness-injected and
+      // must NOT be timestamped.
+      expect(providerContents.some((content) => content.includes('checkpoint summary'))).toBe(true);
+      expect(providerContents.some((content) => content.includes('checkpoint summary') && content.includes('Message sent at '))).toBe(false);
+      expect(providerContents.some((content) => content.startsWith('discard this'))).toBe(false);
       expect(streamState.seenSystemPrompts[0]).toContain('reinject file state');
     });
   });
@@ -592,7 +597,7 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
       expect(durableUser?.content).toBe('summarize the attachment');
     });
 
-    it('attaches current time as a transient system-reminder on the provider user message', async () => {
+    it('attaches a deterministic sent-at reminder on the provider user message', async () => {
       const agent = newAgent();
       const observedPrompts: string[] = [];
       streamState.current = {
@@ -604,11 +609,12 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
       });
 
       // The system prompt no longer carries the wall clock (moved to the
-      // per-request turn-time reminder).
+      // persistent turn-context injection).
       expect(observedPrompts).toHaveLength(1);
       expect(observedPrompts[0]).not.toContain('Current date and time:');
 
-      // The provider payload's current-turn user message carries the reminder.
+      // The provider payload's current-turn user message carries the reminder
+      // in the locked v1 format: UTC ISO-8601 seconds, no locale dependence.
       const providerMessages = streamState.seenMessages[0] as Message[];
       const providerUser = providerMessages.find(
         (message) =>
@@ -617,15 +623,113 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
           message.content.includes('what time is it?'),
       );
       expect(providerUser).toBeDefined();
-      expect(String(providerUser?.content)).toContain('<system-reminder>');
-      expect(String(providerUser?.content)).toContain('Current time:');
+      expect(String(providerUser?.content)).toMatch(
+        /<system-reminder>\nMessage sent at \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\.\n<\/system-reminder>$/,
+      );
 
-      // The reminder is transient — never persisted in the durable timeline.
+      // Canonical storage stays clean: the reminder is reconstructible
+      // request-assembly output, never persisted content.
       const durableUser = (agent.getMessages() as Message[]).find(
         (message) => message.role === 'user',
       );
-      expect(String(durableUser?.content)).not.toContain('Current time:');
+      expect(String(durableUser?.content)).toBe('what time is it?');
       expect(String(durableUser?.content)).not.toContain('<system-reminder>');
+    });
+
+    it('keeps the sent-at reminder byte-stable across tool rounds of the same turn', async () => {
+      const agent = newAgent();
+      streamState.current = {
+        responses: [
+          // Round 1: model calls a tool.
+          [
+            { type: 'text', data: 'running' },
+            {
+              type: 'tool_use',
+              data: { id: 'tu-time-1', name: 'echo', input: { msg: 'x' } },
+            },
+            { type: 'done' },
+          ],
+          // Round 2: model finishes.
+          [
+            { type: 'text', data: 'finished' },
+            { type: 'done' },
+          ],
+        ],
+      };
+
+      await drainStream(agent, 'long running task');
+      expect(streamState.callCount).toBe(2);
+
+      const extractReminder = (roundMessages: unknown): string | undefined => {
+        const messages = roundMessages as Message[];
+        const user = messages.find(
+          (m) =>
+            m.role === 'user' &&
+            typeof m.content === 'string' &&
+            m.content.includes('long running task'),
+        );
+        const match = String(user?.content).match(/<system-reminder>[\s\S]*?<\/system-reminder>/);
+        return match?.[0];
+      };
+
+      const round1Reminder = extractReminder(streamState.seenMessages[0]);
+      const round2Reminder = extractReminder(streamState.seenMessages[1]);
+
+      // Present on every request of the turn…
+      expect(round1Reminder).toBeDefined();
+      expect(round2Reminder).toBeDefined();
+      expect(round1Reminder).toContain('Message sent at ');
+      // …and byte-identical: the reminder renders from the persisted
+      // message timestamp, so the request prefix (which includes the user
+      // message) stays prompt-cache friendly across tool rounds.
+      expect(round2Reminder).toBe(round1Reminder);
+    });
+
+    it('reconstructs sent-at reminders for historical turns with byte-identical output (append-only prompt history)', async () => {
+      const agent = newAgent();
+      streamState.current = {
+        responses: [[{ type: 'text', data: 'first reply' }, { type: 'done' }]],
+      };
+
+      await drainStream(agent, 'first question');
+      const firstCallReminder = (() => {
+        const messages = streamState.seenMessages[0] as Message[];
+        const user = messages.find(
+          (m) => m.role === 'user' && String(m.content).includes('first question'),
+        );
+        return String(user?.content).match(/<system-reminder>[\s\S]*?<\/system-reminder>/)?.[0];
+      })();
+      expect(firstCallReminder).toBeDefined();
+
+      // Second human turn on the same session: the historical turn-1 user
+      // message must re-carry the SAME reminder bytes, so the cache prefix
+      // does not diverge at the injection point.
+      streamState.current = {
+        responses: [[{ type: 'text', data: 'second reply' }, { type: 'done' }]],
+      };
+      await drainStream(agent, 'second question');
+
+      const secondCallMessages = streamState.seenMessages[1] as Message[];
+      const turn1InSecondCall = secondCallMessages.find(
+        (m) => m.role === 'user' && String(m.content).includes('first question'),
+      );
+      const turn2InSecondCall = secondCallMessages.find(
+        (m) => m.role === 'user' && String(m.content).includes('second question'),
+      );
+
+      expect(String(turn1InSecondCall?.content)).toContain('first question');
+      expect(String(turn1InSecondCall?.content).match(/<system-reminder>[\s\S]*?<\/system-reminder>/)?.[0])
+        .toBe(firstCallReminder);
+      expect(String(turn2InSecondCall?.content)).toMatch(/<system-reminder>\nMessage sent at /);
+
+      // Durable timeline still holds both prompts clean.
+      const durableUsers = (agent.getMessages() as Message[]).filter(
+        (message) => message.role === 'user',
+      );
+      expect(durableUsers.map((m) => String(m.content))).toEqual([
+        'first question',
+        'second question',
+      ]);
     });
   });
 
