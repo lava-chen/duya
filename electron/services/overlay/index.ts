@@ -34,10 +34,12 @@
 import { BrowserWindow, screen } from 'electron';
 
 import { getLogger, LogComponent } from '../../logging/logger.js';
+import { selectVisibleOverlayElements } from './geometry.js';
 
 const logger = getLogger();
 
 let overlayWindow: BrowserWindow | null = null;
+let overlayLoad: Promise<void> | null = null;
 let screenListenersWired = false;
 
 // ────────────────────────────────────────────────────────────────────
@@ -113,7 +115,7 @@ const OVERLAY_HTML =
       frame.style.height = r.h + 'px';
       var badge = document.createElement('span');
       badge.className = 'badge';
-      badge.textContent = String(count);
+      badge.textContent = String(Number.isInteger(el.overlayIndex) ? el.overlayIndex : count);
       badge.style.left = (r.x - origin.x) + 'px';
       badge.style.top = (r.y - origin.y - 8) + 'px';
       root.appendChild(frame);
@@ -154,7 +156,7 @@ function createOverlayWindow(displayBounds: Electron.Rectangle): BrowserWindow {
   win.setAlwaysOnTop(true, 'screen-saver');
   win.setIgnoreMouseEvents(true);
   win.setContentProtection(true);
-  void win.loadURL(OVERLAY_HTML);
+  overlayLoad = win.loadURL(OVERLAY_HTML).then(() => undefined);
   win.once('ready-to-show', () => win.showInactive());
   return win;
 }
@@ -164,6 +166,7 @@ function destroyOverlayWindow(): void {
     overlayWindow.destroy();
   }
   overlayWindow = null;
+  overlayLoad = null;
 }
 
 /**
@@ -227,10 +230,53 @@ export function showOverlayElements(elements: readonly Record<string, unknown>[]
   try {
     wireScreenListeners();
 
-    // Cover the display that holds the union of the element rects
-    // (fallback: primary display when no rect is usable).
+    // UI Automation BoundingRectangle values are physical screen pixels,
+    // while Electron screen bounds and renderer CSS coordinates are DIPs.
+    // Normalize before picking a display or subtracting its origin; mixing
+    // these spaces misplaces frames on scaled displays.
+    const positionedElements = process.platform === 'win32'
+      ? elements.map((entry) => {
+          const rect = rectOf(entry);
+          if (!rect) return entry;
+          const dipRect = screen.screenToDipRect(null, {
+            x: rect.x,
+            y: rect.y,
+            width: rect.w,
+            height: rect.h,
+          });
+          return {
+            ...entry,
+            rect: { x: dipRect.x, y: dipRect.y, w: dipRect.width, h: dipRect.height },
+          };
+        })
+      : elements;
+
+    // Resolve a display from the normalized tree, then compact it using that
+    // display's dimensions before creating or updating the overlay window.
     let union: RectLike | null = null;
-    for (const entry of elements) {
+    for (const entry of positionedElements) {
+      const rect = rectOf(entry);
+      if (!rect) continue;
+      union = union
+        ? {
+            x: Math.min(union.x, rect.x),
+            y: Math.min(union.y, rect.y),
+            w: Math.max(union.x + union.w, rect.x + rect.w) - Math.min(union.x, rect.x),
+            h: Math.max(union.y + union.h, rect.y + rect.h) - Math.min(union.y, rect.y),
+          }
+        : rect;
+    }
+    const initialDisplay = union
+      ? screen.getDisplayMatching({ x: union.x, y: union.y, width: union.w, height: union.h })
+      : screen.getPrimaryDisplay();
+    const compactElements = selectVisibleOverlayElements(positionedElements, initialDisplay.bounds);
+    if (compactElements.length === 0) {
+      clearOverlayElements();
+      return;
+    }
+
+    union = null;
+    for (const entry of compactElements) {
       const rect = rectOf(entry);
       if (!rect) continue;
       union = union
@@ -244,7 +290,7 @@ export function showOverlayElements(elements: readonly Record<string, unknown>[]
     }
     const display = union
       ? screen.getDisplayMatching({ x: union.x, y: union.y, width: union.w, height: union.h })
-      : screen.getPrimaryDisplay();
+      : initialDisplay;
 
     if (!overlayWindow || overlayWindow.isDestroyed()) {
       overlayWindow = createOverlayWindow(display.bounds);
@@ -263,26 +309,29 @@ export function showOverlayElements(elements: readonly Record<string, unknown>[]
 
     const origin = display.bounds;
     const payload = JSON.stringify({
-      origin: { x: origin.x, y: origin.y },
+      x: origin.x,
+      y: origin.y,
     });
     const win = overlayWindow;
-    // Set the display origin first (draw coords are display-relative),
-    // then inject the element list as a JSON STRING (double stringify
-    // keeps the page from evaluating anything).
-    void win.webContents
-      .executeJavaScript(`window.__overlayOrigin = ${payload}; true;`)
-      .then(() =>
-        win.webContents.executeJavaScript(
-          `window.__overlayShow(${JSON.stringify(JSON.stringify(elements))}); true;`,
-        ),
-      )
+    const ready = overlayLoad ?? Promise.resolve();
+    // The page reads a flat { x, y } origin. Update it and the element list
+    // together so one refresh cannot draw with another refresh's origin.
+    // Wait for navigation before injection; otherwise its new document can
+    // discard the script along with the initial about:blank context.
+    void ready
+      .then(() => {
+        if (win.isDestroyed() || overlayWindow !== win) return undefined;
+        return win.webContents.executeJavaScript(
+          `window.__overlayOrigin = ${payload}; window.__overlayShow(${JSON.stringify(JSON.stringify(compactElements))}); true;`,
+        );
+      })
       .catch(() => {
         // Page not ready yet or window torn down — next show retries.
       });
 
     logger.debug(
       'overlay: showing elements',
-      { count: elements.length, displayId: display.id },
+      { count: compactElements.length, total: elements.length, displayId: display.id },
       LogComponent.ComputerUse,
     );
   } catch (err) {

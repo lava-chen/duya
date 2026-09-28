@@ -455,6 +455,90 @@ export class UiaProbeClient {
     };
   }
 
+  /**
+   * CUA list_apps (plan 575): processes with a visible main window, plus
+   * which one is foreground. Returns null on timeout / probe unavailable.
+   */
+  async listApps(): Promise<
+    Array<{ pid: number; exe: string | null; title: string; active: boolean }> | null
+  > {
+    const response = await this.request((id) => ({ id, op: 'apps' as const }), 4_000);
+    if (response === null || response.kind !== 'response' || !response.ok) {
+      return null;
+    }
+    return response.apps;
+  }
+
+  /**
+   * CUA list_windows (plan 575): top-level windows (optionally one pid)
+   * with geometry, minimized and DWM-cloaked state.
+   */
+  async listWindows(
+    pid = 0,
+  ): Promise<
+    Array<{
+      hwnd: number;
+      pid: number;
+      title: string;
+      rect: { x: number; y: number; w: number; h: number } | null;
+      minimized: boolean;
+      cloaked: boolean;
+    }> | null
+  > {
+    const response = await this.request((id) => ({ id, op: 'windows' as const, pid }), 4_000);
+    if (response === null || response.kind !== 'response' || !response.ok) {
+      return null;
+    }
+    return response.windows;
+  }
+
+  /**
+   * CUA select_text (plan 575): locate text inside the cached element's
+   * TextPattern range and select it. Mirrors invoke()'s stale-tree
+   * auto-recovery: re-enumerate and retry once.
+   */
+  async selectText(
+    hwnd: number,
+    opts: { index: number; text: string; name?: string; controlType?: string },
+  ): Promise<{ ok: boolean; reason?: string; pattern?: string | null; element?: unknown } | null> {
+    const attempt = (): Promise<UiaProbeResponse | null> =>
+      this.request(
+        (id) => ({
+          id,
+          op: 'selectText' as const,
+          hwnd,
+          index: opts.index,
+          text: opts.text,
+          ...(opts.name !== undefined ? { name: opts.name } : {}),
+          ...(opts.controlType !== undefined ? { controlType: opts.controlType } : {}),
+        }),
+        this.opts.invokeTimeoutMs,
+      );
+
+    const response = await attempt();
+    if (response === null || response.kind !== 'response') {
+      return null;
+    }
+    if (!response.ok) {
+      if (response.reason !== UIA_INVOKE_ERRORS.STALE_TREE) {
+        return { ok: false, reason: response.reason };
+      }
+      const refreshed = await this.enumerate(hwnd);
+      if (refreshed === null) {
+        return { ok: false, reason: UIA_INVOKE_ERRORS.STALE_TREE };
+      }
+      const retry = await attempt();
+      if (retry === null || retry.kind !== 'response') {
+        return null;
+      }
+      if (!retry.ok) {
+        return { ok: false, reason: retry.reason };
+      }
+      return { ok: true, pattern: retry.pattern, element: retry.element };
+    }
+    return { ok: true, pattern: response.pattern, element: response.element };
+  }
+
   /** Stop the probe process and tear down timers. */
   async dispose(): Promise<void> {
     if (this.idleTimer) {

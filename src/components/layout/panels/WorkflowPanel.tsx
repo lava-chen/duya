@@ -1145,7 +1145,7 @@ export function RunDetailView({
   );
 }
 
-// ─── panel shell ───
+// ─── legacy panel entry ───
 
 export interface WorkflowPanelProps {
   /** Session working directory — resolves the project-scope definition root. */
@@ -1154,89 +1154,22 @@ export interface WorkflowPanelProps {
   tab?: { params?: Record<string, unknown> };
 }
 
-export function WorkflowPanel({ projectDir, tab: tabDesc }: WorkflowPanelProps = {}) {
+export function WorkflowPanel(_props: WorkflowPanelProps = {}) {
   const { t } = useTranslation();
-  const resolvedProjectDir =
-    projectDir ??
-    (typeof tabDesc?.params?.workingDirectory === "string" ? tabDesc.params.workingDirectory : undefined);
-  // A run card's click / ↗ lands here: the panel switches to the runs tab and
-  // opens the run detail sub-view (`params.runId` seeds it on a fresh tab;
-  // panel-tab params are frozen on reuse, so the same
-  // `duya:open-workflow-run-panel` event also drives re-open below).
-  // `duya:open-workflow-node-panel` additionally focuses ONE node's dedicated
-  // detail viewer inside that run detail (node-card chip links).
-  const paramRunId =
-    typeof tabDesc?.params?.runId === "string" ? tabDesc.params.runId.trim() : "";
-  const paramNodeId =
-    typeof tabDesc?.params?.nodeId === "string" ? tabDesc.params.nodeId.trim() : "";
-  const [tab, setTab] = useState<"definitions" | "runs">(paramRunId ? "runs" : "definitions");
-  const [detailRunId, setDetailRunId] = useState<string>(paramRunId);
-  const [focusNodeId, setFocusNodeId] = useState<string>(paramNodeId);
-
-  useEffect(() => {
-    const handleOpenRunPanel = (event: Event) => {
-      const runId = (event as CustomEvent<{ runId?: string }>).detail?.runId;
-      if (typeof runId !== "string" || !runId.trim()) return;
-      setTab("runs");
-      setDetailRunId(runId.trim());
-      setFocusNodeId("");
-    };
-    const handleOpenNodePanel = (event: Event) => {
-      const detail = (event as CustomEvent<{ runId?: string; nodeId?: string }>).detail;
-      const runId = typeof detail?.runId === "string" ? detail.runId.trim() : "";
-      const nodeId = typeof detail?.nodeId === "string" ? detail.nodeId.trim() : "";
-      if (!runId || !nodeId) return;
-      setTab("runs");
-      setDetailRunId(runId);
-      setFocusNodeId(nodeId);
-    };
-    window.addEventListener("duya:open-workflow-run-panel", handleOpenRunPanel as EventListener);
-    window.addEventListener("duya:open-workflow-node-panel", handleOpenNodePanel as EventListener);
-    return () => {
-      window.removeEventListener("duya:open-workflow-run-panel", handleOpenRunPanel as EventListener);
-      window.removeEventListener("duya:open-workflow-node-panel", handleOpenNodePanel as EventListener);
-    };
-  }, []);
-
   return (
-    <div className="flex h-full flex-col bg-[var(--bg-canvas)] text-[var(--text)]">
-      <div className="flex items-center gap-2 border-b border-[var(--border)] px-3 py-2">
+    <div className="flex h-full flex-col items-start gap-3 bg-[var(--bg-canvas)] p-4 text-[var(--text)]">
+      <div className="flex items-center gap-2 text-sm font-semibold">
         <RepeatIcon className="h-4 w-4 text-[var(--accent)]" />
-        <span className="text-sm font-semibold">{t("panel.workflow.title")}</span>
+        {t("nav.workflow")}
       </div>
-      <div className="flex items-center gap-1 border-b border-[var(--border)] px-3 py-1.5" role="tablist">
-        {(["definitions", "runs"] as const).map((id) => (
-          <button
-            key={id}
-            type="button"
-            role="tab"
-            aria-selected={tab === id}
-            data-testid={`workflow-tab-${id}`}
-            className={`rounded px-2 py-1 text-xs ${
-              tab === id
-                ? "bg-[var(--bg-surface)] font-semibold text-[var(--text)]"
-                : "text-[var(--text-muted)] hover:text-[var(--text)]"
-            }`}
-            onClick={() => setTab(id)}
-          >
-            {id === "definitions" ? t("panel.workflow.tabDefinitions") : t("panel.workflow.tabRuns")}
-          </button>
-        ))}
-      </div>
-      <div className="flex-1 overflow-y-auto">
-        {tab === "definitions" ? (
-          <DefinitionsTab projectDir={resolvedProjectDir} onLaunched={() => setTab("runs")} />
-        ) : detailRunId ? (
-          <RunDetailView
-            runId={detailRunId}
-            onBack={() => setDetailRunId("")}
-            focusNodeId={focusNodeId}
-            onFocusNodeChange={(nodeId) => setFocusNodeId(nodeId ?? "")}
-          />
-        ) : (
-          <RunsTab />
-        )}
-      </div>
+      <p className="text-xs leading-relaxed text-[var(--text-muted)]">{t("workflow.panel.useMainPage" as never)}</p>
+      <button
+        type="button"
+        className="rounded-md border border-[var(--border)] px-3 py-1.5 text-xs hover:bg-[var(--bg-surface)]"
+        onClick={() => void useConversationStore.getState().setCurrentView("workflow")}
+      >
+        {t("workflow.panel.openPage" as never)}
+      </button>
     </div>
   );
 }

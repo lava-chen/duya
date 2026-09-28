@@ -35,8 +35,6 @@ import {
   StopIcon,
 } from '@/components/icons';
 import { useTranslation } from '@/hooks/useTranslation';
-import { useConversationStore } from '@/stores/conversation-store';
-import { dispatchOpenWorkflowNodePanel } from '@/lib/open-workflow-node-panel-event';
 import {
   runUiStatus,
   type WorkflowRunUiStatus,
@@ -64,6 +62,12 @@ interface WorkflowRunCardProps {
    * When given, the store is bypassed entirely.
    */
   run?: WorkflowRunSse;
+  /** Force the node chips open for an enclosing run-detail view. */
+  chipsExpanded?: boolean;
+  /** Override the default chip navigation. */
+  onChipOpen?: (chip: RunChipView) => void;
+  /** Hide the self-navigation affordance when the card is already in run detail. */
+  showDetailButton?: boolean;
 }
 
 /** i18n suffix per UI state — the titles live under `workflow.card.title.*`. */
@@ -88,7 +92,13 @@ function countAttemptedAgents(run: WorkflowRunSse): number | undefined {
   return typeof run.subagents === 'number' && run.subagents > 0 ? run.subagents : undefined;
 }
 
-export function WorkflowRunCard({ runId, run: runProp }: WorkflowRunCardProps) {
+export function WorkflowRunCard({
+  runId,
+  run: runProp,
+  chipsExpanded: chipsExpandedProp,
+  onChipOpen: onChipOpenProp,
+  showDetailButton = true,
+}: WorkflowRunCardProps) {
   // Hook stays unconditional: with a pre-built view the store key is empty and
   // simply yields undefined.
   const storeRun = useWorkflowRun(runId ?? '');
@@ -99,7 +109,9 @@ export function WorkflowRunCard({ runId, run: runProp }: WorkflowRunCardProps) {
   const [stopping, setStopping] = useState(false);
   // Progressive disclosure: the rail's per-node chips start collapsed; one
   // click on the rail reveals them (2026-09-23 feedback).
-  const [chipsExpanded, setChipsExpanded] = useState(false);
+  const [localChipsExpanded, setLocalChipsExpanded] = useState(false);
+  const chipsExpanded = chipsExpandedProp ?? localChipsExpanded;
+  const chipsExpansionControlled = chipsExpandedProp !== undefined;
 
   // Hooks at the top level only. The stage census (header right side) counts
   // straight off the step list — no count-up machinery, since the numeric
@@ -126,28 +138,21 @@ export function WorkflowRunCard({ runId, run: runProp }: WorkflowRunCardProps) {
   // store-side (only terminal statuses are refused), so they get one too.
   const showStop = ui === 'running' || ui === 'paused';
 
-  const openDetail = () => {
+  const openDetail = (nodeId?: string) => {
     if (!effectiveRunId) return;
-    window.dispatchEvent(new CustomEvent('duya:open-workflow-run-panel', { detail: { runId: effectiveRunId } }));
+    window.dispatchEvent(new CustomEvent('duya:open-workflow-run-panel', {
+      detail: { runId: effectiveRunId, ...(nodeId ? { nodeId } : {}) },
+    }));
   };
 
-  // Node-card link upgrade (2026-09-27, after plan 568): an agent chip with
-  // a child session enters that session's chat view in the main column
-  // (setActiveThread — the read-only side pane remains available from the
-  // subagent tool rows / task drawer). Per-kind chips (decision / human /
-  // browser) open the node's dedicated detail viewer in the workflow panel;
-  // the aggregated script chip has no single node behind it, so it keeps
-  // opening the run detail.
+  // Every node chip enters the same run-detail route. The selected node is
+  // shown below the graph, where agent nodes use the embedded read-only chat.
   const openChip = (chip: RunChipView) => {
-    if (chip.childSessionId) {
-      void useConversationStore.getState().setActiveThread(chip.childSessionId);
+    if (onChipOpenProp) {
+      onChipOpenProp(chip);
       return;
     }
-    if (chip.kind !== 'script') {
-      dispatchOpenWorkflowNodePanel(effectiveRunId, chip.key);
-      return;
-    }
-    openDetail();
+    openDetail(chip.kind === 'script' ? undefined : chip.key);
   };
 
   const stop = async () => {
@@ -212,7 +217,7 @@ export function WorkflowRunCard({ runId, run: runProp }: WorkflowRunCardProps) {
       data-status={run.status}
       data-workflow-card
       title={
-        hasSteps
+        hasSteps && !chipsExpansionControlled
           ? chipsExpanded
             ? t('workflow.card.chipsCollapse')
             : t('workflow.card.chipsExpand')
@@ -223,7 +228,7 @@ export function WorkflowRunCard({ runId, run: runProp }: WorkflowRunCardProps) {
       // per-node chips. Opening the run detail stays with the explicit ↗
       // affordances (header button and chips), so a casual click never yanks
       // the user into the side panel.
-      onClick={hasSteps ? () => setChipsExpanded((v) => !v) : undefined}
+      onClick={hasSteps && !chipsExpansionControlled ? () => setLocalChipsExpanded((v) => !v) : undefined}
     >
       {/* Header — icon + status title + name, then census + rerun + expand.
           The ↗ is the explicit, keyboard-accessible path into the run detail;
@@ -302,15 +307,17 @@ export function WorkflowRunCard({ runId, run: runProp }: WorkflowRunCardProps) {
           </button>
         )}
 
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); openDetail(); }}
-          className="shrink-0 inline-flex items-center justify-center text-muted-foreground hover:text-[var(--text)] transition-colors"
-          aria-label={t('workflow.card.openDetail')}
-          title={t('workflow.card.openDetail')}
-        >
-          <ArrowSquareOutIcon size={14} />
-        </button>
+        {showDetailButton && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); openDetail(); }}
+            className="shrink-0 inline-flex items-center justify-center text-muted-foreground hover:text-[var(--text)] transition-colors"
+            aria-label={t('workflow.card.openDetail')}
+            title={t('workflow.card.openDetail')}
+          >
+            <ArrowSquareOutIcon size={14} />
+          </button>
+        )}
       </div>
 
       {restartError && (

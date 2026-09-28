@@ -34,6 +34,11 @@ import type {
   ReviewScopeParams,
   GitCommitInfo,
   GitListCommitsResult,
+  GitListCommitsOptions,
+  GitListBranchesResult,
+  GitBranchRef,
+  GitRepositoryState,
+  GitCommitDetailResult,
 } from './git-types';
 
 function isGitRepoDir(cwd: string): boolean {
@@ -848,6 +853,21 @@ export function registerGitHandlers(): void {
       }
     }
     return { isGitRepo: true, locals, remotes };
+  });
+
+  ipcMain.handle('git:repo-state', async (_event, cwd: unknown): Promise<GitRepositoryState> => {
+    if (typeof cwd !== 'string' || cwd.length === 0 || !isGitRepoDir(cwd)) {
+      return { isGitRepo: false };
+    }
+    const [branchOut, headOut, statusOut] = await Promise.all([
+      Promise.resolve().then(() => stdoutOf(runGit(cwd, ['branch', '--show-current']))),
+      Promise.resolve().then(() => stdoutOf(runGit(cwd, ['rev-parse', '--short', 'HEAD']))),
+      Promise.resolve().then(() => stdoutOf(runGit(cwd, ['status', '--porcelain']))),
+    ]);
+    const branch = branchOut?.trim() || undefined;
+    const head = headOut?.trim() || undefined;
+    const dirty = statusOut ? statusOut.split('\n').filter((l) => l.length > 0).length : 0;
+    return { isGitRepo: true, branch, head, dirty };
   });
 
   ipcMain.handle('git:commit-detail', async (_event, cwd: unknown, sha: unknown): Promise<GitCommitDetailResult> => {

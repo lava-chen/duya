@@ -59,6 +59,7 @@ import { manageRoutineTool } from './ManageRoutineTool/index.js';
 import { listAppConnectorsTool, connectAppTool } from './AppConnectorManageTool/index.js';
 import { planTool } from './PlanTool/index.js';
 import { getComputerUseToolsWithDecide } from './OSTool/index.js';
+import { definition as computerCuaDefinition, executor as computerCuaExecutor } from './OSTool/ComputerCuaTool.js';
 
 /**
  * BashTool instance
@@ -319,6 +320,15 @@ export function createBuiltinRegistry(
       inputSchemaSummary: 'computer-use actions (capture/click/type/key/scroll/drag/set_value/wait/zoom + delegated decide loop)',
     });
   }
+
+  // Plan 575: the 14-tool ZCode-aligned CUA surface. Same registration
+  // policy as plan 552 — hidden from the LLM-facing surface by default
+  // (modes can inject it); workflow engine and tests can still execute
+  // it through the registry.
+  registry.register(computerCuaDefinition, computerCuaExecutor, {
+    exposeMode: 'hidden',
+    inputSchemaSummary: 'CUA tools (list_apps/list_windows/get_app_state/left_click/scroll/type/set_value/select_text/key/perform_action/paste/request_access/stop)',
+  });
 
   return registry;
 }

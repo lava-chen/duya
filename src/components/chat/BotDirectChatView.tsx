@@ -50,6 +50,14 @@ import {
   isBotDirectDisplayable,
   type AgentDmChipGroup,
 } from "./bot/agent-dm-pair";
+import {
+  buildChannelActivityChipGroups,
+  isChannelActivityMarker,
+  type ChannelActivityChipGroup,
+} from "./bot/channel-activity";
+import { ChannelActivityChip, ChannelActivityOverlay } from "./bot/ChannelActivityChip";
+import { isRoutineActivityMarker } from "./bot/routine-activity";
+import { RoutineActivityChip } from "./bot/RoutineActivityChip";
 import { ChevronDownIcon } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { Message } from "@/types/message";
@@ -165,6 +173,12 @@ interface BubbleRow {
   /** Plan 497: set when this row renders the collapsed DM chip for a run
    *  of consecutive same-peer marker rows (chip replaces the old card). */
   dmGroup?: AgentDmChipGroup;
+  /** Channel send/receive marker: renders as the collapsed channel chip. */
+  isChannelMarker?: boolean;
+  /** Set when this row renders the channel chip for a marker burst. */
+  channelGroup?: ChannelActivityChipGroup;
+  /** Routine lifecycle marker: renders as the routine chip (1:1, no group). */
+  isRoutineMarker?: boolean;
   /** Reply quote parsed back out of a composed user content (see bot/reply.ts). */
   replyPreview?: ReplyQuote | null;
   /** Standalone image bubble (text-kind message with re-attached images is
@@ -659,6 +673,9 @@ export function BotDirectChatView({
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   // Plan 491 P0.4: scroll freeze detection
   const [isScrolledUp, setIsScrolledUp] = useState(false);
+  // Open channel-burst detail overlay (chip click). Local to the view —
+  // the burst's entries ride the group, no cross-session fetch needed.
+  const [channelOverlayGroup, setChannelOverlayGroup] = useState<ChannelActivityChipGroup | null>(null);
 
   // Reply preview click — scroll the quoted message back into view.
   // Rows carry data-message-id (BotBubbleRow); the transcript container
@@ -685,6 +702,12 @@ export function BotDirectChatView({
     for (const group of buildAgentDmChipGroups(messages)) {
       group.memberIds.forEach((id, i) => dmInfoByRowId.set(id, { group, first: i === 0 }));
     }
+    // Channel send/receive markers collapse the same way (one chip per
+    // contiguous burst of channel traffic).
+    const channelInfoByRowId = new Map<string, { group: ChannelActivityChipGroup; first: boolean }>();
+    for (const group of buildChannelActivityChipGroups(messages)) {
+      group.memberIds.forEach((id, i) => channelInfoByRowId.set(id, { group, first: i === 0 }));
+    }
     const result: BubbleRow[] = [];
     let previousRole: string | null = null;
     for (const message of messages) {
@@ -709,6 +732,35 @@ export function BotDirectChatView({
             dmGroup: info.group,
           });
         }
+        continue;
+      }
+      // Channel send/receive markers render as the collapsed channel chip
+      // at the burst's first member; the rest are dropped (same shape as
+      // the DM branch above).
+      if (isChannelActivityMarker(message)) {
+        const info = channelInfoByRowId.get(message.id);
+        if (info?.first) {
+          result.push({
+            message,
+            role: "assistant",
+            text: "",
+            isGroupStart: false,
+            isChannelMarker: true,
+            channelGroup: info.group,
+          });
+        }
+        continue;
+      }
+      // Routine lifecycle markers render 1:1 (one chip per mutation, no
+      // burst merging) and do not participate in bubble grouping.
+      if (isRoutineActivityMarker(message)) {
+        result.push({
+          message,
+          role: "assistant",
+          text: "",
+          isGroupStart: false,
+          isRoutineMarker: true,
+        });
         continue;
       }
       if (isBubbleMessage(message)) {
@@ -872,6 +924,17 @@ export function BotDirectChatView({
             return { name: c?.name, avatarColor: c?.avatarColor };
           }}
           onOpenPeer={(peerId, peerName) => onOpenDmPair?.(peerId, peerName)}
+        />
+      ) : row.isChannelMarker && row.channelGroup ? (
+        <ChannelActivityChip
+          key={row.channelGroup.key}
+          group={row.channelGroup}
+          onOpen={setChannelOverlayGroup}
+        />
+      ) : row.isRoutineMarker && row.message.routineMeta ? (
+        <RoutineActivityChip
+          key={row.message.id}
+          meta={row.message.routineMeta}
         />
       ) : row.text || row.replyPreview ? (
         <BotBubbleRow
@@ -1268,6 +1331,15 @@ export function BotDirectChatView({
             : t("bot.chat.placeholderUnbound")
         }
       />
+
+      {/* Channel-burst detail overlay: full-container layer above the chat
+          surface (header + transcript + composer), closed by its back/X. */}
+      {channelOverlayGroup && (
+        <ChannelActivityOverlay
+          group={channelOverlayGroup}
+          onClose={() => setChannelOverlayGroup(null)}
+        />
+      )}
     </div>
   );
 }

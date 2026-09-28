@@ -22,17 +22,13 @@
 
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useShallow } from 'zustand/react/shallow';
+import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useConversationStore } from '@/stores/conversation-store';
 import { getThreadIPC } from '@/lib/ipc-client';
-import { projectMessageTranscript } from '@/lib/project-message-transcript';
-import { MessageList } from '@/components/chat/MessageList';
+import { ReadOnlySessionChat } from '@/components/chat/ReadOnlySessionChat';
 import { ArrowSquareOutIcon, ChatCircleIcon } from '@/components/icons';
 import type { PageTab } from './registry';
-
-const RELOAD_INTERVAL_MS = 2500;
 
 export function SessionMessagesPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const { t } = useTranslation();
@@ -41,26 +37,11 @@ export function SessionMessagesPanel({ tab }: { tab: PageTab; embedded: boolean 
 
   const [threadTitle, setThreadTitle] = useState(paramTitle);
   const [unavailable, setUnavailable] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-
-  const messages = useConversationStore(
-    useShallow((s) => (sessionId ? s.messages[sessionId] : undefined)),
-  );
-  const loadThreadMessages = useConversationStore((s) => s.loadThreadMessages);
-
-  const reload = useCallback(
-    (force: boolean) => {
-      if (!sessionId) return Promise.resolve();
-      return loadThreadMessages(sessionId, force ? { force: true } : undefined);
-    },
-    [sessionId, loadThreadMessages],
-  );
 
   // Initial load + thread metadata probe (title + existence check).
   useEffect(() => {
     setThreadTitle(paramTitle);
     setUnavailable(false);
-    setLoaded(false);
     if (!sessionId) {
       setUnavailable(true);
       return;
@@ -80,31 +61,10 @@ export function SessionMessagesPanel({ tab }: { tab: PageTab; embedded: boolean 
       .catch(() => {
         // Transient probe failure — the poll below still loads messages.
       });
-    void reload(true).then(() => {
-      if (alive) setLoaded(true);
-    });
     return () => {
       alive = false;
     };
-    // reload is stable per sessionId; paramTitle only seeds the initial title.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
-
-  // Keep a live session (running sub-agent / workflow node) streaming into
-  // the panel. Forced reload lets the store's streaming-merge branch run;
-  // for idle sessions it's a plain DB refresh.
-  useEffect(() => {
-    if (!sessionId || unavailable) return;
-    const id = window.setInterval(() => {
-      void reload(true);
-    }, RELOAD_INTERVAL_MS);
-    return () => window.clearInterval(id);
-  }, [sessionId, unavailable, reload]);
-
-  const visibleMessages = useMemo(
-    () => (messages ? projectMessageTranscript(messages).messages : []),
-    [messages],
-  );
+  }, [paramTitle, sessionId]);
 
   const openInMain = useCallback(() => {
     if (!sessionId) return;
@@ -139,16 +99,8 @@ export function SessionMessagesPanel({ tab }: { tab: PageTab; embedded: boolean 
           <div className="flex h-full items-center justify-center px-4 text-xs text-[var(--text-muted)]">
             {t('panel.session.unavailable')}
           </div>
-        ) : visibleMessages.length === 0 ? (
-          <div className="flex h-full items-center justify-center px-4 text-xs text-[var(--text-muted)]">
-            {loaded ? t('panel.session.empty') : t('panel.session.loading')}
-          </div>
         ) : (
-          <MessageList
-            messages={visibleMessages}
-            sessionId={sessionId}
-            isStreaming={false}
-          />
+          <ReadOnlySessionChat sessionId={sessionId} className="h-full min-h-0" />
         )}
       </div>
     </div>

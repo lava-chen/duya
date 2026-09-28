@@ -51,6 +51,7 @@ export type ReminderSourceId =
   | 'hook_context_rail'
   | 'pre_tool_use_advisory'
   | 'git_safety'
+  | 'turn_time'
   | 'background_notification';
 
 const REMINDER_SOURCE_DESCRIPTORS: Record<ReminderSourceId, ReminderSourceDescriptor> = {
@@ -131,6 +132,17 @@ const REMINDER_SOURCE_DESCRIPTORS: Record<ReminderSourceId, ReminderSourceDescri
     lifecycle: 'per_request',
     persisted: false,
     evidenceLabel: 'sr.git_safety',
+  },
+  // Wall-clock snapshot attached to the current turn's user message at the
+  // per-request boundary (replaces the old `Current date and time:` line in
+  // the environment system-prompt section, which only refreshed per turn
+  // build). Transient: re-injected with a fresh timestamp on every model
+  // request, never persisted, invisible in the renderer timeline.
+  turn_time: {
+    channel: 'per_turn',
+    lifecycle: 'transient',
+    persisted: false,
+    evidenceLabel: 'sr.turn_time',
   },
   // Background-task notifications claimed from the mailbox at a run
   // checkpoint (`<task-notification>` XML). Transient: the row is applied in

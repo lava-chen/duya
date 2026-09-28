@@ -282,3 +282,9 @@ export interface ResearchSessionSnapshot {
   // Null until the user invokes "show evidence" on a conclusion.
   lastEvidenceChain: ResearchEvidenceChainSnapshot | null;
 }
+
+/**
+ * Alias used by the client-side session manager. Mirrors the server-side
+ * snapshot exactly; the manager just tracks it as mutable client state.
+ */
+export type ResearchSessionState = ResearchSessionSnapshot;

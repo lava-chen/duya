@@ -533,4 +533,47 @@ export default async function (wf) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('runTool hands each concurrent wf.tool call its own toolUseId (map fan-out)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-runner-'));
+    try {
+      writeSavedWorkflow(
+        dir,
+        'fanout',
+        { description: 'fanout probe' },
+        `
+export default async function (wf) {
+  const results = await wf.map(['a', 'b'], async (item) => {
+    const r = await wf.tool('bash', { command: 'echo ' + item });
+    return item + ':' + String(r);
+  });
+  return results.join('|');
+}
+`,
+      );
+      // Concurrent map fan-out against ONE shared run ctx: every execute call
+      // must carry a distinct toolUseId — tools key per-call state off it
+      // (bash task id + output file, result ids). A constant id made two
+      // concurrent bash calls share one output file and read each other's
+      // output.
+      const seenToolUseIds: unknown[] = [];
+      registryExecute.mockImplementation(async (_name, _input, _cwd, ctx) => {
+        seenToolUseIds.push((ctx as { toolUseId?: string } | undefined)?.toolUseId);
+        return { result: 'ok', metadata: {} };
+      });
+      const { deps } = makeDeps();
+      await launchSavedWorkflow(deps, { runId: 'r9', workflowName: 'fanout', projectDir: dir });
+
+      expect(seenToolUseIds.length).toBeGreaterThanOrEqual(2);
+      for (const id of seenToolUseIds) expect(typeof id).toBe('string');
+      expect(new Set(seenToolUseIds).size).toBe(seenToolUseIds.length);
+      // The run itself completes cleanly with the per-call identities.
+      expect(workflowRunDbMocks.finish).toHaveBeenCalledWith(
+        'r9',
+        expect.objectContaining({ status: 'complete' }),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

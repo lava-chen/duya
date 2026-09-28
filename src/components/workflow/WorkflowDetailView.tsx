@@ -52,7 +52,7 @@ import { SyntaxHighlighter } from '@/lib/prism-languages';
 import { vs, vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { WorkflowGraph } from './WorkflowGraph';
 import { WorkflowPreviewCard } from './run-display/workflow-preview-card';
-import { RunsTab } from '@/components/layout/panels/WorkflowPanel';
+import { WorkflowRunHistory } from './WorkflowRunHistory';
 import {
   WorkflowLaunchDialog,
   type WorkflowLaunchDialogEntry,
@@ -544,6 +544,9 @@ function fileNameOf(path: string): string {
 export interface WorkflowDetailViewProps {
   name: string;
   scope?: 'global' | 'project';
+  initialTab?: 'definition' | 'history';
+  onTabChange?: (tab: 'definition' | 'history') => void;
+  onOpenRun: (runId: string, nodeId?: string) => void;
   /** Path to navigate back to the library. */
   onBack: () => void;
   projectDir?: string;
@@ -560,12 +563,16 @@ type TabKey = 'definition' | 'history';
 export function WorkflowDetailView({
   name,
   scope = 'global',
+  initialTab = 'definition',
+  onTabChange,
+  onOpenRun,
   onBack,
   projectDir,
   onAmendInChat,
 }: WorkflowDetailViewProps) {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<TabKey>('definition');
+  const [tab, setTab] = useState<TabKey>(initialTab);
+  const [historyCount, setHistoryCount] = useState(0);
   const [def, setDef] = useState<WorkflowDefView | null>(null);
   const [summary, setSummary] = useState<WorkflowDefinitionSummary | null>(null);
   const [resolvedScope, setResolvedScope] = useState<'global' | 'project'>(scope);
@@ -819,7 +826,10 @@ export function WorkflowDetailView({
           <button
             type="button"
             style={tabStyle(tab === 'definition')}
-            onClick={() => setTab('definition')}
+            onClick={() => {
+              setTab('definition');
+              onTabChange?.('definition');
+            }}
             role="tab"
             aria-selected={tab === 'definition'}
           >
@@ -828,11 +838,14 @@ export function WorkflowDetailView({
           <button
             type="button"
             style={tabStyle(tab === 'history')}
-            onClick={() => setTab('history')}
+            onClick={() => {
+              setTab('history');
+              onTabChange?.('history');
+            }}
             role="tab"
             aria-selected={tab === 'history'}
           >
-            {t('workflow.tab.history')}
+            {t('workflow.tab.history')}{historyCount > 0 ? ` ${historyCount}` : ''}
           </button>
         </div>
         <div style={pathInlineStyle}>
@@ -879,7 +892,13 @@ export function WorkflowDetailView({
 
       {!error && tab === 'history' && (
         <div style={{ paddingTop: 'var(--space-2, 8px)' }}>
-          <RunsTab />
+          <WorkflowRunHistory
+            workflowName={name}
+            scope={resolvedScope}
+            projectDir={projectDir}
+            onCountChange={setHistoryCount}
+            onOpenRun={(run) => onOpenRun(run.id)}
+          />
         </div>
       )}
 
@@ -905,8 +924,13 @@ export function WorkflowDetailView({
         <WorkflowLaunchDialog
           entry={launchEntry}
           defaultProjectDir={projectDir}
+          navigateOnLaunch={false}
           onClose={() => setLaunching(false)}
-          onLaunched={() => setTab('history')}
+          onLaunched={(runId) => {
+            setTab('history');
+            onTabChange?.('history');
+            onOpenRun(runId);
+          }}
         />
       )}
     </PageFrame>

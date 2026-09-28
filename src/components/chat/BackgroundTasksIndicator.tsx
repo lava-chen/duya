@@ -49,15 +49,12 @@ export function BackgroundTasksIndicator({ sessionId }: BackgroundTasksIndicator
   );
   const subagentRunningCount = subagentRunning.length;
 
-  // Running tasks first, then the recently-ended ones the registry still
-  // keeps (they stay openable — their output file lingers for a while).
-  const orderedTasks = useMemo(() => {
-    return [...bashTasks].sort((a, b) => {
-      if ((a.status === 'running') !== (b.status === 'running')) {
-        return a.status === 'running' ? -1 : 1;
-      }
-      return b.startTime - a.startTime;
-    });
+  // The registry retains ended tasks for output/history views, but this
+  // composer popover only represents work that is still running.
+  const runningBashTasks = useMemo(() => {
+    return bashTasks
+      .filter((task) => task.status === 'running')
+      .sort((a, b) => b.startTime - a.startTime);
   }, [bashTasks]);
 
   const totalCount = bashRunningCount + subagentRunningCount;
@@ -163,12 +160,12 @@ export function BackgroundTasksIndicator({ sessionId }: BackgroundTasksIndicator
           data-testid="composer-background-tasks-list"
           className="bg-tasks-popover"
         >
-          {orderedTasks.length > 0 && (
+          {runningBashTasks.length > 0 && (
             <>
               <p className="bg-tasks-popover-heading">
                 {t('chat.backgroundTasks.sectionCommands')}
               </p>
-              {orderedTasks.map((task) => (
+              {runningBashTasks.map((task) => (
                 <button
                   key={task.id}
                   type="button"

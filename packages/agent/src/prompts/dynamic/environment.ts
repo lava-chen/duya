@@ -131,6 +131,13 @@ export function formatCurrentDateTime(nowMs: number, tzStr?: string): string {
 }
 
 /**
+ * Wall-clock format moved to the per-request turn-time reminder
+ * (`agent/turn-time-reminder.ts`) — the environment section no longer
+ * renders a date-time line, so this module keeps only the formatter the
+ * reminder reuses.
+ */
+
+/**
  * Build the environment body as a flat string array (no ` - ` prefix and
  * no `Environment\n\nYou have been invoked in the following environment:\n`
  * wrapper — those are the template's job). The legacy `getEnvironmentSection`
@@ -160,8 +167,6 @@ export function buildEnvironmentItems(ctx: PromptContext): string[] {
     : null
 
   const shellInfoLine = getShellInfoLine(ctx.shell, ctx.platform)
-  const nowMs = ctx.nowMs ?? Date.now()
-  const currentDateTime = formatCurrentDateTime(nowMs, ctx.location?.timezone)
 
   const envItems: (string | null)[] = [
     hasWorkingDir
@@ -183,7 +188,6 @@ export function buildEnvironmentItems(ctx: PromptContext): string[] {
     ctx.location
       ? `Location: ${ctx.location.locale}${ctx.location.localeCountryCode ? ` (${ctx.location.localeCountryCode})` : ''}, timezone ${ctx.location.timezone}`
       : null,
-    `Current date and time: ${currentDateTime}`,
     modelDescription,
     knowledgeCutoffMessage,
     `Duya is available as a CLI in the terminal, desktop app (Mac/Windows).`,

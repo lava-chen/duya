@@ -50,7 +50,14 @@ export type MessageSource =
   | 'reaction'
   | 'agent_dm'
   | 'group'
-  | 'group_system';
+  | 'group_system'
+  // Channel send/receive marker rows (bot-direct chat chips). One row per
+  // channel message in/out of the bot; payload rides metadata.channelMsg.
+  | 'channel_activity'
+  // Routine lifecycle marker rows (bot-direct chat chips): one row per
+  // routine create/update/pause/resume/delete affecting this bot; payload
+  // rides metadata.routine.
+  | 'routine_activity';
 
 /**
  * Sources that are visible to the end user in a 1:1 bot chat view.
@@ -65,6 +72,12 @@ export const BOT_DIRECT_VISIBLE_SOURCES: readonly MessageSource[] = [
   'reaction',
   // Plan 477 P4.4: bot→bot DM marker cards (sent + received directions).
   'agent_dm',
+  // Channel send/receive marker cards — collapsed into "与 XX 收发消息"
+  // chips by the bot-direct view, never rendered as standalone bubbles.
+  'channel_activity',
+  // Routine lifecycle marker cards ("已创建 routine X" chips) — one row per
+  // routine mutation affecting this bot, never rendered as bubbles.
+  'routine_activity',
 ] as const;
 
 /**

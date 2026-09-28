@@ -19,7 +19,31 @@
 
 import type { Message } from '@/types/message';
 import type { Thread } from '@/stores/conversation-store';
+import type { TranslationKey } from '@/i18n';
 import { SESSION_KIND_PREFIXES } from './section-system';
+
+type TFunc = (key: TranslationKey, params?: Record<string, string | number>) => string;
+
+/**
+ * Compact relative time for roster rows / rail cards ("3m", "2h", "4d").
+ * Shared by the full list rows and the collapsed-rail hover card so both
+ * surfaces age identically.
+ */
+export function formatTimeAgo(t: TFunc, timestamp: number): string {
+  if (!timestamp) return "";
+  const now = Date.now();
+  const diff = now - timestamp;
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+  const weeks = Math.floor(diff / 604800000);
+
+  if (minutes < 1) return t("time.justNow");
+  if (minutes < 60) return `${minutes}m`;
+  if (hours < 24) return `${hours}h`;
+  if (days < 7) return `${days}d`;
+  return `${weeks}w`;
+}
 
 /**
  * One bot from the merged read side (mirrors `BotListItem` in

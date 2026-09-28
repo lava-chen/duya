@@ -587,7 +587,7 @@ class Logger extends EventEmitter {
     const ctx: LogContext = {}
     for (const [k, v] of Object.entries(payload)) {
       if (v === undefined) continue
-      ctx[k] = v as LogContextValue
+      ctx[k] = v as unknown
     }
     this.write(this.createLogEntry('INFO', `[token:${label}]`, { component: LogComponent.TokenCalc, context: ctx }))
   }

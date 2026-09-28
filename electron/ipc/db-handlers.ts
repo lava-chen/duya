@@ -74,6 +74,8 @@ import { uploadAsset as conductorUploadAsset, uploadProjectAsset as conductorUpl
 import { captureWebsiteSnapshot } from '../conductor/link-snapshot-service';
 import { prepareCanvasDocument, syncCanvasDocument } from '../conductor/document-service';
 import { getCoreStores } from '../db/core-connection';
+import { newEventToIpcMessage } from './core-db-adapters';
+import { getSessionManager } from '../agents/session-manager';
 import { CronFileStore } from '../automation/cron-file';
 import { getConnectorCredential, storeConnectorCredential } from '../channels/agent-session-channels';
 import { getAppConnectionService } from '../services/app-connections/app-connection-service';
@@ -1107,12 +1109,64 @@ export function registerDbHandlers(): void {
     return scheduler.listCrons();
   });
 
+  // Routine lifecycle marker (bot-direct chat chip). User-side routine
+  // mutations (automation page) land the same chip in the bot's chat that
+  // ManageRoutineTool persists for agent-side mutations. agent=null (a
+  // project cron, not bot-bound) writes nothing. Best-effort.
+  const appendRoutineMarker = (
+    agent: string | null | undefined,
+    action: 'created' | 'updated' | 'deleted' | 'paused' | 'resumed',
+    routineId: string,
+    name: string,
+  ): void => {
+    if (!agent) return;
+    try {
+      const sessionId = `bot:${agent}`;
+      const message = {
+        id: `routine-marker-${randomUUID()}`,
+        session_id: sessionId,
+        role: 'assistant',
+        content: `${action} routine "${name}"`,
+        status: 'complete',
+        msg_type: 'text',
+        source: 'routine_activity',
+        metadata: {
+          source: 'routine_activity',
+          routine: {
+            action,
+            name,
+            ...(routineId ? { routineId } : {}),
+          },
+        },
+        created_at: Date.now(),
+      };
+      const { messageLog } = getCoreStores();
+      const event = ipcMessageToNewEvent(
+        sessionId,
+        message as unknown as Parameters<typeof ipcMessageToNewEvent>[1],
+        null,
+      );
+      messageLog.appendBatch([event]);
+      const broadcast = newEventToIpcMessage(event);
+      if (broadcast) {
+        getSessionManager().broadcastSessionEvent('message:new', {
+          sessionId,
+          messages: [broadcast],
+        });
+      }
+    } catch {
+      // Marker persistence is cosmetic — swallow.
+    }
+  };
+
   ipcMain.handle('automation:cron:create', (_event, data: CreateAutomationCronInput) => {
     const scheduler = getAutomationScheduler();
     if (!scheduler) {
       throw new Error('Automation scheduler is not initialized');
     }
-    return scheduler.createCron(data);
+    const created = scheduler.createCron(data);
+    appendRoutineMarker(created.agent, 'created', created.id, created.name);
+    return created;
   });
 
   ipcMain.handle('automation:cron:update', (_event, id: string, patch: UpdateAutomationCronInput) => {
@@ -1120,7 +1174,16 @@ export function registerDbHandlers(): void {
     if (!scheduler) {
       throw new Error('Automation scheduler is not initialized');
     }
-    return scheduler.updateCron(id, patch);
+    const before = scheduler.getCron(id);
+    const updated = scheduler.updateCron(id, patch);
+    // A user-side enable flip surfaces as pause/resume, every other patch as
+    // a plain update (mirrors ManageRoutineTool's action set).
+    if (before && typeof patch.enabled === 'boolean' && before.enabled !== patch.enabled) {
+      appendRoutineMarker(updated.agent, patch.enabled ? 'resumed' : 'paused', updated.id, updated.name);
+    } else {
+      appendRoutineMarker(updated.agent, 'updated', updated.id, updated.name);
+    }
+    return updated;
   });
 
   ipcMain.handle('automation:cron:delete', (_event, id: string) => {
@@ -1128,7 +1191,13 @@ export function registerDbHandlers(): void {
     if (!scheduler) {
       throw new Error('Automation scheduler is not initialized');
     }
-    return scheduler.deleteCron(id);
+    // Fetch before delete: the marker needs the job's bot binding + name.
+    const existing = scheduler.getCron(id);
+    const result = scheduler.deleteCron(id);
+    if (existing) {
+      appendRoutineMarker(existing.agent, 'deleted', id, existing.name);
+    }
+    return result;
   });
 
   ipcMain.handle('automation:cron:run', async (_event, id: string) => {

@@ -592,7 +592,7 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
       expect(durableUser?.content).toBe('summarize the attachment');
     });
 
-    it('adds current time as a non-cacheable request contributor', async () => {
+    it('attaches current time as a transient system-reminder on the provider user message', async () => {
       const agent = newAgent();
       const observedPrompts: string[] = [];
       streamState.current = {
@@ -603,8 +603,29 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
         onSystemPromptReady: ({ systemPrompt }) => observedPrompts.push(systemPrompt),
       });
 
+      // The system prompt no longer carries the wall clock (moved to the
+      // per-request turn-time reminder).
       expect(observedPrompts).toHaveLength(1);
-      expect(observedPrompts[0]).toContain('Current date and time:');
+      expect(observedPrompts[0]).not.toContain('Current date and time:');
+
+      // The provider payload's current-turn user message carries the reminder.
+      const providerMessages = streamState.seenMessages[0] as Message[];
+      const providerUser = providerMessages.find(
+        (message) =>
+          message.role === 'user' &&
+          typeof message.content === 'string' &&
+          message.content.includes('what time is it?'),
+      );
+      expect(providerUser).toBeDefined();
+      expect(String(providerUser?.content)).toContain('<system-reminder>');
+      expect(String(providerUser?.content)).toContain('Current time:');
+
+      // The reminder is transient — never persisted in the durable timeline.
+      const durableUser = (agent.getMessages() as Message[]).find(
+        (message) => message.role === 'user',
+      );
+      expect(String(durableUser?.content)).not.toContain('Current time:');
+      expect(String(durableUser?.content)).not.toContain('<system-reminder>');
     });
   });
 

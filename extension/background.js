@@ -1280,6 +1280,46 @@ async function handleEvaluate(id, msg) {
 
 // ─── Click ───────────────────────────────────────────────────────────
 
+/**
+ * In-page resolution of the first *visible* match of a CSS selector. The
+ * first DOM match is often a hidden template copy (search boxes, modals) —
+ * acting on it makes DOM.getBoxModel throw "Could not compute box model"
+ * and CDP input land nowhere. Returns the element's viewport rect center,
+ * or { ok: false } when no visible match exists.
+ */
+async function resolveFirstVisibleElement(debuggee, selector, action) {
+  const result = await safeEvaluate(debuggee, `(() => {
+    var elements = document.querySelectorAll(${JSON.stringify(selector)});
+    var zeroSize = null;
+    for (var i = 0; i < elements.length; i++) {
+      var el = elements[i];
+      var rect = el.getBoundingClientRect();
+      var style = getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden') continue;
+      if (rect.width > 0 && rect.height > 0) {
+        try { el.scrollIntoView({ block: 'center', behavior: 'instant' }); } catch {}
+        var box = el.getBoundingClientRect();
+        ${action === 'click' ? 'el.click();' : 'el.focus();'}
+        return {
+          ok: true,
+          x: Math.round(box.x + box.width / 2),
+          y: Math.round(box.y + box.height / 2),
+        };
+      }
+      // Zero-sized but rendered: not usable as a click target, yet focus()
+      // still works and CDP key events land in it (e.g. search pages whose
+      // visible box is a wrapper around a 0x0 legacy input).
+      if (${action === 'focus'} && !zeroSize) zeroSize = el;
+    }
+    if (zeroSize) {
+      zeroSize.focus();
+      return { ok: true, zeroSized: true };
+    }
+    return { ok: false, reason: 'no_visible_match', matches: elements.length };
+  })()`);
+  return result?.result?.value ?? { ok: false, reason: 'evaluate_failed' };
+}
+
 async function handleClick(id, msg) {
   const { tabId, selector } = msg;
 
@@ -1309,28 +1349,41 @@ async function handleClick(id, msg) {
         return;
       }
     } else {
-      // Selector-based clicking: get document root first, then query
-      const doc = await chrome.debugger.sendCommand(debuggee, 'DOM.getDocument', {});
-      const rootNodeId = doc.root.nodeId;
-      const result = await chrome.debugger.sendCommand(debuggee, 'DOM.querySelector', { nodeId: rootNodeId, selector });
-      const nodeId = result.nodeId;
-
-      if (!nodeId) {
-        sendResult(id, { ok: false, error: `Element not found: ${selector}` });
-        return;
+      // Prefer an in-page visible match (el.click()); DOM.querySelector's
+      // first match may be a hidden template copy with no box. Falls back
+      // to the CDP coordinate click for cases the in-page path can't see
+      // (shadow DOM, cross-origin frames).
+      let clicked = false;
+      try {
+        const visible = await resolveFirstVisibleElement(debuggee, selector, 'click');
+        clicked = visible?.ok === true;
+      } catch {
+        clicked = false;
       }
+      if (!clicked) {
+        // Selector-based clicking: get document root first, then query
+        const doc = await chrome.debugger.sendCommand(debuggee, 'DOM.getDocument', {});
+        const rootNodeId = doc.root.nodeId;
+        const result = await chrome.debugger.sendCommand(debuggee, 'DOM.querySelector', { nodeId: rootNodeId, selector });
+        const nodeId = result.nodeId;
 
-      const boxResult = await chrome.debugger.sendCommand(debuggee, 'DOM.getBoxModel', { nodeId });
-      const [x1, y1, x2, y2] = boxResult.model.content;
-      const x = (x1 + x2) / 2;
-      const y = (y1 + y2) / 2;
+        if (!nodeId) {
+          sendResult(id, { ok: false, error: `Element not found: ${selector}` });
+          return;
+        }
 
-      await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
-        type: 'mousePressed', x, y, button: 'left', clickCount: 1,
-      });
-      await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
-        type: 'mouseReleased', x, y, button: 'left', clickCount: 1,
-      });
+        const boxResult = await chrome.debugger.sendCommand(debuggee, 'DOM.getBoxModel', { nodeId });
+        const [x1, y1, x2, y2] = boxResult.model.content;
+        const x = (x1 + x2) / 2;
+        const y = (y1 + y2) / 2;
+
+        await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
+          type: 'mousePressed', x, y, button: 'left', clickCount: 1,
+        });
+        await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
+          type: 'mouseReleased', x, y, button: 'left', clickCount: 1,
+        });
+      }
     }
 
     sendResult(id, { ok: true });
@@ -1371,28 +1424,48 @@ async function handleType(id, msg) {
         return;
       }
     } else {
-      const doc = await chrome.debugger.sendCommand(debuggee, 'DOM.getDocument', {});
-      const rootNodeId = doc.root.nodeId;
-      const result = await chrome.debugger.sendCommand(debuggee, 'DOM.querySelector', { nodeId: rootNodeId, selector });
-      if (result.nodeId) {
-        const boxResult = await chrome.debugger.sendCommand(debuggee, 'DOM.getBoxModel', { nodeId: result.nodeId });
-        const [x1, y1, x2, y2] = boxResult.model.content;
-        const x = (x1 + x2) / 2;
-        const y = (y1 + y2) / 2;
-        await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
-          type: 'mousePressed', x, y, button: 'left', clickCount: 1,
-        });
-        await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
-          type: 'mouseReleased', x, y, button: 'left', clickCount: 1,
-        });
+      // Prefer focusing an in-page visible match: focus() needs no box model
+      // and skips hidden template copies of the input (their getBoxModel
+      // throws "Could not compute box model"). Falls back to the CDP click
+      // path when no visible match exists.
+      let focused = false;
+      try {
+        const visible = await resolveFirstVisibleElement(debuggee, selector, 'focus');
+        focused = visible?.ok === true;
+      } catch {
+        focused = false;
+      }
+      if (!focused) {
+        const doc = await chrome.debugger.sendCommand(debuggee, 'DOM.getDocument', {});
+        const rootNodeId = doc.root.nodeId;
+        const result = await chrome.debugger.sendCommand(debuggee, 'DOM.querySelector', { nodeId: rootNodeId, selector });
+        if (result.nodeId) {
+          const boxResult = await chrome.debugger.sendCommand(debuggee, 'DOM.getBoxModel', { nodeId: result.nodeId });
+          const [x1, y1, x2, y2] = boxResult.model.content;
+          const x = (x1 + x2) / 2;
+          const y = (y1 + y2) / 2;
+          await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
+            type: 'mousePressed', x, y, button: 'left', clickCount: 1,
+          });
+          await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
+            type: 'mouseReleased', x, y, button: 'left', clickCount: 1,
+          });
+        }
       }
     }
 
-    // Type text
-    for (const char of text) {
-      await chrome.debugger.sendCommand(debuggee, 'Input.dispatchKeyEvent', {
-        type: 'char', text: char,
-      });
+    // Type text. Input.insertText (IME-style) is the reliable path: plain
+    // `Input.dispatchKeyEvent {type:'char'}` events do not produce text on
+    // current Chromium builds. The per-char loop stays as the fallback for
+    // engines where insertText is unavailable.
+    try {
+      await chrome.debugger.sendCommand(debuggee, 'Input.insertText', { text });
+    } catch {
+      for (const char of text) {
+        await chrome.debugger.sendCommand(debuggee, 'Input.dispatchKeyEvent', {
+          type: 'char', text: char,
+        });
+      }
     }
 
     sendResult(id, { ok: true });
@@ -1475,12 +1548,50 @@ async function handlePressKey(id, msg) {
   const keyInfo = keyMap[key] || { key, code: key, keyCode: 0 };
 
   try {
+    // CDP reads windowsVirtualKeyCode / nativeVirtualKeyCode — a plain
+    // `keyCode` property is ignored, and synthetic Enter with a zero virtual
+    // key code never triggers a form submit. Enter also carries text:'\r'
+    // (what Puppeteer sends) — without it Chromium treats the key as
+    // textless and skips the keypress default action.
+    const event = {
+      key: keyInfo.key,
+      code: keyInfo.code,
+      windowsVirtualKeyCode: keyInfo.keyCode,
+      nativeVirtualKeyCode: keyInfo.keyCode,
+    };
+    if (keyInfo.keyCode === 13) {
+      event.text = '\r';
+      event.unmodifiedText = '\r';
+    }
     await chrome.debugger.sendCommand(debuggee, 'Input.dispatchKeyEvent', {
-      type: 'keyDown', ...keyInfo,
+      type: 'keyDown', ...event,
     });
     await chrome.debugger.sendCommand(debuggee, 'Input.dispatchKeyEvent', {
-      type: 'keyUp', ...keyInfo,
+      type: 'keyUp', ...event,
     });
+
+    // CDP key events can be dropped entirely when the browser window has no
+    // OS focus (locked session / background window) — the typed text still
+    // lands via Input.insertText, but the key events never reach the page.
+    // Replicate the operational effect of pressing Enter in-page: dispatch a
+    // KeyboardEvent so page handlers see it, and requestSubmit() the owning
+    // form so implicit submission happens.
+    if (key === 'Enter') {
+      await safeEvaluate(debuggee, `(() => {
+        var el = document.activeElement;
+        if (!el) return false;
+        var opts = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
+        el.dispatchEvent(new KeyboardEvent('keydown', opts));
+        el.dispatchEvent(new KeyboardEvent('keyup', opts));
+        var form = el.form || el.closest('form');
+        if (form) {
+          if (form.requestSubmit) form.requestSubmit();
+          else form.submit();
+          return true;
+        }
+        return false;
+      })()`);
+    }
     sendResult(id, { ok: true });
   } catch (error) {
     sendResult(id, { ok: false, error: unwrapDebuggerMessage(error) });

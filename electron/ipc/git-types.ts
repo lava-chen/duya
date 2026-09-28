@@ -116,6 +116,62 @@ export interface GitListCommitsResult {
   commits: GitCommitInfo[];
 }
 
+/** One branch reference — local or remote. `current` is only present for the
+ *  active local branch; `remote` is only present for remote-tracking refs. */
+export interface GitBranchRef {
+  name: string;
+  head: string;
+  /** Only set for the currently-checked-out local branch. */
+  current?: boolean;
+  /** Only set for remote-tracking refs; the remote's name (e.g. "origin"). */
+  remote?: string;
+}
+
+export interface GitListBranchesResult {
+  isGitRepo: boolean;
+  locals: GitBranchRef[];
+  remotes: GitBranchRef[];
+}
+
+/** Snapshot of the working tree's repository state (HEAD, branch, dirty). */
+export interface GitRepositoryState {
+  isGitRepo: boolean;
+  /** Short name of the current branch (or "HEAD" in detached state). */
+  branch?: string;
+  /** Short SHA of HEAD. */
+  head?: string;
+  /** Number of files with uncommitted changes. */
+  dirty?: number;
+}
+
+// ── Commit detail (plan 518) ────────────────────────────────────
+
+export interface GitCommitDetailResult {
+  isGitRepo: boolean;
+  commit?: GitCommitInfo & {
+    shortHash: string;
+    body: string;
+    author: string;
+    authorEmail: string;
+    authorDate: string;
+    parents: string[];
+    refs: string[];
+    isMerge: boolean;
+  };
+  files?: GitReviewFile[];
+  totals?: GitStatusTotals;
+  patch?: string;
+  truncated?: boolean;
+  binary?: boolean;
+  error?: string;
+}
+
+// ── Options bag for list-commits ─────────────────────────────────
+
+export interface GitListCommitsOptions {
+  count?: number;
+}
+
 export interface GitAPI {
   status: (cwd: string) => Promise<GitStatusResult>;
   review: (cwd: string) => Promise<GitReviewResult>;
@@ -133,11 +189,11 @@ export interface GitAPI {
   reviewScopedDiff: (cwd: string, scope: ReviewScopeParams, filePath: string) => Promise<GitReviewDiffResult>;
   listCommits: (cwd: string, count?: number) => Promise<GitListCommitsResult>;
   /** Read the detail of a single commit (subject, author, files, stats, diff). */
-  commitDetail: (cwd: string, sha: string) => Promise<unknown>;
+  commitDetail: (cwd: string, sha: string) => Promise<GitCommitDetailResult>;
   /** Enumerate local branches (current + others). */
-  listBranches: (cwd: string) => Promise<unknown>;
+  listBranches: (cwd: string) => Promise<GitListBranchesResult>;
   /** Snapshot of the working tree's repo state (HEAD, branch, dirty counts). */
-  repoState: (cwd: string) => Promise<unknown>;
+  repoState: (cwd: string) => Promise<GitRepositoryState>;
   /** Switch the working tree to an existing branch. */
   switchBranch: (cwd: string, branchName: string) => Promise<unknown>;
   /** Create a new branch at an optional start point. */

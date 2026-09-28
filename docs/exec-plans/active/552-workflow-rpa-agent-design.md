@@ -444,3 +444,37 @@ workflow_run_snapshots   run_id 1:1 → blob（冻结 YAML + 节点栈 + journal
 4. 本机环境限制：better-sqlite3 v13 无 Node 20.20.2 darwin-x64 预编译(源码编译段错误),
    sqlite 依赖套件在本机跳过/失败——workflow-store/handler 测试在健康环境运行
    (与既有 core-db 套件同一 skipIf 守卫)。
+
+## 14. 运行锚真机验证注记（2026-09-28，duya dev + run-anchored 触发）
+
+对 `~/.duya/workflows/test-01..07.dwf.ts` 七类能力工作流逐个真机触发（run 锚
+`POST /workflow-runtime/trigger`，与启动弹窗同链路）：
+
+| 能力 | 结果 | 备注 |
+|----|----|----|
+| test-01 tool/map/publish | ✅ complete | **修 bug**：`buildToolUseContext` 全 run 共享一个 `toolUseId`，并发 map fan-out 的 bash 调用共享同一 taskId → 同一输出文件互串（`["(no output)","fanout-0-one","fanout-2-three"]`）。修复 = runTool/runAgent 每次调用浅拷贝 ctx 换新 `toolUseId`（workflow-runner.ts），附 map fan-out 回归测试 |
+| test-02 错误阶梯 | ✅ complete | 未知工具 try/catch + browser on_stuck skip 均按预期 |
+| test-03 wf.agent | ✅ complete | 子代理 22.6s，outputSchema 校验通道正常 |
+| test-04 wf.decide | ✅ complete | 类型化决策出答案（0ms 走规则兜底档） |
+| test-05 wf.browser | ✅ complete（修 3 处扩展 bug 后） | 见下 |
+| test-06 wf.gui | ❌ 挂死 | 复现历史挂死（9-23/24 同状）：child→main `computer-use:execute` 响应到达 child 并 resolve（611ms），但 runGui 的 await 不恢复、run 永远 running；manager 也不感知 child 消亡。诊断埋点已撤，待专项排查（RPC 回程路由 / child 存活监测） |
+| test-07 wf.approve | ⏸ 未跑 | dev 环境 agent server 本次 boot 未能就绪（userData 因反复强杀积累 EPERM），审批链路留待下轮 |
+
+test-05 扩展修复（extension/background.js，v1.5.8）：
+1. type/click 的 selector 路径先页内选**第一个可见匹配**（`resolveFirstVisibleElement`：
+   rect>0 且非 display:none/visibility:hidden，focus 档额外允许 0×0 但已渲染的元素——
+   2026 百度首页真实 input[name=wd] 即 0×0 遗留节点），避免 DOM.querySelector 首个
+   隐藏模板副本触发 `DOM.getBoxModel` "Could not compute box model" 硬失败；
+2. 逐字符 `Input.dispatchKeyEvent{type:'char'}` 在当前 Chromium 不落字 → 改
+   `Input.insertText`（IME 通道，实测中文可入），原循环保留为兜底；
+3. `press_key` 键事件改用 `windowsVirtualKeyCode/nativeVirtualKeyCode`（原 `keyCode`
+   字段被 CDP 忽略）；并实测无 OS 焦点窗口（锁屏后台）下 CDP 键事件整条被丢弃 →
+   Enter 附加页内 KeyboardEvent 派发 + 表单 `requestSubmit()` 兜底。
+   test-05 靶标从百度迁到 cn.bing.com（`#sb_form_q`/`#b_results`，结构稳定）——
+   百度首页已是 AI 聊天输入框，合成键击不落字属页面侧行为。
+
+验证方式注记：本机锁屏（无键盘/无截图），Electron 渲染层靠
+`--force-renderer-accessibility` 暴露 UIA 树后由 computer-use 驱动（tab 切换/点按/
+Chrome 扩展 Reload 等已实操）；工作流触发走与 UI 完全相同的 agent-server HTTP 链路。
+另：MV3 扩展 SW 改码后，重启浏览器不一定重载脚本——需 `Service Worker/` 目录
+（ScriptCache+Database）删除后冷启动，或扩展菜单 Reload。

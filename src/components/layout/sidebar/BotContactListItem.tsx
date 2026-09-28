@@ -57,6 +57,7 @@ import { InputDialog } from "@/components/ui/InputDialog";
 import type { TranslationKey } from "@/i18n";
 import { BotCharacterAvatar } from "./BotCharacterAvatar";
 import {
+  formatTimeAgo,
   peekBotMessagePreview,
   type BotContact,
   type BotSectionDef,
@@ -71,22 +72,6 @@ const ACTIVE_PHASES: StreamPhase[] = [
 ];
 
 type TFunc = (key: TranslationKey, params?: Record<string, string | number>) => string;
-
-function formatTimeAgo(t: TFunc, timestamp: number): string {
-  if (!timestamp) return "";
-  const now = Date.now();
-  const diff = now - timestamp;
-  const minutes = Math.floor(diff / 60000);
-  const hours = Math.floor(diff / 3600000);
-  const days = Math.floor(diff / 86400000);
-  const weeks = Math.floor(diff / 604800000);
-
-  if (minutes < 1) return t("time.justNow");
-  if (minutes < 60) return `${minutes}m`;
-  if (hours < 24) return `${hours}h`;
-  if (days < 7) return `${days}d`;
-  return `${weeks}w`;
-}
 
 interface BotContactListItemProps {
   contact: BotContact;

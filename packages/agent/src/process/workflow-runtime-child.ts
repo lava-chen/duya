@@ -206,10 +206,13 @@ export async function runWorkflowRuntimeChild(
           }
         | undefined;
       if (m?.type === 'computer-use:execute:response' && typeof m.requestId === 'string') {
-        const resolve = pendingComputerUse.get(m.requestId);
-        if (resolve) {
-          pendingComputerUse.delete(m.requestId);
-          resolve({ success: m.success === true, data: m.data, error: m.error });
+        // Do NOT delete here: settle() resolves only when its own delete
+        // wins, so pre-deleting made the real resolve unreachable — every
+        // computer-use RPC in this child hung until its (also-losing)
+        // timeout, wedging gui nodes forever.
+        const settle = pendingComputerUse.get(m.requestId);
+        if (settle) {
+          settle({ success: m.success === true, data: m.data, error: m.error });
         }
       }
     });

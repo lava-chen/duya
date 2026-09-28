@@ -160,3 +160,36 @@ export async function getGitReviewScopedDiff(cwd: string, scope: ReviewScopePara
 export async function getGitCommits(cwd: string, count?: number): Promise<GitListCommitsResult> {
   return window.electronAPI?.git?.listCommits(cwd, count) ?? { commits: [] };
 }
+
+// ── Branch and repo-state helpers (plan 308 Phase 2) ───────────────
+
+export interface GitBranchRef {
+  name: string;
+  head: string;
+  current?: boolean;
+  remote?: string;
+}
+
+export interface GitListBranchesResult {
+  isGitRepo: boolean;
+  locals: GitBranchRef[];
+  remotes: GitBranchRef[];
+}
+
+export interface GitRepositoryState {
+  isGitRepo: boolean;
+  branch?: string;
+  head?: string;
+  dirty?: number;
+}
+
+/** Empty/default state for a non-repo or error path. */
+export const EMPTY_REPO_STATE: GitRepositoryState = { isGitRepo: false };
+
+export async function getGitBranches(cwd: string): Promise<GitListBranchesResult> {
+  return window.electronAPI?.git?.listBranches(cwd) ?? { isGitRepo: false, locals: [], remotes: [] };
+}
+
+export async function getGitRepoState(cwd: string): Promise<GitRepositoryState> {
+  return window.electronAPI?.git?.repoState(cwd) ?? { isGitRepo: false };
+}

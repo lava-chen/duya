@@ -160,60 +160,123 @@
   background: var(--sidebar-bg);
 }
 
-/* Spacer for sidebar width */
-.titlebar-spacer {
-  width: 260px;
+/* Drag filler after the menu bar — everything not a control stays draggable. */
+.titlebar-drag-fill {
+  flex: 1;
+  align-self: stretch;
+}
+
+/* Brand chip doubles as the sidebar rail toggle: hovering swaps the app icon
+   for the rail-toggle icon (ZCode desktop behavior). The chip is centered on
+   the collapsed rail's icon axis — rail width 56px with 34px buttons puts
+   the icon column center at 28px, so a 26px chip starts at 15px — keeping it
+   aligned with the icon column underneath in both sidebar states. */
+.titlebar-brand {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  margin-left: 15px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-brand .titlebar-logo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 7px;
+  object-fit: cover;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  opacity: 1;
+  transition: opacity 0.12s ease;
+}
+
+.titlebar-brand .titlebar-brand-toggle {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.titlebar-brand:hover .titlebar-logo,
+.titlebar-brand:focus-visible .titlebar-logo {
+  opacity: 0;
+}
+
+.titlebar-brand:hover .titlebar-brand-toggle,
+.titlebar-brand:focus-visible .titlebar-brand-toggle {
+  opacity: 1;
+}
+
+/* Title bar icon buttons: back/forward navigation. */
+.titlebar-nav-btn {
+  width: 30px;
+  height: 30px;
+  margin-left: 2px;
+  border: none;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
   flex-shrink: 0;
 }
 
-/* Title bar brand (logo + text) */
-.titlebar-brand {
-  display: flex;
-  align-items: flex-end;
-  gap: 0.5rem;
-  padding-left: 1.6rem;
-  padding-bottom: 4px;
-  -webkit-app-region: no-drag;
-  height: 100%;
-}
-
-/* macOS: reserve space for traffic lights (close/minimize/maximize buttons) */
-.titlebar-drag-region.is-mac .titlebar-brand {
-  padding-left: 80px;
-}
-
-/* Windows: keep original padding */
-.titlebar-drag-region.is-win .titlebar-brand {
-  padding-left: 1.6rem;
-}
-
-.titlebar-logo {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  object-fit: cover;
-}
-
-.titlebar-brand-text {
-  font-family: "Windsor", "Georgia", "Times New Roman", serif;
-  font-size: 1.6rem;
-  font-weight: 700;
+.titlebar-nav-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
   color: var(--text);
-  letter-spacing: 0.02em;
-  line-height: 1;
-  display: block;
 }
 
-/* Title bar content area - aligns with app-main */
-.titlebar-content-area {
-  flex: 1;
+.titlebar-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Native-style menu bar (文件 / 编辑 / 视图 / 帮助). Each item hosts a
+   DropdownMenu portal; the bar itself must not drag the window. */
+.titlebar-menubar {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  pointer-events: none;
-  padding-left: 0;
-  padding-right: 1rem;
+  gap: 2px;
+  margin-left: 6px;
+  height: 100%;
+  -webkit-app-region: no-drag;
 }
+
+.titlebar-menubar-item {
+  height: 26px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.titlebar-menubar-item:hover,
+.titlebar-menubar-item.active {
+  background: var(--surface-hover);
+}
+
 
 .titlebar-thread-title {
   font-size: 0.85rem;

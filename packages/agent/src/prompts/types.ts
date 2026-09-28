@@ -231,11 +231,11 @@ export interface PromptContext {
   // Plan 550 1d-rest (environment section) — populated by the
   // `environment` preBuildHook so the dynamic/environment.hbs template
   // can render async + non-deterministic fields (git repo detection,
-  // wall-clock snapshot, marketing-name / cutoff lookup) synchronously.
+  // marketing-name / cutoff lookup) synchronously. The wall-clock
+  // snapshot (`nowMs`) moved to the per-request turn-time reminder
+  // (`agent/turn-time-reminder.ts`).
   /** Result of async `fs.access(<cwd>/.git)` — null when cwd is empty or the check threw. */
   isGitRepo?: boolean | null;
-  /** Wall-clock snapshot in ms. Captured once per `buildSystemPrompt` so the cache entry stays stable. */
-  nowMs?: number;
   /** OS uname -sr equivalent. Windows uses `osVersion() osRelease()`; others use `osType() osRelease()`. */
   unameSr?: string;
   /** Best-effort marketing name for the model (claude / openai / gemini / etc.). `null` when the model id has no recognised prefix. */

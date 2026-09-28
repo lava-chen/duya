@@ -389,21 +389,55 @@ describe('RecorderService — app_focus enumerate snapshot (plan 562 phase 5)', 
     await service.stop();
   });
 
-  it('suppresses the callback for empty trees and self/blocked apps', async () => {
+  it('clears the overlay on stop and ignores a snapshot that resolves afterward', async () => {
+    let resolveEnumerate!: (result: UiaEnumerateResult) => void;
+    const enumerate = vi.fn(() => new Promise<UiaEnumerateResult>((resolve) => {
+      resolveEnumerate = resolve;
+    }));
+    const onSnapshot = vi.fn();
+    const onClear = vi.fn();
+    const service = makeService({
+      probe: {
+        at: async () => ({ source: 'none' }),
+        enumerate,
+      },
+      onEnumerateSnapshot: onSnapshot,
+      onEnumerateClear: onClear,
+    });
+
+    await service.start();
+    tracker().onChange(null, CHROME);
+    expect(enumerate).toHaveBeenCalledWith(CHROME.hwnd, CHROME.title);
+    await service.stop();
+    expect(onClear).toHaveBeenCalled();
+
+    resolveEnumerate({
+      elements: [{ name: 'OK', controlType: 'Button', rect: { x: 1, y: 2, w: 3, h: 4 }, interactive: true, source: 'uia-probe' }],
+      truncated: false,
+      reason: null,
+    });
+    await new Promise((r) => setImmediate(r));
+    expect(onSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('clears on empty trees and filtered apps', async () => {
     const enumerate = vi.fn(async () => ({ elements: [], truncated: false, reason: null }));
     const onSnapshot = vi.fn();
+    const onClear = vi.fn();
     const service = makeService({
       probe: {
         at: async () => ({ source: 'none' }),
         enumerate: () => enumerate(),
       },
       onEnumerateSnapshot: onSnapshot,
+      onEnumerateClear: onClear,
     });
     await service.start();
     // Empty tree → no callback.
     tracker().onChange(null, CHROME);
     await new Promise((r) => setImmediate(r));
     expect(onSnapshot).not.toHaveBeenCalled();
+    expect(onClear).toHaveBeenCalled();
     // Self window → enumerate not even attempted.
     const SELF = { hwnd: 3, pid: process.pid, processName: 'DUYA', title: 'duya' };
     tracker().onChange(CHROME, SELF);
@@ -414,6 +448,7 @@ describe('RecorderService — app_focus enumerate snapshot (plan 562 phase 5)', 
     tracker().onChange(SELF, KEEPASS);
     await new Promise((r) => setImmediate(r));
     expect(enumerate).toHaveBeenCalledTimes(1);
+    expect(onClear).toHaveBeenCalledTimes(5);
     await service.stop();
   });
 

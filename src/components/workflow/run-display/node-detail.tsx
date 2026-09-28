@@ -27,6 +27,7 @@ import {
 import { useTranslation } from '@/hooks/useTranslation';
 import { ImagePreview } from '@/components/chat/preview/ImagePreview';
 import { rewriteMediaSrc } from '@/components/chat/markdownComponents';
+import { ReadOnlySessionChat } from '@/components/chat/ReadOnlySessionChat';
 import { useConversationStore } from '@/stores/conversation-store';
 import {
   openWorkflowArtifactIPC,
@@ -99,9 +100,11 @@ function MetaChips({ chips }: { chips: Array<string | null | undefined> }) {
   const list = chips.filter((c): c is string => Boolean(c));
   if (list.length === 0) return null;
   return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] tabular-nums text-[var(--muted)]">
-      {list.map((chip) => (
-        <span key={chip}>{chip}</span>
+    <div className="flex flex-wrap items-center gap-1.5 border-t border-[var(--border)] pt-2 text-[10px] tabular-nums text-[var(--muted)]">
+      {list.map((chip, index) => (
+        <span key={`${index}-${chip}`} className="rounded-md bg-[var(--surface-hover)] px-1.5 py-0.5">
+          {chip}
+        </span>
       ))}
     </div>
   );
@@ -236,6 +239,9 @@ function ToolNodeBody({ record }: { record: WorkflowJournalRecord }) {
           {record.inputSummary ?? record.action ?? record.nodeId}
         </pre>
       </Section>
+      <Section label={t('workflow.node.output' as never)}>
+        <OutputBlock result={record.result} />
+      </Section>
       <MetaChips
         chips={[
           typeof record.exitCode === 'number' ? `${t('workflow.step.exitCode' as never)} ${record.exitCode}` : null,
@@ -243,9 +249,6 @@ function ToolNodeBody({ record }: { record: WorkflowJournalRecord }) {
           formatStepSize(record.outputSize),
         ]}
       />
-      <Section label={t('workflow.node.output' as never)}>
-        <OutputBlock result={record.result} />
-      </Section>
     </>
   );
 }
@@ -257,7 +260,6 @@ function AgentNodeBody({ record }: { record: WorkflowJournalRecord }) {
     : null;
   return (
     <>
-      <MetaChips chips={[tokens, formatStepDuration(record.durationMs)]} />
       {record.childSessionId && (
         <div className="flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1.5">
           <ChatCircleIcon className="shrink-0 text-[var(--accent)]" size={14} />
@@ -278,9 +280,11 @@ function AgentNodeBody({ record }: { record: WorkflowJournalRecord }) {
           </button>
         </div>
       )}
+      {record.childSessionId && <ReadOnlySessionChat sessionId={record.childSessionId} />}
       <Section label={t('workflow.node.output' as never)}>
         <OutputBlock result={record.result} />
       </Section>
+      <MetaChips chips={[tokens, formatStepDuration(record.durationMs)]} />
     </>
   );
 }
@@ -312,11 +316,9 @@ function DecisionNodeBody({ record }: { record: WorkflowJournalRecord }) {
           <OutputBlock result={res.candidates} />
         </Section>
       )}
-      {res.output !== undefined && res.output !== null && (
-        <Section label={t('workflow.node.decisionOutput' as never)}>
-          <OutputBlock result={res.output} />
-        </Section>
-      )}
+      <Section label={t('workflow.node.output' as never)}>
+        <OutputBlock result={record.result} />
+      </Section>
       <MetaChips
         chips={[
           typeof res.status === 'string' ? res.status : null,
@@ -324,9 +326,6 @@ function DecisionNodeBody({ record }: { record: WorkflowJournalRecord }) {
           formatStepDuration(record.durationMs),
         ]}
       />
-      <Section label={t('workflow.node.output' as never)}>
-        <OutputBlock result={record.result} />
-      </Section>
     </>
   );
 }
@@ -341,10 +340,13 @@ function HumanNodeBody({ record }: { record: WorkflowJournalRecord }) {
 
   if (record.status === 'waiting' || decision === null) {
     return (
-      <div className="flex items-center gap-2 text-[11px] text-[var(--warning)]">
-        <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-[var(--warning)]" />
-        {t('workflow.step.awaitingHuman' as never)}
-      </div>
+      <>
+        <div className="flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1.5 text-[11px] text-[var(--warning)]">
+          <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-[var(--warning)]" />
+          {t('workflow.step.awaitingHuman' as never)}
+        </div>
+        <MetaChips chips={[formatStepDuration(record.durationMs)]} />
+      </>
     );
   }
   const icon =
@@ -361,7 +363,7 @@ function HumanNodeBody({ record }: { record: WorkflowJournalRecord }) {
         : 'workflow.node.humanTimeout';
   return (
     <>
-      <div className="flex items-center gap-2 text-[11px] text-[var(--text)]" data-testid="workflow-node-human-decision">
+      <div className="flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1.5 text-[11px] text-[var(--text)]" data-testid="workflow-node-human-decision">
         {icon}
         {t(labelKey as never)}
         {res.escalated === true && (
@@ -379,11 +381,11 @@ function GuiNodeBody({ record, refs }: { record: WorkflowJournalRecord; refs: st
   const { t } = useTranslation();
   return (
     <>
-      <MetaChips chips={[record.action, formatStepDuration(record.durationMs), formatStepSize(record.outputSize)]} />
       <ScreenshotGallery refs={refs} emptyHint={t('workflow.node.noScreenshots' as never)} />
       <Section label={t('workflow.node.output' as never)}>
         <OutputBlock result={record.result} />
       </Section>
+      <MetaChips chips={[record.action, formatStepDuration(record.durationMs), formatStepSize(record.outputSize)]} />
     </>
   );
 }
@@ -410,21 +412,34 @@ function BrowserNodeBody({ record, refs }: { record: WorkflowJournalRecord; refs
           </span>
         </Section>
       )}
-      {title && (
-        <MetaChips chips={[title, steps !== null ? `${steps} ${t('workflow.node.browserSteps' as never)}` : null]} />
-      )}
-      <MetaChips chips={[formatStepDuration(record.durationMs), formatStepSize(record.outputSize)]} />
-      <ScreenshotGallery refs={shotRefs} emptyHint={t('workflow.node.noScreenshots' as never)} />
       <Section label={t('workflow.node.output' as never)}>
         <OutputBlock result={record.result} />
       </Section>
+      <ScreenshotGallery refs={shotRefs} emptyHint={t('workflow.node.noScreenshots' as never)} />
+      <MetaChips
+        chips={[
+          title,
+          steps !== null ? `${steps} ${t('workflow.node.browserSteps' as never)}` : null,
+          formatStepDuration(record.durationMs),
+          formatStepSize(record.outputSize),
+        ]}
+      />
     </>
   );
 }
 
 function NoopNodeBody({ record }: { record: WorkflowJournalRecord }) {
+  const { t } = useTranslation();
   return (
-    <p className="text-[11px] text-[var(--muted)]">{record.inputSummary ?? record.nodeId}</p>
+    <>
+      <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1.5 text-[11px] text-[var(--muted)]">
+        {record.inputSummary ?? record.nodeId}
+      </div>
+      <Section label={t('workflow.node.output' as never)}>
+        <OutputBlock result={record.result} />
+      </Section>
+      <MetaChips chips={[formatStepDuration(record.durationMs), formatStepSize(record.outputSize)]} />
+    </>
   );
 }
 

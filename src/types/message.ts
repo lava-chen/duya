@@ -79,6 +79,37 @@ export interface RoomPostMeta {
   clientMsgId?: string;
 }
 
+/**
+ * Channel send/receive marker payload (parsed from channel_msg_meta /
+ * metadata.channelMsg). One row per channel message in/out of the bot; the
+ * bot-direct view collapses consecutive rows into "与 XX 收发消息" chips.
+ */
+export interface ChannelActivityMeta {
+  direction: 'in' | 'out';
+  /** Channel address token, `platform:chat` (e.g. "telegram:12345"). */
+  address: string;
+  platform: string;
+  chat: string;
+  /** Inbound only: display name/username of the external sender. */
+  senderName?: string;
+  /** Message body (inbound envelope text / outbound sent content). */
+  text?: string;
+  /** Outbound attachment URL when the send carried media. */
+  url?: string;
+}
+
+/**
+ * Routine lifecycle marker payload (parsed from routine_meta /
+ * metadata.routine). One row per routine create/update/pause/resume/delete
+ * affecting the bot; rendered as a centered "已创建 routine X" chip.
+ */
+export interface RoutineActivityMeta {
+  action: 'created' | 'updated' | 'deleted' | 'paused' | 'resumed';
+  /** Routine display name at the time of the mutation. */
+  name: string;
+  routineId?: string;
+}
+
 export interface ContentBlock {
   type: string;
   [key: string]: unknown;
@@ -140,6 +171,12 @@ export interface Message {
 
   /** Plan 477 P4.4: bot→bot DM marker payload for marker card rendering. */
   agentDmMeta?: AgentDmCardMeta | null;
+
+  /** Channel send/receive marker payload for chip rendering. */
+  channelMsgMeta?: ChannelActivityMeta | null;
+
+  /** Routine lifecycle marker payload for chip rendering. */
+  routineMeta?: RoutineActivityMeta | null;
 
   /** Plan 478: shared-room post payload for room view rendering. */
   groupPostMeta?: RoomPostMeta | null;

@@ -16,7 +16,7 @@
  * contract with the header.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { useTranslation } from '@/hooks/useTranslation';
 import { IconRefresh } from '@/components/icons';
@@ -25,6 +25,12 @@ import { PageFrame, PageHeader, PageTabs } from '@/components/ui/page';
 import { RecorderView } from '@/components/recorder/RecorderView';
 import { WorkflowLibraryView } from './WorkflowLibraryView';
 import { WorkflowDetailView } from './WorkflowDetailView';
+import { WorkflowRunDetailView } from './WorkflowRunDetailView';
+
+export interface WorkflowRunNavigationRequest {
+  runId: string;
+  nodeId?: string;
+}
 
 export interface WorkflowPageProps {
   projectDir?: string;
@@ -32,9 +38,12 @@ export interface WorkflowPageProps {
   onCreateViaConversation?: (scope: 'global' | 'project', projectDir?: string) => void;
   /** Amend a saved workflow through a chat session (carries the user's own brief). */
   onAmendInChat?: (name: string, scope: 'global' | 'project', requirements: string) => void;
+  runRequest?: WorkflowRunNavigationRequest | null;
+  onRunRequestConsumed?: () => void;
 }
 
-type DetailState = { name: string; scope: 'global' | 'project' } | null;
+type DetailTab = 'definition' | 'history';
+type DetailState = { name: string; scope: 'global' | 'project'; tab: DetailTab } | null;
 type TabId = 'definitions' | 'recordings';
 
 export function WorkflowPage({
@@ -42,19 +51,45 @@ export function WorkflowPage({
   projectName,
   onCreateViaConversation,
   onAmendInChat,
+  runRequest,
+  onRunRequestConsumed,
 }: WorkflowPageProps) {
   const { t } = useTranslation();
   const [detail, setDetail] = useState<DetailState>(null);
   const [tab, setTab] = useState<TabId>('definitions');
   /** Bumped by the header refresh — remounts the active tab body. */
   const [reloadKey, setReloadKey] = useState(0);
+  const [openedRun, setOpenedRun] = useState<WorkflowRunNavigationRequest | null>(null);
+
+  useEffect(() => {
+    if (!runRequest) return;
+    setOpenedRun(runRequest);
+    onRunRequestConsumed?.();
+  }, [runRequest?.runId, runRequest?.nodeId, onRunRequestConsumed]);
+
+  if (openedRun) {
+    return (
+      <WorkflowRunDetailView
+        key={`${openedRun.runId}:${openedRun.nodeId ?? ''}`}
+        runId={openedRun.runId}
+        focusNodeId={openedRun.nodeId}
+        onBack={() => setOpenedRun(null)}
+      />
+    );
+  }
 
   if (detail) {
     return (
       <WorkflowDetailView
+        key={detail.name}
         name={detail.name}
         scope={detail.scope}
         projectDir={projectDir}
+        initialTab={detail.tab}
+        onTabChange={(nextTab) => {
+          setDetail((current) => current ? { ...current, tab: nextTab } : current);
+        }}
+        onOpenRun={(runId, nodeId) => setOpenedRun({ runId, ...(nodeId ? { nodeId } : {}) })}
         onBack={() => setDetail(null)}
         onAmendInChat={onAmendInChat}
       />
@@ -94,7 +129,7 @@ export function WorkflowPage({
           projectDir={projectDir}
           projectName={projectName}
           onCreateViaConversation={onCreateViaConversation}
-          onOpenDetail={(name, scope) => setDetail({ name, scope })}
+          onOpenDetail={(name, scope) => setDetail({ name, scope, tab: 'definition' })}
         />
       ) : (
         <RecorderView

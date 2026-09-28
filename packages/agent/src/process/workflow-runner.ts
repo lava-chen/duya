@@ -3,8 +3,8 @@
  *
  * This is the production swap-in for the plan 552 §14 synthetic SSE bridge:
  * a `.dwf.ts` saved workflow (frontmatter + TS script) is resolved from the
- * project/global scopes, a real run row is created in core-db (via the
- * worker db bridge), and the script body is compiled + executed inside the
+ * project/global scopes, a real run record is persisted through the core-db
+ * worker bridge, and the script body is compiled + executed inside the
  * dwf vm sandbox (modes/workflow/dwf/runtime). Every journal record rides
  * the same worker→router→SSE channel (`chat:workflow_run`) as before —
  * `emit` stays the stable port.
@@ -464,6 +464,13 @@ function buildHostPorts(
 ): DwfHostPorts {
   const registry = createBuiltinRegistry();
   const ctx = buildToolUseContext(deps, registry, cwd);
+  // Per-call identity: every wf.tool / wf.agent call is its own tool use, so
+  // each call passes a ctx clone carrying a fresh toolUseId. Tools key
+  // per-call state off it (bash task id + output file, result ids, approval
+  // correlation) — with the run-scoped constant id, concurrent map fan-out
+  // bash calls shared one task/output file and read each other's output.
+  // One shared appState / abortController remains run-scoped by design.
+  const executeToolCall = registry.execute.bind(registry);
   // One extension session tab per wf.browser call (plan 564 D2).
   let browserSeq = 0;
 
@@ -481,7 +488,12 @@ function buildHostPorts(
     },
 
     async runTool(tool, input) {
-      const res = await registry.execute(tool, (input ?? {}) as Record<string, unknown>, cwd, ctx);
+      const res = await executeToolCall(
+        tool,
+        (input ?? {}) as Record<string, unknown>,
+        cwd,
+        { ...ctx, toolUseId: randomUUID() },
+      );
       if (!res) {
         return { ok: false, error: `unknown tool "${tool}"` };
       }
@@ -503,7 +515,7 @@ function buildHostPorts(
       // Foreground sub-agent through the SubagentTool executor: sub-session
       // creation (plan 504 lineage), renderer progress events and session
       // status bookkeeping all come along for free.
-      const res = await registry.execute(
+      const res = await executeToolCall(
         SUBAGENT_TOOL_NAME,
         {
           prompt: spec.prompt,
@@ -512,7 +524,7 @@ function buildHostPorts(
           ...(spec.model !== undefined ? { model: spec.model } : {}),
         },
         cwd,
-        ctx,
+        { ...ctx, toolUseId: randomUUID() },
       );
       if (!res) {
         return { ok: false, error: `subagent tool "${SUBAGENT_TOOL_NAME}" not registered` };
@@ -567,7 +579,6 @@ function buildHostPorts(
       } catch {
         // Focus is advisory; the on_stuck ladder owns real failures.
       }
-
       const ports: GuiRunPorts = {
         backend: createIpcGuiBackend(deps.computerUseRequest),
         artifacts: deps.guiArtifactStore ?? new MemoryArtifactStore(),

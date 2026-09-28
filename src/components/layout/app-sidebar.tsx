@@ -62,6 +62,7 @@ import { CreateProjectDialog } from "@/components/ui/CreateProjectDialog";
 import { useBotContacts } from "./sidebar/use-bot-contacts";
 import { BotContactListItem } from "./sidebar/BotContactListItem";
 import { RoomContactListItem } from "./sidebar/RoomContactListItem";
+import { RailBotAvatar } from "./sidebar/RailBotAvatar";
 import {
   resolveBotOpenThreadId,
   deriveBotPlaceholderThreadId,
@@ -75,6 +76,9 @@ import { EditBotDialog } from "./EditBotDialog";
 import { createConfigAgent, deleteConfigAgent } from "@/lib/agent-profile-ipc";
 
 type ThemeMode = "light" | "dark";
+
+/** Sidebar top-level partition (工作 / Bots). */
+type SidebarTab = "work" | "bots";
 
 // Type-safe label keys
 type NavLabelKey = 'nav.automation' | 'nav.workflow' | 'nav.conductor' | 'nav.extensions' | 'nav.projects';
@@ -134,10 +138,14 @@ const settingsNavGroups: {
 interface AppSidebarProps {
   isSettingsPage?: boolean;
   style?: React.CSSProperties;
+  /** Collapsed to the icon-only rail (title-bar toggle). */
+  collapsed?: boolean;
+  /** Expand back to the full sidebar (rail items call it before acting). */
+  onExpand?: () => void;
 }
 
 export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
-  function AppSidebar({ isSettingsPage = false, style }, ref) {
+  function AppSidebar({ isSettingsPage = false, collapsed = false, onExpand, style }, ref) {
     const { t } = useTranslation();
     const { settings, loading, error, save } = useSettings();
     const [isLoading, setIsLoading] = useState(true);
@@ -146,7 +154,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     const [isCreateProjectDialogOpen, setIsCreateProjectDialogOpen] = useState(false);
     const [editBotContact, setEditBotContact] = useState<BotContact | null>(null);
     // Sidebar top tab switcher (work / bots) — defaults to bots.
-    const [sidebarTab, setSidebarTab] = useState<"work" | "bots">("bots");
+    const [sidebarTab, setSidebarTab] = useState<SidebarTab>("bots");
     const {
       pinned: pinnedBots,
       sections: botSectionGroups,
@@ -258,6 +266,18 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     }, [reloadBots]);
     // Plan 478: shared-room edit opens the settings panel (rooms live in the
     // Bots section as their own "群聊" group).
+    // Title-bar 文件 menu (and other global entry points) open the unified
+    // create-project dialog through the `duya:new-project` window event —
+    // the dialog itself lives here in the sidebar.
+    const [menuCreateProject, setMenuCreateProject] = useState(false);
+    useEffect(() => {
+      const handler = () => {
+        setMenuCreateProject(true);
+        onExpand?.();
+      };
+      window.addEventListener("duya:new-project", handler);
+      return () => window.removeEventListener("duya:new-project", handler);
+    }, [onExpand]);
     // Plan 471 v8: in "在一个列表中" (singleList) mode the flat session
     // list reveals incrementally (20 at a time — user preference, bigger
     // batch than the 5-per-project-group because it spans ALL projects
@@ -630,6 +650,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
      */
     const handleCreateProjectConfirm = async (input: { name: string; paths: string[]; icon: string | null; color: string | null }) => {
       setIsCreateProjectDialogOpen(false);
+      setMenuCreateProject(false);
       const projectName = input.name.trim();
       if (!projectName) return;
       try {
@@ -931,6 +952,151 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       setSettingsTab(tabId);
       enterSettings();
     };
+
+    // Collapsed sidebar: icon-only rail (toggled from the title bar). The
+    // rail mirrors the sidebar's own structure: the top bar's create "+"
+    // and search buttons first, then the CURRENT tab's content — work tab
+    // shows the primary nav, bots tab shows every bot's avatar (tap to open
+    // its chat; badges for errors/running, like the roster rows). Icons act
+    // in place — expansion stays with the brand-chip toggle. plan 571
+    // replaces this rail with the tab shell's dedicated narrow rail.
+    if (collapsed) {
+      const isBotsTab = sidebarTab === "bots";
+      const railNavClick = (view: ViewType) => {
+        setSidebarTab("work");
+        setCurrentView(view);
+        if (view === 'conductor') {
+          openOrActivatePage('conductor');
+        }
+      };
+      // Same roster order as the Bots tab: pinned → sectioned → unassigned.
+      const railBots = [
+        ...pinnedBots,
+        ...botSectionGroups.flatMap((group) => group.contacts),
+        ...unassignedBots,
+      ];
+      return (
+        <aside className="app-sidebar app-sidebar-rail" ref={ref} style={style}>
+          <DropdownMenu
+            trigger={
+              <button
+                type="button"
+                className="rail-btn"
+                aria-label={t("sidebar.create.title")}
+                title={t("sidebar.create.title")}
+              >
+                <PlusIcon size={17} />
+              </button>
+            }
+            items={isBotsTab
+              ? [
+                  {
+                    kind: "action" as const,
+                    id: "create-bot",
+                    label: t("bot.create.title"),
+                    iconLeft: <PlusIcon size={14} />,
+                    onSelect: () => void handleQuickCreateBot(),
+                  },
+                  {
+                    kind: "action" as const,
+                    id: "create-room",
+                    label: t("room.create.title"),
+                    iconLeft: <PlusIcon size={14} />,
+                    onSelect: () => void handleQuickCreateRoom(),
+                  },
+                ]
+              : [
+                  {
+                    kind: "action" as const,
+                    id: "create-chat",
+                    label: t("nav.newChat"),
+                    iconLeft: <ChatCirclePlusIcon size={14} />,
+                    onSelect: () => startNewChat(),
+                  },
+                  {
+                    kind: "action" as const,
+                    id: "create-project",
+                    label: t("project.newProject"),
+                    iconLeft: <FolderIcon size={14} />,
+                    onSelect: () => handleNewBlankProject(),
+                  },
+                ]}
+          />
+          <button
+            type="button"
+            className="rail-btn"
+            aria-label={t("sidebar.search.placeholder")}
+            title={t("sidebar.search.placeholder")}
+            onClick={() => useSearchPaletteStore.getState().setOpen(true)}
+          >
+            <SearchIcon size={17} />
+          </button>
+          <div className="rail-divider" />
+          {isBotsTab ? (
+            <div className="rail-bot-list">
+              {railBots.map((contact) => {
+                const threadId = resolveBotOpenThreadId(contact, threads);
+                return (
+                  <RailBotAvatar
+                    key={contact.agentId}
+                    contact={contact}
+                    onOpen={() => {
+                      if (!threadId) return;
+                      setActiveThread(threadId);
+                      setCurrentView("chat");
+                    }}
+                  />
+                );
+              })}
+            </div>
+          ) : (
+            mainNavItems.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.view}
+                  type="button"
+                  className={`rail-btn${currentView === item.view ? " active" : ""}`}
+                  title={t(item.labelKey)}
+                  aria-label={t(item.labelKey)}
+                  onClick={() => railNavClick(item.view)}
+                >
+                  <Icon size={17} />
+                </button>
+              );
+            })
+          )}
+          <div className="rail-spacer" />
+          <button
+            type="button"
+            className={`rail-btn${currentView === 'extensions' ? " active" : ""}`}
+            title={t('nav.extensions')}
+            aria-label={t('nav.extensions')}
+            onClick={() => setCurrentView('extensions')}
+          >
+            <PlugIcon size={17} />
+          </button>
+          <button
+            type="button"
+            className="rail-btn"
+            title={t('common.settings')}
+            aria-label={t('common.settings')}
+            onClick={() => enterSettings()}
+          >
+            <GearSixIcon size={17} />
+          </button>
+          <button
+            type="button"
+            className="rail-btn"
+            title={t('sidebar.toggleThemeAria')}
+            aria-label={t('sidebar.toggleThemeAria')}
+            onClick={toggleTheme}
+          >
+            {resolvedTheme === "dark" ? <SunIcon size={17} /> : <MoonStarsIcon size={17} />}
+          </button>
+        </aside>
+      );
+    }
 
     // Settings mode sidebar
     if (currentView === 'settings') {
@@ -1600,8 +1766,11 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         </div>
 
         <CreateProjectDialog
-          isOpen={isCreateProjectDialogOpen}
-          onCancel={() => setIsCreateProjectDialogOpen(false)}
+          isOpen={isCreateProjectDialogOpen || menuCreateProject}
+          onCancel={() => {
+            setIsCreateProjectDialogOpen(false);
+            setMenuCreateProject(false);
+          }}
           onConfirm={handleCreateProjectConfirm}
         />
 

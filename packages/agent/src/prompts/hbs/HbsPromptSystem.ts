@@ -234,7 +234,7 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
     // `env_items` string[] via the same helper the legacy TS path uses,
     // so the .hbs body's `{{#each env_items}}` produces a byte-identical
     // render to `getEnvironmentSection`. The preBuildHook populates
-    // ctx.isGitRepo / ctx.nowMs / ctx.unameSr / ctx.marketingName /
+    // ctx.isGitRepo / ctx.unameSr / ctx.marketingName /
     // ctx.knowledgeCutoff; mapper always runs after preBuildHook so
     // those overrides are present in production. Tests inject them
     // directly when calling `renderStaticTemplate` for parity checks.

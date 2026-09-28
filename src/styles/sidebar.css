@@ -3,6 +3,141 @@
  * Do not edit the ordering of rules within this file; the entry file
  * imports domain files in cascade order.
  */
+/* Collapsed icon rail (title-bar sidebar toggle): icons only, fixed narrow
+   width set by app-shell. Icons act in place (view/tab/theme switches) —
+   expansion is the brand-chip toggle's job. */
+.app-sidebar.app-sidebar-rail {
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.6rem 0.4rem;
+}
+
+.app-sidebar-rail .rail-btn {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.app-sidebar-rail .rail-btn svg {
+  width: 17px !important;
+  height: 17px !important;
+}
+
+.app-sidebar-rail .rail-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.app-sidebar-rail .rail-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.app-sidebar-rail .rail-divider {
+  width: 24px;
+  height: 1px;
+  flex-shrink: 0;
+  background: var(--border);
+  margin: 0.2rem 0;
+}
+
+/* Bots-tab rail roster: every bot's avatar, scrollable like the tab list.
+   The scrollbar is hidden — the rail scrolls by wheel and should read as a
+   dense column of avatars, not a pane with a scrollbar. */
+.app-sidebar-rail .rail-bot-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.app-sidebar-rail .rail-bot-list::-webkit-scrollbar {
+  display: none;
+}
+
+.app-sidebar-rail .rail-bot {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 50%;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  cursor: pointer;
+}
+
+/* No circular hover fill: the avatar already reacts (bloub animates), and a
+   rounded highlight behind it read as a stray shadow on the rail. */
+
+/* Hover detail card (portaled to body, fixed next to the avatar).
+   Background uses the opaque command-menu token — `--surface` is
+   translucent under the glass theme and the card would show the chat
+   content bleeding through. */
+.rail-bot-card {
+  z-index: 1100;
+  width: 250px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--command-menu-bg);
+  border: 1px solid var(--command-menu-border, var(--border));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+  transform: translateY(-50%);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.rail-bot-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.rail-bot-card-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-bot-card-status {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.rail-bot-card-preview {
+  margin-top: 7px;
+  color: var(--muted);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.app-sidebar-rail .rail-spacer {
+  flex: 1;
+}
+
 /* Sidebar resize: no dedicated element — app-shell.tsx hit-tests the
    sidebar's right edge (±4px) directly, so the layout stays seamless. */
 

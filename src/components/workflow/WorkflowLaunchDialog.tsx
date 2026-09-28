@@ -42,6 +42,42 @@ const CUSTOM_DIR = '__custom__';
  */
 const LAUNCH_DIR_STORAGE_KEY = 'duya:workflow:launch-dirs:v1';
 
+/**
+ * Where the user last filled each workflow's args. Same philosophy as the dir
+ * memory above: "实参有记忆" — a successful launch keeps the raw field values
+ * per workflow name, so the next 实参窗 opens pre-filled with what actually
+ * ran instead of falling back to the declared defaults. localStorage is
+ * enough — UI preference, not run data.
+ */
+const LAUNCH_ARGS_STORAGE_KEY = 'duya:workflow:launch-args:v1';
+
+interface LaunchArgsMemory {
+  byName?: Record<string, Record<string, string>>;
+}
+
+function loadLaunchArgsMemory(): LaunchArgsMemory {
+  try {
+    const raw = window.localStorage.getItem(LAUNCH_ARGS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as LaunchArgsMemory;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveLaunchArgsMemory(workflowName: string, values: Record<string, string>): void {
+  try {
+    const memory = loadLaunchArgsMemory();
+    const next: LaunchArgsMemory = {
+      byName: { ...(memory.byName ?? {}), [workflowName]: values },
+    };
+    window.localStorage.setItem(LAUNCH_ARGS_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // Quota / private mode — the launch itself still proceeds.
+  }
+}
+
 interface LaunchDirMemory {
   last?: string;
   byName?: Record<string, string>;
@@ -159,11 +195,14 @@ function ArgInput({
 export function WorkflowLaunchDialog({
   entry,
   defaultProjectDir,
+  navigateOnLaunch = true,
   onClose,
   onLaunched,
 }: {
   entry: WorkflowLaunchDialogEntry;
   defaultProjectDir?: string;
+  /** Let the owning workflow page handle navigation without broadcasting a second route. */
+  navigateOnLaunch?: boolean;
   onClose: () => void;
   onLaunched?: (runId: string) => void;
 }) {
@@ -188,10 +227,18 @@ export function WorkflowLaunchDialog({
     );
   });
   const [customDir, setCustomDir] = useState(false);
+  // 实参预填顺序（"有记忆 + 有默认"）：
+  //   1. 这个 workflow 上次输入的值（输入即保存，见 handleArgChange）
+  //   2. 声明的默认值（decl.default）
+  //   3. boolean 落到 'false'，其余留空
   const [values, setValues] = useState<Record<string, string>>(() => {
+    const lastArgs = loadLaunchArgsMemory().byName?.[entry.name];
     const seed: Record<string, string> = {};
     for (const [name, decl] of Object.entries(entry.args ?? {})) {
-      if (decl.default !== undefined) {
+      const remembered = lastArgs?.[name];
+      if (remembered !== undefined && remembered !== '') {
+        seed[name] = remembered;
+      } else if (decl.default !== undefined) {
         seed[name] = decl.type === 'json' ? JSON.stringify(decl.default) : String(decl.default);
       } else if (decl.type === 'boolean') {
         seed[name] = 'false';
@@ -201,6 +248,22 @@ export function WorkflowLaunchDialog({
     }
     return seed;
   });
+
+  /**
+   * 输入即保存："正常输入体验" — 每次改动立刻落盘为该 workflow 的草稿，
+   * 下次打开实参窗直接预填。是否成功启动不影响保存（这是草稿，不是
+   * 运行记录）；清空输入也如实保存为空。
+   */
+  const handleArgChange = useCallback(
+    (name: string, v: string) => {
+      setValues((cur) => {
+        const next = { ...cur, [name]: v };
+        saveLaunchArgsMemory(entry.name, next);
+        return next;
+      });
+    },
+    [entry.name],
+  );
   const [error, setError] = useState<string | null>(null);
   const [launching, setLaunching] = useState(false);
   // Plan 568 (ZCode subagentModel parity): run-level agent model override.
@@ -279,17 +342,19 @@ export function WorkflowLaunchDialog({
       // Remember where this workflow was launched — the next 实参窗 for the
       // same workflow pre-fills it (and any dialog pre-fills the global last).
       saveLaunchDirMemory(entry.name, projectDir.trim());
-      // The run panel is keyed by runId, so the event is the whole handshake
-      // (plan 560 D5 — the panel then subscribes to the run's own SSE stream).
-      window.dispatchEvent(
-        new CustomEvent('duya:open-workflow-run-panel', { detail: { runId: res.runId } }),
-      );
-      onLaunched?.(res.runId);
       onClose();
+      onLaunched?.(res.runId);
+      // The runId is the canonical navigation key. Most callers broadcast the
+      // route event; an owning page can handle navigation through onLaunched.
+      if (navigateOnLaunch) {
+        window.dispatchEvent(
+          new CustomEvent('duya:open-workflow-run-panel', { detail: { runId: res.runId } }),
+        );
+      }
     } finally {
       setLaunching(false);
     }
-  }, [argEntries, values, projectDir, model, entry.name, entry.scope, onLaunched, onClose, t]);
+  }, [argEntries, values, projectDir, model, entry.name, entry.scope, navigateOnLaunch, onLaunched, onClose, t]);
 
   const scopeLabel =
     entry.scope === 'project'
@@ -305,7 +370,7 @@ export function WorkflowLaunchDialog({
       onClick={onClose}
     >
       <div
-        className="w-[440px] max-w-[90vw] rounded-lg border border-[var(--border)] bg-[var(--bg-canvas)] shadow-lg"
+        className="flex max-h-[85vh] w-[440px] max-w-[90vw] flex-col rounded-lg border border-[var(--border)] bg-[var(--bg-canvas)] shadow-lg"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header — glyph + mono name + scope badge, like the definition card. */}
@@ -334,7 +399,7 @@ export function WorkflowLaunchDialog({
           <p className="px-4 pt-2.5 text-xs leading-relaxed text-[var(--muted)]">{entry.description}</p>
         )}
 
-        <div className="flex flex-col gap-3 px-4 py-3 text-xs">
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3 text-xs">
           {/* Where the run executes — this is the agent nodes' workingDirectory. */}
           <div>
             <label className="block pb-1 text-[var(--text)]">{t('panel.workflow.launchRunIn')}</label>
@@ -400,7 +465,7 @@ export function WorkflowLaunchDialog({
                     <ArgInput
                       decl={decl}
                       value={values[name] ?? ''}
-                      onChange={(v) => setValues((cur) => ({ ...cur, [name]: v }))}
+                      onChange={(v) => handleArgChange(name, v)}
                     />
                     {decl.description && (
                       <span className="text-[10px] leading-relaxed text-[var(--muted)]">{decl.description}</span>

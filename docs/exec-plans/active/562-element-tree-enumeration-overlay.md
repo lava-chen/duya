@@ -1,7 +1,7 @@
 # Plan 562 — 元素全树枚举 + 真实坐标 SOM + 可视化 Overlay
 
-> **Status**: Windows 侧 Phase 0–2 完成、Phase 3/5 代码+单测落地（2026-09-22，全部未提交）；
-> Chrome enumerate 退化观察、overlay Playwright 真机对位、录制+overlay 全链路冒烟待人工；
+> **Status**: Windows 侧 Phase 0–2 完成、Phase 3/5 代码+单测落地（2026-09-22）；2026-09-27 修复 overlay 重叠框筛选与 recorder stop/focus 生命周期清理；2026-09-28 修正 overlay origin 数据结构、等待页面加载后注入、Windows UIA 物理像素转 Electron DIP；
+> Gate：overlay/recorder 定向测试 30/30 通过；独立 Electron + Playwright renderer 冒烟在 125% 缩放下两框精确对位、刷新替换与清理通过；Chrome 真录制全链路回归仍待人工；
 > Phase 4（macOS AX helper）未开工
 > **Priority**: P1
 > **定位**: plan 556 capture/record 通道的能力补齐 —— 从「点击时点探单元素」升级为「窗口内全部可交互元素枚举 + 真实坐标」，对标商业 computer-use demo 的全树可视化（macOS AX 框框图）。
@@ -86,6 +86,8 @@ plan 519 的 `element-detector` 虽然消费 AxInfo，但 **AX 输入不带坐�
 - [x] 生命周期：随 recorder start/stop 启停（status→idle 即 clear）+ 显示器/缩放变更
       （display-metrics-changed / display-removed 重建）；computer-use mode capture
       开关联动待接（当前 overlay 由 IPC 与 recorder 生命周期驱动）
+- [x] 2026-09-27 回归修复：移除 UIA 重复/大面积包含框，限制最多 36 个可见目标；
+      recorder 切窗/空树/stop/dispose 清理 overlay，并忽略 stop 或旧窗口后才返回的异步枚举结果
 - [ ] Gate：sanitize payload 门单测绿（5/5）；**Playwright MCP UI 冒烟（真机截图核对
       rect 对位）待人工**
 
@@ -106,7 +108,7 @@ plan 519 的 `element-detector` 虽然消费 AxInfo，但 **AX 输入不带坐�
 ### Phase 5 — 收尾
 
 - [x] recorder 事件流可选附加 `enumerate` 快照（app_focus 变化时异步刷新，不阻塞落盘；
-      `onEnumerateSnapshot` 注入单例 → overlay；空树/UIPI/自身窗口/黑名单应用不触发）
+      `onEnumerateSnapshot` 注入单例 → overlay；空树/UIPI/自身窗口/黑名单应用清空 overlay 且不绘制快照）
 - [x] `npm run typecheck:all`（改动文件零错误）+ electron tsconfig 复查
       （改动文件零错误）+ daemon/probe/recorder/som/matcher 既有单测回归绿
 - [ ] 真机 Gate：录制 + overlay 同开全链路冒烟

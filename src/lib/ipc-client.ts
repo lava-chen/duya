@@ -84,6 +84,10 @@ export interface Message {
   sendMessageMeta?: SendMessageCardMeta | null;
   /** Plan 477 P4.4: bot→bot DM marker payload (parsed from agent_dm_meta). */
   agentDmMeta?: AgentDmCardMeta | null;
+  /** Channel send/receive marker payload (parsed from channel_msg_meta). */
+  channelMsgMeta?: import("@/types/message").ChannelActivityMeta | null;
+  /** Routine lifecycle marker payload (parsed from routine_meta). */
+  routineMeta?: import("@/types/message").RoutineActivityMeta | null;
   /** Plan 478: shared-room post payload (parsed from group_post_meta). */
   groupPostMeta?: import("@/types/message").RoomPostMeta | null;
   /** Compaction marker: true when this row is a compact summary. */
@@ -247,6 +251,10 @@ export interface DbMessage {
   send_message_meta?: string | null
   /** Plan 477 P4.4: bot→bot DM marker payload (JSON), mirrors MessageRow.agent_dm_meta. */
   agent_dm_meta?: string | null
+  /** Channel send/receive marker payload (JSON), mirrors MessageRow.channel_msg_meta. */
+  channel_msg_meta?: string | null
+  /** Routine lifecycle marker payload (JSON), mirrors MessageRow.routine_meta. */
+  routine_meta?: string | null
   /** Plan 478: shared-room post payload (JSON), mirrors MessageRow.group_post_meta. */
   group_post_meta?: string | null
   /** Compaction marker: true when this row is a compact summary. */
@@ -452,6 +460,24 @@ export function dbMessageToMessage(db: DbMessage): Message {
         // that name, so chips group correctly and the overlay resolves what
         // it can.
         synthesizeLegacyAgentDmMeta(db),
+    channelMsgMeta: db.channel_msg_meta
+      ? (() => {
+          try {
+            return JSON.parse(db.channel_msg_meta) as import("@/types/message").ChannelActivityMeta;
+          } catch {
+            return null;
+          }
+        })()
+      : null,
+    routineMeta: db.routine_meta
+      ? (() => {
+          try {
+            return JSON.parse(db.routine_meta) as import("@/types/message").RoutineActivityMeta;
+          } catch {
+            return null;
+          }
+        })()
+      : null,
     groupPostMeta: db.group_post_meta
       ? (() => {
           try {

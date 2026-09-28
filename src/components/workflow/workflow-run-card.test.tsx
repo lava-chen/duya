@@ -424,3 +424,74 @@ describe("WorkflowLaunchDialog run location", () => {
     expect(raw).toBeNull();
   });
 });
+
+describe("WorkflowLaunchDialog arg value memory", () => {
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
+  const argsEntry = {
+    name: "scrape-job",
+    scope: "project" as const,
+    args: {
+      tag: { type: "string" as const, default: "a" },
+      days: { type: "number" as const },
+    },
+  };
+
+  function argValue(name: string): string {
+    const slot = screen.getByTestId(`workflow-launch-arg-${name}`);
+    const input = slot.querySelector("input") as HTMLInputElement;
+    return input.value;
+  }
+
+  it("seeds declared defaults, then autosaves typed values across reopens", async () => {
+    const { unmount } = render(
+      <WorkflowLaunchDialog
+        entry={argsEntry}
+        defaultProjectDir="/repo"
+        onClose={() => {}}
+      />,
+    );
+    // First open: declared defaults seed the fields (days has none → empty).
+    expect(argValue("tag")).toBe("a");
+    expect(argValue("days")).toBe("");
+
+    // Type and close without launching — input saves as you type, so the
+    // draft survives the dialog being torn down.
+    fireEvent.change(screen.getByTestId("workflow-launch-arg-tag").querySelector("input")!, {
+      target: { value: "b" },
+    });
+    fireEvent.change(screen.getByTestId("workflow-launch-arg-days").querySelector("input")!, {
+      target: { value: "7" },
+    });
+    unmount();
+
+    // Next dialog for the same workflow opens pre-filled with the draft —
+    // not with the declared default again.
+    render(
+      <WorkflowLaunchDialog entry={argsEntry} defaultProjectDir="/repo" onClose={() => {}} />,
+    );
+    expect(argValue("tag")).toBe("b");
+    expect(argValue("days")).toBe("7");
+  });
+
+  it("clearing an input falls back to the declared default next time", async () => {
+    const { unmount } = render(
+      <WorkflowLaunchDialog entry={argsEntry} defaultProjectDir="/repo" onClose={() => {}} />,
+    );
+    fireEvent.change(screen.getByTestId("workflow-launch-arg-tag").querySelector("input")!, {
+      target: { value: "b" },
+    });
+    fireEvent.change(screen.getByTestId("workflow-launch-arg-tag").querySelector("input")!, {
+      target: { value: "" },
+    });
+    unmount();
+
+    render(
+      <WorkflowLaunchDialog entry={argsEntry} defaultProjectDir="/repo" onClose={() => {}} />,
+    );
+    // An empty draft is treated as "no value" — the declared default shows.
+    expect(argValue("tag")).toBe("a");
+  });
+});

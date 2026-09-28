@@ -27,6 +27,8 @@ import type {
   GitTurnReview,
   GitLatestTurnReviewResult,
   GitAPI,
+  GitListBranchesResult,
+  GitRepositoryState,
 } from './ipc/git-types'
 
 /** Plan 525 Phase 2.5 — wire shape of a `projects` row. Mirrors the DB
@@ -1203,6 +1205,14 @@ export interface ElectronAPI {
      *  with duya's own light/dark theme. */
     setNativeThemeSource: (mode: 'light' | 'dark' | 'system') => Promise<void>
   }
+  /** Title-bar menu bar commands (Edit / View). These need main-process
+   *  webContents access (paste cannot go through execCommand), so the
+   *  renderer forwards the action and main applies it to the sender. */
+  appChrome: {
+    editCommand: (action: 'undo' | 'redo' | 'cut' | 'copy' | 'paste' | 'selectAll') => Promise<void>
+    zoom: (action: 'in' | 'out' | 'reset') => Promise<void>
+    toggleFullscreen: () => Promise<void>
+  }
   agent: AgentAPI
   projects: {
     getRecentFolders: () => Promise<string[]>
@@ -2029,6 +2039,11 @@ const electronAPI: ElectronAPI = {
     windowBackdrop,
     setNativeThemeSource: (mode: 'light' | 'dark' | 'system') =>
       ipcRenderer.invoke('native-theme:set-source', mode),
+  },
+  appChrome: {
+    editCommand: (action) => ipcRenderer.invoke('app-chrome:edit', action),
+    zoom: (action) => ipcRenderer.invoke('app-chrome:zoom', action),
+    toggleFullscreen: () => ipcRenderer.invoke('app-chrome:toggle-fullscreen'),
   },
   agent: {
     streamChat: (prompt, options) => ipcRenderer.invoke('agent:stream', { prompt, options }),

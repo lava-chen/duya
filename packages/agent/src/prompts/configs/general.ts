@@ -64,7 +64,7 @@ export const generalConfig: PromptSystemConfig = {
     const memoryHook = createMemoryPreBuildHook()
     const memoryResult = isMemoryEnabled() ? await memoryHook(ctx) : undefined
     // Plan 550 1d-rest (environment section): pre-populate isGitRepo /
-    // nowMs / unameSr / marketingName / knowledgeCutoff so the .hbs
+    // unameSr / marketingName / knowledgeCutoff so the .hbs
     // template can render them synchronously. Merged with the memory
     // extension; later fields win on collision but the two surfaces
     // never overlap.

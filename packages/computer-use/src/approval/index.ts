@@ -29,8 +29,8 @@ export type { ComputerUseAction };
 export interface ApprovalRequest {
   /** Stable id for the request (used for cancellation correlation). */
   requestId: string;
-  /** Action that's about to fire (e.g. 'click'). */
-  action: ComputerUseAction;
+  /** Action that's about to fire (e.g. 'click' — see ApprovalActionName). */
+  action: ApprovalActionName;
   /** Compact arguments preview (no PII, no full PII dumps). */
   argsPreview: Record<string, unknown>;
   /** Free-form rationale the model can attach (optional). */
@@ -48,6 +48,14 @@ export interface ApprovalResult {
   /** 'user' for explicit allow/deny, 'timeout' for auto-cancel. */
   reason: 'user-allow' | 'user-deny' | 'timeout' | 'bridge-error';
 }
+
+/**
+ * Action label on an approval request. The classic computer_use enum is
+ * the primary vocabulary; plan 575's CUA surface reuses the same bridge
+ * with its own tool names (left_click / set_value / ...), so the field
+ * widens to any string while keeping enum autocomplete.
+ */
+export type ApprovalActionName = ComputerUseAction | (string & {});
 
 /**
  * The bridge contract. Phase 2 wires an ElectronIPCApprovalBridge;

@@ -296,9 +296,20 @@ Separate SQLite file (`memory-state.db`, next to `duya-main.db` in the same boot
 两个平台后端按 `backend/factory.ts` 路由（`DUYA_CUA_DRIVER` 环境变量可强制 MCP `cua-driver` 兜底）：
 
 - **Windows（UIA 栈）**：`ElectronDesktopBackend`（desktopCapturer + nut.js + sharp，文件名 `win32.ts`
-  实为跨平台）+ `resources/recorder/uia-probe.ps1` 常驻 PowerShell 探测（probe/readUrl/enumerate/fg，
-  JSON 行协议）+ `win32-injection.ts` 后台点击梯 + recorder（uiohook hook-worker / converter /
-  element-matcher L1–L3）。三消费者共用 `createComputerUseDaemon` 管线（spawn/心跳/重启/recycle）。
+  实为跨平台）+ `resources/recorder/uia-probe.ps1` 常驻 PowerShell 探测（probe/readUrl/enumerate/fg/
+  apps/windows/selectText/invoke，JSON 行协议）+ `win32-injection.ts` 后台点击梯 + recorder（uiohook
+  hook-worker / converter / element-matcher L1–L3）。三消费者共用 `createComputerUseDaemon` 管线
+  （spawn/心跳/重启/recycle）。
+- **CUA 14 工具面（plan 575，Windows）**：ZCode/Codex CUA 对齐的系统级面。契约层
+  `packages/computer-use/src/cua/`（元素 token 台账 / 树归一化三步 prune-merge-flatten /
+  `formatObservation` 优先级裁剪 / `diffSnapshots` full-delta-no_change / `CuaError` 错误码分类
+  + action_sent-retry 语义）；服务层 `electron/services/cua/cua-service.ts`（14 工具逻辑：
+  窗口解析 fail-closed、app_ref 作用域元素寻址（0 基模型索引 → 1 基 probe 槽）、隐式帧绑定坐标
+  ——坐标目标只对 `get_app_state(includeScreenshot)` 交付过的最后一帧解析）；通道
+  `computer-use:cua`（`electron/ipc/cua-handlers.ts` 拥有 CuaService 单例，agent 侧
+  `computer_cua` 单工具 14-action，`packages/agent/src/tool/OSTool/ComputerCuaTool.ts`，
+  builtin hidden 注册 + `.system/computer-use` 内置 skill）。非 win32 平台返回
+  STRUCTURED_STATE_UNAVAILABLE。
 - **macOS（AX 栈，plan 572）**：Swift CLI helper `resources/ax-helper/`（`scripts/build-ax-helper.sh`
   编 universal binary）经同一条 daemon 管线常驻——`enumerate/probe`（快照句柄制元素 + 真实坐标，
   `AXUIElementSetMessagingTimeout(0.5s)` 防阻塞）→ element-detector `axElements`(`axSource:'ax-tree'`)；

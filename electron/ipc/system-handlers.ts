@@ -50,6 +50,41 @@ export function registerSystemHandlers(): void {
       mode === 'light' || mode === 'dark' || mode === 'system' ? mode : 'system';
   });
 
+  // Title-bar menu commands (Edit / View menus in the HTML menu bar). These
+  // must run in the main process because the renderer has no webContents
+  // access (execCommand cannot paste). They act on `event.sender` — the
+  // invoking webContents — not a hard-coded main window, so they stay
+  // correct for any secondary window.
+  ipcMain.handle('app-chrome:edit', (event, action: string) => {
+    const wc = event.sender;
+    switch (action) {
+      case 'undo': wc.undo(); break;
+      case 'redo': wc.redo(); break;
+      case 'cut': wc.cut(); break;
+      case 'copy': wc.copy(); break;
+      case 'paste': wc.paste(); break;
+      case 'selectAll': wc.selectAll(); break;
+      default:
+        getLogger().warn('Unknown edit command', { action }, LogComponent.Main);
+    }
+  });
+
+  ipcMain.handle('app-chrome:zoom', (event, action: string) => {
+    const wc = event.sender;
+    if (action === 'reset') {
+      wc.setZoomLevel(0);
+      return;
+    }
+    // Chromium zoom levels step by 0.5 (~20% per step).
+    const level = wc.getZoomLevel();
+    wc.setZoomLevel(action === 'in' ? level + 0.5 : level - 0.5);
+  });
+
+  ipcMain.handle('app-chrome:toggle-fullscreen', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win) win.setFullScreen(!win.isFullScreen());
+  });
+
   // Public predicate — kept exported for unit tests.
   // Duya's open-external policy is intentionally strict: only standard
   // http(s) URLs are forwarded to the OS. file://, javascript:, smb://, and

@@ -22,7 +22,8 @@
 import { randomUUID } from "node:crypto";
 import type { Tool, ToolResult, ToolUseContext } from "../../types.js";
 import { automationDb } from "../../ipc/db-client.js";
-import { parseAgentIdFromBotSession } from "../../agent/dm/bot-session-id.js";
+import { appendMessages } from "../../session/db.js";
+import { getBotSessionId, parseAgentIdFromBotSession } from "../../agent/dm/bot-session-id.js";
 import { MANAGE_ROUTINE_TOOL_NAME, MAX_ROUTINES_PER_BOT } from "./constants.js";
 
 export { MAX_ROUTINES_PER_BOT };
@@ -292,6 +293,7 @@ export class ManageRoutineTool implements Tool {
       agent: selfAgentId,
       enabled: true,
     });
+    await appendRoutineMarker(getBotSessionId(selfAgentId), "created", created.id, created.name);
     return result(
       `Created routine "${created.name}" (id ${created.id}). Confirm it to the user once.`,
     );
@@ -331,6 +333,7 @@ export class ManageRoutineTool implements Tool {
         : {}),
       ...(triggers !== undefined ? { eventTriggers: triggers } : {}),
     });
+    await appendRoutineMarker(getBotSessionId(selfAgentId), "updated", updated.id, updated.name);
     return result(`Updated routine "${updated.name}" (id ${updated.id}). It keeps its history.`);
   }
 
@@ -342,6 +345,12 @@ export class ManageRoutineTool implements Tool {
       return result(`No routine with id ${id} belongs to you. Use list to see your routines.`, true);
     }
     const updated = await automationDb.updateCron(id, { enabled });
+    await appendRoutineMarker(
+      getBotSessionId(selfAgentId),
+      enabled ? "resumed" : "paused",
+      updated.id,
+      updated.name,
+    );
     return result(
       `${enabled ? "Resumed" : "Paused"} routine "${updated.name}" (id ${updated.id}).${enabled ? "" : " It stays listed but will not fire until resumed."}`,
     );
@@ -356,6 +365,7 @@ export class ManageRoutineTool implements Tool {
       return result(`No routine with id ${id} belongs to you. Use list to see your routines.`, false);
     }
     await automationDb.deleteCron(id);
+    await appendRoutineMarker(getBotSessionId(selfAgentId), "deleted", id, existing.name);
     return result(`Deleted routine "${existing.name}" (id ${id}).`);
   }
 
@@ -397,3 +407,39 @@ export class ManageRoutineTool implements Tool {
 }
 
 export const manageRoutineTool = new ManageRoutineTool();
+
+/**
+ * Persist a routine lifecycle marker row into the bot's transcript (bot-direct
+ * chat renders it as the centered "已创建 routine X" chip). Best-effort: the
+ * mutation itself is already durable; a marker failure must not fail the tool.
+ */
+async function appendRoutineMarker(
+  sessionId: string,
+  action: "created" | "updated" | "deleted" | "paused" | "resumed",
+  routineId: string,
+  name: string,
+): Promise<void> {
+  try {
+    await appendMessages(sessionId, [
+      {
+        id: `routine-marker-${randomUUID()}`,
+        role: "assistant",
+        content: `${action} routine "${name}"`,
+        status: "complete",
+        msg_type: "text",
+        source: "routine_activity" as const,
+        timestamp: Date.now(),
+        metadata: {
+          source: "routine_activity" as const,
+          routine: {
+            action,
+            name,
+            ...(routineId ? { routineId } : {}),
+          },
+        },
+      },
+    ]);
+  } catch {
+    // Marker persistence is cosmetic — swallow.
+  }
+}

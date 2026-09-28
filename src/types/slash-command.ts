@@ -1,5 +1,7 @@
 // slash-command.ts - Types for slash commands system
 
+import type * as React from 'react';
+
 export type PopoverItemKind =
   | 'slash_command'
   | 'agent_command'

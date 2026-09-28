@@ -19,7 +19,8 @@
 #        "maxDepth":40,"maxNodes":500,              (knobs optional; controlTypes
 #        "controlTypes":["Button",...]}             overrides the built-in whitelist)
 #      {"id":4,"ok":true,"elements":[{"name":"..","controlType":"Button",...,
-#         "rect":{...},"isPassword":false,"interactive":true},...],
+#         "rect":{...},"isPassword":false,"interactive":true,
+#         "enabled":true,"focused":false[,"selected":true]},...],
 #         "truncated":false,"reason":null,"count":12}
 #      {"id":4,"ok":true,"elements":[],"truncated":true,...}  — partial tree kept
 #                                                               after a budget hit
@@ -139,13 +140,42 @@ namespace Duya.Recorder
         }
 
         // Enumerate nodes carry the interactive assertion the overlay's
-        // renderer-side defense re-checks (plan 562 phase 3). The base
-        // JSON always ends with "}", so splice the flag in.
-        private static string InteractiveElementJson(AutomationElement el)
+        // renderer-side defense re-checks (plan 562 phase 3), plus the
+        // real UIA state bits the CUA tree contract needs (plan 575 gap
+        // fix): IsEnabled / HasKeyboardFocus are plain property reads off
+        // the already-fetched info struct; IsSelected costs one pattern
+        // availability query and is emitted only when the element actually
+        // carries SelectionItemPattern (the key is omitted otherwise, so
+        // strict downstream readers stay happy — same convention as the
+        // conditional "value" key in ElementJson).
+        private static string InteractiveElementJson(AutomationElement el, AutomationElement.AutomationElementInformation c)
         {
             string baseJson = ElementJson(el);
             if (baseJson == "null") { return null; }
-            return baseJson.Substring(0, baseJson.Length - 1) + ",\"interactive\":true}";
+            bool enabled = true;
+            try { enabled = c.IsEnabled; } catch { }
+            bool focused = false;
+            try { focused = c.HasKeyboardFocus; } catch { }
+            string selectedJson = "";
+            try
+            {
+                object p;
+                if (el.TryGetCurrentPattern(SelectionItemPattern.Pattern, out p))
+                {
+                    SelectionItemPattern sp = p as SelectionItemPattern;
+                    if (sp != null)
+                    {
+                        selectedJson = ",\"selected\":" + (sp.Current.IsSelected ? "true" : "false");
+                    }
+                }
+            }
+            catch { }
+            return baseJson.Substring(0, baseJson.Length - 1)
+                 + ",\"interactive\":true"
+                 + ",\"enabled\":" + (enabled ? "true" : "false")
+                 + ",\"focused\":" + (focused ? "true" : "false")
+                 + selectedJson
+                 + "}";
         }
 
         // Returns the element JSON string, the literal "null" when UIA
@@ -304,6 +334,30 @@ namespace Duya.Recorder
         [DllImport("kernel32.dll")]
         private static extern bool CloseHandle(IntPtr handle);
 
+        // ---- plan 575 CUA surface: window/app enumeration + text selection ----
+
+        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsIconic(IntPtr hWnd);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+
+        [DllImport("user32.dll")]
+        private static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+
+        // DWMWA_CLOAKED = 14 — a UWP shell window reports visible to
+        // IsWindowVisible while actually suspended/hidden; DWM knows.
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
+
         private static bool IsProcessElevated(int pid)
         {
             if (pid <= 0) { return false; }
@@ -400,7 +454,7 @@ namespace Duya.Recorder
                 if (controlType == null) { return false; }
                 controlType = controlType.Replace("ControlType.", "");
                 if (!st.ControlTypes.Contains(controlType)) { return false; }
-                json = InteractiveElementJson(el);
+                json = InteractiveElementJson(el, c);
                 return json != null;
             }
             catch { return false; }
@@ -790,6 +844,127 @@ namespace Duya.Recorder
             Task<string> task = Task.Run(work);
             return task.Wait(timeoutMs) ? task.Result : null;
         }
+
+        // ------------------------------------------------------------------
+        // CUA surface (plan 575): app/window enumeration for list_apps /
+        // list_windows, and TextPattern selection for select_text.
+        // ------------------------------------------------------------------
+
+        // list_apps: processes with a visible main window. exe is null for
+        // system/elevated processes where MainModule is unreadable. active
+        // marks the foreground pid. Returns a JSON array, null on timeout.
+        public static string ListApps()
+        {
+            Func<string> work = delegate
+            {
+                IntPtr fg = GetForegroundWindow();
+                int fgPid = 0;
+                try { GetWindowThreadProcessId(fg, out fgPid); } catch { }
+                List<string> rows = new List<string>();
+                foreach (System.Diagnostics.Process p in System.Diagnostics.Process.GetProcesses())
+                {
+                    try
+                    {
+                        if (p.MainWindowHandle == IntPtr.Zero) { continue; }
+                        string title = p.MainWindowTitle;
+                        if (string.IsNullOrEmpty(title)) { continue; }
+                        string exe = null;
+                        try { exe = p.MainModule.FileName; } catch { }
+                        string row = "{\"pid\":" + p.Id
+                            + ",\"exe\":" + (exe == null ? "null" : Escape(exe))
+                            + ",\"title\":" + Escape(title)
+                            + ",\"active\":" + (fgPid == p.Id ? "true" : "false") + "}";
+                        rows.Add(row);
+                    }
+                    catch { }
+                }
+                return "[" + string.Join(",", rows.ToArray()) + "]";
+            };
+            Task<string> task = Task.Run(work);
+            return task.Wait(3000) ? task.Result : null;
+        }
+
+        // list_windows: top-level windows (optionally one pid). UWP shell
+        // surfaces report DWMWA_CLOAKED so the caller can skip suspended
+        // ApplicationFrameHost hosts. Returns a JSON array, null on timeout.
+        public static string ListWindows(int pidFilter)
+        {
+            Func<string> work = delegate
+            {
+                List<string> rows = new List<string>();
+                EnumWindows(delegate(IntPtr hWnd, IntPtr lParam)
+                {
+                    try
+                    {
+                        if (!IsWindowVisible(hWnd)) { return true; }
+                        int pid;
+                        GetWindowThreadProcessId(hWnd, out pid);
+                        if (pidFilter > 0 && pid != pidFilter) { return true; }
+                        int cloaked = 0;
+                        try { DwmGetWindowAttribute(hWnd, 14, out cloaked, 4); } catch { }
+                        StringBuilder sb = new StringBuilder(512);
+                        GetWindowText(hWnd, sb, 512);
+                        RECT r;
+                        string rectJson = "null";
+                        if (GetWindowRect(hWnd, out r))
+                        {
+                            rectJson = "{\"x\":" + r.Left + ",\"y\":" + r.Top
+                                + ",\"w\":" + (r.Right - r.Left) + ",\"h\":" + (r.Bottom - r.Top) + "}";
+                        }
+                        string row = "{\"hwnd\":" + hWnd.ToInt64()
+                            + ",\"pid\":" + pid
+                            + ",\"title\":" + Escape(sb.ToString())
+                            + ",\"rect\":" + rectJson
+                            + ",\"minimized\":" + (IsIconic(hWnd) ? "true" : "false")
+                            + ",\"cloaked\":" + (cloaked != 0 ? "true" : "false") + "}";
+                        rows.Add(row);
+                    }
+                    catch { }
+                    return true;
+                }, IntPtr.Zero);
+                return "[" + string.Join(",", rows.ToArray()) + "]";
+            };
+            Task<string> task = Task.Run(work);
+            return task.Wait(3000) ? task.Result : null;
+        }
+
+        // select_text: resolve the cached element (same guards as invoke),
+        // find the needle inside its TextPattern document range, and select
+        // the first occurrence. Returns "OK:{...}" / "ERR:<code>" /
+        // null-on-timeout like InvokeElement; codes add no-pattern and
+        // not-found on top of the resolve family.
+        public static string SelectText(IntPtr hwnd, int oneBasedIndex, string needle, string verifyName, string verifyType, int timeoutMs)
+        {
+            Func<string> work = delegate
+            {
+                try
+                {
+                    if (hwnd == IntPtr.Zero) { return "ERR:no-window"; }
+                    if (string.IsNullOrEmpty(needle)) { return "ERR:not-found"; }
+                    AutomationElement el2;
+                    string resolveCode = ResolveCached(hwnd, oneBasedIndex, verifyName, verifyType, out el2);
+                    if (resolveCode != "ok") { return "ERR:" + resolveCode; }
+                    TextPattern tp = GetPattern(el2, TextPattern.Pattern) as TextPattern;
+                    if (tp == null) { return "ERR:no-pattern"; }
+                    System.Windows.Automation.Text.TextPatternRange doc = tp.DocumentRange;
+                    System.Windows.Automation.Text.TextPatternRange found = doc.FindText(needle, true, false);
+                    if (found == null) { return "ERR:not-found"; }
+                    found.Select();
+                    string postJson;
+                    try { postJson = ElementJson(el2); } catch { postJson = "null"; }
+                    string inner = postJson == "null" ? "" : postJson.Substring(1, postJson.Length - 2);
+                    return "OK:{\"pattern\":\"TextPattern\""
+                         + (inner.Length > 0 ? ",\"element\":{" + inner + "}" : "")
+                         + "}";
+                }
+                catch
+                {
+                    return "ERR:stale-tree";
+                }
+            };
+            Task<string> task = Task.Run(work);
+            return task.Wait(timeoutMs) ? task.Result : null;
+        }
     }
 }
 '@
@@ -931,6 +1106,51 @@ while ($true) {
         }
         else {
             # "ERR:<code>" — the code is a stable ASCII identifier.
+            $code = $json.Substring(4)
+            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":false,"reason":"' + $code + '"}')
+        }
+    }
+    elseif ($op -eq 'apps') {
+        # CUA list_apps (plan 575): processes with a visible main window.
+        $json = [Duya.Recorder.UiaProbe]::ListApps()
+        if ($null -eq $json) {
+            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":false,"reason":"timeout"}')
+        } else {
+            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":true,"apps":' + $json + '}')
+        }
+    }
+    elseif ($op -eq 'windows') {
+        # CUA list_windows (plan 575): top-level windows, optionally one pid.
+        $pidFilter = 0
+        try { if ($req.PSObject.Properties['pid'] -and $req.pid) { $pidFilter = [int]$req.pid } } catch { }
+        $json = [Duya.Recorder.UiaProbe]::ListWindows($pidFilter)
+        if ($null -eq $json) {
+            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":false,"reason":"timeout"}')
+        } else {
+            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":true,"windows":' + $json + '}')
+        }
+    }
+    elseif ($op -eq 'selectText') {
+        # CUA select_text (plan 575): TextPattern search + Select on a
+        # cached enumerate element; same guard family as invoke.
+        $hwnd = [IntPtr]::Zero
+        try { $hwnd = [IntPtr][int64]$req.hwnd } catch { }
+        $index = 0
+        try { if ($req.PSObject.Properties['index']) { $index = [int]$req.index } } catch { }
+        $needle = $null
+        try { if ($req.PSObject.Properties['text'] -and $null -ne $req.text) { $needle = [string]$req.text } } catch { }
+        $vname = $null
+        try { if ($req.PSObject.Properties['name'] -and $null -ne $req.name) { $vname = [string]$req.name } } catch { }
+        $vtype = $null
+        try { if ($req.PSObject.Properties['controlType'] -and $null -ne $req.controlType) { $vtype = [string]$req.controlType } } catch { }
+        $json = [Duya.Recorder.UiaProbe]::SelectText($hwnd, $index, $needle, $vname, $vtype, 1000)
+        if ($null -eq $json) {
+            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":false,"reason":"timeout"}')
+        }
+        elseif ($json.StartsWith('OK:')) {
+            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":true,' + $json.Substring(3) + '}')
+        }
+        else {
             $code = $json.Substring(4)
             [Console]::Out.WriteLine('{"id":' + $id + ',"ok":false,"reason":"' + $code + '"}')
         }

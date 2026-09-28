@@ -24,6 +24,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { messageDb, sendMessageStateDb } from '../../ipc/db-client.js';
+import { appendMessages } from '../../session/db.js';
 import { getLogger } from '../../utils/logger.js';
 import { SEND_MESSAGE_TOOL_NAME } from './constants.js';
 import type { ToolUseContext } from '../../types.js';
@@ -539,6 +540,42 @@ async function deliverToChannel(
         result: `Channel delivery failed: ${result?.reason ?? 'unknown error'}`,
         error: true,
       };
+    }
+    // Channel send/receive marker row: the delivered message never touched
+    // the transcript (channel sends bypass messageDb.append), so persist a
+    // `channel_activity` marker so the bot-direct chat can render the
+    // "发送到 XX" chip and its detail view. Best-effort — the delivery is
+    // already durable; a transcript failure must not report it as failed.
+    try {
+      const [platform, ...chatParts] = channel.split(':');
+      await appendMessages(sessionId, [
+        {
+          id: messageId,
+          role: 'assistant',
+          content: `→ [${channel}] ${outboundContent}`,
+          status: 'complete',
+          msg_type: 'text',
+          source: 'channel_activity' as const,
+          timestamp: Date.now(),
+          metadata: {
+            source: 'channel_activity' as const,
+            channelMsg: {
+              direction: 'out' as const,
+              address: channel,
+              platform: platform ?? channel,
+              chat: chatParts.join(':'),
+              text: outboundContent,
+              ...(mediaUrl ? { url: mediaUrl } : {}),
+            },
+          },
+        },
+      ]);
+    } catch (markerErr) {
+      getLogger().debug('SendMessage channel marker append failed (non-fatal)', {
+        sessionId,
+        channel,
+        error: markerErr instanceof Error ? markerErr.message : String(markerErr),
+      });
     }
     return {
       id: messageId,

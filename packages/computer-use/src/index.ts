@@ -26,6 +26,7 @@ export * from './safety/index.js';
 export * from './memory/index.js';
 export * from './approval/index.js';
 export * from './decide/index.js';
+export * from './cua/index.js';
 export * from './access.js';
 export * from './types.js';
 export * from './recorder/index.js';

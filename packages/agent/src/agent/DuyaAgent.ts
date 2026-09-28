@@ -144,6 +144,7 @@ import {
   getOSContextBridge,
   injectOSContextFragment,
 } from '../context/os-context/index.js';
+import { injectTurnTimeReminder } from './turn-time-reminder.js';
 import {
   getDiscoveredToolPrompts,
   harvestDiscoveredTools,
@@ -2147,6 +2148,13 @@ export class duyaAgent implements AgentRuntime {
         // it via __setBridgeForTest. The fragment is ephemeral (lives only
         // on `llmMessages`; never lands in the durable timeline).
         injectOSContextFragment(llmMessages, runtimePromptMessageId);
+
+        // Wall-clock snapshot attached after the current turn's user message
+        // on every model request (replaces the `Current date and time:` line
+        // in the environment system-prompt section). Transient: lives only on
+        // `llmMessages`, never persisted; fresh timestamp per request keeps
+        // mid-turn time accurate without perturbing the cache-able prompt.
+        injectTurnTimeReminder(llmMessages, runtimePromptMessageId);
 
         // (grok `GetMcpTools` parity): full schemas of tools found
         // via `tool_search` are appended at the very tail, leaving the request's

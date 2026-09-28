@@ -68,12 +68,15 @@ import { registerAppConnectionHandlers } from './ipc/app-connection-handlers';
 import { registerTerminalHandlers } from './ipc/terminal-handlers';
 import { registerBrowserWebviewHandlers } from './ipc/browser-webview-handlers';
 import { registerBrowserCookieHandlers } from './ipc/browser-cookie-handlers';
+// Plan 532: one-click local browser extension install (detect/install/uninstall).
+import { registerExtensionInstallerHandlers } from './ipc/extension-installer-handlers';
 import { registerProjectDatabaseHandlers } from './ipc/project-database-handlers';
 import { registerProjectEntityHandlers } from './ipc/project-entity-handlers';
 import { registerGitHandlers } from './ipc/git-handlers';
 import { registerBashTaskHandlers } from './ipc/bash-task-handlers';
 import { registerWorkflowHandlers } from './ipc/workflow-handlers';
 import { registerComputerUsePermissionsHandlers } from './ipc/computer-use-permissions';
+import { registerCuaHandlers } from './ipc/cua-handlers';
 // Plan 556 Phase 5: event recorder IPC + recording badge.
 import { registerRecorderHandlers } from './ipc/recorder-handlers';
 import { registerVoiceHandlers } from './ipc/voice-handlers';
@@ -497,6 +500,11 @@ if (gotTheLock) {
     // when this registration was missing.
     registerComputerUseHandlers();
     registerComputerUsePermissionsHandlers();
+    // Plan 575: CUA channel — the 14-tool ZCode-aligned computer-use
+    // surface (list_apps/get_app_state/left_click/...). Without this
+    // the computer_cua tool call fails the same "No handler
+    // registered" way plan 454 documented above.
+    registerCuaHandlers();
 
     // ============================================================
     // Step 4.5: Start Agent Server (HTTP+SSE for Agent communication)
@@ -1153,6 +1161,10 @@ registerLazyIpcHandlers({
 });
 registerBrowserWebviewHandlers();
 registerBrowserCookieHandlers();
+// Plan 532: renderer polls `extensionInstaller:detect` on mount via
+// `useBrowserExtension`; without this registration every call rejects with
+// "No handler registered for 'extensionInstaller:detect'".
+registerExtensionInstallerHandlers();
 registerGitHandlers();
 // Plan 552 Phase 7: workflow console reads (run list / journal).
 registerWorkflowHandlers();

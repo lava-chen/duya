@@ -6,9 +6,8 @@
  * resolve inline per `buildSystemPrompt` call:
  *
  *   - `isGitRepo` — async `fs.access(workingDirectory/.git)`.
- *   - `nowMs` — `Date.now()` for the `Current date and time:` line.
- *     Captured once per `buildSystemPrompt` so the section body stays
- *     stable for the lifetime of the prompt-cache entry.
+ *     (`nowMs` was removed from this hook: the wall-clock snapshot moved
+ *     to the per-request turn-time reminder in `agent/turn-time-reminder.ts`.)
  *   - `unameSr` — `os.version() os.release()` (or `os.type() os.release()`
  *     on non-Windows); same as the legacy uname resolution.
  *   - `marketingName` — best-effort model name from `modelId`
@@ -22,7 +21,7 @@
  * only if the hook was skipped (e.g. in unit tests that call
  * `getEnvironmentSection` directly).
  *
- * Tests inject fixed strings via the `nowMs` / `isGitRepo` / `unameSr`
+ * Tests inject fixed strings via the `isGitRepo` / `unameSr`
  * / `marketingName` / `knowledgeCutoff` options so byte-level parity
  * stays deterministic without touching the real fs / os.
  */
@@ -36,8 +35,6 @@ import { getMarketingNameForModel, getKnowledgeCutoff } from './environment.js'
 export interface EnvironmentPreBuildOptions {
   /** Override the git-repo detector. Default: async `fs.access(workingDirectory/.git)`. */
   isGitRepo?: (workingDirectory: string) => Promise<boolean>
-  /** Override the wall-clock snapshot. Default: `Date.now()`. */
-  nowMs?: () => number
   /** Override for `os.type/version/release` tuple. */
   unameSr?: (platform: NodeJS.Platform) => string
   /** Override the marketing-name lookup. Defaults to `getMarketingNameForModel`. */
@@ -63,8 +60,7 @@ function defaultUnameSr(platform: NodeJS.Platform): string {
 /**
  * Build the `promptContextExtension` payload the environment section's
  * .hbs template consumes. Always succeeds — fields default to safe
- * fallbacks (`null` for is_git_repo means "could not determine";
- * `null` for now_ms means "do not include a date-time line").
+ * fallbacks (`null` for is_git_repo means "could not determine").
  */
 export async function buildEnvironmentContext(
   workingDirectory: string | undefined,
@@ -73,7 +69,6 @@ export async function buildEnvironmentContext(
   options: EnvironmentPreBuildOptions = {},
 ): Promise<Partial<PromptContext>> {
   const isGitRepoFn = options.isGitRepo ?? defaultIsGitRepo
-  const nowMsFn = options.nowMs ?? Date.now
   const unameSrFn = options.unameSr ?? defaultUnameSr
   const marketingNameFn = options.marketingName ?? getMarketingNameForModel
   const knowledgeCutoffFn = options.knowledgeCutoff ?? getKnowledgeCutoff
@@ -84,7 +79,6 @@ export async function buildEnvironmentContext(
 
   return {
     isGitRepo,
-    nowMs: nowMsFn(),
     unameSr: unameSrFn(platform as NodeJS.Platform),
     marketingName: marketingNameFn(modelId) ?? null,
     knowledgeCutoff: knowledgeCutoffFn(modelId) ?? null,

@@ -33,12 +33,15 @@
  * caller has already resolved agentId → sessionId before calling these methods.
  */
 
+import { randomUUID } from 'node:crypto';
 import { enqueueInboundWake, notifySessionIdle } from './wake-dispatcher';
 import { runWakePromptInExistingSession, type WakeRunOutcome } from './wake-run';
 import { normalizeChannelAddress, parseChannelAddress } from '../../packages/agent/src/channels/types';
 import type { ChannelAddress, ChannelInboundEnvelope, ChannelOutboundMessage, DeliveryFailure } from '../../packages/agent/src/channels/types';
 import { buildChannelInboundWakePrompt, buildChannelDeliveryFailureWakePrompt, buildChannelAckRedrivePrompt, CHANNEL_INBOUND_WAKE_CUE, CHANNEL_DELIVERY_FAILED_WAKE_CUE } from '../../packages/agent/src/channels/prompts';
 import { getCoreStores } from '../db/core-connection';
+import { ipcMessageToNewEvent, newEventToIpcMessage } from '../ipc/core-db-adapters';
+import { getSessionManager } from '../agents/session-manager';
 import { parseAgentIdFromBotSession } from './bot-session-id';
 import { getLogger, LogComponent } from '../logging/logger';
 import { openChannelStore } from '../channels/channel-store';
@@ -279,6 +282,12 @@ export function wakeForInbound(
   persistInboundEnvelope(sessionId, envelope);
   ackRedriveCounts.delete(sessionId);
 
+  // Channel send/receive marker row (bot-direct chat chips): the wake prompt
+  // itself is persisted as a hidden `system` row, so without this marker the
+  // channel message is invisible in the bot's chat. Best-effort — a marker
+  // failure must never block the wake.
+  appendInboundChannelMarker(sessionId, envelope);
+
   // Enqueue the connector.inbound wake
   const envelopeId = `${agentId}:${envelope.address.platform}:${envelope.address.chat}`;
   const result = enqueueInboundWake(sessionId, {
@@ -295,6 +304,65 @@ export function wakeForInbound(
     result,
     platform: envelope.address.platform,
   }, LogComponent.AgentProcess);
+}
+
+/**
+ * Persist one `channel_activity` marker row for an inbound channel envelope
+ * (mirrors agent-dm-dispatcher's receiver marker). The structured payload
+ * rides metadata.channelMsg (PERSISTED_METADATA_KEYS whitelist) so the
+ * renderer's chip grouping + detail view survive reload.
+ */
+function appendInboundChannelMarker(
+  sessionId: string,
+  envelope: ChannelInboundEnvelope,
+): void {
+  try {
+    const text = envelope.text.trim();
+    if (!text) return; // reaction-only envelopes have no chat body to show
+    const { platform, chat } = envelope.address;
+    const address = `${platform}:${chat}`;
+    const sender = envelope.sender || platform;
+    const message = {
+      id: `channel-marker-in-${randomUUID()}`,
+      session_id: sessionId,
+      role: 'user',
+      content: `[${platform}] ${sender}: ${text}`,
+      status: 'complete',
+      msg_type: 'text',
+      source: 'channel_activity',
+      metadata: {
+        source: 'channel_activity',
+        channelMsg: {
+          direction: 'in',
+          address,
+          platform,
+          chat,
+          senderName: sender,
+          text,
+        },
+      },
+      created_at: Date.now(),
+    };
+    const { messageLog } = getCoreStores();
+    const event = ipcMessageToNewEvent(
+      sessionId,
+      message as unknown as Parameters<typeof ipcMessageToNewEvent>[1],
+      null,
+    );
+    messageLog.appendBatch([event]);
+    const broadcast = newEventToIpcMessage(event);
+    if (broadcast) {
+      getSessionManager().broadcastSessionEvent('message:new', {
+        sessionId,
+        messages: [broadcast],
+      });
+    }
+  } catch (err) {
+    logger.warn('Channel inbound marker append failed (non-fatal)', {
+      sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    }, LogComponent.AgentProcess);
+  }
 }
 
 export interface ChannelBackgroundWakes {

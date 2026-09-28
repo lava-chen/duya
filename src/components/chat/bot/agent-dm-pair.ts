@@ -48,6 +48,13 @@ export const BOT_DIRECT_VISIBLE_SOURCES: ReadonlySet<string> = new Set([
   'send_message',
   'user',
   'agent_dm',
+  // Channel send/receive markers — the view branches them into the collapsed
+  // channel chip (bot/channel-activity.ts) before the bubble path ever sees
+  // them; they must reach the transcript hook to be groupable.
+  'channel_activity',
+  // Routine lifecycle markers — the view branches them into the routine chip
+  // (bot/RoutineActivityChip) the same way.
+  'routine_activity',
 ]);
 
 /**

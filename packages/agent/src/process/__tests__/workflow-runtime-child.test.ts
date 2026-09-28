@@ -368,4 +368,66 @@ export default async function (wf) {
     const finished = h.frames[h.frames.length - 1] as { status: string };
     expect(finished.status).toBe('complete');
   });
+
+  it('a computer-use:execute:response resolves the pending RPC so gui nodes do not hang', async () => {
+    // Regression: the response handler used to delete the pending entry
+    // BEFORE calling settle, whose own `delete() && resolve()` guard then
+    // lost — the promise never resolved, the (also-losing) timeout never
+    // resolved it either, and every gui node waited forever.
+    const messageListeners: Array<(msg: unknown) => void> = [];
+    const onSpy = vi.spyOn(process, 'on').mockImplementation(((event: string, handler: never) => {
+      if (event === 'message') messageListeners.push(handler as (msg: unknown) => void);
+      return process;
+    }) as never);
+    const sent: Array<Record<string, unknown>> = [];
+    (process as unknown as { send: (msg: unknown) => boolean }).send = (msg) => {
+      sent.push(msg as Record<string, unknown>);
+      // Answer every computer-use request with a failure envelope (focus is
+      // advisory; capture fails → on_stuck:'skip') — exactly the production
+      // message flow through the 'message' listener.
+      const req = msg as { type?: string; requestId?: string };
+      if (req.type === 'computer-use:execute' && req.requestId) {
+        for (const l of messageListeners) {
+          l({
+            type: 'computer-use:execute:response',
+            requestId: req.requestId,
+            success: false,
+            error: { code: 'BACKEND_UNAVAILABLE', message: 'no backend in test' },
+          });
+        }
+      }
+      return true;
+    };
+
+    const h = startChild(`
+export default async function (wf) {
+  const r = await wf.gui({ target_app: 'Notepad', on_stuck: 'skip', steps: [{ do: 'capture' }] });
+  return 'gui:' + String(r);
+}
+`);
+    try {
+      await waitFor(
+        () => sent.some((m) => m.type === 'computer-use:execute'),
+        'the computer-use request',
+        () => sent.map((m) => String(m.type)),
+      );
+      await waitFor(
+        () => h.frames.some((f) => f.type === 'workflow:finished'),
+        'the finished frame (gui node must not hang on an answered RPC)',
+        () => h.frames.map((f) => f.type as string),
+      );
+      await h.run;
+
+      const finished = h.frames[h.frames.length - 1] as { status: string };
+      // The hang bug's signature was NO terminal ever arriving. With the
+      // fix, the answered RPC resolves and the run reaches a terminal —
+      // 'failed' is legitimate here (the mock backend reports unavailable),
+      // what must never happen again is waiting forever.
+      expect(['complete', 'failed']).toContain(finished.status);
+      expect(h.frames.some((f) => f.type === 'workflow:run-event')).toBe(true);
+    } finally {
+      onSpy.mockRestore();
+      delete (process as unknown as { send?: unknown }).send;
+    }
+  });
 });

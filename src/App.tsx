@@ -48,6 +48,11 @@ import { SearchCommandPalette } from "@/components/SearchCommandPalette";
 /** Boot splash lifecycle. Re-exported from StartupLanding for convenience. */
 type BootSplashPhase = StartupLandingPhase;
 
+interface WorkflowRunNavigationRequest {
+  runId: string;
+  nodeId?: string;
+}
+
 const ACTIVE_LIKE_PHASES: StreamPhase[] = ['starting', 'streaming', 'awaiting_permission', 'persisting'];
 const isActiveLike = (phase: StreamPhase) => ACTIVE_LIKE_PHASES.includes(phase);
 
@@ -138,6 +143,27 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
         messages: s.messages,
       }))
     );
+
+  const [workflowRunRequest, setWorkflowRunRequest] = useState<WorkflowRunNavigationRequest | null>(null);
+  const consumeWorkflowRunRequest = useCallback(() => setWorkflowRunRequest(null), []);
+
+  useEffect(() => {
+    const openWorkflowRun = (event: Event) => {
+      const detail = (event as CustomEvent<{ runId?: unknown; nodeId?: unknown }>).detail;
+      const runId = typeof detail?.runId === 'string' ? detail.runId.trim() : '';
+      const nodeId = typeof detail?.nodeId === 'string' ? detail.nodeId.trim() : '';
+      if (!runId) return;
+      setWorkflowRunRequest({ runId, ...(nodeId ? { nodeId } : {}) });
+      setCurrentView('workflow');
+    };
+
+    window.addEventListener('duya:open-workflow-run-panel', openWorkflowRun as EventListener);
+    window.addEventListener('duya:open-workflow-node-panel', openWorkflowRun as EventListener);
+    return () => {
+      window.removeEventListener('duya:open-workflow-run-panel', openWorkflowRun as EventListener);
+      window.removeEventListener('duya:open-workflow-node-panel', openWorkflowRun as EventListener);
+    };
+  }, [setCurrentView]);
 
   const threadMessages = useMemo(
     () => (activeThreadId ? messages[activeThreadId] ?? [] : []),
@@ -839,7 +865,11 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
           {currentView === 'skills' && <SkillsView />}
           {currentView === 'automation' && <AutomationView />}
           {currentView === 'workflow' && (
-            <WorkflowPage onCreateViaConversation={handleCreateWorkflowViaConversation} />
+            <WorkflowPage
+              onCreateViaConversation={handleCreateWorkflowViaConversation}
+              runRequest={workflowRunRequest}
+              onRunRequestConsumed={consumeWorkflowRunRequest}
+            />
           )}
           {currentView === 'projects' && <ProjectsView />}
           {currentView === 'conductor' && <ConductorView />}
@@ -858,7 +888,13 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       case 'automation':
         return <AutomationView />;
       case 'workflow':
-        return <WorkflowPage onCreateViaConversation={handleCreateWorkflowViaConversation} />;
+        return (
+          <WorkflowPage
+            onCreateViaConversation={handleCreateWorkflowViaConversation}
+            runRequest={workflowRunRequest}
+            onRunRequestConsumed={consumeWorkflowRunRequest}
+          />
+        );
       case 'projects':
         // Plan 525 Phase 2: Projects page must be reachable even when no
         // session has ever been mounted (chatEverMountedRef stays false on

@@ -50,7 +50,7 @@ import type { ElementDescriptor } from './events.js';
 /** Probe operation payload the main side builds. */
 export interface UiaProbeRequest {
   id: number;
-  op: 'probe' | 'readUrl' | 'ping' | 'enumerate' | 'fg' | 'invoke';
+  op: 'probe' | 'readUrl' | 'ping' | 'enumerate' | 'fg' | 'invoke' | 'apps' | 'windows' | 'selectText';
   x?: number;
   y?: number;
   hwnd?: number;
@@ -75,6 +75,16 @@ export interface UiaProbeRequest {
   /** invoke: optional staleness guards verified against the cached element. */
   name?: string;
   controlType?: string;
+  /**
+   * windows (plan 575): pid filter — 0/absent lists every top-level
+   * window (list_windows), a positive pid narrows to that process.
+   */
+  pid?: number;
+  /**
+   * selectText (plan 575): the text to locate inside the element's
+   * TextPattern document range and select.
+   */
+  text?: string;
 }
 
 /**
@@ -145,11 +155,19 @@ export const UIA_INVOKE_FAILURE_REASONS = {
 export type EnumeratedElement = Omit<ElementDescriptor, 'source'> & {
   /** True when the element passed the interactive ControlType whitelist. */
   interactive?: boolean;
+  /** Real UIA state (plan 575 probe upgrade) — absent = unknown. */
+  enabled?: boolean;
+  focused?: boolean;
+  /** Emitted only when the element carries SelectionItemPattern. */
+  selected?: boolean;
 };
 
 /** ElementDescriptor with the `interactive` flag carried through. */
 export type EnumeratedElementDescriptor = ElementDescriptor & {
   interactive?: boolean;
+  enabled?: boolean;
+  focused?: boolean;
+  selected?: boolean;
 };
 
 /** Serialize one request as a single ASCII line (safe for any console codepage). */
@@ -185,11 +203,33 @@ export function buildRequestLine(request: UiaProbeRequest): string {
       ...(request.controlType !== undefined ? { controlType: request.controlType } : {}),
     });
   }
+  if (request.op === 'apps') {
+    return JSON.stringify({ id: request.id, op: 'apps' });
+  }
+  if (request.op === 'windows') {
+    return JSON.stringify({ id: request.id, op: 'windows', pid: request.pid ?? 0 });
+  }
+  if (request.op === 'selectText') {
+    return JSON.stringify({
+      id: request.id,
+      op: 'selectText',
+      hwnd: request.hwnd,
+      index: request.index,
+      text: request.text,
+      ...(request.name !== undefined ? { name: request.name } : {}),
+      ...(request.controlType !== undefined ? { controlType: request.controlType } : {}),
+    });
+  }
   return JSON.stringify({ id: request.id, op: 'ping' });
 }
 
 const EnumeratedElementSchema = ElementDescriptorSchema.omit({ source: true }).extend({
   interactive: z.boolean().optional(),
+  /** Real UIA state (plan 575 probe upgrade) — absent = unknown. */
+  enabled: z.boolean().optional(),
+  focused: z.boolean().optional(),
+  /** Emitted only when the element carries SelectionItemPattern. */
+  selected: z.boolean().optional(),
 });
 
 const successResponseSchema = z.object({
@@ -208,11 +248,37 @@ const successResponseSchema = z.object({
       title: z.string(),
     })
     .optional(),
+  /** apps (plan 575): processes with a visible main window. */
+  apps: z
+    .array(
+      z.object({
+        pid: z.number(),
+        exe: z.string().nullable(),
+        title: z.string(),
+        active: z.boolean(),
+      }),
+    )
+    .optional(),
+  /** windows (plan 575): top-level windows with geometry + shell state. */
+  windows: z
+    .array(
+      z.object({
+        hwnd: z.number(),
+        pid: z.number(),
+        title: z.string(),
+        rect: z
+          .object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() })
+          .nullable(),
+        minimized: z.boolean(),
+        cloaked: z.boolean(),
+      }),
+    )
+    .optional(),
   /** Success-side qualifier, e.g. "elevated" (window skipped, UIPI). */
   reason: z.string().nullable().optional(),
   /** invoke (plan 564): the structural method that actually ran. */
   method: z.string().optional(),
-  /** invoke: UIA pattern used ("InvokePattern", null for SetFocus). */
+  /** invoke / selectText (plan 575): UIA pattern used ("TextPattern" on select). */
   pattern: z.string().nullable().optional(),
   /** invoke: ValuePattern read-back after setValue (null otherwise). */
   value: z.string().nullable().optional(),
@@ -250,6 +316,17 @@ export type UiaProbeResponse =
       pattern: string | null;
       /** invoke: ValuePattern read-back after setValue. */
       value: string | null;
+      /** apps (plan 575): processes with a visible main window; null otherwise. */
+      apps: Array<{ pid: number; exe: string | null; title: string; active: boolean }> | null;
+      /** windows (plan 575): top-level windows with geometry; null otherwise. */
+      windows: Array<{
+        hwnd: number;
+        pid: number;
+        title: string;
+        rect: { x: number; y: number; w: number; h: number } | null;
+        minimized: boolean;
+        cloaked: boolean;
+      }> | null;
     }
   | { kind: 'response'; id: number; ok: false; reason: string };
 
@@ -302,6 +379,8 @@ export function parseUiaProbeLine(line: string): UiaProbeResponse | null {
       method: success.data.method ?? null,
       pattern: success.data.pattern ?? null,
       value: success.data.value ?? null,
+      apps: success.data.apps ?? null,
+      windows: success.data.windows ?? null,
     };
   }
   return null;

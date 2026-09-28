@@ -70,6 +70,8 @@ function ipcMessageToUiMessage(m: IpcMessage): Message {
     source: m.source ?? null,
     sendMessageMeta: m.sendMessageMeta ?? null,
     agentDmMeta: m.agentDmMeta ?? null,
+    channelMsgMeta: m.channelMsgMeta ?? null,
+    routineMeta: m.routineMeta ?? null,
     isCompactSummary: m.isCompactSummary ?? undefined,
     compactBoundaryId: m.compactBoundaryId ?? undefined,
     compactedMessageCount: m.compactedMessageCount ?? undefined,

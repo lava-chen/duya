@@ -190,16 +190,22 @@ describe('BackgroundTasksIndicator', () => {
     window.removeEventListener('duya:open-bash-output-panel', onOpen);
   });
 
-  it('lists running tasks before ended ones', () => {
+  it('lists only running commands and orders them newest first', () => {
     mocks.bashTasks = [
       { id: 'ended', pid: 1, outputFile: '/o1', command: 'old', status: 'completed', startTime: 10, endTime: 20 },
-      { id: 'live', pid: 2, outputFile: '/o2', command: 'new', status: 'running', startTime: 5 },
+      { id: 'killed', pid: 2, outputFile: '/o2', command: 'stopped', status: 'killed', startTime: 20, endTime: 30 },
+      { id: 'live-older', pid: 3, outputFile: '/o3', command: 'older live', status: 'running', startTime: 5 },
+      { id: 'live-newer', pid: 4, outputFile: '/o4', command: 'newer live', status: 'running', startTime: 25 },
     ];
     render(<BackgroundTasksIndicator sessionId="s1" />);
     fireEvent.click(chip() as HTMLElement);
     const rows = screen.getAllByTestId(/^background-task-row-/);
-    expect(rows[0]).toHaveAttribute('data-testid', 'background-task-row-live');
-    expect(rows[1]).toHaveAttribute('data-testid', 'background-task-row-ended');
+    expect(rows.map((row) => row.getAttribute('data-testid'))).toEqual([
+      'background-task-row-live-newer',
+      'background-task-row-live-older',
+    ]);
+    expect(screen.queryByTestId('background-task-row-ended')).toBeNull();
+    expect(screen.queryByTestId('background-task-row-killed')).toBeNull();
   });
 
   it('jumps into the sub-agent session when its row is clicked', () => {

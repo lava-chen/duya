@@ -103,3 +103,34 @@ export const RUN_UI_STATUS_I18N_KEY: Record<WorkflowRunUiStatus, string> = {
   interrupted: 'workflow.runUi.interrupted',
   unknown: 'workflow.runUi.unknown',
 };
+
+/** Shared helpers for the compact history and full-page detail surfaces. */
+export function workflowRunStatusTitleKey(status: string): string {
+  return RUN_UI_STATUS_I18N_KEY[runUiStatus(status)];
+}
+
+export function isWorkflowRunActive(status: string): boolean {
+  return isRunUiActive(status);
+}
+
+export function workflowRunCanStop(status: string): boolean {
+  const ui = runUiStatus(status);
+  return ui === 'running' || ui === 'paused';
+}
+
+export function workflowRunStatusTone(status: string): 'success' | 'warning' | 'error' | 'muted' | 'active' {
+  switch (runUiStatus(status)) {
+    case 'running':
+      return 'active';
+    case 'paused':
+      return 'warning';
+    case 'complete':
+      return 'success';
+    case 'failed':
+    case 'cancelled':
+    case 'interrupted':
+      return 'error';
+    default:
+      return 'muted';
+  }
+}

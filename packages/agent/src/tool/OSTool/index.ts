@@ -25,6 +25,18 @@ export {
   type ComputerUseToolEnvelope,
 } from './ComputerUseTool.js';
 
+// Plan 575: the 14-tool ZCode-aligned CUA surface.
+export {
+  COMPUTER_CUA_TOOL_NAME,
+  COMPUTER_CUA_IPC_CHANNEL,
+  COMPUTER_CUA_TOOLS,
+  computerCuaInputSchema,
+  definition as computerCuaDefinition,
+  executor as computerCuaExecutor,
+  type ComputerCuaEnvelope,
+  type ComputerCuaToolName,
+} from './ComputerCuaTool.js';
+
 export {
   COMPUTER_USE_TOOL_NAME,
   COMPUTER_USE_ACTIONS,

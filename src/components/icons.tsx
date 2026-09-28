@@ -15,6 +15,7 @@ import type { LucideProps } from "lucide-react";
 import {
   // === Lucide icons (primary) ===
   ArrowUpRight,
+  ArrowDownLeft,
   ArrowLeft,
   ArrowRight,
   ArrowUp,
@@ -364,6 +365,7 @@ function wrapTabler(Icon: TablerIcon): WrappedIconComponent {
 // ─── Lucide icons (primary) ───────────────────────────────────────────────────
 
 export const ArrowUpRightIcon = wrapLucide(ArrowUpRight);
+export const ArrowDownLeftIcon = wrapLucide(ArrowDownLeft);
 export const ArrowLeftIcon = wrapLucide(ArrowLeft);
 export const ArrowRightIcon = wrapLucide(ArrowRight);
 export const ArrowUpIcon = wrapLucide(ArrowUp);

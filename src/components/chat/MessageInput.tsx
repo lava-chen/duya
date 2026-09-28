@@ -2151,11 +2151,6 @@ export function MessageInput({
           {/* Bottom Toolbar */}
           <div className="mt-1 px-2 flex min-w-0 items-center gap-2">
             <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-visible">
-              {/* Live background-task chip (bash commands + sub-agents).
-                  Moved in from the row below the input box — shares the
-                  toolbar row with the model selector; renders nothing
-                  while nothing runs in the background. */}
-              <BackgroundTasksIndicator sessionId={sessionId} />
               {/* Plus Button — opens the `@` context popup (添加附件 / mode / MCP). The
                   `/` commands are only reachable by typing `/` in the input. */}
               <IconButton
@@ -2240,6 +2235,10 @@ export function MessageInput({
                   <span className="truncate">Agent Plan Mode</span>
                 </span>
               )}
+              {/* Live background-task chip (bash commands + sub-agents).
+                  Keep it after permission and active-mode controls; when no
+                  mode is active, it becomes the third toolbar action. */}
+              <BackgroundTasksIndicator sessionId={sessionId} />
             </div>
 
             {/* Right: one button slot, three states. While streaming with

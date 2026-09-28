@@ -49,7 +49,7 @@ export const botConfig: PromptSystemConfig = {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.
     if (ctx.omitAgentsMd) return
     // Plan 550 1d-rest (environment section): pre-populate isGitRepo /
-    // nowMs / unameSr / marketingName / knowledgeCutoff so the .hbs
+    // unameSr / marketingName / knowledgeCutoff so the .hbs
     // template can render them synchronously. Bot config has no memory
     // hook (botMemory tiers replace it), so the extension is solely the
     // env one here.

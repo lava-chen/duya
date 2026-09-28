@@ -42,7 +42,7 @@ import { RecorderFocusTracker } from './focus-tracker.js';
 import { createSharedUiaProbeAdapter, type UiaEnumerateResult, type UiaForegroundInfo } from './uia-probe.js';
 import { createSharedAxRecorderAdapter } from './ax-helper.js';
 import { getForegroundWindowInfo } from '../computer-use-backend.js';
-import { showOverlayElements } from '../overlay/index.js';
+import { clearOverlayElements, showOverlayElements } from '../overlay/index.js';
 
 const logger = getLogger();
 
@@ -121,6 +121,8 @@ export interface RecorderServiceOptions {
    * snapshot must never block or fail the append chain.
    */
   onEnumerateSnapshot?: (result: UiaEnumerateResult, app: AppRef) => void;
+  /** Hide the element overlay when its foreground snapshot is no longer valid. */
+  onEnumerateClear?: () => void;
   /**
    * plan 572 Phase 4 (macOS): Secure Input probe (kCGSSessionSecureInputPID
    * via the AX helper). Called on focus changes; true = keyboard
@@ -194,6 +196,9 @@ export class RecorderService {
     probe?: RecorderProbe;
     urlRefreshIntervalMs: number;
     onEnumerateSnapshot?: RecorderServiceOptions['onEnumerateSnapshot'];
+    onEnumerateClear?: RecorderServiceOptions['onEnumerateClear'];
+    permissionGate?: RecorderServiceOptions['permissionGate'];
+    secureInputQuery?: RecorderServiceOptions['secureInputQuery'];
     createWorker?: RecorderServiceOptions['createWorker'];
   };
 
@@ -204,6 +209,9 @@ export class RecorderService {
       probe: opts.probe,
       urlRefreshIntervalMs: opts.urlRefreshIntervalMs ?? URL_REFRESH_INTERVAL_MS,
       onEnumerateSnapshot: opts.onEnumerateSnapshot,
+      onEnumerateClear: opts.onEnumerateClear,
+      permissionGate: opts.permissionGate,
+      secureInputQuery: opts.secureInputQuery,
       createWorker: opts.createWorker,
     };
   }
@@ -235,6 +243,7 @@ export class RecorderService {
 
   async stop(): Promise<SessionSummary | null> {
     if (this.status !== 'recording' && this.status !== 'starting') {
+      this.clearEnumerateSnapshot();
       return null;
     }
     if (this.stopInFlight) {
@@ -255,10 +264,12 @@ export class RecorderService {
     if (this.status === 'recording' || this.status === 'starting') {
       await this.stop();
     }
+    this.clearEnumerateSnapshot();
     this.statusListeners.clear();
   }
 
   private async doStart(): Promise<void> {
+    this.clearEnumerateSnapshot();
     this.setStatus('starting');
     this.degraded = false;
     this.droppedNoApp = 0;
@@ -360,6 +371,7 @@ export class RecorderService {
   }
 
   private async doStop(): Promise<void> {
+    this.clearEnumerateSnapshot();
     this.setStatus('stopping');
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
@@ -433,6 +445,9 @@ export class RecorderService {
     this.redactHint = false;
     this.currentApp = nextApp;
     this.currentHwnd = next.hwnd;
+    // Do not leave the previous app's controls visible while the new tree
+    // is being enumerated (or when the next app is filtered out).
+    this.clearEnumerateSnapshot();
 
     // Browser URL: refresh on every focus change INTO a supported
     // browser; clear immediately when leaving one (no stale URLs).
@@ -473,20 +488,31 @@ export class RecorderService {
     // Plan 562 Phase 5: async element-tree snapshot on focus changes.
     // (hwnd,title) caching keeps an unchanged application from being
     // re-scanned. Fire-and-forget: the snapshot must never block the
-    // append chain, and a null/empty result simply leaves the overlay
-    // as-is (cleared on recorder stop).
+    // append chain. Clear on empty/error and ignore results that arrive
+    // after focus changed or recording stopped.
     const enumerate = this.opts.probe?.enumerate;
     const onSnapshot = this.opts.onEnumerateSnapshot;
     if (enumerate && onSnapshot) {
       const hwnd = next.hwnd;
       const title = next.title;
+      const sessionId = this.sessionId;
+      const isCurrentSnapshot = () =>
+        (this.status === 'starting' || this.status === 'recording') &&
+        this.sessionId === sessionId &&
+        this.currentHwnd === hwnd &&
+        this.currentApp?.title === title;
       void enumerate(hwnd, title)
         .then((result) => {
+          if (!isCurrentSnapshot()) return;
           if (result && result.elements.length > 0) {
             onSnapshot(result, nextApp);
+          } else {
+            this.clearEnumerateSnapshot();
           }
         })
-        .catch(() => undefined);
+        .catch(() => {
+          if (isCurrentSnapshot()) this.clearEnumerateSnapshot();
+        });
     }
 
     const focusEvent: RecorderEvent = {
@@ -640,6 +666,18 @@ export class RecorderService {
     return pid === process.pid;
   }
 
+  private clearEnumerateSnapshot(): void {
+    try {
+      this.opts.onEnumerateClear?.();
+    } catch (err) {
+      logger.warn(
+        'recorder element overlay clear failed',
+        { error: err instanceof Error ? err.message : String(err) },
+        LogComponent.ComputerUse,
+      );
+    }
+  }
+
   // --- status -----------------------------------------------------------
 
   onStatus(listener: (snapshot: RecorderStatusSnapshot) => void): () => void {
@@ -732,10 +770,9 @@ export function getRecorderService(): RecorderService {
       // overlay. Empty trees (custom-drawn windows, UIPI skips) draw
       // nothing — the overlay stays cleared.
       onEnumerateSnapshot: (result) => {
-        if (result.elements.length > 0) {
-          showOverlayElements(result.elements as unknown as Record<string, unknown>[]);
-        }
+        showOverlayElements(result.elements as unknown as Record<string, unknown>[]);
       },
+      onEnumerateClear: clearOverlayElements,
     });
   }
   return _singleton;

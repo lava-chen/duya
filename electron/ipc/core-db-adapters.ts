@@ -105,6 +105,10 @@ export interface MessageRow {
    * JSON-serialized from message metadata.agentDm. Null for plain rows.
    */
   agent_dm_meta?: string | null;
+  /** Channel send/receive marker payload (JSON), from metadata.channelMsg. */
+  channel_msg_meta?: string | null;
+  /** Routine lifecycle marker payload (JSON), from metadata.routine. */
+  routine_meta?: string | null;
   /** Plan 478: shared-room post payload (JSON). */
   group_post_meta?: string | null;
   /**
@@ -439,6 +443,13 @@ const PERSISTED_METADATA_KEYS = [
   // clientMsgId) — the room view and the group orchestrator both read the
   // member identity back out of the persisted room transcript entries.
   'groupPost',
+  // Channel send/receive marker payload (direction/address/platform/chat/
+  // senderName/text) — the bot-direct chat's channel chips and their detail
+  // overlay read this back after reload.
+  'channelMsg',
+  // Routine lifecycle marker payload (action/name/routineId) — the bot-direct
+  // chat's routine chips read this back after reload.
+  'routine',
 ] as const;
 
 /**
@@ -770,6 +781,14 @@ function messageToIpcRow(
     agent_dm_meta:
       metadata?.agentDm != null
         ? JSON.stringify(metadata.agentDm)
+        : null,
+    channel_msg_meta:
+      metadata?.channelMsg != null
+        ? JSON.stringify(metadata.channelMsg)
+        : null,
+    routine_meta:
+      metadata?.routine != null
+        ? JSON.stringify(metadata.routine)
         : null,
     group_post_meta:
       metadata?.groupPost != null
