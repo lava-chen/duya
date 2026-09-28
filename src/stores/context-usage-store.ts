@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { ContextSnapshot } from '@duya/ai';
 
 /**
  * context-usage-store.ts
@@ -13,6 +14,32 @@ import { create } from 'zustand';
  */
 export interface LiveContextUsage {
   usedTokens: number;
+  /**
+   * Plan 577 §2 three-value accounting (worker-computed). The UI consumes
+   * `currentEstimatedInputTokens` — the projection the worker derived — and
+   * must NOT re-derive any formula renderer-side. `latestInputTokens` /
+   * `peakInputTokens` are the Observation/Accounting values for diagnostics.
+   */
+  latestInputTokens?: number;
+  peakInputTokens?: number;
+  projectedNextInputTokens?: number;
+  currentEstimatedInputTokens?: number;
+  estimateSource?: 'provider' | 'anchor_projection' | 'tokenizer' | 'heuristic' | 'unknown';
+  /**
+   * Plan 577 §3/§4 lineage (optional — old workers omit them): the ledger
+   * epoch + observation age the frame was built from, the resolved window
+   * and its source. `windowSource === 'default'` means the 200K fallback
+   * fired — the ring marks it so the silent split ("ring 1M / compact 200K",
+   * plan 517 R1) can never hide again.
+   */
+  epoch?: number;
+  confidence?: 'authoritative' | 'derived' | 'heuristic';
+  observedAt?: number;
+  contextWindow?: number;
+  windowSource?: 'capability' | 'catalog' | 'default';
+  /** The exact projection snapshot also consumed by compaction decisions. */
+  contextSnapshot?: ContextSnapshot;
+  toolDefinitionsTokens?: number;
   /** False → the number is a rough local estimate (or post-compaction
    *  unknown); the ring shows "?" instead of trusting it. */
   anchored: boolean;
@@ -48,6 +75,18 @@ export interface LiveContextUsage {
     msgs: number;
     compactedPending: boolean;
   };
+  /** Plan 577 §4: context composition buckets (plan-577 workers only). */
+  composition?: {
+    unattributedObservedTokens: number;
+    system: Array<{ label: string; tokens: number }>;
+    conversation: Array<{ label: string; tokens: number }>;
+    injectedContext: Array<{ label: string; tokens: number }>;
+    toolDefinitions: Array<{ label: string; tokens: number }>;
+    toolResults: Array<{ label: string; tokens: number }>;
+    attachments: Array<{ label: string; tokens: number }>;
+    memory: Array<{ label: string; tokens: number }>;
+    providerOverhead: Array<{ label: string; tokens: number }>;
+  };
   updatedAt: number;
 }
 
@@ -80,6 +119,21 @@ export const useContextUsageStore = create<ContextUsageState>((set) => ({
  */
 export interface WorkerUsageSnapshot {
   usedTokens?: number;
+  /** Plan 577 §2 three-value accounting (optional — old workers omit them). */
+  latestInputTokens?: number;
+  peakInputTokens?: number;
+  projectedNextInputTokens?: number;
+  currentEstimatedInputTokens?: number;
+  estimateSource?: 'provider' | 'anchor_projection' | 'tokenizer' | 'heuristic' | 'unknown';
+  /** Plan 577 §3/§4 lineage (optional — old workers omit them). */
+  epoch?: number;
+  confidence?: LiveContextUsage['confidence'];
+  observedAt?: number;
+  contextWindow?: number;
+  windowSource?: LiveContextUsage['windowSource'];
+  contextSnapshot?: ContextSnapshot;
+  toolDefinitionsTokens?: number;
+  composition?: LiveContextUsage['composition'];
   anchored?: boolean;
   inputTokens?: number;
   outputTokens?: number;
@@ -110,6 +164,21 @@ export function applyWorkerUsageSnapshot(
   if (!snapshot || typeof snapshot !== 'object') return;
   useContextUsageStore.getState().setLive(sessionId, {
     usedTokens: snapshot.usedTokens ?? 0,
+    // Plan 577 §2 three-value accounting — pass-through, no re-derivation.
+    latestInputTokens: snapshot.latestInputTokens,
+    peakInputTokens: snapshot.peakInputTokens,
+    projectedNextInputTokens: snapshot.projectedNextInputTokens,
+    currentEstimatedInputTokens: snapshot.currentEstimatedInputTokens,
+    estimateSource: snapshot.estimateSource,
+    // Plan 577 §3/§4 lineage — pass-through, no re-derivation.
+    epoch: snapshot.epoch,
+    confidence: snapshot.confidence,
+    observedAt: snapshot.observedAt,
+    contextWindow: snapshot.contextWindow,
+    windowSource: snapshot.windowSource,
+    contextSnapshot: snapshot.contextSnapshot,
+    toolDefinitionsTokens: snapshot.toolDefinitionsTokens,
+    composition: snapshot.composition,
     anchored: snapshot.anchored ?? false,
     inputTokens: snapshot.inputTokens ?? 0,
     outputTokens: snapshot.outputTokens ?? 0,

@@ -56,6 +56,12 @@ export interface ContextEstimateOptions {
    *  anchor exists — once anchored, the API's input_tokens already includes
    *  the prefix, and adding it again would double-count. */
   systemPrefixTokens?: number;
+  /** Estimated tool-definition surface (name/description/input_schema JSON).
+   *  Plan 577 §4: the unanchored fallback historically priced only the
+   *  system prefix, so Plugin/MCP-heavy sessions under-counted by the whole
+   *  schema volume. Added ONLY on the unanchored path (same double-count
+   *  rule as systemPrefixTokens). Diagnostics-only on the anchored path. */
+  toolDefinitionsTokens?: number;
 }
 
 export interface ContextEstimate {
@@ -66,11 +72,15 @@ export interface ContextEstimate {
   anchored: boolean;
   /** Index of the message providing the anchor, or null. */
   anchorIndex: number | null;
+  /** Normalized provider input plus the assistant content actually persisted. */
   anchorTokens: number;
   trailingTokens: number;
   /** Model that produced the anchor request (token-accounting). Null when
    *  unanchored or the anchor predates per-message model attribution. */
   anchorModel: string | null;
+  /** Plan 577 §4: the tool-definition volume actually charged to this
+   *  estimate (> 0 only on the unanchored path; diagnostics). */
+  toolDefinitionsTokens: number;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -183,7 +193,7 @@ export function estimateMessageTokens(message: {
 // ──────────────────────────────────────────────────────────────────────────
 
 /**
- * Normalize a usage block into the full prompt volume the model saw.
+ * Normalize the input-side usage into the prompt volume the model saw.
  *
  * Anthropic reports `input_tokens` EXCLUDING cache read/write; many
  * OpenAI-compatible gateways map `prompt_tokens` (which INCLUDES cached
@@ -249,36 +259,22 @@ function isUsableAnchor(
   const usage = msg.usage ?? msg.tokenUsage;
   if (!usage) return undefined;
   const underReported = isUnderReportedUsage(usage);
-  const { prompt, output } = normalizePromptTokens(usage);
-  // Provider-reported total_tokens (OpenAI-compatible gateways) is the most
-  // authoritative anchor when present, but only trust it when it's larger than
-  // the cache-normalized prompt — gateways that omit cache from total_tokens
-  // would otherwise silently under-count the anchor and miss compaction.
-  //
-  // NEVER trust the top-level total_tokens on a turn-cumulative block (one
-  // carrying `last_call`): there it is the SUM of every LLM call in the turn,
-  // not the prompt volume of the final request. Math.max-ing it against
-  // prompt+output let the cumulative value win, seeding the ring with an
-  // ~N×-inflated anchor (measured 7.67M on a 1M-window model at ~110K real
-  // usage, 2026-09-26) and firing proactive compaction 9 turns early.
-  // `prompt`/`output` above already read `last_call` via normalizePromptTokens.
-  let total: number;
-  if (!usage.last_call && typeof usage.total_tokens === 'number' && usage.total_tokens > 0) {
-    total = Math.max(usage.total_tokens, prompt + output);
-  } else {
-    total = prompt + output;
-  }
-  // All-zero usage renders as an empty ring; cache-only requests (input=0,
-  // large hits) are meaningful and survive via normalizePromptTokens.
-  if (total <= 0) return undefined;
-  return { value: total, underReported };
+  const { prompt } = normalizePromptTokens(usage);
+  // The provider's output_tokens / total_tokens describe generated traffic,
+  // not context carried into the next request. Add only the assistant content
+  // that the harness actually persisted; hidden or discarded output therefore
+  // cannot inflate a context anchor. The output payload estimate uses the same
+  // block-aware tokenizer as trailing messages.
+  if (prompt <= 0) return undefined;
+  return { value: prompt + estimateMessageTokens(msg), underReported };
 }
 
 /**
- * Compute the current context size from a message list.
+ * Compute the current input projection from a message list.
  *
- * 1. Anchored path: latest valid assistant usage after the last compaction
- *    boundary + estimated tokens of everything appended since.
+ * 1. Anchored path: latest valid assistant input after the last compaction
+ *    boundary + the persisted assistant content on that message + estimated
+ *    tokens of everything appended since.
  * 2. Unanchored path: whole-history estimate + `systemPrefixTokens`.
  * 3. Post-compaction stale: an anchor exists but only at/before the last
  *    boundary (it describes the pre-compaction context) AND there are
@@ -295,6 +291,7 @@ export function computeContextEstimate(
     anchorTokens: 0,
     trailingTokens: 0,
     anchorModel: null,
+    toolDefinitionsTokens: 0,
   };
 
   // Last compaction boundary — anchors at or before it are stale.
@@ -350,6 +347,9 @@ export function computeContextEstimate(
       anchorTokens: base,
       trailingTokens: trailing,
       anchorModel,
+      // Anchored: the provider's input_tokens already priced the tool
+      // definitions — never add the local schema estimate on top.
+      toolDefinitionsTokens: 0,
     };
   }
 
@@ -363,12 +363,215 @@ export function computeContextEstimate(
   let tokens = 0;
   for (const msg of messages) tokens += estimateMessageTokens(msg);
   const prefix = options.systemPrefixTokens || 0;
+  // Plan 577 §4: unanchored estimates historically missed the tool-schema
+  // volume entirely — plugin/MCP-heavy sessions under-counted by the whole
+  // surface. Charge it once, here, on the unanchored path only.
+  const toolDefinitions = Math.max(0, options.toolDefinitionsTokens || 0);
+  const total = (tokens > 0 || prefix > 0 ? tokens + prefix : 0) + toolDefinitions;
   return {
-    usedTokens: tokens > 0 || prefix > 0 ? tokens + prefix : 0,
+    usedTokens: total,
     anchored: false,
     anchorIndex: null,
     anchorTokens: 0,
     trailingTokens: tokens,
     anchorModel: null,
+    toolDefinitionsTokens: toolDefinitions,
   };
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// ContextComposition (plan 577 §4) — context is not just messages
+// ──────────────────────────────────────────────────────────────────────────
+
+/** One labelled slice of the context (bucket diagnostics). */
+export interface ContextPart {
+  label: string;
+  tokens: number;
+}
+
+export interface ContextComposition {
+  system: ContextPart[];
+  conversation: ContextPart[];
+  /** Harness injections: system-reminder / turn metadata / workspace status /
+   *  memory recall / skill instructions — the only bucket that keeps
+   *  attributing correctly as Plugin/Skill/MCP weight grows. */
+  injectedContext: ContextPart[];
+  toolDefinitions: ContextPart[];
+  toolResults: ContextPart[];
+  attachments: ContextPart[];
+  memory: ContextPart[];
+  providerOverhead: ContextPart[];
+  /** The provider-observed anchor volume (anchored path only) — a fact that
+   *  cannot be bucketed locally without double-guessing the provider.
+   *  composition buckets + this = estimate.usedTokens. */
+  unattributedObservedTokens: number;
+}
+
+/**
+ * Text prefixes that identify a harness-injected payload (plan 577 §4
+ * `injectedContext` bucket). Runtime-injected user-role rows carry these
+ * markers; extend here when a new injection channel appears.
+ */
+const HARNESS_INJECTION_PREFIXES = [
+  '<system-reminder',
+  '<task-notification',
+  '[system]',
+  '[agent]',
+  '[routine]',
+  '<runtime_context>',
+  '<turn-metadata>',
+  '<workspace-status>',
+] as const;
+
+function isHarnessInjectedText(text: string): boolean {
+  const head = text.slice(0, 64);
+  return HARNESS_INJECTION_PREFIXES.some((p) => head.includes(p));
+}
+
+/** Bucket options extend the estimator's — the composition is computed over
+ *  the SAME measurement, never a second-derivation. */
+export interface ContextCompositionOptions extends ContextEstimateOptions {
+  /** Sub-slices for the system bucket (labelled parts of the prompt).
+   *  When absent, a non-zero systemPrefixTokens collapses into one part. */
+  systemParts?: ContextPart[];
+  /** Sub-slices for the tool-definitions bucket (e.g. per MCP server). */
+  toolDefinitionParts?: ContextPart[];
+  /** Memory-recall payload priced outside the message timeline. */
+  memoryParts?: ContextPart[];
+}
+
+/** Content-block classification for one message's blocks. */
+type BlockBucket = 'conversation' | 'injectedContext' | 'toolResults' | 'attachments';
+
+function classifyBlockBucket(block: unknown): BlockBucket {
+  if (!block || typeof block !== 'object') return 'conversation';
+  const b = block as { type?: string };
+  switch (b.type) {
+    case 'tool_result':
+      return 'toolResults';
+    case 'image':
+      return 'attachments';
+    case 'text':
+      return typeof (b as { text?: string }).text === 'string' &&
+        isHarnessInjectedText((b as { text: string }).text)
+        ? 'injectedContext'
+        : 'conversation';
+    default:
+      return 'conversation';
+  }
+}
+
+/**
+ * Compute the context size AND its composition in one pass (plan 577 §4).
+ *
+ * The `estimate` inside the result is exactly what
+ * {@link computeContextEstimate} would return for the same input — the
+ * composition is a projection of the same measurement, not a parallel one.
+ *
+ * Bucketing rules:
+ * - Anchored: the anchor's observed volume is a provider fact and lands in
+ *   `unattributedObservedTokens`; every message AFTER the anchor is
+ *   block-classified into the buckets. The system/tool/memory overheads are
+ *   inside the anchor volume — their buckets stay empty (no double-count).
+ *   Bucket sum + unattributed = total.
+ * - Unanchored: the whole history is bucketed; the system/tool/memory
+ *   overheads come from the labelled options parts.
+ * - Empty history + zero overhead → all buckets empty, total 0.
+ */
+export function computeContextComposition(
+  messages: readonly ContextEstimateMessage[],
+  options: ContextCompositionOptions = {},
+): { estimate: ContextEstimate; composition: ContextComposition } {
+  const estimate = computeContextEstimate(messages, options);
+
+  const buckets: Record<BlockBucket, ContextPart[]> = {
+    conversation: [],
+    injectedContext: [],
+    toolResults: [],
+    attachments: [],
+  };
+  const push = (bucket: BlockBucket, label: string, tokens: number): void => {
+    if (tokens <= 0) return;
+    buckets[bucket].push({ label, tokens });
+  };
+
+  // Scan range: anchored → only the trailing slice is attributable locally;
+  // unanchored (and the "?"-post-compaction case, where there is nothing to
+  // attribute) → the whole history.
+  const scanStart =
+    estimate.anchored && estimate.anchorIndex !== null ? estimate.anchorIndex + 1 : 0;
+
+  if (estimate.usedTokens !== null) {
+    for (let i = scanStart; i < messages.length; i++) {
+      const msg = messages[i];
+      if (typeof msg.content === 'string') {
+        push(
+          isHarnessInjectedText(msg.content) ? 'injectedContext' : 'conversation',
+          `${msg.role}#${i}`,
+          estimateMessageTokens(msg),
+        );
+        continue;
+      }
+      for (let j = 0; j < msg.content.length; j++) {
+        const block = msg.content[j];
+        const bucket = classifyBlockBucket(block);
+        // Per-block cost through the SAME block-aware estimator the timeline
+        // scan uses (single-block array) — tool_result recursion, image
+        // floor, thinking and tool_use input are priced identically, so the
+        // bucket sum equals the trailing estimate exactly.
+        const tokens = estimateMessageTokens({ role: msg.role, content: [block] });
+        push(bucket, `${msg.role}#${i}.${j}`, tokens);
+      }
+    }
+  }
+
+  const systemPrefix = options.systemPrefixTokens || 0;
+  // Anchored: the system prompt / tool schemas / memory payloads are INSIDE
+  // the provider-observed anchor volume — re-emitting them as labelled parts
+  // would double-count and break the
+  //   all-buckets + unattributedObservedTokens === estimate.usedTokens
+  // invariant. Overhead parts are labelled only on the unanchored path,
+  // where nothing authoritative has priced them. The tool-definitions
+  // fallback reads the estimate's charged value (0 on the anchored path)
+  // rather than the raw option, so an anchored turn never shows the bucket.
+  const overheadLabelled = !estimate.anchored;
+  const systemParts: ContextPart[] = !overheadLabelled
+    ? []
+    : options.systemParts && options.systemParts.length > 0
+      ? options.systemParts.filter((p) => p.tokens > 0)
+      : systemPrefix > 0
+        ? [{ label: 'system', tokens: systemPrefix }]
+        : [];
+
+  const toolDefinitionParts: ContextPart[] = !overheadLabelled
+    ? []
+    : options.toolDefinitionParts && options.toolDefinitionParts.length > 0
+      ? options.toolDefinitionParts.filter((p) => p.tokens > 0)
+      : (estimate.toolDefinitionsTokens || 0) > 0
+        ? [{ label: 'tool definitions', tokens: estimate.toolDefinitionsTokens }]
+        : [];
+
+  const memoryParts: ContextPart[] = !overheadLabelled
+    ? []
+    : (options.memoryParts ?? []).filter((p) => p.tokens > 0);
+
+  return {
+    estimate,
+    composition: {
+      system: systemParts,
+      conversation: buckets.conversation,
+      injectedContext: buckets.injectedContext,
+      toolDefinitions: toolDefinitionParts,
+      toolResults: buckets.toolResults,
+      attachments: buckets.attachments,
+      memory: memoryParts,
+      providerOverhead: [],
+      unattributedObservedTokens: estimate.anchored ? estimate.anchorTokens : 0,
+    },
+  };
+}
+
+/** Total across a bucket — the sum every diagnostic surface renders. */
+export function contextPartsTotal(parts: readonly ContextPart[]): number {
+  return parts.reduce((sum, p) => sum + p.tokens, 0);
 }

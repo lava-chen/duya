@@ -3,21 +3,46 @@
  *
  * Design:
  * - Token counting: always via computeContextEstimate() (same as renderer ring).
- *   Priority: observedPromptTokens (API anchor) > computeContextEstimate > 0.
- * - Threshold: totalTokens > maxTokens - reserveTokens  (Pi style).
+ *   Plan 577 §2: the projection is shrink-aware — the timeline scan
+ *   (anchor + trailing) is the base measurement, a schema delta is added on
+ *   top (tool growth the next request will carry), and live provider
+ *   observations fill the windows the scan cannot see (post-compaction "?",
+ *   no-anchor-yet). The old "observed round-max overrides everything"
+ *   short-circuit is gone: it pinned the measurement at the turn peak even
+ *   after a prune shrank the projection.
+ * - Threshold: totalTokens > triggerHighWatermark  (max − reserve, Pi style).
+ *   Plan 577 §4: the budget is a four-line model — trigger (proactive),
+ *   rearm (suppression state machine), target (optimization goal only) and
+ *   hardLimit (mid-loop overflow). Suppression lifts on the rearm line, not
+ *   "on success".
  * - Suppression: lightweight — remember the last failure type and when to retry.
  *   No 5-state machine. Failures: auth (time-windowed, plan 552), size (cleared
- *   on compaction / budget change), other (cleared on next turn). Failure
- *   classification is single-sourced in compactErrors.classifySuppressReason.
+ *   when the projection re-arms below the rearm low-watermark or the budget
+ *   changes), other (cleared on next turn). Failure classification is
+ *   single-sourced in compactErrors.classifySuppressReason.
  * - No prefire. No iterative summary. No suppression cooldown constants.
  * - Flat delegation: one class, one shouldCompact() call.
+ * - Accounting (plan 577 §2.1/§3): the Observation / Accounting-State layers
+ *   and the epoch counter live in the ContextLedger — the single observation
+ *   entry point. This manager delegates to it; accounting semantics (latest
+ *   falls only across a noted shrink, peak is a per-epoch high-water mark)
+ *   are unchanged from Phase 1.
  */
 
 import type { Message, MessageContent } from '../types.js'
 import type { CompactionResult, CompactionStats, CompactionStrategy, CompactOptions } from './types.js'
 import { DEFAULT_CONTEXT_WINDOW } from './types.js'
 import { TokenBudgetManager } from './tokenBudget.js'
-import { computeContextEstimate, type ContextEstimateMessage } from '@duya/ai'
+import {
+  applyLiveAnchorCorrection,
+  computeContextEstimate,
+  estimateContextMessageTokens,
+  normalizePromptTokens,
+  type ContextAccountingState,
+  type ContextEstimateMessage,
+  type ContextSnapshot,
+} from '@duya/ai'
+import { ContextLedger } from '../context/ContextLedger.js'
 import { logger } from '../utils/logger.js'
 import { SessionMemoryCompactStrategy } from './strategies/index.js'
 import { BackgroundPrefire } from './BackgroundPrefire.js'
@@ -43,6 +68,10 @@ export interface CompactionProbe {
   overTriggerLine: boolean
   /** `tokens > hardLimit` — the mid-loop overflow line (full window). */
   overHardLimit: boolean
+  /** Plan 577 §2: high-water mark of observed inputs since the last epoch
+   *  reset. Overflow diagnostics / tokenTrace consume this — the projection
+   *  may sit far below what this session already saw (post-prune). */
+  peakInputTokens?: number
 }
 
 /**
@@ -62,6 +91,7 @@ function toContextEstimateMessage(msg: Message): ContextEstimateMessage {
     content: msg.content as string | unknown[],
     usage: (msg as { usage?: unknown }).usage ?? undefined,
     tokenUsage: msg.tokenUsage ?? undefined,
+    model: msg.model ?? undefined,
     isCompactBoundary: msg.isCompactBoundary ?? undefined,
   }
 }
@@ -143,6 +173,16 @@ export interface CompactionManagerConfig {
   /** Reserved tokens for response. Compacts when totalTokens > maxTokens - reserveTokens. Default 16384. */
   reserveTokens?: number
   systemPromptTokens?: number
+  /**
+   * Plan 577 §4: the rearm low-watermark (suppression state-machine line).
+   * Default: 0.75 × maxTokens. Must stay ≤ the trigger line.
+   */
+  rearmLowWatermark?: number
+  /**
+   * Plan 577 §4: the compaction optimization goal. Never gates the state
+   * machine. Default: 0.6 × maxTokens.
+   */
+  compactionTarget?: number
   enableReinjection?: boolean
   reinjectionConfig?: Partial<ReinjectorConfig>
   keepRecentTokens?: number
@@ -239,14 +279,20 @@ export class CompactionManager {
   /** Background pass1 summarization state (Plan 495 G1). */
   private prefire: BackgroundPrefire
 
-  /** Last prompt volume reported by the provider (authoritative anchor). */
-  private observedPromptTokens?: number
+  /**
+   * Plan 577 §3: the Observation / Accounting-State layer and the epoch
+   * counter live here — the single observation entry point. This manager
+   * is the ledger's host and delegates all accounting reads to it.
+   */
+  private readonly ledger = new ContextLedger()
 
   constructor(private config: CompactionManagerConfig = {}) {
     this.budget = new TokenBudgetManager({
       maxTokens: config.maxTokens ?? DEFAULT_CONTEXT_WINDOW,
       systemPromptTokens: config.systemPromptTokens ?? 8000,
       reservedTokens: config.reserveTokens ?? 16_384,
+      rearmLowWatermark: config.rearmLowWatermark,
+      compactionTarget: config.compactionTarget,
     })
     this.prefire = new BackgroundPrefire({ prefireStartFraction: config.prefireStartFraction })
     if (config.enableReinjection) {
@@ -268,14 +314,17 @@ export class CompactionManager {
 
   /**
    * Reserve tokens for the next turn's response. Compacts when:
-   *   totalTokens > maxTokens - reserveTokens
+   *   totalTokens > triggerHighWatermark (maxTokens - reserveTokens)
    *
-   * This is the only threshold function — matches Pi exactly.
+   * Plan 577 §4: BEFORE the suppression gate, the rearm hysteresis is
+   * evaluated — when a 'size' suppression is active and the projection has
+   * fallen below the rearm low-watermark, the system re-arms.
    */
   shouldCompact(messages: readonly Message[]): boolean {
-    if (this.suppression.isActive()) return false
     const totalTokens = this.contextSize(messages)
-    return totalTokens > this.budget.maxTokens - this.budget.reservedTokens
+    this.maybeRearm(totalTokens)
+    if (this.suppression.isActive()) return false
+    return totalTokens > this.budget.triggerHighWatermark
   }
 
   /**
@@ -294,22 +343,103 @@ export class CompactionManager {
       imageTriggered: imageCount >= IMAGE_COMPACTION_TRIGGER_COUNT,
       overTriggerLine: tokens > this.getTriggerLine(),
       overHardLimit: tokens > this.getHardLimit(),
+      peakInputTokens: this.getPeakInputTokens(),
     }
   }
 
-  /** Soft line: proactive compaction fires above it (max − reserve). */
+  /** Soft line: proactive compaction fires above it (max − reserve).
+   *  Plan 577 §4: derived from the budget's triggerHighWatermark. */
   getTriggerLine(): number {
-    return this.budget.maxTokens - this.budget.reservedTokens
+    return this.budget.triggerHighWatermark
   }
 
   /** Hard line: the full window — mid-loop overflow fires at it. */
   getHardLimit(): number {
-    return this.budget.maxTokens
+    return this.budget.hardLimit
+  }
+
+  /** Plan 577 §4: suppression state-machine line (default 0.75 × window). */
+  getRearmLowWatermark(): number {
+    return this.budget.rearmLowWatermark
+  }
+
+  /** Plan 577 §4: compaction optimization goal (default 0.6 × window) —
+   *  never a state-machine threshold. */
+  getCompactionTarget(): number {
+    return this.budget.compactionTarget
+  }
+
+  /**
+   * Plan 577 §4: the rearm half of the double-watermark hysteresis.
+   *
+   * A 'size' suppression is lifted when the CURRENT projection falls below
+   * the rearm low-watermark — regardless of whether any compaction reached
+   * the target. Replaces the old "successful compaction clears suppression"
+   * rule, which kept the system suppressed even when the context had
+   * legitimately shrunk (prune) and suppressed it forever when a
+   * summarizer plateaued above the trigger line.
+   *
+   * Safe to call on every measurement: idempotent, only ever touches the
+   * 'size' scope, and logs the transition once.
+   */
+  maybeRearm(currentTokens: number): boolean {
+    if (this.suppression.getFailureType() !== 'size') return false
+    if (!this.suppression.isActive()) return false
+    if (currentTokens > this.budget.rearmLowWatermark) return false
+    this.suppression.clearOnBudgetChange()
+    logger.info(
+      `[CompactionManager] re-arm: projection ${currentTokens} ≤ rearm low-watermark ` +
+        `${this.budget.rearmLowWatermark} — 'size' suppression lifted`,
+    )
+    return true
   }
 
   /** Token count for the context ring (same algorithm, always consistent). */
   getContextTokens(messages: readonly Message[]): number {
     return this.contextSize(messages)
+  }
+
+  /**
+   * Build the one context snapshot shared by budget decisions and the live
+   * worker frame. The ledger contributes provider facts and lineage; this
+   * manager applies the persisted-timeline and schema deltas once.
+   */
+  getContextSnapshot(messages: readonly Message[]): ContextSnapshot {
+    const estimateMessages = messages.map(toContextEstimateMessage)
+    const estimate = computeContextEstimate(estimateMessages, {
+      systemPrefixTokens: this.budget.systemPromptTokens + this.budget.reservedTokens,
+    })
+    const snapshot = this.ledger.getSnapshot()
+    const anchorMessage =
+      estimate.anchorIndex === null ? undefined : estimateMessages[estimate.anchorIndex]
+    const scanAnchorInputTokens = normalizePromptTokens(
+      anchorMessage?.usage ?? anchorMessage?.tokenUsage,
+    ).prompt
+    const observation = snapshot.observation
+    const projection = applyLiveAnchorCorrection({
+      scanUsedTokens: estimate.usedTokens,
+      scanAnchorInputTokens,
+      scanAnchored: estimate.anchored,
+      timelineIncludesLiveObservation:
+        observation !== null && scanAnchorInputTokens === observation.inputTokens,
+      liveLatestInputTokens:
+        snapshot.accounting.latestInputTokens ?? observation?.inputTokens ?? 0,
+      schemaDelta: this.ledger.currentSchemaDelta(),
+      shrinkArmed: snapshot.lastObservationFollowedShrink,
+    })
+
+    snapshot.accounting = {
+      ...snapshot.accounting,
+      projectedNextInputTokens: projection.usedTokens,
+    }
+    snapshot.estimateSource = projection.estimateSource
+    snapshot.confidence =
+      projection.estimateSource === 'provider'
+        ? 'authoritative'
+        : projection.estimateSource === 'anchor_projection'
+          ? 'derived'
+          : 'heuristic'
+    return snapshot
   }
 
   getStats(messages?: readonly Message[]): CompactionStats {
@@ -326,6 +456,12 @@ export class CompactionManager {
     return this.budget.maxTokens
   }
 
+  /** Plan 577 §3: raw ledger facts. Live ring and compaction consumers should
+   *  use getContextSnapshot() so they share the timeline-enriched projection. */
+  getContextLedger(): ContextLedger {
+    return this.ledger
+  }
+
   /**
    * Rewrite the compaction budget to a new context window. Called on
    * runtime model switches (DuyaAgent streamChat drift detection) so a move
@@ -333,9 +469,11 @@ export class CompactionManager {
    * of staying pinned at the original window.
    *
    * Non-positive values are ignored (guards the constructor default path).
-   * systemPromptTokens / reservedTokens from the original config are
-   * preserved across the rebuild. A real budget change also clears 'size'
-   * suppression — a window change is exactly the budget change it waits for.
+   * systemPromptTokens / reservedTokens / rearm-target overrides from the
+   * original config are preserved across the rebuild (explicit overrides
+   * stay absolute; fraction-derived ones re-derive from the new window).
+   * A real budget change also clears 'size' suppression — a window change
+   * is exactly the budget change it waits for.
    */
   updateMaxTokens(maxTokens: number): void {
     if (!Number.isFinite(maxTokens) || maxTokens <= 0) return;
@@ -344,38 +482,134 @@ export class CompactionManager {
       maxTokens,
       systemPromptTokens: this.config.systemPromptTokens ?? 8000,
       reservedTokens: this.config.reserveTokens ?? 16_384,
+      rearmLowWatermark: this.config.rearmLowWatermark,
+      compactionTarget: this.config.compactionTarget,
     });
     this.suppression.clearOnBudgetChange();
   }
 
   /**
-   * Called by DuyaAgent after each result event with the actual prompt volume
-   * the provider reported. This anchors the next shouldCompact() call to real
-   * data instead of a char heuristic.
+   * Plan 577 §2.1 → §3: Observation-layer entry point (delegates to the
+   * ContextLedger). Called by DuyaAgent after each result event with the
+   * call's cache-aware normalized input (the prompt the provider actually
+   * saw) and its output.
+   *
+   * Accounting updates (ledger-owned semantics, unchanged from Phase 1):
+   * - `latest` replaces unconditionally when a shrink was noted since the
+   *   last observation (prune legitimately lowered the context); otherwise a
+   *   decrease is treated as a gateway under-report and the previous value
+   *   is kept (the round-max defense the old single-anchor fed on).
+   * - `peak` is a pure high-water mark — it never falls within an epoch.
+   * - The schema snapshot is re-taken so post-observation tool growth shows
+   *   up as a schemaDelta instead of waiting for the next provider report.
+   */
+  setObservedUsage(inputTokens: number, outputTokens: number): void {
+    this.ledger.recordObservation({ inputTokens, outputTokens })
+  }
+
+  /**
+   * Plan 577 §3: epoch-tagged variant. `epoch` is the generation the
+   * observer captured when the request was built — an older value means the
+   * observation is stale (a compaction rewrote the timeline mid-flight) and
+   * the ledger DROPS it instead of letting it drag the ring backwards.
+   */
+  setObservedUsageForEpoch(
+    inputTokens: number,
+    outputTokens: number,
+    epoch: number,
+  ): boolean {
+    return this.ledger.recordObservation({ inputTokens, outputTokens, epoch })
+  }
+
+  /**
+   * Compat shim (plan 577 transition): the historical single-number feed.
+   * The old value was a round-max prompt+output volume; callers that have
+   * not migrated to {@link setObservedUsage} land it in the Observation
+   * input slot with zero output so the accounting state still advances.
    */
   setObservedPromptTokens(tokens: number): void {
     if (Number.isFinite(tokens) && tokens > 0) {
-      this.observedPromptTokens = Math.floor(tokens)
+      this.setObservedUsage(tokens, 0)
     }
   }
 
   /**
-   * Plan 517 P2.3: read the most recent provider-anchored prompt volume.
-   * Returns undefined when no anchor is set (post-compaction window or
-   * never-streamed agent). Used by the turn-based + token-based cooldown
-   * gate in DuyaAgent to suppress repeated auto-compaction.
+   * Plan 517 P2.3 → plan 577: read the most recent provider-anchored input
+   * volume (Observation layer). Returns undefined when no anchor is set
+   * (post-compaction window or never-streamed agent). Consumed by the
+   * turn-based + token-based cooldown gate in DuyaAgent; units changed from
+   * the old prompt+output volume to input-only — both sides of the growth
+   * subtraction use the same units, so the gate semantics are unchanged.
    */
   getObservedPromptTokens(): number | undefined {
-    return this.observedPromptTokens
+    const observation = this.ledger.getObservation()
+    return observation ? observation.inputTokens : undefined
   }
 
+  /** Accounting State: latest observed input (may fall across a shrink). */
+  getLatestInputTokens(): number | undefined {
+    return this.ledger.getLatestInputTokens()
+  }
+
+  /** Accounting State: high-water mark since the last epoch reset. */
+  getPeakInputTokens(): number | undefined {
+    return this.ledger.getPeakInputTokens()
+  }
+
+  /**
+   * Plan 577 §2: a projection-level shrink was detected by the caller
+   * (compressProjectedToolMessages returned a different reference — tool
+   * results pruned / offloaded). Arms the next observation to replace
+   * `latest` even when smaller, and marks its provenance for the ring-side
+   * downward anchor correction. (Delegates to the ledger.)
+   */
+  noteProjectionShrink(): void {
+    this.ledger.noteProjectionShrink()
+  }
+
+  /** True when the current latest observation is the first one after a noted
+   *  shrink — the ring may correct its anchor downward from it. */
+  wasLastObservationPostShrink(): boolean {
+    return this.ledger.wasLastObservationPostShrink()
+  }
+
+  /**
+   * Plan 577 §2: current system+tools estimate (DuyaAgent re-estimates per
+   * request build). The delta against the snapshot taken at the last
+   * observation is the projection's schemaDelta — an MCP/skill load is felt
+   * by the next request without waiting for the provider to report it.
+   */
+  setSchemaEstimateTokens(tokens: number): void {
+    this.ledger.noteSchemaEstimate(tokens)
+  }
+
+  /** Plan 577 §3: full accounting-state snapshot from the ledger. */
+  getAccountingState(): ContextAccountingState {
+    return this.ledger.getAccountingState()
+  }
+
+  /** Current ContextLedger epoch (plan 577 §3 generation counter). */
+  getContextEpoch(): number {
+    return this.ledger.getEpoch()
+  }
+
+  /**
+   * Epoch reset (plan 577 §3: `beginEpoch('clear')`). Span-style clears
+   * (rewind, hard reset) go through here; compaction success uses the
+   * explicit 'compaction' reason below. Kept as a compat API — DuyaAgent
+   * and tests call this name.
+   */
   clearObservedPromptTokens(): void {
-    this.observedPromptTokens = undefined
+    this.ledger.beginEpoch('clear')
   }
 
-  /** Called when a compaction succeeds — clears 'size' suppression. */
+  /**
+   * Called when a compaction succeeds — records the timestamp. Plan 577 §4:
+   * it no longer clears 'size' suppression ("success ⇒ re-arm" is gone);
+   * the rearm low-watermark owns that transition now (see maybeRearm and
+   * the post-compact hysteresis in compact()).
+   */
   onCompactionSuccess(): void {
-    this.suppression.clearOnBudgetChange()
     this.lastCompactionAt = Date.now()
   }
 
@@ -460,7 +694,7 @@ export class CompactionManager {
   clearCache(): void {
     this.reinjector?.clearCache()
     this.lastCompactionAt = undefined
-    this.observedPromptTokens = undefined
+    this.clearObservedPromptTokens()
     this.prefire.clear()
   }
 
@@ -630,26 +864,54 @@ export class CompactionManager {
       }
 
       const finalTokens = this.contextSize(finalMessages) + reinjectedTokens
-      const overThresholdAfterCompact = finalTokens > this.budget.maxTokens - this.budget.reservedTokens
+      // Plan 577 §4: the post-compact state machine reads the REARM line,
+      // not just the trigger line.
+      //   finalTokens > triggerHighWatermark → still over the proactive
+      //     line at all → suppress (the old 517 P2.2 loop brake, unchanged);
+      //   trigger ≥ finalTokens > rearmLowWatermark → the compaction did
+      //     not push the context back into the safe zone: keep 'size'
+      //     suppression so auto-compaction waits until the projection falls
+      //     below rearm (another compaction, a prune, or a budget change).
+      //     "维持 suppression 等待下一次机会" — never a permanent stall:
+      //     emergency / model-switch / manual paths bypass the gate, and
+      //     shouldCompact() re-arms the moment the projection drops below
+      //     the rearm watermark.
+      //   finalTokens ≤ rearmLowWatermark → system re-armed; even when the
+      //     compactionTarget (optimization goal) was missed, suppression is
+      //     lifted (plan 577 §4 key semantics).
+      const overTrigger = finalTokens > this.budget.triggerHighWatermark
+      const overRearm = finalTokens > this.budget.rearmLowWatermark
+      const overThresholdAfterCompact = overRearm
 
-      // Plan 517 P2.2: activate the dead-code `overThresholdAfterCompact`
-      // flag as an active loop brake. When compaction cannot shrink the
-      // context below the threshold (system prompt + reinject overshoot),
-      // suppress 'size' so subsequent shouldCompact() returns false until
-      // a future successful compaction drives `finalTokens` down. This
-      // breaks the loop where compaction runs every other turn because
-      // the post-compaction context keeps re-crossing the threshold.
-      if (overThresholdAfterCompact) {
+      // Plan 577 §4: a successful compaction whose projection fell below the
+      // rearm low-watermark lifts a pre-existing 'size' suppression right
+      // here — the rearm line, not "success", owns the release (band
+      // semantics spelled out above). Without this call a compaction that
+      // landed under the watermark would leave a stale suppression hanging
+      // until the next shouldCompact() measurement happened to re-arm it.
+      this.maybeRearm(finalTokens)
+
+      if (overRearm) {
         this.suppression.trySuppress('size')
         this.emit({
           type: 'compaction_over_threshold',
           tokensRetained: finalTokens,
-          available: this.budget.maxTokens - this.budget.reservedTokens,
+          available: this.budget.triggerHighWatermark,
         })
+        if (!overTrigger) {
+          logger.info(
+            `[CompactionManager] post-compact projection ${finalTokens} is below the trigger line ` +
+              `but above the rearm watermark ${this.budget.rearmLowWatermark} — keeping ` +
+              `'size' suppression until the context re-arms`,
+          )
+        }
       }
 
       this.onCompactionSuccess()
-      this.clearObservedPromptTokens()
+      // Plan 577 §3: compaction rewrites the context lineage — a new epoch
+      // begins. Stale observations (a result still in flight from the
+      // pre-compact context) are dropped by the ledger from here on.
+      this.ledger.beginEpoch('compaction')
       // The rewrite invalidates any prefire fingerprint — drop it so the
       // next cycle starts clean (Plan 495 G1 lifecycle).
       this.prefire.clear()
@@ -681,13 +943,16 @@ export class CompactionManager {
 
   // ─── Private ────────────────────────────────────────────────────────────────
 
+  /**
+   * Plan 577 §2: shrink-aware projection measurement.
+   *
+   * Budget decisions consume the same ContextSnapshot projection emitted to
+   * the ring. The timeline scan adds only content actually persisted; a fresh
+   * provider input observation bridges the result→push window without adding
+   * its output volume or re-adding messages already present in that request.
+   */
   private contextSize(messages: readonly Message[]): number {
-    if (this.observedPromptTokens !== undefined) return this.observedPromptTokens
-    const est = computeContextEstimate(
-      messages.map(toContextEstimateMessage),
-      { systemPrefixTokens: this.budget.systemPromptTokens + this.budget.reservedTokens },
-    )
-    return est.usedTokens ?? 0
+    return this.getContextSnapshot(messages).accounting.projectedNextInputTokens
   }
 
   private emit(event: CompactionManagerEvent): void {

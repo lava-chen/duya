@@ -51,10 +51,10 @@ describe('useContextUsage', () => {
     const usage = result.current;
     expect(usage.hasData).toBe(true);
     // normalizedInput (ring input) = rawInput + cacheHit (8000 > 1000) = 9000;
-    // used = input + output + trailing = 9200. The session "t" total counts
+    // used = normalized input + persisted assistant content = 9004. The session "t" total counts
     // ONLY-NEW volume (input + cacheWrite), never the re-read cacheHit → 1000.
     expect(usage.inputTokens).toBe(9000);
-    expect(usage.used).toBe(9200);
+    expect(usage.used).toBe(9004);
     expect(usage.totalInput).toBe(1000);
   });
 
@@ -81,6 +81,53 @@ describe('useContextUsage', () => {
     );
     expect(result.current.used).toBe(15_000);
     expect(result.current.totalInput).toBe(40_000);
+  });
+
+  it('uses the shared snapshot window and projection over caller fallbacks', () => {
+    useContextUsageStore.getState().setLive('sess-1', {
+      usedTokens: 170_000,
+      currentEstimatedInputTokens: 180_000,
+      contextWindow: 200_000,
+      windowSource: 'default',
+      contextSnapshot: {
+        schemaVersion: 1,
+        observation: {
+          inputTokens: 150_000,
+          outputTokens: 20_000,
+          source: 'provider',
+          requestId: '',
+          observedAt: 10,
+        },
+        accounting: {
+          latestInputTokens: 150_000,
+          peakInputTokens: 170_000,
+          projectedNextInputTokens: 150_000,
+        },
+        estimateSource: 'provider',
+        confidence: 'authoritative',
+        observedAt: 10,
+        lastUpdatedAt: 10,
+        anchorRequestId: null,
+        anchorTurnId: null,
+        modelId: 'custom-model',
+        contextWindow: 200_000,
+        windowSource: 'default',
+        epoch: 2,
+        lastObservationFollowedShrink: false,
+      },
+      inputTokens: 150_000,
+      outputTokens: 20_000,
+      anchored: true,
+    });
+
+    const { result } = renderHook(() =>
+      useContextUsage([], 'custom-model', 1_000_000, 'sess-1'),
+    );
+
+    expect(result.current.used).toBe(150_000);
+    expect(result.current.contextWindow).toBe(200_000);
+    expect(result.current.ratio).toBe(0.75);
+    expect(result.current.windowSource).toBe('default');
   });
 
   it('returns noData when there is no persisted usage and no authoritative live value', () => {
@@ -125,8 +172,8 @@ describe('useContextUsage', () => {
     const { result } = renderHook(() =>
       useContextUsage(messages, 'claude-sonnet', 200_000, 'sess-1'),
     );
-    // Falls back to the persisted scan: normalized input + output + trailing.
-    expect(result.current.used).toBe(9200);
+    // Falls back to input plus the assistant content that was persisted.
+    expect(result.current.used).toBe(9004);
     expect(result.current.hasData).toBe(true);
   });
 
@@ -158,11 +205,12 @@ describe('useContextUsage', () => {
       useContextUsage(messages, 'claude-sonnet', 200_000, 'sess-1'),
     );
     // last_call normalized (8000 > 1000 → cache omitted from input):
-    // 1000 + 8000 + 100 = 9100; used = 9100 + 200 output = 9300. NOT the
+    // 1000 + 8000 + 100 = 9100; output usage is excluded and persisted
+    // assistant content adds 4 tokens, so used = 9104. NOT the
     // cumulative 3000 + 24000 + 300 + 600 = 27900 that made the ring spike
     // at turn start.
     expect(result.current.inputTokens).toBe(9100);
-    expect(result.current.used).toBe(9300);
+    expect(result.current.used).toBe(9104);
     // Cumulative totals keep summing ONLY-NEW (input + cacheWrite) per call,
     // never cacheHit: 3000 + 300 = 3300. NOT the resident 27300 that would
     // accumulate the re-read 24000 prefix across every call.

@@ -30,7 +30,7 @@ import type { Message, MessageContent, MCPServerConfig, Tool, TokenUsage, UsageC
 import type { ProviderRuntimeConfig } from '@duya/ai';
 import { logger } from '../utils/logger.js';
 import { parseUsageCall } from './call-usage.js';
-import { seedTokenUsageFromHistory } from './seed-token-usage.js';
+import { seedTokenUsageFromHistory, parsePersistedTokenUsage } from './seed-token-usage.js';
 import {
   messageDb,
   pluginDb,
@@ -59,7 +59,7 @@ import {
 import type { QueuedCommand } from '../queue/index.js';
 import { generateSessionTitle } from '../session/title-generator.js';
 import { getSteeringConfig } from '../hooks/config.js';
-import { classifyError, APIErrorType, computeContextEstimate, normalizePromptTokens } from '@duya/ai';
+import { classifyError, APIErrorType, computeContextComposition, normalizePromptTokens, type ContextEstimateSource } from '@duya/ai';
 import type { PromptProfile } from '../prompts/modes/types.js';
 import { isBotAgentProfile } from '../prompts/index.js';
 // Plan 312: type-only import for the App Connection tool descriptor.
@@ -319,13 +319,13 @@ let liveTotalInputRaw = 0;     // raw input_tokens (for cost on the uncached por
 let liveTotalOutput = 0;
 let liveTotalCacheHit = 0;
 let liveTotalCacheCreation = 0;
-// Latest API-reported prompt volume (input + cache + output). The result
-// event handler updates this; emitLiveUsage prefers it over the
-// computeContextEstimate(messages) anchor so the ring reflects the most
-// recent call's volume immediately, without waiting for the new assistant
-// message to be pushed to the timeline (which lags the result event by a
-// fraction of a second — long enough for the user to see a wrong value).
-let liveLatestObserved = 0;
+// Plan 577 §3: the per-call Observation values (latest input, its output
+// bridge, peak high-water mark) and the shrink provenance are OWNED by the
+// ContextLedger (hosted by CompactionManager) — emitLiveUsage reads them
+// from the ledger snapshot below. The old module-level live* copies are
+// gone: two sources of truth for the same numbers is exactly what Phase 2
+// exists to eliminate, and the ledger's epoch reset (compaction / clear)
+// clears them with the same atomicity as the accounting state.
 // Plan 445 Bug #7: dedupe emitLiveUsage so a tool-heavy turn's N
 // consecutive tool_result events don't spam the renderer with the
 // same snapshot. Key = (usedTokens, anchored, totalInput,
@@ -381,38 +381,75 @@ const emitLiveUsage = (
 ): void => {
   if (!targetSessionId) return;
   const msgs: Message[] = agent?.getMessages?.() ?? [];
-  // Estimated tokens of the system prompt + tools (excluding message history)
-  // — added ONLY on the unanchored fallback path inside computeContextEstimate.
-  const systemPrefix =
-    (typeof agent?.getSystemContextTokensEstimate === 'function'
-      ? agent.getSystemContextTokensEstimate()
-      : 0) || systemFallbackTokens || 0;
-  const estimate = computeContextEstimate(msgs, { systemPrefixTokens: systemPrefix });
-  const anchored = estimate.anchored && !compactedPending;
-  // Anchor correction: when a fresh result event has been observed, the
-  // anchor in `messages` still points to the previous call's assistant
-  // (the new one hasn't been pushDurable'd yet). Prefer the latest
-  // observed API volume so the ring reflects reality before the timeline
-  // catches up. Estimate's trailing estimate (≥ 1 new message) is added
-  // on top, matching the previous semantics of anchorTokens + trailing.
-  let usedForRing = estimate.usedTokens ?? 0;
-  let anchorTokensForRing = estimate.anchorTokens;
-  let trailingForRing = estimate.trailingTokens;
-  if (liveLatestObserved > anchorTokensForRing) {
-    // Replace the stale anchor with the fresh observed volume. Trailing
-    // stays the same — the messages after the observed call are still
-    // there and still need to be added.
-    const delta = liveLatestObserved - anchorTokensForRing;
-    usedForRing = liveLatestObserved + trailingForRing;
-    anchorTokensForRing = liveLatestObserved;
-    if (delta > 0) {
-      // sanity log when the correction is non-trivial (>100 tokens)
-      if (delta > 100) {
-        ringTrace(
-          `[${targetSessionId.slice(0, 8)}] anchor-correct: stale=${estimate.anchorTokens} fresh=${liveLatestObserved} delta=+${delta}`,
-        );
-      }
-    }
+  // Plan 577 §3: the enriched snapshot is produced by CompactionManager,
+  // combining ledger-owned observations with the timeline projection shared
+  // by compaction probes. Keep the ledger-only getter as a compatibility
+  // fallback for older workers.
+  const contextSnapshot =
+    typeof agent?.getContextSnapshot === 'function'
+      ? agent.getContextSnapshot(msgs)
+      : null;
+  const ledgerSnapshot = contextSnapshot ??
+    (typeof agent?.getContextLedgerSnapshot === 'function'
+      ? agent.getContextLedgerSnapshot()
+      : null);
+  const observedLatest = ledgerSnapshot?.observation?.inputTokens ?? 0;
+  const observedOutput = ledgerSnapshot?.observation?.outputTokens ?? 0;
+  const observedPeak = ledgerSnapshot?.accounting?.peakInputTokens ?? 0;
+  // Estimated tokens of the system prompt (excluding tool definitions) —
+  // added ONLY on the unanchored fallback path inside computeContextEstimate.
+  // Plan 577 §4: the tool-definition surface travels as its own option so
+  // the unanchored estimate and the composition buckets can price it
+  // separately (agents without the split getters keep the combined value).
+  const agentSystemTokens =
+    typeof agent?.getSystemTokensEstimate === 'function'
+      ? agent.getSystemTokensEstimate()
+      : agent?.getSystemContextTokensEstimate?.() ?? 0;
+  const agentToolsTokens =
+    typeof agent?.getToolsTokensEstimate === 'function' ? agent.getToolsTokensEstimate() : 0;
+  const systemPrefix = agentSystemTokens || systemFallbackTokens || 0;
+  const { estimate, composition } = computeContextComposition(msgs, {
+    systemPrefixTokens: systemPrefix,
+    toolDefinitionsTokens: agentToolsTokens,
+  });
+  const usedForRing =
+    contextSnapshot?.accounting?.projectedNextInputTokens ?? estimate.usedTokens ?? 0;
+  const estimateSource: ContextEstimateSource | 'unknown' =
+    contextSnapshot?.estimateSource ??
+    (estimate.anchored ? 'anchor_projection' : estimate.usedTokens ? 'heuristic' : 'unknown');
+  const anchored = contextSnapshot
+    ? estimateSource !== 'heuristic' && estimateSource !== 'unknown' && !compactedPending
+    : estimate.anchored && !compactedPending;
+  const anchorTokensForRing = estimate.anchorTokens;
+  const trailingForRing = estimate.trailingTokens;
+
+  // Composition parts remain useful during a live correction, but the
+  // timeline can temporarily describe an older projection. Reconcile the
+  // diagnostic buckets to the exact shared ContextSnapshot headline; if the
+  // correction shrank below stale labelled parts, retain the total as
+  // unattributed provider volume rather than publishing an impossible sum.
+  const compositionParts = [
+    composition.system,
+    composition.conversation,
+    composition.injectedContext,
+    composition.toolDefinitions,
+    composition.toolResults,
+    composition.attachments,
+    composition.memory,
+    composition.providerOverhead ?? [],
+  ].reduce((sum, parts) => sum + parts.reduce((partSum, part) => partSum + part.tokens, 0), 0);
+  if (compositionParts > usedForRing) {
+    composition.system = [];
+    composition.conversation = [];
+    composition.injectedContext = [];
+    composition.toolDefinitions = [];
+    composition.toolResults = [];
+    composition.attachments = [];
+    composition.memory = [];
+    composition.providerOverhead = [];
+    composition.unattributedObservedTokens = usedForRing;
+  } else {
+    composition.unattributedObservedTokens = usedForRing - compositionParts;
   }
   // Token-trace: emit a structured INFO line so the operator can correlate
   // input / cache / trailing growth over time. The anchor's raw usage block
@@ -425,6 +462,12 @@ const emitLiveUsage = (
     anchored,
     systemPrefix,
     msgs: msgs.length,
+    // Plan 577 §2: three-value accounting telemetry (latest / peak /
+    // projected) + where the number came from.
+    latestInput: observedLatest > 0 ? observedLatest : null,
+    peakInput: observedPeak > 0 ? observedPeak : null,
+    projectedNext: usedForRing,
+    estimateSource,
     result: {
       used: estimate.usedTokens,
       anchorTokens: estimate.anchorTokens,
@@ -441,6 +484,30 @@ const emitLiveUsage = (
   // sessions stay attributable.
   ringTrace(
     `[${targetSessionId.slice(0, 8)}] emit msgs=${msgs.length} anchored=${anchored} anchorIdx=${estimate.anchorIndex} anchor=${anchorTokensForRing} trailing=${trailingForRing} used=${usedForRing} systemPrefix=${systemPrefix} totalsIn=${liveTotalInput} cacheHit=${liveTotalCacheHit}`,
+  );
+  // Plan 577 §4: the composition buckets ride the same trace ("first logs,
+  // then UI") — one line that names every bucket so a context-size surprise
+  // (MCP load, giant tool result, memory recall) is attributable in seconds.
+  const bucketLine = (
+    [
+      ['unattributed', composition.unattributedObservedTokens],
+      ['conversation', composition.conversation],
+      ['toolResults', composition.toolResults],
+      ['toolDefs', composition.toolDefinitions],
+      ['injected', composition.injectedContext],
+      ['system', composition.system],
+      ['memory', composition.memory],
+      ['attachments', composition.attachments],
+    ] as const
+  )
+    .map(([label, parts]) =>
+      typeof parts === 'number'
+        ? `${label}=${parts}`
+        : `${label}=${parts.reduce((s, p) => s + p.tokens, 0)}`,
+    )
+    .join(' ');
+  ringTrace(
+    `[${targetSessionId.slice(0, 8)}] composition: ${bucketLine} (anchored=${anchored ? 1 : 0})`,
   );
   // Last-request per-call fields for the stats line: read off the anchor
   // message itself (`usage` in-memory from DuyaAgent, `tokenUsage` persisted).
@@ -460,7 +527,14 @@ const emitLiveUsage = (
   // Plan 546: include `liveTotalInputRaw` so the cost line (which the
   // ring renders from this field) does not appear to flicker when only
   // the raw counter advances between two normalized-equal events.
-  const emitKey = `${usedForRing}|${anchored ? 1 : 0}|${liveTotalInput}|${liveTotalInputRaw}|${liveTotalCacheHit}|${liveTotalCacheCreation}|${liveTotalOutput}|${agent?.model ?? mainModelName}|${currentProviderId}`;
+  // Plan 577 §2: include the three-value accounting + source so a
+  // peak/latest/source change re-emits even when the projection is equal.
+  // Plan 577 §3: the ledger epoch is part of the key — a beginEpoch()
+  // must force a re-emit even when every number happens to match.
+  const windowInfo = contextSnapshot?.contextWindow
+    ? { contextWindow: contextSnapshot.contextWindow, windowSource: contextSnapshot.windowSource }
+    : agent?.getContextWindowResolved?.() ?? null;
+  const emitKey = `${usedForRing}|${anchored ? 1 : 0}|${liveTotalInput}|${liveTotalInputRaw}|${liveTotalCacheHit}|${liveTotalCacheCreation}|${liveTotalOutput}|${observedLatest}|${observedPeak}|${estimateSource}|${agent?.model ?? mainModelName}|${currentProviderId}|${ledgerSnapshot?.epoch ?? -1}|${ledgerSnapshot?.observedAt ?? 0}|${windowInfo?.windowSource ?? '?'}`;
   if (emitKey === lastEmittedUsageKey) {
     ringTrace(`[${targetSessionId.slice(0, 8)}] emit-skip (no change) used=${usedForRing}`);
     return;
@@ -473,13 +547,43 @@ const emitLiveUsage = (
     // post-compaction without a fresh response).
     anchored,
     usedTokens: usedForRing,
-    inputTokens: lastInput,
-    outputTokens: lastOutput,
+    // Plan 577 §2: three-value accounting. The renderer consumes
+    // `currentEstimatedInputTokens` — the worker-computed projection — and
+    // must never re-derive the formula itself.
+    latestInputTokens: observedLatest > 0 ? observedLatest : undefined,
+    peakInputTokens: observedPeak > 0 ? observedPeak : undefined,
+    projectedNextInputTokens: usedForRing,
+    currentEstimatedInputTokens: usedForRing,
+    contextSnapshot: contextSnapshot ?? undefined,
+    estimateSource,
+    // Plan 577 §3/§4: lineage + window source. The renderer marks the
+    // ring when the window fell back to the 200K default and can show the
+    // confidence tier without re-deriving anything.
+    epoch: ledgerSnapshot?.epoch,
+    confidence: ledgerSnapshot?.confidence,
+    observedAt: ledgerSnapshot?.observedAt,
+    contextWindow: windowInfo?.contextWindow,
+    windowSource: windowInfo?.windowSource,
+    inputTokens: observedLatest || lastInput,
+    outputTokens: observedOutput || lastOutput,
     cacheHitTokens: anchorUsage?.cache_hit_tokens,
     cacheCreationTokens: anchorUsage?.cache_creation_tokens,
-    // Estimated tokens of the system prompt + tools (pi-style prefix), kept
+    // Estimated tokens of the system prompt (pi-style prefix), kept
     // in the frame for diagnostics.
     systemTokens: systemPrefix,
+    toolDefinitionsTokens: agentToolsTokens || undefined,
+    // Plan 577 §4: composition buckets for the diagnostics surfaces.
+    composition: {
+      unattributedObservedTokens: composition.unattributedObservedTokens,
+      system: composition.system,
+      conversation: composition.conversation,
+      injectedContext: composition.injectedContext,
+      toolDefinitions: composition.toolDefinitions,
+      toolResults: composition.toolResults,
+      attachments: composition.attachments,
+      memory: composition.memory,
+      providerOverhead: composition.providerOverhead ?? [],
+    },
     // Session-cumulative totals so the ring's ↑/↓/R/W/$ line moves live.
     totalInput: liveTotalInput,
     totalInputRaw: liveTotalInputRaw,
@@ -499,7 +603,9 @@ const emitLiveUsage = (
       anchorMsgId: estimate.anchorIndex !== null ? msgs[estimate.anchorIndex]?.id : null,
       anchorTokens: anchorTokensForRing,
       trailingTokens: trailingForRing,
-      observedLatest: liveLatestObserved,
+      observedLatest,
+      observedPeak,
+      estimateSource,
       msgs: msgs.length,
       compactedPending,
     },
@@ -849,6 +955,50 @@ function computerUseIpcRequest<T = unknown>(
   });
 }
 
+// Plan 575: IPC request for the computer_cua tool (14-tool surface).
+//
+// Routes `computer-use:cua` messages to the Agent Server, which forwards
+// them to the CUA dispatcher (electron/ipc/cua-handlers.ts owns the
+// CuaService singleton). MUST be matched in toolIpcRequest BEFORE the
+// conductorIpcRequest fallback — otherwise the request is re-labeled
+// `conductor:executor:rpc` with action = 'computer-use:cua' (the payload
+// has no `action` field) and the ConductorExecutorProxy answers
+// UNKNOWN_ACTION. Mirror of computerUseIpcRequest (plan 454).
+function computerCuaIpcRequest<T = unknown>(
+  _channel: string,
+  payload: unknown,
+  options?: { timeout?: number }
+): Promise<{ success: boolean; data?: T; error?: { code: string; message: string } }> {
+  return new Promise((resolve, reject) => {
+    const requestId = crypto.randomUUID();
+    const timeout = options?.timeout || 30000;
+
+    const timeoutHandle = setTimeout(() => {
+      if (pendingIpcRequests.has(requestId)) {
+        pendingIpcRequests.delete(requestId);
+        resolve({ success: false, error: { code: 'TIMEOUT', message: `computer-use:cua IPC request timeout after ${timeout}ms` } });
+      }
+    }, timeout);
+
+    pendingIpcRequests.set(requestId, {
+      resolve: (v) => resolve(v as { success: boolean; data?: T; error?: { code: string; message: string } }),
+      reject: (e) => reject(e),
+      timeoutHandle,
+    });
+
+    // Forward the CUA executor's flattened { tool, args, sessionId }
+    // envelope to the Agent Server's computer-use:cua handler.
+    const outerPayload = payload as { tool?: string; args?: Record<string, unknown>; sessionId?: string } | undefined;
+    sendToMain({
+      type: 'computer-use:cua',
+      requestId,
+      tool: outerPayload?.tool,
+      args: outerPayload?.args,
+      sessionId: outerPayload?.sessionId,
+    });
+  });
+}
+
 // Plan 481: IPC request for the memory-tier bridge (update_state tool).
 //
 // Routes `memory-tier:rpc` messages to the main process, where the
@@ -954,6 +1104,11 @@ function toolIpcRequest<T = unknown>(
   }
   if (channel === 'computer-use:execute') {
     return computerUseIpcRequest<T>(channel, payload, options);
+  }
+  // Plan 575: computer_cua channel — must precede the conductor fallback
+  // (see computerCuaIpcRequest above for the failure mode).
+  if (channel === 'computer-use:cua') {
+    return computerCuaIpcRequest<T>(channel, payload, options);
   }
   if (channel === 'memory-tier:rpc') {
     return memoryTierIpcRequest<T>(channel, payload, options);
@@ -1146,29 +1301,14 @@ function messageRowToMessage(
     }
   }
 
-  let tokenUsage: TokenUsage | undefined;
-  if (row.token_usage) {
-    try {
-      const parsed = JSON.parse(row.token_usage) as Partial<TokenUsage> | null;
-      // Restore only if it carries the required numeric counters — malformed
-      // rows must not break the live-usage seed scan.
-      if (
-        parsed &&
-        typeof parsed.input_tokens === 'number' &&
-        typeof parsed.output_tokens === 'number'
-      ) {
-        tokenUsage = {
-          input_tokens: parsed.input_tokens,
-          output_tokens: parsed.output_tokens,
-          total_tokens: parsed.total_tokens,
-          cache_hit_tokens: parsed.cache_hit_tokens,
-          cache_creation_tokens: parsed.cache_creation_tokens,
-        };
-      }
-    } catch {
-      // ignore parse errors
-    }
-  }
+  // parsePersistedTokenUsage preserves the plan-445 sub-blocks (`last_call`
+  // + `calls[]`). Stripping them here made every reloaded turn-cumulative
+  // block normalize as ONE request's prompt (cacheHit > input → input +
+  // cacheHit + write ≈ N_calls × real context): measured anchor 476,536 on
+  // a ~24k context (2026-09-28) → ring 238% / 200k and a spurious proactive
+  // compaction of the real history until the turn's first `result` observed
+  // the true 24,178 and corrected the anchor back down.
+  const tokenUsage = parsePersistedTokenUsage(row.token_usage);
 
   // Plan 486: restore thread/fork metadata from the flat row columns so a
   // reloaded session can serve getThread and keep branched messages out of
@@ -1704,6 +1844,10 @@ async function initAgent(
     // describe the pre-compaction prompt, so mark pending and broadcast an
     // unanchored frame (ring shows "?") until the next `result` lands.
     compactedPending = true;
+    // Plan 577 §3: epoch boundary — compaction succeeded inside
+    // CompactionManager.compact(), whose ledger already began the
+    // 'compaction' epoch, so the Observation layer (latest/peak/shrink) is
+    // cleared atomically there. Nothing to reset here anymore.
     emitLiveUsage(sessionId);
   };
 
@@ -2759,7 +2903,9 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       liveTotalOutput = seeded.totalOutput;
       liveTotalCacheHit = seeded.totalCacheHit;
       liveTotalCacheCreation = seeded.totalCacheCreation;
-      liveLatestObserved = 0;
+      // Plan 577 §3: the Observation layer is ledger-owned — no module-level
+      // reset needed here (a fresh agent starts at epoch 0 with no
+      // observation by construction).
       // Plan 445 Bug #7: dedupe cache must reset on init so the first
       // frame of the session always emits even if the numbers happen
       // to match a previous session.
@@ -3027,10 +3173,12 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           // pure estimator anchors on it directly. Clear the post-compaction
           // pending flag here too.
           compactedPending = false;
-          // Update the latest observed prompt volume so emitLiveUsage can
-          // surface it before the new assistant message lands in the timeline.
-          // Without this the ring flickers (anchor lags by one call).
-          liveLatestObserved = normalizedInput + outputTokens;
+          // Plan 577 §3: the Observation layer is seeded by DuyaAgent itself
+          // (setObservedUsage on its `result` handler, BEFORE this event is
+          // yielded) into the ContextLedger — the single entry point. The
+          // ledger holds latest input, the output bridge and the peak
+          // high-water mark; emitLiveUsage reads them from the snapshot and
+          // merges into the timeline scan via applyLiveAnchorCorrection.
           // Accumulate session-cumulative totals for the ring's stats line.
           liveTotalInput += onlyNewInput;
           liveTotalInputRaw += rawInput;
@@ -3715,7 +3863,9 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             liveTotalOutput = 0;
             liveTotalCacheHit = 0;
             liveTotalCacheCreation = 0;
-            liveLatestObserved = 0;
+            // Plan 577 §3: new session = fresh agent instance = a fresh
+            // ContextLedger (its own epoch counter starts at 0 with an empty
+            // Observation layer) — no module-level observation reset needed.
             // Plan 445 Bug #7: dedupe cache must reset on session switch.
             lastEmittedUsageKey = null;
           }
@@ -4447,6 +4597,32 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
           }
           break;
         }
+        // Plan 575: computer_cua tool response. Resolves the promise
+        // created by computerCuaIpcRequest so the computer_cua tool
+        // executor can unwrap the envelope.
+        case 'computer-use:cua:response': {
+          const { requestId, success, data, error } = msg as unknown as {
+            requestId: string;
+            success: boolean;
+            data?: unknown;
+            error?: { code: string; message: string };
+          };
+          const pending = pendingIpcRequests.get(requestId);
+          if (pending) {
+            if (pending.timeoutHandle) {
+              clearTimeout(pending.timeoutHandle);
+            }
+            pendingIpcRequests.delete(requestId);
+            if (success) {
+              pending.resolve({ success: true, data });
+            } else {
+              pending.resolve({ success: false, error: error || { code: 'UNKNOWN', message: 'Unknown error' } });
+            }
+          } else {
+            warn('[Agent-Process] No pending computer-use:cua IPC request found for requestId:', requestId);
+          }
+          break;
+        }
         // Plan 481: memory-tier bridge response (update_state tool).
         case 'memory-tier:rpc:response': {
           const { requestId, success, data, error } = msg as unknown as {
@@ -4602,6 +4778,8 @@ async function handleCompactMessage(msg: unknown): Promise<void> {
     // frame — the ring shows "?" until the next turn's first `result`
     // provides a post-compaction anchor (plan 443, pi parity).
     compactedPending = true;
+    // Plan 577 §3: the successful compact() began the 'compaction' epoch in
+    // the ledger — the observation lineage is cleared there atomically.
     emitLiveUsage(sessionId);
     sendToMain({ type: 'compact:done', sessionId, result });
   } catch (error) {

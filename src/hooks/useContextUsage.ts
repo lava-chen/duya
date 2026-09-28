@@ -55,6 +55,13 @@ export interface ContextUsage {
   /** 0..1 — actual / contextWindow */
   cacheHitRate: number;
   state: ContextState;
+  /**
+   * Plan 577 §4: where the context window came from (worker frame when a
+   * live snapshot carries it, else the local resolution chain). 'default'
+   * = the 200K fallback fired — surfaces should mark the ring so the
+   * "ring 1M / compaction 200K" silent split (plan 517 R1) stays visible.
+   */
+  windowSource: 'capability' | 'catalog' | 'default';
 }
 
 /** Prediction margin so "one more message" trips warning/critical early. */
@@ -102,11 +109,28 @@ function resolveWindowForAnchor(
   sessionModel: string | undefined,
   callerWindow: number | undefined,
 ): number {
+  return resolveWindowWithSource(anchorModel, sessionModel, callerWindow).contextWindow;
+}
+
+/**
+ * Plan 577 §4: same resolution as {@link resolveWindowForAnchor} but also
+ * reports WHERE the window came from, so the ring can mark a 'default'
+ * (200K fallback) value instead of hiding the split.
+ */
+function resolveWindowWithSource(
+  anchorModel: string | null | undefined,
+  sessionModel: string | undefined,
+  callerWindow: number | undefined,
+): { contextWindow: number; windowSource: 'capability' | 'catalog' | 'default' } {
   if (anchorModel && anchorModel !== sessionModel) {
     const catalogWindow = findModelById(anchorModel)?.contextWindow;
-    if (catalogWindow && catalogWindow > 0) return catalogWindow;
+    if (catalogWindow && catalogWindow > 0) return { contextWindow: catalogWindow, windowSource: 'catalog' };
   }
-  return getContextWindowForModel(sessionModel, callerWindow);
+  const resolved = resolveContextWindow({
+    capabilityContextWindow: callerWindow,
+    modelId: sessionModel,
+  });
+  return { contextWindow: resolved.contextWindow, windowSource: resolved.source };
 }
 
 /**
@@ -197,6 +221,8 @@ function finalize(params: {
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
+  /** Plan 577 §4: window resolution source (worker frame or local chain). */
+  windowSource: 'capability' | 'catalog' | 'default';
   totals: {
     totalInput: number;
     totalInputRaw: number;
@@ -234,6 +260,7 @@ function finalize(params: {
     ...totals,
     cacheHitRate: chDenominator > 0 ? totals.totalCacheRead / chDenominator : 0,
     state: stateFor(effectiveRatio),
+    windowSource: params.windowSource,
   };
 }
 
@@ -261,7 +288,22 @@ export function useContextUsage(
       // window/ratio priced against the model actually in use, not the
       // session's current picker value.
       const liveModel = live.model || modelName;
-      const resolvedContextWindow = resolveWindowForAnchor(liveModel, modelName, contextWindow);
+      // Plan 577 §4: when the worker frame carries its own window
+      // resolution (getContextWindowResolved — the SAME chain the
+      // compaction budget used), it is the authoritative source; older
+      // workers fall back to the local resolution chain.
+      const resolved =
+        live.contextSnapshot?.contextWindow &&
+        live.contextSnapshot.contextWindow > 0 &&
+        live.contextSnapshot.windowSource
+          ? {
+              contextWindow: live.contextSnapshot.contextWindow,
+              windowSource: live.contextSnapshot.windowSource,
+            }
+          : live.contextWindow && live.contextWindow > 0 && live.windowSource
+            ? { contextWindow: live.contextWindow, windowSource: live.windowSource }
+            : resolveWindowWithSource(liveModel, modelName, contextWindow);
+      const resolvedContextWindow = resolved.contextWindow;
       const livePricing = pricingForMessage(live.model, modelName, pricing);
       const liveTotalCost =
         live.totalInputRaw !== undefined &&
@@ -280,7 +322,14 @@ export function useContextUsage(
         hasData: true,
         modelName: liveModel,
         contextWindow: resolvedContextWindow,
-        used: live.usedTokens,
+        windowSource: resolved.windowSource,
+        // Plan 577 §2: the renderer consumes the worker-computed projection
+        // (`currentEstimatedInputTokens`) and never re-derives the formula.
+        // Fall back to the raw frame number for pre-577 workers.
+        used:
+          live.contextSnapshot?.accounting.projectedNextInputTokens ??
+          live.currentEstimatedInputTokens ??
+          live.usedTokens,
         inputTokens: live.inputTokens || 0,
         outputTokens: live.outputTokens || 0,
         cacheReadTokens: live.cacheHitTokens || 0,
@@ -315,7 +364,7 @@ export function useContextUsage(
       const anchorMsg =
         estimate.anchorIndex !== null ? messages[estimate.anchorIndex] : undefined;
       const anchorModel = estimate.anchorModel || modelName;
-      const resolvedContextWindow = resolveWindowForAnchor(anchorModel, modelName, contextWindow);
+      const resolved = resolveWindowWithSource(anchorModel, modelName, contextWindow);
       const src = anchorMsg?.tokenUsage?.last_call ?? anchorMsg?.tokenUsage;
       const anchorInput = src?.input_tokens || 0;
       const anchorCacheRead = src?.cache_hit_tokens || 0;
@@ -323,7 +372,8 @@ export function useContextUsage(
       return finalize({
         hasData: true,
         modelName: anchorModel,
-        contextWindow: resolvedContextWindow,
+        contextWindow: resolved.contextWindow,
+        windowSource: resolved.windowSource,
         used: estimate.usedTokens ?? 0,
         inputTokens: normalizeInputTokens(anchorInput, anchorCacheRead, anchorCacheWrite),
         outputTokens: src?.output_tokens || 0,
@@ -337,10 +387,12 @@ export function useContextUsage(
     // A renderer-side guess omits system prompt / tool overhead and swings
     // against the worker's authoritative numbers. Keep cumulative totals
     // for the stats line but mark hasData=false ("?" display).
+    const fallbackWindow = resolveWindowWithSource(null, modelName, contextWindow);
     return finalize({
       hasData: false,
       modelName,
-      contextWindow: getContextWindowForModel(modelName, contextWindow),
+      contextWindow: fallbackWindow.contextWindow,
+      windowSource: fallbackWindow.windowSource,
       used: 0,
       inputTokens: 0,
       outputTokens: 0,

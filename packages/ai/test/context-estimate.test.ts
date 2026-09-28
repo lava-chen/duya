@@ -117,16 +117,16 @@ describe('computeContextEstimate', () => {
   it('anchors on the latest valid assistant usage and estimates trailing messages', () => {
     const messages: ContextEstimateMessage[] = [
       { role: 'user', content: 'hello' },
-      assistant({ input_tokens: 1000, output_tokens: 200, cache_hit_tokens: 9000 }), // anchor → 10200
+      assistant({ input_tokens: 1000, output_tokens: 200, cache_hit_tokens: 9000 }), // input 10000 + persisted "ok"
       { role: 'assistant', content: [{ type: 'text', text: 'e'.repeat(400) }] },
       { role: 'user', content: 'f'.repeat(200) },
     ];
     const est = computeContextEstimate(messages);
     expect(est.anchored).toBe(true);
     expect(est.anchorIndex).toBe(1);
-    expect(est.anchorTokens).toBe(10200); // normalized input 10000 + output 200
+    expect(est.anchorTokens).toBe(10001); // normalized input + persisted assistant content
     expect(est.trailingTokens).toBe(150);
-    expect(est.usedTokens).toBe(10350);
+    expect(est.usedTokens).toBe(10151);
   });
 
   it('ignores aborted/errored assistants as anchors', () => {
@@ -180,7 +180,7 @@ describe('computeContextEstimate', () => {
     const est = computeContextEstimate(messages);
     expect(est.anchored).toBe(true);
     expect(est.anchorIndex).toBe(3);
-    expect(est.usedTokens).toBe(3100);
+    expect(est.usedTokens).toBe(3001);
   });
 
   it('prefers in-memory per-call usage over persisted cumulative tokenUsage', () => {
@@ -193,7 +193,7 @@ describe('computeContextEstimate', () => {
       },
     ];
     const est = computeContextEstimate(messages);
-    expect(est.anchorTokens).toBe(2100);
+    expect(est.anchorTokens).toBe(2000); // empty persisted content; output usage is ignored
   });
 
   it('empty history yields used=0 (not null) so a fresh session shows an empty ring', () => {
@@ -220,10 +220,10 @@ describe('gateway under-report guard (plan 444)', () => {
   it('falls back to the previous anchor when the latest is an obvious under-report', () => {
     const est = computeContextEstimate([big, underReported, user]);
     expect(est.anchored).toBe(true);
-    expect(est.anchorTokens).toBe(150_500);
+    expect(est.anchorTokens).toBe(150_003); // input + persisted "old reply"
     // base = prev anchor; trailing = the two appended messages
     expect(est.usedTokens).toBe(150_500 + est.trailingTokens);
-    expect(est.anchorIndex).toBe(1); // latest anchor still indexes the newest message
+    expect(est.anchorIndex).toBe(0); // output-only usage is not a context anchor
   });
 
   it('respects a genuine post-offload shrink (non-zero real input)', () => {
@@ -235,21 +235,21 @@ describe('gateway under-report guard (plan 444)', () => {
       tokenUsage: { input_tokens: 40_000, output_tokens: 147 },
     };
     const est = computeContextEstimate([big, shrunk, user]);
-    expect(est.anchorTokens).toBe(40_147);
-    expect(est.usedTokens).toBe(40_147 + est.trailingTokens);
+    expect(est.anchorTokens).toBe(40_005); // input + persisted reply estimate
+    expect(est.usedTokens).toBe(40_005 + est.trailingTokens);
   });
 
-  it('keeps a small all-zero-input anchor when no larger predecessor exists', () => {
-    // Fresh session whose first round reports zeros: nothing better exists,
-    // so the estimate stays anchored on it instead of deanchoring.
+  it('does not treat output-only usage as a context anchor', () => {
+    // Without input-side provider counters, generated output cannot stand in
+    // for the prompt volume. The estimator falls back to the persisted history.
     const first = {
       role: 'assistant',
       content: 'hi',
       tokenUsage: { input_tokens: 0, output_tokens: 150 },
     };
     const est = computeContextEstimate([first, user]);
-    expect(est.anchored).toBe(true);
-    expect(est.usedTokens).toBe(150 + est.trailingTokens);
+    expect(est.anchored).toBe(false);
+    expect(est.usedTokens).toBe(5);
   });
 });
 

@@ -118,12 +118,19 @@ export function ContextUsageRing({
     else strokeColor = 'var(--success)';
   }
 
-  const effectiveWindow = contextWindow || usage.contextWindow;
-  // `(auto)` mirrors pi's footer: it means the context window was NOT pinned
-  // by the user (no 200K/1M override from provider capabilities), so the
-  // window is auto-resolved from the model. When a window is pinned, the tag
-  // is hidden because the fraction is then exact, not "auto".
-  const isAutoWindow = !contextWindow;
+  // The ratio and denominator both come from useContextUsage's resolved
+  // snapshot, so a caller prop cannot display a different window than the
+  // one used to calculate the percentage.
+  const effectiveWindow = usage.contextWindow;
+  // `(auto)` marks catalog/default resolution. A capability window is treated
+  // as explicitly configured and hides the mark.
+  // Plan 577 §4: when the resolution fell through BOTH the capability row
+  // and the model catalog (windowSource === 'default'), the ring shows the
+  // stronger `(auto · uncapped)` mark — the 200K fallback fired and the
+  // ring's fraction may be silently wrong (plan 517 R1 split).
+  const isAutoWindow = usage.windowSource !== 'capability';
+  const autoWindowLabel =
+    usage.windowSource === 'default' ? '(auto · uncapped)' : '(auto)';
   const ctxClass =
     usage.state === 'critical'
       ? 'context-usage-ring-ctx context-usage-ring-ctx--critical'
@@ -156,7 +163,7 @@ export function ContextUsageRing({
           <span className={ctxClass}>{ctxPercent}%</span>
           {' · '}
           {f(usage.used)} / {f(effectiveWindow)}
-          {isAutoWindow ? ' (auto)' : ''}
+          {isAutoWindow ? ` ${autoWindowLabel}` : ''}
         </>
       ),
     });
@@ -275,7 +282,7 @@ export function ContextUsageRing({
                   </span>
                   {isAutoWindow && (
                     <span className="context-usage-ring-stat context-usage-ring-stat--dim">
-                      (auto)
+                      {autoWindowLabel}
                     </span>
                   )}
                 </span>
@@ -583,10 +590,14 @@ export function ContextUsagePanel({
 }: ContextUsageDataProps & { open: boolean }) {
   const usage = useContextUsage(messages, modelName, contextWindow, sessionId, pricing);
 
-  const effectiveWindow = contextWindow || usage.contextWindow;
-  // `(auto)` — same semantics as the ring's stats line: the window was not
-  // pinned by the user, so the fraction is auto-resolved from the model.
-  const isAutoWindow = !contextWindow;
+  const effectiveWindow = usage.contextWindow;
+  // Match the ring: catalog/default resolution is automatic; a capability
+  // window is explicitly configured.
+  // Plan 577 §4: windowSource 'default' upgrades the mark to
+  // `(auto · uncapped)` — the 200K fallback fired (plan 517 R1 visibility).
+  const isAutoWindow = usage.windowSource !== 'capability';
+  const autoWindowLabel =
+    usage.windowSource === 'default' ? '(auto · uncapped)' : '(auto)';
   const ctxPercent = usage.hasData ? (usage.ratio * 100).toFixed(1) : '?';
   const ctxClass =
     usage.state === 'critical'
@@ -608,7 +619,7 @@ export function ContextUsagePanel({
             <span className={ctxClass}>{ctxPercent}%</span>
             <span className="context-usage-panel-dim">
               · {f(usage.used)} / {f(effectiveWindow)}
-              {isAutoWindow ? ' (auto)' : ''}
+              {isAutoWindow ? ` ${autoWindowLabel}` : ''}
             </span>
           </span>
 

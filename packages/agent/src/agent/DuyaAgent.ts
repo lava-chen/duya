@@ -56,6 +56,7 @@ import { getCachedAppConnectionDescriptors } from '../tool/AppConnectionTool/ind
 import { buildAppsSystemSection, collectConnectorActivationInjection, collectPluginInjections, collectSkillInjections, extractExplicitSkillMentions, mergeSkillMentionSources } from '../mentions/index.js';
 import { matchSkillsForPrompt, buildSkillSuggestionInjection } from '../skills/index.js';
 import { compressProjectedToolMessages } from '../compact/projectionCompress.js';
+import { classifyContextLengthError } from '../compact/compactErrors.js';
 import { createAIClient, createAIClientWithRetry, inferProvider, findModelCompat, estimateContextTextTokens } from '@duya/ai';
 import type { AIClient, AIClientOptions, RetryConfig, ApiFormat } from '@duya/ai';
 import { resolveDefaultBaseURL, resolveLlmClientDiscriminator } from '@duya/ai';
@@ -144,14 +145,14 @@ import {
   getOSContextBridge,
   injectOSContextFragment,
 } from '../context/os-context/index.js';
-import { injectTurnTimeReminder } from './turn-time-reminder.js';
+import { injectTurnTimestampReminders } from './turn-time-reminder.js';
 import {
   getDiscoveredToolPrompts,
   harvestDiscoveredTools,
   renderDiscoveredToolSchemaBlock,
 } from './tool-search-discovery.js';
 import type { AgentDefinition } from '../tool/SubagentTool/index.js';
-import { CompactionManager, createCompactionManager } from '../compact/CompactionManager.js';
+import { CompactionManager, createCompactionManager, type CompactionProbe } from '../compact/CompactionManager.js';
 import { resolveCompactionContextWindow } from '../compact/contextWindow.js';
 import type { CompactOptions } from '../compact/types.js';
 
@@ -463,6 +464,23 @@ export class duyaAgent implements AgentRuntime {
    */
   private lastSystemContextTokensEstimate = 0;
   /**
+   * Plan 577 §4: the system-prompt and tool-definition halves of the
+   * estimate above, kept separately so the ContextComposition diagnostics
+   * can bucket them without re-stringifying the whole surface.
+   */
+  private lastSystemTokensEstimate = 0;
+  private lastToolsTokensEstimate = 0;
+  /**
+   * Plan 577 §3: the compaction window + its resolution source, refreshed
+   * in the constructor and on every streamChat drift check. The worker's
+   * emitLiveUsage reads it so the ring and the compaction budget state the
+   * same windowSource (the 200K-fallback split becomes visible).
+   */
+  private resolvedWindow: { contextWindow: number; windowSource: 'capability' | 'catalog' | 'default' } = {
+    contextWindow: 0,
+    windowSource: 'default',
+  };
+  /**
    * Mode context for the current streamChat call. Holds
    * `toolUseContextPatch` (consumed by the tool executor) and
    * `state` (read by mode prompt builders and hooks).
@@ -678,6 +696,19 @@ export class duyaAgent implements AgentRuntime {
       enableReinjection: true,
       maxTokens: resolvedContextWindow.contextWindow,
     });
+    // Plan 577 §3: seed the ledger's window/model lineage from the same
+    // resolution the budget used — one source of truth for windowSource.
+    this.resolvedWindow = {
+      contextWindow: resolvedContextWindow.contextWindow,
+      windowSource: resolvedContextWindow.source,
+    };
+    this.compactionManager.getContextLedger().noteModelSwitch(
+      {
+        contextWindow: resolvedContextWindow.contextWindow,
+        windowSource: resolvedContextWindow.source,
+      },
+      options.runtimeConfig?.model ?? options.model,
+    );
 
     // Plan 517 P2.2: forward the over-threshold event so the renderer can
     // surface a "auto-compaction paused" hint. The loop brake itself
@@ -1312,11 +1343,29 @@ export class duyaAgent implements AgentRuntime {
     // capability → catalog → default resolution as the constructor, so a
     // switch re-bases the compaction budget on the real window instead of
     // the 200K default.
-    const contextWindow = resolveCompactionContextWindow({
+    // Plan 577 Phase 0: the resolution SOURCE is kept alongside the value so
+    // the emergency-compaction evidence log can state where the budget came
+    // from (future ContextLedger verification baselines read these lines).
+    const resolvedCompactionWindow = resolveCompactionContextWindow({
       capabilityContextWindow:
         this.runtimeConfig?.modelCapabilities?.contextWindow,
       modelId: this.runtimeConfig?.model ?? this._model,
-    }).contextWindow;
+    });
+    const contextWindow = resolvedCompactionWindow.contextWindow;
+    const compactionWindowSource = resolvedCompactionWindow.source;
+    // Plan 577 §3: keep the ledger's window/model lineage in step. A model
+    // or window change is a BUDGET change, NOT a context-lineage rebuild —
+    // noteModelSwitch never rolls the epoch over.
+    this.resolvedWindow = {
+      contextWindow,
+      windowSource: compactionWindowSource,
+    };
+    this.compactionManager
+      .getContextLedger()
+      .noteModelSwitch(
+        { contextWindow, windowSource: compactionWindowSource },
+        this.runtimeConfig?.model ?? this._model,
+      );
 
     // Grok-aligned model-switch trigger (`maybe_compact_on_model_switch`,
     // grok `compaction.rs:1984-2016`). When the model or its context window
@@ -1336,23 +1385,55 @@ export class duyaAgent implements AgentRuntime {
         previousModel !== this._model ||
         previousContextWindow !== contextWindow
       ) {
+        // Plan 577 Phase 0: model switch is a BUDGET INVALIDATION, not a
+        // compaction command. The old order compacted unconditionally (any
+        // context size) and only then raised the window. New order: apply the
+        // new budget first (which also clears 'size' suppression — a window
+        // change is exactly the budget change it waits for), re-probe the
+        // projected context against the NEW trigger line, and compact only
+        // when the next request would not fit. A 200K→1M upgrade with a
+        // 120K context therefore no longer compacts at all.
+        this.compactionManager.updateMaxTokens(contextWindow);
+        let probe: CompactionProbe | null = null;
         try {
-          await this.compactionController.compactProactive({
-            trigger: 'model_switch',
-          });
-        } catch (modelSwitchError) {
-          // model_switch is best-effort: a failed model-switch compact does
-          // not block the turn. The error is surfaced via the
-          // `compaction_error` event for telemetry.
+          probe = this.compactionManager.probeCompaction(
+            this.compactionController.projectInputMessages(),
+          );
+        } catch (probeError) {
           logger.warn(
-            `[Agent] Model-switch compaction failed: ${
-              modelSwitchError instanceof Error ? modelSwitchError.message : String(modelSwitchError)
+            `[Agent] Model-switch probe failed, skipping threshold check: ${
+              probeError instanceof Error ? probeError.message : String(probeError)
             }`,
             undefined,
             'Agent',
           );
         }
-        this.compactionManager.updateMaxTokens(contextWindow);
+        if (probe && !probe.overTriggerLine) {
+          logger.info(
+            `[Agent] Model/window switched (${previousModel} → ${this._model}, ` +
+              `window ${previousContextWindow} → ${contextWindow}): projected context ` +
+              `${probe.tokens} ≤ trigger line ${contextWindow - 16384}, no compaction needed`,
+            undefined,
+            'Agent',
+          );
+        } else {
+          try {
+            await this.compactionController.compactProactive({
+              trigger: 'model_switch',
+            });
+          } catch (modelSwitchError) {
+            // model_switch is best-effort: a failed model-switch compact does
+            // not block the turn. The error is surfaced via the
+            // `compaction_error` event for telemetry.
+            logger.warn(
+              `[Agent] Model-switch compaction failed: ${
+                modelSwitchError instanceof Error ? modelSwitchError.message : String(modelSwitchError)
+              }`,
+              undefined,
+              'Agent',
+            );
+          }
+        }
       }
     }
     this._lastSeenModel = this._model;
@@ -1955,16 +2036,22 @@ export class duyaAgent implements AgentRuntime {
       // context ring collapse to ~1% for an instant between tool rounds.
       // Conversation context only grows within a turn, so max is always the
       // truthful anchor; compaction resets via compactedPending separately.
-      const resultPromptVolume = (
+      // Plan 577 §2: split the prompt-volume normalizer from the volume that
+      // folds output in. `normalizedPromptVolume` is the Observation-layer
+      // input (the prompt the provider actually saw); `resultPromptVolume`
+      // keeps the historical prompt+output semantics for round-max tracing.
+      const normalizedPromptVolume = (
         u?: { input_tokens?: number; output_tokens?: number; cache_hit_tokens?: number; cache_creation_tokens?: number },
       ): number => {
         if (!u) return 0;
         const input = u.input_tokens ?? 0;
         const hit = u.cache_hit_tokens ?? 0;
         const write = u.cache_creation_tokens ?? 0;
-        const prompt = hit > input || write > input ? input + hit + write : input;
-        return prompt + (u.output_tokens ?? 0);
+        return hit > input || write > input ? input + hit + write : input;
       };
+      const resultPromptVolume = (
+        u?: { input_tokens?: number; output_tokens?: number; cache_hit_tokens?: number; cache_creation_tokens?: number },
+      ): number => normalizedPromptVolume(u) + (u?.output_tokens ?? 0);
       let roundResultUsage:
         | { input_tokens?: number; output_tokens?: number; total_tokens?: number; cache_hit_tokens?: number; cache_creation_tokens?: number }
         | undefined = undefined;
@@ -2113,9 +2200,11 @@ export class duyaAgent implements AgentRuntime {
         logger.info(`[Agent] Turn ${turnCount}: Starting LLM stream, messages=${messages.length}, provider=${this.provider}`);
         let llmEventCount = 0;
         logger.info(`[Agent] Turn ${turnCount}: Calling llmClient.streamChat...`);
-        const llmMessages = compressProjectedToolMessages(
-          runtimePromptMessageId
-            ? messages.map((msg) => (
+        // Plan 577 §2: prune detection — compressProjectedToolMessages is
+        // pure and returns the SAME reference when no transform changed
+        // anything, so a reference change is the projection-shrink signal.
+        const prePruneMessages = runtimePromptMessageId
+          ? messages.map((msg) => (
                 msg.id === runtimePromptMessageId
                   ? {
                       ...msg,
@@ -2123,8 +2212,19 @@ export class duyaAgent implements AgentRuntime {
                     }
                   : msg
               ))
-            : messages
-        );
+            : messages;
+        const llmMessages = compressProjectedToolMessages(prePruneMessages);
+        if (llmMessages !== prePruneMessages) {
+          // Projection shrank (tool-result prune / offload / reformat): arm
+          // the next observation to replace the accounting `latest` even
+          // when smaller, and let the ring correct its anchor downward.
+          this.compactionManager.noteProjectionShrink();
+          logger.tokenTrace('projectionShrink', {
+            sessionId: turnContext.sessionId ?? undefined,
+            msgsBefore: prePruneMessages.length,
+            msgsAfter: llmMessages.length,
+          });
+        }
 
         // Plan 486 搂2.3: render the reply/fork quote context and keep the
         // provider payload clean. This runs at the per-request boundary where
@@ -2149,12 +2249,15 @@ export class duyaAgent implements AgentRuntime {
         // on `llmMessages`; never lands in the durable timeline).
         injectOSContextFragment(llmMessages, runtimePromptMessageId);
 
-        // Wall-clock snapshot attached after the current turn's user message
-        // on every model request (replaces the `Current date and time:` line
-        // in the environment system-prompt section). Transient: lives only on
-        // `llmMessages`, never persisted; fresh timestamp per request keeps
-        // mid-turn time accurate without perturbing the cache-able prompt.
-        injectTurnTimeReminder(llmMessages, runtimePromptMessageId);
+        // Persistent turn-context injection (C′): every human-turn user
+        // message — historical ones included — gets its `Message sent at`
+        // reminder re-rendered deterministically from the persisted
+        // `message.timestamp` on every request. Bytes never change across
+        // replays, so the provider cache prefix stays intact; the durable
+        // timeline keeps the clean canonical content (shallow-copy swap on
+        // `llmMessages` only). Replaces the old `Current date and time:`
+        // line in the environment system-prompt section.
+        injectTurnTimestampReminders(llmMessages);
 
         // (grok `GetMcpTools` parity): full schemas of tools found
         // via `tool_search` are appended at the very tail, leaving the request's
@@ -2177,11 +2280,17 @@ export class duyaAgent implements AgentRuntime {
         // Cache the system-prompt + tool-surface estimate for the live
         // context ring's no-usage fallback. Only the provider contract is
         // counted (name/description/input_schema), mirroring what is
-        // serialized into the request body.
-        this.lastSystemContextTokensEstimate = this._estimateSystemAndToolsTokens(
-          systemPromptContent,
-          tools,
-        );
+        // serialized into the request body. Plan 577 §4: the two halves
+        // are kept separate for the composition diagnostics.
+        const systemAndTools = this._estimateSystemAndToolsTokens(systemPromptContent, tools);
+        this.lastSystemTokensEstimate = systemAndTools.system;
+        this.lastToolsTokensEstimate = systemAndTools.tools;
+        this.lastSystemContextTokensEstimate = systemAndTools.total;
+        // Plan 577 §2: feed the schema baseline so the compaction manager
+        // can price tool/schema growth BETWEEN provider observations
+        // (schemaDelta) — an MCP/skill load is felt by the next request
+        // without waiting for the provider to report it.
+        this.compactionManager.setSchemaEstimateTokens(this.lastSystemContextTokensEstimate);
         try {
           options?.onSystemPromptReady?.({
             systemPrompt: systemPromptContent,
@@ -2214,6 +2323,10 @@ export class duyaAgent implements AgentRuntime {
         // Plan 480 P2.4: refresh the declared-tools snapshot before every
         // provider request (the array changes across rounds as discovered
         // tools join). The visibility guard reads it during execution.
+        // Plan 577 §3: capture the epoch for this built prompt. A replay uses
+        // the same prompt bytes, so it must retain this generation and be
+        // dropped if compaction/clear changed the timeline while it was in flight.
+        const requestEpoch = this.compactionManager.getContextEpoch();
         const streamGenerator = runTurnStream({
           llmClient: this.llmClient,
           llmMessages,
@@ -2856,6 +2969,11 @@ export class duyaAgent implements AgentRuntime {
             // candidate so an off-by-one is easy to spot).
             const candidateVolume = resultPromptVolume(usage);
             const prevVolume = roundResultUsage ? candidateVolume : 0;
+            // Plan 577 §2: Observation-layer feed — input and output travel
+            // separately; the manager owns the round-max defense on the
+            // input slot and output never inflates the anchor.
+            const observedInput = normalizedPromptVolume(usage);
+            const observedOutput = usage?.output_tokens ?? 0;
             logger.tokenTrace('observedPromptTokens', {
               sessionId: turnContext.sessionId ?? undefined,
               turnEvent: 'result',
@@ -2863,6 +2981,10 @@ export class duyaAgent implements AgentRuntime {
               candidate: candidateVolume,
               prev: prevVolume,
               keptNew: resultPromptVolume(usage) >= resultPromptVolume(roundResultUsage),
+              input: observedInput,
+              output: observedOutput,
+              latestInput: this.compactionManager.getLatestInputTokens() ?? null,
+              peakInput: this.compactionManager.getPeakInputTokens() ?? null,
               usage: usage
                 ? {
                     input: usage.input_tokens,
@@ -2873,8 +2995,12 @@ export class duyaAgent implements AgentRuntime {
                   }
                 : null,
             });
-            if (observedPrompt > 0) {
-              this.compactionManager.setObservedPromptTokens(observedPrompt);
+            if (observedInput > 0) {
+              this.compactionManager.setObservedUsageForEpoch(
+                observedInput,
+                observedOutput,
+                requestEpoch,
+              );
             }
             yield event;
           }
@@ -3011,15 +3137,55 @@ export class duyaAgent implements AgentRuntime {
         const errorMessage = error instanceof Error ? error.message : String(error);
         logger.error(`[Agent] Turn ${turnCount}: Error in LLM stream`, error instanceof Error ? error : new Error(errorMessage));
 
-        // Check for context length exceeded errors and attempt compaction
-        const isContextLengthError =
-          errorMessage.includes('context_length_exceeded') ||
-          errorMessage.includes('context window exceeds limit') ||
-          errorMessage.includes('prompt_too_long') ||
-          errorMessage.includes('exceeds limit');
+        // Check for context length exceeded errors and attempt compaction.
+        // Plan 577 Phase 0: dual-evidence gate. The old raw
+        // `errorMessage.includes('exceeds limit')` match fired a
+        // threshold-free emergency compaction for ANY error carrying that
+        // phrase (output/payload/quota wording included). Now:
+        //   explicit provider claim → compaction on its own (the local budget
+        //     may be misresolved, so a probe is NOT more authoritative here);
+        //   weak wording            → only with local corroboration
+        //     (projected context already over the trigger line); probe
+        //     failure = no evidence = no compaction (fail-closed).
+        const contextErrorKind = classifyContextLengthError(errorMessage);
+        let isContextLengthError = false;
+        let evidence: 'explicit' | 'weak+probe' | null = null;
+        // Best-effort probe for BOTH evidence kinds: weak needs it as
+        // corroboration; explicit only uses it for the structured evidence
+        // log (plan 577 review round 2 — these lines become the historical
+        // baseline the Phase 2 ContextLedger is verified against).
+        let evidenceProbe: CompactionProbe | null = null;
+        if (contextErrorKind !== null) {
+          try {
+            evidenceProbe = this.compactionManager.probeCompaction(
+              this.compactionController.projectInputMessages(),
+            );
+          } catch {
+            evidenceProbe = null; // projection failure → no local evidence
+          }
+        }
+        if (contextErrorKind === 'explicit') {
+          isContextLengthError = true;
+          evidence = 'explicit';
+        } else if (contextErrorKind === 'weak' && evidenceProbe?.overTriggerLine) {
+          isContextLengthError = true;
+          evidence = 'weak+probe';
+        }
 
         if (isContextLengthError) {
-          logger.warn(`[Agent] Turn ${turnCount}: Context length exceeded, attempting compaction`);
+          logger.warn(
+            `[Agent] Turn ${turnCount}: Context length exceeded (evidence=${evidence}), attempting compaction`,
+            {
+              classification: contextErrorKind,
+              estimatedTokens: evidenceProbe?.tokens ?? null,
+              peakInputTokens: evidenceProbe?.peakInputTokens ?? null,
+              triggerLine: this.compactionManager.getTriggerLine(),
+              hardLimit: this.compactionManager.getHardLimit(),
+              contextWindow: this.compactionManager.getMaxTokens(),
+              modelId: this._model,
+              windowSource: compactionWindowSource,
+            },
+          );
           try {
             const compactEntry = await this.compactionController.compactProactive({ trigger: 'emergency' });
             if (compactEntry) {
@@ -4664,20 +4830,76 @@ export class duyaAgent implements AgentRuntime {
   }
 
   /**
-   * Character→token estimate for the system prompt + tool-definition surface
-   * (plan 552: delegates to the shared CJK-aware estimator in @duya/ai
-   * instead of a private copy). Only the provider contract fields
-   * (name/description/input_schema) are counted.
+   * Plan 577 §3: true when the latest provider observation is the FIRST one
+   * after a projection shrink (prune / offload). The worker process reads
+   * this in emitLiveUsage to allow the ring's anchor correction to replace
+   * the timeline anchor downward — otherwise gateway under-reports would
+   * collapse it. Non-consuming; provenance lives in the ContextLedger.
    */
-  private _estimateSystemAndToolsTokens(systemPrompt: string, tools: Tool[]): number {
+  isLastContextObservationPostShrink(): boolean {
+    return this.compactionManager.wasLastObservationPostShrink();
+  }
+
+  /**
+   * Plan 577 §3: raw ledger facts and lineage. The worker's usage path uses
+   * getContextSnapshot() below to add the shared timeline projection.
+   */
+  getContextLedgerSnapshot(): ReturnType<import('../context/ContextLedger.js').ContextLedger['getSnapshot']> {
+    return this.compactionManager.getContextLedger().getSnapshot();
+  }
+
+  /**
+   * Plan 577 §3: return the enriched projection snapshot used by both
+   * compaction decisions and the worker's live usage frame.
+   */
+  getContextSnapshot(messages: readonly Message[] = this.messages) {
+    return this.compactionManager.getContextSnapshot(messages);
+  }
+
+  /**
+   * Plan 577 §3/§4: the resolved compaction window + its source
+   * (capability → catalog → 200K default). The ring surfaces the source so
+   * a silent 200K fallback becomes visible in the UI.
+   */
+  getContextWindowResolved(): { contextWindow: number; windowSource: 'capability' | 'catalog' | 'default' } {
+    return { ...this.resolvedWindow };
+  }
+
+  /**
+   * Plan 577 §4: the system-prompt half of the last request's fixed
+   * surface (excluding tool definitions). 0 until the first streamChat.
+   */
+  getSystemTokensEstimate(): number {
+    return this.lastSystemTokensEstimate;
+  }
+
+  /**
+   * Plan 577 §4: the tool-definition half (name/description/input_schema
+   * JSON of the full tool list). 0 until the first streamChat.
+   */
+  getToolsTokensEstimate(): number {
+    return this.lastToolsTokensEstimate;
+  }
+
+  /**
+   * Character→token estimates for the system prompt and the tool-definition
+   * surface separately (plan 552 delegation + plan 577 §4 split). Only the
+   * provider contract fields (name/description/input_schema) are counted.
+   */
+  private _estimateSystemAndToolsTokens(systemPrompt: string, tools: Tool[]): {
+    system: number;
+    tools: number;
+    total: number;
+  } {
+    const systemTokens = systemPrompt ? estimateContextTextTokens(systemPrompt) : 0;
     const contract = tools.map(({ name, description, input_schema }) => ({
       name,
       description,
       input_schema,
     }));
-    const text = `${systemPrompt}\n${JSON.stringify(contract)}`;
-    if (!text) return 0;
-    return estimateContextTextTokens(text);
+    const toolsText = contract.length > 0 ? JSON.stringify(contract) : '';
+    const toolsTokens = toolsText ? estimateContextTextTokens(toolsText) : 0;
+    return { system: systemTokens, tools: toolsTokens, total: systemTokens + toolsTokens };
   }
 
   /**

@@ -10,6 +10,8 @@ export {
   estimateMessageTokens as estimateContextMessageTokens,
   estimateTextTokens as estimateContextTextTokens,
   normalizePromptTokens,
+  computeContextComposition,
+  contextPartsTotal,
   IMAGE_TOKEN_FLOOR,
   CJK_CHARS_PER_TOKEN,
   ASCII_CHARS_PER_TOKEN,
@@ -17,6 +19,9 @@ export {
   type ContextEstimateMessage,
   type ContextEstimateOptions,
   type ContextEstimate,
+  type ContextPart,
+  type ContextComposition,
+  type ContextCompositionOptions,
 } from './utils/context-estimate.js';
 export {
   DEFAULT_CONTEXT_WINDOW,
@@ -24,6 +29,24 @@ export {
   type ContextWindowSource,
   type ResolvedContextWindow,
 } from './utils/context-window.js';
+export {
+  projectNextInput,
+  applyLiveAnchorCorrection,
+  type ContextEstimateSource,
+  type ContextObservation,
+  type ContextAccountingState,
+  type LiveAnchorCorrectionInput,
+  type LiveAnchorCorrectionResult,
+} from './utils/context-accounting.js';
+export {
+  emptyContextSnapshot,
+  serializeContextSnapshot,
+  deserializeContextSnapshot,
+  CONTEXT_SNAPSHOT_SCHEMA_VERSION,
+  type ContextSnapshot,
+  type ContextSnapshotEstimateSource,
+  type ContextSnapshotConfidence,
+} from './utils/context-snapshot.js';
 export { createOpenAICompletionsClient } from './api/openai-completions.js';
 export { transformMessages, isSameModel } from './api/transform-messages.js';
 export { ThinkTagParser } from './utils/think-tag-parser.js';
