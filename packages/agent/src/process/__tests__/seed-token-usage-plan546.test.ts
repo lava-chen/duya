@@ -17,6 +17,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   deriveSingleCallUsage,
+  parsePersistedTokenUsage,
   seedTokenUsageFromHistory,
 } from '../seed-token-usage.js';
 import type { Message, TokenUsage } from '@duya/ai';
@@ -214,5 +215,107 @@ describe('deriveSingleCallUsage (plan 546)', () => {
   it('returns null for null/undefined cumulative (DuyaAgent legacy-fallback branch handles this)', () => {
     expect(deriveSingleCallUsage(null)).toBeNull();
     expect(deriveSingleCallUsage(undefined)).toBeNull();
+  });
+
+  it('derives the largest-prompt call from calls[] when last_call is missing (stripped round-trip)', () => {
+    // 2026-09-28 regression shape: a plan-445+ block whose `last_call`
+    // sub-block was stripped by a reload round-trip. The top-level fields
+    // are the TURN-CUMULATIVE sum — returning them as the "single call"
+    // re-inflates the anchor ~N×. The snapshot must come from the ledger's
+    // largest-prompt call instead (cache-exclusive convention: prompt =
+    // input + cacheHit when cacheHit > input).
+    const cumulative: TokenUsage = {
+      input_tokens: 11_315, // Σ input over 3 calls — must NOT bleed through
+      output_tokens: 2_527,
+      cache_hit_tokens: 462_694, // Σ cache_hit — must NOT bleed through
+      calls: [call(899, 122, 20_603), call(1116, 103, 21_499), call(3955, 104, 22_100)],
+      // NO last_call
+    };
+    expect(deriveSingleCallUsage(cumulative)).toEqual({
+      input_tokens: 3955,
+      output_tokens: 104,
+      cache_hit_tokens: 22_100,
+      cache_creation_tokens: 0,
+    });
+  });
+
+  it('derives by normalized prompt volume, not raw input (cache-inclusive calls)', () => {
+    // A cache-INCLUSIVE call (rawInput covers the cached prefix) can have a
+    // small raw input but the largest real prompt; a cache-exclusive call
+    // with input=0 + big hit must not win on raw input alone either. The
+    // volume metric mirrors the writer: normalized prompt + output.
+    const cumulative: TokenUsage = {
+      input_tokens: 100,
+      output_tokens: 30,
+      cache_hit_tokens: 100,
+      calls: [call(100, 10, 0), call(0, 20, 1000)],
+      // NO last_call
+    };
+    // call 1: normalized prompt = 100 (hit ≤ input), +10 output = 110.
+    // call 2: normalized prompt = 0 + 1000 = 1000, +20 = 1020 → wins.
+    expect(deriveSingleCallUsage(cumulative)).toEqual({
+      input_tokens: 0,
+      output_tokens: 20,
+      cache_hit_tokens: 1000,
+      cache_creation_tokens: 0,
+    });
+  });
+});
+
+describe('parsePersistedTokenUsage (plan 445 shape round-trip)', () => {
+  it('preserves last_call and calls[] alongside the top-level counters', () => {
+    const stored = JSON.stringify({
+      input_tokens: 150,
+      output_tokens: 25,
+      total_tokens: 175,
+      cache_hit_tokens: 300,
+      cache_creation_tokens: 20,
+      calls: [call(50, 8, 100, 10), call(100, 17, 200, 10)],
+      last_call: { input_tokens: 100, output_tokens: 17, cache_hit_tokens: 200, cache_creation_tokens: 10 },
+    });
+
+    expect(parsePersistedTokenUsage(stored)).toEqual({
+      input_tokens: 150,
+      output_tokens: 25,
+      total_tokens: 175,
+      cache_hit_tokens: 300,
+      cache_creation_tokens: 20,
+      calls: [call(50, 8, 100, 10), call(100, 17, 200, 10)],
+      last_call: { input_tokens: 100, output_tokens: 17, cache_hit_tokens: 200, cache_creation_tokens: 10 },
+    });
+  });
+
+  it('returns undefined for null / empty / malformed / counter-less JSON', () => {
+    expect(parsePersistedTokenUsage(null)).toBeUndefined();
+    expect(parsePersistedTokenUsage(undefined)).toBeUndefined();
+    expect(parsePersistedTokenUsage('')).toBeUndefined();
+    expect(parsePersistedTokenUsage('not json{')).toBeUndefined();
+    expect(parsePersistedTokenUsage('{"foo":1}')).toBeUndefined();
+    expect(parsePersistedTokenUsage('null')).toBeUndefined();
+  });
+
+  it('regression 2026-09-28: the stripped block inflated the reloaded anchor 476,536 / ~24k', () => {
+    // The persisted row (journal:028c2e4c) carried last_call — but the old
+    // messageRowToMessage dropped it, so computeContextEstimate normalized
+    // the cumulative top-level as one prompt: 11,315 + 462,694 + 2,527 =
+    // 476,536 (ring 238% / 200k) while the provider's real prompt was
+    // 24,178. The parser must keep last_call so the scan reads 28,244.
+    const stored = JSON.stringify({
+      input_tokens: 11_315,
+      output_tokens: 2527,
+      total_tokens: 13_842,
+      cache_hit_tokens: 462_694,
+      cache_creation_tokens: 0,
+      calls: [call(899, 122, 20_603), call(1116, 103, 21_499)],
+      last_call: { input_tokens: 473, output_tokens: 71, cache_hit_tokens: 27_771, cache_creation_tokens: 0 },
+    });
+
+    const parsed = parsePersistedTokenUsage(stored);
+    expect(parsed?.last_call).toBeDefined();
+    expect(parsed?.last_call?.input_tokens).toBe(473);
+    expect(parsed?.last_call?.cache_hit_tokens).toBe(27_771);
+    // With last_call preserved, normalizePromptTokens reads 473 + 27,771
+    // instead of 11,315 + 462,694.
+    expect(parsed?.last_call!.input_tokens! + parsed?.last_call!.cache_hit_tokens!).toBe(28_244);
   });
 });

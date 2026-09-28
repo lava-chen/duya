@@ -131,6 +131,20 @@ process.on('message', (msg: Record<string, unknown>) => {
     }
     return;
   }
+  // Plan 575 §0-⑥: route computer-use:cua:response back to the worker.
+  // Same gap class as the computer-use:execute branch above — without
+  // this return path every computer_cua call times out after 15s.
+  if (msg.type === 'computer-use:cua:response' && typeof msg.requestId === 'string') {
+    const key = `rpc:${msg.requestId}`;
+    const workerChild = workerDbRequests.get(key);
+    if (workerChild) {
+      workerDbRequests.delete(key);
+      if (!workerChild.killed) {
+        workerChild.send(msg);
+      }
+    }
+    return;
+  }
   // Plan 481: route memory-tier:rpc:response back to the worker.
   if (msg.type === 'memory-tier:rpc:response' && typeof msg.requestId === 'string') {
     const key = `rpc:${msg.requestId}`;

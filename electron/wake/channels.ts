@@ -453,6 +453,11 @@ export class DefaultChannelBackgroundWakes implements ChannelBackgroundWakes {
     persistInboundEnvelope(sessionId, envelope);
     ackRedriveCounts.delete(sessionId);
 
+    // Channel send/receive marker row (bot-direct chat chips) — the live
+    // connector-runtime path wakes through THIS method, so the marker must
+    // be written here too, not only in the module-level wakeForInbound.
+    appendInboundChannelMarker(sessionId, envelope);
+
     // Enqueue the inbound wake with the dispatcher
     const result = enqueueInboundWake(sessionId, {
       envelopeId: `${agentId}:${envelope.address.platform}:${envelope.address.chat}`,

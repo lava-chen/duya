@@ -61,6 +61,8 @@ export const computerCuaInputSchema = z.object({
   windowId: z.number().optional(),
   includeScreenshot: z.boolean().optional(),
   maxElements: z.number().int().positive().optional(),
+  // get_app_state: force a full UIA re-scan instead of the cached tree.
+  fresh: z.boolean().optional(),
   // Element / coordinate targets.
   target: targetSchema.optional(),
   from: targetSchema.optional(),
@@ -96,11 +98,13 @@ export const definition: Tool = {
   name: COMPUTER_CUA_TOOL_NAME,
   description:
     'System-level computer use for Windows (ZCode/Codex-aligned CUA surface). Accessibility-first:\n' +
-    '  1. get_app_state — read a window as an indexed element tree ([n] kind title = value actions=[...]); pass includeScreenshot=true for pixels (also arms coordinate clicks)\n' +
+    '  1. get_app_state — read a window as an indexed element tree ([n] kind title = value actions=[...]); pass includeScreenshot=true for pixels (also arms coordinate clicks). Minimized windows are addressable: the tree reads fine, and includeScreenshot=true first restores the window WITHOUT stealing the user\'s focus\n' +
     '  2. Act on ELEMENT indices: left_click / set_value / perform_action (AXPress, AXToggle, ...) / select_text — these ride UIA patterns, work on background windows, and re-verify after dispatch\n' +
-    '  3. list_apps / list_windows to find pid / window_id; request_access to check readiness; stop_computer_control to drop session state\n\n' +
+    '  3. list_apps / list_windows to find pid / window_id (list_windows includes minimized windows); request_access to check readiness; stop_computer_control to drop session state\n\n' +
     'Rules:\n' +
-    '  - Element indices are scoped to the app_ref (pid/name/windowId) of your last get_app_state; re-observe after navigation. On ELEMENT_UNAVAILABLE / STALE_STATE, re-observe FIRST — never blindly repeat an action (left_click may have possibly_sent)\n' +
+    '  - Element indices are scoped to the app_ref (pid/name/windowId) of your last get_app_state; re-observe after navigation. On ELEMENT_UNAVAILABLE / STALE_STATE, re-observe FIRST (pass fresh=true to force a re-scan — the cached tree may be up to a few minutes old) — never blindly repeat an action (left_click may have possibly_sent)\n' +
+    '  - To switch apps, just get_app_state the target (name/pid/windowId) — it never needs the foreground. After switching, your old indices belong to the previous window\n' +
+    '  - An app that is not running cannot be observed — launch it via the Bash tool first (start "QQ" / Start-Process); this surface has no launch primitive\n' +
     '  - Coordinate targets are pixels of the LAST screenshot YOU received (get_app_state includeScreenshot=true); without a frame they are refused\n' +
     '  - Empty tree = custom-drawn window (or elevated → PERMISSION_DENIED): fall back to the older computer_use vision loop instead of retrying\n' +
     '  - NOT_SETTABLE / NOT_SELECTABLE / ACTION_UNAVAILABLE are capability refusals: change approach, do not retry\n' +
@@ -114,10 +118,11 @@ export const definition: Tool = {
         description: 'Which CUA operation to run.',
       },
       pid: { type: 'number', description: 'app_ref: target process id' },
-      name: { type: 'string', description: 'app_ref: window title substring (ambiguous matches are refused)' },
-      windowId: { type: 'number', description: 'app_ref: exact top-level window handle from list_windows' },
-      includeScreenshot: { type: 'boolean', description: 'get_app_state: attach a window screenshot (arms coordinate clicks)' },
+      name: { type: 'string', description: 'app_ref: window title substring (visible or minimized; ambiguous matches are refused)' },
+      windowId: { type: 'number', description: 'app_ref: exact top-level window handle from list_windows (works for minimized windows too)' },
+      includeScreenshot: { type: 'boolean', description: 'get_app_state: attach a window screenshot (arms coordinate clicks); on a minimized window it first restores the window without stealing focus' },
       maxElements: { type: 'number', description: 'get_app_state: element cap in the rendered tree' },
+      fresh: { type: 'boolean', description: 'get_app_state: force a full UIA re-scan instead of the cached tree (use when receipts smell stale, e.g. after stale-tree)' },
       target: {
         type: 'object',
         description: 'Action target: {type:"element",index} (0-based from get_app_state) or {type:"coordinate",x,y} (last-screenshot pixels)',

@@ -118,6 +118,17 @@ export function registerSystemHandlers(): void {
     return { canceled: result.canceled, filePaths: result.filePaths };
   });
 
+  ipcMain.handle('dialog:open-file', async (_event, options?: { defaultPath?: string; title?: string }) => {
+    const mainWindow = getMainWindow();
+    if (!mainWindow) return { canceled: true, filePaths: [] };
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: options?.title || 'Select files',
+      defaultPath: options?.defaultPath || undefined,
+      properties: ['openFile', 'multiSelections'],
+    });
+    return { canceled: result.canceled, filePaths: result.filePaths };
+  });
+
   ipcMain.handle('dialog:select-download-folder', async (_event, options?: { defaultPath?: string; title?: string }) => {
     const mainWindow = getMainWindow();
     if (!mainWindow) return { canceled: true, filePaths: [] };

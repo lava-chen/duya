@@ -235,6 +235,41 @@ describe('system-handlers', () => {
     });
   });
 
+  describe('dialog:open-file', () => {
+    it('opens a multi-select file dialog without format filters', async () => {
+      mocks.dialog.showOpenDialog.mockResolvedValueOnce({
+        canceled: false,
+        filePaths: ['/workspace/notes.md'],
+      });
+
+      const result = await invokeHandler('dialog:open-file', {}, {
+        defaultPath: '/workspace',
+        title: 'Pick a document',
+      });
+
+      expect(result).toEqual({ canceled: false, filePaths: ['/workspace/notes.md'] });
+      expect(mocks.dialog.showOpenDialog).toHaveBeenCalledWith(
+        mocks.mainWindow,
+        expect.objectContaining({
+          title: 'Pick a document',
+          defaultPath: '/workspace',
+          properties: ['openFile', 'multiSelections'],
+        }),
+      );
+    });
+
+    it('returns canceled when no main window exists', async () => {
+      const original = mocks.mainWindow;
+      mocks.mainWindow = null;
+      try {
+        const result = await invokeHandler('dialog:open-file', {}, {});
+        expect(result).toEqual({ canceled: true, filePaths: [] });
+      } finally {
+        mocks.mainWindow = original;
+      }
+    });
+  });
+
   describe('shell:open-path', () => {
     it('rejects non-string path with "Invalid path"', async () => {
       const result = await invokeHandler('shell:open-path', {}, 123);

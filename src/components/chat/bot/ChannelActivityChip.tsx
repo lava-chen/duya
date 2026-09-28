@@ -1,5 +1,6 @@
 import { useTranslation } from "@/hooks/useTranslation";
-import { ArrowDownLeftIcon, ArrowUpRightIcon, XIcon } from "@/components/icons";
+import { XIcon } from "@/components/icons";
+import { ChannelIcon } from "@/components/settings/ChannelIcon";
 import {
   platformLabel,
   type ChannelActivityChipGroup,
@@ -14,9 +15,10 @@ interface ChannelActivityChipProps {
 /**
  * Collapsed channel send/receive chip in the bot-direct transcript (companion
  * to AgentDmGroupChip). One chip per burst of consecutive channel markers;
- * the sentence merges direction(s) and platform(s):
+ * each involved channel renders its brand icon in front of the sentence:
  *   从 Telegram 收到 3 条消息 / 发送了 2 条消息到 Feishu / 与 Telegram 收发了 5 条消息.
- * Click opens the read-only detail overlay (ChannelActivityOverlay).
+ * Visual language matches the DM chip: bare centered text, no pill shadow;
+ * only the sentence anchor washes on hover. Click opens the detail overlay.
  */
 export function ChannelActivityChip({ group, onOpen }: ChannelActivityChipProps) {
   const { t } = useTranslation();
@@ -37,16 +39,11 @@ export function ChannelActivityChip({ group, onOpen }: ChannelActivityChipProps)
         onClick={() => onOpen(group)}
         title={t("bot.channel.overlayTitle")}
       >
-        {group.inCount > 0 && (
-          <span className="bot-chat-channel-chip__icon bot-chat-channel-chip__icon--in">
-            <ArrowDownLeftIcon size={12} />
-          </span>
-        )}
-        {group.outCount > 0 && (
-          <span className="bot-chat-channel-chip__icon bot-chat-channel-chip__icon--out">
-            <ArrowUpRightIcon size={12} />
-          </span>
-        )}
+        <span className="bot-chat-channel-chip__icons" aria-hidden="true">
+          {group.platforms.map((platform) => (
+            <ChannelIcon key={platform} channel={platform} size={14} />
+          ))}
+        </span>
         <span className="bot-chat-channel-chip__text">{sentence}</span>
       </button>
     </div>

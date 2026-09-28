@@ -420,3 +420,26 @@ exposure = "full"
 - builtin 重分档：`send_artifact`、`ReactToMessage` `always` → `discoverable`。
 
 **落地**：`tool/registry.ts`（类型 + `registerWithKey` 增 meta 参）、`agent-profile/ToolFilter.ts`（四档判定）、`tool/hint-stub.ts`（新）、`tool/{searchTools,catalogFromRegistry,dispatcherFromRegistry,visibility-guard}.ts`、`config/tool-exposure.ts`（收敛）、`agent/DuyaAgent.ts` + `agent/session/agent-shell.ts`（stub 构建 / guard / tail 门控 / 目录条件化）、`tool/builtin.ts`。`typecheck:all` 绿；exposure 相关 16 个测试套件全部通过（含重写的 tool-exposure / tool-filter ×2 / grayscale-harness / hint-stub / runtime-closure Case 12 / ReactToMessage discoverability）。
+
+### 8.19 ask 死端修复（2026-09-28，discoverable 暴露后显形的 bug）
+
+**现象**（用户实录）：`tool_invoke` 调 discoverable 工具（computer_cua 等）一律返回
+`# Approval required ... cannot be granted through tool_invoke`——**没有审批卡、没有执行、没有恢复路径**。
+根因：discoverable 工具不在 allowlist/规则/工作区收容内 → 权限链落到默认 `ask`（permissions.ts 709-713）
+→ dispatcher ask 分支硬失败（§8.11 的"ask 不执行"设计）。直调路径不受影响（PermissionsGate 把 ask 映射为
+`{allowed:true}`，普通 executor 直接执行）。该设计在 hidden 时代无害，discoverable 暴露后成为主路径死端。
+
+**修复**（`dispatcherFromRegistry.ts`，镜像 mcp/apply.ts 的 MCP runtime gate 语义）：
+- ask + 有 `context.requestPermission`（交互会话）→ 走真审批卡
+  （`requestPermission({id, toolName: 解析后真名, toolInput, mode:'generic', expiresAt:5min, decisionReason})`）；
+  `deny` → 结构化 Permission denied；`paused` → 审批卡等待文本（plan 498 语义，不落执行）；
+  `allow` → 落到执行。权限链仍是闸门：auto-approve 模式在 ask 之前已达 allow。
+- ask + 无通道（headless CLI / 子代理 / 后台 gateway）→ 大声 warn + 隐式放行（与 mcp/apply.ts 的
+  headless 信任模型一致——问了会死锁回合）。
+- `_approvedToolUses` 审批记忆通道**不适用**此处：那是 StreamingToolExecutor pre-check 写入、
+  MCP executor 重入消费的通道；tool_invoke 的目标工具没有 pre-check 写入方。
+
+**测试**：`plan480-meta-tools.test.ts` 原"ask 不执行"pinning 测试重写为四条契约：
+无通道隐式执行 / 卡片 allow 执行（含 toolName=解析后真名 + toolInput 透传断言）/ 卡片 deny 不执行 /
+卡片 paused 不执行。29 测全绿；直接消费方（agent-entry / mcp loader / pending-hook-messages /
+db-persistence-round-trip）60 测全绿。

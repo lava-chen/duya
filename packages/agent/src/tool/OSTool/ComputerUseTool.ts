@@ -84,7 +84,11 @@ export const definition: Tool = {
         description:
           'invoke: 1-based tree element index | set_value: tree element (UIA ValuePattern write) | click/drag: SOM element index',
       },
-      hwnd: { type: 'number', description: 'tree: target window handle (default: foreground)' },
+      hwnd: {
+        type: 'number',
+        description:
+          'tree: target window handle (default: foreground) | invoke/set_value: structural target (default: the window of your last tree call — pass it when driving a background app)',
+      },
       maxElements: { type: 'number', description: 'tree: emitted-element cap' },
       fresh: { type: 'boolean', description: 'tree: bypass the enumerate cache' },
       method: {

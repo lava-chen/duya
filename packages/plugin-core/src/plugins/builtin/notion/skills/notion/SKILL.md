@@ -1,7 +1,6 @@
 ---
 name: notion
 description: Use duya against a connected Notion workspace via the official Notion remote MCP endpoint. Search pages and databases, read Notion content, and create or update pages and records. Trigger on any mention of Notion, a Notion page/database link, or requests to search, read, summarize, or edit Notion content. Requires the Notion app connection to be authorized.
-allowed-tools: Bash, Read, Write, Edit, Glob, Grep
 ---
 
 # Notion
@@ -9,8 +8,8 @@ allowed-tools: Bash, Read, Write, Edit, Glob, Grep
 Work with the user's connected Notion workspace. All operations go through the
 official Notion remote MCP tools, which are exposed to the agent as
 `remote_notion_*` (e.g. `remote_notion_search`, `remote_notion_fetch`,
-`remote_notion_create_pages`). These tools only appear when the Notion app
-connection is authorized.
+`remote_notion_create_pages`, `remote_notion_update_page`). These tools only
+appear when the Notion app connection is authorized.
 
 ## Duya capability binding
 
@@ -32,11 +31,13 @@ then retry. Tools appear after the connection is established.
    locate the target page or database. If multiple hits, ask the user which to
    use before proceeding.
 2. **Read before edit.** Fetch the page or database with `remote_notion_fetch`
-   (or the database equivalent) before modifying, so you understand structure,
-   existing content, and required properties.
-3. **Create or update.** Use `remote_notion_create_pages` / `remote_notion_update_page`
-   for pages and records. For task databases, confirm the data source and
-   required properties first, then create with explicit parent/pages fields.
+   before modifying, so you understand structure, existing content, and
+   required properties. For database-backed pages, the fetch returns the data
+   source id (`collection://...`) that create/update calls expect.
+3. **Create or update.** Use `remote_notion_create_pages` with an explicit
+   `parent` and a `pages` array; use `remote_notion_update_page` for edits (see
+   guardrails for the command schema). For task databases, confirm the data
+   source and required properties first.
 4. **Verify.** After a write, fetch the page again to confirm the change landed
    correctly.
 
@@ -45,11 +46,19 @@ then retry. Tools appear after the connection is established.
 - Notion tool availability can vary per workspace/token. If a tool call returns
   `Tool <name> not found`, treat that tool as unavailable for the rest of the
   task; use `remote_notion_search` and `remote_notion_fetch` where sufficient.
-- Use one literal search query per search call; run separate searches for
-  alternate phrasings instead of combining with `or`.
-- Only send Notion page/database/data-source URLs or IDs to fetch tools.
+- Use one literal search query per search call and pass `filters: {}`
+  explicitly when no narrower filter applies; run separate searches for
+  alternate phrasings instead of combining them with `or` or `+` in one query.
+- Only send Notion page/database/data-source URLs or IDs to fetch tools. Search
+  can also surface external connected-source URLs — use those as context or
+  citations, but do not feed them into fetch.
 - Send explicit page/database IDs where the schema requires them; do not rely
   on the active/selected page.
+- Edit page content via `remote_notion_update_page` with
+  `command: "update_content"` and exact `old_str` / full-replacement `new_str`
+  pairs. For property-only edits use `command: "update_properties"` with
+  `content_updates: []`. The deployed schema expects both top-level fields even
+  when one is unused; do not invent insertion-only commands.
 
 ## Output standards
 

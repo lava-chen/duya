@@ -23,6 +23,7 @@
 @plugin "@tailwindcss/typography";
 
 @theme {
+  --color-background: var(--main-bg);
   --color-foreground: var(--foreground);
   --color-muted-foreground: var(--muted);
   --color-border: var(--border);

@@ -116,7 +116,7 @@ export const DocumentCreateDialog: React.FC<DocumentCreateDialogProps> = ({ open
 
   const chooseFromFolder = useCallback(async () => {
     if (!projectPath) return;
-    const result = await window.electronAPI.references.pickFiles({
+    const result = await window.electronAPI.dialog.openFile({
       title: t("conductor.document.pickFilesTitle"),
       defaultPath: projectPath,
     });

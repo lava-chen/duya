@@ -16,6 +16,7 @@ import type { ToolRegistration } from '../../modes/types.js';
 import { definition, executor } from './ComputerUseTool.js';
 import { contextDefinition, contextExecutor } from './context-tool.js';
 import { decideDefinition, decideExecutor, isComputerUseDecideAvailable } from './ComputerUseDecideTool.js';
+import { definition as cuaDefinition, executor as cuaExecutor } from './ComputerCuaTool.js';
 
 export {
   definition as computerUseDefinition,
@@ -107,4 +108,18 @@ export function getComputerUseToolsWithDecide(includeContext: boolean): ToolRegi
     registrations.push({ definition: decideDefinition, executor: decideExecutor });
   }
   return registrations;
+}
+
+/**
+ * plan 575 follow-up: the full Computer Use surface for the mode's
+ * inject — the vision tool (+ conditional context/decide siblings)
+ * plus the `computer_cua` 14-tool structural channel. Both top-level
+ * tools are always present; the prompt carries the two-tool contract
+ * (computer_use = primary loop, computer_cua = receipt-grade sibling).
+ */
+export function getComputerUseToolsWithCua(includeContext: boolean): ToolRegistration[] {
+  return [
+    ...getComputerUseToolsWithDecide(includeContext),
+    { definition: cuaDefinition, executor: cuaExecutor },
+  ];
 }

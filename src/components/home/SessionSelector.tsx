@@ -13,7 +13,6 @@ import {
   CheckIcon,
 } from "@/components/icons";
 import { DropdownMenu, type MenuAction } from "@/components/ui/DropdownMenu";
-import { ReferencesPanel } from "./ReferencesPanel";
 
 interface SessionSelectorProps {
   selectedProject: { workingDirectory: string; projectName: string } | null;
@@ -42,7 +41,7 @@ export function SessionSelector({
   onSelectThread,
   greeting,
   showRecentThreads = true,
-  maxRecentThreads = 8,
+  maxRecentThreads = 5,
   children,
 }: SessionSelectorProps) {
   const { threads, projects, isHydrated } = useConversationStore(
@@ -54,7 +53,6 @@ export function SessionSelector({
   );
   const { t, locale } = useTranslation();
   const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<"threads" | "references">("threads");
   const [projectSearch, setProjectSearch] = useState("");
 
   const closeProjectDropdown = useCallback(() => {
@@ -65,7 +63,6 @@ export function SessionSelector({
   const handleSelectProject = (project: { workingDirectory: string; projectName: string }) => {
     onSelectProject(project);
     closeProjectDropdown();
-    setActiveTab("threads");
   };
 
   const handleNewBlankProject = () => {
@@ -251,57 +248,25 @@ export function SessionSelector({
         <div className="welcome-project-row">{projectSelector}</div>
       )}
 
-      {/* Tab strip: only shown when a project is selected */}
-      {selectedProject && (
-        <div className="welcome-tabs" role="tablist" aria-label={t('references.tab.ariaLabel')}>
-          <button
-            role="tab"
-            aria-selected={activeTab === "threads"}
-            className={`welcome-tab ${activeTab === "threads" ? "active" : ""}`}
-            onClick={() => setActiveTab("threads")}
-          >
-            {t('references.tab.threads')}
-          </button>
-          <button
-            role="tab"
-            aria-selected={activeTab === "references"}
-            className={`welcome-tab ${activeTab === "references" ? "active" : ""}`}
-            onClick={() => setActiveTab("references")}
-          >
-            {t('references.tab.references')}
-          </button>
-        </div>
-      )}
-
-      {/* Tab panels */}
-      {selectedProject && activeTab === "references" ? (
-        <div className="welcome-tab-panel">
-          <ReferencesPanel
-            workingDirectory={selectedProject.workingDirectory}
-            projectName={selectedProject.projectName}
-          />
-        </div>
-      ) : (
-        showRecentThreads && recentThreads.length > 0 && (
-          <div className="welcome-recent">
-            <h2>{t('chat.recentThreads')}</h2>
-            <div className="recent-list">
-              {recentThreads.map((thread) => (
-                <button
-                  key={thread.id}
-                  className="recent-item"
-                  onClick={() => onSelectThread(thread.id)}
-                >
-                  <div className="recent-item-left">
-                    <span className="recent-title">{thread.title}</span>
-                    <span className="recent-project">{thread.projectName || thread.workingDirectory}</span>
-                  </div>
-                  <span className="recent-date">{formatDate(thread.updatedAt)}</span>
-                </button>
-              ))}
-            </div>
+      {showRecentThreads && recentThreads.length > 0 && (
+        <div className="welcome-recent">
+          <h2>{t('chat.recentThreads')}</h2>
+          <div className="recent-list">
+            {recentThreads.map((thread) => (
+              <button
+                key={thread.id}
+                className="recent-item"
+                onClick={() => onSelectThread(thread.id)}
+              >
+                <div className="recent-item-left">
+                  <span className="recent-title">{thread.title}</span>
+                  <span className="recent-project">{thread.projectName || thread.workingDirectory}</span>
+                </div>
+                <span className="recent-date">{formatDate(thread.updatedAt)}</span>
+              </button>
+            ))}
           </div>
-        )
+        </div>
       )}
     </>
   );

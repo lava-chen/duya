@@ -135,6 +135,54 @@ export function clearCaptureSize(sessionId: string | undefined): void {
 }
 
 /**
+ * plan 578 smoke fix: the window of the last successful structural
+ * `tree` observation, per session. `invoke` / `set_value(element)` used
+ * to resolve their target from the FOREGROUND at dispatch time — and
+ * the approval card sits between tree and dispatch, so answering it
+ * moves focus and the invoke landed on a window whose ElementCache was
+ * never populated ("no-element"). The remembered hwnd makes structural
+ * dispatch address the window the model actually observed; an explicit
+ * `hwnd` argument still wins.
+ */
+interface StructuralTarget {
+  hwnd: number;
+  title: string;
+  at: number;
+}
+const structuralTargets = new Map<string, StructuralTarget>();
+const MAX_STRUCTURAL_TARGETS = 32;
+
+/** Call after a successful `tree` (source=uia-tree). */
+export function rememberStructuralTarget(
+  sessionId: string | undefined,
+  hwnd: number,
+  title: string,
+): void {
+  if (!Number.isInteger(hwnd) || hwnd <= 0) return;
+  const key = zoomOriginKey(sessionId);
+  if (!structuralTargets.has(key) && structuralTargets.size >= MAX_STRUCTURAL_TARGETS) {
+    const oldest = structuralTargets.keys().next();
+    if (!oldest.done) structuralTargets.delete(oldest.value);
+  }
+  structuralTargets.set(key, { hwnd, title, at: Date.now() });
+}
+
+/**
+ * The structural target for the next invoke/set_value: the remembered
+ * last-tree hwnd, if any.
+ */
+export function getRememberedStructuralTarget(
+  sessionId: string | undefined,
+): StructuralTarget | undefined {
+  return structuralTargets.get(zoomOriginKey(sessionId));
+}
+
+/** Forget the remembered structural target (tests / stop_computer_control). */
+export function clearStructuralTarget(sessionId: string | undefined): void {
+  structuralTargets.delete(zoomOriginKey(sessionId));
+}
+
+/**
  * Map a model-supplied image-space point to the physical screen point
  * nut.js expects: rebase out of the active zoom crop (if any), then
  * scale image → physical. Pure — the caller passes the primary

@@ -16,7 +16,7 @@ import os from 'os';
 import { pathToFileURL } from 'url';
 import { app } from 'electron';
 import type { PluginCatalogEntry, PluginCategory, PluginManifest } from './types';
-import { readPluginManifest } from './manifest';
+import { listCapabilityKinds, readAppConnectionDeclarations, readPluginManifest } from './manifest';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getOfficialPluginAssets } from '../../packages/plugin-core/src/plugins/loader/official-assets.js';
 import { deriveCapabilityCounts } from './capability-counts.js';
@@ -245,6 +245,18 @@ function buildBuiltinCatalogEntry(
 ): PluginCatalogEntry | null {
   if (!manifest?.name) return null;
   const id = manifest.id || `com.duya.${manifest.name}`;
+  // Derive the install-dialog auth gate from the plugin's own app
+  // declarations: a required connection means the install flow must run the
+  // OAuth connect step (two-icon UI), an optional one connects on use.
+  // Marketplace entries get this from their marketplace.json policy — builtin
+  // plugins have no such metadata, so it comes from the declaration itself.
+  const appDecls = readAppConnectionDeclarations(pluginDir);
+  const authPolicy: PluginCatalogEntry['authPolicy'] =
+    appDecls.length === 0
+      ? undefined
+      : appDecls.some((decl) => decl.required)
+        ? 'on_install'
+        : 'on_use';
   return applyInterfaceMetadata({
     id,
     name: manifest.name,
@@ -255,6 +267,11 @@ function buildBuiltinCatalogEntry(
     category: normalizeCategory(manifest.interface?.category),
     trustLevel: 'official',
     capabilityCounts: deriveCapabilityCounts(manifest as PluginCatalogEntry['manifest'], pluginDir),
+    // Full synced copy under the user-home builtin cache. Without this the
+    // install falls back to a manifest-only copy: assets (icon) and local
+    // skills never land in the versioned cache.
+    marketplacePluginDir: pluginDir,
+    authPolicy,
     manifest,
     author: manifest.author,
   }, manifest);

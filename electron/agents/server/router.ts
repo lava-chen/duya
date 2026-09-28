@@ -943,6 +943,13 @@ async function handlePostChat(
             workerDbRequests.set(`rpc:${msg.requestId}`, child);
             process.send(msg);
           }
+          // Plan 575 §0-⑥: forward computer-use:cua to the main process
+          // (the CUA dispatcher lives in Electron main). Without this relay
+          // the worker's computer_cua calls time out after 15s.
+          if (msg.type === 'computer-use:cua' && typeof msg.requestId === 'string' && process.send) {
+            workerDbRequests.set(`rpc:${msg.requestId}`, child);
+            process.send(msg);
+          }
           // Plan 481: forward memory-tier:rpc to the main process
           // (memory tier writer lives in Electron main).
           if (msg.type === 'memory-tier:rpc' && typeof msg.requestId === 'string' && process.send) {
@@ -1996,6 +2003,13 @@ async function lazySpawnWorkerForCompact(
     }
     // Plan 454: forward computer-use:execute to the main process.
     if (msg.type === 'computer-use:execute' && typeof msg.requestId === 'string' && process.send) {
+      workerDbRequests.set(`rpc:${msg.requestId}`, child);
+      process.send(msg);
+    }
+    // Plan 575 §0-⑥: forward computer-use:cua to the main process
+    // (CUA dispatcher lives in Electron main); without the relay the
+    // worker's computer_cua calls time out after 15s.
+    if (msg.type === 'computer-use:cua' && typeof msg.requestId === 'string' && process.send) {
       workerDbRequests.set(`rpc:${msg.requestId}`, child);
       process.send(msg);
     }
@@ -3066,6 +3080,12 @@ export function createHandleRequest(
               return;
             }
             if (msg.type === 'computer-use:execute' && typeof msg.requestId === 'string' && process.send) {
+              workerDbRequests.set(`rpc:${msg.requestId}`, child);
+              process.send(msg);
+              return;
+            }
+            // Plan 575 §0-⑥: forward computer-use:cua to the main process.
+            if (msg.type === 'computer-use:cua' && typeof msg.requestId === 'string' && process.send) {
               workerDbRequests.set(`rpc:${msg.requestId}`, child);
               process.send(msg);
               return;

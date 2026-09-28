@@ -19,7 +19,12 @@ vi.mock('electron', () => ({
 
 const state = vi.hoisted(() => ({ root: '' as string }));
 
-function buildBuiltinFixture(id: string, version: string, name: string): void {
+function buildBuiltinFixture(
+  id: string,
+  version: string,
+  name: string,
+  opts: { withAppConnection?: boolean } = {},
+): void {
   const pluginDir = join(state.root, id, version);
   mkdirSync(join(pluginDir, '.duya-plugin'), { recursive: true });
   writeFileSync(
@@ -45,15 +50,28 @@ function buildBuiltinFixture(id: string, version: string, name: string): void {
     join(pluginDir, 'permissions', 'policy.json'),
     JSON.stringify({ defaultMode: 'workspace', permissions: [] }, null, 2),
   );
+  // A required app connection → the install dialog must gate on OAuth
+  // (authPolicy derives from the declaration for builtin entries).
+  if (opts.withAppConnection) {
+    mkdirSync(join(pluginDir, 'apps'), { recursive: true });
+    writeFileSync(
+      join(pluginDir, 'apps', 'connections.json'),
+      JSON.stringify(
+        [{ id: name, provider: name, scopes: [], toolsets: [], required: true }],
+        null,
+        2,
+      ),
+    );
+  }
 }
 
 describe('getBuiltinCatalogEntries — builtin cache scan', () => {
   beforeAll(() => {
     state.root = mkdtempSync(join(tmpdir(), 'duya-builtin-test-'));
-    buildBuiltinFixture('github', '0.1.0', 'github');
+    buildBuiltinFixture('github', '0.1.0', 'github', { withAppConnection: true });
     buildBuiltinFixture('documents', '0.1.0', 'documents');
     // A second version of the same plugin — scanner must pick one deterministically.
-    buildBuiltinFixture('github', '0.2.0', 'github');
+    buildBuiltinFixture('github', '0.2.0', 'github', { withAppConnection: true });
   });
 
   afterAll(() => {
@@ -74,6 +92,13 @@ describe('getBuiltinCatalogEntries — builtin cache scan', () => {
     expect(github!.capabilityCounts.skills).toBeGreaterThanOrEqual(1);
     // Highest version wins.
     expect(github!.version).toBe('0.2.0');
+    // The entry carries its on-disk copy so install copies the full dir
+    // (assets/skills) instead of falling back to a manifest-only install.
+    expect(github!.marketplacePluginDir).toBe(join(state.root, 'github', '0.2.0'));
+    // Required app connection → install dialog runs the OAuth connect step.
+    expect(github!.authPolicy).toBe('on_install');
+    // No app declaration → no install-time auth gate.
+    expect(documents!.authPolicy).toBeUndefined();
 
     expect(documents).toBeDefined();
     expect(documents!.manifest).toBeDefined();

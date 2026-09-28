@@ -383,7 +383,13 @@ export function spawnAgentServer(): Promise<number> {
               type: 'computer-use:cua:response',
               requestId: msg.requestId,
               success: envelope.success,
-              data: envelope,
+              // Reply with the INNER data (observation/text/screenshot),
+              // not the whole envelope — the worker-side ipcRequest
+              // resolves `{success, data}` and the computer_cua executor
+              // reads `response.data.screenshot` directly. Sending the
+              // envelope would double-nest it and break the get_app_state
+              // screenshot lift.
+              data: envelope.data,
               error: envelope.error,
             });
           })

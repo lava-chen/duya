@@ -390,28 +390,29 @@ describe('computer-use-mode inject — conditional context tool', () => {
     )({ sessionId, workingDirectory: '/tmp', state: {} });
   }
 
-  it('injects only computer_use when unarmed', () => {
+  it('injects computer_use + computer_cua when unarmed (plan 575 follow-up)', () => {
     const tools = injectFor(SESSION);
-    expect(tools.map((t) => t.definition.name)).toEqual(['computer_use']);
+    expect(tools.map((t) => t.definition.name)).toEqual(['computer_use', 'computer_cua']);
   });
 
-  it('injects both tools when armed (0-element capture path)', () => {
+  it('injects all three tools when armed (0-element capture path)', () => {
     recordComputerUseContextTrigger(SESSION, 'capture-zero-elements');
     const tools = injectFor(SESSION);
     expect(tools.map((t) => t.definition.name)).toEqual([
       'computer_use',
       'computer_use_context',
+      'computer_cua',
     ]);
   });
 
-  it('injects both tools when armed (suspected_noop path)', () => {
+  it('injects the context tool when armed (suspected_noop path)', () => {
     recordComputerUseContextTrigger(SESSION, 'click-suspected-noop');
     expect(injectFor(SESSION).map((t) => t.definition.name)).toContain(
       'computer_use_context',
     );
   });
 
-  it('injects both tools when armed (explicit-call path)', () => {
+  it('injects the context tool when armed (explicit-call path)', () => {
     recordComputerUseContextTrigger(SESSION, 'explicit-call');
     expect(injectFor(SESSION).map((t) => t.definition.name)).toContain(
       'computer_use_context',
@@ -422,6 +423,7 @@ describe('computer-use-mode inject — conditional context tool', () => {
     recordComputerUseContextTrigger(SESSION, 'explicit-call');
     expect(injectFor('other-session').map((t) => t.definition.name)).toEqual([
       'computer_use',
+      'computer_cua',
     ]);
   });
 });

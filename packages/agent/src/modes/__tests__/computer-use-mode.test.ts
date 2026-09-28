@@ -34,15 +34,17 @@ describe('computerUseMode — registration', () => {
   it('declares the computer_use tool via inject (function form)', () => {
     expect(typeof computerUseMode.tools?.inject).toBe('function');
     // plan 519 D2: inject is function-form and consults the session's
-    // trigger registry — an unarmed session sees only `computer_use`.
+    // trigger registry. plan 575 follow-up: `computer_cua` (structural
+    // channel) is ALWAYS appended after the vision tool.
     const inject = computerUseMode.tools!.inject as (ctx: {
       sessionId: string;
       workingDirectory: string;
       state: Record<string, never>;
     }) => ReturnType<typeof getComputerUseTools>;
     const tools = inject({ sessionId: 'unarmed-session', workingDirectory: '/tmp', state: {} });
-    expect(tools.length).toBe(1);
+    expect(tools.length).toBe(2);
     expect(tools[0].definition.name).toBe(COMPUTER_USE_TOOL_NAME);
+    expect(tools[1].definition.name).toBe('computer_cua');
   });
 
   it('uses overrideFilter so the tool survives profile filtering', () => {
@@ -54,11 +56,20 @@ describe('computerUseMode — registration', () => {
     // plan 551 Phase 3: prefix is a PromptBuilder — the decide section is
     // appended only when a decision backend is configured. Without one
     // (unit-test default) the prompt is the plain vision-loop manual.
+    // plan 575 follow-up: the CUA two-tool contract section is always
+    // present.
     const text = typeof prefix === 'function' ? prefix({} as never, '') : (prefix ?? '');
     expect(text).toContain('capture(somMode=true)');
     expect(text).toContain('suspected_noop');
     expect(text).toContain('APP_BLOCKED');
     expect(text).toContain('REDACTED_FIELD');
+    expect(text).toContain('CUA channel (computer_cua)');
+    // plan 578: the app-switching guidance is always present too.
+    expect(text).toContain('Switching apps (computer_cua)');
+    expect(text).toContain('WITHOUT stealing the user');
+    // plan 578 follow-up: not-running apps launch via Bash — the CUA
+    // surface has no launch primitive.
+    expect(text).toContain('no launch primitive');
   });
 
   it('declares the expected display metadata', () => {
@@ -136,8 +147,10 @@ describe('applyModes — computer-use-mode integration', () => {
       resolved,
     });
     // overrideFilter: injected tools append to baseTools unconditionally.
-    expect(result.tools.length).toBe(1);
+    // plan 575 follow-up: `computer_cua` rides along with the vision tool.
+    expect(result.tools.length).toBe(2);
     expect(result.tools[0].definition.name).toBe(COMPUTER_USE_TOOL_NAME);
+    expect(result.tools[1].definition.name).toBe('computer_cua');
   });
 
   it('surfaces computerUseMode flag via toolUseContextPatch', async () => {

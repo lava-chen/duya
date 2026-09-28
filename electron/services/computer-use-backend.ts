@@ -165,8 +165,23 @@ const nutAdapter: NutAdapter = {
       await nut.mouse.drag(path);
     },
     async wheel(direction: 'UP' | 'DOWN' | 'LEFT' | 'RIGHT', amount: number): Promise<void> {
-      const nut = loadNut() as { mouse: { wheel(d: 'UP' | 'DOWN' | 'LEFT' | 'RIGHT', a: number): Promise<unknown> } };
-      await nut.mouse.wheel(direction, amount);
+      // @nut-tree-fork/nut-js Mouse has NO wheel(direction, amount) — the
+      // real API is scrollDown/scrollUp/scrollLeft/scrollRight(amount in
+      // ticks). The old direct call died with "mouse.wheel is not a
+      // function" on real machines (same bug class as the CUA adapter).
+      const nut = loadNut() as {
+        mouse: {
+          scrollDown(a: number): Promise<unknown>;
+          scrollUp(a: number): Promise<unknown>;
+          scrollLeft(a: number): Promise<unknown>;
+          scrollRight(a: number): Promise<unknown>;
+        };
+      };
+      const ticks = Math.max(1, Math.round(amount));
+      if (direction === 'UP') await nut.mouse.scrollUp(ticks);
+      else if (direction === 'DOWN') await nut.mouse.scrollDown(ticks);
+      else if (direction === 'LEFT') await nut.mouse.scrollLeft(ticks);
+      else await nut.mouse.scrollRight(ticks);
     },
   },
   keyboard: {
@@ -791,6 +806,7 @@ async function uiaTreeProvider(opts: {
 
 async function uiaInvokeProvider(opts: {
   element: number;
+  hwnd?: number;
   method?: UiaInvokeOptions['method'];
   value?: string;
   name?: string;
@@ -798,7 +814,10 @@ async function uiaInvokeProvider(opts: {
 }): Promise<UiaInvokeResult> {
   const start = Date.now();
   const probe = getSharedUiaProbeClient();
-  const target = await resolveStructuralTarget();
+  // plan 578 smoke fix: prefer the caller's remembered last-tree hwnd —
+  // resolving from the live foreground made structural dispatch land on
+  // whatever held focus after the approval card (no-element).
+  const target = await resolveStructuralTarget(opts.hwnd);
   if (!target) {
     return { ok: false, reason: 'no foreground window' };
   }

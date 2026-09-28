@@ -41,8 +41,13 @@ export interface SeededTokenTotals {
  * `result` handler also walks.
  *
  * Returns the largest-prompt call of the turn when `last_call` is
- * present (plan 445+); otherwise the legacy top-level block (treated
- * as single-call for pre-plan-445 rows).
+ * present (plan 445+). When `last_call` is missing but the per-call
+ * ledger is present (partial write, or a round-trip that stripped the
+ * sub-block), the snapshot is DERIVED from `calls[]` — the top-level
+ * fields of such a block are the turn-cumulative sum, and returning
+ * them re-inflates every anchor consumer ~N× (2026-09-28: anchor
+ * 476,536 on a ~24k context). Only legacy single-call rows fall back
+ * to the top-level fields.
  */
 export function deriveSingleCallUsage(
   cumulative: TokenUsage | null | undefined,
@@ -65,6 +70,32 @@ export function deriveSingleCallUsage(
         : {}),
     };
   }
+  // Plan 445+ block with a per-call ledger but no `last_call`: derive the
+  // largest-prompt call from the ledger, mirroring the writer's selection
+  // (agent-process-entry result handler — anchorVolume = normalized prompt
+  // + output). The top-level fields here are the turn-cumulative sum.
+  if (cumulative.calls && cumulative.calls.length > 0) {
+    let maxCall = cumulative.calls[0];
+    const volumeOf = (c: UsageCall): number => {
+      const input = c.input_tokens ?? 0;
+      const hit = c.cache_hit_tokens ?? 0;
+      const write = c.cache_creation_tokens ?? 0;
+      return (hit > input || write > input ? input + hit + write : input) + (c.output_tokens ?? 0);
+    };
+    for (const c of cumulative.calls) {
+      if (volumeOf(c) > volumeOf(maxCall)) maxCall = c;
+    }
+    return {
+      input_tokens: maxCall.input_tokens ?? 0,
+      output_tokens: maxCall.output_tokens ?? 0,
+      ...(maxCall.cache_hit_tokens !== undefined
+        ? { cache_hit_tokens: maxCall.cache_hit_tokens }
+        : {}),
+      ...(maxCall.cache_creation_tokens !== undefined
+        ? { cache_creation_tokens: maxCall.cache_creation_tokens }
+        : {}),
+    };
+  }
   // Legacy single-call block.
   return {
     input_tokens: cumulative.input_tokens ?? 0,
@@ -76,6 +107,54 @@ export function deriveSingleCallUsage(
       ? { cache_creation_tokens: cumulative.cache_creation_tokens }
       : {}),
   };
+}
+
+/**
+ * Parse a persisted `token_usage` JSON column into a TokenUsage block,
+ * PRESERVING the plan-445 shape (`last_call` + `calls[]`).
+ *
+ * Bug history (2026-09-28, session 917aca65): the worker's row→Message
+ * reload used to keep only the five top-level counters. On the reloaded
+ * timeline the turn-CUMULATIVE block then normalized as one request's
+ * prompt (normalizePromptTokens: cacheHit > input → input + cacheHit +
+ * write), i.e. Σ full prompts over the turn ≈ N_calls × real context.
+ * Measured: anchor 476,536 on a ~24k context → ring 238% / 200k plus a
+ * spurious proactive compaction of the real 24k history; the first
+ * `result` observation corrected it back to 24,178.
+ *
+ * Returns undefined when the JSON is missing/malformed or lacks the
+ * required numeric counters — malformed rows must not break the load.
+ */
+export function parsePersistedTokenUsage(
+  raw: string | null | undefined,
+): TokenUsage | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as Partial<TokenUsage> | null;
+    if (
+      parsed &&
+      typeof parsed.input_tokens === 'number' &&
+      typeof parsed.output_tokens === 'number'
+    ) {
+      return {
+        input_tokens: parsed.input_tokens,
+        output_tokens: parsed.output_tokens,
+        total_tokens: parsed.total_tokens,
+        cache_hit_tokens: parsed.cache_hit_tokens,
+        cache_creation_tokens: parsed.cache_creation_tokens,
+        // The plan-445 sub-blocks MUST survive the reload: `last_call` is
+        // the single-call anchor every scan prefers, and dropping it makes
+        // the cumulative top-level counters normalize as one request's
+        // prompt (≈ N_calls × real context — bug history above). `calls[]`
+        // feeds the seed totals and the deriveSingleCallUsage fallback.
+        ...(parsed.last_call ? { last_call: parsed.last_call } : {}),
+        ...(parsed.calls && parsed.calls.length > 0 ? { calls: parsed.calls } : {}),
+      };
+    }
+  } catch {
+    // ignore parse errors — malformed rows must not break the load
+  }
+  return undefined;
 }
 
 const emptyTotals: SeededTokenTotals = {

@@ -61,6 +61,21 @@ export function getPluginInstalledSymlinkPath(pluginId: string): string {
   return path.join(getPluginInstalledRoot(), pluginId);
 }
 
+/**
+ * lstat-based existence check for the installed link path. `fs.existsSync`
+ * follows the link, so it returns false for a dangling symlink (one whose
+ * versioned cache dir is already gone) — using it here silently skipped
+ * cleanup of ghost links and made every reinstall fail with EEXIST.
+ */
+function linkEntryExists(linkPath: string): boolean {
+  try {
+    fs.lstatSync(linkPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function createInstalledSymlink(
   pluginId: string,
   cacheDir: string
@@ -70,14 +85,7 @@ export function createInstalledSymlink(
   ensureDir(installedDir);
 
   const linkPath = getPluginInstalledSymlinkPath(pluginId);
-
-  if (fs.existsSync(linkPath)) {
-    if (fs.lstatSync(linkPath).isSymbolicLink()) {
-      fs.unlinkSync(linkPath);
-    } else {
-      fs.rmSync(linkPath, { recursive: true, force: true });
-    }
-  }
+  removeInstalledSymlink(pluginId);
 
   fs.symlinkSync(cacheDir, linkPath, 'dir');
   logger.info('Plugin symlink created', { pluginId, cacheDir }, COMPONENT);
@@ -85,8 +93,15 @@ export function createInstalledSymlink(
 
 export function removeInstalledSymlink(pluginId: string): void {
   const linkPath = getPluginInstalledSymlinkPath(pluginId);
-  if (fs.existsSync(linkPath)) {
+  if (!linkEntryExists(linkPath)) return;
+
+  const stat = fs.lstatSync(linkPath);
+  if (stat.isSymbolicLink()) {
     fs.unlinkSync(linkPath);
+  } else {
+    // Real directory at the link path (never created by this module, but
+    // rmSync on the path itself does not follow it, so this is safe).
+    fs.rmSync(linkPath, { recursive: true, force: true });
   }
 }
 

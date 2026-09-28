@@ -8,7 +8,7 @@ import { toolInvokeTool } from '../../src/tool/ToolInvokeTool/ToolInvokeTool.js'
 import { createToolInvokeDispatcherFromRegistry } from '../../src/tool/ToolInvokeTool/dispatcherFromRegistry.js';
 import { createToolSchemaProviderFromRegistry } from '../../src/tool/ToolSchemaTool/catalogFromRegistry.js';
 import { ToolRegistry, type ToolExecutor } from '../../src/tool/registry.js';
-import type { Tool, ToolResult } from '../../src/types.js';
+import type { Tool, ToolResult, ToolUseContext } from '../../src/types.js';
 
 const LONG_DESCRIPTION = 'd'.repeat(500);
 
@@ -328,15 +328,132 @@ describe('tool_invoke registry dispatcher (Plan 480 P2.2)', () => {
     expect(out.result).toContain('policy says no');
   });
 
-  it('does not execute when the permission chain asks', async () => {
-    const registry = makeRegistry();
-    const out = await dispatcher(registry, 'ask').dispatch({
+  it('executes implicitly when the chain asks and no requestPermission channel exists', async () => {
+    // Headless context (no requestPermission): trusted app-internal surface,
+    // implicit allow with a warn — same semantics as the MCP runtime gate.
+    const registry = new ToolRegistry();
+    let executed = false;
+    registry.registerWithKey(
+      'mcp_github_create_issue',
+      makeTool('mcp_github_create_issue', 'github', 'create_issue'),
+      {
+        async execute(): Promise<ToolResult> {
+          executed = true;
+          return { id: crypto.randomUUID(), name: 'x', result: 'ran headless' };
+        },
+      },
+    );
+    const dispatcher = createToolInvokeDispatcherFromRegistry({
+      registry,
+      checkPermission: async () => ({ behavior: 'ask', message: 'policy says confirm' }),
+    });
+    const out = await dispatcher.dispatch({
       namespace: 'github',
       tool: 'create_issue',
       arguments: {},
     });
+    expect(executed).toBe(true);
+    expect(out.error).toBeUndefined();
+    expect(out.result).toBe('ran headless');
+  });
+
+  it('asks through requestPermission and executes when the user allows', async () => {
+    const registry = new ToolRegistry();
+    const prompts: Array<{ toolName: string; toolInput: unknown }> = [];
+    let executed = false;
+    registry.registerWithKey(
+      'mcp_github_create_issue',
+      makeTool('mcp_github_create_issue', 'github', 'create_issue'),
+      {
+        async execute(): Promise<ToolResult> {
+          executed = true;
+          return { id: crypto.randomUUID(), name: 'x', result: 'ran after approval' };
+        },
+      },
+    );
+    const context = {
+      requestPermission: async (request: { toolName: string; toolInput: unknown }) => {
+        prompts.push({ toolName: request.toolName, toolInput: request.toolInput });
+        return 'allow' as const;
+      },
+    } as unknown as ToolUseContext;
+    const dispatcher = createToolInvokeDispatcherFromRegistry({
+      registry,
+      checkPermission: async () => ({ behavior: 'ask', message: 'policy says confirm' }),
+      contextProvider: () => context,
+    });
+    const out = await dispatcher.dispatch({
+      namespace: 'github',
+      tool: 'create_issue',
+      arguments: { title: 'x' },
+    });
+    expect(prompts).toEqual([{ toolName: 'mcp_github_create_issue', toolInput: { title: 'x' } }]);
+    expect(executed).toBe(true);
+    expect(out.error).toBeUndefined();
+    expect(out.result).toBe('ran after approval');
+  });
+
+  it('does not execute when the user denies the approval card', async () => {
+    const registry = new ToolRegistry();
+    let executed = false;
+    registry.registerWithKey(
+      'mcp_github_create_issue',
+      makeTool('mcp_github_create_issue', 'github', 'create_issue'),
+      {
+        async execute(): Promise<ToolResult> {
+          executed = true;
+          return { id: crypto.randomUUID(), name: 'x', result: 'should not run' };
+        },
+      },
+    );
+    const context = {
+      requestPermission: async () => 'deny' as const,
+    } as unknown as ToolUseContext;
+    const dispatcher = createToolInvokeDispatcherFromRegistry({
+      registry,
+      checkPermission: async () => ({ behavior: 'ask', message: 'policy says confirm' }),
+      contextProvider: () => context,
+    });
+    const out = await dispatcher.dispatch({
+      namespace: 'github',
+      tool: 'create_issue',
+      arguments: {},
+    });
+    expect(executed).toBe(false);
     expect(out.error).toBe(true);
-    expect(out.result).toContain('Approval required');
+    expect(out.result).toContain('Permission denied');
+  });
+
+  it('does not execute when the approval card is paused for durable approval', async () => {
+    const registry = new ToolRegistry();
+    let executed = false;
+    registry.registerWithKey(
+      'mcp_github_create_issue',
+      makeTool('mcp_github_create_issue', 'github', 'create_issue'),
+      {
+        async execute(): Promise<ToolResult> {
+          executed = true;
+          return { id: crypto.randomUUID(), name: 'x', result: 'should not run' };
+        },
+      },
+    );
+    const context = {
+      requestPermission: async () => 'paused' as const,
+    } as unknown as ToolUseContext;
+    const dispatcher = createToolInvokeDispatcherFromRegistry({
+      registry,
+      checkPermission: async () => ({ behavior: 'ask' }),
+      contextProvider: () => context,
+    });
+    const out = await dispatcher.dispatch({
+      namespace: 'github',
+      tool: 'create_issue',
+      arguments: {},
+    });
+    expect(executed).toBe(false);
+    expect(out.error).toBe(true);
+    expect(out.result).toContain('Waiting for approval');
+    expect(out.result).toContain('approval card');
   });
 
   it('reports an unknown namespace with available namespaces', async () => {

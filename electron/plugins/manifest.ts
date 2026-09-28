@@ -167,23 +167,34 @@ function readPermissionsPolicy(pluginRoot: string): {
 }
 
 /**
- * Read the connection ids a plugin declares, for the
- * `components.appConnections` capability summary. Provider validation and
- * the builtin connector catalog live in `electron/services/app-connections`
- * (Plan 312) — here we only need the id list.
+ * A single app connection declaration a plugin ships.
+ * `required` mirrors the legacy `apps/connections.json` flag (`.app.json`
+ * declarations are authored as install-time connections and read as required).
+ */
+export interface PluginAppConnectionDecl {
+  id: string;
+  required: boolean;
+}
+
+/**
+ * Read the app connection declarations a plugin declares. Provider validation
+ * and the builtin connector catalog live in `electron/services/app-connections`
+ * (Plan 312) — here we only surface the id + required flag.
  *
  * Two sources, in priority order (plan 455-open-connector-registry D3):
  *  1. `<pluginRoot>/.app.json` — parsed by the shared app-schema
  *     (`parseAppDeclarationFile`, lenient: malformed files return [] here)
  *  2. `apps/connections.json` — legacy layout, kept for old plugin packages
  */
-function readAppConnectionIds(pluginRoot: string): string[] {
+export function readAppConnectionDeclarations(
+  pluginRoot: string,
+): PluginAppConnectionDecl[] {
   const appJsonPath = path.join(pluginRoot, '.app.json');
   if (fs.existsSync(appJsonPath)) {
     try {
       const parsed = parseAppDeclarationFile(fs.readFileSync(appJsonPath, 'utf8'));
       if (parsed.ok) {
-        return parsed.apps.map((app) => app.id);
+        return parsed.apps.map((app) => ({ id: app.id, required: true }));
       }
     } catch {
       return [];
@@ -197,11 +208,18 @@ function readAppConnectionIds(pluginRoot: string): string[] {
     const list = Array.isArray(raw) ? raw : isObject(raw) && Array.isArray(raw.connections) ? raw.connections : [];
     return list
       .filter((entry): entry is Record<string, unknown> => isObject(entry))
-      .map((entry) => (typeof entry.id === 'string' ? entry.id : ''))
-      .filter((id) => id.length > 0);
+      .map((entry) => ({
+        id: typeof entry.id === 'string' ? entry.id : '',
+        required: entry.required === true,
+      }))
+      .filter((decl) => decl.id.length > 0);
   } catch {
     return [];
   }
+}
+
+function readAppConnectionIds(pluginRoot: string): string[] {
+  return readAppConnectionDeclarations(pluginRoot).map((decl) => decl.id);
 }
 
 function parseSetupField(

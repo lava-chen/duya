@@ -2,14 +2,17 @@
  * Unit tests for CompactionManager loop guards (Pi-aligned flat suppression):
  * - provider-usage anchoring of shouldCompact
  * - 'other' suppression clears at the next turn start (onTurnStart)
- * - 'size' suppression survives onTurnStart and clears only on a successful
- *   compaction — the budget change it was waiting for (see updateMaxTokens)
+ * - 'size' suppression survives onTurnStart and clears only when the
+ *   projection re-arms below the rearm low-watermark (plan 577 §4 — a
+ *   successful compaction alone no longer clears it; budget changes via
+ *   updateMaxTokens still do)
  * - 'auth' suppression is time-windowed and self-heals (plan 552 — the old
  *   onAuthRefresh clear trigger had no production callers)
  * - non-auto triggers (manual / emergency / model_switch) call compact()
  *   directly and never consult shouldCompact(), so the gate does not apply
  * - runtime model-switch wiring: updateMaxTokens rewrites the budget
- * - post-compact over-threshold self-check flag
+ * - post-compact over-threshold self-check flag (rearm-line comparison)
+ * - plan 577 §4 double-watermark hysteresis: trigger fires, rearm releases
  *
  * Regression context: session 5e930b44 (2026-08-26) compacted every ~50-90s
  * because the post-compaction projection kept reading above the threshold.
@@ -44,6 +47,20 @@ function makeMessages(chars: number): Message[] {
  *  the compaction threshold of a 200k-window manager. */
 const OVER_THRESHOLD_CHARS = 700_000
 
+/** The nine-section summary body the mock summarizer returns — passes the
+ *  degenerate guard (SECTION_MIN_HITS=3 against the numbered headings) and
+ *  stays far above MIN_SUMMARY_CHARS. */
+const BASE_SUMMARY =
+  '1. Primary Request and Intent: Complete the compaction loop regression test suite and verify suppression behaves correctly.\n\n' +
+  '2. Key Technical Concepts: Token budgeting, context window estimation, five-state suppression machine, and the retry ladder.\n\n' +
+  '3. Files and Code Sections: CompactionManager.ts — flat delegation, budget anchoring, and suppression; SessionMemoryCompactStrategy.ts — the retry ladder.\n\n' +
+  '4. Errors and Fixes: Fixed the transient 5xx handling so a failed summarizer retries rather than poisoning the suppression window.\n\n' +
+  '5. Problem Solving: The compaction loop is broken by a post-compaction projection that stays above threshold; suppression clears on success.\n\n' +
+  '6. All User Messages: Verify compaction failure suppression and that auto-compaction does not loop endlessly.\n\n' +
+  '7. Pending Tasks: None outstanding for this test scope.\n\n' +
+  '8. Current Work: Running the rejection-path assertions against the mocked summarizer.\n\n' +
+  '9. Optional Next Step: Confirm the suppress-after-failure test passes and the events array contains the expected compaction_error.\n'
+
 describe('CompactionManager loop guards', () => {
   let manager: CompactionManager
   let mockSummarizer: ReturnType<typeof vi.fn>
@@ -51,17 +68,7 @@ describe('CompactionManager loop guards', () => {
 
   beforeEach(() => {
     vi.useFakeTimers()
-    mockSummarizer = vi.fn().mockResolvedValue(
-      '1. Primary Request and Intent: Complete the compaction loop regression test suite and verify suppression behaves correctly.\n\n' +
-        '2. Key Technical Concepts: Token budgeting, context window estimation, five-state suppression machine, and the retry ladder.\n\n' +
-        '3. Files and Code Sections: CompactionManager.ts — flat delegation, budget anchoring, and suppression; SessionMemoryCompactStrategy.ts — the retry ladder.\n\n' +
-        '4. Errors and Fixes: Fixed the transient 5xx handling so a failed summarizer retries rather than poisoning the suppression window.\n\n' +
-        '5. Problem Solving: The compaction loop is broken by a post-compaction projection that stays above threshold; suppression clears on success.\n\n' +
-        '6. All User Messages: Verify compaction failure suppression and that auto-compaction does not loop endlessly.\n\n' +
-        '7. Pending Tasks: None outstanding for this test scope.\n\n' +
-        '8. Current Work: Running the rejection-path assertions against the mocked summarizer.\n\n' +
-        '9. Optional Next Step: Confirm the suppress-after-failure test passes and the events array contains the expected compaction_error.\n',
-    )
+    mockSummarizer = vi.fn().mockResolvedValue(BASE_SUMMARY)
     // Small keepRecentTokens so the strategy produces a real summary marker.
     manager = new CompactionManager({ keepRecentTokens: 30 })
     manager.setSummarizer(mockSummarizer)
@@ -111,7 +118,7 @@ describe('CompactionManager loop guards', () => {
       expect(manager.shouldCompact(messages)).toBe(true)
     })
 
-    it("'size' failures survive onTurnStart and clear only on a successful compaction", async () => {
+    it("'size' failures survive onTurnStart and successful compactions, and clear on re-arm", async () => {
       const messages = makeMessages(OVER_THRESHOLD_CHARS)
       mockSummarizer.mockRejectedValueOnce(
         new Error('context_length_exceeded'),
@@ -123,9 +130,17 @@ describe('CompactionManager loop guards', () => {
       manager.onTurnStart()
       expect(manager.isSuppressed()).toBe(true)
 
-      // A successful compaction clears 'size' (the budget change it waited
-      // for — clearOnBudgetChange runs in onCompactionSuccess).
+      // A successful compaction does NOT clear 'size' by itself (plan 577
+      // §4: "success ⇒ re-arm" is gone). This compaction's projection stays
+      // above the 150k rearm watermark (the recent tail rides in at ~200k),
+      // so the gate holds despite the success.
       await manager.compact(messages, { trigger: 'auto' })
+      expect(manager.isSuppressed()).toBe(true)
+
+      // The gate lifts only when the projection re-arms below the rearm
+      // low-watermark — here a successful compaction of a small history
+      // (maybeRearm inside compact(); a budget change re-arms the same way).
+      await manager.compact(makeMessages(2_000), { trigger: 'auto' })
       expect(manager.isSuppressed()).toBe(false)
     })
 
@@ -330,12 +345,13 @@ describe('CompactionManager loop guards', () => {
   describe('Plan 517 P2.2: trySuppress idempotence', () => {
     it('over-threshold compaction applies size suppression exactly once', async () => {
       // The 'size' suppression applied by trySuppress('size') inside the
-      // successful compaction path is sticky until the next successful
-      // compaction — `clearOnBudgetChange()` clears only on the budget
-      // change that follows a successful compaction. We verify the
+      // successful compaction path is sticky until the rearm line says
+      // otherwise (plan 577 §4): maybeRearm() lifts it only when the CURRENT
+      // projection falls below the rearm low-watermark — a subsequent
+      // successful compaction qualifies because its post-compact projection
+      // is tiny, as does any budget change (updateMaxTokens). We verify the
       // user-visible loop break: after a single over-threshold compaction,
-      // shouldCompact() returns false; only a subsequent successful
-      // compaction clears the gate.
+      // shouldCompact() returns false; the gate lifts only via re-arm.
       const messages: Message[] = [{ role: 'user', content: 'x'.repeat(OVER_THRESHOLD_CHARS * 2) }]
       const first = await manager.compact(messages, { trigger: 'auto' })
 
@@ -350,14 +366,103 @@ describe('CompactionManager loop guards', () => {
         manager.onTurnStart()
         expect(manager.isSuppressed()).toBe(true)
 
-        // A subsequent successful compaction clears 'size' via
-        // clearOnBudgetChange() inside onCompactionSuccess().
+        // A subsequent successful compaction lifts 'size' via the rearm
+        // line — its projection falls below the rearm low-watermark and
+        // maybeRearm() re-arms the system inside compact().
         await manager.compact(makeMessages(2_000), { trigger: 'auto' })
         expect(manager.isSuppressed()).toBe(false)
       }
       // If the strategy trimmed successfully, the gate is not active and
       // this assertion does not apply — see the matching `it('is false for
       // a normal small compaction')` test above.
+    })
+  })
+
+  describe('Plan 577 §4: double-watermark hysteresis (trigger / rearm / target)', () => {
+    // Hysteresis scenarios control the POST-COMPACT projection through the
+    // recent-tail retention — one huge USER-role message the cut keeps
+    // verbatim — instead of the summary text. The tail is user-role, so the
+    // cut lands on a turn start: no split turn, exactly one summarizer call,
+    // no panic trim. The landing is
+    //   systemPrefix (24,384) + summary wrapper (~0.7k) + tail/4 + 2.
+    function makeHysteresisMessages(recentChars: number): Message[] {
+      return [
+        ...Array.from({ length: 20 }, () => ({
+          role: 'user' as const,
+          content: 'a'.repeat(1_000),
+        })),
+        { role: 'user', content: 'c'.repeat(Math.max(recentChars, 1)) },
+        { role: 'user', content: 'continue' },
+      ]
+    }
+
+    // Band midpoints on the 200k window (§5: trigger 183,616 / rearm 150,000
+    // / target 120,000): ~135k and ~166k landings → 440k / 564k tail chars.
+    const LAND_BETWEEN_TARGET_AND_REARM_CHARS = 440_000
+    const LAND_BETWEEN_REARM_AND_TRIGGER_CHARS = 564_000
+
+    it('derives the four-value budget from the 200k window (§5 example: 184k/150k/120k/200k)', () => {
+      expect(manager.getTriggerLine()).toBe(200_000 - 16_384)
+      expect(manager.getRearmLowWatermark()).toBe(150_000)
+      expect(manager.getCompactionTarget()).toBe(120_000)
+      expect(manager.getHardLimit()).toBe(200_000)
+    })
+
+    it('lifts suppression when the compaction lands below rearm even though the target was missed', async () => {
+      // Prime a 'size' suppression with a failed auto compact.
+      mockSummarizer.mockRejectedValueOnce(new Error('context_length_exceeded'))
+      await expect(manager.compact(makeMessages(OVER_THRESHOLD_CHARS), { trigger: 'auto' })).rejects.toThrow()
+      expect(manager.getSuppressionType()).toBe('size')
+
+      // The retry lands at ~135k: above the 120k target, below the 150k
+      // rearm watermark (plan 577 §5: the 184k → 139k-shaped case).
+      const result = await manager.compact(
+        makeHysteresisMessages(LAND_BETWEEN_TARGET_AND_REARM_CHARS),
+        { trigger: 'auto' },
+      )
+
+      // Landing-band sanity — the test really is exercising the target/rearm
+      // gap, not accidentally landing under the target.
+      expect(result.tokensRetained).toBeGreaterThan(manager.getCompactionTarget())
+      expect(result.tokensRetained).toBeLessThan(manager.getRearmLowWatermark())
+
+      // Key semantics: suppression lifted despite missing the target — the
+      // target is an optimization goal, never a state-machine threshold.
+      expect(result.overThresholdAfterCompact).toBe(false)
+      expect(manager.isSuppressed()).toBe(false)
+      expect(events.some((e) => e.type === 'compaction_over_threshold')).toBe(false)
+
+      // …and it does not re-fire: the projection sits below the trigger line.
+      expect(manager.shouldCompact(result.messages)).toBe(false)
+    })
+
+    it('keeps suppression when the compaction lands above rearm, until the projection falls below it', async () => {
+      // Lands at ~166k: below the 183,616 trigger, above the 150k rearm
+      // watermark (plan 577 §5: the 184k → 160k-shaped case).
+      const result = await manager.compact(
+        makeHysteresisMessages(LAND_BETWEEN_REARM_AND_TRIGGER_CHARS),
+        { trigger: 'auto' },
+      )
+
+      expect(result.tokensRetained).toBeGreaterThan(manager.getRearmLowWatermark())
+      expect(result.tokensRetained).toBeLessThan(manager.getTriggerLine())
+
+      // Above rearm → the loop brake engages (overThresholdAfterCompact is
+      // now the rearm comparison, not the trigger comparison).
+      expect(result.overThresholdAfterCompact).toBe(true)
+      expect(manager.isSuppressed()).toBe(true)
+      expect(manager.getSuppressionType()).toBe('size')
+      expect(events.some((e) => e.type === 'compaction_over_threshold')).toBe(true)
+
+      // Hysteresis: the projection is BELOW the trigger line, yet the gate
+      // stays shut — release belongs to the rearm line, not the trigger line.
+      expect(manager.shouldCompact(result.messages)).toBe(false)
+
+      // "等待下一次机会": the next measurement that sees the projection under
+      // the rearm watermark re-arms the system (another compaction, a prune,
+      // a budget change…). shouldCompact measures first, re-arms, then gates.
+      expect(manager.shouldCompact(makeMessages(2_000))).toBe(false)
+      expect(manager.isSuppressed()).toBe(false)
     })
   })
 

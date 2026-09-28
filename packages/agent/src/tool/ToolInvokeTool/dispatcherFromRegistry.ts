@@ -1,7 +1,10 @@
+import { randomUUID } from 'node:crypto';
+
 import type { ExposeMode, ToolRegistry } from '../registry.js';
 import type { ToolUseContext } from '../../types.js';
 import type { ToolInvokeDispatcher, ToolInvokeRequest, ToolInvokeOutcome } from './ToolInvokeTool.js';
 import { BUILTIN_TOOLS_NAMESPACE } from '../ToolSchemaTool/catalogFromRegistry.js';
+import { logger } from '../../utils/logger.js';
 
 /**
  * Plan 480 P2.2/P2.3 — registry-backed dispatcher for `tool_invoke`.
@@ -17,14 +20,19 @@ import { BUILTIN_TOOLS_NAMESPACE } from '../ToolSchemaTool/catalogFromRegistry.j
  * runs come from the SAME registry, so discovery can never promise a tool
  * the executor cannot find.
  *
- * Permission semantics (documented decision, plan 480 §8.10):
+ * Permission semantics:
  *   - allow  → execute
  *   - deny   → structured error carrying the decision message
- *   - ask    → NOT executed. Interactive approval flows through the
- *              StreamingToolExecutor approval channel, which this dispatcher
- *              deliberately does not fake. The model receives an explicit
- *              message that the call needs user approval it cannot grant
- *              through `tool_invoke` (e.g. bypass/dontAsk modes allow).
+ *   - ask    → interactive approval through the turn's ToolUseContext.
+ *              With a `requestPermission` channel (interactive session) the
+ *              user gets a REAL approval card — deny/paused surface as
+ *              structured errors, allow falls through to execution. Without
+ *              a channel (headless CLI / sub-agent / background gateway
+ *              session) there is no interactive user to answer and asking
+ *              would dead-lock the turn, so the call proceeds implicitly
+ *              with a loud warn — the same trust model the MCP runtime gate
+ *              uses (mcp/apply.ts). The permission chain is still the gate:
+ *              auto-approve modes reach `allow` before this branch.
  *
  * The permission check is a caller-injected function (DuyaAgent wraps its
  * `hasPermissionsToUseTool`), so this module stays unit-testable without a
@@ -210,12 +218,60 @@ export function createToolInvokeDispatcherFromRegistry(
         );
       }
       if (decision.behavior === 'ask') {
-        return errorResult(
-          'Approval required',
-          `The tool \`${tool}\` (namespace \`${namespace}\`) requires user approval, which cannot be granted through \`tool_invoke\`.\n\n${
-            decision.message ? `${decision.message}\n\n` : ''
-          }Ask the user to approve the operation, or retry when the session runs in an auto-approve mode.`,
-        );
+        const context = deps.contextProvider?.();
+        if (context?.requestPermission) {
+          // Interactive session: raise a REAL approval card through the
+          // turn's permission_request flow (chat:permission event →
+          // renderer Allow/Deny prompt). This mirrors the MCP runtime
+          // gate (mcp/apply.ts) — prompting inside the executor keeps
+          // allow/deny + execution in a single synchronous flow.
+          const userDecision = await context.requestPermission({
+            id: randomUUID(),
+            toolName: resolved.internalName,
+            toolInput: args,
+            mode: 'generic',
+            expiresAt: Date.now() + 5 * 60 * 1000,
+            decisionReason: decision.message,
+          });
+          if (userDecision === 'deny') {
+            logger.warn(
+              '[ToolInvoke] tool call denied by user',
+              { toolName: resolved.internalName, namespace },
+            );
+            return errorResult(
+              'Permission denied',
+              decision.message
+                ? decision.message
+                : `The user denied the call to \`${tool}\` (namespace \`${namespace}\`).`,
+            );
+          }
+          // Plan 498: 'paused' means the request was persisted as a durable
+          // approval card; the turn must NOT fall through to execution.
+          // Surface the neutral waiting text; a later continuation run
+          // replays the approved call via the one-shot approval ledger.
+          if (userDecision === 'paused') {
+            logger.info(
+              '[ToolInvoke] tool call paused for durable approval card',
+              { toolName: resolved.internalName, namespace },
+            );
+            return errorResult(
+              'Waiting for approval',
+              `The call to \`${tool}\` (namespace \`${namespace}\`) is waiting for user approval. ` +
+                'The request has been sent as an approval card; end your turn without further tool calls.',
+            );
+          }
+          // 'allow' → fall through to execution below.
+        } else {
+          // No interactive user available (headless CLI / sub-agent /
+          // background gateway session): asking would dead-lock the turn.
+          // These contexts are trusted app-internal/automation surfaces,
+          // so allow implicitly with a loud warn — same semantics as the
+          // MCP runtime gate (mcp/apply.ts).
+          logger.warn(
+            '[ToolInvoke] no interactive user available; implicitly allowing ask-tool',
+            { toolName: resolved.internalName, namespace, reason: decision.message },
+          );
+        }
       }
 
       // 3. Execute through the registered executor (the same one direct calls

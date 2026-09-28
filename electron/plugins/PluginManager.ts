@@ -654,8 +654,11 @@ export class PluginManager {
       const installPath = removed.installPath || resolveInstalledSymlink(pluginId) || '';
       const dataPath = removed.dataPath || path.join(this.store.getPaths().dataDir, pluginId);
 
-      removeDirSafe(installPath);
+      // Unlink the installed link BEFORE deleting the versioned cache: deleting
+      // the cache first leaves the link dangling, and a link-following existence
+      // check then skips cleanup, leaving a ghost link that breaks reinstalls.
       removeInstalledSymlink(pluginId);
+      removeDirSafe(installPath);
       if (deleteData) {
         removeDirSafe(dataPath);
         // Also purge stored setup values so a reinstall does not resurrect

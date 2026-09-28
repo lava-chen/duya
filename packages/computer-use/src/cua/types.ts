@@ -113,6 +113,13 @@ export interface CuaObservation {
     windowId: number;
     title: string | null;
     bounds: [number, number, number, number] | null;
+    /**
+     * True when the observation was read from a minimized window (plan
+     * 578): the tree is valid but element bounds may sit at the iconic
+     * position — restore via a screenshot-bearing observation before
+     * coordinate work.
+     */
+    minimized?: boolean;
   };
   elements: CuaElement[];
   /**

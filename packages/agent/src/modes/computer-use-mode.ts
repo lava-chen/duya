@@ -22,6 +22,10 @@
  * (list_apps / focus_app) — injected only when the vision path armed
  * its escape hatch (0-element SOM capture / suspected_noop click /
  * explicit prior call); the 9-action enum itself is never widened.
+ * plan 575 follow-up: the `computer_cua` 14-tool structural channel
+ * (ZCode-aligned receipts) is now ALWAYS injected alongside — both
+ * surfaces share the same execution guard (revoke + app policy) and
+ * the same approval channel on the Electron side.
  * `overrideFilter: true` so the tools survive even under restrictive
  * agent profiles.
  *
@@ -33,7 +37,7 @@
 import type { ModeModifier } from './types.js';
 import {
   clearComputerUseContextTrigger,
-  getComputerUseToolsWithDecide,
+  getComputerUseToolsWithCua,
   isComputerUseDecideAvailable,
   shouldInjectComputerUseContext,
 } from '../tool/OSTool/index.js';
@@ -99,6 +103,24 @@ const COMPUTER_USE_DECIDE_PROMPT = `
 - \`status=done\` → continue your plan. \`likely_done\` → verify yourself. \`needs_confirmation\` → the user must approve a risky action. \`error | stuck | ambiguous | blocked | max_actions\` → take over with the vision loop above (ambiguous lists top candidates).`;
 
 /**
+ * plan 575 follow-up — `computer_cua` rides the same mode. Kept short:
+ * the 14 sub-tools document themselves in-schema; the prompt only pins
+ * the two-tool contract and the shared-safety fact.
+ */
+const COMPUTER_USE_CUA_PROMPT = `
+
+## CUA channel (computer_cua)
+- \`computer_cua\` is the receipt-grade sibling of \`computer_use\`: one call = one sub-tool (list_apps / list_windows / get_app_state / left_click / left_click_drag / scroll / type / key / set_value / select_text / perform_action / paste / request_access / stop_computer_control). Every action returns a receipt (\`actionSent\`, \`dispatchStatus\`, \`targetVerificationStatus\`); \`get_app_state\` returns window + tree + optional screenshot in one shot.
+- Keep \`computer_use\` as your primary loop. Reach for \`computer_cua\` when you need a trusted, validated dispatch on a specific element (background-window clicks, \`set_value\` you will verify, \`paste\` for long text without IME).
+- Both surfaces enforce the SAME gates — app allow-list policy and user approval. \`NOT_AUTHORIZED\` / \`PERMISSION_DENIED\` from either surface are refusals-as-policy: stop and tell the user.
+
+## Switching apps (computer_cua)
+- To work on another app, \`get_app_state\` it by name / pid / windowId — no app ever needs the foreground. \`list_windows\` lists minimized windows too (\`minimized: true\`), and a minimized window's tree is still readable.
+- \`includeScreenshot=true\` on a minimized window first restores it WITHOUT stealing the user's focus, so tree bounds and pixels share one post-restore layout; a pure-tree observation keeps it minimized.
+- An app that is not running cannot be observed: launch it first via the Bash tool (\`start "QQ"\` or \`Start-Process\`), wait for its window, then get_app_state it — the CUA surface has no launch primitive.
+- After switching apps or surfaces, re-observe before acting — element indices and screenshot coordinates belong to the observation that produced them.`;
+
+/**
  * Computer Use Mode modifier — session-level, exclusive with every
  * other mode. Injects the `computer_use` tool and wires OSContext.
  */
@@ -113,28 +135,30 @@ export const computerUseMode: ModeModifier = {
   },
 
   tools: {
-    // plan 519 §3.2 (D2) + plan 551 Phase 3 — function-form inject so the
-    // tool list is decided per run. The `computer_use` vision tool
-    // (9-action enum, never widened) is always present; the
+    // plan 519 §3.2 (D2) + plan 551 Phase 3 + plan 575 follow-up —
+    // function-form inject so the tool list is decided per run. The
+    // `computer_use` vision tool (9-action enum, never widened) and the
+    // `computer_cua` 14-tool structural channel are always present; the
     // `computer_use_context` escape hatch is appended when its sticky
     // trigger registry is armed; the `computer_use_decide` delegated-goal
-    // tool is appended only when a decision backend is configured (no
-    // key → the list is byte-identical to pre-plan-551).
+    // tool is appended only when a decision backend is configured.
     inject: (ctx) =>
-      getComputerUseToolsWithDecide(shouldInjectComputerUseContext(ctx.sessionId)),
+      getComputerUseToolsWithCua(shouldInjectComputerUseContext(ctx.sessionId)),
     // Computer Use tools must survive profile filtering — even the
     // `code` profile should see them when this mode is on.
     overrideFilter: true,
   },
 
   prompt: {
-    // plan 551 Phase 3: the decide section rides along only when the
-    // decide tool is actually injected. PromptBuilder contract: return
-    // the FULL prompt (prefix + incoming base).
+    // plan 551 Phase 3 + plan 575 follow-up: the decide section rides
+    // along only when the decide tool is actually injected; the CUA
+    // section is always present (the CUA tool always is). PromptBuilder
+    // contract: return the FULL prompt (prefix + incoming base).
     prefix: (_ctx, base) =>
-      (isComputerUseDecideAvailable()
-        ? COMPUTER_USE_PROMPT + COMPUTER_USE_DECIDE_PROMPT
-        : COMPUTER_USE_PROMPT) + base,
+      COMPUTER_USE_PROMPT +
+      COMPUTER_USE_CUA_PROMPT +
+      (isComputerUseDecideAvailable() ? COMPUTER_USE_DECIDE_PROMPT : '') +
+      base,
   },
 
   hooks: {

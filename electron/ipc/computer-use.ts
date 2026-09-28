@@ -33,14 +33,12 @@ import {
 } from '../../packages/agent/dist/tool/OSTool/ComputerUseTool.js';
 import {
   buildArgsPreview,
-  checkAccess,
   formatTreeForLlm,
   getDefaultApprovalBridge,
   getDefaultDesktopBackend,
   requiresConfirmation,
   validateKeyCombo,
   validateTextFull,
-  type AppAccessPolicy,
 } from '@duya/computer-use';
 
 import { getLogger, LogComponent } from '../logging/logger.js';
@@ -48,16 +46,21 @@ import { getOSContextBridge } from '../../packages/agent/dist/context/os-context
 import { logComputerUseAction } from '../services/computer-use-audit.js';
 import { saveComputerUseCapture } from '../services/computer-use-capture-store.js';
 import {
-  isComputerUseControlRevoked,
   showComputerUseOverlay,
 } from '../services/computer-use-overlay.js';
+import {
+  assertAppAllowed,
+  assertNotRevoked,
+} from '../services/computer-use-guard.js';
 import {
   clearZoomOrigin,
   getCaptureAxRef,
   getRememberedCaptureSize,
+  getRememberedStructuralTarget,
   modelPointToScreen,
   rememberCaptureAxRefs,
   rememberCaptureSize,
+  rememberStructuralTarget,
   rememberZoomOrigin,
 } from './computer-use-coords.js';
 import { getSharedAxHelperClient } from '../services/recorder/ax-helper.js';
@@ -225,78 +228,11 @@ async function requestApprovalIfNeeded(
 }
 
 /**
- * Cached Computer Use access policy. Loaded lazily from config on
- * first use (defaults to deny-by-default) and refreshed whenever
- * the config store broadcasts a change.
+ * App access policy + revoke gate live in services/computer-use-guard.ts
+ * — ONE implementation shared with the CUA surface (plan 575 follow-up).
+ * The call sites below keep their own envelope mapping
+ * (USER_REJECTED / APP_BLOCKED) on top of the shared decisions.
  */
-let cachedAccessPolicy: AppAccessPolicy | null = null;
-
-/**
- * Read the [computer_use] access policy from the config store. Uses
- * `ConfigStore` if available; falls back to the deny-by-default
- * constant when the store isn't reachable (unit tests, CLI).
- */
-function getAccessPolicy(): AppAccessPolicy {
-  if (cachedAccessPolicy) return cachedAccessPolicy;
-  try {
-    // Lazy import keeps the module independent of the config tree.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { getConfigStore } = require('../config/store-instance') as {
-      getConfigStore: () => { getByPath(path: string): unknown };
-    };
-    const store = getConfigStore();
-    const raw = store.getByPath('computer_use') as AppAccessPolicy | undefined;
-    if (raw === undefined) {
-      // No [computer_use] section configured: keep the feature usable
-      // (allow-by-default) so dev / first-run works out of the box.
-      // Users who want to restrict it add allowed_apps + set
-      // default_access = "deny".
-      cachedAccessPolicy = { default_access: 'allow', allowed_apps: [], denied_apps: [] };
-    } else {
-      // User explicitly configured the section: honor their values
-      // with a deny default so an allow-list-only config locks
-      // everything else down.
-      cachedAccessPolicy = {
-        default_access: raw?.default_access ?? 'deny',
-        allowed_apps: raw?.allowed_apps ?? [],
-        denied_apps: raw?.denied_apps ?? [],
-      };
-    }
-  } catch {
-    // Store unreachable (unit tests, CLI): allow by default so
-    // non-Electron contexts don't hard-fail every action.
-    cachedAccessPolicy = { default_access: 'allow', allowed_apps: [], denied_apps: [] };
-  }
-  return cachedAccessPolicy;
-}
-
-/**
- * Evaluate whether the current foreground app is permitted to be
- * automated by Computer Use. Uses OSContextBridge for the app info
- * (same source the daemon writes). Denies-by-default when the policy
- * has no allow-list entry for the foreground app.
- */
-function checkForegroundAccess(): { ok: boolean; reason?: string } {
-  try {
-    const ctx = getOSContextBridge().getCurrent();
-    const verdict = checkAccess(getAccessPolicy(), {
-      processName: (ctx?.foreground as { exeName?: string } | undefined)?.exeName ?? null,
-      title: (ctx?.foreground as { title?: string } | undefined)?.title ?? null,
-      focusedEntity: ctx?.focusedEntity ?? null,
-    });
-    return verdict.allowed ? { ok: true } : { ok: false, reason: verdict.reason };
-  } catch (err) {
-    logger.warn(
-      'computer-use: access check threw',
-      { error: err instanceof Error ? err.message : String(err) },
-      LogComponent.ComputerUse,
-    );
-    return {
-      ok: false,
-      reason: 'Access policy evaluation failed; action refused for safety.',
-    };
-  }
-}
 
 /**
  * Pull the base64 PNG out of a capture result so it can be persisted.
@@ -335,13 +271,11 @@ async function runAction(
 
   try {
     // User stop button: while a revocation is in force, refuse every
-    // action so the agent hands control back to the user.
-    if (isComputerUseControlRevoked()) {
-      return envelopeError(
-        action,
-        ComputerUseErrorCode.USER_REJECTED,
-        'computer control was stopped by the user from the overlay — ask the user before continuing',
-      );
+    // action so the agent hands control back to the user. Shared guard
+    // with the CUA surface (services/computer-use-guard.ts).
+    const revoked = assertNotRevoked();
+    if (!revoked.ok) {
+      return envelopeError(action, ComputerUseErrorCode.USER_REJECTED, revoked.reason);
     }
     // Visual indicator: purple glow + cursor halo + top stop button.
     showComputerUseOverlay(sessionId);
@@ -383,7 +317,7 @@ async function runAction(
       case 'click': {
         // Access gate: refuse to click on an app that the policy
         // doesn't allow.
-        const access = checkForegroundAccess();
+        const access = await assertAppAllowed(action);
         if (!access.ok) {
           logger.warn(
             'computer-use: click refused — app access policy',
@@ -470,7 +404,7 @@ async function runAction(
       }
       case 'type': {
         // Access gate: typing into an unapproved app is refused.
-        const access = checkForegroundAccess();
+        const access = await assertAppAllowed(action);
         if (!access.ok) {
           logger.warn(
             'computer-use: type refused — app access policy',
@@ -706,6 +640,11 @@ async function runAction(
             );
           }
           const r = await backend.uiaInvoke({
+            // plan 578 smoke fix: same last-tree targeting as invoke.
+            hwnd:
+              typeof data.hwnd === 'number' && data.hwnd > 0
+                ? data.hwnd
+                : getRememberedStructuralTarget(sessionId)?.hwnd,
             element: data.element,
             method: 'setValue',
             value,
@@ -837,7 +776,7 @@ async function runAction(
       // the focus-only variant exempt — it cannot change app state).
       // Both ride the same access policy gate as the vision actions.
       case 'tree': {
-        const access = checkForegroundAccess();
+        const access = await assertAppAllowed(action);
         if (!access.ok) {
           logger.warn(
             'computer-use: tree refused — app access policy',
@@ -865,6 +804,12 @@ async function runAction(
           maxNodes: typeof data.maxElements === 'number' ? data.maxElements : undefined,
           fresh: data.fresh === true,
         });
+        // plan 578 smoke fix: remember the observed window so a later
+        // invoke / set_value(element) targets it instead of whatever
+        // holds focus after the approval card.
+        if (tree.source === 'uia-tree' && typeof tree.hwnd === 'number' && tree.hwnd > 0) {
+          rememberStructuralTarget(sessionId, tree.hwnd, tree.title ?? '');
+        }
         const formatted = formatTreeForLlm(tree);
         logger.debug(
           'computer-use: tree',
@@ -887,7 +832,7 @@ async function runAction(
         };
       }
       case 'invoke': {
-        const access = checkForegroundAccess();
+        const access = await assertAppAllowed(action);
         if (!access.ok) {
           logger.warn(
             'computer-use: invoke refused — app access policy',
@@ -923,7 +868,15 @@ async function runAction(
             );
           }
         }
+        // plan 578 smoke fix: explicit hwnd wins; otherwise target the
+        // window of the last tree observation (the foreground at
+        // dispatch time is unreliable — the approval card moves it).
+        const structuralHwnd =
+          typeof data.hwnd === 'number' && data.hwnd > 0
+            ? data.hwnd
+            : getRememberedStructuralTarget(sessionId)?.hwnd;
         const r = await backend.uiaInvoke({
+          hwnd: structuralHwnd,
           element: Number(data.element),
           method:
             typeof data.method === 'string'

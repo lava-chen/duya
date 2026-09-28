@@ -308,25 +308,29 @@ export function createBuiltinRegistry(
   // token overhead while keeping it on the initial tool surface.
   registry.register(planTool.toTool(), planTool, { exposeMode: 'hint' });
 
-  // Plan 552 Phase 0: computer-use tools registered so the workflow
-  // engine (tool / gui nodes) can enumerate and execute them through the
-  // ToolRegistry even when Computer Use mode is off. `hidden` keeps them
-  // out of every LLM-facing surface (tool list, tool_search, tool_invoke)
-  // — the LLM sees them only via computer-use-mode's inject, so normal
-  // chats are byte-identical to pre-552 behavior.
+  // Plan 552 Phase 0 + plan 575 follow-up: computer-use tools registered
+  // so the workflow engine (tool / gui nodes) can enumerate and execute
+  // them through the ToolRegistry even when Computer Use mode is off.
+  // `discoverable` keeps them out of the always-on tool list but lets
+  // the LLM find them via tool_search and call them via tool_invoke
+  // (schema delivered as a conversation-tail on discovery). Execution
+  // is safe without the mode: the Electron side enforces the shared
+  // execution guard (revoke + app policy) and the approval channel on
+  // every mutating action. computer-use-mode additionally injects them
+  // eagerly with the operating prompt.
   for (const tr of getComputerUseToolsWithDecide(false)) {
     registry.register(tr.definition, tr.executor, {
-      exposeMode: 'hidden',
+      exposeMode: 'discoverable',
       inputSchemaSummary: 'computer-use actions (capture/click/type/key/scroll/drag/set_value/wait/zoom + delegated decide loop)',
     });
   }
 
   // Plan 575: the 14-tool ZCode-aligned CUA surface. Same registration
-  // policy as plan 552 — hidden from the LLM-facing surface by default
-  // (modes can inject it); workflow engine and tests can still execute
-  // it through the registry.
+  // policy as plan 552 — discoverable (findable via tool_search,
+  // invokable via tool_invoke) rather than always-on; workflow engine
+  // and tests execute it through the registry directly.
   registry.register(computerCuaDefinition, computerCuaExecutor, {
-    exposeMode: 'hidden',
+    exposeMode: 'discoverable',
     inputSchemaSummary: 'CUA tools (list_apps/list_windows/get_app_state/left_click/scroll/type/set_value/select_text/key/perform_action/paste/request_access/stop)',
   });
 

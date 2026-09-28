@@ -331,6 +331,13 @@ export interface UiaTreeResult {
 export interface UiaInvokeOptions {
   /** 1-based tree element index (from the `tree` action). */
   element: number;
+  /**
+   * Target top-level window. Defaults to the foreground window when
+   * absent — plan 578 smoke fix: the caller passes the window of the
+   * last `tree` observation so the dispatch does not depend on what
+   * holds focus at that moment (the approval card moves it).
+   */
+  hwnd?: number;
   /** Structural method. Default `auto` picks from the ControlType. */
   method?: UiaInvokeMethod;
   /** Payload for `setValue`. */

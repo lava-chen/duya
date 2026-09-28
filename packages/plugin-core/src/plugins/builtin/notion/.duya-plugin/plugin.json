@@ -25,6 +25,11 @@
     "category": "productivity",
     "brandColor": "#FFFFFF",
     "icon": "./assets/icon.svg",
-    "screenshots": []
+    "screenshots": [],
+    "defaultPrompt": [
+      "Find the latest decision on [project] pricing in Notion and summarize it with supporting page links",
+      "Create a Notion roadmap database with owner, status, quarter, and risk properties, then populate it from my initiative list",
+      "Audit our top product docs in Notion for outdated content and list the pages that should be updated first"
+    ]
   }
 }

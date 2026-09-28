@@ -203,6 +203,13 @@ export class CompactionCoordinator {
     // and suppression, exactly as before the probe consolidation. The
     // fallback stays lazy so the cooldown gate still short-circuits before
     // the compaction engine is consulted when no probe is available.
+    // Plan 577 §4: the rearm half of the double-watermark hysteresis runs
+    // here too — a 'size' suppression lifts as soon as the measured
+    // projection falls below the rearm low-watermark, even if no compaction
+    // fired this turn (prune-driven shrink counts).
+    if (probe) {
+      this.deps.compactionManager.maybeRearm(probe.tokens)
+    }
     const suppressed = this.deps.compactionManager.isSuppressed();
     if (
       !cooldownActive &&

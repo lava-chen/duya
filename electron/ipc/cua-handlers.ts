@@ -28,7 +28,9 @@ import {
 } from '@duya/computer-use';
 
 import { getLogger, LogComponent } from '../logging/logger.js';
-import { CuaService } from '../services/cua/cua-service.js';
+import { assertComputerUseAllowed } from '../services/computer-use-guard.js';
+import { CuaService, type CuaAppRef } from '../services/cua/cua-service.js';
+import { restoreWindowWithoutFocus } from '../services/cua/window-restore.js';
 
 const logger = getLogger();
 
@@ -125,11 +127,37 @@ async function captureWindow(
 
 let sharedService: CuaService | null = null;
 
+/**
+ * plan 578 smoke fix: the agent-tool schema exposes the app_ref as
+ * TOP-LEVEL pid/name/windowId fields, while the service action methods
+ * read a nested `appRef` object. Translate here — before this fix every
+ * element action reached the service with app_ref = {} and failed with
+ * ELEMENT_UNAVAILABLE "no observation for this app_ref yet", no matter
+ * what the model passed (real-machine smoke 2026-09-28).
+ */
+function toAppRef(args: Record<string, unknown>): CuaAppRef | undefined {
+  const ref: CuaAppRef = {};
+  if (typeof args.pid === 'number' && args.pid > 0) ref.pid = args.pid;
+  if (typeof args.name === 'string' && args.name.trim()) ref.name = args.name;
+  if (typeof args.windowId === 'number' && args.windowId > 0) ref.windowId = args.windowId;
+  return Object.keys(ref).length > 0 ? ref : undefined;
+}
+
 function getService(): CuaService {
   if (sharedService === null) {
     sharedService = new CuaService({
       writeClipboard: (text: string) => clipboard.writeText(text),
       capture: (windowId, bounds) => captureWindow(windowId, bounds),
+      // plan 578: a screenshot-bearing get_app_state on a minimized
+      // window restores it first (SW_SHOWNOACTIVATE — no focus steal),
+      // ZCode's "include_screenshot un-minimizes" parity.
+      restoreWindow: (windowId) => restoreWindowWithoutFocus(windowId),
+      // plan 575 follow-up: CUA rides the SAME execution guard as the
+      // vision surface — one implementation of the revoke gate (overlay
+      // STOP) + the [computer_use] app-access policy. Decisions are
+      // shared; the CUA envelope maps them onto NOT_AUTHORIZED /
+      // PERMISSION_DENIED inside the service.
+      guard: (input) => assertComputerUseAllowed(input),
       // plan 575 red line: mutating CUA tools ride the SAME user-
       // confirmation channel as the classic computer_use surface —
       // the shared ApprovalBridge (same bridge the requestApprovalIfNeeded
@@ -207,6 +235,7 @@ export async function dispatchCuaTool(input: CuaDispatchRequest): Promise<CuaEnv
             windowId: typeof args.windowId === 'number' ? args.windowId : undefined,
             includeScreenshot: args.includeScreenshot === true,
             maxElements: typeof args.maxElements === 'number' ? args.maxElements : undefined,
+            fresh: args.fresh === true,
           },
           sessionId,
         );
@@ -214,10 +243,16 @@ export async function dispatchCuaTool(input: CuaDispatchRequest): Promise<CuaEnv
         break;
       }
       case 'left_click':
-        data = await service.leftClick(args as Parameters<Svc['leftClick']>[0], sessionId);
+        data = await service.leftClick(
+          { ...(args as Parameters<Svc['leftClick']>[0]), appRef: toAppRef(args) },
+          sessionId,
+        );
         break;
       case 'left_click_drag':
-        data = await service.leftClickDrag(args as Parameters<Svc['leftClickDrag']>[0], sessionId);
+        data = await service.leftClickDrag(
+          { ...(args as Parameters<Svc['leftClickDrag']>[0]), appRef: toAppRef(args) },
+          sessionId,
+        );
         break;
       case 'scroll':
         data = await service.scroll(args as Parameters<Svc['scroll']>[0], sessionId);
@@ -229,13 +264,22 @@ export async function dispatchCuaTool(input: CuaDispatchRequest): Promise<CuaEnv
         data = await service.key(args as Parameters<Svc['key']>[0], sessionId);
         break;
       case 'set_value':
-        data = await service.setValue(args as Parameters<Svc['setValue']>[0], sessionId);
+        data = await service.setValue(
+          { ...(args as Parameters<Svc['setValue']>[0]), appRef: toAppRef(args) },
+          sessionId,
+        );
         break;
       case 'select_text':
-        data = await service.selectText(args as Parameters<Svc['selectText']>[0], sessionId);
+        data = await service.selectText(
+          { ...(args as Parameters<Svc['selectText']>[0]), appRef: toAppRef(args) },
+          sessionId,
+        );
         break;
       case 'perform_action':
-        data = await service.performAction(args as Parameters<Svc['performAction']>[0], sessionId);
+        data = await service.performAction(
+          { ...(args as Parameters<Svc['performAction']>[0]), appRef: toAppRef(args) },
+          sessionId,
+        );
         break;
       case 'paste':
         data = await service.paste(args as Parameters<Svc['paste']>[0], sessionId);

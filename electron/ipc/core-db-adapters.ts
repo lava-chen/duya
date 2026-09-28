@@ -202,7 +202,11 @@ export function inferMessageSource(dto: {
     explicit === 'agent_dm' ||
     // Plan 478: shared-room entries (bot PostToRoom + room lifecycle notes).
     explicit === 'group' ||
-    explicit === 'group_system'
+    explicit === 'group_system' ||
+    // Channel send/receive marker rows (bot-direct chat chips).
+    explicit === 'channel_activity' ||
+    // Routine lifecycle marker rows (bot-direct chat chips).
+    explicit === 'routine_activity'
   ) {
     return explicit;
   }

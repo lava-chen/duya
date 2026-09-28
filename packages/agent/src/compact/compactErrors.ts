@@ -14,6 +14,58 @@
 export type SuppressReason = 'size' | 'schema' | 'auth' | 'credit' | 'other'
 
 /**
+ * Plan 577 Phase 0: how strongly a stream error claims "the context/prompt
+ * itself is too big".
+ *
+ * - `explicit` — the provider unambiguously says the prompt/context exceeded
+ *   the model's window. Trustworthy on its own (the local budget may itself be
+ *   misresolved, so a local probe is NOT more authoritative here).
+ * - `weak`     — generic "…exceeds limit" wording that non-context errors
+ *   (output caps, payload caps, rate limits phrased oddly) also produce. Must
+ *   be corroborated by local evidence before an emergency compaction fires.
+ * - `null`     — not a context-length claim at all.
+ */
+export type ContextLengthErrorKind = 'explicit' | 'weak' | null
+
+/**
+ * Narrow context-length classifier for the EMERGENCY compaction path
+ * (plan 577 Phase 0). Deliberately NOT {@link classifySuppressReason}: that
+ * one maps `invalid prompt` / `invalid_argument` onto `size` too, which is
+ * far too wide to justify a threshold-free emergency compaction.
+ *
+ * Before this helper, the emergency gate was the raw substring
+ * `errorMessage.includes('exceeds limit')` with no threshold check — any
+ * unrelated error carrying that phrase compacted the session at arbitrary
+ * context sizes (2026-09-28 investigation).
+ */
+export function classifyContextLengthError(message: string): ContextLengthErrorKind {
+  if (!message) return null
+  const m = message.toLowerCase()
+
+  // Provider explicitly says the prompt/context exceeded the model window.
+  const explicitMarkers = [
+    'context_length_exceeded', // OpenAI error code
+    'prompt_too_long', // Anthropic error code
+    'context window exceeds limit',
+    'exceeds the context window',
+    'maximum context length', // OpenAI message prose
+    'context length exceeded',
+    'prompt is too long', // Anthropic message prose
+    'input length exceeds',
+    'input tokens exceed',
+    'too many input tokens',
+  ]
+  if (explicitMarkers.some((marker) => m.includes(marker))) return 'explicit'
+
+  // Generic residue — the old gate's whole match surface. Non-context errors
+  // (output caps, payload caps, quota wording) can produce these phrases, so
+  // callers must double-check against local context evidence.
+  if (m.includes('exceeds limit') || m.includes('exceeds the limit')) return 'weak'
+
+  return null
+}
+
+/**
  * Plan 523 P1: the retry ladder throws this when every attempt returned only
  * degenerate/empty summary text (instead of the pre-495 placeholder contract
  * that returned '' — which let bad summaries silently replace real history).

@@ -27,6 +27,7 @@
 import { getLogger, LogComponent } from '../../logging/logger.js';
 import type { UiaProbeClient } from '../recorder/uia-probe.js';
 import { getSharedUiaProbeClient } from '../recorder/uia-probe.js';
+import type { GuardDecision, GuardTargetApp } from '../computer-use-guard.js';
 import {
   adaptEnumerated,
   decideSnapshotMode,
@@ -53,7 +54,14 @@ export interface CuaNutAdapter {
   mouse: {
     setPosition(point: { x: number; y: number }): Promise<void>;
     click(button?: number): Promise<void>;
-    wheel(direction: 'UP' | 'DOWN' | 'LEFT' | 'RIGHT', amount: number): Promise<void>;
+    // @nut-tree-fork/nut-js Mouse API: direction-split scroll methods,
+    // amount in ticks (~100px per tick on most platforms). There is NO
+    // wheel(direction, amount) on this library — real-machine smoke
+    // 2026-09-28 ("i.mouse.wheel is not a function").
+    scrollDown(amount: number): Promise<unknown>;
+    scrollUp(amount: number): Promise<unknown>;
+    scrollLeft(amount: number): Promise<unknown>;
+    scrollRight(amount: number): Promise<unknown>;
   };
   keyboard: {
     type(text: string, opts?: { delayMs?: number }): Promise<void>;
@@ -83,6 +91,18 @@ export interface CuaAppRef {
   windowId?: number;
 }
 
+/** One live, addressable window resolved from an app_ref (plan 578). */
+interface ResolvedWindow {
+  hwnd: number;
+  pid: number;
+  title: string;
+  bounds: [number, number, number, number] | null;
+  minimized: boolean;
+}
+
+/** Milliseconds for the window manager to repaint after a restore. */
+const RESTORE_SETTLE_MS = 300;
+
 export interface CuaServiceDeps {
   /** Shared UIA probe client (defaults to the singleton getter). */
   probeClient?: () => UiaProbeClient;
@@ -104,10 +124,29 @@ export interface CuaServiceDeps {
    * (headless/test wiring); production wires the shared ApprovalBridge.
    */
   approval?: (tool: string, args: Record<string, unknown>) => Promise<{ ok: boolean; reason?: string }>;
+  /**
+   * Shared execution guard (services/computer-use-guard.ts) — the SAME
+   * revoke + app-access policy the vision surface uses. Absent = no
+   * gate (headless/test wiring); production wires
+   * assertComputerUseAllowed.
+   */
+  guard?: (input: {
+    action: string;
+    targetApp?: GuardTargetApp | null;
+    skipAppPolicy?: boolean;
+  }) => Promise<GuardDecision>;
   /** nut.js adapter override (tests); lazy require() when absent. */
   nut?: CuaNutAdapter | null;
   /** nut.js loader override factory — used once, then cached. */
   loadNut?: () => CuaNutAdapter | null;
+  /**
+   * Restore (un-minimize) a window WITHOUT stealing focus — ShowWindow
+   * with SW_SHOWNOACTIVATE (plan 578). Wired only in production
+   * (cua-handlers); absent = no restore capability, and screenshot
+   * requests on minimized windows fail with restore_unavailable instead
+   * of wasting a blank capture.
+   */
+  restoreWindow?: (windowId: number) => Promise<boolean>;
 }
 
 /** Per-session state: ledger + snapshot cache + last frame + last trees. */
@@ -233,6 +272,28 @@ export class CuaService {
   }
 
   /**
+   * Shared execution guard (plan 575 follow-up): the SAME revoke +
+   * app-access decisions as the vision surface. `revoked` →
+   * NOT_AUTHORIZED, `app-blocked` → PERMISSION_DENIED; nothing has been
+   * dispatched at that point. `skipAppPolicy` covers read-only
+   * observations (visual capture parity — the vision path revocation-
+   * gates capture but never app-gates it).
+   */
+  private async guardGate(
+    action: string,
+    targetApp?: GuardTargetApp | null,
+    opts: { skipAppPolicy?: boolean } = {},
+  ): Promise<void> {
+    if (!this.deps.guard) return;
+    const verdict = await this.deps.guard({ action, targetApp: targetApp ?? null, skipAppPolicy: opts.skipAppPolicy });
+    if (!verdict.ok) {
+      throw new CuaError(verdict.reason, {
+        code: verdict.kind === 'revoked' ? 'NOT_AUTHORIZED' : 'PERMISSION_DENIED',
+      });
+    }
+  }
+
+  /**
    * User-confirmation gate (plan 575 red line). Throws NOT_AUTHORIZED
    * with actionSent=false when the user denied / the request timed out —
    * nothing has been dispatched at that point.
@@ -254,6 +315,9 @@ export class CuaService {
   // ────────────────────────────────────────────────────────────────────
 
   async listApps(): Promise<CuaAppInfo[]> {
+    // Observation-only: revocation-gated (after the user presses STOP the
+    // desktop stays unobserved until they re-arm — vision parity).
+    await this.guardGate('list_apps', null, { skipAppPolicy: true });
     const rows = await this.probe().listApps();
     if (rows === null) {
       throw new CuaError('list_apps: the UIA probe is unavailable or timed out', {
@@ -274,6 +338,8 @@ export class CuaService {
   // ────────────────────────────────────────────────────────────────────
 
   async listWindows(pid?: number): Promise<CuaWindowInfo[]> {
+    // Observation-only: revocation-gated (vision parity, see list_apps).
+    await this.guardGate('list_windows', null, { skipAppPolicy: true });
     const rows = await this.probe().listWindows(pid ?? 0);
     if (rows === null) {
       throw new CuaError('list_windows: the UIA probe is unavailable or timed out', {
@@ -296,35 +362,47 @@ export class CuaService {
 
   /**
    * Resolve an app_ref ({pid|name|window_id}) to one live window.
-   * Alignment with ZCode: pid is cross-checked against the window list,
-   * name matching is case-insensitive `contains` over visible,
-   * non-cloaked windows; ambiguity and misses fail closed.
+   * Alignment with ZCode (plan 578): a minimized window is still fully
+   * addressable — UIA reads its tree, and a screenshot-bearing
+   * observation restores it without stealing focus. Only cloaked
+   * surfaces (suspended UWP shells / other virtual desktops) stay
+   * refused: their trees read empty or hang the probe. Resolution is
+   * visible-first — pid/name fall back to minimized windows only when
+   * nothing visible matches, so a foreground twin always wins.
    */
-  private async resolveWindow(appRef: CuaAppRef): Promise<{
-    hwnd: number;
-    pid: number;
-    title: string;
-    bounds: [number, number, number, number] | null;
-  }> {
+  private async resolveWindow(appRef: CuaAppRef): Promise<ResolvedWindow> {
     const windows = (await this.probe().listWindows(0)) ?? [];
-    const visible = windows.filter((w) => !w.cloaked && !w.minimized && (w.title || '').length > 0);
+    const addressable = windows.filter((w) => !w.cloaked && (w.title || '').length > 0);
+    const visible = addressable.filter((w) => !w.minimized);
+    const minimized = addressable.filter((w) => w.minimized);
 
     if (appRef.windowId !== undefined) {
-      const hit = visible.find((w) => w.hwnd === appRef.windowId);
+      // An exact handle is unambiguous — admit minimized (and untitled)
+      // windows; only a truly gone hwnd or a cloaked surface is refused.
+      const hit = windows.find((w) => w.hwnd === appRef.windowId);
       if (!hit) {
         throw new CuaError(
-          `window ${appRef.windowId} is gone or not visible; call list_windows and pick a fresh window_id`,
+          `window ${appRef.windowId} is gone; call list_windows and pick a fresh window_id`,
           { code: 'STALE_STATE' },
+        );
+      }
+      if (hit.cloaked) {
+        throw new CuaError(
+          `window ${appRef.windowId} is cloaked (suspended UWP surface or another virtual desktop) — its UIA tree is unreadable; pick a visible or minimized window`,
+          { code: 'INVALID_APP' },
         );
       }
       return this.toResolved(hit);
     }
 
     if (typeof appRef.pid === 'number' && appRef.pid > 0) {
-      const hits = visible.filter((w) => w.pid === appRef.pid);
+      let hits = visible.filter((w) => w.pid === appRef.pid);
+      if (hits.length === 0) {
+        hits = minimized.filter((w) => w.pid === appRef.pid);
+      }
       if (hits.length === 0) {
         throw new CuaError(
-          `pid ${appRef.pid} has no visible window — call list_apps / list_windows for a live identity`,
+          `pid ${appRef.pid} has no addressable window (visible or minimized) — call list_apps / list_windows for a live identity`,
           { code: 'INVALID_APP' },
         );
       }
@@ -333,7 +411,7 @@ export class CuaService {
       // Refuse with disambiguation guidance (ZCode-aligned).
       if (hits.length > 1 && (await this.isSharedHostPid(appRef.pid))) {
         throw new CuaError(
-          `pid ${appRef.pid} is ApplicationFrameHost — it hosts several UWP windows under one process id (${hits.length} visible here); call list_windows and target the exact window_id`,
+          `pid ${appRef.pid} is ApplicationFrameHost — it hosts several UWP windows under one process id (${hits.length} here); call list_windows and target the exact window_id`,
           { code: 'INVALID_APP' },
         );
       }
@@ -342,10 +420,13 @@ export class CuaService {
 
     if (typeof appRef.name === 'string' && appRef.name.trim()) {
       const wanted = appRef.name.trim().toLowerCase();
-      const hits = visible.filter((w) => (w.title || '').toLowerCase().includes(wanted));
+      let hits = visible.filter((w) => (w.title || '').toLowerCase().includes(wanted));
+      if (hits.length === 0) {
+        hits = minimized.filter((w) => (w.title || '').toLowerCase().includes(wanted));
+      }
       if (hits.length === 0) {
         throw new CuaError(
-          `no visible window title matches ${JSON.stringify(appRef.name)}; call list_apps for exact names`,
+          `no window title matches ${JSON.stringify(appRef.name)} among visible or minimized windows; call list_windows for exact titles`,
           { code: 'INVALID_APP' },
         );
       }
@@ -366,7 +447,7 @@ export class CuaService {
         code: 'INVALID_APP',
       });
     }
-    return { hwnd: fg.hwnd, pid: fg.pid, title: fg.title, bounds: null };
+    return { hwnd: fg.hwnd, pid: fg.pid, title: fg.title, bounds: null, minimized: false };
   }
 
   private toResolved(hit: {
@@ -374,13 +455,57 @@ export class CuaService {
     pid: number;
     title: string;
     rect: { x: number; y: number; w: number; h: number } | null;
-  }): { hwnd: number; pid: number; title: string; bounds: [number, number, number, number] | null } {
+    minimized?: boolean;
+  }): ResolvedWindow {
+    const minimized = hit.minimized === true;
     return {
       hwnd: hit.hwnd,
       pid: hit.pid,
       title: hit.title,
-      bounds: hit.rect ? [hit.rect.x, hit.rect.y, hit.rect.w, hit.rect.h] : null,
+      // The iconic (-32000,-32000) rect of a minimized window is
+      // meaningless for coordinate math — keep it off the receipt.
+      bounds: !minimized && hit.rect ? [hit.rect.x, hit.rect.y, hit.rect.w, hit.rect.h] : null,
+      minimized,
     };
+  }
+
+  /**
+   * plan 578: un-minimize the resolved window (ShowWindow with
+   * SW_SHOWNOACTIVATE — no focus steal) and re-query its geometry so the
+   * observation describes the post-restore layout. Mutates `win` in
+   * place on success. Returns the model-facing receipt line: null when
+   * restore is unavailable for this host, a restore_* failure line when
+   * the capture must be skipped (the caller leaves `win.minimized` true
+   * in that case, which also blocks the capture).
+   */
+  private async restoreForCapture(win: ResolvedWindow): Promise<string | null> {
+    if (!this.deps.restoreWindow) {
+      return '[restore_unavailable: the window is minimized and this host has no restore capability — the screenshot was skipped; the tree is still valid]';
+    }
+    let ok = false;
+    try {
+      ok = await this.deps.restoreWindow(win.hwnd);
+    } catch {
+      ok = false;
+    }
+    if (!ok) {
+      return '[restore_failed: the window is minimized and could not be restored — the screenshot was skipped; the tree is still valid]';
+    }
+    // Let the window manager repaint before re-reading the geometry —
+    // the capture itself runs after the probe round-trips below.
+    await new Promise((resolve) => setTimeout(resolve, RESTORE_SETTLE_MS));
+    try {
+      const rows = await this.probe().listWindows(0);
+      const row = rows?.find((w) => w.hwnd === win.hwnd);
+      if (row && !row.minimized && !row.cloaked) {
+        win.minimized = false;
+        win.bounds = row.rect ? [row.rect.x, row.rect.y, row.rect.w, row.rect.h] : null;
+        return '[window_restored: the target was minimized — it was restored without taking focus; element bounds and the screenshot share the post-restore layout]';
+      }
+    } catch {
+      // Probe could not answer — treat as incomplete below.
+    }
+    return '[restore_incomplete: the restore was sent but the window still reads minimized — the screenshot was skipped; re-observe]';
   }
 
   // ────────────────────────────────────────────────────────────────────
@@ -388,13 +513,31 @@ export class CuaService {
   // ────────────────────────────────────────────────────────────────────
 
   async getAppState(
-    appRef: CuaAppRef & { includeScreenshot?: boolean; maxElements?: number },
+    appRef: CuaAppRef & { includeScreenshot?: boolean; maxElements?: number; fresh?: boolean },
     sessionId?: string,
   ): Promise<{ observation: CuaObservation; text: string; screenshot?: CuaCaptureResult }> {
+    // Read-only observation: revocation-gated only (visual capture parity).
+    await this.guardGate('get_app_state', null, { skipAppPolicy: true });
     const state = this.session(sessionId);
     const win = await this.resolveWindow(appRef);
 
-    const probed = await this.probe().enumerate(win.hwnd);
+    // plan 578: a minimized target's tree is readable, but its pixels are
+    // not — restore WITHOUT stealing focus before enumerating so the
+    // element rects, the frame binding and the screenshot all describe
+    // one post-restore layout. Pure tree observations keep the window
+    // minimized (ZCode: "a minimized tree is fully usable").
+    const restoreNote =
+      win.minimized && appRef.includeScreenshot === true ? await this.restoreForCapture(win) : null;
+
+    // Observation-only optimization (plan 575 follow-up): the tree rides
+    // the probe's (hwnd,title) enumerate cache — same semantics as the
+    // vision structural channel. Action correctness never depends on the
+    // cache: element actions carry the name/controlType staleness guard
+    // and invoke auto-recovers one stale-tree generation. `fresh` forces
+    // a full re-scan when receipts smell stale.
+    const probed = await (appRef.fresh === true
+      ? this.probe().enumerate(win.hwnd)
+      : this.probe().enumerateCached(win.hwnd, win.title));
     if (probed === null) {
       throw new CuaError(
         `get_app_state: enumerating window ${win.hwnd} timed out — the target may be hung; retry once or pick another window`,
@@ -452,7 +595,7 @@ export class CuaService {
       stateId,
       snapshotMode: previous ? snapshotMode : 'full',
       app: { pid: win.pid, bundleId, name: win.title },
-      window: { windowId: win.hwnd, title: win.title, bounds: win.bounds },
+      window: { windowId: win.hwnd, title: win.title, bounds: win.bounds, minimized: win.minimized },
       elements,
       truncated: probed.truncated === true,
       changes: previous ? diff : undefined,
@@ -465,9 +608,17 @@ export class CuaService {
       text +=
         '\n[tree truncated: the element walk hit its budget — this list is PARTIAL; an absent element is not proof it does not exist, scroll or refine the window and re-observe]';
     }
+    if (restoreNote) {
+      text += `\n${restoreNote}`;
+    } else if (win.minimized) {
+      text +=
+        '\n[window_minimized: the tree was read from the minimized window — element bounds may sit at the iconic position; includeScreenshot=true restores it without stealing focus before pixel work]';
+    }
 
     let screenshot: CuaCaptureResult | undefined;
-    if (appRef.includeScreenshot === true) {
+    // A capture of a still-minimized window is a guaranteed-blank frame —
+    // restoreForCapture already explained the skip in the failure note.
+    if (appRef.includeScreenshot === true && !win.minimized) {
       const shot = this.deps.capture ? await this.deps.capture(win.hwnd, win.bounds) : null;
       if (!shot || shot.width <= 0 || shot.height <= 0) {
         text += '\n[screenshot unavailable: the window could not be captured (occluded or gone)]';
@@ -537,6 +688,29 @@ export class CuaService {
    * the ledger confirms the index was issued, and the last observation
    * supplies the probe's staleness guards.
    */
+  /**
+   * Validate a target argument before any field access. The agent-tool
+   * zod schema marks target optional (one schema serves all 14 actions),
+   * so a bare left_click/perform_action/... without a target reaches the
+   * service and previously died on `target.type` with a TypeError instead
+   * of a structured envelope. Real-machine smoke 2026-09-28.
+   */
+  private requireTarget(value: unknown, what: string): CuaTarget {
+    if (
+      value === null ||
+      typeof value !== 'object' ||
+      !('type' in value) ||
+      ((value as { type: unknown }).type !== 'element' &&
+        (value as { type: unknown }).type !== 'coordinate')
+    ) {
+      throw new CuaError(
+        `${what}: missing or malformed target — pass {type:"element",index} from the last get_app_state tree (or {type:"coordinate",x,y} from your last screenshot)`,
+        { code: 'INVALID_APP' },
+      );
+    }
+    return value as CuaTarget;
+  }
+
   private resolveElement(
     state: CuaSessionState,
     appRef: CuaAppRef,
@@ -616,6 +790,21 @@ export class CuaService {
         if (title.toLowerCase().includes(wanted)) return hwnd;
       }
     }
+    // ZCode bound-object parity (plan 578 smoke follow-up): an element
+    // action carrying NO identifying app_ref addresses the single
+    // observed window of this session. With several observed windows
+    // (or an app_ref that names something unobserved) resolution stays
+    // fail-closed — naming the wrong window silently would be worse.
+    const hasRef =
+      appRef.windowId !== undefined ||
+      (typeof appRef.pid === 'number' && appRef.pid > 0) ||
+      (typeof appRef.name === 'string' && appRef.name.trim().length > 0);
+    if (!hasRef) {
+      const observed = [...state.elementsByHwnd.entries()]
+        .filter(([, elements]) => elements.length > 0)
+        .map(([hwnd]) => hwnd);
+      if (observed.length === 1) return observed[0];
+    }
     return undefined;
   }
 
@@ -632,6 +821,14 @@ export class CuaService {
     opts: { method?: string; value?: string },
   ): Promise<CuaActionReceipt> {
     const resolved = this.resolveElement(state, appRef, target);
+    // Shared guard + approval BEFORE dispatch: the policy evaluates the
+    // element's owning process (element actions may target a background
+    // window), then the user-confirmation card if the tool carries one.
+    await this.guardGate(tool, {
+      pid: resolved.elements[0]?.ownerPid ?? null,
+      title: state.titleByHwnd.get(resolved.hwnd) ?? null,
+    });
+    await this.requireApproval(tool, { target, ...opts } as Record<string, unknown>);
     const outcome = await this.probe().invoke(resolved.hwnd, {
       index: resolved.probeIndex,
       method: (opts.method as 'auto' | 'invoke' | 'toggle' | 'expand' | 'collapse' | 'select' | 'focus' | 'setValue') ?? 'auto',
@@ -698,13 +895,17 @@ export class CuaService {
     args: { appRef?: CuaAppRef; target: CuaTarget; button?: 'left' | 'right' | 'middle'; clickCount?: number },
     sessionId?: string,
   ): Promise<CuaActionReceipt> {
-    await this.requireApproval('left_click', args as Record<string, unknown>);
     const state = this.session(sessionId);
-    if (args.target.type === 'element') {
-      return this.invokeElement(state, args.appRef ?? {}, args.target, 'left_click', { method: 'auto' });
+    const target = this.requireTarget(args.target, 'left_click');
+    if (target.type === 'element') {
+      // Guard + approval run inside invokeElement (target-aware policy).
+      return this.invokeElement(state, args.appRef ?? {}, target, 'left_click', { method: 'auto' });
     }
+    // Coordinate path: physical input against the foreground app.
+    await this.guardGate('left_click', null);
+    await this.requireApproval('left_click', args as Record<string, unknown>);
     const nut = this.requireNut();
-    const point = this.resolveCoordinate(state, args.target);
+    const point = this.resolveCoordinate(state, target);
     await nut.mouse.setPosition(point);
     const button = nutButtonNumber(nut, args.button ?? 'left');
     const clicks = Math.max(1, Math.min(3, args.clickCount ?? 1));
@@ -719,15 +920,27 @@ export class CuaService {
     sessionId?: string,
   ): Promise<CuaActionReceipt> {
     const state = this.session(sessionId);
+    const fromTarget = this.requireTarget(args.from, 'left_click_drag.from');
+    const toTarget = this.requireTarget(args.to, 'left_click_drag.to');
     const nut = this.requireNut();
-    const from =
-      args.from.type === 'coordinate'
-        ? this.resolveCoordinate(state, args.from)
-        : await this.elementCenter(state, args.appRef ?? {}, args.from);
-    const to =
-      args.to.type === 'coordinate'
-        ? this.resolveCoordinate(state, args.to)
-        : await this.elementCenter(state, args.appRef ?? {}, args.to);
+    // Guard + approval BEFORE any pointer movement. Drag is physical
+    // input on BOTH paths (UIA has no drag pattern), so element ends
+    // still dispatch pixels — the policy therefore evaluates the owning
+    // process of the last element end (the drop target wins), falling
+    // back to foreground semantics for pure coordinate drags.
+    let targetPid: number | null = null;
+    let targetTitle: string | null = null;
+    const resolveEnd = async (target: CuaTarget): Promise<{ x: number; y: number }> => {
+      if (target.type === 'coordinate') return this.resolveCoordinate(state, target);
+      const resolved = this.resolveElement(state, args.appRef ?? {}, target);
+      targetPid = resolved.elements[0]?.ownerPid ?? targetPid;
+      targetTitle = state.titleByHwnd.get(resolved.hwnd) ?? targetTitle;
+      return this.elementCenter(state, args.appRef ?? {}, target);
+    };
+    const from = await resolveEnd(fromTarget);
+    const to = await resolveEnd(toTarget);
+    await this.guardGate('left_click_drag', { pid: targetPid, title: targetTitle });
+    await this.requireApproval('left_click_drag', args as Record<string, unknown>);
     const steps = 10;
     for (let i = 0; i <= steps; i += 1) {
       const t = i / steps;
@@ -765,23 +978,41 @@ export class CuaService {
   ): Promise<CuaActionReceipt> {
     const state = this.session(sessionId);
     const nut = this.requireNut();
+    // Physical wheel input against the foreground window — foreground
+    // policy semantics (vision parity: scroll is access-gated there).
+    await this.guardGate('scroll', null);
     if (args.target && args.target.type === 'coordinate') {
       const point = this.resolveCoordinate(state, args.target);
       await nut.mouse.setPosition(point);
     }
     const dir = args.direction.toUpperCase() as 'UP' | 'DOWN' | 'LEFT' | 'RIGHT';
-    await nut.mouse.wheel(dir, Math.max(1, args.pages ?? 1));
+    // @nut-tree-fork/nut-js Mouse has no wheel(direction, amount) — the
+    // API is scrollDown/scrollUp/scrollLeft/scrollRight(amount). The old
+    // wheel call died with "i.mouse.wheel is not a function" on real
+    // machines (vision adapter had the same bug). 1 page ≈ 10 ticks
+    // (~100px per tick on most platforms).
+    const ticks = Math.max(1, args.pages ?? 1) * 10;
+    if (dir === 'UP') await nut.mouse.scrollUp(ticks);
+    else if (dir === 'DOWN') await nut.mouse.scrollDown(ticks);
+    else if (dir === 'LEFT') await nut.mouse.scrollLeft(ticks);
+    else await nut.mouse.scrollRight(ticks);
     return { tool: 'scroll', actionSent: true, dispatchStatus: 'possibly_sent' };
   }
 
   async typeText(args: { text: string }, _sessionId?: string): Promise<CuaActionReceipt> {
     const nut = this.requireNut();
+    // Physical keystrokes land in the foreground app — foreground policy
+    // semantics (vision parity: type is access-gated there).
+    await this.guardGate('type', null);
     await nut.keyboard.type(args.text, { delayMs: 10 });
     return { tool: 'type', actionSent: true, dispatchStatus: 'possibly_sent' };
   }
 
   async key(args: { key: string; modifiers?: string[] }, _sessionId?: string): Promise<CuaActionReceipt> {
     const nut = this.requireNut();
+    // Physical key chord lands in the foreground app — foreground policy
+    // semantics (vision parity: keys are access-gated there).
+    await this.guardGate('key', null);
     const chord = normalizeKeyChord([...(args.modifiers ?? []), args.key].join('+'));
     const { modifiers, key } = splitChord(chord);
     const tokens: Array<string | number> = [];
@@ -800,7 +1031,8 @@ export class CuaService {
     sessionId?: string,
   ): Promise<CuaActionReceipt> {
     const state = this.session(sessionId);
-    return this.invokeElement(state, args.appRef ?? {}, args.target, 'set_value', {
+    const target = this.requireTarget(args.target, 'set_value');
+    return this.invokeElement(state, args.appRef ?? {}, target, 'set_value', {
       method: 'setValue',
       value: args.value,
     });
@@ -811,7 +1043,14 @@ export class CuaService {
     sessionId?: string,
   ): Promise<CuaActionReceipt> {
     const state = this.session(sessionId);
-    const resolved = this.resolveElement(state, args.appRef ?? {}, args.target);
+    const target = this.requireTarget(args.target, 'select_text');
+    const resolved = this.resolveElement(state, args.appRef ?? {}, target);
+    // Element dispatch to a (possibly background) app mutates selection
+    // state — same target-aware policy as the invokeElement paths.
+    await this.guardGate('select_text', {
+      pid: resolved.elements[0]?.ownerPid ?? null,
+      title: state.titleByHwnd.get(resolved.hwnd) ?? null,
+    });
     const outcome = await this.probe().selectText(resolved.hwnd, {
       index: resolved.probeIndex,
       text: args.text,
@@ -848,7 +1087,6 @@ export class CuaService {
     args: { appRef?: CuaAppRef; target: CuaTarget; action: string; value?: string },
     sessionId?: string,
   ): Promise<CuaActionReceipt> {
-    await this.requireApproval('perform_action', args as Record<string, unknown>);
     const state = this.session(sessionId);
     const method = actionToMethod(args.action);
     if (method === null) {
@@ -860,7 +1098,8 @@ export class CuaService {
     // Advertised-actions guard (plan 575 gap fix): the doc promised "only
     // actions the element declares are valid" — actually enforce it. The
     // element row from the last observation carries the derived actions=[...].
-    const resolved = this.resolveElement(state, args.appRef ?? {}, args.target);
+    const actionTarget = this.requireTarget(args.target, 'perform_action');
+    const resolved = this.resolveElement(state, args.appRef ?? {}, actionTarget);
     const el = resolved.elements[resolved.probeIndex - 1];
     if (el && Array.isArray(el.actions) && !el.actions.includes(args.action)) {
       throw new CuaError(
@@ -868,13 +1107,17 @@ export class CuaService {
         { code: 'ACTION_UNAVAILABLE' },
       );
     }
-    return this.invokeElement(state, args.appRef ?? {}, args.target, 'perform_action', {
+    return this.invokeElement(state, args.appRef ?? {}, actionTarget, 'perform_action', {
       method,
       ...(method === 'setValue' ? { value: args.value } : {}),
     });
   }
 
   async paste(args: { text: string }, _sessionId?: string): Promise<CuaActionReceipt> {
+    // Clipboard swap + ctrl+v land in the foreground app — foreground
+    // policy semantics, and the guard runs BEFORE the clipboard is
+    // touched (a denied paste must not leave text on the clipboard).
+    await this.guardGate('paste', null);
     await this.requireApproval('paste', args as Record<string, unknown>);
     if (!this.deps.writeClipboard) {
       throw new CuaError('paste: no clipboard provider on this platform', {

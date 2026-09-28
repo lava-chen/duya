@@ -10,10 +10,13 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  clearStructuralTarget,
   clearZoomOrigin,
   clearCaptureSize,
+  getRememberedStructuralTarget,
   modelPointToScreen,
   rememberCaptureSize,
+  rememberStructuralTarget,
   rememberZoomOrigin,
   zoomOriginKey,
 } from '../computer-use-coords.js';
@@ -152,5 +155,41 @@ describe('modelPointToScreen', () => {
       x: 188,
       y: 94,
     });
+  });
+});
+
+describe('structural target memory (plan 578 smoke fix)', () => {
+  beforeEach(() => {
+    clearStructuralTarget('sA');
+    clearStructuralTarget('sB');
+    clearStructuralTarget(undefined);
+  });
+
+  it('remembers and returns the last tree window per session', () => {
+    expect(getRememberedStructuralTarget('sA')).toBeUndefined();
+    rememberStructuralTarget('sA', 66876, 'QQ');
+    expect(getRememberedStructuralTarget('sA')).toMatchObject({ hwnd: 66876, title: 'QQ' });
+    // Session-scoped: another session sees nothing.
+    expect(getRememberedStructuralTarget('sB')).toBeUndefined();
+    // A later tree re-targets the session.
+    rememberStructuralTarget('sA', 42, 'Other');
+    expect(getRememberedStructuralTarget('sA')?.hwnd).toBe(42);
+  });
+
+  it('ignores invalid handles and clears on demand', () => {
+    rememberStructuralTarget('sA', 0, '');
+    rememberStructuralTarget('sA', Number.NaN, '');
+    expect(getRememberedStructuralTarget('sA')).toBeUndefined();
+    rememberStructuralTarget('sA', 7, 'X');
+    clearStructuralTarget('sA');
+    expect(getRememberedStructuralTarget('sA')).toBeUndefined();
+  });
+
+  it('buckets the no-session id stably', () => {
+    rememberStructuralTarget(undefined, 5, 'T');
+    expect(getRememberedStructuralTarget(undefined)?.hwnd).toBe(5);
+    expect(getRememberedStructuralTarget('sB')).toBeUndefined();
+    clearStructuralTarget(undefined);
+    expect(getRememberedStructuralTarget(undefined)).toBeUndefined();
   });
 });
