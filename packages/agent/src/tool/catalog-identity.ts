@@ -1,31 +1,21 @@
-import { createHash } from 'node:crypto';
-
 import type { Tool } from '../types.js';
 import type { ToolCatalogSource } from './catalog-types.js';
 
-function canonicalize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (!value || typeof value !== 'object') return value;
-
-  const sorted: Record<string, unknown> = {};
-  for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-    const child = (value as Record<string, unknown>)[key];
-    if (child !== undefined) sorted[key] = canonicalize(child);
-  }
-  return sorted;
-}
+// Plan 580 D1: `computeSchemaRevision` moved down into the
+// protocol-pure MCP Core (`@duya/plugin-core/src/mcp/core/descriptor.ts`,
+// canonicalize+sha256, byte-identical algorithm). This module re-exports
+// it so every existing consumer (`registry.ts` snapshot revision, catalog
+// tooling) keeps working; a byte-equal test in both packages locks the
+//存量 registry entry hash 不变 (existing registry entry hashes do not change).
+export { computeSchemaRevision as getSchemaRevision, canonicalizeJson } from '@duya/plugin-core/src/mcp/core/descriptor.js';
+import { canonicalizeJson } from '@duya/plugin-core/src/mcp/core/descriptor.js';
 
 export function normalizeToolInputSchema(schema: Tool['input_schema']): Record<string, unknown> {
   const parsed: unknown = JSON.parse(JSON.stringify(schema));
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new TypeError('Tool input schema must be a JSON Schema object');
   }
-  return canonicalize(parsed) as Record<string, unknown>;
-}
-
-export function getSchemaRevision(schema: Record<string, unknown>): string {
-  const serialized = JSON.stringify(canonicalize(schema));
-  return `sha256:${createHash('sha256').update(serialized).digest('hex')}`;
+  return canonicalizeJson(parsed) as Record<string, unknown>;
 }
 
 export function createToolId(source: ToolCatalogSource, rawName: string): string {

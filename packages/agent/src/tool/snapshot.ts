@@ -44,6 +44,14 @@ export interface ToolSnapshot {
   readonly catalogEntries: ReadonlyArray<ToolCatalogEntry>;
   /** Resolve one row by its stable tool ID. */
   getCatalogEntry(toolId: string): ToolCatalogEntry | undefined;
+  /**
+   * Plan 580 D10: catalog revision captured when the snapshot was
+   * taken. `tool_catalog` list-mode cursors encode it so a pagination
+   * run that overlaps an inventory refresh fails loudly
+   * (`CATALOG_CURSOR_STALE`) instead of returning duplicated or
+   * skipped rows.
+   */
+  readonly catalogRevision: number;
   /** Creation timestamp (ms since epoch) for diagnostics. */
   readonly createdAt: number;
 }

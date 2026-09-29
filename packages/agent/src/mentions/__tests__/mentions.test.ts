@@ -51,8 +51,25 @@ describe('buildAppsSystemSection', () => {
     expect(section).toContain('## Apps (Connectors)');
     expect(section).toContain('[@App-Name](app://<provider-id>)');
     expect(section).toContain('tool_catalog');
-    expect(section).toContain('- [Notion](app://notion): remote_notion_search, remote_notion_fetch');
+    // Plan 580 Phase 3: deterministic order — provider ids sorted, tools sorted.
     expect(section).toContain('- [GitHub](app://github): remote_github_list_issues');
+    expect(section).toContain('- [Notion](app://notion): remote_notion_fetch, remote_notion_search');
+  });
+
+  it('is byte-deterministic for the same connection set regardless of descriptor order', () => {
+    const a = buildAppsSystemSection(descriptors);
+    const shuffled: AppToolSummary[] = [
+      descriptors[2],
+      descriptors[1],
+      descriptors[0],
+    ];
+    const b = buildAppsSystemSection(shuffled);
+    expect(a).toBe(b);
+  });
+
+  it('points at tool_catalog list mode when search misses (plan 580 Phase 3)', () => {
+    const section = buildAppsSystemSection(descriptors) ?? '';
+    expect(section).toContain('Use tool_catalog with list(namespace=...) to enumerate');
   });
 
   it('falls back to the provider id as label', () => {

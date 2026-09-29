@@ -13,14 +13,14 @@
 import type { ProviderId, RiskTier } from './types.js';
 
 /**
- * JSON-schema subset compatible with the agent's `Tool.input_schema`.
- * The agent side re-uses this verbatim — no token fields ever appear.
+ * JSON-schema input spec for a connector tool. Plan 580 D4: this is the
+ * CANONICAL schema, verbatim from the remote server (any JSON-schema
+ * shape, including combinator roots like `oneOf`) — never trimmed or
+ * type-rewritten. The agent side re-uses it verbatim for Ajv / catalog
+ * detail / schema revision; the model-facing projection is generated at
+ * the last mile via `projectForProvider`. No token fields ever appear.
  */
-export interface ConnectorInputSchema {
-  type: 'object';
-  properties: Record<string, unknown>;
-  required?: string[];
-}
+export type ConnectorInputSchema = Record<string, unknown>;
 
 /**
  * Describes a connector tool the agent can discover via `tool_catalog`
@@ -65,6 +65,13 @@ export interface ConnectorToolDescriptor {
    * passes this back to the main process so the right token is used.
    */
   connectionId: string;
+  /**
+   * Plan 580 D7: stable namespace slug of the owning connection ('' =
+   * the provider's first connection, bare namespace). Stamped by
+   * ConnectorService after listing; the agent derives the tool's
+   * discovery namespace from provider + this value.
+   */
+  connectionSlug?: string;
   /**
    * Connector-internal action key (e.g. `drive.list_files`). The
    * descriptor's `name` is the LLM-facing alias; `action` is the

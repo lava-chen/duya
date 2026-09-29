@@ -24,9 +24,17 @@ import { safeUserDataPath } from '../../logging/logger';
 
 export const CONNECTORS_CACHE_TTL_MS = 3_600_000;
 
-interface CachedSnapshot {
+export interface CachedSnapshot {
   fetchedAt: number;
   provider: string;
+  /**
+   * Plan 580 D4: entries written from plan 580 onward carry
+   * `schemaVerbatim: true` — their `inputSchema` is the server's
+   * canonical form, not the legacy normalized rewrite. Snapshots
+   * without the flag predate the canonical store and are rejected on
+   * read (→ live re-fetch) rather than served with trimmed schemas.
+   */
+  schemaVerbatim?: boolean;
   /** Raw MCP `tools/list` response payload (tool definitions only). */
   tools: Array<{
     name: string;
@@ -69,7 +77,10 @@ export function readCatalogCache(connectionId: string): CachedSnapshot | null {
     typeof parsed !== 'object' ||
     typeof (parsed as { fetchedAt?: unknown }).fetchedAt !== 'number' ||
     typeof (parsed as { provider?: unknown }).provider !== 'string' ||
-    !Array.isArray((parsed as { tools?: unknown }).tools)
+    !Array.isArray((parsed as { tools?: unknown }).tools) ||
+    // Plan 580 D4: pre-canonical snapshots hold normalized (trimmed)
+    // schemas — force a live re-fetch instead of serving them.
+    (parsed as { schemaVerbatim?: unknown }).schemaVerbatim !== true
   ) {
     return null;
   }
@@ -98,7 +109,13 @@ export function writeCatalogCache(
     console.error('[catalog-cache] mkdir failed', dir, err);
     return false;
   }
-  const payload = JSON.stringify({ fetchedAt: Date.now(), provider, tools });
+  const payload = JSON.stringify({
+    fetchedAt: Date.now(),
+    provider,
+    // Plan 580 D4: marks this snapshot as holding canonical verbatim schemas.
+    schemaVerbatim: true,
+    tools,
+  });
   const tmp = tmpPath(connectionId);
   const final = cachePath(connectionId);
   try {

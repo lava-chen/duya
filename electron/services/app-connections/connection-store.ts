@@ -11,6 +11,7 @@
 
 import type Database from 'better-sqlite3';
 import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
+import { deriveConnectionSlug } from '@duya/plugin-core/src/mcp/core/alias.js';
 import type {
   AppConnection,
   AppConnectionStatus,
@@ -31,6 +32,7 @@ interface AppConnectionRow {
   last_error: string | null;
   created_at: number;
   updated_at: number;
+  connection_slug: string;
 }
 
 function rowToConnection(row: AppConnectionRow): AppConnection {
@@ -52,6 +54,7 @@ function rowToConnection(row: AppConnectionRow): AppConnection {
     lastError: row.last_error,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    connectionSlug: row.connection_slug,
   };
 }
 
@@ -65,11 +68,29 @@ export class ConnectionStore {
 
   upsert(conn: AppConnection): AppConnection {
     const now = Date.now();
+    // Plan 580 D7: the namespace slug is assigned exactly once, at row
+    // creation, and never changes afterwards (reconnects keep it). The
+    // provider's first connection holds the bare namespace ('') for
+    // life; later connections derive a collision-free 4-hex slug.
+    const existing = this.get(conn.id);
+    let connectionSlug: string;
+    if (existing) {
+      connectionSlug = existing.connectionSlug ?? '';
+    } else {
+      const siblings = this.listByProvider(conn.provider).filter((c) => c.id !== conn.id);
+      connectionSlug =
+        siblings.length === 0
+          ? ''
+          : deriveConnectionSlug(
+              conn.id,
+              new Set(['', ...siblings.map((c) => c.connectionSlug ?? '')]),
+            );
+    }
     this.db
       .prepare(
         `INSERT INTO app_connections
-           (id, provider, account_label, account_id, scopes, status, expires_at, last_error, created_at, updated_at)
-         VALUES (@id, @provider, @account_label, @account_id, @scopes, @status, @expires_at, @last_error, @created_at, @updated_at)
+           (id, provider, account_label, account_id, scopes, status, expires_at, last_error, created_at, updated_at, connection_slug)
+         VALUES (@id, @provider, @account_label, @account_id, @scopes, @status, @expires_at, @last_error, @created_at, @updated_at, @connection_slug)
          ON CONFLICT(id) DO UPDATE SET
            provider = excluded.provider,
            account_label = excluded.account_label,
@@ -91,8 +112,9 @@ export class ConnectionStore {
         last_error: conn.lastError,
         created_at: conn.createdAt ?? now,
         updated_at: now,
+        connection_slug: connectionSlug,
       });
-    return this.get(conn.id) ?? { ...conn, updatedAt: now };
+    return this.get(conn.id) ?? { ...conn, connectionSlug, updatedAt: now };
   }
 
   get(id: string): AppConnection | undefined {

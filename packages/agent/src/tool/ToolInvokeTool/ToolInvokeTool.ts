@@ -4,10 +4,10 @@ import type { ToolExecutor } from '../registry.js';
 /**
  * Plan 480 P2.1 — `tool_invoke` invocation meta tool.
  *
- * Invokes a tool that is NOT in the request's `tools` array. The model must
- * first read the target's schema via `tool_catalog`, then call this tool with
- * `{ namespace, tool, arguments }`. The executor resolves the real tool and
- * dispatches through the injected handler.
+ * Invokes a deferred tool that is NOT in the request's `tools` array. The
+ * model may read the target's schema via `tool_catalog` when it needs discovery
+ * or argument guidance, then calls this tool with `{ tool_id, arguments }`.
+ * The executor validates against the live schema before dispatching.
  *
  * This module deliberately contains NO registry/permission logic: the
  * injected `ToolInvokeDispatcher` is the seam where the agent wires
@@ -30,15 +30,23 @@ export interface ToolInvokeOutcome {
   error?: boolean;
   errorCode?: string;
   toolName?: string;
+  /**
+   * Plan 580 D8: canonical MCP content blocks preserved from the
+   * deferred tool's ToolResult (lossless save; the text already carries
+   * bounded metadata lines).
+   */
+  blocks?: unknown[];
+  /** Plan 580 D8: verbatim `structuredContent` from the MCP result. */
+  structured?: unknown;
 }
 
 export interface ToolInvokeDispatcher {
   dispatch(request: ToolInvokeRequest): Promise<ToolInvokeOutcome>;
 }
 
-const DESCRIPTION = `Invoke a tool that is not in the current tool list.
+const DESCRIPTION = `Invoke a deferred tool that is not in the current tool list.
 
-Call \`tool_catalog\` with the target \`tool_id\` FIRST to read its current schema, then invoke it here:
+Use \`tool_catalog\` to discover tools or inspect a schema when needed. If you already know the stable \`tool_id\` and valid arguments, invoke it directly; the arguments are checked against the current schema before execution:
 
 \`{"tool_id":"<stable-id>","arguments":{...}}\`
 
@@ -56,8 +64,7 @@ export class ToolInvokeTool implements Tool, ToolExecutor {
       },
       arguments: {
         type: 'object',
-        description:
-          'Arguments for the tool, matching the current schema returned by tool_catalog',
+        description: 'Arguments for the deferred tool; validated against its current schema before execution.',
       },
     },
     required: ['tool_id', 'arguments'],
@@ -107,7 +114,7 @@ export class ToolInvokeTool implements Tool, ToolExecutor {
     if (args === null || typeof args !== 'object' || Array.isArray(args)) {
       return this.errorResult(
         'Tool Invoke Error',
-        '`arguments` (object) is required. Read the schema with `tool_catalog` first.',
+        '`arguments` must be an object. Use `tool_catalog` to inspect the schema if you need help with its fields.',
       );
     }
 
@@ -136,6 +143,9 @@ export class ToolInvokeTool implements Tool, ToolExecutor {
           `${TOOL_INVOKE_RESULT_MARKER}\n\n# Tool Invoke: \`${toolId}\`\n\n_No result returned._`,
         ...(outcome.errorCode ? { metadata: { errorCode: outcome.errorCode } } : {}),
         ...(isError ? { error: true } : {}),
+        // Plan 580 D8: pass the canonical MCP blocks through untouched.
+        ...(outcome.blocks ? { blocks: outcome.blocks } : {}),
+        ...(outcome.structured !== undefined ? { structured: outcome.structured } : {}),
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

@@ -478,6 +478,28 @@ export class AppConnectionService {
     return true;
   }
 
+  /**
+   * Plan 580 D2 (chain B lifecycle truth): the Remote MCP stream died
+   * (transport `onclose`/`onerror` while not disconnecting). Mark the
+   * connection `error` so the UI stops claiming `connected` for a dead
+   * stream. Only a live `connected` row degrades — never overwrite
+   * `revoked` / `expired` / user-driven states. Recovery is implicit:
+   * the next invoke re-connects (see RemoteMcpConnector.ensureSession).
+   */
+  async markTransportDead(connectionId: string, reason: string): Promise<void> {
+    const conn = this._connectionStore.get(connectionId);
+    if (!conn || conn.status !== 'connected') return;
+    this._connectionStore.updateStatus(connectionId, 'error', {
+      lastError: `Remote MCP stream died: ${reason}`,
+    });
+    this.logger.warn(
+      'App Connection: remote MCP transport died; connection marked error',
+      { connectionId, provider: conn.provider, reason },
+      COMPONENT,
+    );
+    await this.fireReload();
+  }
+
   /** Best-effort token revocation at the provider. Never throws. */
   private async revokeAtProvider(provider: ProviderId, connectionId: string): Promise<void> {
     const config = getProviderConfig(provider);

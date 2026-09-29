@@ -170,6 +170,21 @@ export interface ToolResult {
    * Mirrors the FileAttachment.imageChunks shape ({ base64, mediaType }).
    */
   images?: Array<{ data: string; mediaType: string }>;
+  /**
+   * Plan 580 D8 — canonical MCP content blocks, verbatim from the
+   * server's `tools/call` result. SAVED LOSSLESSLY (persistence keeps
+   * the full object via message.metadata); the model-facing `result`
+   * text only receives a bounded single-line metadata line per
+   * non-text block (≤200 chars). NEVER stringify these into `result` —
+   * image/audio base64 payloads would eat hundreds of thousands of
+   * tokens for zero benefit.
+   */
+  blocks?: unknown[];
+  /**
+   * Plan 580 D8 — `structuredContent` from the MCP `tools/call` result,
+   * verbatim. Canonical saved form; provider projection is a later plan.
+   */
+  structured?: unknown;
 }
 
 // ─── Token usage ───

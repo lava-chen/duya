@@ -40,7 +40,8 @@ function makeDb(): DatabaseType {
       expires_at INTEGER,
       last_error TEXT,
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      connection_slug TEXT NOT NULL DEFAULT ''
     )
   `);
   return db;
@@ -170,5 +171,114 @@ describe('ConnectionStore', () => {
   it('updateStatus returns undefined for unknown id', () => {
     const store = new ConnectionStore(db);
     expect(store.updateStatus('nope', 'connected')).toBeUndefined();
+  });
+
+  // --- Plan 580 D7: stable connection slugs ---
+
+  it('D7: first connection holds the bare slug, later ones derive 4-hex slugs', () => {
+    const store = new ConnectionStore(db);
+    const first = store.upsert({
+      id: 'conn-first', provider: GOOGLE, accountLabel: 'a', accountId: '1',
+      scopes: [], status: 'connected', expiresAt: null, lastError: null,
+      createdAt: 1, updatedAt: 1,
+    });
+    const second = store.upsert({
+      id: 'conn-second', provider: GOOGLE, accountLabel: 'b', accountId: '2',
+      scopes: [], status: 'connected', expiresAt: null, lastError: null,
+      createdAt: 2, updatedAt: 2,
+    });
+    expect(first.connectionSlug).toBe('');
+    expect(second.connectionSlug).toMatch(/^[0-9a-f]{4,8}$/);
+    expect(second.connectionSlug).not.toBe('');
+  });
+
+  it('D7: reconnecting (upsert same id) keeps the assigned slug for life', () => {
+    const store = new ConnectionStore(db);
+    store.upsert({
+      id: 'conn-x', provider: GOOGLE, accountLabel: 'a', accountId: '1',
+      scopes: [], status: 'connected', expiresAt: null, lastError: null,
+      createdAt: 1, updatedAt: 1,
+    });
+    const original = store.get('conn-x')?.connectionSlug;
+    store.upsert({
+      id: 'conn-x', provider: GOOGLE, accountLabel: 'a2', accountId: '1',
+      scopes: [], status: 'disconnected', expiresAt: null, lastError: null,
+      createdAt: 1, updatedAt: 2,
+    });
+    expect(store.get('conn-x')?.connectionSlug).toBe(original);
+  });
+
+  it('D7: slugs are unique within a provider even when ids hash-collide', () => {
+    const store = new ConnectionStore(db);
+    const seen = new Set<string>();
+    // Derive many slugs; the allocator must never repeat one within the
+    // provider. (The first connection legitimately holds '' — it starts
+    // in `seen` via the loop itself.)
+    for (let i = 0; i < 12; i++) {
+      const conn = store.upsert({
+        id: `conn-hash-${i}`, provider: GOOGLE, accountLabel: `a${i}`, accountId: String(i),
+        scopes: [], status: 'connected', expiresAt: null, lastError: null,
+        createdAt: i + 1, updatedAt: i + 1,
+      });
+      const slug = conn.connectionSlug ?? '';
+      expect(seen.has(slug)).toBe(false);
+      seen.add(slug);
+    }
+  });
+
+  it('D7: a new connection after the bare holder was removed derives a fresh slug (existing connections unaffected)', () => {
+    const store = new ConnectionStore(db);
+    store.upsert({
+      id: 'conn-1', provider: GOOGLE, accountLabel: 'a', accountId: '1',
+      scopes: [], status: 'connected', expiresAt: null, lastError: null,
+      createdAt: 1, updatedAt: 1,
+    });
+    const second = store.upsert({
+      id: 'conn-2', provider: GOOGLE, accountLabel: 'b', accountId: '2',
+      scopes: [], status: 'connected', expiresAt: null, lastError: null,
+      createdAt: 2, updatedAt: 2,
+    });
+    const secondSlug = second.connectionSlug ?? '';
+    expect(secondSlug).not.toBe('');
+    // The bare holder is deleted.
+    store.remove('conn-1');
+    // Existing derived connection is never promoted (slug immutable).
+    expect(store.get('conn-2')?.connectionSlug).toBe(secondSlug);
+    // A new connection while conn-2 still exists derives a fresh slug —
+    // conn-2's namespace is untouched.
+    const third = store.upsert({
+      id: 'conn-3', provider: GOOGLE, accountLabel: 'c', accountId: '3',
+      scopes: [], status: 'connected', expiresAt: null, lastError: null,
+      createdAt: 3, updatedAt: 3,
+    });
+    expect(third.connectionSlug).not.toBe('');
+    expect(third.connectionSlug).not.toBe(secondSlug);
+    // Once the provider has NO connections left, the next one re-claims
+    // the bare namespace.
+    store.remove('conn-2');
+    store.remove('conn-3');
+    const fourth = store.upsert({
+      id: 'conn-4', provider: GOOGLE, accountLabel: 'd', accountId: '4',
+      scopes: [], status: 'connected', expiresAt: null, lastError: null,
+      createdAt: 4, updatedAt: 4,
+    });
+    expect(fourth.connectionSlug).toBe('');
+  });
+
+  it('D7: tool-alias bytes — single connection unchanged, two connections coexist', async () => {
+    const { allocateConnectionToolAlias, connectionNamespace } = await import(
+      '@duya/plugin-core/src/mcp/core/alias.js'
+    );
+    // Single connection (slug ''): byte-identical to the pre-580
+    // `remote_<provider>_<tool>` form.
+    const single = allocateConnectionToolAlias(connectionNamespace('notion', ''), 'search', new Set());
+    expect(single).toBe('remote_notion_search');
+    // Two connections: the bare namespace and the slug namespace never
+    // collide — both aliases coexist.
+    const second = allocateConnectionToolAlias(
+      connectionNamespace('notion', 'a31f'), 'search', new Set([single]),
+    );
+    expect(second).toBe('remote_notion_a31f_search');
+    expect(second).not.toBe(single);
   });
 });

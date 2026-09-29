@@ -81,6 +81,7 @@ describe('catalog-cache (Plan 450 Phase E)', () => {
       JSON.stringify({
         fetchedAt: Date.now() - CONNECTORS_CACHE_TTL_MS - 1,
         provider: 'github',
+        schemaVerbatim: true,
         tools: [{ name: 'list_prs' }],
       }),
       'utf8',
@@ -88,6 +89,23 @@ describe('catalog-cache (Plan 450 Phase E)', () => {
     const cached = readCatalogCache('conn-stale');
     expect(cached).not.toBeNull();
     expect(isFresh(cached!)).toBe(false);
+  });
+
+  it('rejects a pre-canonical snapshot without the schemaVerbatim flag (plan 580 D4)', () => {
+    const dir = path.join(mocks.scratch, 'app-connections', 'catalog-cache');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      path.join(dir, 'conn-legacy.json'),
+      JSON.stringify({
+        fetchedAt: Date.now(),
+        provider: 'notion',
+        // No `schemaVerbatim` — written before the canonical verbatim store.
+        tools: [{ name: 'search', inputSchema: { type: 'object', properties: {} } }],
+      }),
+      'utf8',
+    );
+    // Legacy trimmed schemas must not be served; the caller re-fetches live.
+    expect(readCatalogCache('conn-legacy')).toBeNull();
   });
 
   it('deletes the snapshot', () => {

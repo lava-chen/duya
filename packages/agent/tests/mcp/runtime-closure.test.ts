@@ -246,6 +246,9 @@ vi.mock('../../src/mcp/index.js', async () => {
         });
         return client;
       }),
+      // Plan 580 D2: apply.ts wires the tools/list_changed callback on
+      // every freshly constructed manager.
+      setOnToolsChanged: vi.fn(),
     };
     stubs.push(stub);
     consumeStubOverride(stub);

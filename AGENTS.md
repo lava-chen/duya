@@ -105,6 +105,10 @@ node packages/agent/dist/cli/index.js [options]
 ## Gates
 
 - Pre-commit: `npm run typecheck:all` MUST pass. esbuild does not type check.
+- MCP connectors: a new or changed connector MUST pass the conformance suite
+  (`packages/agent/tests/integration/mcp-conformance.test.ts`, L1–L9) before
+  merge — transactional discovery, replace-set, catalog retrieval, deterministic
+  invoke, error taxonomy, and lifecycle truth (plan 580).
 - UI changes: verify with Playwright MCP after implementation. Do not skip.
 - No commit of secrets, API keys, credentials.
 - Build gate: `npm run electron:build` before push if build output, packaging, or lazy/module boundaries can change.

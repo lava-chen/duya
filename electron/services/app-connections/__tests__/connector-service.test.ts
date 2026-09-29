@@ -137,7 +137,7 @@ describe('ConnectorService', () => {
   it('listDescriptorsForConnected returns descriptors for connected connections only', async () => {
     // Add a disconnected connection
     seedConnection(db, { id: 'c-disc', provider: GOOGLE, status: 'disconnected' });
-    const descriptors = await connectorService.listDescriptorsForConnected();
+    const { descriptors, connectedConnectionIds } = await connectorService.listDescriptorsForConnected();
     // Only c-google should produce descriptors
     expect(descriptors).toHaveLength(3);
     expect(descriptors.every((descriptor) => descriptor.connectionId === 'c-google')).toBe(true);
@@ -146,6 +146,9 @@ describe('ConnectorService', () => {
       'google_drive_get',
       'google_drive_read',
     ]);
+    // D6: the authoritative connected set tracks connection rows, not
+    // descriptor success — a disconnected row must not appear here.
+    expect(connectedConnectionIds).toEqual(['c-google']);
   });
 
   it('invoke happy path: calls connector with token and returns data', async () => {

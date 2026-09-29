@@ -26,6 +26,10 @@ import { createMicrosoft365Connector } from './connectors/microsoft365.js';
 import { createWeComConnector } from './connectors/wecom.js';
 import { RemoteMcpConnector } from './connectors/remote-mcp.js';
 import { invokeRestTemplate } from './connectors/rest-invoker.js';
+import {
+  classifyMcpError,
+  errorCodeForClass,
+} from '@duya/plugin-core/src/mcp/core/error-taxonomy.js';
 import { getProviderConfig, registerProviderConfig, unregisterProviderConfig } from './providers/registry.js';
 import { declarationToProviderConfig } from './declarative/projection.js';
 import {
@@ -56,6 +60,13 @@ export interface ConnectorInvokePayload {
   connectionId: string;
   action: string;
   args: unknown;
+  /**
+   * Plan 580 D5: absolute epoch-ms deadline computed worker-side and
+   * honored main-side via the SDK's per-request `timeout`/`signal`.
+   * The shared transport is NEVER closed for one aborted call. Absent
+   * (older worker) → the SDK default applies.
+   */
+  deadlineAt?: number;
 }
 
 export class ConnectorService {
@@ -72,6 +83,11 @@ export class ConnectorService {
   constructor(deps: ConnectorServiceDeps = {}) {
     this.service = deps.service ?? getAppConnectionService();
     this.remoteMcp = new RemoteMcpConnector(this.service.vault);
+    // Plan 580 D2: transport death must surface as a connection status
+    // change, not a silent dead stream behind a `connected` badge.
+    this.remoteMcp.onTransportDead = (connectionId, reason) => {
+      void this.service.markTransportDead(connectionId, reason).catch(() => undefined);
+    };
     this.fetchImpl = deps.fetchImpl ?? fetch;
     // Plan 455 D4: first-party TS connectors are the ONLY custom-binding
     // residents. slack/microsoft365/google migrate to `rest` declarations
@@ -179,12 +195,30 @@ export class ConnectorService {
   }
 
   /**
-   * List all tool descriptors for currently-connected connections.
+   * List all tool descriptors for currently-connected connections,
+   * together with the connected connection-id set.
+   *
+   * Plan 580 Phase 2C (D6): the id set is the authoritative
+   * `connection:removed` signal — it is derived from the connection
+   * rows, NOT from descriptor success, so a connection whose Remote
+   * MCP discovery failed stays in the set (the agent keeps its
+   * last-known inventory) while a removed connection drops out (the
+   * agent replaces its bucket with an authoritative empty set).
+   *
    * Called by the init/reload payload builder so the agent process can
    * register deferred tools. Descriptors contain NO tokens.
    */
-  async listDescriptorsForConnected(): Promise<ConnectorToolDescriptor[]> {
+  async listDescriptorsForConnected(): Promise<{
+    descriptors: ConnectorToolDescriptor[];
+    connectedConnectionIds: string[];
+    discoveryFailedConnectionIds: string[];
+  }> {
     const out: ConnectorToolDescriptor[] = [];
+    const connectedConnectionIds: string[] = [];
+    // Plan 580 D6: connections whose discovery FAILED this round. The
+    // agent must keep their last-known inventory (no replace) instead of
+    // treating the missing descriptors as an authoritative empty set.
+    const discoveryFailedConnectionIds: string[] = [];
     const policy = readAppPolicy();
     for (const dto of this.service.list()) {
       if (dto.status !== 'connected') continue;
@@ -193,6 +227,7 @@ export class ConnectorService {
       // so the agent registry never sees them — mirroring codex's
       // `apps_enabled ? filter_codex_apps_mcp_tools : empty`.
       if (!isProviderEnabled(policy, dto.provider)) continue;
+      connectedConnectionIds.push(dto.id);
       // Plan 455 D2: one resolution instead of per-provider special cases.
       const resolution = this.registry.resolve(dto.provider);
       if (!resolution) {
@@ -201,6 +236,7 @@ export class ConnectorService {
           { connectionId: dto.id, provider: dto.provider },
           COMPONENT,
         );
+        discoveryFailedConnectionIds.push(dto.id);
         continue;
       }
       if (resolution.binding === 'mcp-remote') {
@@ -214,10 +250,20 @@ export class ConnectorService {
             { connectionId: dto.id, provider: dto.provider, code: token.error.code },
             COMPONENT,
           );
+          discoveryFailedConnectionIds.push(dto.id);
           continue;
         }
         try {
-          out.push(...await this.remoteMcp.listDescriptors(dto.id, dto.provider, token.data));
+          // Plan 580 D7: the connection's stable slug drives the tool
+          // alias namespace (`remote_<provider>[_<slug>]_<tool>`).
+          out.push(
+            ...await this.remoteMcp.listDescriptors(
+              dto.id,
+              dto.provider,
+              token.data,
+              dto.connectionSlug ?? '',
+            ),
+          );
         } catch (error) {
           this.logger.warn(
             'Remote MCP descriptor discovery failed',
@@ -225,6 +271,7 @@ export class ConnectorService {
             { connectionId: dto.id, provider: dto.provider },
             COMPONENT,
           );
+          discoveryFailedConnectionIds.push(dto.id);
         }
         continue;
       }
@@ -243,16 +290,52 @@ export class ConnectorService {
     // an IPC round-trip. Destructive tiers are never stamped.
     // Plan 450 Phase G: also stamp the display label so the agent's Apps
     // system section and activation reminder can show `Notion`, not `notion`.
+    // Plan 580 D7: stamp the stable namespace slug so the agent-side
+    // discovery namespace (and thus the tool alias) is per-connection. When
+    // a provider has multiple connections, disambiguate the display label
+    // with the per-connection `account_label` (`Notion · rain@example.com`)
+    // so the model can tell the accounts apart; single-connection providers
+    // keep the bare label (byte-stable section).
+    const connections = this.service.list();
+    const slugByConnection = new Map(
+      connections.map((c) => [c.id, c.connectionSlug ?? ''] as const),
+    );
+    const accountLabelByConnection = new Map(
+      connections.map((c) => [c.id, c.accountLabel] as const),
+    );
+    const connectionCountByProvider = new Map<string, number>();
+    for (const c of connections) {
+      connectionCountByProvider.set(c.provider, (connectionCountByProvider.get(c.provider) ?? 0) + 1);
+    }
     for (const descriptor of out) {
       const resolution = this.registry.resolve(descriptor.provider);
+      const baseLabel = resolution?.meta?.label ?? getProviderConfig(descriptor.provider)?.label;
+      const connectionId = descriptor.connectionId;
+      const count = connectionCountByProvider.get(descriptor.provider) ?? 1;
       descriptor.providerLabel =
-        resolution?.meta?.label ?? getProviderConfig(descriptor.provider)?.label;
+        count > 1 && accountLabelByConnection.get(connectionId)
+          ? `${baseLabel} · ${accountLabelByConnection.get(connectionId)}`
+          : baseLabel;
+      descriptor.connectionSlug = slugByConnection.get(connectionId) ?? '';
       if (
         descriptor.riskTier !== 'destructive' &&
         isToolGloballyApproved(descriptor.provider, descriptor.name)
       ) {
         descriptor.preApproved = true;
       }
+    }
+    return { descriptors: out, connectedConnectionIds, discoveryFailedConnectionIds };
+  }
+
+  /**
+   * Plan 580 Phase 5: per-connection inventory ledger snapshots from the
+   * remote-MCP connector. Connections without a live session are absent.
+   */
+  listLedgerSnapshots(): Record<string, ReturnType<RemoteMcpConnector['getLedgerSnapshot']>> {
+    const out: Record<string, NonNullable<ReturnType<RemoteMcpConnector['getLedgerSnapshot']>>> = {};
+    for (const conn of this.service.list()) {
+      const snapshot = this.remoteMcp.getLedgerSnapshot(conn.id);
+      if (snapshot) out[conn.id] = snapshot;
     }
     return out;
   }
@@ -263,7 +346,7 @@ export class ConnectorService {
    * discarded — it is never written into the returned result.
    */
   async invoke(payload: ConnectorInvokePayload): Promise<AppConnectionResult<unknown>> {
-    const { connectionId, action, args } = payload;
+    const { connectionId, action, args, deadlineAt } = payload;
     if (!connectionId || typeof connectionId !== 'string') {
       return failure('connection_not_found', 'connectionId is required', false);
     }
@@ -340,7 +423,19 @@ export class ConnectorService {
           this.fetchImpl,
         );
       } else if (resolution.binding === 'mcp-remote') {
-        result = await this.remoteMcp.invoke(connectionId, conn.provider, action, args, tokenResult.data);
+        // Plan 580 D5: forward the worker-computed deadline so the SDK
+        // enforces one cut-off per request ({ timeout, signal }); a single
+        // aborted call never closes the shared transport.
+        result = await this.remoteMcp.invoke(
+          connectionId,
+          conn.provider,
+          action,
+          args,
+          tokenResult.data,
+          typeof deadlineAt === 'number' && Number.isFinite(deadlineAt) && deadlineAt > 0
+            ? { deadlineAt }
+            : undefined,
+        );
       } else {
         const connector = this.customModule(conn.provider);
         if (!connector) {

@@ -1,22 +1,48 @@
 /**
  * MCP Client - Model Context Protocol Client
  * Manages MCP server connections and tool calls
+ *
+ * Plan 580: transactional paginated discovery (D3), lifecycle truth
+ * (D2 — list_changed / onclose / onerror → degraded), single-deadline
+ * per-request abort (D5 — never closes a shared transport), canonical
+ * result blocks (D8), and error classification / breaker decoupling
+ * (D9) — all via the protocol-pure primitives in
+ * `@duya/plugin-core/src/mcp/core/`.
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import {
+  CallToolResultSchema,
+  ToolListChangedNotificationSchema,
+} from '@modelcontextprotocol/sdk/types.js';
 import type { Tool, ToolResult, MCPServerConfig, MCPConnectionStatus } from '../types.js';
 import { logger } from '../utils/logger.js';
 import { getCircuitBreakerManager, type CircuitBreaker } from './circuit-breaker.js';
 import { buildSafeEnv, sanitizeSecrets, scanMcpDescription } from './security.js';
+import { InventoryLedger } from './inventory-ledger.js';
+import {
+  listAllTools,
+  formatDiscoveryLogLine,
+  discoveryDebugEnabled,
+  createDeadlineClock,
+  classifyMcpError,
+  breakerDisposition,
+  errorCodeForClass,
+  McpError,
+} from '@duya/plugin-core/src/mcp/core/index.js';
+import { composeResultFromBlocks } from './result-blocks.js';
 
 // Three-level timeout defaults (seconds). A server may override each
 // level via config: `startupTimeoutSec`, `toolTimeoutSec`, and
 // `toolTimeouts` (per-tool). These are the fallbacks when unset.
 const DEFAULT_STARTUP_TIMEOUT_MS = 30_000; // 30s: spawn + handshake + listTools
 const DEFAULT_TOOL_TIMEOUT_MS = 120_000;   // 120s: default per-tool-call cap
+
+/** Plan 580 D2: debounce window for coalescing `tools/list_changed`. */
+const LIST_CHANGED_DEBOUNCE_MS = 500;
 
 /** Convert an optional seconds value to ms, falling back to `fallback`. */
 function timeoutMs(seconds: number | undefined, fallback: number): number {
@@ -39,16 +65,35 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 }
 
 /**
+ * Plan 580 D8 — deterministic, bounded (≤200 chars) single-line
+ * metadata for a non-text MCP content block lives in
+ * `./result-blocks.ts` (shared with the chain-B executor).
+ */
+
+/**
  * MCP Client - Manages connection to a single MCP server.
  * Internal to this module — only `MCPManager` is used externally.
  */
 class MCPClient {
   private client: Client | null = null;
-  private transport: StdioClientTransport | StreamableHTTPClientTransport | null = null;
+  private transport: Transport | null = null;
   private config: MCPServerConfig;
   private connectionStatus: MCPConnectionStatus = 'disconnected';
   private tools: Tool[] = [];
   private circuitBreaker: CircuitBreaker;
+  /** Plan 580 D2: server capabilities captured at initialize. */
+  private serverCapabilities: Record<string, unknown> | undefined;
+  /** Plan 580 D3: +1 on every successful transactional rediscovery commit. */
+  private inventoryRevision = 0;
+  /** Plan 580 D2: debounce state for tools/list_changed. */
+  private listChangedTimer: ReturnType<typeof setTimeout> | undefined;
+  private rediscoveryInFlight = false;
+  /** Plan 580 §D6: per-connection inventory ledger (chain A instance). */
+  private readonly ledger = new InventoryLedger();
+  /** True while an intentional disconnect closes the transport. */
+  private closing = false;
+  /** Plan 580 D2: set by MCPManager; fires after a successful rediscovery. */
+  private onToolsChanged: ((serverName: string) => void) | undefined;
 
   constructor(config: MCPServerConfig) {
     this.config = config;
@@ -72,6 +117,16 @@ class MCPClient {
   /** The underlying config (name + transport + timeouts). */
   getConfig(): MCPServerConfig {
     return this.config;
+  }
+
+  /**
+   * Plan 580 D2: register the post-rediscovery callback. Called by
+   * MCPManager (wired by apply.ts) so a list_changed notification can
+   * trigger a registry replace-set without the client knowing about
+   * the registry.
+   */
+  setOnToolsChanged(cb: ((serverName: string) => void) | undefined): void {
+    this.onToolsChanged = cb;
   }
 
   /**
@@ -134,6 +189,145 @@ class MCPClient {
     return this.tools;
   }
 
+  /** Plan 580 D2: server capabilities saved from `initialize`. */
+  getServerCapabilities(): Record<string, unknown> | undefined {
+    return this.serverCapabilities;
+  }
+
+  /** Plan 580 D3: monotonic inventory revision (per successful commit). */
+  getInventoryRevision(): number {
+    return this.inventoryRevision;
+  }
+
+  /** Plan 580 Phase 5: ledger snapshot for the diagnostics surface. */
+  getLedgerSnapshot(): ReturnType<InventoryLedger['getSnapshot']> {
+    return this.ledger.getSnapshot();
+  }
+
+  /**
+   * Plan 580 D2: mark transport death. `onclose`/`onerror` are the ONLY
+   * triggers — no speculative reconnect detection. Intentional
+   * disconnects set `closing` first and are exempt.
+   */
+  private markTransportDead(reason: string): void {
+    if (this.closing) return;
+    if (this.connectionStatus === 'disconnected') return;
+    this.connectionStatus = 'degraded';
+    logger.warn(`[MCP] transport dead for "${this.config.name}": ${reason} — status=degraded`);
+  }
+
+  /**
+   * Plan 580 D2: transactional rediscovery. Full paginated
+   * `tools/list`; the in-memory tool set is replaced ONLY on success
+   * (D6: a failed discovery never clears last-known inventory).
+   */
+  private async rediscoverTools(): Promise<void> {
+    if (!this.client || this.connectionStatus !== 'connected') return;
+    if (this.rediscoveryInFlight) return;
+    this.rediscoveryInFlight = true;
+    this.ledger.beginDiscovery();
+    try {
+      const deadline = createDeadlineClock(this.getStartupTimeoutMs());
+      const debug = discoveryDebugEnabled();
+      const result = await listAllTools(this.client, {
+        deadline,
+        generation: this.inventoryRevision + 1,
+        ...(debug ? { debugLog: (m: string) => logger.info(`[MCP] ${this.config.name} ${m}`) } : {}),
+      });
+      this.tools = result.tools.map((t) => this.toTool(t));
+      this.inventoryRevision++;
+      this.ledger.commitDiscovery({
+        pagesFetched: result.pagesFetched,
+        discoveredTotal: result.discoveredTotal,
+        truncated: result.truncated,
+        ...(this.serverCapabilities ? { serverCapabilities: this.serverCapabilities } : {}),
+      });
+      logger.info(
+        `[MCP] rediscovered tools for "${this.config.name}": ${formatDiscoveryLogLine(result)}`,
+      );
+      this.onToolsChanged?.(this.config.name);
+    } catch (err) {
+      // D6: discovery failed → keep last-known inventory, no replace.
+      this.ledger.failDiscovery();
+      logger.warn(
+        `[MCP] rediscovery failed for "${this.config.name}"; keeping last-known inventory: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    } finally {
+      this.rediscoveryInFlight = false;
+    }
+  }
+
+  /**
+   * Plan 580 D2: coalescing debounce for tools/list_changed. A burst
+   * of notifications triggers exactly one rediscovery.
+   */
+  private scheduleRediscovery(): void {
+    if (this.listChangedTimer) clearTimeout(this.listChangedTimer);
+    this.listChangedTimer = setTimeout(() => {
+      this.listChangedTimer = undefined;
+      void this.rediscoverTools();
+    }, LIST_CHANGED_DEBOUNCE_MS);
+  }
+
+  /** Map a Core descriptor to the agent Tool shape (annotations verbatim). */
+  private toTool(tool: { name: string; description?: string; inputSchema?: Record<string, unknown>; annotations?: Record<string, unknown> }): Tool {
+    // Security layer 3 (prompt injection scan): warn on suspicious tool
+    // descriptions. Does not block — false positives would break legit
+    // server descriptions. Warning only — the actual source-based
+    // blocking gate lives in the permission system (`decideMcpSource`).
+    scanMcpDescription(this.config.name, tool.name, tool.description || '');
+    const rawAnnotations = tool.annotations;
+    const annotations =
+      rawAnnotations && typeof rawAnnotations === 'object' && !Array.isArray(rawAnnotations)
+        ? (rawAnnotations as Record<string, unknown>)
+        : undefined;
+    return {
+      name: tool.name,
+      description: tool.description || '',
+      input_schema: (tool.inputSchema ?? { type: 'object', properties: {} }) as Record<string, unknown>,
+      ...(annotations ? { annotations } : {}),
+    };
+  }
+
+  /**
+   * Build the transport for the configured kind. Lifecycle-test seam
+   * (plan 580 Phase 2.5): a subclass may override this to inject an
+   * `InMemoryTransport` pair and exercise the REAL connect → notify →
+   * rediscover → degrade path against a fixture server without
+   * spawning a subprocess.
+   */
+  protected buildTransport(): Transport {
+    if (this.config.transport === 'streamable-http') {
+      if (!this.config.url) {
+        throw new Error('Streamable HTTP MCP server requires a URL');
+      }
+      return new StreamableHTTPClientTransport(new URL(this.config.url), {
+        requestInit: this.config.headers
+          ? { headers: this.config.headers }
+          : undefined,
+      });
+    }
+    if (!this.config.command) {
+      throw new Error('Stdio MCP server requires a command');
+    }
+    // Security layer 1 (env allowlist): strip secrets from the subprocess
+    // environment before spawning the MCP server process. MCP servers are
+    // untrusted external code; without this, any API key / token in the
+    // agent process env leaks to them. `envPassthrough: 'inherit'` opts
+    // out for trusted bundled servers that depend on inherited env.
+    const safeEnv = buildSafeEnv(this.config.env, {
+      forceInherit: this.config.envPassthrough === 'inherit',
+    });
+
+    return new StdioClientTransport({
+      command: this.config.command,
+      args: this.config.args,
+      env: safeEnv,
+    });
+  }
+
   /**
    * Connect to the MCP server
    */
@@ -149,45 +343,25 @@ class MCPClient {
 
     try {
       this.connectionStatus = 'connecting';
+      this.transport = this.buildTransport();
 
-      if (this.config.transport === 'streamable-http') {
-        if (!this.config.url) {
-          throw new Error('Streamable HTTP MCP server requires a URL');
-        }
-        this.transport = new StreamableHTTPClientTransport(new URL(this.config.url), {
-          requestInit: this.config.headers
-            ? { headers: this.config.headers }
-            : undefined,
-        });
-      } else {
-        if (!this.config.command) {
-          throw new Error('Stdio MCP server requires a command');
-        }
-        // Security layer 1 (env allowlist): strip secrets from the subprocess
-        // environment before spawning the MCP server process. MCP servers are
-        // untrusted external code; without this, any API key / token in the
-        // agent process env leaks to them. `envPassthrough: 'inherit'` opts
-        // out for trusted bundled servers that depend on inherited env.
-        const safeEnv = buildSafeEnv(this.config.env, {
-          forceInherit: this.config.envPassthrough === 'inherit',
-        });
-
-        this.transport = new StdioClientTransport({
-          command: this.config.command,
-          args: this.config.args,
-          env: safeEnv,
-        });
-      }
-
+      // Plan 580 D2: `tools.listChanged` is a SERVER capability (the server
+      // declares it will push `notifications/tools/list_changed`); the MCP
+      // spec has no client-side `tools` capability and SDK 1.30.0's
+      // ClientCapabilitiesSchema rejects it. Client-side subscription is the
+      // setNotificationHandler(ToolListChangedNotificationSchema) below.
       this.client = new Client(
         {
           name: 'duya-mcp-client',
           version: '0.1.0',
         },
-        {
-          capabilities: {},
-        }
+        { capabilities: {} },
       );
+
+      // Plan 580 D2: transport death → degraded (no speculative reconnect).
+      this.closing = false;
+      this.transport.onclose = () => this.markTransportDead('transport closed');
+      this.transport.onerror = (err) => this.markTransportDead(`transport error: ${err}`);
 
       const startupMs = this.getStartupTimeoutMs();
       await withTimeout(
@@ -196,44 +370,54 @@ class MCPClient {
         `connect to "${this.config.name}"`,
       );
 
-      // List available tools
-      const toolsResponse = await withTimeout(
-        this.client.listTools(),
-        startupMs,
-        `listTools for "${this.config.name}"`,
-      );
-      this.tools = toolsResponse.tools.map((tool: { name: string; description?: string; inputSchema?: unknown; annotations?: unknown }) => {
-        // Security layer 3 (prompt injection scan): warn on suspicious tool
-        // descriptions. Does not block — false positives would break legit
-        // server descriptions. Warning only — the actual source-based
-        // blocking gate lives in the permission system (`decideMcpSource`).
-        scanMcpDescription(this.config.name, tool.name, tool.description || '');
-        // MCP `tools/list` may include `annotations` (readOnly,
-        // destructive, openWorld). The SDK types are permissive
-        // (Record<string, unknown>) and we keep them verbatim so the
-        // `mcp:status:snapshot` SSE event can surface them to the
-        // settings UI without a second IPC round-trip.
-        const rawAnnotations = tool.annotations;
-        const annotations =
-          rawAnnotations && typeof rawAnnotations === 'object' && !Array.isArray(rawAnnotations)
-            ? (rawAnnotations as Record<string, unknown>)
-            : undefined;
-        return {
-          name: tool.name,
-          description: tool.description || '',
-          input_schema: tool.inputSchema as Record<string, unknown>,
-          ...(annotations ? { annotations } : {}),
-        };
+      // Plan 580 D2: save server capabilities from the initialize result.
+      try {
+        const caps = this.client.getServerCapabilities();
+        if (caps && typeof caps === 'object') {
+          this.serverCapabilities = caps as Record<string, unknown>;
+        }
+      } catch {
+        // getServerCapabilities is sync and should not throw; defensive.
+      }
+
+      // Plan 580 D2: tools/list_changed → debounce → transactional rediscovery.
+      this.client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+        logger.info(`[MCP] tools/list_changed from "${this.config.name}" (debounced ${LIST_CHANGED_DEBOUNCE_MS}ms)`);
+        this.scheduleRediscovery();
+      });
+
+      // Plan 580 D3: transactional paginated discovery (Phase 0
+      // instrumentation: DUYA_MCP_DISCOVERY_DEBUG=1 logs every page with
+      // cursor/pages/total under the SAME connection / OAuth grant).
+      const startupDeadline = createDeadlineClock(startupMs);
+      const debug = discoveryDebugEnabled();
+      const discovery = await listAllTools(this.client, {
+        deadline: startupDeadline,
+        generation: this.inventoryRevision + 1,
+        ...(debug ? { debugLog: (m: string) => logger.info(`[MCP] ${this.config.name} ${m}`) } : {}),
+      });
+
+      // Post-discovery generation check: nothing can supersede during a
+      // connect, but keep the guard symmetric with rediscovery.
+      this.tools = discovery.tools.map((t) => this.toTool(t));
+      this.inventoryRevision++;
+      this.ledger.commitDiscovery({
+        pagesFetched: discovery.pagesFetched,
+        discoveredTotal: discovery.discoveredTotal,
+        truncated: discovery.truncated,
+        ...(this.serverCapabilities ? { serverCapabilities: this.serverCapabilities } : {}),
       });
 
       this.connectionStatus = 'connected';
       this.circuitBreaker.recordSuccess();
-      
-      logger.info(`[MCP] Connected to server: ${this.config.name} (${this.tools.length} tools)`);
+
+      logger.info(
+        `[MCP] Connected to server: ${this.config.name} (${formatDiscoveryLogLine(discovery)})`,
+      );
     } catch (error) {
       this.connectionStatus = 'error';
       this.circuitBreaker.recordFailure();
-      
+
       const errorMsg = error instanceof Error ? error.message : String(error);
       logger.error(`[MCP] Failed to connect to server: ${this.config.name} - ${errorMsg}`);
       throw new Error(`Failed to connect to MCP server ${this.config.name}: ${errorMsg}`);
@@ -244,6 +428,12 @@ class MCPClient {
    * Disconnect from the MCP server
    */
   async disconnect(): Promise<void> {
+    // Intentional close — exempt from the degraded transition.
+    this.closing = true;
+    if (this.listChangedTimer) {
+      clearTimeout(this.listChangedTimer);
+      this.listChangedTimer = undefined;
+    }
     if (this.client) {
       await this.client.close();
       this.client = null;
@@ -259,50 +449,104 @@ class MCPClient {
 
   /**
    * Call a tool on the MCP server
+   *
+   * Plan 580 D5: single deadline → SDK `{ timeout, signal }`. The SDK
+   * sends a per-request cancellation on abort; we NEVER close the
+   * shared transport for one aborted call (it serves parallel calls).
    */
   async callTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
-    if (!this.client || this.connectionStatus !== 'connected') {
-      throw new Error(`MCP server not connected: ${this.config.name}`);
+    const fail = (message: string, code?: string): ToolResult => ({
+      id: `${this.config.name}-${name}`,
+      name,
+      result: code ? `[${code}] ${message}` : message,
+      error: true,
+    });
+
+    if (!this.client) {
+      return fail(`MCP server not connected: ${this.config.name}`, 'MCP_TRANSPORT');
+    }
+    // Plan 580 D2: a degraded transport fails immediately instead of
+    // hanging on the SDK 60s default timeout.
+    if (this.connectionStatus === 'degraded') {
+      return fail(`MCP transport degraded for server: ${this.config.name}`, 'MCP_TRANSPORT');
+    }
+    if (this.connectionStatus !== 'connected') {
+      return fail(`MCP server not connected: ${this.config.name}`, 'MCP_TRANSPORT');
     }
 
-    // Check circuit breaker
+    // Check connection-level circuit breaker
     if (!this.circuitBreaker.canExecute()) {
-      throw new Error(`Circuit breaker is open for MCP server: ${this.config.name}`);
+      return fail(`Circuit breaker is open for MCP server: ${this.config.name}`, 'MCP_TRANSPORT');
     }
+
+    // Plan 580 D9: tool-scoped breaker (timeout disposition) — independent
+    // counter keyed connection:tool, same parameters as the connection
+    // breaker. A slow generation tool must never fuse the whole server.
+    const toolScopedBreaker = getCircuitBreakerManager().getBreaker(`${this.config.name}:${name}`);
+    if (!toolScopedBreaker.canExecute()) {
+      return fail(
+        `Circuit breaker is open for MCP tool: ${this.config.name}.${name} (repeated timeouts)`,
+        'MCP_TIMEOUT',
+      );
+    }
+
+    // Plan 580 D5: effective timeout = per-tool override → server default
+    // → 120s global. One deadline drives both the SDK `timeout` and the
+    // `signal`; no outer race timer, no transport close fallback.
+    const effectiveTimeoutMs = this.getToolTimeoutMs(name);
+    const deadline = createDeadlineClock(effectiveTimeoutMs);
 
     try {
-      const result = await withTimeout(
-        this.client.callTool(
-          {
-            name,
-            arguments: args,
-          },
-          CallToolResultSchema
-        ),
-        this.getToolTimeoutMs(name),
-        `callTool "${this.config.name}.${name}"`,
+      const result = await this.client.callTool(
+        {
+          name,
+          arguments: args,
+        },
+        CallToolResultSchema,
+        { timeout: deadline.remainingMs(), signal: deadline.signal },
       );
 
+      // Success closes BOTH breakers (connection + tool-scoped).
       this.circuitBreaker.recordSuccess();
+      toolScopedBreaker.recordSuccess();
 
-      // Convert MCP result to ToolResult
-      const content = result.content as Array<{ type: string; text?: string }>;
-      const textContent = content
-        .filter((c): c is { type: 'text'; text: string } => c.type === 'text')
-        .map(c => c.text)
-        .join('\n');
+      // Plan 580 D8: canonical blocks saved losslessly; model-facing text
+      // = text blocks joined + bounded metadata lines for non-text blocks
+      // (shared last-mile in ./result-blocks.ts).
+      const content = (result.content ?? []) as Array<Record<string, unknown>>;
+      const composed = composeResultFromBlocks(content);
 
       const toolResult: ToolResult = {
         id: `${this.config.name}-${name}`,
-        name: name,
-        result: textContent,
+        name,
+        result: composed.text,
+        ...(composed.hasNonText ? { blocks: content as unknown[] } : {}),
+        ...(result.structuredContent !== undefined ? { structured: result.structuredContent } : {}),
       };
       if (result.isError) {
+        // Plan 580 D9: a JSON-RPC-level success carrying isError=true is a
+        // BUSINESS error (server's normal answer) — no breaker impact.
         toolResult.error = true;
       }
       return toolResult;
     } catch (error) {
-      this.circuitBreaker.recordFailure();
+      // Plan 580 D9: classify → disposition. Only transport/protocol
+      // failures count toward the connection breaker; timeouts count
+      // toward the tool-scoped breaker; auth/business are ignored.
+      const { cls, disposition } = (() => {
+        const c = classifyMcpError(error);
+        return { cls: c, disposition: breakerDisposition(c) };
+      })();
+      switch (disposition) {
+        case 'connection':
+          this.circuitBreaker.recordFailure();
+          break;
+        case 'tool-scoped':
+          toolScopedBreaker.recordFailure();
+          break;
+        case 'ignore':
+          break;
+      }
 
       const rawMsg = error instanceof Error ? error.message : String(error);
       // Security layer 2 (secret sanitization): redact credential-like
@@ -311,11 +555,12 @@ class MCPClient {
       // this, a misconfigured MCP server that echoes its auth token in
       // an error string would leak it into the conversation history.
       const errorMsg = sanitizeSecrets(rawMsg);
-      logger.error(`[MCP] Tool call failed: ${this.config.name}.${name} - ${rawMsg}`);
+      const code = errorCodeForClass(cls);
+      logger.error(`[MCP] Tool call failed (${cls}/${disposition}): ${this.config.name}.${name} - ${rawMsg}`);
       return {
         id: `${this.config.name}-${name}`,
-        name: name,
-        result: `Error: ${errorMsg}`,
+        name,
+        result: `[${code}] ${errorMsg}`,
         error: true,
       };
     }
@@ -368,6 +613,19 @@ class MCPClient {
  */
 export class MCPManager {
   private clients: Map<string, MCPClient> = new Map();
+  /** Plan 580 D2: post-rediscovery callback wired by apply.ts. */
+  private toolsChangedHandler: ((serverName: string) => void) | undefined;
+
+  /**
+   * Plan 580 D2: register the tools-changed callback. Applies to every
+   * current AND future client of this manager.
+   */
+  setOnToolsChanged(cb: ((serverName: string) => void) | undefined): void {
+    this.toolsChangedHandler = cb;
+    for (const client of this.clients.values()) {
+      client.setOnToolsChanged(cb);
+    }
+  }
 
   /**
    * Stable fingerprint of the connect-relevant fields of a config.
@@ -390,6 +648,7 @@ export class MCPManager {
    */
   async addServer(config: MCPServerConfig): Promise<MCPClient> {
     const client = new MCPClient(config);
+    client.setOnToolsChanged(this.toolsChangedHandler);
     await client.connect();
     this.clients.set(config.name, client);
     return client;
@@ -404,6 +663,7 @@ export class MCPManager {
    */
   adopt(client: MCPClient, newConfig: MCPServerConfig): MCPClient {
     client.applyConfigUpdate(newConfig);
+    client.setOnToolsChanged(this.toolsChangedHandler);
     this.clients.set(client.getName(), client);
     return client;
   }
@@ -572,3 +832,8 @@ export class MCPManager {
     }));
   }
 }
+
+export { MCPClient };
+
+// Plan 580 D9: McpError re-exported for consumers translating errors.
+export { McpError };

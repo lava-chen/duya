@@ -26,7 +26,7 @@ export {
   type ComputerUseToolEnvelope,
 } from './ComputerUseTool.js';
 
-// Plan 575: the 14-tool ZCode-aligned CUA surface.
+// Plan 575: the 14-operation Windows accessibility CUA surface.
 export {
   COMPUTER_CUA_TOOL_NAME,
   COMPUTER_CUA_IPC_CHANNEL,

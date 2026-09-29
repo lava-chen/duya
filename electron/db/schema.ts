@@ -2,6 +2,7 @@ import { getLogger, LogComponent } from '../logging/logger';
 import { ensureToolApprovalTables } from './toolApprovalState';
 import { ensureWorkbenchTables } from '../conductor/workbench-store';
 import { createSendMessageStateTables } from './sendMessageState';
+import { deriveConnectionSlug } from '@duya/plugin-core/src/mcp/core/alias.js';
 
 // Use type-only import to avoid bundling better-sqlite3 in the schema module
 type BetterSqlite3Db = import('better-sqlite3').Database;
@@ -446,7 +447,8 @@ export function initializeSchema(db: BetterSqlite3Db): void {
       expires_at INTEGER,
       last_error TEXT,
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      connection_slug TEXT NOT NULL DEFAULT ''
     )
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_app_connections_provider ON app_connections(provider)`);
@@ -895,7 +897,8 @@ function markMigrationApplied(db: BetterSqlite3Db, migration: Migration): void {
     .run(migration.id, migration.name, Date.now());
 }
 
-const migrations: Migration[] = [
+/** All ordered schema migrations. Exported for targeted migration tests. */
+export const migrations: Migration[] = [
   {
     id: 1,
     name: 'ensure_chat_sessions_columns',
@@ -2659,6 +2662,59 @@ const migrations: Migration[] = [
             model = COALESCE((SELECT model FROM chat_sessions WHERE id = messages.session_id), ''),
             provider_id = COALESCE((SELECT provider_id FROM chat_sessions WHERE id = messages.session_id), '')
         `);
+      }
+    },
+  },
+  {
+    // Plan 580 D7: stable per-connection slug for namespace identity.
+    // '' = the provider's FIRST connection holding the bare namespace
+    // (`notion`) for life; later connections derive a 4-hex slug from
+    // fnv1a(connectionId) and address `notion:<slug>`. The slug is
+    // assigned once at creation and never changes; a removed bare-name
+    // holder is never "promoted" onto an existing derived connection.
+    // Backfill: per provider, the OLDEST row keeps '', the rest derive.
+    id: 58,
+    name: 'add_connection_slug_to_app_connections',
+    migrate(db: BetterSqlite3Db): void {
+      const tableInfo = db.prepare('PRAGMA table_info(app_connections)').all() as Array<{ name: string }>;
+      if (!tableInfo.map((col) => col.name).includes('connection_slug')) {
+        db.exec(`ALTER TABLE app_connections ADD COLUMN connection_slug TEXT NOT NULL DEFAULT ''`);
+      }
+      // Backfill rows that still carry the default. Per provider, the
+      // oldest connection (created_at, then id for determinism) holds
+      // the bare namespace; every other connection derives its slug
+      // from its connectionId with collision avoidance inside the
+      // provider's taken set.
+      const rows = db
+        .prepare(
+          `SELECT id, provider, connection_slug FROM app_connections
+           ORDER BY provider, created_at, id`,
+        )
+        .all() as Array<{ id: string; provider: string; connection_slug: string }>;
+      const takenByProvider = new Map<string, Set<string>>();
+      const update = db.prepare('UPDATE app_connections SET connection_slug = ? WHERE id = ?');
+      for (const row of rows) {
+        if (row.connection_slug !== '') {
+          // Already derived (defensive: transaction normally means every
+          // row is on the default at this point) — claim its slug.
+          let taken = takenByProvider.get(row.provider);
+          if (!taken) {
+            taken = new Set<string>();
+            takenByProvider.set(row.provider, taken);
+          }
+          taken.add(row.connection_slug);
+          continue;
+        }
+        let taken = takenByProvider.get(row.provider);
+        if (!taken) {
+          // Oldest default row of this provider → claims the bare
+          // namespace for life; nothing to write (already '').
+          takenByProvider.set(row.provider, new Set<string>(['']));
+          continue;
+        }
+        const slug = deriveConnectionSlug(row.id, taken);
+        taken.add(slug);
+        update.run(slug, row.id);
       }
     },
   },

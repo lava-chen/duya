@@ -41,7 +41,6 @@ import type {
 import type { MCPServerConfig, Tool, ToolUseContext } from '../types.js';
 import type { ToolExecutor, ToolMetaInput } from '../tool/registry.js';
 import { readToolExposureConfig, mcpExposureToToolExposure } from '../config/tool-exposure.js';
-import { downgradeToolSchemaForBudget } from '../tool/spec-budget.js';
 import { buildToolHint } from './tool-hint.js';
 import { MCPManager } from './index.js';
 import { ToolRegistry, MCPRegistryReplaceError } from '../tool/registry.js';
@@ -65,6 +64,10 @@ export type ApplyReason =
   | 'plugin:install'
   | 'plugin:enable'
   | 'plugin:disable'
+  // Plan 580 D2: a server sent `notifications/tools/list_changed` and
+  // the client completed its transactional rediscovery; the registry
+  // replace-set reuses the standard apply pipeline.
+  | 'mcp:tools_changed'
   | 'manual';
 
 export interface ApplyOpts {
@@ -261,6 +264,25 @@ export function applyMCPConfiguration(opts: ApplyOpts): Promise<MCPApplyResult> 
   return enqueueApply(() => runApply(opts));
 }
 
+// Plan 580 D2: a client's transactional rediscovery completed; refresh
+// the registry replace-set through the standard apply pipeline. The
+// client side already debounces notifications (500ms coalesce); this
+// extra schedule fires the reload through the apply mutex. Re-entrant
+// safety: the reload adopts existing clients (config signature
+// unchanged) without reconnecting, so it cannot loop.
+let toolsChangedReloadTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleToolsChangedReload(agent: DuyaAgentLike): void {
+  if (toolsChangedReloadTimer) clearTimeout(toolsChangedReloadTimer);
+  toolsChangedReloadTimer = setTimeout(() => {
+    toolsChangedReloadTimer = undefined;
+    void applyMCPConfiguration({ agent, reason: 'mcp:tools_changed' }).catch((err) => {
+      logger.warn(
+        `[MCP] tools_changed reload failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+  }, 0);
+}
+
 async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
   const committedAt = Date.now();
   const { agent, reason, agentProfileId } = opts;
@@ -292,6 +314,14 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
   const allocateProviderName = buildProviderNameAllocator(initialUsedNames);
 
   const nextManager = new MCPManager();
+  // Plan 580 D2: wire tools/list_changed → registry replace-set. The
+  // client performs the transactional rediscovery (last-known inventory
+  // kept on failure); this callback only re-runs the apply pipeline so
+  // the long-lived registry mirrors the new inventory.
+  nextManager.setOnToolsChanged((serverName) => {
+    logger.info(`[MCP] tools changed on "${serverName}"; scheduling registry reload`);
+    scheduleToolsChangedReload(agent);
+  });
   // Build all server configs first (synchronous, no inter-config
   // dependencies), then connect in parallel. Each addServer call
   // spawns an independent child process + handshake + listTools
@@ -573,14 +603,18 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
     // Plan 480 P1.4: per-tool hint derived from the raw schema (argument-name
     // list with `(required)` markers, same shape as the built-in
     // `image_generate` hint). Catalog results use this truthful, one-line
-    // summary. Extracted BEFORE the spec budget downgrade
-    // so a truncated schema still yields its original argument list.
+    // summary. Extracted BEFORE any projection so a truncated schema still
+    // yields its original argument list.
     const hint = buildToolHint(t) || 'No structured arguments';
     preparedEntries.push({
       key: t.internalKey,
-      // Plan 452 Phase A: bound the spec so a pathologically large server
-      // schema does not overwhelm a direct-exposure request.
-      definition: downgradeToolSchemaForBudget(t, hint).definition,
+      // Plan 580 D4: the registry entry holds the CANONICAL schema
+      // verbatim (Ajv validation, catalog detail, and the schema
+      // revision all consume it). The 8KB spec budget + type-root wrap
+      // moved to the last-mile `projectForProvider` in
+      // `DuyaAgent._resolveTools` — budget trimming never pollutes the
+      // canonical form anymore.
+      definition: t,
       executor,
       meta: {
         exposure: mcpExposureToToolExposure(readToolExposureConfig().exposure),

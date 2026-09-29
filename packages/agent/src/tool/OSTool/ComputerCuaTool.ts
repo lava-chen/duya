@@ -47,7 +47,7 @@ export const COMPUTER_CUA_TOOLS = [
 
 export type ComputerCuaToolName = (typeof COMPUTER_CUA_TOOLS)[number];
 
-/** Element or coordinate target (ZCode-aligned targeting vocabulary). */
+/** Target an accessible UI element or a point in the latest screenshot. */
 const targetSchema = z.union([
   z.object({ type: z.literal('element'), index: z.number().int().nonnegative() }),
   z.object({ type: z.literal('coordinate'), x: z.number().int().nonnegative(), y: z.number().int().nonnegative() }),
@@ -61,7 +61,7 @@ export const computerCuaInputSchema = z.object({
   windowId: z.number().optional(),
   includeScreenshot: z.boolean().optional(),
   maxElements: z.number().int().positive().optional(),
-  // get_app_state: force a full UIA re-scan instead of the cached tree.
+  // get_app_state: force a full accessibility-tree scan instead of the cached tree.
   fresh: z.boolean().optional(),
   // Element / coordinate targets.
   target: targetSchema.optional(),
@@ -77,7 +77,7 @@ export const computerCuaInputSchema = z.object({
   // Keyboard.
   key: z.string().optional(),
   modifiers: z.array(z.enum(['ctrl', 'alt', 'shift', 'meta'])).optional(),
-  // perform_action: AX-vocabulary semantic action (AXPress, AXToggle, ...).
+  // perform_action: semantic action advertised by the selected control.
   action: z.string().optional(),
 });
 
@@ -91,53 +91,46 @@ export interface ComputerCuaEnvelope<T = unknown> {
 
 /**
  * Tool definition. Accessibility-first workflow, mirroring the ZCode
- * CUA skill semantics: observe → act on element indices → re-observe;
- * coordinate clicks need a fresh screenshot frame.
+ * Observe the window, act on its elements, then observe again. Coordinate
+ * actions use pixels from the latest screenshot.
  */
 export const definition: Tool = {
   name: COMPUTER_CUA_TOOL_NAME,
   description:
-    'System-level computer use for Windows (ZCode/Codex-aligned CUA surface). Accessibility-first:\n' +
-    '  1. get_app_state — read a window as an indexed element tree ([n] kind title = value actions=[...]); pass includeScreenshot=true for pixels (also arms coordinate clicks). Minimized windows are addressable: the tree reads fine, and includeScreenshot=true first restores the window WITHOUT stealing the user\'s focus\n' +
-    '  2. Act on ELEMENT indices: left_click / set_value / perform_action (AXPress, AXToggle, ...) / select_text — these ride UIA patterns, work on background windows, and re-verify after dispatch\n' +
-    '  3. list_apps / list_windows to find pid / window_id (list_windows includes minimized windows); request_access to check readiness; stop_computer_control to drop session state\n\n' +
-    'Rules:\n' +
-    '  - Element indices are scoped to the app_ref (pid/name/windowId) of your last get_app_state; re-observe after navigation. On ELEMENT_UNAVAILABLE / STALE_STATE, re-observe FIRST (pass fresh=true to force a re-scan — the cached tree may be up to a few minutes old) — never blindly repeat an action (left_click may have possibly_sent)\n' +
-    '  - To switch apps, just get_app_state the target (name/pid/windowId) — it never needs the foreground. After switching, your old indices belong to the previous window\n' +
-    '  - An app that is not running cannot be observed — launch it via the Bash tool first (start "QQ" / Start-Process); this surface has no launch primitive\n' +
-    '  - Coordinate targets are pixels of the LAST screenshot YOU received (get_app_state includeScreenshot=true); without a frame they are refused\n' +
-    '  - Empty tree = custom-drawn window (or elevated → PERMISSION_DENIED): fall back to the older computer_use vision loop instead of retrying\n' +
-    '  - NOT_SETTABLE / NOT_SELECTABLE / ACTION_UNAVAILABLE are capability refusals: change approach, do not retry\n' +
-    '  - paste and type route through the host clipboard/keyboard — keep text short and confirm the field had focus via set_value where possible',
+    'Interact with running Windows apps through accessible UI elements and screenshots. Use list_apps or list_windows to find an app, then get_app_state to inspect its controls.\n\n' +
+    'Use element indices from the latest get_app_state result for clicks, text entry, selection, and advertised element actions. Indices belong to that app and can change after navigation, so inspect the app again before acting on stale indices. If an action reports ELEMENT_UNAVAILABLE or STALE_STATE, inspect again; fresh=true forces a new scan.\n\n' +
+    'Available actions include left_click, left_click_drag, scroll, type, set_value, select_text, key, perform_action, and paste. request_access checks whether computer access is ready; stop_computer_control ends the current control session.\n\n' +
+    'Set includeScreenshot=true when you need a visual view or must act on coordinates. Coordinates refer to pixels in the latest screenshot for that window. Minimized windows can be inspected; requesting a screenshot restores the window without taking focus from the user.\n\n' +
+    'Only running apps can be inspected. If an app is not running, launch it separately first. An empty accessibility tree can mean the app uses custom-drawn controls or requires elevated access; use the screenshot-based computer tool when available. Capability errors such as NOT_SETTABLE, NOT_SELECTABLE, and ACTION_UNAVAILABLE mean that action is unsupported; choose another approach instead of retrying it. Text entry uses the host keyboard or clipboard, so confirm the intended field is focused.',
   input_schema: {
     type: 'object',
     properties: {
       tool: {
         type: 'string',
         enum: [...COMPUTER_CUA_TOOLS],
-        description: 'Which CUA operation to run.',
+        description: 'Operation to perform on the selected app or its windows.',
       },
-      pid: { type: 'number', description: 'app_ref: target process id' },
-      name: { type: 'string', description: 'app_ref: window title substring (visible or minimized; ambiguous matches are refused)' },
-      windowId: { type: 'number', description: 'app_ref: exact top-level window handle from list_windows (works for minimized windows too)' },
-      includeScreenshot: { type: 'boolean', description: 'get_app_state: attach a window screenshot (arms coordinate clicks); on a minimized window it first restores the window without stealing focus' },
-      maxElements: { type: 'number', description: 'get_app_state: element cap in the rendered tree' },
-      fresh: { type: 'boolean', description: 'get_app_state: force a full UIA re-scan instead of the cached tree (use when receipts smell stale, e.g. after stale-tree)' },
+      pid: { type: 'number', description: 'Process ID of the app to inspect or control.' },
+      name: { type: 'string', description: 'Window title or app name to match. Ambiguous matches are refused.' },
+      windowId: { type: 'number', description: 'Exact top-level window ID returned by list_windows.' },
+      includeScreenshot: { type: 'boolean', description: 'Attach a screenshot of the window. Required before using coordinate targets. A minimized window is restored without taking focus.' },
+      maxElements: { type: 'number', description: 'Maximum number of accessible controls to include in the result.' },
+      fresh: { type: 'boolean', description: 'Force a new scan of the app instead of using the cached control list.' },
       target: {
         type: 'object',
-        description: 'Action target: {type:"element",index} (0-based from get_app_state) or {type:"coordinate",x,y} (last-screenshot pixels)',
+        description: 'Target either an accessible control by its 0-based index from get_app_state, or a point (x, y) in the latest screenshot.',
       },
-      from: { type: 'object', description: 'left_click_drag: start target' },
-      to: { type: 'object', description: 'left_click_drag: end target' },
-      button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'left_click: mouse button' },
-      clickCount: { type: 'number', description: 'left_click: 1=single, 2=double, 3=triple' },
-      direction: { type: 'string', enum: ['up', 'down', 'left', 'right'], description: 'scroll: wheel direction' },
-      pages: { type: 'number', description: 'scroll: wheel amount (default 1)' },
-      text: { type: 'string', description: 'type: text to type | select_text: text to locate and select | paste: text to stage' },
-      value: { type: 'string', description: 'set_value: replacement value (ValuePattern, bypasses IME)' },
-      key: { type: 'string', description: 'key: key or chord ("Return", "ctrl+a", "super+c")' },
-      modifiers: { type: 'array', items: { type: 'string', enum: ['ctrl', 'alt', 'shift', 'meta'] }, description: 'key: held modifiers' },
-      action: { type: 'string', description: 'perform_action: semantic action the element advertises (see actions=[...] in the tree)' },
+      from: { type: 'object', description: 'Starting target for a drag.' },
+      to: { type: 'object', description: 'Ending target for a drag.' },
+      button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'Mouse button to use for a click.' },
+      clickCount: { type: 'number', description: 'Number of clicks: 1 for single, 2 for double, or 3 for triple.' },
+      direction: { type: 'string', enum: ['up', 'down', 'left', 'right'], description: 'Direction to scroll.' },
+      pages: { type: 'number', description: 'Amount to scroll, in pages. Defaults to 1.' },
+      text: { type: 'string', description: 'Text to type or paste, or text to find and select.' },
+      value: { type: 'string', description: 'New value to set on the selected control.' },
+      key: { type: 'string', description: 'Key or key combination, such as "Return" or "ctrl+a".' },
+      modifiers: { type: 'array', items: { type: 'string', enum: ['ctrl', 'alt', 'shift', 'meta'] }, description: 'Modifier keys to hold while pressing a key.' },
+      action: { type: 'string', description: 'Action listed for the selected control in get_app_state.' },
     },
     required: ['tool'],
   },

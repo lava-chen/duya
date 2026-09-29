@@ -384,6 +384,51 @@ Key wiring:
   implemented. Existing deferred-schema utilities alone do not establish native
   search support.
 
+#### MCP Capability Core (plan 580)
+
+MCP capability flows through four layers, all fed by one protocol-pure Core:
+
+1. **Core** (`packages/plugin-core/src/mcp/core/`) — no I/O, no agent deps:
+   transactional paginated discovery (`listAllTools` — commit only on normal
+   cursor exhaustion; mid-page failure throws and discards), descriptor
+   canonicalization, stable slug/alias allocation (D7), `DeadlineClock` (D5 —
+   one deadline per pass, SDK receives `{ timeout, signal }`, a shared
+   transport is never closed for one aborted request), error taxonomy (D9 —
+   `classifyMcpError` + `breakerDisposition`), and ledger types. Both chains
+   import this code; behavior cannot drift.
+2. **Registry** (`packages/agent/src/tool/registry.ts`) — definitions,
+   executors, owner-scoped replace-sets (`replaceByOwner`). Every successful
+   mutation bumps a monotonic `catalogRevision` (D10).
+3. **Catalog** (`ToolCatalogTool`) — three mutually exclusive modes: `search`
+   (ranked matches, no schemas), `list(namespace)` (keyset paging with an
+   opaque cursor bound to `(catalogRevision, namespace)`; a revision change
+   mid-page-walk → `CATALOG_CURSOR_STALE`), and `detail(tool_id)` (canonical
+   schema verbatim, deep-equal).
+4. **Exposure** — `eager` / `deferred` / `hidden` as above; the connector
+   Apps system section renders unconditionally so the model can always
+   enumerate via `tool_catalog` list mode.
+
+Two chains share Core and differ only in transport placement:
+
+- **Chain A** (worker, `packages/agent/src/mcp/index.ts`): one `MCPClient` per
+  stdio / streamable-http server inside the agent worker; tools land in the
+  registry through `MCPManager` → `setOnToolsChanged` replace-set.
+- **Chain B** (main, `electron/services/app-connections/connectors/remote-mcp.ts`):
+  OAuth-capable remote connectors in the main process; the worker's
+  `AppConnectionTool` calls over IPC with a `deadlineAt` stamp (+30s IPC
+  buffer), and results round-trip through the same D8 last-mile
+  (`composeResultFromBlocks`, lossless `ToolResult.blocks`).
+
+Lifecycle truth (D2/D6): `transport.onclose`/`onerror` are the ONLY death
+signals → status `degraded` → `callTool` fails fast with `MCP_TRANSPORT`;
+`tools/list_changed` → 500ms debounce → transactional rediscovery → replace-set
+commit; a failed discovery NEVER clears last-known inventory. Each chain keeps
+an `InventoryLedger` (`discoveryStatus: complete|refreshing|failed|stale` +
+five-layer metrics) surfaced through `mcp:status:snapshot` and the chain-B
+connection status DTO (optional `ledger` field). Admission gate: conformance
+L1–L9 (`packages/agent/tests/integration/mcp-conformance.test.ts`, AGENTS.md
+Gates).
+
 ### Mode System (Plan 224)
 
 Modes are declarative `ModeModifier` objects:

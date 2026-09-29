@@ -22,6 +22,18 @@
 
 import type { Tool, ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolExecutor, ToolMetaInput } from '../registry.js';
+import { connectionNamespace } from '@duya/plugin-core/src/mcp/core/alias.js';
+import { composeResultFromBlocks } from '../../mcp/result-blocks.js';
+
+/**
+ * Plan 580 D5: chain-B per-call deadline, mirroring chain A's default
+ * tool-call cap (120s). The worker stamps an absolute `deadlineAt`; the
+ * main process honors it via the SDK's per-request `{ timeout, signal }`.
+ * The IPC wait gets a +30s buffer so the main side times out FIRST and
+ * returns a structured error instead of the IPC layer racing it.
+ */
+const CHAIN_B_TOOL_TIMEOUT_MS = 120_000;
+const CHAIN_B_IPC_BUFFER_MS = 30_000;
 
 /**
  * Descriptor shape sent from the main process. Mirrors
@@ -31,11 +43,14 @@ import type { ToolExecutor, ToolMetaInput } from '../registry.js';
 export interface AppConnectionToolDescriptor {
   name: string;
   description: string;
-  inputSchema: {
-    type: 'object';
-    properties: Record<string, unknown>;
-    required?: string[];
-  };
+  /**
+   * Plan 580 D4: CANONICAL input schema, verbatim from the remote MCP
+   * server (any JSON-schema shape, including combinator roots like
+   * `oneOf`). Ajv validation, catalog detail, and the schema revision
+   * hash all use this as-is; the model-facing projection is generated
+   * at the last mile in `_resolveTools` via `projectForProvider`.
+   */
+  inputSchema: Record<string, unknown>;
   inputSchemaSummary: string;
   riskTier: 'read' | 'draft' | 'write' | 'modify' | 'destructive';
   /**
@@ -60,23 +75,26 @@ export interface AppConnectionToolDescriptor {
    */
   providerLabel?: string;
   connectionId: string;
+  /**
+   * Plan 580 D7: persisted connection slug ('' = the provider's first
+   * connection, holding the bare namespace for life). Older main
+   * processes omit the field — treated as '' (bare namespace).
+   */
+  connectionSlug?: string;
   action: string;
 }
 
 /**
  * Build the agent-side `Tool` definition from a descriptor.
- * The `input_schema` is forwarded as-is so the LLM sees the same shape
- * the connector module declared.
+ * Plan 580 D4: the canonical `input_schema` is forwarded VERBATIM — the
+ * legacy unconditional `type: 'object'` overwrite is gone (it corrupted
+ * combinator roots before the registry could hash the canonical form).
  */
 function buildToolDefinition(desc: AppConnectionToolDescriptor): Tool {
   return {
     name: desc.name,
     description: desc.description,
-    input_schema: {
-      ...desc.inputSchema,
-      // Ensure `type: 'object'` is always present (defensive).
-      type: 'object' as const,
-    },
+    input_schema: desc.inputSchema,
   };
 }
 
@@ -108,14 +126,19 @@ function buildExecutor(desc: AppConnectionToolDescriptor): ToolExecutor {
         };
       }
 
+      // Plan 580 D5: one absolute deadline per call, computed here and
+      // honored main-side (SDK per-request timeout+signal; the shared
+      // transport is never closed for an aborted call).
+      const deadlineAt = Date.now() + CHAIN_B_TOOL_TIMEOUT_MS;
       const response = await context.ipcRequest(
         'appConnection:invoke',
         {
           connectionId: desc.connectionId,
           action: desc.action,
           args: input,
+          deadlineAt,
         },
-        { timeout: 60_000 },
+        { timeout: CHAIN_B_TOOL_TIMEOUT_MS + CHAIN_B_IPC_BUFFER_MS },
       );
 
       if (!response.success) {
@@ -157,6 +180,28 @@ function buildExecutor(desc: AppConnectionToolDescriptor): ToolExecutor {
         };
       }
 
+      // Plan 580 D8: for the remote-MCP binding the main process returns
+      // `data.content` as the MCP content array. Compose the model-visible
+      // text with the SHARED last-mile (text verbatim + bounded metadata
+      // lines), and save the canonical blocks losslessly in
+      // `ToolResult.blocks`. Other bindings (REST / custom) keep the JSON
+      // envelope — their data never contains base64 media blocks.
+      const data = response.data as { content?: unknown; isError?: boolean } | unknown;
+      const mcpContent = (data && typeof data === 'object' && Array.isArray((data as { content?: unknown }).content))
+        ? (data as { content: unknown[] }).content
+        : undefined;
+      if (mcpContent) {
+        const composed = composeResultFromBlocks(mcpContent);
+        const isError = (data as { isError?: boolean }).isError === true;
+        return {
+          id: crypto.randomUUID(),
+          name: toolName,
+          result: composed.text,
+          ...(composed.hasNonText ? { blocks: mcpContent } : {}),
+          ...(isError ? { error: true } : {}),
+        };
+      }
+
       return {
         id: crypto.randomUUID(),
         name: toolName,
@@ -184,7 +229,10 @@ function buildMeta(desc: AppConnectionToolDescriptor): ToolMetaInput {
     exposure: 'deferred',
     source: { kind: 'connector', id: desc.provider },
     discovery: {
-      namespace: desc.provider,
+      // Plan 580 D7: stable per-connection namespace — the provider's
+      // first connection holds the bare provider id for life; later
+      // ones get `provider:<slug>`. Never a full UUID.
+      namespace: connectionNamespace(desc.provider, desc.connectionSlug ?? ''),
       conciseHint: desc.description,
       tags: [desc.provider, desc.name],
     },
@@ -210,74 +258,67 @@ export function createAppConnectionTool(desc: AppConnectionToolDescriptor): {
 }
 
 /**
- * Plan 450 (Phase C): single-descriptor inputSchema byte budget. Mirrors
- * codex's `MAX_AGENT_PLUGIN_MCP_SPEC_BYTES = 8_000` — any hosted MCP
- * descriptor whose serialized inputSchema exceeds this is registered
- * with an empty object schema + summary folded into the description.
- * Keeps the model prompt bounded when a remote server advertises a
- * pathologically large schema (e.g. a hundred-property wrapper).
+ * Plan 580 Phase 2C (D6): connection owners whose bucket must be
+ * authoritatively emptied on the next `registerAppConnectionTools`
+ * call. Populated by `setCachedAppConnectionDescriptors` when a
+ * previously-known connection disappears from the connected set
+ * (`connection:removed`); NEVER populated for a connection that is
+ * still connected but whose fresh discovery failed (`discovery:failed`
+ * keeps the last-known inventory).
  */
-export const APP_CONNECTION_SPEC_BYTE_BUDGET = 8192;
-
-function downgradeForByteBudget(desc: AppConnectionToolDescriptor): AppConnectionToolDescriptor {
-  let size: number;
-  try {
-    size = JSON.stringify(desc.inputSchema).length;
-  } catch {
-    size = APP_CONNECTION_SPEC_BYTE_BUDGET + 1;
-  }
-  if (size <= APP_CONNECTION_SPEC_BYTE_BUDGET) return desc;
-  // Lossy fallback: surface the tool's intent via description so
-  // tool_catalog / the model still know what the tool is for, and
-  // disable structured input by replacing the schema with an empty
-  // object. The executor still receives the raw `args` JSON from the
-  // model so it can fall back to forwarding whatever the host server
-  // accepted before this rewrite.
-  return {
-    ...desc,
-    inputSchema: { type: 'object', properties: {} },
-    description: `${desc.description}\n\n[Schema truncated: ${size} bytes exceeds ${APP_CONNECTION_SPEC_BYTE_BUDGET}-byte budget; use ${desc.inputSchemaSummary}.]`,
-  };
-}
+const pendingRemovedOwners = new Set<string>();
 
 /**
- * Register an array of descriptors into a ToolRegistry. Removes any
- * previously-registered connector tools first (by name) so reloads
- * don't leave stale entries.
+ * Register connector descriptors into a ToolRegistry.
+ *
+ * Plan 580 Phase 2C (D6): descriptors are bucketed per connection and
+ * each bucket is committed through `registry.replaceByOwner(
+ * `connector:${connectionId}`, …)` — a strict validate-then-commit
+ * replace-set. Reload diffs (46 → 45 after one tool disappears) land
+ * as kept/removed keys of the same commit; the legacy prefix-table
+ * cleanup is gone (it only ever covered `google_/slack_/microsoft_/
+ * wecom_` and leaked `remote_*` ghost tools).
  */
 export function registerAppConnectionTools(
   registry: import('../registry.js').ToolRegistry,
   descriptors: AppConnectionToolDescriptor[],
 ): { added: number; removed: number; downgraded: number } {
-  // No cleanup needed — the per-turn registry from createBuiltinRegistry
-  // is fresh, so there are no stale connector tools to remove. But
-  // for safety (e.g. when a custom registry is passed via options),
-  // we still check and remove existing connector-prefixed tools.
-  const _existingTools = registry.getAllTools();
-  const newNames = new Set(descriptors.map((d) => d.name));
-  const connectorPrefixes = ['google_', 'slack_', 'microsoft_', 'wecom_'];
+  let added = 0;
   let removed = 0;
-  for (const tool of _existingTools) {
-    if (!newNames.has(tool.name) && connectorPrefixes.some((p) => tool.name.startsWith(p))) {
-      registry.unregister(tool.name);
-      removed++;
+
+  // D6 `connection:removed` → authoritative empty replace.
+  for (const owner of pendingRemovedOwners) {
+    try {
+      const result = registry.replaceByOwner(owner as `connector:${string}`, []);
+      removed += result.removedKeys.length;
+    } catch {
+      // Bucket absent (e.g. a fresh per-turn registry) — nothing to clear.
     }
   }
+  pendingRemovedOwners.clear();
 
-  let added = 0;
-  let downgraded = 0;
-  for (const rawDesc of descriptors) {
-    const desc = downgradeForByteBudget(rawDesc);
-    if (desc !== rawDesc) downgraded++;
-    if (registry.has(desc.name)) {
-      registry.unregister(desc.name);
+  // D6 `discovery:succeeded` → authoritative replace, one bucket per connection.
+  const buckets = new Map<
+    string,
+    Array<{ key: string; definition: Tool; executor: ToolExecutor; meta: ToolMetaInput }>
+  >();
+  for (const desc of descriptors) {
+    const owner = `connector:${desc.connectionId}`;
+    let bucket = buckets.get(owner);
+    if (!bucket) {
+      bucket = [];
+      buckets.set(owner, bucket);
     }
     const { definition, executor, meta } = createAppConnectionTool(desc);
-    registry.register(definition, executor, meta);
-    added++;
+    bucket.push({ key: definition.name, definition, executor, meta });
+  }
+  for (const [owner, entries] of buckets) {
+    const result = registry.replaceByOwner(owner as `connector:${string}`, entries);
+    added += result.addedKeys.length;
+    removed += result.removedKeys.length;
   }
 
-  return { added, removed, downgraded };
+  return { added, removed, downgraded: 0 };
 }
 
 // --- Descriptor cache ---
@@ -288,9 +329,66 @@ export function registerAppConnectionTools(
 
 let cachedDescriptors: AppConnectionToolDescriptor[] = [];
 
-/** Update the cached descriptor list (called after init/reload). */
-export function setCachedAppConnectionDescriptors(descriptors: AppConnectionToolDescriptor[]): void {
-  cachedDescriptors = descriptors;
+/**
+ * Update the cached descriptor list (called after init/reload).
+ *
+ * Plan 580 Phase 2C (D6): the three replace-set events are
+ * distinguished here:
+ *   - a cached connection absent from the connected set →
+ *     `connection:removed` → its bucket is queued for an authoritative
+ *     empty replace on the next registration;
+ *   - a connected connection with NO fresh descriptors and NOT in the
+ *     discovery-failure set → `discovery:succeeded` with an empty
+ *     inventory → its bucket is queued for an authoritative empty
+ *     replace too (the remote server genuinely lost all its tools);
+ *   - a connected connection in the discovery-failure set →
+ *     `discovery:failed` → its last-known descriptors are kept, so the
+ *     registry bucket is NOT replaced (and NOT cleared);
+ *   - fresh descriptors → `discovery:succeeded` → next registration
+ *     replaces that bucket.
+ *
+ * When the main process does NOT report a connected set (pre-580
+ * caller), the flat descriptor list is the whole truth: every cached
+ * connection missing from it is queued for an empty replace (the
+ * legacy full-swap behaviour).
+ */
+export function setCachedAppConnectionDescriptors(
+  descriptors: AppConnectionToolDescriptor[],
+  connectedConnectionIds?: string[],
+  discoveryFailedConnectionIds?: string[],
+): void {
+  const connectedSet = connectedConnectionIds ? new Set(connectedConnectionIds) : undefined;
+  const failedSet = discoveryFailedConnectionIds ? new Set(discoveryFailedConnectionIds) : undefined;
+  const freshConnections = new Set(descriptors.map((d) => d.connectionId));
+  let merged = descriptors;
+  if (!connectedSet) {
+    // Legacy full-swap: no authoritative connected set to reason with.
+    for (const d of cachedDescriptors) {
+      if (!freshConnections.has(d.connectionId)) {
+        pendingRemovedOwners.add(`connector:${d.connectionId}`);
+      }
+    }
+  } else {
+    for (const d of cachedDescriptors) {
+      if (!connectedSet.has(d.connectionId)) {
+        // `connection:removed` — the user deleted/disconnected it.
+        pendingRemovedOwners.add(`connector:${d.connectionId}`);
+      } else if (!freshConnections.has(d.connectionId) && !failedSet?.has(d.connectionId)) {
+        // Connected, absent from fresh discovery, and NOT reported as a
+        // discovery failure → succeeded with an empty inventory.
+        pendingRemovedOwners.add(`connector:${d.connectionId}`);
+      }
+      // else (failedSet.has) → `discovery:failed` — keep last-known.
+    }
+    const lastKnown = cachedDescriptors.filter(
+      (d) =>
+        !freshConnections.has(d.connectionId) &&
+        connectedSet.has(d.connectionId) &&
+        failedSet?.has(d.connectionId) === true,
+    );
+    if (lastKnown.length > 0) merged = [...descriptors, ...lastKnown];
+  }
+  cachedDescriptors = merged;
 }
 
 /** Read the cached descriptor list (called per-turn by DuyaAgent). */

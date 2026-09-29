@@ -117,24 +117,9 @@ export function createToolInvokeDispatcherFromRegistry(
       if (current.exposure !== 'deferred') {
         return errorResult('TOOL_IS_EAGER', 'Tool exposure changed', `Tool \`${toolId}\` is no longer deferred. Call \`${current.definition.name}\` directly.`);
       }
-      if (advertised.schemaRevision !== current.schemaRevision) {
-        return errorResult('SCHEMA_STALE', 'Tool schema changed', `The schema for \`${toolId}\` changed after this request began. Read its schema again with tool_catalog.`);
-      }
-      const loadedRevision = deps.getLoadedSchemaRevision?.(toolId);
-      const loadedRound = deps.getLoadedSchemaRound?.(toolId);
-      const currentRound = deps.getCurrentRound?.();
-      const readWasVisibleBeforeThisRequest =
-        loadedRound === undefined || currentRound === undefined || loadedRound < currentRound;
-      if (loadedRevision !== current.schemaRevision || !readWasVisibleBeforeThisRequest) {
-        return errorResult(
-          loadedRevision && readWasVisibleBeforeThisRequest ? 'SCHEMA_STALE' : 'SCHEMA_NOT_LOADED',
-          'Tool schema not current',
-          `Read the current schema for \`${toolId}\` with tool_catalog before invoking it.`,
-        );
-      }
-
-      // Validate arguments against the same live JSON Schema that the model
-      // read, before permission checks and before the executor can run.
+      // Validate against the live schema before permission checks and execution.
+      // A catalog detail read is optional: valid arguments can be dispatched
+      // immediately, and schema changes are handled by live validation.
       try {
         const validate = getCatalogValidator(current);
         if (!validate(args)) {
@@ -202,10 +187,17 @@ export function createToolInvokeDispatcherFromRegistry(
           ? toText((result as { result?: unknown }).result)
           : toText(result);
         const isError = (result as { error?: boolean } | null)?.error === true;
+        // Plan 580 D8: preserve the canonical MCP blocks/structured from
+        // the deferred tool's ToolResult (lossless save; the text already
+        // carries the bounded metadata lines).
+        const blocks = (result as { blocks?: unknown[] } | null)?.blocks;
+        const structured = (result as { structured?: unknown } | null)?.structured;
         return {
           result: resultText ?? `Tool \`${current.definition.name}\` returned no result.`,
           toolName: current.definition.name,
           ...(isError ? { error: true } : {}),
+          ...(blocks ? { blocks } : {}),
+          ...(structured !== undefined ? { structured } : {}),
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

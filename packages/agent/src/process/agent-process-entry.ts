@@ -1141,6 +1141,8 @@ function toolIpcRequest<T = unknown>(
 function fetchAppConnectionDescriptors(): Promise<{
   success: boolean;
   descriptors?: unknown[];
+  connectedConnectionIds?: string[];
+  discoveryFailedConnectionIds?: string[];
   error?: { code: string; message: string };
 }> {
   return new Promise((resolve) => {
@@ -1155,7 +1157,7 @@ function fetchAppConnectionDescriptors(): Promise<{
     }, timeout);
 
     pendingIpcRequests.set(requestId, {
-      resolve: (v) => resolve(v as { success: boolean; descriptors?: unknown[]; error?: { code: string; message: string } }),
+      resolve: (v) => resolve(v as { success: boolean; descriptors?: unknown[]; connectedConnectionIds?: string[]; discoveryFailedConnectionIds?: string[]; error?: { code: string; message: string } }),
       reject: (e) => resolve({ success: false, error: { code: 'INTERNAL', message: e instanceof Error ? e.message : String(e) } }),
       timeoutHandle,
     });
@@ -1186,7 +1188,15 @@ async function reloadAppConnectionTools(): Promise<void> {
       log('[Agent-Process] App Connection: descriptor fetch failed:', response.error?.message);
       return;
     }
-    setCachedAppConnectionDescriptors(response.descriptors as AppConnectionToolDescriptor[]);
+    // Plan 580 Phase 2C (D6): forward the authoritative connected set and
+    // the discovery-failure set so setCached can distinguish all three
+    // replace-set events: `connection:removed` (empty replace),
+    // `discovery:succeeded` (replace), `discovery:failed` (keep last-known).
+    setCachedAppConnectionDescriptors(
+      response.descriptors as AppConnectionToolDescriptor[],
+      response.connectedConnectionIds,
+      response.discoveryFailedConnectionIds,
+    );
     log(`[Agent-Process] App Connection: ${response.descriptors.length} descriptors cached`);
   } catch (err) {
     warn('[Agent-Process] App Connection: reload failed:', err);
@@ -3759,26 +3769,43 @@ function collectMcpStatusByServer(
 ): Record<
   string,
   {
-    connectionStatus: 'connected' | 'disconnected' | 'connecting' | 'error';
+    connectionStatus: 'connected' | 'disconnected' | 'connecting' | 'error' | 'degraded';
     toolCount: number;
     tools: Array<{
       name: string;
       description: string;
       annotations: Record<string, unknown> | undefined;
     }>;
+    /** Plan 580 Phase 5: per-server inventory ledger snapshot (optional; absent on older clients). */
+    ledger?: {
+      discoveryStatus: 'complete' | 'refreshing' | 'failed' | 'stale';
+      pagesFetched: number;
+      discoveredTotal: number;
+      inventoryRevision: number;
+      layers: { discovered: number; descriptors: number; aliases: number; registered: number; discoverable: number };
+      fetchedAt: number;
+    };
   }
 > {
   if (!manager) return {};
   const out: Record<
     string,
     {
-      connectionStatus: 'connected' | 'disconnected' | 'connecting' | 'error';
+      connectionStatus: 'connected' | 'disconnected' | 'connecting' | 'error' | 'degraded';
       toolCount: number;
       tools: Array<{
         name: string;
         description: string;
         annotations: Record<string, unknown> | undefined;
       }>;
+      ledger?: {
+        discoveryStatus: 'complete' | 'refreshing' | 'failed' | 'stale';
+        pagesFetched: number;
+        discoveredTotal: number;
+        inventoryRevision: number;
+        layers: { discovered: number; descriptors: number; aliases: number; registered: number; discoverable: number };
+        fetchedAt: number;
+      };
     }
   > = {};
   for (const client of manager.getAllClients()) {
@@ -3792,6 +3819,9 @@ function collectMcpStatusByServer(
         description: t.description,
         annotations: t.annotations,
       })),
+      // Plan 580 Phase 5: attach the ledger snapshot when the client
+      // provides one (new-field-optional contract; older UI ignores it).
+      ledger: client.getLedgerSnapshot(),
     };
   }
   return out;

@@ -75,13 +75,26 @@ export interface ToolExecutor {
 
 export type { ToolExposure } from './catalog-types.js';
 
+/**
+ * Plan 580 D6: ownership tags for replace-set semantics.
+ *   - `'non-mcp'` — default for `register()` (builtin / mode / agent tools);
+ *     never participates in replace-set.
+ *   - `'mcp'` — chain A config-MCP tools, keyed by internalKey.
+ *   - `` `connector:${connectionId}` `` — chain B App-Connection tools,
+ *     one bucket per connection (plan 580 Phase 2C).
+ */
+export type ToolOwner = 'non-mcp' | 'mcp' | `connector:${string}`;
+
+/** Owners that `replaceByOwner` may target (replace-set semantics). */
+export type ReplaceableOwner = Exclude<ToolOwner, 'non-mcp'>;
+
 function exposureFromMeta(meta: ToolMetaInput | undefined): ToolExposure {
   return meta?.exposure ?? 'eager';
 }
 
 function sourceForTool(
   definition: Tool,
-  owner: 'non-mcp' | 'mcp',
+  owner: ToolOwner,
   meta: ToolMetaInput | undefined,
   internalName: string,
 ): ToolCatalogSource {
@@ -152,9 +165,10 @@ interface RegisteredTool {
    * for builtin, mode-specific, agent, conductor, and any other
    * non-MCP tools — the old path is intentionally NOT scoped to a
    * specific source). Explicitly set to 'mcp' by `registerWithKey`
-   * and used by `replaceByOwner` to scope MCP cleanup.
+   * and to `connector:${connectionId}` by the App-Connection bucket
+   * registration; used by `replaceByOwner` to scope cleanup.
    */
-  owner: 'non-mcp' | 'mcp';
+  owner: ToolOwner;
   /** Catalog metadata captured with the definition and executor. */
   meta?: ToolMetaInput;
 }
@@ -182,6 +196,23 @@ export interface ToolHintMeta {
 export class ToolRegistry {
   private tools: Map<string, RegisteredTool> = new Map();
 
+  /**
+   * Plan 580 D10: monotonic catalog revision, bumped on every catalog
+   * mutation. Snapshots capture it so `tool_catalog` list-mode cursors
+   * can detect an inventory refresh that happened mid-pagination
+   * (`CATALOG_CURSOR_STALE`).
+   */
+  private catalogRevisionCounter = 1;
+
+  private bumpCatalogRevision(): void {
+    this.catalogRevisionCounter++;
+  }
+
+  /** Current catalog revision (monotonic; increments on every mutation). */
+  getCatalogRevision(): number {
+    return this.catalogRevisionCounter;
+  }
+
   /** Register a tool and its catalog metadata. */
   register(
     definition: Tool,
@@ -194,6 +225,7 @@ export class ToolRegistry {
       owner: 'non-mcp',
       meta: meta ? cloneToolMeta(meta) : undefined,
     });
+    this.bumpCatalogRevision();
   }
 
   /**
@@ -223,7 +255,7 @@ export class ToolRegistry {
     key: string,
     definition: Tool,
     executor: ToolExecutor,
-    owner: 'non-mcp' | 'mcp' = 'mcp',
+    owner: ToolOwner = 'mcp',
     meta?: ToolMetaInput,
   ): void {
     if (this.tools.has(key)) {
@@ -276,29 +308,32 @@ export class ToolRegistry {
         removed++;
       }
     }
+    if (removed > 0) this.bumpCatalogRevision();
     return removed;
   }
 
   /**
    * Phase 2A Batch A: atomic replace of all entries owned by
-   * `ownerId`. Only `'mcp'` is currently supported; non-MCP
+   * `ownerId`. Plan 580 Phase 2C: accepts `'mcp'` (chain A) and
+   * `` `connector:${connectionId}` `` (chain B buckets); non-MCP
    * entries (owner === 'non-mcp', i.e. builtin / mode-specific /
    * agent / conductor / etc.) are NEVER touched by this method.
-   * This is the single commit point for an MCP apply (Batch C);
-   * failure here means the registry is unchanged.
+   * This is the single commit point for an MCP apply (Batch C) and
+   * for connector replace-sets; failure here means the registry is
+   * unchanged.
    *
    * The operation is strictly validate-then-commit:
    *
    *   Phase 1 (validate, no mutation):
-   *     1a) Reject if `ownerId !== 'mcp'`.
+   *     1a) Reject if `ownerId === 'non-mcp'`.
    *     1b) Reject if `preparedEntries` has duplicate keys.
    *     1c) Reject if any prepared key would overwrite an existing
-   *         non-mcp entry.
+   *         entry owned by a different owner.
    *
    *   Phase 2 (compute, no mutation):
-   *     2) removedKeys = current mcp keys not in prepared
-   *        addedKeys   = prepared keys not currently mcp-owned
-   *        keptKeys    = current mcp keys that survive in prepared
+   *     2) removedKeys = current owner keys not in prepared
+   *        addedKeys   = prepared keys not currently owner-owned
+   *        keptKeys    = current owner keys that survive in prepared
    *
    *   Phase 3 (commit, single mutation block):
    *     3) Apply the prepared set; the map is mutated exactly once
@@ -312,7 +347,7 @@ export class ToolRegistry {
    *   bit-for-bit from the snapshot taken at entry.
    */
   replaceByOwner(
-    ownerId: 'mcp',
+    ownerId: ReplaceableOwner,
     preparedEntries: ReadonlyArray<{
       key: string;
       definition: Tool;
@@ -328,9 +363,12 @@ export class ToolRegistry {
     const snapshot = new Map(this.tools);
 
     // ---- Phase 1: validate (no mutation) ----
-    if (ownerId !== 'mcp') {
+    // ReplaceableOwner already excludes 'non-mcp' at the type level; this
+    // runtime guard covers callers that bypass the static type (e.g. JS
+    // callers or untyped IPC payloads).
+    if ((ownerId as ToolOwner) === 'non-mcp') {
       throw new MCPRegistryReplaceError(
-        `replaceByOwner: ownerId must be 'mcp' (got '${ownerId}')`,
+        `replaceByOwner: ownerId must be 'mcp' or 'connector:<connectionId>' (got '${ownerId}')`,
       );
     }
 
@@ -368,23 +406,24 @@ export class ToolRegistry {
     }
 
     // ---- Phase 3: commit (single mutation block) ----
-    // Re-seed the map: keep every non-mcp entry as-is, then set
-    // every prepared mcp entry. This is one Map mutation block —
-    // no partial state is observable from outside.
+    // Re-seed the map: keep every entry NOT owned by the target owner
+    // as-is (non-mcp, mcp, and other connector buckets), then set the
+    // prepared entries. One Map mutation block — no partial state is
+    // observable from outside.
     try {
       this.tools.clear();
-      // Restore non-mcp entries from the snapshot (byte-equivalent).
+      // Restore foreign-owner entries from the snapshot (byte-equivalent).
       for (const [key, entry] of snapshot) {
-        if (entry.owner !== 'mcp') {
+        if (entry.owner !== ownerId) {
           this.tools.set(key, entry);
         }
       }
-      // Add the prepared mcp entries.
+      // Add the prepared entries under the target owner.
       for (const e of preparedEntries) {
         this.tools.set(e.key, {
           definition: e.definition,
           executor: e.executor,
-          owner: 'mcp',
+          owner: ownerId,
           meta: e.meta ? cloneToolMeta(e.meta) : undefined,
         });
       }
@@ -396,6 +435,7 @@ export class ToolRegistry {
       );
     }
 
+    this.bumpCatalogRevision();
     return { removedKeys, addedKeys, keptKeys };
   }
 
@@ -481,6 +521,8 @@ export class ToolRegistry {
     return {
       tools: Object.freeze(tools) as readonly Tool[],
       providerNameToInternalKey,
+      // Plan 580 D10: revision captured at snapshot time for cursor binding.
+      catalogRevision: this.catalogRevisionCounter,
       getExposure: (n: string) => exposureMap.get(n) ?? 'eager',
       getExecutor: (n: string) => executorMap.get(n),
       getMeta: (n: string) => metaMap.get(n),
@@ -540,7 +582,7 @@ export class ToolRegistry {
    * the providerName allocator seed from the live catalog instead
    * of a hardcoded builtin list.
    */
-  getOwner(name: string): 'non-mcp' | 'mcp' | undefined {
+  getOwner(name: string): ToolOwner | undefined {
     const direct = this.tools.get(name);
     if (direct) return direct.owner;
     for (const [, entry] of this.tools) {

@@ -128,8 +128,15 @@ export function buildAppsSystemSection(
   }
   if (byProvider.size === 0) return null;
 
+  // Plan 580 Phase 3: sort by provider id so the rendered bytes depend only
+  // on the connection set, never on descriptor arrival order (which follows
+  // async discovery).
   const appLines = [...byProvider.entries()]
-    .map(([id, { label, tools }]) => `- [${label}](app://${id}): ${tools.join(', ')}`)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([id, { label, tools }]) => {
+      const toolList = [...tools].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      return `- [${label}](app://${id}): ${toolList.join(', ')}`;
+    })
     .join('\n');
 
   // Plan 498: "help the user connect" contract, aligned with grok-bot's
@@ -143,6 +150,7 @@ export function buildAppsSystemSection(
     '## Apps (Connectors)',
     'Apps (Connectors) can be explicitly triggered in user messages in the format `[@App-Name](app://<provider-id>)`. Apps can also be triggered implicitly whenever the context suggests an installed app would help.',
     "An app's tools are either already in your tool list for this turn, or discoverable through the `tool_catalog` tool.",
+    'Use tool_catalog with list(namespace=...) to enumerate an app\'s tools when a search misses them.',
     'Do not call list_mcp_resources or similar for apps — use the tools listed above or tool_catalog.',
     'Connected apps this session:',
     appLines,

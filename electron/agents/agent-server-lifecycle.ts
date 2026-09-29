@@ -254,13 +254,20 @@ export function spawnAgentServer(): Promise<number> {
       if (msg.type === 'appConnection:listDescriptors' && typeof msg.requestId === 'string') {
         const connectorService = getConnectorService();
         void connectorService.listDescriptorsForConnected()
-          .then((descriptors) => {
+          .then(({ descriptors, connectedConnectionIds, discoveryFailedConnectionIds }) => {
             if (!child.killed) {
               child.send({
                 type: 'appConnection:listDescriptors:response',
                 requestId: msg.requestId,
                 success: true,
                 descriptors,
+                // Plan 580 Phase 2C (D6): authoritative connected set for
+                // the agent-side removed/failed replace-set distinction.
+                connectedConnectionIds,
+                // Plan 580 Phase 2C (D6): connections whose discovery
+                // failed this round — the agent keeps their last-known
+                // inventory instead of treating absence as an empty set.
+                discoveryFailedConnectionIds,
               });
             }
           })

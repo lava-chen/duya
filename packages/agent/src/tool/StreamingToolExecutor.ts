@@ -1588,6 +1588,17 @@ export class StreamingToolExecutor {
         // leaks into the LLM payload.
         metadata: (result.metadata ?? undefined) as Message['metadata'],
       };
+      // Plan 580 D8 (persistence): canonical MCP content blocks and
+      // `structuredContent` ride message.metadata so they survive session
+      // reload with the existing message JSON persistence (metadata is
+      // persisted verbatim and never serialized into the LLM payload).
+      if (result.blocks || result.structured !== undefined) {
+        toolMessage.metadata = {
+          ...(toolMessage.metadata ?? {}),
+          ...(result.blocks ? { mcpBlocks: result.blocks } : {}),
+          ...(result.structured !== undefined ? { mcpStructured: result.structured } : {}),
+        } as Message['metadata'];
+      }
       if (result.images && result.images.length > 0) {
         toolMessage.content = [
           { type: 'text', text: resultContent },

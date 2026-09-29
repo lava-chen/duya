@@ -608,7 +608,14 @@ export interface SamplingRateLimitConfig {
 }
 
 // MCP 连接状态
-export type MCPConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+/**
+ * Plan 580 D2: `degraded` distinguishes a transport that died after a
+ * successful connect (onclose/onerror fired) from an intentional
+ * `disconnected` and a connect-time `error`. A degraded client's
+ * `callTool` fails immediately with MCP_TRANSPORT instead of hanging
+ * on the SDK timeout.
+ */
+export type MCPConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error' | 'degraded';
 
 // 文件附件
 export interface FileAttachment {

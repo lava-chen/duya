@@ -61,6 +61,13 @@ export interface AppConnection {
   lastError: string | null;
   createdAt: number;
   updatedAt: number;
+  /**
+   * Plan 580 D7: stable namespace slug. '' = the provider's FIRST
+   * connection, holding the bare namespace (`notion`) for life; later
+   * connections hold a derived 4-hex slug and address `notion:<slug>`.
+   * Assigned once at creation and never changed afterwards.
+   */
+  connectionSlug?: string;
 }
 
 /**
@@ -78,6 +85,25 @@ export interface AppConnectionStatusDTO {
   lastError: string | null;
   createdAt: number;
   updatedAt: number;
+  /**
+   * Plan 580 D7: stable namespace slug ('' = the provider's first
+   * connection, bare namespace). Non-secret; needed by the agent-side
+   * descriptor stamping for per-connection tool namespaces.
+   */
+  connectionSlug?: string;
+  /**
+   * Plan 580 Phase 5: chain B inventory ledger snapshot (D3/D10),
+   * optional so older consumers ignore it. Filled only for remote-MCP
+   * connections with a live session; absent otherwise.
+   */
+  ledger?: {
+    discoveryStatus: 'complete' | 'refreshing' | 'failed' | 'stale';
+    pagesFetched: number;
+    discoveredTotal: number;
+    inventoryRevision: number;
+    layers: { discovered: number; descriptors: number; aliases: number; registered: number; discoverable: number };
+    fetchedAt: number;
+  };
 }
 
 /** Renderer-safe OAuth provider state for the preset connection catalog. */
@@ -113,6 +139,7 @@ export function toStatusDTO(conn: AppConnection): AppConnectionStatusDTO {
     lastError: conn.lastError,
     createdAt: conn.createdAt,
     updatedAt: conn.updatedAt,
+    connectionSlug: conn.connectionSlug ?? '',
   };
 }
 
@@ -157,7 +184,15 @@ export type AppConnectionErrorCode =
   | 'unknown_action'
   | 'internal'
   | 'provider_blocked'
-  | 'provider_not_configured';
+  | 'provider_not_configured'
+  /** Plan 580 D9/D4: stable MCP error classes surfaced verbatim from the
+   *  remote-MCP binding so the model sees the same five-code contract as
+   *  chain A. Only the mcp-remote binding produces these. */
+  | 'MCP_TRANSPORT'
+  | 'MCP_TIMEOUT'
+  | 'MCP_PROTOCOL'
+  | 'MCP_AUTH_REQUIRED'
+  | 'MCP_TOOL_ERROR';
 
 /** Structured connector error returned to the agent executor. */
 export interface AppConnectionError {

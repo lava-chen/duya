@@ -53,6 +53,7 @@ import { getAgentsMdManager } from '../agentsmd/index.js';
 import { extractTriggerPaths } from '../agentsmd/nested-loader.js';
 import { isNestedAgentsMdEnabled } from '../config/feature-flags.js';
 import { getCachedAppConnectionDescriptors } from '../tool/AppConnectionTool/index.js';
+import { projectForProvider } from '@duya/plugin-core/src/mcp/core/projection.js';
 import { buildAppsSystemSection, collectConnectorActivationInjection, collectPluginInjections, collectSkillInjections, extractExplicitSkillMentions, mergeSkillMentionSources } from '../mentions/index.js';
 import { matchSkillsForPrompt, buildSkillSuggestionInjection } from '../skills/index.js';
 import { compressProjectedToolMessages } from '../compact/projectionCompress.js';
@@ -3676,7 +3677,12 @@ export class duyaAgent implements AgentRuntime {
     for (const t of allTools) {
       const exposure = snapshot.getExposure(t.name);
       if (!isToolVisible(t.name, exposure, discoveredSeed, constraints)) continue;
-      tools.push(t);
+      // Plan 580 D4: last-mile provider projection. The registry holds
+      // canonical schemas untouched; only what leaves to the model is
+      // wrapped (combinator roots) or 8KB-budget-trimmed here. Identity
+      // results push the original object so byte-stable turns don't copy.
+      const projection = projectForProvider(t.input_schema);
+      tools.push(projection.downgraded ? { ...t, input_schema: projection.schema } : t);
     }
     logger.info(
       `[Agent] streamChat: ${tools.length}/${allTools.length} tools visible after visibility filter`,
@@ -3787,17 +3793,27 @@ export class duyaAgent implements AgentRuntime {
     // "what MCP tools do I have?" does not depend on search-result
     // ordering. Under `full`/`hint` every MCP tool is declared on the
     // request already; the directory would be redundant.
-    if (!options?.disableSystemPrompt && readToolExposureConfig().exposure === 'search') {
-      const mcpCatalog = buildMCPCapabilityCatalog(
-        this.activeMCPRegistry.getAllTools().filter(
-          (tool) => this.activeMCPRegistry.getOwner(tool.name) === 'mcp',
-        ),
-        { entryPoint: 'tool_catalog' },
-      );
-      if (mcpCatalog) {
-        systemPromptContent = systemPromptContent
-          ? `${systemPromptContent}\n\n${mcpCatalog}`
-          : mcpCatalog;
+    //
+    // Plan 580 Phase 3 (Awareness 常驻): the connector "Apps" section is
+    // gated on `disableSystemPrompt` only, NOT on the exposure config — the
+    // model needs the mention syntax and the `tool_catalog list` pointer in
+    // every exposure mode, because deferred/connector tools are still
+    // reachable through `tool_catalog` even when the directory above is
+    // redundant. Rendered deterministically: null (omitted) when nothing is
+    // connected, byte-stable for a stable connection set.
+    if (!options?.disableSystemPrompt) {
+      if (readToolExposureConfig().exposure === 'search') {
+        const mcpCatalog = buildMCPCapabilityCatalog(
+          this.activeMCPRegistry.getAllTools().filter(
+            (tool) => this.activeMCPRegistry.getOwner(tool.name) === 'mcp',
+          ),
+          { entryPoint: 'tool_catalog' },
+        );
+        if (mcpCatalog) {
+          systemPromptContent = systemPromptContent
+            ? `${systemPromptContent}\n\n${mcpCatalog}`
+            : mcpCatalog;
+        }
       }
 
       // Plan 450 Phase G: persistent "Apps (Connectors)" section 鈥?codex's
