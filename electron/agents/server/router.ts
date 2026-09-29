@@ -2919,8 +2919,10 @@ export function createHandleRequest(
     }
 
     if (parts[0] === 'plugins' && parts[1] === 'reload' && method === 'POST') {
-      const count = deps.workerManager.broadcastCommand({ type: 'reload:skills' });
-      deps.workerManager.broadcastCommand({ type: 'reload:mcp' });
+      // Refresh only connector descriptors in the worker. The next turn merges
+      // them into its tool snapshot; rebuilding MCP state here can disturb
+      // unrelated tools in an active session.
+      const count = deps.workerManager.broadcastCommand({ type: 'appConnection:reload' });
       sendJson(res, 200, { ok: true, workersNotified: count });
       return;
     }

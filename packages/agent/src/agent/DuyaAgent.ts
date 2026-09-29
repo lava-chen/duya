@@ -3862,6 +3862,28 @@ export class duyaAgent implements AgentRuntime {
       }
     }
 
+    // Deferred tools must be discovered and have their full schema loaded in
+    // a separate provider round before tool_invoke is eligible. ToolInvoke
+    // enforces this at runtime; this system-level sequence prevents avoidable
+    // failed calls when a connector tool is unfamiliar to the model.
+    if (
+      !options?.disableSystemPrompt &&
+      tools.some((tool) => tool.name === 'tool_catalog') &&
+      tools.some((tool) => tool.name === 'tool_invoke')
+    ) {
+      const deferredToolProtocol = [
+        '## Deferred tool schema protocol',
+        '- Search for a needed tool with `tool_catalog({ query })`. If there are no matches, retry with a shorter, broader query or a suggested namespace.',
+        '- When a search result says `invocation` uses `tool_invoke`, call `tool_catalog({ tool_id })` for that exact stable ID and wait for its complete schema result.',
+        '- Do not call `tool_invoke` in the same assistant response or parallel batch as the schema lookup. Invoke it only in a later provider round, using arguments that match the returned `input_schema`.',
+        '- Never guess a deferred tool\'s arguments from its name, description, or search summary. If the schema is missing or stale, read it again before invoking.',
+        '- A catalog or invocation configuration error describes current-session tool availability; it does not prove that the user\'s connector is unauthorized.',
+      ].join('\n');
+      systemPromptContent = systemPromptContent
+        ? `${systemPromptContent}\n\n${deferredToolProtocol}`
+        : deferredToolProtocol;
+    }
+
     return systemPromptContent;
   }
 

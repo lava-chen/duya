@@ -1151,7 +1151,9 @@ function fetchAppConnectionDescriptors(): Promise<{
 }
 
 /**
- * Plan 312: reload App Connection tools after init or MCP reload.
+ * Plan 312: refresh App Connection descriptors after init, connection changes,
+ * or MCP reload. This updates the next turn's tool snapshot without rebuilding
+ * the worker's MCP runtime.
  *
  * Fetches the current connector tool descriptors from the main process
  * and caches them. The per-turn registry merge in DuyaAgent._resolveTools
@@ -1168,7 +1170,6 @@ async function reloadAppConnectionTools(): Promise<void> {
     const response = await fetchAppConnectionDescriptors();
     if (!response.success || !response.descriptors) {
       log('[Agent-Process] App Connection: descriptor fetch failed:', response.error?.message);
-      setCachedAppConnectionDescriptors([]);
       return;
     }
     setCachedAppConnectionDescriptors(response.descriptors as AppConnectionToolDescriptor[]);
@@ -3817,10 +3818,9 @@ async function reloadMCP(): Promise<void> {
     // `mcp:status:get` (handled in the worker protocol switch
     // below).
     sendToMain(buildMcpReloadedEvent(result));
-    // Plan 312: refresh App Connection descriptors after MCP reload.
-    // The /plugins/reload broadcast triggers reloadMCP; connect/disconnect
-    // triggers /plugins/reload, so this covers both paths.
-    void reloadAppConnectionTools();
+    // Keep App Connection descriptors synchronized after a genuine MCP
+    // reload too. Connect/disconnect uses its dedicated worker command.
+    await reloadAppConnectionTools();
   } catch (err) {
     warn('[Agent-Process] Failed to reload MCP:', err);
     sendToMain({ type: 'mcp:reload:error', error: err instanceof Error ? err.message : String(err) });
@@ -4281,6 +4281,12 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
         case 'reload:skills': {
           log('[Agent-Process] Received reload:skills');
           void reloadSkills();
+          break;
+        }
+
+        case 'appConnection:reload': {
+          log('[Agent-Process] Received appConnection:reload');
+          await reloadAppConnectionTools();
           break;
         }
 
