@@ -1614,7 +1614,6 @@ export function ChatView({
                 authCompleted={authCompletedFor !== null && authCompletedFor === pendingAuthRequest.provider}
                 onDismiss={dismissAuthRequest}
                 onRetry={retryAfterAuth}
-                resolveProviderLabel={(id) => id}
               />
             )}
 

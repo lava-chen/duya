@@ -16,13 +16,22 @@
  *   The `authCompleted` prop (main's `app-connection:connected` broadcast)
  *   drives the same connected transition, covering a re-auth started from
  *   the settings page while this card was pending.
+ *
+ * The card self-resolves the provider's display metadata (brand label,
+ * icon, one-line description) from the `appConnection:providers` catalog
+ * so the user can see exactly WHICH app is asking for access — a raw
+ * provider id like `notion` is meaningless to most users. The fetch is
+ * best-effort: when the catalog is unreachable the card falls back to
+ * `resolveProviderLabel` / the raw provider id.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/Button';
 import { useTranslation } from '@/hooks/useTranslation';
 import { getAppConnectionAPI } from '@/lib/app-connection-ipc';
-import { ShieldIcon } from '@/components/icons';
+import type { AppConnectionProviderDTO } from '@/lib/app-connection-ipc';
+import { ShieldIcon, ShieldCheckIcon } from '@/components/icons';
+import { ConnectorIcon } from '@/components/extensions/connector-icons';
 
 export interface ConnectorAuthRequiredRequest {
   provider?: string;
@@ -48,7 +57,7 @@ export interface ConnectorAuthRequiredCardProps {
   onDismiss: () => void;
   /** Fired once when the card reaches the connected state. */
   onRetry: () => void;
-  /** Localize provider label when the registry is reachable. */
+  /** Optional label override when the provider catalog is unreachable. */
   resolveProviderLabel?: (providerId: string) => string;
 }
 
@@ -64,12 +73,35 @@ export function ConnectorAuthRequiredCard({
   const { t } = useTranslation();
   const [phase, setPhase] = useState<CardPhase>('waiting');
   const [error, setError] = useState<string | null>(null);
+  const [providerMeta, setProviderMeta] = useState<AppConnectionProviderDTO | null>(null);
   const resumedRef = useRef(false);
   const isConnect = request.variant === 'connect';
 
-  const providerLabel = resolveProviderLabel
-    ? resolveProviderLabel(request.provider ?? '')
-    : request.provider ?? 'the connected app';
+  useEffect(() => {
+    let cancelled = false;
+    const provider = request.provider;
+    if (!provider) return;
+    const api = getAppConnectionAPI();
+    if (!api?.providers) return;
+    api
+      .providers()
+      .then((res) => {
+        if (cancelled || !res.success || !res.data) return;
+        setProviderMeta(res.data.find((p) => p.id === provider) ?? null);
+      })
+      .catch(() => {
+        /* best-effort only — the card renders with the raw id */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [request.provider]);
+
+  const providerLabel =
+    providerMeta?.label ??
+    (resolveProviderLabel ? resolveProviderLabel(request.provider ?? '') : undefined) ??
+    request.provider ??
+    t('connectorAuth.fallbackProvider');
 
   const finishConnected = useCallback(() => {
     if (resumedRef.current) return;
@@ -115,33 +147,66 @@ export function ConnectorAuthRequiredCard({
   };
 
   const busy = phase === 'connecting';
+  const connected = phase === 'connected';
+  const title = isConnect
+    ? t('connectorAuth.connectTitleNamed', { provider: providerLabel })
+    : t('connectorAuth.reauthTitleNamed', { provider: providerLabel });
+  const body = isConnect
+    ? t('connectorAuth.connectBody', { provider: providerLabel })
+    : t('connectorAuth.body', { provider: providerLabel, tool: request.toolName ?? '' });
+  const showConfigHint =
+    !connected && providerMeta?.configured === false && !!providerMeta.configurationHint;
 
   return (
-    <div className="rounded-lg border border-border/40 bg-[var(--surface)] px-4 py-3 my-2">
-      <div className="flex items-center gap-2 mb-2">
-        <ShieldIcon size={18} />
-        <span className="font-medium text-sm text-foreground">
-          {isConnect ? t('connectorAuth.connectTitle') : t('connectorAuth.title')}
-        </span>
+    <div className="rounded-lg border border-border/40 bg-[var(--surface)] px-4 py-3.5 my-2 shadow-[0_1px_3px_rgba(0,0,0,0.06)]">
+      <div className="flex items-start gap-3">
+        <div
+          aria-hidden="true"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border/30 bg-[var(--bg-canvas)]"
+        >
+          {providerMeta ? (
+            <ConnectorIcon
+              provider={providerMeta.id}
+              size={22}
+              monogram={providerMeta.monogram}
+              label={providerMeta.label}
+            />
+          ) : (
+            <ShieldIcon size={18} className="text-muted-foreground" />
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <span className="font-medium text-sm text-foreground">{title}</span>
+          {providerMeta?.description && !connected && (
+            <p
+              className="mt-0.5 text-xs text-muted-foreground/80 line-clamp-1"
+              title={providerMeta.description}
+            >
+              {providerMeta.description}
+            </p>
+          )}
+          {connected ? (
+            <p className="mt-1 flex items-center gap-1.5 text-sm text-green-600" role="status">
+              <ShieldCheckIcon size={14} className="shrink-0" />
+              {t('connectorAuth.connected', { provider: providerLabel })}
+            </p>
+          ) : (
+            <p className="mt-1 text-sm text-muted-foreground">{body}</p>
+          )}
+          {error && (
+            <p className="mt-2 text-xs text-red-500" role="alert">
+              {error}
+            </p>
+          )}
+          {showConfigHint && (
+            <p className="mt-2 rounded-md border border-border/30 bg-[var(--bg-canvas)] px-2.5 py-1.5 text-xs text-muted-foreground">
+              {providerMeta?.configurationHint}
+            </p>
+          )}
+        </div>
       </div>
-      {phase === 'connected' ? (
-        <p className="text-sm text-green-600 mb-1" role="status">
-          {t('connectorAuth.connected', { provider: providerLabel })}
-        </p>
-      ) : (
-        <p className="text-sm text-muted-foreground mb-3">
-          {isConnect
-            ? t('connectorAuth.connectBody', { provider: providerLabel })
-            : t('connectorAuth.body', { provider: providerLabel, tool: request.toolName ?? '' })}
-        </p>
-      )}
-      {error && (
-        <p className="text-xs text-red-500 mb-3" role="alert">
-          {error}
-        </p>
-      )}
-      {phase !== 'connected' && (
-        <div className="flex justify-end gap-2">
+      {!connected && (
+        <div className="mt-3 flex justify-end gap-2">
           <Button
             variant="secondary"
             size="sm"

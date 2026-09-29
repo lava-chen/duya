@@ -1264,7 +1264,6 @@ export function BotDirectChatView({
               authCompleted={authCompletedFor !== null && authCompletedFor === pendingAuthRequest.provider}
               onDismiss={dismissAuthRequest}
               onRetry={retryAfterAuth}
-              resolveProviderLabel={(id) => id}
             />
           </div>
         )}

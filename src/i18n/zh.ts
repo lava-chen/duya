@@ -486,7 +486,8 @@ const zh: Record<TranslationKey, string> = {
   'toolApproval.waiting': '等待审批',
   'toolApproval.approved': '已允许',
   'toolApproval.denied': '已拒绝',
-  'connectorAuth.title': '重新授权已连接的应用',
+  'connectorAuth.reauthTitleNamed': '重新授权 {provider}',
+  'connectorAuth.fallbackProvider': '外部应用',
   'connectorAuth.body': '{provider} 连接授权已过期，调用 {tool} 需要重新授权后才能继续。',
   'connectorAuth.reauthorize': '去重新授权',
   'connectorAuth.connecting': '正在打开浏览器…',
@@ -498,7 +499,7 @@ const zh: Record<TranslationKey, string> = {
   'connectorAuth.retry': '重试',
   'connectorAuth.resumeMessage': '已重新授权 {provider}，请用相同参数重试刚才失败的 `{tool}` 调用。',
   // Plan 503: bot-initiated first-time connect variant.
-  'connectorAuth.connectTitle': '连接外部应用',
+  'connectorAuth.connectTitleNamed': '连接 {provider}',
   'connectorAuth.connectBody': '{provider} 需要连接授权后才能继续。点击下方按钮在浏览器中完成授权，完成后会自动通知对方继续。',
   'connectorAuth.authorize': '去连接',
   'connectorAuth.connectResumeMessage': '{provider} 已连接成功，请继续处理用户最初的请求。',

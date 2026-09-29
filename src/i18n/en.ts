@@ -495,7 +495,8 @@ const en = {
   'toolApproval.waiting': 'Waiting for approval',
   'toolApproval.approved': 'Allowed',
   'toolApproval.denied': 'Denied',
-  'connectorAuth.title': 'Re-authorize connected app',
+  'connectorAuth.reauthTitleNamed': 'Re-authorize {provider}',
+  'connectorAuth.fallbackProvider': 'the connected app',
   'connectorAuth.body': 'The {provider} connection expired and the `{tool}` call needs re-authorization to continue.',
   'connectorAuth.reauthorize': 'Re-authorize',
   'connectorAuth.connecting': 'Opening browser…',
@@ -507,7 +508,7 @@ const en = {
   'connectorAuth.retry': 'Retry',
   'connectorAuth.resumeMessage': 'Re-authorized {provider}. Please re-issue the failed `{tool}` call with the same arguments.',
   // Plan 503: bot-initiated first-time connect variant.
-  'connectorAuth.connectTitle': 'Connect external app',
+  'connectorAuth.connectTitleNamed': 'Connect {provider}',
   'connectorAuth.connectBody': '{provider} needs to be connected before it can be used. Click the button below to authorize in the browser; the bot is notified automatically once done.',
   'connectorAuth.authorize': 'Connect',
   'connectorAuth.connectResumeMessage': '{provider} is now connected. Please continue with the user\'s original request.',
