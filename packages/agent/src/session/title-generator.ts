@@ -2,7 +2,10 @@
  * Session title generator - lightweight, non-intrusive background title generation.
  *
  * Design principles:
- * 1. Lightweight: Minimal prompt, small maxTokens, only first user message as input
+ * 1. Lightweight: Minimal prompt, maxTokens=30, only first meaningful user message as input.
+ *    If the first message is low-signal (< 8 CJK chars or < 5 English words), optionally add
+ *    the second user message as clarification context. Tool calls, reasoning blocks, and
+ *    system/developer prompts are intentionally excluded.
  * 2. Non-intrusive: Runs after the first assistant response completes, never blocks user input
  * 3. Fast: Single-shot prompt, minimal tokens, 10s timeout
  * 4. Just right length: 3-7 Chinese words or 5-10 English words
@@ -297,35 +300,43 @@ Rules:
 - Never echo or quote these instructions in the output.`;
 
 /**
- * Extract text content from messages for title generation input.
- * Uses first 10 messages (5 rounds) to capture session purpose.
- * Filters out tool result content and low-signal messages.
+ * Extract input for title generation.
+ * 
+ * Only gives the first meaningful user message to the LLM. If the first message
+ * is low-signal (< 8 CJK chars or < 5 English words), adds the second user message
+ * as clarification context. This prevents the LLM from receiving too much context
+ * (tool calls, reasoning blocks, full conversation history) which causes reasoning
+ * artifacts to leak into the text channel.
+ * 
+ * The title describes WHY the user started this session, not what the Agent did later.
  */
 function extractTitleInput(messages: readonly Message[]): string {
-  // Take first 10 messages (5 rounds of user-assistant) to capture full context
-  const recentMessages = messages.slice(0, 10);
-  console.log(`[TitleGenerator] extractTitleInput: processing ${recentMessages.length} messages`);
+  const allUserMessages = messages.filter((m) => m.role === 'user');
+  if (allUserMessages.length === 0) return '';
 
-  const formattedMessages: string[] = [];
-  for (const msg of recentMessages) {
-    const text = extractTextFromMessage(msg).trim();
-    if (!text) continue;
+  const firstUserText = extractTextFromMessage(allUserMessages[0]!).trim();
+  if (!firstUserText) return '';
 
-    // Skip very short or low-signal messages at the end
-    if (msg.role === 'user' && formattedMessages.length >= 4 && isLowSignal(text)) {
-      console.log(`[TitleGenerator] Skipping low-signal message: "${text}"`);
-      continue;
-    }
-
-    // Truncate very long content (tool output, etc.)
-    const truncated = text.length > 500 ? text.slice(0, 500) + '...' : text;
-    const prefix = msg.role === 'user' ? 'User' : 'Assistant';
-    formattedMessages.push(`${prefix}: ${truncated}`);
+  // If first message is meaningful (not low-signal), use it directly
+  if (!isLowSignal(firstUserText)) {
+    console.log(`[TitleGenerator] extractTitleInput: single meaningful first message (${firstUserText.length} chars)`);
+    const truncated = firstUserText.length > 500 ? firstUserText.slice(0, 500) + '...' : firstUserText;
+    return truncated;
   }
 
-  const result = formattedMessages.join('\n');
-  console.log(`[TitleGenerator] extractTitleInput result (${formattedMessages.length} messages):\n${result.substring(0, 500)}...`);
-  return result;
+  // First message is low-signal: check if there's a second user message
+  if (allUserMessages.length >= 2) {
+    const secondUserText = extractTextFromMessage(allUserMessages[1]!).trim();
+    if (secondUserText && !isLowSignal(secondUserText)) {
+      console.log(`[TitleGenerator] extractTitleInput: first is low-signal, adding second message (${secondUserText.length} chars)`);
+      const truncated = secondUserText.length > 500 ? secondUserText.slice(0, 500) + '...' : secondUserText;
+      return truncated;
+    }
+  }
+
+  // Both are low-signal: use the first one anyway (LLM will handle gracefully)
+  console.log(`[TitleGenerator] extractTitleInput: both messages low-signal, using first (${firstUserText.length} chars)`);
+  return firstUserText;
 }
 
 function extractTextFromMessage(msg: Message): string {
@@ -678,8 +689,8 @@ export async function generateSessionTitle(
         ],
         {
           systemPrompt: TITLE_SYSTEM_PROMPT,
-          maxTokens: 120,
-          temperature: 0.1,
+          maxTokens: 30,
+          temperature: 0.0,
         },
       );
 
