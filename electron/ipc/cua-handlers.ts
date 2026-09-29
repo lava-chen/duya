@@ -14,7 +14,7 @@
  * scope red line: only the Windows channel is implemented here).
  */
 
-import { clipboard, desktopCapturer } from 'electron';
+import { app, clipboard, desktopCapturer } from 'electron';
 import { randomUUID } from 'node:crypto';
 
 import {
@@ -336,5 +336,29 @@ export function registerCuaHandlers(): void {
       } satisfies CuaEnvelope;
     }
     return dispatchCuaTool({ tool: raw.tool, args: raw.args, sessionId: raw.sessionId });
+  });
+
+  // Plan 575 §CUA toolrow: return app icon data URL for a given bundleId / exe path.
+  ipcMain.handle('cua:get-application-icon', async (_event, bundleId: string) => {
+    try {
+      if (process.platform !== 'win32') return { iconDataUrl: null };
+      // app.getAppIconPath is Electron internal; use getResourcePath workaround.
+      // On Windows the bundleId is the exe path; try to get icon via nativeImage.
+      const { nativeImage } = require('electron') as typeof import('electron');
+      let iconPath: string | null = null;
+      if (bundleId && bundleId.includes('\\')) {
+        iconPath = bundleId;
+      } else if (bundleId) {
+        // macOS bundle identifier — not supported on Windows here
+        return { iconDataUrl: null };
+      }
+      if (!iconPath) return { iconDataUrl: null };
+      const icon = nativeImage.createFromPath(iconPath);
+      if (icon.isEmpty()) return { iconDataUrl: null };
+      const dataUrl = icon.toDataURL();
+      return { iconDataUrl: dataUrl };
+    } catch {
+      return { iconDataUrl: null };
+    }
   });
 }

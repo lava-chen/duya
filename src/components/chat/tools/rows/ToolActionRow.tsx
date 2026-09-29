@@ -50,6 +50,7 @@ import { TaskToolRow } from './TaskToolRow';
 import { TodoToolRow } from './TodoToolRow';
 import { VisionToolRow } from './VisionToolRow';
 import { CanvasConductorToolRow } from './CanvasConductorToolRow';
+import { CuaToolRow } from './CuaToolRow';
 import { BrowserToolRow } from './BrowserToolRow';
 import { McpToolRow } from './McpToolRow';
 import { InvokeToolRow } from './InvokeToolRow';
@@ -215,6 +216,12 @@ const ROUTES: RouteEntry[] = [
     // IS 'builtin', falls back to generic WrenchIcon + tool name.
     match: (t) => t.name.toLowerCase() === 'invoke' || t.name.toLowerCase() === 'tool_invoke',
     render: (tool) => <InvokeToolRow tool={tool} />,
+  },
+  {
+    // Computer-use tools (computer_use_*) — plan 575 §CUA toolrow.
+    // Renders with the target app icon when available in tool.metadata.cuaApp.
+    match: (t) => t.name.toLowerCase() === 'computer_cua',
+    render: (tool) => <CuaToolRow tool={tool} />,
   },
 ];
 

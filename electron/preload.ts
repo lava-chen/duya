@@ -3138,6 +3138,11 @@ const duya = {
     ipcRenderer.invoke('duya:link-preview', url).then((p) => p?.favicon ?? null),
   getPageTitle: (url: string): Promise<string | null> =>
     ipcRenderer.invoke('duya:link-preview', url).then((p) => p?.title ?? null),
+  /** Plan 575 §CUA toolrow: get app icon data URL for a bundleId (exe path on Windows). */
+  cua: {
+    getApplicationIcon: (bundleId: string): Promise<string | null> =>
+      ipcRenderer.invoke('cua:get-application-icon', bundleId).then((r) => r?.iconDataUrl ?? null),
+  },
 };
 contextBridge.exposeInMainWorld('duya', duya);
 
