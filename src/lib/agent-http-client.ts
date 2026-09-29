@@ -102,6 +102,18 @@ export interface AgentEvent {
   groupId?: string;
   progressTitle?: string;
   progressSource?: 'provider_commentary' | 'model_progress_tool' | 'tool_fallback';
+  /** Optional upstream identifier (provider request id, OpenAI x-request-id,
+   *  Anthropic message id, etc.) surfaced with `chat:error` so the chat
+   *  banner can show a trace id for support handoff. */
+  traceId?: string;
+  /** Optional upstream task id surfaced alongside `chat:error`. */
+  taskId?: string;
+  /** Optional provider error code (e.g. `rate_limit_error`,
+   *  `usage_limit_exceeded`). Surfaced with `chat:error`. */
+  code?: string;
+  /** Optional short error message surfaced with `chat:error`. Falls back to
+   *  `error` when missing. */
+  message?: string;
 }
 
 export type EventHandler = (event: AgentEvent) => void;
@@ -325,6 +337,10 @@ export class AgentServerClient {
                 error: (event.data as Record<string, unknown>)?.error as string,
                 content: (event.data as Record<string, unknown>)?.content as string,
                 reason: (event.data as Record<string, unknown>)?.reason as string | undefined,
+                traceId: (event.data as Record<string, unknown>)?.traceId as string | undefined,
+                taskId: (event.data as Record<string, unknown>)?.taskId as string | undefined,
+                code: (event.data as Record<string, unknown>)?.code as string | undefined,
+                message: (event.data as Record<string, unknown>)?.message as string | undefined,
               };
               if (mappedEvent.type === 'done' || mappedEvent.type === 'chat:done' || mappedEvent.type === 'error' || mappedEvent.type === 'chat:error') {
                 terminalEventReceived = true;
@@ -429,6 +445,10 @@ export class AgentServerClient {
                       error: (event.data as Record<string, unknown>)?.error as string,
                       content: (event.data as Record<string, unknown>)?.content as string,
                       reason: (event.data as Record<string, unknown>)?.reason as string | undefined,
+                      traceId: (event.data as Record<string, unknown>)?.traceId as string | undefined,
+                      taskId: (event.data as Record<string, unknown>)?.taskId as string | undefined,
+                      code: (event.data as Record<string, unknown>)?.code as string | undefined,
+                      message: (event.data as Record<string, unknown>)?.message as string | undefined,
                     };
                     if (mappedEvent.type === 'done' || mappedEvent.type === 'chat:done' || mappedEvent.type === 'error' || mappedEvent.type === 'chat:error') {
                       terminalEventReceived = true;
@@ -580,6 +600,11 @@ export class AgentServerClient {
                 result: (event.data as Record<string, unknown>)?.result,
                 error: (event.data as Record<string, unknown>)?.error as string,
                 content: (event.data as Record<string, unknown>)?.content as string,
+                reason: (event.data as Record<string, unknown>)?.reason as string | undefined,
+                traceId: (event.data as Record<string, unknown>)?.traceId as string | undefined,
+                taskId: (event.data as Record<string, unknown>)?.taskId as string | undefined,
+                code: (event.data as Record<string, unknown>)?.code as string | undefined,
+                message: (event.data as Record<string, unknown>)?.message as string | undefined,
               };
               if (mappedEvent.type === 'done' || mappedEvent.type === 'chat:done' || mappedEvent.type === 'error' || mappedEvent.type === 'chat:error') {
                 terminalEventReceived = true;

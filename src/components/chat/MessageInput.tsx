@@ -6,7 +6,6 @@ import React, { useMemo, useState, useRef, useCallback, KeyboardEvent, FormEvent
 import { ArrowUpIcon,
   SearchIcon,
   XIcon,
-  StopIcon,
   XCircleIcon,
   PaperclipIcon,
   PlusIcon,
@@ -119,6 +118,22 @@ function PluginPopoverIcon({
       style={{ objectFit: 'contain', borderRadius: 4 }}
       onError={() => setFailed(true)}
     />
+  );
+}
+
+function StopIcon({ size = 16, className }: { size?: number; className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      className={className}
+    >
+      <rect x="6" y="4" width="4" height="16" rx="1" />
+      <rect x="14" y="4" width="4" height="16" rx="1" />
+    </svg>
   );
 }
 

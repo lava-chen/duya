@@ -29,6 +29,12 @@ exec-plans/
 
 Plans in `active/` are being executed with clear phases and checkpoints.
 
+### Workspace
+
+| Plan | Description | Priority | Status |
+| --- | --- | --- | --- |
+| [2026-09-workspace-phase-0](./active/2026-09-workspace-phase-0.md) | Define Workspace domain, single-root Project migration, creation settings, and Trust / Permission contract | P0 | Planning |
+
 ### Tool Catalog
 
 | Plan | Description | Priority | Status |

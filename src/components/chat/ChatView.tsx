@@ -8,6 +8,7 @@ import { useTranslation } from '@/hooks/useTranslation';
 import type { Message } from '@/types';
 import { MessageList, type MessageListRef } from './MessageList';
 import { MessageInput } from './MessageInput';
+import { ChatErrorBanner } from './ChatErrorBanner';
 import { GoalStatusChip } from './GoalStatusChip';
 import { PermissionPrompt } from './PermissionPrompt';
 import { ConnectorAuthRequiredCard } from './ConnectorAuthRequiredCard';
@@ -1464,52 +1465,6 @@ export function ChatView({
         <ContextCompressionToast message={compressionNotification} />
       )}
 
-      {/* Agent error banner with retry */}
-      {(phase === 'error' || (streamingError && phase !== 'aborted')) && (() => {
-        const isRateLimit = streamingError?.code === 'rate_limit_error';
-        const isUsageLimit = streamingError?.code === 'usage_limit_exceeded';
-        const isProviderSafetyFilter = streamingError?.code === 'provider_safety_filter';
-        const bannerTitle = isRateLimit
-          ? t('error.rateLimitTitle')
-          : isUsageLimit
-            ? t('error.usageLimitTitle')
-            : isProviderSafetyFilter
-              ? 'Provider safety filter stopped the response'
-              : 'Agent Error';
-        const bannerMessage = isRateLimit
-          ? t('error.rateLimitMessage')
-          : isUsageLimit
-            ? t('error.usageLimitMessage')
-            : isProviderSafetyFilter
-              ? 'The model provider blocked the final generated output. DUYA keeps previous tool work and file edits; continue in this session with a narrower request or switch models.'
-              : streamingError?.message || 'The agent process encountered an error. You can retry with the same session.';
-        return (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-top-2 duration-300">
-          <div className="flex flex-col gap-2 px-4 py-3 bg-red-500/90 text-white text-sm rounded-lg shadow-lg backdrop-blur-sm max-w-md">
-            <div className="flex items-center gap-2">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path d="M8 1a7 7 0 100 14A7 7 0 008 1z" stroke="currentColor" strokeWidth="1.5" />
-                <path d="M8 5v3M8 10.5v.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-              </svg>
-              <span className="font-medium">{bannerTitle}</span>
-            </div>
-            <p className="text-white/90 text-xs leading-relaxed">
-              {bannerMessage}
-            </p>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={handleRetry}
-              className="self-start px-3 py-1 mt-1 bg-white/20 hover:bg-white/30 text-white text-xs font-medium rounded transition-colors cursor-pointer"
-            >
-              {t('error.tryAgain')}
-            </Button>
-          </div>
-        </div>
-        );
-      })()}
-
       <div className="chat-body-row">
         <div className="chat-main-column">
       <div className="flex-1 min-h-0">
@@ -1526,6 +1481,13 @@ export function ChatView({
               >
                 {/* Input between selector and recent threads */}
                 <WorkspaceComposerLayer expanded={workspaceExpanded}>
+                {(phase === 'error' || (streamingError && phase !== 'aborted')) && (
+                  <ChatErrorBanner
+                    error={streamingError}
+                    onRetry={phase === 'error' ? handleRetry : undefined}
+                    variant="compact"
+                  />
+                )}
                 <div className={`w-full welcome-message-input workspace-floating-composer${workspaceExpanded ? ' workspace-floating-composer-expanded' : ''}`}>
                   <MessageInput
                     onSend={handleSend}
@@ -1640,6 +1602,13 @@ export function ChatView({
                 permissionProfile={permissionProfile}
               />
             ) : (
+              <>
+              {(phase === 'error' || (streamingError && phase !== 'aborted')) && (
+                <ChatErrorBanner
+                  error={streamingError}
+                  onRetry={phase === 'error' ? handleRetry : undefined}
+                />
+              )}
               <MessageInput
                 onSend={handleSend}
                 onRecapRequest={requestRecap}
@@ -1673,6 +1642,7 @@ export function ChatView({
                 contextWindow={capabilityContextWindow}
                 contextPricing={capabilityPricing}
               />
+              </>
             )}
           </div>
         </div>

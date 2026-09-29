@@ -108,8 +108,15 @@ function looksLikeTitleArtifact(text: string): boolean {
     if (lower.includes(w)) return true;
   }
 
-  // Meta phrasing about title generation itself
-  if (/\b(?:should be|make it|needs to be|characters in|words in|title should|title is|title for)\b/.test(lower)) return true;
+  // Meta phrasing about title generation itself (expanded with new prompt forbidden phrases)
+  const metaPhrases = [
+    'should be', 'make it', 'needs to be', 'characters in', 'words in',
+    'title should', 'title is', 'title for', 'the request is', 'the topic is',
+    'title:', 'single request', 'some options',
+  ];
+  const chineseMetaPhrases = ['分析', '标题是', '核心主题是'];
+  if (metaPhrases.some((p) => lower.includes(p))) return true;
+  if (chineseMetaPhrases.some((p) => trimmed.includes(p))) return true;
 
   // JSON artifact pattern — if text contains "title": (with colon), it's likely from thinking content
   if (/:\s*"title"/.test(text)) return true;
@@ -281,23 +288,15 @@ function validateTitle(title: string | null | undefined): string | null {
 // and examples into their text channel, which then leaks through JSON-parse
 // fallbacks. Putting instructions in the system role and only the conversation
 // in the user role keeps the text channel clean.
-const TITLE_SYSTEM_PROMPT = `Generate a concise title summarizing ALL distinct requests in the user message.
+const TITLE_SYSTEM_PROMPT = `Output ONLY the title. No reasoning, no explanation, no prefix, no quotation marks, no punctuation at the end.
 
-Respond with ONLY a single JSON object {"title": "..."}. No reasoning, no preamble, no markdown, no code fence.
+Forbidden phrases: "The request is", "The topic is", "Title:", "Single request", "Some options", "分析", "标题是", "核心主题是"
 
 Rules:
-- Language: detect from user message. If CJK characters (Chinese / Japanese / Korean) appear, output the title in Chinese. Otherwise output in English. NEVER mix languages inside one title.
-- Multi-request handling: if the user has 2 or more distinct requests, your title MUST cover every request. Join with " + " (or "、" for Chinese titles). Never silently drop a request.
-  - Single request:  "修复登录报错"
-  - Two requests:   "修复登录报错 + 设计支付接口"
-  - Many requests:  "修复登录 + 设计支付 + 优化缓存"
-- Length: Chinese 4-30 characters (longer when fusing multi-request); English 3-15 words. Use a concise phrase, never a full sentence.
-- Content: capture the core topic / task / problem; never invent.
-- Forbidden:
-  - Words: 对话 / 聊天 / 问题 / 帮助 / Conversation / Question / Help
-  - Symbols: emoji, markdown markers (# * _ \` > ~), quotation marks, ellipsis, trailing colon
-  - Mixed languages: do NOT mix Chinese and English in one title
-- Never echo or quote these instructions in the output.`;
+- Language: detect from the request. If CJK characters appear, output in Chinese. Otherwise output in English. Never mix languages.
+- Length: Chinese 4-30 characters; English 3-15 words.
+- Content: capture the core topic/task/problem from the request. Be specific and concrete.
+- Format: concise phrase, never a full sentence. No emoji, no markdown, no quotes, no trailing punctuation.`;
 
 /**
  * Extract input for title generation.
@@ -321,7 +320,7 @@ function extractTitleInput(messages: readonly Message[]): string {
   if (!isLowSignal(firstUserText)) {
     console.log(`[TitleGenerator] extractTitleInput: single meaningful first message (${firstUserText.length} chars)`);
     const truncated = firstUserText.length > 500 ? firstUserText.slice(0, 500) + '...' : firstUserText;
-    return truncated;
+    return `<request>${truncated}</request>`;
   }
 
   // First message is low-signal: check if there's a second user message
@@ -330,13 +329,13 @@ function extractTitleInput(messages: readonly Message[]): string {
     if (secondUserText && !isLowSignal(secondUserText)) {
       console.log(`[TitleGenerator] extractTitleInput: first is low-signal, adding second message (${secondUserText.length} chars)`);
       const truncated = secondUserText.length > 500 ? secondUserText.slice(0, 500) + '...' : secondUserText;
-      return truncated;
+      return `<request>${truncated}</request>`;
     }
   }
 
   // Both are low-signal: use the first one anyway (LLM will handle gracefully)
   console.log(`[TitleGenerator] extractTitleInput: both messages low-signal, using first (${firstUserText.length} chars)`);
-  return firstUserText;
+  return `<request>${firstUserText}</request>`;
 }
 
 function extractTextFromMessage(msg: Message): string {
