@@ -69,8 +69,15 @@ describe('matchToolPattern', () => {
 });
 
 describe('isToolVisible', () => {
-  it('always-exposed tool with no constraints is visible', () => {
-    expect(isToolVisible('read', 'always', EMPTY_DISCOVERED, NO_CONSTRAINTS)).toBe(true);
+  it('keeps catalog routing available under capability allowlists', () => {
+    const c: ToolVisibilityConstraints = { allowedTools: ['file:read'] };
+    expect(isToolVisible('tool_catalog', 'eager', EMPTY_DISCOVERED, c)).toBe(true);
+    expect(isToolVisible('tool_invoke', 'eager', EMPTY_DISCOVERED, c)).toBe(true);
+    expect(isToolVisible('tool_invoke', 'eager', EMPTY_DISCOVERED, { ...c, disabledTools: ['tool_invoke'] })).toBe(false);
+  });
+
+  it('eager tool with no constraints is visible', () => {
+    expect(isToolVisible('read', 'eager', EMPTY_DISCOVERED, NO_CONSTRAINTS)).toBe(true);
   });
 
   it('hidden tool is never visible', () => {
@@ -78,37 +85,37 @@ describe('isToolVisible', () => {
     expect(isToolVisible('debug', 'hidden', new Set(['debug']), NO_CONSTRAINTS)).toBe(false);
   });
 
-  it('hint tool is visible without discovery (stub entry)', () => {
-    expect(isToolVisible('mcp__srv__query', 'hint', EMPTY_DISCOVERED, NO_CONSTRAINTS)).toBe(true);
+  it('eager tool is visible without discovery', () => {
+    expect(isToolVisible('mcp__srv__query', 'eager', EMPTY_DISCOVERED, NO_CONSTRAINTS)).toBe(true);
   });
 
-  it('discoverable tool is hidden until discovered', () => {
-    expect(isToolVisible('browser', 'discoverable', EMPTY_DISCOVERED, NO_CONSTRAINTS)).toBe(false);
-    expect(isToolVisible('browser', 'discoverable', new Set(['browser']), NO_CONSTRAINTS)).toBe(true);
+  it('deferred tool is hidden from direct invocation until selected', () => {
+    expect(isToolVisible('browser', 'deferred', EMPTY_DISCOVERED, NO_CONSTRAINTS)).toBe(false);
+    expect(isToolVisible('browser', 'deferred', new Set(['browser']), NO_CONSTRAINTS)).toBe(true);
   });
 
   it('disabledTools (exact) hides the tool', () => {
-    expect(isToolVisible('read', 'always', EMPTY_DISCOVERED, { disabledTools: ['read'] })).toBe(false);
-    expect(isToolVisible('write', 'always', EMPTY_DISCOVERED, { disabledTools: ['read'] })).toBe(true);
+    expect(isToolVisible('read', 'eager', EMPTY_DISCOVERED, { disabledTools: ['read'] })).toBe(false);
+    expect(isToolVisible('write', 'eager', EMPTY_DISCOVERED, { disabledTools: ['read'] })).toBe(true);
   });
 
   it('profileDisallowedPatterns (wildcard) hides matching tools', () => {
     const c: ToolVisibilityConstraints = { profileDisallowedPatterns: ['exec:*'] };
-    expect(isToolVisible('exec:bash', 'always', EMPTY_DISCOVERED, c)).toBe(false);
-    expect(isToolVisible('file:read', 'always', EMPTY_DISCOVERED, c)).toBe(true);
+    expect(isToolVisible('exec:bash', 'eager', EMPTY_DISCOVERED, c)).toBe(false);
+    expect(isToolVisible('file:read', 'eager', EMPTY_DISCOVERED, c)).toBe(true);
   });
 
   it('allowedTools (exact) restricts to listed tools', () => {
     const c: ToolVisibilityConstraints = { allowedTools: ['read', 'glob'] };
-    expect(isToolVisible('read', 'always', EMPTY_DISCOVERED, c)).toBe(true);
-    expect(isToolVisible('write', 'always', EMPTY_DISCOVERED, c)).toBe(false);
+    expect(isToolVisible('read', 'eager', EMPTY_DISCOVERED, c)).toBe(true);
+    expect(isToolVisible('write', 'eager', EMPTY_DISCOVERED, c)).toBe(false);
   });
 
   it('profileAllowedPatterns (wildcard) restricts to matching tools', () => {
     const c: ToolVisibilityConstraints = { profileAllowedPatterns: ['file:*', 'search:*'] };
-    expect(isToolVisible('file:read', 'always', EMPTY_DISCOVERED, c)).toBe(true);
-    expect(isToolVisible('search:grep', 'always', EMPTY_DISCOVERED, c)).toBe(true);
-    expect(isToolVisible('exec:bash', 'always', EMPTY_DISCOVERED, c)).toBe(false);
+    expect(isToolVisible('file:read', 'eager', EMPTY_DISCOVERED, c)).toBe(true);
+    expect(isToolVisible('search:grep', 'eager', EMPTY_DISCOVERED, c)).toBe(true);
+    expect(isToolVisible('exec:bash', 'eager', EMPTY_DISCOVERED, c)).toBe(false);
   });
 
   it('deny wins over allow', () => {
@@ -116,14 +123,14 @@ describe('isToolVisible', () => {
       profileAllowedPatterns: ['file:*', 'exec:*'],
       profileDisallowedPatterns: ['exec:bash'],
     };
-    expect(isToolVisible('file:read', 'always', EMPTY_DISCOVERED, c)).toBe(true);
-    expect(isToolVisible('exec:python', 'always', EMPTY_DISCOVERED, c)).toBe(true);
-    expect(isToolVisible('exec:bash', 'always', EMPTY_DISCOVERED, c)).toBe(false);
+    expect(isToolVisible('file:read', 'eager', EMPTY_DISCOVERED, c)).toBe(true);
+    expect(isToolVisible('exec:python', 'eager', EMPTY_DISCOVERED, c)).toBe(true);
+    expect(isToolVisible('exec:bash', 'eager', EMPTY_DISCOVERED, c)).toBe(false);
   });
 
   it('discovered tool still respects denylist', () => {
     const c: ToolVisibilityConstraints = { disabledTools: ['browser'] };
-    expect(isToolVisible('browser', 'discoverable', new Set(['browser']), c)).toBe(false);
+    expect(isToolVisible('browser', 'deferred', new Set(['browser']), c)).toBe(false);
   });
 });
 

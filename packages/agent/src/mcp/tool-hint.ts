@@ -7,11 +7,11 @@ import type { Tool } from '../types.js';
  *
  * Mirrors grok's `descriptionGenerator` / `inputSchemaSummary` role: a short,
  * schema-free line telling the model what arguments a tool takes, so it can
- * decide whether to deep-read the full schema (via `tool_schema`) without
+ * decide whether to deep-read the full schema (via `tool_catalog`) without
  * fetching every schema upfront.
  *
  * The target shape is the one already used for the built-in `image_generate`
- * discoverable tool (`tool/builtin.ts`): a comma-separated argument-name list
+ * deferred tool (`tool/builtin.ts`): a comma-separated argument-name list
  * with `(required)` markers, e.g.
  *
  *   prompt (required), size, quality, reference_image, output_path

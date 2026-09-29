@@ -172,7 +172,7 @@ export class ConnectorService {
   /**
    * List all tool descriptors for currently-connected connections.
    * Called by the init/reload payload builder so the agent process can
-   * register discoverable tools. Descriptors contain NO tokens.
+   * register deferred tools. Descriptors contain NO tokens.
    */
   async listDescriptorsForConnected(): Promise<ConnectorToolDescriptor[]> {
     const out: ConnectorToolDescriptor[] = [];

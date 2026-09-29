@@ -15,7 +15,7 @@ appear when the Notion app connection is authorized.
 
 - The connector is the official Notion remote MCP endpoint
   (`https://mcp.notion.com/mcp`) managed by duya's app-connection system.
-- Tools are named `remote_notion_<tool>` and are discoverable via `tool_search`.
+- Tools are named `remote_notion_<tool>` and are discoverable via `tool_catalog`.
 - If no `remote_notion_*` tool is available, the Notion connection is not
   authorized — tell the user to connect Notion in the app connection settings.
 

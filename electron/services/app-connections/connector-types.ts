@@ -23,7 +23,7 @@ export interface ConnectorInputSchema {
 }
 
 /**
- * Describes a connector tool the agent can discover via `tool_search`
+ * Describes a connector tool the agent can discover via `tool_catalog`
  * and invoke. The descriptor is provider-owned; the executor lives in
  * the main process.
  */
@@ -34,7 +34,7 @@ export interface ConnectorToolDescriptor {
   description: string;
   /** JSON-schema for the tool's input parameters (LLM-facing). */
   inputSchema: ConnectorInputSchema;
-  /** Concise summary used by `tool_search` for ranking. */
+  /** Concise summary used by `tool_catalog` for ranking. */
   inputSchemaSummary: string;
   /** Risk tier — drives the agent-side permission gate (Plan 312 §6). */
   riskTier: RiskTier;

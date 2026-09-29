@@ -3,8 +3,8 @@
  *
  * Generates images from a text prompt through a configurable provider
  * (`[image_generation]` in ~/.duya/config.toml: openai Images API or
- * fal.ai). Registered with `exposeMode: 'discoverable'` — it is NOT on
- * the default tool surface; the model reaches it via `tool_search`.
+ * fal.ai). Registered with `exposure: 'deferred'` — it is NOT on
+ * the default tool surface; the model reaches it via `tool_catalog`.
  */
 
 import type { Tool, ToolResult } from '../../types.js';

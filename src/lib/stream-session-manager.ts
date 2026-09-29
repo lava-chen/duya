@@ -457,7 +457,7 @@ interface StartStreamParams {
   mode?: string;
   /**
    * Plan 450: providers @-mentioned in the composer for this run. Forwarded
-   * to the worker so connector tools of these providers skip tool_search.
+   * to the worker so connector tools of these providers are promoted to direct calls.
    */
   mentionedProviders?: string[];
   defaultWorkspaceDirectory?: string;
@@ -1455,7 +1455,7 @@ export class StreamSessionManager {
    * the model can resolve. Connects to the App Connections API to enumerate
    * connected providers, then delegates to the pure `rewriteAppMentionTokens`
    * helper. Best-effort; on failure returns the content unchanged with no
-   * mentions so the agent falls back to default discoverable tools.
+   * mentions so the agent falls back to the default deferred catalog surface.
    */
   private async resolveAppMentions(
     content: string,
@@ -1868,7 +1868,7 @@ export class StreamSessionManager {
       // list for per-turn activation. Best-effort; failure to enumerate
       // connections (e.g. agent server unreachable during typing) leaves
       // the content unchanged and the array empty, which simply degrades
-      // to the default discoverable tools.
+      // to the default deferred catalog surface.
       const appMentions = await this.resolveAppMentions(params.content);
       // Plugin mentions: rewrite `@pluginId` → `[@Name](plugin://id)` and merge
       // the plugin's connected app connectors into `mentionedProviders` (the

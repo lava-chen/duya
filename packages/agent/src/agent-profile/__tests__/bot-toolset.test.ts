@@ -48,7 +48,8 @@ describe('BOT_TOOLSET', () => {
     expect(BOT_TOOLSET).not.toContain('ReactToMessage');
   });
 
-  it('does not claim the always-exposed meta tools (T4/T5)', () => {
+  it('does not claim the always-exposed meta tools', () => {
+    expect(BOT_TOOLSET).not.toContain('tool_catalog');
     expect(BOT_TOOLSET).not.toContain('tool_schema');
     expect(BOT_TOOLSET).not.toContain('tool_invoke');
   });
@@ -71,7 +72,7 @@ describe('applyBotToolset', () => {
 
   it('appends the bot toolset to a "*" allowlist (plan 496 exposure promotion)', () => {
     // The default `full` base profile resolves to ['*']. The exact names must
-    // still be appended: ToolFilter only promotes a discoverable tool on an
+    // still be appended: ToolFilter only promotes a deferred tool on an
     // exact allowlist entry, so a bare '*' bot never saw SendMessage.
     const merged = applyBotToolset(makeProfile(['*']));
     expect(merged.allowedTools).toContain('*');

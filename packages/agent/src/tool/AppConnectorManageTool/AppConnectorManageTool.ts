@@ -2,7 +2,7 @@
  * App Connector Management Tools (Plan 503) — bot-only connector
  * elicitation (grok-bot 0.18 sand-mcp-management-tools parity).
  *
- * Boundary: these tools are registered `discoverable` in the builtin
+ * Boundary: these tools are registered `deferred` in the builtin
  * registry and surfaced ONLY to bot profiles via the BOT_TOOLSET
  * exact-name promotion (agent-profile/bot-toolset.ts). Interactive
  * main-session agents stay on the settings-page connect flow.

@@ -562,6 +562,7 @@ function processCandidate(
     serverName: c.rawConfig.name,
     scopedServerName: buildScopedServerName(c),
     rawConfig: {
+      connectionId: c.rawConfig.connectionId,
       transport: c.rawConfig.transport,
       command: c.rawConfig.command,
       args: c.rawConfig.args,
@@ -687,7 +688,7 @@ export async function resolveMCPDiscovery(
       pluginId: entry.pluginId,
       pluginName: entry.pluginName,
       scopedServerName: runtimeScopedServerName,
-      rawConfig: p.proc.expanded,
+      rawConfig: { ...p.proc.expanded, connectionId: entry.rawConfig.connectionId },
       allowedAgentIds: entry.allowedAgentIds,
     });
   }

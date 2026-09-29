@@ -122,7 +122,15 @@ export interface Tool {
    *                  (not emitted by the current resolution engine)
    *   - 'unknown'  : defensive default for any tool missing the field
    */
-  mcpInfo?: { serverName: string; toolName: string; source: 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown' };
+  mcpInfo?: {
+    serverName: string;
+    toolName: string;
+    source: 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown';
+    /** Durable MCP connection identity, independent of display names. */
+    connectionId?: string;
+    /** Stable owning plugin identity when this server comes from a plugin. */
+    pluginId?: string;
+  };
 }
 
 // Vision model configuration
@@ -244,7 +252,7 @@ export interface ChatOptions {
     systemPrompt: string;
     /**
      * Provider-facing tool definitions for this exact request. This can change
-     * between turns after `tool_search` discovers an on-demand tool.
+     * between turns after `tool_catalog` discovers a deferred tool.
      */
     tools: Array<Pick<Tool, 'name' | 'description' | 'input_schema'>>;
     turn: number;
@@ -352,7 +360,7 @@ export interface ChatOptions {
   wakeRun?: boolean;
   /**
    * Plan 450: providers the user @-mentioned in the composer for this run.
-   * Connector tools of these providers skip tool_search discovery (exposure
+     * Connector tools of these providers skip catalog discovery (exposure
    * promotion) and a one-shot connector-activation reminder is injected into
    * the first model turn. Cleared implicitly per streamChat call.
    */
@@ -504,6 +512,10 @@ export interface SessionInfo {
 // MCP 服务器配置
 export interface MCPServerConfig {
   name: string;
+  /** Durable, non-secret identity for this configured connection. */
+  connectionId?: string;
+  /** Stable owner identity for plugin-provided MCP servers. */
+  pluginId?: string;
   /**
    * Local stdio transport command. Required when `transport` is omitted or
    * set to `stdio`; forbidden for remote transports.

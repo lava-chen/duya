@@ -1,43 +1,16 @@
 import { randomUUID } from 'node:crypto';
+import { Ajv, type ValidateFunction } from 'ajv';
 
-import type { ExposeMode, ToolRegistry } from '../registry.js';
+import type { ToolRegistry } from '../registry.js';
 import type { ToolUseContext } from '../../types.js';
 import type { ToolInvokeDispatcher, ToolInvokeRequest, ToolInvokeOutcome } from './ToolInvokeTool.js';
-import { BUILTIN_TOOLS_NAMESPACE } from '../ToolSchemaTool/catalogFromRegistry.js';
+import type { ToolSnapshot } from '../snapshot.js';
+import type { ToolCatalogEntry } from '../catalog-types.js';
 import { logger } from '../../utils/logger.js';
 
-/**
- * Plan 480 P2.2/P2.3 — registry-backed dispatcher for `tool_invoke`.
- *
- * Wires the invocation meta tool to the real permission chain and executor:
- *   resolve → permission (allow / deny / ask) → executor → outcome
- *
- * Resolution scope (must mirror the tool_schema catalog provider):
- *   - namespace = an MCP server name   → MCP-owned tools by `mcpInfo`
- *   - namespace = 'builtin'            → non-MCP `hint` / `discoverable`
- *                                        built-ins by definition name
- * The schema the model read via `tool_schema` and the tool that actually
- * runs come from the SAME registry, so discovery can never promise a tool
- * the executor cannot find.
- *
- * Permission semantics:
- *   - allow  → execute
- *   - deny   → structured error carrying the decision message
- *   - ask    → interactive approval through the turn's ToolUseContext.
- *              With a `requestPermission` channel (interactive session) the
- *              user gets a REAL approval card — deny/paused surface as
- *              structured errors, allow falls through to execution. Without
- *              a channel (headless CLI / sub-agent / background gateway
- *              session) there is no interactive user to answer and asking
- *              would dead-lock the turn, so the call proceeds implicitly
- *              with a loud warn — the same trust model the MCP runtime gate
- *              uses (mcp/apply.ts). The permission chain is still the gate:
- *              auto-approve modes reach `allow` before this branch.
- *
- * The permission check is a caller-injected function (DuyaAgent wraps its
- * `hasPermissionsToUseTool`), so this module stays unit-testable without a
- * live agent.
- */
+/** Registry-backed fallback dispatcher. It resolves stable IDs against the
+ * current catalog, validates the exact loaded schema revision, then follows
+ * the ordinary permission and executor path. */
 
 export interface ToolInvokePermissionDecision {
   behavior: 'allow' | 'deny' | 'ask';
@@ -48,6 +21,16 @@ export interface ToolInvokePermissionDecision {
 export interface ToolInvokeDispatcherDeps {
   /** Turn-level registry containing the tool surface. */
   registry: ToolRegistry;
+  /** The exact immutable catalog view that the current request exposed. */
+  getSnapshot?: () => ToolSnapshot | undefined;
+  /** Schema detail reads scoped to this request/session. */
+  getLoadedSchemaRevision?: (toolId: string) => string | undefined;
+  /** Provider round in which each schema result became visible to the model. */
+  getLoadedSchemaRound?: (toolId: string) => number | undefined;
+  /** Current provider round, used to prevent same-response detail + invoke batches. */
+  getCurrentRound?: () => number;
+  /** Current-turn profile/mode/allowlist eligibility by stable tool ID. */
+  isEligibleTool?: (toolId: string) => boolean;
   /** Wraps the agent's permission chain for the resolved real tool name. */
   checkPermission: (
     toolName: string,
@@ -64,99 +47,32 @@ export interface ToolInvokeDispatcherDeps {
   contextProvider?: () => ToolUseContext | undefined;
 }
 
-interface ResolvedTool {
-  internalName: string;
-  displayName: string;
-  isBuiltin: boolean;
-}
+const catalogAjv = new Ajv({ allErrors: true, strict: false });
+const catalogValidators = new Map<string, ValidateFunction>();
 
-/**
- * Four-tier exposure: `tool_invoke` reaches exactly the tools whose full
- * schema is NOT declared on the request's tools array — `discoverable`
- * (found via tool_search) and `hint` (stub entry, deep-read via
- * tool_schema). `always` tools are declared already; `hidden` tools are
- * unreachable by any model path.
- */
-function isInvocableThroughMetaTool(mode: ExposeMode): boolean {
-  return mode === 'discoverable' || mode === 'hint';
-}
-
-function listNamespaces(registry: ToolRegistry): string[] {
-  const namespaces = new Set<string>();
-  let hasBuiltin = false;
-  for (const tool of registry.getAllTools()) {
-    if (registry.getOwner(tool.name) === 'mcp') {
-      if (
-        tool.mcpInfo &&
-        registry.getExposeMode(tool.name) !== 'hidden'
-      ) {
-        namespaces.add(tool.mcpInfo.serverName);
-      }
-    } else if (isInvocableThroughMetaTool(registry.getExposeMode(tool.name))) {
-      hasBuiltin = true;
-    }
+function getCatalogValidator(entry: ToolCatalogEntry): ValidateFunction {
+  const cached = catalogValidators.get(entry.schemaRevision);
+  if (cached) return cached;
+  const validator = catalogAjv.compile(entry.inputSchema);
+  catalogValidators.set(entry.schemaRevision, validator);
+  if (catalogValidators.size > 256) {
+    const oldestKey = catalogValidators.keys().next().value;
+    if (oldestKey !== undefined) catalogValidators.delete(oldestKey);
   }
-  if (hasBuiltin) namespaces.add(BUILTIN_TOOLS_NAMESPACE);
-  return [...namespaces].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return validator;
 }
 
-function resolveBuiltinTool(
-  registry: ToolRegistry,
-  toolName: string,
-): ResolvedTool | undefined {
-  for (const tool of registry.getAllTools()) {
-    if (registry.getOwner(tool.name) !== 'mcp') {
-      if (
-        isInvocableThroughMetaTool(registry.getExposeMode(tool.name)) &&
-        tool.name === toolName
-      ) {
-        return { internalName: tool.name, displayName: tool.name, isBuiltin: true };
-      }
-    }
+function errorResult(title: string, body: string): ToolInvokeOutcome;
+function errorResult(errorCode: string, title: string, body: string): ToolInvokeOutcome;
+function errorResult(first: string, second: string, third?: string): ToolInvokeOutcome {
+  if (third !== undefined) {
+    return {
+      result: `# ${second}\n\nError code: \`${first}\`\n\n${third}`,
+      error: true,
+      errorCode: first,
+    };
   }
-  return undefined;
-}
-
-function resolveMcpTool(
-  registry: ToolRegistry,
-  namespace: string,
-  toolName: string,
-): ResolvedTool | undefined {
-  for (const tool of registry.getAllTools()) {
-    if (registry.getOwner(tool.name) !== 'mcp') continue;
-    if (registry.getExposeMode(tool.name) === 'hidden') continue;
-    const info = tool.mcpInfo;
-    if (!info) continue;
-    if (info.serverName === namespace && info.toolName === toolName) {
-      return { internalName: tool.name, displayName: info.toolName, isBuiltin: false };
-    }
-  }
-  return undefined;
-}
-
-function listToolsInNamespace(
-  registry: ToolRegistry,
-  namespace: string,
-): string[] {
-  const names: string[] = [];
-  for (const tool of registry.getAllTools()) {
-    if (registry.getExposeMode(tool.name) === 'hidden') continue;
-    if (namespace === BUILTIN_TOOLS_NAMESPACE) {
-      if (
-        registry.getOwner(tool.name) !== 'mcp' &&
-        isInvocableThroughMetaTool(registry.getExposeMode(tool.name))
-      ) {
-        names.push(tool.name);
-      }
-    } else if (registry.getOwner(tool.name) === 'mcp' && tool.mcpInfo?.serverName === namespace) {
-      names.push(tool.mcpInfo.toolName);
-    }
-  }
-  return names.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-}
-
-function errorResult(title: string, body: string): ToolInvokeOutcome {
-  return { result: `# ${title}\n\n${body}`, error: true };
+  return { result: `# ${first}\n\n${second}`, error: true };
 }
 
 function toText(value: unknown): string {
@@ -173,144 +89,127 @@ export function createToolInvokeDispatcherFromRegistry(
 ): ToolInvokeDispatcher {
   return {
     async dispatch(request: ToolInvokeRequest): Promise<ToolInvokeOutcome> {
-      const { namespace, tool, arguments: args } = request;
+      const { tool_id: toolId, arguments: args } = request;
+      const snapshot = deps.getSnapshot?.();
+      const advertised = snapshot?.getCatalogEntry(toolId);
+      if (!advertised) {
+        return errorResult('TOOL_NOT_FOUND', 'Tool not found', `No tool with stable ID \`${toolId}\` exists in the current catalog snapshot.`);
+      }
+      if (advertised.exposure === 'hidden') {
+        return errorResult('TOOL_HIDDEN', 'Tool unavailable', `Tool \`${toolId}\` is hidden.`);
+      }
+      if (deps.isEligibleTool && !deps.isEligibleTool(toolId)) {
+        return errorResult('TOOL_OUT_OF_SCOPE', 'Tool unavailable', `Tool \`${toolId}\` is outside the active profile or mode scope.`);
+      }
+      if (advertised.exposure !== 'deferred') {
+        return errorResult('TOOL_IS_EAGER', 'Tool is already available', `Call \`${advertised.definition.name}\` directly; eager tools cannot be dispatched through tool_invoke.`);
+      }
 
-      // 1. Resolve the real registered tool. Same registry feeds tool_schema
-      //    discovery and this execution — no schema/executor drift.
-      const resolved =
-        namespace === BUILTIN_TOOLS_NAMESPACE
-          ? resolveBuiltinTool(deps.registry, tool)
-          : resolveMcpTool(deps.registry, namespace, tool);
-      if (!resolved) {
-        const namespaces = listNamespaces(deps.registry);
-        const toolNames = listToolsInNamespace(deps.registry, namespace);
-        if (namespaces.length === 0) {
-          return errorResult(
-            'Tool Invoke Error',
-            `No tools are reachable through tool_invoke. Namespace \`${namespace}\` / tool \`${tool}\` cannot be resolved.`,
-          );
-        }
-        if (toolNames.length === 0) {
-          return errorResult(
-            'Unknown namespace',
-            `Namespace \`${namespace}\` is not connected.\n\nAvailable namespaces: ${namespaces
-              .map((n) => `\`${n}\``)
-              .join(', ')}.`,
-          );
-        }
+      // Resolve again against the live registry before permission checks so a
+      // mid-turn tools/list_changed cannot execute stale arguments.
+      const current = deps.registry.getCatalogEntryById(toolId);
+      if (!current) {
+        return errorResult('TOOL_NOT_FOUND', 'Tool no longer available', `Tool \`${toolId}\` was removed from the live registry.`);
+      }
+      if (current.exposure === 'hidden') {
+        return errorResult('TOOL_HIDDEN', 'Tool unavailable', `Tool \`${toolId}\` is now hidden.`);
+      }
+      if (current.exposure !== 'deferred') {
+        return errorResult('TOOL_IS_EAGER', 'Tool exposure changed', `Tool \`${toolId}\` is no longer deferred. Call \`${current.definition.name}\` directly.`);
+      }
+      if (advertised.schemaRevision !== current.schemaRevision) {
+        return errorResult('SCHEMA_STALE', 'Tool schema changed', `The schema for \`${toolId}\` changed after this request began. Read its schema again with tool_catalog.`);
+      }
+      const loadedRevision = deps.getLoadedSchemaRevision?.(toolId);
+      const loadedRound = deps.getLoadedSchemaRound?.(toolId);
+      const currentRound = deps.getCurrentRound?.();
+      const readWasVisibleBeforeThisRequest =
+        loadedRound === undefined || currentRound === undefined || loadedRound < currentRound;
+      if (loadedRevision !== current.schemaRevision || !readWasVisibleBeforeThisRequest) {
         return errorResult(
-          'Unknown tool',
-          `Tool \`${tool}\` does not exist in namespace \`${namespace}\`.\n\nAvailable tools: ${toolNames
-            .map((t) => `\`${t}\``)
-            .join(', ')}.`,
+          loadedRevision && readWasVisibleBeforeThisRequest ? 'SCHEMA_STALE' : 'SCHEMA_NOT_LOADED',
+          'Tool schema not current',
+          `Read the current schema for \`${toolId}\` with tool_catalog before invoking it.`,
         );
       }
 
-      // 2. Permission gate on the RESOLVED real tool (permissions can never
-      //    be bypassed by routing through the meta tool).
-      const decision = await deps.checkPermission(resolved.internalName, args);
+      // Validate arguments against the same live JSON Schema that the model
+      // read, before permission checks and before the executor can run.
+      try {
+        const validate = getCatalogValidator(current);
+        if (!validate(args)) {
+          const issues = (validate.errors ?? [])
+            .slice(0, 8)
+            .map((issue) => `${issue.instancePath || '/'} ${issue.message ?? 'is invalid'}`);
+          return errorResult('INVALID_ARGUMENTS', 'Invalid tool arguments', issues.join('\n') || 'Arguments do not match the current tool schema.');
+        }
+      } catch (error) {
+        return errorResult('INVALID_SCHEMA', 'Tool schema cannot be validated', error instanceof Error ? error.message : String(error));
+      }
+
+      const decision = await deps.checkPermission(current.internalName, args);
       if (decision.behavior === 'deny') {
         return errorResult(
+          'TOOL_PERMISSION_DENIED',
           'Permission denied',
-          decision.message
-            ? decision.message
-            : `The tool \`${tool}\` (namespace \`${namespace}\`) was denied by the permission policy.`,
+          decision.message ?? `The tool \`${current.definition.name}\` was denied by the permission policy.`,
         );
       }
       if (decision.behavior === 'ask') {
         const context = deps.contextProvider?.();
         if (context?.requestPermission) {
-          // Interactive session: raise a REAL approval card through the
-          // turn's permission_request flow (chat:permission event →
-          // renderer Allow/Deny prompt). This mirrors the MCP runtime
-          // gate (mcp/apply.ts) — prompting inside the executor keeps
-          // allow/deny + execution in a single synchronous flow.
           const userDecision = await context.requestPermission({
             id: randomUUID(),
-            toolName: resolved.internalName,
+            toolName: current.internalName,
             toolInput: args,
             mode: 'generic',
             expiresAt: Date.now() + 5 * 60 * 1000,
             decisionReason: decision.message,
           });
           if (userDecision === 'deny') {
-            logger.warn(
-              '[ToolInvoke] tool call denied by user',
-              { toolName: resolved.internalName, namespace },
-            );
+            logger.warn('[ToolInvoke] tool call denied by user', { toolName: current.internalName, toolId });
             return errorResult(
+              'TOOL_PERMISSION_DENIED',
               'Permission denied',
-              decision.message
-                ? decision.message
-                : `The user denied the call to \`${tool}\` (namespace \`${namespace}\`).`,
+              decision.message ?? `The user denied the call to \`${current.definition.name}\`.`,
             );
           }
-          // Plan 498: 'paused' means the request was persisted as a durable
-          // approval card; the turn must NOT fall through to execution.
-          // Surface the neutral waiting text; a later continuation run
-          // replays the approved call via the one-shot approval ledger.
           if (userDecision === 'paused') {
-            logger.info(
-              '[ToolInvoke] tool call paused for durable approval card',
-              { toolName: resolved.internalName, namespace },
-            );
+            logger.info('[ToolInvoke] tool call paused for durable approval card', { toolName: current.internalName, toolId });
             return errorResult(
+              'TOOL_APPROVAL_PENDING',
               'Waiting for approval',
-              `The call to \`${tool}\` (namespace \`${namespace}\`) is waiting for user approval. ` +
-                'The request has been sent as an approval card; end your turn without further tool calls.',
+              `The call to \`${current.definition.name}\` is waiting for user approval. The request has been sent as an approval card; end your turn without further tool calls.`,
             );
           }
-          // 'allow' → fall through to execution below.
         } else {
-          // No interactive user available (headless CLI / sub-agent /
-          // background gateway session): asking would dead-lock the turn.
-          // These contexts are trusted app-internal/automation surfaces,
-          // so allow implicitly with a loud warn — same semantics as the
-          // MCP runtime gate (mcp/apply.ts).
           logger.warn(
             '[ToolInvoke] no interactive user available; implicitly allowing ask-tool',
-            { toolName: resolved.internalName, namespace, reason: decision.message },
+            { toolName: current.internalName, toolId, reason: decision.message },
           );
         }
       }
 
-      // 3. Execute through the registered executor (the same one direct calls
-      //    use — no second implementation path). Built-in tools receive the
-      //    turn's ToolUseContext; MCP executors ignore it.
-      const executor = deps.registry.getExecutor(resolved.internalName);
-      if (!executor) {
-        return errorResult(
-          'Tool Invoke Error',
-          `Executor for \`${tool}\` (namespace \`${namespace}\`) is not registered.`,
-        );
-      }
-
       try {
-        const context = resolved.isBuiltin
-          ? deps.contextProvider?.()
-          : undefined;
+        const executor = current.executor;
+        const isMcp = deps.registry.getOwner(current.definition.name) === 'mcp';
         const result = await executor.execute(
           args,
           deps.workingDirectory,
-          context,
+          isMcp ? undefined : deps.contextProvider?.(),
         );
-        const text = result && typeof result === 'object'
+        const resultText = result && typeof result === 'object'
           ? toText((result as { result?: unknown }).result)
           : toText(result);
-        const isError =
-          (result as { error?: boolean } | null)?.error === true;
+        const isError = (result as { error?: boolean } | null)?.error === true;
         return {
-          result:
-            text ??
-            `Tool \`${tool}\` returned no result.`,
+          result: resultText ?? `Tool \`${current.definition.name}\` returned no result.`,
+          toolName: current.definition.name,
           ...(isError ? { error: true } : {}),
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return errorResult(
-          'Tool Invoke Failed',
-          `Invoking \`${tool}\` in namespace \`${namespace}\` failed:\n\n${message}`,
-        );
+        return errorResult('TOOL_EXECUTION_FAILED', 'Tool Invoke Failed', `Invoking \`${current.definition.name}\` failed:\n\n${message}`);
       }
     },
   };

@@ -10,7 +10,7 @@
 //
 // Design notes:
 //   - `tools` is a frozen array; callers must not mutate it.
-//   - Lookup helpers (`getExposeMode`, `getExecutor`, `getMeta`)
+//   - Lookup helpers (`getExposure`, `getExecutor`, `getMeta`)
 //     key on `definition.name` (the model-visible name), NOT on the
 //     registry's internal storage key. This is correct for both
 //     builtin tools (key === name) and MCP tools (key ===
@@ -20,7 +20,8 @@
 //     `resolveMCPProviderToolName`.
 
 import type { Tool } from '../types.js';
-import type { ToolExecutor, ExposeMode, ToolHintMeta } from './registry.js';
+import type { ToolExecutor, ToolHintMeta } from './registry.js';
+import type { ToolCatalogEntry, ToolExposure } from './catalog-types.js';
 
 /**
  * Immutable per-turn view of the ToolCatalog.
@@ -33,12 +34,16 @@ export interface ToolSnapshot {
   readonly tools: ReadonlyArray<Tool>;
   /** providerName → internalKey alias map (StreamingToolExecutor dependency). */
   readonly providerNameToInternalKey: ReadonlyMap<string, string>;
-  /** Look up expose mode by tool name. Defaults to 'always'. */
-  getExposeMode(name: string): ExposeMode;
+  /** Canonical exposure mode by model-visible tool name. */
+  getExposure(name: string): ToolExposure;
   /** Look up executor by tool name. */
   getExecutor(name: string): ToolExecutor | undefined;
   /** Look up persisted meta by tool name. */
   getMeta(name: string): ToolHintMeta | undefined;
+  /** Read-only catalog rows from the same immutable turn snapshot. */
+  readonly catalogEntries: ReadonlyArray<ToolCatalogEntry>;
+  /** Resolve one row by its stable tool ID. */
+  getCatalogEntry(toolId: string): ToolCatalogEntry | undefined;
   /** Creation timestamp (ms since epoch) for diagnostics. */
   readonly createdAt: number;
 }

@@ -103,9 +103,10 @@ function serverToFormData(server: MCPServerConfig): MCPServerFormData {
   };
 }
 
-function formDataToServer(formData: MCPServerFormData): MCPServerConfig {
+function formDataToServer(formData: MCPServerFormData, connectionId?: string): MCPServerConfig {
   return {
     name: formData.name.trim(),
+    ...(connectionId ? { connectionId } : {}),
     command: formData.command.trim(),
     args: parseArgs(formData.args),
     env: parseEnv(formData.env),
@@ -229,10 +230,9 @@ export function MCPSection() {
   const [agentProfiles, setAgentProfiles] = useState<AgentProfile[]>([]);
   const [inventory, setInventory] = useState<MCPInventorySnapshotDTO | null>(null);
 
-  // Plan 452 Phase A: global MCP exposure switch. Default OFF = Direct
-  // (MCP tool schemas ride every request); ON = on-demand discovery
-  // (MCP tools register discoverable, surfaced via tool_search). Connector
-  // (app) tools are unaffected — always @-mention/tool_search gated.
+  // Plan 452 Phase A: global MCP exposure switch. Default OFF keeps direct
+  // MCP calls available; ON uses tool_catalog and tool_invoke. Connector
+  // tools remain scoped to the providers selected for this turn.
   // Persisted at `tools.on_demand_discovery` in ~/.duya/config.toml; the
   // agent worker re-reads it on every MCP (re)registration.
   const [onDemandDiscovery, setOnDemandDiscovery] = useState(false);
@@ -391,7 +391,7 @@ export function MCPSection() {
   const handleSave = useCallback(async () => {
     if (!validateForm()) return;
 
-    const newServer = formDataToServer(formData);
+    const newServer = formDataToServer(formData, editingServer?.connectionId);
     let newServers: MCPServerConfig[];
 
     if (editingServer) {
@@ -604,17 +604,15 @@ export function MCPSection() {
         )}
       </SettingsCard>
 
-      {/* Plan 452 Phase A: global tool-exposure switch. Tools are Direct by
-          default (schemas ride every request); on-demand discovery flips
-          them to tool_search-only for a lean prompt. */}
+      {/* Plan 452 Phase A: global MCP tool-exposure switch. */}
       <SettingsCard className="mb-4">
         <div className="py-4 flex items-start justify-between gap-4">
           <div className="min-w-0">
             <h3 className="font-medium text-foreground">按需工具发现 (On-demand tool discovery)</h3>
             <p className="text-xs text-muted-foreground mt-1">
-              关闭（默认）：MCP 服务器的工具直接进入每轮请求，无需搜索即可调用。
-              开启：MCP 工具注册为可发现状态，模型通过 tool_search 按需加载，prompt 更精简但多一跳。
-              应用连接器（App）工具不受此项影响——始终由 @ 提及或 tool_search 激活。
+              关闭（默认）：MCP 工具可直接调用。
+              开启：MCP 工具通过目录按需查找，读取单个 schema 后经统一入口调用，可缩短常驻工具表。
+              应用连接器继续按本轮选中的 provider 控制可用范围。
               修改后重新连接 MCP 服务器生效。
             </p>
           </div>

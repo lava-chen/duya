@@ -9,6 +9,7 @@
  */
 
 import type { UserMcpTomlServer } from '@duya/plugin-core/src/mcp/user-config.js';
+import { randomUUID } from 'node:crypto';
 import { getConfigStore } from '../config/store-instance';
 import type { McpServerEntry } from '../config/schema';
 import { notifyMcpConfigChanged } from './mcp-write-reload';
@@ -20,6 +21,7 @@ export function mcpServersToServerList(
   if (!mcpServers) return [];
   return Object.values(mcpServers).map((entry) => ({
     name: entry.name,
+    connectionId: entry.connectionId,
     transport: entry.transport,
     command: entry.command,
     args: entry.args ? [...entry.args] : undefined,
@@ -43,6 +45,7 @@ export function serverListToMcpServers(
   for (const s of servers) {
     out[s.name] = {
       name: s.name,
+      connectionId: s.connectionId ?? randomUUID(),
       transport: s.transport,
       command: s.command,
       args: s.args ? [...s.args] : undefined,
@@ -62,10 +65,23 @@ export function serverListToMcpServers(
 
 /** Read the current user-managed MCP server list from ConfigStore. */
 export async function readUserMcpToml(): Promise<UserMcpTomlServer[]> {
-  const mcpServers = getConfigStore().getByPath('mcp_servers') as
+  const store = getConfigStore();
+  const mcpServers = store.getByPath('mcp_servers') as
     | Record<string, McpServerEntry>
     | undefined;
-  return mcpServersToServerList(mcpServers);
+  if (!mcpServers) return [];
+  let migrated = false;
+  const withConnectionIds: Record<string, McpServerEntry> = {};
+  for (const [key, entry] of Object.entries(mcpServers)) {
+    if (entry.connectionId) {
+      withConnectionIds[key] = entry;
+    } else {
+      withConnectionIds[key] = { ...entry, connectionId: randomUUID() };
+      migrated = true;
+    }
+  }
+  if (migrated) store.set('mcp_servers', withConnectionIds);
+  return mcpServersToServerList(withConnectionIds);
 }
 
 /** Replace the entire user-managed MCP server list in ConfigStore, then reload MCP. */

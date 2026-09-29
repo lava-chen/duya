@@ -62,7 +62,7 @@ describe('AppConnectionTool', () => {
       expect(definition.name).toBe('google_drive_list_files');
       expect(definition.description).toContain('Google Drive');
       expect(definition.input_schema.type).toBe('object');
-      expect(meta.exposeMode).toBe('discoverable');
+      expect(meta.exposure).toBe('deferred');
       expect(meta.inputSchemaSummary).toBe(desc.inputSchemaSummary);
       expect(typeof executor.execute).toBe('function');
     });
@@ -168,8 +168,8 @@ describe('AppConnectionTool', () => {
       expect(result.added).toBe(2);
       expect(registry.has('google_drive_list_files')).toBe(true);
       expect(registry.has('slack_search_messages')).toBe(true);
-      // discoverable tools are registered with meta
-      expect(registry.getExposeMode('google_drive_list_files')).toBe('discoverable');
+      // Connector tools are deferred and discoverable from the catalog.
+      expect(registry.getExposure('google_drive_list_files')).toBe('deferred');
     });
 
     it('removes stale connector-prefixed tools not in the new set', () => {

@@ -6,6 +6,8 @@ import * as TOML from '@iarna/toml';
  */
 export interface UserMcpTomlServer {
   name: string;
+  /** Durable, non-secret connection identity persisted independently of name. */
+  connectionId?: string;
   transport?: 'stdio' | 'streamable-http';
   command?: string;
   args?: string[];
@@ -120,6 +122,9 @@ export function parseUserMcpToml(text: string): UserMcpTomlServer[] {
     }
     result.push({
       name,
+      connectionId: typeof pickKey(entry, 'connection_id', 'connectionId') === 'string'
+        ? pickKey(entry, 'connection_id', 'connectionId') as string
+        : undefined,
       transport: transport as UserMcpTomlServer['transport'],
       command: typeof entry.command === 'string' ? entry.command : undefined,
       args: stringArray(entry.args, `mcp_servers.${name}.args`),
@@ -173,6 +178,7 @@ export function stringifyUserMcpToml(servers: readonly UserMcpTomlServer[]): str
   const mcpServers: Record<string, Record<string, unknown>> = {};
   for (const server of servers) {
     mcpServers[server.name] = {
+      ...(server.connectionId ? { connection_id: server.connectionId } : {}),
       ...(server.transport ? { transport: server.transport } : {}),
       ...(server.command ? { command: server.command } : {}),
       ...(server.args?.length ? { args: server.args } : {}),

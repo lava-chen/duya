@@ -36,15 +36,12 @@ import {
 import type { PromptSystem } from '../../prompts/index.js';
 import type { ToolRegistry } from '../../tool/registry.js';
 import { readToolExposureConfig } from '../../config/tool-exposure.js';
-import { buildHintStubEntry } from '../../tool/hint-stub.js';
+import { ToolCatalogTool, type ToolCatalogView } from '../../tool/ToolCatalogTool/ToolCatalogTool.js';
+import { ToolInvokeTool } from '../../tool/ToolInvokeTool/ToolInvokeTool.js';
 import type { AgentDefinition } from '../../tool/SubagentTool/index.js';
 import type { ChatOptions, Message, MessageContent, SSEEvent, Tool, WidgetStyleSignature } from '../../types.js';
 import { logger } from '../../utils/logger.js';
 import { buildAgentIdentityBlock, EMPTY_DISCOVERED } from '../utils/agent-helpers.js';
-import { toolSearchTool } from '../../tool/ToolSearchTool/ToolSearchTool.js';
-import { searchToolsFromRegistry } from '../../tool/ToolSearchTool/searchTools.js';
-import { toolSchemaTool } from '../../tool/ToolSchemaTool/ToolSchemaTool.js';
-import { createToolSchemaProviderFromRegistry } from '../../tool/ToolSchemaTool/catalogFromRegistry.js';
 import { collectActiveModes } from '../../modes/apply-modes.js';
 import { modeModifierRegistry } from '../../modes/index.js';
 import type { ModeModifier, ModeModifierContext, OrchestratorDeps, ToolRegistration } from '../../modes/index.js';
@@ -113,6 +110,9 @@ export async function resolveTools(
   registry: ToolRegistry;
   agentDefinitions: AgentDefinition[];
   constraints: ToolVisibilityConstraints;
+  catalogTool: ToolCatalogTool;
+  catalogView: ToolCatalogView;
+  toolInvokeExecutor: ToolInvokeTool;
 }> {
   logger.info(`[Agent] streamChat: Loading tools...`);
   let registry = options?.toolRegistry;
@@ -133,18 +133,48 @@ export async function resolveTools(
     profileAllowedPatterns: appliedProfile?.allowedTools,
     profileDisallowedPatterns: appliedProfile?.disallowedTools,
   };
+  if (!registry.has('tool_catalog')) {
+    const catalog = new ToolCatalogTool();
+    registry.register(catalog.toTool(), catalog, { exposure: 'eager' });
+  }
+  if (!registry.has('tool_invoke')) {
+    const invoke = new ToolInvokeTool();
+    registry.register(invoke.toTool(), invoke, { exposure: 'eager' });
+  }
+  const catalogTool = registry.getExecutor('tool_catalog');
+  const toolInvokeExecutor = registry.getExecutor('tool_invoke');
+  if (!(catalogTool instanceof ToolCatalogTool) || !(toolInvokeExecutor instanceof ToolInvokeTool)) {
+    throw new Error('Tool catalog executors are missing or have incompatible registrations.');
+  }
   const snapshot = registry.snapshot(ctx.providerNameToInternalKey);
   const allTools = snapshot.tools;
   const mcpToolCount = allTools.filter((t) => registry.getOwner(t.name) === 'mcp').length;
   logger.debug(`[Agent] Tool snapshot: ${allTools.length} total (${mcpToolCount} MCP, ${allTools.length - mcpToolCount} non-MCP)`);
-  // Four-tier exposure: `always` pushes the full definition, `hint` pushes
-  // a stub (full schema behind tool_schema), `discoverable` is excluded
-  // until found/promoted, `hidden` is never exposed.
+  const eligibleToolIds = new Set(
+    snapshot.catalogEntries
+      .filter((entry) => isToolVisible(entry.definition.name, entry.exposure === 'hidden' ? 'hidden' : 'eager', EMPTY_DISCOVERED, constraints))
+      .map((entry) => entry.toolId),
+  );
+  const directToolIds = new Set(
+    snapshot.catalogEntries
+      .filter((entry) => isToolVisible(entry.definition.name, entry.exposure, EMPTY_DISCOVERED, constraints))
+      .map((entry) => entry.toolId),
+  );
+  const catalogView: ToolCatalogView = {
+    snapshot,
+    registry,
+    eligibleToolIds,
+    directToolIds,
+    loadedSchemaRevisions: new Map(),
+    loadedSchemaRounds: new Map(),
+    currentRound: 0,
+  };
+  catalogTool.setView(catalogView);
   const tools: Tool[] = [];
   for (const t of allTools) {
-    const mode = snapshot.getExposeMode(t.name);
-    if (!isToolVisible(t.name, mode, EMPTY_DISCOVERED, constraints)) continue;
-    tools.push(mode === 'hint' ? buildHintStubEntry(t, snapshot.getMeta(t.name)) : t);
+    const exposure = snapshot.getExposure(t.name);
+    if (!isToolVisible(t.name, exposure, EMPTY_DISCOVERED, constraints)) continue;
+    tools.push(t);
   }
   logger.info(`[Agent] streamChat: ${tools.length}/${allTools.length} tools visible after visibility filter`);
   if (appliedProfile?.allowedTools?.length && tools.length === 0) {
@@ -158,7 +188,7 @@ export async function resolveTools(
   const { getAgentDefinitions } = await import('../../tool/SubagentTool/index.js');
   const agentDefinitions = getAgentDefinitions();
   logger.info(`[Agent] streamChat: Loaded ${agentDefinitions.length} agent definitions`);
-  return { tools, registry, agentDefinitions, constraints };
+  return { tools, registry, agentDefinitions, constraints, catalogTool, catalogView, toolInvokeExecutor };
 }
 
 /** Build the turn's system prompt (prompt system, MCP catalog, overrides, profile identity). */
@@ -209,12 +239,12 @@ export async function buildSystemPrompt(
     // Four-tier exposure: the bounded MCP directory is only useful when MCP
     // tools are absent from the request's tools array (exposure = "search").
     // Under `full`/`hint` the tools are declared on every request.
-    if (readToolExposureConfig().exposure === 'search') {
+    if (readToolExposureConfig().exposure !== 'full') {
       const mcpCatalog = buildMCPCapabilityCatalog(
         ctx.activeMCPRegistry.getAllTools().filter(
           (tool) => ctx.activeMCPRegistry.getOwner(tool.name) === 'mcp',
         ),
-        { entryPoint: 'tool_search' },
+        { entryPoint: 'tool_catalog' },
       );
       if (mcpCatalog) {
         systemPromptContent = systemPromptContent ? `${systemPromptContent}\n\n${mcpCatalog}` : mcpCatalog;
@@ -387,9 +417,33 @@ export async function* dispatchOrchestratorMode(
     ? prompt
     : prompt.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
   const toolRegistry = ctx.activeMCPRegistry;
-  toolSearchTool.setSearchFn((query, limit) => searchToolsFromRegistry(toolRegistry, query, limit));
-  // Plan 480 P2.1: same registry view for on-demand schema discovery.
-  toolSchemaTool.setProvider(createToolSchemaProviderFromRegistry(toolRegistry));
+  const catalogTool = toolRegistry.getExecutor('tool_catalog');
+  if (catalogTool instanceof ToolCatalogTool) {
+    const snapshot = toolRegistry.snapshot(ctx.providerNameToInternalKey);
+    const constraints: ToolVisibilityConstraints = {
+      disabledTools: options?.disabledTools,
+      allowedTools: options?.allowedTools,
+    };
+    const eligibleToolIds = new Set(
+      snapshot.catalogEntries
+        .filter((entry) => isToolVisible(entry.definition.name, entry.exposure === 'hidden' ? 'hidden' : 'eager', EMPTY_DISCOVERED, constraints))
+        .map((entry) => entry.toolId),
+    );
+    const directToolIds = new Set(
+      snapshot.catalogEntries
+        .filter((entry) => isToolVisible(entry.definition.name, entry.exposure, EMPTY_DISCOVERED, constraints))
+        .map((entry) => entry.toolId),
+    );
+    catalogTool.setView({
+      snapshot,
+      registry: toolRegistry,
+      eligibleToolIds,
+      directToolIds,
+      loadedSchemaRevisions: new Map(),
+      loadedSchemaRounds: new Map(),
+      currentRound: 0,
+    });
+  }
 
   const orchestratorActiveModes = collectActiveModes(options ?? {});
   const orchestratorResolved = orchestratorActiveModes.length > 0

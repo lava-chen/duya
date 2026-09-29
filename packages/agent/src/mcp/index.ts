@@ -81,6 +81,8 @@ class MCPClient {
    * three-level timeout set plus the name override.
    */
   applyConfigUpdate(next: MCPServerConfig): void {
+    this.config.connectionId = next.connectionId;
+    this.config.pluginId = next.pluginId;
     this.config.nameOverride = next.nameOverride;
     this.config.startupTimeoutSec = next.startupTimeoutSec;
     this.config.toolTimeoutSec = next.toolTimeoutSec;
@@ -484,6 +486,8 @@ export class MCPManager {
       description: string;
       input_schema: Record<string, unknown>;
       source: 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown';
+      connectionId?: string;
+      pluginId?: string;
       nameOverride?: string;
     };
     const pending: Pending[] = [];
@@ -491,6 +495,7 @@ export class MCPManager {
       if (!client.isConnected()) continue;
       const scopedServerName = client.getName();
       const source = client.getSource();
+      const config = client.getConfig();
       const nameOverride = client.getNameOverride();
       for (const tool of client.getTools()) {
         pending.push({
@@ -499,6 +504,8 @@ export class MCPManager {
           description: tool.description,
           input_schema: tool.input_schema,
           source,
+          connectionId: config.connectionId,
+          pluginId: config.pluginId,
           nameOverride,
         });
       }
@@ -524,6 +531,8 @@ export class MCPManager {
           serverName: p.scopedServerName,
           toolName: p.toolName,
           source: p.source,
+          connectionId: p.connectionId,
+          pluginId: p.pluginId,
         },
         serverName: p.scopedServerName,
       });

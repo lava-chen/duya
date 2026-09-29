@@ -49,6 +49,7 @@ export interface VisionLLMConfig {
 // MCP Server configuration
 export interface MCPServerConfig {
   name: string;
+  connectionId?: string;
   command: string;
   args?: string[];
   env?: Record<string, string>;

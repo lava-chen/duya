@@ -37,7 +37,7 @@ import { ToolRegistry, type ToolExecutor, type ToolMetaInput } from './registry.
 export interface HarnessToolEntry {
   tool: Tool;
   executor?: ToolExecutor;
-  /** Extra registration meta (exposeMode / riskTier / inputSchemaSummary). */
+  /** Extra registration meta (exposure / riskTier / inputSchemaSummary). */
   meta?: ToolMetaInput;
 }
 

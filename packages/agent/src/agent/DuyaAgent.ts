@@ -128,17 +128,13 @@ import { planModeTracker } from '../modes/plan/plan-tracker.js';
 
 import { ToolRegistry } from '../tool/registry.js';
 import type { ToolExecutor } from '../tool/registry.js';
-import { toolSearchTool } from '../tool/ToolSearchTool/ToolSearchTool.js';
-import { searchToolsFromRegistry } from '../tool/ToolSearchTool/searchTools.js';
-import { toolSchemaTool } from '../tool/ToolSchemaTool/ToolSchemaTool.js';
-import { createToolSchemaProviderFromRegistry } from '../tool/ToolSchemaTool/catalogFromRegistry.js';
-import { toolInvokeTool } from '../tool/ToolInvokeTool/ToolInvokeTool.js';
+import { invalidateToolCatalogSchemaReads, recordToolCatalogSchemaRead, ToolCatalogTool, type ToolCatalogView } from '../tool/ToolCatalogTool/ToolCatalogTool.js';
+import { ToolInvokeTool } from '../tool/ToolInvokeTool/ToolInvokeTool.js';
 import { createToolInvokeDispatcherFromRegistry } from '../tool/ToolInvokeTool/dispatcherFromRegistry.js';
 import {
   recordUndeclaredCall,
   evaluateVisibilityGuard,
 } from '../tool/visibility-guard.js';
-import { buildHintStubEntry } from '../tool/hint-stub.js';
 
 // Plan 453 Task C: contextual-user-fragment injection channel.
 import {
@@ -146,11 +142,6 @@ import {
   injectOSContextFragment,
 } from '../context/os-context/index.js';
 import { injectTurnTimestampReminders } from './turn-time-reminder.js';
-import {
-  getDiscoveredToolPrompts,
-  harvestDiscoveredTools,
-  renderDiscoveredToolSchemaBlock,
-} from './tool-search-discovery.js';
 import type { AgentDefinition } from '../tool/SubagentTool/index.js';
 import { CompactionManager, createCompactionManager, type CompactionProbe } from '../compact/CompactionManager.js';
 import { resolveCompactionContextWindow } from '../compact/contextWindow.js';
@@ -1244,21 +1235,19 @@ export class duyaAgent implements AgentRuntime {
     // `this.messages` together 鈥?a single bridge between helper output
     // and the main loop.
 
-    const { tools: baseTools, registry, agentDefinitions, constraints } = await this._resolveTools(options, appliedProfile);
+    const {
+      tools: baseTools,
+      registry,
+      agentDefinitions,
+      constraints,
+      catalogTool,
+      catalogView,
+      toolInvokeExecutor,
+    } = await this._resolveTools(options, appliedProfile);
     let tools = baseTools;
 
-    // Plan 241 Phase 1: wire tool_search to this registry so it can list
-    // every tool currently registered (including MCP-injected ones).
-    // The single ToolSearchTool instance is shared across the agent
-    // process; the most recently set registry wins (acceptable for the
-    // sequential streamChat model 鈥?concurrent streams would need a
-    // per-call registry override, planned for Phase 2).
-    toolSearchTool.setSearchFn((query, limit) =>
-      searchToolsFromRegistry(registry, query, limit),
-    );
-    // Plan 480 P2.1: wire tool_schema to the same registry view so the model
-    // can discover MCP tool schemas on demand (catalog / deferred exposure).
-    toolSchemaTool.setProvider(createToolSchemaProviderFromRegistry(registry));
+    // The catalog snapshot and per-context dispatchers are prepared by
+    // _resolveTools; each stream keeps its own immutable request view.
 
     // Diagnostic: worker uses console.error for stderr (stdout is JSON-RPC).
     // eslint-disable-next-line no-console
@@ -1287,9 +1276,8 @@ export class duyaAgent implements AgentRuntime {
     );
     // Declared-tools visibility guard. Snapshot of the tools declared on
     // the current provider request (filled before each openLLMStream). Any
-    // model call to a tool name outside that set is rejected — the only
-    // sanctioned paths to undeclared tools are
-    // tool_search → tool_schema → tool_invoke (four-tier exposure).
+    // model call to a tool name outside that set is rejected. Deferred tools
+    // are reached through tool_catalog → tool_invoke.
     let declaredToolsForRequest = new Set<string>();
     const guardedCanUseTool: typeof canUseTool = async (toolName, toolInput) => {
       const decision = evaluateVisibilityGuard({
@@ -1306,8 +1294,8 @@ export class duyaAgent implements AgentRuntime {
       }
       return canUseTool(toolName, toolInput);
     };
-    // Plan 480 P2.2: wire tool_invoke to the registry + permission chain so
-    // the model can execute tools it discovered via tool_schema. The gate
+    // Wire tool_invoke to the registry + permission chain so the model can
+    // execute tools whose schemas it read through tool_catalog. The gate
     // runs on the RESOLVED real tool name 鈥?routing through the meta tool can
     // never bypass the permission policy. ask decisions are not executed (see
     // dispatcherFromRegistry.ts); deny carries the decision message back.
@@ -1319,9 +1307,13 @@ export class duyaAgent implements AgentRuntime {
     // tool then minted a fresh ephemeral session per call, one Chrome tab
     // group per page).
     let turnToolUseContext: ToolUseContext | undefined;
-    toolInvokeTool.setDispatcher(
-      createToolInvokeDispatcherFromRegistry({
+    const toolInvokeDispatcher = createToolInvokeDispatcherFromRegistry({
         registry,
+        getSnapshot: () => catalogView.snapshot,
+        getLoadedSchemaRevision: (toolId) => catalogView.loadedSchemaRevisions.get(toolId),
+        getLoadedSchemaRound: (toolId) => catalogView.loadedSchemaRounds.get(toolId),
+        getCurrentRound: () => catalogView.currentRound,
+        isEligibleTool: (toolId) => catalogView.eligibleToolIds.has(toolId),
         workingDirectory: turnContext.workingDirectory ?? undefined,
         contextProvider: () => turnToolUseContext,
         checkPermission: async (toolName, args) => {
@@ -1337,8 +1329,7 @@ export class duyaAgent implements AgentRuntime {
               : {}),
           };
         },
-      }),
-    );
+      });
     // Plan 522: route the model-switch window check through the same
     // capability → catalog → default resolution as the constructor, so a
     // switch re-bases the compaction budget on the real window instead of
@@ -1515,6 +1506,48 @@ export class duyaAgent implements AgentRuntime {
       tools = modeResult.tools.map((t) => t.definition);
       systemPromptContent = modeResult.systemPrompt;
 
+      // applyModes filters the direct tool list. Mirror those decisions in
+      // the catalog too, or a deferred target could bypass a mode block via
+      // tool_invoke. Router wrappers are infrastructure, so a mode allowlist
+      // does not need to name them; explicit mode blocks still apply.
+      const modeToolPolicy = this.resolvedModes.tools;
+      const modeAllowsTarget = (name: string): boolean =>
+        modeToolPolicy.overrideFilter || (
+          !modeToolPolicy.blocked.includes(name) &&
+          (modeToolPolicy.allowed === null || modeToolPolicy.allowed.includes(name))
+        );
+      const modeAllowsRouter = (name: string): boolean =>
+        modeToolPolicy.overrideFilter || !modeToolPolicy.blocked.includes(name);
+      const canCatalog =
+        isToolVisible('tool_catalog', 'eager', EMPTY_DISCOVERED, constraints) &&
+        modeAllowsRouter('tool_catalog');
+      const canInvoke =
+        isToolVisible('tool_invoke', 'eager', EMPTY_DISCOVERED, constraints) &&
+        modeAllowsRouter('tool_invoke');
+      const directNames = new Set(tools.map((tool) => tool.name));
+      const eligibleAfterMode = catalogView.snapshot.catalogEntries.filter((entry) => {
+        if (!catalogView.eligibleToolIds.has(entry.toolId) || !modeAllowsTarget(entry.definition.name)) return false;
+        if (entry.exposure !== 'deferred' || directNames.has(entry.definition.name)) return true;
+        return canCatalog && canInvoke;
+      });
+      catalogView.eligibleToolIds = new Set(eligibleAfterMode.map((entry) => entry.toolId));
+      catalogView.directToolIds = new Set(
+        eligibleAfterMode
+          .filter((entry) => directNames.has(entry.definition.name))
+          .map((entry) => entry.toolId),
+      );
+      if (canCatalog && !directNames.has('tool_catalog')) {
+        const definition = catalogView.snapshot.tools.find((tool) => tool.name === 'tool_catalog');
+        if (definition) tools.push(definition);
+      }
+      const hasRoutableDeferred = eligibleAfterMode.some(
+        (entry) => entry.exposure === 'deferred' && !directNames.has(entry.definition.name),
+      );
+      if (canInvoke && hasRoutableDeferred && !directNames.has('tool_invoke')) {
+        const definition = catalogView.snapshot.tools.find((tool) => tool.name === 'tool_invoke');
+        if (definition) tools.push(definition);
+      }
+
       logger.info(
         `[Agent] streamChat: Applied ${this.resolvedModes.modes.length} mode modifier(s): ${this.resolvedModes.modes.map((m) => m.id).join(', ')}`,
       );
@@ -1666,21 +1699,6 @@ export class duyaAgent implements AgentRuntime {
     // / tool_use / stop_sequence), captured from the stream's done event.
     let turnStopReason: string | undefined = undefined;
 
-    // Plan 241 Phase 3: tools discovered via `tool_search` during this
-    // streamChat call are added to the next turn's tool list so the LLM
-    // can invoke them without searching again. Set is local to this call,
-    // so it is GC'd when streamChat finishes (no cross-session pollution).
-    const discoveredTools: Set<string> = new Set();
-    let discoveredToolPromptSuffix = '';
-    // Discovered-tool schema delivery: the full schema rides the
-    // conversation tail (grok `GetMcpTools` parity; the tools array stays
-    // stable). The config-driven 'array' delivery was retired with the
-    // four-tier exposure model; `discoveredPromotedToToolList` remains as
-    // the sole runtime merge path — it flips to true once a compaction
-    // fires mid-stream (compaction summarizes the tail away, so the
-    // discovered tools return to the persistent tool list for the rest of
-    // the call).
-    let discoveredPromotedToToolList = false;
 
     // Generate a unique seq_index for this streamChat call
     // All messages created in this call (including multi-turn) will share this seq_index
@@ -1716,16 +1734,6 @@ export class duyaAgent implements AgentRuntime {
       // Remove the prior turn's dynamic guide before rebuilding this turn.
       // This prevents duplicate prompt sections when a discovered tool stays
       // active across multiple tool-use turns.
-      if (
-        discoveredToolPromptSuffix &&
-        systemPromptContent.endsWith(discoveredToolPromptSuffix)
-      ) {
-        systemPromptContent = systemPromptContent.slice(
-          0,
-          -discoveredToolPromptSuffix.length,
-        );
-      }
-      discoveredToolPromptSuffix = '';
 
       turnCount++;
       // Grok-aligned 5-state suppression: clear SUPPRESS_TURN at the start
@@ -1746,31 +1754,6 @@ export class duyaAgent implements AgentRuntime {
       // for the rest of the call, respecting the same deny/allow
       // constraints. Config-driven 'array' delivery was retired — this
       // promotion is the only remaining merge path.
-      const mergeDiscoveredToToolList = discoveredPromotedToToolList;
-      if (mergeDiscoveredToToolList && discoveredTools.size > 0) {
-        const visible = new Set(tools.map((t) => t.name));
-        let added = 0;
-        for (const name of discoveredTools) {
-          if (visible.has(name)) continue;
-          // Re-check visibility with current discovered set + constraints.
-          if (!isToolVisible(name, registry.getExposeMode(name), discoveredTools, constraints)) continue;
-          const def = registry.getTool(name);
-          if (!def) {
-            logger.warn(
-              `[Agent] discovered tool '${name}' no longer registered, skipping`,
-            );
-            continue;
-          }
-          tools = [...tools, def];
-          visible.add(name);
-          added++;
-        }
-        if (added > 0) {
-          logger.info(
-            `[Agent] Turn ${turnCount}: added ${added} discovered tools to LLM request`,
-          );
-        }
-      }
 
       // Plan 224 Phase 3: re-evaluate function-form mode prompt prefixes
       // each turn so mode state that mutates during the stream (e.g.
@@ -1796,25 +1779,6 @@ export class duyaAgent implements AgentRuntime {
       // Plan 426 Phase 3: the mid-turn buffered-activation flush and the
       // per-turn mode reminders moved into the mode-coordinator PreTurn hook
       // (dispatched after the mailbox checkpoint below).
-
-      // A discoverable tool receives the exact same full schema object that
-      // an always-exposed tool receives. If its executor also provides a
-      // usage guide (BrowserTool.getPrompt, for example), append that guide
-      // to this turn's system prompt as well — only meaningful once the
-      // tool actually rides the tools array (post-compaction promotion).
-      const discoveredPrompts = mergeDiscoveredToToolList
-        ? getDiscoveredToolPrompts(registry, discoveredTools)
-        : [];
-      if (discoveredPrompts.length > 0) {
-        discoveredToolPromptSuffix = [
-          '',
-          '',
-          '## On-Demand Tool Guides',
-          '',
-          ...discoveredPrompts,
-        ].join('\n');
-        systemPromptContent += discoveredToolPromptSuffix;
-      }
 
       // Background results that completed after a previous turn end are
       // picked up at the mailbox checkpoint below, not here.
@@ -2005,6 +1969,8 @@ export class duyaAgent implements AgentRuntime {
       // Reassigned every turn so `tool_invoke` always sees the CURRENT
       // context (abortController, appState and sessionId are per-turn).
       turnToolUseContext = toolUseContext;
+      catalogTool.setContextView(toolUseContext, catalogView);
+      toolInvokeExecutor.setDispatcherForContext(toolUseContext, toolInvokeDispatcher);
 
       const executor = new ToolExecutionPipeline(
         registry,
@@ -2113,14 +2079,10 @@ export class duyaAgent implements AgentRuntime {
       if (!settledRun) {
         throw compactionFailure ?? new Error('Compaction run did not settle');
       }
+      if (settledRun.didCompact) invalidateToolCatalogSchemaReads(catalogView);
       for (const ev of settledRun.events) yield ev;
       systemPromptContent = settledRun.systemPromptContent;
       messages = settledRun.messages;
-      if (settledRun.didCompact) {
-        // Plan 480 P3.2: compaction summarizes the tail away, so the
-        // discovered tools return to the persistent tool list from here on.
-        discoveredPromotedToToolList = true;
-      }
       const mailboxDecision = await this._claimMailboxAtCheckpoint(
         runId,
         messages,
@@ -2259,24 +2221,6 @@ export class duyaAgent implements AgentRuntime {
         // line in the environment system-prompt section.
         injectTurnTimestampReminders(llmMessages);
 
-        // (grok `GetMcpTools` parity): full schemas of tools found
-        // via `tool_search` are appended at the very tail, leaving the request's
-        // `tools` array untouched so the cached prefix stays byte-stable. The
-        // model invokes each via the constant `tool_invoke` meta tool. Transient:
-        // rebuilt from `discoveredTools` every turn, never persisted. Skipped
-        // once a compaction promoted the set into the persistent tool list.
-        if (!discoveredPromotedToToolList && discoveredTools.size > 0) {
-          const schemaBlock = renderDiscoveredToolSchemaBlock(registry, discoveredTools);
-          if (schemaBlock) {
-            llmMessages.push({
-              id: crypto.randomUUID(),
-              role: 'user',
-              content: schemaBlock,
-              timestamp: Date.now(),
-              metadata: { runtimeContext: true, isDiscoveredToolSchemas: true },
-            });
-          }
-        }
         // Cache the system-prompt + tool-surface estimate for the live
         // context ring's no-usage fallback. Only the provider contract is
         // counted (name/description/input_schema), mirroring what is
@@ -2320,13 +2264,13 @@ export class duyaAgent implements AgentRuntime {
         // failing the whole turn. The retryable-error classification and
         // attempt budget live in ./stream-retry.ts. Post-`done` failures
         // propagate unchanged via the turnCommitted guard.
-        // Plan 480 P2.4: refresh the declared-tools snapshot before every
-        // provider request (the array changes across rounds as discovered
-        // tools join). The visibility guard reads it during execution.
+        // Refresh the declared-tools snapshot before every provider request.
+        // The visibility guard reads it during execution.
         // Plan 577 §3: capture the epoch for this built prompt. A replay uses
         // the same prompt bytes, so it must retain this generation and be
         // dropped if compaction/clear changed the timeline while it was in flight.
         const requestEpoch = this.compactionManager.getContextEpoch();
+        catalogView.currentRound = turnCount;
         const streamGenerator = runTurnStream({
           llmClient: this.llmClient,
           llmMessages,
@@ -2643,6 +2587,9 @@ export class duyaAgent implements AgentRuntime {
                   if (!result.message.id) {
                     result.message.id = crypto.randomUUID();
                   }
+                  if (result.message.role === 'tool') {
+                    recordToolCatalogSchemaRead(catalogView, result.message.metadata);
+                  }
                   this._pushDurable(messages, result.message);
 
                   // Yield tool result event
@@ -2744,23 +2691,10 @@ export class duyaAgent implements AgentRuntime {
               `[Agent] Turn ${turnCount}: getRemainingResults completed, toolResultMessageCount=${toolResultMessageCount}`
             );
 
-            // Plan 241 Phase 3: scan the tool_results we just appended
-            // to `messages` for `tool_search` payloads and surface the
-            // discovered tool names to the next turn's tool list.
+            // Post-tool hooks and file-context collection run after results
+            // have been committed to the message history.
             //
-            // We re-scan `messages` from the end rather than threading
-            // a separate collector through `getRemainingResults` 鈥?            // simpler and avoids changing the executor's public surface.
-            // The cost is O(N) over the new tool_result batch, which
-            // is small (typically 1-3 per turn).
             if (toolResultMessageCount > 0) {
-              const newToolResults = messages.slice(-toolResultMessageCount);
-              const addedCount = harvestDiscoveredTools(newToolResults, discoveredTools);
-              if (addedCount > 0) {
-                logger.info(
-                  `[Agent] Turn ${turnCount}: Plan 241 Phase 3 harvested ${addedCount} tool name(s) from tool_search results; will surface in next turn`,
-                );
-              }
-
               // Plan 426: PostToolUse dispatch, fired now that the turn's
               // tool results are committed so hook injections read as
               // feedback on those results (grok "results committed after"
@@ -2856,8 +2790,7 @@ export class duyaAgent implements AgentRuntime {
                         : { trigger: 'preflight_overflow' as const }),
                     });
                   if (compactEntry) {
-                    // Plan 480 P3.2: discovered tools return to the tool list.
-                    discoveredPromotedToToolList = true;
+                    invalidateToolCatalogSchemaReads(catalogView);
                     logger.info(
                       `[Agent] Turn ${turnCount}: Preflight overflow compaction fired, retained=${compactEntry.tokensAfter ?? 0} tokens`,
                       undefined,
@@ -3189,8 +3122,7 @@ export class duyaAgent implements AgentRuntime {
           try {
             const compactEntry = await this.compactionController.compactProactive({ trigger: 'emergency' });
             if (compactEntry) {
-              // Plan 480 P3.2: discovered tools return to the tool list.
-              discoveredPromotedToToolList = true;
+              invalidateToolCatalogSchemaReads(catalogView);
               logger.info(`[Agent] Turn ${turnCount}: Compaction succeeded, strategy=${compactEntry.strategy}, retained=${compactEntry.tokensAfter ?? 0} tokens`);
               const reProjected = this._projectModelMessages(systemPromptContent, { injectHookContexts: true });
               systemPromptContent = reProjected.systemPromptContent;
@@ -3618,6 +3550,9 @@ export class duyaAgent implements AgentRuntime {
     registry: ToolRegistry;
     agentDefinitions: AgentDefinition[];
     constraints: ToolVisibilityConstraints;
+    catalogTool: ToolCatalogTool;
+    catalogView: ToolCatalogView;
+    toolInvokeExecutor: ToolInvokeTool;
   }> {
     logger.info(`[Agent] streamChat: Loading tools...`);
     let registry = options?.toolRegistry;
@@ -3642,11 +3577,8 @@ export class duyaAgent implements AgentRuntime {
         logger.warn(`[Agent] Failed to merge App Connection tools: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    // Plan 450/452: connector tools stay `discoverable` by default 鈥?the
-    // user's model is "@ to activate": without a mention the tools are only
-    // reachable via tool_search (the persistent Apps system section keeps
-    // the model aware they exist). @-mentioned providers' tools are promoted
-    // into the discovered set for THIS turn (exposure promotion).
+    // Connector tools are deferred by default. An @-mention promotes that
+    // provider's tools to direct calls for this turn.
     const selectedProviders = options?.mentionedProviders?.filter((p) => typeof p === 'string' && p) ?? [];
     const preExposedConnectorTools = new Set<string>(
       selectedProviders.length
@@ -3655,16 +3587,8 @@ export class duyaAgent implements AgentRuntime {
             .map((d) => d.name)
         : [],
     );
-    // Single-pass tool visibility filter.
-    //
-    // One question per tool: is it visible to the LLM this turn?
-    //   1. Exposure tier: always/hint declared, discoverable only once
-    //      found or exact-promoted, hidden never
-    //   2. Denylist: caller exact + profile wildcard (deny wins)
-    //   3. Allowlist: caller exact + profile wildcard
-    //
-    // discoverable tools are excluded here (empty discovered set) and
-    // merged in per-turn by the streaming loop after tool_search runs.
+    // Apply current profile, caller, and provider-mention constraints. The
+    // catalog keeps a separate eligible set for deferred dispatch.
     const constraints: ToolVisibilityConstraints = {
       disabledTools: options?.disabledTools,
       allowedTools: options?.allowedTools,
@@ -3675,28 +3599,59 @@ export class duyaAgent implements AgentRuntime {
     // turn. The snapshot guarantees the tools array and lookup helpers
     // remain stable even if the catalog mutates mid-turn (e.g.
     // tools/list_changed).
+    if (!registry.has('tool_catalog')) {
+      const catalog = new ToolCatalogTool();
+      registry.register(catalog.toTool(), catalog, { exposure: 'eager' });
+    }
+    if (!registry.has('tool_invoke')) {
+      const invoke = new ToolInvokeTool();
+      registry.register(invoke.toTool(), invoke, { exposure: 'eager' });
+    }
+    const catalogTool = registry.getExecutor('tool_catalog');
+    const toolInvokeExecutor = registry.getExecutor('tool_invoke');
+    if (!(catalogTool instanceof ToolCatalogTool) || !(toolInvokeExecutor instanceof ToolInvokeTool)) {
+      throw new Error('Tool catalog executors are missing or have incompatible registrations.');
+    }
     const snapshot = registry.snapshot(this.providerNameToInternalKey);
     const allTools = snapshot.tools;
     const mcpToolCount = allTools.filter((t) => registry.getOwner(t.name) === 'mcp').length;
     logger.debug(
       `[Agent] Tool snapshot: ${allTools.length} total (${mcpToolCount} MCP, ${allTools.length - mcpToolCount} non-MCP)`,
     );
-    // Four-tier exposure: `always` tools push their full definition,
-    // `hint` tools push a stub (description + argument summary, empty
-    // schema — full schema stays behind tool_schema), `discoverable`
-    // tools are excluded until found via tool_search or exact-promoted,
-    // `hidden` tools are never exposed.
     const discoveredSeed =
       preExposedConnectorTools.size > 0
         ? new Set([...EMPTY_DISCOVERED, ...preExposedConnectorTools])
         : EMPTY_DISCOVERED;
+    const directToolIds = new Set(
+      snapshot.catalogEntries
+        .filter((entry) => isToolVisible(entry.definition.name, entry.exposure, discoveredSeed, constraints))
+        .map((entry) => entry.toolId),
+    );
+    const catalogAllowed = isToolVisible('tool_catalog', 'eager', EMPTY_DISCOVERED, constraints);
+    const invokeAllowed = isToolVisible('tool_invoke', 'eager', EMPTY_DISCOVERED, constraints);
+    const eligibleToolIds = new Set(
+      snapshot.catalogEntries
+        .filter((entry) =>
+          isToolVisible(entry.definition.name, 'eager', discoveredSeed, constraints) &&
+          (entry.exposure !== 'deferred' || directToolIds.has(entry.toolId) || (catalogAllowed && invokeAllowed))
+        )
+        .map((entry) => entry.toolId),
+    );
+    const catalogView: ToolCatalogView = {
+      snapshot,
+      registry,
+      eligibleToolIds,
+      directToolIds,
+      loadedSchemaRevisions: new Map(),
+      loadedSchemaRounds: new Map(),
+      currentRound: 0,
+    };
+    catalogTool.setView(catalogView);
     const tools: Tool[] = [];
     for (const t of allTools) {
-      const mode = snapshot.getExposeMode(t.name);
-      if (!isToolVisible(t.name, mode, discoveredSeed, constraints)) continue;
-      tools.push(
-        mode === 'hint' ? buildHintStubEntry(t, snapshot.getMeta(t.name)) : t,
-      );
+      const exposure = snapshot.getExposure(t.name);
+      if (!isToolVisible(t.name, exposure, discoveredSeed, constraints)) continue;
+      tools.push(t);
     }
     logger.info(
       `[Agent] streamChat: ${tools.length}/${allTools.length} tools visible after visibility filter`,
@@ -3731,7 +3686,7 @@ export class duyaAgent implements AgentRuntime {
     const agentDefinitions = getAgentDefinitions();
     logger.info(`[Agent] streamChat: Loaded ${agentDefinitions.length} agent definitions`);
 
-    return { tools, registry, agentDefinitions, constraints };
+    return { tools, registry, agentDefinitions, constraints, catalogTool, catalogView, toolInvokeExecutor };
   }
 
   /**
@@ -3812,7 +3767,7 @@ export class duyaAgent implements AgentRuntime {
         this.activeMCPRegistry.getAllTools().filter(
           (tool) => this.activeMCPRegistry.getOwner(tool.name) === 'mcp',
         ),
-        { entryPoint: 'tool_search' },
+        { entryPoint: 'tool_catalog' },
       );
       if (mcpCatalog) {
         systemPromptContent = systemPromptContent
@@ -4105,15 +4060,6 @@ export class duyaAgent implements AgentRuntime {
     // already registered; no per-turn construction needed.
     const toolRegistry = this.activeMCPRegistry;
 
-    // Plan 241 Phase 1: wire tool_search to the orchestrator's registry
-    // so it sees the same tool surface that the orchestrator's main loop
-    // dispatches against.
-    toolSearchTool.setSearchFn((query, limit) =>
-      searchToolsFromRegistry(toolRegistry, query, limit),
-    );
-    // Plan 480 P2.1: same registry view for on-demand schema discovery.
-    toolSchemaTool.setProvider(createToolSchemaProviderFromRegistry(toolRegistry));
-
     // Plan 224 Phase 3: if a modifier mode (conductor) is active alongside
     // this orchestrator mode (research), inject the modifier's tools into
     // the orchestrator's registry so the orchestrator can call them. The
@@ -4140,6 +4086,34 @@ export class duyaAgent implements AgentRuntime {
           }
         }
       }
+    }
+
+    const catalogExecutor = toolRegistry.getExecutor('tool_catalog');
+    if (catalogExecutor instanceof ToolCatalogTool) {
+      const snapshot = toolRegistry.snapshot(this.providerNameToInternalKey);
+      const constraints: ToolVisibilityConstraints = {
+        disabledTools: options?.disabledTools,
+        allowedTools: options?.allowedTools,
+      };
+      const eligibleToolIds = new Set(
+        snapshot.catalogEntries
+          .filter((entry) => isToolVisible(entry.definition.name, entry.exposure === 'hidden' ? 'hidden' : 'eager', EMPTY_DISCOVERED, constraints))
+          .map((entry) => entry.toolId),
+      );
+      const directToolIds = new Set(
+        snapshot.catalogEntries
+          .filter((entry) => isToolVisible(entry.definition.name, entry.exposure, EMPTY_DISCOVERED, constraints))
+          .map((entry) => entry.toolId),
+      );
+      catalogExecutor.setView({
+        snapshot,
+        registry: toolRegistry,
+        eligibleToolIds,
+        directToolIds,
+        loadedSchemaRevisions: new Map(),
+        loadedSchemaRounds: new Map(),
+        currentRound: 0,
+      });
     }
 
     const deps: OrchestratorDeps = {

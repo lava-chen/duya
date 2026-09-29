@@ -169,9 +169,9 @@ function buildExecutor(desc: AppConnectionToolDescriptor): ToolExecutor {
 
 /**
  * Build the `ToolMetaInput` for a descriptor. Connector tools are
- * `discoverable`: they enter the LLM's default tool list only when the user
+ * `deferred`: they enter the LLM's direct tool list only when the user
  * @-mentions their provider this turn (exposure promotion in
- * `DuyaAgent._resolveTools`), or after `tool_search` surfaces them. The
+ * `DuyaAgent._resolveTools`), or after `tool_catalog` surfaces them. The
  * persistent "Apps (Connectors)" system section keeps the model aware of
  * what exists either way.
  *
@@ -181,7 +181,13 @@ function buildExecutor(desc: AppConnectionToolDescriptor): ToolExecutor {
  */
 function buildMeta(desc: AppConnectionToolDescriptor): ToolMetaInput {
   return {
-    exposeMode: 'discoverable',
+    exposure: 'deferred',
+    source: { kind: 'connector', id: desc.provider },
+    discovery: {
+      namespace: desc.provider,
+      conciseHint: desc.description,
+      tags: [desc.provider, desc.name],
+    },
     inputSchemaSummary: desc.inputSchemaSummary,
     riskTier: desc.riskTier,
   };
@@ -222,7 +228,7 @@ function downgradeForByteBudget(desc: AppConnectionToolDescriptor): AppConnectio
   }
   if (size <= APP_CONNECTION_SPEC_BYTE_BUDGET) return desc;
   // Lossy fallback: surface the tool's intent via description so
-  // tool_search / the model still know what the tool is for, and
+  // tool_catalog / the model still know what the tool is for, and
   // disable structured input by replacing the schema with an empty
   // object. The executor still receives the raw `args` JSON from the
   // model so it can fall back to forwarding whatever the host server

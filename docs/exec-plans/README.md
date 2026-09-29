@@ -29,6 +29,12 @@ exec-plans/
 
 Plans in `active/` are being executed with clear phases and checkpoints.
 
+### Tool Catalog
+
+| Plan | Description | Priority | Status |
+| --- | --- | --- | --- |
+| [2026-09-tool-catalog-unification](./active/2026-09-tool-catalog-unification.md) | Tool Catalog 统一发现入口、稳定 tool ID、hint 元数据与 provider 按需加载 | P1 | In Progress |
+
 ### Agent Core & Message
 
 | Plan                                                                                                             | Description                                                                                                                                                                                                                 | Priority  | Status                                                                                                       |

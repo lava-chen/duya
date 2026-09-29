@@ -60,7 +60,7 @@ export interface ChatOptions {
   clientMsgId?: string;
   /**
    * Plan 450: providers @-mentioned in the composer for this run. Forwarded
-   * to the worker so connector tools of these providers skip tool_search.
+   * to the worker so connector tools of these providers are promoted to direct calls.
    */
   mentionedProviders?: string[];
   /**

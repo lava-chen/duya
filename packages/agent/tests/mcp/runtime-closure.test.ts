@@ -1183,14 +1183,11 @@ describe('Case 12: MCP tools exposed by default + permission gate flow', () => {
     } as unknown as import('../../src/types.js').ToolUseContext;
   }
 
-  it('registers MCP tools as hint-exposed by default (stub entry, no tool_search needed)', async () => {
+  it('keeps default MCP tools directly available for compatibility', async () => {
     const agent = makeFakeAgent();
     const { internalKey, providerName } = await applySettingsServer(agent);
     expect(agent._toolEntries().get(internalKey)).toBeDefined();
-    // Default exposure: the tool is declared on the base LLM tool list as a
-    // hint stub (no tool_search discovery round-trip); the full schema is
-    // read via tool_schema.
-    expect(agent._activeMCPRegistry().getExposeMode(providerName)).toBe('hint');
+    expect(agent._activeMCPRegistry().getExposure(providerName)).toBe('eager');
   });
 
   it('bypassPermissions mode bypasses the gate (no prompt)', async () => {

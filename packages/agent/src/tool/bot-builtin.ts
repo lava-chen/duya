@@ -2,13 +2,13 @@
  * Bot-specific tool registry (Plan 241).
  *
  * Independent registry for bots — completely separate from the general agent
- * builtin.ts. This allows per-agent-type exposeMode assignments.
+ * builtin.ts. This allows per-agent-type exposure assignments.
  *
  * Tool strategy:
  * - Bot is a collaborator/assistant, not a primary controller
  * - SubagentTool is hidden (bots should not spawn sub-agents)
  * - BOT_TOOLSET tools are surfaced as 'always' so bots can use them turn one
- * - File search tools (GrepTool, GlobTool) are discoverable (bots use sessionTool instead)
+ * - File search tools (GrepTool, GlobTool) are deferred (bots use sessionTool instead)
  *
  * Usage:
  *   import { registerBotTools } from './bot-builtin.js';
@@ -50,9 +50,8 @@ import { duyaCliTool } from './DuyaCliTool/index.js';
 import { askUserQuestionTool } from './AskUserQuestionTool/AskUserQuestionTool.js';
 import { moduleTool } from './ModuleTool/ModuleTool.js';
 import { widgetTool } from './WidgetTool/index.js';
-import { toolSearchTool } from './ToolSearchTool/ToolSearchTool.js';
-import { toolSchemaTool } from './ToolSchemaTool/ToolSchemaTool.js';
-import { toolInvokeTool } from './ToolInvokeTool/ToolInvokeTool.js';
+import { ToolCatalogTool } from './ToolCatalogTool/ToolCatalogTool.js';
+import { ToolInvokeTool } from './ToolInvokeTool/ToolInvokeTool.js';
 import { updateStateTool } from './UpdateStateTool/UpdateStateTool.js';
 import { sendMessageTool } from './SendMessageTool/index.js';
 import { sendToAgentTool } from './SendToAgentTool/index.js';
@@ -104,100 +103,103 @@ export function registerBotTools(registry: ToolRegistry): void {
   // always — tools with full schema sent every request
   // --------------------------------------------------------------------------
 
-  // Core file operations (excluding GrepTool, GlobTool — see discoverable)
+  // Core file operations (excluding GrepTool, GlobTool — see deferred tools)
   const bashTool = new BashTool();
-  registry.register(bashTool.toTool(), bashTool, { exposeMode: 'always' });
+  registry.register(bashTool.toTool(), bashTool, { exposure: 'eager' });
 
   const readTool = new ReadTool();
-  registry.register(readTool.toTool(), readTool, { exposeMode: 'always' });
+  registry.register(readTool.toTool(), readTool, { exposure: 'eager' });
 
   const writeTool = new WriteTool();
-  registry.register(writeTool.toTool(), writeTool, { exposeMode: 'always' });
+  registry.register(writeTool.toTool(), writeTool, { exposure: 'eager' });
 
   const editToolInstance = new EditTool();
-  registry.register(editToolInstance.toTool(), editToolInstance, { exposeMode: 'always' });
+  registry.register(editToolInstance.toTool(), editToolInstance, { exposure: 'eager' });
 
   // Todo tool
-  registry.register(todoTool.toTool(), todoTool, { exposeMode: 'always' });
+  registry.register(todoTool.toTool(), todoTool, { exposure: 'eager' });
 
   // Background task tools (get_task_output, kill_task — subagent action wrappers)
-  registry.register(getTaskOutputTool.toTool(), getTaskOutputTool, { exposeMode: 'always', riskTier: 'read' });
-  registry.register(killTaskTool.toTool(), killTaskTool, { exposeMode: 'always', riskTier: 'write' });
+  registry.register(getTaskOutputTool.toTool(), getTaskOutputTool, { exposure: 'eager', riskTier: 'read' });
+  registry.register(killTaskTool.toTool(), killTaskTool, { exposure: 'eager', riskTier: 'write' });
 
-  // Tool discovery and invocation infrastructure
-  registry.register(toolSearchTool.toTool(), toolSearchTool, { exposeMode: 'always' });
-  registry.register(toolSchemaTool.toTool(), toolSchemaTool, { exposeMode: 'always' });
-  registry.register(toolInvokeTool.toTool(), toolInvokeTool, { exposeMode: 'always' });
+  const toolCatalogTool = new ToolCatalogTool();
+  const toolInvokeTool = new ToolInvokeTool();
+  registry.register(toolCatalogTool.toTool(), toolCatalogTool, { exposure: 'eager' });
+  registry.register(toolInvokeTool.toTool(), toolInvokeTool, { exposure: 'eager' });
 
   // BOT_TOOLSET — always for bots (exact-name promotion, turn one available)
-  registry.register(sendToAgentTool.toTool(), sendToAgentTool, { exposeMode: 'always' });         // Plan 477
-  registry.register(sendMessageTool.toTool(), sendMessageTool, { exposeMode: 'always' });         // Plan 483
-  registry.register(createAgentTool.toTool(), createAgentTool, { exposeMode: 'always' });         // Plan 492
-  registry.register(updateAgentTool.toTool(), updateAgentTool, { exposeMode: 'always' });         // Plan 492
-  registry.register(manageRoutineTool.toTool(), manageRoutineTool, { exposeMode: 'always' });     // Plan 476
-  registry.register(postToRoomTool.toTool(), postToRoomTool, { exposeMode: 'always' });           // Plan 478
-  registry.register(listAppConnectorsTool.toTool(), listAppConnectorsTool, { exposeMode: 'always' }); // Plan 503
-  registry.register(connectAppTool.toTool(), connectAppTool, { exposeMode: 'always' });           // Plan 503
-  registry.register(sessionTool.toTool(), sessionTool, { exposeMode: 'always' });                 // Plan 504
+  registry.register(sendToAgentTool.toTool(), sendToAgentTool, { exposure: 'eager' });         // Plan 477
+  registry.register(sendMessageTool.toTool(), sendMessageTool, { exposure: 'eager' });         // Plan 483
+  registry.register(createAgentTool.toTool(), createAgentTool, { exposure: 'eager' });         // Plan 492
+  registry.register(updateAgentTool.toTool(), updateAgentTool, { exposure: 'eager' });         // Plan 492
+  registry.register(manageRoutineTool.toTool(), manageRoutineTool, { exposure: 'eager' });     // Plan 476
+  registry.register(postToRoomTool.toTool(), postToRoomTool, { exposure: 'eager' });           // Plan 478
+  registry.register(listAppConnectorsTool.toTool(), listAppConnectorsTool, { exposure: 'eager' }); // Plan 503
+  registry.register(connectAppTool.toTool(), connectAppTool, { exposure: 'eager' });           // Plan 503
+  registry.register(sessionTool.toTool(), sessionTool, { exposure: 'eager' });                 // Plan 504
 
   // --------------------------------------------------------------------------
-  // hint — stub only (name + desc + arg summary), full schema on demand
+  // Direct tools and deferred tools
   // --------------------------------------------------------------------------
 
-  registry.register(browserTool.toTool(), browserTool, { exposeMode: 'hint' });
-  registry.register(skillTool, skillTool, { exposeMode: 'hint' });
+  registry.register(browserTool.toTool(), browserTool, {
+    exposure: 'deferred',
+    inputSchemaSummary: 'Search, open, inspect, and interact with webpages using a persistent browser session.',
+  });
+  registry.register(skillTool, skillTool, { exposure: 'eager' });
 
   const visionTool = new VisionTool();
-  registry.register(visionTool, visionTool, { exposeMode: 'hint' });
+  registry.register(visionTool, visionTool, { exposure: 'eager' });
 
   registry.register(imageGenerateTool.toTool(), imageGenerateTool, {
-    exposeMode: 'hint',
+    exposure: 'deferred',
     inputSchemaSummary: 'prompt (required), size, quality, reference_image, output_path',
   });
 
   // Plan 525 Phase 4: Unified plan tool for duya project plan management (built-in, replaced MCP)
-  registry.register(planTool.toTool(), planTool, { exposeMode: 'hint' });
+  registry.register(planTool.toTool(), planTool, { exposure: 'eager' });
 
   // --------------------------------------------------------------------------
-  // discoverable — not in tool list, found only via tool_search
+  // deferred — not in tool list, found only via tool_catalog
   // --------------------------------------------------------------------------
 
   // File search tools — bots use sessionTool for tasks, not grep/glob directly
   const grepToolInstance = new GrepTool();
-  registry.register(grepToolInstance.toTool(), grepToolInstance, { exposeMode: 'discoverable' });
-  registry.register(globTool.toTool(), globTool, { exposeMode: 'discoverable' });
+  registry.register(grepToolInstance.toTool(), grepToolInstance, { exposure: 'deferred' });
+  registry.register(globTool.toTool(), globTool, { exposure: 'deferred' });
 
   // Communication and search helpers
-  registry.register(briefTool, briefTool, { exposeMode: 'discoverable' });
-  registry.register(sessionSearchTool.toTool(), sessionSearchTool, { exposeMode: 'discoverable' });
-  registry.register(messageSessionTool.toTool(), messageSessionTool, { exposeMode: 'discoverable' });
+  registry.register(briefTool, briefTool, { exposure: 'deferred' });
+  registry.register(sessionSearchTool.toTool(), sessionSearchTool, { exposure: 'deferred' });
+  registry.register(messageSessionTool.toTool(), messageSessionTool, { exposure: 'deferred' });
 
   // update_state — bot memory/state writes (Plan 481)
-  registry.register(updateStateTool.toTool(), updateStateTool, { exposeMode: 'discoverable' });
+  registry.register(updateStateTool.toTool(), updateStateTool, { exposure: 'deferred' });
 
   // duya_cli control plane
-  registry.register(duyaCliTool.toTool(), duyaCliTool, { exposeMode: 'discoverable' });
+  registry.register(duyaCliTool.toTool(), duyaCliTool, { exposure: 'deferred' });
 
   // ReactToMessage — emoji tapback (Plan 490)
-  registry.register(reactToMessageTool.toTool(), reactToMessageTool, { exposeMode: 'discoverable' });
+  registry.register(reactToMessageTool.toTool(), reactToMessageTool, { exposure: 'deferred' });
 
   // ModuleTool — load design specs (for widget authoring guide)
-  registry.register(moduleTool.toTool(), moduleTool, { exposeMode: 'discoverable' });
+  registry.register(moduleTool.toTool(), moduleTool, { exposure: 'deferred' });
 
   // --------------------------------------------------------------------------
   // hidden — never exposed to the LLM
   // --------------------------------------------------------------------------
 
   // SubagentTool — bots should NOT spawn sub-agents (this is the main controller's job)
-  registry.register(subagentTool.toTool(), subagentTool, { exposeMode: 'hidden' });
+  registry.register(subagentTool.toTool(), subagentTool, { exposure: 'hidden' });
 
   // AskUserQuestionTool — bots should not directly ask users multi-choice questions
   // (use SendMessage instead)
-  registry.register(askUserQuestionTool.toTool(), askUserQuestionTool, { exposeMode: 'hidden' });
+  registry.register(askUserQuestionTool.toTool(), askUserQuestionTool, { exposure: 'hidden' });
 
   // ApplyPatchTool — Codex diff patch is too low-level for bot use
-  registry.register(applyPatchTool.toTool(), applyPatchTool, { exposeMode: 'hidden' });
+  registry.register(applyPatchTool.toTool(), applyPatchTool, { exposure: 'hidden' });
 
   // show_widget — bots should not generate UI components
-  registry.register(widgetTool.toTool(), widgetTool, { exposeMode: 'hidden' });
+  registry.register(widgetTool.toTool(), widgetTool, { exposure: 'hidden' });
 }
