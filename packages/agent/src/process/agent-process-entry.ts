@@ -2004,14 +2004,37 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
       return { type: 'chat:thinking', content };
     }
     case 'tool_use_started':
-      return { type: 'chat:tool_use_started', id: (event.data as { id: string }).id, name: (event.data as { name: string }).name, input: (event.data as { input?: unknown }).input };
+      return {
+        type: 'chat:tool_use_started',
+        id: (event.data as { id: string }).id,
+        name: (event.data as { name: string }).name,
+        input: (event.data as { input?: unknown }).input,
+        groupId: (event.data as { groupId?: string }).groupId,
+        progressTitle: (event.data as { progressTitle?: string }).progressTitle,
+        progressSource: (event.data as { progressSource?: string }).progressSource,
+      };
     // Plan 461: incremental argument fragment for a tool call still being
     // generated. `delta` is a raw JSON slice — the renderer accumulates it
     // per tool_use id so the row can render partial file content live.
     case 'tool_use_delta':
       return { type: 'chat:tool_use_delta', id: (event.data as { id: string }).id, name: (event.data as { name: string }).name, delta: (event.data as { delta: string }).delta };
+    case 'tool_group_progress':
+      return {
+        type: 'chat:tool_group_progress',
+        groupId: (event.data as { groupId?: string }).groupId,
+        title: (event.data as { title: string }).title,
+        source: (event.data as { source?: string }).source,
+      };
     case 'tool_use':
-      return { type: 'chat:tool_use', id: (event.data as { id: string }).id, name: (event.data as { name: string }).name, input: (event.data as { input?: unknown }).input };
+      return {
+        type: 'chat:tool_use',
+        id: (event.data as { id: string }).id,
+        name: (event.data as { name: string }).name,
+        input: (event.data as { input?: unknown }).input,
+        groupId: (event.data as { groupId?: string }).groupId,
+        progressTitle: (event.data as { progressTitle?: string }).progressTitle,
+        progressSource: (event.data as { progressSource?: string }).progressSource,
+      };
     case 'tool_result':
       return {
         type: 'chat:tool_result',

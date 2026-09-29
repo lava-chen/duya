@@ -44,6 +44,24 @@ describe('computeSegments (default behavior)', () => {
   });
 });
 
+describe('computeSegments group identity', () => {
+  it('keeps same-group tools together and splits adjacent tools with different group ids', () => {
+    const grouped = (id: string, groupId: string): ActionItem => ({
+      kind: 'tool',
+      tool: { id, name: 'Bash', input: {}, groupId },
+    });
+    const segments = computeSegments([
+      grouped('1', 'group-a'),
+      grouped('2', 'group-a'),
+      grouped('3', 'group-b'),
+      grouped('4', 'group-b'),
+    ]);
+    expect(segments).toHaveLength(2);
+    expect(segments.map((segment) => segment.kind)).toEqual(['group', 'group']);
+    expect(segments.map((segment) => segment.kind === 'group' ? segment.entries.length : 1)).toEqual([2, 2]);
+  });
+});
+
 describe('computeSegments focus mode', () => {
   it('merges everything across text boundaries into one big group', () => {
     const segments = computeSegments(

@@ -443,6 +443,7 @@ const en = {
   // into i18n so the locale stays consistent.
   'streaming.toolAction.groupSummary.fallback.one': 'Executed 1 action',
   'streaming.toolAction.groupSummary.fallback.other': 'Executed {count} actions',
+  'streaming.toolAction.groupProgress.generic': 'Working',
   // ThinkingRow chrome strings. Previously hardcoded as 'Thinking...'
   // / 'Thought' / '思考' literals — moved into i18n so the locale
   // stays consistent with the rest of the chrome verbs.

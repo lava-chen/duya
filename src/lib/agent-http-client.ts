@@ -99,6 +99,9 @@ export interface AgentEvent {
   error?: string;
   content?: string;
   reason?: string;
+  groupId?: string;
+  progressTitle?: string;
+  progressSource?: 'provider_commentary' | 'model_progress_tool' | 'tool_fallback';
 }
 
 export type EventHandler = (event: AgentEvent) => void;
@@ -314,6 +317,9 @@ export class AgentServerClient {
                 id: (event.data as Record<string, unknown>)?.id as string,
                 name: (event.data as Record<string, unknown>)?.name as string,
                 input: (event.data as Record<string, unknown>)?.input,
+                groupId: (event.data as Record<string, unknown>)?.groupId as string | undefined,
+                progressTitle: (event.data as Record<string, unknown>)?.progressTitle as string | undefined,
+                progressSource: (event.data as Record<string, unknown>)?.progressSource as AgentEvent['progressSource'],
                 delta: (event.data as Record<string, unknown>)?.delta as string | undefined,
                 result: (event.data as Record<string, unknown>)?.result,
                 error: (event.data as Record<string, unknown>)?.error as string,
@@ -567,6 +573,9 @@ export class AgentServerClient {
                 id: (event.data as Record<string, unknown>)?.id as string,
                 name: (event.data as Record<string, unknown>)?.name as string,
                 input: (event.data as Record<string, unknown>)?.input,
+                groupId: (event.data as Record<string, unknown>)?.groupId as string | undefined,
+                progressTitle: (event.data as Record<string, unknown>)?.progressTitle as string | undefined,
+                progressSource: (event.data as Record<string, unknown>)?.progressSource as AgentEvent['progressSource'],
                 delta: (event.data as Record<string, unknown>)?.delta as string | undefined,
                 result: (event.data as Record<string, unknown>)?.result,
                 error: (event.data as Record<string, unknown>)?.error as string,

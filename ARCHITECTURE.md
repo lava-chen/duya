@@ -809,6 +809,23 @@ npm run electron:pack:linux   # Linux (AppImage, .deb, .rpm)
 7. Continue conversation loop
 ```
 
+### Tool-use Group Progress Titles
+
+Tool-call groups may carry a short progress title with source metadata:
+`provider_commentary`, `model_progress_tool`, or `tool_fallback`. The OpenAI
+Responses adapter maps only output text explicitly marked with the
+`commentary` phase; ordinary assistant text and reasoning stay on their
+existing paths. Other adapters without a distinct commentary field can use
+the private `progress_update({ title })` control call or the deterministic
+fallback.
+
+The agent intercepts `progress_update` before ordinary tool resolution,
+permission checks, execution, and durable result persistence. It is replayed
+only in the working model request context. Each emitted tool call captures a
+stable group ID, title, and source, which travel through SSE to the renderer;
+late tool results therefore remain attached to their original group. Fallback
+titles use bounded, allowlisted display data and localized generic labels.
+
 ## Key Design Decisions
 
 ### Why SQLite?
