@@ -816,6 +816,9 @@ describe('StreamSessionManager State Machine', () => {
           id: event.data?.id as string | undefined,
           name: event.data?.name as string | undefined,
           input: event.data?.input,
+          groupId: event.data?.groupId as string | undefined,
+          progressTitle: event.data?.progressTitle as string | undefined,
+          progressSource: event.data?.progressSource as 'provider_commentary' | 'model_progress_tool' | 'tool_fallback' | undefined,
           result: event.data?.result,
           error: event.data?.error as string | undefined,
           content: event.data?.content as string | undefined,
@@ -1041,6 +1044,9 @@ describe('StreamSessionManager State Machine', () => {
           id: event.data?.id as string | undefined,
           name: event.data?.name as string | undefined,
           input: event.data?.input,
+          groupId: event.data?.groupId as string | undefined,
+          progressTitle: event.data?.progressTitle as string | undefined,
+          progressSource: event.data?.progressSource as 'provider_commentary' | 'model_progress_tool' | 'tool_fallback' | undefined,
           result: event.data?.result,
           error: event.data?.error as string | undefined,
           content: event.data?.content as string | undefined,
@@ -1060,6 +1066,33 @@ describe('StreamSessionManager State Machine', () => {
       const { streamMemoryPolicy } = await import('./stream-session-manager');
       streamMemoryPolicy.terminalSlimDelayMs = originalDelay;
       streamMemoryPolicy.maxRetainedSessions = originalCap;
+    });
+
+    it('updates only tools in the addressed group and keeps results paired by call id', async () => {
+      vi.useFakeTimers();
+      try {
+        const { manager } = await createFreshManager();
+        const { emit } = await startHangingStream(manager, 'group-progress');
+
+        emit({ type: 'tool_use', data: { id: 'call-a', name: 'read', input: {}, groupId: 'group-a' } });
+        emit({ type: 'tool_use', data: { id: 'call-b', name: 'edit', input: {}, groupId: 'group-b' } });
+        emit({ type: 'tool_use_started', data: {
+          id: 'call-c', name: 'write', input: {}, groupId: 'group-c', progressTitle: 'Draft the patch',
+          progressSource: 'model_progress_tool',
+        } });
+        emit({ type: 'tool_group_progress', data: { groupId: 'group-a', title: 'Review source files' } });
+        emit({ type: 'tool_result', data: { id: 'call-a', result: 'done', error: false } });
+
+        const snapshot = manager.getSnapshot('group-progress');
+        expect(snapshot!.toolUses).toMatchObject([
+          { id: 'call-a', groupId: 'group-a', progressTitle: 'Review source files' },
+          { id: 'call-b', groupId: 'group-b', progressTitle: undefined },
+          { id: 'call-c', groupId: 'group-c', progressTitle: 'Draft the patch', progressSource: 'model_progress_tool' },
+        ]);
+        expect(snapshot!.toolResults[0]).toMatchObject({ tool_use_id: 'call-a', content: 'done' });
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('frees the last turn streaming payload after the terminal grace period but keeps finalMessageContent', async () => {

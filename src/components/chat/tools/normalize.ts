@@ -1,3 +1,5 @@
+import type { ToolAction } from './types';
+
 // Normalization helpers shared between the streaming path
 // (`useStreamingActions.streamingEventsToActions`) and the persisted
 // path (`MessageItem.messageToActionItems`). Both must turn a
@@ -48,16 +50,10 @@ export function buildToolAction(
   result?: { content?: string; is_error?: boolean; duration_ms?: number | null; metadata?: Record<string, unknown> },
   fallbackDurationMs?: number | null,
   stage?: string,
-): {
-  id: string | undefined;
-  name: string;
-  input: unknown;
-  result?: string;
-  isError?: boolean;
-  durationMs?: number | null;
-  metadata?: Record<string, unknown>;
-  stage?: string;
-} {
+  groupId?: string,
+  progressTitle?: string,
+  progressSource?: ToolAction['progressSource'],
+): ToolAction {
   return {
     id,
     name,
@@ -67,5 +63,8 @@ export function buildToolAction(
     durationMs: result?.duration_ms ?? fallbackDurationMs,
     metadata: result?.metadata,
     stage,
+    groupId,
+    progressTitle,
+    progressSource,
   };
 }

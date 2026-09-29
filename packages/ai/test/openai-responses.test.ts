@@ -101,9 +101,30 @@ describe('openai-responses streamChat (plan 440 baseline)', () => {
     ];
     const events = await collect(makeClient().streamChat(MESSAGES));
     expect(sseText(events)).toBe('Hello world');
+    expect(events.some(e => e.type === 'tool_group_progress')).toBe(false);
     expect(events.some(e => e.type === 'error')).toBe(false);
     expect(events.some(e => e.type === 'done')).toBe(true);
     expect(events.some(e => e.type === 'result')).toBe(true);
+  });
+
+  it('normalizes only explicit commentary phase text into tool-group progress', async () => {
+    mocks.state.stream = [
+      { type: 'response.output_item.added', item: { type: 'message', id: 'c_1', phase: 'commentary' } },
+      { type: 'response.output_text.delta', item_id: 'c_1', delta: 'Reading the target files' },
+      { type: 'response.output_item.done', item: { type: 'message', id: 'c_1', phase: 'commentary' } },
+      { type: 'response.output_item.added', item: { type: 'reasoning', id: 'r_1' } },
+      { type: 'response.reasoning_summary_text.delta', item_id: 'r_1', delta: 'private reasoning' },
+      { type: 'response.output_item.added', item: { type: 'message', id: 'm_1' } },
+      { type: 'response.output_text.delta', item_id: 'm_1', delta: 'Final answer' },
+      { type: 'response.output_item.done', item: { type: 'message', id: 'm_1' } },
+      { type: 'response.completed', response: { id: 'resp_1', status: 'completed', usage: { input_tokens: 1, output_tokens: 1 } } },
+    ];
+    const events = await collect(makeClient().streamChat(MESSAGES));
+    expect(events.filter((event) => event.type === 'tool_group_progress')).toEqual([
+      { type: 'tool_group_progress', data: { title: 'Reading the target files', source: 'provider_commentary' } },
+    ]);
+    expect(sseText(events)).toBe('Final answer');
+    expect(events.some((event) => event.type === 'thinking' && event.data === 'private reasoning')).toBe(true);
   });
 
   it('carries web_search_call items and surfaces a summary in the text stream', async () => {

@@ -463,7 +463,14 @@ function normalizeWorkerEvent(event: Record<string, unknown>): Record<string, un
   } else if (msgType === 'chat:tool_use_started') {
     sseEvent = {
       type: 'tool_use_started',
-      data: { id: event.id, name: event.name, input: event.input },
+      data: {
+        id: event.id,
+        name: event.name,
+        input: event.input,
+        groupId: event.groupId,
+        progressTitle: event.progressTitle,
+        progressSource: event.progressSource,
+      },
     };
   } else if (msgType === 'chat:tool_use_delta') {
     // Plan 461: incremental tool-call argument fragment. Forwarded verbatim
@@ -473,10 +480,22 @@ function normalizeWorkerEvent(event: Record<string, unknown>): Record<string, un
       type: 'tool_use_delta',
       data: { id: event.id, name: event.name, delta: event.delta },
     };
+  } else if (msgType === 'chat:tool_group_progress') {
+    sseEvent = {
+      type: 'tool_group_progress',
+      data: { groupId: event.groupId, title: event.title, source: event.source },
+    };
   } else if (msgType === 'chat:tool_use') {
     sseEvent = {
       type: 'tool_use',
-      data: { id: event.id, name: event.name, input: event.input },
+      data: {
+        id: event.id,
+        name: event.name,
+        input: event.input,
+        groupId: event.groupId,
+        progressTitle: event.progressTitle,
+        progressSource: event.progressSource,
+      },
     };
   } else if (msgType === 'chat:tool_result') {
     sseEvent = {
@@ -2918,14 +2937,14 @@ export function createHandleRequest(
       return;
     }
 
-  if (parts[0] === 'plugins' && parts[1] === 'reload' && method === 'POST') {
-    // Refresh only connector descriptors in the worker. The next turn merges
-    // them into its tool snapshot; rebuilding MCP state here can disturb
-    // unrelated tools in an active session.
-    const count = deps.workerManager.broadcastCommand({ type: 'appConnection:reload' });
-    sendJson(res, 200, { ok: true, workersNotified: count });
-    return;
-  }
+    if (parts[0] === 'plugins' && parts[1] === 'reload' && method === 'POST') {
+      // Refresh only connector descriptors in the worker. The next turn merges
+      // them into its tool snapshot; rebuilding MCP state here can disturb
+      // unrelated tools in an active session.
+      const count = deps.workerManager.broadcastCommand({ type: 'appConnection:reload' });
+      sendJson(res, 200, { ok: true, workersNotified: count });
+      return;
+    }
 
     if (parts[0] === 'mcp' && parts[1] === 'status' && method === 'POST') {
       // Phase 2A diagnostic chain: ask every worker for its

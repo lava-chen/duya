@@ -168,6 +168,7 @@ export type {
   ToolResultMetadata,
   ToolUse,
   ToolUseContent,
+  ToolGroupProgressSource,
   TokenUsage,
   UsageCall,
   ParameterDiagnostic,

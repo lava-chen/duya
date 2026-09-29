@@ -103,6 +103,45 @@ vi.mock('./ToolResultRenderer', () => ({
 }));
 
 describe('ToolActionsGroup shell rendering', () => {
+  it('renders explicit progress titles and a safe fallback in separate groups', () => {
+    const tools: ToolAction[] = [
+      {
+        id: 'commentary-1', name: 'read', input: { path: 'src/a.ts' }, result: 'a',
+        groupId: 'commentary-group', progressTitle: 'Inspect the source', progressSource: 'provider_commentary',
+      },
+      {
+        id: 'commentary-2', name: 'grep', input: { pattern: 'source' }, result: 'b',
+        groupId: 'commentary-group', progressTitle: 'Inspect the source', progressSource: 'provider_commentary',
+      },
+      {
+        id: 'fallback-1', name: 'read', input: { path: 'src/b.ts' }, result: 'c',
+        groupId: 'fallback-group', progressSource: 'tool_fallback',
+      },
+      {
+        id: 'fallback-2', name: 'edit', input: { file_path: 'src/b.ts' }, result: 'd',
+        groupId: 'fallback-group', progressSource: 'tool_fallback',
+      },
+      {
+        id: 'control-1', name: 'grep', input: { pattern: 'needle' }, result: 'e',
+        groupId: 'control-group', progressTitle: 'Find matching references', progressSource: 'model_progress_tool',
+      },
+      {
+        id: 'control-2', name: 'read', input: { path: 'src/c.ts' }, result: 'f',
+        groupId: 'control-group', progressTitle: 'Find matching references', progressSource: 'model_progress_tool',
+      },
+    ];
+
+    const { container } = render(<ToolActionsGroup tools={tools} flat />);
+    const titles = [...container.querySelectorAll('[data-title-source]')];
+    expect(titles).toHaveLength(3);
+    expect(titles[0]).toHaveTextContent('Inspect the source');
+    expect(titles[0]).toHaveAttribute('data-title-source', 'provider_commentary');
+    expect(titles[1]).toHaveAttribute('data-title-source', 'tool_fallback');
+    expect(titles[1]?.textContent).not.toContain('src/b.ts');
+    expect(titles[2]).toHaveTextContent('Find matching references');
+    expect(titles[2]).toHaveAttribute('data-title-source', 'model_progress_tool');
+  });
+
   // The pre-existing 'powershell' / 'create_file' tests in this block
   // assert on hard-coded strings ('PowerShell', 'Create file',
   // 'Command completed in 2.1s', 'Completed in 640ms') that are not

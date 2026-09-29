@@ -171,6 +171,9 @@ function parseMessageContent(content: string | unknown[], msgType?: string): {
               id: b.id as string,
               name: b.name as string,
               input: b.input as Record<string, unknown> || {},
+              groupId: typeof b.groupId === 'string' ? b.groupId : undefined,
+              progressTitle: typeof b.progressTitle === 'string' ? b.progressTitle : undefined,
+              progressSource: typeof b.progressSource === 'string' ? b.progressSource as ToolUseInfo['progressSource'] : undefined,
             });
           }
         }
@@ -188,13 +191,16 @@ function parseMessageContent(content: string | unknown[], msgType?: string): {
     content.forEach(block => {
       if (block && typeof block === 'object') {
         const b = block as Record<string, unknown>;
-        if (b.type === 'text' && b.text) {
+        if (b.type === 'text' && b.phase !== 'commentary' && b.text) {
           textParts.push(b.text as string);
         } else if (b.type === 'tool_use') {
           toolUses.push({
             id: b.id as string,
             name: b.name as string,
             input: b.input as Record<string, unknown> || {},
+            groupId: typeof b.groupId === 'string' ? b.groupId : undefined,
+            progressTitle: typeof b.progressTitle === 'string' ? b.progressTitle : undefined,
+            progressSource: typeof b.progressSource === 'string' ? b.progressSource as ToolUseInfo['progressSource'] : undefined,
           });
         } else if (b.type === 'thinking' && b.thinking) {
           const rawThinking = b.thinking;
@@ -231,7 +237,7 @@ function extractMarkdownFromBlocks(content: string | unknown[]): string {
   for (const block of content) {
     if (!block || typeof block !== 'object') continue;
     const b = block as Record<string, unknown>;
-    if (b.type === 'text' && typeof b.text === 'string') {
+    if (b.type === 'text' && b.phase !== 'commentary' && typeof b.text === 'string') {
       parts.push(b.text);
     }
   }
@@ -400,7 +406,7 @@ function messageToActionItems(
     for (const block of msg.content) {
       if (!block || typeof block !== 'object') continue;
       const b = block as Record<string, unknown>;
-      if (b.type === 'text' && b.text && String(b.text).trim()) {
+      if (b.type === 'text' && b.phase !== 'commentary' && b.text && String(b.text).trim()) {
         actions.push({ kind: 'text', content: String(b.text) });
       } else if (b.type === 'tool_use') {
         if (b.name === 'show_widget') {
@@ -417,15 +423,18 @@ function messageToActionItems(
           actions.push({ kind: 'notice', notice });
           continue;
         }
-        actions.push({
-          kind: 'tool',
-          tool: buildToolAction(
-            toolId,
-            String(b.name || ''),
-            (b.input as Record<string, unknown>) || {},
-            result,
-          ),
-        });
+        const toolAction = buildToolAction(
+          toolId,
+          String(b.name || ''),
+          (b.input as Record<string, unknown>) || {},
+          result,
+          undefined,
+          undefined,
+          typeof b.groupId === 'string' ? b.groupId : undefined,
+          typeof b.progressTitle === 'string' ? b.progressTitle : undefined,
+          typeof b.progressSource === 'string' ? b.progressSource as ToolUseInfo['progressSource'] : undefined,
+        );
+        actions.push({ kind: 'tool', tool: toolAction });
       } else if (b.type === 'thinking' && b.thinking) {
         const rawThinking = b.thinking;
         const thinkingStr = typeof rawThinking === 'string' ? rawThinking : JSON.stringify(rawThinking);

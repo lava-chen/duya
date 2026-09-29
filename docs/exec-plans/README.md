@@ -37,6 +37,8 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 
 ### Agent Core & Message
 
+- [2026-09-tool-use-group-progress-titles](./active/2026-09-tool-use-group-progress-titles.md): Implementation and focused checks complete; Electron/provider smoke pending.
+
 | Plan                                                                                                             | Description                                                                                                                                                                                                                 | Priority  | Status                                                                                                       |
 | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------ |
 | [315-agent-message-domain-framework](./active/315-agent-message-domain-framework.md)                             | Pi-inspired append-only AgentMessage timeline, custom message projection, durable compaction checkpoints                                                                                                                    | P0        | Phase 1 complete; runtime integration deferred                                                               |
