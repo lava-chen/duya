@@ -65,7 +65,9 @@ export class ToolInvokeTool implements Tool, ToolExecutor {
   };
 
   private dispatcher?: ToolInvokeDispatcher;
-  private readonly contextDispatchers = new WeakMap<ToolUseContext, ToolInvokeDispatcher>();
+  // StreamingToolExecutor creates a shallow per-tool context copy. The
+  // options object keeps the per-turn identity across that copy.
+  private readonly contextDispatchers = new WeakMap<object, ToolInvokeDispatcher>();
 
   setDispatcher(dispatcher: ToolInvokeDispatcher): void {
     this.dispatcher = dispatcher;
@@ -73,6 +75,9 @@ export class ToolInvokeTool implements Tool, ToolExecutor {
 
   setDispatcherForContext(context: ToolUseContext, dispatcher: ToolInvokeDispatcher): void {
     this.contextDispatchers.set(context, dispatcher);
+    if (context.options && typeof context.options === 'object') {
+      this.contextDispatchers.set(context.options, dispatcher);
+    }
   }
 
   toTool(): Tool {
@@ -106,7 +111,10 @@ export class ToolInvokeTool implements Tool, ToolExecutor {
       );
     }
 
-    const dispatcher = context ? this.contextDispatchers.get(context) : this.dispatcher;
+    const dispatcher = context
+      ? this.contextDispatchers.get(context) ??
+        (context.options ? this.contextDispatchers.get(context.options) : undefined)
+      : this.dispatcher;
     if (!dispatcher) {
       return this.errorResult(
         'Tool Invoke Error',

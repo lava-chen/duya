@@ -125,7 +125,9 @@ export class ToolCatalogTool implements Tool, ToolExecutor {
   };
 
   private view?: ToolCatalogView;
-  private readonly contextViews = new WeakMap<ToolUseContext, ToolCatalogView>();
+  // StreamingToolExecutor creates a shallow per-tool context copy. The
+  // options object keeps the per-turn identity across that copy.
+  private readonly contextViews = new WeakMap<object, ToolCatalogView>();
 
   setView(view: ToolCatalogView): void {
     this.view = view;
@@ -137,6 +139,9 @@ export class ToolCatalogTool implements Tool, ToolExecutor {
 
   setContextView(context: ToolUseContext, view: ToolCatalogView): void {
     this.contextViews.set(context, view);
+    if (context.options && typeof context.options === 'object') {
+      this.contextViews.set(context.options, view);
+    }
   }
 
   toTool(): Tool {
@@ -164,7 +169,10 @@ export class ToolCatalogTool implements Tool, ToolExecutor {
       return this.result({ errorCode: 'INVALID_CATALOG_QUERY', message: 'Provide exactly one non-empty query or tool_id.' }, true);
     }
 
-    const view = context ? this.contextViews.get(context) : this.view;
+    const view = context
+      ? this.contextViews.get(context) ??
+        (context.options ? this.contextViews.get(context.options) : undefined)
+      : this.view;
     if (!view) return this.result({ errorCode: 'CATALOG_UNAVAILABLE', message: 'The current tool catalog is not available.' }, true);
 
     if (query !== undefined) {
