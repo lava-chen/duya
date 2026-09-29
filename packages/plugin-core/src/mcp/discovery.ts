@@ -51,6 +51,8 @@ export interface MCPCandidate {
   pluginDataPath?: string;
   rawConfig: {
     name: string;
+    /** Durable identity for settings-owned servers; never contains credentials. */
+    connectionId?: string;
     transport?: 'stdio' | 'streamable-http';
     command?: string;
     args?: string[];
@@ -105,6 +107,7 @@ export interface MCPServerInventoryEntry {
   serverName: string;             // unscoped display name (rawConfig.name)
   scopedServerName: string;       // internal identifier (plugin:<id>:<name> for plugins, plain for others)
   rawConfig: {
+    connectionId?: string;
     transport?: 'stdio' | 'streamable-http';
     command?: string;
     args?: string[];
@@ -141,6 +144,7 @@ export interface ResolvedMCPServerConfig {
   pluginName?: string;
   scopedServerName: string;
   rawConfig: {
+    connectionId?: string;
     transport?: 'stdio' | 'streamable-http';
     command?: string;
     args: string[];

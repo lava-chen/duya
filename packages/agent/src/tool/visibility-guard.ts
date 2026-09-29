@@ -1,18 +1,18 @@
 import { logger } from '../utils/logger.js';
 
 /**
- * Declared-tools visibility guard (four-tier exposure model).
+ * Declared-tools visibility guard for the unified catalog.
  *
  * The request's tools array deliberately omits some registered tools:
- * `discoverable` tools are absent until found via tool_search, and
+ * deferred tools are absent until their schema is loaded, and
  * `hidden` tools are never exposed at all. A model call whose tool name is
  * NOT declared on the current request (not in the array) is therefore an
  * undeclared call — it is always rejected with a structured message
  * pointing the model at the sanctioned path:
- * tool_search → tool_schema → tool_invoke.
+ * tool_catalog → tool_invoke.
  *
- * Declared tools = `always` full entries + `hint` stub entries (+ promoted
- * discoverables merged into the array). The guard decision is pure so the
+ * Declared tools = eager entries, catalog routers, and explicitly promoted
+ * deferred entries. The guard decision is pure so the
  * harness replays it without spinning the agent loop; the rejection
  * telemetry below keeps a per-name counter for debugging.
  *
@@ -32,7 +32,7 @@ export function recordUndeclaredCall(toolName: string): number {
   undeclaredCallCounts.set(toolName, count);
   logger.warn(
     `[VisibilityGuard] rejected direct call to tool not declared on the request's tools array: "${toolName}" (count=${count}). ` +
-      'Discover via tool_search, read the schema via tool_schema, invoke via tool_invoke.',
+      'Find the tool with tool_catalog, read its schema by tool_id, then invoke deferred tools via tool_invoke.',
   );
   return count;
 }
@@ -61,7 +61,7 @@ export interface VisibilityGuardResult {
 
 export const VISIBILITY_DENIAL_MESSAGE = (toolName: string): string =>
   `Tool \`${toolName}\` is not in this request's tool list. ` +
-  `Find it with \`tool_search\`, read its schema with \`tool_schema\`, then invoke it via \`tool_invoke\`. ` +
+  `Find it with \`tool_catalog\`, read its schema by \`tool_id\`, then invoke deferred tools via \`tool_invoke\`. ` +
   `Direct calls to undeclared tools are rejected.`;
 
 export function evaluateVisibilityGuard(

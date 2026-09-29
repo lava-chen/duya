@@ -90,7 +90,7 @@ export function collectConnectorActivationInjection(
     body: [
       'The user explicitly mentioned these app connections in their message:',
       ...lines,
-      'Prefer these apps\' tools for tasks matching their capabilities; other tools remain discoverable through tool_search.',
+      'Prefer these apps\' tools for tasks matching their capabilities; other tools remain discoverable through tool_catalog.',
     ].join('\n'),
   };
 }
@@ -100,7 +100,7 @@ export function collectConnectorActivationInjection(
  *
  * codex parity: `core/src/context/apps_instructions.rs` renders a
  * developer-role block whenever any accessible+enabled app exists, teaching
- * the `[$app-name](app://id)` mention syntax and pointing at tool_search —
+ * the `[$app-name](app://id)` mention syntax and pointing at tool_catalog —
  * so the model can trigger apps implicitly, not only on turns where the
  * user happened to @-mention one. Returns null when no app is connected,
  * keeping the system prompt unchanged for users without connections
@@ -138,8 +138,8 @@ export function buildAppsSystemSection(
   return [
     '## Apps (Connectors)',
     'Apps (Connectors) can be explicitly triggered in user messages in the format `[@App-Name](app://<provider-id>)`. Apps can also be triggered implicitly whenever the context suggests an installed app would help.',
-    "An app's tools are either already in your tool list for this turn, or discoverable through the `tool_search` tool.",
-    'Do not call list_mcp_resources or similar for apps — use the tools listed above or tool_search.',
+    "An app's tools are either already in your tool list for this turn, or discoverable through the `tool_catalog` tool.",
+    'Do not call list_mcp_resources or similar for apps — use the tools listed above or tool_catalog.',
     'Connected apps this session:',
     appLines,
     'Helping the user connect apps:',

@@ -43,9 +43,8 @@ import { askUserQuestionTool } from './AskUserQuestionTool/AskUserQuestionTool.j
 import { moduleTool } from './ModuleTool/ModuleTool.js';
 import { widgetTool } from './WidgetTool/index.js';
 import { hasShellFamily } from '../utils/shellDetector.js';
-import { toolSearchTool } from './ToolSearchTool/ToolSearchTool.js';
-import { toolSchemaTool } from './ToolSchemaTool/ToolSchemaTool.js';
-import { toolInvokeTool } from './ToolInvokeTool/ToolInvokeTool.js';
+import { ToolCatalogTool } from './ToolCatalogTool/ToolCatalogTool.js';
+import { ToolInvokeTool } from './ToolInvokeTool/ToolInvokeTool.js';
 import { updateStateTool } from './UpdateStateTool/UpdateStateTool.js';
 import { sendMessageTool } from './SendMessageTool/index.js';
 import { sendToAgentTool } from './SendToAgentTool/index.js';
@@ -102,90 +101,91 @@ export function createBuiltinRegistry(
   }
 
   // Bash is the default shell on every platform. PowerShell remains
-  // available via tool_search when present, but is not exposed on the
+  // available via tool_catalog when present, but is not exposed on the
   // initial tool surface — its quoting/escaping quirks caused too many
   // execution bugs. On Windows without Git Bash, the bash tool still
   // works because resolveShellExecutionPlan falls back to PowerShell.
   registry.register(bashTool.toTool(), bashTool, {
-    exposeMode: 'always',
+    exposure: 'eager',
   });
   if (hasShellFamily('powershell')) {
     registry.register(powerShellTool.toTool(), powerShellTool, {
-      exposeMode: 'discoverable',
+      exposure: 'deferred',
     });
   }
 
   // Read tool
   const readTool = new ReadTool();
-  registry.register(readTool.toTool(), readTool, { exposeMode: 'always' });
+  registry.register(readTool.toTool(), readTool, { exposure: 'eager' });
 
   // Write tool - class implements both Tool and ToolExecutor
-  registry.register(writeTool.toTool(), writeTool, { exposeMode: 'always' });
+  registry.register(writeTool.toTool(), writeTool, { exposure: 'eager' });
 
   // Grep tool
-  registry.register(grepTool.toTool(), grepTool, { exposeMode: 'always' });
+  registry.register(grepTool.toTool(), grepTool, { exposure: 'eager' });
 
   // Edit tool
   const editToolInstance = new EditTool();
-  registry.register(editToolInstance.toTool(), editToolInstance, { exposeMode: 'always' });
+  registry.register(editToolInstance.toTool(), editToolInstance, { exposure: 'eager' });
 
   // Apply patch tool - unified diff application (Codex format)
   const applyPatchToolInstance = new ApplyPatchTool();
-  registry.register(applyPatchToolInstance.toTool(), applyPatchToolInstance, { exposeMode: 'always' });
+  registry.register(applyPatchToolInstance.toTool(), applyPatchToolInstance, { exposure: 'eager' });
 
   // Glob tool
   const globToolInstance = new GlobTool();
-  registry.register(globToolInstance.toTool(), globToolInstance, { exposeMode: 'always' });
+  registry.register(globToolInstance.toTool(), globToolInstance, { exposure: 'eager' });
 
   // SubagentTool - for spawning sub-agents
-  registry.register(subagentTool.toTool(), subagentTool, { exposeMode: 'always' });
+  registry.register(subagentTool.toTool(), subagentTool, { exposure: 'eager' });
 
-  // Memory curation tools — validated writes, registered discoverable so the
+  // Memory curation tools — validated writes, registered deferred so the
   // curator profile can select them via allowedTools.
   const memoryWriteTool = new MemoryWriteTool();
-  registry.register(memoryWriteTool.toTool(), memoryWriteTool, { exposeMode: 'discoverable' });
+  registry.register(memoryWriteTool.toTool(), memoryWriteTool, { exposure: 'deferred' });
   const writeStage1PolicyTool = new WriteStage1PolicyTool();
-  registry.register(writeStage1PolicyTool.toTool(), writeStage1PolicyTool, { exposeMode: 'discoverable' });
+  registry.register(writeStage1PolicyTool.toTool(), writeStage1PolicyTool, { exposure: 'deferred' });
 
   // Phase 5: Todo tool (aligned to Grok todo_write)
-  registry.register(todoTool.toTool(), todoTool, { exposeMode: 'always' });
+  registry.register(todoTool.toTool(), todoTool, { exposure: 'eager' });
 
   // Phase 5: Background sub-agent task tools. get_task_output is a read-only
   // status/output snapshot (never blocks — completion arrives as an async
   // <task-notification>); kill_task is a write.
-  registry.register(getTaskOutputTool.toTool(), getTaskOutputTool, { exposeMode: 'always', riskTier: 'read' });
-  registry.register(killTaskTool.toTool(), killTaskTool, { exposeMode: 'always', riskTier: 'write' });
+  registry.register(getTaskOutputTool.toTool(), getTaskOutputTool, { exposure: 'eager', riskTier: 'read' });
+  registry.register(killTaskTool.toTool(), killTaskTool, { exposure: 'eager', riskTier: 'write' });
 
-  // Plan mode controls are available through tool_search when needed.
-  registry.register(enterPlanModeTool, enterPlanModeTool, { exposeMode: 'discoverable' });
-  registry.register(exitPlanModeTool, exitPlanModeTool, { exposeMode: 'discoverable' });
-  registry.register(switchModeTool, switchModeTool, { exposeMode: 'discoverable' });
+  // Plan mode controls are available through tool_catalog when needed.
+  registry.register(enterPlanModeTool, enterPlanModeTool, { exposure: 'deferred' });
+  registry.register(exitPlanModeTool, exitPlanModeTool, { exposure: 'deferred' });
+  registry.register(switchModeTool, switchModeTool, { exposure: 'deferred' });
 
-  // Browser — web search and fetch surface. Large schema (many operations),
-  // so hint mode reduces token overhead while keeping it on the initial tool
-  // surface. The stub appends argument summary to the description.
-  registry.register(browserTool.toTool(), browserTool, { exposeMode: 'hint' });
+  // Browser has many operations, so keep its full schema behind the catalog.
+  registry.register(browserTool.toTool(), browserTool, {
+    exposure: 'deferred',
+    inputSchemaSummary: 'Search, open, inspect, and interact with webpages using a persistent browser session.',
+  });
 
   // Phase 5: Other tools
   // Skill must be on the initial surface (Skills catalog instructs model to
-  // call it); hint mode keeps it surfaced with stub schema to reduce overhead.
-  registry.register(skillTool, skillTool, { exposeMode: 'hint' });
-  registry.register(briefTool, briefTool, { exposeMode: 'discoverable' });
-  registry.register(sessionSearchTool.toTool(), sessionSearchTool, { exposeMode: 'discoverable' });
+  // call it); keep its compact schema on the eager surface.
+  registry.register(skillTool, skillTool, { exposure: 'eager' });
+  registry.register(briefTool, briefTool, { exposure: 'deferred' });
+  registry.register(sessionSearchTool.toTool(), sessionSearchTool, { exposure: 'deferred' });
   // Inter-agent communication tool — message another session's agent
-  registry.register(messageSessionTool.toTool(), messageSessionTool, { exposeMode: 'discoverable' });
+  registry.register(messageSessionTool.toTool(), messageSessionTool, { exposure: 'deferred' });
   // Plan 504 — spawn a real project-scoped child session and run it async.
   // Bot-exclusive: not auto-surfaced to general sessions (mirrors
   // send_to_agent); bots get exact-name promotion via BOT_TOOLSET.
-  registry.register(sessionTool.toTool(), sessionTool, { exposeMode: 'discoverable' });
+  registry.register(sessionTool.toTool(), sessionTool, { exposure: 'deferred' });
   const visionTool = new VisionTool();
-  registry.register(visionTool, visionTool, { exposeMode: 'hint' });
+  registry.register(visionTool, visionTool, { exposure: 'eager' });
 
   // image_generate — media generation tool (plan image-gen). Registered
-  // discoverable: it stays off the default tool surface and is reached via
-  // `tool_search`. Config lives under `[image_generation]` in config.toml.
+  // deferred: it stays off the default tool surface and is reached via
+  // `tool_catalog`. Config lives under `[image_generation]` in config.toml.
   registry.register(imageGenerateTool.toTool(), imageGenerateTool, {
-    exposeMode: 'discoverable',
+    exposure: 'deferred',
     inputSchemaSummary: 'prompt (required), size, quality, reference_image, output_path',
   });
   // cronTool removed in plan 99 — use `duya_cli` (command: 'cron') instead.
@@ -202,25 +202,28 @@ export function createBuiltinRegistry(
   // pairing, plus the legacy read actions) are all reachable
   // through `duya_cli { argv: ["config", …] }` /
   // `duya_cli { argv: ["mcp", …] }`.
-  registry.register(duyaCliTool.toTool(), duyaCliTool, { exposeMode: 'discoverable' });
+  registry.register(duyaCliTool.toTool(), duyaCliTool, { exposure: 'deferred' });
 
   // AskUserQuestion tool - prompt the user with multi-choice questions
-  registry.register(askUserQuestionTool.toTool(), askUserQuestionTool, { exposeMode: 'always' });
+  registry.register(askUserQuestionTool.toTool(), askUserQuestionTool, { exposure: 'eager' });
 
   // ModuleTool - load design specification modules on demand
   // Agent calls read_module BEFORE show_widget or canvas tools to get style guides
-  registry.register(moduleTool.toTool(), moduleTool, { exposeMode: 'discoverable' });
+  registry.register(moduleTool.toTool(), moduleTool, { exposure: 'deferred' });
 
   // show_widget — generative UI widgets (charts, diagrams, calculators, mini-apps).
   // Short description kept inline; see WidgetTool for full executor.
-  registry.register(widgetTool.toTool(), widgetTool, { exposeMode: 'hint' });
+  registry.register(widgetTool.toTool(), widgetTool, {
+    exposure: 'deferred',
+    inputSchemaSummary: 'Create a chart, diagram, calculator, or small interactive app for the conversation.',
+  });
 
   // send_artifact - explicit outbound file delivery through a gateway channel.
-  // Discoverable: gateway sessions reach it via tool_search; in desktop
+  // Deferred: gateway sessions reach it via tool_catalog; in desktop
   // sessions it is a harmless no-op, so keeping it off the default tool
   // surface saves the schema tokens.
   const sendArtifactTool = new SendArtifactTool();
-  registry.register(sendArtifactTool.toTool(), sendArtifactTool, { exposeMode: 'discoverable' });
+  registry.register(sendArtifactTool.toTool(), sendArtifactTool, { exposure: 'deferred' });
 
   // Plan 224 Phase 3: canvas conductor tools are no longer registered
   // here. They are injected declaratively via `conductorMode.tools.inject`
@@ -228,27 +231,16 @@ export function createBuiltinRegistry(
   // The `conductorMode` option is now read from `ChatOptions` by the mode
   // registry, not by `createBuiltinRegistry`.
 
-  // Plan 241 Phase 1: ToolSearchTool must be in the registry so the LLM
-  // can call it. It's always exposed (Phase 1 does not yet filter by
-  // exposeMode). The actual `setSearchFn` injection lives in
-  // `DuyaAgent.streamChat` because it needs access to the per-call
-  // registry (including MCP-injected tools).
-  registry.register(toolSearchTool.toTool(), toolSearchTool, { exposeMode: 'always' });
-
-  // Plan 480 P2.1: discovery + invocation meta tools. Their names and schemas
-  // are byte-constant; dynamic tools (MCP / plugins / connectors) never enter
-  // the request's tools array — the model reads their schemas via
-  // `tool_schema` and invokes via `tool_invoke`. The catalog provider is
-  // injected per-call by the agent (like toolSearchTool.setSearchFn); the
-  // invocation dispatcher is wired in P2.2 (permission gate) / P3.
-  registry.register(toolSchemaTool.toTool(), toolSchemaTool, { exposeMode: 'always' });
-  registry.register(toolInvokeTool.toTool(), toolInvokeTool, { exposeMode: 'always' });
+  const toolCatalogTool = new ToolCatalogTool();
+  const toolInvokeTool = new ToolInvokeTool();
+  registry.register(toolCatalogTool.toTool(), toolCatalogTool, { exposure: 'eager' });
+  registry.register(toolInvokeTool.toTool(), toolInvokeTool, { exposure: 'eager' });
 
   // Plan 481 T1: update_state — bot memory/state writes through the 479 tier
   // store (see UpdateStateTool). Discoverable: only bot profiles surface it
   // (bot-toolset.ts appends it to allowedTools); checkPermissions maps
   // own=allow / shared=ask per the 481 permission matrix.
-  registry.register(updateStateTool.toTool(), updateStateTool, { exposeMode: 'discoverable' });
+  registry.register(updateStateTool.toTool(), updateStateTool, { exposure: 'deferred' });
 
   // Plan 483 P2: SendMessage — bot proactive message delivery to the UI.
   // Based on grok-bot SendMessage semantics: this is the ONLY way for a bot to
@@ -256,35 +248,35 @@ export function createBuiltinRegistry(
   // Discoverable: only bot profiles surface it (bot-toolset.ts appends it to
   // allowedTools). The message is saved to DB and pushed to the renderer via
   // SSE broadcast in the message:append handler.
-  registry.register(sendMessageTool.toTool(), sendMessageTool, { exposeMode: 'discoverable' });
+  registry.register(sendMessageTool.toTool(), sendMessageTool, { exposure: 'deferred' });
 
   // Plan 477 P1.2: send_to_agent — asynchronous agent-to-agent DM. The
   // message lands in the target's agent_mailbox (kind='agent_dm') and the
   // 476 wake bus handles waking the recipient. Discoverable: bot profiles
   // surface it via the BOT_TOOLSET exact-name promotion (plan 496).
-  registry.register(sendToAgentTool.toTool(), sendToAgentTool, { exposeMode: 'discoverable' });
+  registry.register(sendToAgentTool.toTool(), sendToAgentTool, { exposure: 'deferred' });
 
   // Plan 478 P2.1: post_to_room — a member's only voice into a shared room
   // (grok group SendMessage parity). The authored entry lands directly in the
   // room transcript session (`room:<roomId>`); the main process hooks the
   // append for room sessions and drives the round-robin orchestrator.
   // Discoverable: surfaced via the BOT_TOOLSET exact-name promotion.
-  registry.register(postToRoomTool.toTool(), postToRoomTool, { exposeMode: 'discoverable' });
+  registry.register(postToRoomTool.toTool(), postToRoomTool, { exposure: 'deferred' });
 
   // Plan 492 P4: create_agent / update_agent — bot self-management (grok
   // sand-agent-management-tools parity). Persistence goes through the
   // db-bridge config:agents:create|update cases; the main process owns the
   // config.toml write. Discoverable: bot profiles surface them via
-  // BOT_TOOLSET; main-session '*' profiles stay behind tool_search.
-  registry.register(createAgentTool.toTool(), createAgentTool, { exposeMode: 'discoverable' });
-  registry.register(updateAgentTool.toTool(), updateAgentTool, { exposeMode: 'discoverable' });
+  // BOT_TOOLSET; main-session '*' profiles stay behind tool_catalog.
+  registry.register(createAgentTool.toTool(), createAgentTool, { exposure: 'deferred' });
+  registry.register(updateAgentTool.toTool(), updateAgentTool, { exposure: 'deferred' });
 
   // Plan 476 P2.3b: manage_routine — bot routine self-management (grok
   // update_state target "routine" parity). Persistence goes through the
   // db-bridge automation:cron:* cases; the tool enforces bot ownership
   // agent-side (bridge has no session context). Discoverable: bot profiles
   // surface it via BOT_TOOLSET; main sessions cannot own routines.
-  registry.register(manageRoutineTool.toTool(), manageRoutineTool, { exposeMode: 'discoverable' });
+  registry.register(manageRoutineTool.toTool(), manageRoutineTool, { exposure: 'deferred' });
 
   // Plan 503: list_app_connectors / connect_app — bot-only connector
   // elicitation (grok AuthenticateMcpServer parity). connect_app shows the
@@ -292,27 +284,26 @@ export function createBuiltinRegistry(
   // and never touches tokens; the OAuth flow and resume stay in main + UI.
   // Discoverable: bot profiles surface them via BOT_TOOLSET; interactive
   // main-session agents keep the settings-page connect flow.
-  registry.register(listAppConnectorsTool.toTool(), listAppConnectorsTool, { exposeMode: 'discoverable' });
-  registry.register(connectAppTool.toTool(), connectAppTool, { exposeMode: 'discoverable' });
+  registry.register(listAppConnectorsTool.toTool(), listAppConnectorsTool, { exposure: 'deferred' });
+  registry.register(connectAppTool.toTool(), connectAppTool, { exposure: 'deferred' });
 
   // Plan 490 P1: ReactToMessage — emoji tapback on a chat message (grok
-  // sand-reaction-tool parity). Discoverable: reached via tool_search when
+  // sand-reaction-tool parity). Deferred: reached via tool_catalog when
   // the model needs it; the schema cost does not justify a permanent slot
   // on the default surface. Writes a source='reaction' row through the
   // normal message pipeline; toggle semantics live in the tool.
-  registry.register(reactToMessageTool.toTool(), reactToMessageTool, { exposeMode: 'discoverable' });
+  registry.register(reactToMessageTool.toTool(), reactToMessageTool, { exposure: 'deferred' });
 
   // Plan 525 Phase 4: Plan tools — unified built-in tool for duya project plan
   // management. Single tool with three actions (status/search/complete) replaces
-  // the previous MCP-server-based implementation. Exposed as hint level to reduce
-  // token overhead while keeping it on the initial tool surface.
-  registry.register(planTool.toTool(), planTool, { exposeMode: 'hint' });
+  // the previous MCP-server-based implementation and stays directly callable.
+  registry.register(planTool.toTool(), planTool, { exposure: 'eager' });
 
   // Plan 552 Phase 0 + plan 575 follow-up: computer-use tools registered
   // so the workflow engine (tool / gui nodes) can enumerate and execute
   // them through the ToolRegistry even when Computer Use mode is off.
-  // `discoverable` keeps them out of the always-on tool list but lets
-  // the LLM find them via tool_search and call them via tool_invoke
+  // `deferred` keeps them out of the eager tool list but lets
+  // the LLM find them via tool_catalog and call them via tool_invoke
   // (schema delivered as a conversation-tail on discovery). Execution
   // is safe without the mode: the Electron side enforces the shared
   // execution guard (revoke + app policy) and the approval channel on
@@ -320,17 +311,17 @@ export function createBuiltinRegistry(
   // eagerly with the operating prompt.
   for (const tr of getComputerUseToolsWithDecide(false)) {
     registry.register(tr.definition, tr.executor, {
-      exposeMode: 'discoverable',
+      exposure: 'deferred',
       inputSchemaSummary: 'computer-use actions (capture/click/type/key/scroll/drag/set_value/wait/zoom + delegated decide loop)',
     });
   }
 
   // Plan 575: the 14-tool ZCode-aligned CUA surface. Same registration
-  // policy as plan 552 — discoverable (findable via tool_search,
+  // policy as plan 552 — deferred (findable via tool_catalog,
   // invokable via tool_invoke) rather than always-on; workflow engine
   // and tests execute it through the registry directly.
   registry.register(computerCuaDefinition, computerCuaExecutor, {
-    exposeMode: 'discoverable',
+    exposure: 'deferred',
     inputSchemaSummary: 'CUA tools (list_apps/list_windows/get_app_state/left_click/scroll/type/set_value/select_text/key/perform_action/paste/request_access/stop)',
   });
 

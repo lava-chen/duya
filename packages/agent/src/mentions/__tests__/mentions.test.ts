@@ -50,7 +50,7 @@ describe('buildAppsSystemSection', () => {
     const section = buildAppsSystemSection(descriptors) ?? '';
     expect(section).toContain('## Apps (Connectors)');
     expect(section).toContain('[@App-Name](app://<provider-id>)');
-    expect(section).toContain('tool_search');
+    expect(section).toContain('tool_catalog');
     expect(section).toContain('- [Notion](app://notion): remote_notion_search, remote_notion_fetch');
     expect(section).toContain('- [GitHub](app://github): remote_github_list_issues');
   });

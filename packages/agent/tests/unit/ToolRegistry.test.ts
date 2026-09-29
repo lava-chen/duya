@@ -134,12 +134,12 @@ describe('ToolRegistry', () => {
         key: 'mcp__plugin:github__search',
         definition: tool,
         executor,
-        meta: { exposeMode: 'discoverable' },
+        meta: { exposure: 'deferred' },
       }]);
 
       expect(registry.getTool('mcp_github_search')).toBe(tool);
       expect(registry.getExecutor('mcp_github_search')).toBe(executor);
-      expect(registry.getExposeMode('mcp_github_search')).toBe('discoverable');
+      expect(registry.getExposure('mcp_github_search')).toBe('deferred');
     });
   });
 });

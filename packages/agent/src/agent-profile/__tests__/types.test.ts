@@ -19,7 +19,7 @@ describe('PRESET_AGENT_PROFILES', () => {
     expect(curator.disallowedTools).toContain('task');
     expect(curator.disallowedTools).toContain('canvas:*');
     expect(curator.disallowedTools).toContain('duya_cli');
-    expect(curator.disallowedTools).toContain('tool_search');
+    expect(curator.disallowedTools).toContain('tool_catalog');
     expect(curator.disallowedTools).toContain('skill');
   });
 
@@ -54,7 +54,7 @@ describe('PRESET_AGENT_PROFILES', () => {
     const allTools = [
       'read', 'write', 'edit', 'grep', 'glob',
       'bash', 'powershell', 'task', 'browser', 'canvas_create',
-      'show_widget', 'AskUserQuestion', 'duya_cli', 'tool_search',
+      'show_widget', 'AskUserQuestion', 'duya_cli', 'tool_catalog',
       'skill', 'todo', 'vision_analyze',
     ];
     const result = resolveAllowedTools(curator, allTools);

@@ -17,14 +17,14 @@
  *     the 490 exposure comparison).
  *   - image_generate (2026-09-05 membership decision): grok exposes
  *     GenerateImage statically on every non-subagent turn; duya's tool is
- *     discoverable-only, so bots need the exact-name promotion to match.
+ *     deferred-only, so bots need the exact-name promotion to match.
  *   - manage_routine (Plan 476 P2.3b): bot routine self-management (grok
  *     update_state target "routine" parity). Creates/edits cron-backed
  *     routines bound to the calling bot; scheduled fires wake the bot's
  *     resident session through the 476 wake bus.
  *   - post_to_room (T3, plan 478): a member's only voice into a shared room
  *     (grok group SendMessage parity). background_tasks (T6) stays optional
- *     pending the 476 P3.3 evaluation. tool_schema / tool_invoke (T4/T5) are
+ *     pending the 476 P3.3 evaluation. tool_catalog / tool_invoke are
  *     always-exposed for every profile and are deliberately NOT in this set.
  *     ReactToMessage (plan 490 P1) will register always-exposed instead,
  *     mirroring grok's SAND_FORCED_STATIC placement — also not in this set.
@@ -58,10 +58,10 @@ export const BOT_TOOLSET: readonly string[] = [
 /**
  * Append the bot toolset to a profile's allowlist (idempotent). An existing
  * `'*'` allowlist keeps the wildcard AND gains the explicit bot tool names:
- * plan 496 exposure promotion only surfaces a discoverable tool when its
+ * plan 496 exposure promotion only surfaces a deferred tool when its
  * name appears EXACTLY in the allowlist, so a bare `'*'` bot (the default
  * `full` base profile) previously never saw `SendMessage` — the bot's only
- * voice — without a tool_search round-trip the model cannot know to make.
+ * voice — without a tool_catalog lookup the model cannot know to make.
  * An undefined allowlist stays a no-op (no explicit tool decisions to
  * amend). Deny entries are never touched.
  */

@@ -27,7 +27,7 @@ describe('buildMCPCapabilityCatalog', () => {
     expect(catalog).toContain('## MCP Capability Directory');
     expect(catalog).toContain('`notion` (plugin, 2 tools): create_page, search_pages');
     expect(catalog).toContain('`github` (user config.toml, 1 tools): list_pull_requests');
-    expect(catalog).toContain('call `tool_search` with the server name');
+    expect(catalog).toContain('call `tool_catalog` with the server name');
     expect(catalog).not.toContain('input_schema');
   });
 
@@ -86,7 +86,7 @@ describe('buildMCPCapabilityCatalog', () => {
       mcpTool(`server_${String(i).padStart(2, '0')}`, 'tool_a'),
     );
     const catalog = buildMCPCapabilityCatalog(tools, {
-      maxTotalChars: 600,
+      maxTotalChars: 500,
       maxServers: 40,
     });
     expect(catalog).toContain('omitted from this compact directory');
@@ -107,6 +107,19 @@ describe('buildMCPCapabilityCatalog', () => {
     const catalog = buildMCPCapabilityCatalog(tools, { maxServers: 2 });
     expect(catalog).toContain('`a`');
     expect(catalog).not.toContain('`c`');
+    expect(catalog).toContain('3 additional MCP server(s) omitted');
+  });
+
+  it('orders colliding sanitized labels deterministically', () => {
+    const catalog = buildMCPCapabilityCatalog([
+      mcpTool('same\nlabel', 'zeta'),
+      mcpTool('same label', 'alpha'),
+    ]);
+    const first = buildMCPCapabilityCatalog([
+      mcpTool('same label', 'alpha'),
+      mcpTool('same\nlabel', 'zeta'),
+    ]);
+    expect(catalog).toBe(first);
   });
 });
 
@@ -159,14 +172,13 @@ describe('buildToolHintFromSchema (Plan 480 P1.4)', () => {
   });
 });
 
-  it('switches the closing guidance to tool_schema/tool_invoke in catalog mode', () => {
+  it('uses tool_catalog/tool_invoke guidance for deferred MCP tools', () => {
     const catalog = buildMCPCapabilityCatalog([mcpTool('github', 'list_pull_requests')], {
-      entryPoint: 'tool_invoke',
+      entryPoint: 'tool_catalog',
     });
-    expect(catalog).toContain('call `tool_schema` with the server name');
-    expect(catalog).toContain('invoke it with `tool_invoke`');
-    expect(catalog).not.toContain('call `tool_search`');
+    expect(catalog).toContain('call `tool_catalog` with the server name');
+    expect(catalog).toContain('invoke deferred tools with `tool_invoke`');
 
     const legacy = buildMCPCapabilityCatalog([mcpTool('github', 'list_pull_requests')]);
-    expect(legacy).toContain('call `tool_search` with the server name');
+    expect(legacy).toContain('call `tool_catalog` with the server name');
   });

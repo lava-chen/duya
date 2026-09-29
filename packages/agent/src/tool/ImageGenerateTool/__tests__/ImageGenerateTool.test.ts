@@ -1,7 +1,7 @@
 /**
  * ImageGenerateTool tests (plan image-gen).
  *
- * Verifies the discoverable tool's execute path: config plumbing, error
+ * Verifies the deferred tool's execute path: config plumbing, error
  * surfacing when disabled / misconfigured, and successful generation
  * result shape with mocked fetch.
  */

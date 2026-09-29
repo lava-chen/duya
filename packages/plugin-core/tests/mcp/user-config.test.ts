@@ -87,4 +87,24 @@ allowed_agent_ids = ["snake"]
 `);
     expect(parsed[0]?.allowedAgentIds).toEqual(['snake']);
   });
+
+  it('round-trips durable connection IDs independently of server display names', () => {
+    const servers = [{
+      name: 'issues',
+      connectionId: 'connection-7',
+      command: 'node',
+      enabled: true,
+    }];
+    const text = stringifyUserMcpToml(servers);
+    expect(text).toContain('connection_id = "connection-7"');
+    expect(parseUserMcpToml(text)).toEqual(servers);
+
+    const camelCase = parseUserMcpToml(`
+[mcp_servers.renamed]
+connectionId = "connection-7"
+command = "node"
+enabled = true
+`);
+    expect(camelCase[0]?.connectionId).toBe('connection-7');
+  });
 });

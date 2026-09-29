@@ -40,7 +40,7 @@ import type {
 } from '@duya/plugin-core';
 import type { MCPServerConfig, Tool, ToolUseContext } from '../types.js';
 import type { ToolExecutor, ToolMetaInput } from '../tool/registry.js';
-import { readToolExposureConfig, mcpExposureToExposeMode } from '../config/tool-exposure.js';
+import { readToolExposureConfig, mcpExposureToToolExposure } from '../config/tool-exposure.js';
 import { downgradeToolSchemaForBudget } from '../tool/spec-budget.js';
 import { buildToolHint } from './tool-hint.js';
 import { MCPManager } from './index.js';
@@ -298,6 +298,8 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
   // RPC, so parallelization cuts startup from N*~1-2s to ~1-2s.
   const nextConfigs: MCPServerConfig[] = next.resolvedConfigs.map((resolved) => ({
     name: resolved.scopedServerName,
+    connectionId: (resolved.rawConfig as typeof resolved.rawConfig & { connectionId?: string }).connectionId,
+    pluginId: resolved.pluginId,
     transport: resolved.rawConfig.transport,
     command: resolved.rawConfig.command,
     args: resolved.rawConfig.args,
@@ -570,25 +572,25 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
     };
     // Plan 480 P1.4: per-tool hint derived from the raw schema (argument-name
     // list with `(required)` markers, same shape as the built-in
-    // `image_generate` hint). This replaces the previous placeholder text so
-    // `tool_search` results and (later) `tool_schema` entries carry a
-    // truthful, one-line summary. Extracted BEFORE the spec budget downgrade
+    // `image_generate` hint). Catalog results use this truthful, one-line
+    // summary. Extracted BEFORE the spec budget downgrade
     // so a truncated schema still yields its original argument list.
     const hint = buildToolHint(t) || 'No structured arguments';
     preparedEntries.push({
       key: t.internalKey,
-      // Plan 452 Phase A: bound the spec — Direct exposure rides every
-      // request, so a pathologically large server schema must not.
+      // Plan 452 Phase A: bound the spec so a pathologically large server
+      // schema does not overwhelm a direct-exposure request.
       definition: downgradeToolSchemaForBudget(t, hint).definition,
       executor,
       meta: {
-        // Four-tier exposure policy: the `[tools] exposure` value maps
-        //   full   → 'always'       (full schema rides every request)
-        //   hint   → 'hint'          (stub entry: description + argument
-        //                             summary, empty schema; deep-read via
-        //                             tool_schema) — default
-        //   search → 'discoverable' (tool_search-only)
-        exposeMode: mcpExposureToExposeMode(readToolExposureConfig().exposure),
+        exposure: mcpExposureToToolExposure(readToolExposureConfig().exposure),
+        catalogInputSchema: t.input_schema,
+        catalogDescription: t.description,
+        discovery: {
+          namespace: t.mcpInfo.serverName,
+          conciseHint: hint,
+          tags: [t.mcpInfo.serverName, t.mcpInfo.toolName],
+        },
         inputSchemaSummary: hint,
       },
     });

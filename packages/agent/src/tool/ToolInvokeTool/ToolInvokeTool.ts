@@ -1,11 +1,11 @@
-import type { Tool, ToolResult } from '../../types.js';
+import type { Tool, ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolExecutor } from '../registry.js';
 
 /**
  * Plan 480 P2.1 — `tool_invoke` invocation meta tool.
  *
  * Invokes a tool that is NOT in the request's `tools` array. The model must
- * first read the target's schema via `tool_schema`, then call this tool with
+ * first read the target's schema via `tool_catalog`, then call this tool with
  * `{ namespace, tool, arguments }`. The executor resolves the real tool and
  * dispatches through the injected handler.
  *
@@ -20,8 +20,7 @@ export const TOOL_INVOKE_NAME = 'tool_invoke';
 export const TOOL_INVOKE_RESULT_MARKER = '<!-- duya-tool-invoke-result -->';
 
 export interface ToolInvokeRequest {
-  namespace: string;
-  tool: string;
+  tool_id: string;
   arguments: Record<string, unknown>;
 }
 
@@ -29,6 +28,8 @@ export interface ToolInvokeRequest {
 export interface ToolInvokeOutcome {
   result: string;
   error?: boolean;
+  errorCode?: string;
+  toolName?: string;
 }
 
 export interface ToolInvokeDispatcher {
@@ -37,9 +38,9 @@ export interface ToolInvokeDispatcher {
 
 const DESCRIPTION = `Invoke a tool that is not in the current tool list.
 
-Call \`tool_schema\` FIRST to read the target tool's schema, then invoke it here:
+Call \`tool_catalog\` with the target \`tool_id\` FIRST to read its current schema, then invoke it here:
 
-\`{"namespace":"<id>","tool":"<name>","arguments":{...}}\`
+\`{"tool_id":"<stable-id>","arguments":{...}}\`
 
 The result is returned as if the tool had been called directly. Errors from the underlying tool (including permission denials) are returned in the result — do not retry blindly; read the error and adjust.`;
 
@@ -49,27 +50,29 @@ export class ToolInvokeTool implements Tool, ToolExecutor {
   readonly input_schema: Record<string, unknown> = {
     type: 'object',
     properties: {
-      namespace: {
+      tool_id: {
         type: 'string',
-        description: 'Namespace of the tool (e.g. an MCP server name)',
-      },
-      tool: {
-        type: 'string',
-        description: 'Name of the tool to invoke',
+        description: 'Stable tool ID returned by tool_catalog',
       },
       arguments: {
         type: 'object',
         description:
-          'Arguments for the tool, matching the schema returned by tool_schema',
+          'Arguments for the tool, matching the current schema returned by tool_catalog',
       },
     },
-    required: ['namespace', 'tool', 'arguments'],
+    required: ['tool_id', 'arguments'],
+    additionalProperties: false,
   };
 
   private dispatcher?: ToolInvokeDispatcher;
+  private readonly contextDispatchers = new WeakMap<ToolUseContext, ToolInvokeDispatcher>();
 
   setDispatcher(dispatcher: ToolInvokeDispatcher): void {
     this.dispatcher = dispatcher;
+  }
+
+  setDispatcherForContext(context: ToolUseContext, dispatcher: ToolInvokeDispatcher): void {
+    this.contextDispatchers.set(context, dispatcher);
   }
 
   toTool(): Tool {
@@ -89,25 +92,22 @@ export class ToolInvokeTool implements Tool, ToolExecutor {
     };
   }
 
-  async execute(input: Record<string, unknown>): Promise<ToolResult> {
-    const namespace = typeof input.namespace === 'string' ? input.namespace : undefined;
-    const tool = typeof input.tool === 'string' ? input.tool : undefined;
+  async execute(input: Record<string, unknown>, _workingDirectory?: string, context?: ToolUseContext): Promise<ToolResult> {
+    const toolId = typeof input.tool_id === 'string' ? input.tool_id.trim() : undefined;
     const args = input.arguments;
 
-    if (!namespace) {
-      return this.errorResult('Tool Invoke Error', '`namespace` (string) is required.');
-    }
-    if (!tool) {
-      return this.errorResult('Tool Invoke Error', '`tool` (string) is required.');
+    if (!toolId) {
+      return this.errorResult('Tool Invoke Error', '`tool_id` (string) is required.');
     }
     if (args === null || typeof args !== 'object' || Array.isArray(args)) {
       return this.errorResult(
         'Tool Invoke Error',
-        '`arguments` (object) is required. Read the schema with `tool_schema` first.',
+        '`arguments` (object) is required. Read the schema with `tool_catalog` first.',
       );
     }
 
-    if (!this.dispatcher) {
+    const dispatcher = context ? this.contextDispatchers.get(context) : this.dispatcher;
+    if (!dispatcher) {
       return this.errorResult(
         'Tool Invoke Error',
         'Tool invocation is not configured in this session.',
@@ -115,9 +115,8 @@ export class ToolInvokeTool implements Tool, ToolExecutor {
     }
 
     try {
-      const outcome = await this.dispatcher.dispatch({
-        namespace,
-        tool,
+      const outcome = await dispatcher.dispatch({
+        tool_id: toolId,
         arguments: args as Record<string, unknown>,
       });
       const isError = outcome.error === true;
@@ -126,14 +125,15 @@ export class ToolInvokeTool implements Tool, ToolExecutor {
         name: this.name,
         result:
           outcome.result ??
-          `${TOOL_INVOKE_RESULT_MARKER}\n\n# Tool Invoke: \`${namespace}\` / \`${tool}\`\n\n_No result returned._`,
+          `${TOOL_INVOKE_RESULT_MARKER}\n\n# Tool Invoke: \`${toolId}\`\n\n_No result returned._`,
+        ...(outcome.errorCode ? { metadata: { errorCode: outcome.errorCode } } : {}),
         ...(isError ? { error: true } : {}),
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return this.errorResult(
         'Tool Invoke Failed',
-        `Invoking \`${tool}\` in namespace \`${namespace}\` failed:\n\n${message}`,
+        `Invoking \`${toolId}\` failed:\n\n${message}`,
       );
     }
   }

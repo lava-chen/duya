@@ -20,7 +20,7 @@ creation, commit and push, `gh auth status`, and Actions log inspection.
   (`https://api.githubcopilot.com/mcp`) managed by duya's app-connection
   system.
 - Tools are named `remote_github_<tool>` and are discoverable via
-  `tool_search`.
+  `tool_catalog`.
 - If no `remote_github_*` tool is available, the GitHub connection is not
   authorized — tell the user to connect GitHub in the app connection settings.
 

@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   readToolExposureConfig,
-  mcpExposureToExposeMode,
+  mcpExposureToToolExposure,
   type MCPExposureMode,
 } from '../tool-exposure.js';
 
@@ -52,7 +52,7 @@ describe('readToolExposureConfig (plan 452 Phase A)', () => {
   });
 });
 
-describe('readToolExposureConfig exposure policy (four-tier model)', () => {
+describe('readToolExposureConfig legacy MCP policy', () => {
   beforeEach(() => {
     tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-tool-exposure3-'));
     delete process.env.DUYA_TOOLS_EXPOSURE;
@@ -78,11 +78,11 @@ describe('readToolExposureConfig exposure policy (four-tier model)', () => {
     }
   });
 
-  it('normalizes the retired catalog policy to hint', () => {
+  it('normalizes the retired catalog policy to search', () => {
     fs.writeFileSync(path.join(tmpRoot, 'config.toml'), '[tools]\nexposure = "catalog"\n', 'utf-8');
     const config = readToolExposureConfig(tmpRoot);
-    expect(config.exposure).toBe('hint');
-    expect(config.onDemandDiscovery).toBe(false);
+    expect(config.exposure).toBe('search');
+    expect(config.onDemandDiscovery).toBe(true);
   });
 
   it('exposure key wins over the legacy boolean', () => {
@@ -113,7 +113,7 @@ describe('readToolExposureConfig exposure policy (four-tier model)', () => {
   it('env DUYA_TOOLS_EXPOSURE overrides config', () => {
     fs.writeFileSync(path.join(tmpRoot, 'config.toml'), '[tools]\nexposure = "full"\n', 'utf-8');
     process.env.DUYA_TOOLS_EXPOSURE = 'catalog';
-    expect(readToolExposureConfig(tmpRoot).exposure).toBe('hint');
+    expect(readToolExposureConfig(tmpRoot).exposure).toBe('search');
   });
 
   it('new env key wins over the legacy env key', () => {
@@ -123,15 +123,15 @@ describe('readToolExposureConfig exposure policy (four-tier model)', () => {
   });
 });
 
-describe('mcpExposureToExposeMode', () => {
-  it('maps each policy value to the registry ExposeMode', () => {
+describe('mcpExposureToToolExposure', () => {
+  it('maps legacy MCP policy values to the unified exposure axis', () => {
     const cases: Array<[MCPExposureMode, string]> = [
-      ['full', 'always'],
-      ['hint', 'hint'],
-      ['search', 'discoverable'],
+      ['full', 'eager'],
+      ['hint', 'eager'],
+      ['search', 'deferred'],
     ];
     for (const [policy, expected] of cases) {
-      expect(mcpExposureToExposeMode(policy)).toBe(expected);
+      expect(mcpExposureToToolExposure(policy)).toBe(expected);
     }
   });
 });

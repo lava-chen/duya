@@ -364,7 +364,7 @@ export const SPECIAL_AGENT_PROFILES: AgentProfile[] = [
       // No interactive / UI / canvas surface — curator runs headless.
       'canvas:*', 'show_widget', 'AskUserQuestion',
       // No browser, no self-management, no module loader.
-      'browser', 'duya_cli', 'read_module', 'todo', 'tool_search', 'skill',
+      'browser', 'duya_cli', 'read_module', 'todo', 'tool_catalog', 'skill',
       // No mode-switching side effects.
       'EnterPlanMode', 'ExitPlanMode', 'SwitchMode',
       // No session-to-session messaging or vision.

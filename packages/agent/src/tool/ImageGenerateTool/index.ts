@@ -1,6 +1,6 @@
 /**
  * Image generation tool bundle (plan image-gen).
- * Export surface for the discoverable `image_generate` tool.
+ * Export surface for the deferred `image_generate` tool.
  */
 
 export {

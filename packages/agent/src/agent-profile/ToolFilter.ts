@@ -3,8 +3,7 @@
  *
  * One question: is this tool visible to the LLM this turn?
  *
- *   visible = (exposure tier admits it: always/hint directly,
- *              discoverable only once found or exact-promoted)
+ *   visible = (eager directly, deferred only when explicitly promoted)
  *           && not denied
  *           && (no allowlist || matches allowlist)
  *
@@ -12,7 +11,7 @@
  */
 
 import type { AgentProfile } from './types.js';
-import type { ExposeMode } from '../tool/registry.js';
+import type { ToolExposure } from '../tool/catalog-types.js';
 
 // ============================================================
 // Wildcard Matching
@@ -62,33 +61,42 @@ export interface ToolVisibilityConstraints {
 /**
  * Single source of truth for tool visibility.
  *
- * @param exposeMode  — the tool's registration exposeMode
- * @param discovered  — tool names already surfaced via tool_search this session
+ * @param exposure    — the tool's canonical loading policy
+ * @param discovered  — deferred tool names promoted to direct calls (for example, a connector mention)
  * @param constraints — caller + profile allow/deny lists
  */
 export function isToolVisible(
   toolName: string,
-  exposeMode: ExposeMode,
+  exposure: ToolExposure,
   discovered: ReadonlySet<string>,
   c: ToolVisibilityConstraints,
 ): boolean {
-  // 1. Exposure policy (four tiers)
-  // hidden: never exposed — not in the tools array, not discoverable, not
+  // 1. Exposure policy
+  // hidden: never exposed — not in the tools array, not in the catalog, not
   // reachable through the meta tools. Exact allowlist entries do NOT
   // promote a hidden tool: promotion is an exposure decision, and the
   // registration already decided this tool is not for the model.
-  if (exposeMode === 'hidden') return false;
-  // discoverable: unknown to the model until found via tool_search.
+  if (exposure === 'hidden') return false;
+  // Catalog wrappers are infrastructure. They remain available under a
+  // profile allowlist; the catalog view independently filters every target.
+  const isCatalogRouter = toolName === 'tool_catalog' || toolName === 'tool_invoke';
+  if (c.disabledTools?.includes(toolName)) return false;
+  if (c.profileDisallowedPatterns?.length && anyPatternMatches(toolName, c.profileDisallowedPatterns)) return false;
+  if (isCatalogRouter) return true;
+
+  // Deferred tools stay out of the direct tool list until explicitly
+  // promoted by a caller or an exact allowlist entry. Reading their schema
+  // in tool_catalog does not expose them as direct calls.
   // Plan 496: an EXACT (non-wildcard) allowlist entry is a deliberate
-  // exposure decision — it promotes a discoverable tool into the toolset
-  // without a tool_search round-trip. This is what makes `SendMessage` /
+  // exposure decision — it promotes a deferred tool into the direct toolset
+  // without a catalog round-trip. This is what makes `SendMessage` /
   // `send_to_agent` / `update_state` visible to bot profiles from turn one:
   // bot-toolset.ts names them explicitly, and the pre-496 behavior gated
   // them behind discovery so the bot's only voice was unreachable (the
   // model cannot search for a tool it does not know it needs). Wildcards
   // (`*`, `file:*`) deliberately do NOT promote — a `full`-profile bot must
   // still name the tool, and main-session `'*'` profiles stay quiet.
-  if (exposeMode === 'discoverable') {
+  if (exposure === 'deferred') {
     const promoted =
       c.allowedTools?.includes(toolName) === true ||
       c.profileAllowedPatterns?.includes(toolName) === true;
@@ -96,15 +104,9 @@ export function isToolVisible(
       return false;
     }
   }
-  // 'always' (full schema entry) and 'hint' (stub entry) are declared on
-  // every request; the caller decides the entry shape. Both fall through
-  // to the constraint checks below.
+  // Eager tools are declared on every request and pass through to constraints.
 
-  // 2. Denylist (caller exact + profile wildcard) — deny wins
-  if (c.disabledTools?.includes(toolName)) return false;
-  if (c.profileDisallowedPatterns?.length && anyPatternMatches(toolName, c.profileDisallowedPatterns)) return false;
-
-  // 3. Allowlist (caller exact + profile wildcard)
+  // 2. Allowlist (caller exact + profile wildcard)
   if (c.allowedTools?.length && !c.allowedTools.includes(toolName)) return false;
   if (c.profileAllowedPatterns?.length && !anyPatternMatches(toolName, c.profileAllowedPatterns)) return false;
 
@@ -124,7 +126,7 @@ export interface ToolFilterResult {
 /**
  * Resolve which tool names pass the profile's allow/deny patterns.
  * Convenience wrapper around `isToolVisible` for profile-only checks
- * (no exposeMode or discovery — treats all tools as always-exposed).
+ * (no per-tool exposure or discovery — treats all tools as eager).
  */
 export function resolveAllowedTools(
   profile: AgentProfile,
@@ -137,7 +139,7 @@ export function resolveAllowedTools(
   const allowed: string[] = [];
   const denied: string[] = [];
   for (const name of allToolNames) {
-    if (isToolVisible(name, 'always', new Set(), constraints)) {
+    if (isToolVisible(name, 'eager', new Set(), constraints)) {
       allowed.push(name);
     } else {
       denied.push(name);

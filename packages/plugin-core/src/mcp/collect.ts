@@ -16,6 +16,7 @@ import type { MCPCandidate, MCPCollectionResult } from './discovery';
 /** One user/settings MCP server entry, regardless of source. */
 export interface MCPCollectorSettingsItem {
   name: string;
+  connectionId?: string;
   transport?: 'stdio' | 'streamable-http';
   command?: string;
   args?: string[];
@@ -124,6 +125,7 @@ export function buildCandidatesFromSettingsEntries(
       sourceSubOrigin,
       rawConfig: {
         name: item.name,
+        connectionId: item.connectionId,
         transport: item.transport,
         command: item.command,
         args: item.args,

@@ -342,34 +342,47 @@ Separate SQLite file (`memory-state.db`, next to `duya-main.db` in the same boot
 - `packages/agent/src/mcp/` - MCP server integration
 - Tool protocol adapter layer (Plan 418)
 
-#### Four-Tier Tool Exposure
+#### Tool Catalog and Exposure
 
-Every registered tool carries an `ExposeMode`
-(`packages/agent/src/tool/registry.ts`) that decides how the model sees it.
-All discovery/invocation paths funnel through one set of rules:
+`ToolRegistry` remains the source of definitions, executors, and source
+metadata. Each `ToolSnapshot` (`packages/agent/src/tool/snapshot.ts`) projects
+eligible entries into a catalog with stable `tool_id`, normalized schema,
+`schema_revision`, source, discovery hints, and one of three exposure values:
 
-| Tier | ExposeMode | Request tools array | Discovery | Invocation |
-| ---- | ---------- | ------------------- | --------- | ---------- |
-| T1 | `always` | full schema entry | n/a (declared) | direct call |
-| T2 | `hint` | stub entry: name + description + argument summary, empty schema (`tool/hint-stub.ts`) | full schema via `tool_schema` | direct call |
-| T3 | `discoverable` | absent until found | `tool_search` hit → schema appended as a conversation-tail block (`agent/tool-search-discovery.ts`) | `tool_invoke` |
-| T4 | `hidden` | never | invisible to `tool_search` and the `tool_schema` catalog | unreachable by the model |
+| Exposure | Provider tool list | Discovery | Invocation |
+| -------- | ------------------ | --------- | ---------- |
+| `eager` | Full schema | Searchable for explanation; details say `direct` | Direct call by the provider-visible name |
+| `deferred` | Not exposed directly | `tool_catalog({query})`, then one schema via `tool_catalog({tool_id})` | `tool_invoke({tool_id, arguments})` fallback |
+| `hidden` | Not exposed | Omitted from catalog search and detail | Unavailable |
+
+`tool_catalog` returns short, deterministically ranked matches without schemas.
+The detail operation returns one schema and a revision receipt. The agent records
+that receipt only after the tool result is committed to the conversation, so a
+same-provider-response `tool_catalog` + `tool_invoke` batch cannot use a schema
+the model has not read yet. Fallback dispatch resolves the stable ID against the
+request snapshot and live registry, checks current scope and exposure, confirms
+the prior-round schema revision, validates arguments, then applies the ordinary
+permission / approval chain before executing the real tool.
 
 Key wiring:
 
-- Visibility policy: `isToolVisible` (`agent-profile/ToolFilter.ts`) — deny
-  wins over allow; an exact allowlist entry promotes a `discoverable` tool
-  (plan 496); `hidden` is never promotable.
-- MCP tier: `[tools] exposure = "full" \| "hint" \| "search"` in
-  `config.toml` maps to `always` / `hint` / `discoverable`
-  (`config/tool-exposure.ts`); default `hint`, legacy `catalog` normalizes
-  to `hint`.
-- Guard: a model call to a name not declared on the request's tools array
-  is always rejected (`tool/visibility-guard.ts`), pointing the model at
-  `tool_search` → `tool_schema` → `tool_invoke`. Compaction may promote the
-  discovered set into the array at runtime (`discoveredPromotedToToolList`)
-  — the sole array-merge path after the config-driven `array` delivery was
-  retired.
+- Visibility policy: `agent-profile/ToolFilter.ts` keeps profile, exact
+  allowlist, and mode restrictions in the same eligibility path. Infrastructure
+  routers remain available when a target is eligible; they do not grant access
+  to out-of-scope targets.
+- Legacy MCP exposure: `[tools] exposure = "full" | "hint" | "search"` maps
+  `full` and `hint` to `eager` to preserve direct availability, and `search` to
+  `deferred`. Legacy `catalog` maps to `search`. The default remains `hint`
+  (therefore eager) until representative provider measurements justify a
+  default change (`config/tool-exposure.ts`).
+- MCP and plugin identities use persistent connection IDs where available;
+  schema revisions change independently of stable IDs. Full catalog schemas are
+  retained separately from provider-facing schema-budget reductions.
+- `tool_search`, `tool_schema`, and empty-schema hint stubs are retired. Native
+  OpenAI / Claude search adapters are not currently wired; providers use the
+  catalog + invoke fallback until capability checks and request contracts are
+  implemented. Existing deferred-schema utilities alone do not establish native
+  search support.
 
 ### Mode System (Plan 224)
 

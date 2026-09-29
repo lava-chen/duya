@@ -22,7 +22,7 @@
  * IGNORE idempotency, no per-row delete), matching how grok rewrites the
  * transcript entry's reactions array.
  *
- * Exposure: registered exposeMode 'always' (grok SAND_FORCED_STATIC
+ * Exposure: registered as eager (grok SAND_FORCED_STATIC
  * parity — see turn-toolset.ts), deliberately NOT in BOT_TOOLSET: the
  * exact-name allowlist promotion would hide it from non-bot profiles that
  * list explicit tools, while 'always' matches grok's unconditional

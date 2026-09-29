@@ -1,6 +1,6 @@
 /**
  * App Connector Management Tools (Plan 503) — bot-only connector
- * elicitation. Registered `discoverable` in the builtin registry and
+ * elicitation. Registered `deferred` in the builtin registry and
  * surfaced only to bot profiles via BOT_TOOLSET.
  */
 export {

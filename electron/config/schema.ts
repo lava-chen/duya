@@ -324,6 +324,7 @@ export interface GatewayProxyConfig {
 
 export interface McpServerEntry {
   name: string;
+  connectionId?: string;
   transport?: 'stdio' | 'streamable-http';
   command?: string;
   args?: string[];

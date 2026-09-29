@@ -1,62 +1,45 @@
 /**
- * MCP tool exposure policy (four-tier exposure model).
+ * Legacy MCP tool exposure setting. `full` and `hint` retain direct-call
+ * availability as eager tools; `search` maps to deferred catalog dispatch.
  *
  * Scope: MCP tools only. App-connector tools are deliberately OUT of scope —
- * they are always `discoverable` and @-mention-promoted per turn (the
+ * they are always deferred and @-mention-promoted to direct calls per turn (the
  * user's "@ to activate" model, plan 450); the persistent Apps system
  * section covers awareness without exposure.
  *
- * Exposure maps onto the registry's four ExposeMode tiers:
+ * Compatibility mappings onto the catalog's three exposure values:
  *
- *   - `full`     → 'always'       full schemas ride every request in the
- *                                 tools array.
- *   - `hint`     → 'hint'         a stub entry (name + description +
- *                                 argument summary, empty schema) rides the
- *                                 tools array; the full schema is read via
- *                                 the constant `tool_schema` meta tool.
- *                                 DEFAULT — dynamic tools stay known to the
- *                                 model at a fraction of the token cost.
- *   - `search`   → 'discoverable' MCP tools are unknown until found via
- *                                 tool_search (schema delivered as a
- *                                 conversation-tail block; invoked via
- *                                 tool_invoke).
+ *   - `full`     → eager      full schemas ride every request.
+ *   - `hint`     → eager      preserves the old direct-call behavior while
+ *                             replacing the empty schema stub with its schema.
+ *   - `search`   → deferred   compatibility alias for the unified catalog.
  *
  * Backward compatibility: the retired `[tools] exposure = "catalog"` value
- * is accepted and normalized to `hint`; `[tools] on_demand_discovery = true`
+ * is accepted and normalized to `search`; `[tools] on_demand_discovery = true`
  * maps to `search`. The explicit `exposure` key wins when both appear.
  * Env overrides mirror the config keys (DUYA_TOOLS_EXPOSURE /
  * DUYA_TOOLS_ON_DEMAND_DISCOVERY).
  *
- * Deliberately NOT model-capability-gated: duya targets arbitrary models
- * and its discovery/invocation meta tools are client-side implementations
- * that work with any function-calling model, so there is nothing to
- * auto-detect — the choice belongs to the user, not the model probe.
+ * The fallback catalog is client-side and works with any function-calling
+ * model; native provider tool-search capabilities are negotiated separately.
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import { parse } from '@iarna/toml';
 import { resolveConfigRoot } from '../hooks/config.js';
+import type { ToolExposure } from '../tool/catalog-types.js';
 
 export type MCPExposureMode = 'full' | 'hint' | 'search';
 
-/** Map the user-facing policy to the registry ExposeMode used by MCP tools. */
-export function mcpExposureToExposeMode(
-  exposure: MCPExposureMode,
-): 'always' | 'hint' | 'discoverable' {
-  switch (exposure) {
-    case 'full':
-      return 'always';
-    case 'hint':
-      return 'hint';
-    case 'search':
-      return 'discoverable';
-  }
+/** Map legacy MCP configuration to the unified catalog exposure axis. */
+export function mcpExposureToToolExposure(exposure: MCPExposureMode): ToolExposure {
+  return exposure === 'search' ? 'deferred' : 'eager';
 }
 
 export interface ToolExposureConfig {
   /**
-   * MCP tool exposure policy (four-tier model). Default `'hint'`.
+   * Legacy MCP policy. Default `'hint'`, mapped to eager for compatibility.
    */
   exposure: MCPExposureMode;
   /**
@@ -76,9 +59,8 @@ const EXPOSURE_VALUES: readonly string[] = ['full', 'hint', 'search'];
 function parseExposure(value: unknown): MCPExposureMode | undefined {
   if (typeof value !== 'string') return undefined;
   const normalized = value.trim().toLowerCase();
-  // Retired plan-480 'catalog' policy: its "never a full schema on the
-  // array" intent is now served by the hint tier.
-  if (normalized === 'catalog') return 'hint';
+  // Retired plan-480 'catalog' policy: keep its deferred-schema intent.
+  if (normalized === 'catalog') return 'search';
   return (EXPOSURE_VALUES as readonly string[]).includes(normalized)
     ? (normalized as MCPExposureMode)
     : undefined;
