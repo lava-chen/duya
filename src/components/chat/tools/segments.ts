@@ -46,6 +46,16 @@ export function computeSegments(actions: ActionItem[], opts: ComputeSegmentsOpti
 
   for (const action of actions) {
     if (action.kind === 'tool') {
+      if (!opts.focus) {
+        const firstTool = run.find((entry): entry is Extract<SegmentEntry, { kind: 'tool' }> => entry.kind === 'tool');
+        if (
+          firstTool &&
+          (firstTool.tool.groupId !== undefined || action.tool.groupId !== undefined) &&
+          firstTool.tool.groupId !== action.tool.groupId
+        ) {
+          flush();
+        }
+      }
       run.push({ kind: 'tool', tool: action.tool });
     } else if (action.kind === 'thinking') {
       // Thinking joins the run — does NOT break consecutive tools.

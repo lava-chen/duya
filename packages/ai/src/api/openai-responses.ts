@@ -474,7 +474,12 @@ export function parseResponsesEvent(
         assistantMsg.content.push(block);
         itemToContentIdx.set(item.id, assistantMsg.content.length - 1);
       } else if (item.type === 'message') {
-        const block: TextContent = { type: 'text', text: '' };
+        const phase = (item as unknown as { phase?: unknown }).phase;
+        const block: TextContent = {
+          type: 'text',
+          text: '',
+          ...(phase === 'commentary' || phase === 'final_answer' ? { phase } : {}),
+        };
         assistantMsg.content.push(block);
         itemToContentIdx.set(item.id, assistantMsg.content.length - 1);
       } else if (item.type === 'function_call') {
@@ -577,6 +582,10 @@ export function parseResponsesEvent(
     case 'response.output_text.delta': {
       const idx = itemToContentIdx.get(event.item_id);
       if (idx === undefined) return null;
+      const outputBlock = assistantMsg.content[idx];
+      if (outputBlock?.type === 'text' && outputBlock.phase === 'commentary') {
+        return appendText(assistantMsg, event.delta, idx);
+      }
       if (state.thinkParser) {
         const { thinking, text } = state.thinkParser.feed(event.delta);
         const events: AssistantMessageEvent[] = [];

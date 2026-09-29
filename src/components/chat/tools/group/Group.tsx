@@ -13,7 +13,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
 import { ActionRowChrome } from '../chrome/ActionRowChrome';
-import { buildGroupSummary } from './buildGroupSummary';
+import { resolveGroupDisplayTitle } from './buildGroupDisplayTitle';
 import { isBrowserFallbackMode } from '../registry';
 import { isBrowserTool } from '../classify';
 import { ToolActionRow } from '../rows/ToolActionRow';
@@ -81,10 +81,10 @@ export function Group({
   const hasRunning = tools.some((entry) => entry.tool.result === undefined);
   const hasError = tools.some((entry) => entry.tool.isError);
   const groupStatus: ToolStatus = hasRunning ? 'running' : hasError ? 'error' : 'success';
-  const summaryText = buildGroupSummary(
+  const displayTitle = resolveGroupDisplayTitle(
     tools.map((entry) => entry.tool),
     t,
-    locale
+    locale,
   );
 
   const containsBrowser = tools.some((entry) => isBrowserTool(entry.tool.name));
@@ -105,7 +105,7 @@ export function Group({
   // This key is also used to persist expansion state in the
   // module-level Map above — computed before useState so the lazy
   // initializer can read the persisted value.
-  const groupKey = `grp-${tools[0]?.tool.id ?? `idx0-${entries[0]?.kind ?? 'unknown'}`}`;
+  const groupKey = `grp-${tools[0]?.tool.groupId ?? tools[0]?.tool.id ?? `idx0-${entries[0]?.kind ?? 'unknown'}`}`;
 
   // Rehydrate expansion state from the module-level Map. The lazy
   // initializer only runs on mount, so subsequent updates to the Map
@@ -161,7 +161,7 @@ export function Group({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      {summaryText}
+      <span data-title-source={displayTitle.source}>{displayTitle.title}</span>
     </ActionRowChrome>
   );
 

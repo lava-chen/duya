@@ -145,6 +145,12 @@ import { injectTurnTimestampReminders } from './turn-time-reminder.js';
 import type { AgentDefinition } from '../tool/SubagentTool/index.js';
 import { CompactionManager, createCompactionManager, type CompactionProbe } from '../compact/CompactionManager.js';
 import { resolveCompactionContextWindow } from '../compact/contextWindow.js';
+import {
+  PROGRESS_UPDATE_TOOL,
+  PROGRESS_UPDATE_TOOL_NAME,
+  ToolGroupProgressTracker,
+  readProgressUpdateCall,
+} from './tool-group-progress.js';
 import type { CompactOptions } from '../compact/types.js';
 
 // New message domain framework (plan 315)
@@ -1255,6 +1261,14 @@ export class duyaAgent implements AgentRuntime {
     // eslint-disable-next-line no-console
     console.error(`[Agent-Process] canvas tools: ${tools.filter(t => t.name.startsWith('canvas_')).map(t => t.name).join(', ') || '(none)'}`);
     let systemPromptContent = await this._buildSystemPrompt(tools, options, appliedProfile);
+    const toolGroupProgressInstructions = [
+      'Tool-group progress: before a tool batch, provide one concise plain-text title for the work.',
+      'Use the provider structured commentary channel when it is explicitly available; otherwise call the private progress-title tool shown in the available tools with {title}.',
+      'Never derive a title from hidden reasoning or ordinary assistant prose. The progress-title call is private and does not perform work.',
+    ].join(' ');
+    systemPromptContent = systemPromptContent
+      ? `${systemPromptContent}\n\n${toolGroupProgressInstructions}`
+      : toolGroupProgressInstructions;
     const { permissionContext, canUseTool } = buildPermissions(
       {
         getPermissionMode: () => this.getPermissionMode(),
@@ -1558,6 +1572,12 @@ export class duyaAgent implements AgentRuntime {
       this.baseSystemPromptWithoutModes = undefined;
     }
 
+    let progressToolName = PROGRESS_UPDATE_TOOL_NAME;
+    while (tools.some((tool) => tool.name === progressToolName)) {
+      progressToolName = `duya_${progressToolName}`;
+    }
+    tools = [...tools, { ...PROGRESS_UPDATE_TOOL, name: progressToolName }];
+
     // Plan 413d: build the mode state-machine coordinator only when a
     // session-level mode with a tracker is active. Rebuilt per streamChat
     // call (same lifecycle as modeCtx); the trackers themselves are engine
@@ -1612,6 +1632,10 @@ export class duyaAgent implements AgentRuntime {
     }
 
     let turnCount = 0;
+    // Tool-group state belongs to the whole streamChat run, not one provider
+    // request. Private progress calls consume a model turn before real tools
+    // run, and tool batches may continue across multiple model turns.
+    const toolGroupProgress = new ToolGroupProgressTracker();
     // Per-run agentic-turn cap. Absent 鈫?uncapped (pi-aligned design):
     // the loop runs until the LLM naturally produces a tool-free turn,
     // hits a token/context limit (`stopReason: 'length'`), the caller
@@ -1980,6 +2004,8 @@ export class duyaAgent implements AgentRuntime {
 
       // Per-turn state
       const assistantContent: MessageContent[] = [];
+      const privateProgressCalls: Array<{ id: string; title?: string }> = [];
+      const pendingProgressAtRequestStart = toolGroupProgress.pendingSnapshot();
       let needsFollowUp = false;
       let thinkingContent = '';  // Accumulate thinking content for this turn
       let hasThinkingContent = false;  // Track if we have any thinking content
@@ -2294,6 +2320,10 @@ export class duyaAgent implements AgentRuntime {
             // caller because it touches closure state in streamChat.
             executor.discard();
             assistantContent.length = 0;
+            privateProgressCalls.length = 0;
+            // A retry replays this provider request. Keep prior turn state,
+            // but discard progress announced only by the failed attempt.
+            toolGroupProgress.restorePending(pendingProgressAtRequestStart);
             thinkingContent = '';
             hasThinkingContent = false;
             thinkingSignature = undefined;
@@ -2315,16 +2345,52 @@ export class duyaAgent implements AgentRuntime {
           }
 
           if (event.type === 'tool_use_started') {
-            yield event;
+            if (event.data.name === progressToolName) continue;
+            const group = toolGroupProgress.assign(event.data.id);
+            if (group.progressEvent) {
+              yield { type: 'tool_group_progress', data: group.progressEvent };
+            }
+            yield {
+              ...event,
+              data: {
+                ...event.data,
+                groupId: group.groupId,
+                ...(group.progressTitle ? { progressTitle: group.progressTitle } : {}),
+                progressSource: group.progressSource,
+              },
+            };
 
           } else if (event.type === 'tool_use_delta') {
+            if (event.data.name === progressToolName) continue;
             // Plan 461: incremental tool-call argument fragment. Purely
             // cosmetic on this side (the authoritative input arrives with
             // `tool_use`), so forward it untouched 鈥?the renderer uses it
             // to render file edits while the model is still writing them.
             yield event;
 
+          } else if (event.type === 'tool_group_progress') {
+            toolGroupProgress.queue(event.data.title, event.data.source);
+
           } else if (event.type === 'tool_use') {
+            const progressUpdate = readProgressUpdateCall(
+              event.data.name,
+              progressToolName,
+              event.data.input,
+            );
+            if (progressUpdate) {
+              const title = progressUpdate.title;
+              privateProgressCalls.push({ id: event.data.id, title });
+              if (title) toolGroupProgress.queue(title, 'model_progress_tool');
+              needsFollowUp = true;
+              continue;
+            }
+
+            const group = toolGroupProgress.assign(event.data.id);
+            const { groupId, progressTitle } = group;
+            if (group.progressEvent) {
+              yield { type: 'tool_group_progress', data: group.progressEvent };
+            }
+
             // Plan 426 follow-up: PreToolUse 鈥?notification before the tool
             // is dispatched to its executor. Runs to completion (blocking),
             // fail-open; matchers filter on the tool name.
@@ -2364,7 +2430,13 @@ export class duyaAgent implements AgentRuntime {
             }
 
             // Add tool to executor for background execution
-            executor.addTool(event.data);
+            const groupedToolUse = {
+              ...event.data,
+              groupId,
+              ...(progressTitle ? { progressTitle } : {}),
+              progressSource: group.progressSource,
+            };
+            executor.addTool(groupedToolUse);
             needsFollowUp = true;
 
             // Anti-dead-loop: track consecutive identical tool calls (name +
@@ -2381,6 +2453,9 @@ export class duyaAgent implements AgentRuntime {
               id: event.data.id,
               name: event.data.name,
               input: event.data.input,
+              groupId,
+              ...(progressTitle ? { progressTitle } : {}),
+              progressSource: group.progressSource,
               // Gemini thought signatures must be replayed with the
               // function call they were issued for.
               ...(event.data.signature ? { thoughtSignature: event.data.signature } : {}),
@@ -2396,10 +2471,11 @@ export class duyaAgent implements AgentRuntime {
               modeSwitchToolIds.set(event.data.id, event.data.name);
             }
 
-            // Yield the tool_use event to caller
-            yield event;
+            // Yield the tool_use event to caller with its stable group identity.
+            yield { ...event, data: groupedToolUse };
 
           } else if (event.type === 'text') {
+            toolGroupProgress.closeActiveGroup();
             // Accumulate text content - merge consecutive text blocks
             // to prevent markdown fragmentation when stored in DB
             const lastBlock = assistantContent[assistantContent.length - 1];
@@ -2466,7 +2542,10 @@ export class duyaAgent implements AgentRuntime {
             // Add the rest of the content (text and tool_use blocks)
             finalAssistantContent.push(...assistantContent);
 
-            if (finalAssistantContent.length > 0 || needsFollowUp) {
+            if (
+              finalAssistantContent.length > 0 ||
+              (needsFollowUp && privateProgressCalls.length === 0)
+            ) {
               // Per-message model attribution: lets transformMessages
               // recognize this message as same-model on the next round's
               // request and replay its thinking block natively (with the
@@ -2515,6 +2594,13 @@ export class duyaAgent implements AgentRuntime {
                 (pushed as Message & { tokenUsage?: unknown }).tokenUsage = usageBlock;
               }
               this._pushDurable(messages, pushed);
+            }
+
+            if (!needsFollowUp) {
+              // No subsequent tool call consumed this update. Treat it as an
+              // orphan rather than carrying it into a later agent run.
+              toolGroupProgress.restorePending(undefined);
+              toolGroupProgress.closeActiveGroup();
             }
 
             // Plan 418 L2 (pi parity): a max_tokens/length stop means every
@@ -2690,6 +2776,30 @@ export class duyaAgent implements AgentRuntime {
             logger.debug(
               `[Agent] Turn ${turnCount}: getRemainingResults completed, toolResultMessageCount=${toolResultMessageCount}`
             );
+
+            // Private progress calls are replayed to the model through the
+            // working message array only. They never enter the durable
+            // timeline, tool executor, permission flow, or renderer rows.
+            for (const call of privateProgressCalls.splice(0)) {
+              messages.push({
+                role: 'assistant',
+                content: [{
+                  type: 'tool_use',
+                  id: call.id,
+                  name: progressToolName,
+                  input: { title: call.title ?? '' },
+                }],
+                timestamp: Date.now(),
+              });
+              messages.push({
+                role: 'tool',
+                tool_call_id: call.id,
+                content: call.title
+                  ? 'Progress title accepted.'
+                  : 'No valid progress title was accepted.',
+                timestamp: Date.now(),
+              });
+            }
 
             // Post-tool hooks and file-context collection run after results
             // have been committed to the message history.

@@ -1978,8 +1978,19 @@ export class StreamSessionManager {
               id: event.id || crypto.randomUUID(),
               name: event.name,
               input: event.input,
+              groupId: event.groupId,
+              progressTitle: event.progressTitle,
+              progressSource: event.progressSource,
             });
           }
+          break;
+
+        case 'tool_group_progress':
+          this.handleToolGroupProgressEvent(
+            sessionId,
+            streamId,
+            event.data as { groupId?: string; title?: string } | undefined,
+          );
           break;
 
         case 'tool_use_delta':
@@ -2564,7 +2575,14 @@ export class StreamSessionManager {
     this.resetIdleTimeout(sessionId);
   }
 
-  private handleToolUseEvent(sessionId: string, streamId: string, toolUse: { id: string; name: string; input: unknown }): void {
+  private handleToolUseEvent(sessionId: string, streamId: string, toolUse: {
+    id: string;
+    name: string;
+    input: unknown;
+    groupId?: string;
+    progressTitle?: string;
+    progressSource?: 'provider_commentary' | 'model_progress_tool' | 'tool_fallback';
+  }): void {
     const s = this.sessions.get(sessionId);
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;
     // Skip if this tool_use was already loaded from DB on page refresh
@@ -2584,6 +2602,9 @@ export class StreamSessionManager {
       name: toolUse.name,
       input: toolUse.input as Record<string, unknown>,
       stage: s.researchStage || undefined,
+      groupId: toolUse.groupId,
+      progressTitle: toolUse.progressTitle,
+      progressSource: toolUse.progressSource,
     };
     // Plan 461: the authoritative input has arrived — drop any accumulated
     // partial fragments for this tool call so the row stops streaming.
@@ -2625,6 +2646,30 @@ export class StreamSessionManager {
         }];
       }
     }
+    this.notifyToolListeners(sessionId);
+    this.notifyStreamingEventsListeners(sessionId);
+    this.resetIdleTimeout(sessionId);
+  }
+
+  private handleToolGroupProgressEvent(
+    sessionId: string,
+    streamId: string,
+    progress: { groupId?: string; title?: string } | undefined,
+  ): void {
+    const s = this.sessions.get(sessionId);
+    if (!s || !this.isCurrentStream(sessionId, streamId)) return;
+    if (!progress?.groupId || typeof progress.title !== 'string') return;
+
+    const update = (toolUse: ToolUseInfo): ToolUseInfo =>
+      toolUse.groupId === progress.groupId
+        ? { ...toolUse, progressTitle: progress.title }
+        : toolUse;
+    s.toolUses = s.toolUses.map(update);
+    s.streamingEvents = s.streamingEvents.map((event) =>
+      event.type === 'tool_use'
+        ? { ...event, toolUse: update(event.toolUse) }
+        : event,
+    );
     this.notifyToolListeners(sessionId);
     this.notifyStreamingEventsListeners(sessionId);
     this.resetIdleTimeout(sessionId);

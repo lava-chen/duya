@@ -463,7 +463,14 @@ function normalizeWorkerEvent(event: Record<string, unknown>): Record<string, un
   } else if (msgType === 'chat:tool_use_started') {
     sseEvent = {
       type: 'tool_use_started',
-      data: { id: event.id, name: event.name, input: event.input },
+      data: {
+        id: event.id,
+        name: event.name,
+        input: event.input,
+        groupId: event.groupId,
+        progressTitle: event.progressTitle,
+        progressSource: event.progressSource,
+      },
     };
   } else if (msgType === 'chat:tool_use_delta') {
     // Plan 461: incremental tool-call argument fragment. Forwarded verbatim
@@ -473,10 +480,22 @@ function normalizeWorkerEvent(event: Record<string, unknown>): Record<string, un
       type: 'tool_use_delta',
       data: { id: event.id, name: event.name, delta: event.delta },
     };
+  } else if (msgType === 'chat:tool_group_progress') {
+    sseEvent = {
+      type: 'tool_group_progress',
+      data: { groupId: event.groupId, title: event.title, source: event.source },
+    };
   } else if (msgType === 'chat:tool_use') {
     sseEvent = {
       type: 'tool_use',
-      data: { id: event.id, name: event.name, input: event.input },
+      data: {
+        id: event.id,
+        name: event.name,
+        input: event.input,
+        groupId: event.groupId,
+        progressTitle: event.progressTitle,
+        progressSource: event.progressSource,
+      },
     };
   } else if (msgType === 'chat:tool_result') {
     sseEvent = {

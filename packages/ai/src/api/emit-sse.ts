@@ -20,10 +20,21 @@ export function emitSSE(internalEvent: AssistantMessageEvent): SSEEvent | null {
     // text_end / thinking_end carry the full block content and are
     // suppressed (null) to avoid duplicating content that was already
     // streamed incrementally.
-    case 'text_delta':
+    case 'text_delta': {
+      const block = internalEvent.partial.content[internalEvent.contentIndex];
+      if (block?.type === 'text' && block.phase === 'commentary') return null;
       return { type: 'text', data: internalEvent.delta };
-    case 'text_end':
+    }
+    case 'text_end': {
+      const block = internalEvent.partial.content[internalEvent.contentIndex];
+      if (block?.type === 'text' && block.phase === 'commentary') {
+        return {
+          type: 'tool_group_progress',
+          data: { title: block.text, source: 'provider_commentary' },
+        };
+      }
       return null;
+    }
     case 'thinking_delta': {
       // Forward the accumulated thinking signature (Anthropic signature_delta
       // content, or the openai wire-field marker recorded at block creation)

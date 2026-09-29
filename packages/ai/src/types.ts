@@ -38,6 +38,8 @@ export interface TextContent {
   text: string;
   /** Provider signature for text content (Anthropic text signature). */
   textSignature?: string;
+  /** Exact Responses API phase. Only 'commentary' is used for tool progress titles. */
+  phase?: 'commentary' | 'final_answer';
   /**
    * Provider annotations captured verbatim (plan 440 phase 2): OpenAI
    * url_citation / file_citation / container_file_citation entries attached
@@ -62,6 +64,12 @@ export interface ToolUseContent {
   input: Record<string, unknown>;
   /** Provider signature for tool call (Anthropic thought signature). */
   thoughtSignature?: string;
+  /** Stable identity for the UI group that owns this tool call. */
+  groupId?: string;
+  /** Sanitized user-facing progress title for the owning tool group. */
+  progressTitle?: string;
+  /** Source of the title, or the deterministic tool fallback. */
+  progressSource?: ToolGroupProgressSource;
 }
 
 export interface ToolResultContent {
@@ -120,7 +128,15 @@ export interface ToolUse {
   id: string;
   name: string;
   input: Record<string, unknown>;
+  groupId?: string;
+  progressTitle?: string;
+  progressSource?: ToolGroupProgressSource;
 }
+
+export type ToolGroupProgressSource =
+  | 'provider_commentary'
+  | 'model_progress_tool'
+  | 'tool_fallback';
 
 export interface ToolResultMetadata {
   durationMs?: number;
@@ -326,6 +342,7 @@ export type SSEEvent =
    *  producing them (Codex/pi TUI parity). */
   | { type: 'tool_use_delta'; data: { id: string; name: string; delta: string } }
   | { type: 'tool_use'; data: ToolUse & { /** Provider thought signature (Gemini functionCall thoughtSignature) for replay continuity. */ signature?: string } }
+  | { type: 'tool_group_progress'; data: { groupId?: string; title: string; source: ToolGroupProgressSource } }
   | { type: 'tool_result'; data: ToolResult }
   | { type: 'tool_progress'; data: { toolName: string; elapsedSeconds: number } }
   | { type: 'tool_timeout'; data: { toolName: string; elapsedSeconds: number } }

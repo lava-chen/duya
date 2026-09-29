@@ -212,6 +212,11 @@ export interface ToolUseInfo {
    *  stamped by the streaming manager in arrival order. Empty when not in a
    *  research run. */
   stage?: string;
+  /** Stable identity for the tool group this call belongs to. */
+  groupId?: string;
+  /** Sanitized progress title for the owning tool group. */
+  progressTitle?: string;
+  progressSource?: 'provider_commentary' | 'model_progress_tool' | 'tool_fallback';
 }
 
 export interface ToolResultInfo {

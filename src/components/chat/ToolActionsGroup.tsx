@@ -345,6 +345,9 @@ export function pairTools(
       isError: result?.is_error,
       durationMs: result?.duration_ms,
       metadata: result?.metadata,
+      groupId: t.groupId,
+      progressTitle: t.progressTitle,
+      progressSource: t.progressSource,
     });
   }
 

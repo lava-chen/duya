@@ -30,6 +30,9 @@ export interface ToolAction {
   /** Research lifecycle stage the tool ran in (e.g. gathering / evaluating).
    *  Set by the streaming path from the tool_use event in arrival order. */
   stage?: string;
+  groupId?: string;
+  progressTitle?: string;
+  progressSource?: 'provider_commentary' | 'model_progress_tool' | 'tool_fallback';
 }
 
 /**

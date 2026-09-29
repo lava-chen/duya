@@ -441,6 +441,7 @@ const zh: Record<TranslationKey, string> = {
   'streaming.toolAction.groupSummary.andMore': '其他 {count} 项',
   'streaming.toolAction.groupSummary.fallback.one': '执行了 1 项操作',
   'streaming.toolAction.groupSummary.fallback.other': '执行了 {count} 项操作',
+  'streaming.toolAction.groupProgress.generic': '正在处理',
   'streaming.toolAction.thinking.placeholder': '思考中...',
   'streaming.toolAction.thinking.empty': '思考',
   'streaming.toolAction.thinking.title': '思考',
