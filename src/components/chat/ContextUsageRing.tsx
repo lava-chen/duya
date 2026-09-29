@@ -4,6 +4,10 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Message } from '@/types/message';
 import { useContextUsage, type ContextUsage } from '@/hooks/useContextUsage';
 import { formatTokensPi, type ModelPricing } from '@/lib/context-usage-utils';
+import {
+  useContextUsageStore,
+  type ContextCompositionSnapshot,
+} from '@/stores/context-usage-store';
 import { Button } from '@/components/ui/Button';
 
 interface ContextUsageRingProps {
@@ -44,6 +48,126 @@ interface ContextUsageDataProps {
   isCompacting?: boolean;
 }
 
+type ContextComposition = ContextCompositionSnapshot['composition'];
+
+interface ContextBreakdownRow {
+  key: string;
+  label: string;
+  tokens: number;
+  color: 'system' | 'tools' | 'conversation' | 'connectors' | 'injected' | 'skills' | 'attachments' | 'memory' | 'other';
+}
+
+function sumContextParts(parts: readonly { tokens: number }[]): number {
+  return parts.reduce((total, part) => total + part.tokens, 0);
+}
+
+function buildContextBreakdown(
+  composition: ContextComposition | undefined,
+  usedTokens: number,
+): ContextBreakdownRow[] {
+  if (!composition || usedTokens <= 0) return [];
+
+  const connectorDefinitions = composition.toolDefinitions.filter((part) =>
+    /mcp|connector|plugin/i.test(part.label),
+  );
+  const connectorDefinitionSet = new Set(connectorDefinitions);
+  const regularDefinitions = composition.toolDefinitions.filter(
+    (part) => !connectorDefinitionSet.has(part),
+  );
+  // Tool results attributed to their connector/MCP source by the worker's
+  // composition (labels `connector:<id>` / `mcp:<id>` / `plugin:<id>` —
+  // `tool_invoke` tool_ids and eager `mcp_<server>_<tool>` names). They get
+  // their own row with the per-source names; unlabelled results stay merged
+  // into the generic tools row.
+  const connectorResultParts = (composition.toolResults ?? []).filter((part) =>
+    /^(connector|mcp|plugin):/.test(part.label),
+  );
+  const connectorResultSet = new Set(connectorResultParts);
+  const regularResults = (composition.toolResults ?? []).filter(
+    (part) => !connectorResultSet.has(part),
+  );
+  const connectorSourceNames = connectorResultParts
+    .map((part) => {
+      const id = part.label.split(':').slice(1).join(':');
+      // plugin-owned ids are `pluginId:connection` — the connection is the
+      // user-facing name (mirrors formatInvokeSourceLabel).
+      const name = id.split(':').filter(Boolean).at(-1) ?? id;
+      return name ? name.charAt(0).toUpperCase() + name.slice(1) : '';
+    })
+    .filter((name, idx, all) => name && all.indexOf(name) === idx);
+  // Plan 579: loaded skill bodies are their own kind, labelled with the
+  // skills actually loaded (Skill tool results, <skill> injections,
+  // SKILL.md reads — labels arrive as `skill:<name>`).
+  const skillNames = (composition.skills ?? [])
+    .map((part) => part.label.replace(/^skill:/, ''))
+    .filter((name, idx, all) => name && all.indexOf(name) === idx);
+  // Split declaration from .filter: chaining the filter directly onto the
+  // array literal drops its contextual type and widens every `color:` to
+  // string (TS2322).
+  const allRows: ContextBreakdownRow[] = [
+    { key: 'system', label: '系统提示词', tokens: sumContextParts(composition.system), color: 'system' },
+    {
+      key: 'tools',
+      label: '工具及子智能体',
+      tokens: sumContextParts(regularDefinitions) + sumContextParts(regularResults),
+      color: 'tools',
+    },
+    { key: 'conversation', label: '对话消息', tokens: sumContextParts(composition.conversation), color: 'conversation' },
+    {
+      key: 'connectors',
+      label: 'MCP 工具定义',
+      tokens: sumContextParts(connectorDefinitions),
+      color: 'connectors',
+    },
+    {
+      key: 'connectorResults',
+      label:
+        connectorSourceNames.length > 0
+          ? `连接器调用 (${connectorSourceNames.join('、')})`
+          : '连接器调用',
+      tokens: sumContextParts(connectorResultParts),
+      color: 'connectors',
+    },
+    {
+      key: 'skills',
+      label: skillNames.length > 0 ? `技能 (${skillNames.join('、')})` : '技能',
+      tokens: sumContextParts(composition.skills ?? []),
+      color: 'skills',
+    },
+    {
+      key: 'injected',
+      label: '运行时注入',
+      tokens: sumContextParts(composition.injectedContext),
+      color: 'injected',
+    },
+    { key: 'attachments', label: '附件', tokens: sumContextParts(composition.attachments), color: 'attachments' },
+    { key: 'memory', label: '记忆', tokens: sumContextParts(composition.memory), color: 'memory' },
+    { key: 'provider', label: 'Provider 开销', tokens: sumContextParts(composition.providerOverhead), color: 'other' },
+  ];
+  const rows = allRows.filter((row) => row.tokens > 0);
+
+  const classifiedTokens = sumContextParts(rows);
+  // Keep the colored segments bounded by the headline total if a projection
+  // shrank after the worker produced its last breakdown.
+  const scale = classifiedTokens > usedTokens ? usedTokens / classifiedTokens : 1;
+  const scaledRows = rows.map((row) => ({ ...row, tokens: row.tokens * scale }));
+  const remainder = Math.max(0, usedTokens - sumContextParts(scaledRows));
+  if (remainder > 0) {
+    scaledRows.push({
+      key: 'unattributed',
+      label: 'Provider 实测余量',
+      tokens: remainder,
+      color: 'other',
+    });
+  }
+  return scaledRows;
+}
+
+function formatContextPercent(tokens: number, contextWindow: number): string {
+  if (contextWindow <= 0) return '—';
+  return `${((tokens / contextWindow) * 100).toFixed(1).replace(/\.0$/, '')}%`;
+}
+
 /**
  * Small ring trigger next to the input. On hover the ring slides a pi-style
  * stats line out to the left (cumulative ↑input / ↓output / R cache / $ cost,
@@ -70,6 +194,9 @@ export function ContextUsageRing({
   onToggle,
 }: ContextUsageRingProps) {
   const usage = useContextUsage(messages, modelName, contextWindow, sessionId, pricing);
+  const compositionSnapshot = useContextUsageStore((s) =>
+    sessionId ? s.compositionBySession[sessionId] : undefined,
+  );
   const [hovered, setHovered] = useState(false);
   const [pinned, setPinned] = useState(false);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -146,11 +273,23 @@ export function ContextUsageRing({
     ? (usage.ratio * 100).toFixed(1)
     : '?';
 
-  const statsExpanded = isPanel
+  const showBreakdown = hovered && !pinned && !(isPanel && expanded);
+  const statsExpanded = (isPanel
     ? Boolean(expanded)
     : reversed
       ? !pinned
-      : (hovered || pinned);
+      : (hovered || pinned)) && !showBreakdown;
+
+  const breakdownRows = buildContextBreakdown(
+    compositionSnapshot?.composition,
+    usage.used,
+  );
+  const breakdownPercent = usage.hasData ? `${ctxPercent}%` : '?';
+  const breakdownSegments = breakdownRows.filter((row) => row.tokens > 0);
+  const breakdownBarScale = Math.max(
+    effectiveWindow,
+    breakdownSegments.reduce((total, row) => total + row.tokens, 0),
+  );
 
   // Popup-variant rows (bot composer): label/value pairs over the same
   // live `usage` data the line variant slides out.
@@ -190,6 +329,53 @@ export function ContextUsageRing({
         }}
         onMouseLeave={scheduleHide}
       >
+        <div
+          className="context-composition-popover"
+          role="status"
+          aria-hidden={!showBreakdown}
+          data-visible={showBreakdown}
+        >
+          <div className="context-composition-popover__title">上下文用量</div>
+          <div className="context-composition-popover__headline">
+            <strong>{breakdownPercent}</strong>
+            <span>已使用 {f(usage.used)} / {f(effectiveWindow)}</span>
+          </div>
+          {breakdownRows.length > 0 ? (
+            <>
+              <div
+                className="context-composition-popover__bar"
+                aria-hidden="true"
+                style={{ background: 'var(--bg-hover)' }}
+              >
+                {breakdownSegments.map((row) => (
+                  <span
+                    key={row.key}
+                    className={`context-composition-popover__segment context-composition-popover__segment--${row.color}`}
+                    style={{ width: `${(row.tokens / breakdownBarScale) * 100}%` }}
+                  />
+                ))}
+              </div>
+              <div className="context-composition-popover__rows">
+                {breakdownRows.map((row) => (
+                  <div className="context-composition-popover__row" key={row.key}>
+                    <span className={`context-composition-popover__dot context-composition-popover__dot--${row.color}`} />
+                    <span className="context-composition-popover__label">{row.label}</span>
+                    <span className="context-composition-popover__value">
+                      {formatContextPercent(row.tokens, effectiveWindow)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div className="context-composition-popover__note">
+                分类依据 harness 估算；有 Provider usage 时总量以实测为准，未归属差额单独保留。技能内容已单独标记（含加载的技能名）；连接器/MCP 调用结果按来源独立标记。
+              </div>
+            </>
+          ) : (
+            <div className="context-composition-popover__empty">
+              分类明细会在收到本轮 usage 后显示。
+            </div>
+          )}
+        </div>
         {variant === 'popup' ? (
           <div className="context-usage-popover" role="status" aria-hidden={!statsExpanded}>
             {popoverRows.length > 0 ? (
@@ -564,6 +750,113 @@ export function ContextUsageRing({
         }
         .context-usage-popover__value--dim {
           opacity: 0.65;
+        }
+
+        .context-composition-popover {
+          position: absolute;
+          bottom: calc(100% + 10px);
+          right: 0;
+          z-index: 61;
+          width: min(340px, calc(100vw - 32px));
+          padding: 16px;
+          border: 1px solid var(--border);
+          border-radius: 14px;
+          background: var(--surface-solid, var(--surface));
+          box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+          color: var(--text);
+          opacity: 0;
+          transform: translateY(4px);
+          pointer-events: none;
+          transition: opacity 0.15s ease, transform 0.15s ease;
+        }
+        .context-composition-popover[data-visible='true'] {
+          opacity: 1;
+          transform: none;
+          pointer-events: auto;
+        }
+        .context-composition-popover__title {
+          margin-bottom: 8px;
+          font-size: 14px;
+          font-weight: 600;
+        }
+        .context-composition-popover__headline {
+          display: flex;
+          align-items: baseline;
+          gap: 10px;
+          margin-bottom: 10px;
+        }
+        .context-composition-popover__headline strong {
+          font-size: 23px;
+          line-height: 1.1;
+          font-variant-numeric: tabular-nums;
+        }
+        .context-composition-popover__headline span,
+        .context-composition-popover__note,
+        .context-composition-popover__empty {
+          color: var(--muted);
+        }
+        .context-composition-popover__headline span {
+          font-size: 12px;
+          font-variant-numeric: tabular-nums;
+        }
+        .context-composition-popover__bar {
+          display: flex;
+          height: 8px;
+          overflow: hidden;
+          margin-bottom: 12px;
+          border-radius: 999px;
+          background: var(--bg-hover);
+        }
+        .context-composition-popover__segment { min-width: 2px; }
+        .context-composition-popover__segment--system,
+        .context-composition-popover__dot--system { background: var(--accent); }
+        .context-composition-popover__segment--tools,
+        .context-composition-popover__dot--tools { background: var(--success); }
+        .context-composition-popover__segment--conversation,
+        .context-composition-popover__dot--conversation { background: var(--warning); }
+        .context-composition-popover__segment--connectors,
+        .context-composition-popover__dot--connectors { background: #8b5cf6; }
+        .context-composition-popover__segment--injected,
+        .context-composition-popover__dot--injected { background: #ec4899; }
+        .context-composition-popover__segment--skills,
+        .context-composition-popover__dot--skills { background: #f97316; }
+        .context-composition-popover__segment--attachments,
+        .context-composition-popover__dot--attachments { background: #06b6d4; }
+        .context-composition-popover__segment--memory,
+        .context-composition-popover__dot--memory { background: #64748b; }
+        .context-composition-popover__segment--other,
+        .context-composition-popover__dot--other { background: var(--muted); }
+        .context-composition-popover__rows {
+          display: flex;
+          flex-direction: column;
+          gap: 7px;
+        }
+        .context-composition-popover__row {
+          display: grid;
+          grid-template-columns: 10px minmax(0, 1fr) auto;
+          align-items: center;
+          gap: 8px;
+          min-height: 18px;
+          font-size: 12px;
+        }
+        .context-composition-popover__dot {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+        }
+        .context-composition-popover__label { color: var(--text); }
+        .context-composition-popover__value {
+          color: var(--muted);
+          font-variant-numeric: tabular-nums;
+        }
+        .context-composition-popover__note,
+        .context-composition-popover__empty {
+          margin-top: 10px;
+          font-size: 10px;
+          line-height: 1.4;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .context-composition-popover { transition: none; }
         }
       `}</style>
     </>

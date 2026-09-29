@@ -29,6 +29,12 @@ import {
   isModuleTool,
   isMessageSessionTool,
 } from './classify';
+import {
+  dedupeSourcePrefix,
+  describeInvokeTool,
+  describeMcpProviderName,
+  humanizeToolLabel,
+} from './invoke-identity';
 import type { ToolAction, ToolRendererDef } from './types';
 
 /**
@@ -379,20 +385,39 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
     // MCP-provided tools — any name starting with the `mcp_` provider
     // prefix (see computeProviderName in
     // packages/plugin-core/src/mcp/provider-tool-name.ts). The summary
-    // surfaces the *MCP server name* (one server exposes many tools)
-    // instead of the raw envelope or the per-tool name. The dedicated
-    // McpToolRow owns the visible chrome; this entry keeps the registry
-    // icon/label consistent for any path that bypasses it (e.g. group
-    // summary).
+    // surfaces "server · Tool Label" (one server exposes many tools; the
+    // tool label is humanized with a repeated server prefix removed) so
+    // the chrome reads "GitHub · Create issue" instead of the raw
+    // envelope. The dedicated McpToolRow owns the visible chrome; this
+    // entry keeps the registry icon/label consistent for any path that
+    // bypasses it (e.g. group summary).
     match: (n) => n.toLowerCase().startsWith('mcp_'),
     icon: AiGatewayIcon,
     labelKey: 'streaming.toolAction.label.mcp',
     getSummary: (input, name?: string) => {
       const prefix = name || '';
       if (!prefix.toLowerCase().startsWith('mcp_')) return prefix || 'mcp';
-      const rest = prefix.slice('mcp_'.length);
-      const lastSep = rest.lastIndexOf('_');
-      return lastSep !== -1 ? rest.slice(0, lastSep) : rest;
+      const parts = describeMcpProviderName(prefix);
+      if (!parts) return prefix;
+      const server = humanizeToolLabel(parts.server);
+      const toolLabel = dedupeSourcePrefix(humanizeToolLabel(parts.toolName), server);
+      return toolLabel ? `${server} · ${toolLabel}` : server;
+    },
+  },
+  {
+    // tool_invoke — the generic invoke meta-tool (Plan 480). The stable
+    // `tool_id` in the input names the source app/server and the action;
+    // connector calls show the provider id, MCP calls the server name,
+    // and builtin deferred tools the humanized tool name. Falls back to
+    // the legacy `{ namespace, tool }` draft shape for old transcripts.
+    match: (n) => n.toLowerCase() === 'invoke' || n.toLowerCase() === 'tool_invoke',
+    icon: AiGatewayIcon, // default; InvokeToolRow overrides per source kind
+    labelKey: 'streaming.toolAction.label.mcp',
+    getSummary: (input) => {
+      const identity = describeInvokeTool(input);
+      if (!identity) return 'invoke';
+      if (identity.kind === 'builtin' || !identity.sourceLabel) return identity.toolLabel;
+      return `${identity.sourceLabel} · ${identity.toolLabel}`;
     },
   },
   {

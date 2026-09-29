@@ -6,6 +6,7 @@
 
 const INTERACTIVE_CONTROL_TYPES = new Set([
   'button',
+  'splitbutton',
   'edit',
   'hyperlink',
   'checkbox',
@@ -16,6 +17,9 @@ const INTERACTIVE_CONTROL_TYPES = new Set([
   'slider',
   'listitem',
   'toggleswitch',
+  'dataitem',
+  'treeitem',
+  'spinner',
 ]);
 
 export const OVERLAY_VISIBLE_ELEMENT_LIMIT = 36;
@@ -25,6 +29,13 @@ interface RectLike {
   y: number;
   w: number;
   h: number;
+}
+
+interface DisplayBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 interface Candidate {
@@ -65,10 +76,16 @@ function isDuplicateOrContained(candidate: Candidate, kept: Candidate): boolean 
 /**
  * Return a compact list in UIA enumeration order. `overlayIndex` preserves
  * the original 1-based UIA index even when an overlapping entry is omitted.
+ *
+ * Elements whose rect does not intersect the target display are dropped:
+ * the overlay is a single window on ONE display, so frames for the other
+ * display — or at a minimized window's iconic position (−25600,−25600) —
+ * are invisible anyway and would only pollute the badge numbering
+ * (plan 576 recorder follow-up).
  */
 export function selectVisibleOverlayElements(
   elements: readonly Record<string, unknown>[],
-  displayBounds: { width: number; height: number },
+  displayBounds: DisplayBounds,
 ): Record<string, unknown>[] {
   const displayArea = displayBounds.width * displayBounds.height;
   if (!Number.isFinite(displayArea) || displayArea <= 0) return [];
@@ -81,6 +98,14 @@ export function selectVisibleOverlayElements(
     if (typeof controlType !== 'string' || !INTERACTIVE_CONTROL_TYPES.has(controlType.toLowerCase())) continue;
     const rect = rectOf(element);
     if (!rect) continue;
+    if (
+      rect.x + rect.w <= displayBounds.x ||
+      rect.x >= displayBounds.x + displayBounds.width ||
+      rect.y + rect.h <= displayBounds.y ||
+      rect.y >= displayBounds.y + displayBounds.height
+    ) {
+      continue;
+    }
     const area = rect.w * rect.h;
     // Large accessibility containers are poor click targets and usually
     // overlap many smaller controls. Keep the target-sized rectangles only.

@@ -377,6 +377,21 @@ export class duyaAgent implements AgentRuntime {
    * block the transient runtime-context layer lost. Reset per streamChat.
    */
   private promptContextBlocks: string[] = [];
+
+  /**
+   * Plan 579: token cost of the transient `<skill>` mention injections this
+   * run, keyed by skill name (dedup across re-mentions within the run). The
+   * projection rail these bodies ride is invisible to the message-timeline
+   * scan, so the context composition takes them from here (skillParts
+   * option) instead — same treatment as memory-recall payloads. Reset per
+   * streamChat, matching promptContextBlocks' lifecycle.
+   */
+  private injectedSkillParts: Map<string, number> = new Map();
+
+  /** Plan 579: labelled token parts for the run's injected skill bodies. */
+  getInjectedSkillParts(): Array<{ label: string; tokens: number }> {
+    return [...this.injectedSkillParts.entries()].map(([label, tokens]) => ({ label, tokens }));
+  }
   /**
    * Plan 517 P2.1: turn-based cooldown to prevent the compaction-loop bug.
    * `lastCompactionTurn` is the streamChat-local turn number at which the
@@ -1131,8 +1146,18 @@ export class duyaAgent implements AgentRuntime {
         explicitSkills,
       );
       const skillInjections = await collectSkillInjections(mergedMentionedSkills);
+      // Plan 579: attribute the transient bodies' token cost per skill
+      // (cleared per run, matching promptContextBlocks' lifecycle).
+      this.injectedSkillParts.clear();
       for (const injection of skillInjections) {
-        this.promptContexts.push(`<${injection.envelope}>\n${injection.body}\n</${injection.envelope}>`);
+        const rendered = `<${injection.envelope}>\n${injection.body}\n</${injection.envelope}>`;
+        this.promptContexts.push(rendered);
+        if (injection.envelope === 'skill' && injection.skillName) {
+          this.injectedSkillParts.set(
+            `skill:${injection.skillName}`,
+            estimateContextTextTokens(rendered),
+          );
+        }
       }
       if (skillInjections.length > 0) {
         logger.info(`[Agent] Skill injection: ${skillInjections.length} skill fragment(s) queued`);
@@ -3860,6 +3885,28 @@ export class duyaAgent implements AgentRuntime {
           `[Agent] bot prompt sections skipped: ${err instanceof Error ? err.message : String(err)}`
         );
       }
+    }
+
+    // Deferred tools must be discovered and have their full schema loaded in
+    // a separate provider round before tool_invoke is eligible. ToolInvoke
+    // enforces this at runtime; this system-level sequence prevents avoidable
+    // failed calls when a connector tool is unfamiliar to the model.
+    if (
+      !options?.disableSystemPrompt &&
+      tools.some((tool) => tool.name === 'tool_catalog') &&
+      tools.some((tool) => tool.name === 'tool_invoke')
+    ) {
+      const deferredToolProtocol = [
+        '## Deferred tool schema protocol',
+        '- Search for a needed tool with `tool_catalog({ query })`. If there are no matches, retry with a shorter, broader query or a suggested namespace.',
+        '- When a search result says `invocation` uses `tool_invoke`, call `tool_catalog({ tool_id })` for that exact stable ID and wait for its complete schema result.',
+        '- Do not call `tool_invoke` in the same assistant response or parallel batch as the schema lookup. Invoke it only in a later provider round, using arguments that match the returned `input_schema`.',
+        '- Never guess a deferred tool\'s arguments from its name, description, or search summary. If the schema is missing or stale, read it again before invoking.',
+        '- A catalog or invocation configuration error describes current-session tool availability; it does not prove that the user\'s connector is unauthorized.',
+      ].join('\n');
+      systemPromptContent = systemPromptContent
+        ? `${systemPromptContent}\n\n${deferredToolProtocol}`
+        : deferredToolProtocol;
     }
 
     return systemPromptContent;

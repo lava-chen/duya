@@ -38,12 +38,13 @@ function materialFieldDiff(
 ): CuaSnapshotDiff['updated'][number]['changes'] {
   const changes: CuaSnapshotDiff['updated'][number]['changes'] = {};
   if ((oldEl.value || '') !== (newEl.value || '')) changes.value = newEl.value ?? '';
-  const oldLabel = oldEl.title ?? '';
-  const newLabel = newEl.title ?? '';
-  if (oldLabel !== newLabel) changes.label = newEl.title;
+  const oldLabel = oldEl.title ?? oldEl.label ?? '';
+  const newLabel = newEl.title ?? newEl.label ?? '';
+  if (oldLabel !== newLabel) changes.label = newEl.title ?? newEl.label ?? null;
   if ((oldEl.focused ?? false) !== (newEl.focused ?? false)) changes.focused = newEl.focused;
   if ((oldEl.enabled ?? true) !== (newEl.enabled ?? true)) changes.enabled = newEl.enabled;
   if ((oldEl.editable ?? false) !== (newEl.editable ?? false)) changes.editable = newEl.editable;
+  if ((oldEl.checked ?? null) !== (newEl.checked ?? null)) changes.checked = newEl.checked;
   if (!sameBounds(oldEl.bounds, newEl.bounds)) changes.bounds = newEl.bounds;
   const oldA = (oldEl.actions || []).join(',');
   const newA = (newEl.actions || []).join(',');

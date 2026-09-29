@@ -16,16 +16,31 @@
 #                                                    first-Edit fallback)
 #   → {"id":3,"op":"ping"}  →  {"id":3,"ok":true}
 #   → {"id":4,"op":"enumerate","hwnd":197144,     — plan 562 full-tree enumeration
-#        "maxDepth":40,"maxNodes":500,              (knobs optional; controlTypes
-#        "controlTypes":["Button",...]}             overrides the built-in whitelist)
+#        "maxDepth":40,"maxNodes":1500,             (knobs optional; controlTypes
+#        "controlTypes":["Button",...],             overrides the built-in whitelist;
+#        "totalMs":8000}                            per-request walk budget — cold
+#                                                   windows get a raised one)
 #      {"id":4,"ok":true,"elements":[{"name":"..","controlType":"Button",...,
 #         "rect":{...},"isPassword":false,"interactive":true,
-#         "enabled":true,"focused":false[,"selected":true]},...],
+#         "enabled":true,"focused":false[,"selected":true]
+#         [,"label":".."][,"checked":true][,"description":".."]
+#         [,"offscreen":true],"depth":2},...],
 #         "truncated":false,"reason":null,"count":12}
-#      {"id":4,"ok":true,"elements":[],"truncated":true,...}  — partial tree kept
-#                                                               after a budget hit
+#      {"id":4,"ok":true,"elements":[...],"truncated":true,...}  — partial tree kept
+#                                                          after a budget hit OR a
+#                                                          hang-net salvage
 #      {"id":4,"ok":true,"elements":[],"reason":"elevated",...} — UIPI skip, no
 #                                                                  budget burned
+#
+#   plan 576 walk semantics: the per-root-child shard is a recursive
+#   ControlView TreeWalker walk (not a flat FindAll), so every emitted
+#   node carries its REAL tree `depth`. Static Text nodes never occupy
+#   emission slots (the 1-based invoke cache order stays interactive-only,
+#   plan 576 red line) — their text rides as a `label` on the next
+#   emitted element (forward attachment, capped). `maxNodes` budgets
+#   VISITED nodes (Text/containers included, so a virtualized list cannot
+#   flood the walk); offscreen subtrees are emitted as flagged leaves and
+#   NOT descended into, which keeps the budget on on-screen content.
 #   → {"id":5,"op":"invoke","hwnd":197144,"index":12,"method":"invoke",  — plan 564
 #        "value":null,"name":"Sign in","controlType":"Button"}   structural act op:
 #      {"id":5,"ok":true,"method":"invoke","pattern":"InvokePattern",  resolve the
@@ -47,6 +62,17 @@
 $ErrorActionPreference = 'Continue'
 try {
     [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+} catch { }
+# stdin is a redirected pipe; [Console]::In decodes with the console
+# input codepage (GBK on zh-CN hosts), which mangles every non-ASCII
+# name the request carries (invoke/selectText guards become mojibake and
+# fail closed as stale-tree). Decode explicitly as UTF-8 instead.
+try {
+    [Console]::InputEncoding = [System.Text.Encoding]::UTF8
+} catch { }
+$stdinReader = $null
+try {
+    $stdinReader = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8)
 } catch { }
 
 # C# 5 (the PowerShell 5.1 compiler): no string interpolation, no ?. —
@@ -109,6 +135,9 @@ namespace Duya.Recorder
             // the LLM-facing tree listing needs it to pick fields. Never
             // emitted for password fields; the key is omitted (not null)
             // when unsupported so downstream strict readers stay happy.
+            // plan 576: the value is wire-capped (Documents can carry the
+            // whole page text) — the renderers apply their own display
+            // truncation on top.
             string valueJson = null;
             if (!c.IsPassword
                 && (c.ControlType == ControlType.Edit
@@ -123,7 +152,7 @@ namespace Duya.Recorder
                         ValuePattern vp = p as ValuePattern;
                         if (vp != null && !string.IsNullOrEmpty(vp.Current.Value))
                         {
-                            valueJson = Escape(vp.Current.Value);
+                            valueJson = Escape(TruncateValue(vp.Current.Value));
                         }
                     }
                 }
@@ -137,6 +166,17 @@ namespace Duya.Recorder
                  + ",\"isPassword\":" + (c.IsPassword ? "true" : "false")
                  + (valueJson == null ? "" : ",\"value\":" + valueJson)
                  + "}";
+        }
+
+        // plan 576 wire cap for pattern values (Document/Edit text). Large
+        // enough for field values and code snippets, small enough that one
+        // oversized document cannot dominate the observation.
+        private const int MaxValueChars = 400;
+
+        private static string TruncateValue(string s)
+        {
+            if (s == null || s.Length <= MaxValueChars) { return s; }
+            return s.Substring(0, MaxValueChars);
         }
 
         // Enumerate nodes carry the interactive assertion the overlay's
@@ -405,17 +445,31 @@ namespace Duya.Recorder
         private class EnumState
         {
             public readonly List<string> Nodes = new List<string>();
-            // Live element references parallel to Nodes (plan 564) — the
-            // invoke op resolves its 1-based index against this list.
-            public readonly List<AutomationElement> Elements = new List<AutomationElement>();
+            // Invoke-slot snapshots parallel to Nodes (plan 564): runtime
+            // id + name/type captured for free off the cached walk, so
+            // `invoke` can re-hydrate a LIVE element without the walk
+            // ever paying a per-node cross-process property read.
+            public readonly List<InvokeSlot> Slots = new List<InvokeSlot>();
             public readonly object Gate = new object();
             public readonly HashSet<string> ControlTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            public TreeWalker Walker = TreeWalker.ControlViewWalker;
             public Stopwatch Clock;
             public int TotalMs;
+            // plan 576: MaxNodes budgets VISITED nodes (every node the
+            // walk steps over — Text and containers included) so a
+            // virtualized list cannot flood the walk with placeholder
+            // rows. Only whitelisted-vocabulary nodes occupy emission
+            // slots, so Nodes.Count <= Visited.
             public int MaxNodes;
             public int MaxDepth;
             public bool Truncated;
+            public int Visited;
+            // plan 576 + 578 interplay: a MINIMIZED window reports every
+            // element IsOffscreen=true (iconic position). Offscreen descent
+            // pruning is a budget guard for VISIBLE windows — on a
+            // minimized one it would collapse the whole tree to zero, so
+            // the caller disables pruning there ("a minimized tree is
+            // fully usable", plan 578).
+            public bool PruneOffscreen;
 
             public int NodeCount
             {
@@ -424,24 +478,63 @@ namespace Duya.Recorder
 
             public bool BudgetBlown
             {
-                get { return NodeCount >= MaxNodes || Clock.ElapsedMilliseconds >= TotalMs; }
+                get { return Visited >= MaxNodes || Clock.ElapsedMilliseconds >= TotalMs; }
             }
 
-            public void Add(string json, AutomationElement el)
+            public void Add(string json, InvokeSlot slot)
             {
                 lock (Gate)
                 {
                     Nodes.Add(json);
-                    Elements.Add(el);
+                    Slots.Add(slot);
                 }
             }
         }
 
-        // Interactive whitelist check + JSON emission for one element.
-        // IsOffscreen elements are skipped (UFO inspector's default
-        // filter): they are invisible to the user, cannot be click
-        // targets, and virtualized lists would otherwise flood the
-        // tree with placeholder rows.
+        // One invoke-cache slot: everything `invoke` needs to re-hydrate
+        // the live element later. RuntimeId is the stable handle; name /
+        // controlType double as the staleness guards the model's invoke
+        // request carries.
+        private class InvokeSlot
+        {
+            public int[] RuntimeId;
+            public string Name;
+            public string ControlType;
+        }
+
+        // Bulk-cache request for the enumerate walk (plan 562 perf fix).
+        // Elements obtained while this request is active carry every read
+        // property client-side, so a whole subtree arrives in ONE
+        // cross-process call instead of one call per node per property —
+        // the single biggest enumerate cost on Chromium-sized trees.
+        private static CacheRequest NewCacheRequest(TreeScope scope)
+        {
+            CacheRequest cr = new CacheRequest();
+            cr.TreeScope = scope;
+            cr.TreeFilter = Automation.ControlViewCondition;
+            cr.Add(AutomationElement.NameProperty);
+            cr.Add(AutomationElement.AutomationIdProperty);
+            cr.Add(AutomationElement.ControlTypeProperty);
+            cr.Add(AutomationElement.BoundingRectangleProperty);
+            cr.Add(AutomationElement.IsOffscreenProperty);
+            cr.Add(AutomationElement.IsPasswordProperty);
+            cr.Add(AutomationElement.ClassNameProperty);
+            cr.Add(AutomationElement.IsEnabledProperty);
+            cr.Add(AutomationElement.HasKeyboardFocusProperty);
+            cr.Add(AutomationElement.HelpTextProperty);
+            cr.Add(AutomationElement.RuntimeIdProperty);
+            cr.Add(ValuePattern.Pattern);
+            cr.Add(SelectionItemPattern.Pattern);
+            cr.Add(TogglePattern.Pattern);
+            return cr;
+        }
+
+        // Interactive whitelist check + JSON emission for one element in
+        // CURRENT form (used for the window root, which is fetched outside
+        // any active cache request). IsOffscreen elements are skipped (UFO
+        // inspector's default filter): they are invisible to the user,
+        // cannot be click targets, and virtualized lists would otherwise
+        // flood the tree with placeholder rows.
         private static bool TryMakeNode(EnumState st, AutomationElement el, out string json)
         {
             json = null;
@@ -460,39 +553,301 @@ namespace Duya.Recorder
             catch { return false; }
         }
 
-        // ControlViewWalker recursion. Depth is capped silently (a
-        // naturally shallow tree must not be flagged truncated); the
-        // truncated flag is reserved for node/time budget hits.
-        private static void Walk(EnumState st, AutomationElement el, int depth)
+        // Cached-form sibling of ElementJson: identical wire shape, but
+        // every read hits the client-side cache (el.Current would throw
+        // on a cached-form element). Values are wire-capped.
+        private static string CachedElementJson(AutomationElement el)
         {
-            if (el == null || depth > st.MaxDepth) { return; }
-            if (st.BudgetBlown) { st.Truncated = true; return; }
-
-            string json;
-            if (TryMakeNode(st, el, out json))
+            AutomationElement.AutomationElementInformation c = el.Cached;
+            Rect r = c.BoundingRectangle;
+            string rect;
+            if (r.IsEmpty)
             {
-                st.Add(json, el);
-                if (st.NodeCount >= st.MaxNodes) { st.Truncated = true; return; }
+                rect = "null";
             }
-            if (depth == st.MaxDepth) { return; }
-
-            AutomationElement child;
-            try { child = st.Walker.GetFirstChild(el); } catch { return; }
-            while (child != null)
+            else
             {
-                Walk(st, child, depth + 1);
-                if (st.BudgetBlown) { st.Truncated = true; return; }
-                AutomationElement next;
-                try { next = st.Walker.GetNextSibling(child); } catch { return; }
-                child = next;
+                rect = "{\"x\":" + ((int)r.X) + ",\"y\":" + ((int)r.Y)
+                     + ",\"w\":" + ((int)r.Width) + ",\"h\":" + ((int)r.Height) + "}";
             }
+            string controlType = null;
+            if (c.ControlType != null) { controlType = c.ControlType.ProgrammaticName; }
+            if (controlType != null) { controlType = controlType.Replace("ControlType.", ""); }
+            string valueJson = null;
+            if (!c.IsPassword
+                && (c.ControlType == ControlType.Edit
+                    || c.ControlType == ControlType.Document
+                    || c.ControlType == ControlType.ComboBox))
+            {
+                try
+                {
+                    ValuePattern vp = el.GetCachedPattern(ValuePattern.Pattern) as ValuePattern;
+                    if (vp != null && !string.IsNullOrEmpty(vp.Cached.Value))
+                    {
+                        valueJson = Escape(TruncateValue(vp.Cached.Value));
+                    }
+                }
+                catch { }
+            }
+            return "{\"name\":" + Escape(c.Name)
+                 + ",\"controlType\":" + Escape(controlType)
+                 + ",\"automationId\":" + Escape(c.AutomationId)
+                 + ",\"className\":" + Escape(c.ClassName)
+                 + ",\"rect\":" + rect
+                 + ",\"isPassword\":" + (c.IsPassword ? "true" : "false")
+                 + (valueJson == null ? "" : ",\"value\":" + valueJson)
+                 + "}";
+        }
+
+        // plan 576 label-attachment caps: a pending text run rides the
+        // walk until the next emitted element absorbs it as `label`.
+        // The caps bound how far a run can travel and how big one label
+        // can get, so a stray paragraph cannot dominate a row.
+        private const int MaxLabelParts = 8;
+        private const int MaxLabelChars = 200;
+
+        private static string JoinPendingTexts(List<string> pending)
+        {
+            if (pending == null || pending.Count == 0) { return null; }
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < pending.Count && i < MaxLabelParts; i++)
+            {
+                string part = pending[i];
+                if (string.IsNullOrEmpty(part)) { continue; }
+                if (sb.Length > 0) { sb.Append(' '); }
+                sb.Append(part);
+                if (sb.Length >= MaxLabelChars) { break; }
+            }
+            string joined = sb.ToString();
+            if (joined.Length > MaxLabelChars) { joined = joined.Substring(0, MaxLabelChars); }
+            return joined.Length > 0 ? joined : null;
+        }
+
+        // Cached-form record for one emitted walk node: the base element
+        // JSON plus the plan 576 tree-contract fields. Conditional keys
+        // are omitted (not null) so strict downstream readers stay happy:
+        //   label       — pending static-Text run absorbed by this node
+        //   checked     — TogglePattern state (only when the pattern exists)
+        //   description — non-empty HelpText
+        //   offscreen   — only when true; the walk does NOT descend into
+        //                 offscreen subtrees (budget protection)
+        //   depth       — REAL UIA tree depth relative to the window root
+        private static string CachedNodeJson(
+            AutomationElement el,
+            AutomationElement.AutomationElementInformation c,
+            int depth,
+            string label)
+        {
+            string baseJson = CachedElementJson(el);
+            if (baseJson == "null") { return null; }
+            bool enabled = true;
+            try { enabled = c.IsEnabled; } catch { }
+            bool focused = false;
+            try { focused = c.HasKeyboardFocus; } catch { }
+            string selectedJson = "";
+            try
+            {
+                SelectionItemPattern sp = el.GetCachedPattern(SelectionItemPattern.Pattern) as SelectionItemPattern;
+                if (sp != null)
+                {
+                    selectedJson = ",\"selected\":" + (sp.Cached.IsSelected ? "true" : "false");
+                }
+            }
+            catch { }
+            string checkedJson = "";
+            try
+            {
+                TogglePattern tp = el.GetCachedPattern(TogglePattern.Pattern) as TogglePattern;
+                if (tp != null)
+                {
+                    checkedJson = ",\"checked\":" + (tp.Cached.ToggleState == ToggleState.On ? "true" : "false");
+                }
+            }
+            catch { }
+            string descriptionJson = "";
+            try
+            {
+                if (!string.IsNullOrEmpty(c.HelpText))
+                {
+                    descriptionJson = ",\"description\":" + Escape(TruncateValue(c.HelpText));
+                }
+            }
+            catch { }
+            bool offscreen = false;
+            try { offscreen = c.IsOffscreen; } catch { }
+            string labelJson = string.IsNullOrEmpty(label) ? "" : ",\"label\":" + Escape(label);
+            return baseJson.Substring(0, baseJson.Length - 1)
+                 + labelJson
+                 + ",\"interactive\":true"
+                 + ",\"enabled\":" + (enabled ? "true" : "false")
+                 + ",\"focused\":" + (focused ? "true" : "false")
+                 + selectedJson
+                 + checkedJson
+                 + descriptionJson
+                 + (offscreen ? ",\"offscreen\":true" : "")
+                 + ",\"depth\":" + depth
+                 + "}";
+        }
+
+        // plan 576 walk: the managed System.Windows.Automation TreeWalker
+        // does NOT apply the ambient CacheRequest to navigation results —
+        // GetFirstChild/GetNextSibling return CURRENT-form elements and
+        // every .Cached read on them throws ("cannot request an uncached
+        // property"). The reliable cached fetch is FindAll (the 562 perf
+        // fix), so the walk is a two-phase hybrid:
+        //   1. BFS collect — per node ONE FindAll(Children) call returns
+        //      its children as CACHED elements; nodes go into an in-memory
+        //      wrapper tree with their depth (budget: one COM call per
+        //      visited node, identical to a TreeWalker walk).
+        //   2. DFS emit — the wrapper tree is walked depth-first in
+        //      document order; every property read is a client-side cache
+        //      hit, so emission never crosses process.
+        private class WalkNodeRec
+        {
+            public AutomationElement El;
+            public readonly List<WalkNodeRec> Children = new List<WalkNodeRec>();
+        }
+
+        // Phase 1: BFS collect. Every stepped node — Text or container
+        // alike — counts against MaxNodes (a virtualized list cannot flood
+        // the walk). Offscreen nodes stay in the tree (emitted as flagged
+        // leaves) but are NOT expanded, keeping the budget on on-screen
+        // content.
+        private static void CollectLevels(EnumState st, Queue<KeyValuePair<WalkNodeRec, int>> queue)
+        {
+            while (queue.Count > 0)
+            {
+                KeyValuePair<WalkNodeRec, int> pair = queue.Dequeue();
+                WalkNodeRec rec = pair.Key;
+                int depth = pair.Value;
+                st.Visited++;
+                if (st.BudgetBlown)
+                {
+                    st.Truncated = true;
+                    return;
+                }
+                if (depth >= st.MaxDepth)
+                {
+                    continue;
+                }
+                bool offscreen = false;
+                try { offscreen = rec.El.Cached.IsOffscreen; }
+                catch { continue; }
+                if (offscreen && st.PruneOffscreen)
+                {
+                    continue;
+                }
+                try
+                {
+                    AutomationElementCollection kids = rec.El.FindAll(TreeScope.Children, Automation.ControlViewCondition);
+                    if (kids != null)
+                    {
+                        for (int i = 0; i < kids.Count; i++)
+                        {
+                            WalkNodeRec child = new WalkNodeRec();
+                            child.El = kids[i];
+                            rec.Children.Add(child);
+                            queue.Enqueue(new KeyValuePair<WalkNodeRec, int>(child, depth + 1));
+                        }
+                    }
+                }
+                catch { }
+            }
+        }
+
+        // Phase 2: DFS emit over the collected wrapper tree. Static Text
+        // nodes NEVER occupy emission slots (plan 576 red line — the
+        // 1-based invoke cache order stays interactive-only); their text
+        // is absorbed as `label` on the next emitted element (forward
+        // attachment, capped). The run rides through anonymous containers,
+        // which is the point: labels and their fields usually sit in
+        // different nesting levels.
+        private static void EmitDfs(EnumState st, WalkNodeRec rec, int depth, List<string> pendingTexts)
+        {
+            if (rec == null || rec.El == null) { return; }
+            AutomationElement.AutomationElementInformation c;
+            string controlType;
+            try
+            {
+                c = rec.El.Cached;
+                if (c.ControlType == null) { return; }
+                controlType = c.ControlType.ProgrammaticName;
+                if (controlType == null) { return; }
+                controlType = controlType.Replace("ControlType.", "");
+            }
+            catch { return; }
+
+            if (string.Equals(controlType, "Text", StringComparison.OrdinalIgnoreCase))
+            {
+                string text = null;
+                try { text = c.Name; } catch { }
+                if (!string.IsNullOrEmpty(text))
+                {
+                    text = text.Trim();
+                    if (text.Length > 0 && pendingTexts.Count < MaxLabelParts * 4)
+                    {
+                        pendingTexts.Add(text);
+                    }
+                }
+                return;
+            }
+
+            bool offscreen = false;
+            try { offscreen = c.IsOffscreen; } catch { }
+
+            if (st.ControlTypes.Contains(controlType))
+            {
+                string label = JoinPendingTexts(pendingTexts);
+                pendingTexts.Clear();
+                string json = CachedNodeJson(rec.El, c, depth, label);
+                if (json != null)
+                {
+                    InvokeSlot slot = new InvokeSlot();
+                    try { slot.Name = c.Name; } catch { }
+                    slot.ControlType = controlType;
+                    try { slot.RuntimeId = (int[])rec.El.GetCachedPropertyValue(AutomationElement.RuntimeIdProperty); } catch { slot.RuntimeId = null; }
+                    st.Add(json, slot);
+                }
+            }
+
+            if (offscreen || depth >= st.MaxDepth)
+            {
+                return;
+            }
+            for (int i = 0; i < rec.Children.Count; i++)
+            {
+                EmitDfs(st, rec.Children[i], depth + 1, pendingTexts);
+            }
+        }
+
+        // Serialize whatever the walk collected so far. Shared by the
+        // success path and the hang-net salvage path below, so a walk
+        // that got wedged mid-shard still returns the partial tree
+        // instead of dropping every node it already landed.
+        private static string SerializeState(IntPtr hwnd, EnumState st)
+        {
+            string elements;
+            List<InvokeSlot> snapshot;
+            lock (st.Gate)
+            {
+                elements = st.Nodes.Count > 0
+                    ? "[" + string.Join(",", st.Nodes.ToArray()) + "]"
+                    : "[]";
+                snapshot = new List<InvokeSlot>(st.Slots);
+            }
+            RememberElements(hwnd, snapshot);
+            return "{\"elements\":" + elements
+                 + ",\"truncated\":" + (st.Truncated ? "true" : "false")
+                 + ",\"reason\":null"
+                 + ",\"count\":" + snapshot.Count + "}";
         }
 
         // Returns a complete JSON object
         // {"elements":[...],"truncated":bool,"reason":str|null,"count":n}
         // for the PS dispatcher to splice (it strips the outer braces),
-        // or null when the whole operation timed out (caller maps to
-        // ok:false/timeout).
+        // or null when the whole operation failed (caller maps to
+        // ok:false/timeout). A walk that blows its budget returns the
+        // PARTIAL tree with truncated:true.
         // The outer Wait is the hang net for a single stuck UIA call; the
         // internal clock is what normally ends the walk with a partial
         // tree + truncated:true (plan 562 phase 1).
@@ -504,6 +859,26 @@ namespace Duya.Recorder
             int maxDepth,
             string[] controlTypes)
         {
+            EnumState st = new EnumState();
+            if (controlTypes != null)
+            {
+                for (int i = 0; i < controlTypes.Length; i++)
+                {
+                    if (!string.IsNullOrEmpty(controlTypes[i]))
+                    {
+                        st.ControlTypes.Add(controlTypes[i].Trim());
+                    }
+                }
+            }
+            st.Clock = Stopwatch.StartNew();
+            st.TotalMs = totalTimeoutMs;
+            st.MaxNodes = maxNodes;
+            st.MaxDepth = maxDepth;
+            // A minimized window reports its whole subtree offscreen —
+            // pruning descent there would return an empty tree and break
+            // plan 578's "a minimized tree is fully usable" contract.
+            st.PruneOffscreen = !IsIconic(hwnd);
+
             Func<string> work = delegate
             {
                 try
@@ -518,53 +893,95 @@ namespace Duya.Recorder
                         return "{\"elements\":[],\"truncated\":false,\"reason\":\"elevated\",\"count\":0}";
                     }
 
-                    AutomationElement root = AutomationElement.FromHandle(hwnd);
-                    if (root == null) { return null; }
-
-                    EnumState st = new EnumState();
-                    if (controlTypes != null)
+                    AutomationElement root = null;
+                    try { root = AutomationElement.FromHandle(hwnd); } catch
                     {
-                        for (int i = 0; i < controlTypes.Length; i++)
-                        {
-                            if (!string.IsNullOrEmpty(controlTypes[i]))
-                            {
-                                st.ControlTypes.Add(controlTypes[i].Trim());
-                            }
-                        }
+                        // Dead handle (window closed): FromHandle THROWS
+                        // ElementNotAvailableException instead of returning
+                        // null — report it honestly either way.
+                        return "{\"elements\":[],\"truncated\":false,\"reason\":\"no-window\",\"count\":0}";
                     }
-                    st.Clock = Stopwatch.StartNew();
-                    st.TotalMs = totalTimeoutMs;
-                    st.MaxNodes = maxNodes;
-                    st.MaxDepth = maxDepth;
+                    if (root == null)
+                    {
+                        return "{\"elements\":[],\"truncated\":false,\"reason\":\"no-window\",\"count\":0}";
+                    }
 
                     // The root itself is rarely interactive (Window), but a
                     // custom whitelist may include it — check it inline.
                     string rootJson;
-                    if (TryMakeNode(st, root, out rootJson)) { st.Add(rootJson, root); }
+                    if (TryMakeNode(st, root, out rootJson))
+                    {
+                        InvokeSlot rootSlot = new InvokeSlot();
+                        try
+                        {
+                            AutomationElement.AutomationElementInformation rc = root.Current;
+                            rootSlot.Name = rc.Name;
+                            rootSlot.ControlType = rc.ControlType != null ? rc.ControlType.ProgrammaticName : null;
+                            if (rootSlot.ControlType != null) { rootSlot.ControlType = rootSlot.ControlType.Replace("ControlType.", ""); }
+                            rootSlot.RuntimeId = root.GetRuntimeId();
+                        }
+                        catch { }
+                        st.Visited++;
+                        st.Add(rootJson, rootSlot);
+                        if (st.BudgetBlown) { st.Truncated = true; }
+                    }
 
-                    // Each child of the root walks in its own task with an
+                    // Root children in one cross-process call, then each
+                    // child subtree walked in its own shard with an
                     // independent time slice: one hung subtree cannot eat
                     // the whole budget. Abandoned shards keep running and
                     // are simply never merged — partial tree is the answer.
+                    // Each shard runs the plan 576 recursive ControlView
+                    // TreeWalker walk inside an active cache request: one
+                    // navigation call per node, every property read a
+                    // client-side cache hit, real tree depth on every
+                    // emitted node.
                     List<Task> shards = new List<Task>();
-                    AutomationElement child;
-                    try { child = st.Walker.GetFirstChild(root); } catch { child = null; }
-                    while (child != null)
+                    List<AutomationElement> shardRoots = new List<AutomationElement>();
+                    try
                     {
-                        AutomationElement sub = child;
+                        using (NewCacheRequest(TreeScope.Element).Activate())
+                        {
+                            AutomationElementCollection kids = root.FindAll(TreeScope.Children, Automation.ControlViewCondition);
+                            if (kids != null)
+                            {
+                                for (int i = 0; i < kids.Count; i++) { shardRoots.Add(kids[i]); }
+                            }
+                        }
+                    }
+                    catch (Exception shardRootsErr)
+                    {
+                        try { System.Console.Error.WriteLine("[uia-probe][walk] shard-roots-fetch-throw " + shardRootsErr.GetType().Name + ": " + shardRootsErr.Message); } catch { }
+                    }
+                    foreach (AutomationElement sub in shardRoots)
+                    {
                         shards.Add(Task.Run((Action)(delegate
                         {
-                            try { Walk(st, sub, 1); } catch { }
+                            try
+                            {
+                                using (NewCacheRequest(TreeScope.Element).Activate())
+                                {
+                                    WalkNodeRec shardTree = new WalkNodeRec();
+                                    shardTree.El = sub;
+                                    Queue<KeyValuePair<WalkNodeRec, int>> queue = new Queue<KeyValuePair<WalkNodeRec, int>>();
+                                    queue.Enqueue(new KeyValuePair<WalkNodeRec, int>(shardTree, 0));
+                                    CollectLevels(st, queue);
+                                    List<string> pendingTexts = new List<string>();
+                                    EmitDfs(st, shardTree, 0, pendingTexts);
+                                }
+                                try { System.Console.Error.WriteLine("[uia-probe][walk] shard-done visited=" + st.Visited + " nodes=" + st.NodeCount); } catch { }
+                            }
+                            catch (Exception shardErr)
+                            {
+                                try { System.Console.Error.WriteLine("[uia-probe][walk] shard-throw " + shardErr.GetType().Name + ": " + shardErr.Message); } catch { }
+                            }
                         })));
-                        try { child = st.Walker.GetNextSibling(child); } catch { break; }
                     }
                     // Wait each shard for its slice, clamped to the total
-                    // budget remaining. Cold-start UIA COM activation makes
-                    // the first calls slow — a fixed 50ms slice produced
-                    // truncated:true + count:0 on the real-machine smoke
-                    // (every shard timed out before its first node landed),
-                    // so the floor is 250ms; sibling shards run in parallel
-                    // and typically finish during the first wait.
+                    // budget remaining. Cold-start UIA COM activation (and
+                    // the target's own accessibility-engine spin-up) makes
+                    // the first calls slow — the caller raises both budgets
+                    // for a cold window, which widens the slice too.
                     foreach (Task shard in shards)
                     {
                         long remaining = st.TotalMs - st.Clock.ElapsedMilliseconds;
@@ -572,29 +989,17 @@ namespace Duya.Recorder
                         int slice = subtreeTimeoutMs < remaining ? subtreeTimeoutMs : (int)remaining;
                         if (!shard.Wait(slice)) { st.Truncated = true; }
                     }
-
-                    string elements = "[]";
-                    lock (st.Gate)
-                    {
-                        if (st.Nodes.Count > 0) { elements = "[" + string.Join(",", st.Nodes.ToArray()) + "]"; }
-                    }
-                    // Remember the live element references for the invoke
-                    // op (plan 564). Emission order == Nodes order == the
-                    // 1-based index the LLM-facing tree listing shows.
-                    List<AutomationElement> snapshot;
-                    lock (st.Gate) { snapshot = new List<AutomationElement>(st.Elements); }
-                    RememberElements(hwnd, snapshot);
-                    return "{\"elements\":" + elements
-                         + ",\"truncated\":" + (st.Truncated ? "true" : "false")
-                         + ",\"reason\":null"
-                         + ",\"count\":" + st.NodeCount + "}";
+                    return SerializeState(hwnd, st);
                 }
                 catch { return null; }
             };
             // Hang net above the internal clock: if a single UIA call is
-            // stuck past the internal budget the walk cannot bail anyway.
+            // stuck past the internal budget the walk cannot bail anyway —
+            // salvage whatever landed instead of dropping it.
             Task<string> task = Task.Run(work);
-            return task.Wait(totalTimeoutMs + 500) ? task.Result : null;
+            if (task.Wait(totalTimeoutMs + 500)) { return task.Result; }
+            st.Truncated = true;
+            return SerializeState(hwnd, st);
         }
 
         // ------------------------------------------------------------------
@@ -607,11 +1012,11 @@ namespace Duya.Recorder
         // ------------------------------------------------------------------
 
         private static readonly object CacheGate = new object();
-        private static Dictionary<IntPtr, List<AutomationElement>> ElementCache = new Dictionary<IntPtr, List<AutomationElement>>();
+        private static Dictionary<IntPtr, List<InvokeSlot>> ElementCache = new Dictionary<IntPtr, List<InvokeSlot>>();
 
-        private static void RememberElements(IntPtr hwnd, List<AutomationElement> elements)
+        private static void RememberElements(IntPtr hwnd, List<InvokeSlot> slots)
         {
-            if (elements == null || elements.Count == 0) { return; }
+            if (slots == null || slots.Count == 0) { return; }
             lock (CacheGate)
             {
                 // Tiny window-bounded cache: more than four tracked
@@ -619,42 +1024,97 @@ namespace Duya.Recorder
                 // eviction; windows are re-enumerated on demand anyway).
                 if (ElementCache.Count >= 4 && !ElementCache.ContainsKey(hwnd))
                 {
-                    ElementCache = new Dictionary<IntPtr, List<AutomationElement>>();
+                    ElementCache = new Dictionary<IntPtr, List<InvokeSlot>>();
                 }
-                ElementCache[hwnd] = elements;
+                ElementCache[hwnd] = slots;
             }
         }
 
         // Resolve a 1-based slot out of the window's cached tree and run
-        // the optional staleness guards. Returns "ok", "no-element"
-        // (nothing cached for the hwnd), "bad-index", or "stale-tree"
-        // (the COM element died, or name/controlType no longer match).
+        // the optional staleness guards, then re-hydrate the LIVE element.
+        // The cached walk stores RuntimeId + name/type snapshots (free
+        // client-side reads), so the guard check costs no COM at all; the
+        // live element is re-located once via a RuntimeId lookup so the
+        // structural patterns act on the real thing, not a stale RCW.
+        // Returns "ok", "no-element" (nothing cached for the hwnd),
+        // "bad-index", "no-window", or "stale-tree" (the element died, or
+        // name/controlType no longer match).
         private static string ResolveCached(IntPtr hwnd, int oneBasedIndex, string verifyName, string verifyType, out AutomationElement el)
         {
             el = null;
-            List<AutomationElement> list = null;
+            InvokeSlot slot = null;
             lock (CacheGate)
             {
+                List<InvokeSlot> list = null;
                 if (!ElementCache.TryGetValue(hwnd, out list) || list == null) { return "no-element"; }
                 if (oneBasedIndex < 1 || oneBasedIndex > list.Count) { return "bad-index"; }
-                el = list[oneBasedIndex - 1];
+                slot = list[oneBasedIndex - 1];
+            }
+            if (slot == null || slot.RuntimeId == null)
+            {
+                try { System.Console.Error.WriteLine("[uia-probe][resolve] stage=slot-rid-null slot=" + (slot == null ? "null" : (slot.Name ?? ""))); } catch { }
+                return "stale-tree";
+            }
+            // Snapshot guard: the slot must still be what the model saw
+            // when it read the tree listing. PS 5.1 binds an absent/null
+            // $vname to "" for the string parameter (plan 564 smoke), so
+            // the guard must treat empty as absent, not as a mismatch.
+            if (!string.IsNullOrEmpty(verifyName))
+            {
+                if (!string.Equals(slot.Name ?? "", verifyName, StringComparison.OrdinalIgnoreCase))
+                {
+                    try { System.Console.Error.WriteLine("[uia-probe][resolve] stage=snap-name slot=" + (slot.Name ?? "") + " want=" + verifyName); } catch { }
+                    return "stale-tree";
+                }
+            }
+            if (!string.IsNullOrEmpty(verifyType))
+            {
+                if (!string.Equals(slot.ControlType ?? "", verifyType, StringComparison.OrdinalIgnoreCase))
+                {
+                    try { System.Console.Error.WriteLine("[uia-probe][resolve] stage=snap-type slot=" + (slot.ControlType ?? "") + " want=" + verifyType); } catch { }
+                    return "stale-tree";
+                }
             }
             try
             {
-                AutomationElement.AutomationElementInformation c = el.Current;
-                if (verifyName != null)
+                AutomationElement root = AutomationElement.FromHandle(hwnd);
+                if (root == null) { return "no-window"; }
+                AutomationElement live = root.FindFirst(TreeScope.Subtree,
+                    new PropertyCondition(AutomationElement.RuntimeIdProperty, slot.RuntimeId));
+                if (live == null)
                 {
-                    if (!string.Equals(c.Name ?? "", verifyName, StringComparison.OrdinalIgnoreCase)) { return "stale-tree"; }
+                    try { System.Console.Error.WriteLine("[uia-probe][resolve] stage=refind-null ridLen=" + slot.RuntimeId.Length); } catch { }
+                    return "stale-tree";
                 }
-                if (verifyType != null)
+                // Live guard: the element may have changed since the
+                // snapshot even though the runtime id still resolves.
+                AutomationElement.AutomationElementInformation c = live.Current;
+                if (!string.IsNullOrEmpty(verifyName))
+                {
+                    if (!string.Equals(c.Name ?? "", verifyName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        try { System.Console.Error.WriteLine("[uia-probe][resolve] stage=live-name live=" + (c.Name ?? "") + " want=" + verifyName); } catch { }
+                        return "stale-tree";
+                    }
+                }
+                if (!string.IsNullOrEmpty(verifyType))
                 {
                     string have = c.ControlType != null ? c.ControlType.ProgrammaticName : null;
                     if (have != null) { have = have.Replace("ControlType.", ""); }
-                    if (!string.Equals(have ?? "", verifyType, StringComparison.OrdinalIgnoreCase)) { return "stale-tree"; }
+                    if (!string.Equals(have ?? "", verifyType, StringComparison.OrdinalIgnoreCase))
+                    {
+                        try { System.Console.Error.WriteLine("[uia-probe][resolve] stage=live-type live=" + (have ?? "") + " want=" + verifyType); } catch { }
+                        return "stale-tree";
+                    }
                 }
+                el = live;
                 return "ok";
             }
-            catch { return "stale-tree"; }
+            catch (Exception refErr)
+            {
+                try { System.Console.Error.WriteLine("[uia-probe][resolve] stage=refind-throw " + refErr.GetType().Name + ": " + refErr.Message); } catch { }
+                return "stale-tree";
+            }
         }
 
         private static object GetPattern(AutomationElement el, AutomationPattern pattern)
@@ -979,30 +1439,41 @@ try {
 
 [Console]::Out.WriteLine('{"ready":true}')
 
-# Default interactive ControlType whitelist (plan 562 phase 0) — mirrored
-# in packages/computer-use/src/recorder/uia-probe-protocol.ts
-# (DEFAULT_INTERACTIVE_CONTROL_TYPES). An enumerate request may override
-# it with a `controlTypes` array.
+# Default interactive ControlType whitelist (plan 562 phase 0, widened by
+# plan 576 with the ZCode content/row vocabulary: DataItem/TreeItem rows,
+# Document page content, SplitButton, Spinner) — mirrored in
+# packages/computer-use/src/recorder/uia-probe-protocol.ts
+# (DEFAULT_INTERACTIVE_CONTROL_TYPES). Static Text is deliberately NOT
+# whitelisted: Text nodes are absorbed as `label` on the next emitted
+# element and never occupy emission slots. An enumerate request may
+# override the list with a `controlTypes` array.
 $defaultInteractiveTypes = @(
-    'Button', 'Edit', 'Hyperlink', 'CheckBox', 'RadioButton', 'ComboBox',
-    'TabItem', 'MenuItem', 'Slider', 'ListItem', 'ToggleSwitch')
+    'Button', 'SplitButton', 'Edit', 'Hyperlink', 'CheckBox', 'RadioButton',
+    'ComboBox', 'TabItem', 'MenuItem', 'Slider', 'ListItem', 'ToggleSwitch',
+    'DataItem', 'TreeItem', 'Document', 'Spinner')
 
-# enumerate budgets (plan 562 phase 1): per-root-child subtree slice
-# (clamped to the total budget remaining; 250ms floor covers cold-start
-# UIA COM activation), total walk budget, node cap. The main side races
-# at 3s.
+# enumerate budgets (plan 562 phase 1; plan 576 semantics): per-root-child
+# subtree slice (clamped to the total budget remaining; 250ms floor covers
+# cold-start UIA COM activation), total walk budget, VISITED-node cap
+# (raised from the 562-era 500: the 2026-09-29 cached-walk fix made the
+# per-node cost one navigation call, and 1500 matches the model-facing
+# render cap so the walk does not become the binding constraint before
+# time does). The main side races at 3s.
 $enumerateSubtreeMs = 250
 $enumerateTotalMs = 1500
-$enumerateMaxNodes = 500
+$enumerateMaxNodes = 1500
 $enumerateMaxDepth = 40
 
 while ($true) {
-    $line = [Console]::In.ReadLine()
+    if ($null -ne $stdinReader) { $line = $stdinReader.ReadLine() } else { $line = [Console]::In.ReadLine() }
     if ($null -eq $line) { break }
     $trimmed = $line.Trim()
     if ($trimmed.Length -eq 0) { continue }
 
-    try { $req = $trimmed | ConvertFrom-Json } catch { continue }
+    try { $req = $trimmed | ConvertFrom-Json } catch {
+        try { [System.Console]::Error.WriteLine('[uia-probe][loop] parse-fail: ' + $_.Exception.Message) } catch { }
+        continue
+    }
 
     $id = 0
     $op = ''
@@ -1042,6 +1513,19 @@ while ($true) {
         $maxDepth = $enumerateMaxDepth
         try { if ($req.PSObject.Properties['maxNodes']) { $maxNodes = [int]$req.maxNodes } } catch { }
         try { if ($req.PSObject.Properties['maxDepth']) { $maxDepth = [int]$req.maxDepth } } catch { }
+        # Per-request walk budget (cold/warm tiers): the main side raises
+        # totalMs for a window's first scan so the walk can absorb UIA COM
+        # activation + the target's own accessibility-engine startup. The
+        # subtree slice scales with it (half the total, floored at the
+        # warm 250ms) so a cold FindFirst has room to come back at all.
+        $totalMs = $enumerateTotalMs
+        try {
+            if ($req.PSObject.Properties['totalMs']) {
+                $totalMs = [Math]::Max(500, [Math]::Min(20000, [int]$req.totalMs))
+            }
+        } catch { }
+        $subtreeMs = $enumerateSubtreeMs
+        if ($totalMs -gt $enumerateTotalMs) { $subtreeMs = [Math]::Max($subtreeMs, [int]($totalMs / 2)) }
         $types = $defaultInteractiveTypes
         try {
             if ($req.PSObject.Properties['controlTypes'] -and $null -ne $req.controlTypes) {
@@ -1050,7 +1534,7 @@ while ($true) {
             }
         } catch { }
         $json = [Duya.Recorder.UiaProbe]::EnumerateWindow(
-            $hwnd, $enumerateTotalMs, $enumerateSubtreeMs, $maxNodes, $maxDepth, [string[]]$types)
+            $hwnd, $totalMs, $subtreeMs, $maxNodes, $maxDepth, [string[]]$types)
         if ($null -eq $json) {
             [Console]::Out.WriteLine('{"id":' + $id + ',"ok":false,"reason":"timeout"}')
         } else {
@@ -1101,8 +1585,12 @@ while ($true) {
             [Console]::Out.WriteLine('{"id":' + $id + ',"ok":false,"reason":"timeout"}')
         }
         elseif ($json.StartsWith('OK:')) {
-            # Splice the post-action object into the flat response line.
-            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":true,' + $json.Substring(3) + '}')
+            # Splice the post-action object into the flat response line —
+            # strip "OK:" AND the inner object's braces, exactly like the
+            # enumerate path, or the line reads "ok":true,{...} (invalid
+            # JSON the client would drop on the floor).
+            $frag = $json.Substring(4, $json.Length - 5)
+            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":true,' + $frag + '}')
         }
         else {
             # "ERR:<code>" — the code is a stable ASCII identifier.
@@ -1148,7 +1636,10 @@ while ($true) {
             [Console]::Out.WriteLine('{"id":' + $id + ',"ok":false,"reason":"timeout"}')
         }
         elseif ($json.StartsWith('OK:')) {
-            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":true,' + $json.Substring(3) + '}')
+            # Strip "OK:" and the inner object's braces (same splice rule
+            # as invoke — Substring(3) alone left invalid JSON on the wire).
+            $frag = $json.Substring(4, $json.Length - 5)
+            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":true,' + $frag + '}')
         }
         else {
             $code = $json.Substring(4)

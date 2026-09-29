@@ -313,6 +313,14 @@ export interface UiaTreeElement {
   rect?: Bbox;
   /** True when UIA flags a password field — `value` is never included. */
   isPassword?: boolean;
+  /** Static-Text run absorbed from the neighborhood (plan 576). */
+  label?: string;
+  /** REAL UIA tree depth relative to the window root (plan 576). */
+  depth?: number;
+  /** TogglePattern state, only when the element carries the pattern. */
+  checked?: boolean;
+  /** Non-empty HelpText only (plan 576). */
+  description?: string;
 }
 
 /** `tree` action result. `source: 'unavailable'` = no structural channel. */

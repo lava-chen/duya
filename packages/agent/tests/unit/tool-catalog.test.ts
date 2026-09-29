@@ -75,7 +75,7 @@ function wireDispatcher(
 }
 
 function fakeContext(): ToolUseContext {
-  return { toolUseId: 'turn-1' } as unknown as ToolUseContext;
+  return { toolUseId: 'turn-1', options: {} } as unknown as ToolUseContext;
 }
 
 describe('tool_catalog', () => {
@@ -225,6 +225,33 @@ describe('tool_catalog', () => {
 });
 
 describe('tool_invoke', () => {
+  it('keeps per-turn catalog and dispatcher wiring on shallow tool-context copies', async () => {
+    const harness = makeHarness();
+    const context = fakeContext();
+    harness.catalogTool.setContextView(context, harness.view);
+    wireDispatcher(harness, context);
+
+    const catalogContext = { ...context, toolUseId: 'catalog-read' };
+    const detail = await harness.catalogTool.execute(
+      { tool_id: harness.toolId },
+      undefined,
+      catalogContext,
+    );
+    expect(detail.error).toBeFalsy();
+    expect(recordToolCatalogSchemaRead(harness.view, detail.metadata)).toBe(true);
+
+    harness.view.currentRound += 1;
+    const invokeContext = { ...context, toolUseId: 'deferred-invoke' };
+    const invoked = await harness.invokeTool.execute(
+      { tool_id: harness.toolId, arguments: { value: 'ok' } },
+      undefined,
+      invokeContext,
+    );
+    expect(invoked.error).toBeFalsy();
+    expect(invoked.result).toContain('executed ok');
+    expect(harness.executor.execute).toHaveBeenCalledOnce();
+  });
+
   it('requires the schema read for this exact revision and validates before execution', async () => {
     const harness = makeHarness();
     const context = fakeContext();

@@ -9,8 +9,9 @@ import type { ContextSnapshot } from '@duya/ai';
  * tool-result estimates) so the renderer can show the context ring growing in
  * real time, instead of waiting for the turn-end DB persist.
  *
- * Keyed by session id. Values are overwritten in place; a session is cleared
- * when its stream ends.
+ * Keyed by session id. Live values are cleared when a stream ends; the last
+ * composition is retained separately so the context-ring hover remains useful
+ * between turns.
  */
 export interface LiveContextUsage {
   usedTokens: number;
@@ -81,6 +82,8 @@ export interface LiveContextUsage {
     system: Array<{ label: string; tokens: number }>;
     conversation: Array<{ label: string; tokens: number }>;
     injectedContext: Array<{ label: string; tokens: number }>;
+    /** Loaded skill payloads (label `skill:<name>` per skill) — plan 579. */
+    skills: Array<{ label: string; tokens: number }>;
     toolDefinitions: Array<{ label: string; tokens: number }>;
     toolResults: Array<{ label: string; tokens: number }>;
     attachments: Array<{ label: string; tokens: number }>;
@@ -90,21 +93,49 @@ export interface LiveContextUsage {
   updatedAt: number;
 }
 
+export interface ContextCompositionSnapshot {
+  composition: NonNullable<LiveContextUsage['composition']>;
+  usedTokens: number;
+  contextWindow?: number;
+  updatedAt: number;
+}
+
 interface ContextUsageState {
   liveBySession: Record<string, LiveContextUsage | undefined>;
+  /** Last composition remains available after streaming ends for ring hover. */
+  compositionBySession: Record<string, ContextCompositionSnapshot | undefined>;
   setLive: (sessionId: string, data: Omit<LiveContextUsage, 'updatedAt'>) => void;
   clearLive: (sessionId: string) => void;
 }
 
 export const useContextUsageStore = create<ContextUsageState>((set) => ({
   liveBySession: {},
+  compositionBySession: {},
   setLive: (sessionId, data) =>
-    set((s) => ({
-      liveBySession: {
-        ...s.liveBySession,
-        [sessionId]: { ...data, updatedAt: Date.now() },
-      },
-    })),
+    set((s) => {
+      const updatedAt = Date.now();
+      const live = { ...data, updatedAt };
+      const compositionBySession = { ...s.compositionBySession };
+      if (data.composition) {
+        compositionBySession[sessionId] = {
+          composition: data.composition,
+          usedTokens:
+            data.contextSnapshot?.accounting.projectedNextInputTokens ??
+            data.currentEstimatedInputTokens ??
+            data.usedTokens,
+          contextWindow: data.contextWindow,
+          updatedAt,
+        };
+      } else if (!s.liveBySession[sessionId]) {
+        // A new stream from an older worker must not show the prior turn's
+        // composition as if it described the new request.
+        delete compositionBySession[sessionId];
+      }
+      return {
+        liveBySession: { ...s.liveBySession, [sessionId]: live },
+        compositionBySession,
+      };
+    }),
   clearLive: (sessionId) =>
     set((s) => {
       if (!s.liveBySession[sessionId]) return s;

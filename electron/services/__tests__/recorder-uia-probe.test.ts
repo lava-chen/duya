@@ -20,7 +20,12 @@ vi.mock('../../logging/logger', () => {
   };
 });
 
-import { UiaProbeClient, resolveUiaProbeScriptPath, UIA_FG_TIMEOUT_MS } from '../recorder/uia-probe';
+import {
+  UiaProbeClient,
+  resolveUiaProbeScriptPath,
+  UIA_ENUMERATE_COLD_TOTAL_MS,
+  UIA_FG_TIMEOUT_MS,
+} from '../recorder/uia-probe';
 
 class FakeProcess extends EventEmitter {
   pid = 1000 + Math.floor(Math.random() * 1000);
@@ -351,11 +356,18 @@ describe('UiaProbeClient', () => {
     procs[0]!.pushStdout('{"ready":true}\n');
     await started;
 
+    // Non-empty tree: full TTL applies (empty trees get the short TTL —
+    // see the plan 576 test below).
     const first = client.enumerateCached(300, 'Chrome');
     await vi.advanceTimersByTimeAsync(10);
     const req1 = JSON.parse(procs[0]!.stdin.writes[0]!.trim()) as { id: number };
     procs[0]!.pushStdout(
-      JSON.stringify({ id: req1.id, ok: true, elements: [], truncated: false }) + '\n',
+      JSON.stringify({
+        id: req1.id,
+        ok: true,
+        elements: [{ name: '地址栏', controlType: 'Edit' }],
+        truncated: false,
+      }) + '\n',
     );
     await first;
 
@@ -365,9 +377,67 @@ describe('UiaProbeClient', () => {
     expect(procs[0]!.stdin.writes).toHaveLength(2); // TTL elapsed → re-scan
     const req2 = JSON.parse(procs[0]!.stdin.writes[1]!.trim()) as { id: number };
     procs[0]!.pushStdout(
-      JSON.stringify({ id: req2.id, ok: true, elements: [], truncated: false }) + '\n',
+      JSON.stringify({
+        id: req2.id,
+        ok: true,
+        elements: [{ name: '地址栏', controlType: 'Edit' }],
+        truncated: false,
+      }) + '\n',
     );
     await second;
+    await client.dispose();
+  });
+
+  it('enumerateCached caches an EMPTY tree only briefly (plan 576 overlay fix)', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    // Full TTL far in the future — the empty entry must expire well before.
+    const client = makeClient(spawnFn, { enumerateCacheTtlMs: 5 * 60_000 });
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    // First scan returns an empty tree (minimized window: every element
+    // reports offscreen).
+    const first = client.enumerateCached(400, '文件资源管理器');
+    await vi.advanceTimersByTimeAsync(10);
+    const req1 = JSON.parse(procs[0]!.stdin.writes[0]!.trim()) as { id: number };
+    procs[0]!.pushStdout(
+      JSON.stringify({ id: req1.id, ok: true, elements: [], truncated: false }) + '\n',
+    );
+    const firstResult = await first;
+    expect(firstResult?.elements).toHaveLength(0);
+
+    // Within the empty-TTL window the cache still serves (focus flapping
+    // must not hammer the walk).
+    await vi.advanceTimersByTimeAsync(1_000);
+    const second = await client.enumerateCached(400, '文件资源管理器');
+    expect(procs[0]!.stdin.writes).toHaveLength(1);
+    expect(second).toBe(firstResult);
+
+    // After 2s the empty entry expires even though the full TTL has not —
+    // the restored window must get a real re-scan instead of a pinned
+    // zero-frames overlay.
+    await vi.advanceTimersByTimeAsync(1_500);
+    const third = client.enumerateCached(400, '文件资源管理器');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(procs[0]!.stdin.writes).toHaveLength(2);
+    const req3 = JSON.parse(procs[0]!.stdin.writes[1]!.trim()) as { id: number };
+    procs[0]!.pushStdout(
+      JSON.stringify({
+        id: req3.id,
+        ok: true,
+        elements: [{ name: '最小化', controlType: 'Button' }],
+        truncated: false,
+      }) + '\n',
+    );
+    const thirdResult = await third;
+    expect(thirdResult?.elements).toHaveLength(1);
+
+    // A NON-empty entry keeps the full TTL.
+    await vi.advanceTimersByTimeAsync(30_000);
+    const fourth = await client.enumerateCached(400, '文件资源管理器');
+    expect(procs[0]!.stdin.writes).toHaveLength(2);
+    expect(fourth).toBe(thirdResult);
     await client.dispose();
   });
 
@@ -580,6 +650,121 @@ describe('UiaProbeClient', () => {
     const refresh = await readRequest(procs);
     respond(procs, refresh, { ok: false, reason: 'timeout' });
     await expect(invokePromise).resolves.toEqual({ ok: false, reason: 'stale-tree' });
+    await client.dispose();
+  });
+
+  // --- cold/warm enumerate tiers (plan 562 perf fix) --------------------
+
+  it('enumerateCached runs the cold tier on the first scan, warm on re-scans', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn, { enumerateTimeoutMs: 200 });
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    // Cache miss → cold tier: raised walk budget on the wire + raised race.
+    const first = client.enumerateCached(100, 'Chrome');
+    await vi.advanceTimersByTimeAsync(10);
+    const req1 = JSON.parse(procs[0]!.stdin.writes[0]!.trim()) as {
+      id: number;
+      totalMs?: number;
+    };
+    expect(req1.totalMs).toBe(UIA_ENUMERATE_COLD_TOTAL_MS);
+    procs[0]!.pushStdout(
+      JSON.stringify({ id: req1.id, ok: true, elements: [{ name: 'A', controlType: 'Button' }], truncated: false }) + '\n',
+    );
+    await first;
+
+    // Cache hit → no request at all.
+    await client.enumerateCached(100, 'Chrome');
+    expect(procs[0]!.stdin.writes).toHaveLength(1);
+
+    // Title change → warm re-scan: no totalMs override on the wire.
+    const third = client.enumerateCached(100, 'Chrome *');
+    await vi.advanceTimersByTimeAsync(10);
+    const req3 = JSON.parse(procs[0]!.stdin.writes[1]!.trim()) as {
+      id: number;
+      totalMs?: number;
+    };
+    expect(req3.totalMs).toBeUndefined();
+    procs[0]!.pushStdout(
+      JSON.stringify({ id: req3.id, ok: true, elements: [], truncated: false }) + '\n',
+    );
+    await third;
+    await client.dispose();
+  });
+
+  it('enumerate passes an explicit per-request walk budget through', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn);
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    const p = client.enumerate(197144, { totalMs: 8000 });
+    await vi.advanceTimersByTimeAsync(10);
+    const request = JSON.parse(procs[0]!.stdin.writes[0]!.trim()) as { id: number; totalMs?: number };
+    expect(request.totalMs).toBe(8000);
+    procs[0]!.pushStdout(
+      JSON.stringify({ id: request.id, ok: true, elements: [], truncated: false }) + '\n',
+    );
+    await p;
+    await client.dispose();
+  });
+
+  // --- per-target quarantine (plan 562 perf fix) ------------------------
+
+  it('quarantines a stalled window without recycling the probe', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn, {
+      enumerateTimeoutMs: 100,
+      targetQuarantineMs: 500,
+    });
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    // Three consecutive timeouts on hwnd 1 → that window is quarantined…
+    for (let i = 0; i < 3; i++) {
+      void client.enumerate(1);
+      await vi.advanceTimersByTimeAsync(150);
+    }
+    // …but the probe process stays UP (no recycle, no degrade).
+    expect(client.currentState).toBe('running');
+    expect(client.isDegraded).toBe(false);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+
+    // The quarantined window short-circuits with a stable reason.
+    const quarantined = await client.enumerate(1);
+    expect(quarantined).toEqual({
+      elements: [],
+      truncated: true,
+      reason: 'target-unresponsive',
+    });
+    expect(await client.invoke(1, { index: 1 })).toEqual({
+      ok: false,
+      reason: 'target-unresponsive',
+    });
+
+    // A different window is unaffected.
+    const other = client.enumerate(2);
+    await vi.advanceTimersByTimeAsync(10);
+    const req = JSON.parse(procs[0]!.stdin.writes.at(-1)!.trim()) as { id: number };
+    procs[0]!.pushStdout(
+      JSON.stringify({ id: req.id, ok: true, elements: [{ name: 'B', controlType: 'Button' }], truncated: false }) + '\n',
+    );
+    await expect(other).resolves.toMatchObject({ elements: [{ name: 'B' }] });
+
+    // Past the quarantine window the window is walked again.
+    await vi.advanceTimersByTimeAsync(600);
+    const retry = client.enumerate(1);
+    await vi.advanceTimersByTimeAsync(10);
+    const reqRetry = JSON.parse(procs[0]!.stdin.writes.at(-1)!.trim()) as { id: number };
+    procs[0]!.pushStdout(
+      JSON.stringify({ id: reqRetry.id, ok: true, elements: [{ name: 'C', controlType: 'Button' }], truncated: false }) + '\n',
+    );
+    await expect(retry).resolves.toMatchObject({ elements: [{ name: 'C' }] });
+    expect(spawnFn).toHaveBeenCalledTimes(1); // never respawned
     await client.dispose();
   });
 });

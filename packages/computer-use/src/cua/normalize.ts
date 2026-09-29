@@ -7,12 +7,11 @@
  * has NOT ported (associateTitleUIElements, flattenIntoSelectableAncestor,
  * …) are tracked in plan 575 §1 and intentionally absent.
  *
- * The trio operates on tree-shaped nodes. The duya probe currently
- * emits a flat interactive-only list (plan 562), so `adaptEnumerated`
- * is the production entry: it derives kind/pressable/hasMenu/actions
- * from the ControlType and drops nothing (the probe whitelist already
- * filtered non-interactive nodes). The tree path is kept for the
- * moment the probe emits hierarchy (plan 575 §3 Phase 2 note).
+ * The trio operates on tree-shaped nodes. Since plan 576 the probe walk
+ * emits static Text as an absorbed `label` on the next element and
+ * carries real tree `depth`, so `adaptEnumerated` (the production entry)
+ * no longer loses neighboring labels: the tree pipeline below remains
+ * for the tree-shaped inputs and future container emission.
  */
 
 import { uiaControlTypeToKind } from './kindMap.js';
@@ -205,6 +204,16 @@ export interface EnumeratedProbeElement {
   focused?: boolean;
   /** Emitted only when the element carries SelectionItemPattern. */
   selected?: boolean;
+  /** Emitted only when the element carries TogglePattern (plan 576). */
+  checked?: boolean;
+  /** Non-empty HelpText only (plan 576). */
+  description?: string;
+  /** REAL UIA tree depth relative to the window root (plan 576). */
+  depth?: number;
+  /** Static-Text run absorbed from the neighborhood (plan 576). */
+  label?: string;
+  /** Only when true — the walk does not descend into offscreen subtrees. */
+  offscreen?: boolean;
 }
 
 /** Semantic actions derived from a ControlType (aligned AX vocabulary). */
@@ -228,6 +237,8 @@ export function deriveActions(controlType: string | null | undefined): string[] 
       return ['AXSetValue'];
     case 'Slider':
       return ['AXSetValue', 'AXIncrement', 'AXDecrement'];
+    case 'Spinner':
+      return ['AXIncrement', 'AXDecrement'];
     case 'Menu':
       return ['AXShowMenu', 'AXPress'];
     default:
@@ -258,6 +269,11 @@ export function adaptEnumerated(
   pressable: boolean;
   hasMenu: boolean;
   selected?: boolean;
+  checked?: boolean;
+  description?: string;
+  depth?: number;
+  label?: string;
+  offscreen?: boolean;
   ownerPid: number | null;
   probeIndex: number;
   hwnd: number;
@@ -276,6 +292,13 @@ export function adaptEnumerated(
     enabled: el.enabled ?? true,
     focused: el.focused ?? false,
     selected: el.selected ?? false,
+    // plan 576 tree-contract fields: pass through as-is (absent = the
+    // probe did not report them — e.g. an older probe binary).
+    ...(el.checked !== undefined ? { checked: el.checked } : {}),
+    ...(el.description ? { description: el.description } : {}),
+    ...(el.depth !== undefined ? { depth: el.depth } : {}),
+    ...(el.label ? { label: el.label } : {}),
+    ...(el.offscreen === true ? { offscreen: true } : {}),
     editable:
       el.controlType === 'Edit' ||
       el.controlType === 'Document' ||

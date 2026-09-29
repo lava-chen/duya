@@ -239,9 +239,9 @@ export function buildCatalogSkillEntry(skill: PromptSkill): CatalogSkillEntry {
 export const SKILLS_CATALOG_FIXED_OVERHEAD_CHARS =
     '<available_skills>\n</available_skills>'.length
   + '## Available skills\n\n'.length
-  + 'Load a skill by reading its <location> with the read tool; the `Skill` tool is a fallback that loads the same instructions by name. This index is not a substitute for the selected skill\'s SKILL.md.'.length
+  + 'Trigger rules: if the user names a skill (with `$Name`, `/Name`, or plain text) or the task clearly matches a skill\'s `<description>` above, use that skill before taking task actions, and state in one short line which skill you are loading. Load it by invoking the `Skill` tool with the skill\'s exact `<name>` — it returns the full SKILL.md instructions with absolute paths for the skill\'s scripts, references, and assets. Only if the `Skill` tool errors or is unavailable, read the `<location>` file with the read tool as a fallback. This index is not a substitute for the selected skill\'s SKILL.md. Do not carry a loaded skill across turns unless it is named or matched again.'.length
   + '\nThis catalog is the complete, authoritative list of installed skills for this session. When the user asks what skills you have, what you can do, or which skill fits a task, answer directly from it — do not run CLI commands (such as `duya skill list`), enumerate skill directories, or query any other source to re-discover skills. CLI skill commands exist for the user\'s terminal-side management (install / enable / disable), not for your inventory answers.'.length
-  + '\n\n### Skill roots\n\nWhen the catalog drops a `<location>` to fit the token budget, look it up here. Reading the path with the read tool is preferred over the `Skill` tool (fallback).\n\n| Skill | Source |\n|---|---|\n'.length
+  + '\n\n### Skill roots\n\nWhen the catalog drops a `<location>` to fit the token budget, look the skill\'s `<name>` up here and invoke the `Skill` tool with it.\n\n| Skill | Source |\n|---|---|\n'.length
 
 /**
  * Build the load-diagnostics comment line the mapper emits into

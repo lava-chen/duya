@@ -168,7 +168,8 @@ export function createBuiltinRegistry(
 
   // Phase 5: Other tools
   // Skill must be on the initial surface (Skills catalog instructs model to
-  // call it); keep its compact schema on the eager surface.
+  // call it). Keep its real, compact schema on the eager surface; previous
+  // hint stubs exposed an empty schema and caused Skill calls to fail validation.
   registry.register(skillTool, skillTool, { exposure: 'eager' });
   registry.register(briefTool, briefTool, { exposure: 'deferred' });
   registry.register(sessionSearchTool.toTool(), sessionSearchTool, { exposure: 'deferred' });

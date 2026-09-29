@@ -147,6 +147,8 @@ export function registerBotTools(registry: ToolRegistry): void {
     exposure: 'deferred',
     inputSchemaSummary: 'Search, open, inspect, and interact with webpages using a persistent browser session.',
   });
+  // Keep Skill on the eager surface so its real input schema is available;
+  // the previous hint stub exposed an empty schema and failed validation.
   registry.register(skillTool, skillTool, { exposure: 'eager' });
 
   const visionTool = new VisionTool();

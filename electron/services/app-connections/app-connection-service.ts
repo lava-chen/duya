@@ -34,6 +34,7 @@ import {
   overrideClientId,
   setClientSecret,
 } from './providers/registry.js';
+import { disconnectMcpSession } from './connector-service.js';
 import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
 import type {
   AppConnection,
@@ -455,6 +456,10 @@ export class AppConnectionService {
 
     this.vault.remove(connectionId);
     this.vault.removeMcpOAuth(connectionId);
+    // Also clear any cached Remote MCP session so a future reconnect
+    // starts fresh instead of reusing a stale session (bug fix).
+    void disconnectMcpSession(connectionId);
+
     if (conn.provider === WECOM_PROVIDER || conn.provider === QQ_MAIL_PROVIDER) {
       this.vault.removeOAuthClient(conn.provider);
     }

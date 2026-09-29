@@ -155,7 +155,7 @@ describe('CuaService — get_app_state', () => {
     expect(text).toContain('app: pid=11 "DUYA"');
     expect(text).toContain('window: "DUYA" window_id=100 bounds=[0,0,800,600]');
     expect(text).toContain('[0] button OK (pressable) actions=[AXPress]');
-    expect(text).toContain('[1] textfield Search actions=[AXSetValue]');
+    expect(text).toContain('[1] textfield Search (editable) actions=[AXSetValue]');
     expect(observation.snapshotMode).toBe('full');
     expect(observation.stateId).toContain('cua-11-100-');
     expect(observation.elements[1]?.editable).toBe(true);
@@ -854,5 +854,107 @@ describe('CuaService — minimized windows (plan 578)', () => {
       service.leftClick({ appRef: { pid: 999 }, target: { type: 'element', index: 0 } }, 's'),
     ).rejects.toMatchObject({ code: 'ELEMENT_UNAVAILABLE' });
     expect(fake.invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe('CuaService — stale-tree identity recovery (plan 578 smoke)', () => {
+  let fake: FakeProbe;
+  let service: CuaService;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fake = makeFakeProbe();
+    fake.listWindows.mockResolvedValue(WINDOWS);
+    fake.listApps.mockResolvedValue([{ pid: 11, exe: 'C:\\app\\duya.exe', title: 'DUYA', active: true }]);
+    service = makeService(fake, makeNut());
+  });
+
+  it('retries at the re-identified slot and refreshes the session tree', async () => {
+    const TREE_A = [
+      { name: 'OK', controlType: 'Button', rect: { x: 10, y: 10, w: 80, h: 24 } },
+      { name: 'Search', controlType: 'Edit', rect: { x: 10, y: 40, w: 200, h: 24 }, value: '' },
+    ];
+    // The app re-ordered its tree: OK moved from slot 1 to slot 3.
+    const TREE_B = [
+      { name: 'Search', controlType: 'Edit', rect: { x: 10, y: 40, w: 200, h: 24 }, value: '' },
+      { name: 'New', controlType: 'Button', rect: { x: 10, y: 70, w: 80, h: 24 } },
+      { name: 'OK', controlType: 'Button', rect: { x: 10, y: 10, w: 80, h: 24 } },
+    ];
+    fake.enumerate
+      .mockResolvedValueOnce({ elements: TREE_A, truncated: false, reason: null })
+      .mockResolvedValue({ elements: TREE_B, truncated: false, reason: null });
+    fake.invoke
+      .mockResolvedValue({ ok: true, element: { name: 'OK', controlType: 'Button' } })
+      .mockResolvedValueOnce({ ok: false, reason: 'stale-tree' });
+
+    await service.getAppState({ pid: 11 }, 's');
+    const receipt = await service.leftClick(
+      { appRef: { pid: 11 }, target: { type: 'element', index: 0 } },
+      's',
+    );
+    expect(receipt.dispatchStatus).toBe('accepted');
+    expect(fake.invoke).toHaveBeenCalledTimes(2);
+    // The retry addresses OK's NEW slot (0-based 2 → probe slot 3).
+    expect(fake.invoke.mock.calls[1]?.[1]).toMatchObject({ index: 3 });
+
+    // The session tree was refreshed with the clicked generation: the
+    // model can act on the NEW numbering without re-observing.
+    await service.leftClick({ appRef: { pid: 11 }, target: { type: 'element', index: 2 } }, 's');
+    expect(fake.invoke.mock.calls[2]?.[1]).toMatchObject({ index: 3 });
+  });
+
+  it('surfaces stale-tree when the element cannot be re-identified', async () => {
+    const TREE_A = [
+      { name: 'OK', controlType: 'Button', rect: { x: 10, y: 10, w: 80, h: 24 } },
+      { name: 'Search', controlType: 'Edit', rect: { x: 10, y: 40, w: 200, h: 24 }, value: '' },
+    ];
+    const TREE_B = [{ name: 'New', controlType: 'Button', rect: { x: 10, y: 70, w: 80, h: 24 } }];
+    fake.enumerate
+      .mockResolvedValueOnce({ elements: TREE_A, truncated: false, reason: null })
+      .mockResolvedValue({ elements: TREE_B, truncated: false, reason: null });
+    fake.invoke.mockResolvedValue({ ok: false, reason: 'stale-tree' });
+
+    await service.getAppState({ pid: 11 }, 's');
+    await expect(
+      service.leftClick({ appRef: { pid: 11 }, target: { type: 'element', index: 1 } }, 's'),
+    ).rejects.toMatchObject({
+      code: 'ELEMENT_UNAVAILABLE',
+      message: expect.stringContaining('re-identified'),
+    });
+    // One dispatch attempt only — no blind retry without a re-identified slot.
+    expect(fake.invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('picks the candidate closest to the original slot when several match', async () => {
+    const TREE_A = [{ name: 'OK', controlType: 'Button', rect: { x: 10, y: 10, w: 80, h: 24 } }];
+    const TREE_B = [
+      { name: 'Search', controlType: 'Edit', rect: { x: 10, y: 40, w: 200, h: 24 }, value: '' },
+      { name: 'OK', controlType: 'Button', rect: { x: 10, y: 10, w: 80, h: 24 } },
+      { name: 'X', controlType: 'Button', rect: { x: 10, y: 70, w: 80, h: 24 } },
+      { name: 'OK', controlType: 'Button', rect: { x: 10, y: 100, w: 80, h: 24 } },
+    ];
+    fake.enumerate
+      .mockResolvedValueOnce({ elements: TREE_A, truncated: false, reason: null })
+      .mockResolvedValue({ elements: TREE_B, truncated: false, reason: null });
+    fake.invoke
+      .mockResolvedValue({ ok: true, element: { name: 'OK', controlType: 'Button' } })
+      .mockResolvedValueOnce({ ok: false, reason: 'stale-tree' });
+
+    await service.getAppState({ pid: 11 }, 's');
+    await service.leftClick({ appRef: { pid: 11 }, target: { type: 'element', index: 0 } }, 's');
+    // OK exists at 0-based 1 and 3; the original slot was 0-based 0 →
+    // the closest candidate (1, probe slot 2) wins.
+    expect(fake.invoke.mock.calls[1]?.[1]).toMatchObject({ index: 2 });
+  });
+
+  it('does not attempt recovery for non-stale failures', async () => {
+    fake.enumerate.mockResolvedValue({ elements: TREE, truncated: false, reason: null });
+    fake.invoke.mockResolvedValue({ ok: false, reason: 'no-pattern' });
+    await service.getAppState({ pid: 11 }, 's');
+    await expect(
+      service.leftClick({ appRef: { pid: 11 }, target: { type: 'element', index: 0 } }, 's'),
+    ).rejects.toMatchObject({ code: 'ACTION_UNAVAILABLE' });
+    expect(fake.invoke).toHaveBeenCalledTimes(1);
+    expect(fake.enumerate).toHaveBeenCalledTimes(1);
   });
 });

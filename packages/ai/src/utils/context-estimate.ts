@@ -52,9 +52,9 @@ export interface ContextEstimateMessage {
 }
 
 export interface ContextEstimateOptions {
-  /** Estimated system prompt + tool definitions. Added ONLY when no usage
-   *  anchor exists — once anchored, the API's input_tokens already includes
-   *  the prefix, and adding it again would double-count. */
+  /** Estimated system prompt + tool definitions. Added to the headline only
+   *  when no usage anchor exists — with an anchor, these values may label
+   *  diagnostic composition parts but are never charged a second time. */
   systemPrefixTokens?: number;
   /** Estimated tool-definition surface (name/description/input_schema JSON).
    *  Plan 577 §4: the unanchored fallback historically priced only the
@@ -393,17 +393,22 @@ export interface ContextComposition {
   system: ContextPart[];
   conversation: ContextPart[];
   /** Harness injections: system-reminder / turn metadata / workspace status /
-   *  memory recall / skill instructions — the only bucket that keeps
-   *  attributing correctly as Plugin/Skill/MCP weight grows. */
+   *  memory recall / skill suggestions — the only bucket that keeps
+   *  attributing correctly as Plugin/Skill/MCP weight grows. Skill bodies
+   *  live in {@link skills}, not here. */
   injectedContext: ContextPart[];
+  /** Loaded skill payloads, one part per skill (label `skill:<name>`):
+   *  `Skill` tool results, `<skill>` mention injections, and Read results
+   *  of a SKILL.md file. Codex parity — the transcript names the skill, so
+   *  must the accounting. */
+  skills: ContextPart[];
   toolDefinitions: ContextPart[];
   toolResults: ContextPart[];
   attachments: ContextPart[];
   memory: ContextPart[];
   providerOverhead: ContextPart[];
-  /** The provider-observed anchor volume (anchored path only) — a fact that
-   *  cannot be bucketed locally without double-guessing the provider.
-   *  composition buckets + this = estimate.usedTokens. */
+  /** Anchored provider volume not covered by local category estimates.
+   *  The headline remains provider-observed; category rows are estimates. */
   unattributedObservedTokens: number;
 }
 
@@ -421,6 +426,9 @@ const HARNESS_INJECTION_PREFIXES = [
   '<runtime_context>',
   '<turn-metadata>',
   '<workspace-status>',
+  // Skill-suggestion envelopes are per-turn harness hints (skillMatch.ts) —
+  // skill BODIES (the `<skill>` envelope) go to the skills bucket instead.
+  '<skill-suggestion>',
 ] as const;
 
 function isHarnessInjectedText(text: string): boolean {
@@ -438,10 +446,19 @@ export interface ContextCompositionOptions extends ContextEstimateOptions {
   toolDefinitionParts?: ContextPart[];
   /** Memory-recall payload priced outside the message timeline. */
   memoryParts?: ContextPart[];
+  /** Plan 579: transient `<skill>` mention-injection bodies (agent
+   *  projection rail) — priced outside the message timeline like
+   *  {@link memoryParts}, labelled `skill:<name>` per skill. */
+  skillParts?: ContextPart[];
 }
 
 /** Content-block classification for one message's blocks. */
-type BlockBucket = 'conversation' | 'injectedContext' | 'toolResults' | 'attachments';
+type BlockBucket =
+  | 'conversation'
+  | 'injectedContext'
+  | 'toolResults'
+  | 'attachments'
+  | 'skills';
 
 function classifyBlockBucket(block: unknown): BlockBucket {
   if (!block || typeof block !== 'object') return 'conversation';
@@ -459,6 +476,139 @@ function classifyBlockBucket(block: unknown): BlockBucket {
     default:
       return 'conversation';
   }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Skill attribution (plan 579)
+// ──────────────────────────────────────────────────────────────────────────
+
+/** Tools whose call loads a skill body. `read`/aliases cover the Read-first
+ *  fallback path (and any model that reads SKILL.md directly); `skill` is
+ *  the dedicated loader. */
+const SKILL_LOADER_TOOL_NAMES = new Set(['skill', 'read', 'readfile', 'read_file']);
+
+/** The per-call skill label for a tool_use block, or null when the call
+ *  does not load a skill. Label format: `skill:<name>` — `<name>` is the
+ *  catalog name (Skill tool input) or the skill's directory name (the
+ *  segment before SKILL.md, mirroring codex's "Read SKILL.md (demo skill)"
+ *  annotation). */
+function skillCallLabel(block: {
+  name?: unknown;
+  input?: unknown;
+}): string | null {
+  const name = typeof block.name === 'string' ? block.name.toLowerCase() : '';
+  if (!SKILL_LOADER_TOOL_NAMES.has(name)) return null;
+  const input = block.input as Record<string, unknown> | undefined;
+  if (name === 'skill') {
+    const skill = typeof input?.skill === 'string' ? input.skill.trim().replace(/^\//, '') : '';
+    return skill ? `skill:${skill}` : 'skill';
+  }
+  const rawPath =
+    typeof input?.file_path === 'string'
+      ? input.file_path
+      : typeof input?.path === 'string'
+        ? input.path
+        : typeof input?.filePath === 'string'
+          ? input.filePath
+          : '';
+  const segments = rawPath.split(/[\\/]/).filter(Boolean);
+  const base = segments[segments.length - 1];
+  if (!base || base.toLowerCase() !== 'skill.md') return null;
+  const dir = segments[segments.length - 2];
+  return dir ? `skill:${dir}` : 'skill';
+}
+
+/** The mention-injection envelope the agent wraps skill bodies in
+ *  (`<skill>\n<name>…</name>…`). `<skill-suggestion>` blocks are hints, not
+ *  loaded bodies, and stay in injectedContext — `startsWith('<skill>')`
+ *  already excludes them. */
+function isSkillInjectionText(text: string): boolean {
+  return text.trimStart().startsWith('<skill>');
+}
+
+function skillInjectionLabel(text: string): string {
+  const match = text.slice(0, 200).match(/<name>([^<]{1,64})<\/name>/);
+  return match ? `skill:${match[1]}` : 'skill';
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Connector / MCP tool-result attribution (tool catalog wire format)
+// ──────────────────────────────────────────────────────────────────────────
+
+/** Source kinds of the stable tool-ID wire format (`createToolId` in
+ *  @duya/agent catalog-identity: `kind:encodedSourceId:encodedToolName`). */
+type InvokeSourceKind = 'builtin' | 'mcp' | 'plugin' | 'connector';
+
+export interface ParsedInvokeToolId {
+  kind: InvokeSourceKind;
+  /** Decoded source identity — provider id for connectors, server name for
+   *  MCP, `pluginId:connection` for plugin-owned MCP servers. */
+  source: string;
+  /** Decoded per-tool name (may repeat the source as a prefix). */
+  toolName: string;
+}
+
+/** Parse the stable tool ID produced by the tool catalog. The IDs travel
+ *  inside `tool_invoke` inputs, so the composition (and the renderer) can
+ *  attribute a call to its connector / MCP source from the transcript
+ *  alone — no catalog access required. Returns null for foreign formats. */
+export function parseInvokeToolId(raw: string): ParsedInvokeToolId | null {
+  const segments = raw.split(':');
+  if (segments.length < 3) return null;
+  const kind = segments[0];
+  if (kind !== 'builtin' && kind !== 'mcp' && kind !== 'plugin' && kind !== 'connector') {
+    return null;
+  }
+  const decode = (value: string): string => {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  };
+  return {
+    kind,
+    source: decode(segments[1]),
+    toolName: decode(segments.slice(2).join(':')),
+  };
+}
+
+/**
+ * Label for a tool_use block whose RESULT should be attributed to its
+ * connector / MCP source (label format `connector:<id>` / `mcp:<id>` /
+ * `plugin:<id>`), or null when the result stays in the generic toolResults
+ * pool (builtin tools).
+ *
+ * Channels, in priority order:
+ * 1. `tool_invoke` — the stable tool ID in the input is authoritative.
+ * 2. Eager MCP tools — provider-visible `mcp_<server>_<tool>` names. The
+ *    sanitizer collapses the internal `__` separators, so the split is a
+ *    heuristic: the FIRST token is the server (tool names are typically
+ *    multi-word, server names single-token).
+ * 3. Remote-MCP connector aliases — `remote_<provider>_<tool>`.
+ */
+function invokeResultLabel(block: { name?: unknown; input?: unknown }): string | null {
+  const name = typeof block.name === 'string' ? block.name : '';
+  if (!name) return null;
+  if (name === 'tool_invoke') {
+    const input = block.input as Record<string, unknown> | undefined;
+    const toolId = typeof input?.tool_id === 'string' ? input.tool_id.trim() : '';
+    const parsed = toolId ? parseInvokeToolId(toolId) : null;
+    // Builtin deferred tools invoked through tool_invoke stay generic —
+    // they are the harness's own tools, not connector/MCP weight.
+    return parsed && parsed.kind !== 'builtin' ? `${parsed.kind}:${parsed.source}` : null;
+  }
+  if (name.startsWith('mcp_')) {
+    const rest = name.slice('mcp_'.length);
+    const firstSep = rest.indexOf('_');
+    const server = firstSep !== -1 ? rest.slice(0, firstSep) : rest;
+    return server ? `mcp:${server}` : 'mcp';
+  }
+  if (name.startsWith('remote_')) {
+    const provider = name.slice('remote_'.length).split('_')[0];
+    if (provider) return `connector:${provider}`;
+  }
+  return null;
 }
 
 /**
@@ -484,57 +634,120 @@ export function computeContextComposition(
 ): { estimate: ContextEstimate; composition: ContextComposition } {
   const estimate = computeContextEstimate(messages, options);
 
-  const buckets: Record<BlockBucket, ContextPart[]> = {
+  const anchorBuckets: Record<BlockBucket, ContextPart[]> = {
     conversation: [],
     injectedContext: [],
     toolResults: [],
     attachments: [],
+    skills: [],
   };
+  const trailingBuckets: Record<BlockBucket, ContextPart[]> = {
+    conversation: [],
+    injectedContext: [],
+    toolResults: [],
+    attachments: [],
+    skills: [],
+  };
+  let currentMessageIndex = -1;
   const push = (bucket: BlockBucket, label: string, tokens: number): void => {
     if (tokens <= 0) return;
-    buckets[bucket].push({ label, tokens });
+    const isTrailing =
+      estimate.anchored &&
+      estimate.anchorIndex !== null &&
+      currentMessageIndex > estimate.anchorIndex;
+    (isTrailing ? trailingBuckets : anchorBuckets)[bucket].push({ label, tokens });
   };
 
-  // Scan range: anchored → only the trailing slice is attributable locally;
-  // unanchored (and the "?"-post-compaction case, where there is nothing to
-  // attribute) → the whole history.
-  const scanStart =
-    estimate.anchored && estimate.anchorIndex !== null ? estimate.anchorIndex + 1 : 0;
+  // Track the last compaction boundary so old, discarded history is never
+  // assigned to the current prompt's composition.
+  let boundaryIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.isCompactBoundary) {
+      boundaryIndex = i;
+      break;
+    }
+  }
+
+  // tool_use id → skill label, so the paired tool_result (usually the next
+  // user message) lands in the skills bucket with the skill's name.
+  const skillUseByCallId = new Map<string, string>();
+  // tool_use id → connector/MCP source label, so invoke results attribute to
+  // `connector:<id>` / `mcp:<id>` / `plugin:<id>` parts instead of the
+  // generic toolResults pool (the "MCP 工具结果暂未独立" plan 577 gap).
+  const toolSourceLabelByCallId = new Map<string, string>();
 
   if (estimate.usedTokens !== null) {
-    for (let i = scanStart; i < messages.length; i++) {
+    for (let i = estimate.anchored ? boundaryIndex + 1 : 0; i < messages.length; i++) {
+      currentMessageIndex = i;
       const msg = messages[i];
       if (typeof msg.content === 'string') {
         push(
-          isHarnessInjectedText(msg.content) ? 'injectedContext' : 'conversation',
-          `${msg.role}#${i}`,
+          isSkillInjectionText(msg.content)
+            ? 'skills'
+            : isHarnessInjectedText(msg.content)
+              ? 'injectedContext'
+              : 'conversation',
+          isSkillInjectionText(msg.content)
+            ? skillInjectionLabel(msg.content)
+            : `${msg.role}#${i}`,
           estimateMessageTokens(msg),
         );
         continue;
       }
       for (let j = 0; j < msg.content.length; j++) {
         const block = msg.content[j];
-        const bucket = classifyBlockBucket(block);
         // Per-block cost through the SAME block-aware estimator the timeline
         // scan uses (single-block array) — tool_result recursion, image
         // floor, thinking and tool_use input are priced identically, so the
         // bucket sum equals the trailing estimate exactly.
         const tokens = estimateMessageTokens({ role: msg.role, content: [block] });
-        push(bucket, `${msg.role}#${i}.${j}`, tokens);
+        const b = block as {
+          type?: string;
+          id?: unknown;
+          name?: unknown;
+          input?: unknown;
+          tool_use_id?: unknown;
+          text?: unknown;
+        };
+        if (b?.type === 'tool_use') {
+          const label = skillCallLabel(b as { name?: unknown; input?: unknown });
+          if (label && typeof b.id === 'string') skillUseByCallId.set(b.id, label);
+          const sourceLabel = invokeResultLabel(b as { name?: unknown; input?: unknown });
+          if (sourceLabel && typeof b.id === 'string') {
+            toolSourceLabelByCallId.set(b.id, sourceLabel);
+          }
+          push('conversation', `${msg.role}#${i}.${j}`, tokens);
+          continue;
+        }
+        if (b?.type === 'tool_result') {
+          const id = typeof b.tool_use_id === 'string' ? b.tool_use_id : undefined;
+          const label = id ? skillUseByCallId.get(id) : undefined;
+          if (label) {
+            push('skills', label, tokens);
+          } else {
+            const sourceLabel = id ? toolSourceLabelByCallId.get(id) : undefined;
+            push('toolResults', sourceLabel ?? `${msg.role}#${i}.${j}`, tokens);
+          }
+          continue;
+        }
+        if (
+          b?.type === 'text' &&
+          typeof b.text === 'string' &&
+          isSkillInjectionText(b.text)
+        ) {
+          push('skills', skillInjectionLabel(b.text), tokens);
+          continue;
+        }
+        push(classifyBlockBucket(block), `${msg.role}#${i}.${j}`, tokens);
       }
     }
   }
 
   const systemPrefix = options.systemPrefixTokens || 0;
-  // Anchored: the system prompt / tool schemas / memory payloads are INSIDE
-  // the provider-observed anchor volume — re-emitting them as labelled parts
-  // would double-count and break the
-  //   all-buckets + unattributedObservedTokens === estimate.usedTokens
-  // invariant. Overhead parts are labelled only on the unanchored path,
-  // where nothing authoritative has priced them. The tool-definitions
-  // fallback reads the estimate's charged value (0 on the anchored path)
-  // rather than the raw option, so an anchored turn never shows the bucket.
-  const overheadLabelled = !estimate.anchored;
+  // These values only contribute to the headline on an unanchored estimate.
+  // On the anchored path they are local category estimates inside the measured
+  // provider total, so they help explain it without being added a second time.
+  const overheadLabelled = estimate.usedTokens !== null;
   const systemParts: ContextPart[] = !overheadLabelled
     ? []
     : options.systemParts && options.systemParts.length > 0
@@ -547,26 +760,64 @@ export function computeContextComposition(
     ? []
     : options.toolDefinitionParts && options.toolDefinitionParts.length > 0
       ? options.toolDefinitionParts.filter((p) => p.tokens > 0)
-      : (estimate.toolDefinitionsTokens || 0) > 0
-        ? [{ label: 'tool definitions', tokens: estimate.toolDefinitionsTokens }]
+      : (options.toolDefinitionsTokens || 0) > 0
+        ? [{ label: 'tool definitions', tokens: options.toolDefinitionsTokens || 0 }]
         : [];
 
   const memoryParts: ContextPart[] = !overheadLabelled
-    ? []
-    : (options.memoryParts ?? []).filter((p) => p.tokens > 0);
+      ? []
+      : (options.memoryParts ?? []).filter((p) => p.tokens > 0);
+
+  // Plan 579: injected skill bodies ride the transient projection rail, not
+  // the message timeline — same outside-the-timeline pricing as memory.
+  const skillOptionParts: ContextPart[] = !overheadLabelled
+      ? []
+      : (options.skillParts ?? []).filter((p) => p.tokens > 0);
+
+  const anchorParts = [
+    ...Object.values(anchorBuckets),
+    systemParts,
+    toolDefinitionParts,
+    memoryParts,
+    skillOptionParts,
+  ];  const anchorClassifiedTokens = anchorParts.reduce(
+    (total, parts) => total + contextPartsTotal(parts),
+    0,
+  );
+  // A rough local tokenizer can exceed the provider's observed anchor. Scale
+  // its category shares down in that case; never let estimates inflate the
+  // measured headline. Any under-estimated remainder stays explicitly
+  // unattributed instead of being assigned to a guessed category.
+  const anchorScale =
+    estimate.anchored && anchorClassifiedTokens > estimate.anchorTokens
+      ? estimate.anchorTokens / anchorClassifiedTokens
+      : 1;
+  const scaleParts = (parts: ContextPart[]): ContextPart[] =>
+    parts.map((part) => ({ ...part, tokens: Math.floor(part.tokens * anchorScale) }));
+  const combineBuckets = (bucket: BlockBucket): ContextPart[] => [
+    ...scaleParts(anchorBuckets[bucket]),
+    ...trailingBuckets[bucket],
+  ];
+  const attributedAnchorTokens = anchorParts.reduce(
+    (total, parts) => total + contextPartsTotal(scaleParts(parts)),
+    0,
+  );
 
   return {
     estimate,
     composition: {
-      system: systemParts,
-      conversation: buckets.conversation,
-      injectedContext: buckets.injectedContext,
-      toolDefinitions: toolDefinitionParts,
-      toolResults: buckets.toolResults,
-      attachments: buckets.attachments,
-      memory: memoryParts,
+      system: scaleParts(systemParts),
+      conversation: combineBuckets('conversation'),
+      injectedContext: combineBuckets('injectedContext'),
+      skills: [...combineBuckets('skills'), ...scaleParts(skillOptionParts)],
+      toolDefinitions: scaleParts(toolDefinitionParts),
+      toolResults: combineBuckets('toolResults'),
+      attachments: combineBuckets('attachments'),
+      memory: scaleParts(memoryParts),
       providerOverhead: [],
-      unattributedObservedTokens: estimate.anchored ? estimate.anchorTokens : 0,
+      unattributedObservedTokens: estimate.anchored
+        ? Math.max(0, estimate.anchorTokens - attributedAnchorTokens)
+        : 0,
     },
   };
 }

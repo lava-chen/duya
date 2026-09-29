@@ -19,7 +19,7 @@
 import type { UiaTreeElement, UiaTreeResult } from '../backend/types.js';
 
 /** Defaults for the text rendering. */
-const DEFAULT_MAX_ELEMENTS = 120;
+const DEFAULT_MAX_ELEMENTS = 300;
 const DEFAULT_MAX_VALUE_LEN = 40;
 const DEFAULT_MAX_NAME_LEN = 80;
 
@@ -33,12 +33,18 @@ function quote(s: string, max: number): string {
 
 /**
  * Render one element as a single line. Values come after the name so a
- * long value cannot push the identity fields off small screens.
+ * long value cannot push the identity fields off small screens. plan
+ * 576: unlabeled fields fall back to their absorbed static-text label,
+ * and rows indent by the probe's real tree depth.
  */
 export function formatTreeElement(el: UiaTreeElement): string {
   const role = el.role ?? 'Unknown';
   const name = el.name ? ` ${quote(el.name, DEFAULT_MAX_NAME_LEN)}` : '';
-  let line = `[${el.index}]${role}${name}`;
+  const label =
+    !el.name && (el as { label?: string }).label
+      ? ` ${quote((el as { label?: string }).label as string, DEFAULT_MAX_NAME_LEN)}`
+      : '';
+  let line = `[${el.index}]${role}${name}${label}`;
   if (el.isPassword === true) {
     line += ' *pw';
   } else if (el.value !== undefined && el.value.length > 0) {
@@ -66,6 +72,13 @@ export function emptyTreeHint(result: UiaTreeResult): string {
     return (
       'Window is elevated (UIPI): its UIA tree is unreadable from a ' +
       'non-elevated process — use the vision loop instead.'
+    );
+  }
+  if (result.reason === 'target-unresponsive') {
+    return (
+      'Window repeatedly ignored the structural walk (UIA provider busy ' +
+      'or hung) and is quarantined for a minute — use the vision loop ' +
+      '(capture somMode=true + click) instead of retrying tree.'
     );
   }
   return (

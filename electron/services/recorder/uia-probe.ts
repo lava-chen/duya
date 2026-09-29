@@ -13,8 +13,12 @@
  *   readUrl(hwnd) → address-bar value for supported browsers (zh/en
  *                    name match + first-Edit fallback, §4.3).
  *   enumerate(hwnd) → full interactive-element tree with real rects
- *                    (plan 562): 1500ms walk budget inside the probe,
- *                    3s main-side race; partial trees survive budget
+ *                    (plan 562): warm walks run 1500ms inside the probe
+ *                    with a 3s main-side race; a window's FIRST scan
+ *                    (cache miss) runs the cold tier instead — 8s walk
+ *                    / 10s race — because the first UIA touch of a
+ *                    Chromium/Electron window also spins up its
+ *                    accessibility engine. Partial trees survive budget
  *                    hits (truncated:true). (hwnd,title) caching keeps
  *                    an unchanged application from being re-scanned.
  *   invoke(hwnd, i)  → structural act op (plan 564): resolve a 1-based
@@ -26,10 +30,16 @@
  *                    error is surfaced — the caller re-runs tree when it
  *                    still fails.
  *
- * Failure policy (design §5 + plan 562 D5):
- *   - per-request timeout   → consecutive counter; LIMIT consecutive
+ * Failure policy (design §5 + plan 562 D5, perf-fixed):
+ *   - global-op timeout     → consecutive counter; LIMIT consecutive
  *                             stalls ⇒ the probe is considered hung:
  *                             recycled once, degraded if it happens again
+ *   - target-op timeout     → per-hwnd counter; LIMIT stalls on the SAME
+ *                             hwnd ⇒ that window is QUARANTINED for
+ *                             UIA_TARGET_QUARANTINE_MS (reason
+ *                             'target-unresponsive') instead of recycling
+ *                             the process — one heavy target must not
+ *                             take the shared probe down
  *   - probe crash           → the daemon restarts once; a second crash
  *                             ⇒ degraded (element-less recording)
  *   - idle 5min             ⇒ process recycled; next use respawns
@@ -70,8 +80,30 @@ export const UIA_READURL_TIMEOUT_MS = 800;
 export const UIA_FG_TIMEOUT_MS = 1200;
 /** Main-side race for enumerate(): the probe's internal walk budget is 1500ms. */
 export const UIA_ENUMERATE_TIMEOUT_MS = 3_000;
+/**
+ * Cold-window enumerate tier: the FIRST scan of a hwnd must absorb UIA
+ * COM activation plus the target's own accessibility-engine spin-up
+ * (Chromium/Electron start their renderer a11y lazily — 1-3s alone), so
+ * the walk budget and the main-side race both widen for cache-miss
+ * scans. Warm re-scans keep the tight budgets above.
+ */
+export const UIA_ENUMERATE_COLD_TOTAL_MS = 8_000;
+export const UIA_ENUMERATE_COLD_TIMEOUT_MS = 10_000;
 /** Main-side race for invoke(): the probe's internal budget is 1000ms. */
 export const UIA_INVOKE_TIMEOUT_MS = 2_500;
+
+/**
+ * Quarantine for a window whose structural requests keep timing out
+ * (plan 562 perf fix): after LIMIT consecutive timeouts on the SAME
+ * hwnd the client stops walking that window for the cooldown window
+ * and answers with reason 'target-unresponsive' instead. One heavy or
+ * wedged target must not recycle the probe (and take every other
+ * application's structural channel down with it) — the process-wide
+ * recycle stays reserved for global-op stalls and crash budgets.
+ */
+export const UIA_TARGET_QUARANTINE_MS = 60_000;
+/** Stable reason string for a quarantined target (mirrors the renderer hint). */
+export const UIA_TARGET_UNRESPONSIVE = 'target-unresponsive';
 
 /**
  * Stable invoke failure reasons the probe can return (mirrored in
@@ -155,6 +187,15 @@ interface EnumerateCacheEntry {
   title: string;
   result: UiaEnumerateResult;
   at: number;
+  /**
+   * Per-entry TTL override. Empty trees get a SHORT one: an empty scan is
+   * exactly the transient case — a minimized / mid-restore window reports
+   * every element offscreen (and a minimized subtree is walked without
+   * offscreen pruning since plan 576, but restore races still exist) —
+   * and caching that emptiness for the full TTL pinned the recorder
+   * overlay to "no frames" after the window came back (2026-09-29 bug).
+   */
+  ttlMs?: number;
 }
 
 export interface UiaProbeClientOptions {
@@ -163,12 +204,18 @@ export interface UiaProbeClientOptions {
   readUrlTimeoutMs?: number;
   fgTimeoutMs?: number;
   enumerateTimeoutMs?: number;
+  /** Cold-window walk budget sent to the probe (first scan of a hwnd). */
+  enumerateColdTotalMs?: number;
+  /** Cold-window main-side race (first scan of a hwnd). */
+  enumerateColdTimeoutMs?: number;
   invokeTimeoutMs?: number;
   readyTimeoutMs?: number;
   idleRecycleMs?: number;
   consecutiveTimeoutLimit?: number;
   /** Degraded auto-retry window (plan 562 D5). */
   degradedRetryMs?: number;
+  /** Per-target quarantine cooldown after consecutive same-hwnd stalls. */
+  targetQuarantineMs?: number;
   /** Enumerate cache TTL (ms); an older entry is re-scanned. */
   enumerateCacheTtlMs?: number;
   /** Test hook: forwarded to the daemon spawnFn. */
@@ -191,10 +238,15 @@ export function resolveUiaProbeScriptPath(): string {
 interface PendingRequest {
   resolve: (response: UiaProbeResponse | null) => void;
   timer: NodeJS.Timeout;
+  /** Stall-accounting key ('global', or `h:<hwnd>` for target ops). */
+  stallKey?: string;
 }
 
 /** Cache TTL default (plan 562 D5): re-scan after 5min even if unchanged. */
 const ENUMERATE_CACHE_TTL_MS = 5 * 60_000;
+
+/** TTL for cached EMPTY trees — see EnumerateCacheEntry.ttlMs. */
+const ENUMERATE_EMPTY_CACHE_TTL_MS = 2_000;
 
 export class UiaProbeClient {
   private daemon: ComputerUseDaemon | null = null;
@@ -205,6 +257,10 @@ export class UiaProbeClient {
   private readyWaiters: Array<() => void> = [];
   private recycledOnce = false;
   private consecutiveTimeouts = 0;
+  /** Consecutive timeouts per target hwnd (`h:<hwnd>` keys; see request()). */
+  private stallsByTarget = new Map<number, number>();
+  /** hwnd → quarantine start (0 never). A quarantined target is skipped. */
+  private quarantinedAt = new Map<number, number>();
   private lastActivityAt = 0;
   private idleTimer: NodeJS.Timeout | null = null;
   /** When the client entered the degraded state (0 = never). */
@@ -216,11 +272,14 @@ export class UiaProbeClient {
     readUrlTimeoutMs: number;
     fgTimeoutMs: number;
     enumerateTimeoutMs: number;
+    enumerateColdTotalMs: number;
+    enumerateColdTimeoutMs: number;
     invokeTimeoutMs: number;
     readyTimeoutMs: number;
     idleRecycleMs: number;
     consecutiveTimeoutLimit: number;
     degradedRetryMs: number;
+    targetQuarantineMs: number;
     enumerateCacheTtlMs: number;
     spawnFn?: UiaProbeClientOptions['spawnFn'];
   };
@@ -232,11 +291,14 @@ export class UiaProbeClient {
       readUrlTimeoutMs: opts.readUrlTimeoutMs ?? UIA_READURL_TIMEOUT_MS,
       fgTimeoutMs: opts.fgTimeoutMs ?? UIA_FG_TIMEOUT_MS,
       enumerateTimeoutMs: opts.enumerateTimeoutMs ?? UIA_ENUMERATE_TIMEOUT_MS,
+      enumerateColdTotalMs: opts.enumerateColdTotalMs ?? UIA_ENUMERATE_COLD_TOTAL_MS,
+      enumerateColdTimeoutMs: opts.enumerateColdTimeoutMs ?? UIA_ENUMERATE_COLD_TIMEOUT_MS,
       invokeTimeoutMs: opts.invokeTimeoutMs ?? UIA_INVOKE_TIMEOUT_MS,
       readyTimeoutMs: opts.readyTimeoutMs ?? READY_TIMEOUT_MS,
       idleRecycleMs: opts.idleRecycleMs ?? IDLE_RECYCLE_MS,
       consecutiveTimeoutLimit: opts.consecutiveTimeoutLimit ?? CONSECUTIVE_TIMEOUT_LIMIT,
       degradedRetryMs: opts.degradedRetryMs ?? DEGRADED_RETRY_MS,
+      targetQuarantineMs: opts.targetQuarantineMs ?? UIA_TARGET_QUARANTINE_MS,
       enumerateCacheTtlMs: opts.enumerateCacheTtlMs ?? ENUMERATE_CACHE_TTL_MS,
       spawnFn: opts.spawnFn,
     };
@@ -294,7 +356,11 @@ export class UiaProbeClient {
 
   /** Read the address-bar value of a browser window. Never throws. */
   async readUrl(hwnd: number): Promise<string | null> {
-    const response = await this.request((id) => ({ id, op: 'readUrl', hwnd }), this.opts.readUrlTimeoutMs);
+    const response = await this.request(
+      (id) => ({ id, op: 'readUrl', hwnd }),
+      this.opts.readUrlTimeoutMs,
+      { stallKey: `h:${hwnd}` },
+    );
     if (response === null || response.kind !== 'response' || !response.ok) {
       return null;
     }
@@ -324,9 +390,21 @@ export class UiaProbeClient {
    * Enumerate the interactive-element tree of a window with real
    * BoundingRectangles (plan 562 Phase 1). Never throws: null = the
    * probe could not answer (timeout/degraded), an empty result with
-   * reason 'elevated' = UIPI skip, truncated:true = partial tree kept.
+   * reason 'elevated' = UIPI skip, reason 'target-unresponsive' = the
+   * window is quarantined after consecutive stalls, truncated:true =
+   * partial tree kept.
+   *
+   * `opts.totalMs` overrides the probe-side walk budget for THIS
+   * request (the cold tier in enumerateCached uses it); `opts.raceMs`
+   * widens the main-side race to match.
    */
-  async enumerate(hwnd: number, opts: { maxNodes?: number; maxDepth?: number } = {}): Promise<UiaEnumerateResult | null> {
+  async enumerate(
+    hwnd: number,
+    opts: { maxNodes?: number; maxDepth?: number; totalMs?: number; raceMs?: number } = {},
+  ): Promise<UiaEnumerateResult | null> {
+    if (this.isQuarantined(hwnd)) {
+      return { elements: [], truncated: true, reason: UIA_TARGET_UNRESPONSIVE };
+    }
     const response = await this.request(
       (id) => ({
         id,
@@ -334,8 +412,10 @@ export class UiaProbeClient {
         hwnd,
         ...(opts.maxNodes !== undefined ? { maxNodes: opts.maxNodes } : {}),
         ...(opts.maxDepth !== undefined ? { maxDepth: opts.maxDepth } : {}),
+        ...(opts.totalMs !== undefined ? { totalMs: opts.totalMs } : {}),
       }),
-      this.opts.enumerateTimeoutMs,
+      opts.raceMs ?? this.opts.enumerateTimeoutMs,
+      { stallKey: `h:${hwnd}` },
     );
     if (response === null || response.kind !== 'response' || !response.ok) {
       return null;
@@ -355,6 +435,12 @@ export class UiaProbeClient {
    * `ttlMs` overrides the client-level cache TTL for this call (plan
    * 564: the SOM capture path uses a short TTL so clicking targets are
    * real coordinates that are never very stale).
+   *
+   * Budget tiers: a cache MISS for a hwnd we have never scanned runs
+   * the cold tier (raised walk budget + race) — the first UIA touch of
+   * a Chromium/Electron window also spins its accessibility engine up,
+   * which alone can outlast the warm budget. Re-scans of known
+   * windows (title change / TTL expiry) stay warm.
    */
   async enumerateCached(
     hwnd: number,
@@ -363,16 +449,32 @@ export class UiaProbeClient {
   ): Promise<UiaEnumerateResult | null> {
     const ttl = opts.ttlMs ?? this.opts.enumerateCacheTtlMs;
     const cached = this.enumerateCache.get(hwnd);
-    const fresh = cached && Date.now() - cached.at < ttl;
+    const fresh = cached && Date.now() - cached.at < (cached.ttlMs ?? ttl);
     if (cached && fresh && cached.title === title && title.length > 0) {
       return cached.result;
     }
-    const result = await this.enumerate(hwnd, opts);
+    const cold = !cached;
+    const result = await this.enumerate(
+      hwnd,
+      cold
+        ? {
+            ...(opts.maxNodes !== undefined ? { maxNodes: opts.maxNodes } : {}),
+            ...(opts.maxDepth !== undefined ? { maxDepth: opts.maxDepth } : {}),
+            totalMs: this.opts.enumerateColdTotalMs,
+            raceMs: this.opts.enumerateColdTimeoutMs,
+          }
+        : opts,
+    );
     if (result === null) {
       // Keep any previous entry: a failed scan must not flush a good tree.
       return null;
     }
-    this.enumerateCache.set(hwnd, { title, result, at: Date.now() });
+    this.enumerateCache.set(
+      hwnd,
+      result.elements.length === 0
+        ? { title, result, at: Date.now(), ttlMs: ENUMERATE_EMPTY_CACHE_TTL_MS }
+        : { title, result, at: Date.now() },
+    );
     if (this.enumerateCache.size > 16) {
       // Bounded: drop the oldest entry (insertion-ordered Map).
       const oldest = this.enumerateCache.keys().next();
@@ -402,6 +504,9 @@ export class UiaProbeClient {
     hwnd: number,
     opts: { index: number; method?: UiaInvokeMethod; value?: string; name?: string; controlType?: string },
   ): Promise<UiaInvokeOutcome | null> {
+    if (this.isQuarantined(hwnd)) {
+      return { ok: false, reason: UIA_TARGET_UNRESPONSIVE };
+    }
     const attempt = (): Promise<UiaProbeResponse | null> =>
       this.request(
         (id) => ({
@@ -415,6 +520,7 @@ export class UiaProbeClient {
           ...(opts.controlType !== undefined ? { controlType: opts.controlType } : {}),
         }),
         this.opts.invokeTimeoutMs,
+        { stallKey: `h:${hwnd}` },
       );
 
     const response = await attempt();
@@ -501,6 +607,9 @@ export class UiaProbeClient {
     hwnd: number,
     opts: { index: number; text: string; name?: string; controlType?: string },
   ): Promise<{ ok: boolean; reason?: string; pattern?: string | null; element?: unknown } | null> {
+    if (this.isQuarantined(hwnd)) {
+      return { ok: false, reason: UIA_TARGET_UNRESPONSIVE };
+    }
     const attempt = (): Promise<UiaProbeResponse | null> =>
       this.request(
         (id) => ({
@@ -513,6 +622,7 @@ export class UiaProbeClient {
           ...(opts.controlType !== undefined ? { controlType: opts.controlType } : {}),
         }),
         this.opts.invokeTimeoutMs,
+        { stallKey: `h:${hwnd}` },
       );
 
     const response = await attempt();
@@ -547,6 +657,8 @@ export class UiaProbeClient {
     }
     this.failAllPending('disposed');
     this.enumerateCache.clear();
+    this.stallsByTarget.clear();
+    this.quarantinedAt.clear();
     await this.stopDaemon();
     this.state = 'idle';
   }
@@ -630,15 +742,83 @@ export class UiaProbeClient {
     }
     this.pending.delete(parsed.id);
     clearTimeout(pending.timer);
-    this.consecutiveTimeouts = 0;
+    this.clearStall(pending.stallKey);
     this.lastActivityAt = Date.now();
     pending.resolve(parsed);
+  }
+
+  /** True while the hwnd sits in its post-stall quarantine window. */
+  private isQuarantined(hwnd: number): boolean {
+    const at = this.quarantinedAt.get(hwnd);
+    if (at === undefined) {
+      return false;
+    }
+    if (Date.now() - at >= this.opts.targetQuarantineMs) {
+      this.quarantinedAt.delete(hwnd);
+      return false;
+    }
+    return true;
+  }
+
+  private clearStall(key?: string): void {
+    if (key === undefined) {
+      return;
+    }
+    if (key === 'global') {
+      this.consecutiveTimeouts = 0;
+      return;
+    }
+    const hwnd = Number(key.slice(2));
+    if (Number.isFinite(hwnd)) {
+      this.stallsByTarget.delete(hwnd);
+    }
+  }
+
+  /** Account one timed-out request under its stall key (plan 562 perf fix). */
+  private async accountStall(key: string | undefined): Promise<void> {
+    if (key === undefined || key === 'global') {
+      // No hwnd on the wire: a hung op wedges the shared dispatcher, so
+      // the process-wide recycle policy applies as before.
+      this.consecutiveTimeouts += 1;
+      logger.debug(
+        'uia probe request timed out',
+        { consecutive: this.consecutiveTimeouts },
+        LogComponent.ComputerUse,
+      );
+      if (this.consecutiveTimeouts >= this.opts.consecutiveTimeoutLimit) {
+        await this.recycleOnStall();
+      }
+      return;
+    }
+    const hwnd = Number(key.slice(2));
+    if (!Number.isFinite(hwnd)) {
+      return;
+    }
+    const count = (this.stallsByTarget.get(hwnd) ?? 0) + 1;
+    this.stallsByTarget.set(hwnd, count);
+    logger.debug(
+      'uia probe target request timed out',
+      { hwnd, consecutive: count },
+      LogComponent.ComputerUse,
+    );
+    if (count >= this.opts.consecutiveTimeoutLimit) {
+      // Quarantine the TARGET, not the process: one heavy or wedged
+      // window must not recycle the probe and take every other
+      // application's structural channel down with it.
+      this.stallsByTarget.delete(hwnd);
+      this.quarantinedAt.set(hwnd, Date.now());
+      logger.warn(
+        'uia probe target quarantined after consecutive stalls',
+        { hwnd, quarantineMs: this.opts.targetQuarantineMs },
+        LogComponent.ComputerUse,
+      );
+    }
   }
 
   private async request(
     build: (id: number) => UiaProbeRequest,
     timeoutMs: number,
-    opts: { countsTowardStall?: boolean } = {},
+    opts: { countsTowardStall?: boolean; stallKey?: string } = {},
   ): Promise<UiaProbeResponse | null> {
     await this.ensureStarted();
     if (this.state !== 'running' || !this.daemon) {
@@ -651,7 +831,7 @@ export class UiaProbeClient {
         resolve(null);
       }, timeoutMs);
       timer.unref?.();
-      this.pending.set(id, { resolve, timer });
+      this.pending.set(id, { resolve, timer, stallKey: opts.stallKey });
       const written = this.daemon?.writeStdin?.(buildRequestLine(build(id)) + '\n') ?? false;
       if (!written) {
         this.pending.delete(id);
@@ -663,26 +843,20 @@ export class UiaProbeClient {
       if (opts.countsTowardStall === false) {
         return response;
       }
-      this.consecutiveTimeouts += 1;
-      logger.debug(
-        'uia probe request timed out',
-        { consecutive: this.consecutiveTimeouts },
-        LogComponent.ComputerUse,
-      );
-      if (this.consecutiveTimeouts >= this.opts.consecutiveTimeoutLimit) {
-        await this.recycleOnStall();
-      }
+      await this.accountStall(opts.stallKey ?? 'global');
     }
     return response;
   }
 
   /**
-   * The probe looks hung (consecutive timeouts / never became ready).
-   * Recycle once; the second stall degrades the client for good —
+   * The probe looks hung (global-op consecutive timeouts / never became
+   * ready). Recycle once; the second stall degrades the client for good —
    * element-less recording is the designed fallback (design §5).
+   * Per-target stalls do NOT land here: they quarantine the window.
    */
   private async recycleOnStall(): Promise<void> {
     this.consecutiveTimeouts = 0;
+    this.stallsByTarget.clear();
     this.failAllPending('recycled');
     await this.stopDaemon();
     if (this.recycledOnce) {

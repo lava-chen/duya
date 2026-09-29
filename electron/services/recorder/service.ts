@@ -769,7 +769,15 @@ export function getRecorderService(): RecorderService {
       // Plan 562 Phase 5: focus-change snapshots feed the element
       // overlay. Empty trees (custom-drawn windows, UIPI skips) draw
       // nothing — the overlay stays cleared.
-      onEnumerateSnapshot: (result) => {
+      onEnumerateSnapshot: (result, app) => {
+        // INFO on purpose: the zero-frames complaint (2026-09-29) was only
+        // diagnosable from this count — one line per focus change is the
+        // heartbeat of the overlay channel.
+        logger.info(
+          'recorder element overlay snapshot',
+          { count: result.elements.length, app: app.title ?? '', pid: app.pid },
+          LogComponent.ComputerUse,
+        );
         showOverlayElements(result.elements as unknown as Record<string, unknown>[]);
       },
       onEnumerateClear: clearOverlayElements,

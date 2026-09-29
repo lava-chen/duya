@@ -26,13 +26,16 @@ export function elementPriority(
     kind,
   );
   if (el.focused) score += 220;
+  if (el.selected) score += 240;
   if (el.pressable && el.enabled) score += 200;
   if (leafControl) score += 100;
   if (el.title) score += 60;
+  if (el.label) score += 40;
   if (el.editable && !container) score += 120;
   if (el.hasMenu && !container) score += 30;
   if (el.value) score += 20;
   if (container) score -= 120;
+  if (el.offscreen) score -= 150;
   const [, , ew, eh] = el.bounds;
   const [, , ww, wh] = windowBounds ?? [0, 0, 0, 0];
   if (ew <= 0 || eh <= 0) {
@@ -42,18 +45,47 @@ export function elementPriority(
   return score;
 }
 
-/** One element row (aligned row shape; title first, metadata after). */
+/** Value/label display cap on one row (ZCode row shape). */
+const ROW_VALUE_CAP = 60;
+const ROW_LABEL_CAP = 40;
+
+/** Actions every element effectively has — not worth a row slot (ZCode). */
+const UBIQUITOUS_ACTIONS: ReadonlySet<string> = new Set(['AXScrollToVisible']);
+
+function rowTruncate(s: string, max: number): string {
+  return s.length <= max ? s : `${s.slice(0, max)}…`;
+}
+
+/** One element row (ZCode row shape: indent = depth, caps in parens). */
 export function elementRow(index: number, el: CuaElement): string {
-  const parts: string[] = [`[${index}]`];
-  parts.push(el.kind || el.role.toLowerCase() || 'unknown');
-  if (el.title) parts.push(el.title);
-  if (el.value) parts.push(`= ${el.value}`);
-  if (el.focused) parts.push('(focused)');
-  if (el.pressable) parts.push('(pressable)');
-  if (el.hasMenu) parts.push('(has_menu)');
-  if (!el.enabled) parts.push('(disabled)');
-  if (el.actions.length > 0) parts.push(`actions=[${el.actions.join(',')}]`);
-  return parts.join(' ');
+  const caps: string[] = [];
+  if (el.pressable) caps.push('pressable');
+  if (el.editable) caps.push('editable');
+  if (el.hasMenu) caps.push('has_menu');
+  if (el.focused) caps.push('focused');
+  if (el.selected === true) caps.push('selected');
+  if (el.checked === true) caps.push('checked');
+  if (el.checked === false) caps.push('unchecked');
+  if (el.enabled === false) caps.push('disabled');
+  if (el.offscreen === true) caps.push('offscreen');
+  // Identity: the element's own name first; an otherwise-unlabeled field
+  // falls back to the absorbed static-text label (plan 576). `||` (not
+  // ??) on purpose: an EMPTY-string name must fall through too.
+  const titleText = el.title || el.label || null;
+  const title = titleText ? ` ${titleText}` : '';
+  const labelSuffix =
+    el.title && el.label ? ` label:"${rowTruncate(el.label, ROW_LABEL_CAP)}"` : '';
+  const value = el.value ? ` = ${rowTruncate(el.value, ROW_VALUE_CAP)}` : '';
+  const head = `[${index}] ${el.kind || el.role.toLowerCase() || 'unknown'}${title}${labelSuffix}${value}`;
+  const tail = caps.length > 0 ? ` (${caps.join(' ')})` : '';
+  const semanticActions = el.actions.filter((a) => !UBIQUITOUS_ACTIONS.has(a));
+  const actions =
+    semanticActions.length > 0 ? ` actions=[${semanticActions.join(',')}]` : '';
+  // Hierarchy: the probe's real tree depth (plan 576), indented like the
+  // ZCode row renderer (capped so a deep DOM chain cannot push the row
+  // body off-screen).
+  const indent = ' '.repeat(1 + Math.min(el.depth ?? 0, 24));
+  return `${indent}${head}${tail}${actions}`;
 }
 
 /**
@@ -83,22 +115,17 @@ export function formatObservation(
     ranked.sort((a, b) => b.score - a.score);
     const selected = ranked.slice(0, maxElements);
     const keep = new Set(selected.map((entry) => entry.index));
-    // Keep ancestors: walk back up filling the missing depth chain. The
-    // flat duya list has no depth yet, so "ancestors" = the preceding
-    // structural containers by bounds containment (cheap, deterministic).
+    // Keep ancestors: ZCode's depth walk-back — from each kept element,
+    // fill the missing parent chain by scanning backwards for the next
+    // element at depth-1, depth-2, … until the root. The probe's real
+    // tree depth (plan 576) makes this exact; without depth fields
+    // (older probe) every depth reads 0 and the walk is a no-op.
     for (const { index } of selected) {
-      const box = obs.elements[index]?.bounds;
-      if (!box) continue;
-      for (let j = index - 1; j >= 0; j -= 1) {
-        const outer = obs.elements[j]?.bounds;
-        if (!outer) continue;
-        const contains =
-          outer[0] <= box[0] &&
-          outer[1] <= box[1] &&
-          outer[0] + outer[2] >= box[0] + box[2] &&
-          outer[1] + outer[3] >= box[1] + box[3];
-        if (contains && !keep.has(j)) {
+      let wanted = (obs.elements[index]?.depth ?? 0) - 1;
+      for (let j = index - 1; j >= 0 && wanted >= 0; j -= 1) {
+        if ((obs.elements[j]?.depth ?? 0) === wanted) {
           keep.add(j);
+          wanted -= 1;
         }
       }
     }

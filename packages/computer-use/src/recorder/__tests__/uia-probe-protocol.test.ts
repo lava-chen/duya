@@ -38,6 +38,12 @@ describe('uia-probe-protocol — buildRequestLine', () => {
       '{"id":5,"op":"enumerate","hwnd":7,"maxDepth":20,"maxNodes":100,"controlTypes":["Button","Edit"]}',
     );
   });
+
+  it('carries the per-request walk budget when set', () => {
+    expect(buildRequestLine({ id: 6, op: 'enumerate', hwnd: 9, totalMs: 8000 })).toBe(
+      '{"id":6,"op":"enumerate","hwnd":9,"totalMs":8000}',
+    );
+  });
 });
 
 describe('uia-probe-protocol — parseUiaProbeLine', () => {
@@ -198,9 +204,10 @@ describe('uia-probe-protocol — enumerate element mapping', () => {
     expect(enumeratedElementToDescriptor(null)).toBeNull();
   });
 
-  it('DEFAULT_INTERACTIVE_CONTROL_TYPES covers the plan 562 whitelist', () => {
+  it('DEFAULT_INTERACTIVE_CONTROL_TYPES covers the plan 562 whitelist plus the plan 576 vocabulary', () => {
     expect(DEFAULT_INTERACTIVE_CONTROL_TYPES).toEqual([
       'Button',
+      'SplitButton',
       'Edit',
       'Hyperlink',
       'CheckBox',
@@ -211,7 +218,44 @@ describe('uia-probe-protocol — enumerate element mapping', () => {
       'Slider',
       'ListItem',
       'ToggleSwitch',
+      'DataItem',
+      'TreeItem',
+      'Document',
+      'Spinner',
     ]);
+  });
+
+  it('enumerated elements carry the plan 576 tree-contract fields', () => {
+    const mapped = enumeratedElementToDescriptor({
+      name: null,
+      controlType: 'Edit',
+      rect: { x: 1, y: 2, w: 30, h: 20 },
+      interactive: true,
+      enabled: true,
+      focused: false,
+      label: '用户名',
+      depth: 3,
+      checked: true,
+      description: 'Enter your account name',
+      offscreen: true,
+    });
+    expect(mapped).not.toBeNull();
+    expect(mapped?.label).toBe('用户名');
+    expect(mapped?.depth).toBe(3);
+    expect(mapped?.checked).toBe(true);
+    expect(mapped?.description).toBe('Enter your account name');
+    expect(mapped?.offscreen).toBe(true);
+    // Absent fields stay absent (strict downstream readers).
+    const bare = enumeratedElementToDescriptor({
+      name: 'OK',
+      controlType: 'Button',
+      rect: { x: 0, y: 0, w: 10, h: 10 },
+      interactive: true,
+    });
+    expect(bare?.label).toBeUndefined();
+    expect(bare?.depth).toBeUndefined();
+    expect(bare?.checked).toBeUndefined();
+    expect(bare?.offscreen).toBeUndefined();
   });
 });
 

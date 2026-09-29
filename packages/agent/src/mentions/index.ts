@@ -47,6 +47,10 @@ export interface TurnInjection {
   envelope: string;
   /** Full body text (rendered inside `<envelope>...</envelope>`). */
   body: string;
+  /** Plan 579: for `envelope === 'skill'`, the resolved skill name — lets
+   *  the agent attribute the transient injection's token cost to the skill
+   *  (the projection rail is invisible to the message-timeline scan). */
+  skillName?: string;
 }
 
 /** Minimal tool-descriptor shape the mention module needs (no schemas). */
@@ -315,6 +319,7 @@ export async function collectSkillInjections(
     const location = skill.skillRoot ? join(skill.skillRoot, 'SKILL.md') : undefined;
     injections.push({
       envelope: 'skill',
+      skillName: skill.name,
       body: [
         `<name>${escapeXml(skill.name)}</name>`,
         ...(location ? [`<location>${escapeXml(location)}</location>`] : []),
