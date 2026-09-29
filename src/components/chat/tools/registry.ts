@@ -396,6 +396,26 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
     },
   },
   {
+    // tool_invoke — the generic invoke meta-tool (Plan 480). When the
+    // namespace is NOT 'builtin', it's an MCP server call and uses
+    // AiGatewayIcon + namespace as summary. When namespace IS 'builtin',
+    // falls back to WrenchIcon + tool name.
+    match: (n) => n.toLowerCase() === 'invoke' || n.toLowerCase() === 'tool_invoke',
+    icon: AiGatewayIcon, // default; InvokeToolRow overrides based on namespace
+    labelKey: 'streaming.toolAction.label.mcp',
+    getSummary: (input, name?: string) => {
+      const inp = input as Record<string, unknown> | undefined;
+      const namespace = typeof inp?.namespace === 'string' ? inp.namespace : '';
+      const tool = typeof inp?.tool === 'string' ? inp.tool : '';
+      if (namespace && namespace !== 'builtin') {
+        // MCP server namespace — show the server name
+        return namespace;
+      }
+      // builtin namespace — show tool name
+      return tool || name || 'invoke';
+    },
+  },
+  {
     match: () => true,
     icon: WrenchIcon,
     labelKey: null,

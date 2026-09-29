@@ -7,9 +7,9 @@
  *    attachments / system / toolDefinitions / memory) with the
  *    `injectedContext` bucket the second review round added — harness
  *    injections stop being invisible inside "conversation";
- * ② the unanchored estimate now charges the tool-definition surface
- *    (options.toolDefinitionsTokens) exactly once, and the anchored path
- *    never charges it (provider input already priced it);
+ * ② the unanchored estimate charges tool definitions once; on the anchored
+ *    path, local message/system/tool estimates explain the provider total
+ *    without charging them a second time;
  * ③ the composition is a projection of the SAME measurement:
  *    buckets + unattributedObservedTokens === estimate.usedTokens.
  */
@@ -32,11 +32,11 @@ function assistantAnchor(inputTokens: number, outputTokens: number): ContextEsti
 
 describe('ContextComposition bucketing', () => {
   it('routes blocks into conversation / toolResults / attachments / injectedContext', () => {
-    // The blocks ride in a user message AFTER the anchor: the anchor's
-    // provider-observed volume covers everything up to and including its own
-    // request, so only post-anchor messages are locally attributable —
-    // bucketing pre-anchor blocks would double-count them.
+    // Provider usage remains the headline authority. Local estimates for the
+    // prompt, system and tool definitions explain that anchor without adding
+    // them to the headline again.
     const messages: ContextEstimateMessage[] = [
+      { role: 'user', content: 'prior context' },
       assistantAnchor(10_000, 500),
       {
         role: 'user',
@@ -49,22 +49,28 @@ describe('ContextComposition bucketing', () => {
       },
     ];
 
-    const { estimate, composition } = computeContextComposition(messages);
+    const { estimate, composition } = computeContextComposition(messages, {
+      systemPrefixTokens: 1_000,
+      toolDefinitionsTokens: 2_000,
+    });
     expect(estimate.anchored).toBe(true);
-    // The anchor is a provider fact — not locally attributable.
-    expect(composition.unattributedObservedTokens).toBe(10_000 + 500);
-    // The four trailing blocks land in four different buckets.
-    expect(composition.conversation.length).toBe(1);
+    expect(contextPartsTotal(composition.system)).toBe(1_000);
+    expect(contextPartsTotal(composition.toolDefinitions)).toBe(2_000);
+    // Prompt history + persisted answer + the trailing text are conversation.
+    expect(composition.conversation.length).toBe(3);
     expect(composition.injectedContext.length).toBe(1);
     expect(composition.toolResults.length).toBe(1);
     expect(composition.attachments.length).toBe(1);
     expect(composition.attachments[0].tokens).toBe(IMAGE_TOKEN_FLOOR);
     // Sum invariant: buckets + unattributed === total.
     const bucketSum =
+      contextPartsTotal(composition.system) +
       contextPartsTotal(composition.conversation) +
       contextPartsTotal(composition.injectedContext) +
+      contextPartsTotal(composition.toolDefinitions) +
       contextPartsTotal(composition.toolResults) +
-      contextPartsTotal(composition.attachments);
+      contextPartsTotal(composition.attachments) +
+      contextPartsTotal(composition.memory);
     expect(composition.unattributedObservedTokens + bucketSum).toBe(estimate.usedTokens);
   });
 
@@ -75,7 +81,8 @@ describe('ContextComposition bucketing', () => {
     ];
     const { composition } = computeContextComposition(messages);
     expect(composition.injectedContext.length).toBe(1);
-    expect(composition.conversation.length).toBe(0);
+    // The anchored assistant response itself is persisted into the next prompt.
+    expect(composition.conversation.length).toBe(1);
   });
 
   it('unanchored path: tool definitions are priced once and land in the bucket', () => {
@@ -94,7 +101,7 @@ describe('ContextComposition bucketing', () => {
     expect(contextPartsTotal(composition.system)).toBe(1_000);
   });
 
-  it('anchored path never double-charges the tool definitions', () => {
+  it('anchored path labels estimated tool definitions without charging them twice', () => {
     const messages: ContextEstimateMessage[] = [
       assistantAnchor(50_000, 1_000),
       { role: 'user', content: 'follow-up' },
@@ -104,9 +111,37 @@ describe('ContextComposition bucketing', () => {
     });
     expect(estimate.anchored).toBe(true);
     expect(estimate.toolDefinitionsTokens).toBe(0);
-    expect(composition.toolDefinitions).toEqual([]);
-    // 50k input + persisted "answer" (2 tokens) + trailing follow-up — no tool charge.
+    expect(contextPartsTotal(composition.toolDefinitions)).toBe(12_000);
+    // 50k input + persisted "answer" (2 tokens) + trailing follow-up — the
+    // local tool estimate is a category, not an extra charge to the headline.
     expect(estimate.usedTokens).toBe(50_002 + estimate.trailingTokens);
+    const attributed =
+      contextPartsTotal(composition.system) +
+      contextPartsTotal(composition.conversation) +
+      contextPartsTotal(composition.injectedContext) +
+      contextPartsTotal(composition.toolDefinitions) +
+      contextPartsTotal(composition.toolResults) +
+      contextPartsTotal(composition.attachments) +
+      contextPartsTotal(composition.memory);
+    expect(composition.unattributedObservedTokens + attributed).toBe(estimate.usedTokens);
+  });
+
+  it('scales local categories when they exceed the provider anchor', () => {
+    const messages = [assistantAnchor(100, 10)];
+    const { estimate, composition } = computeContextComposition(messages, {
+      systemPrefixTokens: 1_000,
+      toolDefinitionsTokens: 1_000,
+    });
+    const attributed =
+      contextPartsTotal(composition.system) +
+      contextPartsTotal(composition.conversation) +
+      contextPartsTotal(composition.injectedContext) +
+      contextPartsTotal(composition.toolDefinitions) +
+      contextPartsTotal(composition.toolResults) +
+      contextPartsTotal(composition.attachments) +
+      contextPartsTotal(composition.memory);
+    expect(attributed).toBeLessThanOrEqual(estimate.anchorTokens);
+    expect(composition.unattributedObservedTokens + attributed).toBe(estimate.usedTokens);
   });
 
   it('systemParts / memoryParts label their buckets when provided', () => {
@@ -143,5 +178,117 @@ describe('ContextComposition bucketing', () => {
     expect(estimate.usedTokens).toBeNull();
     expect(composition.conversation).toEqual([]);
     expect(composition.unattributedObservedTokens).toBe(0);
+  });
+});
+
+describe('ContextComposition skills bucket (plan 579)', () => {
+  it('attributes a Skill tool result to its skill via the tool_use id', () => {
+    const messages: ContextEstimateMessage[] = [
+      assistantAnchor(10_000, 100),
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'sk1', name: 'Skill', input: { skill: 'docx' } }],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'sk1', content: '{"success":true,"commandName":"docx","content":"..."}' },
+        ],
+      },
+    ];
+    const { composition } = computeContextComposition(messages);
+    expect(composition.skills.length).toBe(1);
+    expect(composition.skills[0].label).toBe('skill:docx');
+    expect(composition.skills[0].tokens).toBeGreaterThan(0);
+    expect(composition.toolResults.length).toBe(0);
+  });
+
+  it('attributes a Read of SKILL.md to the skill directory name', () => {
+    const messages: ContextEstimateMessage[] = [
+      assistantAnchor(10_000, 100),
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: 'C:\\Users\\me\\.duya\\skills\\pptx\\SKILL.md' } },
+          // A regular read in the same message must stay in toolResults.
+          { type: 'tool_use', id: 'r2', name: 'Read', input: { file_path: 'src/index.ts' } },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'r1', content: 'File: ...\\SKILL.md\n\nskill body' },
+          { type: 'tool_result', tool_use_id: 'r2', content: 'regular file body' },
+        ],
+      },
+    ];
+    const { composition } = computeContextComposition(messages);
+    expect(composition.skills.length).toBe(1);
+    expect(composition.skills[0].label).toBe('skill:pptx');
+    expect(composition.toolResults.length).toBe(1);
+  });
+
+  it('routes <skill> mention injections into the skills bucket', () => {
+    const messages: ContextEstimateMessage[] = [
+      assistantAnchor(10_000, 100),
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: '<skill>\n<name>pdf</name>\n<location>/skills/pdf/SKILL.md</location>\n\nPDF skill body' },
+          { type: 'text', text: '<skill-suggestion>maybe use pdf</skill-suggestion>' },
+        ],
+      },
+    ];
+    const { composition } = computeContextComposition(messages);
+    expect(composition.skills.length).toBe(1);
+    expect(composition.skills[0].label).toBe('skill:pdf');
+    // Suggestions are hints, not loaded bodies — they stay in injectedContext.
+    expect(composition.injectedContext.length).toBe(1);
+  });
+
+  it('keeps the sum invariant with the skills bucket included', () => {
+    const messages: ContextEstimateMessage[] = [
+      assistantAnchor(8_000, 100),
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'sk9', name: 'Skill', input: { skill: '/xlsx' } }],
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'sk9', content: 'skill instructions' }],
+      },
+      // Single-block message: per-block ceil === per-message ceil, so the
+      // sum invariant holds without rounding drift (multi-block messages
+      // can drift ±1 token between the two granularities).
+      { role: 'user', content: [{ type: 'text', text: 'plain text' }] },
+    ];
+    const { estimate, composition } = computeContextComposition(messages);
+    expect(composition.skills[0].label).toBe('skill:xlsx');
+    const attributed =
+      contextPartsTotal(composition.system) +
+      contextPartsTotal(composition.conversation) +
+      contextPartsTotal(composition.injectedContext) +
+      contextPartsTotal(composition.skills) +
+      contextPartsTotal(composition.toolDefinitions) +
+      contextPartsTotal(composition.toolResults) +
+      contextPartsTotal(composition.attachments) +
+      contextPartsTotal(composition.memory);
+    expect(composition.unattributedObservedTokens + attributed).toBe(estimate.usedTokens);
+  });
+
+  it('merges skillParts (transient mention injections) into the skills bucket', () => {
+    const messages: ContextEstimateMessage[] = [
+      assistantAnchor(20_000, 100),
+      { role: 'user', content: 'use it now' },
+    ];
+    const { estimate, composition } = computeContextComposition(messages, {
+      skillParts: [{ label: 'skill:commit', tokens: 900 }],
+    });
+    // The projection-rail body is inside the provider anchor — labelled but
+    // never charged twice.
+    expect(estimate.usedTokens).toBe(20_002 + estimate.trailingTokens);
+    expect(composition.skills).toEqual([{ label: 'skill:commit', tokens: 900 }]);
+    expect(composition.unattributedObservedTokens + composition.skills[0].tokens)
+      .toBeLessThanOrEqual(estimate.anchorTokens);
   });
 });

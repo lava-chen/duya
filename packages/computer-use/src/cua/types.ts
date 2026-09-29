@@ -72,6 +72,23 @@ export interface CuaElement {
   hasMenu: boolean;
   /** SelectionItemPattern state (probe emits it only when the pattern exists). */
   selected?: boolean;
+  /** TogglePattern state (probe emits it only when the pattern exists, plan 576). */
+  checked?: boolean;
+  /** Non-empty HelpText only (plan 576). */
+  description?: string;
+  /**
+   * REAL UIA tree depth relative to the window root (plan 576 walk
+   * contract). Drives the renderer's hierarchy indent and the
+   * depth-based ancestor keeping when trimming.
+   */
+  depth?: number;
+  /**
+   * Static-Text run absorbed from the neighborhood (plan 576) — the text
+   * beside an otherwise-unlabeled field. Absent when no Text neighbor.
+   */
+  label?: string;
+  /** Only when true — the element was reported offscreen by UIA. */
+  offscreen?: boolean;
   ownerPid: number | null;
   /** 1-based enumerate order for the owning hwnd (probe cache slot). */
   probeIndex: number;
@@ -143,6 +160,7 @@ export interface CuaElementChange {
     focused?: boolean;
     enabled?: boolean;
     editable?: boolean;
+    checked?: boolean;
     bounds?: [number, number, number, number];
     actions?: string[];
   };

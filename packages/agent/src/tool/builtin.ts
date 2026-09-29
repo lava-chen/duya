@@ -168,8 +168,11 @@ export function createBuiltinRegistry(
 
   // Phase 5: Other tools
   // Skill must be on the initial surface (Skills catalog instructs model to
-  // call it); hint mode keeps it surfaced with stub schema to reduce overhead.
-  registry.register(skillTool, skillTool, { exposeMode: 'hint' });
+  // call it). Plan 579: full-schema exposure — the hint stub ships an EMPTY
+  // input_schema, so models that shape arguments from the schema produced
+  // Skill calls that failed zod validation and fell back to reading SKILL.md
+  // with the read tool. The full schema costs ~30 tokens.
+  registry.register(skillTool, skillTool, { exposeMode: 'always' });
   registry.register(briefTool, briefTool, { exposeMode: 'discoverable' });
   registry.register(sessionSearchTool.toTool(), sessionSearchTool, { exposeMode: 'discoverable' });
   // Inter-agent communication tool — message another session's agent

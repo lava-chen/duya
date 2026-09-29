@@ -46,10 +46,17 @@ let screenListenersWired = false;
 // Page (no preload — data URL + executeJavaScript injection)
 // ────────────────────────────────────────────────────────────────────
 
-/** Mirror of DEFAULT_INTERACTIVE_CONTROL_TYPES (packages/computer-use). */
+/**
+ * Mirror of DEFAULT_INTERACTIVE_CONTROL_TYPES (packages/computer-use),
+ * plan 576 vocabulary. `document` is deliberately excluded here even
+ * though the CUA tree whitelists it: the overlay draws a frame per
+ * element and a frame over the whole page is pure noise for the
+ * recorder user — Document content stays visible in the tree channel.
+ */
 const PAGE_WHITELIST = [
-  'button', 'edit', 'hyperlink', 'checkbox', 'radiobutton', 'combobox',
-  'tabitem', 'menuitem', 'slider', 'listitem', 'toggleswitch',
+  'button', 'splitbutton', 'edit', 'hyperlink', 'checkbox', 'radiobutton',
+  'combobox', 'tabitem', 'menuitem', 'slider', 'listitem', 'toggleswitch',
+  'dataitem', 'treeitem', 'spinner',
 ];
 
 const OVERLAY_HTML =

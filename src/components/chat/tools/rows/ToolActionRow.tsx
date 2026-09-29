@@ -52,6 +52,7 @@ import { VisionToolRow } from './VisionToolRow';
 import { CanvasConductorToolRow } from './CanvasConductorToolRow';
 import { BrowserToolRow } from './BrowserToolRow';
 import { McpToolRow } from './McpToolRow';
+import { InvokeToolRow } from './InvokeToolRow';
 import { ResearchReportStatusRow } from './ResearchReportStatusRow';
 import { ResearchStateToolRow } from './ResearchStateToolRow';
 
@@ -206,6 +207,14 @@ const ROUTES: RouteEntry[] = [
     // fallthrough below.
     match: (t) => t.name.toLowerCase().startsWith('mcp_'),
     render: (tool) => <McpToolRow tool={tool} />,
+  },
+  {
+    // tool_invoke — the generic invoke meta-tool (Plan 480). When the
+    // namespace is NOT 'builtin', it's an MCP server call and renders
+    // with AiGateway icon + namespace as server name. When namespace
+    // IS 'builtin', falls back to generic WrenchIcon + tool name.
+    match: (t) => t.name.toLowerCase() === 'invoke' || t.name.toLowerCase() === 'tool_invoke',
+    render: (tool) => <InvokeToolRow tool={tool} />,
   },
 ];
 

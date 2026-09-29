@@ -386,6 +386,21 @@ export class duyaAgent implements AgentRuntime {
    * block the transient runtime-context layer lost. Reset per streamChat.
    */
   private promptContextBlocks: string[] = [];
+
+  /**
+   * Plan 579: token cost of the transient `<skill>` mention injections this
+   * run, keyed by skill name (dedup across re-mentions within the run). The
+   * projection rail these bodies ride is invisible to the message-timeline
+   * scan, so the context composition takes them from here (skillParts
+   * option) instead — same treatment as memory-recall payloads. Reset per
+   * streamChat, matching promptContextBlocks' lifecycle.
+   */
+  private injectedSkillParts: Map<string, number> = new Map();
+
+  /** Plan 579: labelled token parts for the run's injected skill bodies. */
+  getInjectedSkillParts(): Array<{ label: string; tokens: number }> {
+    return [...this.injectedSkillParts.entries()].map(([label, tokens]) => ({ label, tokens }));
+  }
   /**
    * Plan 517 P2.1: turn-based cooldown to prevent the compaction-loop bug.
    * `lastCompactionTurn` is the streamChat-local turn number at which the
@@ -1140,8 +1155,18 @@ export class duyaAgent implements AgentRuntime {
         explicitSkills,
       );
       const skillInjections = await collectSkillInjections(mergedMentionedSkills);
+      // Plan 579: attribute the transient bodies' token cost per skill
+      // (cleared per run, matching promptContextBlocks' lifecycle).
+      this.injectedSkillParts.clear();
       for (const injection of skillInjections) {
-        this.promptContexts.push(`<${injection.envelope}>\n${injection.body}\n</${injection.envelope}>`);
+        const rendered = `<${injection.envelope}>\n${injection.body}\n</${injection.envelope}>`;
+        this.promptContexts.push(rendered);
+        if (injection.envelope === 'skill' && injection.skillName) {
+          this.injectedSkillParts.set(
+            `skill:${injection.skillName}`,
+            estimateContextTextTokens(rendered),
+          );
+        }
       }
       if (skillInjections.length > 0) {
         logger.info(`[Agent] Skill injection: ${skillInjections.length} skill fragment(s) queued`);

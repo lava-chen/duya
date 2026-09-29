@@ -110,10 +110,21 @@ export function ReadToolRow({ tool }: ReadToolRowProps) {
   const focusRange = resolveFocusRange(tool);
   const lineLabel = formatLineLabel(focusRange);
 
+  // Plan 579: reading a SKILL.md IS loading that skill (the codex-annotated
+  // "Read SKILL.md (demo skill)" case). Show it as a skill invocation —
+  // verb switches to the skill keys and the summary becomes the skill's
+  // directory name, with the raw file name demoted to the right slot.
+  const isSkillDoc = Boolean(filePath && /(?:^|[\\/])SKILL\.md$/i.test(filePath));
+  const skillName = isSkillDoc
+    ? (filePath as string).split(/[\\/]/).filter(Boolean).slice(-2, -1)[0] || ''
+    : '';
+
   const verbKey =
-    status === 'running' ? 'streaming.toolAction.running.read'
-    : status === 'error' ? 'streaming.toolAction.error.read'
-    : 'streaming.toolAction.done.read';
+    status === 'running'
+      ? (isSkillDoc ? 'streaming.toolAction.running.skill' : 'streaming.toolAction.running.read')
+      : status === 'error'
+        ? (isSkillDoc ? 'streaming.toolAction.error.skill' : 'streaming.toolAction.error.read')
+        : (isSkillDoc ? 'streaming.toolAction.done.skill' : 'streaming.toolAction.done.read');
 
   // Click the row → open the file in DUYA's side-panel preview workspace.
   // When a line range is known, forward it so the panel scrolls to and
@@ -138,7 +149,11 @@ export function ReadToolRow({ tool }: ReadToolRowProps) {
       onMouseLeave={() => setHovered(false)}
       buttonClassName="cursor-pointer"
       rightSlot={
-        lineLabel ? (
+        isSkillDoc ? (
+          <span className="text-[11px] text-muted-foreground/50 shrink-0 font-mono">
+            SKILL.md
+          </span>
+        ) : lineLabel ? (
           <span className="text-[11px] text-muted-foreground/50 tabular-nums shrink-0 font-mono">
             {lineLabel}
           </span>
@@ -151,7 +166,7 @@ export function ReadToolRow({ tool }: ReadToolRowProps) {
         }`}
         title={filePath || undefined}
       >
-        {fileName}
+        {isSkillDoc && skillName ? skillName : fileName}
       </span>
     </ActionRowChrome>
   );

@@ -411,6 +411,13 @@ const emitLiveUsage = (
   const { estimate, composition } = computeContextComposition(msgs, {
     systemPrefixTokens: systemPrefix,
     toolDefinitionsTokens: agentToolsTokens,
+    // Plan 579: transient <skill> mention-injection bodies ride the
+    // projection rail, outside the message timeline — same treatment as
+    // memory-recall payloads.
+    skillParts:
+      typeof agent?.getInjectedSkillParts === 'function'
+        ? agent.getInjectedSkillParts()
+        : [],
   });
   const usedForRing =
     contextSnapshot?.accounting?.projectedNextInputTokens ?? estimate.usedTokens ?? 0;
@@ -425,32 +432,37 @@ const emitLiveUsage = (
 
   // Composition parts remain useful during a live correction, but the
   // timeline can temporarily describe an older projection. Reconcile the
-  // diagnostic buckets to the exact shared ContextSnapshot headline; if the
-  // correction shrank below stale labelled parts, retain the total as
-  // unattributed provider volume rather than publishing an impossible sum.
-  const compositionParts = [
+  // estimated categories to the exact shared ContextSnapshot headline. If a
+  // correction shrinks the headline, scale the category shares rather than
+  // discarding every label and making the full total look unattributed.
+  const compositionBuckets = [
     composition.system,
     composition.conversation,
     composition.injectedContext,
+    composition.skills,
     composition.toolDefinitions,
     composition.toolResults,
     composition.attachments,
     composition.memory,
     composition.providerOverhead ?? [],
-  ].reduce((sum, parts) => sum + parts.reduce((partSum, part) => partSum + part.tokens, 0), 0);
-  if (compositionParts > usedForRing) {
-    composition.system = [];
-    composition.conversation = [];
-    composition.injectedContext = [];
-    composition.toolDefinitions = [];
-    composition.toolResults = [];
-    composition.attachments = [];
-    composition.memory = [];
-    composition.providerOverhead = [];
-    composition.unattributedObservedTokens = usedForRing;
-  } else {
-    composition.unattributedObservedTokens = usedForRing - compositionParts;
+  ];
+  const sumCompositionParts = (): number =>
+    compositionBuckets.reduce(
+      (sum, parts) => sum + parts.reduce((partSum, part) => partSum + part.tokens, 0),
+      0,
+    );
+  const compositionParts = sumCompositionParts();
+  if (compositionParts > usedForRing && compositionParts > 0) {
+    const scale = Math.max(0, usedForRing) / compositionParts;
+    for (const parts of compositionBuckets) {
+      const scaledParts = parts.map((part) => ({
+        ...part,
+        tokens: Math.floor(part.tokens * scale),
+      }));
+      parts.splice(0, parts.length, ...scaledParts);
+    }
   }
+  composition.unattributedObservedTokens = Math.max(0, usedForRing - sumCompositionParts());
   // Token-trace: emit a structured INFO line so the operator can correlate
   // input / cache / trailing growth over time. The anchor's raw usage block
   // is included so an off-by-one (under-report or cache-misaccount) is easy
@@ -495,6 +507,7 @@ const emitLiveUsage = (
       ['toolResults', composition.toolResults],
       ['toolDefs', composition.toolDefinitions],
       ['injected', composition.injectedContext],
+      ['skills', composition.skills],
       ['system', composition.system],
       ['memory', composition.memory],
       ['attachments', composition.attachments],
@@ -578,6 +591,7 @@ const emitLiveUsage = (
       system: composition.system,
       conversation: composition.conversation,
       injectedContext: composition.injectedContext,
+      skills: composition.skills,
       toolDefinitions: composition.toolDefinitions,
       toolResults: composition.toolResults,
       attachments: composition.attachments,

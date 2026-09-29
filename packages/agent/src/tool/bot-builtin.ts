@@ -145,7 +145,9 @@ export function registerBotTools(registry: ToolRegistry): void {
   // --------------------------------------------------------------------------
 
   registry.register(browserTool.toTool(), browserTool, { exposeMode: 'hint' });
-  registry.register(skillTool, skillTool, { exposeMode: 'hint' });
+  // Plan 579: full schema (see tool/builtin.ts) — the hint stub's empty
+  // input_schema made Skill calls fail zod validation.
+  registry.register(skillTool, skillTool, { exposeMode: 'always' });
 
   const visionTool = new VisionTool();
   registry.register(visionTool, visionTool, { exposeMode: 'hint' });

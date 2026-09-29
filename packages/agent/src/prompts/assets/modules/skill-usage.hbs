@@ -4,7 +4,7 @@ A skill supplies task-specific instructions. Available skills are listed as stru
 
 - Treat `<available_skills>` as the authoritative inventory of installed skills. When the user asks what skills you have, what you can do, or which skill fits a task, answer directly from that catalog — do not run CLI commands (such as `duya skill list`), enumerate directories, or call other tools to re-discover skills. CLI skill commands exist for the user's terminal-side management (install / enable / disable), not for your inventory answers.
 - Use a named skill, or one whose description clearly matches the task, before taking the action it governs.
-- Load it by reading the `<location>` file with the read tool; the `Skill` tool is a fallback that loads the same instructions by name.
+- Load it by invoking the {{TOOL_NAMES.SKILL}} tool with the skill's `<name>` — it returns the full SKILL.md instructions with absolute paths for referenced resources. Reading the `<location>` file with the read tool is a fallback for when the tool errors or is unavailable.
 - Read the skill's required `SKILL.md` and directly referenced resources before acting; do not load unrelated references.
 - Use the smallest set of skills that covers the task. If a requested skill is unavailable or cannot be read, say so briefly and continue with the safest useful fallback.
 - When a skill materially changes the approach, state that in a concise progress update and final handoff.

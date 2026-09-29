@@ -150,6 +150,45 @@ describe('adaptEnumerated (flat probe path)', () => {
     expect(legacy.focused).toBe(false);
     expect(legacy.selected).toBe(false);
   });
+
+  it('passes the plan 576 tree-contract fields through when reported', () => {
+    const rich = adaptEnumerated(
+      {
+        name: null,
+        controlType: 'Edit',
+        rect: { x: 0, y: 0, w: 100, h: 24 },
+        label: '用户名',
+        depth: 4,
+        checked: false,
+        description: 'Account name',
+        offscreen: true,
+      },
+      5,
+      100,
+      11,
+    );
+    expect(rich.label).toBe('用户名');
+    expect(rich.depth).toBe(4);
+    expect(rich.checked).toBe(false);
+    expect(rich.description).toBe('Account name');
+    expect(rich.offscreen).toBe(true);
+
+    // Absent on the wire → absent on the element (no false constants).
+    const bare = adaptEnumerated({ name: 'X', controlType: 'Edit', rect: null }, 6, 100, 11);
+    expect(bare.label).toBeUndefined();
+    expect(bare.depth).toBeUndefined();
+    expect(bare.checked).toBeUndefined();
+    expect(bare.offscreen).toBeUndefined();
+  });
+
+  it('derives spinner/split-button actions (plan 576 vocabulary)', () => {
+    expect(adaptEnumerated({ controlType: 'Spinner' }, 1, 1, 1).actions).toEqual([
+      'AXIncrement',
+      'AXDecrement',
+    ]);
+    expect(adaptEnumerated({ controlType: 'SplitButton' }, 2, 1, 1).kind).toBe('button');
+    expect(adaptEnumerated({ controlType: 'TreeItem' }, 3, 1, 1).kind).toBe('row');
+  });
 });
 
 function makeEl(overrides: Partial<CuaElement>): CuaElement {
@@ -294,7 +333,68 @@ describe('format', () => {
       16,
       makeEl({ title: '合并两个新的 Pull Request', actions: ['AXPress', 'AXScrollIntoView'] }),
     );
-    expect(row).toBe('[16] button 合并两个新的 Pull Request (pressable) actions=[AXPress,AXScrollIntoView]');
+    expect(row).toBe(
+      ' [16] button 合并两个新的 Pull Request (pressable) actions=[AXPress,AXScrollIntoView]',
+    );
+  });
+
+  it('indents rows by the probe tree depth (plan 576)', () => {
+    const row = elementRow(0, makeEl({ depth: 3, title: 'Deep' }));
+    expect(row.startsWith('    [0] button Deep')).toBe(true);
+    // Depth cap: rows never indent past 24.
+    const capped = elementRow(0, makeEl({ depth: 40, title: 'X' }));
+    expect(capped.startsWith(`${' '.repeat(25)}[0] button X`)).toBe(true);
+  });
+
+  it('falls back to the absorbed label as identity and shows both when present', () => {
+    const unlabeled = elementRow(1, makeEl({ title: null, label: '用户名' }));
+    expect(unlabeled).toContain('[1] button 用户名');
+    const emptyName = elementRow(2, makeEl({ title: '', label: '空名回落到 label' }));
+    expect(emptyName).toContain('button 空名回落到 label');
+    const both = elementRow(3, makeEl({ title: 'Search', label: '搜索框旁的说明文字' }));
+    expect(both).toContain('button Search label:"搜索框旁的说明文字"');
+  });
+
+  it('renders toggle state, offscreen and disabled caps', () => {
+    const row = elementRow(
+      3,
+      makeEl({ role: 'CheckBox', kind: 'checkbox', checked: false, offscreen: true, enabled: false }),
+    );
+    expect(row).toContain('unchecked');
+    expect(row).toContain('offscreen');
+    expect(row).toContain('disabled');
+    const on = elementRow(4, makeEl({ role: 'CheckBox', kind: 'checkbox', checked: true }));
+    expect(on).toContain('checked');
+    expect(on).not.toContain('unchecked');
+  });
+
+  it('keeps ancestors by real depth when trimming (plan 576)', () => {
+    const elements = [
+      makeEl({
+        native: 'cua-1', probeIndex: 1, depth: 0, kind: '', role: 'Pane',
+        title: 'root', actions: [], pressable: false, bounds: [0, 0, 1000, 800],
+      }),
+      makeEl({
+        native: 'cua-2', probeIndex: 2, depth: 1, kind: '', role: 'Pane',
+        title: 'pane', actions: [], pressable: false, bounds: [0, 0, 1000, 800],
+      }),
+      makeEl({ native: 'cua-3', probeIndex: 3, depth: 2, title: 'leaf-a' }),
+      makeEl({ native: 'cua-4', probeIndex: 4, depth: 2, title: 'leaf-b' }),
+    ];
+    const obs: CuaObservation = {
+      stateId: 's-3',
+      snapshotMode: 'full',
+      app: { pid: 1, bundleId: null, name: null },
+      window: { windowId: 1, title: 'W', bounds: [0, 0, 1000, 800] },
+      elements,
+    };
+    const text = formatObservation(obs, { maxElements: 1 });
+    // leaf-a wins the priority contest; its depth-0/depth-1 ancestors are
+    // kept by the depth walk-back even though their own score is lower.
+    expect(text).toContain('[2] button leaf-a');
+    expect(text).toContain('[0] pane root');
+    expect(text).toContain('[1] pane pane');
+    expect(text).toContain('indices are sparse');
   });
 
   it('renders the observation header and trims with a sparse-index note', () => {

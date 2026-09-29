@@ -84,6 +84,15 @@ export class ConnectorService {
     registerCustomConnector(asAppConnectorId('wecom'), () => createWeComConnector(this.service.vault));
   }
 
+  /** Clear the cached Remote MCP session so the next connection starts fresh. */
+  private async disconnectSession(connectionId: string): Promise<void> {
+    try {
+      await this.remoteMcp.disconnect(connectionId);
+    } catch (err) {
+      this.logger.warn('App Connection: failed to disconnect MCP session', { connectionId, err: String(err) }, COMPONENT);
+    }
+  }
+
   /** Test/loader seam: plugin `.app.json` declarations (Plan 455 Phase C). */
   get connectorRegistry(): AppConnectorRegistry {
     return this.registry;
@@ -390,6 +399,9 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+/** Disconnect and clear the cached session for a Remote MCP connection. Called by
+ *  AppConnectionService when removing an mcp-remote connection so that the
+ *  in-memory session cache does not hold stale tokens. */
 // --- Singleton ---
 
 let singleton: ConnectorService | null = null;
@@ -403,4 +415,9 @@ export function getConnectorService(): ConnectorService {
 
 export function _resetConnectorServiceSingleton(): void {
   singleton = null;
+}
+
+/** Disconnect and clear the cached session for a Remote MCP connection. */
+export function disconnectMcpSession(connectionId: string): Promise<void> {
+  return getConnectorService().disconnectSession(connectionId);
 }

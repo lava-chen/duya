@@ -829,12 +829,31 @@ export class CuaService {
       title: state.titleByHwnd.get(resolved.hwnd) ?? null,
     });
     await this.requireApproval(tool, { target, ...opts } as Record<string, unknown>);
-    const outcome = await this.probe().invoke(resolved.hwnd, {
-      index: resolved.probeIndex,
-      method: (opts.method as 'auto' | 'invoke' | 'toggle' | 'expand' | 'collapse' | 'select' | 'focus' | 'setValue') ?? 'auto',
-      ...(opts.value !== undefined ? { value: opts.value } : {}),
-      ...resolved.guards,
-    });
+    const dispatch = (index: number) =>
+      this.probe().invoke(resolved.hwnd, {
+        index,
+        method: (opts.method as 'auto' | 'invoke' | 'toggle' | 'expand' | 'collapse' | 'select' | 'focus' | 'setValue') ?? 'auto',
+        ...(opts.value !== undefined ? { value: opts.value } : {}),
+        ...resolved.guards,
+      });
+    let outcome = await dispatch(resolved.probeIndex);
+    if (outcome !== null && !outcome.ok && outcome.reason === 'stale-tree') {
+      // plan 578 smoke: one identity-based recovery. The probe's own
+      // same-slot retry (re-enumerate + retry) still misses when the
+      // app re-orders its tree between observation and dispatch —
+      // Chromium/Electron apps (QQ NT) churn constantly. Re-enumerate
+      // and re-find the element by (role, title), then retry at its
+      // new slot.
+      const recovered = await this.recoverStaleElement(
+        state,
+        resolved.hwnd,
+        resolved.probeIndex,
+        resolved.guards,
+      );
+      if (recovered !== null) {
+        outcome = await dispatch(recovered);
+      }
+    }
     if (outcome === null) {
       throw new CuaError('the structural action timed out — the target may be hung', {
         code: 'TIMEOUT',
@@ -859,12 +878,58 @@ export class CuaService {
     };
   }
 
+  /**
+   * plan 578 smoke: re-resolve an element by identity after the probe's
+   * own same-slot retry still answered stale-tree. Chromium/Electron
+   * apps (QQ NT) re-order their accessibility tree between observation
+   * and dispatch — parallel enumerate shards emit nondeterministically
+   * and live layout churn shifts slots — so the observed slot no longer
+   * addresses the element the model picked. Re-enumerates the window,
+   * finds the element matching the original (role, title) guards — the
+   * candidate closest to the original slot when several match — re-issues
+   * the window's ledger slots and refreshes the cached tree, and returns
+   * the new 1-based probe slot. Null when the element cannot be
+   * re-identified (name changed / tree collapsed): the caller surfaces
+   * stale-tree and the model must re-observe.
+   */
+  private async recoverStaleElement(
+    state: CuaSessionState,
+    hwnd: number,
+    originalProbeIndex: number,
+    guards: { name?: string; controlType?: string },
+  ): Promise<number | null> {
+    if (!guards.name && !guards.controlType) return null;
+    const probed = await this.probe().enumerate(hwnd);
+    if (probed === null || probed.reason) return null;
+    const ownerPid = state.elementsByHwnd.get(hwnd)?.[0]?.ownerPid ?? null;
+    const elements: CuaElement[] = probed.elements.map((el, i) => ({
+      native: `cua-${hwnd}:${i + 1}`,
+      ...adaptEnumerated(el, i + 1, hwnd, ownerPid),
+    }));
+    const candidates: number[] = [];
+    elements.forEach((el, i) => {
+      const roleOk = guards.controlType ? el.role === guards.controlType : true;
+      const titleOk = guards.name ? el.title === guards.name : true;
+      if (roleOk && titleOk) candidates.push(i);
+    });
+    if (candidates.length === 0) return null;
+    const originalIndex = originalProbeIndex - 1;
+    const best = candidates.reduce((a, b) =>
+      Math.abs(b - originalIndex) < Math.abs(a - originalIndex) ? b : a,
+    );
+    // The next action must resolve against the generation that was
+    // actually clicked — same contract as a fresh get_app_state.
+    state.ledger.issueSnapshot(hwnd, elements.length, ownerPid);
+    state.elementsByHwnd.set(hwnd, elements);
+    return best + 1;
+  }
+
   /** Map probe invoke failure reasons to the CUA error taxonomy. */
   private invokeFailureToError(reason: string): CuaError {
     switch (reason) {
       case 'stale-tree':
         return new CuaError(
-          'the element moved on since the last observation (stale-tree) — re-run get_app_state and re-pick',
+          'the element could not be re-identified after re-enumeration (stale-tree) — the app re-rendered; re-run get_app_state and re-pick',
           { code: 'ELEMENT_UNAVAILABLE' },
         );
       case 'no-element':

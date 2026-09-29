@@ -198,11 +198,18 @@ function axElementsToSom(
       continue;
     }
     const controlType = d.controlType ?? 'Control';
+    // plan 576: the enumerate vocabulary now includes Document (page
+    // content) — a full-window marker is pure noise on the SOM grid.
+    // Offscreen elements (flagged by the walk) are likewise not drawn.
+    if (controlType === 'Document') continue;
+    if ((d as { offscreen?: boolean }).offscreen === true) continue;
     const name = (d.name ?? '').trim();
     result.push({
       index: index++,
       bbox: { x: rect.x, y: rect.y, w: rect.w, h: rect.h },
-      label: (name.length > 0 ? name : controlType).slice(0, 48),
+      // Unlabeled fields fall back to their absorbed static-text label
+      // (plan 576) so the marker reads like the field does in the tree.
+      label: (name.length > 0 ? name : ((d as { label?: string }).label ?? '') || controlType).slice(0, 48),
       kind: kindFromControlType(controlType),
       axSource: source,
       // plan 572: macOS AX snapshot handle rides through so the IPC

@@ -7,7 +7,8 @@
  *   {"id":2,"op":"readUrl","hwnd":197144}
  *   {"id":3,"op":"ping"}
  *   {"id":4,"op":"enumerate","hwnd":197144,"maxDepth":40,"maxNodes":500,
- *      "controlTypes":["Button","Edit",...]}   (plan 562 — knobs optional)
+ *      "totalMs":8000,"controlTypes":["Button","Edit",...]}   (plan 562 —
+ *      knobs optional; totalMs overrides the walk budget for this request)
  *   {"id":5,"op":"invoke","hwnd":197144,"index":12,"method":"invoke",
  *      "value":null,"name":"Sign in","controlType":"Button"}
  *      (plan 564 — structural act op; index is 1-based into the probe's
@@ -58,6 +59,13 @@ export interface UiaProbeRequest {
   maxDepth?: number;
   /** enumerate: emitted-node cap (probe default when absent). */
   maxNodes?: number;
+  /**
+   * enumerate: total walk budget for THIS request (ms; probe default
+   * 1500 when absent). The main side raises it for a cold window so the
+   * first walk can absorb UIA COM activation + the target's own
+   * accessibility-engine startup.
+   */
+  totalMs?: number;
   /** enumerate: interactive ControlType override (probe default when absent). */
   controlTypes?: string[];
   /**
@@ -93,12 +101,20 @@ export interface UiaProbeRequest {
  * traversal still walks *through* every other element to reach the
  * interactive descendants inside containers.
  *
+ * plan 576 widens the list with the ZCode content/row vocabulary:
+ * DataItem/TreeItem (list/table/tree rows), Document (page content with
+ * its value), SplitButton and Spinner. Static Text is deliberately NOT
+ * whitelisted — Text nodes are absorbed as a `label` on the next
+ * emitted element and never occupy emission slots (the 1-based invoke
+ * cache order stays interactive-only).
+ *
  * Order is the wire default; the enumerate request may override it via
  * `controlTypes`. Matching is case-insensitive against the
  * `ProgrammaticName` minus the `ControlType.` prefix.
  */
 export const DEFAULT_INTERACTIVE_CONTROL_TYPES: readonly string[] = [
   'Button',
+  'SplitButton',
   'Edit',
   'Hyperlink',
   'CheckBox',
@@ -109,6 +125,10 @@ export const DEFAULT_INTERACTIVE_CONTROL_TYPES: readonly string[] = [
   'Slider',
   'ListItem',
   'ToggleSwitch',
+  'DataItem',
+  'TreeItem',
+  'Document',
+  'Spinner',
 ];
 
 /**
@@ -160,6 +180,24 @@ export type EnumeratedElement = Omit<ElementDescriptor, 'source'> & {
   focused?: boolean;
   /** Emitted only when the element carries SelectionItemPattern. */
   selected?: boolean;
+  /** Emitted only when the element carries TogglePattern (plan 576). */
+  checked?: boolean;
+  /** Non-empty HelpText only (plan 576). */
+  description?: string;
+  /**
+   * plan 576 walk contract: REAL UIA tree depth relative to the window
+   * root. The model-facing renderer indents by it and uses it to keep
+   * ancestors when trimming.
+   */
+  depth?: number;
+  /**
+   * Static-Text run absorbed from the neighborhood (plan 576): the text
+   * beside an otherwise-unlabeled field. Forward-attached by the walk,
+   * capped; absent when no Text neighbor exists.
+   */
+  label?: string;
+  /** Only when true — the walk does not descend into offscreen subtrees. */
+  offscreen?: boolean;
 };
 
 /** ElementDescriptor with the `interactive` flag carried through. */
@@ -168,6 +206,11 @@ export type EnumeratedElementDescriptor = ElementDescriptor & {
   enabled?: boolean;
   focused?: boolean;
   selected?: boolean;
+  checked?: boolean;
+  description?: string;
+  depth?: number;
+  label?: string;
+  offscreen?: boolean;
 };
 
 /** Serialize one request as a single ASCII line (safe for any console codepage). */
@@ -188,6 +231,7 @@ export function buildRequestLine(request: UiaProbeRequest): string {
       hwnd: request.hwnd,
       ...(request.maxDepth !== undefined ? { maxDepth: request.maxDepth } : {}),
       ...(request.maxNodes !== undefined ? { maxNodes: request.maxNodes } : {}),
+      ...(request.totalMs !== undefined ? { totalMs: request.totalMs } : {}),
       ...(request.controlTypes !== undefined ? { controlTypes: request.controlTypes } : {}),
     });
   }
@@ -230,6 +274,16 @@ const EnumeratedElementSchema = ElementDescriptorSchema.omit({ source: true }).e
   focused: z.boolean().optional(),
   /** Emitted only when the element carries SelectionItemPattern. */
   selected: z.boolean().optional(),
+  /** Emitted only when the element carries TogglePattern (plan 576). */
+  checked: z.boolean().optional(),
+  /** Non-empty HelpText only (plan 576). */
+  description: z.string().optional(),
+  /** REAL UIA tree depth relative to the window root (plan 576). */
+  depth: z.number().int().nonnegative().optional(),
+  /** Absorbed static-Text run (plan 576) — absent when none. */
+  label: z.string().optional(),
+  /** Only when true; the walk does not descend into offscreen subtrees. */
+  offscreen: z.boolean().optional(),
 });
 
 const successResponseSchema = z.object({

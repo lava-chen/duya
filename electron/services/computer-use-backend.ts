@@ -792,6 +792,11 @@ async function uiaTreeProvider(opts: {
     className: el.className ?? undefined,
     rect: el.rect,
     isPassword: el.isPassword === true,
+    // plan 576 tree-contract fields (absent when the probe didn't report).
+    ...(el.label ? { label: el.label } : {}),
+    ...(el.depth !== undefined ? { depth: el.depth } : {}),
+    ...(el.checked !== undefined ? { checked: el.checked } : {}),
+    ...(el.description ? { description: el.description } : {}),
   }));
   return {
     hwnd: target.hwnd,
@@ -956,12 +961,14 @@ export function initializeComputerUseBackend(): boolean {
       // plan 572 Phase 5 (macOS): single-window capture via the AX
       // helper's ScreenCaptureKit op (occluded windows OK; SDK < 14
       // answers null -> the backend falls back to the full-screen path).
+      // The helper names the payload `png`; the backend contract is
+      // `WindowCapture.base64` — remap instead of leaking the field name.
       ...(IS_MAC
         ? {
             windowCaptureProvider: async (windowId: number) => {
               try {
                 const shot = await getSharedAxHelperClient().screenshotWindow(windowId);
-                return shot ?? null;
+                return shot ? { base64: shot.png, width: shot.width, height: shot.height } : null;
               } catch {
                 return null;
               }
