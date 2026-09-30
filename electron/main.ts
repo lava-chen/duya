@@ -63,6 +63,7 @@ import { registerUpdaterHandlers } from './ipc/updater-handlers';
 import { registerAgentServerHandlers } from './ipc/agent-server-handlers';
 import { registerPluginHandlers } from './ipc/plugin-handlers';
 import { reconcilePluginAppDeclarations } from './services/app-connections/declarative/reconcile';
+import { getAppConnectionService } from './services/app-connections/app-connection-service';
 import { registerAppConnectionHandlers } from './ipc/app-connection-handlers';
 import { registerTerminalHandlers } from './ipc/terminal-handlers';
 import { registerBrowserWebviewHandlers } from './ipc/browser-webview-handlers';
@@ -1129,6 +1130,21 @@ try {
 } catch (err) {
   logger.warn(
     'Plugin connector declaration reconcile failed (non-fatal)',
+    { error: err instanceof Error ? err.message : String(err) },
+    'Main',
+  );
+}
+// Plan (boot rehydrate): silently restore remote MCP sessions that died
+// during the previous run, using the stored refresh token + dynamic
+// client identity. Runs once during boot so the UI shows the connected
+// state without forcing a browser OAuth flow. Non-fatal — failures
+// leave rows in `error` so the user can still force a re-auth via
+// the toggle.
+try {
+  await getAppConnectionService().rehydrateRemoteMcpConnections();
+} catch (err) {
+  logger.warn(
+    'Remote MCP rehydrate failed (non-fatal)',
     { error: err instanceof Error ? err.message : String(err) },
     'Main',
   );

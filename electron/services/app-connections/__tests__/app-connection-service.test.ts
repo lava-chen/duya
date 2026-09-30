@@ -10,6 +10,9 @@
  * Pre-fix, every restart forced a full OAuth round-trip because
  * startRemoteMcpAuthorization minted a fresh connectionId per call,
  * orphaning the stored refresh token.
+ *
+ * Also covers the boot-time `rehydrateRemoteMcpConnections` path that
+ * restores sessions during app startup without user interaction.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -296,5 +299,101 @@ describe('AppConnectionService — silent reconnect (remote-mcp-silent-reconnect
     await bareService.connect(NOTION);
 
     expect(oauthMocks.startRemoteMcpAuthorization).toHaveBeenCalledTimes(1);
+  });
+
+  // ---------------------------------------------------------------
+  // boot rehydrate — Plan: remote-mcp-silent-reconnect
+  // Walks every remote MCP provider + every existing row at boot,
+  // brings dead ones back to `connected` using the stored refresh
+  // token, and never throws (so a single broken connection cannot
+  // abort startup).
+  // ---------------------------------------------------------------
+
+  it('rehydrate brings error-status rows back to connected', async () => {
+    seedConnection(store, {
+      id: 'r-stale',
+      provider: NOTION,
+      status: 'error',
+      lastError: 'Remote MCP stream died: transport closed',
+    });
+    vault.set('r-stale', fakeToken());
+
+    await service.rehydrateRemoteMcpConnections();
+
+    expect(remoteMcp.ensureSession).toHaveBeenCalledTimes(1);
+    expect(remoteMcp.ensureSession.mock.calls[0][0]).toBe('r-stale');
+    expect(oauthMocks.startRemoteMcpAuthorization).not.toHaveBeenCalled();
+    expect(store.get('r-stale')?.status).toBe('connected');
+    expect(store.get('r-stale')?.lastError).toBeNull();
+  });
+
+  it('rehydrate also reconnects connected-status rows whose transport died before onTransportDead fired', async () => {
+    seedConnection(store, { id: 'r-live', provider: NOTION, status: 'connected' });
+    vault.set('r-live', fakeToken());
+
+    await service.rehydrateRemoteMcpConnections();
+
+    expect(remoteMcp.ensureSession).toHaveBeenCalledTimes(1);
+    expect(remoteMcp.ensureSession.mock.calls[0][0]).toBe('r-live');
+    expect(store.get('r-live')?.status).toBe('connected');
+  });
+
+  it('rehydrate skips rows with no stored refresh token', async () => {
+    seedConnection(store, { id: 'r-no-tokens', provider: NOTION, status: 'error' });
+    // vault is empty for this id.
+
+    await service.rehydrateRemoteMcpConnections();
+
+    expect(remoteMcp.ensureSession).not.toHaveBeenCalled();
+    // Status left as-is so the UI keeps showing it and the user can
+    // force a re-authorization via the toggle.
+    expect(store.get('r-no-tokens')?.status).toBe('error');
+  });
+
+  it('rehydrate swallows ensureSession failures (non-fatal)', async () => {
+    seedConnection(store, { id: 'r-revoked', provider: NOTION, status: 'error' });
+    vault.set('r-revoked', fakeToken({ refreshToken: 'rt-revoked' }));
+    remoteMcp.ensureSession.mockRejectedValue(new Error('refresh token rejected'));
+
+    // Must NOT throw — a single broken connection cannot abort boot.
+    await expect(service.rehydrateRemoteMcpConnections()).resolves.toBeUndefined();
+
+    expect(remoteMcp.ensureSession).toHaveBeenCalledTimes(1);
+    // Row stays in `error` so the UI can still surface the failure.
+    expect(store.get('r-revoked')?.status).toBe('error');
+  });
+
+  it('rehydrate is a no-op when RemoteMcpConnector was never installed', async () => {
+    const bareService = new AppConnectionService({
+      store,
+      vault: vault as never,
+      tokenService: new TokenService({ store, vault: vault as never }),
+    });
+    // setRemoteMcpConnector intentionally not called.
+    seedConnection(store, { id: 'r-stale', provider: NOTION, status: 'error' });
+    vault.set('r-stale', fakeToken());
+
+    await expect(
+      bareService.rehydrateRemoteMcpConnections(),
+    ).resolves.toBeUndefined();
+
+    expect(remoteMcp.ensureSession).not.toHaveBeenCalled();
+  });
+
+  it('rehydrate continues past per-row failures (one bad row does not abort the rest)', async () => {
+    seedConnection(store, { id: 'r-good', provider: NOTION, status: 'error' });
+    seedConnection(store, { id: 'r-bad', provider: NOTION, status: 'error' });
+    vault.set('r-good', fakeToken());
+    vault.set('r-bad', fakeToken());
+
+    remoteMcp.ensureSession
+      .mockResolvedValueOnce({ connectionId: 'r-good', test: [] } as never)
+      .mockRejectedValueOnce(new Error('transient'));
+
+    await service.rehydrateRemoteMcpConnections();
+
+    expect(remoteMcp.ensureSession).toHaveBeenCalledTimes(2);
+    expect(store.get('r-good')?.status).toBe('connected');
+    expect(store.get('r-bad')?.status).toBe('error');
   });
 });

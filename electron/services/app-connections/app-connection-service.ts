@@ -528,6 +528,65 @@ export class AppConnectionService {
   }
 
   /**
+   * Plan (boot rehydrate): silently restore remote MCP sessions that
+   * died during the previous run, using the stored refresh token +
+   * dynamic client identity stored alongside it. Intended to be called
+   * once during app boot (after {@link reconcilePluginAppDeclarations})
+   * so connections come back to `connected` without forcing a browser
+   * OAuth flow.
+   *
+   * Design constraints (plan 580 D2 — kept):
+   *   - Never opens the browser; only reuses stored credentials.
+   *   - Failures are non-fatal — leaves rows in `error` so the UI can
+   *     still surface the message and the user can force a re-auth via
+   *     the toggle.
+   *   - Skips rows that have no refresh token (the user previously
+   *     revoked or never finished an OAuth flow).
+   *
+   * Walks every provider with a `remoteMcpUrl` and every existing row
+   * for that provider, regardless of stored status (`connected` rows
+   * whose transport died without `onTransportDead` firing also count).
+   * Skips rows for providers that have no remote MCP endpoint — those
+   * have their own recovery path through the OAuth flow.
+   */
+  async rehydrateRemoteMcpConnections(): Promise<void> {
+    if (!this.remoteMcp) return;
+    for (const provider of listProviders()) {
+      if (!provider.remoteMcpUrl) continue;
+      const candidates = this._connectionStore.listByProvider(provider.id);
+      for (const conn of candidates) {
+        const stored = this.vault.get(conn.id);
+        if (!stored?.refreshToken) continue;
+        try {
+          await this.remoteMcp.ensureSession(conn.id, provider, conn.scopes);
+          this._connectionStore.updateStatus(conn.id, 'connected', {
+            lastError: null,
+          });
+          this.logger.info(
+            'App Connection: boot rehydrate succeeded',
+            { provider: provider.id, connectionId: conn.id },
+            COMPONENT,
+          );
+        } catch (err) {
+          this.logger.warn(
+            'App Connection: boot rehydrate failed (non-fatal)',
+            { provider: provider.id, connectionId: conn.id },
+            COMPONENT,
+          );
+          this.logger.debug(
+            'App Connection: boot rehydrate error detail',
+            {
+              error:
+                err instanceof Error ? err.message : String(err),
+            },
+            COMPONENT,
+          );
+        }
+      }
+    }
+  }
+
+  /**
    * Disconnect a connection:
    *   1. Best-effort call the provider revoke endpoint.
    *   2. Remove the token set from the vault.
