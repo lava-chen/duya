@@ -553,15 +553,35 @@ html[data-font="system"] .message-content li {
  * content-driven column widths, and a per-cell width cap so long cells wrap
  * instead of stretching the table. */
 .markdown-table-root {
+  position: relative;
   margin: 0.75rem 0;
 }
 
 .markdown-table-toolbar {
+  position: absolute;
+  top: 0.2rem;
+  right: 0.2rem;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 0.125rem;
-  margin-bottom: 0.25rem;
+  opacity: 0;
+  pointer-events: none;
+  background: var(--bg-elevated);
+  border-radius: 0.5rem;
+  padding: 0.25rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  transition: opacity 150ms ease;
+  z-index: 10;
+}
+
+.markdown-table-root:hover .markdown-table-toolbar {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.markdown-table-toolbar.is-visible {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .markdown-table-toolbar button,
