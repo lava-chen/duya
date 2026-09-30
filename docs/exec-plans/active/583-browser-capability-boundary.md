@@ -304,16 +304,83 @@ worktree 内不存在该 Junction，故未沿用。
 
 
 
-### Phase 3 — 缝 B：browser plugin（ZCode 形制）
+### Phase 3 — 缝 B：browser plugin（ZCode 形制）✅ 已落地
 
-- [ ] 新建一方 plugin 包（走 `packages/plugin-core/src/plugins/builtin/` 现有先例，如 `github` / `notion`）。
-- [ ] 内容边界：skills（research / RPA 场景）、`workflows/*.yaml`、
-      `permissions/policy.json`（域名白名单 + DOM blocker 策略）、UI 输出模板。
-- [ ] **已定**：34 文件 10,806 行的 `platform-extractors/` + `platform-hooks/` **留在包内**
-      （用户决策 2026-10-01，见 §0）。plugin 只提供**增量** extractor / hook 扩展点，
-      不接管既有实现。
-- [ ] 权限接线：plugin 的 `policy.json` 声明的域名/DOM 策略要真正接进
-      `DomainBlocker`，而不是停在 manifest。
+落地于 `82f07912`（plugin + 测试）与 `909234ba`（手册修 github 枚举）。
+目录 `packages/plugin-core/src/plugins/builtin/browser/`，5 个文件：
+
+- [x] `.duya-plugin/plugin.json` — `category: automation`（在
+      `src/lib/plugin-types.ts:370` 的 `PluginCategory` 联合内；相邻的
+      `plans` 用了不在联合内的 `developer-tools`，是既存不一致，未跟随）。
+      **无 `setup`**：引擎已在应用内，没有安装或连接动作可做。
+- [x] `assets/icon.svg` — 16×16，与 `github` 同规格。
+- [x] `permissions/policy.json` — 只写**确实被执行**的三个 tier 字段。
+- [x] `skills/browser-research/SKILL.md`（568 字描述）— 多源调研 + provenance、
+      批量读取、SPA/XHR 数据回收、交叉验证、以及必须上报而非绕过的
+      付费墙 / 登录墙 / CAPTCHA / 限流。
+- [x] `skills/browser-automation/SKILL.md`（636 字描述）— 表单填写、多步流程、
+      每次写操作后验证、重渲染后 ref 失效、原生 dialog 恢复、以及
+      支付 / 凭据 / 删号 / 发帖的不可逆写闸门。
+- [x] `electron/plugins/builtin-browser-plugin.test.ts` — 9 用例，见下。
+
+**原计划内容清单的收敛（主动缩小，非遗漏）**
+
+§0 的缝 B 范围写的是「skills / workflows / 权限策略 / UI 模板」。本次只交付了
+**skills + 权限策略**两项，另两项**主动推迟**：
+
+- `workflows/*.yaml`：模板化流程的前提是先有稳定的场景词汇。operation 名刚
+  从 23 订正为 35、hidden 语义刚定清，立刻把流程写进模板等于把会变的东西
+  固化。等 skill 在真实任务里跑过一轮，沉淀出重复出现的步骤再抽模板。
+- UI 输出模板：属于产品面（相邻 plan 573），不在本 plan 动。
+
+
+
+原写「`policy.json` 声明的域名/DOM 策略要真正接进 `DomainBlocker`，而不是停在
+manifest」——**这条前提是错的**，故没有实现它：
+
+- `permissions[].domains` 确实在传递（`PluginManager.ts:480,561`）、确实在 UI
+  展示（`PluginPermissionReview.tsx:67`）、也确实到达 daemon（`daemon.ts:569`）。
+- 但**导航拦截的实际执行者是设置驱动的 `DomainBlocker`**，daemon 收到的
+  `blocked_domains` 来自扩展设置，不是来自 manifest 声明。
+- 所以在本插件里写 `domains` 只会是装饰性字段：读得到、传得下去、但拦不住
+  任何东西。宁可只声明三个真被执行的 tier 字段，也不制造一个看起来在管事
+  的空壳。真要统一，得单独立项改 `DomainBlocker` 的数据源——那是产品面改动，
+  不属于本 plan。
+
+**实测事实（写作过程中核出来的，不靠推测）**
+
+- operation 实为 **35 个**，其中 `post` / `twitter_post` 标了 `hidden: true`
+  → schema 枚举里只有 **33 个**。（`BrowserTool.ts` 头部注释写的「23 operations」
+  是陈旧的。）
+- `tool_catalog` 入参只有 `query` / `tool_id` / `namespace` / `cursor`，且
+  `additionalProperties: false`。skill 一开始写成了臆造的
+  `{action:'detail', target:'browser'}`，会被直接拒收——已改。
+- `tabs_select` / `tabs_close` 的参数是 `target`（tab index 或 id），
+  不是 `index`。
+- `file_upload` 用 **CSS `selector`** 而非 ref——全套里唯一的例外。
+- `file_upload` / `cookies` / `network_start` / `network_read` 与整套坐标操作
+  在 fallback（无 CDP）下一律**报错而非降级**。
+- 手册 `prompt.ts` 的 search engine 枚举漏了 `github`（schema 里有，
+  `ALL_ENGINES` 里也有，模型读不到）→ 已在 `909234ba` 修掉。
+
+**为什么 skill 不重复手册**
+
+Phase 2 已把 ~20 KB 手册接到 `tool_catalog` 的 detail 响应。手册负责
+「有哪些 operation、参数长什么样、网络环境决策表、安全规则」；skill 只补
+手册表达不了的东西——调研工作流与审批姿态。这也是先接手册、再写 skill 的
+顺序要求：否则 skill 会固化成一份会过期的 operation 清单。
+
+**测试的取舍**
+
+不造 fixture，直接读**真实出货目录**（`catalog-builtin.test.ts` 造 fixture，
+测的是扫描器；这里要测的是产物本身）。另外加了一条**反臆造 API** 断言：
+两个 SKILL.md 里所有 `"operation": "x"` 字面量和所有反引号包裹的
+snake_case token，都必须存在于 `getAllActions()`。这条守卫在写作时真的抓到了
+`tool_catalog` / `usage_guide` 两个误报（也确证了它不是空转）。
+
+变异测试证明它有牙：把 `writeActionsRequireApproval` 拼错成
+`writeActionsRequire_Approval`，`readPermissionsPolicy` 会静默把该字段丢成
+`undefined`（`JSON.parse` 失败被 `catch` 吞掉），测试立刻红。
 
 ### Phase 4 — 缝 C（可选，需先有第三方引擎诉求）
 
@@ -339,7 +406,9 @@ worktree 内不存在该 Junction，故未沿用。
 - Phase 1：`npx vitest run packages/agent/tests/BrowserTool packages/browser`；
   `npm run typecheck:web`；worktree 内先 junction `node_modules`（根 + 各 workspace 包）否则报假 TS2307。
 - Phase 2：`npm run typecheck:all`；Playwright 验 tool_catalog 对 browser 的 namespace 提示。
-- Phase 3：`npx vitest run packages/plugin-core`；plugin 安装/卸载后工具可见性回归。
+- Phase 3（已跑）：`npx vitest run packages/browser electron/plugins/builtin-browser-plugin.test.ts`
+  → 26 文件全绿；`npx tsc -p packages/browser --noEmit`、`npx tsc -p packages/agent --noEmit`、
+  `npm run typecheck:web` 均 exit 0。
 - Phase 4：`npm run typecheck:all` + 完整 vitest；**真实 Electron renderer 内验 preload 路径**，
   浏览器态不可用纯 Vite 验证。
 - 全程：任何阶段都不跑 `npm test` 与 `npm run electron:dev` 并行（共享 `better-sqlite3` 二进制）。
@@ -352,6 +421,19 @@ worktree 内不存在该 Junction，故未沿用。
 - `SchemaGenerator.test.ts:110,:127` 的字符串路径是否触发路径敏感加载。
 - `platform-extractors/` 与 `platform-hooks/` 之间、以及它们与 `actions/` 之间的**运行时**耦合
   （本次只静态核了 import 边）；`Registry` 动态拼装可能有静态 import 看不到的耦合。
+- **真实 Electron browser smoke 未做**：第 4 个消费点
+  `process/agent-process-entry.ts:78`（经 `builtin.js` 间接引入，`:4284` 调
+  `setBrowserConfig`）不能只靠 grep 判定，需重开 dev app 跑一次真实对话。
+  阻塞：本机 `node-pty` 无编译产物（`MSB8040`，缺 VS Spectre 缓解库，
+  **机器级问题、非本 plan 造成**），需装系统软件。
+- **browserMode 是否新增 popover 入口**：属产品决策，未擅自加。
+  相邻 plan 573 拥有产品面改动权。
+- **plugin 安装/卸载后的工具可见性回归未做**（Phase 3 原定的 gate 之一）：
+  需真实 Electron 环境。纯 Vite 验不了 preload 路径。
+- `electron/plugins/PluginManager.test.ts` 在本 worktree 加载失败
+  （`Cannot find package '@duya/agent/message'`）：`packages/agent/dist` 只有 8 个
+  文件的陈旧构建，而 `./message` 是已声明导出但 `dist/message.js` 不存在。
+  **与本 plan 无关**，属 worktree 环境问题。
 
 ## 10. 决策记录
 
@@ -373,4 +455,18 @@ worktree 内不存在该 Junction，故未沿用。
   最终类型走 `dist/*.d.ts`、运行时走源码；详见 §7 Phase 1 的对照表。
 - 2026-10-01：engine 内 4 个既有红已修（`backend-resolver` 期望写反、`screenshot` 落盘契约），
   归因方式为基线 worktree 复跑，非推测。
+- 2026-10-01：Phase 3 落地（`82f07912` + `909234ba`）。**第三次更正**：原 Phase 3 写
+  「`policy.json` 的域名/DOM 策略要真正接进 `DomainBlocker`，而不是停在 manifest」，
+  前提是错的——`permissions[].domains` 确实一路传到 daemon，但导航拦截的实际执行者是
+  设置驱动的 `DomainBlocker`，daemon 的 `blocked_domains` 来自扩展设置而非 manifest。
+  故本插件只声明三个真被执行的 tier 字段，不写装饰性 `domains`。详见 §7 Phase 3。
+- 2026-10-01：顺手修掉手册的一处真实欠文档：search 的 engine 枚举漏了
+  `github`（schema 有、`ALL_ENGINES` 有、模型读不到），已补并说明它是
+  code/repo 专用且永不领衔（`909234ba`）。
+- 2026-10-01：**BOM 静默失效**（写测试时踩到，未修代码，仅记录）：`Set-Content -Encoding utf8`
+  在 PowerShell 5.1 下写 BOM，而 `readPermissionsPolicy` 的 `JSON.parse` 遇 BOM 抛错
+  被 `catch` 吞掉 → 整个 permission policy 静默变成 `undefined`，且**不报错**。
+  任何 `permissions/policy.json` / `plugin.json` 若带 BOM 都会这样。
+  修它要动所有插件共用的读取路径，属独立改动，未纳入本 plan。
+
 
