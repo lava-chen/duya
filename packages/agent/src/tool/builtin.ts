@@ -163,6 +163,14 @@ export function createBuiltinRegistry(
   registry.register(browserTool.toTool(), browserTool, {
     exposure: 'deferred',
     inputSchemaSummary: 'Search, open, inspect, and interact with webpages using a persistent browser session.',
+    // Plan 583 Phase 2: give the tool a real namespace so `tool_catalog`
+    // search and namespace paging can group it (previously every builtin
+    // fell back to the 'builtin' namespace, which made a capability-level
+    // hint impossible). The `computer` namespace is the intended sibling.
+    discovery: {
+      namespace: 'browser',
+      tags: ['web', 'cdp', 'navigation', 'scraping', 'screenshot', 'playwright'],
+    },
   });
 
   // Phase 5: Other tools

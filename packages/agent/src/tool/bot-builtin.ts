@@ -145,6 +145,13 @@ export function registerBotTools(registry: ToolRegistry): void {
   registry.register(browserTool.toTool(), browserTool, {
     exposure: 'deferred',
     inputSchemaSummary: 'Search, open, inspect, and interact with webpages using a persistent browser session.',
+    // Same catalog identity as the general surface (plan 583 Phase 2) so a
+    // bot's browser entry is discoverable under the same `browser` namespace
+    // and carries the same stable tool_id.
+    discovery: {
+      namespace: 'browser',
+      tags: ['web', 'cdp', 'navigation', 'scraping', 'screenshot', 'playwright'],
+    },
   });
   // Keep Skill on the eager surface so its real input schema is available;
   // the previous hint stub exposed an empty schema and failed validation.
