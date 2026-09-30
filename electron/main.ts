@@ -1140,15 +1140,25 @@ try {
 // state without forcing a browser OAuth flow. Non-fatal — failures
 // leave rows in `error` so the user can still force a re-auth via
 // the toggle.
-try {
-  await getAppConnectionService().rehydrateRemoteMcpConnections();
-} catch (err) {
-  logger.warn(
-    'Remote MCP rehydrate failed (non-fatal)',
-    { error: err instanceof Error ? err.message : String(err) },
-    'Main',
-  );
-}
+//
+// Wrapped in an async IIFE rather than awaited at module top level: the
+// Electron bundle is built as CommonJS (`scripts/build-electron.mjs`), and
+// esbuild rejects top-level await under `cjs`, so the bare `await` here
+// failed `npm run electron:build` outright — which blocks the release build
+// and every Playwright E2E run. The IIFE is the pattern the other boot
+// tasks in this file already use, and the surrounding try/catch keeps the
+// failure non-fatal exactly as before.
+void (async () => {
+  try {
+    await getAppConnectionService().rehydrateRemoteMcpConnections();
+  } catch (err) {
+    logger.warn(
+      'Remote MCP rehydrate failed (non-fatal)',
+      { error: err instanceof Error ? err.message : String(err) },
+      'Main',
+    );
+  }
+})();
 // Lazy groups: the module graphs behind these channels are only needed once
 // the corresponding UI is used, so the real handlers load on first invoke.
 registerLazyIpcHandlers({
