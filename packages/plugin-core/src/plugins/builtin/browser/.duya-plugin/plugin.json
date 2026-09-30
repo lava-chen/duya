@@ -1,0 +1,29 @@
+{
+  "name": "browser",
+  "version": "0.1.0",
+  "description": "Drive a real browser from duya: search, read and extract from web pages, fill forms and complete multi-step interactions, and capture screenshots for visual verification. The engine ships inside duya as @duya/browser — this plugin adds the scenario knowledge (how to research, how to automate) and its permission policy, not a second browser.",
+  "author": {
+    "name": "Duya"
+  },
+  "homepage": "https://github.com/lava-chen/duya",
+  "license": "MIT",
+  "keywords": [
+    "browser",
+    "web",
+    "research",
+    "scraping",
+    "automation",
+    "rpa",
+    "screenshot",
+    "cdp"
+  ],
+  "interface": {
+    "displayName": "Browser",
+    "shortDescription": "Search, read, extract and automate on real web pages",
+    "longDescription": "Use duya's built-in browser to work with live web pages. The `browser` tool drives a real Chromium session over CDP and degrades gracefully (extension -> sidebar webview -> static fetch) when a transport is unavailable. This plugin contributes the operating knowledge: when to snapshot instead of guessing selectors, how to verify that a write actually landed, and how to research a topic across many sources without losing provenance. The engine is part of duya, so there is nothing to install, no binary to download and no account to connect. Read the `browser` tool's usage guide (via tool_catalog) before the first call — it documents every operation and its failure modes.",
+    "category": "automation",
+    "brandColor": "#3B82F6",
+    "icon": "./assets/icon.svg",
+    "screenshots": []
+  }
+}

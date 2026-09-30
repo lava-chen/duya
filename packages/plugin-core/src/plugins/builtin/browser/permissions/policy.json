@@ -1,0 +1,5 @@
+{
+  "defaultMode": "read",
+  "writeActionsRequireApproval": true,
+  "destructiveActionsRequireApproval": true
+}
