@@ -2,13 +2,19 @@
  * PermissionService — audit-only ledger of permissions granted to a
  * plugin at install time.
  *
- * Runtime interception lives in
- * `packages/agent/src/mcp/permission-gate.ts:evaluateMcpToolPermission`.
- * This service is intentionally NOT consulted on the hot path; it
- * exists so:
+ * Runtime interception lives in the central permission pipeline:
+ * `decideMcpSource` (`packages/agent/src/permissions/permissions.ts`), which
+ * is both the provenance step of `hasPermissionsToUseTool` and the gate the
+ * MCP executor consults before dispatching a third-party tool call. This
+ * service is intentionally NOT consulted on the hot path; it exists so:
  *   - The UI can show "you granted this plugin N permissions" surfaces.
  *   - `PluginManager.remove` has a single point of revocation
  *     (`revokeAllPermissions`).
+ *
+ * NOTE (plan 584): the ledger is an in-memory map, so it does not survive a
+ * restart, and `checkPermission` has no runtime callers. The authoritative
+ * persisted copy is `PluginRegistryEntry.grantedPermissions`. Plan 584 Phase 3
+ * makes this service read that instead of keeping a second source of truth.
  *
  * The historical `confirmPluginPermissions` method never confirmed
  * anything — it was a write-only ledger entry. It has been renamed to

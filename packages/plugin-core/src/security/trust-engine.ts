@@ -86,7 +86,11 @@ export class TrustEngine {
   }
 
   getCapabilities(trust: PluginTrustInfo): TrustLevelCapability {
-    return TRUST_LEVEL_CAPABILITIES[trust.level];
+    // Return a copy: the table is module-level state, and plan 584 wires
+    // these values into install/activation decisions. A caller that mutated
+    // the returned object would silently change the policy for every later
+    // caller. All fields are primitives, so a shallow copy is sufficient.
+    return { ...TRUST_LEVEL_CAPABILITIES[trust.level] };
   }
 
   meetsMinimumLevel(
