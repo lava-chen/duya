@@ -48,6 +48,7 @@ import { ThreadListItem } from "../shared/ThreadListItem";
 import { SidebarSectionItem, type SectionKind } from "./sidebar/SidebarSectionItem";
 import {
   bucketThreadsByKind,
+  sortThreadsBy,
   SYSTEM_SECTIONS,
 } from "./sidebar/section-system";
 import { useSidebarSectionsStore } from "@/stores/sidebar-sections-store";
@@ -710,12 +711,10 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     // `findSectionForProject`; projects with no mapping land in the
     // synthetic "__uncategorized__" section so they remain visible.
     const sidebarStructure = useMemo(() => {
-      const sortThreads = (items: Thread[]) =>
-        [...items].sort((a, b) => {
-          if (projectSortBy === 'priority') return b.createdAt - a.createdAt;
-          if (projectSortBy === 'lastActivity') return b.updatedAt - a.updatedAt;
-          return a.title.localeCompare(b.title);
-        });
+      // Plan 582 (G8): the comparator lives in `section-system` so the
+      // system sections, the project groups and the archived section cannot
+      // drift apart — and so `lastActivity` picks up the G4 recency column.
+      const sortThreads = (items: Thread[]) => sortThreadsBy(items, projectSortBy);
 
       // Bucket threads by kind. Sub-agents are dropped in `bucketThreadsByKind`.
       const buckets = bucketThreadsByKind(threads);
@@ -916,12 +915,17 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         // The roster is sliced to `archivedVisibleCount` so the section
         // reveals 10 rows at a time instead of dumping the whole archive
         // into the sidebar.
+        //
+        // Plan 582 (G8): it now goes through the same `sortThreads` as every
+        // other section. It used to render in raw `listArchived` order, so
+        // picking "按名称" left the archive untouched — and "按最近活动"
+        // sorted it by the wrong column entirely.
         {
           id: '__system__:archived',
           kind: 'archived' as SectionKind,
           name: '__ARCHIVED_SECTION__',
           collapsed: collapsedSystemSections.has('__system__:archived'),
-          items: threadItems(archivedThreads.slice(0, archivedVisibleCount)),
+          items: threadItems(sortThreads(archivedThreads).slice(0, archivedVisibleCount)),
           archivedHiddenCount: Math.max(0, archivedThreads.length - archivedVisibleCount),
         },
       ];
@@ -1611,6 +1615,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                         project={project}
                         threads={projectThreads}
                         activeThreadId={activeThreadId}
+                        sortBy={projectSortBy}
                       />
                     );
                   }

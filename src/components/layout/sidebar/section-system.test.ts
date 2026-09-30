@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   detectThreadKind,
   bucketThreadsByKind,
+  sortThreadsBy,
   SYSTEM_SECTIONS,
   SESSION_KIND_PREFIXES,
   isPlaceholderThreadId,
@@ -93,5 +94,51 @@ describe('isPlaceholderThreadId (plan 505)', () => {
   it('returns false for null / undefined', () => {
     expect(isPlaceholderThreadId(null, 'bot')).toBe(false);
     expect(isPlaceholderThreadId(undefined, 'bot')).toBe(false);
+  });
+});
+
+describe('sortThreadsBy (Plan 582 G8)', () => {
+  it('sorts by title, then createdAt, then recency, per mode', () => {
+    const threads = [
+      makeThread({ id: 'b', title: 'Beta', createdAt: 300, recencyAt: 100 }),
+      makeThread({ id: 'a', title: 'Alpha', createdAt: 100, recencyAt: 900 }),
+      makeThread({ id: 'c', title: 'Gamma', createdAt: 200, recencyAt: 500 }),
+    ];
+
+    // 'manual' is the mode whose comparator falls through to title order.
+    expect(sortThreadsBy(threads, 'manual').map((t) => t.id)).toEqual(['a', 'b', 'c']);
+    expect(sortThreadsBy(threads, 'priority').map((t) => t.id)).toEqual(['b', 'c', 'a']);
+    expect(sortThreadsBy(threads, 'lastActivity').map((t) => t.id)).toEqual(['a', 'c', 'b']);
+  });
+
+  it('lastActivity reads recencyAt, NOT updatedAt', () => {
+    // Plan 582 (G4): the whole point. `tidy` was archived (so updatedAt
+    // jumped) but was not USED more recently, so it must not float to the
+    // top of the sidebar just because the user filed it away.
+    const threads = [
+      makeThread({ id: 'tidy', title: 'Tidy', updatedAt: 9000, recencyAt: 10 }),
+      makeThread({ id: 'active', title: 'Active', updatedAt: 20, recencyAt: 8000 }),
+    ];
+    expect(sortThreadsBy(threads, 'lastActivity').map((t) => t.id)).toEqual(['active', 'tidy']);
+  });
+
+  it('falls back to updatedAt when a thread predates the recency column', () => {
+    // A pre-G4 main process sends no recency_at. Falling back keeps the
+    // order total; treating undefined as 0 would sink every old thread.
+    const threads = [
+      makeThread({ id: 'old-a', title: 'A', updatedAt: 100, recencyAt: undefined }),
+      makeThread({ id: 'old-b', title: 'B', updatedAt: 200, recencyAt: undefined }),
+    ];
+    expect(sortThreadsBy(threads, 'lastActivity').map((t) => t.id)).toEqual(['old-b', 'old-a']);
+  });
+
+  it('does not mutate its input', () => {
+    const threads = [
+      makeThread({ id: 'b', title: 'B' }),
+      makeThread({ id: 'a', title: 'A' }),
+    ];
+    const before = threads.map((t) => t.id);
+    sortThreadsBy(threads, 'manual');
+    expect(threads.map((t) => t.id)).toEqual(before);
   });
 });

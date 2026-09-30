@@ -72,6 +72,14 @@ export interface Thread {
   archivedAt?: number | null;
   archivedPath?: string | null;
   rolloutPath?: string | null;
+  /**
+   * Plan 582 (G4): when the user last USED this session. Distinct from
+   * `updatedAt`, which also moves on archiving, pinning and renaming — the
+   * sidebar sorts on this so housekeeping does not reorder the list.
+   */
+  recencyAt?: number | null;
+  /** Plan 582 (G4): start of the most recent turn. */
+  lastTurnStartedAt?: number | null;
 }
 
 // Project group for sidebar display

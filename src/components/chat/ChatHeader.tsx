@@ -99,7 +99,12 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
       kind: "action",
       id: "rename",
       label: t("thread.renameThread"),
-      shortcut: "Ctrl+Alt+R",
+      // Plan 582 (G8): the `Ctrl+Alt+R` / `Ctrl+Alt+S` labels that used to
+      // sit here had no keydown handler anywhere in the renderer — grep for
+      // `altKey` finds nothing. They advertised shortcuts that did nothing,
+      // which is worse than showing none: users bind muscle memory to a key
+      // and then conclude the app is broken. Re-add a label only alongside the
+      // handler that implements it.
       onSelect: () => setIsEditing(true),
     },
     { kind: "divider", id: "div-1" },
@@ -107,7 +112,6 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
       kind: "action",
       id: "openSideChat",
       label: t("chat.header.openSideChat"),
-      shortcut: "Ctrl+Alt+S",
       onSelect: handleOpenSideChat,
     },
     {

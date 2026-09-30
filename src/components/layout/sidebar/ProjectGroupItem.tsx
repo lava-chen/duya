@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
-import { useConversationStore, type Thread, type ProjectGroup } from "@/stores/conversation-store";
+import { useConversationStore, type Thread, type ProjectGroup, type ProjectSortBy } from "@/stores/conversation-store";
+import { sortThreadsBy } from "./section-system";
 import { ThreadListItem } from "../../shared/ThreadListItem";
 import {
   FolderIcon,
@@ -36,11 +37,17 @@ interface ProjectGroupItemProps {
   project: ProjectGroup;
   threads: Thread[];
   activeThreadId: string | null;
+  /**
+   * Plan 582 (G8): the sidebar's active sort mode. This group used to
+   * hard-code `updatedAt DESC`, so choosing "按名称" or "按优先级" in the
+   * sidebar header silently did nothing once a session was inside a project.
+   */
+  sortBy: ProjectSortBy;
 }
 
 const THREAD_COLLAPSE_THRESHOLD = 5;
 
-export function ProjectGroupItem({ project, threads, activeThreadId }: ProjectGroupItemProps) {
+export function ProjectGroupItem({ project, threads, activeThreadId, sortBy }: ProjectGroupItemProps) {
   const { t } = useTranslation();
   const { startNewChat, collapsedProjects, toggleProjectExpanded } = useConversationStore();
   // Plan 471: project ↔ section assignment. The selector subscribes to the
@@ -74,8 +81,10 @@ export function ProjectGroupItem({ project, threads, activeThreadId }: ProjectGr
   // "删除项目" label doing the wrong thing).
   const [removeDialogProject, setRemoveDialogProject] = useState<ProjectEntity | null>(null);
 
-  // Sort threads by updatedAt, most recent first
-  const sortedThreads = [...threads].sort((a, b) => b.updatedAt - a.updatedAt);
+  // Plan 582 (G8): delegate to the shared comparator so this group honours
+  // the sidebar's sort setting — and so `lastActivity` reads the G4 recency
+  // column rather than `updatedAt`, which archiving and renaming also move.
+  const sortedThreads = sortThreadsBy(threads, sortBy);
 
   // Reveal sessions incrementally (5 at a time) so expanding never jumps
   // straight from 5 to the full list.

@@ -13,6 +13,7 @@
  */
 
 import type { Thread } from '@/stores/conversation-store';
+import type { ProjectSortBy } from '@/stores/conversation-store';
 
 export type SystemSectionKind = 'project' | 'cron' | 'gateway' | 'wakeup' | 'pinned' | 'bot' | 'room';
 
@@ -170,4 +171,32 @@ export function bucketThreadsByKind(threads: Thread[]): {
  *  built-in kind. */
 export function getSystemSection(id: string): SystemSectionDescriptor | undefined {
   return SYSTEM_SECTIONS.find((s) => s.id === id);
+}
+
+/**
+ * Plan 582 (G8): the ONE thread comparator, shared by every section.
+ *
+ * Three places used to sort independently — `app-sidebar`'s system sections,
+ * `ProjectGroupItem`, and the archived section (which did not sort at all).
+ * Divergent comparators are how "my project list ignores the sort setting"
+ * bugs happen, so the rule lives here and the three call sites delegate.
+ *
+ * `lastActivity` deliberately reads `recencyAt`, not `updatedAt` (Plan 582
+ * G4). `updatedAt` also moves when the user archives, pins or renames a
+ * session, so sorting on it made housekeeping reorder the list. `recencyAt`
+ * only advances when a turn starts. The `updatedAt` fallback keeps threads
+ * from a pre-G4 main process in a sensible position instead of all at the
+ * bottom.
+ */
+export function sortThreadsBy(
+  items: Thread[],
+  sortBy: ProjectSortBy,
+): Thread[] {
+  return [...items].sort((a, b) => {
+    if (sortBy === 'priority') return b.createdAt - a.createdAt;
+    if (sortBy === 'lastActivity') {
+      return (b.recencyAt ?? b.updatedAt) - (a.recencyAt ?? a.updatedAt);
+    }
+    return a.title.localeCompare(b.title);
+  });
 }
