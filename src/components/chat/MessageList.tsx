@@ -1308,19 +1308,10 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
       <button
         type="button"
         onClick={handleJumpToLatest}
-        className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40 inline-flex items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--surface-solid)] px-3 py-1.5 text-xs font-medium text-[var(--muted)] shadow-sm hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-colors animate-in fade-in slide-in-from-bottom-2 duration-200"
+        className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40 inline-flex h-9 w-9 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-solid)] text-[var(--muted)] shadow-sm hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-colors animate-in fade-in slide-in-from-bottom-2 duration-200"
         aria-label="Jump to latest message"
       >
-        <ChevronDownIcon size={14} strokeWidth={2.25} />
-        <span>Jump to latest</span>
-        {unreadTurns > 0 && (
-          <span
-            className="ml-0.5 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-[var(--accent)] px-1 text-[10px] font-semibold text-white"
-            aria-label={`${unreadTurns} new turn${unreadTurns === 1 ? '' : 's'}`}
-          >
-            {unreadTurns > 99 ? '99+' : unreadTurns}
-          </span>
-        )}
+        <ChevronDownIcon size={16} strokeWidth={2.25} />
       </button>
     )}
     </div>

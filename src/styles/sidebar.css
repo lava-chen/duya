@@ -745,8 +745,48 @@ html[data-glass-repair] .attachment-preview-overlay {
   font-weight: 500;
 }
 
+/* -----------------------------------------------------------------------
+ * Sidebar geometry tokens
+ *
+ * The sidebar's hierarchy has a single vertical line — the "name column" —
+ * that should run through every project-name AND every thread-title.
+ * Rather than scatter magic numbers (1.875rem / 0.5rem / 14px) across
+ * multiple rules, we express every horizontal offset as "distance from
+ * the sidebar's outer-left to the name column" and read that single
+ * value in every rule that needs alignment.
+ *
+ * Derivation (do not change without re-deriving everything below):
+ *   --sidebar-name-column-x
+ *     = project-group-header.margin-left        (0.5rem)
+ *     + project-group-header.padding-left       (0.5rem)
+ *     + project-group-icon width                (14px)
+ *     + project-group-header gap (icon→name)    (0.25rem)
+ *     = 1.25rem + 14px = 34px
+ *
+ * Read by:
+ *   - .project-group-threads  → margin-left (places threads in name column)
+ *   - .project-group-header .project-group-name and .thread-item-title
+ *     stay where they are naturally once the above is set; the only
+ *     thing they need is padding-left: 0 (already the case for
+ *     .thread-item after Plan sidebar-edge).
+ *
+ * If you change --sidebar-icon-size, .project-group-header padding-left,
+ * or .project-group-header gap, update --sidebar-name-column-x too.
+ * --------------------------------------------------------------------- */
+:root {
+  --sidebar-icon-size: 14px;
+  --sidebar-header-x-pad: 0.5rem;
+  --sidebar-header-gap: 0.25rem;
+  --sidebar-name-column-x: calc(
+    0.5rem + var(--sidebar-header-x-pad) + var(--sidebar-icon-size) + var(--sidebar-header-gap)
+  );
+}
+
 .project-group-threads {
-  margin-left: 1.875rem;
+  /* Plan sidebar-edge: push thread container's outer-left to the name
+   * column. Combined with .thread-item { padding-left: 0 } this makes
+   * thread titles flush with the project name — no extra indent. */
+  margin-left: var(--sidebar-name-column-x);
   margin-top: 0.1rem;
 }
 
@@ -803,7 +843,12 @@ html[data-glass-repair] .attachment-preview-overlay {
   border: 0;
   border-radius: 0.35rem;
   text-align: left;
-  padding: 0.2rem 0.5rem;
+  /* Plan sidebar-edge: drop horizontal padding so the title sits flush with
+   * the row's left edge (matching project-group-header's flush geometry) and
+   * the hover overlay hugs the right edge. Vertical padding kept for hit
+   * height. The horizontal gap below replaces the old padding-x. */
+  padding: 0.2rem 0;
+  column-gap: 0.25rem;
   margin: 0;
   width: 100%;
   max-width: 100%;
@@ -815,7 +860,7 @@ html[data-glass-repair] .attachment-preview-overlay {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.5rem;
+  gap: 0.25rem;
   min-height: 0;
 }
 
@@ -839,7 +884,9 @@ html[data-glass-repair] .attachment-preview-overlay {
 }
 
 .thread-item:hover .thread-item-title {
-  padding-right: 1.5rem;
+  /* Smaller reservation since the hover overlay sits flush against the
+   * right edge of the row instead of inside the old 0.5rem right gutter. */
+  padding-right: 1.6rem;
 }
 
 .thread-item-actions {
@@ -864,7 +911,7 @@ html[data-glass-repair] .attachment-preview-overlay {
    content (which fades out), giving a clean replace-not-overlap effect. */
 .thread-item-actions-hover {
   position: absolute;
-  right: 0.5rem;
+  right: 0;
   top: 50%;
   transform: translateY(-50%);
   display: flex;

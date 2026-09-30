@@ -523,7 +523,11 @@ html.compact .sidebar-primary-link {
 }
 
 html.compact .thread-item {
-  padding: 0.15rem 0.5rem;
+  /* Plan sidebar-edge: drop horizontal padding to match non-compact
+   * intent (.thread-item { padding: 0.2rem 0 }). Without this override
+   * compact-mode would re-introduce the 8px left gutter that the new
+   * thread-row geometry deliberately removed. Keep vertical shrink. */
+  padding: 0.15rem 0;
   font-size: 0.85rem;
 }
 
