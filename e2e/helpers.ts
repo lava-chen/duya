@@ -33,6 +33,19 @@ export interface DuyaApp {
 }
 
 /**
+ * The isolated userData root for a namespace.
+ *
+ * Exported rather than inlined so a spec that needs to reach the namespace's
+ * SQLite file on disk (e.g. to seed a row in a shape the running app cannot
+ * produce) derives the exact same path `launchDuya` uses. Two independent
+ * derivations drift the moment either file moves, and the symptom is a
+ * `existsSync` failure that looks like a product bug.
+ */
+export function userDataRootFor(namespace: string): string {
+  return path.resolve(__dirname, '..', '.e2e-userdata', namespace);
+}
+
+/**
  * Launch DUYA Electron app in test mode and wait for the first window.
  *
  * Per-namespace isolation is achieved by setting DUYA_TEST_USER_DATA_DIR
@@ -45,10 +58,7 @@ export interface DuyaApp {
  */
 export async function launchDuya(opts: LaunchOptions): Promise<DuyaApp> {
   const fs = await import('node:fs');
-  const pathMod = await import('node:path');
-  // .e2e-userdata/<ns> — git-ignored implicitly (no tracked file uses
-  // this path; if the repo wants to be explicit, add to .gitignore).
-  const userDataRoot = pathMod.resolve(__dirname, '..', '.e2e-userdata', opts.namespace);
+  const userDataRoot = userDataRootFor(opts.namespace);
   fs.mkdirSync(userDataRoot, { recursive: true });
 
   const app = await electron.launch({

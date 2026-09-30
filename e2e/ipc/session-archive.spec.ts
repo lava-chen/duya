@@ -27,6 +27,22 @@
  *   4. G5 — an archived session is absent from the active roster and present
  *      in the archived one.
  *   5. Archive is idempotent and a second call does not re-date the row.
+ *   6. §8.1 — a row left on the Plan 549 convention is still restored to its
+ *      recorded path instead of a bare basename at the rollout root. The row
+ *      is put into that shape in place, with a direct SQL write, because
+ *      nothing in the running app can produce it.
+ *
+ * KNOWN HARNESS LIMIT (why §8.1 is not a two-launch test): the boot-time
+ * legacy migration needs two launches to observe, and this harness does not
+ * carry the core DB across one. A bare close/relaunch — no rewriting, no
+ * product code involved — comes back with `sessions`, `message_index` and
+ * `session_runtime_locks` all empty, while `meta` carries a boot-2 timestamp
+ * for `imported_from_legacy`, i.e. the file was rebuilt rather than truncated.
+ * The migration's own logic is covered against a real filesystem and a real
+ * schema by `electron/db/core/__tests__/legacy-archive-migration.test.ts`
+ * (13 cases, including one that asserts a Plan 549 row reads as EMPTY and
+ * that the migration makes its history readable again); what is NOT covered
+ * end-to-end is the three-line call in `initCoreDatabase` that runs it.
  *
  * This file is also what caught the `session:unarchive` vs
  * `db:session:unarchive` channel mismatch (Plan 549), which made the
@@ -38,7 +54,11 @@
  * start empty.
  */
 import { test, expect } from '@playwright/test';
-import { launchDuya, closeDuya, invokeApi, type DuyaApp } from '../helpers';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { launchDuya, closeDuya, invokeApi, userDataRootFor, type DuyaApp } from '../helpers';
 
 let dua: DuyaApp;
 
@@ -290,5 +310,92 @@ test.describe('session archive (Plan 582)', () => {
     const rowAfter = await invokeApi<SessionRow>(dua.page, 'thread.get', id);
     expect(rowAfter.archived_at).toBe(row.archived_at);
     expect(rowAfter.archived_path).toBe(row.archived_path);
+  });
+
+
+  test('§8.1: a Plan 549 file row unarchives to its recorded path, not the rollout root', async () => {
+    const namespace = 'ipc-archive-legacy';
+    // Mirrors boot-config: in test mode the rollout root is namespaced under
+    // `~/.duya/`, and the core DB sits beside the legacy one in the isolated
+    // userData dir. `userDataRootFor` is the same helper `launchDuya` uses, so
+    // the two cannot drift.
+    const rolloutRoot = path.join(os.homedir(), '.duya', 'test-namespaces', namespace);
+    const coreDbPath = path.join(userDataRootFor(namespace), 'databases', 'duya-core.db');
+
+    // A namespace's `config.toml` PERSISTS in `~/.duya/test-namespaces/<ns>/`
+    // and pins an absolute `database_path`. Whichever checkout ran the
+    // namespace first owns it, so a later run from a different worktree keeps
+    // writing to a path the app no longer shares with this one. The spec owns
+    // this namespace, so reset it.
+    fs.rmSync(path.join(rolloutRoot, 'config.toml'), { force: true });
+    fs.rmSync(userDataRootFor(namespace), { recursive: true, force: true });
+
+    dua = await launchDuya({ namespace });
+    await waitForCoreStores();
+    const id = `e2e-legacy-${Date.now()}`;
+    await createSession(id, 'legacy row');
+    await appendRollout(id, 'first');
+    await appendRollout(id, 'second');
+
+    const before = await invokeApi<SessionRow>(dua.page, 'thread.get', id);
+    const messagesBefore = await messagesOf(id);
+    expect(messagesBefore.length).toBeGreaterThan(0);
+    const originalRel = before.rollout_path!.replace(/\\/g, '/');
+    const originalAbs = path.join(rolloutRoot, originalRel);
+    expect(fs.existsSync(originalAbs)).toBe(true);
+
+    // Let the app archive it for real, so the bucket, the directory shape and
+    // the file move are all genuine rather than hand-rolled.
+    const archived = await invokeApi<{ ok: boolean }>(dua.page, 'session.archive', id);
+    expect(archived.ok).toBe(true);
+    const afterArchive = await invokeApi<SessionRow>(dua.page, 'thread.get', id);
+    const bucket = afterArchive.archived_path!.split('/').slice(0, 2).join('/');
+    const liveName = path.posix.basename(afterArchive.rollout_path!);
+    const liveAbs = path.join(rolloutRoot, afterArchive.rollout_path!);
+    expect(fs.existsSync(liveAbs)).toBe(true);
+
+    // Now put the row back on the Plan 549 shape, in place, while the app is
+    // still running: one file at `archived/<date>/<basename>`, and
+    // `rollout_path` left on the pre-archive path — which is precisely what the
+    // old handler left behind, and the only reason the original location is
+    // still recoverable at all. SQLite runs in WAL mode, so a second
+    // connection can write while the app holds the database open.
+    const legacyRel = `${bucket}/${liveName}`;
+    const legacyAbs = path.join(rolloutRoot, legacyRel);
+    fs.renameSync(liveAbs, legacyAbs);
+
+    const db = new DatabaseSync(coreDbPath);
+    try {
+      db.exec('PRAGMA busy_timeout = 5000');
+      db.prepare('UPDATE sessions SET rollout_path = ?, archived_path = ? WHERE id = ?').run(
+        originalRel,
+        legacyRel,
+        id,
+      );
+    } finally {
+      db.close();
+    }
+
+    // ── Unarchive through the real bridge ───────────────────────────────
+    // The boot-time migration is the primary fix, but it needs a second
+    // launch to observe, and this harness does not carry the core DB across
+    // one (a bare close/relaunch empties `sessions` — see the note in the file
+    // header). This exercises the `stat`-based fallback the same handler uses
+    // for any row that arrives after that migration ran.
+    const unarchived = await invokeApi<boolean>(dua.page, 'session.unarchive', id);
+    expect(unarchived).toBe(true);
+
+    // Restored to the recorded path — NOT to the rollout root basename that a
+    // bare `archived/<date>/` prefix strip would have produced.
+    expect(fs.existsSync(originalAbs)).toBe(true);
+    expect(fs.statSync(originalAbs).size).toBeGreaterThan(0);
+    expect(fs.existsSync(path.join(rolloutRoot, liveName))).toBe(false);
+    expect(fs.existsSync(legacyAbs)).toBe(false);
+
+    const after = await invokeApi<SessionRow>(dua.page, 'thread.get', id);
+    expect(after.status).toBe('active');
+    expect(after.archived_path).toBeNull();
+    expect(after.rollout_path!.replace(/\\/g, '/')).toBe(originalRel);
+    expect((await messagesOf(id)).length).toBe(messagesBefore.length);
   });
 });

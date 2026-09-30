@@ -1,10 +1,10 @@
 # 582 — Session 归档加固（归档轮转历史断裂 / 生命周期安全 / 排序语义 / 归档视图交互）
 
-> **Status**: In Progress（G1–G8 落地；G9 主体落地 + 一项有意未做；**存量迁移未做，见 §8.1**）· **Priority**: P0 · **Owner**: TBD
+> **Status**: In Progress（G1–G9 主体落地；G9 一项删除确认文案**有意未做**；G3 两项 renderer 侧**有意未做**；**存量迁移已收口，见 §8.1**）· **Priority**: P0 · **Owner**: TBD
 > **立项**: 2026-10-01（对标 `docs/references/codex-thread-and-worktree-management.md` 的 codex thread 管理调研）
 > **前置**: Plan 549（归档对齐 codex）**已于 2026-09-19 经 PR #56 落地**（commit `9b1b1fe4`），Track A/B/C/D 全部实现。本 plan **不重做 549**，只补它留下的正确性缺口。
 > **分界**: 存储与生命周期（G1–G4）见 §2–§5；UI 轨（G5–G9）见 §6。
-> **落地**: PR #76（G1,G3,G5,G7）、#77（G2）、#78（G4）、#79（G6,G8,G9）、#80（E2E + 两个存量 bug）。**未完成项见 §8.1**。
+> **落地**: PR #76（G1,G3,G5,G7）、#77（G2）、#78（G4）、#79（G6,G8,G9）、#80（E2E + 两个存量 bug）、#81（文档）、#82（G1 存量迁移 + `restoreArchivedMoves` 方向修复）。**剩余项见 §8 完成定义**。
 
 ---
 
@@ -377,7 +377,7 @@ G5 是读码推断，**未运行验证**。动工前先在 dev 环境手动复�
 
 **门禁**
 
-- [ ] **`npm run typecheck:all`** —— 未跑；本轮只跑了 `npm run typecheck:web`（EXITCODE 0）与 `npm run electron:build`（EXITCODE 0）
+- [x] **`npm run typecheck:all`** —— EXITCODE 0（PR #82 轮首次真正跑通，含 web/agent/cli/conductor/voice 五段）
 - [x] **单测** —— 存储轨 10 + 2（`db-handlers.test.ts` 归档用例、`stores.test.ts` 成环/菱形）、`session-recency.test.ts` 6、`session-store.test.ts` 9、`section-system.test.ts` 4
 - [x] **E2E** `e2e/ipc/session-archive.spec.ts` —— 5 spec 真跑通过（真实 Electron + 真实 fs + 真实 SQLite）
 - [ ] **Playwright MCP** 烟测 —— 未做（UI 轨改动未经人工交互验证；E2E 走的是 IPC 层，不覆盖渲染）
@@ -430,10 +430,28 @@ handler 只写 `archived_path`、**没动 `rollout_path`**，所以 `rollout_pat
 行更新一旦失败，文件已经搬走而 SQL 仍写着 archived。现已按方向取 `archived`/`restored`
 两端，并跳过 `from === to`。
 
-**证据**：`electron/db/core/__tests__/legacy-archive-migration.test.ts` 13 例（真实 fs +
-真实 schema），含一条**先断言「549 行读出来确实是空的」再断言迁移后历史可读**；
-`archive-paths.test.ts` 补 `archivedBucketDate` / `resolveArchivedPathInBucket`；
-`db-handlers.test.ts` 补两条真实文件系统的反档用例（G1 目录形状 / 549 文件形状）。
+**证据**：
+- `electron/db/core/__tests__/legacy-archive-migration.test.ts` 13 例（真实 fs +
+  真实 schema），含一条**先断言「549 行读出来确实是空的」再断言迁移后历史可读**；
+- `archive-paths.test.ts` 补 `archivedBucketDate` / `resolveArchivedPathInBucket`；
+- `db-handlers.test.ts` 补两条真实文件系统的反档用例（G1 目录形状 / 549 文件形状）；
+- `e2e/ipc/session-archive.spec.ts` 补一条**真 IPC + 真 fs** 的 549 形状反档用例：
+  用 app 自己归档出真实的 bucket 与目录，再就地用 SQL 把行改回 549 形状，然后走
+  `db:session:unarchive`，断言文件回到 `rollout_path` 记录的位置、**而不是**被前缀
+  剥离后落到 `<rolloutRoot>/<basename>`。
+
+**未覆盖的一处（如实记录）**：迁移挂在 `initCoreDatabase` 里，要观察到它需要**两次启动**，
+而本仓的 IPC E2E harness **不保留跨启动的核心库**——纯「关掉再启动」（不含任何改写、
+不涉及本次改动）之后，`sessions` / `message_index` / `session_runtime_locks` 全空，
+而 `meta.imported_from_legacy` 带着第二次启动的时间戳，即**文件是被重建而非被清空**。
+因此迁移的**逻辑**有 13 条真实 fs/schema 单测兜底，**但 `initCoreDatabase` 里那三行
+调用本身没有端到端覆盖**。这是 harness 的既有问题，不在本 plan 范围内修。
+
+**顺带发现的 harness 陷阱**（值得单独记一笔）：命名空间的 `config.toml` 持久化在
+`~/.duya/test-namespaces/<ns>/`，里面写的是**绝对路径** `database_path`。谁先跑这个命名
+空间谁就"拥有"它——换 worktree 再跑（尤其旧 worktree 已被删除时），应用会继续往那个
+已失效的绝对路径写，测试却以为自己在操作当前 checkout 的库。新的 §8.1 spec 因此在启动
+前显式清掉本命名空间的 `config.toml` 与 userData 目录。
 
 **影响面**：只影响 549 落地后、582 落地前归档过的会话；新建归档不受影响。
 
