@@ -162,6 +162,14 @@ touched until the merge lands on `origin/master`.
    from the primary checkout — the repo root plus every workspace package
    that has its own (`packages/agent`, `conductor`, `gateway`,
    `plugin-core`, `voice`). Missing junctions produce fake TS2307 errors.
+   **Those junctions are live pointers into the primary checkout: never
+   delete a worktree directory recursively.** `git worktree remove` (even
+   with `--force`) walks the tree, Windows follows the junctions, and the
+   primary's `node_modules` gets gutted — `.bin` shims, platform binaries
+   under `@esbuild`, hoisted packages. `npm install` only reifies what the
+   lockfile lists, so content deleted *inside* a package the lockfile
+   already satisfies stays missing. To retire a worktree, unlink the
+   junctions first, or leave the directory and remove it by hand.
 3. **Verify in place**: targeted `npx vitest run <files>` +
    `npm run typecheck:web`, plus any other package gates the diff
    touches. Known footgun: `typecheck:cli` OOM-crashes tsc under the
