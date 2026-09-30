@@ -24,8 +24,24 @@
  * with no undo path in the renderer, so it is a different promise than
  * archive and gets its own wording at its own call site rather than sharing
  * a component that would have to lie about one of them.
+ *
+ * ── Why this renders through a portal ────────────────────────────────────
+ *
+ * It is mounted by `ThreadListItem`, i.e. deep inside the sidebar, and a
+ * `z-index` alone cannot rescue it from there. `.app-body` and
+ * `.app-workspace-row` are both `position: relative` with `z-index: auto`,
+ * which makes each of them a stacking context; the sidebar and the
+ * workspace row are siblings inside `.app-body`, so with no z-index of
+ * their own the later-in-DOM workspace row paints on top of the sidebar
+ * outright. A `fixed; z-index: 50` overlay rendered in place is therefore
+ * trapped in the sidebar's context and loses — the dialog is visible but
+ * every click on Cancel / Archive lands on the chat composer behind it.
+ *
+ * Portalling to `document.body` lifts the overlay into the root stacking
+ * context, which is the same reason `DropdownMenu` portals its menu.
  */
 
+import { createPortal } from "react-dom";
 import { useTranslation } from "@/hooks/useTranslation";
 
 interface ArchiveConfirmProps {
@@ -49,7 +65,7 @@ export function ArchiveConfirm({
 
   if (!open) return null;
 
-  return (
+  return createPortal(
     <div
       role="dialog"
       aria-modal="true"
@@ -117,6 +133,7 @@ export function ArchiveConfirm({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

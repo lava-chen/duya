@@ -373,14 +373,17 @@ G5 是读码推断，**未运行验证**。动工前先在 dev 环境手动复�
 - [x] **G8** `projectSortBy` 传进 `ProjectGroupItem`；比较器统一到 `section-system.sortThreadsBy`
 - [x] **G8** 摘掉 `ChatHeader.tsx` 的假快捷键 label（`Ctrl+Alt+R` / `Ctrl+Alt+S` 全仓无 handler）
 - [x] **G9** 新增 `ArchiveConfirm`，文案如实交代「可撤销 / 连带子 agent / 文件会移动」
+- [x] **G9** 修复 `ArchiveConfirm` 被侧栏层叠上下文困住、点不动 —— 改走 `createPortal`；见 §8.2
 - [ ] **G9** 删除确认文案 —— **有意未做**：`db:session:delete` 是软删除且 renderer 无 undo，与归档是不同的承诺，不共用一个会说谎的组件
 
 **门禁**
 
 - [x] **`npm run typecheck:all`** —— EXITCODE 0（PR #82 轮首次真正跑通，含 web/agent/cli/conductor/voice 五段）
 - [x] **单测** —— 存储轨 10 + 2（`db-handlers.test.ts` 归档用例、`stores.test.ts` 成环/菱形）、`session-recency.test.ts` 6、`session-store.test.ts` 9、`section-system.test.ts` 4
-- [x] **E2E** `e2e/ipc/session-archive.spec.ts` —— 5 spec 真跑通过（真实 Electron + 真实 fs + 真实 SQLite）
-- [ ] **Playwright MCP** 烟测 —— 未做（UI 轨改动未经人工交互验证；E2E 走的是 IPC 层，不覆盖渲染）
+- [x] **E2E** `e2e/ipc/session-archive.spec.ts` —— 6 spec 真跑通过（真实 Electron + 真实 fs + 真实 SQLite）
+- [x] **E2E** `e2e/ipc/session-archive-ui.spec.ts` —— 5 用例渲染层验收（确认/取消/归档分区/批量恢复/排序/假快捷键），见 §8.2
+- [x] **单测** `ThreadListItem.test.tsx` 存量 15 红灯清零（PR #79 起 `storeMocks` 漏 `threads`）；新增 `ArchiveConfirm.test.tsx` 5 例
+- [x] **Playwright MCP** 烟测 —— 由渲染层 E2E 取代：renderer 依赖 preload 暴露的 `window.electronAPI`，纯 Vite 浏览器模式取不到数据，跑不出真实侧栏
 
 ### 8.0 PR #80 顺带修掉的两个存量 bug
 
@@ -454,6 +457,70 @@ handler 只写 `archived_path`、**没动 `rollout_path`**，所以 `rollout_pat
 前显式清掉本命名空间的 `config.toml` 与 userData 目录。
 
 **影响面**：只影响 549 落地后、582 落地前归档过的会话；新建归档不受影响。
+
+---
+
+### 8.2 UI 轨渲染层验证（G6 / G8 / G9）—— 抓到一个真实缺陷
+
+G6 / G8 / G9 合并后，renderer 侧改动**一次都没有被真正渲染验证过**：既有 e2e
+全部直连 `window.electronAPI`，不经过侧栏、行菜单、确认弹窗，因此"归档要确认"
+这件事在测试里根本不存在。本节补上 `e2e/ipc/session-archive-ui.spec.ts`（真
+Electron + DOM 断言，一次启动跑完 5 个用例），并记录它查出的问题。
+
+#### 8.2.1 真实缺陷：G9 确认弹窗点不动（已修）
+
+`ArchiveConfirm` 由 `ThreadListItem` 渲染，而 `ThreadListItem` 在侧栏里。弹窗
+自身是 `position: fixed; z-index: 50`，铺满视口，但**点不动**。
+
+根因是层叠上下文，不是 z-index 大小：
+
+- `.app-body` 与 `.app-workspace-row` 都是 `position: relative` + `z-index: auto`，
+  各自构成一个层叠上下文；
+- 侧栏与工作区是 `.app-body` 下的**兄弟**，且都没有 z-index，按树序绘制 →
+  DOM 靠后的 `.app-workspace-row` 永远盖住侧栏；
+- 弹窗的 `z-index: 50` 只在侧栏所属的层叠上下文**内部**生效，跨不出去。
+
+`document.elementsFromPoint` 实测命中栈（自上而下）：composer 输入框 → … →
+`DIV.app-workspace-row` → Cancel 按钮 → 弹窗面板 → `DIV.fixed inset-0 z-50`。
+**用户在真实应用里点 Cancel / Archive，打到的是背后的聊天输入框。**
+
+修复：`ArchiveConfirm` 改用 `createPortal(..., document.body)`，与
+`DropdownMenu` 同一套做法（`src/components/ui/DropdownMenu.tsx:419`）。
+
+> 教训：这类 bug 单测和 jsdom **结构上无法**发现（jsdom 不做布局与层叠），
+> IPC e2e 也无法发现（不渲染）。只有渲染层断言能抓。快捷门禁里"跑一遍单测"
+> 不覆盖这一层。
+
+#### 8.2.2 顺带修掉的存量红灯
+
+`src/components/shared/ThreadListItem.test.tsx` 自 PR #79 起**全文件 15 红灯**，
+一直没人跑：G9 给 `ThreadListItem` 加了 `useConversationStore((s) => s.threads)`
+（G2 的 `childCount` 要数子 session），但测试的 `storeMocks` 没补 `threads` 键，
+每个用例都死在 `threads.filter`。其中一条断言本身也已过期——它还在验证 G9 之前的
+"点一下就直接归档"。两条都已修正，并补了 Cancel 真的什么都不做的用例。
+
+`src/components/layout/panels/WorkflowPanel.test.tsx` 的 12 个红灯与本 plan 无关
+（stash 掉本节全部改动后同样 12 红），属既有问题，未处理。
+
+#### 8.2.3 UI 轨 E2E 的两个环境陷阱（已写进 spec 注释）
+
+1. **`:3000` 上可能是别的 checkout 的 Vite。** `e2e/playwright.config.ts` 的
+   `webServer` 是 `reuseExistingServer: true`，会直接复用任何已经在监听 3000 的
+   服务。Electron 侧 `getRendererUrl()` 硬编码探测 3000–3005（无可覆盖的环境变量），
+   于是应用可能加载**另一棵树**的页面：那份树的 workspace 包解析不了，
+   `globals.css` 转换抛错，React 根本不挂载——而 `window.electronAPI` 由 preload
+   注入、与页面无关，照常存在，所以"等 bridge 就绪"这种常规检查会顺利通过。
+   spec 内已加 `vite-error-overlay` 探测，把这种失败直接说成人话。
+2. **`e2e/helpers.ts` 的 onboarding 跳过是死代码。** 那段被
+   `if (process.env.DUYA_TEST === '1')` 包着，读的是 **Playwright runner 进程**的
+   环境变量，而 `DUYA_TEST=1` 只注入了 **Electron 子进程**；没人 export 它，所以
+   从不执行。后果不止"多一层遮罩"：引导向导的 locale 探测会改语言，而且
+   conversation store 停在 `isHydrated === false`，`loadFromDatabase()` 永不调用，
+   **一个 thread 行都渲染不出来**。spec 改用 `e2e/ipc/file-workspace.spec.ts` 里
+   已验证可行的写法：预置 `duya-onboarding-completed` + `duya-conversations`
+   （`lastSyncAt: 0` 顺带击穿 `loadFromDatabase` 的 30s 新鲜度短路）后 reload。
+   另注：侧栏 work/bots 分页是**纯组件 state**（默认 `bots`），session 分区只在
+   Work 页签下渲染，spec 必须先切过去。
 
 ---
 
