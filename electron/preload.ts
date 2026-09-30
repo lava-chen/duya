@@ -143,16 +143,33 @@ export interface SessionAPI {
     title?: string
   }) => Promise<{
     ok: boolean
-    reason?: 'source_not_found' | 'message_not_found'
+    reason?: 'source_not_found' | 'message_not_found' | 'source_archived'
     sessionId?: string
     seedCount?: number
     session?: unknown
   }>
-  // Plan 506 (C2): archive lifecycle — status flip only, files untouched.
-  archive: (sessionId: string) => Promise<boolean>
+  /**
+   * Plan 582 (G2): archive is a batch over the session's whole spawn subtree
+   * and reports WHY it refused, not just whether it worked. `session_busy`
+   * is the one the user can act on — it means a turn is still running
+   * somewhere in the subtree and nothing was changed on disk or in SQL.
+   */
+  archive: (sessionId: string) => Promise<ArchiveResult>
   unarchive: (sessionId: string) => Promise<boolean>
   listArchived: () => Promise<unknown[]>
 }
+
+/** Plan 582 (G2): mirrors `ArchiveResult` in `electron/ipc/db-handlers.ts`. */
+export type ArchiveResult =
+  | { ok: true; archivedSessionIds: string[] }
+  | {
+      ok: false
+      reason: 'not_found' | 'session_busy' | 'io'
+      sessionId: string
+      blockedId?: string
+      origin?: string | null
+      failedId?: string
+    }
 
 /** Plan 506 Track A: rollout portability (export / import / reconcile). */
 export interface RolloutAPI {

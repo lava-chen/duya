@@ -608,8 +608,28 @@ export async function deleteThreadIPC(id: string): Promise<boolean> {
   return window.electronAPI!.thread!.delete(id) as Promise<boolean>
 }
 
-// Plan 506 (C2): archive lifecycle — status flip only, rollout files untouched.
-export async function archiveThreadIPC(sessionId: string): Promise<boolean> {
+/**
+ * Plan 582 (G2): the archive IPC reports why it refused, not just whether it
+ * worked. `session_busy` is the actionable one — a turn is still running
+ * somewhere in the session's spawn subtree, so nothing was archived and the
+ * user can retry once it settles. Mirrors `ArchiveResult` in
+ * `electron/preload.ts`.
+ */
+export type ArchiveResult =
+  | { ok: true; archivedSessionIds: string[] }
+  | {
+      ok: false
+      reason: 'not_found' | 'session_busy' | 'io'
+      sessionId: string
+      /** Subtree member that tripped the refusal, when known. */
+      blockedId?: string
+      /** Who holds the lock on `blockedId`: user | agent | background. */
+      origin?: string | null
+      /** Subtree member whose move or row update failed, when known. */
+      failedId?: string
+    }
+
+export async function archiveThreadIPC(sessionId: string): Promise<ArchiveResult> {
   return window.electronAPI!.session!.archive(sessionId)
 }
 
@@ -652,7 +672,9 @@ export async function forkAtMessageIPC(input: {
   title?: string
 }): Promise<{
   ok: boolean
-  reason?: 'source_not_found' | 'message_not_found'
+  // Plan 582 (G3): `source_archived` — forking an archived session would
+  // re-materialize its rollout file, which is an implicit unarchive.
+  reason?: 'source_not_found' | 'message_not_found' | 'source_archived'
   sessionId?: string
   seedCount?: number
 }> {

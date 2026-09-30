@@ -102,17 +102,16 @@ export async function copySessionId(threadId: string): Promise<void> {
  * decided what "selected" means (batch toolbar passes the checkbox set,
  * a per-project "archive all" action passes `getSessionIdsUnderProject()`).
  *
- * Returns the number of sessions successfully archived (locally; IPC failure
- * is logged inside the store action and is not surfaced here — the local
- * state is already updated optimistically).
+ * Returns the number of sessions actually archived. Plan 582 (G2) made the
+ * store action resolve only after the main process commits and report
+ * whether it did, because archiving a subtree containing a running turn is
+ * refused outright — so the caller can no longer assume every id succeeded.
  */
 export async function archiveSelectedSessions(threadIds: string[]): Promise<number> {
   const state = useConversationStore.getState();
-  for (const id of threadIds) {
-    state.archiveThread(id);
-  }
+  const results = await Promise.all(threadIds.map((id) => state.archiveThread(id)));
   notifyThreadsChanged();
-  return threadIds.length;
+  return results.filter(Boolean).length;
 }
 
 /**
