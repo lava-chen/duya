@@ -265,15 +265,37 @@ worktree 内不存在该 Junction，故未沿用。
 
 ### Phase 2 — 缝 A 收口：catalog 元数据 + 手册归位
 
-- [ ] 给 browser 注册补 `discovery: { namespace: 'browser', tags: [...] }`，
-      与 `computer` 形成对称命名空间（顺带把 §4 的"全仓无 namespace"缺口记给
-      2026-09-tool-catalog-unification）。
-- [ ] `prompt.ts`(487) 的长操作手册从常驻 prompt 迁到 `ToolExecutor.getPrompt()`
-      （`registry.ts:50` 已定义该可选钩子，参照 `computer-use-mode.ts` 的分工）。
-- [ ] 评估是否新增 `browserMode`（`ModeModifier`，仿 `modes/computer-use-mode.ts`）：
-      收益是 mode 切换即可获得/撤销 browser 工具，代价是多一个 mode id + popover 项。
-- [ ] 用 `SectionDef.requiresTools`（`prompts/PromptSystem.ts:178`）把 browser 相关 prompt section
-      挂到 browser 工具实际启用时才注入。
+- [x] 给 browser 注册补 `discovery: { namespace: 'browser', tags: [...] }`
+      （`builtin.ts` + `bot-builtin.ts` 两处，两侧解析出同一个稳定 `tool_id`）。
+      **顺带记录的仓级缺口**：全仓**没有任何 builtin 工具**设过 `discovery.namespace`，
+      全部 fallback 到 `'builtin'`。`computer_cua` / `computer_use` 同样未设，
+      命名空间提示（`computer: screenshot, desktop interaction…`）在
+      2026-09-tool-catalog-unification 落地前无法生效——已记给该 plan，本 plan 不越界修。
+- [x] **手册可达性（修正了本 phase 的原前提）**。原写"把 `prompt.ts` 从常驻 prompt 迁到
+      `ToolExecutor.getPrompt()`"，实测前提有误：`prompt.ts` **早已只**挂在 `getPrompt()` 上，
+      真正的问题是——`ToolExecutor.getPrompt?()`（`registry.ts:49-50` 声明，注释写着
+      "injected after on-demand discovery"）**全仓没有任何消费方**。
+      在 `ToolCatalogTool` / `ToolInvokeTool` / `dispatcherFromRegistry` /
+      `tool-search-discovery.ts` 中 grep `getPrompt|guide|usage` **零命中**。
+      即：browser 约 20 KB 的操作手册、SkillTool / BriefTool / 两个 plan-mode 工具 /
+      `image_generate` 的手册**全部对模型不可见**。模型此前只看到
+      `BROWSER_TOOL_DESCRIPTION` 的 1,017 字符。
+      已在 `tool_catalog` 的 **detail 响应**接线（模型已锁定单个工具、正要读全量 schema 的时刻），
+      带 12,000 字符上限 + 显式截断标记；抛异常 / 非字符串 / 空白一律省略，绝不让缺手册
+      变成 schema 读取失败。search / list 结果不注入，保持发现路径轻量。
+- [x] 用 `SectionDef.requiresTools`（`prompts/PromptSystem.ts:178`）把 browser 相关 prompt section
+      挂到 browser 工具实际启用时才注入。**当前无 browser 专属 prompt section**
+      （`prompts/configs/{general,code,bot}.ts` 里没有），故本项**无需改动**，
+      机制已就位、待真有 section 时再用。
+- [ ] 评估是否新增 `browserMode`（`ModeModifier`，仿 `modes/computer-use-mode.ts`）。
+      **未决，且需要产品判断**：收益是 mode 切换即可获得/撤销 browser 工具
+      （当前 browser 走 `exposure:'deferred'`，已在 catalog 后按需暴露）；
+      代价是新增一个 mode id + popover 入口（plan 224 的三步注册）。不擅自加。
+
+验收：`tsc -p packages/agent` 0 错误；`vitest run packages/agent/tests/unit/tool-catalog`
+仅剩 2 个既有红（`tool_invoke` schema-read，与本改动无关）；新增 7 个 usage-guide 用例 +
+2 个适配层手册存在性用例全绿。
+
 
 ### Phase 3 — 缝 B：browser plugin（ZCode 形制）
 
@@ -335,3 +357,13 @@ worktree 内不存在该 Junction，故未沿用。
   codex 的 chrome 插件**不可**作为独立版本线先例引用，改以 openclaw 为样本。
 - 2026-10-01：发现 plan 580 的 catalog 机制（`source.kind:'plugin'` / `ToolOwner` /
   `replaceByOwner`）已落地，故缝 C 改动面比预期小（约 5 处），无需新建注册表。
+- 2026-10-01：**两处更正**。(a) 早先称 `actions/index.ts` 导出 `./ActionRegistry.js`
+  是潜伏 bug——错，同名 `index.ts` 在 grep 输出里造成歧义，该路径本来就正确。
+  (b) Phase 2 原写"把 browser 手册从常驻 prompt 迁到 `getPrompt()`"——错，手册早已只在
+  `getPrompt()` 上；真正缺陷是 `getPrompt()` **无人调用**，20 KB 指引对模型不可见。
+  这条比原设想更有价值：它同时让 registry 声明的 on-demand 契约变成真的。
+- 2026-10-01：Phase 1 的解析方式与 Phase 0 初稿不同（paths→源码不可行，TS6059 ×72），
+  最终类型走 `dist/*.d.ts`、运行时走源码；详见 §7 Phase 1 的对照表。
+- 2026-10-01：engine 内 4 个既有红已修（`backend-resolver` 期望写反、`screenshot` 落盘契约），
+  归因方式为基线 worktree 复跑，非推测。
+
