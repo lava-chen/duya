@@ -21,6 +21,7 @@ import {
   resolveArchivedPath,
   resolveUnarchivedPath,
 } from '../db/core/archive-paths';
+import { recoverOriginalRel } from '../db/core/legacy-archive-migration';
 import { getChannelManager } from '../messaging/port-manager';
 import { invertPatch } from '../db/core/conductors/invert-patch';
 import { createConductorUndoRedoHandlers } from './conductor-handlers/conductor-undo-redo-handlers';
@@ -248,9 +249,15 @@ function restoreArchivedMoves(
 ): void {
   for (let i = moved.length - 1; i >= 0; i -= 1) {
     const entry = moved[i];
+    // The two directions journal different pairs. Archiving records where
+    // the file WENT (`archivedAbs`); unarchiving records where it must go
+    // BACK (`restoredAbs`). Reading `srcAbs` as the fallback for `to` — as an
+    // earlier version of this helper did — made the unarchive rollback a
+    // rename-to-itself no-op, so a failed row update left the files moved
+    // while the row still said "archived".
     const from = entry.archivedAbs ?? entry.srcAbs;
-    const to = entry.srcAbs ?? entry.restoredAbs;
-    if (!from || !to) continue;
+    const to = entry.restoredAbs ?? entry.srcAbs;
+    if (!from || !to || from === to) continue;
     try {
       fs.mkdirSync(path.dirname(to), { recursive: true });
       fs.renameSync(from, to);
@@ -886,6 +893,13 @@ export function registerDbHandlers(): void {
    * `archive-<g>.jsonl` siblings back too. Destination paths are the exact
    * inverses of the archive mapping (a pure `archived/<date>/` prefix
    * strip), so nothing is reconstructed by guesswork.
+   *
+   * Plan 582 (G1 follow-up, §8.1): a Plan 549 row records a single FILE and
+   * has no mirrored path to invert, so the prefix strip would only recover a
+   * basename. Those rows are normalized at boot by
+   * `migrateLegacyArchivedRows`; the `stat`-based branch below is the safety
+   * net for any that arrive later, and restores to the recorded
+   * `rollout_path` instead.
    */
   ipcMain.handle('db:session:unarchive', (_event, sessionId: string) => {
     const { sessions, messageLog } = getCoreStores();
@@ -904,7 +918,16 @@ export function registerDbHandlers(): void {
     }
     const rolloutRoot = resolveRolloutRoot();
     const archivedDirAbs = path.join(rolloutRoot, archivedDirRel);
-    if (!fs.existsSync(archivedDirAbs)) {
+    // One stat answers both questions this handler needs: is the archive still
+    // on disk at all, and is it the Plan 549 single-FILE shape or the G1
+    // directory?
+    let archivedStat: fs.Stats | null = null;
+    try {
+      archivedStat = fs.statSync(archivedDirAbs);
+    } catch {
+      archivedStat = null;
+    }
+    if (!archivedStat) {
       // Archive files already gone — drop the metadata, leave status flipped.
       sessions.update(sessionId, {
         status: 'active',
@@ -914,15 +937,25 @@ export function registerDbHandlers(): void {
       return true;
     }
 
+    // Plan 582 (G1 follow-up, §8.1): a row written by Plan 549 records one
+    // FILE, and the mirrored source path is gone with it — stripping
+    // `archived/<date>/` yields a bare basename, which would drop the file at
+    // `<rolloutRoot>/<basename>` instead of the date tree it came from.
+    // `migrateLegacyArchivedRows` rewrites these rows at boot; when one still
+    // slips through (an older build archived after that migration ran),
+    // restore to the session's own recorded `rollout_path` instead.
+    const legacyRestoreRel = archivedStat.isFile()
+      ? recoverOriginalRel(session.rolloutPath, rolloutRoot)
+      : null;
+
     // Every `.jsonl` in the archived directory belongs to this session, so
-    // restore them together. If the recorded path is itself a file (rows
-    // written by Plan 549 before the directory convention), fall back to it.
-    const archivedFiles = collectJsonlFiles(archivedDirAbs);
+    // restore them together. A legacy file row contributes exactly one entry.
+    const archivedFiles = archivedStat.isDirectory() ? collectJsonlFiles(archivedDirAbs) : [];
     const plan = (archivedFiles.length > 0 ? archivedFiles : [archivedDirAbs])
       .filter((srcAbs) => fs.existsSync(srcAbs))
       .map((srcAbs) => {
         const rel = path.relative(rolloutRoot, srcAbs).split(path.sep).join('/');
-        const restoredRel = resolveUnarchivedPath(rel);
+        const restoredRel = legacyRestoreRel ?? resolveUnarchivedPath(rel);
         return { srcAbs, restoredRel, restoredAbs: path.join(rolloutRoot, restoredRel) };
       });
 

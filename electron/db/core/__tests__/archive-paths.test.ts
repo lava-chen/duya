@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  archivedBucketDate,
   archivedDirFor,
   formatArchiveDate,
   resolveArchivedPath,
+  resolveArchivedPathInBucket,
   resolveUnarchivedPath,
 } from '../archive-paths';
 
@@ -111,6 +113,51 @@ describe('archive-paths (Plan 549, corrected by Plan 582 G1)', () => {
       const a = archivedDirFor(resolveArchivedPath('agents/bot-1/sessions/active.jsonl', fixedNow));
       const b = archivedDirFor(resolveArchivedPath('agents/bot-2/sessions/active.jsonl', fixedNow));
       expect(a).not.toBe(b);
+    });
+  });
+
+  // Used by the Plan 582 §8.1 legacy migration to re-file a Plan 549 row in
+  // the bucket its bytes are already sitting in.
+  describe('archivedBucketDate', () => {
+    it('reads the bucket out of a mirrored archive path', () => {
+      expect(
+        archivedBucketDate('archived/2026-09-18/sessions/2026/09/18/rollout-x.jsonl'),
+      ).toBe('2026-09-18');
+    });
+
+    it('reads the bucket out of a Plan 549 basename-only path', () => {
+      expect(archivedBucketDate('archived/2026-09-18/rollout-x.jsonl')).toBe('2026-09-18');
+    });
+
+    it('returns null for a path outside the archive tree', () => {
+      expect(archivedBucketDate('sessions/2026/09/18/rollout-x.jsonl')).toBeNull();
+      expect(archivedBucketDate('archived/not-a-date/rollout-x.jsonl')).toBeNull();
+      expect(archivedBucketDate('archived/2026-09-18')).toBeNull();
+    });
+  });
+
+  describe('resolveArchivedPathInBucket', () => {
+    it('mirrors into the supplied bucket instead of a clock-derived one', () => {
+      const rel = 'sessions/2026/09/01/rollout-x.jsonl';
+      const fixedNow = Date.UTC(2026, 8, 18, 14, 30, 0);
+      // Same mapping as resolveArchivedPath when the bucket agrees...
+      expect(resolveArchivedPathInBucket(rel, '2026-09-18')).toBe(
+        resolveArchivedPath(rel, fixedNow),
+      );
+      // ...and it does not re-date a file that is already bucketed elsewhere.
+      expect(resolveArchivedPathInBucket(rel, '2025-01-02')).toBe(
+        'archived/2025-01-02/sessions/2026/09/01/rollout-x.jsonl',
+      );
+    });
+
+    it('stays idempotent for an already-archived path', () => {
+      const once = resolveArchivedPathInBucket('agents/a1/sessions/active.jsonl', '2026-09-18');
+      expect(resolveArchivedPathInBucket(once, '2025-01-02')).toBe(once);
+    });
+
+    it('round-trips through resolveUnarchivedPath', () => {
+      const rel = 'sessions/2026/09/01/s-abc/active.jsonl';
+      expect(resolveUnarchivedPath(resolveArchivedPathInBucket(rel, '2026-09-18'))).toBe(rel);
     });
   });
 });

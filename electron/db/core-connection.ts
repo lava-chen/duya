@@ -33,6 +33,7 @@ import {
   ConductorStore,
   WorkflowRunStore,
   LegacyImport,
+  migrateLegacyArchivedRows,
   type SqliteCtor,
   type Migration,
 } from './core';
@@ -193,6 +194,16 @@ export function initCoreDatabase(sqlite: SqliteCtor): CoreStores | null {
       // First relocate any rollout files written under the old
       // `<databases>/sessions/` layout to `~/.duya/sessions/` (Codex-style).
       migrateRolloutRoots();
+
+      // Plan 582 (G1 follow-up, §8.1): re-file archive rows that Plan 549
+      // wrote on the old single-file convention. Runs before any session
+      // service accepts requests, so no archived session can be read in its
+      // broken (empty-history) state. Idempotent, and a no-op for users with
+      // nothing archived under 549.
+      const archiveReport = migrateLegacyArchivedRows(db, rolloutRoot);
+      for (const sessionId of archiveReport.migrated) {
+        stores.messageLog.invalidateRolloutPathCache(sessionId);
+      }
 
       const impl = new LegacyImport(stores, resolveDatabasePath().dbPath, sqlite);
       if (impl.needsImport()) {

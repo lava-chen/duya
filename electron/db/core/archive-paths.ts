@@ -73,6 +73,32 @@ export function resolveUnarchivedPath(archivedRel: string): string {
 }
 
 /**
+ * The `YYYY-MM-DD` bucket an archived relative path sits in, or `null` when
+ * the path is not under `archived/<date>/` at all.
+ *
+ * Used by the Plan 582 legacy migration to re-file a Plan 549 row inside the
+ * bucket its file is *already* in, rather than re-deriving the date from a
+ * timestamp and risking a second bucket for one session.
+ */
+export function archivedBucketDate(archivedRel: string): string | null {
+  const parts = archivedRel.split('/');
+  if (parts.length <= ARCHIVE_PREFIX_SEGMENTS || parts[0] !== 'archived') return null;
+  return /^\d{4}-\d{2}-\d{2}$/.test(parts[1]) ? parts[1] : null;
+}
+
+/**
+ * Mirror `currentRel` into a specific `archived/<date>/` bucket.
+ *
+ * Same mapping as `resolveArchivedPath`, with the bucket supplied by the
+ * caller instead of derived from a clock. Already-archived input is returned
+ * unchanged, so the operation stays idempotent.
+ */
+export function resolveArchivedPathInBucket(currentRel: string, bucket: string): string {
+  if (isArchivedRel(currentRel)) return currentRel;
+  return path.posix.join('archived', bucket, currentRel);
+}
+
+/**
  * The archived *directory* that holds a given archived file path.
  *
  * This is what the session row stores in `archived_path`: a session's
