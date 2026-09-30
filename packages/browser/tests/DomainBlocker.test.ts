@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isUrlBlocked, normalizeDomain, isValidDomain, getEffectiveBlockedDomains, DEFAULT_BLOCKED_DOMAINS } from '../../../src/tool/BrowserTool/DomainBlocker.js';
+import { isUrlBlocked, normalizeDomain, isValidDomain, getEffectiveBlockedDomains, DEFAULT_BLOCKED_DOMAINS } from '../src/DomainBlocker.js';
 
 describe('DomainBlocker', () => {
   describe('isUrlBlocked', () => {

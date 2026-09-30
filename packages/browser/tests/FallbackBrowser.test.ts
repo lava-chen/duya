@@ -3,7 +3,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { pathToFileURL } from 'url';
 import { describe, expect, it } from 'vitest';
-import { FallbackBrowser } from '../../src/tool/BrowserTool/FallbackBrowser.js';
+import { FallbackBrowser } from '../src/FallbackBrowser.js';
 
 describe('FallbackBrowser local HTML navigation', () => {
   it('loads file:// HTML inside the working directory', async () => {

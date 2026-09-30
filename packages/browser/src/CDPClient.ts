@@ -7,7 +7,7 @@
  */
 
 import { EventEmitter } from 'events';
-import { logger } from '../../utils/logger.js';
+import { logger } from './logger.js';
 import { generateStealthJs } from './stealth.js';
 import { WebviewCDPClient } from './WebviewCDPClient.js';
 import { HumanLikeCDPClient } from './HumanLikeCDPClient.js';

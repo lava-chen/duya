@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { parallelFetchAction } from '../../../src/tool/BrowserTool/actions/parallel.ts';
+import { parallelFetchAction } from '../../src/actions/parallel.ts';
 
 describe('parallel_fetch schema', () => {
   it('accepts a bare array of URLs', () => {

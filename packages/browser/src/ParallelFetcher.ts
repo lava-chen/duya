@@ -4,7 +4,7 @@
  */
 
 import axios from 'axios';
-import { isSafeUrl } from '../../utils/urlSafety.js';
+import { isSafeUrl } from './urlSafety.js';
 
 export interface FetchTask {
   id: string;

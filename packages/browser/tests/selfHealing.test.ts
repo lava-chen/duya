@@ -3,7 +3,7 @@ import {
   isRecoverableSessionInvalidation,
   retryOnceAfterSessionInvalidation,
   SESSION_SELF_HEAL_FAILED_MSG,
-} from '../../src/tool/BrowserTool/selfHealing.js';
+} from '../src/selfHealing.js';
 
 describe('isRecoverableSessionInvalidation', () => {
   it.each([

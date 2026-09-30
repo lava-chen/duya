@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { WebviewCDPClient } from '../../src/tool/BrowserTool/WebviewCDPClient.js';
+import { WebviewCDPClient } from '../src/WebviewCDPClient.js';
 
 interface RequestRecord {
   url: string;

@@ -1,10 +1,19 @@
 # Plan 583 — 浏览器能力边界：引擎抽包 / 能力插件化 / 工具槽位可替换
 
-> 状态：已设计未开工（`backlog/`）。本 plan 0 行代码，全部为调研结论 + 分阶段方案。
+> 状态：**active**（2026-10-01 由 backlog 提升）。Phase 0 接缝设计已定，Phase 1 开始搬迁。
 > 日期：2026-10-01　范围：`packages/agent/src/tool/BrowserTool/**`、`packages/plugin-core` 插件 capability 面
 > 关联：plan 573（内置浏览器产品面，**本 plan 不碰**）、plan 580（tool catalog，已落地部分见 §4）、
 > 2026-09-tool-catalog-unification（catalog 设计）、plan 224（ModeModifier）、plan 241（tool_search）、
 > plan 419（权限决策总线）、plan 557（`requiresTools` 门控）
+
+## 0. 已定决策（2026-10-01）
+
+| 决策点 | 结论 |
+|---|---|
+| `platform-extractors/` + `platform-hooks/`（34 文件 10,806 行） | **留在包内**，不随 plugin 分发。理由：已是 `exposure:'deferred'` 不占默认上下文；随 plugin 分发会把首启成本推给用户（ZCode 把 computer-use 默认关的理由） |
+| 插件化范围 | 缝 B（skills / workflows / 权限策略 / UI 模板）按"怎么安全怎么来"推进；**引擎不进 plugin** |
+| 缝 C（plugin 贡献原生 tool） | 保留在计划内，不在首轮路径上；等有第三方引擎诉求再启动 |
+| 迁移安全性 | 逐阶段推进，每阶段独立可回滚；`utils/logger` 走注入 port，`utils/urlSafety` 搬入后 agent 侧留 re-export（单一实现） |
 
 ## 1. 决策问题
 
@@ -159,32 +168,96 @@
 
 ### Phase 0 — 边界冻结与行为基线（不动代码）
 
-- [ ] 在本 plan 顶部固化"非范围"清单：`electron/services/browser/**`、`src/components/browser/**`、
-      `electron/preload.ts` 的 browser 通道。
-- [ ] 给 4 个外部消费点各补一个 characterization test（`builtin-surface.test.ts:22` 的源码文本断言
-      可作为模板，但 Phase 1 改路径后需同步改断言文案）。
+- [x] 固化"非范围"清单：`electron/services/browser/**`、`src/components/browser/**`、
+      `electron/preload.ts` 的 browser 通道。见 §2 第 ① 层证据。
+- [x] 接缝设计定案（2026-10-01，逐项附实测依据）：
+
+  | 接缝 | 结论 | 依据 |
+  |---|---|---|
+  | `BaseTool` | 适配层 `BrowserTool.ts` **留在 agent**，不进包 | 它 `extends BaseTool`（`BaseTool.ts:80`）并提供 `toTool()`（`:234`）/`setBrowserConfig`/`setDomainBlockerConfig`，是 agent-tool 契约本身 |
+  | `utils/logger` | 包内定义 `BrowserLogger` port + `setBrowserLogger()`，agent 侧注入 `getLogger()` | 包内仅 2 文件 14 处调用（`CDPClient.ts` 9 处、`BrowserTool.ts` 5 处）；且 `AgentLogger` 的签名 `(message, context?, component?)` / `error(message, error?, context?, component?)`（`utils/logger.ts:232-288`）与 port **结构同构，注入时零适配器** |
+  | `utils/urlSafety` | **整体搬进包**（351 行，只依赖 `dns/promises`），agent 侧 `src/utils/urlSafety.ts` 变为 re-export | 消费者只有 5 处（`agent-process-entry.ts`、`session/db.ts` + BrowserTool 内 3 处），re-export 后这 2 个 agent 调用点零改动，且保持单一实现 |
+  | 解析方式 | agent 侧走 `@duya/browser/src/...` 深层直引（免 build），配 `tsconfig paths` + `vitest` alias | 与既有先例一致：`catalog-identity.ts:10` 就是 `@duya/plugin-core/src/mcp/core/descriptor.js`；`vitest.config.ts` 已有 worktree-safe 的 `PLUGIN_CORE_ROOT` alias 同款写法 |
+  | 目录形态 | agent 侧保留 `src/tool/BrowserTool/` 作**适配层目录**（只留 `BrowserTool.ts` + `index.ts` + 其测试） | 保住 `builtin.ts:31` / `bot-builtin.ts:39` / `builtin.ts:354` 三处 `./BrowserTool/BrowserTool.js` 路径不变，`builtin-surface.test.ts:22` 的源码文本断言**无需改动** |
+  | 死代码 | 删 `platform-adapters/types.ts`（35 行，全仓 0 importer） | 已在依赖扫描中确认 |
+
+- [ ] 给 4 个外部消费点各补一个 characterization test。特别是
+      `process/agent-process-entry.ts:4284` 的间接路径——它经 `../tool/builtin.js` 引入
+      `browserTool` 并调 `setBrowserConfig`，**按显式 import grep 搬迁会漏掉**。
 - [ ] 记录基线：browser 工具在 `exposure:'deferred'` 下的 `tool_catalog` 行为、
       `refreshDefinition` 在 backend mode 切换后的 schema 变化、`blockedDomains` 生效路径。
-- [ ] 确认 `DUYA_DAEMON_PORT` 缺省行为（`CDPClient.ts:106`），决定包外运行时的失败方式：
-      抛可读错误还是 fallback 到 `fallback` backend。
+- [x] `DUYA_DAEMON_PORT` 缺省行为已确认：`CDPClient.ts:106` 与 `WebviewCDPClient.ts:20`
+      在**模块作用域**读 `process.env.DUYA_DAEMON_PORT ?? '19825'`，端口不可达时由
+      `backend-resolver.ts:35-53` 的降级链兜到 `webview` / `fallback`。
+      决策：**保持现状**（不在包边界抛错），降级链本身就是容错设计；包外运行落到 `fallback`。
+
 
 ### Phase 1 — 缝 A 主体：抽 `packages/browser`
 
-- [ ] 新建 `packages/browser`（`package.json` / `tsconfig.json` 仿 `packages/computer-use`），
-      加入 workspace 列表。
-- [ ] 搬 79 个自包含文件（整目录 `cp` + 改相对路径前缀，`actions/`、`platform-extractors/`、
-      `platform-hooks/`、`__tests__/` 一并）。
-- [ ] 三个 runtime 依赖处置，逐个落定：
-      - `utils/urlSafety`（`isSafeUrl` / `isSafeUrlSync`）——纯函数，**搬进包**，agent 侧改为 re-export。
-      - `utils/logger`——**注入 port**（结构化 logger 实例属 electron 侧，agent 侧构造时传入），
-        避免包反向依赖 `electron/logging`。
-      - `BaseTool`——**不搬**。`BrowserTool.ts`(464) 留在 `packages/agent/src/tool/`，
-        只 import 包内 engine，`toTool()` / `setBrowserConfig` / `setDomainBlockerConfig` 三个
-        对外方法签名保持不变，调用方零改动。
-- [ ] 迁移 13 个外部测试 + `DomainBlocker.test.ts` + `builtin-surface.test.ts`，同一 commit 内完成。
-- [ ] 删 `platform-adapters/types.ts`（0 importer）。
-- [ ] 修 `SchemaGenerator.test.ts:110,:127` 中作为**字符串**出现的 `../../src/tool/BrowserTool/actions/parallel`
-      路径（可能触发路径敏感加载，需实测确认）。
+- [x] 新建 `packages/browser`（workspace glob `packages/*` 自动纳入；`package.json` / `tsconfig.json`
+      对标 `packages/computer-use` 的**已构建包**形态，见下方"解析方式"修正）。
+- [x] 搬 79 个自包含文件 + 4 个依赖文件（`git mv` 保历史）：引擎 21 个根文件 + `actions/`、
+      `platform-extractors/`、`platform-hooks/`、`__tests__/` 进 `packages/browser/src/`。
+- [x] 三个 runtime 依赖处置：
+      - `utils/urlSafety`（`isSafeUrl` / `isSafeUrlSync`）——**已搬进包**
+        （`packages/browser/src/urlSafety.ts`），agent 侧 `src/utils/urlSafety.ts` 变为 re-export shim，
+        `agent-process-entry.ts` / `session/db.ts` 两个消费者零改动，且保持单一实现。
+      - `utils/logger`——**已注入 port**（`packages/browser/src/logger.ts`）：`BrowserLogger`
+        接口 + `setBrowserLogger()`，未注入时落到静默 no-op。适配层 `BrowserTool.ts` 模块作用域
+        调 `setBrowserLogger(logger)`，因 `AgentLogger` 签名与 port 同构，**无适配器代码**。
+      - `BaseTool`——**不搬**，按 §7 Phase 0 的决策，适配层留在 `src/tool/BrowserTool/`。
+- [x] 迁移 13 个外部测试 + `DomainBlocker.test.ts` 到 `packages/browser/tests/`（14 个文件，
+      按各自目录深度重算相对路径）。`BrowserTool.test.ts` 测的是**适配层**，已移回
+      `packages/agent/tests/BrowserTool/`。`builtin-surface.test.ts:22` 的源码文本断言
+      因适配层路径未变而**无需改动**。
+- [x] 删 `platform-adapters/types.ts`（35 行，全仓 0 importer）。
+- [x] `SchemaGenerator.test.ts:110,:127` 的动态 `import()` 字符串已改为 `../src/actions/parallel`
+      （实测确为路径敏感的动态 import，扩展名可省略，vite 正常解析）。
+- [x] 删除 `actions/types.ts` 里零消费者的 `ActionResult` 别名及其 `ToolResult` 依赖
+      —— 引擎由此**彻底不再依赖 agent 类型**，比镜像定义更干净。
+
+**解析方式修正（实测后与 Phase 0 初稿不同）**：初稿设想 `@duya/browser` 走 `tsconfig paths`
+指向源码。实测不可行——agent 是用 tsc **真实产出 dist** 的（`build:agent` → `tsc`），
+`rootDir: ./src` 必须守住，而 paths 指向 `.ts` 会把包源码拉进 agent 的 program，
+触发 72 个 `TS6059`。最终形态对标 `@duya/computer-use`：
+
+| 消费者 | 解析到 | 手段 |
+|---|---|---|
+| `tsc`（agent 类型检查） | `packages/browser/dist/index.d.ts` | agent tsconfig `paths` |
+| esbuild（agent bundle） | `packages/browser/src/index.ts` | `build-agent-bundle.mjs` 的 `alias`（否则会把 `.d.ts` 内联进 bundle） |
+| vitest | `packages/browser/src/index.ts` | `vitest.config.ts` 的 `resolve.alias` |
+| 构建顺序 | — | 新增 `build:browser`，串进 `build:agent` 与 `typecheck:agent` |
+
+`@duya/plugin-core` 走的是 `node_modules` 里的 npm Junction（`main: src/index.ts`），
+worktree 内不存在该 Junction，故未沿用。
+
+验收进展（2026-10-01）：
+
+- `npx tsc --noEmit -p packages/browser` → **0 错误**
+- `npx tsc --noEmit -p packages/agent` → **0 错误**
+- `npx vitest run packages/browser` → **25 文件 / 234 用例全绿**（迁移前该组为 232 用例、
+  **4 红**；已在基线 `e1bc1650` 原始路径复现同一批红，确认是既有失败而非搬迁引入）
+- 顺手修掉 4 个既有红（见下方"顺手修掉的既有红"）
+- 归因方法：建 `browser-baseline` worktree（detached `e1bc1650`）跑同一组测试逐条比对，
+  剩余 12 个失败与基线同组失败**逐一对应**（适配层 `file://` 1 + `tool-catalog` 2 +
+  `fileReadState` 3 + `ReadTool` 4 + `GrepTool` 1 + `PlanTool` 1），零回归。
+  适配层 `file://` 失败断言文本在搬迁前后**逐字相同**
+  （`expected '### Page...' to contain 'Local snapshot'`），确认与 import 变更无关。
+- 待办：`npm run typecheck:web` 全链路 + `npm run bundle:agent`（esbuild alias 实测）；
+  真实 Electron 内的 browser 行为 smoke（`agent-process-entry.ts:4284` 的间接
+  `setBrowserConfig` 路径不能只靠 grep 验证）。
+
+**顺手修掉的既有红**（均在引擎内，现归本 plan 所有）：
+
+1. `backend-resolver.test.ts` human-like 用例把期望写反了。`resolveBackend('human-like', true, false)`
+   传 `extensionOnline=true`，按 `backend-resolver.ts:45` 的契约"扩展在线即可用 human-like，
+   无需 renderer"，应返回 `'human-like'`。已改为断言真实契约，并补
+   `('human-like', false, false) → 'fallback'` 这一真正降级的用例。
+2. `actions/screenshot.test.ts` 3 个用例仍断言旧的 `result.screenshot`，但实现早已改为
+   **优先落盘 `filePath`**、仅在写失败时回退内联 data URL。已改为
+   用 `vi.mock('node:fs/promises')` 让两条分支都确定可测：默认路径断言写盘的文件名与字节，
+   新增"写盘失败"与"建目录失败"两个内联回退用例（用例数 232 → 234）。
+
 
 验收：`npx vitest run packages/agent/tests/BrowserTool packages/browser` 全绿；
 `npm run typecheck:web` 无新增错误；4 个外部消费点 import 全部改完且无遗漏（`agent-process-entry.ts`
@@ -207,10 +280,9 @@
 - [ ] 新建一方 plugin 包（走 `packages/plugin-core/src/plugins/builtin/` 现有先例，如 `github` / `notion`）。
 - [ ] 内容边界：skills（research / RPA 场景）、`workflows/*.yaml`、
       `permissions/policy.json`（域名白名单 + DOM blocker 策略）、UI 输出模板。
-- [ ] **待决**：34 文件 10,806 行的 `platform-extractors/` + `platform-hooks/` 放包内还是随 plugin 分发。
-      包内 = 默认可用、开箱即用（当前行为）；随 plugin = 体积小但首启拉起成本上升
-      （ZCode 把 computer-use 默认关的理由）。倾向**留包内 + plugin 只做增量**，
-      因为 extractors 已是 `exposure:'deferred'`，不占默认上下文。
+- [ ] **已定**：34 文件 10,806 行的 `platform-extractors/` + `platform-hooks/` **留在包内**
+      （用户决策 2026-10-01，见 §0）。plugin 只提供**增量** extractor / hook 扩展点，
+      不接管既有实现。
 - [ ] 权限接线：plugin 的 `policy.json` 声明的域名/DOM 策略要真正接进
       `DomainBlocker`，而不是停在 manifest。
 

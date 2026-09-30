@@ -9,7 +9,7 @@ vi.mock('axios', () => ({
 }));
 
 // Path is relative to THIS test file, not the source file.
-vi.mock('../../../utils/urlSafety.js', () => ({
+vi.mock('../urlSafety.js', () => ({
   isSafeUrl: async () => ({ safe: true }),
 }));
 

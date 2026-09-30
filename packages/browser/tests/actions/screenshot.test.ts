@@ -1,7 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screenshotAction } from '../../../src/tool/BrowserTool/actions/screenshot.js';
-import type { ActionContext } from '../../../src/tool/BrowserTool/actions/types.js';
-import type { ICDPClient } from '../../../src/tool/BrowserTool/CDPClient.js';
+
+// The action persists the PNG to a temp file (so the vision loop can pass a
+// short filePath instead of an inline base64 data URL) and only falls back to
+// the inline URL when the write fails. Mock both so each branch is
+// deterministic instead of depending on the host tmpdir being writable.
+const fsMocks = vi.hoisted(() => ({
+  mkdir: vi.fn(),
+  writeFile: vi.fn(),
+}));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, mkdir: fsMocks.mkdir, writeFile: fsMocks.writeFile };
+});
+
+import { screenshotAction } from '../../src/actions/screenshot.js';
+import type { ActionContext } from '../../src/actions/types.js';
+import type { ICDPClient } from '../../src/CDPClient.js';
 
 function createMockCDP(overrides: Partial<ICDPClient> = {}): ICDPClient {
   return {
@@ -60,6 +75,11 @@ function createMockContext(overrides: Partial<ActionContext> = {}): ActionContex
 }
 
 describe('screenshotAction', () => {
+  beforeEach(() => {
+    fsMocks.mkdir.mockReset().mockResolvedValue(undefined);
+    fsMocks.writeFile.mockReset().mockResolvedValue(undefined);
+  });
+
   describe('execute', () => {
     it('should call cdp.screenshot() with no options by default', async () => {
       const mockCDP = createMockCDP();
@@ -75,8 +95,15 @@ describe('screenshotAction', () => {
         fullPage: false,
         selector: undefined,
       });
+      // Default path: the PNG is written to a temp file, not inlined.
+      expect(result.screenshot).toBeUndefined();
+      expect(result.filePath).toMatch(/shot-.*\.png$/);
+      expect(fsMocks.writeFile).toHaveBeenCalledWith(
+        result.filePath,
+        Buffer.from('base64pngdata', 'base64'),
+      );
       expect(result).toEqual({
-        screenshot: 'data:image/png;base64,base64pngdata',
+        filePath: result.filePath,
         fullPage: false,
         selector: undefined,
         mode: 'extension',
@@ -93,7 +120,7 @@ describe('screenshotAction', () => {
         fullPage: true,
         selector: undefined,
       });
-      expect(result.screenshot).toBe('data:image/png;base64,base64pngdata');
+      expect(result.filePath).toMatch(/shot-.*\.png$/);
       expect(result.fullPage).toBe(true);
     });
 
@@ -133,7 +160,10 @@ describe('screenshotAction', () => {
       expect(result.mode).toBe('playwright');
     });
 
-    it('should prepend data:image/png;base64, prefix to base64 data', async () => {
+    it('should prepend data:image/png;base64, prefix when the temp write fails', async () => {
+      // Inline base64 is the degraded path: only used when the PNG cannot be
+      // persisted (read-only tmpdir, disk full, permissions).
+      fsMocks.writeFile.mockRejectedValueOnce(new Error('EACCES'));
       const mockCDP = createMockCDP({
         screenshot: vi.fn().mockResolvedValue('YWJjZGVm'),
       });
@@ -141,7 +171,20 @@ describe('screenshotAction', () => {
 
       const result = await screenshotAction.execute({}, ctx);
 
+      expect(result.filePath).toBeUndefined();
       expect(result.screenshot).toBe('data:image/png;base64,YWJjZGVm');
+    });
+
+    it('should also fall back to the inline URL when the temp dir cannot be created', async () => {
+      fsMocks.mkdir.mockRejectedValueOnce(new Error('EROFS'));
+      const mockCDP = createMockCDP();
+      const ctx = createMockContext({ cdp: mockCDP });
+
+      const result = await screenshotAction.execute({}, ctx);
+
+      expect(result.filePath).toBeUndefined();
+      expect(result.screenshot).toBe('data:image/png;base64,base64pngdata');
+      expect(fsMocks.writeFile).not.toHaveBeenCalled();
     });
 
     it('should propagate errors from cdp.screenshot()', async () => {

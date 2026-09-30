@@ -6,14 +6,14 @@
  * could be closed mid-use when its 5-minute idle timer fires after re-acquire.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { BrowserPool } from '../../src/tool/BrowserTool/BrowserPool.js';
-import type { ICDPClient } from '../../src/tool/BrowserTool/CDPClient.js';
+import { BrowserPool } from '../src/BrowserPool.js';
+import type { ICDPClient } from '../src/CDPClient.js';
 
-vi.mock('../../src/tool/BrowserTool/CDPClient.js', () => ({
+vi.mock('../src/CDPClient.js', () => ({
   createCDPClientForMode: vi.fn(),
 }));
 
-import { createCDPClientForMode } from '../../src/tool/BrowserTool/CDPClient.js';
+import { createCDPClientForMode } from '../src/CDPClient.js';
 
 function makeClient(): ICDPClient {
   return {

@@ -14,7 +14,7 @@
  * - DNS rebinding attacks via hostname resolution check
  */
 
-import { isSafeUrlSync } from '../../utils/urlSafety.js';
+import { isSafeUrlSync } from './urlSafety.js';
 
 export interface DomainBlockerConfig {
   blockedDomains: string[];

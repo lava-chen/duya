@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { ExtensionCDPClient, PlaywrightCDPClient } from '../../../src/tool/BrowserTool/CDPClient.js';
+import { ExtensionCDPClient, PlaywrightCDPClient } from '../../src/CDPClient.js';
 
 // Helper: simulate daemon HTTP response.
 // `send()` does `result.data` on the daemon response, extracting the CDP result.

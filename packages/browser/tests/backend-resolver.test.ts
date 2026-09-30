@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveBackend, type BrowserBackendMode } from '../../src/tool/BrowserTool/backend-resolver';
+import { resolveBackend, type BrowserBackendMode } from '../src/backend-resolver';
 
 describe('resolveBackend', () => {
   it('auto mode: uses extension when online', () => {
@@ -38,8 +38,15 @@ describe('resolveBackend', () => {
     expect(resolveBackend('human-like', true, true)).toBe('human-like');
   });
 
-  it('human-like mode: falls back to static fetch when renderer unavailable', () => {
-    expect(resolveBackend('human-like', true, false)).toBe('fallback');
+  // `human-like` needs EITHER transport: the extension drives it over CDP,
+  // the sidebar <webview> over the debugger. Only when both are gone does it
+  // degrade to static fetch (see backend-resolver.ts `case 'human-like'`).
+  it('human-like mode: keeps human-like when the extension is online but the renderer is not', () => {
+    expect(resolveBackend('human-like', true, false)).toBe('human-like');
+  });
+
+  it('human-like mode: falls back to static fetch only when neither transport is available', () => {
+    expect(resolveBackend('human-like', false, false)).toBe('fallback');
   });
 
   it('handles all mode values without throwing', () => {

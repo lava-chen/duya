@@ -8,7 +8,7 @@ import axios from 'axios';
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, relative, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isSafeUrl } from '../../utils/urlSafety.js';
+import { isSafeUrl } from './urlSafety.js';
 
 export interface FallbackSnapshot {
   url: string;

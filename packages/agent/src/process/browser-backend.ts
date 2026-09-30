@@ -9,7 +9,7 @@
  * 组件友好）；逐字符 type 留给需要真实键击节奏的场景。
  */
 
-import { ExtensionCDPClient } from '../tool/BrowserTool/CDPClient.js';
+import { ExtensionCDPClient } from '@duya/browser';
 import {
   runBrowserNode,
   type BrowserBackendPort,

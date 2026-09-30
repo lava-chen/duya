@@ -26,6 +26,15 @@ await build({
   format: 'cjs',
   sourcemap: false,
   minify: true,
+  // Plan 583 seam A: the agent imports the browser engine as `@duya/browser`.
+  // The agent tsconfig maps that specifier to the package's emitted
+  // `dist/index.d.ts` so `tsc` can honour its own `rootDir`; esbuild honours
+  // the same tsconfig, so without this alias the bundle would try to inline a
+  // declaration file. Bundle the engine SOURCE instead. Must be absolute —
+  // esbuild treats a relative value as a bare module specifier.
+  alias: {
+    '@duya/browser': path.resolve('packages', 'browser', 'src', 'index.ts'),
+  },
   external: [
     'better-sqlite3',
     'fsevents',

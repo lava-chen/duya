@@ -25,7 +25,7 @@ import {
 } from './computer.js';
 import type { ActionHandler } from './types.js';
 
-export { type ActionContext, type ActionHandler, type ActionResult } from './types.js';
+export { type ActionContext, type ActionHandler } from './types.js';
 export { SchemaGenerator } from '../SchemaGenerator.js';
 export { ActionRegistry } from './ActionRegistry.js';
 

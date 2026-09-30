@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { networkStartAction } from '../../../src/tool/BrowserTool/actions/network.js';
-import type { ActionContext } from '../../../src/tool/BrowserTool/actions/types.js';
+import { networkStartAction } from '../../src/actions/network.js';
+import type { ActionContext } from '../../src/actions/types.js';
 
 function createContext() {
   const cdp = {

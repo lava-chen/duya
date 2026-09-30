@@ -14,7 +14,11 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "allowSyntheticDefaultImports": true
+    "allowSyntheticDefaultImports": true,
+    "baseUrl": ".",
+    "paths": {
+      "@duya/browser": ["../browser/dist/index.d.ts"]
+    }
   },
   "include": ["src/**/*"],
   "exclude": [

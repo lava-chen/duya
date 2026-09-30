@@ -41,6 +41,7 @@
     "@anthropic-ai/sdk": "^0.80.0",
     "@commander-js/extra-typings": "^14.0.0",
     "@duya/ai": "0.1.0",
+    "@duya/browser": "0.0.1",
     "@duya/cli": "0.1.0",
     "@duya/computer-use": "0.0.1",
     "@duya/conductor": "0.1.0",

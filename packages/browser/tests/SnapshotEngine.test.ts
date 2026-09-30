@@ -11,9 +11,9 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { SnapshotEngine } from '../../src/tool/BrowserTool/SnapshotEngine.js';
-import type { ICDPClient, CDPMode } from '../../src/tool/BrowserTool/CDPClient.js';
-import { generateSnapshotJsPrompt } from '../../src/tool/BrowserTool/SnapshotEngine.js';
+import { SnapshotEngine } from '../src/SnapshotEngine.js';
+import type { ICDPClient, CDPMode } from '../src/CDPClient.js';
+import { generateSnapshotJsPrompt } from '../src/SnapshotEngine.js';
 
 // ── Mock CDP Client ──────────────────────────────────────────────────
 

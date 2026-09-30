@@ -1,0 +1,35 @@
+{
+  "name": "@duya/browser",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Browser engine package (plan 583 seam A). CDP clients (extension / webview / human-like / Playwright), backend degradation chain, action registry + schema generator, snapshot engine, platform extractors and hooks, domain blocking and URL safety. Owns no agent-tool contract and no product surface — the BaseTool adapter stays in @duya/agent and the built-in browser window stays in electron/ (plan 573).",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "clean": "node -e \"const fs=require('node:fs'); fs.rmSync('dist',{recursive:true,force:true}); fs.rmSync('tsconfig.tsbuildinfo',{force:true})\"",
+    "build": "npm run clean && tsc --incremental",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "axios": "^1.14.0",
+    "jimp": "^1.6.1",
+    "playwright": "^1.59.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.3.3",
+    "vitest": "^3.0.0"
+  }
+}

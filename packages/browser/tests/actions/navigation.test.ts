@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { navigateAction } from '../../../src/tool/BrowserTool/actions/navigation.js';
-import type { ActionContext } from '../../../src/tool/BrowserTool/actions/types.js';
+import { navigateAction } from '../../src/actions/navigation.js';
+import type { ActionContext } from '../../src/actions/types.js';
 
 function createMockContext(overrides: Partial<ActionContext> = {}): ActionContext {
   return {

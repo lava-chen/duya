@@ -3,29 +3,59 @@
  * Slim facade using ActionRegistry pattern.
  * Supports: 23 operations via pluggable action handlers.
  * Three backends: Extension CDP, Playwright, Fallback (static).
+ *
+ * Plan 583 seam A: this file is the agent-side adapter and the only thing
+ * left in `tool/BrowserTool/`. All browser capability (CDP clients, action
+ * registry, snapshot engine, extractors, policy) now lives in the
+ * `@duya/browser` package. The adapter keeps the `BaseTool` contract —
+ * `toTool()`, `execute()`, `setBrowserConfig()`, `setDomainBlockerConfig()` —
+ * so the four consumer sites keep working unchanged.
  */
 
 import type { Tool, ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolExecutor } from '../registry.js';
 import { BaseTool } from '../BaseTool.js';
-import { BROWSER_TOOL_NAME, BROWSER_TOOL_DESCRIPTION, BROWSER_TOOL_DESCRIPTION_HUMAN_LIKE } from './constants.js';
-import { ExtensionCDPClient, clearBrowserCache, type ICDPClient } from './CDPClient.js';
-import { WebviewCDPClient } from './WebviewCDPClient.js';
-import { HumanLikeCDPClient } from './HumanLikeCDPClient.js';
-import { resolveBackend, DEFAULT_BROWSER_CONFIG, type BrowserToolConfig } from './backend-resolver.js';
-import { SnapshotEngine } from './SnapshotEngine.js';
-import { FallbackBrowser } from './FallbackBrowser.js';
-import { ParallelFetcher } from './ParallelFetcher.js';
-import { BrowserPool } from './BrowserPool.js';
-import { getPrompt } from './prompt.js';
-import { detectNetworkEnvironment } from './networkEnv.js';
-import { PlatformHookManager } from './platform-hooks/PlatformHookManager.js';
-import { isUrlBlocked, getEffectiveBlockedDomains, type DomainBlockerConfig } from './DomainBlocker.js';
-import { ActionRegistry, SchemaGenerator, getAllActions, type ActionContext } from './actions/index.js';
-import { formatResult } from './ResultFormatter.js';
-import { isRecoverableSessionInvalidation, retryOnceAfterSessionInvalidation } from './selfHealing.js';
-import type { BrowserMode, NetworkEnvironment } from './types.js';
+import {
+  BROWSER_TOOL_NAME,
+  BROWSER_TOOL_DESCRIPTION,
+  BROWSER_TOOL_DESCRIPTION_HUMAN_LIKE,
+  ExtensionCDPClient,
+  WebviewCDPClient,
+  HumanLikeCDPClient,
+  clearBrowserCache,
+  resolveBackend,
+  DEFAULT_BROWSER_CONFIG,
+  SnapshotEngine,
+  FallbackBrowser,
+  ParallelFetcher,
+  BrowserPool,
+  getPrompt,
+  detectNetworkEnvironment,
+  PlatformHookManager,
+  isUrlBlocked,
+  getEffectiveBlockedDomains,
+  ActionRegistry,
+  SchemaGenerator,
+  getAllActions,
+  formatResult,
+  isRecoverableSessionInvalidation,
+  retryOnceAfterSessionInvalidation,
+  setBrowserLogger,
+} from '@duya/browser';
+import type {
+  ICDPClient,
+  BrowserToolConfig,
+  DomainBlockerConfig,
+  ActionContext,
+  BrowserMode,
+  NetworkEnvironment,
+} from '@duya/browser';
 import { logger } from '../../utils/logger.js';
+
+// Route engine logs (CDP connect/restore, mode switches) into the host's
+// structured logger. The port is structurally compatible with AgentLogger,
+// so this needs no adapter object.
+setBrowserLogger(logger);
 
 /** Close idle agent pages (and clear cache) this long after the last browser operation. */
 const BROWSER_IDLE_CLOSE_TIMEOUT_MS = 2 * 60 * 1000;

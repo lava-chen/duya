@@ -19,8 +19,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod/v4';
-import { SchemaGenerator } from '../../src/tool/BrowserTool/SchemaGenerator';
-import type { ActionHandler } from '../../src/tool/BrowserTool/actions/types';
+import { SchemaGenerator } from '../src/SchemaGenerator';
+import type { ActionHandler } from '../src/actions/types';
 
 function makeAction(
   operation: string,
@@ -107,7 +107,7 @@ describe('SchemaGenerator — z.preprocess handling', () => {
 describe('SchemaGenerator — parallel_fetch urls field', () => {
   it('emits urls as an array of strings (not a string)', async () => {
     const { parallelFetchAction } = await import(
-      '../../src/tool/BrowserTool/actions/parallel'
+      '../src/actions/parallel'
     );
     const { inputSchema } = SchemaGenerator.generate([parallelFetchAction]);
     const variants = (inputSchema as { anyOf: Array<{ properties: Record<string, unknown>; required: string[] }> })
@@ -124,7 +124,7 @@ describe('SchemaGenerator — parallel_fetch urls field', () => {
 
   it('emits timeoutMs as a number (not a string)', async () => {
     const { parallelFetchAction } = await import(
-      '../../src/tool/BrowserTool/actions/parallel'
+      '../src/actions/parallel'
     );
     const { inputSchema } = SchemaGenerator.generate([parallelFetchAction]);
     const variants = (inputSchema as { anyOf: Array<{ properties: Record<string, unknown> }> })

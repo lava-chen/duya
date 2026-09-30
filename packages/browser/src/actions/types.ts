@@ -1,5 +1,4 @@
 import type { z } from 'zod/v4';
-import type { ToolResult } from '../../../types.js';
 import type { ICDPClient } from '../CDPClient.js';
 import type { SnapshotEngine } from '../SnapshotEngine.js';
 import type { FallbackBrowser } from '../FallbackBrowser.js';
@@ -41,5 +40,3 @@ export interface ActionHandler<TInput = Record<string, unknown>> {
   readonly hidden?: boolean;
   execute(input: TInput, ctx: ActionContext): Promise<Record<string, unknown>>;
 }
-
-export type ActionResult = ToolResult;
