@@ -512,7 +512,7 @@ pi 则是另一极端：无 manifest 预声明 + 静默遮蔽内置，用户在 
       补不补注册时门控。plan 419 的 P1（`checkPermissions` 预检、`riskTier`、
       `PermissionContext` 注入）正好是这条的地基，但 P1 尚未落地。
 
-#### 推进顺序（G1 / G2 / G3 均已落地）
+#### 推进顺序（G1 / G2 / G3 / G4 均已落地）
 
 0. ~~G1：`discoverHooks` 格式修正~~ ✅ `968d18c5`
 1. ~~独立 plan [584](../completed/584-plugin-trust-enforcement.md)~~ ✅ **2026-10-01 完成**。
@@ -521,11 +521,14 @@ pi 则是另一极端：无 manifest 预声明 + 静默遮蔽内置，用户在 
 2. ~~G2：让 plugin 的 hook 真的执行~~ ✅ `5477574e`。**方案 A 的主体已落地。**
 3. ~~G3：plugin 的 commands / agents~~ ✅ **删除，不是接线。** 宿主能力本身不存在，
    接了也只是把死元数据换个地方放。
-4. **缝 C 方案 B 判定为「暂不做」**：`plugin` 这个 MCP source 桶在仓内**不可达**
+4. ~~G4：补上 G2 留下的信任门~~ ✅ `allowHttpHooks` / `maxHooks` 原本被误判为 N/A，
+   它们有执行点且 G2 已接上。已按 `TRUST_LEVEL_CAPABILITIES` 逐条执行。
+5. **缝 C 方案 B 判定为「暂不做」**：`plugin` 这个 MCP source 桶在仓内**不可达**
    （零个 plugin 声明 `mcp/servers.json`），放松它对 `decideMcpSource` 是空转。
-5. **C 方案（进程内执行）仍需先解决门控缺失**——但注意这不是「等 584」：
+6. **C 方案（进程内执行）仍需先解决门控缺失**——但注意这不是「等 584」：
    584 已完成且说明了：**要接 C，必须先为它新建一个执行点**（声明 + 校验），
-   否则就是无门控地执行第三方代码。
+   否则就是无门控地执行第三方代码。G4 是这条教训的第一次实际应用：
+   G2 自己就是先接了执行点、门才补上，顺序反了。接 C 时不要重蹈。
 
 #### G2 的实现要点（2026-10-01）
 
@@ -576,6 +579,50 @@ pi 则是另一极端：无 manifest 预声明 + 静默遮蔽内置，用户在 
 commands/agents），与 plugin-core 的 `PluginCapabilities` interface 是两个类型。
 顺带确认：它不含这两个字段，所以本次删除**没有制造用户可见的虚假承诺**，
 原本就只是潜在的。
+
+#### G4：G2 留下的信任门（2026-10-01，事后发现）
+
+**这是 G2 直接打开的新可达面，必须记清楚。**
+
+584 把 `allowHttpHooks` / `maxHooks` 判为「无执行点，标 N/A 不接假门」。**这个判断对
+`allowAgentHooks` / `allowAutoUpdate` 成立，对 `allowHttpHooks` 和 `maxHooks` 是错的** ——
+它们有执行点，而且 G2 把那个执行点接上了：
+
+| 环节 | 证据 |
+|---|---|
+| plugin 可以声明 http hook | `HttpHookSchema` 在 `HookCommandSchema` 判别联合里；G1 修好后 `parseHooksJsonContent` 能正常解析它 |
+| G2 让它真的执行 | `discoverPluginHookFiles` → `setExtraHookFiles` → `readHooksConfig` → `ConfigHooksRunner` → `executeHttpHook` |
+| 执行时**无任何门** | `executor.ts:297` 无条件 `fetch(hook.url, { method: 'POST', body: JSON.stringify(input) })` |
+| 信任表说了不行 | `TRUST_LEVEL_CAPABILITIES` 里 `allowHttpHooks` 只在 `official` 为 true，verified / local / untrusted 全是 false |
+| 但没人读它 | `getCapabilities()` 唯一调用点是一个只读 IPC |
+
+**外泄面**：`UserPromptSubmit` 的输入含 `prompt`（用户原始提问），`PreToolUse` 含
+`tool_input`（完整工具入参），`PostToolUse` 含 `tool_input` + `tool_response`。
+也就是说一个 marketplace 插件（`Verified`）或未知来源插件（`Untrusted`）可以声明
+`{"type":"http","url":"..."}`，把用户提问和工具载荷 POST 到任意地址。
+
+**结论：G2 让 plugin hook 上线时没有附带它自己声明需要的门**，而 plan 正文恰好写过
+「要接 C 必须先为它新建一个执行点（声明 + 校验），否则就是无门控地执行第三方代码」。
+这条门现在补上。
+
+实现（**协议零改动**，门开在 `readHooksConfig` 这一个所有消费方都经过的点）：
+
+1. `setExtraHookFiles` 的元素从裸路径改为 `{ path, trustLevel }`。
+   `trustLevel` 取自 `plugin:registry:list` —— 就是 G2 已经在调的那个接口，
+   `PluginViewItem.trustLevel` 本来就在返回里（注册库在安装时就记了信任引擎的判定）。
+2. `gatePluginHooks()` 按 `TRUST_LEVEL_CAPABILITIES` 逐条执行：
+   `allowHttpHooks` / `allowAgentHooks` 挡对应类型，`maxHooks` 限单个插件的 hook 数。
+   **不新造任何策略，只执行表里已经写好的承诺。**
+3. 一律 fail-closed：trustLevel 缺失或无法识别的条目**直接丢弃**，不默认放行；
+   丢弃时打 WARN 留痕。
+4. `command` / `process` hook **不拦** —— 它们是本地进程执行，是另一个暴露面，
+   本次不假装解决。
+
+两轮变异测试证明门有牙：`allowHttpHooks` 改成恒 true → 5 条用例红；
+`maxHooks` 上限改成 `MAX_SAFE_INTEGER` → 3 条用例红。
+
+门禁：`npx vitest run packages/agent/src/hooks` → 12 文件 / 199 用例全绿；
+`npx tsc -p packages/agent --noEmit` exit 0；`npm run typecheck:web` exit 0。
 
 #### 已有的冲突/优先级策略地图（2026-10-01 摸清，比三个参照物都好）
 

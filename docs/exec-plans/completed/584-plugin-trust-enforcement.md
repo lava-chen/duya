@@ -5,11 +5,14 @@
 > 独立成 plan 的原因是：**这个缺口与缝 C 做不做无关，且是缝 C 的硬前提**。
 >
 > **交付摘要**：六个 capability 字段中，只有一个（`meetsMinimumLevel`）存在
-> 可接的执行点，已接线（Phase 1）。其余五个一个未接线、四个**没有执行点**，
+> 可接的执行点，已接线（Phase 1）。其余五个一个未接线、四个**在下笔时没有执行点**，
 > 如实标为 N/A 而非接假门（Phase 2）。同时**删掉**了一个读起来像执法、
 > 实际零调用点的 `PermissionService`（Phase 3），并给 Phase 1 开的逃生口
 > 补上审计痕迹（Phase 4）。过程中修掉两处真实缺陷：共享能力表被按引用交出，
 > 以及 `builtin-directory` 被误判 `untrusted`（后者差一步就会禁用所有内置插件）。
+>
+> **事后更正**：下笔时的两个 N/A 判断（`maxHooks` / `allowHttpHooks`）是**带时点的**，
+> 被 583 G2 推翻前提后已在 583 G4 补上门控。见下方对账表的时点更正。
 
 ## 0. 结论
 
@@ -89,20 +92,25 @@
 | `requirePermissionConfirmation` | **未接线** | 表里有、无人读。Phase 1 明确**不**拿它做安装门控（语义不同） |
 | `allowAutoUpdate` | **N/A：执行点不存在** | plugin 无任何 update/sync 机制，`autoUpdate` 存了但无人读。见 Phase 2 |
 | `maxFileAccess` | **N/A：执行点不存在** | plugin 无文件访问执行路径，接线是假的 |
-| `maxHooks` | **N/A：执行点不存在** | plugin 声明的 hook 从不执行（见 583 §7 Phase 4） |
-| `allowHttpHooks` | **N/A：执行点不存在** | 同上 |
-| `allowAgentHooks` | **N/A：执行点不存在** | 同上 |
+| `maxHooks` | **当时 N/A → 现已接线** | 写下时 plugin hook 确实从不执行。583 G2 接上后成为真实暴露面，已在 [583 G4](./583-browser-capability-boundary.md) 按 `maxHooks` 逐档限流 |
+| `allowHttpHooks` | **当时 N/A → 现已接线** | 同上。G2 之后一个 `Verified` / `Untrusted` 插件可声明 http hook 把用户提问与工具载荷 POST 到任意 URL，已按 `allowHttpHooks` 拦截 |
+| `allowAgentHooks` | **N/A：执行点仍不存在** | `executor.ts` 对 `prompt` / `agent` 只打 `NOT_IMPLEMENTED`，没有执行点。G4 仍按此字段设门，属面向未来的 fail-safe |
 | `meetsMinimumLevel()` | **已接线（Phase 1）** | 唯一有消费者的能力相关 API |
 
 > **Phase 1 之后，六个 capability 字段里只有 `meetsMinimumLevel` 有消费者。**
 > 其余五个要么未接线、要么根本没有执行点。这不是本 plan 没做完，
-> 是**当前代码里不存在可接的地方**。给不存在的执行点接线，会造出一个看起来
+> 是**写下当时代码里不存在可接的地方**。给不存在的执行点接线，会造出一个看起来
 > 在管事、实际不拦任何东西的字段——和 583 Phase 3 里 `permissions[].domains` 的
-> 情况是同一类错误。若将来 plugin 真的开始执行 hook / 自动更新，这几行要重新评估。
+> 情况是同一类错误。
 
-> 「N/A」是**有意的标注**，不是漏做。给一个不存在的执行点接线，会造出一个看起来
-> 在管事、实际不拦任何东西的字段——和 583 Phase 3 里 `permissions[].domains` 的
-> 情况是同一类错误。若将来 plugin 真的开始执行 hook，这三行要重新评估。
+> **⚠️ 时点更正（2026-10-01，583 G4）**：上面「没有执行点」这个结论对
+> `maxHooks` / `allowHttpHooks` **是带时点的**——它成立的前提是「plugin 声明的 hook
+> 从不执行」，而 583 G2 把这个前提推翻了。推翻之后这两行从「N/A」变成「**已接线的门**」。
+> `allowAgentHooks` / `allowAutoUpdate` / `maxFileAccess` 的 N/A 判断不受影响。
+>
+> 教训是关于**顺序**的：G2 先接了执行点、门是事后补的（G4）。而 583 plan 正文当时写过
+> 「要接 C 必须先为它新建一个执行点（声明 + 校验），否则就是无门控地执行第三方代码」。
+> 接 C（进程内执行 plugin 代码）时不要重蹈这个顺序。
 
 ### Phase 1 — T-1 安装时门控 ✅ 已落地
 
@@ -163,6 +171,10 @@ tier 映射补全后，5 个 `PluginSource` 全部落在已识别档位，**`Unt
 
 所以 `allowAutoUpdate` 与 `maxHooks` / `allowHttpHooks` / `allowAgentHooks` 同类：
 **没有执行点**。去「接线」只有两种做法，两种都错：
+
+> **时点注**：本段写于「plugin hook 从不执行」成立之时。583 G2 让 plugin hook 真的执行后，
+> `maxHooks` / `allowHttpHooks` 获得了执行点，G4 已为它们接上门控；
+> `allowAgentHooks` 仍无执行点（executor 对 `agent` 只打 `NOT_IMPLEMENTED`）。
 
 - (a) 顺便把 plugin 自动更新机制做出来 —— 那是功能开发，不属于安全 plan。
 - (b) 把一个没人读的标志钳一下 —— 制造一个看起来在管事、实际不拦任何东西的字段。
