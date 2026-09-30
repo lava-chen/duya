@@ -612,6 +612,59 @@ export class MessageLog {
    * the compaction controller, and the append-only rollout file are
    * untouched — LLM context semantics do not change.
    */
+  /**
+   * Plan 582 (G1): the directory holding a bot session's generation files.
+   *
+   * The read paths used to hardcode `agents/<agentId>/sessions`, deriving the
+   * location from the session id and ignoring `rollout_path` entirely. That is
+   * fine while a bot session never moves — but archiving relocates the whole
+   * set under `archived/<date>/agents/<agentId>/sessions`, and every reader
+   * then looked in the original (now empty) directory and returned nothing.
+   * Archiving a bot session was therefore unreadable no matter where its
+   * files landed.
+   *
+   * `rollout_path` is authoritative when it resolves to something that
+   * exists; the id-derived directory stays as the fallback for rows that have
+   * never been written (or predate the column).
+   */
+  private resolveBotSessionsDir(sessionId: string, agentId: string): string {
+    const rel = this.getRolloutPath(sessionId);
+    if (rel) {
+      const abs = this.resolvePathOnDisk(rel);
+      if (fs.existsSync(path.dirname(abs))) return path.dirname(abs);
+    }
+    return path.join(this.rootDir, 'agents', agentId, 'sessions');
+  }
+
+  /**
+   * Plan 582 (G1): every rollout FILE that belongs to a session, in
+   * generation order (oldest `archive-<g>.jsonl` first, `active.jsonl` last).
+   *
+   * Archiving used to move exactly one file — the one named by
+   * `rollout_path`. For a session in the generation layout (every bot, plus
+   * any human/cron session past `NON_BOT_ROTATION_THRESHOLD_BYTES`) that
+   * stranded the `archive-<g>.jsonl` siblings: the row's new `rollout_path`
+   * pointed into a directory with no segments, so `listBySession` resolved
+   * zero history rows and the session silently lost everything written
+   * before the last rotation.
+   *
+   * Single-file sessions get a one-element array, so callers do not have to
+   * branch on layout.
+   */
+  collectSessionRolloutFiles(sessionId: string): string[] {
+    const botAgentId = parseAgentIdFromBotSession(sessionId);
+    if (botAgentId) {
+      return this.collectSessionGenerationFiles(this.resolveBotSessionsDir(sessionId, botAgentId));
+    }
+    const rel = this.getRolloutPath(sessionId);
+    if (!rel) return [];
+    const abs = this.resolvePathOnDisk(rel);
+    if (path.basename(rel) === 'active.jsonl') {
+      return this.collectSessionGenerationFiles(path.dirname(abs));
+    }
+    return fs.existsSync(abs) ? [abs] : [];
+  }
+
   listBySession(
     sessionId: string,
     options?: { source?: readonly string[]; includeSuperseded?: boolean },
@@ -630,7 +683,7 @@ export class MessageLog {
     if (botAgentId) {
       return this.listBySessionMultiFile(
         sessionId,
-        path.join(this.rootDir, 'agents', botAgentId, 'sessions'),
+        this.resolveBotSessionsDir(sessionId, botAgentId),
         options,
       );
     }
@@ -1015,9 +1068,7 @@ export class MessageLog {
   project(sessionId: string): TimelineEntryRow[] {
     const botAgentId = parseAgentIdFromBotSession(sessionId);
     if (botAgentId) {
-      return this.projectMultiFile(
-        path.join(this.rootDir, 'agents', botAgentId, 'sessions'),
-      );
+      return this.projectMultiFile(this.resolveBotSessionsDir(sessionId, botAgentId));
     }
 
     const relativePath = this.getRolloutPath(sessionId);
@@ -1675,9 +1726,7 @@ export class MessageLog {
     const botAgentId = parseAgentIdFromBotSession(sessionId);
     if (botAgentId) {
       files.push(
-        ...this.collectSessionGenerationFiles(
-          path.join(this.rootDir, 'agents', botAgentId, 'sessions'),
-        ),
+        ...this.collectSessionGenerationFiles(this.resolveBotSessionsDir(sessionId, botAgentId)),
       );
     } else {
       const rel = this.getRolloutPath(sessionId);
@@ -2171,6 +2220,19 @@ export class MessageLog {
   }
 
   // ─── Private session helpers ───
+
+  /**
+   * Plan 582 (G1): drop the cached `rollout_path` for a session.
+   *
+   * Archive and unarchive rewrite `sessions.rollout_path` behind
+   * MessageLog's back. Without invalidation the next read or append would
+   * resolve against the pre-move path — a location that no longer exists —
+   * and `ensureFile` would happily create a fresh empty file there, quietly
+   * detaching the session from its real rollout.
+   */
+  invalidateRolloutPathCache(sessionId: string): void {
+    this.pathCache.delete(sessionId);
+  }
 
   /** Read rollout_path from the sessions table. Returns null if not set or table missing. */
   private getRolloutPath(sessionId: string): string | null {
