@@ -131,6 +131,53 @@ export async function deleteSelectedSessions(threadIds: string[]): Promise<numbe
 }
 
 // ---------------------------------------------------------------------------
+// Archive-scoped operations (Plan 582 G6)
+// ---------------------------------------------------------------------------
+
+/**
+ * Unarchive every session in `threadIds`, returning how many actually came
+ * back. Sequential rather than `Promise.all`: each `unarchiveThread` mutates
+ * the same `archivedThreads` roster, and interleaving the IPC round-trips
+ * makes the final refetch race the individual updates.
+ */
+export async function unarchiveSelectedSessions(threadIds: string[]): Promise<number> {
+  const state = useConversationStore.getState();
+  let restored = 0;
+  for (const id of threadIds) {
+    try {
+      await state.unarchiveThread(id);
+      restored += 1;
+    } catch {
+      // A single unmovable file must not abandon the rest of the batch; the
+      // caller reports the count and the user retries the remainder.
+    }
+  }
+  notifyThreadsThreadsRestored(restored);
+  return restored;
+}
+
+/**
+ * Clear the archive: unarchive everything that is currently archived.
+ *
+ * "清空归档" reads as "delete it all" to most users, so it is deliberately
+ * implemented as the *reversible* direction — restore everything to the
+ * active list. Anything genuinely destructive belongs behind the per-row
+ * delete action, where the scope is one row the user can see.
+ */
+export async function restoreAllArchivedSessions(): Promise<number> {
+  const ids = useConversationStore.getState().archivedThreads.map((t) => t.id);
+  return unarchiveSelectedSessions(ids);
+}
+
+/** Cross-window broadcast after a batch restore. */
+function notifyThreadsThreadsRestored(count: number): void {
+  notifyThreadsChanged();
+  if (count > 0) {
+    void useConversationStore.getState().loadArchivedThreads();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Project-scoped operations
 // ---------------------------------------------------------------------------
 

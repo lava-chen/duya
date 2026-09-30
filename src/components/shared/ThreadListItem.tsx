@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useConversationStore, type Thread } from "@/stores/conversation-store";
 import { ArchiveIcon, DotsThreeIcon, CopyIcon, NotePencilIcon, CircleNotchIcon, PinIcon, PinFilledIcon, TrashIcon, DownloadSimpleIcon } from "@/components/icons";
 import { exportRolloutIPC } from "@/lib/ipc-client";
@@ -16,6 +16,7 @@ import type { StreamPhase } from "@/types/message";
 import type { PermissionRequestEvent } from "@/types/stream";
 import type { TranslationKey } from "@/i18n";
 import { DropdownMenu, type MenuAction } from "@/components/ui/DropdownMenu";
+import { ArchiveConfirm } from "@/components/shared/ArchiveConfirm";
 
 type TFunc = (key: TranslationKey, params?: Record<string, string | number>) => string;
 
@@ -55,6 +56,10 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
   const unarchiveThread = useConversationStore((s) => s.unarchiveThread);
   const updateThreadTitle = useConversationStore((s) => s.updateThreadTitle);
   const setThreadPinned = useConversationStore((s) => s.setThreadPinned);
+  // Plan 582 (G9): how many sub-agent sessions the archive batch will take
+  // with this row, so the confirm dialog can say so before the click lands.
+  const threads = useConversationStore((s) => s.threads);
+  const [isArchiveConfirmOpen, setIsArchiveConfirmOpen] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [newTitle, setNewTitle] = useState(thread.title || "");
   const [isRunning, setIsRunning] = useState(false);
@@ -132,10 +137,30 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
     deleteThread(thread.id);
   }, [deleteThread, thread.id]);
 
-  // Plan 506 (C2): archive — status flip, rollout files stay on disk.
-  const handleArchive = useCallback(() => {
-    archiveThread(thread.id);
+  // Plan 582 (G9): archiving is now a confirm-then-act flow, because
+  // `db:session:archive` takes the session's whole spawn subtree with it —
+  // one click on a parent conversation files away every sub-agent session
+  // underneath it, and nothing on screen said so.
+  const handleArchive = useCallback(async () => {
+    await archiveThread(thread.id);
   }, [archiveThread, thread.id]);
+
+  const handleOpenArchiveConfirm = useCallback(() => {
+    setIsArchiveConfirmOpen(true);
+  }, []);
+
+  const handleArchiveConfirmCancel = useCallback(() => {
+    setIsArchiveConfirmOpen(false);
+  }, []);
+
+  // Plan 582 (G2): the archive batch covers every descendant. Count them from
+  // the live roster so the dialog can say what it is about to take; the main
+  // process is still the authority (it re-walks the spawn tree and can refuse
+  // the whole batch if a turn is running).
+  const childCount = useMemo(
+    () => threads.filter((t) => t.parentId === thread.id).length,
+    [threads, thread.id],
+  );
 
   // Plan 549 (Track B): unarchive -- restores the session to the active
   // list. Symmetric to handleArchive but waits on the store promise so
@@ -193,7 +218,10 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
         label: t("thread.archiveThread"),
         iconLeft: <ArchiveIcon size={14} />,
         className: "thread-dropdown-item",
-        onSelect: handleArchive,
+        // Plan 582 (G9): opens the confirm dialog instead of archiving. The
+        // backend now takes this session's whole spawn subtree with it, so a
+        // bare click is no longer the size of action the label implies.
+        onSelect: handleOpenArchiveConfirm,
       };
 
   const threadMenuItems: MenuAction[] = [
@@ -358,6 +386,20 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
           />
         </div>
       </div>
+
+      {/* Plan 582 (G9): confirm before a subtree-wide archive. Rendered
+          outside the row's own clickable surface so the row's "open thread"
+          handler does not swallow the dialog's clicks. */}
+      <ArchiveConfirm
+        open={isArchiveConfirmOpen}
+        title={thread.title}
+        childCount={childCount}
+        onCancel={handleArchiveConfirmCancel}
+        onConfirm={async () => {
+          setIsArchiveConfirmOpen(false);
+          await handleArchive();
+        }}
+      />
     </>
   );
 }

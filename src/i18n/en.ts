@@ -1287,6 +1287,44 @@ const en = {
   'thread.archiveThread': 'Archive Thread',
   // Plan 549 (Track B): unarchive + archive-time sub-line.
   'thread.unarchiveThread': 'Unarchive',
+  // Plan 582 (G9): archive confirmation. The body names the session so the
+  // user can see which row they clicked, and the hint states the two
+  // consequences that were previously invisible: sub-agent sessions go too,
+  // and the conversation files move on disk.
+  'thread.archiveConfirmTitle': 'Archive this thread?',
+  'thread.archiveConfirmBody': '“{title}” will move to the archive.',
+  'thread.archiveConfirmHint':
+    'Reversible — “Unarchive” puts the thread and its files back. The conversation files move into the archive folder on disk.',
+  'thread.archiveConfirmWithChildren':
+    'This also archives {count} sub-agent session(s) spawned by this thread. Reversible the same way.',
+  'thread.archiveConfirmAction': 'Archive',
+  // Plan 582 (G6): archive outcome + undo. The toast names how many
+  // sub-agent sessions went with it, because after the rows leave the
+  // sidebar the user has no other way to learn the batch was wider than the
+  // one they clicked.
+  'thread.archivedToastTitle': 'Archived',
+  'thread.archivedToastHint': '“{title}” moved to the archive.',
+  'thread.archivedToastWithChildren':
+    '{count} sub-agent session(s) were archived with it.',
+  'thread.archivedToastUndo': 'Undo',
+  // Plan 582 (G6): bulk restore for the archive section.
+  'thread.archiveRestoreAll': 'Restore all',
+  'thread.archiveCount': '{count} archived',
+  'thread.archiveRestoredToast': 'Restored {count} archived thread(s).',
+  // Plan 582 (G2): archive refusals. `session_busy` is the one the user can
+  // act on, and it usually means a SUB-agent is still running — a message
+  // that only said "wait for the turn" would send them to the wrong thread.
+  'thread.archiveBusyTitle': 'Thread is running, cannot archive',
+  'thread.archiveBusyHint': 'Wait for the current turn to finish, then try again.',
+  'thread.archiveBusyChildren':
+    'One of its sub-agent sessions is still running. Wait for this turn to finish, then try again.',
+  'thread.archiveMissingTitle': 'Thread no longer exists',
+  'thread.archiveFailedTitle': 'Could not archive',
+  'thread.archiveFailedHint':
+    'The files were left where they were. Nothing was changed — please try again.',
+  // Plan 582 (G6): read-only preview when an archived thread is opened.
+  'chat.archivedReadonlyBanner': 'This thread is archived and read-only.',
+  'chat.archivedReadonlyPlaceholder': 'Unarchive this thread to continue the conversation.',
   'thread.archivedAt': 'Archived',
   'thread.exportRollout': 'Export Session Rollout',
   'thread.exportDoneTitle': 'Rollout exported',

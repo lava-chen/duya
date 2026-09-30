@@ -364,6 +364,18 @@ export function ChatView({
 
   // Project state derived from store threads
   const storeThreads = useConversationStore(s => s.threads);
+  // Plan 582 (G6): an archived session lives in `archivedThreads`, not
+  // `threads` (G5). Opening one from the archive section is a READ-ONLY
+  // preview — the transcript is fully readable, but typing into it would
+  // append to a session the user filed away and whose files now sit under
+  // `archived/`, which the next archive/unarchive round-trip would then
+  // have to reconcile. Refuse at the composer instead of at the backend.
+  const archivedThreads = useConversationStore(s => s.archivedThreads);
+  const unarchiveThread = useConversationStore(s => s.unarchiveThread);
+  const isArchivedSession = useMemo(
+    () => archivedThreads.some((t) => t.id === sessionId),
+    [archivedThreads, sessionId],
+  );
   const setThreadWorkingDirectory = useConversationStore(s => s.setThreadWorkingDirectory);
   const setThreadModel = useConversationStore(s => s.setThreadModel);
   const addProjectFolder = useConversationStore(s => s.addProjectFolder);
@@ -1591,6 +1603,31 @@ export function ChatView({
               />
             ) : (
               <>
+              {/* Plan 582 (G6): read-only preview for an archived session.
+                  The transcript below stays fully interactive (scroll,
+                  copy, export); only the composer is closed, and it says
+                  why plus offers the way back. */}
+              {isArchivedSession && (
+                <div
+                  data-testid="archived-readonly-banner"
+                  className="mx-4 mb-2 flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm"
+                  style={{
+                    backgroundColor: 'var(--bg-muted, transparent)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text)',
+                  }}
+                >
+                  <span>{t('chat.archivedReadonlyBanner')}</span>
+                  <button
+                    type="button"
+                    className="shrink-0 text-sm font-medium"
+                    style={{ color: 'var(--accent)' }}
+                    onClick={() => void unarchiveThread(sessionId)}
+                  >
+                    {t('thread.unarchiveThread')}
+                  </button>
+                </div>
+              )}
               {(phase === 'error' || (streamingError && phase !== 'aborted')) && (
                 <ChatErrorBanner
                   error={streamingError}
@@ -1603,7 +1640,10 @@ export function ChatView({
                 onCancelEdit={cancelComposerEdit}
                 onRecapRequest={requestRecap}
                 onStop={handleStop}
-                disabled={false}
+                disabled={isArchivedSession}
+                placeholder={
+                  isArchivedSession ? t('chat.archivedReadonlyPlaceholder') : t('chat.typeMessage')
+                }
                 isStreaming={isStreaming}
                 hasQueuedMessages={hasQueuedMessages}
                 sessionId={sessionId}
@@ -1613,7 +1653,6 @@ export function ChatView({
                 onEffortChange={setEffort}
                 permissionMode={permissionMode}
                 onPermissionModeChange={handlePermissionModeChange}
-                placeholder={t('chat.typeMessage')}
                 messages={messages}
                 conductorEnabled={conductorEnabled}
                 onConductorChange={handleConductorChange}
