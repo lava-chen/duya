@@ -10,7 +10,7 @@
  * Engine selection is deterministic code (based on probed network
  * environment + query language), the SERP is parsed by engine-specific
  * scripts into a clean {title,url,snippet} list, and failures degrade
- * through an engine chain (google → bing → baidu → duckduckgo → brave → yahoo) before
+ * through an engine chain (google → bing → baidu → duckduckgo → brave → yahoo → github) before
  * escalating to manual/human-like takeover guidance.
  */
 

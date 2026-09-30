@@ -196,9 +196,9 @@ ${interactionGuide}
   {"operation": "search", "query": "node better-sqlite3 migration guide", "maxResults": 8, "engine": "auto"}
   \`\`\`
   - One call = engine selection + SERP navigation + parsing. Returns \`{results: [{rank, title, url, snippet}]}\`.
-  - \`engine\`: \`auto\` (recommended — deterministic choice from the probed network environment), or explicitly \`google\` / \`bing\` / \`baidu\` / \`duckduckgo\` / \`brave\` / \`yahoo\`.
+  - \`engine\`: \`auto\` (recommended — deterministic choice from the probed network environment), or explicitly \`google\` / \`bing\` / \`baidu\` / \`duckduckgo\` / \`brave\` / \`yahoo\` / \`github\`. \`github\` is a code/repo specialist: it is appended last as a fallback and never leads, so it is worth naming explicitly for library, issue, and repository questions.
   - \`maxResults\`: 1-20, default 8.
-  - Failed engines degrade automatically (google → bing → baidu → duckduckgo → brave → yahoo). If everything fails the result carries \`nextSteps\` — follow them instead of improvising.
+  - Failed engines degrade automatically (google → bing → baidu → duckduckgo → brave → yahoo → github). If everything fails the result carries \`nextSteps\` — follow them instead of improvising.
   - To read a result, \`navigate\` to its URL or batch them with \`parallel_fetch\`.
 
 - **navigate** - Load a URL
