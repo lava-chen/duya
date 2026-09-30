@@ -512,23 +512,32 @@ pi 则是另一极端：无 manifest 预声明 + 静默遮蔽内置，用户在 
       补不补注册时门控。plan 419 的 P1（`checkPermissions` 预检、`riskTier`、
       `PermissionContext` 注入）正好是这条的地基，但 P1 尚未落地。
 
-#### 推进顺序（已更新：584 已完成，G1 已落地）
+#### 推进顺序（G1 / G2 均已落地）
 
-0. ~~G1：`discoverHooks` 格式修正~~ ✅ `968d18c5`。**这是缝 C 方案 A 的第一个真实落点。**
+0. ~~G1：`discoverHooks` 格式修正~~ ✅ `968d18c5`
 1. ~~独立 plan [584](../completed/584-plugin-trust-enforcement.md)~~ ✅ **2026-10-01 完成**。
    Phase 1 接上了唯一有执行点的能力项；Phase 2 取消为 N/A；Phase 3 删掉只写不读的
    `PermissionService`；Phase 4 给 `setEnabled` 补审计痕迹。
-   **净结论：信任层现在有一个真门（安装时），其余五个 capability 字段没有执行点。**
-2. **G2（下一步）：让 plugin 的 hook 真的执行。** 这是方案 A（声明式组合）的主体，
-   且执行器**已经存在**（`parseHooksJsonContent` / `mergeHooksSettings` / `executeHook`
-   的 spawn+fetch），缺的只是「把已启用 plugin 的 `hooks/hooks.json` 路径并入
-   `readHooksConfig()` 的文件列表」这一步。注意此处**不需要执行任何 plugin 代码**——
-   跑的是 plugin 声明的外部命令，形态与 openclaw 的 in-process `registerTool` 完全不同。
+2. ~~G2：让 plugin 的 hook 真的执行~~ ✅ `5477574e`。**方案 A 的主体已落地。**
 3. **缝 C 方案 B 判定为「暂不做」**：`plugin` 这个 MCP source 桶在仓内**不可达**
    （零个 plugin 声明 `mcp/servers.json`），放松它对 `decideMcpSource` 是空转。
 4. **C 方案（进程内执行）仍需先解决门控缺失**——但注意这不是「等 584」：
    584 已完成且说明了：**要接 C，必须先为它新建一个执行点**（声明 + 校验），
    否则就是无门控地执行第三方代码。
+
+#### G2 的实现要点（2026-10-01）
+
+- **不需要新增跨进程契约。** 一度想给 `InitCommand` 加 `pluginHookFiles`，随后发现
+  agent 进程本来就用自己的 `pluginDb.registryList()` 发现 plugin skill 路径，
+  于是完全照抄 `discoverPluginSkillPaths()` 的模式，协议零改动。
+- **时序是个真坑**：`ConfigHooksRunner` 在**构造函数**里求值一次
+  `readHooksConfig()`。所以 `setExtraHookFiles()` 必须在 agent 构造**之前**调用
+  （放在 init handler 开头），放在 skill 加载里会晚一轮。
+- **`config.toml` 不存在时也必须生效**：旧 `readHooksConfig` 一见文件不存在直接
+  `return undefined`，那会让**恰好没手配过 hooks 的用户**丢掉全部 plugin hook。
+  测试专门钉了这一条。
+- `[hooks] disabled` 是按 config.toml 的 entry 字符串寻址的，**够不到 plugin 文件**。
+  所以 plugin 文件走空 disabled 集合——这是承认限制，不是假装它可寻址。
 
 #### 已有的冲突/优先级策略地图（2026-10-01 摸清，比三个参照物都好）
 
