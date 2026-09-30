@@ -47,6 +47,7 @@ import { parse } from '@iarna/toml';
 import { z } from 'zod';
 import type { HooksSettings, HookMatcher } from './types.js';
 import { parseHooksJsonContent, mergeHooksSettings } from './hooks-json.js';
+import { PluginTrustLevel, TRUST_LEVEL_CAPABILITIES } from '@duya/plugin-core';
 import { logger } from '../utils/logger.js';
 
 // ============================================================================
@@ -216,30 +217,125 @@ export function resolveHookFilePath(rawPath: string, baseDir: string): string {
 }
 
 /**
- * Hook files contributed by **enabled plugins**, set once at agent init.
+ * One plugin-contributed hook file, paired with the trust level that gates it.
  *
  * Plan 583 phase G2. A plugin's `hooks/hooks.json` uses the same ecosystem
  * shape as a user hook file and is parsed by the same loader, but until now
  * nothing fed plugin files in here — the only writer of `[hooks] files` was the
  * `hooks add` CLI, so plugin-declared hooks were discovered and counted in the
- * plugin catalog yet never ran. This list is the bridge: the main process
- * resolves enabled plugins to their install paths and passes the resulting
- * `hooks/hooks.json` paths in the init command.
+ * plugin catalog yet never ran. This is the bridge: the agent resolves enabled
+ * plugins to their install paths and passes the resulting `hooks/hooks.json`
+ * paths in, each tagged with the plugin's registry trust level.
  *
- * Absolute paths only, and each must already exist — the main process filters,
+ * The trust level is not optional and not defaulted. G2 initially shipped
+ * without it, which meant a plugin of any trust level could declare an
+ * `http` hook and have the executor POST the hook input — including
+ * `UserPromptSubmit.prompt` and `PreToolUse.tool_input` — to a URL the
+ * plugin chose. `TRUST_LEVEL_CAPABILITIES` has always said `allowHttpHooks`
+ * is false below `official`; nothing read it. Carrying the level here is
+ * what lets {@link gatePluginHooks} enforce that at the one place every
+ * consumer already goes through.
+ *
+ * Absolute paths only, and each must already exist — the caller filters,
  * so a stale or removed plugin contributes nothing rather than a WARN per turn.
  *
  * No cache concerns: `readHooksConfig` re-reads every file on each call, so a
  * hook file edited on disk takes effect on the next turn.
  */
-let extraHookFiles: readonly string[] = [];
-
-export function setExtraHookFiles(files: readonly string[]): void {
-  extraHookFiles = files.filter((f) => typeof f === 'string' && f.length > 0);
+export interface PluginHookFile {
+  path: string;
+  trustLevel: PluginTrustLevel;
 }
 
-export function getExtraHookFiles(): readonly string[] {
+let extraHookFiles: readonly PluginHookFile[] = [];
+
+const TRUST_LEVEL_VALUES: readonly string[] = Object.values(PluginTrustLevel);
+
+/** Narrow an untrusted value to a {@link PluginTrustLevel}, or reject it. */
+export function isPluginTrustLevel(value: unknown): value is PluginTrustLevel {
+  return typeof value === 'string' && TRUST_LEVEL_VALUES.includes(value);
+}
+
+export function setExtraHookFiles(files: readonly PluginHookFile[]): void {
+  // An entry with an unrecognized trust level is dropped rather than
+  // defaulted. Defaulting would silently grant the permissive branch of
+  // every gate below, which is the wrong direction to fail.
+  extraHookFiles = files.filter(
+    (f): f is PluginHookFile =>
+      !!f && typeof f.path === 'string' && f.path.length > 0 && isPluginTrustLevel(f.trustLevel),
+  );
+}
+
+export function getExtraHookFiles(): readonly PluginHookFile[] {
   return extraHookFiles;
+}
+
+/**
+ * Enforce the trust engine's declared capabilities on one plugin hook file.
+ *
+ * Two rules, both taken verbatim from `TRUST_LEVEL_CAPABILITIES` — this
+ * invents no policy of its own, it only enforces what the table already
+ * promised:
+ *
+ *  - `allowHttpHooks` / `allowAgentHooks` gate the two hook types that can
+ *    reach outside the box. `process` and `command` hooks spawn local
+ *    processes; that is a separate exposure and is not gated here.
+ *  - `maxHooks` caps the hook commands contributed by a single plugin, so a
+ *    plugin cannot register an unbounded number of dispatch sites.
+ *
+ * Returns the surviving hooks. An unknown trust level yields undefined, so
+ * the file contributes nothing.
+ */
+function gatePluginHooks(
+  settings: HooksSettings,
+  trustLevel: PluginTrustLevel,
+  sourceLabel: string,
+): HooksSettings | undefined {
+  const caps = TRUST_LEVEL_CAPABILITIES[trustLevel];
+  if (!caps) {
+    logger.warn(
+      `[HooksConfig] ${sourceLabel}: unknown trust level (plugin hooks skipped)`,
+    );
+    return undefined;
+  }
+
+  const gated: HooksSettings = {};
+  let kept = 0;
+  let dropped = 0;
+
+  for (const [event, matchers] of Object.entries(settings)) {
+    if (!Array.isArray(matchers)) continue;
+    const keptMatchers: HookMatcher[] = [];
+    for (const matcher of matchers) {
+      const keptHooks = [];
+      for (const hook of matcher.hooks ?? []) {
+        const permitted =
+          hook.type === 'http'
+            ? caps.allowHttpHooks
+            : hook.type === 'agent'
+              ? caps.allowAgentHooks
+              : true;
+        if (!permitted || kept >= caps.maxHooks) {
+          dropped += 1;
+          continue;
+        }
+        kept += 1;
+        keptHooks.push(hook);
+      }
+      if (keptHooks.length > 0) keptMatchers.push({ ...matcher, hooks: keptHooks });
+    }
+    if (keptMatchers.length > 0) {
+      (gated as Record<string, unknown>)[event] = keptMatchers;
+    }
+  }
+
+  if (dropped > 0) {
+    logger.warn(
+      `[HooksConfig] ${sourceLabel}: dropped ${dropped} hook(s) not permitted at trust level ${trustLevel} ` +
+        `(allowed: ${kept})`,
+    );
+  }
+  return Object.keys(gated).length > 0 ? gated : undefined;
 }
 
 /**
@@ -272,6 +368,36 @@ function loadHookFileParts(
 }
 
 /**
+ * Read and gate every plugin hook file, in file order. Mirrors
+ * `loadHookFileParts` for the read/parse failure handling, then applies
+ * {@link gatePluginHooks} with each file's own trust level.
+ *
+ * Plugin paths are absolute and are not addressable by the `[hooks] disabled`
+ * id scheme, which is keyed on the config.toml entry string. So they get an
+ * empty disabled set rather than a wrong one.
+ */
+function loadPluginHookParts(
+  files: readonly PluginHookFile[],
+  readFile: (p: string) => string,
+): Array<HooksSettings | undefined> {
+  const parts: Array<HooksSettings | undefined> = [];
+  for (const file of files) {
+    let body: string;
+    try {
+      body = readFile(file.path);
+    } catch (err) {
+      logger.warn(
+        `[HooksConfig] hook file not readable (skipped): ${file.path} (${err instanceof Error ? err.message : String(err)})`,
+      );
+      continue;
+    }
+    const parsed = parseHooksJsonContent(body, file.path);
+    parts.push(parsed ? gatePluginHooks(parsed, file.trustLevel, file.path) : undefined);
+  }
+  return parts;
+}
+
+/**
  * Read the `[hooks]` section. Returns undefined when the section is absent,
  * `files` is missing/empty, any referenced file fails to parse, or the
  * section fails validation — hooks are strictly optional and
@@ -282,7 +408,9 @@ function loadHookFileParts(
  * Plugin-contributed files (see `setExtraHookFiles`) are merged in after the
  * config.toml ones, so their hooks fire after the user's own for the same
  * event. They apply even when there is no config.toml at all: a user with no
- * `[hooks]` section must still get their plugins' hooks.
+ * `[hooks]` section must still get their plugins' hooks. Each plugin file is
+ * passed through {@link gatePluginHooks} first, so the trust engine's declared
+ * capabilities apply before any plugin hook can run.
  */
 export function readHooksConfig(): HooksSettings | undefined {
   const configRoot = resolveConfigRoot();
@@ -295,8 +423,9 @@ export function readHooksConfig(): HooksSettings | undefined {
 
   // Plugin hook files are absolute and are not addressable by the
   // `[hooks] disabled` id scheme, which is keyed on the config.toml entry
-  // string. So they get an empty disabled set rather than a wrong one.
-  const pluginParts = loadHookFileParts(extraHookFiles, new Set(), configRoot, readFile);
+  // string. So they get an empty disabled set rather than a wrong one, and
+  // instead go through the trust gate.
+  const pluginParts = loadPluginHookParts(extraHookFiles, readFile);
   return mergeHooksSettings([fromConfig, ...pluginParts]);
 }
 

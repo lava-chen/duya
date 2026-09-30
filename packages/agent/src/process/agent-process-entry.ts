@@ -58,7 +58,7 @@ import {
 } from '../queue/index.js';
 import type { QueuedCommand } from '../queue/index.js';
 import { generateSessionTitle } from '../session/title-generator.js';
-import { getSteeringConfig, setExtraHookFiles } from '../hooks/config.js';
+import { getSteeringConfig, setExtraHookFiles, isPluginTrustLevel, type PluginHookFile } from '../hooks/config.js';
 import { classifyError, APIErrorType, computeContextComposition, normalizePromptTokens, type ContextEstimateSource } from '@duya/ai';
 import type { PromptProfile } from '../prompts/modes/types.js';
 import { isBotAgentProfile } from '../prompts/index.js';
@@ -3577,17 +3577,28 @@ async function discoverPluginSkillPaths(): Promise<string[]> {
  * Disabled plugins are excluded here, which is the whole point: plugin
  * enable/disable is the user's switch for whether its hooks fire.
  */
-async function discoverPluginHookFiles(): Promise<string[]> {
-  const files: string[] = [];
+async function discoverPluginHookFiles(): Promise<PluginHookFile[]> {
+  const files: PluginHookFile[] = [];
   try {
-    const installed = await pluginDb.registryList() as Array<{ id?: unknown; enabled?: unknown; installPath?: unknown }>;
+    const installed = await pluginDb.registryList() as Array<{ id?: unknown; enabled?: unknown; installPath?: unknown; trustLevel?: unknown }>;
     const enabledPlugins = installed.filter(
       (item) => item.enabled === true && typeof item.id === 'string' && typeof item.installPath === 'string'
     );
     for (const plugin of enabledPlugins) {
+      // A registry row with no usable trust level contributes nothing. The
+      // gate in the hooks config layer fails closed on an unrecognized level,
+      // so guessing a default here would only paper over a registry bug with
+      // a permissive guess. Trust comes from the registry because that is
+      // where the install gate already recorded the engine's decision.
+      if (!isPluginTrustLevel(plugin.trustLevel)) {
+        warn(
+          `[Agent-Process] Plugin ${plugin.id} has no recognized trust level; its hook file is skipped`,
+        );
+        continue;
+      }
       const hooksFile = path.join(plugin.installPath as string, 'hooks', 'hooks.json');
       if (existsSync(hooksFile)) {
-        files.push(hooksFile);
+        files.push({ path: hooksFile, trustLevel: plugin.trustLevel });
       }
     }
     if (files.length > 0) {
