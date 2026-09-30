@@ -78,23 +78,24 @@ Rules:
 
 ***
 
-## Backlog (11)
+## Backlog (12)
 
 Designed, not started. Nothing here is promised work.
 
 | Plan | Why it is not active |
 | --- | --- |
-| [09-workspace-phase-0](../backlog/2026-09-workspace-phase-0.md) | P0 design-only, 0/26 started |
-| [button-unification](../backlog/309-button-unification.md) | 0-byte file: delete or write |
-| [duya-ai-model-list-lazy-loading](../backlog/426b-duya-ai-model-list-lazy-loading.md) | 0/21, nothing started |
-| [failclosed-command-parsing-and-content-rules](../backlog/443-failclosed-command-parsing-and-content-rules.md) | content rules remain dead code |
-| [external-agent-invocation](../backlog/482-external-agent-invocation.md) | no code started |
-| [bot-reliability-ack-and-resume](../backlog/484-bot-reliability-ack-and-resume.md) | no code started |
-| [dock-layout-and-window-management](../backlog/527-dock-layout-and-window-management.md) | idea only |
-| [multi-path-sidebar-rendering](../backlog/530-multi-path-sidebar-rendering.md) | blocked on 525 Phase 2 `--apply` |
-| [model-call-trace](../backlog/561-model-call-trace.md) | 0/40, unstarted |
-| [tab-shell-workbench](../backlog/571-tab-shell-workbench.md) | 0/28, unstarted |
-| [chain-ab-runtime-merge-evaluation](../backlog/581-chain-ab-runtime-merge-evaluation.md) | decision doc only; execution deferred to plan 582+ |
+| [09-workspace-phase-0](./backlog/2026-09-workspace-phase-0.md) | P0 design-only, 0/26 started |
+| [button-unification](./backlog/309-button-unification.md) | 0-byte file: delete or write |
+| [duya-ai-model-list-lazy-loading](./backlog/426b-duya-ai-model-list-lazy-loading.md) | 0/21, nothing started |
+| [failclosed-command-parsing-and-content-rules](./backlog/443-failclosed-command-parsing-and-content-rules.md) | content rules remain dead code |
+| [external-agent-invocation](./backlog/482-external-agent-invocation.md) | no code started |
+| [bot-reliability-ack-and-resume](./backlog/484-bot-reliability-ack-and-resume.md) | no code started |
+| [dock-layout-and-window-management](./backlog/527-dock-layout-and-window-management.md) | idea only |
+| [multi-path-sidebar-rendering](./backlog/530-multi-path-sidebar-rendering.md) | blocked on 525 Phase 2 `--apply` |
+| [model-call-trace](./backlog/561-model-call-trace.md) | 0/40, unstarted |
+| [tab-shell-workbench](./backlog/571-tab-shell-workbench.md) | 0/28, unstarted |
+| [chain-ab-runtime-merge-evaluation](./backlog/581-chain-ab-runtime-merge-evaluation.md) | decision doc only; execution deferred to plan 582+ |
+| [browser-capability-boundary](./backlog/583-browser-capability-boundary.md) | design + evidence only, 0 code; split into seam A (package) / B (plugin) / C (optional native tool) |
 
 ***
 
