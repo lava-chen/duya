@@ -290,10 +290,10 @@ worktree 内不存在该 Junction，故未沿用。
       挂到 browser 工具实际启用时才注入。**当前无 browser 专属 prompt section**
       （`prompts/configs/{general,code,bot}.ts` 里没有），故本项**无需改动**，
       机制已就位、待真有 section 时再用。
-- [ ] 评估是否新增 `browserMode`（`ModeModifier`，仿 `modes/computer-use-mode.ts`）。
-      **未决，且需要产品判断**：收益是 mode 切换即可获得/撤销 browser 工具
-      （当前 browser 走 `exposure:'deferred'`，已在 catalog 后按需暴露）；
-      代价是新增一个 mode id + popover 入口（plan 224 的三步注册）。不擅自加。
+- [x] **不新增 `browserMode`**（用户决定 2026-10-01）。保持 `exposure:'deferred'`，
+      browser 通过 `tool_catalog` 按需发现即可。加 mode 的收益只是多一个入口，
+      代价是新增 mode id + popover 入口（plan 224 三步注册），且产品面归 plan 573。
+      本项就此关闭，不再挂待决。
 
 验收：`tsc -p packages/agent` 0 错误；`vitest run packages/agent/tests/unit/tool-catalog`
 仅剩 2 个既有红（`tool_invoke` schema-read，与本改动无关）；新增 7 个 usage-guide 用例 +
