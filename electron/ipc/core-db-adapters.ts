@@ -356,6 +356,11 @@ export function coreSessionToIpcRow(session: CoreSession): Record<string, unknow
     rollout_path: session.rolloutPath,
     archived_at: session.archivedAt,
     archived_path: session.archivedPath,
+    // Plan 582 (G4): the sidebar's real sort key travels with the row so the
+    // renderer can order by it directly instead of guessing from
+    // `updated_at` — which archiving, pinning and renaming all bump.
+    recency_at: session.recencyAt ?? session.updatedAt,
+    last_turn_started_at: session.lastTurnStartedAt,
   };
 }
 

@@ -50,6 +50,15 @@ export interface Thread {
   archivedAt?: number | null
   archivedPath?: string | null
   rolloutPath?: string | null
+  /**
+   * Plan 582 (G4): when the user last USED this session. Distinct from
+   * `updatedAt`, which also moves on archiving, pinning and renaming — that
+   * conflation is what let housekeeping reorder the sidebar. Optional so a
+   * pre-G4 main process still yields a usable Thread.
+   */
+  recencyAt?: number | null
+  /** Plan 582 (G4): start of the most recent turn. */
+  lastTurnStartedAt?: number | null
 }
 
 export interface Message {
@@ -214,6 +223,14 @@ interface DbThread {
   rollout_path?: string | null
   archived_at?: number | null
   archived_path?: string | null
+  /**
+   * Plan 582 (G4): when the user last USED this session, as opposed to
+   * `updated_at` which moves on every row write. The sidebar sorts on this.
+   * Optional so a pre-G4 main process (or a hand-built fixture) still maps.
+   */
+  recency_at?: number | null
+  /** Plan 582 (G4): start of the most recent turn, for "last active" copy. */
+  last_turn_started_at?: number | null
 }
 
 export interface DbMessage {
@@ -349,6 +366,11 @@ function dbThreadToThread(db: DbThread | null | undefined): Thread | null {
     rolloutPath: db.rollout_path ?? null,
     archivedAt: db.archived_at ?? null,
     archivedPath: db.archived_path ?? null,
+    // Plan 582 (G4): fall back to `updatedAt` when the main process predates
+    // the recency column, so the sidebar keeps a total order either way
+    // rather than dropping every thread to the bottom.
+    recencyAt: db.recency_at ?? db.updated_at,
+    lastTurnStartedAt: db.last_turn_started_at ?? null,
   }
 }
 

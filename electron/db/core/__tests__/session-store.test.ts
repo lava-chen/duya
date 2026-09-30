@@ -406,4 +406,126 @@ describe('SessionStore', () => {
     expect(() => m.up(db)).not.toThrow();
     expect(() => m.up(db)).not.toThrow();
   });
+
+  // ─── Plan 582 (G4): recency is separate from updated_at ───
+
+  describe('recency_at (Plan 582 G4)', () => {
+    it('create seeds recency_at from updated_at and leaves last_turn_started_at null', () => {
+      const at = Date.UTC(2026, 7, 6, 12, 0, 0);
+      const s = store.create(createInput('s-1', { updatedAt: at }));
+      expect(s.recencyAt).toBe(at);
+      expect(s.lastTurnStartedAt).toBeNull();
+    });
+
+    it('create honours an explicit recencyAt', () => {
+      const s = store.create(createInput('s-1', { recencyAt: 42, lastTurnStartedAt: 41 }));
+      expect(s.recencyAt).toBe(42);
+      expect(s.lastTurnStartedAt).toBe(41);
+    });
+
+    it('update() bumps updated_at but leaves recency_at alone', () => {
+      const at = Date.UTC(2026, 7, 6, 12, 0, 0);
+      const s = store.create(createInput('s-1', { updatedAt: at }));
+      // A rename is a housekeeping write. If it moved recency, the sidebar
+      // would reorder every time the user tidies up.
+      store.update('s-1', { title: 'renamed' });
+
+      const after = store.get('s-1')!;
+      expect(after.recencyAt).toBe(at);
+      expect(after.updatedAt).toBeGreaterThanOrEqual(after.recencyAt);
+    });
+
+    it('update({ recencyAt }) moves recency without touching lastTurnStartedAt', () => {
+      store.create(createInput('s-1'));
+      store.update('s-1', { recencyAt: 9999 });
+      expect(store.get('s-1')!.recencyAt).toBe(9999);
+      expect(store.get('s-1')!.lastTurnStartedAt).toBeNull();
+    });
+
+    it('ARCHIVING DOES NOT REORDER THE SIDEBAR', () => {
+      // This is the whole point of G4. Two sessions created an hour apart;
+      // archiving the OLDER one used to float it to the top of the list.
+      const older = Date.UTC(2026, 7, 6, 10, 0, 0);
+      const newer = Date.UTC(2026, 7, 6, 11, 0, 0);
+      store.create(createInput('old', { updatedAt: older, recencyAt: older }));
+      store.create(createInput('new', { updatedAt: newer, recencyAt: newer }));
+
+      expect(store.list().map((s) => s.id)).toEqual(['new', 'old']);
+
+      // Exactly what the archive handler does: status + archive metadata,
+      // no recencyAt in the patch.
+      store.update('old', {
+        status: 'archived',
+        archivedAt: Date.UTC(2026, 7, 6, 12, 0, 0),
+        archivedPath: 'archived/2026-08-06/old',
+      });
+
+      // Still ordered by when each was last USED, and `old` is out of the
+      // active list entirely rather than hoisted to the top of it.
+      expect(store.list().map((s) => s.id)).toEqual(['new']);
+      expect(store.get('old')!.recencyAt).toBe(older);
+    });
+
+    it('list() breaks same-recency ties on id DESC, deterministically', () => {
+      const at = Date.UTC(2026, 7, 6, 12, 0, 0);
+      store.create(createInput('a', { updatedAt: at, recencyAt: at }));
+      store.create(createInput('b', { updatedAt: at, recencyAt: at }));
+      store.create(createInput('c', { updatedAt: at, recencyAt: at }));
+      expect(store.list().map((s) => s.id)).toEqual(['c', 'b', 'a']);
+      // Repeated reads must agree — an unstable ORDER BY silently reshuffles
+      // the sidebar between renders.
+      expect(store.list().map((s) => s.id)).toEqual(['c', 'b', 'a']);
+    });
+
+    it('list({ workingDirectory }) keeps the recency order inside the filter', () => {
+      const at = Date.UTC(2026, 7, 6, 12, 0, 0);
+      store.create(createInput('x1', { workingDirectory: 'E:/a', updatedAt: at, recencyAt: at }));
+      store.create(createInput('x2', { workingDirectory: 'E:/a', updatedAt: at + 5, recencyAt: at + 5 }));
+      store.create(createInput('y1', { workingDirectory: 'E:/b', updatedAt: at + 9, recencyAt: at + 9 }));
+      expect(store.list({ workingDirectory: 'E:/a' }).map((s) => s.id)).toEqual(['x2', 'x1']);
+    });
+
+    it('migration 34 backfills pre-existing rows from updated_at', () => {
+      // Build a database that predates the migration, then apply it.
+      const fresh = new Database(path.join(tempDir, 'legacy.db')) as unknown as SqliteDatabase;
+      try {
+        for (const m of SessionStore.migrations) {
+          if (m.id === 34) break;
+          m.up(fresh);
+        }
+        fresh
+          .prepare(
+            `INSERT INTO sessions (id, title, working_directory, project_name, status,
+               model, provider_id, mode, permission_mode, agent_type, agent_name,
+               extensions, created_at, updated_at)
+             VALUES ('legacy', 'Old', '', '', 'active', '', 'env', 'code', 'default',
+               'main', '', '{}', 1000, 5000)`,
+          )
+          .run();
+
+        const m = SessionStore.migrations.find((x) => x.id === 34)!;
+        m.up(fresh);
+
+        const row = fresh.prepare('SELECT recency_at, last_turn_started_at FROM sessions WHERE id = ?')
+          .get('legacy') as { recency_at: number | null; last_turn_started_at: number | null };
+        expect(row.recency_at).toBe(5000);
+        expect(row.last_turn_started_at).toBeNull();
+      } finally {
+        fresh.close();
+      }
+    });
+
+    it('migration 34 is idempotent and swaps the ordering index', () => {
+      const m = SessionStore.migrations.find((x) => x.id === 34)!;
+      expect(() => m.up(db)).not.toThrow();
+      expect(() => m.up(db)).not.toThrow();
+
+      const names = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'sessions'")
+        .all() as Array<{ name: string }>).map((r) => r.name);
+      expect(names).toContain('idx_sessions_recency');
+      // The old updated_at-only index would let SQLite satisfy an
+      // `ORDER BY recency_at` plan with a sort on every list call.
+      expect(names).not.toContain('idx_sessions_updated');
+    });
+  });
 });
