@@ -396,11 +396,17 @@ snake_case token，都必须存在于 `getAllActions()`。这条守卫在写作�
   MCP 子进程（`mcp/collect.ts:75-99`，且需 `enabled === true`）、markdown
   skills/commands/agents、YAML workflows。全仓找不到任何把 plugin 目录里的
   `.js`/`.ts` 做 `import` / `createRequire` / `vm` / worker 的路径。
-- **plugin 声明的 hook 从不执行。** `discoverHooks` 读 `hooks/hooks.json` 返回一个
-  **裸数组**，消费者只有 manifest 映射、能力计数、UI DTO 三处。真正会执行的 hook
-  系统（`agent/src/hooks/executor.ts:202` spawn / `:297` fetch）只从
+- **plugin 声明的 hook 从不执行。** 消费者只有 manifest 映射、能力计数、UI DTO 三处。
+  真正会执行的 hook 系统（`agent/src/hooks/executor.ts:202` spawn / `:297` fetch）只从
   `~/.duya/config.toml` 的 `[hooks] files` 读定义，而唯一的写入者是 `hooks add` CLI。
-  两套格式还互不兼容（数组 vs 对象，`hooks-json.ts:64-72` 明确拒数组）。
+  **⚠️ 更正（2026-10-01，`968d18c5`）**：本 plan 原写「两套格式互不兼容
+  （数组 vs 对象，`hooks-json.ts:64-72` 明确拒数组）」——**错**。真实情况是
+  `discoverHooks` 单方面只接受顶层**数组**，而执行侧的 `parseHooksJsonContent`
+  解析**对象**，且仓内自带一份合规样本
+  `packages/agent/skills/.system/memory-search/hooks.json` 用的就是对象。
+  即：约定只有一个（对象），发现层写错了。已修 `discoverHooks`。
+  **但「不执行」这半仍然成立**——没有任何代码把 plugin 的 hook 文件喂进
+  `readHooksConfig()`，所以发现对了也仍然不跑。这才是 G2（真正的接线）。
 - **信任模型是死元数据，从未被执行。** 这是最关键的一条：
   `trust-engine.ts` 的 `PluginTrustLevel` 与 `TrustLevelCapability`
   （`maxHooks` / `allowHttpHooks` / `maxFileAccess` / `requirePermissionConfirmation`）
@@ -506,18 +512,36 @@ pi 则是另一极端：无 manifest 预声明 + 静默遮蔽内置，用户在 
       补不补注册时门控。plan 419 的 P1（`checkPermissions` 预检、`riskTier`、
       `PermissionContext` 注入）正好是这条的地基，但 P1 尚未落地。
 
-#### 推进顺序（已更新：584 已完成）
+#### 推进顺序（已更新：584 已完成，G1 已落地）
 
+0. ~~G1：`discoverHooks` 格式修正~~ ✅ `968d18c5`。**这是缝 C 方案 A 的第一个真实落点。**
 1. ~~独立 plan [584](../completed/584-plugin-trust-enforcement.md)~~ ✅ **2026-10-01 完成**。
    Phase 1 接上了唯一有执行点的能力项；Phase 2 取消为 N/A；Phase 3 删掉只写不读的
    `PermissionService`；Phase 4 给 `setEnabled` 补审计痕迹。
    **净结论：信任层现在有一个真门（安装时），其余五个 capability 字段没有执行点。**
-2. **缝 C 现在可以走 A + B 的加强**（声明式组合 + 现有 MCP 路径的信任接线）。
-   注意 584 的净结论对 C 的意义：进程内执行（C 方案）仍然**没有**按信任档位约束
-   的门可用——因为五个字段里四个的执行点不存在。
-3. **C 方案（进程内执行）仍需先解决门控缺失**，但注意这不是「等 584」——
+2. **G2（下一步）：让 plugin 的 hook 真的执行。** 这是方案 A（声明式组合）的主体，
+   且执行器**已经存在**（`parseHooksJsonContent` / `mergeHooksSettings` / `executeHook`
+   的 spawn+fetch），缺的只是「把已启用 plugin 的 `hooks/hooks.json` 路径并入
+   `readHooksConfig()` 的文件列表」这一步。注意此处**不需要执行任何 plugin 代码**——
+   跑的是 plugin 声明的外部命令，形态与 openclaw 的 in-process `registerTool` 完全不同。
+3. **缝 C 方案 B 判定为「暂不做」**：`plugin` 这个 MCP source 桶在仓内**不可达**
+   （零个 plugin 声明 `mcp/servers.json`），放松它对 `decideMcpSource` 是空转。
+4. **C 方案（进程内执行）仍需先解决门控缺失**——但注意这不是「等 584」：
    584 已完成且说明了：**要接 C，必须先为它新建一个执行点**（声明 + 校验），
    否则就是无门控地执行第三方代码。
+
+#### 已有的冲突/优先级策略地图（2026-10-01 摸清，比三个参照物都好）
+
+| 能力种类 | 现有策略 | 证据 |
+|---|---|---|
+| **skills** | 加权优先级：system 6 > custom 5 > agent 4 > user/project 3 > **plugin 2 = 普通 bundled 2** > 无标记 1；同级 first-wins | `packages/agent/src/skills/resolver.ts:50-116` |
+| **MCP servers** | `shadowedBy`：被遮蔽的条目**保留在 inventory 里可见**、标记、从生效集排除 | `packages/plugin-core/src/mcp/discovery.ts:195-243` |
+| **commands / agents** | **无任何遮蔽/优先级** | `discoverCommands` / `discoverAgents` 在 `electron/`、`agent/src/`、`src/` 下零消费者 |
+| 工具（tool） | 尚未支持 plugin 贡献 | — |
+
+skills 那套的关键设计值得单独指出：**「用户改过的 bundled skill 被提升到 user 档（3），
+确保 plugin 无法遮蔽它」**——即「用户投入过的能力，优先级高于插件」。
+openclaw 要用户先手动禁用内置，pi 静默遮蔽，duya 这套两者都不是。
 
 
 
