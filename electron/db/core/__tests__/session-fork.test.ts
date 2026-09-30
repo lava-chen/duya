@@ -519,8 +519,40 @@ describe('forkSession orchestration (plan 506, Track B1)', () => {
     expect(sessions.get('fork-2')).toBeNull();
   });
 
-  it('returns message_not_found when throughMessageId is absent, writing nothing', () => {
-    const sourceId = 'src-3';
+  it('returns source_archived and writes nothing when the source is archived (Plan 582 G3)', () => {
+    // Archiving relocates the rollout to `archived/<date>/…` and records it in
+    // `archived_path`. Forking anyway would route the timeline read through
+    // MessageLog's drift recovery, which can "find" the archived file and
+    // adoptRolloutPath it — silently resurrecting the archived session into
+    // the active roster. Guard before any read or write happens.
+    const sourceId = 'src-archived';
+    const newId = 'fork-from-archived';
+    const t = Date.UTC(2026, 8, 7, 9, 30, 0);
+    sessions.create({
+      id: sourceId,
+      title: 'Archived',
+      status: 'archived',
+      archivedAt: t,
+      archivedPath: `archived/2026-09-07/rollout-${sourceId}.jsonl`,
+    });
+    messageLog.appendBatch([seedEvent(sourceId, textMsg('m-1', 'secret history', t))]);
+
+    const result = forkSession(deps, {
+      sourceSessionId: sourceId,
+      throughMessageId: 'm-1',
+      newSessionId: newId,
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'source_archived', seedCount: 0 });
+    // Nothing written: no session row, no rollout, no spawn edge — and the
+    // source's archived rollout path is untouched.
+    expect(sessions.get(newId)).toBeNull();
+    expect(spawnEdges.getParent(newId)).toBeNull();
+    expect(messageLog.listBySession(newId)).toEqual([]);
+    expect(sessions.get(sourceId)?.archivedPath).toBe(`archived/2026-09-07/rollout-${sourceId}.jsonl`);
+  });
+
+  it('returns message_not_found when throughMessageId is absent, writing nothing', () => {    const sourceId = 'src-3';
     const newId = 'fork-3';
     const t = Date.UTC(2026, 8, 7, 9, 30, 0);
     sessions.create({ id: sourceId, title: 'Original' });

@@ -36,7 +36,7 @@ Rules:
 
 ***
 
-## Active Plans (35)
+## Active Plans (36)
 
 | Plan | Priority | Next action |
 | --- | --- | --- |
@@ -75,6 +75,7 @@ Rules:
 | [browser-core-upgrade](./active/573-browser-core-upgrade.md) | P0 | Phase 3: add the core-db browsing-history table + migration, hook webview main-frame `did-navigate`, expose `browser:history-*` IPC plus the history view _(Phases 1/1b/2/2b landed)_ |
 | [cua-tree-richness](./active/576-cua-tree-richness.md) | P1 | Phase 3 in the ps1 C# probe walk: emit `children_total/shown/offset` for container nodes, plus `surface_kind` and the new-window settle poll _(Phases 1-2 landed)_ |
 | [mcp-capability-core-convergence](./active/580-mcp-capability-core-convergence.md) | P0 | Run Phase 0's real-machine Notion baseline (instrumented around `RemoteMcpConnector`/`MCPClient` discovery) to record `pages=N, total=M` _(Phases 0/3/4/5 open)_ |
+| [session-archive-hardening](./active/582-session-archive-hardening.md) | P0 | Run the §6.5 runtime repro, then fix G5 (archived rows permanently injected into the active sidebar) + G7 (rename/pin/delete on archived rows are no-ops) _(G1-G9 all open)_ |
 
 ***
 

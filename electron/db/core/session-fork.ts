@@ -187,7 +187,7 @@ export interface ForkSessionInput {
 
 export type ForkSessionResult =
   | { ok: true; sessionId: string; seedCount: number; idMap: Map<string, string> }
-  | { ok: false; reason: 'source_not_found' | 'message_not_found'; seedCount: 0 };
+  | { ok: false; reason: 'source_not_found' | 'message_not_found' | 'source_archived'; seedCount: 0 };
 
 /**
  * Fork a session: create a NEW session whose rollout starts as a copy of
@@ -208,6 +208,21 @@ export function forkSession(
   const source = deps.sessions.get(input.sourceSessionId);
   if (!source) {
     return { ok: false, reason: 'source_not_found', seedCount: 0 };
+  }
+
+  // 1b. Plan 582 (G3): refuse to fork out of an archived session.
+  //
+  // Archiving relocates the rollout to `archived/<date>/…` and records it in
+  // `archived_path`. Forgetting that here is worse than a cosmetic bug: the
+  // timeline read below goes through `MessageLog.repairedProject`, whose
+  // drift recovery (`findRolloutFileBySessionId`) will happily "find" the
+  // archived file and `adoptRolloutPath` it — silently resurrecting an
+  // archived session into the active roster as a side effect of a fork.
+  //
+  // codex gates the same operation: after commit d944ce83a2 the CLI refuses
+  // to resume or fork an archived session and offers to unarchive first.
+  if (source.status === 'archived') {
+    return { ok: false, reason: 'source_archived', seedCount: 0 };
   }
 
   // 2. Effective timeline of the source: projected (rebase-applied),
