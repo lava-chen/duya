@@ -624,6 +624,49 @@ commands/agents），与 plugin-core 的 `PluginCapabilities` interface 是两�
 门禁：`npx vitest run packages/agent/src/hooks` → 12 文件 / 199 用例全绿；
 `npx tsc -p packages/agent --noEmit` exit 0；`npm run typecheck:web` exit 0。
 
+#### G4 之后仍未关闭的：`command` / `process` hook（2026-10-01，待用户定尺度）
+
+G4 关掉了网络那一扇门（http），但**本地执行那一扇还开着**，而且性质更重。
+
+实测（`executor.ts:108-151`）：
+
+| 类型 | spawn 方式 | 实际能力 |
+|---|---|---|
+| `command` | `spawn(cmd, [], { shell: true, cwd })` | **任意 shell 命令**，用户完整权限，在**会话工作目录**下 |
+| `process` | `spawn(cmd, args, { shell: false, cwd })` | 任意可执行文件直跑（无 shell） |
+| 二者共同 | `resolveProcessSpawn` 把 `node` 改写成 `process.execPath` + `ELECTRON_RUN_AS_NODE=1` | 插件可以让 **app 自己的 Electron 运行时**执行任意 Node 代码 |
+
+`${KEY}` 展开由 `HOOK_VAR_SAFE_RE` 守着，但那只防**变量**注入，不防插件自己指定 `command`。
+`cwd` 传的是会话工作目录，所以脚本能碰到整个工作区，不受 plugin 目录限制。
+
+**为什么没直接补门**：
+
+1. **现在不可达** —— 全仓 `packages/**/hooks.json` 只有 `packages/agent/skills/.system/memory-search/hooks.json`，
+   那是 agent 自带的系统 skill，**零个 plugin 真的声明了 hook**。所以这是「还没人用的门」，
+   不是「正在被推开的门」。
+2. **和 G3 的 commands/agents 不同类** —— 那两个是**宿主没有加载器**，真来了也不执行；
+   这里宿主**会完整执行**。所以不能按 N/A 处理。
+3. **没有现成字段可依** —— 信任表里没有 `allowCommandHooks` / `allowProcessHooks`。
+   `allowAgentHooks` 管的是 `type: 'agent'`（executor 对它只打 `NOT_IMPLEMENTED`）。
+   硬套就是新造策略。
+4. **`maxFileAccess` 接不上** —— 它写着 untrusted 是 `plugin-dir-only`，但一个 spawn 出去的
+   shell 无法被约束到某个目录（没有 OS 级沙箱）。这条只能继续标 N/A，如实说做不到。
+5. **`requirePermissionConfirmation` 语义是对的，但接线要产品面** —— 它本来就是「使用时询问」的意思
+   （584 拒绝拿它做安装门控正是因为语义不同）。拿它做「插件要跑本地进程 → 先问用户」是正确用法，
+   但需要：同意弹窗 + 决策持久化（按插件一次？按 hook 一次？）。这是产品面决策，不该我替你定。
+
+**待你拍板的三种尺度**（按安全性递减、成本递增）：
+
+| 选项 | 做法 | 代价 |
+|---|---|---|
+| **A. 只允许 official** | 复用 http 的门：`official` 以外一律丢弃 `command`/`process` | 第三方插件等于没有 hook。**需要新字段**（不能硬套 `allowAgentHooks`） |
+| **B. 显式同意** | 接 `requirePermissionConfirmation`：非 official 插件的本地执行 hook 首次执行前弹窗确认，结果按插件持久化 | 要做同意 UI + 存储 + 设置页。是**真正对第三方生态友好的方案** |
+| **C. 继续留门** | 只写文档，等真有插件需要再说 | 一旦有第一个插件这么干就已经晚了 |
+
+我的判断：**B 是唯一对第三方插件生态成立的方案**，A 会让「plugin 带 hook」这件事事实上
+只对一方插件开放（那不如明说只支持 official），C 的风险是发现时已经在生产上。
+但 B 是产品面，按惯例该你定尺度。
+
 #### 已有的冲突/优先级策略地图（2026-10-01 摸清，比三个参照物都好）
 
 | 能力种类 | 现有策略 | 证据 |
