@@ -161,6 +161,12 @@ const zh: Record<TranslationKey, string> = {
   'chat.greeting.evening': '晚上好，今天想做什么？',
   'chat.greeting.night': '夜深了，注意休息',
 
+  'chat.errorBanner.showDetails': '查看详情',
+  'chat.errorBanner.copyError': '复制错误',
+  'chat.errorBanner.retry': '重试',
+  'chat.errorBanner.dismiss': '关闭错误提示',
+  'chat.errorBanner.detailsTitle': '错误详情',
+
   'chat.header.openSideChat': '打开侧边聊天',
   'chat.header.copy': '复制',
   'chat.header.copyId': '复制 ID',

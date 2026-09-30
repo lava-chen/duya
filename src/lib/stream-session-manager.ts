@@ -405,11 +405,20 @@ export const streamMemoryPolicy = {
 export interface StreamingError {
   message: string;
   code: string | null;
+  /** Verbose stack/cause detail for the chat banner's "Show details" dialog. */
+  detail?: string;
+  /** Upstream trace id (request id, agent trace id) for support handoff. */
+  traceId?: string;
+  /** Upstream agent-side task id, when the server reports one. */
+  taskId?: string;
 }
 
 interface StreamErrorEventData {
   message?: string;
   code?: string;
+  detail?: string;
+  traceId?: string;
+  taskId?: string;
 }
 
 interface PersistEvent {
@@ -646,6 +655,14 @@ interface SessionState {
   /** Provider error code (e.g. `rate_limit_error`, `usage_limit_exceeded`).
    *  Set alongside `error` so the UI can render a tailored banner. */
   errorCode: string | null;
+  /** Upstream trace id (request id, agent trace id) carried alongside the
+   *  error. Surfaceable to the chat error banner for support handoff. */
+  errorTraceId: string | null;
+  /** Upstream agent-side task id. Surfaceable alongside `errorTraceId`. */
+  errorTaskId: string | null;
+  /** Verbose stack/cause detail for the chat error banner's details dialog.
+   *  Optional: only populated when the upstream explicitly provides one. */
+  errorDetail: string | null;
   finalMessageContent: string | null;
   toolTimeoutInfo: { toolName: string; elapsedSeconds: number } | null;
   toolProgressInfo: { toolName: string; elapsedSeconds: number } | null;
@@ -797,6 +814,9 @@ function createInitialState(sessionId: string): Omit<SessionState, 'listeners' |
     lastActiveAt: Date.now(),
     error: null,
     errorCode: null,
+    errorTraceId: null,
+    errorTaskId: null,
+    errorDetail: null,
     finalMessageContent: null,
     toolTimeoutInfo: null,
     toolProgressInfo: null,
@@ -894,17 +914,34 @@ function normalizeStreamError(data: StreamErrorEventData | undefined): Streaming
       ? 'provider_safety_filter'
       : null
   );
+  // Preserve upstream traceId/taskId/detail verbatim so the banner's
+  // "Show details" dialog and "Copy" button can surface them.
+  const detail = typeof data?.detail === 'string' && data.detail.length > 0
+    ? data.detail
+    : undefined;
+  const traceId = typeof data?.traceId === 'string' && data.traceId.length > 0
+    ? data.traceId
+    : undefined;
+  const taskId = typeof data?.taskId === 'string' && data.taskId.length > 0
+    ? data.taskId
+    : undefined;
 
   if (code === 'provider_safety_filter') {
     return {
       code,
       message: 'The model provider stopped the final response because its safety filter flagged newly generated output. Previous tool work and file edits are kept; continue with a narrower request or switch models.',
+      detail,
+      traceId,
+      taskId,
     };
   }
 
   return {
     code,
     message: providerMessage,
+    detail,
+    traceId,
+    taskId,
   };
 }
 
@@ -1662,6 +1699,9 @@ export class StreamSessionManager {
     state.completedAt = null;
     state.error = null;
     state.errorCode = null;
+    state.errorTraceId = null;
+    state.errorTaskId = null;
+    state.errorDetail = null;
     state.finalMessageContent = null;
     state.toolTimeoutInfo = null;
     state.toolProgressInfo = null;
@@ -2281,6 +2321,9 @@ export class StreamSessionManager {
     state.phase = 'streaming';
     state.error = null;
     state.errorCode = null;
+    state.errorTraceId = null;
+    state.errorTaskId = null;
+    state.errorDetail = null;
     state.completedAt = null;
     state.streamingText = '';
     state.streamingThinking = '';
@@ -2341,6 +2384,10 @@ export class StreamSessionManager {
       state.currentStreamId = state.streamId;
       state.phase = 'streaming';
       state.error = null;
+      state.errorCode = null;
+      state.errorTraceId = null;
+      state.errorTaskId = null;
+      state.errorDetail = null;
       state.completedAt = null;
       this.cleanupMessagePort(sessionId);
       const cleanup = getAgentServerClient().onEvent(
@@ -3154,6 +3201,9 @@ export class StreamSessionManager {
     s.statusText = undefined;
     s.error = normalizedError.message;
     s.errorCode = normalizedError.code;
+    s.errorTraceId = normalizedError.traceId ?? null;
+    s.errorTaskId = normalizedError.taskId ?? null;
+    s.errorDetail = normalizedError.detail ?? null;
     s.completedAt = Date.now();
     // Plan 462: terminal — drop any pending retry notice.
     this.notifyRetryListeners(sessionId, null);
@@ -3769,10 +3819,24 @@ export class StreamSessionManager {
   private notifyErrorListeners(sessionId: string, error: string | null): void {
     const state = this.sessions.get(sessionId);
     if (!state) return;
-    const info: StreamingError | null = error ? { message: error, code: state.errorCode } : null;
+    const info: StreamingError | null = error
+      ? this.buildStreamingErrorFromMessage(state, error)
+      : null;
     state.fieldListeners.error.forEach((listener) => {
       try { listener(info); } catch (e) { console.error(e); }
     });
+  }
+
+  /** Assemble a `StreamingError` payload from the current session state.
+   *  Used by paths that already have a message string but need to thread
+   *  traceId / taskId / detail through to listeners. */
+  private buildStreamingErrorFromMessage(state: SessionState, message: string | null): StreamingError | null {
+    if (!message) return null;
+    const info: StreamingError = { message, code: state.errorCode };
+    if (state.errorTraceId) info.traceId = state.errorTraceId;
+    if (state.errorTaskId) info.taskId = state.errorTaskId;
+    if (state.errorDetail) info.detail = state.errorDetail;
+    return info;
   }
 
   private notifyCompletedAtListeners(sessionId: string, at: number | null): void {

@@ -159,6 +159,12 @@ const en = {
   'chat.greeting.evening': 'Good evening! What are we building today?',
   'chat.greeting.night': "It's late — don't forget to rest.",
 
+  'chat.errorBanner.showDetails': 'Show details',
+  'chat.errorBanner.copyError': 'Copy error',
+  'chat.errorBanner.retry': 'Retry',
+  'chat.errorBanner.dismiss': 'Dismiss error banner',
+  'chat.errorBanner.detailsTitle': 'Error details',
+
   'chat.header.openSideChat': 'Open side chat',
   'chat.header.copy': 'Copy',
   'chat.header.copyId': 'Copy ID',
