@@ -344,18 +344,102 @@ export function discoverAgentPluginsMcpServers(
   return servers
 }
 
+/**
+ * Discover hook declarations from `<pluginDir>/hooks/hooks.json`.
+ *
+ * The on-disk format is the ecosystem shape shared by Claude Code's
+ * `settings.json` and ZCode plugin `hooks.json` files, and it is the same
+ * shape the agent's own hook executor parses
+ * (`packages/agent/src/hooks/hooks-json.ts`):
+ *
+ * ```json
+ * { "description": "...",
+ *   "hooks": { "UserPromptSubmit": [ { "matcher": "...", "hooks": [
+ *       { "type": "process", "command": "node", "args": ["x.mjs"] } ] } ] } }
+ * ```
+ *
+ * `packages/agent/skills/.system/memory-search/hooks.json` is a
+ * spec-conformant example that ships in this repo.
+ *
+ * This function previously returned the parsed file only when it was a
+ * top-level **array**, so a conformant plugin file was silently reported as
+ * zero hooks and `capabilityCounts.hooks` undercounted it. The array form is
+ * still accepted for tolerance, but it is not the convention.
+ *
+ * Each hook *command* becomes one flat entry, because the consumers
+ * (`manifest.ts`, `dto-mappers.ts`) read a single `event` and a single
+ * `handler` string. The parsed detail is preserved on the index signature so
+ * callers that need `type` / `command` / `args` / `matcher` can read it.
+ *
+ * Note: discovery is not execution. Nothing yet feeds plugin hook files into
+ * the agent's hook config, so these describe declarations, not running hooks
+ * (plan 584 §Phase 0 reconciliation table).
+ */
 export function discoverHooks(pluginDir: string): HookCapability[] {
   const hooksPath = join(pluginDir, 'hooks', 'hooks.json')
   if (!existsSync(hooksPath)) return []
 
+  let parsed: unknown
   try {
-    const raw = readFileSync(hooksPath, 'utf-8')
-    const parsed = JSON.parse(raw)
-    if (Array.isArray(parsed)) return parsed
-    return []
+    parsed = JSON.parse(readFileSync(hooksPath, 'utf-8'))
   } catch {
     return []
   }
+
+  // Legacy tolerance: a bare array of {event, handler} entries.
+  if (Array.isArray(parsed)) {
+    return parsed.filter(
+      (entry): entry is HookCapability =>
+        isObjectRecord(entry) && typeof entry.event === 'string' && typeof entry.handler === 'string',
+    )
+  }
+
+  if (!isObjectRecord(parsed)) return []
+  const hooks = parsed.hooks
+  if (!isObjectRecord(hooks)) return []
+
+  const out: HookCapability[] = []
+  for (const [event, matcherGroups] of Object.entries(hooks)) {
+    if (!Array.isArray(matcherGroups)) continue
+    for (const group of matcherGroups) {
+      if (!isObjectRecord(group)) continue
+      const commands = group.hooks
+      if (!Array.isArray(commands)) continue
+      for (const command of commands) {
+        if (!isObjectRecord(command)) continue
+        out.push({
+          event,
+          handler: describeHookHandler(command),
+          type: typeof command.type === 'string' ? command.type : undefined,
+          command: typeof command.command === 'string' ? command.command : undefined,
+          args: Array.isArray(command.args) ? command.args.filter((a): a is string => typeof a === 'string') : undefined,
+          url: typeof command.url === 'string' ? command.url : undefined,
+          timeoutMs: typeof command.timeoutMs === 'number' ? command.timeoutMs : undefined,
+          matcher: typeof group.matcher === 'string' ? group.matcher : undefined,
+        })
+      }
+    }
+  }
+  return out
+}
+
+/**
+ * A short, human-readable label for one hook command. Used as `handler` in
+ * the flat capability list, where the existing consumers only ever display it.
+ */
+function describeHookHandler(command: Record<string, unknown>): string {
+  const type = typeof command.type === 'string' ? command.type : 'unknown'
+  if (type === 'http') {
+    return `http ${typeof command.url === 'string' ? command.url : ''}`.trim()
+  }
+  const parts: string[] = [type]
+  if (typeof command.command === 'string') parts.push(command.command)
+  if (Array.isArray(command.args)) {
+    for (const arg of command.args) {
+      if (typeof arg === 'string') parts.push(arg)
+    }
+  }
+  return parts.join(' ')
 }
 
 /**
