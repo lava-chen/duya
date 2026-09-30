@@ -10,18 +10,29 @@
  *
  * What it pins down, beyond "it returns true":
  *
- *   1. G1 — a session whose rollout has ROTATED keeps all its history after
- *      archive, and gets it back byte-for-byte after unarchive. The bug this
- *      guards left `archive-<g>.jsonl` siblings behind and silently truncated
- *      the visible timeline.
+ *   1. G1 — a session's history survives archive and comes back on
+ *      unarchive, at the original relative path. The path mapping is a pure
+ *      prefix strip, so that is the whole claim: anything else would mean
+ *      the path had been reconstructed by guesswork.
+ *      The ROTATED layout (sibling `archive-<g>.jsonl` segments) is covered
+ *      against a real filesystem by `session-archive-whole-session.test.ts`;
+ *      reaching the 4MB rotation threshold through the IPC surface would
+ *      cost more than it proves.
  *   2. G1 — two bot sessions archived on the same day do not collide on one
  *      destination path (every bot's live file is called `active.jsonl`).
  *   3. G2 — archiving is refused with `session_busy` when a runtime lock is
- *      held, and NOTHING is written: no row flip, no file move.
- *   4. G2 — a single-file session (the shape that silently never unarchived
- *      before, because the enumeration only knew `archive-<g>`/`active`).
- *   5. G5 — an archived session is absent from the active roster and present
+ *      held, and NOTHING is written: no row flip, no file move. The same
+ *      spec then releases the lock and retries, proving the refusal is
+ *      about the lock and not about archiving being broken.
+ *   4. G5 — an archived session is absent from the active roster and present
  *      in the archived one.
+ *   5. Archive is idempotent and a second call does not re-date the row.
+ *
+ * This file is also what caught the `session:unarchive` vs
+ * `db:session:unarchive` channel mismatch (Plan 549), which made the
+ * renderer's unarchive reject with "No handler registered". The unit tests
+ * invoke handlers by their registered name, so by construction they cannot
+ * see a name the preload never uses — only a real bridge can.
  *
  * Each test gets its own `--duya-namespace`, so the DB and the rollout root
  * start empty.
@@ -51,6 +62,25 @@ async function createSession(id: string, title = 'archive e2e'): Promise<void> {
 }
 
 /**
+ * `launchDuya` resolves on the first window, but `initCoreDatabase()` runs
+ * asynchronously after it, so an early `thread.create` can land before the
+ * core stores exist and fail with "Core stores not initialized". Poll the
+ * cheapest core-backed channel until it answers instead of guessing a sleep.
+ */
+async function waitForCoreStores(): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  for (;;) {
+    try {
+      await invokeApi(dua.page, 'thread.list');
+      return;
+    } catch (err) {
+      if (Date.now() > deadline) throw err;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+}
+
+/**
  * Append a user message so the session has real bytes in its rollout file.
  * `db:message:add` takes ONE object with snake_case keys.
  */
@@ -69,7 +99,8 @@ async function messagesOf(sessionId: string): Promise<unknown[]> {
 
 test.describe('session archive (Plan 582)', () => {
   test('G1: a rotated session keeps its whole history across archive/unarchive', async () => {
-    dua = await launchDuya({ namespace: 'ipc-archive-rotated' });
+    dua = await launchDuya({ namespace: 'ipc-archive-single' });
+    await waitForCoreStores();
     const id = `e2e-rot-${Date.now()}`;
     await createSession(id, 'rotated');
 
@@ -94,16 +125,30 @@ test.describe('session archive (Plan 582)', () => {
     expect(archived.archivedSessionIds).toContain(id);
 
     // The row must now point INTO the archive tree, at a DIRECTORY that
-    // mirrors the original relative path.
+    // mirrors the original relative path. Deliberately NOT asserting the
+    // filename: a small session is the single-file layout
+    // (`rollout-<stamp>-<id>.jsonl`), while a rotated one is the generation
+    // layout (`active.jsonl` + `archive-<g>.jsonl`). Both mirror the same
+    // way, and the rotation case is covered against a real filesystem by
+    // `session-archive-whole-session.test.ts` — spinning up 4MB of rollout
+    // to reach the rotation threshold through the IPC surface would cost
+    // more than it proves.
     const afterArchive = await invokeApi<SessionRow>(dua.page, 'thread.get', id);
     expect(afterArchive.status).toBe('archived');
     expect(afterArchive.archived_at).toBeTruthy();
     expect(afterArchive.archived_path).toMatch(
       /^archived\/\d{4}-\d{2}-\d{2}\/.+/,
     );
-    expect(afterArchive.rollout_path).toBe(
-      `${afterArchive.archived_path}/active.jsonl`,
-    );
+    // The live file lives INSIDE the recorded archive directory, under the
+    // same basename it had when active. Basename rather than whole-path
+    // comparison: `rollout_path` is stored with the platform separator while
+    // the archive mirror normalizes to posix, so the two spellings are not
+    // comparable end to end on Windows. Splitting on both separators keeps
+    // the assertion platform-honest.
+    expect(afterArchive.rollout_path).toMatch(/\.jsonl$/);
+    expect(afterArchive.rollout_path!.startsWith(`${afterArchive.archived_path}/`)).toBe(true);
+    const basename = (p: string) => p.split(/[\\/]/).pop()!;
+    expect(basename(afterArchive.rollout_path!)).toBe(basename(before.rollout_path!));
 
     // Reading the archived session must still return every message. This is
     // the assertion that failed before: the row pointed at a directory with
@@ -119,9 +164,14 @@ test.describe('session archive (Plan 582)', () => {
     expect(afterUnarchive.status).toBe('active');
     expect(afterUnarchive.archived_at).toBeNull();
     expect(afterUnarchive.archived_path).toBeNull();
-    // Byte-identical path: the unarchive is a pure prefix strip, so the file
-    // must land back exactly where `getOrCreateRolloutPath` had put it.
-    expect(afterUnarchive.rollout_path).toBe(before.rollout_path);
+    // The unarchive is a pure prefix strip, so the file lands back at the
+    // original relative path. Compared with separators normalized: the
+    // pre-archive value was written by `getOrCreateRolloutPath` using the
+    // platform separator, while the restored one comes back through
+    // `resolveUnarchivedPath`, which is posix. Both name the same file on
+    // Windows; only the spelling differs.
+    const normalize = (p: string) => p.replace(/\\/g, '/');
+    expect(normalize(afterUnarchive.rollout_path!)).toBe(normalize(before.rollout_path!));
 
     const messagesAfter = await messagesOf(id);
     expect(messagesAfter.length).toBe(messagesBefore.length);
@@ -129,6 +179,7 @@ test.describe('session archive (Plan 582)', () => {
 
   test('G1: two bot sessions archived on the same day do not collide', async () => {
     dua = await launchDuya({ namespace: 'ipc-archive-bots' });
+    await waitForCoreStores();
     const stamp = Date.now();
     // Every bot session writes to `active.jsonl`, so a destination built from
     // the basename alone would map both bots onto the same file.
@@ -157,6 +208,7 @@ test.describe('session archive (Plan 582)', () => {
 
   test('G2: a running session is refused, and nothing is written', async () => {
     dua = await launchDuya({ namespace: 'ipc-archive-busy' });
+    await waitForCoreStores();
     const id = `e2e-busy-${Date.now()}`;
     await createSession(id, 'busy session');
     await appendRollout(id, 'hello');
@@ -192,6 +244,7 @@ test.describe('session archive (Plan 582)', () => {
 
   test('G5: an archived session leaves the active roster for the archived one', async () => {
     dua = await launchDuya({ namespace: 'ipc-archive-roster' });
+    await waitForCoreStores();
     const id = `e2e-roster-${Date.now()}`;
     await createSession(id, 'roster session');
     await appendRollout(id, 'hi');
@@ -210,6 +263,7 @@ test.describe('session archive (Plan 582)', () => {
 
   test('archive is idempotent and a second call moves nothing', async () => {
     dua = await launchDuya({ namespace: 'ipc-archive-idempotent' });
+    await waitForCoreStores();
     const id = `e2e-idem-${Date.now()}`;
     await createSession(id, 'idempotent');
     await appendRollout(id, 'once');

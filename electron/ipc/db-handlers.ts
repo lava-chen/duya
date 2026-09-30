@@ -873,13 +873,21 @@ export function registerDbHandlers(): void {
    * Plan 549 (Track A): unarchive — reverse the rename and reset the
    * archive metadata. Mirrors codex's `unarchive_thread.rs` semantics.
    *
+   * Plan 582: the channel is `db:session:unarchive`, matching what
+   * `preload.ts` invokes. It was registered as bare `session:unarchive`,
+   * which nothing ever called — the renderer's unarchive had been rejecting
+   * with "No handler registered" since Plan 549 shipped, and the unit tests
+   * could not see it because they invoke handlers by their registered name
+   * rather than through the preload bridge. `e2e/ipc/session-archive.spec.ts`
+   * is what caught it.
+   *
    * Plan 582 (G1): `archived_path` is the destination DIRECTORY, and the
    * restore walks the whole directory so a rotated session gets its
    * `archive-<g>.jsonl` siblings back too. Destination paths are the exact
    * inverses of the archive mapping (a pure `archived/<date>/` prefix
    * strip), so nothing is reconstructed by guesswork.
    */
-  ipcMain.handle('session:unarchive', (_event, sessionId: string) => {
+  ipcMain.handle('db:session:unarchive', (_event, sessionId: string) => {
     const { sessions, messageLog } = getCoreStores();
     const session = sessions.get(sessionId);
     if (!session) return false;

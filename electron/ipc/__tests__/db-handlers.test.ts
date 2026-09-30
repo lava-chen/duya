@@ -1257,10 +1257,20 @@ describe('db-handlers (core store thin forward)', () => {
     });
   });
 
-  describe('session:unarchive (Plan 549)', () => {
+  describe('db:session:unarchive (Plan 549 / 582)', () => {
+    // Plan 582: this handler was registered as bare `session:unarchive` while
+    // preload invoked `db:session:unarchive`, so the renderer's unarchive had
+    // been rejecting with "No handler registered" since Plan 549. These tests
+    // invoke by registered name and therefore could never have caught it —
+    // the assertion below is the cheap guard, `e2e/ipc/session-archive.spec.ts`
+    // is the one that goes through the real bridge.
+    it('is registered under the channel name preload invokes', () => {
+      expect(mocks.captured.handle.has('db:session:unarchive')).toBe(true);
+    });
+
     it('returns false for an unknown session id', async () => {
       mocks.stores.sessions.get.mockReturnValueOnce(undefined);
-      const result = await invokeHandler('session:unarchive', {}, 'missing');
+      const result = await invokeHandler('db:session:unarchive', {}, 'missing');
       expect(result).toBe(false);
     });
 
@@ -1270,7 +1280,7 @@ describe('db-handlers (core store thin forward)', () => {
         status: 'archived',
         archivedPath: null,
       });
-      const result = await invokeHandler('session:unarchive', {}, 's-2');
+      const result = await invokeHandler('db:session:unarchive', {}, 's-2');
       expect(result).toBe(true);
       expect(mocks.stores.sessions.update).toHaveBeenCalledWith('s-2', {
         status: 'active',
@@ -1285,7 +1295,7 @@ describe('db-handlers (core store thin forward)', () => {
         status: 'active',
         archivedPath: null,
       });
-      const result = await invokeHandler('session:unarchive', {}, 's-3');
+      const result = await invokeHandler('db:session:unarchive', {}, 's-3');
       expect(result).toBe(true);
       expect(mocks.stores.sessions.update).not.toHaveBeenCalled();
     });
