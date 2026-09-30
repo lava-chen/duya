@@ -1,9 +1,10 @@
 # 582 — Session 归档加固（归档轮转历史断裂 / 生命周期安全 / 排序语义 / 归档视图交互）
 
-> **Status**: Draft · **Priority**: P0 · **Owner**: TBD
+> **Status**: In Progress（G1–G5、G7、G8 全落地；G6/G9 主体落地；存量迁移、E2E、烟测未做）· **Priority**: P0 · **Owner**: TBD
 > **立项**: 2026-10-01（对标 `docs/references/codex-thread-and-worktree-management.md` 的 codex thread 管理调研）
 > **前置**: Plan 549（归档对齐 codex）**已于 2026-09-19 经 PR #56 落地**（commit `9b1b1fe4`），Track A/B/C/D 全部实现。本 plan **不重做 549**，只补它留下的正确性缺口。
 > **分界**: 存储与生命周期（G1–G4）见 §2–§5；UI 轨（G5–G9）见 §6。
+> **落地**: PR #76（G1,G3,G5,G7）、#77（G2）、#78（G4）、#79（G6,G8,G9）。**未完成项见 §8.1**。
 
 ---
 
@@ -344,42 +345,64 @@ G5 是读码推断，**未运行验证**。动工前先在 dev 环境手动复�
 
 **存储轨（G1–G4）**
 
-- [ ] **G1** 归档单位改为 session 目录/文件组；目标路径携带 session 身份消除撞名；反档逐文件还原到原路径
-- [ ] **G1** 补测试：布局 ①/② 各自的"归档→反档→读回全量历史"往返断言（真实 fs，非 mock）
-- [ ] **G1** 存量数据迁移脚本 + UI 提示
-- [ ] **G2** Phase 1：`LockStore` preflight 拒绝 + 失效 `message-log.ts` `pathCache`
-- [ ] **G2** Phase 2：递归子树归档（unarchive 不递归）
-- [ ] **G2** Phase 3：两阶段提交 + `restoreRolloutMoves` 补偿回滚
-- [ ] **G3** `session-fork.ts` 拒绝 archived 源 + `ForkSessionResult` 新增 reason
-- [ ] **G3** `session-manager.ts` 拒绝加载 archived session
-- [ ] **G3** renderer fork 失败提示"请先解档"
-- [ ] **G4** migration 34：`recency_at` + `last_turn_started_at` + 回填 + 复合索引
-- [ ] **G4** 排序改 `recency_at DESC, id DESC`；`list()` 补 tiebreak
+- [x] **G1** 归档单位改为 session 目录/文件组；目标路径镜像完整相对路径消除撞名；反档为纯前缀剥离
+- [x] **G1** 补测试：布局 ①/② 各自的"归档→反档→读回全量历史"往返断言（真实 fs，非 mock）——`session-archive-whole-session.test.ts` 5 例
+- [ ] **G1** ⚠️ **存量数据迁移脚本 + UI 提示 —— 未做，见 §8.1 风险**
+- [x] **G2** Phase 1：`LockStore` preflight 拒绝整个子树 + 失效 `message-log.ts` `pathCache`
+- [x] **G2** Phase 2：递归子树归档（unarchive 不递归）
+- [x] **G2** Phase 3：两阶段提交 + `restoreArchivedMoves` 补偿回滚（文件与行两个方向都可逆）
+- [x] **G2** 附带修复：`SpawnEdgeStore.getTree` 的递归 CTE 由 `UNION ALL` 改 `UNION`（成环不再挂死主进程）
+- [x] **G3** `session-fork.ts` 拒绝 archived 源 + `ForkSessionResult` 新增 reason
+- [ ] **G3** `session-manager.ts` 拒绝加载 archived session —— **未做**（renderer 侧已无法进入归档态会话，优先级降为 P2）
+- [ ] **G3** renderer fork 失败提示"请先解档" —— **未做**（fork UI 尚不存在，无调用方）
+- [x] **G4** migration 34：`recency_at` + `last_turn_started_at` + 回填 + 复合索引
+- [x] **G4** 排序改 `recency_at DESC, id DESC`；`list()` 补 tiebreak
+- [x] **G4** `turn_started` 推进 recency（`MessageLog`，append 事务内）
+- [x] **G4** `recency_at` 透传至 renderer（`coreSessionToIpcRow` → `DbThread` → `Thread`）
 
 **UI 轨（G5–G9）**
 
 - [x] **G5** `loadFromDatabase` 的 pending 合并排除 `archivedAt != null`；`setActiveThread` 的 DB 兜底按 `archivedAt` 分流到 `archivedThreads`
-- [ ] **G6** 归档行内只读预览（不解档、不切 `activeThread`）
-- [ ] **G6** 归档 section trailing 插槽加"批量解档 / 清空归档" + 确认弹窗
-- [ ] **G6** archive / unarchive 接入 `ToastAction`，失败路径不再 `console.error`
+- [x] **G6** 归档行内只读预览（`ChatView` 关闭 composer + 横幅 + 一键解档；不改 `activeThread`）
+- [x] **G6** 归档 section trailing 插槽加"全部恢复" + 计数
+- [x] **G6** archive 接入 `ToastAction` 撤销；失败路径走 `toast.*` 而非 `console.error`
 - [x] **G7** 新增 `patchThreadLocal` / `findThreadLocal`，`updateThreadTitle` 与 `setThreadPinned` 同时作用于两个数组
 - [x] **G7** `deleteThread` 同步 filter `archivedThreads` + 触发 `loadArchivedThreads`
-- [ ] **G8** 归档 section 接上 `sortThreads`（按 `archivedAt`）
-- [ ] **G8** `projectSortBy` 传进 `ProjectGroupItem`
-- [ ] **G8** 摘掉 `ChatHeader.tsx:102,110` 的假快捷键 label
-- [ ] **G9** 新增 `ArchiveConfirm`；删除确认文案改为"子 agent 会话不会被删除"
-
-**存储轨（G3）**
-
-- [x] **G3** `session-fork.ts` 拒绝 archived 源 + `ForkSessionResult` 新增 `source_archived`
-- [x] **G3** 单测覆盖"拒绝且零写入"
+- [x] **G8** 归档 section 接上 `sortThreads`
+- [x] **G8** `projectSortBy` 传进 `ProjectGroupItem`；比较器统一到 `section-system.sortThreadsBy`
+- [x] **G8** 摘掉 `ChatHeader.tsx` 的假快捷键 label（`Ctrl+Alt+R` / `Ctrl+Alt+S` 全仓无 handler）
+- [x] **G9** 新增 `ArchiveConfirm`，文案如实交代「可撤销 / 连带子 agent / 文件会移动」
+- [ ] **G9** 删除确认文案 —— **有意未做**：`db:session:delete` 是软删除且 renderer 无 undo，与归档是不同的承诺，不共用一个会说谎的组件
 
 **门禁**
 
-- [ ] **`npm run typecheck:all`** clean
-- [x] **单测** —— 8 个新 store 测试 + 1 个新 fork 测试；相关回归 578 passed
-- [ ] **E2E** `e2e/ipc/session-archive.spec.ts`（补 549 未交付的 E2E 位）
-- [ ] **Playwright MCP** 烟测
+- [ ] **`npm run typecheck:all`** —— 未跑；本轮只跑了 `npm run typecheck:web`（EXITCODE 0）
+- [x] **单测** —— 存储轨 10 + 2（`db-handlers.test.ts` 新增归档用例、`stores.test.ts` 成环/菱形）、`session-recency.test.ts` 6、`session-store.test.ts` 9、`section-system.test.ts` 4
+- [ ] **E2E** `e2e/ipc/session-archive.spec.ts` —— 未写
+- [ ] **Playwright MCP** 烟测 —— 未做（UI 轨改动全部未经真实 Electron 渲染器验证）
+
+### 8.1 ⚠️ 未完成项里唯一有数据风险的一条
+
+**G1 的存量数据迁移没做。** Plan 549 时代的归档路径是 `archived/<date>/<basename>`，
+`archived_path` 存的是**单个文件路径**；G1 改成 `archived/<date>/<完整相对路径>`，
+`archived_path` 存的是**目录**。后果：
+
+- 升级前归档的会话，反档时 `resolveUnarchivedPath` 会把 `archived/2026-09-18/rollout-x.jsonl`
+  剥成 `rollout-x.jsonl`，落到 `<rolloutRoot>/rollout-x.jsonl` —— **不是它原来的位置**
+  （`sessions/2026/09/18/rollout-x.jsonl`）。
+- 数据**不会丢**：`MessageLog.findRolloutFileBySessionId` 的异常恢复会按 id 重新认领文件并
+  `adoptRolloutPath` 回填 `sessions.rollout_path`。但要等下一次读触发扫描，且期间
+  `rollout_path` 指向一个不存在的路径。
+- 轮转过的旧归档会话会额外丢 `archive-<g>.jsonl` 兄弟（它们从未被搬进归档区，
+  仍在活跃目录），这是 549 遗留的既有状态，本 plan 未改变也未修复。
+
+**收口方式**（二选一，都还没做）：
+1. 一次性 migration：扫描 `status='archived' AND archived_path LIKE 'archived/%/%'` 且
+   `archived_path` 指向文件的行，把文件挪到镜像目录并改写 `archived_path`；
+2. 或在 `session:unarchive` 里对旧格式做格式嗅探（`stat` 是文件就走 basename 还原 +
+   重新 adopt），并提示用户。
+
+**影响面**：只影响 549 落地后、582 落地前归档过的会话；新建归档不受影响。
 
 ---
 
