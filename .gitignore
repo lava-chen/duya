@@ -109,6 +109,10 @@ docs/*/
 !docs/product-specs/
 !docs/release-notes/
 !docs/recovered-plans/
+# exec-plans is the documented workflow's home (plans are created, moved
+# between active/ backlog/ completed/, and committed). Without this exception
+# every NEW plan file is silently ignored and never reaches the index.
+!docs/exec-plans/
 docs/*.md
 
 # Tests
