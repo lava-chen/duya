@@ -421,11 +421,23 @@ snake_case token，都必须存在于 `getAllActions()`。这条守卫在写作�
 - `SchemaGenerator.test.ts:110,:127` 的字符串路径是否触发路径敏感加载。
 - `platform-extractors/` 与 `platform-hooks/` 之间、以及它们与 `actions/` 之间的**运行时**耦合
   （本次只静态核了 import 边）；`Registry` 动态拼装可能有静态 import 看不到的耦合。
-- **真实 Electron browser smoke 未做**：第 4 个消费点
-  `process/agent-process-entry.ts:78`（经 `builtin.js` 间接引入，`:4284` 调
-  `setBrowserConfig`）不能只靠 grep 判定，需重开 dev app 跑一次真实对话。
-  阻塞：本机 `node-pty` 无编译产物（`MSB8040`，缺 VS Spectre 缓解库，
-  **机器级问题、非本 plan 造成**），需装系统软件。
+- ~~**真实 Electron browser smoke 未做**~~ → **已用更精确的手段覆盖**（`3d815452`）。
+  第 4 个消费点 `process/agent-process-entry.ts:78` 从 `tool/builtin.js` 导入**单例**
+  `{ browserTool }`（不是 `BrowserTool` 类），在 `config:update` worker 命令里调
+  `setBrowserConfig()`。grep 直接 import 站点必然漏掉这条——对象是经 re-export 进来的。
+  所以真正的不变量是**身份不变量**：被 entry 改写的对象，必须与 registry 注册的、
+  模型读到的，是同一个。`packages/agent/tests/BrowserTool/browser-tool-singleton.test.ts`
+  直接断言这一点，并用 `human-like` 模式做探针（`description` 是按 config 切换的
+  getter，成功即可从公共面观测，不必开 GUI）。这比「启动 Electron 观察症状」更便宜
+  也更定点。
+- **node-pty / MSB8040：曾误判为 smoke 的阻塞，实际不是**（2026-10-01 核实）。
+  node-pty 1.1.0 **自带 `prebuilds/win32-x64`**，`lib/index.js` 走预编译路径，
+  `require('node-pty')` 在本机**实测加载成功**；且 `TerminalManager.loadNodePty()`
+  是懒加载（用终端时才 require），不阻塞 app 启动。
+  MSB8040 只影响**从源码重建** node-pty，即 `scripts/after-pack.js:320` 的
+  `electron-rebuild` → 只卡**打包**，不卡开发态与上面的测试。
+  故 VS Spectre 组件**不是 plan 583 的前置**。若要恢复 `electron:pack`，需提权安装
+  （当前 shell 非管理员），命令见下方交接说明。
 - **browserMode 是否新增 popover 入口**：属产品决策，未擅自加。
   相邻 plan 573 拥有产品面改动权。
 - **plugin 安装/卸载后的工具可见性回归未做**（Phase 3 原定的 gate 之一）：
