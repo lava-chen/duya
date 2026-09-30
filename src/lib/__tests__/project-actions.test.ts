@@ -15,8 +15,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // Mocks — must be hoisted before the module under test is imported.
 // ---------------------------------------------------------------------------
 
+/**
+ * Plan 582 (G2): the archive IPC returns a result object naming the sessions
+ * it committed, and the store action resolves to whether the archive happened
+ * — that boolean is what the batch helpers count. Declared here (rather than
+ * imported) because this file replaces the whole `../ipc-client` module.
+ */
 const mocks = vi.hoisted(() => ({
-  archiveIPC: vi.fn().mockResolvedValue(true),
+  archiveIPC: vi.fn(
+    async (sessionId: string): Promise<
+      | { ok: true; archivedSessionIds: string[] }
+      | { ok: false; reason: 'not_found' | 'session_busy' | 'io'; sessionId: string }
+    > => ({ ok: true, archivedSessionIds: [sessionId] }),
+  ),
   deleteIPC: vi.fn().mockResolvedValue(true),
   updateIPC: vi.fn().mockResolvedValue({} as never),
   exportIPC: vi.fn().mockResolvedValue({ absolutePath: '/tmp/x.jsonl', lines: 1, bytes: 1 }),
@@ -110,7 +121,14 @@ function resetStores(): void {
 }
 
 beforeEach(() => {
-  mocks.archiveIPC.mockClear();
+  // mockClear() keeps call history but NOT the implementation, so a test that
+  // installs its own archive result would leak it into the next one. Reset
+  // and re-seed the default explicitly.
+  mocks.archiveIPC.mockReset();
+  mocks.archiveIPC.mockImplementation(async (sessionId: string) => ({
+    ok: true,
+    archivedSessionIds: [sessionId],
+  }));
   mocks.deleteIPC.mockClear();
   mocks.updateIPC.mockClear();
   mocks.exportIPC.mockClear();
@@ -229,6 +247,26 @@ describe('project-actions — selected-set batch ops', () => {
     const count = await actions.archiveSelectedSessions([]);
     expect(spy).not.toHaveBeenCalled();
     expect(count).toBe(0);
+  });
+
+  it('archiveSelectedSessions counts only the ids that actually archived', async () => {
+    // Plan 582 (G2): archiving a subtree with a live turn is refused by the
+    // main process, so "ids requested" and "ids archived" are no longer the
+    // same number and reporting the former would be a lie.
+    mocks.archiveIPC.mockImplementation(async (sessionId: string) =>
+      sessionId === 't-2'
+        ? { ok: false, reason: 'session_busy', sessionId }
+        : { ok: true, archivedSessionIds: [sessionId] },
+    );
+    useConversationStore.setState({
+      threads: [makeThread('t-1', 'E:/x'), makeThread('t-2', 'F:/y')],
+      messages: {},
+      activeThreadId: null,
+    } as never);
+    vi.spyOn(useConversationStore.getState(), 'archiveThread');
+
+    const count = await actions.archiveSelectedSessions(['t-1', 't-2']);
+    expect(count).toBe(1);
   });
 });
 

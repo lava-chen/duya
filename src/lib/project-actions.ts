@@ -54,7 +54,10 @@ function notifyThreadsChanged(): void {
 
 /** Archive a single session via the existing Plan 506 primitive. */
 export async function archiveSingleSession(threadId: string): Promise<void> {
-  useConversationStore.getState().archiveThread(threadId);
+  // Plan 582 (G2): the store action is asynchronous now, so this has to
+  // await it. Otherwise a caller that archives and immediately re-reads the
+  // roster races the main process and sees the pre-archive state.
+  await useConversationStore.getState().archiveThread(threadId);
 }
 
 /** Delete a single session via the existing Plan 506 primitive. */
