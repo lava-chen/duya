@@ -75,7 +75,7 @@ Rules:
 | [browser-core-upgrade](./active/573-browser-core-upgrade.md) | P0 | Phase 3: add the core-db browsing-history table + migration, hook webview main-frame `did-navigate`, expose `browser:history-*` IPC plus the history view _(Phases 1/1b/2/2b landed)_ |
 | [cua-tree-richness](./active/576-cua-tree-richness.md) | P1 | Phase 3 in the ps1 C# probe walk: emit `children_total/shown/offset` for container nodes, plus `surface_kind` and the new-window settle poll _(Phases 1-2 landed)_ |
 | [mcp-capability-core-convergence](./active/580-mcp-capability-core-convergence.md) | P0 | Run Phase 0's real-machine Notion baseline (instrumented around `RemoteMcpConnector`/`MCPClient` discovery) to record `pages=N, total=M` _(Phases 0/3/4/5 open)_ |
-| [browser-capability-boundary](./active/583-browser-capability-boundary.md) | P0 | Phase 4 (seam C) is optional and needs a third-party engine request first; before that, run a real Electron browser smoke — the `setBrowserConfig` path via `builtin.js` cannot be validated by grep alone _(seams A and B landed — 10 commits; engine suite 234 green; browser plugin + 2 skills shipped)_ |
+| [browser-capability-boundary](./active/583-browser-capability-boundary.md) | P0 | Seam C rewritten: the "≈5 change sites" estimate was wrong — plugins contribute **zero** executable code today and the trust layer that would gate them is **unenforced dead metadata**. Next: stand up a separate plan to actually wire `trust-engine`/`PermissionService`, then land seam C as declarative-composition + MCP trust _(seams A and B landed — 15 commits)_ |
 
 ***
 

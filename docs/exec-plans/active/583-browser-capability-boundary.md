@@ -382,24 +382,131 @@ snake_case token，都必须存在于 `getAllActions()`。这条守卫在写作�
 `writeActionsRequire_Approval`，`readPermissionsPolicy` 会静默把该字段丢成
 `undefined`（`JSON.parse` 失败被 `catch` 吞掉），测试立刻红。
 
-### Phase 4 — 缝 C（可选，需先有第三方引擎诉求）
+### Phase 4 — 缝 C：plugin 贡献原生 tool ⚠️ 原「约 5 处」估计被推翻
 
-改动面（已定位，约 5 处）：
+**用户 2026-10-01 决定启动**（不再等第三方引擎诉求：这是通用 harness 缺口）。
+但启动前的调研把原估计推翻了，故先重写这一节再动手。
 
-- [ ] `packages/plugin-core/src/formats/{types,duya,shared}.ts` — manifest 加 `tools` capability 键
-      （或 `tools/index.js` + `contracts.tools` 声明，照 openclaw `contracts.tools` 形态）。
-- [ ] `packages/plugin-core/src/plugins/loader/capability-discovery.ts:404` — 新增 `discoverTools()`
-      并入 `PluginCapabilities`。
-- [ ] `packages/agent/src/tool/registry.ts:86-89` — `ToolOwner` 增加
-      `` `plugin-native:${pluginId}` `` 变体，否则 `ReplaceableOwner` 排除机制会让原生 tool
-      无法被 `replaceByOwner` 作用域化管理（`non-mcp` 被显式排除，`:369-373` 有运行时守卫）。
-- [ ] agent 侧新增加载器：`registerWithKey(key, def, executor, owner, meta)`，
-      `meta.source = { kind:'plugin', id: pluginId }`。
-- [ ] 信任与门控：项目级信任（比照 pi `trust-manager.ts:30-38`）+ `riskTier` 接
-      plan 419 权限总线。
-- [ ] 冲突策略**显式选型**：openclaw 是"后来者丢弃"（数组 + `continue`），
-      duya 若要"可替换默认能力"需明确 first-wins + 显式禁用，或改成显式 `Map<slot, provider>`。
-      不要照抄成 last-write-wins，也不要留成隐式行为。
+#### 原估计错在哪
+
+原文字假设「plugin 已有某种执行路径，只要加个 `tools` manifest 键 + 加载器即可」。
+**实测前提不成立**：
+
+- **duya 的 plugin 目前贡献零可执行代码。** 真正被执行的只有三类：
+  MCP 子进程（`mcp/collect.ts:75-99`，且需 `enabled === true`）、markdown
+  skills/commands/agents、YAML workflows。全仓找不到任何把 plugin 目录里的
+  `.js`/`.ts` 做 `import` / `createRequire` / `vm` / worker 的路径。
+- **plugin 声明的 hook 从不执行。** `discoverHooks` 读 `hooks/hooks.json` 返回一个
+  **裸数组**，消费者只有 manifest 映射、能力计数、UI DTO 三处。真正会执行的 hook
+  系统（`agent/src/hooks/executor.ts:202` spawn / `:297` fetch）只从
+  `~/.duya/config.toml` 的 `[hooks] files` 读定义，而唯一的写入者是 `hooks add` CLI。
+  两套格式还互不兼容（数组 vs 对象，`hooks-json.ts:64-72` 明确拒数组）。
+- **信任模型是死元数据，从未被执行。** 这是最关键的一条：
+  `trust-engine.ts` 的 `PluginTrustLevel` 与 `TrustLevelCapability`
+  （`maxHooks` / `allowHttpHooks` / `maxFileAccess` / `requirePermissionConfirmation`）
+  由 `source` 字符串算出（`:61-86`）后存进 registry，但——**本计划复核过全仓调用方**：
+  - `getCapabilities()` 只有一个调用点：`electron/ipc/plugin-handlers.ts:630`，
+    且是**只读 IPC 查询**（`plugin:security:trust-info`）。
+  - `meetsMinimumLevel` 在 `electron/` 与 `packages/agent/src/` 下**零调用方**。
+  - `PermissionService.checkPermission`（自述为"不在热路径的审计账本"）**零运行时调用方**。
+  - 安装时**无信任提示**：`plugin:install` 装完直接 `enabled = true`
+    （`PluginManager.ts:491`），唯一拒绝是企业 blocklist（`:345-353`）。
+
+  也就是说：**今天不存在"这个 plugin 被信任运行代码"这个概念，只有"启用了没有"。**
+
+  这意味着缝 C 一旦落地，将是这个应用**第一次**允许 plugin 作者的文件在主进程 /
+  agent 进程内执行代码——而门控它的信任层恰好是未接线的。这不是"加个键"，
+  这是安全架构工作。原「约 5 处」的估计因此不成立。
+
+#### 但 duya 的注册表侧位置比两个参照物都好
+
+调研同时发现 duya 在冲突处理上**已经优于** openclaw 和 pi，不必照抄任何一方：
+
+- MCP 工具已有**双身份**机制：`internalKey`（registry 键，`mcp__<server>__<tool>`，
+  `mcp/index.ts:782`）+ `providerName`（模型可见名），经
+  `computeProviderName`（`@duya/plugin-core`，`mcp/provider-tool-name.ts`）分配，
+  冲突时按 `__2` / `__3` 后缀 + 哈希截断。**即：冲突靠构造消除，不靠策略。**
+- `replaceByOwner(owner, entries)`（`tool/registry.ts:349-437`）是
+  **validate-then-commit 原子替换**：三阶段（校验 / 算 diff / 单块提交），
+  任一阶段失败保证 registry 逐字节还原。
+- 跨 owner 键冲突**直接抛错**（`:383-388`），所以 `replaceByOwner` 永远无法顶掉
+  `non-mcp` 内置工具。
+- 已有两个可直接照抄的先例：MCP 走 `apply.ts` → `DuyaAgent.setActiveMCPRuntime`
+  → `replaceByOwner('mcp', …)`；App-Connection 走
+  `tool/AppConnectionTool/index.ts:290-318` 的**按 owner 分桶**再逐桶提交。
+- catalog 侧**零改动**：`ToolSourceKind` 已含 `'plugin'`
+  （`tool/catalog-types.ts:6`），`sourceForTool` 已会为 plugin 拥有的 MCP 工具
+  返回 `kind:'plugin'`。
+
+#### 三个参照 harness 的实测（`E:\cloned-projects`）
+
+| harness | 磁盘 | plugin 原生 tool | 冲突策略 | 信任门控 |
+|---|---|---|---|---|
+| openclaw | ✅ | ✅ 进程内 `registerTool` | **first-wins，后来者丢弃**（`plugins/tools.ts:1363-1376` `continue`）；占名需先显式禁用内置（`docs/tools/browser.md:50-62`） | config allowlist + 逐 plugin 开关；local 插件未显式信任**在 import 前**就拒（`loader.ts:2236`） |
+| pi | ✅ | ✅ 进程内 `registerTool` | **静默顶掉内置**（`agent-session.ts:2604-2620` 先塞内置再 `set` 覆盖） | 项目级信任，项目内 `.pi/extensions` **未信任不加载**（`docs/extensions.md:113`） |
+| codex | ✅ | ❌ 仅声明式 | — | — |
+| claude-code-haha | ✅ | ❌ 仅声明式 | — | — |
+| 其余 13 个 | — | 不在磁盘上 | — | — |
+
+两处需要**更正我先前的口头结论**：
+
+1. openclaw 的"同名工具被后者覆盖"是**错的**。`registerTool`（`registry.ts:602-656`）
+   **完全不做**重名检查，无条件 append；丢弃发生在之后的**物化阶段**
+   `tools.ts:1364-1375`，且比对用的 name set **预置了内置工具名**。所以真实机制是
+   first-wins + 需先腾出名字，不是覆盖。
+2. openclaw 真有价值的不是冲突策略，而是 `contracts.tools` **执行前声明闸门**
+   （`registry.ts:610-619`：`plugin must declare contracts.tools before registering
+   agent tools`）。这是所有样本里**唯一**能在**不执行 plugin 代码**的前提下
+   审阅其工具面的机制。
+
+pi 则是另一极端：无 manifest 预声明 + 静默遮蔽内置，用户在 manifest 里根本看不到
+插件要顶掉哪个核心工具。**不要继承这个默认行为。**
+
+#### 缝 C 的正确形态（三选一，必须先定）
+
+| 方案 | plugin 贡献什么 | 是否执行 plugin 代码 | 风险面 |
+|---|---|---|---|
+| **A. 纯声明式组合** | 只能声明"把哪些已有能力以什么参数暴露"，由宿主映射到已有工具 | **否** | 最低。治不了"第三方需要新能力"的真需求 |
+| **B. MCP 子进程**（= 今天的既有能力） | 起一个外部进程 | 是，但在**子进程** | 低。已有 `decideMcpSource` 门控 |
+| **C. 进程内原生 tool** | 可执行 JS/TS，同宿主 realm | **是，且全权** | 高。需先修信任层 |
+
+**方案 C 的前置条件（缺一不可，顺序有依赖）**：
+
+- [ ] **C-0 先让信任层真正生效**（独立 plan，不属缝 C）：把
+      `trust-engine.ts` 的 `TrustLevelCapability` 与 `PermissionService.checkPermission`
+      从死元数据接到至少一处真实门控。否则 C 方案是在无门控的进程内执行第三方代码。
+      —— 这是**本 plan 识别出的最高优先级安全缺口，与缝 C 是否做无关**。
+- [ ] **C-1 执行前声明闸门**：照 openclaw `contracts.tools`，manifest 声明工具面，
+      在**加载代码之前**校验。收益：不执行代码即可审阅插件要暴露什么。
+- [ ] **C-2 加载**：manifest 声明 → 信任校验 → 才 import。import 机制可照
+      openclaw（原生 `require` 优先，jiti 兜底）或 pi（jiti）。
+- [ ] **C-3 注册**：`ToolOwner` 增加 `` `plugin-native:${pluginId}` `` 变体
+      （`registry.ts:86-89`；`ReplaceableOwner` 已 `Exclude` 掉 `non-mcp`，`:369-373`
+      另有运行时守卫），按 `AppConnectionTool` 的分桶模式逐 plugin
+      `replaceByOwner` 原子提交。`meta.source = { kind:'plugin', id: pluginId }`
+      （catalog 无需新增 kind）。**必须走 `internalKey` + `providerName` 双身份**，
+      否则 `register()` 的 `tools.set`（`registry.ts:222`）会**静默覆盖**同名内置工具。
+- [ ] **C-4 冲突策略显式选型**：duya 有第三个选项，比两个参照物都好——
+      复用既有 `BUILTIN_FALLBACK_REPLACEMENTS` 的 `shadowedBy` 语义
+      （`mcp/discovery.ts:195-243`）：被遮蔽的内置工具**保留在 inventory 里可见**、
+      标记 `shadowedBy`、只在 `resolvedConfigs` 排除。参照物要么要求用户先禁用内置
+      （openclaw），要么静默遮蔽（pi）；duya 已有第三种更可视的写法，且带
+      `mcp-server-shadowed` 这类 issue 事件可复用。
+- [ ] **C-5 权限接线**：插件原生 tool 需要 `decideMcpSource` 的同构兄弟
+      （`permissions/permissions.ts:289-325`：`plugin`/`local`/`unknown` → `ask`，
+      永不自动批准）。今天是**调用时**门控，**注册时**无门控；C 方案要明确
+      补不补注册时门控。plan 419 的 P1（`checkPermissions` 预检、`riskTier`、
+      `PermissionContext` 注入）正好是这条的地基，但 P1 尚未落地。
+
+#### 建议的推进顺序
+
+1. 先立**独立 plan** 做 C-0（信任层接线）。这是既有安全缺口，独立有价值，
+   且是 C 的前提。
+2. 缝 C 落到 **A + B 的加强**（声明式组合 + 现有 MCP 路径的信任接线），
+   风险面可控，且能覆盖"第三方想暴露新能力"里相当一部分诉求。
+3. **C 方案（进程内执行）等信任层有真实门控后再评估**，不要与 C-0 并行开工。
+
+
 
 ## 8. Gates
 
@@ -480,5 +587,18 @@ snake_case token，都必须存在于 `getAllActions()`。这条守卫在写作�
   被 `catch` 吞掉 → 整个 permission policy 静默变成 `undefined`，且**不报错**。
   任何 `permissions/policy.json` / `plugin.json` 若带 BOM 都会这样。
   修它要动所有插件共用的读取路径，属独立改动，未纳入本 plan。
+- 2026-10-01：**再次更正 openclaw 的结论**（本 plan §10 早先那条也需按此读）。
+  先前称 openclaw「同名工具被后者覆盖」——**仍错**，且这次拿到了确切机制：
+  `registerTool`（`plugins/registry.ts:602-656`）**根本不做重名检查**，无条件 append；
+  丢弃发生在之后的**物化阶段** `plugins/tools.ts:1364-1375`，比对用的 name set
+  **预置了内置工具名**，故真实机制是 **first-wins + 需先腾出名字**（openclaw 自己也
+  要求先 `plugins.entries.browser.enabled = false`）。数组存插件（`registry.ts:646`）
+  这半句是对的，但和"丢弃"不在同一处、也不是同一阶段。
+  另有一点先前没说清：`contracts.tools` 是**执行前**声明闸门，不是运行时校验。
+- 2026-10-01：识别出**既有安全缺口（与缝 C 是否做无关）**：`trust-engine.ts` 的
+  `TrustLevelCapability` 与 `PermissionService.checkPermission` 全仓**零执行点**——
+  `getCapabilities()` 唯一调用点是只读 IPC 查询（`plugin-handlers.ts:630`），
+  `meetsMinimumLevel` 零调用方。已复核（两个独立来源 + 本人 grep 复核）。
+  按 §7 Phase 4 的建议，应先立独立 plan 接线信任层，再谈进程内执行第三方代码。
 
 
