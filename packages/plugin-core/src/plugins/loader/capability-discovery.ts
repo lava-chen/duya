@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, existsSync, statSync, realpathSync } from 'fs'
-import { join, basename, extname, resolve, relative, isAbsolute } from 'path'
+import { join, extname, resolve, relative, isAbsolute } from 'path'
 import { parse as parseYaml } from 'yaml'
 import {
   WorkflowTemplateSchema,
@@ -10,29 +10,6 @@ export interface CapabilityIndexItem {
   name: string
   path: string
   description?: string
-}
-
-function scanMdFiles(dirPath: string): CapabilityIndexItem[] {
-  if (!existsSync(dirPath)) return []
-
-  try {
-    return readdirSync(dirPath)
-      .filter((name) => extname(name) === '.md' && statSync(join(dirPath, name)).isFile())
-      .map((name) => ({
-        name: basename(name, '.md'),
-        path: join(dirPath, name),
-      }))
-  } catch {
-    return []
-  }
-}
-
-export function discoverCommands(pluginDir: string): CapabilityIndexItem[] {
-  return scanMdFiles(join(pluginDir, 'commands'))
-}
-
-export function discoverAgents(pluginDir: string): CapabilityIndexItem[] {
-  return scanMdFiles(join(pluginDir, 'agents'))
 }
 
 /**
@@ -486,8 +463,6 @@ export function discoverWorkflows(pluginDir: string): WorkflowTemplate[] {
 }
 
 export interface PluginCapabilities {
-  commands: CapabilityIndexItem[]
-  agents: CapabilityIndexItem[]
   skills: CapabilityIndexItem[]
   hooks: HookCapability[]
   /**
@@ -513,8 +488,6 @@ export function discoverAllCapabilities(
   // the same server injected twice.
   const nativeMcp = discoverMcpServers(pluginDir)
   return {
-    commands: discoverCommands(pluginDir),
-    agents: discoverAgents(pluginDir),
     skills: discoverSkills(pluginDir),
     hooks: discoverHooks(pluginDir),
     workflows: discoverWorkflows(pluginDir),

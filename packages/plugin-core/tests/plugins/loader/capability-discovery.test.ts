@@ -6,8 +6,6 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import {
   discoverSkills,
-  discoverCommands,
-  discoverAgents,
   discoverAllCapabilities,
   discoverWorkflows,
   discoverAgentPluginsMcpServers,
@@ -100,29 +98,7 @@ describe('discoverSkills — edge cases', () => {
   })
 })
 
-describe('discoverSkills — does not affect other discover* helpers', () => {
-  it('discoverCommands still uses the flat layout', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'duya-cmd-'))
-    try {
-      mkdirSync(join(dir, 'commands'), { recursive: true })
-      writeFileSync(join(dir, 'commands', 'lint.md'), '# Lint\n')
-      expect(discoverCommands(dir).map((c) => c.name)).toEqual(['lint'])
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-
-  it('discoverAgents still uses the flat layout', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'duya-agt-'))
-    try {
-      mkdirSync(join(dir, 'agents'), { recursive: true })
-      writeFileSync(join(dir, 'agents', 'reviewer.md'), '# Reviewer\n')
-      expect(discoverAgents(dir).map((a) => a.name)).toEqual(['reviewer'])
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-
+describe('discoverAllCapabilities — exposed capability set', () => {
   it('discoverAllCapabilities exposes skills from the subdirectory layout', () => {
     const dir = mkdtempSync(join(tmpdir(), 'duya-all-'))
     try {
@@ -130,11 +106,51 @@ describe('discoverSkills — does not affect other discover* helpers', () => {
       writeFileSync(join(dir, 'skills', 'one', 'SKILL.md'), '# One\n')
       const caps = discoverAllCapabilities(dir)
       expect(caps.skills.map((s) => s.name)).toEqual(['one'])
-      expect(caps.commands).toEqual([])
-      expect(caps.agents).toEqual([])
       expect(caps.hooks).toEqual([])
       expect(caps.workflows).toEqual([])
       expect(caps.mcpServers).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // Plan 583 seam C / G3 — `commands` and `agents` were removed from
+  // PluginCapabilities. They were discovered and then read by nothing:
+  // the host has no plugin-contributed slash-command registry
+  // (`getCommandsForPlatform` is a hardcoded built-in list, and only
+  // `/recap` even has execution logic) and no custom-agent loader
+  // (`getAgentDefinitions()` returns a hardcoded `getBuiltInAgents()`).
+  // The key-set assertion below is the regression guard: re-adding
+  // either field makes it fail, so the removal cannot silently rot back
+  // into a promise the host does not keep.
+  it('exposes exactly the capabilities the host can actually load', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'duya-caps-keys-'))
+    try {
+      const caps = discoverAllCapabilities(dir)
+      expect(Object.keys(caps).sort()).toEqual([
+        'hooks',
+        'mcpServers',
+        'skills',
+        'workflows',
+      ])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('ignores a plugin `commands/` or `agents/` directory entirely', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'duya-caps-legacy-'))
+    try {
+      mkdirSync(join(dir, 'commands'), { recursive: true })
+      writeFileSync(join(dir, 'commands', 'lint.md'), '# Lint\n')
+      mkdirSync(join(dir, 'agents'), { recursive: true })
+      writeFileSync(join(dir, 'agents', 'reviewer.md'), '# Reviewer\n')
+      expect(discoverAllCapabilities(dir)).toEqual({
+        skills: [],
+        hooks: [],
+        workflows: [],
+        mcpServers: [],
+      })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
