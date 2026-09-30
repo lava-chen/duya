@@ -117,11 +117,6 @@ vi.mock('../../packages/plugin-core/src', () => ({
       return { level: 'official' };
     }
   },
-  PermissionService: class {
-    async recordGrantedPermissions() {
-      return [];
-    }
-  },
   PolicyEngine: class {
     isPluginBlocked() {
       return { allowed: true };

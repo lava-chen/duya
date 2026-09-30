@@ -14,14 +14,14 @@ export {
 } from './security/trust-engine';
 export type { PluginTrustInfo, TrustLevelCapability } from './security/trust-engine';
 
-export {
-  PermissionService,
-} from './security/permission-service';
-export type {
-  PermissionRequest,
-  GrantedPermission,
-  PermissionCheckResult,
-} from './security/permission-service';
+// Plan 584 Phase 3: PermissionService was removed. It kept an in-memory map
+// of granted permissions that nothing ever read, duplicating
+// `PluginRegistryEntry.grantedPermissions` — the single persisted record that
+// the UI actually reads. A class named "PermissionService" with a
+// `checkPermission` method reads as enforcement while gating nothing, so it
+// was removed rather than wired. Manifest-declared permissions remain
+// metadata today: the `domains` field is not enforced, because navigation
+// blocking is driven by the settings-backed DomainBlocker.
 
 export {
   PolicyEngine,

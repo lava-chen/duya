@@ -20,7 +20,6 @@ import {
 import { resolvePluginVersion } from './cache/version-resolver';
 import {
   TrustEngine,
-  PermissionService,
   PolicyEngine,
   withPluginError,
   withPluginErrorSync,
@@ -93,7 +92,6 @@ export class PluginManager {
   private readonly setupStore = new PluginSetupStore();
   private readonly pathValidator = new PathSafetyValidator();
   private readonly trustEngine = new TrustEngine();
-  private readonly permissionService = new PermissionService();
   private readonly policyEngine = new PolicyEngine();
 
   constructor() {
@@ -474,15 +472,13 @@ export class PluginManager {
       createInstalledSymlink(pluginId, cacheDir);
       ensureDir(pluginDataPath);
 
-      if (catalogEntry.manifest.permissions?.length) {
-        const perms = catalogEntry.manifest.permissions.map((p) => ({
-          name: p.name,
-          scope: p.scope as 'plugin' | 'project' | 'system' | undefined,
-          domains: p.domains,
-        }));
-        await this.permissionService.recordGrantedPermissions(pluginId, perms);
-      }
-
+      // Plan 584 Phase 3: permissions declared by the manifest are recorded on
+      // the registry entry below (`grantedPermissions`), which is the single
+      // persisted record and what the UI reads. They previously also went into
+      // a PermissionService ledger that nothing ever read, which made it look
+      // like a second source of truth. Note these are metadata today: the
+      // `domains` field is not enforced, because navigation blocking is driven
+      // by the settings-backed DomainBlocker rather than by the manifest.
       const now = new Date().toISOString();
       const setupState = this.computeSetupState(catalogEntry.id, catalogEntry.manifest);
       // Plan 584 Phase 1: an origin the trust engine could not classify is
@@ -566,15 +562,10 @@ export class PluginManager {
       createInstalledSymlink(pluginId, cacheDir);
       ensureDir(pluginDataPath);
 
-      if (manifest.permissions?.length) {
-        const perms = manifest.permissions.map((p) => ({
-          name: p.name,
-          scope: p.scope as 'plugin' | 'project' | 'system' | undefined,
-          domains: p.domains,
-        }));
-        await this.permissionService.recordGrantedPermissions(pluginId, perms);
-      }
-
+      // Plan 584 Phase 3: manifest-declared permissions are recorded on the
+      // registry entry below (`grantedPermissions`), which is the single
+      // persisted record and what the UI reads. They previously also went into
+      // a PermissionService ledger that nothing ever read.
       const now = new Date().toISOString();
       const setupState = this.computeSetupState(pluginId, manifest);
       // Plan 584 Phase 1 — same gate as installFromCatalog. A path install is
@@ -698,8 +689,6 @@ export class PluginManager {
         }
       }
 
-      this.permissionService.revokeAllPermissions(pluginId);
-
       this.logger.info('Plugin removed', { pluginId, deleteData }, LogComponent.Main);
       return { removed: true };
     });
@@ -727,10 +716,6 @@ export class PluginManager {
 
   getTrustEngine(): TrustEngine {
     return this.trustEngine;
-  }
-
-  getPermissionService(): PermissionService {
-    return this.permissionService;
   }
 }
 
