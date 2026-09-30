@@ -90,13 +90,47 @@
 > 在管事、实际不拦任何东西的字段——和 583 Phase 3 里 `permissions[].domains` 的
 > 情况是同一类错误。若将来 plugin 真的开始执行 hook，这三行要重新评估。
 
-### Phase 1 — T-1 安装时门控（最小、最高价值）
+### Phase 1 — T-1 安装时门控 ✅ 已落地
 
-- [ ] `PluginManager.install` 在写 `enabled` 之前按 `trustInfo.level` 决策。
-      最低要求：`Untrusted` 不再无条件 `enabled: true`。
-- [ ] 复用既有错误类型表达拒绝（参考 `:347-352` 的
-      `type: 'marketplace-blocked-by-policy'`），不要新造语义。
-- [ ] 测试：四种 trust level × install 的 `enabled` 结果矩阵。
+形态：**装上但默认不启用**（用户 2026-10-01 按 goal「怎么安全怎么来」授权推进，
+非再次确认）。理由见 `electron/plugins/install-gate.ts` 头部注释。
+
+- [x] 新增 `electron/plugins/install-gate.ts`：`decideInstallGate(trust)` 返回
+      `{ enabled, reason, detail }`；只有 `Untrusted` 档 `enabled: false`。
+- [x] `PluginManager.installFromCatalog` / `installFromPath` 两处 `:491` / `:572`
+      的裸 `enabled: true` 改走门控，并对非默认决策记 `logger.warn`。
+- [x] 新增 `initialHealthStatus(enabled, setupState)`，让「装上即禁用」与
+      `setEnabled(false)` 的 health 语义一致（否则一个显示 `ready`、一个 `disabled`）。
+- [x] `electron/plugins/install-gate.test.ts`（12 用例）：四档矩阵 + 5 个
+      `PluginSource` 全部 enabled + health 三态。
+
+**明确不按 `requirePermissionConfirmation` 门控。** 该字段语义是「使用时询问」；
+拿它做安装门控会把**所有 marketplace 与所有 local 安装**一起禁用，那是 UX 回归
+而非安全收益——用户在 catalog 点 Install 本身就是那几个档位的同意行为。
+安装时要问的问题更窄：**这个来源我们认不认识。**
+
+#### 落地前抓到的两件事
+
+1. **tier 映射不完整，且差一步就会造成生产事故。** `PluginSource` 有 5 个值，
+   `TrustEngine` 只处理 4 个——`'builtin-directory'` 落进默认分支被判 `Untrusted`。
+   而 `catalog.ts:268` 恰恰给内置插件声明 `trustLevel: 'official'`，但
+   `PluginManager:365` **忽略 catalog 的声明**、用 `source` 重算，于是注册表把
+   **所有一方内置插件记成 `untrusted`**。
+   **如果先写门控、后查映射，这个门会禁用所有内置插件**——包括 plan 583 刚发的
+   browser plugin。已先修（`6e620ac8`），并加了「覆盖 `PluginSource` 全枚举」的
+   守卫测试。
+2. **`getCapabilities` 把共享表按引用交出**（Phase 0 已修，`491e65c3`）。
+
+#### 如实说明：今天这个门不改变任何用户可见行为
+
+tier 映射补全后，5 个 `PluginSource` 全部落在已识别档位，**`Untrusted` 分支通过
+两条 install 路径都不可达**。所以这是一道**面向未来的 fail-safe**，不是用户能感觉
+到的安全提升。两个方向的测试都写了：门存在，且门不碰正常安装。
+
+真要让它有实际拦截力，需要出现一个「来源无法识别」的真实入口——目前没有。
+不要把它当成「已经修好了一个安全漏洞」来记录。
+
+
 
 ### Phase 2 — T-2 能力分层落地
 
@@ -136,6 +170,29 @@
 - 每个 Phase 至少一个「未接线时会红」的测试。
 - 涉及安装行为的改动：**必须**附四种 trust level 的矩阵测试，
   因为这是唯一能证明「没有误伤正常安装」的东西。
+
+### 已跑结果
+
+| 门禁 | 结果 |
+|---|---|
+| `npx vitest run electron/plugins` | **12 文件全绿**（含覆盖 install 的 `PluginManager.test.ts`） |
+| `npx vitest run packages/plugin-core/tests/trust-engine.test.ts` | 全绿 |
+| `npx tsc -p packages/plugin-core --noEmit` | exit 0 |
+| `npm run typecheck:web` | exit 0 |
+
+**两个环境陷阱（都不是本次改动造成的，但会浪费下一次的时间）**：
+
+1. worktree 内 `node_modules/@duya/*` 是指向**主 checkout** 的 Junction，所以
+   `@duya/agent/*` 解析到主 checkout 的 `dist`，不是 worktree 的。主 checkout 的
+   `packages/agent/dist` 当时是**空的**，导致 `PluginManager.test.ts` 报
+   `Cannot find package '@duya/agent/message'`——看起来像代码坏了，其实是
+   dist 没建。在主 checkout 跑一次 `npm run -w @duya/agent build` 即可。
+   （注意 `git status` 数 dist 文件时只数顶层会漏掉 `dist/<dir>/` 子目录，
+   我因此误判过一次「dist 只有 8 个文件」。要用 `-Recurse`。）
+2. `packages/plugin-core/tests/app-schema-marketplace-compat.test.ts` 失败，
+   断在 `app.name` 断言。它读的是**外部仓库**
+   `E:/Projects/duya-marketplace/duya-marketplace/plugins` 下的 `.app.json`，
+   与本 plan 无关（本分支 diff 零文件落在 `connectors/`）。属既有红。
 
 ## 5. 明确不做
 
