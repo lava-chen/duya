@@ -11,11 +11,12 @@ import {
 /**
  * Chat markdown table with ZCode-style quick actions: copy as Markdown,
  * download as CSV (UTF-8 BOM + formula-injection guard), and a fullscreen
- * preview with a sticky header. The toolbar stays visible above the table,
- * matching ZCode's always-rendered action row.
+ * preview with a sticky header. The toolbar appears inside the table on
+ * thead hover, positioned in the top-right corner — saving vertical space.
  */
 export function MarkdownTableFrame({ children }: { children?: React.ReactNode }) {
   const tableRef = useRef<HTMLTableElement | null>(null);
+  const [toolbarVisible, setToolbarVisible] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
 
   const readRows = useCallback(() => readRowsFromTable(tableRef.current), []);
@@ -54,41 +55,64 @@ export function MarkdownTableFrame({ children }: { children?: React.ReactNode })
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [previewOpen]);
 
+  // Show toolbar on thead hover. The toolbar lives inside the scroll
+  // container alongside the table; we use mouseenter/mouseleave (not
+  // :hover) so the toolbar stays visible while the cursor moves from
+  // thead to the toolbar buttons without flicker.
+  useEffect(() => {
+    const table = tableRef.current;
+    if (!table) return;
+    const thead = table.querySelector('thead');
+    if (!thead) return;
+    const onEnter = () => setToolbarVisible(true);
+    const onLeave = (event: MouseEvent) => {
+      const related = event.relatedTarget as HTMLElement | null;
+      if (related?.closest('.markdown-table-toolbar')) return;
+      setToolbarVisible(false);
+    };
+    thead.addEventListener('mouseenter', onEnter);
+    thead.addEventListener('mouseleave', onLeave);
+    return () => {
+      thead.removeEventListener('mouseenter', onEnter);
+      thead.removeEventListener('mouseleave', onLeave);
+    };
+  }, [children]);
+
   return (
     <div className="markdown-table-root">
-      <div className="markdown-table-toolbar">
-        <button
-          type="button"
-          title="复制 Markdown"
-          aria-label="复制表格为 Markdown"
-          onClick={() => {
-            void handleCopyMarkdown();
-          }}
-        >
-          <CopyIcon size={14} />
-        </button>
-        <button
-          type="button"
-          title="下载 CSV"
-          aria-label="下载表格为 CSV"
-          onClick={handleDownloadCsv}
-        >
-          <DownloadIcon size={14} />
-        </button>
-        <button
-          type="button"
-          title="全屏预览"
-          aria-label="打开表格全屏预览"
-          onClick={() => setPreviewOpen(true)}
-        >
-          <Maximize2Icon size={14} />
-        </button>
-      </div>
       <div className="markdown-table-frame">
         <div className="markdown-table-scroll scrollbar-thin">
           <table className="markdown-table" ref={tableRef}>
             {children}
           </table>
+          <div className={`markdown-table-toolbar${toolbarVisible ? ' is-visible' : ''}`}>
+            <button
+              type="button"
+              title="复制 Markdown"
+              aria-label="复制表格为 Markdown"
+              onClick={() => {
+                void handleCopyMarkdown();
+              }}
+            >
+              <CopyIcon size={14} />
+            </button>
+            <button
+              type="button"
+              title="下载 CSV"
+              aria-label="下载表格为 CSV"
+              onClick={handleDownloadCsv}
+            >
+              <DownloadIcon size={14} />
+            </button>
+            <button
+              type="button"
+              title="全屏预览"
+              aria-label="打开表格全屏预览"
+              onClick={() => setPreviewOpen(true)}
+            >
+              <Maximize2Icon size={14} />
+            </button>
+          </div>
         </div>
       </div>
       {previewOpen ? (
