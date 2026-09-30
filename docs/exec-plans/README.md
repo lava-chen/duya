@@ -36,7 +36,7 @@ Rules:
 
 ***
 
-## Active Plans (36)
+## Active Plans (35)
 
 | Plan | Priority | Next action |
 | --- | --- | --- |
@@ -75,7 +75,6 @@ Rules:
 | [browser-core-upgrade](./active/573-browser-core-upgrade.md) | P0 | Phase 3: add the core-db browsing-history table + migration, hook webview main-frame `did-navigate`, expose `browser:history-*` IPC plus the history view _(Phases 1/1b/2/2b landed)_ |
 | [cua-tree-richness](./active/576-cua-tree-richness.md) | P1 | Phase 3 in the ps1 C# probe walk: emit `children_total/shown/offset` for container nodes, plus `surface_kind` and the new-window settle poll _(Phases 1-2 landed)_ |
 | [mcp-capability-core-convergence](./active/580-mcp-capability-core-convergence.md) | P0 | Run Phase 0's real-machine Notion baseline (instrumented around `RemoteMcpConnector`/`MCPClient` discovery) to record `pages=N, total=M` _(Phases 0/3/4/5 open)_ |
-| [session-archive-hardening](./active/582-session-archive-hardening.md) | P0 | G1–G9 landed (PR #76–#81), G1 legacy-archive migration closed in #82 (§8.1) plus a `restoreArchivedMoves` direction fix. `typecheck:all` green. **Open: Playwright UI smoke pass for the G6/G8/G9 renderer changes — the one unverified surface** |
 
 ***
 
@@ -99,7 +98,7 @@ Designed, not started. Nothing here is promised work.
 
 ***
 
-## Completed Plans (365)
+## Completed Plans (366)
 
 Archived for decision logs. Not an index of current work.
 
@@ -138,7 +137,7 @@ Archived for decision logs. Not an index of current work.
 - [tool-path-permission-refactor](../completed/97-tool-path-permission-refactor.md) · [chat-ux-improvement-plan](../completed/chat-ux-improvement-plan.md) · [duya-implementation-phase1](../completed/duya-implementation-phase1.md) · [duya-implementation-phase2-3](../completed/duya-implementation-phase2-3.md) · [duya-implementation-phase4-5](../completed/duya-implementation-phase4-5.md) · [duya-project-structure](../completed/duya-project-structure.md)
 - [duya-source-code-integration](../completed/duya-source-code-integration.md) · [first-test-problems-analysis](../completed/first-test-problems-analysis.md) · [first-test-problems](../completed/first-test-problems.md) · [harness-comparison-docs](../completed/harness-comparison-docs.md) · [problems](../completed/problems.md)
 
-### App Shell / UI (45)
+### App Shell / UI (46)
 
 - [06-15-right-sidebar-redesign](../completed/2026-06-15-right-sidebar-redesign.md) · [office-workspace](../completed/215-office-workspace.md) · [input-option-popover-alignment](../completed/232-input-option-popover-alignment.md) · [skills-completion-plan](../completed/25-skills-completion-plan.md) · [turn-review-history](../completed/308-turn-review-history.md) · [no-project-session](../completed/314-no-project-session.md)
 - [subagent-nested-session](../completed/37-subagent-nested-session.md) · [chat-generative-ui](../completed/38-chat-generative-ui.md) · [beta-launch-preparation](../completed/39-beta-launch-preparation.md) · [onboarding-experience-overhaul](../completed/41-onboarding-experience-overhaul.md) · [skills-system-cleanup-and-system-skills](../completed/414-skills-system-cleanup-and-system-skills.md) · [inline-task-row](../completed/416-inline-task-row.md)
@@ -147,7 +146,7 @@ Archived for decision logs. Not an index of current work.
 - [browser-webview-parallel-isolation](../completed/442-browser-webview-parallel-isolation.md) · [sidebar-section-refactor](../completed/471-sidebar-section-refactor.md) · [unified-attachment-card-visual](../completed/472-unified-attachment-card-visual.md) · [run-surface-threadkind-consolidation](../completed/505-run-surface-threadkind-consolidation.md) · [channel-attachments](../completed/507-channel-attachments.md) · [modal-unification](../completed/510-modal-unification.md)
 - [sidebar-awaiting-input-pill](../completed/516-sidebar-awaiting-input-pill.md) · [browser-tab-group-management](../completed/524-browser-tab-group-management.md) · [shared-agent-channel-root](../completed/526-shared-agent-channel-root.md) · [dwf-browser-node](../completed/564-dwf-browser-node.md) · [dwf-zcode-parity-resume-compile-actor-escalate](../completed/565-dwf-zcode-parity-resume-compile-actor-escalate.md) · [background-command-list-and-output-panel](../completed/566-background-command-list-and-output-panel.md)
 - [system-reminder-taxonomy-sanitize-rebuild](../completed/567-system-reminder-taxonomy-sanitize-rebuild.md) · [finalize-final-mailbox-poll](../completed/569-finalize-final-mailbox-poll.md) · [exit-boundary-user-message-separation](../completed/570-exit-boundary-user-message-separation.md) · [mailbox-delivery-receipts](../completed/571-mailbox-delivery-receipts.md) · [recap-feature](../completed/65-recap-feature.md) · [researcher-codex-ui-alignment](../completed/82-researcher-codex-ui-alignment.md)
-- [plugin-codex-ui-alignment](../completed/83-plugin-codex-ui-alignment.md) · [research-agent-memory-and-literature-plugin](../completed/84-research-agent-memory-and-literature-plugin.md) · [sidebar-project-management](../completed/sidebar-project-management.md)
+- [plugin-codex-ui-alignment](../completed/83-plugin-codex-ui-alignment.md) · [research-agent-memory-and-literature-plugin](../completed/84-research-agent-memory-and-literature-plugin.md) · [sidebar-project-management](../completed/sidebar-project-management.md) · [session-archive-hardening](../completed/582-session-archive-hardening.md)
 
 ### CLI / Cron / Provider (39)
 

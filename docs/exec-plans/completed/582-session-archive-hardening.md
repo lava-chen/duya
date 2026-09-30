@@ -1,10 +1,10 @@
 # 582 — Session 归档加固（归档轮转历史断裂 / 生命周期安全 / 排序语义 / 归档视图交互）
 
-> **Status**: In Progress（G1–G9 主体落地；G9 一项删除确认文案**有意未做**；G3 两项 renderer 侧**有意未做**；**存量迁移已收口，见 §8.1**）· **Priority**: P0 · **Owner**: TBD
+> **Status**: **Completed**（G1–G9 全部落地并经渲染层验证；G9 一项删除确认文案**有意未做**；G3 两项 renderer 侧**有意未做**——理由见 §8。存量迁移见 §8.1，UI 轨验证见 §8.2）· **Priority**: P0 · **Owner**: TBD
 > **立项**: 2026-10-01（对标 `docs/references/codex-thread-and-worktree-management.md` 的 codex thread 管理调研）
 > **前置**: Plan 549（归档对齐 codex）**已于 2026-09-19 经 PR #56 落地**（commit `9b1b1fe4`），Track A/B/C/D 全部实现。本 plan **不重做 549**，只补它留下的正确性缺口。
 > **分界**: 存储与生命周期（G1–G4）见 §2–§5；UI 轨（G5–G9）见 §6。
-> **落地**: PR #76（G1,G3,G5,G7）、#77（G2）、#78（G4）、#79（G6,G8,G9）、#80（E2E + 两个存量 bug）、#81（文档）、#82（G1 存量迁移 + `restoreArchivedMoves` 方向修复）。**剩余项见 §8 完成定义**。
+> **落地**: PR #76（G1,G3,G5,G7）、#77（G2）、#78（G4）、#79（G6,G8,G9）、#80（E2E + 两个存量 bug）、#81（文档）、#82（G1 存量迁移 + `restoreArchivedMoves` 方向修复）、#83（渲染层 E2E + G9 弹窗层叠上下文修复 + 清掉 `ThreadListItem.test.tsx` 存量红灯）。完成定义见 §8。
 
 ---
 
