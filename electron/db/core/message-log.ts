@@ -560,6 +560,13 @@ export class MessageLog {
             generation,
           );
         }
+        // Plan 582 (G4): advance recency inside the same transaction as the
+        // index rows, and only on a turn boundary. A turn start is the one
+        // event that unambiguously means "the user is using this session
+        // now", so it — and not every append — is what reorders the sidebar.
+        // Done here rather than in SessionStore so the ordering key can never
+        // advance for a write that did not actually land in the index.
+        this.advanceRecencyOnTurnStart(freshEvents);
       });
       txn();
 
@@ -2345,6 +2352,55 @@ export class MessageLog {
 
     this.pathCache.set(sessionId, desired);
     return desired;
+  }
+
+  /**
+   * Plan 582 (G4): move a session's recency forward when a turn starts.
+   *
+   * Called from inside `appendBatch`'s transaction, so a turn boundary that
+   * failed to index never reorders the sidebar. Only `turn_started` counts:
+   * streaming tokens, tool calls and draft saves are writes to a session the
+   * user is already inside, and letting them touch recency would put a
+   * background cron run or a bot mid-task at the top of the list.
+   *
+   * The lookup is by `id` alone. Bot sessions are NOT a shared `'bot'` row —
+   * their primary key is the full `bot:<agentId>` session id (see
+   * `getBotSessionId`), so each bot's turn advances only its own row. The
+   * `agent_id` column exists for soft-delete-by-bot lookups, not identity.
+   *
+   * Fail-open like its neighbours: a missing `sessions` table (test fixtures)
+   * or a locked row must never block the append.
+   */
+  private advanceRecencyOnTurnStart(events: ReadonlyArray<NewEvent>): void {
+    const turnStarts = events.filter(
+      (ev) => (ev.payload as { type?: string }).type === 'turn_started',
+    );
+    if (turnStarts.length === 0) return;
+
+    // Several turn boundaries can land in one batch; the latest one is the
+    // session's real position, so collapse to one write per session.
+    const latest = new Map<string, number>();
+    for (const ev of turnStarts) {
+      const payload = ev.payload as { startedAt?: number; createdAt?: number };
+      const startedAt = payload.startedAt ?? payload.createdAt ?? ev.createdAt;
+      const prior = latest.get(ev.sessionId);
+      if (prior === undefined || startedAt > prior) latest.set(ev.sessionId, startedAt);
+    }
+
+    const stmt = this.db.prepare(
+      'UPDATE sessions SET recency_at = ?, last_turn_started_at = ? WHERE id = ?',
+    );
+    for (const [sessionId, startedAt] of latest) {
+      try {
+        stmt.run(startedAt, startedAt, sessionId);
+      } catch (err) {
+        logger.warn('Failed to advance sessions.recency_at on turn start', {
+          sessionId,
+          startedAt,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   }
 
   /** Move a session's rollout file to a new date bucket and update rollout_path. */

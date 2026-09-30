@@ -53,6 +53,20 @@ export interface CoreSession {
    * `resolveArchivedPath` / `archivedDirFor` in archive-paths.ts.
    */
   archivedPath: string | null;
+  /**
+   * Plan 582 (G4): unix-ms of the last time the user actually USED this
+   * session, i.e. the last time a turn started. Deliberately NOT the same as
+   * `updatedAt`: housekeeping writes (archiving, pinning, renaming) bump
+   * `updatedAt` and must leave this alone, or the sidebar order would churn
+   * every time the user tidies up. This is the sidebar's sort key.
+   */
+  recencyAt: number | null;
+  /**
+   * Plan 582 (G4): unix-ms of the most recent turn boundary, kept separately
+   * from `recencyAt` so "when did the last turn start" stays answerable
+   * without parsing the rollout file.
+   */
+  lastTurnStartedAt: number | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -76,6 +90,14 @@ export interface SessionCreateInput {
   rolloutPath?: string | null;
   archivedAt?: number | null;
   archivedPath?: string | null;
+  /**
+   * Plan 582 (G4). Only a deliberate caller advances recency — the
+   * `turn_started` writer in MessageLog. `update()` bumps `updated_at` on
+   * every call but never touches these, which is what keeps archiving,
+   * renaming and pinning out of the sidebar's sort order.
+   */
+  recencyAt?: number | null;
+  lastTurnStartedAt?: number | null;
   createdAt?: number;
   updatedAt?: number;
 }
@@ -97,6 +119,10 @@ export interface SessionPatch {
   rolloutPath?: string | null;
   archivedAt?: number | null;
   archivedPath?: string | null;
+  /** Plan 582 (G4): opt-in only. See `SessionCreateInput.recencyAt`. */
+  recencyAt?: number | null;
+  /** Plan 582 (G4): opt-in only. See `SessionCreateInput.lastTurnStartedAt`. */
+  lastTurnStartedAt?: number | null;
 }
 
 export interface SessionListFilter {
@@ -176,6 +202,50 @@ export class SessionStore {
         }
       },
     },
+    {
+      // Plan 582 (G4): split "this row changed" from "the user was last here".
+      //
+      // `updated_at` is bumped by every `update()`, which meant that archiving
+      // a session — a housekeeping action, not a use of the conversation —
+      // moved it to the top of the sidebar. `recency_at` is the ordering key
+      // and only advances when a turn actually starts, matching codex
+      // `0039_threads_recency_at.sql`. `last_turn_started_at` records the
+      // most recent turn boundary on its own, which is what the sidebar can
+      // show without having to parse the rollout.
+      //
+      // Both stay nullable so a row that predates the migration is still
+      // valid; the backfill below gives every existing row a starting point.
+      id: 34,
+      name: 'add_recency_at_and_last_turn_started_at_to_sessions',
+      up: (db) => {
+        const cols = db
+          .prepare('PRAGMA table_info(sessions)')
+          .all() as Array<{ name: string }>;
+        const colSet = new Set(cols.map((c) => c.name));
+        if (!colSet.has('recency_at')) {
+          db.exec('ALTER TABLE sessions ADD COLUMN recency_at INTEGER');
+        }
+        if (!colSet.has('last_turn_started_at')) {
+          db.exec('ALTER TABLE sessions ADD COLUMN last_turn_started_at INTEGER');
+        }
+        // One-shot backfill: before this column existed, the best available
+        // proxy for "last used" is "last written".
+        db.exec('UPDATE sessions SET recency_at = updated_at WHERE recency_at IS NULL');
+
+        // `idx_sessions_updated` served the old `ORDER BY updated_at DESC`.
+        // Replace it with indexes that match the new ORDER BY, including the
+        // working_directory-prefixed variant that `list({ workingDirectory })`
+        // needs so the filtered sidebar path stays index-covered.
+        db.exec('DROP INDEX IF EXISTS idx_sessions_updated');
+        db.exec(
+          'CREATE INDEX IF NOT EXISTS idx_sessions_recency ON sessions(recency_at DESC, id DESC)',
+        );
+        db.exec('DROP INDEX IF EXISTS idx_sessions_working_dir');
+        db.exec(
+          'CREATE INDEX IF NOT EXISTS idx_sessions_working_dir ON sessions(working_directory, recency_at DESC, id DESC)',
+        );
+      },
+    },
   ];
 
   private readonly db: SqliteDatabase;
@@ -196,12 +266,12 @@ export class SessionStore {
           id, title, working_directory, project_name, status, model, provider_id,
           mode, permission_mode, agent_profile_id, parent_session_id, agent_type,
           agent_name, draft, extensions, rollout_path, archived_at, archived_path,
-          created_at, updated_at
+          recency_at, last_turn_started_at, created_at, updated_at
         ) VALUES (
           @id, @title, @working_directory, @project_name, @status, @model, @provider_id,
           @mode, @permission_mode, @agent_profile_id, @parent_session_id, @agent_type,
           @agent_name, @draft, @extensions, @rollout_path, @archived_at, @archived_path,
-          @created_at, @updated_at
+          @recency_at, @last_turn_started_at, @created_at, @updated_at
         )`,
       )
       .run({
@@ -223,6 +293,11 @@ export class SessionStore {
         rollout_path: input.rolloutPath ?? null,
         archived_at: input.archivedAt ?? null,
         archived_path: input.archivedPath ?? null,
+        // Plan 582 (G4): a brand-new session has just been used, so it starts
+        // at the top of the recency order. Without this it would sort last
+        // until its first turn_started event lands.
+        recency_at: input.recencyAt ?? updatedAt,
+        last_turn_started_at: input.lastTurnStartedAt ?? null,
         created_at: createdAt,
         updated_at: updatedAt,
       });
@@ -253,7 +328,13 @@ export class SessionStore {
     if (patch.rolloutPath !== undefined) { sets.push('rollout_path = @rollout_path'); params.rollout_path = patch.rolloutPath; }
     if (patch.archivedAt !== undefined) { sets.push('archived_at = @archived_at'); params.archived_at = patch.archivedAt; }
     if (patch.archivedPath !== undefined) { sets.push('archived_path = @archived_path'); params.archived_path = patch.archivedPath; }
+    if (patch.recencyAt !== undefined) { sets.push('recency_at = @recency_at'); params.recency_at = patch.recencyAt; }
+    if (patch.lastTurnStartedAt !== undefined) { sets.push('last_turn_started_at = @last_turn_started_at'); params.last_turn_started_at = patch.lastTurnStartedAt; }
     if (sets.length === 0) return;
+    // Plan 582 (G4): `updated_at` tracks "this row changed"; `recency_at`
+    // tracks "the user was last here" and is written only by the explicit
+    // patch fields above. Conflating them is what made archiving reorder the
+    // sidebar.
     sets.push('updated_at = @updated_at');
     params.updated_at = Date.now();
     this.db.prepare(`UPDATE sessions SET ${sets.join(', ')} WHERE id = @id`).run(params);
@@ -291,8 +372,12 @@ export class SessionStore {
       filter.excludeModes.forEach((m, i) => { params[`em${i}`] = m; });
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    // Plan 582 (G4): sort by recency, not by "last time the row was written",
+    // so housekeeping (archive/pin/rename) does not reorder the sidebar. The
+    // `id DESC` tiebreak matches `listSummaries` — without it, sessions
+    // sharing a millisecond come back in whatever order SQLite feels like.
     const rows = this.db
-      .prepare(`SELECT * FROM sessions ${where} ORDER BY updated_at DESC`)
+      .prepare(`SELECT * FROM sessions ${where} ORDER BY recency_at DESC, id DESC`)
       .all(params) as SessionRow[];
     return rows.map(rowToSession);
   }
@@ -406,7 +491,7 @@ export class SessionStore {
          WHERE s.status != 'deleted'
            AND s.id NOT LIKE 'gw-%'
            AND s.parent_session_id IS NULL
-         ORDER BY s.updated_at DESC, s.id DESC
+         ORDER BY s.recency_at DESC, s.id DESC
          LIMIT ? OFFSET ?`,
       )
       .all(limit, offset) as SessionSummary[];
@@ -552,6 +637,8 @@ interface SessionRow {
   rollout_path: string | null;
   archived_at: number | null;
   archived_path: string | null;
+  recency_at: number | null;
+  last_turn_started_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -576,6 +663,8 @@ function rowToSession(row: SessionRow): CoreSession {
     rolloutPath: row.rollout_path,
     archivedAt: row.archived_at,
     archivedPath: row.archived_path,
+    recencyAt: row.recency_at,
+    lastTurnStartedAt: row.last_turn_started_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
