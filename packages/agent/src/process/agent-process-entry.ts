@@ -58,7 +58,7 @@ import {
 } from '../queue/index.js';
 import type { QueuedCommand } from '../queue/index.js';
 import { generateSessionTitle } from '../session/title-generator.js';
-import { getSteeringConfig } from '../hooks/config.js';
+import { getSteeringConfig, setExtraHookFiles } from '../hooks/config.js';
 import { classifyError, APIErrorType, computeContextComposition, normalizePromptTokens, type ContextEstimateSource } from '@duya/ai';
 import type { PromptProfile } from '../prompts/modes/types.js';
 import { isBotAgentProfile } from '../prompts/index.js';
@@ -3564,8 +3564,48 @@ async function discoverPluginSkillPaths(): Promise<string[]> {
   return paths;
 }
 
+/**
+ * Plan 583 phase G2 — collect `hooks/hooks.json` from every **enabled**
+ * plugin.
+ *
+ * Mirrors `discoverPluginSkillPaths` above: the agent process already reads the
+ * plugin registry from its own database, so no main-process round trip and no
+ * protocol field is needed. Only files that already exist are returned, so a
+ * removed or half-installed plugin contributes nothing rather than a WARN on
+ * every turn.
+ *
+ * Disabled plugins are excluded here, which is the whole point: plugin
+ * enable/disable is the user's switch for whether its hooks fire.
+ */
+async function discoverPluginHookFiles(): Promise<string[]> {
+  const files: string[] = [];
+  try {
+    const installed = await pluginDb.registryList() as Array<{ id?: unknown; enabled?: unknown; installPath?: unknown }>;
+    const enabledPlugins = installed.filter(
+      (item) => item.enabled === true && typeof item.id === 'string' && typeof item.installPath === 'string'
+    );
+    for (const plugin of enabledPlugins) {
+      const hooksFile = path.join(plugin.installPath as string, 'hooks', 'hooks.json');
+      if (existsSync(hooksFile)) {
+        files.push(hooksFile);
+      }
+    }
+    if (files.length > 0) {
+      log(`[Agent-Process] Discovered ${files.length} plugin hook files`);
+    }
+  } catch (err) {
+    warn('[Agent-Process] Failed to discover plugin hook files:', err);
+  }
+  return files;
+}
+
 async function reloadSkills(): Promise<void> {
   try {
+    // Plan 583 G2: a plugin enable/disable has to move its hooks too, and
+    // this is the same event that re-resolves plugin skill paths, so the two
+    // stay consistent. The loop-hook path re-reads per run, so this takes
+    // effect from the next run without an agent restart.
+    setExtraHookFiles(await discoverPluginHookFiles());
     // Plan 445: no explicit cache handling needed here. loadSkillsFromDirectory
     // resolves each child directory through the per-skill snapshot cache, so
     // this full reload only re-parses SKILL.md files whose subtree changed;
@@ -3890,6 +3930,12 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
           });
           let initError: string | null = null;
           try {
+            // Plan 583 G2: resolve plugin hook files BEFORE the agent is
+            // constructed. `ConfigHooksRunner` snapshots `readHooksConfig()`
+            // once in its constructor, so a later call would be too late for
+            // that turn's settings. The loop-hook path re-reads per run, but
+            // doing it here keeps both consistent from the first turn.
+            setExtraHookFiles(await discoverPluginHookFiles());
             await initAgent(
               initMsg.providerConfig,
               initMsg.workingDirectory,

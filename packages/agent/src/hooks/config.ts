@@ -216,20 +216,88 @@ export function resolveHookFilePath(rawPath: string, baseDir: string): string {
 }
 
 /**
+ * Hook files contributed by **enabled plugins**, set once at agent init.
+ *
+ * Plan 583 phase G2. A plugin's `hooks/hooks.json` uses the same ecosystem
+ * shape as a user hook file and is parsed by the same loader, but until now
+ * nothing fed plugin files in here — the only writer of `[hooks] files` was the
+ * `hooks add` CLI, so plugin-declared hooks were discovered and counted in the
+ * plugin catalog yet never ran. This list is the bridge: the main process
+ * resolves enabled plugins to their install paths and passes the resulting
+ * `hooks/hooks.json` paths in the init command.
+ *
+ * Absolute paths only, and each must already exist — the main process filters,
+ * so a stale or removed plugin contributes nothing rather than a WARN per turn.
+ *
+ * No cache concerns: `readHooksConfig` re-reads every file on each call, so a
+ * hook file edited on disk takes effect on the next turn.
+ */
+let extraHookFiles: readonly string[] = [];
+
+export function setExtraHookFiles(files: readonly string[]): void {
+  extraHookFiles = files.filter((f) => typeof f === 'string' && f.length > 0);
+}
+
+export function getExtraHookFiles(): readonly string[] {
+  return extraHookFiles;
+}
+
+/**
+ * Read every hook file in `files` and return the per-file parse results, in
+ * file order. Shared by the config.toml path and the plugin path so both get
+ * identical unreadable-file and parse-failure handling.
+ */
+function loadHookFileParts(
+  files: readonly string[],
+  disabledSet: ReadonlySet<string>,
+  baseDir: string,
+  readFile: (p: string) => string,
+): Array<HooksSettings | undefined> {
+  const parts: Array<HooksSettings | undefined> = [];
+  for (const entry of files) {
+    const filePath = resolveHookFilePath(entry, baseDir);
+    let body: string;
+    try {
+      body = readFile(filePath);
+    } catch (err) {
+      logger.warn(
+        `[HooksConfig] hook file not readable (skipped): ${filePath} (${err instanceof Error ? err.message : String(err)})`,
+      );
+      continue;
+    }
+    const parsed = parseHooksJsonContent(body, filePath);
+    parts.push(parsed ? filterDisabledHooks(parsed, disabledSet, entry) : undefined);
+  }
+  return parts;
+}
+
+/**
  * Read the `[hooks]` section. Returns undefined when the section is absent,
  * `files` is missing/empty, any referenced file fails to parse, or the
  * section fails validation — hooks are strictly optional and
  * misconfiguration must never break the agent loop (fail-open, per-file
  * WARNs from the loader). NOT cached — each call re-reads config.toml and
  * every hook file so edits apply to the next streamChat (hot reload).
+ *
+ * Plugin-contributed files (see `setExtraHookFiles`) are merged in after the
+ * config.toml ones, so their hooks fire after the user's own for the same
+ * event. They apply even when there is no config.toml at all: a user with no
+ * `[hooks]` section must still get their plugins' hooks.
  */
 export function readHooksConfig(): HooksSettings | undefined {
-  const configPath = path.join(resolveConfigRoot(), 'config.toml');
-  if (!fs.existsSync(configPath)) return undefined;
-  return _readHooksConfigFromRaw(fs.readFileSync(configPath, 'utf-8'), {
-    baseDir: resolveConfigRoot(),
-    readFile: (p) => fs.readFileSync(p, 'utf-8'),
-  });
+  const configRoot = resolveConfigRoot();
+  const configPath = path.join(configRoot, 'config.toml');
+  const raw = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf-8') : '';
+  const readFile = (p: string): string => fs.readFileSync(p, 'utf-8');
+
+  const fromConfig = _readHooksConfigFromRaw(raw, { baseDir: configRoot, readFile });
+  if (extraHookFiles.length === 0) return fromConfig;
+
+  // Plugin hook files are absolute and are not addressable by the
+  // `[hooks] disabled` id scheme, which is keyed on the config.toml entry
+  // string. So they get an empty disabled set rather than a wrong one.
+  const pluginParts = loadHookFileParts(extraHookFiles, new Set(), configRoot, readFile);
+  return mergeHooksSettings([fromConfig, ...pluginParts]);
 }
 
 /**
@@ -272,22 +340,7 @@ export function _readHooksConfigFromRaw(
   const disabledSet = new Set(disabled);
   const baseDir = deps.baseDir ?? resolveConfigRoot();
   const readFile = deps.readFile ?? ((p: string) => fs.readFileSync(p, 'utf-8'));
-  const parts: Array<HooksSettings | undefined> = [];
-  for (const entry of files) {
-    const filePath = resolveHookFilePath(entry, baseDir);
-    let body: string;
-    try {
-      body = readFile(filePath);
-    } catch (err) {
-      logger.warn(
-        `[HooksConfig] hook file not readable (skipped): ${filePath} (${err instanceof Error ? err.message : String(err)})`,
-      );
-      continue;
-    }
-    const parsed = parseHooksJsonContent(body, filePath);
-    parts.push(parsed ? filterDisabledHooks(parsed, disabledSet, entry) : undefined);
-  }
-  return mergeHooksSettings(parts);
+  return mergeHooksSettings(loadHookFileParts(files, disabledSet, baseDir, readFile));
 }
 
 /** Hook-file list schema for the `[hooks]` section. */
