@@ -1,7 +1,7 @@
 'use client';
 
 import { createContext, useState, useEffect, useCallback, type ReactNode } from 'react';
-import { type Locale, type TranslationKey, translate } from '@/i18n';
+import { type Locale, type TranslationKey, translate, setActiveLocale } from '@/i18n';
 import { useSettings } from '@/hooks/useSettings';
 
 export interface I18nContextValue {
@@ -42,6 +42,12 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       translate(locale, key, params),
     [locale],
   );
+
+  // Mirror the locale outside React so stores and the toast queue can
+  // localize without a hook. See `setActiveLocale` in `@/i18n`.
+  useEffect(() => {
+    setActiveLocale(locale);
+  }, [locale]);
 
   return (
     <I18nContext.Provider value={{ locale, setLocale, t, isLoading }}>

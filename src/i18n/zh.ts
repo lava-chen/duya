@@ -1272,6 +1272,34 @@ const zh: Record<TranslationKey, string> = {
   'thread.archiveThread': '归档对话',
   // Plan 549 (Track B): unarchive + archive-time sub-line.
   'thread.unarchiveThread': '取消归档',
+  // Plan 582 (G9)：归档确认。标题点明具体是哪一条，正文说明子 agent 会话
+  // 会一起走，并如实交代「可撤销」与「文件会移动」——这两件事此前在界面上
+  // 完全没有体现。
+  'thread.archiveConfirmTitle': '归档这条对话？',
+  'thread.archiveConfirmBody': '「{title}」将被移入归档区。',
+  'thread.archiveConfirmHint':
+    '可以撤销——点「取消归档」会把对话和文件放回原处。会话文件会被移动到磁盘上的归档目录。',
+  'thread.archiveConfirmWithChildren':
+    '由这条对话派生的 {count} 个子 agent 会话也会一起归档，同样可以撤销。',
+  'thread.archiveConfirmAction': '归档',
+  // Plan 582 (G6)：归档结果 + 撤销。行离开侧边栏之后，用户无从得知这一批
+  // 里到底带走了多少子 agent 会话，所以通知必须说清楚。
+  'thread.archivedToastTitle': '已归档',
+  'thread.archivedToastHint': '「{title}」已移入归档区。',
+  'thread.archivedToastWithChildren': '同时归档了 {count} 个子 agent 会话。',
+  'thread.archivedToastUndo': '撤销',
+  // Plan 582 (G6)：归档区批量操作。
+  'thread.archiveRestoreAll': '全部恢复',
+  'thread.archiveCount': '已归档 {count} 条',
+  'thread.archiveRestoredToast': '已恢复 {count} 条归档对话。',
+  // Plan 582 (G2)：归档被拒时的提示。`session_busy` 通常是**子 agent**
+  // 还在跑——只说「等本轮结束」会把用户引到错误的对话上。
+  'thread.archiveBusyTitle': '会话正在运行，无法归档',
+  'thread.archiveBusyHint': '请等本轮结束后重试。',
+  'thread.archiveBusyChildren': '它的子 agent 会话仍在执行，请等本轮结束后重试。',
+  'thread.archiveMissingTitle': '会话不存在或已被删除',
+  'thread.archiveFailedTitle': '归档失败',
+  'thread.archiveFailedHint': '文件移动未完成，数据保持原样，请重试。',
   'thread.archivedAt': '归档于',
   'thread.exportRollout': '导出会话 Rollout',
   'thread.exportDoneTitle': 'Rollout 已导出',

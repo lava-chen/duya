@@ -46,6 +46,8 @@ import { useSearchPaletteStore } from "@/stores/search-palette-store";
 import { ProjectGroupItem } from "./sidebar/ProjectGroupItem";
 import { ThreadListItem } from "../shared/ThreadListItem";
 import { SidebarSectionItem, type SectionKind } from "./sidebar/SidebarSectionItem";
+import { restoreAllArchivedSessions } from "@/lib/project-actions";
+import { toast } from "@/components/ui/toast";
 import {
   bucketThreadsByKind,
   sortThreadsBy,
@@ -1682,6 +1684,34 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                         <CaretRightIcon size={10} />
                         <span>{t('common.showAll', { count: reveal })}</span>
                       </button>
+                    );
+                  }
+                  // Plan 582 (G6): bulk actions for the archive. The section
+                  // previously offered per-row unarchive only, so clearing a
+                  // 60-session archive meant 60 round trips through the row
+                  // menu. Both actions are the REVERSIBLE direction —
+                  // "clear the archive" restores everything rather than
+                  // deleting, because a label that reads as destructive
+                  // should not be attached to a destructive default.
+                  if (section.id === '__system__:archived' && archivedThreads.length > 0) {
+                    return (
+                      <div className="flex items-center gap-1 px-1 pt-0.5">
+                        <button
+                          type="button"
+                          data-testid="archive-restore-all"
+                          className="sidebar-section-view-all"
+                          onClick={() => {
+                            void restoreAllArchivedSessions().then((n) => {
+                              toast.success(t('thread.archiveRestoredToast', { count: n }));
+                            });
+                          }}
+                        >
+                          {t('thread.archiveRestoreAll')}
+                        </button>
+                        <span className="text-xs" style={{ color: 'var(--muted)' }}>
+                          {t('thread.archiveCount', { count: archivedThreads.length })}
+                        </span>
+                      </div>
                     );
                   }
                   return null;

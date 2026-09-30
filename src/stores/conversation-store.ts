@@ -25,6 +25,9 @@ import {
 } from '@/lib/ipc-client';
 import { getAgentServerClient } from '@/lib/agent-http-client';
 import { toast } from '@/components/ui/toast';
+// Plan 582: stores live outside the React tree, so they cannot use the
+// `useTranslation` hook. `t` reads the locale `I18nProvider` mirrors here.
+import { t } from '@/i18n';
 import { useContextUsageStore } from '@/stores/context-usage-store';
 import { registerLoadedMessages, isSessionBusy } from '@/lib/stream-session-manager';
 import { isPlaceholderThreadId } from '@/components/layout/sidebar/section-system';
@@ -828,7 +831,7 @@ export const useConversationStore = create<ConversationState>()(
           result = await archiveThreadIPC(id);
         } catch (err) {
           console.error('[Store] archiveThread failed', err);
-          toast.error('归档失败', { description: String(err) });
+          toast.error(t('thread.archiveFailedTitle'), { description: String(err) });
           return false;
         }
 
@@ -836,17 +839,17 @@ export const useConversationStore = create<ConversationState>()(
           // Nothing was changed on disk or in SQL, so there is nothing to
           // roll back locally either — just say why.
           if (result.reason === 'session_busy') {
-            toast.warning('会话正在运行，无法归档', {
+            toast.warning(t('thread.archiveBusyTitle'), {
               description:
                 result.blockedId && result.blockedId !== id
-                  ? '它的子 agent 会话仍在执行，请等本轮结束后重试。'
-                  : '请等本轮结束后重试。',
+                  ? t('thread.archiveBusyChildren')
+                  : t('thread.archiveBusyHint'),
             });
           } else if (result.reason === 'not_found') {
-            toast.error('会话不存在或已被删除');
+            toast.error(t('thread.archiveMissingTitle'));
           } else {
-            toast.error('归档失败', {
-              description: '文件移动未完成，数据保持原样，请重试。',
+            toast.error(t('thread.archiveFailedTitle'), {
+              description: t('thread.archiveFailedHint'),
             });
           }
           return false;
@@ -872,6 +875,32 @@ export const useConversationStore = create<ConversationState>()(
         // every archive. Fire-and-forget — a stale cache is less bad than
         // blocking the UI on a sidebar refetch.
         void get().loadArchivedThreads();
+
+        // Plan 582 (G6): offer undo on the way out. Archiving is a batch over
+        // the whole spawn subtree, so "which rows just moved" is a question
+        // the user cannot answer by looking at the sidebar after the fact —
+        // but the backend already told us exactly which ids it committed.
+        const rootTitle = get().threads.find((t) => t.id === id)?.title ?? id;
+        toast({
+          title: t('thread.archivedToastTitle'),
+          description:
+            result.archivedSessionIds.length > 1
+              ? t('thread.archivedToastWithChildren', {
+                  count: result.archivedSessionIds.length - 1,
+                })
+              : t('thread.archivedToastHint', { title: rootTitle }),
+          action: {
+            label: t('thread.archivedToastUndo'),
+            onClick: () => {
+              // Restore the root only. The children ride along on their own
+              // spawn edges, so restoring the root and then the children is
+              // the honest inverse of what archive did.
+              for (const sid of result.archivedSessionIds) {
+                void get().unarchiveThread(sid);
+              }
+            },
+          },
+        });
         return true;
       },
 
