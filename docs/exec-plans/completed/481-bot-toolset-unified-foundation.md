@@ -1,7 +1,7 @@
 # 481 — Bot 工具集统一建档（系列新增工具一次性建立）
 
 > **Status**: Phase 1 + T1 完成 2026-09-03（分支 feat/481-bot-toolset-foundation，PR #38 → recover480）· **Priority**: P0 · **Owner**: TBD
-> **总纲**: [473-grok-bot-framework-overview](./473-grok-bot-framework-overview.md)
+> **总纲**: [473-grok-bot-framework-overview](../active/473-grok-bot-framework-overview.md)
 > **定位**: 473–480 各 plan 中**新增的 agent 工具**在此统一收口：同一批设计 schema、权限默认值、注册方式与测试基建，**一次性建立**，避免每个子 plan 各写一套工具基建。
 > **参考源码**：grok-bot `runner/tools/sand-state-tool.ts`（update_state）、`send-message-tool.ts`；duya 既有约定 `packages/agent/src/tool/<Name>/`（index + prompt.ts + `__tests__/`）、`tool/builtin.ts`、`tool/registry.ts`、plan 419（权限决策总线）、plan 224（AgentProfile 工具集）
 

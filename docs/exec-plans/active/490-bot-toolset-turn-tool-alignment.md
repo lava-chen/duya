@@ -2,7 +2,7 @@
 
 > **Status**: Planning · **Priority**: P0 · **Owner**: TBD
 > **总纲**: [473-grok-bot-framework-overview](./473-grok-bot-framework-overview.md)
-> **前置**: [481-bot-toolset-unified-foundation](./481-bot-toolset-unified-foundation.md) (T1-T6 建档)
+> **前置**: [481-bot-toolset-unified-foundation](../completed/481-bot-toolset-unified-foundation.md) (T1-T6 建档)
 > **对比源码**: `E:\cloned-projects\grok-bot-0.18-reconstructed\source\host\runner\tools\turn-toolset.ts`
 
 > ⚠️ **本 plan 经过完整资产审计后重写**,仅列真正的功能缺口。不再把已有工具误标为缺失。

@@ -3,7 +3,7 @@
 > **Status**: Planning（证据核验完成，分项方案已定，待按建议顺序开工）
 > **Priority**: P0（首项）/ P1（其余）
 > **Created**: 2026-08-17
-> **Related**: [426-hook-loop-bus](../completed/426-hook-loop-bus.md)（hook 运行时底座，已完成）、[87-hook-system-full-enhancement](./87-hook-system-full-enhancement.md)（PreToolUse 其余事件）、[97-tool-path-permission-refactor](./97-tool-path-permission-refactor.md)（沙箱路径约束）、[310-multi-model-reasoning-architecture](./310-multi-model-reasoning-architecture.md)（模型路由）、[37-subagent-nested-session](./37-subagent-nested-session.md)（子代理 UI）、[308-turn-review-history](./308-turn-review-history.md)（per-turn delta，仅展示）、[243-session-search-overhaul](./243-session-search-overhaul.md)（FTS5）
+> **Related**: [426-hook-loop-bus](../completed/426-hook-loop-bus.md)（hook 运行时底座，已完成）、[87-hook-system-full-enhancement](../completed/87-hook-system-full-enhancement.md)（PreToolUse 其余事件）、[97-tool-path-permission-refactor](../completed/97-tool-path-permission-refactor.md)（沙箱路径约束）、[310-multi-model-reasoning-architecture](../completed/310-multi-model-reasoning-architecture.md)（模型路由）、[37-subagent-nested-session](../completed/37-subagent-nested-session.md)（子代理 UI）、[308-turn-review-history](../completed/308-turn-review-history.md)（per-turn delta，仅展示）、[243-session-search-overhaul](../completed/243-session-search-overhaul.md)（FTS5）
 
 ---
 

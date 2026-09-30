@@ -510,7 +510,12 @@ question you're asking.
 
 1. Read AGENTS.md (this file) ← REQUIRED
 2. Check `docs/exec-plans/README.md` for current work status ← REQUIRED
-3. Find relevant active plan or create new one
+   - The **Active Plans** table is the commitment list. Every row states one
+     concrete next action — start from the top. Do not read a plan's own
+     `Status:` header as truth; it goes stale. The index is the source of truth.
+   - `backlog/` is an idea shelf, not a promise. Promoting something out of it
+     means moving the file to `active/` and giving it a next action.
+3. Find the top active plan, or create a new one and give it a next action
 4. Read the plan file to understand current progress
 5. Read ARCHITECTURE.md for technical details
 
@@ -524,9 +529,15 @@ question you're asking.
 ### Complete Task
 
 1. Mark completed checkboxes `[x]` in the plan file
-2. If plan fully done:
-   - Move plan file to `docs/exec-plans/completed/`
-   - Update `docs/exec-plans/README.md` (remove from active, add to completed)
+2. Update `docs/exec-plans/README.md` in the same commit:
+   - Plan fully landed → move the file to `docs/exec-plans/completed/` and drop
+     its Active row (its name joins the matching completed group)
+   - Partially landed but still valid → keep it in `active/` and rewrite its
+     Next action to the new one
+   - Turned out wrong, blocked, or not worth doing → move it to
+     `docs/exec-plans/backlog/` with a one-line reason
+   - Never leave a finished plan in `active/`. Archiving is part of the work,
+     not a later cleanup chore.
 3. If architectural change: update ARCHITECTURE.md
 4. Commit with clear English message
 
@@ -550,7 +561,7 @@ question you're asking.
 | `AGENTS.md`           | This file — main entry point (start here)                   |
 | `ARCHITECTURE.md`     | Architecture, database schema, data flows, module APIs      |
 | `docs/design-docs/`   | Design decisions and core beliefs                           |
-| `docs/exec-plans/`    | Execution plans (active/, completed/, tech-debt-tracker.md) |
+| `docs/exec-plans/`    | Execution plans (`README.md` is the index; `active/`, `backlog/`, `completed/`, `tech-debt-tracker.md`) |
 | `docs/generated/`     | Auto-generated docs                                         |
 | `docs/product-specs/` | Product specifications and onboarding                       |
 

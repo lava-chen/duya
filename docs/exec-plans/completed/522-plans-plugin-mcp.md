@@ -1,5 +1,7 @@
 # Plan 522 — Plans Plugin: MCP 化的执行计划管理
 
+> **SUPERSEDED (2026-10-01 triage)** — superseded by [525-project-entity-and-plan-management](../active/525-project-entity-and-plan-management.md), which asked for this file to be deleted.
+
 > 状态字段以本文件 frontmatter 为准（本 plan 是新存储格式的第一个使用者）。
 
 ## 背景与动机

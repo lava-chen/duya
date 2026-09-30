@@ -1,5 +1,7 @@
 # 415 — duya Workflow 架构方案（独立 run 管理系统）
 
+> **SUPERSEDED (2026-10-01 triage)** — superseded by [552-workflow-rpa-agent-design](./552-workflow-rpa-agent-design.md); its runtime scope is owned by [560-workflow-independent-runtime](../active/560-workflow-independent-runtime.md).
+
 > 状态：设计稿（待评审）
 > 优先级：P1
 > 定位：**独立的后台 run 管理系统**（对齐 grok `xai-grok-shell/src/session/workflow`），

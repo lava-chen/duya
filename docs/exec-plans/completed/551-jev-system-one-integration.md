@@ -5,7 +5,7 @@
 > **Created**: 2026-09-19
 > **技术底稿**: [`docs/references/jev-model-research.md`](../../references/jev-model-research.md)（Jev API 契约、能力边界、jev-browser 25 条设计规则）
 > **参考实现**: [Ying-Kai-Liao/jev-browser](https://github.com/Ying-Kai-Liao/jev-browser)（"LLM plans, Jev decides" 浏览器自动化，40/42 正确 / 0 false-done）、[typesafe-ai/skills](https://github.com/typesafe-ai/skills)（官方编程模型）、[LangChain: Building a Harness with Jev](https://www.langchain.com/blog/building-a-harness-with-jev)
-> **相关 plan**: [454-computer-use-mode](./454-computer-use-mode.md)、[419-permission-decision-bus](./419-permission-decision-bus.md)、[415-workflow-mode-design](./415-workflow-mode-design.md)（终极承接方）、[552-workflow-rpa-agent-design](./552-workflow-rpa-agent-design.md)（415 companion，本 plan Phase 4 的实施归宿）、[519-computer-use-harness-gaps](./519-computer-use-harness-gaps.md)
+> **相关 plan**: [454-computer-use-mode](./454-computer-use-mode.md)、[419-permission-decision-bus](../active/419-permission-decision-bus.md)、[415-workflow-mode-design](./415-workflow-mode-design.md)（终极承接方）、[552-workflow-rpa-agent-design](./552-workflow-rpa-agent-design.md)（415 companion，本 plan Phase 4 的实施归宿）、[519-computer-use-harness-gaps](./519-computer-use-harness-gaps.md)
 > **背景**: duya 的 agent loop / computer-use / workflow（415）里有大量"小判断"（元素选择、状态判断、风险门控、verdict 佐证），目前要么靠 LLM 全量调用（秒级延迟、按生成计费、烧上下文），要么靠硬编码规则（脆）。Jev（TypeSafe，2026-09-16 发布）是首个商用的 "System One 模型"：state + 多问题一次并行请求 → typed 决策 + 校准概率，70–500ms、$0.042/MTok、输出免费。**终端目标：为 415 workflow RPA 的"确定性骨架"补上"感知不确定"缺口——tool 节点内循环由 Jev 做感知/门控，agent 只做规划。本 plan 负责其基础设施。**
 
 ---

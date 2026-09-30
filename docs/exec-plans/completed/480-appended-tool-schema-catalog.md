@@ -1,7 +1,7 @@
 # 480 — 追加式 Tool Schema 目录（Grok 式：tools 数组恒定，schema 走侧信道 + Meta 工具调用）
 
 > **Status**: Planning · **Priority**: P1 · **Owner**: TBD
-> **总纲**: [473-grok-bot-framework-overview](./473-grok-bot-framework-overview.md)
+> **总纲**: [473-grok-bot-framework-overview](../active/473-grok-bot-framework-overview.md)
 > **关联**: plan 241（tool_search 元工具，已完成——但其"动态 schema 注入下一轮全量注入"正是本 plan 要替换的形态）、plan 418（Deferred Tools / tool_reference，Phase 1-5 完成——传输层能力，与本 plan 正交）
 > **参考源码**：grok-bot `source/host/runner/tools/mcp-meta-tools.ts`、`source/packages/agent/tools/mcp/builtin-tools.ts`（`DynamicToolRegistry`）、`turn-toolset.ts:1306-1531`
 >

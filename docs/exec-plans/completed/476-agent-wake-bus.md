@@ -1,7 +1,7 @@
 # 476 — Agent Wake Bus（三车道唤醒调度 + 来源注册表 + 持久化 Rearm + 抢占/Redrive）
 
 > **Status**: Implementation mostly_complete · **Priority**: P0 · **Owner**: TBD
-> **总纲**: [473-grok-bot-framework-overview](./473-grok-bot-framework-overview.md)
+> **总纲**: [473-grok-bot-framework-overview](../active/473-grok-bot-framework-overview.md)
 > **参考源码**：grok-bot `source/host/extensions/transcript/`：`background-wakes.ts`、`completion-revivals.ts`、`pending-wake-rearm.ts`、`sand-pending-wake-store.ts`、`send-turn-dispatch.ts`、`run-scheduler.ts`（三车道）、`roster-projection.ts`、`async-task-union.ts`；`sand-quiet-work-origin.ts`、`sand-multitask.ts`
 >
 > **目标**：把 duya 目前各自为政的唤醒路径（task-notification、cron fire、renderer 消息、未来的 DM/connector inbound/broadcast）收敛到**单一 Wake Bus**：统一来源注册、车道优先级、pending 持久化与重启 rearm、优先级抢占与 redrive、quiet-work 语义。**这是 477/478 的地基。**

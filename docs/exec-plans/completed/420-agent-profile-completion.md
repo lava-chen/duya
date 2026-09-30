@@ -1,5 +1,7 @@
 # 420 Agent Profile 补完计划（UI 管理 + promptProfile 持久化 + 双通道会话绑定收敛）
 
+> **SUPERSEDED (2026-10-01 triage)** — voided verbatim by [424-config-driven-custom-agents](./424-config-driven-custom-agents.md) ("旧 plan 420 … 整篇作废").
+
 > **For agentic workers:** 用 `executing-plans` 逐 task 实现。步骤使用 checkbox（`- [ ]`）追踪。
 > **Status**: Planning
 > **Priority**: P1

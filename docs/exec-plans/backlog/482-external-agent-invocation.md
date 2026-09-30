@@ -2,7 +2,7 @@
 
 > **Status**: Planning · **Priority**: P1 · **Owner**: TBD · **Created**: 2026-09-02
 > **参考源**：`E:/cloned-projects/grok-bot-0.18-reconstructed`（下称 grok-bot）`source/shared/inference-router.ts` + `source/host/extensions/inference/{provider-session,codex-direct-responses}.ts`
-> **定位**：与 [473](./473-grok-bot-framework-overview.md) 系列互补。**473 系列管「duya 自己的 bot 之间怎么互相唤醒与编排」，本 plan 管「duya 怎么把活派给本机已安装的外部 agent」**。473 移植的是 grok-bot 的编排层，本 plan 移植的是它借用外部 agent 执行能力的那一层。
+> **定位**：与 [473](../active/473-grok-bot-framework-overview.md) 系列互补。**473 系列管「duya 自己的 bot 之间怎么互相唤醒与编排」，本 plan 管「duya 怎么把活派给本机已安装的外部 agent」**。473 移植的是 grok-bot 的编排层，本 plan 移植的是它借用外部 agent 执行能力的那一层。
 
 ---
 
@@ -20,9 +20,9 @@
 | 分 provider 记用量 | `sand-inference-router-usage`（requests/tokens/cache/lastUsedAt） | 无 |
 
 **duya 已有的"外部"能力都不是这一件事**：
-- [95-external-agent-import](./95-external-agent-import.md)：**导入** Claude/Codex 的工作区配置与会话（Phase 1/1.5 ✅）—— 数据迁移，不是调用。
-- [424](./424-config-driven-custom-agents.md) / [custom-agent-creation](../superpowers/plans/2026-08-14-custom-agent-creation.md)：用 config.toml 定义 **duya 自己的** agent（读侧+创建层 ✅）—— 内部人格，不是外部引擎。
-- [310](./310-multi-model-reasoning-architecture.md) / [451](./451-multi-protocol-and-wrapper-layer.md)：`packages/ai` 自建 wire-protocol + wrapper 层，用**用户自己的 API key** —— 相当于 grok-bot 的 openrouter 路线，不是"借壳"。
+- [95-external-agent-import](../completed/95-external-agent-import.md)：**导入** Claude/Codex 的工作区配置与会话（Phase 1/1.5 ✅）—— 数据迁移，不是调用。
+- [424](../completed/424-config-driven-custom-agents.md) / [custom-agent-creation](../superpowers/plans/2026-08-14-custom-agent-creation.md)：用 config.toml 定义 **duya 自己的** agent（读侧+创建层 ✅）—— 内部人格，不是外部引擎。
+- [310](../completed/310-multi-model-reasoning-architecture.md) / [451](../active/451-multi-protocol-and-wrapper-layer.md)：`packages/ai` 自建 wire-protocol + wrapper 层，用**用户自己的 API key** —— 相当于 grok-bot 的 openrouter 路线，不是"借壳"。
 
 **一句话缺口**：duya 能自己当 agent、能导入别人的配置、能用自家 key 接各家模型，但**不能"借用"本机已登录的 Claude Code / Codex 等外部 agent 来干活**。
 
@@ -92,7 +92,7 @@ inject_tools = false
 max_turns = 8
 ```
 
-`duya external-agent list/doctor` 子命令负责检测本机可用性与登录状态（对齐 [431-memory-setup](./431-memory-setup-cli-and-skill.md) 的自配置体感）。
+`duya external-agent list/doctor` 子命令负责检测本机可用性与登录状态（对齐 [431-memory-setup](../completed/431-memory-setup-cli-and-skill.md) 的自配置体感）。
 
 ---
 
@@ -124,7 +124,7 @@ max_turns = 8
 
 ### Phase 3：cli-sdk 后端（P1）
 
-- [ ] `cli-sdk/process-supervisor.ts`：spawn + timeout + 优雅中断（SIGTERM → 等待 → SIGKILL）+ 僵尸进程回收 + Windows 进程树处理（复用 [15-bash-worker](./15-bash-worker-implementation.md) 与 BashTool 的既有经验）。
+- [ ] `cli-sdk/process-supervisor.ts`：spawn + timeout + 优雅中断（SIGTERM → 等待 → SIGKILL）+ 僵尸进程回收 + Windows 进程树处理（复用 [15-bash-worker](../completed/15-bash-worker-implementation.md) 与 BashTool 的既有经验）。
 - [ ] `cli-sdk/claude-code.ts`：官方 SDK 驱动，`maxTurns` / `permissionMode` / cwd 约束。
 - [ ] `cli-sdk/acp.ts`（可选，视 P0.3）：ACP / app-server JSON-RPC 客户端，作为与具体 CLI 解耦的第二入口。
 - [ ] 单测：超时中断、异常退出、输出截断、并发上限。
@@ -134,15 +134,15 @@ max_turns = 8
 > grok-bot 靠它把宿主能力喂给 Claude Code。duya 当前**没有 MCP server 能力**，这是本 plan 最大的新增件，因此与主体解耦、默认关闭。
 
 - [ ] `tool-bridge/stdio-server.ts`：最小 MCP server（评估引入 `@modelcontextprotocol/sdk/server` vs 手写 JSON-RPC，以依赖成本为准）。
-- [ ] 暴露白名单工具（默认 Read/Grep/Glob 只读），**写工具默认不暴露**，暴露即走 [419](./419-permission-decision-bus.md) 权限总线。
+- [ ] 暴露白名单工具（默认 Read/Grep/Glob 只读），**写工具默认不暴露**，暴露即走 [419](../active/419-permission-decision-bus.md) 权限总线。
 - [ ] `inject_tools = true` 时才启用，且首次启用需 UI 二次确认。
 - [ ] 单测：协议握手、工具调用往返、越权拒绝。
 
 ### Phase 5：接入与 UI（P1，依赖 Phase 2 或 3）
 
 - [ ] `SubagentTool` 增 external backend：结果写回父会话，transcript 独立落盘（沿用 `session_spawn_edges` 血缘表，见 [332](./completed/332-storage-alignment-improvements.md)）。
-- [ ] 新增 `delegate_to_external` 工具（schema/权限/测试在 [481](./481-bot-toolset-unified-foundation.md) 建档）；权限默认 **ask**（每一次委派都需确认，目标不在 config 白名单则 deny）。
-- [ ] 结果回传接 [476](./476-agent-wake-bus.md) WakeQueue（476 未落地前先复用 [212](./completed/212-subagent-task-notification.md) task-notification）。
+- [ ] 新增 `delegate_to_external` 工具（schema/权限/测试在 [481](../completed/481-bot-toolset-unified-foundation.md) 建档）；权限默认 **ask**（每一次委派都需确认，目标不在 config 白名单则 deny）。
+- [ ] 结果回传接 [476](../completed/476-agent-wake-bus.md) WakeQueue（476 未落地前先复用 [212](./completed/212-subagent-task-notification.md) task-notification）。
 - [ ] UI：委派行（外部 agent 名 + 状态 + 用时）、外部 transcript 折叠、用量徽标；UI 改动按仓库约定用 Playwright MCP 验证。
 - [ ] 用量记录：`external_agent_usage`（requests / input / output / cache / lastUsedAt / agentId），对齐 grok-bot 分 provider 记账。
 
@@ -161,7 +161,7 @@ max_turns = 8
 |---|---|
 | 默认态 | `enabled = false`；未显式配置的外部 agent 一律不可用 |
 | 凭据 | **只读引用，不复制**：不写入 duya `secrets.json`，不落日志，不进 LLM 上下文；读取时校验 0600 + regular file + 非符号链接 |
-| 权限 | 每次委派走 [419](./419-permission-decision-bus.md) 总线，默认 `ask`；目标不在白名单 → `deny` |
+| 权限 | 每次委派走 [419](../active/419-permission-decision-bus.md) 总线，默认 `ask`；目标不在白名单 → `deny` |
 | 工作目录 | 外部进程 cwd 限制在会话 workspace 内，复用 `allowedRoots`（见 [401](./completed/401-memory-curation-tool-foundation.md)） |
 | 工具暴露 | 默认**不注入**任何 duya 工具；注入时默认只读，写工具需显式确认 |
 | 回传内容 | 外部 agent 输出视为**不可信输入**，过 `ContextScanner` 做 prompt-injection 扫描 |
@@ -215,11 +215,11 @@ max_turns = 8
 
 | Plan | 关系 |
 |---|---|
-| [473](./473-grok-bot-framework-overview.md) 系列（474–481） | **互补**：473 管内部 bot 编排，482 管外部 agent 委派；两者共用 476 WakeQueue 与 481 工具建档入口 |
-| [451](./451-multi-protocol-and-wrapper-layer.md) | 边界划分见 D4；482 不碰 `packages/ai` |
-| [95](./95-external-agent-import.md) | 导入 vs 调用，互不重叠 |
-| [424](./424-config-driven-custom-agents.md) / custom-agent-creation | 内部人格定义；482 的外部 agent 不等于自定义 agent profile |
-| [66](./66-async-nonblocking-subagent.md) / [37](./37-subagent-nested-session.md) | 委派结果的异步展示与嵌套会话 UI 可复用 |
+| [473](../active/473-grok-bot-framework-overview.md) 系列（474–481） | **互补**：473 管内部 bot 编排，482 管外部 agent 委派；两者共用 476 WakeQueue 与 481 工具建档入口 |
+| [451](../active/451-multi-protocol-and-wrapper-layer.md) | 边界划分见 D4；482 不碰 `packages/ai` |
+| [95](../completed/95-external-agent-import.md) | 导入 vs 调用，互不重叠 |
+| [424](../completed/424-config-driven-custom-agents.md) / custom-agent-creation | 内部人格定义；482 的外部 agent 不等于自定义 agent profile |
+| [66](../completed/66-async-nonblocking-subagent.md) / [37](../completed/37-subagent-nested-session.md) | 委派结果的异步展示与嵌套会话 UI 可复用 |
 | [212](./completed/212-subagent-task-notification.md) | 476 未落地前的结果回传通道 |
-| [419](./419-permission-decision-bus.md) | 委派与工具暴露的权限唯一入口 |
-| [429](./429-harness-gap-closure.md) | 若有重叠的 harness 缺口项，以 429 的证据核验为准 |
+| [419](../active/419-permission-decision-bus.md) | 委派与工具暴露的权限唯一入口 |
+| [429](../active/429-harness-gap-closure.md) | 若有重叠的 harness 缺口项，以 429 的证据核验为准 |
