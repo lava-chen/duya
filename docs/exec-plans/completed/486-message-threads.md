@@ -1,7 +1,7 @@
 # 486 — 消息 Thread/Fork 分支层（Message Threads：超长 session 内的独立讨论线）
 
 > **Status**: Implementation · **Priority**: P1 · **Owner**: TBD
-> **总纲**: [473-grok-bot-framework-overview](./473-grok-bot-framework-overview.md)
+> **总纲**: [473-grok-bot-framework-overview](../active/473-grok-bot-framework-overview.md)
 > **立项**: 2026-09-02（用户发现 grok 可在 bot 超长 session 内对单条消息开独立 thread——消息三点菜单 "Start a thread"——认为可融入 duya 现有 session 管理；全链路源码核实后**单独立项**，因横跨 message 模型/投影/压缩/UI，放 477 会超载）
 > **参考源码**：grok-bot `shared/transcript-threads.ts`（thread 纯函数）、`host/extensions/transcript/send-thread-stamping.ts`、`send-pipeline.ts`（branched 落盘）、`host/extensions/session/agent-db-schema.ts`（branched 过滤 SQL）、`agent-db.ts`（getThread）、`host/runner/system-prompt.ts:48`（quote 注入）、前端 `workspace/conversation-workspace-controller.ts:184`（fork 提交）、`transcript-card/message-actions.tsx:277`（Start a thread）
 > **前置**: plan 315（append-only MessageTimeline + `parentId` 字段基座——**已存在且未消费**）、424/485（bot 存储）、441（journal）

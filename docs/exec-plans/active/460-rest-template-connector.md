@@ -3,7 +3,7 @@
 > **Status**: Planning
 > **Priority**: P1
 > **Created**: 2026-08-29
-> **依赖**: [455-open-connector-registry](./455-open-connector-registry.md)（**必须先完成** Phase A/B——`AppConnectorId` 品牌类型 + 统一 `AppConnector` 类 + `.app.json` schema；本计划的 REST Template 是统一类 `rest` 绑定的实现）；[449-risk-tier-approval](./449-app-connection-approval-parity.md)（审批分级）；[450-app-connection-codex-alignment](./450-app-connection-codex-alignment.md)（@提及激活 + 目录缓存）
+> **依赖**: [455-open-connector-registry](./455-open-connector-registry.md)（**必须先完成** Phase A/B——`AppConnectorId` 品牌类型 + 统一 `AppConnector` 类 + `.app.json` schema；本计划的 REST Template 是统一类 `rest` 绑定的实现）；[449-risk-tier-approval](../completed/449-app-connection-approval-parity.md)（审批分级）；[450-app-connection-codex-alignment](../completed/450-app-connection-codex-alignment.md)（@提及激活 + 目录缓存）
 > **源码依据**: `E:\cloned-projects\codex` `codex-rs` + `docs/references/codex-deep-dive/17-plugin-marketplace-and-app-connector.md`
 > **校验目标**: Slack（最简 OAuth HTTP provider）→ Microsoft 365 → Google Drive
 
@@ -370,9 +370,9 @@ function interpolate(template: string, ctx: object): string {
 ## 13. 延伸阅读
 
 - [455-open-connector-registry](./455-open-connector-registry.md) — `AppConnectorId` 类型开放 + Remote MCP 声明注册
-- [449-app-connection-approval-parity](./449-app-connection-approval-parity.md) — riskTier 审批分级 + tool_overrides
-- [450-app-connection-codex-alignment](./450-app-connection-codex-alignment.md) — @提及激活 + 目录缓存 + spec 预算
-- [312-app-connection-oauth](./312-app-connection-oauth.md) — OAuth 基础设施
-- [313-first-party-plugin-catalog](./313-first-party-plugin-catalog.md) — bundled plugin catalog
-- [314-global-connector-registry-design-suite](./314-global-connector-registry-design-suite.md) — canonical connectorId
+- [449-app-connection-approval-parity](../completed/449-app-connection-approval-parity.md) — riskTier 审批分级 + tool_overrides
+- [450-app-connection-codex-alignment](../completed/450-app-connection-codex-alignment.md) — @提及激活 + 目录缓存 + spec 预算
+- [312-app-connection-oauth](../completed/312-app-connection-oauth.md) — OAuth 基础设施
+- [313-first-party-plugin-catalog](../completed/313-first-party-plugin-catalog.md) — bundled plugin catalog
+- [314-global-connector-registry-design-suite](../completed/314-global-connector-registry-design-suite.md) — canonical connectorId
 - [docs/references/codex-deep-dive/17-plugin-marketplace-and-app-connector.md](../references/codex-deep-dive/17-plugin-marketplace-and-app-connector.md) — codex 三件套参考

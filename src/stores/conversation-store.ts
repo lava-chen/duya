@@ -555,6 +555,38 @@ function mapIpcMessagesToStore(messages: IpcMessage[]): Message[] {
   }));
 }
 
+/**
+ * Plan 582 (G7): apply a patch to a thread in BOTH the active list and the
+ * archived roster.
+ *
+ * The store keeps `threads` (active) and `archivedThreads` (Plan 549 Track B)
+ * as two separate arrays, but several per-thread actions used to map only
+ * `threads`. For a row living in the archived section that meant the local
+ * state silently diverged from the DB: rename showed no effect, pin left no
+ * visual trace, and delete left the row on screen until some later
+ * archive/unarchive happened to refetch the roster.
+ *
+ * Mapping both arrays keeps the UI truthful regardless of which section the
+ * row is rendered in.
+ */
+function patchThreadLocal(
+  state: { threads: Thread[]; archivedThreads: Thread[] },
+  id: string,
+  patch: (t: Thread) => Thread,
+): Pick<{ threads: Thread[]; archivedThreads: Thread[] }, 'threads' | 'archivedThreads'> {
+  const apply = (list: Thread[]) => list.map((t) => (t.id === id ? patch(t) : t));
+  return { threads: apply(state.threads), archivedThreads: apply(state.archivedThreads) };
+}
+
+/**
+ * Plan 582 (G7): look a thread up in either roster. Actions that persist to
+ * the DB used to read `threads` only, so a rename on an archived row updated
+ * local state but skipped the DB write entirely.
+ */
+function findThreadLocal(state: { threads: Thread[]; archivedThreads: Thread[] }, id: string): Thread | undefined {
+  return state.threads.find((t) => t.id === id) ?? state.archivedThreads.find((t) => t.id === id);
+}
+
 export const useConversationStore = create<ConversationState>()(
   persist(
     (set, get) => ({
@@ -742,6 +774,10 @@ export const useConversationStore = create<ConversationState>()(
         set((state) => {
           const { [id]: _, ...remainingMessages } = state.messages;
           const newThreads = state.threads.filter((t) => t.id !== id);
+          // Plan 582 (G7): the archived roster is a second array — deleting
+          // an archived row used to leave it on screen until some later
+          // archive/unarchive happened to refetch the roster.
+          const newArchived = state.archivedThreads.filter((t) => t.id !== id);
           const newActiveId =
             state.activeThreadId === id
               ? newThreads[0]?.id ?? null
@@ -749,6 +785,7 @@ export const useConversationStore = create<ConversationState>()(
 
           return {
             threads: newThreads,
+            archivedThreads: newArchived,
             activeThreadId: newActiveId,
             messages: remainingMessages,
           };
@@ -758,6 +795,9 @@ export const useConversationStore = create<ConversationState>()(
         deleteThreadIPC(id)
           .then(() => {
             notifyThreadsChanged();
+            // Plan 582 (G7): keep the archived-section roster fresh so a
+            // deletion made from anywhere is reflected in both sections.
+            void get().loadArchivedThreads();
           })
           .catch(console.error);
       },
@@ -837,6 +877,17 @@ export const useConversationStore = create<ConversationState>()(
         let thread = get().threads.find(t => t.id === id);
         console.log('[Store] Found in local threads:', !!thread, 'parentId:', thread?.parentId);
 
+        // Plan 582 (G5): a thread that lives in the archived roster must
+        // never be promoted into `threads`. `db:session:list` excludes
+        // archived rows (session-store: `status NOT IN ('deleted','archived')`),
+        // so anything we injected here would fall out of `dbThreadIds` and
+        // be re-accepted by the pending-merge below on every refetch — the
+        // row would sit in the active sidebar until an app restart.
+        // The archived copy is the authoritative one; reuse it read-only.
+        if (!thread) {
+          thread = get().archivedThreads.find((t) => t.id === id);
+        }
+
         // If thread not in local state, try to fetch from DB
         if (!thread) {
           console.log('[Store] Thread not in local, fetching from DB...');
@@ -846,10 +897,21 @@ export const useConversationStore = create<ConversationState>()(
             if (result) {
               thread = result.thread;
               console.log('[Store] Fetched thread parentId:', thread.parentId);
-              // Add to local threads
-              set((state) => ({
-                threads: [result.thread, ...state.threads.filter(t => t.id !== id)]
-              }));
+              // Plan 582 (G5): only promote non-archived rows into the
+              // active list. An archived row is routed to the archived
+              // roster instead of the active sidebar.
+              if (result.thread.archivedAt != null) {
+                set((state) => ({
+                  archivedThreads: [
+                    result.thread,
+                    ...state.archivedThreads.filter((t) => t.id !== id),
+                  ],
+                }));
+              } else {
+                set((state) => ({
+                  threads: [result.thread, ...state.threads.filter(t => t.id !== id)]
+                }));
+              }
             }
           } catch (err) {
             console.error('[Store] Failed to fetch thread from DB:', err);
@@ -1122,14 +1184,14 @@ export const useConversationStore = create<ConversationState>()(
       },
 
       updateThreadTitle: (id, title) => {
-        set((state) => ({
-          threads: state.threads.map((t) =>
-            t.id === id ? { ...t, title, updatedAt: Date.now() } : t
-          ),
-        }));
+        // Plan 582 (G7): patch both rosters, otherwise an archived row's
+        // rename is a visual no-op.
+        set((state) => patchThreadLocal(state, id, (t) => ({ ...t, title, updatedAt: Date.now() })));
 
-        // Sync title update to database using updateThreadIPC
-        const thread = get().threads.find((t) => t.id === id);
+        // Sync title update to database using updateThreadIPC.
+        // Plan 582 (G7): look the thread up in either roster — reading
+        // `threads` only meant an archived row never reached the DB.
+        const thread = findThreadLocal(get(), id);
         if (thread) {
           get().syncThreadTitleToDatabase(id, title);
         }
@@ -1223,11 +1285,11 @@ export const useConversationStore = create<ConversationState>()(
       },
 
       setThreadPinned: (id, pinned) => {
-        set((state) => ({
-          threads: state.threads.map((t) =>
-            t.id === id ? { ...t, pinned: pinned ? 1 : 0 } : t
-          ),
-        }));
+        // Plan 582 (G7): patch both rosters so pinning an archived row
+        // actually shows up.
+        set((state) =>
+          patchThreadLocal(state, id, (t) => ({ ...t, pinned: pinned ? 1 : 0 }))
+        );
         // Persist to sessions.extensions.pinned via the dedicated IPC.
         // Fire-and-forget — the local state update is optimistic; a failure
         // here only means the pin won't survive a restart, which is an
@@ -1236,11 +1298,9 @@ export const useConversationStore = create<ConversationState>()(
           window.electronAPI.session.setPinned(id, pinned).catch((err) => {
             console.error('[Store] Failed to persist pinned state:', err);
             // Revert local state on failure so the UI stays truthful.
-            set((state) => ({
-              threads: state.threads.map((t) =>
-                t.id === id ? { ...t, pinned: pinned ? 0 : 1 } : t
-              ),
-            }));
+            set((state) =>
+              patchThreadLocal(state, id, (t) => ({ ...t, pinned: pinned ? 0 : 1 }))
+            );
           });
         }
       },
@@ -1344,7 +1404,14 @@ export const useConversationStore = create<ConversationState>()(
           const dbThreadIds = new Set(filteredThreads.map((t) => t.id));
 
           // Keep local threads that don't exist in DB yet (pending sync)
-          const pendingThreads = existingThreads.filter(t => !dbThreadIds.has(t.id));
+          // Plan 582 (G5): `db:session:list` never returns archived rows, so
+          // an archived session sitting in `threads` would always miss
+          // `dbThreadIds` and be re-accepted here on every refetch — the row
+          // would persist in the active sidebar until an app restart. Drop
+          // it from the active list; the archived roster is its home.
+          const pendingThreads = existingThreads.filter(
+            (t) => !dbThreadIds.has(t.id) && t.archivedAt == null
+          );
 
           // Detect new child threads from DB
           const newChildParentIds: string[] = [];

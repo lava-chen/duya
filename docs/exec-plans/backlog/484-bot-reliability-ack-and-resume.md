@@ -1,7 +1,7 @@
 # 484 — Bot 可靠性兜底（ack 义务投递确认 + Run 级中断续跑）
 
 > **Status**: Planning · **Priority**: P0 · **Owner**: TBD
-> **总纲**: [473-grok-bot-framework-overview](./473-grok-bot-framework-overview.md)
+> **总纲**: [473-grok-bot-framework-overview](../active/473-grok-bot-framework-overview.md)
 > **立项**: 2026-09-02（473 系列完整性审计新增——全量对照 grok-bot host 侧 13 功能簇后，确认两块**可靠性底线**空白：C4 ack 义务、C6 断点交接/升级恢复）
 > **前置**: plan 476（WakeQueue + 锁接线 + quiet 语义）、441（事件级 journal，若复用其落盘）
 > **参考源码**：grok-bot `source/host/extensions/transcript/ack-obligations.ts`、`sand-ack-obligation-store.ts`、`channel-delivery-unregistered-error.ts`；`source/host/extensions/transcript/upgrade-recreate-resume.ts`、`sand-upgrade-resume-store.ts`、`box-handoff-resume.ts`

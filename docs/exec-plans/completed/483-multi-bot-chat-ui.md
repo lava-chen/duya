@@ -1,9 +1,11 @@
 # 483 — 多 Bot 聊天 UI（侧栏 Bots 分组 + 类 Telegram 聊天 + Bot 资料/设置）
 
+> **SUPERSEDED (2026-10-01 triage)** — the unlanded phases (Phase 0 / 2 / 3) were absorbed by [489-bot-chat-dataflow-and-complete-cards](../active/489-bot-chat-dataflow-and-complete-cards.md).
+
 > **Status**: Implementation · **Priority**: P1 · **Owner**: TBD
 > **Phase 1 基础已落地（2026-09-03）**：P1.1/P1.2/P1.3 基础版完成（18 新单测 + typecheck:all 绿）。数据源用 `[agents.*]` config（plan 424 的 `config:agents:list` IPC）替代未落地的 477 绑定映射；477 绑定线程（`bot:<agentId>:<sessionId>`）出现后自动并接（`buildBotContacts` 已写好合并逻辑）。见文末决策日志。
 > **P2.1 聊天壳（bot-direct 视图）已落地（2026-09-03）**；P0（roster 增量）/ P2.2 卡族 / P2.3-P2.6 / P3 数据流与卡族部分**移交 489**（`489-bot-chat-dataflow-and-complete-cards.md`）。489 已完成 P0.1/P0.3（数据层 source 投影 + 订阅切换）+ P2.2 最小版（SendMessage 5 kind 可读卡），本 plan 后续直接从 489 承接。
-> **总纲**: [473-grok-bot-framework-overview](./473-grok-bot-framework-overview.md)
+> **总纲**: [473-grok-bot-framework-overview](../active/473-grok-bot-framework-overview.md)
 > **前置**: 476（Wake Bus Phase 0 先行——UI 的 typing/busy 指示依赖锁接线）、477（per-bot 常驻会话，bot 聊天 = 该 bot 专属 session 的读视图）、478（群聊 transcript，群联系人点开 = 群房间流）
 > **参考源码**：grok-bot（shipped renderer 语义：SendMessage is the only voice / reactions / plugin mention 卡片）；`roster-emit.ts`/`roster-projection.ts`/`replica-writer.ts`（P0 增量订阅）、`widget-responses.ts`/`workflow-commands.ts`（P2.5 卡闭环与 @ 展开）、`agent-lifecycle.ts`（P2.6 successor）；duya `src/components/`（下表）
 >
@@ -204,7 +206,7 @@ vision provider 恢复可用后对实现截图与标准截图正面对审，两�
   2. `partialize` 把 placeholder 原样写进 localStorage，下次启动 hydrate 后被同一清理再次清掉——重启体验丢失。
 - 这两条路径是 09-03 决策时未考虑到的：当时只假设了占位 id 是 "in-memory 状态"，没意识到它会经 store 持久化层 + DB 同步层各被击一次。
 
-**修复归位**：挂在本 plan 之外、由 [491 P2.5](./491-bot-chat-messaging-feel.md#phase-25--bot-新建后跳转回归修复bugfix独立于-p2-打磨) 落地。
+**修复归位**：挂在本 plan 之外、由 [491 P2.5](../active/491-bot-chat-messaging-feel.md#phase-25--bot-新建后跳转回归修复bugfix独立于-p2-打磨) 落地。
 - **D1 partialize**：新增 `isPlaceholderBotThreadId(id)` 与 `partializeConversationState(state)` 纯函数；persist middleware 的 partialize 委托前者。占位 id 持久化为 null。
 - **D2 cleanup 白名单**：`loadFromDatabase` 的 orphan-cleanup 分支遇到 placeholder 跳过清除。
 - **C fast-path**：`app-sidebar.tsx` 新增 `handleOpenBotById(agentId)`，`CreateBotDialog.onCreated` 改为先跳转再 `await reloadBots()`。

@@ -9,7 +9,7 @@
 >
 > **总纲**: [473-grok-bot-framework-overview](./473-grok-bot-framework-overview.md)
 > **前置 / 平行**: 476（Wake Bus）+ 477（per-bot 常驻会话）+ 478（群聊）+ 481（工具集统一建档）+ 484（ack 与续跑）+ 486（消息 thread 分支）+ 488（Channel 接入）
-> **承接**: [483-multi-bot-chat-ui](./483-multi-bot-chat-ui.md) Phase 0/2/3 未落地部分
+> **承接**: [483-multi-bot-chat-ui](../completed/483-multi-bot-chat-ui.md) Phase 0/2/3 未落地部分
 > **参考源码**: `E:/cloned-projects/grok-bot-0.18-reconstructed/frontend/src/recovered/features/conversation/workspace/transcript.tsx` + `chat-header.tsx` + `composer.tsx` + `cards/transcript-card/*`（卡族）+ `reaction-actions.ts`（reactToMessage）+ `widget-responses.ts`（host 闭环）+ `workflow-commands.ts`（@mention 展开）+ `roster-emit.ts`/`roster-projection.ts`/`replica-writer.ts`（roster 增量）
 
 ---
@@ -433,27 +433,27 @@ BotDirectChatView
 ## 10. 交叉引用
 
 - **总纲**:[473-grok-bot-framework-overview](./473-grok-bot-framework-overview.md)
-- **承接**:[483-multi-bot-chat-ui](./483-multi-bot-chat-ui.md) Phase 0/2/3
+- **承接**:[483-multi-bot-chat-ui](../completed/483-multi-bot-chat-ui.md) Phase 0/2/3
 - **平行的 bot 系列**:
-  - [476-agent-wake-bus](./476-agent-wake-bus.md)(P2.5 派发 hidden run 依赖)
-  - [477-agent-dm-messaging](./477-agent-dm-messaging.md)(P3.1 Bindings tab 数据源)
+  - [476-agent-wake-bus](../completed/476-agent-wake-bus.md)(P2.5 派发 hidden run 依赖)
+  - [477-agent-dm-messaging](../completed/477-agent-dm-messaging.md)(P3.1 Bindings tab 数据源)
   - [478-shared-rooms-group-chat](./478-shared-rooms-group-chat.md)(RoomRoundMark / RoomPassNote / @mention 数据源)
   - [479-bot-memory-isolation-tiers](./479-bot-memory-isolation-tiers.md)(P3.1 Memory tab 数据源)
-  - [481-bot-toolset-unified-foundation](./481-bot-toolset-unified-foundation.md)(SendMessage 已在白名单)
-  - [484-bot-reliability-ack-and-resume](./484-bot-reliability-ack-and-resume.md)(SendMessage ack 与续跑判定)
+  - [481-bot-toolset-unified-foundation](../completed/481-bot-toolset-unified-foundation.md)(SendMessage 已在白名单)
+  - [484-bot-reliability-ack-and-resume](../backlog/484-bot-reliability-ack-and-resume.md)(SendMessage ack 与续跑判定)
   - [485-bot-storage-layout](./485-bot-storage-layout.md)(profile.json 身份层 + P3.2 外观写)
-  - [486-message-threads](./486-message-threads.md)(P2.2 reply_to 字段已支持)
-  - [487-host-persistent-tool-permission](./487-host-persistent-tool-permission.md)(P2.5 secret 卡 + permission 卡复用)
+  - [486-message-threads](../completed/486-message-threads.md)(P2.2 reply_to 字段已支持)
+  - [487-host-persistent-tool-permission](../completed/487-host-persistent-tool-permission.md)(P2.5 secret 卡 + permission 卡复用)
   - [488-bot-channel-integration](./488-bot-channel-integration.md)(P2.5 outbound channel 走 channelDb.deliver 已就)
 - **平行的非 bot 系列**:
   - [419-permission-decision-bus](./419-permission-decision-bus.md)(P2.5 permission 卡过期 + userMessageEpoch 衔接)
-  - [437-hook-row-in-message-flow](./437-hook-row-in-message-flow.md)(P2.2 复用 hook row 通道)
-  - [441-event-granularity-journal](./441-event-granularity-journal.md)(journal 与 message 边界)
-  - [326-core-db-rollout-foundation](./326-core-db-rollout-foundation.md) / [328-core-db-electron-wiring](./328-core-db-electron-wiring.md)(MessageLog.project 接口稳定)
-  - [314-tool-catalog-snapshot](./314-tool-catalog-snapshot.md)(SendMessage tool_schema 文档化)
-  - [202-agent-mailbox](./202-agent-mailbox.md)(P1.3 未读角标数据源)
-  - [309-button-unification](./309-button-unification.md)(P3.2 设置页 Button 统一)
-  - [308-turn-review-history](./308-turn-review-history.md)(BotProfileCard Activity tab 可借用 turn review DTO)
-  - [471-sidebar-section-refactor](./471-sidebar-section-refactor.md)(Bots section 复用机制)
+  - [437-hook-row-in-message-flow](../completed/437-hook-row-in-message-flow.md)(P2.2 复用 hook row 通道)
+  - plan 441 event-granularity journal (file no longer exists; the mechanism landed in agent-core _pushDurable)(journal 与 message 边界)
+  - [326-core-db-rollout-foundation](../completed/326-core-db-rollout-foundation.md) / [328-core-db-electron-wiring](../completed/328-core-db-electron-wiring.md)(MessageLog.project 接口稳定)
+  - [314-tool-catalog-snapshot](../completed/314-tool-catalog-snapshot.md)(SendMessage tool_schema 文档化)
+  - [202-agent-mailbox](../completed/202-agent-mailbox.md)(P1.3 未读角标数据源)
+  - [309-button-unification](../backlog/309-button-unification.md)(P3.2 设置页 Button 统一)
+  - [308-turn-review-history](../completed/308-turn-review-history.md)(BotProfileCard Activity tab 可借用 turn review DTO)
+  - [471-sidebar-section-refactor](../completed/471-sidebar-section-refactor.md)(Bots section 复用机制)
   - [2026-08-14-custom-agent-creation](../superpowers/plans/2026-08-14-custom-agent-creation.md)(P2.6 创建时挂 `isKickstartRequested=true`)
 - **原始源码参考**:`E:/cloned-projects/grok-bot-0.18-reconstructed/frontend/src/recovered/features/conversation/workspace/transcript.tsx` + `chat-header.tsx` + `composer.tsx` + `cards/transcript-card/*` + `reaction-actions.ts` + `widget-responses.ts` + `workflow-commands.ts` + `roster-emit.ts` + `roster-projection.ts` + `replica-writer.ts`

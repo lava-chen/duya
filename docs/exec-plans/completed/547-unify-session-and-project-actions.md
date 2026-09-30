@@ -6,12 +6,12 @@
 > actually deletes only the sessions under the project (it leaves the project entity in place).
 >
 > **Sibling plans**:
-> - [535-project-menus-use-dropdownmenu](./535-project-menus-use-dropdownmenu.md) — visual-equivalent port of the three hand-rolled
+> - [535-project-menus-use-dropdownmenu](../active/535-project-menus-use-dropdownmenu.md) — visual-equivalent port of the three hand-rolled
 >   project menus onto the shared `DropdownMenu`. Already Phase 1 / 2 + part of Phase 3 on master. Plan 547 is the *behavioral* twin of
 >   535: same surface area, but fixes what each menu item actually does, not how it looks.
 > - [506-rollout-as-first-class-data](./506-rollout-as-first-class-data.md) — landed the session-archive (`archiveThread`) primitive.
 >   Plan 547 reuses that primitive everywhere; no new IPC.
-> - [525-project-entity-and-plan-management](./525-project-entity-and-plan-management.md) — `ProjectEntity` schema. Plan 547 consumes
+> - [525-project-entity-and-plan-management](../active/525-project-entity-and-plan-management.md) — `ProjectEntity` schema. Plan 547 consumes
 >   it but does not modify it.
 > - [233-conductor-multi-canvas-management](./233-conductor-multi-canvas-management.md) — pattern reference for "every surface calls
 >   the same store action" alignment.

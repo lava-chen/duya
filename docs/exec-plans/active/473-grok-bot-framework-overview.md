@@ -112,20 +112,20 @@
 |---|---|---|---|
 | [474-bot-system-prompt-sections](./474-bot-system-prompt-sections.md) | bot 系统提示词层（人格 section + 身份信封 + 预算 + **双键冻结快照**：内容哈希 + summaryEpoch） | P0 | 485（profile.json 身份源） |
 | [475-bot-compaction-increment](./475-bot-compaction-increment.md) | 压缩增量：422 收口 + bot 场景重注入 + per-bot compact 配置 + **压缩后处理链（A2–A6）** | P1 | 474、476 |
-| [476-agent-wake-bus](./476-agent-wake-bus.md) | 唤醒总线：三车道 + wake 来源注册表 + pending 持久化/rearm + 抢占/redrive + **turn_epoch 回合活性（§2.6）** + quiet-work | P0 | 无（系列地基） |
-| [477-agent-dm-messaging](./477-agent-dm-messaging.md) | bot→bot DM：envelope + SendToAgent 工具 + 防回环 + per-bot 常驻绑定 | P0 | 476、485（state/session-binding 落点） |
+| [476-agent-wake-bus](../completed/476-agent-wake-bus.md) | 唤醒总线：三车道 + wake 来源注册表 + pending 持久化/rearm + 抢占/redrive + **turn_epoch 回合活性（§2.6）** + quiet-work | P0 | 无（系列地基） |
+| [477-agent-dm-messaging](../completed/477-agent-dm-messaging.md) | bot→bot DM：envelope + SendToAgent 工具 + 防回环 + per-bot 常驻绑定 | P0 | 476、485（state/session-binding 落点） |
 | [478-shared-rooms-group-chat](./478-shared-rooms-group-chat.md) | 群聊：group 模型 + 轮次编排 + @mention + 群 transcript | P1 | 477 |
 | [479-bot-memory-isolation-tiers](./479-bot-memory-isolation-tiers.md) | 记忆隔离层：Grok 式三层（Own/User/Project）+ 单写者 shard + via 溯源 + 三层注入（独立 section/预算/优先级 own>project>user）+ **双键冻结快照** | P0 | 474、485（memory/ 落点） |
-| [480-appended-tool-schema-catalog](./480-appended-tool-schema-catalog.md) | 追加式 Tool Schema 目录：tools 数组恒定 + 稳定排序 catalog 侧信道 + 恒定 meta 工具（tool_schema/tool_invoke）+ 收编 241 注入路径 | P1 | 418（能力声明）、474（section 通道） |
-| [481-bot-toolset-unified-foundation](./481-bot-toolset-unified-foundation.md) | 系列新增工具统一建档：update_state（**含 profile.set/avatar.set**）/ SendToAgent / PostToRoom / tool_schema / tool_invoke / background_tasks 一次性建立 + 测试基建 + 权限矩阵 | P0 | 各归属 plan、485（executor 底层） |
-| [483-multi-bot-chat-ui](./483-multi-bot-chat-ui.md) | 多 Bot 聊天 UI：侧栏 Bots 分组（与 Projects 平级）+ 类 Telegram 联系人聊天 + Bot 资料卡 + Bots/群组设置（前端收口层） | P1 | 476、477、485（roster/avatar 数据源）、488（channel 配置 UI） |
-| [484-bot-reliability-ack-and-resume](./484-bot-reliability-ack-and-resume.md) | **可靠性兜底**：ack 义务投递确认（C4）+ run 级中断续跑/升级恢复（C6） | P0 | 476、485（state/ 落点） |
+| [480-appended-tool-schema-catalog](../completed/480-appended-tool-schema-catalog.md) | 追加式 Tool Schema 目录：tools 数组恒定 + 稳定排序 catalog 侧信道 + 恒定 meta 工具（tool_schema/tool_invoke）+ 收编 241 注入路径 | P1 | 418（能力声明）、474（section 通道） |
+| [481-bot-toolset-unified-foundation](../completed/481-bot-toolset-unified-foundation.md) | 系列新增工具统一建档：update_state（**含 profile.set/avatar.set**）/ SendToAgent / PostToRoom / tool_schema / tool_invoke / background_tasks 一次性建立 + 测试基建 + 权限矩阵 | P0 | 各归属 plan、485（executor 底层） |
+| [483-multi-bot-chat-ui](../completed/483-multi-bot-chat-ui.md) | 多 Bot 聊天 UI：侧栏 Bots 分组（与 Projects 平级）+ 类 Telegram 联系人聊天 + Bot 资料卡 + Bots/群组设置（前端收口层） | P1 | 476、477、485（roster/avatar 数据源）、488（channel 配置 UI） |
+| [484-bot-reliability-ack-and-resume](../backlog/484-bot-reliability-ack-and-resume.md) | **可靠性兜底**：ack 义务投递确认（C4）+ run 级中断续跑/升级恢复（C6） | P0 | 476、485（state/ 落点） |
 | [485-bot-storage-layout](./485-bot-storage-layout.md) | **存储布局**：config.toml 声明层 + agents/<id>/ 身份目录（profile.json 含 title/settings/avatar）+ agentId 约束 + ~/.duya 规划 | P0 | 424（[agents.<id>] 读侧） |
-| [486-message-threads](./486-message-threads.md) | **消息 thread/fork 分支层**：同一 timeline 内分支（replyToId+branched）→ 主投影过滤 + thread 聚合读 + quote 注入 + 压缩不占主窗口 + UI "Start a thread"（483 承接） | P1 | 315（parentId 基座）、483（UI） |
-| [487-host-persistent-tool-permission](./487-host-persistent-tool-permission.md) | Host 持久化工具权限 | P1 | 481 |
+| [486-message-threads](../completed/486-message-threads.md) | **消息 thread/fork 分支层**：同一 timeline 内分支（replyToId+branched）→ 主投影过滤 + thread 聚合读 + quote 注入 + 压缩不占主窗口 + UI "Start a thread"（483 承接） | P1 | 315（parentId 基座）、483（UI） |
+| [487-host-persistent-tool-permission](../completed/487-host-persistent-tool-permission.md) | Host 持久化工具权限 | P1 | 481 |
 | [488-bot-channel-integration](./488-bot-channel-integration.md) | **Bot Channel 接入**：外部消息平台绑定（Discord/Slack）+ `[inbound]` 唤醒 + 出站发送 + reaction + secret-request | P1 | 485（agents/<id>/channels/ + connector-secrets/）、476（connector.inbound wake source）、474（botChannels section）、481（SendMessage channel 字段 + update_state channel.disconnect） |
 
-> **旁支（同参考源，非本系列子 plan）**：[482-external-agent-invocation](./482-external-agent-invocation.md) —— 移植 grok-bot 的另一半能力：调用**外部 agent**（Claude Code / Codex）。本系列管「duya 自己的 bot 如何互相唤醒与编排」，482 管「duya 如何把活派给本机已安装的外部 agent」；两者共用 476 的 WakeQueue 与 481 的工具建档入口。
+> **旁支（同参考源，非本系列子 plan）**：[482-external-agent-invocation](../backlog/482-external-agent-invocation.md) —— 移植 grok-bot 的另一半能力：调用**外部 agent**（Claude Code / Codex）。本系列管「duya 自己的 bot 如何互相唤醒与编排」，482 管「duya 如何把活派给本机已安装的外部 agent」；两者共用 476 的 WakeQueue 与 481 的工具建档入口。
 
 ---
 
@@ -198,7 +198,7 @@
 
 | 簇 | grok 模块 | 判定 | 处置 |
 |---|---|---|---|
-| C4 ack 义务 | `ack-obligations.ts` + `sand-ack-obligation-store.ts`（用户消息必须被可见确认；5s idle redrive ≤3 次 + ackRunTokens 归属） | **空白** | **新立 [484](./484-bot-reliability-ack-and-resume.md)**（Phase 1） |
+| C4 ack 义务 | `ack-obligations.ts` + `sand-ack-obligation-store.ts`（用户消息必须被可见确认；5s idle redrive ≤3 次 + ackRunTokens 归属） | **空白** | **新立 [484](../backlog/484-bot-reliability-ack-and-resume.md)**（Phase 1） |
 | C6 断点交接/升级恢复 | `upgrade-recreate-resume.ts` + `sand-upgrade-resume-store.ts`（quiesce→marker→重启 hidden 续跑，automation 带 runId） | **空白**（476 P3 rearm ≠ run 续跑） | **484**（Phase 2） |
 | C11 widget 卡闭环 + @展开 | `widget-responses.ts`（提问补问/secret 提交/权限卡过期/reactToMessage）+ `workflow-commands.ts`（@agent/@workflow 展开） | **空白**（481 只建档工具无卡宿主侧） | **并入 483**（新增 Phase 2.5 前置；@mention 展开为 478 依赖） |
 | C12 client-side-tool-v2 | IDE 原生工具执行流投影（call/result/epoch/sequence/replay） | 无 IDE 宿主 → 大概率不需要 | **方向性结论见下**（不移植，480 不覆盖它） |
@@ -237,4 +237,4 @@
 
 **核心结论**：grok 的 thread **不是新会话，是同一 transcript 的分支层**——bot 超长 session 不分裂；branched 不进主投影 → 不进主模型上下文（压缩免疫）；thread 视图 = root + threadDescendants 的独立读。**duya 的 315 `parentId` 字段已定义但全为 null 未消费——是低成本的直接移植**，且天然契合 duya session 串行架构。
 
-**执行登记**：新立 [486](./486-message-threads.md)（P1），已入 §3 依赖图与索引表。依赖关系：315（基座）→ 486（模型/投影/压缩）→ 483（UI）；477 envelope replyTo 与 486 字段同源，实施互引；478 群 transcript 暂不接 branched。
+**执行登记**：新立 [486](../completed/486-message-threads.md)（P1），已入 §3 依赖图与索引表。依赖关系：315（基座）→ 486（模型/投影/压缩）→ 483（UI）；477 envelope replyTo 与 486 字段同源，实施互引；478 群 transcript 暂不接 branched。

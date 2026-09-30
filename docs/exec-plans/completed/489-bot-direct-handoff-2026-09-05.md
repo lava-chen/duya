@@ -1,5 +1,7 @@
 # 489 交接提示词 — BotDirectChat 数据流 + 最小卡族（2026-09-05 会话产出）
 
+> **SUPERSEDED (2026-10-01 triage)** — handoff scratchpad; its T1–T7 output was folded into [489-bot-chat-dataflow-and-complete-cards](../active/489-bot-chat-dataflow-and-complete-cards.md).
+
 > 用途：把 2026-09-05 这轮会话的**已落地成果 + 剩余任务**打包成可直接交给下一个 agent 的提示词。
 > 用法：把 §1 的提示词整段贴给新会话，§2–§5 作为它随时可查的事实底座（含精确文件行号）。
 

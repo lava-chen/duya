@@ -1,7 +1,7 @@
 # 477 — Bot→Bot DM 通讯（Agent Envelope + SendToAgent + 防回环 + Per-Bot 常驻绑定）
 
 > **Status**: Implementation · **Priority**: P0 · **Owner**: TBD
-> **总纲**: [473-grok-bot-framework-overview](./473-grok-bot-framework-overview.md)
+> **总纲**: [473-grok-bot-framework-overview](../active/473-grok-bot-framework-overview.md)
 > **前置**: plan 476（Wake Bus——DM 是 `agent.dm` source）
 > **参考源码**：grok-bot `source/host/extensions/transcript/agent-to-agent-messaging.ts`、`source/host/agents/agent-messaging.ts`、`send-turn-dispatch.ts`、`send-message-shaping.ts`、`send-acceptance.ts`、`prompt-acceptance-ledger.ts`（§2.5）；duya `electron/agents/server/interagent-router.ts`（CycleDetector 可复用）
 >

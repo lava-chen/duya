@@ -17,6 +17,7 @@ import { getLogger, LogComponent } from '../logging/logger';
 import { setBrowserMaxTabs } from '../services/browser/daemon';
 import { getCoreStores } from '../db/core-connection';
 import {
+  archivedDirFor,
   resolveArchivedPath,
   resolveUnarchivedPath,
 } from '../db/core/archive-paths';
@@ -226,6 +227,80 @@ function isPathInside(candidate: string, dir: string): boolean {
  */
 function getNextZIndex(canvasId: string, minZ = 1): number {
   return Math.max(getMaxZIndex(canvasId) + 1, minZ);
+}
+
+/**
+ * Plan 582 (G1): undo a partially-completed rollout file move.
+ *
+ * Archive/unarchive move a *batch* of files, and a later failure would
+ * otherwise strand the earlier ones. This mirrors codex's
+ * `restore_rollout_moves` (`thread-store/src/local/archive_thread.rs`): a
+ * hand-rolled compensating transaction with no dependency on a real one.
+ *
+ * Entries are undone newest-first, mirroring the order they were applied.
+ * Best-effort per entry: a file that cannot be moved back is logged and the
+ * rollback continues, because abandoning the rest would strand more data
+ * than it saved.
+ */
+function restoreArchivedMoves(
+  moved: ReadonlyArray<{ srcAbs: string; archivedAbs?: string; restoredAbs?: string }>,
+  rolloutRoot: string,
+): void {
+  for (let i = moved.length - 1; i >= 0; i -= 1) {
+    const entry = moved[i];
+    const from = entry.archivedAbs ?? entry.srcAbs;
+    const to = entry.srcAbs ?? entry.restoredAbs;
+    if (!from || !to) continue;
+    try {
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.renameSync(from, to);
+    } catch (err) {
+      getLogger().warn(
+        'archive: failed to roll back a moved rollout file',
+        { from, to, rolloutRoot, err: String(err) },
+        LogComponent.DB,
+      );
+    }
+  }
+}
+
+/**
+ * Plan 582 (G1): every `.jsonl` directly inside `dir`, in the order a session
+ * consumes them — `archive-0.jsonl` … `archive-N.jsonl`, then `active.jsonl`,
+ * then anything else, with `rollout-<stamp>-<id>.jsonl` last.
+ *
+ * Order matters: the caller uses the LAST entry as the session's live
+ * `rollout_path`. The tail bucket is what makes this work for a
+ * single-file (never-rotated) session, whose archived file keeps its
+ * original `rollout-*` name — restricting the scan to `archive-<g>` /
+ * `active` names would silently skip exactly those.
+ */
+function collectJsonlFiles(dir: string): string[] {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const rank = (name: string): number => {
+    if (/^archive-\d+\.jsonl$/.test(name)) return 0;
+    if (name === 'active.jsonl') return 1;
+    return 2;
+  };
+  return entries
+    .filter((name) => name.endsWith('.jsonl'))
+    .sort((a, b) => {
+      const ra = rank(a);
+      const rb = rank(b);
+      if (ra !== rb) return ra - rb;
+      if (ra === 0) {
+        const ga = Number(a.match(/^archive-(\d+)\.jsonl$/)![1]);
+        const gb = Number(b.match(/^archive-(\d+)\.jsonl$/)![1]);
+        if (ga !== gb) return ga - gb;
+      }
+      return a.localeCompare(b);
+    })
+    .map((name) => path.join(dir, name));
 }
 
 export function registerDbHandlers(): void {
@@ -517,16 +592,15 @@ export function registerDbHandlers(): void {
    * that case so the next user attempt finds a consistent state.
    */
   ipcMain.handle('db:session:archive', (_event, sessionId: string) => {
-    const { sessions } = getCoreStores();
+    const { sessions, messageLog } = getCoreStores();
     const session = sessions.get(sessionId);
     if (!session) return false;
     if (session.status === 'archived') return true; // idempotent
 
     const now = Date.now();
     const currentRel = session.rolloutPath ?? sessions.getRolloutPath(sessionId);
-
-    // No rollout file to move — fall back to status flip only.
     if (!currentRel) {
+      // No rollout file to move — fall back to status flip only.
       sessions.update(sessionId, {
         status: 'archived',
         archivedAt: now,
@@ -536,10 +610,24 @@ export function registerDbHandlers(): void {
     }
 
     const rolloutRoot = resolveRolloutRoot();
-    const srcAbs = path.join(rolloutRoot, currentRel);
-    if (!fs.existsSync(srcAbs)) {
-      // File already gone (manual delete / cross-volume crash). The
-      // session is still in the DB, so we archive the metadata only.
+
+    // Plan 582 (G1): move EVERY file the session owns, not just the one named
+    // by `rollout_path`. A session in the generation layout (every bot, plus
+    // any human/cron session past NON_BOT_ROTATION_THRESHOLD_BYTES) keeps its
+    // history in sibling `archive-<g>.jsonl` files next to `active.jsonl`.
+    // Moving only `rollout_path` stranded those siblings, and since the row's
+    // new path pointed at a directory with no segments, `listBySession`
+    // resolved zero history rows — the archived session silently lost
+    // everything written before the last rotation.
+    const enumerated = messageLog.collectSessionRolloutFiles(sessionId);
+    const candidates =
+      enumerated.length > 0
+        ? enumerated
+        : [path.join(rolloutRoot, currentRel)].filter((abs) => fs.existsSync(abs));
+
+    if (candidates.length === 0) {
+      // Every rollout file is already gone (manual delete / cross-volume
+      // crash). The row survives, so archive the metadata only.
       sessions.update(sessionId, {
         status: 'archived',
         archivedAt: now,
@@ -548,67 +636,109 @@ export function registerDbHandlers(): void {
       return true;
     }
 
-    const archivedRel = resolveArchivedPath(currentRel, now);
-    const archivedAbs = path.join(rolloutRoot, archivedRel);
-
-    // Plan 549 (Track C): pre-check the source for an exclusive lock
-    // before attempting the rename. On Windows, fs.renameSync against a
-    // file held open by another process returns EBUSY mid-flight, after
-    // which the rename may have partially completed. We open the file
-    // first; if that throws, abort before mutating disk. The probe is
-    // intentionally narrow -- we only need to know the file is not held
-    // in a way that blocks rename. The actual safety net is the rename's
-    // atomic-on-same-volume guarantee.
-    let srcHandle: number | undefined;
-    try {
-      srcHandle = fs.openSync(srcAbs, 'r');
-    } catch (err) {
-      getLogger().warn(
-        'archive: source file is locked, refusing to rename',
-        { sessionId, src: srcAbs, err: String(err) },
-        LogComponent.DB,
-      );
-      return false;
-    }
-    try {
-      fs.closeSync(srcHandle);
-    } catch {
-      // Closing the probe handle is best-effort; even if it fails the
-      // file is still in whatever state the OS left it in.
-    }
-
-    try {
-      fs.mkdirSync(path.dirname(archivedAbs), { recursive: true });
-      fs.renameSync(srcAbs, archivedAbs);
-    } catch (err) {
-      getLogger().warn(
-        'archive: rename failed, SQL state unchanged',
-        { sessionId, src: srcAbs, dst: archivedAbs, err: String(err) },
-        LogComponent.DB,
-      );
-      return false;
-    }
-
-    sessions.update(sessionId, {
-      status: 'archived',
-      archivedAt: now,
-      archivedPath: archivedRel,
+    const plan = candidates.map((srcAbs) => {
+      const rel = path.relative(rolloutRoot, srcAbs).split(path.sep).join('/');
+      const archivedRel = resolveArchivedPath(rel, now);
+      return { srcAbs, archivedRel, archivedAbs: path.join(rolloutRoot, archivedRel) };
     });
+
+    // Plan 549 (Track C): pre-check every source for an exclusive lock before
+    // attempting any rename. On Windows, fs.renameSync against a file held
+    // open by another process returns EBUSY mid-flight, after which earlier
+    // renames in the same batch have already landed. Probing the whole batch
+    // up front keeps the operation all-or-nothing.
+    for (const { srcAbs } of plan) {
+      let handle: number | undefined;
+      try {
+        handle = fs.openSync(srcAbs, 'r');
+      } catch (err) {
+        getLogger().warn(
+          'archive: source file is locked, refusing to rename',
+          { sessionId, src: srcAbs, err: String(err) },
+          LogComponent.DB,
+        );
+        return false;
+      }
+      try {
+        fs.closeSync(handle);
+      } catch {
+        // Closing the probe handle is best-effort; even if it fails the file
+        // is still in whatever state the OS left it in.
+      }
+    }
+
+    // Move the batch, compensating backwards if any step fails. Without this
+    // a mid-batch failure leaves some segments archived and the rest active,
+    // and nothing in the system can reconcile that afterwards.
+    const moved: typeof plan = [];
+    for (const entry of plan) {
+      try {
+        fs.mkdirSync(path.dirname(entry.archivedAbs), { recursive: true });
+        fs.renameSync(entry.srcAbs, entry.archivedAbs);
+        moved.push(entry);
+      } catch (err) {
+        restoreArchivedMoves(moved, rolloutRoot);
+        getLogger().warn(
+          'archive: rename failed, rolled back, SQL state unchanged',
+          {
+            sessionId,
+            src: entry.srcAbs,
+            dst: entry.archivedAbs,
+            rolledBack: moved.length,
+            err: String(err),
+          },
+          LogComponent.DB,
+        );
+        return false;
+      }
+    }
+
+    // `collectSessionRolloutFiles` returns generation order, so the LAST entry
+    // is the live `active.jsonl`. Repoint `rollout_path` at it so the archived
+    // session stays readable — previously the row kept pointing at the
+    // pre-archive path, which no longer existed.
+    const liveArchivedRel = plan[plan.length - 1].archivedRel;
+    try {
+      sessions.update(sessionId, {
+        status: 'archived',
+        archivedAt: now,
+        // The generation layout spans sibling files that move together, so the
+        // row records the shared destination DIRECTORY, not a single file.
+        archivedPath: archivedDirFor(liveArchivedRel),
+        rolloutPath: liveArchivedRel,
+      });
+    } catch (err) {
+      restoreArchivedMoves(moved, rolloutRoot);
+      getLogger().warn(
+        'archive: metadata update failed, rolled back moved files',
+        { sessionId, rolledBack: moved.length, err: String(err) },
+        LogComponent.DB,
+      );
+      return false;
+    }
+
+    // The row's rollout_path just changed; drop the cached resolution so the
+    // next read or append re-reads the DB instead of the pre-archive path.
+    messageLog.invalidateRolloutPathCache(sessionId);
     return true;
   });
   /**
    * Plan 549 (Track A): unarchive — reverse the rename and reset the
-   * archive metadata. Mirrors codex's `unarchive_thread.rs` semantics:
-   * the file moves back into `sessions/<basename>` (relative to the
-   * rollout root) and `archived_at` clears.
+   * archive metadata. Mirrors codex's `unarchive_thread.rs` semantics.
+   *
+   * Plan 582 (G1): `archived_path` is the destination DIRECTORY, and the
+   * restore walks the whole directory so a rotated session gets its
+   * `archive-<g>.jsonl` siblings back too. Destination paths are the exact
+   * inverses of the archive mapping (a pure `archived/<date>/` prefix
+   * strip), so nothing is reconstructed by guesswork.
    */
   ipcMain.handle('session:unarchive', (_event, sessionId: string) => {
-    const { sessions } = getCoreStores();
+    const { sessions, messageLog } = getCoreStores();
     const session = sessions.get(sessionId);
     if (!session) return false;
     if (session.status !== 'archived') return true; // idempotent
-    const archivedRel = session.archivedPath;
-    if (!archivedRel) {
+    const archivedDirRel = session.archivedPath;
+    if (!archivedDirRel) {
       // Archived metadata-only — just flip the status.
       sessions.update(sessionId, {
         status: 'active',
@@ -618,9 +748,9 @@ export function registerDbHandlers(): void {
       return true;
     }
     const rolloutRoot = resolveRolloutRoot();
-    const archivedAbs = path.join(rolloutRoot, archivedRel);
-    if (!fs.existsSync(archivedAbs)) {
-      // Archive file already gone — drop the metadata, leave status flipped.
+    const archivedDirAbs = path.join(rolloutRoot, archivedDirRel);
+    if (!fs.existsSync(archivedDirAbs)) {
+      // Archive files already gone — drop the metadata, leave status flipped.
       sessions.update(sessionId, {
         status: 'active',
         archivedAt: null,
@@ -628,29 +758,74 @@ export function registerDbHandlers(): void {
       });
       return true;
     }
-    // Restore to a sensible active path. `resolveUnarchivedPath` derives
-    // `sessions/<basename>` from the archived layout; we then ask the
-    // session store for the current rollout_path so a future append goes
-    // to the right day bucket.
-    const restoredRel = resolveUnarchivedPath(archivedRel);
-    const restoredAbs = path.join(rolloutRoot, restoredRel);
+
+    // Every `.jsonl` in the archived directory belongs to this session, so
+    // restore them together. If the recorded path is itself a file (rows
+    // written by Plan 549 before the directory convention), fall back to it.
+    const archivedFiles = collectJsonlFiles(archivedDirAbs);
+    const plan = (archivedFiles.length > 0 ? archivedFiles : [archivedDirAbs])
+      .filter((srcAbs) => fs.existsSync(srcAbs))
+      .map((srcAbs) => {
+        const rel = path.relative(rolloutRoot, srcAbs).split(path.sep).join('/');
+        const restoredRel = resolveUnarchivedPath(rel);
+        return { srcAbs, restoredRel, restoredAbs: path.join(rolloutRoot, restoredRel) };
+      });
+
+    if (plan.length === 0) {
+      sessions.update(sessionId, {
+        status: 'active',
+        archivedAt: null,
+        archivedPath: null,
+      });
+      return true;
+    }
+
+    const moved: typeof plan = [];
+    for (const entry of plan) {
+      try {
+        fs.mkdirSync(path.dirname(entry.restoredAbs), { recursive: true });
+        fs.renameSync(entry.srcAbs, entry.restoredAbs);
+        moved.push(entry);
+      } catch (err) {
+        restoreArchivedMoves(moved, rolloutRoot);
+        getLogger().warn(
+          'unarchive: rename failed, rolled back, SQL state unchanged',
+          {
+            sessionId,
+            src: entry.srcAbs,
+            dst: entry.restoredAbs,
+            rolledBack: moved.length,
+            err: String(err),
+          },
+          LogComponent.DB,
+        );
+        return false;
+      }
+    }
+
+    // Generation order is preserved by the directory scan below, so the last
+    // restored entry is the live `active.jsonl` for a rotated session.
+    const liveRestoredRel = plan[plan.length - 1].restoredRel;
     try {
-      fs.mkdirSync(path.dirname(restoredAbs), { recursive: true });
-      fs.renameSync(archivedAbs, restoredAbs);
+      sessions.update(sessionId, {
+        status: 'active',
+        archivedAt: null,
+        archivedPath: null,
+        rolloutPath: liveRestoredRel,
+      });
     } catch (err) {
+      restoreArchivedMoves(moved, rolloutRoot);
       getLogger().warn(
-        'unarchive: rename failed, SQL state unchanged',
-        { sessionId, src: archivedAbs, dst: restoredAbs, err: String(err) },
+        'unarchive: metadata update failed, rolled back moved files',
+        { sessionId, rolledBack: moved.length, err: String(err) },
         LogComponent.DB,
       );
       return false;
     }
-    sessions.update(sessionId, {
-      status: 'active',
-      archivedAt: null,
-      archivedPath: null,
-      rolloutPath: restoredRel,
-    });
+
+    // The row's rollout_path changed under us; drop the cached resolution so
+    // the next append/read re-reads the DB instead of a stale path.
+    messageLog.invalidateRolloutPathCache(sessionId);
     return true;
   });
 

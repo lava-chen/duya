@@ -3,7 +3,7 @@
 > **Status**: Planning
 > **Priority**: P1
 > **Created**: 2026-09-13
-> **Companion**: [455-codex-marketplace-and-install](./455-codex-marketplace-and-install.md)(现状:单 `url` 字段,无 fallback)、[455-open-connector-registry](./455-open-connector-registry.md)(registry 已支持多源 schema,本计划补 git-source 路径)
+> **Companion**: [455-codex-marketplace-and-install](./455-codex-marketplace-and-install.md)(现状:单 `url` 字段,无 fallback)、[455-open-connector-registry](../active/455-open-connector-registry.md)(registry 已支持多源 schema,本计划补 git-source 路径)
 > **Source evidence**: 2026-09-13 用户反馈:"gitee 在国内国外都能有很好的连接,把它作为第一来源";plan 28 历史背景(app 升级源曾有过 github → gitee fallback,后被简化移除)
 
 ---
