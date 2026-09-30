@@ -968,13 +968,21 @@ export class SpawnEdgeStore {
    * Walk the full descendant spawn tree rooted at `sessionId` via a recursive
    * CTE. Returns every edge reachable from `sessionId` (children, grandchildren,
    * ...). Helper edges are deduped by the UNION semantics of the CTE.
+   *
+   * Plan 582 (G2): the recursive term must be `UNION`, not `UNION ALL`. With
+   * `UNION ALL` SQLite emits every reachable row, so a diamond (one child
+   * reachable by two parents) grows the result exponentially and a
+   * parent/child cycle never terminates — both hang the connection holding
+   * this database, which is the main process. `UNION` collapses duplicates as
+   * they are produced, which is both the documented behaviour and the only
+   * formulation that terminates on adversarial edge data.
    */
   getTree(sessionId: string): SpawnEdge[] {
     const rows = this.db
       .prepare(
         `WITH RECURSIVE tree AS (
            SELECT * FROM session_spawn_edges WHERE parent_session_id = ?
-           UNION ALL
+           UNION
            SELECT e.* FROM session_spawn_edges e
              JOIN tree t ON e.parent_session_id = t.child_session_id
          )

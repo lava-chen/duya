@@ -19,6 +19,9 @@
  * hoisted) and test bodies share one singleton.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 // All mock state lives in vi.hoisted so the vi.mock factory closures
 // (also hoisted) and the test bodies see the same singleton.
@@ -90,6 +93,11 @@ const mocks = vi.hoisted(() => {
     deleteBySession: vi.fn(),
     searchText: vi.fn(() => []),
     rewriteSession: vi.fn(),
+    // Plan 582 (G1/G2): whole-session file enumeration + cache invalidation.
+    // Default [] keeps the "no rollout file" metadata-only path reachable;
+    // tests that exercise the file moves override it.
+    collectSessionRolloutFiles: vi.fn(() => [] as string[]),
+    invalidateRolloutPathCache: vi.fn(),
   };
 
   const tasks = {
@@ -141,7 +149,18 @@ const mocks = vi.hoisted(() => {
     renew: vi.fn(() => true),
     release: vi.fn(() => true),
     isLocked: vi.fn(() => false),
+    // Plan 582 (G2): who holds the lock, for the archive refusal payload.
+    lockOrigin: vi.fn(() => null as string | null),
   };
+
+  // Plan 582 (G2): archive walks the spawn subtree, so the handler needs a
+  // real tree. Default [] means "no children"; subtree tests override.
+  const spawnEdges = {
+    getTree: vi.fn(() => [] as Array<{ childSessionId: string }>),
+  };
+
+  const coreDb = { db: {} };
+  const resolveRolloutRoot = vi.fn(() => '/tmp/rollout-root');
 
   const mailbox = {
     enqueue: vi.fn(),
@@ -154,8 +173,17 @@ const mocks = vi.hoisted(() => {
     listForSession: vi.fn(() => []),
   };
 
-  const coreDb = { db: {} };
-  const stores = { coreDb, messageLog, sessions, mailbox, tasks, permissions, locks };
+  const stores = {
+    coreDb,
+    messageLog,
+    sessions,
+    mailbox,
+    tasks,
+    permissions,
+    locks,
+    spawnEdges,
+    resolveRolloutRoot,
+  };
 
   // ─── Mock adapters (core-db-adapters) ───
   // Each adapter returns a recognizable tagged object so tests can assert
@@ -252,7 +280,7 @@ const mocks = vi.hoisted(() => {
     })),
   };
 
-  return { captured, logger, resolvePermissionProfile, stores, adapters };
+  return { captured, logger, resolvePermissionProfile, stores, adapters, resolveRolloutRoot };
 });
 
 // ─── Module mocks (paths relative to this test file) ───
@@ -310,7 +338,9 @@ vi.mock('../../config/boot-config', () => ({
     needsDbRename: false,
   })),
   resolveCoreDatabasePath: vi.fn(() => '/tmp/core.db'),
-  resolveRolloutRoot: vi.fn(() => '/tmp/rollout-root'),
+  // Plan 582 (G2): archive/unarchive move real files, so tests override this
+  // with a temp directory instead of the placeholder.
+  resolveRolloutRoot: mocks.resolveRolloutRoot,
   resolveAttachmentsRoot: vi.fn(() => '/tmp/attachments-root'),
   validateDatabasePath: vi.fn(() => ({ valid: true })),
   updateDatabasePath: vi.fn(() => true),
@@ -400,6 +430,7 @@ vi.mock('../../conductor/document-service', () => ({
 // the mocked dependencies.
 import { registerDbHandlers } from '../db-handlers';
 import { getDatabase } from '../../db/index';
+import { formatArchiveDate } from '../../db/core/archive-paths';
 
 // ─── Helper ───
 
@@ -959,28 +990,32 @@ describe('db-handlers (core store thin forward)', () => {
 
   // ==================== Plan 549 Track A: archive / unarchive handlers ====================
 
-  describe('db:session:archive (Plan 549)', () => {
-    it('returns false for an unknown session id', async () => {
+  describe('db:session:archive (Plan 549 / 582 G2)', () => {
+    it('reports not_found for an unknown session id', async () => {
       mocks.stores.sessions.get.mockReturnValueOnce(undefined);
       const result = await invokeHandler('db:session:archive', {}, 'missing');
-      expect(result).toBe(false);
+      expect(result).toEqual({ ok: false, reason: 'not_found', sessionId: 'missing' });
     });
 
-    it('flips status to archived without touching files when rolloutPath is null', async () => {
-      mocks.stores.sessions.get.mockReturnValueOnce({
+    it('flips status to archived without touching files when the session has no rollout', async () => {
+      // The handler reads the row twice (root probe, then the planning loop),
+      // so this must be a standing implementation rather than a single use.
+      mocks.stores.sessions.get.mockImplementation(() => ({
         id: 's-1',
+        status: 'active',
         rolloutPath: null,
         archivedAt: null,
         archivedPath: null,
-      });
-      mocks.stores.sessions.getRolloutPath.mockReturnValueOnce(null);
+      }));
+      mocks.stores.sessions.getRolloutPath.mockReturnValue(null);
 
       const result = await invokeHandler('db:session:archive', {}, 's-1');
-      expect(result).toBe(true);
+      expect(result).toEqual({ ok: true, archivedSessionIds: ['s-1'] });
       expect(mocks.stores.sessions.update).toHaveBeenCalledWith('s-1', {
         status: 'archived',
         archivedAt: expect.any(Number),
         archivedPath: null,
+        rolloutPath: null,
       });
     });
 
@@ -988,13 +1023,237 @@ describe('db-handlers (core store thin forward)', () => {
       mocks.stores.sessions.get.mockReturnValueOnce({
         id: 's-1',
         status: 'archived',
-        rolloutPath: 'sessions/2026/09/18/rollout-s-1.jsonl',
+        rolloutPath: 'archived/2026-09-18/sessions/rollout-s-1.jsonl',
         archivedAt: 100,
-        archivedPath: 'archived/2026-09-18/rollout-s-1.jsonl',
+        archivedPath: 'archived/2026-09-18/sessions',
       });
       const result = await invokeHandler('db:session:archive', {}, 's-1');
-      expect(result).toBe(true);
+      expect(result).toEqual({ ok: true, archivedSessionIds: [] });
       expect(mocks.stores.sessions.update).not.toHaveBeenCalled();
+    });
+
+    // ─── G2 PHASE 1: runtime-lock preflight ────────────────────────────
+
+    it('refuses with session_busy when the root session still holds a lock', async () => {
+      mocks.stores.sessions.get.mockReturnValueOnce({
+        id: 's-1',
+        status: 'active',
+        rolloutPath: null,
+        archivedAt: null,
+        archivedPath: null,
+      });
+      mocks.stores.locks.isLocked.mockImplementation((id: string) => id === 's-1');
+      mocks.stores.locks.lockOrigin.mockReturnValue('agent');
+
+      const result = await invokeHandler('db:session:archive', {}, 's-1');
+      expect(result).toEqual({
+        ok: false,
+        reason: 'session_busy',
+        sessionId: 's-1',
+        blockedId: 's-1',
+        origin: 'agent',
+      });
+      // The whole point of the preflight: nothing was written anywhere.
+      expect(mocks.stores.sessions.update).not.toHaveBeenCalled();
+      expect(mocks.stores.messageLog.collectSessionRolloutFiles).not.toHaveBeenCalled();
+    });
+
+    it('refuses the whole batch when a DESCENDANT is running, even if the root is idle', async () => {
+      mocks.stores.sessions.get.mockReturnValueOnce({
+        id: 'root',
+        status: 'active',
+        rolloutPath: null,
+        archivedAt: null,
+        archivedPath: null,
+      });
+      mocks.stores.spawnEdges.getTree.mockReturnValueOnce([
+        { childSessionId: 'child-a' },
+        { childSessionId: 'grandchild' },
+      ]);
+      mocks.stores.locks.isLocked.mockImplementation((id: string) => id === 'grandchild');
+      mocks.stores.locks.lockOrigin.mockReturnValue('user');
+
+      const result = await invokeHandler('db:session:archive', {}, 'root');
+      expect(result).toMatchObject({
+        ok: false,
+        reason: 'session_busy',
+        sessionId: 'root',
+        blockedId: 'grandchild',
+        origin: 'user',
+      });
+      expect(mocks.stores.sessions.update).not.toHaveBeenCalled();
+    });
+
+    // ─── G2 PHASE 2/3: subtree coverage ─────────────────────────────────
+
+    it('archives the root and every descendant in the spawn tree', async () => {
+      const rows: Record<string, Record<string, unknown>> = {
+        root: { id: 'root', status: 'active', rolloutPath: null, archivedAt: null, archivedPath: null },
+        'child-a': { id: 'child-a', status: 'active', rolloutPath: null, archivedAt: null, archivedPath: null },
+        'child-b': { id: 'child-b', status: 'active', rolloutPath: null, archivedAt: null, archivedPath: null },
+      };
+      mocks.stores.sessions.get.mockImplementation((id: string) => rows[id] ?? null);
+      mocks.stores.spawnEdges.getTree.mockReturnValueOnce([
+        { childSessionId: 'child-a' },
+        { childSessionId: 'child-b' },
+      ]);
+
+      const result = await invokeHandler('db:session:archive', {}, 'root');
+      expect(result).toEqual({
+        ok: true,
+        archivedSessionIds: ['root', 'child-a', 'child-b'],
+      });
+      for (const id of ['root', 'child-a', 'child-b']) {
+        expect(mocks.stores.sessions.update).toHaveBeenCalledWith(
+          id,
+          expect.objectContaining({ status: 'archived' }),
+        );
+      }
+      // The rollout path cache for every moved session is now stale.
+      expect(mocks.stores.messageLog.invalidateRolloutPathCache).toHaveBeenCalledTimes(3);
+    });
+
+    it('skips an already-archived descendant instead of re-reporting it', async () => {
+      mocks.stores.sessions.get.mockImplementation((id: string) => {
+        if (id === 'root')
+          return { id: 'root', status: 'active', rolloutPath: null, archivedAt: null, archivedPath: null };
+        if (id === 'child') return { id: 'child', status: 'archived', rolloutPath: null, archivedAt: 1, archivedPath: 'archived/x' };
+        return null;
+      });
+      mocks.stores.spawnEdges.getTree.mockReturnValueOnce([{ childSessionId: 'child' }]);
+
+      const result = await invokeHandler('db:session:archive', {}, 'root');
+      expect(result).toEqual({ ok: true, archivedSessionIds: ['root'] });
+      expect(mocks.stores.sessions.update).toHaveBeenCalledTimes(1);
+      expect(mocks.stores.sessions.update).toHaveBeenCalledWith('root', expect.anything());
+    });
+
+    it('skips a soft-deleted descendant rather than resurrecting its metadata', async () => {
+      mocks.stores.sessions.get.mockImplementation((id: string) => {
+        if (id === 'root')
+          return { id: 'root', status: 'active', rolloutPath: null, archivedAt: null, archivedPath: null };
+        if (id === 'gone') return { id: 'gone', status: 'deleted', rolloutPath: null, archivedAt: null, archivedPath: null };
+        return null;
+      });
+      mocks.stores.spawnEdges.getTree.mockReturnValueOnce([{ childSessionId: 'gone' }]);
+
+      const result = await invokeHandler('db:session:archive', {}, 'root');
+      expect(result).toEqual({ ok: true, archivedSessionIds: ['root'] });
+    });
+
+    it('dedupes a child that the tree reports through two parents', async () => {
+      const seen: string[] = [];
+      mocks.stores.sessions.get.mockImplementation((id: string) => {
+        seen.push(id);
+        return { id, status: 'active', rolloutPath: null, archivedAt: null, archivedPath: null };
+      });
+      mocks.stores.spawnEdges.getTree.mockReturnValueOnce([
+        { childSessionId: 'shared' },
+        { childSessionId: 'shared' },
+      ]);
+
+      const result = await invokeHandler('db:session:archive', {}, 'root');
+      expect(result).toEqual({ ok: true, archivedSessionIds: ['root', 'shared'] });
+      expect(seen.filter((id) => id === 'shared')).toHaveLength(1);
+    });
+
+    // ─── G2 PHASE 2/3: two-phase commit over the real filesystem ────────
+
+    it('moves every rollout file and repoints the row at the archived directory', async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-archive-'));
+      try {
+        const srcDir = path.join(root, 'sessions', '2026', '09', '30');
+        fs.mkdirSync(srcDir, { recursive: true });
+        const segA = path.join(srcDir, 'archive-0.jsonl');
+        const segB = path.join(srcDir, 'active.jsonl');
+        fs.writeFileSync(segA, '{"a":1}\n');
+        fs.writeFileSync(segB, '{"b":1}\n');
+
+        mocks.resolveRolloutRoot.mockReturnValueOnce(root);
+        mocks.stores.sessions.get.mockReturnValueOnce({
+          id: 's-1',
+          status: 'active',
+          rolloutPath: 'sessions/2026/09/30/active.jsonl',
+          archivedAt: null,
+          archivedPath: null,
+        });
+        mocks.stores.messageLog.collectSessionRolloutFiles.mockReturnValueOnce([segA, segB]);
+
+        const result = (await invokeHandler('db:session:archive', {}, 's-1')) as {
+          ok: boolean;
+          archivedSessionIds: string[];
+        };
+        expect(result.ok).toBe(true);
+
+        // Both segments left the live directory...
+        expect(fs.readdirSync(srcDir)).toEqual([]);
+        // ...and the row records the archive DIRECTORY plus the live segment.
+        const patch = mocks.stores.sessions.update.mock.calls[0][1] as {
+          archivedPath: string;
+          rolloutPath: string;
+        };
+        expect(patch.archivedPath).toMatch(
+          new RegExp(`^archived/\\d{4}-\\d{2}-\\d{2}/sessions/2026/09/30$`),
+        );
+        expect(patch.rolloutPath).toBe(`${patch.archivedPath}/active.jsonl`);
+        // And the bytes really moved.
+        expect(
+          fs.readFileSync(path.join(root, patch.rolloutPath), 'utf8'),
+        ).toBe('{"b":1}\n');
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it('rolls back earlier files and leaves SQL untouched when a later rename fails', async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-archive-'));
+      try {
+        const dirA = path.join(root, 'sessions', 'a');
+        const dirB = path.join(root, 'sessions', 'b');
+        fs.mkdirSync(dirA, { recursive: true });
+        fs.mkdirSync(dirB, { recursive: true });
+        const fileA = path.join(dirA, 'active.jsonl');
+        const fileB = path.join(dirB, 'active.jsonl');
+        fs.writeFileSync(fileA, 'A\n');
+        fs.writeFileSync(fileB, 'B\n');
+
+        // Park a directory exactly where B's rename has to land, so the move
+        // fails after A's has already succeeded. The bucket date comes from
+        // the same helper the production path uses, so this cannot drift.
+        const destB = path.join(
+          root,
+          'archived',
+          formatArchiveDate(Date.now()),
+          'sessions',
+          'b',
+          'active.jsonl',
+        );
+        fs.mkdirSync(destB, { recursive: true });
+
+        mocks.resolveRolloutRoot.mockReturnValueOnce(root);
+        mocks.stores.sessions.get.mockImplementation((id: string) => ({
+          id,
+          status: 'active',
+          rolloutPath: `sessions/${id}/active.jsonl`,
+          archivedAt: null,
+          archivedPath: null,
+        }));
+        mocks.stores.spawnEdges.getTree.mockReturnValueOnce([{ childSessionId: 'b' }]);
+        mocks.stores.messageLog.collectSessionRolloutFiles.mockImplementation((id: string) => [
+          path.join(root, 'sessions', id, 'active.jsonl'),
+        ]);
+
+        const result = await invokeHandler('db:session:archive', {}, 'a');
+        expect(result).toEqual({ ok: false, reason: 'io', sessionId: 'a', failedId: 'b' });
+
+        // A's file is back where it started — the batch was all-or-nothing.
+        expect(fs.readFileSync(fileA, 'utf8')).toBe('A\n');
+        // No row was written, so the database never claimed a move that the
+        // filesystem then undid.
+        expect(mocks.stores.sessions.update).not.toHaveBeenCalled();
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
     });
   });
 

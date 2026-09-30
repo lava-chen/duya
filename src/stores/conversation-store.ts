@@ -24,6 +24,7 @@ import {
   type Message as IpcMessage,
 } from '@/lib/ipc-client';
 import { getAgentServerClient } from '@/lib/agent-http-client';
+import { toast } from '@/components/ui/toast';
 import { useContextUsageStore } from '@/stores/context-usage-store';
 import { registerLoadedMessages, isSessionBusy } from '@/lib/stream-session-manager';
 import { isPlaceholderThreadId } from '@/components/layout/sidebar/section-system';
@@ -194,9 +195,13 @@ interface ConversationState {
   exitSettings: () => void;
   createThread: (options?: { workingDirectory?: string; projectName?: string; providerId?: string; model?: string; noProject?: boolean; agentProfileId?: string | null }) => Promise<Thread | null>;
   deleteThread: (id: string) => void;
-  /** Plan 506 (C2): archive a session — drops it from the active list via a
-   *  status flip; the rollout files stay on disk (unarchive restores it). */
-  archiveThread: (id: string) => void;
+  /** Plan 506 (C2): archive a session — drops it from the active list and
+   *  moves its rollout files under the archive tree. Plan 582 (G2): also
+   *  covers the session's whole spawn subtree, resolves only after the main
+   *  process has committed, surfaces a toast when it refuses because a turn
+   *  is still running somewhere in that subtree, and returns whether the
+   *  archive actually happened so batch callers can count honestly. */
+  archiveThread: (id: string) => Promise<boolean>;
   /** Plan 549 (Track A/B): unarchive — restores a session to the active
    *  list. Backend also reverses the file rename; the row disappears
    *  from `archivedThreads` and re-appears on the next `loadThreads`
@@ -802,9 +807,43 @@ export const useConversationStore = create<ConversationState>()(
           .catch(console.error);
       },
 
-      archiveThread: (id) => {
-        // Plan 506 (C2): identical local removal to deleteThread, but the
-        // backend flips status to 'archived' — rollout files stay intact.
+      archiveThread: async (id) => {
+        // Plan 582 (G2): the local removal is no longer optimistic. The
+        // backend archives the session's whole spawn subtree and refuses
+        // outright when a turn is still running anywhere in it, so removing
+        // the row first would leave the sidebar showing a state the database
+        // never reached. Awaiting costs one IPC round-trip on a click that is
+        // already a deliberate action, and it is the only way a failure can
+        // be reported honestly instead of silently swallowed.
+        let result: Awaited<ReturnType<typeof archiveThreadIPC>>;
+        try {
+          result = await archiveThreadIPC(id);
+        } catch (err) {
+          console.error('[Store] archiveThread failed', err);
+          toast.error('归档失败', { description: String(err) });
+          return false;
+        }
+
+        if (!result.ok) {
+          // Nothing was changed on disk or in SQL, so there is nothing to
+          // roll back locally either — just say why.
+          if (result.reason === 'session_busy') {
+            toast.warning('会话正在运行，无法归档', {
+              description:
+                result.blockedId && result.blockedId !== id
+                  ? '它的子 agent 会话仍在执行，请等本轮结束后重试。'
+                  : '请等本轮结束后重试。',
+            });
+          } else if (result.reason === 'not_found') {
+            toast.error('会话不存在或已被删除');
+          } else {
+            toast.error('归档失败', {
+              description: '文件移动未完成，数据保持原样，请重试。',
+            });
+          }
+          return false;
+        }
+
         set((state) => {
           const { [id]: _, ...remainingMessages } = state.messages;
           const newThreads = state.threads.filter((t) => t.id !== id);
@@ -820,15 +859,12 @@ export const useConversationStore = create<ConversationState>()(
           };
         });
 
-        archiveThreadIPC(id)
-          .then(() => {
-            notifyThreadsChanged();
-            // Plan 549 (Track B): keep the archived-section roster fresh
-            // after every archive. Fire-and-forget — a stale cache is
-            // less bad than blocking the UI on a sidebar refetch.
-            void get().loadArchivedThreads();
-          })
-          .catch(console.error);
+        notifyThreadsChanged();
+        // Plan 549 (Track B): keep the archived-section roster fresh after
+        // every archive. Fire-and-forget — a stale cache is less bad than
+        // blocking the UI on a sidebar refetch.
+        void get().loadArchivedThreads();
+        return true;
       },
 
       unarchiveThread: async (id) => {

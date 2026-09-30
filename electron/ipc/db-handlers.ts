@@ -303,6 +303,199 @@ function collectJsonlFiles(dir: string): string[] {
     .map((name) => path.join(dir, name));
 }
 
+// ─── Plan 582 (G2): whole-subtree archive as a two-phase commit ─────────
+
+/**
+ * The four row fields a batch archive has to put back if a LATER unit in the
+ * same batch fails. `rollout_path` is in the set because archiving repoints it
+ * at the moved file, so restoring only the status columns would leave the row
+ * pointing at a path that no longer exists.
+ */
+interface ArchiveRowSnapshot {
+  status: string;
+  archivedAt: number | null;
+  archivedPath: string | null;
+  rolloutPath: string | null;
+}
+
+/** One session's contribution to a batch archive, computed before any I/O. */
+interface ArchiveUnit {
+  sessionId: string;
+  /** File renames to perform, in the order `collectSessionRolloutFiles` gave. */
+  moves: Array<{ srcAbs: string; archivedAbs: string; archivedRel: string }>;
+  /** Row state before the batch; replayed verbatim if the batch aborts. */
+  snapshot: ArchiveRowSnapshot;
+  /** Row state the batch writes on success. */
+  target: ArchiveRowSnapshot;
+}
+
+/** Why a batch archive refused or failed. Surfaced verbatim to the renderer. */
+export type ArchiveFailureReason = 'not_found' | 'session_busy' | 'io';
+
+export type ArchiveResult =
+  | { ok: true; archivedSessionIds: string[] }
+  | {
+      ok: false;
+      reason: ArchiveFailureReason;
+      /** Root of the requested archive, for logging. */
+      sessionId: string;
+      /** Subtree member that tripped a `session_busy` refusal, when known. */
+      blockedId?: string;
+      /** Who holds the lock on `blockedId`: user | agent | background. */
+      origin?: string | null;
+      /** Subtree member whose move or row update failed, when known. */
+      failedId?: string;
+    };
+
+/**
+ * Decide what archiving `sessionId` alone would do, without touching disk.
+ *
+ * Splitting planning from execution is what makes the batch two-phase: the
+ * caller can hold every unit's plan in memory, reject the whole call on a
+ * preflight failure, and only then start renaming.
+ */
+function planSessionArchive(
+  sessionId: string,
+  row: {
+    status: string;
+    archivedAt: number | null;
+    archivedPath: string | null;
+    rolloutPath: string | null;
+  },
+  now: number,
+  rolloutRoot: string,
+  collectFiles: (id: string) => string[],
+  resolveRowPath: (id: string) => string | null,
+): ArchiveUnit {
+  const snapshot: ArchiveRowSnapshot = {
+    status: row.status,
+    archivedAt: row.archivedAt,
+    archivedPath: row.archivedPath,
+    rolloutPath: row.rolloutPath,
+  };
+  const currentRel = row.rolloutPath ?? resolveRowPath(sessionId);
+
+  // Move EVERY file the session owns, not just the one named by
+  // `rollout_path`. A session in the generation layout (every bot, plus any
+  // human/cron session past NON_BOT_ROTATION_THRESHOLD_BYTES) keeps its
+  // history in sibling `archive-<g>.jsonl` files next to `active.jsonl`.
+  // Moving only `rollout_path` stranded those siblings, and since the row's
+  // new path pointed at a directory with no segments, `listBySession`
+  // resolved zero history rows — the archived session silently lost
+  // everything written before the last rotation.
+  const enumerated = collectFiles(sessionId);
+  const candidates =
+    enumerated.length > 0
+      ? enumerated
+      : currentRel
+        ? [path.join(rolloutRoot, currentRel)].filter((abs) => fs.existsSync(abs))
+        : [];
+
+  // No rollout file at all — a session created without a chat history, or one
+  // whose files were removed out from under us. The row still survives, so
+  // archive the metadata alone.
+  if (candidates.length === 0) {
+    return {
+      sessionId,
+      moves: [],
+      snapshot,
+      target: { status: 'archived', archivedAt: now, archivedPath: null, rolloutPath: row.rolloutPath },
+    };
+  }
+
+  const moves = candidates.map((srcAbs) => {
+    const rel = path.relative(rolloutRoot, srcAbs).split(path.sep).join('/');
+    const archivedRel = resolveArchivedPath(rel, now);
+    return { srcAbs, archivedRel, archivedAbs: path.join(rolloutRoot, archivedRel) };
+  });
+
+  return {
+    sessionId,
+    moves,
+    snapshot,
+    target: {
+      status: 'archived',
+      archivedAt: now,
+      // The generation layout spans sibling files that move together, so the
+      // row records the shared destination DIRECTORY, not a single file.
+      archivedPath: archivedDirFor(moves[moves.length - 1].archivedRel),
+      // `collectSessionRolloutFiles` returns generation order, so the LAST
+      // entry is the live `active.jsonl`. Repointing at it is what keeps an
+      // archived session readable.
+      rolloutPath: moves[moves.length - 1].archivedRel,
+    },
+  };
+}
+
+/**
+ * PHASE 2 + PHASE 3 of the batch: move every file, then update every row.
+ * Returns the first failure after restoring everything already applied, so a
+ * caller that gets `ok: false` knows the database and the filesystem are both
+ * exactly as they were.
+ */
+function commitArchiveBatch(
+  units: ReadonlyArray<ArchiveUnit>,
+  rolloutRoot: string,
+  applyRow: (sessionId: string, state: ArchiveRowSnapshot) => void,
+): { ok: true } | { ok: false; failedId: string; phase: 'move' | 'row' } {
+  // ── PHASE 2: file moves, journalled so any failure can be undone ─────
+  const journal: Array<{ srcAbs: string; archivedAbs: string }> = [];
+  for (const unit of units) {
+    for (const move of unit.moves) {
+      try {
+        fs.mkdirSync(path.dirname(move.archivedAbs), { recursive: true });
+        fs.renameSync(move.srcAbs, move.archivedAbs);
+        journal.push({ srcAbs: move.srcAbs, archivedAbs: move.archivedAbs });
+      } catch (err) {
+        restoreArchivedMoves(journal, rolloutRoot);
+        getLogger().warn(
+          'archive: rename failed, rolled back, SQL state unchanged',
+          {
+            sessionId: unit.sessionId,
+            src: move.srcAbs,
+            dst: move.archivedAbs,
+            rolledBack: journal.length,
+            err: String(err),
+          },
+          LogComponent.DB,
+        );
+        return { ok: false, failedId: unit.sessionId, phase: 'move' };
+      }
+    }
+  }
+
+  // ── PHASE 3: row updates, likewise reversed on failure ───────────────
+  const written: ArchiveUnit[] = [];
+  for (const unit of units) {
+    try {
+      applyRow(unit.sessionId, unit.target);
+      written.push(unit);
+    } catch (err) {
+      for (let i = written.length - 1; i >= 0; i -= 1) {
+        const done = written[i];
+        try {
+          applyRow(done.sessionId, done.snapshot);
+        } catch (restoreErr) {
+          getLogger().warn(
+            'archive: failed to restore a row after an aborted batch',
+            { sessionId: done.sessionId, err: String(restoreErr) },
+            LogComponent.DB,
+          );
+        }
+      }
+      restoreArchivedMoves(journal, rolloutRoot);
+      getLogger().warn(
+        'archive: metadata update failed, rolled back rows and moved files',
+        { sessionId: unit.sessionId, restoredRows: written.length, err: String(err) },
+        LogComponent.DB,
+      );
+      return { ok: false, failedId: unit.sessionId, phase: 'row' };
+    }
+  }
+
+  return { ok: true };
+}
+
 export function registerDbHandlers(): void {
   // ==================== Safe Mode Handler ====================
 
@@ -580,147 +773,101 @@ export function registerDbHandlers(): void {
   });
 
   /**
-   * Plan 549 (Track A): archive a session — moves the rollout JSONL from
-   * its active path to `<rolloutRoot>/archived/<YYYY-MM-DD>/<basename>`
-   * AND flips status='archived'. Status-only fallback when there is no
-   * rollout file (sessions created without a chat history) or when the
-   * rollout is already gone from disk — matches the codex archive_thread
-   * pattern of "best effort: move what we can, never block on disk".
+   * Plan 549 (Track A): archive a session — moves its rollout files under
+   * `<rolloutRoot>/archived/<YYYY-MM-DD>/<full rel path>` AND flips
+   * status='archived'. Status-only fallback when the session has no rollout
+   * file at all (created without a chat history).
    *
-   * Failure modes (Windows file lock, cross-volume rename) surface as
-   * `false` so the renderer can show a toast; the SQL is unchanged in
-   * that case so the next user attempt finds a consistent state.
+   * Plan 582 (G1) widened the unit of work from one file to every file the
+   * session owns, so a rotated session keeps its history.
+   *
+   * Plan 582 (G2) widened it again, from one session to its whole spawn
+   * subtree, and made the batch a two-phase commit:
+   *
+   *   PHASE 1 (no disk, no SQL): every session in the subtree must be idle.
+   *     Archiving a session with a turn in flight renames the file the agent
+   *     process still holds open; its next append recreates the old path and
+   *     the turn's output is split across two files with no natural order.
+   *     `LockStore` already tracks who is running, so a running session is
+   *     refused outright rather than archived underneath the turn.
+   *   PHASE 2: move every file, journalling each success.
+   *   PHASE 3: update every row; any failure restores the rows already
+   *     written and then the file journal.
+   *
+   * Splitting it this way is what makes "one member of the subtree is busy"
+   * a total no-op instead of a half-archived tree — the same batch semantics
+   * codex gets from `archive_threads`, where the first session must succeed
+   * or the whole call fails.
+   *
+   * Unarchive deliberately does NOT recurse: restoring a parent while its
+   * children stay archived is the reversible half of this, and codex agrees.
    */
-  ipcMain.handle('db:session:archive', (_event, sessionId: string) => {
-    const { sessions, messageLog } = getCoreStores();
-    const session = sessions.get(sessionId);
-    if (!session) return false;
-    if (session.status === 'archived') return true; // idempotent
+  ipcMain.handle('db:session:archive', (_event, sessionId: string): ArchiveResult => {
+    const { sessions, messageLog, locks, spawnEdges } = getCoreStores();
+    const root = sessions.get(sessionId);
+    if (!root) return { ok: false, reason: 'not_found', sessionId };
+    if (root.status === 'archived') return { ok: true, archivedSessionIds: [] };
 
-    const now = Date.now();
-    const currentRel = session.rolloutPath ?? sessions.getRolloutPath(sessionId);
-    if (!currentRel) {
-      // No rollout file to move — fall back to status flip only.
-      sessions.update(sessionId, {
-        status: 'archived',
-        archivedAt: now,
-        archivedPath: null,
-      });
-      return true;
-    }
+    // ── PHASE 1: runtime-lock preflight across the whole subtree ────────
+    // Deduped because `getTree` is edge-shaped: a child reachable by two
+    // parents appears twice, and re-checking a lock is only wasted work.
+    const subtree = new Set<string>([sessionId]);
+    for (const edge of spawnEdges.getTree(sessionId)) subtree.add(edge.childSessionId);
 
-    const rolloutRoot = resolveRolloutRoot();
-
-    // Plan 582 (G1): move EVERY file the session owns, not just the one named
-    // by `rollout_path`. A session in the generation layout (every bot, plus
-    // any human/cron session past NON_BOT_ROTATION_THRESHOLD_BYTES) keeps its
-    // history in sibling `archive-<g>.jsonl` files next to `active.jsonl`.
-    // Moving only `rollout_path` stranded those siblings, and since the row's
-    // new path pointed at a directory with no segments, `listBySession`
-    // resolved zero history rows — the archived session silently lost
-    // everything written before the last rotation.
-    const enumerated = messageLog.collectSessionRolloutFiles(sessionId);
-    const candidates =
-      enumerated.length > 0
-        ? enumerated
-        : [path.join(rolloutRoot, currentRel)].filter((abs) => fs.existsSync(abs));
-
-    if (candidates.length === 0) {
-      // Every rollout file is already gone (manual delete / cross-volume
-      // crash). The row survives, so archive the metadata only.
-      sessions.update(sessionId, {
-        status: 'archived',
-        archivedAt: now,
-        archivedPath: null,
-      });
-      return true;
-    }
-
-    const plan = candidates.map((srcAbs) => {
-      const rel = path.relative(rolloutRoot, srcAbs).split(path.sep).join('/');
-      const archivedRel = resolveArchivedPath(rel, now);
-      return { srcAbs, archivedRel, archivedAbs: path.join(rolloutRoot, archivedRel) };
-    });
-
-    // Plan 549 (Track C): pre-check every source for an exclusive lock before
-    // attempting any rename. On Windows, fs.renameSync against a file held
-    // open by another process returns EBUSY mid-flight, after which earlier
-    // renames in the same batch have already landed. Probing the whole batch
-    // up front keeps the operation all-or-nothing.
-    for (const { srcAbs } of plan) {
-      let handle: number | undefined;
-      try {
-        handle = fs.openSync(srcAbs, 'r');
-      } catch (err) {
-        getLogger().warn(
-          'archive: source file is locked, refusing to rename',
-          { sessionId, src: srcAbs, err: String(err) },
-          LogComponent.DB,
-        );
-        return false;
-      }
-      try {
-        fs.closeSync(handle);
-      } catch {
-        // Closing the probe handle is best-effort; even if it fails the file
-        // is still in whatever state the OS left it in.
-      }
-    }
-
-    // Move the batch, compensating backwards if any step fails. Without this
-    // a mid-batch failure leaves some segments archived and the rest active,
-    // and nothing in the system can reconcile that afterwards.
-    const moved: typeof plan = [];
-    for (const entry of plan) {
-      try {
-        fs.mkdirSync(path.dirname(entry.archivedAbs), { recursive: true });
-        fs.renameSync(entry.srcAbs, entry.archivedAbs);
-        moved.push(entry);
-      } catch (err) {
-        restoreArchivedMoves(moved, rolloutRoot);
-        getLogger().warn(
-          'archive: rename failed, rolled back, SQL state unchanged',
-          {
-            sessionId,
-            src: entry.srcAbs,
-            dst: entry.archivedAbs,
-            rolledBack: moved.length,
-            err: String(err),
-          },
-          LogComponent.DB,
-        );
-        return false;
-      }
-    }
-
-    // `collectSessionRolloutFiles` returns generation order, so the LAST entry
-    // is the live `active.jsonl`. Repoint `rollout_path` at it so the archived
-    // session stays readable — previously the row kept pointing at the
-    // pre-archive path, which no longer existed.
-    const liveArchivedRel = plan[plan.length - 1].archivedRel;
-    try {
-      sessions.update(sessionId, {
-        status: 'archived',
-        archivedAt: now,
-        // The generation layout spans sibling files that move together, so the
-        // row records the shared destination DIRECTORY, not a single file.
-        archivedPath: archivedDirFor(liveArchivedRel),
-        rolloutPath: liveArchivedRel,
-      });
-    } catch (err) {
-      restoreArchivedMoves(moved, rolloutRoot);
-      getLogger().warn(
-        'archive: metadata update failed, rolled back moved files',
-        { sessionId, rolledBack: moved.length, err: String(err) },
+    for (const id of subtree) {
+      if (!locks.isLocked(id)) continue;
+      const origin = locks.lockOrigin(id);
+      getLogger().info(
+        'archive: refusing, a session in the subtree is still running',
+        { sessionId, blockedId: id, origin },
         LogComponent.DB,
       );
-      return false;
+      return { ok: false, reason: 'session_busy', sessionId, blockedId: id, origin };
     }
 
-    // The row's rollout_path just changed; drop the cached resolution so the
-    // next read or append re-reads the DB instead of the pre-archive path.
-    messageLog.invalidateRolloutPathCache(sessionId);
-    return true;
+    // ── Plan every unit up front, still without touching disk ──────────
+    const now = Date.now();
+    const rolloutRoot = resolveRolloutRoot();
+    const units: ArchiveUnit[] = [];
+    for (const id of subtree) {
+      const row = sessions.get(id);
+      // Already archived is a no-op we must not re-report; a soft-deleted
+      // descendant is not ours to resurrect metadata for.
+      if (!row || row.status === 'archived' || row.status === 'deleted') continue;
+      units.push(
+        planSessionArchive(
+          id,
+          {
+            status: row.status,
+            archivedAt: row.archivedAt,
+            archivedPath: row.archivedPath,
+            rolloutPath: row.rolloutPath,
+          },
+          now,
+          rolloutRoot,
+          (sid) => messageLog.collectSessionRolloutFiles(sid),
+          (sid) => sessions.getRolloutPath(sid),
+        ),
+      );
+    }
+
+    // ── PHASE 2 + 3: move, then commit rows ────────────────────────────
+    const outcome = commitArchiveBatch(units, rolloutRoot, (id, state) => {
+      sessions.update(id, {
+        status: state.status,
+        archivedAt: state.archivedAt,
+        archivedPath: state.archivedPath,
+        rolloutPath: state.rolloutPath,
+      });
+    });
+    if (!outcome.ok) {
+      return { ok: false, reason: 'io', sessionId, failedId: outcome.failedId };
+    }
+
+    // Every row's rollout_path just changed; drop the cached resolution so
+    // the next read or append re-reads the DB instead of the pre-archive path.
+    for (const unit of units) messageLog.invalidateRolloutPathCache(unit.sessionId);
+    return { ok: true, archivedSessionIds: units.map((u) => u.sessionId) };
   });
   /**
    * Plan 549 (Track A): unarchive — reverse the rename and reset the

@@ -41,9 +41,16 @@ export interface CoreSession {
   archivedAt: number | null;
   /**
    * Plan 549 (Track A): rollout-relative path where the JSONL lives after
-   * archive. The format is `<rolloutRoot>/archived/<YYYY-MM-DD>/<basename>`
-   * — see `resolveArchivedPath` in archive-paths.ts. Null while the
-   * session is active or when there is no rollout file to move.
+   * archive. Null while the session is active or when there is no rollout
+   * file to move.
+   *
+   * Plan 582 (G1) changed the shape from a single file path to the archive
+   * DIRECTORY `<rolloutRoot>/archived/<YYYY-MM-DD>/<full rel path>`: a
+   * rotated session's history spans sibling `archive-<g>.jsonl` files that
+   * must move together, and mirroring the full relative path makes
+   * unarchive a pure prefix strip that is lossless and collision-free
+   * between two bot sessions archived on the same day. See
+   * `resolveArchivedPath` / `archivedDirFor` in archive-paths.ts.
    */
   archivedPath: string | null;
   createdAt: number;

@@ -684,6 +684,37 @@ describe.skipIf(!nativeSqliteAvailable)('stores', () => {
       spawnEdges.record({ parentSessionId: 'root', childSessionId: 'a' });
       expect(spawnEdges.getParent('root')).toBeNull();
     });
+
+    // Plan 582 (G2): these two guard the change from UNION ALL to UNION in
+    // the recursive CTE. getTree is on the archive path, so a hang here is a
+    // hang in the main process while the user clicks Archive.
+    it('getTree terminates on a parent/child cycle instead of spinning forever', () => {
+      // A cycle is not reachable through `record` (an edge is keyed
+      // parent->child, so b->a and a->b are both insertable — the graph has
+      // no acyclicity constraint).
+      spawnEdges.record({ parentSessionId: 'a', childSessionId: 'b' });
+      spawnEdges.record({ parentSessionId: 'b', childSessionId: 'a' });
+
+      const tree = spawnEdges.getTree('a');
+      expect(tree.map((e) => e.id).sort()).toEqual(['a->b', 'b->a']);
+    });
+
+    it('getTree dedupes a child reachable through two parents', () => {
+      // root -> a -> shared, root -> b -> shared. With UNION ALL the shared
+      // edge is emitted once per path; the archive batch must see it once.
+      spawnEdges.record({ parentSessionId: 'root', childSessionId: 'a' });
+      spawnEdges.record({ parentSessionId: 'root', childSessionId: 'b' });
+      spawnEdges.record({ parentSessionId: 'a', childSessionId: 'shared' });
+      spawnEdges.record({ parentSessionId: 'b', childSessionId: 'shared' });
+
+      const tree = spawnEdges.getTree('root');
+      expect(tree.map((e) => e.id).sort()).toEqual([
+        'a->shared',
+        'b->shared',
+        'root->a',
+        'root->b',
+      ]);
+    });
   });
 
   // ─── AttachmentStore ───
