@@ -26,3 +26,27 @@ describe('BrowserTool local file navigation', () => {
     expect(result.result).toContain('Local snapshot');
   });
 });
+
+describe('BrowserTool usage guide (plan 583 Phase 2)', () => {
+  // The operating manual is ~20 KB and is now surfaced through
+  // `tool_catalog`'s detail response, so it is model-visible for the first
+  // time. If the engine ever stops producing it, the model silently loses
+  // all browser guidance — this test is the tripwire for that.
+  it('exposes a substantial, browser-specific operating manual', () => {
+    const guide = new BrowserTool().getPrompt();
+
+    expect(guide.length).toBeGreaterThan(5_000);
+    expect(guide).toContain('browser');
+    // Documents real operations rather than restating the tool description.
+    expect(guide).toMatch(/snapshot/);
+    expect(guide).toMatch(/navigate/);
+  });
+
+  it('is reachable through the registry executor contract', () => {
+    // `getPrompt?()` is optional on ToolExecutor; the catalog detail path
+    // calls it via that interface, so it must exist on the registered object.
+    const tool = new BrowserTool();
+    expect(typeof (tool as { getPrompt?: () => string }).getPrompt).toBe('function');
+  });
+});
+
