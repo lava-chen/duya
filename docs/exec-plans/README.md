@@ -1,4 +1,4 @@
-﻿# Execution Plans
+# Execution Plans
 
 > **This is the first place to check before any work!** See workflow below.
 
@@ -40,7 +40,6 @@ Rules:
 
 | Plan | Priority | Next action |
 | --- | --- | --- |
-| [plugin-trust-enforcement](./active/584-plugin-trust-enforcement.md) | **P0** | Phase 4 (narrowed): `setEnabled` is the escape hatch the Phase 1 gate relies on and currently leaves no audit trail — log an explicit opt-in with `trustLevel`; do not add a registration-time gate before plan 419 P1 _(Phases 0-3 landed; Phase 2 was cancelled as N/A because plugin auto-update has no execution point, and Phase 3 resolved to deleting the write-only PermissionService)_ |
 | [08-31-multi-agent-profile-design](./active/2026-08-31-multi-agent-profile-design.md) | P1 | Implement plan 7.2 memory partition by profile (migration + `[memory] partition` toggle) _(section C partially done via 481/477)_ |
 | [popover-autoflip](./active/237-popover-autoflip.md) | P1 | Migrate `HoverPopover` to `usePopoverPlacement`, then `SlashCommandPopover` / `ModelSelector` |
 | [permission-decision-bus](./active/419-permission-decision-bus.md) | P0 | Add `checkPermissions` + `riskTier` to the MCP tool registration path _(P0/P2 done; P1 open)_ |
@@ -76,7 +75,7 @@ Rules:
 | [browser-core-upgrade](./active/573-browser-core-upgrade.md) | P0 | Phase 3: add the core-db browsing-history table + migration, hook webview main-frame `did-navigate`, expose `browser:history-*` IPC plus the history view _(Phases 1/1b/2/2b landed)_ |
 | [cua-tree-richness](./active/576-cua-tree-richness.md) | P1 | Phase 3 in the ps1 C# probe walk: emit `children_total/shown/offset` for container nodes, plus `surface_kind` and the new-window settle poll _(Phases 1-2 landed)_ |
 | [mcp-capability-core-convergence](./active/580-mcp-capability-core-convergence.md) | P0 | Run Phase 0's real-machine Notion baseline (instrumented around `RemoteMcpConnector`/`MCPClient` discovery) to record `pages=N, total=M` _(Phases 0/3/4/5 open)_ |
-| [browser-capability-boundary](./active/583-browser-capability-boundary.md) | P0 | Seam C rewritten: the "≈5 change sites" estimate was wrong — plugins contribute **zero** executable code today and the trust layer that would gate them is **unenforced dead metadata**. Next: stand up a separate plan to actually wire `trust-engine`/`PermissionService`, then land seam C as declarative-composition + MCP trust _(seams A and B landed — 15 commits)_ |
+| [browser-capability-boundary](./active/583-browser-capability-boundary.md) | P0 | Seam C is now unblocked: land it as A (declarative composition) + strengthening B (the existing MCP trust path). Process-in-process execution (option C) still needs a **new** execution point for trust-tiered gating — plan 584 finished and proved the other five capability fields have none _(seams A and B landed; trust layer wired in [584](../completed/584-plugin-trust-enforcement.md))_ |
 
 ***
 

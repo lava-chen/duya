@@ -1,7 +1,15 @@
 # Plan 584 — plugin 信任层接线：让已有的 trust 分层真正有牙齿
 
-> 状态：active。P0 安全项。由 [583 §7 Phase 4](./583-browser-capability-boundary.md) 的调研拆出，
+> 状态：**已完成**（2026-10-01）。P0 安全项。由
+> [583 §7 Phase 4](./583-browser-capability-boundary.md) 的调研拆出，
 > 独立成 plan 的原因是：**这个缺口与缝 C 做不做无关，且是缝 C 的硬前提**。
+>
+> **交付摘要**：六个 capability 字段中，只有一个（`meetsMinimumLevel`）存在
+> 可接的执行点，已接线（Phase 1）。其余五个一个未接线、四个**没有执行点**，
+> 如实标为 N/A 而非接假门（Phase 2）。同时**删掉**了一个读起来像执法、
+> 实际零调用点的 `PermissionService`（Phase 3），并给 Phase 1 开的逃生口
+> 补上审计痕迹（Phase 4）。过程中修掉两处真实缺陷：共享能力表被按引用交出，
+> 以及 `builtin-directory` 被误判 `untrusted`（后者差一步就会禁用所有内置插件）。
 
 ## 0. 结论
 
@@ -215,9 +223,11 @@ tier 映射补全后，5 个 `PluginSource` 全部落在已识别档位，**`Unt
 （`decideMcpSource` 已在**调用时**对 plugin/local/unknown 逐次询问），
 但**当前没有任何审计痕迹**：谁在什么时候启用了什么，只有 `logger.info` 一行。
 
-- [ ] `setEnabled` 在启用「装上时被门控扣下」的 plugin 时，记一条带
-      `trustLevel` 的显式日志。低成本，且把 Phase 1 开的口子闭上。
-- [ ] 与 plan 419 P1 对齐前**不**在此加注册时门控（避免两套门）。
+- [x] `setEnabled` 在启用「装上时被门控扣下」的 plugin 时，记一条带
+      `trustLevel` 的 **warn**（含 `source` / `marketplace`）；其余启用变更记
+      **info**。策略仍单源：`isWithheldAtInstall()` 委托给 `decideInstallGate()`。
+      代价极小，且把 Phase 1 开的口子闭上。
+- [x] 与 plan 419 P1 对齐前**不**在此加注册时门控（避免两套门）。
 
 
 
