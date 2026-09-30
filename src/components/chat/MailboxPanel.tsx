@@ -18,7 +18,6 @@ import { useShallow } from "zustand/react/shallow";
 import {
   useMailboxStore,
   type MailboxRow,
-  type MailboxKind,
   type MailboxStatus,
 } from "@/stores/mailbox-store";
 import { MailboxBubble } from "./MailboxBubble";
@@ -29,6 +28,7 @@ interface MailboxPanelProps {
    * Optional callback for the "more" menu on a single row (reclassify, etc).
    */
   onMore?: (row: MailboxRow) => void;
+  onEditInComposer?: (row: MailboxRow) => void;
   /**
    * Optional override for the rows. When provided, the panel skips
    * the zustand store subscription and renders the supplied rows.
@@ -43,6 +43,7 @@ const VISIBLE_STATUSES: MailboxStatus[] = ["pending", "observed"];
 export function MailboxPanel({
   sessionId,
   onMore,
+  onEditInComposer,
   rowsOverride,
 }: MailboxPanelProps) {
   const storeRows = useMailboxStore(
@@ -52,7 +53,6 @@ export function MailboxPanel({
 
   const list = useMailboxStore((state) => state.list);
   const cancel = useMailboxStore((state) => state.cancel);
-  const edit = useMailboxStore((state) => state.edit);
   const guide = useMailboxStore((state) => state.guide);
 
   // Initial load + refetch on session change
@@ -76,16 +76,9 @@ export function MailboxPanel({
     [rows],
   );
 
-  const handleEdit = useCallback(
-    (id: string, patch: { content?: string; kind?: MailboxKind }) => {
-      void edit(id, patch);
-    },
-    [edit],
-  );
-
   const handleCancel = useCallback(
     (id: string) => {
-      void cancel(id, "user_cancelled_via_bubble");
+      void cancel(id, "user_cancelled_via_bubble").catch(() => {});
     },
     [cancel],
   );
@@ -116,7 +109,7 @@ export function MailboxPanel({
                 <MailboxBubble
                   key={row.id}
                   row={row}
-                  onEdit={handleEdit}
+                  onEditInComposer={onEditInComposer}
                   onCancel={handleCancel}
                   onGuide={handleGuide}
                   onMore={onMore}

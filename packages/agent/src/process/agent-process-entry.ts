@@ -87,9 +87,9 @@ import { resolveChatStartAgentMode } from './permission-profile-bridge.js';
 import { applyMCPConfiguration, type MCPApplyResult } from '../mcp/apply.js';
 import { storePendingAnswer, takePendingAnswer } from '../tool/AskUserQuestionTool/AskUserQuestionTool.js';
 import { isCDNImageUrl } from '../utils/urlSafety.js';
-import { resizeImageBuffer, needsResizing, TARGET_IMAGE_SIZE_BYTES } from '../utils/imageResizer.js';
 import { isModelLikelyMultimodal } from '../utils/multimodal-detection.js';
 import { detectModelCapability } from '../utils/model-capability-cache.js';
+import { loadAttachmentImages } from '../utils/attachment-images.js';
 import { buildImageAttachmentContext } from '../utils/image-attachment-context.js';
 import type { ProbeConfig } from '../utils/model-capability-cache.js';
 import type { ToolExecutor } from '../tool/registry.js';
@@ -2481,102 +2481,15 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
     // Phase 1: Read and compress all image files once.
     // Cache base64 data to avoid double-read (vision analysis + content block).
-    interface CachedImageData {
-      base64: string;
-      mediaType: string;
-    }
-    const imageDataCache = new Map<string, CachedImageData>();
+    const imageDataCache = await loadAttachmentImages(imageFiles);
     const readFailedFiles = new Set<string>();
-    // Track CDN URLs separately from transient read failures. Both end up
-    // with no cached base64, but the fallback prompt needs to tell the main
-    // model *why* each image is unavailable. See buildImageAttachmentContext
-    // in utils/image-attachment-context.ts.
     const cdnSkippedFiles = new Set<string>();
     const visionFailedFiles = new Set<string>();
-    const markReadFailed = (name: string) => {
-      if (name) readFailedFiles.add(name);
-    };
-    const markCdnSkipped = (name: string) => {
-      if (name) cdnSkippedFiles.add(name);
-    };
-    const markVisionFailed = (name: string) => {
-      if (name) visionFailedFiles.add(name);
-    };
-
+    const markVisionFailed = (name: string) => { if (name) visionFailedFiles.add(name); };
     for (const file of imageFiles) {
-      let base64Data = '';
-      let mediaType = file.type;
-
-      if (file.url.startsWith('data:')) {
-        // Data URL path (clipboard paste / screenshot tool). Decode and
-        // run through the same resize pipeline as file-path images so
-        // long screenshots (e.g. 1920x8000) get scaled down to <=2048px
-        // before being sent to the vision model. Without this, a tall
-        // webpage screenshot can blow the model's context window because
-        // vision token count is proportional to pixel count, not byte size.
-        try {
-          const commaIdx = file.url.indexOf(',');
-          const header = commaIdx > 0 ? file.url.slice(5, commaIdx) : '';
-          const rawBase64 = file.url.slice(commaIdx + 1);
-          const imgBuffer = Buffer.from(rawBase64, 'base64');
-          // Prefer the media type declared in the data URL header;
-          // fall back to the FileAttachment.type.
-          const headerMediaType = /data:([^;]+)/.exec(header)?.[1];
-          mediaType = headerMediaType || file.type;
-          if (needsResizing(imgBuffer)) {
-            try {
-              const resized = await resizeImageBuffer(imgBuffer, TARGET_IMAGE_SIZE_BYTES);
-              base64Data = resized.buffer.toString('base64');
-              mediaType = resized.mediaType;
-              log(`[Agent-Process] Compressed pasted image "${file.name}": ${imgBuffer.length} → ${resized.buffer.length} bytes`);
-            } catch (resizeErr) {
-              warn(`[Agent-Process] Image compression failed for pasted "${file.name}", using original:`, resizeErr);
-              base64Data = rawBase64;
-            }
-          } else {
-            base64Data = rawBase64;
-          }
-        } catch (decodeErr) {
-          // Last-resort fallback: keep the old behavior.
-          base64Data = file.url.split(',')[1] || '';
-        }
-      } else if ((file as unknown as Record<string, string>).base64) {
-        base64Data = (file as unknown as Record<string, string>).base64;
-      } else if (file.url && !file.url.startsWith('data:') && !isCDNImageUrl(file.url)) {
-        try {
-          const imgBuffer = await readFile(file.url);
-          if (needsResizing(imgBuffer)) {
-            try {
-              const resized = await resizeImageBuffer(imgBuffer, TARGET_IMAGE_SIZE_BYTES);
-              base64Data = resized.buffer.toString('base64');
-              mediaType = resized.mediaType;
-              log(`[Agent-Process] Compressed image "${file.name}": ${imgBuffer.length} → ${resized.buffer.length} bytes`);
-            } catch (resizeErr) {
-              warn(`[Agent-Process] Image compression failed for "${file.name}", using original:`, resizeErr);
-              base64Data = imgBuffer.toString('base64');
-            }
-          } else {
-            base64Data = imgBuffer.toString('base64');
-          }
-        } catch (readErr) {
-          markReadFailed(file.name);
-        }
-      } else if (isCDNImageUrl(file.url)) {
-        // CDN URLs have no local data available. Mark explicitly so the
-        // fallback prompt can distinguish "skipped on purpose" from
-        // "read failed transiently" — both end up with no cached base64.
-        markCdnSkipped(file.name);
-      } else {
-        markReadFailed(file.name);
-      }
-
-      if (base64Data) {
-        imageDataCache.set(file.name, { base64: base64Data, mediaType });
-      } else if (isCDNImageUrl(file.url)) {
-        // Already recorded in cdnSkippedFiles above; nothing more to do.
-      } else {
-        markReadFailed(file.name);
-      }
+      if (imageDataCache.has(file)) continue;
+      if (isCDNImageUrl(file.url)) cdnSkippedFiles.add(file.name);
+      else readFailedFiles.add(file.name);
     }
 
     // Phase 2: Vision pre-analysis using the configured vision model.
@@ -2603,7 +2516,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     if (shouldUseVisionPreAnalysis) {
       let analyzedCount = 0;
       for (const file of imageFiles) {
-        const cached = imageDataCache.get(file.name);
+        const cached = imageDataCache.get(file);
         if (!cached) continue;
 
         try {
@@ -2659,7 +2572,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       sendI18nStatus('streaming.visionFallback');
       const toolPassResults: string[] = [];
       for (const file of imageFiles) {
-        const cached = imageDataCache.get(file.name);
+        const cached = imageDataCache.get(file);
         const imagePath = (file.path || file.url || '').trim();
 
         // Skip CDN URLs (no local data available)
@@ -2792,7 +2705,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       // Only send image blocks to multimodal-capable models.
       for (const file of files) {
         if (file.type.startsWith('image/') || file.type.startsWith('img/')) {
-          const cached = imageDataCache.get(file.name);
+          const cached = imageDataCache.get(file);
 
           if (cached) {
             if (modelIsMultimodal) {
@@ -3024,6 +2937,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       // Structured capability summaries; agent injects <plugin-activation>.
       mentionedPlugins: msg.options?.mentionedPlugins,
       attachments: files,
+      imageInputSupported: modelIsMultimodal,
       displayContent: msg.options?.displayContent,
       // Plan 441: thread the chat:start message id through as the turn id
       // so every journal emit and rebase event for this turn carries the

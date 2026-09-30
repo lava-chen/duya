@@ -1,3 +1,4 @@
+import React from 'react';
 /**
  * MessageInput.test.tsx - smoke test after Plan 220 migration.
  *
@@ -12,7 +13,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 
 // Heavy modules that MessageInput transitively imports. We mock them out
@@ -87,7 +88,8 @@ vi.mock('@/components/chat/ContextUsageRing', () => ({
 }));
 
 vi.mock('@/components/chat/RichTextInput', () => ({
-  RichTextInput: () => <div data-testid="rich-text-input" />,
+  RichTextInput: React.forwardRef<HTMLDivElement, { value: string; onChange: (value: string) => void; disabled?: boolean }>((props, ref) =>
+    <div ref={ref} data-testid="rich-text-input" contentEditable={!props.disabled} suppressContentEditableWarning onInput={(event) => props.onChange(event.currentTarget.textContent ?? '')}>{props.value}</div>),
 }));
 
 vi.mock('@/components/chat/FileAttachmentCard', () => ({
@@ -95,7 +97,8 @@ vi.mock('@/components/chat/FileAttachmentCard', () => ({
 }));
 
 vi.mock('@/components/chat/AttachmentBar', () => ({
-  AttachmentBar: () => <div data-testid="attachment-bar" />,
+  AttachmentBar: ({ attachments, onRemove }: { attachments: Array<{ id: string; name: string }>; onRemove?: (id: string) => void }) =>
+    <div data-testid="attachment-bar">{attachments.map((file) => <button type="button" key={file.id} onClick={() => onRemove?.(file.id)}>{file.name}</button>)}</div>,
 }));
 
 vi.mock('@/components/chat/InlineTaskRow', () => ({
@@ -208,4 +211,39 @@ describe('MessageInput (Plan 220 smoke test)', () => {
   // NOTE: the former "reports the selected model together with its provider"
   // case was removed — the standalone ModelSelector was replaced by the
   // unified slash-command popover (onSelectModel via useSlashCommands).
+});
+
+describe('full composer message editing', () => {
+  const attachments = [{ id: 'one', name: 'first.png', type: 'image/png', url: 'data:image/png;base64,YWJj', size: 3 }, { id: 'two', name: 'second.png', type: 'image/png', url: 'data:image/png;base64,ZGVm', size: 3 }];
+  it('restores attachments, allows removal, and submits the edited payload', async () => {
+    const onSend = vi.fn();
+    const { container } = render(<MessageInput onSend={onSend} editDraft={{ key: 'edit', text: 'compare', attachments }} />);
+    expect(screen.getByTestId('rich-text-input')).toHaveTextContent('compare');
+    fireEvent.click(screen.getByText('first.png'));
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(onSend).toHaveBeenCalled());
+    expect(onSend.mock.calls[0][1]).toEqual([attachments[1]]);
+    await waitFor(() => expect(screen.getByTestId('rich-text-input').textContent).toBe(''));
+  });
+  it('cancel restores the pre-existing draft without sending', () => {
+    const onSend = vi.fn();
+    const onCancelEdit = vi.fn();
+    const { rerender } = render(<MessageInput onSend={onSend} onCancelEdit={onCancelEdit} />);
+    fireEvent.input(screen.getByTestId('rich-text-input'), { target: { textContent: 'unsent draft' } });
+    rerender(<MessageInput onSend={onSend} onCancelEdit={onCancelEdit} editDraft={{ key: 'edit', text: 'old message', attachments }} />);
+    fireEvent.click(screen.getByText('mailbox.bubble.cancelEdit'));
+    expect(screen.getByTestId('rich-text-input')).toHaveTextContent('unsent draft');
+    expect(screen.queryByText('first.png')).toBeNull();
+    expect(onCancelEdit).toHaveBeenCalledOnce();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+  it('failed submission preserves text and attachments for retry', async () => {
+    const onSend = vi.fn().mockRejectedValue(new Error('Not saved'));
+    const { container } = render(<MessageInput onSend={onSend} editDraft={{ key: 'edit', text: 'compare', attachments }} />);
+    fireEvent.submit(container.querySelector('form')!);
+    await screen.findByRole('alert');
+    expect(screen.getByTestId('rich-text-input')).toHaveTextContent('compare');
+    expect(screen.getByText('first.png')).toBeInTheDocument();
+    expect(screen.getByText('second.png')).toBeInTheDocument();
+  });
 });

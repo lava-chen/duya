@@ -1188,6 +1188,9 @@ export class StreamSessionManager {
     const queue = this.pendingMessages.get(sessionId) || [];
     queue.push(params);
     this.pendingMessages.set(sessionId, queue);
+    // A mailbox save may finish after the active run ends. Still promote
+    // its row atomically before starting, rather than stranding or duplicating it.
+    if (params.queuedMailboxId && this.canSend(sessionId)) this.autoStartQueuedStream(sessionId);
   }
 
   getPendingMessages(sessionId: string): StartStreamParams[] {
@@ -1221,6 +1224,7 @@ export class StreamSessionManager {
     setTimeout(() => {
       void (async () => {
         try {
+          if (!this.canSend(sessionId)) return;
           const queue = this.pendingMessages.get(sessionId);
           while (queue && queue.length > 0) {
             const next = queue.shift()!;
@@ -1240,11 +1244,6 @@ export class StreamSessionManager {
 
                 const row = promoted as Record<string, unknown>;
                 if (typeof row.content === 'string') {
-                  // An empty promoted row must not become a blank user turn
-                  // (2026-09-26 investigation) — skip it entirely.
-                  if (!row.content.trim()) {
-                    continue;
-                  }
                   next.content = row.content;
                   next.displayContent = row.content;
                 }
@@ -1260,6 +1259,7 @@ export class StreamSessionManager {
               }
             }
 
+            if (!next.content.trim() && !next.files?.length) continue;
             await this.startStream(next);
             return;
           }
@@ -1445,9 +1445,6 @@ export class StreamSessionManager {
     if (!promoted) return false;
 
     const content = typeof promoted.content === 'string' ? promoted.content : '';
-    // An empty promoted row must not become a blank user turn — skip it.
-    if (!content.trim()) return false;
-
     let files: FileAttachment[] | undefined;
     if (typeof promoted.attachments_json === 'string') {
       try {
@@ -1457,6 +1454,8 @@ export class StreamSessionManager {
         // Undecodable attachments — deliver the text alone.
       }
     }
+
+    if (!content.trim() && !files?.length) return false;
 
     // Inherit the session's last manual-send template (model / permission /
     // profile / ...) so an externally written row streams with the usual

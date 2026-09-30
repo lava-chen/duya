@@ -133,11 +133,11 @@ interface MessageItemProps {
   onToolResult?: (toolUseId: string, approved: boolean) => void;
   // Messages merged from the same round (thinking + tool_use + text)
   mergedMessages?: Message[];
-  // Inline edit: only the last user message is editable.
+  // Only the last user message is editable.
   isEditable?: boolean;
   // Called when the user edits and sends. The parent deletes the message
   // (and everything after it) then re-sends the edited text.
-  onEditSend?: (messageId: string, text: string) => void;
+  onEditMessage?: (messageId: string) => void;
   /** Per-session Focus mode: collapse the round into one big action group
    *  and hide intermediate text outputs — only the final reply shows. */
   focusMode?: boolean;
@@ -552,15 +552,13 @@ function messageItemPropsEqual(prev: MessageItemProps, next: MessageItemProps): 
     && messagesEqual(prev.mergedMessages, next.mergedMessages)
     && prev.onToolResult === next.onToolResult
     && prev.isEditable === next.isEditable
-    && prev.onEditSend === next.onEditSend
+    && prev.onEditMessage === next.onEditMessage
     && prev.focusMode === next.focusMode
     && prev.isLiveRun === next.isLiveRun;
 }
 
-function MessageItemComponent({ message, toolResults = [], onToolResult, mergedMessages = [], isEditable, onEditSend, focusMode = false, isLiveRun = false }: MessageItemProps) {
+function MessageItemComponent({ message, toolResults = [], onToolResult, mergedMessages = [], isEditable, onEditMessage, focusMode = false, isLiveRun = false }: MessageItemProps) {
   const [copied, setCopied] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
-  const [editText, setEditText] = useState('');
   // Preview modal state
   const [previewAttachment, setPreviewAttachment] = useState<FileAttachment | null>(null);
   const [previewPastedContent, setPreviewPastedContent] = useState<{ id: string; content: string; preview: string } | null>(null);
@@ -827,37 +825,8 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
     setPreviewPastedContent(null);
   };
 
-  // Inline edit: extract the user-typed text from the message, populate the
-  // edit textarea, and switch to editing mode. Prefers displayContent (pure
-  // user text without attachment bodies) over content.
-  const handleStartEdit = () => {
-    const source = message.displayContent !== undefined ? message.displayContent : message.content;
-    let text = '';
-    if (typeof source === 'string') {
-      text = source;
-    } else if (Array.isArray(source)) {
-      text = source
-        .filter((b): b is { type: 'text'; text: string } =>
-          !!b && typeof b === 'object' && (b as Record<string, unknown>).type === 'text'
-          && typeof (b as Record<string, unknown>).text === 'string')
-        .map(b => b.text)
-        .join('');
-    }
-    setEditText(text);
-    setIsEditing(true);
-  };
-
-  const handleEditSend = () => {
-    const trimmed = editText.trim();
-    if (!trimmed) return;
-    onEditSend?.(message.id, trimmed);
-    setIsEditing(false);
-  };
-
-  const handleEditCancel = () => {
-    setIsEditing(false);
-    setEditText('');
-  };
+  // Restore the full message to the main composer without rewinding yet.
+  const handleStartEdit = () => onEditMessage?.(message.id);
 
   const isUser = message.role === 'user';
   const hasPastedContents = allPastedContents.length > 0;
@@ -1006,53 +975,7 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
               ))}
             </div>
           )}
-          {isEditing ? (
-            <div
-              className="rounded-2xl rounded-tr-sm border overflow-hidden transition-all duration-200"
-              /* Plan 471 v11: drop the drop shadow to match the
-                 sidebar popover cleanup — keep only border + fill, same
-                 thin-card feel as the @-mention popover elsewhere. */
-              style={{ backgroundColor: 'var(--command-menu-bg)', borderColor: 'var(--command-menu-border)' }}
-            >
-              <textarea
-                value={editText}
-                onChange={(e) => setEditText(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    handleEditSend();
-                  }
-                  if (e.key === 'Escape') {
-                    e.preventDefault();
-                    handleEditCancel();
-                  }
-                }}
-                autoFocus
-                className="w-full bg-transparent text-sm px-4 py-2.5 outline-none resize-none"
-                style={{ color: 'var(--text)', minHeight: '60px', maxHeight: '240px' }}
-                rows={3}
-              />
-              <div className="flex justify-end items-center gap-2 px-3 pb-2.5 pt-0.5">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleEditCancel}
-                  className="text-[var(--muted)]"
-                >
-                  {locale === 'zh' ? '取消' : 'Cancel'}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleEditSend}
-                  className="bg-[var(--text)] text-[var(--bg-canvas)] hover:opacity-90"
-                >
-                  {locale === 'zh' ? '发送' : 'Send'}
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <>
+          <>
               {userBrowserReferences.text && (
                 <div
                   className="rounded-2xl rounded-tr-sm px-4 py-2.5"
@@ -1081,7 +1004,7 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
                 >
                   {copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
                 </IconButton>
-                {isEditable && onEditSend && (
+                {isEditable && onEditMessage && (
                   <IconButton
                     variant="ghost"
                     size="sm"
@@ -1095,8 +1018,7 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
                   </IconButton>
                 )}
               </div>
-            </>
-          )}
+          </>
         </div>
 
         {/* Preview Modal */}

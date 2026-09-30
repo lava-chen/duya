@@ -243,6 +243,8 @@ export interface AgentOptions {
 
 // 对话选项
 export interface ChatOptions {
+  /** Capability detected by the worker; reused for in-run attachment delivery. */
+  imageInputSupported?: boolean;
   systemPrompt?: string;
   /**
    * Observes the fully assembled prompt immediately before a provider request.

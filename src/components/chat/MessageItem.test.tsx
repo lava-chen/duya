@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { describe, expect, it, vi } from 'vitest';
 import type { Message } from '@/types';
@@ -205,4 +205,12 @@ describe('MessageItem action grouping', () => {
     // widget still rendered as an independent block in the same bubble
     expect(screen.getByTestId('widget')).toBeInTheDocument();
   });
+});
+
+it('returns the complete user message to the main composer without an inline text editor', () => {
+  const onEditMessage = vi.fn();
+  const { container } = render(<MessageItem message={{ id: 'user-edit', role: 'user', content: 'compare', timestamp: 1 }} isEditable onEditMessage={onEditMessage} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Edit and resend' }));
+  expect(onEditMessage).toHaveBeenCalledWith('user-edit');
+  expect(container.querySelector('textarea')).toBeNull();
 });

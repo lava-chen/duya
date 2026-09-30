@@ -159,6 +159,8 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 
 ### Chat / Streaming
 
+- [Chat attachments, editing, and in-run input](./active/2026-09-chat-attachment-edit-queue.md): Implemented; typecheck, Electron build, and browser checks passed. Live provider smoke pending.
+
 | Plan                                                                   | Description                                                                                                                                                                              | Priority | Status                                                |
 | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----------------------------------------------------- |
 | [447-streaming-durable-dedup](./active/447-streaming-durable-dedup.md) | Session switch-back duplicate rendering + mid-run refresh live-state parity 鈥?subtract durable-covered prefix from streamingEvents; active-turn rounds keep live tool-group presentation | P1       | Phase 1-4 implemented; manual UI verification pending |

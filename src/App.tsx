@@ -447,7 +447,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
         : permissionMode === 'ask' ? 'default'
         : 'auto';
 
-      if (!canSend(activeThreadId)) {
+      if (queuedMailboxId || !canSend(activeThreadId)) {
         enqueueMessage(activeThreadId, {
           sessionId: activeThreadId,
           content: plainContent,

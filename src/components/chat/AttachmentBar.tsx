@@ -43,6 +43,7 @@ import { rewriteMediaSrc } from './markdownComponents';
 export interface AttachmentBarProps {
   attachments: FileAttachment[];
   mode: 'input' | 'history';
+  cardWidth?: number;
   onRemove?: (id: string) => void;
   onPreview?: (att: FileAttachment) => void;
 }
@@ -253,6 +254,7 @@ function ReferenceSquareCard({
 export function AttachmentBar({
   attachments,
   mode,
+  cardWidth = 104,
   onRemove,
   onPreview,
 }: AttachmentBarProps) {
@@ -305,7 +307,7 @@ export function AttachmentBar({
                   (att.kind === 'image' ? (att.url || att.path) : undefined)
                 }
                 url={att.url || att.path}
-                width={104}
+                width={cardWidth}
                 onRemove={mode === 'input' ? (id) => onRemove?.(id) : undefined}
                 onClick={mode === 'history' ? () => onPreview?.(att) : undefined}
               />

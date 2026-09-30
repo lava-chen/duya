@@ -26,7 +26,7 @@ interface MessageListProps {
   onScrollStateChange?: (isNearBottom: boolean) => void;
   error?: string | null;
   sessionId: string;
-  onEditSend?: (messageId: string, text: string) => void;
+  onEditMessage?: (messageId: string) => void;
   /** Predicted follow-up prompts shown as cards at the end of the stream. */
   nextStepSuggestions?: string[];
   onNextStepSelect?: (value: string) => void;
@@ -343,7 +343,7 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
   cachedHeight,
   onHeightChange,
   isEditable,
-  onEditSend,
+  onEditMessage,
   focusMode,
   isLiveRun,
 }: {
@@ -354,7 +354,7 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
   cachedHeight?: number;
   onHeightChange: (messageId: string, height: number) => void;
   isEditable?: boolean;
-  onEditSend?: (messageId: string, text: string) => void;
+  onEditMessage?: (messageId: string) => void;
   focusMode?: boolean;
   /** Plan 447: round belongs to the turn currently being streamed —
    *  render the tool group in the live presentation instead of the
@@ -439,7 +439,7 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
           toolResults={group.toolResults}
           mergedMessages={group.mergedMessages}
           isEditable={isEditable}
-          onEditSend={onEditSend}
+          onEditMessage={onEditMessage}
           focusMode={focusMode}
           isLiveRun={isLiveRun}
         />
@@ -454,7 +454,7 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
   && prev.isAlwaysRendered === next.isAlwaysRendered
   && prev.cachedHeight === next.cachedHeight
   && prev.isEditable === next.isEditable
-  && prev.onEditSend === next.onEditSend
+  && prev.onEditMessage === next.onEditMessage
   && prev.focusMode === next.focusMode
   && prev.isLiveRun === next.isLiveRun
 ));
@@ -810,7 +810,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   onScrollStateChange,
   error,
   sessionId,
-  onEditSend,
+  onEditMessage,
   nextStepSuggestions,
   onNextStepSelect,
 }, ref) {
@@ -1241,7 +1241,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
             cachedHeight={rowHeightsRef.current.get(group.message.id)}
             onHeightChange={handleRowHeightChange}
             isEditable={group.message.role === 'user' && group.message.id === lastUserMessageId}
-            onEditSend={onEditSend}
+            onEditMessage={onEditMessage}
             focusMode={focusMode}
             // Plan 447: rounds after the last user message belong to the turn
             // being streamed — render them in the live presentation so a
