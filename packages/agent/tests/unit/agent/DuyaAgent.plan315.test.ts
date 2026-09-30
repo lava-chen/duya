@@ -460,6 +460,19 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
   // 3. mailbox & task notification: not persisted, not rendered, in model.
   // ---------------------------------------------------------------
   describe('runtime context filtering', () => {
+    it('includes both images from attachment-only mailbox input at the actual checkpoint', async () => {
+      const agent = newAgent({ sessionId: 'sess-images' });
+      const { mailboxDb } = await import('../../../src/ipc/db-client.js');
+      const attachments = ['YWJj', 'ZGVm'].map((data, index) => ({ id: `image-${index}`, name: 'image.png', type: 'image/png', url: `data:image/png;base64,${data}`, size: 3 }));
+      vi.spyOn(mailboxDb, 'claimBatch').mockResolvedValueOnce({ rows: [{ id: 'images', content: '', kind: 'followup', attachments_json: JSON.stringify(attachments) }], claimTokens: ['token'] }).mockResolvedValue({ rows: [], claimTokens: [] });
+      vi.spyOn(mailboxDb, 'apply').mockResolvedValue({});
+      await drainStream(agent, 'start', { imageInputSupported: true });
+      const seen = streamState.seenMessages[0] as Message[];
+      const imageBlocks = seen.flatMap((message) => Array.isArray(message.content) ? message.content : []).filter((block) => block.type === 'image');
+      expect(imageBlocks.map((block) => block.type === 'image' ? block.source.data : '')).toEqual(['YWJj', 'ZGVm']);
+      expect(mailboxDb.apply).toHaveBeenCalledWith(expect.objectContaining({ id: 'images' }));
+    });
+
     it('does not surface mailbox runtime instructions in getMessages but includes them in the provider payload', async () => {
       const agent = newAgent({ sessionId: 'sess-mailbox' });
 

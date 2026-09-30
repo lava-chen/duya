@@ -905,3 +905,9 @@ titles use bounded, allowlisted display data and localized generic labels.
 | Mode | Agent behavior modifier |
 | Provider | LLM API adapter |
 | MCP | Model Context Protocol |
+
+### Chat attachment and mailbox delivery
+
+- `packages/agent/src/utils/attachment-images.ts` loads image bytes by attachment object identity, so repeated clipboard filenames remain separate. Worker chat startup and checkpoint mailbox guidance share this pipeline. The worker passes the detected image-input capability to `ChatOptions`.
+- `packages/agent/src/message/mailbox-attachment-context.ts` projects persisted mailbox attachments into text context and supported image blocks. Image-only followups and queued turns are valid; text-only models receive vision analysis when available. Runtime guidance retains the existing hidden/transient lifecycle.
+- Chat edits restore text and attachments to `MessageInput`; transcript rewind happens on submission. Pending edits require a cancellation receipt before replacement. `MailboxPanel` is the single pending-message view and shows current-run versus next-turn routing with previews. Saved mailbox rows always enter the promotion path, including saves that finish after a run ends.

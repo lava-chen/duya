@@ -1,3 +1,6 @@
+import { prepareMailboxGuidance } from '../message/mailbox-attachment-context.js';
+import { parseMailboxAttachments } from '../utils/attachment-images.js';
+import { isModelLikelyMultimodal } from '../utils/multimodal-detection.js';
 /**
  * duyaAgent - AI Agent 鏍稿績绫? * 鎻愪緵娴佸紡瀵硅瘽銆佸伐鍏疯皟鐢ㄣ€佷細璇濈鐞嗚兘鍔? *
  * Implementation home for the `duyaAgent` class. The public surface
@@ -185,7 +188,6 @@ import {
   adaptAttachmentContext,
   adaptBackgroundNotification,
   adaptLoopNudgeContext,
-  adaptMailboxRows,
   projectRuntimeContextToProviderMessage,
   RUNTIME_CONTEXT_METADATA_KEYS,
 } from '../message/runtime-context-adapters.js';
@@ -2141,6 +2143,7 @@ export class duyaAgent implements AgentRuntime {
         seqIndex,
         'before_model_turn',
         options?.wakeRun === true,
+        options?.imageInputSupported,
       );
       // A `backgroundTaskResume` run has no user prompt (the turn-1 push is
       // skipped above). If its FIRST checkpoint claim comes back empty, the
@@ -3102,6 +3105,7 @@ export class duyaAgent implements AgentRuntime {
             seqIndex,
             'before_final_answer',
             options?.wakeRun === true,
+            options?.imageInputSupported,
           );
           if (finalMailboxDecision.action === 'hard_replace') {
             // Replacement runtime_context was already pushed by
@@ -3166,6 +3170,7 @@ export class duyaAgent implements AgentRuntime {
                 seqIndex,
                 'before_final_answer',
                 options?.wakeRun === true,
+                options?.imageInputSupported,
               );
               const absorbed = decision.action === 'continue' && decision.absorbed;
               if (absorbed) {
@@ -3523,6 +3528,7 @@ export class duyaAgent implements AgentRuntime {
     seqIndex: number,
     checkpoint: 'before_model_turn' | 'before_final_answer',
     wakeRun = false,
+    imageInputSupported = isModelLikelyMultimodal(this.model),
   ): Promise<RuntimeMailboxDecision> {
     if (!this.sessionId) {
       return { action: 'continue', absorbed: false };
@@ -3559,7 +3565,7 @@ export class duyaAgent implements AgentRuntime {
       });
     };
 
-    const usableRows = claim.rows.filter((row) => row.content.trim().length > 0);
+    const usableRows = claim.rows.filter((row) => row.content.trim().length > 0 || parseMailboxAttachments(row.attachments_json).length > 0);
     if (!usableRows.length) {
       return { action: 'continue', absorbed: false };
     }
@@ -3610,7 +3616,9 @@ export class duyaAgent implements AgentRuntime {
     if (guidanceRows.length > 0) {
       // Align claim tokens with the guidance (non-empty) rows.
       const guidanceTokens = guidanceRows.map((row) => claim.claimTokens[claim.rows.indexOf(row)]);
-      const adapted = adaptMailboxRows(guidanceRows, guidanceTokens, { seqIndex });
+      const adapted = await prepareMailboxGuidance(guidanceRows, guidanceTokens, {
+        seqIndex, imageInputSupported, analyzeImage: this.visualAnalysis.analyzeImage.bind(this.visualAnalysis),
+      });
       for (const ctx of adapted) {
         const projected = projectRuntimeContextToProviderMessage(ctx);
         if (projected) messages.push(projected);

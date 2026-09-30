@@ -134,7 +134,7 @@ interface MailboxState {
   edit: (id: string, patch: { content?: string; kind?: MailboxKind }) => Promise<void>;
   /** Mark a queued row for in-run pickup at the next safe checkpoint. */
   guide: (id: string) => Promise<MailboxRow | null>;
-  cancel: (id: string, reason?: string) => Promise<void>;
+  cancel: (id: string, reason?: string) => Promise<MailboxRow | null>;
   list: (sessionId: string, opts?: { status?: MailboxStatus[]; limit?: number }) => Promise<void>;
 
   // Event reconciliation (called by mailbox event listener)
@@ -238,11 +238,11 @@ export const useMailboxStore = create<MailboxState>()((set, get) => ({
         return row;
       }
 
-      return null;
+      get()._removeRow(params.sessionId, optimisticId);
+      throw new Error('Could not save the pending message');
     } catch (error) {
-      console.error('[MailboxStore] send failed:', error);
-      // Keep optimistic row but mark as failed in UI
-      return optimisticRow;
+      get()._removeRow(params.sessionId, optimisticId);
+      throw error;
     }
   },
 
@@ -280,17 +280,13 @@ export const useMailboxStore = create<MailboxState>()((set, get) => ({
 
   cancel: async (id, reason) => {
     const electronAPI = window.electronAPI;
-    if (!electronAPI?.mailbox) return;
-
-    try {
-      const result = await electronAPI.mailbox.cancel(id, reason);
-      if (result) {
-        const row = dbRowToMailboxRow(result as Record<string, unknown>);
-        get()._removeRow(row.sessionId, row.id);
-      }
-    } catch (error) {
-      console.error('[MailboxStore] cancel failed:', error);
-    }
+    if (!electronAPI?.mailbox) return null;
+    const result = await electronAPI.mailbox.cancel(id, reason);
+    if (!result) return null;
+    const row = dbRowToMailboxRow(result as Record<string, unknown>);
+    if (row.status !== 'cancelled') return null;
+    get()._removeRow(row.sessionId, row.id);
+    return row;
   },
 
   list: async (sessionId, opts) => {

@@ -1,3 +1,5 @@
+import { Button } from '@/components/ui/Button';
+import type { ComposerEditDraft } from '@/lib/chat-edit-draft';
 // MessageInput.tsx - Message input component with file attachments, model/effort selection, and badge support
 
 'use client';
@@ -138,6 +140,8 @@ function StopIcon({ size = 16, className }: { size?: number; className?: string 
 }
 
 interface MessageInputProps {
+  editDraft?: ComposerEditDraft | null;
+  onCancelEdit?: () => void;
   onSend: (
     content: string,
     files?: FileAttachment[],
@@ -145,7 +149,7 @@ interface MessageInputProps {
     mode?: string,
     displayContent?: string,
     conductorMode?: boolean,
-  ) => void;
+  ) => void | Promise<void>;
   onRecapRequest?: () => Promise<{
     success: boolean;
     recap: string | null;
@@ -425,10 +429,12 @@ export function PermissionModeSelector({ value, onChange }: PermissionModeSelect
 }
 
 export function MessageInput({
+  editDraft,
+  onCancelEdit,
   onSend,
   onRecapRequest,
   onStop,
-  disabled = false,
+  disabled: disabledProp = false,
   isStreaming = false,
   hasQueuedMessages = false,
   sessionId,
@@ -465,6 +471,8 @@ export function MessageInput({
   turnReview,
 }: MessageInputProps) {
   const { t } = useTranslation();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const disabled = disabledProp || isSubmitting;
   const [inputValue, setInputValue] = useState('');
   // Plan 220: hidden prompt prefix that panels inject via
   // `duya:set-hidden-prompt`. Sent to the LLM ahead of `inputValue`
@@ -844,6 +852,34 @@ export function MessageInput({
     buildDisplayContent,
     hasUnparsedDocs,
   } = useAttachments();
+
+  const priorDraftRef = useRef<{ text: string; hiddenPrompt: string; attachments: FileAttachment[] } | null>(null);
+  const editDraftRef = useRef(editDraft);
+  editDraftRef.current = editDraft;
+  const sendingRef = useRef(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!editDraft) { priorDraftRef.current = null; return; }
+    if (!priorDraftRef.current) priorDraftRef.current = { text: inputValue, hiddenPrompt, attachments };
+    setInputValue(editDraft.text);
+    setHiddenPrompt('');
+    clearAttachments();
+    addAttachment(editDraft.attachments);
+    setSendError(null);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+    // Each request replaces the editor once; typing must not reapply it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editDraft?.key]);
+  const cancelEdit = () => {
+    const previous = priorDraftRef.current;
+    setInputValue(previous?.text ?? '');
+    setHiddenPrompt(previous?.hiddenPrompt ?? '');
+    clearAttachments();
+    if (previous) addAttachment(previous.attachments);
+    priorDraftRef.current = null;
+    setSendError(null);
+    onCancelEdit?.();
+  };
 
   // Lazy new-chat draft mode. Restore the saved draft once on mount, then
   // report every change back so the caller can persist it across
@@ -1483,7 +1519,7 @@ export function MessageInput({
 
     getDraftIPC(sessionId)
       .then((draft) => {
-        if (draft && prevSessionIdRef.current === sessionId) {
+        if (draft && prevSessionIdRef.current === sessionId && !editDraftRef.current) {
           setInputValue(draft);
           draftLoadedRef.current = true;
           requestAnimationFrame(() => adjustTextareaHeight());
@@ -1732,14 +1768,14 @@ export function MessageInput({
   }, [addFile, adjustTextareaHeight, disabled]);
 
   const handleSubmit = useCallback(
-    (e: FormEvent) => {
+    async (e: FormEvent) => {
       e.preventDefault();
       const trimmedValue = inputValue.trim();
 
       // Check if we have any content to send (input or any attachment).
       const hasContent = trimmedValue || attachments.length > 0;
       if (!hasContent) return;
-      if (disabled) return;
+      if (disabled || sendingRef.current) return;
 
       // Block sending while document parsing is in progress — the parsed
       // text would be missing and the agent would see "Not Parsed" warnings.
@@ -1816,10 +1852,18 @@ export function MessageInput({
       const cliAppend = buildCliAppend(cliBadge);
       if (cliBadge) setCliBadge(null);
 
-      clearDraft();
       const sendMode = pickMessageMode(activeModes);
       const conductorMode = activeModes.has('conductor') || undefined;
-      onSend(modelContent, allAttachments, styleOpts, sendMode, displayContentForUser, conductorMode);
+      sendingRef.current = true;
+      setIsSubmitting(true);
+      setSendError(null);
+      try {
+        await onSend(modelContent, allAttachments, styleOpts, sendMode, displayContentForUser, conductorMode);
+      } catch (error) {
+        setSendError(error instanceof Error ? error.message : t('chat.pendingSaveFailed'));
+        return;
+      } finally { sendingRef.current = false; setIsSubmitting(false); }
+      clearDraft();
       // The outgoing content carried every pending review-panel comment
       // (see buildContentWithChips); flag them sent so the strip empties
       // and the next message doesn't re-attach the same comments. The
@@ -1834,7 +1878,7 @@ export function MessageInput({
         textareaRef.current.style.height = 'auto';
       }
     },
-    [inputValue, hiddenPrompt, disabled, isStreaming, isParsing, cliBadge, attachments, hasUnparsedDocs, buildContentWithChips, clearAttachments, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, activeModes, requestRecap, workingDirectory],
+    [inputValue, hiddenPrompt, disabled, isStreaming, isParsing, cliBadge, attachments, hasUnparsedDocs, buildContentWithChips, clearAttachments, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, activeModes, requestRecap, workingDirectory, t],
   );
 
   const handleKeyDown = useCallback(
@@ -2091,6 +2135,13 @@ export function MessageInput({
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
         >
+          {editDraft && (
+            <div className="composer-edit-banner">
+              <span>{t('chat.editingMessage')}</span>
+              <Button type="button" variant="ghost" size="sm" disabled={isSubmitting} onClick={cancelEdit}>{t('mailbox.bubble.cancelEdit')}</Button>
+            </div>
+          )}
+          {sendError && <p className="composer-send-error" role="alert">{sendError}</p>}
           {/* Drag-and-drop overlay */}
           {isDraggingOver && (
             <div className="message-input-drop-overlay" role="status" aria-live="polite">

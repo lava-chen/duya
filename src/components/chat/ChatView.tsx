@@ -1,3 +1,4 @@
+import { messageEditDraft, mailboxAttachments, type ComposerEditDraft } from '@/lib/chat-edit-draft';
 // ChatView.tsx - Main chat container component (CodePilot style)
 
 'use client';
@@ -35,7 +36,6 @@ import { useContextUsageStore } from '@/stores/context-usage-store';
 import { useCompactionStore } from '@/stores/compaction-store';
 import { useMailboxStore } from '@/stores/mailbox-store';
 import { useBusyMessageModeValue } from '@/stores/busy-message-mode-store';
-import { useShallow } from 'zustand/react/shallow';
 import type { MailboxRow } from '@/stores/mailbox-store';
 import type { FileAttachment } from '@/types/message';
 import { MailboxPanel } from './MailboxPanel';
@@ -370,33 +370,11 @@ export function ChatView({
   const setActiveThread = useConversationStore(s => s.setActiveThread);
   const deleteMessageAndAfter = useConversationStore(s => s.deleteMessageAndAfter);
   const sendMailbox = useMailboxStore(s => s.send);
+  const [editDraft, setEditDraft] = useState<ComposerEditDraft | null>(null);
+  const editTargetRef = useRef<{ messageId: string } | { mailbox: MailboxRow } | null>(null);
+  useEffect(() => { editTargetRef.current = null; setEditDraft(null); }, [sessionId]);
+  const cancelComposerEdit = useCallback(() => { editTargetRef.current = null; setEditDraft(null); }, []);
   const busyMessageMode = useBusyMessageModeValue();
-  const mailboxRows = useMailboxStore(
-    useShallow(state => state.getBySession(sessionId)),
-  );
-
-  // Mailbox rows are deliberately not persisted in the normal transcript
-  // until their checkpoint permits it. Render them as transient user bubbles
-  // meanwhile, so a queued or guided instruction is visible immediately.
-  const mailboxMessages = useMemo(() => {
-    const persistedMessageIds = new Set(messages.map(message => message.id));
-    const isVisible = (row: MailboxRow) => {
-      if (row.status === 'pending' || row.status === 'observed') return true;
-      return row.status === 'applied'
-        && isStreaming
-        && (!row.resultingUserMsgId || !persistedMessageIds.has(row.resultingUserMsgId));
-    };
-
-    return mailboxRows
-      .filter(isVisible)
-      .map((row): Message => ({
-        id: `mailbox-${row.id}`,
-        role: 'user',
-        content: row.content,
-        timestamp: row.createdAt,
-      }));
-  }, [isStreaming, mailboxRows, messages]);
-
   /**
    * Filter persisted messages through the agent-side visibility field.
    * Hidden runtime_context rows (attachment context, mailbox instructions,
@@ -409,8 +387,8 @@ export function ChatView({
   );
 
   const renderedMessages = useMemo(
-    () => [...visibleMessages, ...mailboxMessages],
-    [visibleMessages, mailboxMessages],
+    () => visibleMessages,
+    [visibleMessages],
   );
 
   const selectedProject = useMemo(() => {
@@ -942,6 +920,22 @@ export function ChatView({
 
   const handleSend = useCallback(
     async (content: string, files?: FileAttachment[], outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string, displayContent?: string) => {
+      const editTarget = editTargetRef.current;
+      if (editTarget && 'messageId' in editTarget) {
+        if (isStreaming) throw new Error(t('chat.editRunActive'));
+        const result = await deleteMessageAndAfter(sessionId, editTarget.messageId);
+        // If sending fails after rewind, retry the retained draft as a new turn.
+        editTargetRef.current = null;
+        if (result.restoredFiles?.length) {
+          setCompressionNotification(`Restored ${result.restoredFiles.length} file(s) to their pre-edit state.`);
+          setTimeout(() => setCompressionNotification(null), 5000);
+        }
+      } else if (editTarget && 'mailbox' in editTarget) {
+        const cancelled = await useMailboxStore.getState().cancel(editTarget.mailbox.id, 'replaced_from_composer');
+        if (!cancelled) throw new Error(t('chat.editAlreadyPickedUp'));
+        // A failed replacement retains the content as an ordinary draft for retry.
+        editTargetRef.current = null;
+      }
       lastUserContentRef.current = content;
       lastFilesRef.current = files;
       lastOutputStyleRef.current = outputStyleConfig;
@@ -956,11 +950,12 @@ export function ChatView({
           // 'followup' rows inject immediately at the next before_model_turn
           // checkpoint. The mailbox bubble's "Guide" button can still flip
           // an individual queued row to followup mid-run.
-          kind: busyMessageMode,
+          kind: editTarget && 'mailbox' in editTarget ? editTarget.mailbox.kind : busyMessageMode,
           submittedDuringRunId: sessionId,
           attachments: files,
         });
-        if (queuedRow && !queuedRow.id.startsWith('optimistic-')) {
+        if (!queuedRow || queuedRow.id.startsWith('optimistic-')) throw new Error(t('chat.pendingSaveFailed'));
+        if (queuedRow) {
           const { modelName: actualModel } = parseModelName(sessionModel || '');
           onSendMessage(
             content,
@@ -976,6 +971,7 @@ export function ChatView({
             permissionMode,
           );
         }
+        cancelComposerEdit();
         return;
       }
       // New round: reset the git baseline and capture the pre-turn state
@@ -995,9 +991,10 @@ export function ChatView({
       }
       // Parse model format: "[providerName] modelName" to extract pure model name
       const { modelName: actualModel } = parseModelName(sessionModel || '');
-      onSendMessage(content, actualModel, files, agentProfileId, outputStyleConfig, mode, effort, displayContent, conductorEnabled, undefined, permissionMode);
+      await onSendMessage(content, actualModel, files, agentProfileId, outputStyleConfig, mode, effort, displayContent, conductorEnabled, undefined, permissionMode);
+      cancelComposerEdit();
     },
-    [agentProfileId, isStreaming, onSendMessage, parseModelName, sendMailbox, sessionId, sessionModel, effort, conductorEnabled, permissionMode, busyMessageMode, activeThread?.workingDirectory]
+    [agentProfileId, isStreaming, onSendMessage, parseModelName, sendMailbox, sessionId, sessionModel, effort, conductorEnabled, permissionMode, busyMessageMode, activeThread?.workingDirectory, deleteMessageAndAfter, cancelComposerEdit, t]
   );
 
   // Plan 498 auto-retry (Plan 450 B3): after a successful re-authorization
@@ -1292,28 +1289,19 @@ export function ChatView({
     }
   }, [onSendMessage, sessionModel, parseModelName, agentProfileId, effort, permissionMode]);
 
-  // Inline edit-and-resend: delete the target user message (and everything
-  // after it), then send the edited text as a fresh message. Only the last
-  // user message is editable (enforced by MessageList via isEditable).
-  const handleEditSend = useCallback(async (messageId: string, text: string) => {
-    if (isStreaming || !text.trim() || !sessionId) return;
-    let restoredFiles: string[] | undefined;
-    try {
-      const result = await deleteMessageAndAfter(sessionId, messageId);
-      restoredFiles = result.restoredFiles;
-    } catch (err) {
-      console.error('[ChatView] edit-and-resend: deleteMessageAndAfter failed', err);
-      return;
-    }
-    // Plan 429 #3: tell the user when rewound tool calls rolled files on
-    // disk back to their pre-edit snapshots.
-    if (restoredFiles && restoredFiles.length > 0) {
-      setCompressionNotification(`Restored ${restoredFiles.length} file${restoredFiles.length === 1 ? '' : 's'} to their pre-edit state.`);
-      setTimeout(() => setCompressionNotification(null), 5000);
-    }
-    const { modelName: actualModel } = parseModelName(sessionModel || '');
-    onSendMessage(text, actualModel, undefined, agentProfileId, lastOutputStyleRef.current, undefined, effort, text, conductorEnabled, undefined, permissionMode);
-  }, [isStreaming, sessionId, deleteMessageAndAfter, parseModelName, sessionModel, onSendMessage, agentProfileId, effort, conductorEnabled, permissionMode]);
+  const handleEditMessage = useCallback((messageId: string) => {
+    if (isStreaming) return;
+    const message = messages.find((entry) => entry.id === messageId);
+    if (!message) return;
+    editTargetRef.current = { messageId };
+    setEditDraft(messageEditDraft(message));
+  }, [isStreaming, messages]);
+
+  const handleEditPending = useCallback((row: MailboxRow) => {
+    if (row.status !== 'pending') return;
+    editTargetRef.current = { mailbox: row };
+    setEditDraft({ key: crypto.randomUUID(), text: row.content, attachments: mailboxAttachments(row.attachmentsJson) });
+  }, []);
 
   const handleCompact = useCallback(() => {
     if (!sessionId) return;
@@ -1468,7 +1456,7 @@ export function ChatView({
       <div className="chat-body-row">
         <div className="chat-main-column">
       <div className="flex-1 min-h-0">
-        {messages.length === 0 && !isStreaming ? (
+        {messages.length === 0 && !isStreaming && !editDraft ? (
           /* Empty state with SessionSelector and centered input */
           <div className="h-full flex flex-col items-center justify-center px-4">
             <div className="w-full @min-[864px]:max-w-4xl @min-[1280px]:max-w-6xl flex flex-col items-center">
@@ -1491,6 +1479,8 @@ export function ChatView({
                 <div className={`w-full welcome-message-input workspace-floating-composer${workspaceExpanded ? ' workspace-floating-composer-expanded' : ''}`}>
                   <MessageInput
                     onSend={handleSend}
+                    editDraft={editDraft}
+                    onCancelEdit={cancelComposerEdit}
                     onRecapRequest={requestRecap}
                     onStop={handleStop}
                     disabled={false}
@@ -1540,7 +1530,7 @@ export function ChatView({
               onForceStop={handleStop}
               onScrollStateChange={handleScrollStateChange}
               sessionId={sessionId}
-              onEditSend={handleEditSend}
+              onEditMessage={handleEditMessage}
               nextStepSuggestions={nextStepSuggestions}
               onNextStepSelect={handleNextStepSelect}
             />
@@ -1588,9 +1578,7 @@ export function ChatView({
               />
             )}
 
-            {isStreaming && (
-              <MailboxPanel sessionId={sessionId} />
-            )}
+            <MailboxPanel sessionId={sessionId} onEditInComposer={handleEditPending} />
 
             {/* Plan 416: task progress row now renders inside the
                 composer (no longer a floating pill above it). */}
@@ -1611,6 +1599,8 @@ export function ChatView({
               )}
               <MessageInput
                 onSend={handleSend}
+                editDraft={editDraft}
+                onCancelEdit={cancelComposerEdit}
                 onRecapRequest={requestRecap}
                 onStop={handleStop}
                 disabled={false}

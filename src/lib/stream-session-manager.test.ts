@@ -554,6 +554,29 @@ describe('StreamSessionManager State Machine', () => {
       expect(mockFetchB).not.toHaveBeenCalled();
     });
 
+    it('promotes a mailbox row saved after the run already ended, exactly once', async () => {
+      const { streamSessionManager } = await import('./stream-session-manager');
+      stubMailboxPromote(() => Promise.resolve({ content: 'late followup', attachments_json: '[]' }));
+      const mockFetch = vi.fn().mockResolvedValue(createMockSSEResponse([{ type: 'connected' }, { type: 'done' }]));
+      vi.stubGlobal('fetch', mockFetch);
+      streamSessionManager.enqueueMessage('late-mailbox', { sessionId: 'late-mailbox', content: 'late followup', queuedMailboxId: 'late-row' });
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(window.electronAPI!.mailbox!.promoteQueued).toHaveBeenCalledWith('late-row');
+      expect(chatCalls(mockFetch)).toHaveLength(1);
+    });
+
+    it('delivers an attachment-only pending message', async () => {
+      const { streamSessionManager } = await import('./stream-session-manager');
+      stubMailboxPromote(() => Promise.resolve({ content: '', attachments_json: JSON.stringify([{ id: 'pic', name: 'image.png', type: 'image/png', url: 'data:image/png;base64,YWJj', size: 3 }]) }));
+      const mockFetch = vi.fn().mockResolvedValue(createMockSSEResponse([{ type: 'connected' }, { type: 'done' }]));
+      vi.stubGlobal('fetch', mockFetch);
+      expect(await streamSessionManager.deliverQueuedRow('deliver-only-image', 'row-image')).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const request = chatCalls(mockFetch)[0]?.[1] as RequestInit;
+      const body = JSON.parse(String(request.body));
+      expect(body.options.files).toHaveLength(1);
+    });
+
     it('parses attachments_json into file attachments for the delivered turn', async () => {
       const { streamSessionManager } = await import('./stream-session-manager');
       stubMailboxPromote(() =>
