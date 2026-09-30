@@ -1296,6 +1296,11 @@ const en = {
   'subAgent.status.completed': 'Completed',
   'subAgent.status.error': 'Error',
   'subAgent.status.waiting': 'Waiting',
+  // Plan 571: the shared SubagentRunStatus vocabulary. `failed` replaced the
+  // old `error` spelling; `killed` (user stop) is now a first-class state.
+  'subAgent.status.pending': 'Pending',
+  'subAgent.status.failed': 'Failed',
+  'subAgent.status.killed': 'Stopped',
 
   'panel.files': 'Files',
   'panel.preview': 'Preview',
@@ -1347,6 +1352,17 @@ const en = {
   'panel.session.empty': 'No messages yet.',
   'panel.session.loading': 'Loading…',
   'panel.session.unavailable': 'Session unavailable or deleted.',
+  // Plan 571: sub-agent runtime header. `killed` is deliberately its own label
+  // so a user-cancelled run never reads as a failure.
+  'panel.session.status.pending': 'Pending',
+  'panel.session.status.running': 'Running',
+  'panel.session.status.completed': 'Completed',
+  'panel.session.status.failed': 'Failed',
+  'panel.session.status.killed': 'Stopped',
+  'panel.session.toolCount': '{count} tool calls',
+  'panel.session.stop': 'Stop',
+  'panel.session.stopping': 'Stopping…',
+  'panel.session.stopFailed': 'Could not send the stop request — the sub-agent may already be finished.',
   'panel.workflow.launchImmediateHint': 'Runs immediately as an independent run; artifacts land in ~/.duya/workflow-artifacts/<runId>/',
   'panel.workflow.launchArgs': 'Arguments',
   'panel.workflow.launch': 'Run',

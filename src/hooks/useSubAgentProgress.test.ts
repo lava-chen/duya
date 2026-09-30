@@ -18,7 +18,14 @@ describe('getSubAgentStatus', () => {
   });
 
   it('uses explicit terminal progress events for completion and failure', () => {
+    // Plan 571 renamed the failure state to `failed` and added `killed`; the
+    // full vocabulary is exercised in src/lib/__tests__/subagent-status.test.ts.
     expect(getSubAgentStatus([event('started'), event('done')])).toBe('completed');
-    expect(getSubAgentStatus([event('started'), event('error')])).toBe('error');
+    expect(getSubAgentStatus([event('started'), event('error')])).toBe('failed');
+  });
+
+  it('distinguishes a user kill from a failure', () => {
+    const killed = { ...event('error'), data: 'killed: user_kill' };
+    expect(getSubAgentStatus([event('started'), killed])).toBe('killed');
   });
 });

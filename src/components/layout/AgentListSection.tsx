@@ -17,11 +17,15 @@ import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
 import { DrawerSection } from './DrawerSection';
 
+// Plan 571: keyed on the shared `SubagentRunStatus` vocabulary. `waiting` was
+// renamed to `pending` and `error` to `failed`, and `killed` was added so a
+// user-cancelled sub-agent no longer renders with the red X of a crash.
 const STATUS_KEY: Record<SubAgentRowInfo['status'], TranslationKey> = {
-  waiting: 'subAgent.status.waiting',
+  pending: 'subAgent.status.pending',
   running: 'subAgent.status.running',
   completed: 'subAgent.status.completed',
-  error: 'subAgent.status.error',
+  failed: 'subAgent.status.failed',
+  killed: 'subAgent.status.killed',
 };
 
 export interface AgentListSectionProps {
@@ -56,10 +60,13 @@ function AgentRow({ agent, onOpen }: { agent: SubAgentRowInfo; onOpen: () => voi
   const canOpen = Boolean(agent.sessionId);
   const { t } = useTranslation();
   const statusIcon =
-    agent.status === "running" || agent.status === "waiting" ? (
+    agent.status === "running" || agent.status === "pending" ? (
       <SpinnerIcon size={12} className="text-accent animate-spin" />
     ) : agent.status === "completed" ? (
       <CheckIcon size={12} className="text-green-500" />
+    ) : agent.status === "killed" ? (
+      // Cancelled is not a failure — neutral glyph, not the red X.
+      <XIcon size={12} className="text-muted-foreground" />
     ) : (
       <XIcon size={12} className="text-red-500" />
     );

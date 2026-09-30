@@ -1744,13 +1744,67 @@ function handlePostPermissionMode(
   });
 }
 
-function handlePostPermission(
+/**
+ * Plan 571: stop one running sub-agent from the sidebar runtime panel.
+ *
+ * The sub-agent does NOT have its own worker process — it runs in-process
+ * inside the parent's worker (`runAgent` constructs a nested agent). So this
+ * route is keyed by the PARENT session id and forwards a stdin command to that
+ * parent's live worker, which calls
+ * `backgroundAgentLifecycle.kill(taskId, 'user_kill')`.
+ *
+ * This mirrors `handlePostPermissionMode` (`:1705`): fire-and-forget toward the
+ * worker, because the worker may be idle (no process) and the run has already
+ * ended by then — neither is a user-facing error.
+ */
+function handlePostSubagentKill(
   sessionId: string,
   req: http.IncomingMessage,
   res: http.ServerResponse,
   deps: RouterDeps,
 ): void {
-  const { sessionManager, workerManager, httpLogger } = deps;
+  const { workerManager, httpLogger } = deps;
+
+  let body = '';
+  req.on('data', (chunk: Buffer) => {
+    body += chunk.toString();
+  });
+
+  req.on('end', () => {
+    let parsed: { taskId?: unknown };
+    try {
+      parsed = body ? JSON.parse(body) : {};
+    } catch {
+      sendJson(res, 400, { error: 'Invalid JSON body' });
+      return;
+    }
+
+    const taskId = typeof parsed.taskId === 'string' ? parsed.taskId.trim() : '';
+    if (!taskId) {
+      sendJson(res, 400, { error: 'taskId is required' });
+      return;
+    }
+
+    httpLogger.info('Sub-agent kill requested', { sessionId, taskId });
+    const sent = workerManager.sendCommand(sessionId, {
+      type: 'subagent:kill',
+      sessionId,
+      taskId,
+      reason: 'user_kill',
+    });
+    // 404 means the parent worker is not resident (its turn already ended, or
+    // the sub-agent outlived it and there is nothing to stop). The panel
+    // treats this as a no-op rather than an error.
+    sendJson(res, sent ? 200 : 404, sent ? { ok: true } : { error: 'Worker not available' });
+  });
+}
+
+function handlePostPermission(
+  sessionId: string,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  deps: RouterDeps,
+): void {  const { sessionManager, workerManager, httpLogger } = deps;
 
   const session = sessionManager.getSession(sessionId);
   if (!session) {
@@ -2676,6 +2730,10 @@ function handleSessionsRoute(
     }
     if (pathParts.length === 3 && pathParts[2] === 'permission-mode') {
       handlePostPermissionMode(sessionId, req, res, deps);
+      return;
+    }
+    if (pathParts.length === 4 && pathParts[2] === 'subagents' && pathParts[3] === 'kill') {
+      handlePostSubagentKill(sessionId, req, res, deps);
       return;
     }
   }

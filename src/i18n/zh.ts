@@ -1281,6 +1281,11 @@ const zh: Record<TranslationKey, string> = {
   'subAgent.status.completed': '已完成',
   'subAgent.status.error': '出错',
   'subAgent.status.waiting': '等待中',
+  // Plan 571：统一后的 SubagentRunStatus 词表。`failed` 取代旧的 `error` 写法，
+  // `killed`（用户主动停止）成为一等状态。
+  'subAgent.status.pending': '等待中',
+  'subAgent.status.failed': '失败',
+  'subAgent.status.killed': '已停止',
 
   'panel.files': '文件',
   'panel.preview': '预览',
@@ -1332,6 +1337,16 @@ const zh: Record<TranslationKey, string> = {
   'panel.session.empty': '暂无消息。',
   'panel.session.loading': '加载中…',
   'panel.session.unavailable': '会话不存在或已删除。',
+  // Plan 571：子代理运行时头部。`killed` 单独成词，用户主动停止不显示为失败。
+  'panel.session.status.pending': '等待中',
+  'panel.session.status.running': '运行中',
+  'panel.session.status.completed': '已完成',
+  'panel.session.status.failed': '失败',
+  'panel.session.status.killed': '已停止',
+  'panel.session.toolCount': '{count} 次工具调用',
+  'panel.session.stop': '停止',
+  'panel.session.stopping': '停止中…',
+  'panel.session.stopFailed': '未能发送停止请求，子代理可能已经结束。',
   'panel.workflow.launchImmediateHint': '将立即作为一次独立运行启动；产物写入 ~/.duya/workflow-artifacts/<runId>/',
   'panel.workflow.launchArgs': '参数',
   'panel.workflow.launch': '运行',

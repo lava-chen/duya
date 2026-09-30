@@ -12,6 +12,14 @@ import { parseSubAgentToolResult } from '@/lib/subagent-result';
 import { useConversationStore } from '@/stores/conversation-store';
 import { dispatchOpenSessionPanel } from '@/lib/open-session-panel-event';
 import { useStreamingAgentProgress, type AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
+import {
+  SUBAGENT_EDIT_TOOLS,
+  SUBAGENT_READ_TOOLS,
+  SUBAGENT_SEARCH_TOOLS,
+  SUBAGENT_SHELL_TOOLS,
+  computeSubagentToolUseCounts,
+  type SubagentToolUseCounts,
+} from '@/lib/subagent-live-transcript';
 import type { ToolAction } from '../types';
 
 interface SubAgentToolRowProps {
@@ -19,67 +27,7 @@ interface SubAgentToolRowProps {
   agentProgressEvents?: AgentProgressEventWithMeta[];
 }
 
-const READ_TOOLS = new Set([
-  'read',
-  'readfile',
-  'read_file',
-  'read_multiple_files',
-]);
-
-const EDIT_TOOLS = new Set([
-  'edit',
-  'edit_file',
-  'str_replace_editor',
-  'write',
-  'writefile',
-  'write_file',
-  'create_file',
-  'createfile',
-]);
-
-const SEARCH_TOOLS = new Set([
-  'search',
-  'glob',
-  'grep',
-  'find_files',
-  'search_files',
-]);
-
-const SHELL_TOOLS = new Set([
-  'shell',
-  'bash',
-  'execute',
-  'run',
-  'execute_command',
-  'run_command',
-  'powershell',
-]);
-
-interface ToolStats {
-  read: number;
-  edit: number;
-  search: number;
-  shell: number;
-  browser: number;
-  other: number;
-  total: number;
-}
-
-function computeStats(events: AgentProgressEventWithMeta[]): ToolStats {
-  const stats: ToolStats = { read: 0, edit: 0, search: 0, shell: 0, browser: 0, other: 0, total: 0 };
-  for (const e of events) {
-    if (e.type !== 'tool_result' || !e.toolName) continue;
-    const name = e.toolName.toLowerCase();
-    stats.total++;
-    if (READ_TOOLS.has(name)) stats.read++;
-    else if (EDIT_TOOLS.has(name)) stats.edit++;
-    else if (SEARCH_TOOLS.has(name)) stats.search++;
-    else if (SHELL_TOOLS.has(name)) stats.shell++;
-    else if (name.startsWith('browser_') || name.startsWith('browser-') || name === 'browser') stats.browser++;
-    else stats.other++;
-  }
-  return stats;
-}
+type ToolStats = SubagentToolUseCounts;
 
 function getPrefixColor(prefix: string): string | undefined {
   // Match whole words only so names like "QRCode scanner" don't pick up
@@ -95,10 +43,10 @@ function getPrefixColor(prefix: string): string | undefined {
 function getToolVerb(toolName?: string): string {
   if (!toolName) return '运行工具';
   const name = toolName.toLowerCase();
-  if (READ_TOOLS.has(name)) return '读取文件';
-  if (EDIT_TOOLS.has(name)) return '编辑文件';
-  if (SEARCH_TOOLS.has(name)) return '搜索';
-  if (SHELL_TOOLS.has(name)) return '执行命令';
+  if (SUBAGENT_READ_TOOLS.has(name)) return '读取文件';
+  if (SUBAGENT_EDIT_TOOLS.has(name)) return '编辑文件';
+  if (SUBAGENT_SEARCH_TOOLS.has(name)) return '搜索';
+  if (SUBAGENT_SHELL_TOOLS.has(name)) return '执行命令';
   if (name.startsWith('browser_') || name.startsWith('browser-') || name === 'browser') return '浏览网页';
   if (name === 'todo' || name === 'todowrite') return '操作任务';
   if (name === 'askuserquestion') return '询问用户';
@@ -128,13 +76,13 @@ function getToolTarget(event: AgentProgressEventWithMeta): string | undefined {
   const name = event.toolName?.toLowerCase() ?? '';
   const input = event.toolInput;
 
-  if (SHELL_TOOLS.has(name) || name === 'duya_cli' || name === 'duya-cli' || name === 'duyacli') {
+  if (SUBAGENT_SHELL_TOOLS.has(name) || name === 'duya_cli' || name === 'duya-cli' || name === 'duyacli') {
     return getStringInput(input, ['command', 'cmd', 'script', 'commandLine']);
   }
-  if (READ_TOOLS.has(name) || EDIT_TOOLS.has(name)) {
+  if (SUBAGENT_READ_TOOLS.has(name) || SUBAGENT_EDIT_TOOLS.has(name)) {
     return getStringInput(input, ['file_path', 'filePath', 'path', 'file', 'filename']);
   }
-  if (SEARCH_TOOLS.has(name)) {
+  if (SUBAGENT_SEARCH_TOOLS.has(name)) {
     return getStringInput(input, ['query', 'pattern', 'glob', 'path']);
   }
   if (name.startsWith('browser_') || name.startsWith('browser-') || name === 'browser') {
@@ -209,6 +157,71 @@ function buildStatusPhrase(
   return '初始化中...';
 }
 
+export interface SubagentEventSelection {
+  /** The sub-agent's own session id, once the launch receipt arrived. */
+  sessionId?: string;
+  /** The run's task id, from the receipt or from the `started` event. */
+  taskId?: string;
+  description?: string;
+  name?: string;
+  subagentType?: string;
+}
+
+/**
+ * Pick the progress events belonging to ONE sub-agent run out of the merged
+ * parent-channel log.
+ *
+ * Exported for unit testing: the cross-wiring bug this fixes (two concurrent
+ * same-type sub-agents sharing one row's status) lives entirely in here.
+ *
+ * Resolution order, strongest identity first:
+ *  1. child `sessionId` — the child session id is carried on every event.
+ *  2. `agentId` === the run's task id — the id the `started` event carries at
+ *     spawn, which is what makes a still-running run addressable.
+ *  3. the `started` group whose description/name matches the tool input
+ *     (pre-571 fallback; also how a row binds its task id on first sight).
+ *  4. agent type substring.
+ *  5. All events — ONLY when exactly one run is present in the log. With
+ *     several distinct `agentId`s, returning everything is precisely the
+ *     cross-wiring bug, so an unmatchable row renders nothing instead.
+ */
+export function selectSubagentEvents(
+  events: AgentProgressEventWithMeta[],
+  selector: SubagentEventSelection,
+): AgentProgressEventWithMeta[] {
+  if (events.length === 0) return events;
+
+  const { sessionId, taskId } = selector;
+  if (sessionId) {
+    const filtered = events.filter((event) => event.sessionId === sessionId);
+    if (filtered.length > 0) return filtered;
+  }
+  if (taskId) {
+    const filtered = events.filter((event) => event.agentId === taskId);
+    if (filtered.length > 0) return filtered;
+  }
+
+  // Runs present in the log, keyed by task id. One entry means the row is the
+  // only sub-agent in flight, which makes the "everything" fallback safe.
+  const runIds = new Set(events.map((event) => event.agentId).filter((id): id is string => !!id));
+  const desc = selector.description || selector.name || '';
+  if (desc) {
+    const byDesc = events.filter((event) => {
+      const eventDesc = event.agentDescription || event.agentName || '';
+      return eventDesc === desc;
+    });
+    if (byDesc.length > 0) return byDesc;
+  }
+  if (selector.subagentType) {
+    const type = selector.subagentType.toLowerCase();
+    const byType = events.filter((event) => (event.agentType || '').toLowerCase().includes(type));
+    if (byType.length > 0) return byType;
+  }
+
+  if (runIds.size <= 1) return events;
+  return [];
+}
+
 export function SubAgentToolRow({ tool, agentProgressEvents }: SubAgentToolRowProps) {
   const renderer = getRenderer(tool.name);
   const summary = renderer.getSummary(tool.input, tool.name);
@@ -242,53 +255,31 @@ export function SubAgentToolRow({ tool, agentProgressEvents }: SubAgentToolRowPr
     return out;
   }, [agentProgressEvents, ownEvents]);
 
-  // Filter events for this sub-agent. While running (no parsedResult yet),
-  // we cannot filter by sessionId/agentId because the tool result hasn't
-  // arrived. Fall back to matching by agentType + description from the
-  // tool input so multiple concurrent sub-agents don't cross-wire.
+  // Filter events for THIS sub-agent.
+  //
+  // Plan 571: the correlation key is the run's task id, carried on every
+  // progress event as `agentId` (`buildChatAgentProgressPayload`) and stamped
+  // onto the `started` event synchronously at spawn — so the row can bind to
+  // it while the run is still in flight. The previous implementation matched
+  // running runs by `description` / `name` string equality and finally by
+  // "all events", which cross-wired two concurrent sub-agents of the same
+  // type. String matching survives only as a last-resort fallback for
+  // sessions recorded before the `started` event existed.
   const toolInput = tool.input as Record<string, unknown> | undefined;
   const inputDescription = typeof toolInput?.description === 'string' ? toolInput.description : '';
   const inputName = typeof toolInput?.name === 'string' ? toolInput.name : '';
   const inputSubagentType = typeof toolInput?.subagent_type === 'string' ? toolInput.subagent_type : '';
 
-  const subAgentEvents = useMemo(() => {
-    const events = mergedEvents;
-    if (events.length === 0) return events;
-
-    // Once we have the result, filter by sessionId/agentId precisely.
-    const sessionId = parsedResult?.sessionId;
-    if (sessionId) {
-      const filtered = events.filter((event) => event.sessionId === sessionId);
-      if (filtered.length > 0) return filtered;
-    }
-    const agentId = parsedResult?.agentId || parsedResult?.taskId;
-    if (agentId) {
-      const filtered = events.filter((event) => event.agentId === agentId);
-      if (filtered.length > 0) return filtered;
-    }
-
-    // Running: match by agentType + description/name so concurrent
-    // sub-agents with different types don't get mixed up. If only one
-    // sub-agent is running, fall through to all events.
-    const desc = inputDescription || inputName;
-    if (desc) {
-      const byDesc = events.filter((event) => {
-        const eventDesc = event.agentDescription || event.agentName || '';
-        return eventDesc === desc;
-      });
-      if (byDesc.length > 0) return byDesc;
-    }
-    if (inputSubagentType) {
-      const byType = events.filter((event) => {
-        const eventType = event.agentType || '';
-        return eventType.toLowerCase().includes(inputSubagentType.toLowerCase());
-      });
-      if (byType.length > 0) return byType;
-    }
-
-    // Single sub-agent — use all events.
-    return events;
-  }, [mergedEvents, parsedResult?.sessionId, parsedResult?.agentId, parsedResult?.taskId, inputDescription, inputName, inputSubagentType]);
+  const subAgentEvents = useMemo(
+    () => selectSubagentEvents(mergedEvents, {
+      sessionId: parsedResult?.sessionId,
+      taskId: parsedResult?.taskId || parsedResult?.agentId,
+      description: inputDescription,
+      name: inputName,
+      subagentType: inputSubagentType,
+    }),
+    [mergedEvents, parsedResult?.sessionId, parsedResult?.agentId, parsedResult?.taskId, inputDescription, inputName, inputSubagentType],
+  );
 
   const latestEvent = subAgentEvents[subAgentEvents.length - 1];
   const lastToolEvent = useMemo(
@@ -313,7 +304,15 @@ export function SubAgentToolRow({ tool, agentProgressEvents }: SubAgentToolRowPr
   const targetSessionId = parsedResult?.sessionId
     || subAgentEvents.find((e) => e.sessionId)?.sessionId;
 
-  const stats = useMemo(() => computeStats(subAgentEvents), [subAgentEvents]);
+  const stats = useMemo(() => computeSubagentToolUseCounts(subAgentEvents), [subAgentEvents]);
+
+  // The run's task id, for the panel's stop control. The parsed result is the
+  // authoritative source; while a foreground run is still executing the row
+  // binds to the id the `started` event carries.
+  const runTaskId = parsedResult?.taskId
+    || parsedResult?.agentId
+    || subAgentEvents.find((e) => e.type === 'started' && e.agentId)?.agentId
+    || subAgentEvents[0]?.agentId;
 
   const prefix = parsedResult?.resolvedAgentType
     || parsedResult?.agentType
@@ -336,10 +335,15 @@ export function SubAgentToolRow({ tool, agentProgressEvents }: SubAgentToolRowPr
     // ZCode-parity: a subagent row opens the sub-agent's session as a
     // read-only view in the sidebar panel instead of yanking the main
     // column away from the parent transcript. The panel's header offers
-    // "open in main view" for the old jump-into behavior.
+    // "open in main view" for the old jump-into behavior, plus a stop
+    // control that needs the parent thread id and this run's task id.
     dispatchOpenSessionPanel(
       targetSessionId,
       `${prefix}${description ? ` · ${description}` : ''}`,
+      {
+        parentSessionId: activeThreadId || undefined,
+        taskId: runTaskId || undefined,
+      },
     );
   };
 

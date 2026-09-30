@@ -597,6 +597,64 @@ Multi-bot rooms (≤6 members + user) in one shared transcript. The room is a **
 - **Prompts**: groups render inside the agent-messaging contract — `loader.ts` reads groups.toml (worker-side) → `ctx.agentGroups` → `renderBotRoster` passes `AgentGroupSummary[]` into `buildAgentMessagingSystemPrompt`.
 - **UI**: sidebar Bots section gains a 群聊 group (`buildRoomContacts` + `RoomContactListItem`, composite room avatar); `GroupRoomChatView` (source-filtered `useRoomTranscript`, speaker-name lines, group_system rows, @mention composer with member picker dropdown); `GroupSettingsDialog` (create/edit ≤6 members/delete) over `config:groups:*` + `room:ensure|post|getTranscript|members` IPC (`electron/ipc/group-handlers.ts`, preload `groups`/`room`). `App.tsx` mounts it for `resolveChatMode === 'room'`; ChatView no longer falls through for room sessions.
 
+### Sub-agent Runtime & Side Panel (Plan 571)
+
+**Lifecycle vocabulary.** A sub-agent run has exactly five states, defined once in
+`src/lib/subagent-status.ts` and consumed by every surface:
+`pending | running | completed | failed | killed`.
+`killed` is first-class: `BackgroundAgentLifecycle.kill()` already records it agent-side, and
+before plan 571 the renderer had **three** incompatible spellings of the same lifecycle
+(`SubAgentRowInfo.status`, `ParsedSubAgentToolResult.status`, agent-side `TaskStatus`), none of
+which could express a user cancel — so a stopped sub-agent rendered as a failure.
+`deriveSubagentStatus(events)` derives state from the ordered progress events; the last terminal
+event wins, and a kill (an `error` whose `data` starts with `killed`) resolves to `killed`.
+
+**Event stream.** A sub-agent runs **in-process inside its parent's worker** — it has no process
+and no SSE session of its own. Its events are multiplexed onto the parent's
+`chat:agent_progress` channel and tagged with the child's own session id
+(`agentSessionId` on the wire, remapped to `event.sessionId` by
+`stream-session-manager.ts::handleAgentProgressEvent`).
+`text` / `thinking` payloads are **incremental deltas**, not cumulative snapshots
+(`DuyaAgent.ts:2520-2528`), so a renderer subscriber can rebuild the child's transcript from the
+event log alone. `heartbeat` is a keepalive type carrying no content and must never enter a
+transcript projection.
+
+**Two buffers, on purpose.** `SessionState.agentProgressEvents` is scoped to one parent turn — it is
+reset on run start (`:1708`) and dropped by the terminal slim (`:3309`). That is correct for the
+parent transcript and wrong for a child, which routinely outlives the turn that spawned it. Plan 571
+adds `subagentProgress`, keyed by **child** session id and never cleared on a turn boundary;
+`subscribeToSubagentProgress()` replays retained history synchronously before streaming live, so a
+panel opened mid-run renders what it missed. Entries are reclaimed once terminal, past a 5-minute
+retention, **and** unlistened; a mounted panel pins its log. This is the same split ZCode reaches by
+routing raw child events onto the child session's event topic
+(`runtime/methods/subagent.ts:335-339`) — duya gets the equivalent by keying the multiplexed
+channel, with no transport change.
+
+**Side panel.** `SessionMessagesPanel` (registry id `session-messages`, `multiInstance`, opened
+programmatically via `duya:open-session-panel`) renders any persisted session in the sidebar and
+reuses the main `MessageList` — ZCode-parity reuse of the main chat view rather than a bespoke
+renderer. It serves two kinds of session: sub-agents (live event stream available) and workflow
+actor nodes (no event stream; historical only). Live sub-agents stream via
+`useSubagentRuntimeStream` with **no polling**; the historical path keeps its reload as a fallback.
+Emitters never touch panel state — they dispatch a CustomEvent carrying
+`{ sessionId, parentSessionId, taskId, title }` and the panel provider resolves dedup/focus
+(tabs dedup on `sessionId` only).
+
+**Stop path.** `POST /sessions/:parentSessionId/subagents/kill { taskId }`
+(`electron/agents/server/router.ts::handlePostSubagentKill`) → `workerManager.sendCommand(parentSessionId,
+{ type: 'subagent:kill', taskId, reason: 'user_kill' })` → worker →
+`backgroundAgentLifecycle.kill(taskId, 'user_kill')`.
+It is keyed by the **parent** session because the child has no worker. A 404 means the parent
+worker is no longer resident, which the panel treats as a no-op rather than an error.
+
+**Result contract.** The `task` tool returns a discriminated shape keyed on `status`
+(`pending | running | completed | failed | killed`) carrying `sessionId`, `taskId`, `outputFilePath`,
+`totalToolUseCount`, `totalDurationMs`, `totalTokens`, `usage`, `workingDirectory`, `isolation`, and
+`warnings`. `src/lib/subagent-result.ts` parses it and still accepts the pre-571 field names
+(`childSessionId`, `backgroundTaskId`, `outputFile`, `isAsync`) so already-persisted history keeps
+rendering. A background launch receipt is a *successful* result that says nothing about the child —
+it must never be read as completion.
+
 ## Package Workspace
 
 ### Canvas Workbench Runtime (Plan 570)

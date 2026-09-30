@@ -519,6 +519,39 @@ interface StartStreamResult {
   generation: number;
 }
 
+/**
+ * Plan 571: one sub-agent's cross-turn progress buffer.
+ *
+ * `events` is the full ordered log of everything the child reported, kept alive
+ * across parent turn boundaries. `terminalAt` is stamped when a `done`/`error`
+ * event arrives so the entry can be reclaimed after a grace period (the panel
+ * may still be mounted and needs the history to render its final transcript).
+ */
+interface SubagentProgressEntry {
+  events: AgentProgressEvent[];
+  listeners: Set<(event: AgentProgressEvent) => void>;
+  /** Wall-clock ms of the first `started` event, for the panel's elapsed timer. */
+  startedAt: number | null;
+  /** Wall-clock ms of the terminal event, or null while still running. */
+  terminalAt: number | null;
+  lastActivityAt: number;
+}
+
+/**
+ * How long a finished sub-agent's event log is retained before reclamation.
+ * Mirrors the agent-side drained-record retention
+ * (`BackgroundAgentLifecycle.DEFAULT_DRAINED_RETENTION_MS`, 5 min): long
+ * enough for a panel the user is looking at, short enough that the renderer
+ * does not accumulate logs for the whole app lifetime.
+ */
+const SUBAGENT_PROGRESS_RETENTION_MS = 5 * 60 * 1000;
+
+/** Upper bound on concurrently tracked sub-agents (LRU eviction on overflow). */
+const SUBAGENT_PROGRESS_MAX_TRACKED = 64;
+
+/** Cap on buffered events per sub-agent, to bound a runaway child's memory. */
+const SUBAGENT_PROGRESS_MAX_EVENTS = 2000;
+
 // Field-based listeners for granular subscriptions
 type FieldListeners = {
   text: Set<(text: string) => void>;
@@ -547,7 +580,7 @@ export interface RetryNotice {
 
 /** Sub-agent progress event */
 export interface AgentProgressEvent {
-  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'started' | 'done' | 'error' | 'hook_invoked';
+  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'started' | 'done' | 'error' | 'hook_invoked' | 'heartbeat';
   data?: string;
   toolName?: string;
   toolInput?: Record<string, unknown>;
@@ -1124,6 +1157,27 @@ export class StreamSessionManager {
   /** Deferred slim timers keyed by sessionId (streamMemoryPolicy). */
   private terminalSlimTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private debugIpc = typeof process !== 'undefined' && process.env?.DUYA_DEBUG_IPC === 'true';
+
+  /**
+   * Plan 571: sub-agent progress that outlives the parent turn.
+   *
+   * `SessionState.agentProgressEvents` is scoped to one parent turn — it is
+   * reset when a new run starts (`:1708`) and dropped by the terminal slim
+   * (`:3309`). That is correct for the parent transcript, but wrong for a
+   * background sub-agent: the child keeps running after the parent's turn ends,
+   * so its event history was being erased in the renderer while the backend
+   * still held it. The row then saw a successful launch receipt with no
+   * terminal event and spun forever.
+   *
+   * This map is keyed by the CHILD session id and is deliberately not cleared
+   * on turn boundaries, so `SessionMessagesPanel` can subscribe to a running
+   * sub-agent and keep receiving deltas. It mirrors what ZCode does by routing
+   * raw child events onto the child session's own event topic
+   * (`runtime/methods/subagent.ts:335-339`); duya multiplexes them onto the
+   * parent channel instead and keys them by `agentSessionId`, which is
+   * equivalent for a renderer subscriber and needs no transport change.
+   */
+  private subagentProgress = new Map<string, SubagentProgressEntry>();
 
   private debugLog(...args: unknown[]): void {
     if (this.debugIpc) {
@@ -2924,6 +2978,7 @@ export class StreamSessionManager {
 
     s.agentProgressEvents = [...s.agentProgressEvents, event];
     this.notifyAgentProgressListeners(sessionId, event);
+    this.recordSubagentProgress(event);
 
     // Plan 437: hook events are routed through this handler. Convert
     // the structured `hookEvent` payload into a `HookAction` and append
@@ -3489,6 +3544,141 @@ export class StreamSessionManager {
   getAgentProgressHistory(sessionId: string): AgentProgressEvent[] {
     const state = this.getOrCreateState(sessionId);
     return [...state.agentProgressEvents];
+  }
+
+  // ---------------------------------------------------------------------------
+  // Plan 571: cross-turn sub-agent progress.
+  //
+  // These three members are the renderer-facing half of the fix for "the
+  // side panel shows nothing while a sub-agent is running". They read and write
+  // `subagentProgress`, which is keyed by the CHILD session id and is never
+  // cleared by a parent turn boundary or by the terminal slim.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Append one sub-agent event to its durable buffer and fan it out to any
+   * mounted panel.
+   *
+   * Events without a child session id are ignored: every event on the
+   * `chat:agent_progress` channel is a sub-agent event, and
+   * `agentSessionId` (remapped to `event.sessionId` upstream) is the only
+   * thing that identifies which child it belongs to. A missing id means the
+   * wire contract broke, and guessing a bucket would corrupt another child's
+   * transcript.
+   */
+  private recordSubagentProgress(event: AgentProgressEvent): void {
+    const childSessionId = event.sessionId;
+    if (!childSessionId) return;
+
+    const now = Date.now();
+    let entry = this.subagentProgress.get(childSessionId);
+    if (!entry) {
+      entry = { events: [], listeners: new Set(), startedAt: null, terminalAt: null, lastActivityAt: now };
+      this.subagentProgress.set(childSessionId, entry);
+      this.evictSubagentProgressIfNeeded();
+    }
+
+    entry.events.push(event);
+    // A pathological child could otherwise grow this without bound. Drop the
+    // oldest events rather than the newest: the tail is what the panel renders
+    // and what the terminal result refers to.
+    if (entry.events.length > SUBAGENT_PROGRESS_MAX_EVENTS) {
+      entry.events.splice(0, entry.events.length - SUBAGENT_PROGRESS_MAX_EVENTS);
+    }
+    entry.lastActivityAt = now;
+    if (event.type === 'started' && entry.startedAt === null) {
+      entry.startedAt = now;
+    }
+    if (event.type === 'done' || event.type === 'error') {
+      entry.terminalAt = now;
+    }
+
+    entry.listeners.forEach((listener) => {
+      try {
+        listener(event);
+      } catch (e) {
+        console.error(e);
+      }
+    });
+  }
+
+  /**
+   * Reclaim buffers for finished sub-agents, and enforce the tracked cap.
+   *
+   * An entry is only reclaimed once it is terminal, past the retention window,
+   * AND has no listeners — a mounted panel keeps its log alive no matter how
+   * old it is, because it is still rendering from it.
+   */
+  private evictSubagentProgressIfNeeded(): void {
+    const now = Date.now();
+    for (const [childSessionId, entry] of this.subagentProgress) {
+      const expired = entry.terminalAt !== null
+        && now - entry.terminalAt > SUBAGENT_PROGRESS_RETENTION_MS;
+      if (expired && entry.listeners.size === 0) {
+        this.subagentProgress.delete(childSessionId);
+      }
+    }
+
+    if (this.subagentProgress.size <= SUBAGENT_PROGRESS_MAX_TRACKED) return;
+    // Evict the least-recently-active entry that nobody is watching. Never
+    // touch one with listeners, and never touch a still-running one: those
+    // are the entries a panel is actively streaming.
+    const candidates = [...this.subagentProgress.entries()]
+      .filter(([, entry]) => entry.listeners.size === 0 && entry.terminalAt !== null)
+      .sort((a, b) => a[1].lastActivityAt - b[1].lastActivityAt);
+    let overflow = this.subagentProgress.size - SUBAGENT_PROGRESS_MAX_TRACKED;
+    for (const [childSessionId] of candidates) {
+      if (overflow <= 0) break;
+      this.subagentProgress.delete(childSessionId);
+      overflow -= 1;
+    }
+  }
+
+  /**
+   * Subscribe to one sub-agent's live event stream.
+   *
+   * Replays the retained history synchronously before attaching, so a panel
+   * opened mid-run renders the transcript it missed instead of starting blank.
+   */
+  subscribeToSubagentProgress(
+    subAgentSessionId: string,
+    listener: (event: AgentProgressEvent) => void,
+  ): () => void {
+    if (!subAgentSessionId) return () => {};
+
+    let entry = this.subagentProgress.get(subAgentSessionId);
+    if (!entry) {
+      entry = { events: [], listeners: new Set(), startedAt: null, terminalAt: null, lastActivityAt: Date.now() };
+      this.subagentProgress.set(subAgentSessionId, entry);
+    }
+    const target = entry;
+    target.listeners.add(listener);
+    for (const event of target.events) {
+      try {
+        listener(event);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    return () => {
+      target.listeners.delete(listener);
+      this.evictSubagentProgressIfNeeded();
+    };
+  }
+
+  /**
+   * Buffered history for one sub-agent, plus the timing the panel header needs.
+   * Returns an empty log for an unknown child so a cold panel renders its
+   * "no live data yet" state instead of throwing.
+   */
+  getSubagentProgressSnapshot(subAgentSessionId: string): {
+    events: AgentProgressEvent[];
+    startedAt: number | null;
+    terminalAt: number | null;
+  } {
+    const entry = this.subagentProgress.get(subAgentSessionId);
+    if (!entry) return { events: [], startedAt: null, terminalAt: null };
+    return { events: [...entry.events], startedAt: entry.startedAt, terminalAt: entry.terminalAt };
   }
 
   subscribeToError(sessionId: string, listener: (error: StreamingError | null) => void): () => void {

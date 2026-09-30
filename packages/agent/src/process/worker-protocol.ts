@@ -642,10 +642,32 @@ export interface AgentDebugEvent {
   message: string;
 }
 
+/**
+ * Progress event types a sub-agent can emit, mirrored on the wire as
+ * `agentEventType`.
+ *
+ * Plan 571: `heartbeat` is the 5s keepalive. It was previously emitted as
+ * `thinking`, which made the keepalive text indistinguishable from real model
+ * reasoning once it reached the transcript projection. Keeping it a distinct
+ * member of the union is what lets the renderer render a liveness indicator
+ * without inventing prose. Must stay in sync with `AgentProgressEvent['type']`
+ * in `tool/SubagentTool/runAgent.ts` and with `deriveSubagentStatus` in
+ * `src/lib/subagent-status.ts`.
+ */
+export type SubagentAgentEventType =
+  | 'text'
+  | 'thinking'
+  | 'tool_use'
+  | 'tool_result'
+  | 'started'
+  | 'heartbeat'
+  | 'done'
+  | 'error';
+
 export interface AgentAgentProgressEvent {
   type: 'chat:agent_progress';
   sessionId: string;
-  agentEventType?: string;
+  agentEventType?: SubagentAgentEventType | string;
   data?: string;
   toolName?: string;
   toolInput?: Record<string, unknown>;
