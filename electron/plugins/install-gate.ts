@@ -68,6 +68,16 @@ export function decideInstallGate(trust: PluginTrustInfo): InstallGateDecision {
 }
 
 /**
+ * Whether the install-time gate would have withheld enablement for this trust
+ * tier. `setEnabled` uses this so the escape hatch the gate creates stays
+ * auditable: enabling such a plugin is a deliberate user act, and it should
+ * leave a louder trace than an ordinary enable.
+ */
+export function isWithheldAtInstall(trust: PluginTrustInfo): boolean {
+  return !decideInstallGate(trust).enabled;
+}
+
+/**
  * Health status for a freshly installed plugin.
  *
  * Mirrors what `PluginManager.setEnabled` records when a plugin is turned off,

@@ -24,7 +24,7 @@ import {
   PluginTrustLevel,
   type PluginSource,
 } from '../../packages/plugin-core/src';
-import { decideInstallGate, initialHealthStatus } from './install-gate.js';
+import { decideInstallGate, initialHealthStatus, isWithheldAtInstall } from './install-gate.js';
 
 const engine = new TrustEngine();
 
@@ -95,8 +95,37 @@ describe('decideInstallGate — real install paths are unaffected', () => {
   });
 });
 
-describe('initialHealthStatus agrees with setEnabled', () => {
-  it('reports disabled regardless of setup state when not enabled', () => {
+describe('isWithheldAtInstall — the setEnabled audit signal', () => {
+  it.each([
+    [PluginTrustLevel.Untrusted, true],
+    [PluginTrustLevel.Local, false],
+    [PluginTrustLevel.Verified, false],
+    [PluginTrustLevel.Official, false],
+  ])('tier %s -> withheld=%s', (level, expected) => {
+    expect(isWithheldAtInstall({ level })).toBe(expected);
+  });
+
+  it('never withholds a recognised source', () => {
+    // Phase 4 uses this only to decide whether an explicit enable deserves a
+    // louder log line. If it ever fired for a normal plugin, every ordinary
+    // enable would be logged as a warning and the signal would be worthless.
+    const PLUGIN_SOURCES: PluginSource[] = [
+      'bundled',
+      'builtin-directory',
+      'marketplace',
+      'local',
+      'development',
+    ];
+    for (const source of PLUGIN_SOURCES) {
+      const trust = engine.determineTrustLevel(source, 'acme-marketplace');
+      expect(isWithheldAtInstall(trust), `source "${source}" must not be treated as withheld`).toBe(
+        false,
+      );
+    }
+  });
+});
+
+describe('initialHealthStatus agrees with setEnabled', () => {  it('reports disabled regardless of setup state when not enabled', () => {
     for (const setupState of ['complete', 'needs_setup', 'invalid']) {
       expect(initialHealthStatus(false, setupState)).toBe('disabled');
     }

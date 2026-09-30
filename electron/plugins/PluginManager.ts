@@ -26,7 +26,7 @@ import {
   type PluginResult,
 } from '../../packages/plugin-core/src';
 import { PathSafetyValidator } from '../../packages/plugin-core/src/security/path-validator';
-import { decideInstallGate, initialHealthStatus } from './install-gate';
+import { decideInstallGate, initialHealthStatus, isWithheldAtInstall } from './install-gate';
 import {
   getPluginErrorMessage,
   getPluginErrorSeverity,
@@ -643,6 +643,20 @@ export class PluginManager {
         },
       };
       this.store.upsertPlugin(updated);
+
+      // Plan 584 Phase 4: `setEnabled` is the escape hatch the install gate
+      // creates, and it was leaving no trace at all. Enabling a plugin the gate
+      // would have withheld is a deliberate opt-in, so it gets a warn with the
+      // trust level attached rather than a routine info line.
+      if (enabled && isWithheldAtInstall({ level: entry.trustLevel })) {
+        this.logger.warn(
+          'Plugin enabled explicitly despite an origin the trust engine could not classify',
+          { pluginId, trustLevel: entry.trustLevel, source: entry.source, marketplace: entry.marketplace },
+          LogComponent.Main,
+        );
+      } else {
+        this.logger.info('Plugin enablement changed', { pluginId, enabled, trustLevel: entry.trustLevel }, LogComponent.Main);
+      }
       return updated;
     });
   }
