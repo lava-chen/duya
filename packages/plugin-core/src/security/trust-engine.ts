@@ -66,6 +66,14 @@ export class TrustEngine {
       return { level: PluginTrustLevel.Official, verifiedBy: 'DUYA' };
     }
 
+    // First-party plugins shipped inside the app (the builtin marketplace
+    // directory). This is first-party code, not a third-party download, so it
+    // sits at the same tier as `bundled`. The case was missing before plan 584,
+    // which left every builtin plugin falling through to the Untrusted default.
+    if (source === 'builtin-directory') {
+      return { level: PluginTrustLevel.Official, verifiedBy: 'DUYA' };
+    }
+
     if (source === 'development') {
       return { level: PluginTrustLevel.Local };
     }

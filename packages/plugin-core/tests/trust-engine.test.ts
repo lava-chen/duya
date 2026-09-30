@@ -48,6 +48,39 @@ describe('TrustEngine.determineTrustLevel', () => {
     expect(engine.determineTrustLevel(source).level).toBe(expected);
   });
 
+  it('treats a builtin-directory plugin as official, not untrusted', () => {
+    // `PluginSource` (electron/plugins/types.ts) is
+    // 'bundled' | 'builtin-directory' | 'marketplace' | 'local' | 'development'.
+    // Before plan 584, 'builtin-directory' had no case here and fell through
+    // to the Untrusted default — so PluginManager, which recomputes trust from
+    // `catalogEntry.source` and ignores the catalog's own `trustLevel`, wrote
+    // every first-party builtin plugin into the registry as `untrusted`. That
+    // is both a data-integrity bug and a trap for any gate keyed on the
+    // Untrusted tier: it would have disabled the first-party plugins.
+    expect(engine.determineTrustLevel('builtin-directory').level).toBe(
+      PluginTrustLevel.Official,
+    );
+  });
+
+  it('covers every value of the PluginSource union', () => {
+    // Guards against the enum growing again without a case here. `PluginSource`
+    // is declared in electron/plugins/types.ts; duplicated here deliberately so
+    // this test fails the moment either side drifts.
+    const PLUGIN_SOURCES = [
+      'bundled',
+      'builtin-directory',
+      'marketplace',
+      'local',
+      'development',
+    ] as const;
+    for (const source of PLUGIN_SOURCES) {
+      const level = engine.determineTrustLevel(source, 'some-marketplace').level;
+      expect(level, `source "${source}" fell through to a default tier`).not.toBe(
+        PluginTrustLevel.Untrusted,
+      );
+    }
+  });
+
   it('treats a marketplace install as verified and attributes the verifier', () => {
     const trust = engine.determineTrustLevel('marketplace', 'acme-marketplace');
     expect(trust.level).toBe(PluginTrustLevel.Verified);
