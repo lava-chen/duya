@@ -31,6 +31,11 @@ const storeMocks = vi.hoisted(() => ({
   unarchiveThread: vi.fn().mockResolvedValue(undefined),
   updateThreadTitle: vi.fn(),
   setThreadPinned: vi.fn(),
+  // Plan 582 (G2): the row reads the whole roster to count the sub-agent
+  // sessions an archive would take with it, so the archive confirm dialog can
+  // say so. Without this key the selector returns undefined and every case in
+  // this file dies on `threads.filter` before reaching its own assertion.
+  threads: [] as Array<{ id: string; parentId: string | null }>,
 }));
 
 // Selector-aware mock. ThreadListItem now subscribes via per-action
@@ -127,12 +132,32 @@ describe('ThreadListItem menu (Plan 506)', () => {
     expect(screen.getByText('thread.deleteThread')).toBeTruthy();
   });
 
-  it('archive item calls store archiveThread with the thread id', () => {
+  it('archive item opens the G9 confirm step instead of archiving straight away', () => {
+    // Plan 582 (G9): the menu item is confirm-then-act. `db:session:archive`
+    // takes the session's whole spawn subtree, so a bare click is no longer
+    // the size of action the label implies. This test previously asserted
+    // the pre-G9 behaviour (one click archives) and has been red since.
     render(<ThreadListItem thread={makeThread()} isActive={false} />);
     openMenu();
     fireEvent.click(screen.getByText('thread.archiveThread'));
+
+    expect(storeMocks.archiveThread).not.toHaveBeenCalled();
+    expect(screen.getByTestId('archive-confirm')).toBeTruthy();
+
+    // Confirming is what actually archives.
+    fireEvent.click(screen.getByTestId('archive-confirm-ok'));
     expect(storeMocks.archiveThread).toHaveBeenCalledWith('s-1');
     expect(storeMocks.deleteThread).not.toHaveBeenCalled();
+  });
+
+  it('cancelling the G9 confirm step archives nothing', () => {
+    render(<ThreadListItem thread={makeThread()} isActive={false} />);
+    openMenu();
+    fireEvent.click(screen.getByText('thread.archiveThread'));
+    fireEvent.click(screen.getByText('common.cancel'));
+
+    expect(storeMocks.archiveThread).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('archive-confirm')).toBeNull();
   });
 
   it('export item exports the rollout and notifies with the path', async () => {
