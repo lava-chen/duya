@@ -26,6 +26,7 @@ import { TokenVault } from './token-vault.js';
 import { TokenService } from './token-service.js';
 import { startAuthorization, FlowError } from './oauth/flow.js';
 import { startRemoteMcpAuthorization } from './oauth/remote-mcp-flow.js';
+import type { RemoteMcpConnector } from './connectors/remote-mcp.js';
 import {
   clearClientSecret,
   getProviderConfig,
@@ -89,6 +90,14 @@ export class AppConnectionService {
   private readonly fetchImpl: typeof fetch;
   private reloadHook: ReloadBroadcastHook | null = null;
   private readonly providerBlockCheck?: ProviderBlockCheck;
+  /**
+   * Remote MCP connector installed by ConnectorService via
+   * {@link setRemoteMcpConnector}. Used by the silent reconnect path in
+   * {@link connect} to re-establish a session using the existing
+   * connectionId + stored refresh token, instead of forcing the user
+   * through a full browser OAuth flow after every restart.
+   */
+  private remoteMcp: RemoteMcpConnector | null = null;
 
   constructor(deps: AppConnectionServiceDeps = {}) {
     this.vault = deps.vault ?? new TokenVault();
@@ -124,6 +133,16 @@ export class AppConnectionService {
   /** Install the post-mutation reload hook (called by IPC layer). */
   setReloadHook(hook: ReloadBroadcastHook): void {
     this.reloadHook = hook;
+  }
+
+  /**
+   * Install the shared RemoteMcpConnector instance so this service can
+   * call `ensureSession` with the existing connectionId + stored refresh
+   * token (see {@link connect}). ConnectorService owns the connector
+   * lifecycle and calls this once during its own construction.
+   */
+  setRemoteMcpConnector(connector: RemoteMcpConnector): void {
+    this.remoteMcp = connector;
   }
 
   /** List all connections as renderer-safe DTOs. */
@@ -361,6 +380,21 @@ export class AppConnectionService {
       if (!config) {
         throw new FlowError('provider_not_configured', `${provider} is not a registered connector`);
       }
+
+      // Plan (silent reconnect): for remote MCP providers, prefer reusing
+      // the existing connectionId + stored refresh token over forcing the
+      // user through the browser OAuth flow after every transport death.
+      // The MCP SDK refreshes the access token silently using the stored
+      // refresh token; only fall back to OAuth if no token is stored or the
+      // provider rejects the refresh.
+      if (config.remoteMcpUrl) {
+        const silent = await this.trySilentReconnectRemoteMcp(provider, config, scopes);
+        if (silent) {
+          await this.fireReload();
+          return silent;
+        }
+      }
+
       const dto = config.remoteMcpUrl
         ? await startRemoteMcpAuthorization(provider, {
             store: this._connectionStore,
@@ -373,6 +407,14 @@ export class AppConnectionService {
             scopes,
             fetchImpl: this.fetchImpl,
           });
+
+      // After a fresh OAuth, scrub any `error`-status rows left over from
+      // prior transport deaths. Without this, every restart+reconnect cycle
+      // would accumulate one stale DB row plus an orphaned vault token pair.
+      if (config.remoteMcpUrl) {
+        this.cleanupStaleRemoteMcpConnections(provider, dto.id);
+      }
+
       await this.fireReload();
       return dto;
     } catch (err) {
@@ -392,6 +434,97 @@ export class AppConnectionService {
       }
       throw err;
     }
+  }
+
+  /**
+   * Plan (silent reconnect): try to bring a `Remote MCP` connection back
+   * to `connected` using the connection's stored refresh token, without
+   * launching the browser OAuth flow. Returns the refreshed status DTO
+   * on success, or `null` to signal the caller to fall back to OAuth.
+   *
+   * Pre-conditions for the silent path:
+   *   - The connector was installed via {@link setRemoteMcpConnector}.
+   *   - The provider has a `remoteMcpUrl` (already enforced by the caller).
+   *   - A prior connection row exists for this provider.
+   *   - The vault still holds a refresh token under that connectionId.
+   *
+   * Failure modes (all fall back to OAuth):
+   *   - No stored token (first-time connect after reset/reinstall).
+   *   - MCP SDK rejected the refresh token (revoked / password changed).
+   *   - The provider's MCP endpoint is unreachable.
+   */
+  private async trySilentReconnectRemoteMcp(
+    provider: ProviderId,
+    config: { remoteMcpUrl: string; [k: string]: unknown },
+    scopes?: string[],
+  ): Promise<AppConnectionStatusDTO | null> {
+    if (!this.remoteMcp || !config?.remoteMcpUrl) return null;
+
+    // Prefer an `error`-status row (transport died) over any other row, since
+    // that is the exact recovery scenario this helper targets. Fall back to
+    // any row with stored tokens so a `disconnected` row also gets a chance.
+    // Note: TokenSet uses camelCase (`refreshToken`), not snake_case.
+    const candidates = this._connectionStore.listByProvider(provider);
+    const target =
+      candidates.find(
+        (c) => c.status === 'error' && this.vault.get(c.id)?.refreshToken,
+      ) ??
+      candidates.find((c) => this.vault.get(c.id)?.refreshToken);
+    if (!target) return null;
+
+    try {
+      await this.remoteMcp.ensureSession(target.id, config, scopes);
+      this._connectionStore.updateStatus(target.id, 'connected', {
+        lastError: null,
+      });
+      const refreshed = this._connectionStore.get(target.id);
+      if (!refreshed) return null;
+      this.logger.info(
+        'App Connection: silent reconnect succeeded',
+        { provider, connectionId: target.id },
+        COMPONENT,
+      );
+      return toStatusDTO(refreshed);
+    } catch (err) {
+      this.logger.warn(
+        'App Connection: silent reconnect failed; falling back to OAuth',
+        { provider, connectionId: target.id },
+        COMPONENT,
+      );
+      this.logger.debug(
+        'App Connection: silent reconnect error detail',
+        { error: err instanceof Error ? err.message : String(err) },
+        COMPONENT,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * After a fresh OAuth succeeds for a remote MCP provider, delete any
+   * leftover `error`-status rows for the same provider. Each row may also
+   * have orphaned token blobs in the vault (left over from the randomUUID
+   * dance in {@link startRemoteMcpAuthorization}); drop those too so they
+   * don't accumulate forever.
+   */
+  private cleanupStaleRemoteMcpConnections(
+    provider: ProviderId,
+    keepConnectionId: string,
+  ): void {
+    const stale = this._connectionStore
+      .listByProvider(provider)
+      .filter((c) => c.id !== keepConnectionId && c.status === 'error');
+    if (stale.length === 0) return;
+    for (const row of stale) {
+      this._connectionStore.remove(row.id);
+      this.vault.remove(row.id);
+      this.vault.removeMcpOAuth(row.id);
+    }
+    this.logger.info(
+      'App Connection: cleaned up stale remote MCP connection rows',
+      { provider, removed: stale.length },
+      COMPONENT,
+    );
   }
 
   /**

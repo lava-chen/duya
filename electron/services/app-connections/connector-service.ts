@@ -88,6 +88,11 @@ export class ConnectorService {
     this.remoteMcp.onTransportDead = (connectionId, reason) => {
       void this.service.markTransportDead(connectionId, reason).catch(() => undefined);
     };
+    // Plan (silent reconnect): hand the shared RemoteMcpConnector instance
+    // to the connection service so it can re-establish a session with the
+    // existing connectionId + stored refresh token on a re-toggle, instead
+    // of forcing the user through the browser OAuth flow after every restart.
+    this.service.setRemoteMcpConnector(this.remoteMcp);
     this.fetchImpl = deps.fetchImpl ?? fetch;
     // Plan 455 D4: first-party TS connectors are the ONLY custom-binding
     // residents. slack/microsoft365/google migrate to `rest` declarations
