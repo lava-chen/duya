@@ -512,16 +512,18 @@ pi 则是另一极端：无 manifest 预声明 + 静默遮蔽内置，用户在 
       补不补注册时门控。plan 419 的 P1（`checkPermissions` 预检、`riskTier`、
       `PermissionContext` 注入）正好是这条的地基，但 P1 尚未落地。
 
-#### 推进顺序（G1 / G2 均已落地）
+#### 推进顺序（G1 / G2 / G3 均已落地）
 
 0. ~~G1：`discoverHooks` 格式修正~~ ✅ `968d18c5`
 1. ~~独立 plan [584](../completed/584-plugin-trust-enforcement.md)~~ ✅ **2026-10-01 完成**。
    Phase 1 接上了唯一有执行点的能力项；Phase 2 取消为 N/A；Phase 3 删掉只写不读的
    `PermissionService`；Phase 4 给 `setEnabled` 补审计痕迹。
 2. ~~G2：让 plugin 的 hook 真的执行~~ ✅ `5477574e`。**方案 A 的主体已落地。**
-3. **缝 C 方案 B 判定为「暂不做」**：`plugin` 这个 MCP source 桶在仓内**不可达**
+3. ~~G3：plugin 的 commands / agents~~ ✅ **删除，不是接线。** 宿主能力本身不存在，
+   接了也只是把死元数据换个地方放。
+4. **缝 C 方案 B 判定为「暂不做」**：`plugin` 这个 MCP source 桶在仓内**不可达**
    （零个 plugin 声明 `mcp/servers.json`），放松它对 `decideMcpSource` 是空转。
-4. **C 方案（进程内执行）仍需先解决门控缺失**——但注意这不是「等 584」：
+5. **C 方案（进程内执行）仍需先解决门控缺失**——但注意这不是「等 584」：
    584 已完成且说明了：**要接 C，必须先为它新建一个执行点**（声明 + 校验），
    否则就是无门控地执行第三方代码。
 
@@ -539,13 +541,49 @@ pi 则是另一极端：无 manifest 预声明 + 静默遮蔽内置，用户在 
 - `[hooks] disabled` 是按 config.toml 的 entry 字符串寻址的，**够不到 plugin 文件**。
   所以 plugin 文件走空 disabled 集合——这是承认限制，不是假装它可寻址。
 
+#### G3 的结论：删除，而不是接线（2026-10-01）
+
+原计划是把 skills 那套加权优先级阶梯扩到 plugin 的 `commands/` / `agents/`。
+动手前先查宿主能力是否存在，结论是**不存在**，所以阶梯没有阶梯可扩：
+
+| 宿主侧 | 实测 |
+|---|---|
+| slash command 注册表 | `getCommandsForPlatform` 是**硬编码 built-in 列表**，不是 plugin 喂入的 registry；注册表自带注释「other built-ins are hidden until their execution logic is wired up」，全仓只有 `/recap` 有执行逻辑 |
+| custom agent 加载器 | `getAgentDefinitions()` 直接 `return getBuiltInAgents()`，硬编码 |
+| `loadAgentsDir` | `getActiveAgentsFromList` / `filterAgentsByMcpRequirements` / `isCustomAgent` 除 barrel 外**零调用点**；`CustomAgentDefinition` 的 `filename` / `baseDir` 是为一个**不存在的加载器**预留的脚手架 |
+
+也就是说，就算把优先级阶梯接上，也只是让一个**没人读的数组**排了个序。
+
+删除面（全部经 `git grep` 确认零外部消费者）：
+
+1. `discoverCommands` / `discoverAgents` 两个函数
+2. 它们唯一共用的私有辅助 `scanMdFiles`（随之变死）
+3. `PluginCapabilities` 的 `commands` / `agents` 两个字段
+4. `discoverAllCapabilities` 里对应的两行接线
+5. 测试里 2 个独立用例 + `discoverAllCapabilities` 用例里的 2 行断言
+6. import 里的 `basename` —— 只在 `scanMdFiles` 里用过
+
+三个 `discoverAllCapabilities` 调用点（`manifest.ts:353`、`:712`、`capability-counts.ts:51`）
+逐一核对过，**只消费 `skills` / `mcpServers` / `workflows` / `hooks`**，删除不触碰它们。
+
+回归守卫：新增 `Object.keys(caps).sort()` 的**精确键集断言**。将来谁把
+`commands` / `agents` 加回来，这条会立刻红 —— 删除不会静默腐化回一个宿主不兑现的承诺。
+另加一条：plugin 目录下存在 `commands/*.md` 与 `agents/*.md` 时
+`discoverAllCapabilities` **必须完全无视它们**。
+
+**明确没动的**：`src/lib/plugin-types.ts:170` 的 `PluginCapabilitiesSchema`
+是 **manifest 声明面**（字段 `skills/mcpServers/cli/ui/hooks`，本就不含
+commands/agents），与 plugin-core 的 `PluginCapabilities` interface 是两个类型。
+顺带确认：它不含这两个字段，所以本次删除**没有制造用户可见的虚假承诺**，
+原本就只是潜在的。
+
 #### 已有的冲突/优先级策略地图（2026-10-01 摸清，比三个参照物都好）
 
 | 能力种类 | 现有策略 | 证据 |
 |---|---|---|
 | **skills** | 加权优先级：system 6 > custom 5 > agent 4 > user/project 3 > **plugin 2 = 普通 bundled 2** > 无标记 1；同级 first-wins | `packages/agent/src/skills/resolver.ts:50-116` |
 | **MCP servers** | `shadowedBy`：被遮蔽的条目**保留在 inventory 里可见**、标记、从生效集排除 | `packages/plugin-core/src/mcp/discovery.ts:195-243` |
-| **commands / agents** | **无任何遮蔽/优先级** | `discoverCommands` / `discoverAgents` 在 `electron/`、`agent/src/`、`src/` 下零消费者 |
+| **commands / agents** | **不适用——能力不存在** | G3 已删除 `discoverCommands` / `discoverAgents`：宿主无 plugin slash-command 注册表（`getCommandsForPlatform` 硬编码），也无 custom-agent 加载器（`getAgentDefinitions()` 硬编码 `getBuiltInAgents()`） |
 | 工具（tool） | 尚未支持 plugin 贡献 | — |
 
 skills 那套的关键设计值得单独指出：**「用户改过的 bundled skill 被提升到 user 档（3），
@@ -566,6 +604,11 @@ openclaw 要用户先手动禁用内置，pi 静默遮蔽，duya 这套两者都
   `npm run typecheck:web` 均 exit 0。
 - Phase 4：`npm run typecheck:all` + 完整 vitest；**真实 Electron renderer 内验 preload 路径**，
   浏览器态不可用纯 Vite 验证。
+- G3（已跑）：`npx vitest run packages/plugin-core electron/plugins` → 34 文件 / 512 用例，
+  **511 通过，唯一失败是既有的外部红** `app-schema-marketplace-compat.test.ts`（读外部仓库
+  `E:/Projects/duya-marketplace` 的 `.app.json`，断在 `app.name`；该用例只 import `connectors/*`，
+  与本次 2 文件 diff 零交集）。
+  `npx tsc -p packages/plugin-core --noEmit` exit 0；`npm run typecheck:web` exit 0。
 - 全程：任何阶段都不跑 `npm test` 与 `npm run electron:dev` 并行（共享 `better-sqlite3` 二进制）。
 
 ## 9. 未验证项（后续需要补证据）
