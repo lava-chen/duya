@@ -1300,6 +1300,9 @@ const zh: Record<TranslationKey, string> = {
   'thread.archiveMissingTitle': '会话不存在或已被删除',
   'thread.archiveFailedTitle': '归档失败',
   'thread.archiveFailedHint': '文件移动未完成，数据保持原样，请重试。',
+  // Plan 582 (G6)：打开归档对话时的只读预览。
+  'chat.archivedReadonlyBanner': '这条对话已归档，当前为只读。',
+  'chat.archivedReadonlyPlaceholder': '取消归档后即可继续这段对话。',
   'thread.archivedAt': '归档于',
   'thread.exportRollout': '导出会话 Rollout',
   'thread.exportDoneTitle': 'Rollout 已导出',

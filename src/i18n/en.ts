@@ -1322,6 +1322,9 @@ const en = {
   'thread.archiveFailedTitle': 'Could not archive',
   'thread.archiveFailedHint':
     'The files were left where they were. Nothing was changed — please try again.',
+  // Plan 582 (G6): read-only preview when an archived thread is opened.
+  'chat.archivedReadonlyBanner': 'This thread is archived and read-only.',
+  'chat.archivedReadonlyPlaceholder': 'Unarchive this thread to continue the conversation.',
   'thread.archivedAt': 'Archived',
   'thread.exportRollout': 'Export Session Rollout',
   'thread.exportDoneTitle': 'Rollout exported',
