@@ -347,7 +347,8 @@ G5 是读码推断，**未运行验证**。动工前先在 dev 环境手动复�
 
 - [x] **G1** 归档单位改为 session 目录/文件组；目标路径镜像完整相对路径消除撞名；反档为纯前缀剥离
 - [x] **G1** 补测试：布局 ①/② 各自的"归档→反档→读回全量历史"往返断言（真实 fs，非 mock）——`session-archive-whole-session.test.ts` 5 例
-- [ ] **G1** ⚠️ **存量数据迁移脚本 + UI 提示 —— 未做，见 §8.1 风险**
+- [x] **G1** 存量数据迁移 —— `legacy-archive-migration.ts` 启动期归一化 549 行 +
+  `unarchive` 格式嗅探兜底；见 §8.1
 - [x] **G2** Phase 1：`LockStore` preflight 拒绝整个子树 + 失效 `message-log.ts` `pathCache`
 - [x] **G2** Phase 2：递归子树归档（unarchive 不递归）
 - [x] **G2** Phase 3：两阶段提交 + `restoreArchivedMoves` 补偿回滚（文件与行两个方向都可逆）
@@ -389,26 +390,50 @@ G5 是读码推断，**未运行验证**。动工前先在 dev 环境手动复�
 2. **`npm run electron:build` 在 master 上直接失败**：`electron/main.ts` 顶层 `await`（来自 `dde5295e`）
    撞上 CJS 输出。已包成该文件其它 boot 任务同款的 async IIFE。
 
-### 8.1 ⚠️ 未完成项里唯一有数据风险的一条
+### 8.1 G1 存量数据迁移（已收口）
 
-**G1 的存量数据迁移没做。** Plan 549 时代的归档路径是 `archived/<date>/<basename>`，
-`archived_path` 存的是**单个文件路径**；G1 改成 `archived/<date>/<完整相对路径>`，
-`archived_path` 存的是**目录**。后果：
+**原风险**：Plan 549 时代的归档路径是 `archived/<date>/<basename>`，`archived_path` 存的是
+**单个文件路径**；G1 改成 `archived/<date>/<完整相对路径>`，`archived_path` 存的是**目录**。
+旧行因此违反 G1 的不变量。
 
-- 升级前归档的会话，反档时 `resolveUnarchivedPath` 会把 `archived/2026-09-18/rollout-x.jsonl`
-  剥成 `rollout-x.jsonl`，落到 `<rolloutRoot>/rollout-x.jsonl` —— **不是它原来的位置**
-  （`sessions/2026/09/18/rollout-x.jsonl`）。
-- 数据**不会丢**：`MessageLog.findRolloutFileBySessionId` 的异常恢复会按 id 重新认领文件并
-  `adoptRolloutPath` 回填 `sessions.rollout_path`。但要等下一次读触发扫描，且期间
-  `rollout_path` 指向一个不存在的路径。
-- 轮转过的旧归档会话会额外丢 `archive-<g>.jsonl` 兄弟（它们从未被搬进归档区，
-  仍在活跃目录），这是 549 遗留的既有状态，本 plan 未改变也未修复。
+**实现时的修正**：本节原先写「数据不会丢，`findRolloutFileBySessionId` 会重新认领」——
+**这是错的**。该恢复只扫 `<rolloutRoot>/sessions`，**从不扫 `archived/`**；而 549 的
+handler 只写 `archived_path`、**没动 `rollout_path`**，所以 `rollout_path` 指向归档前
+那个已被搬走的路径。两者叠加的真实后果比原先记录的更严重：
 
-**收口方式**（二选一，都还没做）：
-1. 一次性 migration：扫描 `status='archived' AND archived_path LIKE 'archived/%/%'` 且
-   `archived_path` 指向文件的行，把文件挪到镜像目录并改写 `archived_path`；
-2. 或在 `session:unarchive` 里对旧格式做格式嗅探（`stat` 是文件就走 basename 还原 +
-   重新 adopt），并提示用户。
+> **升级前的归档会话，升级后打开是空的**（`listBySession` 解析到零行），
+> 而不只是「反档时落错位置」。
+
+**收口方式**：两条都做了，互为防线。
+
+1. **启动期一次性迁移**（主修复）——`electron/db/core/legacy-archive-migration.ts`，
+   由 `initCoreDatabase` 调用（紧邻 `migrateRolloutRoots()`，见
+   `core-connection.ts`）。只处理 `archived_path` 指向**文件**的行：`stat` 判定形状，
+   从行上**未被 549 改写的 `rollout_path`** 还原原始相对路径，把文件挪到
+   **同一个 bucket** 下的镜像目录，并同时改写 `archived_path`（转成目录）与
+   `rollout_path`（指向归档后的活文件）——与 G1 新归档产出的形状完全一致。
+   - 幂等：归一化后 `archived_path` 指向目录，二次运行零命中；无归档的用户只有一条
+     走索引的 SELECT。新装机器完全无感。
+   - 先 rename 后 UPDATE；UPDATE 失败则 rename 回原处，磁盘与 SQL 不会各说各话。
+   - 绝不覆盖已存在的目标文件（`destination_taken` 跳过）。
+   - 轮转过的旧归档会话的 `archive-<g>.jsonl` 兄弟**仍未搬入归档区**（549 从未搬过，
+     它们一直在活跃目录）。迁移不扩大这一条：反档时这些兄弟会自然回到原处与会话重聚，
+     归档期间则仍只显示最后一段。这是 549 遗留的既有状态，本 plan 未改变。
+2. **`db:session:unarchive` 格式嗅探**（兜底）——万一有行在迁移跑过之后才被旧版本写入，
+   handler 用 `stat` 识别「`archived_path` 指向文件」，此时改用该行记录的 `rollout_path`
+   作为还原目标，而不是剥掉前缀只剩一个 basename。宁可落到一个推断出的合理位置，
+   也不落到 `<rolloutRoot>/` 根目录。
+
+**顺带修掉的存量 bug**：`restoreArchivedMoves` 的方向判断有歧义 —— 归档方向记的是
+`archivedAbs`（文件去了哪），反档方向记的是 `restoredAbs`（文件该回哪），而旧代码把
+`srcAbs` 同时当成两者的兜底，于是**反档的回滚退化成「把文件重命名成它自己」的空操作**：
+行更新一旦失败，文件已经搬走而 SQL 仍写着 archived。现已按方向取 `archived`/`restored`
+两端，并跳过 `from === to`。
+
+**证据**：`electron/db/core/__tests__/legacy-archive-migration.test.ts` 13 例（真实 fs +
+真实 schema），含一条**先断言「549 行读出来确实是空的」再断言迁移后历史可读**；
+`archive-paths.test.ts` 补 `archivedBucketDate` / `resolveArchivedPathInBucket`；
+`db-handlers.test.ts` 补两条真实文件系统的反档用例（G1 目录形状 / 549 文件形状）。
 
 **影响面**：只影响 549 落地后、582 落地前归档过的会话；新建归档不受影响。
 

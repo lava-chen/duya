@@ -1299,5 +1299,82 @@ describe('db-handlers (core store thin forward)', () => {
       expect(result).toBe(true);
       expect(mocks.stores.sessions.update).not.toHaveBeenCalled();
     });
+
+    // ─── §8.1: restore targets, over the real filesystem ───────────────
+
+    it('restores every segment of a Plan 582 directory archive to its original path', async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-unarchive-'));
+      try {
+        const archivedDir = path.join(root, 'archived', '2026-09-18', 'sessions', '2026', '09', '01', 's-9');
+        fs.mkdirSync(archivedDir, { recursive: true });
+        fs.writeFileSync(path.join(archivedDir, 'archive-0.jsonl'), '{"a":1}\n');
+        fs.writeFileSync(path.join(archivedDir, 'active.jsonl'), '{"b":1}\n');
+
+        mocks.resolveRolloutRoot.mockReturnValueOnce(root);
+        mocks.stores.sessions.get.mockReturnValueOnce({
+          id: 's-9',
+          status: 'archived',
+          rolloutPath: 'archived/2026-09-18/sessions/2026/09/01/s-9/active.jsonl',
+          archivedAt: 100,
+          archivedPath: 'archived/2026-09-18/sessions/2026/09/01/s-9',
+        });
+
+        const result = await invokeHandler('db:session:unarchive', {}, 's-9');
+        expect(result).toBe(true);
+
+        // Pure prefix strip: both segments are back in the date tree.
+        const restoredDir = path.join(root, 'sessions', '2026', '09', '01', 's-9');
+        expect(fs.readFileSync(path.join(restoredDir, 'archive-0.jsonl'), 'utf8')).toBe('{"a":1}\n');
+        expect(fs.readFileSync(path.join(restoredDir, 'active.jsonl'), 'utf8')).toBe('{"b":1}\n');
+        expect(mocks.stores.sessions.update).toHaveBeenCalledWith('s-9', {
+          status: 'active',
+          archivedAt: null,
+          archivedPath: null,
+          rolloutPath: 'sessions/2026/09/01/s-9/active.jsonl',
+        });
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it('restores a Plan 549 file archive to the recorded rollout_path, not a bare basename', async () => {
+      // The safety net for rows the boot-time migration could not normalize.
+      // A Plan 549 row records a single FILE, so a plain prefix strip would
+      // recover only `rollout-s-9.jsonl` and drop it at the rollout root
+      // instead of `sessions/2026/09/01/`.
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-unarchive-'));
+      try {
+        const legacyAbs = path.join(root, 'archived', '2026-09-18', 'rollout-s-9.jsonl');
+        fs.mkdirSync(path.dirname(legacyAbs), { recursive: true });
+        fs.writeFileSync(legacyAbs, '{"a":1}\n');
+
+        mocks.resolveRolloutRoot.mockReturnValueOnce(root);
+        mocks.stores.sessions.get.mockReturnValueOnce({
+          id: 's-9',
+          status: 'archived',
+          rolloutPath: 'sessions/2026/09/01/rollout-s-9.jsonl',
+          archivedAt: 100,
+          archivedPath: 'archived/2026-09-18/rollout-s-9.jsonl',
+        });
+
+        const result = await invokeHandler('db:session:unarchive', {}, 's-9');
+        expect(result).toBe(true);
+
+        expect(
+          fs.readFileSync(path.join(root, 'sessions', '2026', '09', '01', 'rollout-s-9.jsonl'), 'utf8'),
+        ).toBe('{"a":1}\n');
+        // The pre-fix destination must stay empty.
+        expect(fs.existsSync(path.join(root, 'rollout-s-9.jsonl'))).toBe(false);
+        expect(fs.existsSync(legacyAbs)).toBe(false);
+        expect(mocks.stores.sessions.update).toHaveBeenCalledWith('s-9', {
+          status: 'active',
+          archivedAt: null,
+          archivedPath: null,
+          rolloutPath: 'sessions/2026/09/01/rollout-s-9.jsonl',
+        });
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
   });
 });

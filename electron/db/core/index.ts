@@ -7,6 +7,7 @@
 export * from './database';
 export * from './message-log';
 export * from './archive-paths';
+export * from './legacy-archive-migration';
 export * from './session-store';
 export * from './mailbox';
 export * from './stores';
