@@ -78,13 +78,19 @@
 
 | 字段 | 现状 | 说明 |
 |---|---|---|
-| `requirePermissionConfirmation` | **未接线** | 表里有、无人读。Phase 1 会用到 |
-| `allowAutoUpdate` | **未接线** | 入参是裸 `boolean`，从不比对。Phase 2 |
+| `requirePermissionConfirmation` | **未接线** | 表里有、无人读。Phase 1 明确**不**拿它做安装门控（语义不同） |
+| `allowAutoUpdate` | **N/A：执行点不存在** | plugin 无任何 update/sync 机制，`autoUpdate` 存了但无人读。见 Phase 2 |
 | `maxFileAccess` | **N/A：执行点不存在** | plugin 无文件访问执行路径，接线是假的 |
 | `maxHooks` | **N/A：执行点不存在** | plugin 声明的 hook 从不执行（见 583 §7 Phase 4） |
 | `allowHttpHooks` | **N/A：执行点不存在** | 同上 |
 | `allowAgentHooks` | **N/A：执行点不存在** | 同上 |
-| `meetsMinimumLevel()` | **未接线** | 零调用方。Phase 1 可用它表达「至少 Local」 |
+| `meetsMinimumLevel()` | **已接线（Phase 1）** | 唯一有消费者的能力相关 API |
+
+> **Phase 1 之后，六个 capability 字段里只有 `meetsMinimumLevel` 有消费者。**
+> 其余五个要么未接线、要么根本没有执行点。这不是本 plan 没做完，
+> 是**当前代码里不存在可接的地方**。给不存在的执行点接线，会造出一个看起来
+> 在管事、实际不拦任何东西的字段——和 583 Phase 3 里 `permissions[].domains` 的
+> 情况是同一类错误。若将来 plugin 真的开始执行 hook / 自动更新，这几行要重新评估。
 
 > 「N/A」是**有意的标注**，不是漏做。给一个不存在的执行点接线，会造出一个看起来
 > 在管事、实际不拦任何东西的字段——和 583 Phase 3 里 `permissions[].domains` 的
@@ -132,35 +138,88 @@ tier 映射补全后，5 个 `PluginSource` 全部落在已识别档位，**`Unt
 
 
 
-### Phase 2 — T-2 能力分层落地
+### Phase 2 — T-2 `autoUpdate` 比对 ❌ 取消，改为 N/A
 
-- [ ] `autoUpdate`：`install` / `installLocal` 的 `autoUpdate` 入参与
-      `capabilities.allowAutoUpdate` 比对，不允许时钳为 `false` 并记日志。
-      （`Untrusted` / `Local` 档位已是 `false`，只是没人读。）
-- [ ] `requirePermissionConfirmation`：映射到安装/启用确认流程。
-      若当前无确认 UI，先只落日志 + 在 IPC 返回里暴露「需要确认」标志，不硬造 UI。
-- [ ] `maxFileAccess` / `maxHooks` / `allowHttpHooks`：本 plan **不**接线。
-      前提是对应的执行点根本不存在（plugin hook 从不执行，见 583 §7 Phase 4）。
-      没有执行点的 capability 字段接线是假的——在 §Phase 0 的对账表里标注
-      「N/A：执行点不存在」，避免下一个人误以为漏做了。
+原计划：把 `autoUpdate` 入参与 `capabilities.allowAutoUpdate` 比对。
+**动手前查执行点，发现不存在，故取消。**
 
-### Phase 3 — T-3 授权单一真相
+证据：
 
-- [ ] `PermissionService.checkPermission` 改为读 `PluginRegistryEntry.grantedPermissions`，
-      不再自持 Map。`recordGrantedPermissions` / `revokeAllPermissions` 相应改为
-      委托给 store。
-- [ ] 决定 `checkPermission` 的**调用点**。候选：plugin 声明的 `permissions`
-      在激活时校验一次。注意 `manifest.permissions` 目前的 `domains` 字段
-      **不拦任何东西**（导航拦截由设置驱动的 `DomainBlocker` 决定，见 583 §7 Phase 3），
-      所以接线时不要假装它在管事。
-- [ ] 若最终判定「plugin 声明的 permissions 目前没有可执行的语义」，
-      则**如实把它标为 metadata-only**并写进注释，而不是接一个假的门。
+- `PluginManager` 的公开方法全集是 `listCatalog` / `listInstalled` / `getDetail` /
+  `getSetupValues` / `saveSetupValues` / `installFromCatalog` / `installFromPath` /
+  `setEnabled` / `remove` / `buildHealthIssue` / `getPathValidator` / `getPolicyEngine` /
+  `getTrustEngine` / `getPermissionService`——**没有任何 update / sync / upgrade**。
+- `electron/services/updater.ts` 是**应用自身**的 electron-updater，与 plugin 无关。
+- `plugins.autoUpdate` 只是一个被存下来、能通过 `plugin:install-local` 的 IPC 传入的
+  标志，**没有任何代码读它**。
 
-### Phase 4 — T-4 激活时门控
+所以 `allowAutoUpdate` 与 `maxHooks` / `allowHttpHooks` / `allowAgentHooks` 同类：
+**没有执行点**。去「接线」只有两种做法，两种都错：
 
-- [ ] `enable` / `disable` 路径复核：启用时重算 trust（来源可能变了），
-      信任下降的 plugin 不应能被无提示启用。
-- [ ] 与 plan 419 的 P1（`checkPermissions` 预检 / `riskTier`）对齐，避免两套门。
+- (a) 顺便把 plugin 自动更新机制做出来 —— 那是功能开发，不属于安全 plan。
+- (b) 把一个没人读的标志钳一下 —— 制造一个看起来在管事、实际不拦任何东西的字段。
+  这正是本 plan §Phase 0 标 N/A 时要避免的同一类错误。
+
+**副产品发现（值得单独记）**：`autoUpdate: false` 这个名字**暗示**了一个保护性语义，
+但它不提供任何保护。以后若有代码读它做安全判断，会建立在一个假前提上。
+
+
+
+### Phase 3 — T-3 授权单一真相 ✅ 已落地（结论是「删掉」而非「接线」）
+
+原计划：让 `checkPermission` 读 `PluginRegistryEntry.grantedPermissions`。
+**动手前查调用方，发现连「接线对象」都不存在，故改为删除。**
+
+实测（`PermissionService` 全部方法的外部调用方计数）：
+
+| 方法 | 外部调用点 |
+|---|---|
+| `recordGrantedPermissions` | 1（`PluginManager` install，效果无人读） |
+| `revokeAllPermissions` | 1（`PluginManager` remove，效果无人读） |
+| `getPermissionService()` | **0** |
+| `checkPermission` | **0** |
+| `getPluginPermissions` | **0** |
+| `requestTemporaryPermission` | **0** |
+| `revokePermission` | **0** |
+| `revokeExpired` | **0** |
+| `isExpired` | **0** |
+
+即：那个 Map **只写不读**。且它是内存态，进程重启即丢，本来也不可能成为可靠的
+权限判定依据。
+
+- [x] 删除 `packages/plugin-core/src/security/permission-service.ts` 与其
+      `packages/plugin-core/tests/security/permission-service.test.ts`。
+- [x] 移除 barrel 导出、`PluginManager` 的字段 / 3 处调用 / 访问器。
+- [x] 清理两个 PluginManager 测试里已失效的 mock 桩。
+- [x] 在写入点留注释：plugin 声明的 permissions 现在是**单一记录**
+      （`entry.grantedPermissions`，UI 读它），且 `domains` **不执行**——
+      导航拦截由设置驱动的 `DomainBlocker` 决定。写明是为了防止下一个人
+      以为「少了什么」而再加一份账本。
+
+**为什么是删而不是接**：一个叫 `PermissionService`、带 `checkPermission` 方法的类，
+读起来就是执法，但它什么都不拦。要「接线」就只能自己发明一个执行点——那正是
+583 里 `permissions[].domains` 和本 plan 六个 capability 字段中的四个
+所犯的同一类错误。留着比删掉危险。
+
+### Phase 4 — T-4 激活时门控 ⚠️ 原设想大部分落空，需重新定范围
+
+原写「启用时重算 trust，信任下降的 plugin 不应能被无提示启用」。**这条今天不成立**：
+
+- `PluginRegistryEntry.source` 安装后不再变化，而 trust 完全由 `source` 推导，
+  所以「信任下降」在当前数据模型下**不可能发生**。
+- Phase 1 的门已经是 fail-safe（`Untrusted` 不可达），所以 Phase 4 想守的
+  那个缺口本身不存在。
+
+**唯一还剩的真实价值**：`setEnabled(pluginId, true)` 是 Phase 1 那道门的
+**逃生口**——用户可以显式启用一个装上时未启用的 plugin。这件事本身没问题
+（`decideMcpSource` 已在**调用时**对 plugin/local/unknown 逐次询问），
+但**当前没有任何审计痕迹**：谁在什么时候启用了什么，只有 `logger.info` 一行。
+
+- [ ] `setEnabled` 在启用「装上时被门控扣下」的 plugin 时，记一条带
+      `trustLevel` 的显式日志。低成本，且把 Phase 1 开的口子闭上。
+- [ ] 与 plan 419 P1 对齐前**不**在此加注册时门控（避免两套门）。
+
+
 
 ## 4. Gates
 

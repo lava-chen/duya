@@ -40,7 +40,7 @@ Rules:
 
 | Plan | Priority | Next action |
 | --- | --- | --- |
-| [plugin-trust-enforcement](./active/584-plugin-trust-enforcement.md) | **P0** | Phase 2: compare the `autoUpdate` argument against `capabilities.allowAutoUpdate` (it is a raw caller boolean today, never checked) + the four-tier matrix extension _(Phase 0 and Phase 1 landed; Phase 1 also fixed a real bug where every first-party builtin plugin was recorded as `untrusted`)_ |
+| [plugin-trust-enforcement](./active/584-plugin-trust-enforcement.md) | **P0** | Phase 4 (narrowed): `setEnabled` is the escape hatch the Phase 1 gate relies on and currently leaves no audit trail — log an explicit opt-in with `trustLevel`; do not add a registration-time gate before plan 419 P1 _(Phases 0-3 landed; Phase 2 was cancelled as N/A because plugin auto-update has no execution point, and Phase 3 resolved to deleting the write-only PermissionService)_ |
 | [08-31-multi-agent-profile-design](./active/2026-08-31-multi-agent-profile-design.md) | P1 | Implement plan 7.2 memory partition by profile (migration + `[memory] partition` toggle) _(section C partially done via 481/477)_ |
 | [popover-autoflip](./active/237-popover-autoflip.md) | P1 | Migrate `HoverPopover` to `usePopoverPlacement`, then `SlashCommandPopover` / `ModelSelector` |
 | [permission-decision-bus](./active/419-permission-decision-bus.md) | P0 | Add `checkPermissions` + `riskTier` to the MCP tool registration path _(P0/P2 done; P1 open)_ |
