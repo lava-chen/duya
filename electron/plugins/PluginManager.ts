@@ -27,6 +27,7 @@ import {
   type PluginResult,
 } from '../../packages/plugin-core/src';
 import { PathSafetyValidator } from '../../packages/plugin-core/src/security/path-validator';
+import { decideInstallGate, initialHealthStatus } from './install-gate';
 import {
   getPluginErrorMessage,
   getPluginErrorSeverity,
@@ -484,11 +485,22 @@ export class PluginManager {
 
       const now = new Date().toISOString();
       const setupState = this.computeSetupState(catalogEntry.id, catalogEntry.manifest);
+      // Plan 584 Phase 1: an origin the trust engine could not classify is
+      // installed but not enabled. See install-gate.ts for why this is not
+      // keyed on requirePermissionConfirmation.
+      const gate = decideInstallGate(trustInfo);
+      if (gate.detail) {
+        this.logger.warn(
+          `Plugin installed disabled: ${gate.detail}`,
+          { pluginId, version, source: catalogEntry.source, trustLevel: trustInfo.level },
+          LogComponent.Main,
+        );
+      }
       const entry: PluginRegistryEntry = {
         id: catalogEntry.id,
         name: catalogEntry.name,
         version,
-        enabled: true,
+        enabled: gate.enabled,
         installPath: cacheDir,
         dataPath: pluginDataPath,
         source: catalogEntry.source,
@@ -501,7 +513,7 @@ export class PluginManager {
         grantedPermissions: catalogEntry.manifest.permissions,
         setupState,
         health: {
-          status: setupState === 'needs_setup' ? 'needs_setup' : 'ready',
+          status: initialHealthStatus(gate.enabled, setupState),
           reasons: [],
           checkedAt: now,
         },
@@ -565,11 +577,23 @@ export class PluginManager {
 
       const now = new Date().toISOString();
       const setupState = this.computeSetupState(pluginId, manifest);
+      // Plan 584 Phase 1 — same gate as installFromCatalog. A path install is
+      // always the `local` tier today, so this lands enabled; the gate is
+      // applied anyway so the two paths cannot drift if the local tier is
+      // ever recomputed from something narrower.
+      const gate = decideInstallGate(trustInfo);
+      if (gate.detail) {
+        this.logger.warn(
+          `Plugin installed disabled: ${gate.detail}`,
+          { pluginId, version, path: resolvedPath, trustLevel: trustInfo.level },
+          LogComponent.Main,
+        );
+      }
       const entry: PluginRegistryEntry = {
         id: pluginId,
         name: pluginName,
         version,
-        enabled: true,
+        enabled: gate.enabled,
         installPath: cacheDir,
         dataPath: pluginDataPath,
         source: 'local',
@@ -582,7 +606,7 @@ export class PluginManager {
         grantedPermissions: manifest.permissions,
         setupState,
         health: {
-          status: setupState === 'needs_setup' ? 'needs_setup' : 'ready',
+          status: initialHealthStatus(gate.enabled, setupState),
           reasons: [],
           checkedAt: now,
         },
