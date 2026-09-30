@@ -30,6 +30,7 @@ import { getPluginManager } from '../../plugins/PluginManager';
 import type { PluginCapabilityKind, PluginRegistryEntry, PluginCatalogEntry } from '../../plugins/types';
 import { listCapabilityKinds, readPluginManifest } from '../../plugins/manifest';
 import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
+import { notifyMcpConfigChanged } from '../../services/mcp-write-reload';
 
 interface PluginListItem {
   id: string;
@@ -564,6 +565,9 @@ export async function handleInstallPlugin(
       sendJson(res, mapped.status, mapped.body);
       return;
     }
+    // Autonomous installs go through the CLI control plane rather than the
+    // renderer IPC path, so explicitly refresh worker MCP inventories here.
+    await notifyMcpConfigChanged();
     const event: AuditEvent = {
       kind: 'plugin.install',
       id: result.value.id,
