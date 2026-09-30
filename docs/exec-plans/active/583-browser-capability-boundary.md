@@ -243,9 +243,12 @@ worktree 内不存在该 Junction，故未沿用。
   `fileReadState` 3 + `ReadTool` 4 + `GrepTool` 1 + `PlanTool` 1），零回归。
   适配层 `file://` 失败断言文本在搬迁前后**逐字相同**
   （`expected '### Page...' to contain 'Local snapshot'`），确认与 import 变更无关。
-- 待办：`npm run typecheck:web` 全链路 + `npm run bundle:agent`（esbuild alias 实测）；
-  真实 Electron 内的 browser 行为 smoke（`agent-process-entry.ts:4284` 的间接
+- 待办：真实 Electron 内的 browser 行为 smoke（`agent-process-entry.ts:4284` 的间接
   `setBrowserConfig` 路径不能只靠 grep 验证）。
+- `npm run bundle:agent` 在 Phase 1 后实测通过：产物 5.02 MB，且用 `CDPClient` 独有的
+  字符串 `Extension mode connected` 确认引擎确已内联（alias 若失效会编译失败或整包缺失）。
+  esbuild 的 `alias` 值必须是**绝对路径**——相对路径会被当成包名，报
+  `Could not resolve "packages\\browser\\src\\index.ts"`。
 
 **顺手修掉的既有红**（均在引擎内，现归本 plan 所有）：
 
@@ -295,6 +298,10 @@ worktree 内不存在该 Junction，故未沿用。
 验收：`tsc -p packages/agent` 0 错误；`vitest run packages/agent/tests/unit/tool-catalog`
 仅剩 2 个既有红（`tool_invoke` schema-read，与本改动无关）；新增 7 个 usage-guide 用例 +
 2 个适配层手册存在性用例全绿。
+`npm run typecheck:web` exit 0；`npm run bundle:agent` 产出 5.14 MB，并逐项确认压缩产物内
+含引擎（`Extension mode connected`）、`usage_guide` 接线、`namespace:"browser"` 与
+`scraping` tag——即 Phase 2 的两处改动都真正进了 ship 出去的 bundle。
+
 
 
 ### Phase 3 — 缝 B：browser plugin（ZCode 形制）
