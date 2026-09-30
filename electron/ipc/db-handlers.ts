@@ -38,6 +38,11 @@ import {
   updateCanvasGroup,
   deleteCanvasGroup,
   getCanvasSnapshot,
+  // `getNextZIndex` below calls this. It was never imported, so every
+  // `element.create_native` / connector creation without an explicit
+  // zIndex threw `ReferenceError: getMaxZIndex is not defined`. The same
+  // call in `conductor/db-service.ts` imports it from here.
+  getMaxZIndex,
 } from '../db/queries/conductors';
 import { updateDatabasePath, readBootConfig } from '../config/boot-config';
 import { resolveRolloutRoot } from '../config/boot-config';
@@ -75,7 +80,6 @@ import { maybeDispatchAgentDm } from '../wake/agent-dm-dispatcher';
 import { uploadAsset as conductorUploadAsset, uploadProjectAsset as conductorUploadProjectAsset } from '../conductor/asset-service';
 import { captureWebsiteSnapshot } from '../conductor/link-snapshot-service';
 import { prepareCanvasDocument, syncCanvasDocument } from '../conductor/document-service';
-import { getCoreStores } from '../db/core-connection';
 import { newEventToIpcMessage } from './core-db-adapters';
 import { getSessionManager } from '../agents/session-manager';
 import { CronFileStore } from '../automation/cron-file';
