@@ -98,7 +98,7 @@ async function messagesOf(sessionId: string): Promise<unknown[]> {
 }
 
 test.describe('session archive (Plan 582)', () => {
-  test('G1: a rotated session keeps its whole history across archive/unarchive', async () => {
+  test('G1: a single-file session round-trips archive/unarchive losslessly', async () => {
     dua = await launchDuya({ namespace: 'ipc-archive-single' });
     await waitForCoreStores();
     const id = `e2e-rot-${Date.now()}`;
