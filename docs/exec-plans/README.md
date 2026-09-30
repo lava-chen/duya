@@ -40,6 +40,7 @@ Rules:
 
 | Plan | Priority | Next action |
 | --- | --- | --- |
+| [plugin-trust-enforcement](./active/584-plugin-trust-enforcement.md) | **P0** | Phase 0: fix the dead `permission-service.ts:6` reference to `evaluateMcpToolPermission` (that file does not exist — the function was folded into `decideMcpSource`), then add contract tests for `TrustEngine` tiering _(split out of 583 §7 Phase 4; the trust tiers are never enforced and this is seam C's prerequisite)_ |
 | [08-31-multi-agent-profile-design](./active/2026-08-31-multi-agent-profile-design.md) | P1 | Implement plan 7.2 memory partition by profile (migration + `[memory] partition` toggle) _(section C partially done via 481/477)_ |
 | [popover-autoflip](./active/237-popover-autoflip.md) | P1 | Migrate `HoverPopover` to `usePopoverPlacement`, then `SlashCommandPopover` / `ModelSelector` |
 | [permission-decision-bus](./active/419-permission-decision-bus.md) | P0 | Add `checkPermissions` + `riskTier` to the MCP tool registration path _(P0/P2 done; P1 open)_ |
