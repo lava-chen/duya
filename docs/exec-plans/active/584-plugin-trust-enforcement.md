@@ -56,14 +56,39 @@
 
 ## 3. Phases
 
-### Phase 0 — 让缺口可见
+### Phase 0 — 让缺口可见 ✅ 已落地
 
-- [ ] 修 `permission-service.ts:6` 的死引用，指向 `permissions.ts:289` `decideMcpSource`。
-- [ ] 给 `TrustEngine` 补**契约测试**：`getCapabilities` / `meetsMinimumLevel`
-      的分层语义（`Official` ⊇ `Verified` ⊇ `Local` ⊇ `Untrusted`、
-      `maxHooks` 单调、`Untrusted` 一律 `requirePermissionConfirmation`）。
-      这些是纯函数，补上零风险。
-- [ ] 在 plan 中记录「哪些 capability 字段已接线 / 未接线」的对账表，作为后续 gate。
+- [x] 修 `permission-service.ts:6` 的死引用——原注释指向
+      `packages/agent/src/mcp/permission-gate.ts:evaluateMcpToolPermission`，
+      **该文件不存在**，函数已折叠进 `decideMcpSource`。
+- [x] 给 `TrustEngine` 补契约测试：`packages/plugin-core/tests/trust-engine.test.ts`
+      （18 用例）。覆盖来源→档位映射、marketplace 需具名才升 Verified、
+      未知来源 fail-safe 到 Untrusted、分层单调性（`maxHooks` / `maxFileAccess`
+      随信任上升不减）、`requirePermissionConfirmation` 非 Official 一律为真、
+      `meetsMinimumLevel` 的全序关系。
+- [x] **写测试时抓到一处真实缺陷并已修**：`getCapabilities()` 原本
+      `return TRUST_LEVEL_CAPABILITIES[trust.level]`——把模块级表**按引用交出**。
+      任何调用方改一下返回值就污染了全局策略。Phase 1/2 一旦开始拿它做安装决策，
+      这就是活的隐患。已改为返回浅拷贝。
+- [x] **同时更正我自己对能力表的误读**：`allowAutoUpdate` 并非只有 Official 为真，
+      **Verified 也是 `true`**（`trust-engine.ts:38`）。语义是「marketplace 具名 =
+      有人审过」，Local / Untrusted 才禁止自更新。测试已按实际表写。
+
+#### capability 字段对账表
+
+| 字段 | 现状 | 说明 |
+|---|---|---|
+| `requirePermissionConfirmation` | **未接线** | 表里有、无人读。Phase 1 会用到 |
+| `allowAutoUpdate` | **未接线** | 入参是裸 `boolean`，从不比对。Phase 2 |
+| `maxFileAccess` | **N/A：执行点不存在** | plugin 无文件访问执行路径，接线是假的 |
+| `maxHooks` | **N/A：执行点不存在** | plugin 声明的 hook 从不执行（见 583 §7 Phase 4） |
+| `allowHttpHooks` | **N/A：执行点不存在** | 同上 |
+| `allowAgentHooks` | **N/A：执行点不存在** | 同上 |
+| `meetsMinimumLevel()` | **未接线** | 零调用方。Phase 1 可用它表达「至少 Local」 |
+
+> 「N/A」是**有意的标注**，不是漏做。给一个不存在的执行点接线，会造出一个看起来
+> 在管事、实际不拦任何东西的字段——和 583 Phase 3 里 `permissions[].domains` 的
+> 情况是同一类错误。若将来 plugin 真的开始执行 hook，这三行要重新评估。
 
 ### Phase 1 — T-1 安装时门控（最小、最高价值）
 
