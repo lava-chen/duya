@@ -1,10 +1,10 @@
 # 582 — Session 归档加固（归档轮转历史断裂 / 生命周期安全 / 排序语义 / 归档视图交互）
 
-> **Status**: In Progress（G1–G5、G7、G8 全落地；G6/G9 主体落地；存量迁移、E2E、烟测未做）· **Priority**: P0 · **Owner**: TBD
+> **Status**: In Progress（G1–G8 落地；G9 主体落地 + 一项有意未做；**存量迁移未做，见 §8.1**）· **Priority**: P0 · **Owner**: TBD
 > **立项**: 2026-10-01（对标 `docs/references/codex-thread-and-worktree-management.md` 的 codex thread 管理调研）
 > **前置**: Plan 549（归档对齐 codex）**已于 2026-09-19 经 PR #56 落地**（commit `9b1b1fe4`），Track A/B/C/D 全部实现。本 plan **不重做 549**，只补它留下的正确性缺口。
 > **分界**: 存储与生命周期（G1–G4）见 §2–§5；UI 轨（G5–G9）见 §6。
-> **落地**: PR #76（G1,G3,G5,G7）、#77（G2）、#78（G4）、#79（G6,G8,G9）。**未完成项见 §8.1**。
+> **落地**: PR #76（G1,G3,G5,G7）、#77（G2）、#78（G4）、#79（G6,G8,G9）、#80（E2E + 两个存量 bug）。**未完成项见 §8.1**。
 
 ---
 
@@ -376,10 +376,18 @@ G5 是读码推断，**未运行验证**。动工前先在 dev 环境手动复�
 
 **门禁**
 
-- [ ] **`npm run typecheck:all`** —— 未跑；本轮只跑了 `npm run typecheck:web`（EXITCODE 0）
-- [x] **单测** —— 存储轨 10 + 2（`db-handlers.test.ts` 新增归档用例、`stores.test.ts` 成环/菱形）、`session-recency.test.ts` 6、`session-store.test.ts` 9、`section-system.test.ts` 4
-- [ ] **E2E** `e2e/ipc/session-archive.spec.ts` —— 未写
-- [ ] **Playwright MCP** 烟测 —— 未做（UI 轨改动全部未经真实 Electron 渲染器验证）
+- [ ] **`npm run typecheck:all`** —— 未跑；本轮只跑了 `npm run typecheck:web`（EXITCODE 0）与 `npm run electron:build`（EXITCODE 0）
+- [x] **单测** —— 存储轨 10 + 2（`db-handlers.test.ts` 归档用例、`stores.test.ts` 成环/菱形）、`session-recency.test.ts` 6、`session-store.test.ts` 9、`section-system.test.ts` 4
+- [x] **E2E** `e2e/ipc/session-archive.spec.ts` —— 5 spec 真跑通过（真实 Electron + 真实 fs + 真实 SQLite）
+- [ ] **Playwright MCP** 烟测 —— 未做（UI 轨改动未经人工交互验证；E2E 走的是 IPC 层，不覆盖渲染）
+
+### 8.0 PR #80 顺带修掉的两个存量 bug
+
+1. **unarchive 从未生效**：preload 调 `db:session:unarchive`，handler 注册为 `session:unarchive`。
+   自 Plan 549 起每次反归档都在 reject `No handler registered`。单测按注册名调用，结构上就看不见
+   preload 那一侧；只有真 bridge 能暴露。已改名 + 加注册断言 + E2E 覆盖。
+2. **`npm run electron:build` 在 master 上直接失败**：`electron/main.ts` 顶层 `await`（来自 `dde5295e`）
+   撞上 CJS 输出。已包成该文件其它 boot 任务同款的 async IIFE。
 
 ### 8.1 ⚠️ 未完成项里唯一有数据风险的一条
 
