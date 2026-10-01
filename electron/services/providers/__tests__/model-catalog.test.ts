@@ -208,25 +208,42 @@ describe('ProviderStore — listModelCapabilitiesMerged baseline + override', ()
     store.migrateAllLegacyProviders();
   });
 
-  it('merges built-in baseline with DB overrides, DB winning', () => {
-    // Built-in anthropic baseline has claude-sonnet-4-20250514
-    // (contextWindow 200000). Override it via DB.
+  it('merges built-in baseline with DB overrides, DB winning', async () => {
+    // The model ids come from the live baseline rather than a snapshot of
+    // it. This case used to hardcode `claude-sonnet-4-20250514` and
+    // `claude-3-5-sonnet-20241022`, neither of which the catalog has shipped
+    // since Plan 451 refreshed it, so it asserted against models that do
+    // not exist. Picking from the baseline keeps the case about the merge
+    // rule instead of about which models shipped this quarter.
+    const { anthropicModels } = await import('@duya/ai');
+    expect(anthropicModels.length).toBeGreaterThan(1);
+
+    const baseline = anthropicModels[0];
+    const untouched = anthropicModels[1];
+    const baselineContext = baseline.contextWindow;
+
+    // Baseline entry overridden via the DB.
     dao.upsert({
       providerId: 'anthropic',
-      modelId: 'claude-sonnet-4-20250514',
+      modelId: baseline.id,
       contextWindow: 500_000,
       source: 'user',
       updatedAt: 0,
     });
     const merged = store.listModelCapabilitiesMerged('anthropic');
-    const sonnet = merged.find((m) => m.modelId === 'claude-sonnet-4-20250514');
-    expect(sonnet).toBeTruthy();
-    expect(sonnet!.contextWindow).toBe(500_000); // DB override wins
-    expect(sonnet!.source).toBe('user');
+
+    const overridden = merged.find((m) => m.modelId === baseline.id);
+    expect(overridden).toBeTruthy();
+    expect(overridden!.contextWindow).toBe(500_000); // DB override wins
+    expect(overridden!.source).toBe('user');
+
     // The untouched built-in model is still present from the baseline.
-    const older = merged.find((m) => m.modelId === 'claude-3-5-sonnet-20241022');
-    expect(older).toBeTruthy();
-    expect(older!.source).toBe('preset');
+    const stillPreset = merged.find((m) => m.modelId === untouched.id);
+    expect(stillPreset).toBeTruthy();
+    expect(stillPreset!.source).toBe('preset');
+    // Nothing else in the baseline was disturbed by the override.
+    expect(merged.length).toBe(anthropicModels.length);
+    expect(baselineContext).toBeGreaterThan(0);
   });
 
   it('returns DB rows only when the provider is unknown (no baseline)', () => {

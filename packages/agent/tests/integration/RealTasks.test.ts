@@ -306,9 +306,8 @@ describe('Real Tasks Integration', () => {
       const results: string[] = [];
       for await (const update of executor.getRemainingResults()) {
         if (update.message) {
-          const content = update.message.content;
-          if (Array.isArray(content) && content[0]?.type === 'tool_result') {
-            results.push(String(content[0].content));
+          if (update.message.role === 'tool') {
+            results.push(String(update.message.content));
           }
         }
       }
@@ -342,9 +341,8 @@ describe('Real Tasks Integration', () => {
       const results: string[] = [];
       for await (const update of executor.getRemainingResults()) {
         if (update.message) {
-          const content = update.message.content;
-          if (Array.isArray(content) && content[0]?.type === 'tool_result') {
-            results.push(String(content[0].content));
+          if (update.message.role === 'tool') {
+            results.push(String(update.message.content));
           }
         }
       }
@@ -376,7 +374,7 @@ describe('Real Tasks Integration', () => {
       const tools = executor.getTools();
       expect(tools).toHaveLength(1);
       expect(tools[0].id).toBe('test');
-      expect(['queued', 'executing', 'completed']).toContain(tools[0].status);
+      expect(['queued', 'starting', 'executing', 'completed']).toContain(tools[0].status);
     });
   });
 
@@ -403,9 +401,8 @@ describe('Real Tasks Integration', () => {
       const results: string[] = [];
       for await (const update of executor.getRemainingResults()) {
         if (update.message) {
-          const content = update.message.content;
-          if (Array.isArray(content) && content[0]?.type === 'tool_result') {
-            results.push(String(content[0].content));
+          if (update.message.role === 'tool') {
+            results.push(String(update.message.content));
           }
         }
       }
@@ -438,9 +435,8 @@ describe('Real Tasks Integration', () => {
       const results: string[] = [];
       for await (const update of executor.getRemainingResults()) {
         if (update.message) {
-          const content = update.message.content;
-          if (Array.isArray(content) && content[0]?.type === 'tool_result') {
-            results.push(String(content[0].content));
+          if (update.message.role === 'tool') {
+            results.push(String(update.message.content));
           }
         }
       }
