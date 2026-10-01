@@ -185,6 +185,26 @@ export class FeishuWebhookServer {
     return null;
   }
 
+  /**
+   * Deliver an already-verified, already-authenticated event to the adapter.
+   *
+   * This runs after the 200 ack, so anything it throws can no longer be
+   * turned into an HTTP error response. It is caught and logged here on
+   * purpose: the request handler's own `catch` is guarded by
+   * `!res.headersSent`, so once the ack is out that guard is false and an
+   * `onEvent` rejection was dropped on the floor — a webhook that answers
+   * 200 and silently does nothing, with no trace of why.
+   */
+  private async _dispatch(event: FeishuEvent): Promise<void> {
+    try {
+      await this._options.onEvent(event);
+    } catch (err) {
+      this._onLog('feishu webhook onEvent threw after ack', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   async start(): Promise<void> {
     return new Promise((resolve, reject) => {
       this._server = http.createServer(async (req, res) => {
@@ -278,8 +298,12 @@ export class FeishuWebhookServer {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ code: 0 }));
 
-            await this._options.onEvent(body);
-          } catch {
+            await this._dispatch(body);
+          } catch (err) {
+            this._onLog('feishu webhook request failed', {
+              path: requestPath,
+              error: err instanceof Error ? err.message : String(err),
+            });
             if (!res.headersSent) {
               res.writeHead(500, { 'Content-Type': 'application/json' });
               res.end(JSON.stringify({ error: 'Internal server error' }));

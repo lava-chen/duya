@@ -12,6 +12,10 @@
  * - If `safeStorage.isEncryptionAvailable()` is false (e.g. headless
  *   Linux without libsecret), every mutation throws
  *   `{ code: 'vault_unavailable' }`. We refuse to persist plaintext.
+ * - Reads in that same state are reported through
+ *   {@link TokenVault.isUnavailable} rather than as an empty vault, so a
+ *   live OAuth grant is never mistaken for a revoked one. The read is not
+ *   cached, so it recovers on its own once safeStorage comes back.
  * - Corrupt vault file is treated as an empty map (warn + reset), so a
  *   single bad byte never blocks the authorization flow.
  */
@@ -59,6 +63,8 @@ function vaultPath(): string {
 export class TokenVault {
   private cache: VaultShape = { tokens: {}, oauthClients: {}, mcpOAuth: {} };
   private loaded = false;
+  /** A vault file exists but could not be decrypted. See {@link isUnavailable}. */
+  private unavailable = false;
   private readonly logger = getLogger();
 
   /** Lazily load the vault from disk; idempotent. */
@@ -73,16 +79,24 @@ export class TokenVault {
       }
       const raw = fs.readFileSync(file, 'utf-8');
       if (!safeStorage.isEncryptionAvailable()) {
-        // We cannot decrypt without safeStorage; treat as empty so a
-        // headless env doesn't crash the boot path. Mutations will still
-        // throw VaultUnavailableError when attempting to write.
-        this.logger.warn(
-          'Vault file exists but safeStorage unavailable; treating as empty',
-          undefined,
-          COMPONENT,
-        );
+        // The file is there; we just cannot read it. Do NOT mark the vault
+        // loaded. An empty-but-loaded vault is indistinguishable from "this
+        // connection has no tokens", and callers acted on that difference
+        // by flipping live OAuth grants to `revoked` and persisting it.
+        // Leaving `loaded` false means a later call retries — safeStorage
+        // can become available mid-session once a keyring is set up — and
+        // isUnavailable() lets callers report `vault_unavailable` instead
+        // of `connection_revoked`. Warn only on the transition, otherwise
+        // every read would re-log.
+        if (!this.unavailable) {
+          this.unavailable = true;
+          this.logger.warn(
+            'Vault file exists but safeStorage unavailable; reads report vault_unavailable and will retry',
+            undefined,
+            COMPONENT,
+          );
+        }
         this.cache = { tokens: {}, oauthClients: {}, mcpOAuth: {} };
-        this.loaded = true;
         return this.cache;
       }
       const decrypted = safeStorage.decryptString(Buffer.from(raw, 'base64'));
@@ -102,6 +116,7 @@ export class TokenVault {
             : {},
       };
       this.loaded = true;
+      this.unavailable = false;
       return this.cache;
     } catch (err) {
       // Corrupt file: reset to empty rather than block boot. Logged at WARN
@@ -232,5 +247,18 @@ export class TokenVault {
   /** Test hook: true if a vault file exists on disk. */
   exists(): boolean {
     return fs.existsSync(vaultPath());
+  }
+
+  /**
+   * True when a vault file exists on disk but could not be decrypted
+   * because safeStorage is unavailable.
+   *
+   * This is deliberately distinct from "the vault holds no tokens for
+   * that connection". Callers must not report `connection_revoked` on
+   * this state — the grant may well still be live; we just cannot read it
+   * yet. Retryable: the flag clears as soon as a load succeeds.
+   */
+  isUnavailable(): boolean {
+    return this.unavailable;
   }
 }

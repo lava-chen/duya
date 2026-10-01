@@ -26,7 +26,13 @@ interface Harness {
 let harness: Harness | null = null;
 
 async function start(
-  opts: { verificationToken?: string; encryptKey?: string; path?: string } = {},
+  opts: {
+    verificationToken?: string;
+    encryptKey?: string;
+    path?: string;
+    /** Override the event sink, e.g. to make it throw. */
+    onEvent?: (event: unknown) => Promise<void>;
+  } = {},
 ): Promise<Harness> {
   const received: unknown[] = [];
   const logs: string[] = [];
@@ -36,10 +42,11 @@ async function start(
     path: opts.path ?? PATH,
     verificationToken: opts.verificationToken,
     encryptKey: opts.encryptKey,
-    onEvent: async (event) => {
-      received.push(event);
-    },
-    onLog: (message) => logs.push(message),
+    onEvent: (opts.onEvent ?? (async (event: unknown) => { received.push(event); })) as (
+      event: never,
+    ) => Promise<void>,
+    onLog: (message, detail) =>
+      logs.push(detail ? `${message} ${JSON.stringify(detail)}` : message),
   });
   await server.start();
   // The listen port is only known after start(); read it back off the server.
@@ -245,6 +252,30 @@ describe('encryptKey signature verification', () => {
       body: { type: 'event_callback' },
     });
     expect(res.status).toBe(200);
+  });
+});
+
+describe('post-ack dispatch failures (ISS-50)', () => {
+  // The ack is sent before onEvent runs, so the request handler's catch is
+  // already past its `!res.headersSent` branch by the time the adapter can
+  // throw. That made every dispatch failure invisible: Feishu saw 200, the
+  // user saw no reply, and nothing was written anywhere.
+  it('still acks, and logs the onEvent rejection', async () => {
+    const h = await start({
+      verificationToken: TOKEN,
+      onEvent: async () => {
+        throw new Error('adapter exploded');
+      },
+    });
+    const res = await post(h, {
+      headers: { 'X-Lark-Request-Token': TOKEN },
+      body: { type: 'event_callback', event: { message_id: 'm1' } },
+    });
+
+    expect(res.status).toBe(200);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(h.logs.join(' ')).toMatch(/onEvent threw after ack/);
+    expect(h.logs.join(' ')).toMatch(/adapter exploded/);
   });
 });
 
