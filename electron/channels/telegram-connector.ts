@@ -88,6 +88,22 @@ interface MediaOutcome {
   skippedNote?: string;
 }
 
+/**
+ * Offset persistence seam (ISS-23).
+ *
+ * The update offset used to live only in memory, so every restart replayed
+ * whatever Telegram still had queued — a day of messages turned into one
+ * batch of agent wakes. The store is injected rather than reaching for the
+ * database directly so the connector stays unit-testable, matching how
+ * `fetchFn` is injected here.
+ */
+export interface TelegramOffsetStore {
+  /** Last acknowledged offset, or null when nothing has been stored yet. */
+  load(): number | null;
+  /** Persist the offset after a batch has been handled. */
+  save(offset: number): void;
+}
+
 export interface TelegramConnectorOptions {
   agentId: string;
   /** The bot's own token (from the per-agent connector-secret store). */
@@ -105,6 +121,87 @@ export interface TelegramConnectorOptions {
   pollTimeoutSec?: number;
   /** Sleep after a failed poll before retrying. */
   errorBackoffMs?: number;
+  /**
+   * Offset persistence. Omit to keep the legacy in-memory behaviour.
+   * channel_offsets is keyed per agent because update_id is per bot.
+   */
+  offsetStore?: TelegramOffsetStore;
+  /**
+   * How many updates the first batch after a start may deliver before the
+   * rest are skipped. Guards against a cold start replaying a long backlog
+   * into one agent session. Set to Infinity to disable. Default 500.
+   */
+  startupBacklogLimit?: number;
+}
+
+/**
+ * The slice of better-sqlite3 this store needs. `prepare` is typed as
+ * returning `unknown` on purpose: the driver's Statement generics are
+ * parameterised per call, which no structural signature here will satisfy.
+ * The two methods actually used are cast at the call sites instead.
+ */
+interface OffsetDb {
+  prepare: (sql: string) => unknown;
+}
+
+/** The two Statement methods this store calls. */
+interface OffsetStatement {
+  get: (...args: unknown[]) => unknown;
+  run: (...args: unknown[]) => unknown;
+}
+
+/**
+ * Offset persistence bound to the existing channel_offsets table.
+ *
+ * `getDbFn` is called on every access rather than captured once: the
+ * connector runtime can build a connector before the database finishes
+ * booting, and the table is also absent in safe mode. Both cases
+ * degrade to "no persistence" instead of throwing into the poll loop.
+ */
+export function createChannelOffsetStore(
+  getDbFn: () => OffsetDb | null,
+  channelType: string,
+  offsetKey: string,
+  onUnavailable?: (reason: string) => void,
+): TelegramOffsetStore {
+  let warned = false;
+  const requireDb = (): OffsetDb | null => {
+    const handle = getDbFn();
+    if (!handle) {
+      if (!warned) {
+        warned = true;
+        onUnavailable?.('database not available; offset will not persist across restarts');
+      }
+      return null;
+    }
+    return handle;
+  };
+
+  return {
+    load(): number | null {
+      const handle = requireDb();
+      if (!handle) return null;
+      const stmt = handle.prepare(
+        'SELECT offset_value FROM channel_offsets WHERE channel_type = ? AND offset_key = ?',
+      ) as OffsetStatement;
+      const row = stmt.get(channelType, offsetKey) as { offset_value?: string } | undefined;
+      if (!row || typeof row.offset_value !== 'string') return null;
+      const parsed = Number(row.offset_value);
+      return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+    },
+    save(offset: number): void {
+      const handle = requireDb();
+      if (!handle) return;
+      const stmt = handle.prepare(`
+          INSERT INTO channel_offsets (channel_type, offset_key, offset_value, offset_type, updated_at)
+          VALUES (?, ?, ?, 'long_polling', ?)
+          ON CONFLICT(channel_type, offset_key) DO UPDATE SET
+            offset_value = excluded.offset_value,
+            updated_at = excluded.updated_at
+        `) as OffsetStatement;
+      stmt.run(channelType, offsetKey, String(offset), Date.now());
+    },
+  };
 }
 
 export class TelegramChannelConnector {
@@ -127,6 +224,11 @@ export class TelegramChannelConnector {
    * console. Recovery logs once at INFO.
    */
   private consecutiveFailures = 0;
+  /**
+   * Set once the first batch of a run has been handled, so the startup
+   * backlog cap applies to exactly one batch per start.
+   */
+  private firstBatchDone = false;
 
   constructor(opts: TelegramConnectorOptions) {
     this.opts = opts;
@@ -135,7 +237,58 @@ export class TelegramChannelConnector {
   start(): void {
     if (this.running) return;
     this.running = true;
+    this.restoreOffset();
     this.loopPromise = this.runLoop();
+  }
+
+  /**
+   * Seed the in-memory offset from storage before the first poll.
+   *
+   * A missing or unusable value is not an error: it means a fresh install,
+   * where offset 0 is correct (Telegram then serves only its pending
+   * queue). Failure to read storage must not stop the connector, so this
+   * only logs.
+   */
+  private restoreOffset(): void {
+    this.firstBatchDone = false;
+    const store = this.opts.offsetStore;
+    if (!store) return;
+    try {
+      const stored = store.load();
+      if (stored !== null && Number.isSafeInteger(stored) && stored >= 0) {
+        this.offset = stored;
+        logger.info(
+          'Telegram connector: restored update offset from storage',
+          { agentId: this.opts.agentId, offset: stored },
+          LogComponent.Gateway,
+        );
+      }
+    } catch (err) {
+      logger.warn(
+        `Telegram connector: could not restore offset, starting from 0: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        { agentId: this.opts.agentId },
+        LogComponent.Gateway,
+      );
+    }
+  }
+
+  /** Persist the offset after a batch was handled. Never throws into the loop. */
+  private persistOffset(): void {
+    const store = this.opts.offsetStore;
+    if (!store) return;
+    try {
+      store.save(this.offset);
+    } catch (err) {
+      logger.warn(
+        `Telegram connector: could not persist offset: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        { agentId: this.opts.agentId, offset: this.offset },
+        LogComponent.Gateway,
+      );
+    }
   }
 
   async stop(): Promise<void> {
@@ -160,12 +313,24 @@ export class TelegramChannelConnector {
           this.abortController.signal,
           this.opts.pollTimeoutSec ?? 25,
         );
-        for (const update of updates) {
+        const { batch, skipTo } = this.capStartupBacklog(updates);
+        for (const update of batch) {
           // Advance the offset before (possibly async) handling so a slow
           // media download can never cause a re-fetch of the same update.
           this.offset = update.update_id + 1;
           await this.handleUpdate(update);
         }
+        // The cap may have moved the offset past the batch it kept; the loop
+        // above then walked it backwards. Re-apply the high-water mark, or
+        // the skipped updates come back on the next poll and the cap does
+        // nothing at all.
+        if (skipTo !== null && this.offset < skipTo) {
+          this.offset = skipTo;
+        }
+        // Written only after the batch was handled, so a crash mid-batch
+        // replays the batch rather than silently dropping it.
+        this.persistOffset();
+        if (batch.length > 0) this.firstBatchDone = true;
         if (this.consecutiveFailures > 0) {
           logger.info(
             `Telegram connector: poll recovered after ${this.consecutiveFailures} failed attempt(s)`,
@@ -205,6 +370,46 @@ export class TelegramChannelConnector {
       // timers (stop() would never run).
       await this.sleep(0);
     }
+  }
+
+  /**
+   * Trim the very first batch of a run so a cold start cannot turn a long
+   * backlog into one burst of agent wakes.
+   *
+   * Only the first non-empty batch is capped, so a steady backlog still
+   * drains at full rate afterwards. `skipTo` is the offset that must be
+   * held after the kept updates are handled: without it the loop would walk
+   * the offset back to the last kept update and Telegram would serve the
+   * skipped ones again.
+   */
+  private capStartupBacklog(updates: TelegramUpdate[]): {
+    batch: TelegramUpdate[];
+    skipTo: number | null;
+  } {
+    const limit = this.opts.startupBacklogLimit ?? 500;
+    if (this.firstBatchDone || updates.length === 0) {
+      return { batch: updates, skipTo: null };
+    }
+    if (!Number.isFinite(limit) || updates.length <= limit) {
+      return { batch: updates, skipTo: null };
+    }
+
+    const kept = updates.slice(0, Math.max(0, limit));
+    const newest = updates[updates.length - 1];
+    const skipTo = newest.update_id + 1;
+    this.offset = skipTo;
+    logger.warn(
+      `Telegram connector: skipped ${updates.length - kept.length} backlogged update(s) on start`,
+      {
+        agentId: this.opts.agentId,
+        delivered: kept.length,
+        skipped: updates.length - kept.length,
+        offset: skipTo,
+        limit,
+      },
+      LogComponent.Gateway,
+    );
+    return { batch: kept, skipTo };
   }
 
   private async getUpdates(signal: AbortSignal, timeoutSec: number): Promise<TelegramUpdate[]> {
