@@ -22,6 +22,7 @@ import { getAgentServerPort } from '../agents/agent-server-lifecycle';
 import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
 import { getConfigStore } from '../config/store-instance';
 import { isHttpUrl } from './url-safety';
+import { isPathWithinRoots } from '@duya/agent/tool/allowedRoots';
 export { isHttpUrl } from './url-safety';
 import { getNoProjectWorkspace } from '../automation/workspace';
 
@@ -346,12 +347,28 @@ export function registerSystemHandlers(): void {
     if (sanitized.length === 0) {
       return { success: false, error: 'Invalid project name', path: '' };
     }
+    // Plan 583 ISS-13: the character filter above replaces characters that are
+    // illegal in Windows filenames, but it never touched path separators or
+    // dot segments, so a name like `../../evil` survived intact and
+    // `path.join(workspaceDir, sanitized)` resolved OUTSIDE the workspace —
+    // the handler then created that directory. A project name is a single
+    // directory component, never a path, so reject separators and dot
+    // segments outright instead of trying to sanitise them away.
+    if (/[\\/]/.test(sanitized) || sanitized === '.' || sanitized === '..') {
+      return { success: false, error: 'Invalid project name', path: '' };
+    }
     try {
       const workspaceDir = path.join(homedir(), '.duya', 'workspace');
       if (!fs.existsSync(workspaceDir)) {
         fs.mkdirSync(workspaceDir, { recursive: true });
       }
       const projectDir = path.join(workspaceDir, sanitized);
+      // Belt and braces: the separator check above is the real fix, but the
+      // name is attacker-influenced, so confirm containment with the same
+      // primitive the sandboxed file tools use before creating anything.
+      if (!isPathWithinRoots(projectDir, [workspaceDir])) {
+        return { success: false, error: 'Invalid project name', path: '' };
+      }
       if (fs.existsSync(projectDir)) {
         return { success: false, error: 'Project folder already exists', path: projectDir };
       }

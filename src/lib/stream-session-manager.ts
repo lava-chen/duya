@@ -189,7 +189,19 @@ async function getActiveProviderConfig(): Promise<ProviderConfig | null> {
       return null;
     }
 
-    console.log('[stream-session-manager] Provider config:', config);
+    // Plan 583 ISS-16: this used to `console.log` the whole config object,
+    // which writes the plaintext `apiKey` to the renderer DevTools console on
+    // every stream — i.e. on every turn. Log only the fields needed to
+    // diagnose a provider mismatch, and never the credential.
+    console.debug('[stream-session-manager] Provider config:', {
+      provider: config.provider,
+      providerId: config.providerId,
+      providerType: config.providerType,
+      model: config.model,
+      authStyle: config.authStyle,
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey ? '[redacted]' : '[unset]',
+    });
 
     if (!config.model) {
       console.warn('[stream-session-manager] No model configured in provider');

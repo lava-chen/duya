@@ -710,7 +710,7 @@ export function registerDbHandlers(): void {
    * from the rollout files (the source of truth), reporting missing and
    * orphan files. Returns `ReconcileStats`.
    */
-  ipcMain.handle('rollout:reconcile', () => {
+  ipcMain.handle('db:rollout:reconcile', () => {
     const { messageLog } = getCoreStores();
     return messageLog.reconcileAll();
   });
@@ -723,7 +723,7 @@ export function registerDbHandlers(): void {
    * Throws `ImportValidationError` (message carries the 1-based line
    * number) on invalid input — all-or-nothing, no partial import.
    */
-  ipcMain.handle('rollout:import', (_event, input: {
+  ipcMain.handle('db:rollout:import', (_event, input: {
     sourcePath: string;
     mode: 'restore' | 'continue';
     targetSessionId?: string;
@@ -754,7 +754,7 @@ export function registerDbHandlers(): void {
    * message timeline up to and including `throughMessageId`; the new
    * session records `parent_session_id` + a `fork` spawn edge.
    */
-  ipcMain.handle('session:forkAt', (_event, input: {
+  ipcMain.handle('db:session:forkAt', (_event, input: {
     sourceSessionId: string;
     throughMessageId: string;
     title?: string;

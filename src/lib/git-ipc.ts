@@ -106,13 +106,12 @@ export async function getGitReview(cwd: string): Promise<GitReviewResult> {
   return window.electronAPI?.git?.review(cwd) ?? { isGitRepo: false };
 }
 
-export async function getGitReviewDiff(cwd: string, filePath: string): Promise<GitReviewDiffResult> {
-  return window.electronAPI?.git?.reviewDiff(cwd, filePath) ?? { isGitRepo: false };
-}
-
-export async function getGitReviewFullDiff(cwd: string): Promise<GitReviewFullDiffResult> {
-  return window.electronAPI?.git?.reviewFullDiff(cwd) ?? { isGitRepo: false };
-}
+// Plan 583 ISS-25: `getGitReviewDiff` / `getGitReviewFullDiff` /
+// `getGitReviewScopedDiff` were removed. Nothing imported them — the review
+// panel obtains its diff from `getGitReviewScoped`, which already carries the
+// scoped diff — so they were dead wrappers around three bridge channels the
+// panel never called. The handlers stay in `git-handlers.ts`; only the unused
+// renderer-side wrappers are gone.
 
 export async function getGitLatestTurnReview(sessionId: string, cwd: string): Promise<GitLatestTurnReviewResult> {
   return window.electronAPI?.git?.reviewLatestTurn(sessionId, cwd) ?? { isGitRepo: false };
@@ -151,10 +150,6 @@ export interface GitListCommitsResult {
 
 export async function getGitReviewScoped(cwd: string, scope: ReviewScopeParams): Promise<GitReviewResult> {
   return window.electronAPI?.git?.reviewScoped(cwd, scope) ?? { isGitRepo: false };
-}
-
-export async function getGitReviewScopedDiff(cwd: string, scope: ReviewScopeParams, filePath: string): Promise<GitReviewDiffResult> {
-  return window.electronAPI?.git?.reviewScopedDiff(cwd, scope, filePath) ?? { isGitRepo: false };
 }
 
 export async function getGitCommits(cwd: string, count?: number): Promise<GitListCommitsResult> {

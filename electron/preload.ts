@@ -74,8 +74,9 @@ export const windowBackdrop: '' | 'mica' | 'vibrancy' =
 // Preload script initialized
 
 export interface AgentAPI {
-  streamChat: (prompt: string, options?: Record<string, unknown>) => Promise<unknown>
-  interrupt: () => Promise<unknown>
+  // Plan 583 ISS-24: `streamChat` / `interrupt` were removed. They invoked
+  // `agent:stream` / `agent:interrupt`, neither of which ever had a handler —
+  // agent streaming is HTTP+SSE, not IPC — and no renderer code called them.
   reinitProvider: () => Promise<unknown>
   setAgentPermissionMode: (sessionId: string, mode: string) => Promise<unknown>
 }
@@ -1440,11 +1441,10 @@ export interface ElectronAPI {
     convert: (payload: { sessionId: string; name?: string; description?: string }) => Promise<unknown>
     onStatusChanged: (callback: (snapshot: unknown) => void) => () => void
   }
-  /** Plan 562 Phase 3: element-tree visualization overlay. */
-  overlay: {
-    showElements: (elements: unknown[]) => Promise<{ ok: boolean; error?: string }>
-    clear: () => Promise<{ ok: boolean }>
-  }
+  // Plan 583 ISS-24: the element-tree visualization overlay was removed from
+  // the contract. `overlay:show-elements` / `overlay:clear` were exposed with
+  // no handler, so both rejected; no renderer code called them. See the note
+  // in the runtime bridge above.
   /** Plan 572: macOS TCC permission surface for the computer-use stack. */
   computerUsePermissions: {
     get: () => Promise<{
@@ -2047,8 +2047,10 @@ const electronAPI: ElectronAPI = {
     toggleFullscreen: () => ipcRenderer.invoke('app-chrome:toggle-fullscreen'),
   },
   agent: {
-    streamChat: (prompt, options) => ipcRenderer.invoke('agent:stream', { prompt, options }),
-    interrupt: () => ipcRenderer.invoke('agent:interrupt'),
+    // Plan 583 ISS-24: `streamChat` / `interrupt` invoked `agent:stream` and
+    // `agent:interrupt`, neither of which has ever had a handler — agent
+    // streaming is HTTP+SSE, not IPC, and no renderer code called these.
+    // Removed so the bridge does not advertise a transport that cannot work.
     reinitProvider: () => ipcRenderer.invoke('agent:reinit-provider'),
     /** Live mid-run permission-mode switch for a running session. */
     setAgentPermissionMode: (sessionId: string, mode: string) =>
@@ -2507,11 +2509,13 @@ const electronAPI: ElectronAPI = {
       };
     },
   },
-  /** Plan 562 Phase 3: element-tree visualization overlay. */
-  overlay: {
-    showElements: (elements: unknown[]) => ipcRenderer.invoke('overlay:show-elements', elements),
-    clear: () => ipcRenderer.invoke('overlay:clear'),
-  },
+  /**
+   * Plan 583 ISS-24: the element-tree visualization overlay channels
+   * (`overlay:show-elements` / `overlay:clear`) were exposed here with no
+   * handler on the main-process side, so both rejected at runtime. The
+   * renderer never called them. Removed rather than wired up — if the
+   * overlay comes back it needs a real handler and a real consumer.
+   */
   /** Plan 572: macOS TCC permission surface for the computer-use stack. */
   computerUsePermissions: {
     get: () => ipcRenderer.invoke('computer-use:permissions:get'),
@@ -2627,10 +2631,14 @@ const electronAPI: ElectronAPI = {
     commitDetail: (cwd: string, sha: string) => ipcRenderer.invoke('git:commit-detail', cwd, sha),
     listBranches: (cwd: string) => ipcRenderer.invoke('git:list-branches', cwd),
     repoState: (cwd: string) => ipcRenderer.invoke('git:repo-state', cwd),
-    switchBranch: (cwd: string, branchName: string) => ipcRenderer.invoke('git:switch-branch', cwd, branchName),
-    createBranch: (cwd: string, branchName: string, startPoint?: string) => ipcRenderer.invoke('git:create-branch', cwd, branchName, startPoint),
-    commit: (cwd: string, request: unknown) => ipcRenderer.invoke('git:commit', cwd, request),
-    push: (cwd: string, request?: unknown) => ipcRenderer.invoke('git:push', cwd, request),
+    // Plan 583 ISS-24: `switch-branch` / `create-branch` / `commit` / `push`
+    // were exposed here but had no handler anywhere, so every call rejected.
+    // They are removed rather than wired up: the code-review surface is
+    // contractually read-only (see AGENTS.md "Code Review Workspace" — scope
+    // is always HEAD to the working tree, and it is read-only: never add
+    // stage, commit, push, reset, or other mutating Git controls here).
+    // Dropping them from the bridge also means a future handler cannot be
+    // reached from the renderer by accident.
   },
   weixin: {
     getAccounts: () => ipcRenderer.invoke('db:weixin:getAccounts'),
