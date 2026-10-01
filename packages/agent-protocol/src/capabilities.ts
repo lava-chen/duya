@@ -77,7 +77,24 @@ export interface RuntimeCapabilities {
     readonly oldestAvailableSeq: number;
     /** Highest `seq` minted so far. */
     readonly latestSeq: number;
+    /**
+     * All three durability buckets, and all three are REQUIRED.
+     *
+     * An earlier draft carried `durable` and `ephemeral` but no `volatile`,
+     * which meant the eleven volatile events a host genuinely receives —
+     * `run.paused`, `tool.progress`, `tool.call_preview`, `assistant.status`,
+     * `compaction.step` and the rest — were never declared anywhere in the
+     * handshake. That directly contradicted the stated purpose of this field
+     * ("lets a host enumerate what it will actually see"): a host could not
+     * enumerate eleven of the events it was about to be sent.
+     *
+     * It also made `assertCapabilityConsistency` unable to fire, because the
+     * `tool.call_preview` check read `events.ephemeral` for an event the
+     * registry classifies as volatile. The guard against lying about
+     * `tool_preview` was structurally dead.
+     */
     readonly durable: readonly EventType[];
+    readonly volatile: readonly EventType[];
     readonly ephemeral: readonly EventType[];
   };
   readonly permissions: {
@@ -270,9 +287,13 @@ export function assertCapabilityConsistency(
       required: 'runtime capability `permission_coordinator`',
     });
   }
-  if (capabilities.events.ephemeral.includes('tool.call_preview') && !has('tool_preview')) {
+  // `tool.call_preview` is VOLATILE, not ephemeral (`EVENT_META` in
+  // registry.ts). The earlier check read `events.ephemeral`, so it could never
+  // be true and this guard never fired — the exact "promise nobody keeps" case
+  // this function exists to catch, catching nothing.
+  if (capabilities.events.volatile.includes('tool.call_preview') && !has('tool_preview')) {
     problems.push({
-      field: 'events.ephemeral',
+      field: 'events.volatile',
       advertised: "includes 'tool.call_preview'",
       required: 'runtime capability `tool_preview`',
     });
