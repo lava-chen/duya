@@ -16,6 +16,7 @@ import {
   removeTierEntryByPath,
   mergedTierRecall,
   rebuildTierIndexFromFiles,
+  DEFAULT_TIER_ENTRY_LIMIT,
   type TierIndexRow,
 } from '../tierIndex';
 
@@ -63,6 +64,45 @@ const BASE_FRONTMATTER = {
   status: 'active',
   importance: 'normal',
 };
+
+interface BulkSeedOptions {
+  tier: 'agent' | 'user';
+  agentProfileId: string;
+  /** dedupe_key prefix; keep it distinct per tier to avoid cross-tier dedupe. */
+  prefix: string;
+  count: number;
+  /** updated_at of the first row; ascends by index so the last insert is newest. */
+  baseUpdatedAt: number;
+}
+
+/**
+ * Bulk-insert one shard's worth of rows with a single prepared statement in
+ * one transaction, so cap tests can seed past the limit cheaply. `updated_at`
+ * ascends with the index, making the newest row the last insert.
+ */
+function seedBulk(db: DatabaseType, opts: BulkSeedOptions): void {
+  const insert = db.prepare(
+    `INSERT INTO memory_tier_index
+       (entry_id, tier, agent_profile_id, project_id, kind, dedupe_key, file_path, content_hash, created_at, updated_at)
+     VALUES (?, ?, ?, '', 'note', ?, ?, 'h', ?, ?)`
+  );
+  const { tier, agentProfileId, prefix, count, baseUpdatedAt } = opts;
+  const run = db.transaction(() => {
+    for (let i = 0; i < count; i += 1) {
+      const key = `${prefix}:item-${i}`;
+      insert.run(
+        computeTierEntryId(tier, agentProfileId, '', key),
+        tier,
+        agentProfileId,
+        key,
+        `memory/bulk/${tier}-${i}.md`,
+        baseUpdatedAt + i,
+        baseUpdatedAt + i
+      );
+    }
+  });
+  run();
+}
 
 describe('tier key normalization and identity', () => {
   it('normalizes dedupe keys: trim + lowercase + collapse whitespace', () => {
@@ -206,6 +246,35 @@ describe('listTierEntries / listTierShards', () => {
     const userShards = listTierShards(db, 'user');
     expect(userShards).toHaveLength(2); // legacy '' shard + botB shard
   });
+
+  it('bounds a whole-tier read at DEFAULT_TIER_ENTRY_LIMIT', () => {
+    seedBulk(db, { tier: 'user', agentProfileId: '', prefix: 'bulk', count: DEFAULT_TIER_ENTRY_LIMIT + 1, baseUpdatedAt: 1 });
+
+    // The row is in the index — only the read is bounded.
+    expect(db.prepare('SELECT COUNT(*) AS n FROM memory_tier_index').get()).toMatchObject({
+      n: DEFAULT_TIER_ENTRY_LIMIT + 1,
+    });
+    const rows = listTierEntries(db, { tier: 'user' });
+    expect(rows).toHaveLength(DEFAULT_TIER_ENTRY_LIMIT);
+    // Newest-first ordering means the cap drops the oldest row, not an
+    // arbitrary one: the single oldest row (updated_at = 1) is the casualty.
+    expect(rows.at(-1)?.updated_at).toBe(2);
+  });
+
+  it('honours an explicit limit and still returns the newest rows', () => {
+    seedBulk(db, { tier: 'user', agentProfileId: '', prefix: 'bulk', count: 10, baseUpdatedAt: 1 });
+    const rows = listTierEntries(db, { tier: 'user' }, 3);
+    expect(rows.map((r) => r.dedupe_key)).toEqual(['bulk:item-9', 'bulk:item-8', 'bulk:item-7']);
+  });
+
+  it('rejects a non-positive or fractional limit rather than running unbounded', () => {
+    seedBulk(db, { tier: 'user', agentProfileId: '', prefix: 'bulk', count: 3, baseUpdatedAt: 1 });
+    // SQLite treats `LIMIT -1` as "no limit", so a bad cap must throw, not
+    // silently restore the unbounded read.
+    expect(() => listTierEntries(db, { tier: 'user' }, 0)).toThrow(/positive integer/);
+    expect(() => listTierEntries(db, { tier: 'user' }, -1)).toThrow(/positive integer/);
+    expect(() => listTierEntries(db, { tier: 'user' }, 1.5)).toThrow(/positive integer/);
+  });
 });
 
 describe('getTierEntryByPath / removeTierEntryByPath', () => {
@@ -267,6 +336,56 @@ describe('mergedTierRecall', () => {
     upsertTierEntry(db, { tier: 'project', agentProfileId: 'botA', projectId: 'p1', kind: 'note', dedupeKey: 'proj:fact', filePath: 'e.md', contentHash: 'h', updatedAt: 90 });
     const { resolved } = mergedTierRecall(db, { agentProfileId: 'botA' });
     expect(resolved).toHaveLength(0);
+  });
+
+  it('caps every tier read so a large index cannot flood the merge', () => {
+    const perTier = 260; // > the 200-per-tier cap, deliberately not a round match
+    seedBulk(db, { tier: 'agent', agentProfileId: 'botA', prefix: 'own', count: perTier, baseUpdatedAt: 1000 });
+    seedBulk(db, { tier: 'user', agentProfileId: '', prefix: 'usr', count: perTier, baseUpdatedAt: 2000 });
+
+    // Every row is in the index — only the reads are bounded.
+    expect(db.prepare('SELECT COUNT(*) AS n FROM memory_tier_index').get()).toMatchObject({ n: perTier * 2 });
+
+    const { resolved } = mergedTierRecall(db, { agentProfileId: 'botA' });
+    expect(resolved).toHaveLength(400); // 200 own + 200 user, not 260 + 260
+
+    const keys = new Set(resolved.map((r) => r.entry.dedupe_key));
+    // Truncation is recency-first: the newest rows of each tier survive and
+    // the oldest are the ones dropped.
+    expect(keys.has('usr:item-259')).toBe(true);
+    expect(keys.has('usr:item-0')).toBe(false);
+    expect(keys.has('own:item-259')).toBe(true);
+    expect(keys.has('own:item-0')).toBe(false);
+  });
+
+  it('caps the project tier read as well', () => {
+    seedBulk(db, { tier: 'user', agentProfileId: '', prefix: 'usr', count: 5, baseUpdatedAt: 2000 });
+    const perProject = 260;
+    const insert = db.prepare(
+      `INSERT INTO memory_tier_index
+         (entry_id, tier, agent_profile_id, project_id, kind, dedupe_key, file_path, content_hash, created_at, updated_at)
+       VALUES (?, 'project', '', 'p1', 'note', ?, ?, 'h', ?, ?)`
+    );
+    const run = db.transaction(() => {
+      for (let i = 0; i < perProject; i += 1) {
+        const key = `prj:item-${i}`;
+        insert.run(
+          computeTierEntryId('project', '', 'p1', key),
+          key,
+          `memory/bulk/project-p1-${i}.md`,
+          1000 + i,
+          1000 + i
+        );
+      }
+    });
+    run();
+
+    const { resolved } = mergedTierRecall(db, { agentProfileId: 'botA', projectIds: ['p1'] });
+    expect(resolved).toHaveLength(205); // 200 project + 5 user
+    const projectKeys = resolved.filter((r) => r.tier === 'project').map((r) => r.entry.dedupe_key);
+    expect(projectKeys).toHaveLength(200);
+    expect(projectKeys).toContain('prj:item-259');
+    expect(projectKeys).not.toContain('prj:item-0');
   });
 });
 
