@@ -40,13 +40,19 @@ const write = process.argv.includes('--write');
 const ERROR_LINE = /^(.+?)\((\d+),(\d+)\): error (TS\d+):/;
 
 function collectErrors() {
+  const tscBin = resolve(repoRoot, 'node_modules/typescript/bin/tsc');
+  if (!existsSync(tscBin)) {
+    process.stderr.write('typecheck-electron-gate: typescript is not installed. Run `npm install`.\n');
+    process.exit(2);
+  }
   const proc = spawnSync(
     process.execPath,
-    [resolve(repoRoot, 'node_modules/typescript/bin/tsc'), '-p', project, '--noEmit', '--pretty', 'false'],
+    [tscBin, '-p', project, '--noEmit', '--pretty', 'false'],
     { cwd: repoRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
   );
 
   const output = `${proc.stdout ?? ''}${proc.stderr ?? ''}`;
+  const lines = output.split(/\r?\n/);
 
   // tsc exits 0 when clean and 1 (sometimes 2) when it reports diagnostics.
   // Both mean "we have output to parse"; anything else is a broken run.
@@ -58,6 +64,21 @@ function collectErrors() {
   }
   if (!existsSync(resolve(repoRoot, 'node_modules/typescript/bin/tsc'))) {
     process.stderr.write('typecheck-electron-gate: typescript is not installed. Run `npm install`.\n');
+    process.exit(2);
+  }
+
+  // A run that reports diagnostics ALWAYS produces at least one line matching
+  // ERROR_LINE. A non-zero exit with zero matching lines is a different thing
+  // entirely: tsc failed before it could typecheck (unreadable tsconfig, a
+  // bad `extends`, a syntax error in the config). Treating that as "no errors"
+  // made the gate print OK and exit 0 while typechecking was completely
+  // broken — and its own "re-record with --write" hint would then have wiped
+  // the whole baseline. Verified against a deliberately broken project path.
+  if (proc.status !== 0 && !lines.some((line) => ERROR_LINE.test(line))) {
+    process.stderr.write(
+      `typecheck-electron-gate: tsc exited ${proc.status} without producing a single `
+        + `parseable diagnostic — this is a broken typecheck, not a clean one.\n${output}\n`,
+    );
     process.exit(2);
   }
 
@@ -147,6 +168,23 @@ if (write) {
 
 const regressionsFound = regressions(current, baseline);
 const resolved = resolvedKeys(current, baseline);
+
+// Second line of defence against destroying the ratchet. The `--write` hint
+// below is only safe when a handful of keys genuinely got fixed. If most of
+// the baseline "disappeared" at once, that is far more likely a broken or
+// partial typecheck than a mass cleanup, and following the hint would delete
+// the ratchet's entire memory. Refuse to suggest it and fail loudly instead.
+const BASELINE_COLLAPSE_RATIO = 0.5;
+if (baseline.size > 0 && resolved.length / baseline.size > BASELINE_COLLAPSE_RATIO) {
+  process.stderr.write(
+    `\ntypecheck-electron-gate: ${resolved.length} of ${baseline.size} baselined key(s) `
+      + `disappeared at once (>${Math.round(BASELINE_COLLAPSE_RATIO * 100)}%).\n`
+      + `That is far more likely a partial or broken typecheck than a mass cleanup.\n`
+      + `Refusing to suggest --write, because doing so here would delete the ratchet.\n`
+      + `Investigate first; re-record only once the run is known to be complete.\n`,
+  );
+  process.exit(1);
+}
 
 if (resolved.length > 0) {
   process.stdout.write(
