@@ -7,6 +7,7 @@ import { CopyIcon, CheckIcon, DownloadSimpleIcon, SquaresFourIcon } from '@/comp
 import { addChatWidgetToCanvas } from '@duya/conductor/renderer/ipc/chat-widget-to-canvas';
 import { useOptionalPanel } from '@/hooks/usePanel';
 import { useLinkOpener } from '@/hooks/useLinkOpener';
+import { useTheme } from '@/hooks/useTheme';
 import { useConductorStore } from '@duya/conductor/renderer/stores/conductor-store';
 import { ImagePreview } from '@/components/chat/preview/ImagePreview';
 import { IconButton } from '@/components/ui/IconButton';
@@ -36,25 +37,6 @@ function computeWidgetCacheKey(widgetCode: string): string {
 
 export function clearWidgetHeightCache(): void {
   _heightCache.clear();
-}
-
-function useTheme(): 'light' | 'dark' {
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    if (typeof document === 'undefined') return 'dark';
-    return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
-  });
-
-  useEffect(() => {
-    const root = document.documentElement;
-    const observer = new MutationObserver(() => {
-      const attr = root.getAttribute('data-theme');
-      setTheme(attr === 'light' ? 'light' : 'dark');
-    });
-    observer.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
-    return () => observer.disconnect();
-  }, []);
-
-  return theme;
 }
 
 function getFileExtension(code: string): string {
@@ -243,7 +225,7 @@ export const WidgetRenderer = React.memo(function WidgetRenderer({
   const lastCodeRef = useRef(widgetCode);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const iframeReadyRef = useRef(false);
-  const theme = useTheme();
+  const { theme } = useTheme();
 
   const cacheKey = computeWidgetCacheKey(widgetCode);
 
