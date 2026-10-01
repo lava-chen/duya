@@ -117,22 +117,23 @@ export class FeishuWebhookServer {
   /**
    * Verify the `X-Lark-Signature` header when an encryptKey is configured.
    *
-   * Algorithm (SHA-256, hex) over the newline-joined
-   * `timestamp + nonce + encryptKey + rawBody`.
+   * Algorithm, per the official spec (see the URL at the call site):
+   *   content   = timestamp + nonce + encrypt_key + body, unseparated
+   *   signature = sha256(content) as lowercase hex
    *
-   * Notes for whoever has to correct this:
-   * - The official `@larksuiteoapi/node-sdk` RequestHandle computes
-   *   `sha256(timestamp + nonce + encryptKey + JSON.stringify(data))`
-   *   with NO separators and with the parsed body object (which by then
-   *   also carries `headers`), so it cannot be used as the reference
-   *   implementation — that check does not match what a server signs.
-   *   The shape that agrees with the SDK (sha256, hex digest,
-   *   timestamp+nonce+key+body order) is what is implemented here.
-   * - The raw request body is used, not a re-serialised object, because
-   *   re-serialising changes key order and whitespace.
-   * - This only runs when `encryptKey` is set. With no key configured the
-   *   check is skipped, exactly as the SDK does, so existing setups that
-   *   never configured a key are unaffected.
+   * The body is the raw request body, not a re-serialised object: the
+   * re-serialisation would change key order and whitespace, and therefore
+   * the digest.
+   *
+   * Do NOT "fix" this to match `@larksuiteoapi/node-sdk`. Its
+   * `RequestHandle` signs `sha256(timestamp + nonce + encryptKey +
+   * JSON.stringify(data))` over the *parsed* body object, which by then
+   * also carries `headers`, so it does not reproduce what a server signs
+   * and is not a usable reference implementation. The spec above is the
+   * authority.
+   *
+   * This only runs when `encryptKey` is set. With no key configured the
+   * check is skipped, so setups that never configured one are unaffected.
    */
   private _verifySignature(
     req: http.IncomingMessage,
@@ -163,9 +164,15 @@ export class FeishuWebhookServer {
       return { ok: false, reason: 'replayed nonce' };
     }
 
+    // Signature, exactly as the official spec defines it:
+    //   content   = timestamp + nonce + encrypt_key + body   (no separators)
+    //   signature = sha256(content).hexdigest()
+    // The concatenation is unseparated in all six reference implementations
+    // (Python / Java / Golang / Node.js / C# / PHP). See
+    // https://open.feishu.cn/document/ukTMukTMukTM/uYDNxYjL2QTM24iN0EjN/event-subscription-configure-/encrypt-key-encryption-configuration-case
     const expected = crypto
       .createHash('sha256')
-      .update(`${timestamp}\n${nonce}\n${encryptKey}\n${rawBody}`)
+      .update(timestamp + nonce + encryptKey + rawBody)
       .digest('hex');
     if (!timingSafeEqualStr(expected, signature)) {
       return { ok: false, reason: 'signature mismatch' };

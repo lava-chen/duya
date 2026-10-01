@@ -6,7 +6,7 @@
  * wire, because the defect being pinned here was precisely a control that
  * looked present in the code but did not reject anything.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import crypto from 'node:crypto';
 import http from 'node:http';
 
@@ -85,12 +85,18 @@ function post(
   });
 }
 
-/** Build the headers a genuine signed Feishu request would carry. */
+/**
+ * Build the headers a genuine signed Feishu request would carry.
+ *
+ * Per the official spec the signed string is the four parts concatenated
+ * with NO separators:
+ *   sha256(timestamp + nonce + encrypt_key + body).hexdigest()
+ */
 function signed(h: { body: string }, nonce: string, tsSeconds: number, key = ENCRYPT_KEY) {
   const timestamp = String(tsSeconds);
   const signature = crypto
     .createHash('sha256')
-    .update(`${timestamp}\n${nonce}\n${key}\n${h.body}`)
+    .update(timestamp + nonce + key + h.body)
     .digest('hex');
   return {
     'X-Lark-Request-Timestamp': timestamp,
@@ -107,6 +113,100 @@ beforeEach(() => {
 afterEach(async () => {
   await harness?.server.stop();
   harness = null;
+});
+
+/**
+ * Known-good signature vector, computed outside this codebase.
+ *
+ * The point of this literal is that it is NOT produced by the same
+ * expression the server uses. A test whose expected value is computed by
+ * the implementation's own formula agrees with the implementation no
+ * matter how wrong the formula is — which is exactly how the newline-joined
+ * variant survived: the helper and the server were wrong in the same way,
+ * so every test passed while every real Feishu request would have been
+ * rejected with a 401.
+ *
+ * Inputs:
+ *   timestamp   = "1600000000"
+ *   nonce       = "abc123"
+ *   encrypt_key = "enc-key-value"
+ *   body        = {"type":"event_callback","event":{"message_id":"m1"}}
+ *
+ *   sha256(timestamp + nonce + encrypt_key + body) = the value below
+ *
+ * Verified against the official reference implementation and independently
+ * via `sha256sum`. The newline-joined form of the same inputs hashes to
+ * b2afc5ddc4feaeeece8d19e2fc2f960a51f08e7e6c704a5059417c9c6418dec8, which
+ * the test below asserts is REJECTED.
+ */
+const VECTOR = {
+  timestamp: '1600000000',
+  nonce: 'abc123',
+  key: ENCRYPT_KEY,
+  body: '{"type":"event_callback","event":{"message_id":"m1"}}',
+  signature: '16419ae5e631662e95b6d79d4d77f265d402f283d0d0dd8f883603e9f8eba9d8',
+  wrongSignature: 'b2afc5ddc4feaeeece8d19e2fc2f960a51f08e7e6c704a5059417c9c6418dec8',
+};
+
+describe('signature conformance to the official spec', () => {
+  beforeEach(() => {
+    // Freeze only Date, at the vector's timestamp, so the 5-minute
+    // staleness window does not make the fixed vector expire. `toFake` is
+    // narrowed deliberately: faking setTimeout too would strand the real
+    // http round-trip these tests depend on.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Number(VECTOR.timestamp) * 1000);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('accepts the known-good signature from the spec', async () => {
+    const h = await start({ verificationToken: TOKEN, encryptKey: VECTOR.key });
+    const res = await post(h, {
+      raw: VECTOR.body,
+      headers: {
+        'X-Lark-Request-Timestamp': VECTOR.timestamp,
+        'X-Lark-Request-Nonce': VECTOR.nonce,
+        'X-Lark-Signature': VECTOR.signature,
+        'X-Lark-Request-Token': TOKEN,
+      },
+    });
+
+    expect(res.status).toBe(200);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(h.received).toHaveLength(1);
+  });
+
+  it('rejects the newline-joined digest of the same inputs', async () => {
+    // The regression this pins: the concatenation is UNSEPARATED. A server
+    // that joins with newlines produces a different digest and would 401
+    // every genuine request while its own tests stayed green.
+    const h = await start({ verificationToken: TOKEN, encryptKey: VECTOR.key });
+    const res = await post(h, {
+      raw: VECTOR.body,
+      headers: {
+        'X-Lark-Request-Timestamp': VECTOR.timestamp,
+        'X-Lark-Request-Nonce': VECTOR.nonce,
+        'X-Lark-Signature': VECTOR.wrongSignature,
+        'X-Lark-Request-Token': TOKEN,
+      },
+    });
+
+    expect(res.status).toBe(401);
+    expect(h.received).toHaveLength(0);
+  });
+
+  it('the vector is what the spec says, not what the server happens to compute', () => {
+    // Independent re-derivation inside the test, spelled out rather than
+    // delegating to the server, so a change to either side is visible.
+    const derived = crypto
+      .createHash('sha256')
+      .update(VECTOR.timestamp + VECTOR.nonce + VECTOR.key + VECTOR.body)
+      .digest('hex');
+    expect(derived).toBe(VECTOR.signature);
+  });
 });
 
 describe('mandatory token check (ISS-17)', () => {
