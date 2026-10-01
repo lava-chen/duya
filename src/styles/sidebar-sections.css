@@ -37,17 +37,19 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.2rem 0.5rem;
-  font-size: 0.88rem;
-  font-weight: 400;
+  height: 38px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  font-size: 0.875rem;
+  font-weight: 450;
   color: var(--text);
   cursor: pointer;
   user-select: none;
-  border-radius: 0.35rem;
+  border-radius: 9px;
   transition: background-color 0.15s ease, color 0.15s ease;
 }
 .sidebar-section-item .sidebar-section-header:hover {
-  background: var(--surface-hover);
+  background: color-mix(in srgb, var(--text) 4.5%, transparent);
 }
 /* Plan 471 v10 / 549: "项目", "定时任务" and "已归档" keep a flat resting
    look — no hover background wash (user feedback). The chevron + trailing
@@ -253,19 +255,23 @@
   align-items: center;
   gap: 0.35rem;
   width: 100%;
-  padding: 0.25rem 0.75rem;
-  margin: 0.15rem 0;
+  min-height: 28px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  margin: 0;
   border: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: 12px;
   cursor: pointer;
-  border-radius: 0.35rem;
+  border-radius: 9px;
   transition: background-color 0.15s ease, color 0.15s ease;
+  opacity: 0.62;
 }
 .sidebar-section-view-all:hover {
-  background: var(--surface-hover);
+  background: color-mix(in srgb, var(--text) 4.5%, transparent);
   color: var(--text);
+  opacity: 1;
 }
 .sidebar-section-view-all:focus-visible {
   outline: 2px solid var(--focus, var(--accent));

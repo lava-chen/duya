@@ -34,10 +34,10 @@
 }
 
 .sidebar-settings svg {
-  width: 16px !important;
-  height: 16px !important;
+  width: 18px !important;
+  height: 18px !important;
   flex-shrink: 0;
-  stroke-width: 1.5;
+  stroke-width: 1.75;
 }
 
 .sidebar-settings:hover {

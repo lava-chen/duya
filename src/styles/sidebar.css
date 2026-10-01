@@ -27,8 +27,9 @@
 }
 
 .app-sidebar-rail .rail-btn svg {
-  width: 17px !important;
-  height: 17px !important;
+  width: 18px !important;
+  height: 18px !important;
+  stroke-width: 1.75;
 }
 
 .app-sidebar-rail .rail-btn:hover {
@@ -274,21 +275,27 @@ html[data-glass-repair] .attachment-preview-overlay {
 }
 
 .sidebar-primary-link svg {
-  width: 16px !important;
-  height: 16px !important;
+  width: 18px !important;
+  height: 18px !important;
   flex-shrink: 0;
   display: block;
-  stroke-width: 1.5;
+  stroke-width: 1.75;
 }
 
 /* Icon container for consistent alignment */
 .sidebar-primary-link .nav-icon {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+}
+
+.sidebar-new-chat-btn svg {
+  width: 18px !important;
+  height: 18px !important;
+  stroke-width: 1.75;
 }
 
 .sidebar-primary-link:hover {
@@ -597,27 +604,29 @@ html[data-glass-repair] .attachment-preview-overlay {
 }
 
 .project-group-item {
-  margin-bottom: 0.15rem;
+  margin-bottom: 0;
 }
 
 .project-group-header {
   display: flex;
   align-items: center;
   gap: 0.25rem;
-  padding: 0.2rem 0.5rem;
+  height: 38px;
+  padding: 0 0.625rem;
   margin: 0 0.5rem;
   width: calc(100% - 1rem);
   box-sizing: border-box;
   color: var(--muted);
-  font-size: 0.8rem;
+  font-size: 0.875rem;
+  font-weight: 450;
   cursor: pointer;
   position: relative;
-  border-radius: 0.4rem;
+  border-radius: 9px;
   transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 .project-group-header:hover {
-  background: var(--surface-hover);
+  background: color-mix(in srgb, var(--text) 4.5%, transparent);
   color: var(--text);
 }
 
@@ -731,8 +740,9 @@ html[data-glass-repair] .attachment-preview-overlay {
 .project-group-icon {
   flex-shrink: 0;
   opacity: 0.7;
-  width: 14px !important;
-  height: 14px !important;
+  width: 16px !important;
+  height: 16px !important;
+  stroke-width: 1.75;
 }
 
 .project-group-name {
@@ -742,7 +752,7 @@ html[data-glass-repair] .attachment-preview-overlay {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 500;
+  font-weight: 450;
 }
 
 /* -----------------------------------------------------------------------
@@ -750,7 +760,7 @@ html[data-glass-repair] .attachment-preview-overlay {
  *
  * The sidebar's hierarchy has a single vertical line — the "name column" —
  * that should run through every project-name AND every thread-title.
- * Rather than scatter magic numbers (1.875rem / 0.5rem / 14px) across
+ * Rather than scatter magic numbers (0.5rem / 0.625rem / 16px) across
  * multiple rules, we express every horizontal offset as "distance from
  * the sidebar's outer-left to the name column" and read that single
  * value in every rule that needs alignment.
@@ -758,24 +768,22 @@ html[data-glass-repair] .attachment-preview-overlay {
  * Derivation (do not change without re-deriving everything below):
  *   --sidebar-name-column-x
  *     = project-group-header.margin-left        (0.5rem)
- *     + project-group-header.padding-left       (0.5rem)
- *     + project-group-icon width                (14px)
+ *     + project-group-header.padding-left       (0.625rem)
+ *     + project-group-icon width                (16px)
  *     + project-group-header gap (icon→name)    (0.25rem)
- *     = 1.25rem + 14px = 34px
+ *     = 1.375rem + 16px = 38px
  *
  * Read by:
- *   - .project-group-threads  → margin-left (places threads in name column)
- *   - .project-group-header .project-group-name and .thread-item-title
- *     stay where they are naturally once the above is set; the only
- *     thing they need is padding-left: 0 (already the case for
- *     .thread-item after Plan sidebar-edge).
+ *   - .project-group-threads .thread-item → padding-left after the
+ *     container's half-rem inset, keeping thread titles aligned with
+ *     project names while row surfaces span the same width as headers.
  *
  * If you change --sidebar-icon-size, .project-group-header padding-left,
  * or .project-group-header gap, update --sidebar-name-column-x too.
  * --------------------------------------------------------------------- */
 :root {
-  --sidebar-icon-size: 14px;
-  --sidebar-header-x-pad: 0.5rem;
+  --sidebar-icon-size: 16px;
+  --sidebar-header-x-pad: 0.625rem;
   --sidebar-header-gap: 0.25rem;
   --sidebar-name-column-x: calc(
     0.5rem + var(--sidebar-header-x-pad) + var(--sidebar-icon-size) + var(--sidebar-header-gap)
@@ -783,33 +791,33 @@ html[data-glass-repair] .attachment-preview-overlay {
 }
 
 .project-group-threads {
-  /* Plan sidebar-edge: push thread container's outer-left to the name
-   * column. Combined with .thread-item { padding-left: 0 } this makes
-   * thread titles flush with the project name — no extra indent. */
-  margin-left: var(--sidebar-name-column-x);
-  margin-top: 0.1rem;
+  /* Match the project header's side margins so thread hover/active
+   * surfaces span the same width, while row titles keep their alignment. */
+  margin: 0.1rem 0.5rem 0;
 }
 
 .project-group-expand-all {
   display: flex;
   align-items: center;
   gap: 0.35rem;
-  padding: 0.25rem 0.5rem;
-  margin: 0.15rem 0;
+  min-height: 28px;
+  box-sizing: border-box;
+  padding: 0 0.625rem 0 calc(var(--sidebar-name-column-x) - 0.5rem);
+  margin: 0;
   border: none;
   background: transparent;
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: 12px;
   cursor: pointer;
-  border-radius: 0.3rem;
+  border-radius: 9px;
   transition: background-color 0.15s ease, color 0.15s ease;
   width: 100%;
   text-align: left;
-  opacity: 0.6;
+  opacity: 0.5;
 }
 
 .project-group-expand-all:hover {
-  background: var(--surface-hover);
+  background: color-mix(in srgb, var(--text) 4.5%, transparent);
   color: var(--text);
   opacity: 1;
 }
@@ -835,6 +843,14 @@ html[data-glass-repair] .attachment-preview-overlay {
   width: auto;
   margin: 0 0.5rem;
   min-width: 0;
+}
+
+.app-sidebar .project-group-threads .thread-item {
+  /* These rows are already inset by their parent container. Reset the
+   * section-wide thread gutter so their surfaces match the project header. */
+  width: 100%;
+  margin: 0;
+  padding-left: calc(var(--sidebar-name-column-x) - 0.5rem);
 }
 
 .thread-item {
@@ -945,6 +961,42 @@ html[data-glass-repair] .attachment-preview-overlay {
   justify-content: center;
 }
 
+/* Sidebar navigation rows use a consistent, full-width hit target. The
+   shared ThreadListItem also appears outside the sidebar, so keep this
+   geometry and the softer state colors scoped to the navigation surface. */
+.app-sidebar .thread-item {
+  height: 38px;
+  min-height: 38px;
+  flex: 0 0 38px;
+  padding: 0 10px;
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 450;
+}
+
+.app-sidebar .thread-item:hover {
+  background: color-mix(in srgb, var(--text) 4.5%, transparent);
+}
+
+.app-sidebar .thread-item.active {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.app-sidebar .thread-item:hover .thread-item-title {
+  padding-right: 52px;
+}
+
+.app-sidebar .thread-item-actions-hover {
+  right: 6px;
+}
+
+.app-sidebar .thread-item-time {
+  font-size: 11px;
+  opacity: 0.42;
+}
+
 /* Plan 549 (Track B): archived rows dim the title text and use a
  * muted sub-line for the archive timestamp. The archived-at sub-line
  * reuses the same font-size as .thread-item-time so layout stays stable. */
@@ -969,6 +1021,11 @@ html[data-glass-repair] .attachment-preview-overlay {
   align-items: center;
   justify-content: center;
   font-style: italic;
+}
+
+.app-sidebar .thread-item-archived-at {
+  font-size: 11px;
+  opacity: 0.42;
 }
 
 /* Running indicator in thread item */
