@@ -681,6 +681,42 @@ migration-30 用例用「只应用到 30」的 schema 调当前版 SQL，而 `ag
 才加的）。`tsc -p packages/plugin-core` exit 0、`tsc --noEmit`（electron + src）exit 0、
 `packages/agent` exit 0。变异测试：把 `localExecutionAllowed` 改成恒 true → **5 条用例红**。
 
+#### 附带调研：plugin 的 MCP 工具权限（G5 之后，2026-10-01）
+
+G5 让第三方插件的 **hook** 有了「按插件持久授权 + 展示实际命令行」的形态。顺手查了
+同一问题的另一半 —— **plugin 的 MCP 工具** —— 结论是**现在不动，但问题要在第一个实例
+出现前回答**。
+
+实测链路：
+
+| 环节 | 事实 |
+|---|---|
+| `decideMcpSource` | `plugin` / `local` / `unknown` 一律 `ask`，注释写明「never silently auto-approves third-party sources」 |
+| 短路位置 | `hasPermissionsToUseTool` 的 **step 0**，`context.source` 存在时**直接 return**，后面整条流水线都不走 |
+| 「总是允许」 | **在短路之前**被 `PermissionsGate.ts:179` 的 `turn.approval.alwaysAllowTools` 命中，所以用户的「总是允许」**确实生效**（我一开始怀疑它被短路掉了，查过之后不成立） |
+| 持久范围 | `tool_approval_rules` 的 `CHECK (scope_type IN ('bot','session'))`，源码注释直说 **"never global"** |
+
+**所以真实行为是**：plugin 的 MCP 工具**每个会话首次调用会问一次**（不是每次调用），
+但**没有任何跨会话的持久授权**。一个装了 5 个 MCP 工具的 marketplace 插件，用户每天
+要为每个工具点一次「总是允许」，点完下个会话又来。
+
+**为什么现在不写代码**：11 个内置 plugin（`browser` / `documents` / `github` / `notion` /
+`obsidian` / `pdf` / `plans` / `presentations` / `spreadsheets` / `wecom` / `zotero`）
+**零个声明 `mcp/servers.json`**，所以 `plugin` 这个 source 桶今天**一个实例都没有**。
+和 G3 的 commands/agents 一样：没有真实实例就只记录，不造门。
+
+**但这不是 N/A，是「门迟早要开、先把问题写下来」**。第一个 plugin 声明 MCP server 的
+那天会撞上的问题正是 G5 已经回答过一半的那个：
+
+> 装一个 plugin 是不是等于信任它自带的 MCP 工具？信任到什么粒度、持续多久？
+> `settings`（用户手写路径配置的 MCP server）是自动放行的，因为那是用户自己写的配置；
+> 而 marketplace plugin 的工具清单是**第三方给的**，用户点「安装」时并没有逐条看过。
+
+G5 的答案是「按插件持久 + 展示实际内容供知情同意」。MCP 工具侧目前**没有对应物**，
+且 `tool_approval_rules` 的 CHECK 约束写死了只有 `bot` / `session` 两种作用域 ——
+要加 plugin 作用域就是改这张表，属于产品决定（装插件是否隐含信任其工具），
+**不是**能顺手接上的。所以留在这里等尺度。
+
 #### 已有的冲突/优先级策略地图（2026-10-01 摸清，比三个参照物都好）
 
 | 能力种类 | 现有策略 | 证据 |

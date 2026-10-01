@@ -170,6 +170,34 @@ touched until the merge lands on `origin/master`.
    lockfile lists, so content deleted *inside* a package the lockfile
    already satisfies stays missing. To retire a worktree, unlink the
    junctions first, or leave the directory and remove it by hand.
+   **Consequence: `node_modules/@duya/*` resolve to the PRIMARY checkout's
+   packages, so your own uncommitted edits to a workspace package are
+   invisible to tsc.** `npm run typecheck:web` then reports
+   `TS2305: Module '"@duya/plugin-core"' has no exported member '<what you
+   just added>'` — a false positive, not a code defect. Repointing the
+   junction is not an option: `mavis-trash` correctly refuses to remove a
+   reparse point that targets the primary checkout, and forcing it risks
+   the primary. Working approach: verify with a throwaway tsconfig that
+   widens `rootDir` to `"../.."` and adds
+   `"@duya/plugin-core": ["../plugin-core/src/index.ts"]` to `paths` (both
+   side effects are required — pointing outside `rootDir` otherwise raises
+   TS6059 on every plugin-core file). Delete the file afterwards; do not
+   commit it. Packages consumed as built output instead of source
+   (`@duya/agent` via `dist/`) additionally need the PRIMARY's `dist`
+   rebuilt, or resolution fails with a missing-export or missing-module
+   error that looks like broken code.
+   **A failed `npm install` in the primary checkout can empty `packages/`
+   wholesale and rewrite `package-lock.json` into a tree with no workspace
+   packages — which then makes the damage self-perpetuating, because npm
+   now reads those package dirs as removable.** Repair order matters:
+   `git checkout -- packages/ package-lock.json` FIRST, then reinstall.
+   Check `package.json` before restoring it — a user's in-flight dependency
+   edit (e.g. an uncommitted `@dnd-kit` addition) lives in a tracked file
+   and restoring the lockfile alone will not touch it, but restoring
+   `package.json` would silently discard it. Confirm the 20-ish other
+   modified paths are all outside the paths you are about to restore. Use
+   `npm install --ignore-scripts` when the blocker is a native rebuild
+   (node-pty/MSB8040), then restore the one native binary by hand.
 3. **Verify in place**: targeted `npx vitest run <files>` +
    `npm run typecheck:web`, plus any other package gates the diff
    touches. Known footgun: `typecheck:cli` OOM-crashes tsc under the
