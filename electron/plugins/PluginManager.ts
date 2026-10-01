@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { getLogger, LogComponent } from '../logging/logger';
+import { getDatabase } from '../db/index';
+import { clearPluginHookConsent } from '../db/pluginHookConsent';
 import { getPluginCatalog, getPluginCatalogEntry, getLocalPluginPaths, getBuiltinPluginsSourceDir, resolveIconUrl } from './catalog';
 import { listCapabilityKinds, readPluginManifest } from './manifest';
 import { clonePluginFromGit } from './marketplace/git-source';
@@ -688,6 +690,24 @@ export class PluginManager {
       // check then skips cleanup, leaving a ghost link that breaks reinstalls.
       removeInstalledSymlink(pluginId);
       removeDirSafe(installPath);
+      // Plan 583 seam C: hook-execution consent is about the CODE a plugin
+      // ships, not the data it stored, so this is purged on every remove and
+      // not gated on `deleteData`. Keeping the data is the normal upgrade
+      // path, and a reinstall brings new code that the old answer never
+      // described -- a stale `granted` would silently authorize it. A fresh
+      // install simply asks again, which is the cheap failure direction.
+      try {
+        const db = getDatabase();
+        if (db) clearPluginHookConsent(db, pluginId);
+      } catch (err) {
+        // Non-fatal: a leftover row is only reachable if the same plugin id is
+        // installed again, and the gate is fail-closed on anything unexpected.
+        this.logger.warn(
+          'Failed to clear plugin hook consent on remove (non-fatal)',
+          { pluginId, error: String(err) },
+          LogComponent.Main,
+        );
+      }
       if (deleteData) {
         removeDirSafe(dataPath);
         // Also purge stored setup values so a reinstall does not resurrect

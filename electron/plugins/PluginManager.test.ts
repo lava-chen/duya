@@ -10,6 +10,9 @@ const state = vi.hoisted(() => ({
   cacheDir: '',
   storeEntries: [] as Array<Record<string, unknown>>,
   storeUpsertPlugin: vi.fn(),
+  storeRemovePlugin: vi.fn(),
+  consentClear: vi.fn(),
+  consentDbAvailable: true,
 }));
 
 vi.mock('../logging/logger', () => ({
@@ -91,6 +94,26 @@ vi.mock('./PluginRegistryStore', () => ({
       state.storeUpsertPlugin(entry);
       state.storeEntries = [entry];
     }
+
+    removePlugin(pluginId: string) {
+      state.storeRemovePlugin(pluginId);
+      const found = state.storeEntries.find((e) => e.id === pluginId);
+      state.storeEntries = state.storeEntries.filter((e) => e.id !== pluginId);
+      return found;
+    }
+  },
+}));
+
+// Plan 583 seam C — hook-execution consent is purged on every remove. The
+// database and the consent store are mocked so the assertion is on the
+// wiring, not on SQL, which `pluginHookConsent.test.ts` already covers.
+vi.mock('../db/index', () => ({
+  getDatabase: () => (state.consentDbAvailable ? { __mock: true } : null),
+}));
+
+vi.mock('../db/pluginHookConsent', () => ({
+  clearPluginHookConsent: (_db: unknown, pluginId: string) => {
+    state.consentClear(pluginId);
   },
 }));
 
@@ -127,6 +150,7 @@ vi.mock('../../packages/plugin-core/src', () => ({
     }
   },
   withPluginError: async (_pluginId: string, _action: string, fn: () => Promise<unknown>) => fn(),
+  withPluginErrorSync: (_pluginId: string, _action: string, fn: () => unknown) => fn(),
 }));
 
 vi.mock('../../packages/plugin-core/src/security/path-validator', () => ({
@@ -229,5 +253,82 @@ describe('PluginManager.installFromCatalog', () => {
 
     // MCP server config is copied from the fixture dir.
     expect(existsSync(path.join(state.cacheDir, 'mcp', 'servers.json'))).toBe(true);
+  });
+});
+
+describe('PluginManager.remove — hook consent (plan 583 seam C)', () => {
+  beforeEach(() => {
+    state.tempRoot = mkdtempSync(path.join(tmpdir(), 'duya-plugin-remove-'));
+    state.storeEntries = [];
+    state.storeRemovePlugin.mockReset();
+    state.consentClear.mockReset();
+    state.consentDbAvailable = true;
+
+    fs.mkdirSync(path.join(state.tempRoot, 'installed'), { recursive: true });
+    fs.mkdirSync(path.join(state.tempRoot, 'data'), { recursive: true });
+    fs.mkdirSync(path.join(state.tempRoot, 'staging'), { recursive: true });
+  });
+
+  afterEach(() => {
+    if (state.tempRoot) {
+      rmSync(state.tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  function seedInstalled(pluginId: string): void {
+    state.storeEntries = [
+      {
+        id: pluginId,
+        installPath: path.join(state.tempRoot, 'cache', pluginId),
+        dataPath: path.join(state.tempRoot, 'data', pluginId),
+      },
+    ];
+  }
+
+  it('purges hook consent even when the user keeps their plugin data', async () => {
+    // The load-bearing case. `deleteData: false` is the normal upgrade path:
+    // the settings and secrets stay, but a reinstall brings new code that the
+    // old `granted` never described. Consent is about code, not data, so it
+    // must not survive the uninstall.
+    seedInstalled('com.duya.p');
+    const manager = new PluginManager();
+
+    await manager.remove('com.duya.p', false);
+
+    expect(state.consentClear).toHaveBeenCalledWith('com.duya.p');
+  });
+
+  it('purges hook consent when the data is deleted too', async () => {
+    seedInstalled('com.duya.p');
+    const manager = new PluginManager();
+
+    await manager.remove('com.duya.p', true);
+
+    expect(state.consentClear).toHaveBeenCalledWith('com.duya.p');
+  });
+
+  it('does not purge consent for a plugin that was not installed', async () => {
+    // `removePlugin` returning nothing means the remove was a no-op; there is
+    // no install to invalidate, so no row should be touched.
+    const manager = new PluginManager();
+
+    const result = await manager.remove('com.duya.absent', false);
+
+    expect(result).toMatchObject({ removed: false });
+    expect(state.consentClear).not.toHaveBeenCalled();
+  });
+
+  it('completes the remove when the database is unavailable', async () => {
+    // Non-fatal by design: a leftover row is only reachable on a later
+    // reinstall, and the gate fails closed on anything unexpected. Failing the
+    // uninstall instead would leave the user unable to remove a plugin.
+    seedInstalled('com.duya.p');
+    state.consentDbAvailable = false;
+    const manager = new PluginManager();
+
+    const result = await manager.remove('com.duya.p', false);
+
+    expect(result).toMatchObject({ removed: true });
+    expect(state.consentClear).not.toHaveBeenCalled();
   });
 });
