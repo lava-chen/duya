@@ -13,6 +13,9 @@
  */
 
 import { BrowserWindow } from 'electron';
+import { getLogger, LogComponent } from '../logging/logger';
+
+const logger = getLogger();
 
 export type SessionState = 'active' | 'idle' | 'streaming' | 'error' | 'closed';
 
@@ -112,7 +115,7 @@ class SessionManager {
       info.state = 'closed';
     }
     this.sessions.clear();
-    console.log('[SessionManager] All sessions cleared');
+    logger.info('All sessions cleared', undefined, LogComponent.SessionManager);
   }
 }
 

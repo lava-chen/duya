@@ -20,7 +20,9 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, renameSync } from 'node:fs';
 import path from 'node:path';
-import { safeUserDataPath } from '../../logging/logger';
+import { safeUserDataPath, getLogger, LogComponent } from '../../logging/logger';
+
+const logger = getLogger();
 
 export const CONNECTORS_CACHE_TTL_MS = 3_600_000;
 
@@ -123,7 +125,7 @@ export function writeCatalogCache(
   try {
     mkdirSync(dir, { recursive: true });
   } catch (err) {
-    console.error('[catalog-cache] mkdir failed', dir, err);
+    logger.error('Catalog cache mkdir failed', err instanceof Error ? err : new Error(String(err)), { dir }, LogComponent.NetHandlers);
     return false;
   }
   const payload = JSON.stringify({
@@ -142,7 +144,7 @@ export function writeCatalogCache(
     renameSync(tmp, final);
     return true;
   } catch (err) {
-    console.error('[catalog-cache] write/rename failed', tmp, '->', final, err);
+    logger.error('Catalog cache write/rename failed', err instanceof Error ? err : new Error(String(err)), { tmp, final }, LogComponent.NetHandlers);
     return false;
   }
 }

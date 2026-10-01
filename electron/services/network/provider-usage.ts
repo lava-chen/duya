@@ -12,13 +12,11 @@ import { initLogger, LogComponent } from '../../logging/logger';
 // "quota fetcher returns nothing" impossible to diagnose.
 const logger = initLogger({ level: 'INFO' });
 
-// `console.log` mirror: the file logger is async/buffered and only visible
-// after a restart, but the user is staring at "No quota data returned" right
-// now. Always-on console traces make the request/response visible in the
-// DevTools console (main process prints land there via electron's stdio).
+// Structured mirror of the quota request/response trail. The file logger is
+// async/buffered and only visible after a restart, but the user is staring at
+// "No quota data returned" right now, so these traces stay at INFO.
 const trace = (...args: unknown[]) => {
-  // eslint-disable-next-line no-console
-  console.log('[provider-usage]', ...args);
+  logger.info(String(args[0] ?? 'trace'), { args: args.slice(1) }, LogComponent.NetHandlers);
 };
 
 export interface QuotaItem {

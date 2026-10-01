@@ -3,10 +3,23 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-const mocks = vi.hoisted(() => ({ scratch: '' }));
+const mocks = vi.hoisted(() => ({
+  scratch: '',
+  logger: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    fatal: vi.fn(),
+  },
+}));
 
 vi.mock('../../../logging/logger', () => ({
   safeUserDataPath: () => mocks.scratch,
+  getLogger: () => mocks.logger,
+  LogComponent: {
+    NetHandlers: 'NetHandlers',
+  },
 }));
 
 const {

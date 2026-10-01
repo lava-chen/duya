@@ -22,6 +22,9 @@ import { buildCronProviderConfig, resolveCronModel } from '../../automation/prov
 import { readConfigAgents } from '../../../packages/agent/src/agent-profile/config-agents.js';
 import { normalizePath } from '../../memory-state/pathUtils';
 import type { JournalRecord } from '../../../packages/agent/src/modes/workflow/journal';
+import { getLogger, LogComponent } from '../../logging/logger';
+
+const logger = getLogger();
 
 /**
  * Detect whether the project has a `.duya/references/` directory.
@@ -643,7 +646,7 @@ function normalizeWorkerEvent(event: Record<string, unknown>): Record<string, un
       .then((mod) => mod.setLastMCpStatusSnapshot(event))
       .catch((err) => {
         // Defensive: never break the SSE forward path on a bad payload.
-        console.warn('[agents/router] mcp-runtime-store ingest failed:', err);
+        logger.warn('mcp-runtime-store ingest failed', { error: err instanceof Error ? err.message : String(err) }, LogComponent.Main);
       });
     sseEvent = { type: 'mcp:status:snapshot', data: event };
   } else if (msgType === 'mcp:reload:error') {

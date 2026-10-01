@@ -9,6 +9,9 @@
 
 import { spawn, exec } from 'child_process';
 import type { ChildProcess } from 'child_process';
+import { getLogger, LogComponent } from '../logging/logger';
+
+const logger = getLogger();
 
 /**
  * Kill a process and all its descendants reliably.
@@ -55,13 +58,13 @@ function killWindowsProcessTree(pid: number, _force: boolean): Promise<void> {
 
       taskkill.on('close', (code) => {
         if (code !== 0) {
-          console.warn(`[ProcessCleanup] taskkill exited with code ${code}, stderr: ${stderr.trim()}`);
+          logger.warn('taskkill exited with non-zero code', { pid, code, stderr: stderr.trim() }, LogComponent.Main);
         }
         waitForDeath();
       });
 
       taskkill.on('error', (err) => {
-        console.error(`[ProcessCleanup] taskkill spawn error:`, err.message);
+        logger.error('taskkill spawn error', err instanceof Error ? err : new Error(String(err)), { pid }, LogComponent.Main);
         waitForDeath();
       });
     };
@@ -71,7 +74,7 @@ function killWindowsProcessTree(pid: number, _force: boolean): Promise<void> {
       const maxAttempts = 20; // 2 seconds total
       const check = (): void => {
         if (attempts >= maxAttempts) {
-          console.warn(`[ProcessCleanup] Process ${pid} may still be alive after max attempts`);
+          logger.warn('Process may still be alive after max attempts', { pid, maxAttempts }, LogComponent.Main);
           resolve();
           return;
         }
@@ -114,7 +117,7 @@ function killUnixProcessTree(
 
     const timer = setTimeout(() => {
       if (!child.killed && child.exitCode === null) {
-        console.warn(`[ProcessCleanup] Process ${child.pid} did not exit after ${timeoutMs}ms, sending SIGKILL`);
+        logger.warn('Child process did not exit before timeout, sending SIGKILL', { pid: child.pid, timeoutMs }, LogComponent.Main);
         child.kill('SIGKILL');
       }
       resolve();
