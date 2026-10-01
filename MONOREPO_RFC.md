@@ -12,17 +12,20 @@
 
 | 问题 | 结论 | 依据 |
 |---|---|---|
-| Workspace 是否值得独立 package？ | ⚠️ **部分值得** —— 只有 roots/policy 值得；env/worktree/connector/context **不值得** | 5 处路径包含检查重复实现，其中两处 symlink 语义不一致 |
-| Agent Control Plane 是否值得独立 package？ | ✅ **值得定义，暂不建包** —— 职责真实且分散，但耦合是循环的，先解耦再抽 | 3 套 task 模型、2 套 automation、5 套 queue、4 套 approval |
+| Workspace 是否值得独立 package？ | ❌ **不建包** —— 它是 Control Plane 内的一个小型 module | ~~5 处路径包含检查重复实现~~ → **已复核：5 处全 LIVE 且分层，不是重复**（见 08 §4）。真正的理由是 workspace 状态**散落在 8 个 owner**；但这 8 个 owner 都在 host 侧，收进 `control-plane/workspace/` 即可，不需要一次 package 边界 |
+| Agent Control Plane 是否值得独立 package？ | ✅ **值得定义，暂不建包** —— 职责真实且分散，但耦合是循环的，先解耦再抽 | ~~3 套 task 模型、2 套 automation、5 套 queue~~ → **已复核：task 实为 3 个不同 subject、automation 两套都活**（见 08）。真正的理由是 **wake ↔ automation 的循环依赖**（§1.8） |
 | Control Plane 与 Conductor 是否重叠？ | ❌ **不重叠** | Conductor 是 canvas UI，与 orchestration 无关 |
 | Goal Mode 属于哪层？ | **拆分**：goal-tracker → Control Plane；`update_goal` 工具 → Runtime | 同一功能现在横跨 DB / mode / workspace 三个 substrate |
-| Automation Scheduler 位置？ | **Control Plane**（`electron/automation`） | 与 workflow trigger 重复，是最尖锐的重复 |
+| Automation Scheduler 位置？ | **Control Plane**（`electron/automation`） | ~~与 workflow trigger 重复，是最尖锐的重复~~ → **已复核：两套栈都活，只有 `trigger.ts` 一个文件是死的**（见 08 §2）。收敛理由改为 wake 循环耦合 |
 | Bot identity 与 AgentIdentity 统一？ | ✅ **方向对，但还不能建对象** | 现状分散在 4 处 registry |
 | Memory 绑定哪一层？ | **User / Project / Agent 三层已有设计**，绑定 Run 是错的 | plan 479 已定义 tier |
 | Connector binding 属于 Workspace 还是 Agent profile？ | **Agent profile**（能力），不是 Workspace（位置） | 现状是全局单 store，缺的是 scope 维度 |
-| Permission policy 谁拥有？ | **Workspace（roots）+ Agent profile（mode），Control Plane 组合** | 4 个 source of truth，默认值已经分叉 |
+| Permission policy 谁拥有？ | **Workspace（roots）+ Agent profile（mode），Control Plane 组合** | ~~4 个 source of truth，默认值已经分叉~~ → **已复核：是 5 份拷贝，但两个 resolver 都默认 `'auto'`，分歧被夸大且当前不可达**（见 08 §3）。真正的理由是**三套不兼容的 permission 动作词汇 + 两个 `expiresAt` 时钟**（见 07 §0.3） |
 | Session 是否降级为 UI/communication concept？ | ✅ **应该**，但需分阶段 | `sessions` 表一行同时承载 9 个概念 |
 | Harness 是否更名 evals？ | ✅ **应该更名** | 仓库里 "harness" 已有 3 种含义，`harness/` 会冲突 |
+| **重复实现哪些能删？** | ✅ **只有 2 个文件可安全删除**，另有 4 项需前置条件 | 见 `08-duplicate-implementation-adjudication.md` |
+| **protocol 到底怎么规定？** | ✅ **完整规格已出**（模块布局 / 事件闭合注册表 / 三 transport / 错误分类 / 14 条 drift test） | 见 `07-agent-protocol-spec.md` |
+| **conductor 是否该改成 canvas？** | ❌ **不该整体改**（344 文件 / 2 库 / 230 i18n key / 39 CSS class），✅ **但该改 4 行** | 见 `09-conductor-rename-assessment.md` |
 
 ---
 
@@ -126,31 +129,45 @@ CREATE TABLE IF NOT EXISTS project_bots (project_id, bot_id, joined_at, PRIMARY 
 **即：Project 已经是 durable identity（UUID + 名字 + 多根 + bot 成员），但被跨库 FK 逼出了第二张影子表。**
 这是 Project 概念**唯一**的真实缺陷，且缺陷在 Storage 层，不在概念层。
 
-### 1.6 三套 Task 模型（同名不同命）
+### 1.6 三套 Task 模型（同名不同命）— ⚠️ 已按可达性重裁，见 `08-duplicate-implementation-adjudication.md`
 
-| # | 实现 | substrate | 能力 | 跨重启 |
-|---|---|---|---|---|
-| 1 | `electron/db/core/stores.ts:86` TaskStore | SQLite (core.db) | `claim(id, owner)`、blocked 拒绝、`getAgentStatuses` | ✅ |
-| 2 | `electron/db/schema.ts:163` | SQLite (main.db) | 列与 #1 相同，**无 INSERT 写入** —— 被冻结的壳 | — |
-| 3 | `packages/agent/src/lifecycle/TaskState.ts:13` | **内存 `Map`** + `AbortController` | 后台 subagent 状态 | ❌ **丢失** |
-| 4 | `packages/agent/src/session/bash-task-store.ts` | **JSON 文件** `~/.duya/bash-tasks/` | 显式说明为何不用 SQLite（避免改 IPC schema） | ✅（PID 死亡标 `lost`） |
+| # | 实现 | substrate | 能力 | 跨重启 | 裁决 |
+|---|---|---|---|---|---|
+| 1 | `electron/db/core/stores.ts:86` TaskStore | SQLite (core.db) | `claim(id, owner)`、blocked 拒绝 | ✅ | **LIVE** |
+| 2 | `electron/db/schema.ts:163` | SQLite (main.db) | 列与 #1 相同，**无 INSERT 写入** | — | **DEAD** |
+| 3 | `packages/agent/src/lifecycle/TaskState.ts:13` | **内存 `Map`** + `AbortController` | 后台 subagent **执行控制** | ❌ **丢失** | **LIVE** |
+| 4 | `packages/agent/src/session/bash-task-store.ts` | **JSON 文件** `~/.duya/bash-tasks/` | 后台 bash 命令 | ✅（PID 死亡标 `lost`） | **LIVE** |
 
-> 同一个 "task" 词，四种生命周期。#3 内存 Map 在 agent 进程重启后全部丢失。
+> **修正**：这不是"四份重复"，而是**三个互不重叠的 subject**。
+> #1 是 TODO 清单（SQLite-via-IPC，唯一活的持久 todo 路径，调用链已逐跳验证）；
+> #3 是 subagent 的 **abort/notify 机制**（SQLite 提供不了）；
+> #4 是 bash 命令的持久层。`KillTaskTool.ts:84` **同时对 #3 和 #4 解析 id** —— 删任何一个都会打断 Kill。
+>
+> 另有两处更正：`getAgentStatuses` **在 electron 里根本不存在**（agent 端自算，且无调用者）；
+> `claim()` 传输已接线但**工具从不调用**（`TodoTool` 只用 list/get/create/update/delete）。
+> 唯一可删的是 #2 的死 DDL（需 migration）。
 
-### 1.7 两套完整的 Automation / Trigger 栈（最尖锐的重复）
+### 1.7 两套完整的 Automation / Trigger 栈 — ⚠️ 已按可达性重裁，见 `08-duplicate-implementation-adjudication.md`
 
 | | Stack A（Main） | Stack B（Worker） |
 |---|---|---|
 | 存储 | `~/.duya/cronjob.toml`（`CronFileStore`，自称"single source of truth"） | `~/.duya/workflows/` YAML registry |
-| 入口 | `electron/automation/Scheduler.ts` 60s tick + retry backoff `[30s,60s,300s]` | `packages/agent/src/modes/workflow/trigger.ts` "unified trigger entry (plan 552 §7)" |
-| 通道 | cron + event listener (github/slack polling) | manual / cron / bot / http **四个** |
-| run 账本 | `automation_cron_runs` | `workflow_runs` |
+| **活的入口** | `electron/main.ts:567 initAutomationScheduler()` + `:568 initRoutineListenerHub(...)` | `WorkflowRunCard.tsx:182` → `workflow-ipc.ts:255` → `preload.ts:2453` → `router.ts:2991` |
+| 其他消费面 | IPC、CLI、wake bus（`wake-dispatcher.ts:374-376`） | `workflow-handlers.ts:205,227,252,266,281` |
+| run 账本 | `automation_cron_runs`（**migration 50 已 DROP**） | `workflow_runs` |
 | 消费者 | `automation/agent-run.ts` 建普通 agent session | workflow runtime |
 
-**而 agent 的 routine 工具只通向 Stack A**（`tool/ManageRoutineTool/ManageRoutineTool.ts:17-19`：
+**而 agent 的 routine 工具只通向 Stack A**（`ManageRoutineTool.ts:17-19`：
 "Persistence goes through the db-bridge `automation:cron:*` cases … the agent subprocess never writes
-cronjob.toml itself"），Stack B 却在 `trigger.ts:6` 引用 "405/409 CronStore"。
-**两套 schedule、两个 registry、两个 run 账本，一个 agent。**
+cronjob.toml itself"）。
+
+> **修正 —— 两套栈都活着，唯一可删的是一个从未接线的文件。**
+> `modes/workflow/trigger.ts`（自称 "unified trigger entry (plan 552 §7)"）的四个导出
+> `launchFromTrigger` / `channelAllowed` / `buildDedupKey` / `normalizeCronInstant`
+> **全仓只命中它自己和它的测试**。每条运行时触发路径都走 `workflow-runtime-manager.ts:261 trigger()`。
+>
+> 所以真正的问题不是"两套栈"，而是 **wake ↔ automation 的循环依赖（§1.8）** ——
+> 那才是 Control Plane 无法抽包的根本原因。**两套 schedule/registry/账本并存仍值得在 M4 收敛。**
 
 ### 1.8 Wake 与 Automation 是循环耦合，不是分层
 
@@ -253,8 +270,8 @@ research_events(..., UNIQUE(run_id, sequence))                            -- 严
                     └───────────────┬──────────────┘
                                     │ 1:N
                     ┌───────────────▼──────────────┐
-                    │  Workspace (execution ns)    │  roots[] · cwd · capability policy
-                    │  ★ 新概念，roots 部分已有      │  connector scope · env
+                    │  Workspace (execution ns)    │  roots[] · cwd · accessPolicy
+                    │  ★ Control Plane 内的 module  │  （不是独立 package，也无独立表）
                     └───────────────┬──────────────┘
                                     │ 1:N
         ┌───────────────────────────┼───────────────────────────┐
@@ -279,6 +296,11 @@ research_events(..., UNIQUE(run_id, sequence))                            -- 严
 
 **核心反转**：`Session` 从"万物的父键"降级为"Run 的一个投影"。
 
+> **Workspace 也不建表。** 它与 Project 的区别不是"要不要存储"，而是
+> "谁是事实来源"：Project 有 UUID 且跨 session 稳定；Workspace 只是
+> **Run 启动时被解析一次的执行位置**（roots + cwd + accessPolicy），
+> 解析完就固化进 `RunManifest`（§6.1）。把它做成表只会引入第 2 个真相源。
+
 ---
 
 ## 3. 各对象定义与裁决
@@ -294,15 +316,15 @@ research_events(..., UNIQUE(run_id, sequence))                            -- 严
 
 **裁决：Project 概念层冻结，只修 Storage 缺陷。**
 
-### 3.2 Workspace — ⚠️ 只有 roots/policy 部分值得建包
+### 3.2 Workspace — ❌ 不建包，是 Control Plane 内的一个 module
 
 严格套用"至少两个真实代码位置重复承担"：
 
 | 候选职责 | 重复数 | 裁决 |
 |---|---|---|
-| **路径包含 / roots policy** | **5** | ✅ 值得 |
-| **Permission policy 解析** | **4** | ✅ 值得 |
-| **cwd 归一化** | **3 个 normalizer / 5 个 store** | ✅ 值得 |
+| **路径包含 / roots policy** | **5** | ✅ 收敛（重复是真的，但收进一个 module 即可） |
+| **Permission policy 解析** | **4** | ✅ 收敛 |
+| **cwd 归一化** | **3 个 normalizer / 5 个 store** | ✅ 收敛 |
 | Environment snapshot | **1** | ❌ 是新功能不是去重 |
 | Connector / MCP scope | **1**（全局单 store） | ❌ 缺的是维度不是重复 |
 | Worktree / branch | **0 实现** | ❌ 只有 prompt 文本 |
@@ -319,11 +341,90 @@ research_events(..., UNIQUE(run_id, sequence))                            -- 严
 
 **Workspace 明确不该包含**：worktree notice 文案（`forkSubagent.ts:150`）、
 tool 选择、system prompt 装配、memory projection（`memory-state/outbox.ts:127` 的 roots 是
-`defaultMemoryRoot()`，混用会让 workspace root 扩大记忆写权限）、OS sandbox policy。
+`defaultMemoryRoot()`，混用会让 workspace root 扩大记忆写权限）、OS sandbox policy、
+connector / env / capability（见上表 4 个 ❌）。
 
-**裁决：建 `packages/workspace`，但只收 roots + policy 解析。**
-`docs/exec-plans/backlog/2026-09-workspace-phase-0.md` 已在 Planning（P0，0/26），
-本 RFC 与之对齐，不重复设计。
+**职责就这么小，再多就不是 Workspace**：
+
+```ts
+// apps/desktop/src/main/control-plane/workspace/workspace-state.ts
+interface WorkspaceState {
+  workspaceId?: string;        // 可选：Workspace 目前还没有一等身份（§1.1 中 workspaceId 出现 0 次）
+  cwd: string;
+  roots: readonly WorkspaceRoot[];
+  accessPolicy: AccessPolicy;  // 只回答"能访问哪里"，不含 permission 交互
+}
+```
+
+**裁决：不建 `packages/workspace`，作为 Control Plane 内的 module。**
+
+```
+apps/desktop/src/main/
+  control-plane/
+    goals/  tasks/  runs/  scheduler/  wake/  checkpoints/
+    workspace/                  ← ★ Workspace 落在这里，不是 package
+      workspace-state.ts
+      resolve-workspace.ts
+      canonicalize-path.ts
+      allowed-roots.ts
+      access-policy.ts
+```
+
+**为什么撤回初版的"建包"**（初版 §3.2 写的是 `裁决：建 packages/workspace`）：
+
+| 裁决准则（`03` §0） | 是否满足 | 事实 |
+|---|---|---|
+| 3 · 被 2 个以上 consumer 使用 | ❌ | 唯一 consumer 是 Control Plane。CLI / evals 走 Run API，拿到的是已物化的 `RunManifest`，**不需要 resolver** |
+| 5 · 可能存在多个 host | ⚠️ 仅可能性 | 第二个 host 还不存在（§6.2 同款理由：control-plane 也不建包） |
+| 1 · 独立生命周期 | ❌ | workspace 状态只在 Run 启动那一瞬间被读一次，之后全程由 `RunManifest` 承载 |
+| 6 · 重要架构 contract | ⚠️ 部分 | contract 由 `agent-protocol` 承载（`WorkspaceSnapshot`），**不是**由一个包承载 |
+
+> **"包"承载不了它真正的价值。** 真正需要保护的是**边界方向**，不是目录层级 ——
+> 而方向靠 `agent-protocol` 的只读契约 + CI 边界检查保证，不靠 `package.json`。
+
+**跨边界只留契约，不留实现**：
+
+```ts
+// packages/agent-protocol/src/workspace.ts —— 纯数据形状，零 IO
+export interface WorkspaceSnapshot {
+  readonly cwd: string;
+  readonly roots: readonly WorkspaceRoot[];
+}
+```
+
+于是依赖方向是单向的：
+
+```
+agent-protocol          ← contract（WorkspaceSnapshot，零 IO）
+       ▲
+Control Plane / workspace/   ← owns mutable state + resolution
+       │
+       │ resolve（物化，run 启动时一次）
+       ▼
+  RunManifest（immutable）
+       │
+       ▼
+  Agent Runtime         ← ✗ 不得反查 workspace
+```
+
+**Runtime 不能反过来查询 Workspace**（同 §6.1）：一旦它持有 Workspace 引用并在中途查询，
+run 的输入就会在执行过程中漂移，checkpoint 与 resume 都失去可复现基线。
+
+**什么时候才值得抽成 `packages/workspace`？** 三条**同时**满足：
+
+1. 出现第二个真实 host（CLI / evals harness / 未来 host），且它**不复用 Control Plane**、
+   需要自己解析 workspace；
+2. 四个纯函数已经稳定并被独立使用：
+   `canonicalizePath` · `resolveRoots` · `validateCwd` · `isWithinRoots`；
+3. realpath vs 词法的语义分歧已关闭（上方"安全一致性问题"解决）。
+
+在那之前只做**内部边界收敛**：把 5 处 path containment 收到
+`control-plane/workspace/`，并把 policy 字段从 transport 里拆出来。
+
+> **与 backlog 计划的关系**：`docs/exec-plans/backlog/2026-09-workspace-phase-0.md`
+> （P0，0/26）本就主张 "Main owns the authoritative root map, policy decision, and
+> immutable Run manifest"，**从未假设 `packages/workspace`** —— 本裁决与它天然对齐，
+> 不需要重设计。
 
 ### 3.3 Agent Control Plane — ✅ 定义职责，⚠️ 暂不建包
 
@@ -346,7 +447,9 @@ tool 选择、system prompt 装配、memory projection（`memory-state/outbox.ts
 **仍应留在 Agent Runtime 的**：模型循环、tool 执行、subagent 的**执行体**、
 permission 的**交互**、compaction、取消、runtime 事件、执行内状态。
 
-**属于 Workspace 的**：roots、cwd、env 快照。
+**属于 Workspace 的**（Control Plane 内的 `workspace/` module，见 §3.2）：
+roots、cwd、accessPolicy。**不含** env / connector / capability —— 那三项要么是新功能，
+要么属于 Agent profile。
 
 **属于 Storage 的**：所有 durable 表、event log、checkpoint 落盘。
 
@@ -499,6 +602,66 @@ config.toml 管 agent 定义，`project_bots` 管成员关系，`rollout_catalog
 > **原则**：conversation history **不是** durable state，它是 durable state 的**投影**。
 > 今天的实现恰好相反 —— transcript 是唯一真相（§1.13）。这是最需要反转的一点。
 
+### 3.9 🔥 P0 架构缺口：Session history ≠ checkpoint
+
+**现状（二次追踪后的精确诊断，比初版严重）**：
+
+初版判断是"flush handler 只有 logger"。**实测下来问题更深一层 —— 整个 checkpoint 子系统从未被喂过数据。**
+
+| 环节 | 状态 |
+|---|---|
+| `CheckpointBatcher.enqueue()` | **零生产调用者**。全仓只有 `server-integration.test.ts` 调用它 |
+| `SessionManager.setLastCheckpoint()` | 只被 `enqueue()` 调用 ⇒ **同样零调用** |
+| flush handler（`index.ts:21-25`） | 只有 logger。即便有数据也只打日志 |
+| `checkpointBatcher.flush()`（`router.ts:1453`、`:1554`） | 冲刷一个**永远为空的队列**，无副作用 |
+| `SessionManager.setLastMessages()`（`router.ts:1523`） | **内存** `Map`，进程重启即丢 |
+| `pendingMessages`（`router.ts:1516`） | 只在 `done`（`:1433`）与 `error`（`:1532-1545`）路径写 DB |
+| `checkpoints` 表 | **全仓不存在**（所有 "checkpoint" 命中都是 SQLite WAL checkpoint，同名不同义） |
+
+**实际发生的事**：worker 确实在发 `checkpoint` 事件（`router.ts:1510` 有完整 handler），
+但 router 只是把 messages 堆进**函数内局部数组** `pendingMessages`，
+同时写内存 ring 和 SSE 帧给 renderer，**然后 return —— 没有任何一步落盘**。
+
+> **净效果**：为"崩溃后可恢复"而设计的数据，
+> **只在不需要它的时候（正常结束 / 报错）才被持久化**。
+> 崩溃或 worker 被 kill 时，`pendingMessages` 连同内存 ring 一起蒸发。
+
+**这不只是"功能没做"，它是一个会误导用户的缺陷**：
+`session_runtime_locks` 的锁 TTL 是 300 秒（`stores.ts:479`），崩溃后锁仍在，
+所以 UI 上看起来像是"还在运行"，实际状态已经没了，重试还会被锁挡住直到过期。
+
+**必须正式存在的结构**：
+
+```
+Run
+ ├─ status / attempt          ← 崩溃后可判定，不靠锁
+ ├─ checkpoint                ← 落盘，不再是内存 Map
+ ├─ workspace ref
+ ├─ plan / progress           ← 非 LLM 的进度表示
+ ├─ pending approval          ← 活得比 run 久的审批
+ └─ resume cursor             ← 从哪继续
+```
+
+**判定**：这是本轮重构的 **P0**，不是"顺手做一下"。
+理由：Goal Mode / Persistent Agent 的所有能力都建立在"run 可恢复"之上；
+没有 durable checkpoint，其余都是空中楼阁。
+
+> ⚠️ **但修复成本不是"极低"，而是需要一个 schema 决策。**
+> 把 handler 从 logger 换成 repository 写入**这一步不够** —— 因为没有任何东西调用 `enqueue()`，
+> 而且把 checkpoint 写进现有 message log 会撞上一个已知的性能事实：
+> `db:message:replace` 走的是 `messageLog.appendBatch`（`db-handlers.ts:1138-1157`，
+> **append-only + 幂等 INSERT OR IGNORE**，generation 乐观锁已废弃），
+> 所以它可以便宜地高频调用 —— 这是好消息，意味着接线成本确实低。
+>
+> **真正需要决策的是**：checkpoint 的落点是
+> ① 复用 message log 的 append-only 语义，还是
+> ② 新建 `run_checkpoints` 表（RFC §2 的 Run 模型）？
+> ① 改动小、和今天的消息模型一致；② 才是 §3.9 那个结构真正落地。
+> **这个选择会决定 Run 这个一等实体何时真正存在**，因此不能顺手做。
+
+> **注意与 §3.8 的关系**：Durable/Ephemeral 表定义了**哪些字段该存**；
+> 本节定义**必须先有 Run 这个实体**。两者一起才是完整答案。
+
 **优先修复**（低成本、高价值）：把 `CheckpointBatcher` 的 flush handler 从"打日志"
 改成落盘到 `run_checkpoints` 表。这一步就能让"崩溃后可恢复"从假变真。
 
@@ -602,21 +765,24 @@ Evals ──→ Agent Control Plane ──→ Agent Runtime
 > **Project 是四个概念里唯一已经做对的。** 缺陷只有一个：跨库 FK 逼出了 memory-state 的影子表
 > （`catalogSync.ts:208-220`）。修 Storage 即可，**不要重建 Project 表**。
 
-### ② Workspace（执行环境）— 逻辑层 ⚠️ 条件采纳
+### ② Workspace（执行环境）— Control Plane 内的 module ❌ 不建包
 
 | 子项 | 物理位置 | 裁决 |
 |---|---|---|
-| roots | `packages/workspace` | ✅ 进（现 5 处重复） |
-| cwd | `packages/workspace` | ✅ 进（3 个 normalizer / 5 个 store） |
-| repo / files | `packages/workspace` | ✅ 进（多根集合） |
+| roots | `control-plane/workspace/` | ✅ 收（现 5 处重复） |
+| cwd | `control-plane/workspace/` | ✅ 收（3 个 normalizer / 5 个 store） |
+| repo / files | `control-plane/workspace/` | ✅ 收（多根集合） |
 | context sources | `agent-core` 的 `PromptSystem:495-496` | ❌ **不进** —— 已是唯一装配点，散的是内容不是身份 |
 | connectors | `packages/plugin-core` | ❌ **不进** —— 缺的是 scope 维度（现在全局单 store） |
 | capabilities | `agent-protocol` 的 `CapabilityPolicy` | 契约，进 manifest 不进 workspace |
-| trust / permission policy | `packages/workspace` | ✅ 进（4 个 source of truth，默认值已分叉） |
+| trust / permission policy | `control-plane/workspace/` | ✅ 收（4 个 source of truth，默认值已分叉） |
 | environment state | **不落地** | ❌ 现状"继承全部 env"，是**安全特性需求**不是边界去重 |
+| 跨边界形状 | `agent-protocol` 的 `WorkspaceSnapshot` | **只是契约**（纯数据，零 IO），不含解析逻辑 |
 
 > **只有 4/8 进 workspace。** 判据是"至少两个真实代码位置重复承担"，
 > 且 workspace 必须**不含任何 agent reasoning**（不含 prompt 文本、tool 选择、compaction）。
+> 落点是 Control Plane 内的一个目录，**不是 `packages/workspace`** —— 理由与触发抽包的三条
+> 条件见 §3.2。
 
 ### ③ Agent Control Plane — 跨进程逻辑，**暂时不是一个包**
 
@@ -645,7 +811,7 @@ Evals ──→ Agent Control Plane ──→ Agent Runtime
 | tool execution | `agent-runtime` + `browser` 等独立能力包 | ✅ |
 | compaction | **`agent-core`**（纯逻辑，无 IO） | 不在 runtime |
 | subagent | `agent-runtime` | ✅ |
-| permissions | 策略在 `workspace`，**交互**在 runtime | 拆开 |
+| permissions | 策略在 `control-plane/workspace/`，**交互**在 runtime | 拆开 |
 | runtime events | `agent-protocol` 的 `RunEvent` | 契约 |
 
 **Runtime 需要的签名**（写清约束，不要求现在实现）：
@@ -665,11 +831,13 @@ run(AgentInput) -> AgentEventStream
 | **Session/Channel** | `electron/db/core/session-store.ts` | 数据对象 | **降级为投影，分 S1–S5** |
 | **Goal / Task / Run** | Control Plane 的持久化 | 数据对象 | Goal/Run 需新表；Task 复用现有 |
 | **AgentIdentity** | `agent-protocol` 的只读 ref | 契约 | **不建存储对象** |
+| **Workspace** | `control-plane/workspace/` | 逻辑层（Control Plane 内部） | **不建包、不建表**，物化进 `RunManifest` |
 | **Evals** | `evals/`（非 workspace 成员） | 目录 | 新建 |
 
 > **一句话**：Project/Goal/Task/Run/Session 是**数据对象**（落在 Control Plane 与 Storage），
-> Workspace/Control Plane/Runtime/Core 是**逻辑层**（落成包或跨进程模块），
-> AgentIdentity 目前只是**契约引用**。把逻辑层误当数据对象建表，是最容易走偏的地方。
+> Runtime/Core 是**逻辑层**（落成 package），Workspace/Control Plane 是**逻辑层**（落成
+> host 内部的模块，不建包），AgentIdentity 目前只是**契约引用**。
+> 把逻辑层误当数据对象建表、把模块误当 package 拆出来，是最容易走偏的两件事。
 
 ---
 
@@ -692,35 +860,144 @@ plan 583 的分支 `.claude/worktrees/browser-capability-split` 已建 `packages
 （Bash 三件套与权限强耦合暂不动；Read/Edit/Write 合计仅 ~3k 太薄）。
 
 ```
-┌─────────────────────────────────────────────────────┐
-│ agent-protocol   (零内部依赖 · 零 IO)                │  ← RunManifest / RunEvent /
-│                                                     │    ToolEvent / Permission
-└──────────────────────┬──────────────────────────────┘
+                        agent-protocol
+                       ▲          ▲
+                       │          │
+                  agent-core     │
+                       ▲          │
+                       │          │
+                 agent-runtime   │
+                       ▲          │
+                       │          │
+        ┌──────────────┴──────────┴──┐
+        │      Control Plane        │  ← 逻辑层（apps/desktop/src/main/control-plane/）
+        │  ┌─────────────────────┐  │
+        │  │ workspace/ (内部)    │  │  roots · cwd · accessPolicy
+        │  └─────────────────────┘  │
+        │  goals tasks runs wake …  │
+        └──────────────┬────────────┘
                        │
-      ┌────────────────┼────────────────┐
-      ▼                ▼                ▼
- agent-core      browser  ★          ai
- (纯 reasoning)  (19k 独立能力)       (provider)
-      └────────────────┬────────────────┘
-                       ▼
-              agent-runtime
-                       │
-     ┌─────────────────┼──────────────────┐
-     ▼                 ▼                  ▼
- workspace       plugin-core         ★ control-plane
- (roots+policy)  (mcp/plugins)      (逻辑层，暂不建包)
-                       │
-     ══════════════════╪════════════  进程边界
-                       ▼
+                     Storage
+```
+
+**箭头 = 依赖方向（谁 import 谁）。** 因此逐条为：
+
+| 模块 | 依赖 | 不依赖 |
+|---|---|---|
+| `agent-core` | `agent-protocol` | runtime / control-plane / storage |
+| `agent-runtime` | `agent-core` + `agent-protocol` | control-plane / storage |
+| `control-plane` | `runtime` + `storage` + `protocol` | — |
+| `control-plane/workspace/`（**内部**，不导出为包） | 只依赖纯路径工具（node `path` / `fs.realpath`） | runtime / storage / 任何 `packages/*` |
+| `storage` | domain contracts | runtime / core 的实现 |
+
+> **本节修正了初版图的一个实质错误**：初版把链条画成自上而下的
+> `protocol → core → runtime → workspace`，暗示 protocol 依赖 core。
+> **正确方向是反的** —— 底层依赖上层所依赖的协议，箭头指向上游。
+>
+> **同时撤回初版把 `workspace` 画成 Control Plane 的平级依赖**：Workspace 是
+> Control Plane **内部的 module**（§3.2），不是可以独立 import 的节点。
+> 它对 Runtime 的唯一输出是物化后的 `RunManifest`。
+
+### 6.1 Workspace → RunManifest → Runtime（materialize 边界）
+
+```
+Control Plane / workspace/        agent-protocol
+  (WorkspaceState, mutable)      (WorkspaceSnapshot, 只读契约)
+            │                              ▲
+            └────────── resolve ───────────┘
+                          │
+                          ▼
+                 RunManifest (immutable)
+                          │
+                          ▼
+                 Agent Runtime (只读消费)
+```
+
+**Control Plane 从 Workspace 物化出一个不可变的 RunManifest，再交给 Runtime。**
+
+这样做的原因很实际：一旦 Runtime 持有 Workspace 引用并在中途查询，
+RunManifest 的不可变性就废了 —— run 的输入会在执行过程中漂移，
+checkpoint 与 resume 都失去可复现的基线。
+
+| 角色 | 状态 | 谁能写 |
+|---|---|---|
+| `WorkspaceState`（Control Plane 内部） | mutable | Control Plane（run 启动前） |
+| `RunManifest` | **immutable** | 无人（materialize 的瞬间定型） |
+| `Agent Runtime` | 只读消费 | 无人 |
+
+> **这条边界与"workspace 是否建包"无关。** 即使将来抽成 `packages/workspace`，
+> Runtime 仍然只能拿到 materialize 后的 manifest；反过来说，因为这条边界由
+> `agent-protocol` 的只读形状 + CI 保证，**今天没有理由为它单独建包**。
+
+### 6.2 Control Plane 暂时是逻辑层，不是 package ✅ 已修正
+
+**初版把 `control-plane` 画在 packages 一侧，这是不对的。** 它现在是
+`apps/desktop/src/main/control-plane/` 下的**逻辑边界**：
+
+```
+apps/desktop/src/main/
+  control-plane/       ← 暂时逻辑层，不是 package
+    goals/  tasks/  runs/  scheduler/
+    wake/   approvals/  steering/  checkpoints/
+    workspace/         ← ★ Workspace：roots / cwd / accessPolicy 解析
+                         （§3.2。它是本目录下的一个 module，不是 package）
+  storage/             ← 实现层，见 §6.3
+  ipc/  platform/
+```
+
+**`workspace/` 为什么也待在这里**：`control-plane/` 尚未抽包（下面两条条件），
+而 Workspace 的唯一 consumer 就是 Control Plane。两者同处一次搬迁决策里，
+拆开只会制造一个"半个 Control Plane 在包里、半个在目录里"的中间态。
+
+**提拔为 `packages/control-plane` 的条件（两条都满足才提）**：
+
+1. 依赖真的单向了 —— `wake-dispatcher ↔ automation/agent-run` 的循环已解开
+2. 出现**第二个 host**（CLI 或 Bot）真的需要它
+
+两条都不满足就不建。现在把这些职责在 Desktop Main 内部先形成清晰 DAG。
+
+> **`workspace/` 单独抽包的门槛是另一套**（三条，见 §3.2）——
+> 它由"多 host 各自解析 workspace"触发，与 control-plane 抽包**不是同一个决策**。
+> 即使 control-plane 提成 package，`workspace/` 仍应作为它内部的一个 module 存在。
+
+### 6.3 Storage 是本次重构的关键边界 ✅ 已补充
+
+**初版漏了这一层。** 但本调查发现的四个架构缺陷 —— 跨库 FK 逼出影子表、
+3 套 Task 模型、Goal 错绑 session、checkpoint 未落盘 —— **全部在 Storage 层**。
+
+分层（现在明确，**不急于拆 `packages/storage`**）：
+
+```
+Domain object
+   ↓
+Repository contract          ← 上层只依赖这一层
+   ↓
+Storage implementation       ← SQLite / JSONL / filesystem
+```
+
+**六个对象禁止上层直接写 SQL**：
+`Project` · `Goal` · `Task` · `Run` · `Session` · `Checkpoint`
+
+| 缺陷 | Storage 层的根因 |
+|---|---|
+| 跨库 FK → memory-state 影子表 | FK 跨库不可约束，被迫写占位行 |
+| 3 套 Task 模型 | SQLite / 冻结壳 / 内存 Map / JSON 文件四种 substrate |
+| Goal 错绑 session | `session_goals UNIQUE(session_id)` 把 1:N 压成 1:1 |
+| checkpoint 未落盘 | 没有任何 repository，只有内存 Map |
+
+> 这四条**都不是 package 问题，是 ownership 问题**。先定义 Repository contract，
+> 让上层不再直接 SQL；`packages/storage` 什么时候建，取决于第二个 consumer 是否出现。
+
+### 6.4 Host 与 process 边界
+
+```
    ┌──────────┬──────────┬──────────┬──────────┐
    │ desktop  │   cli    │  evals   │ gateway  │  ← 平级 consumer
    └──────────┴──────────┴──────────┴──────────┘
+        (apps/desktop)              (非 workspace 成员)
 ```
 
 **`evals` 不在 workspace 成员内**（理由见 `04-agent-harness-design.md` §2）。
-
-> **注意层次差异**：`control-plane` 在图里是**跨进程逻辑**（`electron/db/core/*` +
-> `wake-dispatcher` + `automation`），不是一个包。它最终可能拆包，但那是解耦之后的事。
 
 ---
 
@@ -728,12 +1005,13 @@ plan 583 的分支 `.claude/worktrees/browser-capability-split` 已建 `packages
 
 | 风险 | 现实威胁 | 缓解 |
 |---|---|---|
-| **God Package** | 把 wake+automation+db-bridge+workflow 全塞进 `agent-control-plane` —— 它会变成 300KB+ 的 `db-bridge` | 明确排除清单：模型循环、tool 实现、prompt 组装**禁止**进入 |
-| **循环搬进新包** | wake ↔ automation 已循环，抽包只会搬家 | **先 C1/M4 解耦，抽包排在解耦之后** |
-| **过度 micro-package** | 8 个概念 → 13+ 个包，每个都要 build/test/typecheck 配置 | 每新增包必须过 `03-target-structure.md` 的 7 条准则 |
+| **God Package** | 把 wake+automation+db-bridge+workflow 全塞进 `control-plane/` —— 它会变成 300KB+ 的 `db-bridge` | 明确排除清单：模型循环、tool 实现、prompt 组装**禁止**进入 |
+| **循环搬进新目录** | wake ↔ automation 已循环，抽目录只会搬家 | **先解耦，再谈边界**。逻辑层 ≠ 立刻等于 package |
+| **过度 micro-package** | 8 个领域概念 → 13+ 个包，每个都要 build/test/typecheck 配置 | 每新增包必须过 `03-target-structure.md` 的 7 条准则；**领域对象永远不单独建包** |
 | **假多租户** | 为不存在的 Cloud 设计 `workspaceId`/`tenantId` 隔离 | Cloud 需求出现前不做隔离，只做可替换性 |
 | **Session 迁移事故** | S4 动 `sessions` 牵 1776 处 renderer 引用 | 拆成 S1–S5，每步保留读回退列 |
 | **checkpoint 语义膨胀** | 把 LLM transcript 当 checkpoint 存 → 重复且不可 replay | Durable/Ephemeral 表（§3.8）是硬边界 |
+| **RunManifest 被绕过** | Runtime 直接读 Workspace mutable state → run 输入执行中漂移 | materialize 是唯一入口（§6.1）；RunManifest 不可变 |
 | **术语漂移** | "harness" 已有 3 义，再加 "control plane" 变 4 义 | 改用 `evals/`；每个新术语进 `AGENTS.md` 的 Architecture 章节 |
 
 ---
@@ -746,11 +1024,17 @@ plan 583 的分支 `.claude/worktrees/browser-capability-split` 已建 `packages
 | `WorktreeAllocator` | **0 行实现**（`git worktree add` 全仓不存在），只有 prompt 文本 |
 | Cloud / 多租户隔离 | 0 需求。只保证可替换性 |
 | `packages/ui` | UI 的问题是边界泄漏不是缺包（`03` §1.1） |
+| **`packages/workspace`** | Workspace 只有 Control Plane 一个 consumer，且状态只在 Run 启动时读一次。作为 `control-plane/workspace/` 内部 module；跨边界形状放 `agent-protocol`（`WorkspaceSnapshot`）。抽包的三条触发条件见 §3.2 |
 | `packages/mcp` / `memory` / `storage` | 已有 owner 或所有权未反转（`03` §1.1） |
 | Environment snapshot 特性 | 现状是"继承全部 env"，无 allowlist —— 那是**安全特性需求**，不是边界去重 |
 | Connector per-workspace scope | 缺的是 scope 维度，属于 plugin-capability 模型演进 |
 | 重建 `projects` 表 | 概念已成立，只修跨库 FK |
-| 改 `CheckpointBatcher` 为持久化 | **← 相反：这个应该做，成本最低收益最高**（§3.8） |
+| **conductor → canvas 整体重命名** | **344 文件 / 2 个 DB / 230 i18n key / 39 CSS class，且会主动降低清晰度**（`CanvasConductor` 撞车 + 摧毁 i18n 里 finite-workspace vs infinite-canvas 的区分）。见 `09-conductor-rename-assessment.md` |
+| **删除 `TaskStore.claim/block/unassignTeammate`** | 完整、已测试、已接线，只是暂无生产调用者 —— 可能是"差一个开关"的功能 |
+| **删除 `legacy-import.ts`** | 它是唯一能读 plan-328 之前用户数据的组件，是**复活舱**而非死代码 |
+| 合并 `policy.ts` 与 `allowedRoots.ts` 的 path 检查 | 它们实现**不同结果**（问用户 vs 拒绝），合并改的是权限 UX 不只是代码量 |
+| `zod` 作为 protocol 包运行时依赖 | 类型才是事实来源；JSON Schema 在测试期生成 |
+| 改 `CheckpointBatcher` 为持久化 | **← 相反：这个应该做，成本最低收益最高**（§3.9） |
 
 ---
 
@@ -760,18 +1044,40 @@ plan 583 的分支 `.claude/worktrees/browser-capability-split` 已建 `packages
 
 | 序 | 动作 | 成本 | 收益 | 依据 |
 |---|---|---|---|---|
-| 1 | **CheckpointBatcher 落盘** | 极低 | 高 | §1.12 现在只打日志，崩溃即丢 |
-| 2 | **统一两套 escape check** | 低 | 高（安全） | §3.2 realpath vs 词法不一致 |
-| 3 | **M4 conductor 解耦** | 低 | 高 | 删整段 build hack |
+| 0 | **conductor 4 行文案修正** | 极低 | 中 | `09` §7.2 —— 用户可见的 zh/en + zh 内部劈裂只差 4 行 |
+| 1 | **CheckpointBatcher 落盘** | 极低 | 高 | §3.9 现在只打日志，崩溃即丢 |
+| 1.5 | **删 2 个死文件** | 极低 | 中 | `08` §6：`session/permission-resolver.ts`（import 了从不调用）、`modes/workflow/trigger.ts`（TEST-ONLY） |
+| 2 | **统一 permission 动作词汇 + 单一 `expiresAt` 时钟** | 低 | 高（正确性） | `07` §0.3 —— 3 套不兼容词汇 + 2 个时钟；**取代原"统一 escape check"**（08 §4 证明那是分层不是重复） |
+| 2.5 | **`architecture-check.mjs` + 基线自检** | 低 | 高（解锁后续所有治理） | `07` §16 M0 —— 没有闸门，"不新增边"无法强制 |
+| 3 | **M4 conductor 解耦** | 低 | 高 | 删整段 build hack；**并在此 PR 内做 conductor 重命名的步骤 1–6**（`09` §7.3） |
 | 4 | **C1 解循环 SCC** | 中 | 高（解锁 M5） | 18 SCC，最大 42 文件 |
+| 4.5 | **建 `packages/agent-protocol` 空壳 + 14 条 drift test** | 低 | 高（解锁 harness） | `07` §16 M1 —— 先立闸门再搬代码，避免 grok `sampling-types` 式失败 |
 | 5 | `session_goals` 加 `goal_id`（S1） | 中 | 中高 | `UNIQUE(session_id)` 是硬天花板 |
 | 6 | `runs` 表 + 锁按 run（`run_checkpoints` 同批） | 中 | 中高 | §1.4 runId 是临时 UUID |
-| 7 | 合并 automation 两栈 | 中高 | 中高 | §1.7 |
-| 8 | 内存 `TaskRecord` → SQLite（S3） | 中 | 中 | §1.6 跨重启丢失 |
-| 9 | 建 `packages/workspace`（仅 roots+policy） | 中 | 中高 | §3.2 |
-| 10 | wire-level mock provider → `evals/` | 中 | 高 | §4.3 当前无法离线 eval |
-| 11 | `agent-control-plane` 包 | 高 | 中 | **必须在 7、8 之后** |
+| 7 | 合并 automation 两栈 | 中高 | 中高 | §1.7 —— **但先删 `trigger.ts`**（见 1.5） |
+| 8 | 内存 `TaskRecord` → SQLite（S3） | 中 | 中 | §1.6 #3 跨重启丢失。**注意 #3/#4 是执行控制层，不是持久层重复**（`08` §1.3） |
+| 9 | **Control Plane 内收敛 `workspace/`**（roots+cwd+accessPolicy 解析） | 中 | 中高 | §3.2 —— 零路径改写、零新包；把 policy 字段从 transport 里拆出来，关闭 realpath/词法语义分歧 |
+| 10 | wire-level mock provider → `evals/` | 中 | 高 | §4.3 当前无法离线 eval。**依赖 4.5 的 fixtures.ts** |
+| 11 | `packages/control-plane` 提拔 | 高 | 中 | **必须在 7、8 之后，且需第二个 host** |
 | 12 | S4（sessions 瘦身） | 很高 | 中 | 最后做 |
+| 13 | `src + electron → apps/desktop` 搬移 | 很高 | 中 | **335 处路径改写**，见 §9.1 |
+| — | conductor i18n/CSS/DB 重命名（步骤 7–9） | 高 | **≈0** | `09` §7.3 —— **没有用户可见理由就不做**；装饰性改名不值得两个数据库的迁移 |
+
+### 9.1 搬移 `apps/desktop` 的真实成本（修正一个常见假设）
+
+**"纯移动"是不成立的。** 实测：
+
+| 边 | 数量 | 移动后 | 性质 |
+|---|---|---|---|
+| `electron → src` | 57 | 深度 +2，两侧同搬 | 机械改写，相对关系可保持 |
+| `electron → packages/*` | **161** | 深度 +4 | **必须逐条改写**，125 条指向 `packages/agent` |
+| deep import | 117 | 绕过 `exports`，不受影响但需一并处理 | 机械 |
+
+合计 **约 335 处路径改写** + `tsconfig`/`vite.config`/esbuild 4 个 entry + `electron-builder.yml`。
+
+**结论**：这是一个独立的高风险阶段，**不应该排在早期**。
+早期阶段（Control Plane 内聚、checkpoint 落盘、解 SCC）**零路径改写**，
+先做它们能立刻拿到 10/5 的成功指标，且 master 始终可运行。
 
 ---
 
@@ -788,6 +1094,10 @@ plan 583 的分支 `.claude/worktrees/browser-capability-split` 已建 `packages
 2. **统一两套路径逃逸检查** —— 现在 realpath 与词法并存，是安全不一致。
 3. **解 wake ↔ automation 的循环** —— 否则 control plane 抽出来只是把循环搬家。
 
-反过来，**最该克制的**是不要建 `PersistentAgent`、`WorktreeAllocator`、Cloud 隔离
-—— 这三个都缺"至少两个真实代码位置重复承担"的证据。
+反过来，**最该克制的**是不要建 `packages/workspace`、`PersistentAgent`、
+`WorktreeAllocator`、Cloud 隔离
+—— 这四个都缺"至少两个真实代码位置重复承担"的证据。
+Workspace 的重复是真的，但它收敛的**目的地是 Control Plane 内部的一个目录**，
+不是一个新 package：它的价值在于边界方向，而方向由 `agent-protocol` 的
+`WorkspaceSnapshot` 只读契约 + materialize 边界（§6.1）保证，与目录层级无关。
 按 `AGENTS.md` 的原则：**证据不足时，只定义 contract 与术语，不建包。**
