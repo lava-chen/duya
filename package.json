@@ -43,7 +43,7 @@
     "electron:pack:linux": "npm run electron:build && electron-builder --linux --config electron-builder.yml",
     "typecheck": "npm run typecheck:web",
     "typecheck:web": "npm run build:agent && tsc --noEmit",
-    "typecheck:electron": "node scripts/typecheck-electron-gate.mjs",
+    "typecheck:electron": "npm run build:voice && node scripts/typecheck-electron-gate.mjs",
     "typecheck:electron:baseline": "node scripts/typecheck-electron-gate.mjs --write",
     "typecheck:agent": "npm run build:cli && npm run -w @duya/agent typecheck",
     "typecheck:cli": "npm run -w @duya/cli typecheck",
