@@ -35,6 +35,7 @@ import {
   DEFAULT_MAX_WEBVIEW_SESSIONS,
 } from './webview-bridge';
 import { startWebviewMemoryWatchdog, stopWebviewMemoryWatchdog } from './webview-memory';
+import { decideExtensionTrust } from './extension-trust';
 
 const DEFAULT_DAEMON_PORT = 19825;
 const PORT = parseInt(process.env.DUYA_DAEMON_PORT ?? String(DEFAULT_DAEMON_PORT), 10);
@@ -62,6 +63,13 @@ interface PendingExtensionApprovalInternal {
   ws: WebSocket;
   connectionState: ExtensionConnectionState;
   extensionId: string | null;
+  /**
+   * Plan 583 / ISS-18: the id that is actually AUTHORISED if the user approves.
+   * Never the id the connection claimed for itself — see the `trustExtensionId`
+   * derivation in the `hello` handler. A request with no `trustedExtensionId`
+   * can be shown but not approved.
+   */
+  trustedExtensionId: string | null;
   extensionName: string;
   extensionVersion: string | null;
   requestedAt: number;
@@ -495,6 +503,23 @@ function setupWebSocket(server: ReturnType<typeof createServer>): void {
             : null;
           const resolvedExtensionId = extId ?? helloExtensionId;
 
+          // Plan 583 / ISS-18: the trust rule lives in `decideExtensionTrust`
+          // so it is stated (and tested) once. Summary: authorisation uses
+          // ONLY the `chrome-extension://<id>` origin, which the browser sets
+          // and a client cannot forge. The id in `hello` is attacker-controlled
+          // — any local process, or any page with a `null` origin, can claim
+          // the published bridge id — so it may be displayed but never
+          // allowed. An empty allowlist means nothing is trusted yet, not
+          // "trust the first caller".
+          const trust = decideExtensionTrust({
+            originExtensionId: extId,
+            claimedExtensionId: helloExtensionId,
+            allowedExtensionIds,
+          });
+          if (trust.rejection === 'untrusted_origin') {
+            log('warn', `Extension claimed id "${helloExtensionId}" without a chrome-extension origin — treating as untrusted`);
+          }
+
           log('info', `Received hello from extension: name="${receivedName}", version="${receivedVersion}", id="${resolvedExtensionId ?? 'none'}", raw=${rawMsg.slice(0, 200)}`);
 
           // Verify extension name - must match exactly
@@ -505,10 +530,7 @@ function setupWebSocket(server: ReturnType<typeof createServer>): void {
             return;
           }
 
-          const requiresApproval =
-            allowedExtensionIds.length > 0 &&
-            resolvedExtensionId !== null &&
-            !allowedExtensionIds.includes(resolvedExtensionId);
+          const requiresApproval = !trust.trusted;
 
           if (requiresApproval) {
             if (pendingExtensionApproval?.ws && pendingExtensionApproval.ws !== ws) {
@@ -517,12 +539,13 @@ function setupWebSocket(server: ReturnType<typeof createServer>): void {
             pendingExtensionApproval = {
               ws,
               connectionState,
-              extensionId: resolvedExtensionId,
+              extensionId: trust.displayExtensionId,
+              trustedExtensionId: trust.trustedExtensionId,
               extensionName: receivedName,
               extensionVersion: receivedVersion,
               requestedAt: Date.now(),
             };
-            log('warn', `Extension approval required for unknown ID: ${resolvedExtensionId}`);
+            log('warn', `Extension approval required: reason=${trust.rejection} id=${trust.displayExtensionId ?? 'none'}`);
             try { ws.send(JSON.stringify({ type: 'hello_ack', ok: false, reason: 'pending_approval', extensionId: resolvedExtensionId })); } catch {}
             return;
           }
@@ -534,14 +557,6 @@ function setupWebSocket(server: ReturnType<typeof createServer>): void {
             receivedVersion,
             resolvedExtensionId,
           );
-
-          if (resolvedExtensionId && !allowedExtensionIds.includes(resolvedExtensionId)) {
-            allowedExtensionIds.push(resolvedExtensionId);
-            log('info', `Added extension ID to allowed list: ${resolvedExtensionId}`);
-            if (onAutoApprovedExtensionId) {
-              onAutoApprovedExtensionId(resolvedExtensionId);
-            }
-          }
 
           try { ws.send(JSON.stringify({ type: 'hello_ack', ok: true })); } catch {}
           // Push runtime config (e.g. max agent pages) once the extension is
@@ -905,16 +920,27 @@ export function approvePendingExtensionApproval(): { success: boolean; extension
   }
 
   const pendingApproval = pendingExtensionApproval;
-  const pendingId = pendingApproval.extensionId;
+  // Plan 583 / ISS-18: approve the id the ORIGIN proved, never the id the
+  // socket asked for. A connection that could not present a
+  // `chrome-extension://` origin is shown for transparency but cannot be
+  // granted the browser automation channel.
+  const pendingId = pendingApproval.trustedExtensionId;
 
   if (!pendingId) {
-    pendingApproval.ws.close(1008, 'Cannot approve extension without ID');
+    pendingApproval.ws.close(1008, 'Cannot approve extension without a verified chrome-extension origin');
     pendingExtensionApproval = null;
-    return { success: false, error: 'Pending extension has no ID' };
+    return { success: false, error: 'Pending extension has no trusted (origin-derived) ID' };
   }
 
   if (!allowedExtensionIds.includes(pendingId)) {
     allowedExtensionIds.push(pendingId);
+  }
+
+  // Persist the user's decision. Plan 583 / ISS-18: this used to fire from the
+  // connect path, which is what made a self-approving socket durable. It now
+  // runs only on an explicit approve.
+  if (onAutoApprovedExtensionId) {
+    onAutoApprovedExtensionId(pendingId);
   }
 
   setVerifiedExtensionConnection(
