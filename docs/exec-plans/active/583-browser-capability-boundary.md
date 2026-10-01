@@ -723,6 +723,86 @@ G5 的答案是「按插件持久 + 展示实际内容供知情同意」。MCP �
 要加 plugin 作用域就是改这张表，属于产品决定（装插件是否隐含信任其工具），
 **不是**能顺手接上的。所以留在这里等尺度。
 
+#### 阻断性发现：`node:vm` 不是安全边界（2026-10-01 三轮实测）
+
+给「方案 C：plugin 在宿主进程内跑代码」找隔离原语时，结论是**这个隔离不存在**，而且是
+结构性的。三轮实测都指向同一句：**Node 的 `vm` 只要注入了宿主 realm 的对象，就不可能
+是安全边界**。
+
+实测对象是 dwf 的真实形状（`dwf/runtime.ts:836`）——
+`vm.createContext({ JSON, Math, URL, TextEncoder, TextDecoder, console, wf, args })`，
+**没有传任何 `codeGeneration` 选项**，注入的全是宿主 realm 对象。
+
+| 轮次 | 做了什么 | 结果 |
+|---|---|---|
+| 1 | 复刻上面的 context 形状，跑 `JSON.constructor.constructor('return process')()` | **拿到真实 `process`**：`pid` 可读、`cwd()` 返回工作目录 |
+| 2 | 补 `codeGeneration: { strings: false, wasm: false }` | **仍然逃逸**。注入的是宿主 realm 对象，取到的是宿主 `Function`，绕过 context 自己的设置；只有把内建对象改成在 context 内构造才被 block |
+| 3 | 内建对象全部 context 内构造 + 代码生成已关，再逐个试注入物 | 只要注入**任何一个**宿主 realm 对象就仍可逃逸（见下表） |
+
+第 3 轮逐项（`x.constructor.constructor` 即取到宿主 `Function` 构造器）：
+
+| 注入物 | 结果 |
+|---|---|
+| `wf.tool`（宿主桥函数） | **ESCAPED** |
+| `wf.log` | **ESCAPED** |
+| `console.log` | **ESCAPED** |
+| `args` | **ESCAPED** |
+
+而 dwf 的**整个设计**就是把宿主原语桥 `wf` 注入进去。所以结论直接落地：
+**保留桥 = 不是沙箱；去掉桥 = 没有这个功能。** 唯一的真边界是进程边界。
+
+**现有的「沙箱」测试给的是假安全感**：`__tests__/dwf-runtime.test.ts:113` 断言
+`typeof process / require / fetch / setTimeout` 全为 `undefined`。上面三轮证明逃逸成立时
+这个测试**照样绿** —— 它检查的是**环境全局里有没有这个名字**，不是**能不能拿到**。
+vm 的全部问题就在这个区别上。
+
+#### 由此照亮的现存风险：克隆一个仓库就可能执行任意代码
+
+这不是新引入的，是 dwf 一直在那里的行为，被上面的实测照亮了。
+
+| 环节 | 事实 |
+|---|---|
+| 枚举 | `SAVED_WORKFLOW_PROJECT_DIR = '.duya/workflows'`（`dwf/contracts.ts:25`）是**相对会话工作目录**的；`SavedWorkflowStore.list(cwd)`（`dwf/store.ts:171`）直接枚举，**无安装、无来源校验** |
+| 风险扫描 | `scanDwfRisk`（`dwf/planner-dwf.ts:54`）是**纯正则**，只扫 `wf.tool("...")` 字面量 + 有没有 `wf.publish(` / `wf.approve(`。**三轮实测的逃逸路径一个都不用** → 判为**零风险、零告警** |
+| 确认门 | `manager.ts:191`：`if (plan.highRiskNodes.length === 0) return this.launch(...)` → 零高风险节点**直接执行，不弹确认窗** |
+
+合起来：**克隆一个仓库 → 触发 / 点击其中自带的 workflow → 不弹窗 → 任意代码以用户权限执行。**
+
+影响面按实测如实标：dwf 脚本跑在 **agent worker 进程**内
+（`process/agent-process-entry.ts:4385-4392` 注释自述 "runs in-process"），逃逸拿到的是该
+worker 的真实 `process` —— 同一 OS 用户、完整文件系统访问、该进程的环境变量。
+所以**「搬去子进程」对这个漏洞不是修复**：它现在已经在子进程里了，而子进程对本地内容
+来说没有安全边界可言（进程隔离挡的是崩溃，不是恶意代码要你的文件和凭据）。
+
+**要真修，方向只有一个：不要执行没经用户认可的内容。** 档位见本节末尾待拍板。
+
+#### 外部 harness 对照：行业实际做法是「不在进程内跑第三方代码」（11 个 clone）
+
+| 形态 | 代表 | 隔离 |
+|---|---|---|
+| **进程内、零隔离** | openclaw（jiti/require，`loader.ts:636`）、pi（`loader.ts:556`）、minimax-code（vendored pi）、hermes-agent（`importlib`，`plugin_loader.py:74`） | **无** |
+| **声明式 / 子进程** | codex、claude-code-haha、ZCode、OpenHarness | MCP 子进程 / 声明式 hook |
+
+**两条对早先结论的更正**：
+
+1. openclaw 的 `createGuardedPluginRegistrationApi`（`loader.ts:596-628`）**不是**能力包装，
+   只是**生命周期栅栏**（register 关闭后 API 返回 `undefined`）。别把它当隔离读。
+2. 本 plan §5 早先写的 openclaw「执行前声明闸门」**不成立**：`contracts.tools` 只在
+   `contracts/registry.ts:101` 用于**过滤哪些插件贡献 provider**，**没有**运行期
+   「未声明即拒绝」的校验。
+
+还有一个三家共同的结构性事实：**跑进程内代码的 harness 全部在加载期就执行 plugin 代码，
+早于任何逐次调用的同意机制** —— 同意门在加载期形同虚设。
+
+对照之下，duya 已有的 MCP 子进程模型（进程边界 + `mcp/security.ts:buildSafeEnv` 环境
+白名单 + `sanitizeSecrets` 凭据脱敏 + `decideMcpSource` 逐工具门 + 超时）是**严格更好的
+隔离叙事**，而 plugin **已经能通过 `mcp/servers.json` 走到它**（今天零实例，见上节）。
+
+**对方案 C 的直接影响**：需要执行第三方代码的场景，MCP 通道已经覆盖了。既然 `vm` 边界
+不成立，「plugin 在宿主进程内跑代码」要么放弃，要么把执行整体搬到子进程 —— 后者与 dwf
+的教训叠在一起就是同一个问题：**本地内容一旦被当成代码执行，隔离原语救不了你，只有
+「谁来批准执行」能救。**
+
 #### 已有的冲突/优先级策略地图（2026-10-01 摸清，比三个参照物都好）
 
 | 能力种类 | 现有策略 | 证据 |
@@ -735,6 +815,35 @@ G5 的答案是「按插件持久 + 展示实际内容供知情同意」。MCP �
 skills 那套的关键设计值得单独指出：**「用户改过的 bundled skill 被提升到 user 档（3），
 确保 plugin 无法遮蔽它」**——即「用户投入过的能力，优先级高于插件」。
 openclaw 要用户先手动禁用内置，pi 静默遮蔽，duya 这套两者都不是。
+
+#### 待你拍板：两个边界问题（我不自己定）
+
+**问题一：dwf 修复档位。** 实测已证明「vm 是沙箱」为假，于是缺的不是隔离而是**授权**。
+三档按代价从小到大：
+
+| 档 | 做什么 | 代价 | 剩什么没修 |
+|---|---|---|---|
+| **(b)** 扫描器认不出的脚本一律 `awaiting_confirm` | 纯 fail-closed，复用现有 `awaiting_confirm` 机制，**不需新 UI**、不改执行路径 | 几乎所有 workflow 都会弹窗（因为纯正则本来就识别不出）→ 功能可用性下降明显 | 承认了「运行它是用户的决定」，但用户仍可能随手点「允许」 |
+| **(c)** 停止自动枚举 project-scope workflow（只保留 `~/.duya/workflows`） | 改动最小：克隆的仓库不再自带可执行 workflow | 失去「仓库自带工作流」这个产品特性 | 覆盖主路径；若将来重新开启，必须先解决授权 |
+| **(a)** 把 dwf 执行迁到子进程 | —— | —— | **不解决本问题**（实测：它已经在 worker 子进程里了；进程边界挡崩溃不挡恶意代码）。除非同时给子进程套 OS 级沙箱（Windows Job Object / 容器 / seccomp），那是另一个量级的工程 |
+
+我的读法：**(c) 是唯一能真正断掉这条链的最小改动**，而 (b) 是它的补刀 —— 因为
+`~/.duya/workflows` 是用户自己写的，放行合理，但 project scope 来自**克隆来的内容**。
+(a) 在当前形态下是**假修复**，不该单独选；若要 (a)，必须连 OS 级沙箱一起做，那应该单开
+plan，不属于 583。
+
+**问题二：方案 C 的边界。** 实测把选项收窄成三个：
+
+1. **只做声明式贡献**（skill / MCP server / hook，不跑进程内代码）—— 行业实际做法，
+   duya 的 MCP 通道已就位，零新隔离面。
+2. **允许进程内执行，但要求显式同意**（G5 那套同意门扩展到「加载前」）。**实测表明这不够**：
+   三个跑进程内的 harness 全在加载期就执行代码，早于任何逐次同意。
+3. **允许进程内执行，且接受它不是沙箱**（只做能力裁剪 + 审计）—— 诚实的名字叫
+   「用户认可的执行」，不叫沙箱。
+
+需要你定的是：走 1，还是走 3，以及若走 3，暴露给 plugin 的 API 面收多窄。
+**我不会自己拍这个板** —— 它决定了第三方代码将来在 duya 里的权限天花板。
+
 
 
 
@@ -837,5 +946,26 @@ openclaw 要用户先手动禁用内置，pi 静默遮蔽，duya 这套两者都
   `getCapabilities()` 唯一调用点是只读 IPC 查询（`plugin-handlers.ts:630`），
   `meetsMinimumLevel` 零调用方。已复核（两个独立来源 + 本人 grep 复核）。
   按 §7 Phase 4 的建议，应先立独立 plan 接线信任层，再谈进程内执行第三方代码。
+- 2026-10-01：**方案 C 的隔离前提被实测推翻**（三轮，见 §7「阻断性发现」）。dwf 的
+  `vm` 只要注入宿主 realm 对象即可逃逸，第三轮证明「内建对象全在 context 内构造 +
+  代码生成已关」都不够——注入 `wf.tool` / `wf.log` / `console.log` / `args` 任一即可。
+  故「找一套能安全化 `node:vm` 的配置」这条路**不存在**，不是调参问题。
+  由此照亮一条现存风险链（`.duya/workflows` 相对会话 cwd 枚举 + 纯正则 `scanDwfRisk`
+  判零风险 + `manager.ts:191` 零高风险直接 launch）→ 克隆仓库可能免确认执行任意代码。
+  **未修，等你拍板档位**（§7 末尾）。
+- 2026-10-01：**一处需要修正自己上一轮判断的地方**。我先前把「唯一的真边界是进程边界」
+  当成 dwf 漏洞的修复方向——**不成立**。dwf 脚本本来就跑在 agent worker 子进程内
+  （`agent-process-entry.ts:4385-4392` 自述 in-process），逃逸后拿到的就是同 OS 用户的
+  完整文件系统与该进程环境变量。进程隔离挡的是崩溃，不是本地内容里的恶意代码。
+  要真修只能从**授权**入手（谁来批准执行），不是从**隔离**入手。这条同时决定了
+  方案 C 不能靠「搬去子进程」就认为安全。
+- 2026-10-01：外部 harness 对照的**两条更正**。(a) openclaw 的
+  `createGuardedPluginRegistrationApi`（`loader.ts:596-628`）是**生命周期栅栏**
+  （register 关闭后 API 返回 `undefined`），不是能力包装 / 隔离；
+  (b) §5 早先称 `contracts.tools` 是「执行前声明闸门」——**不成立**，它只在
+  `contracts/registry.ts:101` 用于过滤哪些插件贡献 provider，没有运行期「未声明即拒绝」
+  校验。三个跑进程内代码的 harness（openclaw / pi / hermes-agent）**全部在加载期就执行
+  plugin 代码**，早于任何逐次调用的同意机制 —— 故「加载前加同意门」也不构成隔离。
+
 
 
