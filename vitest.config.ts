@@ -5,6 +5,9 @@ import { fileURLToPath } from 'url'
 // Resolve workspace plugin-core from THIS checkout (worktree-safe;
 // the node_modules junction pins the primary checkout).
 const PLUGIN_CORE_ROOT = fileURLToPath(new URL('./packages/plugin-core', import.meta.url))
+// Same reason: the protocol package must be tested against THIS worktree's
+// source, never the primary checkout's dist.
+const AGENT_PROTOCOL_SRC = fileURLToPath(new URL('./packages/agent-protocol/src', import.meta.url))
 
 export default defineConfig({
   test: {
@@ -18,6 +21,7 @@ export default defineConfig({
       'packages/*/tests/**/*.test.ts',
       'packages/*/tests/**/*.spec.ts',
       'packages/ai/test/**/*.test.ts',
+      'packages/agent-protocol/test/**/*.test.ts',
       'packages/gateway/src/**/*.test.ts',
       'packages/agent/src/**/*.test.ts',
       'packages/cli/src/**/*.test.ts',
@@ -58,6 +62,11 @@ export default defineConfig({
       // Resolve workspace plugin-core from THIS checkout (worktree-safe;
       // the node_modules junction pins the primary checkout).
       { find: '@duya/plugin-core', replacement: PLUGIN_CORE_ROOT },
+      // Subpaths first: the bare name would otherwise swallow
+      // `@duya/agent-protocol/testing` and `/legacy`.
+      { find: /^@duya\/agent-protocol\/testing$/, replacement: AGENT_PROTOCOL_SRC + '/testing/fixtures.ts' },
+      { find: /^@duya\/agent-protocol\/legacy$/, replacement: AGENT_PROTOCOL_SRC + '/legacy/sse-event.ts' },
+      { find: /^@duya\/agent-protocol$/, replacement: AGENT_PROTOCOL_SRC + '/index.ts' },
       // Mirror vite.config.ts aliases so vitest can resolve
       // `@duya/conductor/renderer/*` to the package's source tree. Without
       // these the test environment errors out when any imported file

@@ -20,7 +20,10 @@
 | 04 | [Agent Harness 设计](04-agent-harness-design.md) | Run API / 事件 / 权限 / 取消恢复 / evaluator 怎么定义？ |
 | 05 | [架构治理](05-architecture-governance.md) | 怎么强制执行，而不是靠自觉？ |
 | 06 | [迁移方案](06-migration-plan.md) | 按什么顺序做？每步怎么验收、怎么回滚？ |
+| 07 | [`agent-protocol` 接口规格](07-agent-protocol-spec.md) | **protocol 到底怎么规定？** 文件布局、闭合事件注册表、三种 transport、错误分类、14 条 drift test、M0–M11 迁移顺序 |
+| 10 | [参考实现对比](10-reference-comparison.md) | **codex / grok / pi / ZCode 哪些该抄？** 16 条决定 + 写完代码后被自己推翻的 3 条 |
 | 10 | [技术债台账](10-tech-debt-tracker.md) | 目标状态与仓库实际状态之间还差什么？谁来还？ |
+| 11 | [protocol 前瞻评审](11-protocol-forward-review.md) | 这套协议接下来会往哪里坏掉？ |
 
 ---
 
