@@ -1,4 +1,4 @@
-﻿export type ResearchPanelStage =
+export type ResearchPanelStage =
   | 'idle'
   | 'planning'
   | 'awaiting_plan_approval'
