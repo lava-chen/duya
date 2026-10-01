@@ -2,6 +2,33 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CompactionManager, createCompactionManager } from '../../../src/compact/CompactionManager.js';
 import type { Message } from '../../../src/types.js';
 
+/**
+ * A summary the degeneracy guard will actually accept.
+ *
+ * Plan 523 added `isDegenerateSummary`: new summarizer output is rejected
+ * unless it carries at least MIN_SUMMARY_CHARS and at least three distinct
+ * numbered section headings, and the retry ladder then throws
+ * `SummaryDegenerateError` once every attempt degenerates. The stubs in
+ * this file all predate that guard -- `'memory flush '.repeat(100)` and
+ * friends are long but structurally empty -- so every compaction here was
+ * failing inside the strategy before it reached the assertion it was
+ * written for. This helper returns the 9-section shape the prompt asks
+ * for, which is the same fixture SessionMemoryCompactStrategy.test.ts uses.
+ */
+function validSummary(extra = ''): string {
+  return (
+    '1. Primary Request and Intent: Finish the audit remediation and land the PR stack.\n\n' +
+    '2. Key Technical Concepts: HTTP+SSE three-tier split, IPC invoke/handle, MessagePort channels.\n\n' +
+    '3. Files and Code Sections: packages/agent/src/compact/CompactionManager.ts — the compaction facade.\n\n' +
+    '4. Errors and Fixes: Fixed a preflight guard that ran after it had already dereferenced the conversation.\n\n' +
+    '5. Problem Solving: Resolved cross-compaction state leakage by keeping the prefire seed on the manager.\n\n' +
+    '6. All User Messages: 修复审计发现的问题并交付分轨 PR。\n\n' +
+    `7. Pending and Next Steps: continue the remaining tracks.${extra}\n\n` +
+    '8. Current Work: consolidating the test-debt remediation.\n\n' +
+    '9. Optional Next Step: open the next stacked PR.\n'
+  );
+}
+
 describe('CompactionManager', () => {
   let manager: CompactionManager;
 
@@ -24,7 +51,7 @@ describe('CompactionManager', () => {
     it('should create manager with default config', () => {
       const m = createCompactionManager();
       expect(m).toBeDefined();
-      expect(m.getAvailableStrategies()).toEqual(['session_memory']);
+      expect(m.getMaxTokens()).toBeGreaterThan(0);
     });
 
     it('should create manager with custom config', () => {
@@ -36,10 +63,12 @@ describe('CompactionManager', () => {
       expect(m).toBeDefined();
     });
 
-    it('has a single grok-aligned strategy (no micro/snip/reactive)', () => {
-      const m = createCompactionManager();
-      expect(m.getAvailableStrategies()).toEqual(['session_memory']);
-    });
+    /**
+     * `getAvailableStrategies()` is gone. Strategy enumeration was dropped
+     * when the grok-aligned single strategy landed; the surviving way to
+     * assert that micro/snip/reactive are gone is the fallback behaviour,
+     * covered by the `compact` case below.
+     */
   });
 
   describe('getStats', () => {
@@ -47,14 +76,6 @@ describe('CompactionManager', () => {
       const stats = manager.getStats();
       expect(stats.totalTokens).toBe(0);
       expect(stats.maxTokens).toBe(100000);
-    });
-  });
-
-  describe('updateContextTokens', () => {
-    it('should update context token count', () => {
-      manager.updateContextTokens([]);
-      const stats = manager.getStats();
-      expect(stats.totalTokens).toBe(0);
     });
   });
 
@@ -97,16 +118,14 @@ describe('CompactionManager', () => {
     });
   });
 
-  describe('circuit breaker', () => {
-    it('should not trigger initially', () => {
-      expect(manager.isCircuitBreakerTriggered()).toBe(false);
-    });
-
-    it('should reset circuit breaker', () => {
-      manager.resetCircuitBreaker();
-      expect(manager.isCircuitBreakerTriggered()).toBe(false);
-    });
-  });
+  /**
+   * The circuit breaker is gone, replaced by the `Suppression` machine
+   * (`isSuppressed` / `suppress` / `trySuppress` / `clearOnTurnStart` /
+   * `clearOnBudgetChange`). Its behaviour — including the "not triggered
+   * initially" case and the turn-scoped self-heal — is covered in
+   * `src/compact/__tests__/CompactionManager.loop-guards.test.ts` under
+   * "failure suppression (flat)".
+   */
 
   describe('event handlers', () => {
     it('should add and remove event handlers', () => {
@@ -155,66 +174,22 @@ describe('CompactionManager', () => {
     })
   })
 
-  describe('prefire (two-pass)', () => {
-    const manyMessages = (n: number): Message[] =>
-      Array.from({ length: n }, (_, i) =>
-        createMessage(i % 2 === 0 ? 'user' : 'assistant', `msg ${i} `.repeat(20)),
-      );
-
-    it('shouldPrefire returns false below the prefire threshold', () => {
-      manager.updateContextTokens(manyMessages(2));
-      expect(manager.shouldPrefire(manyMessages(2))).toBe(false);
-    });
-
-    it('shouldPrefire returns false above the compaction threshold', () => {
-      // Force usage into the compact band via observedPromptTokens anchor.
-      manager.setObservedPromptTokens(90000);
-      expect(manager.shouldPrefire(manyMessages(12))).toBe(false);
-    });
-
-    it('shouldPrefire returns true in the prefire band and no cache hit', async () => {
-      const longSummary = 'prefire summary '.repeat(40);
-      const summarizer = vi.fn(async () => longSummary);
-      manager.setSummarizer(summarizer);
-      const messages = manyMessages(12);
-      manager.setObservedPromptTokens(70000);
-      expect(manager.shouldPrefire(messages)).toBe(true);
-      const summary = await manager.prefire(messages);
-      expect(summary).toBe(longSummary.trim());
-      // Cache satisfied — no longer triggers.
-      expect(manager.shouldPrefire(messages)).toBe(false);
-    });
-
-    it('prefire returns empty string when no summarizer is set', async () => {
-      const messages = manyMessages(12);
-      manager.setObservedPromptTokens(70000);
-      expect(await manager.prefire(messages)).toBe('');
-    });
-
-    it('cached prefire summary seeds the strategy on the next compaction', async () => {
-      const longSummary = 'seeded prefire summary '.repeat(40);
-      const summarizer = vi.fn(async () => longSummary);
-      manager.setSummarizer(summarizer);
-      const messages = [
-        ...manyMessages(10),
-        createMessage('user', 'final user turn'),
-      ];
-      const summary = await manager.prefire(messages);
-      expect(summary).toBe(longSummary.trim());
-      // getPrefireSummary returns the cached value for the same content.
-      expect(manager.getPrefireSummary(messages)).toBe(longSummary.trim());
-      // A different content set invalidates the cache.
-      expect(manager.getPrefireSummary(manyMessages(3))).toBe('');
-    });
-  });
+  /**
+   * `shouldPrefire` / `prefire` / `getPrefireSummary` are gone. Prefire is
+   * now a background pass: `maybeStartPrefire` returns void and kicks the
+   * pass off, `hasFreshPrefire` reports availability, and
+   * `takePrefireSummary` awaits and consumes. The state machine these five
+   * cases used to reach into — threshold gating, the in-flight guard, the
+   * no-summarizer case, consume-and-clear, and cache invalidation on a
+   * different content set — is covered directly in
+   * `src/compact/__tests__/BackgroundPrefire.test.ts`, which asserts each
+   * of those against the class that now owns them.
+   */
 
   describe('memory flush', () => {
     it('invokes the configured sink after compaction with the summary', async () => {
       const flush = vi.fn(async () => {});
-      const summarizer = vi.fn(async () => {
-        // A long, non-degenerate summary so the strategy stores it.
-        return 'memory flush '.repeat(100);
-      });
+      const summarizer = vi.fn(async () => validSummary());
       manager.setMemoryFlushFn(flush);
       manager.setSummarizer(summarizer);
 
@@ -227,15 +202,17 @@ describe('CompactionManager', () => {
       expect(arg.length).toBeGreaterThan(0);
     });
 
-    it('does not invoke the sink when none is configured', async () => {
-      const summarizer = vi.fn(async () => 'short - degenerate, no summary stored');
+    it('completes without a sink configured', async () => {
+      // Previously this stubbed a degenerate summarizer and asserted
+      // `expect(true).toBe(true)` -- a tautology that could not fail, while
+      // the degenerate output actually made compact() throw. The real
+      // contract is that a missing sink is simply not called.
+      const summarizer = vi.fn(async () => validSummary());
       manager.setSummarizer(summarizer);
       const messages: Message[] = Array.from({ length: 30 }, (_, i) =>
         createMessage(i % 2 === 0 ? 'user' : 'assistant', `turn ${i} ` + 'detail '.repeat(30)),
       );
-      await manager.compact(messages);
-      // No sink → nothing to assert beyond not throwing.
-      expect(true).toBe(true);
+      await expect(manager.compact(messages)).resolves.toBeDefined();
     });
   });
 });
