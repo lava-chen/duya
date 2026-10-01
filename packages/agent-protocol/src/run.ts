@@ -53,10 +53,20 @@ export type CancelReason =
   | 'host_shutdown'
   | 'harness_abort';
 
-export type RunTerminalState = {
-  readonly status: 'completed' | 'cancelled' | 'budget_exhausted' | 'failed';
-  readonly error?: ProtocolErrorInfo;
-};
+/**
+ * How a run ended.
+ *
+ * A discriminated union, not a bag of optionals. With `error?: ProtocolErrorInfo`
+ * on a single object, `failed` without an error and `completed` with one are both
+ * representable, and both are wrong. The failure code is the whole point of
+ * knowing a run failed, so it is not optional on the failure arm and forbidden
+ * on the others.
+ */
+export type RunTerminalState =
+  | { readonly status: 'completed'; readonly stopReason?: StopReason }
+  | { readonly status: 'cancelled'; readonly stopReason?: StopReason }
+  | { readonly status: 'budget_exhausted'; readonly stopReason?: StopReason }
+  | { readonly status: 'failed'; readonly error: ProtocolErrorInfo };
 
 export interface CancelOutcome {
   /** False means the run was already terminal and this call did nothing. */

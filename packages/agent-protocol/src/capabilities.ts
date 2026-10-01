@@ -25,7 +25,6 @@ import type { ErrorCode } from './errors.js';
 import type { ResumeSupport } from './resume.js';
 import type { PermissionAction } from './permission.js';
 import type { EventType } from './events/registry.js';
-import type { ConnectorBinding } from './primitives.js';
 
 export type TransportKind = 'in-process' | 'subprocess' | 'http-sse';
 
@@ -55,10 +54,13 @@ export interface RuntimeCapabilities {
     readonly graceMs: number;
     readonly pause: boolean;
     readonly deterministic: boolean;
-    readonly maxEventBytes: number;
   };
   readonly events: {
-    readonly replayWindow: number;
+    /** Oldest `seq` the runtime can still replay. A resume below this is refused
+     *  — see `ResumeSupport`, which is why this is a seq and not a count. */
+    readonly oldestAvailableSeq: number;
+    /** Highest `seq` minted so far. */
+    readonly latestSeq: number;
     readonly durable: readonly EventType[];
     readonly ephemeral: readonly EventType[];
   };
@@ -67,13 +69,24 @@ export interface RuntimeCapabilities {
     readonly defaultTimeoutMs: number;
     readonly maxTimeoutMs: number;
   };
+  /**
+   * What the runtime CAN do, not what this run IS configured to do.
+   *
+   * Deliberately no `connectionId` anywhere in here. A `ConnectorBinding` names
+   * a specific user's connection, which belongs to the Agent Profile or the
+   * RunManifest; a capability probe runs before any profile is chosen, and
+   * echoing per-user connection ids back to a host is a small information leak
+   * with no upside. What belongs here is the set of connector *providers* the
+   * runtime can speak to.
+   */
   readonly catalog: {
     readonly profiles: readonly string[];
     readonly modes: readonly string[];
     readonly tools: readonly string[];
-    readonly connectors: readonly ConnectorBinding[];
+    readonly connectorProviders: readonly string[];
   };
   readonly transports: readonly TransportKind[];
+  /** The single source of truth for size limits. `run` carries behaviour, not numbers. */
   readonly limits: ProtocolLimits;
   /** Lets a host enumerate what it will actually see, so a mismatch is
    *  diagnosable rather than mysterious. */
@@ -83,7 +96,9 @@ export interface RuntimeCapabilities {
 // ── requirement shape ─────────────────────────────────────────────────────
 
 export interface CapabilityRequirement {
-  readonly needsReplayWindow?: number;
+  /** How many `seq` of replay history the host needs. Checked against the depth
+   *  the runtime advertises, never against an absolute sequence number. */
+  readonly needsReplayDepth?: number;
   readonly needsPause?: boolean;
   readonly needsDeterministic?: boolean;
   readonly needsTurnBoundaryResume?: boolean;
@@ -118,9 +133,12 @@ function unmet(
   const missing: string[] = [];
   const r = capabilities.run;
 
-  if (requirement.needsReplayWindow !== undefined) {
-    if (!capabilities.events.replayWindow || capabilities.events.replayWindow < requirement.needsReplayWindow) {
-      missing.push(`replayWindow>=${requirement.needsReplayWindow}`);
+  if (requirement.needsReplayDepth !== undefined) {
+    // Depth, not a count of seqs: the runtime advertises the range it holds,
+    // so the only meaningful question is how many seqs of history it can serve.
+    const depth = Math.max(0, capabilities.events.latestSeq - capabilities.events.oldestAvailableSeq + 1);
+    if (depth < requirement.needsReplayDepth) {
+      missing.push(`replayDepth>=${requirement.needsReplayDepth}`);
     }
   }
   if (requirement.needsPause && !r.pause) missing.push('pause');
@@ -135,8 +153,8 @@ function unmet(
   if (requirement.needsTransport && !capabilities.transports.includes(requirement.needsTransport)) {
     missing.push(`transports.${requirement.needsTransport}`);
   }
-  if (requirement.needsMaxEventBytes !== undefined && r.maxEventBytes < requirement.needsMaxEventBytes) {
-    missing.push(`maxEventBytes>=${requirement.needsMaxEventBytes}`);
+  if (requirement.needsMaxEventBytes !== undefined && capabilities.limits.maxEventBytes < requirement.needsMaxEventBytes) {
+    missing.push(`limits.maxEventBytes>=${requirement.needsMaxEventBytes}`);
   }
   if (requirement.needsCancel && r.cancel !== requirement.needsCancel) {
     missing.push(`cancel=${requirement.needsCancel}`);

@@ -83,7 +83,7 @@ const FIXTURES = {
   'tool.group_progress': { title: 'fixture group', source: 'test' },
   'tool.timed_out': { toolCallId: 'call-1', toolName: 'Read', elapsedMs: 30_000 },
   'tool.call_completed': {
-    toolUseId: 'call-1',
+    toolCallId: 'call-1',
     content: 'ok',
     isError: false,
     durationMs: 1,

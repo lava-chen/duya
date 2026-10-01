@@ -185,7 +185,7 @@
       "since": "1.0"
     },
     "tool.call_started": {
-      "durability": "volatile",
+      "durability": "durable",
       "category": "tool",
       "since": "1.0"
     },

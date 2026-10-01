@@ -55,6 +55,7 @@ import type {
   PermissionScope,
   PermissionSource,
 } from '../permission.js';
+import type { ProtocolErrorInfo } from '../errors.js';
 
 // ── content blocks ────────────────────────────────────────────────────────
 
@@ -117,7 +118,7 @@ export interface ToolUse {
 
 export interface ToolResult {
   readonly type: 'tool_result';
-  readonly toolUseId: ToolCallId;
+  readonly toolCallId: ToolCallId;
   readonly content: string;
   /** The protocol FORCES this field. Today 1666 stored tool_results have
    *  zero `is_error: true`, because the legacy `tool_use` event merged
@@ -168,8 +169,17 @@ export interface RunCompletedPayload {
   readonly cancelRequested?: boolean;
 }
 
+/**
+ * Terminal run failure.
+ *
+ * Carries a `ProtocolErrorInfo`, not a free-form `{ code, message }`. An
+ * earlier draft used `{ code: string; message: string; details?: unknown }`,
+ * which quietly reopened the taxonomy this package exists to close: every
+ * closed `ErrorCode` in `errors.ts` would have had a second, stringly-typed
+ * escape hatch at exactly the moment a host most needs to branch on it.
+ */
 export interface RunFailedPayload {
-  readonly error: { readonly code: string; readonly message: string; readonly details?: unknown };
+  readonly error: ProtocolErrorInfo;
 }
 
 // ── turn ──────────────────────────────────────────────────────────────────
@@ -242,18 +252,53 @@ export interface AssistantUsagePayload {
   readonly usage: TokenUsage;
 }
 
-/** `mode` was a bare `string` in the legacy SSE union (ai/src/types.ts:379).
- *  Here it is a closed set, so a rename cannot silently change meaning. */
-export type AssistantMode = 'default' | 'plan' | 'research' | 'conductor' | 'goal';
+/**
+ * The agent's behavioural mode — what the `SwitchMode` tool switches between,
+ * and what the renderer shows as the input-box chip.
+ *
+ * The values are the agent's own, verbatim. An earlier draft of this file
+ * invented a third vocabulary (`default | plan | research | conductor | goal`)
+ * by reading the legacy SSE union, where `mode` is only `string` and therefore
+ * carries no information at all. That draft was wrong twice over: it invented
+ * values the runtime never emits, and it mixed in the plan-224 popover
+ * `ModeModifier` vocabulary, which is a different layer entirely and is already
+ * carried by `RunManifest.capabilities.modes`.
+ *
+ * A closed set is worth having, but only once it is pinned to what the runtime
+ * actually produces. Anything else is a rename that silently changes meaning.
+ */
+export const ASSISTANT_MODES = ['general', 'plan', 'explore', 'verify', 'code-review'] as const;
+
+/** One of the agent's behavioural modes. */
+export type AssistantMode = (typeof ASSISTANT_MODES)[number];
 
 export interface AssistantModeChangedPayload {
   readonly mode: AssistantMode;
+  /** Who initiated the switch. The agent switches itself via the mode tool. */
   readonly source: 'agent' | 'user';
   readonly reason?: string;
 }
 
 export type GoalState = 'idle' | 'active' | 'achieved' | 'exhausted' | 'paused';
 
+/** One entry of a goal's audit trail. */
+export interface GoalHistoryEntry {
+  readonly at: EventTimestamp;
+  /** What happened, e.g. `worker_round_complete`, `verification_failed`. */
+  readonly event: string;
+  readonly detail?: string;
+  /** Why it happened, when the reason is not implied by `event`. */
+  readonly reason?: string;
+}
+
+/**
+ * Progress on a long-running goal.
+ *
+ * Every field the worker emits is preserved. A projection that drops fields
+ * looks harmless at the type level and is a silent data loss at runtime: the
+ * UI reads `pauseMessage` to render the pause card and `totalWorkerRounds` for
+ * the turn counter, and neither can be reconstructed from the rest.
+ */
 export interface AssistantGoalUpdatedPayload {
   readonly state: GoalState;
   readonly phase: string;
@@ -263,9 +308,22 @@ export interface AssistantGoalUpdatedPayload {
   readonly consecutiveNotAchieved: number;
   readonly gapsSummary?: string;
   readonly strategyProposal?: string;
+  /** Human-readable explanation shown while the goal is parked. */
+  readonly pauseMessage?: string;
+  /** Machine-readable pause reason; closed catalog, distinct from the message. */
   readonly pauseReason?: string;
+  /** Worker rounds completed toward the objective. */
+  readonly totalWorkerRounds?: number;
+  /** Independent verification rounds run so far. */
+  readonly totalVerifyRounds?: number;
+  /** Wall-clock ms since the goal started. */
+  readonly elapsedMs?: Millis;
+  /** Epoch ms the goal was started. */
+  readonly createdAt?: EventTimestamp;
+  /** Set while the goal is active but parked on a known wait. */
+  readonly executionWait?: 'verification';
   readonly planFile?: string;
-  readonly history?: readonly { readonly at: EventTimestamp; readonly note: string }[];
+  readonly history?: readonly GoalHistoryEntry[];
 }
 
 export interface AssistantStatusPayload {
@@ -274,6 +332,15 @@ export interface AssistantStatusPayload {
 
 // ── tool ──────────────────────────────────────────────────────────────────
 
+/**
+ * A tool invocation the runtime is about to attempt.
+ *
+ * Durable, not volatile. The tool has not produced a side effect yet, but the
+ * *intent* to call it is exactly the fact a recovery needs: without a durable
+ * record, a crash mid-tool leaves no evidence the call was ever made, and a
+ * ledger of side effects has nothing to reconcile against. Durable intent is
+ * the cheap half of that story — the expensive half is `tool.call_completed`.
+ */
 export interface ToolCallStartedPayload {
   readonly toolCallId: ToolCallId;
   readonly toolName: string;
@@ -322,7 +389,10 @@ export interface ToolTimedOutPayload {
  * one must win.
  */
 export interface ToolCallCompletedPayload {
-  readonly toolUseId: ToolCallId;
+  /** Same correlation id as `tool.call_started`. The legacy wire mixed `id`,
+   *  `toolCallId` and `toolUseId` for this one concept; the protocol has one
+   *  name, so a result can never fail to join its invocation. */
+  readonly toolCallId: ToolCallId;
   readonly content: string;
   /** Mandatory here, unlike the legacy event, which dropped it. */
   readonly isError: boolean;
@@ -413,7 +483,7 @@ export interface HookInvokedPayload {
   readonly status: 'ok' | 'error';
   readonly errorMessage?: string;
   readonly toolName?: string;
-  readonly toolUseId?: ToolCallId;
+  readonly toolCallId?: ToolCallId;
 }
 
 // ── diagnostic ────────────────────────────────────────────────────────────

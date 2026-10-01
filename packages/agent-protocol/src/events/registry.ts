@@ -150,7 +150,7 @@ export const EVENT_META = {
   'assistant.goal_updated': { durability: 'durable', category: 'assistant', since: '1.0', description: 'Goal state machine progress.' },
   'assistant.status': { durability: 'volatile', category: 'assistant', since: '1.0', description: 'Human-readable status line for the UI.' },
 
-  'tool.call_started': { durability: 'volatile', category: 'tool', since: '1.0', description: 'Tool invocation began. Split from completion so isError can be recorded.' },
+  'tool.call_started': { durability: 'durable', category: 'tool', since: '1.0', description: 'Tool invocation began. Durable, not volatile: the intent to call is the fact a side-effect ledger reconciles against after a crash.' },
   'tool.arguments_delta': { durability: 'ephemeral', category: 'tool', since: '1.0', description: 'Streaming tool arguments.' },
   'tool.progress': { durability: 'volatile', category: 'tool', since: '1.0', description: 'Long-running tool progress.' },
   'tool.group_progress': { durability: 'volatile', category: 'tool', since: '1.0', description: 'Aggregate progress for a group of tools.' },

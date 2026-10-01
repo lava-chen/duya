@@ -33,9 +33,21 @@ export interface ResumeSupport {
   readonly eventSeq: boolean;
   readonly messageIndex: boolean;
   readonly checkpointGeneration: boolean;
-  /** Envelopes retained for `event_seq` resumption. Honest, not aspirational:
-   *  the runtime advertises what it can actually serve. */
-  readonly replayWindow: number;
+  /**
+   * The replay range this runtime can still serve, as SEQUENCE NUMBERS.
+   *
+   * Not a count. An earlier draft advertised `replayWindow: number` and tested
+   * `from.seq <= replayWindow`, which compares an absolute sequence number
+   * against a buffer size and is wrong the moment a run is longer than the
+   * buffer. With a 500-entry ring and a run currently at `seq = 1200`, the ring
+   * holds 701–1200, so resuming from 1000 is perfectly served while
+   * `1000 <= 500` is false — a legal resume refused, with no way for a host to
+   * tell the difference between "too old" and "not supported".
+   *
+   * `oldestAvailableSeq > latestSeq` means nothing is replayable.
+   */
+  readonly oldestAvailableSeq: number;
+  readonly latestSeq: number;
   /**
    * Always true. Mid-tool resume is not merely unsupported, it is refused, and
    * the refusal is part of the advertised contract so a host can plan a run
@@ -49,9 +61,15 @@ export const NO_RESUME: ResumeSupport = {
   eventSeq: false,
   messageIndex: false,
   checkpointGeneration: false,
-  replayWindow: 0,
+  oldestAvailableSeq: 1,
+  latestSeq: 0,
   rejectsMidToolResume: true,
 };
+
+/** Is `seq` still inside the replay range? */
+export function isReplayable(support: ResumeSupport, seq: number): boolean {
+  return support.oldestAvailableSeq <= seq && seq <= support.latestSeq;
+}
 
 /** Does this support profile cover the requested boundary? */
 export function supportsBoundary(support: ResumeSupport, from: ResumeBoundary): boolean {
@@ -59,7 +77,7 @@ export function supportsBoundary(support: ResumeSupport, from: ResumeBoundary): 
     case 'turn_boundary':
       return support.turnBoundary;
     case 'event_seq':
-      return support.eventSeq && from.seq <= support.replayWindow;
+      return support.eventSeq && isReplayable(support, from.seq);
     case 'message_index':
       return support.messageIndex;
     case 'checkpoint_generation':
@@ -73,9 +91,13 @@ export function isFork(from: ResumeBoundary): boolean {
 }
 
 /**
- * The refusal reason when a boundary is not covered. Mapped to
- * `replay_unavailable` (window too small) or `invalid_resume_point`
- * (mid-tool, or the shape is not supported at all).
+ * The refusal reason when a boundary is not covered.
+ *
+ * `replay_unavailable` when the shape is supported but the requested `seq` has
+ * already fallen out of the replay range; `invalid_resume_point` for mid-tool
+ * resumes and for shapes the runtime does not support at all. A host that gets
+ * `replay_unavailable` can retry from an older checkpoint; one that gets
+ * `invalid_resume_point` cannot, so conflating the two strands it.
  */
 export function resumeRefusalCode(
   support: ResumeSupport,
@@ -83,7 +105,7 @@ export function resumeRefusalCode(
   midTool = false,
 ): 'replay_unavailable' | 'invalid_resume_point' {
   if (midTool) return 'invalid_resume_point';
-  if (from.kind === 'event_seq' && from.seq > support.replayWindow) {
+  if (from.kind === 'event_seq' && support.eventSeq && !isReplayable(support, from.seq)) {
     return 'replay_unavailable';
   }
   return 'invalid_resume_point';

@@ -226,6 +226,47 @@ grok `sampling-types` 的失败模式是文档声称 "no I/O" 而 `Cargo.toml` �
 `schema/` 一旦出现就失败，并要求同一个 commit 附上生成器。
 手写的 schema 落不了地。这比「检查一个没人维护的 JSON 有没有过期」有用得多。
 
+**PP-1 第二轮评审（2026-10-01）：对着真实 worker 实现复核，发现 6 处语义级问题**
+
+第一轮评审查的是「protocol 内部是否自洽」。第二轮把 protocol 和
+`packages/agent/src/process/worker-protocol.ts`（runtime 真正打印的东西）逐条对，
+结论是**不能把 PP-1 当作「协议已定型」**。六条全部复核成立：
+
+| # | 问题 | 真相 | 处置 |
+|---|---|---|---|
+| P0-1 | `assistant.mode_changed` 枚举错了 | worker 真实值是 `general\|plan\|explore\|verify\|code-review`（`SwitchModeTool/constants.ts` 的 `ALL_MODES`）；protocol 原先写的是 `default\|plan\|research\|conductor\|goal` | 改用 runtime 真实词汇，并**双向**断言（worker 能发的都能表达、protocol 允许的 runtime 都会发） |
+| P0-2 | `goal_updated` 静默丢字段 | 丢了 `pauseMessage` / `totalWorkerRounds` / `totalVerifyRounds` / `elapsedMs` / `createdAt` / `executionWait`，且 `history` 从 `{at,event,detail?,reason?}` 被改成 `{at,note}` | 全部补回；`history` 对齐真实结构 |
+| P0-3 | tool 关联 id 不统一 + durability 隐患 | `call_started` 用 `toolCallId`、`call_completed` 用 `toolUseId`；且 `call_started` 是 volatile | 全部收敛为 `toolCallId`；`call_started` 改 **durable**——崩溃后「本想调用」这条记录是 side-effect ledger 唯一的对账依据 |
+| P0-4 | `RunFailedPayload` 绕开错误分类 | `{code: string; message: string}` 让自由字符串从后门回到闭合的 `ErrorCode` 体系 | 改为 `ProtocolErrorInfo`；`RunTerminalState` 改为 discriminated union，`failed` 必须有 error、其他状态禁止有 |
+| P1-5 | capabilities 两个事实来源 | `run.maxEventBytes` 与 `limits.maxEventBytes` 并存；`catalog.connectors` 混了层（capability 不该带用户的 `connectionId`） | 删掉 `run.maxEventBytes`；connectors 改为 `connectorProviders: string[]` |
+| P1-6 | resume 判断有实质 bug | `from.seq <= replayWindow` 拿**绝对 seq** 比**窗口大小**。500 条 ring 在 seq=1200 时保存 701–1200，从 1000 resume 合法却被拒 | capability 改为 `oldestAvailableSeq` / `latestSeq`，用 `isReplayable()` 判断 |
+
+**根因是一个方法论错误，不只是六个 bug。**
+drift test #9 认真对照的是 `packages/ai/src/types.ts` 的 SSE union，
+但**那里 `mode` 就是个 `string`，不带任何信息**——
+「把 string 收紧为闭合 union」时从一个不携带事实的字段推导词汇，只能靠编。
+P0-1 就是这么来的。同理 SSE union 里根本没有 goal 的那些字段，
+所以「对齐 SSE union」看起来是完整的 P0-2 实际上在丢数据。
+
+**因此新增 `test/worker-event-coverage.test.ts`：以 worker-protocol.ts 为事实来源，
+逐事件断言「target 表达的不少于 source」。** 包含：
+
+- 9 组 worker event → protocol payload 的字段覆盖，**改名显式登记**成审计表
+  （`result`→`content`、`name`→`toolName`、`duration_ms`→`durationMs`……），
+  改名表本身也被双向校验：指向的字段必须真的存在，源字段必须真的还在；
+- mode 词汇**双向**断言；tool 关联 id 唯一性；`call_started` 的 durable；
+- `RunFailedPayload` 不得出现自由 `code: string`；`RunTerminalState` 必须是四臂 union。
+
+**已植入探针逐条验证会咬人**：把 P0-1 / P0-2 / P0-3(id) / P0-3(durable) / P0-4 的修复
+逐个回退，对应断言全部变红（durable 那条同时被自己的测试和 #5 快照抓到）。
+过程中测试自己也踩了两次「看起来有覆盖其实没有」的坑，已修：
+CRLF 让 `line === '}'` 永不成立、`readonly` 修饰符让字段正则失配。
+
+**顺带修了审计 resolver 的第三个洞**：它解析不了 `.mjs` 文件，
+候选列表里只有 `.ts`/`.tsx`/`.js`。所以 `scripts/architecture/` 下的
+`.mjs` 互相 import 一直是 `unresolved`——**不可解析的边会豁免本该套在它身上的规则**。
+修完 self-test 回到 562，无需重录基线。
+
 **命名在 PP-1 评审时改过一轮（2026-10-01）**
 
 初版有三个名字与**被迁移方**同名，而冲突要等到迁移那一刻才会进同一个文件作用域：

@@ -48,12 +48,16 @@ function resolveFile(base) {
   const cands = [];
   const ext = path.extname(base);
   if (ext === ".js" || ext === ".mjs") {
+    // The literal path is tried too: a `.mjs` specifier is usually the real
+    // file rather than a TypeScript stand-in, and treating every `.mjs` edge
+    // as unresolved would hide exactly the governance-script imports this
+    // audit exists to see. Kept in sync with `audit-imports.mjs:resolveFile`.
     const stem = base.slice(0, -ext.length);
-    cands.push(`${stem}.ts`, `${stem}.tsx`, `${stem}.js`);
+    cands.push(`${stem}.ts`, `${stem}.tsx`, base, `${stem}.js`);
   } else {
     cands.push(`${base}.ts`, `${base}.tsx`, `${base}.js`, `${base}.mjs`, base);
   }
-  cands.push(`${base}/index.ts`, `${base}/index.tsx`, `${base}/index.js`);
+  cands.push(`${base}/index.ts`, `${base}/index.tsx`, `${base}/index.js`, `${base}/index.mjs`);
   for (const c of cands) {
     try { if (fs.existsSync(c) && fs.statSync(c).isFile()) return c; } catch { /* ignore */ }
   }

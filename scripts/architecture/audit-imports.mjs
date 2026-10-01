@@ -119,14 +119,20 @@ function resolveFile(base) {
   const candidates = [];
   const ext = path.extname(base);
   if (ext === ".js" || ext === ".mjs") {
-    // NodeNext style: './x.js' actually means './x.ts' in this repo
+    // NodeNext style: './x.js' actually means './x.ts' in this repo. The
+    // literal path is ALSO tried, because unlike `./x.js` a `./x.mjs`
+    // specifier is frequently the real file and not a TS stand-in — every
+    // governance script in this directory is `.mjs` and imports `.mjs`.
+    // Without the literal fallback those edges read as `unresolved`, which is
+    // both a false alarm and a hole: an unresolvable edge is exempt from the
+    // rules that would have flagged it.
     const stem = base.slice(0, -ext.length);
-    candidates.push(`${stem}.ts`, `${stem}.tsx`, `${stem}.js`);
+    candidates.push(`${stem}.ts`, `${stem}.tsx`, base, `${stem}.js`);
   } else {
     candidates.push(`${base}.ts`, `${base}.tsx`, `${base}.js`, `${base}.mjs`, base);
   }
   candidates.push(
-    `${base}/index.ts`, `${base}/index.tsx`, `${base}/index.js`,
+    `${base}/index.ts`, `${base}/index.tsx`, `${base}/index.js`, `${base}/index.mjs`,
   );
   // The literal candidate always wins; the source twin is only a fallback for
   // the build-output case described above.
