@@ -64,6 +64,9 @@ import type { WorkflowRunSse } from '../worker-protocol.js';
 
 type Frame = { type: string; sessionId: string; event: string; run: WorkflowRunSse };
 
+/** Per-test home dir standing in for `os.homedir()`; seeded in `beforeEach`. */
+let globalHome = '';
+
 function makeDeps(overrides?: Partial<Parameters<typeof launchSavedWorkflow>[0]>) {
   const frames: Frame[] = [];
   const deps = {
@@ -72,6 +75,7 @@ function makeDeps(overrides?: Partial<Parameters<typeof launchSavedWorkflow>[0]>
     requestPermission: vi.fn(async () => 'allow' as const),
     llm: { apiKey: 'k', provider: 'openai' as const, model: 'm' },
     workingDirectory: process.cwd(),
+    savedWorkflowHomeDir: globalHome,
     ...overrides,
   };
   return { frames, deps };
@@ -137,8 +141,14 @@ export default async function (wf) {
 }
 `;
 
-function writeSavedWorkflow(dir: string, name: string, meta: SavedWorkflowMeta, script: string): string {
-  const scopeDir = path.join(dir, '.duya', 'workflows');
+/**
+ * Writes into the GLOBAL root (`<homeDir>/.duya/workflows`, plan 583 (c)) — not
+ * the run's `projectDir`. Production resolves the global root from the
+ * worker's home, so the test injects its own instead of writing into the real
+ * user profile.
+ */
+function writeSavedWorkflow(name: string, meta: SavedWorkflowMeta, script: string): string {
+  const scopeDir = path.join(globalHome, '.duya', 'workflows');
   fs.mkdirSync(scopeDir, { recursive: true });
   const file = path.join(scopeDir, `${name}.dwf.ts`);
   fs.writeFileSync(file, serializeSavedWorkflow(meta, script), 'utf8');
@@ -146,6 +156,9 @@ function writeSavedWorkflow(dir: string, name: string, meta: SavedWorkflowMeta, 
 }
 
 beforeEach(() => {
+  // The global saved-workflow root is `<homeDir>/.duya/workflows` (plan 583 (c)).
+  // A per-test temp dir, so fixtures never land in the real user profile.
+  globalHome = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-wf-home-'));
   // Per-run text logs must not land in the real home during tests.
   process.env.DUYA_WORKFLOW_LOGS_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-run-logs-'));
   workflowRunDbMocks.create.mockReset().mockImplementation(async (input: { id?: string }) => ({
@@ -216,7 +229,6 @@ describe('launchSavedWorkflow', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-runner-'));
     try {
       writeSavedWorkflow(
-        dir,
         'strict',
         { description: 'strict', args: { count: { type: 'number', required: true } } },
         'export default async function () { return 1; }\n',
@@ -235,7 +247,7 @@ describe('launchSavedWorkflow', () => {
   it('runs the script end-to-end: run row, journal, frames, terminal status', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-runner-'));
     try {
-      writeSavedWorkflow(dir, 'digest', HAPPY_META, HAPPY_SCRIPT);
+      writeSavedWorkflow('digest', HAPPY_META, HAPPY_SCRIPT);
       const { frames, deps } = makeDeps();
       await launchSavedWorkflow(deps, { runId: 'r3', workflowName: 'digest', projectDir: dir });
 
@@ -278,7 +290,7 @@ describe('launchSavedWorkflow', () => {
   it('carries stage dividers + artifact names on the session digest frames', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-runner-'));
     try {
-      writeSavedWorkflow(dir, 'staged', { description: 'staged' }, PHASE_SCRIPT);
+      writeSavedWorkflow('staged', { description: 'staged' }, PHASE_SCRIPT);
       const { frames, deps } = makeDeps();
       await launchSavedWorkflow(deps, { runId: 'r9', workflowName: 'staged', projectDir: dir });
 
@@ -306,7 +318,7 @@ describe('launchSavedWorkflow', () => {
   it('stamps origin=session on the legacy path so the runs tab stays truthful', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-runner-'));
     try {
-      writeSavedWorkflow(dir, 'digest', HAPPY_META, HAPPY_SCRIPT);
+      writeSavedWorkflow('digest', HAPPY_META, HAPPY_SCRIPT);
       const { deps } = makeDeps();
       await launchSavedWorkflow(deps, { runId: 'r6', workflowName: 'digest', projectDir: dir });
 
@@ -322,7 +334,6 @@ describe('launchSavedWorkflow', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-resume-'));
     try {
       writeSavedWorkflow(
-        dir,
         'resumable',
         { description: 'resumable' },
         `
@@ -395,7 +406,6 @@ export default async function (wf) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-runner-'));
     try {
       writeSavedWorkflow(
-        dir,
         'gated',
         { description: 'gated' },
         `
@@ -434,7 +444,7 @@ export default async function (wf) {
   it('run-anchored: touches no database and forwards every record through the transport', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-runner-'));
     try {
-      writeSavedWorkflow(dir, 'anchored', { description: 'anchored' }, PHASE_SCRIPT);
+      writeSavedWorkflow('anchored', { description: 'anchored' }, PHASE_SCRIPT);
       const transport = makeRunAnchorTransport();
       const { frames, deps } = makeDeps({
         transport,
@@ -505,7 +515,6 @@ export default async function (wf) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-runner-'));
     try {
       writeSavedWorkflow(
-        dir,
         'cwd-probe',
         { description: 'cwd probe' },
         `
@@ -538,7 +547,6 @@ export default async function (wf) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-runner-'));
     try {
       writeSavedWorkflow(
-        dir,
         'fanout',
         { description: 'fanout probe' },
         `

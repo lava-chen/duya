@@ -46,12 +46,19 @@ export interface WorkflowRuntimeInitCommand {
   workflowName: string;
   /** Script args; declared frontmatter defaults are applied child-side. */
   params?: Record<string, unknown>;
-  /** Project scope root for saved-workflow resolution; also the run cwd. */
+  /** Run cwd, and the project dir a run is anchored to. NOT a definition
+   *  source: project-scope saved workflows are no longer loaded (plan 583 (c)). */
   projectDir?: string;
   scope?: 'project' | 'global' | null;
   llm: WorkflowRunnerLlmConfig;
   /** Fallback cwd when the run carries no `projectDir`. */
   workingDirectory: string;
+  /**
+   * Home dir for the global saved-workflow root. Unset in production (the
+   * worker's `os.homedir()` is right); the runtime child harness sets it so a
+   * test can own the directory instead of writing into the real profile.
+   */
+  homeDir?: string;
   /**
    * Artifact ROOT (`~/.duya/workflow-artifacts`). `FsArtifactStore` appends
    * `<runId>/` itself, so the per-run directory is `<root>/<runId>/`.
@@ -313,6 +320,7 @@ export async function runWorkflowRuntimeChild(
       },
       llm: init.llm,
       workingDirectory: init.projectDir ?? init.workingDirectory,
+      ...(init.homeDir !== undefined ? { savedWorkflowHomeDir: init.homeDir } : {}),
       takePendingAnswer: (permissionId) => {
         const answers = pendingAskAnswers.get(permissionId);
         if (answers) pendingAskAnswers.delete(permissionId);

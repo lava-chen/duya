@@ -57,6 +57,7 @@ const META: SavedWorkflowMeta = {
   args: { label: { type: 'string', default: 'x' } },
 };
 
+/** Writes into `<homeDir>/.duya/workflows` — the GLOBAL root (plan 583 (c)). */
 function writeWorkflow(dir: string, name: string, script: string): void {
   const scopeDir = path.join(dir, '.duya', 'workflows');
   fs.mkdirSync(scopeDir, { recursive: true });
@@ -135,6 +136,10 @@ function startChild(
     runId,
     workflowName: 'fixture',
     projectDir: dir,
+    // The global root is `homeDir/.duya/workflows` (plan 583 (c)) — pointing it
+    // at the same temp dir makes `writeWorkflow` land where resolve reads, and
+    // keeps the test out of the real user profile.
+    homeDir: dir,
     llm: { apiKey: 'k', provider: 'openai', model: 'm' },
     workingDirectory: dir,
     artifactsRoot,
@@ -288,6 +293,96 @@ export default async function (wf) {
     ) as Array<{ record: { status: string; result: unknown } }>;
     const approval = approvalRecords[approvalRecords.length - 1];
     expect(approval.record.status).toBe('succeeded');
+  });
+
+  // ─── plan 583 (b): pre-execution consent ───
+
+  /**
+   * 认不出的脚本：调了 `wf.*` 白名单之外的东西（这里用第三轮实测证明能逃逸的
+   * `constructor` 链）。它 `publish` 一个产物 —— 于是「拒绝后产物不存在」就成了
+   * 「一行都没跑」的可观测断言，而不是靠日志措辞。
+   */
+  const UNRECOGNIZED = `
+export default async function (wf) {
+  await wf.publish("should-not-exist.md", "boom", "text/markdown");
+  return wf.tool.constructor.constructor("return 1")();
+}
+`;
+
+  /**
+   * The artifact file the script above would write IF it ran. The store
+   * sanitizes the declared name (`report.md` → `report_md.md`), so this must be
+   * the sanitized form — asserting the raw name would pass on every run and
+   * prove nothing.
+   */
+  const ARTIFACT = path.join('run-1', 'should-not-exist_md.md');
+
+  it('an unrecognized script asks BEFORE it runs, and a denial executes nothing', async () => {
+    const h = startChild(UNRECOGNIZED);
+    await waitFor(
+      () => h.frames.some((f) => f.type === 'workflow:permission-request'),
+      'the pre-execution consent request',
+      () => h.frames.map((f) => f.type as string),
+    );
+    const request = h.frames.find((f) => f.type === 'workflow:permission-request') as {
+      requestId: string;
+      toolName: string;
+      toolInput: { prompt: string };
+    };
+    expect(request.toolName).toBe('workflow_approval');
+    // 理由与源码都要在窗里 —— 看不到内容就没法做知情决定。
+    expect(request.toolInput.prompt).toContain('not recognized');
+    expect(request.toolInput.prompt).toContain('constructor');
+    expect(request.toolInput.prompt).toContain('wf.tool.constructor');
+
+    h.push({ type: 'workflow:permission-resolve', requestId: request.requestId, decision: 'deny' });
+    await waitFor(
+      () => h.frames.some((f) => f.type === 'workflow:finished'),
+      'the finished frame',
+      () => h.frames.map((f) => f.type as string),
+    );
+    await h.run;
+
+    const finished = h.frames[h.frames.length - 1] as { status: string };
+    expect(finished.status).toBe('failed');
+    expect(JSON.stringify(finished)).toContain('execution not approved');
+    // The real assertion: not one line ran. No artifact, no publish, no escape.
+    expect(fs.existsSync(path.join(h.artifactsRoot, ARTIFACT))).toBe(false);
+  });
+
+  it('the same script runs once the user approves it', async () => {
+    const h = startChild(UNRECOGNIZED);
+    await waitFor(
+      () => h.frames.some((f) => f.type === 'workflow:permission-request'),
+      'the pre-execution consent request',
+      () => h.frames.map((f) => f.type as string),
+    );
+    const request = h.frames.find((f) => f.type === 'workflow:permission-request') as { requestId: string };
+    h.push({ type: 'workflow:permission-resolve', requestId: request.requestId, decision: 'allow' });
+    await waitFor(
+      () => h.frames.some((f) => f.type === 'workflow:finished'),
+      'the finished frame',
+      () => h.frames.map((f) => f.type as string),
+    );
+    await h.run;
+
+    const finished = h.frames[h.frames.length - 1] as { status: string };
+    expect(finished.status).not.toBe('failed');
+    // Approved → the script's own side effect happened. That is what consent means.
+    expect(fs.existsSync(path.join(h.artifactsRoot, ARTIFACT))).toBe(true);
+  });
+
+  it('a recognized script is never asked about (the gate has teeth in both directions)', async () => {
+    const h = startChild(SCRIPT);
+    await waitFor(
+      () => h.frames.some((f) => f.type === 'workflow:finished'),
+      'the finished frame',
+      () => h.frames.map((f) => f.type as string),
+    );
+    await h.run;
+    // No consent round-trip for a script we positively recognize — otherwise
+    // "fail-closed" would just mean "ask about everything", which is not a gate.
+    expect(h.frames.filter((f) => f.type === 'workflow:permission-request')).toEqual([]);
   });
 
   it('fails the run loudly when the workflow does not exist', async () => {

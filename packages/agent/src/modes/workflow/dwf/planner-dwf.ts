@@ -14,6 +14,7 @@
 import type { SavedWorkflowMeta } from './contracts.js';
 import { parseSavedWorkflow } from './frontmatter.js';
 import { compileDwfScript, DwfCompileError } from './runtime.js';
+import { extractToolCalls } from './trust.js';
 import { RULE_RISK_RE } from '../planner.js';
 
 /** LLM 端口（生产：AIClient one-shot；测试：canned）。与声明式 planner 同形。 */
@@ -40,15 +41,11 @@ export interface DwfPlannerResult {
   warnings: string[];
 }
 
-/** 抽取脚本里的 `wf.tool("...")` / `wf.tool('...')` 字面量。 */
-export function extractToolCalls(script: string): string[] {
-  const names: string[] = [];
-  const re = /\bwf\.tool\(\s*(['"`])([^'"`]+)\1/g;
-  for (const match of script.matchAll(re)) {
-    names.push(match[2]!);
-  }
-  return names;
-}
+/**
+ * `extractToolCalls` 住在 trust.ts —— 生成期与执行期都要用同一份「脚本里调了哪些
+ * 工具」的抽取，两处各写一份必然漂。这里转出去是为了保住本模块原有的导出面。
+ */
+export { extractToolCalls };
 
 /** 规则风险扫描：不可逆词表命中 + publish 存在性。纯函数，测试可直达。 */
 export function scanDwfRisk(script: string): { highRiskCalls: string[]; warnings: string[] } {

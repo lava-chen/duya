@@ -47,6 +47,7 @@ import {
   type WorkflowRunSse,
 } from './worker-protocol.js';
 import { SavedWorkflowStore } from '../modes/workflow/dwf/store.js';
+import { assessDwfScript, formatDwfConsentPrompt } from '../modes/workflow/dwf/trust.js';
 import { runDwfScript, compileDwfScript, DwfCompileError, type DwfHostPorts } from '../modes/workflow/dwf/runtime.js';
 import { Journal, type JournalRecord, type JournalSink } from '../modes/workflow/journal.js';
 import {
@@ -178,6 +179,16 @@ export interface WorkflowRunnerDeps {
   llm: WorkflowRunnerLlmConfig;
   /** Default execution cwd — overridden per-run by `req.projectDir`. */
   workingDirectory: string;
+  /**
+   * Home dir used to resolve the GLOBAL saved-workflow root. Omitted in
+   * production, where `os.homedir()` on the worker is the right machine.
+   *
+   * It exists because the main-process dwf IPC handlers already accept a
+   * `homeDir` and the worker side did not — the two halves of the same lookup
+   * each decided where "global" was on their own, and only tests could observe
+   * it. Making it explicit keeps the two halves symmetric.
+   */
+  savedWorkflowHomeDir?: string;
   /**
    * Persistence + progress port. Absent → the legacy worker-db bridge, so
    * every pre-560 caller keeps working untouched.
@@ -730,14 +741,17 @@ export async function launchSavedWorkflow(
     runLog.close();
   };
 
-  // 1. Resolve the saved definition (project scope shadows global).
+  // 1. Resolve the saved definition. Global scope only (plan 583 (c)) — a
+  //    `.duya/workflows/*.dwf.ts` sitting in the run cwd is never consulted, so
+  //    cloning a repository cannot hand the session a runnable workflow.
   const store = new SavedWorkflowStore();
   const cwd = req.projectDir ?? deps.workingDirectory;
-  const resolved = store.resolve(cwd, req.workflowName);
+  const rootOptions = deps.savedWorkflowHomeDir !== undefined ? { homeDir: deps.savedWorkflowHomeDir } : undefined;
+  const resolved = store.resolve(cwd, req.workflowName, rootOptions);
   if (!resolved.ok) {
     const detail =
       resolved.reason === 'not_found'
-        ? `workflow "${req.workflowName}" not found in ${cwd} (or ~/.duya/workflows)`
+        ? `workflow "${req.workflowName}" not found in ~/.duya/workflows`
         : resolved.reason === 'invalid_name'
           ? resolved.detail
           : `${resolved.reason}: ${resolved.detail}`;
@@ -773,6 +787,41 @@ export async function launchSavedWorkflow(
           : String(err);
     await failFrame(`script compile failed: ${detail}`);
     return;
+  }
+
+  // 2.6 Execution consent (plan 583, user-picked (c)+(b)). The dwf vm is NOT a
+  //     sandbox — three probes showed any injected host-realm object escapes it,
+  //     and there is no configuration that changes that (see dwf/trust.ts). So
+  //     the only control left is asking. A script the recognizer does not
+  //     positively recognize is escalated to the interactive pipeline WITH ITS
+  //     SOURCE attached, before any run row exists here.
+  //
+  //     Deliberately AFTER the compile gate: never ask the user to approve a
+  //     script that does not even compile. Deliberately reusing
+  //     toolName 'workflow_approval' — it is the same ask card the wf.approve
+  //     primitive already rides, so this needs no new UI on the renderer.
+  const assessment = assessDwfScript(resolved.script);
+  if (!assessment.recognized) {
+    const decision = await deps.requestPermission({
+      id: randomUUID(),
+      toolName: 'workflow_approval',
+      toolInput: {
+        prompt: formatDwfConsentPrompt({
+          name: resolved.name,
+          path: resolved.path,
+          scope: resolved.scope,
+          description: resolved.meta.description,
+          script: resolved.script,
+          assessment,
+        }),
+      },
+      expiresAt: Date.now() + 300_000,
+    });
+    if (decision !== 'allow') {
+      await failFrame(`execution not approved (${decision}): ${assessment.reasons.join('; ')}`);
+      return;
+    }
+    runLog.line('warn', `execution consent granted by user: ${assessment.reasons.join('; ')}`);
   }
 
   // 3. Run row + snapshot seed. On the run-anchored path main created the row

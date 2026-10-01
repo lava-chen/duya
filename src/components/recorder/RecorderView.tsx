@@ -100,7 +100,6 @@ export function RecorderView({ projectDir, onDefinitionSaved }: RecorderViewProp
 
   const [converted, setConverted] = useState<RecorderConvertResult | null>(null);
   const [name, setName] = useState("");
-  const [scope, setScope] = useState<"global" | "project">("global");
   const [savedTo, setSavedTo] = useState<string | null>(null);
   /** The convert button first asks WHICH conversion route to take. */
   const [pickMode, setPickMode] = useState(false);
@@ -256,7 +255,8 @@ export function RecorderView({ projectDir, onDefinitionSaved }: RecorderViewProp
       name,
       meta: converted.meta,
       script: converted.script,
-      scope,
+      // Global scope only (plan 583 (c)) — see the scope readout in the footer.
+      scope: "global",
       projectDir,
     });
     if (!result.ok) {
@@ -524,22 +524,15 @@ export function RecorderView({ projectDir, onDefinitionSaved }: RecorderViewProp
                   onChange={(event) => setName(event.target.value)}
                   data-testid="recorder-def-name"
                 />
+                {/*
+                  No scope picker (plan 583 (c)): project-scope saved workflows
+                  are no longer a definition source, so offering the choice
+                  would just be a control that always fails. The save goes to
+                  the global scope; the scope label is a plain readout, not a
+                  toggle.
+                */}
                 <span className="text-xs text-muted-foreground">{t("recorder.convert.scope")}</span>
-                <Button
-                  variant={scope === "global" ? "accent" : "ghost"}
-                  size="sm"
-                  onClick={() => setScope("global")}
-                >
-                  {t("workflow.scopeGlobal")}
-                </Button>
-                <Button
-                  variant={scope === "project" ? "accent" : "ghost"}
-                  size="sm"
-                  disabled={!projectDir}
-                  onClick={() => setScope("project")}
-                >
-                  {t("workflow.scopeProject")}
-                </Button>
+                <span className="text-xs text-foreground">{t("workflow.scopeGlobal")}</span>
                 <div className="ml-auto flex items-center gap-2">
                   {savedTo && (
                     <span className="font-mono text-xs text-muted-foreground">

@@ -1,7 +1,9 @@
 /**
  * dwf-store.test.ts — dwf saved-workflow 契约/编解码/存储层的门禁测试：
- * frontmatter 往返（逐字节保真）、四种 parse 失败各有其名、两档作用域 first-wins
- * 遮蔽、坏文件不炸列表、原子保存与删除、名字即路径穿越防线。
+ * frontmatter 往返（逐字节保真）、四种 parse 失败各有其名、坏文件不炸列表、
+ * 原子保存与删除、名字即路径穿越防线，以及 plan 583 (c) 的核心不变量：
+ * **项目档不是定义来源**（克隆来的 `.duya/workflows/*.dwf.ts` 解析不到、列不出，
+ * 往里写/删会响亮报错）。
  */
 
 import { describe, it, expect } from 'vitest';
@@ -66,11 +68,15 @@ describe('dwf contracts', () => {
     expect(isValidSavedWorkflowName('x'.repeat(65))).toBe(false);
   });
 
-  it('roots are ordered [project, global] and honor the injected homeDir', () => {
+  it('the global root is the ONLY root — project scope is not a definition source', () => {
+    // plan 583 (c): `.duya/workflows/` travels with a cloned repository, so it
+    // is not a lookup root. This assertion is the guard — put the project root
+    // back and it goes red.
     const roots = savedWorkflowRoots('/repo', { homeDir: '/home/u' });
-    expect(roots.map((r) => r.scope)).toEqual(['project', 'global']);
-    expect(roots[0]!.dir).toBe(path.join('/repo', '.duya', 'workflows'));
-    expect(roots[1]!.dir).toBe(path.join('/home/u', '.duya', 'workflows'));
+    expect(roots.map((r) => r.scope)).toEqual(['global']);
+    expect(roots[0]!.dir).toBe(path.join('/home/u', '.duya', 'workflows'));
+    // cwd must not leak into resolution any more: same answer for any repo.
+    expect(savedWorkflowRoots('/some/cloned/repo', { homeDir: '/home/u' })).toEqual(roots);
   });
 
   it('drafts dir is a sibling of the saved dir', () => {
@@ -151,24 +157,28 @@ describe('dwf frontmatter codec', () => {
 // ─── store ───
 
 describe('SavedWorkflowStore', () => {
-  it('resolve reads project scope first (project shadows global)', () => {
+  it('a .dwf.ts in the session project dir is NOT resolvable (plan 583 (c))', () => {
+    // 这是 (c) 的安全断言本身：一个 `git clone` 进来的 `.duya/workflows/*.dwf.ts`
+    // 绝不能因为会话 cwd 落在那个仓库里就变成可解析、可执行的定义。
+    // 把 project 档加回查找根，这条立刻红。
     const cwd = tmpRoot();
     const home = tmpRoot();
     try {
       const store = new SavedWorkflowStore();
-      projectWorkflow(cwd, 'dup', { description: 'project version' }, 'const p = 1;');
-      const globalFile = path.join(home, '.duya', 'workflows', `dup${SAVED_WORKFLOW_FILE_EXTENSION}`);
-      fs.mkdirSync(path.dirname(globalFile), { recursive: true });
-      fs.writeFileSync(globalFile, serializeSavedWorkflow({ description: 'global version' }, 'const g = 1;'), 'utf8');
+      const planted = projectWorkflow(cwd, 'from-clone', { description: 'shipped by a repo' }, 'const p = 1;');
+      expect(fs.existsSync(planted)).toBe(true); // 文件确实在磁盘上
 
-      const hit = store.resolve(cwd, 'dup', { homeDir: home });
+      // 名字解析不到，且 list 也看不到它。
+      expect(store.resolve(cwd, 'from-clone', { homeDir: home })).toMatchObject({ ok: false, reason: 'not_found' });
+      expect(store.list(cwd, { homeDir: home }).entries).toEqual([]);
+
+      // 同名定义放进全局档就能解析 —— 区别只在档位，不在名字。
+      store.save(cwd, 'from-clone', { description: 'user approved it' }, 'const g = 1;', 'global', { homeDir: home });
+      const hit = store.resolve(cwd, 'from-clone', { homeDir: home });
       expect(hit.ok).toBe(true);
       if (!hit.ok) return;
-      expect(hit.scope).toBe('project');
-      expect(hit.meta.description).toBe('project version');
-
-      const globalOnly = store.resolve(cwd, 'ghost-name-x', { homeDir: home });
-      expect(globalOnly).toMatchObject({ ok: false, reason: 'not_found' });
+      expect(hit.scope).toBe('global');
+      expect(hit.meta.description).toBe('user approved it');
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true });
       fs.rmSync(home, { recursive: true, force: true });
@@ -198,19 +208,17 @@ describe('SavedWorkflowStore', () => {
     const home = tmpRoot();
     try {
       const store = new SavedWorkflowStore();
-      projectWorkflow(cwd, 'good-wf', { description: 'fine' }, 'const a = 1;');
-      const dir = path.join(cwd, '.duya', 'workflows');
+      const dir = path.join(home, '.duya', 'workflows');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, `good-wf${SAVED_WORKFLOW_FILE_EXTENSION}`), serializeSavedWorkflow({ description: 'fine' }, 'const a = 1;'), 'utf8');
       fs.writeFileSync(path.join(dir, 'bad-wf.dwf.ts'), 'garbage\n', 'utf8');
       fs.writeFileSync(path.join(dir, 'Not-kebab.dwf.ts'), 'x\n', 'utf8');
 
       const result = store.list(cwd, { homeDir: home });
       expect(result.entries.map((e) => e.name)).toEqual(['good-wf']);
       expect(result.invalid).toHaveLength(2);
-      // dirs 按优先序回两个根（即使目录不存在也回，GUI 的 watch 靠它）。
-      expect(result.dirs).toEqual([
-        path.join(cwd, '.duya', 'workflows'),
-        path.join(home, '.duya', 'workflows'),
-      ]);
+      // dirs 只回全局档那一个（即使目录不存在也回，GUI 的 watch 靠它）。
+      expect(result.dirs).toEqual([path.join(home, '.duya', 'workflows')]);
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true });
       fs.rmSync(home, { recursive: true, force: true });
@@ -233,14 +241,9 @@ describe('SavedWorkflowStore', () => {
       expect(hit.meta.description).toBe('Check deploy health.');
       expect(hit.source).toBe(fs.readFileSync(saved.path, 'utf8'));
 
-      // 项目档同名 → hides_global。
-      projectWorkflow(cwd, 'deploy-check', { description: 'project override' }, 'const p = 1;');
-      const again = store.save(cwd, 'deploy-check', { description: 'project override' }, 'const p = 1;', 'project', { homeDir: home });
-      expect(again.shadowing).toBe('hides_global');
-
-      // 反向：全局档保存时项目里已有同名 → hidden_by_project。
-      const globalAgain = store.save(cwd, 'deploy-check', { description: 'global again' }, 'const g = 1;', 'global', { homeDir: home });
-      expect(globalAgain.shadowing).toBe('hidden_by_project');
+      // 单一档之后没有遮蔽可言：shadowing 恒为 null（协议面保留，恒 null 是明账）。
+      const again = store.save(cwd, 'deploy-check', { description: 'v2' }, 'const s2 = 1;', 'global', { homeDir: home });
+      expect(again.shadowing).toBeNull();
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true });
       fs.rmSync(home, { recursive: true, force: true });
@@ -251,37 +254,48 @@ describe('SavedWorkflowStore', () => {
     const cwd = tmpRoot();
     try {
       const store = new SavedWorkflowStore();
-      expect(() => store.save(cwd, '../evil', { description: 'x' }, '', 'project', { homeDir: cwd })).toThrow(/invalid workflow name/);
+      expect(() => store.save(cwd, '../evil', { description: 'x' }, '', 'global', { homeDir: cwd })).toThrow(/invalid workflow name/);
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true });
     }
   });
 
-  it('delete removes only the named scope entry', () => {
+  it('save and delete into project scope throw instead of writing to a dead directory', () => {
+    // 写进没人读的目录是最坏的一种失败：用户以为存下了，下次运行却是 not_found。
+    // 所以这里必须**响亮地**失败（fail-loud），不能静默重定向。
     const cwd = tmpRoot();
     const home = tmpRoot();
     try {
       const store = new SavedWorkflowStore();
-      projectWorkflow(cwd, 'gone-soon', { description: 'p' }, '');
-      store.save(cwd, 'gone-soon', { description: 'g' }, '', 'global', { homeDir: home });
-
-      expect(store.delete(cwd, 'gone-soon', 'project', { homeDir: home })).toBe(true);
-      const hit = store.resolve(cwd, 'gone-soon', { homeDir: home });
-      // 项目档删了，全局档还在。
-      expect(hit.ok).toBe(true);
-      if (!hit.ok) return;
-      expect(hit.scope).toBe('global');
-      expect(store.delete(cwd, 'gone-soon', 'project', { homeDir: home })).toBe(false);
-
-      expect(store.delete(cwd, 'gone-soon', 'global', { homeDir: home })).toBe(true);
-      expect(store.resolve(cwd, 'gone-soon', { homeDir: home })).toMatchObject({ ok: false, reason: 'not_found' });
+      expect(() => store.save(cwd, 'x', { description: 'x' }, 'const a = 1;', 'project', { homeDir: home })).toThrow(
+        /not a definition source/,
+      );
+      expect(() => store.delete(cwd, 'x', 'project', { homeDir: home })).toThrow(/not a definition source/);
+      // 拒绝时不得留下任何文件。
+      expect(fs.existsSync(path.join(cwd, '.duya', 'workflows'))).toBe(false);
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true });
       fs.rmSync(home, { recursive: true, force: true });
     }
   });
 
-  it('shadowing helper reports null when the other scope is empty', () => {
+  it('delete removes the entry and then reports it gone', () => {
+    const cwd = tmpRoot();
+    const home = tmpRoot();
+    try {
+      const store = new SavedWorkflowStore();
+      store.save(cwd, 'gone-soon', { description: 'g' }, '', 'global', { homeDir: home });
+
+      expect(store.delete(cwd, 'gone-soon', 'global', { homeDir: home })).toBe(true);
+      expect(store.resolve(cwd, 'gone-soon', { homeDir: home })).toMatchObject({ ok: false, reason: 'not_found' });
+      expect(store.delete(cwd, 'gone-soon', 'global', { homeDir: home })).toBe(false);
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('shadowing helper reports null in the single-scope world', () => {
     const cwd = tmpRoot();
     try {
       expect(savedWorkflowShadowing(cwd, 'project', 'lonely-wf', { homeDir: cwd })).toBeNull();

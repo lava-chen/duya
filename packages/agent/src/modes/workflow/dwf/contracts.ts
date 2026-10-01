@@ -21,12 +21,13 @@ import { z } from 'zod';
  */
 export const SAVED_WORKFLOW_FILE_EXTENSION = '.dwf.ts';
 
-/** 项目作用域的存放目录（相对会话工作目录）。 */
-export const SAVED_WORKFLOW_PROJECT_DIR = '.duya/workflows';
-
 /**
  * 全局作用域的存放目录（相对 agent 进程的家目录）。落点
  * `~/.duya/workflows/<name>.dwf.ts`，对所有项目可见。
+ *
+ * 这是**唯一**的作用域根。项目档（原 `.duya/workflows/`，相对会话工作目录）连同它的
+ * 常量一起删掉了：它随 `git clone` 进来，所以不是定义来源（plan 583 (c)）。留着一个
+ * 没人读的常量，会让下一个读代码的人以为那条路还能走。
  */
 export const SAVED_WORKFLOW_GLOBAL_DIR = '.duya/workflows';
 
@@ -60,18 +61,23 @@ export function isValidSavedWorkflowName(name: string): boolean {
 // ─── 作用域 ───
 
 /**
- * 作用域两档：`project` 落在项目的 `.duya/workflows/`，只在那个项目里可见；`global`
- * 落在 `~/.duya/workflows/`，对所有项目可见。一个文件的作用域由它所在的目录推得，
- * frontmatter 不存。
+ * 作用域的词汇表。**只有 `global` 真正可写可读**（`~/.duya/workflows/`）。
+ *
+ * `'project'` 仍留在类型里，但**不再有根**（plan 583 (c)）：它必须留着，否则
+ * `save` / `delete` / IPC 里那条「显式拒绝 project 档」的分支在类型上不可达，也就
+ * 无法被测。运行时的实际行为是：传 `'project'` → 抛
+ * `PROJECT_SCOPE_NOT_A_SOURCE`（或 IPC 回错），不是静默重定向。
  */
 export const SAVED_WORKFLOW_SCOPES = ['project', 'global'] as const;
 export const SavedWorkflowScopeSchema = z.enum(SAVED_WORKFLOW_SCOPES);
 export type SavedWorkflowScope = z.infer<typeof SavedWorkflowScopeSchema>;
 
 /**
- * 遮蔽事实：另一档已有同名定义。保存时算出，供确认窗展示。
- * `hides_global`：这次保存的是项目档，它会在本项目里遮蔽同名的全局档；
- * `hidden_by_project`：这次保存的是全局档，本项目已有同名的项目档会遮蔽它。
+ * 遮蔽事实：另一档已有同名定义。`hides_global` / `hidden_by_project`。
+ *
+ * **单一档之后这两个值已经不可能产生** —— 另一档没有根了。类型留着是因为它跨
+ * preload / IPC / GUI 三个面，拆协议的成本高于留一个恒 null 的字段
+ * （`savedWorkflowShadowing` 现在恒返回 `null`）。这是笔明确的债，不是描述现状。
  */
 export const SAVED_WORKFLOW_SHADOWING = ['hides_global', 'hidden_by_project'] as const;
 export const SavedWorkflowShadowingSchema = z.enum(SAVED_WORKFLOW_SHADOWING);

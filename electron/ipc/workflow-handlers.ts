@@ -16,6 +16,7 @@ import { getCoreStoresOrNull } from '../db/core-connection';
 import {
   SavedWorkflowStore,
   SavedWorkflowMetaSchema,
+  PROJECT_SCOPE_NOT_A_SOURCE,
   isValidSavedWorkflowName,
   compileDwfScript,
   DwfCompileError,
@@ -330,6 +331,14 @@ export function registerWorkflowHandlers(): void {
         if (!isValidSavedWorkflowName(payload.name)) {
           return { ok: false, error: `invalid workflow name: ${payload.name}` };
         }
+        // Project scope is not a definition source (plan 583, user-picked (c)):
+        // `.duya/workflows/` travels with a cloned repository. Reject it as the
+        // user-facing answer rather than letting store.save throw into the
+        // catch below — that path logs a stack for what is an expected request.
+        if (payload.scope === 'project') {
+          logger.warn('dwf workflow save rejected: project scope is no longer loaded', { name: payload.name }, LogComponent.Main);
+          return { ok: false, error: PROJECT_SCOPE_NOT_A_SOURCE };
+        }
         // meta 在主进程再过一次 schema——渲染层是不可信边界。
         const meta = SavedWorkflowMetaSchema.parse(payload.meta) as SavedWorkflowMeta;
         // Compile gate (plan 565 Phase B): a script that cannot compile never
@@ -348,15 +357,19 @@ export function registerWorkflowHandlers(): void {
           return { ok: false, error: `script compile failed: ${detail}` };
         }
         const store = new SavedWorkflowStore();
+        // Default scope is GLOBAL, not project: a save is the user putting a
+        // script somewhere they can see and manage, and the global dir is the
+        // only one that is both readable back and not repo-borne.
+        const scope = payload.scope ?? 'global';
         const saved = store.save(
           payload.projectDir ?? process.cwd(),
           payload.name,
           meta,
           payload.script,
-          payload.scope ?? 'project',
+          scope,
           { homeDir: payload.homeDir },
         );
-        logger.info('dwf workflow saved', { name: payload.name, file: saved.path, scope: payload.scope ?? 'project' }, LogComponent.Main);
+        logger.info('dwf workflow saved', { name: payload.name, file: saved.path, scope }, LogComponent.Main);
         return { ok: true, file: saved.path, shadowing: saved.shadowing };
       } catch (err) {
         logger.error('Failed to save dwf workflow', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
@@ -370,16 +383,21 @@ export function registerWorkflowHandlers(): void {
     (_e, payload: { name: string; scope?: SavedWorkflowScope; projectDir?: string; homeDir?: string }) => {
       const logger = getLogger();
       try {
+        if (payload.scope === 'project') {
+          return { ok: false, error: PROJECT_SCOPE_NOT_A_SOURCE };
+        }
+        // Default scope matches save's default: global (plan 583 (c)).
+        const scope = payload.scope ?? 'global';
         const deleted = new SavedWorkflowStore().delete(
           payload.projectDir ?? process.cwd(),
           payload.name,
-          payload.scope ?? 'project',
+          scope,
           { homeDir: payload.homeDir },
         );
         if (!deleted) {
-          return { ok: false, error: `workflow "${payload.name}" not found in ${payload.scope ?? 'project'} scope` };
+          return { ok: false, error: `workflow "${payload.name}" not found in ${scope} scope` };
         }
-        logger.info('dwf workflow deleted', { name: payload.name, scope: payload.scope ?? 'project' }, LogComponent.Main);
+        logger.info('dwf workflow deleted', { name: payload.name, scope }, LogComponent.Main);
         return { ok: true };
       } catch (err) {
         logger.error('Failed to delete dwf workflow', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);

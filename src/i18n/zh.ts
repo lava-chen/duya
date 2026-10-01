@@ -1294,7 +1294,7 @@ const zh: Record<TranslationKey, string> = {
   'panel.workflow.invalid': '无效',
   'panel.workflow.savedCount': '已保存的工作流',
   'panel.workflow.noDefinitions': '还没有保存过工作流。可在对话里创建。',
-  'panel.workflow.definitionsHint': '定义来自项目的 .duya/workflows/ 与全局 ~/.duya/workflows/（.dwf.ts）。脚本本体请在对话里维护。',
+  'panel.workflow.definitionsHint': '定义来自全局 ~/.duya/workflows/（.dwf.ts）。项目目录里的 .duya/workflows/ 不再被加载——它会随克隆的仓库一起进来。脚本本体请在对话里维护。',
   'panel.workflow.running': '进行中',
   'panel.workflow.finished': '已结束',
   'panel.workflow.noRunning': '没有正在进行的工作流。',

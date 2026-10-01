@@ -787,7 +787,7 @@ describe('dwf planner', () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'dwf-planner-'));
     try {
       const store = new SavedWorkflowStore();
-      store.save(cwd, 'pr-review', result.meta, result.script, 'project', { homeDir: cwd });
+      store.save(cwd, 'pr-review', result.meta, result.script, 'global', { homeDir: cwd });
       const hit = store.resolve(cwd, 'pr-review', { homeDir: cwd });
       expect(hit.ok).toBe(true);
       if (hit.ok) expect(hit.script).toBe(result.script);

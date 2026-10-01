@@ -4,7 +4,6 @@
 
 export {
   SAVED_WORKFLOW_FILE_EXTENSION,
-  SAVED_WORKFLOW_PROJECT_DIR,
   SAVED_WORKFLOW_GLOBAL_DIR,
   SAVED_WORKFLOW_DRAFTS_DIR,
   SAVED_WORKFLOW_NAME_PATTERN,
@@ -48,6 +47,7 @@ export {
   savedWorkflowRoot,
   savedWorkflowDraftsDir,
   savedWorkflowShadowing,
+  PROJECT_SCOPE_NOT_A_SOURCE,
 } from './store.js';
 
 export type {
@@ -78,6 +78,14 @@ export {
 } from './planner-dwf.js';
 
 export type { DwfPlannerLlm, DwfPlannerInput, DwfPlannerResult } from './planner-dwf.js';
+
+export {
+  DWF_PRIMITIVES,
+  assessDwfScript,
+  formatDwfConsentPrompt,
+} from './trust.js';
+
+export type { DwfScriptAssessment, DwfConsentFacts } from './trust.js';
 
 export { defToDwfSource } from './def-to-dwf.js';
 

@@ -1309,7 +1309,7 @@ const en = {
   'panel.workflow.invalid': 'INVALID',
   'panel.workflow.savedCount': 'Saved workflows',
   'panel.workflow.noDefinitions': 'No workflows saved yet. Author one in chat.',
-  'panel.workflow.definitionsHint': 'Definitions come from the project .duya/workflows/ and the global ~/.duya/workflows/ (.dwf.ts). Script bodies are maintained in chat.',
+  'panel.workflow.definitionsHint': 'Definitions come from the global ~/.duya/workflows/ (.dwf.ts). A project .duya/workflows/ is no longer loaded — it arrives with a cloned repository. Script bodies are maintained in chat.',
   'panel.workflow.running': 'In progress',
   'panel.workflow.finished': 'Finished',
   'panel.workflow.noRunning': 'No runs in progress.',
