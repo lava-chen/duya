@@ -63,6 +63,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:rules": "node tests/rules-compliance.test.mjs",
     "test:e2e": "npx playwright test --config=e2e/playwright.config.ts",
     "test:e2e:smoke": "npx playwright test --config=e2e/playwright.config.ts --project=smoke",
     "test:e2e:ipc": "npx playwright test --config=e2e/playwright.config.ts --project=ipc",

@@ -113,10 +113,12 @@ docs/*/
 docs/*.md
 
 # Tests
-# Tests: only the root-level `tests/` scratch directory is ignored.
+# Tests: the root-level `tests/` scratch directory is ignored, EXCEPT the
+# rules-compliance checker, which is tracked and wired to `npm run test:rules`.
 # `packages/agent/tests/` and `packages/plugin-core/tests/` are intentionally
 # tracked — they hold the project's unit-test source.
-/tests/
+/tests/*
+!/tests/rules-compliance.test.mjs
 
 # Bundled output
 packages/agent/bundle/
