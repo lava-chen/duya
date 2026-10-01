@@ -966,6 +966,81 @@ describe('db-handlers (core store thin forward)', () => {
     });
   });
 
+  // ==================== Plan 583 / ISS-31: agent profile payload contract ====================
+  // The handlers used to take `Record<string, unknown>` and coerce each value
+  // with a bare `as` cast, so a type-confused payload reached the row verbatim.
+  describe('db:agentProfile payload contract (ISS-31)', () => {
+    function makeFakeDb() {
+      const rows = new Map<string, Record<string, unknown>>();
+      return {
+        rows,
+        prepare: (sql: string) => ({
+          run: (params: unknown) => {
+            const p = params as Record<string, unknown>;
+            if (sql.includes('INSERT INTO agent_profiles')) {
+              rows.set(p.id as string, { ...p });
+            } else if (sql.includes('UPDATE agent_profiles')) {
+              rows.set(p.id as string, { ...(rows.get(p.id as string) ?? {}), ...p });
+            }
+            return { changes: 1, lastInsertRowid: 1 };
+          },
+          get: (arg: unknown) => {
+            const id = typeof arg === 'string' ? arg : (arg as Record<string, unknown>).id;
+            return rows.get(id as string);
+          },
+          all: () => Array.from(rows.values()),
+        }),
+      };
+    }
+
+    it('refuses an object where a string column belongs', async () => {
+      vi.mocked(getDatabase).mockReturnValue(makeFakeDb() as never);
+      await expect(
+        invokeHandler('db:agentProfile:update', {}, 'my-agent', { name: { evil: true } }),
+      ).rejects.toThrow(/Invalid payload for db:agentProfile:update/);
+    });
+
+    it('refuses a scalar where a tool-pattern array belongs', async () => {
+      vi.mocked(getDatabase).mockReturnValue(makeFakeDb() as never);
+      await expect(
+        invokeHandler('db:agentProfile:update', {}, 'my-agent', { allowed_tools: 'file:*' }),
+      ).rejects.toThrow(/Invalid payload/);
+    });
+
+    it('refuses an oversized free-text column', async () => {
+      vi.mocked(getDatabase).mockReturnValue(makeFakeDb() as never);
+      await expect(
+        invokeHandler('db:agentProfile:update', {}, 'my-agent', { description: 'a'.repeat(5001) }),
+      ).rejects.toThrow(/Invalid payload/);
+    });
+
+    it('refuses a non-string profile id', async () => {
+      vi.mocked(getDatabase).mockReturnValue(makeFakeDb() as never);
+      await expect(
+        invokeHandler('db:agentProfile:update', {}, 42, { name: 'ok' }),
+      ).rejects.toThrow(/Invalid payload/);
+    });
+
+    it('refuses a type-confused payload on create', async () => {
+      vi.mocked(getDatabase).mockReturnValue(makeFakeDb() as never);
+      await expect(
+        invokeHandler('db:agentProfile:create', {}, { id: 'a', name: 'A', profile_kind: 7 }),
+      ).rejects.toThrow(/Invalid payload for db:agentProfile:create/);
+    });
+
+    it('still accepts a well-formed patch and strips unknown keys', async () => {
+      const db = makeFakeDb();
+      vi.mocked(getDatabase).mockReturnValue(db as never);
+      await invokeHandler('db:agentProfile:create', {}, { id: 'my-agent', name: 'My Agent' });
+      const updated = (await invokeHandler('db:agentProfile:update', {}, 'my-agent', {
+        description: 'hello',
+        bogus: 'ignored',
+      })) as Record<string, unknown>;
+      expect(updated.description).toBe('hello');
+      expect(updated.bogus).toBeUndefined();
+    });
+  });
+
   // ==================== plan 413 db:relocateDatabase path-safety ====================
   // The DB holds all chats + credentials, so the relocate destination
   // must stay inside the user home directory. Only the rejection paths

@@ -9,6 +9,12 @@ import { ipcMain, BrowserWindow } from 'electron';
 import { getAgentProcessPool } from './process-pool/agent-process-pool';
 import { getAgentServerPort } from './agent-server-lifecycle';
 import { toLLMProvider, type ApiProvider } from '../config/provider-types';
+import {
+  ApiProviderPatchSchema,
+  ApiProviderUpsertSchema,
+  parseIpcPayload,
+  RecordIdSchema,
+} from '../ipc/contracts';
 import { getCoreStores } from '../db/core-connection';
 import { getLogger, LogComponent } from '../logging/logger';
 import { dispatchDbAction, handleDbRequest as processDbRequest, type DbRequest, type DbResponse } from './db-bridge';
@@ -475,7 +481,14 @@ export function registerAgentHandlers(): void {
   });
 
   // Upsert provider
-  ipcMain.handle('config:provider:upsert', (_event, data: ApiProvider) => {
+  ipcMain.handle('config:provider:upsert', (_event, payload: unknown) => {
+    // The cast is honest about a pre-existing lie rather than papering over
+    // it: `ApiProvider` declares `providerType`/`baseUrl`/`apiKey` as required,
+    // but `migrateLegacyApiProvider` has always tolerated their absence (it
+    // falls back to a default apiFormat and an empty baseUrl), and every
+    // in-repo caller sends a partial payload. The schema validates shape and
+    // bounds; the migration still decides the defaults.
+    const data = parseIpcPayload(ApiProviderUpsertSchema, payload, 'config:provider:upsert') as ApiProvider;
     const store = getProviderStore();
     store.migrateAllLegacyProviders();
     store.upsertLlmProvider(migrateLegacyApiProvider(data));
@@ -483,13 +496,21 @@ export function registerAgentHandlers(): void {
   });
 
   // Update provider (partial update)
-  ipcMain.handle('config:provider:update', (_event, id: string, data: Partial<ApiProvider>) => {
+  ipcMain.handle('config:provider:update', (_event, id: string, payload: unknown) => {
+    const data = parseIpcPayload(ApiProviderPatchSchema, payload, 'config:provider:update');
     const store = getProviderStore();
     store.migrateAllLegacyProviders();
     const existingLlm = store.getLlmProvider(id);
     const existing = existingLlm ? toLegacyApiProvider(existingLlm) : undefined;
     if (!existing) return null;
-    const updated = { ...existing, ...data, id };
+    // Same cast rationale as upsert, and for an additional reason:
+    // `ApiProvider['providerType']` is declared as a 9-value union, but the
+    // live vocabulary is wider — 'lm-studio', 'glm', 'minimax' and
+    // 'minimax-cn' all appear in real provider payloads today. The declared
+    // union is narrower than reality, so a validated string cannot be proven
+    // assignable to it. Narrowing the union is the real fix, but it reaches
+    // across packages and is out of scope for the payload-contract track.
+    const updated = { ...existing, ...data, id } as ApiProvider;
     store.upsertLlmProvider(migrateLegacyApiProvider(updated));
     return maskProvider(updated);
   });
@@ -503,10 +524,11 @@ export function registerAgentHandlers(): void {
 
   // Activate provider
   ipcMain.handle('config:provider:activate', (_event, id: string) => {
+    const providerId = parseIpcPayload(RecordIdSchema, id, 'config:provider:activate');
     const store = getProviderStore();
     store.migrateAllLegacyProviders();
-    store.setDefaultLlmProvider(id);
-    const providerLlm = store.getLlmProvider(id);
+    store.setDefaultLlmProvider(providerId);
+    const providerLlm = store.getLlmProvider(providerId);
     return providerLlm ? maskProvider(toLegacyApiProvider(providerLlm)) : null;
   });
 

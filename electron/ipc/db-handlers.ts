@@ -14,6 +14,7 @@ import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
 import { getAutomationScheduler } from '../automation/Scheduler';
 import type { CreateAutomationCronInput, UpdateAutomationCronInput } from '../automation/types';
 import { getLogger, LogComponent } from '../logging/logger';
+import { AgentProfileCreateSchema, AgentProfileUpdateSchema, parseIpcPayload, RecordIdSchema } from './contracts';
 import { setBrowserMaxTabs } from '../services/browser/daemon';
 import { getCoreStores } from '../db/core-connection';
 import {
@@ -2293,9 +2294,10 @@ export function registerDbHandlers(): void {
     return getDb().prepare('SELECT * FROM agent_profiles WHERE id = ?').get(id);
   });
 
-  ipcMain.handle('db:agentProfile:create', (_event, data: Record<string, unknown>) => {
+  ipcMain.handle('db:agentProfile:create', (_event, payload: unknown) => {
+    const data = parseIpcPayload(AgentProfileCreateSchema, payload, 'db:agentProfile:create');
     const now = Date.now();
-    const id = (data.id as string) || randomUUID();
+    const id = data.id || randomUUID();
     const database = getDb();
     database.prepare(`
       INSERT INTO agent_profiles (
@@ -2311,10 +2313,10 @@ export function registerDbHandlers(): void {
       description: data.description ?? null,
       allowed_tools: data.allowed_tools ? JSON.stringify(data.allowed_tools) : null,
       disallowed_tools: data.disallowed_tools ? JSON.stringify(data.disallowed_tools) : null,
-      prompt_system: (data.prompt_system as string) ?? null,
+      prompt_system: data.prompt_system ?? null,
       prompt_profile: data.prompt_profile ? JSON.stringify(data.prompt_profile) : null,
       default_model: data.default_model ?? null,
-      profile_kind: (data.profile_kind as string) ?? 'main',
+      profile_kind: data.profile_kind ?? 'main',
       user_visible: data.user_visible !== undefined ? (data.user_visible ? 1 : 0) : 1,
       is_preset: data.is_preset !== undefined ? (data.is_preset ? 1 : 0) : 0,
       is_enabled: data.is_enabled !== undefined ? (data.is_enabled ? 1 : 0) : 1,
@@ -2366,33 +2368,36 @@ export function registerDbHandlers(): void {
     return updated;
   });
 
-  ipcMain.handle('db:agentProfile:update', (_event, id: string, data: Record<string, unknown>) => {
+  ipcMain.handle('db:agentProfile:update', (_event, id: string, payload: unknown) => {
+    const data = parseIpcPayload(AgentProfileUpdateSchema, payload, 'db:agentProfile:update');
+    const profileId = parseIpcPayload(RecordIdSchema, id, 'db:agentProfile:update');
     const now = Date.now();
     const fields: string[] = ['updated_at = @updated_at'];
-    const params: Record<string, unknown> = { id, updated_at: now };
+    const params: Record<string, unknown> = { id: profileId, updated_at: now };
 
     const fieldMap: Record<string, [string, (v: unknown) => unknown]> = {
       name: ['name', v => v],
       description: ['description', v => v ?? null],
       allowed_tools: ['allowed_tools', v => v ? JSON.stringify(v) : null],
       disallowed_tools: ['disallowed_tools', v => v ? JSON.stringify(v) : null],
-      prompt_system: ['prompt_system', v => (v as string) ?? null],
+      prompt_system: ['prompt_system', v => v ?? null],
       prompt_profile: ['prompt_profile', v => v ? JSON.stringify(v) : null],
       default_model: ['default_model', v => v ?? null],
-      profile_kind: ['profile_kind', v => (v as string) ?? 'main'],
+      profile_kind: ['profile_kind', v => v ?? 'main'],
       is_enabled: ['is_enabled', v => v !== undefined ? (v ? 1 : 0) : 1],
     };
 
     for (const [key, [dbField, transform]] of Object.entries(fieldMap)) {
-      if (data[key] !== undefined) {
+      const value = (data as Record<string, unknown>)[key];
+      if (value !== undefined) {
         fields.push(`${dbField} = @${dbField}`);
-        params[dbField] = transform(data[key]);
+        params[dbField] = transform(value);
       }
     }
 
     const database = getDb();
     database.prepare(`UPDATE agent_profiles SET ${fields.join(', ')} WHERE id = @id`).run(params);
-    return database.prepare('SELECT * FROM agent_profiles WHERE id = ?').get(id);
+    return database.prepare('SELECT * FROM agent_profiles WHERE id = ?').get(profileId);
   });
 
   ipcMain.handle('db:agentProfile:delete', (_event, id: string) => {
