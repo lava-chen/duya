@@ -4,9 +4,9 @@ import {
   extractResultFromLastMessage,
   buildChatAgentProgressPayload,
   type AgentProgressPayloadMeta,
-} from '../../../src/tool/AgentTool/agentLifecycleBridge.js'
+} from '../../../src/tool/SubagentTool/subagentLifecycleBridge.js'
 import { BackgroundAgentLifecycle } from '../../../src/lifecycle/BackgroundAgentLifecycle.js'
-import type { AgentProgressEvent } from '../../../src/tool/AgentTool/runAgent.js'
+import type { AgentProgressEvent } from '../../../src/tool/SubagentTool/runAgent.js'
 import type { TaskRecord } from '../../../src/lifecycle/TaskState.js'
 import * as fs from 'node:fs/promises'
 
