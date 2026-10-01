@@ -2,9 +2,16 @@ name: Test
 
 on:
   push:
-    branches: [main, develop]
+    # Plan 583 ISS-01: this workflow previously watched `main`/`develop`,
+    # neither of which exists in this repository — `origin/HEAD` is
+    # `master`, and `gh pr create --base master` is the documented flow in
+    # AGENTS.md. The triggers therefore never matched and this entire
+    # workflow has never run, which is how a P0 type error and a P0 build
+    # break both reached master. `main`/`develop` are kept in case they are
+    # ever created, but `master` is the one that must be here.
+    branches: [master, main, develop]
   pull_request:
-    branches: [main, develop]
+    branches: [master, main, develop]
 
 jobs:
   test:

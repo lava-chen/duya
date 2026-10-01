@@ -14,27 +14,37 @@
     "paths": {
       "@/*": ["./*"],
       "@duya/agent/message": ["../packages/agent/dist/message/index"],
+      "@duya/agent/tool/allowedRoots": ["../packages/agent/src/tool/allowedRoots.ts"],
       "@duya/plugin-core": ["../packages/plugin-core/src/index.ts"],
       "@duya/plugin-core/*": ["../packages/plugin-core/*"]
     }
   },
   "include": [
     "./agents/**/*.ts",
+    "./channels/**/*.ts",
     "./cli/**/*.ts",
+    "./conductor/**/*.ts",
     "./config/**/*.ts",
+    "./core/**/*.ts",
     "./db/**/*.ts",
     "./gateway/**/*.ts",
     "./import/**/*.ts",
     "./ipc/**/*.ts",
+    "./lib/**/*.ts",
     "./logging/**/*.ts",
     "./messaging/**/*.ts",
     "./memory-state/**/*.ts",
     "./memory/**/*.ts",
+    "./plugins/**/*.ts",
     "./project-database/**/*.ts",
     "./services/**/*.ts",
+    "./skills/**/*.ts",
+    "./types/**/*.ts",
+    "./utils/**/*.ts",
+    "./wake/**/*.ts",
     "./automation/**/*.ts",
     "./main.ts",
     "./preload.ts"
   ],
-  "exclude": ["node_modules", "*.test.ts"]
+  "exclude": ["node_modules", "**/*.test.ts", "**/*.spec.ts", "**/__tests__/**", "**/__mocks__/**"]
 }

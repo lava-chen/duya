@@ -58,6 +58,15 @@ export default defineConfig({
       // Resolve workspace plugin-core from THIS checkout (worktree-safe;
       // the node_modules junction pins the primary checkout).
       { find: '@duya/plugin-core', replacement: PLUGIN_CORE_ROOT },
+      // Plan 583 ISS-02: the duya-file media allowlist reuses the sandboxed
+      // file tools' root-boundary primitive from agent source. Point at this
+      // checkout (worktree-safe), same as plugin-core above.
+      {
+        find: /^@duya\/agent\/tool\/allowedRoots$/,
+        replacement: fileURLToPath(
+          new URL('./packages/agent/src/tool/allowedRoots.ts', import.meta.url),
+        ),
+      },
       // Mirror vite.config.ts aliases so vitest can resolve
       // `@duya/conductor/renderer/*` to the package's source tree. Without
       // these the test environment errors out when any imported file
