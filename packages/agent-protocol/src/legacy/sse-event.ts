@@ -81,7 +81,8 @@ export const SSE_EVENT_TO_PROTOCOL: Readonly<
 
   // `tool_use` and `tool_use_started` carry IDENTICAL data
   // (router.ts:466-477 vs :491-502) and the same on the worker side
-  // (worker-protocol.ts:269-283, two interfaces that differ only in the
+  // (packages/agent/src/process/worker-protocol.ts:269-283, two interfaces
+  // that differ only in the
   // `type` discriminant). `tool_use_started` is the provisional announcement
   // while arguments are still streaming; `tool_use` is the authoritative
   // re-emission — DuyaAgent.ts:2394-2397 says so in as many words. Consumers
@@ -135,7 +136,8 @@ export const UNDECLARED_ROUTER_EVENTS: Readonly<Record<string, readonly EventTyp
   token_usage: ['assistant.usage'],
   // `checkpoint` is absorbed by compaction.completed + run.started{resumedFrom};
   // its {messages, generation} payload is a STORAGE shape and must not cross
-  // the protocol boundary (router.ts:1520-1526, worker-protocol.ts:248-255).
+  // the protocol boundary (router.ts:1520-1526,
+  // packages/agent/src/process/worker-protocol.ts:248-255).
   checkpoint: [],
   // Control frame, not an event.
   ready: [],
@@ -156,7 +158,7 @@ export const LEGACY_PERMISSION_ACTION_MAP: Readonly<Record<string, PermissionAct
   allow_once: 'allow',
   allow_for_session: 'allow_always',
   // `paused` is what the bot approval card path means when a host never
-  // answers (types.ts:334-336) — a timeout, recorded as a deny.
+  // answers (packages/agent/src/types.ts:337) — a timeout, recorded as a deny.
   paused: 'deny',
 };
 

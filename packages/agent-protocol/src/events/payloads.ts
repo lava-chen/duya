@@ -135,10 +135,11 @@ export interface ToolResult {
   readonly content: string;
   /** The protocol FORCES this field, because every producer treats it as
    *  optional and so absence is indistinguishable from success. The same bit
-   *  is spelled three ways in this repo: `error?: boolean` on the worker's
-   *  `chat:tool_result` (worker-protocol.ts:304, relayed verbatim by
-   *  router.ts:506) and `is_error?: boolean` on `@duya/ai`'s
-   *  `ToolResultContent` (types.ts:79) — two different structures, two
+   *  is spelled three ways in this repo: `chat:tool_result` carries
+   *  `error?: boolean` (packages/agent/src/process/worker-protocol.ts:299-305,
+   *  relayed verbatim by router.ts:506), and `@duya/ai`'s
+   *  `ToolResultContent` carries `is_error?: boolean`
+   *  (packages/ai/src/types.ts:75-80) — two different structures, two
    *  different names, both optional. A required boolean is the only spelling
    *  that makes a missing failure signal a type error rather than a default. */
   readonly isError: boolean;
@@ -491,9 +492,10 @@ export interface SubagentCompletedPayload {
   readonly summary?: string;
 }
 
-/** From `AgentProgressEvent.hookEvent` (ai/src/types.ts:332-347).
+/** From `AgentProgressEvent.hookEvent` (packages/ai/src/types.ts:332-347).
  *
- *  NOTE: the legacy payload carried its OWN `seq` field (ai/types.ts:344) —
+ *  NOTE: the legacy payload carried its OWN `seq` field
+ *  (packages/ai/src/types.ts:344) —
  *  a THIRD seq namespace. The protocol discards it; the envelope's `seq` is
  *  the only ordering authority. */
 export interface HookInvokedPayload {

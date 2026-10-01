@@ -53,8 +53,11 @@ export type DecodedEvent = RunEvent | UnknownRunEvent;
 export type Durability = 'durable' | 'volatile' | 'ephemeral';
 
 /** Classification only. grok-build keeps its method enum FLAT and leaves
- *  direction enforcement to the hub (methods.rs:19-21); the same applies here —
- *  the protocol supplies vocabulary, adapters enforce direction. */
+ *  direction enforcement to the hub; the same applies here — the protocol
+ *  supplies vocabulary, adapters enforce direction.
+ *
+ *  external, grok-build `crates/common/xai-tool-protocol/src/methods.rs:19-21`
+ *  "the enum is flat — direction enforcement is the computer hub's job" */
 export type EventCategory =
   | 'run'
   | 'turn'
