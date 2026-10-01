@@ -523,11 +523,13 @@ pi 则是另一极端：无 manifest 预声明 + 静默遮蔽内置，用户在 
    接了也只是把死元数据换个地方放。
 4. ~~G4：补上 G2 留下的信任门~~ ✅ `allowHttpHooks` / `maxHooks` 原本被误判为 N/A，
    它们有执行点且 G2 已接上。已按 `TRUST_LEVEL_CAPABILITIES` 逐条执行。
-5. **缝 C 方案 B 判定为「暂不做」**：`plugin` 这个 MCP source 桶在仓内**不可达**
+5. ~~G5：`command` / `process` hook 的显式同意~~ ✅ **用户选定方案 B 并落地。**
+   共享规则在 plugin-core，agent 侧 fail-closed，设置页展示真实命令行供知情同意。
+6. **缝 C 方案 B 判定为「暂不做」**：`plugin` 这个 MCP source 桶在仓内**不可达**
    （零个 plugin 声明 `mcp/servers.json`），放松它对 `decideMcpSource` 是空转。
-6. **C 方案（进程内执行）仍需先解决门控缺失**——但注意这不是「等 584」：
+7. **C 方案（进程内执行）仍需先解决门控缺失**——但注意这不是「等 584」：
    584 已完成且说明了：**要接 C，必须先为它新建一个执行点**（声明 + 校验），
-   否则就是无门控地执行第三方代码。G4 是这条教训的第一次实际应用：
+   否则就是无门控地执行第三方代码。G4/G5 是这条教训的两次实际应用：
    G2 自己就是先接了执行点、门才补上，顺序反了。接 C 时不要重蹈。
 
 #### G2 的实现要点（2026-10-01）
@@ -624,7 +626,7 @@ commands/agents），与 plugin-core 的 `PluginCapabilities` interface 是两�
 门禁：`npx vitest run packages/agent/src/hooks` → 12 文件 / 199 用例全绿；
 `npx tsc -p packages/agent --noEmit` exit 0；`npm run typecheck:web` exit 0。
 
-#### G4 之后仍未关闭的：`command` / `process` hook（2026-10-01，待用户定尺度）
+#### G5：`command` / `process` hook 的显式同意（2026-10-01，用户选定方案 B 后落地）
 
 G4 关掉了网络那一扇门（http），但**本地执行那一扇还开着**，而且性质更重。
 
@@ -637,35 +639,47 @@ G4 关掉了网络那一扇门（http），但**本地执行那一扇还开着**
 | 二者共同 | `resolveProcessSpawn` 把 `node` 改写成 `process.execPath` + `ELECTRON_RUN_AS_NODE=1` | 插件可以让 **app 自己的 Electron 运行时**执行任意 Node 代码 |
 
 `${KEY}` 展开由 `HOOK_VAR_SAFE_RE` 守着，但那只防**变量**注入，不防插件自己指定 `command`。
-`cwd` 传的是会话工作目录，所以脚本能碰到整个工作区，不受 plugin 目录限制。
+`cwd` 传的是会话工作目录，所以脚本能碰到整个工作区，不受 plugin 目录限制 ——
+这也意味着 `maxFileAccess` 的 `plugin-dir-only` **接不上**（spawn 出去的 shell 无法被约束到
+某个目录，没有 OS 级沙箱），该字段继续标 N/A。
 
-**为什么没直接补门**：
+与 G3 的 commands/agents **不同类**：那两个是宿主没有加载器，真来了也不执行；这里宿主
+**会完整执行**。所以不能按 N/A 处理。
 
-1. **现在不可达** —— 全仓 `packages/**/hooks.json` 只有 `packages/agent/skills/.system/memory-search/hooks.json`，
-   那是 agent 自带的系统 skill，**零个 plugin 真的声明了 hook**。所以这是「还没人用的门」，
-   不是「正在被推开的门」。
-2. **和 G3 的 commands/agents 不同类** —— 那两个是**宿主没有加载器**，真来了也不执行；
-   这里宿主**会完整执行**。所以不能按 N/A 处理。
-3. **没有现成字段可依** —— 信任表里没有 `allowCommandHooks` / `allowProcessHooks`。
-   `allowAgentHooks` 管的是 `type: 'agent'`（executor 对它只打 `NOT_IMPLEMENTED`）。
-   硬套就是新造策略。
-4. **`maxFileAccess` 接不上** —— 它写着 untrusted 是 `plugin-dir-only`，但一个 spawn 出去的
-   shell 无法被约束到某个目录（没有 OS 级沙箱）。这条只能继续标 N/A，如实说做不到。
-5. **`requirePermissionConfirmation` 语义是对的，但接线要产品面** —— 它本来就是「使用时询问」的意思
-   （584 拒绝拿它做安装门控正是因为语义不同）。拿它做「插件要跑本地进程 → 先问用户」是正确用法，
-   但需要：同意弹窗 + 决策持久化（按插件一次？按 hook 一次？）。这是产品面决策，不该我替你定。
+**用户 2026-10-01 选定方案 B**（`requirePermissionConfirmation`：非 official 插件跑本地
+进程前显式问用户，决策按插件持久化）。落地如下。
 
-**待你拍板的三种尺度**（按安全性递减、成本递增）：
+**共享规则放在 `@duya/plugin-core`**（`src/security/hook-consent.ts`）而不是任一侧：
+主进程用它决定「要不要问」，agent 用它决定「能不能跑」，两边不可能各写一份而漂移。
 
-| 选项 | 做法 | 代价 |
-|---|---|---|
-| **A. 只允许 official** | 复用 http 的门：`official` 以外一律丢弃 `command`/`process` | 第三方插件等于没有 hook。**需要新字段**（不能硬套 `allowAgentHooks`） |
-| **B. 显式同意** | 接 `requirePermissionConfirmation`：非 official 插件的本地执行 hook 首次执行前弹窗确认，结果按插件持久化 | 要做同意 UI + 存储 + 设置页。是**真正对第三方生态友好的方案** |
-| **C. 继续留门** | 只写文档，等真有插件需要再说 | 一旦有第一个插件这么干就已经晚了 |
+**主进程**
+- `electron/db/pluginHookConsent.ts` —— module-owned side table
+  `plugin_hook_consent(plugin_id PK, decision CHECK IN ('granted','denied'), decided_at)`，
+  幂等 DDL 同时接为 **migration 59** 和 `initializeSchema` 自修复（沿用 plan-498 范式）。
+  **无行 = 未授予**，绝不当作同意；`denied` 是被记录的决定而非缺省，UI 才能区分
+  「你拒绝了」和「还没问你」。
+- `electron/plugins/hook-consent.ts` —— 复用 `discoverHooks`（它已经在扁平化时保留了
+  `type`，所以**不需要另写 parser**），输出 `required` / `decision` /
+  `localExecutionHooks`（真实命令行，用于知情同意）。
+- IPC `plugin:hook-consent:get` / `:list` / `:set`，preload + `PluginAPI` 类型 + renderer 封装。
 
-我的判断：**B 是唯一对第三方插件生态成立的方案**，A 会让「plugin 带 hook」这件事事实上
-只对一方插件开放（那不如明说只支持 official），C 的风险是发现时已经在生产上。
-但 B 是产品面，按惯例该你定尺度。
+**agent 侧**
+- `setExtraHookFiles` 元素扩为 `{ path, trustLevel, localExecutionAllowed }`。
+  同意表经 `plugin:hook-consent:list` 一次取回。**拉取失败回落到空表** → 所有非一方
+  插件解析为「未授予」→ 命令类 hook 被丢。读不到的同意表不得变成放行一切的同意表。
+- `gatePluginHooks` 逐 hook 丢弃（不是整文件丢）：拒绝本地执行不会顺手禁掉同文件里
+  无关的 `prompt` hook。测试专门钉了这一条。
+
+**设置页**
+- `PluginHookConsentCard` —— 只在 `required` 时渲染，展示**每一条实际命令行 + 所属事件**，
+  因为这个决定是关于那些具体命令的，看不到命令就没法做知情决定。允许 / 拒绝 / 撤销。
+
+门禁：`vitest run packages/agent/src/hooks packages/plugin-core electron/db electron/plugins`
+→ 78 文件 / 1267 用例，**1265 通过**，2 个失败均为既有红且经 stash 验证与本次无关
+（`app-schema-marketplace-compat` 读外部 marketplace 仓库；`workflow-store` 的
+migration-30 用例用「只应用到 30」的 schema 调当前版 SQL，而 `agent_model` 是 migration 32
+才加的）。`tsc -p packages/plugin-core` exit 0、`tsc --noEmit`（electron + src）exit 0、
+`packages/agent` exit 0。变异测试：把 `localExecutionAllowed` 改成恒 true → **5 条用例红**。
 
 #### 已有的冲突/优先级策略地图（2026-10-01 摸清，比三个参照物都好）
 
