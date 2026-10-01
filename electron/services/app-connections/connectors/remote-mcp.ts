@@ -41,7 +41,7 @@ import {
   allocateConnectionToolAlias,
   connectionNamespace,
 } from '@duya/plugin-core/src/mcp/core/alias.js';
-import { InventoryLedger } from '../inventory-ledger.js';
+import { InventoryLedger } from '@duya/plugin-core/src/mcp/core/ledger-types.js';
 import { getLogger, LogComponent } from '../../../logging/logger';
 
 const COMPONENT = 'AppConnectionConnector' as LogComponent;
@@ -79,7 +79,7 @@ interface RemoteSession {
   serverCapabilities?: Record<string, unknown>;
   /**
    * Plan 580 D3 chain B inventory ledger, owned per session (see
-   * `inventory-ledger.ts`). It is the single source of truth for discovery
+   * `@duya/plugin-core/src/mcp/core/ledger-types.ts`). It is the single source of truth for discovery
    * state: pagesFetched / discoveredTotal / inventoryRevision / layers /
    * fetchedAt all live here, not as loose fields on this interface. Do not
    * flatten them back out — the snapshot returned by `getLedgerSnapshot()`
