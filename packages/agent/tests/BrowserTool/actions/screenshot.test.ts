@@ -1,5 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screenshotAction } from '../../../src/tool/BrowserTool/actions/screenshot.js';
+
+// Only writeFile is wrapped; mkdir and the real read/write stay intact so
+// the persistence tests exercise an actual filesystem round-trip.
+const mocks = vi.hoisted(() => ({ writeFileShouldFail: false }));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    writeFile: async (path: string, data: Uint8Array) => {
+      if (mocks.writeFileShouldFail) {
+        throw new Error('ENOSPC: no space left on device');
+      }
+      return actual.writeFile(path, data);
+    },
+  };
+});
 import type { ActionContext } from '../../../src/tool/BrowserTool/actions/types.js';
 import type { ICDPClient } from '../../../src/tool/BrowserTool/CDPClient.js';
 
@@ -75,12 +92,13 @@ describe('screenshotAction', () => {
         fullPage: false,
         selector: undefined,
       });
-      expect(result).toEqual({
-        screenshot: 'data:image/png;base64,base64pngdata',
-        fullPage: false,
-        selector: undefined,
-        mode: 'extension',
-      });
+      // Captures are persisted to a temp PNG so the vision loop can hand
+      // vision_analyze a short filePath instead of an inline base64 data URL.
+      expect(result.filePath).toMatch(/duya-screenshots[/\\]shot-\d+-[a-z0-9]+\.png$/);
+      expect(result.screenshot).toBeUndefined();
+      expect(result.fullPage).toBe(false);
+      expect(result.selector).toBeUndefined();
+      expect(result.mode).toBe('extension');
     });
 
     it('should pass fullPage=true to cdp.screenshot()', async () => {
@@ -93,7 +111,7 @@ describe('screenshotAction', () => {
         fullPage: true,
         selector: undefined,
       });
-      expect(result.screenshot).toBe('data:image/png;base64,base64pngdata');
+      expect(result.filePath).toBeDefined();
       expect(result.fullPage).toBe(true);
     });
 
@@ -133,7 +151,7 @@ describe('screenshotAction', () => {
       expect(result.mode).toBe('playwright');
     });
 
-    it('should prepend data:image/png;base64, prefix to base64 data', async () => {
+    it('should persist the capture as a decodable PNG file', async () => {
       const mockCDP = createMockCDP({
         screenshot: vi.fn().mockResolvedValue('YWJjZGVm'),
       });
@@ -141,7 +159,31 @@ describe('screenshotAction', () => {
 
       const result = await screenshotAction.execute({}, ctx);
 
-      expect(result.screenshot).toBe('data:image/png;base64,YWJjZGVm');
+      expect(result.filePath).toBeDefined();
+      // The file must contain the decoded payload, not the base64 text.
+      const { readFile, rm } = await import('node:fs/promises');
+      const written = await readFile(result.filePath as string);
+      expect(written.toString('utf8')).toBe('abcdef');
+      await rm(result.filePath as string, { force: true });
+    });
+
+    it('should fall back to an inline data URL when persisting the file fails', async () => {
+      const mockCDP = createMockCDP({
+        screenshot: vi.fn().mockResolvedValue('YWJjZGVm'),
+      });
+      const ctx = createMockContext({ cdp: mockCDP });
+
+      // The persistence step must never lose the capture: a failed write
+      // degrades to the inline data URL rather than dropping the image.
+      mocks.writeFileShouldFail = true;
+      try {
+        const result = await screenshotAction.execute({}, ctx);
+
+        expect(result.filePath).toBeUndefined();
+        expect(result.screenshot).toBe('data:image/png;base64,YWJjZGVm');
+      } finally {
+        mocks.writeFileShouldFail = false;
+      }
     });
 
     it('should propagate errors from cdp.screenshot()', async () => {
