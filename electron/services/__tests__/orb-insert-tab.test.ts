@@ -20,7 +20,22 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock('@duya/agent/context/os-context', () => ({
+/**
+ * Mock the module `orb-insert-tab.ts` ACTUALLY imports.
+ *
+ * This used to mock `@duya/agent/context/os-context`, a specifier the
+ * module never imports: `orb-insert-tab.ts:27` reaches into the built
+ * output through a raw relative path. `vi.mock` matches on the resolved
+ * module, so the mock silently never applied, the real bridge was used,
+ * and every case short-circuited on `isEnabled() === false` and reported
+ * `os-context-bridge-disabled` instead of the reason under test.
+ *
+ * The same wrong specifier appears in other electron tests; the real fix
+ * is for electron to import `@duya/agent/context/os-context` and let a
+ * vitest alias resolve it to agent source (as ISS-02 did for
+ * `allowedRoots`), so tests stop depending on a prior `dist` build.
+ */
+vi.mock('../../../packages/agent/dist/context/os-context/index.js', () => ({
   getOSContextBridge: () => mocks.osContextBridge,
 }));
 

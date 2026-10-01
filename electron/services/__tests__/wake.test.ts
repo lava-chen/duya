@@ -45,6 +45,50 @@ import {
   type OrbState,
 } from '../wake';
 
+/**
+ * A URL the orb window will actually try to load.
+ *
+ * `sendOrb` deliberately queues messages until `did-finish-load`, because a
+ * send to a renderer that has not mounted its `ipcRenderer.on` listeners
+ * yet is silently dropped. With no `orbDevUrl`/`orbResourcesPath` the
+ * resolved URL is `about:blank`, `ensureOrb` skips `loadURL` entirely, and
+ * the queue never drains — so any assertion that a message *reached* the
+ * renderer was asserting against a queue nobody flushed. Supplying a real
+ * URL makes the double load, fire `did-finish-load`, and flush, which is
+ * what happens in dev and in a packaged build.
+ */
+const LOADABLE_ORB_URL = 'http://localhost:5173/orb/index.html';
+
+type FakeWebContents = {
+  send: ReturnType<typeof vi.fn>;
+  listeners: Record<string, Array<(...args: unknown[]) => void>>;
+  on: (event: string, listener: (...args: unknown[]) => void) => void;
+  once: (event: string, listener: (...args: unknown[]) => void) => void;
+  off: (event: string, listener: (...args: unknown[]) => void) => void;
+  emit: (event: string, ...args: unknown[]) => void;
+};
+
+function createFakeWebContents(): FakeWebContents {
+  const listeners: Record<string, Array<(...args: unknown[]) => void>> = {};
+  const on = (event: string, listener: (...args: unknown[]) => void): void => {
+    (listeners[event] ??= []).push(listener);
+  };
+  return {
+    send: vi.fn(),
+    listeners,
+    on,
+    once: on,
+    off: (event, listener) => {
+      const kept = (listeners[event] ?? []).filter((fn) => fn !== listener);
+      if (kept.length > 0) listeners[event] = kept;
+      else delete listeners[event];
+    },
+    emit: (event, ...args) => {
+      for (const fn of [...(listeners[event] ?? [])]) fn(...args);
+    },
+  };
+}
+
 class FakeBrowserWindow {
   destroyed = false;
   bounds: { x: number; y: number; width: number; height: number } = {
@@ -60,9 +104,18 @@ class FakeBrowserWindow {
    */
   setBoundsCount = 0;
   visible = false;
-  webContents = {
-    send: vi.fn(),
-  };
+  /**
+   * `wake.ts:544` queues inbound messages until the orb's renderer has
+   * finished loading, which it observes via `webContents.on(
+   * 'did-finish-load')`. The mock only carried `send`, so every test
+   * that reached the load path died on `webContents.on is not a
+   * function` — a gap in the double, not a defect in the service.
+   *
+   * The listener table lives in a closure rather than off `this`: inside
+   * an object literal `this` is the literal itself, so `this.webContents`
+   * would be undefined.
+   */
+  webContents = createFakeWebContents();
   listeners: Record<string, Array<(...args: unknown[]) => void>> = {};
   on(event: string, listener: (...args: unknown[]) => void): void {
     (this.listeners[event] ??= []).push(listener);
@@ -81,12 +134,33 @@ class FakeBrowserWindow {
   }
   restore(): void {}
   focus(): void {}
+  /**
+   * `wake.ts` reads the current geometry back through `getBounds()` to
+   * decide whether the orb actually moved. The double only had a
+   * `bounds` field and `setBounds`, so every path that compared old to
+   * new geometry threw instead of asserting.
+   */
+  getBounds(): { x: number; y: number; width: number; height: number } {
+    return { ...this.bounds };
+  }
+  /** No-op, but present because `wake.ts` toggles it around `setBounds`. */
+  setResizable(_resizable: boolean): void {}
   setBounds(next: { x: number; y: number; width: number; height: number }): void {
     this.bounds = { ...next };
     this.setBoundsCount++;
   }
+  /**
+   * Models "the orb renderer has finished loading".
+   *
+   * `wake.ts` registers its `did-finish-load` flush listener (line 544)
+   * before it calls `loadURL` (line 591), so emitting here is faithful to
+   * the real ordering. Emitting synchronously rather than on a later tick
+   * keeps the suite's existing synchronous `wake(); expect(send)` shape
+   * meaningful instead of silently asserting against an unflushed queue.
+   */
   loadURL(url: string): Promise<void> {
     mocks.loadURL(url);
+    this.webContents.emit('did-finish-load');
     return Promise.resolve();
   }
 }
@@ -160,7 +234,7 @@ describe('WakeService wake/collapse', () => {
   });
 
   it('wake() from DORMANT transitions to INPUT and creates the window', () => {
-    const wake = initializeWakeService({});
+    const wake = initializeWakeService({ orbDevUrl: LOADABLE_ORB_URL });
     wake.wake();
 
     expect(wake.getState()).toBe('INPUT');
@@ -184,7 +258,7 @@ describe('WakeService wake/collapse', () => {
   });
 
   it('collapse() returns to DORMANT and sends hide', () => {
-    const wake = initializeWakeService({});
+    const wake = initializeWakeService({ orbDevUrl: LOADABLE_ORB_URL });
     wake.wake();
     wake.collapse();
 
