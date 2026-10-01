@@ -145,67 +145,17 @@ export function registerAgentHandlers(): void {
     return pool.isRunning('');
   });
 
-  // Handler to get agent provider config for initializing agent subprocess
-  ipcMain.handle('agent:getProviderConfig', (_event, sessionId: string) => {
-    const store = getProviderStore();
-    store.migrateAllLegacyProviders();
-
-    // Read provider_id / model from the core sessions store (plan 328).
-    const session = getCoreStores().sessions.get(sessionId);
-
-    let provider: ApiProvider | null = null;
-    if (session?.providerId) {
-      const llm = store.getLlmProvider(session.providerId);
-      provider = llm ? toLegacyApiProvider(llm) : null;
-    }
-
-    if (!provider) {
-      const activeLlm = store.getDefaultLlmProvider();
-      provider = activeLlm ? toLegacyApiProvider(activeLlm) : null;
-    }
-
-    if (!provider) return null;
-
-    const defaultModel = getDefaultModelForProvider(provider.providerType, provider.options);
-
-    // Build runtime config via the store for new agent code paths.
-    const llm = store.getLlmProvider(provider.id);
-    let runtimeConfig: Record<string, unknown> | undefined;
-    if (llm) {
-      const resolvedModelId = session?.model || defaultModel;
-      const capability = store.resolveRuntimeCapability(provider.id, resolvedModelId);
-      const cfg = buildRuntimeConfig(llm, {
-        modelId: resolvedModelId,
-        capabilities: capability,
-      });
-      runtimeConfig = {
-        providerId: cfg.providerId,
-        apiFormat: cfg.apiFormat,
-        baseUrl: cfg.baseUrl,
-        apiKey: cfg.apiKey,
-        accessToken: cfg.accessToken,
-        headers: cfg.headers,
-        model: cfg.model,
-        modelCapabilities: cfg.modelCapabilities,
-        // ModelCompat flags (thinking format, supportsFinishReason, …) are
-        // consumed by DuyaAgent (runtimeConfig.modelCompat) to build the LLM
-        // client. Without this field every provider runs compat-less in the
-        // main chat path and reasoning models lose their thinking wiring.
-        modelCompat: cfg.modelCompat,
-        requestOptions: cfg.requestOptions,
-      };
-    }
-
-    return {
-      apiKey: provider.apiKey,
-      baseURL: provider.baseUrl || undefined,
-      model: session?.model || defaultModel,
-      provider: toLLMProvider(provider.providerType),
-      // Phase 2: include the runtime config so the agent can adopt
-      // the new path when ready.
-      runtimeConfig,
-    };
-  });
+  // Plan 583 / ISS-12: the `agent:getProviderConfig` channel that used to sit
+  // here is deleted. It returned `apiKey` in plaintext (twice — once at the top
+  // level and again inside `runtimeConfig.apiKey`), and no renderer could reach
+  // it: `preload.ts` never exposed it, and the bridge exposes no generic
+  // channel-name invoke. So it was a live secret-exfiltration surface with
+  // zero callers, and a trap for the next person who wired it up.
+  //
+  // The two paths that DO need a runtime config keep their own construction:
+  // `agents/server/router.ts#buildInitProviderConfig` for chat and compact
+  // spawns, and `agents/db-bridge.ts` (`config:provider:resolveRuntime`) for
+  // the agent server's IPC round-trip.
 
   // Handler to get masked provider config for renderer (no API key exposure)
   ipcMain.handle('agent:getMaskedProviderConfig', (_event, sessionId: string) => {
