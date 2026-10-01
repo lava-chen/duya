@@ -1,0 +1,38 @@
+{
+  "name": "@duya/agent-protocol",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Transport-neutral wire contract for Duya agent runs: a closed event registry, envelopes, manifests, permissions, and an error taxonomy. Types only — zero runtime dependencies.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/fixtures.d.ts",
+      "import": "./dist/testing/fixtures.js"
+    },
+    "./legacy": {
+      "types": "./dist/legacy/sse-event.d.ts",
+      "import": "./dist/legacy/sse-event.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "vitest": "^3.0.0"
+  }
+}
