@@ -88,7 +88,15 @@ export interface ChatStartOptions {
   maxTokens?: number;
   files?: FileAttachment[];
   agentProfileId?: string | null;
-  permissionMode?: 'bypass' | 'step' | 'full';
+  /**
+   * Plan 583 / ISS-09: the old `permissionMode?: 'bypass' | 'step' | 'full'`
+   * field is gone. It matched neither the DB `permission_profile` vocabulary
+   * nor the agent's internal modes, nothing ever set it, and the worker
+   * ignored it in favour of the session row. Leaving it on the wire invited
+   * callers to believe they were setting a permission. Use
+   * `permissionModeOverride` for a per-turn override, or persist the durable
+   * profile on the session row.
+   */
   /** User message ID from frontend, used to look up parsed doc attachments from DB */
   userMessageId?: string;
 }
