@@ -1349,7 +1349,7 @@ const zh: Record<TranslationKey, string> = {
   'panel.files': '文件',
   'panel.preview': '预览',
   'panel.review': '代码审阅',
-  'panel.conductor': '指挥台',
+  'panel.conductor': '画布',
   'panel.workflow.title': '工作流',
   'panel.workflow.tabDefinitions': '定义',
   'panel.workflow.tabRuns': '运行',
@@ -2854,7 +2854,7 @@ const zh: Record<TranslationKey, string> = {
   'conductor.toolbar.delete': '删除',
 
   // 画布视图
-  'conductor.loading': '正在加载指挥台…',
+  'conductor.loading': '正在加载画布…',
   'conductor.dismissError': '关闭错误提示',
   'conductor.selectOrCreateCanvas': '选择或创建一个画布以开始',
 
@@ -2907,7 +2907,7 @@ const zh: Record<TranslationKey, string> = {
   'conductor.status.syncing': '同步中',
   'conductor.status.undo': '撤销',
   'conductor.status.redo': '重做',
-  'conductor.status.settings': '指挥台设置',
+  'conductor.status.settings': '画布设置',
 
   // 画布链接对话框
   'conductor.link.title': '创建画布链接',
