@@ -222,6 +222,11 @@ const result = {
     edge: k, count: v.n, distinctTargets: v.targets.size,
     targets: [...v.targets].slice(0, 25),
   })),
+  // Per-edge detail, not just the per-pair aggregate above. Added for
+  // architecture-check.mjs, which fingerprints each violation individually so
+  // a ratchet can tell "same debt" from "different debt at the same count".
+  // Purely additive: the human summary and every count above are unchanged.
+  crossBoundaryEdges: crossBoundary,
   deepImportsByPair: byPair(deep).map(([k, v]) => ({
     edge: k, count: v.n, distinctTargets: v.targets.size,
     targets: [...v.targets].slice(0, 25),

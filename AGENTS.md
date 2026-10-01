@@ -105,6 +105,20 @@ node packages/agent/dist/cli/index.js [options]
 ## Gates
 
 - Pre-commit: `npm run typecheck:all` MUST pass. esbuild does not type check.
+- Architecture boundaries: `npm run architecture:check` MUST pass. It is a
+  ratchet, not a lint: ~938 pre-existing violations are frozen in
+  `.architecture-baseline.json`, and only *new* ones block. Never add a
+  fingerprint to the baseline to silence something you just introduced — fix
+  the edge, or use `--write` only when a migration legitimately removed debt.
+  Modules declared `managed: true` in `architecture-policy.yaml`
+  (`agent-protocol`, `agent-core`, `agent-runtime`) have zero tolerance and
+  cannot be baselined at all.
+  - ⚠️ **Not yet enforced in CI.** The workflow's push trigger points at
+    `main`/`develop` while this repo's default branch is `master`, so no
+    `push` run has ever happened. Until plan 583 ISS-01 lands, this gate is
+    local-only and its absence from a green CI run means nothing.
+  - Verify the gate itself still sees everything after touching the resolver or
+    the audit scripts: `npm run architecture:self-test`.
 - MCP connectors: a new or changed connector MUST pass the conformance suite
   (`packages/agent/tests/integration/mcp-conformance.test.ts`, L1–L9) before
   merge — transactional discovery, replace-set, catalog retrieval, deterministic
