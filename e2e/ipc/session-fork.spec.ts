@@ -7,13 +7,13 @@
  * never been reachable, despite the core logic being complete and unit-tested
  * against real stores.
  *
- * The unit tests in `electron/db/core/__tests__/session-fork.test.ts` call
+ * The unit tests in `apps/desktop/src/main/db/core/__tests__/session-fork.test.ts` call
  * `forkSession()` directly, so by construction they can never see a channel
  * name. Only a real bridge can. That is the same lesson as
  * `session-archive.spec.ts`, which caught the `db:session:unarchive` variant
  * of this exact bug.
  *
- * `electron/ipc/__tests__/ipc-channel-contract.test.ts` now guards the class
+ * `apps/desktop/src/main/ipc/__tests__/ipc-channel-contract.test.ts` now guards the class
  * statically; this file guards the behaviour.
  */
 import { test, expect } from '@playwright/test';

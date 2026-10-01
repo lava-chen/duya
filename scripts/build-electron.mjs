@@ -64,25 +64,25 @@ async function buildElectron() {
 
   await build({
     ...shared,
-    entryPoints: ['electron/main.ts'],
+    entryPoints: ['apps/desktop/src/main/index.ts'],
     outfile: 'dist-electron/main.js',
   });
 
   await build({
     ...shared,
-    entryPoints: ['electron/preload.ts'],
+    entryPoints: ['apps/desktop/src/preload/index.ts'],
     outfile: 'dist-electron/preload.js',
   });
 
   await build({
     ...shared,
-    entryPoints: ['electron/agents/server/index.ts'],
+    entryPoints: ['apps/desktop/src/main/agents/server/index.ts'],
     outfile: 'dist-electron/agent-server.js',
   });
 
   await build({
     ...shared,
-    entryPoints: ['electron/project-database/worker.ts'],
+    entryPoints: ['apps/desktop/src/main/project-database/worker.ts'],
     outfile: 'dist-electron/project-database-worker.js',
   });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { computeNextRunAt } from '../../../../electron/automation/schedule';
-import type { CronSchedule } from '../../../../electron/automation/types';
+import { computeNextRunAt } from '../../../../apps/desktop/src/main/automation/schedule';
+import type { CronSchedule } from '../../../../apps/desktop/src/main/automation/types';
 
 describe('computeNextRunAt', () => {
   it('returns future timestamp for a one-shot schedule', () => {

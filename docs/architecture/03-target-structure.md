@@ -111,6 +111,59 @@ evals/                            # ★ 新建。不是 workspace member（见 0
 
 ---
 
+## 2.1 M7 已落地：`apps/desktop/`（2026-10-01）
+
+`apps/desktop/{src/{main,preload,renderer}}` 已实际搬迁，取代原 `electron/` + `src/`：
+
+```
+apps/desktop/
+  package.json              # @duya/desktop（private，暂不搬依赖）
+  tsconfig.main.json        # main 层（不进 gate，见下）
+  tsconfig.preload.json     # preload 层
+  tsconfig.renderer.json    # renderer 层 —— 根 tsconfig.json extends 它
+  src/main/                 # ← electron/**        （main.ts → index.ts）
+  src/preload/              # ← electron/preload.ts（→ index.ts）
+  src/renderer/             # ← src/**
+```
+
+分层 tsconfig 采用 ZCode `packages/desktop` 的形态（main / preload / renderer 分离）。
+**可借鉴的是分层，不是目录名** —— 见下。
+
+### 为什么没有照抄 ZCode 的 `packages/desktop` + `packages/ui`
+
+评估过 ZCode 的真实布局（`packages/desktop` + `packages/ui` + `packages/shared`，
+只有 `apps/zcode-cli` 在 `apps/`），结论是**不采纳**，理由三条：
+
+1. **先拆 ui 会制造一条新的违规边。** ZCode 能把 desktop 与 ui 分包，靠 `packages/shared`
+   兜住跨进程契约（`zcode-protocol-v4` / `model-config` / `node` 等子路径）。
+   本次明确**不建 shared**，54 条 `main → renderer` 的边只做机械改写。
+   若 ui 独立成包，这 54 条就从"同包内相对路径"变成"main 反向 import renderer 包"，
+   正好撞上 `05-architecture-governance.md` 要禁的规则 —— **净负收益**。
+2. **准则 3 不满足。** ZCode 有 `@zcode/web` + `@zcode/client` 与 ui 并列，ui 才有 2 个以上
+   consumer。duya 只有一个 renderer。
+3. **`apps/` 与 `packages/` 的语义。** duya 是单一可部署单元；ZCode 自己把独立分发的
+   `zcode-cli` 放在 `apps/`。`apps/desktop` = 可部署应用，`packages/*` = 库，语义更准。
+
+### 抽 `packages/ui` 的触发条件（届时 M3 的 shared 应已就位）
+
+1. 出现第二个真实 renderer consumer（web host，或 conductor 独立可消费）；
+2. 先把 **109 个直接引用 `window.electronAPI` 的 renderer 文件**迁到平台端口层
+   （实测 504 处引用，`src/lib/ipc-client.ts` 一个文件占 82 处，ZCode 的对应物是
+   `packages/shared/src/platform.ts` 的 `IPlatformService`）；
+3. 满足 1 + 2 后再抽包。
+
+> **顺序不能反**：先补平台端口层，再抽 ui 包。现在硬抽等于把 109 个 Electron 耦合点
+> 冻结进一个"共享包"，将来 web 接入时再全部拆一遍。
+
+### 本次搬迁没有解决的
+
+- **`packages/shared`（M3）未做** —— 54 条 `main → renderer` 边按原路径保留，留给 M3 收敛。
+- **main 进程仍无类型门禁** —— `tsconfig.main.json` 已定义但**故意不进 `typecheck:all`**：
+  `tsc -p apps/desktop/tsconfig.main.json` 实测有 **898 个既有错误**（与 plan 583 ISS-01 同源），
+  挂上即红。main 的安全网目前是 `npm run build:electron`（esbuild 解析每一条 import 边）+ `npm test`。
+
+---
+
 ## 3. 关键裁决详述
 
 ### 3.1 `agent-tools` 该不该独立？—— 裁决：**不建这个包，改用按能力抽包**

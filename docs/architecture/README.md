@@ -20,6 +20,7 @@
 | 04 | [Agent Harness 设计](04-agent-harness-design.md) | Run API / 事件 / 权限 / 取消恢复 / evaluator 怎么定义？ |
 | 05 | [架构治理](05-architecture-governance.md) | 怎么强制执行，而不是靠自觉？ |
 | 06 | [迁移方案](06-migration-plan.md) | 按什么顺序做？每步怎么验收、怎么回滚？ |
+| 10 | [技术债台账](10-tech-debt-tracker.md) | 目标状态与仓库实际状态之间还差什么？谁来还？ |
 
 ---
 

@@ -11,10 +11,10 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: [
-      'src/**/*.test.ts',
-      'src/**/*.test.tsx',
-      'src/**/*.spec.ts',
-      'electron/**/*.test.ts',
+      'apps/desktop/src/renderer/**/*.test.ts',
+      'apps/desktop/src/renderer/**/*.test.tsx',
+      'apps/desktop/src/renderer/**/*.spec.ts',
+      'apps/desktop/src/main/**/*.test.ts',
       'packages/*/tests/**/*.test.ts',
       'packages/*/tests/**/*.spec.ts',
       'packages/ai/test/**/*.test.ts',
@@ -49,7 +49,7 @@ export default defineConfig({
     // up the latest source instead of stale committed `.js` artifacts.
     extensions: ['.mjs', '.mts', '.ts', '.tsx', '.js', '.jsx', '.json'],
     alias: [
-      { find: '@', replacement: path.resolve(__dirname, './src') },
+      { find: '@', replacement: path.resolve(__dirname, './apps/desktop/src/renderer') },
       // Pin better-sqlite3 to the root-managed copy. packages/agent pins
       // v11 (no node-24 prebuilt exists), so its package-local duplicate
       // loads with a stale NODE_MODULE_VERSION; the root copy is the one
