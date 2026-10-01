@@ -15,7 +15,12 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-const mocks = vi.hoisted(() => ({ home: '' }));
+const mocks = vi.hoisted(() => ({
+  home: '',
+  // Plan 583 / ISS-30: the sender guard compares against the main window.
+  mainWindowId: 4242 as number | null,
+  mainOrigin: 'http://localhost:3000',
+}));
 
 vi.mock('os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('os')>();
@@ -48,8 +53,26 @@ vi.mock('electron', () => ({
 
 // The module registers many handlers and pulls in the main-process graph.
 // Stub the heavy collaborators so this stays a unit test.
+//
+// NOTE on mock paths: `vi.mock` paths resolve relative to THIS file, so
+// `../core/window-manager` would mean `electron/ipc/core/window-manager` and
+// match nothing. The real module is `electron/core/window-manager`, i.e.
+// `../../core/window-manager`. The older `../…` mocks above are no-ops that
+// happen to work because the real modules load cleanly under the mocked
+// `electron`; the one below is spelled correctly because ISS-30's sender
+// guard depends on it.
 vi.mock('../core/bootstrap', () => ({ isDev: false }));
-vi.mock('../core/window-manager', () => ({ getMainWindow: () => null }));
+vi.mock('../../core/window-manager', () => ({
+  getMainWindow: () =>
+    mocks.mainWindowId === null
+      ? null
+      : {
+          isDestroyed: () => false,
+          webContents: { id: mocks.mainWindowId, getURL: () => mocks.mainOrigin },
+        },
+  getIsQuitting: () => false,
+  setIsQuitting: () => undefined,
+}));
 vi.mock('../agents/agent-server-lifecycle', () => ({ getAgentServerPort: () => 0 }));
 vi.mock('../agents/process-pool/agent-process-pool', () => ({
   getAgentProcessPool: () => ({ on: () => undefined }),
@@ -80,10 +103,18 @@ afterAll(() => {
   if (mocks.home) fs.rmSync(mocks.home, { recursive: true, force: true });
 });
 
+/** An IPC event that the sender guard should accept: the app's main frame. */
+function trustedEvent() {
+  return {
+    sender: { id: mocks.mainWindowId },
+    senderFrame: { routingId: 0, url: `${mocks.mainOrigin}/index.html` },
+  };
+}
+
 async function create(name: unknown) {
   const fn = handlers.get('app:create-project-folder');
   if (!fn) throw new Error('app:create-project-folder was not registered');
-  return (await fn({}, name)) as { success: boolean; error: string; path: string };
+  return (await fn(trustedEvent(), name)) as { success: boolean; error: string; path: string };
 }
 
 describe('app:create-project-folder — traversal', () => {
@@ -142,5 +173,52 @@ describe('app:create-project-folder — legitimate names still work', () => {
   it('rejects a name that already exists', async () => {
     expect((await create('dupe')).success).toBe(true);
     expect((await create('dupe')).success).toBe(false);
+  });
+});
+
+describe('app:create-project-folder — sender trust (plan 583, ISS-30)', () => {
+  async function callWith(event: unknown, name: string) {
+    const fn = handlers.get('app:create-project-folder');
+    if (!fn) throw new Error('app:create-project-folder was not registered');
+    return fn(event, name);
+  }
+
+  it('refuses an auxiliary window and creates nothing', async () => {
+    const event = { sender: { id: 9999 }, senderFrame: { routingId: 0, url: `${mocks.mainOrigin}/` } };
+    await expect(callWith(event, 'from-overlay')).rejects.toThrow(/untrusted sender/);
+    expect(fs.existsSync(path.join(workspaceDir, 'from-overlay'))).toBe(false);
+  });
+
+  it('refuses a webview guest', async () => {
+    const event = { sender: { id: 7777 }, senderFrame: { routingId: 0, url: 'https://evil.example/' } };
+    await expect(callWith(event, 'from-guest')).rejects.toThrow(/untrusted sender/);
+    expect(fs.existsSync(path.join(workspaceDir, 'from-guest'))).toBe(false);
+  });
+
+  it('refuses an iframe inside the main window', async () => {
+    const event = { sender: { id: mocks.mainWindowId }, senderFrame: { routingId: 12, url: `${mocks.mainOrigin}/` } };
+    await expect(callWith(event, 'from-iframe')).rejects.toThrow(/untrusted sender/);
+    expect(fs.existsSync(path.join(workspaceDir, 'from-iframe'))).toBe(false);
+  });
+
+  it('refuses a main frame that navigated off the app origin', async () => {
+    const event = { sender: { id: mocks.mainWindowId }, senderFrame: { routingId: 0, url: 'https://evil.example/' } };
+    await expect(callWith(event, 'from-elsewhere')).rejects.toThrow(/untrusted sender/);
+    expect(fs.existsSync(path.join(workspaceDir, 'from-elsewhere'))).toBe(false);
+  });
+
+  it('refuses when there is no main window at all', async () => {
+    mocks.mainWindowId = null;
+    try {
+      const event = { sender: { id: 1 }, senderFrame: { routingId: 0, url: `${mocks.mainOrigin}/` } };
+      await expect(callWith(event, 'headless')).rejects.toThrow(/untrusted sender/);
+    } finally {
+      mocks.mainWindowId = 4242;
+    }
+  });
+
+  it('still accepts the app main frame', async () => {
+    const result = (await create('from-main-frame')) as { success: boolean };
+    expect(result.success).toBe(true);
   });
 });

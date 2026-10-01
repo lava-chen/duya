@@ -18,6 +18,7 @@ import { homedir } from 'os';
 import { getLogger, LogComponent } from '../logging/logger';
 import { isDev } from '../core/bootstrap';
 import { getMainWindow } from '../core/window-manager';
+import { assertTrustedSender } from './trusted-sender';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
 import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
 import { getConfigStore } from '../config/store-instance';
@@ -339,6 +340,10 @@ export function registerSystemHandlers(): void {
   });
 
   ipcMain.handle('app:create-project-folder', async (_event, projectName: string) => {
+    // Plan 583 / ISS-30: this handler creates a directory from a
+    // renderer-supplied name, so it must only be reachable from the app's
+    // own main frame. Guard first, before reading any argument.
+    assertTrustedSender(_event, {}, 'app:create-project-folder');
     if (typeof projectName !== 'string' || projectName.length === 0 || projectName.length > 255) {
       return { success: false, error: 'Invalid project name', path: '' };
     }
