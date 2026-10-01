@@ -14,7 +14,15 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { EVENT_META, EVENT_REGISTRY, EVENT_TYPES } from '../src/index.js';
+import {
+  EVENT_META,
+  EVENT_REGISTRY,
+  EVENT_TYPES,
+  PROTOCOL_CAPABILITIES,
+  PROTOCOL_SCHEMA_REVISION,
+  isProtocolCapability,
+  type ProtocolCapability,
+} from '../src/index.js';
 
 const SNAPSHOT = join(
   fileURLToPath(new URL('..', import.meta.url)),
@@ -23,21 +31,31 @@ const SNAPSHOT = join(
   'event-types.json',
 );
 
+interface EventMetaSnapshot {
+  readonly durability: string;
+  readonly category: string;
+  readonly minProtocol: string;
+  readonly minSchemaRevision: number;
+  readonly requiresCapability?: string;
+}
+
 interface Snapshot {
   readonly count: number;
   readonly types: readonly string[];
-  readonly meta: Readonly<Record<string, { durability: string; category: string; since: string }>>;
+  readonly meta: Readonly<Record<string, EventMetaSnapshot>>;
 }
 
 function current(): Snapshot {
   const types = [...EVENT_TYPES].sort();
-  const meta: Record<string, { durability: string; category: string; since: string }> = {};
+  const meta: Record<string, EventMetaSnapshot> = {};
   for (const type of types) {
     const spec = EVENT_META[type];
     meta[type] = {
       durability: spec.durability,
       category: spec.category,
-      since: spec.since,
+      minProtocol: spec.minProtocol,
+      minSchemaRevision: spec.minSchemaRevision,
+      ...(spec.requiresCapability ? { requiresCapability: spec.requiresCapability } : {}),
     };
   }
   return { count: types.length, types, meta };
@@ -79,10 +97,49 @@ describe('drift #5: event type snapshot', () => {
     expect(actual.meta).toEqual(committed.meta);
   });
 
-  it('every event declares the protocol version that introduced it', () => {
+  it('every event declares a well-formed gate, and it is a real one', () => {
+    // This replaces the old "every event declares a valid `since`" assertion,
+    // which checked the SHAPE of a string nothing read. Here the gate is
+    // consulted: an unknown or malformed gate would be caught by the
+    // compatibility suite, and this is the check that no event was left
+    // ungated in the first place.
     for (const [type, spec] of Object.entries(EVENT_META)) {
-      expect(spec.since, `${type} has no valid since`).toMatch(/^\d+\.\d+$/);
+      expect(spec.minProtocol, `${type} has no valid minProtocol`).toMatch(/^\d+\.\d+$/);
+      expect(
+        Number.isInteger(spec.minSchemaRevision) && spec.minSchemaRevision >= 1,
+        `${type} has no valid minSchemaRevision`,
+      ).toBe(true);
+      expect(
+        spec.minSchemaRevision,
+        `${type} is gated after the current schema revision, so it can never be delivered`,
+      ).toBeLessThanOrEqual(PROTOCOL_SCHEMA_REVISION);
+      if (spec.requiresCapability !== undefined) {
+        expect(
+          isProtocolCapability(spec.requiresCapability),
+          `${type} requires ${spec.requiresCapability}, which is not in the capability vocabulary`,
+        ).toBe(true);
+      }
     }
+  });
+
+  it('every gated capability is actually consumed by something', () => {
+    // A capability nobody requires is dead weight in the handshake, and a
+    // required capability nothing uses is a false promise to a host. Both are
+    // ways the negotiation starts lying.
+    const required = new Set(
+      Object.values(EVENT_META)
+        .map((s) => s.requiresCapability)
+        .filter((c): c is ProtocolCapability => c !== undefined),
+    );
+    for (const cap of required) {
+      expect(
+        PROTOCOL_CAPABILITIES,
+        `capability ${cap} is required by an event but is not declared in the vocabulary`,
+      ).toContain(cap);
+    }
+    // The reverse direction is a lint, not a failure: a capability may be
+    // reserved for a control method. Control methods are checked separately.
+    expect(required.size).toBeGreaterThan(0);
   });
 
   it('the registry views agree with the metadata table', () => {

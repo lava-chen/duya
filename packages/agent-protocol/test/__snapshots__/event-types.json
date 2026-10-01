@@ -1,5 +1,5 @@
 {
-  "count": 36,
+  "count": 38,
   "types": [
     "assistant.goal_updated",
     "assistant.message_finalized",
@@ -10,6 +10,7 @@
     "assistant.thinking_block",
     "assistant.thinking_delta",
     "assistant.usage",
+    "checkpoint.saved",
     "compaction.completed",
     "compaction.failed",
     "compaction.over_threshold",
@@ -30,6 +31,7 @@
     "subagent.started",
     "tool.arguments_delta",
     "tool.call_completed",
+    "tool.call_preview",
     "tool.call_started",
     "tool.group_progress",
     "tool.progress",
@@ -42,182 +44,235 @@
     "assistant.goal_updated": {
       "durability": "durable",
       "category": "assistant",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "assistant.message_finalized": {
       "durability": "durable",
       "category": "assistant",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "assistant.mode_changed": {
       "durability": "volatile",
       "category": "assistant",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "assistant.status": {
       "durability": "volatile",
       "category": "assistant",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "assistant.text_block": {
       "durability": "durable",
       "category": "assistant",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "assistant.text_delta": {
       "durability": "ephemeral",
       "category": "assistant",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "assistant.thinking_block": {
       "durability": "durable",
       "category": "assistant",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "assistant.thinking_delta": {
       "durability": "ephemeral",
       "category": "assistant",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "assistant.usage": {
       "durability": "durable",
       "category": "assistant",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1,
+      "requiresCapability": "usage_accounting"
+    },
+    "checkpoint.saved": {
+      "durability": "durable",
+      "category": "run",
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1,
+      "requiresCapability": "checkpoint_resume"
     },
     "compaction.completed": {
       "durability": "durable",
       "category": "compaction",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "compaction.failed": {
       "durability": "durable",
       "category": "compaction",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "compaction.over_threshold": {
       "durability": "volatile",
       "category": "compaction",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "compaction.started": {
       "durability": "durable",
       "category": "compaction",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "compaction.step": {
       "durability": "volatile",
       "category": "compaction",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "diagnostic": {
       "durability": "ephemeral",
       "category": "diagnostic",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "diagnostic.trace": {
       "durability": "ephemeral",
       "category": "diagnostic",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "extension.custom": {
       "durability": "volatile",
       "category": "extension",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "hook.invoked": {
       "durability": "durable",
       "category": "subagent",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "permission.expired": {
       "durability": "durable",
       "category": "permission",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1,
+      "requiresCapability": "permission_expiry"
     },
     "permission.requested": {
       "durability": "durable",
       "category": "permission",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "permission.resolved": {
       "durability": "durable",
       "category": "permission",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "run.completed": {
       "durability": "durable",
       "category": "run",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "run.failed": {
       "durability": "durable",
       "category": "run",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "run.paused": {
       "durability": "volatile",
       "category": "run",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "run.started": {
       "durability": "durable",
       "category": "run",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "subagent.completed": {
       "durability": "durable",
       "category": "subagent",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "subagent.started": {
       "durability": "durable",
       "category": "subagent",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "tool.arguments_delta": {
       "durability": "ephemeral",
       "category": "tool",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "tool.call_completed": {
       "durability": "durable",
       "category": "tool",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1,
+      "requiresCapability": "tool_outcome_detail"
+    },
+    "tool.call_preview": {
+      "durability": "volatile",
+      "category": "tool",
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1,
+      "requiresCapability": "tool_call_preview"
     },
     "tool.call_started": {
       "durability": "durable",
       "category": "tool",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "tool.group_progress": {
       "durability": "volatile",
       "category": "tool",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "tool.progress": {
       "durability": "volatile",
       "category": "tool",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "tool.timed_out": {
       "durability": "volatile",
       "category": "tool",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "turn.completed": {
       "durability": "durable",
       "category": "turn",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "turn.retry_scheduled": {
       "durability": "volatile",
       "category": "turn",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     },
     "turn.started": {
       "durability": "durable",
       "category": "turn",
-      "since": "1.0"
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
     }
   }
 }

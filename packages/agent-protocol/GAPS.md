@@ -1,431 +1,404 @@
-# Gap register — `agent-protocol` PP-1
+# Gap register — `@duya/agent-protocol`
 
-协议里**已记录但未解决**的缺口。每一条都写明:现象、根因、为什么现在不修、
-以及**关闭它的验收标准**。放在这里而不是散在模块注释里,是因为这些是
-「消费方迁移前必须有答案」的问题,不是「以后有空再优化」的问题。
+协议里所有**曾经未决**的架构问题。每一条现在只能是两种状态之一：
 
-规则:**一条 gap 只能被两种方式关闭——实现它,或在 `DECIDED:` 写下裁决并说明代价。**
-不能既不实现也不裁决就把它留在类型里。
-
----
-
-## G-1 · 闭合 `ErrorCode` 与代码实际使用的错误码几乎不相交
-
-**严重度** 高 · **归属** PP-6(错误分类落地)· **状态** 未决
-
-### 现象
-
-`errors.ts` 定义了 40 个闭合 `ErrorCode`。逐个在 `packages/` `electron/` `src/`
-里搜索字面量,**其中 32 个查无此串**。
-
-代码真实在用的是另一套自由字符串,例如:
-
-```
-internal_error   missing_arg       invalid_request      agent_not_found
-platform_unavailable   db_unavailable   cron_not_found    connector_auth_required
-provider_error    unknown_action    invalid_arguments    unsupported_file
-http_<status>     skill_not_found   not_in_catalog      connection_revoked
-no_agent          invalid_id        slack_error          scheduler_unavailable
-path_not_found    insert_failed     copy_failed          rm_failed
-sync_failed       plugin_registry_error   missing_query   missing_operation
-invalid_channel_id   blocked        skill_read_failed
-```
-
-而 worker 的 `chat:error` 定义是 `code?: string`——**自由字符串,没有闭合约束。**
-
-### 根因
-
-和 `AssistantMode`、`StopReason` 同源:40 个 code 是照着 07 §11 的规格写的,
-不是从代码里的真实取值集合推出来的。规格给出的是一个**应当存在**的分类法,
-不是**当前存在**的分类法。
-
-### 为什么现在不修
-
-修它需要先做一个决策,而这个决策不是我的:
-
-**哪些层的 code 值得上 wire?** 现在至少有三层各自在发 code——
-connector 层(`provider_error` / `http_<status>`)、CLI HTTP 层
-(`missing_arg` / `invalid_request` / `db_unavailable`)、agent 层。
-把三层全部收进一个 40 值的集合,和只收 agent 层,得到的映射表完全不同。
-后者更小也更可能正确,但会丢 connector 层的可诊断性。
-
-### 关闭条件
-
-1. 写下裁决:**哪一层的 code 进入 `ErrorCode`,哪一层保持自由字符串**
-   (建议:agent 运行期错误进,connector/HTTP 层的 code 保留在 `details` 里)。
-2. 为每一个进入集合的真实 code 写一条映射,并**为未映射的 code 规定兜底**
-   (当前倾向 `unclassified`,而 `UNCLASSIFIED_ERROR_CODES` 已为此预留)。
-3. `worker-event-coverage.test.ts` 增加断言:代码里出现的每个 `code` 字面量
-   要么在映射表里,要么被显式标为「留在 details」。
-4. 补一个反向断言:`ErrorCode` 里每个值都能追溯到至少一个真实产生点,
-   否则它就是又一个 spec-only 的词。
-
----
-
-## G-2 · `PermissionRequest` 的三个必填字段当前无生产者
-
-**严重度** 高 · **归属** PP-5 / PP-6 · **状态** 未决
-
-### 现象
-
-```ts
-// packages/agent/src/process/worker-protocol.ts
-export interface AgentPermissionEvent {
-  type: 'chat:permission';
-  sessionId: string;
-  request: { id: string; toolName: string; toolInput: Record<string, unknown> };
-}
-```
-
-而 protocol 的 `PermissionRequest` 必填:
-
-| 字段 | 当前来源 |
+| 状态 | 含义 |
 |---|---|
-| `requestId` | `request.id` ✔ |
-| `toolName` | `request.toolName` ✔ |
-| `toolInput` | `request.toolInput` ✔ |
-| `kind` | **无** |
-| `mode` | **无** |
-| `expiresAt` | **无**——全仓找不到任何权限 timer |
+| **UNRESOLVED** | 没人裁决。**任何测试都不得固定它的答案。** |
+| **DECIDED** | 已裁决，并写明**代价**与**强制它的那个测试**。 |
 
-全仓 `expiresAt` 相关的命中全是无关物(MCP lease、API 超时、DB lease)。
+## 唯一规则
 
-### 根因
+> **未 DECIDED 的问题不能被测试偷偷固定。**
 
-`expiresAt` 的文档写着「单一权威时钟」,并描述了「旧实现里 agent 铸值、
-worker 定时」的双时钟问题。**那段描述的是理想状态,不是代码现状**——
-现在根本没有时钟可冲突。写成现状描述是一次没做来源核实的断言。
+这条规则是本文件存在的理由。它不是形式主义——本轮开始时它已经被违反了两次:
 
-### 为什么现在不修
+- `worker-event-coverage.test.ts` 断言 `tool.call_started = durable`,而 G-6 说未决;
+- 同一文件把 worker 的 `error` 映射成 `isError`,等于把「缺失 = 成功」焊死,
+  而 G-7 说未决。
 
-`expiresAt` 必填是**有意为之的设计**:没有期限的审批请求无法安全地
-「等一会儿再说」,而 `permission.expired` 事件依赖它才能构造。
-但要让它成立,运行时必须真的设 timer——那是 PP-6 的实现,不是 PP-1 的类型。
+两条断言都是**绿的**。任何检查「这个问题定了吗」的人——包括三个月后的
+维护者——看到绿灯就会停止查找。**回答开放问题的测试比没有测试更糟**,
+因为它和检查既定问题的测试长得一模一样。
 
-`kind` 和 `mode` 同理:runtime 有足够信息推断(`toolName` 能推出 kind,
-bot approval card 路径能推出 mode),但那是 adapter 的工作。
+现在两条都已裁决,并被移进 `lifecycle-invariants.test.ts`——
+那里才是决策的语义所在。
 
-### 关闭条件
+### 状态词是强制的
 
-1. 运行时在 `chat:permission` 上带出期限,或协议接受 `expiresAt` 可选
-   并规定「缺失时 host 必须自己设期限」——**二者选一,不能两者都不做**。
-2. `kind` 的取值集合从真实代码推导(`tool_use` / `read_path` / `write_path` /
-   `execute` / ... 已列,但需确认每个都有产生点)。
-3. `mode` 与 `AssistantMode` 一样做**双向**核对:runtime 真的能产出全部三种吗?
-4. 字段文档改成陈述**要求**,不再陈述现状。
+每条 DECIDED 必须能回答三个问题:
+
+1. **裁决是什么**——一句话,不含糊
+2. **代价是什么**——具体到字段/文件/迁移成本,不是「有一些工作量」
+3. **哪个测试强制它**——文件名必须真实存在(`14-producer-inventory-drift.test.ts`
+   里有一条断言专门检查这一点)
+
+**不许出现「GAPS 说未决、测试已经固定某个答案」的状态。** 如果你发现某条
+UNRESOLVED 有测试在断言它的答案,那是 bug,不是覆盖。
 
 ---
 
-## G-3 · 协议承诺 `checkpointGeneration` 恢复,但没有 checkpoint 事件
+## G-1 · 错误分类的边界
 
-**严重度** 中 · **归属** PP-4 · **状态** 未决
+**状态** DECIDED · **裁决** 2026-10-01
 
-### 现象
+### 决策
 
-worker 有:
+**不**把 `ErrorCode` 扩成整个仓库所有错误串的注册表。`ErrorCode` 是
+**protocol/run 边界**的闭合分类;producer 自己的 code 原样进
+`ProtocolErrorInfo.cause.code`,保留、不翻译、**永不被分支判断**。
 
-```ts
-export interface CheckpointEvent {
-  type: 'checkpoint';
-  sessionId: string;
-  data: { messages: Array<Record<string, unknown>>; generation: number };
+```
+ProtocolErrorInfo {
+  code: ErrorCode            ← 边界类别,闭合集,host 可以据此分支
+  cause?: { system, code }   ← producer 原始串,自由字符串,仅供诊断
 }
 ```
 
-protocol 的 `ResumeSupport.checkpointGeneration` 和
-`ResumeBoundary { kind: 'checkpoint_generation'; generation }` 都在,
-但 `EVENT_META` 里**没有任何 checkpoint 事件**。
+理由:本仓至少 30 个自由 code(`connector_auth_required` / `http_503` /
+`slack_error` / `cron_not_found` / ...)。收进闭合集意味着每加一个 connector
+的错误就要扩一次,而 host 必须升级才能读懂某次失败为什么发生。分类和
+**收据**分开,边界才守得住。
 
-### 后果
+**代价**
 
-host 无法得知某个 generation 存在。它只能盲目地拿一个数字去 resume,
-然后收到 `invalid_resume_point`。**一种被对外承诺、却无法被发现的恢复方式,
-比不承诺更糟**——调用方会写代码去试它。
+- `ErrorCause` 新类型(约 20 行)
+- 映射表 `PRODUCER_CODE_CATEGORY` 覆盖不到全部真实 code,未覆盖的落到
+  `internal` + 保留原串。**这个映射是有损的,而且诚实地有损**:host 能知道
+  「provider 认证失败」,但不知道是哪个 connector 的凭证过期了(除非去读
+  cause,而它被明令禁止分支)
+- drift test 从「每个 code 都要进闭合集」改成「每个分类结果都必须在闭合集内」
 
-### 为什么现在不修
+**强制它的测试**
+- `worker-adapter-conformance.test.ts` › `error classification (G-1)`
+- `lifecycle-invariants.test.ts` › `a real failure is a tool_error carrying a closed code plus its cause`
 
-加事件会改变 `RunEventPayloads` 和快照,是 PP-4 的范围。但**这个洞必须在
-PP-4 之前被记录**,否则 PP-4 会照着「resume 支持 checkpoint」这句话去实现,
-而不知道没有事件能通知 host。
-
-### 关闭条件
-
-二选一,并在规格里写明:
-
-- **A**:新增 `checkpoint.saved` 事件(携带 `generation`),`ResumeSupport`
-  才允许 `checkpointGeneration: true`。注意 `CheckpointEvent.data.messages`
-  是完整消息数组,上 wire 前必须确认它不是凭据或超大载荷的载体。
-- **B**:`checkpointGeneration` 暂时恒为 `false`,从 `ResumeSupport` 的
-  能力面移除,等 PP-4 再加。
+> 实施中真抓到一个:`PRODUCER_CODE_CATEGORY` 里我写了
+> `'provider_error' as ErrorCode`,而 `provider_error` **不在 `ERROR_CODES` 里**。
+> 那个 `as` 恰好静音了唯一能抓到它的检查。现在表上有一条编译期断言
+> (`_everyCategoryCodeIsReal`)取代它。
 
 ---
 
-## G-4 · 四个真实事件没有 protocol 对应物
+## G-2 · permission 的分类与时钟归谁
 
-**严重度** 中 · **归属** PP-2 · **状态** 未决
+**状态** DECIDED · **裁决** 2026-10-01
 
-`worker-event-coverage.test.ts` 的 `UNMAPPED` 已登记,这里只标注**产品影响**:
+### 决策
 
-| worker 事件 | 字段 | 影响 |
+1. **时钟由 Runtime 的 permission coordinator 拥有。** `expiresAt = startedAt +
+   manifest.permissionPolicy.defaultTimeoutMs`,一个数字、一处铸造、一处执行。
+   没有 coordinator 的 runtime 广播
+   `run.permissionExpiryClock: 'absent'`,并且**不发出** `permission.requested`
+   ——而不是编一个 `expiresAt`。
+2. **adapter 不得从 `toolName` 猜 `kind` / `mode`。** 这两个字段是 producer
+   fact。推导出的 kind 是一串猜测,写进 durable 审计链之后**读起来和事实
+   一模一样**。`Read` 既是 `read_path`,对某些参数又是 `connector`——没有
+   合法推导。
+3. `PermissionPolicyMode` / `PermissionRequestMode` / `PermissionResponse` /
+   `PermissionResolution` 四个命名保持现状;`PermissionDecision` 继续**故意
+   不导出**(留给 policy engine 的评估结果)。
+
+**代价**
+
+- `RuntimeCapabilities.run.permissionExpiryClock` 新字段
+- `RuntimeCapability` 闭合集新增 `permission_coordinator`
+- `assertCapabilityConsistency` 强制两者一致
+- `PermissionRequest` 新增 `startedAt`(此前 `expiresAt` 的文档引用了一个
+  **类型里根本不存在的字段**,而 `PermissionResolution.latencyMs` 没有它就
+  无法被 host 验算)
+- adapter 对 `chat:permission` 返回 `unmapped`。**这是行为变更**:当前代码
+  会发出 `permission_request`,迁移后不会。runtime coordinator 落地前
+  permission 流程是断的——这是有意的,好过发一个假的
+
+**强制它的测试**
+- `worker-adapter-conformance.test.ts` › `G-2 · permission is NOT adapted`
+- `compatibility-gating.test.ts`(经 `permission_expiry` 能力门禁)
+- `14-producer-inventory-drift.test.ts` › `AgentPermissionEvent` 记录为 DECIDED
+
+---
+
+## G-3 · checkpoint 事件
+
+**状态** DECIDED · **裁决** 2026-10-01
+
+### 决策
+
+新增 `checkpoint.saved`,payload 是 `{ checkpointRef, generation, eventSeq }`:
+
+- **绝不放完整 `messages`。** worker 的 `checkpoint` 事件带的是
+  `{ messages, generation }`——那是 transcript 本身,无界,而且正是让
+  checkpoint 载荷变成凭据和体积风险的那种形状。`checkpointRef` 由 Control
+  Plane 解析。
+- `eventSeq` 是取检查点时那条事件的 envelope `seq`,让 host 不必比时间戳就能
+  判断边界在自己已重放内容的前还是后。
+- **durable checkpoint 仓库落地前,`RuntimeCapabilities` 必须广播
+  `checkpointGeneration: false`。** 由 `assertCapabilityConsistency` 强制。
+
+**代价**
+
+- 新事件 + 新 payload
+- 事件挂在 `run` 类别(它是 run 的边界,不是独立子系统)
+- 门禁 `requiresCapability: 'checkpoint_resume'`,所以**没有该能力的 host
+  收不到 checkpoint 引用**,而不是收到后用不了
+- legacy `checkpoint` 映射为**空**并登记进 `NEW_PROTOCOL_EVENTS`
+
+**强制它的测试**
+- `lifecycle-invariants.test.ts` › `G-3 · a checkpoint boundary refers to something the run emitted`
+- `compatibility-gating.test.ts` › `refuses a host missing the required capability`
+
+---
+
+## G-4 · 四个产品事件不进 agent-protocol
+
+**状态** DECIDED · **裁决** 2026-10-01
+
+### 决策
+
+**不把所有 Duya 产品事件塞进 agent-protocol。** 逐条定归属:
+
+| worker 事件 | 归属 | 理由 |
 |---|---|---|
-| `chat:research_updated` | `state, phase, query, subQuestions, sourcesGathered, coverageGaps, rounds, stallRounds, history` | research 是 popover 里的真实 mode,有完整进度状态,protocol 无事件 |
-| `chat:title_generated` | `title` | 会话标题是用户可见的(会话列表),protocol 无事件 |
-| `chat:workflow_run` | `event, run` | workflow 是产品功能,protocol 无事件 |
-| `chat:db_persisted` | `success, messageCount, reason` | 折叠进 `diagnostic`;但**写库失败不只是日志** |
+| `chat:title_generated` | **host/view concern** | 会话标题是 UI 关注点,agent run 不生产它 |
+| `chat:research_updated` | **Research domain projection** | research 是一个有真实进度的 mode;router 已经把它拆成 3 个 SSE 事件,再塞进 run 事件流是第二次投影 |
+| `chat:workflow_run` | **Control Plane / Workflow domain** | workflow run 有自己的协议(`workflow-runtime-manager.ts` 854 行) |
+| `chat:db_persisted`(成功) | **不是 agent 事件** | 成功不需要通知 |
+| `chat:db_persisted`(失败) | `run.failed` 的 `persistence_failed` | 写库失败影响 run 正确性,不是日志行 |
 
-前三个看起来都该是正式事件而不是 diagnostic——它们是产品状态,不是结构化日志。
-第四个需要裁决:持久化失败要不要让 host 知道?(07 §13 的前向兼容要求是
-「老 host 不崩」,不是「老 host 无感」。)
+**代价**
 
-### 关闭条件
+- 这四个事件在 adapter 里返回 `unmapped`,由
+  `worker-adapter-conformance.test.ts` 显式断言——**是决策,不是遗漏**
+- research 域需要自己的投影层,那是另一个包的事
+- G-4 原记录说 research「无 protocol 对应物」;实际更严重——router 已经拆成
+  3 个事件。本条按后者记录
 
-每个事件二选一:新增 protocol 事件,或写明「为什么 diagnostic 足够」。
-
----
-
-## G-5 · `chat:done` 不带任何字段,但 `RunCompletedPayload` 有五个
-
-**严重度** 低 · **归属** PP-2 · **状态** 未决
-
-```ts
-export interface AgentDoneEvent { type: 'chat:done'; sessionId: string; }
-```
-
-protocol 的 `RunCompletedPayload`: `status, stopReason, usage, cancelRequested`。
-
-`stopReason` 在代码里**存在**(`DuyaAgent.ts:3154` `stopReason: turnStopReason`,
-经 hook 传递),但**不走 `chat:done`**。`usage` 同理需要确认来源。
-
-所以这些字段不是「无来源」,而是「来源在另一条链上」——adapter 需要跨链
-把它们汇到 `run.completed`。这是 PP-2 的工作,但要记下来,
-否则容易以为「chat:done 有这些字段」。
-
-### 关闭条件
-
-PP-2 的 adapter 里明确 `RunCompletedPayload` 各字段的取值路径,
-或把无来源的字段从 payload 里去掉。
+**强制它的测试**
+- `14-producer-inventory-drift.test.ts` › `UNMAPPED` 四条 DECIDED 记录
+- `worker-adapter-conformance.test.ts` › `the G-4 domain events are unmapped by decision, not by omission`
 
 ---
 
-## G-6 · 同一个 `tool.call_started` 会发两次,协议无法表达「这是更正」
+## G-5 · `chat:done` 没有字段
 
-**严重度** 高 · **归属** PP-2 / PP-4 · **状态** 未决
+**状态** DECIDED · **裁决** 2026-10-01
 
-### 现象
+### 决策
 
-worker 对一次工具调用发**两个**事件,只有判别符不同:
+legacy completion adapter **可以是 stateful aggregator**,但只能从
+**实际观察到的**来源合成 `run.completed`:
 
-```ts
-// packages/agent/src/process/worker-protocol.ts:269-283
-export interface SubagentToolUseEvent      { type: 'chat:tool_use';        sessionId: string; id: string; name: string; input: unknown }
-export interface SubagentToolUseStartedEvent { type: 'chat:tool_use_started'; sessionId: string; id: string; name: string; input: unknown }
-```
+- `cancel state` — runtime 的终态 CAS
+- `usage` / `stop reason` — 实际产生它们的链(`DuyaAgent.ts:3154` 经 hook)
 
-router 把两者原样转发,data 逐字段相同(`router.ts:466-477` vs `:491-502`)。
-语义差别写在 `DuyaAgent.ts:2394-2397`:「the authoritative input arrives with
-`tool_use`」——`tool_use_started` 是参数还在流式生成时的**临时播报**,
-`tool_use` 是**权威重发**。
+**不得填造无来源字段。** 拿不到 `usage` 就没有 `usage`——不是 `usage: {}`。
 
-消费端把两者 fallthrough 到同一个 upsert,按 id 覆盖:
+**代价**
 
-```
-src/lib/agent-sse-client.ts:452-453        case 'tool_use_started': case 'tool_use':
-src/lib/stream-session-manager.ts:2013-2014 case 'tool_use_started': case 'tool_use':
-```
+- adapter 必须是有状态的,不是纯函数。这意味着 conformance 测试要用一个
+  跨事件的 ledger,不能一条消息一条断言——已如此
+- `chat:done` 当前完全无字段,所以 adapter 只能填 `{ status: 'completed' }`。
+  **`stopReason` / `usage` 目前不填**——填了就是编造。那部分单列为 G-5b
 
-### 为什么这是协议问题而不只是实现细节
+**强制它的测试**
+- `worker-adapter-conformance.test.ts` › `chat:done becomes run.completed`
+- `lifecycle-invariants.test.ts` › `a cancelled run terminates as completed, not failed`
 
-第二轮评审把 `tool.call_started` 改成了 **durable**。durable 的定义是
-「重放后必须能重建同样的状态」。但同一次调用会带着**同一个 `toolCallId`
-发两次不同的 `input`**,于是 durable 事件流里出现了自相矛盾的两条记录:
-
-- host 若按 `seq` 顺序应用 → 状态取决于两条都到还是只到一条
-- host 若按 `toolCallId` 去重 → 丢掉哪一条是未定义的
-- host 若按 `toolCallId` 覆盖 → 隐式实现了「后到为准」,但这是**碰巧对**,
-  不是协议保证的:重放可能只重放第一条
-
-**协议现在没有任何字段能区分「首次播报」和「更正」。** 没有 `revision`,
-没有 `supersedes`,没有 `provisional: true`。
-
-### 关闭条件
-
-二选一:
-
-- **A(推荐)**:`ToolCallStartedPayload` 加 `readonly revision: number`(或
-  `supersedes?: EventSeq`)。runtime 负责单调递增,host 负责丢弃低 revision。
-  成本:一个字段 + 一处 runtime 赋值。
-- **B**:承认 `tool.call_started` 是 **volatile**,durable 语义交给
-  `tool.call_completed` 单点承担。代价:崩溃在工具执行中途时,
-  恢复后**完全看不到这次调用发生过**——这正是 `payloads.ts:364-367`
-  论证 durable intent 时说要避免的情况,所以 B 与那段论证冲突,
-  选 B 必须同时删掉那段论证。
-
-选 B 之前必须先回答:一次崩溃在工具执行中途的运行,恢复后 host 怎么知道
-有副作用可能已经发生?
+> **未完全兑现的部分单列在下面 `G-5b`,状态 UNRESOLVED。**
 
 ---
 
-## G-7 · 同一个「失败」比特在本仓有三个名字,且 wire 上全部可选
+## G-5b · `run.completed` 的 `stopReason` 目前是默认值
 
-**严重度** 中 · **归属** PP-6 · **状态** 未决
+**状态** ⚠️ **UNRESOLVED** · **无测试固定它的答案**
 
-### 现象
+### 问题
 
-| 层 | 字段 | 可选性 | 位置 |
+G-5 裁决了「只从观察到的来源合成」,但 `chat:done` 在代码里不带任何字段。
+`stopReason` 真实存在于 `DuyaAgent.ts:3154` 的 `turnStopReason`,**但它不走
+`chat:done`**。所以 adapter 现在的 `end_turn` 是**默认值,不是观察结果**——
+这正是 G-5 禁止的那类填充。
+
+`RunCompletedPayload` 的 `usage` 同理,来源未确认。
+
+### 为什么标记 UNRESOLVED 而不是顺手修
+
+改它需要决定**哪条链把 stop reason 汇到 run 终态**:worker 事件加字段,还是
+adapter 从 turn.completed 事件里累计。两条路代价不同,且都会动
+`worker-protocol.ts`——那是 PP-2 的范围,不是类型能解决的。
+
+### 关闭条件
+
+1. 决定 stop reason / usage 的汇入路径(worker 事件扩字段,还是 adapter 累计)
+2. 实现后 `worker-adapter-conformance.test.ts` 的 `chat:done` 断言改为断言
+   **观察到的值**,并加一条反例:来源缺失时字段必须缺席
+3. **在此之前,不得有任何测试断言 `chat:done` 产出的具体 `stopReason` 值。**
+   本条建立时 conformance 测试正 pin 着 `end_turn`——那正是自己违反的规则,
+   已在同一次改动里改成只断言可观察部分(`type` / `status`)
+
+---
+
+## G-6 · 一个 durable 事件发两次
+
+**状态** DECIDED · **裁决** 2026-10-01
+
+### 决策
+
+**不加 `revision` 字段。** 按真实 producer 语义拆开:
+
+| worker 事件 | protocol 事件 | durability | 语义 |
 |---|---|---|---|
-| worker 事件 | `error?: boolean` | 可选 | `worker-protocol.ts:304` |
-| router 转发 | `error` | 原样透传 | `router.ts:506` |
-| `@duya/ai` 内容块 | `is_error?: boolean` | 可选 | `types.ts:79` |
-| protocol | `isError: boolean` | **必填** | `events/payloads.ts` |
+| `chat:tool_use_started` | `tool.call_preview` | **volatile** | 参数仍在流式生成,临时播报 |
+| `chat:tool_use_delta` | `tool.arguments_delta` | ephemeral | 参数增量 |
+| `chat:tool_use` | `tool.call_started` | **durable** | 权威意图,**executor dispatch 前恰好一次** |
+| `chat:tool_result` | `tool.call_completed` | durable | 终态 |
 
-前三个是**不同的结构**(SSE 事件 vs 持久化消息内容块),所以两个名字本身
-不算错;但它们**都是可选的**,而缺失和 `false` 在语义上无法区分——
-「工具失败了但没人标记」和「工具成功了」在 wire 上长得一模一样。
+durable start 表达**副作用意图**:崩溃在工具执行中途时,留下一条
+`tool.call_started` 而没有 `tool.call_completed`,这个不对称就是 side-effect
+账本要对账的证据。preview 不进 durable log,因为它描述的调用可能根本不会按
+那样发生。
 
-protocol 把它改成必填是对的。**但这意味着 adapter 必须自己决定**
-`error` 缺失时填 `true` 还是 `false`,而这个决定没有任何依据。
+**代价**
 
-### 与 G-1 的关系
+- 新事件 `tool.call_preview`(事件总数 36 → 38)
+- `ToolCallPreviewPayload` 新类型,带 `provisional: true` 字面量
+- legacy 映射表改一行,并加一条断言:**恰好一个** legacy 事件映射到 durable start
+- `TOOL_LIFECYCLE_EVENTS` **刻意不含** preview——落在 preview 和 start 之间的
+  恢复是**干净边界**(工具没跑过),含进去会拒绝大量合法恢复
+- `RunLedger` 拒绝同 id 第二次 `tool.call_started`,以及 start 之后的 preview
 
-这是 G-1 的一个具体实例:错误分类没有闭合集合,于是每个字段各自退化成一个
-可选布尔。G-1 关闭时如果决定「agent 运行期错误进 `ErrorCode`」,
-本条应当**一并关闭**为 `RunErrorInfo` / `ToolCallFailedPayload` 上的枚举字段。
-
-### 关闭条件
-
-随 G-1 一起裁决。若 G-1 决定错误上闭合集,则 `isError` 降级为
-「由 `error.code` 推导的冗余」或直接删除。
-
----
-
-## G-8 · id 空间是 per-session 的,计数器却是 per-turn 的
-
-**严重度** 高 · **归属** PP-4 · **状态** 未决
-
-### 现象
-
-```
-router.ts:1329   let seqNum = 0;                              // 每次 POST 重新归零
-router.ts:1568   seqNum++;
-router.ts:1569   sessionManager.updateLastEventId(sessionId, seqNum);   // 写进 session 级状态
-router.ts:1570   sessionManager.recordEvent(sessionId, eventType, sseEvent, seqNum);
-```
-
-`session.lastEventId` 和事件环形缓冲(`SESSION_EVENT_BUFFER_SIZE = 500`,
-`session-store.ts:152-153` 保留最近 N 条)**在轮次之间从不重置**。
-
-所以第二轮对话会**重新铸造第一轮已经用过的 id 1..M**。
-
-### 断线重连为什么因此失效
-
-重连路径本身**是对的**,不要误伤:
-
-```
-router.ts:2411   const missedEvents = sessionManager.getEventsSince(sessionId, lastEventId);
-router.ts:2412-2423   写回 record.eventId 原始 id
-router.ts:2437   let seqNum = session.lastEventId;   // 续上同一 id 空间
-router.ts:2432-2436   注释明确记录了这是修过的 bug(之前是 seqNum = 0)
-```
-
-坏的是 `getEventsSince` 的过滤条件 `eventId > lastEventId` 撞上了上面的
-id 复用:第二轮之后,一个带 `Last-Event-ID: 42` 重连的客户端,
-可能收到**第一轮**的事件,或者因为所有新 id 都 `<= 42` 而**一个都收不到**。
-
-### 关闭条件
-
-protocol 侧已经有答案——`seq` 由 runtime 铸造,不由 host 计数
-(`envelope.ts` 的 `seq` ownership 一节)。需要 PP-4 落地:
-runtime 侧保证 `(sessionId, seq)` 单调且不复用,`id` 恒等于 `seq`,
-`getEventsSince` 的比较才有意义。
-
-在 runtime 落地前,**不要**在文档或 host 代码里声称「`Last-Event-ID`
-断线续传可用」。
+**强制它的测试**
+- `lifecycle-invariants.test.ts` › `G-6 · the durable tool start happens exactly once`
+- `09-sse-legacy-bridge.test.ts` › `exactly one legacy event maps to the durable tool start`
+- `14-producer-inventory-drift.test.ts` › `the two tool announcements map to DIFFERENT payloads`
 
 ---
 
-## G-9 · `since` 字段是装饰性的:声明了版本轴,却没有任何门禁消费它
+## G-7 · 失败位有三个名字
 
-**严重度** 高 · **归属** PP-3 / PP-7 · **状态** 未决
+**状态** DECIDED · **裁决** 2026-10-01（与 G-1 同一决策的两面）
 
-### 现象
+### 决策
 
-`EventMeta.since`(`events/registry.ts:74`)声明「引入该事件的协议版本」,
-30 个事件**全部**是 `'1.0'`。全仓唯一的消费者是快照测试:
-
-```ts
-// test/05-event-type-snapshot.test.ts:82-86
-it('every event declares the protocol version that introduced it', () => {
-  for (const [type, spec] of Object.entries(EVENT_META)) {
-    expect(spec.since, `${type} has no valid since`).toMatch(/^\d+\.\d+$/);
-  }
-});
-```
-
-这个测试断言的是**格式**,不是行为。没有任何派发、过滤或门禁读它。
-
-所以现状是:协议**看起来**有逐事件的版本轴,实际上第一个 MINOR  bump 之后,
-一个 1.0 的 host 会收到它完全不认识的 1.1 事件,而没有任何机制拦住它。
-
-### 为什么这条比 G-1~G-8 更根本
-
-G-1(错误码)、G-2(permission 时钟)、G-3(checkpoint)、G-4(无对应物的四个事件)、
-G-6(双发) 全部是同一类形状:**类型里声明了,生产者没有**。
-
-在没有逐消息门禁的前提下,这类问题只有两种结局:
-
-- 强行让生产者补齐 → 协议逼迫运行时造它没有的数据(正是 P0-1 / N-1 的成因)
-- 留在类型里当摆设 → 就是现在的状态,host 会照着类型写代码
-
-**逐消息门禁是第三种结局**,它让「运行时没有」变成一个**可声明的事实**而不是缺陷。
-
-### 参考实现
-
-`prime-agent` 的 `daemon-protocol.ts` 对**每一条命令和每一个事件**都挂了门禁元数据:
+`tool.call_completed.outcome` 改成**明确 outcome 的 discriminated union**:
 
 ```ts
-export interface DaemonCommandCompatibility {
-  minProtocol: number;
-  minSchemaRevision?: number;
-  capability?: DaemonServerCapability;
-}
-
-mutate_queued_message: { minProtocol: 7, minSchemaRevision: 15, capability: "queue_message_mutation" },
-heartbeats_list:     { minProtocol: 7, capability: "heartbeat_catalog" },
-get_model_catalog:   { minProtocol: 7, capability: "model_catalog" },
+type ToolCallOutcome =
+  | { outcome: 'success' }
+  | { outcome: 'tool_error'; error: ProtocolErrorInfo }
+  | { outcome: 'timeout'; afterMs: number }
+  | { outcome: 'cancelled'; reason: string }
+  | { outcome: 'indeterminate'; note: string }   ← 关键
 ```
 
-它同时有**四条**版本轴(`DAEMON_PROTOCOL_VERSION = 7`、
-`DAEMON_SCHEMA_REVISION = 16`、`DAEMON_UPDATE_RESTART_FORMAT_VERSION = 1`、
-`DAEMON_SCHEMA_ID = "protocol-7-schema-16-1bcb9e7f1a49"`),而且 schema revision
-**只在载荷变化时递增,不动 protocol version**——这正是我们缺的那条轴:
+**legacy 缺失 failure bit 时,必须产出 `indeterminate`,不得默认为 success。**
 
-G-3 加一个 `checkpoint.saved` 事件、但没人需要它时,正确做法是
-`schemaRevision++`,而不是 `PROTOCOL_MINOR++`。后者会让所有 host 进入
-「需要重新探测」的状态,前者只影响真正读那个字段的人。
+把字段改成**必填 boolean 并不解决问题**——只是把谎换了个位置:adapter 仍然
+得为每个 producer 没标 bit 的调用编一个 `false`,而编出来的 success 和真
+的 success 无法区分。union 让「不知道」成为一个必须**按名字选**的分支。
 
-### 关闭条件
+`ToolResult` 内容块(不是事件 payload)同步改——否则同一个歧义留在
+transcript 里。
 
-1. `EventMeta` 增加 `minSchemaRevision: number`(独立于 `since`),
-   或者明确写下 `since` 的语义并让门禁真的读它——**二者选一**。
-2. 定义 host 侧的**能力声明**(现在只有 runtime→host 单向),
-   让 runtime 知道对面能不能处理某个事件。
-3. 至少给 G-1/G-3/G-4/G-6 里的**一条**装上门禁,证明机制可用,
-   再推广到其余。
-4. drift test 断言:每个 `minSchemaRevision` 大于 1 的事件,
-   都能在 `CapabilityRequirement` 里找到对应的 `needs*`。
+**代价**
 
-### 代价
+- `isError: boolean` 从两个类型上删除
+- `indeterminate` 是新分支,host 必须处理。**它意味着「UI 上要显示未知,
+  而不是显示成功」**——这是产品侧要接受的行为变化
+- `errorClass?: string` 一并删除(它的来源同样没有生产者证据)
 
-`EventMeta` 加一个字段(1 行 × 30 个事件)+ 一个查表函数 +
-一条 `assertSatisfies` 分支。**不大。** 现在不做,第一次 MINOR bump 时
-就要在四个独立部署的 host 上做兼容矩阵——那才是大的。
+**强制它的测试**
+- `worker-adapter-conformance.test.ts` › `an ABSENT status becomes indeterminate, never success`
+- `lifecycle-invariants.test.ts` › `G-7 · an absent producer status is indeterminate`
+
+---
+
+## G-8 · id 空间与计数器
+
+**状态** DECIDED · **裁决** 2026-10-01
+
+### 决策
+
+`RunEventEnvelope.seq` = **per-run, runtime-minted**。唯一性作用域是
+**`(runId, seq)`**,**不是 `(sessionId, seq)`**。
+
+- session 比 run 活得久;resumed run 是**新 runId**,`seq` 从 1 重来
+- 所以同一 session 里两个 run 会有相同 `seq` 值,**那不是冲突**
+- **replay ring / durable event repository 归 Run**,以 `(runId, seq)` 为键
+- 跨 run 的 session 流是合法产品需求(转录视图跨 resumed run),但它需要
+  **自己的 stream cursor**,**不得复用 Run seq**。session 级 cursor 是
+  另一个数、另一个生命周期;从 per-run seq 推导可以,但推导必须显式,
+  因为「我在 session 哪里」和「我在这 run 哪里」两种 resume 请求的拒绝
+  原因不同
+
+**代价**
+
+- 现有实现方向相反,必须改:计数器 per-turn(`router.ts:1329` 每次 POST 归零)
+  而 `session.lastEventId` 和 ring 是 per-session 且从不重置
+  (`:1569-1570`)。**第二轮会重铸第一轮的 id**,
+  `getEventsSince` 的 `eventId > lastEventId` 过滤随之失效(`:2411`)
+- 把两个作用域合成一个 session 级计数器是**不可就地修复**的:没有办法说明
+  一个 id 属于哪个 run。必须把计数器移进 ring
+- `SEQ_CONTRACT.uniqueWithin: 'run'` 成为类型上的断言
+- 新增 `eventKey(runId, seq)` 作为规范键
+
+**强制它的测试**
+- `lifecycle-invariants.test.ts` › `G-8 · seq is per-run, gapless, and unique within (runId, seq)`
+- `20-framing-malformed.test.ts` › seq 的负数/非整数/零拒绝
+
+---
+
+## G-9 · `since` 是装饰性的
+
+**状态** DECIDED · **裁决** 2026-10-01
+
+### 决策
+
+在消费者迁移前设计**可执行的 compatibility model**:
+
+1. **独立 `schemaRevision`**,与 `PROTOCOL_MAJOR.MINOR` 正交。载荷形状变化
+   bump schema revision,**不动 protocol version**;只有 wire 契约不兼容才动
+2. **Host 和 Runtime 都声明 capabilities。** `RuntimeCapabilities` 说 runtime
+   能做什么;`HostDeclaration` 说 host 能**消费**什么。**两个方向都要**:
+   runtime 给不能渲染 preview 的 host 推 preview = 坏 UI;host 对没有
+   checkpoint 仓库的 runtime 要 checkpoint resume = 没人兑现的承诺
+3. **`EventMeta` 内嵌 `MessageGate`**,含 `minProtocol` / `minSchemaRevision` /
+   `requiresCapability`。**装饰性 `since` 删除。** 内嵌而非可选字段是为了让
+   「声明事件却不声明门禁」在类型上不可能
+4. **控制面方法走同一张门禁表。** 一个 host 无法实现的控制方法,比不送达
+   更糟——它变成 host 会兑现的承诺
+5. **拒绝是合法结果。** runtime 可以**要求** host 具备某能力;不满足就
+   **拒绝连接**,不降级。参考集里 20 个 harness 只有 1 个 (prime-agent)
+   建模了这条路径
+6. **真正调用门禁的行为测试**,不是断言门禁存在
+
+**代价**
+
+- 新模块 `compatibility.ts`(`admitMessage` / `negotiate` / `defineGateTable`)
+- `Since` 类型删除;`EventMeta` 从 4 字段变 7 字段,38 个事件全部重写
+  (用 `G1_0` 共享常量收敛)
+- `CONTROL_GATE` 新表 + `MESSAGE_GATES` 合并视图
+- `ProtocolCapability` 闭合集 6 项,**每一项都由某个消息或控制方法 require**
+  ——有消费者无声明是死字段,有声明无消费者是对 host 的假承诺
+- 快照格式变化(加了 3 个门禁字段)
+
+**强制它的测试**
+- `compatibility-gating.test.ts`(18 断言,全部**调用**门禁函数读裁决)
+- `05-event-type-snapshot.test.ts` › `every event declares a well-formed gate, and it is a real one`
+
+> 实施中真抓到两个:门禁原本复用 `isCompatible`,而它**只比 MAJOR**,
+> 于是 `minProtocol: '1.3'` 对 `1.0` 的 host **静默放行**——正是这整个模块
+> 要防的 fail-open。已改为完整版本比较,并有专门断言。
 
 ---
 
 ## 维护规则
 
-- 新发现一条就加一条,**不要塞进模块注释里**
-- 每条必须有 **严重度 / 归属阶段 / 关闭条件**,否则它不是 gap 只是一句抱怨
-- 关闭时在条目末尾加 `关闭于:<commit>`,并把结论回写到对应模块的文档注释
-- `worker-event-coverage.test.ts` 的 `UNMAPPED` 与本文件互为索引:
-  测试保证「没被记录的」会变红,本文件保证「被记录的」不会被忘掉
+- **新发现一条就加一条**,不要塞进模块注释
+- 每条只能写 `UNRESOLVED` 或 `DECIDED`;DECIDED 必须带 **cost** 和
+  **enforcing test 文件名**
+- 文件名必须真实存在——`14-producer-inventory-drift.test.ts` 里有一条断言
+  专门检查 `classified` 字段引用的测试文件存在。没有这条,「决定在别处」
+  会变成任何人不愿决定之事的默认回答
+- **UNRESOLVED 条目旁边不许有测试断言它的答案。** 发现即是 bug
+- 关闭时在条目末尾加 `关闭于:<commit>`

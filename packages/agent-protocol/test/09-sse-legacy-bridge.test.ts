@@ -22,6 +22,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import {
+  EVENT_META,
   EVENT_REGISTRY,
   isEventType,
   type EventType,
@@ -82,13 +83,38 @@ describe('drift #9: the legacy mapping table is total and well-formed', () => {
     ).toEqual({ missing: [], extra: [] });
   });
 
-  it('tool_use and tool_use_started are the same announcement, not a start/finish pair', () => {
-    // Both legacy events carry an invocation and nothing else, so both map to
-    // the single `tool.call_started` event. Completion is `tool_result`'s job.
-    // If a future edit reintroduces the "merged invocation and result" story,
+  it('the two legacy tool announcements map to the two DIFFERENT protocol events', () => {
+    // Same shape, different order, different durability. `tool_use_started` is
+    // the provisional one and becomes volatile `tool.call_preview`; `tool_use`
+    // is the authoritative re-emission and becomes the single durable
+    // `tool.call_started`. Completion is `tool_result`'s job.
+    //
+    // The failure this guards is the one that produced a durable event emitted
+    // twice per call with the same id and different arguments — a stream no
+    // host could interpret. If a future edit maps both onto one event again,
     // this goes red.
+    expect(SSE_EVENT_TO_PROTOCOL['tool_use_started']).toEqual(['tool.call_preview']);
     expect(SSE_EVENT_TO_PROTOCOL['tool_use']).toEqual(['tool.call_started']);
-    expect(SSE_EVENT_TO_PROTOCOL['tool_use_started']).toEqual(['tool.call_started']);
+  });
+
+  it('exactly one legacy event maps to the durable tool start', () => {
+    // "Exactly once" is a property of the TABLE, not of prose. Two legacy
+    // events landing on the durable start is the bug; this counts instead of
+    // asserting a list, so a third mapping added later is caught too.
+    const mappers = Object.entries(SSE_EVENT_TO_PROTOCOL).filter(([, targets]) =>
+      targets.includes('tool.call_started'),
+    );
+    expect(
+      mappers.map(([legacy]) => legacy),
+      'more than one legacy event produces the durable tool start',
+    ).toEqual(['tool_use']);
+  });
+
+  it('the preview is volatile and the start is durable', () => {
+    // The split is only meaningful if the durabilities differ; a rename alone
+    // would leave the original ambiguity in place under a new name.
+    expect(EVENT_META['tool.call_preview'].durability).toBe('volatile');
+    expect(EVENT_META['tool.call_started'].durability).toBe('durable');
   });
 
   it('no legacy event maps to both call_started and call_completed', () => {

@@ -31,6 +31,7 @@ function fold(events: readonly RunEvent[], seen: { missing: EventType[] }) {
       case 'run.paused':
       case 'run.completed':
       case 'run.failed':
+      case 'checkpoint.saved':
         tally['run'] = (tally['run'] ?? 0) + 1;
         break;
       case 'turn.started':
@@ -49,6 +50,7 @@ function fold(events: readonly RunEvent[], seen: { missing: EventType[] }) {
       case 'assistant.status':
         tally['assistant'] = (tally['assistant'] ?? 0) + 1;
         break;
+      case 'tool.call_preview':
       case 'tool.call_started':
       case 'tool.arguments_delta':
       case 'tool.progress':
