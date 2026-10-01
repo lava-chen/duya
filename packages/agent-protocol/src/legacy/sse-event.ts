@@ -15,9 +15,11 @@
  *
  * ## The migration is table-driven
  *
- * `SSE_EVENT_TO_PROTOCOL` is the whole cutover plan. Note that one legacy
- * event can expand into two protocol events: `tool_use` carries both the
- * invocation and its result, which is exactly where `is_error` was being lost.
+ * `SSE_EVENT_TO_PROTOCOL` is the whole cutover plan. It is overwhelmingly a
+ * 1:1 renaming: the legacy wire already separates every concern this protocol
+ * names. The genuine fan-outs are `agent_progress` (one bloated union with
+ * three meanings) and the router's research trio, which splits one worker
+ * event into three SSE events on the way out.
  *
  * @deprecated Scheduled for removal one release after the router cutover.
  * Import protocol events from `@duya/agent-protocol` instead.
@@ -77,10 +79,16 @@ export const SSE_EVENT_TO_PROTOCOL: Readonly<
   thinking: ['assistant.thinking_block'],
   thinking_delta: ['assistant.thinking_delta'],
 
-  // ONE legacy event -> TWO protocol events. `tool_use` merged invocation and
-  // result, which is where `is_error` went missing: 1666 stored tool_results
-  // and zero `is_error: true` (plan 428).
-  tool_use: ['tool.call_started', 'tool.call_completed'],
+  // `tool_use` and `tool_use_started` carry IDENTICAL data
+  // (router.ts:466-477 vs :491-502) and the same on the worker side
+  // (worker-protocol.ts:269-283, two interfaces that differ only in the
+  // `type` discriminant). `tool_use_started` is the provisional announcement
+  // while arguments are still streaming; `tool_use` is the authoritative
+  // re-emission — DuyaAgent.ts:2394-2397 says so in as many words. Consumers
+  // collapse the pair into one upsert keyed by id
+  // (agent-sse-client.ts:452-453, stream-session-manager.ts:2013-2014).
+  // Neither carries a result: completion arrives on `tool_result` below.
+  tool_use: ['tool.call_started'],
   tool_use_started: ['tool.call_started'],
   tool_use_delta: ['tool.arguments_delta'],
   tool_result: ['tool.call_completed'],

@@ -13,14 +13,25 @@
  *
  * ## `seq` ownership moved from the host to the runtime
  *
- * Today `seqNum` is a PER-CONNECTION counter (router.ts:1329, assigned at
- * :1568), and `handleGetChat` replays buffered events through a FRESH counter
- * (:2479) while writing an `id:` taken from the ring's original `eventId`
- * (:2423). The consequence is concrete: **a replayed event's `id` does not
- * match the original stream**, so `Last-Event-ID` resumption cannot be trusted.
+ * The id space is PER-SESSION but the counter is PER-TURN. Every POST reopens
+ * the stream with `let seqNum = 0` (router.ts:1329) and increments from there
+ * (:1568), writing that value as the SSE `id:` and pushing it into the
+ * session-wide ring via `updateLastEventId` / `recordEvent` (:1569-1570).
+ * `session.lastEventId` and the ring are never reset between turns, so **turn
+ * two re-mints ids 1..M that turn one already used.**
  *
- * Minting `seq` in the runtime fixes both half at once: `id` is identically
- * `seq`, and resumption becomes a property of the construction rather than
+ * The reconnect path is NOT the broken part — it was already fixed. Replay
+ * writes each record's original `eventId` (router.ts:2412-2423) and the live
+ * counter resumes from `session.lastEventId` (:2437, with the regression note
+ * at :2432-2436 recording the `let seqNum = 0` bug that preceded it). What
+ * breaks is the collision above: `getEventsSince(sessionId, lastEventId)`
+ * (:2411) filters on `eventId > lastEventId`, so after a second turn a
+ * reconnecting client can be handed turn-one events, or be handed nothing at
+ * all, depending on which turn wrote last.
+ *
+ * Minting `seq` in the runtime fixes this by construction: the counter lives
+ * with the ring that consumes it, so one turn can never reissue another's
+ * ids, and `Last-Event-ID` becomes a property of the construction rather than
  * something the host has to reconstruct.
  *
  * ## Control frames are not events

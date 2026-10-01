@@ -11,9 +11,9 @@
  *
  * ## The three limits
  *
- * declared `maxEventBytes` with no default and no nesting or element
- * limit at all. pi-protocol sets all three explicitly. Adopted with the same
- * values so the two packages do not disagree silently.
+ * The first draft declared `maxEventBytes` with no default and no nesting or
+ * element limit at all. pi-protocol sets all three explicitly. Adopted with the
+ * same values so the two packages do not disagree silently.
  *
  * ## Validate the declared length BEFORE buffering
  *
@@ -23,7 +23,7 @@
  *
  * ## No JSON accumulator
  *
- * step 3 deletes router.ts:1334-1386, a 100 KB-capped buffer that
+ * step 3 deletes router.ts:1334-1386, a 64 KB-capped buffer that
  * existed only because `sendEvent` could emit a multi-line JSON body. The
  * protocol mandates exactly one `JSON.stringify` per line, so a bare newline
  * inside a frame is a protocol violation, not something to accumulate around.

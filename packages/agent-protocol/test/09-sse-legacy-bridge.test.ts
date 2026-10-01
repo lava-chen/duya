@@ -82,9 +82,26 @@ describe('drift #9: the legacy mapping table is total and well-formed', () => {
     ).toEqual({ missing: [], extra: [] });
   });
 
-  it('tool_use is the one legacy event that expands into two protocol events', () => {
-    // The merged legacy event is exactly where `is_error` was lost.
-    expect(SSE_EVENT_TO_PROTOCOL['tool_use']).toEqual(['tool.call_started', 'tool.call_completed']);
+  it('tool_use and tool_use_started are the same announcement, not a start/finish pair', () => {
+    // Both legacy events carry an invocation and nothing else, so both map to
+    // the single `tool.call_started` event. Completion is `tool_result`'s job.
+    // If a future edit reintroduces the "merged invocation and result" story,
+    // this goes red.
+    expect(SSE_EVENT_TO_PROTOCOL['tool_use']).toEqual(['tool.call_started']);
+    expect(SSE_EVENT_TO_PROTOCOL['tool_use_started']).toEqual(['tool.call_started']);
+  });
+
+  it('no legacy event maps to both call_started and call_completed', () => {
+    // Guards the specific fabrication this table used to encode: a single
+    // wire event standing in for the whole call lifecycle. Nothing on the
+    // legacy wire carries a result and an invocation together, so no mapping
+    // may claim both endpoints of the lifecycle.
+    for (const [legacy, targets] of Object.entries(SSE_EVENT_TO_PROTOCOL)) {
+      expect(
+        targets.includes('tool.call_started') && targets.includes('tool.call_completed'),
+        `${legacy} claims the whole tool lifecycle from one wire event`,
+      ).toBe(false);
+    }
   });
 
   it('clipboard_write maps to nothing, on purpose', () => {

@@ -132,9 +132,14 @@ export interface ToolResult {
   readonly type: 'tool_result';
   readonly toolCallId: ToolCallId;
   readonly content: string;
-  /** The protocol FORCES this field. Today 1666 stored tool_results have
-   *  zero `is_error: true`, because the legacy `tool_use` event merged
-   *  start and finish and dropped the distinction on the floor. */
+  /** The protocol FORCES this field, because every producer treats it as
+   *  optional and so absence is indistinguishable from success. The same bit
+   *  is spelled three ways in this repo: `error?: boolean` on the worker's
+   *  `chat:tool_result` (worker-protocol.ts:304, relayed verbatim by
+   *  router.ts:506) and `is_error?: boolean` on `@duya/ai`'s
+   *  `ToolResultContent` (types.ts:79) — two different structures, two
+   *  different names, both optional. A required boolean is the only spelling
+   *  that makes a missing failure signal a type error rather than a default. */
   readonly isError: boolean;
   readonly durationMs?: Millis;
   readonly metadata?: Readonly<Record<string, unknown>>;
