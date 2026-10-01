@@ -92,8 +92,10 @@ function statusColor(status: GitReviewFile["status"]): string {
     case "added":
     case "untracked": return "var(--review-add)";
     case "deleted": return "var(--review-remove)";
-    case "renamed": return "#b68cff";
-    default: return "#f39a49";
+    // These were hex literals here while the stylesheet carried its own
+    // copy, so the two could drift. Both live in `.code-review-panel` now.
+    case "renamed": return "var(--review-renamed)";
+    default: return "var(--review-modified)";
   }
 }
 
