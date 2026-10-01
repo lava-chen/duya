@@ -1349,7 +1349,7 @@ const zh: Record<TranslationKey, string> = {
   'panel.files': '文件',
   'panel.preview': '预览',
   'panel.review': '代码审阅',
-  'panel.conductor': '指挥台',
+  'panel.conductor': '画布',
   'panel.workflow.title': '工作流',
   'panel.workflow.tabDefinitions': '定义',
   'panel.workflow.tabRuns': '运行',
