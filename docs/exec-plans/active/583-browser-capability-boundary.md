@@ -652,6 +652,12 @@ G4 关掉了网络那一扇门（http），但**本地执行那一扇还开着**
 **共享规则放在 `@duya/plugin-core`**（`src/security/hook-consent.ts`）而不是任一侧：
 主进程用它决定「要不要问」，agent 用它决定「能不能跑」，两边不可能各写一份而漂移。
 
+**收口修正**：初版把规则硬写成「`official` 豁免、其余需显式授予」，语义上等价于
+`!TRUST_LEVEL_CAPABILITIES[level].requirePermissionConfirmation`，但那是**和信任表各写一份**
+—— 同一个承诺存在两个地方。已改为直接查表，于是 `requirePermissionConfirmation`
+这个从 584 起就一直没人读的 capability 字段**真正接上了执行点**（六个字段里现在只剩
+真 N/A 的那些没有消费者）。测试把「豁免集合 == `[official]`」写死，所以以后改表会红。
+
 **主进程**
 - `electron/db/pluginHookConsent.ts` —— module-owned side table
   `plugin_hook_consent(plugin_id PK, decision CHECK IN ('granted','denied'), decided_at)`，
