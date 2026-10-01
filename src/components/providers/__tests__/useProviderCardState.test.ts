@@ -87,24 +87,36 @@ describe('useProviderCardState — defaults', () => {
     expect(result.current.isCurrent).toBe(false);
   });
 
-  it('isActive mirrors the DTO isActive field', () => {
-    const { result: on } = renderHook(() =>
+  /**
+   * `isActive` is a transitional alias for `isDefault`, not a mirror of
+   * the DTO's own `isActive` field: the hook computes
+   * `const isActive = isDefault` (useProviderCardState.ts:130) and never
+   * reads `provider.isActive`. This case used to assert the DTO mirror,
+   * which the implementation stopped doing, so it failed on every run.
+   *
+   * The pairing that matters is pinned explicitly below: `isDefault` from
+   * the DTO, and the alias tracking it.
+   */
+  it('isActive is a transitional alias of isDefault, not the DTO isActive field', () => {
+    const { result: def } = renderHook(() =>
       useProviderCardState({
-        provider: makeProvider({ isActive: true }),
+        provider: makeProvider({ isDefault: true, isActive: false }),
         appId: 'duya',
         context: { defaultProviderId: null, proxyTakeover: false },
       }),
     );
-    expect(on.current.isActive).toBe(true);
+    expect(def.current.isDefault).toBe(true);
+    expect(def.current.isActive).toBe(true);
 
-    const { result: off } = renderHook(() =>
+    const { result: notDef } = renderHook(() =>
       useProviderCardState({
-        provider: makeProvider({ isActive: false }),
+        provider: makeProvider({ isDefault: false, isActive: true }),
         appId: 'duya',
         context: { defaultProviderId: null, proxyTakeover: false },
       }),
     );
-    expect(off.current.isActive).toBe(false);
+    expect(notDef.current.isDefault).toBe(false);
+    expect(notDef.current.isActive).toBe(false);
   });
 
   it('default dimensions are pinned for duya today', () => {
@@ -226,10 +238,12 @@ describe('useProviderCardState — capability flags', () => {
 });
 
 describe('useProviderCardState — orthogonal composition', () => {
-  it('isCurrent and isActive are independent flags', () => {
+  it('isCurrent is independent of the isDefault/isActive pair', () => {
+    // `isCurrent` comes from `context.defaultProviderId`; `isActive`
+    // aliases `isDefault`. Driving them from separate inputs is the point.
     const { result: both } = renderHook(() =>
       useProviderCardState({
-        provider: makeProvider({ id: 'p-active', isActive: true }),
+        provider: makeProvider({ id: 'p-active', isDefault: true }),
         appId: 'duya',
         context: { defaultProviderId: 'p-active', proxyTakeover: false },
       }),
@@ -239,7 +253,7 @@ describe('useProviderCardState — orthogonal composition', () => {
 
     const { result: currentOnly } = renderHook(() =>
       useProviderCardState({
-        provider: makeProvider({ id: 'p-active', isActive: false }),
+        provider: makeProvider({ id: 'p-active', isDefault: false }),
         appId: 'duya',
         context: { defaultProviderId: 'p-active', proxyTakeover: false },
       }),
