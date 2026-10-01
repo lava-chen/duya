@@ -14,6 +14,7 @@
 //   - none starts with a UTF-8 BOM
 //   - none is UTF-16 (BOM'd or not) — the shape that produced the failure
 //     described in .gitattributes
+//   - no file that starts with a shebang has CRLF on that line
 //
 // Usage:
 //   node scripts/check-text-encoding.mjs          # check (CI)
@@ -84,6 +85,19 @@ function collectViolations() {
     }
     if (!isValidUtf8(bytes)) {
       violations.push({ file, reason: 'not-utf8' });
+      continue;
+    }
+    // A shebang terminated with CRLF. Node loads these fine (it strips the
+    // shebang itself), but Vite/esbuild's transform removes only the `#!...`
+    // text and leaves the trailing \r, which is an illegal token. The
+    // observable failure is a test file that reports "no tests" instead of
+    // failing: scripts/check-manifest-keys.test.ts shipped that way in
+    // PR #97, so its eight assertions had never run.
+    if (bytes[0] === 0x23 && bytes[1] === 0x21) {
+      const lf = bytes.indexOf(0x0a);
+      if (lf > 0 && bytes[lf - 1] === 0x0d) {
+        violations.push({ file, reason: 'crlf-shebang' });
+      }
     }
   }
   return violations;

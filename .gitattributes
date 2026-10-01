@@ -29,6 +29,25 @@
 *.cmd        text eol=crlf
 *.ps1        text eol=crlf
 
+# Node ESM scripts must keep LF. Plan 583 ISS-49.
+#
+# A shebang line terminated with CRLF is loadable by Node (it strips the
+# shebang itself) but NOT by Vite/esbuild: the transform removes the
+# `#!...` text and leaves the trailing `\r`, which is an illegal token.
+# The result is `SyntaxError: Invalid or unexpected token` at the import
+# site, the whole test file reports "no tests", and the suite is green
+# because zero tests ran. scripts/check-manifest-keys.test.ts shipped
+# that way in PR #97.
+#
+# `* text=auto` normalizes the repository side to LF but still hands a
+# Windows checkout CRLF, which is why the .mjs files carrying a shebang
+# were CRLF on disk for everyone using autocrlf.
+*.mjs        text eol=lf
+*.cjs        text eol=lf
+
+# The one tracked .ts file that carries a shebang, for the same reason.
+scripts/migrate-projects-paths.ts   text eol=lf
+
 # Binaries: never normalize.
 *.png        binary
 *.gif        binary

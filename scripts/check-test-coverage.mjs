@@ -18,6 +18,12 @@
 // still contribute nothing meaningful. What it catches is the silent case -
 // a file the runner never even looks at.
 //
+// That other case is now covered, for its known cause, by
+// check-text-encoding.mjs: a `.mjs` with a CRLF shebang matches the glob but
+// dies at import with a SyntaxError, so the file reports "no tests" and the
+// suite is green. That is how scripts/check-manifest-keys.test.ts shipped
+// eight assertions that had never run.
+//
 // Usage:
 //   node scripts/check-test-coverage.mjs          # check (CI)
 //   node scripts/check-test-coverage.mjs --write  # re-record the baseline
