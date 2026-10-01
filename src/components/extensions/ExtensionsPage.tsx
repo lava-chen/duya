@@ -610,6 +610,25 @@ export function ExtensionsPage() {
     }
   }, [createThread, setActiveThread, setCurrentView]);
 
+  // Plan 311 — "Try it out" / workflow launch from the plugin detail view:
+  // the detail view already dispatched the prefill event (stashed as
+  // pending); create a fresh session and switch to chat so MessageInput
+  // mounts and consumes the stash.
+  const handleLaunchFromDetail = useCallback(
+    async (_prompt: string) => {
+      try {
+        const thread = await createThread();
+        if (thread) {
+          setActiveThread(thread.id);
+          setCurrentView("chat");
+        }
+      } catch {
+        void 0;
+      }
+    },
+    [createThread, setActiveThread, setCurrentView]
+  );
+
   // ── Connection mutations ──
   const handleConnect = useCallback(
     async (provider: ProviderId, scopes?: string[]) => {
@@ -880,6 +899,12 @@ export function ExtensionsPage() {
             )
           }
           busy={busyPluginId === detailPlugin.id}
+          onLaunchWorkflow={(prompt) => void handleLaunchFromDetail(prompt)}
+          connections={connections}
+          providers={connectionProviders}
+          onConnectProvider={requestConnection}
+          onDisconnectConnection={(id) => void handleDisconnect(id)}
+          onRemoveConnection={(id) => void handleRemoveConnection(id)}
           onSkillClick={(skill) => {
             const full = skills.find((s) => s.name === skill.name);
             if (full) {
