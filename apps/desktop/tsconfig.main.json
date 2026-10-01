@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "outDir": "../../dist-electron",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "typeRoots": ["./src/main/types", "../../node_modules/@types"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/main/*"],
+      "@duya/agent/message": ["../../packages/agent/dist/message/index"],
+      "@duya/plugin-core": ["../../packages/plugin-core/src/index.ts"],
+      "@duya/plugin-core/*": ["../../packages/plugin-core/*"]
+    }
+  },
+  "include": ["src/main/**/*.ts"],
+  "exclude": ["node_modules", "**/*.test.ts"]
+}

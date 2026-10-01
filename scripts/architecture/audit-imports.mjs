@@ -22,7 +22,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const ROOTS = ["src", "electron", "packages", "tests", "e2e"];
+const ROOTS = ["apps", "packages", "tests", "e2e"];
 const SRC_EXTS = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs"]);
 const SKIP_DIRS = new Set([
   "node_modules", "dist", "dist-electron", "bundle", "build", "release",
@@ -46,8 +46,9 @@ const rel = (p) => path.relative(ROOT, p).split(path.sep).join("/");
 
 /** Which boundary does a file belong to? */
 function ownerOf(relPath) {
-  if (relPath.startsWith("src/")) return "src-renderer";
-  if (relPath.startsWith("electron/")) return "electron-main";
+  if (relPath.startsWith("apps/desktop/src/renderer/")) return "src-renderer";
+  if (relPath.startsWith("apps/desktop/src/preload/")) return "electron-preload";
+  if (relPath.startsWith("apps/desktop/src/main/")) return "electron-main";
   const m = relPath.match(/^packages\/([^/]+)\//);
   if (m) return `pkg:${m[1]}`;
   if (relPath.startsWith("tests/")) return "tests";
@@ -154,9 +155,11 @@ for (const file of files) {
       toFile = resolveFile(path.resolve(path.dirname(file), spec));
       kind = toFile ? "relative" : "unresolved";
       toOwner = toFile ? ownerOf(rel(toFile)) : `UNRESOLVED:${spec}`;
-    } else if (spec.startsWith("electron/")) {
+    } else if (spec.startsWith("apps/desktop/src/main/")) {
       toOwner = "electron-main"; kind = "aliased-path";
-    } else if (spec.startsWith("src/")) {
+    } else if (spec.startsWith("apps/desktop/src/preload/")) {
+      toOwner = "electron-preload"; kind = "aliased-path";
+    } else if (spec.startsWith("apps/desktop/src/renderer/")) {
       toOwner = "src-renderer"; kind = "aliased-path";
     } else {
       toOwner = `external:${pkgName ?? spec.split("/")[0]}`;
@@ -243,8 +246,8 @@ if (process.argv.includes("--json")) {
   console.log(`cross-boundary edges ${m.crossBoundaryEdges}`);
   console.log(`deep imports         ${m.deepImports}   (cross-boundary, bypasses target's exports map)`);
   console.log(`package escapes      ${m.packageBoundaryEscapes}   (relative path from a host into packages/)`);
-  console.log(`  ├─ from src/       ${m.escapesByHost.renderer}`);
-  console.log(`  ├─ from electron/  ${m.escapesByHost.main}`);
+  console.log(`  ├─ from renderer/  ${m.escapesByHost.renderer}`);
+  console.log(`  ├─ from main/      ${m.escapesByHost.main}`);
   console.log(`  └─ from tests/e2e/ ${m.escapesByHost.tests}`);
   console.log(`unresolved           ${result.unresolved.length}`);
   console.log("\n--- cross-boundary by pair ---");

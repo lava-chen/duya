@@ -5,7 +5,7 @@
 //
 // This is the Stage-1 (low-intrusion) implementation. It only depends on
 // the existing DUYA_PREVIEW_MODE env switch that electron:preview already
-// uses. No changes to electron/main.ts are required for Stage 1.
+// uses. No changes to apps/desktop/src/main/index.ts are required for Stage 1.
 //
 // Stage 2 (tool-card scenarios 02..05) will require adding a small
 // DUYA_SHOWCASE branch in electron/main.ts to inject the fixture tasks

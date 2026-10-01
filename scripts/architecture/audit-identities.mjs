@@ -31,8 +31,9 @@ const IDENTS = {
 };
 
 function group(rel) {
-  if (rel.startsWith("src/")) return "src(renderer)";
-  if (rel.startsWith("electron/")) return `electron/${rel.split("/")[1]}`;
+  if (rel.startsWith("apps/desktop/src/renderer/")) return "src(renderer)";
+  if (rel.startsWith("apps/desktop/src/preload/")) return "electron/preload";
+  if (rel.startsWith("apps/desktop/src/main/")) return `electron/${rel.split("/")[4]}`;
   const m = rel.match(/^packages\/([^/]+)\/src\/(?:([^/]+)\/)?/);
   if (m) return m[2] ? `pkg:${m[1]}/${m[2]}` : `pkg:${m[1]}/`;
   if (rel.startsWith("packages/")) return "pkg:(root)";

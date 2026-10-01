@@ -11,29 +11,33 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Verify feature/plan is still active; read relevant active plan file for progress
 - Read [ARCHITECTURE.md](./ARCHITECTURE.md) before starting — contains database schema, data flows, module details
 - For multi-step tasks: use `/plan` mode before writing code
-- Replies: repo-root refs only: `src/components/chat/MessageList.tsx:45`. No absolute paths, no `~/`.
+- Replies: repo-root refs only: `apps/desktop/src/renderer/components/chat/MessageList.tsx:45`. No absolute paths, no `~/`.
 - Missing deps: `npm install`, retry once, then report first actionable error.
 
 ## Map
 
-- Frontend: `src/` (Vite + React 19 + Zero Router)
+- Frontend: `apps/desktop/src/renderer/` (Vite + React 19 + Zero Router)
 - Agent core: `packages/agent/` (@duya/agent, workspace package)
-- Electron main: `electron/` (Main Process + Agent Server + Gateway)
+- Desktop app: `apps/desktop/` (@duya/desktop, workspace package)
+  - `src/main/` — Electron main process (+ Agent Server, Gateway)
+  - `src/preload/` — context bridge
+  - `src/renderer/` — Vite + React 19 + Zero Router frontend
 - Build scripts: `scripts/` (esbuild configs)
 - Docs: `docs/{design-docs,exec-plans,generated,product-specs,references}/`
 - Scoped guides: `docs/exec-plans/README.md`, `docs/design-docs/core-beliefs.md`
 
 ## Code Review Workspace
 
-- Sidebar page: `src/components/layout/panels/CodeReviewPanel.tsx`; register it
-  through `src/components/layout/panels/registry.ts` and pass the session
-  working directory from `src/components/layout/PanelZone.tsx`.
+- Sidebar page: `apps/desktop/src/renderer/components/layout/panels/CodeReviewPanel.tsx`; register it
+  through `apps/desktop/src/renderer/components/layout/panels/registry.ts` and pass the session
+  working directory from `apps/desktop/src/renderer/components/layout/PanelZone.tsx`.
 - Scope is always `HEAD` to the current working tree. It is read-only: never
   add stage, commit, push, reset, or other mutating Git controls here.
 - Bridge contract: `git:review` lists porcelain status plus numstat totals;
   `git:review-diff` returns the selected patch. Keep renderer shapes in
-  `src/lib/git-ipc.ts` synchronized with `electron/preload.ts` and
-  `electron/ipc/git-handlers.ts`.
+  `apps/desktop/src/renderer/lib/git-ipc.ts` synchronized with
+  `apps/desktop/src/preload/index.ts` and
+  `apps/desktop/src/main/ipc/git-handlers.ts`.
 - Security boundary: accept only changed, project-relative paths; reject
   absolute paths, traversal, `.git` metadata, and untracked symlinks resolving
   outside the workspace. Keep diff output bounded at 1 MB and retain safe
@@ -43,12 +47,12 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
   the selected file through the existing chat attachment event.
 - Line comments (plan 572): the toolbar's 预览 toggle renders a single file
   via `code-review-code-viewer.tsx` (`@pierre/diffs`) where hover/click on
-  lines attaches comments. Comments live in `src/lib/code-comment-store.ts`
+  lines attaches comments. Comments live in `apps/desktop/src/renderer/lib/code-comment-store.ts`
   (bucketed per workspace); the composer strip reads the same store and
   injects pending ones as a `# Code comments:` block on send.
 - Verify parser behavior in
-  `src/components/layout/panels/code-review-diff.test.ts`, bridge behavior in
-  `electron/ipc/__tests__/git-handlers.test.ts`, then exercise the panel in a
+  `apps/desktop/src/renderer/components/layout/panels/code-review-diff.test.ts`, bridge behavior in
+  `apps/desktop/src/main/ipc/__tests__/git-handlers.test.ts`, then exercise the panel in a
   real Electron renderer; browser-only Vite cannot validate the preload path.
 
 ## Architecture
@@ -58,7 +62,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - **MessagePort**: 仅用于 config/toolExec/toolStream 三通道，不含 agentControl
 - **Database**: SQLite via better-sqlite3. Path: `%APPDATA%/DUYA/databases/duya-main.db` (Windows), `~/Library/Application Support/DUYA/...` (macOS), `~/.local/share/DUYA/...` (Linux). Managed by `boot.json`.
 - **Agent core** runs in isolated child_process. Built separately as workspace package.
-- **Logging**: Structured logger (`electron/logging/logger.ts`), level `WARN` by default, console output only for WARN+. See [Logging](#logging).
+- **Logging**: Structured logger (`apps/desktop/src/main/logging/logger.ts`), level `WARN` by default, console output only for WARN+. See [Logging](#logging).
 - esbuild does NOT type check. Always run `npm run typecheck:all` before committing.
 - After significant changes: update [ARCHITECTURE.md](./ARCHITECTURE.md).
 - **Mode architecture (plan 224)**: Popover "modes" (plan-task / research / conductor / goal) are declarative `ModeModifier` objects registered in `packages/agent/src/modes/index.ts`. Two paradigms: modifier (tools/prompt/hooks, composed via `applyModes`) and orchestrator (takes over stream). Orthogonal to `AgentProfile` (base toolset) and `PermissionMode` (auth). See [ARCHITECTURE.md § Profile/Mode/Permission](./ARCHITECTURE.md#profile--mode--permission-三层正交plan-224). New mode = 3 steps: write `<mode>-mode.ts` → `modeModifierRegistry.register()` → add popover item + `mode-id.ts` entry. No `DuyaAgent` / `builtin.ts` changes needed. Goal (plan 411) is a session-level mode with a 10-state `ModeTracker` + N-skeptic verification; Research (plan 423) is a session-level deep-research state machine (9-state `ResearchTracker` + `research_start`/`research_report`/`research_continue`/`research_fanout` tools + per-state tool gating + `research_updated` SSE card). Stateful modes declare `tracker` and register it on `modeTrackerEngine` (plan 413); the `ModeCoordinator` injects per-round continuation, persists snapshots, and gates tools by lifecycle state.
@@ -76,7 +80,9 @@ npm run build:web             # Web frontend only
 npm run build:agent           # Build @duya/agent workspace (tsc)
 npm run bundle:agent          # Bundle Agent subprocess entry (esbuild)
 npm run electron:build         # Build Agent + bundle + Vite + Electron
-npm run typecheck:all         # TypeScript check for both src/ and packages/agent — MUST run before commit
+npm run typecheck:all         # TypeScript check for renderer + packages/agent — MUST run before commit
+npm run -w @duya/desktop typecheck:main     # main process layer (NOT gated; large pre-existing backlog)
+npm run -w @duya/desktop typecheck:renderer # renderer layer (same scope as typecheck:web)
 
 # Testing
 npm run test                   # Vitest tests
@@ -355,14 +361,14 @@ gh release view <tag>                  # verify release exists
 - Comments: English only. Never write comments in Chinese.
 - External boundaries: prefer `zod` or existing schema helpers.
 - UI: use CSS variables from `globals.css` (`var(--bg-canvas)`, `var(--text)`, `var(--accent)`). Support both light and dark modes (`data-theme`).
-- Follow existing patterns in `src/components/` before creating new ones.
+- Follow existing patterns in `apps/desktop/src/renderer/components/` before creating new ones.
 - Use Tailwind + custom CSS classes from `globals.css`.
 
 ## Logging
 
 ### System
 
-Use the structured logger from `electron/logging/logger.ts`. **Never use `console.log/warn/error`** directly.
+Use the structured logger from `apps/desktop/src/main/logging/logger.ts`. **Never use `console.log/warn/error`** directly.
 
 ```typescript
 import { initLogger, getLogger, LogComponent } from '../logging/logger';
@@ -438,15 +444,15 @@ question you're asking.
 - **Location**:
   - `src/**/*.test.ts` / `*.test.tsx` — colocated with frontend code
   - `packages/*/tests/**/*.test.ts` — colocated with workspace package code
-  - `electron/ipc/__tests__/*.test.ts` — IPC handler unit tests
+  - `apps/desktop/src/main/ipc/__tests__/*.test.ts` — IPC handler unit tests
 - **Run**: `npm run test`, `npm run test:watch`, `npm run test:coverage`.
 - **IPC handler test pattern** (critical): see
-  `electron/ipc/__tests__/url-safety.test.ts` (pure function) and
-  `electron/ipc/__tests__/logger-handlers.test.ts` (mocked module).
+  `apps/desktop/src/main/ipc/__tests__/url-safety.test.ts` (pure function) and
+  `apps/desktop/src/main/ipc/__tests__/logger-handlers.test.ts` (mocked module).
   - All mock state must live inside `vi.hoisted(() => ({ ... }))` so the
     `vi.mock` factory (also hoisted) and the test bodies share one singleton.
   - `vi.mock` paths are **relative to the test file**, not the source file.
-    From `electron/ipc/__tests__/foo.test.ts`, the logger module is
+    From `apps/desktop/src/main/ipc/__tests__/foo.test.ts`, the logger module is
     `'../../logging/logger'`, not `'../logging/logger'`.
   - For a stable `getLogger()` mock, return `mocks.logger` from the
     factory — not a fresh object each call (otherwise
@@ -481,7 +487,7 @@ question you're asking.
 | Component         | Technology                      | Config                       |
 | ----------------- | ------------------------------- | ---------------------------- |
 | Frontend          | Vite 6 + React 19 + Zero Router | `vite.config.ts`             |
-| Desktop Shell     | Electron 44.2.0 (**requires macOS 13+**; GUI gates run on macOS 13+ hosts) | `electron/main.ts`           |
+| Desktop Shell     | Electron 44.2.0 (**requires macOS 13+**; GUI gates run on macOS 13+ hosts) | `apps/desktop/src/main/index.ts` |
 | Electron Compiler | esbuild                         | `scripts/build-electron.mjs` |
 | Packager          | electron-builder                | `electron-builder.yml`       |
 | Agent Core        | TypeScript                      | `packages/agent/`            |
@@ -543,9 +549,10 @@ question you're asking.
 
 ## Footguns
 
-- Editing `electron/preload.ts` without rebuilding Electron
+- Editing `apps/desktop/src/preload/index.ts` without rebuilding Electron
+- **The main process is NOT typechecked** ⚠️: `typecheck:all` only covers the renderer (the root `tsconfig.json` extends `apps/desktop/tsconfig.renderer.json`). `apps/desktop/tsconfig.main.json` and `tsconfig.preload.json` exist as layer definitions but are deliberately **not** wired into the gate — `tsc -p apps/desktop/tsconfig.main.json` reports a large pre-existing backlog, so gating it today would be red on arrival. For main-process changes, the real safety net is `npm run build:electron` (esbuild resolves every import edge) plus `npm test`. Track the backlog in `docs/architecture/10-tech-debt-tracker.md`.
 - Modifying `packages/agent` exports without rebuilding (`npm run build:agent` / `npm run bundle:agent`)
-- Adding to `src/app/api/` routes without verifying path doesn't conflict
+- Adding to `apps/desktop/src/renderer/app/api/` routes without verifying path doesn't conflict
 - Skipping Playwright verification for UI changes
 - Forgetting `npm run typecheck:all` before committing
 - NOT checking active plans before starting work ⚠️
