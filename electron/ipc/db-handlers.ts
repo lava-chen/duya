@@ -709,8 +709,12 @@ export function registerDbHandlers(): void {
    * Plan 506 (A3): explicit whole-store reconcile — rebuilds message_index
    * from the rollout files (the source of truth), reporting missing and
    * orphan files. Returns `ReconcileStats`.
+   *
+   * Channel name: `preload.ts` invokes `db:rollout:reconcile`. This handler
+   * was registered as `rollout:reconcile`, so nothing could ever reach it —
+   * see `electron/ipc/__tests__/ipc-channel-contract.test.ts`.
    */
-  ipcMain.handle('rollout:reconcile', () => {
+  ipcMain.handle('db:rollout:reconcile', () => {
     const { messageLog } = getCoreStores();
     return messageLog.reconcileAll();
   });
@@ -722,8 +726,11 @@ export function registerDbHandlers(): void {
    * - mode='continue': append the file's lines onto `targetSessionId`.
    * Throws `ImportValidationError` (message carries the 1-based line
    * number) on invalid input — all-or-nothing, no partial import.
+   *
+   * Channel name: `preload.ts` invokes `db:rollout:import`. This handler was
+   * registered as `rollout:import`, so nothing could ever reach it.
    */
-  ipcMain.handle('rollout:import', (_event, input: {
+  ipcMain.handle('db:rollout:import', (_event, input: {
     sourcePath: string;
     mode: 'restore' | 'continue';
     targetSessionId?: string;
@@ -753,8 +760,11 @@ export function registerDbHandlers(): void {
    * of a source session. The seed is the source's projected (rebase-applied)
    * message timeline up to and including `throughMessageId`; the new
    * session records `parent_session_id` + a `fork` spawn edge.
+   *
+   * Channel name: `preload.ts` invokes `db:session:forkAt`. This handler was
+   * registered as `session:forkAt`, so nothing could ever reach it.
    */
-  ipcMain.handle('session:forkAt', (_event, input: {
+  ipcMain.handle('db:session:forkAt', (_event, input: {
     sourceSessionId: string;
     throughMessageId: string;
     title?: string;
