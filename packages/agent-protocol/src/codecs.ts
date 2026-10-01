@@ -28,6 +28,7 @@ import {
   type EventType,
   type RunEvent,
 } from './events/registry.js';
+import { checkRequiredFields } from './events/required.js';
 import { ProtocolError, isKnownCode, type ErrorCode } from './errors.js';
 import { assertWithinStructuralLimits, byteLength, type ProtocolLimits } from './framing.js';
 import { LIMITS } from './framing.js';
@@ -172,6 +173,14 @@ export function validate(raw: unknown, options: DecodeOptions = {}): ValidationI
   if (!isEventType(type)) {
     issues.push({ path: '$.payload.type', message: `unknown event type "${type}"` });
     return issues;
+  }
+
+  // Per-payload field manifest. Runs for EVERY event, not just durable ones: a
+  // volatile `tool.progress` missing its `elapsedMs` is exactly as malformed as
+  // a durable one, and gating this on durability would exempt the two event
+  // families that arrive at the highest rate.
+  for (const issue of checkRequiredFields(type, payload)) {
+    issues.push({ path: `$.payload.${issue.field}`, message: issue.message });
   }
 
   const spec = EVENT_REGISTRY.specOf(type);
