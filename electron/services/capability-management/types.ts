@@ -54,7 +54,20 @@ export type CapabilityOrigin =
   | 'marketplace'
   | 'unknown';
 
-export type CapabilityMcpConnectionStatus = 'connected' | 'disconnected' | 'connecting' | 'error' | 'unknown';
+/** Mirror of `src/lib/capability-management-types.ts` — keep the two in sync. */
+export type CapabilityMcpConnectionStatus =
+  | 'connected'
+  | 'disconnected'
+  | 'connecting'
+  /**
+   * The transport died under a live client (`onclose` / `onerror`) while
+   * the last-known inventory is still intact. Distinct from `error`: the
+   * server was healthy, the pipe is gone, and the model still sees its
+   * tools until the next successful discovery replaces them.
+   */
+  | 'degraded'
+  | 'error'
+  | 'unknown';
 export type CapabilityMcpIssuePhase = 'connection' | 'registration' | 'discovery';
 export type CapabilityMcpIssueSeverity = 'critical' | 'warning' | 'info';
 

@@ -47,7 +47,7 @@ export interface MCPEffectiveServerDTO {
   connected: boolean;
   effectiveEnabled: boolean;
   shadowedCandidateCount: number;
-  connectionStatus: 'connected' | 'disconnected' | 'connecting' | 'error' | 'unknown';
+  connectionStatus: 'connected' | 'disconnected' | 'connecting' | 'degraded' | 'error' | 'unknown';
   lastIssue?: MCPInventoryIssue;
   /**
    * Live tool list reported by the worker's `mcp:status:snapshot` SSE

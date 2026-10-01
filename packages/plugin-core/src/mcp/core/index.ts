@@ -42,6 +42,29 @@ export type {
 } from './list-tools.js';
 
 export {
+  listAllResources,
+  readResource,
+  serverSupportsResources,
+  serverSupportsPrompts,
+  DEFAULT_MAX_RESOURCE_PAGES,
+  DEFAULT_MAX_RESOURCES,
+} from './list-resources.js';
+export type {
+  McpListResourcesClient,
+  McpResourceDescriptor,
+  McpResourceContents,
+  ListAllResourcesOptions,
+  ListAllResourcesResult,
+} from './list-resources.js';
+
+export { paginateCursor } from './paginate.js';
+export type {
+  PaginateOptions,
+  PaginateResult,
+  PaginationTruncation,
+} from './paginate.js';
+
+export {
   fnv1a32Hex,
   deriveConnectionSlug,
   connectionNamespace,

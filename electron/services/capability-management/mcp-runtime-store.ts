@@ -76,7 +76,12 @@ export function setLastMCpStatusSnapshot(payload: unknown): void {
       status !== 'connected' &&
       status !== 'disconnected' &&
       status !== 'connecting' &&
-      status !== 'error'
+      status !== 'error' &&
+      // `degraded` = the transport died under a live client (onclose/onerror).
+      // It MUST survive ingest: dropping the whole entry here made a dead
+      // server indistinguishable from a never-initialized one, so the UI
+      // showed "Unknown" and hid the Reconnect affordance.
+      status !== 'degraded'
     ) {
       continue;
     }

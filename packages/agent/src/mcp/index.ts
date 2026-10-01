@@ -17,6 +17,8 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import {
   CallToolResultSchema,
   ToolListChangedNotificationSchema,
+  ResourceListChangedNotificationSchema,
+  PromptListChangedNotificationSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import type { Tool, ToolResult, MCPServerConfig, MCPConnectionStatus } from '../types.js';
 import { logger } from '../utils/logger.js';
@@ -32,6 +34,10 @@ import {
   breakerDisposition,
   errorCodeForClass,
   McpError,
+  listAllResources,
+  readResource as readResourceCore,
+  serverSupportsResources,
+  serverSupportsPrompts,
 } from '@duya/plugin-core/src/mcp/core/index.js';
 import { composeResultFromBlocks } from './result-blocks.js';
 
@@ -87,6 +93,15 @@ class MCPClient {
   private inventoryRevision = 0;
   /** Plan 580 D2: debounce state for tools/list_changed. */
   private listChangedTimer: ReturnType<typeof setTimeout> | undefined;
+  /** +1 on every successful `resources/list` pass. */
+  private resourcesRevision = 0;
+  /**
+   * Non-tool `list_changed` notifications received (`resources`,
+   * `prompts`). These carry NO refresh handler — there is no model-facing
+   * resource/prompt surface — but they are counted and logged so a server
+   * capability change is never dropped silently.
+   */
+  private capabilityChangeCount = 0;
   private rediscoveryInFlight = false;
   /** Plan 580 §D6: per-connection inventory ledger (chain A instance). */
   private readonly ledger = new InventoryLedger();
@@ -386,6 +401,19 @@ class MCPClient {
         this.scheduleRediscovery();
       });
 
+      // Resource / prompt list changes are NOT tool rediscovery: they must
+      // not touch the tool inventory. They are counted and logged so a
+      // server that adds or removes resources is visible in diagnostics
+      // rather than vanishing (the SDK drops notifications with no handler).
+      this.client.setNotificationHandler(ResourceListChangedNotificationSchema, () => {
+        this.capabilityChangeCount++;
+        logger.info(`[MCP] resources/list_changed from "${this.config.name}"`);
+      });
+      this.client.setNotificationHandler(PromptListChangedNotificationSchema, () => {
+        this.capabilityChangeCount++;
+        logger.info(`[MCP] prompts/list_changed from "${this.config.name}"`);
+      });
+
       // Plan 580 D3: transactional paginated discovery (Phase 0
       // instrumentation: DUYA_MCP_DISCOVERY_DEBUG=1 logs every page with
       // cursor/pages/total under the SAME connection / OAuth grant).
@@ -567,28 +595,42 @@ class MCPClient {
   }
 
   /**
-   * List resources exposed by this MCP server.
-   *
-   * Returns `[]` when:
-   *  - the client is not connected
-   *  - the server does not implement the resources capability (the SDK
-   *    throws "Method not found")
-   *  - the call times out / errors for any other reason
+   * List resources exposed by this MCP server — FULLY PAGINATED.
    *
    * Resources are MCP's read-only data plane (files, DB rows, API
-   * snapshots). Some servers expose a handful; most expose none. The
-   * list_mcp_resources tool surfaces this so the model can discover
-   * what's available.
+   * snapshots). `resources/list` is the same cursor protocol as
+   * `tools/list`, so this runs the shared `paginateCursor` primitive:
+   * every page is fetched, the cursor loop is guarded against a server
+   * that repeats a cursor, and a mid-pagination failure throws instead
+   * of returning a silently-truncated list.
+   *
+   * Returns `[]` when the client is not connected, when the server did
+   * not declare the `resources` capability at initialize, or when the
+   * server genuinely exposes no resources. `serverSupportsResources()`
+   * is the authoritative check for the capability case.
    */
   async listResources(): Promise<Array<{ uri: string; name?: string; description?: string; mimeType?: string }>> {
     if (!this.client || this.connectionStatus !== 'connected') {
       return [];
     }
+    if (!serverSupportsResources(this.serverCapabilities)) {
+      // Server never advertised the capability — do not spend a round-trip
+      // provoking a "Method not found" on every call.
+      return [];
+    }
     try {
-      const result = await this.client.listResources();
-      // The SDK returns `{ resources, nextCursor? }`. We only return the
-      // page at hand — pagination can be added when an MCP server actually
-      // returns more resources than fit in one page in practice.
+      const result = await listAllResources(this.client, {
+        deadline: createDeadlineClock(this.getStartupTimeoutMs()),
+        ...(discoveryDebugEnabled() ? { debugLog: (m: string) => logger.info(`[MCP] ${this.config.name} ${m}`) } : {}),
+      });
+      this.resourcesRevision++;
+      logger.info(
+        `[MCP] listed resources for "${this.config.name}": ${formatDiscoveryLogLine({
+          pagesFetched: result.pagesFetched,
+          discoveredTotal: result.discoveredTotal,
+          truncated: result.truncated,
+        })}`,
+      );
       return result.resources.map((r) => ({
         uri: r.uri,
         ...(r.name !== undefined && { name: r.name }),
@@ -596,15 +638,56 @@ class MCPClient {
         ...(r.mimeType !== undefined && { mimeType: r.mimeType }),
       }));
     } catch (error) {
-      // Method not found = the server simply doesn't expose resources.
-      // That's not an error condition for our caller; surface as empty.
       const msg = error instanceof Error ? error.message : String(error);
-      if (/Method not found/i.test(msg) || /unknown method/i.test(msg)) {
-        return [];
-      }
       logger.warn(`[MCP] listResources failed for ${this.config.name}: ${msg}`);
       return [];
     }
+  }
+
+  /**
+   * Read one resource by URI. The read half of the data plane — without
+   * it a discovered resource is unusable no matter how well it is listed.
+   *
+   * Throws `McpError` when the server has no `resources` capability or
+   * the deadline is already spent, so callers can distinguish "not
+   * supported" from "returned nothing".
+   */
+  async readResource(uri: string): Promise<Array<Record<string, unknown>>> {
+    if (!this.client || this.connectionStatus !== 'connected') {
+      throw new McpError('MCP_TRANSPORT', `MCP server not connected: ${this.config.name}`);
+    }
+    if (!serverSupportsResources(this.serverCapabilities)) {
+      throw new McpError('MCP_PROTOCOL', `MCP server "${this.config.name}" does not expose the resources capability`);
+    }
+    const contents = await readResourceCore(
+      this.client,
+      uri,
+      createDeadlineClock(this.getToolTimeoutMs('resources/read')),
+    );
+    return contents as Array<Record<string, unknown>>;
+  }
+
+  /**
+   * True when the server declared the `resources` capability at
+   * initialize. Callers use this instead of inferring support from an
+   * empty `listResources()` result.
+   */
+  supportsResources(): boolean {
+    return serverSupportsResources(this.serverCapabilities);
+  }
+
+  /** True when the server declared the `prompts` capability at initialize. */
+  supportsPrompts(): boolean {
+    return serverSupportsPrompts(this.serverCapabilities);
+  }
+
+  /**
+   * Monotonic count of non-tool `list_changed` notifications received
+   * (`resources`, `prompts`). Exposed so the capability-change signal is
+   * observable instead of being dropped on the floor.
+   */
+  getCapabilityChangeCount(): number {
+    return this.capabilityChangeCount;
   }
 }
 

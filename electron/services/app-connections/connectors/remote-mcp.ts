@@ -42,9 +42,9 @@ import {
   connectionNamespace,
 } from '@duya/plugin-core/src/mcp/core/alias.js';
 import { InventoryLedger } from '../inventory-ledger.js';
-import { getLogger, LogComponent } from '../../../logging/logger';
+import { getLogger, LogComponent, type LogComponentName } from '../../../logging/logger';
 
-const COMPONENT = 'AppConnectionConnector' as LogComponent;
+const COMPONENT: LogComponentName = LogComponent.ConfigManager;
 
 /** Shared deadline for one full paginated `tools/list` pass (plan 580 D3/D5). */
 const MCP_DISCOVERY_TIMEOUT_MS = 60_000;
@@ -79,6 +79,16 @@ interface RemoteSession {
   /** Monotonic guard: a late commit of a superseded discovery must lose. */
   rediscoveryGeneration: number;
   listChangedTimer: NodeJS.Timeout | null;
+  /**
+   * Plan 580 Phase 5: per-connection inventory ledger (chain B instance).
+   * Written by initial discovery, cache hydration and every
+   * `list_changed` rediscovery; read by `getLedgerSnapshot`.
+   *
+   * This field is load-bearing: without it `session.ledger.commitDiscovery`
+   * throws a TypeError on EVERY discovery pass, which aborts
+   * `ensureSession` and makes every remote-MCP connection fail.
+   */
+  ledger: InventoryLedger;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -378,6 +388,7 @@ export class RemoteMcpConnector {
       discoveredTotal: 0,
       rediscoveryGeneration: 0,
       listChangedTimer: null,
+      ledger: new InventoryLedger(),
     };
     try {
       await client.connect(transport);

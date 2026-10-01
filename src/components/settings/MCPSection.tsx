@@ -119,7 +119,7 @@ function formDataToServer(formData: MCPServerFormData, connectionId?: string): M
 // Phase 3 (MCP runtime status UI) helpers
 // ============================================================================
 
-type McpConnectionStatus = 'connected' | 'disconnected' | 'connecting' | 'error' | 'unknown';
+type McpConnectionStatus = 'connected' | 'disconnected' | 'connecting' | 'degraded' | 'error' | 'unknown';
 
 function statusColor(status: McpConnectionStatus | undefined): {
   bg: string;
@@ -131,6 +131,10 @@ function statusColor(status: McpConnectionStatus | undefined): {
       return { bg: 'bg-green-500/15', fg: 'text-green-700 dark:text-green-400', border: 'border-green-500/30' };
     case 'connecting':
       return { bg: 'bg-amber-500/15', fg: 'text-amber-700 dark:text-amber-400', border: 'border-amber-500/30' };
+    // Degraded = the transport died under a live client. Amber, not red:
+    // the last-known tool inventory is still there, the pipe is not.
+    case 'degraded':
+      return { bg: 'bg-orange-500/15', fg: 'text-orange-700 dark:text-orange-400', border: 'border-orange-500/30' };
     case 'error':
       return { bg: 'bg-red-500/15', fg: 'text-red-700 dark:text-red-400', border: 'border-red-500/30' };
     case 'disconnected':
@@ -146,6 +150,8 @@ function statusLabel(status: McpConnectionStatus | undefined): string {
       return 'Connected';
     case 'connecting':
       return 'Connecting…';
+    case 'degraded':
+      return 'Degraded — transport lost';
     case 'error':
       return 'Failed';
     case 'disconnected':
@@ -161,11 +167,13 @@ function StatusDot({ status }: { status: McpConnectionStatus | undefined }): Rea
       ? 'bg-green-500'
       : status === 'connecting'
         ? 'bg-amber-500'
-        : status === 'error'
-          ? 'bg-red-500'
-          : status === 'disconnected'
-            ? 'bg-zinc-500'
-            : 'bg-zinc-400';
+        : status === 'degraded'
+          ? 'bg-orange-500'
+          : status === 'error'
+            ? 'bg-red-500'
+            : status === 'disconnected'
+              ? 'bg-zinc-500'
+              : 'bg-zinc-400';
   return (
     <span
       aria-label={`mcp status ${status ?? 'unknown'}`}
@@ -670,7 +678,11 @@ export function MCPSection() {
             const isReconnecting = reconnecting.has(server.name);
             const runtimeStatus = runtime?.connectionStatus;
             const showReconnect =
-              server.enabled && (runtimeStatus === 'error' || runtimeStatus === 'disconnected');
+              server.enabled &&
+              (runtimeStatus === 'error' ||
+                runtimeStatus === 'disconnected' ||
+                // A dead transport is exactly when Reconnect matters most.
+                runtimeStatus === 'degraded');
             return (
             <SettingsCard key={server.name} className="mb-4">
               <div className="py-4">
@@ -862,7 +874,10 @@ export function MCPSection() {
             const isReconnecting = reconnecting.has(pmcp.name);
             const runtimeStatus = runtime?.connectionStatus;
             const showReconnect =
-              pmcp.effective && (runtimeStatus === 'error' || runtimeStatus === 'disconnected');
+              pmcp.effective &&
+              (runtimeStatus === 'error' ||
+                runtimeStatus === 'disconnected' ||
+                runtimeStatus === 'degraded');
             return (
             <SettingsCard key={`${pmcp.pluginId}-${pmcp.name}`} className="mb-3">
               <div className="py-4">

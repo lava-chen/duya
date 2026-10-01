@@ -90,4 +90,35 @@ describe('mcp-runtime-store', () => {
     });
     expect(getLastMcpStatusReceivedAt()).toBeGreaterThan(0);
   });
+
+  // Regression: `degraded` (transport death under a live client) used to
+  // be dropped here, so a dead server vanished from the snapshot entirely
+  // and the UI rendered it as "Unknown" with no Reconnect affordance.
+  it('keeps a degraded server in the snapshot instead of dropping it', () => {
+    setLastMCpStatusSnapshot({
+      mcpStatus: {
+        dead: {
+          connectionStatus: 'degraded',
+          toolCount: 2,
+          tools: [{ name: 'alpha', description: 'still listed' }],
+        },
+      },
+    });
+    const snapshot = getLatestMcpStatusByServer();
+    expect(Object.keys(snapshot)).toEqual(['dead']);
+    expect(snapshot.dead.connectionStatus).toBe('degraded');
+    // The last-known inventory is retained: the model still sees the tools.
+    expect(snapshot.dead.toolCount).toBe(2);
+    expect(snapshot.dead.tools).toHaveLength(1);
+  });
+
+  it('still rejects statuses outside the MCPConnectionStatus union', () => {
+    setLastMCpStatusSnapshot({
+      mcpStatus: {
+        nonsense: { connectionStatus: 'banana', toolCount: 0, tools: [] },
+        ok: { connectionStatus: 'connected', toolCount: 1, tools: [] },
+      },
+    });
+    expect(Object.keys(getLatestMcpStatusByServer())).toEqual(['ok']);
+  });
 });

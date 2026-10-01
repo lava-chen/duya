@@ -346,13 +346,19 @@ export function resolveMcpStatusFields(
   let connectionStatus: CapabilityMcpConnectionStatus;
   let tools: McpToolDTO[] | undefined;
   if (liveRuntime) {
-    connectionStatus = liveRuntime.connectionStatus === 'connected'
-      ? 'connected'
-      : liveRuntime.connectionStatus === 'connecting'
-        ? 'connecting'
-        : liveRuntime.connectionStatus === 'error'
-          ? 'error'
-          : 'disconnected';
+    connectionStatus =
+      liveRuntime.connectionStatus === 'connected'
+        ? 'connected'
+        : liveRuntime.connectionStatus === 'connecting'
+          ? 'connecting'
+          : liveRuntime.connectionStatus === 'degraded'
+            // Transport death under a live client: NOT collapsed into
+            // `disconnected`, so the renderer can tell "the pipe died" from
+            // "never connected" and offer Reconnect.
+            ? 'degraded'
+            : liveRuntime.connectionStatus === 'error'
+              ? 'error'
+              : 'disconnected';
     tools = liveRuntime.tools.map((t) => ({
       name: t.name,
       description: t.description,

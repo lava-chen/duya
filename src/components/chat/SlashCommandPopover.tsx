@@ -32,7 +32,7 @@ interface McpServerInfo {
   writable?: boolean;
   source?: 'settings' | 'plugin' | 'bundled';
   /** Live runtime connection status from worker `mcp:status:snapshot`. */
-  connectionStatus?: 'connected' | 'disconnected' | 'connecting' | 'error' | 'unknown';
+  connectionStatus?: 'connected' | 'disconnected' | 'connecting' | 'degraded' | 'error' | 'unknown';
   /** Tool count the worker successfully listed. Absent when unknown. */
   toolCount?: number;
   /** Compact tool list with annotations for the inline expansion. */
@@ -797,19 +797,23 @@ export function SlashCommandPopover({
                     ? 'var(--success, #22c55e)'
                     : status === 'connecting'
                       ? 'var(--warning, #f59e0b)'
-                      : status === 'error'
-                        ? 'var(--danger, #ef4444)'
-                        : 'var(--command-menu-muted)';
+                      : status === 'degraded'
+                        ? 'var(--warning, #f59e0b)'
+                        : status === 'error'
+                          ? 'var(--danger, #ef4444)'
+                          : 'var(--command-menu-muted)';
                 const statusLabel =
                   status === 'connected'
                     ? 'connected'
                     : status === 'connecting'
                       ? 'connecting…'
-                      : status === 'error'
-                        ? 'failed'
-                        : status === 'disconnected'
-                          ? 'disconnected'
-                          : 'unknown';
+                      : status === 'degraded'
+                        ? 'degraded — transport lost'
+                        : status === 'error'
+                          ? 'failed'
+                          : status === 'disconnected'
+                            ? 'disconnected'
+                            : 'unknown';
                 return (
                   <div key={server.name}>
                     <div

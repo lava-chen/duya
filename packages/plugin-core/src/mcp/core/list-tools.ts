@@ -13,10 +13,10 @@
 //   - per-page deadline remaining + abort signal ride to the SDK so a
 //     shared transport is never closed for a single aborted request.
 
-import { McpError } from './error-taxonomy.js';
 import type { DeadlineClock } from './deadline.js';
 import type { McpToolDescriptor } from './descriptor.js';
 import { canonicalizeJson } from './descriptor.js';
+import { paginateCursor, type PaginationTruncation } from './paginate.js';
 
 /** Structural subset of the MCP SDK Client's listTools surface. */
 export interface McpListToolsClient {
@@ -43,7 +43,7 @@ export interface ListAllToolsOptions {
   debugLog?: (message: string) => void;
 }
 
-export type DiscoveryTruncation = false | 'maxPages' | 'maxTools' | 'deadline';
+export type DiscoveryTruncation = PaginationTruncation;
 
 export interface ListAllToolsResult {
   tools: McpToolDescriptor[];
@@ -78,71 +78,28 @@ export async function listAllTools(
   client: McpListToolsClient,
   opts: ListAllToolsOptions,
 ): Promise<ListAllToolsResult> {
-  const maxPages = opts.maxPages ?? DEFAULT_MAX_PAGES;
-  const maxTools = opts.maxTools ?? DEFAULT_MAX_TOOLS;
-
-  const seenCursors = new Set<string>();
-  const byName = new Map<string, McpToolDescriptor>();
-  let pagesFetched = 0;
-  let cursor: string | undefined = undefined;
-  let truncated: DiscoveryTruncation = false;
-
-  while (true) {
-    if (opts.deadline.isExpired()) {
-      throw new McpError('MCP_TIMEOUT', `tools/list pagination deadline exceeded after ${pagesFetched} page(s)`);
-    }
-
-    if (cursor !== undefined) {
-      if (seenCursors.has(cursor)) {
-        throw new McpError(
-          'MCP_PROTOCOL',
-          `tools/list pagination loop: cursor "${cursor}" already seen (page ${pagesFetched + 1})`,
-        );
-      }
-      seenCursors.add(cursor);
-    }
-
-    const timeoutMs = opts.deadline.remainingMs();
-    const page = await client.listTools(
-      cursor !== undefined ? { cursor } : undefined,
-      { timeout: timeoutMs, signal: opts.deadline.signal },
-    );
-    pagesFetched++;
-
-    for (const tool of page.tools ?? []) {
-      if (byName.has(tool.name)) {
-        throw new McpError(
-          'MCP_PROTOCOL',
-          `tools/list returned duplicate tool name "${tool.name}" across pages (page ${pagesFetched})`,
-        );
-      }
-      byName.set(tool.name, tool);
-    }
-
-    opts.debugLog?.(
-      `[mcp-discovery] page=${pagesFetched} cursor=${cursor ?? '<none>'} batchTools=${page.tools?.length ?? 0} totalSoFar=${byName.size} nextCursor=${page.nextCursor ?? '<end>'}`,
-    );
-
-    if (page.nextCursor === null || page.nextCursor === undefined) break;
-
-    if (pagesFetched >= maxPages) {
-      truncated = 'maxPages';
-      opts.debugLog?.(`[mcp-discovery] maxPages=${maxPages} reached; truncated`);
-      break;
-    }
-    if (byName.size >= maxTools) {
-      truncated = 'maxTools';
-      opts.debugLog?.(`[mcp-discovery] maxTools=${maxTools} reached; truncated`);
-      break;
-    }
-    cursor = page.nextCursor;
-  }
+  const result = await paginateCursor<McpToolDescriptor>({
+    deadline: opts.deadline,
+    maxPages: opts.maxPages ?? DEFAULT_MAX_PAGES,
+    maxItems: opts.maxTools ?? DEFAULT_MAX_TOOLS,
+    ...(opts.debugLog ? { debugLog: opts.debugLog } : {}),
+    method: 'tools/list',
+    itemLabel: 'tool name',
+    keyOf: (t) => t.name,
+    fetchPage: async (cursor, remainingMs, signal) => {
+      const page = await client.listTools(
+        cursor !== undefined ? { cursor } : undefined,
+        { timeout: remainingMs, signal },
+      );
+      return { items: page.tools, nextCursor: page.nextCursor };
+    },
+  });
 
   return {
-    tools: [...byName.values()],
-    pagesFetched,
-    discoveredTotal: byName.size,
-    truncated,
+    tools: result.items,
+    pagesFetched: result.pagesFetched,
+    discoveredTotal: result.discoveredTotal,
+    truncated: result.truncated,
   };
 }
 

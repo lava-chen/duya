@@ -531,7 +531,7 @@ export function MessageInput({
     enabled?: boolean;
     writable?: boolean;
     source?: 'settings' | 'plugin' | 'bundled';
-    connectionStatus?: 'connected' | 'disconnected' | 'connecting' | 'error' | 'unknown';
+    connectionStatus?: 'connected' | 'disconnected' | 'connecting' | 'degraded' | 'error' | 'unknown';
     toolCount?: number;
     tools?: Array<{
       name: string;
