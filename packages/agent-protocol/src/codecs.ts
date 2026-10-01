@@ -155,7 +155,14 @@ export function validate(raw: unknown, options: DecodeOptions = {}): ValidationI
   }
 
   const payload = asRecord(record['payload']);
-  if (!payload) return issues;
+  if (!payload) {
+    // The strict path must say so. Returning the issues collected so far would
+    // report success for an envelope whose payload is a string, a number or
+    // null — every required envelope key present, and the one field that makes
+    // it an event carrying nothing. Found by the malformed-input suite.
+    issues.push({ path: '$.payload', message: 'payload is not an object' });
+    return issues;
+  }
 
   const type = payload['type'];
   if (typeof type !== 'string') {

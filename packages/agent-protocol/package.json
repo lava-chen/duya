@@ -12,8 +12,8 @@
       "import": "./dist/index.js"
     },
     "./testing": {
-      "types": "./dist/testing/fixtures.d.ts",
-      "import": "./dist/testing/fixtures.js"
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js"
     },
     "./legacy": {
       "types": "./dist/legacy/sse-event.d.ts",

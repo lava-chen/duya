@@ -71,6 +71,12 @@ const FIXTURES = {
   },
   'assistant.status': { message: 'working' },
 
+  'tool.call_preview': {
+    toolCallId: 'call-1',
+    toolName: 'Read',
+    arguments: {},
+    provisional: true,
+  },
   'tool.call_started': {
     toolCallId: 'call-1',
     toolName: 'Read',
@@ -84,9 +90,11 @@ const FIXTURES = {
   'tool.call_completed': {
     toolCallId: 'call-1',
     content: 'ok',
-    isError: false,
+    outcome: { outcome: 'success' },
     durationMs: 1,
   },
+
+  'checkpoint.saved': { checkpointRef: 'ckpt-1', generation: 1, eventSeq: 4 },
 
   'permission.requested': {
     requestId: 'req-1',
@@ -95,6 +103,7 @@ const FIXTURES = {
     toolName: 'Bash',
     toolInput: {},
     mode: 'generic',
+    startedAt: 0,
     expiresAt: 300_000,
   },
   'permission.resolved': {

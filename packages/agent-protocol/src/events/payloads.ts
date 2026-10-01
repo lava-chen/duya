@@ -129,20 +129,48 @@ export interface ToolUse {
   readonly mcp?: { readonly server: string; readonly tool: string };
 }
 
+/**
+ * How a tool call ended, stated explicitly.
+ *
+ * ## Why not a boolean
+ *
+ * The legacy wire carries the failure bit in three places and all three are
+ * optional: `error?: boolean` on the worker's `chat:tool_result`
+ * (packages/agent/src/process/worker-protocol.ts:299-305, relayed verbatim by
+ * router.ts:506), `is_error?: boolean` on `@duya/ai`'s `ToolResultContent`
+ * (packages/ai/src/types.ts:75-80), and nothing at all on the stored rows. An
+ * absent bit is indistinguishable from a successful call, so a failed tool and
+ * a silent one are the same value on the wire and in the transcript.
+ *
+ * Making the field REQUIRED does not fix that — it only moves the lie. The
+ * adapter would have to invent `false` for every call whose producer omitted
+ * the bit, and nothing distinguishes an invented success from a real one.
+ *
+ * So absence gets its own outcome. `indeterminate` means "the producer did not
+ * say", and a host can treat it differently from `success`: a cost dashboard
+ * can count it, a correctness check can flag it, and a transcript can render it
+ * as unknown rather than as a clean result.
+ *
+ * @see ToolCallCompletedPayload
+ * @see ToolResult
+ */
+export type ToolCallOutcome =
+  | { readonly outcome: 'success' }
+  | { readonly outcome: 'tool_error'; readonly error: ProtocolErrorInfo }
+  | { readonly outcome: 'timeout'; readonly afterMs: number }
+  | { readonly outcome: 'cancelled'; readonly reason: string }
+  /**
+   * The producer emitted a completion with no status. The ONLY correct way for
+   * an adapter to produce this is to pass the absence through.
+   */
+  | { readonly outcome: 'indeterminate'; readonly note: string };
+
 export interface ToolResult {
   readonly type: 'tool_result';
   readonly toolCallId: ToolCallId;
   readonly content: string;
-  /** The protocol FORCES this field, because every producer treats it as
-   *  optional and so absence is indistinguishable from success. The same bit
-   *  is spelled three ways in this repo: `chat:tool_result` carries
-   *  `error?: boolean` (packages/agent/src/process/worker-protocol.ts:299-305,
-   *  relayed verbatim by router.ts:506), and `@duya/ai`'s
-   *  `ToolResultContent` carries `is_error?: boolean`
-   *  (packages/ai/src/types.ts:75-80) — two different structures, two
-   *  different names, both optional. A required boolean is the only spelling
-   *  that makes a missing failure signal a type error rather than a default. */
-  readonly isError: boolean;
+  /** Explicit outcome. See `ToolCallOutcome` for why this is not a boolean. */
+  readonly outcome: ToolCallOutcome;
   readonly durationMs?: Millis;
   readonly metadata?: Readonly<Record<string, unknown>>;
   readonly blocks?: readonly string[];
@@ -360,19 +388,65 @@ export interface AssistantStatusPayload {
 // ── tool ──────────────────────────────────────────────────────────────────
 
 /**
- * A tool invocation the runtime is about to attempt.
+ * A tool call the model has announced but which is not yet final.
  *
- * Durable, not volatile. The tool has not produced a side effect yet, but the
- * *intent* to call it is exactly the fact a recovery needs: without a durable
- * record, a crash mid-tool leaves no evidence the call was ever made, and a
- * ledger of side effects has nothing to reconcile against. Durable intent is
- * the cheap half of that story — the expensive half is `tool.call_completed`.
+ * VOLATILE, and the reason is the whole point of this event existing. While
+ * arguments stream, the model can still change its mind about a path or a
+ * command. The runtime emits this as soon as it knows a call is coming so a
+ * host can render a row immediately, and it goes into no durable log because
+ * the call it describes may never happen as stated.
+ *
+ * The legacy worker emits this as `chat:tool_use_started`, and separately emits
+ * `chat:tool_use` once arguments settle. An earlier draft of this package
+ * mapped BOTH onto `tool.call_started`, which produced a durable event emitted
+ * twice per call with the same id and different arguments — a stream a host
+ * could not interpret, because nothing said which copy superseded the other.
+ * Splitting them is the fix: exactly one durable `tool.call_started` per call.
+ *
+ * @see ToolCallStartedPayload
+ */
+export interface ToolCallPreviewPayload {
+  readonly toolCallId: ToolCallId;
+  readonly toolName: string;
+  /**
+   * Best-effort arguments. Explicitly NOT authoritative — this is a partial
+   * view of a call that is still being generated.
+   */
+  readonly arguments: Readonly<Record<string, unknown>>;
+  /** True while arguments are still streaming. Always true here. */
+  readonly provisional: true;
+}
+
+/**
+ * A tool invocation the runtime is about to dispatch.
+ *
+ * ## Exactly once, authoritative, before dispatch
+ *
+ * This event carries the side-effect INTENT, and it is the only durable record
+ * of that intent. Two properties are load-bearing:
+ *
+ *  - **Exactly once per `toolCallId`.** A crash mid-tool leaves a durable
+ *    `tool.call_started` with no `tool.call_completed`, and that asymmetry is
+ *    the evidence a side-effect ledger reconciles against. Emitting it twice
+ *    would make the ledger count one call twice; never emitting it would leave
+ *    a crash with no trace that the call was attempted at all.
+ *  - **Before executor dispatch.** If it fires after dispatch, a crash between
+ *    dispatch and emit produces a side effect with no intent on record — the
+ *    exact case durable intent exists to prevent.
+ *
+ * `ToolCallPreviewPayload` covers the "something is coming" case; this covers
+ * "this is what will run".
+ *
+ * @see ToolCallPreviewPayload
+ * @see ToolCallCompletedPayload
  */
 export interface ToolCallStartedPayload {
   readonly toolCallId: ToolCallId;
   readonly toolName: string;
+  /** Final arguments. These are what will be dispatched. */
   readonly arguments: Readonly<Record<string, unknown>>;
   readonly annotations?: Readonly<Record<string, unknown>>;
+  /** 1 for a first call; higher only when the runtime deliberately retries. */
   readonly attempt: number;
   readonly groupId?: string;
   readonly progressTitle?: string;
@@ -421,14 +495,46 @@ export interface ToolCallCompletedPayload {
    *  name, so a result can never fail to join its invocation. */
   readonly toolCallId: ToolCallId;
   readonly content: string;
-  /** Mandatory here, unlike the legacy event, which dropped it. */
-  readonly isError: boolean;
+  /**
+   * Explicit outcome, never a defaulted boolean.
+   *
+   * An adapter that receives a legacy completion with no status field MUST
+   * emit `{ outcome: 'indeterminate' }`. Emitting `success` would be a
+   * fabricated fact, and there is no producer evidence for it.
+   */
+  readonly outcome: ToolCallOutcome;
   readonly durationMs: Millis;
-  readonly errorClass?: string;
   readonly metadata?: Readonly<Record<string, unknown>>;
   readonly blocks?: readonly string[];
   readonly structured?: Readonly<Record<string, unknown>>;
   readonly images?: readonly { readonly mediaType: string; readonly data: string }[];
+}
+
+// ── checkpoint ─────────────────────────────────────────────────────────────
+
+/**
+ * A durable checkpoint boundary the runtime has stored.
+ *
+ * ## What is NOT here
+ *
+ * The worker's `checkpoint` event carries `{ messages, generation }`
+ * (packages/agent/src/process/worker-protocol.ts:248-255). The full message
+ * array does NOT cross the protocol boundary. It is unbounded, it is the
+ * transcript itself rather than a reference to it, and it is exactly the shape
+ * that makes a checkpoint payload a credential and size hazard. A host that
+ * wants the messages asks the Control Plane for them by `checkpointRef`.
+ *
+ * `eventSeq` is the envelope `seq` of the event this checkpoint was taken at, so
+ * a host can tell whether the boundary it holds is before or after what it has
+ * already replayed without comparing timestamps.
+ */
+export interface CheckpointSavedPayload {
+  /** Opaque handle the Control Plane resolves. Never the messages themselves. */
+  readonly checkpointRef: string;
+  /** Monotonic per run. A resume below the runtime's floor is refused. */
+  readonly generation: number;
+  /** Envelope `seq` of the event this checkpoint was taken at. */
+  readonly eventSeq: number;
 }
 
 // ── permission (re-exported shapes live in permission.ts) ─────────────────
@@ -584,12 +690,15 @@ export interface RunEventPayloads {
   'assistant.goal_updated': AssistantGoalUpdatedPayload;
   'assistant.status': AssistantStatusPayload;
 
+  'tool.call_preview': ToolCallPreviewPayload;
   'tool.call_started': ToolCallStartedPayload;
   'tool.arguments_delta': ToolArgumentsDeltaPayload;
   'tool.progress': ToolProgressPayload;
   'tool.group_progress': ToolGroupProgressPayload;
   'tool.timed_out': ToolTimedOutPayload;
   'tool.call_completed': ToolCallCompletedPayload;
+
+  'checkpoint.saved': CheckpointSavedPayload;
 
   'permission.requested': PermissionRequestPayload;
   'permission.resolved': PermissionResolutionPayload;

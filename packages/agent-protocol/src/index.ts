@@ -13,6 +13,7 @@
  */
 
 export * from './version.js';
+export * from './compatibility.js';
 export * from './hash.js';
 export * from './primitives.js';
 export * from './errors.js';

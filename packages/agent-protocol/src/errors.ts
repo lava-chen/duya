@@ -156,12 +156,59 @@ export function isTerminal(code: string): boolean {
   return TERMINAL_ERROR_CODES.has(code as ErrorCode);
 }
 
+/**
+ * Where a failure came from, and the producer's own code for it.
+ *
+ * ## The boundary rule
+ *
+ * `ErrorCode` is a closed set for the PROTOCOL/RUN boundary only — the failures
+ * a host must be able to branch on without knowing anything about the provider,
+ * the tool, or the connector. It is not a registry of every string this
+ * repository emits, and it must not become one.
+ *
+ * The code that actually failed says something specific and useful:
+ * `connector_auth_required`, `http_503`, `provider_error`, `cron_not_found`,
+ * `slack_error`, and thirty more in the same shape. Folding those into
+ * `ErrorCode` would mean a set that changes every time a connector gains an
+ * error, and a host that has to upgrade to understand why a run failed.
+ *
+ * So the protocol code is the category and `cause` is the receipt. The cause's
+ * `code` is a free string ON PURPOSE: it is preserved for diagnosis and must
+ * never be branched on. The moment a host switches on `cause.code`, the
+ * boundary this type exists to hold has been crossed.
+ */
+export type ErrorCauseSystem =
+  | 'provider'
+  | 'tool'
+  | 'connector'
+  | 'http'
+  | 'runtime'
+  | 'control_plane';
+
+export interface ErrorCause {
+  readonly system: ErrorCauseSystem;
+  /**
+   * The producer's own code, verbatim and untranslated. Free string by design.
+   * Preserved for diagnosis; never a branch condition.
+   */
+  readonly code: string;
+  /** HTTP status, when `system` is `http` or the producer reported one. */
+  readonly status?: number;
+  /** Diagnostic facts only. Never the offending payload. */
+  readonly detail?: DiagnosticDetail;
+}
+
 export interface ProtocolErrorInfo {
   readonly code: ErrorCode;
   readonly message: string;
   /** Diagnostic facts only — counts, durations, capability names.
    *  Never the offending payload: see `DiagnosticDetail`. */
   readonly details?: DiagnosticDetail;
+  /**
+   * The originating system's code, when the protocol code is a category rather
+   * than the specific failure. See `ErrorCause`.
+   */
+  readonly cause?: ErrorCause;
   /** First-class field, never regex-scraped out of `message`.
    *  Today `retryAfterMs` is not expressed at all. */
   readonly retryAfterMs?: number;

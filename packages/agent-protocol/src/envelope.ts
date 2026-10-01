@@ -55,7 +55,36 @@ import type { RunEvent } from './events/registry.js';
 export interface RunEventEnvelope<T extends RunEvent = RunEvent> {
   readonly runId: RunId;
   readonly sessionId: SessionId;
-  /** Per-run, starts at 1, strictly +1, MINTED BY THE RUNTIME. */
+  /**
+   * Per-RUN sequence, minted by the runtime. Starts at 1, strictly +1, no gaps.
+   *
+   * ## Uniqueness is (runId, seq), never (sessionId, seq)
+   *
+   * A session outlives its runs. A resumed run is a NEW run with a new
+   * `runId`, and a forked one carries `parentRunId`. Both restart `seq` at 1.
+   * So two runs in the same session can and will carry the same `seq` values,
+   * and that is not a collision.
+   *
+   * The current implementation gets this wrong in the opposite direction. The
+   * SSE counter is re-initialised to 0 on every POST (router.ts:1329) while
+   * `session.lastEventId` and the replay ring are per-session and never reset
+   * (router.ts:1569-1570, server/types.ts:39), so turn two re-issues ids turn
+   * one already used and `getEventsSince`'s `eventId > lastEventId` filter stops
+   * meaning anything (router.ts:2411). Collapsing the two scopes into one
+   * session-wide counter is what makes that unrecoverable: there is no way to
+   * say which run an id belongs to.
+   *
+   * ## What this means for replay storage
+   *
+   * The replay ring and any durable event repository belong to the RUN, keyed
+   * by `(runId, seq)`. A cross-run, session-wide stream is a legitimate product
+   * feature — it is how a transcript view spans a resumed run — but it needs its
+   * OWN cursor and it must not reuse this one. A session-level cursor is a
+   * different number with a different lifetime; deriving one from per-run seqs
+   * is possible but the derivation has to be explicit, because a resume request
+   * that means "where was I in the session" and one that means "where was I in
+   * this run" refuse for different reasons.
+   */
   readonly seq: number;
   /** Epoch ms; a virtual clock when `manifest.deterministic` is set. */
   readonly timestamp: EventTimestamp;
@@ -104,9 +133,19 @@ export const SEQ_CONTRACT = {
   step: 1,
   /** Minted by the runtime, never by a host or an adapter. */
   owner: 'runtime' as const,
-  /** `Last-Event-ID` carries this value verbatim. */
+  /**
+   * The scope within which `seq` is unique. NOT `sessionId` — a session holds
+   * many runs, and a resumed run restarts at 1. See `RunEventEnvelope.seq`.
+   */
+  uniqueWithin: 'run' as const,
+  /** Carries this value verbatim, together with the run it belongs to. */
   resumeHeader: 'Last-Event-ID' as const,
 } as const;
+
+/** The identity of one event in the protocol: run-scoped, gapless, runtime-minted. */
+export function eventKey(envelope: { readonly runId: string; readonly seq: number }): string {
+  return `${envelope.runId}#${envelope.seq}`;
+}
 
 export function isValidSeq(seq: unknown): seq is number {
   return typeof seq === 'number' && Number.isInteger(seq) && seq >= SEQ_CONTRACT.start;

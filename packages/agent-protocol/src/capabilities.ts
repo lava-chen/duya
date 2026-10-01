@@ -54,6 +54,22 @@ export interface RuntimeCapabilities {
     readonly graceMs: number;
     readonly pause: boolean;
     readonly deterministic: boolean;
+    /**
+     * Who owns the permission expiry clock.
+     *
+     * `runtime` means exactly one thing: the runtime mints `expiresAt` AND runs
+     * the timer, so the deadline a host sees and the deadline the runtime
+     * enforces are the same number. The legacy wire let the agent mint the
+     * value while the worker set the timer, which is two clocks that can
+     * disagree.
+     *
+     * `absent` means there is no clock. It is a legal advertisement and it is
+     * the honest one today: there is no permission timer anywhere in the agent.
+     * A runtime that emits `permission.requested` with an `expiresAt` while
+     * advertising `absent` is lying, and `assertCapabilityConsistency` is what
+     * catches it.
+     */
+    readonly permissionExpiryClock: 'runtime' | 'absent';
   };
   readonly events: {
     /** Oldest `seq` the runtime can still replay. A resume below this is refused
@@ -188,4 +204,78 @@ export function satisfies(
   } catch {
     return false;
   }
+}
+
+// ── self-consistency ───────────────────────────────────────────────────────
+
+/**
+ * A capability the runtime can PROVIDE, as distinct from what a host can
+ * CONSUME (`ProtocolCapability` in version.ts).
+ *
+ * Kept separate on purpose. Mixing the two is the mistake that produces a
+ * handshake where the runtime concludes a host can execute something because
+ * the host offered to serve it.
+ */
+export const RUNTIME_CAPABILITIES = [
+  /** A durable checkpoint repository exists and `checkpoint.saved` can be emitted. */
+  'checkpoint_repository',
+  /** The runtime owns the permission expiry clock. */
+  'permission_coordinator',
+  /** The executor can emit the provisional `tool.call_preview` before dispatch. */
+  'tool_preview',
+] as const;
+
+export type RuntimeCapability = (typeof RUNTIME_CAPABILITIES)[number];
+
+export interface CapabilityConsistencyProblem {
+  readonly field: string;
+  readonly advertised: string;
+  readonly required: string;
+}
+
+/**
+ * Cross-check what a runtime advertises against what it actually provides.
+ *
+ * This exists because the alternative is a promise nobody keeps. Two real
+ * examples from the current codebase:
+ *
+ *  - `resume.checkpointGeneration: true` with no checkpoint repository and no
+ *    `checkpoint.saved` anywhere in the registry. A host would learn a
+ *    generation exists only by being told a number to resume from.
+ *  - `permissionExpiryClock: 'runtime'` with no coordinator. A host would render
+ *    a deadline the runtime never enforces, and the request would sit open
+ *    until the run ended.
+ *
+ * Both are "the type allows it, the code does not do it" gaps, and a probe is
+ * the only place they can be caught before a host trusts them.
+ */
+export function assertCapabilityConsistency(
+  capabilities: RuntimeCapabilities,
+  provides: readonly RuntimeCapability[],
+): readonly CapabilityConsistencyProblem[] {
+  const problems: CapabilityConsistencyProblem[] = [];
+  const has = (c: RuntimeCapability) => provides.includes(c);
+
+  if (capabilities.run.resume.checkpointGeneration && !has('checkpoint_repository')) {
+    problems.push({
+      field: 'run.resume.checkpointGeneration',
+      advertised: 'true',
+      required: 'runtime capability `checkpoint_repository`',
+    });
+  }
+  if (capabilities.run.permissionExpiryClock === 'runtime' && !has('permission_coordinator')) {
+    problems.push({
+      field: 'run.permissionExpiryClock',
+      advertised: 'runtime',
+      required: 'runtime capability `permission_coordinator`',
+    });
+  }
+  if (capabilities.events.ephemeral.includes('tool.call_preview') && !has('tool_preview')) {
+    problems.push({
+      field: 'events.ephemeral',
+      advertised: "includes 'tool.call_preview'",
+      required: 'runtime capability `tool_preview`',
+    });
+  }
+  return problems;
 }

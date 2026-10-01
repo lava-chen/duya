@@ -18,8 +18,15 @@ export type ResumeBoundary =
   | { readonly kind: 'event_seq'; readonly seq: number }
   /** A FORK, not a continuation: new runId, new parentRunId, reused prefix. */
   | { readonly kind: 'message_index'; readonly atMessageIndex: number }
-  /** The only boundary that survives runtime process death — a storage read. */
-  | { readonly kind: 'checkpoint_generation'; readonly generation: number };
+  /**
+   * The only boundary that survives runtime process death — a storage read.
+   *
+   * Gated on the `checkpoint_resume` host capability: a host that cannot
+   * consume `checkpoint.saved` must not be offered this boundary, and a runtime
+   * with no checkpoint repository must advertise `false` here rather than
+   * discover the gap when a host asks.
+   */
+  | { readonly kind: 'checkpoint_generation'; readonly generation: number; readonly checkpointRef?: string };
 
 export type ResumeBoundaryKind = ResumeBoundary['kind'];
 
@@ -111,8 +118,16 @@ export function resumeRefusalCode(
   return 'invalid_resume_point';
 }
 
-/** Events whose arrival means "a tool is in flight". Used by runtimes to
- *  decide whether a boundary is mid-tool. */
+/**
+ * Events whose arrival means "a tool is in flight". Used by runtimes to
+ * decide whether a boundary is mid-tool.
+ *
+ * `tool.call_preview` is deliberately ABSENT. A preview says a call is coming;
+ * it is volatile, and no side effect has been attempted. A resume boundary that
+ * lands between a preview and the authoritative `tool.call_started` is a clean
+ * boundary — the tool never ran. Including it here would refuse a large number
+ * of perfectly safe resumes.
+ */
 export const TOOL_LIFECYCLE_EVENTS: ReadonlySet<EventType> = new Set<EventType>([
   'tool.call_started',
   'tool.call_completed',

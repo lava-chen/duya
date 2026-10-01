@@ -150,22 +150,46 @@ export type PermissionKind =
  */
 export interface PermissionRequest {
   readonly requestId: string;
+  /**
+   * PRODUCER FACT. The runtime's permission engine classified this request; the
+   * adapter did not.
+   *
+   * An adapter that infers `kind` from `toolName` and emits the result as if it
+   * were classified is producing a guess that then reads as a fact in the
+   * durable audit chain. There is no legitimate derivation: `Read` is both
+   * `read_path` and, for some arguments, a `connector`. If the runtime cannot
+   * classify a request, the honest move is to emit `generic` deliberately and
+   * say so, not to infer and pass.
+   */
   readonly kind: PermissionKind;
   readonly toolCallId?: string;
   readonly toolName: string;
   readonly toolInput: Readonly<Record<string, unknown>>;
+  /**
+   * PRODUCER FACT, for the same reason as `kind`: which interactive situation
+   * raised this. Deriving it from the run's `PermissionPolicyMode` is wrong —
+   * a run in `plan` mode still raises `generic` requests.
+   */
   readonly mode: PermissionRequestMode;
   readonly reason?: string;
   readonly suggestions?: readonly string[];
   readonly metadata?: Readonly<Record<string, string>>;
   readonly blockedPath?: string;
+  /** When the runtime raised the request. Paired with `expiresAt` below. */
+  readonly startedAt: number;
   /**
-   * The single authoritative clock:
-   * `expiresAt = startedAt + manifest.permissionPolicy.defaultTimeoutMs`.
+   * The single authoritative clock, owned by the Runtime's permission
+   * coordinator: `expiresAt = startedAt + manifest.permissionPolicy.defaultTimeoutMs`.
    *
-   * The legacy shape let the agent mint `expiresAt` while the worker set the
-   * timer, so the value a host saw and the value a worker enforced could
-   * disagree. Here one number is minted in one place.
+   * One number, minted in one place, enforced by the same component. The
+   * legacy shape let the agent mint `expiresAt` while the worker set the timer,
+   * so the deadline a host displayed and the deadline a worker enforced were
+   * two values that could disagree.
+   *
+   * A runtime WITHOUT a coordinator must not emit this field with an invented
+   * value. It advertises `run.permissionExpiryClock: 'absent'` and withholds
+   * `permission.expired`, which is gated on the `permission_expiry` host
+   * capability so a host is never told about a deadline nobody enforces.
    */
   readonly expiresAt: number;
 }

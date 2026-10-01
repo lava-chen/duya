@@ -50,6 +50,26 @@ export function encodeNdjson(value: JsonValue, limits: ProtocolLimits = LIMITS):
   return `${line}\n`;
 }
 
+/**
+ * Parse one frame's JSON, converting a parse failure into a `ProtocolError`.
+ *
+ * Without this wrapper a malformed frame throws a bare `SyntaxError`, and a
+ * caller written to catch `ProtocolError` — which is the only error type this
+ * package documents — propagates it into the transport loop instead of
+ * handling it. The two failure modes then look identical to an operator (both
+ * kill the stream) while only one of them is diagnosed.
+ */
+function parseFrame(line: string): JsonValue {
+  try {
+    return JSON.parse(line) as JsonValue;
+  } catch (error) {
+    throw new ProtocolError({
+      code: 'invalid_event_frame',
+      message: `frame is not valid JSON: ${error instanceof Error ? error.message : 'parse failed'}`,
+    });
+  }
+}
+
 export function decodeNdjson<T = JsonValue>(
   text: string,
   limits: ProtocolLimits = LIMITS,
@@ -63,12 +83,12 @@ export function decodeNdjson<T = JsonValue>(
     start = nl + 1;
     if (line.length === 0) continue;
     assertByteBudget(line, limits);
-    out.push(JSON.parse(line) as T);
+    out.push(parseFrame(line) as T);
   }
   const tail = text.slice(start);
   if (tail.length) {
     assertByteBudget(tail, limits);
-    out.push(JSON.parse(tail) as T);
+    out.push(parseFrame(tail) as T);
   }
   return out;
 }
