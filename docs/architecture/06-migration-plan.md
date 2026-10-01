@@ -27,7 +27,7 @@
 | **M4** | conductor 解耦 + 删构建 hack | 2 + 构建顺序耦合 | 低 | 1 |
 | **M5** | 切出 `agent-core` / `agent-runtime` / `agent-tools` | 包级边界成型 | 高（**需先做 C1**） | 3–4 |
 | **M6** | 建立 `harness/agent` | — （新能力） | 低 | 3 |
-| **M7** | 搬迁 `apps/desktop/` | 路径级 | 高（机械） | 2 |
+| **M7** | 搬迁 `apps/desktop/` | 路径级 | 高（机械） | 2 | ✅ **已落地**（PR #115，见 `03-target-structure.md` §2.1） |
 | **M8** | ProcessScope + spawn 收敛 | ~50 spawn 点 | 中 | 2 |
 
 **关键路径**：M0 → C1 → M5。M0 → M1 → M2 → M3 → M7。M5/M6 可与 M3 并行（不同文件所有权）。
@@ -208,7 +208,13 @@
 
 ---
 
-### M7 — 搬迁 `apps/desktop/`
+### M7 — 搬迁 `apps/desktop/` — ✅ 已落地（2026-10-01，PR #115）
+
+**实际执行与本节原计划有出入，落地记录见 `03-target-structure.md` §2.1。**
+要点：① 布局取 `apps/desktop/{src/{main,preload,renderer}}`，采纳 ZCode 的分层
+tsconfig 但不采纳其 `packages/ui` 拆分（理由见 §2.1）；② M3 未做，54 条
+`main → renderer` 边按原路径保留（TD-2）；③ M7 原计划要求 M0/M2 先行，实际以
+"双构建 + renderer tsc" 作为等效安全网先落地，M0 的门禁价值不受影响。
 
 **必须在 M2、M3 之后**。此时 `electron ↔ src`、`electron ↔ agent` 的边都已收敛或已指向 public 入口，
 搬迁主要是机械的路径改写。
