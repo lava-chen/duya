@@ -19,6 +19,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripComments } from "./strip-comments.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const AGENT_SRC = path.join(ROOT, "packages/agent/src");
@@ -65,7 +66,9 @@ const IMPORT_RE = /(?:from\s+|import\s*\(|require\s*\()\s*["']([^"']+)["']/g;
 const pkgFiles = walk(path.join(ROOT, "packages"));
 const graph = new Map();
 for (const f of pkgFiles) {
-  const text = fs.readFileSync(f, "utf8");
+  // Comments are prose, not code — see strip-comments.mjs. A cycle counted
+  // from a commented-out import is a cycle that does not exist.
+  const { text } = stripComments(fs.readFileSync(f, "utf8"));
   const deps = [];
   let m; IMPORT_RE.lastIndex = 0;
   while ((m = IMPORT_RE.exec(text))) {

@@ -214,17 +214,44 @@ modules:
 #
 # MEASURED at master @ b6f8e7c0 (2026-10-01), not copied from the docs.
 # 05-architecture-governance.md §5 still quotes the 7c5bf050-era numbers and
-# they have since drifted — cross-boundary 568 -> 567, escapes 161 -> 153,
-# unresolved 34 -> 41. That drift is exactly why this block lives in the
-# policy, where it is re-measurable, instead of in prose.
+# they have since drifted — cross-boundary 568 -> 567, unresolved 34 -> 41.
+# That drift is exactly why this block lives in the policy, where it is
+# re-measurable, instead of in prose.
+#
+# ## Re-measured 2026-10-08: module-dependency 567 -> 562, escapes 153 -> 161
+#
+# Two resolver defects, both found by the protocol package refusing to be
+# clean. Neither is code drift, and the protocol package contributes ZERO of
+# either.
+#
+# (1) Counts depended on local build state. 16 electron-main deep imports are
+#     written against `packages/agent/dist/...` (e.g. `electron/services/wake.ts`
+#     importing `../../packages/agent/dist/context/os-context/index.js`).
+#     A clone that never built read them as `unresolved` and did not count them;
+#     anyone who ran `npm run typecheck:all` — which runs `build:agent` via
+#     `typecheck:web` — saw 8 extra edges and a red gate. Same commit, two
+#     verdicts. `audit-imports.mjs` now maps a specifier into OUR OWN
+#     `packages/<x>/dist/` back onto the `src/` file that produced it.
+#     Verified identical with and without `dist/` present (161 / 161).
+#     These are the higher, true numbers, not a regression.
+#
+# (2) Comments were parsed as code. Both audits regex the raw file text, so a
+#     doc comment quoting `from '...'` became an edge, and a commented-out
+#     import counted as a live one — meaning deleting the comment would look
+#     like it removed a violation. Six false edges, zero real ones lost
+#     (verified by diffing the edge set before and after). Fixed with
+#     `scripts/architecture/strip-comments.mjs`, which replaces the `SKIP_SPEC`
+#     band-aid that had been patched by name. The module-dependency count fell
+#     570 -> 562; escape, deep-import, cycle and missing-artifact are unchanged,
+#     which is the evidence that only prose was removed.
 #
 # Recompute with:
 #   node scripts/architecture/audit-imports.mjs
 #   node scripts/architecture/audit-modules.mjs
 selfTest:
-  module-dependency: 567
+  module-dependency: 562
   forbidden-dependency: 82
-  package-boundary-escape: 153
+  package-boundary-escape: 161
   deep-import: 117
   cycle: 18
   missing-module-artifact: 1

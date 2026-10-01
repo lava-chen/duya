@@ -20,6 +20,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripComments } from "./strip-comments.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const ROOTS = ["src", "electron", "packages", "tests", "e2e"];
@@ -28,7 +29,9 @@ const SKIP_DIRS = new Set([
   "node_modules", "dist", "dist-electron", "bundle", "build", "release",
   ".git", "coverage", "storybook-static", ".e2e-userdata",
 ]);
-// Import specifiers written for a bundler's benefit, not real module edges.
+// Import specifiers that are never real module edges. Kept separate from
+// comment handling: these are strings that survive stripping and still are not
+// imports.
 const SKIP_SPEC = new Set([".length);", "else if (line.startsWith("]);
 
 function walk(dir, out = []) {
@@ -79,6 +82,38 @@ for (const dirName of fs.readdirSync(path.join(ROOT, "packages"), { withFileType
 const isTestFile = (p) =>
   /(^|\/)(__tests__|tests?)(\/|$)/.test(p) || /\.(test|spec)\.[jt]sx?$/.test(p);
 
+/**
+ * `packages/<x>/dist/a/b.js` -> `packages/<x>/src/a/b.ts`, when that file exists.
+ *
+ * The repo has 16 electron-main deep imports written against
+ * `packages/agent/dist/...` (e.g. `electron/services/wake.ts` importing
+ * `../../packages/agent/dist/context/os-context/index.js`). Those specifiers
+ * resolve ONLY after a build, so without this normalisation the violation
+ * counts depend on whether `dist/` happens to be present:
+ *
+ *   fresh clone, never built     -> 153 package-boundary escapes
+ *   after `npm run typecheck:all`-> 161  (typecheck:web runs build:agent)
+ *
+ * Same commit, opposite verdicts. A gate whose result is a function of local
+ * build state is not a gate.
+ *
+ * The coupling is real in both states — it lives in the source, and
+ * `dist/context/os-context/index.js` is a compile of
+ * `src/context/os-context/index.ts` — so the gate must measure the source, not
+ * the build layout. Normalising also keeps the count stable for anyone who runs
+ * `--write` before or after a build, which is the whole point of freezing a
+ * baseline.
+ *
+ * Scoped deliberately: only OUR OWN workspace `packages/<name>/dist/`. A
+ * third-party package's `dist/` is not a build of this repo's source, and
+ * remapping it would invent a file that does not exist.
+ */
+function distToSourceTwin(p) {
+  const m = /[\\/]packages[\\/]([^\\/]+)[\\/]dist[\\/](.+)$/.exec(p);
+  if (!m) return null;
+  return path.join(ROOT, "packages", m[1], "src", m[2]);
+}
+
 /** Resolve a relative / extensionless specifier to a real file. */
 function resolveFile(base) {
   const candidates = [];
@@ -93,7 +128,15 @@ function resolveFile(base) {
   candidates.push(
     `${base}/index.ts`, `${base}/index.tsx`, `${base}/index.js`,
   );
+  // The literal candidate always wins; the source twin is only a fallback for
+  // the build-output case described above.
+  const withTwins = [];
   for (const c of candidates) {
+    withTwins.push(c);
+    const twin = distToSourceTwin(c);
+    if (twin) withTwins.push(twin);
+  }
+  for (const c of withTwins) {
     try {
       if (fs.existsSync(c) && fs.statSync(c).isFile()) return c;
     } catch { /* ignore */ }
@@ -127,7 +170,10 @@ for (const file of files) {
   const relFrom = rel(file);
   const fromOwner = ownerOf(relFrom);
   const fromTest = isTestFile(relFrom);
-  const text = fs.readFileSync(file, "utf8");
+  // Comments are prose, not code. Scanning raw text made a doc comment that
+  // quotes `from '...'` into a module-dependency violation, and made a
+  // commented-out import look like a live edge. See strip-comments.mjs.
+  const { text } = stripComments(fs.readFileSync(file, "utf8"));
   let m;
   IMPORT_RE.lastIndex = 0;
   while ((m = IMPORT_RE.exec(text))) {
