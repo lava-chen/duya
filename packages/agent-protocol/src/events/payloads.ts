@@ -15,8 +15,9 @@
  *
  * A const array carrying a phantom `payload` field cannot do (2): `payload:
  * null!` erases to `null` at runtime, so the derived union would carry `null`
- * instead of the interface. See `docs/architecture/10-reference-comparison.md`
- * §1 for why grok-build can use a macro here and TypeScript cannot.
+ * instead of the interface. grok-build gets away with a macro here; a
+ * TypeScript project cannot generate a type, so the union is written out and
+ * a test holds it to `keyof RunEventPayloads`.
  *
  * ## Exclusions enforced by construction
  *

@@ -6,8 +6,7 @@
  * puts SSE<->envelope and NDJSON<->envelope both in `codecs.ts`, which
  * conflates three separate concerns. pi-protocol splits them —
  * `framing.ts` / `codec.ts` / `schemas.ts` — and its README states the rule
- * directly: framing is handled "independently of schemas". Adopted here; see
- * `docs/architecture/10-reference-comparison.md` §3.2(c).
+ * directly: framing is handled "independently of schemas". Adopted here.
  *
  * ## The three limits
  *

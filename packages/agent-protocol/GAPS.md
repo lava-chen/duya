@@ -343,6 +343,85 @@ runtime 侧保证 `(sessionId, seq)` 单调且不复用,`id` 恒等于 `seq`,
 
 ---
 
+## G-9 · `since` 字段是装饰性的:声明了版本轴,却没有任何门禁消费它
+
+**严重度** 高 · **归属** PP-3 / PP-7 · **状态** 未决
+
+### 现象
+
+`EventMeta.since`(`events/registry.ts:74`)声明「引入该事件的协议版本」,
+30 个事件**全部**是 `'1.0'`。全仓唯一的消费者是快照测试:
+
+```ts
+// test/05-event-type-snapshot.test.ts:82-86
+it('every event declares the protocol version that introduced it', () => {
+  for (const [type, spec] of Object.entries(EVENT_META)) {
+    expect(spec.since, `${type} has no valid since`).toMatch(/^\d+\.\d+$/);
+  }
+});
+```
+
+这个测试断言的是**格式**,不是行为。没有任何派发、过滤或门禁读它。
+
+所以现状是:协议**看起来**有逐事件的版本轴,实际上第一个 MINOR  bump 之后,
+一个 1.0 的 host 会收到它完全不认识的 1.1 事件,而没有任何机制拦住它。
+
+### 为什么这条比 G-1~G-8 更根本
+
+G-1(错误码)、G-2(permission 时钟)、G-3(checkpoint)、G-4(无对应物的四个事件)、
+G-6(双发) 全部是同一类形状:**类型里声明了,生产者没有**。
+
+在没有逐消息门禁的前提下,这类问题只有两种结局:
+
+- 强行让生产者补齐 → 协议逼迫运行时造它没有的数据(正是 P0-1 / N-1 的成因)
+- 留在类型里当摆设 → 就是现在的状态,host 会照着类型写代码
+
+**逐消息门禁是第三种结局**,它让「运行时没有」变成一个**可声明的事实**而不是缺陷。
+
+### 参考实现
+
+`prime-agent` 的 `daemon-protocol.ts` 对**每一条命令和每一个事件**都挂了门禁元数据:
+
+```ts
+export interface DaemonCommandCompatibility {
+  minProtocol: number;
+  minSchemaRevision?: number;
+  capability?: DaemonServerCapability;
+}
+
+mutate_queued_message: { minProtocol: 7, minSchemaRevision: 15, capability: "queue_message_mutation" },
+heartbeats_list:     { minProtocol: 7, capability: "heartbeat_catalog" },
+get_model_catalog:   { minProtocol: 7, capability: "model_catalog" },
+```
+
+它同时有**四条**版本轴(`DAEMON_PROTOCOL_VERSION = 7`、
+`DAEMON_SCHEMA_REVISION = 16`、`DAEMON_UPDATE_RESTART_FORMAT_VERSION = 1`、
+`DAEMON_SCHEMA_ID = "protocol-7-schema-16-1bcb9e7f1a49"`),而且 schema revision
+**只在载荷变化时递增,不动 protocol version**——这正是我们缺的那条轴:
+
+G-3 加一个 `checkpoint.saved` 事件、但没人需要它时,正确做法是
+`schemaRevision++`,而不是 `PROTOCOL_MINOR++`。后者会让所有 host 进入
+「需要重新探测」的状态,前者只影响真正读那个字段的人。
+
+### 关闭条件
+
+1. `EventMeta` 增加 `minSchemaRevision: number`(独立于 `since`),
+   或者明确写下 `since` 的语义并让门禁真的读它——**二者选一**。
+2. 定义 host 侧的**能力声明**(现在只有 runtime→host 单向),
+   让 runtime 知道对面能不能处理某个事件。
+3. 至少给 G-1/G-3/G-4/G-6 里的**一条**装上门禁,证明机制可用,
+   再推广到其余。
+4. drift test 断言:每个 `minSchemaRevision` 大于 1 的事件,
+   都能在 `CapabilityRequirement` 里找到对应的 `needs*`。
+
+### 代价
+
+`EventMeta` 加一个字段(1 行 × 30 个事件)+ 一个查表函数 +
+一条 `assertSatisfies` 分支。**不大。** 现在不做,第一次 MINOR bump 时
+就要在四个独立部署的 host 上做兼容矩阵——那才是大的。
+
+---
+
 ## 维护规则
 
 - 新发现一条就加一条,**不要塞进模块注释里**

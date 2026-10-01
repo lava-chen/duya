@@ -1,11 +1,10 @@
 /**
  * The closed event registry.
  *
- * This is the TypeScript answer to grok-build's `define_methods!` macro
- * (`docs/architecture/10-reference-comparison.md` §1). Rust can generate a
- * union from one list; TypeScript cannot generate a type, so the single source
- * of truth is the `RunEventPayloads` INTERFACE in payloads.ts and this module
- * derives everything else from `keyof` it.
+ * This is the TypeScript answer to grok-build's `define_methods!` macro.
+ * Rust can generate a union from one list; TypeScript cannot generate a type,
+ * so the single source of truth is the `RunEventPayloads` INTERFACE in
+ * payloads.ts and this module derives everything else from `keyof` it.
  *
  * ## Why specs and registry are separate files
  *

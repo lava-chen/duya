@@ -578,8 +578,9 @@ pkg:computer-use 4）。
 | **D2** | **electron 门禁基线的行号漂移**：CI 报 `router.ts:1570:47` / `2876:80`，本地报 `1567:47` / `2873:80`（与基线一致）。同 commit、同文件内容（已与 GitHub blob 逐行核对），但 CI 报的 `1570:47` 落在一行仅 34 字符的代码上，物理上讲不通 | **G3 → PP-0** | ⏸ 用户 2026-10-01 决定挂起。候选方案见 §6.1 |
 | **D3** | **junction 式 worktree 无法复现干净检出**：`@duya/voice` / `@duya/computer-use` 解析到**主检出**的 dist，本地构建天然带热产物 | 污染 PP-1 之后的每一次本地验收 | ⚠️ 见 §7 T1 |
 | **D4** | **500 事件 replay ring 的诚实性**：`event_seq` 续传只有在 ring 有持久化支撑、或其窗口被诚实通告时才算诚实。**未核实长 run 中 durable 事件密度超过 500 的频率** | PP-9 | ❓ 待测 |
-| **D5** | **`normalizeWorkerEvent` 在 `:569` 之后的 ~120 行**（research / workflow 分支）未完整枚举 | PP-3 | ❓ 待补清单 |
+| **D5** | ~~`normalizeWorkerEvent` 在 `:569` 之后的 ~120 行未完整枚举~~ **已关闭（第三轮审计）**：router 实际发出 25 个事件，全部行号见 `docs/architecture/11-protocol-forward-review.md`。其中 `chat:research_updated` 被 router 拆成 **3 个** SSE 事件（`research_continue` :564 / `research_evidence` :567 / `research_report` :570），比 G-4 原记录更严重 | ~~PP-3~~ | ✅ 已关闭 |
 | **D6** | **`allow_for_session` 在实践中是进程作用域**（`agent-process-entry.ts:4414-4416`），**只是因为一个 worker 今天恰好服务一个 session**。协议的 `allow_always{scope:{kind:'session'}}` **不得继承这个巧合** | PP-5 | ⚠️ 记入测试 |
+| **D7** | **`EventMeta.since` 是装饰性的**：30 个事件全是 `'1.0'`，唯一消费者是断言**格式**的快照测试，没有任何门禁读它。缺这条轴，G-1/G-2/G-3/G-4/G-6 全部无解——它们都是「类型里声明了，生产者没有」的同一形状 | PP-3 / PP-7 | ⛔ 未决。G-9 |
 
 ### 6.1 D2 的候选处置
 
@@ -694,3 +695,68 @@ gh run view 36833837786 --job 110276373440 --log
 **下一步（唯一）**：等 Plan 583 的 G1–G3 全绿后，开 **PP-0**，
 从 `architecture-policy.yaml`（全模块 `managed: false`）开始。
 **不要跳过 PP-0 直接建包**——没有闸门，后面 11 个阶段的验收全部无法验证。
+
+---
+
+## 11. 第三轮审计记录（PP-1 交付后）
+
+四轮评审里最贵的错误类型是**没读源码就断言事实**。本轮先立可信度分级
+（已验证 / 推断 / UNVERIFIED），再逐条复核。结果：
+
+### 11.1 推翻了四个自己写下的事实断言
+
+| 原断言 | 实际 | 提交 |
+|---|---|---|
+| `tool_use` 合并了 start 和 finish，`is_error` 因此丢失 | **两者除判别符外逐字段相同**（`worker-protocol.ts:269-283`），是「临时播报 + 权威重发」，不是合并 | `924232ed` |
+| 重放走 fresh counter，`Last-Event-ID` 不可信 | 重放**是对的**（`router.ts:2412-2423` 写回原始 `eventId`）。真实缺陷相反且更严重，见 G-8 | `924232ed` |
+| router 的多行缓冲是 100 KB | 64 KB（`router.ts:676` / `:2838`） | `924232ed` |
+| `SSE_EVENT_TO_PROTOCOL['tool_use']` 裂变成两个协议事件 | 映射表本身错了，**且有测试断言它**。legacy→protocol 几乎全是 1:1 改名 | `924232ed` |
+
+第一条的连带后果是真设计洞 → **G-6**：`tool.call_started` 是 durable，
+却会带着同一个 `toolCallId` 发两次不同 `input`，协议无字段能表达「这是更正」。
+
+### 11.2 缺口登记从 5 条涨到 9 条
+
+`packages/agent-protocol/GAPS.md`（本轮新建）：
+
+| # | 一句话 | 严重度 |
+|---|---|---|
+| G-1 | 40 个 `ErrorCode` 里 32 个查无此串 | 高 |
+| G-2 | `PermissionRequest` 的 `kind`/`mode`/`expiresAt` 无生产者 | 高 |
+| G-3 | 承诺 `checkpointGeneration` 恢复却无 checkpoint 事件 | 中 |
+| G-4 | 四个真实事件无 protocol 对应物（research 实际被拆成 3 个） | 中 |
+| G-5 | `chat:done` 无字段但 `RunCompletedPayload` 有五个 | 低 |
+| **G-6** | **durable 的 `tool.call_started` 双发，协议无法表达 supersede** | **高** |
+| **G-7** | 失败位三名（`error` / `is_error` / `isError`），wire 上全可选 | 中 |
+| **G-8** | **id 空间 per-session、计数器 per-turn → 第二轮重铸第一轮 id** | **高** |
+| **G-9** | **`since` 是装饰性的：声明了版本轴，无任何门禁消费** | **高** |
+
+### 11.3 与 Duya 源码 / clone harness 的对比
+
+- **控制面无法枚举**：`router.ts` 3466 行**没有路由表**，是手写
+  `parts[N] === 'lit' && method === 'V'` 条件链。两种正则交叉扫描得到
+  **0 个路由注册 / 16 个路径字面量**。加上 180 个 IPC channel、6 个 MessagePort。
+  后果：今天**写不出**针对 Duya 自身 API 的一致性测试。
+- **clone 侧**：38 个目录中 **21 个**有 ≥120 行的协议模块。逐字节取样后，
+  最有参考价值的是 `prime-agent/daemon-protocol.ts`——它有 **4 条正交版本轴**
+  和**逐消息门禁表**（`{ minProtocol, minSchemaRevision, capability }`），
+  正好是 G-1~G-9 的共同解法。`ZCode` 独立地做了同一条路
+  （protocol version 与 wire version 分离）。
+- 完整对比与前瞻结论：`docs/architecture/11-protocol-forward-review.md`。
+
+### 11.4 顺带清理
+
+- 清掉最后 **5 处**文档反向引用（`framing.ts` / `capabilities.ts` / `index.ts` /
+  `payloads.ts` / `registry.ts`），并修复早前清理时**丢失主语**的两处无头句。
+- 关闭 **D5**（router 事件已全量枚举）。
+
+### 11.5 新增经验（写进 §5 的教训）
+
+> 收紧 union 之前必须先问「这个值在代码里的真实取值集合是什么」。
+> 答不上来只能保持 `string` 加转换点——**编一个集合比没有集合更糟**，
+> 因为那是个 host 会去分支的集合。
+>
+> 推论（本轮最贵的一条）：**编造因果链比编造取值集合更糟**，
+> 因为前者会顺带编出设计结论。`tool_use` 那条错误断言不只是命名错，
+> 它推出「`is_error` 因合并而丢失」，据此又把 `tool.call_started` 定成 durable，
+> 最终造出 G-6 这个洞——**一个假前提，污染了三层下游**。

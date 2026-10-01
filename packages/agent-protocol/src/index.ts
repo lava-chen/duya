@@ -5,8 +5,7 @@
  * has ZERO runtime dependencies, and drift test #1 fails the build if that
  * changes. That constraint is the whole reason it exists — an
  * `xai-grok-sampling-types`-style "pure data types" package that quietly pulls
- * in an HTTP client is the failure mode documented in
- * `docs/architecture/10-reference-comparison.md` §1.1.
+ * in an HTTP client is the exact failure mode this constraint exists to stop.
  *
  * `legacy/` and `testing/` are reachable as subpath exports
  * (`@duya/agent-protocol/legacy`, `/testing`) and are deliberately NOT

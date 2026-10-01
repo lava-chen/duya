@@ -14,10 +14,10 @@
  *
  * ## Resource limits
  *
- * listed `maxEventBytes` with no default and no nesting/element limit.
- * pi-protocol sets all three explicitly (16 MiB / 1,000,000 / 64) and validates
- * a declared frame length BEFORE buffering its bytes; that ordering is adopted
- * here in framing.ts. See 10-reference-comparison.md §3.2(d).
+ * The first draft declared `maxEventBytes` with no default and no
+ * nesting/element limit. pi-protocol sets all three explicitly (16 MiB /
+ * 1,000,000 / 64) and validates a declared frame length BEFORE buffering its
+ * bytes; that ordering is adopted here in framing.ts.
  */
 
 import type { ProtocolVersion } from './version.js';
