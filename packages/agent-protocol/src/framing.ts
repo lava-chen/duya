@@ -98,6 +98,17 @@ export function decodeNdjson<T = JsonValue>(
 /**
  * Field order is fixed: `id:` -> `event:` -> `data:`. `id` is the envelope's
  * `seq` verbatim, which is what makes `Last-Event-ID` resumption work.
+ *
+ * ## The frame is measured, not walked
+ *
+ * The first draft called `assertByteBudget` twice: once on the serialised data,
+ * then again on the assembled frame — which contains that same data, so the
+ * large part of the string was walked twice per frame. On the highest-rate path
+ * in the protocol that is pure waste.
+ *
+ * The frame's length is the data's length plus a bounded header and a two-byte
+ * terminator, so the second check measures the header alone and adds. The result
+ * is identical and the cost is independent of payload size.
  */
 export function encodeSseFrame(
   seq: number,
@@ -106,10 +117,17 @@ export function encodeSseFrame(
   limits: ProtocolLimits = LIMITS,
 ): string {
   const data = JSON.stringify(envelope);
-  assertByteBudget(data, limits);
-  const frame = `id: ${seq}\nevent: ${eventType}\ndata: ${data}\n\n`;
-  assertByteBudget(frame, limits);
-  return frame;
+  const dataBytes = assertByteBudget(data, limits);
+  const prefix = `id: ${seq}\nevent: ${eventType}\ndata: `;
+  const terminator = '\n\n';
+  const totalBytes = dataBytes + byteLength(prefix) + byteLength(terminator);
+  if (totalBytes > limits.maxEventBytes) {
+    throw new ProtocolError({
+      code: 'invalid_event_frame',
+      message: `frame is ${totalBytes} bytes, maxEventBytes is ${limits.maxEventBytes}`,
+    });
+  }
+  return `${prefix}${data}${terminator}`;
 }
 
 export interface SseFrame {
@@ -215,7 +233,14 @@ export function encodeLengthPrefixed(payload: Uint8Array, limits: ProtocolLimits
 
 // ── structural limits ─────────────────────────────────────────────────────
 
-function assertByteBudget(value: string, limits: ProtocolLimits): void {
+/**
+ * Enforce the byte budget, and report the measured size.
+ *
+ * Returning the count lets a caller that is about to build a larger string
+ * containing this one add the two lengths instead of re-measuring the whole
+ * assembly. The existing callers ignore the return value, so this is additive.
+ */
+function assertByteBudget(value: string, limits: ProtocolLimits): number {
   const bytes = byteLength(value);
   if (bytes > limits.maxEventBytes) {
     throw new ProtocolError({
@@ -223,9 +248,34 @@ function assertByteBudget(value: string, limits: ProtocolLimits): void {
       message: `frame is ${bytes} bytes, maxEventBytes is ${limits.maxEventBytes}`,
     });
   }
+  return bytes;
 }
 
+/**
+ * UTF-8 byte length of a string.
+ *
+ * ## Why this is not a hand-rolled char loop
+ *
+ * The first draft walked the string in JS, testing each code unit against
+ * 0x80 / 0x800 / surrogate ranges. Correct, allocation-free, and slower than
+ * the native path on every runtime that has one — while the rest of this
+ * repository has been calling `Buffer.byteLength(s, 'utf8')` for its byte
+ * budgets all along (25+ call sites under `electron/`).
+ *
+ * The native fast path is used when `Buffer` exists, which covers Electron
+ * main, the agent subprocess, and every Node-side host. The loop remains as the
+ * fallback because this package is deliberately reachable from a renderer, where
+ * `nodeIntegration` is off and `Buffer` is undefined. A guard costs one property
+ * read per call; dropping the fallback would move a perf win into a crash.
+ */
 export function byteLength(value: string): number {
+  if (typeof Buffer !== 'undefined' && typeof Buffer.byteLength === 'function') {
+    return Buffer.byteLength(value, 'utf8');
+  }
+  return utf8LengthFallback(value);
+}
+
+function utf8LengthFallback(value: string): number {
   let bytes = 0;
   for (let i = 0; i < value.length; i++) {
     const code = value.charCodeAt(i);

@@ -242,9 +242,23 @@ function checkSerializable(
   return issues;
 }
 
-/** Reject a decoded payload whose size exceeds the negotiated budget. */
-export function assertEventBudget(raw: unknown, limits: ProtocolLimits = LIMITS): void {
-  const bytes = byteLength(JSON.stringify(raw));
+/**
+ * Reject a decoded payload whose size exceeds the negotiated budget.
+ *
+ * `serialized` lets a caller that has already produced the wire form hand it
+ * over instead of paying for a second `JSON.stringify` of the same object. On a
+ * durable event carrying a full transcript that is the single largest
+ * avoidable cost on the encode path; measuring the string that is about to be
+ * written is both cheaper and exactly the thing the budget is about.
+ *
+ * Omit it only when no serialised form exists yet.
+ */
+export function assertEventBudget(
+  raw: unknown,
+  limits: ProtocolLimits = LIMITS,
+  serialized?: string,
+): void {
+  const bytes = byteLength(serialized ?? JSON.stringify(raw));
   if (bytes > limits.maxEventBytes) {
     throw new ProtocolError({
       code: 'invalid_event_frame',
