@@ -796,13 +796,6 @@ function truncateUtf8Safe(line: string, maxBytes: number): string {
 }
 
 /**
- * @deprecated Use ReadTool class directly
- */
-export function createReadTool(): ReadTool {
-  return new ReadTool();
-}
-
-/**
  * Map an unsupported extension / magic-byte format to a concrete next-step
  * hint for the model. The point is to make the "use a tool that handles
  * this format directly" message actually point somewhere: the model often

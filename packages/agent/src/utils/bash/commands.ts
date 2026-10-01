@@ -74,13 +74,6 @@ export function splitCommand(command: string): string[] {
 }
 
 /**
- * @deprecated Use splitCommand instead
- */
-export function splitCommand_DEPRECATED(command: string): string[] {
-  return splitCommand(command)
-}
-
-/**
  * Extract output redirections from a command
  * Detects > and >> operators and identifies dangerous targets
  *
