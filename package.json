@@ -6,7 +6,8 @@
   "private": true,
   "main": "dist-electron/main.js",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "apps/*"
   ],
   "scripts": {
     "dev": "vite",

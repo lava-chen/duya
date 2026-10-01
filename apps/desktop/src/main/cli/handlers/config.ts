@@ -1,0 +1,833 @@
+/**
+ * apps/desktop/src/main/cli/handlers/config.ts
+ *
+ * Plan 102 — HTTP handlers for `duya config …` and the
+ * `mcp add/remove/assign` write surface.
+ *
+ * The 14 new endpoints are thin wrappers over the existing
+ * `ConfigManager` / `PairingStore` / agent-settings facade
+ * (which `apps/desktop/src/main/agents/db-bridge.ts` exposes to the agent
+ * process). The handlers are the desktop-side counterpart of
+ * the agent-side `duya_config` tool — same DTO shape, same
+ * field renames (`isActive` → `enabled` for vision), same
+ * audit log rules.
+ *
+ * All write endpoints follow the Phase 7 contract:
+ *   - `invokedBy` is read from `X-Duya-Invoked-By` and stamped
+ *     onto the audit event.
+ *   - `correlationId` is read from `X-Correlation-Id` for
+ *     log correlation.
+ *   - The unified `controlPlaneAudit` JSONL writer records
+ *     `kind: 'config.<sub>.<verb>'`.
+ *
+ * Reads (`GET`) are not audited (Plan 99 §6.2 rule).
+ */
+
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { getProviderStore } from '../../services/providers/provider-store-electron';
+import { getConfigStore } from '../../config/store-instance';
+import {
+  toLegacyApiProvider,
+  migrateLegacyApiProvider,
+} from '../../../renderer/lib/providers/legacy';
+import { appendAuditEvent, type AuditEvent, type AuditEventKind } from '../../services/controlPlaneAudit';
+import { listConfigAgents, upsertConfigAgent, deleteConfigAgent } from '../../config/agents';
+
+// ---------------------------------------------------------------------------
+// Error envelope helpers
+// ---------------------------------------------------------------------------
+
+interface ErrorBody {
+  error: { code: string; message: string };
+}
+
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  const json = JSON.stringify(body);
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(json),
+  });
+  res.end(json);
+}
+
+function sendError(
+  res: ServerResponse,
+  status: number,
+  code: string,
+  message: string,
+): void {
+  const body: ErrorBody = { error: { code, message } };
+  sendJson(res, status, body);
+}
+
+function classify(err: unknown): { status: number; code: string; message: string } {
+  if (err instanceof Error) {
+    // Map common error patterns to stable HTTP codes.
+    const msg = err.message;
+    if (/not found|missing/i.test(msg)) {
+      return { status: 404, code: 'not_found', message: msg };
+    }
+    if (/missing|required/i.test(msg)) {
+      return { status: 400, code: 'invalid_request', message: msg };
+    }
+    if (/already exists/i.test(msg)) {
+      return { status: 409, code: 'conflict', message: msg };
+    }
+    return { status: 500, code: 'internal_error', message: msg };
+  }
+  return { status: 500, code: 'internal_error', message: String(err) };
+}
+
+// ---------------------------------------------------------------------------
+// Audit context
+// ---------------------------------------------------------------------------
+
+function getUserDataDir(): string {
+  const envOverride = process.env.DUYA_CLI_USER_DATA_DIR;
+  if (envOverride && envOverride.trim().length > 0) return envOverride;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { app } = require('electron');
+    if (app && typeof app.getPath === 'function') {
+      return app.getPath('userData');
+    }
+  } catch {
+    // not in electron context
+  }
+  return join(homedir(), '.duya');
+}
+
+type InvokedBy = 'cli' | 'agent-tool' | `agent-tool:${string}`;
+
+interface AuditContext {
+  invokedBy: InvokedBy;
+  correlationId?: string;
+}
+
+function readAuditContext(req: IncomingMessage): AuditContext {
+  const invokedHeader = req.headers['x-duya-invoked-by'];
+  const correlationHeader = req.headers['x-correlation-id'];
+  const invokedByRaw = Array.isArray(invokedHeader) ? invokedHeader[0] : invokedHeader;
+  const correlationIdRaw = Array.isArray(correlationHeader) ? correlationHeader[0] : correlationHeader;
+  // Default to 'cli' for backwards compat (the original Phase 7 convention).
+  const invokedBy: InvokedBy = (invokedByRaw as InvokedBy | undefined) ?? 'cli';
+  return invokedBy
+    ? { invokedBy, correlationId: typeof correlationIdRaw === 'string' ? correlationIdRaw : undefined }
+    : { invokedBy: 'cli' };
+}
+
+async function audit(
+  ctx: AuditContext,
+  kind: AuditEventKind,
+  id: string,
+  note?: string,
+): Promise<void> {
+  const event: AuditEvent = {
+    kind,
+    id,
+    ts: Date.now(),
+    invokedBy: ctx.invokedBy,
+    ...(ctx.correlationId ? { correlationId: ctx.correlationId } : {}),
+    ...(note ? { note } : {}),
+  };
+  await appendAuditEvent(getUserDataDir(), event);
+}
+
+// ---------------------------------------------------------------------------
+// Body reader
+// ---------------------------------------------------------------------------
+
+async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  return new Promise<Record<string, unknown>>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      const text = Buffer.concat(chunks).toString('utf-8');
+      if (text.length === 0) {
+        resolve({});
+        return;
+      }
+      try {
+        const obj = JSON.parse(text) as unknown;
+        if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+          resolve(obj as Record<string, unknown>);
+        } else {
+          reject(new Error('request body must be a JSON object'));
+        }
+      } catch (err) {
+        reject(new Error(`malformed JSON body: ${err instanceof Error ? err.message : String(err)}`));
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Provider DTO mapping
+// ---------------------------------------------------------------------------
+
+interface ProviderListItem {
+  id: string;
+  name: string;
+  providerType: string;
+  isActive: boolean;
+  hasKey: boolean;
+  baseUrl?: string;
+  model?: string;
+}
+
+interface ApiProvider {
+  id: string;
+  name: string;
+  providerType: string;
+  baseUrl?: string;
+  apiKey?: string;
+  isActive?: boolean;
+  model?: string;
+}
+
+function toProviderListItem(p: ApiProvider): ProviderListItem {
+  return {
+    id: p.id,
+    name: p.name,
+    providerType: p.providerType,
+    isActive: p.isActive === true,
+    hasKey: typeof p.apiKey === 'string' && p.apiKey.length > 0,
+    ...(p.baseUrl ? { baseUrl: p.baseUrl } : {}),
+    ...(p.model ? { model: p.model } : {}),
+  };
+}
+
+function toProviderInfoItem(p: ApiProvider): ProviderListItem & { headers: Record<string, string>; extraEnvKeys: string[] } {
+  return {
+    ...toProviderListItem(p),
+    headers: {},
+    extraEnvKeys: [],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// GET /v1/config/providers
+// ---------------------------------------------------------------------------
+
+export function handleListConfigProviders(_req: IncomingMessage, res: ServerResponse): void {
+  try {
+    const all = Object.fromEntries(getProviderStore().listLlmProviders().map((p) => [p.id, toLegacyApiProvider(p)]));
+    const providers: ProviderListItem[] = Object.values(all).map(toProviderListItem);
+    sendJson(res, 200, { providers });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GET /v1/config/providers/:id
+// ---------------------------------------------------------------------------
+
+export function handleGetConfigProvider(_req: IncomingMessage, res: ServerResponse, id: string): void {
+  try {
+    const all = Object.fromEntries(getProviderStore().listLlmProviders().map((p) => [p.id, toLegacyApiProvider(p)]));
+    const found = all[id];
+    if (!found) {
+      sendError(res, 404, 'provider_not_found', `Provider '${id}' not found`);
+      return;
+    }
+    sendJson(res, 200, { provider: toProviderInfoItem(found) });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST /v1/config/providers
+// ---------------------------------------------------------------------------
+
+export async function handleAddConfigProvider(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    sendError(res, 400, 'invalid_request', err instanceof Error ? err.message : String(err));
+    return;
+  }
+  const id = typeof body.id === 'string' ? body.id : '';
+  const name = typeof body.name === 'string' ? body.name : '';
+  const providerType = typeof body.providerType === 'string' ? body.providerType : '';
+  if (!id || !name || !providerType) {
+    sendError(res, 400, 'invalid_request', 'id, name, and providerType are required');
+    return;
+  }
+  const baseUrl = typeof body.baseUrl === 'string' ? body.baseUrl : '';
+  const apiKey = typeof body.apiKey === 'string' ? body.apiKey : '';
+  const isActive = body.isActive === true;
+  try {
+    // Cast to the ApiProvider union — the wire body uses the same
+    // enum but the TS type for `providerType` is a strict literal
+    // union. Validate at the wire boundary; the manager rejects
+    // unknown types.
+    const up = getProviderStore().upsertLlmProvider(migrateLegacyApiProvider({ id, name, providerType, baseUrl, apiKey, isActive } as unknown as Parameters<typeof migrateLegacyApiProvider>[0]));
+    if (!up.ok) {
+      sendError(res, 400, 'invalid_request', up.message);
+      return;
+    }
+    const ctx = readAuditContext(req);
+    await audit(ctx, 'config.provider.add', id, `providerType=${providerType}`);
+    const stored = (() => { const pr = getProviderStore().getLlmProvider(id); return pr ? toLegacyApiProvider(pr) : undefined; })();
+    sendJson(res, 200, { ok: true, provider: toProviderListItem(stored) });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// DELETE /v1/config/providers/:id
+// ---------------------------------------------------------------------------
+
+export async function handleRemoveConfigProvider(req: IncomingMessage, res: ServerResponse, id: string): Promise<void> {
+  try {
+    const ok = getProviderStore().deleteLlmProvider(id);
+    if (!ok) {
+      sendError(res, 404, 'provider_not_found', `Provider '${id}' not found`);
+      return;
+    }
+    const ctx = readAuditContext(req);
+    await audit(ctx, 'config.provider.remove', id);
+    sendJson(res, 200, { ok: true, removed: id });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PUT /v1/config/providers/:id/default
+// ---------------------------------------------------------------------------
+
+/**
+ * Set the soft default provider (multi-provider model). The body is
+ * `{}` to set the default to the given id, or `{ clear: true }` to
+ * drop the default. Returns the resulting `defaultProviderId`.
+ */
+export async function handleSetDefaultConfigProvider(req: IncomingMessage, res: ServerResponse, id: string): Promise<void> {
+  let body: Record<string, unknown> = {};
+  try {
+    if (req.headers['content-length'] && Number(req.headers['content-length']) > 0) {
+      body = (await readBody(req)) as Record<string, unknown>;
+    }
+  } catch (err) {
+    sendError(res, 400, 'invalid_request', err instanceof Error ? err.message : String(err));
+    return;
+  }
+  try {
+    const clear = body.clear === true;
+    if (clear) {
+      const ok = getProviderStore().setDefaultLlmProvider(null);
+      if (!ok) {
+        sendError(res, 500, 'set_default_failed', 'Could not clear defaultProviderId');
+        return;
+      }
+    } else {
+      const ok = getProviderStore().setDefaultLlmProvider(id);
+      if (!ok) {
+        sendError(res, 404, 'provider_not_found', `Provider '${id}' not found`);
+        return;
+      }
+    }
+    const ctx = readAuditContext(req);
+    await audit(ctx, 'config.provider.setDefault', id, clear ? 'clear' : 'set');
+    sendJson(res, 200, { ok: true, defaultProviderId: clear ? null : id });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GET / PATCH /v1/config/settings/agent
+// ---------------------------------------------------------------------------
+
+export function handleGetAgentSettings(_req: IncomingMessage, res: ServerResponse): void {
+  try {
+    const settings = getConfigStore().getByPath('agent');
+    sendJson(res, 200, { settings });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+export async function handleSetAgentSettings(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    sendError(res, 400, 'invalid_request', err instanceof Error ? err.message : String(err));
+    return;
+  }
+  // Allowlist: only fields the legacy `duya_config settings_set` could set.
+  const allow = ['model', 'maxTokens', 'temperature', 'topP', 'topK', 'enableThinking', 'thinkingBudget'];
+  // Map the legacy camelCase wire fields onto the canonical config.toml
+  // keys (snake_case). The default model lives at `model.default`, NOT
+  // `agent.model` — mirroring the migration mapping in
+  // `apps/desktop/src/main/config/migrate.ts` (`agentSettings.defaultModel -> model.default`,
+  // `maxTokens -> agent.max_tokens`). Writing camelCase keys into `[agent]`
+  // would leave values the runtime never reads.
+  const fieldTargets: Record<string, string> = {
+    model: 'model.default',
+    maxTokens: 'agent.max_tokens',
+    temperature: 'agent.temperature',
+    topP: 'agent.top_p',
+    topK: 'agent.top_k',
+    enableThinking: 'agent.enable_thinking',
+    thinkingBudget: 'agent.thinking_budget',
+  };
+  const applied: Record<string, unknown> = {};
+  for (const k of allow) {
+    if (body[k] !== undefined) applied[k] = body[k];
+  }
+  if (Object.keys(applied).length === 0) {
+    sendError(
+      res,
+      400,
+      'invalid_request',
+      `At least one field required: ${allow.join(', ')}`,
+    );
+    return;
+  }
+  try {
+    for (const [k, v] of Object.entries(applied)) {
+      getConfigStore().set(fieldTargets[k], v);
+    }
+    const ctx = readAuditContext(req);
+    await audit(ctx, 'config.settings.set', 'agent', Object.keys(applied).join(','));
+    sendJson(res, 200, { ok: true, changes: applied });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GET / PATCH /v1/config/settings/vision
+// ---------------------------------------------------------------------------
+
+interface VisionSettings {
+  provider?: string;
+  model?: string;
+  baseUrl?: string;
+  enabled?: boolean;
+}
+
+/** DTO returned to the CLI — adds the derived `hasKey` flag. */
+interface VisionSettingsDTO extends VisionSettings {
+  hasKey?: boolean;
+}
+
+export function handleGetVisionSettings(_req: IncomingMessage, res: ServerResponse): void {
+  try {
+    const settings = getConfigStore().getByPath('auxiliary.vision') as VisionSettings;
+    const dto: VisionSettingsDTO = {
+      provider: settings.provider,
+      model: settings.model,
+      baseUrl: settings.baseUrl,
+      enabled: settings.enabled,
+      // Vision creds come from the configured provider, not a per-feature key.
+      hasKey: false,
+    };
+    sendJson(res, 200, { settings: dto });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+export async function handleSetVisionSettings(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    sendError(res, 400, 'invalid_request', err instanceof Error ? err.message : String(err));
+    return;
+  }
+  // Plan 102: `enabled` is the canonical wire name (the legacy
+  // `isActive` field is mapped at the boundary in the agent tool,
+  // not here — this handler is the new boundary). We still accept
+  // `isActive` from the wire for forward compat with the old
+  // `duya_config` callers during the migration window.
+  const allow = ['provider', 'model', 'baseUrl', 'enabled', 'isActive'];
+  const patch: Record<string, unknown> = {};
+  for (const k of allow) {
+    if (body[k] !== undefined) patch[k] = body[k];
+  }
+  if (Object.keys(patch).length === 0) {
+    sendError(
+      res,
+      400,
+      'invalid_request',
+      `At least one field required: ${allow.filter((k) => k !== 'isActive').join(', ')}`,
+    );
+    return;
+  }
+  if (patch.isActive !== undefined) {
+    patch.enabled = patch.isActive === true;
+    delete patch.isActive;
+  }
+  try {
+    const current = getConfigStore().getByPath('auxiliary.vision') as VisionSettings;
+    const merged = { ...current, ...patch };
+    // Vision creds come from the provider, not a per-feature key.
+    delete (merged as Record<string, unknown>).apiKey;
+    getConfigStore().set('auxiliary.vision', merged);
+    const ctx = readAuditContext(req);
+    await audit(ctx, 'config.vision.set', 'vision', Object.keys(patch).join(','));
+    sendJson(res, 200, { ok: true, changes: patch });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GET / POST /v1/config/output-styles
+// ---------------------------------------------------------------------------
+
+interface OutputStyle {
+  id?: string;
+  name?: string;
+  description?: string;
+}
+
+export function handleListOutputStyles(_req: IncomingMessage, res: ServerResponse): void {
+  try {
+    const styles = getConfigStore().getByPath('auxiliary.output_styles');
+    const list = Object.entries(styles).map(([id, s]) => {
+      const item: OutputStyle = { id, name: s.name ?? id };
+      if (s.description) item.description = s.description;
+      return item;
+    });
+    sendJson(res, 200, { styles: list });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+export async function handleSetOutputStyle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    sendError(res, 400, 'invalid_request', err instanceof Error ? err.message : String(err));
+    return;
+  }
+  const styleId = typeof body.styleId === 'string' ? body.styleId : '';
+  if (!styleId) {
+    sendError(res, 400, 'invalid_request', 'styleId is required');
+    return;
+  }
+  try {
+    const styles = getConfigStore().getByPath('auxiliary.output_styles');
+    if (!styles[styleId]) {
+      sendError(res, 404, 'output_style_not_found', `Output style not found: ${styleId}`);
+      return;
+    }
+    // Mark the style as active. The activeStyleId is stored on
+    // the agent settings (legacy `duya_config style_set` did the
+    // same thing via `outputStylesSet({ styleId })`).
+    const current = getConfigStore().getByPath('agent') as unknown as Record<string, unknown>;
+    const merged = { ...current, activeStyleId: styleId };
+    getConfigStore().set('agent', merged);
+    const ctx = readAuditContext(req);
+    await audit(ctx, 'config.style.set', styleId);
+    sendJson(res, 200, { ok: true, styleId });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GET /v1/config/pairing
+// POST /v1/config/pairing/approve
+// POST /v1/config/pairing/revoke
+// GET /v1/config/pairing/check
+// ---------------------------------------------------------------------------
+
+// ============================================================================
+// Phase 4.2: generic KV set / get / unset / validate (Plan 200 P4)
+// ============================================================================
+
+type GenericConfigKey =
+  | 'agentSettings'
+  | 'uiPreferences'
+  | 'visionSettings'
+  | 'outputStyles'
+  | 'apiProviders';
+
+const ALLOWED_GENERIC_KEYS: readonly GenericConfigKey[] = [
+  'agentSettings',
+  'uiPreferences',
+  'visionSettings',
+  'outputStyles',
+  'apiProviders',
+];
+
+// Map CLI flat generic keys to ConfigStore nested paths.
+const CFG_PATH: Record<string, string> = {
+  apiProviders: 'providers',
+  agentSettings: 'agent',
+  uiPreferences: 'display',
+  visionSettings: 'auxiliary.vision',
+  outputStyles: 'auxiliary.output_styles',
+};
+
+function isGenericKey(v: unknown): v is GenericConfigKey {
+  return typeof v === 'string' && (ALLOWED_GENERIC_KEYS as readonly string[]).includes(v);
+}
+
+function deepClone<T>(v: T): T {
+  if (typeof structuredClone === 'function') return structuredClone(v);
+  return JSON.parse(JSON.stringify(v)) as T;
+}
+
+/**
+ * POST /v1/config/kv/set
+ * body: { key, value } — merges `value` into the top-level key.
+ * Records an audit event of kind `config.kv.set`.
+ */
+export async function handleConfigKvSet(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    sendError(res, 400, 'invalid_request', err instanceof Error ? err.message : String(err));
+    return;
+  }
+  if (!isGenericKey(body.key)) {
+    sendError(res, 400, 'invalid_key', `key must be one of: ${ALLOWED_GENERIC_KEYS.join(', ')}`);
+    return;
+  }
+  if (typeof body.value !== 'object' || body.value === null || Array.isArray(body.value)) {
+    sendError(res, 400, 'invalid_value', 'value must be a JSON object');
+    return;
+  }
+  try {
+    const current = getConfigStore().getByPath(CFG_PATH[body.key]);
+    const merged = {
+      ...(current as Record<string, unknown>),
+      ...(body.value as Record<string, unknown>),
+    };
+    getConfigStore().set(CFG_PATH[body.key], merged);
+    const ctx = readAuditContext(req);
+    await audit(ctx, 'config.kv.set', body.key, Object.keys(body.value as object).join(','));
+    sendJson(res, 200, { ok: true, key: body.key, value: merged });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+/**
+ * GET /v1/config/kv/get?key=...
+ * Returns the value at the top-level key (the whole record).
+ */
+export function handleConfigKvGet(req: IncomingMessage, res: ServerResponse): void {
+  const url = req.url ?? '/';
+  const qIdx = url.indexOf('?');
+  let key: string | undefined;
+  if (qIdx >= 0) {
+    for (const part of url.slice(qIdx + 1).split('&')) {
+      const eq = part.indexOf('=');
+      if (eq < 0) continue;
+      const k = part.slice(0, eq);
+      const v = part.slice(eq + 1);
+      if (k === 'key') key = decodeURIComponent(v);
+    }
+  }
+  if (!isGenericKey(key)) {
+    sendError(res, 400, 'invalid_key', `key must be one of: ${ALLOWED_GENERIC_KEYS.join(', ')}`);
+    return;
+  }
+  try {
+    const value = getConfigStore().getByPath(CFG_PATH[key]);
+    sendJson(res, 200, { key, value });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+/**
+ * POST /v1/config/kv/unset
+ * body: { key, path? } — drops the key (or the path under it) back
+ * to its default. Without `path` this is destructive: it restores
+ * the entire key to the empty default. The CLI gates this behind
+ * --yes (Phase 7).
+ */
+export async function handleConfigKvUnset(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    sendError(res, 400, 'invalid_request', err instanceof Error ? err.message : String(err));
+    return;
+  }
+  if (!isGenericKey(body.key)) {
+    sendError(res, 400, 'invalid_key', `key must be one of: ${ALLOWED_GENERIC_KEYS.join(', ')}`);
+    return;
+  }
+  const pathRaw = body.path;
+  const path =
+    typeof pathRaw === 'string' && pathRaw.length > 0
+      ? pathRaw.split('.').filter((s) => s.length > 0)
+      : [];
+  try {
+    const current = deepClone(getConfigStore().getByPath(CFG_PATH[body.key]) as Record<string, unknown>);
+    if (path.length === 0) {
+      const defaults: Record<GenericConfigKey, unknown> = {
+        agentSettings: {},
+        uiPreferences: {},
+        visionSettings: { provider: '', model: '', baseUrl: '', enabled: false },
+        outputStyles: {},
+        apiProviders: {},
+      };
+      getConfigStore().set(CFG_PATH[body.key], defaults[body.key]);
+      const ctx = readAuditContext(req);
+      await audit(ctx, 'config.kv.unset', body.key, 'whole-key');
+      sendJson(res, 200, { ok: true, key: body.key, value: defaults[body.key] });
+      return;
+    }
+    let cursor: Record<string, unknown> = current;
+    for (let i = 0; i < path.length - 1; i++) {
+      const seg = path[i];
+      const next = cursor[seg];
+      if (typeof next !== 'object' || next === null) {
+        sendError(res, 404, 'path_not_found', `path not found: ${path.join('.')}`);
+        return;
+      }
+      cursor = next as Record<string, unknown>;
+    }
+    const last = path[path.length - 1];
+    if (!(last in cursor)) {
+      sendError(res, 404, 'path_not_found', `path not found: ${path.join('.')}`);
+      return;
+    }
+    delete cursor[last];
+    getConfigStore().set(CFG_PATH[body.key], current);
+    const ctx = readAuditContext(req);
+    await audit(ctx, 'config.kv.unset', body.key, path.join('.'));
+    sendJson(res, 200, { ok: true, key: body.key, path: path.join('.'), value: current });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+/**
+ * POST /v1/config/validate
+ * body: { key, value } — runs the same validator the manager uses
+ * for `setConfig`, but does NOT write. Returns { valid, error? }.
+ *
+ * Note: the manager's setConfig writes when valid, so we restore the
+ * prior value after the validation probe. This keeps the call
+ * effectively read-only from the caller's perspective.
+ */
+export async function handleConfigValidate(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    sendError(res, 400, 'invalid_request', err instanceof Error ? err.message : String(err));
+    return;
+  }
+  if (!isGenericKey(body.key)) {
+    sendError(res, 400, 'invalid_key', `key must be one of: ${ALLOWED_GENERIC_KEYS.join(', ')}`);
+    return;
+  }
+  try {
+    const before = deepClone(getConfigStore().getByPath(CFG_PATH[body.key]));
+    const merged =
+      typeof body.value === 'object' && body.value !== null && !Array.isArray(body.value)
+        ? { ...(before as Record<string, unknown>), ...(body.value as Record<string, unknown>) }
+        : body.value;
+    getConfigStore().set(CFG_PATH[body.key], merged);
+    // Restore the original value so validate is effectively read-only.
+    getConfigStore().set(CFG_PATH[body.key], before);
+    sendJson(res, 200, { valid: true });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GET /v1/config/agents
+// ---------------------------------------------------------------------------
+
+export function handleListConfigAgents(_req: IncomingMessage, res: ServerResponse): void {
+  try {
+    sendJson(res, 200, { agents: listConfigAgents() });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST /v1/config/agents
+// body: { id, name?, description?, model?, workspace?, agents_md?, tools?, plugins? }
+// ---------------------------------------------------------------------------
+
+export async function handleUpsertConfigAgent(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    sendError(res, 400, 'invalid_request', err instanceof Error ? err.message : String(err));
+    return;
+  }
+  const id = typeof body.id === 'string' ? body.id : '';
+  if (!id) {
+    sendError(res, 400, 'invalid_request', 'id is required');
+    return;
+  }
+  try {
+    const agent = upsertConfigAgent(id, body as unknown as Parameters<typeof upsertConfigAgent>[1]);
+    sendJson(res, 200, { ok: true, agent });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// DELETE /v1/config/agents/:id
+// ---------------------------------------------------------------------------
+
+export function handleDeleteConfigAgent(_req: IncomingMessage, res: ServerResponse, id: string): void {
+  try {
+    const ok = deleteConfigAgent(id);
+    if (!ok) {
+      sendError(res, 404, 'agent_not_found', `Agent '${id}' not found`);
+      return;
+    }
+    sendJson(res, 200, { ok: true, removed: id });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}

@@ -148,7 +148,7 @@ for (const entry of fs.readdirSync(AGENT_SRC, { withFileTypes: true })) {
           const r = rel(t);
           const pm = r.match(/^packages\/agent\/src\/([^/]+)\//);
           if (pm) peers[pm[1]] = (peers[pm[1]] ?? 0) + 1;
-          if (r.startsWith("src/") || r.startsWith("electron/")) escapes += 1;
+          if (r.startsWith("apps/desktop/src/")) escapes += 1;
         }
       }
     }
