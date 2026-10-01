@@ -41,7 +41,6 @@ const FIXTURES = {
     maxAttempts: 3,
     delayMs: 500,
     reason: 'fixture',
-    errorClass: 'provider_timeout',
   },
   'turn.completed': {
     turnId: 'turn-1',
@@ -127,6 +126,7 @@ const FIXTURES = {
   },
   'subagent.completed': { subagentId: 'sub-1', status: 'completed', durationMs: 100 },
   'hook.invoked': {
+    agentEventType: 'PreToolUse',
     hookEventName: 'PostToolUse',
     hookType: 'command',
     hookName: 'fixture-hook',

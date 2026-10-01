@@ -226,6 +226,35 @@ grok `sampling-types` 的失败模式是文档声称 "no I/O" 而 `Cargo.toml` �
 `schema/` 一旦出现就失败，并要求同一个 commit 附上生成器。
 手写的 schema 落不了地。这比「检查一个没人维护的 JSON 有没有过期」有用得多。
 
+**PP-1 第三轮（2026-10-01）：把 25 个 `chat:*` 事件全扫一遍，又挖出 5 处**
+
+第二轮我只手工挑了 9 组事件做字段覆盖，**剩下 16 个根本没进过检查**。
+这一轮改成机器扫描全部事件，结论是同一句话又成立了两遍：
+**「把规格当事实来源」。**
+
+| # | 问题 | 真相 | 处置 |
+|---|---|---|---|
+| N-1 | `StopReason` 词汇也是编的 | 代码真实值 `aborted, completed, end_turn, error, length, max_tokens, stop_sequence`；protocol 漏掉 `completed` 和 `length`，多出代码里查无此串的 `tool_use, refusal, pause` | 改用运行时自己的拼写；provider 的原始值放 `DiagnosticDetail` |
+| N-2 | 40 个 `ErrorCode` 里 32 个在代码里查无此串 | 代码实际用的是 `internal_error, missing_arg, invalid_request, agent_not_found, connector_auth_required, provider_error, unknown_action, http_<status>, scheduler_unavailable, cron_not_found, not_in_catalog, connection_revoked…` **一个都不在闭合集里**，而 `chat:error.code` 是自由字符串 | **未修，记为最大缺口**：闭合错误分类需要一张 32+ 条的映射表，且要先裁决「哪一层的 code 上 wire」 |
+| N-3 | `PermissionRequest.expiresAt` 没有生产者 | worker 的 `chat:permission` 只有 `{id, toolName, toolInput}`，整个权限路径**找不到任何 timer** | **未修，记为协议洞**：`kind`/`mode`/`expiresAt` 三个必填字段当前无一能填；注释里「单一权威时钟」应读作**对运行时的要求**，不是对现状的描述 |
+| N-4 | checkpoint 事件缺失 | worker 有 `type: 'checkpoint'`（`{messages, generation}`），protocol 注册表**无任何 checkpoint 事件**，却对外承诺 `checkpointGeneration` resume | **未修，记为协议洞**：host 无从得知某个 generation 存在 |
+| N-5 | `agent_progress` 的 11 个字段落不进去 | `data` / `toolInput` / `agentEventType` 三个字段在 `subagent.*` 和 `hook.invoked` 里都没有位置 | 三个字段补进 `HookInvokedPayload`（`agentEventType` 尤其重要：它决定了这一帧被拆成哪个事件） |
+
+顺带删掉 `TurnRetryScheduledPayload.errorClass` —— worker 侧**不存在**这个分类，
+是又一次凭规格加的字段，host 会去分支一个永远收不到的值。
+
+**结构性修法：把 UNMAPPED 变成决策日志而不是注释。**
+`worker-event-coverage.test.ts` 现在要求**每个 worker 事件要么被映射、要么被显式登记**
+（含未映射的原因，以及是否属于「协议洞」而非「适配器问题」）。
+已植入假事件验证：worker 一旦新增事件而两边都没登记，测试立即变红。
+**「没人看过」从此不可能被误读成「这样没问题」。**
+
+**这一轮的教训值得单独记：三轮里最贵的两类错误（P0-1 mode、N-1 stopReason、
+N-2 错误码）全部是同一个动作造成的——把一个来源不携带信息的字段收紧成闭合 union，
+或者照着规格文档抄一份词汇表。**
+收紧 union 之前必须先问：这个值在代码里的**真实取值集合**是什么。
+答不上来就不能收紧，只能保持 `string` 并配一个转换点。
+
 **PP-1 第二轮评审（2026-10-01）：对着真实 worker 实现复核，发现 6 处语义级问题**
 
 第一轮评审查的是「protocol 内部是否自洽」。第二轮把 protocol 和

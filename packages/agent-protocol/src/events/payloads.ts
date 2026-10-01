@@ -59,14 +59,26 @@ import type { ProtocolErrorInfo } from '../errors.js';
 
 // ── content blocks ────────────────────────────────────────────────────────
 
+/**
+ * Why a turn or run stopped.
+ *
+ * These are the values the agent actually produces, verbatim. An earlier draft
+ * used a provider API's stop-reason vocabulary (`tool_use`, `refusal`) plus
+ * two protocol-only values, and omitted the two the code really emits —
+ * `length` for a token or context ceiling and `completed` for a normal finish.
+ * A closed union is only worth having if it is pinned to its source; otherwise
+ * it is a list of words a host will branch on that never arrive.
+ *
+ * Providers differ: some report `max_tokens` where this reports `length`. The
+ * adapter normalises to the runtime's own spelling and puts the raw provider
+ * value in `DiagnosticDetail` when a caller needs it.
+ */
 export type StopReason =
+  | 'completed'
+  | 'length'
   | 'end_turn'
-  | 'max_tokens'
   | 'stop_sequence'
-  | 'tool_use'
-  | 'refusal'
   | 'aborted'
-  | 'pause'
   | 'error';
 
 export interface TokenUsage {
@@ -193,12 +205,20 @@ export interface TurnStartedPayload {
   readonly effort?: string;
 }
 
+/**
+ * A model turn is being retried.
+ *
+ * `reason` is the worker's own `message`; there is no separate `errorClass`
+ * on the source event. An earlier draft had one, which meant a host could
+ * branch on a classification nothing ever produced. Classify at the adapter
+ * from `reason` if a caller needs a bucket, and say so in a diagnostic rather
+ * than asserting a field that arrives empty.
+ */
 export interface TurnRetryScheduledPayload {
   readonly attempt: number;
   readonly maxAttempts: number;
   readonly delayMs: number;
   readonly reason: string;
-  readonly errorClass: string;
 }
 
 export interface TurnCompletedPayload {
@@ -471,11 +491,22 @@ export interface SubagentCompletedPayload {
  *  a THIRD seq namespace. The protocol discards it; the envelope's `seq` is
  *  the only ordering authority. */
 export interface HookInvokedPayload {
+  /**
+   * The worker's own `agentEventType`, verbatim.
+   *
+   * This is the field that decides which of the three subagent events an
+   * `agent_progress` frame became, so it is carried rather than discarded —
+   * without it a consumer cannot tell a hook from a subagent transition
+   * without re-deriving the split the adapter already performed.
+   */
+  readonly agentEventType: string;
   readonly hookEventName: string;
   readonly hookType: string;
   readonly hookName: string;
   readonly matcher?: string;
   readonly additionalContext?: string;
+  /** The worker's opaque `data` string, which is the payload for this frame. */
+  readonly data?: string;
   readonly exitCode?: number;
   readonly async: boolean;
   readonly backgroundTaskId?: string;
@@ -484,6 +515,8 @@ export interface HookInvokedPayload {
   readonly errorMessage?: string;
   readonly toolName?: string;
   readonly toolCallId?: ToolCallId;
+  /** The worker's `toolInput`. Optional because a hook frame may not carry one. */
+  readonly toolInput?: Readonly<Record<string, unknown>>;
 }
 
 // ── diagnostic ────────────────────────────────────────────────────────────

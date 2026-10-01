@@ -63,6 +63,16 @@ function protocolFields(iface: string): string[] {
 const ENVELOPE_LEVEL = new Set(['type', 'sessionId', 'id']);
 
 /**
+ * A rename target may be a dotted path when the protocol nests where the
+ * worker does not — `code` becomes `error.code` inside `ProtocolErrorInfo`.
+ * Only the first segment is checked against the payload's top-level fields,
+ * because the extractor reads one interface. The rest of the path is the
+ * adapter's mapping table, which is exactly the thing that does not exist yet
+ * for the worker's free-string error codes, and is called out in UNMAPPED.
+ */
+const rootSegment = (p: string): string => p.split('.')[0]!;
+
+/**
  * Each row: the worker's event interface, the protocol payload that must carry
  * it, and the RENAMES the adapter is expected to perform.
  *
@@ -115,6 +125,58 @@ const PAIRS: ReadonlyArray<{
     // default absence to `false` rather than pass `undefined` through.
     renames: { result: 'content', error: 'isError', duration_ms: 'durationMs' },
   },
+  {
+    worker: 'AgentRetryEvent',
+    protocol: 'TurnRetryScheduledPayload',
+    renames: { message: 'reason' },
+  },
+  {
+    worker: 'AgentErrorEvent',
+    protocol: 'RunFailedPayload',
+    // The worker sends `code?: string`, a free string. `ProtocolErrorInfo`
+    // requires a closed `ErrorCode`, so the adapter needs a mapping table for
+    // the ~32 code strings the codebase actually emits and NONE of which are
+    // in the closed set. That table is PP-6 work and is the single largest
+    // known gap in this migration; see UNMAPPED below.
+    renames: { message: 'error', code: 'error.code' },
+  },
+];
+
+/**
+ * Every worker event with no protocol counterpart yet, and why.
+ *
+ * An entry here is a RECORDED GAP, not an approval. The assertion below fails
+ * if the worker grows an event that appears in neither list, so "we did not
+ * think about it" cannot be mistaken for "we decided".
+ *
+ * Two of these are genuine protocol holes rather than adapter questions, and
+ * are called out as such:
+ *
+ *  - `AgentPermissionEvent` carries `{ id, toolName, toolInput }` and nothing
+ *    else. `PermissionRequest` requires `kind`, `mode` and `expiresAt`, and
+ *    there is no permission timer anywhere in the agent. The "single
+ *    authoritative clock" the field docs describe does not exist in the code;
+ *    it is a requirement for the runtime to satisfy, not a description of
+ *    what it does today.
+ *  - `CheckpointEvent` exists in the worker, and the protocol advertises
+ *    `checkpointGeneration` resume, but the registry has no checkpoint event.
+ *    A host therefore cannot learn that a generation exists.
+ */
+const UNMAPPED: ReadonlyArray<readonly [string, string]> = [
+  ['ChatStartCommand', 'host -> worker input, not an event; becomes run.start + turn.started'],
+  ['InitCommand', 'host -> worker input; its providerConfig.apiKey is exactly what the manifest must not carry'],
+  ['ChatInterruptCommand', 'host -> worker input; becomes run.cancel over the control channel'],
+  ['AgentPermissionEvent', 'GAP: PermissionRequest requires kind/mode/expiresAt and the worker has no timer to source them'],
+  ['AgentDoneEvent', 'carries no fields; RunCompletedPayload.status/usage have no source here yet'],
+  ['AgentAgentProgressEvent', 'split across subagent.* and hook.invoked; all 11 fields now carried'],
+  ['ResearchUpdatedEvent', 'GAP: research is a real mode with real progress state and no protocol event'],
+  ['AgentTitleGeneratedEvent', 'GAP: session titles are user-visible and have no protocol event'],
+  ['WorkflowRunEvent', 'GAP: workflow runs are a product feature with no protocol event'],
+  ['AgentDbPersistedEvent', 'folded into diagnostic; but a failed persist is more than a log line'],
+  ['AgentDebugEvent', 'folded into diagnostic'],
+  ['CheckpointEvent', 'GAP: resume advertises checkpointGeneration with no event announcing one'],
+  ['SubagentToolUseDeltaEvent', 'folded into tool.arguments_delta'],
+  ['ClipboardWriteEvent', 'a UI command, not agent state; the worker has no clipboard'],
 ];
 
 describe('worker event source: nothing is silently dropped', () => {
@@ -136,7 +198,7 @@ describe('worker event source: nothing is silently dropped', () => {
       .map((f) => f.name)
       .filter((n) => !ENVELOPE_LEVEL.has(n))
       .map((n) => renames[n] ?? n)
-      .filter((n) => !target.has(n));
+      .filter((n) => !target.has(rootSegment(n)));
 
     expect(
       dropped,
@@ -153,8 +215,8 @@ describe('worker event source: nothing is silently dropped', () => {
       const target = new Set(protocolFields(protocol));
       for (const [from, to] of Object.entries(renames)) {
         expect(
-          target.has(to),
-          `${w}.${from} is renamed to ${protocol}.${to}, which does not exist`,
+          target.has(rootSegment(to)),
+          `${w}.${from} is renamed to ${protocol}.${to}, whose first segment does not exist`,
         ).toBe(true);
       }
     }
@@ -166,6 +228,38 @@ describe('worker event source: nothing is silently dropped', () => {
       for (const from of Object.keys(renames)) {
         expect(source.has(from), `${w} has no field ${from}, so the rename is dead`).toBe(true);
       }
+    }
+  });
+
+  it('every worker event is either mapped or explicitly recorded as unmapped', () => {
+    // The assertion that makes UNMAPPED a decision log rather than a comment.
+    // An event the worker starts emitting appears in neither list and fails
+    // here, so "nobody looked at this" can never be mistaken for "this is
+    // fine".
+    const accounted = new Set([
+      ...PAIRS.map((p) => p.worker),
+      ...UNMAPPED.map(([w]) => w),
+    ]);
+
+    const declared = [...worker.matchAll(/export interface (\w+)\s*\{/g)].map((m) => m[1]!);
+    const actual = declared.filter((name) => {
+      // Only interfaces that carry a worker-event discriminant, and only
+      // top-level ones — a nested `request` object is not an event.
+      const body = worker.slice(worker.indexOf('export interface ' + name + ' {'));
+      const discriminant = /type:\s*'(chat:[^']+)'|type:\s*'(checkpoint)'/.exec(body.slice(0, 400));
+      return discriminant !== null && !/\n {2,}export interface/.test(body.slice(0, 60));
+    });
+
+    expect(
+      actual.filter((name) => !accounted.has(name)),
+      'these worker events are neither mapped nor recorded in UNMAPPED — add one or the other',
+    ).toEqual([]);
+  });
+
+  it('every recorded gap says why, and names whether it is a protocol hole', () => {
+    for (const [name, reason] of UNMAPPED) {
+      expect(reason.trim().length, `${name} is recorded as unmapped with no reason`).toBeGreaterThan(20);
+      expect(extractInterface(worker, name), `${name} is recorded but no longer exists`).not.toBeNull();
     }
   });
 });
