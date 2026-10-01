@@ -1,12 +1,10 @@
 /**
  * Permission vocabulary: one set of actions, one clock, one audit chain.
  *
- * Design source: 07-agent-protocol-spec.md §7 and §0.3.
- *
  * ## Why this file is not a type shim
  *
  * The current codebase has THREE incompatible vocabularies for the same
- * decision (07 §0.3):
+ * decision:
  *
  *   callback return   'allow' | 'deny' | 'paused'          (agent/src/types.ts:337)
  *   HTTP receive      allow | deny | allow_once | allow_for_session   (router.ts:1785)
@@ -49,7 +47,7 @@ export type PermissionDecision =
   | { readonly action: 'defer' };
 
 /** Returned by `respondToPermission`. NOT an error path.
- *  A late answer is normal when a host was offline (07 §7.2 step 3). */
+ *  A late answer is normal when a host was offline. */
 export type PermissionAck =
   | { readonly accepted: true }
   | {
@@ -93,7 +91,7 @@ export interface PermissionRequested {
   readonly metadata?: Readonly<Record<string, string>>;
   readonly blockedPath?: string;
   /**
-   * SINGLE AUTHORITATIVE CLOCK (07 §7.1):
+   * SINGLE AUTHORITATIVE CLOCK:
    *   expiresAt = startedAt + manifest.permissionPolicy.defaultTimeoutMs
    * defaultTimeoutMs defaults to 300_000, matching the hardcoded value at
    * agent-process-entry.ts:2240. The legacy `PermissionRequestEvent.expiresAt`
@@ -117,7 +115,7 @@ export interface PermissionExpired {
   readonly afterMs: number;
 }
 
-// ── Legacy mapping (07 §7.3) ──────────────────────────────────────────────
+// ── Legacy mapping ──────────────────────────────────────────────
 
 /**
  * Legacy verb → protocol action. Delete one release after 07 M5 lands.

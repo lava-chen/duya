@@ -1,8 +1,6 @@
 /**
  * Protocol version and the compatibility gate.
  *
- * Design source: 07-agent-protocol-spec.md §13.
- *
  * The compatibility rule is deliberately asymmetric. MAJOR equality is the
  * only hard gate; MINOR drift is resolved by capability probing, never by
  * parsing version strings. A semver-style negotiation fails OPEN: after a
@@ -50,8 +48,5 @@ export function isCompatible(host: ProtocolVersion, runtime: ProtocolVersion): C
   return { ok: true };
 }
 
-/**
- * Version at which a payload field or event type was introduced.
- * Used by the event registry and by the schema generator.
- */
+/** Protocol version at which a payload field or event type was introduced. */
 export type Since = `${number}.${number}`;

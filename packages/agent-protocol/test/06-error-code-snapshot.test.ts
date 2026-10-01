@@ -1,8 +1,6 @@
 /**
  * Drift test #6 — the error taxonomy cannot contradict itself.
  *
- * Design source: 07-agent-protocol-spec.md §15 (#6), §11.
- *
  * The partition assertion is the important one: every code is exactly one of
  * RETRYABLE or TERMINAL, never both and never neither. A code that is in
  * neither would leave a host guessing, which is the whole failure mode this

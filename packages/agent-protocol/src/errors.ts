@@ -1,8 +1,6 @@
 /**
  * Error taxonomy. Retryability is a WIRE value, not a client-side guess.
  *
- * Design source: 07-agent-protocol-spec.md §11.
- *
  * The lesson behind this file is grok-build's `TURN_ACTIVE` / `is_turn_active()`
  * (02-reference-repo-boundaries.md:293-301): a client that has to import the
  * server's error enum to classify a failure has lost the ability to evolve
@@ -92,7 +90,7 @@ export const RETRYABLE_ERROR_CODES: ReadonlySet<ErrorCode> = new Set<ErrorCode>(
 /**
  * Codes after which the run is finished and a retry is a NEW run.
  *
- * 07 §15 drift test #6 asserts these two sets partition ERROR_CODES and are
+ * drift test #6 asserts these two sets partition ERROR_CODES and are
  * disjoint, so a code can never be simultaneously "retry this" and "give up".
  */
 export const TERMINAL_ERROR_CODES: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
@@ -132,8 +130,7 @@ export const TERMINAL_ERROR_CODES: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
 /**
  * Codes deliberately in NEITHER set.
  *
- * `runtime_crash` means the clean-cancel path was violated (07 §8: reporting
- * `cancelled` after a hard kill would be a lie). `transport_backpressure_timeout`
+ * `runtime_crash` means the clean-cancel path was violated. `transport_backpressure_timeout`
  * is decided by the adapter's drain policy, not by the run. Neither is a
  * statement about whether the RUN can proceed, so neither may be classified as
  * retryable or terminal by the protocol.
@@ -174,7 +171,7 @@ export type WireResult<T> = { readonly ok: T } | { readonly err: ProtocolErrorIn
 
 /** Thrown only by the strict validation path (`codecs.validate`), never by the
  *  decode path. Decode returns `UnknownRunEvent` for anything it does not
- *  recognise (07 §13). */
+ *  recognise. */
 export class ProtocolError extends Error {
   readonly info: ProtocolErrorInfo;
 

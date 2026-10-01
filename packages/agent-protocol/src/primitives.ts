@@ -1,8 +1,6 @@
 /**
  * Primitive scalar types shared by every part of the protocol.
  *
- * Design source: 07-agent-protocol-spec.md §2.
- *
  * The `Millis` / `RunId` / `SessionId` aliases exist for one reason: they make
  * unit confusion a TYPE error rather than a comment. A `seq` is a number, an
  * epoch-ms timestamp is a number, and a byte budget is a number — three
@@ -65,9 +63,9 @@ export type PermissionModeName =
 
 /** A resolved tool permission table, flattened from `ReadonlyMap` to `Record`.
  *
- *  07 §3.1: the in-repo `ToolPermissionRulesBySource` holds three
- *  `ReadonlyMap`s and cannot cross a JSON boundary. The protocol flattens it
- *  here so the flattening is explicit and testable rather than accidental. */
+ *  The in-repo `ToolPermissionRulesBySource` holds three `ReadonlyMap`s and
+ *  cannot cross a JSON boundary. The protocol flattens it here so the
+ *  flattening is explicit and testable rather than accidental. */
 export type PermissionRulesWire = Readonly<Record<PermissionRuleSource, readonly string[]>>;
 
 export interface ConnectorBinding {
@@ -76,7 +74,7 @@ export interface ConnectorBinding {
   readonly pluginId?: string;
 }
 
-/** Env reference for a run. NEVER inline credentials — see 07 §3.1 and §14. */
+/** Env reference for a run. Never inline credentials. */
 export interface EnvReference {
   /** Opaque handle resolved by the Control Plane's secret resolver. */
   readonly ref: string;
@@ -94,8 +92,8 @@ export interface RunBudget {
 /** Anything JSON-parseable that is safe to place in `details`.
  *
  *  pi-protocol's README states "Validation errors do not retain rejected
- *  payloads"; 07 §3 forbids credentials in the manifest and §14 forbids secrets
- *  on the wire. Together those mean `details` is for DIAGNOSTIC FACTS
+ *  payloads", and credentials are forbidden both in the manifest and on the
+ *  wire. Together those mean `details` is for DIAGNOSTIC FACTS
  *  (counts, durations, capability names) and must never carry the offending
  *  payload, a header, or a token. `test/12-no-secret-in-manifest.test.ts`
  *  pins the rule for the manifest; this comment is the same rule for errors. */

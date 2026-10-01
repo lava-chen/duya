@@ -1,13 +1,11 @@
 /**
  * RunManifest — the complete, immutable description of one run.
  *
- * Design source: 07-agent-protocol-spec.md §3.
- *
  * Every field is `readonly` at the type level, and drift test #11 checks it at
  * runtime by taking the fingerprint at `start` and re-verifying it at `resume`.
  * A rewritten manifest is `manifest_mismatch`, not a silently different run.
  *
- * ## Three fields the current code cannot supply (07 §3.1)
+ * ## Three fields the current code cannot supply
  *
  * These are declared because the protocol needs them, and flagged because they
  * are NOT yet backed by real data. Do not pretend otherwise when wiring a host.
@@ -18,8 +16,7 @@
  *     flattened `PermissionRulesWire`.
  *  2. `env` is `{ ref, hash }`, but credentials are inlined in two places today
  *     (`worker-protocol.ts:7` and `types.ts:141,152,158`). **A Control Plane
- *     secret resolver must exist before this field means anything** — it blocks
- *     plan 584 PP-6.
+ *     secret resolver must exist before this field means anything.**
  *  3. `budget` has no counterpart. The nearest thing is `maxTurns`
  *     (types.ts:289) plus the `agent.max_turns` setting.
  *

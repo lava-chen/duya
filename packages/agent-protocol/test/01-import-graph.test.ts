@@ -1,8 +1,6 @@
 /**
  * Drift test #1 — the fake-leaf detector.
  *
- * Design source: 07-agent-protocol-spec.md §15 (#1), §14.
- *
  * This test exists because grok-build's `xai-grok-sampling-types` describes
  * itself as "Pure data types" and then declares eleven dependencies including
  * `reqwest`, `tracing`, a circuit breaker, and two sibling domain crates
@@ -123,7 +121,7 @@ describe('drift #1: the protocol package is a true leaf', () => {
     }
     expect(
       offenders,
-      `07 §14 forbids these in the protocol package:\n${offenders.join('\n')}`,
+      `these are forbidden in the protocol package:\n${offenders.join('\n')}`,
     ).toEqual([]);
   });
 
@@ -153,7 +151,7 @@ describe('drift #1: the protocol package is a true leaf', () => {
   });
 
   it('the events registry has no runtime import of payloads', () => {
-    // 07 §1 splits specs from registry precisely so this is assertable: the
+    // Specs live in a separate file precisely so this is assertable: the
     // registry must not pull the payload graph into every consumer of it.
     const registry = readFileSync(join(SRC, 'events', 'registry.ts'), 'utf8');
     const nonTypeImports = [...registry.matchAll(IMPORT_RE)]

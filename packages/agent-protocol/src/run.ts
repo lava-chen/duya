@@ -1,9 +1,7 @@
 /**
  * The Run API: what a host gets back, and what cancel actually means.
  *
- * Design source: 07-agent-protocol-spec.md §6 and §8.
- *
- * ## First writer of the terminal state wins (07 §8)
+ * ## First writer of the terminal state wins
  *
  * The run state machine is `pending -> running -> completing -> terminal`, and
  * the terminal transition is a one-shot CAS. Everything below follows from that
@@ -71,7 +69,7 @@ export interface RunMetrics {
   readonly eventsDurable: number;
   readonly eventsVolatile: number;
   /** Ephemeral events are COUNTED, never retained. A text_delta storm would
-   *  otherwise consume the whole buffer (07 §6). */
+   *  otherwise consume the whole buffer. */
   readonly eventsEphemeral: number;
   readonly toolCalls: number;
   readonly permissionRequests: number;

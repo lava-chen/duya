@@ -1,11 +1,9 @@
 /**
  * Framing: bytes to envelopes and back, with explicit resource limits.
  *
- * Design source: 07 §12 (framing row) and §10.
- *
  * ## Why this is its own file
  *
- * 07 §1 puts SSE<->envelope and NDJSON<->envelope both in `codecs.ts`, which
+ * puts SSE<->envelope and NDJSON<->envelope both in `codecs.ts`, which
  * conflates three separate concerns. pi-protocol splits them —
  * `framing.ts` / `codec.ts` / `schemas.ts` — and its README states the rule
  * directly: framing is handled "independently of schemas". Adopted here; see
@@ -13,7 +11,7 @@
  *
  * ## The three limits
  *
- * 07 §10 declared `maxEventBytes` with no default and no nesting or element
+ * declared `maxEventBytes` with no default and no nesting or element
  * limit at all. pi-protocol sets all three explicitly. Adopted with the same
  * values so the two packages do not disagree silently.
  *
@@ -25,7 +23,7 @@
  *
  * ## No JSON accumulator
  *
- * 07 §5.1 step 3 deletes router.ts:1334-1386, a 100 KB-capped buffer that
+ * step 3 deletes router.ts:1334-1386, a 100 KB-capped buffer that
  * existed only because `sendEvent` could emit a multi-line JSON body. The
  * protocol mandates exactly one `JSON.stringify` per line, so a bare newline
  * inside a frame is a protocol violation, not something to accumulate around.

@@ -1,10 +1,10 @@
 /**
  * Canonical JSON and a dependency-free SHA-256.
  *
- * ## Why this file exists (07 §1 did not anticipate this)
+ * ## Why this file exists
  *
- * 07 §3 specifies `manifestFingerprint(m: RunManifest): string` as a sha256 of
- * the canonical JSON, and 07 §15 drift test #1 requires the package to contain
+ * specifies `manifestFingerprint(m: RunManifest): string` as a sha256 of
+ * the canonical JSON, and drift test #1 requires the package to contain
  * ZERO `node:*` imports. Those two requirements collide: `node:crypto` is the
  * obvious way to get a sha256 and it is exactly what the drift test forbids.
  *

@@ -1,34 +1,28 @@
 /**
- * Drift test #10 — the type-first deviation is deliberate, and stays deliberate.
+ * Drift test #10 — this package is type-first, and that has to stay deliberate.
  *
- * Design source: 07-agent-protocol-spec.md §15 (#10). Decision: D7 in
- * `docs/architecture/10-reference-comparison.md`.
- *
- * ## What 07 §15 #10 asked for
- *
- * "Regenerate `schema/*.json` from the types during the test, diff against the
- * committed copy, fail on drift." That presupposes a schema-first package —
- * the source of truth is a schema, types are generated from it or validated
- * against it, and the committed JSON is a derived artifact that can rot.
- *
- * ## Why this package does not have one
+ * ## The obvious design, and why it is wrong here
  *
  * pi-protocol is schema-first: typebox is its only runtime dependency, schemas
  * are the source of truth, and the runtime validates every message against
- * them. That is a defensible design and it is what 07 §15 #10 was copied from.
- * It is the wrong design HERE, for one reason: pi is a single client and a
+ * them. A schema-first package guards drift by regenerating `schema/*.json`
+ * from the types during the test and diffing against the committed copy.
+ *
+ * That guard presumes the schema is the primary artifact and the JSON is a
+ * derived one. Here the TypeScript type is primary, and the guard has to be
+ * inverted instead.
+ *
+ * pi can afford strict runtime validation because it is a single client and a
  * single server in one language, with an explicit README statement that it
  * makes no compatibility promise. Duya has four independently deployed hosts
- * (main process, renderer, subprocess agent, HTTP+SSE gateway) plus a
- * CLI, each versioned separately, each able to be one minor behind.
+ * (main process, renderer, subprocess agent, HTTP+SSE gateway) plus a CLI,
+ * each versioned separately, each able to be one minor behind. Validating
+ * against a committed schema would force every host to ship the schema AND a
+ * validator, and would make an older host crash on a newer runtime's added
+ * field. Forward compatibility is handled instead by the loose-decode-then-
+ * strict-validate split in `codecs.ts`.
  *
- * Runtime validation against a committed schema would force every host to ship
- * the schema AND a validator, and would make an older host crash on a newer
- * runtime's added field — the exact failure 07 §13 forbids. So the source of
- * truth here is the TypeScript type, and forward compatibility is handled by
- * the loose-decode-then-strict-validate split in `codecs.ts`.
- *
- * ## What this test is for, then
+ * ## What this test is for
  *
  * The failure mode a schema directory brings is not "the schema is stale". It
  * is "someone hand-wrote a `schema/*.json`, nothing generates it, nothing reads

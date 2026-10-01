@@ -1,12 +1,10 @@
 /**
  * Payload shapes for every event on the wire.
  *
- * Design source: 07-agent-protocol-spec.md §4.1, §3.1, §14.
- *
  * ## `RunEventPayloads` is the single source of truth
  *
- * It is an INTERFACE keyed by event type, which buys two things 07 §4 was
- * reaching for with a mapped type over a const array:
+ * It is an INTERFACE keyed by event type, which buys two things a mapped type
+ * over a const array cannot:
  *
  *  1. `RunEvent` is derived from `keyof RunEventPayloads`, so adding a key
  *     widens the union and the compiler immediately flags every exhaustive
@@ -20,10 +18,10 @@
  * instead of the interface. See `docs/architecture/10-reference-comparison.md`
  * §1 for why grok-build can use a macro here and TypeScript cannot.
  *
- * ## 07 §14 exclusions enforced by construction
+ * ## Exclusions enforced by construction
  *
  *  - No `Map` / `Set` anywhere: `ToolPermissionRulesBySource` holds three
- *    `ReadonlyMap`s and cannot cross JSON (07 §3.1). `PermissionRulesWire`
+ *    `ReadonlyMap`s and cannot cross JSON. `PermissionRulesWire`
  *    is the flattened `Record` replacement.
  *  - No callbacks, no `ToolResult.pendingExtraResult` / `pendingContext`
  *    (delayed handles that must be resolved BEFORE the protocol boundary).
@@ -423,7 +421,7 @@ export interface HookInvokedPayload {
 export type DiagnosticLevel = 'debug' | 'info' | 'warn' | 'error';
 
 /** Its own channel so an evaluator can consume it while the product UI
- *  ignores it (07 §4.1). */
+ *  ignores it. */
 export interface DiagnosticPayload {
   readonly level: DiagnosticLevel;
   readonly message: string;
@@ -441,7 +439,7 @@ export interface DiagnosticTracePayload {
 // ── extension ─────────────────────────────────────────────────────────────
 
 /** Forward-compatibility escape hatch. A host MUST ignore unknown namespaces
- *  and MUST NOT persist an unknown event (07 §13). */
+ *  and MUST NOT persist an unknown event. */
 export interface ExtensionCustomPayload {
   readonly namespace: string;
   readonly name: string;

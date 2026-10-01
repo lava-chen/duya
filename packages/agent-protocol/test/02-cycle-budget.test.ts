@@ -1,8 +1,6 @@
 /**
  * Drift test #2 — the cycle budget never ratchets the wrong way.
  *
- * Design source: 07-agent-protocol-spec.md §15 (#2), §16.2. Baseline: 05:327.
- *
  * ## What "18" actually measures
  *
  * The spec says "the SCC count of `packages/agent` must always be <= 18". The
@@ -190,7 +188,7 @@ describe('drift #2: the cycle budget', () => {
   it(`stays at or below the baseline of ${BASELINE_SCC_COUNT}`, () => {
     expect(
       sccs.length,
-      `cyclic groups went from <= ${BASELINE_SCC_COUNT} to ${sccs.length}. 07 §16.2: M2-M11 must not re-tangle what M1 untangles.`,
+      `cyclic groups went from <= ${BASELINE_SCC_COUNT} to ${sccs.length}. The migration must not re-tangle what it untangles.`,
     ).toBeLessThanOrEqual(BASELINE_SCC_COUNT);
   });
 
@@ -201,7 +199,7 @@ describe('drift #2: the cycle budget', () => {
 
     expect(
       offenders,
-      'the protocol package is a leaf by construction (07 §1); it cannot participate in a cycle',
+      'the protocol package is a leaf by construction; it cannot participate in a cycle',
     ).toEqual([]);
   });
 
@@ -218,8 +216,8 @@ describe('drift #2: the cycle budget', () => {
   });
 
   it('is a leaf: nothing outside the package imports it yet', () => {
-    // PP-1 builds the package without adopting it. Once PP-2 starts moving
-    // consumers, this assertion is expected to change — and changing it is
+    // The package is built without being adopted yet. Once consumers start
+    // moving, this assertion is expected to change — and changing it is
     // the point, because it must be a deliberate edit rather than a surprise.
     const external: string[] = [];
     for (const [from, deps] of graph) {

@@ -1,23 +1,20 @@
 /**
  * Drift test #9 — the legacy SSE bridge covers everything it must.
  *
- * Design source: 07-agent-protocol-spec.md §15 (#9), §5.
- *
  * Two failure classes this catches:
  *
- *  1. A legacy event with no mapping. Silent data loss at the PP-3 cutover.
+ *  1. A legacy event with no mapping. Silent data loss at the cutover.
  *  2. A mapping to an event type the registry does not have. The mapping table
  *     is a `Record<EventType, ...>` at the type level, so a typo there is a
  *     compile error; what this test adds is the OTHER direction, plus a
  *     cross-package check that the legacy list still matches `@duya/ai`.
  *
- * The cross-package check reads `packages/ai/src/types.ts` as TEXT rather than
- * importing `@duya/ai`. Two reasons: importing it would add a build dependency
- * from the protocol package to another domain package (the grok
- * `sampling-types` mistake in reverse), and in a worktree the bare specifier
- * resolves through the node_modules junction to the PRIMARY checkout's dist —
- * the trap recorded as T1 in plan 584 §7. Reading this worktree's source
- * avoids both.
+ * The cross-package check reads `packages/ai/src/types.ts` as text rather than
+ * importing `@duya/ai`. Importing it would add a build dependency from the
+ * protocol package to another domain package (the grok `sampling-types`
+ * mistake in reverse). It would also be wrong inside a worktree, where a bare
+ * specifier resolves through the node_modules junction to the PRIMARY
+ * checkout's dist instead of the working tree's source.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -86,7 +83,7 @@ describe('drift #9: the legacy mapping table is total and well-formed', () => {
   });
 
   it('tool_use is the one legacy event that expands into two protocol events', () => {
-    // 07 §5: the merged legacy event is exactly where `is_error` was lost.
+    // The merged legacy event is exactly where `is_error` was lost.
     expect(SSE_EVENT_TO_PROTOCOL['tool_use']).toEqual(['tool.call_started', 'tool.call_completed']);
   });
 

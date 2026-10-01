@@ -1,8 +1,6 @@
 /**
  * Resume boundaries.
  *
- * Design source: 07-agent-protocol-spec.md §9.
- *
  * The load-bearing rule is the refusal: **a resume whose `seq` falls strictly
  * between a `tool.call_started` and its terminal event is REJECTED.** Tool side
  * effects are not transactional, so mid-tool recovery silently re-executes

@@ -1,14 +1,12 @@
 /**
  * Codecs: JSON in, envelope out. LENIENT decode, STRICT validate.
  *
- * Design source: 07-agent-protocol-spec.md §5 and §13.
- *
  * ## The one place this file deliberately diverges from pi-protocol
  *
  * pi-protocol's `StrictObject` helper forces `additionalProperties: false` on
  * every object, and its README states "All schemas reject unknown object
- * properties." 07 §13.4 requires the OPPOSITE: the DECODE path must ignore
- * unknown fields, and strictness belongs to a separate `validate` call.
+ * properties." The decode path here must do the OPPOSITE: ignore unknown
+ * fields, and leave strictness to a separate `validate` call.
  *
  * This is not a style difference. pi can afford strict decode because its README
  * ends with "The protocol is experimental and has no compatibility guarantees."
@@ -52,8 +50,7 @@ function isPositiveInt(value: unknown): value is number {
 
 /**
  * LENIENT decode. Never throws on an unknown event TYPE — returns an
- * `UnknownEnvelope` instead (07 §13.2, and the lesson from grok's
- * `from_wire_str -> Option`, 10-reference-comparison.md §1).
+ * `UnknownEnvelope` instead.
  *
  * An unknown event is never durable and must never be persisted. The host's
  * default branch renders nothing and records a `diagnostic` at debug level.
@@ -173,7 +170,7 @@ export function validate(raw: unknown, options: DecodeOptions = {}): ValidationI
   const spec = EVENT_REGISTRY.specOf(type);
   if (spec && spec.durability === 'durable') {
     // A durable event must be persistable: no functions, no undefined, no
-    // Map/Set. 07 §14 lists the categories that cannot cross the boundary.
+    // Map/Set. Those are the categories that cannot cross a JSON boundary.
     issues.push(...checkSerializable(payload, '$.payload', 0, limits));
   }
 

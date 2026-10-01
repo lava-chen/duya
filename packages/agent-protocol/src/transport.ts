@@ -1,8 +1,6 @@
 /**
  * Transport BINDINGS. Zero adapters live here.
  *
- * Design source: 07-agent-protocol-spec.md §12.
- *
  * The protocol defines ports, not sockets. `EventSink` / `EventSource` are
  * channel primitives and live in `envelope.ts`; this module is the layer that
  * binds a manifest, an input, and a control channel into one host-facing

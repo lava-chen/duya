@@ -1,8 +1,6 @@
 /**
  * One minimal legal payload per event.
  *
- * Design source: 07-agent-protocol-spec.md §1 and §15 drift tests #3 / #4.
- *
  * ## Why this ships in `dist`
  *
  * Other packages need the SAME payloads: `agent-core` proves exhaustive switch

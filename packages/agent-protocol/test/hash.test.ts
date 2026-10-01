@@ -1,7 +1,6 @@
 /**
  * The pure-TS SHA-256 and canonical JSON, pinned against an independent oracle.
  *
- * Design source: 07-agent-protocol-spec.md §3 (fingerprint) and §15 (#1, which
  * is the rule that makes this file necessary).
  *
  * ## Why a hand-rolled hash carries real risk

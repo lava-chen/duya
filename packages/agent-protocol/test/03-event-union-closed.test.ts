@@ -2,8 +2,6 @@
  * Drift test #3 — the event union is closed, and decoding never throws on an
  * unknown type.
  *
- * Design source: 07-agent-protocol-spec.md §15 (#3), §13.
- *
  * The "never throws" half is the load-bearing one. Four hosts deploy
  * independently, so an old host WILL meet a new runtime. pi-protocol solves
  * the same problem by rejecting unknown properties outright, which it can only
@@ -88,7 +86,7 @@ describe('drift #3: forward compatibility', () => {
   });
 
   it('an unknown event is never treated as durable', () => {
-    // 07 §13.3: unknown events are never persisted.
+    // Unknown events are never persisted.
     expect(EVENT_REGISTRY.specOf('brand.new.event')).toBeUndefined();
     expect(EVENT_REGISTRY.durable).not.toContain('brand.new.event' as never);
   });
@@ -123,7 +121,7 @@ describe('drift #3: strict validation is a separate, opt-in path', () => {
 
   it('the error for an unknown type does not echo the raw payload back', () => {
     // pi-protocol: "Validation errors do not retain rejected payloads."
-    // 07 §3 forbids credentials on the wire; echoing the payload into an error
+    // Credentials are forbidden on the wire; echoing the payload into an error
     // would put them straight into logs and IPC.
     let thrown: unknown;
     try {

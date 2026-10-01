@@ -1,15 +1,13 @@
 /**
  * The closed event registry.
  *
- * Design source: 07-agent-protocol-spec.md §4.
- *
  * This is the TypeScript answer to grok-build's `define_methods!` macro
  * (`docs/architecture/10-reference-comparison.md` §1). Rust can generate a
  * union from one list; TypeScript cannot generate a type, so the single source
  * of truth is the `RunEventPayloads` INTERFACE in payloads.ts and this module
  * derives everything else from `keyof` it.
  *
- * ## Why specs and registry are separate files (07 §1)
+ * ## Why specs and registry are separate files
  *
  * Because the registry must have ZERO runtime imports. If `registry.ts`
  * imported payload VALUES it would pull the whole payload graph into every
@@ -39,7 +37,7 @@ export type RunEvent = {
   [K in EventType]: { readonly type: K } & RunEventPayloads[K];
 }[EventType];
 
-/** Unknown-event carrier. `fromEnvelope` NEVER throws (07 §13); it returns
+/** Unknown-event carrier. `fromEnvelope` NEVER throws; it returns
  *  this instead so an old host can meet a new runtime. An unknown event is
  *  therefore never durable and is never persisted. */
 export interface UnknownRunEvent {

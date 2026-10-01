@@ -1,8 +1,6 @@
 /**
  * Capability probing — the mechanism that resolves version skew.
  *
- * Design source: 07-agent-protocol-spec.md §10.
- *
  * ## Probe, don't negotiate
  *
  * semver negotiation fails OPEN: after a minor bump the runtime behaves
@@ -16,7 +14,7 @@
  *
  * ## Resource limits
  *
- * 07 §10 listed `maxEventBytes` with no default and no nesting/element limit.
+ * listed `maxEventBytes` with no default and no nesting/element limit.
  * pi-protocol sets all three explicitly (16 MiB / 1,000,000 / 64) and validates
  * a declared frame length BEFORE buffering its bytes; that ordering is adopted
  * here in framing.ts. See 10-reference-comparison.md §3.2(d).
@@ -78,7 +76,7 @@ export interface RuntimeCapabilities {
   readonly transports: readonly TransportKind[];
   readonly limits: ProtocolLimits;
   /** Lets a host enumerate what it will actually see, so a mismatch is
-   *  diagnosable rather than mysterious (07 §13.5). */
+   *  diagnosable rather than mysterious. */
   readonly eventTypes: readonly EventType[];
 }
 

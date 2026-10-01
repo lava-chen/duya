@@ -1,26 +1,26 @@
 /**
- * Legacy `@duya/ai` SSE surface. ISOLATED AND DEPRECATED.
+ * Legacy `@duya/ai` SSE surface. Isolated and deprecated.
  *
- * Exposed only as `@duya/agent-protocol/legacy`. Never re-exported from the
- * main entry (07 §1). **Delete one release after plan 584 PP-3 lands.**
+ * Reachable only as `@duya/agent-protocol/legacy`, never re-exported from the
+ * main entry.
  *
- * Design source: 07-agent-protocol-spec.md §5.
- *
- * ## Why the legacy union is DECLARED here instead of imported
+ * ## Why the legacy union is declared here instead of imported
  *
  * Importing it from `@duya/ai` would give the protocol package a runtime
- * dependency on another domain package — the exact `xai-grok-sampling-types`
- * mistake (`docs/architecture/10-reference-comparison.md` §1.1), just in the
- * other direction. So the shape is declared structurally and
- * `test/09-sse-legacy-bridge.test.ts` pins it against the real union with a
- * type-level equality assertion. If `@duya/ai` adds an event, the test fails;
- * the protocol package stays a leaf.
+ * dependency on another domain package — the `xai-grok-sampling-types`
+ * mistake, just in the other direction. So the shape is declared structurally
+ * and `test/09-sse-legacy-bridge.test.ts` pins it against the real union by
+ * reading that package's source. If `@duya/ai` adds an event, the test fails
+ * and the protocol package stays a leaf.
  *
  * ## The migration is table-driven
  *
- * `SSE_EVENT_TO_PROTOCOL` is the whole plan for PP-3. Note that one legacy
+ * `SSE_EVENT_TO_PROTOCOL` is the whole cutover plan. Note that one legacy
  * event can expand into two protocol events: `tool_use` carries both the
  * invocation and its result, which is exactly where `is_error` was being lost.
+ *
+ * @deprecated Scheduled for removal one release after the router cutover.
+ * Import protocol events from `@duya/agent-protocol` instead.
  */
 
 import type { EventType } from '../events/registry.js';
@@ -139,7 +139,11 @@ export const UNDECLARED_ROUTER_EVENTS: Readonly<Record<string, readonly EventTyp
   research_report: [],
 };
 
-/** Every legacy verb mapped to a protocol action. Delete after PP-5. */
+/**
+ * Every legacy verb mapped to a protocol action.
+ *
+ * @deprecated Removed together with the rest of this module.
+ */
 export const LEGACY_PERMISSION_ACTION_MAP: Readonly<Record<string, PermissionAction>> = {
   allow_once: 'allow',
   allow_for_session: 'allow_always',
@@ -164,16 +168,16 @@ export function isLegacyCompactionType(type: string): boolean {
 export const NEW_PROTOCOL_EVENTS: Readonly<Partial<Record<EventType, string>>> = {
   'run.started':
     'The chat path never had a run concept — worker events carried only a sessionId. This carries the manifest hash and runtime identity, which is what makes resume verifiable.',
-  'run.paused': 'Pause/resume did not exist. 07 §9 defines the boundaries; without this event a paused run is indistinguishable from a stalled one.',
+  'run.paused': 'Pause/resume did not exist. Without this event a paused run is indistinguishable from a stalled one.',
   'turn.completed': 'The legacy surface had turn_start with no terminal event, so a turn that never finished was indistinguishable from one that had not started.',
   'assistant.message_finalized':
     'The authoritative assistant message. Legacy streamed deltas and never marked the point where the message stopped changing, which is why compaction had to guess a boundary.',
   'permission.resolved':
-    'THE BIG ONE. The legacy surface had permission_request and no resolution event, so an answered or timed-out permission left no audit trail. 07 §7.2 requires every decision to be recorded, including timeout and cancellation.',
+    'The legacy surface had permission_request and no resolution event, so an answered or timed-out permission left no audit trail. Every decision must be recorded, including timeout and cancellation.',
   'permission.expired':
     'Emitted before permission.resolved{deny,timeout} so a reconnecting host can reconstruct that a deadline passed rather than inferring it from a deny.',
   diagnostic:
-    'A dedicated channel so an evaluator can consume structured logs while the product UI ignores them (07 §4.1). Legacy `status` was a human string and served both audiences badly.',
+    'A dedicated channel so an evaluator can consume structured logs while the product UI ignores them. Legacy `status` was a human string and served both audiences badly.',
   'diagnostic.trace': 'Span records. The legacy surface had a trace id and nothing to attach to it.',
   'extension.custom':
     'The forward-compatibility escape hatch. Without it, an older host meeting a newer runtime has nowhere to put a forward-compatible extension and would have to drop or crash.',

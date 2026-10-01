@@ -1,8 +1,6 @@
 /**
  * Drift test #12 — no secret crosses the manifest boundary.
  *
- * Design source: 07-agent-protocol-spec.md §15 (#12), §3.1, §14.
- *
  * This is a guard against a specific regression: `RunManifest.env` exists
  * precisely because credentials are inlined today in
  * `packages/agent/src/process/worker-protocol.ts:7` (`InitCommand.providerConfig.apiKey`)

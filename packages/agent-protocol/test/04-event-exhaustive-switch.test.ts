@@ -1,8 +1,6 @@
 /**
  * Drift test #4 — exhaustive switch handling.
  *
- * Design source: 07-agent-protocol-spec.md §15 (#4).
- *
  * Two halves:
  *
  *  - COMPILE TIME. `assertNever` below only accepts `never`. If a new event is

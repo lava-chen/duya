@@ -1,8 +1,6 @@
 /**
  * Drift test #5 — the event type snapshot.
  *
- * Design source: 07-agent-protocol-spec.md §15 (#5).
- *
  * `registry.all`, sorted, must equal the committed
  * `__snapshots__/event-types.json`. Adding an event therefore has to be a
  * deliberate act whose diff is reviewable, rather than a side effect of

@@ -1,8 +1,6 @@
 /**
  * The event envelope and the control plane.
  *
- * Design source: 07-agent-protocol-spec.md §2 and §2.1.
- *
  * ## Why the wire CHANNELS live here and not in `transport.ts`
  *
  * `EventSink` / `EventSource` describe how envelopes move, not how a host binds
@@ -13,7 +11,7 @@
  * envelope shapes they carry, `run.ts` depends on this module, and `transport.ts`
  * depends on both. One direction, no cycle.
  *
- * ## `seq` ownership moved from the host to the runtime (07 §2.1)
+ * ## `seq` ownership moved from the host to the runtime
  *
  * Today `seqNum` is a PER-CONNECTION counter (router.ts:1329, assigned at
  * :1568), and `handleGetChat` replays buffered events through a FRESH counter
