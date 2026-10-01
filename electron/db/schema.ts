@@ -1,5 +1,6 @@
 import { getLogger, LogComponent } from '../logging/logger';
 import { ensureToolApprovalTables } from './toolApprovalState';
+import { ensurePluginHookConsentTables } from './pluginHookConsent';
 import { ensureWorkbenchTables } from '../conductor/workbench-store';
 import { createSendMessageStateTables } from './sendMessageState';
 import { deriveConnectionSlug } from '@duya/plugin-core/src/mcp/core/alias.js';
@@ -506,6 +507,10 @@ export function initializeSchema(db: BetterSqlite3Db): void {
   ensureToolApprovalTables(db);
   // Plan 570: canvas workbench runtime (data sources + handler code).
   ensureWorkbenchTables(db);
+  // Plan 583: user consent for plugin hook execution. The agent reads this to
+  // decide whether a third-party plugin's command/process hooks may run; an
+  // absent row means not granted.
+  ensurePluginHookConsentTables(db);
 }
 
 /**
@@ -2716,6 +2721,17 @@ export const migrations: Migration[] = [
         taken.add(slug);
         update.run(slug, row.id);
       }
+    },
+  },
+  {
+    // Plan 583: persistent user consent for plugin hook execution. Idempotent
+    // DDL also runs as a self-repair step in initializeSchema, matching the
+    // plan-498 side-table pattern. Absent row = not granted, so this table
+    // being empty on an upgraded database fails closed rather than open.
+    id: 59,
+    name: 'add_plugin_hook_consent',
+    migrate(db: BetterSqlite3Db): void {
+      ensurePluginHookConsentTables(db);
     },
   },
 ];

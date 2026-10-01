@@ -59,6 +59,7 @@ import {
 import type { QueuedCommand } from '../queue/index.js';
 import { generateSessionTitle } from '../session/title-generator.js';
 import { getSteeringConfig, setExtraHookFiles, isPluginTrustLevel, type PluginHookFile } from '../hooks/config.js';
+import { isLocalExecutionAllowed } from '@duya/plugin-core';
 import { classifyError, APIErrorType, computeContextComposition, normalizePromptTokens, type ContextEstimateSource } from '@duya/ai';
 import type { PromptProfile } from '../prompts/modes/types.js';
 import { isBotAgentProfile } from '../prompts/index.js';
@@ -3584,6 +3585,26 @@ async function discoverPluginHookFiles(): Promise<PluginHookFile[]> {
     const enabledPlugins = installed.filter(
       (item) => item.enabled === true && typeof item.id === 'string' && typeof item.installPath === 'string'
     );
+    if (enabledPlugins.length === 0) return files;
+
+    // Plan 583 seam C: a plugin's command/process hooks are arbitrary local
+    // code execution, so the user's recorded answer is required first. Fetched
+    // once for the whole batch rather than per plugin.
+    //
+    // If this read fails we fall back to an empty map, which makes every
+    // non-first-party plugin resolve to "not granted" and have those hooks
+    // dropped. That is deliberate: a consent store we cannot read must not
+    // become a consent store that permits everything.
+    let consent: Record<string, string> = {};
+    try {
+      const fetched = await pluginDb.hookConsentList();
+      if (fetched && typeof fetched === 'object' && !Array.isArray(fetched)) {
+        consent = fetched as Record<string, string>;
+      }
+    } catch (err) {
+      warn('[Agent-Process] Could not read plugin hook consent; treating all as not granted:', err);
+    }
+
     for (const plugin of enabledPlugins) {
       // A registry row with no usable trust level contributes nothing. The
       // gate in the hooks config layer fails closed on an unrecognized level,
@@ -3596,9 +3617,14 @@ async function discoverPluginHookFiles(): Promise<PluginHookFile[]> {
         );
         continue;
       }
+      const decision = consent[plugin.id as string];
+      const localExecutionAllowed = isLocalExecutionAllowed(
+        plugin.trustLevel,
+        decision === 'granted' ? 'granted' : null,
+      );
       const hooksFile = path.join(plugin.installPath as string, 'hooks', 'hooks.json');
       if (existsSync(hooksFile)) {
-        files.push({ path: hooksFile, trustLevel: plugin.trustLevel });
+        files.push({ path: hooksFile, trustLevel: plugin.trustLevel, localExecutionAllowed });
       }
     }
     if (files.length > 0) {

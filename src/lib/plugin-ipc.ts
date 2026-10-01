@@ -10,6 +10,8 @@ import type {
   PluginIpcDetailResponse,
   CapabilityIndexItem,
   PluginSetupLoadResult,
+  PluginHookConsentStatus,
+  PluginHookConsentDecision,
 } from './plugin-types';
 import type { WorkflowTemplate } from '@duya/plugin-core';
 
@@ -136,6 +138,15 @@ export function getPluginAPI() {
     },
     setupSave: async (payload: { pluginId: string; values: Record<string, string> }): Promise<{ success: boolean; data?: { ok: boolean }; error?: string }> => {
       return api.plugin.setupSave(payload) as Promise<{ success: boolean; data?: { ok: boolean }; error?: string }>;
+    },
+    // Plan 583 seam C — a plugin may declare command/process hooks, which the
+    // agent spawns for real. These read what the plugin wants to run and record
+    // the user's answer; the agent enforces it before executing anything.
+    hookConsentGet: async (pluginId: string): Promise<{ success: boolean; data?: PluginHookConsentStatus; error?: string }> => {
+      return api.plugin.hookConsent.get(pluginId) as Promise<{ success: boolean; data?: PluginHookConsentStatus; error?: string }>;
+    },
+    hookConsentSet: async (pluginId: string, decision: PluginHookConsentDecision): Promise<{ success: boolean; data?: { pluginId: string; decision: PluginHookConsentDecision }; error?: string }> => {
+      return api.plugin.hookConsent.set(pluginId, decision) as Promise<{ success: boolean; data?: { pluginId: string; decision: PluginHookConsentDecision }; error?: string }>;
     },
   };
 }

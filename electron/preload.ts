@@ -971,6 +971,25 @@ export interface PluginAPI {
   detail: {
     get: (pluginId: string) => Promise<{ success: boolean; data: PluginCatalogEntry | null; error?: string }>
   }
+  // Plan 583 seam C — a plugin's command/process hooks are arbitrary local
+  // code execution. `get` reports what the plugin wants to run and the
+  // recorded answer; `set` records the user's answer, which the agent reads
+  // before it will execute anything.
+  hookConsent: {
+    get: (pluginId: string) => Promise<{
+      success: boolean
+      data?: {
+        required: boolean
+        decision: 'granted' | 'denied' | null
+        localExecutionHooks: Array<{ event: string; handler: string }>
+      }
+      error?: string
+    }>
+    set: (
+      pluginId: string,
+      decision: 'granted' | 'denied',
+    ) => Promise<{ success: boolean; data?: { pluginId: string; decision: 'granted' | 'denied' }; error?: string }>
+  }
   health: {
     list: () => Promise<{ success: boolean; data: PluginHealthReport[]; error?: string }>
   }
@@ -2854,6 +2873,12 @@ const electronAPI: ElectronAPI = {
     },
     detail: {
       get: (pluginId: string) => ipcRenderer.invoke('plugin:detail:get', pluginId),
+    },
+    hookConsent: {
+      get: (pluginId: string) =>
+        ipcRenderer.invoke('plugin:hook-consent:get', { pluginId }),
+      set: (pluginId: string, decision: 'granted' | 'denied') =>
+        ipcRenderer.invoke('plugin:hook-consent:set', { pluginId, decision }),
     },
     health: {
       list: () => ipcRenderer.invoke('plugin:health:list'),

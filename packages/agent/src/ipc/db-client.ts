@@ -935,6 +935,14 @@ export const pluginDb = {
   registryList: () => sendDbRequest('plugin:registry:list', {}),
 
   /**
+   * Plan 583 seam C — the user's recorded answers for whether a plugin may run
+   * local processes from its hook events. Shape:
+   * `{ [pluginId]: 'granted' | 'denied' }`. A plugin id that is absent has not
+   * been decided, which the caller must treat as **not** granted.
+   */
+  hookConsentList: () => sendDbRequest('plugin:hook-consent:list', {}),
+
+  /**
    * Fetch all plugin setup values as a `{ [pluginId]: { [setupKey]: value } }`
    * map. Used by the MCP loader to expand `${setup.X}` references in
    * plugin manifests. Returns an empty object when the setup table is

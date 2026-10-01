@@ -245,6 +245,21 @@ export function resolveHookFilePath(rawPath: string, baseDir: string): string {
 export interface PluginHookFile {
   path: string;
   trustLevel: PluginTrustLevel;
+  /**
+   * Whether this plugin's `command` / `process` hooks may run.
+   *
+   * Those two hook types are arbitrary local code execution: `command` goes
+   * through the shell with `cwd` set to the session working directory,
+   * `process` execs directly, and a `node` command is rewritten onto the app's
+   * own Electron runtime. First-party plugins are exempt; every other origin
+   * needs a recorded `granted` from the user.
+   *
+   * Resolved by the caller rather than here, so this module stays free of IPC
+   * and the gate below stays a pure function of its input. It is required, not
+   * optional: a caller must state the answer, so a forgotten consent lookup
+   * cannot silently widen what runs.
+   */
+  localExecutionAllowed: boolean;
 }
 
 let extraHookFiles: readonly PluginHookFile[] = [];
@@ -273,28 +288,32 @@ export function getExtraHookFiles(): readonly PluginHookFile[] {
 /**
  * Enforce the trust engine's declared capabilities on one plugin hook file.
  *
- * Two rules, both taken verbatim from `TRUST_LEVEL_CAPABILITIES` — this
- * invents no policy of its own, it only enforces what the table already
- * promised:
+ * Three rules, all taken from a decision that already exists rather than
+ * invented here:
  *
  *  - `allowHttpHooks` / `allowAgentHooks` gate the two hook types that can
- *    reach outside the box. `process` and `command` hooks spawn local
- *    processes; that is a separate exposure and is not gated here.
+ *    reach outside the box.
  *  - `maxHooks` caps the hook commands contributed by a single plugin, so a
  *    plugin cannot register an unbounded number of dispatch sites.
+ *  - `command` / `process` hooks may run only when the caller resolved the
+ *    user's consent into {@link PluginHookFile.localExecutionAllowed}. These
+ *    are the hook types that spawn something on the user's machine.
+ *
+ * Dropping is per hook, not per file: a plugin whose consent is missing still
+ * keeps the hook types that are safe to run, so refusing local execution does
+ * not silently disable an unrelated prompt hook.
  *
  * Returns the surviving hooks. An unknown trust level yields undefined, so
  * the file contributes nothing.
  */
 function gatePluginHooks(
   settings: HooksSettings,
-  trustLevel: PluginTrustLevel,
-  sourceLabel: string,
+  file: PluginHookFile,
 ): HooksSettings | undefined {
-  const caps = TRUST_LEVEL_CAPABILITIES[trustLevel];
+  const caps = TRUST_LEVEL_CAPABILITIES[file.trustLevel];
   if (!caps) {
     logger.warn(
-      `[HooksConfig] ${sourceLabel}: unknown trust level (plugin hooks skipped)`,
+      `[HooksConfig] ${file.path}: unknown trust level (plugin hooks skipped)`,
     );
     return undefined;
   }
@@ -314,7 +333,9 @@ function gatePluginHooks(
             ? caps.allowHttpHooks
             : hook.type === 'agent'
               ? caps.allowAgentHooks
-              : true;
+              : hook.type === 'command' || hook.type === 'process'
+                ? file.localExecutionAllowed
+                : true;
         if (!permitted || kept >= caps.maxHooks) {
           dropped += 1;
           continue;
@@ -331,7 +352,7 @@ function gatePluginHooks(
 
   if (dropped > 0) {
     logger.warn(
-      `[HooksConfig] ${sourceLabel}: dropped ${dropped} hook(s) not permitted at trust level ${trustLevel} ` +
+      `[HooksConfig] ${file.path}: dropped ${dropped} hook(s) not permitted at trust level ${file.trustLevel} ` +
         `(allowed: ${kept})`,
     );
   }
@@ -392,7 +413,7 @@ function loadPluginHookParts(
       continue;
     }
     const parsed = parseHooksJsonContent(body, file.path);
-    parts.push(parsed ? gatePluginHooks(parsed, file.trustLevel, file.path) : undefined);
+    parts.push(parsed ? gatePluginHooks(parsed, file) : undefined);
   }
   return parts;
 }

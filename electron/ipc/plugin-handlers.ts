@@ -54,6 +54,15 @@ import {
   type WorkflowTemplateSummary,
 } from '../../packages/plugin-core/src/workflows/schema.js';
 import { readPluginManifest } from '../plugins/manifest.js';
+import { getDatabase } from '../db/index';
+import {
+  getPluginHookConsent,
+  getPluginHookConsentMap,
+  setPluginHookConsent,
+  isPluginHookConsentDecision,
+  type PluginHookConsentDecision,
+} from '../db/pluginHookConsent';
+import { resolveHookConsentStatus } from '../plugins/hook-consent.js';
 
 const COMPONENT = 'PluginHandlers' as LogComponent;
 
@@ -618,6 +627,71 @@ export function registerPluginHandlers(): void {
           COMPONENT,
         );
         return { success: false, data: null, error: message };
+      }
+    },
+  );
+
+  // --- plugin:hook-consent:* --- Plan 583 seam C ---
+  // A plugin may declare command/process hooks, which the agent spawns for
+  // real. These handlers are the user-facing half of that gate: the settings
+  // page shows what the plugin wants to run and records the answer, and the
+  // agent reads the recorded answers before it will execute those hooks.
+
+  ipcMain.handle('plugin:hook-consent:get', async (_event, payload: { pluginId: string }) => {
+    try {
+      const pluginId = payload?.pluginId;
+      if (typeof pluginId !== 'string' || pluginId.length === 0) {
+        return { success: false, error: 'pluginId is required' };
+      }
+      const entry = manager.listInstalled().find((p) => p.id === pluginId);
+      if (!entry) {
+        return { success: false, error: `Plugin not installed: ${pluginId}` };
+      }
+      const db = getDatabase();
+      const decision = db ? getPluginHookConsent(db, pluginId) : null;
+      const status = resolveHookConsentStatus(entry.installPath, entry.trustLevel, decision);
+      return { success: true, data: status };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { success: false, error: message };
+    }
+  });
+
+  ipcMain.handle('plugin:hook-consent:list', async () => {
+    try {
+      const db = getDatabase();
+      return { success: true, data: db ? getPluginHookConsentMap(db) : {} };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { success: false, data: {} as Record<string, PluginHookConsentDecision>, error: message };
+    }
+  });
+
+  ipcMain.handle(
+    'plugin:hook-consent:set',
+    async (_event, payload: { pluginId: string; decision: PluginHookConsentDecision }) => {
+      try {
+        const { pluginId, decision } = payload ?? {};
+        if (typeof pluginId !== 'string' || pluginId.length === 0) {
+          return { success: false, error: 'pluginId is required' };
+        }
+        if (!isPluginHookConsentDecision(decision)) {
+          return { success: false, error: `Invalid decision: ${String(decision)}` };
+        }
+        const db = getDatabase();
+        if (!db) {
+          return { success: false, error: 'Database not initialized' };
+        }
+        setPluginHookConsent(db, pluginId, decision);
+        logger.info(
+          'Plugin hook execution consent recorded',
+          { pluginId, decision },
+          COMPONENT,
+        );
+        return { success: true, data: { pluginId, decision } };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { success: false, error: message };
       }
     },
   );

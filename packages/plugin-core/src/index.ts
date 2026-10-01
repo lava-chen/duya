@@ -14,6 +14,16 @@ export {
 } from './security/trust-engine';
 export type { PluginTrustInfo, TrustLevelCapability } from './security/trust-engine';
 
+// Plan 583 seam C: the shared rule for whether a plugin's command/process
+// hooks may run. Exported from the barrel so the main process (which renders
+// the consent UI) and the agent (which enforces the gate) cannot disagree.
+export {
+  LOCAL_EXECUTION_HOOK_TYPES,
+  isLocalExecutionAllowed,
+  isHookConsentDecision,
+} from './security/hook-consent';
+export type { HookConsentDecision } from './security/hook-consent';
+
 // Plan 584 Phase 3: PermissionService was removed. It kept an in-memory map
 // of granted permissions that nothing ever read, duplicating
 // `PluginRegistryEntry.grantedPermissions` — the single persisted record that

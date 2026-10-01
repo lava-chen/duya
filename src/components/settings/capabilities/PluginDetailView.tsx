@@ -14,6 +14,7 @@ import type { WorkflowTemplate, WorkflowTemplateSummary } from "@duya/plugin-cor
 import { instantiateWorkflow, extractVariables, WorkflowInstantiateError, getTemplatePrompt } from "@duya/plugin-core";
 import { tierRequiresConfirmation, tierRequiresExplicitConfirmation, bumpPermissionTier } from "@duya/plugin-core";
 import { RuntimeStatusBadge } from "./RuntimeStatusBadge";
+import { PluginHookConsentCard } from "./PluginHookConsentCard";
 import {
   buildIncludes,
   getUsageExamples,
@@ -891,6 +892,11 @@ export function PluginDetailView({
                 </div>
               </div>
             )}
+
+            {/* Plan 583 seam C: informed consent for a plugin that runs local
+                processes from its hooks. Renders nothing when the plugin
+                declares no command/process hooks or is first-party. */}
+            {isInstalled && <PluginHookConsentCard pluginId={installed!.id} />}
 
             {/* Information */}
             <div className="space-y-3">

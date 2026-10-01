@@ -29,6 +29,8 @@ import { getLogger, LogComponent } from '../logging/logger';
 import { testProviderConnection } from '../ipc/net-handlers';
 import { getPluginManager } from '../plugins/PluginManager';
 import { readPluginManifest } from '../plugins/manifest';
+import { getDatabase } from '../db/index';
+import { getPluginHookConsentMap } from '../db/pluginHookConsent';
 import { resolvePermissionProfile } from '../db/permission-resolver';
 import type { PermissionProfile } from '../lib/permission-profile';
 import { getCoreStores } from '../db/core-connection';
@@ -2397,6 +2399,14 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
           return item;
         }
       });
+    }
+
+    case 'plugin:hook-consent:list': {
+      // Plan 583 seam C: the agent needs the user's recorded answers before it
+      // will execute a plugin's command/process hooks. Returns the bare map
+      // (not the IPC envelope) because db-bridge cases hand back unwrapped data.
+      const db = getDatabase();
+      return db ? getPluginHookConsentMap(db) : {};
     }
 
     case 'plugin:setup:list-all': {

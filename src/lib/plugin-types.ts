@@ -621,3 +621,38 @@ export interface PluginSetupLoadResult {
   fields: PluginSetupFieldDef[];
   values: Record<string, string>;
 }
+
+/**
+ * Plan 583 seam C — the user's answer about a plugin running local processes.
+ *
+ * A plugin's `hooks/hooks.json` may declare `command` / `process` hooks, which
+ * the agent spawns for real: `command` through the shell with `cwd` set to the
+ * session working directory, `process` as a direct exec, and a `node` command
+ * rewritten onto the app's own Electron runtime. That is arbitrary local code
+ * execution under the user's full privileges, so nothing outside the first-party
+ * tier may run it without a recorded `granted`.
+ *
+ * Note this is a **runtime IPC payload**, not a manifest field — a plugin does
+ * not declare it. What the plugin declares are the hooks; this describes them
+ * and records the answer.
+ */
+export type PluginHookConsentDecision = 'granted' | 'denied';
+
+export interface PluginLocalExecutionHook {
+  /** Hook event the command is bound to, e.g. `PreToolUse`. */
+  event: string;
+  /** Human-readable command line the executor will run. */
+  handler: string;
+}
+
+export interface PluginHookConsentStatus {
+  /**
+   * True when the user has to decide: the plugin declares a local-execution
+   * hook and is not first-party. False means the question does not apply.
+   */
+  required: boolean;
+  /** The recorded answer, or null when the user has not been asked yet. */
+  decision: PluginHookConsentDecision | null;
+  /** Every local-execution hook the plugin declares, shown for informed consent. */
+  localExecutionHooks: PluginLocalExecutionHook[];
+}
