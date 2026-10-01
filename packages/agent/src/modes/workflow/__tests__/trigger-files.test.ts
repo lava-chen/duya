@@ -259,6 +259,34 @@ describe('WorkflowFileRegistry (save-as)', () => {
     }
   });
 
+  it('constructing the registry does NOT create directories in the project', () => {
+    // projectDir is the session working directory — usually a cloned repo.
+    // `workflow:defs:list` constructs this registry on every open of the
+    // definitions panel, so an eager mkdir here used to drop `.duya/workflows/`
+    // into a repo the user never asked us to touch. Put the mkdir back and this
+    // goes red.
+    const globalDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-g-'));
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-p-'));
+    try {
+      const registry = new WorkflowFileRegistry(globalDir, projectDir);
+      expect(fs.existsSync(path.join(projectDir, '.duya'))).toBe(false);
+      // Reading is side-effect free too.
+      registry.list();
+      registry.listDetailed();
+      expect(registry.scopeOf('anything')).toBeUndefined();
+      expect(fs.existsSync(path.join(projectDir, '.duya'))).toBe(false);
+
+      // Saving into project scope still works — the directory is created on
+      // demand, which is the only time creating it is justified.
+      const file = registry.save(CRON_DEF, 'project');
+      expect(fs.existsSync(file)).toBe(true);
+      expect(registry.list()).toContain('morning-digest');
+    } finally {
+      fs.rmSync(globalDir, { recursive: true, force: true });
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('listDetailed returns console-ready summaries (params/triggers/counts/validity)', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-detailed-'));
     try {

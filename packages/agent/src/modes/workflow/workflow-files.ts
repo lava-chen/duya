@@ -60,8 +60,13 @@ export class WorkflowFileRegistry {
   constructor(root?: string, projectDir?: string) {
     this.root = root ?? defaultWorkflowRoot();
     this.projectRoot = projectDir ? path.join(projectDir, '.duya', 'workflows') : null;
+    // Only the GLOBAL root is created here. The project root is deliberately
+    // not: `projectDir` is the session's working directory, which is very often
+    // a cloned repository, and merely *constructing* this registry used to drop
+    // a `.duya/workflows/` directory into it — dirtying a git tree the user
+    // never asked us to touch. `save` creates it on demand, which is the only
+    // time creating it is justified.
     fs.mkdirSync(this.root, { recursive: true });
-    if (this.projectRoot) fs.mkdirSync(this.projectRoot, { recursive: true });
   }
 
   private rootsFor(scope: WorkflowScope): string {
