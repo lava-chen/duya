@@ -25,6 +25,40 @@ import { buildSnippet, extractTerms } from './rag_snippet';
 /** CLI-side minimum query length (mirrors MIN_PROMPT_CHARS in the hook). */
 export const MIN_QUERY_CHARS = 3;
 
+/**
+ * Per-term row cap for the 2-char CJK LIKE fallback.
+ *
+ * A leading-wildcard LIKE cannot use an index, so every short-CJK term
+ * costs a full table scan, and an uncapped scan materialises the full
+ * `content` of every match into this process — a common bigram ("调度")
+ * can read a large fraction of the corpus. 200 is 10x the 20-row FTS5
+ * trigram cap, so a noisy bigram still yields a diverse candidate window
+ * for the top-20 output, while the worst case per term is bounded to 200
+ * rows. The window is ordered by rowid so the same query always scores
+ * the same candidate set (an unordered cap would make recall depend on
+ * SQLite's scan order).
+ */
+export const KEYWORD_CANDIDATE_LIMIT = 200;
+
+/**
+ * Row cap for the vector candidate scan.
+ *
+ * The scan still loads every candidate's JSON embedding text and body into
+ * memory and scores cosine in JS; the proper fix (a separate
+ * `document_vectors` BLOB table with cosine pushed into SQL) is out of
+ * scope. Until then this caps the candidate window so the scan cannot grow
+ * with the corpus. 500 keeps a realistic memory index (hundreds of notes)
+ * fully covered while bounding the worst case to 500 rows. Ordered by
+ * rowid, so the window is deterministic across runs.
+ */
+export const VECTOR_CANDIDATE_LIMIT = 500;
+
+/** Clamp a caller-supplied cap to a positive integer (NaN/Infinity → default). */
+function normalizeCandidateLimit(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(1, Math.floor(value));
+}
+
 export interface RagSearchHit {
   title: string;
   /** Path relative to the scan root. */
@@ -90,7 +124,7 @@ function cosine(a: number[], b: number[]): number {
   return denom === 0 ? 0 : dot / denom;
 }
 
-interface ScoredRow {
+export interface ScoredRow {
   root: string;
   relPath: string;
   title: string;
@@ -107,8 +141,16 @@ interface ScoredRow {
  * LIKE fallback for 2-char CJK terms. Rows are ranked by bm25 and scored
  * by the matched-term ratio so keyword hits stay comparable with vector
  * cosine scores instead of flooding the merge with a constant 1.0.
+ *
+ * Exported for the candidate-bound unit test (the hook core exports its
+ * `keywordSearch` twin for the same reason).
  */
-function keywordSearch(db: Database, query: string): ScoredRow[] {
+export function keywordSearch(
+  db: Database,
+  query: string,
+  candidateLimit: number = KEYWORD_CANDIDATE_LIMIT,
+): ScoredRow[] {
+  const limit = normalizeCandidateLimit(candidateLimit, KEYWORD_CANDIDATE_LIMIT);
   const usableTerms = extractTerms(query);
   if (usableTerms.length === 0) return [];
   const trigramTerms = usableTerms.filter((t) => t.length >= 3);
@@ -145,13 +187,19 @@ function keywordSearch(db: Database, query: string): ScoredRow[] {
     }
   }
   if (shortCjkTerms.length > 0) {
+    // Leading-wildcard LIKE is unindexable, so this is a full scan per
+    // term: bound it to a deterministic rowid window instead of reading
+    // every matching body into memory. Columns are the minimum a scored
+    // candidate needs — rowid for dedupe against the FTS candidates, and
+    // title/content for matched-term counting and snippet building.
     const like = db.prepare(
       `SELECT rowid, root, rel_path, title, content FROM documents
-       WHERE title LIKE ? OR content LIKE ?`,
+       WHERE title LIKE ? OR content LIKE ?
+       ORDER BY rowid LIMIT ?`,
     );
     for (const t of shortCjkTerms) {
       const pattern = `%${t}%`;
-      for (const r of like.all(pattern, pattern) as Array<{
+      for (const r of like.all(pattern, pattern, limit) as Array<{
         rowid: number;
         root: string;
         rel_path: string;
@@ -190,7 +238,7 @@ function keywordSearch(db: Database, query: string): ScoredRow[] {
  */
 export async function searchMemoryIndex(
   query: string,
-  opts?: { limit?: number },
+  opts?: { limit?: number; vectorCandidateLimit?: number },
 ): Promise<RagSearchResult> {
   const trimmed = query.trim();
   if (trimmed.length === 0 || trimmed.length < MIN_QUERY_CHARS) {
@@ -230,10 +278,18 @@ export async function searchMemoryIndex(
   }
 
   try {
+    const vectorCandidateLimit = normalizeCandidateLimit(
+      opts?.vectorCandidateLimit ?? VECTOR_CANDIDATE_LIMIT,
+      VECTOR_CANDIDATE_LIMIT,
+    );
+    // Bounded, deterministic vector candidate window: `rowid` is not
+    // selected (the vector rows never key on it) but orders the window so
+    // the same corpus always scores the same candidates. Embeddings stay
+    // JSON text scored in JS — moving them to a `document_vectors` BLOB
+    // table with SQL-side cosine is the real fix, still out of scope.
     const rows = db
-      .prepare('SELECT rowid, root, rel_path, title, content, embedding FROM documents')
-      .all() as Array<{
-      rowid: number;
+      .prepare('SELECT root, rel_path, title, content, embedding FROM documents ORDER BY rowid LIMIT ?')
+      .all(vectorCandidateLimit) as Array<{
       root: string;
       rel_path: string;
       title: string;
