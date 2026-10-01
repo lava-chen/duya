@@ -871,6 +871,59 @@ saved dwf 的真实链路是：resolve → 编译 → 建 run → `runDwfScript`
 `ToolOwner` / `replaceByOwner` / `source.kind:'plugin'` 机制**保留** —— 它是注册表侧的
 能力，不等于「plugin 能跑进程内代码」，留着不构成风险面。
 
+#### 顺着同一套标准验声明式那条路：结论是它**根本没接线**（2026-10-01）
+
+上一条写「声明式那条路没动，因为它跑结构化定义」——那是**推断，不是证据**。按本 plan
+自己定的纪律（先查真实实例再动手），这次把它查实了。结论改变了吗？没有，但**理由变了**：
+不是「它安全」，是**它不可达**。
+
+| 环节 | 实测 |
+|---|---|
+| 执行引擎 | `new WorkflowManager(...)` 全仓**只出现在两个测试文件**（`manager.test.ts` / `trigger-files.test.ts`）。`packages/agent/src` 里零生产构造点 |
+| 触发层 | `launchFromTrigger`（cron / bot / http 三个通道）**零调用方**，只有它自己的定义 |
+| 渲染层 | `workflow:defs:*` 的唯一渲染层封装 `getWorkflowDefIPC`（`src/lib/workflow-ipc.ts:73`）**零调用方** —— 全仓只有它自己那一处引用 |
+| 主进程 | 五个 `workflow:defs:*` handler **仍在注册**（`workflow-handlers.ts:203-286`），用的是 `WorkflowFileRegistry` |
+| 类型面 | `WorkflowPanel.tsx:148` 仍**声明** `defs: { list, get, … }` |
+
+**最刺眼的一条**：`src/lib/workflow-ipc.ts:6` 自己写着「The old YAML-based `defs.*` API
+has been removed」—— 而主进程还在注册它、面板还在声明它。**文档说已删，代码说还在**，
+两边对不上，且没有任何一方会去发现这件事。
+
+**所以 (c)+(b) 的 dwf 修复不需要碰这条路**，而且这一点现在是**证出来的**而不是假定出来的。
+顺带把一个真缺陷修掉了（无争议、无产品维度、零功能损失）：
+
+> `WorkflowFileRegistry` 的构造函数会 `mkdirSync` 传入的 `projectDir`。
+> `projectDir` 是**会话工作目录**，通常就是克隆来的仓库；而 `workflow:defs:list`
+> 每次打开定义面板都会构造一次这个注册表。合起来：**仅仅打开定义面板，就会在用户的
+> 仓库里创建一个 `.duya/workflows/` 目录**、弄脏 git 工作树。已改为只在 `save` 时
+> 按需创建（`save` 本来就有 `mkdirSync`）。
+
+**还剩两个潜在问题，都因为不可达而没有变成漏洞**（留着不修，但必须写下来）：
+
+1. `list()` / `scopeOf()` / `resolveFile()` 仍然按会话 cwd 枚举项目档 —— 与 dwf 修掉
+   的那条**同构**。今天无害只因为没有执行点；**一旦有人把引擎接上，就自动继承了这个洞**。
+2. `workflow:defs:update` 走 `reg.scopeOf(name)` 拿当前档再 `save(def, currentScope)`。
+   若仓库里有个同名 YAML，用户在 UI 里改「全局那份」的编辑请求会**静默写进仓库工作树**。
+
+**这是一个删还是留的决定，不是我能自己拍的**（用户的否决权）。选项：
+
+- **(i) 按 G3 先例删除**：`workflow:defs:*` 五个 handler + `WorkflowFileRegistry` +
+  `WorkflowManager` / `engine` / `trigger` / `planner` / `verify` 这一整层未接线的声明式
+  引擎（注意：`journal` / `host` / `gui-runner` / `BrowserTool` 等被 dwf 复用的**不能删**，
+  得逐个甄别）。好处：几千行死代码从「读代码时的噪音」里消失，且上面两个潜在洞被物理
+  消灭。代价：plan 552 的成果一次性清空，将来要重做。
+- **(ii) 保留但显式标注「已停放 + 已知两个洞」**，并在 `WorkflowFileRegistry` 上加注释
+  写明「接引擎之前必须先做 dwf 那套」。好处：保留资产。代价：死代码继续占着「读代码
+  时的噪音」这个位置，而两个洞靠注释防住 —— 注释防不住的事，这轮已经有过例子了。
+- **(iii) 只接线，不删**：把声明式引擎真的接上（`WorkflowManager` + 触发层），并**同时**
+  套用 dwf 那套（全局档唯一 + 执行前同意门）。这是工作量最大、也最接近「一个好的
+  agent harness 该有的样子」的一条，但它是新功能，不是清理。
+
+我的读法：**(i) 或 (iii)，不建议 (ii)**。(ii) 的失败模式本轮刚发生过 —— 我在 plan 里写
+「声明式那条路是安全的」，实际是没查；注释挡不住的是**没人会去读的那一行注释**。若选
+(iii)，(c)+(b) 的两半必须**同批**接上，否则等于把刚修好的洞换个入口再开一次。
+
+
 
 
 
@@ -1018,6 +1071,14 @@ saved dwf 的真实链路是：resolve → 编译 → 建 run → `runDwfScript`
   变异测试四轮：`recognized` 恒 true → **20 条红**；runner 的门改成 `if (false && …)` →
   **2 条红**；把 project 根加回 `savedWorkflowRoots` → **4 条红**；project 档写入改成
   静默重定向到 global → **1 条红**。四处均已撤回。
+- 2026-10-01：顺手修掉声明式注册表的一个真缺陷：`WorkflowFileRegistry` 构造函数不再
+  `mkdirSync` 传入的 `projectDir`（否则**打开定义面板就会在用户仓库里建目录**）。
+  门禁：`modes/workflow` 16 文件 / **291 用例全绿**；`tsc -p packages/agent` 只剩那条
+  已知假 TS2305。变异测试：把 mkdir 放回构造函数 → **1 条红**。
+- 2026-10-01：**一处自我更正**。上一条决策记录里我写「声明式那条路没动，因为它跑结构化
+  定义而不是任意代码」—— 那是**推断**。查实之后结论没变，但理由变了：它不是安全，是
+  **不可达**（`new WorkflowManager` 只在测试里、`launchFromTrigger` 零调用方、
+  `getWorkflowDefIPC` 零调用方，而主进程仍在注册那五个 handler）。详见 §7 新增段。
 
 
 
