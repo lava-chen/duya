@@ -21,7 +21,10 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Electron main: `electron/` (Main Process + Agent Server + Gateway)
 - Build scripts: `scripts/` (esbuild configs)
 - Docs: `docs/{design-docs,exec-plans,generated,product-specs,references}/`
-- Scoped guides: `docs/exec-plans/README.md`, `docs/design-docs/core-beliefs.md`
+- Scoped guides: `docs/exec-plans/README.md`. Engineering judgement calls that
+  are not derivable from the code are in [Judgement Calls](#judgement-calls)
+  below — `docs/design-docs/` is gitignored, so new design notes do not
+  belong there.
 
 ## Code Review Workspace
 
@@ -393,6 +396,41 @@ gh release view <tag>                  # verify release exists
 - UI: use CSS variables from `globals.css` (`var(--bg-canvas)`, `var(--text)`, `var(--accent)`). Support both light and dark modes (`data-theme`).
 - Follow existing patterns in `src/components/` before creating new ones.
 - Use Tailwind + custom CSS classes from `globals.css`.
+
+## Judgement Calls
+
+Three rules that repeatedly decided what to build. Each is anchored to the
+instance that established it, so they can be overturned by evidence rather
+than argued from taste. Cases and full evidence: [583](./docs/exec-plans/active/583-browser-capability-boundary.md).
+
+**1. Find a real instance before writing code.** A field with no consumer,
+or a directory nothing loads, is not a missing feature. Wiring one creates
+something that *looks* like it governs behaviour while blocking nothing —
+worse than absent, because the next reader assumes it is safe. Zero
+instances → record it, do not build it. Verify with `git grep` for the
+symbol, then confirm the consumer actually *executes*: "the field exists"
+and "the field's value is used" are different claims, and so are "there is
+a place to load it" and "something loads it".
+
+**2. Conclusions expire with their premise.** Plan 584 marked `maxHooks` and
+`allowHttpHooks` N/A because plugin hooks never ran. G2 made them run and
+the verdict silently became wrong. Re-check a "not applicable" conclusion
+whenever the thing it was N/A *about* changes.
+
+**3. A gate and its execution point ship together.** G2 connected plugin
+hook execution without the gate 584 had already recorded for it, which
+let a marketplace or unknown-source plugin POST the user's prompt and full
+tool payloads to a URL of its choosing. The plan's own text had required
+the gate first. When adding a path that executes third-party code or
+reaches outside the box, the declaration, the check and the execution point
+land in the same batch.
+
+Load-bearing details when you do build one — see G4/G5 for the worked
+example: absent consent means **not** granted, never consent; drop per
+record rather than per file, so refusing one capability does not silently
+disable unrelated ones; keep the rule in a package both sides of a process
+boundary import, so they cannot drift; and prove the gate has teeth by
+breaking it and confirming the cases go red.
 
 ## Logging
 
