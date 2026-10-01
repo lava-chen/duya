@@ -737,11 +737,13 @@ gh run view 36833837786 --job 110276373440 --log
   `parts[N] === 'lit' && method === 'V'` 条件链。两种正则交叉扫描得到
   **0 个路由注册 / 16 个路径字面量**。加上 180 个 IPC channel、6 个 MessagePort。
   后果：今天**写不出**针对 Duya 自身 API 的一致性测试。
-- **clone 侧**：38 个目录中 **21 个**有 ≥120 行的协议模块。逐字节取样后，
-  最有参考价值的是 `prime-agent/daemon-protocol.ts`——它有 **4 条正交版本轴**
-  和**逐消息门禁表**（`{ minProtocol, minSchemaRevision, capability }`），
-  正好是 G-1~G-9 的共同解法。`ZCode` 独立地做了同一条路
-  （protocol version 与 wire version 分离）。
+- **clone 侧**：38 个目录中 **21 个**有 ≥120 行的协议模块。对**全部 20 个**
+  机械提取 11 个设计维度后,结论是否定性的但有价值：
+  **只有 `prime-agent` 同时具备「版本轴 + 逐消息门禁 + 双向能力协商 + 拒绝型握手」。**
+  反直觉的数据点：**`codex` 的 `protocol.rs` 是全场最大（6043 行）却没有任何版本协商**——
+  协议做得最大 ≠ 做得成熟。
+  完整对照、方法边界、以及本轮踩到的 3 个假阳性见
+  `docs/architecture/11-protocol-forward-review.md` §2.3–2.5。
 - 完整对比与前瞻结论：`docs/architecture/11-protocol-forward-review.md`。
 
 ### 11.4 顺带清理
