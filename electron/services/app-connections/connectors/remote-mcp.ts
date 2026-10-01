@@ -67,6 +67,12 @@ interface RemoteSession {
   transport: StreamableHTTPClientTransport;
   tools: Map<string, HydratedTool>;
   provider: ProviderId;
+  /**
+   * Plan 583 / ISS-22: the endpoint this session's transport is bound to.
+   * Written into the catalog snapshot so a later session against a different
+   * `remoteMcpUrl` cannot serve this one's tool list.
+   */
+  endpoint: string;
   /** True while a deliberate close() is in flight; onclose during it is not a death. */
   closing: boolean;
   /** Plan 580 D2: server capabilities from the initialize result (ledger). */
@@ -125,6 +131,15 @@ function toolAlias(provider: ProviderId, toolName: string, slug: string): string
  */
 export class RemoteMcpConnector {
   private readonly sessions = new Map<string, RemoteSession>();
+  /**
+   * Plan 583 / ISS-21: connects in flight, keyed by connection id. Without
+   * this, two concurrent calls for the same connection both missed
+   * `this.sessions`, each built its own `StreamableHTTPClientTransport`,
+   * connected, and then raced on `this.sessions.set` — the loser's transport
+   * and its server-side session were never closed. Callers now await one
+   * shared connect.
+   */
+  private readonly connecting = new Map<string, Promise<RemoteSession>>();
   private readonly logger = getLogger();
 
   /**
@@ -343,6 +358,7 @@ export class RemoteMcpConnector {
       writeCatalogCache(
         connectionId,
         session.provider,
+        session.endpoint,
         result.tools.map((tool) => ({
           name: tool.name,
           ...(tool.description !== undefined ? { description: tool.description } : {}),
@@ -360,6 +376,25 @@ export class RemoteMcpConnector {
   ): Promise<RemoteSession> {
     const current = this.sessions.get(connectionId);
     if (current) return current;
+
+    // Plan 583 / ISS-21: join an in-flight connect instead of starting a
+    // second one. The entry is cleared in a finally so a failed connect never
+    // poisons the connection id.
+    const inFlight = this.connecting.get(connectionId);
+    if (inFlight) return inFlight;
+
+    const attempt = this.connectSession(connectionId, provider, token).finally(() => {
+      this.connecting.delete(connectionId);
+    });
+    this.connecting.set(connectionId, attempt);
+    return attempt;
+  }
+
+  private async connectSession(
+    connectionId: string,
+    provider: ProviderId,
+    token: { accessToken: string; tokenType: string },
+  ): Promise<RemoteSession> {
     const config = getProviderConfig(provider);
     if (!config?.remoteMcpUrl) throw new Error(`${provider} is not a Remote MCP provider`);
 
@@ -377,6 +412,7 @@ export class RemoteMcpConnector {
       transport,
       tools: new Map(),
       provider,
+      endpoint: config.remoteMcpUrl,
       closing: false,
       // A fresh ledger starts at `failed`; mark the connect attempt in flight
       // so a session that has not committed yet does not read as failed.
@@ -411,8 +447,17 @@ export class RemoteMcpConnector {
       // starts don't pay the network round-trip on every session. Stale
       // entries re-fetch foreground; fresh entries skip discovery. The
       // transport/auth is still set up either way.
+      //
+      // Plan 583 / ISS-22: the snapshot is only usable when it came from the
+      // endpoint we are connected to right now. Matching on `provider` alone
+      // let a snapshot survive a change of `remoteMcpUrl` and keep serving the
+      // previous server's tool list.
       const cached = readCatalogCache(connectionId);
-      if (cached && cached.provider === provider && isFresh(cached) && cached.tools.length > 0) {
+      const cacheMatchesEndpoint =
+        cached !== null &&
+        cached.provider === provider &&
+        cached.endpoint === config.remoteMcpUrl;
+      if (cacheMatchesEndpoint && isFresh(cached) && cached.tools.length > 0) {
         session.tools = hydrateTools(cached.tools);
         session.ledger.hydrateFromCache(session.tools.size);
       } else {

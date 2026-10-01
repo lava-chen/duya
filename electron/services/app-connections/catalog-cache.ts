@@ -28,6 +28,16 @@ export interface CachedSnapshot {
   fetchedAt: number;
   provider: string;
   /**
+   * Plan 583 / ISS-22: the endpoint this snapshot was actually fetched from
+   * (the provider's resolved `remoteMcpUrl`). The cache file is keyed by
+   * connection id, so without this a snapshot outlives a change of endpoint —
+   * a different tenant, region, or edited config would keep serving the
+   * previous server's tool list while the connection now points somewhere
+   * else. A snapshot with no `endpoint` predates this and is rejected on read
+   * (→ live re-fetch) rather than trusted.
+   */
+  endpoint: string;
+  /**
    * Plan 580 D4: entries written from plan 580 onward carry
    * `schemaVerbatim: true` — their `inputSchema` is the server's
    * canonical form, not the legacy normalized rewrite. Snapshots
@@ -77,6 +87,10 @@ export function readCatalogCache(connectionId: string): CachedSnapshot | null {
     typeof parsed !== 'object' ||
     typeof (parsed as { fetchedAt?: unknown }).fetchedAt !== 'number' ||
     typeof (parsed as { provider?: unknown }).provider !== 'string' ||
+    // Plan 583 / ISS-22: no recorded endpoint means the snapshot cannot be
+    // tied to the endpoint we are about to talk to. Reject rather than serve.
+    typeof (parsed as { endpoint?: unknown }).endpoint !== 'string' ||
+    (parsed as { endpoint: string }).endpoint.length === 0 ||
     !Array.isArray((parsed as { tools?: unknown }).tools) ||
     // Plan 580 D4: pre-canonical snapshots hold normalized (trimmed)
     // schemas — force a live re-fetch instead of serving them.
@@ -92,6 +106,8 @@ export function readCatalogCache(connectionId: string): CachedSnapshot | null {
   return {
     fetchedAt: (parsed as { fetchedAt: number }).fetchedAt,
     provider: (parsed as { provider: string }).provider,
+    endpoint: (parsed as { endpoint: string }).endpoint,
+    schemaVerbatim: (parsed as { schemaVerbatim?: boolean }).schemaVerbatim,
     tools,
   };
 }
@@ -100,6 +116,7 @@ export function readCatalogCache(connectionId: string): CachedSnapshot | null {
 export function writeCatalogCache(
   connectionId: string,
   provider: string,
+  endpoint: string,
   tools: CachedSnapshot['tools'],
 ): boolean {
   const dir = cacheDir();
@@ -112,6 +129,8 @@ export function writeCatalogCache(
   const payload = JSON.stringify({
     fetchedAt: Date.now(),
     provider,
+    // Plan 583 / ISS-22: bind the snapshot to the endpoint it came from.
+    endpoint,
     // Plan 580 D4: marks this snapshot as holding canonical verbatim schemas.
     schemaVerbatim: true,
     tools,
