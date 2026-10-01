@@ -16,6 +16,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { homedir } from 'os';
 import { getLogger, LogComponent } from '../logging/logger';
+import { ShellPathSchema } from './contracts';
 import { isDev } from '../core/bootstrap';
 import { getMainWindow } from '../core/window-manager';
 import { assertTrustedSender } from './trusted-sender';
@@ -144,20 +145,14 @@ export function registerSystemHandlers(): void {
 
   // Shell handlers
   ipcMain.handle('shell:open-path', async (_event, folderPath: string) => {
-    if (typeof folderPath !== 'string' || folderPath.length === 0 || folderPath.length > 4096) {
-      return 'Invalid path';
-    }
-    if (folderPath.includes('\0')) {
+    if (!ShellPathSchema.safeParse(folderPath).success) {
       return 'Invalid path';
     }
     return shell.openPath(folderPath);
   });
 
   ipcMain.handle('shell:show-item-in-folder', async (_event, filePath: string) => {
-    if (typeof filePath !== 'string' || filePath.length === 0 || filePath.length > 4096) {
-      return 'Invalid path';
-    }
-    if (filePath.includes('\0')) {
+    if (!ShellPathSchema.safeParse(filePath).success) {
       return 'Invalid path';
     }
     // Electron resolves symlinks before revealing; reveal the real path
