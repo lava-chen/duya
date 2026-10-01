@@ -428,18 +428,12 @@ export function BotContactListItem({
           size={32}
           working={activeIsBusy}
         />
-        {activeIsBusy ? (
-          <span
-            className="bot-contact-running-ring"
-            title={t("bot.contactStatus.running")}
-            aria-label={t("bot.contactStatus.running")}
-          />
-        ) : hasError ? (
+        {!activeIsBusy && hasError ? (
           <span
             className="bot-contact-badge error"
             title={t("bot.contactBadgeError")}
           />
-        ) : hasUnseen ? (
+        ) : !activeIsBusy && hasUnseen ? (
           <span
             className="bot-contact-badge unseen"
             title={t("bot.contactBadgeUnseen")}

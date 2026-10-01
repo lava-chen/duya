@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
+import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import { useConversationStore, type Thread, type ProjectGroup, type ProjectSortBy } from "@/stores/conversation-store";
 import { sortThreadsBy } from "./section-system";
 import { ThreadListItem } from "../../shared/ThreadListItem";
@@ -33,6 +34,17 @@ import {
 } from "@/lib/project-actions";
 import { RemoveProjectConfirm } from "@/components/projects/RemoveProjectConfirm";
 
+/**
+ * dnd-kit spread payload for the project header row. Built by the
+ * outer sortable wrapper (`SortableProjectGroupItem`) so the visual
+ * component stays decoupled from dnd-kit. Absent means the row is not
+ * in a sortable context and should keep its current click behaviour.
+ */
+export interface ProjectGroupItemSortableBindings {
+  attributes: DraggableAttributes;
+  listeners: DraggableSyntheticListeners;
+}
+
 interface ProjectGroupItemProps {
   project: ProjectGroup;
   threads: Thread[];
@@ -43,11 +55,23 @@ interface ProjectGroupItemProps {
    * sidebar header silently did nothing once a session was inside a project.
    */
   sortBy: ProjectSortBy;
+  /**
+   * Optional drag bindings for the project header row. When provided
+   * the row becomes a drag handle; when omitted the row behaves
+   * exactly as before (click toggles expand/collapse).
+   */
+  sortableBindings?: ProjectGroupItemSortableBindings | null;
 }
 
 const THREAD_COLLAPSE_THRESHOLD = 5;
 
-export function ProjectGroupItem({ project, threads, activeThreadId, sortBy }: ProjectGroupItemProps) {
+export function ProjectGroupItem({
+  project,
+  threads,
+  activeThreadId,
+  sortBy,
+  sortableBindings,
+}: ProjectGroupItemProps) {
   const { t } = useTranslation();
   const { startNewChat, collapsedProjects, toggleProjectExpanded } = useConversationStore();
   // Plan 471: project ↔ section assignment. The selector subscribes to the
@@ -315,11 +339,17 @@ export function ProjectGroupItem({ project, threads, activeThreadId, sortBy }: P
       <div className="project-group-item" onContextMenu={handleContextMenu}>
         {/* Project Header */}
         <div
-          className="project-group-header"
+          className={`project-group-header${sortableBindings ? " sortable" : ""}`}
           title={project.workingDirectory}
           onClick={handleToggle}
           onMouseEnter={() => setIsHovered(true)}
           onMouseLeave={() => setIsHovered(false)}
+          // Same opt-in pattern as ThreadListItem: when the caller hands
+          // us sortable bindings, spread them so the row becomes a drag
+          // handle. The wrapper sequences pointer events so the click
+          // (toggle expand) and the drag (reorder) don't fight.
+          {...(sortableBindings?.attributes ?? {})}
+          {...(sortableBindings?.listeners ?? {})}
         >
           {isExpanded ? (
             <FolderOpenIcon size={14} className="project-group-icon" />

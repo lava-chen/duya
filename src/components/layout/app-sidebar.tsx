@@ -2,6 +2,19 @@
 
 import { useState, useEffect, useMemo, forwardRef, useCallback, useRef } from "react";
 import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  arrayMove,
+} from "@dnd-kit/sortable";
+import {
   GearSixIcon,
   PlusIcon,
   MoonStarsIcon,
@@ -44,6 +57,7 @@ import {
 import { useConversationStore, type Thread, type ProjectGroup, type ViewType, type SettingsTab, type ProjectSortBy, type ProjectGroupBy } from "@/stores/conversation-store";
 import { useSearchPaletteStore } from "@/stores/search-palette-store";
 import { ProjectGroupItem } from "./sidebar/ProjectGroupItem";
+import { SortableProjectGroupItem } from "./sidebar/SortableProjectGroupItem";
 import { ThreadListItem } from "../shared/ThreadListItem";
 import { SidebarSectionItem, type SectionKind } from "./sidebar/SidebarSectionItem";
 import { restoreAllArchivedSessions } from "@/lib/project-actions";
@@ -54,6 +68,7 @@ import {
   SYSTEM_SECTIONS,
 } from "./sidebar/section-system";
 import { useSidebarSectionsStore } from "@/stores/sidebar-sections-store";
+import { restrictVerticalDragWithinContainer } from "@/lib/sidebarDrag";
 import { useBotActivityStore } from "@/stores/bot-activity-store";
 import { useTranslation } from "@/hooks/useTranslation";
 import { Button } from "@/components/ui/Button";
@@ -287,6 +302,43 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     // and would take too many clicks at 5). Kept in renderer state;
     // resets when the user toggles the view mode or a section collapse.
     const FLAT_LIST_THRESHOLD = 20;
+    // Project-level drag-and-drop. Track the active drag id and any
+    // per-section manual override so reordering the visible list stays
+    // independent of `projectSortBy`. The override is keyed by section id,
+    // so a user section and the system project section can both reorder.
+    const [activeProjectDragId, setActiveProjectDragId] = useState<string | null>(null);
+    const [projectOrderOverrides, setProjectOrderOverrides] = useState<Record<string, string[]>>({});
+    const projectSensors = useSensors(
+      useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+      useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    );
+    const reorderProjectsInSection = useSidebarSectionsStore((s) => s.reorderProjectsInSection);
+    const handleProjectDragStart = useCallback((event: { active: { id: string | number } }) => {
+      setActiveProjectDragId(String(event.active.id));
+    }, []);
+    const handleProjectDragCancel = useCallback(() => {
+      setActiveProjectDragId(null);
+    }, []);
+    const handleProjectDragEnd = useCallback((
+      event: { active: { id: string | number }; over: { id: string | number } | null },
+      sectionKey: string,
+      orderedDirs: string[],
+      isUserSection: boolean,
+      sectionId?: string,
+    ) => {
+      setActiveProjectDragId(null);
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const oldIndex = orderedDirs.indexOf(String(active.id));
+      const newIndex = orderedDirs.indexOf(String(over.id));
+      if (oldIndex < 0 || newIndex < 0) return;
+      const reordered = arrayMove(orderedDirs, oldIndex, newIndex);
+      if (isUserSection && sectionId) {
+        void reorderProjectsInSection(sectionId, reordered);
+      } else {
+        setProjectOrderOverrides((prev) => ({ ...prev, [sectionKey]: reordered }));
+      }
+    }, [reorderProjectsInSection]);
     const [flatListVisibleCount, setFlatListVisibleCount] = useState(FLAT_LIST_THRESHOLD);
     // Plan 549 (Track B): the archived roster only ever grows, so it reveals
     // in batches like the other unbounded sections. 10 per click (smaller
@@ -1600,35 +1652,115 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                   />
                 ) : undefined}
               >
-                {items.map((entry) => {
-                  if (entry.itemKind === 'project') {
-                    const project = entry.group;
-                    const projectThreads = threads.filter(
-                      (t) => t.workingDirectory === project.workingDirectory
-                        && t.agentType !== 'sub-agent'
-                        && t.pinned !== 1
-                        && !t.id.startsWith('cron:')
-                        && !t.id.startsWith('gw-')
-                        && !t.id.startsWith('wakeless-'),
+                {(() => {
+                  // Plan: project-level drag-and-drop. Each section owns
+                  // its own <DndContext> so dragging a project never spans
+                  // sections. The user-section path persists via
+                  // `reorderProjectsInSection`; the system project section
+                  // uses an in-memory override (the conversation store does
+                  // not have a persisted manual-order slot yet).
+                  const orderedEntries = (() => {
+                    if (!isProjectSection) return items;
+                    const dirs = projectOrderOverrides[section.id]
+                      ?? items.filter((e) => e.itemKind === 'project').map((e) => e.group.workingDirectory);
+                    const byDir = new Map(
+                      items.filter((e) => e.itemKind === 'project').map((e) => [e.group.workingDirectory, e]),
                     );
-                    return (
-                      <ProjectGroupItem
-                        key={project.workingDirectory}
-                        project={project}
-                        threads={projectThreads}
-                        activeThreadId={activeThreadId}
-                        sortBy={projectSortBy}
-                      />
-                    );
-                  }
+                    const projectEntries: typeof items = [];
+                    for (const d of dirs) {
+                      const e = byDir.get(d);
+                      if (e) {
+                        projectEntries.push(e);
+                        byDir.delete(d);
+                      }
+                    }
+                    const threadEntries = items.filter((e) => e.itemKind !== 'project');
+                    return [...projectEntries, ...threadEntries];
+                  })();
+                  const projectDirs = items
+                    .filter((e) => e.itemKind === 'project')
+                    .map((e) => e.group.workingDirectory);
                   return (
-                    <ThreadListItem
-                      key={entry.thread.id}
-                      thread={entry.thread}
-                      isActive={entry.thread.id === activeThreadId}
-                    />
+                    <DndContext
+                      modifiers={[restrictVerticalDragWithinContainer]}
+                      sensors={projectSensors}
+                      onDragStart={handleProjectDragStart}
+                      onDragEnd={(event) =>
+                        handleProjectDragEnd(
+                          event,
+                          section.id,
+                          projectDirs,
+                          isUser,
+                          isUser ? section.id : undefined,
+                        )
+                      }
+                      onDragCancel={handleProjectDragCancel}
+                    >
+                      <SortableContext items={projectDirs}>
+                        {orderedEntries.map((entry) => {
+                          if (entry.itemKind === 'project') {
+                            const project = entry.group;
+                            const projectThreads = threads.filter(
+                              (t) => t.workingDirectory === project.workingDirectory
+                                && t.agentType !== 'sub-agent'
+                                && t.pinned !== 1
+                                && !t.id.startsWith('cron:')
+                                && !t.id.startsWith('gw-')
+                                && !t.id.startsWith('wakeless-'),
+                            );
+                            return (
+                              <SortableProjectGroupItem
+                                key={project.workingDirectory}
+                                project={project}
+                                threads={projectThreads}
+                                activeThreadId={activeThreadId}
+                                sortBy={projectSortBy}
+                              />
+                            );
+                          }
+                          return (
+                            <ThreadListItem
+                              key={entry.thread.id}
+                              thread={entry.thread}
+                              isActive={entry.thread.id === activeThreadId}
+                            />
+                          );
+                        })}
+                        {/* Floating clone of the project being dragged so the
+                            user sees a ghost line above the list while they
+                            decide where to drop. dropAnimation={null} keeps the
+                            snap-to-slot instant. */}
+                        <DragOverlay dropAnimation={null}>
+                          {activeProjectDragId ? (() => {
+                            const dragged = items.find(
+                              (e) => e.itemKind === 'project' && e.group.workingDirectory === activeProjectDragId,
+                            );
+                            if (!dragged || dragged.itemKind !== 'project') return null;
+                            const project = dragged.group;
+                            const projectThreads = threads.filter(
+                              (t) => t.workingDirectory === project.workingDirectory
+                                && t.agentType !== 'sub-agent'
+                                && t.pinned !== 1
+                                && !t.id.startsWith('cron:')
+                                && !t.id.startsWith('gw-')
+                                && !t.id.startsWith('wakeless-'),
+                            );
+                            return (
+                              <div style={{ opacity: 0.95 }}>
+                                <ProjectGroupItem
+                                  project={project}
+                                  threads={projectThreads}
+                                  activeThreadId={activeThreadId}
+                                  sortBy={projectSortBy}
+                                />
+                              </div>
+                            );
+                          })() : null}
+                        </DragOverlay>
+                      </SortableContext>
+                    </DndContext>
                   );
-                })}
+                })()}
                 {extraNoProjectThreads.map((thread) => (
                   <ThreadListItem
                     key={thread.id}
