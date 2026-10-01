@@ -10,22 +10,23 @@
  * These are declared because the protocol needs them, and flagged because they
  * are NOT yet backed by real data. Do not pretend otherwise when wiring a host.
  *
- *  1. `permissionPolicy.rules` CANNOT be the in-repo
- *     `ToolPermissionRulesBySource` — it holds three `ReadonlyMap`s
- *     (permissions/types.ts:427-434) and does not survive JSON. Use the
- *     flattened `PermissionRulesWire`.
- *  2. `env` is `{ ref, hash }`, but credentials are inlined in two places today
- *     (`worker-protocol.ts:7` and `types.ts:141,152,158`). **A Control Plane
- *     secret resolver must exist before this field means anything.**
- *  3. `budget` has no counterpart. The nearest thing is `maxTurns`
- *     (types.ts:289) plus the `agent.max_turns` setting.
+ *  1. `permissionPolicy.rules` is `PermissionRulesWire`. The in-repo
+ *     `ToolPermissionRulesBySource` already matches that shape, but the
+ *     `ToolPermissionContext` that carries it does not — its
+ *     `additionalWorkingDirectories` is a `ReadonlyMap`, and a `Map`
+ *     serialises to `{}`. Convert at the boundary; do not forward the context.
+ *  2. `env` is `{ ref, hash }`, but credentials are still inlined in several
+ *     places in the current code. **A Control Plane secret resolver must exist
+ *     before this field means anything.**
+ *  3. `budget` has no direct counterpart. The nearest thing is the
+ *     `max_turns` agent setting.
  *
  * ## `runId` vs `WorkflowRunCommand.runId`
  *
  * These are DIFFERENT concepts. The chat path has never carried a `runId`;
- * worker events only carry `sessionId` (worker-protocol.ts:258), and
- * `WorkflowRunCommand.runId` (:218) is a workflow run, not an agent run.
- * Conflating them is the easiest mistake to make while migrating.
+ * worker events only carry `sessionId`, and `WorkflowRunCommand.runId` is a
+ * workflow run, not an agent run. Conflating them is the easiest mistake to
+ * make while migrating.
  */
 
 import type {
@@ -33,7 +34,7 @@ import type {
   ConnectorBinding,
   EnvReference,
   GoalId,
-  PermissionModeName,
+  PermissionPolicyMode,
   PermissionRulesWire,
   ProjectId,
   ProviderId,
@@ -47,7 +48,7 @@ import { canonicalJson, sha256Hex } from './hash.js';
 import type { JsonValue } from './hash.js';
 
 export interface PermissionPolicy {
-  readonly mode: PermissionModeName;
+  readonly mode: PermissionPolicyMode;
   /** permissions/types.ts:63 */
   readonly hostSwitch: 'ask' | 'always' | 'never';
   /** Default 300_000, matching the hardcoded value at

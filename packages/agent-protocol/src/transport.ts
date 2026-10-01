@@ -18,7 +18,7 @@
  * was a negative lesson. drift test #13 is the parity proof for that.
  */
 
-import type { PermissionAck, PermissionDecision } from './permission.js';
+import type { PermissionAck, PermissionResponse } from './permission.js';
 import type { RuntimeCapabilities, ProbeOptions, TransportKind } from './capabilities.js';
 import type { RunHandle, RunInput, StartOptions, CancelReason, CancelOutcome } from './run.js';
 import type { RunManifest } from './manifest.js';
@@ -58,4 +58,4 @@ export interface RuntimeBinding {
   close(): Promise<void>;
 }
 
-export type { CancelOutcome, CancelReason, PermissionAck, PermissionDecision, RunHandle, RunInput, StartOptions };
+export type { CancelOutcome, CancelReason, PermissionAck, PermissionResponse, RunHandle, RunInput, StartOptions };

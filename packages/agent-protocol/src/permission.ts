@@ -1,41 +1,94 @@
 /**
  * Permission vocabulary: one set of actions, one clock, one audit chain.
  *
- * ## Why this file is not a type shim
+ * ## The chain
  *
- * The current codebase has THREE incompatible vocabularies for the same
+ *   run policy            this run's rules, fixed at start (manifest.permissionPolicy)
+ *        |
+ *   evaluation            runtime-internal policy engine: allow / ask / deny
+ *        | ask
+ *   PermissionRequest      what the host is asked about
+ *        |
+ *   PermissionResponse     what the host or user answered
+ *        |
+ *   PermissionResolution   the durable fact, emitted as permission.resolved
+ *
+ * Only the last three are on the wire. The evaluation is deliberately absent:
+ * it is runtime-internal, has no wire representation, and an adapter has no
+ * business reproducing a policy engine.
+ *
+ * ## Why the four names rather than three
+ *
+ * The old system already used `PermissionDecision` for the EVALUATION — the
+ * `{ behavior: 'allow' | 'ask' | 'deny' }` a policy engine returns, before
+ * anyone is asked. Naming the host's answer `PermissionDecision` as well would
+ * put two different things under one identifier in exactly the files that get
+ * migrated, and the compiler cannot tell them apart once both are in scope.
+ * So the name stays with the concept that already had it, and the wire types
+ * are named for what they carry.
+ *
+ * `PermissionPolicyMode` and `PermissionRequestMode` are split for the same
+ * reason. They are different layers: one is how the whole run is configured,
+ * the other is which interactive situation a single request belongs to.
+ *
+ * ## The legacy vocabulary, and why none of it survives
+ *
+ * The current codebase has three incompatible vocabularies for the same
  * decision:
  *
- *   callback return   'allow' | 'deny' | 'paused'          (agent/src/types.ts:337)
- *   HTTP receive      allow | deny | allow_once | allow_for_session   (router.ts:1785)
- *   worker receive    same four                           (agent-process-entry.ts:4413)
+ *   callback return   'allow' | 'deny' | 'paused'
+ *   HTTP receive      allow | deny | allow_once | allow_for_session
+ *   worker receive    same four
  *
  * `'paused'` is not a permission outcome at all — it is what the bot approval
- * card path actually means when a host never answers (types.ts:334-336). And
- * `expiresAt` exists on two independent clocks: the agent mints the value, the
- * worker sets the timer.
- *
+ * card path means when a host never answers. `allow_once` restates what a
+ * plain allow already says. And `allow_for_session` encodes a duration inside
+ * an action name, so the protocol splits duration out into `scope` instead.
  * pi-protocol's schemas.ts has the comment "Matches AgentHarnessPhase so
- * adapters do not need a second phase vocabulary". That is the entire reason
- * this file exists: ONE vocabulary, derived where possible, policed by drift
- * test #7.
+ * adapters do not need a second phase vocabulary" — that is the whole point
+ * here: one vocabulary, policed by drift test #7.
  */
 
-/** The four legal outcomes. There is no fifth. */
+/**
+ * The four legal outcomes. There is no fifth.
+ *
+ * `allow` is always scoped to the one request that asked. Anything longer
+ * lived is `allow_always` plus an explicit `PermissionScope`, so duration is
+ * never encoded in the action name.
+ */
 export const PERMISSION_ACTIONS = ['allow', 'allow_always', 'deny', 'defer'] as const;
+
+/** One of the four legal outcomes of a permission request. */
 export type PermissionAction = (typeof PERMISSION_ACTIONS)[number];
 
 const PERMISSION_ACTION_SET: ReadonlySet<string> = new Set<string>(PERMISSION_ACTIONS);
+
+/**
+ * Type guard for a permission action.
+ *
+ * @param value - Candidate action string, typically from an untrusted wire frame.
+ * @returns The narrowed action, or `undefined` when it is not one of the four.
+ */
 export function isPermissionAction(value: string): value is PermissionAction {
   return PERMISSION_ACTION_SET.has(value);
 }
 
+/** How long a grant survives. Absent on `PermissionResponse` for one-shot answers. */
 export type PermissionScope =
   | { readonly kind: 'tool'; readonly toolName: string }
   | { readonly kind: 'session' }
   | { readonly kind: 'rule'; readonly ruleContent: string };
 
-export type PermissionDecision =
+/**
+ * A host's or user's answer to a `PermissionRequest`.
+ *
+ * Named for what it carries rather than reusing `PermissionDecision`, which
+ * already means the policy engine's verdict in the system being migrated.
+ *
+ * @see PermissionRequest
+ * @see PermissionResolution
+ */
+export type PermissionResponse =
   | {
       readonly action: 'allow';
       /** Host may rewrite tool input; `userModified` records that it did. */
@@ -46,8 +99,11 @@ export type PermissionDecision =
   | { readonly action: 'deny'; readonly reason?: string }
   | { readonly action: 'defer' };
 
-/** Returned by `respondToPermission`. NOT an error path.
- *  A late answer is normal when a host was offline. */
+/**
+ * Returned by `respondToPermission`. Not an error path — a late answer is
+ * normal when a host was offline, and the rejection says which of the three
+ * unanswerable situations it hit.
+ */
 export type PermissionAck =
   | { readonly accepted: true }
   | {
@@ -59,14 +115,21 @@ export type PermissionAck =
         | 'not_permission_action';
     };
 
-/** Who answered. Persisted so an audit can distinguish policy from operator. */
+/** Who decided. Persisted so an audit can distinguish policy from operator. */
 export type PermissionSource = 'host' | 'policy' | 'default' | 'timeout' | 'cancelled';
 
-export type PermissionMode =
+/**
+ * Which interactive situation a single request belongs to.
+ *
+ * Not the same thing as `PermissionPolicyMode`, which configures the whole
+ * run. A run in `plan` mode can still raise a `generic` request.
+ */
+export type PermissionRequestMode =
   | 'generic'
   | 'ask_user_question'
   | 'exit_plan_mode';
 
+/** What is being asked about. Open-ended so a runtime can add kinds. */
 export type PermissionKind =
   | 'tool_use'
   | 'read_path'
@@ -79,29 +142,43 @@ export type PermissionKind =
 
 // ── Events ────────────────────────────────────────────────────────────────
 
-export interface PermissionRequested {
+/**
+ * A question put to the host, emitted as `permission.requested`.
+ *
+ * @see PermissionResponse
+ * @see PermissionResolution
+ */
+export interface PermissionRequest {
   readonly requestId: string;
   readonly kind: PermissionKind;
   readonly toolCallId?: string;
   readonly toolName: string;
   readonly toolInput: Readonly<Record<string, unknown>>;
-  readonly mode: PermissionMode;
+  readonly mode: PermissionRequestMode;
   readonly reason?: string;
   readonly suggestions?: readonly string[];
   readonly metadata?: Readonly<Record<string, string>>;
   readonly blockedPath?: string;
   /**
-   * SINGLE AUTHORITATIVE CLOCK:
-   *   expiresAt = startedAt + manifest.permissionPolicy.defaultTimeoutMs
-   * defaultTimeoutMs defaults to 300_000, matching the hardcoded value at
-   * agent-process-entry.ts:2240. The legacy `PermissionRequestEvent.expiresAt`
-   * was minted by the agent while the timer was set by the worker — two clocks
-   * that could disagree. Here one value is minted in one place.
+   * The single authoritative clock:
+   * `expiresAt = startedAt + manifest.permissionPolicy.defaultTimeoutMs`.
+   *
+   * The legacy shape let the agent mint `expiresAt` while the worker set the
+   * timer, so the value a host saw and the value a worker enforced could
+   * disagree. Here one number is minted in one place.
    */
   readonly expiresAt: number;
 }
 
-export interface PermissionResolved {
+/**
+ * The durable fact about how a request ended, emitted as `permission.resolved`.
+ *
+ * Emitted for every request exactly once, including the timeout path — a
+ * `PermissionExpired` precedes a resolution with `deny` and `source: 'timeout'`
+ * so a reconnecting host can reconstruct that a deadline passed instead of
+ * inferring it from a deny.
+ */
+export interface PermissionResolution {
   readonly requestId: string;
   readonly action: PermissionAction;
   readonly source: PermissionSource;
@@ -110,21 +187,24 @@ export interface PermissionResolved {
   readonly reason?: string;
 }
 
+/** Emitted when a request passes `expiresAt` unanswered. Always followed by a `PermissionResolution`. */
 export interface PermissionExpired {
   readonly requestId: string;
   readonly afterMs: number;
 }
 
-// ── Legacy mapping ──────────────────────────────────────────────
+// ── Legacy mapping ────────────────────────────────────────────────────────
 
 /**
- * Legacy verb → protocol action. Delete one release after 07 M5 lands.
+ * Legacy verb to protocol action.
  *
- * `allow_for_session` is process-scoped in practice today
- * (agent-process-entry.ts:4414-4416) ONLY because one worker happens to serve
- * one session. The protocol's `allow_always { scope: session }` must NOT
- * inherit that coincidence — that inheritance is exactly how a "session"
- * grant silently becomes a process grant the first time a worker is reused.
+ * `allow_for_session` is process-scoped in practice today only because one
+ * worker happens to serve one session. The protocol's `allow_always` with a
+ * `session` scope must NOT inherit that coincidence — inheriting it is exactly
+ * how a session grant silently becomes a process grant the first time a worker
+ * is reused.
+ *
+ * @deprecated Removed together with the rest of the legacy bridge.
  */
 export const LEGACY_ACTION_MAP: Readonly<Record<string, PermissionAction>> = {
   allow: 'allow',
@@ -135,12 +215,17 @@ export const LEGACY_ACTION_MAP: Readonly<Record<string, PermissionAction>> = {
 };
 
 /**
- * Normalise a legacy verb. `'paused'` maps to `deny` because that is the
- * observable meaning of the bot approval card path (types.ts:334-336): the
- * host never answered, so the request timed out. Anything unrecognised becomes
- * `defer` plus a diagnostic rather than a guessed allow.
+ * Normalise a legacy verb to a `PermissionResponse`.
+ *
+ * `'paused'` maps to `deny` because that is its observable meaning on the bot
+ * approval card path: the host never answered, so the request timed out.
+ * Anything unrecognised becomes `defer` rather than a guessed allow.
+ *
+ * @param legacy - Verb from the pre-protocol wire vocabulary.
+ * @returns A response carrying the corresponding action.
+ * @deprecated Part of the legacy bridge; removed after the router cutover.
  */
-export function normalizeLegacyAction(legacy: string): PermissionDecision {
+export function normalizeLegacyAction(legacy: string): PermissionResponse {
   const mapped = LEGACY_ACTION_MAP[legacy];
   if (mapped === 'allow') return { action: 'allow' };
   if (mapped === 'allow_always') return { action: 'allow_always', scope: { kind: 'session' } };

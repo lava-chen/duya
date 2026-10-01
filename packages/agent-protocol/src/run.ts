@@ -30,7 +30,7 @@
 import type { EventSource, RunEventEnvelope } from './envelope.js';
 import type { RunManifest } from './manifest.js';
 import type { ResumeRequest } from './resume.js';
-import type { PermissionAck, PermissionDecision } from './permission.js';
+import type { PermissionAck, PermissionResponse } from './permission.js';
 import type { RuntimeCapabilities, ProbeOptions } from './capabilities.js';
 import type { ErrorCode, ProtocolErrorInfo } from './errors.js';
 import type { TokenUsage, StopReason, MessageContent, PausePoint } from './events/payloads.js';
@@ -111,7 +111,7 @@ export interface RunHandle {
   readonly terminal: Promise<RunTerminalState>;
   /** The ONLY channel through which run state propagates. */
   events(): EventSource;
-  respondToPermission(requestId: string, decision: PermissionDecision): Promise<PermissionAck>;
+  respondToPermission(requestId: string, decision: PermissionResponse): Promise<PermissionAck>;
   cancel(reason?: CancelReason, opts?: { graceMs?: number }): Promise<CancelOutcome>;
   pause(at?: PausePoint): Promise<void>;
   result(): Promise<RunResult>;

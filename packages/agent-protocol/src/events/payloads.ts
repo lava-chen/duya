@@ -49,9 +49,9 @@ import type {
   WorkspaceId,
 } from '../primitives.js';
 import type {
-  PermissionDecision,
+  PermissionResponse,
   PermissionKind,
-  PermissionMode,
+  PermissionRequestMode,
   PermissionScope,
   PermissionSource,
 } from '../permission.js';
@@ -336,8 +336,8 @@ export interface ToolCallCompletedPayload {
 
 // ── permission (re-exported shapes live in permission.ts) ─────────────────
 
-export type PermissionRequestedPayload = import('../permission.js').PermissionRequested;
-export type PermissionResolvedPayload = import('../permission.js').PermissionResolved;
+export type PermissionRequestPayload = import('../permission.js').PermissionRequest;
+export type PermissionResolutionPayload = import('../permission.js').PermissionResolution;
 export type PermissionExpiredPayload = import('../permission.js').PermissionExpired;
 
 // ── compaction ────────────────────────────────────────────────────────────
@@ -480,8 +480,8 @@ export interface RunEventPayloads {
   'tool.timed_out': ToolTimedOutPayload;
   'tool.call_completed': ToolCallCompletedPayload;
 
-  'permission.requested': PermissionRequestedPayload;
-  'permission.resolved': PermissionResolvedPayload;
+  'permission.requested': PermissionRequestPayload;
+  'permission.resolved': PermissionResolutionPayload;
   'permission.expired': PermissionExpiredPayload;
 
   'compaction.started': CompactionStartedPayload;
@@ -500,4 +500,4 @@ export interface RunEventPayloads {
   'extension.custom': ExtensionCustomPayload;
 }
 
-export type { ConnectorBinding, PermissionDecision, PermissionKind, PermissionMode, PermissionScope, PermissionSource, ProjectId, RequestId, RunBudget, RunId, TaskId, WorkspaceId, AgentProfileId };
+export type { ConnectorBinding, PermissionResponse, PermissionKind, PermissionRequestMode, PermissionScope, PermissionSource, ProjectId, RequestId, RunBudget, RunId, TaskId, WorkspaceId, AgentProfileId };

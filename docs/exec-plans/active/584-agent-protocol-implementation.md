@@ -226,6 +226,29 @@ grok `sampling-types` 的失败模式是文档声称 "no I/O" 而 `Cargo.toml` �
 `schema/` 一旦出现就失败，并要求同一个 commit 附上生成器。
 手写的 schema 落不了地。这比「检查一个没人维护的 JSON 有没有过期」有用得多。
 
+**命名在 PP-1 评审时改过一轮（2026-10-01）**
+
+初版有三个名字与**被迁移方**同名，而冲突要等到迁移那一刻才会进同一个文件作用域：
+
+| 初版 | 改为 | 冲突在哪 |
+|---|---|---|
+| `PermissionDecision`（host 的回答） | `PermissionResponse` | `packages/agent/src/permissions/types.ts` 里的 `PermissionDecision` 是 **policy engine 的判断** `{behavior: allow/ask/deny}`，在有人被问之前就产生了 |
+| `PermissionMode`（单个 request 的交互场景） | `PermissionRequestMode` | 与 `PermissionModeName`（整条 run 的策略）同名但不同层 |
+| `PermissionModeName`（run 级策略） | `PermissionPolicyMode` | 用 `…Name` 后缀消歧是弱约定，不如两边都把层次写进名字 |
+| `PermissionRequested` / `PermissionResolved` | `PermissionRequest` / `PermissionResolution` | 与四段链条对齐 |
+
+最终链条：**Evaluation（runtime 内部，故意不上 wire）→ Request → Response → Resolution**。
+`PermissionDecision` 这个名字**故意不导出**，留给 policy engine，避免迁移时两个同名类型并存。
+改名成本此刻是零（包还没有任何消费者），PP-2 之后就晚了——由 `test/permission-naming.test.ts` 钉住，
+已植入探针确认把旧名写回去会导致两条断言失败。
+
+**同时修掉一处我自己写错的事实**（评审指出，复核成立）：
+注释称 `ToolPermissionRulesBySource` "含三个 ReadonlyMap，不能 JSON 化"。实际它是
+`{[source]?: string[]}`，**本来就是 JSON 安全的**；真正的 `ReadonlyMap` 是同一个
+`ToolPermissionContext` 上的 `additionalWorkingDirectories`（`Map` 序列化会变成 `{}`）。
+结论（wire 上用可 JSON 化结构）成立，**证据不成立**。
+**这正是 file:line 反向引用会腐烂的现成例子**——所以代码里的 `file:line` 引用一并去掉了。
+
 **关键约束（都守住了）**
 - `events/payloads.ts` 与 `events/registry.ts` **分成两个文件**：registry 只有
   `import type`（编译期擦除），drift test #1 断言它**零运行时 import**——实测通过

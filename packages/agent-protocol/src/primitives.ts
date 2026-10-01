@@ -54,18 +54,24 @@ export type PermissionRuleSource =
   | 'cli'
   | 'runtime';
 
-export type PermissionModeName =
+/** How the run as a whole is configured. Distinct from `PermissionRequestMode`,
+ *  which describes one request's interactive situation. */
+export type PermissionPolicyMode =
   | 'default'
   | 'acceptEdits'
   | 'plan'
   | 'bypassPermissions'
   | 'dontAsk';
 
-/** A resolved tool permission table, flattened from `ReadonlyMap` to `Record`.
+/**
+ * Permission rules keyed by source, in a form that survives JSON.
  *
- *  The in-repo `ToolPermissionRulesBySource` holds three `ReadonlyMap`s and
- *  cannot cross a JSON boundary. The protocol flattens it here so the
- *  flattening is explicit and testable rather than accidental. */
+ * The in-repo `ToolPermissionRulesBySource` is already `{ [source]?: string[] }`
+ * and is wire-safe as written. The sibling `ToolPermissionContext` is not: its
+ * `additionalWorkingDirectories` is a `ReadonlyMap`, and a `Map` serialises to
+ * `{}`. The protocol names the safe shape explicitly so adapters convert at
+ * the boundary instead of inheriting whichever shape they happened to be handed.
+ */
 export type PermissionRulesWire = Readonly<Record<PermissionRuleSource, readonly string[]>>;
 
 export interface ConnectorBinding {
