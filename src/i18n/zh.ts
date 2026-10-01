@@ -596,6 +596,7 @@ const zh: Record<TranslationKey, string> = {
   'chat.editingMessage': '正在编辑消息，可调整附件和模型',
   'chat.editRunActive': '运行已开始，请先停止后重新发送',
   'chat.editAlreadyPickedUp': '消息已被读取，请发送一条新的补充消息',
+  'chat.editSendFailedRewound': '发送失败，本次对话已回溯到你编辑的那条消息之前。内容仍保留在输入框中，可以重试发送。',
   'chat.pendingSaveFailed': '待发送消息保存失败，请重试',
   'mailbox.bubble.saving': '保存中',
   'mailbox.bubble.pickedUp': '已读取',

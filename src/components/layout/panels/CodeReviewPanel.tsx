@@ -392,7 +392,18 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     },
   ];
 
+  // Plan 583 / ISS-27: generation guard. `refresh` re-runs whenever the scope,
+  // session, working directory or pinned turn changes, and each run is a
+  // multi-call async read. Without a guard, a slow earlier run could resolve
+  // after a faster later one and overwrite the newer state with stale data
+  // (e.g. switching scope back and forth leaves the previous scope's diff on
+  // screen). Only the newest run may commit.
+  const refreshGenerationRef = useRef(0);
+
   const refresh = useCallback(async () => {
+    const generation = ++refreshGenerationRef.current;
+    const isStale = () => generation !== refreshGenerationRef.current;
+
     if (!workingDirectory) {
       setReview(EMPTY_REVIEW);
       setError("当前会话没有项目目录。");
@@ -417,6 +428,7 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
             : getGitLatestTurnReview(sessionId, workingDirectory),
           getGitTurnHistory(sessionId, workingDirectory, 50),
         ]);
+        if (isStale()) return;
         if (history.turns) setTurns(history.turns);
         if (latest.error) setError(latest.error);
         const stored = latest.review ?? null;
@@ -445,13 +457,16 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
         params.commitTo = commitTo;
       }
       const next = await getGitReviewScoped(workingDirectory, params);
+      if (isStale()) return;
       setReview(next);
       if (!next.isGitRepo) setError("此项目不是 Git 仓库，或 Git 当前不可用。");
     } catch {
+      if (isStale()) return;
       setReview(EMPTY_REVIEW);
       setError("无法读取变更。");
     } finally {
-      setLoading(false);
+      // A superseded run must not clear the spinner the newer run owns.
+      if (!isStale()) setLoading(false);
     }
   }, [scope, sessionId, workingDirectory, commitFrom, commitTo, reviewTurnId]);
 

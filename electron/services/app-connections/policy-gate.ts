@@ -15,9 +15,7 @@
  */
 
 import { getConfigStore } from '../../config/store-instance';
-import { getLogger, LogComponent } from '../../logging/logger';
 
-const COMPONENT = 'AppConnectionPolicy' as LogComponent;
 const CONFIG_KEY = 'apps';
 
 export interface AppPolicy {
@@ -64,23 +62,10 @@ export function isProviderEnabledLive(providerId: string): boolean {
   return isProviderEnabled(readAppPolicy(), providerId);
 }
 
-/**
- * Set the enabled flag for one provider. Returns true on persistence
- * success. Logs at INFO so policy changes are auditable.
- */
-export function setProviderEnabled(providerId: string, enabled: boolean): boolean {
-  const current = readAppPolicy();
-  const next: AppPolicy = {
-    perProvider: {
-      ...current.perProvider,
-      [providerId]: { enabled },
-    },
-  };
-  const ok = getConfigStore().set(CONFIG_KEY, next.perProvider);
-  getLogger().info(
-    'App Connection policy: provider enabled state updated',
-    { provider: providerId, enabled },
-    COMPONENT,
-  );
-  return ok;
-}
+// Plan 583 / ISS-19: `setProviderEnabled` is gone. Nothing ever called it —
+// there is no UI or IPC surface for it — so the `[apps]` policy was only ever
+// reachable by hand-editing config.toml, and the export made that read as a
+// supported write path. The gate is still enforced (now on the invoke path
+// too); changing it is a config edit. If a product decision later calls for an
+// app-managed toggle, it should ship with the settings surface that needs it,
+// rather than as a bare setter nobody renders.

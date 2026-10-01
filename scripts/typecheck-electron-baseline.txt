@@ -11,7 +11,7 @@
 # Each fix should let you delete or lower its line here via `--write`;
 # never hand-add a line to silence a new error.
 #
-# 305 known error(s) across 150 (file, code) key(s).
+# 304 known error(s) across 149 (file, code) key(s).
 electron/agents/db-bridge.ts TS2339 10
 electron/agents/db-bridge.ts TS2531 1
 electron/agents/db-bridge.ts TS2551 2
@@ -123,7 +123,6 @@ electron/services/app-connections/oauth/flow.ts TS2749 1
 electron/services/app-connections/oauth/loopback-server.ts TS2749 1
 electron/services/app-connections/oauth/remote-mcp-flow.ts TS2554 1
 electron/services/app-connections/oauth/remote-mcp-flow.ts TS2749 1
-electron/services/app-connections/policy-gate.ts TS2749 1
 electron/services/app-connections/token-service.ts TS2749 1
 electron/services/app-connections/token-vault.ts TS2345 1
 electron/services/app-connections/token-vault.ts TS2749 1
