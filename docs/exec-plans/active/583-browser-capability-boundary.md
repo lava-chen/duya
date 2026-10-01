@@ -816,33 +816,61 @@ skills 那套的关键设计值得单独指出：**「用户改过的 bundled sk
 确保 plugin 无法遮蔽它」**——即「用户投入过的能力，优先级高于插件」。
 openclaw 要用户先手动禁用内置，pi 静默遮蔽，duya 这套两者都不是。
 
-#### 待你拍板：两个边界问题（我不自己定）
+#### 已定（用户 2026-10-01 拍板）：方案 C 收敛到「只做声明式」，dwf 按 (c)+(b) 修
 
-**问题一：dwf 修复档位。** 实测已证明「vm 是沙箱」为假，于是缺的不是隔离而是**授权**。
-三档按代价从小到大：
+**问题一：dwf 修复档位 → 选 (c)+(b)。** 下面是落地记录，含**两处与原设想不符**的更正。
 
-| 档 | 做什么 | 代价 | 剩什么没修 |
-|---|---|---|---|
-| **(b)** 扫描器认不出的脚本一律 `awaiting_confirm` | 纯 fail-closed，复用现有 `awaiting_confirm` 机制，**不需新 UI**、不改执行路径 | 几乎所有 workflow 都会弹窗（因为纯正则本来就识别不出）→ 功能可用性下降明显 | 承认了「运行它是用户的决定」，但用户仍可能随手点「允许」 |
-| **(c)** 停止自动枚举 project-scope workflow（只保留 `~/.duya/workflows`） | 改动最小：克隆的仓库不再自带可执行 workflow | 失去「仓库自带工作流」这个产品特性 | 覆盖主路径；若将来重新开启，必须先解决授权 |
-| **(a)** 把 dwf 执行迁到子进程 | —— | —— | **不解决本问题**（实测：它已经在 worker 子进程里了；进程边界挡崩溃不挡恶意代码）。除非同时给子进程套 OS 级沙箱（Windows Job Object / 容器 / seccomp），那是另一个量级的工程 |
+**更正 1：落点比原写的小。** 原本以为 (b) 能复用 `awaiting_confirm`「不需新 UI」。实际读代码
+后发现 saved dwf 这条路**根本不走 `WorkflowManager`** —— `workflow-runner.ts` 的 import
+里没有它。`manager.ts:191` 那个「零高风险直接 launch」是**声明式**那条路的门。
+saved dwf 的真实链路是：resolve → 编译 → 建 run → `runDwfScript`，**中间没有任何审批**。
+所以 (b) 的门是新接的，只是恰好能复用已有的交互通道。
 
-我的读法：**(c) 是唯一能真正断掉这条链的最小改动**，而 (b) 是它的补刀 —— 因为
-`~/.duya/workflows` 是用户自己写的，放行合理，但 project scope 来自**克隆来的内容**。
-(a) 在当前形态下是**假修复**，不该单独选；若要 (a)，必须连 OS 级沙箱一起做，那应该单开
-plan，不属于 583。
+**更正 2：必须新增一个注入口。** saved 档唯一能查的根是 `~/.duya/workflows/`，而 worker
+用 `os.homedir()` 现算 —— 测试没法接管。加了 `savedWorkflowHomeDir`（runner deps）+
+`homeDir`（child init）。这不只是为测试：主进程侧的 dwf IPC handler **本来就有**
+`homeDir` 参数，worker 侧没有，两半边对「global 在哪」各说各话，现在对齐了。
 
-**问题二：方案 C 的边界。** 实测把选项收窄成三个：
+| 档 | 落地 |
+|---|---|
+| **(c)** | `savedWorkflowRoots` 只剩 global 根；`resolve` / `list` 因此自动不看项目档。`save` / `delete` 传 `project` **抛错**（`PROJECT_SCOPE_NOT_A_SOURCE`）而不是静默写进死目录。IPC `dwf:save` / `dwf:delete` 的默认 scope 从 `'project'` 改成 `'global'`，显式传 `project` 直接回错。 |
+| **(b)** | 新增 `dwf/trust.ts` 的 `assessDwfScript`：判「认得出」的三条 —— ① 每个 `wf.*` 都在 `DWF_PRIMITIVES`（逐字转录自 `DwfApi`）内；② 源码不含逃逸词表；③ 无不可逆 `wf.tool`（沿用 `RULE_RISK_RE`，与声明式侧同一张表）。认不出 → 在 `launchSavedWorkflow` 里、**编译门之后**、建 run 之前，走 `deps.requestPermission` 把**真实源码 + 理由**交给用户。复用 `toolName: 'workflow_approval'`，**不需要新 UI**。 |
+
+**两处刻意的设计选择**：
+
+1. **门放在编译门之后**：不让用户为一个连编译都过不了的脚本做「要不要执行」的决定。
+2. **「认得出」是双刃的**：命中逃逸词表的**误报方向**被刻意选成「宁可多问一次」。比如
+   `const process = ...` 或文案里出现 "constructor" 都会弹窗。这是安全方向的错得多，
+   不是错得少。
+
+**必须写下来的诚实边界**：`assessDwfScript` 是**可读性**判断，不是安全保证。一段被
+认出的脚本若找到词表外的逃逸路径，它照样逃逸。真正兜住的是「升级给人看」这一步。
+`dwf-trust.test.ts` 因此把四条**实测逃逸向量**写成了回归守卫 —— 不是为了防它们跑起来
+（测试自己更不该跑逃逸代码），而是为了让「vm 不是沙箱」这个结论不会在某次重构后被
+当成过期知识顺手删掉。
+
+**仍未做（明账，不是遗漏）**：
+- 确认文案是**英文**：worker 进程够不到渲染层的 i18n（i18n 是 renderer 侧的），本地化
+  要另开一条通路。
+- `SavedWorkflowShadowing` 与 IPC 的 `shadowing` 字段现在**恒为 null**（单一档之后没有
+  遮蔽可言）。留着是为了不拆 preload/IPC/GUI 三个面的协议 —— 这是笔明确的债。
+- 声明式那条路（`manager.ts` + `WorkflowFileRegistry`，`.json` 定义）**没动**。它执行
+  的是结构化定义而不是任意代码，不在本 plan 的威胁模型里。
+
+**问题二：方案 C 的边界 → 选 1（只做声明式贡献）。**
 
 1. **只做声明式贡献**（skill / MCP server / hook，不跑进程内代码）—— 行业实际做法，
-   duya 的 MCP 通道已就位，零新隔离面。
-2. **允许进程内执行，但要求显式同意**（G5 那套同意门扩展到「加载前」）。**实测表明这不够**：
-   三个跑进程内的 harness 全在加载期就执行代码，早于任何逐次同意。
-3. **允许进程内执行，且接受它不是沙箱**（只做能力裁剪 + 审计）—— 诚实的名字叫
-   「用户认可的执行」，不叫沙箱。
+   duya 的 MCP 通道已就位，零新隔离面。 ← **已选**
+2. 允许进程内执行，但要求显式同意。**实测表明这不够**：三个跑进程内的 harness 全在
+   加载期就执行代码，早于任何逐次同意。
+3. 允许进程内执行，且接受它不是沙箱（只做能力裁剪 + 审计）。
 
-需要你定的是：走 1，还是走 3，以及若走 3，暴露给 plugin 的 API 面收多窄。
-**我不会自己拍这个板** —— 它决定了第三方代码将来在 duya 里的权限天花板。
+**所以缝 C 的结论**：plugin 贡献**原生 tool 的进程内执行路径不做了**。需要执行第三方
+代码的场景走已有的 MCP 子进程通道（`mcp/servers.json` → 进程边界 + `buildSafeEnv`
+环境白名单 + `sanitizeSecrets` + `decideMcpSource` 逐工具门 + 超时）。plan 580 已落的
+`ToolOwner` / `replaceByOwner` / `source.kind:'plugin'` 机制**保留** —— 它是注册表侧的
+能力，不等于「plugin 能跑进程内代码」，留着不构成风险面。
+
 
 
 
@@ -966,6 +994,30 @@ plan，不属于 583。
   `contracts/registry.ts:101` 用于过滤哪些插件贡献 provider，没有运行期「未声明即拒绝」
   校验。三个跑进程内代码的 harness（openclaw / pi / hermes-agent）**全部在加载期就执行
   plugin 代码**，早于任何逐次调用的同意机制 —— 故「加载前加同意门」也不构成隔离。
+- 2026-10-01：**用户拍板，缝 C 收敛**。(1) dwf 按 **(c)+(b)** 修；(2) 方案 C 走**只做声明式
+  贡献**，不开放 plugin 进程内执行代码。落地记录与两处自我更正见 §7「已定」段。
+- 2026-10-01：落地时**发现原判断有两处不准**。(a) 我原以为 (b) 能复用 `awaiting_confirm`
+  「不需新 UI」——**读代码后发现 saved dwf 根本不走 `WorkflowManager`**：
+  `manager.ts:191` 那个「零高风险直接 launch」是**声明式**那条路的门，而 saved dwf 的
+  真实链路（resolve → 编译 → 建 run → `runDwfScript`）**中间一道审批都没有**。
+  所以漏洞比上文描述的更宽，修复点也不是上文指的那个。
+  (b) 只剩全局档可查之后，worker 用 `os.homedir()` 现算，测试接不住 → 加了
+  `savedWorkflowHomeDir`（runner deps）/ `homeDir`（child init）。**这不只是为测试**：
+  主进程侧的 dwf IPC handler 本来就有 `homeDir`，worker 侧没有，两半边对「global 在哪」
+  各说各话，现在对齐。
+- 2026-10-01：门禁结果。`npx vitest run packages/agent/src/modes/workflow
+  packages/agent/src/process electron/ipc` → **58 文件 / 918 用例，917 通过**，
+  唯一红是既有的 `workflow-handlers.test.ts > registers exactly the console channels`
+  （**stash 验证**：干净基线同样红，22 vs 21 个通道，与本次改动零交集 → 记为第 5 个既有红）。
+  `npx tsc --noEmit`（electron + src）exit 0；`npx tsc -p packages/agent
+  tsconfig.worktree-verify.json --noEmit` exit 0。
+  **注意 `npm run typecheck:web` 在本 worktree 仍会红，且与本次改动无关**：它先跑
+  `build:agent`，而 `node_modules/@duya/*` 是指向主 checkout 的 junction，于是 G5 引入的
+  `isLocalExecutionAllowed` 解析成假 TS2305（AGENTS.md 已记该陷阱）。变通法同 AGENTS.md：
+  一次性 tsconfig 同时设 `rootDir: "../.."` 与 `paths`（该文件用完即删，未进提交）。
+  变异测试四轮：`recognized` 恒 true → **20 条红**；runner 的门改成 `if (false && …)` →
+  **2 条红**；把 project 根加回 `savedWorkflowRoots` → **4 条红**；project 档写入改成
+  静默重定向到 global → **1 条红**。四处均已撤回。
 
 
 
