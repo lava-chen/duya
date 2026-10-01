@@ -9,7 +9,7 @@
  * than re-derived at either call site.
  */
 import { describe, it, expect } from 'vitest';
-import { PluginTrustLevel } from '../src/security/trust-engine';
+import { PluginTrustLevel, TRUST_LEVEL_CAPABILITIES } from '../src/security/trust-engine';
 import {
   isLocalExecutionAllowed,
   isHookConsentDecision,
@@ -57,6 +57,38 @@ describe('isLocalExecutionAllowed', () => {
     // that is not exactly 'granted' must not unlock local execution.
     expect(isLocalExecutionAllowed(PluginTrustLevel.Untrusted, 'yes' as never)).toBe(false);
     expect(isLocalExecutionAllowed(PluginTrustLevel.Untrusted, true as never)).toBe(false);
+  });
+
+  it('requires a grant for an unrecognized trust level instead of assuming it is exempt', () => {
+    // The exempt branch is "the table says this level needs no confirmation",
+    // so a level the table does not know cannot take it. Reading
+    // TRUST_LEVEL_CAPABILITIES[level].requirePermissionConfirmation unguarded
+    // would throw here instead, which is a crash rather than a decision.
+    expect(isLocalExecutionAllowed('not-a-level' as never, null)).toBe(false);
+    expect(isLocalExecutionAllowed('not-a-level' as never, 'granted')).toBe(true);
+  });
+
+  // The point of reading the table rather than hardcoding "official is
+  // exempt": a change to the exemption set must fail here, so it is a
+  // deliberate decision in one place instead of a silent behaviour shift in
+  // two. The expected set is written out literally -- deriving both sides
+  // from the table would make this test unfailable.
+  it('exempts exactly official, today', () => {
+    const exempt = Object.values(PluginTrustLevel).filter((level) =>
+      isLocalExecutionAllowed(level, null),
+    );
+    expect(exempt).toEqual([PluginTrustLevel.Official]);
+    // ...and the table currently agrees, so the two are in sync on purpose.
+    const exemptPerTable = Object.values(PluginTrustLevel).filter(
+      (level) => TRUST_LEVEL_CAPABILITIES[level].requirePermissionConfirmation === false,
+    );
+    expect(exemptPerTable).toEqual([PluginTrustLevel.Official]);
+  });
+
+  it('always honors a grant, so a user decision is never silently ignored', () => {
+    for (const level of Object.values(PluginTrustLevel)) {
+      expect(isLocalExecutionAllowed(level, 'granted')).toBe(true);
+    }
   });
 });
 

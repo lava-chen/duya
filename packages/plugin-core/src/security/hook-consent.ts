@@ -20,7 +20,7 @@
  * drift apart, and neither side has to invent policy.
  */
 
-import { PluginTrustLevel } from './trust-engine.js';
+import { PluginTrustLevel, TRUST_LEVEL_CAPABILITIES } from './trust-engine.js';
 
 /** Hook types that spawn something on the user's machine. */
 export const LOCAL_EXECUTION_HOOK_TYPES: ReadonlySet<string> = new Set(['command', 'process']);
@@ -35,15 +35,22 @@ export function isHookConsentDecision(value: unknown): value is HookConsentDecis
 /**
  * Whether a plugin's local-execution hooks may run.
  *
- * First-party is exempt: `official` covers both bundled plugins and the
- * builtin directory, which ship with the app. Every other origin needs an
- * explicit `granted` from the user. A missing decision is **not** consent, and
- * a `denied` decision is never treated as anything else.
+ * Keyed on `TrustLevelCapability.requirePermissionConfirmation`, which is the
+ * field that has always carried this exact meaning: "only official is exempt,
+ * everything else needs the user to say yes". Reading it here rather than
+ * re-deriving the rule keeps the trust table a real promise — a sixth
+ * capability field stops being decorative — and means a future change to the
+ * table's shape is picked up here instead of silently diverging.
+ *
+ * A missing or `denied` decision is **not** consent, and an unrecognized trust
+ * level is **not** consent either: it falls through to requiring a grant, which
+ * is the direction that fails safe.
  */
 export function isLocalExecutionAllowed(
   trustLevel: PluginTrustLevel,
   decision: HookConsentDecision | null | undefined,
 ): boolean {
-  if (trustLevel === PluginTrustLevel.Official) return true;
+  const caps = TRUST_LEVEL_CAPABILITIES[trustLevel];
+  if (caps && !caps.requirePermissionConfirmation) return true;
   return decision === 'granted';
 }
