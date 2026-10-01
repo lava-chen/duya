@@ -1,8 +1,13 @@
 // Shared Git IPC types for the Code Review workspace.
-// This file is the single source of truth consumed by both
-// electron/ipc/git-handlers.ts and electron/preload.ts.
-// Renderer-side code (src/lib/git-ipc.ts) maintains its own copy
-// because it cannot import from the Electron side.
+// This file is the single source of truth consumed by
+// electron/ipc/git-handlers.ts, electron/preload.ts, and the renderer
+// wrapper src/lib/git-ipc.ts (which re-exports these types).
+//
+// It is deliberately import-free so that last hop stays a type-only edge:
+// nothing here can pull electron code into the renderer bundle. This
+// header previously claimed the renderer "cannot import from the Electron
+// side" — true of runtime code, false of types, and `src/global.d.ts`
+// had been importing `ElectronAPI` from `electron/preload` all along.
 
 export interface GitStatusFileChange {
   path: string;
