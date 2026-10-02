@@ -6,6 +6,7 @@ import { CheckpointBatcher } from './checkpoint-batcher';
 import { logger, httpLogger, sessionLogger, workerLogger } from './logger';
 import { createHandleRequest, RouterDeps } from './router';
 import { InteragentRouter } from './interagent-router';
+import { RunOrchestrator, createWorkerExecutionChannel } from './run-orchestrator';
 
 const PORT = 0;
 const HOST = '127.0.0.1';
@@ -318,6 +319,19 @@ const deps: RouterDeps = {
     workerDbRequests,
     logger,
     httpLogger,
+  }),
+  // Plan 586 Reference Run. The chat route opens a run through this and tees
+  // every normalised worker frame into it. Optional in `RouterDeps` so tests
+  // and embedders that never chat keep constructing deps as before.
+  runOrchestrator: new RunOrchestrator({
+    dbRequest,
+    channel: createWorkerExecutionChannel(() => {
+      // Dispatch is the router's: it owns `WorkerManager` and the
+      // `chat:start` shape, and it already issues the command immediately
+      // after `openRun` returns. The run layer only records that a run exists;
+      // it never sends a command of its own, which is what keeps run identity
+      // and execution authority in different layers.
+    }),
   }),
 };
 

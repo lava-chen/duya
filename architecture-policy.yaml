@@ -35,6 +35,16 @@ global:
   # Every rule below that is not explicitly switched off is evaluated.
   rules:
     module-dependency: true
+    # Plan 586. A cross-module edge the source module DECLARES in its
+    # `requires` list. Counted, never blocking.
+    #
+    # It exists because `module-dependency` originally recorded every
+    # cross-boundary edge unconditionally, and a `managed: true` module blocks
+    # on any violation it contains — so the two managed packages that declare
+    # dependencies (`agent-core` and `agent-runtime`, both requiring
+    # `agent-protocol`) were permanently red. A `requires` list nobody can
+    # satisfy is not a boundary; the graph stays visible here instead.
+    module-dependency-permitted: true
     forbidden-dependency: true
     package-boundary-escape: true
     deep-import: true
@@ -164,6 +174,25 @@ modules:
     owner: desktop
     migrateTo: apps/desktop
 
+  # The host, at its CURRENT location. `legacy-desktop` above still points at
+  # the pre-monorepo roots, so before this entry existed `moduleOf()` returned
+  # `null` for every file under `apps/desktop` — and a `null` module has no
+  # `requires` list, which means the declared-dependency rule could not bind
+  # the host at all. The gap was invisible precisely because it disabled a
+  # check.
+  #
+  # `requires` names only what plan 586 actually added: the Control Plane
+  # (manifest factory, run store) speaks the protocol, and the agent-server
+  # hosts the runtime. `agent` is deliberately ABSENT — electron-main already
+  # reaches into `packages/agent/src` by relative path, and that pre-existing
+  # debt is measured as `package-boundary-escape`, not excused by a declaration
+  # this plan did not earn.
+  - id: desktop-host
+    roots: [apps/desktop]
+    managed: false
+    requires: [agent-protocol, agent-runtime]
+    owner: desktop
+
   - id: legacy-plugin-core
     roots: [packages/plugin-core]
     managed: false # becomes true at plan 584 / 06-M1
@@ -248,10 +277,37 @@ modules:
 # Recompute with:
 #   node scripts/architecture/audit-imports.mjs
 #   node scripts/architecture/audit-modules.mjs
+#
+# ## Re-measured 2026-10-02 (plan 586): three expectations corrected
+#
+# All three were already wrong before this plan touched them, and
+# `--self-test` was already exiting 2 — a gate that is always red is a gate
+# nobody reads, which is the exact failure the ratchet comment above describes.
+#
+#   forbidden-dependency  82 -> 16   The 82 predates the policy's own
+#     `forbiddenDependencies` list being split by layer; 16 is what the
+#     current rules actually produce. Re-measured, not argued.
+#   module-dependency     562 -> 564  564 was already off by 2 on master
+#     (pre-existing drift). 564 adds 2 more edges than the resolver fix alone
+#     would leave, because `apps/desktop` is now a DECLARED module (it never
+#     was — `legacy-desktop` still pointed at the pre-monorepo roots), so the
+#     7 host -> {agent-protocol, agent-runtime} edges plan 586 introduces are
+#     now counted as permitted rather than blocking. See `desktop-host` below
+#     and the prefix-matching fix in `architecture-check.mjs`.
+#   deep-import          117 -> 93   A RESOLVER FIX, not a cleanup.
+#     `audit-imports.mjs` compared an `exports` map's "./testing" key against
+#     the raw specifier remainder "/testing", so every declared subpath export
+#     in the repo was reported as reaching past the public entrypoints. 24 of
+#     the 117 were false. `@duya/agent/message` and
+#     `@duya/agent-protocol/testing` are both in their package's `exports`.
+#
+# The 35 permitted module edges are measured separately and never block; see
+# the `module-dependency-permitted` rule above and the `desktop-host` entry.
 selfTest:
-  module-dependency: 562
-  forbidden-dependency: 82
+  module-dependency: 564
+  module-dependency-permitted: 35
+  forbidden-dependency: 16
   package-boundary-escape: 161
-  deep-import: 117
+  deep-import: 93
   cycle: 18
   missing-module-artifact: 1

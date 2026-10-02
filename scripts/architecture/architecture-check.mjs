@@ -127,6 +127,11 @@ const modules = (policy.modules ?? []).map((m) => ({
   id: m.id,
   managed: m.managed === true,
   roots: (m.roots ?? []).map(asPosix),
+  // Carried through so `requires` can be evaluated. It was not read here
+  // before, which is why a declared dependency and a violation looked
+  // identical to the verdict — see `moduleDependencyPermitted`.
+  requires: (m.requires ?? []).map(String),
+  publicEntrypoints: (m.publicEntrypoints ?? []).map(asPosix),
 }));
 
 function moduleOf(file) {
@@ -156,6 +161,46 @@ function findForbidden(fromFile, toPath) {
     if (rule.to.some((re) => re.test(toPath))) return rule.reason;
   }
   return null;
+}
+
+/**
+ * Is this cross-module edge one the policy explicitly permits?
+ *
+ * True when the SOURCE module declares the target in its `requires` list.
+ * `ownerToRoot` maps the audit's owner label (`pkg:agent-protocol`) back to
+ * the repository path prefix, which is how a required module is matched
+ * against a declared root.
+ */
+function moduleDependencyPermitted(fromFile, toOwner) {
+  const from = moduleOf(fromFile);
+  if (from === null) return false;
+  const toRoot = ownerToRoot(toOwner);
+  if (toRoot === null) return false;
+  return (from.requires ?? []).some((id) => {
+    const target = modules.find((m) => m.id === id);
+    return target?.roots.some((r) => pathRootCovers(r, toRoot) || pathRootCovers(toRoot, r)) ?? false;
+  });
+}
+
+/**
+ * Path-prefix containment, on SEGMENT boundaries.
+ *
+ * Plain `startsWith` is wrong here in a way that silently inverts a rule:
+ * `packages/agent`.startsWith(`packages/agent-protocol`) is false, but
+ * `packages/agent-protocol`.startsWith(`packages/agent`) is TRUE, so a naive
+ * bidirectional check treats the legacy `agent` package as CONTAINING both
+ * new `agent-*` packages. Every electron-main -> packages/agent edge was then
+ * permitted by a `requires: [agent-protocol]` declaration it had nothing to do
+ * with — 154 edges waved through a rule meant to catch exactly those.
+ *
+ * A root only covers a path if the path is the root or continues past a
+ * separator. `packages/agent` covers `packages/agent/src/x`; it does not cover
+ * `packages/agent-protocol`.
+ */
+function pathRootCovers(root, p) {
+  if (root === p) return true;
+  const prefix = root.endsWith("/") ? root : `${root}/`;
+  return p.startsWith(prefix);
 }
 
 // ── audit data ────────────────────────────────────────────────────────────
@@ -223,7 +268,27 @@ if (ruleEnabled("module-dependency")) {
   for (const e of imports.crossBoundaryEdges ?? []) {
     const reason = findForbidden(e.from, e.to.startsWith("UNRESOLVED:") ? (ownerToRoot(e.toOwner) ?? e.to) : e.to);
     if (reason) add("forbidden-dependency", e.from, `${e.spec} -> ${e.to} :: ${reason}`);
-    add("module-dependency", e.from, `${e.fromOwner} -> ${e.toOwner}: ${e.spec}`);
+    // A module's own `requires` list is the DECLARATION of which cross-boundary
+    // edges are permitted. An edge into a required module is the policy working,
+    // not a breach of it.
+    //
+    // It used to be recorded unconditionally, and because a `managed: true`
+    // module blocks on every violation it holds, that made the two managed
+    // packages with declared dependencies (`agent-core` requires
+    // `agent-protocol`; `agent-runtime` requires both) permanently red. A
+    // `requires` list nobody can satisfy is not a boundary. `agent-protocol`
+    // never exposed this: it is the only managed module that exists, and it has
+    // `requires: []`.
+    //
+    // Permitted edges are still COUNTED, in a separate rule, so the graph stays
+    // visible and a future `requires` edit shows up as a count change rather
+    // than as silence.
+    const permitted = moduleDependencyPermitted(e.from, e.toOwner);
+    add(
+      permitted ? "module-dependency-permitted" : "module-dependency",
+      e.from,
+      `${e.fromOwner} -> ${e.toOwner}: ${e.spec}`,
+    );
   }
 }
 
@@ -373,9 +438,19 @@ if (CHANGED_REF) {
 
 // ── verdict ───────────────────────────────────────────────────────────────
 
+// Rules that MEASURE rather than forbid. They are reported, counted and
+// fingerprinted so the graph stays visible and a `requires` edit shows up as a
+// count change — but they never block, even inside a `managed: true` module.
+// A managed module's zero tolerance is about rules it can actually break.
+const MEASUREMENT_RULES = new Set(["module-dependency-permitted"]);
+
 const blocking = [];
 const tolerated = [];
 for (const v of violations) {
+  if (MEASUREMENT_RULES.has(v.rule)) {
+    tolerated.push(v);
+    continue;
+  }
   const mod = moduleOf(v.file);
   const isManaged = mod?.managed === true;
   if (isManaged) {

@@ -53,6 +53,23 @@ async function buildElectron() {
       // (@duya/plugin-core → src/index.ts via package.json "main") and
       // subpath imports (@duya/plugin-core/src/...) resolve correctly.
       '@duya/plugin-core': path.resolve(scriptDir, '../packages/plugin-core'),
+      // Same reason, same root-pointing convention, for the three packages
+      // plan 584/586 added. They are ESM with `exports` maps, so the package
+      // root resolves to `dist/index.js` via `main` and the `/testing`
+      // subpath to `dist/testing/index.js` — which is what
+      // `apps/desktop/src/main/agents/server/run-orchestrator.ts` imports.
+      //
+      // The SUBPATH must be listed first and explicitly. esbuild treats an
+      // alias as matching the exact path or a `/`-delimited prefix, so a bare
+      // `@duya/agent-protocol` entry also swallows
+      // `@duya/agent-protocol/testing` and rewrites it to
+      // `<root>/testing` — which resolves to nothing, because the built subpath
+      // lives at `dist/testing`. Longest match wins, so naming both is what
+      // makes the pair work.
+      '@duya/agent-protocol/testing': path.resolve(scriptDir, '../packages/agent-protocol/dist/testing/index.js'),
+      '@duya/agent-protocol': path.resolve(scriptDir, '../packages/agent-protocol'),
+      '@duya/agent-core': path.resolve(scriptDir, '../packages/agent-core'),
+      '@duya/agent-runtime': path.resolve(scriptDir, '../packages/agent-runtime'),
     },
     // The agent bundle (and WorkerPool.ts in packages/agent) reads
     // `import.meta.url` and falls back to `__dirname` when bundled as CJS
