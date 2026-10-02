@@ -71,11 +71,17 @@ interface RemoteSession {
   closing: boolean;
   /** Plan 580 D2: server capabilities from the initialize result (ledger). */
   serverCapabilities?: Record<string, unknown>;
-  // --- Plan 580 D3 ledger state (chain B instance) ---
-  inventoryRevision: number;
-  discoveryStatus: 'complete' | 'refreshing' | 'failed' | 'stale';
-  pagesFetched: number;
-  discoveredTotal: number;
+  /**
+   * Plan 580 D3 chain B inventory ledger, owned per session (see
+   * `inventory-ledger.ts`). It is the single source of truth for discovery
+   * state: pagesFetched / discoveredTotal / inventoryRevision / layers /
+   * fetchedAt all live here, not as loose fields on this interface. Do not
+   * flatten them back out — the snapshot returned by `getLedgerSnapshot()`
+   * is consumed by `connector-service.ts:339`, and a flattened copy cannot
+   * express the `complete` vs `stale` distinction that `commitDiscovery`
+   * derives from `truncated`.
+   */
+  ledger: InventoryLedger;
   /** Monotonic guard: a late commit of a superseded discovery must lose. */
   rediscoveryGeneration: number;
   listChangedTimer: NodeJS.Timeout | null;
@@ -272,14 +278,14 @@ export class RemoteMcpConnector {
   }
 
   private async rediscover(connectionId: string, session: RemoteSession): Promise<void> {
-    session.discoveryStatus = 'refreshing';
+    session.ledger.beginDiscovery();
     try {
       await this.discoverNow(connectionId, session);
     } catch (err) {
       // Plan 580 D6: a failed refresh is NOT an authoritative empty —
       // keep the last-known inventory and mark it failed. The next
       // successful pass (or re-connect) is the only recovery path.
-      session.discoveryStatus = 'failed';
+      session.ledger.failDiscovery();
       this.logger.warn(
         'Remote MCP rediscovery failed; keeping last-known inventory',
         { connectionId, provider: session.provider, err: String(err) },
@@ -372,13 +378,13 @@ export class RemoteMcpConnector {
       tools: new Map(),
       provider,
       closing: false,
-      inventoryRevision: 0,
-      discoveryStatus: 'refreshing',
-      pagesFetched: 0,
-      discoveredTotal: 0,
+      // A fresh ledger starts at `failed`; mark the connect attempt in flight
+      // so a session that has not committed yet does not read as failed.
+      ledger: new InventoryLedger(),
       rediscoveryGeneration: 0,
       listChangedTimer: null,
     };
+    session.ledger.beginDiscovery();
     try {
       await client.connect(transport);
 

@@ -93,6 +93,7 @@ import { getJsonSetting } from './db/queries/settings';
 
 import { isDev, isPreviewMode, DEBUG_IPC, debugLog, setupDevMode, setupTestMode, initGlobalErrorHandlers, acquireSingleInstanceLock, setupSecondInstanceHandler, logEnvironmentDiagnostic } from './core/bootstrap';
 import { getMainWindow, getIsQuitting, setIsQuitting, getIconPath, getRendererUrl, createWindow } from './core/window-manager';
+import { checkMediaPath } from './core/media-allowlist';
 import { createSafeModeWindow, getSafeModeWindow } from './core/safe-mode';
 import { createTray } from './core/tray-manager';
 import { setupApplicationMenu } from './core/menu-manager';
@@ -809,26 +810,21 @@ if (gotTheLock) {
         }
         filePath = filePath.replace(/\//g, path.sep);
 
-        const data = await fs.promises.readFile(filePath);
+        // Plan 583 ISS-02: refuse anything that is not embeddable media
+        // inside an app-owned root. Model-authored markdown can steer this
+        // handler at any absolute path, so the extension and root gates are
+        // both mandatory. See electron/core/media-allowlist.ts.
+        const decision = checkMediaPath(filePath);
+        if (!decision.allowed) {
+          logger.warn('duya-file request refused', { reason: decision.reason }, LogComponent.Main);
+          return new Response('Not Found', { status: 404 });
+        }
 
-        const ext = path.extname(filePath).toLowerCase();
-        const mimeTypes: Record<string, string> = {
-          '.png': 'image/png',
-          '.jpg': 'image/jpeg',
-          '.jpeg': 'image/jpeg',
-          '.gif': 'image/gif',
-          '.svg': 'image/svg+xml',
-          '.webp': 'image/webp',
-          '.bmp': 'image/bmp',
-          '.pdf': 'application/pdf',
-          '.txt': 'text/plain',
-          '.md': 'text/markdown',
-        };
-        const mimeType = mimeTypes[ext] || 'application/octet-stream';
+        const data = await fs.promises.readFile(filePath);
 
         return new Response(data, {
           status: 200,
-          headers: { 'Content-Type': mimeType, 'Cache-Control': 'public, max-age=3600' },
+          headers: { 'Content-Type': decision.mimeType, 'Cache-Control': 'public, max-age=3600' },
         });
       } catch {
         return new Response('Not Found', { status: 404 });

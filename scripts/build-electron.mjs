@@ -70,6 +70,15 @@ async function buildElectron() {
       '@duya/agent-protocol': path.resolve(scriptDir, '../packages/agent-protocol'),
       '@duya/agent-core': path.resolve(scriptDir, '../packages/agent-core'),
       '@duya/agent-runtime': path.resolve(scriptDir, '../packages/agent-runtime'),
+      // The `duya-file://` media allowlist
+      // (apps/desktop/src/main/core/media-allowlist.ts, plan 583 ISS-02)
+      // reuses the sandboxed file tools' root-boundary primitive instead of a
+      // third hand-rolled variant. Point at the source file: it only imports
+      // node:fs/node:path, so it inlines cleanly into the main-process bundle.
+      '@duya/agent/tool/allowedRoots': path.resolve(
+        scriptDir,
+        '../packages/agent/src/tool/allowedRoots.ts',
+      ),
     },
     // The agent bundle (and WorkerPool.ts in packages/agent) reads
     // `import.meta.url` and falls back to `__dirname` when bundled as CJS
