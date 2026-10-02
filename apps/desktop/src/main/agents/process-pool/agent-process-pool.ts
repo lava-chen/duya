@@ -1,0 +1,783 @@
+/**
+ * AgentProcessPool - Multi-process Agent execution with Resource Governor
+ *
+ * Phase 6: Migrated from electron/agent-process-pool.ts into focused modules.
+ *  - process-manager.ts : process lifecycle & resource calculator
+ *  - message-router.ts  : message routing between Main and Agent processes
+ *  - agent-process-pool.ts (this file) : orchestration & public API
+ */
+
+import type { ChildProcess } from 'child_process';
+import { spawn } from 'child_process';
+import { app } from 'electron';
+import { getLogger, LogComponent } from '../../logging/logger.js';
+import { getProviderStore } from '../../services/providers/provider-store-electron.js';
+import { getConfigStore } from '../../config/store-instance.js';
+import { toLegacyApiProvider } from '../../../renderer/lib/providers/legacy.js';
+import { toLLMProvider } from '../../config/provider-types.js';
+import { getDatabase } from '../../ipc/db-handlers.js';
+import { killProcessTree } from '../../lib/process-cleanup.js';
+import { getPerformanceMonitor } from '../../services/performance-monitor.js';
+import { hideComputerUseOverlayForSession } from '../../services/computer-use-overlay.js';
+
+import {
+  calculateMaxConcurrent,
+  getAgentProcessPath,
+  getAgentRuntimeCommand,
+  type RunningProcess,
+} from './process-manager.js';
+
+import {
+  MessageRouter,
+  type ProcessMessage,
+} from './message-router.js';
+
+export type { ProcessMessage };
+
+export interface AgentProcessConfig {
+  sessionId: string;
+  maxMemoryMB?: number;
+}
+
+export interface QueueItem {
+  sessionId: string;
+  resolve: () => void;
+  reject: (error: Error) => void;
+}
+
+export class AgentProcessPool {
+  private maxConcurrent: number;
+  private running = new Map<string, RunningProcess>();
+  private queue: QueueItem[] = [];
+  private heartbeatInterval: NodeJS.Timeout | null = null;
+  private isShuttingDown = false;
+  private busySessions = new Set<string>();
+  private interruptedSessions = new Set<string>();
+  private pendingMessages = new Map<string, { prompt: string; options?: Record<string, unknown> }[]>();
+  /** Sessions the pool has been asked to release (kill). Used to distinguish
+   *  an intentional teardown from an unexpected crash in the exit handler. */
+  private releasedSessions = new Set<string>();
+  private debugIpc = process.env.DUYA_DEBUG_IPC === 'true';
+  private logger = getLogger();
+  private providerReinitLock = new Map<string, boolean>();
+  private unsubConfigChange: (() => void) | null = null;
+  // L1: Cached provider config snapshot to detect provider-only changes
+  private lastProviderSnapshot = '';
+  private router = new MessageRouter();
+
+  constructor() {
+    this.maxConcurrent = calculateMaxConcurrent();
+    this.startHeartbeat();
+    this.subscribeToProviderChanges();
+  }
+
+  private subscribeToProviderChanges(): void {
+    // L1: Only reinit sessions when provider configuration actually changes.
+    // Other config changes (e.g. UI settings) should not trigger a full restart.
+    this.lastProviderSnapshot = JSON.stringify(this.snapshotProviders());
+    this.unsubConfigChange = getConfigStore().subscribe(() => {
+      const current = JSON.stringify(this.snapshotProviders());
+      if (current === this.lastProviderSnapshot) {
+        // Provider config unchanged — skip reinit
+        return;
+      }
+      this.lastProviderSnapshot = current;
+      for (const sessionId of this.running.keys()) {
+        this.reinitProcess(sessionId);
+      }
+    });
+  }
+
+  private snapshotProviders(): unknown {
+    return {
+      defaultProviderId: (getConfigStore().getByPath('model.provider') as string | undefined) ?? null,
+      providers: getProviderStore().listLlmProviders(),
+    };
+  }
+
+  // ========================================================================
+  // Process Lifecycle
+  // ========================================================================
+
+  /**
+   * Pin a session to a specific provider id. Subsequent
+   * `sendProviderInit` calls for this session will use that
+   * provider instead of the global default. Pass `null` to clear
+   * the per-session pin and fall back to the global default.
+   *
+   * The pin is applied at the next re-initialization boundary
+   * (start, post-busy idle, or config-change). It does NOT
+   * interrupt an in-flight turn.
+   */
+  setSessionProvider(sessionId: string, providerId: string | null): void {
+    const proc = this.running.get(sessionId);
+    if (!proc) {
+      // Session not yet started; cache the pin so startProcess
+      // picks it up. We store it on the pool itself.
+      if (providerId !== null) {
+        this.pendingProviderPins.set(sessionId, providerId);
+      } else {
+        this.pendingProviderPins.delete(sessionId);
+      }
+      return;
+    }
+    if (proc.providerId === providerId) return;
+    proc.providerId = providerId;
+    this.pendingProviderPins.delete(sessionId);
+    this.reinitProcess(sessionId);
+  }
+
+  /** Per-session pin queued before the session was started. */
+  private pendingProviderPins = new Map<string, string>();
+
+  /**
+   * Override the heartbeat health-check timeout (ms) for a running session,
+   * or clear a previous override by passing `null`. Used by long-running
+   * autonomous sessions (e.g. the memory curator) so the pool's default 120s
+   * kill does not terminate a legitimately long run; those sessions govern
+   * their own deadline. Queued before the session starts if not yet running.
+   */
+  setSessionHeartbeatTimeout(sessionId: string, ms: number | null): void {
+    const proc = this.running.get(sessionId);
+    if (!proc) {
+      if (ms === null) {
+        this.pendingHeartbeatOverrides.delete(sessionId);
+      } else {
+        this.pendingHeartbeatOverrides.set(sessionId, ms);
+      }
+      return;
+    }
+    proc.heartbeatTimeoutMs = ms ?? undefined;
+    this.pendingHeartbeatOverrides.delete(sessionId);
+  }
+
+  /** Per-session heartbeat timeout queued before the session was started. */
+  private pendingHeartbeatOverrides = new Map<string, number>();
+
+  async acquire(sessionId: string): Promise<{ isNew: boolean }> {
+    if (this.isShuttingDown) {
+      throw new Error('Process pool is shutting down');
+    }
+
+    if (this.running.has(sessionId)) {
+      // Process reuse: the same sessionId is already running. This is only
+      // correct for interactive chat sessions where the caller intentionally
+      // continues the same conversation. One-shot runners (cron / curation)
+      // must pass a unique per-run sessionId so acquire ALWAYS starts fresh;
+      // a reused process here means the previous run's state was not torn down.
+      this.logger.warn(
+        `acquire: reusing already-running process for session ${sessionId}`,
+        { running: this.running.size, maxConcurrent: this.maxConcurrent },
+        LogComponent.AgentProcessPool,
+      );
+      return { isNew: false };
+    }
+
+    if (this.running.size < this.maxConcurrent) {
+      await this.startProcess(sessionId);
+      return { isNew: true };
+    } else {
+      this.logger.info(
+        `acquire: queued session ${sessionId} (at max concurrency ${this.maxConcurrent})`,
+        undefined,
+        LogComponent.AgentProcessPool,
+      );
+      await new Promise<void>((resolve, reject) => {
+        this.queue.push({ sessionId, resolve, reject });
+      });
+      return { isNew: true };
+    }
+  }
+
+  isSessionBusy(sessionId: string): boolean {
+    return this.busySessions.has(sessionId);
+  }
+
+  markSessionBusy(sessionId: string): void {
+    this.busySessions.add(sessionId);
+  }
+
+  markSessionIdle(sessionId: string): void {
+    this.busySessions.delete(sessionId);
+  }
+
+  queueMessage(sessionId: string, prompt: string, options?: Record<string, unknown>): void {
+    if (!this.pendingMessages.has(sessionId)) {
+      this.pendingMessages.set(sessionId, []);
+    }
+    this.pendingMessages.get(sessionId)!.push({ prompt, options });
+  }
+
+  drainNextMessage(sessionId: string): { prompt: string; options?: Record<string, unknown> } | undefined {
+    const queue = this.pendingMessages.get(sessionId);
+    if (!queue || queue.length === 0) {
+      this.pendingMessages.delete(sessionId);
+      return undefined;
+    }
+    const msg = queue.shift()!;
+    if (queue.length === 0) {
+      this.pendingMessages.delete(sessionId);
+    }
+    return msg;
+  }
+
+  hasPendingMessages(sessionId: string): boolean {
+    const queue = this.pendingMessages.get(sessionId);
+    return !!queue && queue.length > 0;
+  }
+
+  private async startProcess(sessionId: string): Promise<void> {
+    const agentPath = getAgentProcessPath();
+    const securityBypassSkills = (getConfigStore().getByPath('agent.security_bypass_skills') as string[] | undefined) || [];
+    const runtime = getAgentRuntimeCommand(sessionId, securityBypassSkills);
+
+    return new Promise((resolve, reject) => {
+      try {
+        const child: ChildProcess = spawn(runtime.command, runtime.args, {
+          stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
+          env: runtime.env,
+        });
+
+        const runningProcess: RunningProcess = {
+          child,
+          startTime: Date.now(),
+          lastPong: Date.now(),
+          sessionId,
+          // Apply any pin that was queued before this session
+          // was actually started; otherwise default to null
+          // (i.e. use the global default).
+          providerId: this.pendingProviderPins.get(sessionId) ?? null,
+          // Apply any heartbeat override queued before the process started.
+          heartbeatTimeoutMs: this.pendingHeartbeatOverrides.get(sessionId),
+        };
+        this.pendingProviderPins.delete(sessionId);
+        this.pendingHeartbeatOverrides.delete(sessionId);
+
+        this.logger.info(`Agent process started: ${runtime.command} ${runtime.args.join(' ')}`, undefined, LogComponent.AgentProcessPool);
+
+        // Capture stderr for debugging - output in real-time + buffer for exit logging
+        const stderrChunks: string[] = [];
+        if (child.stderr) {
+          child.stderr.on('data', (chunk: Buffer) => {
+            const line = chunk.toString();
+            // Real-time output to console
+            process.stderr.write(`[agent:${sessionId.slice(0, 8)}] ${line}`);
+            stderrChunks.push(line);
+          });
+        }
+
+        child.on('message', async (msg: ProcessMessage) => {
+          await this.router.handleMessage(sessionId, msg, runningProcess);
+          if (msg.type === 'pong') {
+            runningProcess.lastPong = Date.now();
+          }
+        });
+
+        child.on('error', (err: Error) => {
+          this.logger.error('Spawn error', err, { sessionId }, LogComponent.AgentProcessPool);
+          this.release(sessionId);
+          reject(err);
+        });
+
+        child.on('exit', (code, signal) => {
+          // The pool was asked to release this session (cron/curation teardown,
+          // shutdown, or a concurrency-policy replace). A force-kill on Windows
+          // surfaces as code 1 + EPIPE on the agent's stdout; that is expected,
+          // not a crash. Only treat a non-released exit as unexpected.
+          const intentionallyReleased = this.releasedSessions.has(sessionId);
+          this.releasedSessions.delete(sessionId);
+
+          // Log the FULL captured stderr so a real failure (provider error,
+          // uncaught exception, MiniMax hang) is diagnosable instead of being
+          // truncated to the pool's first-5-lines slice.
+          if (stderrChunks.length > 0) {
+            const stderrText = stderrChunks.join('\n');
+            if (intentionallyReleased) {
+              this.logger.warn('Agent process exited (released)', { sessionId, code, signal, stderr: stderrText }, LogComponent.AgentProcessPool);
+            } else {
+              this.logger.error('Agent process stderr on exit', undefined, { sessionId, code, signal, stderr: stderrText }, LogComponent.AgentProcessPool);
+            }
+          }
+
+          const isCrash = !intentionallyReleased && (code !== 0 || signal);
+          if (isCrash) {
+            this.logger.error('Process exited unexpectedly', undefined, { sessionId, code, signal }, LogComponent.AgentProcessPool);
+          }
+
+          this.router.broadcastDisconnect(sessionId, code, signal);
+          this.router.clearSession(sessionId);
+          this.running.delete(sessionId);
+          this.busySessions.delete(sessionId);
+          this.providerReinitLock.delete(sessionId);
+
+          // Agent is gone — drop the computer-use control indicator if
+          // it was showing for this session (user request 2026-08-29).
+          hideComputerUseOverlayForSession(sessionId);
+
+          if (!isCrash) {
+            this.pendingMessages.delete(sessionId);
+          }
+
+          this.processQueue();
+        });
+
+        this.running.set(sessionId, runningProcess);
+        this.logger.info(`Process registered for session ${sessionId}`, undefined, LogComponent.AgentProcessPool);
+        resolve();
+      } catch (err) {
+        this.logger.error('Failed to start process', err instanceof Error ? err : new Error(String(err)), {
+          sessionId, runtimeCommand: runtime.command,
+        }, LogComponent.AgentProcessPool);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+  }
+
+  release(sessionId: string): void {
+    const proc = this.running.get(sessionId);
+    if (proc) {
+      this.releasedSessions.add(sessionId);
+      void killProcessTree(proc.child, { force: true });
+    }
+    this.releaseSession(sessionId);
+  }
+
+  /**
+   * Release a session and wait for its agent process to fully exit.
+   *
+   * Used by the curation runner (design §9.2) as a hard boundary before
+   * deleting staging: it requests a graceful interrupt, waits up to
+   * `gracefulMs` for the process to exit, force-kills the process tree if
+   * it does not exit in time, then releases the pool slot.
+   *
+   * Resolves once the process has exited (or was already gone) and the
+   * slot is released. Never rejects.
+   */
+  async releaseAndWait(sessionId: string, opts?: { gracefulMs?: number }): Promise<void> {
+    const gracefulMs = opts?.gracefulMs ?? 10_000;
+    const proc = this.running.get(sessionId);
+
+    // Already released — nothing to do.
+    if (!proc) {
+      return;
+    }
+
+    // This method always tears the process down; mark it so the exit handler
+    // does not report a force-kill as an unexpected crash.
+    this.releasedSessions.add(sessionId);
+
+    const child = proc.child;
+
+    // Process already exited — release the slot immediately.
+    if (child.exitCode !== null) {
+      this.releaseSession(sessionId);
+      return;
+    }
+
+    // Request a graceful shutdown.
+    this.interrupt(sessionId);
+
+    return new Promise<void>((resolve) => {
+      let settled = false;
+      let timer: NodeJS.Timeout | null = null;
+
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+      };
+
+      const onExit = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        this.releaseSession(sessionId);
+        resolve();
+      };
+
+      child.once('exit', onExit);
+
+      timer = setTimeout(() => {
+        if (settled) return;
+        // Graceful exit timed out — force kill, then resolve on exit.
+        void killProcessTree(child, { force: true }).then(() => {
+          if (settled) return;
+          // The exit event may not fire synchronously; release the slot
+          // once the kill is confirmed.
+          settled = true;
+          cleanup();
+          this.releaseSession(sessionId);
+          resolve();
+        });
+      }, gracefulMs);
+    });
+  }
+
+  /**
+   * Release a pool slot: clear per-session state, reject queued work for
+   * the session, and drive the queue. Does NOT kill the process — callers
+   * are responsible for terminating the child first.
+   */
+  private releaseSession(sessionId: string): void {
+    this.running.delete(sessionId);
+    this.busySessions.delete(sessionId);
+    this.interruptedSessions.delete(sessionId);
+    this.providerReinitLock.delete(sessionId);
+    this.router.clearSession(sessionId);
+
+    const remainingQueue: QueueItem[] = [];
+    for (const item of this.queue) {
+      if (item.sessionId === sessionId) {
+        item.reject(new Error(`Process released for session ${sessionId}`));
+      } else {
+        remainingQueue.push(item);
+      }
+    }
+    this.queue = remainingQueue;
+    this.processQueue();
+  }
+
+  private processQueue(): void {
+    if (this.queue.length === 0) return;
+    if (this.running.size >= this.maxConcurrent) return;
+
+    const next = this.queue.shift();
+    if (!next) return;
+
+    // M3: Skip if session already has a running process (duplicate queue entry)
+    if (this.running.has(next.sessionId)) {
+      next.resolve();
+      this.processQueue();
+      return;
+    }
+
+    this.startProcess(next.sessionId)
+      .then(() => next.resolve())
+      .catch(err => next.reject(err));
+  }
+
+  // ========================================================================
+  // Message API
+  // ========================================================================
+
+  send(sessionId: string, msg: ProcessMessage): boolean {
+    const proc = this.running.get(sessionId);
+    if (!proc || proc.child.exitCode !== null) {
+      return false;
+    }
+
+    try {
+      proc.child.send(msg);
+      return true;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  onMessage(sessionId: string, handler: (msg: ProcessMessage) => void): void {
+    this.router.register(sessionId, handler);
+  }
+
+  removeMessageHandler(sessionId: string, handler?: (msg: ProcessMessage) => void): void {
+    this.router.remove(sessionId, handler);
+  }
+
+  /**
+   * Broadcast a runtime config update to all running agent processes.
+   * Used when a setting (e.g. browserBackendMode) changes while agents
+   * are alive — they pick it up without a full re-init.
+   */
+  broadcastConfigUpdate(payload: { browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like' }): void {
+    for (const [sessionId] of this.running) {
+      this.send(sessionId, { type: 'config:update', sessionId, ...payload });
+    }
+  }
+
+  // ========================================================================
+  // Health Monitoring
+  // ========================================================================
+
+  private startHeartbeat(): void {
+    this.heartbeatInterval = setInterval(() => {
+      this.checkAllProcesses();
+    }, 10000);
+  }
+
+  private checkAllProcesses(): void {
+    const now = Date.now();
+    const defaultTimeout = 120000;
+    const defaultPingThreshold = 60000;
+
+    for (const [sessionId, proc] of this.running) {
+      if (proc.child.exitCode !== null) {
+        this.running.delete(sessionId);
+        this.busySessions.delete(sessionId);
+        this.interruptedSessions.delete(sessionId);
+        this.providerReinitLock.delete(sessionId);
+        this.router.clearSession(sessionId);
+        this.processQueue();
+        continue;
+      }
+
+      // Long-running autonomous sessions may override the health-check
+      // timeout (see setSessionHeartbeatTimeout). Derive a proportional
+      // ping threshold so we still probe liveness, just less aggressively.
+      const timeout = proc.heartbeatTimeoutMs ?? defaultTimeout;
+      const pingThreshold = Math.min(defaultPingThreshold, timeout / 2);
+
+      const elapsed = now - proc.lastPong;
+      if (elapsed > timeout) {
+        this.logger.warn('Process timed out, killing', { sessionId, elapsed, timeout }, LogComponent.AgentProcessPool);
+        this.router.broadcastDisconnect(sessionId, null, null);
+        void killProcessTree(proc.child, { force: true });
+        this.running.delete(sessionId);
+        this.busySessions.delete(sessionId);
+        this.interruptedSessions.delete(sessionId);
+        this.providerReinitLock.delete(sessionId);
+        this.router.clearSession(sessionId);
+        this.processQueue();
+      } else if (elapsed > pingThreshold) {
+        try {
+          proc.child.send({ type: 'ping' });
+        } catch {
+          this.running.delete(sessionId);
+          this.busySessions.delete(sessionId);
+          this.interruptedSessions.delete(sessionId);
+          this.providerReinitLock.delete(sessionId);
+          this.router.clearSession(sessionId);
+          this.processQueue();
+        }
+      }
+    }
+  }
+
+  // ========================================================================
+  // Stats
+  // ========================================================================
+
+  getStatus(): {
+    running: number;
+    maxConcurrent: number;
+    queueLength: number;
+    processes: Array<{ sessionId: string; uptime: number; lastPong: number }>;
+  } {
+    const now = Date.now();
+    return {
+      running: this.running.size,
+      maxConcurrent: this.maxConcurrent,
+      queueLength: this.queue.length,
+      processes: Array.from(this.running.values()).map(p => ({
+        sessionId: p.sessionId,
+        uptime: now - p.startTime,
+        lastPong: p.lastPong,
+      })),
+    };
+  }
+
+  isRunning(sessionId: string): boolean {
+    const proc = this.running.get(sessionId);
+    return proc !== undefined && proc.child.exitCode === null;
+  }
+
+  interrupt(sessionId: string): boolean {
+    const proc = this.running.get(sessionId);
+    if (!proc) return false;
+
+    // Use this.send() (which calls proc.child.send) — NOT this.router.send(),
+    // which doesn't exist on MessageRouter. MessageRouter only routes
+    // inbound messages FROM the child process to registered handlers;
+    // it has no outbound send capability.
+    this.send(sessionId, { type: 'chat:interrupt', sessionId });
+    this.interruptedSessions.add(sessionId);
+    return true;
+  }
+
+  getInterruptedSessions(): string[] {
+    return Array.from(this.interruptedSessions);
+  }
+
+  clearInterruptedSession(sessionId: string): void {
+    this.interruptedSessions.delete(sessionId);
+  }
+
+  waitForReady(sessionId: string, timeoutMs = 30000): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.removeMessageHandler(sessionId, readyHandler);
+        reject(new Error(`Agent process ${sessionId} ready timeout (${timeoutMs}ms)`));
+      }, timeoutMs);
+
+      const readyHandler = (msg: ProcessMessage) => {
+        const msgType = (msg as { type?: string }).type;
+        if (msgType === 'ready' || msgType === 'conductor:ready') {
+          clearTimeout(timeout);
+          this.removeMessageHandler(sessionId, readyHandler);
+          const status = (msg as { status?: string }).status;
+          if (status === 'error') {
+            const errorMsg = (msg as { error?: string }).error
+              ?? `Agent process ${sessionId} failed to initialize (status:error)`;
+            reject(new Error(errorMsg));
+            return;
+          }
+          resolve();
+        }
+      };
+      this.onMessage(sessionId, readyHandler);
+    });
+  }
+
+  // ========================================================================
+  // Provider Re-initialization
+  // ========================================================================
+
+  private reinitProcess(sessionId: string): void {
+    if (this.providerReinitLock.get(sessionId)) {
+      return;
+    }
+
+    const proc = this.running.get(sessionId);
+    if (!proc || proc.child.exitCode !== null) return;
+
+    if (this.busySessions.has(sessionId)) {
+      this.providerReinitLock.set(sessionId, true);
+      const handlerSet = this.router.getHandlers(sessionId);
+      if (handlerSet) {
+        // L2: Add a timeout so the handler does not leak if the process exits
+        // without sending chat:done/chat:error (e.g. crash during busy turn).
+        const timeout = setTimeout(() => {
+          handlerSet.delete(checkDone);
+          this.providerReinitLock.delete(sessionId);
+          this.logger.warn(
+            'reinitProcess: busy session handler timed out, cleaning up',
+            { sessionId },
+            LogComponent.AgentProcessPool,
+          );
+        }, 60000);
+        const checkDone = (msg: ProcessMessage): void => {
+          const msgType = (msg as { type?: string }).type;
+          if (msgType === 'chat:done' || msgType === 'chat:error') {
+            clearTimeout(timeout);
+            handlerSet.delete(checkDone);
+            this.providerReinitLock.delete(sessionId);
+            this.sendProviderInit(sessionId);
+          }
+        };
+        handlerSet.add(checkDone);
+      }
+      return;
+    }
+
+    this.sendProviderInit(sessionId);
+  }
+
+  private sendProviderInit(sessionId: string): void {
+    const db = getDatabase();
+
+    let browserBackendMode: 'auto' | 'extension' | 'built-in' | 'human-like' = 'auto';
+    try {
+      const row = db?.prepare("SELECT value FROM settings WHERE key = 'browserBackendMode'").get() as { value: string } | undefined;
+      if (row?.value === 'extension' || row?.value === 'built-in' || row?.value === 'human-like') {
+        browserBackendMode = row.value;
+      }
+    } catch {}
+
+    const proc = this.running.get(sessionId);
+    const pinnedId = proc?.providerId ?? null;
+    const pinned = pinnedId ? getProviderStore().getLlmProvider(pinnedId) : undefined;
+    const targetLlm = pinned ?? getProviderStore().getDefaultLlmProvider();
+    if (!targetLlm) {
+      this.logger.warn(
+        `sendProviderInit: no provider for session ${sessionId} ` +
+          `(pinnedId=${pinnedId}, defaultId=${(getConfigStore().getByPath('model.provider') as string | undefined) ?? 'null'})`,
+        undefined,
+        LogComponent.AgentProcessPool,
+      );
+      return;
+    }
+
+    const target = toLegacyApiProvider(targetLlm);
+    const providerConfig = {
+      apiKey: target.apiKey,
+      baseURL: target.baseUrl,
+      model: target.options?.defaultModel || target.options?.model || '',
+      provider: toLLMProvider(target.providerType),
+      authStyle: 'api_key' as const,
+    };
+
+    this.send(sessionId, {
+      type: 'init',
+      sessionId,
+      providerConfig,
+      systemLocation: {
+        locale: app.getLocale(),
+        localeCountryCode: app.getLocaleCountryCode(),
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      },
+      browserBackendMode,
+    });
+  }
+
+  // ========================================================================
+  // Shutdown
+  // ========================================================================
+
+  async shutdown(): Promise<void> {
+    this.isShuttingDown = true;
+
+    if (this.unsubConfigChange) {
+      this.unsubConfigChange();
+      this.unsubConfigChange = null;
+    }
+
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+
+    for (const [sessionId] of this.running) {
+      this.router.broadcastDisconnect(sessionId, null, null);
+    }
+
+    const killPromises: Promise<void>[] = [];
+    for (const [sessionId, proc] of this.running) {
+      this.releasedSessions.add(sessionId);
+      killPromises.push(killProcessTree(proc.child, { force: true }));
+    }
+    await Promise.all(killPromises);
+
+    const remaining = Array.from(this.running.entries());
+    for (const [sessionId] of remaining) {
+      this.router.clearSession(sessionId);
+    }
+
+    this.running.clear();
+    this.busySessions.clear();
+    this.interruptedSessions.clear();
+    this.providerReinitLock.clear();
+    this.pendingMessages.clear();
+
+    for (const item of this.queue) {
+      item.reject(new Error('Process pool shutdown'));
+    }
+    this.queue = [];
+  }
+}
+
+// ========================================================================
+// Singleton
+// ========================================================================
+
+let processPool: AgentProcessPool | null = null;
+
+export function getAgentProcessPool(): AgentProcessPool {
+  if (!processPool) {
+    processPool = new AgentProcessPool();
+  }
+  return processPool;
+}
+
+export function initAgentProcessPool(): AgentProcessPool {
+  if (processPool) {
+    return processPool;
+  }
+  processPool = new AgentProcessPool();
+  return processPool;
+}

@@ -10,7 +10,7 @@
 //
 // Stage 1 status:
 //   - Scenario 01 (launcher) works end-to-end today.
-//   - Scenarios 02..05 require a one-line addition to electron/main.ts
+//   - Scenarios 02..05 require a one-line addition to apps/desktop/src/main/index.ts
 //     (DUYA_SHOWCASE_DRIVER eval) which the user will be asked to
 //     authorize separately. Until then they fall back to capturing the
 //     launcher state — same as scenario 01 — and label the PNG clearly.

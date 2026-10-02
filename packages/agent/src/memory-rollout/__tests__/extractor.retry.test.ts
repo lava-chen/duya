@@ -19,13 +19,13 @@ const agentRequire = createRequire(path.resolve(__dirname, '../../../package.jso
 const Database = agentRequire('better-sqlite3') as typeof import('better-sqlite3');
 import type { Database as BetterSqlite3Database } from 'better-sqlite3';
 
-import { migration0001 } from '../../../../../electron/memory-state/migrations/0001_init.sql';
-import { migration0002 } from '../../../../../electron/memory-state/migrations/0002_lease_stage1.sql';
-import { migration0003 } from '../../../../../electron/memory-state/migrations/0003_outbox.sql';
-import { migration0005 } from '../../../../../electron/memory-state/migrations/0005_phase2.sql';
-import { migration0006 } from '../../../../../electron/memory-state/migrations/0006_people_areas.sql';
-import { migration0007 } from '../../../../../electron/memory-state/migrations/0007_lifecycle_scope.sql';
-import { migration0008 } from '../../../../../electron/memory-state/migrations/0008_curation_runs.sql';
+import { migration0001 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0001_init.sql';
+import { migration0002 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0002_lease_stage1.sql';
+import { migration0003 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0003_outbox.sql';
+import { migration0005 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0005_phase2.sql';
+import { migration0006 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0006_people_areas.sql';
+import { migration0007 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0007_lifecycle_scope.sql';
+import { migration0008 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0008_curation_runs.sql';
 import { Stage1Extractor, type MessageRowShape } from '../extractor.js';
 import type { AIClient } from '@duya/ai';
 

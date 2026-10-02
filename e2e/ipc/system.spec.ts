@@ -88,7 +88,7 @@ test('shell:open-path rejects empty path', async () => {
 });
 
 // NOTE: NUL-character rejection is tested at the unit level
-// (electron/ipc/__tests__/url-safety.test.ts) because NUL bytes do not
+// (apps/desktop/src/main/ipc/__tests__/url-safety.test.ts) because NUL bytes do not
 // survive Electron IPC serialization reliably — they can hang the IPC
 // channel, making the E2E test flaky.
 
