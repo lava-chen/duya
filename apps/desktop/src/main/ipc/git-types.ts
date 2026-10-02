@@ -194,12 +194,12 @@ export interface GitAPI {
   listBranches: (cwd: string) => Promise<GitListBranchesResult>;
   /** Snapshot of the working tree's repo state (HEAD, branch, dirty counts). */
   repoState: (cwd: string) => Promise<GitRepositoryState>;
-  /** Switch the working tree to an existing branch. */
-  switchBranch: (cwd: string, branchName: string) => Promise<unknown>;
-  /** Create a new branch at an optional start point. */
-  createBranch: (cwd: string, branchName: string, startPoint?: string) => Promise<unknown>;
-  /** Create a commit from the staged/working tree. */
-  commit: (cwd: string, request: unknown) => Promise<unknown>;
-  /** Push the current branch (or specified refspec) to a remote. */
-  push: (cwd: string, request?: unknown) => Promise<unknown>;
+  // Plan 583 ISS-24: `switchBranch` / `createBranch` / `commit` / `push` were
+  // removed from this contract. They were exposed on the bridge but had no
+  // handler, so every call rejected; and the code-review surface is
+  // contractually read-only (AGENTS.md: "It is read-only: never add stage,
+  // commit, push, reset, or other mutating Git controls here"). Declaring
+  // them out of the type as well as out of the runtime bridge means adding a
+  // mutating handler later is a deliberate, reviewable change to both files
+  // rather than something a handler module can satisfy on its own.
 }
