@@ -9,6 +9,9 @@
  * renderer 不需要订阅这个事件 —— 前端 BridgeSection.updateSetting 已经主动调 gateway:reload。
  */
 import { EventEmitter } from 'events';
+import { getLogger, LogComponent } from '../logging/logger';
+
+const logger = getLogger();
 
 export interface GatewayConfigChangedPayload {
   /** 哪个 key / 哪个 handler 触发的，便于日志诊断 */
@@ -41,7 +44,7 @@ export function emitGatewayConfigChanged(source: string): void {
     gatewayConfigEvents.emitConfigChanged({ source });
   } catch (err) {
     // emitter 异常不应影响主流程（DB 已经写完了）
-    console.error('[GatewayConfigEvents] emit failed:', err);
+    logger.error('Config change event emit failed', err instanceof Error ? err : new Error(String(err)), { source }, LogComponent.Gateway);
   }
 }
 

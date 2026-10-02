@@ -81,17 +81,25 @@ function legacyGeminiImage(): ApiProvider {
 }
 
 describe('inferApiFormatFromLegacyProviderType', () => {
-  it('maps official anthropic / bedrock / vertex to anthropic', () => {
+  /**
+   * Bedrock, Vertex and Gemini are their own ApiFormat members now, not
+   * spellings of the anthropic / openai-chat wire protocols. They became
+   * distinct in 3af8d094 ("Bedrock Converse wire protocol + provider") and
+   * ad811fa8 ("bedrock + google model catalogs"); this suite still
+   * collapsed them, so the first mismatched expect in each case aborted
+   * the rest and hid how far the mapping had moved.
+   */
+  it('keeps bedrock and vertex as their own api formats', () => {
     expect(inferApiFormatFromLegacyProviderType('anthropic')).toBe('anthropic');
-    expect(inferApiFormatFromLegacyProviderType('bedrock')).toBe('anthropic');
-    expect(inferApiFormatFromLegacyProviderType('vertex')).toBe('anthropic');
+    expect(inferApiFormatFromLegacyProviderType('bedrock')).toBe('bedrock');
+    expect(inferApiFormatFromLegacyProviderType('vertex')).toBe('vertex');
   });
-  it('maps openai / openai-compatible / openrouter / google / gemini-image to openai-chat', () => {
+  it('maps the openai spellings to openai-chat and the google ones to gemini', () => {
     expect(inferApiFormatFromLegacyProviderType('openai')).toBe('openai-chat');
     expect(inferApiFormatFromLegacyProviderType('openai-compatible')).toBe('openai-chat');
     expect(inferApiFormatFromLegacyProviderType('openrouter')).toBe('openai-chat');
-    expect(inferApiFormatFromLegacyProviderType('google')).toBe('openai-chat');
-    expect(inferApiFormatFromLegacyProviderType('gemini-image')).toBe('openai-chat');
+    expect(inferApiFormatFromLegacyProviderType('google')).toBe('gemini');
+    expect(inferApiFormatFromLegacyProviderType('gemini-image')).toBe('gemini');
   });
   it('maps ollama to ollama', () => {
     expect(inferApiFormatFromLegacyProviderType('ollama')).toBe('ollama');
@@ -164,9 +172,11 @@ describe('migrateLegacyApiProvider', () => {
     expect(p.category).toBe('custom');
   });
 
-  it('migrates gemini-image to apiFormat=openai-chat', () => {
+  it('migrates gemini-image to apiFormat=gemini', () => {
+    // Follows `inferApiFormatFromLegacyProviderType`: gemini-image now
+    // resolves to the dedicated `gemini` format, not `openai-chat`.
     const p = migrateLegacyApiProvider(legacyGeminiImage(), NOW);
-    expect(p.apiFormat).toBe('openai-chat');
+    expect(p.apiFormat).toBe('gemini');
   });
 
   it('preserves active flag in tags for round-trip', () => {

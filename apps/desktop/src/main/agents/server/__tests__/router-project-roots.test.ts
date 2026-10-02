@@ -118,10 +118,32 @@ describe('resolveProjectViaDbRequest (Plan 536 L4)', () => {
     ).resolves.toEqual({
       projectId: 'p-1',
       paths: ['E:/Projects/duya', 'E:/Projects/duya-website', 'E:/Papers/duya-research'],
+      // Plan 525 / 408 follow-up added projectHome to the IPC payload. The
+      // stub predates it, so the field arrives absent and normalises to null.
+      projectHome: null,
     });
     expect(dbRequest).toHaveBeenCalledWith('projects:resolveProject', {
       workingDirectory: 'E:/Projects/duya',
     });
+  });
+
+  it('passes projectHome through, and normalises a non-string to null', async () => {
+    // router.ts documents that projectHome is optional in the IPC payload
+    // and that the caller distinguishes "absent" from "present", so both
+    // branches are pinned here rather than left implicit.
+    await expect(
+      resolveProjectViaDbRequest(
+        vi.fn().mockResolvedValue({ projectId: 'p-1', paths: ['E:/a'], projectHome: 'E:/home' }),
+        'E:/a'
+      )
+    ).resolves.toEqual({ projectId: 'p-1', paths: ['E:/a'], projectHome: 'E:/home' });
+
+    await expect(
+      resolveProjectViaDbRequest(
+        vi.fn().mockResolvedValue({ projectId: 'p-1', paths: ['E:/a'], projectHome: 7 }),
+        'E:/a'
+      )
+    ).resolves.toEqual({ projectId: 'p-1', paths: ['E:/a'], projectHome: null });
   });
 
   it('returns null when the cwd does not belong to any project', async () => {
@@ -167,6 +189,6 @@ describe('resolveProjectViaDbRequest (Plan 536 L4)', () => {
     });
     await expect(
       resolveProjectViaDbRequest(dbRequest, 'E:/a')
-    ).resolves.toEqual({ projectId: 'p-1', paths: ['E:/a', 'E:/b'] });
+    ).resolves.toEqual({ projectId: 'p-1', paths: ['E:/a', 'E:/b'], projectHome: null });
   });
 });

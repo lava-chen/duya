@@ -22,7 +22,7 @@ import type { Tool, ToolResult, MCPServerConfig, MCPConnectionStatus } from '../
 import { logger } from '../utils/logger.js';
 import { getCircuitBreakerManager, type CircuitBreaker } from './circuit-breaker.js';
 import { buildSafeEnv, sanitizeSecrets, scanMcpDescription } from './security.js';
-import { InventoryLedger } from './inventory-ledger.js';
+import { InventoryLedger } from '@duya/plugin-core/mcp/core/ledger-types';
 import {
   listAllTools,
   formatDiscoveryLogLine,

@@ -13,6 +13,9 @@
 import { app } from 'electron';
 
 import { isLowPowerEnabled } from './low-power';
+import { getLogger, LogComponent } from '../logging/logger';
+
+const logger = getLogger();
 
 // =============================================================================
 // TYPES & INTERFACES
@@ -325,7 +328,7 @@ export class PerformanceMonitor {
         thresholdSlopeMBPerMin: MEMORY_LEAK_SLOPE_THRESHOLD,
         timestamp: Date.now(),
       };
-      console.warn('[PerformanceMonitor] Memory leak suspected:', alert);
+      logger.warn('Memory leak suspected', { alert }, LogComponent.PerformanceMonitor);
       return alert;
     }
 
@@ -517,7 +520,7 @@ export class PerformanceMonitor {
         try {
           handler(data);
         } catch (err) {
-          console.error(`[PerformanceMonitor] Handler error:`, err);
+          logger.error('Event handler error', err instanceof Error ? err : new Error(String(err)), { event }, LogComponent.PerformanceMonitor);
         }
       }
     }

@@ -16,12 +16,15 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { homedir } from 'os';
 import { getLogger, LogComponent } from '../logging/logger';
+import { ShellPathSchema } from './contracts';
 import { isDev } from '../core/bootstrap';
 import { getMainWindow } from '../core/window-manager';
+import { assertTrustedSender } from './trusted-sender';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
 import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
 import { getConfigStore } from '../config/store-instance';
 import { isHttpUrl } from './url-safety';
+import { isPathWithinRoots } from '@duya/agent/tool/allowedRoots';
 export { isHttpUrl } from './url-safety';
 import { getNoProjectWorkspace } from '../automation/workspace';
 
@@ -142,20 +145,14 @@ export function registerSystemHandlers(): void {
 
   // Shell handlers
   ipcMain.handle('shell:open-path', async (_event, folderPath: string) => {
-    if (typeof folderPath !== 'string' || folderPath.length === 0 || folderPath.length > 4096) {
-      return 'Invalid path';
-    }
-    if (folderPath.includes('\0')) {
+    if (!ShellPathSchema.safeParse(folderPath).success) {
       return 'Invalid path';
     }
     return shell.openPath(folderPath);
   });
 
   ipcMain.handle('shell:show-item-in-folder', async (_event, filePath: string) => {
-    if (typeof filePath !== 'string' || filePath.length === 0 || filePath.length > 4096) {
-      return 'Invalid path';
-    }
-    if (filePath.includes('\0')) {
+    if (!ShellPathSchema.safeParse(filePath).success) {
       return 'Invalid path';
     }
     // Electron resolves symlinks before revealing; reveal the real path
@@ -338,6 +335,10 @@ export function registerSystemHandlers(): void {
   });
 
   ipcMain.handle('app:create-project-folder', async (_event, projectName: string) => {
+    // Plan 583 / ISS-30: this handler creates a directory from a
+    // renderer-supplied name, so it must only be reachable from the app's
+    // own main frame. Guard first, before reading any argument.
+    assertTrustedSender(_event, {}, 'app:create-project-folder');
     if (typeof projectName !== 'string' || projectName.length === 0 || projectName.length > 255) {
       return { success: false, error: 'Invalid project name', path: '' };
     }
@@ -346,12 +347,28 @@ export function registerSystemHandlers(): void {
     if (sanitized.length === 0) {
       return { success: false, error: 'Invalid project name', path: '' };
     }
+    // Plan 583 ISS-13: the character filter above replaces characters that are
+    // illegal in Windows filenames, but it never touched path separators or
+    // dot segments, so a name like `../../evil` survived intact and
+    // `path.join(workspaceDir, sanitized)` resolved OUTSIDE the workspace —
+    // the handler then created that directory. A project name is a single
+    // directory component, never a path, so reject separators and dot
+    // segments outright instead of trying to sanitise them away.
+    if (/[\\/]/.test(sanitized) || sanitized === '.' || sanitized === '..') {
+      return { success: false, error: 'Invalid project name', path: '' };
+    }
     try {
       const workspaceDir = path.join(homedir(), '.duya', 'workspace');
       if (!fs.existsSync(workspaceDir)) {
         fs.mkdirSync(workspaceDir, { recursive: true });
       }
       const projectDir = path.join(workspaceDir, sanitized);
+      // Belt and braces: the separator check above is the real fix, but the
+      // name is attacker-influenced, so confirm containment with the same
+      // primitive the sandboxed file tools use before creating anything.
+      if (!isPathWithinRoots(projectDir, [workspaceDir])) {
+        return { success: false, error: 'Invalid project name', path: '' };
+      }
       if (fs.existsSync(projectDir)) {
         return { success: false, error: 'Project folder already exists', path: projectDir };
       }

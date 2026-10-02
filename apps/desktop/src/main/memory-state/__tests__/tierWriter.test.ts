@@ -75,7 +75,15 @@ describe('writeTierFact', () => {
     expect(result.success).toBe(true);
     if (!result.success) return;
     expect(result.outcome).toBe('inserted');
-    expect(result.filePath).toBe('agents/alpha/memory/prefers-concise-answers-prefers-c.md');
+    // The stored path is duya-root-relative with forward slashes
+    // (tierWriter.ts:57) and the filename carries a 10-char content-hash
+    // suffix so facts that slugify identically still get distinct files.
+    // Asserting the shape rather than one literal keeps this from going
+    // red the next time the slug rule changes; the previous literal
+    // matched neither the hash nor the 48-char base truncation.
+    expect(result.filePath).toMatch(
+      /^agents\/alpha\/memory\/prefers-concise-answers-[0-9a-f]{10}\.md$/,
+    );
 
     const abs = path.join(duyaRoot, result.filePath!);
     expect(fs.existsSync(abs)).toBe(true);

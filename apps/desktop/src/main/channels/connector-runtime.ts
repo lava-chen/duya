@@ -31,7 +31,7 @@ import type {
 } from '../../../../../packages/agent/src/channels/types';
 import type { NormalizedReply } from '../../../../../packages/gateway/src/types';
 import { isFileUrl, fileUrlToPath, mediaTypeForPath } from './file-url';
-import { TelegramChannelConnector } from './telegram-connector';
+import { TelegramChannelConnector, createChannelOffsetStore } from './telegram-connector';
 import { FeishuChannelConnector } from './feishu-connector';
 import { WeixinConnector } from './weixin-connector';
 import { getChannelBackgroundWakes } from '../wake/channels';
@@ -39,6 +39,7 @@ import { defaultBotSessionCreator } from '../wake/agent-dm-dispatcher';
 import { getBotSessionId } from '../wake/bot-session-id';
 import { readChannelInboundFilter } from './channel-store';
 import { getSharedAgentsRoot } from '../config/agent-paths';
+import { getDb } from '../db/connection';
 
 const logger = getLogger();
 
@@ -297,6 +298,18 @@ class BotConnectorManager {
           token,
           onInbound: routeInboundToBot,
           filter: readChannelInboundFilter(agentId, 'telegram'),
+          // ISS-23: without this the update offset lived only in memory, so
+          // every restart replayed whatever Telegram still had queued.
+          // Keyed by agentId because update_id is per bot.
+          offsetStore: createChannelOffsetStore(
+            () => getDb(),
+            'telegram',
+            agentId,
+            (reason) =>
+              logger.warn(`connector-runtime: telegram offset persistence unavailable: ${reason}`, {
+                agentId,
+              }, LogComponent.Gateway),
+          ),
         });
       }
       case 'feishu': {

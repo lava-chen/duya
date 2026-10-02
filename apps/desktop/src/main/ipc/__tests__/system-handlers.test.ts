@@ -14,7 +14,17 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({
+// The main window identity used by the `app:create-project-folder` sender
+// guard (Plan 583 / ISS-30). Both sides of the comparison are derived from
+// these two constants so the fixture cannot drift out of sync with itself.
+// They live INSIDE vi.hoisted because that factory is hoisted above module
+// scope — a top-level const would still be in its TDZ when it runs.
+const mocks = vi.hoisted(() => {
+  const MAIN_WINDOW_ID = 1;
+  const MAIN_WINDOW_URL = 'http://localhost:3000/';
+  return {
+  MAIN_WINDOW_ID,
+  MAIN_WINDOW_URL,
   shell: {
     openExternal: vi.fn(async () => ''),
     openPath: vi.fn(async () => ''),
@@ -22,7 +32,7 @@ const mocks = vi.hoisted(() => ({
   dialog: {
     showOpenDialog: vi.fn(),
   },
-  mainWindow: { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, show: vi.fn(), restore: vi.fn(), focus: vi.fn(), webContents: { send: vi.fn() } } as { isDestroyed: () => boolean; isVisible: () => boolean; isMinimized: () => boolean; show: () => void; restore: () => void; focus: () => void; webContents: { send: (channel: string, payload: unknown) => void } } | null,
+  mainWindow: { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, show: vi.fn(), restore: vi.fn(), focus: vi.fn(), webContents: { id: MAIN_WINDOW_ID, send: vi.fn(), getURL: () => MAIN_WINDOW_URL } } as { isDestroyed: () => boolean; isVisible: () => boolean; isMinimized: () => boolean; show: () => void; restore: () => void; focus: () => void; webContents: { id: number; send: (channel: string, payload: unknown) => void; getURL: () => string } } | null,
   configStore: {
     getByPath: vi.fn(() => ({ provider: 'anthropic', model: 'claude', baseUrl: '', apiKey: '', enabled: false })),
     set: vi.fn(),
@@ -48,7 +58,8 @@ const mocks = vi.hoisted(() => ({
     handle: new Map<string, (event: unknown, ...args: unknown[]) => unknown | Promise<unknown>>(),
     on: new Map<string, (event: unknown, ...args: unknown[]) => void>(),
   },
-}));
+  };
+});
 
 vi.mock('electron', () => ({
   ipcMain: {
@@ -115,6 +126,15 @@ async function invokeHandler(
   if (!handler) throw new Error(`No handler for ${channel}`);
   return await handler(event, ...args);
 }
+
+/**
+ * An IPC event that `assertTrustedSender` accepts: the main window's own
+ * webContents, main frame (routingId 0), on the app origin.
+ */
+const TRUSTED_EVENT = {
+  sender: { id: mocks.MAIN_WINDOW_ID },
+  senderFrame: { routingId: 0, url: mocks.MAIN_WINDOW_URL },
+};
 
 import { registerSystemHandlers } from '../system-handlers';
 
@@ -307,24 +327,27 @@ describe('system-handlers', () => {
   });
 
   describe('app:create-project-folder', () => {
+    // These exercise the payload gate and name sanitization, so they must
+    // present a sender the ISS-30 guard accepts; the guard's own refusal is
+    // covered by the test at the end of this block.
     it('rejects non-string projectName', async () => {
-      const result = await invokeHandler('app:create-project-folder', {}, 123);
+      const result = await invokeHandler('app:create-project-folder', TRUSTED_EVENT, 123);
       expect(result).toEqual({ success: false, error: 'Invalid project name', path: '' });
     });
 
     it('rejects empty projectName', async () => {
-      const result = await invokeHandler('app:create-project-folder', {}, '');
+      const result = await invokeHandler('app:create-project-folder', TRUSTED_EVENT, '');
       expect(result).toEqual({ success: false, error: 'Invalid project name', path: '' });
     });
 
     it('rejects oversized projectName (256 chars)', async () => {
-      const result = await invokeHandler('app:create-project-folder', {}, 'a'.repeat(256));
+      const result = await invokeHandler('app:create-project-folder', TRUSTED_EVENT, 'a'.repeat(256));
       expect(result).toEqual({ success: false, error: 'Invalid project name', path: '' });
     });
 
     it('sanitizes dangerous characters in the project name', async () => {
       mocks.fsState.existsSync.mockReturnValue(false);
-      const result = await invokeHandler('app:create-project-folder', {}, 'my<bad>name:"|?*');
+      const result = await invokeHandler('app:create-project-folder', TRUSTED_EVENT, 'my<bad>name:"|?*');
       expect(result).toMatchObject({ success: true });
       // The handler creates both `~/.duya/workspace` and the project dir.
       // The workspace dir path is fixed (no user input), so the only
@@ -344,8 +367,33 @@ describe('system-handlers', () => {
 
     it('returns "Project folder already exists" when the folder exists', async () => {
       mocks.fsState.existsSync.mockReturnValue(true);
-      const result = await invokeHandler('app:create-project-folder', {}, 'my-project');
+      const result = await invokeHandler('app:create-project-folder', TRUSTED_EVENT, 'my-project');
       expect(result).toMatchObject({ success: false, error: 'Project folder already exists' });
+    });
+
+    // ISS-30: the handler creates a directory from a renderer-supplied name,
+    // so it must refuse an untrusted frame. This is the integration half of
+    // the guard; trusted-sender.test.ts covers the pure decision function.
+    it('refuses an untrusted sender before touching the filesystem', async () => {
+      mocks.fsState.mkdirSync.mockClear();
+      const guestEvent = {
+        sender: { id: mocks.MAIN_WINDOW_ID + 1 },
+        senderFrame: { routingId: 0, url: mocks.MAIN_WINDOW_URL },
+      };
+      await expect(
+        invokeHandler('app:create-project-folder', guestEvent, 'my-project'),
+      ).rejects.toThrow(/untrusted sender/);
+      expect(mocks.fsState.mkdirSync).not.toHaveBeenCalled();
+    });
+
+    it('refuses an iframe inside the main window', async () => {
+      const iframeEvent = {
+        sender: { id: mocks.MAIN_WINDOW_ID },
+        senderFrame: { routingId: 7, url: mocks.MAIN_WINDOW_URL },
+      };
+      await expect(
+        invokeHandler('app:create-project-folder', iframeEvent, 'my-project'),
+      ).rejects.toThrow(/untrusted sender/);
     });
   });
 

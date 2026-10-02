@@ -10,6 +10,7 @@ import { wasLaunchedAsHidden } from '../services/auto-start';
 import { getNodeExecutable } from '../services/dev-detector';
 import { isHttpUrl } from '../ipc/system-handlers';
 import { setMainWindow } from '../services/browser/daemon';
+import { attachWebviewGuard } from './webview-guard';
 import { loadWindowState, saveWindowState } from './window-state';
 
 const logger = getLogger();
@@ -226,6 +227,20 @@ export async function createWindow(): Promise<void> {
     }
     // Always deny opening inside the BrowserWindow, regardless of protocol.
     return { action: 'deny' };
+  });
+
+  // Plan 583 / ISS-15: the window enables `webviewTag`, so the renderer picks
+  // every guest's webPreferences. Pin a main-process floor before the guest
+  // is created.
+  // Plan 583 / ISS-15: the window enables `webviewTag`, so the renderer picks
+  // every guest's webPreferences. Pin a main-process floor before the guest
+  // is created.
+  attachWebviewGuard(mainWindow.webContents, (fields) => {
+    logger.warn(
+      `Renderer requested unsafe <webview> preferences; pinned: ${fields.join(', ')}`,
+      undefined,
+      LogComponent.Main,
+    );
   });
 
   mainWindow.webContents.on('will-navigate', (event, targetUrl) => {

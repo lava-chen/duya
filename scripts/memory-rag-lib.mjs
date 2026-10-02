@@ -1,4 +1,13 @@
-#!/usr/bin/env node
+// Plan 583: this file deliberately has NO shebang. It is a library, imported
+// by `memory-rag-hook.mjs` and the memory-search skill entry; nothing executes
+// it directly. The shebang it used to carry was vestigial, and it silently
+// broke `scripts/__tests__/memory-rag-lib.test.ts`: esbuild keeps the hashbang
+// in its output, and a hashbang is an invalid token in an ES module, so the
+// test file failed to load with "SyntaxError: Invalid or unexpected token"
+// and the suite reported "no tests" rather than a failure. That left the RAG
+// core — which runs on every prompt — with zero coverage.
+// The sibling entry scripts (memory-rag-hook.mjs, memory-search.mjs) DO keep
+// their shebangs, because those really are executed directly.
 /**
  * scripts/memory-rag-lib.mjs — shared core for the retrievable memory (RAG)
  * scripts (plan 428/430).
@@ -27,6 +36,30 @@ import * as path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
+
+// ============================================================================
+// Retrieval bounds (plan 583 / ISS-32, ISS-33)
+// ============================================================================
+
+/**
+ * Per-term row cap for the 2-char CJK LIKE fallback. A leading-wildcard LIKE
+ * is unindexable, so every short CJK term costs a full table scan; uncapped,
+ * it also materialises the full `content` of every match. 200 is 10x the
+ * 20-row FTS5 trigram cap used above, so a noisy bigram still yields a diverse
+ * window for the top-N output.
+ */
+export const KEYWORD_CANDIDATE_LIMIT = 200;
+
+/**
+ * Row cap for the vector candidate scan in `retrieve`, which runs on EVERY
+ * prompt via the memory-search hook. 500 keeps a realistic memory index
+ * (hundreds of notes) fully covered while bounding the JSON-embedding + body
+ * load. This is a bound, not a similarity pre-filter: on a corpus larger than
+ * this the window is the rowid prefix, which does cap recall on large
+ * indexes. Moving embeddings to a `document_vectors` BLOB table with SQL-side
+ * cosine is the real fix and is still open.
+ */
+export const VECTOR_CANDIDATE_LIMIT = 500;
 
 // ============================================================================
 // Config
@@ -540,13 +573,20 @@ export function keywordSearch(db, prompt) {
     }
   }
   if (shortCjkTerms.length > 0) {
+    // Plan 583 / ISS-33: a leading-wildcard LIKE cannot use an index, so
+    // this is a full table scan per term, and it pulls the full `content` of
+    // every match into this process. Bound it to a deterministic rowid
+    // window. Because SQLite returns LIKE hits in table-scan (rowid) order,
+    // the top-N window is the same prefix the unbounded query produced, so
+    // recall only changes on corpora with more than N matching rows.
     const like = db.prepare(
       `SELECT rowid, root, rel_path, title, content FROM documents
-       WHERE title LIKE ? OR content LIKE ?`,
+       WHERE title LIKE ? OR content LIKE ?
+       ORDER BY rowid LIMIT ?`,
     );
     for (const t of shortCjkTerms) {
       const pattern = `%${t}%`;
-      for (const r of like.all(pattern, pattern)) {
+      for (const r of like.all(pattern, pattern, KEYWORD_CANDIDATE_LIMIT)) {
         if (!candidates.has(r.rowid)) candidates.set(r.rowid, { row: r, matched: new Set() });
       }
     }
@@ -587,9 +627,19 @@ export async function retrieve(dbPath, prompt, provider, settings) {
   const Database = loadSqlite();
   const db = new Database(dbPath);
   try {
+    // Plan 583 / ISS-32: this load is the hook's highest-traffic read — it
+    // runs on EVERY prompt, not just an explicit search. It used to pull
+    // every document's JSON embedding and body into memory with no bound.
+    // Cap the candidate window at VECTOR_CANDIDATE_LIMIT, ordered by rowid so
+    // the same corpus always scores the same candidates.
+    //
+    // The real fix (a separate `document_vectors` BLOB table with cosine
+    // pushed into SQL) is out of scope; the cap is the in-scope bound.
     const rows = db
-      .prepare('SELECT rowid, root, rel_path, title, content, embedding FROM documents')
-      .all();
+      .prepare(
+        'SELECT rowid, root, rel_path, title, content, embedding FROM documents ORDER BY rowid LIMIT ?',
+      )
+      .all(VECTOR_CANDIDATE_LIMIT);
     if (rows.length === 0) return { rows: [], mode: 'keyword', fallbackReason: '' };
 
     const scored = []; // { row, score, cos? }

@@ -41,7 +41,7 @@ import {
   allocateConnectionToolAlias,
   connectionNamespace,
 } from '@duya/plugin-core/mcp/core/alias';
-import { InventoryLedger } from '../inventory-ledger.js';
+import { InventoryLedger } from '@duya/plugin-core/mcp/core/ledger-types';
 import { getLogger, LogComponent } from '../../../logging/logger';
 
 const COMPONENT = 'AppConnectionConnector' as LogComponent;
@@ -67,16 +67,22 @@ interface RemoteSession {
   transport: StreamableHTTPClientTransport;
   tools: Map<string, HydratedTool>;
   provider: ProviderId;
+  /**
+   * Plan 583 / ISS-22: the endpoint this session's transport is bound to.
+   * Written into the catalog snapshot so a later session against a different
+   * `remoteMcpUrl` cannot serve this one's tool list.
+   */
+  endpoint: string;
   /** True while a deliberate close() is in flight; onclose during it is not a death. */
   closing: boolean;
   /** Plan 580 D2: server capabilities from the initialize result (ledger). */
   serverCapabilities?: Record<string, unknown>;
   /**
    * Plan 580 D3 chain B inventory ledger, owned per session (see
-   * `inventory-ledger.ts`). It is the single source of truth for discovery
+   * `@duya/plugin-core/mcp/core/ledger-types.ts`). It is the single source of truth for discovery
    * state: pagesFetched / discoveredTotal / inventoryRevision / layers /
    * fetchedAt all live here, not as loose fields on this interface. Do not
-   * flatten them back out — the snapshot returned by `getLedgerSnapshot()`
+   * flatten them back out 鈥?the snapshot returned by `getLedgerSnapshot()`
    * is consumed by `connector-service.ts:339`, and a flattened copy cannot
    * express the `complete` vs `stale` distinction that `commitDiscovery`
    * derives from `truncated`.
@@ -94,7 +100,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /**
  * Plan 450 Phase E: hydrated tool shape used by both the live discovery
  * path and the catalog cache fast-path. Cache entries are hydrated
- * VERBATIM (plan 580 D4) — the legacy `normalizeInputSchema` rewrite is
+ * VERBATIM (plan 580 D4) 鈥?the legacy `normalizeInputSchema` rewrite is
  * gone; anything the server sent is what the agent sees.
  */
 function hydrateTools(raw: CachedSnapshot['tools']): Map<string, HydratedTool> {
@@ -125,6 +131,15 @@ function toolAlias(provider: ProviderId, toolName: string, slug: string): string
  */
 export class RemoteMcpConnector {
   private readonly sessions = new Map<string, RemoteSession>();
+  /**
+   * Plan 583 / ISS-21: connects in flight, keyed by connection id. Without
+   * this, two concurrent calls for the same connection both missed
+   * `this.sessions`, each built its own `StreamableHTTPClientTransport`,
+   * connected, and then raced on `this.sessions.set` 鈥?the loser's transport
+   * and its server-side session were never closed. Callers now await one
+   * shared connect.
+   */
+  private readonly connecting = new Map<string, Promise<RemoteSession>>();
   private readonly logger = getLogger();
 
   /**
@@ -244,7 +259,7 @@ export class RemoteMcpConnector {
   /**
    * Plan 580 Phase 5: ledger snapshot for one live remote-MCP session.
    * `undefined` when the connection has no session (never connected or
-   * dropped) — callers treat that as "no ledger data", not as a failure.
+   * dropped) 鈥?callers treat that as "no ledger data", not as a failure.
    */
   getLedgerSnapshot(connectionId: string): ReturnType<InventoryLedger['getSnapshot']> | undefined {
     return this.sessions.get(connectionId)?.ledger.getSnapshot();
@@ -282,7 +297,7 @@ export class RemoteMcpConnector {
     try {
       await this.discoverNow(connectionId, session);
     } catch (err) {
-      // Plan 580 D6: a failed refresh is NOT an authoritative empty —
+      // Plan 580 D6: a failed refresh is NOT an authoritative empty 鈥?
       // keep the last-known inventory and mark it failed. The next
       // successful pass (or re-connect) is the only recovery path.
       session.ledger.failDiscovery();
@@ -296,7 +311,7 @@ export class RemoteMcpConnector {
 
   /**
    * Run one transactional paginated discovery (plan 580 D3) and commit it
-   * into the session. Throws on failure — the caller decides whether the
+   * into the session. Throws on failure 鈥?the caller decides whether the
    * failure is fatal (initial connect) or recoverable (rediscovery).
    */
   private async discoverNow(connectionId: string, session: RemoteSession): Promise<void> {
@@ -337,12 +352,13 @@ export class RemoteMcpConnector {
       COMPONENT,
     );
 
-    // Plan 580 D3: the catalog cache only accepts COMPLETE inventories —
+    // Plan 580 D3: the catalog cache only accepts COMPLETE inventories 鈥?
     // a truncated pass is served but never persisted as authoritative.
     if (!result.truncated) {
       writeCatalogCache(
         connectionId,
         session.provider,
+        session.endpoint,
         result.tools.map((tool) => ({
           name: tool.name,
           ...(tool.description !== undefined ? { description: tool.description } : {}),
@@ -360,13 +376,32 @@ export class RemoteMcpConnector {
   ): Promise<RemoteSession> {
     const current = this.sessions.get(connectionId);
     if (current) return current;
+
+    // Plan 583 / ISS-21: join an in-flight connect instead of starting a
+    // second one. The entry is cleared in a finally so a failed connect never
+    // poisons the connection id.
+    const inFlight = this.connecting.get(connectionId);
+    if (inFlight) return inFlight;
+
+    const attempt = this.connectSession(connectionId, provider, token).finally(() => {
+      this.connecting.delete(connectionId);
+    });
+    this.connecting.set(connectionId, attempt);
+    return attempt;
+  }
+
+  private async connectSession(
+    connectionId: string,
+    provider: ProviderId,
+    token: { accessToken: string; tokenType: string },
+  ): Promise<RemoteSession> {
     const config = getProviderConfig(provider);
     if (!config?.remoteMcpUrl) throw new Error(`${provider} is not a Remote MCP provider`);
 
     const transport = new StreamableHTTPClientTransport(new URL(config.remoteMcpUrl), {
       authProvider: createStoredRemoteMcpOAuthProvider(this.vault, connectionId),
     });
-    // Plan 580 D2 (erratum): `tools.listChanged` is a SERVER capability —
+    // Plan 580 D2 (erratum): `tools.listChanged` is a SERVER capability 鈥?
     // the MCP spec has no client-side `tools` capability and the SDK's
     // ClientCapabilitiesSchema rejects it. Client-side subscription is the
     // setNotificationHandler below; server intent is read from
@@ -377,6 +412,7 @@ export class RemoteMcpConnector {
       transport,
       tools: new Map(),
       provider,
+      endpoint: config.remoteMcpUrl,
       closing: false,
       // A fresh ledger starts at `failed`; mark the connect attempt in flight
       // so a session that has not committed yet does not read as failed.
@@ -388,7 +424,7 @@ export class RemoteMcpConnector {
     try {
       await client.connect(transport);
 
-      // Plan 580 D2: transport death → drop the session and notify the
+      // Plan 580 D2: transport death 鈫?drop the session and notify the
       // service layer. No auto-reconnect; the next invoke re-connects.
       transport.onclose = () => this.markTransportDead(connectionId, session, 'transport closed');
       transport.onerror = (err) => this.markTransportDead(connectionId, session, `transport error: ${err}`);
@@ -411,8 +447,17 @@ export class RemoteMcpConnector {
       // starts don't pay the network round-trip on every session. Stale
       // entries re-fetch foreground; fresh entries skip discovery. The
       // transport/auth is still set up either way.
+      //
+      // Plan 583 / ISS-22: the snapshot is only usable when it came from the
+      // endpoint we are connected to right now. Matching on `provider` alone
+      // let a snapshot survive a change of `remoteMcpUrl` and keep serving the
+      // previous server's tool list.
       const cached = readCatalogCache(connectionId);
-      if (cached && cached.provider === provider && isFresh(cached) && cached.tools.length > 0) {
+      const cacheMatchesEndpoint =
+        cached !== null &&
+        cached.provider === provider &&
+        cached.endpoint === config.remoteMcpUrl;
+      if (cacheMatchesEndpoint && isFresh(cached) && cached.tools.length > 0) {
         session.tools = hydrateTools(cached.tools);
         session.ledger.hydrateFromCache(session.tools.size);
       } else {

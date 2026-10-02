@@ -936,7 +936,16 @@ export function ChatView({
       if (editTarget && 'messageId' in editTarget) {
         if (isStreaming) throw new Error(t('chat.editRunActive'));
         const result = await deleteMessageAndAfter(sessionId, editTarget.messageId);
-        // If sending fails after rewind, retry the retained draft as a new turn.
+        // The edit target is cleared so a successful send is not treated as an
+        // edit, but it is restored below if anything after the rewind throws —
+        // otherwise a failed send leaves the composer showing an edit banner
+        // whose target no longer exists.
+        //
+        // The rewound messages are NOT lost: `db:message:truncateFromInclusive`
+        // appends a rebase record and only supersedes the projection, so the
+        // rollout file still holds every event. The rewind also restores the
+        // working tree, which is not itself reversible, so a failed edit-resend
+        // is a state the user must be told about rather than silently retried.
         editTargetRef.current = null;
         if (result.restoredFiles?.length) {
           setCompressionNotification(`Restored ${result.restoredFiles.length} file(s) to their pre-edit state.`);
@@ -948,6 +957,11 @@ export function ChatView({
         // A failed replacement retains the content as an ordinary draft for retry.
         editTargetRef.current = null;
       }
+      // Plan 583 / ISS-28: everything below can throw (agent server down,
+      // provider error, aborted stream). On failure, put the edit target back
+      // so a retry is coherent instead of silently re-sending as a brand-new
+      // turn on top of an already-rewound transcript.
+      try {
       lastUserContentRef.current = content;
       lastFilesRef.current = files;
       lastOutputStyleRef.current = outputStyleConfig;
@@ -1005,6 +1019,18 @@ export function ChatView({
       const { modelName: actualModel } = parseModelName(sessionModel || '');
       await onSendMessage(content, actualModel, files, agentProfileId, outputStyleConfig, mode, effort, displayContent, conductorEnabled, undefined, permissionMode);
       cancelComposerEdit();
+      } catch (err) {
+        // Put the edit target back so the composer stays in a coherent
+        // edit-and-resend state, and say plainly that the transcript was
+        // rewound — otherwise a transient send failure looks like silent
+        // message loss.
+        if (editTarget) editTargetRef.current = editTarget;
+        if (editTarget && 'messageId' in editTarget) {
+          setCompressionNotification(t('chat.editSendFailedRewound'));
+          setTimeout(() => setCompressionNotification(null), 8000);
+        }
+        throw err;
+      }
     },
     [agentProfileId, isStreaming, onSendMessage, parseModelName, sendMailbox, sessionId, sessionModel, effort, conductorEnabled, permissionMode, busyMessageMode, activeThread?.workingDirectory, deleteMessageAndAfter, cancelComposerEdit, t]
   );

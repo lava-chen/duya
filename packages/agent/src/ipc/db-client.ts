@@ -27,6 +27,13 @@ interface DbResponse {
 const pendingRequests = new Map<string, {
   resolve: (result: unknown) => void;
   reject: (error: Error) => void;
+  /**
+   * Plan 583 / ISS-08: the 30s timeout handle. Kept so every completion path
+   * can clear it — without this, a response that arrives in 5ms still left a
+   * live timer for the remaining 29.995s, so a busy turn accumulated one
+   * pending timer per `db:*` call.
+   */
+  timer?: ReturnType<typeof setTimeout>;
 }>();
 
 // Generate unique request ID
@@ -54,7 +61,8 @@ async function sendDbRequest(action: string, payload: unknown): Promise<unknown>
   // Use Promise with setTimeout to ensure registration happens in next tick
   return new Promise((resolve, reject) => {
     // Register pending request
-    pendingRequests.set(id, { resolve, reject });
+    const entry = { resolve, reject, timer: undefined as ReturnType<typeof setTimeout> | undefined };
+    pendingRequests.set(id, entry);
 
     // Send request after registration is complete (next tick)
     process.nextTick(() => {
@@ -63,6 +71,7 @@ async function sendDbRequest(action: string, payload: unknown): Promise<unknown>
       } catch (err) {
         // H4: process.send can throw if the IPC channel is closed
         if (pendingRequests.has(id)) {
+          clearTimeout(entry.timer);
           pendingRequests.delete(id);
           reject(new Error(`Failed to send DB request: ${err instanceof Error ? err.message : String(err)}`));
         }
@@ -70,7 +79,7 @@ async function sendDbRequest(action: string, payload: unknown): Promise<unknown>
     });
 
     // Timeout after 30 seconds
-    setTimeout(() => {
+    entry.timer = setTimeout(() => {
       if (pendingRequests.has(id)) {
         pendingRequests.delete(id);
         reject(new Error(`DB request timeout: ${action}`));
@@ -98,6 +107,9 @@ function handleDbResponse(response: DbResponse): void {
     return;
   }
 
+  if (pending.timer) {
+    clearTimeout(pending.timer);
+  }
   pendingRequests.delete(response.id);
 
   if (response.success) {

@@ -9,6 +9,12 @@ import { ipcMain, BrowserWindow } from 'electron';
 import { getAgentProcessPool } from './process-pool/agent-process-pool';
 import { getAgentServerPort } from './agent-server-lifecycle';
 import { toLLMProvider, type ApiProvider } from '../config/provider-types';
+import {
+  ApiProviderPatchSchema,
+  ApiProviderUpsertSchema,
+  parseIpcPayload,
+  RecordIdSchema,
+} from '../ipc/contracts';
 import { getCoreStores } from '../db/core-connection';
 import { getLogger, LogComponent } from '../logging/logger';
 import { dispatchDbAction, handleDbRequest as processDbRequest, type DbRequest, type DbResponse } from './db-bridge';
@@ -139,67 +145,17 @@ export function registerAgentHandlers(): void {
     return pool.isRunning('');
   });
 
-  // Handler to get agent provider config for initializing agent subprocess
-  ipcMain.handle('agent:getProviderConfig', (_event, sessionId: string) => {
-    const store = getProviderStore();
-    store.migrateAllLegacyProviders();
-
-    // Read provider_id / model from the core sessions store (plan 328).
-    const session = getCoreStores().sessions.get(sessionId);
-
-    let provider: ApiProvider | null = null;
-    if (session?.providerId) {
-      const llm = store.getLlmProvider(session.providerId);
-      provider = llm ? toLegacyApiProvider(llm) : null;
-    }
-
-    if (!provider) {
-      const activeLlm = store.getDefaultLlmProvider();
-      provider = activeLlm ? toLegacyApiProvider(activeLlm) : null;
-    }
-
-    if (!provider) return null;
-
-    const defaultModel = getDefaultModelForProvider(provider.providerType, provider.options);
-
-    // Build runtime config via the store for new agent code paths.
-    const llm = store.getLlmProvider(provider.id);
-    let runtimeConfig: Record<string, unknown> | undefined;
-    if (llm) {
-      const resolvedModelId = session?.model || defaultModel;
-      const capability = store.resolveRuntimeCapability(provider.id, resolvedModelId);
-      const cfg = buildRuntimeConfig(llm, {
-        modelId: resolvedModelId,
-        capabilities: capability,
-      });
-      runtimeConfig = {
-        providerId: cfg.providerId,
-        apiFormat: cfg.apiFormat,
-        baseUrl: cfg.baseUrl,
-        apiKey: cfg.apiKey,
-        accessToken: cfg.accessToken,
-        headers: cfg.headers,
-        model: cfg.model,
-        modelCapabilities: cfg.modelCapabilities,
-        // ModelCompat flags (thinking format, supportsFinishReason, …) are
-        // consumed by DuyaAgent (runtimeConfig.modelCompat) to build the LLM
-        // client. Without this field every provider runs compat-less in the
-        // main chat path and reasoning models lose their thinking wiring.
-        modelCompat: cfg.modelCompat,
-        requestOptions: cfg.requestOptions,
-      };
-    }
-
-    return {
-      apiKey: provider.apiKey,
-      baseURL: provider.baseUrl || undefined,
-      model: session?.model || defaultModel,
-      provider: toLLMProvider(provider.providerType),
-      // Phase 2: include the runtime config so the agent can adopt
-      // the new path when ready.
-      runtimeConfig,
-    };
-  });
+  // Plan 583 / ISS-12: the `agent:getProviderConfig` channel that used to sit
+  // here is deleted. It returned `apiKey` in plaintext (twice — once at the top
+  // level and again inside `runtimeConfig.apiKey`), and no renderer could reach
+  // it: `preload.ts` never exposed it, and the bridge exposes no generic
+  // channel-name invoke. So it was a live secret-exfiltration surface with
+  // zero callers, and a trap for the next person who wired it up.
+  //
+  // The two paths that DO need a runtime config keep their own construction:
+  // `agents/server/router.ts#buildInitProviderConfig` for chat and compact
+  // spawns, and `agents/db-bridge.ts` (`config:provider:resolveRuntime`) for
+  // the agent server's IPC round-trip.
 
   // Handler to get masked provider config for renderer (no API key exposure)
   ipcMain.handle('agent:getMaskedProviderConfig', (_event, sessionId: string) => {
@@ -475,7 +431,14 @@ export function registerAgentHandlers(): void {
   });
 
   // Upsert provider
-  ipcMain.handle('config:provider:upsert', (_event, data: ApiProvider) => {
+  ipcMain.handle('config:provider:upsert', (_event, payload: unknown) => {
+    // The cast is honest about a pre-existing lie rather than papering over
+    // it: `ApiProvider` declares `providerType`/`baseUrl`/`apiKey` as required,
+    // but `migrateLegacyApiProvider` has always tolerated their absence (it
+    // falls back to a default apiFormat and an empty baseUrl), and every
+    // in-repo caller sends a partial payload. The schema validates shape and
+    // bounds; the migration still decides the defaults.
+    const data = parseIpcPayload(ApiProviderUpsertSchema, payload, 'config:provider:upsert') as ApiProvider;
     const store = getProviderStore();
     store.migrateAllLegacyProviders();
     store.upsertLlmProvider(migrateLegacyApiProvider(data));
@@ -483,13 +446,21 @@ export function registerAgentHandlers(): void {
   });
 
   // Update provider (partial update)
-  ipcMain.handle('config:provider:update', (_event, id: string, data: Partial<ApiProvider>) => {
+  ipcMain.handle('config:provider:update', (_event, id: string, payload: unknown) => {
+    const data = parseIpcPayload(ApiProviderPatchSchema, payload, 'config:provider:update');
     const store = getProviderStore();
     store.migrateAllLegacyProviders();
     const existingLlm = store.getLlmProvider(id);
     const existing = existingLlm ? toLegacyApiProvider(existingLlm) : undefined;
     if (!existing) return null;
-    const updated = { ...existing, ...data, id };
+    // Same cast rationale as upsert, and for an additional reason:
+    // `ApiProvider['providerType']` is declared as a 9-value union, but the
+    // live vocabulary is wider — 'lm-studio', 'glm', 'minimax' and
+    // 'minimax-cn' all appear in real provider payloads today. The declared
+    // union is narrower than reality, so a validated string cannot be proven
+    // assignable to it. Narrowing the union is the real fix, but it reaches
+    // across packages and is out of scope for the payload-contract track.
+    const updated = { ...existing, ...data, id } as ApiProvider;
     store.upsertLlmProvider(migrateLegacyApiProvider(updated));
     return maskProvider(updated);
   });
@@ -503,10 +474,11 @@ export function registerAgentHandlers(): void {
 
   // Activate provider
   ipcMain.handle('config:provider:activate', (_event, id: string) => {
+    const providerId = parseIpcPayload(RecordIdSchema, id, 'config:provider:activate');
     const store = getProviderStore();
     store.migrateAllLegacyProviders();
-    store.setDefaultLlmProvider(id);
-    const providerLlm = store.getLlmProvider(id);
+    store.setDefaultLlmProvider(providerId);
+    const providerLlm = store.getLlmProvider(providerId);
     return providerLlm ? maskProvider(toLegacyApiProvider(providerLlm)) : null;
   });
 

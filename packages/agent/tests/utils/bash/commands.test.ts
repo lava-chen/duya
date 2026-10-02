@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
   splitCommand,
-  splitCommand_DEPRECATED,
   extractOutputRedirections,
   parseCommandChain,
   getCommandSubcommandPrefix,
@@ -60,13 +59,6 @@ describe('commands utilities', () => {
     it('should handle single command without separators', () => {
       const result = splitCommand('echo hello')
       expect(result).toEqual(['echo hello'])
-    })
-  })
-
-  describe('splitCommand_DEPRECATED', () => {
-    it('should work as an alias for splitCommand', () => {
-      const result = splitCommand_DEPRECATED('echo a && echo b')
-      expect(result).toEqual(['echo a', 'echo b'])
     })
   })
 
