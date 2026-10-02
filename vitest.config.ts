@@ -3,21 +3,30 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 
 // Resolve workspace plugin-core from THIS checkout (worktree-safe;
-// the node_modules junction pins the primary checkout).
-const PLUGIN_CORE_ROOT = fileURLToPath(new URL('./packages/plugin-core', import.meta.url))
+// the node_modules junction pins the primary checkout). Points at `dist`,
+// matching the package's own `exports` map: consumers now import declared
+// subpaths (`@duya/plugin-core/mcp/core/alias`) instead of reaching into
+// `src/`, so the alias has to map a subpath onto `dist/<subpath>`.
+const PLUGIN_CORE_DIST = fileURLToPath(new URL('./packages/plugin-core/dist', import.meta.url))
+// Same reason: the protocol package must be tested against THIS worktree's
+// source, never the primary checkout's dist.
+const AGENT_PROTOCOL_SRC = fileURLToPath(new URL('./packages/agent-protocol/src', import.meta.url))
 
 export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
     include: [
-      'src/**/*.test.ts',
-      'src/**/*.test.tsx',
-      'src/**/*.spec.ts',
-      'electron/**/*.test.ts',
+      'apps/desktop/src/renderer/**/*.test.ts',
+      'apps/desktop/src/renderer/**/*.test.tsx',
+      'apps/desktop/src/renderer/**/*.spec.ts',
+      'apps/desktop/src/main/**/*.test.ts',
       'packages/*/tests/**/*.test.ts',
       'packages/*/tests/**/*.spec.ts',
       'packages/ai/test/**/*.test.ts',
+      'packages/agent-protocol/test/**/*.test.ts',
+      'packages/agent-core/test/**/*.test.ts',
+      'packages/agent-runtime/test/**/*.test.ts',
       'packages/gateway/src/**/*.test.ts',
       'packages/agent/src/**/*.test.ts',
       'packages/cli/src/**/*.test.ts',
@@ -49,15 +58,31 @@ export default defineConfig({
     // up the latest source instead of stale committed `.js` artifacts.
     extensions: ['.mjs', '.mts', '.ts', '.tsx', '.js', '.jsx', '.json'],
     alias: [
-      { find: '@', replacement: path.resolve(__dirname, './src') },
+      { find: '@', replacement: path.resolve(__dirname, './apps/desktop/src/renderer') },
       // Pin better-sqlite3 to the root-managed copy. packages/agent pins
       // v11 (no node-24 prebuilt exists), so its package-local duplicate
       // loads with a stale NODE_MODULE_VERSION; the root copy is the one
       // the ensure-sqlite-abi pretest swaps per runtime.
       { find: /^better-sqlite3$/, replacement: path.resolve(__dirname, './node_modules/better-sqlite3') },
       // Resolve workspace plugin-core from THIS checkout (worktree-safe;
-      // the node_modules junction pins the primary checkout).
-      { find: '@duya/plugin-core', replacement: PLUGIN_CORE_ROOT },
+      // the node_modules junction pins the primary checkout). Exact bare
+      // name first, then subpaths — the bare rule must not swallow them.
+      { find: /^@duya\/plugin-core$/, replacement: PLUGIN_CORE_DIST + '/index.js' },
+      { find: /^@duya\/plugin-core\/(.*)$/, replacement: PLUGIN_CORE_DIST + '/$1' },
+      // Subpaths first: the bare name would otherwise swallow
+      // `@duya/agent-protocol/testing` and `/legacy`.
+      // `/testing` resolves to the subpath INDEX, matching the package's own
+      // `exports` map. It used to point at `testing/fixtures.ts`, which is one
+      // file inside the subpath and therefore silently hid `RunLedger` and
+      // `mapWorkerEvent` from every consumer — a test importing
+      // `@duya/agent-protocol/testing` got fixtures and nothing else.
+      { find: /^@duya\/agent-protocol\/testing$/, replacement: AGENT_PROTOCOL_SRC + '/testing/index.ts' },
+      { find: /^@duya\/agent-protocol\/legacy$/, replacement: AGENT_PROTOCOL_SRC + '/legacy/sse-event.ts' },
+      { find: /^@duya\/agent-protocol$/, replacement: AGENT_PROTOCOL_SRC + '/index.ts' },
+      // agent-core / agent-runtime resolve to THIS checkout's source too, for
+      // the same worktree-safety reason as the protocol package above.
+      { find: /^@duya\/agent-core$/, replacement: fileURLToPath(new URL('./packages/agent-core/src', import.meta.url)) + '/index.ts' },
+      { find: /^@duya\/agent-runtime$/, replacement: fileURLToPath(new URL('./packages/agent-runtime/src', import.meta.url)) + '/index.ts' },
       // Plan 583 ISS-02: the duya-file media allowlist reuses the sandboxed
       // file tools' root-boundary primitive from agent source. Point at this
       // checkout (worktree-safe), same as plugin-core above.

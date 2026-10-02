@@ -153,3 +153,21 @@ export function buildWorktreeNotice(
 ): string {
   return `You've inherited the conversation context above from a parent agent working in ${parentCwd}. You are operating in an isolated git worktree at ${worktreeCwd} — same repository, same relative file structure, separate working copy. Paths in the inherited context refer to the parent's working directory; translate them to your worktree root. Re-read files before editing if the parent may have modified them since they appear in the context. Your changes stay in this worktree and will not affect the parent's files.`
 }
+
+/**
+ * Notice injected into a **freshly spawned** (`task` tool, `isolation:
+ * 'worktree'`) child running in an isolated worktree.
+ *
+ * Deliberately not {@link buildWorktreeNotice}: that one opens with "you've
+ * inherited the conversation context above", which is true only for the fork
+ * path. A plain spawn briefs the child from zero context, so claiming
+ * otherwise would put a false statement in the child's system-level context
+ * and waste its first turn reconciling paths that do not exist.
+ */
+export function buildWorktreeSpawnNotice(
+  parentCwd: string,
+  worktreeCwd: string,
+  branch: string,
+): string {
+  return `You are running in an isolated git worktree at ${worktreeCwd} (branch ${branch}), created from the repository at ${parentCwd}. This is the same repository with the same relative file structure, but a separate working copy: your file changes stay in this worktree and will NOT be visible in ${parentCwd} until they are merged or cherry-picked. Absolute paths that point into ${parentCwd} do not exist for you — use paths relative to ${worktreeCwd} instead. Report the worktree branch name in your final summary so the parent knows how to adopt your changes.`
+}

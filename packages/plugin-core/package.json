@@ -3,9 +3,75 @@
   "version": "0.1.0",
   "private": true,
   "description": "DUYA plugin core — error handling, security, and policy engine",
-  "main": "src/index.ts",
-  "types": "src/index.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./connectors/app-connector-id": {
+      "types": "./dist/connectors/app-connector-id.d.ts",
+      "default": "./dist/connectors/app-connector-id.js"
+    },
+    "./connectors/app-schema": {
+      "types": "./dist/connectors/app-schema.d.ts",
+      "default": "./dist/connectors/app-schema.js"
+    },
+    "./mcp/collect": {
+      "types": "./dist/mcp/collect.d.ts",
+      "default": "./dist/mcp/collect.js"
+    },
+    "./mcp/user-config": {
+      "types": "./dist/mcp/user-config.d.ts",
+      "default": "./dist/mcp/user-config.js"
+    },
+    "./mcp/resolve": {
+      "types": "./dist/mcp/resolve.d.ts",
+      "default": "./dist/mcp/resolve.js"
+    },
+    "./mcp/core/index": {
+      "types": "./dist/mcp/core/index.d.ts",
+      "default": "./dist/mcp/core/index.js"
+    },
+    "./mcp/core/alias": {
+      "types": "./dist/mcp/core/alias.d.ts",
+      "default": "./dist/mcp/core/alias.js"
+    },
+    "./mcp/core/deadline": {
+      "types": "./dist/mcp/core/deadline.d.ts",
+      "default": "./dist/mcp/core/deadline.js"
+    },
+    "./mcp/core/descriptor": {
+      "types": "./dist/mcp/core/descriptor.d.ts",
+      "default": "./dist/mcp/core/descriptor.js"
+    },
+    "./mcp/core/error-taxonomy": {
+      "types": "./dist/mcp/core/error-taxonomy.d.ts",
+      "default": "./dist/mcp/core/error-taxonomy.js"
+    },
+    "./mcp/core/ledger-types": {
+      "types": "./dist/mcp/core/ledger-types.d.ts",
+      "default": "./dist/mcp/core/ledger-types.js"
+    },
+    "./mcp/core/list-tools": {
+      "types": "./dist/mcp/core/list-tools.d.ts",
+      "default": "./dist/mcp/core/list-tools.js"
+    },
+    "./mcp/core/projection": {
+      "types": "./dist/mcp/core/projection.d.ts",
+      "default": "./dist/mcp/core/projection.js"
+    },
+    "./security/path-validator": {
+      "types": "./dist/security/path-validator.d.ts",
+      "default": "./dist/security/path-validator.js"
+    }
+  },
   "scripts": {
+    "build": "tsc",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

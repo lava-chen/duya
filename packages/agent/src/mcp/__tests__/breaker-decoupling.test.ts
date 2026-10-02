@@ -17,11 +17,11 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { McpError } from '@duya/plugin-core/src/mcp/core/error-taxonomy.js';
+import { McpError } from '@duya/plugin-core/mcp/core/error-taxonomy';
 import {
   classifyMcpError,
   breakerDisposition,
-} from '@duya/plugin-core/src/mcp/core/error-taxonomy.js';
+} from '@duya/plugin-core/mcp/core/error-taxonomy';
 import { getCircuitBreakerManager } from '../circuit-breaker.js';
 
 /** Mirror of the chain A catch-block wiring (mcp/index.ts callTool). */

@@ -29,6 +29,12 @@ export interface TaskRecord {
   }
   progress: ProgressSnapshot
   outputFilePath: string
+  /**
+   * Plan 571: false when the spawn passed `auto_wake: false` — the terminal
+   * notification is suppressed and the model reads the result from the
+   * output file via `get_task_output` instead of being woken.
+   */
+  autoWake: boolean
   unregisterCleanup?: () => void
   subscribers: Set<(snapshot: TaskRecord) => void>
 }

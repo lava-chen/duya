@@ -1,0 +1,348 @@
+# Architecture boundary policy (plan 584 PP-0, task 0.1)
+#
+# Enforced by scripts/architecture/architecture-check.mjs.
+# Design source: docs/architecture/05-architecture-governance.md §2.
+#
+# ── Strategy: progressive enforcement ──────────────────────────────────────
+#
+# `managedOnly: true` + every legacy module `managed: false` means the
+# checker BLOCKS on two things and nothing else:
+#
+#   1. any violation inside a `managed: true` module   (zero tolerance)
+#   2. any violation whose fingerprint is not in .architecture-baseline.json
+#
+# Everything already in the baseline is tolerated debt. Each migration step
+# flips one module to `managed: true` and deletes that module's fingerprints
+# from the baseline, so the debt is paid down monotonically instead of being
+# cleaned up in one unreviewable sprint.
+#
+# The baseline is a RATCHET, not a wish list. A strict gate over ~800
+# pre-existing violations would be permanently red, and a permanently red gate
+# gets ignored — the same failure mode that let ~898 unchecked electron type
+# errors and a never-firing CI workflow reach master.
+
+version: 1
+
+global:
+  # Fail on new violations only. The baseline absorbs the legacy ones.
+  baselineFile: .architecture-baseline.json
+
+  # Only `managed: true` modules get zero-tolerance enforcement. Unmanaged
+  # modules are still measured, still reported, and still blocked on growth —
+  # they just may carry baselined debt.
+  managedOnly: true
+
+  # Every rule below that is not explicitly switched off is evaluated.
+  rules:
+    module-dependency: true
+    # Plan 586. A cross-module edge the source module DECLARES in its
+    # `requires` list. Counted, never blocking.
+    #
+    # It exists because `module-dependency` originally recorded every
+    # cross-boundary edge unconditionally, and a `managed: true` module blocks
+    # on any violation it contains — so the two managed packages that declare
+    # dependencies (`agent-core` and `agent-runtime`, both requiring
+    # `agent-protocol`) were permanently red. A `requires` list nobody can
+    # satisfy is not a boundary; the graph stays visible here instead.
+    module-dependency-permitted: true
+    forbidden-dependency: true
+    package-boundary-escape: true
+    deep-import: true
+    cycle: true
+    missing-module-artifact: true
+
+    # ── Not yet enabled: these have no reproducible baseline yet. ──────────
+    # Enabled as a follow-up once each can be counted deterministically, so the
+    # baseline never has to absorb a number we cannot reproduce.
+    #   max-file-lines              (05 §3 marks it 待测)
+    #   max-contract-lines          (05 §3 marks it 待测)
+    #   max-public-methods          (05 §3 marks it 待测)
+    #   layer-direction             (05 §3 marks it 待测)
+    #   domain-io                   (needed by plan 584 drift test #1 as well)
+    #   ui-implementation-import    (05 §3 says 23; not re-verified yet)
+    #   disallowed-process-spawn    (05 §3.1 says "50+", which is not a count)
+
+# ── Dependency layers: a module may only depend downward ───────────────────
+layers:
+  - protocol # agent-protocol, shared
+  - core # agent-core, agent-tools, ai
+  - runtime # agent-runtime
+  - host # desktop, cli, gateway
+# harness/ lives outside the workspace and is validated separately (05 §4.4).
+
+# ── Edges forbidden regardless of what `requires` says ─────────────────────
+forbiddenDependencies:
+  - from: packages/agent-protocol/**
+    to:
+      - packages/agent-core/**
+      - packages/agent-runtime/**
+      - electron/**
+      - src/**
+    reason: >-
+      protocol must be a true leaf with zero implementation dependencies.
+      grok's sampling-types claimed "no I/O" while its Cargo.toml pulled in
+      reqwest plus 16 internal crates (02-reference-repo-boundaries.md:271-280).
+
+  - from: packages/agent-core/**
+    to:
+      - electron/**
+      - apps/desktop/**
+      - src/**
+      - packages/computer-use/**
+    reason: agent-core must not depend on any host (16 measured violations).
+
+  - from: src/**
+    to:
+      - electron/**
+      - apps/desktop/src/main/**
+    reason: renderer must not depend on the main process (9 measured violations).
+
+  # Not in 05 §2's list, but it is the single largest boundary problem in the
+  # repo (01-current-state-audit.md 核心结论 #6: 57 edges, 24 of them from the
+  # provider layer) and plan 06 stage M3 exists to remove it. Added here so a
+  # NEW main->renderer edge is blocked while the debt is burned down.
+  - from: electron/**
+    to:
+      - src/**
+      - apps/desktop/src/renderer/**
+    reason: >-
+      the main process must not depend on renderer types. 57 measured edges;
+      the provider layer alone accounts for 24. This is the direction that is
+      backwards today, and 06 stage M3 (packages/shared) is what unwinds it.
+
+  - from: packages/**
+    to:
+      - electron/**
+      - src/**
+      - apps/desktop/**
+    reason: >-
+      workspace packages must not depend back on the host
+      (57 measured violations; these are what plan 584 PP-3/PP-11 remove).
+
+  - from: packages/agent-*/
+    to:
+      - packages/ui/**
+      - packages/conductor/**
+    reason: agent must not depend on UI (2 measured violations).
+
+# ── Capability edges that are explicitly permitted ─────────────────────────
+allowedDependencies:
+  - from: packages/agent-runtime/**
+    to:
+      - packages/plugin-core/**
+      - packages/computer-use/**
+      - packages/ai/**
+
+# ── Module declarations ────────────────────────────────────────────────────
+modules:
+  # ── Target state: declared now so the rules bind the moment the directory
+  #    appears. The directories do not exist yet (plan 584 PP-1 creates
+  #    agent-protocol); a root that does not exist simply matches nothing.
+  - id: agent-protocol
+    roots: [packages/agent-protocol]
+    managed: true # zero tolerance from the first commit
+    requires: []
+    publicEntrypoints: [packages/agent-protocol/src/index.ts]
+    owner: agent-harness
+
+  - id: agent-core
+    roots: [packages/agent-core]
+    managed: true
+    requires: [agent-protocol, ai]
+    publicEntrypoints: [packages/agent-core/src/index.ts]
+    owner: agent
+
+  - id: agent-runtime
+    roots: [packages/agent-runtime]
+    managed: true
+    requires: [agent-protocol, agent-core, agent-tools, ai, plugin-core]
+    publicEntrypoints: [packages/agent-runtime/src/index.ts]
+    owner: agent
+
+  # ── Legacy: managed: false, each flipped as its migration lands ─────────
+  - id: legacy-agent
+    roots: [packages/agent]
+    managed: false
+    requires: []
+    owner: agent
+    migrateTo: agent-core
+
+  - id: legacy-desktop
+    roots: [src, electron]
+    managed: false
+    requires: []
+    owner: desktop
+    migrateTo: apps/desktop
+
+  # The host, at its CURRENT location. `legacy-desktop` above still points at
+  # the pre-monorepo roots, so before this entry existed `moduleOf()` returned
+  # `null` for every file under `apps/desktop` — and a `null` module has no
+  # `requires` list, which means the declared-dependency rule could not bind
+  # the host at all. The gap was invisible precisely because it disabled a
+  # check.
+  #
+  # `requires` names only what plan 586 actually added: the Control Plane
+  # (manifest factory, run store) speaks the protocol, and the agent-server
+  # hosts the runtime. `agent` is deliberately ABSENT — electron-main already
+  # reaches into `packages/agent/src` by relative path, and that pre-existing
+  # debt is measured as `package-boundary-escape`, not excused by a declaration
+  # this plan did not earn.
+  - id: desktop-host
+    roots: [apps/desktop]
+    managed: false
+    requires: [agent-protocol, agent-runtime]
+    owner: desktop
+
+  - id: legacy-plugin-core
+    roots: [packages/plugin-core]
+    managed: true # plan 584 / 06-M1: the package now ships a real `exports`
+    # map, so its subpaths are a declared surface rather than an accident.
+    requires: []
+    # The id keeps its `legacy-` prefix for now only to avoid churning a
+    # `--scope` argument that is currently unused; rename it to
+    # `plugin-core` alongside the other managed modules when convenient.
+    #
+    # Mirrors the subpaths in packages/plugin-core/package.json `exports`.
+    # The check classifies an import as public from that `exports` map, not
+    # from this list, so this block is documentation of the intended surface.
+    publicEntrypoints:
+      - packages/plugin-core/src/index.ts
+      - packages/plugin-core/src/connectors/app-connector-id.ts
+      - packages/plugin-core/src/connectors/app-schema.ts
+      - packages/plugin-core/src/mcp/collect.ts
+      - packages/plugin-core/src/mcp/user-config.ts
+      - packages/plugin-core/src/mcp/resolve.ts
+      - packages/plugin-core/src/mcp/core/index.ts
+      - packages/plugin-core/src/mcp/core/alias.ts
+      - packages/plugin-core/src/mcp/core/deadline.ts
+      - packages/plugin-core/src/mcp/core/descriptor.ts
+      - packages/plugin-core/src/mcp/core/error-taxonomy.ts
+      - packages/plugin-core/src/mcp/core/ledger-types.ts
+      - packages/plugin-core/src/mcp/core/list-tools.ts
+      - packages/plugin-core/src/mcp/core/projection.ts
+      - packages/plugin-core/src/security/path-validator.ts
+    owner: extensibility
+
+  - id: legacy-ai
+    roots: [packages/ai]
+    managed: false
+    requires: []
+    owner: agent
+
+  - id: legacy-cli
+    roots: [packages/cli]
+    managed: false
+    requires: []
+    owner: agent
+
+  - id: legacy-gateway
+    roots: [packages/gateway]
+    managed: false
+    requires: []
+    owner: platform
+
+  - id: legacy-conductor
+    roots: [packages/conductor]
+    managed: false
+    requires: []
+    owner: canvas
+
+  - id: legacy-computer-use
+    roots: [packages/computer-use]
+    managed: false
+    requires: []
+    owner: os
+
+  - id: legacy-voice
+    roots: [packages/voice]
+    managed: false
+    requires: []
+    owner: voice
+
+# ── Self-test expectations ─────────────────────────────────────────────────
+#
+# `--self-test` asserts the checker can count every known violation. A mismatch
+# means the resolver has a hole, not that the codebase got cleaner.
+#
+# MEASURED at master @ b6f8e7c0 (2026-10-01), not copied from the docs.
+# 05-architecture-governance.md §5 still quotes the 7c5bf050-era numbers and
+# they have since drifted — cross-boundary 568 -> 567, unresolved 34 -> 41.
+# That drift is exactly why this block lives in the policy, where it is
+# re-measurable, instead of in prose.
+#
+# ## Re-measured 2026-10-08: module-dependency 567 -> 562, escapes 153 -> 161
+#
+# Two resolver defects, both found by the protocol package refusing to be
+# clean. Neither is code drift, and the protocol package contributes ZERO of
+# either.
+#
+# (1) Counts depended on local build state. 16 electron-main deep imports are
+#     written against `packages/agent/dist/...` (e.g. `electron/services/wake.ts`
+#     importing `../../packages/agent/dist/context/os-context/index.js`).
+#     A clone that never built read them as `unresolved` and did not count them;
+#     anyone who ran `npm run typecheck:all` — which runs `build:agent` via
+#     `typecheck:web` — saw 8 extra edges and a red gate. Same commit, two
+#     verdicts. `audit-imports.mjs` now maps a specifier into OUR OWN
+#     `packages/<x>/dist/` back onto the `src/` file that produced it.
+#     Verified identical with and without `dist/` present (161 / 161).
+#     These are the higher, true numbers, not a regression.
+#
+# (2) Comments were parsed as code. Both audits regex the raw file text, so a
+#     doc comment quoting `from '...'` became an edge, and a commented-out
+#     import counted as a live one — meaning deleting the comment would look
+#     like it removed a violation. Six false edges, zero real ones lost
+#     (verified by diffing the edge set before and after). Fixed with
+#     `scripts/architecture/strip-comments.mjs`, which replaces the `SKIP_SPEC`
+#     band-aid that had been patched by name. The module-dependency count fell
+#     570 -> 562; escape, deep-import, cycle and missing-artifact are unchanged,
+#     which is the evidence that only prose was removed.
+#
+# Recompute with:
+#   node scripts/architecture/audit-imports.mjs
+#   node scripts/architecture/audit-modules.mjs
+#
+# ## Re-measured 2026-10-02 (plan 586): three expectations corrected
+#
+# All three were already wrong before this plan touched them, and
+# `--self-test` was already exiting 2 — a gate that is always red is a gate
+# nobody reads, which is the exact failure the ratchet comment above describes.
+#
+#   forbidden-dependency  82 -> 16   The 82 predates the policy's own
+#     `forbiddenDependencies` list being split by layer; 16 is what the
+#     current rules actually produce. Re-measured, not argued.
+#   module-dependency     562 -> 564  564 was already off by 2 on master
+#     (pre-existing drift). 564 adds 2 more edges than the resolver fix alone
+#     would leave, because `apps/desktop` is now a DECLARED module (it never
+#     was — `legacy-desktop` still pointed at the pre-monorepo roots), so the
+#     7 host -> {agent-protocol, agent-runtime} edges plan 586 introduces are
+#     now counted as permitted rather than blocking. See `desktop-host` below
+#     and the prefix-matching fix in `architecture-check.mjs`.
+#   deep-import          117 -> 93   A RESOLVER FIX, not a cleanup.
+#     `audit-imports.mjs` compared an `exports` map's "./testing" key against
+#     the raw specifier remainder "/testing", so every declared subpath export
+#     in the repo was reported as reaching past the public entrypoints. 24 of
+#     the 117 were false. `@duya/agent/message` and
+#     `@duya/agent-protocol/testing` are both in their package's `exports`.
+#
+# The 35 permitted module edges are measured separately and never block; see
+# the `module-dependency-permitted` rule above and the `desktop-host` entry.
+selfTest:
+  # 564 -> 563: plan 584 / 06-M4 removed the last two
+  # `@duya/agent` -> `@duya/conductor` edges; PR #86 added one back for
+  # `@duya/agent/tool/allowedRoots`.
+  module-dependency: 563
+  module-dependency-permitted: 35
+  forbidden-dependency: 16
+  package-boundary-escape: 161
+  # Plan 584 / 06-M1. plugin-core contributed 93 and now 0, because its
+  # `exports` map declares every subpath its consumers import. The 24 that
+  # remain are `@duya/agent/tool/allowedRoots` (added by PR #86) and 23
+  # `src-renderer` -> `@duya/conductor/renderer/*`; neither is plugin-core.
+  deep-import: 24
+  # Was 18. Plan 584 / 06-M1 removed the discovery <-> errors cycle in
+  # plugin-core (see mcp/sources.ts) so the module could become managed.
+  cycle: 17
+  # Was 1: plugin-core was the only package under packages/ with no
+  # `exports` map. The rule is declarative — it reads package.json only, so
+  # this stays 0 regardless of whether dist/ has been built.
+  missing-module-artifact: 0

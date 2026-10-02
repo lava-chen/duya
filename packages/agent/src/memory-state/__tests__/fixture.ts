@@ -9,13 +9,13 @@ import type { Database as BetterSqlite3Database } from 'better-sqlite3';
 // `.sql.ts` files import nothing but `crypto`, so pulling them across
 // the package boundary is safe in vitest (production code in
 // packages/agent MUST NOT import from electron/).
-import { migration0001 } from '../../../../../electron/memory-state/migrations/0001_init.sql';
-import { migration0002 } from '../../../../../electron/memory-state/migrations/0002_lease_stage1.sql';
-import { migration0003 } from '../../../../../electron/memory-state/migrations/0003_outbox.sql';
-import { migration0005 } from '../../../../../electron/memory-state/migrations/0005_phase2.sql';
-import { migration0006 } from '../../../../../electron/memory-state/migrations/0006_people_areas.sql';
-import { migration0007 } from '../../../../../electron/memory-state/migrations/0007_lifecycle_scope.sql';
-import { migration0008 } from '../../../../../electron/memory-state/migrations/0008_curation_runs.sql';
+import { migration0001 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0001_init.sql';
+import { migration0002 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0002_lease_stage1.sql';
+import { migration0003 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0003_outbox.sql';
+import { migration0005 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0005_phase2.sql';
+import { migration0006 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0006_people_areas.sql';
+import { migration0007 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0007_lifecycle_scope.sql';
+import { migration0008 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0008_curation_runs.sql';
 
 /**
  * Shared test fixture for packages/agent memory-state modules

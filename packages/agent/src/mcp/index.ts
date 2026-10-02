@@ -7,7 +7,7 @@
  * per-request abort (D5 — never closes a shared transport), canonical
  * result blocks (D8), and error classification / breaker decoupling
  * (D9) — all via the protocol-pure primitives in
- * `@duya/plugin-core/src/mcp/core/`.
+ * `@duya/plugin-core/mcp/core/`.
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -22,7 +22,7 @@ import type { Tool, ToolResult, MCPServerConfig, MCPConnectionStatus } from '../
 import { logger } from '../utils/logger.js';
 import { getCircuitBreakerManager, type CircuitBreaker } from './circuit-breaker.js';
 import { buildSafeEnv, sanitizeSecrets, scanMcpDescription } from './security.js';
-import { InventoryLedger } from '@duya/plugin-core/src/mcp/core/ledger-types.js';
+import { InventoryLedger } from '@duya/plugin-core/mcp/core/ledger-types';
 import {
   listAllTools,
   formatDiscoveryLogLine,
@@ -32,7 +32,7 @@ import {
   breakerDisposition,
   errorCodeForClass,
   McpError,
-} from '@duya/plugin-core/src/mcp/core/index.js';
+} from '@duya/plugin-core/mcp/core/index';
 import { composeResultFromBlocks } from './result-blocks.js';
 
 // Three-level timeout defaults (seconds). A server may override each

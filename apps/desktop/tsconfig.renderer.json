@@ -1,0 +1,40 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/renderer/*"],
+      "@duya/agent": ["../../packages/agent/dist"],
+      "@duya/agent/*": ["../../packages/agent/dist/*"],
+      "@duya/plugin-core": ["../../packages/plugin-core/dist/index.d.ts"],
+      "@duya/plugin-core/*": ["../../packages/plugin-core/dist/*"],
+      "@duya/conductor/renderer": ["../../packages/conductor/src/renderer/index"],
+      "@duya/conductor/renderer/*": ["../../packages/conductor/src/renderer/*"]
+    }
+  },
+  "include": [
+    "src/renderer/**/*.ts",
+    "src/renderer/**/*.tsx",
+    "../../packages/conductor/src/renderer/**/*.ts",
+    "../../packages/conductor/src/renderer/**/*.tsx"
+  ],
+  "exclude": [
+    "node_modules",
+    "../../dist",
+    "src/renderer/**/*.stories.tsx",
+    "src/renderer/**/*.stories.ts",
+    "src/renderer/**/__stories__/**"
+  ]
+}

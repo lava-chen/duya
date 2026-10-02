@@ -24,7 +24,7 @@ import { CliApiClient } from '../api/client.js';
 import { CliApiError } from '../api/errors.js';
 import { renderJson, type OutputFormat } from '../api/format.js';
 import type { CliSubcommandContext, ExitCode } from '../program/registry.js';
-import type { UserMcpTomlServer } from '@duya/plugin-core/src/mcp/user-config.js';
+import type { UserMcpTomlServer } from '@duya/plugin-core/mcp/user-config';
 
 // ---------------------------------------------------------------------------
 // Helpers shared by mcp subcommands (Plan 99 §3.3 Phase 7 + Plan 102).

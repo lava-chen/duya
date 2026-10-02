@@ -1,0 +1,691 @@
+/**
+ * ipc/plugin-handlers.ts — Plugin-related IPC handlers
+ *
+ * Handlers for:
+ * - Plugin catalog listing
+ * - Plugin registry (installed) listing
+ * - Plugin detail retrieval
+ * - Plugin health listing
+ * - Plugin install/enable/disable/remove (mutations with structured errors)
+ * - Plugin marketplace source management (Plan 455: list/add/remove/refresh)
+ * - Security: permissions, trust levels, policy
+ */
+
+import { ipcMain } from 'electron';
+import { existsSync } from 'fs';
+import { join } from 'path';
+import { getLogger, LogComponent } from '../logging/logger';
+import { getPluginManager } from '../plugins/PluginManager';
+import { getPluginCatalogEntry } from '../plugins/catalog';
+import {
+  addMarketplace,
+  listMarketplaces,
+  refreshMarketplace,
+  removeMarketplace,
+  syncAllMarketplaces,
+  type MarketplaceSyncOutcome,
+} from '../plugins/marketplace/manager';
+import { notifyMcpConfigChanged } from '../services/mcp-write-reload';
+import {
+  reconcilePluginAppDeclarations,
+  reconcilePluginAppDeclarationsFor,
+  unregisterPluginAppDeclarations,
+} from '../services/app-connections/declarative/reconcile';
+import { getAgentServerUrl } from '../services/agent-server-url';
+import {
+  getPluginErrorMessage,
+  getPluginErrorSeverity,
+  isRetryable,
+  getSuggestedAction,
+} from '../../renderer/lib/plugin-error-messages';
+import type {
+  PluginHealthReport,
+  PluginIpcListResponse,
+  PluginIpcDetailResponse,
+  PluginSetupFieldDef,
+  PluginSetupLoadResult,
+} from '../../renderer/lib/plugin-types';
+import type { PluginError } from '../../../../../packages/plugin-core/src/types';
+// Plan 311 — workflow template discovery & summary projection.
+import { discoverWorkflows, discoverSkills } from '../../../../../packages/plugin-core/src/plugins/loader/capability-discovery.js';
+import {
+  toWorkflowSummary,
+  type WorkflowTemplate,
+  type WorkflowTemplateSummary,
+} from '../../../../../packages/plugin-core/src/workflows/schema.js';
+import { readPluginManifest } from '../plugins/manifest.js';
+
+const COMPONENT = 'PluginHandlers' as LogComponent;
+
+function buildHealthIssue(err: PluginError) {
+  return {
+    error: err,
+    severity: getPluginErrorSeverity(err),
+    humanMessage: getPluginErrorMessage(err),
+    technicalDetails: err.type === 'generic-error' ? err.stack : undefined,
+    actionable: isRetryable(err) || !!getSuggestedAction(err),
+    suggestedAction: getSuggestedAction(err),
+    timestamp: Date.now(),
+  };
+}
+
+function handleResult<T>(result: { success: true; data: T } | { success: false; error: PluginError }) {
+  if (result.success) {
+    return { success: true, data: result.data };
+  }
+  return {
+    success: false,
+    data: null as unknown as T,
+    error: getPluginErrorMessage(result.error),
+    pluginError: result.error,
+    healthIssue: buildHealthIssue(result.error),
+  };
+}
+
+/**
+ * Plan 311 — Resolve the on-disk directory to scan for workflow templates.
+ *
+ * Installed plugins copy their files to a cache dir (`installPath`); the
+ * scan uses that copy directly.
+ *
+ * Returns `undefined` when no directory with a `workflows/` subfolder can
+ * be resolved — callers treat that as "no workflows".
+ */
+function resolvePluginDiscoveryDir(_pluginId: string, installPath?: string): string | undefined {
+  if (installPath && existsSync(join(installPath, 'workflows'))) {
+    return installPath;
+  }
+
+  return undefined;
+}
+
+export function registerPluginHandlers(): void {
+  const logger = getLogger();
+  const manager = getPluginManager();
+
+  // --- plugin:catalog:list ---
+  ipcMain.handle('plugin:catalog:list', async (_event, filters?: {
+    search?: string;
+    category?: string;
+    source?: string;
+    installed?: boolean;
+  }): Promise<PluginIpcListResponse<unknown>> => {
+    try {
+      let results = await manager.listCatalog();
+
+      if (filters?.search) {
+        const q = filters.search.toLowerCase();
+        results = results.filter(
+          (p) =>
+            p.name.toLowerCase().includes(q) ||
+            p.description.toLowerCase().includes(q) ||
+            p.id.toLowerCase().includes(q),
+        );
+      }
+
+      if (filters?.category) {
+        results = results.filter((p) => p.category === filters.category);
+      }
+
+      if (filters?.source) {
+        results = results.filter((p) => p.source === filters.source);
+      }
+
+      if (filters?.installed !== undefined) {
+        const installedIds = new Set(manager.listInstalled().map((p) => p.id));
+        if (filters.installed) {
+          results = results.filter((p) => installedIds.has(p.id));
+        } else {
+          results = results.filter((p) => !installedIds.has(p.id));
+        }
+      }
+
+      logger.debug('plugin:catalog:list returned', { count: results.length }, COMPONENT);
+      return { success: true, data: results };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:catalog:list failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, data: [], error: message };
+    }
+  });
+
+  // --- plugin:registry:list ---
+  ipcMain.handle('plugin:registry:list', async (): Promise<PluginIpcListResponse<unknown>> => {
+    try {
+      const installed = manager.listInstalled();
+      logger.debug('plugin:registry:list returned', { count: installed.length }, COMPONENT);
+      return { success: true, data: installed };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:registry:list failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, data: [], error: message };
+    }
+  });
+
+  // --- plugin:detail:get ---
+  ipcMain.handle('plugin:detail:get', async (_event, pluginId: string): Promise<PluginIpcDetailResponse<unknown>> => {
+    try {
+      const detail = manager.getDetail(pluginId);
+      if (!detail.catalog && !detail.entry) {
+        return { success: false, data: null, error: `Plugin not found: ${pluginId}` };
+      }
+      logger.debug('plugin:detail:get', { pluginId }, COMPONENT);
+      return { success: true, data: detail };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:detail:get failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, data: null, error: message };
+    }
+  });
+
+  // --- plugin:health:list ---
+  ipcMain.handle('plugin:health:list', async (): Promise<PluginIpcListResponse<PluginHealthReport>> => {
+    try {
+      const installed = manager.listInstalled();
+      const now = new Date().toISOString();
+      const reports: PluginHealthReport[] = [];
+
+      for (const plugin of installed) {
+        const issues: PluginHealthReport['issues'] = [];
+
+        if (!plugin.enabled) {
+          issues.push(buildHealthIssue({
+            type: 'generic-error',
+            plugin: plugin.id,
+            message: 'Plugin is disabled',
+          }));
+        }
+
+        if (plugin.health?.status === 'failed') {
+          issues.push(buildHealthIssue({
+            type: 'generic-error',
+            plugin: plugin.id,
+            message: plugin.health.reasons.join('; '),
+          }));
+        }
+
+        reports.push({
+          pluginId: plugin.id,
+          healthy: issues.length === 0,
+          issues,
+          lastCheckedAt: now,
+          lastError: plugin.lastError ? {
+            type: 'generic-error',
+            message: plugin.lastError.message,
+            at: plugin.lastError.at,
+          } : undefined,
+        });
+      }
+
+      logger.debug('plugin:health:list returned', { count: reports.length }, COMPONENT);
+      return { success: true, data: reports };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:health:list failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, data: [], error: message };
+    }
+  });
+
+  // --- plugin:install ---
+  ipcMain.handle('plugin:install', async (_event, payload: { pluginId: string; marketplace?: string }) => {
+    try {
+      const result = await manager.installFromCatalog(payload.pluginId, undefined, false, payload.marketplace);
+      if (result.success) {
+        notifyMcpConfigChanged();
+        // Plan 460: bring the plugin's `.app.json` connector declarations online.
+        reconcilePluginAppDeclarationsFor(payload.pluginId);
+      }
+      return handleResult(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:install failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, error: message };
+    }
+  });
+
+  // --- plugin:marketplace:list (Plan 455) ---
+  ipcMain.handle('plugin:marketplace:list', async () => {
+    try {
+      return { success: true, data: listMarketplaces() };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:marketplace:list failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, data: [], error: message };
+    }
+  });
+
+  // --- plugin:marketplace:add (Plan 455) ---
+  // Accepts owner/repo shorthand, https git URLs (with optional #ref), and
+  // local directory paths — parsed and SSRF-gated by source-parse.
+  ipcMain.handle('plugin:marketplace:add', async (_event, payload: { source: string; ref?: string }) => {
+    try {
+      const view = await addMarketplace(payload.source, payload.ref);
+      logger.info('plugin:marketplace:add', { name: view.name, kind: view.kind }, COMPONENT);
+      return { success: true, data: view };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:marketplace:add failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, error: message };
+    }
+  });
+
+  // --- plugin:marketplace:remove (Plan 455) ---
+  ipcMain.handle('plugin:marketplace:remove', async (_event, payload: { name: string }) => {
+    try {
+      removeMarketplace(payload.name);
+      return { success: true, data: null };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:marketplace:remove failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, error: message };
+    }
+  });
+
+  // --- plugin:marketplace:refresh (Plan 455) ---
+  ipcMain.handle('plugin:marketplace:refresh', async (_event, payload: { name?: string }) => {
+    try {
+      const outcomes: MarketplaceSyncOutcome[] = [];
+      if (payload.name) {
+        try {
+          await refreshMarketplace(payload.name);
+        } catch (err) {
+          outcomes.push({
+            marketplace: payload.name,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      } else {
+        outcomes.push(...(await syncAllMarketplaces()));
+      }
+      return { success: true, data: outcomes };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:marketplace:refresh failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, error: message };
+    }
+  });
+
+  // --- plugin:install-local ---
+  ipcMain.handle('plugin:install-local', async (_event, payload: { pluginPath: string; scope?: string; autoUpdate?: boolean }) => {
+    try {
+      const result = await manager.installFromPath(payload.pluginPath, payload.scope as 'user' | undefined, payload.autoUpdate ?? false);
+      if (result.success) {
+        notifyMcpConfigChanged();
+        reconcilePluginAppDeclarationsFor(result.data?.id ?? '');
+      }
+      return handleResult(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:install-local failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, error: message };
+    }
+  });
+
+  // --- plugin:enable ---
+  ipcMain.handle('plugin:enable', async (_event, pluginId: string) => {
+    try {
+      const result = await manager.setEnabled(pluginId, true);
+      if (result.success) {
+        notifyMcpConfigChanged();
+        reconcilePluginAppDeclarationsFor(pluginId);
+      }
+      return handleResult(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:enable failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, error: message };
+    }
+  });
+
+  // --- plugin:disable ---
+  ipcMain.handle('plugin:disable', async (_event, pluginId: string) => {
+    try {
+      const result = await manager.setEnabled(pluginId, false);
+      if (result.success) {
+        notifyMcpConfigChanged();
+        unregisterPluginAppDeclarations(pluginId);
+      }
+      return handleResult(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:disable failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, error: message };
+    }
+  });
+
+  // --- plugin:remove ---
+  ipcMain.handle('plugin:remove', async (_event, payload: { pluginId: string; deleteData?: boolean }) => {
+    try {
+      const result = await manager.remove(payload.pluginId, payload.deleteData ?? false);
+      if (result.success) {
+        notifyMcpConfigChanged();
+        unregisterPluginAppDeclarations(payload.pluginId);
+      }
+      return handleResult(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:remove failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, error: message };
+    }
+  });
+
+  // --- plugin:setup:load ---
+  // Returns the setup field definitions (excluding app-connection, which
+  // renders via OAuth) plus the currently stored values. Secret values are
+  // masked to an empty string — the real secret never crosses IPC. The
+  // renderer uses the field defs to build the form instead of reaching
+  // into the manifest (the zod manifest schema has no `setup` block).
+  ipcMain.handle('plugin:setup:load', async (_event, pluginId: string): Promise<{ success: boolean; data: PluginSetupLoadResult | null; error?: string }> => {
+    try {
+      if (!pluginId) {
+        return { success: false, data: null, error: 'pluginId is required' };
+      }
+      const catalog = getPluginCatalogEntry(pluginId);
+      const manifestSetup = catalog?.manifest.setup ?? [];
+      // Filter out app-connection fields — those are handled by the OAuth
+      // connection UI, not this store.
+      const fields: PluginSetupFieldDef[] = manifestSetup
+        .filter((f) => f.type !== 'app-connection')
+        .map((f) => ({
+          id: f.id,
+          label: f.label,
+          type: f.type,
+          required: !!f.required,
+        }));
+      const secretIds = new Set(
+        manifestSetup.filter((f) => f.type === 'secret').map((f) => f.id),
+      );
+      const stored = manager.getSetupValues(pluginId);
+      const values: Record<string, string> = {};
+      for (const [key, value] of Object.entries(stored)) {
+        // Never echo secrets back to the renderer.
+        values[key] = secretIds.has(key) ? '' : value;
+      }
+      // Ensure every declared field has an entry so the renderer can render
+      // inputs uniformly (missing keys are treated as empty by the form).
+      for (const field of fields) {
+        if (values[field.id] === undefined) {
+          values[field.id] = '';
+        }
+      }
+      logger.debug('plugin:setup:load', { pluginId, fieldCount: fields.length }, COMPONENT);
+      return { success: true, data: { fields, values } };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:setup:load failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, data: null, error: message };
+    }
+  });
+
+  // --- plugin:setup:save ---
+  // Persists user-supplied setup values. The renderer sends only the
+  // fields the user actually edited; PluginManager.saveSetupValues merges
+  // them on top of existing stored values (so unchanged secrets are
+  // preserved) and then recomputes setupState + notifies the agent server.
+  ipcMain.handle('plugin:setup:save', async (_event, payload: { pluginId: string; values: Record<string, string> }): Promise<{ success: boolean; data: { ok: boolean } | null; error?: string }> => {
+    try {
+      if (!payload?.pluginId) {
+        return { success: false, data: null, error: 'pluginId is required' };
+      }
+      const values = payload.values && typeof payload.values === 'object' ? payload.values : {};
+      manager.saveSetupValues(payload.pluginId, values);
+      logger.debug('plugin:setup:save', { pluginId, fieldCount: Object.keys(values).length }, COMPONENT);
+      return { success: true, data: { ok: true } };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:setup:save failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, data: null, error: message };
+    }
+  });
+
+  // --- plugin:doctor ---
+  ipcMain.handle('plugin:doctor', async (_event, pluginId?: string) => {
+    try {
+      const targets = pluginId
+        ? manager.listInstalled().filter((p) => p.id === pluginId)
+        : manager.listInstalled();
+      const now = new Date().toISOString();
+      const reports: PluginHealthReport[] = [];
+
+      for (const plugin of targets) {
+        const issues: PluginHealthReport['issues'] = [];
+
+        if (!existsSync(plugin.installPath)) {
+          issues.push(buildHealthIssue({
+            type: 'path-not-found',
+            plugin: plugin.id,
+            path: plugin.installPath,
+          }));
+        }
+
+        if (plugin.setupState === 'needs_setup') {
+          issues.push(buildHealthIssue({
+            type: 'generic-error',
+            plugin: plugin.id,
+            message: 'Plugin requires setup configuration',
+          }));
+        }
+
+        if (!plugin.enabled) {
+          issues.push(buildHealthIssue({
+            type: 'generic-error',
+            plugin: plugin.id,
+            message: 'Plugin is disabled',
+          }));
+        }
+
+        reports.push({
+          pluginId: plugin.id,
+          healthy: issues.length === 0,
+          issues,
+          lastCheckedAt: now,
+        });
+      }
+
+      logger.debug('plugin:doctor completed', { count: reports.length }, COMPONENT);
+      return { success: true, data: reports };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:doctor failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, data: [], error: message };
+    }
+  });
+
+  // --- plugin:capability-index ---
+  // Plan 311 — workflows count is now discovery-driven (scans the
+  // plugin's on-disk `workflows/` directory) and each item carries
+  // template summaries (id/name/description/permissionTier). The
+  // prompt body is NOT included — full templates are fetched on
+  // demand via `plugin:workflow:get` (Plan 241 progressive
+  // disclosure). The existing grantedPermissions-prefix counts for
+  // skills/mcp/cli/ui/hooks are retained unchanged.
+  ipcMain.handle('plugin:capability-index', async () => {
+    try {
+      const enabled = manager.listInstalled().filter(
+        (p) => p.enabled && p.health?.status !== 'disabled',
+      );
+      const index = enabled.map((p) => {
+        // Plan 311 — discover workflow templates from the plugin's
+        // on-disk directory. Falls back to an empty list when no
+        // directory with `workflows/` can be resolved (e.g. the
+        // plugin was installed from a marketplace that did not ship
+        // workflow files).
+        const discoveryDir = resolvePluginDiscoveryDir(p.id, p.installPath);
+        const templates: WorkflowTemplate[] = discoveryDir
+          ? discoverWorkflows(discoveryDir)
+          : [];
+        const workflowSummaries: WorkflowTemplateSummary[] = templates.map(toWorkflowSummary);
+        const discoveredSkills = discoveryDir ? discoverSkills(discoveryDir) : [];
+        const mcpServerCount = (() => {
+          if (!discoveryDir) return 0;
+          try {
+            const m = readPluginManifest(discoveryDir);
+            return m.capabilities?.mcpServers?.length ?? 0;
+          } catch { return 0; }
+        })();
+
+        return {
+          pluginId: p.id,
+          name: p.name,
+          version: p.version,
+          status: 'enabled' as const,
+          trustLevel: p.trustLevel,
+          capabilities: {
+            skills: discoveredSkills.length,
+            mcpServers: mcpServerCount,
+            cli: p.grantedPermissions?.filter((x) => x.name.startsWith('cli.')).length ?? 0,
+            ui: p.grantedPermissions?.filter((x) => x.name.startsWith('ui.')).length ?? 0,
+            hooks: p.grantedPermissions?.filter((x) => x.name.startsWith('hooks.')).length ?? 0,
+            // Plan 311 — workflow count from on-disk discovery.
+            workflows: workflowSummaries.length,
+          },
+          permissionSummary: {
+            granted: p.grantedPermissions?.map((x) => x.name) ?? [],
+            denied: [],
+          },
+          // Plan 311 — workflow template summaries (no prompt body).
+          workflows: workflowSummaries,
+        };
+      });
+
+      logger.debug('plugin:capability-index generated', { count: index.length }, COMPONENT);
+      return { success: true, data: index };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:capability-index failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, data: [], error: message };
+    }
+  });
+
+  // --- plugin:workflow:get (Plan 311) ---
+  // Fetch the full workflow template (including prompt body) for a
+  // given plugin + workflow id. The capability index only ships
+  // summaries; the renderer calls this when the user actually opens
+  // the launch dialog. Returns `null` when the workflow is not found
+  // so the renderer can show a "template missing" message.
+  ipcMain.handle(
+    'plugin:workflow:get',
+    async (_event, payload: { pluginId: string; workflowId: string }) => {
+      try {
+        const { pluginId, workflowId } = payload;
+        if (!pluginId || !workflowId) {
+          return {
+            success: false,
+            data: null,
+            error: 'pluginId and workflowId are required',
+          };
+        }
+
+        // Resolve the discovery directory. For installed plugins we
+        // use the registry entry's installPath; for bundled plugins
+        // that are not yet installed we fall back to the builtin dir
+        // scan inside `resolvePluginDiscoveryDir`.
+        const installed = manager.listInstalled().find((p) => p.id === pluginId);
+        const installPath = installed?.installPath;
+        const discoveryDir = resolvePluginDiscoveryDir(pluginId, installPath);
+
+        if (!discoveryDir) {
+          logger.warn('plugin:workflow:get — no discovery dir resolved', { pluginId }, COMPONENT);
+          return {
+            success: false,
+            data: null,
+            error: `Plugin directory not found: ${pluginId}`,
+          };
+        }
+
+        const templates = discoverWorkflows(discoveryDir);
+        const template = templates.find((t) => t.id === workflowId);
+        if (!template) {
+          logger.warn(
+            'plugin:workflow:get — workflow not found',
+            { pluginId, workflowId, available: templates.map((t) => t.id) },
+            COMPONENT,
+          );
+          return {
+            success: false,
+            data: null,
+            error: `Workflow not found: ${workflowId}`,
+          };
+        }
+
+        logger.debug('plugin:workflow:get', { pluginId, workflowId }, COMPONENT);
+        return { success: true, data: template };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error(
+          'plugin:workflow:get failed',
+          err instanceof Error ? err : new Error(message),
+          COMPONENT,
+        );
+        return { success: false, data: null, error: message };
+      }
+    },
+  );
+
+  // --- plugin:security:trust-info ---
+  ipcMain.handle('plugin:security:trust-info', async (_event, payload: { pluginId: string; source: string; marketplace?: string }) => {
+    try {
+      const trustEngine = manager.getTrustEngine();
+      const trust = trustEngine.determineTrustLevel(payload.source, payload.marketplace);
+      const capabilities = trustEngine.getCapabilities(trust);
+      return { success: true, data: { trust, capabilities } };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { success: false, error: message };
+    }
+  });
+
+  // --- plugin:security:policy ---
+  // Plan 101 Phase 5: schema simplified to read-only. The historical
+  // `action: 'update'` variant was advertised in the parameter type but
+  // never implemented — the handler always returned `getPolicy()`.
+  // Dropped for honesty; policy updates are out of scope for v0.1.3 and
+  // will be reintroduced in a follow-up plan if needed.
+  ipcMain.handle('plugin:security:policy', async () => {
+    try {
+      const policyEngine = manager.getPolicyEngine();
+      return { success: true, data: policyEngine.getPolicy() };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { success: false, error: message };
+    }
+  });
+
+  // --- plugin:security:check-path ---
+  ipcMain.handle('plugin:security:check-path', async (_event, payload: { path: string; base: string }) => {
+    try {
+      const validator = manager['pathValidator'];
+      const result = (validator as { validatePathWithinBase: (p: string, b: string) => { safe: boolean; resolvedPath?: string; reason?: string } }).validatePathWithinBase(payload.path, payload.base);
+      return { success: true, data: result };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { success: false, error: message };
+    }
+  });
+
+  // --- plugin:cache:stats ---
+  ipcMain.handle('plugin:cache:stats', async () => {
+    try {
+      const { getCacheStats } = await import('../plugins/cache/layout');
+      const stats = getCacheStats();
+      return { success: true, data: stats };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:cache:stats failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, error: message };
+    }
+  });
+
+  // --- plugin:cache:cleanup ---
+  ipcMain.handle('plugin:cache:cleanup', async (_event, payload: { marketplace: string; pluginId: string; keepLatest?: number }) => {
+    try {
+      const { cleanupOldVersions } = await import('../plugins/cache/layout');
+      const removed = cleanupOldVersions(payload.marketplace, payload.pluginId, payload.keepLatest ?? 3);
+      return { success: true, data: { removed } };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:cache:cleanup failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, error: message };
+    }
+  });
+}

@@ -23,7 +23,7 @@ import type {
 } from '@duya/plugin-core';
 import type { MCPServerConfig } from '../types.js';
 import { collectWorkerMCPCandidates, fetchPluginSetupValuesForMcp } from './collect-worker.js';
-import { resolveMCPDiscovery } from '@duya/plugin-core/src/mcp/resolve.js';
+import { resolveMCPDiscovery } from '@duya/plugin-core/mcp/resolve';
 import { logger } from '../utils/logger.js';
 
 // ============================================================================

@@ -79,7 +79,7 @@ import { browserTool } from '../tool/builtin.js';
 import { getBashTaskRegistry } from '../session/bash-task-registry.js';
 import { hookTaskRegistry } from '../hooks/task-registry.js';
 import { backgroundAgentLifecycle } from '../lifecycle/BackgroundAgentLifecycle.js';
-import { sendEvent, parseStdin, type WorkerCommand, buildWorkflowRunEvent, type WorkflowRunCommand } from './worker-protocol.js';
+import { sendEvent, parseStdin, type WorkerCommand, buildWorkflowRunEvent, type WorkflowRunCommand, type SubagentAgentEventType } from './worker-protocol.js';
 import { launchSavedWorkflow } from './workflow-runner.js';
 import { runWorkflowRuntimeChild } from './workflow-runtime-child.js';
 import { MemoryArtifactStore } from '../modes/workflow/gui-artifacts.js';
@@ -2069,9 +2069,12 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
     case 'tool_progress':
       return { type: 'chat:tool_progress', toolUseId: (event.data as { toolName: string }).toolName, percent: 0, stage: `${event.data}` };
     case 'agent_progress': {
-      // Forward sub-agent progress events so the UI can show what the sub-agent is doing
+      // Forward sub-agent progress events so the UI can show what the sub-agent is doing.
+      // `agentEventType` is passed through verbatim (it is not narrowed to a
+      // subset), so the plan 571 `heartbeat` keepalive reaches the renderer as
+      // its own event type instead of masquerading as `thinking` prose.
       const agentEvent = event.data as {
-        type: string;
+        type: SubagentAgentEventType | string;
         data?: string;
         toolName?: string;
         toolInput?: Record<string, unknown>;
@@ -4430,6 +4433,43 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             // missing entry is the expected state — log at info, not warn,
             // to avoid noise.
             log('[Agent-Process] No pending permission for resolved id (likely already resolved or expired):', resolveSessionId, id);
+          }
+          break;
+        }
+
+        case 'subagent:kill': {
+          // Plan 571 2.5: the sub-agent panel's stop button. A sub-agent has
+          // no worker of its own — it runs in-process inside THIS worker — so
+          // the kill arrives on this worker's stdin command channel and is
+          // resolved against this worker's lifecycle singleton.
+          //
+          // Contract:
+          //  - fire-and-forget, like `permission:set` and `db:response`
+          //    (there is no ack convention on this channel);
+          //  - `taskId` is REQUIRED. A bare sessionId is deliberately not
+          //    accepted: sessionId identifies this worker, and accepting it
+          //    would let one id kill whatever task happened to be in flight;
+          //  - never throws. `handleCommand` is awaited by the stdin
+          //    `for await` loop, so an escaping error would tear down the
+          //    worker's command reader and desync every later command.
+          const killMsg = msg as unknown as {
+            type: 'subagent:kill';
+            taskId?: string;
+            sessionId?: string;
+            reason?: string;
+          };
+          if (typeof killMsg.taskId !== 'string' || !killMsg.taskId.trim()) {
+            warn('[Agent-Process] subagent:kill missing taskId, ignoring:', killMsg.sessionId);
+            break;
+          }
+          // The wire `reason` is not trusted: the only reason a user can
+          // produce is a user-initiated stop, and BackgroundAgentLifecycle
+          // types the reason as a closed union.
+          try {
+            const outcome = backgroundAgentLifecycle.tryKill(killMsg.taskId, 'user_kill');
+            log('[Agent-Process] subagent:kill', killMsg.taskId, '->', outcome);
+          } catch (err) {
+            warn('[Agent-Process] subagent:kill threw (ignored):', killMsg.taskId, err);
           }
           break;
         }
