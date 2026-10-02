@@ -89,6 +89,7 @@ duyaUI.pen
 # Agent tools
 .claude/
 .trae/
+.trae-html-share-packages/
 .qoder/
 .mimosa/
 .playwright-mcp/
