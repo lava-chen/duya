@@ -2894,7 +2894,7 @@ const en = {
   'conductor.toolbar.delete': 'Delete',
 
   // Conductor canvas view
-  'conductor.loading': 'Loading Conductor...',
+  'conductor.loading': 'Loading Canvas...',
   'conductor.dismissError': 'Dismiss error',
   'conductor.selectOrCreateCanvas': 'Select or create a canvas to begin',
 
@@ -2947,7 +2947,7 @@ const en = {
   'conductor.status.syncing': 'Syncing',
   'conductor.status.undo': 'Undo',
   'conductor.status.redo': 'Redo',
-  'conductor.status.settings': 'Conductor settings',
+  'conductor.status.settings': 'Canvas settings',
 
   // Conductor link dialog
   'conductor.link.title': 'Create a canvas link',
