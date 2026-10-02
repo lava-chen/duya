@@ -1,51 +1,53 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
-  getAgentToolDefinition,
+  getSubagentToolDefinition,
   getAgentDefinitions,
   formatAgentLineForPrompt,
-  AGENT_TOOL_NAME,
-  type AgentToolInput,
-} from '../../../src/tool/AgentTool/AgentTool.js';
-import { runAgentSync, type RunAgentParams } from '../../../src/tool/AgentTool/runAgent.js';
+  SUBAGENT_TOOL_NAME,
+  type SubagentToolInput,
+} from '../../../src/tool/SubagentTool/SubagentTool.js';
+import { runAgentSync, type RunAgentParams } from '../../../src/tool/SubagentTool/runAgent.js';
 import type { ToolUseContext, Tool, Message } from '../../../src/types.js';
-import type { AgentDefinition } from '../../../src/tool/AgentTool/loadAgentsDir.js';
+import type { AgentDefinition } from '../../../src/tool/SubagentTool/loadAgentsDir.js';
 
 describe('AgentTool', () => {
-  describe('getAgentToolDefinition', () => {
+  describe('getSubagentToolDefinition', () => {
     it('should return valid tool definition', () => {
-      const tool = getAgentToolDefinition();
+      const tool = getSubagentToolDefinition();
 
-      expect(tool.name).toBe(AGENT_TOOL_NAME);
+      expect(tool.name).toBe(SUBAGENT_TOOL_NAME);
       expect(tool.description).toBeDefined();
       expect(tool.input_schema.type).toBe('object');
     });
 
     it('should have prompt as required field', () => {
-      const tool = getAgentToolDefinition();
+      const tool = getSubagentToolDefinition();
       const schema = tool.input_schema as { required?: string[] };
 
       expect(schema.required).toContain('prompt');
     });
 
     it('should have optional subagent_type field', () => {
-      const tool = getAgentToolDefinition();
+      const tool = getSubagentToolDefinition();
       const schema = tool.input_schema as { properties: Record<string, { type: string; description?: string }> };
 
       expect(schema.properties.subagent_type).toBeDefined();
       expect(schema.properties.subagent_type.type).toBe('string');
     });
 
-    it('should have run_in_background field with default false', () => {
-      const tool = getAgentToolDefinition();
+    it('should have run_in_background field defaulting to true', () => {
+      const tool = getSubagentToolDefinition();
       const schema = tool.input_schema as { properties: Record<string, { type: string; default?: boolean }> };
 
       expect(schema.properties.run_in_background).toBeDefined();
       expect(schema.properties.run_in_background.type).toBe('boolean');
-      expect(schema.properties.run_in_background.default).toBe(false);
+      // Subagents run detached unless the caller explicitly opts out. The
+      // implementation reads this as `run_in_background !== false`.
+      expect(schema.properties.run_in_background.default).toBe(true);
     });
 
     it('should have isolation field with worktree enum', () => {
-      const tool = getAgentToolDefinition();
+      const tool = getSubagentToolDefinition();
       const schema = tool.input_schema as { properties: Record<string, { type: string; enum?: string[] }> };
 
       expect(schema.properties.isolation).toBeDefined();
@@ -53,7 +55,7 @@ describe('AgentTool', () => {
     });
 
     it('should have model field for overriding model', () => {
-      const tool = getAgentToolDefinition();
+      const tool = getSubagentToolDefinition();
       const schema = tool.input_schema as { properties: Record<string, { type: string }> };
 
       expect(schema.properties.model).toBeDefined();
@@ -62,10 +64,23 @@ describe('AgentTool', () => {
   });
 
   describe('getAgentDefinitions', () => {
-    it('should return all built-in agents', () => {
+    it('should expose every built-in agent', () => {
       const agents = getAgentDefinitions();
 
-      expect(agents.length).toBe(4);
+      // Pinned by identity rather than by count: adding a built-in agent is a
+      // routine change that must not require touching this suite.
+      expect(agents.map(a => a.agentType).sort()).toEqual(
+        [
+          'general-purpose',
+          'Explore',
+          'Plan',
+          'verification',
+          'CodeReview',
+          'Research',
+          'Canvas',
+          'ComputerUse',
+        ].sort()
+      );
     });
 
     it('should include general-purpose agent', () => {
@@ -146,9 +161,9 @@ describe('AgentTool', () => {
   });
 });
 
-describe('AgentToolInput validation', () => {
+describe('SubagentToolInput validation', () => {
   it('should accept minimal input with only prompt', () => {
-    const input: AgentToolInput = {
+    const input: SubagentToolInput = {
       prompt: 'Test task',
     };
 
@@ -158,7 +173,7 @@ describe('AgentToolInput validation', () => {
   });
 
   it('should accept full input with all fields', () => {
-    const input: AgentToolInput = {
+    const input: SubagentToolInput = {
       name: 'Test Agent',
       description: 'A test agent task',
       subagent_type: 'Explore',

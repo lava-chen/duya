@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { getPrompt, formatAgentLine } from '../../../src/tool/AgentTool/prompt.js';
-import { getBuiltInAgents } from '../../../src/tool/AgentTool/builtInAgents.js';
+import { getPrompt, formatAgentLine } from '../../../src/tool/SubagentTool/prompt.js';
+import { getBuiltInAgents } from '../../../src/tool/SubagentTool/builtInAgents.js';
 
 describe('prompt', () => {
   let agents: ReturnType<typeof getBuiltInAgents>;

@@ -38,8 +38,18 @@ describe('resolveBackend', () => {
     expect(resolveBackend('human-like', true, true)).toBe('human-like');
   });
 
-  it('human-like mode: falls back to static fetch when renderer unavailable', () => {
-    expect(resolveBackend('human-like', true, false)).toBe('fallback');
+  it('human-like mode: keeps human-like when only the extension is online', () => {
+    // human-like degrades extension -> webview -> fallback. An online
+    // extension satisfies it without needing the renderer.
+    expect(resolveBackend('human-like', true, false)).toBe('human-like');
+  });
+
+  it('human-like mode: keeps human-like when only the renderer is available', () => {
+    expect(resolveBackend('human-like', false, true)).toBe('human-like');
+  });
+
+  it('human-like mode: falls back to static fetch when both are unavailable', () => {
+    expect(resolveBackend('human-like', false, false)).toBe('fallback');
   });
 
   it('handles all mode values without throwing', () => {

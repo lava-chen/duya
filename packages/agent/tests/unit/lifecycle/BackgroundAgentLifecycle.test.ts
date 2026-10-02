@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { BackgroundAgentLifecycle } from '../../../src/lifecycle/BackgroundAgentLifecycle.js'
 import type { TaskRecord } from '../../../src/lifecycle/TaskState.js'
-import type { AgentProgressEvent } from '../../../src/tool/AgentTool/runAgent.js'
+import type { AgentProgressEvent } from '../../../src/tool/SubagentTool/runAgent.js'
 import type { Message } from '../../../src/types.js'
 
 // The lifecycle delivers terminal <task-notification> envelopes through the

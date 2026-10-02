@@ -1,22 +1,33 @@
 import { describe, it, expect } from 'vitest';
-import { getBuiltInAgents } from '../../../src/tool/AgentTool/builtInAgents.js';
-import { GENERAL_PURPOSE_AGENT } from '../../../src/tool/AgentTool/built-in/generalPurposeAgent.js';
-import { EXPLORE_AGENT } from '../../../src/tool/AgentTool/built-in/exploreAgent.js';
-import { PLAN_AGENT } from '../../../src/tool/AgentTool/built-in/planAgent.js';
-import { VERIFICATION_AGENT } from '../../../src/tool/AgentTool/built-in/verificationAgent.js';
+import { getBuiltInAgents } from '../../../src/tool/SubagentTool/builtInAgents.js';
+import { GENERAL_PURPOSE_AGENT } from '../../../src/tool/SubagentTool/built-in/generalPurposeAgent.js';
+import { EXPLORE_AGENT } from '../../../src/tool/SubagentTool/built-in/exploreAgent.js';
+import { PLAN_AGENT } from '../../../src/tool/SubagentTool/built-in/planAgent.js';
+import { VERIFICATION_AGENT } from '../../../src/tool/SubagentTool/built-in/verificationAgent.js';
+import { SUBAGENT_TOOL_NAME } from '../../../src/tool/SubagentTool/constants.js';
 
 describe('builtInAgents', () => {
   describe('getBuiltInAgents', () => {
-    it('should return 4 built-in agents', () => {
-      const agents = getBuiltInAgents();
-      expect(agents).toHaveLength(4);
-    });
-
-    it('should return agents in correct order', () => {
+    it('should expose every built-in agent exactly once', () => {
       const agents = getBuiltInAgents();
       const types = agents.map(a => a.agentType);
 
-      expect(types).toEqual(['general-purpose', 'Explore', 'Plan', 'verification']);
+      expect(types).toHaveLength(new Set(types).size);
+
+      // Pinned by identity rather than by count: adding a built-in agent is a
+      // routine change that must not require touching this suite.
+      expect(types.sort()).toEqual(
+        [
+          'general-purpose',
+          'Explore',
+          'Plan',
+          'verification',
+          'CodeReview',
+          'Research',
+          'Canvas',
+          'ComputerUse',
+        ].sort()
+      );
     });
   });
 });
@@ -67,7 +78,7 @@ describe('EXPLORE_AGENT', () => {
   });
 
   it('should not be able to spawn other agents', () => {
-    expect(EXPLORE_AGENT.disallowedTools).toContain('Agent');
+    expect(EXPLORE_AGENT.disallowedTools).toContain(SUBAGENT_TOOL_NAME);
   });
 
   it('should omit CLAUDE.md from context', () => {
@@ -78,16 +89,15 @@ describe('EXPLORE_AGENT', () => {
     const prompt = EXPLORE_AGENT.getSystemPrompt();
 
     expect(prompt).toBeDefined();
-    expect(prompt).toContain('READ-ONLY');
-    expect(prompt).toContain('file search specialist');
+    expect(prompt).toContain('READ-ONLY MODE');
+    expect(prompt).toContain('read-only codebase exploration agent');
   });
 
   it('should explicitly prohibit file modifications in prompt', () => {
     const prompt = EXPLORE_AGENT.getSystemPrompt();
 
-    expect(prompt).toContain('STRICTLY PROHIBITED');
-    expect(prompt).toContain('Creating new files');
-    expect(prompt).toContain('Modifying existing files');
+    expect(prompt).toContain('NO file editing tools');
+    expect(prompt).toContain('Do not create, modify, or delete files');
   });
 
   it('should recommend parallel tool calls for speed', () => {
@@ -108,7 +118,7 @@ describe('PLAN_AGENT', () => {
   });
 
   it('should not be able to spawn other agents', () => {
-    expect(PLAN_AGENT.disallowedTools).toContain('Agent');
+    expect(PLAN_AGENT.disallowedTools).toContain(SUBAGENT_TOOL_NAME);
   });
 
   it('should omit CLAUDE.md from context', () => {
@@ -120,7 +130,7 @@ describe('PLAN_AGENT', () => {
 
     expect(prompt).toBeDefined();
     expect(prompt).toContain('software architect');
-    expect(prompt).toContain('planning');
+    expect(prompt).toContain('design implementation plans');
   });
 
   it('should require critical files output', () => {
@@ -154,7 +164,7 @@ describe('VERIFICATION_AGENT', () => {
   });
 
   it('should not be able to spawn other agents', () => {
-    expect(VERIFICATION_AGENT.disallowedTools).toContain('Agent');
+    expect(VERIFICATION_AGENT.disallowedTools).toContain(SUBAGENT_TOOL_NAME);
   });
 
   it('should inherit model from parent', () => {
