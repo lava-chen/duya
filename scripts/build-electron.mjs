@@ -47,12 +47,16 @@ async function buildElectron() {
     minify: true,
     treeShaking: true,
     alias: {
-      // Resolve workspace plugin-core from this checkout (worktree-safe);
+      // Resolve workspace plugin-core from THIS checkout (worktree-safe);
       // node_modules junctions would otherwise pin the primary checkout.
-      // Points at the package ROOT so both the bare entry
-      // (@duya/plugin-core → src/index.ts via package.json "main") and
-      // subpath imports (@duya/plugin-core/src/...) resolve correctly.
-      '@duya/plugin-core': path.resolve(scriptDir, '../packages/plugin-core'),
+      // Points at `dist`, mirroring the package's own `exports` map: the bare
+      // name lands on `dist/index.js` and a declared subpath on
+      // `dist/<subpath>`, so `@duya/plugin-core/mcp/core/alias` rewrites to
+      // `dist/mcp/core/alias` instead of the old `src/`-shaped specifiers.
+      // (esbuild substitutes the matched package-name prefix, so one entry
+      // covers the bare name and every subpath — see the longest-match note
+      // on `@duya/agent-protocol` below.)
+      '@duya/plugin-core': path.resolve(scriptDir, '../packages/plugin-core/dist'),
       // Same reason, same root-pointing convention, for the three packages
       // plan 584/586 added. They are ESM with `exports` maps, so the package
       // root resolves to `dist/index.js` via `main` and the `/testing`

@@ -28,7 +28,7 @@ import type {
   ConnectorToolDescriptor,
 } from '../connector-types.js';
 import type { ProviderId, RiskTier } from '../types.js';
-import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
+import { asAppConnectorId } from '@duya/plugin-core/connectors/app-connector-id';
 import type { TokenVault } from '../token-vault.js';
 
 const PROVIDER = asAppConnectorId('wecom');

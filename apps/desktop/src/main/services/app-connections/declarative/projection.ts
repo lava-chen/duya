@@ -20,8 +20,8 @@
  *     field); `requiresClientSecret` defaults to `false`.
  */
 
-import type { AppDeclaration } from '@duya/plugin-core/src/connectors/app-schema.js';
-import { asAppConnectorId, type AppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
+import type { AppDeclaration } from '@duya/plugin-core/connectors/app-schema';
+import { asAppConnectorId, type AppConnectorId } from '@duya/plugin-core/connectors/app-connector-id';
 import type { ProviderClientConfig } from '../providers/registry.js';
 
 /** Build a builtin-shaped provider config from a plugin `.app.json` entry. */

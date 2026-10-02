@@ -29,7 +29,7 @@ import { invokeRestTemplate } from './connectors/rest-invoker.js';
 import {
   classifyMcpError,
   errorCodeForClass,
-} from '@duya/plugin-core/src/mcp/core/error-taxonomy.js';
+} from '@duya/plugin-core/mcp/core/error-taxonomy';
 import { getProviderConfig, registerProviderConfig, unregisterProviderConfig } from './providers/registry.js';
 import { declarationToProviderConfig } from './declarative/projection.js';
 import {
@@ -38,8 +38,8 @@ import {
   getCustomConnectorFactory,
   registerCustomConnector,
 } from './app-connector.js';
-import { asAppConnectorId, type AppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
-import type { AppDeclaration } from '@duya/plugin-core/src/connectors/app-schema.js';
+import { asAppConnectorId, type AppConnectorId } from '@duya/plugin-core/connectors/app-connector-id';
+import type { AppDeclaration } from '@duya/plugin-core/connectors/app-schema';
 import type {
   AppConnectionErrorCode,
   AppConnectionResult,

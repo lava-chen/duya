@@ -13,8 +13,8 @@ vi.mock('../../../logging/logger', () => ({
 }));
 
 import { AppConnectorRegistry, registerCustomConnector, _resetCustomConnectorImplementations } from '../app-connector.js';
-import type { AppDeclaration } from '@duya/plugin-core/src/connectors/app-schema.js';
-import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
+import type { AppDeclaration } from '@duya/plugin-core/connectors/app-schema';
+import { asAppConnectorId } from '@duya/plugin-core/connectors/app-connector-id';
 
 function decl(partial: Partial<AppDeclaration>): AppDeclaration {
   return { id: 'acme-tasks', name: 'Acme', tools: [], ...partial } as AppDeclaration;

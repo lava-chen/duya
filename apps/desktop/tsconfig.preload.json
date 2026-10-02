@@ -15,8 +15,8 @@
     "baseUrl": ".",
     "paths": {
       "@duya/agent/message": ["../../packages/agent/dist/message/index"],
-      "@duya/plugin-core": ["../../packages/plugin-core/src/index.ts"],
-      "@duya/plugin-core/*": ["../../packages/plugin-core/*"]
+      "@duya/plugin-core": ["../../packages/plugin-core/dist/index.d.ts"],
+      "@duya/plugin-core/*": ["../../packages/plugin-core/dist/*"]
     }
   },
   "include": ["src/preload/**/*.ts"],

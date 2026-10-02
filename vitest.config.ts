@@ -3,8 +3,11 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 
 // Resolve workspace plugin-core from THIS checkout (worktree-safe;
-// the node_modules junction pins the primary checkout).
-const PLUGIN_CORE_ROOT = fileURLToPath(new URL('./packages/plugin-core', import.meta.url))
+// the node_modules junction pins the primary checkout). Points at `dist`,
+// matching the package's own `exports` map: consumers now import declared
+// subpaths (`@duya/plugin-core/mcp/core/alias`) instead of reaching into
+// `src/`, so the alias has to map a subpath onto `dist/<subpath>`.
+const PLUGIN_CORE_DIST = fileURLToPath(new URL('./packages/plugin-core/dist', import.meta.url))
 // Same reason: the protocol package must be tested against THIS worktree's
 // source, never the primary checkout's dist.
 const AGENT_PROTOCOL_SRC = fileURLToPath(new URL('./packages/agent-protocol/src', import.meta.url))
@@ -62,8 +65,10 @@ export default defineConfig({
       // the ensure-sqlite-abi pretest swaps per runtime.
       { find: /^better-sqlite3$/, replacement: path.resolve(__dirname, './node_modules/better-sqlite3') },
       // Resolve workspace plugin-core from THIS checkout (worktree-safe;
-      // the node_modules junction pins the primary checkout).
-      { find: '@duya/plugin-core', replacement: PLUGIN_CORE_ROOT },
+      // the node_modules junction pins the primary checkout). Exact bare
+      // name first, then subpaths — the bare rule must not swallow them.
+      { find: /^@duya\/plugin-core$/, replacement: PLUGIN_CORE_DIST + '/index.js' },
+      { find: /^@duya\/plugin-core\/(.*)$/, replacement: PLUGIN_CORE_DIST + '/$1' },
       // Subpaths first: the bare name would otherwise swallow
       // `@duya/agent-protocol/testing` and `/legacy`.
       // `/testing` resolves to the subpath INDEX, matching the package's own

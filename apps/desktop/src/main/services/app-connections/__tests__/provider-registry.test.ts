@@ -8,7 +8,7 @@ import {
   setClientSecret,
   unregisterProviderConfig,
 } from '../providers/registry.js';
-import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
+import { asAppConnectorId } from '@duya/plugin-core/connectors/app-connector-id';
 
 const GOOGLE = asAppConnectorId('google');
 const SLACK = asAppConnectorId('slack');

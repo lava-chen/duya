@@ -15,17 +15,17 @@
  */
 export type {
   AppConnectorId,
-} from '@duya/plugin-core/src/connectors/app-connector-id.js';
+} from '@duya/plugin-core/connectors/app-connector-id';
 export {
   asAppConnectorId,
   BUILTIN_CONNECTOR_IDS,
   isBuiltinConnectorId,
   isWellFormedConnectorId,
   pluginConnectorId,
-} from '@duya/plugin-core/src/connectors/app-connector-id.js';
+} from '@duya/plugin-core/connectors/app-connector-id';
 
 /** Legacy alias for pre-455 consumers. */
-export type ProviderId = import('@duya/plugin-core/src/connectors/app-connector-id.js').AppConnectorId;
+export type ProviderId = import('@duya/plugin-core/connectors/app-connector-id').AppConnectorId;
 
 /**
  * Connection lifecycle states.

@@ -1,7 +1,7 @@
 // packages/agent/tests/mcp/collect-worker.test.ts
 // Unit tests for the worker-side MCP candidate collector.
 //
-// The pure transforms now live in @duya/plugin-core/src/mcp/collect.ts
+// The pure transforms now live in @duya/plugin-core/mcp/collect.ts
 // and are exercised here against the shared engine (`buildMCPCandidates`
 // and friends). The async wrapper `collectWorkerMCPCandidates` is
 // exercised separately with a minimal mock of the db-client shape.
@@ -13,7 +13,7 @@ import {
   buildMCPCandidates,
   type MCPCollectorPluginEntry,
   type MCPCollectorInput,
-} from '@duya/plugin-core/src/mcp/collect.js';
+} from '@duya/plugin-core/mcp/collect';
 import { collectWorkerMCPCandidates } from '../../src/mcp/collect-worker.js';
 import type { MCPConfigItem } from '../../src/mcp/config.js';
 

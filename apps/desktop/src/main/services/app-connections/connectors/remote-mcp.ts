@@ -32,15 +32,15 @@ import {
   listAllTools,
   formatDiscoveryLogLine,
   discoveryDebugEnabled,
-} from '@duya/plugin-core/src/mcp/core/list-tools.js';
+} from '@duya/plugin-core/mcp/core/list-tools';
 import {
   createDeadlineClock,
   deadlineClockFromIpc,
-} from '@duya/plugin-core/src/mcp/core/deadline.js';
+} from '@duya/plugin-core/mcp/core/deadline';
 import {
   allocateConnectionToolAlias,
   connectionNamespace,
-} from '@duya/plugin-core/src/mcp/core/alias.js';
+} from '@duya/plugin-core/mcp/core/alias';
 import { InventoryLedger } from '../inventory-ledger.js';
 import { getLogger, LogComponent } from '../../../logging/logger';
 

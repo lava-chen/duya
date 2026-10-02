@@ -6,7 +6,7 @@
 import { join } from 'path';
 import * as os from 'os';
 import { readFile } from 'fs/promises';
-import { parseUserMcpToml, type UserMcpTomlServer } from '@duya/plugin-core/src/mcp/user-config.js';
+import { parseUserMcpToml, type UserMcpTomlServer } from '@duya/plugin-core/mcp/user-config';
 
 /**
  * MCP configuration item (frontend settings format)
