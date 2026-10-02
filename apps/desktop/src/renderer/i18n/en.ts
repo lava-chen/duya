@@ -43,7 +43,7 @@ const en = {
   'nav.automation': 'Automation',
   'nav.workflow': 'Workflow',
   'nav.agents': 'Agents',
-  'nav.conductor': 'Conductor',
+  'nav.conductor': 'Canvas',
   'nav.extensions': 'Extensions',
   'nav.projects': 'Projects',
 
@@ -1372,7 +1372,7 @@ const en = {
   'panel.files': 'Files',
   'panel.preview': 'Preview',
   'panel.review': 'Code Review',
-  'panel.conductor': 'Conductor',
+  'panel.conductor': 'Canvas',
   'panel.workflow.title': 'Workflows',
   'panel.workflow.tabDefinitions': 'Definitions',
   'panel.workflow.tabRuns': 'Runs',

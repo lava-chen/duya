@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "DUYA conductor — canvas orchestrator agent subsystem",
+  "description": "DUYA canvas workspace UI — renders the surface the CanvasConductor agent drives",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
