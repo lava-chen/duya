@@ -25,6 +25,9 @@ import {
 } from './summary_synthesizer';
 import { writeSystemLog } from '../../../../../packages/agent/src/memory-state/system_log';
 import type { RagRefreshResult } from './rag_index';
+import { getLogger, LogComponent } from '../logging/logger';
+
+const logger = getLogger();
 
 /**
  * End-to-end curation cycle orchestrator (Plan 417 Task B).
@@ -267,13 +270,13 @@ export async function runCurationCycle(
     try {
       const touched = await refreshProjections(opts.memoryRoot);
       if (touched.length > 0) {
-        // eslint-disable-next-line no-console
-        console.log(`[memory] refreshed ${touched.length} projection file(s)`);
+        logger.info('Refreshed memory projection files', { count: touched.length }, LogComponent.DB);
       }
     } catch (err) {
-      console.warn(
-        '[memory] projection refresh failed',
-        err instanceof Error ? err.message : String(err),
+      logger.warn(
+        'Memory projection refresh failed',
+        { error: err instanceof Error ? err.message : String(err) },
+        LogComponent.DB,
       );
     }
     completeRun(db, runId, {

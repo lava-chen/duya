@@ -1,4 +1,4 @@
-﻿# Execution Plans
+# Execution Plans
 
 > **This is the first place to check before any work!** See workflow below.
 

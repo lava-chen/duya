@@ -32,6 +32,7 @@ import type { StreamChunk, BufferConfig } from './stream-types.js'
 import { classifyTool } from './orchestration/classify.js'
 import { ToolBatch, BATCH_STRATEGY } from './orchestration/types.js'
 import { createChildAbortController } from '../abort/index.js'
+import { resolveAskWithoutUser, readPermissionMode } from '../permissions/askWithoutUser.js'
 import {
   analyzeShellFailure,
   resolveShellExecutionPlan,
@@ -1262,6 +1263,22 @@ export class StreamingToolExecutor {
           getAppState: this.toolUseContext.getAppState,
         };
         const permResult = (executor as { checkPermissions: (input: unknown, context: unknown) => { allowed: boolean; requiresUserConfirmation?: boolean; reason?: string; mode?: 'generic' | 'ask_user_question' | 'exit_plan_mode' } }).checkPermissions(tool.block.input, toolContext);
+        // Plan 583 / ISS-11: the `&& this.toolUseContext.requestPermission` that
+        // used to sit on the branch below made an unwired hook silently skip
+        // the prompt and run the tool. Resolve the no-user case explicitly
+        // instead, and refuse unless the session mode says nobody is asked.
+        if (permResult.requiresUserConfirmation && !this.toolUseContext.requestPermission) {
+          const mode = readPermissionMode(this.toolUseContext.getAppState());
+          const fallback = resolveAskWithoutUser(mode, tool.block.name);
+          if (fallback.behavior === 'deny') {
+            messages.push(
+              createErrorMessage(tool.id, `<tool_error>${fallback.message}</tool_error>`)
+            );
+            this.finalizeTool(tool, messages, 'Approval required');
+            return;
+          }
+          // Allowed by session mode: fall through to the normal execution path.
+        }
         if (permResult.requiresUserConfirmation && this.toolUseContext.requestPermission) {
           // Use the tool's stable `tool.id` (= toolUseId) as the permission
           // request id so that any answers the user submits can be looked up
@@ -1749,6 +1766,11 @@ export class StreamingToolExecutor {
     startTime: number
   ): Promise<void> {
     if (!this.toolUseContext.requestPermission) {
+      // Plan 583 / ISS-11: this is the reference fail-closed behaviour that
+      // the pre-check, `mcp/apply.ts` and `dispatcherFromRegistry.ts` were
+      // diverging from. It stays unconditional even in `dontAsk`, because
+      // reaching here means a tool itself threw `PermissionRequiredError` —
+      // a tool-level escalation that a session mode should not self-grant.
       messages.push({
         role: 'tool' as const,
         content: `<tool_error>Permission system not configured</tool_error>`,

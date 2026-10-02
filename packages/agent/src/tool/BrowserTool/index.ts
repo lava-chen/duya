@@ -3,7 +3,7 @@
  */
 
 export { BrowserTool, browserTool } from './BrowserTool.js';
-export { createCDPClient, ExtensionCDPClient, PlaywrightCDPClient, fetchBlockedDomains } from './CDPClient.js';
+export { ExtensionCDPClient, PlaywrightCDPClient, fetchBlockedDomains } from './CDPClient.js';
 export type { ICDPClient } from './CDPClient.js';
 export { BrowserPool } from './BrowserPool.js';
 export type { InvestigationTask, InvestigationResult } from './BrowserPool.js';

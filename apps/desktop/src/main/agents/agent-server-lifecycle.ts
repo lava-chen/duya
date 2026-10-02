@@ -563,8 +563,8 @@ export function spawnAgentServer(): Promise<number> {
       const line = data.toString().trim();
       if (!line) return;
 
-      // Also output to console for debugging
-      console.error(`[agent-server] ${line}`);
+      // Also surfaced through the structured logger for debugging
+      logger.error('Agent server stderr', undefined, { line }, LogComponent.Main);
 
       // Classify stderr lines properly — most stderr from the agent server
       // is forwarded worker output (INFO-level), not actual errors.

@@ -65,7 +65,7 @@ describe('getMainButtonState — OMO family', () => {
     const out = getMainButtonState(makeCard({ isOmo: true, isCurrent: true }), APP_ID);
     expectState(out, {
       icon: 'Check',
-      text: 'In use',
+      text: 'Default',
       variant: 'secondary',
       disabled: false,
     });
@@ -75,7 +75,7 @@ describe('getMainButtonState — OMO family', () => {
     const out = getMainButtonState(makeCard({ isOmo: true, isCurrent: false }), APP_ID);
     expectState(out, {
       icon: 'Play',
-      text: 'Enable',
+      text: 'Set as default',
       variant: 'primary',
       disabled: false,
     });
@@ -162,7 +162,7 @@ describe('getMainButtonState — in-use family', () => {
     const out = getMainButtonState(makeCard({ isCurrent: true }), APP_ID);
     expectState(out, {
       icon: 'Check',
-      text: 'In use',
+      text: 'Default',
       variant: 'secondary',
       disabled: true,
     });
@@ -175,7 +175,7 @@ describe('getMainButtonState — in-use family', () => {
       makeCard({ isCurrent: true, isProxyTakeover: true }),
       APP_ID,
     );
-    expect(out.text).toBe('In use');
+    expect(out.text).toBe('Default');
   });
 });
 
@@ -184,7 +184,7 @@ describe('getMainButtonState — default enable', () => {
     const out = getMainButtonState(makeCard(), APP_ID);
     expectState(out, {
       icon: 'Play',
-      text: 'Enable',
+      text: 'Set as default',
       variant: 'primary',
       disabled: false,
     });
@@ -197,7 +197,7 @@ describe('getMainButtonState — default enable', () => {
     );
     expectState(out, {
       icon: 'Play',
-      text: 'Enable',
+      text: 'Set as default',
       variant: 'primary',
       disabled: false,
     });
@@ -215,8 +215,8 @@ describe('getMainButtonState — priority order', () => {
       makeCard({ isOmo: true, isCurrent: true, isFailoverMode: true, isInConfig: true }),
       APP_ID,
     );
-    // OMO + current wins: "In use" not "In queue".
-    expect(out.text).toBe('In use');
+    // OMO + current wins: "Default" not "In queue".
+    expect(out.text).toBe('Default');
   });
 
   it('OMO > additive', () => {
@@ -225,7 +225,7 @@ describe('getMainButtonState — priority order', () => {
       APP_ID,
     );
     // OMO wins: the text is "Enable" not "Add to config".
-    expect(out.text).toBe('Enable');
+    expect(out.text).toBe('Set as default');
   });
 
   it('failover > proxy-blocked', () => {

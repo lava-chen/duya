@@ -79,6 +79,16 @@ export function usePopoverPlacement<T extends HTMLElement = HTMLElement>(
 
   const { refs, floatingStyles, placement, update } = useFloating({
     placement: preferredPlacement,
+    // `fixed`, not floating-ui's `absolute` default.
+    //
+    // The module contract (above) and its test both specify `fixed` so the
+    // popover escapes any `overflow: hidden` ancestor. Leaving `strategy`
+    // unset silently selected `absolute`, which is positioned against the
+    // nearest positioned ancestor and therefore gets clipped by exactly
+    // the containers the contract names. The assertion meant to catch this
+    // never ran, because the suite inherited the global `environment:
+    // 'node'` default and died on `document is not defined` first.
+    strategy: 'fixed',
     middleware,
     ...(autoUpdateWhileMounted
       ? { whileElementsMounted: autoUpdate }

@@ -19,7 +19,7 @@
 
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,7 +32,82 @@ const projectRoot = join(__dirname, '..', '..', '..', '..');
 // workers may not have npx on PATH, depending on how the test runner
 // was launched.
 const NODE_BIN = process.execPath;
-const ELECTRON_BIN = join(projectRoot, 'node_modules', 'electron', 'dist', 'electron.exe');
+
+/**
+ * Resolve the Electron executable across platforms.
+ *
+ * This used to be a hardcoded `node_modules/electron/dist/electron.exe`,
+ * which is the Windows layout only. The repo's own CI matrix runs this
+ * suite on ubuntu-latest and macos-latest too, where the binary is
+ * `electron` with no extension, so the spawn could never have worked on
+ * two of the three platforms the workflow claims to cover.
+ */
+function resolveElectronBin(): string {
+  const fromEnv = process.env.DUYA_TEST_ELECTRON_BIN;
+  if (fromEnv) return fromEnv;
+  const distDir = join(projectRoot, 'node_modules', 'electron', 'dist');
+  for (const candidate of ['electron.exe', 'Electron.exe', 'electron']) {
+    const p = join(distDir, candidate);
+    if (existsSync(p)) return p;
+  }
+  // Last resort: the electron package records its own path in path.txt.
+  const pathTxt = join(projectRoot, 'node_modules', 'electron', 'path.txt');
+  if (existsSync(pathTxt)) {
+    const rel = readFileSync(pathTxt, 'utf-8').trim();
+    if (rel) return join(distDir, rel);
+  }
+  throw new HarnessUnavailable(
+    `Electron binary not found under ${distDir}. Run \`npm install\` first.`,
+  );
+}
+
+/**
+ * The headless entry boots the bundled CLI API server. That bundle is a
+ * build artifact, not source, so on a clean checkout it simply is not
+ * there — and the spawned process died instantly with
+ * `Cannot find module .../bundle/cli-api-server.cjs`, which nobody could
+ * see because the child's stderr was piped and never read. The suite then
+ * sat out the full 30s deadline per file (six files, three minutes) and
+ * reported only "Harness timeout".
+ *
+ * Pre-flight the artifact so the failure is immediate and names the
+ * command that fixes it.
+ */
+const CLI_API_BUNDLE = join(
+  projectRoot,
+  'packages',
+  'agent',
+  'bundle',
+  'cli-api-server.cjs',
+);
+
+/**
+ * A precondition the environment cannot satisfy. Distinguishing this from
+ * a genuine timeout lets callers report "cannot run here" instead of
+ * "the server failed to start", which are very different signals.
+ */
+export class HarnessUnavailable extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'HarnessUnavailable';
+  }
+}
+
+/** True when the environment can host this integration suite. */
+export function harnessUnavailableReason(): string | null {
+  if (!existsSync(CLI_API_BUNDLE)) {
+    return `missing ${CLI_API_BUNDLE} — run \`npm run bundle:agent\` first`;
+  }
+  const distDir = join(projectRoot, 'node_modules', 'electron', 'dist');
+  const found = ['electron.exe', 'Electron.exe', 'electron'].some((c) =>
+    existsSync(join(distDir, c)),
+  );
+  if (!found && !existsSync(join(projectRoot, 'node_modules', 'electron', 'path.txt'))) {
+    return `no Electron binary under ${distDir} — run \`npm install\` first`;
+  }
+  return null;
+}
+
 function runNode(args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv; stdio?: any } = {}) {
   return spawn(NODE_BIN, args, {
     cwd: opts.cwd ?? projectRoot,
@@ -130,6 +205,16 @@ export interface SeedSession {
  * the CLI client.
  */
 export async function startHarness(sessions: SeedSession[]): Promise<Harness> {
+  // Fail before doing any work, and before the 30s poll, so a missing
+  // build artifact costs milliseconds and says what to run.
+  const unavailable = harnessUnavailableReason();
+  if (unavailable) {
+    throw new HarnessUnavailable(
+      `CLI control-plane integration suite cannot run here: ${unavailable}`,
+    );
+  }
+  const electronBin = resolveElectronBin();
+
   const userData = await mkdtemp(join(tmpdir(), 'duya-cli-test-'));
   await seedTestDatabase(userData, sessions);
 
@@ -149,19 +234,30 @@ export async function startHarness(sessions: SeedSession[]): Promise<Harness> {
   // complications of `electron .` while still using the real server
   // source compiled by esbuild.
   const headlessEntry = join(__dirname, 'headless-server.cjs');
-  const electronProc = spawn(
-    ELECTRON_BIN,
-    [headlessEntry],
-    {
-      cwd: projectRoot,
-      env: {
-        ...process.env,
-        CLI_TEST_USER_DATA: userData,
-        ELECTRON_ENABLE_LOGGING: '1',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
+  const electronProc = spawn(electronBin, [headlessEntry], {
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      CLI_TEST_USER_DATA: userData,
+      ELECTRON_ENABLE_LOGGING: '1',
     },
-  );
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  // Keep the child's own diagnostics. Previously stdout/stderr were piped
+  // and never read, so a server that died instantly was indistinguishable
+  // from one that was merely slow, and the only thing the suite could
+  // report was the deadline it hit.
+  let childOutput = '';
+  const capture = (chunk: Buffer) => {
+    childOutput = (childOutput + chunk.toString('utf-8')).slice(-4000);
+  };
+  electronProc.stdout?.on('data', capture);
+  electronProc.stderr?.on('data', capture);
+  let exitedEarly: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  electronProc.on('exit', (code, signal) => {
+    exitedEarly = { code, signal };
+  });
 
   // The CLI API server writes to <userData>/runtime/cli-api.json
   // approximately 1-2 seconds after app.whenReady. We poll for the
@@ -181,7 +277,19 @@ export async function startHarness(sessions: SeedSession[]): Promise<Harness> {
   }
   if (!runtime) {
     electronProc.kill();
-    throw new Error('Harness timeout: CLI API server did not write runtime file within 30s');
+    // If the process is already gone, the deadline is the wrong headline.
+    // Report why it died instead.
+    if (exitedEarly) {
+      throw new HarnessUnavailable(
+        `CLI API server exited (code=${exitedEarly.code ?? 'null'}, ` +
+          `signal=${exitedEarly.signal ?? 'null'}) before writing ` +
+          `${runtimeFile}. Child output:\n${childOutput.trim() || '<empty>'}`,
+      );
+    }
+    throw new Error(
+      `Harness timeout: CLI API server did not write ${runtimeFile} ` +
+        `within 30s. Child output:\n${childOutput.trim() || '<empty>'}`,
+    );
   }
 
   const env = `${envOverride}`;

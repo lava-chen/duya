@@ -17,6 +17,17 @@ import type { ModelStatusDTO } from './types';
 
 export type Platform = 'win32' | 'darwin' | 'linux';
 
+/**
+ * Smallest plausible ggml model file. Below this a model file is a
+ * truncated download rather than a model.
+ *
+ * The suite has imported this by name since the truncation check was
+ * written; when the check was dropped the export went with it and the
+ * import silently degraded to `undefined` instead of failing, which is
+ * what turned a missing guard into `Buffer.alloc(undefined)` in the test.
+ */
+export const MIN_MODEL_BYTES = 1024 * 1024;
+
 export interface WhisperBinaryGuess {
   /** Candidate paths where a `whisper-cli` / `whisper.cpp` binary may live. */
   candidates: string[];
@@ -39,15 +50,6 @@ export interface EnvReport {
   installSteps: string[];
   /** Human-readable summary for the doctor command. */
   summary: string;
-}
-
-/** Whisper CLI binary names per platform, preference-ordered. */
-function binaryNames(platform: NodeJS.Platform): string[] {
-  const base = ['whisper-cli', 'whisper'];
-  if (platform === 'win32') {
-    return ['whisper-cli.exe', 'whisper.exe', 'main.exe'];
-  }
-  return base;
 }
 
 /** Common install locations for the whisper.cpp binary. */
@@ -115,6 +117,22 @@ export interface DetectWhisperOptions {
 }
 
 /**
+ * Binary names to accept when searching PATH.
+ *
+ * PATH is the one place where the name alone is not evidence. `pip install
+ * openai-whisper` puts a console script called `whisper` (or `whisper.exe`)
+ * there, and it is a completely different program from the whisper.cpp CLI.
+ * Matching it made the doctor report "whisper.cpp binary found at ..." and
+ * handed the local STT engine a Python entry point, which then failed at
+ * run time with an error that pointed nowhere near the real cause.
+ *
+ * The ambiguous names stay valid for the managed dir and the common install
+ * locations, which are whisper.cpp-specific directories rather than whatever
+ * else the machine happens to have installed.
+ */
+const PATH_SAFE_BINARY_NAMES = ['whisper-cli', 'whisper-cli.exe', 'whisper-cpp', 'whisper-cpp.exe'];
+
+/**
  * Detect whether a whisper.cpp CLI binary is present on this machine.
  * Order: explicit config → managed dir → PATH → common candidates.
  */
@@ -134,8 +152,9 @@ export function detectWhisperBinary(
     }
   }
   // Search PATH first (executables discoverable via `which`-like lookup).
-  const names = binaryNames(platform);
-  for (const name of names) {
+  // Only the unambiguous whisper.cpp names qualify here -- see
+  // PATH_SAFE_BINARY_NAMES.
+  for (const name of PATH_SAFE_BINARY_NAMES) {
     const fromPath = findOnPath(name);
     if (fromPath) return { found: true, path: fromPath, source: 'path' };
   }
@@ -208,5 +227,13 @@ export function checkModel(modelPath: string): ModelStatusDTO {
     return { model: base, ready: false, sizeMb: 0, path: modelPath };
   }
   const stat = statSync(modelPath);
+  // A download that was interrupted leaves a plausible-looking file behind.
+  // Reporting that as ready sends the local STT engine off to load a
+  // truncated ggml file, which fails with a parse error that says nothing
+  // about the actual cause. The smallest shipped ggml base model is well
+  // over 1 MB, so anything under that is a leftover, not a model.
+  if (stat.size < MIN_MODEL_BYTES) {
+    return { model: base, ready: false, sizeMb: 0, path: modelPath };
+  }
   return { model: base, ready: true, sizeMb: Math.round(stat.size / 1024 / 1024), path: modelPath };
 }

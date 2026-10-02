@@ -106,6 +106,33 @@ const KINDS: readonly TierEntryKind[] = ['profile', 'log', 'note'];
  */
 const REBUILD_SCAN_ROOTS: readonly string[] = ['memory/items', 'memory/entities', 'memory/global'];
 
+/**
+ * Default row cap for `listTierEntries` (ISS-34). This table is a query
+ * index over the whole memory tree, so an unbounded SELECT materialises
+ * every matching row into the caller — on the prompt-rendering path that
+ * is a whole tier, on every prompt.
+ *
+ * Rows come back newest-first (`updated_at DESC, dedupe_key ASC`), so a
+ * capped query keeps the most recent memory, never an arbitrary slice.
+ * The default is deliberately generous: it only guards against an
+ * accidental whole-tier scan. Shard-scoped callers (a single
+ * tier+agent+project slice) stay effectively unconstrained, while hot
+ * paths that know their own budget pass an explicit `limit`.
+ */
+export const DEFAULT_TIER_ENTRY_LIMIT = 1000;
+
+/**
+ * Per-tier cap for the three `listTierEntries` calls in
+ * `mergedTierRecall`, so at most `3 * MERGED_RECALL_TIER_LIMIT` rows ever
+ * reach `mergeTierRecall` (which is itself unbounded).
+ *
+ * This is a safety bound, not a recall budget: the merged result is
+ * rendered into a single prompt, and 200 entries per tier already sits far
+ * beyond what one prompt can carry. Truncation drops that tier's oldest
+ * rows, keeping recall recency-first — the correct entries to lose.
+ */
+const MERGED_RECALL_TIER_LIMIT = 200;
+
 function sha256(text: string): string {
   return crypto.createHash('sha256').update(text).digest('hex');
 }
@@ -225,7 +252,21 @@ function rowToTierIndexRow(row: Record<string, unknown>): TierIndexRow {
   return row as unknown as TierIndexRow;
 }
 
-export function listTierEntries(db: Database, filter: TierQueryFilter): TierIndexRow[] {
+/**
+ * Rows matching `filter`, newest-first. Bounded: `limit` is applied in SQL
+ * (a negative LIMIT is "unbounded" to SQLite, so it is rejected rather than
+ * trusted). Callers that need a different bound pass it explicitly.
+ */
+export function listTierEntries(
+  db: Database,
+  filter: TierQueryFilter,
+  limit: number = DEFAULT_TIER_ENTRY_LIMIT
+): TierIndexRow[] {
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new Error(`tier-index: limit must be a positive integer, got ${limit}`);
+  }
+  // `tier` is required on TierQueryFilter, so `where` always holds at least
+  // `tier = ?` and the interpolated clause is never empty / malformed.
   const where: string[] = ['tier = ?'];
   const params: unknown[] = [filter.tier];
   if (filter.agentProfileId !== undefined) {
@@ -249,9 +290,10 @@ export function listTierEntries(db: Database, filter: TierQueryFilter): TierInde
     .prepare(
       `SELECT * FROM memory_tier_index
        WHERE ${where.join(' AND ')}
-       ORDER BY updated_at DESC, dedupe_key ASC`
+       ORDER BY updated_at DESC, dedupe_key ASC
+       LIMIT ?`
     )
-    .all(...params) as Array<Record<string, unknown>>;
+    .all(...params, limit) as Array<Record<string, unknown>>;
   return rows.map(rowToTierIndexRow);
 }
 
@@ -288,16 +330,24 @@ export function removeTierEntryByPath(db: Database, filePath: string): boolean {
  * user, cross-shard dedupe with earliest-via attribution per tier.
  * `projectIds` is the bot's joined-project membership (Phase 3 state);
  * absent or empty means no project tier participation.
+ *
+ * Every tier is read through `MERGED_RECALL_TIER_LIMIT` (see its doc
+ * comment) — this runs per prompt build, so an unbounded tier read is not
+ * acceptable here even though `listTierEntries` has a (looser) default.
  */
 export function mergedTierRecall(
   db: Database,
   opts: { agentProfileId: string; projectIds?: string[] }
 ): MergedTierRecall<TierIndexRow> {
-  const own = listTierEntries(db, { tier: 'agent', agentProfileId: opts.agentProfileId });
+  const own = listTierEntries(
+    db,
+    { tier: 'agent', agentProfileId: opts.agentProfileId },
+    MERGED_RECALL_TIER_LIMIT
+  );
   const project = opts.projectIds?.length
-    ? listTierEntries(db, { tier: 'project', projectIds: opts.projectIds })
+    ? listTierEntries(db, { tier: 'project', projectIds: opts.projectIds }, MERGED_RECALL_TIER_LIMIT)
     : [];
-  const user = listTierEntries(db, { tier: 'user' });
+  const user = listTierEntries(db, { tier: 'user' }, MERGED_RECALL_TIER_LIMIT);
   return mergeTierRecall({ own, project, user }, {
     keyOf: (row) => row.dedupe_key,
     timeOf: (row) => row.updated_at,

@@ -59,7 +59,7 @@ describe('memory-state migration runner', () => {
       name: string;
       sha256: string;
     }>;
-    expect(rows).toHaveLength(10);
+    expect(rows).toHaveLength(MIGRATIONS.length);
     expect(rows[0].version).toBe(1);
     expect(rows[0].name).toBe('init_control_plane');
     expect(rows[0].sha256).toBe(migration0001.sha256);
@@ -105,13 +105,13 @@ describe('memory-state migration runner', () => {
     runMigrations(db);
 
     const rowsBefore = db.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rowsBefore.n).toBe(10);
+    expect(rowsBefore.n).toBe(MIGRATIONS.length);
 
     // Re-run; should not throw, not insert a duplicate, not re-exec migration.
     runMigrations(db);
 
     const rowsAfter = db.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rowsAfter.n).toBe(10);
+    expect(rowsAfter.n).toBe(MIGRATIONS.length);
 
     db.close();
   });
@@ -128,7 +128,7 @@ describe('memory-state migration runner', () => {
     runMigrations(dbB);
 
     const rows = dbB.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rows.n).toBe(10);
+    expect(rows.n).toBe(MIGRATIONS.length);
 
     dbA.close();
     dbB.close();
@@ -182,7 +182,7 @@ describe('memory-state migration runner', () => {
     runMigrations(dbB);
 
     const rows = dbB.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rows.n).toBe(10);
+    expect(rows.n).toBe(MIGRATIONS.length);
 
     // Schema is intact — tables still queryable.
     const projectCount = dbB.prepare('SELECT COUNT(*) AS n FROM projects').get() as { n: number };
@@ -306,9 +306,18 @@ describe('memory-state migration runner', () => {
     db.close();
   });
 
-  it('MIGRATIONS registry includes migrations 0001-0011 in order', () => {
-    expect(MIGRATIONS).toHaveLength(10);
-    expect(MIGRATIONS[0].version).toBe(1);
+  it('MIGRATIONS registry is ordered, unique, and starts at 0001', () => {
+    // Versions run 0001-0003 then 0005-0012; 0004 was never written, and
+    // 0013/0014 moved to duya-core.db. A hardcoded length went stale every
+    // time a plan appended a migration, so the invariant is asserted
+    // structurally instead: strictly ascending, no duplicates, one entry
+    // per version, anchored at 1.
+    const versions = MIGRATIONS.map((m) => m.version);
+    expect(versions[0]).toBe(1);
+    for (let i = 1; i < versions.length; i += 1) {
+      expect(versions[i]).toBeGreaterThan(versions[i - 1]);
+    }
+    expect(new Set(versions).size).toBe(MIGRATIONS.length);
     expect(MIGRATIONS[0].name).toBe('init_control_plane');
     expect(MIGRATIONS[0].sha256).toBe(migration0001.sha256);
     expect(MIGRATIONS[1].version).toBe(2);

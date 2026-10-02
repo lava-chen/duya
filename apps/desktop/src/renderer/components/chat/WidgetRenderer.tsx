@@ -6,6 +6,8 @@ import { WIDGET_CSS_BRIDGE, WIDGET_THEME_DARK_CSS } from '@duya/conductor/render
 import { CopyIcon, CheckIcon, DownloadSimpleIcon, SquaresFourIcon } from '@/components/icons';
 import { addChatWidgetToCanvas } from '@duya/conductor/renderer/ipc/chat-widget-to-canvas';
 import { useOptionalPanel } from '@/hooks/usePanel';
+import { useLinkOpener } from '@/hooks/useLinkOpener';
+import { useTheme } from '@/hooks/useTheme';
 import { useConductorStore } from '@duya/conductor/renderer/stores/conductor-store';
 import { ImagePreview } from '@/components/chat/preview/ImagePreview';
 import { IconButton } from '@/components/ui/IconButton';
@@ -35,25 +37,6 @@ function computeWidgetCacheKey(widgetCode: string): string {
 
 export function clearWidgetHeightCache(): void {
   _heightCache.clear();
-}
-
-function useTheme(): 'light' | 'dark' {
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    if (typeof document === 'undefined') return 'dark';
-    return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
-  });
-
-  useEffect(() => {
-    const root = document.documentElement;
-    const observer = new MutationObserver(() => {
-      const attr = root.getAttribute('data-theme');
-      setTheme(attr === 'light' ? 'light' : 'dark');
-    });
-    observer.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
-    return () => observer.disconnect();
-  }, []);
-
-  return theme;
 }
 
 function getFileExtension(code: string): string {
@@ -228,11 +211,21 @@ export const WidgetRenderer = React.memo(function WidgetRenderer({
   const [height, setHeight] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Plan 583 ISS-26: widget-supplied links go through the shared opener so
+  // the scheme allowlist and `noopener` apply. Held in a ref because the
+  // message listener is registered once and must not re-subscribe whenever
+  // the link-opener setting changes.
+  const { openLink } = useLinkOpener();
+  const openLinkRef = useRef(openLink);
+  useEffect(() => {
+    openLinkRef.current = openLink;
+  }, [openLink]);
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const lastCodeRef = useRef(widgetCode);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const iframeReadyRef = useRef(false);
-  const theme = useTheme();
+  const { theme } = useTheme();
 
   const cacheKey = computeWidgetCacheKey(widgetCode);
 
@@ -290,7 +283,15 @@ export const WidgetRenderer = React.memo(function WidgetRenderer({
           break;
         case 'widget:link':
           if (e.data.href) {
-            window.open(e.data.href, '_blank');
+            // Plan 583 ISS-26: this used to be a bare
+            // `window.open(e.data.href, '_blank')`. The href arrives by
+            // postMessage from an iframe running MODEL-GENERATED code, so an
+            // unvalidated open let a widget choose the scheme
+            // (`javascript:`, `file:`, custom handlers) and gave the opened
+            // page a live `window.opener`. Route it through the same opener
+            // the markdown renderer uses, which allowlists http/https and
+            // opens with `noopener,noreferrer`.
+            openLinkRef.current(String(e.data.href));
           }
           break;
         case 'widget:sendMessage':

@@ -43,6 +43,9 @@ import {
   applyPolicyEdits,
   readPolicyForPrompt,
 } from '../../../../../packages/agent/src/memory-rollout/stage1_policy_editor';
+import { getLogger, LogComponent } from '../logging/logger';
+
+const logger = getLogger();
 
 /**
  * Input shape — matches the rows `CurationInput[]` returned by
@@ -718,7 +721,7 @@ export async function runSingleShotCuration(
       for (const cat of response.new_categories ?? []) {
         if (!isValidEntityDirName(cat.name)) {
           newCategoriesSkipped.push(cat.name);
-          console.warn(`[memory] new category rejected (invalid name): ${cat.name}`);
+          logger.warn('New category rejected (invalid name)', { name: cat.name }, LogComponent.DB);
           continue;
         }
         const dirPath = path.join(opts.memoryRoot, 'global', cat.name);
@@ -731,23 +734,28 @@ export async function runSingleShotCuration(
           }
           if (stat?.isDirectory()) {
             newCategoriesSkipped.push(cat.name);
-            console.warn(
-              `[memory] new category already exists, skipped: global/${cat.name}`,
+            logger.warn(
+              'New category already exists, skipped',
+              { name: cat.name, scope: 'global' },
+              LogComponent.DB,
             );
             continue;
           }
           // recursive: parent `global/` may not exist yet on first run.
           await fs.mkdir(dirPath, { recursive: true });
           newCategoriesCreated.push(cat.name);
-          console.warn(
-            `[memory] new category created: global/${cat.name} (${cat.reason.slice(0, 80)})`,
+          logger.warn(
+            'New category created',
+            { name: cat.name, scope: 'global', reason: cat.reason.slice(0, 80) },
+            LogComponent.DB,
           );
         } catch (err) {
           // Non-fatal: the run still succeeds; applyCurationActions's
           // atomicWrite re-creates missing parent directories on demand.
-          console.warn(
-            '[memory] new category creation failed',
-            err instanceof Error ? err.message : String(err),
+          logger.warn(
+            'New category creation failed',
+            { name: cat.name, error: err instanceof Error ? err.message : String(err) },
+            LogComponent.DB,
           );
         }
       }
@@ -775,8 +783,10 @@ export async function runSingleShotCuration(
         (i) => (i.summaryMarkdown ?? '').trim().length > 0,
       );
       if (suggestion?.op === 'edit' && !hasAnyBody) {
-        console.warn(
-          '[memory] stage1_policy edit skipped: all inputs in this batch have empty summaries',
+        logger.warn(
+          'stage1_policy edit skipped: all inputs in this batch have empty summaries',
+          undefined,
+          LogComponent.DB,
         );
       } else if (suggestion?.op === 'edit' && opts.policyPath && suggestion.edits) {
         const minIntervalMs = opts.policyMinIntervalMs ?? DEFAULT_POLICY_MIN_INTERVAL_MS;
@@ -788,7 +798,7 @@ export async function runSingleShotCuration(
               policyErrors.push(
                 `rate-limited: last policy write ${Math.round(ageMs / 1000)}s ago (< ${Math.round(minIntervalMs / 1000)}s)`,
               );
-              console.warn(`[memory] stage1_policy edit skipped: ${policyErrors[policyErrors.length - 1]}`);
+              logger.warn('stage1_policy edit skipped (rate limited)', { reason: policyErrors[policyErrors.length - 1] }, LogComponent.DB);
             }
           } catch {
             // File missing — first write is always allowed.
@@ -801,18 +811,21 @@ export async function runSingleShotCuration(
             policyVersion = res.version;
             policyErrors = res.errors;
             if (res.changed) {
-              console.warn(
-                `[memory] stage1_policy updated to v${res.version} (${res.hash.slice(0, 8)})`,
+              logger.warn(
+                'stage1_policy updated',
+                { version: res.version, hash: res.hash.slice(0, 8) },
+                LogComponent.DB,
               );
             }
             for (const errMsg of res.errors) {
-              console.warn(`[memory] stage1_policy edit rejected: ${errMsg}`);
+              logger.warn('stage1_policy edit rejected', { error: errMsg }, LogComponent.DB);
             }
           } catch (err) {
             // Policy write failure is non-fatal — the run still succeeded.
-            console.warn(
-              '[memory] stage1_policy write failed',
-              err instanceof Error ? err.message : String(err),
+            logger.warn(
+              'stage1_policy write failed',
+              { error: err instanceof Error ? err.message : String(err) },
+              LogComponent.DB,
             );
           }
         }

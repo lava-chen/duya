@@ -121,6 +121,12 @@ describe('Real Tasks Integration', () => {
       const agent = new duyaAgent({
         apiKey: 'test-key',
         provider: 'anthropic',
+        // `DuyaAgent` refuses to construct without a model ("no hardcoded
+        // defaults"), and every construction site here predates that
+        // guard, so all 13 cases died inside the constructor before
+        // ever reaching the mocked `streamChat`. The LLM client is mocked
+        // above, so this string is never used for a real request.
+        model: 'test-model',
       });
 
       const events: SSEEvent[] = [];
@@ -150,6 +156,12 @@ describe('Real Tasks Integration', () => {
       const agent = new duyaAgent({
         apiKey: 'test-key',
         provider: 'anthropic',
+        // `DuyaAgent` refuses to construct without a model ("no hardcoded
+        // defaults"), and every construction site here predates that
+        // guard, so all 13 cases died inside the constructor before
+        // ever reaching the mocked `streamChat`. The LLM client is mocked
+        // above, so this string is never used for a real request.
+        model: 'test-model',
       });
 
       const events: SSEEvent[] = [];
@@ -176,6 +188,12 @@ describe('Real Tasks Integration', () => {
       const agent = new duyaAgent({
         apiKey: 'test-key',
         provider: 'anthropic',
+        // `DuyaAgent` refuses to construct without a model ("no hardcoded
+        // defaults"), and every construction site here predates that
+        // guard, so all 13 cases died inside the constructor before
+        // ever reaching the mocked `streamChat`. The LLM client is mocked
+        // above, so this string is never used for a real request.
+        model: 'test-model',
       });
 
       const events: SSEEvent[] = [];
@@ -201,6 +219,12 @@ describe('Real Tasks Integration', () => {
       const agent = new duyaAgent({
         apiKey: 'test-key',
         provider: 'anthropic',
+        // `DuyaAgent` refuses to construct without a model ("no hardcoded
+        // defaults"), and every construction site here predates that
+        // guard, so all 13 cases died inside the constructor before
+        // ever reaching the mocked `streamChat`. The LLM client is mocked
+        // above, so this string is never used for a real request.
+        model: 'test-model',
       });
 
       const events: SSEEvent[] = [];
@@ -230,6 +254,12 @@ describe('Real Tasks Integration', () => {
       const agent = new duyaAgent({
         apiKey: 'test-key',
         provider: 'anthropic',
+        // `DuyaAgent` refuses to construct without a model ("no hardcoded
+        // defaults"), and every construction site here predates that
+        // guard, so all 13 cases died inside the constructor before
+        // ever reaching the mocked `streamChat`. The LLM client is mocked
+        // above, so this string is never used for a real request.
+        model: 'test-model',
       });
 
       const events: SSEEvent[] = [];
@@ -276,9 +306,8 @@ describe('Real Tasks Integration', () => {
       const results: string[] = [];
       for await (const update of executor.getRemainingResults()) {
         if (update.message) {
-          const content = update.message.content;
-          if (Array.isArray(content) && content[0]?.type === 'tool_result') {
-            results.push(String(content[0].content));
+          if (update.message.role === 'tool') {
+            results.push(String(update.message.content));
           }
         }
       }
@@ -312,9 +341,8 @@ describe('Real Tasks Integration', () => {
       const results: string[] = [];
       for await (const update of executor.getRemainingResults()) {
         if (update.message) {
-          const content = update.message.content;
-          if (Array.isArray(content) && content[0]?.type === 'tool_result') {
-            results.push(String(content[0].content));
+          if (update.message.role === 'tool') {
+            results.push(String(update.message.content));
           }
         }
       }
@@ -346,7 +374,7 @@ describe('Real Tasks Integration', () => {
       const tools = executor.getTools();
       expect(tools).toHaveLength(1);
       expect(tools[0].id).toBe('test');
-      expect(['queued', 'executing', 'completed']).toContain(tools[0].status);
+      expect(['queued', 'starting', 'executing', 'completed']).toContain(tools[0].status);
     });
   });
 
@@ -373,9 +401,8 @@ describe('Real Tasks Integration', () => {
       const results: string[] = [];
       for await (const update of executor.getRemainingResults()) {
         if (update.message) {
-          const content = update.message.content;
-          if (Array.isArray(content) && content[0]?.type === 'tool_result') {
-            results.push(String(content[0].content));
+          if (update.message.role === 'tool') {
+            results.push(String(update.message.content));
           }
         }
       }
@@ -408,9 +435,8 @@ describe('Real Tasks Integration', () => {
       const results: string[] = [];
       for await (const update of executor.getRemainingResults()) {
         if (update.message) {
-          const content = update.message.content;
-          if (Array.isArray(content) && content[0]?.type === 'tool_result') {
-            results.push(String(content[0].content));
+          if (update.message.role === 'tool') {
+            results.push(String(update.message.content));
           }
         }
       }
@@ -426,6 +452,12 @@ describe('Real Tasks Integration', () => {
       const agent = new duyaAgent({
         apiKey: 'test-key',
         provider: 'anthropic',
+        // `DuyaAgent` refuses to construct without a model ("no hardcoded
+        // defaults"), and every construction site here predates that
+        // guard, so all 13 cases died inside the constructor before
+        // ever reaching the mocked `streamChat`. The LLM client is mocked
+        // above, so this string is never used for a real request.
+        model: 'test-model',
       });
 
       // Initially should have no messages
@@ -436,6 +468,12 @@ describe('Real Tasks Integration', () => {
       const agent = new duyaAgent({
         apiKey: 'test-key',
         provider: 'anthropic',
+        // `DuyaAgent` refuses to construct without a model ("no hardcoded
+        // defaults"), and every construction site here predates that
+        // guard, so all 13 cases died inside the constructor before
+        // ever reaching the mocked `streamChat`. The LLM client is mocked
+        // above, so this string is never used for a real request.
+        model: 'test-model',
       });
 
       const info = agent.getSessionInfo();
@@ -449,6 +487,12 @@ describe('Real Tasks Integration', () => {
       const agent = new duyaAgent({
         apiKey: 'test-key',
         provider: 'anthropic',
+        // `DuyaAgent` refuses to construct without a model ("no hardcoded
+        // defaults"), and every construction site here predates that
+        // guard, so all 13 cases died inside the constructor before
+        // ever reaching the mocked `streamChat`. The LLM client is mocked
+        // above, so this string is never used for a real request.
+        model: 'test-model',
       });
 
       agent.clearMessages();

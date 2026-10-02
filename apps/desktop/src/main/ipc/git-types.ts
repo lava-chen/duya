@@ -1,8 +1,14 @@
-// Shared Git IPC types for the Code Review workspace.
-// This file is the single source of truth consumed by both
-// apps/desktop/src/main/ipc/git-handlers.ts and apps/desktop/src/preload/index.ts.
-// Renderer-side code (apps/desktop/src/renderer/lib/git-ipc.ts) maintains its own copy
-// because it cannot import from the Electron side.
+﻿// Shared Git IPC types for the Code Review workspace.
+// This file is the single source of truth consumed by
+// apps/desktop/src/main/ipc/git-handlers.ts, apps/desktop/src/preload/index.ts,
+// and the renderer wrapper apps/desktop/src/renderer/lib/git-ipc.ts (which
+// re-exports these types).
+//
+// It is deliberately import-free so that last hop stays a type-only edge:
+// nothing here can pull main-process code into the renderer bundle. This
+// header previously claimed the renderer "cannot import from the Electron
+// side" 鈥?true of runtime code, false of types, and `src/global.d.ts`
+// had been importing `ElectronAPI` from the preload bridge all along.
 
 export interface GitStatusFileChange {
   path: string;
@@ -77,7 +83,7 @@ export interface GitLatestTurnReviewResult {
   error?: string;
 }
 
-// ── Turn history (plan 308 Phase 2) ──────────────────────────────
+// 鈹€鈹€ Turn history (plan 308 Phase 2) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 /** Summary of one persisted turn review (no patch/files payload). */
 export interface GitTurnHistoryEntry {
@@ -95,7 +101,7 @@ export interface GitTurnHistoryResult {
   error?: string;
 }
 
-// ── Scoped review (plan 227) ──────────────────────────────────────
+// 鈹€鈹€ Scoped review (plan 227) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 export type ReviewScopeType = 'uncommitted' | 'unstaged' | 'staged' | 'commit';
 
@@ -116,7 +122,7 @@ export interface GitListCommitsResult {
   commits: GitCommitInfo[];
 }
 
-/** One branch reference — local or remote. `current` is only present for the
+/** One branch reference 鈥?local or remote. `current` is only present for the
  *  active local branch; `remote` is only present for remote-tracking refs. */
 export interface GitBranchRef {
   name: string;
@@ -144,7 +150,7 @@ export interface GitRepositoryState {
   dirty?: number;
 }
 
-// ── Commit detail (plan 518) ────────────────────────────────────
+// 鈹€鈹€ Commit detail (plan 518) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 export interface GitCommitDetailResult {
   isGitRepo: boolean;
@@ -166,7 +172,7 @@ export interface GitCommitDetailResult {
   error?: string;
 }
 
-// ── Options bag for list-commits ─────────────────────────────────
+// 鈹€鈹€ Options bag for list-commits 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 export interface GitListCommitsOptions {
   count?: number;
@@ -194,12 +200,12 @@ export interface GitAPI {
   listBranches: (cwd: string) => Promise<GitListBranchesResult>;
   /** Snapshot of the working tree's repo state (HEAD, branch, dirty counts). */
   repoState: (cwd: string) => Promise<GitRepositoryState>;
-  /** Switch the working tree to an existing branch. */
-  switchBranch: (cwd: string, branchName: string) => Promise<unknown>;
-  /** Create a new branch at an optional start point. */
-  createBranch: (cwd: string, branchName: string, startPoint?: string) => Promise<unknown>;
-  /** Create a commit from the staged/working tree. */
-  commit: (cwd: string, request: unknown) => Promise<unknown>;
-  /** Push the current branch (or specified refspec) to a remote. */
-  push: (cwd: string, request?: unknown) => Promise<unknown>;
+  // Plan 583 ISS-24: `switchBranch` / `createBranch` / `commit` / `push` were
+  // removed from this contract. They were exposed on the bridge but had no
+  // handler, so every call rejected; and the code-review surface is
+  // contractually read-only (AGENTS.md: "It is read-only: never add stage,
+  // commit, push, reset, or other mutating Git controls here"). Declaring
+  // them out of the type as well as out of the runtime bridge means adding a
+  // mutating handler later is a deliberate, reviewable change to both files
+  // rather than something a handler module can satisfy on its own.
 }

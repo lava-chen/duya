@@ -21,7 +21,21 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startHarness, runDoctor, runCli, type Harness, type SeedSession } from './harness';
+import { startHarness, runDoctor, runCli, type Harness, type SeedSession, harnessUnavailableReason } from './harness';
+
+/**
+ * This suite boots a real Electron main process against a bundled CLI
+ * API server, so it needs two build artifacts a plain checkout does not
+ * have: `packages/agent/bundle/cli-api-server.cjs` (from `npm run
+ * bundle:agent`) and an Electron binary. Without them the harness used
+ * to spin out the full 30s deadline in every file and then report
+ * nothing useful.
+ *
+ * Gating the suite keeps that cost at zero and states the condition
+ * outright. Build the bundle and re-run to exercise these.
+ */
+const HARNESS_MISSING = harnessUnavailableReason();
+
 
 const STANDARD_SEED: SeedSession[] = [
   { id: 'sess-test-1', title: 'Test Session', mode: 'code', messageCount: 2 },
@@ -42,7 +56,7 @@ function env(): string {
   return `DUYA_CLI_USER_DATA_DIR=${h!.userData}`;
 }
 
-describe('duya doctor', () => {
+describe.skipIf(HARNESS_MISSING !== null)('duya doctor', () => {
   // ── Scenario 1: Desktop running, all healthy ─────────────────────────────
   it('returns ok overallStatus when desktop is healthy', () => {
     const r = runDoctor(env(), 'json');

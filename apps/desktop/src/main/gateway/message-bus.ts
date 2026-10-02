@@ -33,6 +33,8 @@ import { isUserAllowed, getChannelAllowlist, addChannelAllowlistEntry, removeCha
 import { generateHelpText } from '../../../../../packages/gateway/src/commands/help';
 import { interruptCronSession } from '../automation/agent-run';
 
+const logger = getLogger();
+
 const GATEWAY_SESSION_KEY = '__gateway_session_states__';
 
 // Cached provider config to avoid DB reads on every gateway:inbound
@@ -138,7 +140,7 @@ function getCachedProviderConfig(): Record<string, unknown> | undefined {
       authStyle: 'api_key',
     };
   } catch (err) {
-    console.error('[Gateway] Failed to get provider config for cache:', err);
+    logger.error('Failed to get provider config for cache', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
     _cachedProviderConfig = null;
   }
 
@@ -606,17 +608,17 @@ export function handleGatewayMessage(
 
     case 'gateway:ready':
       getLogger().info('Gateway bridge ready', undefined, LogComponent.Gateway);
-      console.log('[STARTUP] gateway:ready received');
+      logger.info('gateway:ready received', undefined, LogComponent.Gateway);
       break;
 
     case 'gateway:init:complete':
       getLogger().info('Gateway init complete', { success: msg.success }, LogComponent.Gateway);
-      console.log('[STARTUP] gateway:init:complete', msg.success ? 'success' : 'failed', msg.error || '');
+      logger.info('gateway:init:complete received', { success: msg.success, error: msg.error }, LogComponent.Gateway);
       break;
 
     case 'gateway:error':
       getLogger().error('Gateway error', new Error(`${msg.error}`), undefined, LogComponent.Gateway);
-      console.error('[STARTUP] gateway:error', msg.error);
+      logger.error('gateway:error received', new Error(String(msg.error)), undefined, LogComponent.Gateway);
       break;
 
     case 'db:request': {
@@ -648,10 +650,10 @@ export function handleGatewayMessage(
         actionId = msgId || '';
       }
 
-      console.log('[Main] db:request received, id:', actionId, 'action:', action || '(none)');
+      logger.info('db:request received', { actionId, action: action || '(none)' }, LogComponent.Main);
 
       if (!action) {
-        console.warn('[Main] db:request missing action, ignoring malformed message');
+        logger.warn('db:request missing action, ignoring malformed message', undefined, LogComponent.Main);
         sendToGatewayProcess({
           type: 'db:response',
           id: actionId,
@@ -663,15 +665,15 @@ export function handleGatewayMessage(
 
       const actionObj = { action, payload } as { type?: string; action?: string; payload?: Record<string, unknown>; id?: string };
 
-      console.log('[Main] db:request payload debug:', {
+      logger.info('db:request payload debug', {
         action,
         payloadKeys: payload ? Object.keys(payload as object) : 'null/undefined',
         payloadStr: JSON.stringify(payload).slice(0, 200)
-      });
+      }, LogComponent.Main);
 
       const result = dispatchGatewayDbAction(actionObj);
 
-      console.log('[Main] db:request result:', result ? 'ok' : 'null');
+      logger.info('db:request result', { result: result ? 'ok' : 'null' }, LogComponent.Main);
 
       if (result) {
         sendToGatewayProcess({
@@ -793,9 +795,9 @@ export function handleGatewayMessage(
 
       const providerConfig = getCachedProviderConfig();
       if (providerConfig) {
-        console.log('[Main] gateway:inbound: enqueuing, provider:', providerConfig.provider, 'model:', providerConfig.model || '(empty)');
+        logger.info('gateway:inbound enqueuing', { provider: providerConfig.provider, model: providerConfig.model || '(empty)' }, LogComponent.Main);
       } else {
-        console.warn('[Main] gateway:inbound: no active provider configured');
+        logger.warn('gateway:inbound has no active provider configured', undefined, LogComponent.Main);
       }
 
       // Update gateway session metadata (workspace + permission profile).
@@ -889,7 +891,6 @@ export function handleGatewayMessage(
         removed?: boolean;
       };
 
-      const logger = getLogger();
       logger.info('[gateway:reaction] enqueuing reaction wake', {
         sessionId: reactionMsg.sessionId,
         platform: reactionMsg.platform,
@@ -949,7 +950,7 @@ export function handleGatewayMessage(
     }
 
     case 'gateway:feishu:qr:begin:response': {
-      console.log('[Main] gateway:feishu:qr:begin:response received, id:', msg.id, 'msg:', JSON.stringify(msg));
+      logger.info('gateway:feishu:qr:begin:response received', { id: msg.id }, LogComponent.Main);
       const request = _gatewayStatusRequests.get(msg.id as string);
       if (request) {
         clearTimeout(request.timeout);
@@ -958,13 +959,13 @@ export function handleGatewayMessage(
         const error = msg.error as string | undefined;
         request.resolve({ result: result ?? undefined, error });
       } else {
-        console.log('[Main] gateway:feishu:qr:begin:response: no pending request for id:', msg.id);
+        logger.info('gateway:feishu:qr:begin:response has no pending request', { id: msg.id }, LogComponent.Main);
       }
       break;
     }
 
     case 'gateway:feishu:qr:poll:response': {
-      console.log('[Main] gateway:feishu:qr:poll:response received, id:', msg.id, 'msg:', JSON.stringify(msg));
+      logger.info('gateway:feishu:qr:poll:response received', { id: msg.id }, LogComponent.Main);
       const request = _gatewayStatusRequests.get(msg.id as string);
       if (request) {
         clearTimeout(request.timeout);
@@ -973,7 +974,7 @@ export function handleGatewayMessage(
         const error = msg.error as string | undefined;
         request.resolve({ result: result ?? undefined, error });
       } else {
-        console.log('[Main] gateway:feishu:qr:poll:response: no pending request for id:', msg.id);
+        logger.info('gateway:feishu:qr:poll:response has no pending request', { id: msg.id }, LogComponent.Main);
       }
       break;
     }
@@ -991,7 +992,7 @@ export function handleGatewayMessage(
 
     default:
       getLogger().debug('Unknown gateway message type', { type, sessionId }, LogComponent.Gateway);
-      console.log('[STARTUP] Unknown gateway msg:', type, 'sessionId:', sessionId);
+      logger.info('Unknown gateway message received', { type, sessionId }, LogComponent.Main);
       break;
   }
 }
@@ -1128,7 +1129,7 @@ export function getOrBuildInitConfig(): GatewayInitConfig {
         (account.token as string | undefined) ||
         (configStore.getByPath(`channels.adapters.weixin.credentials.${accountId}.token`) as string | undefined);
       if (!token?.trim()) {
-        console.warn('[Gateway] Skipping weixin account with empty token:', accountId);
+        logger.warn('Skipping weixin account with empty token', { accountId }, LogComponent.Gateway);
         continue;
       }
       platforms.push({
@@ -1249,7 +1250,11 @@ export function getOrBuildInitConfig(): GatewayInitConfig {
     profileRoutes: channels.profile_routes ?? [],
   };
 
-  console.log('[STARTUP] getOrBuildInitConfig:', JSON.stringify({ platforms: platforms.map(p => ({ platform: p.platform, enabled: p.enabled, hasCredentials: !!Object.keys(p.credentials).length })), autoStart, workingDirectory }));
+  logger.info('Built gateway init config', {
+    platforms: platforms.map(p => ({ platform: p.platform, enabled: p.enabled, hasCredentials: !!Object.keys(p.credentials).length })),
+    autoStart,
+    workingDirectory,
+  }, LogComponent.Gateway);
   return config;
 }
 
@@ -1275,7 +1280,7 @@ export function registerGatewayIpcHandlers(): void {
   ipcMain.handle('gateway:start', async () => {
     try {
       const config = getOrBuildInitConfig();
-      console.log('[STARTUP] gateway:start called, platforms count:', config.platforms.length);
+      logger.info('gateway:start called', { platforms: config.platforms.length }, LogComponent.Gateway);
       const child = startGatewayProcess(config);
 
       child.on('message', (msg: Record<string, unknown>) => {
@@ -1289,7 +1294,7 @@ export function registerGatewayIpcHandlers(): void {
       try {
         await waitForGatewayReady(config, child, 30_000);
         child.send({ type: 'init', config });
-        console.log('[STARTUP] UI gateway:start sent init');
+        logger.info('UI gateway:start sent init', undefined, LogComponent.Gateway);
         return { success: true };
       } catch (err) {
         getLogger().error('Gateway startup timeout', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
@@ -1404,24 +1409,24 @@ export function registerGatewayIpcHandlers(): void {
 
   ipcMain.handle('gateway:feishu:qr:begin', async (_event, _domain?: string) => {
     const proc = getGatewayProcess();
-    console.log('[Main] gateway:feishu:qr:begin called, proc:', proc ? 'exists' : 'null', proc?.killed ? 'killed' : 'running');
+    logger.info('gateway:feishu:qr:begin called', { processExists: Boolean(proc), killed: Boolean(proc?.killed) }, LogComponent.Main);
     if (!proc || proc.killed) {
-      console.log('[Main] gateway:feishu:qr:begin: Gateway not running');
+      logger.info('gateway:feishu:qr:begin: Gateway not running', undefined, LogComponent.Main);
       return { success: false, error: 'Gateway not running' };
     }
     return new Promise((resolve) => {
       const id = `feishu-qr-begin-${Date.now()}`;
-      console.log('[Main] gateway:feishu:qr:begin: sending message with id:', id);
+      logger.info('gateway:feishu:qr:begin: sending message', { id }, LogComponent.Main);
       const timeout = setTimeout(() => {
         _gatewayStatusRequests.delete(id);
-        console.log('[Main] gateway:feishu:qr:begin: timeout for id:', id);
+        logger.info('gateway:feishu:qr:begin: timeout', { id }, LogComponent.Main);
         resolve({ success: false, error: 'Gateway QR begin timeout' });
       }, 15000);
       _gatewayStatusRequests.set(id, {
         resolve: (value: unknown) => {
           clearTimeout(timeout);
           _gatewayStatusRequests.delete(id);
-          console.log('[Main] gateway:feishu:qr:begin: resolved for id:', id, value);
+          logger.info('gateway:feishu:qr:begin: resolved', { id, error: (value as { error?: string } | null)?.error }, LogComponent.Main);
           const v = value as { result?: Record<string, unknown>; error?: string };
           if (v.error) {
             resolve({ success: false, error: v.error });
@@ -1434,13 +1439,13 @@ export function registerGatewayIpcHandlers(): void {
         reject: (err) => {
           clearTimeout(timeout);
           _gatewayStatusRequests.delete(id);
-          console.log('[Main] gateway:feishu:qr:begin: rejected for id:', id, err.message);
+          logger.info('gateway:feishu:qr:begin: rejected', { id, error: err.message }, LogComponent.Main);
           resolve({ success: false, error: err.message });
         },
         timeout,
       } as { resolve: (value: unknown) => void; reject: (err: Error) => void; timeout: ReturnType<typeof setTimeout> });
       proc.send({ type: 'gateway:feishu:qr:begin', id, domain: _domain || 'feishu' });
-      console.log('[Main] gateway:feishu:qr:begin: message sent to gateway');
+      logger.info('gateway:feishu:qr:begin: message sent to gateway', { id }, LogComponent.Main);
     });
   });
 
@@ -1554,7 +1559,7 @@ export function registerGatewayIpcHandlers(): void {
 }
 
 export async function startGateway(): Promise<void> {
-  console.log('[STARTUP] startGateway() called');
+  logger.info('startGateway called', undefined, LogComponent.Gateway);
   const config = getOrBuildInitConfig();
   const child = startGatewayProcess(config);
 
@@ -1568,10 +1573,10 @@ export async function startGateway(): Promise<void> {
 
   try {
     await waitForGatewayReady(config, child, 30000);
-    console.log('[STARTUP] Gateway ready, sending init...');
+    logger.info('Gateway ready, sending init', undefined, LogComponent.Gateway);
     child.send({ type: 'init', config });
   } catch (err) {
     getLogger().error('Gateway auto-start timeout', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
-    console.error('[STARTUP] Gateway auto-start failed:', err);
+    logger.error('Gateway auto-start failed', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
   }
 }

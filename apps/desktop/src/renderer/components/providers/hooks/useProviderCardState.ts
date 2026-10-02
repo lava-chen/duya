@@ -26,9 +26,14 @@
  *   - isCurrent         : this card is the user's soft default
  *                         provider (the implicit fallback for
  *                         chat/vision/etc).
- *   - isActive          : the LlmProvider.meta.tags contains 'active'.
- *                         (Mirrors the DTO `isActive` field, kept
- *                         as a transitional alias.)
+ *   - isActive          : transitional alias for `isDefault`. It does NOT
+ *                         read the DTO's own `isActive` field -- the card
+ *                         treats "active" and "default" as the same
+ *                         notion. (An earlier revision of this comment
+ *                         claimed the value came from
+ *                         `LlmProvider.meta.tags`, which no line in this
+ *                         file ever referenced; the renderer DTO has no
+ *                         `meta` at all.)
  *   - isDefault         : the DTO `isDefault` field, derived from
  *                         `AppConfig.defaultProviderId`.
  *

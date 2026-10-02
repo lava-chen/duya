@@ -22,8 +22,47 @@ import { getSharedAgentsRoot } from '../config/agent-paths';
 // =============================================================================
 
 /**
+ * Reject a platform that could escape the agents/<id>/ directory.
+ * Mirrors attachment-store.assertSafeSegment.
+ *
+ * This is a segment check only — deliberately NOT a KNOWN_PLATFORMS
+ * allow-list. The credential-platform set is a strict superset of the
+ * connector-platform set: `qq-mail` credentials are collected through
+ * this very store by the secret-request flow (`maybeConnectQqMail` in
+ * db-handlers.ts reads platform "qq-mail"), and "qq-mail" is not a
+ * connector platform. An allow-list here would silently break that
+ * feature, so the boundary stays "one safe path segment" and the
+ * platform vocabulary is left to the callers that own it.
+ *
+ * `secret:store` (db-handlers.ts) forwards `platform` straight from IPC
+ * with no validation of its own, and resolveSecretPath is the last point
+ * before `path.join`, so this is where the traversal has to die. The
+ * callers that already restrict the value — the botChannels connect
+ * handlers match CONNECTOR_MANIFESTS, the QR flow hardcodes
+ * 'feishu'/'weixin' — gain nothing today; this is what makes the store
+ * safe for a caller that does not.
+ */
+function assertSafePlatform(platform: string): void {
+  if (
+    !platform ||
+    platform.includes(path.sep) ||
+    platform.includes('/') ||
+    platform.includes('..') ||
+    platform.includes('\0')
+  ) {
+    throw new Error(`connector-secret-store: invalid platform: "${platform}"`);
+  }
+}
+
+/**
  * Resolve the connector-secrets root for a specific agent.
  * `~/.duya/agents/<agentId>/connector-secrets/` (plan 526 shared root)
+ *
+ * The agentId rule is intentionally left as-is rather than upgraded to
+ * `assertValidBotId` (config/agent-id.ts, kebab-case only): plan 485
+ * Phase 4 is what renames legacy non-kebab ids, and tightening this
+ * store first would lock out those agents. channel-store.ts carries the
+ * same weaker check for the same reason.
  */
 function resolveAgentSecretsDir(agentId: string): string {
   if (!agentId || agentId.includes(path.sep) || agentId.includes('/')) {
@@ -37,6 +76,7 @@ function resolveAgentSecretsDir(agentId: string): string {
  * `~/.duya/agents/<agentId>/connector-secrets/<platform>.json`
  */
 function resolveSecretPath(agentId: string, platform: string): string {
+  assertSafePlatform(platform);
   return path.join(resolveAgentSecretsDir(agentId), `${platform}.json`);
 }
 
@@ -166,7 +206,19 @@ export class FileConnectorSecretStore implements ConnectorSecretStore {
       return fs.readdirSync(dir).filter((entry) => {
         const fullPath = path.join(dir, entry);
         return fs.statSync(fullPath).isFile() && entry.endsWith('.json');
-      }).map((f) => f.replace(/\.json$/, ''));
+      }).map((f) => f.replace(/\.json$/, ''))
+        // Report only names this store could have written itself. A
+        // stray file, or a traversal-shaped name left by an older build,
+        // is not a platform. Deliberately not isKnownPlatform: credential
+        // platforms such as "qq-mail" are a superset of connectors.
+        .filter((platform) => {
+          try {
+            assertSafePlatform(platform);
+            return true;
+          } catch {
+            return false;
+          }
+        });
     } catch {
       return [];
     }

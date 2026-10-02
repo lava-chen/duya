@@ -41,13 +41,19 @@ const write = process.argv.includes('--write');
 const ERROR_LINE = /^(.+?)\((\d+),(\d+)\): error (TS\d+):/;
 
 function collectErrors() {
+  const tscBin = resolve(repoRoot, 'node_modules/typescript/bin/tsc');
+  if (!existsSync(tscBin)) {
+    process.stderr.write('typecheck-electron-gate: typescript is not installed. Run `npm install`.\n');
+    process.exit(2);
+  }
   const proc = spawnSync(
     process.execPath,
-    [resolve(repoRoot, 'node_modules/typescript/bin/tsc'), '-p', project, '--noEmit', '--pretty', 'false'],
+    [tscBin, '-p', project, '--noEmit', '--pretty', 'false'],
     { cwd: repoRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
   );
 
   const output = `${proc.stdout ?? ''}${proc.stderr ?? ''}`;
+  const lines = output.split(/\r?\n/);
 
   // tsc exits 0 when clean and 1 (sometimes 2) when it reports diagnostics.
   // Both mean "we have output to parse"; anything else is a broken run.
@@ -62,68 +68,141 @@ function collectErrors() {
     process.exit(2);
   }
 
-  const seen = new Set();
+  // A run that reports diagnostics ALWAYS produces at least one line matching
+  // ERROR_LINE. A non-zero exit with zero matching lines is a different thing
+  // entirely: tsc failed before it could typecheck (unreadable tsconfig, a
+  // bad `extends`, a syntax error in the config). Treating that as "no errors"
+  // made the gate print OK and exit 0 while typechecking was completely
+  // broken — and its own "re-record with --write" hint would then have wiped
+  // the whole baseline. Verified against a deliberately broken project path.
+  if (proc.status !== 0 && !lines.some((line) => ERROR_LINE.test(line))) {
+    process.stderr.write(
+      `typecheck-electron-gate: tsc exited ${proc.status} without producing a single `
+        + `parseable diagnostic — this is a broken typecheck, not a clean one.\n${output}\n`,
+    );
+    process.exit(2);
+  }
+
+  // Key on `<path> <TScode>` with a COUNT, deliberately NOT on line:col.
+  // Line numbers shift whenever anything above an error gains or loses a
+  // line — adding one import moved 300-odd pre-existing errors by one line
+  // and turned the whole baseline into false "new" reports. A count per
+  // (file, code) is stable under that churn while still failing when a file
+  // gains an additional error of a code it already had.
+  const counts = new Map();
   for (const line of output.split(/\r?\n/)) {
     const m = ERROR_LINE.exec(line);
     if (!m) continue;
-    const [, file, lineNo, colNo, code] = m;
+    const [, file, , , code] = m;
     // Normalise to repo-root-relative, forward slashes, so the baseline is
     // portable across machines and checkouts. The main process lives under
     // `apps/desktop/src/main/` since the electron/ -> apps/desktop relocation.
     const rel = file.replace(/\\/g, '/').replace(/^.*?(apps\/desktop\/src\/main\/)/, '$1');
-    seen.add(`${rel}:${lineNo}:${colNo} ${code}`);
+    const key = `${rel} ${code}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
   }
-  return seen;
+  return counts;
 }
 
 function readBaseline() {
-  if (!existsSync(baselinePath)) return new Set();
-  return new Set(
-    readFileSync(baselinePath, 'utf8')
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter((l) => l && !l.startsWith('#')),
-  );
+  if (!existsSync(baselinePath)) return new Map();
+  const map = new Map();
+  for (const line of readFileSync(baselinePath, 'utf8').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    // "<path> <TScode> <count>"
+    const m = /^(.*\s)(TS\d+)\s+(\d+)$/.exec(trimmed);
+    if (!m) continue;
+    map.set(`${m[1]}${m[2]}`, Number(m[3]));
+  }
+  return map;
+}
+
+/** Keys whose current count exceeds the baselined count. */
+function regressions(current, baseline) {
+  const out = [];
+  for (const [key, count] of current) {
+    const allowed = baseline.get(key) ?? 0;
+    if (count > allowed) out.push({ key, count, allowed });
+  }
+  return out.sort((a, b) => a.key.localeCompare(b.key));
+}
+
+/** Keys that disappeared entirely — safe to drop from the baseline. */
+function resolvedKeys(current, baseline) {
+  const out = [];
+  for (const [key, count] of baseline) {
+    const now = current.get(key) ?? 0;
+    if (now < count) out.push({ key, was: count, now });
+  }
+  return out;
 }
 
 const current = collectErrors();
 const baseline = readBaseline();
 
 if (write) {
+  const total = [...current.values()].reduce((a, b) => a + b, 0);
   const lines = [
     '# Baseline of KNOWN type errors in the electron main process.',
     '# Managed by scripts/typecheck-electron-gate.mjs — regenerate with `--write`.',
-    '# Format: <path>:<line>:<col> <TScode>',
+    '# Format: <path> <TScode> <count>',
     '#',
-    '# This file exists so the gate can fail on NEW errors while the ~294',
-    '# pre-existing ones are paid down. Each fix should delete its line here',
-    '# via `--write`; never hand-add a line to silence a new error.',
+    '# Keys deliberately exclude line:col. Line numbers shift whenever anything',
+    '# above an error gains or loses a line, which would turn every existing',
+    '# error into a false "new" report. Counting per (file, code) is stable',
+    '# under that churn and still fails when a file gains an error of a code it',
+    '# already had.',
     '#',
-    `# ${current.size} known error(s).`,
-    ...[...current].sort(),
+    '# Each fix should let you delete or lower its line here via `--write`;',
+    '# never hand-add a line to silence a new error.',
+    '#',
+    `# ${total} known error(s) across ${current.size} (file, code) key(s).`,
+    ...[...current.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k} ${v}`),
     '',
   ];
   writeFileSync(baselinePath, lines.join('\n'), 'utf8');
-  process.stdout.write(`typecheck-electron-gate: wrote baseline with ${current.size} known error(s).\n`);
+  process.stdout.write(
+    `typecheck-electron-gate: wrote baseline with ${total} known error(s) in ${current.size} key(s).\n`,
+  );
   process.exit(0);
 }
 
-const introduced = [...current].filter((e) => !baseline.has(e));
-const resolved = [...baseline].filter((e) => !current.has(e));
+const regressionsFound = regressions(current, baseline);
+const resolved = resolvedKeys(current, baseline);
+
+// Second line of defence against destroying the ratchet. The `--write` hint
+// below is only safe when a handful of keys genuinely got fixed. If most of
+// the baseline "disappeared" at once, that is far more likely a broken or
+// partial typecheck than a mass cleanup, and following the hint would delete
+// the ratchet's entire memory. Refuse to suggest it and fail loudly instead.
+const BASELINE_COLLAPSE_RATIO = 0.5;
+if (baseline.size > 0 && resolved.length / baseline.size > BASELINE_COLLAPSE_RATIO) {
+  process.stderr.write(
+    `\ntypecheck-electron-gate: ${resolved.length} of ${baseline.size} baselined key(s) `
+      + `disappeared at once (>${Math.round(BASELINE_COLLAPSE_RATIO * 100)}%).\n`
+      + `That is far more likely a partial or broken typecheck than a mass cleanup.\n`
+      + `Refusing to suggest --write, because doing so here would delete the ratchet.\n`
+      + `Investigate first; re-record only once the run is known to be complete.\n`,
+  );
+  process.exit(1);
+}
 
 if (resolved.length > 0) {
   process.stdout.write(
-    `typecheck-electron-gate: ${resolved.length} previously-known error(s) are now gone ` +
-      `(${baseline.size - current.size} net). Re-record with \`--write\` to shrink the baseline.\n`,
+    `typecheck-electron-gate: ${resolved.length} baselined key(s) shrank or disappeared. ` +
+      `Re-record with \`--write\` to tighten the baseline.\n`,
   );
 }
 
-if (introduced.length > 0) {
+if (regressionsFound.length > 0) {
   process.stderr.write(
-    `\ntypecheck-electron-gate: ${introduced.length} NEW type error(s) in the electron main process.\n` +
-      `These are not in the baseline, so they were introduced by this change:\n\n`,
+    `\ntypecheck-electron-gate: ${regressionsFound.length} NEW type error(s) in the electron main process.\n` +
+      `These exceed the baseline, so they were introduced by this change:\n\n`,
   );
-  for (const e of introduced.sort()) process.stderr.write(`  ${e}\n`);
+  for (const r of regressionsFound) {
+    process.stderr.write(`  ${r.key}  (now ${r.count}, baseline ${r.allowed})\n`);
+  }
   process.stderr.write(
     `\nFix them, or if they are pre-existing debt that this change legitimately ` +
       `exposed, re-record the baseline with:\n  node scripts/typecheck-electron-gate.mjs --write\n\n`,
@@ -131,7 +210,8 @@ if (introduced.length > 0) {
   process.exit(1);
 }
 
+const totalNow = [...current.values()].reduce((a, b) => a + b, 0);
 process.stdout.write(
-  `typecheck-electron-gate: OK — no new type errors (${current.size} known, ${baseline.size} baselined).\n`,
+  `typecheck-electron-gate: OK — no new type errors (${totalNow} known across ${current.size} key(s)).\n`,
 );
 process.exit(0);

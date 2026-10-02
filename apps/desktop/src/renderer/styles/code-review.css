@@ -13,6 +13,11 @@
   --review-border: var(--border);
   --review-add: #31c578;
   --review-remove: #ef6262;
+  /* ISS-45: these two were hex literals duplicated into CodeReviewPanel's
+     statusColor(), so the component and the stylesheet could drift apart.
+     Declared as tokens here; the component now references them. */
+  --review-modified: #f39a49;
+  --review-renamed: #b68cff;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -576,8 +581,8 @@
 }
 
 .code-review-file-status.status-modified {
-  color: #f39a49;
-  background: color-mix(in srgb, #f39a49 16%, transparent);
+  color: var(--review-modified);
+  background: color-mix(in srgb, var(--review-modified) 16%, transparent);
 }
 
 .code-review-file-status.status-added,
@@ -592,8 +597,8 @@
 }
 
 .code-review-file-status.status-renamed {
-  color: #b68cff;
-  background: color-mix(in srgb, #b68cff 16%, transparent);
+  color: var(--review-renamed);
+  background: color-mix(in srgb, var(--review-renamed) 16%, transparent);
 }
 
 .code-review-state,

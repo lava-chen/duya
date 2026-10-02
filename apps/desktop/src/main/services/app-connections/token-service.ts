@@ -81,6 +81,23 @@ export class TokenService {
       return failure('connection_not_available', `connection is ${conn.status}`, false);
     }
 
+    // A vault that exists but cannot be decrypted is NOT the same as a
+    // missing token. This check has to come first: the branch below
+    // persists a `revoked` status, so on any host where safeStorage is
+    // unavailable it used to rewrite live OAuth grants as revoked.
+    if (this.vault.isUnavailable()) {
+      this.logger.warn(
+        'Token read skipped: safeStorage unavailable, vault not readable',
+        { connectionId },
+        COMPONENT,
+      );
+      return failure(
+        'vault_unavailable',
+        'safeStorage encryption unavailable; vault could not be read',
+        false,
+      );
+    }
+
     const tokens = this.vault.get(connectionId);
     if (!tokens) {
       // State drift: metadata says connected but vault is empty. Treat
