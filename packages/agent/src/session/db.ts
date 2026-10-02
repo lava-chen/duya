@@ -17,7 +17,6 @@ import * as ipcDbClient from '../ipc/db-client.js';
 import type BetterSqlite3 from 'better-sqlite3';
 import { logger } from '../utils/logger.js';
 import { isCDNImageUrl } from '../utils/urlSafety.js';
-import { resolveAgentPermissionProfile } from './permission-resolver.js';
 
 // =============================================================================
 // IPC Mode Detection
@@ -187,8 +186,9 @@ export interface CreateSessionData {
   agent_type?: string;
   agent_name?: string;
   /**
-   * DB permission profile 显式值. 若不传, 由 resolveAgentPermissionProfile 解析.
-   * agent 端无 settings 表, 普通 new 不传则落 'default'.
+   * DB permission profile 显式值. 不传则落默认值.
+   * 真正的解析发生在 electron 侧（electron/db/permission-resolver.ts，建 session 时），
+   * worker 侧只消费已解析好的值；agent 端没有 settings 表，也没有 resolver。
    * 派生 session 应通过 is_trusted_permission_override + 此字段表达内部 fork 意图.
    */
   permission_profile?: string | null;
