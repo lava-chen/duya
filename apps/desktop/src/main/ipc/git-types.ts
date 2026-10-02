@@ -1,4 +1,4 @@
-﻿// Shared Git IPC types for the Code Review workspace.
+// Shared Git IPC types for the Code Review workspace.
 // This file is the single source of truth consumed by
 // apps/desktop/src/main/ipc/git-handlers.ts, apps/desktop/src/preload/index.ts,
 // and the renderer wrapper apps/desktop/src/renderer/lib/git-ipc.ts (which

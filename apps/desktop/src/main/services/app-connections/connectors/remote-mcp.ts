@@ -1,4 +1,4 @@
-﻿/** Main-process bridge for official Remote MCP tools. */
+/** Main-process bridge for official Remote MCP tools. */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';

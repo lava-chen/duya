@@ -49,19 +49,18 @@ const SRC_DIR = path.join(DESKTOP_SRC, 'renderer');
  * confusion that let the four strandings above go unnoticed for months.
  */
 const UNREGISTERED_BY_DESIGN: Record<string, string> = {
-  // The agent moved to the HTTP+SSE agent server; these two predate it.
-  'agent:stream': 'legacy pre-HTTP+SSE binding, superseded by the agent server',
-  'agent:interrupt': 'legacy pre-HTTP+SSE binding, superseded by the agent server',
-  // AGENTS.md: the Code Review Workspace is read-only and must never stage,
-  // commit, push or switch branches. The bindings exist; the handlers
-  // deliberately do not.
-  'git:commit': 'Code Review Workspace is read-only by policy (AGENTS.md)',
-  'git:push': 'Code Review Workspace is read-only by policy (AGENTS.md)',
-  'git:create-branch': 'Code Review Workspace is read-only by policy (AGENTS.md)',
-  'git:switch-branch': 'Code Review Workspace is read-only by policy (AGENTS.md)',
-  // Wake-agent orb overlay, driven from the orb window rather than main.
-  'overlay:clear': 'orb overlay is driven from the orb window, not the main process',
-  'overlay:show-elements': 'orb overlay is driven from the orb window, not the main process',
+  // Both legacy pre-HTTP+SSE agent bindings (`agent:stream`,
+  // `agent:interrupt`) were removed from the preload outright (plan 583
+  // ISS-24) when the agent moved to the agent server, so neither belongs
+  // here any more — the third test below fails on a stale entry.
+  //
+  // The four mutating `git:*` bindings used to sit here as exposed-but-
+  // unhandled surface. They are gone too: the bridge no longer offers them
+  // at all, which is a stronger expression of the AGENTS.md rule that the
+  // Code Review Workspace is read-only and must never stage, commit, push
+  // or switch branches. `ipc-contract.test.ts` now asserts their absence
+  // directly, so a future re-introduction fails there rather than needing
+  // an allowlist entry.
 };
 
 /** All `.ts` files under the Electron main process, minus tests and build output. */

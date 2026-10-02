@@ -27,9 +27,12 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 
-// This file lives at electron/ipc/__tests__/, so the repo root is three
-// levels up.
-const repoRoot = resolve(__dirname, '../../..');
+// This file lives at apps/desktop/src/main/ipc/__tests__/, so the desktop app
+// root is four levels up. The main process lives in src/main and the preload
+// bridge in src/preload since the electron/ -> apps/desktop relocation.
+const desktopRoot = resolve(__dirname, '../../../..');
+const mainRoot = join(desktopRoot, 'src', 'main');
+const preloadPath = join(desktopRoot, 'src', 'preload', 'index.ts');
 
 function tsFiles(dir: string): string[] {
   const out: string[] = [];
@@ -55,7 +58,7 @@ const LISTEN = /\.on\(\s*[`'"]([A-Za-z0-9:_-]+)[`'"]/g;
 function collect(): { registered: Set<string>; invoked: Set<string>; listened: Set<string> } {
   const registered = new Set<string>();
 
-  for (const file of tsFiles(join(repoRoot, 'electron'))) {
+  for (const file of tsFiles(mainRoot)) {
     const text = readFileSync(file, 'utf8');
     let m: RegExpExecArray | null;
 
@@ -73,7 +76,7 @@ function collect(): { registered: Set<string>; invoked: Set<string>; listened: S
     }
   }
 
-  const preload = readFileSync(join(repoRoot, 'electron/preload.ts'), 'utf8');
+  const preload = readFileSync(preloadPath, 'utf8');
   const invoked = new Set<string>();
   const listened = new Set<string>();
 

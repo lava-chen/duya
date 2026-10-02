@@ -118,7 +118,7 @@ describe('useTheme', () => {
 describe('ISS-41 — the theme hook has a single source', () => {
   it('WidgetRenderer no longer declares a private useTheme', () => {
     const source = readFileSync(
-      join(process.cwd(), 'src/components/chat/WidgetRenderer.tsx'),
+      join(process.cwd(), 'apps/desktop/src/renderer/components/chat/WidgetRenderer.tsx'),
       'utf8',
     );
     expect(source).toContain("import { useTheme } from '@/hooks/useTheme';");

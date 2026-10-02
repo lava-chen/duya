@@ -35,7 +35,7 @@ export type {
   GitBranchRef,
   GitListBranchesResult,
   GitRepositoryState,
-} from '../../electron/ipc/git-types';
+} from '../../main/ipc/git-types';
 
 // The types this file's own signatures reference. `export type { … }` above
 // re-exports without binding locally, so the body needs its own import.
@@ -48,7 +48,7 @@ import type {
   GitStatusResult,
   GitTurnHistoryResult,
   ReviewScopeParams,
-} from '../../electron/ipc/git-types';
+} from '../../main/ipc/git-types';
 
 export async function getGitStatus(cwd: string): Promise<GitStatusResult> {
   // Default to `isGitRepo: false` when the bridge isn't present so
