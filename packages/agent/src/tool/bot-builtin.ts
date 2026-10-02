@@ -25,7 +25,7 @@ import type { ToolUseContext } from '../types.js';
 // ============================================================================
 
 import { BashTool } from './BashTool/BashTool.js';
-import { ReadTool, createReadTool, readFileContent } from './ReadTool/ReadTool.js';
+import { ReadTool, readFileContent } from './ReadTool/ReadTool.js';
 import { WriteTool } from './WriteTool/WriteTool.js';
 import { GrepTool } from './GrepTool/GrepTool.js';
 import { EditTool, editTool, executeEdit } from './EditTool/EditTool.js';

@@ -1,4 +1,3 @@
-﻿// @ts-nocheck
 /**
  * Feishu QR Code Registration (Device Code Flow)
  *

@@ -31,7 +31,21 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 
-import { startHarness, type Harness, type SeedSession } from './harness.js';
+import { startHarness, type Harness, type SeedSession, harnessUnavailableReason } from './harness';
+
+/**
+ * This suite boots a real Electron main process against a bundled CLI
+ * API server, so it needs two build artifacts a plain checkout does not
+ * have: `packages/agent/bundle/cli-api-server.cjs` (from `npm run
+ * bundle:agent`) and an Electron binary. Without them the harness used
+ * to spin out the full 30s deadline in every file and then report
+ * nothing useful.
+ *
+ * Gating the suite keeps that cost at zero and states the condition
+ * outright. Build the bundle and re-run to exercise these.
+ */
+const HARNESS_MISSING = harnessUnavailableReason();
+
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const projectRoot = join(__dirname, '..', '..', '..');
@@ -93,7 +107,7 @@ function parseEnv(s: string): Record<string, string> {
   return out;
 }
 
-describe('duya skill (Phase 3 control plane)', () => {
+describe.skipIf(HARNESS_MISSING !== null)('duya skill (Phase 3 control plane)', () => {
   let h: Harness | null = null;
 
   beforeAll(async () => {

@@ -75,7 +75,7 @@ ${effectiveAgents.map(agent => formatAgentLineForPrompt(agent)).join('\n')}`
   // Shared core prompt used by both coordinator and non-coordinator modes
   const shared = `Launch a new agent to handle complex, multi-step tasks autonomously.
 
-The ${SUBAGENT_TOOL_NAME} tool launches specialized agents (subprocesses) that autonomously handle complex tasks. Each agent type has specific capabilities and tools available to it.
+The ${SUBAGENT_TOOL_NAME} tool runs a specialized agent on your behalf. Each agent type has specific capabilities and tools available to it. The sub-agent runs in this same session's process with its own context and its own conversation — it starts with zero knowledge of our discussion, and anything you want it to know must be in its prompt.
 
 ${agentListSection}
 
@@ -104,11 +104,13 @@ Usage notes:
 - Launch multiple agents concurrently whenever possible, to maximize performance; to do that, use a single message with multiple ${SUBAGENT_TOOL_NAME} tool use content blocks
 - Agents run in the background by default. The tool returns immediately and you continue working — you will be automatically notified when it completes. Do NOT sleep, poll, or proactively check on its progress. Continue with other work or respond to the user instead.
 - Foreground vs background: pass \`run_in_background: false\` only when you truly need the agent's result before the next step. Use the default background mode for independent or parallel work.
-- To continue a previously spawned agent, use ${SEND_MESSAGE_TOOL_NAME} with the agent's ID or name as the \`to\` field. The agent resumes with its full context preserved. Each Agent invocation starts fresh — provide a complete task description.
+- To continue a previously spawned agent, pass \`resume_from\` with the \`subagent_id\` from its result. The sub-agent resumes with its full prior context in the same conversation — the new prompt is a follow-up turn, not a fresh briefing. Re-send the agent's type so it keeps the same role. Do not use ${SEND_MESSAGE_TOOL_NAME}: a plain ${SUBAGENT_TOOL_NAME} call with no \`resume_from\` always starts a new sub-agent.
+- Tuning: \`max_turns\` caps how many turns the agent may take, \`effort\` sets its thinking budget (\`off\` disables extended thinking), \`permission_mode\` controls whether its tool calls can prompt the user, and \`tools: { allow, deny }\` narrows its toolset. Reach for these only when the defaults are visibly wrong for the job.
 - The agent's outputs should generally be trusted
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.), since it is not aware of the user's intent
 - If the user specifies that they want you to run agents "in parallel", you MUST send a single message with multiple ${SUBAGENT_TOOL_NAME} tool use content blocks.
-- You can optionally set \`isolation: "worktree"\` to run the agent in a temporary git worktree, giving it an isolated copy of the repository. The worktree is automatically cleaned up if the agent makes no changes; if changes are made, the worktree path and branch are returned in the result.${writingThePromptSection}
+- You can optionally set \`isolation: "worktree"\` to run the agent in a temporary git worktree, giving it an isolated copy of the repository so its edits cannot touch the user's working copy. This requires a clean working tree; the worktree path and branch are returned in the result. It cannot be combined with \`resume_from\`.
+- Set \`auto_wake: false\` only when you explicitly do not want to be interrupted when a background agent finishes — you then have to fetch the result yourself with get_task_output.${writingThePromptSection}
 
 ${currentExamples}`
 }

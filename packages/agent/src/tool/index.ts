@@ -4,7 +4,7 @@
 
 export { BashTool, type BashToolInput } from './BashTool/BashTool.js';
 export { PowerShellTool } from './PowerShellTool/PowerShellTool.js';
-export { ReadTool, createReadTool, readFileContent } from './ReadTool/ReadTool.js';
+export { ReadTool, readFileContent } from './ReadTool/ReadTool.js';
 export { WriteTool, type WriteToolInput } from './WriteTool/WriteTool.js';
 export { GrepTool, type GrepInput, type GrepMatch } from './GrepTool/GrepTool.js';
 export { EditTool, editTool, executeEdit } from './EditTool/EditTool.js';

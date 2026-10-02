@@ -11,9 +11,16 @@
  *     between renders to keep memory bounded.
  *   - `sanitizeForIframe` strips <script>/<iframe>/etc. so the headless page
  *     is safe even when widget_code is hostile.
- *   - WIDGET_CSS_BRIDGE / WIDGET_THEME_DARK_CSS come from `@duya/conductor`
- *     so the headless preview visually matches the chat renderer (single
- *     source of truth for SVG class colors, theme tokens).
+ *   - WIDGET_CSS_BRIDGE / WIDGET_THEME_DARK_CSS used to be imported from
+ *     `@duya/conductor` "so the headless preview matches the chat renderer,
+ *     single source of truth". That claim was already false: the renderer has
+ *     its own byte-identical copy at
+ *     `packages/conductor/src/renderer/elements/widget-css-bridge.ts`, and
+ *     nothing kept them in sync. They are still two copies. Plan M4 moved them
+ *     here because this was the only consumer of the `elements/` copy, so the
+ *     agent no longer depends on a host-side UI package to render a widget.
+ *     Collapsing the duplication is NOT done — it is a separate change, and
+ *     doing it here would have silently altered what the renderer ships.
  *
  * Crashed/disposed browser is re-created lazily on next render(). The class
  * is intentionally tolerant: failures are reported through the result rather
@@ -365,7 +372,7 @@ async function loadCssBridge(): Promise<void> {
   if (cssLoaded) return cssLoaded;
   cssLoaded = (async () => {
     try {
-      const mod = await import('@duya/conductor/elements/widget-css-bridge');
+      const mod = await import('./widget-css-bridge.js');
       BRIDGE_LIGHT_CACHE = (mod as { WIDGET_CSS_BRIDGE?: string }).WIDGET_CSS_BRIDGE ?? '';
       BRIDGE_DARK_CACHE = (mod as { WIDGET_THEME_DARK_CSS?: string }).WIDGET_THEME_DARK_CSS ?? '';
     } catch {
@@ -382,7 +389,7 @@ async function loadSanitizeForIframe(): Promise<(html: string) => string> {
   if (sanitizeLoader) return sanitizeLoader;
   sanitizeLoader = (async () => {
     try {
-      const mod = await import('@duya/conductor/elements/widget-sanitizer');
+      const mod = await import('./widget-sanitizer.js');
       const fn = (mod as { sanitizeForIframe?: (html: string) => string }).sanitizeForIframe;
       if (typeof fn === 'function') return fn;
     } catch {

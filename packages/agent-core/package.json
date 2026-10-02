@@ -1,0 +1,32 @@
+{
+  "name": "@duya/agent-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure reasoning about a run: terminal-state resolution, budget accounting, durability policy, and capability negotiation. Zero IO, zero host dependencies.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@duya/agent-protocol": "0.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "vitest": "^3.0.0"
+  }
+}

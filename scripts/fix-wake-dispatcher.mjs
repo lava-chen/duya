@@ -1,7 +1,7 @@
 // scripts/fix-wake-dispatcher.mjs - Fix malformed duplicate QUIET_REVIVAL_INSTRUCTION
 import { readFileSync, writeFileSync } from 'fs';
 
-const file = 'electron/wake/wake-dispatcher.ts';
+const file = 'apps/desktop/src/main/wake/wake-dispatcher.ts';
 let content = readFileSync(file, 'utf8');
 
 // The file has TWO declarations of QUIET_REVIVAL_INSTRUCTION:

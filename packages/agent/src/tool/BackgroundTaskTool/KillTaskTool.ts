@@ -62,12 +62,34 @@ export class KillTaskTool implements Tool, ToolExecutor {
       });
     }
 
-    lifecycle.kill(task_id, 'user_kill');
-    return toResult(this.name, {
-      task_id,
-      outcome: 'killed',
-      message: 'Task was terminated successfully',
-    });
+    // `tryKill` (not `kill`) is the model-facing half of the panel stop button:
+    // it performs the same transition but also aborts the record's
+    // AbortController, which is the sub-agent's actual cancel handle. Plain
+    // `kill` only relabelled the status and left the child running, so a
+    // `killed` outcome from this tool was cosmetic. It also degrades a lost
+    // transition race to `already_terminal` instead of throwing out of the
+    // tool executor.
+    const outcome = lifecycle.tryKill(task_id, 'user_kill');
+    if (outcome === 'killed') {
+      return toResult(this.name, {
+        task_id,
+        outcome: 'killed',
+        message: 'Task was terminated successfully',
+      });
+    }
+    if (outcome === 'already_terminal') {
+      const status = lifecycle.getSnapshot(task_id)?.status ?? rec.status;
+      return toResult(this.name, {
+        task_id,
+        outcome: 'already_exited',
+        message: `Task had already ${status}`,
+      });
+    }
+    // `not_found` cannot happen on this path (the snapshot above resolved the
+    // id) unless the record was pruned by the retention window in between —
+    // fall back to the shared handler so the model still gets the known-id
+    // hint instead of a bare failure.
+    return this.killBashTask(task_id);
   }
 
   /**

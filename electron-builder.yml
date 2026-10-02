@@ -30,8 +30,7 @@ files:
   - dist/node_modules/file-uri-to-path/***
   - dist/node_modules/node-pty/***
   - "!node_modules"
-  - "!src"
-  - "!electron"
+  - "!apps"
   - "!build"
   - "!scripts"
   - "!docs"
@@ -61,8 +60,9 @@ extraResources:
     to: agent-bundle/
     filter: ["**/*"]
   # Plan 453 Task F: Wake Agent orb renderer. Vite emits at
-  # `dist/src/orb/index.html` (path is preserved from src/orb/).
-  - from: dist/src/orb/
+  # `dist/apps/desktop/src/renderer/orb/index.html` (the source path is
+  # preserved verbatim under dist/).
+  - from: dist/apps/desktop/src/renderer/orb/
     to: orb/
     filter: ["**/*"]
   # Prebuilt ripgrep binary fetched by scripts/fetch-ripgrep.mjs (pinned
@@ -114,7 +114,7 @@ extraResources:
   - from: public/
     to: public/
     filter: ["**/*"]
-  - from: extension/
+  - from: resources/browser-extension/
     to: extension/
     filter: ["**/*"]
   - from: node_modules/node-pty/

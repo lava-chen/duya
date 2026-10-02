@@ -1,3 +1,22 @@
+# Encoding — Plan 583 / ISS-48.
+#
+# Repository text content is UTF-8 WITHOUT a BOM. This is enforced for editors
+# and IDEs by .editorconfig (`charset = utf-8`); it is stated here so the
+# contract is visible from the file that already governs text handling.
+#
+# `working-tree-encoding` is deliberately NOT used. It is the one Git
+# attribute that would actually enforce encoding, but it re-encodes files on
+# checkout: applying it to a tree that contains non-UTF-8 bytes (it did — two
+# files were stored as UTF-16LE) silently rewrites them for every contributor
+# on their next pull. Fix the tree first, then consider it; do not turn it on
+# as a "fix".
+#
+# The concrete damage encoding drift has already done here: a UTF-8 BOM on the
+# first line of a TypeScript file makes any shebang on that line an illegal
+# token, which made scripts/__tests__/memory-rag-lib.test.ts fail to load and
+# report "no tests" instead of failing. A suite that cannot fail is worse than
+# a suite that is red.
+
 # Line ending policy — Plan 550 fixup.
 
 # General policy (2026-09-23, after .git object-store rebuild): normalize
@@ -9,6 +28,25 @@
 *.bat        text eol=crlf
 *.cmd        text eol=crlf
 *.ps1        text eol=crlf
+
+# Node ESM scripts must keep LF. Plan 583 ISS-49.
+#
+# A shebang line terminated with CRLF is loadable by Node (it strips the
+# shebang itself) but NOT by Vite/esbuild: the transform removes the
+# `#!...` text and leaves the trailing `\r`, which is an illegal token.
+# The result is `SyntaxError: Invalid or unexpected token` at the import
+# site, the whole test file reports "no tests", and the suite is green
+# because zero tests ran. scripts/check-manifest-keys.test.ts shipped
+# that way in PR #97.
+#
+# `* text=auto` normalizes the repository side to LF but still hands a
+# Windows checkout CRLF, which is why the .mjs files carrying a shebang
+# were CRLF on disk for everyone using autocrlf.
+*.mjs        text eol=lf
+*.cjs        text eol=lf
+
+# The one tracked .ts file that carries a shebang, for the same reason.
+scripts/migrate-projects-paths.ts   text eol=lf
 
 # Binaries: never normalize.
 *.png        binary

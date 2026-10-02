@@ -1,4 +1,4 @@
-﻿# Execution Plans
+# Execution Plans
 
 > **This is the first place to check before any work!** See workflow below.
 
@@ -36,7 +36,7 @@ Rules:
 
 ***
 
-## Active Plans (36)
+## Active Plans (38)
 
 | Plan | Priority | Next action |
 | --- | --- | --- |
@@ -76,6 +76,9 @@ Rules:
 | [cua-tree-richness](./active/576-cua-tree-richness.md) | P1 | Phase 3 in the ps1 C# probe walk: emit `children_total/shown/offset` for container nodes, plus `surface_kind` and the new-window settle poll _(Phases 1-2 landed)_ |
 | [mcp-capability-core-convergence](./active/580-mcp-capability-core-convergence.md) | P0 | Run Phase 0's real-machine Notion baseline (instrumented around `RemoteMcpConnector`/`MCPClient` discovery) to record `pages=N, total=M` _(Phases 0/3/4/5 open)_ |
 | [architecture-audit-remediation](./active/583-architecture-audit-remediation.md) | P0 | Add the `typecheck:all` gate to CI so it catches the shipped `remote-mcp.ts` type errors (ISS-01) |
+| [agent-protocol-implementation](./active/584-agent-protocol-implementation.md) | P1 | Run PP-2a: move the wire contract out of @duya/ai behind @duya/agent-protocol (122 edges / 98 files). PP-0 0.1-0.4 and all of PP-1 are landed _(0.5 CI hookup waits on plan 583 G1-G3; 07 §15 #10 needs a spec revision per 10-reference-comparison §7.1)_ |
+| [event-stream-perf-debt](./active/585-event-stream-perf-debt.md) | P1 | Phase 1: add `ephemeral-batcher.ts` (mirroring `checkpoint-batcher.ts`) so token-rate deltas are coalesced per session+type before the SSE write _(design recorded, 0 code; P1 seq-space change deliberately deferred to Phase 3)_ |
+| [reference-run-vertical-slice](./active/586-reference-run-vertical-slice.md) | P0 | P6 only: run the Electron smoke with a provider key — a packaged chat turn must produce a `runs` row, a `run_events` log and one terminal state. P0–P5 landed in #124 (+ #125 lockfile); no runtime evidence yet |
 
 ***
 

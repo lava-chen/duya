@@ -75,7 +75,6 @@ test.describe.serial('Conductor pan and zoom', () => {
     await page.waitForTimeout(300);
 
     const before = await canvasArea.evaluate(() => {
-      // @ts-ignore
       return (window as any).canvasTransformState || { zoom: 1, panX: 0, panY: 0 };
     });
 
@@ -87,7 +86,6 @@ test.describe.serial('Conductor pan and zoom', () => {
     await page.waitForTimeout(200);
 
     const after = await canvasArea.evaluate(() => {
-      // @ts-ignore
       return (window as any).canvasTransformState || { zoom: 1, panX: 0, panY: 0 };
     });
 
@@ -108,7 +106,6 @@ test.describe.serial('Conductor pan and zoom', () => {
     const start = { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 };
 
     const before = await canvasArea.evaluate(() => {
-      // @ts-ignore
       return (window as any).canvasTransformState || { zoom: 1, panX: 0, panY: 0 };
     });
 
@@ -133,7 +130,6 @@ test.describe.serial('Conductor pan and zoom', () => {
     await page.waitForTimeout(200);
 
     const after = await canvasArea.evaluate(() => {
-      // @ts-ignore
       return (window as any).canvasTransformState || { zoom: 1, panX: 0, panY: 0 };
     });
 

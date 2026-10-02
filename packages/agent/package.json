@@ -43,7 +43,6 @@
     "@duya/ai": "0.1.0",
     "@duya/cli": "0.1.0",
     "@duya/computer-use": "0.0.1",
-    "@duya/conductor": "0.1.0",
     "@duya/plugin-core": "0.1.0",
     "@inquirer/prompts": "^7.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",

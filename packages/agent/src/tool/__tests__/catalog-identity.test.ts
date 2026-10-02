@@ -1,6 +1,6 @@
 // Plan 580 Phase 1 — agent-side byte-equal lock for the schema revision.
 // `catalog-identity.getSchemaRevision` is now a re-export of the MCP
-// Core implementation (`@duya/plugin-core/src/mcp/core/descriptor.ts`).
+// Core implementation (`@duya/plugin-core/mcp/core/descriptor.ts`).
 // This test keeps an inline copy of the ORIGINAL algorithm so any
 // drift in the re-export breaks loudly and existing registry entry
 // hashes stay stable.

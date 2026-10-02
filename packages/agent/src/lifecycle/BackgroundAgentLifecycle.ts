@@ -19,6 +19,15 @@ export interface RegisterInput {
   agentName: string
   description: string
   abortController: AbortController
+  /**
+   * Plan 571 (`task` tool's `auto_wake`): when false, the terminal
+   * `<task-notification>` is NOT written to the parent session's mailbox.
+   * The spawn receipt already handed the model the output-file path, so it
+   * can pull the result with `get_task_output` on its own schedule — a
+   * suppressed wake means the parent turn is never resurrected behind the
+   * user's back. Defaults to true (unchanged pre-571 behavior).
+   */
+  autoWake?: boolean
 }
 
 /** Default window (ms) a drained terminal record stays queryable via
@@ -32,6 +41,13 @@ export const DEFAULT_DRAINED_RETENTION_MS = 5 * 60 * 1000
  * idle reaping while background sub-agents are still running inside it.
  */
 export type InFlightChangeListener = (inFlight: number) => void
+
+/** See {@link BackgroundAgentLifecycle.tryKill}. */
+export type KillOutcome = 'killed' | 'not_found' | 'already_terminal'
+
+function isKillableStatus(status: TaskStatus): boolean {
+  return status === 'pending' || status === 'running'
+}
 
 export class BackgroundAgentLifecycle {
   private tasks = new Map<string, TaskRecord>()
@@ -101,6 +117,7 @@ export class BackgroundAgentLifecycle {
       startedAt: now,
       progress: ProgressTracker.initial(now),
       outputFilePath: OutputFileWriter.allocate(input.taskId),
+      autoWake: input.autoWake !== false,
       subscribers: new Set(),
     }
     this.tasks.set(input.taskId, record)
@@ -144,6 +161,11 @@ export class BackgroundAgentLifecycle {
   private isLegalTransition(from: TaskStatus, to: TaskStatus): boolean {
     if (from === to) return false
     if (from === 'pending' && to === 'running') return true
+    // Plan 571: a just-registered task is still `pending` when the user hits
+    // stop (the panel renders `running` from the `started` progress event,
+    // which is emitted before `run()` drains the generator). Without this
+    // edge, stopping a sub-agent in its first milliseconds was impossible.
+    if (from === 'pending' && to === 'killed') return true
     if (from === 'running' && (to === 'completed' || to === 'killed' || to === 'failed')) return true
     return false
   }
@@ -156,8 +178,76 @@ export class BackgroundAgentLifecycle {
     this.transition(taskId, 'failed', (r) => { r.error = error })
   }
 
+  /**
+   * `complete` / `fail` variants that tolerate an out-of-band kill.
+   *
+   * The generator `run()` drains can be terminated by {@link tryKill} between
+   * its last event and its final message, so the natural `complete`/`fail`
+   * call then hits an illegal transition and rejects the `run()` promise —
+   * which the caller fires with `void`, i.e. an unhandled rejection. These
+   * variants keep the existing throwing API for every other caller.
+   */
+  tryComplete(taskId: string, result: NonNullable<TaskRecord['result']>): void {
+    this.applyTerminal(taskId, 'completed', (r) => { r.result = result })
+  }
+
+  tryFail(taskId: string, error: string): void {
+    this.applyTerminal(taskId, 'failed', (r) => { r.error = error })
+  }
+
   kill(taskId: string, reason: 'user_kill' | 'parent_abort' | 'app_exit'): void {
     this.transition(taskId, 'killed', (r) => { r.error = `killed: ${reason}` })
+  }
+
+  /**
+   * Outcome of {@link BackgroundAgentLifecycle.tryKill}.
+   *
+   * - `killed`: the task was pending/running and is now terminal.
+   * - `not_found`: no such taskId in this worker (wrong parent session, or
+   *   the record was already pruned by the retention window).
+   * - `already_terminal`: the task finished before the kill arrived — the
+   *   common race when a user clicks stop on a sub-agent that just landed.
+   */
+  tryKill(taskId: string, reason: 'user_kill' | 'parent_abort' | 'app_exit' = 'user_kill'): KillOutcome {
+    const record = this.tasks.get(taskId)
+    if (!record) return 'not_found'
+    if (!isKillableStatus(record.status)) return 'already_terminal'
+    try {
+      this.kill(taskId, reason)
+    } catch (err) {
+      // `transition` throws on an illegal transition. Reaching here means the
+      // record changed status between the check above and the call, so the
+      // task is already terminal — not an error worth propagating.
+      logger.warn('[SubAgent] tryKill lost a transition race', { taskId, err }, 'SubAgent')
+      return 'already_terminal'
+    }
+    // Abort only after the transition succeeded: a lost race means somebody
+    // else already finished the task and aborting would be a lie. The
+    // controller is the sub-agent's cancel handle (SubagentTool hands
+    // `runAgent` this exact instance), so this is what actually stops the
+    // in-flight LLM request instead of only relabelling the status.
+    try {
+      record.abortController.abort()
+    } catch (err) {
+      logger.warn('[SubAgent] tryKill abort threw', { taskId, err }, 'SubAgent')
+    }
+    return 'killed'
+  }
+
+  /**
+   * `transition` with the throw removed: a record that is already terminal
+   * (or already gone) simply does not change. Subscribers still fire.
+   */
+  private applyTerminal(
+    taskId: string,
+    next: TaskStatus,
+    mutate: (r: TaskRecord) => void,
+  ): void {
+    try {
+      this.transition(taskId, next, mutate)
+    } catch (err) {
+      logger.warn('[SubAgent] terminal transition skipped', { taskId, next, err }, 'SubAgent')
+    }
   }
 
   getCompleted(): TaskRecord[] {
@@ -268,10 +358,10 @@ export class BackgroundAgentLifecycle {
       const result = extractResultFromLastMessage(lastMessage)
       const taskError = progressError ?? extractAgentError(lastMessage)
       if (taskError) {
-        this.fail(taskId, taskError)
+        this.tryFail(taskId, taskError)
         await this.enqueueTaskNotification(taskId, 'failed', { error: taskError })
       } else {
-        this.complete(taskId, result)
+        this.tryComplete(taskId, result)
         await this.enqueueTaskNotification(taskId, 'completed', {
           finalMessage: extractFinalText(result),
           // Plan 554: mechanical verdict parsed from the child's final reply
@@ -284,12 +374,20 @@ export class BackgroundAgentLifecycle {
     } catch (err) {
       if ((err as Error).name === 'AbortError') {
         logger.warn('[SubAgent] lifecycle aborted', { taskId, err }, 'SubAgent')
-        this.kill(taskId, 'parent_abort')
-        await this.enqueueTaskNotification(taskId, 'killed', { error: 'parent_abort' })
+        // An out-of-band kill (sub-agent panel stop button → `subagent:kill`)
+        // already moved the record to `killed`; `tryKill` is a no-op then
+        // instead of throwing an illegal-transition out of this promise.
+        this.tryKill(taskId, 'parent_abort')
+        // The record's own error carries the real cause (`killed: user_kill`
+        // for a panel stop); fall back to the local reason only when this
+        // abort was not already accounted for.
+        const recorded = this.tasks.get(taskId)?.error
+        const reason = recorded?.startsWith('killed:') ? recorded.slice('killed:'.length).trim() : 'parent_abort'
+        await this.enqueueTaskNotification(taskId, 'killed', { error: reason })
       } else {
         const message = (err as Error).message ?? 'Unknown error'
         logger.error('[SubAgent] lifecycle failed', err as Error, { taskId }, 'SubAgent')
-        this.fail(taskId, message)
+        this.tryFail(taskId, message)
         if (terminalProgress !== 'error') {
           onProgress?.({ type: 'error', data: message, agentId: taskId })
         }
@@ -306,6 +404,11 @@ export class BackgroundAgentLifecycle {
    * mailbox as a `background_notification` row. Idempotent per taskId — repeat
    * calls after the first are dropped. Mirrors claude-code's `notified` flag
    * in LocalAgentTask.tsx:227-240.
+   *
+   * Plan 571 (`auto_wake: false`): the mailbox write is skipped entirely. The
+   * spawn receipt already carried `outputFilePath`, so the model can fetch
+   * the result with `get_task_output` whenever it is ready instead of having
+   * the parent session resumed behind its back.
    */
   private async enqueueTaskNotification(
     taskId: string,
@@ -318,7 +421,18 @@ export class BackgroundAgentLifecycle {
     }
     const r = this.tasks.get(taskId)
     if (!r) return
+    // Mark notified either way: a suppressed wake must not leave the door open
+    // for a later terminal path to write the same task's notification.
     this.notified.add(taskId)
+    if (!r.autoWake) {
+      logger.info('[SubAgent] auto_wake=false, suppressing mailbox notification', {
+        taskId,
+        status,
+        parentSessionId: r.parentSessionId,
+        outputFilePath: r.outputFilePath,
+      }, 'SubAgent')
+      return
+    }
     const input: BuildTaskNotificationInput = {
       taskId,
       status,

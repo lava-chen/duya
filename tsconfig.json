@@ -1,39 +1,16 @@
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "lib": ["dom", "dom.iterable", "esnext"],
-    "allowJs": true,
-    "skipLibCheck": true,
-    "strict": true,
-    "noEmit": true,
-    "esModuleInterop": true,
-    "module": "esnext",
-    "moduleResolution": "bundler",
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "jsx": "react-jsx",
-    "incremental": true,
-    "paths": {
-      "@/*": ["./src/*"],
-      "@duya/agent": ["./packages/agent/dist"],
-      "@duya/agent/*": ["./packages/agent/dist/*"],
-      "@duya/plugin-core": ["./packages/plugin-core/src/index.ts"],
-      "@duya/plugin-core/*": ["./packages/plugin-core/*"],
-      "@duya/conductor/renderer": ["./packages/conductor/src/renderer/index"],
-      "@duya/conductor/renderer/*": ["./packages/conductor/src/renderer/*"]
-    }
-  },
+  "extends": "./apps/desktop/tsconfig.renderer.json",
   "include": [
-    "src/**/*.ts",
-    "src/**/*.tsx",
+    "apps/desktop/src/renderer/**/*.ts",
+    "apps/desktop/src/renderer/**/*.tsx",
     "packages/conductor/src/renderer/**/*.ts",
     "packages/conductor/src/renderer/**/*.tsx"
   ],
   "exclude": [
     "node_modules",
-    "electron/**",
-    "src/**/*.stories.tsx",
-    "src/**/*.stories.ts",
-    "src/**/__stories__/**"
+    "dist",
+    "apps/desktop/src/renderer/**/*.stories.tsx",
+    "apps/desktop/src/renderer/**/*.stories.ts",
+    "apps/desktop/src/renderer/**/__stories__/**"
   ]
 }

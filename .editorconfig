@@ -1,0 +1,38 @@
+# EditorConfig — plan 583 / ISS-48.
+#
+# The repo content is UTF-8 without a BOM. This file exists because the
+# previous state had no encoding contract at all: `.gitattributes` pinned line
+# endings but said nothing about encoding, and a scan of tracked text files
+# found 13 files carrying a UTF-8 BOM (nine of them the whole
+# packages/gateway/src/adapters/feishu/ directory, five of those with a DOUBLE
+# BOM) plus two files stored as UTF-16LE outright. All are now normalized;
+# this file is what stops them coming back.
+#
+# The double BOM is the tell: it is what you get when a BOM-adding tool
+# "fixes" a file that already had one. PowerShell 5.1's
+# `Set-Content -Encoding UTF8` does exactly that, which is why the Windows
+# workflow keeps producing them.
+#
+# `charset = utf-8` here means UTF-8 WITHOUT a BOM. That is deliberate: a BOM
+# in a TypeScript source file breaks any shebang on the first line, which is
+# the exact failure that kept scripts/__tests__/memory-rag-lib.test.ts from
+# loading at all (it reported "no tests" rather than failing).
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.md]
+# Trailing spaces are meaningful in Markdown (hard line breaks).
+trim_trailing_whitespace = false
+
+[*.{bat,cmd,ps1}]
+# Windows scripts must keep CRLF; cmd.exe is unreliable with LF. Mirrors the
+# `*.bat text eol=crlf` rules already in .gitattributes.
+end_of_line = crlf

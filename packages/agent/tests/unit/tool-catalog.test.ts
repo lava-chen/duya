@@ -252,34 +252,52 @@ describe('tool_invoke', () => {
     expect(harness.executor.execute).toHaveBeenCalledOnce();
   });
 
-  it('requires the schema read for this exact revision and validates before execution', async () => {
+  /**
+   * The schema-read requirement was removed in 06e5617a ("converge
+   * capability core and lifecycle"): a catalog detail read is now optional
+   * and the dispatcher validates against the live schema instead. The old
+   * expectations (SCHEMA_NOT_LOADED without a prior read, SCHEMA_STALE
+   * after a revision change) described a guard that no longer exists -- the
+   * dispatcher's deps still declare getLoadedSchemaRevision /
+   * getLoadedSchemaRound / getCurrentRound and DuyaAgent still injects
+   * them, but nothing reads them.
+   *
+   * What still has to hold is that arguments are checked against the live
+   * schema before anything executes, and that a schema change between the
+   * model's read and the call is still caught. That is now the validator's
+   * job rather than a staleness check, so it is asserted that way.
+   */
+  it('validates arguments against the live schema, with or without a prior detail read', async () => {
     const harness = makeHarness();
     const context = fakeContext();
     wireDispatcher(harness, context);
-    const missing = await harness.invokeTool.execute({ tool_id: harness.toolId, arguments: { value: 'ok' } }, undefined, context);
-    expect(missing.metadata?.errorCode).toBe('SCHEMA_NOT_LOADED');
+
+    // No schema read at all: valid arguments still execute.
+    const noRead = await harness.invokeTool.execute({ tool_id: harness.toolId, arguments: { value: 'ok' } }, undefined, context);
+    expect(noRead.error).not.toBe(true);
+    expect(harness.executor.execute).toHaveBeenCalledOnce();
+    harness.executor.execute.mockClear();
+
+    // No schema read, invalid arguments: rejected before any side effect.
+    const badNoRead = await harness.invokeTool.execute({ tool_id: harness.toolId, arguments: { value: 1 } }, undefined, context);
+    expect(badNoRead.metadata?.errorCode).toBe('INVALID_ARGUMENTS');
     expect(harness.executor.execute).not.toHaveBeenCalled();
 
+    // A detail read is still recorded and can still be invalidated.
     const detail = await harness.catalogTool.execute({ tool_id: harness.toolId });
-    expect(harness.view.loadedSchemaRevisions.has(harness.toolId)).toBe(false);
     expect(recordToolCatalogSchemaRead(harness.view, detail.metadata)).toBe(true);
     invalidateToolCatalogSchemaReads(harness.view);
     expect(harness.view.loadedSchemaRevisions.has(harness.toolId)).toBe(false);
     expect(harness.view.loadedSchemaRounds.has(harness.toolId)).toBe(false);
     expect(recordToolCatalogSchemaRead(harness.view, detail.metadata)).toBe(true);
-    const sameRound = await harness.invokeTool.execute({ tool_id: harness.toolId, arguments: { value: 'ok' } }, undefined, context);
-    expect(sameRound.metadata?.errorCode).toBe('SCHEMA_NOT_LOADED');
-    harness.view.currentRound += 1;
-    const invalid = await harness.invokeTool.execute({ tool_id: harness.toolId, arguments: { value: 1 } }, undefined, context);
-    expect(invalid.metadata?.errorCode).toBe('INVALID_ARGUMENTS');
-    expect(harness.executor.execute).not.toHaveBeenCalled();
 
+    harness.view.currentRound += 1;
     const valid = await harness.invokeTool.execute({ tool_id: harness.toolId, arguments: { value: 'ok' } }, undefined, context);
-    expect(valid.result).toContain('executed ok');
+    expect(valid.error).not.toBe(true);
     expect(harness.executor.execute).toHaveBeenCalledOnce();
   });
 
-  it('rejects stale schemas, eager targets, and denied calls before side effects', async () => {
+  it('rejects a schema-changed call, eager targets, and denied calls before side effects', async () => {
     const stale = makeHarness();
     const staleContext = fakeContext();
     wireDispatcher(stale, staleContext);
@@ -291,8 +309,11 @@ describe('tool_invoke', () => {
       description: 'Inspect a probe by value.',
       input_schema: { ...schema, properties: { value: { type: 'number' } } },
     }, stale.executor, { exposure: 'deferred', discovery: { namespace: 'probes', conciseHint: 'Inspect a probe by value.', tags: ['inspection'] } });
+    // The tool's schema changed under the model. There is no SCHEMA_STALE
+    // code any more; the live validator is what rejects the now-wrong
+    // arguments, and it must do so before the executor runs.
     const staleResult = await stale.invokeTool.execute({ tool_id: stale.toolId, arguments: { value: 'old' } }, undefined, staleContext);
-    expect(staleResult.metadata?.errorCode).toBe('SCHEMA_STALE');
+    expect(staleResult.metadata?.errorCode).toBe('INVALID_ARGUMENTS');
     expect(stale.executor.execute).not.toHaveBeenCalled();
 
     const eager = makeHarness(schema, 'eager');

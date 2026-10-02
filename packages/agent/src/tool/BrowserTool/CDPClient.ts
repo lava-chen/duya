@@ -1508,14 +1508,4 @@ export async function createCDPClientForMode(
   return playwrightClient;
 }
 
-/**
- * @deprecated Use createCDPClientForMode with an explicit mode.
- * Kept for callers that do not yet pass a mode; behaves like auto mode.
- */
-export async function createCDPClient(sessionId: string): Promise<ICDPClient> {
-  return createCDPClientForMode(sessionId, 'auto');
-}
-
 export { DebuggerConflict, WebviewNotReady } from './WebviewCDPClient.js';
-
-export default createCDPClient;

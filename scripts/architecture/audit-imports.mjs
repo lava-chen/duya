@@ -20,15 +20,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripComments } from "./strip-comments.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const ROOTS = ["src", "electron", "packages", "tests", "e2e"];
+const ROOTS = ["apps", "packages", "tests", "e2e"];
 const SRC_EXTS = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs"]);
 const SKIP_DIRS = new Set([
   "node_modules", "dist", "dist-electron", "bundle", "build", "release",
   ".git", "coverage", "storybook-static", ".e2e-userdata",
 ]);
-// Import specifiers written for a bundler's benefit, not real module edges.
+// Import specifiers that are never real module edges. Kept separate from
+// comment handling: these are strings that survive stripping and still are not
+// imports.
 const SKIP_SPEC = new Set([".length);", "else if (line.startsWith("]);
 
 function walk(dir, out = []) {
@@ -46,8 +49,9 @@ const rel = (p) => path.relative(ROOT, p).split(path.sep).join("/");
 
 /** Which boundary does a file belong to? */
 function ownerOf(relPath) {
-  if (relPath.startsWith("src/")) return "src-renderer";
-  if (relPath.startsWith("electron/")) return "electron-main";
+  if (relPath.startsWith("apps/desktop/src/renderer/")) return "src-renderer";
+  if (relPath.startsWith("apps/desktop/src/preload/")) return "electron-preload";
+  if (relPath.startsWith("apps/desktop/src/main/")) return "electron-main";
   const m = relPath.match(/^packages\/([^/]+)\//);
   if (m) return `pkg:${m[1]}`;
   if (relPath.startsWith("tests/")) return "tests";
@@ -79,21 +83,67 @@ for (const dirName of fs.readdirSync(path.join(ROOT, "packages"), { withFileType
 const isTestFile = (p) =>
   /(^|\/)(__tests__|tests?)(\/|$)/.test(p) || /\.(test|spec)\.[jt]sx?$/.test(p);
 
+/**
+ * `packages/<x>/dist/a/b.js` -> `packages/<x>/src/a/b.ts`, when that file exists.
+ *
+ * The repo has 16 electron-main deep imports written against
+ * `packages/agent/dist/...` (e.g. `electron/services/wake.ts` importing
+ * `../../packages/agent/dist/context/os-context/index.js`). Those specifiers
+ * resolve ONLY after a build, so without this normalisation the violation
+ * counts depend on whether `dist/` happens to be present:
+ *
+ *   fresh clone, never built     -> 153 package-boundary escapes
+ *   after `npm run typecheck:all`-> 161  (typecheck:web runs build:agent)
+ *
+ * Same commit, opposite verdicts. A gate whose result is a function of local
+ * build state is not a gate.
+ *
+ * The coupling is real in both states — it lives in the source, and
+ * `dist/context/os-context/index.js` is a compile of
+ * `src/context/os-context/index.ts` — so the gate must measure the source, not
+ * the build layout. Normalising also keeps the count stable for anyone who runs
+ * `--write` before or after a build, which is the whole point of freezing a
+ * baseline.
+ *
+ * Scoped deliberately: only OUR OWN workspace `packages/<name>/dist/`. A
+ * third-party package's `dist/` is not a build of this repo's source, and
+ * remapping it would invent a file that does not exist.
+ */
+function distToSourceTwin(p) {
+  const m = /[\\/]packages[\\/]([^\\/]+)[\\/]dist[\\/](.+)$/.exec(p);
+  if (!m) return null;
+  return path.join(ROOT, "packages", m[1], "src", m[2]);
+}
+
 /** Resolve a relative / extensionless specifier to a real file. */
 function resolveFile(base) {
   const candidates = [];
   const ext = path.extname(base);
   if (ext === ".js" || ext === ".mjs") {
-    // NodeNext style: './x.js' actually means './x.ts' in this repo
+    // NodeNext style: './x.js' actually means './x.ts' in this repo. The
+    // literal path is ALSO tried, because unlike `./x.js` a `./x.mjs`
+    // specifier is frequently the real file and not a TS stand-in — every
+    // governance script in this directory is `.mjs` and imports `.mjs`.
+    // Without the literal fallback those edges read as `unresolved`, which is
+    // both a false alarm and a hole: an unresolvable edge is exempt from the
+    // rules that would have flagged it.
     const stem = base.slice(0, -ext.length);
-    candidates.push(`${stem}.ts`, `${stem}.tsx`, `${stem}.js`);
+    candidates.push(`${stem}.ts`, `${stem}.tsx`, base, `${stem}.js`);
   } else {
     candidates.push(`${base}.ts`, `${base}.tsx`, `${base}.js`, `${base}.mjs`, base);
   }
   candidates.push(
-    `${base}/index.ts`, `${base}/index.tsx`, `${base}/index.js`,
+    `${base}/index.ts`, `${base}/index.tsx`, `${base}/index.js`, `${base}/index.mjs`,
   );
+  // The literal candidate always wins; the source twin is only a fallback for
+  // the build-output case described above.
+  const withTwins = [];
   for (const c of candidates) {
+    withTwins.push(c);
+    const twin = distToSourceTwin(c);
+    if (twin) withTwins.push(twin);
+  }
+  for (const c of withTwins) {
     try {
       if (fs.existsSync(c) && fs.statSync(c).isFile()) return c;
     } catch { /* ignore */ }
@@ -127,7 +177,10 @@ for (const file of files) {
   const relFrom = rel(file);
   const fromOwner = ownerOf(relFrom);
   const fromTest = isTestFile(relFrom);
-  const text = fs.readFileSync(file, "utf8");
+  // Comments are prose, not code. Scanning raw text made a doc comment that
+  // quotes `from '...'` into a module-dependency violation, and made a
+  // commented-out import look like a live edge. See strip-comments.mjs.
+  const { text } = stripComments(fs.readFileSync(file, "utf8"));
   let m;
   IMPORT_RE.lastIndex = 0;
   while ((m = IMPORT_RE.exec(text))) {
@@ -145,8 +198,16 @@ for (const file of files) {
       toFile = r.file;
       sub = r.sub;
       const exportsMap = workspacePkgs.get(pkgName).exports;
+      // `resolveWorkspace` returns `sub` as the raw remainder of the specifier
+      // — "" or "/testing" — but an `exports` map keys subpaths as "./testing".
+      // Comparing the two without the dot marked every subpath export in the
+      // repo as a deep import: `@duya/agent/message` and
+      // `@duya/agent-protocol/testing` are both declared in their package's
+      // `exports`, and both were being reported as reaching past the public
+      // entrypoints. Only the bare root was ever checked correctly, because
+      // that is the one case where the literal "." happens to line up.
       const isPublic = exportsMap
-        ? exportsMap.has(sub === "" ? "." : sub)
+        ? exportsMap.has(sub === "" || sub === "/" ? "." : `.${sub}`)
         : false;
       kind = toFile ? (isPublic ? "public" : "deep") : "unresolved";
       toOwner = toFile ? ownerOf(rel(toFile)) : `UNRESOLVED:${spec}`;
@@ -154,9 +215,11 @@ for (const file of files) {
       toFile = resolveFile(path.resolve(path.dirname(file), spec));
       kind = toFile ? "relative" : "unresolved";
       toOwner = toFile ? ownerOf(rel(toFile)) : `UNRESOLVED:${spec}`;
-    } else if (spec.startsWith("electron/")) {
+    } else if (spec.startsWith("apps/desktop/src/main/")) {
       toOwner = "electron-main"; kind = "aliased-path";
-    } else if (spec.startsWith("src/")) {
+    } else if (spec.startsWith("apps/desktop/src/preload/")) {
+      toOwner = "electron-preload"; kind = "aliased-path";
+    } else if (spec.startsWith("apps/desktop/src/renderer/")) {
       toOwner = "src-renderer"; kind = "aliased-path";
     } else {
       toOwner = `external:${pkgName ?? spec.split("/")[0]}`;
@@ -222,6 +285,11 @@ const result = {
     edge: k, count: v.n, distinctTargets: v.targets.size,
     targets: [...v.targets].slice(0, 25),
   })),
+  // Per-edge detail, not just the per-pair aggregate above. Added for
+  // architecture-check.mjs, which fingerprints each violation individually so
+  // a ratchet can tell "same debt" from "different debt at the same count".
+  // Purely additive: the human summary and every count above are unchanged.
+  crossBoundaryEdges: crossBoundary,
   deepImportsByPair: byPair(deep).map(([k, v]) => ({
     edge: k, count: v.n, distinctTargets: v.targets.size,
     targets: [...v.targets].slice(0, 25),
@@ -243,8 +311,8 @@ if (process.argv.includes("--json")) {
   console.log(`cross-boundary edges ${m.crossBoundaryEdges}`);
   console.log(`deep imports         ${m.deepImports}   (cross-boundary, bypasses target's exports map)`);
   console.log(`package escapes      ${m.packageBoundaryEscapes}   (relative path from a host into packages/)`);
-  console.log(`  ├─ from src/       ${m.escapesByHost.renderer}`);
-  console.log(`  ├─ from electron/  ${m.escapesByHost.main}`);
+  console.log(`  ├─ from renderer/  ${m.escapesByHost.renderer}`);
+  console.log(`  ├─ from main/      ${m.escapesByHost.main}`);
   console.log(`  └─ from tests/e2e/ ${m.escapesByHost.tests}`);
   console.log(`unresolved           ${result.unresolved.length}`);
   console.log("\n--- cross-boundary by pair ---");
