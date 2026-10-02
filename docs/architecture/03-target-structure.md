@@ -44,7 +44,7 @@ harness/agent/{tasks,runners,evaluators,fixtures,reports}
 | `agent-core/` | ✅ **采纳** | 1,2,4 | `agent/` 9,514 + `prompts/` 6,904 + `compact/` 4,554 + `context/` 2,340 ≈ 23k LOC，零外部进程/网络信号 |
 | `agent-runtime/` | ✅ **采纳** | 1,2,5 | `process/` 8,235 + `session/` 5,332 + `cli/` 4,822 + `lifecycle/` 741；已由 `AgentProcessPool` 独立生命周期 |
 | `agent-tools/` | ❌ **撤回** | — | plan 583 的 `@duya/browser`（19,139 LOC，对 agent/electron 零 import，13 个测试文件）证明**单能力独立成包**优于聚合袋。聚合袋内聚弱、且与"能力插件化"冲突 |
-| `workspace/` | ⚠️ **条件采纳** | 2,6 | 只有 roots + path policy 值得（重复 5 次，且 realpath vs 词法两套逃逸检查语义不一致）。env/worktree/connector **不值得** —— 详见 `MONOREPO_RFC.md` §3.2 |
+| `workspace/` | ❌ **不建包** | — | 撤回初版的"条件采纳"。职责只有 roots + cwd + accessPolicy 解析，**唯一 consumer 是 Control Plane**（准则 3 不满足，准则 5 仅可能性）。落点：`apps/desktop/src/main/control-plane/workspace/` 内部 module；跨边界形状放 `agent-protocol` 的 `WorkspaceSnapshot`。抽包的三条触发条件见 `MONOREPO_RFC.md` §3.2 |
 | `mcp/` | ❌ **不建** | — | 实测 `packages/agent/src/mcp` 仅 3,027 LOC 且已是 `@duya/plugin-core/src/mcp/` 的**消费方**（28 条 deep import）。已有 owner，再建包是双份真相 |
 | `memory/` | ⚠️ **暂不建，先解耦** | — | `memory-state`(4,045) + `memory-rollout`(3,321) = 7,366 LOC，但 schema owner 在 `electron/memory-state/migrations/`（V1）。**先反转所有权，再谈拆包** |
 | `storage/` | ⚠️ **暂不建** | — | 44 处 SQLite 触达分散在 7 个 owner。ZCode 的 `storage` 模块是 16 个塌缩模块里**唯一**被挖出来的 —— 说明它难，不说明该先做 |
@@ -77,6 +77,10 @@ apps/
   desktop/                        # host 侧（独立 workspace，ZCode 模式）
     src/
       main/                       # ← electron/** 迁移
+        control-plane/            # 逻辑层，不是 package（见 §3.5）
+          goals/ tasks/ runs/ scheduler/ wake/ approvals/ checkpoints/
+          workspace/              # ★ Workspace 落这里：roots / cwd / accessPolicy
+          storage/ ipc/ platform/
       preload/                    # ← electron/preload.ts
       renderer/                   # ← src/** 迁移
     package.json
@@ -93,21 +97,25 @@ packages/
   gateway/                        # 保留
   voice/                          # 保留
   shared/                         # ★ 新建。跨进程 contract + 平台 port
-  workspace/                      # ★ 新建（条件）。roots + path policy，见 MONOREPO_RFC §3.2
 
 evals/                            # ★ 新建。不是 workspace member（见 04 §2）
   agent/
     tasks/ runners/ evaluators/ fixtures/ mock-provider/ reports/
 ```
 
-包总数：8 → **14**。其中 6 个新建，1 个重定位，1 个已在进行中。
+包总数：8 → **13**。其中 5 个新建，1 个重定位，1 个已在进行中。
 **未采纳的假设项：5**（`mcp` / `memory` / `storage` / `ui` / **`agent-tools` 聚合包**）。
+**另撤回 1 个条件项**：`packages/workspace` → Control Plane 内的 `workspace/` module
+（理由与抽包触发条件见 `MONOREPO_RFC.md` §3.2）。
 
 > **变更记录**：初版此处是 `agent-tools` + `harness/`（13 包）。
 > 看到 plan 583 的 `docs/browser-capability-split` 分支后：
 > ① 撤回 `agent-tools` 聚合包 —— 单能力独立成包已被 `@duya/browser` 证明更优（见 §3.1）；
 > ② `harness/` 改名为 `evals/` —— 仓库内 "harness" 已有 3 种含义，且 "Control Plane" 才是生产概念
 > （见 `MONOREPO_RFC.md` §4.1）。
+> **第二轮（2026-10-01）**：③ 撤回 `packages/workspace` 的"条件采纳" ——
+> 它的唯一 consumer 是 Control Plane，收成 `control-plane/workspace/` 内部 module，
+> 跨边界只留 `agent-protocol` 的 `WorkspaceSnapshot` 契约（`MONOREPO_RFC.md` §3.2）。
 
 ---
 
@@ -198,7 +206,7 @@ apps/desktop/
 | Subagent（2.7k） | ❌ 是 runtime 能力不是工具 |
 
 > **注意**：这改变了包数量。`agent-tools` 去掉，新增 `@duya/browser`。
-> 8 包 → **14 包**（+6 新建），见 §7。
+> 8 包 → **13 包**（+5 新建），见 §7。
 
 ### 3.2 `@duya/conductor` 重定位：它不是 agent 包
 
@@ -255,6 +263,64 @@ packages/agent/src/tool/WidgetRenderer/HeadlessWidgetRenderer.ts
 
 **裁决**：加 `tsc` build + 收紧 `exports` 是**迁移的前置条件**，不是可选项。
 其中 `connectors/app-connector-id.ts` 独占 28 条 deep import，需要单独设计公共面。
+
+### 3.5 Workspace：不是 package，是 Control Plane 内的 module
+
+§1.1 撤回了 `packages/workspace` 的"条件采纳"。**这一节说明撤回后它落在哪。**
+
+重复是真的 —— 5 处 path containment、4 处 permission policy 解析、3 个 cwd normalizer ——
+但重复的**收束目标**是一个目录，不是一个包：
+
+```
+apps/desktop/src/main/
+  control-plane/
+    goals/  tasks/  runs/  scheduler/  wake/  approvals/  checkpoints/
+    workspace/                 ← roots / cwd / accessPolicy 解析
+      workspace-state.ts       # { workspaceId?, cwd, roots[], accessPolicy }
+      resolve-workspace.ts
+      canonicalize-path.ts     # realpath + 词法两套语义在这里统一
+      allowed-roots.ts
+      access-policy.ts
+```
+
+| 判据 | 是否满足 | 事实 |
+|---|---|---|
+| 3 · 2 个以上 consumer | ❌ | 唯一 consumer 是 Control Plane；CLI / evals 拿的是物化后的 `RunManifest` |
+| 5 · 多个 host | ⚠️ 仅可能性 | 第二个 host 不存在 |
+| 1 · 独立生命周期 | ❌ | workspace 状态只在 Run 启动时读一次 |
+| 6 · 重要 contract | ⚠️ 部分 | contract 由 `agent-protocol` 的 `WorkspaceSnapshot` 承担 |
+
+**跨边界只留纯数据契约**（`agent-protocol/src/workspace.ts`，零 IO）：
+
+```ts
+export interface WorkspaceSnapshot {
+  readonly cwd: string;
+  readonly roots: readonly WorkspaceRoot[];
+}
+```
+
+**依赖方向**：
+
+```
+agent-protocol (WorkspaceSnapshot)
+       ▲ contract
+control-plane/workspace/   owns mutable state + resolution
+       │ resolve → materialize（run 启动时一次）
+       ▼
+  RunManifest (immutable)
+       ▼
+  Agent Runtime          ✗ 不得反查 workspace
+```
+
+**抽包的三条触发条件（同时满足才建 `packages/workspace`）**：
+① 出现第二个真实 host 且不复用 Control Plane；
+② `canonicalizePath` / `resolveRoots` / `validateCwd` / `isWithinRoots` 已稳定且被独立使用；
+③ realpath 与词法的语义分歧已关闭。
+详见 `MONOREPO_RFC.md` §3.2。
+
+> **不建包不等于不设边界。** 边界由 `agent-protocol` 的只读契约 +
+> materialize 唯一入口（`MONOREPO_RFC.md` §6.1）+ CI 的 `control-plane` 禁依赖
+> `packages/*` 规则共同保证 —— 与目录层级无关。
 
 ---
 
@@ -371,13 +437,15 @@ packages/agent/src/tool/WidgetRenderer/HeadlessWidgetRenderer.ts
 | **新建** | `packages/agent-runtime` | 1,2,5 |
 | **新建** | `packages/shared`（跨进程 DTO + 平台 port） | 3,6 |
 | **新建** | `evals/agent`（非 workspace 成员） | 4,5,7 |
-| **新建** | `apps/desktop`（分阶段） | 5,7 |
-| **新建（条件）** | `packages/workspace`（仅 roots + policy） | 2,6 · 见 `MONOREPO_RFC.md` §3.2 |
+| **已落地** | `apps/desktop`（M7 · PR #115，见 §2.1） | 5,7 |
+| **模块（非包）** | `control-plane/workspace/`（roots + cwd + accessPolicy） | 见 §3.5 · 契约在 `agent-protocol` |
 | **进行中** | `packages/browser`（plan 583 缝 A 分支已建） | 1,3,4 · 见 §3.1 |
 | **保留+修复** | `@duya/plugin-core`（加 build + exports） | 6 |
 | **保留** | `@duya/ai`, `@duya/cli`, `@duya/voice`, `@duya/gateway`, `@duya/computer-use` | 1,3,5 |
 | **重定位** | `@duya/conductor` → host 侧 UI/domain 包 | 7 |
 | **不建** | `packages/mcp`, `packages/memory`, `packages/storage`, `packages/ui`, `packages/agent-tools` | — |
+| **不建（撤回条件采纳）** | `packages/workspace` | 准则 3/5 不满足 · 见 §3.5 |
 
-**净变化：8 包 → 14 包（+6 新建，1 进行中，1 重定位，5 个假设项被否决）。**
+**净变化：8 包 → 13 包（+5 新建，1 进行中，1 重定位，5 个假设项被否决，
+1 个条件项撤回为 Control Plane 内部 module）。**
 每一条都对应实测证据，没有一条基于"目录整齐"。
