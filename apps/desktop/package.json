@@ -1,0 +1,12 @@
+{
+  "name": "@duya/desktop",
+  "version": "0.8.1",
+  "private": true,
+  "description": "DUYA desktop shell — Electron main process, preload bridge, and renderer",
+  "main": "src/main/index.ts",
+  "scripts": {
+    "typecheck:main": "tsc -p tsconfig.main.json --noEmit",
+    "typecheck:preload": "tsc -p tsconfig.preload.json --noEmit",
+    "typecheck:renderer": "tsc -p tsconfig.renderer.json --noEmit"
+  }
+}

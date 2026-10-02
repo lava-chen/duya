@@ -89,6 +89,7 @@ duyaUI.pen
 # Agent tools
 .claude/
 .trae/
+.trae-html-share-packages/
 .qoder/
 .mimosa/
 .playwright-mcp/
@@ -104,18 +105,21 @@ scripts/_scratch-*.js
 scripts/probe-*.cjs
 test-results/
 
-# Docs (keep only product-specs, release-notes, and recovered-plans)
+# Docs (keep only product-specs, release-notes, recovered-plans, and architecture)
 docs/*/
 !docs/product-specs/
 !docs/release-notes/
 !docs/recovered-plans/
+!docs/architecture/
 docs/*.md
 
 # Tests
-# Tests: only the root-level `tests/` scratch directory is ignored.
+# Tests: the root-level `tests/` scratch directory is ignored, EXCEPT the
+# rules-compliance checker, which is tracked and wired to `npm run test:rules`.
 # `packages/agent/tests/` and `packages/plugin-core/tests/` are intentionally
 # tracked — they hold the project's unit-test source.
-/tests/
+/tests/*
+!/tests/rules-compliance.test.mjs
 
 # Bundled output
 packages/agent/bundle/

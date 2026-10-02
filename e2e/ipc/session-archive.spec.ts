@@ -39,7 +39,7 @@
  * `session_runtime_locks` all empty, while `meta` carries a boot-2 timestamp
  * for `imported_from_legacy`, i.e. the file was rebuilt rather than truncated.
  * The migration's own logic is covered against a real filesystem and a real
- * schema by `electron/db/core/__tests__/legacy-archive-migration.test.ts`
+ * schema by `apps/desktop/src/main/db/core/__tests__/legacy-archive-migration.test.ts`
  * (13 cases, including one that asserts a Plan 549 row reads as EMPTY and
  * that the migration makes its history readable again); what is NOT covered
  * end-to-end is the three-line call in `initCoreDatabase` that runs it.

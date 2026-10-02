@@ -3,8 +3,9 @@
 // main process (plan 583, ISS-01).
 //
 // Why this exists instead of a plain `tsc --noEmit` in CI: the electron tree
-// had never been typechecked at all (the root tsconfig excludes `electron/**`,
-// and `typecheck:all` therefore never compiled the main process), which is
+// had never been typechecked at all (the root tsconfig excludes
+// `apps/desktop/src/main/**`, and `typecheck:all` therefore never compiled the
+// main process), which is
 // how two P0-class type errors shipped — `remote-mcp.ts` calling
 // `session.ledger` on a type with no such property. Cleaning all ~294
 // pre-existing errors is a separate, larger project, so a strict gate would
@@ -32,7 +33,7 @@ import { dirname, resolve } from 'node:path';
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '..');
 const baselinePath = resolve(scriptDir, 'typecheck-electron-baseline.txt');
-const project = resolve(repoRoot, 'electron/tsconfig.json');
+const project = resolve(repoRoot, 'apps/desktop/tsconfig.main.json');
 
 const write = process.argv.includes('--write');
 
@@ -67,8 +68,9 @@ function collectErrors() {
     if (!m) continue;
     const [, file, lineNo, colNo, code] = m;
     // Normalise to repo-root-relative, forward slashes, so the baseline is
-    // portable across machines and checkouts.
-    const rel = file.replace(/\\/g, '/').replace(/^.*?(electron\/)/, '$1');
+    // portable across machines and checkouts. The main process lives under
+    // `apps/desktop/src/main/` since the electron/ -> apps/desktop relocation.
+    const rel = file.replace(/\\/g, '/').replace(/^.*?(apps\/desktop\/src\/main\/)/, '$1');
     seen.add(`${rel}:${lineNo}:${colNo} ${code}`);
   }
   return seen;
