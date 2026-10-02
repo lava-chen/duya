@@ -217,7 +217,10 @@ function dedupKey(pageId: PageId, params?: Record<string, unknown>): string {
       // One tab per session: repeated opens of the same subagent /
       // workflow-node session reuse (and focus) the existing tab. The
       // reused tab keeps its original params, which is fine — the view is
-      // keyed on the immutable session id.
+      // keyed on the immutable session id. Deliberately sessionId-ONLY:
+      // plan 571 added `parentSessionId` / `taskId` (stop-control context),
+      // and folding them in here would stack a second tab for the same run
+      // every time an emitter re-sent them.
       return `session::${(params?.sessionId as string | undefined) ?? ""}`;
     default:
       return `${pageId}::${JSON.stringify(params ?? {})}`;
@@ -835,11 +838,20 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
 
   // Subagent / workflow-node session viewer (ZCode-parity side pane).
   // Emitters (workflow evidence rows, subagent tool rows, TaskDrawer rows)
-  // only broadcast { sessionId, title? }; the page dedups on sessionId so a
-  // repeated click focuses the existing tab instead of stacking copies.
+  // only broadcast { sessionId, title?, parentSessionId?, taskId? }; the page
+  // dedups on sessionId so a repeated click focuses the existing tab instead
+  // of stacking copies. `parentSessionId` / `taskId` are optional context the
+  // panel needs for the sub-agent stop control — a reused tab keeps its
+  // original params, which is correct because the view is keyed on the
+  // immutable session id.
   useEffect(() => {
     const handleOpenSessionPanel = (event: Event) => {
-      const detail = (event as CustomEvent<{ sessionId?: string; title?: string }>).detail;
+      const detail = (event as CustomEvent<{
+        sessionId?: string;
+        title?: string;
+        parentSessionId?: string;
+        taskId?: string;
+      }>).detail;
       const sessionId = typeof detail?.sessionId === "string" ? detail.sessionId.trim() : "";
       if (!sessionId) return;
       const params: Record<string, unknown> = {
@@ -851,6 +863,12 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
           ? detail.title.trim()
           : sessionId.slice(0, 8),
       };
+      if (typeof detail?.parentSessionId === "string" && detail.parentSessionId.trim()) {
+        params.parentSessionId = detail.parentSessionId.trim();
+      }
+      if (typeof detail?.taskId === "string" && detail.taskId.trim()) {
+        params.taskId = detail.taskId.trim();
+      }
       openOrActivatePage("session-messages", params);
     };
 

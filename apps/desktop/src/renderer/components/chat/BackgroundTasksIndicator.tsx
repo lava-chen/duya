@@ -10,8 +10,9 @@
 // expanded behaviour: the collapsed chip shows per-kind counts; clicking
 // expands a popover listing the background commands (click a row → the
 // task's output opens in the side panel's terminal page) and running
-// sub-agents (click → jump into that session). The full TaskDrawer keeps
-// its own toggle — the chip no longer owns it.
+// sub-agents (click → the sub-agent's runtime opens in the side panel's
+// session-messages page, same as a transcript sub-agent row). The full
+// TaskDrawer keeps its own toggle — the chip no longer owns it.
 //
 // Counts come from the same hooks the drawer uses (no second source of
 // truth), and the chip renders nothing when nothing is running.
@@ -24,7 +25,7 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { useBashTasks } from '@/hooks/useBashTasks';
 import { useSubAgentProgress } from '@/hooks/useSubAgentProgress';
 import { formatElapsed } from '@/lib/format-elapsed';
-import { useConversationStore } from '@/stores/conversation-store';
+import { dispatchOpenSessionPanel } from '@/lib/open-session-panel-event';
 import type { BashBackgroundTaskSnapshot } from '@/types';
 
 export interface BackgroundTasksIndicatorProps {
@@ -97,10 +98,19 @@ export function BackgroundTasksIndicator({ sessionId }: BackgroundTasksIndicator
     setOpen(false);
   }, [sessionId]);
 
-  const openAgentSession = useCallback((agentSessionId: string) => {
-    useConversationStore.getState().setActiveThread(agentSessionId);
+  const openAgentSession = useCallback((agentSessionId: string, taskId?: string) => {
+    // Plan 571: the side panel, not the main chat column. The other two entry
+    // points (SubAgentToolRow, TaskDrawer) already open the panel; calling
+    // `setActiveThread` here used to yank the parent transcript away while a
+    // background sub-agent was still running. `agent.id` IS the run's task id
+    // (grouped by `agentId` upstream), so the panel's stop control can target
+    // this exact run.
+    dispatchOpenSessionPanel(agentSessionId, undefined, {
+      parentSessionId: sessionId || undefined,
+      taskId,
+    });
     setOpen(false);
-  }, []);
+  }, [sessionId]);
 
   // One kind active → name that kind; both → stay generic. Enumerating
   // every two-of-three combination buys nothing: the chip only promises
@@ -201,7 +211,7 @@ export function BackgroundTasksIndicator({ sessionId }: BackgroundTasksIndicator
                   disabled={!agent.sessionId}
                   title={agent.name}
                   onClick={() => {
-                    if (agent.sessionId) openAgentSession(agent.sessionId);
+                    if (agent.sessionId) openAgentSession(agent.sessionId, agent.id);
                   }}
                 >
                   <TablerRobotIcon size={12} className="bg-tasks-popover-row-icon" />

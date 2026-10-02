@@ -13,7 +13,7 @@
 
 import { createHash } from 'node:crypto';
 import { BaseTool } from '../BaseTool.js';
-import type { ToolResult, ToolUseContext, MessageContent } from '../../types.js';
+import type { ToolResult, ToolUseContext, MessageContent, TokenUsage } from '../../types.js';
 import type {
   RenderedToolMessage,
   ToolInterruptBehavior,
@@ -41,10 +41,31 @@ import {
   BACKGROUND_SUBAGENT_IDLE_NOTICE,
   shouldContinueParentWork,
 } from './continueParentWork.js';
+import { resolveResumeTarget } from './resumeAgent.js';
+import { buildWorktreeSpawnNotice } from './forkSubagent.js';
+import { createIsolatedWorktree, WorktreeError } from './worktree.js';
+import {
+  SUBAGENT_EFFORT_LEVELS,
+  SUBAGENT_PERMISSION_MODES,
+  normalizeEffort,
+  normalizePermissionMode,
+  normalizeToolOverlay,
+  serializeSubagentResult,
+  type SubagentToolResultPayload,
+  type SubagentToolOverlay,
+} from './subagentResult.js';
+import type { PermissionMode } from '../../permissions/types.js';
 
 export { formatAgentLine }
 export { SUBAGENT_TOOL_NAME, LEGACY_SUBAGENT_TOOL_NAME, VERIFICATION_AGENT_TYPE, ONE_SHOT_BUILTIN_AGENT_TYPES } from './constants.js';
 
+/**
+ * LLM-facing parameter surface. Every field declared here is read in
+ * `execute()` and threaded into the child run — plan 571 closed the three
+ * declared-but-dead parameters (`auto_wake`, `resume_from`, `isolation`) and
+ * added the four that were missing (`max_turns`, `effort`,
+ * `permission_mode`, `tools`).
+ */
 export interface SubagentToolInput {
   name?: string
   description?: string
@@ -55,21 +76,14 @@ export interface SubagentToolInput {
   resume_from?: string
   isolation?: 'worktree'
   model?: string
-}
-
-export interface SubagentToolResult {
-  agentId: string
-  agentType: string
-  content: Array<{ type: 'text'; text: string }>
-  totalToolUseCount: number
-  totalDurationMs: number
-  totalTokens: number
-  usage: {
-    input_tokens: number
-    output_tokens: number
-    cache_creation_input_tokens?: number
-    cache_read_input_tokens?: number
-  }
+  /** Cap on agentic turns for the child. Absent = uncapped (agent def wins). */
+  max_turns?: number
+  /** Thinking budget for the child's model invocation. */
+  effort?: string
+  /** Permission mode for the child's own tool gate. */
+  permission_mode?: string
+  /** Per-call overlay on top of the agent definition's tool list. */
+  tools?: unknown
 }
 
 const agentTypeAliases: Record<string, string> = {
@@ -88,18 +102,7 @@ const BACKGROUND_SPAWN_TTL_MS = 10 * 60 * 1000;
 
 interface BackgroundSpawnRecord {
   createdAt: number;
-  result: {
-    agentType: string;
-    resolvedAgentType: string;
-    description?: string;
-    content: string;
-    sessionId: string;
-    taskId: string;
-    agentId: string;
-    outputFilePath?: string;
-    background: true;
-    status: 'running';
-  };
+  result: SubagentToolResultPayload;
 }
 
 const recentBackgroundSpawns = new Map<string, BackgroundSpawnRecord>();
@@ -175,26 +178,81 @@ function extractMessageText(content: unknown): string {
  * Deliberately does NOT tell the model to wait via get_task_output: the tool
  * is snapshot-only, and the terminal <task-notification> (with the final
  * result and the output-file path) is delivered automatically, so waiting
- * would double-receive the result. */
+ * would double-receive the result.
+ *
+ * Plan 571: the two footnotes below cover the cases where that automatic
+ * delivery does not happen — `auto_wake: false` (no notification at all, so
+ * the model must poll the file itself) and worktree isolation (the model has
+ * to know where the child's edits actually live). */
 function formatSubagentStartedBackground(
   subagentId: string,
   agentType: string,
   description: string,
   continueParentWork: boolean,
+  extras: {
+    autoWake: boolean;
+    outputFilePath: string;
+    resumed?: boolean;
+    worktreeBranch?: string;
+  },
 ): string {
   const guide = continueParentWork
     ? BACKGROUND_SUBAGENT_CONTINUE_PARENT_WORK
     : BACKGROUND_SUBAGENT_IDLE_NOTICE;
-  return [
+  const lines = [
     `Subagent started in background.`,
     `subagent_id: ${subagentId}`,
     `type: ${agentType}`,
     `description: ${description}`,
     ``,
-    `It runs independently of this session. When it completes you will be notified automatically with a <task-notification> containing the final result and the output-file path (Read it for the full transcript). Do not wait or poll for it — get_task_output only takes a status/output snapshot; it never blocks. If the task looks stuck, use kill_task.`,
-    ``,
-    guide,
-  ].join('\n');
+  ];
+  if (extras.resumed) {
+    lines.push(`This run continues the sub-agent's earlier conversation; its history was replayed into the new turn.`);
+    lines.push(``);
+  }
+  if (extras.autoWake) {
+    lines.push(`It runs independently of this session. When it completes you will be notified automatically with a <task-notification> containing the final result and the output-file path (Read it for the full transcript). Do not wait or poll for it — get_task_output only takes a status/output snapshot; it never blocks. If the task looks stuck, use kill_task.`);
+  } else {
+    lines.push(`It runs independently of this session, and auto_wake is false: you will NOT be notified when it completes. Poll it yourself with get_task_output using task_id "${subagentId}"; the full transcript is at ${extras.outputFilePath}. Read that file for the complete output once the task reports a terminal status.`);
+  }
+  if (extras.worktreeBranch) {
+    lines.push(``);
+    lines.push(`It is working in an isolated git worktree on branch ${extras.worktreeBranch}. Its file changes do not touch this working copy — merge or cherry-pick the branch to adopt them.`);
+  }
+  lines.push(``, guide);
+  return lines.join('\n');
+}
+
+/**
+ * Validate `max_turns`. Non-positive, fractional, and non-numeric values are
+ * dropped (the caller warns) rather than clamped: a silently-clamped cap
+ * would look like the model asked for 5 turns and got 3.
+ */
+function normalizeMaxTurns(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 1) return undefined;
+  return Math.floor(value);
+}
+
+/**
+ * Map the agent-side `TokenUsage` shape onto the receipt's `usage` contract.
+ * Cache token fields are renamed to the `*_input_tokens` spelling the
+ * renderer parser expects.
+ */
+function mapTokenUsage(usage: TokenUsage | undefined): SubagentToolResultPayload['usage'] | undefined {
+  if (!usage) return undefined;
+  const input = Number.isFinite(usage.input_tokens) ? usage.input_tokens : 0;
+  const output = Number.isFinite(usage.output_tokens) ? usage.output_tokens : 0;
+  const mapped: NonNullable<SubagentToolResultPayload['usage']> = {
+    input_tokens: input,
+    output_tokens: output,
+  };
+  if (typeof usage.cache_creation_tokens === 'number' && usage.cache_creation_tokens > 0) {
+    mapped.cache_creation_input_tokens = usage.cache_creation_tokens;
+  }
+  if (typeof usage.cache_hit_tokens === 'number' && usage.cache_hit_tokens > 0) {
+    mapped.cache_read_input_tokens = usage.cache_hit_tokens;
+  }
+  return mapped;
 }
 
 export class SubagentTool extends BaseTool {
@@ -227,21 +285,53 @@ export class SubagentTool extends BaseTool {
       },
       auto_wake: {
         type: 'boolean',
-        description: 'When running in the background, whether to automatically resume/wake the parent session when the sub-agent completes. Defaults to true.',
+        description: 'Background only. When false, the parent session is NOT resumed when the sub-agent completes — no <task-notification> is delivered. Read the result yourself with get_task_output using the output_file_path from this receipt. Defaults to true.',
         default: true,
       },
       resume_from: {
         type: 'string',
-        description: 'A subagent_id / session id to resume an existing sub-agent conversation instead of starting a new one.',
+        description: 'A subagent_id returned by a previous task call. Continues that sub-agent\'s own conversation (its history is replayed into the new run) under the same session id, instead of briefing a fresh agent from scratch. Omit to start a new sub-agent.',
       },
       isolation: {
         type: 'string',
         enum: ['worktree'],
-        description: 'Run the agent in an isolated git worktree',
+        description: 'Set to "worktree" to run the agent in a fresh git worktree of the repository, so its file edits cannot touch the user\'s working copy. Requires a clean git working tree; the worktree path is reported in the result.',
       },
       model: {
         type: 'string',
         description: 'Model to use for this agent (defaults to inherit from parent)',
+      },
+      max_turns: {
+        type: 'number',
+        description: 'Maximum agentic turns for this agent. Omit to use the agent definition\'s own cap, or leave the loop uncapped when it has none.',
+        minimum: 1,
+      },
+      effort: {
+        type: 'string',
+        enum: [...SUBAGENT_EFFORT_LEVELS],
+        description: 'Thinking budget for this agent. "off" disables extended thinking; higher levels spend more tokens on reasoning. Omit to inherit the runtime default.',
+      },
+      permission_mode: {
+        type: 'string',
+        enum: [...SUBAGENT_PERMISSION_MODES],
+        description: 'Permission mode for the sub-agent\'s own tool calls. "default" asks the user, "auto" auto-accepts low-risk actions, "bypassPermissions" runs unattended. Omit to use the default mode.',
+      },
+      tools: {
+        type: 'object',
+        properties: {
+          allow: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Keep only these tools (intersected with the agent definition\'s list).',
+          },
+          deny: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Remove these tools. Applied after allow, so deny wins.',
+          },
+        },
+        additionalProperties: false,
+        description: 'Per-call overlay on top of the agent definition\'s tool list. Agent-orchestration tools stay withheld either way.',
       },
     },
     required: ['prompt'],
@@ -260,15 +350,7 @@ export class SubagentTool extends BaseTool {
     _workingDirectory?: string,
     context?: ToolUseContext
   ): Promise<ToolResult> {
-    const agentInput = input as {
-      prompt: string;
-      subagent_type?: string;
-      name?: string;
-      description?: string;
-      model?: string;
-      maxTurns?: number;
-      run_in_background?: boolean;
-    };
+    const agentInput = input as unknown as SubagentToolInput;
 
     if (!context) {
       return {
@@ -282,6 +364,9 @@ export class SubagentTool extends BaseTool {
     // Plan 568: hoisted so the catch can attach it to the error result —
     // a failed agent's sub-session id is the watch-pane link.
     let subAgentSessionId: string | undefined;
+    // Worktree branch name, surfaced in the receipt so the model can report
+    // where its changes landed.
+    let worktreeBranch: string | undefined;
 
     try {
       const agentDefinitions = context.options.agentDefinitions?.allAgents ?? [];
@@ -290,6 +375,34 @@ export class SubagentTool extends BaseTool {
       const canonicalRequestedType = agentTypeAliases[normalizedRequested] || requestedAgentType;
       const effectiveRunInBackground = agentInput.run_in_background !== false;
       const parentSessionId = context.options.sessionId;
+
+      // ---- Plan 571: validate the parameters that used to be dead -------
+      // `auto_wake` only means anything for a background run; for a
+      // foreground run the model blocks on the result, so there is nothing
+      // to wake and the value is recorded as-is.
+      const autoWake = agentInput.auto_wake !== false;
+      const maxTurns = normalizeMaxTurns(agentInput.max_turns);
+      const effort = normalizeEffort(agentInput.effort);
+      const permissionMode = normalizePermissionMode(agentInput.permission_mode) as PermissionMode | undefined;
+      const toolOverlay: SubagentToolOverlay | undefined = normalizeToolOverlay(agentInput.tools);
+      const warnings: string[] = [];
+
+      if (agentInput.effort !== undefined && effort === undefined) {
+        warnings.push(
+          `effort "${String(agentInput.effort)}" is not a valid thinking level; ignored. Valid values: ${SUBAGENT_EFFORT_LEVELS.join(', ')}.`,
+        );
+      }
+      if (agentInput.permission_mode !== undefined && permissionMode === undefined) {
+        warnings.push(
+          `permission_mode "${String(agentInput.permission_mode)}" is not valid; using the default permission mode. Valid values: ${SUBAGENT_PERMISSION_MODES.join(', ')}.`,
+        );
+      }
+      if (agentInput.tools !== undefined && toolOverlay === undefined) {
+        warnings.push('tools overlay was empty or malformed and has been ignored.');
+      }
+      if (maxTurns === undefined && agentInput.max_turns !== undefined) {
+        warnings.push(`max_turns "${String(agentInput.max_turns)}" is not a positive number; ignored.`);
+      }
 
       logger.info('[SubAgent] Agent tool invoked', {
         requestedAgentType,
@@ -300,6 +413,13 @@ export class SubagentTool extends BaseTool {
         toolUseId: context.toolUseId,
         promptLength: agentInput.prompt?.length ?? 0,
         availableAgentTypes: agentDefinitions.map((def: AgentDefinition) => def.agentType),
+        ...(agentInput.resume_from ? { resumeFrom: agentInput.resume_from } : {}),
+        ...(agentInput.isolation ? { isolation: agentInput.isolation } : {}),
+        ...(maxTurns !== undefined ? { maxTurns } : {}),
+        ...(effort ? { effort } : {}),
+        ...(permissionMode ? { permissionMode } : {}),
+        ...(toolOverlay ? { toolOverlay } : {}),
+        ...(autoWake === false ? { autoWake } : {}),
       }, 'SubAgent')
 
       const agentDefinition = agentDefinitions.find((def: AgentDefinition) => {
@@ -327,7 +447,10 @@ export class SubagentTool extends BaseTool {
       // Clamp defensively: the schema hints maxLength but the model may not
       // honor it, and this string flows into session titles and events.
       const subAgentName = (agentInput.name || agentDefinition.agentType).trim().slice(0, 80);
-      if (effectiveRunInBackground && parentSessionId) {
+      // A resume is a deliberate follow-up turn on the same child, so the
+      // duplicate-spawn guard (which exists to stop a retried spawn from
+      // running the same background task twice) must not swallow it.
+      if (effectiveRunInBackground && parentSessionId && !agentInput.resume_from) {
         const now = Date.now();
         pruneRecentBackgroundSpawns(now);
         const promptHash = hashString(agentInput.prompt.trim());
@@ -356,52 +479,162 @@ export class SubagentTool extends BaseTool {
         }
       }
 
+      // ---- Plan 571 3.1: `resume_from` reuses the child's own session ----
+      // The history is prepended to `promptMessages` and the SAME
+      // subAgentSessionId is reused below, so the child's transcript
+      // continues instead of forking into a new conversation.
+      const resumeTarget = agentInput.resume_from
+        ? await resolveResumeTarget({
+            resumeFrom: agentInput.resume_from,
+            parentSessionId,
+          })
+        : undefined;
+
+      if (resumeTarget && !resumeTarget.ok) {
+        // Hard structured error (plan 571 decision): silently starting fresh
+        // would hand back a "resumed" transcript that is actually empty, and
+        // the model would report conclusions from work that never happened.
+        logger.warn('[SubAgent] resume_from rejected', {
+          code: resumeTarget.code,
+          resumeFrom: agentInput.resume_from,
+          parentSessionId,
+        }, 'SubAgent')
+        return {
+          id: crypto.randomUUID(),
+          name: this.name,
+          result: JSON.stringify({ error: resumeTarget.message }),
+          error: true,
+        };
+      }
+
+      if (resumeTarget?.ok) {
+        if (!agentInput.subagent_type) {
+          warnings.push(
+            `resume_from "${resumeTarget.sessionId}" was continued with the default general-purpose agent; pass subagent_type to keep the original agent's role.`,
+          );
+        }
+        if (
+          resumeTarget.workingDirectory &&
+          context.options.workingDirectory &&
+          resumeTarget.workingDirectory !== context.options.workingDirectory
+        ) {
+          warnings.push(
+            `The resumed sub-agent originally ran in ${resumeTarget.workingDirectory}; this run uses the session's current working directory ${context.options.workingDirectory}.`,
+          );
+        }
+        logger.info('[SubAgent] resuming sub-agent session', {
+          resumeFrom: resumeTarget.sessionId,
+          agentType: agentDefinition.agentType,
+          historyMessages: resumeTarget.history.length,
+          parentSessionId,
+        }, 'SubAgent')
+      }
+
+      // ---- Plan 571 3.3: `isolation: 'worktree'` -------------------------
+      // A worktree can only be created for a NEW child. Resuming an existing
+      // session into a different working copy would silently change which
+      // files the accumulated history refers to, so refuse the combination.
+      if (agentInput.isolation === 'worktree' && resumeTarget?.ok) {
+        return {
+          id: crypto.randomUUID(),
+          name: this.name,
+          result: JSON.stringify({
+            error: 'isolation: "worktree" cannot be combined with resume_from. Start a new sub-agent with isolation, or resume the existing one in the current working directory.',
+          }),
+          error: true,
+        };
+      }
+
+      let childWorkingDirectory = context.options.workingDirectory;
+      if (agentInput.isolation === 'worktree') {
+        try {
+          const worktree = await createIsolatedWorktree(
+            context.options.workingDirectory ?? process.cwd(),
+            subAgentName,
+          );
+          childWorkingDirectory = worktree.path;
+          worktreeBranch = worktree.branch;
+        } catch (err) {
+          if (err instanceof WorktreeError) {
+            // Not a repo / dirty tree / git refused: a specific sentence the
+            // model can act on, never a stack trace.
+            logger.warn('[SubAgent] worktree isolation failed', {
+              code: err.code,
+              parentSessionId,
+            }, 'SubAgent')
+            return {
+              id: crypto.randomUUID(),
+              name: this.name,
+              result: JSON.stringify({ error: err.message }),
+              error: true,
+            };
+          }
+          throw err;
+        }
+      }
+
       // Plan 554: delegated work tasks (not read-only explorers) carry the
       // VERDICT completion contract so the parent gets a mechanical verdict
       // line instead of having to interpret prose.
       const verdictRequired = wantsVerdictContract(agentDefinition.agentType);
-      const promptMessages = [
-        {
-          role: 'user' as const,
-          content: verdictRequired
-            ? `${agentInput.prompt}\n${VERDICT_CONTRACT}`
-            : agentInput.prompt,
-          timestamp: Date.now(),
-        },
-      ];
+      const worktreeNotice =
+        agentInput.isolation === 'worktree' && childWorkingDirectory
+          ? `\n\n${buildWorktreeSpawnNotice(
+              context.options.workingDirectory ?? process.cwd(),
+              childWorkingDirectory,
+              worktreeBranch ?? '(unknown branch)',
+            )}`
+          : '';
+      const userMessage = {
+        role: 'user' as const,
+        content: verdictRequired
+          ? `${agentInput.prompt}\n${VERDICT_CONTRACT}${worktreeNotice}`
+          : `${agentInput.prompt}${worktreeNotice}`,
+        timestamp: Date.now(),
+      };
+      const promptMessages = resumeTarget?.ok
+        ? [...resumeTarget.history, userMessage]
+        : [userMessage];
 
       // Best-effort file-change observation for this child run (plan 554):
       // a porcelain snapshot now, diffed against one taken when the child
       // finishes. Undefined outside a git repo — no observation then.
-      const fileChangeBefore = await captureGitFileChanges(context.options.workingDirectory);
+      // Diffed against the directory the child actually ran in, so worktree
+      // isolation reports the child's edits and not the parent's.
+      const fileChangeBefore = await captureGitFileChanges(childWorkingDirectory);
 
-      subAgentSessionId = crypto.randomUUID();
-      try {
-        await sessionDb.create({
-          id: subAgentSessionId,
-          title: `Sub: ${subAgentName}`,
-          working_directory: context.options.workingDirectory ?? '',
-          project_name: '',
-          mode: 'code',
-          provider_id: context.options.provider || 'env',
-          generation: 0,
-          parent_session_id: context.options.sessionId,
-          agent_type: 'sub-agent',
-          agent_name: subAgentName,
-        });
-        logger.info('[SubAgent] DB session created', {
-          subAgentSessionId,
-          parentSessionId: context.options.sessionId,
-          agentType: agentDefinition.agentType,
-          agentName: subAgentName,
-        }, 'SubAgent')
-      } catch (err) {
-        logger.warn('[SubAgent] failed to create DB session', {
-          subAgentSessionId,
-          parentSessionId: context.options.sessionId,
-          agentType: agentDefinition.agentType,
-          err,
-        }, 'SubAgent')
+      // Resume keeps the original session (and its transcript); a new spawn
+      // mints a fresh id and a fresh `chat_sessions` row.
+      const isResume = resumeTarget?.ok === true;
+      subAgentSessionId = isResume ? resumeTarget.sessionId : crypto.randomUUID();
+      if (!isResume) {
+        try {
+          await sessionDb.create({
+            id: subAgentSessionId,
+            title: `Sub: ${subAgentName}`,
+            working_directory: childWorkingDirectory ?? '',
+            project_name: '',
+            mode: 'code',
+            provider_id: context.options.provider || 'env',
+            generation: 0,
+            parent_session_id: context.options.sessionId,
+            agent_type: 'sub-agent',
+            agent_name: subAgentName,
+          });
+          logger.info('[SubAgent] DB session created', {
+            subAgentSessionId,
+            parentSessionId: context.options.sessionId,
+            agentType: agentDefinition.agentType,
+            agentName: subAgentName,
+          }, 'SubAgent')
+        } catch (err) {
+          logger.warn('[SubAgent] failed to create DB session', {
+            subAgentSessionId,
+            parentSessionId: context.options.sessionId,
+            agentType: agentDefinition.agentType,
+            err,
+          }, 'SubAgent')
+        }
       }
 
       // Shared helper: build a `chat:agent_progress` SSE payload for a
@@ -439,8 +672,25 @@ export class SubagentTool extends BaseTool {
         ? emitLiveProgress
         : context.reportAgentProgress
           ? (event: AgentProgressEvent) => {
+              // Plan 571: the 5s keepalive carries no model output, so it must
+              // not enter the model-facing progress callback (whose event
+              // union is the shared `@duya/ai` contract and has no liveness
+              // member) — and must not be typed as `thinking` to squeeze it
+              // in. It goes straight to the same `chat:agent_progress` wire
+              // event the background path uses, so the renderer can render a
+              // liveness indicator without the text reaching the transcript
+              // projection.
+              if (event.type === 'heartbeat') {
+                emitLiveProgress(event)
+                return
+              }
+              // `type` is destructured into its own binding on purpose: an
+              // object spread of a narrowed discriminated union widens `type`
+              // back to the full union, which would re-admit 'heartbeat'.
+              const { type: eventType, ...eventRest } = event
               context.reportAgentProgress!({
-                ...event,
+                ...eventRest,
+                type: eventType,
                 agentType: agentDefinition.agentType,
                 agentName: agentInput.name,
                 agentDescription: agentInput.description || agentInput.name,
@@ -450,6 +700,10 @@ export class SubagentTool extends BaseTool {
           : undefined;
 
       if (effectiveRunInBackground) {
+        // The lifecycle's controller is the child's cancel handle: it is what
+        // `kill_task` and the sub-agent panel's stop button (via the
+        // `subagent:kill` worker command) abort, and `runAgent` listens on it.
+        const taskAbortController = new AbortController();
         const record = backgroundAgentLifecycle.register({
           taskId,
           parentSessionId: parentSessionId ?? '',
@@ -457,7 +711,8 @@ export class SubagentTool extends BaseTool {
           agentType: agentDefinition.agentType,
           agentName: subAgentName,
           description: agentInput.description || agentInput.name || subAgentName,
-          abortController: new AbortController(),
+          abortController: taskAbortController,
+          autoWake,
         })
 
         logger.info('[SubAgent] background task registered', {
@@ -467,6 +722,7 @@ export class SubagentTool extends BaseTool {
           agentType: agentDefinition.agentType,
           agentName: subAgentName,
           outputFilePath: record.outputFilePath,
+          autoWake,
         }, 'SubAgent')
 
         const userAsks = await getRecentUserAsks(parentSessionId ?? '');
@@ -480,23 +736,34 @@ export class SubagentTool extends BaseTool {
           agentDefinition.agentType,
           agentInput.description || agentInput.name || subAgentName,
           continueParentWork,
+          {
+            autoWake,
+            outputFilePath: record.outputFilePath,
+            ...(isResume ? { resumed: true } : {}),
+            ...(worktreeBranch ? { worktreeBranch } : {}),
+          },
         );
-        const backgroundResult: BackgroundSpawnRecord['result'] = {
+        const backgroundResult = serializeSubagentResult({
+          status: 'running',
           agentType: requestedAgentType,
           resolvedAgentType: agentDefinition.agentType,
-          description: agentInput.description || agentInput.name,
+          ...(agentInput.description || agentInput.name
+            ? { description: agentInput.description || agentInput.name }
+            : {}),
           content: spawnNotice,
           sessionId: subAgentSessionId,
           taskId,
           agentId: taskId,
           outputFilePath: record.outputFilePath,
           background: true,
-          status: 'running',
-        };
+          workingDirectory: childWorkingDirectory,
+          ...(agentInput.isolation === 'worktree' ? { isolation: 'worktree' as const } : {}),
+          ...(warnings.length ? { warnings } : {}),
+        });
         if (parentSessionId) {
           const spawnRecord: BackgroundSpawnRecord = {
             createdAt: Date.now(),
-            result: backgroundResult,
+            result: JSON.parse(backgroundResult) as SubagentToolResultPayload,
           };
           const promptHash = hashString(agentInput.prompt.trim());
           recentBackgroundSpawns.set(`${parentSessionId}:tool:${context.toolUseId}`, spawnRecord);
@@ -523,12 +790,17 @@ export class SubagentTool extends BaseTool {
           toolUseContext: context,
           isAsync: true,
           model: agentInput.model,
-          maxTurns: agentInput.maxTurns,
+          maxTurns,
           availableTools: context.options.tools,
           description: agentInput.description || agentInput.name,
           agentId: taskId,
           onProgress,
           sessionId: subAgentSessionId,
+          ...(effort ? { effort } : {}),
+          ...(permissionMode ? { permissionMode } : {}),
+          ...(toolOverlay ? { toolOverlay } : {}),
+          ...(childWorkingDirectory ? { workingDirectory: childWorkingDirectory } : {}),
+          abortController: taskAbortController,
         }) as AsyncGenerator<unknown, void>;
 
         logger.info('[SubAgent] background run scheduled', {
@@ -574,7 +846,7 @@ export class SubagentTool extends BaseTool {
         return {
           id: crypto.randomUUID(),
           name: this.name,
-          result: JSON.stringify(backgroundResult),
+          result: backgroundResult,
         };
       }
 
@@ -584,12 +856,16 @@ export class SubagentTool extends BaseTool {
         toolUseContext: context,
         isAsync: false,
         model: agentInput.model,
-        maxTurns: agentInput.maxTurns,
+        maxTurns,
         availableTools: context.options.tools,
         description: agentInput.description || agentInput.name,
         agentId: taskId,
         onProgress,
         sessionId: subAgentSessionId,
+        ...(effort ? { effort } : {}),
+        ...(permissionMode ? { permissionMode } : {}),
+        ...(toolOverlay ? { toolOverlay } : {}),
+        ...(childWorkingDirectory ? { workingDirectory: childWorkingDirectory } : {}),
       });
 
       try {
@@ -655,24 +931,56 @@ export class SubagentTool extends BaseTool {
       // the best-effort file-change diff — so the parent model reads the
       // facts alongside the child's prose.
       const verdict = verdictRequired ? parseModelVerdict(resultText) : undefined;
+      // Snapshot the directory the child actually ran in, so a worktree-isolated
+      // run reports its own edits instead of the untouched parent checkout.
       const fileChange = diffFileChanges(
         fileChangeBefore,
-        await captureGitFileChanges(context.options.workingDirectory),
+        await captureGitFileChanges(childWorkingDirectory),
       );
       const parentReport = buildSubagentParentReport({ verdict, fileChange });
       const finalContent = parentReport ? `${resultText}\n\n${parentReport}` : resultText;
 
+      // Plan 571: the completion receipt is the same typed contract as every
+      // other exit path. `runAgent` stamps the counters it accumulated onto
+      // the message metadata, so the model gets real numbers instead of the
+      // renderer having to guess them.
+      const resultMetadata = (result.metadata ?? {}) as Record<string, unknown>;
+      const totalToolUseCount = typeof resultMetadata.agentToolCallCount === 'number'
+        ? resultMetadata.agentToolCallCount
+        : 0;
+      const totalDurationMs = typeof resultMetadata.agentDurationMs === 'number'
+        ? resultMetadata.agentDurationMs
+        : 0;
+      const runFailed = typeof resultMetadata.agentError === 'string' && resultMetadata.agentError.trim() !== '';
+      const usage = mapTokenUsage(result.tokenUsage);
+
       return {
         id: crypto.randomUUID(),
         name: this.name,
-        result: JSON.stringify({
+        result: serializeSubagentResult({
+          status: runFailed ? 'failed' : 'completed',
           agentType: requestedAgentType,
           resolvedAgentType: agentDefinition.agentType,
-          description: agentInput.description || agentInput.name,
+          ...(agentInput.description || agentInput.name
+            ? { description: agentInput.description || agentInput.name }
+            : {}),
           content: finalContent,
-          modelVerdict: verdict,
           sessionId: subAgentSessionId,
+          taskId,
+          agentId: taskId,
+          background: false,
+          totalToolUseCount,
+          totalDurationMs,
+          totalTokens: usage
+            ? usage.input_tokens + usage.output_tokens
+            : 0,
+          ...(usage ? { usage } : {}),
+          workingDirectory: childWorkingDirectory,
+          ...(agentInput.isolation === 'worktree' ? { isolation: 'worktree' as const } : {}),
+          ...(warnings.length ? { warnings } : {}),
+          ...(runFailed ? { error: String(resultMetadata.agentError) } : {}),
         }),
+        ...(runFailed ? { error: true } : {}),
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -740,8 +1048,37 @@ export class SubagentTool extends BaseTool {
       // Aligned to Grok SubagentCompletedOutput.to_model_text(): inline the
       // full output verbatim (no preview truncation) plus a metadata tag and
       // a resume footer, so the model can continue the subagent later.
-      const meta = `<subagent_meta>id=${sessionId}, type=${agentType}, turns=1</subagent_meta>`;
-      const footer = `<subagent_result>\nsubagent_id: ${sessionId}\nsubagent_type: ${agentType}\nTo continue this subagent's conversation, use resume_from="${sessionId}"\n</subagent_result>`;
+      //
+      // Plan 571: the meta tag now carries the real counters from the receipt
+      // (it used to hardcode `turns=1`), and the worktree path is surfaced
+      // so the model can tell the user where the child's edits live.
+      const warnings = Array.isArray(parsed.warnings) ? parsed.warnings : [];
+      const metaParts = [
+        `id=${sessionId}`,
+        `type=${agentType}`,
+        `tools=${parsed.totalToolUseCount ?? 0}`,
+        `duration_ms=${parsed.totalDurationMs ?? 0}`,
+      ];
+      if (parsed.totalTokens) metaParts.push(`tokens=${parsed.totalTokens}`);
+      if (parsed.workingDirectory) metaParts.push(`cwd=${parsed.workingDirectory}`);
+      const meta = `<subagent_meta>${metaParts.join(', ')}</subagent_meta>`;
+
+      const footerLines = [
+        '<subagent_result>',
+        `subagent_id: ${sessionId}`,
+        `subagent_type: ${agentType}`,
+        `To continue this subagent's conversation (its history is preserved), use resume_from="${sessionId}"`,
+      ];
+      if (parsed.isolation === 'worktree') {
+        footerLines.push(
+          `This run was isolated: its file changes are in the git worktree at ${parsed.workingDirectory || '(unknown path)'} and do not affect the session's working directory. Merge or cherry-pick that worktree's branch to adopt them.`,
+        );
+      }
+      for (const warning of warnings) {
+        footerLines.push(`Warning: ${warning}`);
+      }
+      footerLines.push('</subagent_result>');
+      const footer = footerLines.join('\n');
       const output = `${content}\n\n${meta}\n\n${footer}`;
 
       return {
@@ -776,10 +1113,6 @@ export class SubagentTool extends BaseTool {
 }
 
 export const subagentTool = new SubagentTool();
-
-export function getSubagentToolDefinition(): { name: string; description: string; input_schema: Record<string, unknown> } {
-  return subagentTool.toTool();
-}
 
 export function getAgentDefinitions(): AgentDefinition[] {
   return getBuiltInAgents();

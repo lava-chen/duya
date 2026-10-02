@@ -341,8 +341,8 @@ export { GlobTool, globTool, executeGlob } from './GlobTool/GlobTool.js';
 export { MemoryWriteTool } from './MemoryWriteTool/MemoryWriteTool.js';
 export { WriteStage1PolicyTool } from './WriteStage1PolicyTool/WriteStage1PolicyTool.js';
 export { SendArtifactTool } from './SendArtifactTool/SendArtifactTool.js';
-export { getSubagentToolDefinition, getAgentDefinitions, getPrompt } from './SubagentTool/index.js';
-export type { AgentDefinition, SubagentToolInput, SubagentToolResult } from './SubagentTool/index.js';
+export { getAgentDefinitions, getPrompt } from './SubagentTool/index.js';
+export type { AgentDefinition, SubagentToolInput } from './SubagentTool/index.js';
 
 // Phase 5 tools exports
 export { todoTool, TODO_TOOL_NAME, LEGACY_TODO_WIRE_NAMES } from './TodoTool/TodoTool.js';

@@ -10,11 +10,13 @@ import type {
   Tool,
   ToolUseContext,
 } from '../../types.js'
+import type { PermissionMode } from '../../permissions/types.js'
 import type { AgentDefinition, BuiltInAgentDefinition, CustomAgentDefinition } from './loadAgentsDir.js'
 import { isBuiltInAgent } from './loadAgentsDir.js'
 import { duyaAgent } from '../../index.js'
 import { setMaxListeners } from 'node:events'
 import { resolveAgentTools, SUBAGENT_FORBIDDEN_TOOLS } from './subagentToolUtils.js'
+import type { SubagentToolOverlay } from './subagentResult.js'
 import { ToolRegistry } from '../registry.js'
 import { getPromptProfileForSubagentType } from '../../prompts/modes/index.js'
 import { PromptsRegistry } from '../../prompts/registry.js'
@@ -52,6 +54,39 @@ export interface RunAgentParams {
    * When set, the sub-agent's conversation messages will be saved to the database.
    */
   sessionId?: string
+  /**
+   * Thinking-budget level for the child's model invocation. Same vocabulary
+   * as the main session's `StartStreamParams.effort`; undefined inherits the
+   * runtime default (medium for reasoning models).
+   */
+  effort?: string
+  /**
+   * Permission mode for the child agent's own tool gate. Values match the
+   * worker-level agent mode (`default | auto | bypassPermissions`).
+   * Undefined inherits nothing — the child falls back to DuyaAgent's own
+   * `default`, which is the pre-571 behavior.
+   */
+  permissionMode?: PermissionMode
+  /**
+   * Per-call overlay on top of the agent definition's tool list: `allow`
+   * intersects, `deny` removes. Applied BEFORE the orchestration-tool
+   * filter so `tools: { allow: ['task'] }` can never re-grant a sub-agent
+   * the ability to spawn siblings.
+   */
+  toolOverlay?: SubagentToolOverlay
+  /**
+   * Working directory for this run. Defaults to the parent's
+   * `options.workingDirectory`; set explicitly when the run is isolated
+   * into a git worktree.
+   */
+  workingDirectory?: string
+  /**
+   * Abort signal for this run. Defaults to the parent's
+   * `toolUseContext.abortController`; the background lifecycle supplies its
+   * own so `kill_task` / the sub-agent panel stop button can terminate a
+   * child the parent is no longer waiting on.
+   */
+  abortController?: AbortController
 }
 
 export interface CacheSafeParams {
@@ -83,7 +118,14 @@ const SUBAGENT_TOOL_STALL_TIMEOUT_MS = 30 * 60 * 1000
 
 /** Progress event emitted during sub-agent execution */
 export interface AgentProgressEvent {
-  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'started' | 'done' | 'error'
+  /**
+   * `heartbeat` is the 5s keepalive emitted while the child is between
+   * events. It is deliberately NOT `thinking`: the transcript projection
+   * path (`deriveSubagentStatus`, the side pane) reads `thinking` as real
+   * model prose, so a keepalive dressed up as thinking text showed up in the
+   * rendered child conversation as "Agent still running... (12s)".
+   */
+  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'started' | 'heartbeat' | 'done' | 'error'
   data?: string
   toolName?: string
   toolInput?: Record<string, unknown>
@@ -125,6 +167,41 @@ function getAgentSystemPrompt(
   }
 }
 
+interface ToolOverlayResult {
+  tools: Tool[]
+  /** Tool names the overlay named but that were not in the resolved list. */
+  dropped: string[]
+}
+
+/**
+ * Apply the per-call `tools: { allow?, deny? }` overlay on top of the tool
+ * list the agent definition already resolved to.
+ *
+ * `deny` is applied last and wins, so a model that lists the same tool in
+ * both `allow` and `deny` still loses it — the conservative reading of an
+ * ambiguous instruction. Unknown names in `allow` are reported as `dropped`
+ * so the caller can warn the model instead of silently ignoring it.
+ */
+function applyToolOverlay(tools: Tool[], overlay: SubagentToolOverlay | undefined): ToolOverlayResult {
+  if (!overlay) return { tools, dropped: [] }
+  const available = new Set(tools.map((t) => t.name))
+  const dropped: string[] = []
+  let result = tools
+
+  if (overlay.allow?.length) {
+    const allowSet = new Set(overlay.allow)
+    for (const name of overlay.allow) {
+      if (!available.has(name)) dropped.push(name)
+    }
+    result = result.filter((t) => allowSet.has(t.name))
+  }
+  if (overlay.deny?.length) {
+    const denySet = new Set(overlay.deny)
+    result = result.filter((t) => !denySet.has(t.name))
+  }
+  return { tools: result, dropped }
+}
+
 /**
  * Runs an agent with the given parameters.
  * Returns an async generator of messages.
@@ -141,10 +218,19 @@ export async function* runAgent({
   agentId,
   onProgress,
   sessionId,
+  effort,
+  permissionMode,
+  toolOverlay,
+  workingDirectory: workingDirectoryOverride,
+  abortController,
 }: RunAgentParams): RunAgentResult {
   const startTime = Date.now()
   const parentSessionId = toolUseContext.options.sessionId
-  const workingDirectory = toolUseContext.options.workingDirectory ?? process.cwd()
+  const workingDirectory = workingDirectoryOverride ?? toolUseContext.options.workingDirectory ?? process.cwd()
+  // The run-level abort signal. The background lifecycle registers its own
+  // controller per task so a kill can stop the child without waiting for the
+  // parent turn to end; foreground runs keep the parent's controller.
+  const runAbortController = abortController ?? toolUseContext.abortController
 
   // Resolve the role-specific prompt. Shared project governance is composed
   // after tool resolution so tool-aware harness sections stay accurate.
@@ -162,6 +248,10 @@ export async function* runAgent({
 
   // Resolve tools for this agent
   const { resolvedTools } = resolveAgentTools(agentDefinition, availableTools)
+
+  // Per-call `tools: { allow?, deny? }` overlay (plan 571). `deny` wins over
+  // `allow` so a model that lists a tool in both still loses it.
+  const toolOverlayResult = applyToolOverlay(resolvedTools, toolOverlay)
 
   // Determine the model to use
   const agentModel = model || agentDefinition.model || toolUseContext.options.mainLoopModel
@@ -244,7 +334,7 @@ export async function* runAgent({
   const { createBuiltinRegistry } = await import('../builtin.js')
   const registry = createBuiltinRegistry()
   const allTools = registry.getAllTools()
-  const toolNames = new Set(resolvedTools.map(t => t.name))
+  const toolNames = new Set(toolOverlayResult.tools.map(t => t.name))
   let toolsToUse = toolNames.size > 0
     ? allTools.filter(t => toolNames.has(t.name))
     : allTools
@@ -314,6 +404,9 @@ export async function* runAgent({
     // parent has no projectHome.
     projectHome: toolUseContext.options.projectHome,
     omitAgentsMd,
+    // Per-call `permission_mode` for the child's own tool gate. Undefined
+    // keeps DuyaAgent's `default`, the pre-571 behavior.
+    ...(permissionMode ? { permissionMode } : {}),
   })
 
   logger.info('[SubAgent] streamChat starting', {
@@ -323,6 +416,12 @@ export async function* runAgent({
     toolNames: toolsToUse.slice(0, 20).map(tool => tool.name),
     omittedToolCount: Math.max(0, toolsToUse.length - 20),
     subAgentSessionId: sessionId,
+    ...(effort ? { effort } : {}),
+    ...(permissionMode ? { permissionMode } : {}),
+    ...(toolOverlayResult.dropped.length
+      ? { toolOverlayDropped: toolOverlayResult.dropped }
+      : {}),
+    ...(workingDirectoryOverride ? { isolatedWorkingDirectory: workingDirectory } : {}),
   }, 'SubAgent')
 
   const textParts: string[] = []
@@ -348,10 +447,12 @@ export async function* runAgent({
   // fires automatically.
 
   try {
-    // Create an abort controller for the sub-agent, linked to parent's abort controller.
-    // The parent's signal aborts `subAgentAbort`; we forward that to the sub-agent's
-    // own interrupt() so the in-flight LLM HTTP request is cancelled (not just the
-    // outer for-await loop in runAgent). Without this, a long-running LLM call
+    // Create an abort controller for the sub-agent, linked to the run signal.
+    // The run signal (the parent's controller for foreground runs, the
+    // background lifecycle's per-task controller otherwise) aborts
+    // `subAgentAbort`; we forward that to the sub-agent's own interrupt() so
+    // the in-flight LLM HTTP request is cancelled (not just the outer
+    // for-await loop in runAgent). Without this, a long-running LLM call
     // would keep streaming into the void after the user cancels the parent turn.
     const subAgentAbort = new AbortController()
     const onParentAbort = () => {
@@ -374,20 +475,23 @@ export async function* runAgent({
       // never removes it (e.g. an exception before the finally block
       // below). 20 is well above any realistic concurrent-sub-agent
       // count and still preserves Node's leak warning as a safety net.
-      setMaxListeners(20, toolUseContext.abortController.signal)
+      setMaxListeners(20, runAbortController.signal)
     } catch {
       // Older runtimes may not support EventTarget max listener tuning.
     }
-    toolUseContext.abortController.signal.addEventListener('abort', onParentAbort, { once: true })
+    runAbortController.signal.addEventListener('abort', onParentAbort, { once: true })
 
     // Set up a heartbeat to report progress while the sub-agent is running
-    // This prevents the UI from appearing "frozen" during long LLM calls
+    // This prevents the UI from appearing "frozen" during long LLM calls.
+    // Plan 571: emitted as `heartbeat`, not `thinking` — the transcript
+    // projection reads `thinking` as real model prose, so keepalive text
+    // used to land in the rendered child conversation.
     let lastProgressTime = Date.now()
     const heartbeatInterval = setInterval(() => {
       const elapsed = Date.now() - lastProgressTime
       if (elapsed > 5000) {
         // If no progress for 5 seconds, report a heartbeat
-        onProgress?.({ type: 'thinking', data: `Agent still running... (${Math.round(elapsed / 1000)}s)`, agentId })
+        onProgress?.({ type: 'heartbeat', data: `Agent still running... (${Math.round(elapsed / 1000)}s)`, agentId })
       }
     }, 5000)
 
@@ -397,6 +501,8 @@ export async function* runAgent({
         tools: toolsToUse,
         maxTurns: agentMaxTurns,
         toolRegistry: registry,
+        // Per-call thinking budget. Undefined inherits the runtime default.
+        ...(effort ? { effort } : {}),
       })[Symbol.asyncIterator]()
 
       let sawFirstEvent = false
@@ -470,9 +576,10 @@ export async function* runAgent({
         lastEventAt = Date.now()
         lastProgressTime = Date.now()
 
-        // Check if parent has requested abort
-        if (toolUseContext.abortController.signal.aborted) {
-          logger.warn('[SubAgent] aborting due to parent signal', {
+        // Check if the run has been asked to abort (parent turn cancelled, or
+        // the background task was killed).
+        if (runAbortController.signal.aborted) {
+          logger.warn('[SubAgent] aborting due to run signal', {
             agentId,
             agentType: agentDefinition.agentType,
             subAgentSessionId: sessionId,
@@ -535,7 +642,7 @@ export async function* runAgent({
       }
     } finally {
       clearInterval(heartbeatInterval)
-      toolUseContext.abortController.signal.removeEventListener('abort', onParentAbort)
+      runAbortController.signal.removeEventListener('abort', onParentAbort)
     }
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : 'Unknown error'

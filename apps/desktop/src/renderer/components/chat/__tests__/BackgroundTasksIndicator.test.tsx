@@ -208,13 +208,28 @@ describe('BackgroundTasksIndicator', () => {
     expect(screen.queryByTestId('background-task-row-killed')).toBeNull();
   });
 
-  it('jumps into the sub-agent session when its row is clicked', () => {
+  it('opens the sub-agent session in the side panel instead of hijacking the main column', () => {
     mocks.agents = [{ id: 'a1', name: 'a1', status: 'running', sessionId: 'child-1' }];
+    const onOpen = vi.fn();
+    window.addEventListener('duya:open-session-panel', onOpen);
     render(<BackgroundTasksIndicator sessionId="s1" />);
     fireEvent.click(chip() as HTMLElement);
     fireEvent.click(screen.getByTitle('a1'));
-    expect(mocks.setActiveThread).toHaveBeenCalledWith('child-1');
+
+    // Plan 571: all three sub-agent entry points now open the side panel.
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    const detail = (onOpen.mock.calls[0] as Array<CustomEvent>)[0].detail;
+    expect(detail).toMatchObject({
+      sessionId: 'child-1',
+      // `a1` is the run's task id, and `s1` the parent thread the kill is
+      // routed through.
+      taskId: 'a1',
+      parentSessionId: 's1',
+    });
+    // The main chat column must stay on the parent transcript.
+    expect(mocks.setActiveThread).not.toHaveBeenCalled();
     expect(taskList()).toBeNull();
+    window.removeEventListener('duya:open-session-panel', onOpen);
   });
 
   it('closes on Escape', () => {
@@ -238,6 +253,10 @@ describe('BackgroundTasksIndicator', () => {
       'chat.backgroundTasks.sectionCommands',
       'chat.backgroundTasks.sectionAgents',
       'chat.backgroundTasks.openOutput',
+      // Plan 571: the shared sub-agent status vocabulary gained `killed`.
+      'subAgent.status.killed',
+      'subAgent.status.failed',
+      'subAgent.status.pending',
       'bashTaskOutput.status.running',
       'bashTaskOutput.status.completed',
       'bashTaskOutput.status.killed',

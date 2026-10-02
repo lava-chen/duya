@@ -3,14 +3,25 @@
 import { useMemo } from 'react';
 import { useStreamingAgentProgress, type AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
 import { colorForAgent } from '@/lib/agent-color';
+import { deriveSubagentStatus, type SubagentRunStatus } from '@/lib/subagent-status';
 
 export interface SubAgentRowInfo {
   id: string;
   name: string;
   color: string;
-  status: 'waiting' | 'running' | 'completed' | 'error';
+  /**
+   * Plan 571: the single shared vocabulary (see `src/lib/subagent-status.ts`).
+   * Previously this was a fourth spelling of the same lifecycle that could not
+   * express "killed", so a user-cancelled sub-agent rendered as a failure.
+   */
+  status: SubagentRunStatus;
   eventCount?: number;
   sessionId?: string;
+  /**
+   * Path to the jsonl transcript on disk. Populated from the progress events
+   * rather than hardcoded `undefined` — the backend has always emitted it and
+   * the row now surfaces it as a "read full transcript" affordance.
+   */
   outputFilePath?: string;
 }
 
@@ -26,12 +37,16 @@ function groupEventsByAgent(events: AgentProgressEventWithMeta[]): Map<string, A
   return groups;
 }
 
-export function getSubAgentStatus(events: AgentProgressEventWithMeta[]): SubAgentRowInfo['status'] {
-  if (events.length === 0) return 'waiting';
-  const lastEvent = events[events.length - 1];
-  if (lastEvent.type === 'done') return 'completed';
-  if (lastEvent.type === 'error') return 'error';
-  return 'running';
+/**
+ * Derive one sub-agent's status from its ordered progress events.
+ *
+ * Kept as a named export because it encodes a subtle rule worth testing
+ * directly: a background spawn receipt is a *successful* tool result that says
+ * nothing about the child, so the child stays `running` until its own terminal
+ * event arrives.
+ */
+export function getSubAgentStatus(events: AgentProgressEventWithMeta[]): SubagentRunStatus {
+  return deriveSubagentStatus(events);
 }
 
 function getAgentDisplayNameFromEvents(events: AgentProgressEventWithMeta[]): string {
@@ -52,6 +67,21 @@ function getAgentDisplayNameFromEvents(events: AgentProgressEventWithMeta[]): st
 }
 
 /**
+ * Read the transcript path off whichever event carries it.
+ *
+ * `BackgroundAgentLifecycle` allocates the file before the first progress
+ * event, so in practice the `started` event already has it. Scanning in
+ * reverse means the most recent value wins if a run ever reallocates.
+ */
+function getOutputFilePathFromEvents(events: AgentProgressEventWithMeta[]): string | undefined {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const value = (events[i] as { outputFilePath?: unknown }).outputFilePath;
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return undefined;
+}
+
+/**
  * Hook that reads sub-agent progress from the SSE agent_progress channel.
  * In the canonical architecture (after migration), subagent_info content blocks
  * from the message history are the primary data source. During the migration
@@ -67,7 +97,6 @@ export function useSubAgentProgress(sessionId: string): SubAgentRowInfo[] {
     for (const [agentId, agentEvents] of groups) {
       const customName = getAgentDisplayNameFromEvents(agentEvents);
       const status = getSubAgentStatus(agentEvents);
-      const isTerminal = status === 'completed' || status === 'error';
       // AgentProgressEvent carries the sub-agent's session under `sessionId`
       // (it is the canonical sub-agent session id, distinct from the parent
       // session that emitted the progress event).
@@ -82,9 +111,7 @@ export function useSubAgentProgress(sessionId: string): SubAgentRowInfo[] {
         status,
         eventCount: agentEvents.length,
         sessionId: dbSessionId,
-        // outputFilePath will be available from subagent_info blocks in the
-        // canonical architecture; during migration this is empty.
-        outputFilePath: undefined,
+        outputFilePath: getOutputFilePathFromEvents(agentEvents),
       });
     }
 
