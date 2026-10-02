@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
+import { asAppConnectorId } from '@duya/plugin-core/connectors/app-connector-id';
 const GOOGLE = asAppConnectorId('google');
 const SLACK = asAppConnectorId('slack');
 import Database from 'better-sqlite3';

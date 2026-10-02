@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
+import { asAppConnectorId } from '@duya/plugin-core/connectors/app-connector-id';
 const NOTION = asAppConnectorId('notion');
 import Database from 'better-sqlite3';
 import type { Database as DatabaseType } from 'better-sqlite3';

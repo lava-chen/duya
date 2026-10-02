@@ -28,7 +28,7 @@ import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAu
 import { readUserMcpToml, writeUserMcpToml } from '../../services/mcp-config';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import type { UserMcpTomlServer } from '@duya/plugin-core/src/mcp/user-config.js';
+import type { UserMcpTomlServer } from '@duya/plugin-core/mcp/user-config';
 
 // ---------------------------------------------------------------------------
 // Common helpers

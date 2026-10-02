@@ -13,8 +13,8 @@ import type {
   InventoryLedgerSnapshot,
   DiscoveryStatus,
   InventoryLayers,
-} from '@duya/plugin-core/src/mcp/core/ledger-types.js';
-import { emptyLedgerSnapshot } from '@duya/plugin-core/src/mcp/core/ledger-types.js';
+} from '@duya/plugin-core/mcp/core/ledger-types';
+import { emptyLedgerSnapshot } from '@duya/plugin-core/mcp/core/ledger-types';
 
 export interface DiscoveryCommitInput {
   pagesFetched: number;

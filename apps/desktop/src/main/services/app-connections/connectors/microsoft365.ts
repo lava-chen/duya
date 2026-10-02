@@ -14,7 +14,7 @@ import type {
   ConnectorToolDescriptor,
 } from '../connector-types.js';
 import type { ProviderId } from '../types.js';
-import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
+import { asAppConnectorId } from '@duya/plugin-core/connectors/app-connector-id';
 
 const PROVIDER = asAppConnectorId('microsoft365');
 

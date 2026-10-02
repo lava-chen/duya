@@ -56,7 +56,7 @@ import { getAgentsMdManager } from '../agentsmd/index.js';
 import { extractTriggerPaths } from '../agentsmd/nested-loader.js';
 import { isNestedAgentsMdEnabled } from '../config/feature-flags.js';
 import { getCachedAppConnectionDescriptors } from '../tool/AppConnectionTool/index.js';
-import { projectForProvider } from '@duya/plugin-core/src/mcp/core/projection.js';
+import { projectForProvider } from '@duya/plugin-core/mcp/core/projection';
 import { buildAppsSystemSection, collectConnectorActivationInjection, collectPluginInjections, collectSkillInjections, extractExplicitSkillMentions, mergeSkillMentionSources } from '../mentions/index.js';
 import { matchSkillsForPrompt, buildSkillSuggestionInjection } from '../skills/index.js';
 import { compressProjectedToolMessages } from '../compact/projectionCompress.js';

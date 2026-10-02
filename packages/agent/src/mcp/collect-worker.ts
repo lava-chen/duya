@@ -30,7 +30,7 @@ import {
   type MCPCollectorInput,
   type MCPCollectorPluginEntry,
   type MCPCollectorSettingsItem,
-} from '@duya/plugin-core/src/mcp/collect.js';
+} from '@duya/plugin-core/mcp/collect';
 import {
   getMCPErrorMessage,
   getMCPErrorSeverity,

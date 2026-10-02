@@ -28,10 +28,10 @@ import {
   ToolListChangedNotificationSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { listAllTools } from '@duya/plugin-core/src/mcp/core/list-tools.js';
-import { createDeadlineClock } from '@duya/plugin-core/src/mcp/core/deadline.js';
-import { allocateConnectionToolAlias, connectionNamespace } from '@duya/plugin-core/src/mcp/core/alias.js';
-import { classifyMcpError, breakerDisposition } from '@duya/plugin-core/src/mcp/core/error-taxonomy.js';
+import { listAllTools } from '@duya/plugin-core/mcp/core/list-tools';
+import { createDeadlineClock } from '@duya/plugin-core/mcp/core/deadline';
+import { allocateConnectionToolAlias, connectionNamespace } from '@duya/plugin-core/mcp/core/alias';
+import { classifyMcpError, breakerDisposition } from '@duya/plugin-core/mcp/core/error-taxonomy';
 import { ToolRegistry } from '../../src/tool/registry.js';
 import { ToolCatalogTool } from '../../src/tool/ToolCatalogTool/ToolCatalogTool.js';
 

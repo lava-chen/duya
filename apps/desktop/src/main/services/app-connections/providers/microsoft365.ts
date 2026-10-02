@@ -15,7 +15,7 @@ interface MicrosoftMeResponse {
   mail?: string;
 }
 
-import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
+import { asAppConnectorId } from '@duya/plugin-core/connectors/app-connector-id';
 
 const config = getProviderConfig(asAppConnectorId('microsoft365'));
 if (!config) {

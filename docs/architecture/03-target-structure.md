@@ -45,10 +45,10 @@ harness/agent/{tasks,runners,evaluators,fixtures,reports}
 | `agent-runtime/` | ✅ **采纳** | 1,2,5 | `process/` 8,235 + `session/` 5,332 + `cli/` 4,822 + `lifecycle/` 741；已由 `AgentProcessPool` 独立生命周期 |
 | `agent-tools/` | ❌ **撤回** | — | plan 583 的 `@duya/browser`（19,139 LOC，对 agent/electron 零 import，13 个测试文件）证明**单能力独立成包**优于聚合袋。聚合袋内聚弱、且与"能力插件化"冲突 |
 | `workspace/` | ❌ **不建包** | — | 撤回初版的"条件采纳"。职责只有 roots + cwd + accessPolicy 解析，**唯一 consumer 是 Control Plane**（准则 3 不满足，准则 5 仅可能性）。落点：`apps/desktop/src/main/control-plane/workspace/` 内部 module；跨边界形状放 `agent-protocol` 的 `WorkspaceSnapshot`。抽包的三条触发条件见 `MONOREPO_RFC.md` §3.2 |
-| `mcp/` | ❌ **不建** | — | 实测 `packages/agent/src/mcp` 仅 3,027 LOC 且已是 `@duya/plugin-core/src/mcp/` 的**消费方**（28 条 deep import）。已有 owner，再建包是双份真相 |
+| `mcp/` | ❌ **不建** | — | 实测 `packages/agent/src/mcp` 仅 3,027 LOC 且已是 `@duya/plugin-core/mcp/` 的**消费方**（deep import）。已有 owner，再建包是双份真相 |
 | `memory/` | ⚠️ **暂不建，先解耦** | — | `memory-state`(4,045) + `memory-rollout`(3,321) = 7,366 LOC，但 schema owner 在 `electron/memory-state/migrations/`（V1）。**先反转所有权，再谈拆包** |
 | `storage/` | ⚠️ **暂不建** | — | 44 处 SQLite 触达分散在 7 个 owner。ZCode 的 `storage` 模块是 16 个塌缩模块里**唯一**被挖出来的 —— 说明它难，不说明该先做 |
-| `plugin-core/` | ✅ **保留，但必须先加 build** | 3,6 | 49 条 deep import；无 build step 致 `exports` 完全不参与解析。**但这是加重因素而非唯一原因**（真正的量级是 161 条相对路径穿透） |
+| `plugin-core/` | ✅ **保留，已加 build** | 3,6 | Plan 584 / 06-M1 已落地：加 `tsc` build + 14 个 subpath 的 `exports`，deep import 93 → 0，模块转 `managed: true`。**但这只是加重因素而非全部**——真正的量级是 161 条相对路径穿透（`package-boundary-escape`），留待后续阶段 |
 | `packages/ui/` | ❌ **现在不建** | — | `src/` 已有 793 文件的组件体系。UI 当前唯一的跨边界问题是 conductor 的 23 条 deep import，**修边界 ≠ 搬目录** |
 | `agent-tools/` | ❌ **撤回** | 看到 plan 583 的 `@duya/browser` 后判定：单能力独立成包优于聚合袋。见 §3.1 |
 | `harness/agent/` | ✅ **采纳，改名 `evals/`** | 实测：全仓 0 个 harness script，`e2e` 仅 14 个测试文件。改名理由见 `MONOREPO_RFC.md` §4.1（仓库内 "harness" 已有 3 种含义） |

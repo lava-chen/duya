@@ -6,7 +6,7 @@ export type { PluginResult } from './error-wrapper';
 // Re-exporting it from this barrel would force Vite to load that module in
 // the browser, triggering "Module path has been externalized for browser
 // compatibility" errors. Node-side consumers import it directly:
-//   import { PathSafetyValidator } from '@duya/plugin-core/src/security/path-validator'
+//   import { PathSafetyValidator } from '@duya/plugin-core/security/path-validator'
 export {
   PluginTrustLevel,
   TrustEngine,
@@ -70,7 +70,7 @@ export {
   applySourceShadowing,
   // resolveMCPDiscovery is NOT re-exported here — it lives in './mcp/resolve'
   // which imports Node builtins ('fs', 'path'). Node-side consumers import it
-  // directly: import { resolveMCPDiscovery } from '@duya/plugin-core/src/mcp/resolve'
+  // directly: import { resolveMCPDiscovery } from '@duya/plugin-core/mcp/resolve'
   getMCPErrorMessage,
   getMCPErrorSeverity,
   getMCPSuggestedAction,
@@ -79,13 +79,13 @@ export {
   // `global` builtin and throws "global is not defined" in the browser.
   // Re-exporting them pulls @iarna/toml into the renderer bundle via Vite's
   // dep optimizer. Node-side consumers import them directly:
-  //   import { parseUserMcpToml } from '@duya/plugin-core/src/mcp/user-config'
+  //   import { parseUserMcpToml } from '@duya/plugin-core/mcp/user-config'
 } from './mcp';
 // MCP collector input types — type-only re-export. The FUNCTIONS
 // (buildMCPCandidates, etc.) live in './mcp/collect' which imports Node
 // builtins ('fs', 'path') and are therefore NOT re-exported here (same
 // policy as './mcp/resolve'). Node-side consumers import them directly:
-//   import { buildMCPCandidates } from '@duya/plugin-core/src/mcp/collect'
+//   import { buildMCPCandidates } from '@duya/plugin-core/mcp/collect'
 export type {
   MCPCollectorSettingsItem,
   MCPCollectorPluginEntry,
@@ -155,7 +155,7 @@ export type {
 
 // Plan 455: `.app.json` connector declarations (pure module — safe for any
 // environment; deep imports also work via
-// `@duya/plugin-core/src/connectors/app-schema.js`).
+// `@duya/plugin-core/connectors/app-schema.js`).
 export {
   AppDeclarationFileSchema,
   OAuthClientDeclarationSchema,

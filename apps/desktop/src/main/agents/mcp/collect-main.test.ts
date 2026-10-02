@@ -3,7 +3,7 @@
 //
 // The IPC / accessors (PluginManager, ConfigManager, better-sqlite3,
 // readPluginManifest, mcp-config) are mocked so the tests run in isolation.
-// The pure transforms now live in @duya/plugin-core/src/mcp/collect.ts and
+// The pure transforms now live in @duya/plugin-core/mcp/collect.ts and
 // are exercised here against the shared engine (`buildMCPCandidates`
 // and friends). The main-process-specific async wrapper
 // `collectMainMCPCandidates` is tested directly.
@@ -73,7 +73,7 @@ import {
   type MCPCollectorPluginEntry,
   type MCPCollectorSettingsItem,
   type MCPCollectorInput,
-} from '@duya/plugin-core/src/mcp/collect.js';
+} from '@duya/plugin-core/mcp/collect';
 import {
   collectMainMCPCandidates,
 } from './collect-main.js';

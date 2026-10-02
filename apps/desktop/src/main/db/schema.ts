@@ -2,7 +2,7 @@ import { getLogger, LogComponent } from '../logging/logger';
 import { ensureToolApprovalTables } from './toolApprovalState';
 import { ensureWorkbenchTables } from '../conductor/workbench-store';
 import { createSendMessageStateTables } from './sendMessageState';
-import { deriveConnectionSlug } from '@duya/plugin-core/src/mcp/core/alias.js';
+import { deriveConnectionSlug } from '@duya/plugin-core/mcp/core/alias';
 
 // Use type-only import to avoid bundling better-sqlite3 in the schema module
 type BetterSqlite3Db = import('better-sqlite3').Database;
