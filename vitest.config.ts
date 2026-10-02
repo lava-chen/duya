@@ -22,6 +22,8 @@ export default defineConfig({
       'packages/*/tests/**/*.spec.ts',
       'packages/ai/test/**/*.test.ts',
       'packages/agent-protocol/test/**/*.test.ts',
+      'packages/agent-core/test/**/*.test.ts',
+      'packages/agent-runtime/test/**/*.test.ts',
       'packages/gateway/src/**/*.test.ts',
       'packages/agent/src/**/*.test.ts',
       'packages/cli/src/**/*.test.ts',
@@ -64,9 +66,18 @@ export default defineConfig({
       { find: '@duya/plugin-core', replacement: PLUGIN_CORE_ROOT },
       // Subpaths first: the bare name would otherwise swallow
       // `@duya/agent-protocol/testing` and `/legacy`.
-      { find: /^@duya\/agent-protocol\/testing$/, replacement: AGENT_PROTOCOL_SRC + '/testing/fixtures.ts' },
+      // `/testing` resolves to the subpath INDEX, matching the package's own
+      // `exports` map. It used to point at `testing/fixtures.ts`, which is one
+      // file inside the subpath and therefore silently hid `RunLedger` and
+      // `mapWorkerEvent` from every consumer — a test importing
+      // `@duya/agent-protocol/testing` got fixtures and nothing else.
+      { find: /^@duya\/agent-protocol\/testing$/, replacement: AGENT_PROTOCOL_SRC + '/testing/index.ts' },
       { find: /^@duya\/agent-protocol\/legacy$/, replacement: AGENT_PROTOCOL_SRC + '/legacy/sse-event.ts' },
       { find: /^@duya\/agent-protocol$/, replacement: AGENT_PROTOCOL_SRC + '/index.ts' },
+      // agent-core / agent-runtime resolve to THIS checkout's source too, for
+      // the same worktree-safety reason as the protocol package above.
+      { find: /^@duya\/agent-core$/, replacement: fileURLToPath(new URL('./packages/agent-core/src', import.meta.url)) + '/index.ts' },
+      { find: /^@duya\/agent-runtime$/, replacement: fileURLToPath(new URL('./packages/agent-runtime/src', import.meta.url)) + '/index.ts' },
       // Mirror vite.config.ts aliases so vitest can resolve
       // `@duya/conductor/renderer/*` to the package's source tree. Without
       // these the test environment errors out when any imported file

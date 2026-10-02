@@ -198,8 +198,16 @@ for (const file of files) {
       toFile = r.file;
       sub = r.sub;
       const exportsMap = workspacePkgs.get(pkgName).exports;
+      // `resolveWorkspace` returns `sub` as the raw remainder of the specifier
+      // — "" or "/testing" — but an `exports` map keys subpaths as "./testing".
+      // Comparing the two without the dot marked every subpath export in the
+      // repo as a deep import: `@duya/agent/message` and
+      // `@duya/agent-protocol/testing` are both declared in their package's
+      // `exports`, and both were being reported as reaching past the public
+      // entrypoints. Only the bare root was ever checked correctly, because
+      // that is the one case where the literal "." happens to line up.
       const isPublic = exportsMap
-        ? exportsMap.has(sub === "" ? "." : sub)
+        ? exportsMap.has(sub === "" || sub === "/" ? "." : `.${sub}`)
         : false;
       kind = toFile ? (isPublic ? "public" : "deep") : "unresolved";
       toOwner = toFile ? ownerOf(rel(toFile)) : `UNRESOLVED:${spec}`;

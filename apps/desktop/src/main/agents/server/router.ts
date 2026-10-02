@@ -17,6 +17,7 @@ import { Logger } from './logger';
 import { toLLMProvider, type ApiProvider } from '../../config/provider-types';
 import { calculateMaxConcurrentWorkers, getWorkerMemoryThreshold } from './worker-limits';
 import { acquireChatLock, releaseChatLock, type ChatLockOrigin } from './chat-runtime-lock';
+import type { RunOrchestrator } from './run-orchestrator';
 import { parseAgentIdFromBotSession } from '../../wake/bot-session-id';
 import { buildCronProviderConfig, resolveCronModel } from '../../automation/provider-config';
 import { readConfigAgents } from '../../../../../../packages/agent/src/agent-profile/config-agents.js';
@@ -415,6 +416,17 @@ export interface RouterDeps {
    * before; the routes answer 503 when it is absent.
    */
   workflowRuntimeManager?: WorkflowRuntimeManager;
+  /**
+   * Plan 586 Reference Run. Optional so existing tests and any embedder that
+   * never runs the chat path keep constructing deps as before.
+   *
+   * This is the ENTIRE surface the run layer adds to the router: the router
+   * neither knows the protocol nor stores a run. `openRun` is awaited before a
+   * turn is dispatched, `observe` tees every normalised frame, and
+   * `settleSession` closes out a session that produced no terminal frame. When
+   * it is absent the chat path is byte-for-byte the pre-586 path.
+   */
+  runOrchestrator?: RunOrchestrator;
 }
 
 export function sendJson(res: http.ServerResponse, statusCode: number, data: unknown): void {
@@ -446,8 +458,10 @@ export function parsePath(url: string): { pathname: string; parts: string[] } {
  * the payload (empty `data.content`), which manifests as a run view that spins
  * in "loading" with no message stream. Returns `null` for internal
  * control-plane events (`pong`, `memory:wakeup`) that must never reach SSE.
+ *
+ * Exported for tests only. The router calls it; nothing else does.
  */
-function normalizeWorkerEvent(event: Record<string, unknown>): Record<string, unknown> | null {
+export function normalizeWorkerEvent(event: Record<string, unknown>): Record<string, unknown> | null {
   const msgType = event.type as string;
   // Internal heartbeat — never forwarded to SSE clients.
   if (msgType === 'pong') return null;
@@ -657,6 +671,54 @@ function normalizeWorkerEvent(event: Record<string, unknown>): Record<string, un
 }
 
 /**
+ * Normalise a worker frame, and tee it into the run layer when there is a run.
+ *
+ * ## Why this is a tee and not a replacement
+ *
+ * The frame this RETURNS is the one the router writes to SSE, and it is the
+ * exact object the renderer parsed before Plan 586 existed. The run layer only
+ * takes a copy. That asymmetry is the whole "the UI does not change" claim: no
+ * renderer-visible byte of the stream is produced by code added for the run.
+ *
+ * The `ObservedFrame` this drops on the floor is deliberate. It carries the
+ * PROJECTED frame, which is lossy by construction (many protocol events map to
+ * one legacy event and fields the legacy union never declared are dropped).
+ * Routing the live stream through it would quietly truncate `goal_updated`,
+ * `mode_changed` and `tool_result`. The projector exists for the REPLAY path.
+ *
+ * ## Why only the POST chat path calls this
+ *
+ * `handleGetChat` and `handlePostCompact` each attach their OWN `data`
+ * listener and their own multi-line buffer to the same worker stdout. They are
+ * reconnect views, not the turn. If a renderer holds a POST stream and a GET
+ * stream at once, both listeners see every frame, and observing from both
+ * would write each worker event into `run_events` twice under two different
+ * run-scoped `seq` values. One run, one log: the run is opened by the POST
+ * path, so the POST path is the only one that records.
+ *
+ * Exported for tests only. The router calls it; nothing else does.
+ */
+export function normalizeAndObserve(
+  sessionId: string,
+  event: Record<string, unknown>,
+  deps: RouterDeps,
+): Record<string, unknown> | null {
+  const normalized = normalizeWorkerEvent(event);
+  if (normalized === null) return null;
+  // Never let the run layer break the SSE path. `observe` already swallows
+  // per-frame failures; this is the backstop for anything the backstop misses.
+  try {
+    deps.runOrchestrator?.observe(sessionId, normalized);
+  } catch (err) {
+    logger.warn('Run observation failed; frame forwarded anyway', {
+      sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    }, LogComponent.Main);
+  }
+  return normalized;
+}
+
+/**
  * Read the request body as a UTF-8 string. Caps at 64 KiB to
  * match the existing inline parsers in this file; oversize
  * requests get 413 and the connection is destroyed. Returns
@@ -755,6 +817,13 @@ async function handlePostChat(
   // is the final backstop for a process that dies mid-run.
   res.on('close', () => {
     void releaseChatLock(dbRequest, sessionId).catch(() => {});
+    // Plan 586 backstop: a run whose terminal frame never arrived still has to
+    // reach a terminal state. On a normal turn this is a no-op — the `done`
+    // frame already settled the run and `settle` is idempotent — and on the
+    // disconnect path above it is a no-op too, because that handler already
+    // claimed the session's run. What it catches is a stream that closed with
+    // the worker still producing.
+    void deps.runOrchestrator?.settleSession(sessionId).catch(() => {});
   });
 
   let body = '';
@@ -1145,6 +1214,36 @@ async function handlePostChat(
           handlePostChatNonSSE(sessionId, req, res, child, deps);
         }
 
+        // Plan 586 Reference Run: open the run BEFORE the turn is dispatched.
+        //
+        // Ordering is the point. A run whose row does not exist yet is a run
+        // that cannot be recovered, and the first thing the worker produces
+        // could be the last thing anyone ever sees. `openRun` awaits
+        // `run.started` (with its manifest hash) landing in the Control Plane,
+        // so the record precedes every consequence.
+        //
+        // Gated on `wantsSSE` on purpose. Only the SSE branch routes frames
+        // through `normalizeAndObserve`, so only the SSE branch can record a
+        // run faithfully. Opening one for the non-SSE branch would write a run
+        // whose only event is `run.started` and then settle it with a cause
+        // this host never observed — a fabricated `runtime_crash` for a turn
+        // that worked. Not recording is honest; mis-recording is not.
+        //
+        // `openRun` never throws by contract: a Control Plane that refuses must
+        // not cost the user their message.
+        if (wantsSSE && deps.runOrchestrator) {
+          await deps.runOrchestrator.openRun(sessionId, {
+            ...(typeof providerConfig?.model === 'string' ? { model: providerConfig.model } : {}),
+            ...(typeof providerConfig?.providerId === 'string' ? { providerId: providerConfig.providerId } : {}),
+            ...(providerConfig?.providerType === 'openai' || providerConfig?.providerType === 'anthropic'
+              ? { apiFormat: providerConfig.providerType }
+              : {}),
+            runOrigin,
+            ...(workingDirectory ? { workingDirectory } : {}),
+            ...(resolvedProject?.projectId ? { projectId: resolvedProject.projectId } : {}),
+          });
+        }
+
         workerManager.sendCommand(sessionId, {
           type: 'chat:start',
           sessionId,
@@ -1349,6 +1448,11 @@ function handlePostChatSSE(
         child.stdout.removeListener('data', onData);
       }
       workerManager.interruptWorker(sessionId, 2000, 'sse-client-disconnect');
+      // Plan 586: the host is deliberately stopping this turn, so the run
+      // settles as CANCELLED, not as a crash. `resolveRunOutcome` reads
+      // silence as `runtime_crash`, which would be a false accusation: this
+      // worker was asked to stop by this very handler, one line above.
+      void deps.runOrchestrator?.settleSession(sessionId, { cancelRequested: true }).catch(() => {});
     }
     // Plan 476 P0-A: release the runtime lock on every terminal path
     // (done, error, or client disconnect all end up closing the request).
@@ -1418,7 +1522,7 @@ function handlePostChatSSE(
           continue;
         }
 
-        const sseEvent = normalizeWorkerEvent(event);
+        const sseEvent = normalizeAndObserve(sessionId, event, deps);
         // normalizeWorkerEvent only returns null for the already-skipped
         // control-plane events; guard defensively anyway.
         if (!sseEvent) continue;

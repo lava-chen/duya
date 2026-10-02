@@ -32,6 +32,7 @@ import {
   ResearchStore,
   ConductorStore,
   WorkflowRunStore,
+  RunStore,
   LegacyImport,
   migrateLegacyArchivedRows,
   type SqliteCtor,
@@ -61,6 +62,16 @@ export interface CoreStores {
   conductor: ConductorStore;
   /** Workflow run store (plan 552 Phase 4 — run metadata + snapshot blobs). */
   workflowRuns: WorkflowRunStore;
+  /**
+   * Reference Run store (plan 586 — `runs` + `run_events`).
+   *
+   * Distinct from `workflowRuns` on purpose: a workflow run is a library
+   * feature, while a run here is the durable record of one agent turn. They
+   * will eventually share a lineage (`parentRunId` already exists on the
+   * manifest); until then two stores keep two different lifecycles from
+   * sharing one table.
+   */
+  runs: RunStore;
 }
 
 let stores: CoreStores | null = null;
@@ -113,8 +124,15 @@ function migrateRolloutRoots(): void {
   );
 }
 
-/** All migrations from the aggregates, sorted by id. */
-function collectMigrations(): Migration[] {
+/**
+ * All migrations from the aggregates, sorted by id.
+ *
+ * Exported so the composition can be tested as the real thing. A test that
+ * re-declared this list would pass while the real one drifted — and a drifted
+ * list is precisely how a migration id collides and a column gets silently
+ * skipped (`stores.ts`, "Duplicate core migration id 26").
+ */
+export function collectMigrations(): Migration[] {
   return [
     ...MessageLog.migrations,
     ...SessionStore.migrations,
@@ -131,6 +149,7 @@ function collectMigrations(): Migration[] {
     ...ResearchStore.migrations,
     ...ConductorStore.migrations,
     ...WorkflowRunStore.migrations,
+    ...RunStore.migrations,
   ].sort((a, b) => a.id - b.id);
 }
 
@@ -182,6 +201,7 @@ export function initCoreDatabase(sqlite: SqliteCtor): CoreStores | null {
       research: new ResearchStore(db),
       conductor: new ConductorStore(db),
       workflowRuns: new WorkflowRunStore(db),
+      runs: new RunStore(db),
     };
 
     // Plan 329: auto-run the legacy import on first boot. Runs before any
