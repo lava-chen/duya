@@ -27,8 +27,19 @@ const mockedExists = vi.mocked(existsSync);
 const mockedRead = vi.mocked(readFileSync);
 
 /** Simulate a profile dir whose Network/Cookies database exists. */
+/**
+ * Make only `dir`'s profile look like it has a cookie database.
+ *
+ * The old matcher was `String(path).includes('/Default/')`, which only
+ * holds for POSIX separators. `resolveCookieFilePath` builds its
+ * candidates with `path.join`, so on Windows the real argument is
+ * `...\Default\Network\Cookies` and the substring never matched -- the
+ * case failed on windows-latest even though the code was right. Match on
+ * path segments instead so the helper is separator-agnostic.
+ */
 function withCookieDb(dir: string) {
-  mockedExists.mockImplementation((path) => String(path).includes(`/${dir}/`));
+  const target = new RegExp(`(^|[\\\\/])${dir}([\\\\/]|$)`);
+  mockedExists.mockImplementation((path) => target.test(String(path)));
 }
 
 beforeEach(() => {

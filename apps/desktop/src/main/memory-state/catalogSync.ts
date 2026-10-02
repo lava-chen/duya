@@ -393,10 +393,18 @@ export function syncAllFromMainDb(opts: {
   let tombstoned = 0;
   let errors = 0;
 
-  // includeDeleted=true so deleted sessions are tombstoned rather than
-  // silently dropped. The SessionStore.list filter preserves tombstone
-  // semantics from the legacy `is_deleted` column.
-  const coreSessions = opts.sessions.list({ includeDeleted: true });
+  // includeDeleted + includeArchived so BOTH terminal states are
+  // tombstoned rather than silently dropped.
+  //
+  // Plan 506 (C2) made the default session list hide `status='archived'`,
+  // and `list({ includeDeleted: true })` deliberately keeps hiding them
+  // (see db/core/__tests__/session-store.test.ts, "still hides archived
+  // sessions"). Passing only includeDeleted therefore meant an archived
+  // session was never enumerated, so the `status === 'archived'` branch in
+  // syncOneSession below was unreachable and its rollout_catalog row kept
+  // `source_status='active'` forever -- the memory layer would go on
+  // treating an archived session as live.
+  const coreSessions = opts.sessions.list({ includeDeleted: true, includeArchived: true });
   const sessions = coreSessions.map(coreSessionToChatRow);
 
   for (const session of sessions) {

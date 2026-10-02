@@ -182,6 +182,21 @@ touched until the merge lands on `origin/master`.
    from the primary checkout — the repo root plus every workspace package
    that has its own (`packages/agent`, `conductor`, `gateway`,
    `plugin-core`, `voice`). Missing junctions produce fake TS2307 errors.
+   A `packages/agent-core` / `agent-runtime` link is needed too, and it must
+   point at the **worktree's** copy: the root `node_modules/@duya/*` symlinks
+   in the primary checkout may already be stale or missing, and a stale one
+   resolves to a package that no longer exists. Then build the dependency
+   (`npm run build:core`) before `typecheck:runtime` — their `types` point at
+   `dist/`, so a missing build is a TS2307 that looks like a wiring fault.
+2b. **Tearing a worktree down**: those junctions point back INTO the primary
+   checkout, so any recursive delete that follows them deletes the primary
+   checkout's contents. On this repo that removed 3,471 tracked files at
+   once. Remove the directory with the runtime's own recoverable launcher
+   (`rm -- <dir>`, which treats a reparse point as an object and does not
+   traverse it) and **never** `Remove-Item -Recurse`, `cmd /c rd /s /q`, or
+   any shell `rm -rf` on a worktree path. If a junction must go on its own,
+   `cmd /c rmdir <junction>` (no `/s`) detaches the link without following
+   it — never with `/s`.
 3. **Verify in place**: targeted `npx vitest run <files>` +
    `npm run typecheck:web`, plus any other package gates the diff
    touches. Known footgun: `typecheck:cli` OOM-crashes tsc under the

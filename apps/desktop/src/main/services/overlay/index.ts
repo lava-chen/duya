@@ -17,18 +17,20 @@
  * not exist inside a sandboxed data-URL page, so it mirrors the badge
  * chip style (dark surface + purple accent).
  *
- * Renderer-side defense (plan 562 §5 缺口2): the page re-asserts the
- * interactive whitelist on EVERY draw — the enumerate side already
- * filters, but this channel may be fed from anywhere, so anything
- * without a whitelisted ControlType, a usable rect, or interactive !==
- * false is dropped rather than drawn. SOM capture-channel elements are
- * not accepted on this channel at all (they carry no `interactive`
- * provenance).
+ * Defense in depth (plan 562 §5 缺口2): the page re-asserts the
+ * interactive whitelist on EVERY draw, independently of
+ * `selectVisibleOverlayElements` on the main side. Anything without a
+ * whitelisted ControlType, a usable rect, or `interactive !== false` is
+ * dropped rather than drawn. SOM capture-channel elements are not
+ * accepted at all (they carry no `interactive` provenance).
  *
- * Lifecycle: `overlay:show-elements` shows/refreshes; `overlay:clear`,
+ * Lifecycle: `showOverlayElements` shows/refreshes; `clearOverlayElements`,
  * recorder stop, and display metrics changes tear the window down (it
  * is rebuilt on the next show, so a resolution/monitor change can never
- * leave a stale-positioned frame behind).
+ * leave a stale-positioned frame behind). The overlay is main-internal:
+ * the only caller is the recorder service, so no renderer channel feeds
+ * it (the former `overlay:show-elements` / `overlay:clear` IPC surface
+ * was removed with the rest of the unused overlay channels).
  */
 
 import { BrowserWindow, screen } from 'electron';
@@ -228,10 +230,18 @@ function rectOf(entry: Record<string, unknown>): RectLike | null {
 // ────────────────────────────────────────────────────────────────────
 
 /**
- * Show (or refresh) the element frames. `elements` must already be
- * structurally validated (sanitizeOverlayElements); the page applies
- * the semantic interactive filter on top. Cosmetic failures are logged
- * and swallowed — the overlay must never break the recording pipeline.
+ * Show (or refresh) the element frames.
+ *
+ * `elements` is expected to be UI Automation probe output from the
+ * recorder service — the caller is main-internal and there is no
+ * renderer payload to gate here. The structural checks the old
+ * `sanitizeOverlayElements` gate used to perform are now enforced
+ * where the data is actually used: entries without a usable numeric
+ * rect are skipped, and `selectVisibleOverlayElements` drops
+ * non-interactive control types, off-display frames, and anything past
+ * the visible-count cap. The page re-asserts the interactive whitelist
+ * on every draw. Cosmetic failures are logged and swallowed — the
+ * overlay must never break the recording pipeline.
  */
 export function showOverlayElements(elements: readonly Record<string, unknown>[]): void {
   try {

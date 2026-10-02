@@ -12,7 +12,10 @@
  * though it is a pure read operation.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import * as path from 'node:path';
 import { isAutoModeAllowlistedTool } from '../classifier.js';
 import { isToolWithinWorkspace } from '../policy.js';
 import type { ToolPermissionContext } from '../types.js';
@@ -51,33 +54,72 @@ describe('isAutoModeAllowlistedTool (classifier safe allowlist)', () => {
 });
 
 describe('isToolWithinWorkspace (workspace boundary)', () => {
-  const context = makeContext();
+  // Plan 583 / ISS-35: the boundary test now delegates to `isPathWithinRoots`,
+  // which realpaths the roots and SKIPS a root that does not exist. So these
+  // cases need a workspace that actually exists on disk. That tightening only
+  // ever removes an auto-allow fast path (this function answers "may we skip
+  // the prompt?"), never a hard gate, so a missing root degrades to "ask the
+  // user" rather than to "allowed".
+  // TWO separate temp trees. The root set deliberately includes the
+  // workspace's PARENT directory (so a subdirectory-of-a-repo workspace
+  // still works), which means anything under the parent is legitimately
+  // in-bounds. To demonstrate a real escape the target has to live outside
+  // the parent tree too.
+  const workspaceRoot = mkdtempSync(path.join(tmpdir(), 'duya-ws-'));
+  const outsiderRoot = mkdtempSync(path.join(tmpdir(), 'duya-out-'));
+  const workspace = path.join(workspaceRoot, 'project');
+  const outside = path.join(outsiderRoot, 'secrets');
+  mkdirSync(path.join(workspace, 'src'), { recursive: true });
+  mkdirSync(outside, { recursive: true });
+
+  const context = makeContext({ defaultWorkspaceDirectory: workspace });
+
+  afterAll(() => {
+    rmSync(workspaceRoot, { recursive: true, force: true });
+    rmSync(outsiderRoot, { recursive: true, force: true });
+  });
 
   it('matches lowercase built-in tool names', () => {
     expect(
-      isToolWithinWorkspace('glob', { path: 'C:/work/project/src' }, context),
+      isToolWithinWorkspace('glob', { path: path.join(workspace, 'src') }, context),
     ).toBe(true);
     expect(
-      isToolWithinWorkspace('grep', { path: 'C:/work/project' }, context),
+      isToolWithinWorkspace('grep', { path: workspace }, context),
     ).toBe(true);
     expect(
-      isToolWithinWorkspace('read', { file_path: 'C:/work/project/a.ts' }, context),
+      isToolWithinWorkspace('read', { file_path: path.join(workspace, 'a.ts') }, context),
     ).toBe(true);
   });
 
   it('matches capitalized variants', () => {
     expect(
-      isToolWithinWorkspace('Glob', { path: 'C:/work/project/src' }, context),
+      isToolWithinWorkspace('Glob', { path: path.join(workspace, 'src') }, context),
     ).toBe(true);
     expect(
-      isToolWithinWorkspace('Read', { file_path: 'C:/work/project/a.ts' }, context),
+      isToolWithinWorkspace('Read', { file_path: path.join(workspace, 'a.ts') }, context),
     ).toBe(true);
   });
 
   it('rejects paths outside the workspace', () => {
     expect(
-      isToolWithinWorkspace('glob', { path: 'C:/Users/lavachen/.duya/memory' }, context),
+      isToolWithinWorkspace('glob', { path: outside }, context),
     ).toBe(false);
+  });
+
+  it('rejects a symlink inside the workspace that points outside it', () => {
+    // The regression for ISS-35: the old inline `path.relative` loop never
+    // realpath'd either side, so this passed and the tool was auto-allowed
+    // against a path outside every declared root.
+    const link = path.join(workspace, 'escape-link');
+    try {
+      symlinkSync(outside, link, 'junction');
+    } catch {
+      // Creating links can require elevation on some Windows configurations.
+      // Without the fixture we cannot assert the behaviour; skip rather than
+      // assert something we did not exercise.
+      return;
+    }
+    expect(isToolWithinWorkspace('read', { path: link }, context)).toBe(false);
   });
 
   it('returns false for tools with no path-bearing input fields', () => {
@@ -85,12 +127,24 @@ describe('isToolWithinWorkspace (workspace boundary)', () => {
     // not inspect — the tool must not be treated as workspace-confined
     // purely because a pattern string was passed.
     expect(
-      isToolWithinWorkspace('glob', { pattern: 'C:/work/project/**/*.ts' }, context),
+      isToolWithinWorkspace('glob', { pattern: `${workspace}/**/*.ts` }, context),
     ).toBe(false);
   });
 
   it('returns false for non-file-system tools', () => {
     expect(isToolWithinWorkspace('SessionSearch', {}, context)).toBe(false);
     expect(isToolWithinWorkspace('TodoWrite', {}, context)).toBe(false);
+  });
+
+  it('returns false when neither the workspace nor its parent exists', () => {
+    // `isPathWithinRoots` realpaths each root and skips one that does not
+    // exist, so a workspace that was never created yields no anchor at all.
+    // This only removes an auto-allow fast path: the call still falls through
+    // to the normal permission flow.
+    const orphanParent = path.join(outsiderRoot, 'never', 'created');
+    const missing = makeContext({ defaultWorkspaceDirectory: orphanParent });
+    expect(
+      isToolWithinWorkspace('read', { path: path.join(orphanParent, 'a.ts') }, missing),
+    ).toBe(false);
   });
 });

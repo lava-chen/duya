@@ -59,19 +59,14 @@ jobs:
         run: node node_modules/electron/install.js
 
       - name: Build workspace packages
-        # Two-pass build to break the @duya/agent ↔ @duya/conductor circular
-        # dependency on a clean checkout (no dist/):
-        #   Pass 1: build:conductor may emit TS2307 for @duya/agent/* (agent
-        #           dist doesn't exist yet), but tsc still emits .d.ts with
-        #           `any` fallbacks. Errors are suppressed via `|| echo`.
-        #           Pass 1 dist may contain stale nested files from tsc's
-        #           Bundler fallback to agent source — these are cleaned.
-        #   Agent:  builds against conductor's pass-1 .d.ts (resolves via
-        #           node_modules symlink + ambient shim).
-        #   Clean:  remove conductor dist to discard pass-1 junk output.
-        #   Pass 2: rebuild conductor — agent dist now exists, all types
-        #           resolve correctly, .d.ts is regenerated with real types.
-        # build:agent already runs build:cli + the two-pass conductor + agent.
+        # Single-pass build. This used to need a two-pass hack to break a
+        # `@duya/agent` <-> `@duya/conductor` cycle: pass 1 built conductor
+        # with errors suppressed via `|| echo` so `@duya/agent/*` types
+        # resolved, then conductor's dist was cleaned and rebuilt. Plan M4
+        # removed the last agent -> conductor import (the widget primitives
+        # moved into `packages/agent/src/tool/WidgetRenderer/`), so there is
+        # no cycle left and every package builds exactly once.
+        # build:agent already runs build:cli + build:conductor + agent.
         run: npm run build:agent && npm run build:gateway
 
       - name: Build application

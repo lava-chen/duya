@@ -1,4 +1,4 @@
-﻿﻿import type { FeishuMessageContent, FeishuMention } from './types.js';
+import type { FeishuMessageContent, FeishuMention } from './types.js';
 import { parseFeishuContent, isBotMentioned } from './message-utils.js';
 
 export function isGroupChat(chatType: string): boolean {

@@ -2,7 +2,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { invokeRestTemplate, getPath } from '../connectors/rest-invoker.js';
-import type { AppToolDeclaration } from '@duya/plugin-core/src/connectors/app-schema.js';
+import type { AppToolDeclaration } from '@duya/plugin-core/connectors/app-schema';
 
 function tool(partial: Partial<AppToolDeclaration> & { invoke: AppToolDeclaration['invoke'] }): AppToolDeclaration {
   return {

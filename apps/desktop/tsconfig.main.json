@@ -14,10 +14,11 @@
     "paths": {
       "@/*": ["./src/main/*"],
       "@duya/agent/message": ["../../packages/agent/dist/message/index"],
-      "@duya/plugin-core": ["../../packages/plugin-core/src/index.ts"],
-      "@duya/plugin-core/*": ["../../packages/plugin-core/*"]
+      "@duya/agent/tool/allowedRoots": ["../../packages/agent/src/tool/allowedRoots.ts"],
+      "@duya/plugin-core": ["../../packages/plugin-core/dist/index.d.ts"],
+      "@duya/plugin-core/*": ["../../packages/plugin-core/dist/*"]
     }
   },
   "include": ["src/main/**/*.ts"],
-  "exclude": ["node_modules", "**/*.test.ts"]
+  "exclude": ["node_modules", "**/*.test.ts", "**/*.spec.ts", "**/__tests__/**", "**/__mocks__/**"]
 }

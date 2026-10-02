@@ -13,7 +13,7 @@
 
 import { getLogger, LogComponent } from '../../logging/logger';
 import { isToolGloballyApproved } from './tool-approvals.js';
-import { isProviderEnabled, readAppPolicy } from './policy-gate.js';
+import { isProviderEnabled, isProviderEnabledLive, readAppPolicy } from './policy-gate.js';
 import { AppConnectionService, getAppConnectionService } from './app-connection-service.js';
 import { TokenService } from './token-service.js';
 import type { ConnectorModule, ConnectorToolDescriptor, ConnectorInvokeResult } from './connector-types.js';
@@ -29,7 +29,7 @@ import { invokeRestTemplate } from './connectors/rest-invoker.js';
 import {
   classifyMcpError,
   errorCodeForClass,
-} from '@duya/plugin-core/src/mcp/core/error-taxonomy.js';
+} from '@duya/plugin-core/mcp/core/error-taxonomy';
 import { getProviderConfig, registerProviderConfig, unregisterProviderConfig } from './providers/registry.js';
 import { declarationToProviderConfig } from './declarative/projection.js';
 import {
@@ -38,8 +38,8 @@ import {
   getCustomConnectorFactory,
   registerCustomConnector,
 } from './app-connector.js';
-import { asAppConnectorId, type AppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
-import type { AppDeclaration } from '@duya/plugin-core/src/connectors/app-schema.js';
+import { asAppConnectorId, type AppConnectorId } from '@duya/plugin-core/connectors/app-connector-id';
+import type { AppDeclaration } from '@duya/plugin-core/connectors/app-schema';
 import type {
   AppConnectionErrorCode,
   AppConnectionResult,
@@ -359,6 +359,26 @@ export class ConnectorService {
     const conn = this.service.getStatus(connectionId);
     if (!conn) {
       return failure('connection_not_found', `connection ${connectionId} not found`, false);
+    }
+
+    // Plan 450 (Phase C) exposure gate, re-applied on the EXECUTION path.
+    // It used to run only in `listDescriptorsForConnected`, which is the wrong
+    // half: that hides a disabled provider's tools from the model's registry,
+    // but a caller who already knows a tool name and action could still
+    // `invoke` straight through. A policy that only filters listings is not a
+    // policy. Read the live config here so a flip takes effect without a
+    // restart.
+    if (!isProviderEnabledLive(conn.provider)) {
+      this.logger.warn(
+        'App Connection: invoke blocked by [apps] policy',
+        { connectionId, provider: conn.provider, action },
+        COMPONENT,
+      );
+      return failure(
+        'unknown_action',
+        `App provider ${conn.provider} is disabled by the [apps] policy`,
+        false,
+      );
     }
 
     // Plan 455 D2: unified binding dispatch.

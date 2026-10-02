@@ -22,7 +22,7 @@ import type {
   ConnectorModule,
   ConnectorToolDescriptor,
 } from '../connector-types.js';
-import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
+import { asAppConnectorId } from '@duya/plugin-core/connectors/app-connector-id';
 import type { TokenVault } from '../token-vault.js';
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';

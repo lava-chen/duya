@@ -32,6 +32,7 @@ import { readPluginManifest } from '../plugins/manifest';
 import { resolvePermissionProfile } from '../db/permission-resolver';
 import type { PermissionProfile } from '../lib/permission-profile';
 import { getCoreStores } from '../db/core-connection';
+import { dispatchControlPlaneAction } from '../control-plane/run-control-plane';
 import type { WorkflowRunSnapshot, WorkflowRunStatus, WorkflowTriggerKind } from '../db/core/workflow-store';
 import {
   createWidgetPending,
@@ -275,6 +276,26 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
   const now = Date.now();
 
   switch (action) {
+    // ==================== Control Plane / run actions (plan 586) ====================
+    // Handled by the Control Plane dispatcher rather than inline, because these
+    // four actions are the run layer's entire view of storage and inlining them
+    // here would scatter the schema knowledge back across the bridge. The
+    // dispatcher returns `undefined` for an action it does not own, so the
+    // fallthrough below still runs for everything else.
+    //
+    // The agent-server is a FORK, so this is the only route from a run to
+    // `duya-core.db`. It is the same channel `lock:acquire` already uses.
+    case 'run:create':
+    case 'run:append':
+    case 'run:complete':
+    case 'run:get':
+    case 'run:events':
+    case 'run:list-session': {
+      const handled = await dispatchControlPlaneAction(action, p);
+      if (handled !== undefined) return handled;
+      break;
+    }
+
     // ==================== Session actions (core store thin forward) ====================
     case 'session:create': {
       const { sessions } = getCoreStores();

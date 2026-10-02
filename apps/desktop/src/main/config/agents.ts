@@ -29,6 +29,9 @@ import {
   resolveDuyaAgentDir,
 } from './agent-paths.js';
 import { readBotProfile, writeBotProfile, type BotProfile, type BotProfileInput } from './bot-profile.js';
+import { getLogger, LogComponent } from '../logging/logger';
+
+const logger = getLogger();
 
 export interface AgentUpsertInput {
   name: string;
@@ -242,9 +245,8 @@ function seedBotProfileIfMissing(
       avatarColor: avatarColor?.trim() || undefined,
     });
   } catch (err) {
-    // Best-effort: logging infra may not be wired in all callers yet.
-    // eslint-disable-next-line no-console
-    console.warn(`[config-agents] failed to seed profile for '${id}':`, err);
+    // Best-effort: a profile seeding failure must not fail the config write.
+    logger.warn('Failed to seed agent profile', { id, error: err instanceof Error ? err.message : String(err) }, LogComponent.ConfigManager);
   }
 }
 
@@ -427,8 +429,7 @@ export function deleteConfigAgent(id: string): boolean {
       }
     } catch (err) {
       // Config cleanup already succeeded — never fail the delete on disk.
-      // eslint-disable-next-line no-console
-      console.warn(`[config-agents] failed to remove agent dir for '${id}':`, err);
+      logger.warn('Failed to remove agent directory', { id, error: err instanceof Error ? err.message : String(err) }, LogComponent.ConfigManager);
     }
   }
 
@@ -648,8 +649,7 @@ export function purgeDeletedConfigAgents(opts: {
     } catch (err) {
       // Continue with the config cleanup even if the disk move failed —
       // a stale tombstone is harmless compared to a stranded config row.
-      // eslint-disable-next-line no-console
-      console.warn(`[config-agents] purge: failed to remove ${c.path}:`, err);
+      logger.warn('Purge failed to remove agent path', { id: c.id, path: c.path, error: err instanceof Error ? err.message : String(err) }, LogComponent.ConfigManager);
     }
     delete agents[c.id];
     purgedIds.push(c.id);

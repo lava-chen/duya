@@ -4,8 +4,10 @@ import * as fs from 'fs';
 import { SessionManager } from './session-store';
 import { SessionState } from './types';
 import { workerLogger } from './logger';
-import { safeUserDataPath } from '../../logging/logger';
+import { safeUserDataPath, getLogger, LogComponent } from '../../logging/logger';
 import { getWorkerMaxMemoryMB, getWorkerIdleTtlMs, isLowPowerEnv, selectIdleSessionIds } from './worker-limits';
+
+const logger = getLogger();
 
 export function createWorkerEnvironment(
   sessionId: string,
@@ -180,8 +182,8 @@ export class WorkerManager {
       const line = data.toString().trim();
       if (!line) return;
 
-      // Direct output to console for debugging - this is from agent process
-      console.error(`[worker:${sessionId.slice(0, 8)}] ${line}`);
+      // Raw passthrough for debugging - this is from agent process
+      logger.error('Worker stderr passthrough', undefined, { sessionId, line }, LogComponent.Main);
 
       // Parse log level from message - worker uses [LEVEL] prefix
       if (line.startsWith('[ERROR]') || line.includes('Error:')) {

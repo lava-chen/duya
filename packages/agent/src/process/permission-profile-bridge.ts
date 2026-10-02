@@ -23,15 +23,12 @@ export interface ChatStartPermissionInput {
   rowProfile: string | null | undefined;
   /** 显式单次 override (trusted caller only). 类型: agent internal mode. */
   optionOverride: string | null | undefined;
-  /** 旧字段. 故意读取只为记录 "被忽略" 日志, 不影响返回值. */
-  deprecatedOption?: string | null | undefined;
 }
 
 export interface ChatStartPermissionResult {
   agentMode: AgentPermissionMode;
   fromRow: string | null;
   override: string | null;
-  ignoredDeprecated: string | null;
 }
 
 /**
@@ -41,7 +38,10 @@ export interface ChatStartPermissionResult {
  *   - 默认: 来自 DB row 的 profile
  *   - 显式 override (类型合法): 覆盖 row
  *   - 显式 override (类型非法): 忽略, 走 row
- *   - 旧字段 options.permissionMode: **完全忽略**, 只在返回里记录以便日志
+ *
+ * Plan 583 / ISS-09: 旧的 `options.permissionMode` 字段已从 wire 协议删除,
+ * 不再读取也不再记录 —— 旧 sender 携带该字段时它只是普通多余属性, 结构性
+ * 无法被采信, 不需要"读了再忽略"的防御分支.
  *
  * 不抛错, 不读 DB. 调用方负责 try/catch 读取 row, 把 rowProfile 传进来.
  */
@@ -55,7 +55,5 @@ export function resolveChatStartAgentMode(input: ChatStartPermissionInput): Chat
     override = input.optionOverride;
   }
 
-  const ignoredDeprecated = input.deprecatedOption ? String(input.deprecatedOption) : null;
-
-  return { agentMode, fromRow, override, ignoredDeprecated };
+  return { agentMode, fromRow, override };
 }

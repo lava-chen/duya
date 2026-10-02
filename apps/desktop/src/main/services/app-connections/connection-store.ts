@@ -10,8 +10,8 @@
  */
 
 import type Database from 'better-sqlite3';
-import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
-import { deriveConnectionSlug } from '@duya/plugin-core/src/mcp/core/alias.js';
+import { asAppConnectorId } from '@duya/plugin-core/connectors/app-connector-id';
+import { deriveConnectionSlug } from '@duya/plugin-core/mcp/core/alias';
 import type {
   AppConnection,
   AppConnectionStatus,

@@ -56,7 +56,7 @@ import { getAgentsMdManager } from '../agentsmd/index.js';
 import { extractTriggerPaths } from '../agentsmd/nested-loader.js';
 import { isNestedAgentsMdEnabled } from '../config/feature-flags.js';
 import { getCachedAppConnectionDescriptors } from '../tool/AppConnectionTool/index.js';
-import { projectForProvider } from '@duya/plugin-core/src/mcp/core/projection.js';
+import { projectForProvider } from '@duya/plugin-core/mcp/core/projection';
 import { buildAppsSystemSection, collectConnectorActivationInjection, collectPluginInjections, collectSkillInjections, extractExplicitSkillMentions, mergeSkillMentionSources } from '../mentions/index.js';
 import { matchSkillsForPrompt, buildSkillSuggestionInjection } from '../skills/index.js';
 import { compressProjectedToolMessages } from '../compact/projectionCompress.js';
@@ -86,6 +86,7 @@ import { TurnAssembler } from './TurnAssembler.js';
 import type { TurnContext } from './TurnContext.js';
 import { permissionModeFromString } from '../permissions/policy.js';
 import { buildPermissions } from './PermissionsGate.js';
+import { normalizeCanUseToolDecision } from './toolInvokePermission.js';
 import { CompactionCoordinator, type CompactionRunResult } from './CompactionCoordinator.js';
 import { DeadLoopTracker, resolveDeadLoopConfig } from './TurnLoopTracker.js';
 import { SessionFinalizer } from './SessionFinalizer.js';
@@ -1337,10 +1338,22 @@ export class duyaAgent implements AgentRuntime {
       return canUseTool(toolName, toolInput);
     };
     // Wire tool_invoke to the registry + permission chain so the model can
-    // execute tools whose schemas it read through tool_catalog. The gate
-    // runs on the RESOLVED real tool name 鈥?routing through the meta tool can
-    // never bypass the permission policy. ask decisions are not executed (see
-    // dispatcherFromRegistry.ts); deny carries the decision message back.
+    // execute tools whose schemas it read through tool_catalog.
+    //
+    // Plan 583 ISS-04: `checkPermission` used to call the raw
+    // `hasPermissionsToUseTool` engine directly, which skipped three layers
+    // the direct-tool path always runs: the per-turn approval ledger
+    // (`consumeApprovedEffect`), the standing `alwaysAllowTools` grants, and
+    // the plan-mode `gateWriteTool` write barrier. Any tool reachable
+    // through `tool_invoke` therefore bypassed the plan-mode write barrier
+    // entirely — and a comment here claimed the opposite. Routing through
+    // the assembled `canUseTool` closes that.
+    //
+    // Deliberately `canUseTool` and NOT `guardedCanUseTool`: the visibility
+    // guard denies any name outside `declaredToolsForRequest`, and deferred
+    // tools are reached precisely that way (tool_catalog -> tool_invoke), so
+    // the dispatcher applies its own `isEligibleTool` check instead.
+    //
     // Per-turn context handle for the meta-tool dispatcher. The dispatcher is
     // wired HERE — before the turn loop builds its `toolUseContext` — so it
     // takes a getter instead of the object. Without it, every built-in tool
@@ -1358,19 +1371,8 @@ export class duyaAgent implements AgentRuntime {
         isEligibleTool: (toolId) => catalogView.eligibleToolIds.has(toolId),
         workingDirectory: turnContext.workingDirectory ?? undefined,
         contextProvider: () => turnToolUseContext,
-        checkPermission: async (toolName, args) => {
-          const decision = await this.hasPermissionsToUseTool(
-            toolName,
-            args,
-            permissionContext,
-          );
-          return {
-            behavior: decision.behavior,
-            ...(decision.behavior === 'deny' || decision.behavior === 'ask'
-              ? { message: (decision as { message?: string }).message }
-              : {}),
-          };
-        },
+        checkPermission: async (toolName, args) =>
+          normalizeCanUseToolDecision(await canUseTool(toolName, args)),
       });
     // Plan 522: route the model-switch window check through the same
     // capability → catalog → default resolution as the constructor, so a

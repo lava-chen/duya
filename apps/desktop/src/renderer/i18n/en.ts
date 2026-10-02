@@ -605,6 +605,7 @@ const en = {
   'chat.editingMessage': 'Editing message — adjust attachments and model',
   'chat.editRunActive': 'A run started. Stop it before resending this edit.',
   'chat.editAlreadyPickedUp': 'This message has been picked up. Send a new follow-up instead.',
+  'chat.editSendFailedRewound': 'Send failed, so this conversation was already rewound to before your edited message. Your message is kept in the composer — try sending again.',
   'chat.pendingSaveFailed': 'Could not save the pending message. Please retry.',
   'mailbox.bubble.saving': 'Saving',
   'mailbox.bubble.pickedUp': 'Picked up',

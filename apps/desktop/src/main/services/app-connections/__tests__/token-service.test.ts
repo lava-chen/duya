@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
+import { asAppConnectorId } from '@duya/plugin-core/connectors/app-connector-id';
 const GOOGLE = asAppConnectorId('google');
 const SLACK = asAppConnectorId('slack');
 import Database from 'better-sqlite3';
@@ -45,7 +45,8 @@ function makeDb(): DatabaseType {
       expires_at INTEGER,
       last_error TEXT,
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      connection_slug TEXT NOT NULL DEFAULT ''
     )
   `);
   return db;
@@ -54,10 +55,22 @@ function makeDb(): DatabaseType {
 /** In-memory vault stub so we don't need the safeStorage mock dance. */
 class FakeVault {
   private map = new Map<string, TokenSet>();
+  private unavailable = false;
   set(id: string, t: TokenSet) { this.map.set(id, { ...t }); }
-  get(id: string): TokenSet | undefined { const v = this.map.get(id); return v ? { ...v } : undefined; }
+  get(id: string): TokenSet | undefined {
+    // An unreadable vault yields no tokens, exactly like the real one --
+    // that indistinguishability is the whole defect.
+    if (this.unavailable) return undefined;
+    const v = this.map.get(id);
+    return v ? { ...v } : undefined;
+  }
   remove(id: string) { this.map.delete(id); }
   clear() { this.map.clear(); }
+  isUnavailable(): boolean { return this.unavailable; }
+  /** Test hook: simulate a vault file that exists but cannot be decrypted. */
+  markUnavailable(value: boolean) { this.unavailable = value; }
+  /** Test hook: read past the unavailable mask, to prove the grant survives. */
+  peek(id: string): TokenSet | undefined { return this.map.get(id); }
 }
 
 /** Fake fetch returning a fixed refresh response, recording calls. */
@@ -289,5 +302,28 @@ describe('TokenService', () => {
       expect(result.error.code).toBe('connection_revoked');
     }
     expect(store.get('c-drift')?.status).toBe('revoked');
+  });
+
+  it('vault unreadable (safeStorage unavailable) → vault_unavailable, status NOT flipped', async () => {
+    seedConnection({ id: 'c-locked' });
+    // The grant is still there on disk; we simply cannot decrypt it.
+    vault.markUnavailable(true);
+    const { fakeFetch, calls } = makeFakeFetch({});
+    const svc = new TokenService({ store, vault: vault as never, fetchImpl: fakeFetch as unknown as typeof fetch });
+
+    const result = await svc.getValidToken('c-locked');
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe('vault_unavailable');
+    }
+    // The load-bearing assertion: an unreadable vault must NOT persist a
+    // `revoked` status, or the live grant is destroyed by an unrelated
+    // host limitation. Before the fix this returned `connection_revoked`
+    // and wrote `revoked` to the store.
+    expect(store.get('c-locked')?.status).toBe('connected');
+    // The grant itself is untouched and still there for a later retry.
+    expect(vault.peek('c-locked')?.accessToken).toBe('ya29.original');
+    expect(calls).toHaveLength(0);
   });
 });

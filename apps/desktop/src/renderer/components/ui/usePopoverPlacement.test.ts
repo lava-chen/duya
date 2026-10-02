@@ -1,13 +1,21 @@
+/**
+ * @vitest-environment jsdom
+ *
+ * @floating-ui/react reads from viewport via Element APIs that jsdom does
+ * not implement accurately. We only assert the public contract:
+ *   - placement starts at the preferred value
+ *   - reference ref accepts HTMLElement | null
+ *   - style object uses `position: fixed` so callers escape overflow:hidden
+ *   - toFloatingPlacement converts legacy spellings
+ *
+ * The jsdom environment is required: `renderHook` mounts a real component
+ * and the ref setter dereferences a DOM node, so under the global
+ * `environment: 'node'` default three cases threw `document is not
+ * defined` before asserting anything.
+ */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { usePopoverPlacement, toFloatingPlacement } from './usePopoverPlacement';
-
-// @floating-ui/react reads from viewport via Element APIs that jsdom does not
-// implement accurately. We only assert the public contract:
-//   - placement starts at the preferred value
-//   - reference ref accepts HTMLElement | null
-//   - style object uses `position: fixed` so callers escape overflow:hidden
-//   - toFloatingPlacement converts legacy spellings
 
 describe('usePopoverPlacement', () => {
   afterEach(() => {

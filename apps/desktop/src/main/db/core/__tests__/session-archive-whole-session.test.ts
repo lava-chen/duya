@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Plan 582 (G1) 鈥?archiving a ROTATED session must carry its whole history.
  *
  * Before this fix, `db:session:archive` moved exactly the one file named by

@@ -114,7 +114,7 @@ extraResources:
   - from: public/
     to: public/
     filter: ["**/*"]
-  - from: extension/
+  - from: resources/browser-extension/
     to: extension/
     filter: ["**/*"]
   - from: node_modules/node-pty/

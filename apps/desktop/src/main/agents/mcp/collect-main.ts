@@ -23,7 +23,7 @@
 //
 // The pure transforms (bundled resolver, per-source candidate builders,
 // legacy settings.json reader, assembly) all live in
-// @duya/plugin-core/src/mcp/collect.ts. This module only fetches data.
+// @duya/plugin-core/mcp/collect.ts. This module only fetches data.
 
 import { getLogger } from '../../logging/logger.js';
 import { getPluginManager } from '../../plugins/PluginManager.js';
@@ -34,7 +34,7 @@ import {
   type MCPCollectorInput,
   type MCPCollectorPluginEntry,
   type MCPCollectorSettingsItem,
-} from '@duya/plugin-core/src/mcp/collect.js';
+} from '@duya/plugin-core/mcp/collect';
 import {
   getMCPErrorMessage,
   getMCPErrorSeverity,

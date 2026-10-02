@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
+import { asAppConnectorId } from '@duya/plugin-core/connectors/app-connector-id';
 const GOOGLE = asAppConnectorId('google');
 const SLACK = asAppConnectorId('slack');
 import Database from 'better-sqlite3';
@@ -267,7 +267,7 @@ describe('ConnectionStore', () => {
 
   it('D7: tool-alias bytes — single connection unchanged, two connections coexist', async () => {
     const { allocateConnectionToolAlias, connectionNamespace } = await import(
-      '@duya/plugin-core/src/mcp/core/alias.js'
+      '@duya/plugin-core/mcp/core/alias'
     );
     // Single connection (slug ''): byte-identical to the pre-580
     // `remote_<provider>_<tool>` form.

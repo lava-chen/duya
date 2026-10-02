@@ -1,3 +1,12 @@
+/**
+ * @vitest-environment jsdom
+ *
+ * HoverPopover renders through a portal into document.body and drives
+ * hover/focus state with real events, so it needs a DOM. The file was
+ * picking up the global `environment: 'node'` default from
+ * vitest.config.ts and every case died on `document is not defined`
+ * before reaching an assertion.
+ */
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HoverPopover } from './HoverPopover';

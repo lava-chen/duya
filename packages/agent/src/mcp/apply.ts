@@ -30,6 +30,7 @@
 
 import { logger } from '../utils/logger.js';
 import { decideMcpSource } from '../permissions/permissions.js';
+import { resolveAskWithoutUser } from '../permissions/askWithoutUser.js';
 import type { PermissionMode, McpToolSource } from '../permissions/types.js';
 import { computeProviderName, AnthropicToolNamePolicy } from '@duya/plugin-core';
 import type {
@@ -525,16 +526,23 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
             ? ((appState?._approvedToolUses as Record<string, boolean> | undefined) ?? {})[toolUseId]
             : undefined;
           if (!appApproved) {
-            // No approval channel (headless CLI / sub-agent / background
-            // gateway session): there is no interactive user to answer a
-            // permission prompt, so asking would dead-lock the turn. These
-            // contexts are trusted app-internal/automation surfaces, so we
-            // allow the call through (the source-level trust model above
-            // still gates market-installed / manual-path third-party tools
-            // in interactive sessions). Log the implicit approval loudly.
+            // No interactive user to answer the prompt. Plan 583 / ISS-11:
+            // this used to fail open and call through unconditionally, so a
+            // merely-unwired hook ran third-party MCP tools with no consent.
+            // The session mode already encodes "will a human ever see this
+            // prompt?": `dontAsk` / `bypassPermissions` mean never, every
+            // other mode means the user wants to be asked, so refuse.
             if (!context?.requestPermission) {
+              const fallback = resolveAskWithoutUser(activeMode, capturedMcpInfo.toolName);
+              if (fallback.behavior === 'deny') {
+                logger.warn(
+                  '[MCP] ask-tool with no interactive user; denied',
+                  { toolName: capturedMcpInfo.toolName, source, mode: activeMode },
+                );
+                return gateErrorResult('deny', '[MCP permission gate] ' + fallback.message);
+              }
               logger.warn(
-                '[MCP] no interactive user available; implicitly allowing tool',
+                '[MCP] ask-tool with no interactive user; allowed by session mode',
                 { toolName: capturedMcpInfo.toolName, source, mode: activeMode },
               );
               return capturedClient.callTool(capturedMcpInfo.toolName, input);

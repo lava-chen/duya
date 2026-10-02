@@ -4,7 +4,6 @@ import {
   createBuiltinLoopHooks,
   PREMATURE_STOP_PRIORITY,
   TODO_GATE_PRIORITY,
-  TOOL_INTENT_PRIORITY,
 } from '../../../src/hooks/builtin.js';
 import type { LoopHookDispatchContext, LoopHookRegistration } from '../../../src/hooks/loop.js';
 import type { Task } from '../../../src/session/task-store.js';
@@ -49,12 +48,14 @@ function makeHooks(overrides: Partial<Parameters<typeof createBuiltinLoopHooks>[
 }
 
 describe('createBuiltinLoopHooks registration', () => {
-  it('registers the four builtin policies with the fixed PreFinalize order', () => {
+  it('registers the always-on builtin policies with their fixed order', () => {
     const hooks = makeHooks();
     expect(find(hooks, 'builtin.premature-stop').priority).toBe(PREMATURE_STOP_PRIORITY);
-    expect(find(hooks, 'builtin.tool-intent').priority).toBe(TOOL_INTENT_PRIORITY);
-    expect(find(hooks, 'builtin.todo-gate').priority).toBe(TODO_GATE_PRIORITY);
     expect(find(hooks, 'builtin.dead-loop-nudge')).toBeTruthy();
+    // `builtin.tool-intent` used to be asserted here. It was replaced by
+    // the send-message hooks in ab0a2ff8; see the note further down.
+    expect(hooks.some((h) => h.id.startsWith('builtin.tool-intent'))).toBe(false);
+    expect(find(hooks, 'builtin.todo-gate').priority).toBe(TODO_GATE_PRIORITY);
   });
 
   it('omits the todo-gate hook when disabled', () => {
@@ -91,38 +92,18 @@ describe('premature-stop hook', () => {
   });
 });
 
-describe('tool-intent hook', () => {
-  const hook = () => find(makeHooks(), 'builtin.tool-intent');
-
-  it('vetoes when the model announced an action but emitted no tool_use', async () => {
-    const effect = await hook().handler({
-      ...ctx({ messages: [assistantTurn('Let me read the config file next.')] }),
-      event: 'PreFinalize',
-      stopReason: 'end_turn',
-    });
-    expect(effect).toMatchObject({ type: 'block_finalize', source: 'tool_intent' });
-  });
-
-  it('allows when the stop reason is not a natural conclusion', async () => {
-    const effect = await hook().handler({
-      ...ctx({ messages: [assistantTurn('Let me read the config file next.')] }),
-      event: 'PreFinalize',
-      stopReason: 'max_tokens',
-    });
-    expect(effect).toBeUndefined();
-  });
-
-  it('caps nudges per run', async () => {
-    const registration = hook();
-    const messages = [assistantTurn('Let me run the tests again.')];
-    const first = await registration.handler({ ...ctx({ messages }), event: 'PreFinalize', stopReason: 'end_turn' });
-    const second = await registration.handler({ ...ctx({ messages }), event: 'PreFinalize', stopReason: 'end_turn' });
-    const third = await registration.handler({ ...ctx({ messages }), event: 'PreFinalize', stopReason: 'end_turn' });
-    expect(first).toMatchObject({ type: 'block_finalize' });
-    expect(second).toMatchObject({ type: 'block_finalize' });
-    expect(third).toBeUndefined(); // nudgeMax = 2
-  });
-});
+/**
+ * The `tool-intent` loop hook was removed in ab0a2ff8 ("split reminder
+ * sources and rebuild send-message delivery"), which replaced it with the
+ * send-message delivery/reminder hooks. These cases asserted the veto, the
+ * stop-reason exemption and the nudge cap of a hook that no longer
+ * exists, so every one of them failed inside `find()` with
+ * "registration builtin.tool-intent not found".
+ *
+ * The detector logic itself is still unit-tested directly against
+ * `tool-intent-detector.ts`; what is gone is the PreFinalize veto built on
+ * top of it.
+ */
 
 describe('todo-gate hook', () => {
   const pending: Task[] = [

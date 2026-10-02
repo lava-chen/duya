@@ -22,7 +22,7 @@
 
 import type { Tool, ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolExecutor, ToolMetaInput } from '../registry.js';
-import { connectionNamespace } from '@duya/plugin-core/src/mcp/core/alias.js';
+import { connectionNamespace } from '@duya/plugin-core/mcp/core/alias';
 import { composeResultFromBlocks } from '../../mcp/result-blocks.js';
 
 /**

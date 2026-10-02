@@ -19,7 +19,7 @@
 import fs from 'fs';
 import path from 'path';
 import { safeStorage } from 'electron';
-import { parseUserMcpToml } from '@duya/plugin-core/src/mcp/user-config.js';
+import { parseUserMcpToml } from '@duya/plugin-core/mcp/user-config';
 import { getLogger, LogComponent } from '../logging/logger';
 import { parse, stringify } from '@iarna/toml';
 import writeFileAtomic from 'write-file-atomic';

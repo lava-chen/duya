@@ -1,100 +1,54 @@
 // apps/desktop/src/renderer/lib/git-ipc.ts
-// Renderer-side wrapper around the `git:status` IPC. The return type
-// is hand-written here — we deliberately don't import from
-// `apps/desktop/src/preload/index.ts` because that's excluded from the renderer
-// tsconfig. The shapes must stay in sync with the preload interface;
-// any drift surfaces as a `window.electronAPI.git.status` call-site
-// type error.
+// Renderer-side wrapper around the `git:*` IPC channels.
+//
+// The shapes are NOT hand-written here. They are re-exported from
+// `apps/desktop/src/main/ipc/git-types.ts`, which is the single source of
+// truth shared by `git-handlers.ts` and the preload bridge and carries the
+// per-field docs. This file used to keep its own copy of all 19 of them,
+// justified by "we deliberately don't import from the preload bridge
+// because that's excluded from the renderer tsconfig" — which is not why.
+//
+// `exclude` in tsconfig.json filters the `include` globs; it does not
+// keep a file out of the program once something in `include` imports it.
+// `src/global.d.ts` already does `import type { ElectronAPI }` from the
+// preload bridge, so the renderer has been type-referencing the main
+// process side all along. Everything below is `export type` and
+// `import type`, so no main-process code reaches the renderer bundle.
 
-export interface GitStatusFileChange {
-  path: string;
-  additions: number;
-  removals: number;
-}
+export type {
+  GitStatusFileChange,
+  GitStatusTotals,
+  GitStatusResult,
+  GitReviewFileStatus,
+  GitReviewFile,
+  GitReviewResult,
+  GitReviewDiffResult,
+  GitReviewFullDiffResult,
+  GitTurnReview,
+  GitLatestTurnReviewResult,
+  GitTurnHistoryEntry,
+  GitTurnHistoryResult,
+  ReviewScopeType,
+  ReviewScopeParams,
+  GitCommitInfo,
+  GitListCommitsResult,
+  GitBranchRef,
+  GitListBranchesResult,
+  GitRepositoryState,
+} from '../../main/ipc/git-types';
 
-export interface GitStatusTotals {
-  additions: number;
-  removals: number;
-  fileCount: number;
-}
-
-export interface GitStatusResult {
-  isGitRepo: boolean;
-  fileChanges?: GitStatusFileChange[];
-  totals?: GitStatusTotals;
-}
-
-export type GitReviewFileStatus = 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked';
-
-export interface GitReviewFile extends GitStatusFileChange {
-  status: GitReviewFileStatus;
-  oldPath?: string;
-}
-
-export interface GitReviewResult {
-  isGitRepo: boolean;
-  branch?: string;
-  baseRef?: string;
-  files?: GitReviewFile[];
-  totals?: GitStatusTotals;
-  /** Preloaded full diff (scoped review returns it inline). */
-  patch?: string;
-  truncated?: boolean;
-  binary?: boolean;
-}
-
-export interface GitReviewDiffResult {
-  isGitRepo: boolean;
-  path?: string;
-  patch?: string;
-  binary?: boolean;
-  truncated?: boolean;
-  error?: string;
-}
-
-export interface GitReviewFullDiffResult {
-  isGitRepo: boolean;
-  patch?: string;
-  binary?: boolean;
-  truncated?: boolean;
-  error?: string;
-}
-
-export interface GitTurnReview {
-  id: string;
-  sessionId: string;
-  turnId: string;
-  workingDirectory: string;
-  files: GitReviewFile[];
-  totals: GitStatusTotals;
-  patch: string;
-  binary: boolean;
-  truncated: boolean;
-  capturedAt: number;
-}
-
-export interface GitLatestTurnReviewResult {
-  isGitRepo: boolean;
-  review?: GitTurnReview;
-  error?: string;
-}
-
-// ── Turn history (plan 308 Phase 2) ──────────────────────────────
-
-export interface GitTurnHistoryEntry {
-  id: string;
-  turnId: string;
-  additions: number;
-  removals: number;
-  fileCount: number;
-  capturedAt: number;
-}
-
-export interface GitTurnHistoryResult {
-  isGitRepo: boolean;
-  turns?: GitTurnHistoryEntry[];
-  error?: string;
-}
+// The types this file's own signatures reference. `export type { … }` above
+// re-exports without binding locally, so the body needs its own import.
+import type {
+  GitLatestTurnReviewResult,
+  GitListBranchesResult,
+  GitListCommitsResult,
+  GitRepositoryState,
+  GitReviewResult,
+  GitStatusResult,
+  GitTurnHistoryResult,
+  ReviewScopeParams,
+} from '../../main/ipc/git-types';
 
 export async function getGitStatus(cwd: string): Promise<GitStatusResult> {
   // Default to `isGitRepo: false` when the bridge isn't present so
@@ -106,13 +60,12 @@ export async function getGitReview(cwd: string): Promise<GitReviewResult> {
   return window.electronAPI?.git?.review(cwd) ?? { isGitRepo: false };
 }
 
-export async function getGitReviewDiff(cwd: string, filePath: string): Promise<GitReviewDiffResult> {
-  return window.electronAPI?.git?.reviewDiff(cwd, filePath) ?? { isGitRepo: false };
-}
-
-export async function getGitReviewFullDiff(cwd: string): Promise<GitReviewFullDiffResult> {
-  return window.electronAPI?.git?.reviewFullDiff(cwd) ?? { isGitRepo: false };
-}
+// Plan 583 ISS-25: `getGitReviewDiff` / `getGitReviewFullDiff` /
+// `getGitReviewScopedDiff` were removed. Nothing imported them — the review
+// panel obtains its diff from `getGitReviewScoped`, which already carries the
+// scoped diff — so they were dead wrappers around three bridge channels the
+// panel never called. The handlers stay in `git-handlers.ts`; only the unused
+// renderer-side wrappers are gone.
 
 export async function getGitLatestTurnReview(sessionId: string, cwd: string): Promise<GitLatestTurnReviewResult> {
   return window.electronAPI?.git?.reviewLatestTurn(sessionId, cwd) ?? { isGitRepo: false };
@@ -132,29 +85,8 @@ export async function getGitTurnReviewByTurnId(sessionId: string, cwd: string, t
 
 // ── Scoped review (plan 227) ──────────────────────────────────────
 
-export type ReviewScopeType = 'uncommitted' | 'unstaged' | 'staged' | 'commit';
-
-export interface ReviewScopeParams {
-  type: ReviewScopeType;
-  commitFrom?: string;
-  commitTo?: string;
-}
-
-export interface GitCommitInfo {
-  hash: string;
-  subject: string;
-}
-
-export interface GitListCommitsResult {
-  commits: GitCommitInfo[];
-}
-
 export async function getGitReviewScoped(cwd: string, scope: ReviewScopeParams): Promise<GitReviewResult> {
   return window.electronAPI?.git?.reviewScoped(cwd, scope) ?? { isGitRepo: false };
-}
-
-export async function getGitReviewScopedDiff(cwd: string, scope: ReviewScopeParams, filePath: string): Promise<GitReviewDiffResult> {
-  return window.electronAPI?.git?.reviewScopedDiff(cwd, scope, filePath) ?? { isGitRepo: false };
 }
 
 export async function getGitCommits(cwd: string, count?: number): Promise<GitListCommitsResult> {
@@ -162,26 +94,6 @@ export async function getGitCommits(cwd: string, count?: number): Promise<GitLis
 }
 
 // ── Branch and repo-state helpers (plan 308 Phase 2) ───────────────
-
-export interface GitBranchRef {
-  name: string;
-  head: string;
-  current?: boolean;
-  remote?: string;
-}
-
-export interface GitListBranchesResult {
-  isGitRepo: boolean;
-  locals: GitBranchRef[];
-  remotes: GitBranchRef[];
-}
-
-export interface GitRepositoryState {
-  isGitRepo: boolean;
-  branch?: string;
-  head?: string;
-  dirty?: number;
-}
 
 /** Empty/default state for a non-repo or error path. */
 export const EMPTY_REPO_STATE: GitRepositoryState = { isGitRepo: false };

@@ -10,7 +10,7 @@ import type { ToolUseContext } from '../types.js';
 // Import all tools
 import { BashTool } from './BashTool/BashTool.js';
 import { PowerShellTool } from './PowerShellTool/PowerShellTool.js';
-import { ReadTool, createReadTool, readFileContent } from './ReadTool/ReadTool.js';
+import { ReadTool, readFileContent } from './ReadTool/ReadTool.js';
 import { WriteTool } from './WriteTool/WriteTool.js';
 import { GrepTool } from './GrepTool/GrepTool.js';
 import { EditTool, editTool, executeEdit } from './EditTool/EditTool.js';
@@ -333,7 +333,7 @@ export function createBuiltinRegistry(
 export { ToolRegistry } from './registry.js';
 export { BashTool } from './BashTool/BashTool.js';
 export { PowerShellTool } from './PowerShellTool/PowerShellTool.js';
-export { ReadTool, createReadTool, readFileContent } from './ReadTool/ReadTool.js';
+export { ReadTool, readFileContent } from './ReadTool/ReadTool.js';
 export { WriteTool } from './WriteTool/WriteTool.js';
 export { GrepTool } from './GrepTool/GrepTool.js';
 export { EditTool, editTool, executeEdit } from './EditTool/EditTool.js';

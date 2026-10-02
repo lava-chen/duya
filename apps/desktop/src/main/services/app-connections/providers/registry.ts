@@ -19,7 +19,7 @@
 import {
   asAppConnectorId,
   type AppConnectorId,
-} from '@duya/plugin-core/src/connectors/app-connector-id.js';
+} from '@duya/plugin-core/connectors/app-connector-id';
 import type { ProviderId } from '../types';
 
 /**

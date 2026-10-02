@@ -131,4 +131,33 @@ describe('TokenVault', () => {
       vault.set('c4', { accessToken: 'plain', expiresAt: null, tokenType: 'Bearer', scopes: [] }),
     ).toThrow(VaultUnavailableError);
   });
+
+  it('reports isUnavailable instead of pretending the vault is empty', () => {
+    const dir = path.join(tempDir, 'app-connections');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'tokens.vault'),
+      Buffer.from('encrypted:{"tokens":{"c5":{"accessToken":"live","refreshToken":"rt","expiresAt":null,"tokenType":"Bearer","scopes":[]}},"oauthClients":{},"mcpOAuth":{}}', 'utf-8').toString('base64'),
+    );
+
+    encryptionAvailable = false;
+    const vault = new TokenVault();
+
+    // The grant is on disk and perfectly alive; we just cannot read it.
+    expect(vault.exists()).toBe(true);
+    expect(vault.get('c5')).toBeUndefined();
+    expect(vault.isUnavailable()).toBe(true);
+
+    // safeStorage comes back (user set up a keyring): the vault recovers
+    // on its own because the failed read was deliberately not cached.
+    encryptionAvailable = true;
+    expect(vault.get('c5')?.accessToken).toBe('live');
+    expect(vault.isUnavailable()).toBe(false);
+  });
+
+  it('is not unavailable when no vault file exists at all', () => {
+    const vault = new TokenVault();
+    expect(vault.isUnavailable()).toBe(false);
+    expect(vault.get('nope')).toBeUndefined();
+  });
 });

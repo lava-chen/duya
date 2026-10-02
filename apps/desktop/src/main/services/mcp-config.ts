@@ -8,7 +8,7 @@
  * the storage moves to ConfigStore.
  */
 
-import type { UserMcpTomlServer } from '@duya/plugin-core/src/mcp/user-config.js';
+import type { UserMcpTomlServer } from '@duya/plugin-core/mcp/user-config';
 import { randomUUID } from 'node:crypto';
 import { getConfigStore } from '../config/store-instance';
 import type { McpServerEntry } from '../config/schema';

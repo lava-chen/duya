@@ -1,4 +1,4 @@
-﻿import WebSocket from 'ws';
+import WebSocket from 'ws';
 import type { FeishuDomain } from './types.js';
 
 /**

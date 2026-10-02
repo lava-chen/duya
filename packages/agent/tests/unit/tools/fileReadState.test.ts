@@ -69,14 +69,20 @@ describe('edit read-state anchoring (plan 428)', () => {
     expect(readFileSync(file, 'utf-8')).toBe('one\ntwo\nTHREE\nfour\n');
   });
 
-  it('rejects an edit when mtime changed after the read (external modification)', async () => {
+  it('rejects an edit when the file really changed after the read (external modification)', async () => {
     const file = join(root, 'stale.md');
     writeFileSync(file, 'alpha\nbeta\n');
     const read = await new ReadTool().execute({ file_path: file }, root);
     expect(read.error).toBeFalsy();
 
-    // Simulate an external writer (bash / apply_patch / editor) that touches
-    // the file after our read. utimes gives a deterministic mtime bump.
+    // Simulate an external writer (bash / apply_patch / editor) that
+    // rewrites the file after our read. The content has to change, not just
+    // the mtime: this suite used to bump mtime alone with utimesSync and
+    // expect rejection, but Plan 448 made a full-view read exempt from the
+    // staleness check when the content still matches, so an mtime-only
+    // touch is correctly let through. See file-read-state-448.test.ts for
+    // the exemption and the jitter cases.
+    writeFileSync(file, 'alpha\nbeta\ngamma\n');
     const future = new Date(Date.now() + 10_000);
     utimesSync(file, future, future);
 
@@ -88,7 +94,7 @@ describe('edit read-state anchoring (plan 428)', () => {
     expect(result.result).toContain('modified after the last read');
     expect(result.result).toContain('Re-read');
     // Content untouched.
-    expect(readFileSync(file, 'utf-8')).toBe('alpha\nbeta\n');
+    expect(readFileSync(file, 'utf-8')).toBe('alpha\nbeta\ngamma\n');
 
     // Re-reading refreshes the anchor and the edit goes through.
     const reread = await new ReadTool().execute({ file_path: file }, root);
@@ -98,7 +104,7 @@ describe('edit read-state anchoring (plan 428)', () => {
       root,
     );
     expect(retry.error).toBeFalsy();
-    expect(readFileSync(file, 'utf-8')).toBe('alpha\nBETA\n');
+    expect(readFileSync(file, 'utf-8')).toBe('alpha\nBETA\ngamma\n');
   });
 
   it('allows consecutive edits without a re-read between them', async () => {
@@ -139,12 +145,20 @@ describe('edit read-state anchoring (plan 428)', () => {
 });
 
 describe('file-read-state module', () => {
+  // Plan 448 added `isFullView` and `contentSha` to the record so a full
+  // read can be exempt from the mtime check. `toEqual` is a deep
+  // comparison, so these two cases went red on the two new keys.
   it('records, retrieves, and invalidates entries', () => {
     const file = join(root, 'norm.md');
     writeFileSync(file, 'x\n');
     const s = statSync(file);
     recordFileRead(file, { mtimeMs: s.mtimeMs, size: s.size });
-    expect(getFileReadState(file)).toEqual({ mtimeMs: s.mtimeMs, size: s.size });
+    expect(getFileReadState(file)).toEqual({
+      mtimeMs: s.mtimeMs,
+      size: s.size,
+      isFullView: false,
+      contentSha: undefined,
+    });
     invalidateFileRead(file);
     expect(getFileReadState(file)).toBeUndefined();
   });
@@ -156,6 +170,11 @@ describe('file-read-state module', () => {
     recordFileRead(file, { mtimeMs: s.mtimeMs, size: s.size });
     // Forward-slash / ..-laden variants resolve to the same entry.
     const variant = file.replace(/\\/g, '/').replace('/norm.md', '/./norm.md');
-    expect(getFileReadState(variant)).toEqual({ mtimeMs: s.mtimeMs, size: s.size });
+    expect(getFileReadState(variant)).toEqual({
+      mtimeMs: s.mtimeMs,
+      size: s.size,
+      isFullView: false,
+      contentSha: undefined,
+    });
   });
 });

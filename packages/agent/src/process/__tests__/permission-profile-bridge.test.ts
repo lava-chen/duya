@@ -1,13 +1,13 @@
 /**
  * permission-profile-bridge.test.ts - 桥接函数单测 + chat:start 跨层回归
  *
- * 跨层测试覆盖 (v3 反馈第 5 条, 强制本 PR):
- *   - row=full_access + 旧 options.permissionMode=default → agentMode=bypassPermissions (旧字段被忽略)
- *   - row=default + 旧 options.permissionMode=bypassPermissions (试图污染) → agentMode=default
+ * 跨层测试覆盖:
  *   - row=full_access + options.permissionModeOverride=default → agentMode=default
  *   - row=full_access + options.permissionModeOverride=garbage → agentMode=bypassPermissions (走 row)
- *   - row=null + 旧 options.permissionMode=default → agentMode=default
- *   - 任何 ignoredDeprecated 字段被原样返回
+ *   - row=null → agentMode=default (DB 不可读降级)
+ *
+ * Plan 583 / ISS-09: 旧 options.permissionMode 字段已从 wire 协议删除, 相关
+ * "被忽略" 断言不再需要 —— 字段不存在, 旧 sender 携带时只是多余属性.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -69,38 +69,7 @@ describe('isValidAgentMode', () => {
   });
 });
 
-describe('resolveChatStartAgentMode - 跨层回归 (v3 反馈第 5 条)', () => {
-  it('核心 bug 修复: row=full_access + 旧 options.permissionMode=default (旧字段试图污染) → agentMode=bypassPermissions', () => {
-    const r = resolveChatStartAgentMode({
-      rowProfile: 'full_access',
-      optionOverride: undefined,
-      deprecatedOption: 'default',
-    });
-    expect(r.agentMode).toBe('bypassPermissions');
-    expect(r.fromRow).toBe('full_access');
-    expect(r.override).toBeNull();
-    expect(r.ignoredDeprecated).toBe('default');
-  });
-
-  it('row=default + 旧 options.permissionMode=bypassPermissions → agentMode=default (旧字段被忽略)', () => {
-    const r = resolveChatStartAgentMode({
-      rowProfile: 'default',
-      optionOverride: undefined,
-      deprecatedOption: 'bypassPermissions',
-    });
-    expect(r.agentMode).toBe('default');
-    expect(r.ignoredDeprecated).toBe('bypassPermissions');
-  });
-
-  it('row=full_access + 旧 options.permissionMode=bypassPermissions (试图升级) → 旧字段被忽略', () => {
-    const r = resolveChatStartAgentMode({
-      rowProfile: 'default',
-      optionOverride: undefined,
-      deprecatedOption: 'bypassPermissions',
-    });
-    expect(r.agentMode).toBe('default');
-  });
-
+describe('resolveChatStartAgentMode - 跨层回归', () => {
   it('row=full_access + options.permissionModeOverride=default → agentMode=default (override 生效)', () => {
     const r = resolveChatStartAgentMode({
       rowProfile: 'full_access',
@@ -119,11 +88,10 @@ describe('resolveChatStartAgentMode - 跨层回归 (v3 反馈第 5 条)', () => 
     expect(r.override).toBeNull();
   });
 
-  it('row=null + 旧 options.permissionMode=default → agentMode=default (DB 不可读降级, 不读旧字段)', () => {
+  it('row=null → agentMode=default (DB 不可读降级)', () => {
     const r = resolveChatStartAgentMode({
       rowProfile: null,
       optionOverride: undefined,
-      deprecatedOption: 'default',
     });
     expect(r.agentMode).toBe('default');
     expect(r.fromRow).toBeNull();
@@ -151,16 +119,5 @@ describe('resolveChatStartAgentMode - 跨层回归 (v3 反馈第 5 条)', () => 
       optionOverride: undefined,
     });
     expect(r.agentMode).toBe('default');
-  });
-
-  it('同时存在 override 和 deprecated, override 生效, deprecated 仍记录', () => {
-    const r = resolveChatStartAgentMode({
-      rowProfile: 'full_access',
-      optionOverride: 'auto',
-      deprecatedOption: 'bypassPermissions',
-    });
-    expect(r.agentMode).toBe('auto');
-    expect(r.override).toBe('auto');
-    expect(r.ignoredDeprecated).toBe('bypassPermissions');
   });
 });

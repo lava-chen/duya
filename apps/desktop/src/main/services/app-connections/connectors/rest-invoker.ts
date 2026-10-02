@@ -30,7 +30,7 @@
 import type {
   AppToolDeclaration,
   RestInvokeDeclaration,
-} from '@duya/plugin-core/src/connectors/app-schema.js';
+} from '@duya/plugin-core/connectors/app-schema';
 import type { ConnectorInvokeResult } from '../connector-types.js';
 
 const DEFAULT_RETRYABLE_STATUS = [502, 503, 504];
