@@ -2,7 +2,7 @@
 
 > **Status**: Phase 1 ✅(2026-09-04);Phase 4 ✅ 代码+单测(2026-09-05,e2e 挂 P6.2);Phase 2/3/5/6 待开工 · **Priority**: P0 · **Owner**: TBD
 > **总纲**: [473-grok-bot-framework-overview](./473-grok-bot-framework-overview.md)
-> **关联**: [476-agent-wake-bus](./476-agent-wake-bus.md)(已完成)· [477-agent-dm-messaging](./477-agent-dm-messaging.md)(P1-P3 已勾)· [478-shared-rooms-group-chat](./478-shared-rooms-group-chat.md)(未启动,群聊主 plan)· [490-bot-toolset-turn-tool-alignment](./490-bot-toolset-turn-tool-alignment.md)
+> **关联**: [476-agent-wake-bus](../completed/476-agent-wake-bus.md)(已完成)· [477-agent-dm-messaging](../completed/477-agent-dm-messaging.md)(P1-P3 已勾)· [478-shared-rooms-group-chat](./478-shared-rooms-group-chat.md)(未启动,群聊主 plan)· [490-bot-toolset-turn-tool-alignment](./490-bot-toolset-turn-tool-alignment.md)
 > **研究基线**: 2026-09-04 对 grok-bot 0.18 重建库逐文件精读(`agent-messaging.ts`、`sand-agent-management-tools.ts`、`group-chat.ts`、`group-chat-orchestrator.ts`、`group-chat-glue.ts`、`agent-to-agent-messaging.ts`、`background-wakes.ts`),并逐项核实 duya 侧真实接线状态(以 grep 消费者为准,不采信 plan 勾选)。
 
 ---

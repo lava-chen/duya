@@ -221,8 +221,11 @@ describe('gateway under-report guard (plan 444)', () => {
     const est = computeContextEstimate([big, underReported, user]);
     expect(est.anchored).toBe(true);
     expect(est.anchorTokens).toBe(150_003); // input + persisted "old reply"
-    // base = prev anchor; trailing = the two appended messages
-    expect(est.usedTokens).toBe(150_500 + est.trailingTokens);
+    // base = prev anchor; trailing = the two appended messages.
+    // This used to read `150_500 + est.trailingTokens`, which contradicted
+    // both the comment above and the `anchorTokens` assertion two lines up
+    // (150_003) — and the case next door uses `anchorTokens + trailing`.
+    expect(est.usedTokens).toBe(est.anchorTokens + est.trailingTokens);
     expect(est.anchorIndex).toBe(0); // output-only usage is not a context anchor
   });
 

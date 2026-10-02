@@ -50,9 +50,34 @@ describe('live context-usage emission (stateless, plan 443)', () => {
     ];
     const est = computeContextEstimate(history);
     expect(est.anchored).toBe(true);
-    // last_call normalized: 1000 + 8000 + 100 = 9100 prompt (+200 output).
-    expect(est.anchorTokens).toBe(9300);
-    expect(est.usedTokens).toBe(9300);
+    // last_call prompt normalized: 1000 + 8000 + 100 = 9100, plus the
+    // estimate of the persisted assistant content.
+    //
+    // These cases used to add the block's output_tokens to the anchor
+    // ("+200 output" -> 9300). Plan 577 took output out of the anchor --
+    // the number a provider reports for what it generated is not part of
+    // the prompt it will be re-sent inside, and counting it inflated the
+    // budget. The same change is asserted directly in the case below.
+    expect(est.anchorTokens).toBe(9102);
+    expect(est.usedTokens).toBe(9102);
+  });
+
+  it('output_tokens do not inflate the anchor', () => {
+    // The property behind the numbers above, pinned on its own so a future
+    // change to the content estimator cannot quietly reintroduce output
+    // into the anchor.
+    const build = (outputTokens: number): Msg[] => [
+      { id: 'u1', role: 'user', content: 'hello' },
+      assistantWithPersistedUsage(
+        'a1',
+        { input_tokens: 3000, output_tokens: 600, cache_hit_tokens: 24_000, cache_creation_tokens: 300 },
+        { input_tokens: 1000, output_tokens: outputTokens, cache_hit_tokens: 8000, cache_creation_tokens: 100 },
+      ),
+    ];
+    const low = computeContextEstimate(build(1));
+    const high = computeContextEstimate(build(999_999));
+    expect(low.anchorTokens).toBe(high.anchorTokens);
+    expect(low.anchored).toBe(true);
   });
 
   it('mid-turn: fresh in-memory usage beats the stale persisted block; trailing counts tool results', () => {
@@ -81,11 +106,13 @@ describe('live context-usage emission (stateless, plan 443)', () => {
     const est = computeContextEstimate(history);
     expect(est.anchored).toBe(true);
     expect(est.anchorIndex).toBe(3);
-    // Anchor = 2000 + 150 (in-memory usage preferred over the 50K stale row).
-    expect(est.anchorTokens).toBe(2150);
+    // Anchor = the in-memory block's prompt tokens (2000) plus the estimate
+    // of the persisted content. Output (150) is not part of the anchor
+    // since Plan 577.
+    expect(est.anchorTokens).toBe(2004);
     // Trailing: the tool result (400/4 = 100 tokens).
     expect(est.trailingTokens).toBe(100);
-    expect(est.usedTokens).toBe(2250);
+    expect(est.usedTokens).toBe(2104);
   });
 
   it('thinking + tool_use blocks in trailing messages are counted, not dropped', () => {
@@ -102,8 +129,9 @@ describe('live context-usage emission (stateless, plan 443)', () => {
       },
     ];
     const est = computeContextEstimate(history);
-    // anchor 1010 + trailing thinking(100) + text(50)
-    expect(est.usedTokens).toBe(1160);
+    // anchor 1000 + trailing thinking(100) + text(50). The block's
+    // output_tokens (10) is not part of the anchor since Plan 577.
+    expect(est.usedTokens).toBe(1150);
   });
 
   it('post-compaction without a fresh response → unanchored (ring shows ?)', () => {
@@ -131,7 +159,9 @@ describe('live context-usage emission (stateless, plan 443)', () => {
     const est = computeContextEstimate(history);
     expect(est.anchored).toBe(true);
     expect(est.anchorIndex).toBe(3);
-    expect(est.usedTokens).toBe(3100);
+    // 3000 prompt tokens; the block's output_tokens (100) is excluded from
+    // the anchor since Plan 577.
+    expect(est.usedTokens).toBe(3000);
   });
 
   it('cumulative totals accumulate ONLY-NEW per call, never the re-read cache hit', () => {

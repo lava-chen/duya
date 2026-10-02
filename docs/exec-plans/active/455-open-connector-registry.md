@@ -137,5 +137,5 @@
 
 - [460-rest-template-connector](./460-rest-template-connector.md) — `rest` 绑定实现 + slack/m365/google 声明化迁移（依赖本计划 Phase A/B）
 - [452-mcp-direct-and-plugin-unification](./452-mcp-direct-and-plugin-unification.md) — 引用式 apps 声明 + @ 弹层插件化 + plugin:// mention
-- [449-app-connection-approval-parity](./449-app-connection-approval-parity.md) — riskTier 分级 + tool_overrides 审批模板
-- [314-global-connector-registry-design-suite](./314-global-connector-registry-design-suite.md) — canonical connectorId 依赖声明
+- [449-app-connection-approval-parity](../completed/449-app-connection-approval-parity.md) — riskTier 分级 + tool_overrides 审批模板
+- [314-global-connector-registry-design-suite](../completed/314-global-connector-registry-design-suite.md) — canonical connectorId 依赖声明

@@ -3,12 +3,12 @@
 > **Status**: Draft (待 Review)
 > **Priority**: P1
 > **Created**: 2026-09-12
-> **Supersedes**: [522-plans-plugin-mcp](./522-plans-plugin-mcp.md)(**删除该 plan 文件,本 plan 完全替代**)
+> **Supersedes**: [522-plans-plugin-mcp](../completed/522-plans-plugin-mcp.md)(**删除该 plan 文件,本 plan 完全替代**)
 > **Sibling plans**:
 > - [301-memory-v2-phase-1a-schema-projects-catalog](../completed/301-memory-v2-phase-1a-schema-projects-catalog.md) — `projects` 表来源(migration 0001)
 > - [485-bot-storage-layout](./485-bot-storage-layout.md) — agents 存储布局(`~/.duya/agents/<id>/`)
-> - [479-bot-memory-three-tiers](./479-bot-memory-three-tiers.md) — 三层记忆(own/user/project),**与本 plan 解耦**,不动
-> - [493-bot-session-physical-isolation-and-generation-rotation](./493-bot-session-physical-isolation-and-generation-rotation.md) — session 隔离
+> - [479-bot-memory-three-tiers](./479-bot-memory-isolation-tiers.md) — 三层记忆(own/user/project),**与本 plan 解耦**,不动
+> - [493-bot-session-physical-isolation-and-generation-rotation](../completed/493-bot-session-physical-isolation-and-generation-rotation.md) — session 隔离
 
 ---
 

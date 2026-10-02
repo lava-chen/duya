@@ -1,4 +1,3 @@
-﻿// @ts-nocheck
 /**
  * Feishu Document Comment Handler
  *
@@ -6,7 +5,7 @@
  * Integrates with duya's AI agent via GatewayManager IPC.
  */
 
-import type { FeishuEvent, FeishuConfigOptions } from './types.js';
+import type { FeishuEvent } from './types.js';
 import {
   resolveRule,
   isUserAllowed,
@@ -49,6 +48,22 @@ interface CommentReply {
 interface SessionEntry {
   messages: Array<{ role: string; content: string; ts: number }>;
   lastUpdate: number;
+}
+
+/**
+ * App credentials for the document-comment API.
+ *
+ * This was imported from ./types.js as `FeishuConfigOptions`, but no such
+ * export exists there -- the file-level ts-nocheck suppression that used
+ * to sit on this file is what hid the break. `FeishuAdapterOptions` is
+ * not the missing type: that is the adapter's callback bundle, not app
+ * credentials. Exported because it appears in this class's public
+ * constructor signature and the package emits declarations.
+ */
+export interface FeishuConfigOptions {
+  app_id?: string;
+  app_secret?: string;
+  domain?: 'feishu' | 'lark';
 }
 
 const MAX_SESSION_MESSAGES = 50;

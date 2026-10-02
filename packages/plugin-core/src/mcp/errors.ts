@@ -2,7 +2,7 @@
 // MCP error unions, source context, and the unified MCPIssue type.
 // Pure types only — no runtime imports.
 
-import type { MCPSourceContext } from './discovery';
+import type { MCPSourceContext } from './sources';
 
 /**
  * Phases at which an MCP issue can be raised. Lets the UI bucket issues

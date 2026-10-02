@@ -6,6 +6,7 @@ import type { ToolUseContext } from '../../types.js';
 import type { ToolInvokeDispatcher, ToolInvokeRequest, ToolInvokeOutcome } from './ToolInvokeTool.js';
 import type { ToolSnapshot } from '../snapshot.js';
 import type { ToolCatalogEntry } from '../catalog-types.js';
+import { resolveAskWithoutUser, readPermissionMode } from '../../permissions/askWithoutUser.js';
 import { logger } from '../../utils/logger.js';
 
 /** Registry-backed fallback dispatcher. It resolves stable IDs against the
@@ -168,9 +169,22 @@ export function createToolInvokeDispatcherFromRegistry(
             );
           }
         } else {
+          // Plan 583 / ISS-11: an `ask` decision must never be downgraded to
+          // "allow" just because the prompt hook is absent. Route through the
+          // shared resolution so this path matches the MCP executor and the
+          // StreamingToolExecutor.
+          const mode = readPermissionMode(context?.getAppState?.());
+          const fallback = resolveAskWithoutUser(mode, current.definition.name);
+          if (fallback.behavior === 'deny') {
+            logger.warn(
+              '[ToolInvoke] ask-tool with no interactive user; denied',
+              { toolName: current.internalName, toolId, mode, reason: decision.message },
+            );
+            return errorResult('TOOL_PERMISSION_UNANSWERED', 'Approval required', fallback.message);
+          }
           logger.warn(
-            '[ToolInvoke] no interactive user available; implicitly allowing ask-tool',
-            { toolName: current.internalName, toolId, reason: decision.message },
+            '[ToolInvoke] ask-tool with no interactive user; allowed by session mode',
+            { toolName: current.internalName, toolId, mode, reason: decision.message },
           );
         }
       }

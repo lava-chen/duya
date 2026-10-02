@@ -191,8 +191,6 @@ interface ChatStartMessage {
     messages?: Array<{ role: string; content: string }>;
     systemPrompt?: string;
     language?: string;
-    /** @deprecated 由 session row.permission_profile 派生, worker 严格忽略. */
-    permissionMode?: string;
     permissionModeOverride?: 'default' | 'auto' | 'bypassPermissions';
     files?: FileAttachment[];
     agentProfileId?: string | null;
@@ -2442,7 +2440,10 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       ? estimateMessagesTokens([{ role: 'assistant', content: effectiveSystemPrompt }])
       : 0;
     // Resolve permission mode from session row, with explicit override allowed.
-    // 严格忽略 msg.options.permissionMode (旧字段), 防止残留发送路径覆盖 DB 决定.
+    // Plan 583 / ISS-09: the old `options.permissionMode` field is gone from
+    // the wire protocol, so a stale sender that still includes it simply has
+    // it dropped here — structurally impossible to honour, rather than read
+    // and then deliberately ignored.
     let rowProfile: string | null = null;
     try {
       const sessionRow = sessionDb.get(msg.sessionId);
@@ -2453,11 +2454,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     const resolved = resolveChatStartAgentMode({
       rowProfile,
       optionOverride: msg.options?.permissionModeOverride,
-      deprecatedOption: msg.options?.permissionMode,
     });
-    if (resolved.ignoredDeprecated) {
-      log('[chat:start] ignored deprecated options.permissionMode:', resolved.ignoredDeprecated);
-    }
     log('[chat:start] agentMode:', resolved.agentMode, 'fromRow:', resolved.fromRow, 'override:', resolved.override);
     agent.setPermissionMode(resolved.agentMode);
 

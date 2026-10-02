@@ -12,7 +12,7 @@
  * running against a live DB, but close the app for a clean apply.
  */
 import { DatabaseSync } from 'node:sqlite';
-import { applyPathsMigration, dryRunPathsMigration } from '../electron/memory-state/pathsMigration.ts';
+import { applyPathsMigration, dryRunPathsMigration } from '../apps/desktop/src/main/memory-state/pathsMigration.ts';
 
 function parseArgs(argv: string[]): { db?: string; apply: boolean } {
   const args: { db?: string; apply: boolean } = { apply: false };

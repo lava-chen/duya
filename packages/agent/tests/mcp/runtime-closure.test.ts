@@ -274,13 +274,13 @@ vi.mock('../../src/mcp/index.js', async () => {
   };
 });
 
-vi.mock('@duya/plugin-core/src/mcp/resolve.js', () => ({
+vi.mock('@duya/plugin-core/mcp/resolve', () => ({
   resolveMCPDiscovery: vi.fn(),
 }));
 
 import { collectWorkerMCPCandidates } from '../../src/mcp/collect-worker.js';
 import * as mcpModule from '../../src/mcp/index.js';
-import { resolveMCPDiscovery } from '@duya/plugin-core/src/mcp/resolve.js';
+import { resolveMCPDiscovery } from '@duya/plugin-core/mcp/resolve';
 
 const mockedCollect = vi.mocked(collectWorkerMCPCandidates);
 const mockedResolve = vi.mocked(resolveMCPDiscovery);

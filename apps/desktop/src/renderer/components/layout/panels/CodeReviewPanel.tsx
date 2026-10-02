@@ -1,0 +1,1084 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  IconAlertCircle,
+  IconChevronDown,
+  IconChevronLeft,
+  IconChevronRight,
+  IconColumns2,
+  IconCopy,
+  IconDots,
+  IconFileDiff,
+  IconFileMinus,
+  IconFilePlus,
+  IconFileX,
+  IconFold,
+  IconGitCompare,
+  IconInfoCircle,
+  IconLayoutSidebarRight,
+  IconMessagePlus,
+  IconRefresh,
+  IconRoute,
+  IconSearch,
+  IconTextWrap,
+  FileTextIcon,
+} from "@/components/icons";
+import { dispatchAddAttachment } from "@/lib/add-attachment-event";
+import { useCodeComments } from "@/hooks/use-code-comments";
+import { useTheme } from "@/hooks/useTheme";
+import { CodeViewer } from "./code-review-code-viewer";
+import {
+  getGitLatestTurnReview,
+  getGitTurnHistory,
+  getGitTurnDetail,
+  getGitTurnReviewByTurnId,
+  getGitReviewScoped,
+  getGitCommits,
+  type GitReviewFile,
+  type GitReviewResult,
+  type GitTurnReview,
+  type GitTurnHistoryEntry,
+  type ReviewScopeParams,
+  type GitCommitInfo,
+} from "@/lib/git-ipc";
+import { useOptionalPanel } from "@/hooks/usePanel";
+import type { PageTab } from "./registry";
+import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
+import { DropdownMenu, type MenuAction } from "@/components/ui/DropdownMenu";
+import {
+  collapseContextLines,
+  countPatchChanges,
+  fileLanguageLabel,
+  parseReviewPatch,
+  toSplitRows,
+  type ReviewDiffHunk,
+  type ReviewDiffLine,
+  type ReviewDisplayLine,
+  type ReviewFilePatch,
+} from "./code-review-diff";
+
+type DiffLayout = "unified" | "split";
+/** Scope selector values shown in the dropdown. */
+type ReviewScope = "latest-turn" | "uncommitted" | "unstaged" | "staged" | "commit";
+
+const SCOPE_LABELS: Record<ReviewScope, string> = {
+  "latest-turn": "上一轮",
+  uncommitted:  "未提交 (HEAD → 工作区)",
+  unstaged:    "未暂存 (索引 → 工作区)",
+  staged:      "已暂存 (HEAD → 索引)",
+  commit:      "提交对比",
+};
+
+/** Relative-time label for a persisted turn (history dropdown). */
+function formatTurnAge(capturedAt: number): string {
+  const minutes = Math.max(0, Math.floor((Date.now() - capturedAt) / 60_000));
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${Math.floor(hours / 24)} 天前`;
+}
+
+const EMPTY_REVIEW: GitReviewResult = { isGitRepo: false, files: [] };
+
+function joinWorkspacePath(workingDirectory: string, relativePath: string): string {
+  return `${workingDirectory.replace(/[\\/]$/, "")}/${relativePath}`;
+}
+
+function statusColor(status: GitReviewFile["status"]): string {
+  switch (status) {
+    case "added":
+    case "untracked": return "var(--review-add)";
+    case "deleted": return "var(--review-remove)";
+    // These were hex literals here while the stylesheet carried its own
+    // copy, so the two could drift. Both live in `.code-review-panel` now.
+    case "renamed": return "var(--review-renamed)";
+    default: return "var(--review-modified)";
+  }
+}
+
+function StatusIcon({ status }: { status: GitReviewFile["status"] }) {
+  const color = statusColor(status);
+  const props = { size: 18, stroke: 2, color, "aria-label": status, title: status };
+  switch (status) {
+    case "added":
+    case "untracked":
+      return <IconFilePlus {...props} />;
+    case "deleted":
+      return <IconFileMinus {...props} />;
+    case "renamed":
+      return <IconFileX {...props} />;
+    default:
+      return <IconFileDiff {...props} />;
+  }
+}
+
+/** Makes whitespace visible (Codex parity): spaces → ·, tabs → →. */
+function visualizeWhitespace(content: string): string {
+  return content.replace(/ /g, "·").replace(/\t/g, "→");
+}
+
+function DiffLineView({ line, wrapped, showWhitespace }: {
+  line: ReviewDiffLine;
+  wrapped: boolean;
+  showWhitespace: boolean;
+}) {
+  const lineNumber = line.type === "remove" ? line.oldLineNumber : line.newLineNumber;
+  const content = line.content ? (showWhitespace ? visualizeWhitespace(line.content) : line.content) : " ";
+  return (
+    <div className={`code-review-line code-review-line-${line.type}${wrapped ? " is-wrapped" : ""}`}>
+      <span className="code-review-line-number">{lineNumber ?? ""}</span>
+      <span className="code-review-line-prefix" aria-hidden="true">
+        {line.type === "add" ? "+" : line.type === "remove" ? "−" : " "}
+      </span>
+      <code className="code-review-line-code">{content}</code>
+    </div>
+  );
+}
+
+function CollapsedLinesButton({ count, onExpand }: { count: number; onExpand: () => void }) {
+  return (
+    <Button type="button" variant="ghost" size="sm" className="code-review-collapsed-lines" onClick={onExpand}>
+      <IconChevronDown size={14} aria-hidden="true" />
+      显示 {count} 行未修改内容
+    </Button>
+  );
+}
+
+function UnifiedHunk({ hunk, wrapped, foldUnchanged, showWhitespace }: {
+  hunk: ReviewDiffHunk;
+  wrapped: boolean;
+  foldUnchanged: boolean;
+  showWhitespace: boolean;
+}) {
+  const [expandedContext, setExpandedContext] = useState(false);
+  const lines = useMemo(
+    () => collapseContextLines(hunk.lines, foldUnchanged && !expandedContext),
+    [expandedContext, foldUnchanged, hunk.lines],
+  );
+
+  return (
+    <section className="code-review-hunk">
+      <div className="code-review-hunk-header">{hunk.header}</div>
+      {lines.map((line, index) => line.type === "collapsed" ? (
+        <CollapsedLinesButton
+          key={`collapsed-${index}`}
+          count={line.count}
+          onExpand={() => setExpandedContext(true)}
+        />
+      ) : (
+        <DiffLineView key={`${line.type}-${line.oldLineNumber ?? line.newLineNumber ?? index}`} line={line} wrapped={wrapped} showWhitespace={showWhitespace} />
+      ))}
+    </section>
+  );
+}
+
+function SplitHunk({ hunk, wrapped, foldUnchanged, showWhitespace }: {
+  hunk: ReviewDiffHunk;
+  wrapped: boolean;
+  foldUnchanged: boolean;
+  showWhitespace: boolean;
+}) {
+  const [expandedContext, setExpandedContext] = useState(false);
+  const lines = useMemo<ReviewDisplayLine[]>(
+    () => collapseContextLines(hunk.lines, foldUnchanged && !expandedContext),
+    [expandedContext, foldUnchanged, hunk.lines],
+  );
+  const rows = useMemo(() => toSplitRows(lines), [lines]);
+
+  return (
+    <section className="code-review-hunk code-review-hunk-split">
+      <div className="code-review-hunk-header">{hunk.header}</div>
+      {rows.map((row, index) => row.type === "collapsed" ? (
+        <CollapsedLinesButton
+          key={`collapsed-${index}`}
+          count={row.count}
+          onExpand={() => setExpandedContext(true)}
+        />
+      ) : (
+        <div className="code-review-split-row" key={`split-${index}`}>
+          {row.oldLine ? <DiffLineView line={row.oldLine} wrapped={wrapped} showWhitespace={showWhitespace} /> : <div className="code-review-line code-review-line-empty" />}
+          {row.newLine ? <DiffLineView line={row.newLine} wrapped={wrapped} showWhitespace={showWhitespace} /> : <div className="code-review-line code-review-line-empty" />}
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function DiffContents({ hunks, layout, wrapped, foldUnchanged, showWhitespace }: {
+  hunks: ReviewDiffHunk[];
+  layout: DiffLayout;
+  wrapped: boolean;
+  foldUnchanged: boolean;
+  showWhitespace: boolean;
+}) {
+  if (hunks.length === 0) {
+    return <div className="code-review-empty">此文件没有可显示的文本差异。</div>;
+  }
+  return (
+    <div className={`code-review-diff code-review-diff-${layout}`}>
+      {hunks.map((hunk, index) => layout === "split" ? (
+        <SplitHunk key={`${hunk.header}-${index}`} hunk={hunk} wrapped={wrapped} foldUnchanged={foldUnchanged} showWhitespace={showWhitespace} />
+      ) : (
+        <UnifiedHunk key={`${hunk.header}-${index}`} hunk={hunk} wrapped={wrapped} foldUnchanged={foldUnchanged} showWhitespace={showWhitespace} />
+      ))}
+    </div>
+  );
+}
+
+interface ContextMenuState {
+  visible: boolean;
+  x: number;
+  y: number;
+  path: string;
+}
+
+function ReviewContextMenu({
+  state,
+  onClose,
+  onCopyAbsolutePath,
+  onCopyRelativePath,
+  onAddToInput,
+}: {
+  state: ContextMenuState;
+  onClose: () => void;
+  onCopyAbsolutePath: (path: string) => void;
+  onCopyRelativePath: (path: string) => void;
+  onAddToInput: (path: string) => void;
+}) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ x: state.x, y: state.y });
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+    if (state.visible) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [state.visible, onClose]);
+
+  useEffect(() => {
+    if (!state.visible || !menuRef.current) return;
+    const menu = menuRef.current;
+    const rect = menu.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let newX = state.x;
+    let newY = state.y;
+    if (newX + rect.width > vw) newX = vw - rect.width - 8;
+    if (newY + rect.height > vh) newY = vh - rect.height - 8;
+    if (newX < 8) newX = 8;
+    if (newY < 8) newY = 8;
+    setPosition({ x: newX, y: newY });
+  }, [state.visible, state.x, state.y]);
+
+  if (!state.visible) return null;
+
+  const items = [
+    {
+      label: "Add to input",
+      icon: <IconMessagePlus size={14} />,
+      action: () => { onAddToInput(state.path); onClose(); },
+    },
+    {
+      label: "Copy absolute path",
+      icon: <IconCopy size={14} />,
+      action: () => { onCopyAbsolutePath(state.path); onClose(); },
+    },
+    {
+      label: "Copy relative path",
+      icon: <IconRoute size={14} />,
+      action: () => { onCopyRelativePath(state.path); onClose(); },
+    },
+  ];
+
+  return (
+    <div
+      ref={menuRef}
+      className="file-tree-context-menu"
+      style={{ position: "fixed", left: position.x, top: position.y, zIndex: 9999 }}
+    >
+      {items.map((item, i) => (
+        <Button
+          key={i}
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="file-tree-context-menu-item"
+          onClick={item.action}
+        >
+          <span className="file-tree-context-menu-icon">{item.icon}</span>
+          <span className="file-tree-context-menu-label">{item.label}</span>
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
+  const workingDirectory = typeof tab.params?.workingDirectory === "string" ? tab.params.workingDirectory : "";
+  const sessionId = typeof tab.params?.sessionId === "string" ? tab.params.sessionId : "";
+  // Plan 566: a turn-scoped caller (the transcript's file-change card) can pin
+  // this tab to ONE round instead of the session's latest. `reviewTurnId` is
+  // the id of the user message that opened that round, which is also what the
+  // agent stores as `chat_turn_reviews.turn_id`. Empty = follow the latest
+  // round, i.e. the panel's original behaviour.
+  const reviewTurnId = typeof tab.params?.reviewTurnId === "string" ? tab.params.reviewTurnId : "";
+  // File to reveal once the round's diff loads. Turn-scoped callers pass the
+  // row the user actually clicked; without it the panel would select the
+  // first file (alphabetical/git order) and bury the interesting one.
+  const reviewFilePath = typeof tab.params?.reviewFilePath === "string" ? tab.params.reviewFilePath : "";
+  const panel = useOptionalPanel();
+  const workspaceExpanded = panel?.workspaceExpanded ?? false;
+  const [review, setReview] = useState<GitReviewResult>(EMPTY_REVIEW);
+  const [scope, setScope] = useState<ReviewScope>(() => sessionId ? "latest-turn" : "uncommitted");
+  const [turnReview, setTurnReview] = useState<GitTurnReview | null>(null);
+  // Plan 308 Phase 2: persisted turn list for the history selector.
+  const [turns, setTurns] = useState<GitTurnHistoryEntry[]>([]);
+  const [selectedTurnId, setSelectedTurnId] = useState("");
+  const [commitFrom, setCommitFrom] = useState("");
+  const [commitTo, setCommitTo] = useState("");
+  const [commits, setCommits] = useState<GitCommitInfo[]>([]);
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [patch, setPatch] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [diffError, setDiffError] = useState("");
+  const [filter, setFilter] = useState("");
+  const [layout, setLayout] = useState<DiffLayout>("unified");
+  const [wrapped, setWrapped] = useState(false);
+  const [foldUnchanged, setFoldUnchanged] = useState(true);
+  const [showFiles, setShowFiles] = useState(true);
+  const [showWhitespace, setShowWhitespace] = useState(false);
+  // ZCode-style file preview with per-line comments. "diff" keeps the
+  // historical stacked-patches view; "preview" renders ONE file (the
+  // selected one) as a syntax-highlighted read-only surface where the
+  // user can attach comments to line ranges.
+  const [viewMode, setViewMode] = useState<"diff" | "preview">("diff");
+  const [previewContent, setPreviewContent] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  const [previewTruncated, setPreviewTruncated] = useState(false);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState>({
+    visible: false, x: 0, y: 0, path: "",
+  });
+  const fileRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const handleCopyPatch = useCallback(() => {
+    if (!patch) return;
+    navigator.clipboard.writeText(patch).catch(() => {});
+  }, [patch]);
+
+  const overflowMenuItems: MenuAction[] = [
+    {
+      kind: "checkbox",
+      id: "showWhitespace",
+      label: "显示空白字符",
+      checked: showWhitespace,
+      onToggle: (checked) => setShowWhitespace(checked),
+    },
+    {
+      kind: "action",
+      id: "copyPatch",
+      label: "复制 git apply 补丁",
+      disabled: !patch,
+      onSelect: handleCopyPatch,
+    },
+  ];
+
+  // Plan 583 / ISS-27: generation guard. `refresh` re-runs whenever the scope,
+  // session, working directory or pinned turn changes, and each run is a
+  // multi-call async read. Without a guard, a slow earlier run could resolve
+  // after a faster later one and overwrite the newer state with stale data
+  // (e.g. switching scope back and forth leaves the previous scope's diff on
+  // screen). Only the newest run may commit.
+  const refreshGenerationRef = useRef(0);
+
+  const refresh = useCallback(async () => {
+    const generation = ++refreshGenerationRef.current;
+    const isStale = () => generation !== refreshGenerationRef.current;
+
+    if (!workingDirectory) {
+      setReview(EMPTY_REVIEW);
+      setError("当前会话没有项目目录。");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      if (scope === "latest-turn") {
+        if (!sessionId) {
+          setReview(EMPTY_REVIEW);
+          setError("当前会话没有项目目录。");
+          return;
+        }
+        // Plan 308 Phase 2: load the session's turn list for the history
+        // selector alongside the latest review. The history list is fetched
+        // even for a pinned turn so the dropdown stays a usable escape hatch
+        // back to other rounds.
+        const [latest, history] = await Promise.all([
+          reviewTurnId
+            ? getGitTurnReviewByTurnId(sessionId, workingDirectory, reviewTurnId)
+            : getGitLatestTurnReview(sessionId, workingDirectory),
+          getGitTurnHistory(sessionId, workingDirectory, 50),
+        ]);
+        if (isStale()) return;
+        if (history.turns) setTurns(history.turns);
+        if (latest.error) setError(latest.error);
+        const stored = latest.review ?? null;
+        setTurnReview(stored);
+        setSelectedTurnId(stored?.id ?? "");
+        setReview({
+          isGitRepo: latest.isGitRepo,
+          branch: stored ? (reviewTurnId ? "本轮对话" : "上一轮对话") : undefined,
+          baseRef: stored ? "开始 → 结束" : undefined,
+          files: stored?.files ?? [],
+          totals: stored?.totals,
+        });
+        return;
+      }
+
+      // Scoped review: uncommitted / unstaged / staged / commit
+      setTurnReview(null);
+      const params: ReviewScopeParams = { type: scope };
+      if (scope === "commit") {
+        if (!commitFrom || !commitTo) {
+          setReview(EMPTY_REVIEW);
+          setError("请选择两个提交进行对比。");
+          return;
+        }
+        params.commitFrom = commitFrom;
+        params.commitTo = commitTo;
+      }
+      const next = await getGitReviewScoped(workingDirectory, params);
+      if (isStale()) return;
+      setReview(next);
+      if (!next.isGitRepo) setError("此项目不是 Git 仓库，或 Git 当前不可用。");
+    } catch {
+      if (isStale()) return;
+      setReview(EMPTY_REVIEW);
+      setError("无法读取变更。");
+    } finally {
+      // A superseded run must not clear the spinner the newer run owns.
+      if (!isStale()) setLoading(false);
+    }
+  }, [scope, sessionId, workingDirectory, commitFrom, commitTo, reviewTurnId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  // Fetch commit list when scope switches to 'commit'.
+  useEffect(() => {
+    if (scope !== "commit" || !workingDirectory) return;
+    let cancelled = false;
+    void getGitCommits(workingDirectory, 50).then((result) => {
+      if (cancelled) return;
+      setCommits(result.commits);
+      // Default to last commit if nothing selected yet.
+      if (result.commits.length >= 2 && !commitFrom && !commitTo) {
+        setCommitFrom(result.commits[1].hash);
+        setCommitTo(result.commits[0].hash);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [scope, workingDirectory]);
+
+  const files = review.files ?? [];
+  // A pending "reveal this file" request from the caller. Consumed once, as
+  // soon as the round's file list actually contains it — the diff arrives
+  // asynchronously, so the request routinely lands before the files exist.
+  const pendingFocusPathRef = useRef(reviewFilePath);
+  useEffect(() => {
+    const wanted = pendingFocusPathRef.current;
+    if (wanted && files.some((file) => file.path === wanted)) {
+      pendingFocusPathRef.current = "";
+      setSelectedPath(wanted);
+      return;
+    }
+    setSelectedPath((current) => files.some((file) => file.path === current) ? current : files[0]?.path ?? null);
+  }, [files]);
+
+  // A second click on the same round's card (another file row, or the same one
+  // after the tab was reused) must re-target the already-open tab — the tab's
+  // params never change, so the event is the only channel. Mirrors the
+  // `duya:preview-focus-lines` contract used by the file preview panel.
+  const filesRef = useRef(files);
+  useEffect(() => { filesRef.current = files; }, [files]);
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ filePath?: string }>).detail;
+      const target = typeof detail?.filePath === "string" ? detail.filePath : "";
+      if (!target || !filesRef.current.some((file) => file.path === target)) return;
+      setSelectedPath(target);
+      // Let the section element mount/select before scrolling to it.
+      requestAnimationFrame(() => scrollToFileRef.current?.(target));
+    };
+    window.addEventListener("duya:review-focus-file", handler as EventListener);
+    return () => window.removeEventListener("duya:review-focus-file", handler as EventListener);
+  }, []);
+
+  useEffect(() => {
+    if (!workspaceExpanded && layout === "split") setLayout("unified");
+  }, [layout, workspaceExpanded]);
+
+  useEffect(() => {
+    if (scope === "latest-turn") {
+      setPatch(turnReview?.patch ?? "");
+      if (turnReview?.binary) setDiffError("部分文件包含二进制差异，无法以内联文本显示。");
+      else if (turnReview?.truncated) setDiffError("差异内容过大，仅显示前 1 MB。");
+      else setDiffError("");
+      setDiffLoading(false);
+      return;
+    }
+    // Scoped reviews return the patch inline in the review result.
+    setPatch(review.patch ?? "");
+    if (review.binary) setDiffError("部分文件包含二进制差异，无法以内联文本显示。");
+    else if (review.truncated) setDiffError("差异内容过大，仅显示前 1 MB。");
+    else setDiffError("");
+    setDiffLoading(false);
+  }, [scope, turnReview, review.patch, review.binary, review.truncated]);
+
+  // Plan 308 Phase 2: picking an older turn from the history dropdown
+  // swaps in that turn's persisted review. refresh() already applied the
+  // matching review, so the id guard skips that redundant path.
+  useEffect(() => {
+    if (scope !== "latest-turn" || !selectedTurnId || !workingDirectory) return;
+    if (turnReview?.id === selectedTurnId) return;
+    let cancelled = false;
+    setDiffLoading(true);
+    void getGitTurnDetail(workingDirectory, selectedTurnId).then((detail) => {
+      if (cancelled) return;
+      if (detail.error) setError(detail.error);
+      const stored = detail.review ?? null;
+      setTurnReview(stored);
+      setReview({
+        isGitRepo: detail.isGitRepo,
+        branch: stored ? "历史轮次" : undefined,
+        baseRef: stored ? "开始 → 结束" : undefined,
+        files: stored?.files ?? [],
+        totals: stored?.totals,
+      });
+    }).catch(() => {
+      if (!cancelled) {
+        setError("无法读取该轮变更。");
+        setDiffLoading(false);
+      }
+    });
+    return () => { cancelled = true; };
+    // turnReview is read only as an applied-already guard; it must not
+    // retrigger the fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTurnId, scope, workingDirectory]);
+
+  const filePatches = useMemo(() => parseReviewPatch(patch), [patch]);
+  const selectedFile = files.find((file) => file.path === selectedPath) ?? null;
+  const filteredFiles = useMemo(
+    () => files.filter((file) => file.path.toLowerCase().includes(filter.trim().toLowerCase())),
+    [files, filter],
+  );
+  const totals = review.totals;
+
+  // Codex parity: when the patch hit the 1 MB cap the full stack of file
+  // sections degrades to one file at a time with ‹ › navigation.
+  const truncated = scope === "latest-turn"
+    ? turnReview?.truncated ?? false
+    : review.truncated ?? false;
+  const singleFileMode = truncated && filePatches.length > 0;
+  const selectedPatchIndex = useMemo(() => {
+    const index = filePatches.findIndex((filePatch) => filePatch.path === selectedPath);
+    return index >= 0 ? index : 0;
+  }, [filePatches, selectedPath]);
+  const visiblePatches = useMemo(() => {
+    if (!singleFileMode) return filePatches;
+    return filePatches.slice(selectedPatchIndex, selectedPatchIndex + 1);
+  }, [filePatches, selectedPatchIndex, singleFileMode]);
+
+  const stepPatchFile = useCallback((delta: number) => {
+    if (!singleFileMode || filePatches.length === 0) return;
+    const next = Math.min(Math.max(selectedPatchIndex + delta, 0), filePatches.length - 1);
+    setSelectedPath(filePatches[next].path);
+    scrollContainerRef.current?.scrollTo({ top: 0 });
+  }, [filePatches, selectedPatchIndex, singleFileMode]);
+
+  const scrollToFile = useCallback((filePath: string) => {
+    const element = fileRefs.current[filePath];
+    const container = scrollContainerRef.current;
+    if (!element || !container) return;
+    container.scrollTo({ top: element.offsetTop - container.offsetTop, behavior: "smooth" });
+  }, []);
+
+  // The focus event that re-targets an already-open tab is wired up before
+  // this callback exists, so it reaches the latest one through a ref.
+  const scrollToFileRef = useRef(scrollToFile);
+  useEffect(() => { scrollToFileRef.current = scrollToFile; }, [scrollToFile]);
+
+  const handleSelectFile = useCallback((filePath: string) => {
+    setSelectedPath(filePath);
+    scrollToFile(filePath);
+  }, [scrollToFile]);
+
+  const handleContextMenu = useCallback((path: string, event: React.MouseEvent) => {
+    event.preventDefault();
+    setContextMenu({ visible: true, x: event.clientX, y: event.clientY, path });
+  }, []);
+
+  const handleCloseContextMenu = useCallback(() => {
+    setContextMenu((prev) => ({ ...prev, visible: false }));
+  }, []);
+
+  const handleCopyAbsolutePath = useCallback((path: string) => {
+    if (!workingDirectory) return;
+    navigator.clipboard.writeText(joinWorkspacePath(workingDirectory, path)).catch(() => {});
+  }, [workingDirectory]);
+
+  const handleCopyRelativePath = useCallback((path: string) => {
+    navigator.clipboard.writeText(path).catch(() => {});
+  }, []);
+
+  const handleAddToInput = useCallback((path: string) => {
+    if (!workingDirectory) return;
+    dispatchAddAttachment({ kind: "file-tree-ref", path: joinWorkspacePath(workingDirectory, path) });
+  }, [workingDirectory]);
+
+  // Per-line comments (ZCode-style). Bucketed by workspace so two project
+  // windows never share comments; the composer reads the same store.
+  const { comments: workspaceComments, addComment, removeComment } = useCodeComments(workingDirectory);
+  const { theme } = useTheme();
+
+  const fileComments = useMemo(
+    () => workspaceComments.filter((comment) => comment.path === selectedPath),
+    [selectedPath, workspaceComments],
+  );
+  const commentCountByPath = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const comment of workspaceComments) {
+      counts.set(comment.path, (counts.get(comment.path) ?? 0) + 1);
+    }
+    return counts;
+  }, [workspaceComments]);
+
+  // Load the selected file's working-tree content for preview mode.
+  useEffect(() => {
+    if (viewMode !== "preview" || !selectedPath || !workingDirectory) return;
+    let cancelled = false;
+    setPreviewLoading(true);
+    setPreviewError("");
+    setPreviewTruncated(false);
+    const previewPromise = window.electronAPI?.files?.preview(
+      joinWorkspacePath(workingDirectory, selectedPath),
+      workingDirectory,
+    );
+    if (!previewPromise) {
+      setPreviewLoading(false);
+      setPreviewError("文件预览桥接不可用（需要在 Electron 中运行）。");
+      return;
+    }
+    void previewPromise
+      .then((result) => {
+        if (cancelled) return;
+        if (!result || !result.success) {
+          setPreviewError(result?.error || "无法读取文件内容。");
+          setPreviewContent(null);
+          return;
+        }
+        if (result.kind !== "text" || typeof result.content !== "string") {
+          setPreviewError("该文件不是文本文件，无法在预览中评论。");
+          setPreviewContent(null);
+          return;
+        }
+        setPreviewContent(result.content);
+        setPreviewTruncated(Boolean(result.truncated));
+      })
+      .catch((cause: unknown) => {
+        if (cancelled) return;
+        setPreviewError(cause instanceof Error ? cause.message : String(cause));
+        setPreviewContent(null);
+      })
+      .finally(() => {
+        if (!cancelled) setPreviewLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [viewMode, selectedPath, workingDirectory]);
+
+  // Commit-to-commit diffs describe historical blobs while the preview shows
+  // the working tree — commenting on mismatched content would mislead both
+  // the user and the model, so keep those scopes diff-only.
+  useEffect(() => {
+    if (scope === "commit" && viewMode === "preview") setViewMode("diff");
+  }, [scope, viewMode]);
+
+  const handleSubmitCodeComment = useCallback(
+    (params: { range: { startLine: number; endLine: number }; selectedText: string; comment: string }) => {
+      if (!selectedPath || !params.comment.trim()) return;
+      addComment({
+        path: selectedPath,
+        startLine: params.range.startLine,
+        endLine: params.range.endLine,
+        selectedText: params.selectedText,
+        comment: params.comment,
+      });
+    },
+    [addComment, selectedPath],
+  );
+
+  const handleDeleteCodeComment = useCallback(
+    (commentId: string) => {
+      removeComment(commentId);
+    },
+    [removeComment],
+  );
+
+  return (
+    <div className={`code-review-panel${showFiles ? " has-file-tree" : ""}`}>
+      <header className="code-review-toolbar">
+        <div className="code-review-scope">
+          <IconGitCompare size={18} aria-hidden="true" />
+          <select
+            className="code-review-scope-select"
+            value={scope}
+            onChange={(e) => setScope(e.target.value as ReviewScope)}
+            aria-label="审阅范围"
+          >
+            {(Object.keys(SCOPE_LABELS) as ReviewScope[]).map((key) => (
+              <option key={key} value={key}>{SCOPE_LABELS[key]}</option>
+            ))}
+          </select>
+          {scope === "latest-turn" && turns.length > 0 && (
+            <select
+              className="code-review-scope-select"
+              value={selectedTurnId}
+              onChange={(e) => setSelectedTurnId(e.target.value)}
+              aria-label="选择轮次"
+            >
+              {turns.map((turn, index) => (
+                <option key={turn.id} value={turn.id}>
+                  {index === 0
+                    ? `最近一轮 · +${turn.additions} −${turn.removals}`
+                    : `${formatTurnAge(turn.capturedAt)} · +${turn.additions} −${turn.removals} · ${turn.fileCount} 文件`}
+                </option>
+              ))}
+            </select>
+          )}
+          {scope === "commit" && (
+            <div className="code-review-scope-commit-pickers">
+              <select
+                className="code-review-scope-select"
+                value={commitFrom}
+                onChange={(e) => setCommitFrom(e.target.value)}
+                aria-label="起始提交"
+              >
+                {commits.map((c) => (
+                  <option key={c.hash} value={c.hash}>{c.hash.slice(0, 7)} {c.subject}</option>
+                ))}
+              </select>
+              <span className="code-review-scope-arrow">&rarr;</span>
+              <select
+                className="code-review-scope-select"
+                value={commitTo}
+                onChange={(e) => setCommitTo(e.target.value)}
+                aria-label="目标提交"
+              >
+                {commits.map((c) => (
+                  <option key={c.hash} value={c.hash}>{c.hash.slice(0, 7)} {c.subject}</option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+        <div className="code-review-scope-switch" role="group" aria-label="视图模式">
+          <button
+            type="button"
+            className={viewMode === "diff" ? "is-active" : ""}
+            onClick={() => setViewMode("diff")}
+            disabled={scope === "commit"}
+          >
+            差异
+          </button>
+          <button
+            type="button"
+            className={viewMode === "preview" ? "is-active" : ""}
+            onClick={() => setViewMode("preview")}
+            disabled={scope === "commit"}
+            title={scope === "commit" ? "提交对比仅支持差异视图" : "文件预览 · 可对任意行添加评论"}
+          >
+            预览
+          </button>
+        </div>
+        <div className="code-review-totals" aria-label={`${files.length} 个变更文件`}>
+          <span className="is-add">+{totals?.additions ?? 0}</span>
+          <span className="is-remove">−{totals?.removals ?? 0}</span>
+          <span className="code-review-file-count">{files.length} 个文件</span>
+        </div>
+        {review.baseRef && (
+          <span className="code-review-scope-range" title={review.baseRef}>{review.baseRef}</span>
+        )}
+        <div className="code-review-toolbar-actions">
+          <IconButton type="button" variant="default" shape="square" size="sm" onClick={() => void refresh()} title="刷新变更" aria-label="刷新变更" disabled={loading}>
+            <IconRefresh size={15} className={loading ? "animate-spin" : ""} />
+          </IconButton>
+          <IconButton type="button" variant="default" shape="square" size="sm" className={wrapped ? "is-active" : ""} onClick={() => setWrapped((value) => !value)} title="自动换行" aria-label="自动换行" aria-pressed={wrapped}>
+            <IconTextWrap size={15} />
+          </IconButton>
+          <IconButton type="button" variant="default" shape="square" size="sm" className={foldUnchanged ? "is-active" : ""} onClick={() => setFoldUnchanged((value) => !value)} title="折叠未修改内容" aria-label="折叠未修改内容" aria-pressed={foldUnchanged}>
+            <IconFold size={15} />
+          </IconButton>
+          <IconButton type="button" variant="default" shape="square" size="sm" className={layout === "split" ? "is-active" : ""} onClick={() => setLayout((value) => value === "unified" ? "split" : "unified")} title={workspaceExpanded ? "切换统一/分栏差异" : "展开审阅页后可使用分栏差异"} aria-label="切换统一或分栏差异" aria-pressed={layout === "split"} disabled={!workspaceExpanded}>
+            <IconColumns2 size={15} />
+          </IconButton>
+          <IconButton type="button" variant="default" shape="square" size="sm" className={showFiles ? "is-active" : ""} onClick={() => setShowFiles((value) => !value)} title={showFiles ? "隐藏文件" : "显示文件"} aria-label={showFiles ? "隐藏文件" : "显示文件"} aria-pressed={showFiles}>
+            <IconLayoutSidebarRight size={15} />
+          </IconButton>
+          <DropdownMenu
+            trigger={
+              <IconButton
+                type="button"
+                variant="default"
+                shape="square"
+                size="sm"
+                title="更多选项"
+                aria-label="更多选项"
+              >
+                <IconDots size={15} />
+              </IconButton>
+            }
+            items={overflowMenuItems}
+            className="code-review-overflow-menu"
+          />
+        </div>
+      </header>
+
+      {error ? (
+        <div className="code-review-state code-review-state-error"><IconAlertCircle size={18} />{error}</div>
+      ) : !review.isGitRepo ? (
+        <div className="code-review-state"><IconGitCompare size={22} />正在检查工作区…</div>
+      ) : files.length === 0 ? (
+        <div className="code-review-state code-review-state-empty">
+          <IconGitCompare size={26} aria-hidden="true" />
+          <div className="code-review-state-title">
+            {scope === "latest-turn" && reviewTurnId ? "尚无变更记录" : "尚无文件更改"}
+          </div>
+          <div className="code-review-state-sub">
+            {scope !== "latest-turn"
+              ? "所选范围内没有文件变更。"
+              : reviewTurnId
+                // A pinned round has no row in two very different situations,
+                // and the panel cannot tell them apart from the lookup alone:
+                // the round really changed nothing, or the agent never captured
+                // a baseline (workspace is not a git repo). Say both instead of
+                // asserting the round was empty.
+                ? "本轮没有可用的变更记录：可能确实没有文件变更，或工作区不是 Git 仓库。"
+                : "上一轮对话没有产生文件变更。"}
+          </div>
+          {scope === "latest-turn" && (
+            <Button type="button" variant="secondary" size="sm" onClick={() => setScope("uncommitted")}>
+              查看未提交改动
+            </Button>
+          )}
+        </div>
+      ) : (
+        <div className="code-review-workspace">
+          <main className="code-review-main">
+            <div className="code-review-diff-scroll" ref={scrollContainerRef}>
+              {viewMode === "preview" ? (
+                <div className="code-review-preview-wrap">
+                  {selectedPath ? (
+                    <div className="code-review-file-header">
+                      <div className="code-review-file-identity">
+                        {fileLanguageLabel(selectedPath) && (
+                          <span className="code-review-lang-badge">{fileLanguageLabel(selectedPath)}</span>
+                        )}
+                        <span title={selectedPath}>{selectedPath}</span>
+                      </div>
+                      {selectedFile && (
+                        <span className="code-review-file-diffstat" aria-label={`+${selectedFile.additions} −${selectedFile.removals}`}>
+                          <span className="is-add">+{selectedFile.additions}</span>
+                          <span className="is-remove">−{selectedFile.removals}</span>
+                        </span>
+                      )}
+                    </div>
+                  ) : null}
+                  {previewLoading ? (
+                    <div className="code-review-state">正在加载文件…</div>
+                  ) : previewError ? (
+                    <div className="code-review-state code-review-state-error"><IconAlertCircle size={18} />{previewError}</div>
+                  ) : previewContent === null || !selectedPath ? (
+                    <div className="code-review-empty">在右侧选择一个文件进行预览与评论。</div>
+                  ) : (
+                    <>
+                      {previewTruncated && (
+                        <div className="code-review-diff-notice">文件过大，仅显示前一部分。</div>
+                      )}
+                      <CodeViewer
+                        code={previewContent}
+                        fileName={selectedPath.split(/[\\/]/).pop() ?? selectedPath}
+                        showLineNumbers
+                        wrapLongLines={wrapped}
+                        darkMode={theme === "dark"}
+                        comments={fileComments}
+                        enableComments
+                        onSubmitComment={handleSubmitCodeComment}
+                        onDeleteComment={handleDeleteCodeComment}
+                      />
+                    </>
+                  )}
+                </div>
+              ) : diffLoading ? (
+                <div className="code-review-state">正在加载差异…</div>
+              ) : diffError && !patch ? (
+                <div className="code-review-state code-review-state-error"><IconAlertCircle size={18} />{diffError}</div>
+              ) : (
+                <>
+                  {truncated ? (
+                    <div className="code-review-large-banner">
+                      <IconInfoCircle size={14} aria-hidden="true" />
+                      <span>此差异较大，每次仅显示一个文件</span>
+                      {filePatches.length > 1 && (
+                        <div className="code-review-large-banner-nav">
+                          <IconButton
+                            type="button"
+                            variant="default"
+                            shape="square"
+                            size="sm"
+                            onClick={() => stepPatchFile(-1)}
+                            disabled={selectedPatchIndex <= 0}
+                            title="上一个文件"
+                            aria-label="上一个文件"
+                          >
+                            <IconChevronLeft size={14} />
+                          </IconButton>
+                          <span className="code-review-large-banner-pos">{selectedPatchIndex + 1} / {filePatches.length}</span>
+                          <IconButton
+                            type="button"
+                            variant="default"
+                            shape="square"
+                            size="sm"
+                            onClick={() => stepPatchFile(1)}
+                            disabled={selectedPatchIndex >= filePatches.length - 1}
+                            title="下一个文件"
+                            aria-label="下一个文件"
+                          >
+                            <IconChevronRight size={14} />
+                          </IconButton>
+                        </div>
+                      )}
+                    </div>
+                  ) : diffError ? (
+                    <div className="code-review-diff-notice">{diffError}</div>
+                  ) : null}
+                  {visiblePatches.length === 0 ? (
+                    <div className="code-review-empty">没有可显示的文本差异。</div>
+                  ) : (
+                    visiblePatches.map((filePatch) => {
+                      const fileStat = countPatchChanges(filePatch.hunks);
+                      const langLabel = fileLanguageLabel(filePatch.path);
+                      return (
+                        <div
+                          key={filePatch.path}
+                          id={`review-file-${filePatch.path}`}
+                          ref={(element) => { fileRefs.current[filePatch.path] = element; }}
+                          className={`code-review-file-section${selectedPath === filePatch.path ? " is-selected" : ""}`}
+                        >
+                          <div className="code-review-file-header">
+                            <div className="code-review-file-identity">
+                              {langLabel && <span className="code-review-lang-badge">{langLabel}</span>}
+                              <span title={filePatch.path}>{filePatch.path}</span>
+                              {filePatch.status === "binary" && <span className="code-review-file-binary">binary</span>}
+                            </div>
+                            <span className="code-review-file-diffstat" aria-label={`+${fileStat.additions} −${fileStat.removals}`}>
+                              <span className="is-add">+{fileStat.additions}</span>
+                              <span className="is-remove">−{fileStat.removals}</span>
+                            </span>
+                          </div>
+                          {filePatch.status === "binary" ? (
+                            <div className="code-review-empty">二进制文件，无法以内联文本显示。</div>
+                          ) : (
+                            <DiffContents hunks={filePatch.hunks} layout={layout} wrapped={wrapped} foldUnchanged={foldUnchanged} showWhitespace={showWhitespace} />
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </>
+              )}
+            </div>
+          </main>
+
+          {showFiles && (
+            <aside className="code-review-file-tree" aria-label="变更文件">
+              <div className="file-tree-search-row">
+                <div className="file-tree-search">
+                  <IconSearch size={12} className="file-tree-search-icon" />
+                  <input
+                    type="text"
+                    placeholder="筛选文件…"
+                    aria-label="筛选文件"
+                    value={filter}
+                    onChange={(e) => setFilter(e.target.value)}
+                    className="file-tree-search-input"
+                  />
+                </div>
+              </div>
+              <div className="code-review-file-list">
+                {filteredFiles.length === 0 ? (
+                  <div className="file-tree-empty">没有匹配的文件。</div>
+                ) : (
+                  filteredFiles.map((file) => {
+                    const isSelected = selectedPath === file.path;
+                    return (
+                      <Button
+                        key={file.path}
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className={`code-review-file-list-item${isSelected ? " is-selected" : ""}`}
+                        onClick={() => handleSelectFile(file.path)}
+                        onContextMenu={(e) => handleContextMenu(file.path, e)}
+                        aria-selected={isSelected}
+                        role="listitem"
+                        title={file.path}
+                      >
+                        <span className="code-review-file-list-icon">
+                          <StatusIcon status={file.status} />
+                        </span>
+                        <span className="code-review-file-list-path">{file.path}</span>
+                        {(commentCountByPath.get(file.path) ?? 0) > 0 && (
+                          <span
+                            className="code-review-file-list-comment-count"
+                            title={`${commentCountByPath.get(file.path)} 条行级评论`}
+                          >
+                            {commentCountByPath.get(file.path)}
+                          </span>
+                        )}
+                        <span className="code-review-file-list-stats" aria-label={`+${file.additions} −${file.removals}`}>
+                          <span className="is-add">+{file.additions}</span>
+                          <span className="is-remove">−{file.removals}</span>
+                        </span>
+                      </Button>
+                    );
+                  })
+                )}
+              </div>
+            </aside>
+          )}
+        </div>
+      )}
+
+      <ReviewContextMenu
+        state={contextMenu}
+        onClose={handleCloseContextMenu}
+        onCopyAbsolutePath={handleCopyAbsolutePath}
+        onCopyRelativePath={handleCopyRelativePath}
+        onAddToInput={handleAddToInput}
+      />
+    </div>
+  );
+}

@@ -92,7 +92,7 @@ For high-frequency data: tool execution, tool streaming, config sync.
 
 Unified AppConnector registry (Plan 455): first-party providers, plugin `.app.json`
 declarations (`mcp-remote` / `rest` bindings), and custom connectors, resolved by
-`electron/services/app-connections/app-connector.ts`. Tokens live in the main
+`apps/desktop/src/main/services/app-connections/app-connector.ts`. Tokens live in the main
 process (encrypted vault) and never cross IPC.
 
 Auth elicitation loop (Plan 450 Phase B + Plan 498):
@@ -113,14 +113,14 @@ name missing services, never paste authorization URLs).
 
 ### Channel Attachments (Plan 507)
 
-Per-bot channel connectors (`electron/channels/*-connector.ts`) and the gateway
+Per-bot channel connectors (`apps/desktop/src/main/channels/*-connector.ts`) and the gateway
 route path carry inbound media to the bot and upload outbound files to the
 platform. Two data flows:
 
 - **Inbound persist + path injection**: adapters (`gateway-manager.ts`
   `forwardInbound`, Feishu/Weixin/TG deep adapters) download media to temp
   cache; the main process persists each to stable storage via
-  `electron/channels/attachment-store.ts` →
+  `apps/desktop/src/main/channels/attachment-store.ts` →
   `~/.duya/agents/<ownerId>/attachments/inbound/<platform>/<ts>_<name>`
   (shared agents root, plan 526; atomic write, per-kind size caps mirroring
   `attachment-builder.ts`, traveral
@@ -132,8 +132,8 @@ platform. Two data flows:
   `[attachment skipped: <reason>]` lines instead.
 - **Outbound real upload**: `SendMessage type:"attachment"` with a `file://` url
   becomes a `MediaReply` (`gateway` `NormalizedReply.type==='media'`) mapped in
-  `electron/channels/connector-runtime.ts` (feishu/weixin live adapters) or a
-  multipart send in `electron/channels/channel-delivery.ts` (`file-url.ts`
+  `apps/desktop/src/main/channels/connector-runtime.ts` (feishu/weixin live adapters) or a
+  multipart send in `apps/desktop/src/main/channels/channel-delivery.ts` (`file-url.ts`
   decodes `file://` and infers MIME/key); media type follows MIME:
   image→photo, audio→voice, video→video, else document. A missing/empty file or
   `https://` url degrades to the existing text-with-link. Slack stays
@@ -142,7 +142,7 @@ platform. Two data flows:
 ### Gateway = Router + Status Broadcast (Plan 520)
 
 `packages/gateway` serves the **legacy direct-channel line** only (settings
-BridgeSection bindings). Bots ride the per-bot `electron/channels` pipeline
+BridgeSection bindings). Bots ride the per-bot `apps/desktop/src/main/channels` pipeline
 and never touch it. The gateway subprocess no longer:
 
 - resolves sessions (`user-mapper.ts` deleted) — Main resolves/creates the
@@ -152,8 +152,8 @@ and never touch it. The gateway subprocess no longer:
   and wraps them as `gateway:inbound { kind: 'command', command, args }`;
   Main executes help/new/reset/clear/status/stop and answers via
   `requestChannelSend`;
-- gates senders — pairing (`electron/gateway/pairing.ts`,
-  `gateway:pairing:*`, `/pair` `/approve` `/deny`) is fully removed;
+- gates senders — pairing (`gateway:pairing:*`, `/pair` `/approve` `/deny`) is
+  fully removed;
   Main enforces a per-platform channel allow-list
   (`channel-directory.ts`, settings key `gateway_allowlist`, empty list =
   open) and replies `gateway:inbound:response { authorized }`.
@@ -208,7 +208,7 @@ workspace/
 
 ### Rollout as First-Class Data (Plan 506)
 
-The JSONL rollouts are the source of truth; `message_index` is a rebuildable projection. Core: `electron/db/core/message-log.ts` (export/import/reconcile + non-bot generation rotation), `electron/db/core/session-fork.ts` (checkpoint fork). IPC (`electron/ipc/db-handlers.ts`) + preload (`session.forkAt/archive/unarchive/listArchived`, `rollout.export/import/reconcile`):
+The JSONL rollouts are the source of truth; `message_index` is a rebuildable projection. Core: `apps/desktop/src/main/db/core/message-log.ts` (export/import/reconcile + non-bot generation rotation), `apps/desktop/src/main/db/core/session-fork.ts` (checkpoint fork). IPC (`apps/desktop/src/main/ipc/db-handlers.ts`) + preload (`session.forkAt/archive/unarchive/listArchived`, `rollout.export/import/reconcile`):
 
 - **Export** (`db:rollout:export`): one file is one session — bot sessions concatenate `archive-<g>.jsonl` generations in order + `active.jsonl`; read-only.
 - **Import** (`db:rollout:import`): `restore` builds a new session from an external .jsonl; `continue` appends onto an existing session. All-or-nothing validation (1-based line numbers); ids colliding on the `message_index` GLOBAL PK are remapped into `import:<sessionId>:<oldId>` with every cross-reference (parentId / replyToId / compaction refs / rebase newMessages) following.
@@ -219,9 +219,9 @@ The JSONL rollouts are the source of truth; `message_index` is a rebuildable pro
 
 ### Memory State DB (Plan 479)
 
-Separate SQLite file (`memory-state.db`, next to `duya-main.db` in the same boot.json directory), managed by `electron/memory-state/`. Holds the memory control plane: projects / rollout catalog (0001), leases + stage1 outputs (0002-0003), curation runs / publications (0008), and the bot memory tier index (0010).
+Separate SQLite file (`memory-state.db`, next to `duya-main.db` in the same boot.json directory), managed by `apps/desktop/src/main/memory-state/`. Holds the memory control plane: projects / rollout catalog (0001), leases + stage1 outputs (0002-0003), curation runs / publications (0008), and the bot memory tier index (0010).
 
-`memory_tier_index` (migration 0010, Plan 479 Phase 1) is a rebuildable query index over the file-manifest memory tree — the files remain the source of truth. Tiers: `agent` (own, `~/.duya/agents/<agentId>/memory/`), `user` (shared, `~/.duya/memory/`), `project` (`~/.duya/memory/projects/`). `entry_id` = sha256 of tier+writer+project+dedupe_key; shard-unique index enforces one entry per (tier, writer, project, key). Conflict rules live in `electron/memory-state/tierConflicts.ts`: newest-wins within a shard, earliest-via across shards, tier precedence agent > project > user. Store API in `electron/memory-state/tierIndex.ts` (`upsertTierEntry`, `listTierEntries`, `mergedTierRecall`, `rebuildTierIndexFromFiles` with dry-run).
+`memory_tier_index` (migration 0010, Plan 479 Phase 1) is a rebuildable query index over the file-manifest memory tree — the files remain the source of truth. Tiers: `agent` (own, `~/.duya/agents/<agentId>/memory/`), `user` (shared, `~/.duya/memory/`), `project` (`~/.duya/memory/projects/`). `entry_id` = sha256 of tier+writer+project+dedupe_key; shard-unique index enforces one entry per (tier, writer, project, key). Conflict rules live in `apps/desktop/src/main/memory-state/tierConflicts.ts`: newest-wins within a shard, earliest-via across shards, tier precedence agent > project > user. Store API in `apps/desktop/src/main/memory-state/tierIndex.ts` (`upsertTierEntry`, `listTierEntries`, `mergedTierRecall`, `rebuildTierIndexFromFiles` with dry-run).
 
 ## @duya/ai - Multi-Protocol LLM Adapter
 
@@ -303,12 +303,12 @@ Separate SQLite file (`memory-state.db`, next to `duya-main.db` in the same boot
 - **CUA 14 工具面（plan 575，Windows）**：ZCode/Codex CUA 对齐的系统级面。契约层
   `packages/computer-use/src/cua/`（元素 token 台账 / 树归一化三步 prune-merge-flatten /
   `formatObservation` 优先级裁剪 / `diffSnapshots` full-delta-no_change / `CuaError` 错误码分类
-  + action_sent-retry 语义）；服务层 `electron/services/cua/cua-service.ts`（14 工具逻辑：
+  + action_sent-retry 语义）；服务层 `apps/desktop/src/main/services/cua/cua-service.ts`（14 工具逻辑：
   窗口解析 fail-closed（plan 578：minimized 窗口可解析——visible 优先、minimized 兜底、cloaked 拒绝；
   `includeScreenshot=true` 对最小化目标先 `ShowWindow(SW_SHOWNOACTIVATE)` 无焦点恢复
   （`window-restore.ts`）再重查 rect 后 enumerate+capture，纯树观察不恢复）、app_ref 作用域元素寻址（0 基模型索引 → 1 基 probe 槽）、隐式帧绑定坐标
   ——坐标目标只对 `get_app_state(includeScreenshot)` 交付过的最后一帧解析）；通道
-  `computer-use:cua`（`electron/ipc/cua-handlers.ts` 拥有 CuaService 单例，agent 侧
+  `computer-use:cua`（`apps/desktop/src/main/ipc/cua-handlers.ts` 拥有 CuaService 单例，agent 侧
   `computer_cua` 单工具 14-action，`packages/agent/src/tool/OSTool/ComputerCuaTool.ts`，
   builtin hidden 注册 + `.system/computer-use` 内置 skill）。非 win32 平台返回
   STRUCTURED_STATE_UNAVAILABLE。
@@ -320,7 +320,7 @@ Separate SQLite file (`memory-state.db`, next to `duya-main.db` in the same boot
   读浏览器 URL；`AXSecureField` 脱敏；TCC 四权限面（`computer-use:permissions:*` IPC + Automation 页
   `MacPermissionsCard`）+ recorder 权限门/Secure Input 显性化；`capture({windowId})` 经
   ScreenCaptureKit 单窗捕获（SDK 14+ 门控，低版本回 unsupported 降级全屏）。客户端
-  `electron/services/recorder/ax-helper.ts` 对齐 uia-probe 客户端语义（竞速超时/回收/降级重试/pid 缓存）。
+  `apps/desktop/src/main/services/recorder/ax-helper.ts` 对齐 uia-probe 客户端语义（竞速超时/回收/降级重试/pid 缓存）。
 - **坐标铁律**：AX/CGEvent/CGWindow 全 points（左上原点），截图像素 ↔ points 换算集中在
   `capturePxPerPoint`（检测侧）与 `computer-use-coords.ts`（点击侧 darwin 分支）——Retina 半坐标是
   第一大正确性风险。技术底稿 `docs/references/macos-accessibility-research.md`（本地不入库）。
@@ -413,7 +413,7 @@ Two chains share Core and differ only in transport placement:
 - **Chain A** (worker, `packages/agent/src/mcp/index.ts`): one `MCPClient` per
   stdio / streamable-http server inside the agent worker; tools land in the
   registry through `MCPManager` → `setOnToolsChanged` replace-set.
-- **Chain B** (main, `electron/services/app-connections/connectors/remote-mcp.ts`):
+- **Chain B** (main, `apps/desktop/src/main/services/app-connections/connectors/remote-mcp.ts`):
   OAuth-capable remote connectors in the main process; the worker's
   `AppConnectionTool` calls over IPC with a `deadlineAt` stamp (+30s IPC
   buffer), and results round-trip through the same D8 last-mile
@@ -507,10 +507,10 @@ Convergence pass over the eight incrementally-stacked compaction plans (422 → 
 
 Three surgical fixes layered on top of the Plan 422 / Plan 495 stack after a user-reported compaction-loop bug in 2026-09-10:
 
-- **Capability resolution audit log** (`electron/services/providers/provider-store.ts:resolveRuntimeCapability`): the silent `DEFAULT_CONTEXT_WINDOW = 200_000` fallback (`packages/agent/src/compact/types.ts`) was hidden from users on 1M-context models whose id is not in `allProviderModels` (custom OpenRouter-style ids, third-party relays). Each call now emits an info-level audit line with `{ providerId, modelId, contextWindow, source: 'config' | 'db' | 'preset' }` on the three success branches and a warn-level line with `{ providerId, modelId, apiFormat }` plus a concrete pointer to `[options].model_context[modelId]` in `config.toml` when all three layers miss. `DuyaAgent`'s constructor mirrors the same warn with `{ runtimeConfigHasCapabilities, model, apiFormat }`. Users can `grep 'fallback to 200000' app.log` and recover in one step. Override priority: `config.options.model_context[modelId]` > DB row > built-in `allProviderModels`.
+- **Capability resolution audit log** (`apps/desktop/src/main/services/providers/provider-store.ts:resolveRuntimeCapability`): the silent `DEFAULT_CONTEXT_WINDOW = 200_000` fallback (`packages/agent/src/compact/types.ts`) was hidden from users on 1M-context models whose id is not in `allProviderModels` (custom OpenRouter-style ids, third-party relays). Each call now emits an info-level audit line with `{ providerId, modelId, contextWindow, source: 'config' | 'db' | 'preset' }` on the three success branches and a warn-level line with `{ providerId, modelId, apiFormat }` plus a concrete pointer to `[options].model_context[modelId]` in `config.toml` when all three layers miss. `DuyaAgent`'s constructor mirrors the same warn with `{ runtimeConfigHasCapabilities, model, apiFormat }`. Users can `grep 'fallback to 200000' app.log` and recover in one step. Override priority: `config.options.model_context[modelId]` > DB row > built-in `allProviderModels`.
 - **Turn-based + token-based cooldown** (`packages/agent/src/agent/DuyaAgent.ts:1594`, gates `imageTriggered || compactionController.shouldCompact()`): the proactive checkpoint now skips when `turnsSinceLastCompact < MIN_TURNS_SINCE_COMPACT (3)` OR `tokensGrowthSinceCompact < MIN_TOKENS_GROWTH_SINCE_COMPACT (30_000)`. Cooldown baseline pins on every successful proactive compaction via the new `lastCompactionTurn` and `lastCompactionObservedTokens` instance fields. The Pi/grok-style design lets the agent run at least three tool-use turns after each compaction; image-volume triggers (`compact/imageParts.ts`, Plan 495) bypass the gate so multimodal floods are still handled immediately.
 - **`overThresholdAfterCompact` becomes an active loop brake** (`packages/agent/src/compact/CompactionManager.ts:compact`): the flag that Plan 422 computed but never consumed is now wired. When `overThresholdAfterCompact === true` (e.g. system prompt + reinject overshoot), `suppression.trySuppress('size')` fires and a new `compaction_over_threshold` event emits with `{ tokensRetained, available }`. The next `shouldCompact()` returns false at the existing suppression gate until a future successful compaction shrinks `finalTokens` below `available` — breaking the loop where Plan 422 ran every other turn because the post-compaction context kept re-crossing the threshold. `Suppression.trySuppress(type): boolean` (idempotent) lives on the 3-state `Suppression` machine inside `CompactionManager`; the former 5-state `CompactSuppression` API in `compactErrors.ts` was deleted in plan 552 (zero production call sites).
-- **Per-step lifecycle events** (`packages/agent/src/compact/CompactionManager.ts` + `packages/agent/src/process/worker-protocol.ts` + `src/lib/stream-session-manager.ts` + `src/stores/compaction-store.ts`): a new `compaction_step` event (`projecting | cutting | summarizing | rebuilding | reinjecting | trimming`, `started | finished`) plus `compaction_over_threshold` flow as `compact:step` and `compact:over_threshold` SSE frames. The renderer mirrors them into the `compaction-store` (`CompactionPhase` union extended) and into the inline `CompactSummary` row, replacing the legacy single-spinner `'Compacting context...'` with `Summarizing 32 messages...`, `Re-injecting files, skills and tools (6 cached)...`, `Trimming — still over budget`, etc. i18n keys live in `src/i18n/en.ts` / `src/i18n/zh.ts` under `streaming.toolAction.compact.step.{phase}`. `ActionRowChrome` accepts a `verbText?: string` precedence over `verbKey` for callers that need interpolation variables. `@duya/ai`'s `SSEEvent` union gained the four `compact:*` frame types so the legacy `as unknown as SSEEvent` casts in `DuyaAgent.ts` could finally be removed at a future cleanup.
+- **Per-step lifecycle events** (`packages/agent/src/compact/CompactionManager.ts` + `packages/agent/src/process/worker-protocol.ts` + `apps/desktop/src/renderer/lib/stream-session-manager.ts` + `apps/desktop/src/renderer/stores/compaction-store.ts`): a new `compaction_step` event (`projecting | cutting | summarizing | rebuilding | reinjecting | trimming`, `started | finished`) plus `compaction_over_threshold` flow as `compact:step` and `compact:over_threshold` SSE frames. The renderer mirrors them into the `compaction-store` (`CompactionPhase` union extended) and into the inline `CompactSummary` row, replacing the legacy single-spinner `'Compacting context...'` with `Summarizing 32 messages...`, `Re-injecting files, skills and tools (6 cached)...`, `Trimming — still over budget`, etc. i18n keys live in `apps/desktop/src/renderer/i18n/en.ts` / `apps/desktop/src/renderer/i18n/zh.ts` under `streaming.toolAction.compact.step.{phase}`. `ActionRowChrome` accepts a `verbText?: string` precedence over `verbKey` for callers that need interpolation variables. `@duya/ai`'s `SSEEvent` union gained the four `compact:*` frame types so the legacy `as unknown as SSEEvent` casts in `DuyaAgent.ts` could finally be removed at a future cleanup.
 
 ### Long-Session Parity Additions (Plan 495)
 
@@ -519,13 +519,13 @@ Grok-parity gap closure on top of Plan 422, from the 2026-09-05 grok-bot compact
 - **Background prefire** (`compact/BackgroundPrefire.ts` + `CompactionManager.maybeStartPrefire`): when usage crosses 75% of the compaction threshold a passive pass1 summarization runs best-effort; `MessageCompactionController.compactProactive` consumes the completed pass as the `previousSummary` seed (grok two-pass semantics). Validity is a message-id prefix fingerprint — append-only growth keeps it valid; a rewrite (mid-pass compaction) discards the result as prefix-invalid. Kickoff happens at DuyaAgent's per-turn proactive checkpoint; failures never block the turn.
 - **Image-parts trigger** (`compact/imageParts.ts`, `IMAGE_COMPACTION_TRIGGER_COUNT = 85`, grok parity): counted at the turn-start checkpoint and the mid-loop preflight-overflow checkpoint; firing forces compaction via `CompactOptions.force` even under the token budget (screenshot-heavy runs degrade attention before the budget does).
 - **Summary retry ladder** (`compact/summaryRetry.ts`): up to 3 attempts; output-length errors get a one-shot shorter-output instruction; input-length errors shrink the summarized range (tool traffic drops first, `TOOL_MESSAGE_DROP_THRESHOLD = 0.25`, grok `reduceSelfSummaryInputMessages` parity); fatal errors throw immediately; empty/degenerate exhaustion returns '' so the strategy's placeholder path keeps the compaction successful.
-- **Wake preemption / redrive / tail guard** (`electron/wake/wake-dispatcher.ts`, 476 §2.2 close-out): a preempting wake (user message / priority DM) interrupts a dispatcher-owned in-flight run at enqueue time (`interruptRun` dep, best-effort `DELETE /sessions/:id/chat`); the displaced item re-queues as `isRedriven` (exempt from the epoch-stale skip and the recently-dispatched dedupe) and runs after the preempting turn. A run whose epoch advanced mid-flight has its user-facing tail side-effects (DM auto-return) suppressed — grok turn-runtime parity. Dispatching a user-lane wake does not advance the epoch (existing 476/477 contract).
+- **Wake preemption / redrive / tail guard** (`apps/desktop/src/main/wake/wake-dispatcher.ts`, 476 §2.2 close-out): a preempting wake (user message / priority DM) interrupts a dispatcher-owned in-flight run at enqueue time (`interruptRun` dep, best-effort `DELETE /sessions/:id/chat`); the displaced item re-queues as `isRedriven` (exempt from the epoch-stale skip and the recently-dispatched dedupe) and runs after the preempting turn. A run whose epoch advanced mid-flight has its user-facing tail side-effects (DM auto-return) suppressed — grok turn-runtime parity. Dispatching a user-lane wake does not advance the epoch (existing 476/477 contract).
 
 ### Compact Lazy-Spawn Handshake (Plan 508)
 
 Bot sessions whose worker has been idle-reaped and is being lazy-spawned by `POST /sessions/:id/compact` previously hit a misleading `Agent not initialized` error: the router's ready handshake only filtered on event type, never on `ready.status`, so a worker that emitted `ready { status: 'error' }` (e.g. bot session missing `provider_id`) was treated as ready and the subsequent `compact` command ran against a worker whose `initAgent` had thrown. Plan 508 fixes this:
 
-- **`waitForWorkerReady(child, timeoutMs)`** (`electron/agents/server/router.ts`): typed `WorkerReadyOutcome` distinguishing `status: 'error'` (HTTP 503 + worker error verbatim), `status: 'deferred'` (HTTP 409), and timeout (HTTP 504). Extracted from `lazySpawnWorkerForCompact` so the contract is unit-testable.
+- **`waitForWorkerReady(child, timeoutMs)`** (`apps/desktop/src/main/agents/server/router.ts`): typed `WorkerReadyOutcome` distinguishing `status: 'error'` (HTTP 503 + worker error verbatim), `status: 'deferred'` (HTTP 409), and timeout (HTTP 504). Extracted from `lazySpawnWorkerForCompact` so the contract is unit-testable.
 - **`handleCompactMessage(msg)`** (`packages/agent/src/process/agent-process-entry.ts`): extracted from the `'compact'` switch case so it can be replayed from the init drain. When `!agent && initializing`, the message is stashed in `pendingCompactCommand` and replayed from the init finally block (same shape as `chat:start`'s drain); when `!agent && !initializing`, an `init-failed` reason surfaces so the renderer can recover via a fresh chat:start.
 
 ### Bot Run Scheduler (Plan 500, grok SandRunScheduler parity)
@@ -543,21 +543,21 @@ For `bot:<agentId>` sessions the wake dispatcher is the **authoritative run queu
 ### Stability Layers (Plan 501)
 
 - **Frozen-prompt discipline** (`packages/agent/src/prompts/bot/`): bot sections split into stable (identity/roster/promptConfig — content-hash keyed) and `volatile` (memory×3 / automations / channels / spotlight — keyed on the compaction epoch ALONE). Mid-epoch memory writes no longer invalidate any section render; volatile data refreshes at the next compaction boundary (grok `resolveFrozenMemoryPrompt` parity). Identity changes mid-epoch stay covered by the profileUpdate envelope.
-- **Compaction → rotation trigger** (`electron/db/core/message-log.ts`): `appendBatch` rotating a bot session's rollout file whenever a compaction payload lands (plan 493 Phase B now actually fires) — each compaction bumps `chat_sessions.generation` and the compacted summary becomes the first data entry of the fresh generation, so the agent-side `countTimelineCompactions` (summaryEpoch) and the storage generation stay aligned. Rotation failure is fail-open (append proceeds).
+- **Compaction → rotation trigger** (`apps/desktop/src/main/db/core/message-log.ts`): `appendBatch` rotating a bot session's rollout file whenever a compaction payload lands (plan 493 Phase B now actually fires) — each compaction bumps `chat_sessions.generation` and the compacted summary becomes the first data entry of the fresh generation, so the agent-side `countTimelineCompactions` (summaryEpoch) and the storage generation stay aligned. Rotation failure is fail-open (append proceeds).
 - **Delivery counting** (`packages/agent/src/hooks/send-message-reminder.ts`): `post_to_room` counts as a delivery alongside `SendMessage`, so the mechanical delivery-owed backstops read a room turn that already spoke as delivered.
 
 ### Bot Identity & Avatar (Plans 483/485, 481 amendment)
 
-A bot's runtime identity lives in `<duyaRoot>/agents/<id>/profile.json` (`electron/config/bot-profile.ts`): `name` / `description` (model-updatable via `update_state`), `title` (host-managed only), `avatarColor` (color token for the initial-circle avatar) and `avatarImage` (filename of an image inside the agent dir). `config.toml [agents.<id>]` name/description only seed the profile on first creation and act as fallback (485 §2.4). Avatars were (shape, color) tokens until 2026-09-05 — shape tokens are removed; legacy files' `avatarShape` is ignored on read.
+A bot's runtime identity lives in `<duyaRoot>/agents/<id>/profile.json` (`apps/desktop/src/main/config/bot-profile.ts`): `name` / `description` (model-updatable via `update_state`), `title` (host-managed only), `avatarColor` (color token for the initial-circle avatar) and `avatarImage` (filename of an image inside the agent dir). `config.toml [agents.<id>]` name/description only seed the profile on first creation and act as fallback (485 §2.4). Avatars were (shape, color) tokens until 2026-09-05 — shape tokens are removed; legacy files' `avatarShape` is ignored on read.
 
 Plan 502: `title` is fully wired for the host side — create/edit dialogs and `BotSettingsPanel` expose a role-title input, creation seeds it via `AgentUpsertInput.title` → `seedBotProfileIfMissing`, and the sidebar renders it as the contact subtitle (`BotContactListItem`: `title || description`). The model still cannot set it. Bot ids are minted at a SINGLE point in the main process (grok `agent-session.ts` parity: ids are never user-authored): `config:agents:create` accepts an empty id and slugs it from the display name via `slugifyBotIdFromName`, then `allocateBotId` allocates a collision-free id against config keys, on-disk trees, and `.deleted` tombstones; the old renderer-side `deriveBotIdFromName` duplicate is removed. Ids stay readable slugs (unlike grok's opaque uuids) because they double as config keys and `send_to_agent` addresses.
 
-Avatar rendering priority (`src/components/layout/sidebar/BotCharacterAvatar.tsx`): image → colored initial circle → deterministic-hue fallback. The image is served to the renderer over the `duya-file://` protocol (`electron/main.ts`); `listBots()` pre-builds the URL with a `?v=<mtime>` cache-buster, so the renderer never handles raw paths.
+Avatar rendering priority (`apps/desktop/src/renderer/components/layout/sidebar/BotCharacterAvatar.tsx`): image → colored initial circle → deterministic-hue fallback. The image is served to the renderer over the `duya-file://` protocol (`apps/desktop/src/main/index.ts`); `listBots()` pre-builds the URL with a `?v=<mtime>` cache-buster, so the renderer never handles raw paths.
 
 Write paths, all converging on profile.json:
 
 - **UI edit** (`EditBotDialog` / `BotSettingsPanel`, shared `useBotContactForm`): identity via `config:agents:updateBotProfile` → `updateBotProfileIdentity`; avatar image upload via `config:agents:uploadBotAvatar` (file dialog + copy in the main process) and `config:agents:clearBotAvatarImage`.
-- **Model self-edit** (`update_state` profile.set / avatar.set / avatar.clear): routed through the `bot-identity:rpc` channel (agent subprocess → agent-server-lifecycle → `electron/config/bot-identity-rpc.ts`), which binds the subaction to the session's `bot:<agentId>` identity (a bot can only edit its own profile), validates color tokens and image sources, and calls the same identity writers. `avatar.set` accepts `avatarColor` and/or `avatarImagePath` (e.g. the model's own `image_generate` output; validated extension whitelist + 5 MB cap + magic bytes, then copied to `agents/<id>/avatar.<ext>` by `setBotAvatarImage`).
+- **Model self-edit** (`update_state` profile.set / avatar.set / avatar.clear): routed through the `bot-identity:rpc` channel (agent subprocess → agent-server-lifecycle → `apps/desktop/src/main/config/bot-identity-rpc.ts`), which binds the subaction to the session's `bot:<agentId>` identity (a bot can only edit its own profile), validates color tokens and image sources, and calls the same identity writers. `avatar.set` accepts `avatarColor` and/or `avatarImagePath` (e.g. the model's own `image_generate` output; validated extension whitelist + 5 MB cap + magic bytes, then copied to `agents/<id>/avatar.<ext>` by `setBotAvatarImage`).
 
 ### Shared Agents Root (Plan 526)
 
@@ -566,36 +566,36 @@ avatar), sessions, memory shards, skills AND the channels subsystem
 (`channels/<platform>/connection.json`, `connector-secrets/<platform>.json`,
 `gateway/weixin/` state, `attachments/inbound/`) — lives under the shared
 `<duyaRoot>/agents` root (`~/.duya/agents`), resolved via
-`getSharedAgentsRoot()` (`electron/config/agent-paths.ts` →
+`getSharedAgentsRoot()` (`apps/desktop/src/main/config/agent-paths.ts` →
 `ConfigStore.getConfigDir()`). This is what makes a bot fully portable
 across dev and packaged installs: previously channel bindings lived under
 `<userData>/agents/`, which is namespaced per install mode (`duya-dev` vs
 packaged), so a packaged app could never see bindings configured in dev.
 The worker already read `connection.json` from the shared root
 (`packages/agent/src/prompts/bot/loader.ts`), so main and worker now agree.
-At boot, `electron/channels/legacy-root-migration.ts` merges any remaining
+At boot, `apps/desktop/src/main/channels/legacy-root-migration.ts` merges any remaining
 `<userData>/agents/*` channel data into the shared root (per-file,
 target-exists wins, source kept). Soft delete/hard delete of a bot moves or
 removes the whole directory, so credentials are purged with the bot.
 
 ### Bot Routines & Event Listeners (Plan 499, 476 P2.3b/P2.3d)
 
-A **routine** is a `cronjob.toml` entry with `agent` set (bot binding): `name` + `prompt` (the standing order) + a time `schedule` and/or declarative `eventTriggers` (`electron/automation/trigger-match.ts` — github: repo/events/userAllowlist, slack: channel + mention/keyword/message). Fires wake the bot's **resident session** through the wake bus as hidden `[routine]` turns (`enqueueAutomationWake` in `electron/wake/wake-dispatcher.ts`, background lane); the prompt is built at **dispatch time** from cronjob.toml by the dispatcher's `resolveRoutinePrompt` dep (`electron/automation/routine-wake.ts`), so a queued fire wakes with the routine's current definition and a deleted/disabled one skips silently.
+A **routine** is a `cronjob.toml` entry with `agent` set (bot binding): `name` + `prompt` (the standing order) + a time `schedule` and/or declarative `eventTriggers` (`apps/desktop/src/main/automation/trigger-match.ts` — github: repo/events/userAllowlist, slack: channel + mention/keyword/message). Fires wake the bot's **resident session** through the wake bus as hidden `[routine]` turns (`enqueueAutomationWake` in `apps/desktop/src/main/wake/wake-dispatcher.ts`, background lane); the prompt is built at **dispatch time** from cronjob.toml by the dispatcher's `resolveRoutinePrompt` dep (`apps/desktop/src/main/automation/routine-wake.ts`), so a queued fire wakes with the routine's current definition and a deleted/disabled one skips silently.
 
-- **Scheduled/manual fires** (`electron/automation/Scheduler.ts`): the former agent-bound stubs now claim the fire (`lastRunAt`, at-least-once) and enqueue a wake; standalone cron behavior is unchanged.
-- **Event fires** (`electron/automation/listener-hub.ts`): a poll-driven hub (grok SandTriggerHub collect→match→fire shape, no cloud arbitration — duya is local-first). Each tick it polls github `/repos/{r}/events` and slack `conversations.history` with the OAuth token from App Connections (`listener-polls.ts`, injectable fetch), persists per-listener cursors in cronjob.toml (`listener_state`), seeds cursors on first run without replaying history, keeps cursors on poll failure, and coalesces matches into ONE wake carrying a sanitized event summary + escaped `<github_event>`/`<slack_message>` context blocks (payload fields `eventSummary`/`eventContext`). A platform with no connected App Connection stays silent.
+- **Scheduled/manual fires** (`apps/desktop/src/main/automation/Scheduler.ts`): the former agent-bound stubs now claim the fire (`lastRunAt`, at-least-once) and enqueue a wake; standalone cron behavior is unchanged.
+- **Event fires** (`apps/desktop/src/main/automation/listener-hub.ts`): a poll-driven hub (grok SandTriggerHub collect→match→fire shape, no cloud arbitration — duya is local-first). Each tick it polls github `/repos/{r}/events` and slack `conversations.history` with the OAuth token from App Connections (`listener-polls.ts`, injectable fetch), persists per-listener cursors in cronjob.toml (`listener_state`), seeds cursors on first run without replaying history, keeps cursors on poll failure, and coalesces matches into ONE wake carrying a sanitized event summary + escaped `<github_event>`/`<slack_message>` context blocks (payload fields `eventSummary`/`eventContext`). A platform with no connected App Connection stays silent.
 - **Bot tool** (`manage_routine`, `packages/agent/src/tool/ManageRoutineTool/`): single action tool (create/update/pause/resume/delete/list) over the existing `automation:cron:*` db-bridge channels; ownership enforced agent-side from the calling bot's session id (SendToAgentTool precedent — the bridge has no session context). Schedule etiquette (weekday daytime default, minute rule, self-expiry, auth-failure pause) lives in the tool description; wake-cue conduct plus the bot's inventory render in the `botAutomations` prompt section.
 - **UI**: `BotSettingsPanel` embeds `BotRoutinesSection` (rakazo-style rows + inline editor; run history stays in the bot conversation); the global AutomationView badges bot-bound entries. Event-only routines keep their trigger set bot-managed (UI read-only).
 
 ### Shared Rooms / Group Chat (Plan 478, grok group-chat port)
 
-Multi-bot rooms (≤6 members + user) in one shared transcript. The room is a **logical config room** (`~/.duya/groups.toml` `[groups.<id>]`: name / members / max_rounds=3 / max_member_turns=10) — it never runs an LLM; its transcript is the MessageLog session `room:<roomId>` (`electron/wake/group-turn-dispatcher.ts::ensureRoomSession`, `agentType: 'room'`).
+Multi-bot rooms (≤6 members + user) in one shared transcript. The room is a **logical config room** (`~/.duya/groups.toml` `[groups.<id>]`: name / members / max_rounds=3 / max_member_turns=10) — it never runs an LLM; its transcript is the MessageLog session `room:<roomId>` (`apps/desktop/src/main/wake/group-turn-dispatcher.ts::ensureRoomSession`, `agentType: 'room'`).
 
 - **Pure mechanics** (`packages/agent/src/wake/groupTurn.ts`): faithful grok `group-chat.ts` + `group-chat-orchestrator.ts` port — mention parsing (`@Name` word-bounded handles + `@everyone`/`@all`), `resolveResponders` (only messages since the last user post count; no mentions = all members), round-robin `orderRoundSpeakers`, `(pass)` silence, `GROUP_MAX_ROUNDS`/`GROUP_MAX_MEMBER_TURNS`/2-messages-per-turn caps, epoch-cancellable rounds, failed member turn = pass.
 - **Delivery**: the member's only room voice is the `post_to_room` tool (in `BOT_TOOLSET`; discoverable via exact-name promotion). It validates the room + membership against groups.toml (`validateRoomTarget`, `packages/agent/src/session/room-db.ts`) and appends the authored entry (`source: 'group'`, `metadata.groupPost` — whitelisted in `PERSISTED_METADATA_KEYS`, surfaced as `group_post_meta`) directly to the room transcript session; the `message:append` db-bridge broadcast gives every renderer the room view in realtime. Turn budget Map uses a CONSTANT run key (Mimosa scanner false-positives on `Map.get(<tool input>)`).
-- **Orchestration** (`electron/wake/group-turn-dispatcher.ts`): per-room turn epoch + promise chain; each member turn is one hidden wake on the member's `bot:<agentId>` session via `runWakePromptInExistingSession` (profile-bound, 409/失败 = pass), prompt = grok group member contract + transcript window since the member last spoke. Triggers: user post (`room:post` IPC — bumps epoch, interrupts the in-flight member run, voids the remaining plan) and bot post (db-bridge append hook); a group_system conclusion row closes each turn. Pending: automation seeding, DM-preemption redrive, token budget fuse.
+- **Orchestration** (`apps/desktop/src/main/wake/group-turn-dispatcher.ts`): per-room turn epoch + promise chain; each member turn is one hidden wake on the member's `bot:<agentId>` session via `runWakePromptInExistingSession` (profile-bound, 409/失败 = pass), prompt = grok group member contract + transcript window since the member last spoke. Triggers: user post (`room:post` IPC — bumps epoch, interrupts the in-flight member run, voids the remaining plan) and bot post (db-bridge append hook); a group_system conclusion row closes each turn. Pending: automation seeding, DM-preemption redrive, token budget fuse.
 - **Prompts**: groups render inside the agent-messaging contract — `loader.ts` reads groups.toml (worker-side) → `ctx.agentGroups` → `renderBotRoster` passes `AgentGroupSummary[]` into `buildAgentMessagingSystemPrompt`.
-- **UI**: sidebar Bots section gains a 群聊 group (`buildRoomContacts` + `RoomContactListItem`, composite room avatar); `GroupRoomChatView` (source-filtered `useRoomTranscript`, speaker-name lines, group_system rows, @mention composer with member picker dropdown); `GroupSettingsDialog` (create/edit ≤6 members/delete) over `config:groups:*` + `room:ensure|post|getTranscript|members` IPC (`electron/ipc/group-handlers.ts`, preload `groups`/`room`). `App.tsx` mounts it for `resolveChatMode === 'room'`; ChatView no longer falls through for room sessions.
+- **UI**: sidebar Bots section gains a 群聊 group (`buildRoomContacts` + `RoomContactListItem`, composite room avatar); `GroupRoomChatView` (source-filtered `useRoomTranscript`, speaker-name lines, group_system rows, @mention composer with member picker dropdown); `GroupSettingsDialog` (create/edit ≤6 members/delete) over `config:groups:*` + `room:ensure|post|getTranscript|members` IPC (`apps/desktop/src/main/ipc/group-handlers.ts`, preload `groups`/`room`). `App.tsx` mounts it for `resolveChatMode === 'room'`; ChatView no longer falls through for room sessions.
 
 ### Sub-agent Runtime & Side Panel (Plan 571)
 
@@ -665,12 +665,12 @@ agent-registered data sources and refreshed snapshots persist in SQLite and
 flow to widgets over the existing conductor MessagePort channel — installed
 apps need nothing extra.
 
-- **Persistence** (`electron/conductor/workbench-store.ts`, schema via
+- **Persistence** (`apps/desktop/src/main/conductor/workbench-store.ts`, schema via
   `ensureWorkbenchTables` on the legacy main DB): `conductor_data_sources`
   (id / canvas_id / name / type `http|project_db` / config / refresh_interval /
   last_snapshot / last_error) + `conductor_handlers` (forward-looking, unused
   in v1).
-- **Service** (`electron/conductor/workbench-service.ts`, singleton
+- **Service** (`apps/desktop/src/main/conductor/workbench-service.ts`, singleton
   `workbenchService`): CRUD + `refreshSource` — http fetch (main-process, no
   CORS; headers support `$env:NAME` refs) or project-DB query via
   `ProjectDatabaseService.invoke` — persisted then broadcast as
@@ -681,7 +681,7 @@ apps need nothing extra.
 - **Agent tools**: `canvas_data_source`
   (`packages/agent/src/tool/CanvasConductor/CanvasDataSourceTool.ts`) over
   executor RPC actions `data_source.manage` / `data_source.refresh`
-  (`electron/conductor/executor-proxy.ts`).
+  (`apps/desktop/src/main/conductor/executor-proxy.ts`).
 - **Renderer** (`packages/conductor/src/renderer/elements/workbench-runtime.ts`):
   dynamic widget srcdocs get the runtime injected — `window.duya.data`,
   `duya.onData(cb)`, `duya.action('refresh', sourceId)`, attribute-driven
@@ -732,7 +732,7 @@ src/
 
 ### State Management
 
-- Zustand stores in `src/stores/`
+- Zustand stores in `apps/desktop/src/renderer/stores/`
 - React Context for global state
 
 ## Security
@@ -755,7 +755,7 @@ When a tool permission check resolves to `ask`, the worker persists an
 approval card instead of (or in addition to) the in-memory interactive wait:
 
 - **Persist**: approval row in `tool_approval_state` (legacy main DB,
-  `electron/db/toolApprovalState.ts`) + a chat card message
+  `apps/desktop/src/main/db/toolApprovalState.ts`) + a chat card message
   (`msg_type='tool-approval'`, `metadata.sendMessage.approval` — rides the
   existing persistence whitelist). Deterministic ids
   (`approval-card-<requestId>`); re-writes are no-ops.
@@ -789,7 +789,7 @@ approval card instead of (or in addition to) the in-memory interactive wait:
 
 ### System
 
-`electron/logging/logger.ts` - Structured logger
+`apps/desktop/src/main/logging/logger.ts` - Structured logger
 
 ### Levels
 

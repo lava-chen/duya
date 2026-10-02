@@ -369,6 +369,11 @@ export class FeishuChannel extends EventEmitter {
       onEvent: async (event) => {
         try { await this._handleEvent(event); } catch {}
       },
+      // Rejections are security-relevant and were previously invisible:
+      // an unauthorised request just fell through to { code: 0 }.
+      // console.warn matches the rest of this adapter; ISS-47 covers
+      // moving the gateway package off console.*.
+      onLog: (message, detail) => console.warn(`[Feishu] ${message}`, detail ?? ''),
     });
     await this._webhookServer.start();
     // Webhook mode is considered connected when server starts successfully

@@ -32,7 +32,21 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startHarness, runCli, type Harness, type SeedSession } from './harness';
+import { startHarness, runCli, type Harness, type SeedSession, harnessUnavailableReason } from './harness';
+
+/**
+ * This suite boots a real Electron main process against a bundled CLI
+ * API server, so it needs two build artifacts a plain checkout does not
+ * have: `packages/agent/bundle/cli-api-server.cjs` (from `npm run
+ * bundle:agent`) and an Electron binary. Without them the harness used
+ * to spin out the full 30s deadline in every file and then report
+ * nothing useful.
+ *
+ * Gating the suite keeps that cost at zero and states the condition
+ * outright. Build the bundle and re-run to exercise these.
+ */
+const HARNESS_MISSING = harnessUnavailableReason();
+
 
 const STANDARD_SEED: SeedSession[] = [
   {
@@ -87,7 +101,7 @@ function env(): string {
   return `DUYA_CLI_USER_DATA_DIR=${h!.userData}`;
 }
 
-describe('CLI session control plane (real Electron + temp DB)', () => {
+describe.skipIf(HARNESS_MISSING !== null)('CLI session control plane (real Electron + temp DB)', () => {
   describe('list (GET /v1/sessions)', () => {
     it('returns 4-field DTO for top-level visible sessions only', () => {
       const r = runCli(env(), ['session', 'list', '--format', 'json']);

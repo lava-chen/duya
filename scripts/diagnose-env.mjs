@@ -191,7 +191,7 @@ function diagnoseExtraResources() {
   addResult('Extra Resources', 'document-parser/', 'build/document-parser/', 'build/document-parser/', `resources/document-parser/`, checkFile(docParserDir, 'doc-parser').status);
 
   if (fs.existsSync(extensionDir)) {
-    addResult('Extra Resources', 'extension/', 'extension/', 'extension/', `resources/extension/`, 'ok');
+    addResult('Extra Resources', 'browser-extension/', 'resources/browser-extension/', 'resources/browser-extension/', `resources/extension/`, 'ok');
   }
 }
 

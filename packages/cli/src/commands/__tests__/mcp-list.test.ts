@@ -12,7 +12,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { renderListText } from '../mcp.js';
-import type { UserMcpTomlServer } from '@duya/plugin-core/src/mcp/user-config.js';
+import type { UserMcpTomlServer } from '@duya/plugin-core/mcp/user-config';
 
 /** Wire-shaped rows: the CLI must not trust this shape. */
 function wireRows(rows: unknown[]): UserMcpTomlServer[] {

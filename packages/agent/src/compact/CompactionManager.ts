@@ -734,17 +734,24 @@ export class CompactionManager {
     ): void => {
       this.emit({ type: 'compaction_step', step, phase, ...extra })
     }
-    const stats = this.getStats(messages)
-    emitStep('projecting', 'started', {
-      messageCount: messages.length,
-      tokensBefore: this.contextSize(messages),
-    })
-
+    // Preflight first, before anything dereferences `messages`.
+    //
+    // This guard used to sit two statements below `getStats(messages)` and
+    // `messages.length`, so a null/undefined conversation blew up with
+    // "Cannot read properties of null" instead of reaching the check the
+    // guard exists to perform. Its whole point is to stop a caller
+    // sneaking a non-array past the type checker, so it has to run first.
     if (!Array.isArray(messages) || messages.length === 0) {
       const err = new Error('Compaction failed: conversation is empty')
       this.emitError(err, trigger, false)
       throw err
     }
+
+    const stats = this.getStats(messages)
+    emitStep('projecting', 'started', {
+      messageCount: messages.length,
+      tokensBefore: this.contextSize(messages),
+    })
 
     try {
       if (this.reinjector) {

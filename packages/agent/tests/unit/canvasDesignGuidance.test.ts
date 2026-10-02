@@ -15,11 +15,19 @@ describe('conductor canvas design guidance', () => {
 
   it('does not register the batch creation tool', () => {
     const toolNames = getCanvasConductorTools().map(({ definition }) => definition.name);
-    expect(toolNames).toHaveLength(15);
+    // The real invariant is which tools are present, not how many. The
+    // count was pinned at 15 and went red when `canvas_data_source` was
+    // added; a snapshot of the registry size tests nothing about the
+    // batch-tool decision this case exists to protect.
     expect(toolNames).not.toContain('canvas_batch_create');
     expect(toolNames).toContain('canvas_create_element');
     expect(toolNames).toContain('canvas_manage');
     expect(toolNames).toContain('database_manage');
+    expect(toolNames).toContain('canvas_data_source');
+    // Every definition carries a name, and no two share one -- a duplicate
+    // would silently shadow a tool at registration time.
+    expect(toolNames.every((n) => typeof n === 'string' && n.length > 0)).toBe(true);
+    expect(new Set(toolNames).size).toBe(toolNames.length);
   });
 
   it('keeps the mode prompt native-first while retaining compact guidance', () => {

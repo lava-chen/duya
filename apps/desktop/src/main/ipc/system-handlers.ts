@@ -1,0 +1,536 @@
+/**
+ * ipc/system-handlers.ts - System-level IPC handlers
+ *
+ * Handlers that don't belong to any specific subsystem:
+ * - Dialog
+ * - Shell
+ * - Notification
+ * - App info
+ * - Parser
+ * - Workspace
+ * - Recent folders
+ */
+
+import { ipcMain, BrowserWindow, dialog, shell, Notification, app, nativeTheme } from 'electron';
+import * as path from 'path';
+import * as fs from 'fs';
+import { homedir } from 'os';
+import { getLogger, LogComponent } from '../logging/logger';
+import { ShellPathSchema } from './contracts';
+import { isDev } from '../core/bootstrap';
+import { getMainWindow } from '../core/window-manager';
+import { assertTrustedSender } from './trusted-sender';
+import { getAgentServerPort } from '../agents/agent-server-lifecycle';
+import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
+import { getConfigStore } from '../config/store-instance';
+import { isHttpUrl } from './url-safety';
+import { isPathWithinRoots } from '@duya/agent/tool/allowedRoots';
+export { isHttpUrl } from './url-safety';
+import { getNoProjectWorkspace } from '../automation/workspace';
+
+/** Shape of the `auxiliary.vision` config section exposed via the vision IPC. */
+interface VisionSettings {
+  provider: string;
+  model: string;
+  baseUrl: string;
+  enabled: boolean;
+}
+
+const DEFAULT_VISION_SETTINGS: VisionSettings = {
+  provider: '',
+  model: '',
+  baseUrl: '',
+  enabled: false,
+};
+
+export function registerSystemHandlers(): void {
+  // Keep the OS-side material (Mica on Windows 11, vibrancy on macOS) in sync
+  // with duya's own light/dark theme. duya themes independently of the OS, so
+  // when the user picks "dark" while Windows is in light mode we force the
+  // native backdrop dark too — otherwise a dark UI would sit on a light Mica.
+  ipcMain.handle('native-theme:set-source', (_event, mode: 'light' | 'dark' | 'system') => {
+    nativeTheme.themeSource =
+      mode === 'light' || mode === 'dark' || mode === 'system' ? mode : 'system';
+  });
+
+  // Title-bar menu commands (Edit / View menus in the HTML menu bar). These
+  // must run in the main process because the renderer has no webContents
+  // access (execCommand cannot paste). They act on `event.sender` — the
+  // invoking webContents — not a hard-coded main window, so they stay
+  // correct for any secondary window.
+  ipcMain.handle('app-chrome:edit', (event, action: string) => {
+    const wc = event.sender;
+    switch (action) {
+      case 'undo': wc.undo(); break;
+      case 'redo': wc.redo(); break;
+      case 'cut': wc.cut(); break;
+      case 'copy': wc.copy(); break;
+      case 'paste': wc.paste(); break;
+      case 'selectAll': wc.selectAll(); break;
+      default:
+        getLogger().warn('Unknown edit command', { action }, LogComponent.Main);
+    }
+  });
+
+  ipcMain.handle('app-chrome:zoom', (event, action: string) => {
+    const wc = event.sender;
+    if (action === 'reset') {
+      wc.setZoomLevel(0);
+      return;
+    }
+    // Chromium zoom levels step by 0.5 (~20% per step).
+    const level = wc.getZoomLevel();
+    wc.setZoomLevel(action === 'in' ? level + 0.5 : level - 0.5);
+  });
+
+  ipcMain.handle('app-chrome:toggle-fullscreen', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win) win.setFullScreen(!win.isFullScreen());
+  });
+
+  // Public predicate — kept exported for unit tests.
+  // Duya's open-external policy is intentionally strict: only standard
+  // http(s) URLs are forwarded to the OS. file://, javascript:, smb://, and
+  // custom schemes are blocked to prevent external content from coercing the
+  // OS into launching unintended handlers or exposing local files.
+  // (See audit BLOCKER A: external URL safety, 2026-06-03.)
+  // Dialog handlers
+  ipcMain.handle('dialog:open-folder', async (_event, options?: { defaultPath?: string; title?: string }) => {
+    const mainWindow = getMainWindow();
+    if (!mainWindow) return { canceled: true, filePaths: [] };
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: options?.title || 'Select a project folder',
+      defaultPath: options?.defaultPath || undefined,
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    return { canceled: result.canceled, filePaths: result.filePaths };
+  });
+
+  ipcMain.handle('dialog:open-office-files', async (_event, options?: { defaultPath?: string; title?: string }) => {
+    const mainWindow = getMainWindow();
+    if (!mainWindow) return { canceled: true, filePaths: [] };
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: options?.title || 'Open Office files',
+      defaultPath: options?.defaultPath || undefined,
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: 'Office files', extensions: ['docx', 'pptx', 'xlsx'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    });
+    return { canceled: result.canceled, filePaths: result.filePaths };
+  });
+
+  ipcMain.handle('dialog:open-file', async (_event, options?: { defaultPath?: string; title?: string }) => {
+    const mainWindow = getMainWindow();
+    if (!mainWindow) return { canceled: true, filePaths: [] };
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: options?.title || 'Select files',
+      defaultPath: options?.defaultPath || undefined,
+      properties: ['openFile', 'multiSelections'],
+    });
+    return { canceled: result.canceled, filePaths: result.filePaths };
+  });
+
+  ipcMain.handle('dialog:select-download-folder', async (_event, options?: { defaultPath?: string; title?: string }) => {
+    const mainWindow = getMainWindow();
+    if (!mainWindow) return { canceled: true, filePaths: [] };
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: options?.title || 'Select download folder',
+      defaultPath: options?.defaultPath || undefined,
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    return { canceled: result.canceled, filePaths: result.filePaths };
+  });
+
+  // Shell handlers
+  ipcMain.handle('shell:open-path', async (_event, folderPath: string) => {
+    if (!ShellPathSchema.safeParse(folderPath).success) {
+      return 'Invalid path';
+    }
+    return shell.openPath(folderPath);
+  });
+
+  ipcMain.handle('shell:show-item-in-folder', async (_event, filePath: string) => {
+    if (!ShellPathSchema.safeParse(filePath).success) {
+      return 'Invalid path';
+    }
+    // Electron resolves symlinks before revealing; reveal the real path
+    // so the OS file manager lands on the actual file.
+    let target = filePath;
+    try {
+      target = fs.realpathSync(filePath);
+    } catch {
+      // Fall back to the requested path if realpath fails.
+    }
+    shell.showItemInFolder(target);
+    return '';
+  });
+
+  ipcMain.handle('shell:open-external', async (_event, url: string) => {
+    if (typeof url !== 'string' || url.length === 0 || url.length > 4096) {
+      return 'Invalid URL';
+    }
+    const allowed = isHttpUrl(url);
+    if (!allowed) {
+      getLogger().warn(
+        'Rejected shell:open-external request for non-http(s) URL',
+        { urlPreview: url.slice(0, 80) },
+        LogComponent.Main,
+      );
+      return 'Blocked: only http(s) URLs are allowed';
+    }
+    try {
+      await shell.openExternal(url);
+      return '';
+    } catch (err) {
+      return String(err);
+    }
+  });
+
+  // Public export for tests
+  ;(registerSystemHandlers as unknown as { __isHttpUrl?: typeof isHttpUrl }).__isHttpUrl = isHttpUrl;
+
+  // Browser extension path
+  ipcMain.handle('browser-extension:get-path', () => {
+    if (isDev) {
+      return path.join(app.getAppPath(), 'extension');
+    }
+    return path.join(process.resourcesPath, 'extension');
+  });
+
+  // Notification handler
+  //
+  // payload: { title, body, sessionId?, type?, actions?, replyPlaceholder?,
+  //            permissionId?, toolName? }
+  // - type 'message' (default): generic notification (e.g. message completed).
+  // - type 'permission': permission request — renderer forwards the user's
+  //   allow/deny decision via notification:action.
+  // - actions: at most 2 entries (Electron / OS limits). Each triggers a
+  //   'action' event that is forwarded to the renderer as
+  //   'notification:action'. On macOS, the special reply action id
+  //   '__reply' surfaces the user's text via payload.reply when the
+  //   'reply' event fires.
+  ipcMain.handle(
+    'notification:show',
+    async (
+      _event,
+      options: {
+        title: string;
+        body: string;
+        sessionId?: string;
+        type?: 'message' | 'permission';
+        actions?: { id: string; label: string }[];
+        replyPlaceholder?: string;
+        permissionId?: string;
+        toolName?: string;
+      },
+    ) => {
+      if (!options || typeof options.title !== 'string' || options.title.length === 0 || options.title.length > 500) {
+        return false;
+      }
+      try {
+        const actionList = Array.isArray(options.actions)
+          ? options.actions
+              .filter(
+                (a): a is { id: string; label: string } =>
+                  !!a &&
+                  typeof a.id === 'string' &&
+                  a.id.length > 0 &&
+                  a.id.length <= 64 &&
+                  typeof a.label === 'string' &&
+                  a.label.length > 0 &&
+                  a.label.length <= 64,
+              )
+              .slice(0, 2)
+          : undefined;
+
+        // Build the Electron Notification. hasReply enables the inline
+        // reply text field on macOS — the text is delivered via the
+        // 'reply' event rather than 'action'.
+        const notification = new Notification({
+          title: options.title,
+          body: typeof options.body === 'string' ? options.body.slice(0, 2000) : '',
+          ...(actionList && actionList.length > 0 ? { actions: actionList } : {}),
+          ...(options.replyPlaceholder
+            ? { hasReply: true, replyPlaceholder: options.replyPlaceholder.slice(0, 200) }
+            : {}),
+        });
+
+        const broadcastAction = (action: {
+          actionId: string;
+          reply?: string;
+        }) => {
+          const mainWindow = getMainWindow();
+          if (!mainWindow || mainWindow.isDestroyed()) return;
+          mainWindow.webContents.send('notification:action', {
+            sessionId: options.sessionId,
+            type: options.type ?? 'message',
+            permissionId: options.permissionId,
+            toolName: options.toolName,
+            ...action,
+          });
+        };
+
+        notification.on('action', (_event, index) => {
+          const action = actionList?.[index];
+          if (action) {
+            broadcastAction({ actionId: action.id });
+            notification.close();
+          }
+        });
+
+        notification.on('reply', (_event, reply) => {
+          // macOS only. Treat the typed reply as the synthetic '__reply' action.
+          broadcastAction({ actionId: '__reply', reply: String(reply ?? '').slice(0, 4000) });
+          notification.close();
+        });
+
+        // Handle click to navigate to session (existing behavior).
+        notification.on('click', () => {
+          const mainWindow = getMainWindow();
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            if (!mainWindow.isVisible()) {
+              mainWindow.show();
+            }
+            if (mainWindow.isMinimized()) {
+              mainWindow.restore();
+            }
+            mainWindow.focus();
+            mainWindow.webContents.send('notification:clicked', { sessionId: options.sessionId });
+          }
+        });
+
+        notification.show();
+        return true;
+      } catch (err) {
+        const logger = getLogger();
+        logger.error('Failed to show notification', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Notification);
+        return false;
+      }
+    },
+  );
+
+  // App info handlers
+  ipcMain.handle('app:get-version', () => app.getVersion());
+
+  ipcMain.handle('app:quit', () => {
+    const { setIsQuitting } = require('../core/window-manager');
+    setIsQuitting(true);
+    app.quit();
+  });
+
+  ipcMain.handle('app:get-default-workspace', () => {
+    const defaultWorkspace = path.join(homedir(), '.duya');
+    if (!fs.existsSync(defaultWorkspace)) {
+      fs.mkdirSync(defaultWorkspace, { recursive: true });
+    }
+    return defaultWorkspace;
+  });
+
+  // Canonical path of the shared no-project workspace (~/.duya/workspace).
+  // Used by the renderer to route no-project sessions into the "无项目" group.
+  ipcMain.handle('app:get-no-project-workspace', () => {
+    return getNoProjectWorkspace();
+  });
+
+  ipcMain.handle('app:create-project-folder', async (_event, projectName: string) => {
+    // Plan 583 / ISS-30: this handler creates a directory from a
+    // renderer-supplied name, so it must only be reachable from the app's
+    // own main frame. Guard first, before reading any argument.
+    assertTrustedSender(_event, {}, 'app:create-project-folder');
+    if (typeof projectName !== 'string' || projectName.length === 0 || projectName.length > 255) {
+      return { success: false, error: 'Invalid project name', path: '' };
+    }
+    // Sanitize project name for filesystem
+    const sanitized = projectName.replace(/[<>:"|?*\x00-\x1f]/g, '_').trim();
+    if (sanitized.length === 0) {
+      return { success: false, error: 'Invalid project name', path: '' };
+    }
+    // Plan 583 ISS-13: the character filter above replaces characters that are
+    // illegal in Windows filenames, but it never touched path separators or
+    // dot segments, so a name like `../../evil` survived intact and
+    // `path.join(workspaceDir, sanitized)` resolved OUTSIDE the workspace —
+    // the handler then created that directory. A project name is a single
+    // directory component, never a path, so reject separators and dot
+    // segments outright instead of trying to sanitise them away.
+    if (/[\\/]/.test(sanitized) || sanitized === '.' || sanitized === '..') {
+      return { success: false, error: 'Invalid project name', path: '' };
+    }
+    try {
+      const workspaceDir = path.join(homedir(), '.duya', 'workspace');
+      if (!fs.existsSync(workspaceDir)) {
+        fs.mkdirSync(workspaceDir, { recursive: true });
+      }
+      const projectDir = path.join(workspaceDir, sanitized);
+      // Belt and braces: the separator check above is the real fix, but the
+      // name is attacker-influenced, so confirm containment with the same
+      // primitive the sandboxed file tools use before creating anything.
+      if (!isPathWithinRoots(projectDir, [workspaceDir])) {
+        return { success: false, error: 'Invalid project name', path: '' };
+      }
+      if (fs.existsSync(projectDir)) {
+        return { success: false, error: 'Project folder already exists', path: projectDir };
+      }
+      fs.mkdirSync(projectDir, { recursive: true });
+      return { success: true, error: '', path: projectDir };
+    } catch (err) {
+      const logger = getLogger();
+      logger.error('Failed to create project folder', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.System);
+      return { success: false, error: String(err), path: '' };
+    }
+  });
+
+  // Recent folders management
+  const getRecentFoldersPath = () => path.join(app.getPath('userData'), 'recent-folders.json');
+
+  const getRecentFolders = (): string[] => {
+    try {
+      const filePath = getRecentFoldersPath();
+      if (fs.existsSync(filePath)) {
+        return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      }
+    } catch {}
+    return [];
+  };
+
+  const saveRecentFolders = (folders: string[]): void => {
+    try {
+      const filePath = getRecentFoldersPath();
+      fs.writeFileSync(filePath, JSON.stringify(folders.slice(0, 10)));
+    } catch {}
+  };
+
+  ipcMain.handle('projects:get-recent-folders', async () => getRecentFolders());
+
+  ipcMain.handle('projects:add-recent-folder', async (_event, folderPath: string) => {
+    if (typeof folderPath !== 'string' || folderPath.length === 0 || folderPath.length > 4096) {
+      return getRecentFolders();
+    }
+    if (folderPath.includes('\0')) {
+      return getRecentFolders();
+    }
+    const recent = getRecentFolders();
+    const updated = [folderPath, ...recent.filter(f => f !== folderPath)].slice(0, 10);
+    saveRecentFolders(updated);
+    return updated;
+  });
+
+  // Plan 525 — ProjectsView "移除项目" for path-only (no entity) entries.
+  ipcMain.handle('projects:remove-recent-folder', async (_event, folderPath: string) => {
+    if (typeof folderPath !== 'string' || folderPath.length === 0) {
+      return getRecentFolders();
+    }
+    const recent = getRecentFolders();
+    const updated = recent.filter(f => f !== folderPath);
+    saveRecentFolders(updated);
+    return updated;
+  });
+
+  // Sync threads changed event
+  ipcMain.on('sync:threads-changed', (_event) => {
+    const senderWindow = BrowserWindow.fromWebContents(_event.sender);
+    const allWindows = BrowserWindow.getAllWindows();
+    for (const window of allWindows) {
+      if (window !== senderWindow && !window.isDestroyed()) {
+        window.webContents.send('sync:threads-changed');
+      }
+    }
+  });
+
+  // Agent Server port query
+  ipcMain.handle('agent-server:get-port', () => getAgentServerPort());
+
+  // Vision settings handlers
+  ipcMain.handle('vision:get', async () => {
+    const settings = (getConfigStore().getByPath('auxiliary.vision') ?? DEFAULT_VISION_SETTINGS) as VisionSettings;
+    return {
+      provider: settings.provider,
+      model: settings.model,
+      baseUrl: settings.baseUrl,
+      enabled: settings.enabled,
+    };
+  });
+
+  ipcMain.handle('vision:set', async (_event, data: { provider?: string; model?: string; baseUrl?: string; enabled?: boolean }) => {
+    const store = getConfigStore();
+    const currentSettings = (store.getByPath('auxiliary.vision') ?? DEFAULT_VISION_SETTINGS) as VisionSettings;
+    const newSettings = {
+      ...currentSettings,
+      provider: data.provider ?? currentSettings.provider,
+      model: data.model ?? currentSettings.model,
+      baseUrl: data.baseUrl ?? currentSettings.baseUrl,
+      enabled: data.enabled ?? currentSettings.enabled,
+    };
+    store.set('auxiliary.vision', newSettings);
+  });
+
+  // Session management handlers
+  ipcMain.handle('session:getInterruptedSessions', () => {
+    const agentPool = getAgentProcessPool();
+    return agentPool.getInterruptedSessions();
+  });
+
+  // System location — authoritative locale/timezone from the host machine.
+  // Used by the agent subprocess to build a locale-aware system prompt.
+  ipcMain.handle('system:get-location', () => {
+    return {
+      locale: app.getLocale(),
+      localeCountryCode: app.getLocaleCountryCode(),
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    };
+  });
+
+  // Resolve a named bundled asset to a `duya-file://` URL the renderer can
+  // load as an `<img src=...>`. Replaces bare `/icon.png` references that
+  // only resolve under Vite's dev server — packaged builds load
+  // `file://.../app.asar/dist/index.html`, where `/icon.png` would point
+  // at the disk root and 404 silently. The protocol handler in main.ts
+  // already serves these URLs (same scheme used by agent avatars and
+  // conductor-assets), so renderer + Electron round-trip stays in-band.
+  //
+  // Known asset names:
+  //   - `appIcon`            — public/icon.png (splash, install dialog hero)
+  //   - `appIconSquare`      — assets/square.png if present
+  ipcMain.handle(
+    'app:get-asset-url',
+    (_event, name: 'appIcon' | 'appIconSquare' | string): string | null => {
+      const candidates: Record<string, { dev: string[]; prod: string[] }> = {
+        appIcon: {
+          dev: [
+            path.join(app.getAppPath(), 'public', 'icon.png'),
+            path.join(app.getAppPath(), 'dist', 'icon.png'),
+          ],
+          prod: [
+            // Packaged: public/* is copied to resources/public/ via
+            // electron-builder.yml extraResources.
+            path.join(process.resourcesPath, 'public', 'icon.png'),
+            // Fallback: bundled inside dist/ via Vite's publicDir copy.
+            path.join(process.resourcesPath, 'app.asar', 'dist', 'icon.png'),
+          ],
+        },
+        appIconSquare: {
+          dev: [
+            path.join(app.getAppPath(), 'public', 'icon-square.png'),
+          ],
+          prod: [
+            path.join(process.resourcesPath, 'public', 'icon-square.png'),
+            path.join(process.resourcesPath, 'app.asar', 'dist', 'icon-square.png'),
+          ],
+        },
+      };
+      const entry = candidates[name];
+      if (!entry) return null;
+      const pool = isDev ? entry.dev : entry.prod;
+      for (const candidate of pool) {
+        if (fs.existsSync(candidate)) {
+          // Forward-slash separators work on all platforms; the duya-file
+          // protocol handler in main.ts normalizes them back to the OS
+          // separator before readFile.
+          return `duya-file:///${candidate.replace(/\\/g, '/')}`;
+        }
+      }
+      return null;
+    },
+  );
+}

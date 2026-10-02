@@ -5,30 +5,12 @@
 
 import type { MCPDiscoveryStatus, MCPConnectionStatus } from './status';
 import type { MCPIssue } from './errors';
+import type { MCPSettingsSubOrigin, MCPSource, MCPSourceContext } from './sources';
 
-/**
- * Where an MCP server config originated. The engine treats all three as
- * first-class sources; dedup rules are explicit (see shadow.ts in Phase 1).
- */
-export type MCPSource = 'bundled' | 'plugin' | 'settings';
-
-/**
- * For settings-sourced entries, the legacy/canonical sub-origin.
- * `agentSettings` is the newest and wins over `settingsKv` and `legacyFile`
- * for the same unscoped server name (within-settings shadow rule).
- */
-export type MCPSettingsSubOrigin = 'legacyFile' | 'settingsKv' | 'agentSettings' | 'tomlFile';
-
-/**
- * Provenance info attached to MCP issues, used by the UI to bucket issues
- * by source. Field-omitted entries are valid where not applicable.
- */
-export interface MCPSourceContext {
-  source: MCPSource;
-  sourceSubOrigin?: MCPSettingsSubOrigin;
-  pluginId?: string;
-  pluginName?: string;
-}
+// Source provenance now lives in ./sources so ./errors does not have to
+// import from here. Re-exported so existing `from './discovery'` sites keep
+// resolving — see ./sources for why the cycle had to go.
+export type { MCPSettingsSubOrigin, MCPSource, MCPSourceContext };
 
 /**
  * A pre-collected MCP server candidate, as built by either the worker

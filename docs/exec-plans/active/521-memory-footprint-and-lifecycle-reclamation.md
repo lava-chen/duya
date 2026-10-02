@@ -3,7 +3,7 @@
 > **Status**: Phase 0 已完成;Phase 1-5 待评审
 > **Priority**: P1
 > **Created**: 2026-09-11
-> **Companion**: [426-low-spec-performance](./426-low-spec-performance.md)(worker 并发自适应 + 空闲回收 + 内存门限,已落地)、[453-wake-agent](./453-wake-agent.md)(OSContextBridge / wake-agent daemon)、[330-electron-cleanup-repair](../completed/330-electron-cleanup-repair.md)
+> **Companion**: [426-low-spec-performance](../completed/426-low-spec-performance.md)(worker 并发自适应 + 空闲回收 + 内存门限,已落地)、[453-wake-agent](../completed/453-wake-agent.md)(OSContextBridge / wake-agent daemon)、[330-electron-cleanup-repair](../completed/330-electron-cleanup-repair.md)
 > **Source evidence**: 2026-09-11 进程级实测(`Get-CimInstance` + `app.getAppMetrics`)、dev core DB 直读、`webview-bridge.test.ts` / `webview-memory.test.ts`
 
 ---

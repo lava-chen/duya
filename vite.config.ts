@@ -15,7 +15,7 @@ export default defineConfig({
     // browser until the `.js` artifacts are regenerated.
     extensions: ['.mjs', '.mts', '.ts', '.tsx', '.js', '.jsx', '.json'],
     alias: [
-      { find: '@', replacement: path.resolve(__dirname, './src') },
+      { find: '@', replacement: path.resolve(__dirname, './apps/desktop/src/renderer') },
       { find: /^@duya\/conductor\/renderer\/(.*)$/, replacement: path.resolve(__dirname, './packages/conductor/src/renderer/') + '/$1' },
       { find: '@duya/conductor/renderer', replacement: path.resolve(__dirname, './packages/conductor/src/renderer/index') },
     ],
@@ -91,10 +91,11 @@ export default defineConfig({
       input: {
         // Main DUYA renderer entry.
         main: path.resolve(__dirname, 'index.html'),
-        // Plan 453 Task F: Wake Agent orb entry. Build output lands in
-        // `dist-orb/` so it can be packaged separately as a resource
-        // (referenced by electron-builder extraResources).
-        orb: path.resolve(__dirname, 'src/orb/index.html'),
+        // Plan 453 Task F: Wake Agent orb entry. Build output mirrors the
+        // source path under `dist/`, so it lands in
+        // `dist/apps/desktop/src/renderer/orb/` and is packaged separately
+        // as a resource (referenced by electron-builder extraResources).
+        orb: path.resolve(__dirname, 'apps/desktop/src/renderer/orb/index.html'),
       },
       output: {
         manualChunks(id) {

@@ -47,12 +47,42 @@ async function buildElectron() {
     minify: true,
     treeShaking: true,
     alias: {
-      // Resolve workspace plugin-core from this checkout (worktree-safe);
+      // Resolve workspace plugin-core from THIS checkout (worktree-safe);
       // node_modules junctions would otherwise pin the primary checkout.
-      // Points at the package ROOT so both the bare entry
-      // (@duya/plugin-core → src/index.ts via package.json "main") and
-      // subpath imports (@duya/plugin-core/src/...) resolve correctly.
-      '@duya/plugin-core': path.resolve(scriptDir, '../packages/plugin-core'),
+      // Points at `dist`, mirroring the package's own `exports` map: the bare
+      // name lands on `dist/index.js` and a declared subpath on
+      // `dist/<subpath>`, so `@duya/plugin-core/mcp/core/alias` rewrites to
+      // `dist/mcp/core/alias` instead of the old `src/`-shaped specifiers.
+      // (esbuild substitutes the matched package-name prefix, so one entry
+      // covers the bare name and every subpath — see the longest-match note
+      // on `@duya/agent-protocol` below.)
+      '@duya/plugin-core': path.resolve(scriptDir, '../packages/plugin-core/dist'),
+      // Same reason, same root-pointing convention, for the three packages
+      // plan 584/586 added. They are ESM with `exports` maps, so the package
+      // root resolves to `dist/index.js` via `main` and the `/testing`
+      // subpath to `dist/testing/index.js` — which is what
+      // `apps/desktop/src/main/agents/server/run-orchestrator.ts` imports.
+      //
+      // The SUBPATH must be listed first and explicitly. esbuild treats an
+      // alias as matching the exact path or a `/`-delimited prefix, so a bare
+      // `@duya/agent-protocol` entry also swallows
+      // `@duya/agent-protocol/testing` and rewrites it to
+      // `<root>/testing` — which resolves to nothing, because the built subpath
+      // lives at `dist/testing`. Longest match wins, so naming both is what
+      // makes the pair work.
+      '@duya/agent-protocol/testing': path.resolve(scriptDir, '../packages/agent-protocol/dist/testing/index.js'),
+      '@duya/agent-protocol': path.resolve(scriptDir, '../packages/agent-protocol'),
+      '@duya/agent-core': path.resolve(scriptDir, '../packages/agent-core'),
+      '@duya/agent-runtime': path.resolve(scriptDir, '../packages/agent-runtime'),
+      // The `duya-file://` media allowlist
+      // (apps/desktop/src/main/core/media-allowlist.ts, plan 583 ISS-02)
+      // reuses the sandboxed file tools' root-boundary primitive instead of a
+      // third hand-rolled variant. Point at the source file: it only imports
+      // node:fs/node:path, so it inlines cleanly into the main-process bundle.
+      '@duya/agent/tool/allowedRoots': path.resolve(
+        scriptDir,
+        '../packages/agent/src/tool/allowedRoots.ts',
+      ),
     },
     // The agent bundle (and WorkerPool.ts in packages/agent) reads
     // `import.meta.url` and falls back to `__dirname` when bundled as CJS
@@ -64,25 +94,25 @@ async function buildElectron() {
 
   await build({
     ...shared,
-    entryPoints: ['electron/main.ts'],
+    entryPoints: ['apps/desktop/src/main/index.ts'],
     outfile: 'dist-electron/main.js',
   });
 
   await build({
     ...shared,
-    entryPoints: ['electron/preload.ts'],
+    entryPoints: ['apps/desktop/src/preload/index.ts'],
     outfile: 'dist-electron/preload.js',
   });
 
   await build({
     ...shared,
-    entryPoints: ['electron/agents/server/index.ts'],
+    entryPoints: ['apps/desktop/src/main/agents/server/index.ts'],
     outfile: 'dist-electron/agent-server.js',
   });
 
   await build({
     ...shared,
-    entryPoints: ['electron/project-database/worker.ts'],
+    entryPoints: ['apps/desktop/src/main/project-database/worker.ts'],
     outfile: 'dist-electron/project-database-worker.js',
   });
 

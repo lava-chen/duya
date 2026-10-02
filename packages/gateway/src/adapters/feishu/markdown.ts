@@ -1,4 +1,4 @@
-﻿﻿import type { FeishuMessageElement } from './types.js';
+import type { FeishuMessageElement } from './types.js';
 
 const POST_CONTENT_LIMIT = 30000;
 

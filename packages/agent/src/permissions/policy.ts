@@ -15,6 +15,7 @@
 import * as path from 'node:path';
 import { homedir } from 'node:os';
 import type { PermissionCheckResult } from '../tool/types.js';
+import { isPathWithinRoots } from '../tool/allowedRoots.js';
 import {
   EXTERNAL_PERMISSION_MODES,
   PERMISSION_MODES,
@@ -1041,22 +1042,16 @@ export function isShellTool(toolName: string): boolean {
 // ============================================================================
 
 /**
- * Check if a tool's operation is confined within the workspace directory.
- * Tools operating within the workspace get automatic allow.
+ * Collect the path-shaped arguments a tool input names. This is a CANDIDATE
+ * SOURCE, not the decision: each candidate is then checked against the real
+ * boundary rules by `isPathWithinRoots`. In particular the `cd` regex below
+ * only contributes a candidate — it can no longer decide anything on its own,
+ * so a command that changes directory in a way the regex does not model
+ * simply yields no candidate rather than silently passing.
  */
-export function isToolWithinWorkspace(
-  toolName: string,
+function collectWorkspacePathCandidates(
   input: Record<string, unknown>,
-  context: ToolPermissionContext,
-): boolean {
-  // Tool names are lowercase at the permission gate (block name as emitted by
-  // the model: `glob`, `grep`, `read`, ...). Compare case-insensitively so the
-  // legacy capitalized forms (`Glob`, `Grep`, `Read`, `Bash`) still match.
-  const fileSystemTools = ['bash', 'write', 'edit', 'read', 'glob', 'grep', 'apply_patch']
-  if (!fileSystemTools.includes(toolName.toLowerCase())) {
-    return false
-  }
-
+): string[] {
   const paths: string[] = []
 
   if (typeof input.path === 'string') {
@@ -1083,10 +1078,11 @@ export function isToolWithinWorkspace(
     }
   }
 
-  if (paths.length === 0) {
-    return false
-  }
+  return paths
+}
 
+/** The roots a tool is allowed to touch for the current turn. */
+function collectAllowedRoots(context: ToolPermissionContext): string[] {
   const allowedDirs: string[] = []
 
   for (const [dirPath] of context.additionalWorkingDirectories) {
@@ -1104,13 +1100,48 @@ export function isToolWithinWorkspace(
     }
   }
 
+  return allowedDirs
+}
+
+/**
+ * Check if a tool's operation is confined within the workspace directory.
+ * Tools operating within the workspace get automatic allow.
+ *
+ * Plan 583 / ISS-35: the containment test itself now lives in exactly one
+ * place, `isPathWithinRoots` (`tool/allowedRoots.ts`), which is the stricter
+ * of the two implementations that existed here. The previous inline
+ * `path.relative` loop never realpath'd either side, so a symlink inside the
+ * workspace pointing outside it passed the check — precisely the escape
+ * `isPathWithinRoots` was written to reject. It also rejects roots that do not
+ * exist, which fails closed.
+ */
+export function isToolWithinWorkspace(
+  toolName: string,
+  input: Record<string, unknown>,
+  context: ToolPermissionContext,
+): boolean {
+  // Tool names are lowercase at the permission gate (block name as emitted by
+  // the model: `glob`, `grep`, `read`, ...). Compare case-insensitively so the
+  // legacy capitalized forms (`Glob`, `Grep`, `Read`, `Bash`) still match.
+  const fileSystemTools = ['bash', 'write', 'edit', 'read', 'glob', 'grep', 'apply_patch']
+  if (!fileSystemTools.includes(toolName.toLowerCase())) {
+    return false
+  }
+
+  const paths = collectWorkspacePathCandidates(input)
+
+  if (paths.length === 0) {
+    return false
+  }
+
+  const allowedDirs = collectAllowedRoots(context)
+
+  if (allowedDirs.length === 0) {
+    return false
+  }
+
   for (const p of paths) {
-    const resolved = path.resolve(p)
-    const isWithin = allowedDirs.some((allowed) => {
-      const rel = path.relative(allowed, resolved)
-      return !rel.startsWith('..') && !path.isAbsolute(rel)
-    })
-    if (!isWithin) {
+    if (!isPathWithinRoots(path.resolve(p), allowedDirs)) {
       return false
     }
   }

@@ -18,6 +18,8 @@ import {
   stripFrontmatter,
   extractTerms,
   SNIPPET_MAX_LEN,
+  KEYWORD_CANDIDATE_LIMIT,
+  VECTOR_CANDIDATE_LIMIT,
 } from '../memory-rag-lib.mjs';
 
 let tmpDir: string;
@@ -230,5 +232,46 @@ describe('buildSnippet', () => {
     const content = `short intro ${filler} THE_MATCH token ${filler}`;
     const snippet = buildSnippet(content, ['THE_MATCH']);
     expect(snippet).toContain('THE_MATCH');
+  });
+});
+
+// Plan 583 / ISS-32, ISS-33: the retrieval reads are bounded. These cases
+// only became runnable once the vestigial shebang was removed from
+// memory-rag-lib.mjs — before that the whole suite failed to load and
+// reported "no tests", so the RAG core had zero coverage.
+describe('retrieval bounds', () => {
+  it('exports the caps as positive integers', () => {
+    expect(Number.isInteger(KEYWORD_CANDIDATE_LIMIT)).toBe(true);
+    expect(KEYWORD_CANDIDATE_LIMIT).toBeGreaterThan(0);
+    expect(Number.isInteger(VECTOR_CANDIDATE_LIMIT)).toBe(true);
+    expect(VECTOR_CANDIDATE_LIMIT).toBeGreaterThan(0);
+  });
+
+  it('caps the short-CJK LIKE scan at KEYWORD_CANDIDATE_LIMIT', () => {
+    // Seed well past the cap with docs that all match a 2-char CJK term.
+    const many = KEYWORD_CANDIDATE_LIMIT + 150;
+    const insert = db.prepare(
+      'INSERT INTO documents (root, rel_path, title, content, updated_at) VALUES (?, ?, ?, ?, ?)',
+    );
+    for (let i = 0; i < many; i++) {
+      insert.run('root', `bulk-${i}.md`, `调度 ${i}`, `调度内容 ${i} 调度手册`, i);
+    }
+
+    const hits = keywordSearch(db, '调度 手册');
+    expect(hits.length).toBeGreaterThan(0);
+    // Unbounded this would be `many` rows. The cap bounds the per-term window.
+    expect(hits.length).toBeLessThanOrEqual(KEYWORD_CANDIDATE_LIMIT);
+  });
+
+  it('keeps the capped window deterministic across runs', () => {
+    const first = keywordSearch(db, '调度 手册').map((h) => h.rel_path);
+    const second = keywordSearch(db, '调度 手册').map((h) => h.rel_path);
+    expect(second).toEqual(first);
+  });
+
+  it('still finds matches after the cap is applied', () => {
+    // A cap that returned nothing would be a silent recall outage.
+    const hits = keywordSearch(db, '调度 手册');
+    expect(hits.length).toBeGreaterThan(0);
   });
 });
