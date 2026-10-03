@@ -27,6 +27,7 @@
 | 10 | [参考实现对比](10-reference-comparison.md) | **codex / grok / pi / ZCode 哪些该抄？** 16 条决定 + 写完代码后被自己推翻的 3 条 |
 | 10 | [技术债台账](10-tech-debt-tracker.md) | 目标状态与仓库实际状态之间还差什么？谁来还？ |
 | 11 | [protocol 前瞻评审](11-protocol-forward-review.md) | 这套协议接下来会往哪里坏掉？ |
+| 12 | [Monorepo 迁移 Phase 0 评审](12-monorepo-migration-phase-0-review.md) | 基于当前实现复核边界、执行接缝与 agent/Electron 迁移映射；后续实施前先读 |
 
 ---
 
