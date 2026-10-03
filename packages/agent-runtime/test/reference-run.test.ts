@@ -155,10 +155,18 @@ const SCRIPT: ReadonlyArray<Readonly<Record<string, unknown>>> = [
   { type: 'done', data: {} },
 ];
 
-/** An executor that replays a fixed frame list, then ends the stream. */
+/**
+ * An executor that replays a fixed frame list, then ends the stream.
+ *
+ * The channel signature is `start(manifest, input, sink)` as of plan 587 R2.1 —
+ * the run's whole identity and resolved configuration have to be available at
+ * the ONE place an execution begins, or the host has to issue its own command
+ * beside it (which is precisely what R2.1 removed).
+ */
 function scriptedExecutor(frames: readonly Readonly<Record<string, unknown>>[]): ExecutionChannel {
   return {
-    async start(_runId, _sessionId, _input, sink): Promise<ExecutionHandle> {
+    async start(_manifest, input, sink): Promise<ExecutionHandle> {
+      expect(input.revision).toMatch(/^[0-9a-f]{64}$/);
       for (const frame of frames) sink.frame(frame);
       sink.end();
       return { stop: async () => {} };
@@ -176,7 +184,7 @@ function scriptedExecutor(frames: readonly Readonly<Record<string, unknown>>[]):
  */
 function openExecutor(): ExecutionChannel {
   return {
-    async start(_runId, _sessionId, _input, sink): Promise<ExecutionHandle> {
+    async start(_manifest, _input, sink): Promise<ExecutionHandle> {
       let stopped = false;
       return {
         stop: async () => {

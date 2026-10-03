@@ -29,8 +29,15 @@ export { RunController, RunStartError, runtimeEventTypes } from './controller.js
 export type {
   FrameOutcome,
   RunControllerOptions,
+  RunStartAcceptance,
+  RunStartStage,
   RuntimeIdentity,
 } from './controller.js';
+
+// `RunHandle` is re-exported rather than re-declared: the protocol owns the
+// shape, and a host that had to cast around a second definition would be able
+// to drift from the contract's `RunHandle`.
+export type { RunHandle } from '@duya/agent-protocol';
 
 export { RunEventStream, RunSession, isTerminal } from './run-session.js';
 export type { ObserveResult, RunPersistence, RunSessionOptions } from './run-session.js';
@@ -57,4 +64,9 @@ export type {
   ExecutionChannel,
   ExecutionHandle,
   ExecutionSink,
+  RunStartInput,
+} from './transport/execution-channel.js';
+export {
+  ExecutionDispatchError,
+  runInputRevision,
 } from './transport/execution-channel.js';

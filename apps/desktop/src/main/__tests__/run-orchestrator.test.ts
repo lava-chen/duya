@@ -19,7 +19,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { RunTerminalState } from '@duya/agent-protocol';
-import { RunOrchestrator, createWorkerExecutionChannel } from '../agents/server/run-orchestrator';
+import { RunOrchestrator, createWorkerExecutionChannel, type ChatStartCommand } from '../agents/server/run-orchestrator';
 import { logger } from '../agents/server/logger';
 
 interface Call {
@@ -46,8 +46,12 @@ function makeOrchestrator(dbRequest: (a: string, p: Record<string, unknown>) => 
   let dispatched = 0;
   const orchestrator = new RunOrchestrator({
     dbRequest,
-    channel: createWorkerExecutionChannel(() => {
-      dispatched += 1;
+    channel: createWorkerExecutionChannel({
+      dispatch: () => {
+        dispatched += 1;
+        return true;
+      },
+      interrupt: () => true,
     }),
   });
   return { orchestrator, dispatchCount: () => dispatched };
@@ -59,14 +63,33 @@ const intent = {
   providerId: 'anthropic-main',
   apiFormat: 'anthropic' as const,
   origin: 'user' as const,
+  // Plan 587 R2.1: the prompt and options are run INPUT now, passed through the
+  // single entry rather than sent by the router beside it.
+  prompt: 'hello',
+  options: {},
 };
+
+/**
+ * Open a run and return its id, failing loudly when it was NOT accepted.
+ *
+ * `openRun` returns an acknowledgement rather than `string | null` (R2.1), so
+ * a test that wants the id has to assert acceptance. Collapsing that back into
+ * a bare `null` here would hide exactly the distinction R2.1 added.
+ */
+async function open(orchestrator: RunOrchestrator, sessionId: string): Promise<string> {
+  const start = await orchestrator.openRun(sessionId, intent);
+  if (!start.accepted) {
+    throw new Error(`openRun was not accepted (${start.stage}: ${start.reason})`);
+  }
+  return start.runId;
+}
 
 describe('RunOrchestrator', () => {
   it('opens the run through the Control Plane with a frozen manifest', async () => {
     const { calls, request } = recorder();
     const { orchestrator } = makeOrchestrator(request);
 
-    const runId = await orchestrator.openRun('session-1', intent);
+    const runId = await open(orchestrator, 'session-1');
     expect(runId).not.toBeNull();
 
     const create = calls.find((c) => c.action === 'run:create');
@@ -83,16 +106,24 @@ describe('RunOrchestrator', () => {
 
   it('never lets a Control Plane refusal block the chat', async () => {
     // Losing the durable record is a degradation; refusing the user's message
-    // is a regression. `openRun` must return null and the router must carry on.
-    const { orchestrator } = makeOrchestrator(async () => ({ ok: false, error: 'no core stores' }));
-    await expect(orchestrator.openRun('session-1', intent)).resolves.toBeNull();
+    // is a regression. `openRun` must report NOT ACCEPTED and the router must
+    // carry on — and, because the dispatch is inside the start, "not accepted"
+    // now also means nothing was sent to the worker.
+    const { orchestrator, dispatchCount } = makeOrchestrator(async () => ({ ok: false, error: 'no core stores' }));
+    await expect(orchestrator.openRun('session-1', intent)).resolves.toMatchObject({
+      accepted: false,
+      stage: 'run_not_created',
+      reason: 'no core stores',
+    });
+    expect(dispatchCount()).toBe(0);
   });
 
   it('never lets a Control Plane throw block the chat', async () => {
-    const { orchestrator } = makeOrchestrator(async () => {
+    const { orchestrator, dispatchCount } = makeOrchestrator(async () => {
       throw new Error('db:request channel closed');
     });
-    await expect(orchestrator.openRun('session-1', intent)).resolves.toBeNull();
+    await expect(orchestrator.openRun('session-1', intent)).resolves.toMatchObject({ accepted: false });
+    expect(dispatchCount()).toBe(0);
   });
 
   it('records run.started before the first frame is observed', async () => {
@@ -104,7 +135,7 @@ describe('RunOrchestrator', () => {
     // it does. `run.started` is flushed on its own and awaited for exactly
     // that reason: a run that crashes on its first frame still leaves the
     // record that says what it was given.
-    await orchestrator.openRun('session-1', intent);
+    await open(orchestrator, 'session-1');
     const openWindow = calls.length;
 
     orchestrator.observe('session-1', { type: 'turn_start', data: { turnCount: 1 } });
@@ -129,7 +160,7 @@ describe('RunOrchestrator', () => {
   it('settles the run when the worker reports done', async () => {
     const { calls, request } = recorder();
     const { orchestrator } = makeOrchestrator(request);
-    const runId = await orchestrator.openRun('session-1', intent);
+    const runId = await open(orchestrator, 'session-1');
 
     orchestrator.observe('session-1', { type: 'turn_start', data: { turnCount: 1 } });
     orchestrator.observe('session-1', { type: 'text', data: { content: 'hi' } });
@@ -151,7 +182,7 @@ describe('RunOrchestrator', () => {
     // a `running` row that no process will ever close.
     const { calls, request } = recorder();
     const { orchestrator } = makeOrchestrator(request);
-    await orchestrator.openRun('session-1', intent);
+    await open(orchestrator, 'session-1');
 
     orchestrator.observe('session-1', { type: 'turn_start', data: { turnCount: 1 } });
     await orchestrator.settleSession('session-1');
@@ -168,8 +199,8 @@ describe('RunOrchestrator', () => {
     const { calls, request } = recorder();
     const { orchestrator } = makeOrchestrator(request);
 
-    const runA = await orchestrator.openRun('session-a', intent);
-    const runB = await orchestrator.openRun('session-b', intent);
+    const runA = await open(orchestrator, 'session-a');
+    const runB = await open(orchestrator, 'session-b');
     expect(runA).not.toBe(runB);
 
     orchestrator.observe('session-a', { type: 'turn_start', data: { turnCount: 1 } });
@@ -195,7 +226,7 @@ describe('RunOrchestrator', () => {
   it('forwards a frame it could not model, flagged as forward-only', async () => {
     const { request } = recorder();
     const { orchestrator } = makeOrchestrator(request);
-    await orchestrator.openRun('session-1', intent);
+    await open(orchestrator, 'session-1');
 
     // `workflow_run` has no protocol counterpart, and the renderer renders it.
     // Dropping it would break the UI, which is the one thing this plan must
@@ -208,34 +239,54 @@ describe('RunOrchestrator', () => {
   it('drops an internal control-plane frame instead of recording it', async () => {
     const { request } = recorder();
     const { orchestrator } = makeOrchestrator(request);
-    await orchestrator.openRun('session-1', intent);
+    await open(orchestrator, 'session-1');
 
     const outcome = orchestrator.observe('session-1', { type: 'pong' });
     expect(outcome.forwardOnly).toBe(false);
     expect(outcome.legacy).toBeNull();
   });
 
-  it('hands the run id to the host dispatch callback and nothing more', async () => {
-    // The seam's contract: `controller.start` asks the channel to begin, and
-    // the channel forwards the runId to whatever the HOST wired up. The desktop
-    // host wires a no-op, because the router issues `chat:start` itself
-    // immediately after `openRun` returns. So the assertion that matters is
-    // which runId the channel was handed — not that a callback fired, since
-    // whether one fires at all is the host's decision, not the run layer's.
-    const seen: string[] = [];
+  it('dispatches the chat command with the run’s own identity, exactly once', async () => {
+    // The seam's contract, R2.1: `controller.start` asks the channel to begin,
+    // and the channel sends the ONE `chat:start` for the turn. It used to be
+    // handed a bare runId while the router sent the real command itself with a
+    // second id — so this is the assertion that the executor is now told which
+    // run it is executing.
+    //
+    // Strengthened rather than replaced: it still proves the channel fires once
+    // with the run's own id, and now also that the manifest reference and the
+    // input revision travel on the same message.
+    const seen: ChatStartCommand[] = [];
+    const created: Array<Record<string, unknown>> = [];
     const orchestrator = new RunOrchestrator({
-      dbRequest: async (action, payload) =>
-        action === 'run:create' ? { ok: true, runId: payload.runId } : { ok: true },
-      channel: createWorkerExecutionChannel((runId) => {
-        seen.push(runId);
+      dbRequest: async (action, payload) => {
+        if (action === 'run:create') {
+          created.push(payload);
+          return { ok: true, runId: payload.runId };
+        }
+        return { ok: true, applied: true };
+      },
+      channel: createWorkerExecutionChannel({
+        dispatch: (command) => {
+          seen.push(command);
+          return true;
+        },
+        interrupt: () => true,
       }),
     });
 
-    const runId = await orchestrator.openRun('session-1', intent);
-    // The channel fired exactly once, and with the run's own id — so a host
-    // that wants the run layer to drive execution can, without the run layer
-    // inventing a second source of run identity to do it with.
-    expect(seen).toEqual([runId]);
+    const runId = await open(orchestrator, 'session-1');
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.runId).toBe(runId);
+    // The manifest reference is the SAME hash the Control Plane pinned on the
+    // row, not a recomputed one. Two hashes would mean the run record and the
+    // executor disagree about what they were both given.
+    expect(seen[0]?.manifestHash).toBe(created[0]?.['manifestHash']);
+    expect(typeof seen[0]?.inputRevision).toBe('string');
+    expect((seen[0]?.inputRevision as string).length).toBe(64);
+    // `id` is the TURN id, not the run id. Conflating the two is how the two
+    // identities got confused in the first place.
+    expect(seen[0]?.id).not.toBe(runId);
   });
 });
 
@@ -305,10 +356,22 @@ describe('RunOrchestrator — Control Plane acks are not swallowed', () => {
     // throws away.
     const { reports, restore } = captureReports();
     try {
-      const { orchestrator } = makeOrchestrator(
-        stubFor('run:append', { ok: false, written: 0, error: 'SQLITE_BUSY: database is locked' }),
-      );
-      await orchestrator.openRun('session-1', intent);
+      // R2.1: only the MID-STREAM batches are refused. Refusing the very first
+      // append would refuse `run.started`, and a run whose start is not durable
+      // is not dispatched at all — which is R1.2's rule, and it would make this
+      // test pass for a different reason than the one it exists to prove.
+      const { orchestrator } = makeOrchestrator(async (action, payload) => {
+        if (action === 'run:create') return { ok: true, runId: payload.runId };
+        if (action === 'run:append') {
+          const events = payload.events as Array<{ payload: { type: string } }>;
+          if (events.some((e) => e.payload.type === 'run.started')) {
+            return { ok: true, written: events.length };
+          }
+          return { ok: false, written: 0, error: 'SQLITE_BUSY: database is locked' };
+        }
+        return { ok: true, applied: true };
+      });
+      await open(orchestrator, 'session-1');
 
       orchestrator.observe('session-1', { type: 'turn_start', data: { turnCount: 1 } });
       orchestrator.observe('session-1', { type: 'done', data: {} });
@@ -330,7 +393,7 @@ describe('RunOrchestrator — Control Plane acks are not swallowed', () => {
       const { orchestrator } = makeOrchestrator(
         stubFor('run:complete', { ok: false, error: 'SQLITE_BUSY: database is locked' }),
       );
-      await orchestrator.openRun('session-1', intent);
+      await open(orchestrator, 'session-1');
 
       orchestrator.observe('session-1', { type: 'turn_start', data: { turnCount: 1 } });
       orchestrator.observe('session-1', { type: 'done', data: {} });
@@ -352,7 +415,7 @@ describe('RunOrchestrator — Control Plane acks are not swallowed', () => {
     const { reports, restore } = captureReports();
     try {
       const { orchestrator } = makeOrchestrator(stubFor('run:complete', { ok: true, applied: false }));
-      await orchestrator.openRun('session-1', intent);
+      await open(orchestrator, 'session-1');
 
       orchestrator.observe('session-1', { type: 'turn_start', data: { turnCount: 1 } });
       orchestrator.observe('session-1', { type: 'done', data: {} });
@@ -386,7 +449,7 @@ describe('RunOrchestrator — Control Plane acks are not swallowed', () => {
         }
         return { ok: true, applied: true };
       });
-      await orchestrator.openRun('session-1', intent);
+      await open(orchestrator, 'session-1');
 
       orchestrator.observe('session-1', { type: 'turn_start', data: { turnCount: 1 } });
       orchestrator.observe('session-1', { type: 'done', data: {} });
@@ -429,8 +492,12 @@ describe('RunOrchestrator — R1.2 lifecycle at the adapter', () => {
         if (action === 'run:append') return { ok: false, written: 0, error: 'SQLITE_BUSY' };
         return { ok: true, applied: true };
       },
-      channel: createWorkerExecutionChannel(() => {
-        dispatched += 1;
+      channel: createWorkerExecutionChannel({
+        dispatch: () => {
+          dispatched += 1;
+          return true;
+        },
+        interrupt: () => true,
       }),
     });
     return { orchestrator, dispatched: () => dispatched };
@@ -450,13 +517,16 @@ describe('RunOrchestrator — R1.2 lifecycle at the adapter', () => {
     })();
 
     try {
-      await expect(orchestrator.openRun('session-1', intent)).resolves.toBeNull();
+      const start = await orchestrator.openRun('session-1', intent);
+      // Not accepted, and the stage is NAMED: the row exists, `run.started` did
+      // not land. `not.toBeNull()` would not distinguish that from a refused row,
+      // which needs a different operator response.
+      expect(start).toMatchObject({ accepted: false, stage: 'started_not_durable' });
       // The executor was never told to go.
       expect(dispatched()).toBe(0);
-      // And the failure was NAMED. A generic "openRun failed" line is what a
-      // host reads today, and it cannot distinguish a Control Plane that
-      // refused the row from a run that could not be made durable — the two
-      // need different operator responses.
+      // And the failure was NAMED in the log too. A generic "openRun failed"
+      // line is what a host reads today, and it cannot distinguish a Control
+      // Plane that refused the row from a run that could not be made durable.
       expect(reports.join('|')).toMatch(/start_failed|run\.started/i);
     } finally {
       restore();
@@ -475,7 +545,7 @@ describe('RunOrchestrator — R1.2 lifecycle at the adapter', () => {
         if (action === 'run:append') return { ok: false, written: 0, error: 'SQLITE_BUSY' };
         return { ok: true, applied: true };
       },
-      channel: createWorkerExecutionChannel(() => {}),
+      channel: createWorkerExecutionChannel({ dispatch: () => true, interrupt: () => true }),
     });
     void calls;
     void request;
@@ -497,7 +567,7 @@ describe('RunOrchestrator — R1.2 lifecycle at the adapter', () => {
     const { request } = recorder();
     const orchestrator = new RunOrchestrator({
       dbRequest: request,
-      channel: createWorkerExecutionChannel(() => {}),
+      channel: createWorkerExecutionChannel({ dispatch: () => true, interrupt: () => true }),
     });
 
     for (let n = 0; n < 100; n += 1) {
@@ -520,9 +590,9 @@ describe('RunOrchestrator — R1.2 lifecycle at the adapter', () => {
     const { request } = recorder();
     const orchestrator = new RunOrchestrator({
       dbRequest: request,
-      channel: createWorkerExecutionChannel(() => {}),
+      channel: createWorkerExecutionChannel({ dispatch: () => true, interrupt: () => true }),
     });
-    await orchestrator.openRun('session-1', intent);
+    await open(orchestrator, 'session-1');
     orchestrator.observe('session-1', { type: 'done', data: {} });
     await orchestrator.settleSession('session-1');
 
@@ -542,9 +612,9 @@ describe('RunOrchestrator — R1.2 lifecycle at the adapter', () => {
     const { calls, request } = recorder();
     const orchestrator = new RunOrchestrator({
       dbRequest: request,
-      channel: createWorkerExecutionChannel(() => {}),
+      channel: createWorkerExecutionChannel({ dispatch: () => true, interrupt: () => true }),
     });
-    await orchestrator.openRun('session-1', intent);
+    await open(orchestrator, 'session-1');
     orchestrator.observe('session-1', { type: 'turn_start', data: { turnCount: 1 } });
 
     await orchestrator.settleSession('session-1', { cancelRequested: true });

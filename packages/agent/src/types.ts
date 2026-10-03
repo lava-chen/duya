@@ -297,6 +297,21 @@ export interface ChatOptions {
    */
   turnId?: string | null;
   /**
+   * Plan 587 R2.1: the canonical run id for this turn, minted by the Control
+   * Plane's start entry and carried on `chat:start`.
+   *
+   * NOT the same as `turnId`: a run is the unit the Control Plane records a
+   * terminal for, a turn is the unit the UI groups messages into. When this is
+   * present the agent uses it verbatim — as the run identity for mailbox claim
+   * attribution — rather than minting its own, which is the competing-identity
+   * problem contract §B forbids.
+   *
+   * Optional only because the non-Desktop producers (automation, workflow
+   * runtime, sub-agent tool) have not been migrated yet; they are registered for
+   * H8. Omit it and one is minted, reported as non-canonical.
+   */
+  runId?: string;
+  /**
    * Anti-dead-loop guard. Tracks consecutive identical tool calls across
    * turns (signature = tool name + serialized input). At `nudgeAt` a steering
    * message is injected to steer the model; at `hardStopAt` the loop stops

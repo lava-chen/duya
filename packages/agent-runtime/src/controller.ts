@@ -54,7 +54,13 @@ import { RunEventStream, RunSession, type RunPersistence } from './run-session.j
 import { projectToLegacyFrame } from './project/legacy-sse-projector.js';
 import type { LegacySseFrame } from './legacy-sse-contract.js';
 import { translateFrame, type RawFrame, type TranslateContext } from './translate/chat-event-translator.js';
-import type { ExecutionChannel, ExecutionHandle } from './transport/execution-channel.js';
+import {
+  ExecutionDispatchError,
+  runInputRevision,
+  type ExecutionChannel,
+  type ExecutionHandle,
+  type RunStartInput,
+} from './transport/execution-channel.js';
 
 /** The runtime's own identity, as advertised in its `ready` frame. */
 export interface RuntimeIdentity {
@@ -110,6 +116,27 @@ export interface RunControllerOptions {
    * for a host still holding a handle, not the archive.
    */
   readonly receiptLimit?: number;
+  /**
+   * Called after `run.started` is durable and immediately BEFORE the execution
+   * is dispatched.
+   *
+   * The window exists because of plan 587 R2.1. Dispatch moved from the host
+   * into `channel.start`, so the executor is now told to begin while the host
+   * is still inside `start` — and the very first frame it produces is routed
+   * back to the host's tee, which resolves a session to its run through a
+   * binding the host has not been able to make yet.
+   *
+   * It used to be safe by accident: the host bound the session after `start`
+   * returned, and the executor's first frame could only arrive on a later I/O
+   * turn, by which time the binding existed. That is microtask ordering, not a
+   * guarantee, and a dispatch that emitted a frame synchronously would have had
+   * it recorded as a frame for a run the host had not bound.
+   *
+   * So the binding moves INTO this callback, where the order is stated rather
+   * than inferred: durable first, bound second, dispatched third. A host that
+   * has nothing to bind simply omits it.
+   */
+  readonly onDispatchReady?: (runId: string) => void;
 }
 
 /**
@@ -126,19 +153,75 @@ export class RunStartError extends Error {
   /** Stable across hosts: the code a host branches on, not a message. */
   readonly code = 'start_failed' as const;
   /** What the runtime was doing when it gave up, for a log line. */
-  readonly stage: 'started_not_durable' | 'dispatch_threw';
+  readonly stage: RunStartStage;
 
-  constructor(stage: 'started_not_durable' | 'dispatch_threw', cause: unknown) {
+  constructor(stage: RunStartStage, cause: unknown) {
     super(
       stage === 'started_not_durable'
         ? 'run.started was not acknowledged by the Control Plane, so the run was not dispatched'
-        : 'the execution channel refused to start the run',
+        : stage === 'dispatch_refused'
+          ? 'the executor was not available, so the run was not dispatched'
+          : stage === 'run_not_created'
+            ? 'the Control Plane would not create the run row, so the run was not dispatched'
+            : 'the execution channel refused to start the run',
     );
     this.name = 'RunStartError';
     this.stage = stage;
     this.cause = cause;
   }
 }
+
+/**
+ * Why a run was not dispatched.
+ *
+ * Every value is a `not accepted`, and they are named separately because each
+ * demands a different response from a host:
+ *
+ *  - `run_not_created` — the Control Plane would not create the row. A
+ *    durability problem; the host proceeds without a durable record.
+ *  - `started_not_durable` — the row exists but `run.started` never landed. A
+ *    transient storage problem.
+ *  - `dispatch_refused` — the executor is not there (no worker, closed pipe).
+ *    Retrying after one spawns is the fix.
+ *  - `dispatch_threw` — the adapter itself failed. A host bug, not a state.
+ *  - `unknown` — the host's own `openRun` plumbing failed before any of the
+ *    above could be attributed.
+ *
+ * Collapsing them into one boolean is what let a run look live when nothing had
+ * begun executing it.
+ *
+ * The first four are raised below and by the host adapter; the split is spelled
+ * out here because the acceptance type is the host's contract and a host has to
+ * be able to branch on all of them.
+ */
+export type RunStartStage =
+  | 'run_not_created'
+  | 'started_not_durable'
+  | 'dispatch_refused'
+  | 'dispatch_threw'
+  | 'unknown';
+
+
+/**
+ * What a host learns when it asks for a run to be opened.
+ *
+ * The host's dispatch is INSIDE the start, so "did it begin executing?" and
+ * "does a run exist?" are one answer, not two. A host that gets
+ * `accepted: false` knows for certain that no executor was asked to do
+ * anything — which is the whole point, because the alternative (dispatch
+ * anyway, log the refusal) is what produces a run that looks live, answers
+ * nobody, and is closed by nothing.
+ */
+export type RunStartAcceptance =
+  | { readonly accepted: true; readonly runId: string }
+  | {
+      readonly accepted: false;
+      /** The id that was minted and then abandoned, for the log line. */
+      readonly runId: string | null;
+      readonly stage: RunStartStage;
+      readonly reason: string;
+    };
+
 
 /** What the caller learns about one observed frame. */
 export interface FrameOutcome {
@@ -347,34 +430,56 @@ export class RunController implements AgentRuntimeApi {
 
     let handle: ExecutionHandle;
     try {
-      handle = await this.#options.channel.start(
-        runId,
-        input.sessionId,
-        { prompt: input.prompt, options: input.options ?? {} },
-        {
-          frame: (raw) => {
-            this.observeFrame(runId, raw);
-          },
-          envelope: (envelope) => {
-            active.stream.push(envelope);
-          },
-          end: () => {
-            // The executor's stream ended. The run is not finished until it has
-            // a terminal, and this is a floating call — so the catch is not
-            // optional bookkeeping: `settle` degrades rather than rejects, but
-            // a host that made the channel throw must not learn about it as an
-            // unhandled rejection in a process nobody is watching.
-            void this.settle(runId).catch(() => undefined);
-          },
+      // Bind before dispatch, see `onDispatchReady`. Inside the same `try` so a
+      // throwing host hook cannot leave the run bound with no executor behind
+      // it: the catch below closes the run with a terminal either way.
+      this.#options.onDispatchReady?.(runId);
+      // The revision is computed HERE, once, and handed to the adapter. The
+      // Control Plane that persists it and the adapter that puts it on the
+      // executor's command must not each derive it from the same input by their
+      // own rules, because two derivations that agree today are two sources of
+      // truth that a future option can make disagree. The id is
+      // `manifest.runId` and is never re-minted here.
+      const startInput: RunStartInput = {
+        sessionId: input.sessionId,
+        prompt: input.prompt,
+        options: input.options ?? {},
+        revision: runInputRevision({
+          sessionId: input.sessionId,
+          prompt: input.prompt,
+          options: input.options ?? {},
+        }),
+      };
+      handle = await this.#options.channel.start(manifest, startInput, {
+        frame: (raw) => {
+          this.observeFrame(runId, raw);
         },
-      );
+        envelope: (envelope) => {
+          active.stream.push(envelope);
+        },
+        end: () => {
+          // The executor's stream ended. The run is not finished until it has
+          // a terminal, and this is a floating call — so the catch is not
+          // optional bookkeeping: `settle` degrades rather than rejects, but
+          // a host that made the channel throw must not learn about it as an
+          // unhandled rejection in a process nobody is watching.
+          void this.settle(runId).catch(() => undefined);
+        },
+      });
     } catch (error) {
       // A channel that throws has begun no execution, and the run is already
       // durable — so this one CAN be given a terminal, and must be. Leaving
       // the row `running` here is how a run comes to exist, do nothing, and
       // never be closed by anything.
       await this.#failStart(runId, error);
-      throw new RunStartError('dispatch_threw', error);
+      // `dispatch_refused` is the executor saying "there is nothing to run
+      // this on" — a worker that never became resident, a closed pipe. That is
+      // a different incident from an adapter that broke, and a host that cannot
+      // tell them apart retries the wrong one.
+      throw new RunStartError(
+        error instanceof ExecutionDispatchError ? 'dispatch_refused' : 'dispatch_threw',
+        error,
+      );
     }
     active.handle = handle;
 

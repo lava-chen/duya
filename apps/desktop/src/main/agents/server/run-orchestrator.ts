@@ -9,18 +9,28 @@
  * the existing `db:request` channel — the same one `acquireChatLock` uses
  * (`chat-runtime-lock.ts:71`).
  *
- * ## The two calls the router makes
+ * ## ONE entry, not two (plan 587 R2.1)
  *
  * ```ts
- * const runId = await orchestrator.openRun(sessionId, prompt, options);  // before dispatch
- * const legacy = orchestrator.observe(runId, normalizedFrame);            // per frame
+ * const start = await orchestrator.openRun(sessionId, turn);   // opens AND dispatches
+ * const legacy = orchestrator.observe(sessionId, frame);        // per frame
  * ```
  *
- * `openRun` is awaited BEFORE `sendCommand({type:'chat:start'})`, because a
- * run whose record does not exist yet is a run that cannot be recovered. If the
- * Control Plane refuses, the router still dispatches the chat — the product
- * keeps working, and the refusal is logged — because losing the durable run is
- * a degradation and refusing the user's message is a regression.
+ * The dispatch is inside that single entry. `openRun` hands the channel the
+ * manifest, the resolved prompt and the input revision, and the channel's
+ * adapter puts the canonical `runId`, the manifest hash and the revision on the
+ * one `chat:start` command that begins the work. Before this, the router sent
+ * `chat:start` itself with a SECOND freshly minted id on it, and nothing
+ * connected the two — so a run could exist with an executor that had never been
+ * told it was executing anything.
+ *
+ * `openRun` still never blocks the chat: a Control Plane that refuses is a
+ * degradation, and a product that refuses to answer because a bookkeeping row
+ * could not be written is a worse regression. What changed is that "chat
+ * proceeded" comes back as an explicit `{ accepted: false, stage }` rather than
+ * a bare `null` the caller could only guess about — and, crucially, a run that
+ * was not accepted has NO executor behind it, because the dispatch never
+ * happened.
  *
  * `observe` is a tee: it returns the legacy frame for the router to write and
  * keeps the protocol envelope for `run_events`. The router never learns the
@@ -42,12 +52,17 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { manifestFingerprint, type RunResult, type RunTerminalState } from '@duya/agent-protocol';
 import {
+  ExecutionDispatchError,
   RunController,
   RunStartError,
   type ExecutionChannel,
   type ExecutionHandle,
   type FrameOutcome,
+  type RunHandle,
+  type RunStartAcceptance,
+  type RunStartStage,
   type TranslateContext,
 } from '@duya/agent-runtime';
 // Imported from the factory module, NOT the `control-plane` barrel. The barrel
@@ -62,6 +77,21 @@ import { logger } from './logger';
 
 /** The `dbRequest` seam the router already threads through `RouterDeps`. */
 type DbRequest = ControlPlaneRequest;
+
+/**
+ * Ended runs whose `RunResult` is still readable, plus every turn in flight.
+ *
+ * A host that wants a real `RunResult` — the non-SSE response, which has no
+ * stream to read a terminal off — needs the handle the controller returned, and
+ * that handle deliberately outlives the live run: `result()` is a READ that
+ * never settles (contract §C). Discarding it at settle time would force the
+ * host to rebuild the receipt from the terminal alone, which is a second
+ * derivation of a value the runtime already decided once.
+ *
+ * Bounded for the same reason the controller's receipts are: remembering every
+ * run forever is the leak this replaces, with more useful-looking data in it.
+ */
+const RETAINED_HANDLES = 64;
 
 export interface RunOrchestratorOptions {
   readonly dbRequest: DbRequest;
@@ -79,6 +109,26 @@ export interface RunModelIdentity {
   readonly providerId: string;
   readonly apiFormat: 'anthropic' | 'openai';
 }
+
+/**
+ * Everything one chat turn needs to become a run.
+ *
+ * The prompt and the options are HERE rather than sent by the router alongside
+ * the run, because they used to be a second parallel description of the same
+ * turn — the double source of truth §R2.2 names. Passing them in means the
+ * command that starts the work is DERIVED FROM the run, so the two cannot
+ * drift apart.
+ *
+ * `sessionId` and `runId` are deliberately absent: the run id is minted here,
+ * by the Control Plane's start entry, and the session id is the map key. A
+ * caller that could supply its own run id would be a second run-identity
+ * source, which is the thing R2.1 exists to remove.
+ */
+export type RunTurnIntent = Omit<RunIntent, 'sessionId' | 'runId'> & {
+  readonly apiFormat?: 'anthropic' | 'openai';
+  readonly prompt: string;
+  readonly options: Readonly<Record<string, unknown>>;
+};
 
 /** Everything the router needs back from `observe`. */
 export interface ObservedFrame {
@@ -136,6 +186,25 @@ export class RunOrchestrator {
    * when the settlement lands.
    */
   readonly #finishing = new Map<string, Promise<void>>();
+  /**
+   * runId -> the handle the controller handed back, kept so an ENDED run is
+   * still answerable.
+   *
+   * `result()` is a read that never settles (contract §C), so the handle is the
+   * only source of a real `RunResult`. The non-SSE response has no event stream
+   * to read a terminal off and needs one. Bounded by `RETAINED_HANDLES`, and
+   * inserted in run order so eviction drops the oldest.
+   */
+  readonly #handleByRun = new Map<string, RunHandle>();
+  /**
+   * runId -> the session that asked for it, for the window inside `openRun`.
+   *
+   * Exists only so `onDispatchReady` — which receives a run id, because that is
+   * all the controller knows — can bind the right session before the dispatch.
+   * Deleted as soon as the start resolves, so it can never hold a binding for a
+   * run that ended.
+   */
+  readonly #pendingSessionByRun = new Map<string, string>();
 
   constructor(options: RunOrchestratorOptions) {
     this.#options = options;
@@ -161,6 +230,22 @@ export class RunOrchestrator {
       identity: { name: 'duya-agent-server', version: RUNTIME_VERSION },
       protocol: { major: 1, minor: 0 },
       contextFor: (manifest) => this.#contextFor(manifest.runId, manifest.permissionPolicy.defaultTimeoutMs),
+      // Bind the session BEFORE the dispatch, which now happens inside
+      // `controller.start` (plan 587 R2.1). The first frame the worker produces
+      // comes back through the router's tee, which resolves a session to its run
+      // through this very binding — so binding afterwards would make the first
+      // frame of every turn race the map it is looked up in.
+      //
+      // It is NOT bound before `run.started` is durable: that was R1.2's fix for
+      // a start that failed leaving the session pointing at a run with no record
+      // and no place in the Control Plane. The hook is after that barrier, so
+      // both properties hold.
+      onDispatchReady: (runId) => {
+        const sessionId = this.#pendingSessionByRun.get(runId);
+        if (sessionId === undefined) return;
+        this.#bySession.set(sessionId, runId);
+        this.#endedBySession.delete(sessionId);
+      },
       // The run id is read from the manifest INSIDE this closure, not from a
       // field on the orchestrator. A field would be a single slot shared by
       // every concurrent session, so two interleaved runs would append their
@@ -206,23 +291,32 @@ export class RunOrchestrator {
   }
 
   /**
-   * Open a run for a chat turn and return its id.
+   * Open a run for a chat turn AND dispatch it. One call, one dispatch.
    *
    * Never throws. The chat proceeds either way; the run layer is additive, and
    * a product that refuses to answer because a bookkeeping row could not be
    * written is worse than one that answers without the record.
    *
-   * `null` therefore means "there is no run for this turn", and it covers
-   * three genuinely different situations: the Control Plane refused the row, the
-   * run's durable `started` never landed, and the channel threw. All three are
-   * reported by name, because an operator reading "chat proceeded" needs to
-   * know which of them happened.
+   * What it returns is the acknowledgement the contract asks for (§R2.1): an
+   * explicit `accepted` flag plus, when false, WHICH of the three distinct
+   * situations happened. Before this, the answer was `string | null` and the
+   * caller could only learn "no run", which is precisely the ambiguity that let
+   * a refused start and a started run look alike.
+   *
+   * One consequence is worth stating plainly: `accepted: false` now also means
+   * **nothing was dispatched**. The `chat:start` command is issued from inside
+   * the start, so there is no path where the executor was told to work while the
+   * run layer reported that the run did not open.
    */
-  async openRun(
-    sessionId: string,
-    intent: Omit<RunIntent, 'sessionId'> & { readonly apiFormat?: 'anthropic' | 'openai' },
-  ): Promise<string | null> {
+  async openRun(sessionId: string, intent: RunTurnIntent): Promise<RunStartAcceptance> {
     const runId = randomUUID();
+    // The pending-session entry lives only for the duration of this call, and a
+    // `finally` is the only thing that guarantees that: there are three exits
+    // from the body below (refused row, failed start, success) and the one that
+    // returns EARLY is the `run_not_created` path, which a trailing cleanup
+    // after the try block would never reach. One entry per refused run, for the
+    // life of the agent-server process, is the leak this map could have become.
+    this.#pendingSessionByRun.set(runId, sessionId);
     try {
       if (typeof intent.model === 'string' && intent.model !== '') {
         this.#modelByRun.set(runId, {
@@ -231,7 +325,12 @@ export class RunOrchestrator {
           apiFormat: intent.apiFormat ?? 'anthropic',
         });
       }
-      const built = buildRunManifest({ ...intent, sessionId, runId });
+      // `prompt` and `options` are stripped before the manifest is built: they
+      // are run INPUT, not configuration. Leaving them in would mean the
+      // manifest fingerprint changes whenever the user rewords a message, which
+      // is the opposite of what a manifest is for.
+      const { prompt: turnPrompt, options: turnOptions, ...manifestIntent } = intent;
+      const built = buildRunManifest({ ...manifestIntent, sessionId, runId });
       const created = (await this.#options.dbRequest('run:create', {
         runId,
         sessionId,
@@ -242,32 +341,42 @@ export class RunOrchestrator {
 
       if (created?.ok !== true) {
         this.#forgetRun(runId);
+        const reason = created?.error ?? 'unknown';
         logger.warn('Control Plane refused the run — chat proceeds without a durable record', {
           sessionId,
           runId,
-          reason: created?.error ?? 'unknown',
+          reason,
         });
-        return null;
+        return { accepted: false, runId: null, stage: 'run_not_created', reason };
       }
 
       // Start the run so `run.started` is recorded with its manifest hash
       // BEFORE the worker produces anything. This is what makes a run that
       // crashes on its first frame still answerable.
       //
-      // The session is bound AFTER the start, not before. It used to be bound
-      // first, which meant a start that failed left the session pointing at a
+      // The session is bound by `onDispatchReady`, after `run.started` is
+      // durable and before the executor is told to begin. It used to be bound
+      // FIRST, which meant a start that failed left the session pointing at a
       // run with no `run.started` and no place in the Control Plane — and the
-      // worker's very next frame was then teed into it.
-      await this.#controller.start(built.manifest, {
-        prompt: '',
+      // worker's very next frame was then teed into it. Binding first is also
+      // what R2.1 requires now, since the dispatch happens inside this call and
+      // its first frame can arrive before `openRun` returns.
+      const handle = await this.#controller.start(built.manifest, {
+        prompt: turnPrompt,
         sessionId,
-        options: {},
+        options: turnOptions,
       });
-      this.#bySession.set(sessionId, runId);
-      this.#endedBySession.delete(sessionId);
-      return runId;
+      this.#retain(runId, handle);
+      return { accepted: true, runId };
     } catch (error) {
       this.#forgetRun(runId);
+      // The binding is released here rather than left to survive a refused
+      // start: a session pointing at a run that was never dispatched is exactly
+      // what R1.2 fixed, and `dispatch_refused` reaches this path now that a
+      // missing worker is a refusal instead of a silently dropped command.
+      if (this.#bySession.get(sessionId) === runId) {
+        this.#bySession.delete(sessionId);
+      }
       if (error instanceof RunStartError) {
         // `start_failed` is the code, and it is not the same incident as a
         // refused row: the row exists, the run did not open, and the executor
@@ -277,14 +386,56 @@ export class RunOrchestrator {
           runId,
           stage: error.stage,
         });
-        return null;
+        return {
+          accepted: false,
+          runId,
+          stage: error.stage,
+          reason: describeCause(error.cause) || error.message,
+        };
       }
+      const reason = describeCause(error);
       logger.warn('openRun failed — chat proceeds without a durable record', {
         sessionId,
-        error: error instanceof Error ? error.message : String(error),
+        error: reason,
       });
-      return null;
+      return { accepted: false, runId, stage: 'unknown', reason };
+    } finally {
+      // The one cleanup that has to cover every exit, including the early
+      // `run_not_created` return above. See the note at the top of this method.
+      this.#pendingSessionByRun.delete(runId);
     }
+  }
+
+  /**
+   * Keep a handle answerable after its run ends, up to the retention limit.
+   *
+   * `Map` preserves insertion order, so the first key is the oldest and
+   * evicting it evicts the right one without a second structure.
+   */
+  #retain(runId: string, handle: RunHandle): void {
+    this.#handleByRun.delete(runId);
+    this.#handleByRun.set(runId, handle);
+    while (this.#handleByRun.size > RETAINED_HANDLES) {
+      const oldest = this.#handleByRun.keys().next();
+      if (oldest.done === true) return;
+      this.#handleByRun.delete(oldest.value);
+    }
+  }
+
+  /**
+   * The run's `RunResult` once it has ended, or `null` for a session that never
+   * had one.
+   *
+   * A READ. It waits on the runtime's completion promise and never settles the
+   * run, so a host can ask for the receipt after the fact without becoming
+   * another thing that can end a turn.
+   */
+  async resultFor(sessionId: string): Promise<RunResult | null> {
+    const runId = this.#bySession.get(sessionId) ?? this.#endedBySession.get(sessionId);
+    if (runId === undefined) return null;
+    const handle = this.#handleByRun.get(runId);
+    if (handle === undefined) return null;
+    return handle.result();
   }
 
   /**
@@ -356,20 +507,43 @@ export class RunOrchestrator {
    * already started that work, this waits for it rather than returning while
    * the terminal write is still crossing the process boundary — which is what
    * made the close event unable to vouch for the run it was closing.
+   *
+   * @returns The terminal the run reached, or `null` when the session had no
+   *   live run to settle. The non-SSE response needs it: it has no stream to
+   *   read an outcome off, and answering "interrupted" without saying what the
+   *   run recorded is the gap R2.1 closes. `null` is deliberately distinct from
+   *   a terminal — "there was no run" is not "the run ended".
    */
-  async settleSession(sessionId: string, opts?: { cancelRequested?: boolean }): Promise<void> {
+  async settleSession(
+    sessionId: string,
+    opts?: { cancelRequested?: boolean },
+  ): Promise<RunTerminalState | null> {
     const inFlight = this.#finishing.get(sessionId);
     if (inFlight !== undefined) {
       await inFlight;
-      return;
+      return this.#terminalFor(sessionId);
     }
     const runId = this.#bySession.get(sessionId);
-    if (runId === undefined) return;
+    if (runId === undefined) return null;
     try {
       await this.#finish(sessionId, runId, opts);
     } catch (error) {
       logger.error('Run settle failed', error instanceof Error ? error : new Error(String(error)), { sessionId, runId });
     }
+    return this.#terminalFor(sessionId);
+  }
+
+  /**
+   * The terminal the session's run decided, live or ended.
+   *
+   * `controller.receiptFor` answers for ENDED runs only, so a live run is asked
+   * directly. `null` means this controller has no record of a run for the
+   * session at all.
+   */
+  #terminalFor(sessionId: string): RunTerminalState | null {
+    const runId = this.#bySession.get(sessionId) ?? this.#endedBySession.get(sessionId);
+    if (runId === undefined) return null;
+    return this.#controller.activeRun(runId)?.terminal ?? this.#controller.receiptFor(runId);
   }
 
   /**
@@ -475,6 +649,113 @@ export class RunOrchestrator {
   }
 }
 
+/**
+ * One non-Desktop producer of agent turns, as measured.
+ *
+ * `ownedBy` names the slice that is expected to take it over. H8 is the
+ * migration; R2.1's rule is that this PR moves Desktop chat and no one else,
+ * so this list exists to make "no one else" checkable rather than assumed.
+ *
+ * Every `*Path` is repo-relative and EXISTSENCE-CHECKED by
+ * `run-entry-registration.test.ts`. That is the whole point of separating the
+ * path from the note: a note can age, but a path that stops resolving fails a
+ * build instead of quietly describing a producer that moved.
+ */
+export interface ConsumerRegistration {
+  readonly consumer: string;
+  /** Repo-relative path where the turn begins. */
+  readonly startPath: string;
+  /** Repo-relative path where the turn is stopped, or `null` when there is none. */
+  readonly stopPath: string | null;
+  /** Repo-relative path where a permission decision is granted or denied. */
+  readonly permissionPath: string;
+  /** What it mints today, and why that is not a run identity. */
+  readonly identityNote: string;
+  /** How it is stopped, when `stopPath` is not self-explanatory. */
+  readonly stopNote?: string;
+  /** The slice that owns taking this over. */
+  readonly ownedBy: string;
+}
+
+/**
+ * Every agent-turn producer that is NOT Desktop chat, with its real paths.
+ *
+ * ## Why a constant and not a document
+ *
+ * A list in prose is unfalsifiable — it drifts silently, and nothing notices
+ * until someone migrates a path that has since moved. Here, the paths are
+ * typechecked data, and a test fails if a registered file disappears. That
+ * turns "did we miss a consumer?" from a review question into a test.
+ *
+ * ## What is deliberately NOT here
+ *
+ * `packages/cli` starts no agent run at all: it is HTTP CRUD against the
+ * agent-server. The plan lists CLI as a consumer, and the real headless entry is
+ * `packages/agent/src/cli/index.ts`, which constructs a `DuyaAgent` directly and
+ * therefore bypasses `chat:start` entirely. It is recorded below as a
+ * DIVERGENCE rather than as a row, because pretending a consumer exists where
+ * none does is the failure this list is meant to prevent.
+ */
+export const NON_DESKTOP_CONSUMERS: readonly ConsumerRegistration[] = Object.freeze([
+  Object.freeze({
+    consumer: 'automation (scheduler)',
+    startPath: 'apps/desktop/src/main/automation/Scheduler.ts',
+    stopPath: null,
+    permissionPath: 'packages/agent/src/permissions/permissions.ts',
+    // A runId that lives only inside a `cron:<job>:<ts>:<runId>` session id
+    // string and never reaches the Control Plane's `runs` table.
+    identityNote: 'mints a runId that only lives inside a session id string',
+    ownedBy: 'H8',
+  }),
+  Object.freeze({
+    // A `workflowRunId` written to a DIFFERENT table. Contract §B: stored
+    // alongside run identity, never mixed with it.
+    consumer: 'workflow agent runtime',
+    startPath: 'apps/desktop/src/main/agents/server/workflow-runtime-manager.ts',
+    stopPath: 'apps/desktop/src/main/agents/server/workflow-runtime-manager.ts',
+    stopNote: 'workflow:cancel on the child stdin, then SIGTERM',
+    permissionPath: 'packages/agent/src/permissions/permissions.ts',
+    identityNote: 'mints a workflowRunId into its own table, not `runs`',
+    ownedBy: 'H8',
+  }),
+  Object.freeze({
+    // `taskId` / `subAgentSessionId`, not a run id. The child's cancel handle
+    // is the only stop, and `subagent:kill` reaches it.
+    consumer: 'sub-agent tool',
+    startPath: 'packages/agent/src/tool/SubagentTool/SubagentTool.ts',
+    stopPath: 'packages/agent/src/process/agent-process-entry.ts',
+    stopNote: 'subagent:kill reaches the child lifecycle controller',
+    permissionPath: 'packages/agent/src/permissions/permissions.ts',
+    identityNote: 'mints taskId / subAgentSessionId, which are not run ids',
+    ownedBy: 'H8',
+  }),
+]);
+
+/**
+ * Where the plan and the repository disagree, recorded rather than papered over.
+ *
+ * `packages/cli` is listed by plan 587 §R2.1 as a consumer of the single run
+ * entry. It is not one: it exposes HTTP CRUD and never constructs an agent run.
+ * The headless path that DOES construct one is
+ * `packages/agent/src/cli/index.ts`, which builds a `DuyaAgent` directly and so
+ * never passes through `chat:start` — it cannot be brought under this boundary
+ * by the Desktop adapter at all, and needs its own decision.
+ *
+ * Recorded here so the next slice inherits the finding instead of
+ * rediscovering it, and so nobody reports the CLI as migrated on the strength
+ * of a Desktop-only change.
+ */
+export const RUN_ENTRY_DIVERGENCES: readonly { readonly claim: string; readonly reality: string }[] =
+  Object.freeze([
+    Object.freeze({
+      claim: 'plan 587 §R2.1 lists packages/cli as a consumer of the single run entry',
+      reality:
+        'packages/cli starts no agent run (HTTP CRUD only); the headless entry is ' +
+        'packages/agent/src/cli/index.ts, which constructs DuyaAgent directly and ' +
+        'never passes through chat:start. It needs its own R2 slice.',
+    }),
+  ]);
+
 /** Why a durability reply is not a success, or `null` when it is one. */
 interface AckFailure {
   /** True for a write that did not fail but did not land — a lost CAS. */
@@ -527,25 +808,132 @@ function reportAckLoss(action: string, runId: string, failure: AckFailure): void
 }
 
 /**
- * An execution channel that hands the run layer the worker's frames.
+ * A cause, as one diagnostic line.
  *
- * The router already owns the child's stdout and already normalises every
- * frame, so this channel does not read a stream — it is told when to dispatch
- * and it forwards what the router hands it. That keeps the run layer from
+ * The `reason` on a `not accepted` acknowledgement is read by an operator
+ * deciding what to do next, so it gets the underlying message rather than the
+ * wrapper's — `RunStartError`'s own message is the same sentence for every
+ * stage, which is exactly the text that tells you nothing.
+ */
+function describeCause(cause: unknown): string {
+  if (cause === undefined || cause === null) return '';
+  if (cause instanceof Error) return cause.message;
+  if (typeof cause === 'string') return cause;
+  return String(cause);
+}
+
+
+/**
+ * The one command that begins a chat turn, as the worker sees it.
+ *
+ * Everything on this object is derived from the run: the `runId` is the
+ * canonical one the Control Plane minted, `manifestHash` is the reference to the
+ * frozen configuration, and `inputRevision` identifies the exact prompt and
+ * options this run was opened with. The executor therefore cannot end up with a
+ * second identity, and a run row that says one thing cannot be contradicted by
+ * the command that produced it.
+ *
+ * `id` stays a TURN id, not a run id. `agent-process-entry` threads it as
+ * `ChatOptions.turnId` (journal emits, `message_index.turn_id`, turn review)
+ * and a run spans one `chat:start`, but the concepts are different: a run is
+ * the unit the Control Plane records a terminal for, a turn is the unit the UI
+ * groups messages into. Reusing one id for both is how the two got confused in
+ * the first place. It is NOT re-minted per run and NOT the canonical id — it is
+ * a third thing, correctly named.
+ */
+export interface ChatStartCommand {
+  readonly type: 'chat:start';
+  readonly sessionId: string;
+  /** Turn id. See above. */
+  readonly id: string;
+  /** The canonical run id, minted by the Control Plane's start entry. */
+  readonly runId: string;
+  /** Reference to the frozen manifest: its sha256 fingerprint. */
+  readonly manifestHash: string;
+  /** Digest of this turn's prompt and options. */
+  readonly inputRevision: string;
+  readonly prompt: string;
+  readonly options: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * What the host must be able to do for the adapter to dispatch.
+ *
+ * `dispatch` REPORTS whether the command reached the worker. That boolean is
+ * the whole of R2.1's "no fake running run" guarantee at this seam: a `false`
+ * means there is no worker to run this on, and the adapter turns it into a
+ * refusal so the run is closed with a terminal instead of left looking live.
+ * Ignoring it is exactly what the router used to do.
+ *
+ * Expressed as an OBJECT rather than a callable with a property, because
+ * `interrupt` is not optional and a positional second argument is the kind of
+ * thing that silently binds to the wrong function when a call site is edited.
+ *
+ * `interrupt` is deliberately required rather than optional. The Desktop host
+ * already has exactly one stop path (`WorkerManager.interruptWorker`, used by
+ * the SSE disconnect handler, the DELETE route, and the agent-process pool), and
+ * R2.1's job is to bind the runtime's declared `stop` to it — not to add a
+ * second one. An optional `stop` is how the previous empty no-op happened.
+ */
+export interface WorkerExecutionBinding {
+  /** Send one `chat:start`. Returns false when no worker accepted it. */
+  readonly dispatch: (command: ChatStartCommand) => boolean;
+  /** The host's existing single worker-stop function. */
+  readonly interrupt: (sessionId: string, graceMs: number, reason: string) => boolean;
+}
+
+
+/** Why the adapter says the run was not dispatched. */
+function refused(reason: string): ExecutionDispatchError {
+  return new ExecutionDispatchError(reason);
+}
+
+/**
+ * The execution channel from the run layer to the legacy worker command.
+ *
+ * ## It dispatches; it does not stream
+ *
+ * The router already owns the child's stdout and already normalises every frame,
+ * so this adapter does not read a stream — the runtime pushes frames into
+ * `observeFrame` through the router's tee. That keeps the run layer from
  * becoming a second consumer of worker stdout, which would mean two parsers of
  * one format.
+ *
+ * ## `stop` is the host's existing interrupt, not a new one
+ *
+ * See {@link WorkerDispatch.interrupt}. The runtime never escalates to a hard
+ * kill and never clears the worker's command queue: a grace deadline that ends
+ * in a platform kill, and a double-press that pops a queued turn, are R2.3's
+ * `ExecutionHandle.stop` work. What R2.1 fixes here is the opposite problem —
+ * `stop` used to be an empty function, so `RunController.cancel` returned
+ * `{ applied: true }` for a stop that had touched nothing at all, which is the
+ * one field a host reads to know its stop did something.
  */
-export function createWorkerExecutionChannel(dispatch: (runId: string) => void): ExecutionChannel {
+export function createWorkerExecutionChannel(binding: WorkerExecutionBinding): ExecutionChannel {
   return {
-    async start(runId: string): Promise<ExecutionHandle> {
-      // Dispatch is the router's: it owns the WorkerManager and the `chat:start`
-      // command shape. The run layer only says "a run is ready to execute".
-      dispatch(runId);
+    async start(manifest, input): Promise<ExecutionHandle> {
+      const command: ChatStartCommand = {
+        type: 'chat:start',
+        sessionId: input.sessionId,
+        // A turn id, and a fresh one per turn. Deliberately NOT the run id:
+        // see `ChatStartCommand`.
+        id: randomUUID(),
+        runId: manifest.runId,
+        manifestHash: manifestFingerprint(manifest),
+        inputRevision: input.revision,
+        prompt: input.prompt,
+        options: input.options,
+      };
+      if (!binding.dispatch(command)) {
+        throw refused(`no worker accepted chat:start for session ${input.sessionId}`);
+      }
       return {
-        stop: async () => {
-          // A cooperative stop is the router's DELETE /sessions/:id/chat path.
-          // The runtime never hard-kills on its own: only the host knows
-          // whether a hard kill is acceptable.
+        stop: async (graceMs: number) => {
+          // The one existing host interrupt. `applied` is reported by the host
+          // itself; the runtime re-reads the run's closed flag afterwards, so a
+          // worker that finished inside the window is still reported as
+          // `applied: false` rather than as a stop that landed.
+          binding.interrupt(input.sessionId, graceMs, 'run-cancel');
         },
       };
     },

@@ -82,22 +82,31 @@ const FRAMES = {
  */
 async function runTurn(sessionId: string): Promise<string | null> {
   let dispatched = false;
-  const channel = createWorkerExecutionChannel(() => {
-    dispatched = true;
+  // R2.1: the channel dispatches, and it REPORTS whether the worker took it.
+  // The `false` here is what makes a refused dispatch a terminal rather than a
+  // run that looks live, so a `true` is the honest value for this harness.
+  const channel = createWorkerExecutionChannel({
+    dispatch: () => {
+      dispatched = true;
+      return true;
+    },
+    interrupt: () => true,
   });
   const orchestrator = new RunOrchestrator({
     channel,
     dbRequest: (action, payload) => dispatchControlPlaneAction(action, payload),
   });
 
-  const runId = await orchestrator.openRun(sessionId, {
+  const start = await orchestrator.openRun(sessionId, {
     workingDirectory: '/repo',
     model: 'claude-opus',
     providerId: 'anthropic-main',
     apiFormat: 'anthropic',
-    runOrigin: 'user',
+    prompt: 'hello',
+    options: {},
   });
-  if (runId === null) return null;
+  if (!start.accepted) return null;
+  const runId = start.runId;
 
   // The worker was told to go. This is the moment the run must already be on
   // disk — if `run.started` were still buffered, a crash here would lose it.
@@ -225,18 +234,26 @@ describe('the Reference Run, closed', () => {
   it('records a turn that ends in an error as failed, not completed', async () => {
     let dispatched = false;
     const orchestrator = new RunOrchestrator({
-      channel: createWorkerExecutionChannel(() => {
-        dispatched = true;
+      channel: createWorkerExecutionChannel({
+        dispatch: () => {
+          dispatched = true;
+          return true;
+        },
+        interrupt: () => true,
       }),
       dbRequest: (action, payload) => dispatchControlPlaneAction(action, payload),
     });
-    const runId = await orchestrator.openRun('session-err', {
+    const start = await orchestrator.openRun('session-err', {
       workingDirectory: '/repo',
       model: 'claude-opus',
       providerId: 'anthropic-main',
+      prompt: 'hello',
+      options: {},
     });
     expect(dispatched).toBe(true);
-    expect(runId).not.toBeNull();
+    expect(start.accepted).toBe(true);
+    if (!start.accepted) throw new Error('unreachable');
+    const runId = start.runId;
 
     const deps = { runOrchestrator: orchestrator } as unknown as RouterDeps;
     normalizeAndObserve('session-err', { type: 'chat:text', data: 'partial' }, deps);

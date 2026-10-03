@@ -320,17 +320,24 @@ const deps: RouterDeps = {
     logger,
     httpLogger,
   }),
-  // Plan 586 Reference Run. The chat route opens a run through this and tees
-  // every normalised worker frame into it. Optional in `RouterDeps` so tests
-  // and embedders that never chat keep constructing deps as before.
+  // Plan 586 Reference Run / plan 587 R2.1 single run entry. The chat route
+  // calls `openRun` exactly once, and that call OPENS the run and DISPATCHES the
+  // turn: the channel below is what issues `chat:start`, with the canonical run
+  // id, the manifest hash and the input revision on it. The router used to send
+  // that command itself, which made two dispatches of one turn and left the
+  // executor carrying an id no run row knew about.
   runOrchestrator: new RunOrchestrator({
     dbRequest,
-    channel: createWorkerExecutionChannel(() => {
-      // Dispatch is the router's: it owns `WorkerManager` and the
-      // `chat:start` shape, and it already issues the command immediately
-      // after `openRun` returns. The run layer only records that a run exists;
-      // it never sends a command of its own, which is what keeps run identity
-      // and execution authority in different layers.
+    channel: createWorkerExecutionChannel({
+      // The command is delivered by the host because the host owns
+      // `WorkerManager`; the fields on it come from the run, so the run layer
+      // still decides WHAT is executed and only the host decides HOW.
+      dispatch: (command) => workerManager.sendCommand(command.sessionId, { ...command }),
+      // The host's EXISTING single stop path, not a second one. `stop` used to
+      // be an empty function, so a runtime cancel reported `applied: true` for a
+      // stop that had touched nothing.
+      interrupt: (sessionId, graceMs, reason) =>
+        workerManager.interruptWorker(sessionId, graceMs, reason),
     }),
   }),
 };
