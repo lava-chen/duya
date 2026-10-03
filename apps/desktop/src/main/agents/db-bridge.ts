@@ -13,7 +13,9 @@ import {
   consumeApprovedToolApproval,
   createToolApproval,
   listToolApprovalRules,
+  resolveToolApproval,
   toolApprovalInputHash,
+  upsertToolApprovalRule,
 } from '../db/toolApprovalState';
 import { getProviderStore } from '../services/providers/provider-store-electron';
 import { getConfigStore } from '../config/store-instance';
@@ -883,6 +885,45 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         (p.scopeType as 'bot' | 'session') ?? 'session',
         p.scopeId as string,
       );
+    }
+
+    // Plan 587 R2.4: the worker path's "always allow" now writes the SAME
+    // durable table the bot card path already wrote. Two writers, one table,
+    // one scope key -- so a grant made in the UI and a grant made by a click on
+    // a permission prompt are the same kind of fact and cannot disagree.
+    case 'toolApproval:upsertRule': {
+      const db = getDatabase();
+      if (!db) return { ok: false, error: 'db_unavailable' };
+      const scopeType = (p.scopeType as 'bot' | 'session') ?? 'session';
+      const scopeId = p.scopeId as string;
+      const toolName = p.toolName as string;
+      if (scopeId === '' || toolName === '') {
+        return { ok: false, error: 'toolApproval:upsertRule requires scopeId and toolName' };
+      }
+      upsertToolApprovalRule(db, scopeType, scopeId, toolName);
+      return { ok: true };
+    }
+
+    // Plan 587 R2.4: the router's permission answer. This is the DURABLE write
+    // the interactive path never made — `handlePostPermission` used to forward
+    // the decision to the worker and record nothing, so a decision that reached
+    // a tool call had no row saying it had been made.
+    //
+    // `resolveToolApproval`'s CAS is the whole late/duplicate guard: the first
+    // answer wins and claims, every later one is told `claimed: false` and is
+    // answered with the row that is already on record. Returns
+    // `{ ok: false, error: 'not_found' }` rather than `undefined` so the caller
+    // can tell "no such request" from "the bridge does not know this action".
+    case 'toolApproval:resolve': {
+      const db = getDatabase();
+      if (!db) return { ok: false, error: 'db_unavailable' };
+      const decision = p.decision as 'allow' | 'always' | 'deny';
+      if (decision !== 'allow' && decision !== 'always' && decision !== 'deny') {
+        return { ok: false, error: 'invalid_decision' };
+      }
+      const claimed = resolveToolApproval(db, p.id as string, decision);
+      if (!claimed) return { ok: false, error: 'not_found' };
+      return { ok: true, claimed: claimed.claimed, row: claimed.row };
     }
 
     case 'message:getCount': {

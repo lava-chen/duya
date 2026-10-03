@@ -860,6 +860,21 @@ type PendingPermissionEntry = {
 
 const pendingPermissions = new Map<string, PendingPermissionEntry>();
 
+// The grant scope each session's "always allow" writes into (plan 587 R2.4).
+//
+// `permission:resolve` arrives long after `chat:start` and on a different code
+// path, and the surface decides the scope: a bot/wake session's "always" is
+// scoped to the BOT (so a new conversation with the same bot inherits it and a
+// different bot does not), while an interactive session's is scoped to the
+// SESSION. Guessing the scope at resolve time would write a session grant for a
+// bot, or a bot grant for a session, and the mis-scoped row would then be read
+// back on every later turn of the wrong owner.
+//
+// Recorded at `chat:start`, which is the only place that knows the surface, and
+// dropped on `chat:done` so a recycled worker does not inherit a scope from a
+// session it no longer serves.
+const permissionScopes = new Map<string, { scopeType: 'bot' | 'session'; scopeId: string }>();
+
 function pendingPermissionKey(sessionId: string, id: string): string {
   return `${sessionId}::${id}`;
 }
@@ -2532,20 +2547,41 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // pause — they are inherently interactive.
     const permissionSurface = msg.options?.permissionSurface === 'bot' ? 'bot' : 'default';
     const botAgentId = msg.options?.agentProfileId || null;
+    // Plan 587 R2.4: `permission:resolve` needs to know which durable scope an
+    // "always allow" belongs to, and this is the only place that knows. A
+    // missing entry falls back to the session scope, which is the narrower of
+    // the two: a wrongly-scoped bot grant would leak across conversations, a
+    // wrongly-scoped session grant only asks again.
+    const grantScope = {
+      scopeType: (permissionSurface === 'bot' ? 'bot' : 'session') as 'bot' | 'session',
+      scopeId: (permissionSurface === 'bot' ? botAgentId : msg.sessionId) || msg.sessionId,
+    };
+    permissionScopes.set(msg.sessionId, grantScope);
     const requestPermission = createSurfaceAwarePermissionHandler(
       createPermissionHandler(msg.sessionId),
       { sessionId: msg.sessionId, surface: permissionSurface, botAgentId },
     );
     // Plan 498: "Always allow this tool" grants from persisted approval
     // cards, scoped to this session's bot (bot surface) or the session itself.
+    // Plan 587 R2.4: this durable read is now also the SOURCE of the in-process
+    // approval cache, so the two cannot disagree. Previously the cache was
+    // written only by this worker's own `allow_for_session` clicks, which made
+    // it a process grant wearing a session label — and a recycled worker
+    // started with an empty cache while the durable table still held the grant.
     let approvedAlwaysAllowTools: string[] = [];
     try {
-      approvedAlwaysAllowTools = (await toolApprovalDb.listRules({
-        scopeType: permissionSurface === 'bot' ? 'bot' : 'session',
-        scopeId: (permissionSurface === 'bot' ? botAgentId : msg.sessionId) || msg.sessionId,
-      })) as string[];
+      approvedAlwaysAllowTools = (await toolApprovalDb.listRules(grantScope)) as string[];
     } catch {
       // Best-effort: a failed rules read just skips the always-allow seeds.
+    }
+    if (approvedAlwaysAllowTools.length > 0) {
+      try {
+        const { rememberSessionApproval } = await import('../tool/AppConnectionTool/approvals.js');
+        for (const tool of approvedAlwaysAllowTools) rememberSessionApproval(tool);
+      } catch {
+        // The durable set is still on `approvedAlwaysAllowTools`, which the
+        // permission gate consults first. The cache is only a fast path.
+      }
     }
     const consumeApprovedEffect = async (
       toolName: string,
@@ -3660,6 +3696,12 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     sendToMain({ type: 'chat:done', sessionId: msg.sessionId });
   } finally {
     stopChatHeartbeat();
+    // Plan 587 R2.4: the grant SCOPE is per session, so it must not outlive
+    // the session that established it. A worker that kept serving a new
+    // session would otherwise write a new session's "always allow" into the
+    // previous session's row -- a grant that follows the process instead of
+    // the conversation, which is the exact failure §E forbids.
+    permissionScopes.delete(msg.sessionId);
   }
 }
 
@@ -4567,10 +4609,44 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             clearTimeout(pending.timeoutHandle);
             pendingPermissions.delete(key);
             if (decision === 'allow' || decision === 'allow_once' || decision === 'allow_for_session') {
-              // Plan 449: `allow_for_session` on an app-connection tool now
-              // actually remembers — same tool skips the write/modify ask for
-              // the rest of this worker's (session-scoped) lifetime.
+              // Plan 587 R2.4: `allow_for_session` used to record the grant in
+              // this process's memory only, so it died on worker recycle even
+              // though `tool_approval_rules` (read at :2541) already had a
+              // durable reader waiting for it. A grant whose scope is narrower
+              // than its name is a defect, so the WRITE now goes to the same
+              // table the bot card path writes, keyed by the session.
+              //
+              // The in-process set is kept as a fast path AND is seeded from
+              // the durable rules below, so the two cannot disagree: it is a
+              // cache of the session's grants, not a second opinion about them.
               if (decision === 'allow_for_session' && pending.toolName) {
+                const scope = permissionScopes.get(resolveSessionId) ?? {
+                  scopeType: 'session' as const,
+                  scopeId: resolveSessionId,
+                };
+                try {
+                  const written = (await toolApprovalDb.upsertRule({
+                    scopeType: scope.scopeType,
+                    scopeId: scope.scopeId,
+                    toolName: pending.toolName,
+                  })) as { ok?: boolean } | undefined;
+                  if (written?.ok === false) {
+                    warn('[Agent-Process] session grant could not be persisted; scope stays one-shot', {
+                      sessionId: resolveSessionId,
+                      toolName: pending.toolName,
+                    });
+                  }
+                } catch (err) {
+                  // A grant that could not be stored must not be reported as
+                  // remembered. The call itself still proceeds (the user did
+                  // answer "allow"); only the DURATION is lost, and it is lost
+                  // loudly rather than silently.
+                  warn('[Agent-Process] session grant write failed; scope stays one-shot', {
+                    sessionId: resolveSessionId,
+                    toolName: pending.toolName,
+                    error: err instanceof Error ? err.message : String(err),
+                  });
+                }
                 const connectorDescriptor = (await getAppConnection()).getCachedAppConnectionDescriptors().find(
                   (d: any) => d.name === pending.toolName,
                 );
