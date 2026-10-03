@@ -66,8 +66,21 @@ import {
   type ExecutionHandle,
   type ExecutionSink,
   type RunPersistence,
+  type StopReceipt,
   type TranslateContext,
 } from '@duya/agent-runtime';
+
+/**
+ * A stop the executor honoured and left cleanly.
+ *
+ * R2.3 gave `stop` a receipt so a caller can tell a clean exit from a kill.
+ * A double returning `Promise<void>` could say neither, so these report the
+ * cooperative case explicitly.
+ */
+function cooperativeStop(reason: string): StopReceipt {
+  return { requested: true, disposition: 'cooperative', waitedMs: 0, reason };
+}
+
 
 // ── a persistence whose every call the test can see ─────────────────────
 
@@ -191,8 +204,9 @@ function openExecutor(probe: ExecutorProbe): ExecutionChannel {
   return {
     async start(): Promise<ExecutionHandle> {
       return {
-        stop: async () => {
+        stop: async (request) => {
           probe.stops += 1;
+        return cooperativeStop(request.reason);
         },
       };
     },
@@ -209,8 +223,9 @@ function manualExecutor(
       async start(_runId, _sessionId, _input, received): Promise<ExecutionHandle> {
         sink = received;
         return {
-          stop: async () => {
+          stop: async (request) => {
             probe.stops += 1;
+          return cooperativeStop(request.reason);
           },
         };
       },

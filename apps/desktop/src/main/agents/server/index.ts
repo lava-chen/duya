@@ -335,7 +335,10 @@ const deps: RouterDeps = {
       dispatch: (command) => workerManager.sendCommand(command.sessionId, { ...command }),
       // The host's EXISTING single stop path, not a second one. `stop` used to
       // be an empty function, so a runtime cancel reported `applied: true` for a
-      // stop that had touched nothing.
+      // stop that had touched nothing. R2.3 keeps the same call and adds the
+      // OUTCOME: the host has always killed the worker after the grace deadline,
+      // and the run layer now gets to see that happen instead of recording the
+      // kill as a clean cancellation.
       interrupt: (sessionId, graceMs, reason) =>
         workerManager.interruptWorker(sessionId, graceMs, reason),
     }),

@@ -46,8 +46,21 @@ import {
   type ExecutionChannel,
   type ExecutionHandle,
   type RunPersistence,
+  type StopReceipt,
   type TranslateContext,
 } from '@duya/agent-runtime';
+
+/**
+ * A stop the executor honoured and left cleanly.
+ *
+ * R2.3 gave `stop` a receipt so a caller can tell a clean exit from a kill.
+ * A double returning `Promise<void>` could say neither, so these report the
+ * cooperative case explicitly.
+ */
+function cooperativeStop(reason: string): StopReceipt {
+  return { requested: true, disposition: 'cooperative', waitedMs: 0, reason };
+}
+
 
 /** Returned instead of a status when a public promise has NOT resolved. */
 const PENDING = 'pending' as const;
@@ -125,8 +138,9 @@ function openExecutor(probe: ExecutorProbe): ExecutionChannel {
   return {
     async start(): Promise<ExecutionHandle> {
       return {
-        stop: async () => {
+        stop: async (request) => {
           probe.stops += 1;
+        return cooperativeStop(request.reason);
         },
       };
     },

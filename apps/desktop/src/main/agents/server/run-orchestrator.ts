@@ -52,7 +52,14 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { manifestFingerprint, type RunManifest, type RunResult, type RunTerminalState } from '@duya/agent-protocol';
+import {
+  manifestFingerprint,
+  type CancelOutcome,
+  type RunManifest,
+  type RunResult,
+  type RunTerminalState,
+  type StopDisposition,
+} from '@duya/agent-protocol';
 import {
   ExecutionDispatchError,
   RunController,
@@ -63,6 +70,7 @@ import {
   type RunHandle,
   type RunStartAcceptance,
   type RunStartStage,
+  type StopReceipt,
   type TranslateContext,
 } from '@duya/agent-runtime';
 // Imported from the factory module, NOT the `control-plane` barrel. The barrel
@@ -592,6 +600,56 @@ export class RunOrchestrator {
     this.#modelByRun.delete(runId);
   }
 
+  /**
+   * Stop a session's run through the runtime's own cancel path.
+   *
+   * The sibling of {@link settleSession}, and deliberately NOT a synonym for it.
+   * `settleSession` records a terminal for a run somebody else already stopped —
+   * it is what the router's `res.on('close')` backstop uses, where the worker is
+   * interrupted on the line above and the run only needs closing. This one asks
+   * the run to stop: it issues the interrupt itself and returns what the stop
+   * turned into.
+   *
+   * That distinction is the reason `handleDeleteChat` calls THIS and not the
+   * pair. The DELETE route used to interrupt the worker on its own and leave the
+   * run `running` forever, while the SSE disconnect path one screen away went
+   * through the arbiter — two host-initiated stops, one of which had no terminal
+   * at all. Both are now one arbiter with two call styles, and the difference
+   * between them is who sends the interrupt, not whether the run is closed.
+   *
+   * `null` when the session has no live run. "There was no run" is not "the run
+   * was cancelled", and a host that reads `null` as a success invents a
+   * cancellation for a turn that never started.
+   */
+  async cancelSession(sessionId: string, reason: string): Promise<CancelOutcome | null> {
+    // `#endedBySession` as well as `#bySession`, because a run that has already
+    // settled is still answerable: the caller wants to know that stopping it did
+    // nothing, and the terminal it reached is the answer. Only a session with
+    // neither a live run nor a recent one returns `null`.
+    const runId = this.#bySession.get(sessionId) ?? this.#endedBySession.get(sessionId);
+    if (runId === undefined) return null;
+    try {
+      return await this.#controller.cancel(runId, { reason: `delete:${reason}` });
+    } catch (error) {
+      logger.error(
+        'Run cancel failed',
+        error instanceof Error ? error : new Error(String(error)),
+        { sessionId, runId },
+      );
+      // A cancel that could not complete still has to CLOSE the run: the worker
+      // is being stopped either way, and leaving the row `running` is the one
+      // outcome nobody can reconcile later. The fallback terminal is read once,
+      // after the settle, because a receipt that does not exist yet is not a
+      // terminal to report.
+      await this.settleSession(sessionId, { cancelRequested: true });
+      const terminal = this.#controller.receiptFor(runId);
+      // `null` rather than a fabricated `completed`: if the settle also failed,
+      // this host has no terminal to give and must say so instead of inventing
+      // a success for a run it could not close.
+      return terminal === null ? null : { requested: true, applied: true, terminal };
+    }
+  }
+
   /** The live run for a session, for the cancel path. */
   runForSession(sessionId: string): string | null {
     return this.#bySession.get(sessionId) ?? null;
@@ -893,10 +951,32 @@ export interface ChatStartCommand {
 export interface WorkerExecutionBinding {
   /** Send one `chat:start`. Returns false when no worker accepted it. */
   readonly dispatch: (command: ChatStartCommand) => boolean;
-  /** The host's existing single worker-stop function. */
-  readonly interrupt: (sessionId: string, graceMs: number, reason: string) => boolean;
+  /**
+   * The host's existing single worker-stop function.
+   *
+   * Returns `null` when there is no worker to stop — which the real host does,
+   * and which the adapter turns into a `disposition: 'unavailable'` rather than
+   * a cooperative stop for an interrupt that touched nothing. It is NOT a
+   * boolean any more: the run layer has to await the outcome, because a grace
+   * deadline that ends in a platform kill is invisible to a caller that only
+   * learns whether a command was sent.
+   */
+  readonly interrupt: (sessionId: string, graceMs: number, reason: string) => WorkerInterrupt | null;
 }
 
+
+/**
+ * What the adapter needs back from the host's interrupt.
+ *
+ * A structural type rather than an import of `WorkerManager`'s own, so the
+ * adapter can be driven by a test without a `WorkerManager` and without this
+ * file taking a dependency on the process pool's internals. It is structurally
+ * `WorkerManager.interruptWorker`'s return type.
+ */
+export type WorkerInterrupt = {
+  readonly accepted: boolean;
+  readonly settled: Promise<StopDisposition>;
+};
 
 /** Why the adapter says the run was not dispatched. */
 function refused(reason: string): ExecutionDispatchError {
@@ -916,17 +996,34 @@ function refused(reason: string): ExecutionDispatchError {
  *
  * ## `stop` is the host's existing interrupt, not a new one
  *
- * See {@link WorkerDispatch.interrupt}. The runtime never escalates to a hard
- * kill and never clears the worker's command queue: a grace deadline that ends
- * in a platform kill, and a double-press that pops a queued turn, are R2.3's
- * `ExecutionHandle.stop` work. What R2.1 fixes here is the opposite problem —
- * `stop` used to be an empty function, so `RunController.cancel` returned
- * `{ applied: true }` for a stop that had touched nothing at all, which is the
- * one field a host reads to know its stop did something.
+ * See {@link WorkerExecutionBinding.interrupt}. R2.3 did not add a second stop
+ * path either; what it added is the OUTCOME. The host already killed the worker
+ * after a grace deadline, and the runtime could not see it happen, so a run
+ * whose process was killed was recorded as the clean cancellation it failed to
+ * be.
+ *
+ * ## The budget crosses on the command, and why it has to
+ *
+ * A ceiling that only the run layer checks is a receipt, not a budget. The run
+ * layer learns a turn started when the frame COMES BACK, which is after the
+ * model request has been dispatched; stopping the run at that point prevents
+ * turn three, not turn two. The only component that knows it is about to make a
+ * request is the executor, and the only channel it reads before the turn loop
+ * is `chat:start`.
+ *
+ * So `manifest.budget.maxTurns` is forwarded as `options.maxTurns`, which is
+ * the option `DuyaAgent` already checks before dispatching the next turn. A
+ * ceiling of `0` is treated as absent, matching `isBudgetExhausted`'s own
+ * `isPositive`: forwarding `0` would stop a healthy run after one turn.
  */
 export function createWorkerExecutionChannel(binding: WorkerExecutionBinding): ExecutionChannel {
   return {
     async start(manifest, input): Promise<ExecutionHandle> {
+      const maxTurns = manifest.budget.maxTurns;
+      const options: Readonly<Record<string, unknown>> =
+        typeof maxTurns === 'number' && Number.isFinite(maxTurns) && maxTurns > 0
+          ? { ...input.options, maxTurns }
+          : input.options;
       const command: ChatStartCommand = {
         type: 'chat:start',
         sessionId: input.sessionId,
@@ -940,18 +1037,26 @@ export function createWorkerExecutionChannel(binding: WorkerExecutionBinding): E
         manifest,
         inputRevision: input.revision,
         prompt: input.prompt,
-        options: input.options,
+        options,
       };
       if (!binding.dispatch(command)) {
         throw refused(`no worker accepted chat:start for session ${input.sessionId}`);
       }
       return {
-        stop: async (graceMs: number) => {
-          // The one existing host interrupt. `applied` is reported by the host
-          // itself; the runtime re-reads the run's closed flag afterwards, so a
-          // worker that finished inside the window is still reported as
-          // `applied: false` rather than as a stop that landed.
-          binding.interrupt(input.sessionId, graceMs, 'run-cancel');
+        stop: async (request): Promise<StopReceipt> => {
+          const interrupt = binding.interrupt(input.sessionId, request.graceMs, request.reason);
+          if (interrupt === null) {
+            // No worker was there. Reporting `cooperative` would credit a stop
+            // with a clean exit that nothing produced.
+            return {
+              requested: false,
+              disposition: 'unavailable',
+              waitedMs: 0,
+              reason: request.reason,
+            };
+          }
+          const disposition = await interrupt.settled;
+          return { requested: interrupt.accepted, disposition, waitedMs: 0, reason: request.reason };
         },
       };
     },

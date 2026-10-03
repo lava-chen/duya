@@ -38,7 +38,7 @@
  * manifest 鈥?which is why `RunController` calls this exactly once.
  */
 
-import type { RunEventEnvelope, RunManifest } from '@duya/agent-protocol';
+import type { RunEventEnvelope, RunManifest, StopDisposition } from '@duya/agent-protocol';
 import { runInputRevision } from '@duya/agent-protocol';
 import type { RawFrame } from '../translate/chat-event-translator.js';
 
@@ -54,19 +54,71 @@ import type { RawFrame } from '../translate/chat-event-translator.js';
  */
 export { runInputRevision };
 
+/** Re-exported, so an adapter can name a disposition without a second import. */
+export type { StopDisposition };
+
+/**
+ * What a stop is being asked for.
+ *
+ * An object rather than a positional `graceMs`, because the second argument is
+ * the one that gets lost: a stop with no reason recorded is a kill in the
+ * durable log that nobody can account for, and the reason is the only field
+ * that says who asked for it.
+ */
+export interface StopRequest {
+  /** The window in which a cooperative stop is honoured. */
+  readonly graceMs: number;
+  /** Who asked, in the caller's own words. Recorded in the terminal. */
+  readonly reason: string;
+}
+
+/**
+ * What the stop turned into.
+ *
+ * ## Why `stop` returns this at all
+ *
+ * It used to return `Promise<void>`, and the host's interrupt is synchronous and
+ * fire-and-forget. So the await resolved before the grace window had even
+ * opened: a cancel reported success for a worker that was still running, and
+ * nothing upstream could tell a clean stop from a process that had to be killed.
+ * The Desktop host has ALWAYS escalated after a grace deadline
+ * (`WorkerManager.interruptWorker`); this receipt is what makes that visible,
+ * and it is the same stop path, not a second one.
+ *
+ * ## The boundedness contract
+ *
+ * `stop` MUST resolve, and anything awaiting it must survive it not resolving.
+ * A stop nobody answered is reported as `escalated`, because "we stopped
+ * waiting" and "it stopped cleanly" are different claims and only the second one
+ * is a success.
+ */
+export interface StopReceipt {
+  /** True when a stop was actually put to an executor. */
+  readonly requested: boolean;
+  /** How it ended. See {@link StopDisposition}. */
+  readonly disposition: StopDisposition;
+  /** How long the caller waited, for a log line. Never a promise of more. */
+  readonly waitedMs: number;
+  /** Echoed back, so a receipt can be logged without the original request. */
+  readonly reason: string;
+}
+
 /** An execution started by the runtime. */
 export interface ExecutionHandle {
   /**
-   * Stop the execution. `graceMs` is the window in which a cooperative stop is
-   * honoured before the caller escalates; the runtime never escalates on its
-   * own, because only the host knows whether a hard kill is acceptable.
+   * Stop the execution, and report what happened.
    *
-   * Plan 587 R2.1 binds this to the host's EXISTING single interrupt function.
-   * It deliberately does not add a second stop path and does not escalate: a
-   * grace deadline that ends in a platform kill is R2.3's `ExecutionHandle.stop`
-   * work, and adding it here would create the parallel path the plan forbids.
+   * `graceMs` is the window in which a cooperative stop is honoured before the
+   * adapter escalates to a platform kill. The runtime is the caller, and it
+   * bounds its own await on top of that: an adapter that never resolves must
+   * still leave the run closable.
+   *
+   * Plan 587 R2.1 bound this to the host's EXISTING single interrupt function
+   * and deliberately added no second stop path. R2.3 added none either. What
+   * changed is that the SAME function's outcome is reported, and that a stop
+   * nobody answered became a reportable state instead of an invisible one.
    */
-  stop(graceMs: number): Promise<void>;
+  stop(request: StopRequest): Promise<StopReceipt>;
 }
 
 /** Receives frames from the executor as they are produced. */

@@ -51,6 +51,16 @@ export interface RunTerminationIntent {
   readonly cancelRequested?: boolean;
   /** `graceMs` elapsed and the transport had to hard-kill. */
   readonly escalated?: boolean;
+  /**
+   * Why the stop was asked for, in the caller's own words (`user`, `budget`,
+   * `delete`, ...).
+   *
+   * Recorded rather than derived because it is the only thing in the durable
+   * receipt that answers "who asked for this kill". A run that is `runtime_crash`
+   * with `escalated: true` is, on its own, an unanswered question; the reason is
+   * the half that makes it investigable.
+   */
+  readonly requestedReason?: string;
   /** The host is shutting down; the run did not choose to end. */
   readonly hostShutdown?: boolean;
 }
@@ -112,7 +122,15 @@ export function resolveRunOutcome(
       error: {
         ...IMPLICIT_CRASH,
         message: 'the transport hard-killed the run before the clean cancel path completed',
-        details: { escalated: true },
+        // `escalated` is the verdict; `requestedReason` is the provenance. The
+        // reason is spread in only when the caller supplied one, so a verdict
+        // that did not record it does not grow a fabricated value.
+        details: {
+          escalated: true,
+          ...(opts.intent.requestedReason === undefined
+            ? {}
+            : { requestedReason: opts.intent.requestedReason }),
+        },
       },
     };
   }

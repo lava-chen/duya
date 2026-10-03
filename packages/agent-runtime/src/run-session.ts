@@ -44,6 +44,7 @@ import {
   emptyCounters,
   isBudgetExhausted,
   resolveRunOutcome,
+  type BudgetVerdict,
   type RunEventCounters,
   type RunSpend,
 } from '@duya/agent-core';
@@ -214,6 +215,13 @@ export class RunSession {
   #lostBatch: unknown = null;
   #lostEvents = 0;
   #lostBatches = 0;
+  /**
+   * When each in-flight tool call started, on the wall clock.
+   *
+   * Only for the calls that have not closed, and only so a dangling call can
+   * report a MEASURED duration when it is closed as unknown. See `observe`.
+   */
+  readonly #toolStartedAt = new Map<string, number>();
   readonly #terminalPromise: Promise<RunTerminalState>;
   #resolveTerminal!: (state: RunTerminalState) => void;
   /** The receipt. Built once, handed out by identity to every reader. */
@@ -296,6 +304,15 @@ export class RunSession {
     const envelope = this.#ledger.emit(event, this.#options.now());
     this.#counters = countEvent(this.#counters, event);
     this.#spend = accumulate(event, this.#spend);
+    // Stamped here rather than at settle time, because the interval this
+    // produces is the call's OWN duration and settle time is not it. Bounded by
+    // the number of tool calls a run makes, and dropped as soon as the call is
+    // closed, so it cannot become a per-run memory leak.
+    if (event.type === 'tool.call_started') {
+      this.#toolStartedAt.set(event.toolCallId, this.#options.clock());
+    } else if (event.type === 'tool.call_completed' || event.type === 'tool.timed_out') {
+      this.#toolStartedAt.delete(event.toolCallId);
+    }
 
     if (event.type === 'run.completed' || event.type === 'run.failed') {
       this.#terminalEvents.push(event);
@@ -348,6 +365,7 @@ export class RunSession {
   async settle(intent?: {
     cancelRequested?: boolean;
     escalated?: boolean;
+    requestedReason?: string;
   }): Promise<RunTerminalState> {
     if (this.#terminal !== null) return this.#terminal;
     if (this.#settling !== null) return this.#settling;
@@ -359,11 +377,17 @@ export class RunSession {
   async #settleOnce(intent?: {
     cancelRequested?: boolean;
     escalated?: boolean;
+    requestedReason?: string;
   }): Promise<RunTerminalState> {
     const wallClockMs = this.#options.clock() - this.#options.startedAt;
+    // Before the verdict, not after it: a dangling tool call is a fact about the
+    // run's transcript, and a terminal that contradicts it is a transcript
+    // nobody can trust. `observe` throws only if a terminal event already
+    // exists, and this runs before `#synthesizeTerminalEvent` can create one.
+    this.#closeDanglingTools(intent?.requestedReason ?? 'no stop was requested');
     const decided = resolveRunOutcome(this.#terminalEvents, {
       ...(intent === undefined ? {} : { intent }),
-      budgetExhausted: this.#budgetVerdict(wallClockMs),
+      budgetExhausted: this.budgetVerdict(wallClockMs).exhausted,
     });
 
     // An exit that produced no terminal EVENT still has to produce one.
@@ -552,19 +576,81 @@ export class RunSession {
   }
 
   /**
-   * Whether the run exhausted its budget.
+   * Whether the run exhausted its budget, right now.
+   *
+   * PUBLIC, and the reason is R2.3. It used to be a private method called only
+   * from `settle`, which made it a verdict machine: it decided what a finished
+   * run should be recorded as, and could not stop anything. Contract §D asks for
+   * the check BEFORE the next turn or tool call, and the component that knows
+   * the run's spend is this one.
+   *
+   * So the measurement is exposed rather than duplicated. A second copy in the
+   * controller would be a second place for the counting rules to drift, and
+   * `run-budget.ts`'s header says exactly why that is not allowed.
    *
    * A custom `budgetBreached` wins, so a host can enforce a policy the shared
-   * measurement cannot express. Otherwise the manifest's own budget is
-   * measured here. A run with no budget is never exhausted — which is the
-   * correct reading of "no ceiling was set", not "every ceiling is zero".
+   * measurement cannot express. Otherwise the manifest's own budget is measured
+   * here. A run with no budget is never exhausted, which is the correct reading
+   * of "no ceiling was set" rather than "every ceiling is zero".
    */
-  #budgetVerdict(wallClockMs: number): boolean {
+  budgetVerdict(wallClockMs?: number): BudgetVerdict {
+    const elapsed = wallClockMs ?? this.#options.clock() - this.#options.startedAt;
     const custom = this.#options.budgetBreached;
-    if (custom !== undefined) return custom(this.#spend, wallClockMs);
+    if (custom !== undefined) return hostPolicyVerdict(custom(this.#spend, elapsed));
     const budget = this.#options.budget;
-    if (budget === undefined) return false;
-    return isBudgetExhausted(budget, this.#spend, wallClockMs).exhausted;
+    if (budget === undefined) return hostPolicyVerdict(false);
+    return isBudgetExhausted(budget, this.#spend, elapsed);
+  }
+
+  /**
+   * Tool calls that started and never reported an outcome.
+   *
+   * Read by the settle path to close the transcript honestly. See
+   * {@link RunLedger.danglingToolCalls} for why the ledger tracks them instead
+   * of rejecting them.
+   */
+  danglingToolCalls(): readonly string[] {
+    return this.#ledger.danglingToolCalls();
+  }
+
+  /**
+   * Give every unanswered tool call an explicit, UNKNOWN completion.
+   *
+   * Contract §D: a tool that was running when the run ended either completes
+   * correctly or is marked unknown, and the side-effect reconciliation is D7.
+   *
+   * `indeterminate` rather than `cancelled` is the load-bearing choice. A
+   * `cancelled` outcome is a claim that the call did not finish, and a call that
+   * did not finish is not the same as a call that had no effect: a half-written
+   * file, a request already on the wire, a payment already submitted. Recording
+   * `cancelled` would tell every downstream reader — the cost dashboard, the
+   * transcript, D7's eventual reconciler — that nothing happened. A kill is not
+   * an undo, and this is the place that would otherwise quietly claim it was.
+   */
+  #closeDanglingTools(reason: string): void {
+    const now = this.#options.clock();
+    for (const toolCallId of this.danglingToolCalls()) {
+      const startedAt = this.#toolStartedAt.get(toolCallId);
+      this.observe({
+        type: 'tool.call_completed',
+        toolCallId,
+        // Empty, and deliberately so. There is no result, and a synthesised
+        // string here would be a fabricated answer to a question the run never
+        // got back. The `outcome` below is the part that carries the meaning.
+        content: '',
+        // Measured, not defaulted: the interval from the call's own start event
+        // to the terminal is a fact about how long the run waited, and it is the
+        // only honest value available for a call that never returned.
+        durationMs: startedAt === undefined ? 0 : Math.max(0, now - startedAt),
+        outcome: {
+          outcome: 'indeterminate',
+          // The id is IN the note, not only beside it. Whoever reconciles this
+          // in D7 may be reading the note alone, from a log line, and a note
+          // that only says "a call" cannot be joined to anything.
+          note: `${toolCallId}: no result was observed before the run ended (${reason}); whether this call's side effects landed is unknown`,
+        },
+      });
+    }
   }
 
   #metrics(wallClockMs: number): RunMetrics {
@@ -600,6 +686,21 @@ function degradedTerminal(cause: unknown): RunTerminalState {
   };
 }
 
+/**
+ * A host policy's yes/no answer, shaped as a verdict.
+ *
+ * `budgetBreached` is a boolean hook and `BudgetVerdict` is a shaped answer, so
+ * a host that says "yes" without naming the ceiling it crossed would leave a
+ * caller able to report nothing more informative than "over budget". The
+ * `breaches` list stays empty for a host policy: inventing the crossed ceiling
+ * from a hook that never named one is the same fabrication as a guessed token
+ * count, and an empty list is a true statement about what the hook said.
+ */
+function hostPolicyVerdict(exhausted: boolean): BudgetVerdict {
+  return { exhausted, breaches: [] };
+}
+
+/** A cause, as one diagnostic line. Never the payload it carried. */
 function describe(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }

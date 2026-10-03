@@ -42,6 +42,19 @@ import {
 import { normalizeAndObserve, type RouterDeps } from '../agents/server/router';
 import { manifestFor } from './run-entry-manifest-fixture';
 
+/**
+ * A stop the host has already completed: accepted, and the worker left cleanly.
+ *
+ * Shared by every double in this file so they all report the SAME thing. Before
+ * R2.3 the binding returned a boolean, which could not distinguish this from a
+ * worker that had to be killed.
+ */
+const COOPERATIVE_INTERRUPT: WorkerInterrupt = {
+  accepted: true,
+  settled: Promise.resolve('cooperative'),
+};
+
+
 interface Call {
   action: string;
   payload: Record<string, unknown>;
@@ -80,7 +93,7 @@ describe('R2.1 — one run entry dispatches the turn', () => {
           sent.push(command);
           return true;
         },
-        interrupt: () => true,
+        interrupt: () => COOPERATIVE_INTERRUPT,
       }),
     });
 
@@ -134,7 +147,7 @@ describe('R2.1 — one run entry dispatches the turn', () => {
           observedLate = outcome.late;
           return true;
         },
-        interrupt: () => true,
+        interrupt: () => COOPERATIVE_INTERRUPT,
       }),
     });
 
@@ -158,7 +171,7 @@ describe('R2.1 — one run entry dispatches the turn', () => {
           dispatched = true;
           return false;
         },
-        interrupt: () => true,
+        interrupt: () => COOPERATIVE_INTERRUPT,
       }),
     });
 
@@ -192,12 +205,15 @@ describe('R2.1 — one run entry dispatches the turn', () => {
     // EXISTING interrupt, or nowhere? Adding a public cancel route here would
     // be a new entry the product does not call yet, and re-wiring the DELETE
     // handler onto the arbiter is R2.3.
+    // R2.3 finished that sentence: the DELETE handler IS on the arbiter now, and
+    // `stop` carries the reason through instead of inventing one of its own, so
+    // the durable receipt can say which route asked.
     const interrupts: Array<{ sessionId: string; graceMs: number; reason: string }> = [];
     const channel = createWorkerExecutionChannel({
       dispatch: () => true,
       interrupt: (sessionId, graceMs, reason) => {
         interrupts.push({ sessionId, graceMs, reason });
-        return true;
+        return COOPERATIVE_INTERRUPT;
       },
     });
     const manifest = manifestFor({ runId: 'run-1', sessionId: 'session-1' });
@@ -207,13 +223,16 @@ describe('R2.1 — one run entry dispatches the turn', () => {
       { sessionId: 'session-1', prompt: 'hello', options: {}, revision: 'a'.repeat(64) },
       { frame: () => undefined, end: () => undefined },
     );
-    await handle.stop(2000);
+    const receipt = await handle.stop({ graceMs: 2000, reason: 'delete:user' });
 
     // ONE call, keyed by session, through the host's existing function. Not a
     // second interrupt invented here.
     expect(interrupts).toEqual([
-      { sessionId: 'session-1', graceMs: 2000, reason: 'run-cancel' },
+      { sessionId: 'session-1', graceMs: 2000, reason: 'delete:user' },
     ]);
+    // And the host's outcome is handed back rather than dropped, which is what
+    // lets a kill be recorded as a kill.
+    expect(receipt).toMatchObject({ requested: true, disposition: 'cooperative', reason: 'delete:user' });
   });
 
   it('records each worker frame once, under the dispatched run’s own id', async () => {
@@ -235,7 +254,7 @@ describe('R2.1 — one run entry dispatches the turn', () => {
           sent.push(command);
           return true;
         },
-        interrupt: () => true,
+        interrupt: () => COOPERATIVE_INTERRUPT,
       }),
     });
     const deps = { runOrchestrator: orchestrator } as unknown as RouterDeps;
@@ -279,7 +298,7 @@ describe('R2.1 — one run entry dispatches the turn', () => {
     const { request } = recorder();
     const orchestrator = new RunOrchestrator({
       dbRequest: request,
-      channel: createWorkerExecutionChannel({ dispatch: () => true, interrupt: () => true }),
+      channel: createWorkerExecutionChannel({ dispatch: () => true, interrupt: () => COOPERATIVE_INTERRUPT }),
     });
     const deps = { runOrchestrator: orchestrator } as unknown as RouterDeps;
 

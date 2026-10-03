@@ -46,6 +46,18 @@ import {
   createWorkerExecutionChannel,
 } from '../agents/server/run-orchestrator';
 import { handlePostChatNonSSE, type RouterDeps } from '../agents/server/router';
+import type { WorkerInterrupt } from '../agents/server/run-orchestrator';
+
+/**
+ * A stop the host has already completed: accepted, and the worker left cleanly.
+ *
+ * R2.3 gave the interrupt a receipt instead of a boolean, so a double can no
+ * longer say "interrupted" without saying HOW. This one says: cleanly.
+ */
+const COOPERATIVE_INTERRUPT: WorkerInterrupt = {
+  accepted: true,
+  settled: Promise.resolve('cooperative'),
+};
 
 const intent = {
   workingDirectory: '/repo',
@@ -88,7 +100,7 @@ function makeOrchestrator(appendSink?: (event: { payload: { type: string } }) =>
       },
       interrupt: () => {
         commands.push('interrupt');
-        return true;
+        return COOPERATIVE_INTERRUPT;
       },
     }),
   });

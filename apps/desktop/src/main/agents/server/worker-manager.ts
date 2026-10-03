@@ -1,6 +1,7 @@
 import { fork, ChildProcess } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
+import type { StopDisposition } from '@duya/agent-protocol';
 import { SessionManager } from './session-store';
 import { SessionState } from './types';
 import { workerLogger } from './logger';
@@ -8,6 +9,23 @@ import { safeUserDataPath, getLogger, LogComponent } from '../../logging/logger'
 import { getWorkerMaxMemoryMB, getWorkerIdleTtlMs, isLowPowerEnv, selectIdleSessionIds } from './worker-limits';
 
 const logger = getLogger();
+
+/**
+ * An interrupt that was put to a live worker, and when it took effect.
+ *
+ * Returned instead of the `true` this function used to return, so the run layer
+ * can await a stop it cannot otherwise observe. `null` covers the old `false`
+ * and keeps every existing truthiness check working unchanged.
+ *
+ * `settled` ALWAYS resolves — see {@link WorkerManager.interruptWorker} for the
+ * three ways and why none of them waits on a reaping process.
+ */
+export interface WorkerInterrupt {
+  /** Whether the interrupt command actually reached the worker. */
+  readonly accepted: boolean;
+  /** How the stop ended. Resolves exactly once. */
+  readonly settled: Promise<StopDisposition>;
+}
 
 export function createWorkerEnvironment(
   sessionId: string,
@@ -303,9 +321,36 @@ export class WorkerManager {
     this.killWorkerImpl(sessionId, entry.child);
   }
 
-  interruptWorker(sessionId: string, graceMs = 2000, reason = 'unknown'): boolean {
+  /**
+   * Ask a worker to stop, and get a bounded, reportable answer.
+   *
+   * The escalation below is NOT new in R2.3 — the grace timer and the kill have
+   * always been here. What changed is that the result is now reachable: the
+   * grace timer used to fire into a `setTimeout` whose only witness was a log
+   * line, so the run layer could not tell a worker that left cleanly from one
+   * that had to be killed, and recorded both as a clean cancellation.
+   *
+   * `null` when there is no worker, which keeps the historical boolean's
+   * truthiness at every existing call site (`if (interruptWorker(...))`) while
+   * giving the run layer a promise it can bound.
+   *
+   * `settled` resolves in exactly one of three ways, and always resolves:
+   *
+   *  - the child exits inside the grace window: `cooperative`.
+   *  - the grace window expires and the kill is issued: `escalated`. It resolves
+   *    when the kill is SENT, not when the process is reaped — waiting for a
+   *    process that may never reap is how this call becomes the unbounded await
+   *    the runtime also has to defend against.
+   *  - the interrupt command could not be delivered: `unavailable`.
+   */
+  interruptWorker(sessionId: string, graceMs = 2000, reason = 'unknown'): WorkerInterrupt | null {
     const child = this.workers.get(sessionId);
-    if (!child) return false;
+    if (!child) return null;
+
+    let settle: (disposition: StopDisposition) => void = () => undefined;
+    const settled = new Promise<StopDisposition>((resolve) => {
+      settle = resolve;
+    });
 
     const sent = this.sendCommand(sessionId, { type: 'chat:interrupt', sessionId });
     // WARN (not INFO): the default log level is WARN, and the two callers that
@@ -319,21 +364,36 @@ export class WorkerManager {
       reason,
     });
 
+    // ONE timer, cleared on every exit below. A grace timer that survives the
+    // child it was watching will kill a REPLACEMENT worker spawned into the same
+    // session id, which is a far worse failure than the one it was meant to
+    // prevent — so the `get(sessionId) === child` guard is load-bearing and is
+    // not simplified away.
     const timeout = setTimeout(() => {
-      if (this.workers.get(sessionId) === child) {
-        workerLogger.warn('Worker still present after interrupt grace period, terminating', {
-          sessionId,
-          pid: child.pid,
-        });
-        this.killWorkerImpl(sessionId, child);
+      if (this.workers.get(sessionId) !== child) {
+        // The child was replaced or already gone; nothing of ours is running.
+        settle('cooperative');
+        return;
       }
+      workerLogger.warn('Worker still present after interrupt grace period, terminating', {
+        sessionId,
+        pid: child.pid,
+      });
+      this.killWorkerImpl(sessionId, child);
+      settle('escalated');
     }, graceMs);
+    if (typeof timeout.unref === 'function') timeout.unref();
 
     child.once('exit', () => {
       clearTimeout(timeout);
+      // The process left, but the timer may have fired first. `settle` is
+      // idempotent on a settled promise, so a race between the two paths
+      // resolves once, with the escalation winning if it got there first.
+      settle('cooperative');
     });
 
-    return true;
+    if (!sent) settle('unavailable');
+    return { accepted: sent, settled };
   }
 
   // Internal kill that accepts the child directly, used by spawnWorker during replace
