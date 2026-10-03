@@ -744,7 +744,30 @@ selfTest:
   # removed, the "before" run taken with the three source files and the seven
   # eval files reverted ALONE. `.architecture-baseline.json` was not touched and
   # `--write` was not run.
-  module-dependency-permitted: 116
+  # 116 -> 118 is NOT mine and is recorded here so the next reader does not
+  # attribute it to whoever touches this line next: 116 was the value E4.1
+  # recorded, and the T3.1..T3.5 + E4.1 stack that landed after it (master
+  # @ f63cb0e9) already counts 118. I measured that by stashing the whole diff
+  # on this branch and re-running the check: 118 -> 119 with my change, exactly
+  # 1 added and 0 removed.
+  #
+  # 118 -> 119 is MINE, and it is a MEASURED value, not a gate relaxation. The
+  # one edge is
+  # `apps/desktop/src/main/db/core/__tests__/run-store-idempotency.test.ts` ->
+  # `packages/agent-protocol/src/index.ts` for the specifier
+  # `@duya/agent-protocol`, contributed by the R1.3 store test. It needs the
+  # protocol's own `RunEventEnvelope` and `RunTerminalState` to build the
+  # fixtures the content-conflict comparison reads, and the comparison is only
+  # meaningful against the real envelope type rather than a re-declared copy.
+  # Direction is correct and `agent-protocol` remains a leaf. The other two R1.3
+  # test files add no edge: they import only from `apps/desktop/src/main`.
+  #
+  # `module-dependency` is UNCHANGED at 559, and that remains the load-bearing
+  # half: no edge became a NON-permitted dependency, so no managed module's
+  # zero tolerance is affected. `module-dependency-permitted` is counted, never
+  # blocking, and never consults the baseline. `.architecture-baseline.json` was
+  # not touched and `architecture:baseline` (`--write`) was not run.
+  module-dependency-permitted: 119
   forbidden-dependency: 16
   # 161 -> 162: one more relative-path escape into packages/agent, from the
   # plan-583 stack. Now 126 agent / 16 plugin-core / 13 gateway / 7 conductor.

@@ -261,6 +261,25 @@ export type RunStartStage =
   | 'started_not_durable'
   | 'dispatch_refused'
   | 'dispatch_threw'
+  /**
+   * A run is already live for this session (plan 587 R1.3).
+   *
+   * Distinct from `run_not_created` on purpose: the row EXISTS, and refusing
+   * because the run already exists says something `run_not_created` cannot. The
+   * caller rebinds nothing and dispatches nothing, which is the whole point of
+   * never overwriting a live binding.
+   */
+  | 'run_active'
+  /**
+   * The Control Plane reports this `runId` already records the same manifest
+   * and input (plan 587 R1.3).
+   *
+   * Also distinct from `run_not_created`, and for the opposite reason: the row
+   * exists and is CORRECT, so nothing is missing — what is refused is starting
+   * a second execution against it. Merging it into `run_not_created` would tell
+   * an operator the run had no durable record when it has a perfect one.
+   */
+  | 'run_already_exists'
   | 'unknown';
 
 
@@ -437,7 +456,25 @@ export class RunController implements AgentRuntimeApi {
    */
   async start(
     manifest: RunManifest,
-    input: { readonly prompt: string; readonly sessionId: string; readonly options?: Readonly<Record<string, unknown>> },
+    input: {
+      readonly prompt: string;
+      readonly sessionId: string;
+      readonly options?: Readonly<Record<string, unknown>>;
+      /**
+       * The input revision, when the host has already computed it (R1.3).
+       *
+       * A host that persists this digest into the run row MUST hand the same
+       * string here, or the row and the executor's command would carry two
+       * independently derived values that happen to agree today. Both are
+       * computed with the protocol's single `runInputRevision`, so this is one
+       * derivation evaluated once, not two rules.
+       *
+       * Optional because a host with no durable row to keep in step has nothing
+       * to gain from computing it early; omitting it falls back to the
+       * derivation below, which is the behaviour every existing caller had.
+       */
+      readonly revision?: string;
+    },
     _opts?: StartOptions,
   ): Promise<RunHandle> {
     const now = this.#options.now ?? Date.now;
@@ -545,15 +582,21 @@ export class RunController implements AgentRuntimeApi {
       // own rules, because two derivations that agree today are two sources of
       // truth that a future option can make disagree. The id is
       // `manifest.runId` and is never re-minted here.
+      //
+      // A host that already computed it — because it is writing the digest into
+      // the run row — passes it through UNCHANGED, so the row and the wire carry
+      // one value rather than two that agree by coincidence.
       const startInput: RunStartInput = {
         sessionId: input.sessionId,
         prompt: input.prompt,
         options: input.options ?? {},
-        revision: runInputRevision({
-          sessionId: input.sessionId,
-          prompt: input.prompt,
-          options: input.options ?? {},
-        }),
+        revision:
+          input.revision ??
+          runInputRevision({
+            sessionId: input.sessionId,
+            prompt: input.prompt,
+            options: input.options ?? {},
+          }),
       };
       handle = await this.#options.channel.start(manifest, startInput, {
         frame: (raw) => {

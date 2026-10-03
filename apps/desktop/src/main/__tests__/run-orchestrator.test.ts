@@ -46,11 +46,11 @@ function recorder(): { calls: Call[]; request: (a: string, p: Record<string, unk
     calls,
     request: async (action, payload) => {
       calls.push({ action, payload });
-      if (action === 'run:create') return { ok: true, runId: payload.runId };
+      if (action === 'run:create') return { ok: true, state: 'created', runId: payload.runId };
       if (action === 'run:append') {
-        return { ok: true, written: (payload.events as unknown[]).length };
+        return { ok: true, state: 'applied', runId: payload.runId, written: (payload.events as unknown[]).length };
       }
-      return { ok: true, applied: true };
+      return { ok: true, state: 'applied', runId: payload.runId, applied: true };
     },
   };
 }
@@ -122,7 +122,16 @@ describe('RunOrchestrator', () => {
     // is a regression. `openRun` must report NOT ACCEPTED and the router must
     // carry on — and, because the dispatch is inside the start, "not accepted"
     // now also means nothing was sent to the worker.
-    const { orchestrator, dispatchCount } = makeOrchestrator(async () => ({ ok: false, error: 'no core stores' }));
+    // `no core stores` is the `unavailable` state exactly: the Control Plane
+    // exists but its database cannot be reached. R1.3 named that refusal, and
+    // the acceptance still carries the producer's own sentence so a host can
+    // branch on it.
+    const { orchestrator, dispatchCount } = makeOrchestrator(async () => ({
+      ok: false,
+      state: 'unavailable',
+      runId: '',
+      reason: 'no core stores',
+    }));
     await expect(orchestrator.openRun('session-1', intent)).resolves.toMatchObject({
       accepted: false,
       stage: 'run_not_created',
@@ -275,9 +284,17 @@ describe('RunOrchestrator', () => {
       dbRequest: async (action, payload) => {
         if (action === 'run:create') {
           created.push(payload);
-          return { ok: true, runId: payload.runId };
+          return { ok: true, state: 'created', runId: payload.runId };
         }
-        return { ok: true, applied: true };
+        if (action === 'run:append') {
+          return {
+            ok: true,
+            state: 'applied',
+            runId: payload.runId,
+            written: (payload.events as unknown[]).length,
+          };
+        }
+        return { ok: true, state: 'applied', runId: payload.runId, applied: true };
       },
       channel: createWorkerExecutionChannel({
         dispatch: (command) => {
@@ -355,18 +372,30 @@ describe('RunOrchestrator — Control Plane acks are not swallowed', () => {
   /** `run:create` succeeds so the run opens; every other action is stubbed. */
   function stubFor(action: string, reply: unknown) {
     return async (requested: string, payload: Record<string, unknown>): Promise<unknown> => {
-      if (requested === 'run:create') return { ok: true, runId: payload.runId };
+      if (requested === 'run:create') return { ok: true, state: 'created', runId: payload.runId };
       if (requested === action) return reply;
-      return { ok: true, applied: true };
+      // R1.3: the fallthrough has to answer each action in ITS OWN vocabulary.
+      // A single `{ applied: true }` for everything satisfies neither: an
+      // `run:append` receipt is invalid without a `written` count, and the
+      // reader rejects an unrecognisable shape rather than assuming a write.
+      if (requested === 'run:append') {
+        return {
+          ok: true,
+          state: 'applied',
+          runId: payload.runId,
+          written: (payload.events as unknown[]).length,
+        };
+      }
+      return { ok: true, state: 'applied', runId: payload.runId, applied: true };
     };
   }
 
   it('reports a durable append the Control Plane refused', async () => {
-    // `appendRunEvents` never throws: it catches and returns
-    // `{ ok: false, written: 0, error }` (`run-control-plane.ts:113-116`). So a
-    // lost event batch cannot reach the runtime as a rejection — the ONLY way
-    // it can become visible is if the adapter reads the reply it currently
-    // throws away.
+    // `appendRunEvents` never throws: it catches and answers a receipt
+    // (`run-control-plane.ts`). So a lost event batch cannot reach the runtime
+    // as a rejection — the ONLY way it can become visible is if the adapter
+    // reads the reply it currently throws away. R1.3 gave that reply a state, so
+    // the refusal now says WHICH kind it is rather than only that it happened.
     const { reports, restore } = captureReports();
     try {
       // R2.1: only the MID-STREAM batches are refused. Refusing the very first
@@ -374,15 +403,15 @@ describe('RunOrchestrator — Control Plane acks are not swallowed', () => {
       // is not dispatched at all — which is R1.2's rule, and it would make this
       // test pass for a different reason than the one it exists to prove.
       const { orchestrator } = makeOrchestrator(async (action, payload) => {
-        if (action === 'run:create') return { ok: true, runId: payload.runId };
+        if (action === 'run:create') return { ok: true, state: 'created', runId: payload.runId };
         if (action === 'run:append') {
           const events = payload.events as Array<{ payload: { type: string } }>;
           if (events.some((e) => e.payload.type === 'run.started')) {
-            return { ok: true, written: events.length };
+            return { ok: true, state: 'applied', runId: payload.runId, written: events.length };
           }
-          return { ok: false, written: 0, error: 'SQLITE_BUSY: database is locked' };
+          return { ok: false, state: 'busy', runId: payload.runId, reason: 'SQLITE_BUSY: database is locked' };
         }
-        return { ok: true, applied: true };
+        return { ok: true, state: 'applied', runId: payload.runId, applied: true };
       });
       await open(orchestrator, 'session-1');
 
@@ -398,13 +427,20 @@ describe('RunOrchestrator — Control Plane acks are not swallowed', () => {
   });
 
   it('reports a terminal write the Control Plane refused', async () => {
-    // `completeRun` returns `{ ok: false, error }` on a DB failure
-    // (`run-control-plane.ts:145-148`). Without a reported failure the run
-    // looks settled in the host while its `runs` row is still `running`.
+    // `completeRun` answers a refusal receipt on a DB failure
+    // (`run-control-plane.ts`). Without a reported failure the run looks settled
+    // in the host while its `runs` row is still `running`. R1.3 named that
+    // refusal: a busy database is a distinct state from any other SQL failure,
+    // because only one of them is worth retrying.
     const { reports, restore } = captureReports();
     try {
       const { orchestrator } = makeOrchestrator(
-        stubFor('run:complete', { ok: false, error: 'SQLITE_BUSY: database is locked' }),
+        stubFor('run:complete', {
+          ok: false,
+          state: 'busy',
+          runId: 'r-1',
+          reason: 'SQLITE_BUSY: database is locked',
+        }),
       );
       await open(orchestrator, 'session-1');
 
@@ -420,14 +456,26 @@ describe('RunOrchestrator — Control Plane acks are not swallowed', () => {
   });
 
   it('reports a lost terminal CAS instead of assuming this call won it', async () => {
-    // `{ ok: true, applied: false }` is the honest shape of a lost CAS: the
-    // write did not fail, it simply did not land, because another writer
-    // already decided this run's history (`run-store.ts:249`). The adapter
-    // currently reads that reply and reports nothing, so the runtime believes
-    // its terminal is the durable one when it is not.
+    // R1.3 replaced the bare `{ ok: true, applied: false }` this used to stub.
+    // A lost CAS is no longer reported as a single anonymous "did not land": the
+    // Control Plane now READS the committed terminal back and says which of two
+    // very different things happened — `reconciled` (another writer agreed, and
+    // the run IS settled as decided) or `conflict` (another writer decided
+    // something else, and the claim is lost). This asserts the second, which is
+    // the one that must never be reported as a win. The first is asserted in
+    // `run-orchestrator-ack.test.ts`, where it must NOT degrade the run.
     const { reports, restore } = captureReports();
     try {
-      const { orchestrator } = makeOrchestrator(stubFor('run:complete', { ok: true, applied: false }));
+      const { orchestrator } = makeOrchestrator(
+        stubFor('run:complete', {
+          ok: false,
+          state: 'conflict',
+          runId: 'r-1',
+          applied: false,
+          committed: { status: 'cancelled' },
+          reason: 'another writer cancelled this run',
+        }),
+      );
       await open(orchestrator, 'session-1');
 
       orchestrator.observe('session-1', { type: 'turn_start', data: { turnCount: 1 } });
@@ -450,7 +498,7 @@ describe('RunOrchestrator — Control Plane acks are not swallowed', () => {
     const { reports, restore } = captureReports();
     try {
       const { orchestrator } = makeOrchestrator(async (action, payload) => {
-        if (action === 'run:create') return { ok: true, runId: payload.runId };
+        if (action === 'run:create') return { ok: true, state: 'created', runId: payload.runId };
         if (action === 'run:append') {
           const events = payload.events as Array<{ payload: { type: string } }>;
           // `run.started` must land for `openRun` to resolve, so only the
@@ -458,9 +506,9 @@ describe('RunOrchestrator — Control Plane acks are not swallowed', () => {
           if (events.some((e) => e.payload.type === 'run.completed')) {
             throw new Error('db:request channel closed mid-append');
           }
-          return { ok: true, written: events.length };
+          return { ok: true, state: 'applied', runId: payload.runId, written: events.length };
         }
-        return { ok: true, applied: true };
+        return { ok: true, state: 'applied', runId: payload.runId, applied: true };
       });
       await open(orchestrator, 'session-1');
 
@@ -501,9 +549,9 @@ describe('RunOrchestrator — R1.2 lifecycle at the adapter', () => {
       // `run:create` succeeds — the row exists — and the FIRST append is
       // refused, so the run cannot be made durable and must not be dispatched.
       dbRequest: async (action, payload) => {
-        if (action === 'run:create') return { ok: true, runId: payload.runId };
-        if (action === 'run:append') return { ok: false, written: 0, error: 'SQLITE_BUSY' };
-        return { ok: true, applied: true };
+        if (action === 'run:create') return { ok: true, state: 'created', runId: payload.runId };
+        if (action === 'run:append') return { ok: false, state: 'busy', runId: payload.runId, reason: 'SQLITE_BUSY' };
+        return { ok: true, state: 'applied', runId: payload.runId, applied: true };
       },
       channel: createWorkerExecutionChannel({
         dispatch: () => {
@@ -554,9 +602,9 @@ describe('RunOrchestrator — R1.2 lifecycle at the adapter', () => {
     const { calls, request } = recorder();
     const orchestrator = new RunOrchestrator({
       dbRequest: async (action, payload) => {
-        if (action === 'run:create') return { ok: true, runId: payload.runId };
-        if (action === 'run:append') return { ok: false, written: 0, error: 'SQLITE_BUSY' };
-        return { ok: true, applied: true };
+        if (action === 'run:create') return { ok: true, state: 'created', runId: payload.runId };
+        if (action === 'run:append') return { ok: false, state: 'busy', runId: payload.runId, reason: 'SQLITE_BUSY' };
+        return { ok: true, state: 'applied', runId: payload.runId, applied: true };
       },
       channel: createWorkerExecutionChannel({ dispatch: () => true, interrupt: () => true }),
     });

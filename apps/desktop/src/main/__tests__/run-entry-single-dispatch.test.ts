@@ -75,9 +75,9 @@ function recorder(): { calls: Call[]; request: (a: string, p: Record<string, unk
     calls,
     request: async (action, payload) => {
       calls.push({ action, payload });
-      if (action === 'run:create') return { ok: true, runId: payload.runId };
-      if (action === 'run:append') return { ok: true, written: (payload.events as unknown[]).length };
-      return { ok: true, applied: true };
+      if (action === 'run:create') return { ok: true, state: 'created', runId: payload.runId };
+      if (action === 'run:append') return { ok: true, state: 'applied', runId: payload.runId, written: (payload.events as unknown[]).length };
+      return { ok: true, state: 'applied', runId: payload.runId, applied: true };
     },
   };
 }
