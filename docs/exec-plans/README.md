@@ -36,7 +36,99 @@ Rules:
 
 ***
 
+## Verified baseline (2026-10-03 · `master @ d96ae3be`)
+
+**Read this before picking up any plan.** Every number here was measured on a
+clean `master` in this session, not copied from a plan file.
+
+### Gates
+
+| Command | State | Note |
+| --- | --- | --- |
+| `npm run typecheck:all` | ✅ exit 0 | |
+| `npm run architecture:check` | ✅ exit 0 | 802 violations, **all baselined**, 0 blocking |
+| `npm run architecture:self-test` | ✅ exit 0 | 548 / 35 / 16 / 162 / 25 / 16 / 0 |
+| `npm run check:encoding` | ✅ exit 0 | |
+| `npm run check:test-coverage` | ✅ exit 0 | 1 known orphan in baseline |
+| **`npm test`** | ❌ **exit 1** | **42–45 failing suites / 109–111 failing tests. Pre-existing — see below.** |
+
+The two architecture gates were **red before this session** (`self-test` exit 2,
+`check` exit 1 with 641 blocking) because `.architecture-baseline.json` had
+been recorded by a pre-fix resolver. Fixed in PR #132. **Any PR that changes
+`scripts/architecture/audit-*.mjs` must `--write` the baseline in the same
+commit** — `architecture-policy.yaml` now states this.
+
+### The test suite is red, and it was red before any of this
+
+Two full runs on the same day, same code except PR #133:
+
+| Run | Failing suites | Failing tests | Passing |
+| --- | --- | --- | --- |
+| before #133 | 45 | 111 | 11,680 |
+| after #133 | **42** | **109** | 11,682 |
+
+Of the 3-suite difference, **1 is #133** (`02-cycle-budget.test.ts`, which was
+red for a reason unrelated to code). The other **2 sit in `packages/agent` and
+are load-dependent flakes** — the first run logged
+`[vitest-worker]: Timeout calling "onTaskUpdate"` under parallel load. **So the
+honest floor is 42–45, not 42.** Do not "fix" a flake you did not cause.
+
+Failing suites by owner (after #133):
+
+| Owner | Failing suites |
+| --- | --- |
+| `apps/desktop` | 21 |
+| `packages/agent` | 17 (19 under load) |
+| `scripts/__tests__` | 2 |
+| `packages/agent-protocol` | 1 (`13-citation-drift`) |
+| `packages/plugin-core` | 1 (`app-schema-marketplace-compat`, unrelated) |
+
+**Treat this as the floor, not as your regression.** Before you start, record
+the `npm test` output; if your branch ends with a *different* set of failures,
+that is on you. Plan 583's `fix/583-track-q-test-debt-2` (PR #131) was working
+this debt when the baseline was taken.
+
+`e2e` was **not** run — it needs `npm run electron:build` first.
+
+### Ordering constraints that are easy to get wrong
+
+```
+M0.5  (CI required check)  ──►  M3   architecture:check not in CI = M3's
+                                          new shared/ edges go unchecked
+C1    (15 of 16 cycles)    ──►  M5   the 42-file cycle crosses the cut
+M4    (conductor, 2 files) ──►  M3   cheapest win first; deletes a build hack
+```
+
+- **C1 before M5 is not advisory.** The 42-file SCC spans
+  `agent-core`(modes) and `agent-runtime`(tool/process/hooks); moving files
+  before it is cut does not compile. Its entry point is the **14-file
+  types/registry cycle**, not the barrel — see
+  `docs/architecture/03-target-structure.md` §5.3 for why the barrel claim
+  was wrong.
+- **Verify a cycle fix by re-running the count**, never by reading the graph.
+  "Is it an SCC member" and "is it on a path into one" are different questions,
+  and the original C1.1 plan got that wrong.
+- **16 SCCs is the current number; 18 is the ceiling** in
+  `05-architecture-governance.md` and in
+  `packages/agent-protocol/test/02-cycle-budget.test.ts`. Do not tighten the
+  ceiling until C1 has actually landed.
+
+### Before you claim a phase is done
+
+`typecheck:all` is **not sufficient** for anything touching
+`apps/desktop/src/main/` — the main process has no type gate at all
+(898 pre-existing `tsc` errors, TD-1). Its only safety net today is
+`npm run build:electron` plus `npm test`.
+
+***
+
 ## Active Plans (38)
+
+> ⚠️ **38 exceeds the cap this file sets for itself** ("Cap it; do not let it
+> grow back"). Triaging that list is a decision about what the project is
+> actually pursuing, so it has deliberately **not** been done here — flagging
+> it as the first thing a planning pass should settle. Until then, treat the
+> table below as 38 independent candidates, not a ranked queue.
 
 | Plan | Priority | Next action |
 | --- | --- | --- |
