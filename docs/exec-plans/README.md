@@ -63,15 +63,25 @@ they do not agree, and the CI number is the one that matters.
 | Command | State | Note |
 | --- | --- | --- |
 | `npm run typecheck:all` | ✅ exit 0 | **本地必须从干净检出验证；CI 已于 PR #135 在 ubuntu/windows/macos 三个 runner 上全绿** |
-| `npm run architecture:check` | ✅ exit 0 | 802 violations, **all baselined**, 0 blocking |
-| `npm run architecture:self-test` | ✅ exit 0 | 548 / 35 / 16 / 162 / 25 / 16 / 0 |
+| `npm run architecture:check` | ✅ exit 0 | 801 violations, 0 blocking, baseline 799（2 条已失效指纹经分类后手工删除） |
+| `npm run architecture:self-test` | ✅ exit 0 | 547 / 35 / 16 / 162 / 25 / 16 / 0 |
 | `npm run check:encoding` | ✅ exit 0 | |
 | `npm run check:test-coverage` | ✅ exit 0 | 1 known orphan in baseline |
-| **`npm test`** | ❌ **exit 1** | **CI (ubuntu): 64 files / 187 tests. Local (Windows): 45 files / 112 tests. Both pre-existing — the two sets only partly overlap, see below.** |
+| **`npm test`** | ❌ **exit 1** | **失败文件数：本地 (Windows) 45 / CI (ubuntu) 64。失败"测试数"不是基线——它随构建状态变（clean 75 → build 后 101）。权威口径是 (file, test, signature) 集合，见下。** |
 
-Both numbers are reproducible: the CI one from the run log, the local one from
-`npm test -- --reporter=json --outputFile=<path>`. Compare **file sets**, not
-counts — the counts are what sent this file wrong in the first place.
+**只有"失败文件数"是可比的，测试总数不是。** 本地 (Windows) 实测 **45 个失败文件**，
+可从两种状态复现（clean 安装 75 个失败测试 / build 之后 101 个失败测试）——
+所以 45 站得住，测试总数站不住，因为分母（collect 量）本身随构建状态变。
+CI (ubuntu, run `37099318050`, 同一 SHA) 实测 **64 个失败文件**，collect 量与本机一致
+(1009 文件 / 11873 测试)。本机侧的权威口径是 G0.1 记录的 **103 个
+(file, test, signature) tuple**，分类 77 deterministic / 25 environment-infra /
+1 已证 flake（二次运行证实）。
+
+> 本行曾发布 "Local (Windows): 45 files / **112** tests"。**112 既非 COLD (75) 也非
+> WARM (101) 任何一种状态**，且 `1e6d0b0e..0e13d4cd` 之间没有任何测试文件改动，
+> 因此它无法从任何状态复现。**一个复现不出来的数字不是基线**，已删除而非替换。
+> 比较一律按 (file, test, signature) 集合做，不按总数——总数正是当初把这一行写错的
+> 原因。证据见 `docs/exec-plans/active/587-agent-harness-monorepo/11-execution-log.md`。
 
 ### ⚠️ 硬规则：本地绿 ≠ CI 绿，**反过来也成立**
 
@@ -91,6 +101,7 @@ counts — the counts are what sent this file wrong in the first place.
 `npm test` 本地 45 个文件红，CI **64** 个红。同一份代码，差 19 个文件。
 详见下一节。那 22 个 CI-only 失败里有一组是**权限检查在 Linux 上不触发**，
 只看本地 `npm test` 的人永远不会知道它存在。
+这是**文件集合**的对比，不是测试总数的对比——两边的测试总数口径不同，不可相减。
 
 复现 CI 条件：
 
