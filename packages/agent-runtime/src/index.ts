@@ -100,6 +100,65 @@ export type {
 export { handleReplayOutcome } from './replay/replay-guards.js';
 export type { ReplayOutcomeStatus } from './replay/replay-guards.js';
 
+// Plan 587 T3.4 — coalescing, the byte bound, and the channel separation.
+//
+// The batcher is a PRODUCER-side filter that runs BEFORE the emitter, so a
+// coalesced delta never receives a `seq` at all and the live stream stays dense
+// (contract §F allows gaps in the durable store and nowhere else). `RunEventEmitter`
+// is unchanged and remains the single minting authority.
+export {
+  COALESCABLE_EVENT_TYPES,
+  DeltaBatcher,
+  batchedPublisher,
+  coalesceKeyId,
+  coalesceKeyOf,
+  defaultMeasureBytes,
+  isCoalescable,
+  systemBatchClock,
+} from './events/coalesce.js';
+export type {
+  BatchClock,
+  BatchThresholds,
+  BatchTimer,
+  CoalesceKey,
+  CoalesceScope,
+  CoalescingMetrics,
+  CoalescingReceipt,
+  DeltaBatcherOptions,
+  EventMinter,
+  OfferResult,
+} from './events/coalesce.js';
+
+export { BoundedEventQueue, defaultEnvelopeBytes } from './events/backpressure.js';
+export type {
+  BackpressureMetrics,
+  BoundedEventQueueOptions,
+  DeliveryGap,
+  EnqueueOutcome,
+  OverflowAction,
+} from './events/backpressure.js';
+
+export { FanOutBroker } from './events/stream-fanout.js';
+
+export {
+  NEVER_QUEUED_CONTROL_METHODS,
+  TRANSPORT_FLOW_CONTROL,
+  assertNoPerTypePauseClaim,
+  bypassesEventQueue,
+  cancelReachesRunUnderSaturatedEventChannel,
+  supportsPerTypePause,
+} from './events/control-channel.js';
+export type {
+  ControlChannelPort,
+  ControlChannelReport,
+  ControlDelivery,
+  ControlOnlyMethods,
+  ControlChannelScope,
+  FlowControlCapability,
+} from './events/control-channel.js';
+
+export type { CoalescingGuards } from './events/coalesce-guards.js';
+
 export {
   translateFrame,
   classifyToolOutcome,
