@@ -25,7 +25,7 @@
     "README.md"
   ],
   "scripts": {
-    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "clean": "node -e \"for(const t of ['dist','tsconfig.tsbuildinfo'])require('fs').rmSync(t,{recursive:true,force:true})\"",
     "build": "tsc -b",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

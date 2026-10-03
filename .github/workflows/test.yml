@@ -36,6 +36,13 @@ jobs:
         run: npm ci
 
       - name: Run typecheck
+        # The renderer's `tsc --noEmit` aborts the Node process with
+        # `Abort trap: 6` (exit 134) on the macOS runner under the default
+        # heap — a V8 out-of-memory, not a type error. ubuntu passes the same
+        # step with the default heap, so this is runner memory, not code.
+        # Same remedy AGENTS.md already documents for `typecheck:cli`.
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
         run: npm run typecheck:all
 
       - name: Run tests

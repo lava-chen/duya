@@ -58,7 +58,7 @@
     "typecheck:plugin-core": "npm run -w @duya/plugin-core typecheck",
     "typecheck:conductor": "npm run -w @duya/conductor typecheck",
     "typecheck:voice": "npm run -w @duya/voice typecheck",
-    "typecheck:all": "npm run check:encoding && npm run check:manifest-keys && npm run check:test-coverage && npm run check:no-ts-suppress && npm run typecheck:protocol && npm run typecheck:core && npm run typecheck:runtime && npm run typecheck:web && npm run typecheck:electron && npm run typecheck:agent && npm run typecheck:cli && npm run typecheck:conductor && npm run typecheck:voice",
+    "typecheck:all": "npm run check:encoding && npm run check:manifest-keys && npm run check:test-coverage && npm run check:no-ts-suppress && npm run build:protocol && npm run typecheck:protocol && npm run typecheck:core && npm run build:core && npm run typecheck:runtime && npm run typecheck:web && npm run typecheck:electron && npm run typecheck:agent && npm run typecheck:cli && npm run typecheck:conductor && npm run typecheck:voice",
     "architecture:check": "node scripts/architecture/architecture-check.mjs",
     "architecture:self-test": "node scripts/architecture/architecture-check.mjs --self-test",
     "architecture:baseline": "node scripts/architecture/architecture-check.mjs --write",

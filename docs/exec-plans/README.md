@@ -45,12 +45,51 @@ clean `master` in this session, not copied from a plan file.
 
 | Command | State | Note |
 | --- | --- | --- |
-| `npm run typecheck:all` | ✅ exit 0 | |
+| `npm run typecheck:all` | ✅ exit 0 | **必须从干净检出验证**，见下方硬规则 |
 | `npm run architecture:check` | ✅ exit 0 | 802 violations, **all baselined**, 0 blocking |
 | `npm run architecture:self-test` | ✅ exit 0 | 548 / 35 / 16 / 162 / 25 / 16 / 0 |
 | `npm run check:encoding` | ✅ exit 0 | |
 | `npm run check:test-coverage` | ✅ exit 0 | 1 known orphan in baseline |
 | **`npm test`** | ❌ **exit 1** | **42–45 failing suites / 109–111 failing tests. Pre-existing — see below.** |
+
+### ⚠️ 硬规则：本地绿 ≠ CI 绿
+
+**报告任何闸门结果前，先确认它是"干净检出"跑出来的。**
+
+这不是理论。2026-10-03 实测：`typecheck:all` 本地 **exit 0**，CI **连续 6 次全红**，
+每次都挂在 `Run typecheck`。根因是 `typecheck:all` 依赖 `packages/agent-protocol/dist/`，
+而本地那个 `dist` 是历史 `build:agent` 的残留 —— **本地那个绿是缓存的产物，不是证据**。
+已由 PR #135 修复（`typecheck:all` 现在按依赖顺序先 `build:protocol` → `build:core`；
+三个 agent 包的 `clean` 同时删 `tsconfig.tsbuildinfo`）。
+
+复现 CI 条件：
+
+```bash
+# 把所有 workspace 的 dist 与 tsbuildinfo 移开，等价于干净检出
+for d in packages/* apps/desktop; do
+  [ -d "$d/dist" ] && mv "$d/dist" "$d/dist.ci-sim"
+  [ -f "$d/tsconfig.tsbuildinfo" ] && mv "$d/tsconfig.tsbuildinfo" "$d/tsconfig.tsbuildinfo.ci-sim"
+done
+npm run typecheck:all          # 期望 exit 0
+```
+
+`npm run build:agent` 之后可以把 `.ci-sim` 后缀的目录丢掉。
+
+> **同一类病已出现两次**：TD-0 是 architecture baseline 用旧 resolver 录的；
+> TD-7 是 `tsconfig.tsbuildinfo` 在 `dist` 没了之后仍声称"已构建"。
+> **共同教训：任何"上次跑过就跳过"的机制，都必须在产物消失时失效。**
+> 不失效的结果是本地永远绿、干净环境永远红，而差异要到 CI 才暴露。
+
+### 查闸门状态先看 CI，不要只信本地
+
+```bash
+gh run list --limit 5              # 最近运行
+gh run view <id>                   # 哪一步挂的
+gh run view <id> --log-failed      # 实际错误
+```
+
+CI 只跑 1m30s 左右就挂在 `Run typecheck` 时，**说明它根本没到测试** ——
+本地要 145s+。用时长判断失败位置比读日志快。
 
 The two architecture gates were **red before this session** (`self-test` exit 2,
 `check` exit 1 with 641 blocking) because `.architecture-baseline.json` had
@@ -122,13 +161,60 @@ M4    (conductor, 2 files) ──►  M3   cheapest win first; deletes a build h
 
 ***
 
-## Active Plans (38)
+## Active Plans (40)
 
-> ⚠️ **38 exceeds the cap this file sets for itself** ("Cap it; do not let it
+> ⚠️ **40 exceeds the cap this file sets for itself** ("Cap it; do not let it
 > grow back"). Triaging that list is a decision about what the project is
 > actually pursuing, so it has deliberately **not** been done here — flagging
 > it as the first thing a planning pass should settle. Until then, treat the
-> table below as 38 independent candidates, not a ranked queue.
+> table below as independent candidates, not a ranked queue.
+
+### The dependency shape, which the table below does not show
+
+Extracted from the plan headers (2026-10-03). This is what actually determines
+the order you can work in:
+
+```
+473 ──┬─ 474  475  478  479  485  488  489  490  491  492      ← 扇出阻塞 10 个
+      │        └──────┘  └────┘  └─────────┘  └──┘
+      │           │       │         │
+      │           │       └────┬────┘
+529 ──┘                    525
+429 ── 448
+452 ── 455 ── 460          ← 455 ↔ 460 互为依赖（见下）
+584 ── 586
+```
+
+**Three things a flat priority list hides:**
+
+1. **473 is the largest fan-out in the repo** — ten plans wait on it. It is
+   an umbrella tracker, not an implementation plan, so it will not "complete"
+   the way the others do; its own index note says it closes when 478 P2.3
+   lands. Treat it as a coordination surface, not a work item.
+
+2. **455 ↔ 460 is a cycle, but a phase-level one.** 460's header says it
+   "must complete 455 Phase A/B first"; 455's remaining Phase D is the REST
+   template work that 460 describes. A flat graph cannot express that — the
+   next action is *455 Phase A/B*, not "455".
+
+3. **525 waits on two different plans** (485 and 479), and its own next
+   action is a data migration with a destructive `--apply`. Sequence it after
+   both, and get the migration rehearsed before running it against anything
+   you cannot rebuild.
+
+### Verified: what the next-action column claims
+
+Each row was checked against the working tree, not against its plan file.
+Four were wrong and are corrected below; these five were checked and are
+**still true**, so the row is safe to act on:
+
+| Plan | Checked | Result |
+| --- | --- | --- |
+| 496 | `packages/agent/src/worktree/` | does not exist — "0 code" is accurate |
+| 443 | `DUYA_RIPGREP_PATH` in `GrepTool` | not wired |
+| 585 | `ephemeral-batcher.ts` | not created |
+| 573 | browsing-history table + `browser:history-*` IPC | neither exists |
+| 460 | `.app.json` files in repo | zero |
 
 | Plan | Priority | Next action |
 | --- | --- | --- |
@@ -137,7 +223,7 @@ M4    (conductor, 2 files) ──►  M3   cheapest win first; deletes a build h
 | [permission-decision-bus](./active/419-permission-decision-bus.md) | P0 | Add `checkPermissions` + `riskTier` to the MCP tool registration path _(P0/P2 done; P1 open)_ |
 | [harness-gap-closure](./active/429-harness-gap-closure.md) | P0 | Add `block_tool` hook effect + `PreToolUse` dispatch in `DuyaAgent` |
 | [search-tools-hardening](./active/443-search-tools-hardening.md) | — | Wire `DUYA_RIPGREP_PATH` + timeout/abort into `GrepTool` spawn _(tasks A-G untouched)_ |
-| [read-edit-freshness-protocol](./active/448-read-edit-freshness-protocol.md) | P0 | Add the `WriteTool` read-first gate (Task E) _(Phase 2/3 unstarted)_ |
+| [read-edit-freshness-protocol](./active/448-read-edit-freshness-protocol.md) | P1 | Phase 2/3 — **Task E 已落地**（`WriteTool.ts` 已含 read-first 快照检查），下两项见 plan |
 | [multi-protocol-and-wrapper-layer](./active/451-multi-protocol-and-wrapper-layer.md) | P0 | Implement Phase 5 Vertex (`api/google-vertex.ts` + `providers/vertex.ts`) _(2 wrappers still inline)_ |
 | [mcp-direct-and-plugin-unification](./active/452-mcp-direct-and-plugin-unification.md) | P1 | Remove the dead MCP submenu branch + merge the Apps/MCP constant sections _(Phase B absorbed by 455 D3)_ |
 | [open-connector-registry](./active/455-open-connector-registry.md) | P1 | Close Phase D: run `typecheck:all` + full vitest and record the result |
@@ -162,12 +248,13 @@ M4    (conductor, 2 files) ──►  M3   cheapest win first; deletes a build h
 | [projects-core-db-and-main-db-migration](./active/534-projects-core-db-and-main-db-migration.md) | P0 | Run the Phase 3.6.a static scan of `widget.*` callers and log `[CONDUCTOR_DUAL_WRITE]` counts _(3.6 not started)_ |
 | [project-menus-use-dropdownmenu](./active/535-project-menus-use-dropdownmenu.md) | — | Replace the `BotContactListItem` inline submenu with a `MenuAction` of `kind:'submenu'` _(Phase 3 open)_ |
 | [project-context-injection-v2](./active/536-project-context-injection-v2.md) | P1 | Add the current `projectId`/name to the bot memory system-prompt section (L3) _(only L3 open)_ |
-| [prompt-hbs-and-agent-decomposition](./active/550-prompt-hbs-and-agent-decomposition.md) | P1 | Extract the TurnLoop event dispatcher out of `streamChat` into `TurnStreamRunner` _(worktree branch in progress)_ |
+| [prompt-hbs-and-agent-decomposition](./active/550-prompt-hbs-and-agent-decomposition.md) | P1 | 提取 `TurnStreamRunner` 后续步骤 —— **`TurnStreamRunner.ts` 已存在**，下步见 plan |
 | [workflow-independent-runtime](./active/560-workflow-independent-runtime.md) | P0 | Land the Phase 5 `wf.agent` Go/No-Go spike: bind `runAgent` in the child process and journal `nodeKind:'agent'` + usage, or fall back to option C _(Phases 1-4 landed (Phase 4 checkbox list is stale))_ |
 | [browser-core-upgrade](./active/573-browser-core-upgrade.md) | P0 | Phase 3: add the core-db browsing-history table + migration, hook webview main-frame `did-navigate`, expose `browser:history-*` IPC plus the history view _(Phases 1/1b/2/2b landed)_ |
 | [cua-tree-richness](./active/576-cua-tree-richness.md) | P1 | Phase 3 in the ps1 C# probe walk: emit `children_total/shown/offset` for container nodes, plus `surface_kind` and the new-window settle poll _(Phases 1-2 landed)_ |
 | [mcp-capability-core-convergence](./active/580-mcp-capability-core-convergence.md) | P0 | Run Phase 0's real-machine Notion baseline (instrumented around `RemoteMcpConnector`/`MCPClient` discovery) to record `pages=N, total=M` _(Phases 0/3/4/5 open)_ |
-| [architecture-audit-remediation](./active/583-architecture-audit-remediation.md) | P0 | Add the `typecheck:all` gate to CI so it catches the shipped `remote-mcp.ts` type errors (ISS-01) |
+| [architecture-audit-remediation](./active/583-architecture-audit-remediation.md) | P0 | **ISS-01 已闭环**（`typecheck:all` 已在 `.github/workflows/test.yml:38`）—— 但它此前每跑必红，根因是 `typecheck:all` 依赖构建产物，已由 PR #135 修复。下一项见 plan |
+| [session-archive-hardening](./active/582-session-archive-hardening.md) | P0 | Storage 与生命周期补强（G1–G4 / UI 轨 G5–G9）—— **此前未列入本索引，2026-10-03 补上**；前置 plan 549 已于 PR #56 落地 |
 | [agent-protocol-implementation](./active/584-agent-protocol-implementation.md) | P1 | Run PP-2a: move the wire contract out of @duya/ai behind @duya/agent-protocol (122 edges / 98 files). PP-0 0.1-0.4 and all of PP-1 are landed _(0.5 CI hookup waits on plan 583 G1-G3; 07 §15 #10 needs a spec revision per 10-reference-comparison §7.1)_ |
 | [event-stream-perf-debt](./active/585-event-stream-perf-debt.md) | P1 | Phase 1: add `ephemeral-batcher.ts` (mirroring `checkpoint-batcher.ts`) so token-rate deltas are coalesced per session+type before the SSE write _(design recorded, 0 code; P1 seq-space change deliberately deferred to Phase 3)_ |
 | [reference-run-vertical-slice](./active/586-reference-run-vertical-slice.md) | P0 | P6 only: run the Electron smoke with a provider key — a packaged chat turn must produce a `runs` row, a `run_events` log and one terminal state. P0–P5 landed in #124 (+ #125 lockfile); no runtime evidence yet |
