@@ -190,3 +190,110 @@ export {
   ExecutionDispatchError,
   runInputRevision,
 } from './transport/execution-channel.js';
+
+// Plan 587 T3.5 -- the three transports, the capability probe, the taxonomy.
+//
+// The three adapters are deliberately NOT collapsed behind one implementation.
+// What they share is the PORT (`transport-port.js`), and the port's intake
+// takes a RAW frame, so no adapter can mint a `seq`. That is the mechanical
+// reason the equivalence claim in `equivalence.ts` is a structural property
+// rather than a convention three code paths must keep agreeing on.
+
+export {
+  LINE_CODEC_LIMITS,
+  NdjsonLineDecoder,
+  encodeNdjsonLine,
+  parseNdjsonLine,
+} from './transport/line-codec.js';
+
+export type {
+  RawFrameIntake,
+  RuntimeTransport,
+  TransportConnectOptions,
+  TransportDiagnostics,
+  TransportPrivateChannel,
+  TransportRun,
+} from './transport/transport-port.js';
+
+export { SubprocessTransport } from './transport/subprocess-transport.js';
+export type { SubprocessScenario, SubprocessTransportOptions } from './transport/subprocess-transport.js';
+
+export { InProcessTransport } from './transport/in-process-transport.js';
+export type { InProcessTransportOptions } from './transport/in-process-transport.js';
+
+export {
+  HttpSseClient,
+  HttpSseServer,
+  SSE_DISCONNECT,
+  SSE_END,
+  SSE_EVENT,
+  SSE_FRAME,
+  SSE_REPLAY,
+  parseFrameStream,
+  parseSseStream,
+} from './transport/http-sse-transport.js';
+export type {
+  HttpSseClientOptions,
+  HttpSseServerOptions,
+  HttpSseSubscriptionResult,
+  RegisteredRun,
+  ReplayPreamble,
+} from './transport/http-sse-transport.js';
+
+export {
+  CapabilityProbeError,
+  UNPROVEN_CAPABILITIES,
+  admitIncoming,
+  assertTransportCanStart,
+  enumerateProbe,
+  flowControlOf,
+  negotiateEventAdmission,
+  probeRuntimeCapabilities,
+} from './transport/capability-probe.js';
+export type {
+  AdmissionReport,
+  CapabilityProbeErrorDetail,
+  CapabilityProbeInput,
+  EventAdmission,
+  GateTable,
+  ProbeEnumeration,
+  UnprovenCapability,
+} from './transport/capability-probe.js';
+
+export {
+  TRANSPORT_ERROR_CATEGORIES,
+  categoriseErrorCode,
+  errorPolicy,
+  explainError,
+} from './transport/error-taxonomy.js';
+export type {
+  CallerAction,
+  TransportErrorCategory,
+  TransportErrorPolicy,
+} from './transport/error-taxonomy.js';
+
+export {
+  TRANSPORT_LOCAL_PAYLOAD_FIELDS,
+  assertNormalisationIsHonest,
+  canonicalise,
+  compareRuns,
+  normaliseEnvelope,
+  normaliseResult,
+} from './transport/equivalence.js';
+export type {
+  NormalisationViolation,
+  NormalisedEvent,
+  NormalisedPayload,
+  NormalisedResult,
+  NormalisedValue,
+} from './transport/equivalence.js';
+
+// Type-level guards. Present in `src/` on purpose: every package's tsconfig
+// excludes `test/`, so an assertion in a test directory is checked by nothing.
+export type {
+  COMPARED_EVENT_TYPES_ARE_REGISTRY_TYPES,
+  ERROR_CATEGORY_LIST_IS_DERIVED,
+  RAW_FRAME_INTAKE_ACCEPTS_ONLY_RAW_FRAMES,
+  TRANSPORT_ERROR_CATEGORIES_ARE_EXHAUSTIVE,
+  TRANSPORT_PORTS_CARRY_NO_RUN_STATE,
+} from './transport/transport-guards.js';
