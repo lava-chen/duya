@@ -52,8 +52,10 @@ import type {
   StartOptions,
 } from '@duya/agent-protocol';
 import { DEFAULT_LIMITS, EVENT_REGISTRY, LifecycleViolation, manifestFingerprint } from '@duya/agent-protocol';
+import type { LifecycleViolationCode } from '@duya/agent-protocol';
 import type { RunSpend } from '@duya/agent-core';
 import { RunEventStream, RunSession, type RunPersistence } from './run-session.js';
+import { RunEventEmitter } from './events/event-emitter.js';
 import { projectToLegacyFrame } from './project/legacy-sse-projector.js';
 import type { LegacySseFrame } from './legacy-sse-contract.js';
 import { translateFrame, type RawFrame, type TranslateContext } from './translate/chat-event-translator.js';
@@ -317,6 +319,16 @@ export interface FrameOutcome {
 interface ActiveRun {
   readonly manifest: RunManifest;
   readonly session: RunSession;
+  /**
+   * The run's single emit entry point (plan 587 T3.2).
+   *
+   * Held on the run rather than passed around, because the two ways it used to
+   * be bypassed were both "a caller reached for `session` or `stream`
+   * directly". An executor that speaks the protocol can now only reach the run
+   * through this, so a durable event cannot exist without a sequence number and
+   * a lifecycle check.
+   */
+  readonly emitter: RunEventEmitter;
   readonly stream: RunEventStream;
   readonly translateCtx: TranslateContext;
   handle: ExecutionHandle | null;
@@ -459,17 +471,31 @@ export class RunController implements AgentRuntimeApi {
     // "what was this run given?" answerable for a run that crashed one
     // millisecond later. A run whose first event is a consequence of its
     // second cannot answer that.
-    const startedEnvelope = session.observe({
+    //
+    // Through the emitter, like every other event. The stream and the emitter
+    // are built first so the first event takes the same path as the thousandth
+    // — an event minted by a different route is an event nobody has proved is
+    // stamped, checked and persisted.
+    const stream = new RunEventStream();
+    const emitter = new RunEventEmitter({ session, stream, runId });
+    const started = emitter.emit({
       type: 'run.started',
       manifestHash: manifestFingerprint(manifest),
       protocol: this.#options.protocol,
       runtime: this.#options.identity,
     });
+    if (!started.ok) {
+      // A `run.started` the registry or the field manifest refuses means the
+      // manifest this run was given does not describe itself. Dispatching
+      // anyway would leave a run whose first durable record is a hole.
+      throw new RunStartError('run_not_created', started.message);
+    }
 
     const active: ActiveRun = {
       manifest,
       session,
-      stream: new RunEventStream(),
+      emitter,
+      stream,
       translateCtx: this.#options.contextFor(manifest),
       handle: null,
       cancelRequested: false,
@@ -478,7 +504,6 @@ export class RunController implements AgentRuntimeApi {
       stopping: null,
     };
     this.#runs.set(runId, active);
-    active.stream.push(startedEnvelope);
 
     // AWAIT the first flush before returning. `observe` records
     // `run.started` immediately rather than behind the batch — and that flush
@@ -535,7 +560,34 @@ export class RunController implements AgentRuntimeApi {
           this.observeFrame(runId, raw);
         },
         envelope: (envelope) => {
-          active.stream.push(envelope);
+          // NOT a stream push. This used to be `active.stream.push(envelope)`,
+          // which let an executor append to a run with its own `seq`, no
+          // ledger check, and no durable write — an event visible in the UI and
+          // absent from storage. The emitter re-mints the sequence from this
+          // run's ledger and persists what the registry says is durable, so
+          // there is no path into the run that skips the ledger.
+          //
+          // The receipt is folded into a diagnostic rather than dropped, so a
+          // peer whose numbering disagrees with ours is visible instead of
+          // silently renumbered.
+          const inbound = active.emitter.acceptInbound(envelope);
+          if (!inbound.accepted) {
+            active.emitter.emit({
+              type: 'diagnostic',
+              level: 'warn',
+              message: `refused an inbound envelope: ${inbound.rejection.message}`,
+              data: { code: inbound.rejection.code, observedType: inbound.rejection.observedType },
+            });
+            return;
+          }
+          if (inbound.producerSeqDisagreed) {
+            active.emitter.emit({
+              type: 'diagnostic',
+              level: 'warn',
+              message: `executor stamped seq ${envelope.seq}; the run minted ${inbound.envelope.seq}`,
+              data: { eventType: envelope.payload.type },
+            });
+          }
         },
         end: () => {
           // The executor's stream ended. The run is not finished until it has
@@ -610,7 +662,11 @@ export class RunController implements AgentRuntimeApi {
     const active = this.#runs.get(runId);
     if (active === undefined) return;
     try {
-      active.session.observe({
+      // Through the emitter, so this terminal is stamped, field-checked and
+      // pushed to the stream like every other event. It used to go straight to
+      // `session.observe`, which meant a failed start produced a durable record
+      // that no observer ever saw.
+      active.emitter.emit({
         type: 'run.failed',
         error: {
           code: 'internal',
@@ -706,8 +762,36 @@ export class RunController implements AgentRuntimeApi {
     }
 
     try {
-      const envelope = active.session.observe(translated.event);
-      active.stream.push(envelope);
+      // Through the emitter, so a translated frame is field-checked against the
+      // registry's manifest before it is buffered. The check is what makes a
+      // translator bug — a `run.completed` with no `status` — a refusal rather
+      // than a durable event that contradicts itself.
+      const emitted = active.emitter.emit(translated.event);
+      if (!emitted.ok) {
+        // A ledger violation is not a malformed field. It means the run's own
+        // history rejected this event, and the run records THAT as its
+        // terminal — with the violation's code as the cause. Routing it here
+        // rather than throwing is what keeps `#onLifecycleViolation` reachable
+        // now that the emitter converts a throw into a receipt.
+        if (emitted.violation !== null) {
+          return this.#onLifecycleViolation(active, emitted.violation, emitted.message);
+        }
+        if (emitted.requiresTerminal) {
+          // A critical message this runtime cannot act on. Recording it as a
+          // diagnostic and carrying on is the "unknown critical event quietly
+          // becomes success" outcome, so the run is failed instead.
+          active.emitter.emit({
+            type: 'run.failed',
+            error: {
+              code: 'invalid_event_frame',
+              message: emitted.message,
+              cause: { system: 'runtime', code: emitted.code },
+            },
+          });
+        }
+        return { legacy: null, envelope: null, forwardOnly: false, internal: false };
+      }
+      const envelope = emitted.envelope;
       // The check runs on EVERY event, not only the ones that spend something:
       // `assistant.usage` is the only place a token ceiling can be seen, and it
       // arrives as an ordinary event. One call, evaluated by the same code that
@@ -717,7 +801,7 @@ export class RunController implements AgentRuntimeApi {
       return { legacy: projectToLegacyFrame(envelope), envelope, forwardOnly: false, internal: false };
     } catch (error) {
       if (!(error instanceof LifecycleViolation)) throw error;
-      return this.#onLifecycleViolation(active, error);
+      return this.#onLifecycleViolation(active, error.code, error.detail);
     }
   }
 
@@ -987,35 +1071,50 @@ export class RunController implements AgentRuntimeApi {
    * the right response is to STOP interpreting it, which settling does. The
    * violation is preserved as the failure's `cause`, so the durable log says
    * exactly which rule broke.
+   *
+   * Takes the code and detail rather than the `LifecycleViolation` instance
+   * because the emitter reports a violation as a receipt, not a throw (its
+   * contract is that `emit` never throws). Passing the instance would mean
+   * reconstructing one here, which is a worse way to carry two strings.
    */
-  #onLifecycleViolation(active: ActiveRun, violation: LifecycleViolation): FrameOutcome {
+  #onLifecycleViolation(
+    active: ActiveRun,
+    code: LifecycleViolationCode,
+    detail: string,
+  ): FrameOutcome {
     if (active.session.isClosed) {
       // The run is decided and this frame arrived after it. `late` is set here
       // as well as on the "no such run" branch, because a frame can land in the
       // window where the run has been closed but not yet dropped from the map —
       // and a host watching for late frames must not see a gap in the middle of
       // its own race.
-      return { legacy: null, envelope: null, forwardOnly: false, internal: false, violation: violation.code, late: true };
+      return { legacy: null, envelope: null, forwardOnly: false, internal: false, violation: code, late: true };
     }
     let envelope: RunEventEnvelope;
     try {
-      envelope = active.session.observe({
+      // Through the emitter, for the same reason as every other event: the
+      // failure the ledger asks for has to be stamped and published by one
+      // path, or a run that ended because of a violation is recorded somewhere
+      // a host cannot see.
+      const emitted = active.emitter.emit({
         type: 'run.failed',
         error: {
           code: 'internal',
-          message: `run lifecycle violated: ${violation.detail}`,
-          cause: { system: 'runtime', code: violation.code },
+          message: `run lifecycle violated: ${detail}`,
+          cause: { system: 'runtime', code },
         },
       });
+      if (!emitted.ok) throw new Error(emitted.message);
+      envelope = emitted.envelope;
     } catch {
       // The ledger refused the failure event too — which means a terminal
       // event was already recorded. Nothing further can be appended.
-      return { legacy: null, envelope: null, forwardOnly: false, internal: false, violation: violation.code };
+      return { legacy: null, envelope: null, forwardOnly: false, internal: false, violation: code };
     }
     active.stream.push(envelope);
     void this.settle(active.session.runId).catch(() => undefined);
     const legacy = projectToLegacyFrame(envelope);
-    return { legacy, envelope, forwardOnly: false, internal: false, violation: violation.code };
+    return { legacy, envelope, forwardOnly: false, internal: false, violation: code };
   }
 
   #handleFor(active: ActiveRun): RunHandle {
