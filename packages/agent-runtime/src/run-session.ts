@@ -3,7 +3,7 @@
  *
  * ## Why the ledger is not re-implemented here
  *
- * `@duya/agent-protocol/testing` exports `RunLedger`, which is the
+ * `@duya/agent-protocol` exports `RunLedger`, which is the
  * specification of what a legal run stream is: gapless run-scoped `seq` from
  * 1, exactly one terminal event, a tool result with no invocation rejected, a
  * permission resolution for a request nobody saw rejected. Those rules are
@@ -38,11 +38,7 @@ import type {
   RunTerminalState,
   WireEnvelope,
 } from '@duya/agent-protocol';
-import { EVENT_REGISTRY, isTerminal } from '@duya/agent-protocol';
-// The ledger is the protocol's own specification of a legal run stream. It
-// lives under the `/testing` subpath by design — depending on it is a
-// deliberate act, and this is that act.
-import { RunLedger, type LifecycleViolation } from '@duya/agent-protocol/testing';
+import { EVENT_REGISTRY, RunLedger, isTerminal, type LifecycleViolation } from '@duya/agent-protocol';
 import {
   countEvent,
   emptyCounters,
@@ -122,6 +118,22 @@ export class RunSession {
   #spend: RunSpend = { turns: 0, toolCalls: 0, tokens: 0 };
   #terminal: RunTerminalState | null = null;
   #closed = false;
+  /**
+   * The in-flight settlement, so concurrent settles share ONE barrier pass.
+   *
+   * Not a second decision cache — `#terminal` is that. This exists because the
+   * decision is no longer published the moment it is made, so two callers
+   * racing to settle would otherwise both append and both complete.
+   */
+  #settling: Promise<RunTerminalState> | null = null;
+  /**
+   * The tail of the append chain. Every batch is handed to the persistence in
+   * the order it was observed, and `settle` awaits the whole chain rather than
+   * only the batches still sitting in the buffer.
+   */
+  #flushChain: Promise<void> = Promise.resolve();
+  /** The first durable-write failure seen, kept so a later settle can degrade. */
+  #appendFault: unknown = null;
   readonly #terminalPromise: Promise<RunTerminalState>;
   #resolveTerminal!: (state: RunTerminalState) => void;
 
@@ -195,7 +207,12 @@ export class RunSession {
       // would explain the crash. Every other durable event can be reconstructed
       // from what follows it; this one cannot.
       if (event.type === 'run.started' || this.#buffer.length >= (this.#options.flushEvery ?? 16)) {
-        void this.flush();
+        // Observed frames must never block on a cross-process write, so this
+        // is not awaited. The refusal is not lost: `flush` records it on the
+        // session before re-throwing, and the catch below keeps it from
+        // surfacing as an unhandled rejection. `settle` reads the record and
+        // reports the run as degraded instead of completed.
+        void this.flush().catch(() => undefined);
       }
     }
     return envelope;
@@ -208,42 +225,105 @@ export class RunSession {
    * the rules about cancellation-vs-completion and silence-vs-completion live
    * in exactly one place and this class cannot drift from them.
    *
-   * One-shot: a second call returns the first decision and does nothing. A
-   * caller that settles twice has a bug, and the correct behaviour is to leave
-   * the recorded history alone.
+   * One-shot: a second call returns the first decision and does nothing, and
+   * concurrent callers share the in-flight pass. A caller that settles twice
+   * has a bug, and the correct behaviour is to leave the recorded history
+   * alone.
+   *
+   * ## The decision and its publication are two steps
+   *
+   * The decision may be made in memory at any time, but it is NOT published
+   * until the durable barrier has been acknowledged. So the order is:
+   * decide → flush every batch → write the terminal row → publish. A host
+   * waiting on `terminal$` therefore cannot observe a run as finished while
+   * its last event is still in flight, and a barrier that fails can still
+   * change the answer: the run reports an explicit `persistence_failed`
+   * terminal rather than the `completed` it decided in memory.
    */
   async settle(intent?: {
     cancelRequested?: boolean;
     escalated?: boolean;
   }): Promise<RunTerminalState> {
     if (this.#terminal !== null) return this.#terminal;
+    if (this.#settling !== null) return this.#settling;
 
+    this.#settling = this.#settleOnce(intent);
+    return this.#settling;
+  }
+
+  async #settleOnce(intent?: {
+    cancelRequested?: boolean;
+    escalated?: boolean;
+  }): Promise<RunTerminalState> {
     const wallClockMs = this.#options.clock() - this.#options.startedAt;
-    const state = resolveRunOutcome(this.#terminalEvents, {
+    const decided = resolveRunOutcome(this.#terminalEvents, {
       ...(intent === undefined ? {} : { intent }),
       budgetExhausted: this.#budgetVerdict(wallClockMs),
     });
 
-    this.#terminal = state;
-    this.#resolveTerminal(state);
+    let terminal = decided;
+    try {
+      // Flush before completing: a terminal decision recorded with its events
+      // still sitting in a buffer is a run whose last word is missing. The
+      // batch that `observe` already spliced out is covered too — `#flushChain`
+      // is the tail of every append this run has made, not just the buffered
+      // ones, so a batch still in flight cannot overtake this terminal row.
+      await this.flush();
+      // An append that failed earlier in the run already lost events. Writing
+      // the terminal now would publish `completed` for a transcript with a hole
+      // in it, so the fault is re-read here and folded into the verdict.
+      if (this.#appendFault !== null) throw this.#appendFault;
+      await this.#options.persistence.complete(decided, this.#metrics(wallClockMs));
+    } catch (error) {
+      terminal = degradedTerminal(error);
+    }
 
-    // Flush before completing: a terminal decision recorded with its events
-    // still sitting in a buffer is a run whose last word is missing.
-    await this.flush();
-    await this.#options.persistence.complete(state, this.#metrics(wallClockMs));
+    this.#terminal = terminal;
     this.#closed = true;
-    return state;
+    this.#resolveTerminal(terminal);
+    return terminal;
   }
 
-  /** Flush any buffered durable events. Safe to call more than once. */
-  async flush(): Promise<void> {
+  /**
+   * Flush any buffered durable events. Safe to call more than once.
+   *
+   * Serialised through `#flushChain` so batches reach the persistence in
+   * observation order, and so a caller that awaits one flush also waits for
+   * every batch still in flight behind it. A refusal is remembered
+   * (`#appendFault`) before it is re-thrown: the fire-and-forget flush in
+   * `observe` cannot report anything, and a run must not be able to lose a
+   * batch and settle as `completed` because nobody was listening when it
+   * failed.
+   */
+  flush(): Promise<void> {
+    const pending = this.#flushChain.then(
+      () => this.#flushBatch(),
+      () => this.#flushBatch(),
+    );
+    this.#flushChain = pending;
+    return pending;
+  }
+
+  async #flushBatch(): Promise<void> {
     if (this.#buffer.length === 0) return;
     const batch = this.#buffer.splice(0, this.#buffer.length);
-    await this.#options.persistence.append(batch);
+    try {
+      await this.#options.persistence.append(batch);
+    } catch (error) {
+      this.#appendFault ??= error;
+      throw error;
+    }
   }
 
   /**
    * The run's result, once it has ended.
+   *
+   * A READ. It waits on the same completion promise every other reader uses and
+   * never settles the run: settling here would mean a host that asked "what
+   * happened?" decided the answer, and an executor still streaming would be
+   * recorded as a success it never reached. If the run has not ended, this
+   * promise stays pending — which is the truth, and the caller's cue to keep
+   * waiting.
    *
    * `transcript` is empty by design in this slice. Filling it would mean the
    * session retained every envelope for the life of the handle, and the durable
@@ -252,7 +332,7 @@ export class RunSession {
    * second source of truth with a shorter lifetime.
    */
   async result(): Promise<RunResult> {
-    const terminal = this.#terminal ?? (await this.settle());
+    const terminal = await this.#terminalPromise;
     const wallClockMs = this.#options.clock() - this.#options.startedAt;
     return {
       runId: this.runId,
@@ -300,6 +380,30 @@ export class RunSession {
       wallClockMs,
     };
   }
+}
+
+/**
+ * The terminal a run reports when its durable barrier was never acknowledged.
+ *
+ * `persistence_failed`, not `completed` and not a silent success: the run's
+ * work may well have finished, but this runtime cannot show that any of it
+ * reached storage, and a host that counts this as a success is counting a run
+ * whose record it does not have. The run is over either way, so this replaces
+ * the decision rather than opening a second one.
+ */
+function degradedTerminal(cause: unknown): RunTerminalState {
+  return {
+    status: 'failed',
+    error: {
+      code: 'persistence_failed',
+      message: 'the run ended, but its durable events were not acknowledged',
+      details: { durability: 'degraded', reason: describe(cause) },
+    },
+  };
+}
+
+function describe(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 /**

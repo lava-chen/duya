@@ -48,8 +48,8 @@ import type {
   RuntimeCapabilities,
   StartOptions,
 } from '@duya/agent-protocol';
-import { DEFAULT_LIMITS, EVENT_REGISTRY, manifestFingerprint } from '@duya/agent-protocol';
-import { LifecycleViolation } from '@duya/agent-protocol/testing';
+import { DEFAULT_LIMITS, EVENT_REGISTRY, LifecycleViolation, manifestFingerprint } from '@duya/agent-protocol';
+import type { RunSpend } from '@duya/agent-core';
 import { RunEventStream, RunSession, type RunPersistence } from './run-session.js';
 import { projectToLegacyFrame } from './project/legacy-sse-projector.js';
 import type { LegacySseFrame } from './legacy-sse-contract.js';
@@ -82,6 +82,14 @@ export interface RunControllerOptions {
   readonly clock?: () => number;
   /** Grace window handed to a cooperative stop, in ms. */
   readonly cancelGraceMs?: number;
+  /**
+   * Measure budget against something other than the manifest's own ceilings.
+   *
+   * Only needed for a policy `isBudgetExhausted` cannot express — a per-provider
+   * cost ceiling, a tenant quota. The default is the manifest, which is where
+   * the Control Plane put it, and this class has no second opinion to offer.
+   */
+  readonly budgetBreached?: (spend: RunSpend, wallClockMs: number) => boolean;
 }
 
 /** What the caller learns about one observed frame. */
@@ -105,7 +113,11 @@ interface ActiveRun {
   readonly translateCtx: TranslateContext;
   handle: ExecutionHandle | null;
   cancelRequested: boolean;
-  settling: Promise<void> | null;
+  /**
+   * The in-flight settlement, typed by what it resolves to so no caller has to
+   * re-derive the terminal from the session and risk inventing one.
+   */
+  settling: Promise<RunTerminalState> | null;
 }
 
 export class RunController implements AgentRuntimeApi {
@@ -178,6 +190,15 @@ export class RunController implements AgentRuntimeApi {
       startedAt: clock(),
       clock,
       persistence: this.#options.persistenceFor(manifest),
+      // The manifest is the Control Plane's frozen decision about what this run
+      // was allowed to spend, so it is the budget — not a controller-level
+      // default. Omitting it made `#budgetVerdict` false for every run, and a
+      // run that hit its ceiling was reported as something other than
+      // `budget_exhausted`.
+      budget: manifest.budget,
+      ...(this.#options.budgetBreached === undefined
+        ? {}
+        : { budgetBreached: this.#options.budgetBreached }),
     });
 
     // `run.started` is emitted BEFORE the execution is dispatched, not after.
@@ -297,19 +318,19 @@ export class RunController implements AgentRuntimeApi {
    * Idempotent: a second call returns the first decision. A caller that
    * settles twice has a bug, and the correct behaviour is to leave the recorded
    * history alone.
+   *
+   * Every path out of here returns a terminal the run actually produced. A run
+   * id this controller has no record of is not a success, so it reports
+   * `run_not_found` — a host that counted it as `completed` would be inflating
+   * its own success metrics with a run it never opened.
    */
   async settle(
     runId: string,
     intent?: { cancelRequested?: boolean; escalated?: boolean },
   ): Promise<RunTerminalState> {
     const active = this.#runs.get(runId);
-    if (active === undefined) {
-      return { status: 'completed' };
-    }
-    if (active.settling !== null) {
-      await active.settling;
-      return active.session.terminal ?? { status: 'completed' };
-    }
+    if (active === undefined) return absentRun(runId);
+    if (active.settling !== null) return active.settling;
 
     active.settling = (async () => {
       const merged =
@@ -318,13 +339,14 @@ export class RunController implements AgentRuntimeApi {
             ? { cancelRequested: true }
             : undefined
           : { ...intent, ...(active.cancelRequested ? { cancelRequested: true } : {}) };
-      await active.session.settle(merged);
+      const terminal = await active.session.settle(merged);
       active.stream.close();
+      return terminal;
     })();
 
-    await active.settling;
+    const terminal = await active.settling;
     this.#runs.delete(runId);
-    return active.session.terminal ?? { status: 'completed' };
+    return terminal;
   }
 
   /**
@@ -338,8 +360,14 @@ export class RunController implements AgentRuntimeApi {
    */
   async cancel(runId: string): Promise<CancelOutcome> {
     const active = this.#runs.get(runId);
-    if (active === undefined || active.session.isClosed) {
-      return { applied: false, terminal: { status: 'completed' } };
+    if (active === undefined) {
+      return { applied: false, terminal: absentRun(runId) };
+    }
+    if (active.session.isClosed) {
+      // Already terminal: the point of `applied: false` is that the caller can
+      // tell "I cancelled this" from "it had already ended", so it gets the
+      // terminal the run actually reached rather than a default.
+      return { applied: false, terminal: active.session.terminal ?? absentRun(runId) };
     }
     active.cancelRequested = true;
     await active.handle?.stop(this.#options.cancelGraceMs ?? 5000);
@@ -414,6 +442,25 @@ export class RunController implements AgentRuntimeApi {
       },
     };
   }
+}
+
+/**
+ * The terminal for a run this controller holds no record of.
+ *
+ * `run_not_found` rather than `completed`. "There is no such run" is a fact,
+ * and it is not the same fact as "the run finished" — a host that settles an
+ * unknown id and is handed `completed` has been told a success for a run it
+ * never opened, which is precisely the accounting error `CancelOutcome.applied`
+ * exists to prevent on the other side of this call.
+ */
+function absentRun(runId: string): RunTerminalState {
+  return {
+    status: 'failed',
+    error: {
+      code: 'run_not_found',
+      message: `no live run ${runId} is known to this runtime`,
+    },
+  };
 }
 
 /** Every event type the runtime can emit. Closed set, by construction. */
