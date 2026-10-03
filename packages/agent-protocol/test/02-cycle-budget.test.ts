@@ -55,8 +55,16 @@ const SKIP_DIRS = new Set([
   '__tests__', 'tests', '__mocks__', '__snapshots__',
 ]);
 
-/** Matches `from '...'`, `import('...')` and `require('...')`, type-only included. */
-const IMPORT_RE = /(?:from\s+|import\s*\(|require\s*\()\s*["']([^"']+)["']/g;
+/**
+ * Matches `from '...'`, `import('...')` and `require('...')`, type-only included.
+ *
+ * CR and LF are excluded, matching the audit scripts and the shared test copy:
+ * a specifier is never multi-line, and a class that matches line endings lets a
+ * match start inside ordinary code and run to a quote many lines later. See
+ * `scripts/architecture/strip-comments.test.ts` for the regression test and
+ * `scripts/architecture/audit-imports.mjs` for the gate copy.
+ */
+const IMPORT_RE = /(?:from\s+|import\s*\(|require\s*\()\s*["']([^"'\r\n]+)["']/g;
 
 function walk(dir: string, out: string[] = []): string[] {
   if (!existsSync(dir)) return out;
