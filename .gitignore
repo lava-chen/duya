@@ -111,6 +111,16 @@ docs/*/
 !docs/release-notes/
 !docs/recovered-plans/
 !docs/architecture/
+# Exec plans: track what is still being worked on, not the history.
+# `active/` and `backlog/` are the plans a new session reads, so they must be
+# in the repo. `completed/` is a local archive — the index names those in plain
+# text instead of linking, precisely because they are not versioned.
+!docs/exec-plans/
+docs/exec-plans/completed/
+docs/exec-plans/*.json
+# Stale 2026-08 copy of the tech-debt ledger. The live one lives with plan 587
+# at active/587-agent-harness-monorepo/reference/10-tech-debt-tracker.md.
+docs/exec-plans/tech-debt-tracker.md
 docs/*.md
 
 # Tests
