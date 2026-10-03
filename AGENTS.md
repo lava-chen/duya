@@ -12,6 +12,10 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
   and the ordering constraints — read that section before picking up a plan.
 - Verify feature/plan is still active; read relevant active plan file for progress
 - Read [ARCHITECTURE.md](./ARCHITECTURE.md) before starting — contains database schema, data flows, module details
+- Monorepo / Agent Harness refactoring: follow the sole execution queue in
+  [plan 587](./docs/exec-plans/active/587-agent-harness-monorepo/README.md).
+  Its contracts, phase gates, migration map, and handoff log supersede the
+  archived 429/550/583–586 plans and the historical M/PP/C schedules.
 - For multi-step tasks: use `/plan` mode before writing code
 - Replies: repo-root refs only: `apps/desktop/src/renderer/components/chat/MessageList.tsx:45`. No absolute paths, no `~/`.
 - Missing deps: `npm install`, retry once, then report first actionable error.
@@ -584,7 +588,7 @@ question you're asking.
 ## Footguns
 
 - Editing `apps/desktop/src/preload/index.ts` without rebuilding Electron
-- **The main process is NOT typechecked** ⚠️: `typecheck:all` only covers the renderer (the root `tsconfig.json` extends `apps/desktop/tsconfig.renderer.json`). `apps/desktop/tsconfig.main.json` and `tsconfig.preload.json` exist as layer definitions but are deliberately **not** wired into the gate — `tsc -p apps/desktop/tsconfig.main.json` reports a large pre-existing backlog, so gating it today would be red on arrival. For main-process changes, the real safety net is `npm run build:electron` (esbuild resolves every import edge) plus `npm test`. Track the backlog in `docs/architecture/10-tech-debt-tracker.md`.
+- **The main process is NOT typechecked** ⚠️: `typecheck:all` only covers the renderer (the root `tsconfig.json` extends `apps/desktop/tsconfig.renderer.json`). `apps/desktop/tsconfig.main.json` and `tsconfig.preload.json` exist as layer definitions but are deliberately **not** wired into the gate — `tsc -p apps/desktop/tsconfig.main.json` reports a large pre-existing backlog, so gating it today would be red on arrival. For main-process changes, the real safety net is `npm run build:electron` (esbuild resolves every import edge) plus `npm test`. Track the backlog in `docs/exec-plans/active/587-agent-harness-monorepo/reference/10-tech-debt-tracker.md` (TD-1 is the main-process `tsc` backlog).
 - Modifying `packages/agent` exports without rebuilding (`npm run build:agent` / `npm run bundle:agent`)
 - Adding to `apps/desktop/src/renderer/app/api/` routes without verifying path doesn't conflict
 - Skipping Playwright verification for UI changes

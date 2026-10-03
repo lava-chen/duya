@@ -1,3 +1,6 @@
+> Historical / superseded for execution. 原位置：`docs/architecture/05-architecture-governance.md`。
+> 唯一执行入口：[587 主计划](../README.md)；设计冲突以 [00 合同](../00-contracts.md) 为准。旧 Status / checkbox / 行号保留为历史证据。
+
 # 架构治理设计（architecture-policy.yaml + 执行机制）
 
 > 阶段一交付物 5/5（治理部分） · 生成日期 2026-10-01

@@ -1,3 +1,6 @@
+> Historical / superseded for execution. 原位置：`docs/architecture/09-conductor-rename-assessment.md`。
+> 唯一执行入口：[587 主计划](../README.md)；设计冲突以 [00 合同](../00-contracts.md) 为准。旧 Status / checkbox / 行号保留为历史证据。
+
 # 09 — `conductor` → `canvas` 重命名影响面评估
 
 > 结论先行：**不建议整体重命名。** 建议只做 4 处文案/注释修正（约 4 个文件、零 DB、零 CSS），

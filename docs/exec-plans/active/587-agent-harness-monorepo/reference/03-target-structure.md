@@ -1,3 +1,6 @@
+> Historical / superseded for execution. 原位置：`docs/architecture/03-target-structure.md`。
+> 唯一执行入口：[587 主计划](../README.md)；设计冲突以 [00 合同](../00-contracts.md) 为准。旧 Status / checkbox / 行号保留为历史证据。
+
 # 目标结构设计与 Package 取舍裁决
 
 > 阶段一交付物 3/5 · 生成日期 2026-10-01

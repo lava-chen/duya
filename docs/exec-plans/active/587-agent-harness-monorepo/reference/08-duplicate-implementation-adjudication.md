@@ -1,3 +1,6 @@
+> Historical / superseded for execution. 原位置：`docs/architecture/08-duplicate-implementation-adjudication.md`。
+> 唯一执行入口：[587 主计划](../README.md)；设计冲突以 [00 合同](../00-contracts.md) 为准。旧 Status / checkbox / 行号保留为历史证据。
+
 # 08 — 重复实现裁决：哪一套是活的，哪些可以删
 
 > 目的：把"这里有重复"的直觉，变成"**这一份是死代码，那两份是不同 subject**"的可执行结论。

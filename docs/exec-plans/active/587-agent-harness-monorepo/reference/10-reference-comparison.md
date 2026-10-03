@@ -1,3 +1,6 @@
+> Historical / superseded for execution. 原位置：`docs/architecture/10-reference-comparison.md`。
+> 唯一执行入口：[587 主计划](../README.md)；设计冲突以 [00 合同](../00-contracts.md) 为准。旧 Status / checkbox / 行号保留为历史证据。
+
 # 10 — 参考实现对比：codex / grok-build / pi / ZCode
 
 > 生成日期 2026-10-01 · 证据基线 `master` @ `b6f8e7c0`
