@@ -54,7 +54,7 @@ import type {
 import { DEFAULT_LIMITS, EVENT_REGISTRY, LifecycleViolation, manifestFingerprint } from '@duya/agent-protocol';
 import type { LifecycleViolationCode } from '@duya/agent-protocol';
 import type { RunSpend } from '@duya/agent-core';
-import { RunEventStream, RunSession, type RunPersistence } from './run-session.js';
+import { RunEventStream, RunSession, type RunPersistence, type RunTranscriptReader } from './run-session.js';
 import { RunEventEmitter } from './events/event-emitter.js';
 import { projectToLegacyFrame } from './project/legacy-sse-projector.js';
 import type { LegacySseFrame } from './legacy-sse-contract.js';
@@ -125,6 +125,19 @@ export interface RunControllerOptions {
    */
   readonly flushEvery?: number;
   readonly appendRetries?: number;
+  /**
+   * How long the write path may add in retry backoff, passed through per run.
+   *
+   * The Control Plane's, for the same reason `appendRetries` is: it decides how
+   * patient this runtime is with its storage, and a runtime that chose its own
+   * patience would be choosing its own durability guarantee. `delay` is passed
+   * through beside it so a host can supply its own scheduler, and
+   * `transcriptReader` because whether a run's transcript can be read back is
+   * also a property of the store rather than of the runtime.
+   */
+  readonly appendBackoffBudgetMs?: number;
+  readonly delay?: (ms: number) => Promise<void>;
+  readonly transcriptReader?: RunTranscriptReader;
   /**
    * How many ended runs this controller can still answer for.
    *
@@ -501,6 +514,13 @@ export class RunController implements AgentRuntimeApi {
       ...(this.#options.appendRetries === undefined
         ? {}
         : { appendRetries: this.#options.appendRetries }),
+      ...(this.#options.appendBackoffBudgetMs === undefined
+        ? {}
+        : { appendBackoffBudgetMs: this.#options.appendBackoffBudgetMs }),
+      ...(this.#options.delay === undefined ? {} : { delay: this.#options.delay }),
+      ...(this.#options.transcriptReader === undefined
+        ? {}
+        : { transcriptReader: this.#options.transcriptReader }),
     });
 
     // `run.started` is emitted BEFORE the execution is dispatched, not after.

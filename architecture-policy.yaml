@@ -795,7 +795,33 @@ selfTest:
   # `module-dependency` is UNCHANGED at 559 again, which is still the load-bearing
   # half. `.architecture-baseline.json` was not touched and
   # `architecture:baseline` (`--write`) was NOT run for this increment.
-  module-dependency-permitted: 123
+  # 123 -> 124 (plan 587 R1.4): ONE further permitted edge, 0 removed, layered on
+  # top of E4.2's four rather than replacing them. E4.2's attribution above is
+  # unchanged.
+  #
+  # Worth recording, because it cost a wrong number: R1.4 originally measured
+  # 119 -> 120 on a base that predated E4.2, so its bare figure was stale by
+  # exactly those four. Two independently measured deltas from different bases do
+  # not add up, and taking one branch number over the other would have recorded a
+  # figure the resolver disagrees with. The value here is measured on the tree
+  # that actually contains both changes.
+  #
+  # The edge is one test-tree import of `@duya/agent-protocol` from
+  # `packages/agent-runtime/test/run-result-surface.test.ts`. The assertions it
+  # carries are the point of the slice: a missing usage field must read as
+  # `unknown` rather than `0`, and an unimplemented surface must read as
+  # `unsupported` rather than `[]`. Direction is correct; `agent-protocol`
+  # remains a leaf - nothing in it imports anything from `packages/`.
+  #
+  # `module-dependency` is UNCHANGED at 559, and that remains the load-bearing
+  # half: no edge became a NON-permitted dependency, so no managed module zero
+  # tolerance is affected. `module-dependency-permitted` is counted, never
+  # blocking, and never consults the baseline.
+  #
+  # Attributed BY MEASUREMENT: the new test file reverted ALONE, edge set against
+  # edge set, exactly 1 added and 0 removed. `.architecture-baseline.json` was not
+  # touched and `--write` was not run.
+  module-dependency-permitted: 124
   forbidden-dependency: 16
   # 161 -> 162: one more relative-path escape into packages/agent, from the
   # plan-583 stack. Now 126 agent / 16 plugin-core / 13 gateway / 7 conductor.
