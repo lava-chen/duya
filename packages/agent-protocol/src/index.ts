@@ -40,6 +40,7 @@ export * from './codecs.js';
 export * from './events/payloads.js';
 export * from './events/registry.js';
 export * from './events/required.js';
+export * from './events/criticality.js';
 
 export { RunLedger, LifecycleViolation } from './run-ledger.js';
 export type { LifecycleViolationCode } from './run-ledger.js';

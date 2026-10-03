@@ -42,6 +42,34 @@ export type { RunHandle } from '@duya/agent-protocol';
 export { RunEventStream, RunSession, isTerminal } from './run-session.js';
 export type { ObserveResult, RunPersistence, RunSessionOptions } from './run-session.js';
 
+// Plan 587 T3.2 — the single emit entry point, the structural dispatch that
+// decides what a peer may say, and the control-plane census.
+export { RunEventEmitter, isTerminalEventType } from './events/event-emitter.js';
+export type {
+  EmitAcceptance,
+  EmitRejection,
+  EmitRejectionCode,
+  EmitResult,
+  InboundAcceptance,
+  InboundResult,
+  RunEventEmitterPorts,
+} from './events/event-emitter.js';
+
+export { classifyMessageKind, dispatchMessage } from './events/structural-dispatch.js';
+export type {
+  DispatchAccepted,
+  DispatchAcceptedControl,
+  DispatchExtension,
+  DispatchIssue,
+  DispatchOptions,
+  DispatchRejection,
+  DispatchResult,
+  InboundMessageKind,
+} from './events/structural-dispatch.js';
+
+export { CONTROL_PLANE_CENSUS, censusGaps, NOT_YET } from './control-plane-census.js';
+export type { CensusAuthority, CensusPlane, CensusRow } from './control-plane-census.js';
+
 export {
   translateFrame,
   classifyToolOutcome,

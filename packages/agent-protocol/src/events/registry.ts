@@ -10,8 +10,8 @@
  *
  * Because the registry must have ZERO runtime imports. If `registry.ts`
  * imported payload VALUES it would pull the whole payload graph into every
- * consumer of the registry, and drift test #1 — "the registry must not import
- * anything at runtime" — would be unassertable. Everything it needs from
+ * consumer of the registry, and drift test #1 鈥?"the registry must not import
+ * anything at runtime" 鈥?would be unassertable. Everything it needs from
  * payloads.ts arrives as `import type`, which the compiler erases.
  *
  * ## Three properties this buys
@@ -53,11 +53,11 @@ export type DecodedEvent = RunEvent | UnknownRunEvent;
 export type Durability = 'durable' | 'volatile' | 'ephemeral';
 
 /** Classification only. grok-build keeps its method enum FLAT and leaves
- *  direction enforcement to the hub; the same applies here — the protocol
+ *  direction enforcement to the hub; the same applies here 鈥?the protocol
  *  supplies vocabulary, adapters enforce direction.
  *
  *  external, grok-build `crates/common/xai-tool-protocol/src/methods.rs:19-21`
- *  "the enum is flat — direction enforcement is the computer hub's job" */
+ *  "the enum is flat 鈥?direction enforcement is the computer hub's job" */
 export type EventCategory =
   | 'run'
   | 'turn'
@@ -75,12 +75,27 @@ export type EventCategory =
  * Extends `MessageGate` rather than carrying a `since` string, so an event
  * cannot be declared without also declaring when it appeared and what a
  * consumer must understand to make sense of it. The earlier `since` field was
- * writable and unreadable in the same breath — thirty events all read `1.0`
- * and nothing consulted it — so the type now refuses to let that happen.
+ * writable and unreadable in the same breath 鈥?thirty events all read `1.0`
+ * and nothing consulted it 鈥?so the type now refuses to let that happen.
  */
 export interface EventMeta extends MessageGate {
   readonly durability: Durability;
   readonly category: EventCategory;
+  /**
+   * Whether a consumer that does not understand this event may ignore it.
+   *
+   * Plan 587 T3.2, contract 搂F: "鏃犳硶璇嗗埆鐨勫叧閿帶鍒?terminal 涓嶈兘鍋峰伔鍙樻垚鎴愬姛"
+   * 鈥?an unrecognised critical control/terminal must not quietly become
+   * success. This flag is where that sentence becomes machine-readable.
+   *
+   * The rule is NAMESPACE, not a per-event judgement, and it is enforced at
+   * compile time by `CRITICALITY_MATCHES_RESERVED_NAMESPACES` in
+   * `criticality.ts`: an event in a reserved namespace is critical, and no
+   * event outside one is. A hand-picked list would be a second source of truth
+   * that a new event could silently opt out of, which is the exact failure the
+   * registry is supposed to prevent for `durability`.
+   */
+  readonly critical: boolean;
   readonly description: string;
 }
 
@@ -146,13 +161,35 @@ export function defineEventUnion<M extends MetaTable>(meta: M): EventRegistry {
  * checkpoint should be sent no checkpoint reference rather than one it will
  * try and fail to use.
  */
-const G1_0 = { minProtocol: '1.0', minSchemaRevision: 1 } as const;
+const G1_0 = { minProtocol: '1.0', minSchemaRevision: 1, critical: false } as const;
+
+/**
+ * The gate for an event in a RESERVED namespace, where "critical" is a
+ * property of the name rather than a per-event opinion.
+ *
+ * `run.`, `permission.` and `checkpoint.` are the namespaces the protocol mints
+ * ITSELF, and they are exactly the namespaces where a consumer that does not
+ * understand the event is holding a false belief rather than a missing pixel:
+ *
+ *  - an unread `run.completed` / `run.failed` is a run whose ending is unknown,
+ *    which is what "quietly becomes success" means;
+ *  - an unread `permission.requested` is a blocked tool with nobody answering;
+ *  - an unread `checkpoint.saved` is a resume boundary a host will later try to
+ *    restore from and cannot.
+ *
+ * Everything else is display fidelity, not correctness. A host that misses
+ * `assistant.text_delta` shows a gap; a host that misses `run.completed` reports
+ * a run it does not know the end of. `extension.` is the namespace the contract
+ * names as the forward-compatibility escape hatch, so ignoring it IS its
+ * contract rather than a failure to understand it.
+ */
+const G1_0_CRITICAL = { ...G1_0, critical: true } as const;
 
 export const EVENT_META = {
-  'run.started': { ...G1_0, durability: 'durable', category: 'run', description: 'Run opened; carries the manifest hash and the runtime identity.' },
-  'run.paused': { ...G1_0, durability: 'volatile', category: 'run', description: 'Run halted at a pause point, resumable.' },
-  'run.completed': { ...G1_0, durability: 'durable', category: 'run', description: 'Terminal success. Cancellation also lands here, not in run.failed.' },
-  'run.failed': { ...G1_0, durability: 'durable', category: 'run', description: 'Terminal failure with a protocol error code.' },
+  'run.started': { ...G1_0_CRITICAL, durability: 'durable', category: 'run', description: 'Run opened; carries the manifest hash and the runtime identity.' },
+  'run.paused': { ...G1_0_CRITICAL, durability: 'volatile', category: 'run', description: 'Run halted at a pause point, resumable.' },
+  'run.completed': { ...G1_0_CRITICAL, durability: 'durable', category: 'run', description: 'Terminal success. Cancellation also lands here, not in run.failed.' },
+  'run.failed': { ...G1_0_CRITICAL, durability: 'durable', category: 'run', description: 'Terminal failure with a protocol error code.' },
 
   'turn.started': { ...G1_0, durability: 'durable', category: 'turn', description: 'A model turn began.' },
   'turn.retry_scheduled': { ...G1_0, durability: 'volatile', category: 'turn', description: 'Retry metadata promoted to a first-class event.' },
@@ -176,11 +213,11 @@ export const EVENT_META = {
   'tool.timed_out': { ...G1_0, durability: 'volatile', category: 'tool', description: 'Tool exceeded its deadline.' },
   'tool.call_completed': { ...G1_0, requiresCapability: 'tool_outcome_detail', durability: 'durable', category: 'tool', description: 'Tool finished. `outcome` is a discriminated union; an absent producer status becomes `indeterminate`, never `success`.' },
 
-  'permission.requested': { ...G1_0, durability: 'durable', category: 'permission', description: 'Approval needed. `expiresAt` is minted once, by the runtime.' },
-  'permission.resolved': { ...G1_0, durability: 'durable', category: 'permission', description: 'Every decision is recorded, including timeout and cancellation.' },
-  'permission.expired': { ...G1_0, requiresCapability: 'permission_expiry', durability: 'durable', category: 'permission', description: 'Emitted BEFORE permission.resolved{deny,timeout}.' },
+  'permission.requested': { ...G1_0_CRITICAL, durability: 'durable', category: 'permission', description: 'Approval needed. `expiresAt` is minted once, by the runtime.' },
+  'permission.resolved': { ...G1_0_CRITICAL, durability: 'durable', category: 'permission', description: 'Every decision is recorded, including timeout and cancellation.' },
+  'permission.expired': { ...G1_0_CRITICAL, requiresCapability: 'permission_expiry', durability: 'durable', category: 'permission', description: 'Emitted BEFORE permission.resolved{deny,timeout}.' },
 
-  'checkpoint.saved': { ...G1_0, requiresCapability: 'checkpoint_resume', durability: 'durable', category: 'run', description: 'A durable checkpoint boundary. Carries a reference, never the messages. Gated on `checkpoint_resume` so a host is never handed a reference it cannot use.' },
+  'checkpoint.saved': { ...G1_0_CRITICAL, requiresCapability: 'checkpoint_resume', durability: 'durable', category: 'run', description: 'A durable checkpoint boundary. Carries a reference, never the messages. Gated on `checkpoint_resume` so a host is never handed a reference it cannot use.' },
 
   'compaction.started': { ...G1_0, durability: 'durable', category: 'compaction', description: 'Context compaction began.' },
   'compaction.step': { ...G1_0, durability: 'volatile', category: 'compaction', description: 'Compaction progress step.' },
@@ -206,7 +243,7 @@ export const isEventType = EVENT_REGISTRY.isKnown;
 
 export const eventSpecOf = EVENT_REGISTRY.specOf;
 
-// ── control-plane gate table ───────────────────────────────────────────────
+// 鈹€鈹€ control-plane gate table 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 /**
  * The same gate, applied to control methods.

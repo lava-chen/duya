@@ -814,7 +814,35 @@ export type WorkerEvent =
   | SkillsStatusEvent
   | CompactDoneEvent
   | CompactErrorEvent
+  | ResearchUpdatedEvent
+  | WorkflowRunEvent
+  | ClipboardWriteEvent
+  | CompactStepEvent
+  | CompactOverThresholdEvent
+  | CompactSummaryOutcomeEvent
   | MemoryWakeupEvent;
+
+/**
+ * The six members T3.2 added, and why the union below is contiguous.
+ *
+ * Plan 587 T3.1 measured 27 members against 33 exported `*Event` interfaces
+ * and recorded the gap in `MIGRATION.md` without fixing it. T3.2 closes it.
+ * The six are all PRODUCED on this wire — three of them by a `build*Event`
+ * factory in this same file — while a consumer narrowing on `WorkerEvent`
+ * could not see them, and they are exactly the research / workflow /
+ * compaction coverage the event map is supposed to carry.
+ *
+ * They sit at the end of the union rather than beside their topical neighbours
+ * for a mechanical reason: `MIGRATION.md` documents a one-line reproduction
+ * that reads the members until the first line that is not `| Name`, so a
+ * comment inside the union truncates the measurement and makes the guard's own
+ * repro report a gap that is not there. Keep the members contiguous.
+ *
+ * `WORKER_EVENT_UNION_IS_COMPLETE` in `./worker-event-completeness.ts` is the
+ * compile-time half of the guard, and it lives in `src/` because this package's
+ * `tsconfig` excludes the test globs and esbuild strips types — T3.1 measured
+ * that a guard written in a test directory enforces nothing.
+ */
 
 // Backpressure write queue (M10).
 //

@@ -453,6 +453,55 @@ selfTest:
   # nine `export type { ... } from` re-exports), +1 in the new
   # `packages/ai/src/tool-result-wire.ts`, +1 in its test.
   module-dependency: 559
+  # 51 -> 61 (plan 587 T3.2): TEN new, all one owner pair, 0 removed.
+  #
+  # `module-dependency` is UNCHANGED at 559, and that is the load-bearing half:
+  # no edge became a NON-permitted dependency, so no managed module's zero
+  # tolerance is affected. Only the permitted counter moved.
+  #
+  # ATTRIBUTED BY MEASUREMENT, not inferred. `scripts/architecture/audit-imports.mjs`
+  # run on master @ 62eacb35 and again with the T3.2 tree, whole-output diffed:
+  # files scanned 3174 -> 3184 (+10, the ten new files), file edges 14260 ->
+  # 14301, internal edges 8354 -> 8384, cross-boundary edges 610 -> 620, and
+  # the owner-pair histogram line
+  #     18 pkg:agent-runtime -> pkg:agent-protocol
+  # becomes
+  #     28 pkg:agent-runtime -> pkg:agent-protocol
+  # The pair moved by exactly TEN, which is the +10 in the counter above, so
+  # every new edge is accounted for and none is from another pair. A
+  # `--json` edge-set diff agrees: 9 added, 0 removed, all
+  # `packages/agent-runtime/** -> packages/agent-protocol/src/index.ts` (six
+  # files; `event-emitter.ts` alone contributes three, one per import
+  # statement). The 9-vs-10 difference is the two counters deduplicating
+  # differently, not a missing edge — the pair histogram is the number that
+  # reconciles, and it reconciles exactly.
+  #
+  # WHY THE EDGE IS THE RIGHT SHAPE. T3.2 put the run's single emit entry point
+  # (`events/event-emitter.ts`), the structural dispatcher
+  # (`events/structural-dispatch.ts`) and the control-plane census
+  # (`control-plane-census.ts`) in `agent-runtime`, and all three need the
+  # protocol's vocabulary as VALUES, not just types: the `EVENT_META` registry
+  # for durability and criticality, `checkRequiredFields` for the per-field
+  # manifest, `verdictForUnknownType` for the critical/extension boundary, and
+  # `LifecycleViolation` to tell a lifecycle refusal from a malformed field.
+  # `agent-runtime` already declares `requires: [agent-core, agent-protocol]`,
+  # so these are permitted edges and the policy working as declared. The
+  # direction is the sanctioned one: runtime depends DOWNWARD on protocol,
+  # which is the dependency contract §A states.
+  #
+  # What T3.2 did NOT do is add a new module. `criticality.ts` and
+  # `worker-event-completeness.ts` are leaves inside `agent-protocol` and
+  # `packages/agent` respectively and import nothing outside their own
+  # package, so neither contributes an edge of its own; verified by reading
+  # their import blocks, not by inspection of the counts.
+  #
+  # Four of the ten are in `test/`. A new test file in `agent-runtime` that
+  # imports `@duya/agent-protocol` adds one permitted edge, which is the
+  # established shape for this module — `reference-run.test.ts`,
+  # `run-correctness-seams.test.ts` and `run-persistence-sequence.test.ts`
+  # already do it, and the R2.1 block above records the same thing happening
+  # for `run-persistence-sequence.test.ts`.
+  #
   # 35 -> 36: ONE genuinely new, legitimately permitted edge.
   # `packages/agent-runtime/test/run-persistence-sequence.test.ts` (plan 587
   # R1.2) imports `@duya/agent-protocol` TYPES -- RunManifest, RunBudget,
@@ -568,7 +617,7 @@ selfTest:
   # managed module's zero tolerance is affected. `module-dependency-permitted` is
   # in MEASUREMENT_RULES -- it never blocks and never consults the baseline.
   # `--write` was not run, and the baseline section is byte-identical.
-  module-dependency-permitted: 51
+  module-dependency-permitted: 61
   forbidden-dependency: 16
   # 161 -> 162: one more relative-path escape into packages/agent, from the
   # plan-583 stack. Now 126 agent / 16 plugin-core / 13 gateway / 7 conductor.
