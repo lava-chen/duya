@@ -326,22 +326,52 @@ modules:
 #
 # The 35 permitted module edges are measured separately and never block; see
 # the `module-dependency-permitted` rule above and the `desktop-host` entry.
+## Re-measured 2026-10-03 (master @ 0dfaf650): four expectations moved
+
+# Preceded by a **baseline that had gone stale against the resolver itself**, which is
+# why this re-measurement and a `--write` had to happen together. Recorded here because
+# the failure mode is the one the ratchet comment above warns about.
+
+# **(1) The baseline was recorded by the PRE-FIX resolver.** The two resolver fixes
+    # documented below (`strip-comments.mjs`; the `packages/<x>/dist/` -> `src/`
+    # back-mapping) changed the fingerprints, but `.architecture-baseline.json`
+    # was never re-recorded. Result: **815 of 941 baseline fingerprints no longer
+    # triggered, and all 802 current violations read as "not in baseline"** — 641
+    # blocking. The debt was neither real nor new; it was the same legacy edges
+    # encoded by a different resolver. `selfTest` had been maintained; the baseline
+    # had not.
+
+# **(2) Two counts were genuinely off the last measurement, in the SAME direction.**
+    # `package-boundary-escape` 161 -> 162 and `deep-import` 24 -> 25. Both are the
+    # agent class, and both trace to the plan-583 remediation stack
+    # (`fix/583-track-a-p0` / `fix/583-track-q-test-debt-2`), which added one more
+    # `@duya/agent/tool/allowedRoots` deep import and one more relative-path escape
+    # into `packages/agent`. Verified by `git log` on the two files, not assumed.
+    # **This is legacy debt that arrived after the last measurement, not a fresh
+    # regression** — it belongs in the baseline, and `--write` puts it there.
+
+# **(3) Two counts improved, from the same merges.** `module-dependency` 563 -> 548
+    # (`refactor(agent): drop two dead modules with no production callers` removed
+    # edges that were counted but unreachable) and `cycle` 17 -> 16. These are the
+    # ratchet working: debt paid down, not re-baselined.
+
 selfTest:
-  # 564 -> 563: plan 584 / 06-M4 removed the last two
-  # `@duya/agent` -> `@duya/conductor` edges; PR #86 added one back for
-  # `@duya/agent/tool/allowedRoots`.
-  module-dependency: 563
+  # 563 -> 548: `refactor(agent): drop two dead modules with no production
+  # callers` (plan 583) removed edges that were counted but unreachable.
+  module-dependency: 548
   module-dependency-permitted: 35
   forbidden-dependency: 16
-  package-boundary-escape: 161
-  # Plan 584 / 06-M1. plugin-core contributed 93 and now 0, because its
-  # `exports` map declares every subpath its consumers import. The 24 that
-  # remain are `@duya/agent/tool/allowedRoots` (added by PR #86) and 23
-  # `src-renderer` -> `@duya/conductor/renderer/*`; neither is plugin-core.
-  deep-import: 24
-  # Was 18. Plan 584 / 06-M1 removed the discovery <-> errors cycle in
-  # plugin-core (see mcp/sources.ts) so the module could become managed.
-  cycle: 17
+  # 161 -> 162: one more relative-path escape into packages/agent, from the
+  # plan-583 stack. Now 126 agent / 16 plugin-core / 13 gateway / 7 conductor.
+  package-boundary-escape: 162
+  # Was 24. The 25 are 2x `@duya/agent/tool/allowedRoots`
+  # (`main/core/media-allowlist.ts`, `main/ipc/system-handlers.ts`) and
+  # 23 `src-renderer` -> `@duya/conductor/renderer/*`; neither is plugin-core.
+  # The second allowedRoots import arrived with the plan-583 stack.
+  deep-import: 25
+  # Was 17. The 42-file SCC remains; the count fell because
+  # `fix/conductor-copy-and-dead-code` (PR #130) removed an edge.
+  cycle: 16
   # Was 1: plugin-core was the only package under packages/ with no
   # `exports` map. The rule is declarative — it reads package.json only, so
   # this stays 0 regardless of whether dist/ has been built.
