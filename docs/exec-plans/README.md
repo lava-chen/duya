@@ -161,13 +161,60 @@ M4    (conductor, 2 files) ──►  M3   cheapest win first; deletes a build h
 
 ***
 
-## Active Plans (38)
+## Active Plans (39)
 
-> ⚠️ **38 exceeds the cap this file sets for itself** ("Cap it; do not let it
+> ⚠️ **39 exceeds the cap this file sets for itself** ("Cap it; do not let it
 > grow back"). Triaging that list is a decision about what the project is
 > actually pursuing, so it has deliberately **not** been done here — flagging
 > it as the first thing a planning pass should settle. Until then, treat the
-> table below as 38 independent candidates, not a ranked queue.
+> table below as independent candidates, not a ranked queue.
+
+### The dependency shape, which the table below does not show
+
+Extracted from the plan headers (2026-10-03). This is what actually determines
+the order you can work in:
+
+```
+473 ──┬─ 474  475  478  479  485  488  489  490  491  492      ← 扇出阻塞 10 个
+      │        └──────┘  └────┘  └─────────┘  └──┘
+      │           │       │         │
+      │           │       └────┬────┘
+529 ──┘                    525
+429 ── 448
+452 ── 455 ── 460          ← 455 ↔ 460 互为依赖（见下）
+584 ── 586
+```
+
+**Three things a flat priority list hides:**
+
+1. **473 is the largest fan-out in the repo** — ten plans wait on it. It is
+   an umbrella tracker, not an implementation plan, so it will not "complete"
+   the way the others do; its own index note says it closes when 478 P2.3
+   lands. Treat it as a coordination surface, not a work item.
+
+2. **455 ↔ 460 is a cycle, but a phase-level one.** 460's header says it
+   "must complete 455 Phase A/B first"; 455's remaining Phase D is the REST
+   template work that 460 describes. A flat graph cannot express that — the
+   next action is *455 Phase A/B*, not "455".
+
+3. **525 waits on two different plans** (485 and 479), and its own next
+   action is a data migration with a destructive `--apply`. Sequence it after
+   both, and get the migration rehearsed before running it against anything
+   you cannot rebuild.
+
+### Verified: what the next-action column claims
+
+Each row was checked against the working tree, not against its plan file.
+Four were wrong and are corrected below; these five were checked and are
+**still true**, so the row is safe to act on:
+
+| Plan | Checked | Result |
+| --- | --- | --- |
+| 496 | `packages/agent/src/worktree/` | does not exist — "0 code" is accurate |
+| 443 | `DUYA_RIPGREP_PATH` in `GrepTool` | not wired |
+| 585 | `ephemeral-batcher.ts` | not created |
+| 573 | browsing-history table + `browser:history-*` IPC | neither exists |
+| 460 | `.app.json` files in repo | zero |
 
 | Plan | Priority | Next action |
 | --- | --- | --- |

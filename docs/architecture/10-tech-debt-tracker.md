@@ -108,8 +108,14 @@ M7 搬迁把这件事从"没有配置文件"变成"有分层配置但故意不�
 | **根因** | `@duya/agent-protocol` 的 `types` 与 `exports` 都指向 `./dist/*`，而 `typecheck:protocol` 是 `tsc --noEmit` —— **只检查、不产出**。`typecheck:all` 的顺序是 `typecheck:protocol` → `typecheck:core`，中间没有任何 build。`typecheck:web` 有 `npm run build:agent &&` 前置，core/runtime 没有 |
 | **为什么本地是绿的** | **`packages/agent-protocol/dist/` 是历史 `build:agent` 的残留。** 换句话说，本地那个 exit 0 **不是证据**，是缓存的产物。CI 每次都是干净检出，所以每次都红 |
 | **第二个 bug（同时暴露）** | `tsc -b` 是增量的。`clean` 只删 `dist`、不删 `tsconfig.tsbuildinfo` ⇒ **删掉 dist 后的下一次 build 是静默 no-op**，包最终没有 dist 也没有任何报错。本次实测：删掉 protocol 的 dist 后 `npm run build:protocol` **没有重建**，因为 tsbuildinfo 还声称"已构建" |
-| **修法** | ① `typecheck:all` 改为 `build:protocol` → `typecheck:protocol` → `typecheck:core` → `build:core` → `typecheck:runtime` → …（沿用 `typecheck:web` 已有的"先 build 依赖再检查"模式）；② 三个包的 `clean` 同时删 `dist` 与 `tsconfig.tsbuildinfo` |
-| **验证** | 清空**全部** workspace 的 `dist` + `tsbuildinfo`（模拟干净检出）后 `typecheck:all` **exit 0**；`clean` → `build:protocol` 确实产出 `dist/index.d.ts` |
+| **修法** | ① `typecheck:all` 改为 `build:protocol` → `typecheck:protocol` → `typecheck:core` → `build:core` → `typecheck:runtime` → …（沿用 `typecheck:web` 已有的"先 build 依赖再检查"模式）；② 三个包的 `clean` 同时删 `dist` 与 `tsconfig.tsbuildinfo`；③ CI 的 `Run typecheck` 步骤加 `NODE_OPTIONS=--max-old-space-size=6144`（见下） |
+| **验证（本地）** | 清空**全部** workspace 的 `dist` + `tsbuildinfo`（模拟干净检出）后 `typecheck:all` **exit 0**；`clean` → `build:protocol` 确实产出 `dist/index.d.ts` |
+| **⚠️ ① 修完仍红（同一 PR 内追加）** | 排序修复让 `typecheck:core` / `typecheck:runtime` 第一次真正通过（CI 日志可证），但 **macOS runner 在 `typecheck:web` 的 `tsc --noEmit` 上 V8 OOM**：`Abort trap: 6`，**exit 134**。**ubuntu 用同样的默认堆跑完整个 typecheck 并进入了 `npm test`**，所以这是 runner 内存，不是代码。已按 `AGENTS.md` 既有的 `typecheck:cli` 处方给 CI 步骤加 `NODE_OPTIONS=--max-old-space-size=6144` |
+
+> **修复的顺序有诊断价值**：把"本地绿 / CI 红"拆成两问后，
+> ① 产物依赖（`dist` 缺失）② runner 资源（堆不足）。
+> **第一问的修复让 ubuntu 完全通过**，这才让第二问暴露出来 ——
+> 否则两个问题叠在一起，只会看到同一个 "typecheck 失败"。
 
 > **与 TD-0 是同一个病**：缓存状态从未失效。
 > TD-0 是 baseline 用旧 resolver 录的，这个是 `tsconfig.tsbuildinfo` 在 `dist` 没了之后仍然声称已构建。
