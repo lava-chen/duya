@@ -112,12 +112,27 @@ describe('E4.3 — the fixed set, through the real harness', () => {
         now: () => new Date('2026-01-01T00:00:00.000Z'),
       });
 
-      expect(report.cases).toHaveLength(1);
-      const live = report.cases[0];
+      // Selected by id, not by position. Plan 587 E4.2 appends the behaviour
+      // matrix as a case of its own on the extended suite, so `cases[0]` is no
+      // longer "the one case that ran" — and an assertion that counted cases
+      // would have been asserting the report's shape rather than the live case's
+      // behaviour, which is what this test is for.
+      const live = report.cases.find((c) => c.id === 'live-task-artefact-requires-key');
+      expect(live).toBeDefined();
       expect(live?.mode).toBe('live');
       expect(live?.status).toBe('skipped');
       expect(live?.environmentBlock).toMatch(/live-provider-credentials/);
       expect(live?.checks.every((k) => k.status === 'skipped')).toBe(true);
+
+      // The matrix rides along in the same report, and it is `skipped` there too.
+      // Asserting it here is what keeps E4.2's rows from being a decoration that
+      // a future change could quietly turn green: if a matrix row ever became a
+      // `pass`, this line would go red.
+      const matrix = report.cases.find((c) => c.id === 'behaviour-matrix');
+      expect(matrix).toBeDefined();
+      expect(matrix?.checks.length).toBeGreaterThan(0);
+      expect(matrix?.checks.every((k) => k.status === 'skipped')).toBe(true);
+      expect(matrix?.checks.every((k) => k.checkId.startsWith('matrix/'))).toBe(true);
 
       // The whole report is a live report, so it may not claim determinism.
       expect(report.determinism).toBe('not-claimed');

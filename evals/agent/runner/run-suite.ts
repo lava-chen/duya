@@ -47,6 +47,7 @@ import { evaluateDeclaration, type EvalEvidence } from '../evaluators/families';
 import { skipped, type CheckResult } from '../evaluators/layer';
 import { liveReadiness } from '../evaluators/live';
 import { assembleReport, makeCaseReport, type CaseReport, type EvalReport } from '../evaluators/suite';
+import { formatMatrix, matrixChecks, matrixSection } from '../matrix/section';
 
 /**
  * Repo root, resolved from this file (`evals/agent/runner/` is three levels
@@ -250,6 +251,45 @@ export async function runSuite(options: RunOptions): Promise<EvalReport> {
     cases.push(await runOneCase(entry, env));
   }
 
+  // Plan 587 E4.2: the behaviour matrix, as one case whose checks are the rows.
+  //
+  // It is a CASE rather than free-floating report data so the rows are counted by
+  // the same tally as everything else — which is what stops a row from being
+  // decorative. Every row is `skipped`, because this runner did not execute the
+  // evidence (see `../matrix/section.ts`), so a matrix row can never contribute
+  // to the `pass` count.
+  //
+  // It is added to the EXTENDED suite ONLY, and that is a load-bearing decision
+  // rather than a convenience. The fixed suite is the CI gate: its contract is
+  // exit 0 when every harness case is green, and every row of the matrix is
+  // `skipped` by construction because this runner does not execute them. Folding
+  // the matrix into the fixed suite would therefore make that gate permanently
+  // red for a reason that has nothing to do with the system under test — which
+  // is how a gate stops being read. The matrix is a coverage ledger, and a
+  // coverage ledger belongs in the report a human reads, not in the gate a CI
+  // job branches on.
+  const section = matrixSection();
+  if (options.suite.kind === 'extended') {
+    cases.push(
+      makeCaseReport({
+        id: 'behaviour-matrix',
+        title: 'plan 587 E4.2 — the behaviour matrix, and where each row is proved',
+        caseFormatVersion: -1,
+        pinnedContract: CURRENT_RUN_CONTRACT,
+        currentContract: CURRENT_RUN_CONTRACT,
+        mode: 'offline',
+        checks: matrixChecks(),
+        observation: {
+          rows: section.rows,
+          provedReal: section.provedReal,
+          coveredByExistingSuite: section.coveredByExistingSuite,
+          unsupported: section.unsupported,
+          unsupportedCapabilities: [...section.unsupportedCapabilities],
+        },
+      }),
+    );
+  }
+
   // Proven once, from the first case that actually ran, and read from the
   // harness's own metadata rather than recomputed.
   const ranCase = cases.find((c) => c.observation !== undefined && typeof c.observation['agentBundleSha256'] === 'string');
@@ -282,6 +322,7 @@ export async function runSuite(options: RunOptions): Promise<EvalReport> {
     unsupported,
     runnerFailed: false,
     requireComplete: options.suite.requireComplete,
+    ...(options.suite.kind === 'extended' ? { matrix: section } : {}),
   });
 
   if (options.outFile !== undefined) {
@@ -310,6 +351,12 @@ export function formatReport(report: EvalReport): string {
   const layers = Object.entries(report.byLayer).filter(([, n]) => n > 0);
   lines.push(layers.length > 0 ? `failing layers: ${layers.map(([k, n]) => `${k}=${n}`).join('  ')}` : 'failing layers: none');
   for (const u of report.unsupported) lines.push(`unsupported: ${u}`);
+  if (report.matrix !== undefined) {
+    lines.push('');
+    lines.push('behaviour matrix (plan 587 E4.2) — R = proved on a real path, C = an existing suite owns it, U = unsupported');
+    lines.push(...formatMatrix(report.matrix));
+    lines.push('  every matrix row is reported as `skipped`: this runner did not execute its evidence, and a skipped check is not a pass');
+  }
   lines.push(`exit ${report.exit.code}: ${report.exit.reason}`);
   return lines.join('\n');
 }

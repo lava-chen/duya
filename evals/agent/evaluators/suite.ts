@@ -38,6 +38,7 @@
  */
 
 import { CHECK_STATUSES, type AttributedLayer, type CheckResult, type CheckStatus, type EvalFamily } from './layer';
+import type { MatrixSection } from '../matrix/section';
 
 const SEVERITY: Readonly<Record<CheckStatus, number>> = {
   pass: 0,
@@ -108,6 +109,16 @@ export interface EvalReport {
   /** How many non-passing checks attributed to each layer. */
   readonly byLayer: Readonly<Record<AttributedLayer, number>>;
   readonly cases: readonly CaseReport[];
+  /**
+   * Plan 587 E4.2: the behaviour matrix, as report data.
+   *
+   * Optional and additive. The matrix is a CLAIM about what is proved, not a
+   * check that ran, so it is reported beside the checks rather than folded into
+   * them: a row this runner did not execute must never be able to raise the
+   * `pass` count. Every matrix row also appears as a `skipped` check (see
+   * `../matrix/section.ts`), which is what makes the totals count it.
+   */
+  readonly matrix?: MatrixSection;
   /** Capabilities this report does NOT prove, named. */
   readonly unsupported: readonly string[];
   readonly exit: { readonly code: ExitCode; readonly reason: string };
@@ -178,6 +189,7 @@ export interface AssembleInput {
   readonly unsupported: readonly string[];
   readonly runnerFailed: boolean;
   readonly requireComplete: boolean;
+  readonly matrix?: MatrixSection;
 }
 
 export function assembleReport(input: AssembleInput): EvalReport {
@@ -198,6 +210,7 @@ export function assembleReport(input: AssembleInput): EvalReport {
     totals,
     byLayer,
     cases: input.cases,
+    ...(input.matrix === undefined ? {} : { matrix: input.matrix }),
     unsupported: input.unsupported,
     exit,
   };

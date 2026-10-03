@@ -767,7 +767,35 @@ selfTest:
   # zero tolerance is affected. `module-dependency-permitted` is counted, never
   # blocking, and never consults the baseline. `.architecture-baseline.json` was
   # not touched and `architecture:baseline` (`--write`) was not run.
-  module-dependency-permitted: 119
+  #
+  # 119 -> 123 (plan 587 E4.2, layered ON TOP of the 119 above — upstream's block
+  # and attribution are left intact): FOUR new permitted edges, all of them test
+  # files importing `@duya/agent-protocol`, and all measured rather than counted
+  # by eye. `node scripts/architecture/audit-imports.mjs --json` reports 682
+  # cross-boundary edges, of which exactly four name a file added by this slice:
+  #
+  #   apps/desktop/src/main/db/core/__tests__/run-store-reopen.test.ts
+  #       -> packages/agent-protocol/src/index.ts   (x2: one `import type`, one
+  #          `import { manifestFingerprint }`)
+  #   packages/agent-runtime/test/capability-pause-closed.test.ts
+  #       -> packages/agent-protocol/src/index.ts
+  #   packages/agent-runtime/test/run-resource-growth.test.ts
+  #       -> packages/agent-protocol/src/index.ts
+  #
+  # Every one is a declared edge, not an escape: both owning modules already
+  # require `agent-protocol` in their `requires` lists, and the protocol package
+  # remains a leaf with no dependency of its own. `run-store-reopen` needs the
+  # protocol's real `RunEventEnvelope` to write a durable event AND
+  # `manifestFingerprint` to write a manifest hash the store will later verify —
+  # a hand-written digest would have made `verifyManifest` report a mismatch,
+  # which is correct behaviour and the wrong fixture. The two `agent-runtime`
+  # tests need the protocol's `RunManifest` / `RunTerminalState` / error code to
+  # build a real run and read its real capability advertisement.
+  #
+  # `module-dependency` is UNCHANGED at 559 again, which is still the load-bearing
+  # half. `.architecture-baseline.json` was not touched and
+  # `architecture:baseline` (`--write`) was NOT run for this increment.
+  module-dependency-permitted: 123
   forbidden-dependency: 16
   # 161 -> 162: one more relative-path escape into packages/agent, from the
   # plan-583 stack. Now 126 agent / 16 plugin-core / 13 gateway / 7 conductor.
