@@ -204,13 +204,29 @@ touched until the merge lands on `origin/master`.
    `dist/`, so a missing build is a TS2307 that looks like a wiring fault.
 2b. **Tearing a worktree down**: those junctions point back INTO the primary
    checkout, so any recursive delete that follows them deletes the primary
-   checkout's contents. On this repo that removed 3,471 tracked files at
-   once. Remove the directory with the runtime's own recoverable launcher
-   (`rm -- <dir>`, which treats a reparse point as an object and does not
-   traverse it) and **never** `Remove-Item -Recurse`, `cmd /c rd /s /q`, or
-   any shell `rm -rf` on a worktree path. If a junction must go on its own,
-   `cmd /c rmdir <junction>` (no `/s`) detaches the link without following
-   it — never with `/s`.
+   checkout's sources. This has now happened **twice** on this repo:
+   **3,471** tracked files on 2026-08-25, and **3,492** more on 2026-10-03.
+
+   **Always use `scripts/remove-worktree.sh <name-or-path> [--delete-branch]`.**
+   It lists every reparse point, unlinks each one with `cmd rmdir` *without*
+   `/s`, then **re-scans and aborts if any junction survived** — only then does
+   it let git remove the worktree. That re-scan is the whole point: it is what
+   makes the delete safe, and it is the step every manual procedure skips.
+
+   Do **not** hand-roll a teardown. Specifically, `rm -- <dir>` and the
+   runtime's recoverable trash launcher are **not** safe here: this file
+   previously claimed they "treat a reparse point as an object and do not
+   traverse it". That claim is false — following AGENTS.md that way on
+   2026-10-03 wiped 3,492 tracked files from the primary checkout. Never use
+   `Remove-Item -Recurse`, `cmd /c rd /s /q`, or a shell `rm -rf` on a
+   worktree path either.
+
+   If a single junction must go on its own, `cmd /c rmdir <junction>` (no `/s`)
+   detaches the link without following it — never with `/s`. And if you ever
+   do hit this: the deletions are **unstaged working-tree deletions**, so
+   `git restore .` in the primary checkout brings every tracked file back from
+   HEAD. Check `git status --short` for a pure ` D` pattern (nothing staged)
+   before restoring, so you do not clobber real work.
 3. **Verify in place**: targeted `npx vitest run <files>` +
    `npm run typecheck:web`, plus any other package gates the diff
    touches. Known footgun: `typecheck:cli` OOM-crashes tsc under the
@@ -603,7 +619,7 @@ question you're asking.
 - Electron window blank: check DevTools console, verify `http://localhost:3000` reachable
 - Renderer E2E may load **another checkout's** Vite ⚠️: `e2e/playwright.config.ts` sets `reuseExistingServer: true`, so it silently reuses whatever already answers on `:3000`, and `getRendererUrl()` probes a hardcoded 3000–3005 with no env override. From a worktree that means the app can render a page served by the primary checkout — where `packages/*` may not resolve, so `globals.css` transform throws, React never mounts, and the failure surfaces 15s later as a mystery "element not found". `window.electronAPI` looks perfectly healthy throughout (the preload is per-webContents, not per-URL), so "wait for the bridge" is not a sufficient readiness check. Free port 3000 before running renderer E2E, or assert the app actually mounted — `e2e/ipc/session-archive-ui.spec.ts` does both.
 - `e2e/helpers.ts` does NOT dismiss onboarding ⚠️: the block is guarded by `if (process.env.DUYA_TEST === '1')`, which reads the **Playwright runner** process, while `DUYA_TEST=1` is only injected into the **Electron child** env. Nothing exports it in the runner, so the block never runs. It is not only a modal: the conversation store stays below `isHydrated`, `loadFromDatabase()` is never called, and no thread row renders at all. Seed `duya-onboarding-completed` + `duya-conversations` in localStorage and reload, the way `e2e/ipc/file-workspace.spec.ts` does. Also note the sidebar's work/bots split is plain component state defaulting to `bots`, so session sections only render after switching to the Work tab.
-- NEVER `rm -rf` a worktree on Windows ⚠️: GNU rm does not treat NTFS junctions as symlinks — it recurses THROUGH them. Worktrees contain junctioned `node_modules`, and npm workspaces makes `node_modules/@duya/*` junction back into `packages/*`, so one `rm -rf .claude/worktrees/<name>` can wipe every workspace package's sources in the primary checkout (incident 2026-08-25, 7 packages lost). Remove junctions first with `cmd //c rmdir <junction>` (no `/s` — deletes the link only), or just use `scripts/remove-worktree.sh <name>`, which unlinks all reparse points, verifies none remain, and only then deletes.
+- NEVER hand-roll a worktree teardown on Windows ⚠️: GNU rm does not treat NTFS junctions as symlinks — it recurses THROUGH them. Worktrees contain junctioned `node_modules`, and npm workspaces makes `node_modules/@duya/*` junction back into `packages/*`, so one recursive delete of `.claude/worktrees/<name>` wipes every workspace package's sources in the primary checkout. This happened twice: 3,471 files on 2026-08-25 and 3,492 on 2026-10-03. **`rm --` and the recoverable trash launcher are unsafe too** — they traverse reparse points here, despite an earlier version of this file claiming otherwise. Always use `scripts/remove-worktree.sh <name>`, which unlinks all reparse points, **re-scans and aborts if any remain**, and only then deletes. Recovery if it happens anyway: the deletions are unstaged, so `git restore .` in the primary checkout restores every tracked file from HEAD.
 - Bug hunt: when looking for defects, cross-check new diffs against `docs/exec-plans/completed/2026-09-bug-sweep.md` first — it catalogs the recurring shapes (async-as-value, non-null assertion, silent API fallthrough, fractional-cell math, port 0, etc.) with concrete duya examples and detection rules.
 
 ## Docs Structure
