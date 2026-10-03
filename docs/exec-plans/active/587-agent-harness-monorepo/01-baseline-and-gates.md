@@ -4,13 +4,22 @@
 
 ## G0.1 接管与可重复基线
 
-- [ ] 在隔离分支记录HEAD、工作树、已有PR/任务与package解析路径；workspace context工具可用时先读，缺失明确记录，不编造共享任务。
-- [ ] 读取项目baseline，保存完整`npm test`的失败文件/测试名/错误签名、退出码、环境/ABI和flake分类。日志在忽略的验证目录，执行日志只记摘要/路径；禁止将敏感消息原文存入共享活动。
+> G0.1执行于2026-10-03，分支`plan/587-g0-baseline` @ `0e13d4cd`。原始证据在忽略目录`.tmp-validation/587-g0/`，摘要见[执行日志](11-execution-log.md)。第3项仅**部分**满足，原因见执行日志"未达成项"。
+
+- [x] 在隔离分支记录HEAD、工作树、已有PR/任务与package解析路径；workspace context工具可用时先读，缺失明确记录，不编造共享任务。
+  HEAD `0e13d4cd`；工作树`.claude/worktrees/587-g0`；开放PR **0**（最近30个全MERGED/CLOSED）；远端129分支、`main`/`develop`不存在；12个`@duya/*`链接与4个起点`require.resolve`全部落在本工作树内。**workspace context工具不可用，已明确记录，未编造共享任务。**（`takeover-record.md`、`package-resolution.md`）
+- [x] 读取项目baseline，保存完整`npm test`的失败文件/测试名/错误签名、退出码、环境/ABI和flake分类。日志在忽略的验证目录，执行日志只记摘要/路径；禁止将敏感消息原文存入共享活动。
+  WARM口径（build后、clean依赖）45失败文件/101失败测试/**103个(file,test,signature) tuple**，exit 1；collect 1009文件/11873测试（非零collect）。分类77 deterministic / 25 environment-infra / **1已证flake**（经二次运行证实）。环境：Windows、Node 24.16.0、sqlite ABI **137实测加载成功**、clean安装。未存任何用户消息原文或凭据。（`test-failure-set.md`、`test-results-warm.json`）
 - [ ] `npm ci`的清洁checkout或真正独立依赖安装，运行typecheck/build；检查@duya/*实际解析到该checkout。主检出junction暖产物不能当clean证据。
-- [ ] 对照最新CI：trigger、typecheck包含范围、Node heap、实际通过/失败/取消步骤。2026-10-03的dist次序修复和heap修复已有提交，重新验证而不是重复实施。
-- [ ] 验证architecturecheck/self-test输出和typecheckelectron ratchet。main/preload已有ratchet，禁止继续使用“完全没有typegate”的旧事实。
+  **仅部分满足。** 依赖树确为clean：无junction、无暖`node_modules`、无dist/tsbuildinfo（安装前已枚举），1043个顶层条目，12个`@duya/*`全部内部解析。`typecheck:all` exit **0**（154s）、`build` exit **0**（87s）均在此树上跑出。**但`npm ci`进程exit 1**：`puppeteer` postinstall因本机缓存缺`chrome.exe`失败（重试时按其自身提示设`PUPPETEER_SKIP_DOWNLOAD=1`），随后仓库自身`postinstall`的`node-pty`编译报**MSB8040**（本机VS 18缺Spectre缓解库）。属环境/工具链问题，非仓库缺陷；`better-sqlite3`已成功重建。需装该VS组件或提供匹配`node-pty`预编译产物后重跑取得exit 0。（`npm-ci.log`、`npm-ci-retry.log`、`npm-ci-evidence.md`、`sqlite-abi.md`）
+- [x] 对照最新CI：trigger、typecheck包含范围、Node heap、实际通过/失败/取消步骤。2026-10-03的dist次序修复和heap修复已有提交，重新验证而不是重复实施。
+  原引用的37095446083/37095893167**已非最新**（其后还有8次）；最新为**37099318050**（master push，SHA `0e13d4cd`，failure），上一次37098693756。`gh`已认证。typecheck三OS**全绿**→heap修复**已验证有效**；`npm test`红；其余OS为**cancelled**（未设`fail-fast:false`），不得记为通过；`build` job因`needs:test` **skipped**，故`electron:build`在CI**从未执行**。heap为`NODE_OPTIONS: --max-old-space-size=6144`且**仅typecheck步骤**。trigger配置`[master,main,develop]`但远端只有`master`。dist次序修复亦由本任务实测佐证（见下方架构节与执行日志"构建次序"）。（`ci-runs.md`）
+- [x] 验证architecturecheck/self-test输出和typecheckelectron ratchet。main/preload已有ratchet，禁止继续使用“完全没有typegate”的旧事实。
+  `architecture:check` exit **0**：total 802 = tolerated 802 = baseline 802，新增**0**；`self-test` exit **0**，7类期望计数合计802独立复现同一数字。ratchet**确实存在且在跑**：`scripts/typecheck-electron-gate.mjs` + 已提交`scripts/typecheck-electron-baseline.txt`，基线**303 errors / 148 (file,code) keys**，在`typecheck:all`内输出 `OK — no new type errors (303 known across 148 key(s))`，与CI同一行逐字一致、零漂移。“没有typegate”已按源码与CI日志证伪。补充：零容忍managed模块实为**4个**（含`legacy-plugin-core`）。（`architecture-and-ratchet.md`）
 
 失败记录例：`{head,platform,node,sqliteAbi,suite,test,errorCode,signature,classification}`。相同总数不能证明集合相同；新增失败必须定位并修复或证明不可归因。
+
+> G0.1附带发现（交G0.2/G0.3，非本阶段完成项）：构建次序**只存在于`typecheck:all`的一个`&&`链**里，仓库无npm拓扑依赖、无TS project references。单跑`typecheck:electron`在clean检出上产生49个假`TS2307`；`npm test`在未build时产生250个假解析失败。
 
 ## G0.2 CI 与 required checks
 
