@@ -27,10 +27,16 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 
 - Frontend: `apps/desktop/src/renderer/` (Vite + React 19 + Zero Router)
 - Agent core: `packages/agent/` (@duya/agent, workspace package)
+  - `packages/agent-protocol/` — transport-neutral wire contract
+  - `packages/agent-core/` — run reasoning, zero IO
+  - `packages/agent-runtime/` — run execution engine
+  - All three are `managed: true` (Gates): zero tolerance, never baselined.
 - Desktop app: `apps/desktop/` (@duya/desktop, workspace package)
-  - `src/main/` — Electron main process (+ Agent Server, Gateway)
+  - `src/main/` — Electron main process (+ Gateway). The Agent Server is a
+    separate spawned child process, not in-process.
   - `src/preload/` — context bridge
   - `src/renderer/` — Vite + React 19 + Zero Router frontend
+- Other workspaces: `packages/{ai,cli,computer-use,conductor,gateway,plugin-core,voice}/` (12 total)
 - Build scripts: `scripts/` (esbuild configs)
 - Docs: `docs/{design-docs,exec-plans,generated,product-specs,references}/`
 - Scoped guides: `docs/exec-plans/README.md`, `docs/design-docs/core-beliefs.md`
@@ -126,8 +132,8 @@ node packages/agent/dist/cli/index.js [options]
   fingerprint to the baseline to silence something you just introduced — fix
   the edge, or use `--write` only when a migration legitimately removed debt.
   Modules declared `managed: true` in `architecture-policy.yaml`
-  (`agent-protocol`, `agent-core`, `agent-runtime`) have zero tolerance and
-  cannot be baselined at all.
+  (`agent-protocol`, `agent-core`, `agent-runtime`, `legacy-plugin-core`)
+  have zero tolerance and cannot be baselined at all.
   - **Verify CI enforcement separately.** The workflow now watches `master`
     and runs `typecheck:all`; this does not imply `architecture:check` is a
     required check. Plan 587 G0 owns that remaining gate and ruleset work.
@@ -593,7 +599,7 @@ question you're asking.
 - Skipping Playwright verification for UI changes
 - Forgetting `npm run typecheck:all` before committing
 - NOT checking active plans before starting work ⚠️
-- `better-sqlite3` is a V8-ABI native module: the Electron runtime (ABI 119) and the local Node used by Vitest (ABI 137) need different builds, so a single `build/Release/better_sqlite3.node` can only serve one runtime at a time. Switching is now automatic: `scripts/ensure-sqlite-abi.mjs` runs as the `pre`-hook of the DB-touching entry points (`pretest*` → node, `preelectron:*` / e2e → electron) and swaps in the matching **prebuilt** binary (fast copy/download via `prebuild-install`, no source compile) when the current one doesn't load. If you ever see `NODE_MODULE_VERSION` mismatch, just re-run the command — it self-heals; or run `npm run rebuild:node` (node) / `npm run rebuild` (electron) manually. Don't run `npm test` and `npm run electron:dev` at the same time (they share the binary, and a running Electron locks the `.node` file on Windows).
+- `better-sqlite3` is a V8-ABI native module: the Electron runtime (ABI 149 — verified against Electron 44.2.0's `process.versions.modules`) and the local Node used by Vitest (ABI 137) need different builds, so a single `build/Release/better_sqlite3.node` can only serve one runtime at a time. Switching is now automatic: `scripts/ensure-sqlite-abi.mjs` runs as the `pre`-hook of the DB-touching entry points (`pretest*` → node, `preelectron:*` / e2e → electron) and swaps in the matching **prebuilt** binary (fast copy/download via `prebuild-install`, no source compile) when the current one doesn't load. If you ever see `NODE_MODULE_VERSION` mismatch, just re-run the command — it self-heals; or run `npm run rebuild:node` (node) / `npm run rebuild` (electron) manually. Don't run `npm test` and `npm run electron:dev` at the same time (they share the binary, and a running Electron locks the `.node` file on Windows).
 - Electron window blank: check DevTools console, verify `http://localhost:3000` reachable
 - Renderer E2E may load **another checkout's** Vite ⚠️: `e2e/playwright.config.ts` sets `reuseExistingServer: true`, so it silently reuses whatever already answers on `:3000`, and `getRendererUrl()` probes a hardcoded 3000–3005 with no env override. From a worktree that means the app can render a page served by the primary checkout — where `packages/*` may not resolve, so `globals.css` transform throws, React never mounts, and the failure surfaces 15s later as a mystery "element not found". `window.electronAPI` looks perfectly healthy throughout (the preload is per-webContents, not per-URL), so "wait for the bridge" is not a sufficient readiness check. Free port 3000 before running renderer E2E, or assert the app actually mounted — `e2e/ipc/session-archive-ui.spec.ts` does both.
 - `e2e/helpers.ts` does NOT dismiss onboarding ⚠️: the block is guarded by `if (process.env.DUYA_TEST === '1')`, which reads the **Playwright runner** process, while `DUYA_TEST=1` is only injected into the **Electron child** env. Nothing exports it in the runner, so the block never runs. It is not only a modal: the conversation store stays below `isHydrated`, `loadFromDatabase()` is never called, and no thread row renders at all. Seed `duya-onboarding-completed` + `duya-conversations` in localStorage and reload, the way `e2e/ipc/file-workspace.spec.ts` does. Also note the sidebar's work/bots split is plain component state defaulting to `bots`, so session sections only render after switching to the Work tab.

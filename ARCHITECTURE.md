@@ -13,7 +13,7 @@ centralized in that plan's reference directory.
 DUYA is a Windows desktop AI agent client with a modular architecture:
 
 - **Frontend**: Vite + React 19 + Zero Router (Electron renderer)
-- **Desktop Shell**: Electron 28 (Main Process)
+- **Desktop Shell**: Electron 44 (Main Process)
 - **Agent Core**: `@duya/agent` workspace package
 - **AI Layer**: `@duya/ai` multi-protocol adapter
 - **Database**: SQLite via better-sqlite3
@@ -23,7 +23,7 @@ DUYA is a Windows desktop AI agent client with a modular architecture:
 | Layer | Technology |
 |-------|------------|
 | Frontend | Vite 6, React 19, Zero Router, Tailwind |
-| Desktop Shell | Electron 28 |
+| Desktop Shell | Electron 44 |
 | Build | esbuild, electron-builder |
 | Agent Core | TypeScript |
 | Database | better-sqlite3 (FTS5, trigram) |
@@ -33,24 +33,26 @@ DUYA is a Windows desktop AI agent client with a modular architecture:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Desktop Shell (Electron)                  │
+│  Process layer 1 - Electron Main Process                    │
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐            │
+│  │  Core   │ │ Config  │ │ Memory  │ │ Agents  │            │
+│  │   DB    │ │  Store  │ │  State  │ │ Manager │            │
+│  └─────────┘ └─────────┘ └─────────┘ └─────────┘            │
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐            │
+│  │   IPC   │ │Services │ │Gateway  │ │  Auto-  │            │
+│  │ Handlers│ │         │ │         │ │ mation  │            │
+│  └─────────┘ └─────────┘ └─────────┘ └─────────┘            │
+│  spawns ↓ (ELECTRON_RUN_AS_NODE=1)                          │
 ├─────────────────────────────────────────────────────────────┤
-│  Main Process                                               │
-│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐          │
-│  │  Core   │ │ Config  │ │ Memory  │ │Agents   │          │
-│  │   DB    │ │  Store  │ │  State  │ │Manager  │          │
-│  └─────────┘ └─────────┘ └─────────┘ └─────────┘          │
-│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐          │
-│  │   IPC   │ │Services │ │Gateway  │ │Auto-    │          │
-│  │ Handlers│ │         │ │         │ │mation   │          │
-│  └─────────┘ └─────────┘ └─────────┘ └─────────┘          │
+│  Process layer 2 - Agent Server (HTTP + SSE)                │
+│  agent-server.js / router.ts / worker-manager.ts            │
 ├─────────────────────────────────────────────────────────────┤
-│              Agent Server (HTTP + SSE)                       │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │              Agent Worker Processes                  │   │
-│  │  @duya/agent (workspace package)                    │   │
-│  │  @duya/ai (multi-protocol LLM adapter)             │   │
-│  └─────────────────────────────────────────────────────┘   │
+│  Process layer 3 - Agent Workers (fork, one per session)    │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │  @duya/agent (workspace package)                      │  │
+│  │  @duya/ai (multi-protocol LLM adapter)                │  │
+│  │  entry: agent-process-entry.js                        │  │
+│  └───────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
@@ -64,7 +66,7 @@ DUYA is a Windows desktop AI agent client with a modular architecture:
 
 ## IPC Architecture
 
-DUYA uses two communication patterns:
+DUYA uses three communication patterns:
 
 ### 1. IPC Invoke/Handle (Request-Response)
 
@@ -86,13 +88,26 @@ Renderer → Agent Server (HTTP POST) → Worker Process → LLM
                               SSE Stream → Renderer
 ```
 
-- Agent Server runs as HTTP server in Main Process
-- Each session spawns/is assigned to a Worker Process
+- The Agent Server is a **separate spawned child process**, not an in-process
+  HTTP server: `spawnAgentServer` launches it as `process.execPath` +
+  `spawn(agent-server.js)` under `ELECTRON_RUN_AS_NODE=1`
+  (`apps/desktop/src/main/agents/agent-server-lifecycle.ts:118,122`).
+- Each session is backed by its own Worker Process, forked lazily and keyed by
+  session id (`apps/desktop/src/main/agents/server/worker-manager.ts:90`, entry
+  `agent-process-entry.js`). Settled workers idle past the TTL are reaped
+  (`worker-manager.ts:460`) and the next request takes the same lazy-spawn path.
 - Streaming via Server-Sent Events
 
 ### 3. MessagePort
 
 For high-frequency data: tool execution, tool streaming, config sync.
+
+Exactly three channels are registered at runtime — `config`, `toolExec`,
+`toolStream` (`apps/desktop/src/main/index.ts:431-437`). `agentControl` is
+**not** a live channel; it was removed in Phase 7.1 of plan 53. The stale
+`agentControl` entry still listed in `DEFAULT_CHANNEL_DEFINITIONS`
+(`apps/desktop/src/main/types/port-types.ts:136`) is re-exported but has no
+production consumer, so it opens no port.
 
 ## App Connections (Connectors)
 
@@ -606,7 +621,7 @@ Multi-bot rooms (≤6 members + user) in one shared transcript. The room is a **
 ### Sub-agent Runtime & Side Panel (Plan 571)
 
 **Lifecycle vocabulary.** A sub-agent run has exactly five states, defined once in
-`src/lib/subagent-status.ts` and consumed by every surface:
+`apps/desktop/src/renderer/lib/subagent-status.ts` and consumed by every surface:
 `pending | running | completed | failed | killed`.
 `killed` is first-class: `BackgroundAgentLifecycle.kill()` already records it agent-side, and
 before plan 571 the renderer had **three** incompatible spellings of the same lifecycle
@@ -647,7 +662,7 @@ Emitters never touch panel state — they dispatch a CustomEvent carrying
 (tabs dedup on `sessionId` only).
 
 **Stop path.** `POST /sessions/:parentSessionId/subagents/kill { taskId }`
-(`electron/agents/server/router.ts::handlePostSubagentKill`) → `workerManager.sendCommand(parentSessionId,
+(`apps/desktop/src/main/agents/server/router.ts::handlePostSubagentKill`) → `workerManager.sendCommand(parentSessionId,
 { type: 'subagent:kill', taskId, reason: 'user_kill' })` → worker →
 `backgroundAgentLifecycle.kill(taskId, 'user_kill')`.
 It is keyed by the **parent** session because the child has no worker. A 404 means the parent
@@ -656,7 +671,7 @@ worker is no longer resident, which the panel treats as a no-op rather than an e
 **Result contract.** The `task` tool returns a discriminated shape keyed on `status`
 (`pending | running | completed | failed | killed`) carrying `sessionId`, `taskId`, `outputFilePath`,
 `totalToolUseCount`, `totalDurationMs`, `totalTokens`, `usage`, `workingDirectory`, `isolation`, and
-`warnings`. `src/lib/subagent-result.ts` parses it and still accepts the pre-571 field names
+`warnings`. `apps/desktop/src/renderer/lib/subagent-result.ts` parses it and still accepts the pre-571 field names
 (`childSessionId`, `backgroundTaskId`, `outputFile`, `isAsync`) so already-persisted history keeps
 rendering. A background launch receipt is a *successful* result that says nothing about the child —
 it must never be read as completion.
@@ -701,23 +716,32 @@ apps need nothing extra.
 
 ```
 packages/
-├── agent/            @duya/agent - Agent core
-├── ai/               @duya/ai - Multi-protocol LLM adapter
-├── cli/              @duya/cli - CLI tools
-├── computer-use/     @duya/computer-use - Computer use capability
-├── computer-use-demo/@duya/computer-use-demo - Computer use demo
-├── conductor/        @duya/conductor - Conductor component
-├── gateway/          @duya/gateway - Gateway component
-├── plugin-core/      @duya/plugin-core - Plugin system
-└── voice/            @duya/voice - Voice component
+├── agent/                @duya/agent - Agent core
+├── agent-core/           @duya/agent-core - Run reasoning (zero IO)
+├── agent-protocol/       @duya/agent-protocol - Transport-neutral wire contract
+├── agent-runtime/        @duya/agent-runtime - Run execution engine
+├── ai/                   @duya/ai - Multi-protocol LLM adapter
+├── cli/                  @duya/cli - CLI tools
+├── computer-use/         @duya/computer-use - Computer use capability
+├── conductor/            @duya/conductor - Conductor component
+├── gateway/              @duya/gateway - Gateway component
+├── plugin-core/          @duya/plugin-core - Plugin system
+└── voice/                @duya/voice - Voice component
+
+apps/
+└── desktop/              @duya/desktop - Electron app (main/preload/renderer)
 ```
+
+`agent-protocol`, `agent-core`, and `agent-runtime` are the plan 587
+`managed: true` boundaries (`architecture-policy.yaml`) — zero tolerance, never
+baselined.
 
 ## Frontend Architecture
 
 ### Directory
 
 ```
-src/
+apps/desktop/src/renderer/
 ├── components/
 │   ├── chat/           # Chat UI (MessageList, Input, etc.)
 │   ├── layout/          # Panel, Sidebar, Header
