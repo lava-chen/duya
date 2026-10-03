@@ -16,8 +16,14 @@
 import { describe, expect, it } from 'vitest';
 import { stripComments } from './strip-comments.mjs';
 
-/** The same edge regex both audit scripts use. */
-const IMPORT_RE = /(?:from\s+|import\s*\(|require\s*\()\s*["']([^"']+)["']/g;
+/**
+ * The same edge regex both audit scripts use.
+ *
+ * CR and LF are excluded: a specifier is never multi-line, and letting the
+ * class match line endings let a match begin inside ordinary code and run to a
+ * quote many lines later. `strip-comments.test.ts` asserts that below.
+ */
+const IMPORT_RE = /(?:from\s+|import\s*\(|require\s*\()\s*["']([^"'\r\n]+)["']/g;
 
 function liveSpecs(src: string): string[] {
   const { text, unterminated } = stripComments(src);
@@ -103,5 +109,52 @@ describe('strip-comments: diagnostics and offsets', () => {
 
   it('ends a block comment at the first */', () => {
     expect(liveSpecs("/* a */ import y from './r.js';")).toEqual(['./r.js']);
+  });
+});
+
+describe('strip-comments: an import specifier is never multi-line', () => {
+  /**
+   * The real shape, lifted from
+   * `apps/desktop/src/renderer/components/layout/panels/code-review-diff.ts`.
+   *
+   * The string literal `'rename from '` contains the sequence `from `, so the
+   * regex took that for its keyword and opened the capture on that string's
+   * closing quote. Because the specifier class was `[^"']` — which matches CR
+   * and LF — the capture then ran to the next quote anywhere in the file and
+   * swallowed two lines of ordinary source. `.length);\n    else if
+   * (line.startsWith(` was reported as an `UNRESOLVED:` module-dependency
+   * violation. And because the capture held the RAW line ending, that junk
+   * fingerprinted differently on a CRLF and an LF checkout: green on Windows,
+   * one new blocking violation on ubuntu. Same code, opposite verdict.
+   */
+  const QUOTE_THEN_QUOTE_LATER = [
+    "    else if (line.startsWith('rename from ')) current.oldPath = line.slice('rename from '.length);",
+    "    else if (line.startsWith('rename to ')) current.path = line.slice('rename to '.length);",
+  ].join('\n');
+
+  it('never captures a specifier that spans a line break', () => {
+    for (const src of [QUOTE_THEN_QUOTE_LATER, QUOTE_THEN_QUOTE_LATER.replace(/\n/g, '\r\n')]) {
+      for (const spec of liveSpecs(src)) {
+        expect(spec).not.toMatch(/[\r\n]/);
+      }
+    }
+  });
+
+  it('produces identical specifiers for CRLF and LF source', () => {
+    // The platform-independence half of the defect. Identical code must yield
+    // identical fingerprints, or one recorded baseline cannot be valid on
+    // every OS — which is what made the `architecture` CI job unstable.
+    const lf = `${QUOTE_THEN_QUOTE_LATER}\nimport y from './r.js';`;
+    const crlf = lf.replace(/\n/g, '\r\n');
+    expect(liveSpecs(crlf)).toEqual(liveSpecs(lf));
+  });
+
+  it('still reports the real import, so the junk fix did not blind the gate', () => {
+    // The under-count direction, and the reason this is not "just delete the
+    // bad match": a regex tightened to stop spanning lines must keep seeing
+    // the imports that are genuinely there.
+    const lf = `${QUOTE_THEN_QUOTE_LATER}\nimport y from './r.js';`;
+    expect(liveSpecs(lf)).toContain('./r.js');
+    expect(liveSpecs(lf.replace(/\n/g, '\r\n'))).toContain('./r.js');
   });
 });

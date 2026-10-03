@@ -7,7 +7,7 @@
       "cycle": 16,
       "deep-import": 25,
       "forbidden-dependency": 16,
-      "module-dependency": 548,
+      "module-dependency": 547,
       "module-dependency-permitted": 35,
       "package-boundary-escape": 162
     }
@@ -232,7 +232,6 @@
     "52005b01f98bb149",
     "52b0221c1c1327ff",
     "53be83995f2eab71",
-    "5404f9b06a31899c",
     "54de4a25aaf32456",
     "552263bd71e830bf",
     "55d1b42cfa2c17b0",

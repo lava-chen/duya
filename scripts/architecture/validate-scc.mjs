@@ -11,7 +11,10 @@ function walk(d, o = []) {
   }
   return o;
 }
-const re = /(?:from\s+|import\s*\(|require\s*\()\s*["']([^"']+)["']/g;
+// CR/LF excluded: a specifier is never multi-line, and allowing them let a
+// match start inside ordinary code and capture a slice of the file. Same regex
+// as the audit scripts — see scripts/architecture/audit-imports.mjs.
+const re = /(?:from\s+|import\s*\(|require\s*\()\s*["']([^"'\r\n]+)["']/g;
 function res(base) {
   const c = []; const e = path.extname(base);
   if (e === ".js") { const s = base.slice(0, -3); c.push(`${s}.ts`, `${s}.tsx`, `${s}.js`); }
