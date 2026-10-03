@@ -17,9 +17,10 @@
  * must carry the terminal state.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { RunTerminalState } from '@duya/agent-protocol';
 import { RunOrchestrator, createWorkerExecutionChannel } from '../agents/server/run-orchestrator';
+import { logger } from '../agents/server/logger';
 
 interface Call {
   action: string;
@@ -235,5 +236,166 @@ describe('RunOrchestrator', () => {
     // that wants the run layer to drive execution can, without the run layer
     // inventing a second source of run identity to do it with.
     expect(seen).toEqual([runId]);
+  });
+});
+
+/**
+ * Seam 4 — the adapter must not swallow a Control Plane ack.
+ *
+ * ## What is broken
+ *
+ * The persistence adapter awaits `dbRequest(...)` and discards the reply
+ * (`run-orchestrator.ts:120-125`). The Control Plane on the other side of that
+ * channel reports honestly and distinguishes three outcomes that mean very
+ * different things:
+ *
+ *   - `{ ok: false, error }`      — the write did not happen
+ *   - `{ ok: true, applied: false }` — a LOST CAS: another writer already
+ *                                    decided this run's history
+ *   - a thrown error              — the channel itself failed
+ *
+ * The adapter treats all three as success, so the runtime believes a run is
+ * durably recorded when nothing was written. Contract §C: a DB failure must
+ * return an explicit failure / degraded receipt, and must never be dressed up
+ * as `completed`; a CAS that was not applied must be reconciled against the
+ * existing terminal rather than silently assumed to be this call's success.
+ *
+ * ## What these tests can and cannot prove
+ *
+ * The orchestrator exposes no receipt surface for an append or a terminal
+ * write — `settleSession` returns `void` and swallows settle errors into a log
+ * line. So the only thing observable from outside is whether the failure was
+ * REPORTED. That is asserted here. It is the narrowest honest evidence
+ * available without changing production signatures, and it is deliberately
+ * tolerant of the mechanism the fix chooses (warn, error, or a thrown error
+ * that `settleSession` logs) — what it forbids is silence.
+ */
+describe('RunOrchestrator — Control Plane acks are not swallowed', () => {
+  /**
+   * Collect every diagnostic the orchestrator emits, and keep the spies out of
+   * the way of stdout. `warn` and `error` are pooled because the right level
+   * for a degraded transcript and the right level for a lost CAS are not the
+   * same question, and this test does not want to answer it.
+   */
+  function captureReports(): { reports: string[]; restore: () => void } {
+    const reports: string[] = [];
+    const warn = vi.spyOn(logger, 'warn').mockImplementation((msg: string) => {
+      reports.push(`warn:${msg}`);
+    });
+    const error = vi.spyOn(logger, 'error').mockImplementation((msg: string) => {
+      reports.push(`error:${msg}`);
+    });
+    return { reports, restore: () => { warn.mockRestore(); error.mockRestore(); } };
+  }
+
+  /** `run:create` succeeds so the run opens; every other action is stubbed. */
+  function stubFor(action: string, reply: unknown) {
+    return async (requested: string, payload: Record<string, unknown>): Promise<unknown> => {
+      if (requested === 'run:create') return { ok: true, runId: payload.runId };
+      if (requested === action) return reply;
+      return { ok: true, applied: true };
+    };
+  }
+
+  it('reports a durable append the Control Plane refused', async () => {
+    // `appendRunEvents` never throws: it catches and returns
+    // `{ ok: false, written: 0, error }` (`run-control-plane.ts:113-116`). So a
+    // lost event batch cannot reach the runtime as a rejection — the ONLY way
+    // it can become visible is if the adapter reads the reply it currently
+    // throws away.
+    const { reports, restore } = captureReports();
+    try {
+      const { orchestrator } = makeOrchestrator(
+        stubFor('run:append', { ok: false, written: 0, error: 'SQLITE_BUSY: database is locked' }),
+      );
+      await orchestrator.openRun('session-1', intent);
+
+      orchestrator.observe('session-1', { type: 'turn_start', data: { turnCount: 1 } });
+      orchestrator.observe('session-1', { type: 'done', data: {} });
+
+      await vi.waitFor(() => {
+        expect(reports).not.toHaveLength(0);
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it('reports a terminal write the Control Plane refused', async () => {
+    // `completeRun` returns `{ ok: false, error }` on a DB failure
+    // (`run-control-plane.ts:145-148`). Without a reported failure the run
+    // looks settled in the host while its `runs` row is still `running`.
+    const { reports, restore } = captureReports();
+    try {
+      const { orchestrator } = makeOrchestrator(
+        stubFor('run:complete', { ok: false, error: 'SQLITE_BUSY: database is locked' }),
+      );
+      await orchestrator.openRun('session-1', intent);
+
+      orchestrator.observe('session-1', { type: 'turn_start', data: { turnCount: 1 } });
+      orchestrator.observe('session-1', { type: 'done', data: {} });
+
+      await vi.waitFor(() => {
+        expect(reports).not.toHaveLength(0);
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it('reports a lost terminal CAS instead of assuming this call won it', async () => {
+    // `{ ok: true, applied: false }` is the honest shape of a lost CAS: the
+    // write did not fail, it simply did not land, because another writer
+    // already decided this run's history (`run-store.ts:249`). The adapter
+    // currently reads that reply and reports nothing, so the runtime believes
+    // its terminal is the durable one when it is not.
+    const { reports, restore } = captureReports();
+    try {
+      const { orchestrator } = makeOrchestrator(stubFor('run:complete', { ok: true, applied: false }));
+      await orchestrator.openRun('session-1', intent);
+
+      orchestrator.observe('session-1', { type: 'turn_start', data: { turnCount: 1 } });
+      orchestrator.observe('session-1', { type: 'done', data: {} });
+
+      await vi.waitFor(() => {
+        expect(reports).not.toHaveLength(0);
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it('surfaces a channel that throws mid-append rather than losing the batch', async () => {
+    // A throw is the one failure mode the adapter already propagates: the
+    // rejection escapes `append`, unwinds the settle, and the orchestrator logs
+    // it. This test is a guard rather than a regression — it pins the behaviour
+    // that makes the three cases above unambiguously defects: silence, not
+    // propagation, is what a lost ack looks like today.
+    const { reports, restore } = captureReports();
+    try {
+      const { orchestrator } = makeOrchestrator(async (action, payload) => {
+        if (action === 'run:create') return { ok: true, runId: payload.runId };
+        if (action === 'run:append') {
+          const events = payload.events as Array<{ payload: { type: string } }>;
+          // `run.started` must land for `openRun` to resolve, so only the
+          // terminal batch is allowed to fail.
+          if (events.some((e) => e.payload.type === 'run.completed')) {
+            throw new Error('db:request channel closed mid-append');
+          }
+          return { ok: true, written: events.length };
+        }
+        return { ok: true, applied: true };
+      });
+      await orchestrator.openRun('session-1', intent);
+
+      orchestrator.observe('session-1', { type: 'turn_start', data: { turnCount: 1 } });
+      orchestrator.observe('session-1', { type: 'done', data: {} });
+
+      await vi.waitFor(() => {
+        expect(reports).not.toHaveLength(0);
+      });
+    } finally {
+      restore();
+    }
   });
 });

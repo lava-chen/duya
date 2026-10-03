@@ -90,6 +90,12 @@ export interface ObservedFrame {
 export class RunOrchestrator {
   readonly #options: RunOrchestratorOptions;
   readonly #controller: RunController;
+  /**
+   * One `db:request` durability call, with the failure reported where it is
+   * seen. A reply this adapter cannot read and a channel that throws are both
+   * diagnostics only the adapter can attach a run id to.
+   */
+  readonly #request: DbRequest;
   /** sessionId -> the run currently executing for it. One live run per
    *  session, which the router's own STREAMING 409 already guarantees. */
   readonly #bySession = new Map<string, string>();
@@ -104,6 +110,23 @@ export class RunOrchestrator {
 
   constructor(options: RunOrchestratorOptions) {
     this.#options = options;
+    this.#request = options.dbRequest;
+    // A durable call whose CHANNEL throws is reported here and re-thrown, so a
+    // failure that cannot produce a reply is as visible as one that can. The
+    // runtime turns a rejected append into a `persistence_failed` terminal
+    // rather than an exception, so the settle path is no longer a reliable
+    // place to notice it.
+    const request = async (action: string, runId: string, payload: Record<string, unknown>): Promise<unknown> => {
+      try {
+        return await this.#request(action, payload);
+      } catch (error) {
+        logger.warn(`${action} channel failed — the durable transcript is degraded`, {
+          runId,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    };
     this.#controller = new RunController({
       channel: options.channel,
       identity: { name: 'duya-agent-server', version: RUNTIME_VERSION },
@@ -118,10 +141,35 @@ export class RunOrchestrator {
         const runId = manifest.runId;
         return {
           append: async (envelopes) => {
-            await this.#options.dbRequest('run:append', { runId, events: envelopes });
+            // Both Control Plane failure shapes are reported HERE rather than
+            // left to the settle path, because a run that loses a batch
+            // mid-stream and is then hard-killed never reaches a settle that
+            // could report it. A thrown channel is re-thrown so the caller still
+            // learns the batch is gone.
+            const reply = await request('run:append', runId, { runId, events: envelopes });
+            // The Control Plane never throws for a failed write — it answers
+            // `{ ok: false, written: 0, error }` and moves on, because losing
+            // one batch of a user's transcript is a degradation. That answer is
+            // only useful if somebody reads it, and discarding it is what turned
+            // a refused write into a silent one.
+            const failure = readAck(reply, 'run:append');
+            if (failure !== null) {
+              reportAckLoss('run:append', runId, failure);
+              throw new Error(`run:append was not acknowledged: ${failure.reason}`);
+            }
           },
           complete: async (terminal, metrics) => {
-            await this.#options.dbRequest('run:complete', { runId, terminal, metrics });
+            const reply = await request('run:complete', runId, { runId, terminal, metrics });
+            // `{ ok: true, applied: false }` is the honest shape of a LOST CAS:
+            // the write did not fail, it did not land, because another writer
+            // already decided this run's history. Treating it as this call's
+            // success leaves the runtime believing its terminal is the durable
+            // one when it is not.
+            const failure = readAck(reply, 'run:complete');
+            if (failure !== null) {
+              reportAckLoss('run:complete', runId, failure);
+              throw new Error(`run:complete was not acknowledged: ${failure.reason}`);
+            }
           },
         };
       },
@@ -277,6 +325,57 @@ export class RunOrchestrator {
       model: resolved ?? { model: 'unknown', providerId: 'unknown', apiFormat: 'anthropic' },
     };
   }
+}
+
+/** Why a durability reply is not a success, or `null` when it is one. */
+interface AckFailure {
+  /** True for a write that did not fail but did not land — a lost CAS. */
+  readonly lostCas: boolean;
+  readonly reason: string;
+}
+
+/**
+ * Read one Control Plane durability reply.
+ *
+ * Three outcomes mean very different things: a success, a refusal
+ * (`{ ok: false, error }`), and a success that did not apply
+ * (`{ ok: true, applied: false }`). Only the first is a durable write, and a
+ * reply this adapter cannot read is a refusal rather than an optimistic default:
+ * an unrecognised shape is not evidence that anything was written.
+ */
+function readAck(reply: unknown, action: string): AckFailure | null {
+  if (typeof reply !== 'object' || reply === null) {
+    return { lostCas: false, reason: `unrecognised ${action} reply` };
+  }
+  const record = reply as { ok?: unknown; error?: unknown; applied?: unknown };
+  if (record.ok !== true) {
+    const reason =
+      typeof record.error === 'string' ? record.error : `${action} reported ok=${String(record.ok)}`;
+    return { lostCas: false, reason };
+  }
+  // `run:append` has no CAS and reports `written` rather than `applied`; only
+  // `run:complete` is a one-shot write that can be won or lost.
+  if (action === 'run:complete' && record.applied !== true) {
+    return { lostCas: true, reason: 'another writer already settled this run' };
+  }
+  return null;
+}
+
+/**
+ * Log a durability reply that was not a success.
+ *
+ * Warned here rather than left to the settle path, because this is the only
+ * place that still knows which action and which run id were refused — and a run
+ * that loses a batch mid-stream and is then hard-killed never reaches a settle
+ * that could report it.
+ */
+function reportAckLoss(action: string, runId: string, failure: AckFailure): void {
+  logger.warn(
+    failure.lostCas
+      ? `${action} CAS lost — the durable terminal is another writer's, not this one`
+      : `${action} refused — the durable transcript is degraded`,
+    { runId, reason: failure.reason },
+  );
 }
 
 /**

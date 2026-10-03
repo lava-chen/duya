@@ -35,7 +35,7 @@ import { isEventType } from '../events/registry.js';
 import type { ErrorCode, ErrorCauseSystem } from '../errors.js';
 import { isKnownCode } from '../errors.js';
 import type { ToolCallOutcome } from '../events/payloads.js';
-import { RunLedger, type RunLedgerOptions } from './run-ledger.js';
+import { RunLedger, type RunLedgerOptions } from '../run-ledger.js';
 
 /** The raw shape the worker prints. Deliberately loose: it is untrusted input. */
 export type RawWorkerEvent = Readonly<Record<string, unknown>>;

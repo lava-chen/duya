@@ -1,5 +1,5 @@
 /**
- * A reference run ledger — the state machine a host uses to rebuild a run.
+ * The run ledger — the state machine a host uses to rebuild a run.
  *
  * ## Why this is shipped and not buried in a test
  *
@@ -15,6 +15,17 @@
  * ledger calls a violation, because the ledger IS the specification of
  * "permitted".
  *
+ * ## Why it lives at the package root
+ *
+ * It used to sit under `testing/`, which was a lie with a comment defending it:
+ * `RunController` and `RunSession` — production — imported it from a subpath
+ * whose own header said those exports are "deliberately NOT re-exported here, so
+ * [they] cannot become a permanent part of the surface". A state machine the
+ * production runtime executes is part of the surface whether or not the import
+ * says so, and contract §H forbids importing a production ledger from
+ * `/testing`. It is now re-exported from the root AND from `/testing`, so
+ * existing consumers keep working while the production import is honest.
+ *
  * ## Scope
  *
  * Run-scoped. `seq` is unique within a run, so every piece of state here dies
@@ -23,10 +34,10 @@
  * different lifetime — see `RunEventEnvelope.seq`.
  */
 
-import type { RunEvent, EventType } from '../events/registry.js';
-import type { RunEventEnvelope } from '../envelope.js';
-import { eventKey, SEQ_CONTRACT } from '../envelope.js';
-import { TOOL_LIFECYCLE_EVENTS } from '../resume.js';
+import type { RunEvent, EventType } from './events/registry.js';
+import type { RunEventEnvelope } from './envelope.js';
+import { eventKey, SEQ_CONTRACT } from './envelope.js';
+import { TOOL_LIFECYCLE_EVENTS } from './resume.js';
 
 /** Why a stream is not a legal run. Machine-readable; tests branch on it. */
 export type LifecycleViolationCode =
