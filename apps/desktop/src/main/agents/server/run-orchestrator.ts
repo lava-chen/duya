@@ -52,7 +52,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { manifestFingerprint, type RunResult, type RunTerminalState } from '@duya/agent-protocol';
+import { manifestFingerprint, type RunManifest, type RunResult, type RunTerminalState } from '@duya/agent-protocol';
 import {
   ExecutionDispatchError,
   RunController,
@@ -850,6 +850,21 @@ export interface ChatStartCommand {
   readonly runId: string;
   /** Reference to the frozen manifest: its sha256 fingerprint. */
   readonly manifestHash: string;
+  /**
+   * The frozen manifest itself (plan 587 R2.2).
+   *
+   * R2.1 carried only the HASH, and the worker logged it — a digest nobody
+   * compares. Verifying it requires the thing it is a digest OF, so the
+   * manifest now crosses the boundary and the worker recomputes the hash over
+   * what it actually received.
+   *
+   * It is the PUBLIC manifest: `RunManifest.env` is a reference, drift test #12
+   * walks every field for credential-shaped keys, and no secret is added here.
+   * That said, the credential for this turn DOES reach the worker by another
+   * route — the `init` command's `providerConfig.apiKey` — and this is not the
+   * place that fixes it. See `manifest-factory` header note 2 and T3.
+   */
+  readonly manifest: RunManifest;
   /** Digest of this turn's prompt and options. */
   readonly inputRevision: string;
   readonly prompt: string;
@@ -920,6 +935,9 @@ export function createWorkerExecutionChannel(binding: WorkerExecutionBinding): E
         id: randomUUID(),
         runId: manifest.runId,
         manifestHash: manifestFingerprint(manifest),
+        // Carried so the worker can recompute the hash above over what it
+        // actually received, rather than taking the Control Plane's word.
+        manifest,
         inputRevision: input.revision,
         prompt: input.prompt,
         options: input.options,

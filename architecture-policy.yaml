@@ -163,7 +163,16 @@ modules:
   - id: legacy-agent
     roots: [packages/agent]
     managed: false
-    requires: []
+    # Plan 587 R2.2: `agent-protocol` is added, and it is the FIRST declared
+    # dependency this module has. The worker now VERIFIES the manifest binding
+    # it is handed — `verifyRunManifestBinding` recomputes the manifest
+    # fingerprint and the input digest over what actually arrived — and those
+    # two hashes live in the protocol package. A worker that could not reach
+    # them would have to reimplement canonical JSON and sha256, and a second
+    # implementation of the digest is a second source of truth for exactly the
+    # value whose whole purpose is to be checked. So the edge is declared
+    # rather than avoided.
+    requires: [agent-protocol]
     owner: agent
     migrateTo: agent-core
 
@@ -459,7 +468,27 @@ selfTest:
   # `agent-runtime` files alone and re-measuring 38, not by inspection.
   # `module-dependency` is still 547, which is the load-bearing half: no edge
   # became non-permitted, so no managed module's zero tolerance is affected.
-  module-dependency-permitted: 40
+  #
+  # 40 -> 44 (plan 587 R2.2): FOUR new, all permitted, all attributable. The
+  # worker now VERIFIES the manifest binding it is handed
+  # (`packages/agent/src/process/run-manifest-verification.ts`), and verifying a
+  # sha256 fingerprint and an input digest requires the protocol package that
+  # defines both. `legacy-agent.requires` gains `agent-protocol` for it — this
+  # module's FIRST declared dependency, and the reason the edges are permitted
+  # rather than merely tolerated. Without that verification `manifestHash` and
+  # `inputRevision` were digests nobody compared: a comment with hex in it.
+  #
+  # Attributed BY MEASUREMENT, not inspection. Reverting only the three
+  # `packages/agent` files' protocol imports (the two sources and the new test)
+  # and re-running the checker measured 41, not 40 — so those three account for
+  # three edges, and the fourth is the new `desktop-host` test file
+  # `apps/desktop/src/main/__tests__/run-manifest-config.test.ts` importing
+  # `RunManifest` / `manifestFingerprint`: the same shape R2.1 recorded for its
+  # own new fixture. `module-dependency` measured 547 both with and without the
+  # change, which is the load-bearing half — declaring the edge moved a
+  # BLOCKING violation into a COUNTED one, so no managed module's zero tolerance
+  # is affected. No other row in this table moved, and `--write` was not run.
+  module-dependency-permitted: 44
   forbidden-dependency: 16
   # 161 -> 162: one more relative-path escape into packages/agent, from the
   # plan-583 stack. Now 126 agent / 16 plugin-core / 13 gateway / 7 conductor.
