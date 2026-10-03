@@ -8,8 +8,13 @@ import type { MCPIssue } from './errors';
 import type { MCPSettingsSubOrigin, MCPSource, MCPSourceContext } from './sources';
 
 // Source provenance now lives in ./sources so ./errors does not have to
-// import from here. Re-exported so existing `from './discovery'` sites keep
-// resolving — see ./sources for why the cycle had to go.
+// import from here. Re-exported so existing import sites keep resolving —
+// see ./sources for why the cycle had to go.
+//
+// Do not quote a specifier preceded by `from`/`import`/`require` in these
+// comments. `02-cycle-budget.test.ts` walks raw file text, so a commented-out
+// import is indistinguishable from a live edge and would resurrect the very
+// cycle this re-export was written to break.
 export type { MCPSettingsSubOrigin, MCPSource, MCPSourceContext };
 
 /**

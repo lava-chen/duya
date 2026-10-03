@@ -6,7 +6,11 @@
 // (discovery -> errors -> discovery). Both edges were `import type`, so no
 // cycle existed at runtime, but the architecture checker counts file edges
 // and a `managed: true` module may not carry one. ./discovery re-exports all
-// three, so every existing `from './discovery'` import site is unchanged.
+// three, so every existing import site is unchanged.
+//
+// The specifier is deliberately written without a `from '...'` form: the
+// cycle-budget test walks raw text and cannot tell a quoted specifier in a
+// comment from a live import, which would report this cycle as still open.
 
 /**
  * Where an MCP server config originated. The engine treats all three as
