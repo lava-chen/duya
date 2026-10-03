@@ -99,6 +99,33 @@ M7 搬迁把这件事从"没有配置文件"变成"有分层配置但故意不�
 
 ---
 
+## TD-6 · 注释里的可解析 specifier：治理测试的已知盲点，44 个文件待清理 ✅ 当前环已修
+
+| 字段 | 内容 |
+|---|---|
+| **状态** | ⚠️ **部分修复** — 唯一成环的 2 处已修（`02-cycle-budget.test.ts` 转绿）；43 个文件、52 处潜伏项**未动** |
+| **实测（修前）** | `02-cycle-budget.test.ts` 的 walker 数出 **17**，`audit-modules.mjs` 数出 **16** → 交叉校验失败。差异来自 `mcp/{discovery,errors,sources}.ts` 两处**注释里的 `from './discovery'`** |
+| **讽刺之处** | 那条环 plan 584 / 06-M1 已经解除了，**留下的正是解释"为什么必须解除"的那两段注释**。模块是 `managed: true`，真环已闭，保护它的闸门却在为自身修复的文档报错 |
+| **全仓扫描** | `packages/**` + `apps/**` 共 **44 个文件 / 54 处**"raw 文本里有、剥注释后没有"的 specifier。但**分层看**：绝大多数是散文误匹配（`"it broke"` / `"bad payload"` / `"it had already ended"`，来自 `transitioned from "..."` 这类句式），解析不到真实文件，因此无害；**真正危险的是"相对路径 + 能解析到真实文件"**，当前约 7 处（`plugin-core/src/index.ts` 5 处 bare、`plugin-core/src/mcp/index.ts` 2 处、`agent/src/agentsmd/index.ts`、`agent/src/tool/bot-builtin.ts`、`main/automation/agent-run.ts`、`main/plugins/catalog.ts`） |
+| **解锁条件（两条）** | ① **近路**：清掉那 7 处相对路径写法（与已修的 2 处同类）。② **正路（推荐）**：给 `02-cycle-budget.test.ts` 的 walker 接上 `scripts/architecture/strip-comments.mjs`，让两个 walker **构造上**一致，散文从此无法移动计数 |
+
+> **为什么 ② 才是正解**：测试自己的注释承认了盲点，理由是
+> "importing it would create a `pkg:agent-protocol -> scripts/...` dependency，
+> 而这个模块的全部主张就是零条这样的依赖"。**这个理由站不住** ——
+> `strip-comments.mjs` 是无依赖的开发期纯模块，不进产物包；
+> `forbiddenDependencies` 里也没有 `packages/** → scripts/**` 这一条。
+> 现在的代价是：任何人写一段解释性的注释就能让治理测试变红，而且**红的原因与代码无关**。
+>
+> **但 ② 属于改动治理测试自身的设计，不应与清理混在一起做** ——
+> 先落 ① 让闸门绿，再单开一个 PR 做 ②。
+>
+> **通用教训**：任何正则扫源码的工具，注释都是噪声源。
+> `strip-comments.mjs` 的文件头已经写明这个洞真实发生过两次，
+> 第三次发生在测试自己的 walker 上 —— **它当时被判定为"可接受的已知代价"，
+> 而这个判定没有再被复核。**
+
+---
+
 ## TD-5 · `02-cycle-budget.test.ts` 有与整份审计相同的解析器盲点
 
 | 字段 | 内容 |
