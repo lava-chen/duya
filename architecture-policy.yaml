@@ -617,7 +617,24 @@ selfTest:
   # managed module's zero tolerance is affected. `module-dependency-permitted` is
   # in MEASUREMENT_RULES -- it never blocks and never consults the baseline.
   # `--write` was not run, and the baseline section is byte-identical.
-  module-dependency-permitted: 61
+  # 61 -> 78 (plan 587 T3.3): SEVENTEEN new, all one direction, 0 removed.
+  #
+  # Every one is `pkg:agent-runtime -> pkg:agent-protocol` (10 from the four new
+  # `src/replay/*.ts` files, one of them via the `/transcript` subpath; 7 more
+  # from the new test files' own imports). The two `index.ts` edits add only
+  # RELATIVE re-exports, so they contribute no cross-boundary edge themselves.
+  #
+  # `module-dependency` is UNCHANGED at 559, and that is the load-bearing half:
+  # no edge became a NON-permitted dependency, so no managed module's zero
+  # tolerance is affected. Only the permitted counter moved.
+  #
+  # Attributed BY MEASUREMENT: two `audit-imports.mjs --json` runs on this
+  # branch, edge set against edge set, plus a third with the four source files
+  # reverted alone (which measures 11 fewer, and turns every re-export
+  # unresolved — so it is a valid attribution and an invalid total). The full
+  # attribution, the reason the direction is the correct one, and the note that
+  # `agent-protocol` stays a leaf are in the T3.3 block at the end of this file.
+  module-dependency-permitted: 78
   forbidden-dependency: 16
   # 161 -> 162: one more relative-path escape into packages/agent, from the
   # plan-583 stack. Now 126 agent / 16 plugin-core / 13 gateway / 7 conductor.
@@ -686,3 +703,58 @@ selfTest:
 # `--write` was not run; the baseline section is byte-identical, and
 # `tolerated (baselined) 817 -> 829` is the expected consequence of raising this
 # expectation by exactly the measured 12.
+#
+# Re-measured 2026-10-03 (plan 587 T3.3, branch 587/t3-3-seq-cursor on top of
+# master @ 3b121ba2): 17 new, all one direction, 0 removed
+#
+#   module-dependency               559 -> 559   UNCHANGED, and that is the
+#                                                load-bearing half.
+#   module-dependency-permitted      61 -> 78   +17, every one of them the edge
+#                                                `pkg:agent-runtime ->
+#                                                 pkg:agent-protocol`.
+#   tolerated (baselined)           839 -> 856   +17, the same 17.
+#   baseline size                   811 -> 811   untouched; `--write` was NOT run.
+#
+# ATTRIBUTED BY MEASUREMENT, not inferred. Both ends of the delta were run on
+# this branch: first at `3b121ba2` with no replay code present, then with it.
+#
+#   scripts/architecture/audit-imports.mjs --json, edge sets diffed:
+#
+#     + 11 edges from the four new source files, all
+#       `pkg:agent-runtime -> pkg:agent-protocol`:
+#         src/replay/replay-repository.ts     3
+#         src/replay/transcript-snapshot.ts   4  (one via the `/transcript` subpath)
+#         src/replay/replay-subscription.ts   2
+#         src/replay/replay-guards.ts         2
+#     +  7 edges from the new test files' own imports, same direction
+#       (replay-window 2, replay-guards 2, replay-subscription 1, and the
+#       relative-import tests, which are not cross-boundary at all)
+#
+# The two `index.ts` edits add RELATIVE re-exports (`./replay.js`,
+# `./replay/replay-repository.js`), so they contribute no cross-boundary edge of
+# their own.
+#
+# Reverting the four source files ALONE (tests and index edits kept) and
+# re-running the audit returns 11 fewer edges — but it also turns every
+# re-export above into an UNRESOLVED spec, which the audit then counts
+# separately: that run reports 643 edges, i.e. 17 MORE than the intact tree. So
+# the revert run is a valid attribution of the 11 source edges and an INVALID
+# total. The intact-tree number is the one to compare, and it is what is
+# recorded here. (Reverting source alone also turns the checker red on
+# `module-dependency` 559 -> 576, because those 17 re-exports stop resolving —
+# which is itself the clearest statement that the new index.ts exports are load
+# bearing rather than decorative.)
+#
+# WHY THE DIRECTION IS THE RIGHT SHAPE. `agent-runtime` is layer `runtime` and
+# `agent-protocol` is layer `protocol` in the `layers:` list above, so these
+# edges point DOWNWARD, and `pkg:agent-runtime` already declares
+# `agent-protocol` in its `requires` list — which is exactly why they land in
+# `module-dependency-permitted` (counted, never blocking) instead of
+# `module-dependency` (blocking). T3.3 needed nothing from the protocol that
+# was not already its vocabulary: a run's `seq`, its `RunEventEnvelope`, its
+# `RunId`, and the transcript types T3.1 moved. The replay contract itself
+# (`ReplayCursor`, `ReplayWindow`) was added to the protocol package as a new
+# leaf module with no dependency of its own, because a cursor is wire data.
+#
+# `@duya/agent-protocol` stays a true leaf: `forbidden-dependency` is unchanged
+# at 16 and no edge has `packages/agent-protocol/src/replay.ts` as its source.

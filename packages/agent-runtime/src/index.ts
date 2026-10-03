@@ -70,6 +70,36 @@ export type {
 export { CONTROL_PLANE_CENSUS, censusGaps, NOT_YET } from './control-plane-census.js';
 export type { CensusAuthority, CensusPlane, CensusRow } from './control-plane-census.js';
 
+// Plan 587 T3.3 — the scoped cursor, the window it is checked against, and the
+// live/replay handoff. The replay path is read-only by construction: it holds a
+// `RunEventReader` and a live tap, and no ledger, so it cannot mint a seq,
+// append, or start an executor.
+export { resolveReplay, InMemoryRunEventStore } from './replay/replay-repository.js';
+export type {
+  AppendReceipt,
+  ReplayOutcome,
+  RunEventIdentityConflict,
+  RunEventReader,
+} from './replay/replay-repository.js';
+
+export { openReplaySubscription } from './replay/replay-subscription.js';
+export type {
+  OpenSubscriptionInput,
+  RunEventSubscription,
+  RunEventSubscriptionReceipt,
+  RunEventTap,
+} from './replay/replay-subscription.js';
+
+export { buildTranscriptSnapshot, openBlock } from './replay/transcript-snapshot.js';
+export type {
+  RecoveredBlock,
+  TranscriptRebuildReport,
+  TranscriptSnapshot,
+} from './replay/transcript-snapshot.js';
+
+export { handleReplayOutcome } from './replay/replay-guards.js';
+export type { ReplayOutcomeStatus } from './replay/replay-guards.js';
+
 export {
   translateFrame,
   classifyToolOutcome,
