@@ -99,6 +99,29 @@ M7 搬迁把这件事从"没有配置文件"变成"有分层配置但故意不�
 
 ---
 
+## TD-7 · `typecheck:all` 依赖构建产物，干净检出必红 ✅ 已修
+
+| 字段 | 内容 |
+|---|---|
+| **状态** | ✅ **已修**（`package.json` 的 `typecheck:all` 加 `build:protocol` / `build:core`；三个 agent 包的 `clean` 同时删 `tsconfig.tsbuildinfo`） |
+| **实测（修前）** | **CI 连续 6 次全红**，全部挂在 `Run typecheck` 一步（`packages/agent-core` 8 个 `TS2307: Cannot find module '@duya/agent-protocol'`）。本地 `typecheck:all` 却是 **exit 0** |
+| **根因** | `@duya/agent-protocol` 的 `types` 与 `exports` 都指向 `./dist/*`，而 `typecheck:protocol` 是 `tsc --noEmit` —— **只检查、不产出**。`typecheck:all` 的顺序是 `typecheck:protocol` → `typecheck:core`，中间没有任何 build。`typecheck:web` 有 `npm run build:agent &&` 前置，core/runtime 没有 |
+| **为什么本地是绿的** | **`packages/agent-protocol/dist/` 是历史 `build:agent` 的残留。** 换句话说，本地那个 exit 0 **不是证据**，是缓存的产物。CI 每次都是干净检出，所以每次都红 |
+| **第二个 bug（同时暴露）** | `tsc -b` 是增量的。`clean` 只删 `dist`、不删 `tsconfig.tsbuildinfo` ⇒ **删掉 dist 后的下一次 build 是静默 no-op**，包最终没有 dist 也没有任何报错。本次实测：删掉 protocol 的 dist 后 `npm run build:protocol` **没有重建**，因为 tsbuildinfo 还声称"已构建" |
+| **修法** | ① `typecheck:all` 改为 `build:protocol` → `typecheck:protocol` → `typecheck:core` → `build:core` → `typecheck:runtime` → …（沿用 `typecheck:web` 已有的"先 build 依赖再检查"模式）；② 三个包的 `clean` 同时删 `dist` 与 `tsconfig.tsbuildinfo` |
+| **验证** | 清空**全部** workspace 的 `dist` + `tsbuildinfo`（模拟干净检出）后 `typecheck:all` **exit 0**；`clean` → `build:protocol` 确实产出 `dist/index.d.ts` |
+
+> **与 TD-0 是同一个病**：缓存状态从未失效。
+> TD-0 是 baseline 用旧 resolver 录的，这个是 `tsconfig.tsbuildinfo` 在 `dist` 没了之后仍然声称已构建。
+> **两者的共同教训**：**任何"上次跑过就跳过"的机制，都必须在产物消失时失效** ——
+> 否则本地永远是绿的，而干净环境永远是红的，而差异要到 CI 才暴露。
+>
+> **给下一个人的硬规则**：**报告 typecheck 结果前，先确认它是"干净检出"跑出来的。**
+> 本次就是靠 `gh run list` 发现 CI 全红、再回头复现，才挖出这个洞 ——
+> 只看本地 exit 0 会得出完全相反的结论。
+
+---
+
 ## TD-6 · 注释里的可解析 specifier：治理测试的已知盲点，44 个文件待清理 ✅ 当前环已修
 
 | 字段 | 内容 |
