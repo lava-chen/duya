@@ -7,12 +7,17 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 ## Start
 
 - Repo: `https://github.com/lava-chen/duya`&#x20;
-- Before ANY work: read [docs/exec-plans/active/README.md](./docs/exec-plans/README.md) for current work status
+- Before ANY work: read [docs/exec-plans/README.md](./docs/exec-plans/README.md) for current work status.
+  Its **Verified baseline** section records which gates are green, which are red,
+  and the ordering constraints — read that section before picking up a plan.
 - Verify feature/plan is still active; read relevant active plan file for progress
 - Read [ARCHITECTURE.md](./ARCHITECTURE.md) before starting — contains database schema, data flows, module details
 - For multi-step tasks: use `/plan` mode before writing code
 - Replies: repo-root refs only: `apps/desktop/src/renderer/components/chat/MessageList.tsx:45`. No absolute paths, no `~/`.
 - Missing deps: `npm install`, retry once, then report first actionable error.
+- **Baseline is not all green**: `npm test` currently fails (see the exec-plans
+  baseline). Record the failure set before you start so you can tell your own
+  regressions from the pre-existing ones.
 
 ## Map
 
