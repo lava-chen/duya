@@ -28,6 +28,16 @@
  *
  * Usage: node scripts/ensure-sqlite-abi.mjs <node|electron>
  * Exit codes: 0 = ready, 1 = failed to prepare (diagnostics printed).
+ *
+ * Exit 1 covers two DISTINCT conditions, and they are reported distinctly
+ * because they call for different fixes:
+ *   - the binding does not load under the target and the swap could not
+ *     repair it (a real ABI mismatch), and
+ *   - the target runtime itself could not be obtained, so no probe was
+ *     possible (no Electron binary — see scripts/electron-binary.mjs).
+ * The second is NOT downgraded to a warning. A build that cannot verify its
+ * native binding is not a build that has verified it, and this script is the
+ * only thing standing between a wrong-ABI binary and a runtime crash.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -35,6 +45,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+
+import {
+  MISSING_PACKAGE,
+  resolveElectronBinary,
+} from './electron-binary.mjs';
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -63,24 +78,6 @@ function electronVersion() {
   } catch {
     return null;
   }
-}
-
-function electronBinary() {
-  const dir = pkgDir('electron');
-  if (!dir) return null;
-  const pathTxt = path.join(dir, 'path.txt');
-  if (!fs.existsSync(pathTxt)) return null;
-  const bin = path.join(dir, 'dist', fs.readFileSync(pathTxt, 'utf8').trim());
-  if (fs.existsSync(bin)) return bin;
-  // On Windows, electron ships as `electron.exe` but path.txt records the
-  // bare name "electron". fs.existsSync does not apply PATHEXT, so check
-  // the .exe variant explicitly. spawnSync on win32 also needs the .exe
-  // suffix; passing the un-suffixed path yields ENOENT.
-  if (process.platform === 'win32') {
-    const exeBin = `${bin}.exe`;
-    if (fs.existsSync(exeBin)) return exeBin;
-  }
-  return null;
 }
 
 /**
@@ -163,10 +160,29 @@ try {
   // No marker yet — verify.
 }
 
-const command = target === 'electron' ? electronBinary() : process.execPath;
+// Resolve the probe command. The electron target goes through the resolver in
+// scripts/electron-binary.mjs rather than reading `dist/` + `path.txt` here:
+// electron@44.2.0 ships no install script, so on a clean checkout neither
+// exists until something requires the package, and a check that only reads
+// those two files can never succeed.
+const resolved = target === 'electron' ? resolveElectronBinary({ packageDir: pkgDir('electron'), requireFn: require }) : null;
+const command = resolved ? resolved.binary : process.execPath;
 const env = target === 'electron' ? { ...process.env, ELECTRON_RUN_AS_NODE: '1' } : process.env;
 if (!command) {
-  console.error('[abi] electron binary not found; cannot verify the electron target.');
+  // An absent binary is NOT an ABI mismatch, and collapsing the two into one
+  // message is what made this failure undiagnosable in CI. Name the cause
+  // that was actually observed. This still exits non-zero: an unverifiable
+  // target is not a verified one, and a green build must never mean "we could
+  // not check".
+  if (resolved.reason === MISSING_PACKAGE) {
+    console.error(`[abi] cannot verify the electron target: ${resolved.detail}`);
+  } else {
+    console.error(
+      `[abi] cannot verify the electron target: no Electron binary (${resolved.detail}).\n` +
+        '      electron ships no install script, so its binary is downloaded on first use —\n' +
+        '      run `npx install-electron` to materialise it, then retry.',
+    );
+  }
   process.exit(1);
 }
 
