@@ -1,18 +1,37 @@
 # R2 — 单一 Run 入口接管真实 worker
 
-前置：R1。Next：R2.1。接入旧DuyaAgent，不重写模型循环。runtime主控制、host负责执行transport。
+前置：R1。Next：R2.2。接入旧DuyaAgent，不重写模型循环。runtime主控制、host负责执行transport。
+
+> **R2.1 已完成**（PR #150）。R2.2 开工中；R2.3（cancel与预算）、R2.4（审批真实回传）仍开放。
+> 入口普查已完成并作为 R2.1 第一项交付物记录在 `run-orchestrator.ts:679-763`（`NON_DESKTOP_CONSUMERS` / `RUN_ENTRY_DIVERGENCES`），且有测试断言**每条登记路径在磁盘上真实存在**——首版三处路径写错，是该测试抓出来的。
+> **与计划描述不符之处**：`packages/cli` 当前**根本不启动 agent run**，全是 HTTP CRUD；真正在跑的是 `packages/agent/src/cli/index.ts` 直接构造 `DuyaAgent`。计划把 CLI 列为 consumer 与代码不符，已按实际登记给 H8，未臆造工作。
 
 ## 文件与入口
 
 Desktop `agents/server/{router,index,run-orchestrator}.ts`、worker-manager/process-pool、`control-plane/manifest-factory.ts`；legacy `packages/agent/src/process/{worker-protocol,agent-process-entry}.ts`及真实当前命名；runtimeexecutionchannel/controller。先CodeGraph定位实际文件/调用，旧历史行号不作精确定位。
 
+> 普查更正：旧历史文档里的 `electron/` 与根 `src/` 路径**在本分支不存在**，真实路径是 `apps/desktop/src/{main,preload,renderer}`。行号可用，路径不可用。
+
 ## R2.1 Adapter 与切换清单
 
-- [ ] 列出chatPOST/nonSSE、CLI、automation、workflowagent、subagent当前start/stop/permission路径。第一PR仅Desktopchat，其他consumer登记H8接管。
-- [ ] 实现ExecutionChannel.start(manifest,input,sink/control)到旧worker命令的adapter；router只调用一个入口，不再controllerstart+独立send。
-- [ ] 初始化可仍复用旧privateworkerconfig；每次chatstart携带canonicalrunId与manifestref/inputrevision，旧agent不再另造对应runId。
-- [ ] 消息SSEtee只observe一次；reconnectGET不重复observe/persist。非SSE路径有真实RunResult，不能绕新边界。
-- [ ] worker没ready/dispatch失败不留下运行中的假run；startack必须能判别已接受与未接受。
+- [x] 列出chatPOST/nonSSE、CLI、automation、workflowagent、subagent当前start/stop/permission路径。第一PR仅Desktopchat，其他consumer登记H8接管。
+  登记于 `run-orchestrator.ts:679-763`，测试 `run-entry-single-dispatch.test.ts:196-227` 断言每条路径存在。**CLI 实际不启动 run**（见上）。
+- [x] 实现ExecutionChannel.start(manifest,input,sink/control)到旧worker命令的adapter；router只调用一个入口，不再controllerstart+独立send。
+  `execution-channel.ts:96-128`、`controller.ts:389-425`、`router.ts:1217-1295`（独立的 `sendCommand` 已删）。测试断言**恰好一个** `chat:start`。
+- [x] 初始化可仍复用旧privateworkerconfig；每次chatstart携带canonicalrunId与manifestref/inputrevision，旧agent不再另造对应runId。
+  `run-orchestrator.ts:801-849`（`ChatStartCommand`）、`types.ts:299-312`、`DuyaAgent.ts:1761-1767` **穿线**用 `options.runId`（非别名），因此 mailbox 归属到的就是 Control Plane 记录终态时用的那个值。shim 退出条件：当 `NON_DESKTOP_CONSUMERS` 每行都提供 `runId`、`canonical: false` 不再出现时，`resolveTurnRunId` 的 fallback 可删。
+  run 身份五处铸造的处理：**统一** openRun 与 `DuyaAgent:1761`；**重分类** `router.ts:1250` 的 `id` 为 **turn id**（`ChatOptions.turnId`、journal、`message_index.turn_id`），按设计每轮铸造，与 run 身份是两个概念；**不动** `seqIndex = Date.now()`（UI 轮次）与 `m-${runId}`/`turn-N`（本就从规范 id 派生）。
+- [x] 消息SSEtee只observe一次；reconnectGET不重复observe/persist。非SSE路径有真实RunResult，不能绕新边界。
+  `router.ts:1745-1866`、`run-orchestrator.ts:405-419` `resultFor`。non-SSE 原本**完全不建 run**（`openRun` 被 `wantsSSE` 挡在 `:1234`，断连直接回 `status:'interrupted'` 却不停止 worker，注释还写成"有意为之"）。现在返回 `{ events, status:'interrupted', run }` 并 settle **`cancelled`**、worker 继续跑——因为原来的静默让 run 读作 `runtime_crash`，等于让运行时为这个 handler 做的事背锅。`events`/`status` 逐字节未变，只增加 `run`。不选择停 worker 是因为 §D 区分 disconnect 与 cancel 并要求保持 Desktop 既有 adapter 行为。
+  "只observe一次"实测**本就**结构成立（每请求一个 POST 分支，GET 重连视图从不 observe），因此用测试钉住而未改代码；单入口新依赖的"dispatch 与 session 绑定之间到达的帧"则通过 `onDispatchReady` 变成**结构性**保证，不靠微任务时序。
+- [x] worker没ready/dispatch失败不留下运行中的假run；startack必须能判别已接受与未接受。
+  `run-orchestrator.ts:288-403` `RunStartAcceptance`、`execution-channel.ts:130-141`。测试同时断言确实落了一条 `run:complete` 终态。
+
+**R2.1 的测试抓到自己代码里两个真 bug**：non-SSE handler 在 `chat:done` 上**先返回后 observe**，run 看不到终态、把正常完成的轮次判成 `runtime_crash`；`#pendingSessionByRun` 在 `run_not_created` 提前返回路径上泄漏（已改 `finally`）。
+
+**测试证明的边界**：adapter、次序、接受契约、non-SSE 边界均为**离线**证明（无 worker、无 provider key、无 Electron）。**不**证明真实 `DuyaAgent` 消费了规范 id——最后一跳在 `resolveTurnRunId` 接缝上覆盖，不是端到端。未声称任何宿主边界能力。
+
+**有意未做**：`handleDeleteChat` 仍然中断 worker 而不 settle run（R2.3）；worker **携带** `manifestHash`/`inputRevision` 但**不校验**（R2.2，代码里如实标注而非假装已强制）。
 
 ## R2.2 Manifest 实际生效
 
