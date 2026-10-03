@@ -161,9 +161,9 @@ M4    (conductor, 2 files) ──►  M3   cheapest win first; deletes a build h
 
 ***
 
-## Active Plans (39)
+## Active Plans (40)
 
-> ⚠️ **39 exceeds the cap this file sets for itself** ("Cap it; do not let it
+> ⚠️ **40 exceeds the cap this file sets for itself** ("Cap it; do not let it
 > grow back"). Triaging that list is a decision about what the project is
 > actually pursuing, so it has deliberately **not** been done here — flagging
 > it as the first thing a planning pass should settle. Until then, treat the
