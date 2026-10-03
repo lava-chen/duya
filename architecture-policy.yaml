@@ -668,7 +668,58 @@ selfTest:
   # source. T3.4 added nothing to the protocol package — the registry's
   # `durability` column is what the coalescing policy reads, so there is no
   # second durability table to drift.
-  module-dependency-permitted: 94
+  #
+  # ── Re-measured 2026-10-03 (plan 587 T3.5, branch 587/t3-5-transports on top of
+  # master @ 6c6fef28): 21 new, all one direction, 0 removed ──────────────────
+  #
+  #   module-dependency               559 -> 559   UNCHANGED, and that is the
+  #                                                load-bearing half.
+  #   module-dependency-permitted      94 -> 115   +21
+  #   tolerated (baselined)          872 -> 893   +21, the same 21.
+  #   baseline size                 811 -> 811   untouched; `--write` was NOT run.
+  #
+  # Every one of the 21 is the edge `pkg:agent-runtime -> pkg:agent-protocol`.
+  # `agent-runtime` declares `agent-protocol` in its `requires` list and the
+  # `layers:` list puts `runtime` above `protocol`, so the edges point DOWNWARD
+  # and land in `module-dependency-permitted` — counted, never blocking. No
+  # managed module's zero tolerance is affected, which is why
+  # `module-dependency` did not move at all.
+  #
+  # ATTRIBUTED BY MEASUREMENT, not inferred. Two `audit-imports.mjs --json` runs,
+  # edge sets diffed, on this branch: first with the whole T3.5 tree, then with
+  # ONLY `src/transport/` stashed (the nine new source files) while `index.ts` and
+  # every test file stayed in place.
+  #
+  #   1. SOURCE contribution = 8, exactly. One `pkg:agent-runtime ->
+  #      pkg:agent-protocol` edge per new source file that imports the protocol:
+  #      line-codec, transport-port, subprocess-transport, http-sse-transport,
+  #      in-process-transport, capability-probe, transport-guards, equivalence.
+  #      `error-taxonomy.ts` is the ninth file and contributes NONE, because it
+  #      imports nothing from the protocol at all — the taxonomy is deliberately
+  #      self-contained so no `ErrorCode` set can be silently re-derived there.
+  #   2. The remaining 13 are the new TEST files' own `@duya/agent-protocol`
+  #      imports, same direction. The counter counts OCCURRENCES of
+  #      (rule, file, detail), so one test file with several specifiers
+  #      contributes several. 8 + 13 = 21.
+  #   3. The diff ALSO reports 46 "removed" edges, and they are an ARTIFACT of
+  #      the revert rather than a real subtraction — the same confound the T3.3
+  #      and T3.4 blocks above record. Removing the sources while keeping
+  #      `index.ts` and the tests turns all nine `index.ts` re-exports and all
+  #      the tests' `../src/transport/*.js` imports `UNRESOLVED`, which
+  #      `architecture-check.mjs` then reports as NEW `[module-dependency]`
+  #      violations. The `with` set is therefore 750 edges and the `without` set
+  #      788, which is why the honest reading is the 8 real source edges and NOT
+  #      the raw set difference. Reverting `index.ts` instead is not available
+  #      either: it breaks the pre-existing consumers T3.2/T3.3/T3.4 added.
+  #
+  # WHY THE DIRECTION IS THE CORRECT SHAPE. A transport's vocabulary is the
+  # protocol's: `RunEventEnvelope`, `RunManifest`, `ReplayCursor`, `HostDeclaration`
+  # and the error codes are all wire data defined in the leaf package, and T3.5
+  # added no new wire type. What T3.5 added is a PORT, three adapters over it, a
+  # capability probe, an error taxonomy and a normalisation — all of which are
+  # runtime-layer code reaching DOWN for vocabulary. Nothing here points up, and
+  # `@duya/agent-protocol` stays a true leaf.
+  module-dependency-permitted: 115
   forbidden-dependency: 16
   # 161 -> 162: one more relative-path escape into packages/agent, from the
   # plan-583 stack. Now 126 agent / 16 plugin-core / 13 gateway / 7 conductor.
