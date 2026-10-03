@@ -18,6 +18,7 @@ import { toLLMProvider } from '../../config/provider-types.js';
 import { getDatabase } from '../../ipc/db-handlers.js';
 import { killProcessTree } from '../../lib/process-cleanup.js';
 import { getPerformanceMonitor } from '../../services/performance-monitor.js';
+import { registerSpawnedWorker, unregisterSpawnedWorker } from '../../control-plane/spawned-workers.js';
 import { hideComputerUseOverlayForSession } from '../../services/computer-use-overlay.js';
 
 import {
@@ -306,6 +307,10 @@ export class AgentProcessPool {
 
           this.router.broadcastDisconnect(sessionId, code, signal);
           this.router.clearSession(sessionId);
+          // Plan 587 C6.1: the child is gone, so it is no longer a process this
+          // host holds. Keyed by the child handle, so a recycled pid's
+          // predecessor arriving late cannot unregister its successor.
+          unregisterSpawnedWorker(runningProcess.child.pid, runningProcess.child);
           this.running.delete(sessionId);
           this.busySessions.delete(sessionId);
           this.providerReinitLock.delete(sessionId);
@@ -322,6 +327,10 @@ export class AgentProcessPool {
         });
 
         this.running.set(sessionId, runningProcess);
+        // Plan 587 C6.1: this host spawned it, so the Control Plane must be able
+        // to authorise a `db:request` from it. Unregistered, a session worker's
+        // run actions are refused with no useful diagnosis.
+        registerSpawnedWorker(runningProcess.child.pid, 'chat', runningProcess.child);
         this.logger.info(`Process registered for session ${sessionId}`, undefined, LogComponent.AgentProcessPool);
         resolve();
       } catch (err) {

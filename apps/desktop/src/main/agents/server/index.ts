@@ -319,8 +319,7 @@ const deps: RouterDeps = {
     workerDbRequests,
     logger,
     httpLogger,
-  }),
-  // Plan 586 Reference Run / plan 587 R2.1 single run entry. The chat route
+  }),  // Plan 586 Reference Run / plan 587 R2.1 single run entry. The chat route
   // calls `openRun` exactly once, and that call OPENS the run and DISPATCHES the
   // turn: the channel below is what issues `chat:start`, with the canonical run
   // id, the manifest hash and the input revision on it. The router used to send

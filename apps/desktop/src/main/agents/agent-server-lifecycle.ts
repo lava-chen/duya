@@ -7,6 +7,7 @@ import { getConfigStore } from '../config/store-instance';
 import type { PerformanceConfig } from '../config/schema';
 import { workerLimitEnvFromConfig } from './server/worker-limits';
 import { handleDbRequest } from './db-bridge';
+import { registerSpawnedWorker, unregisterSpawnedWorker } from '../control-plane/spawned-workers';
 import { killProcessTree } from '../lib/process-cleanup';
 import { getDatabasePath } from '../db/connection';
 import type { ConductorExecutorProxy, ExecutorRpcRequest } from '../conductor/executor-proxy';
@@ -157,7 +158,15 @@ export function spawnAgentServer(): Promise<number> {
       }
 
       if (msg.type === 'db:request') {
-        handleDbRequest(msg).then((response) => {
+        // Plan 587 C6.1: this is the second real transport for `db:request`, and
+        // it is NOT in the chat pool's map — the agent server is its own child.
+        // Threading its pid and role is what lets the Control Plane authorise it
+        // rather than refuse it.
+        handleDbRequest(msg, {
+          senderPid: child.pid,
+          registeredSessionId: null,
+          role: 'agent-server',
+        }).then((response) => {
           if (!child.killed) {
             child.send(response);
           }
@@ -596,7 +605,14 @@ export function spawnAgentServer(): Promise<number> {
       }
     });
 
+    // Plan 587 C6.1: the agent server is the third spawn site that speaks
+    // `db:request`, and it is not in the chat pool's map — so without an
+    // explicit registration its run actions are refused with no useful
+    // diagnosis. Registered here, and unregistered on exit below.
+    registerSpawnedWorker(child.pid, 'agent-server', child);
+
     child.on('exit', (code, signal) => {
+      unregisterSpawnedWorker(child.pid, child);
       if (!settled) {
         settled = true;
         reject(new Error(`Agent Server exited immediately with code ${code}, signal ${signal}`));
