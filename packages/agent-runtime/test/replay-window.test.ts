@@ -14,8 +14,9 @@ import {
   type RunEventReader,
 } from '../src/replay/replay-repository.js';
 import { buildTranscriptSnapshot } from '../src/replay/transcript-snapshot.js';
-import type { ReplayCursor, RunEventEnvelope } from '@duya/agent-protocol';
-import { eventKey } from '@duya/agent-protocol';
+import type { ReplayCursor, ResumeSupport, RunEventEnvelope } from '@duya/agent-protocol';
+import { eventKey, isReplayable, resumeRefusalCode } from '@duya/agent-protocol';
+import { RunEventStream } from '../src/run-session.js';
 
 const RUN = 'run-1';
 
@@ -247,5 +248,71 @@ describe('the snapshot a resync serves is derived, never a second copy', () => {
       source: 'live_buffer',
     });
     expect(snapshot.source).toBe('live_buffer');
+  });
+});
+
+describe('the bounded ring is a cache, and the store is the source', () => {
+  it('serves an event the live queue dropped, so the drop is invisible', async () => {
+    // `RunEventStream`'s bounded queue shifts the oldest entry out when it is
+    // full. A consumer that reconnects must not be able to tell that happened,
+    // which is only true if the history comes from the store and not from the
+    // ring. This is the difference between a cache and a source of truth, stated
+    // as the property it has to have.
+    const stream = new RunEventStream(2);
+    for (const seq of [1, 2, 3, 4, 5]) stream.push(env(seq));
+    const survivors: number[] = [];
+    for await (const item of stream) {
+      survivors.push(item.seq);
+      if (survivors.length === 2) break;
+    }
+    // The ring kept the two most recent and discarded the rest.
+    expect(survivors).toEqual([4, 5]);
+
+    const store = storeWith([1, 2, 3, 4, 5]);
+    const outcome = await resolveReplay(store, { runId: RUN, epoch: 1, mintedLatest: 5 }, cursorAt(3));
+    expect(outcome.kind === 'replay' && outcome.events.map((e) => e.seq)).toEqual([4, 5]);
+
+    // Union of what the cache still held and what the store served: the whole
+    // run, each seq once, in order — the two sources overlap safely.
+    const fromCursorZero = await resolveReplay(store, { runId: RUN, epoch: 1, mintedLatest: 5 }, cursorAt(0));
+    const all = fromCursorZero.kind === 'replay' ? fromCursorZero.events.map((e) => e.seq) : [];
+    expect(all).toEqual([1, 2, 3, 4, 5]);
+    expect(new Set([...survivors, ...all]).size).toBe(5);
+  });
+});
+
+describe('event replay is not execution resume', () => {
+  it('replays the events inside a tool call while still refusing to RESUME there', async () => {
+    // Contract §F separates the two capabilities, and contract §G makes mid-tool
+    // recovery a refusal. The pair of assertions is the separation: reading what
+    // happened during a tool call is safe and supported, continuing execution
+    // from inside one is not — and confusing the two would let a host resume a
+    // side effect it never observed.
+    const store = new InMemoryRunEventStore();
+    store.appendSync([
+      env(1),
+      { ...env(2), payload: { type: 'tool.call_started', toolCallId: 't1', name: 'Bash' } } as RunEventEnvelope,
+    ]);
+
+    const outcome = await resolveReplay(store, { runId: RUN, epoch: 1, mintedLatest: 2 }, cursorAt(1));
+    // Replay: the tool call's own event is readable.
+    expect(outcome.kind === 'replay' && outcome.events.map((e) => e.seq)).toEqual([2]);
+
+    const support: ResumeSupport = {
+      turnBoundary: true,
+      eventSeq: true,
+      messageIndex: false,
+      checkpointGeneration: false,
+      oldestAvailableSeq: 1,
+      latestSeq: 2,
+      rejectsMidToolResume: true,
+    };
+    // Resume: the same seq is refused, and with the UNRETRYABLE code.
+    expect(isReplayable(support, 2)).toBe(true);
+    expect(resumeRefusalCode(support, { kind: 'event_seq', seq: 2 }, true)).toBe('invalid_resume_point');
+    // And a boundary outside the tool is fine, so the refusal is about the tool
+    // and not about replay being unavailable.
+    expect(resumeRefusalCode(support, { kind: 'event_seq', seq: 1 }, false)).toBe('invalid_resume_point');
+    expect(support.rejectsMidToolResume).toBe(true);
   });
 });
