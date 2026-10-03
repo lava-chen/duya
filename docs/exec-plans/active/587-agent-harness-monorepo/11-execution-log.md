@@ -135,7 +135,7 @@ Next task: exact ID + file + first action
 
 | 阶段 | Commit/PR | targeted / fullsetdiff | clean / CI | host / artifacts | Exit |
 | --- | --- | --- | --- | --- | --- |
-| G0 | 本地 `plan/587-g0-baseline`（G0.1，见下） | 首次建立集合：45文件/101测试/103 tuple，按file+test+signature | 本地clean安装（`npm ci` exit 1，环境原因）/ CI 37099318050 @同一SHA | 全部原始证据在 `.tmp-validation/587-g0/` | G0.1部分；G0未验收 |
+| G0 | G0.1 `93fcc97e`(PR #138)；G0.2-A `313d1f66`(PR #140) | 首次建立集合：45文件/101测试/103 tuple，按file+test+signature；G0.2-A未改测试，collect 1009文件/10709测试 | 本地clean安装（`npm ci` exit 1，环境原因）/ CI 37099318050 @同一SHA | `.tmp-validation/587-g0/`、`.tmp-validation/587-g0-2/` | G0.1部分、G0.2-A完成；G0未验收 |
 | R1 | — | — | — | — | 未验收 |
 | R2 | — | — | — | — | 未验收 |
 | T3 | — | — | — | — | 未验收 |
@@ -177,4 +177,31 @@ Remaining blocker:
 Next task: G0.2 — `docs/exec-plans/active/587-agent-harness-monorepo/01-baseline-and-gates.md`，第一个动作：把 `architecture:check` 作为独立只读CI job接入 `.github/workflows/test.yml`，并让 `build` job 不再因 `needs: test` 失败而被整job跳过（否则 `electron:build` 在CI永远没有证据）
 ```
 
-不要用“已定位/已改文件/已merge”替代runtimeverified。修改主Next时同步阶段入口，阻塞描述给下一agent一条具体可实施动作。
+## G0.2-A CI 接线
+
+```text
+Task: G0.2-A / CI gate wiring
+State: merged（PR #140，`42cef0f0`，master `313d1f66`）；G0仍未验收
+Head / branch / PR: 313d1f66 / plan/587-g0-2-ci-wiring / #140
+Changed files and public entry: 仅 `.github/workflows/test.yml`（+275/-10）。无源码、无测试、无配置改动
+Old caller → new caller / ownership: 新增 `architecture` job（ubuntu）；`test` job解除依赖；`build` job 的 `needs: test` 改为 `needs: architecture`
+Baseline failure set and new failure diff: 未改任何测试。`npm test` 仍 exit 1；本worktree collect 1009文件/10709测试（junction依赖口径，与G0.1的clean-install 45/101不可直接比较，但红色一致、collect未削减）
+Checks:
+  - architecture:check / self-test（无任何dist的clean树） exit 0 / 0 —— 802/802/802，548/35/16/162/25/16/0
+  - architecture-check.mjs --json                    exit 0  total:802 blocking:0 tolerated:802
+  - npm test                                        exit 1  1009 files / 10709 tests
+  - 边界探针（agent-protocol 内 import @duya/agent-core） architecture:check exit 1，指名文件+两条规则+原因
+  - 测试探针（expect(1+1).toBe(3)）                    npm test exit 1，collect 1009→1010
+  - 清除两探针后                                    git status 仅 test.yml；两路径 Test-Path=False；两个architecture门禁回0
+  - guard 在 Git Bash 下跑真实日志（含UTF-16日志）    真实日志0 / 零collection 1 / 12文件0测试 1 / 无摘要 1 / 缺日志 0(defer)
+  - pipefail 传播                                   内层失败传出 1
+Capabilities actually verified / still unsupported:
+  - 已验证：architecture门禁不依赖dist（resolver读package.json声明的exports，不读构建产物）；新job在真实probed失败下确实变红；零collection无法伪装成绿
+  - 仍不支持/未验证：未在真实GitHub runner上执行（`shell: bash` on windows-latest 依赖预装Git Bash、fetch-depth:0 的成本均为推理未实测）；`npm test` 的红仍是既有债，本次未收敛
+Shim consumers + removal criterion: 不适用
+Rollback/data compatibility: 纯CI配置，可git revert
+Remaining blocker: G0.2其余项（合同测试独立job、测试债收敛、required checks/ruleset）与G0.2-B构建次序
+Next task: G0.2-B — 根 `package.json` 的scripts。方向已定为显式topological scripts（不引入TS project references），依据见01-baseline-and-gates.md对应条目
+```
+
+不要用"已定位/已改文件/已merge"替代runtimeverified。修改主Next时同步阶段入口，阻塞描述给下一agent一条具体可实施动作。

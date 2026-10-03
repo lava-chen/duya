@@ -25,12 +25,21 @@
 
 范围：`.github/workflows/test.yml`、`scripts/architecture/*`、现有Electron类型门禁及仓库ruleset。
 
-- [ ] 将architecturecheck作为独立可读CI job；resolver变化运行self-test。保持managed三包zero新增容忍。
+- [x] 将architecturecheck作为独立可读CI job；resolver变化运行self-test。保持managed三包zero新增容忍。
+  PR #140（`42cef0f0`）新增独立`architecture` job（ubuntu），跑`architecture:check` + 按路径过滤的`self-test`（`scripts/architecture/**`、policy、baseline变更时触发，base sha不可用时fail-safe为运行）。**实测该门禁不需要`dist/`**：resolver读的是各package.json声明的`exports`，不是构建产物；clean树上`check`=0（802/802/802）、`self-test`=0（548/35/16/162/25/16/0）。因此该job刻意**不**先build——先build只会增加耗时，并把将来意外的dist依赖藏进缓存命中后面。零容忍managed模块仍为**4个**（含`legacy-plugin-core`），一个都没放松；`architecture:baseline`（`--write`）未出现在CI任何位置。
 - [ ] 在cleanjob验证从无dist/tsbuildinfo状态构建；显式topologicalscripts或projectreferences二选一维护，不引入并存的不同顺序。
+  **已定方向：显式topological scripts，不引入TS project references。** 三条实测依据：①真正的消费点是esbuild——`scripts/build-agent-bundle.mjs`与`scripts/build-electron.mjs`都无alias，经`node_modules`解析到`dist/*.js`，且都不对消费端跑tsc，`tsc -b`的次序对它们是装饰性的；②`packages/agent/src/journal/Journal.ts:29`自引用`@duya/agent/message`（解析到自身`dist/message/index.d.ts`），project references无法表达该环；③`apps/desktop/src/main`有约153处`packages/agent/src/...`源码相对深引，绕过任何tsconfig图。另：11个包中4个已`composite: true`、7个没有，且无任何`references`——这个半迁移状态正是计划禁止的"并存的不同顺序"，不得扩大。仓库无turbo/nx/lerna/npm-run-all。
+  目标不是"顺序写对"，而是**每个入口自给自足**：`typecheck:electron`、`bundle:agent`、`npm test`、`npm run electron:build`都必须能在无任何`dist/`的树上单独跑通。同时修两处实证缺陷：`build:agent`漏掉`voice`与`gateway`（现由electron脚本临时构建），`bundle:agent`只build了`ai`而esbuild还要解析`plugin-core`/`cli/contract`/`computer-use`，clean树下**必然失败**。实施中（G0.2-B）。
 - [ ] 将合同/迁移相关测试接入独立job，保持完整testjob的红色真实可见。
+  PR #140已让`test` job与`build`解耦，`npm test`的红色保持完整可见（未减少collect、未加`|| true`/glob跳过）。合同/迁移测试的独立job仍待做。
 - [ ] 处理既有测试债并收敛fullsuite；在此之前如需迁移ratchet，必须以具体失败签名比较且对新增失败失败，不能`|| true`、glob跳过或只比较总数。
+  尚未开始。基线为G0.1建立的45文件/101测试/103 tuple（77 deterministic / 25 env-infra / 1已证flake）。
 - [ ] required checks采用可稳定通过且不能掩盖回归的job。仓库设置变更前先给出具体job名和rulesetdiff，按权限工具执行；没有管理权限标blocked并保留本地/CI实施证据，不能称强制合并门禁已完成。
-- [ ] 故意新增一条禁止import和一个新增失败fixture验证gate失败；清除探针后恢复。artifact保存实际检查了多少测试和文件，零collection必须失败。
+  尚未开始。当前仓库无ruleset强制。
+- [x] 故意新增一条禁止import和一个新增失败fixture验证gate失败；清除探针后恢复。artifact保存实际检查了多少测试和文件，零collection必须失败。
+  PR #140已做。**边界探针**：在`packages/agent-protocol`（managed、`requires: []`）内`import { isTerminal } from "@duya/agent-core"` → `architecture:check` exit 1，并指名文件、两条规则与原因。**测试探针**：`expect(1+1).toBe(3)` → `npm test` exit 1，collect由1009→1010文件。**两探针均已删除**，`git status`只剩`test.yml`，两个路径`Test-Path`为False，两个architecture门禁回到0。
+  零collection防护：`architecture-check.mjs`只要`blocking.length===0`就exit 0，而这在**完全没扫到任何东西时同样成立**——若将来模块根匹配被打坏，`total`塌成0，门禁会一边报告"OK 无新增违规"一边什么都没拦。两个新job都断言非零扫描；test侧还覆盖"12文件但0测试"与摘要不可读两种情形。architecture侧guard还区分了checker的exit 1（查到违规，上一步已红）与exit 2（引擎故障），避免在真实失败上再叠一个更含糊的红。
+  运行期实测：`npm test` exit 1，collect **1009文件/10709测试**（本worktree为junction依赖，与G0.1的clean-install口径不可直接比较，但红色一致、collect未被削减）。
 
 出口：clean类型/构建通过；architecture与关键回归CI确实执行；完整测试债有签名且没有新回归；required enforcement的已验证范围准确。fullsuite红不能要求agent为了绿色扩大业务重构，债按接管表分批解决。
 
