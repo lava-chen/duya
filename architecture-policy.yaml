@@ -384,6 +384,16 @@ modules:
 # of `code-review-diff.ts`'s own source that was never a module edge. No legacy
 # debt was removed and no genuinely new violation was absorbed, which is the
 # condition under which `--write` is permitted.
+#
+# Re-measured 2026-10-03 (plan 587 R1.2): 1 new, 0 parse changes, 0 debt removed
+#
+# `module-dependency-permitted` 35 -> 36 and NOTHING else moved. The edge is
+# `run-persistence-sequence.test.ts` -> `@duya/agent-protocol`, which the
+# `agent-runtime` module's own `requires` list permits, so the checker is
+# reporting the policy working rather than a breach. This is a MEASUREMENT
+# moving, not a gate relaxing: the rule never blocks, it never consults the
+# baseline, and the baseline is untouched. `module-dependency` stayed at 547,
+# so no edge crossed from permitted into not-permitted.
 
 selfTest:
   # 548 -> 547: one counted edge was never real. The parser had carved
@@ -392,7 +402,21 @@ selfTest:
   # specifier can no longer span lines, so it is not counted. Every other rule is
   # byte-identical, and 801 of the 802 baseline fingerprints were kept.
   module-dependency: 547
-  module-dependency-permitted: 35
+  # 35 -> 36: ONE genuinely new, legitimately permitted edge.
+  # `packages/agent-runtime/test/run-persistence-sequence.test.ts` (plan 587
+  # R1.2) imports `@duya/agent-protocol` TYPES -- RunManifest, RunBudget,
+  # RunTerminalState, RunResult and friends -- and the module declares
+  # `requires: [agent-protocol, ...]`, so `moduleDependencyPermitted` classes it
+  # as permitted. The count is per OCCURRENCE of (rule, file, detail), so a new
+  # test file in this module adds exactly 1, and removing that one import takes
+  # it back to 35 (verified both ways, not inferred). `module-dependency` stays
+  # at 547, which is the load-bearing part: the edge did not become a
+  # non-permitted dependency, and this rule never blocks even inside a managed
+  # module, so a managed module's zero tolerance is untouched. The two sibling
+  # run-layer suites (`reference-run.test.ts`, `run-correctness-seams.test.ts`)
+  # already import the same package the same way, so this is the established
+  # shape for a test in `agent-runtime` and not a new kind of edge.
+  module-dependency-permitted: 36
   forbidden-dependency: 16
   # 161 -> 162: one more relative-path escape into packages/agent, from the
   # plan-583 stack. Now 126 agent / 16 plugin-core / 13 gateway / 7 conductor.

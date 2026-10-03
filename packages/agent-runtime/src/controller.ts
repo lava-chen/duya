@@ -90,6 +90,54 @@ export interface RunControllerOptions {
    * the Control Plane put it, and this class has no second opinion to offer.
    */
   readonly budgetBreached?: (spend: RunSpend, wallClockMs: number) => boolean;
+  /**
+   * Durable-append batching and retry policy, passed through to every run.
+   *
+   * The Control Plane's to set, because both numbers are about the cost of a
+   * round trip to storage: `flushEvery` trades durability latency against
+   * traffic, and `appendRetries` decides how long a refused batch is re-offered
+   * before the run is told it lost events. A runtime that chose them itself
+   * would be choosing its own durability guarantees.
+   */
+  readonly flushEvery?: number;
+  readonly appendRetries?: number;
+  /**
+   * How many ended runs this controller can still answer for.
+   *
+   * Bounded because the alternative is a slower version of the leak it
+   * replaces: dropping the live run but remembering every run forever. The
+   * durable row remains the receipt of record — this is the in-memory answer
+   * for a host still holding a handle, not the archive.
+   */
+  readonly receiptLimit?: number;
+}
+
+/**
+ * A run that could not be opened.
+ *
+ * A named failure rather than an adapter's own error, because the two mean
+ * different things to a host: "the record does not exist" and "the worker
+ * refused to start" are different incidents, and a host that catches broadly
+ * will otherwise treat them as the same failure and dispatch anyway. `start`
+ * throws this instead of returning a handle, because there is no handle to
+ * return — a run with no durable `started` is not a run.
+ */
+export class RunStartError extends Error {
+  /** Stable across hosts: the code a host branches on, not a message. */
+  readonly code = 'start_failed' as const;
+  /** What the runtime was doing when it gave up, for a log line. */
+  readonly stage: 'started_not_durable' | 'dispatch_threw';
+
+  constructor(stage: 'started_not_durable' | 'dispatch_threw', cause: unknown) {
+    super(
+      stage === 'started_not_durable'
+        ? 'run.started was not acknowledged by the Control Plane, so the run was not dispatched'
+        : 'the execution channel refused to start the run',
+    );
+    this.name = 'RunStartError';
+    this.stage = stage;
+    this.cause = cause;
+  }
 }
 
 /** What the caller learns about one observed frame. */
@@ -104,6 +152,23 @@ export interface FrameOutcome {
   readonly internal: boolean;
   /** Present when the frame broke a run invariant. */
   readonly violation?: string;
+  /**
+   * True when the frame arrived for a run that had already reached its
+   * terminal.
+   *
+   * Rejected, not recorded — the ledger has no seq to give it and the run's
+   * history is closed. Reported rather than dropped, because a worker that
+   * keeps producing after the run was decided is the difference between a
+   * cosmetic duplicate and a host that never sees the frame it is waiting for.
+   */
+  readonly late?: boolean;
+  /**
+   * True when this controller has no record of the run at all, and never did.
+   * Distinct from `late`: a frame for a run that never opened is a routing
+   * mistake, and folding it in with the above would hide that behind a
+   * perfectly ordinary race.
+   */
+  readonly unknown?: boolean;
 }
 
 interface ActiveRun {
@@ -125,6 +190,17 @@ export class RunController implements AgentRuntimeApi {
 
   readonly #options: RunControllerOptions;
   readonly #runs = new Map<string, ActiveRun>();
+  /**
+   * What each recently-ended run decided, oldest first.
+   *
+   * The live run is dropped on settle — a run that is over must not be holding
+   * a stream, a translation context and a manifest — but the VERDICT it
+   * reached is kept, because the contract keeps a run's outcome answerable and
+   * `run_not_found` is a lie about a run that ended. Bounded by
+   * `receiptLimit`, because remembering every run forever is the same leak
+   * with more useful-looking data in it.
+   */
+  readonly #receipts = new Map<string, RunTerminalState>();
 
   constructor(options: RunControllerOptions) {
     this.#options = options;
@@ -174,6 +250,18 @@ export class RunController implements AgentRuntimeApi {
     return manifestFingerprint(manifest);
   }
 
+  /**
+   * Open a run and dispatch it.
+   *
+   * The order is the contract: record `run.started`, wait for the Control Plane
+   * to acknowledge it, and only then begin the execution. A run dispatched
+   * before its own start is durable is a run whose consequences outlive its
+   * record, which is the case a durable run log exists to prevent.
+   *
+   * @throws {RunStartError} when the start could not be made durable, or when
+   *   the execution channel refused. Either way the executor is NOT running and
+   *   no live run is left behind.
+   */
   async start(
     manifest: RunManifest,
     input: { readonly prompt: string; readonly sessionId: string; readonly options?: Readonly<Record<string, unknown>> },
@@ -199,6 +287,10 @@ export class RunController implements AgentRuntimeApi {
       ...(this.#options.budgetBreached === undefined
         ? {}
         : { budgetBreached: this.#options.budgetBreached }),
+      ...(this.#options.flushEvery === undefined ? {} : { flushEvery: this.#options.flushEvery }),
+      ...(this.#options.appendRetries === undefined
+        ? {}
+        : { appendRetries: this.#options.appendRetries }),
     });
 
     // `run.started` is emitted BEFORE the execution is dispatched, not after.
@@ -233,27 +325,86 @@ export class RunController implements AgentRuntimeApi {
     // dispatches the execution the moment it returns. Without this await,
     // "recorded before the first frame" would be a race the run layer lost
     // about half the time.
-    await session.flush();
+    //
+    // And a refusal here means the run is NOT open, which is a decision rather
+    // than an accident of a throw: the executor is not started, the run is
+    // dropped, and the caller is told which of the two things went wrong.
+    //
+    // The check is on what was LOST, not on whether `flush` rejected. A drain
+    // that gives up on a batch has done its job by definition — the queue is
+    // empty and nothing more can be done — so it resolves, and reading the
+    // rejection alone would let a run whose `started` was thrown away dispatch
+    // an executor anyway.
+    try {
+      await session.flush();
+      if (session.lostEvents > 0) {
+        throw new RunStartError('started_not_durable', 'run.started was not acknowledged');
+      }
+    } catch (error) {
+      this.#runs.delete(runId);
+      throw error instanceof RunStartError ? error : new RunStartError('started_not_durable', error);
+    }
 
-    const handle = await this.#options.channel.start(
-      runId,
-      input.sessionId,
-      { prompt: input.prompt, options: input.options ?? {} },
-      {
-        frame: (raw) => {
-          this.observeFrame(runId, raw);
+    let handle: ExecutionHandle;
+    try {
+      handle = await this.#options.channel.start(
+        runId,
+        input.sessionId,
+        { prompt: input.prompt, options: input.options ?? {} },
+        {
+          frame: (raw) => {
+            this.observeFrame(runId, raw);
+          },
+          envelope: (envelope) => {
+            active.stream.push(envelope);
+          },
+          end: () => {
+            // The executor's stream ended. The run is not finished until it has
+            // a terminal, and this is a floating call — so the catch is not
+            // optional bookkeeping: `settle` degrades rather than rejects, but
+            // a host that made the channel throw must not learn about it as an
+            // unhandled rejection in a process nobody is watching.
+            void this.settle(runId).catch(() => undefined);
+          },
         },
-        envelope: (envelope) => {
-          active.stream.push(envelope);
-        },
-        end: () => {
-          void this.settle(runId);
-        },
-      },
-    );
+      );
+    } catch (error) {
+      // A channel that throws has begun no execution, and the run is already
+      // durable — so this one CAN be given a terminal, and must be. Leaving
+      // the row `running` here is how a run comes to exist, do nothing, and
+      // never be closed by anything.
+      await this.#failStart(runId, error);
+      throw new RunStartError('dispatch_threw', error);
+    }
     active.handle = handle;
 
     return this.#handleFor(active);
+  }
+
+  /**
+   * Close out a run whose dispatch threw.
+   *
+   * Synthesises the `run.failed` the executor will never send, so the settle
+   * path has a terminal to record rather than a silence to interpret. The
+   * verdict itself is still `resolveRunOutcome`'s.
+   */
+  async #failStart(runId: string, cause: unknown): Promise<void> {
+    const active = this.#runs.get(runId);
+    if (active === undefined) return;
+    try {
+      active.session.observe({
+        type: 'run.failed',
+        error: {
+          code: 'internal',
+          message: 'the execution channel refused to start the run',
+          cause: { system: 'runtime', code: 'dispatch_failed', detail: describe(cause) },
+        },
+      });
+    } catch {
+      // The ledger refused the failure event, which means a terminal was
+      // already recorded. The settle below still has something to write.
+    }
+    await this.settle(runId);
   }
 
   /**
@@ -282,6 +433,29 @@ export class RunController implements AgentRuntimeApi {
     return this.#runs.get(runId)?.session;
   }
 
+  /** Runs this controller is still holding open. Zero once everything settled. */
+  get liveRuns(): number {
+    return this.#runs.size;
+  }
+
+  /** Ended runs this controller can still answer for. Bounded by `receiptLimit`. */
+  get retainedReceipts(): number {
+    return this.#receipts.size;
+  }
+
+  /**
+   * The terminal an ended run reached, or `null` for a run this controller
+   * never opened.
+   *
+   * The in-memory half of the receipt the contract keeps queryable. The
+   * durable half is the `runs` row, and it outlives this map — this answers
+   * for the host still holding a handle, and says nothing about runs older
+   * than the retention window.
+   */
+  receiptFor(runId: string): RunTerminalState | null {
+    return this.#receipts.get(runId) ?? null;
+  }
+
   /**
    * Observe one raw frame from the executor.
    *
@@ -293,7 +467,18 @@ export class RunController implements AgentRuntimeApi {
   observeFrame(runId: string, raw: RawFrame): FrameOutcome {
     const active = this.#runs.get(runId);
     if (active === undefined) {
-      return { legacy: null, envelope: null, forwardOnly: false, internal: false };
+      // A run that is gone is one of two things, and a host debugging a stuck
+      // turn needs to tell them apart: it already ended, or it never opened.
+      // Before this, both returned the same silent no-op.
+      return {
+        legacy: null,
+        envelope: null,
+        forwardOnly: false,
+        internal: false,
+        ...(this.#receipts.has(runId)
+          ? { late: true }
+          : { late: false, unknown: true }),
+      };
     }
 
     const translated = translateFrame(raw, active.translateCtx);
@@ -315,7 +500,8 @@ export class RunController implements AgentRuntimeApi {
   /**
    * Settle a run.
    *
-   * Idempotent: a second call returns the first decision. A caller that
+   * Idempotent: a second call returns the first decision, whether it arrives
+   * while the first is still in flight or long after it finished. A caller that
    * settles twice has a bug, and the correct behaviour is to leave the recorded
    * history alone.
    *
@@ -329,7 +515,12 @@ export class RunController implements AgentRuntimeApi {
     intent?: { cancelRequested?: boolean; escalated?: boolean },
   ): Promise<RunTerminalState> {
     const active = this.#runs.get(runId);
-    if (active === undefined) return absentRun(runId);
+    if (active === undefined) {
+      // An ended run reports what it reached. Returning `run_not_found` here
+      // would make every post-hoc `settle` — the router's `res.on('close')`
+      // backstop included — claim the run never existed.
+      return this.#receipts.get(runId) ?? absentRun(runId);
+    }
     if (active.settling !== null) return active.settling;
 
     active.settling = (async () => {
@@ -346,11 +537,37 @@ export class RunController implements AgentRuntimeApi {
 
     const terminal = await active.settling;
     this.#runs.delete(runId);
+    this.#remember(runId, terminal);
     return terminal;
   }
 
   /**
+   * Keep what a run decided, up to the retention limit.
+   *
+   * `Map` preserves insertion order, so the first key is the oldest receipt
+   * and evicting it evicts the right one without a second structure.
+   */
+  #remember(runId: string, terminal: RunTerminalState): void {
+    const limit = this.#options.receiptLimit ?? 64;
+    this.#receipts.delete(runId);
+    this.#receipts.set(runId, terminal);
+    while (this.#receipts.size > limit) {
+      const oldest = this.#receipts.keys().next();
+      if (oldest.done === true) return;
+      this.#receipts.delete(oldest.value);
+    }
+  }
+
+  /**
    * Cancel a run.
+   *
+   * The ONE worker-stop path. This phase adds no second one and no hard kill:
+   * `handle.stop(graceMs)` is the cooperative stop the host owns, and every
+   * terminal candidate — this, a `done` frame, an executor that went silent —
+   * goes through the same one-shot `settle`, which is contract §D's serial
+   * arbiter. `resolveRunOutcome` in `@duya/agent-core` still owns the
+   * cancellation-vs-completion rule, so a run that finishes inside the stop
+   * window is decided in exactly one place.
    *
    * Returns `{ applied: false }` when the run was already terminal, and does
    * nothing in that case. That is the improvement over `handleDeleteChat`
@@ -361,7 +578,8 @@ export class RunController implements AgentRuntimeApi {
   async cancel(runId: string): Promise<CancelOutcome> {
     const active = this.#runs.get(runId);
     if (active === undefined) {
-      return { applied: false, terminal: absentRun(runId) };
+      const receipt = this.#receipts.get(runId);
+      return { applied: false, terminal: receipt ?? absentRun(runId) };
     }
     if (active.session.isClosed) {
       // Already terminal: the point of `applied: false` is that the caller can
@@ -371,6 +589,14 @@ export class RunController implements AgentRuntimeApi {
     }
     active.cancelRequested = true;
     await active.handle?.stop(this.#options.cancelGraceMs ?? 5000);
+    // `stop` is a window, not an instant: a worker that was already finishing
+    // can reach its own terminal inside it. `isClosed` is re-read HERE, after
+    // the await, because checking it before is what let a cancel report
+    // `applied: true` while handing back a terminal it had no part in — and
+    // `applied` is the one field a host reads to know its stop did something.
+    if (active.session.isClosed) {
+      return { applied: false, terminal: active.session.terminal ?? absentRun(runId) };
+    }
     const terminal = await this.settle(runId, { cancelRequested: true });
     return { applied: true, terminal };
   }
@@ -386,7 +612,12 @@ export class RunController implements AgentRuntimeApi {
    */
   #onLifecycleViolation(active: ActiveRun, violation: LifecycleViolation): FrameOutcome {
     if (active.session.isClosed) {
-      return { legacy: null, envelope: null, forwardOnly: false, internal: false, violation: violation.code };
+      // The run is decided and this frame arrived after it. `late` is set here
+      // as well as on the "no such run" branch, because a frame can land in the
+      // window where the run has been closed but not yet dropped from the map —
+      // and a host watching for late frames must not see a gap in the middle of
+      // its own race.
+      return { legacy: null, envelope: null, forwardOnly: false, internal: false, violation: violation.code, late: true };
     }
     let envelope: RunEventEnvelope;
     try {
@@ -404,7 +635,7 @@ export class RunController implements AgentRuntimeApi {
       return { legacy: null, envelope: null, forwardOnly: false, internal: false, violation: violation.code };
     }
     active.stream.push(envelope);
-    void this.settle(active.session.runId);
+    void this.settle(active.session.runId).catch(() => undefined);
     const legacy = projectToLegacyFrame(envelope);
     return { legacy, envelope, forwardOnly: false, internal: false, violation: violation.code };
   }
@@ -461,6 +692,11 @@ function absentRun(runId: string): RunTerminalState {
       message: `no live run ${runId} is known to this runtime`,
     },
   };
+}
+
+/** A cause, as one diagnostic line. Never the payload it carried. */
+function describe(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 /** Every event type the runtime can emit. Closed set, by construction. */

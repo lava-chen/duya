@@ -399,3 +399,160 @@ describe('RunOrchestrator — Control Plane acks are not swallowed', () => {
     }
   });
 });
+
+/**
+ * R1.2 — the adapter's half of the persistence sequence and the lifecycle
+ * around it.
+ *
+ * The runtime package owns the write queue, the one-shot settlement and the
+ * terminal event. What is left here is the ADAPTER, and it has three jobs of
+ * its own that no runtime test can reach:
+ *
+ *   1. **A run that was never opened must not be addressable.** `openRun`
+ *      registered the session BEFORE the durable `started`, so a start that
+ *      failed left the session pointing at a run that does not exist — and the
+ *      router's next frame was teed into it.
+ *   2. **The per-run model binding must be released.** `#modelByRun` was only
+ *      ever written. One entry per turn, for the life of the agent-server
+ *      process, which is the unbounded half of R1.2 item 5.
+ *   3. **A frame for a run that has ended is a diagnostic.** The router keeps
+ *      writing it either way; the run layer's job is to say so.
+ */
+describe('RunOrchestrator — R1.2 lifecycle at the adapter', () => {
+  function openAndRefuseStarted(): { orchestrator: RunOrchestrator; dispatched: () => number } {
+    let dispatched = 0;
+    const orchestrator = new RunOrchestrator({
+      // `run:create` succeeds — the row exists — and the FIRST append is
+      // refused, so the run cannot be made durable and must not be dispatched.
+      dbRequest: async (action, payload) => {
+        if (action === 'run:create') return { ok: true, runId: payload.runId };
+        if (action === 'run:append') return { ok: false, written: 0, error: 'SQLITE_BUSY' };
+        return { ok: true, applied: true };
+      },
+      channel: createWorkerExecutionChannel(() => {
+        dispatched += 1;
+      }),
+    });
+    return { orchestrator, dispatched: () => dispatched };
+  }
+
+  it('does not open a session whose durable start failed', async () => {
+    // The run row exists, `run.started` did not land, so the run did not open.
+    // `openRun` must report that rather than hand back a runId the host will
+    // attribute a whole turn's events to.
+    const { orchestrator, dispatched } = openAndRefuseStarted();
+    const { reports, restore } = (() => {
+      const reports: string[] = [];
+      const warn = vi.spyOn(logger, 'warn').mockImplementation((msg: string) => {
+        reports.push(msg);
+      });
+      return { reports, restore: () => warn.mockRestore() };
+    })();
+
+    try {
+      await expect(orchestrator.openRun('session-1', intent)).resolves.toBeNull();
+      // The executor was never told to go.
+      expect(dispatched()).toBe(0);
+      // And the failure was NAMED. A generic "openRun failed" line is what a
+      // host reads today, and it cannot distinguish a Control Plane that
+      // refused the row from a run that could not be made durable — the two
+      // need different operator responses.
+      expect(reports.join('|')).toMatch(/start_failed|run\.started/i);
+    } finally {
+      restore();
+    }
+  });
+
+  it('leaves no session mapping behind for a run that never opened', async () => {
+    // `openRun` set `#bySession` before `controller.start`. On a start that
+    // failed, the next frame from the worker was routed into a run that has no
+    // record and no `run.started` — an append for a run the Control Plane
+    // never finished opening.
+    const { calls, request } = recorder();
+    const orchestrator = new RunOrchestrator({
+      dbRequest: async (action, payload) => {
+        if (action === 'run:create') return { ok: true, runId: payload.runId };
+        if (action === 'run:append') return { ok: false, written: 0, error: 'SQLITE_BUSY' };
+        return { ok: true, applied: true };
+      },
+      channel: createWorkerExecutionChannel(() => {}),
+    });
+    void calls;
+    void request;
+
+    await orchestrator.openRun('session-1', intent).catch(() => null);
+    // No run is addressable for this session, so a frame has nowhere to go.
+    expect(orchestrator.runForSession('session-1')).toBeNull();
+
+    const before = calls.length;
+    orchestrator.observe('session-1', { type: 'text', data: { content: 'x' } });
+    expect(calls).toHaveLength(before);
+  });
+
+  it('releases the per-run model binding when the run ends', async () => {
+    // `#modelByRun` had no delete. One entry per turn, held for the life of the
+    // agent-server process, keyed by a runId nothing could ever look up again.
+    // The plan's acceptance scenario measures this directly: after 100 runs the
+    // adapter must be back at its baseline.
+    const { request } = recorder();
+    const orchestrator = new RunOrchestrator({
+      dbRequest: request,
+      channel: createWorkerExecutionChannel(() => {}),
+    });
+
+    for (let n = 0; n < 100; n += 1) {
+      const sessionId = `session-${n}`;
+      await orchestrator.openRun(sessionId, intent);
+      orchestrator.observe(sessionId, { type: 'turn_start', data: { turnCount: 1 } });
+      orchestrator.observe(sessionId, { type: 'done', data: {} });
+      await orchestrator.settleSession(sessionId);
+    }
+
+    expect(orchestrator.retainedModelBindings).toBe(0);
+    expect(orchestrator.retainedSessionRuns).toBe(0);
+  });
+
+  it('reports a frame that arrives after its run ended', async () => {
+    // The router writes the frame either way — that is the live path and it
+    // does not change. What the run layer owes the host is the fact that the
+    // run had already decided, which is otherwise indistinguishable from a
+    // frame for a session that never opened a run.
+    const { request } = recorder();
+    const orchestrator = new RunOrchestrator({
+      dbRequest: request,
+      channel: createWorkerExecutionChannel(() => {}),
+    });
+    await orchestrator.openRun('session-1', intent);
+    orchestrator.observe('session-1', { type: 'done', data: {} });
+    await orchestrator.settleSession('session-1');
+
+    const late = orchestrator.observe('session-1', { type: 'text', data: { content: 'after' } });
+    expect(late.late).toBe(true);
+
+    // A session that never had a run is a different fact, and stays a no-op.
+    const neverRan = orchestrator.observe('other-session', { type: 'text', data: { content: 'x' } });
+    expect(neverRan.late).toBe(false);
+  });
+
+  it('records a client disconnect as cancelled, and releases the session', async () => {
+    // The router's `req.on('close')` interrupts the worker and calls
+    // `settleSession(sessionId, { cancelRequested: true })`. This host asked
+    // for the stop, so `runtime_crash` would be a false accusation — and the
+    // session has to be released on this path too, not only on the `done` one.
+    const { calls, request } = recorder();
+    const orchestrator = new RunOrchestrator({
+      dbRequest: request,
+      channel: createWorkerExecutionChannel(() => {}),
+    });
+    await orchestrator.openRun('session-1', intent);
+    orchestrator.observe('session-1', { type: 'turn_start', data: { turnCount: 1 } });
+
+    await orchestrator.settleSession('session-1', { cancelRequested: true });
+
+    const complete = calls.find((c) => c.action === 'run:complete');
+    const terminal = complete?.payload.terminal as RunTerminalState;
+    expect(terminal.status).toBe('cancelled');
+    expect(orchestrator.runForSession('session-1')).toBeNull();
+    expect(orchestrator.retainedModelBindings).toBe(0);
+  });
+});
