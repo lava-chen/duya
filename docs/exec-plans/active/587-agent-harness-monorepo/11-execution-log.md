@@ -4,12 +4,12 @@
 
 ## 当前基线
 
-2026-10-03计划整合时HEAD `4be6ec7a`；共享checkout可能继续前进，G0开工必须刷新。
+2026-10-03计划整合期间HEAD从`4be6ec7a`推进到`1c33e4c9`；共享checkout可能继续前进，G0开工必须刷新。
 
 - 已有：Desktop物理迁移、新三包reference实现、runs/events存储、cleanbuild次序修复、CIheap修复。
 - 上轮评审：9文件142tests通过；暖typecheckall、architecturecheck/selftest通过；802存量违规被容忍。
-- 上轮CI37095446083：Ubuntutypecheck通过、macOSheapOOM失败，随后`5bf3220a`添加heap配置；修复后完整CI本记录未验证。
-- 完整test历史基线42–45failing suites/109–111failing tests，实际集合见项目索引；本次文档整合不重跑runtimefullsuite。
+- 上轮CI37095446083：Ubuntutypecheck通过、macOSheapOOM失败，随后`5bf3220a`添加heap配置；最新项目索引记录37095893167三个runner的typecheck通过，本次整合没有独立重跑该CI。
+- 最新项目索引记录：Windows45失败文件/112失败测试，Linux CI64失败文件/187失败测试；42共同失败、22CI独有、3本地独有。旧42–45仅Windows口径，不能当跨平台floor；本次不重跑runtimefullsuite，G0需刷新具体集合。
 - 四个run接缝为上轮隔离源码探针证据，本次G0/R1必须核对最新修复状态。
 - Electron/provider P6与executionresume无本轮完成声明。
 

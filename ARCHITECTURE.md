@@ -4,6 +4,12 @@
 
 ## Overview
 
+Monorepo / Agent Harness changes follow the single execution plan
+[587](./docs/exec-plans/active/587-agent-harness-monorepo/README.md).
+Its contracts and phase gates define the target; this document describes
+the current implementation. Historical RFCs and migration schedules are
+centralized in that plan's reference directory.
+
 DUYA is a Windows desktop AI agent client with a modular architecture:
 
 - **Frontend**: Vite + React 19 + Zero Router (Electron renderer)

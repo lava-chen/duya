@@ -222,4 +222,4 @@ max_turns = 8
 | [66](../completed/66-async-nonblocking-subagent.md) / [37](../completed/37-subagent-nested-session.md) | 委派结果的异步展示与嵌套会话 UI 可复用 |
 | [212](./completed/212-subagent-task-notification.md) | 476 未落地前的结果回传通道 |
 | [419](../active/419-permission-decision-bus.md) | 委派与工具暴露的权限唯一入口 |
-| [429](../active/429-harness-gap-closure.md) | 若有重叠的 harness 缺口项，以 429 的证据核验为准 |
+| [429](../active/587-agent-harness-monorepo/history/429-harness-gap-closure.md) | 若有重叠的 harness 缺口项，以 429 的证据核验为准 |

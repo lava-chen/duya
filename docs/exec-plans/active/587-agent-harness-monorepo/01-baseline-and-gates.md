@@ -29,6 +29,8 @@
 
 - [ ] 分清package build DAG、type graph、runtimevalue graph、host import。现有SCC仅是扫描口径，不能要求每个小PR都严格少一个SCC。
 - [ ] 对resolver变更导出旧/新fingerprints分类：解析变化、移除债、真实新增。先修真实新增；审查后再更新selftest与baseline，不能整批`--write`吸收新违规。
+- [ ] 协议预算测试的walker复用可信workspace/exportsresolver与剥注释逻辑。leaf指protocol没有反向实现依赖，不是没有consumer；core/runtime/CLI/host正常公开import必须允许。
+- [ ] 跨平台失败按Windows/Linux/macOS各自HEAD与具体签名记录；优先核对权限行为差异和AGENTS加载相对路径收敛，不以修改安全断言或删测试修绿色。
 - [ ] protocol/core/runtime零容忍；legacy允许旧baseline但不得引入新增反向边。新port/slice的graph有明确方向。
 - [ ] publicexport对应真实消费者与runtimebuild。Nodepackage `exports`限制package-name访问；相对越界需resolver管，不能用`main:src`解释全部问题。
 

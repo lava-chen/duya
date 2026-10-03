@@ -94,6 +94,8 @@
 
 ## 4. 保留的独立功能计划：消费合同，不复制责任
 
+技术债接管：TD0/1/5/6/7/8归G0（可信resolver、typegate、clean与跨平台集合）；TD2归M5.2；TD3归M5.5进程适配说明；TD4归M5切片分类；TD9的AGENTS加载路径收敛归G0先核对、M5/C6修实现并由E4覆盖。历史leaf断言的错误含义不继承。
+
 | 计划 | 对接阶段 / 限制 |
 | --- | --- |
 | 419 permissionbus | R2/C6；riskTier与MCPregistration接同broker，保留专属任务 |
