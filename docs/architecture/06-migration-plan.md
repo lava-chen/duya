@@ -20,21 +20,27 @@
 | 阶段 | 名称 | 消除的违规 | 风险 | 预估 PR 数 |
 |---|---|---|---|---|
 | **M0** | 建立架构检查（不移动任何代码） | — （只测量） | 极低 | 1 |
-| **C1** | **解耦循环 SCC**（barrel 退出内部环） | 缩小最大 SCC（42 文件） | 中 | 1–2 |
+| **C1** | **解耦循环 SCC**（15/16 不需架构改动） | 环数 16 → 1，最大 SCC 42 文件 | 中 | **4–5**（第三轮从 1–2 上调：16 个环逐个可独立回滚） |
 | **M1** | 收敛 plugin-core | 49 deep + 1 missing-artifact | 低 | 2 |
 | **M2** | 抽出 `agent-protocol` | 17 deep + 125 escape（agent 部分） | 中 | 2 |
-| **M3** | 抽出 `shared`（解 electron→src） | 57 中约 45 | 中 | 2 |
+| **M3** | 抽出 `shared`（解 `main → renderer`） | 54 条 + CLI 契约归位 | 中 | 3 |
 | **M4** | conductor 解耦 + 删构建 hack | 2 + 构建顺序耦合 | 低 | 1 |
-| **M5** | 切出 `agent-core` / `agent-runtime` / `agent-tools` | 包级边界成型 | 高（**需先做 C1**） | 3–4 |
-| **M6** | 建立 `harness/agent` | — （新能力） | 低 | 3 |
-| **M7** | 搬迁 `apps/desktop/` | 路径级 | 高（机械） | 2 | ✅ **已落地**（PR #115，见 `03-target-structure.md` §2.1） |
+| **M5** | 切出 `agent-core` / `agent-runtime` | 包级边界成型 | 高（**需先做 C1**） | 3–4 |
+| **M6** | 建立 `evals/agent`（初版名 `harness/`） | — （新能力） | 低 | 3 |
+| **M7** | 搬迁 `apps/desktop/` | 路径级 | 高（机械） | 2 ✅ **已落地**（PR #115，见 `03-target-structure.md` §2.1） |
 | **M8** | ProcessScope + spawn 收敛 | ~50 spawn 点 | 中 | 2 |
 
-**关键路径**：M0 → C1 → M5。M0 → M1 → M2 → M3 → M7。M5/M6 可与 M3 并行（不同文件所有权）。
+**关键路径**：M0 → C1 → M5。M0 → M1 → M2 → M3。M5/M6 可与 M3 并行（不同文件所有权）。
 
-> ⚠️ **C1 是第二轮审计新增的阶段。** 实测 `packages/**` 有 **18 个循环 SCC（最大 42 文件）**，
+> ⚠️ **C1 是第二轮审计新增、第三轮修正入口的阶段。**
+> 实测 `packages/**` 有 **16 个循环 SCC（最大 42 文件）**（基线上限 18），
 > 横跨 `modes`/`hooks`/`tool`/`process`/`agent` —— 正好压在 `agent-core` 与 `agent-runtime` 的切口上。
-> 不先解耦，M5 的文件移动会导致编译失败。详见 `01-current-state-audit.md` §2.1 V7。
+> 不先解耦，M5 的文件移动会导致编译失败。详见 `01-current-state-audit.md` §2.1 V7
+> 与 `03-target-structure.md` §5.2 全谱。
+>
+> **第三轮修正**：初版把 C1 定义为"让 barrel 退出内部环"，**该前提已被实测削弱**
+> （`packages/agent/src/index.ts` 不属于任何 SCC）。现改为按环成员清单逐个解，
+> 入口是 14 文件类型/注册表环，不是 barrel。详见下文 C1 的「原 C1.1 的状态」。
 
 ---
 
@@ -48,7 +54,7 @@
 |---|---|
 | M0.1 | `architecture-policy.yaml`（交付物 5 §2 的迁移前版本：全部模块 `managed: false`） |
 | M0.2 | `scripts/architecture/architecture-check.mjs` + **能解析 workspace 包名与相对路径穿透**的 resolver |
-| M0.3 | **`--self-test`**：断言能数出全部已知违规（568 cross / 161 escape / 117 deep / **18 cycle** / 1 missing-artifact） |
+| M0.3 | **`--self-test`**：断言能数出全部已知违规（568 cross / 161 escape / 117 deep / **16 cycle**（基线上限 18）/ 1 missing-artifact） |
 | M0.4 | `.architecture-baseline.json`（指纹式，含全部现有违规） |
 | M0.5 | 接入 CI（**阻塞式 required check**）+ `AGENTS.md` 补 Gates 章节 |
 
@@ -103,24 +109,37 @@
 
 ---
 
-### M3 — 抽出 `packages/shared`（解 `electron → src`）
+### M3 — 抽出 `packages/shared`（解 `main → renderer`）
 
-**为什么必须做**：`electron → src/` 有 **57 条**边。不解开，M7 的目录搬迁会产生 400+ 文件的路径改写。
+**为什么必须做**：`main → renderer` 有 **54 条**边（初版记 57 条，差异见 M3.0）。
+
+**为什么现在做**：M7 搬迁时明确选择了"机械改写、留给 M3"。
+M3.0 重跑基线 → M3.1–M3.3 抽类型 → M3.4 改写 → M3.5 解 renderer→ai
+→ M3.6 CLI 契约归位 → M3.7 平台端口层。
 
 | 任务 | 内容 |
 |---|---|
-| M3.1 | 抽 `src/lib/providers/{types,legacy,catalog,domain/ProviderValidation}` 到 `packages/shared`（占 24 条中的大部分） |
-| M3.2 | 抽 `src/types/{bash-task,hook-task,usage,index}` 到 `packages/shared`（preload 契约类型，4 条） |
-| M3.3 | 抽 `src/{lib/plugin-types,lib/plugin-error-messages,types/import}` 到 `packages/shared`（9 条） |
-| M3.4 | 改写 electron 侧引用；`src/` 保留 re-export 保持渲染层零改动 |
-| M3.5 | 解 `src → @duya/ai`（18 条）：provider **类型**留在 `ai`，但 renderer 只能引类型（`import type`），运行时逻辑走 IPC |
+| M3.0 | **重跑 `node scripts/architecture/audit-imports.mjs` 取新基线** —— 下列 24/4/9/18/54 条全部是 M7 搬迁**之前**按 `electron/` 与 `src/` 统计的，路径已变（见 `03` §1.3）。数字可能已漂移，**不得直接当验收目标用** |
+| M3.1 | 抽 `src/renderer/lib/providers/{types,legacy,catalog,domain/ProviderValidation}` 到 `packages/shared`（占 24 条中的大部分） |
+| M3.2 | 抽 preload 契约类型（`bash-task` / `hook-task` / `usage`）到 `packages/shared`（4 条） |
+| M3.3 | 抽 plugin 类型（`plugin-types` / `plugin-error-messages` / `types/import`）到 `packages/shared`（9 条） |
+| M3.4 | 改写 main 侧引用；`src/renderer/` 保留 re-export 保持渲染层零改动 |
+| M3.5 | 解 `renderer → @duya/ai`（18 条）：provider **类型**留在 `ai`，但 renderer 只能引类型（`import type`），运行时逻辑走 IPC |
+| **M3.6** | **CLI 契约归位（第三轮补录）**：把 `packages/cli/src/contract` 的 descriptor registry + `CliInvocation`/`CliRunResult` envelope 放进 `shared`，实现（`apps/desktop/src/main/cli/handlers/`，26 handler / 8,713 行）留在 main 作实现层。**先补 `build` + `exports`** —— 否则重演 plugin-core 的"`main: src/index.ts` ⇒ `exports` 从不参与解析" |
+| **M3.7** | **平台端口层**（`03` §1.2 ①）：109 个直接引用 `window.electronAPI` 的 renderer 文件、504 处引用（`src/renderer/lib/ipc-client.ts` 一个文件占 82 处）。**这是 `packages/ui` 能否抽包的前置，顺序不能反** |
 
 **风险点**：M3.5 若处理不当，会把 Node SDK 拖进浏览器 bundle。
 `vite.config.ts:optimizeDeps.needsInterop` 现有的 4 条配置就是泄漏的**成本证据**。
 验收时要确认 bundle 里不再出现 `@anthropic-ai/sdk` / `openai` 的运行时代码。
 
-**验收**：`electron → src` 计数归零；`architecture:check` 的 `forbiddenDependencies` 中
-`packages/** → src/**` 一条不再触发。
+**前置条件（不可跳过）**：**M0.5 必须先落地。**
+`scripts/architecture/architecture-check.mjs` 与 `.architecture-baseline.json` 均已存在，
+但 CI required check 未接入（plan 583 P0）。M3 会产生新的一批 `packages/shared` 引用边，
+**没有闸门就是又一轮 161 条相对路径穿透**（上一轮其中 125 条指向 `packages/agent`）。
+
+**验收**：`main → renderer` 计数归零；`architecture:check` 的 `forbiddenDependencies` 中
+`packages/** → src/**` 一条不再触发；M3.6 完成后 `packages/agent` 对
+`@duya/cli/contract` 的子路径 import 计数归零。
 
 ---
 
@@ -168,36 +187,74 @@
 
 ---
 
-### C1 — 解耦循环 SCC（M5 的前置，第二轮审计新增）
+### C1 — 解耦循环 SCC（M5 的前置，第二轮审计新增，第三轮修正入口）
 
 **为什么必须先做**：最大 SCC 的 42 个文件同时包含目标结构里的 `agent-core`（`modes/`）
 与 `agent-runtime`（`tool/`、`process/`、`hooks/`）。在这条环解开之前，
 `agent-core` 与 `agent-runtime` 的边界在编译层面根本不存在。
 
+**实测 16 个环（`node scripts/architecture/audit-modules.mjs`，2026-10-03），
+其中 15 个不需任何架构改动即可解掉**，全谱见 `03-target-structure.md` §5.2。
+
 | 任务 | 内容 | 验证 |
 |---|---|---|
-| C1.1 | 让公共 barrel 退出内部环：`src/index.ts` 不应被 `tool/SubagentTool/runAgent.ts` 等内部模块 import，改为直接引用具体模块 | `node scripts/architecture/audit-modules.mjs` 的 SCC#1 规模下降 |
-| C1.2 | 逐个拆解剩余 SCC，优先拆 14 文件那个（`tool` 7 + `skills` 4 + `permissions` 2 + `types.ts` 1） | SCC 数量 / 规模逐轮下降 |
-| C1.3 | 把 `cycle` 规则的 baseline 从 18 逐步降到 0 | 每降一个，从 baseline 移除对应指纹 |
+| **C1.1** | **解 14 文件类型/注册表环**（`types.ts` + `tool/{types,catalog-types,catalog-identity,registry,BaseTool,snapshot}` + `skills/{types,registry,rootSnapshotCache,conditionalSkills}` + `permissions/{types,policy}` + `tool/SubagentTool/loadAgentsDir`）。全部是类型与注册表互相 import，纯卫生问题。**它含 `types.ts`/`permissions/types.ts`/`tool/types.ts`/`tool/registry.ts`/`tool/BaseTool.ts`，拆掉会连带缩小 42 环** | SCC#2 消失；SCC#1 规模下降 |
+| **C1.2** | 解 barrel/接口小环：`computer-use/memory/{core,slice,index}`（`index.ts` 是成员）、`ai/{index.ts ↔ retry-client.ts}`、`tool/BrowserTool/{CDPClient,HumanLikeCDPClient,WebviewCDPClient}` | 环总数下降，`02-cycle-budget.test.ts` 仍过 |
+| **C1.3** | 解 2 文件环批量：`permissions/{classifier↔permissions}`、`session/{bash-task-store↔bash-task-registry}`、`prompts/bot/{epoch↔framework}`、`skills/{skillsSync↔loader}`、`tool/OSTool/{context-tool↔ComputerUseTool}`、`cli/commands/{doctor↔doctor-config}`、`computer-use/backend/mcp/{result-parser↔cua-driver}`、`ai/providers/*`（2 个） | 环总数逐轮下降 |
+| **C1.4** | 解 `compact/` 4 文件环（`transforms/{imageTruncation,micro,canvas}Transform` + `projectionCompress`）。**它是 core 里信号最干净的一块，必须先解自己的环才能整体搬** | SCC 消失 |
+| **C1.5** | 导体解耦：`conductor/renderer` 9 文件 React 组件环（与 agent 无关，可与前述并行） | SCC 消失 |
+| **C1.6** | 把 `cycle` 规则的 baseline 从 18 逐步收到实测值（当前 16），**每降一档先更新 `02-cycle-budget.test.ts` 的上限** | 每降一档从 baseline 移除对应指纹 |
+| **C1.7** | 最后才攻 42 环（`modes` 6 + `hooks` 5 + `agent` 3 + `tool` 3 + `process` 3）。**C1.1–C1.5 全部完成后此处才具备可行性** | SCC#1 消失 → M5 解锁 |
 
 **验收**：`node scripts/architecture/validate-scc.mjs` 的交叉验证保持 0 误报；
-`typecheck:all` 通过；每一步 SCC 数量或最大规模严格下降。
+`typecheck:all` 通过；**每一步 SCC 数量或最大规模严格下降**（不允许持平）。
+
+> ### ⚠️ 原 C1.1 的状态：前提被削弱，收益未验证（第三轮）
+>
+> 初版 C1.1 是"让公共 barrel `src/index.ts` 退出内部环
+> （`tool/SubagentTool/runAgent.ts → src/index.ts → agent/DuyaAgent.ts → tool/StreamingToolExecutor.ts`）"。
+>
+> **第三轮实测结果既不是成立也不是证伪 —— 是"两者都不是"**：
+>
+> - `verify-cycle.mjs` 复现的路径**确实经过** `src/index.ts`
+>   → "barrel 在通往环的路径上"**成立**；
+> - 但 `packages/agent/src/index.ts` **不属于任何 SCC**（16 个环逐一核对）
+>   → `StreamingToolExecutor.ts` 的 import 全部落在 `tool/` 内部，**不回到 barrel，环在别处闭合**；
+> - 因此"删掉这条 import 能显著缩小 SCC"**从未被验证，证据倾向否定**。
+>
+> **本轮自身的教训（比结论更重要）**：先只看 `--json` 的环成员就断言"barrel 无关"（**错**），
+> 后用 `verify-cycle.mjs` 才发现路径真实经过 barrel（修正）。
+> **"是否在 SCC 成员里"与"是否在通往 SCC 的路径上"是两个不同问题，审计脚本各答一个，
+> 两者都不足以单独支撑"删掉它能解环"的结论。**
+>
+> **因此 C1 的入口定为 14 环**，理由换成不依赖上述争议的那一条：
+> 那 14 个文件**全部是类型与注册表**、成员清单已完整枚举可逐条核对，
+> 且含 42 环多处依赖的类型来源。barrel 本身仍是卫生问题，
+> 归入 C1.2（`computer-use/memory/index.ts`、`ai/index.ts` 这几个**成员确实含 barrel** 的环）。
+>
+> **流程要求**：任何解环任务落地前，必须用**删改 + 重跑 SCC 计数**实测收益，
+> 不得靠读图推断。同步修正 `01-current-state-audit.md` §V7 / §9 的同类表述。
 
 > **经验参考**（codex）：它的 `core → app-server-protocol` 只有 2 个文件用它，
-> 结果被当成"已知 wart"长期挂着。**Duya 的 18 个 SCC 是同一类问题的规模版，
+> 结果被当成"已知 wart"长期挂着。**Duya 的环是同一类问题的规模版，
 > 不做 C1 就直接 M5，等于把编译失败推给拆包阶段。**
+> 但要吸取反向教训：**解环任务清单必须由实测的环成员清单驱动，
+> 不能由"barrel 不该被 import"这类通用直觉驱动** —— 后者在本仓库已被削弱过一次。
 
 ---
 
-### M6 — 建立 `harness/agent`
+### M6 — 建立 `evals/agent`（初版名 `harness/agent`，已改名）
 
-**可以与 M3/M5 并行**（文件所有权不重叠：只新增 `harness/**`）。
+**可以与 M3/M5 并行**（文件所有权不重叠：只新增 `evals/**`）。
+
+> **改名理由**（见 `MONOREPO_RFC.md` §4.1）：仓库内 "harness" 已有 3 种含义，
+> 而 "Control Plane" 才是生产概念。新建顶层 `harness/` 必然语义冲突。
 
 按交付物 4 §9 的 H1–H7：
 
 | 任务 | 内容 | 依赖 |
 |---|---|---|
-| M6.1 | `harness/agent/{tasks,runners,evaluators,fixtures,reports}` 骨架 + README | 无 |
+| M6.1 | `evals/agent/{tasks,runners,evaluators,fixtures,reports}` 骨架 + README | 无 |
 | M6.2 | `local-runner` 跑通单次 run | M2（Run API） |
 | M6.3 | `mock-provider`（wire-level，grok 模式）+ 3 个 smoke task | M6.2 |
 | M6.4 | `subprocess-runner` / `http-runner`，验证三者行为一致 | M6.3 |
@@ -291,8 +348,9 @@ worktree 内提交（`node_modules` 需 junction），`gh pr merge --merge` 保�
 
 | 风险 | 概率 | 影响 | 缓解 |
 |---|---|---|---|
-| M0 的 resolver 漏检（复制 ZCode 的洞） | 中 | 高（治理假象） | **`--self-test` 断言已知违规计数**（568 cross / 161 escape / 117 deep / **18 cycle** / 1 missing） |
-| **M5 撞上 18 个循环 SCC** | **高** | **高** | **已在计划中：C1 必须先做** —— 见下方新增的 C1 任务 |
+| M0 的 resolver 漏检（复制 ZCode 的洞） | 中 | 高（治理假象） | **`--self-test` 断言已知违规计数**（568 cross / 161 escape / 117 deep / **16 cycle**（基线 18）/ 1 missing） |
+| **M5 撞上 42 文件循环 SCC** | **高** | **高** | **已在计划中：C1 必须先做** —— C1.1–C1.5 可解掉 15/16 个环，为 42 环腾出条件 |
+| C1 的任务清单由直觉而非实测驱动 | **已发生一次** | 中 | 原 C1.1（barrel）的前提被第三轮削弱：路径经过 barrel，但 barrel 不是 SCC 成员。**解环任务必须先跑 `audit-modules.mjs --json` 核对成员清单，落地后用"删改 + 重跑计数"验证收益** |
 | M2 类型移动波及面超预期 | 中 | 中 | M2.2 单独 PR；`types.ts` 的 re-export 分层迁移 |
 | M3.5 把 Node SDK 拖进 renderer bundle | 中 | 中 | 验收时检查 bundle 内容；优先 `import type` |
 | M5 在 177k LOC 上做移动 | 高 | 高 | 每步保留 `packages/agent` 为 re-export shim；小 PR |

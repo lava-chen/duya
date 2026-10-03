@@ -12,7 +12,7 @@
 
 Duya 目前是**单 workspace、八个平级包、两个巨型文件夹**的结构。真正的架构问题不是"包太少"，而是
 **没有任何一层被强制执行**：跨边界 import 有 **568** 条，其中 **117** 条是绕过 public entrypoint 的 deep import、
-**161** 条是相对路径穿透包边界；`packages/agent` 内部有 **18 个循环依赖 SCC（最大 42 文件）**，
+**161** 条是相对路径穿透包边界；`packages/agent` 内部最大有一个 **42 文件的循环 SCC**（轮数初测 18、2026-10-03 复测 **16**），
 以 177k 行承载了 core + runtime + protocol + capability + infrastructure 五种生命周期。
 
 ---
@@ -154,38 +154,53 @@ Duya 目前是**单 workspace、八个平级包、两个巨型文件夹**的结�
 > 穿透全部集中在 Electron Main，且规模（161）是 deep import（117）的 1.4 倍 ——
 > **相对路径穿透才是 main↔packages 耦合的主因，而不是缺 `exports` 声明。**
 
-**V7 — 模块级循环依赖：18 个 SCC，最大 42 文件** ⚠️ **（第二轮修正，初版误报 0）**
+**V7 — 模块级循环依赖：最大 SCC 42 文件** ⚠️ **（第二轮修正，初版误报 0；第三轮更新计数）**
 
-Tarjan SCC 扫描 `packages/**`（`.ts`/`.tsx`，排除 tests）→ **18 个 size>1 的循环分量**。
-由 `node scripts/architecture/audit-modules.mjs` 复现，并用独立 BFS 逐对验证可达性
-（`scripts/architecture/validate-scc.mjs`：抽样 14 对，0 误报；SCC#1 的 42 个成员两两互相可达）。
+Tarjan SCC 扫描 `packages/**`（`.ts`/`.tsx`，排除 tests）。
+初版实测 **18 个** size>1 的循环分量；**2026-10-03 复测为 16 个**
+（`node scripts/architecture/audit-modules.mjs`，`cyclic groups (SCC > 1) 16`）。
+用独立 BFS 逐对验证可达性（`scripts/architecture/validate-scc.mjs`：抽样 14 对，0 误报）。
 
-最大的 SCC（42 文件）横跨 5 个模块：
+> **18 是 `05-architecture-governance.md` 的基线上限，不是应当被覆写的实测值。**
+> `packages/agent-protocol/test/02-cycle-budget.test.ts` 卡的是 `SCC ≤ 18`，
+> 因此 18 → 16 是**改善**；基线暂不收紧，等 C1 落地后再定。
+
+最大的 SCC（42 文件）横跨 5 个模块（脚本只输出前 20 个成员，余 22 个未展示）：
 
 | 模块 | 文件数 |
 |---|---|
 | `agent/src/modes` | 6 |
 | `agent/src/hooks` | 5 |
-| `agent/src/tool` | 4 |
+| `agent/src/agent` | 3 |
+| `agent/src/tool` | 3 |
 | `agent/src/process` | 3 |
-| `agent/src/agent` | 2 |
 
-**一条已验证的 8 跳环路**（`verify-cycle.mjs` 实测路径）：
+**一条已验证的路径**（`verify-cycle.mjs` 实测，非闭环证明）：
 
 ```
-modes/index.ts
- → modes/goal/goal-mode.ts
+modes/goal/goal-mode.ts
  → modes/goal/goal-tools.ts
  → modes/goal/goal-evaluator.ts
  → tool/SubagentTool/runAgent.ts
- → src/index.ts                     ← 公共 barrel 参与了内部环
+ → src/index.ts                     ← 公共 barrel 在这条路径上
  → agent/DuyaAgent.ts
  → tool/StreamingToolExecutor.ts
 ```
 
-其余 SCC：14（`tool` 7 + `skills` 4 + `permissions` 2 + `types.ts` 1）·
-9（`conductor/src/renderer`）· 4（`agent/compact`）· 3（`agent/tool`）· 3（`computer-use/memory`）·
-其余为 2 文件的小环。
+> ⚠️ **第三轮修正：barrel 的位置需要精确表述。**
+> `src/index.ts` 在**通往**环的路径上（上述 `verify-cycle.mjs` 路径可复现），
+> 但 **不属于任何 SCC**（`audit-modules.mjs --json` 逐环核对，16 个环无一包含它）——
+> `StreamingToolExecutor.ts` 的 import 全部落在 `tool/` 内部，不回到 barrel，**环在别处闭合**。
+> 所以"公共 barrel 参与了内部环路"字面上不精确；"改掉它能显著缩小 SCC"**未被验证**。
+> 详见 `03-target-structure.md` §5.3 与 `06-migration-plan.md` C1 阶段。
+>
+> **本条自身的教训**：先只看环成员就断言"barrel 无关"（错），
+> 后用 `verify-cycle.mjs` 才发现路径真实经过 barrel（修正）。
+> **"是否在 SCC 成员里"与"是否在通往 SCC 的路径上"是两个不同问题。**
+
+其余 SCC（16 个全谱见 `03-target-structure.md` §5.2）：14（`tool` 7 + `skills` 4 + `permissions` 2 + `types.ts` 1，**纯类型/注册表环**）·
+9（`conductor/src/renderer`）· 4（`agent/compact`）· 3（`agent/tool` BrowserTool）· 3（`computer-use/memory`）·
+其余为 2 文件的小环（`ai` 3 个、`permissions`、`session`、`prompts/bot`、`skills`、`tool/OSTool`、`cli/commands`、`computer-use/backend/mcp`）。
 
 > **这一条改变了设计前提。** 初版（本轮之前）报告"模块级循环依赖 0"，并据此把
 > `forbidCycles: true` 当作"唯一已满足的规则"。该结论是脚本的路径拼接 bug 造成的假阴性
@@ -196,8 +211,9 @@ modes/index.ts
 > 目标结构里的 `agent-core`（modes）与 `agent-runtime`（tool/process/hooks）边界
 > —— **M5 拆包必须先解耦这条环，否则拆分无法编译通过。**
 >
-> 根因之一：`src/index.ts` 这个公共 barrel 参与内部环路（`runAgent.ts → src/index.ts → DuyaAgent.ts`）。
-> barrel 不该被内部模块 import，这条可独立修掉，能显著缩小 SCC。
+> **16 个环里 15 个不需任何架构改动即可解掉**，且解环入口不是 barrel 而是
+> 14 文件类型/注册表环（成员清单已完整枚举）。任务拆解见
+> `06-migration-plan.md` C1.1–C1.7。
 
 ### 2.4 未解析 specifier（34 条）
 主要为两类：stale 引用（如 `packages/agent/src/tool/AgentTool/*` —— 目录已改名 `SubagentTool`）
@@ -318,9 +334,18 @@ esbuild 的 `alias` 里专门写了 `@duya/plugin-core` → 本地路径，注�
 由 `node scripts/architecture/audit-modules.mjs` 复现：**36 个顶层模块 · 669 个非测试文件 · 156,994 LOC**
 （含测试为 870 文件 / 177,278 LOC；两个口径都给出，避免歧义）。
 
-> ⚠️ **本表的分类是"归属倾向"，不是"可独立抽出的边界"。** V7 实测的 18 个循环 SCC
+> ⚠️ **本表的分类是"归属倾向"，不是"可独立抽出的边界"。** V7 实测的 42 文件最大环
 > （最大 42 文件，横跨 modes/hooks/tool/process/agent）说明这五类互相咬合，
 > 任何一类都不能原样搬走。见 §9 修正记录第 4 条。
+
+> ⚠️ **本表是第一轮审计的快照，数字已不是现值。**
+> 2026-10-03 复测（`audit-modules.mjs`，排除 tests）与本表有出入：
+> `tool/` 58,427 → **60,137**、`modes/` 16,202 → **16,095**、`agent/` 9,514 → **9,556**、
+> `compact/` 4,554 → **4,561**、`process/` 8,235 → **8,350**、`session/` 5,332 → **5,276**、
+> `utils/` 4,231 → **4,224**、`hooks/` 4,223（不变）。
+> 差异来源是脚本口径（`files`/`loc` 统计范围），**不是**代码变动。
+> **现值表见 `03-target-structure.md` §5.1** —— 那里按"外部信号"重排了归属，
+> 本表的 A/B/C/D/E 分类仅作为分类法的历史记录保留。
 
 | 模块 | files | LOC | 外部信号 | 分类 | 理由 |
 |---|---|---|---|---|---|
@@ -348,7 +373,7 @@ esbuild 的 `alias` 里专门写了 `@duya/plugin-core` → 本地路径，注�
 
 **结论**：`packages/agent` 内（排除测试 156,994 LOC）中，**A(Core) 约 30k、B(Runtime) 约 30k、
 C(Protocol) 约 8k、D(Capability) 约 25k、E(Infrastructure) 约 30k** — 五类均匀混杂。
-**V7 的 18 个循环 SCC 提供了硬证据**：它们通过 `tool/`（58k 行单体）与 `modes/` 互相咬合，
+**V7 的最大循环 SCC 提供了硬证据**：它们通过 `tool/`（58k 行单体）与 `modes/` 互相咬合，
 最大 SCC 的 42 个文件横跨 A/B/E 三类，**因此五类都不能原样抽出**。
 
 这直接约束目标结构：`agent-core` / `agent-runtime` 的切分必须**先解耦**，
@@ -370,10 +395,13 @@ C(Protocol) 约 8k、D(Capability) 约 25k、E(Infrastructure) 约 30k** — 五
    专门为此配置 CommonJS interop —— 这是边界泄漏的**成本证据**，不是配置偏好。
 6. **renderer 侧的包引用本身是干净的**：`src/` → `packages/` 的 4 条全部走 public entrypoint，
    0 条相对路径穿透。真正需要治理的是 Electron Main 的 161 条。
-7. **`packages/agent` 内部有 18 个循环依赖 SCC（最大 42 文件）**，横跨 modes/hooks/tool/process/agent。
+7. **`packages/agent` 内部最大 SCC 为 42 文件**（轮数 16，基线上限 18），横跨 modes/hooks/tool/process/agent。
    这意味着 A–E 五类**不是五个可独立抽出的抽屉** —— M5 拆包必须先解耦，否则编译不过。
-   可独立先修的一条：`src/index.ts` 这个公共 barrel 参与了内部环
-   （`runAgent.ts → src/index.ts → DuyaAgent.ts → StreamingToolExecutor.ts`），barrel 不该被内部模块 import。
+   **可独立先修的第一块是 14 文件的类型/注册表环**（`types.ts` + `tool/{types,catalog-types,catalog-identity,registry,BaseTool,snapshot}`
+   + `skills/*` + `permissions/{types,policy}` + `loadAgentsDir`）—— 成员清单已完整枚举。
+   ⚠️ 原先推荐的第一块"`src/index.ts` 公共 barrel"**已在第三轮被削弱**：
+   它确实在通往环的路径上，但**不是任何 SCC 的成员**，改掉它能否解环未经验证。
+   详见 §9 修正记录第 8 条与 `03` §5.3。
 
 ---
 
@@ -387,9 +415,11 @@ C(Protocol) 约 8k、D(Capability) 约 25k、E(Infrastructure) 约 30k** — 五
 | 1 | `src → packages/agent` 4 条"走相对路径、绕过 `exports`" | 4 条全是裸标识符（3× `@duya/agent` + 1× `@duya/agent/message`），经 `exports` 正常解析 | 传导到 `05` 的 `escapesPackageBoundary` 规则与 `06` 的 M0 门槛数字；两处均已修正 |
 | 2 | 跨边界 import "217 处" | **568** 条 | 初版把 `src→electron` 与部分 `electron→packages` 计入不同口径；现统一为"跨 owner 且非 external" |
 | 3 | 包边界穿透未单独统计 | **161 条，且 100% 来自 `electron/`；`src/` 为 0** | 补为 V6，并修正了"renderer 是主要问题"的错误权重 |
-| 4 | **模块级循环依赖 "0"** | **18 个 SCC，最大 42 文件** | **实质性错误。** 初版脚本的图用相对路径作键、绝对路径作边值，无边匹配 → 假阴性。`forbidCycles` **未**满足；M5 拆包前必须先解耦 |
+| 4 | **模块级循环依赖 "0"** | **最大 SCC 42 文件**（轮数：初测 18，2026-10-03 复测 **16**） | **实质性错误。** 初版脚本的图用相对路径作键、绝对路径作边值，无边匹配 → 假阴性。`forbidCycles` **未**满足；M5 拆包前必须先解耦 |
 | 5 | `packages/agent/src` "35 个模块" | **36 个** | 初版手工列举遗漏 `modules/`（空目录被顺带计入）。现由脚本输出 |
 | 6 | `packages/agent/src` "177,278 LOC" | **156,994 LOC（排除 tests）/ 870 文件（含 tests）** | 两个数字口径不同：前者排除测试，后者含测试。现两者都给 |
+| 7 | **agent 模块分类按 LOC 划归属** | 判据应是**外部信号**，不是体量 | `modes/` 16k 行里只有 **1 个**进程信号（切口本身）；`compact/` **零信号却是 4 文件环**；`tool/` 60k 行含 9 PROC + 4 NET。按 LOC 划会把这三块全划错。现值表见 `03` §5.1 |
+| 8 | **"公共 barrel `src/index.ts` 参与内部环，改掉它能显著缩小 SCC"**（第二轮据此定 C1.1） | **前提被削弱**：路径经 barrel 属实（`verify-cycle.mjs` 可复现），但 barrel **不是任何 SCC 的成员** —— 环在 `StreamingToolExecutor` 之后别处闭合 | **C1 入口改为 14 文件类型/注册表环。** 教训："是否在 SCC 成员里"与"是否在通往 SCC 的路径上"是两个不同问题，审计脚本各答一个，都不足以单独支撑"删掉它能解环"。**解环任务落地前必须"删改 + 重跑 SCC 计数"实测**，不得靠读图推断 |
 
 ### 4 的根因与修法
 
@@ -421,7 +451,7 @@ unresolved           34
 
 ── audit-modules.mjs ──
 packages/ files           1597
-cyclic groups (SCC > 1)   18
+cyclic groups (SCC > 1)   18   ← 2026-10-03 复测为 16
 agent/src top-level mods  36
 agent/src files (no tests) 669
 agent/src LOC (no tests)  156994
