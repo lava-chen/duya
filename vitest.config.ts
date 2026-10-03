@@ -78,6 +78,10 @@ export default defineConfig({
       // `@duya/agent-protocol/testing` got fixtures and nothing else.
       { find: /^@duya\/agent-protocol\/testing$/, replacement: AGENT_PROTOCOL_SRC + '/testing/index.ts' },
       { find: /^@duya\/agent-protocol\/legacy$/, replacement: AGENT_PROTOCOL_SRC + '/legacy/sse-event.ts' },
+      // Plan 587 T3.1: the moved transcript vocabulary. Subpath rule first,
+      // for the same reason as `/testing` and `/legacy` above — the bare-name
+      // rule below would otherwise swallow it.
+      { find: /^@duya\/agent-protocol\/transcript$/, replacement: AGENT_PROTOCOL_SRC + '/transcript/index.ts' },
       { find: /^@duya\/agent-protocol$/, replacement: AGENT_PROTOCOL_SRC + '/index.ts' },
       // agent-core / agent-runtime resolve to THIS checkout's source too, for
       // the same worktree-safety reason as the protocol package above.

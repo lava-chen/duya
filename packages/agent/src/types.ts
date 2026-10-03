@@ -7,10 +7,16 @@ import type { AgentDefinition } from './tool/SubagentTool/loadAgentsDir.js';
 import type { PermissionMode, LocalToolPermission } from './permissions/types.js';
 
 // Re-export shared types from @duya/ai (spec §6.1).
-// The definitions have been migrated to packages/ai/src/types.ts
-// to break the circular dependency between packages/agent and packages/ai.
-// @duya/ai versions are supersets: all original fields preserved + new
-// signature fields (textSignature, thinkingSignature, thoughtSignature, etc.)
+//
+// Plan 587 T3.1 (2026-10-03) moved the DEFINITION of the pure data one level
+// further, to `@duya/agent-protocol/transcript`. `@duya/ai` re-exports it
+// unchanged, so this file's imports keep resolving and this re-export is still
+// a genuine pass-through rather than a second definition.
+//
+// @deprecated Import from `@duya/agent-protocol/transcript` for the data
+// shapes, or from `@duya/ai` for the provider surface. Removal task
+// 587-T3-1-REMOVE-TRANSCRIPT; see packages/agent-protocol/MIGRATION.md for the
+// compatibility window that must elapse first.
 import type {
   MessageRole,
   TextContent,
@@ -34,6 +40,11 @@ import type {
   LLMProvider,
 } from '@duya/ai';
 
+/**
+ * @deprecated Re-export of `@duya/agent-protocol/transcript`, itself a
+ * re-export of the types `@duya/ai` has always published. Removal task
+ * 587-T3-1-REMOVE-TRANSCRIPT.
+ */
 export type {
   MessageRole,
   TextContent,

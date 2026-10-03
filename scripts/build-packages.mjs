@@ -65,22 +65,29 @@ const repoRoot = resolve(scriptDir, '..');
  */
 const BUILD_ORDER = [
   // Level 1 — no `@duya/*` imports.
-  '@duya/ai',
+  // `@duya/ai` used to sit here, but plan 587 T3.1 gave it one
+  // (`@duya/agent-protocol/transcript`, the moved transcript vocabulary), so
+  // it moves down a level. Keeping it in level 1 would have `@duya/ai`
+  // typechecking against whatever `agent-protocol/dist` happened to contain —
+  // or against a stale declaration for a subpath that does not exist yet.
   '@duya/agent-protocol',
+
+  // Level 2 — depend only on level 1.
+  '@duya/ai', //              -> @duya/agent-protocol
   '@duya/plugin-core',
   '@duya/conductor',
   '@duya/gateway',
   '@duya/voice',
 
-  // Level 2 — depend only on level 1.
+  // Level 3 — depend only on level 2.
   '@duya/agent-core', //   -> @duya/agent-protocol
   '@duya/computer-use', // -> @duya/ai
   '@duya/cli', //          -> @duya/plugin-core
 
-  // Level 3.
+  // Level 4.
   '@duya/agent-runtime', // -> @duya/agent-core, @duya/agent-protocol
 
-  // Level 4 — last. `@duya/agent` consumes the four level-1/2 packages above,
+  // Level 5 — last. `@duya/agent` consumes the four level-2/3 packages above,
   // and `apps/desktop/src/main` plus the agent bundle both import it, so
   // nothing that needs it can be built or typechecked earlier. It also
   // resolves `@duya/agent/message` to its OWN emitted `dist/message`, so it

@@ -15,6 +15,9 @@
       "@/*": ["./src/main/*"],
       "@duya/agent/message": ["../../packages/agent/dist/message/index"],
       "@duya/agent/tool/allowedRoots": ["../../packages/agent/src/tool/allowedRoots.ts"],
+      "@duya/agent-protocol/transcript": [
+        "../../packages/agent-protocol/dist/transcript/index.d.ts"
+      ],
       "@duya/plugin-core": ["../../packages/plugin-core/dist/index.d.ts"],
       "@duya/plugin-core/*": ["../../packages/plugin-core/dist/*"]
     }

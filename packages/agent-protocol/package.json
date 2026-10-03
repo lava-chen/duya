@@ -18,6 +18,10 @@
     "./legacy": {
       "types": "./dist/legacy/sse-event.d.ts",
       "import": "./dist/legacy/sse-event.js"
+    },
+    "./transcript": {
+      "types": "./dist/transcript/index.d.ts",
+      "import": "./dist/transcript/index.js"
     }
   },
   "files": [
