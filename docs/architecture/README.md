@@ -35,10 +35,12 @@
 1. **问题不是包太少，是没有任何一层被强制执行。**
    568 条跨边界 import，其中 **117 条 deep import**（绕过 public entrypoint）
    与 **161 条相对路径穿透**（全部来自 Electron Main，`src/` 为 0）。
-2. **`packages/agent` 内部有 18 个循环依赖 SCC，最大 42 文件**，
+2. **`packages/agent` 内部最大循环 SCC 为 42 文件**（轮数：初测 18，2026-10-03 复测 16），
    横跨 `modes`/`hooks`/`tool`/`process`/`agent`。
    这条环正好压在 `agent-core` 与 `agent-runtime` 的切口上 ——
    **拆包前必须先解耦，否则编译不过。**
+   第三轮补充：**16 个环里 15 个不需架构改动即可解掉**，
+   且解环入口是 14 文件类型/注册表环，**不是**原先认定的公共 barrel（见 `03` §5.3）。
 
 3. **缺失的不是包，是三样东西**：一个 protocol package、一个 agent entrypoint 收敛、一条 CI 边界检查。
 
@@ -122,6 +124,29 @@ evals/agent/         ★ 新建  非 workspace member（初版名为 harness/）
 `packages/storage`（44 处触达分散在 7 个 owner）、`packages/ui`（UI 的问题是边界泄漏不是缺包）、
 `packages/agent-tools`（聚合袋内聚弱，改为按能力独立成包）。
 
+### ⚠️ 落地现状（2026-10-03 实测，与目标结构的差距）
+
+**目标结构是设计态，`packages/agent` 一行未动。** 这一点必须先讲清楚，
+否则容易把"新包已存在"误读成"老包已拆分"：
+
+| 目标包 | 现状 | 差距 |
+|---|---|---|
+| `agent-protocol` | ✅ 8,171 行 | 绿地新建，**不是**从 `agent` 搬来的 |
+| `agent-core` | ⚠️ 1,208 行 / 8 文件 | 目标 ≈ 39.5k LOC。**实现仍全在 `packages/agent`** |
+| `agent-runtime` | ⚠️ 2,651 行 / 9 文件 | 目标 ≈ 93.4k LOC。同上 |
+| `browser` | ❌ 不在 master | 只存在于 `docs/browser-capability-split` 分支 |
+| `shared` | ❌ 未建 | 阻塞 M3 |
+| `evals/agent` | ❌ 未建 | M6 |
+| `apps/desktop` | ✅ 已落地 | `electron/` 与根 `src/` 已消失 |
+
+实测：`packages/agent` 883 文件 / 180,041 行，内部对 `@duya/agent-protocol`、
+`@duya/agent-core`、`@duya/agent-runtime` 的引用为 **0 条**。
+新三包合计 12,030 行 = 老包的 6.7%，构成 plan 586 的 reference run 纵切
+（消费方只有 `main/agents/server/run-orchestrator.ts` 与 `main/db/core/run-store.ts`）。
+
+**这不是"拆了一半"，而是"旁边新建了一条路"。** 之所以这样是对的：
+18→16 个环里那个 42 文件环横跨切口，物理搬迁会编译失败。
+
 ---
 
 ## 下一步
@@ -135,15 +160,25 @@ evals/agent/         ★ 新建  非 workspace member（初版名为 harness/）
 
    ```
    ── audit-imports.mjs ──
-   cross-boundary edges 568 · deep imports 117
-   package escapes 161 (src/ 0 · electron/ 161) · unresolved 34
+   cross-boundary edges 583 · deep imports 25
+   package escapes 162 (renderer 0 · main 162) · unresolved 10
    ── audit-modules.mjs ──
-   cyclic groups 18 (largest 42) · agent/src mods 36 · LOC 156994
+   cyclic groups 16 (largest 42) · agent/src mods 36 · LOC 158850
    ```
+   ✅ **以上为 2026-10-03 `master @ 0dfaf650` 实测值**，已与
+   `architecture-policy.yaml` 的 `selfTest` 块和 `.architecture-baseline.json` 对齐。
+   `npm run architecture:self-test` 与 `npm run architecture:check` 均 exit 0
+   （802 条违规全部 baselined，0 blocking）。
+
+   > ⚠️ 旧数字（568 / 117 / 161 / 34 / 18）散落在本文档其他章节，是 M7 搬迁前
+   > 按 `electron/` 与 `src/` 统计的。**`deep imports` 117 → 25 不是治理成果，
+   > 是 resolver 修复消掉的 93 条假阳性**（详见 `03` §1.4 与 policy 的两段
+   > re-measurement 注释）。唯一真实增长是 `package escapes` 161 → 162。
 
 3. **C1（解耦循环 SCC）** —— M5 的前置。最大的 42 文件 SCC 横跨
    `agent-core`(modes) 与 `agent-runtime`(tool/process/hooks) 的切口，
-   不先解环就拆包会编译失败。
+   不先解环就拆包会编译失败。**16 个环里 15 个不需架构改动即可解掉**，
+   入口是 14 文件类型/注册表环（`06` C1.1）。
 4. 每个阶段走 `AGENTS.md` 的 **Worktree → PR workflow**，独立可回滚
 
 ---
@@ -162,6 +197,17 @@ node scripts/architecture/verify-cycle.mjs <a> <b>   # 打印具体环路路径
 
 `audit-imports.mjs` 读取每个 workspace 包的真实 `exports` 字段来判定 public / deep / escape。
 
-**审计经过两轮修正**，逐条记录在 `01-current-state-audit.md` §9。
-其中最重要的一条：初版报告"模块级循环依赖 0"是脚本路径拼接 bug 造成的假阴性，
-真实值为 **18 个 SCC（最大 42 文件）** —— 这一条改变了整个迁移的阶段顺序（新增 C1）。
+**审计经过三轮修正**，逐条记录在 `01-current-state-audit.md` §9。
+两条最关键的：
+
+1. 初版报告"模块级循环依赖 0"是脚本路径拼接 bug 造成的假阴性，
+   真实值为最大 **42 文件的 SCC**（轮数初测 18、复测 16）——
+   这一条改变了整个迁移的阶段顺序（新增 C1）。
+2. 第三轮发现**第二轮认定的解环入口（公共 barrel）前提被削弱**：
+   barrel 确实在通往环的路径上，但**不是任何 SCC 的成员**。
+   教训是"是否在 SCC 成员里"与"是否在通往 SCC 的路径上"是两个不同问题 ——
+   **解环任务必须用"删改 + 重跑 SCC 计数"验证收益，不能靠读图推断。**
+
+⚠️ **本文档的数字有三类时效性风险**，读之前先确认：
+① import 侧数字按 M7 之前的旧路径统计；② agent 模块 LOC 表是第一轮快照；
+③ SCC 轮数已从 18 降到 16 但基线上限未收紧。**动手前重跑 `scripts/architecture/` 下的脚本。**

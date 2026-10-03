@@ -50,8 +50,8 @@ harness/agent/{tasks,runners,evaluators,fixtures,reports}
 | `storage/` | ⚠️ **暂不建** | — | 44 处 SQLite 触达分散在 7 个 owner。ZCode 的 `storage` 模块是 16 个塌缩模块里**唯一**被挖出来的 —— 说明它难，不说明该先做 |
 | `plugin-core/` | ✅ **保留，已加 build** | 3,6 | Plan 584 / 06-M1 已落地：加 `tsc` build + 14 个 subpath 的 `exports`，deep import 93 → 0，模块转 `managed: true`。**但这只是加重因素而非全部**——真正的量级是 161 条相对路径穿透（`package-boundary-escape`），留待后续阶段 |
 | `packages/ui/` | ❌ **现在不建** | — | `src/` 已有 793 文件的组件体系。UI 当前唯一的跨边界问题是 conductor 的 23 条 deep import，**修边界 ≠ 搬目录** |
-| `agent-tools/` | ❌ **撤回** | 看到 plan 583 的 `@duya/browser` 后判定：单能力独立成包优于聚合袋。见 §3.1 |
-| `harness/agent/` | ✅ **采纳，改名 `evals/`** | 实测：全仓 0 个 harness script，`e2e` 仅 14 个测试文件。改名理由见 `MONOREPO_RFC.md` §4.1（仓库内 "harness" 已有 3 种含义） |
+| `agent-tools/` | ❌ **撤回** | — | 看到 plan 583 的 `@duya/browser` 后判定：单能力独立成包优于聚合袋。见 §3.1 |
+| `harness/agent/` | ✅ **采纳，改名 `evals/`** | 4,5,7 | 实测：全仓 0 个 harness script，`e2e` 仅 14 个测试文件。改名理由见 `MONOREPO_RFC.md` §4.1（仓库内 "harness" 已有 3 种含义） |
 
 ### 1.2 假设之外必须新增的两项
 
@@ -67,6 +67,72 @@ ZCode 的对应物是 `packages/shared/src/platform.ts` 的 `IPlatformService` +
 `packages/agent/tool` 10、`electron/ipc` 6、`packages/agent/cli-control-plane` 6、`electron/plugins` 4）。
 grok-build 用 `clippy.toml` 禁裸 `Command::spawn` 强制走 `ProcessScope::enroll`，
 并且 Duya **已经有真实 bug 佐证**（`AGENTS.md` footgun：运行中的 Electron 锁住 `.node` 文件）。
+
+**③ `packages/cli/src/contract`（第三轮补录，初版遗漏）**
+CLI 控制面契约**已经存在且干净**，但它现在被 `@duya/agent` 的 `tool/DuyaCliTool/`
+通过子路径 import，违反 host 侧持有实现的依赖方向。其模块头注释已自证边界：
+
+```
+Hard rule: this module MUST NOT import any agent runtime
+(no `duyaAgent`, no `REPL`, no `loadSkills`, no `session/db.ts`).
+```
+
+它与 `apps/desktop/src/main/cli/handlers/`（26 个 handler / 8,713 行，**零个
+import `@duya/agent`**）构成一对：**实现住在 `apps/` 里，谁都 import 不到。**
+裁决：与 M3 的 `shared/` 一起处理 —— descriptor registry + invocation/result envelope
+进 `shared`，handlers 留在 main 作为实现层。**这同时是 §6.2 "第二个 host" 条件
+已经满足一半的证据**：传输层（loopback HTTP + bearer）已多 host，缺的是共享代码层。
+
+---
+
+## 1.3 路径注记（阅读本文前必读）
+
+本文成文时 `electron/` 与根 `src/` 尚存，**M7 搬迁后它们已消失**（§2.1）。
+下文所有路径按下表换算，不要按字面去找文件：
+
+| 文中写法 | 现路径 |
+|---|---|
+| `electron/…` | `apps/desktop/src/main/…` |
+| `src/…`（renderer 语境） | `apps/desktop/src/renderer/…` |
+| `src/renderer` | `apps/desktop/src/renderer` |
+
+**未随之更新的实测数字**（仍以旧路径统计得出，需重跑确认）：
+`electron → src/` 57 条边、`packages/* → electron/` 161 条相对路径穿透、
+`main → renderer` 54 条。这些是 M3 的输入，M3 开工第一步应重跑
+`node scripts/architecture/audit-imports.mjs` 取得新基线。
+
+### 1.4 2026-10-03 复测（`master @ 0dfaf650`）：基线已全部对齐
+
+上表的旧数字已重跑并更新。`architecture-policy.yaml` 的 `selfTest` 块与
+`.architecture-baseline.json` **同批重录**，`npm run architecture:check` 现为
+**全绿：802 条违规全部 baselined，0 blocking**。
+
+| 指标 | 旧（文档/初测） | 现（实测） |
+|---|---|---|
+| cross-boundary edges | 568 | **583** |
+| deep imports | 117 | **25** |
+| package escapes | 161 | **162** |
+| unresolved | 34 | **10** |
+| 循环 SCC | 18 | **16** |
+
+跨 owner 边 Top 7（现值）：`electron-main→agent` **145** · `agent→ai` 80 ·
+`electron-main→plugin-core` 67 · `electron-main→renderer` **53** ·
+`agent→plugin-core` 27 · `renderer→conductor` 23 · `electron-main→ai` 21。
+
+> **`deep imports` 117 → 25 不是治理成果，是 resolver 修复。** 详见
+> `architecture-policy.yaml` 的 "Re-measured 2026-10-08" 与 "Re-measured 2026-10-02"
+> 两段：`exports` 子路径被误判、注释被当代码解析，两次修复共消掉 93 条假阳性。
+> **读本文档时不要把 117 当历史峰值去衡量今天。**
+>
+> **`package escapes` 161 → 162 才是唯一真实增长**，且来自 plan-583 栈
+> （`git log` 已核，不是推断）。构成：agent 126 / plugin-core 16 / gateway 13 / conductor 7。
+>
+> **同时暴露一个此前无人发现的问题**：`.architecture-baseline.json` 是用
+> **修复前的 resolver** 录的，导致 941 条指纹里 815 条已不再触发、
+> 802 条现存违规全部报 "not in baseline"（641 blocking）。
+> **`selfTest` 一直在维护，baseline 从没跟上** —— 闸门是红的，且红得毫无意义。
+> 这是"闸门永远是红的 = 没人读"的标准案例，policy 文件开头那段 ratchet 注释
+> 描述的正是它自己的失效。
 
 ---
 
@@ -361,12 +427,13 @@ control-plane/workspace/   owns mutable state + resolution
 | `agent-core` → `electron` / `packages/*/host` = **禁止** | V1：16 条 |
 | `src/renderer` → `electron` 实现 = **禁止** | V2：9 条 |
 | `packages/*` → 根 `src/` 或 `electron/` = **禁止** | V4 反向：57 条需先解耦 |
-| `agent-core` ↔ `agent-runtime` 互相 import = **禁止** | V7：18 个循环 SCC，最大 42 文件横跨切口 |
+| `agent-core` ↔ `agent-runtime` 互相 import = **禁止** | V7：最大 42 文件环横跨切口（实测环数 16，基线上限 18） |
 
 > **V7 是本结构最大的落地风险。** 实测 `modes`/`hooks`/`tool`/`process`/`agent` 同处一个
 > 42 文件 SCC。`agent-core`(modes) 与 `agent-runtime`(tool/process/hooks) 的切口
 > **被一条真实的环穿过** —— 在解耦之前，TypeScript 层面这个边界不存在。
 > 迁移必须先做 C1（见 `06-migration-plan.md`），不能把 M5 当成机械的文件移动。
+> 切口归属表与解环顺序见 §5.1 / §5.2。
 
 ---
 
@@ -380,32 +447,153 @@ control-plane/workspace/   owns mutable state + resolution
 | `packages/voice` | 1,406 LOC。拆它只增加包数量，不减少任何复杂度（不满足准则 7） |
 | `packages/gateway` | 16,850 LOC，独立生命周期 + 独立 bundle 已具备。它是 host 侧 consumer，不属于 agent harness 图 |
 | `packages/computer-use` | 13,064 LOC，自带 MCP SDK + nut.js + uiohook，独立生命周期成立。但它有自己的 electron backend（`src/electron/`），拆分应与 platform-ports 一起做，不是独立议题 |
-| `agent-core` 内的 `modes/`（16,202） | `workflow`(12,186) + `goal`(4,751) + `research`(2,354) 各自内部自洽，且**已经**通过 `ModeModifier` 机制解耦（见 `AGENTS.md` plan 224）。但它同时是最大循环 SCC 的成员（6 个文件），拆分前必须先解环 |
+| `agent-core` 内的 `modes/`（16,095） | `workflow`(12,186) + `goal`(4,751) + `research`(2,354) 各自内部自洽，且**已经**通过 `ModeModifier` 机制解耦（见 `AGENTS.md` plan 224）。但它同时是最大循环 SCC 的成员（6 个文件），拆分前必须先解环。**信号判据：全模块只有 1 个进程信号，切掉它即可整体进 core**（见 §5.1） |
+| `agent-core` 内的 `compact/`（4,561） | 外部信号为零，本应是 core 最干净的一块，**但它自己是 4 文件环**（§5.2）。零信号 ≠ 零环 |
 | `agent-core` 内的 `memory-state`/`memory-rollout` | 7,366 LOC，但 schema owner 在 electron。**先反转所有权（V1），再评估拆包** |
 | `packages/ui` | 见 §1.1。UI 的问题是边界泄漏，不是缺包 |
 
 ---
 
-## 5.1 `agent-core` / `agent-runtime` 的切口为什么不是现成的
+## 5.1 `agent-core` / `agent-runtime` 的切口由「外部信号」决定，不由体量决定
 
-第二轮审计（`audit-modules.mjs` + `validate-scc.mjs`）给出硬证据：
-`packages/**` 存在 **18 个循环 SCC**，最大一个 **42 文件**，构成如下：
+第三轮实测（`node scripts/architecture/audit-modules.mjs`，2026-10-03）推翻了一个想当然的推法：
+**按 LOC 大小划切口会划错。** `modes/` 16k 行里混着一个进程信号，
+`compact/` 零信号却自己成环，`tool/` 60k 行里 9 个进程 + 4 个网络信号。判据只能是**外部信号**。
 
-| 模块 | 文件数 | 归属 |
+| 模块 | 文件 | LOC | 外部信号 | 归属 |
+|---|---|---|---|---|
+| `compact` | 22 | 4,561 | **零** | core |
+| `message` | 10 | 3,433 | **零** | **protocol** |
+| `wake` | 7 | 932 | **零** | **protocol** |
+| `context` | 10 | 2,340 | FS2 SYS2 | core |
+| `agent` | 29 | 9,556 | SYS3 FS1 | core |
+| `prompts` | 54 | 6,904 | SYS15 FS11 TPL2 CONF1 | core |
+| `modes` | 66 | 16,095 | SYS20 FS10 SCHEMA6 CONF3 **PROC1** | core（须切掉那 1 个 PROC） |
+| `ipc` | 1 | 1,264 | PROC1 | runtime |
+| `sandbox` | 7 | 1,098 | PROC2 SYS2 FS1 | runtime |
+| `hooks` | 14 | 4,223 | PROC2 SYS7 FS4 SCHEMA2 | runtime |
+| `cli` | 16 | 4,822 | PROC1 SYS10 FS5 TUI2 SQLITE1 | runtime |
+| `session` | 11 | 5,276 | **SQLITE2** PROC1 | runtime |
+| `process` | 11 | 8,350 | SYS7 FS3 | runtime |
+| `skills` | 16 | 3,960 | SYS13 FS9 | runtime |
+| `utils` | 24 | 4,224 | PROC2 SYS13 FS7 IMG1 | runtime |
+| `memory-rollout` | 9 | 3,321 | **SQLITE2** SYS7 FS5 | 归属待反转 |
+| `memory-state` | 15 | 4,045 | **SQLITE5** SYS16 FS10 | 归属待反转 |
+| `tool` | 287 | 60,137 | **PROC9 NET4** SYS59 FS40 SCHEMA29 | runtime |
+| `permissions` | 6 | 3,806 | SYS2 | **protocol** |
+
+按此得到三个切分集合：
+
+```
+core     = agent + modes + prompts + compact + context   ≈ 39.5k LOC
+runtime  = tool + process + session + cli + hooks
+           + skills + utils + sandbox + ipc               ≈ 93.4k LOC
+protocol = message + wake + permissions                  =  8,171 LOC
+```
+
+**`protocol` 的 8,171 行与现存 `packages/agent-protocol` 的 8,171 行完全相等** ——
+M2.1 的 "~9k LOC" 不是估的，是照这三个模块量出来的。
+
+> **一个重要区分**：`core` 的判据是"无进程/网络信号"，**不是**"零外部信号"。
+> `modes` 有 20 个 SYS + 10 个 FS 信号，但只有 **1 个 PROC** ——
+> 那一个就是切口本身，切掉它 `modes` 整体可进 core。
+> 反过来 `compact` 信号为零，**自己却是 4 文件环**
+> （`compact/transforms/{imageTruncation,micro,canvas}Transform.ts` + `compact/projectionCompress.ts`）：
+> **零信号 ≠ 零环**，它不能直接搬。
+
+---
+
+## 5.2 循环 SCC 全谱（实测 16 个）
+
+```
+node scripts/architecture/audit-modules.mjs
+cyclic groups (SCC > 1)   16        ← 实测值（2026-10-03）
+```
+
+**`18` 是 `05-architecture-governance.md` §基线的上限，不是一个应当被覆写的实测值。**
+`packages/agent-protocol/test/02-cycle-budget.test.ts` 卡的是 `SCC ≤ 18`，
+因此 18 → 16 是**改善**；基线暂不收紧，等 C1 落地后再决定收到 16 还是更低。
+
+全谱（`size 42` 一行脚本只输出前 20 个成员，余 22 个未展示）：
+
+| size | 成员 | 性质 | 解环成本 |
+|---|---|---|---|
+| **42** | `modes`(6) + `hooks`(5) + `agent`(3) + `tool`(3) + `process`(3) | 阻塞 M5 | 高 |
+| **14** | `types.ts` + `tool/{types,catalog-types,catalog-identity,registry,BaseTool,snapshot}` + `skills/{types,registry,rootSnapshotCache,conditionalSkills}` + `permissions/{types,policy}` + `tool/SubagentTool/loadAgentsDir` | **纯类型/注册表环** | **低** |
+| 9 | `conductor/renderer/{CanvasArea,ElementChrome,ElementRenderer,GroupLayer,FreeformLayer,Native*}` | React 组件环，与 agent 无关 | 中 |
+| 4 | `compact/{transforms/*,projectionCompress}` | core 内部环 | 低 |
+| 3 | `computer-use/memory/{core,slice,index}` | barrel 环 | 极低 |
+| 3 | `tool/BrowserTool/{CDPClient,HumanLikeCDPClient,WebviewCDPClient}` | 接口环 | 低 |
+| 2 | `ai/{index↔retry-client}` · `ai/providers/{catalog↔catalog-data}` · `ai/{types↔auth/helpers}` | barrel 环 | 极低 |
+| 2 | `computer-use/backend/mcp/{result-parser↔cua-driver}` | — | 低 |
+| 2 | `cli/commands/{doctor↔doctor-config}` | 与 agent 无关 | 极低 |
+| 2 | `session/{bash-task-store↔bash-task-registry}` | — | 低 |
+| 2 | `prompts/bot/{epoch↔framework}` | — | 低 |
+| 2 | `skills/{skillsSync↔loader}` | — | 低 |
+| 2 | `tool/OSTool/{context-tool↔ComputerUseTool}` | — | 低 |
+| 2 | `permissions/{classifier↔permissions}` | — | 低 |
+
+**16 个环里 15 个可在不碰架构的前提下解掉**，唯一的硬骨头是 42 那个。
+
+## 5.3 barrel 的真实位置：它在路径上，但不在环里
+
+初版（`01` §V7 与迁移计划 C1.1）断言："公共 barrel `src/index.ts` 参与了内部环
+（`tool/SubagentTool/runAgent.ts → src/index.ts → agent/DuyaAgent.ts → tool/StreamingToolExecutor.ts`），
+修掉这一条能显著缩小 SCC。"
+
+**第三轮实测把这句话拆成两半：一半成立，一半未验证。**
+
+**成立的部分** —— `verify-cycle.mjs` 复现出的路径确实经过 barrel：
+
+```
+modes/goal/goal-mode.ts
+ → modes/goal/goal-tools.ts
+ → modes/goal/goal-evaluator.ts
+ → tool/SubagentTool/runAgent.ts
+ → src/index.ts                    ← 公共 barrel 确实在这条路径上
+ → agent/DuyaAgent.ts
+ → tool/StreamingToolExecutor.ts
+```
+
+`runAgent.ts` 确有 `import { duyaAgent } from '../../index.js'`。
+
+**未验证的部分** —— **但 `src/index.ts` 不是任何 SCC 的成员**
+（`audit-modules.mjs --json` 逐环校验：16 个环无一包含它）。
+两者不矛盾：`StreamingToolExecutor.ts` 的 import 全部落在 `tool/` 内部与 `types.js`，
+**它不回到 `src/index.ts`**，所以环是在别处闭合的，`index.ts` 只是路径上的一个中转站。
+
+因此：
+
+- 结论"barrel 参与内部环路"**字面上不精确** —— 它参与的是通往环的**路径**，
+  不是环本身；
+- 结论"修掉这一条能显著缩小 SCC"**从未被验证，且证据倾向于否定** ——
+  既然 `index.ts` 不是成员，删掉那条 import 不会让该文件退出任何 SCC；
+- 但 **`index.ts` 仍是一个被内部模块 import 的 barrel**，卫生问题依然成立
+  （`01` §V7 记录了全仓只有一处内部 barrel import 命中：`mentions/__tests__/`）。
+
+**barrel 参与内部环的真正案例长在别处**，且规模很小：
+
+| 环 | 成员 | 说明 |
 |---|---|---|
-| `agent/src/modes` | 6 | A Core |
-| `agent/src/hooks` | 5 | D Capability |
-| `agent/src/tool` | 4 | B Runtime |
-| `agent/src/process` | 3 | E Infra |
-| `agent/src/agent` | 2 | A Core |
+| 3 | `computer-use/memory/{core,slice,index}` | `index.ts` 是成员 |
+| 2 | `ai/{index.ts ↔ retry-client.ts}` | `index.ts` 是成员 |
+| 3 | `tool/BrowserTool/{CDPClient,HumanLikeCDPClient,WebviewCDPClient}` | 接口环 |
+| 2 | `ai/providers/{catalog↔catalog-data}` · `ai/{types↔auth/helpers}` | — |
+| 2 | `computer-use/backend/mcp/{result-parser↔cua-driver}` | — |
 
-**这个 SCC 同时包含 A/B/D/E 四类**，正好压在 `agent-core` 与 `agent-runtime` 的切口上。
-含义有两层：
+**因此 C1 的入口仍是 14 环，但理由要换成不依赖被证伪前提的那一条**：
+那 14 个文件**全部是类型与注册表**（`types.ts` / `tool/types.ts` / `catalog-types.ts` /
+`permissions/types.ts` / `skills/types.ts` / `registry.ts` / `BaseTool.ts` / `snapshot.ts` / …），
+互相 import 是纯粹的卫生问题，**成员清单已完整枚举、逐条可核对**；
+且它含 `types.ts` / `permissions/types.ts` / `tool/types.ts` / `tool/registry.ts` / `tool/BaseTool.ts`，
+是 42 环里多处依赖的类型来源，拆掉它会**连带缩小 42 环**。
+这个理由独立于 barrel 假设，且更强。
 
-1. **不能按目录整体搬。** `modes/` 与 `tool/` 互相依赖，单独搬任一个都会留下悬空引用。
-2. **必须先有一轮解耦。** 成本最低的第一步：公共 barrel `src/index.ts` 参与了内部环
-   （`tool/SubagentTool/runAgent.ts → src/index.ts → agent/DuyaAgent.ts → tool/StreamingToolExecutor.ts`）。
-   barrel 不该被内部模块 import —— 修掉这一条能显著缩小 SCC，且是纯粹的边界卫生问题。
+> **方法论教训（值得写进流程）**：本轮先只查了 `--json` 的环成员就断言 barrel 无关，
+> 又用 `verify-cycle.mjs` 才发现路径真实经过 barrel。
+> **"是否在 SCC 成员里"与"是否在通往 SCC 的路径上"是两个不同的问题**，
+> 审计脚本各答一个，两者都不足以单独支撑"删掉它能解环"的结论。
+> 任何解环任务落地前，都要用**删改 + 重跑 SCC 计数**实测，而不是靠读图推断。
 
 **因此本设计的 M5 阶段被显式降级为"解耦后再拆"**，并在迁移计划中新增 C1 阶段作为前置。
 
