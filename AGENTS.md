@@ -132,8 +132,8 @@ node packages/agent/dist/cli/index.js [options]
   fingerprint to the baseline to silence something you just introduced — fix
   the edge, or use `--write` only when a migration legitimately removed debt.
   Modules declared `managed: true` in `architecture-policy.yaml`
-  (`agent-protocol`, `agent-core`, `agent-runtime`) have zero tolerance and
-  cannot be baselined at all.
+  (`agent-protocol`, `agent-core`, `agent-runtime`, `legacy-plugin-core`)
+  have zero tolerance and cannot be baselined at all.
   - **Verify CI enforcement separately.** The workflow now watches `master`
     and runs `typecheck:all`; this does not imply `architecture:check` is a
     required check. Plan 587 G0 owns that remaining gate and ruleset work.
