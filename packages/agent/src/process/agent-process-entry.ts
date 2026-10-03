@@ -76,6 +76,9 @@ import { duyaAgent } from '../agent/DuyaAgent.js';
 import { Journal } from '../journal/Journal.js';
 import { loadSkills, getSkillRegistry, getAgentSkillDirectory } from '../skills/index.js';
 import { browserTool } from '../tool/builtin.js';
+import { modeModifierRegistry } from '../modes/index.js';
+import { verifyRunManifestBinding, type WorkerCapabilitySet } from './run-manifest-verification.js';
+import type { RunManifest } from '@duya/agent-protocol';
 import { getBashTaskRegistry } from '../session/bash-task-registry.js';
 import { hookTaskRegistry } from '../hooks/task-registry.js';
 import { backgroundAgentLifecycle } from '../lifecycle/BackgroundAgentLifecycle.js';
@@ -205,17 +208,33 @@ interface ChatStartMessage {
    * Plan 587 R2.1: reference to the frozen manifest (its sha256 fingerprint), so
    * the executor can tell WHICH run configuration it was given.
    *
-   * Carried and logged, not yet ENFORCED. Verification — rejecting a manifest
-   * hash the worker cannot reproduce, an unknown required capability, an illegal
-   * cwd — is R2.2, and claiming it here would be a capability this build does
-   * not have.
+   * R2.2: the hash is now CHECKED, not just carried — see
+   * `verifyRunManifestBinding` and the call in `handleChatStart`. A digest the
+   * receiver can recompute over the manifest it received is a check; a digest
+   * nobody compares was a comment with hex in it.
    */
   manifestHash?: string;
   /**
    * Plan 587 R2.1: digest of this turn's prompt and options, pinned before the
-   * dispatch. Same caveat as `manifestHash`: carried, not yet checked.
+   * dispatch.
+   *
+   * R2.2: also checked, against the prompt and options that actually arrived.
+   * This is the check that makes the removal of the old dual input source
+   * falsifiable — if a side channel ever delivers a prompt beside the resolved
+   * one again, the two disagree and the turn is refused.
    */
   inputRevision?: string;
+  /**
+   * Plan 587 R2.2: the frozen manifest itself, so the hash above can be
+   * recomputed over what this process received rather than trusted.
+   *
+   * The PUBLIC manifest: it carries an `env` REFERENCE and no credential
+   * (drift test #12 walks every field for one). The provider credential for
+   * this turn still reaches the worker through the separate, controlled
+   * `init` command's `providerConfig` — a real constraint of the current
+   * design, not a guarantee this field provides. There is no secret broker.
+   */
+  manifest?: RunManifest;
   prompt: string;
   options?: {
     messages?: Array<{ role: string; content: string }>;
@@ -317,6 +336,50 @@ let chatInProgress = false;
 let currentSecurityScanEnabled = true;
 let lastInterruptTime = 0;
 const DOUBLE_INTERRUPT_WINDOW_MS = 3000;
+
+/**
+ * What THIS build can do, for manifest verification (plan 587 R2.2).
+ *
+ * Read from the real registries rather than a hardcoded list, because a list
+ * written here would drift the moment a mode is registered and would then be
+ * a LIE in the worst direction: it would report a capability this process does
+ * not have, and the check that exists to prevent a run executing under a
+ * configuration it was not given would be asserting the opposite.
+ *
+ * Two kinds of entry, and the difference matters:
+ *
+ *  - `streaming` is a real, named capability this build implements: this
+ *    process streams a chat turn over the parent pipe, and the Desktop chat
+ *    path requires it. It is listed because the Control Plane names it, and a
+ *    non-streaming executor must refuse the run rather than answer it wrongly.
+ *  - The mode ids come from `modeModifierRegistry.list()` — the same registry
+ *    `applyModes` resolves against, so a mode this process cannot apply is
+ *    reported as unavailable.
+ *
+ * What is NOT claimed: tool names, profile ids, and any `replay` / `pause`
+ * capability. The tool set is assembled per turn from MCP servers, skills and
+ * plugins, so there is no single static list to be honest about here, and
+ * claiming tool availability from a static list is the same drift problem one
+ * level down. A tool named in the manifest that this build lacks therefore
+ * lands in `unsatisfiedOptional` — recorded, not fatal — which is the honest
+ * degrade.
+ *
+ * The revision is the PACKAGE version, not an invented counter: it is a real,
+ * versioned fact about this build, which is all a "did the catalog move under
+ * this run" record needs. Inventing a string here would be the self-certified
+ * fact the manifest exists to prevent.
+ */
+const AGENT_CATALOG_REVISION = '0.1.0';
+
+function workerCapabilitySet(): WorkerCapabilitySet {
+  const modeIds = modeModifierRegistry.list().map((mode) => mode.id);
+  return {
+    available: ['streaming', ...modeIds],
+    catalogRevision: `agent@${AGENT_CATALOG_REVISION}`,
+    manifestVersion: 1,
+  };
+}
+
 let sessionSystemPrompt: string | undefined = undefined;
 let existingMessageCount = 0;
 // Plan 508: pending compact command captured during init. The router may
@@ -2402,6 +2465,63 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     firstFileTextLength: msg.options?.files?.[0]?.text?.length ?? 'N/A',
     firstFileRaw: msg.options?.files?.[0] ? JSON.stringify(msg.options.files[0]).substring(0, 200) : 'N/A',
   });
+
+  // Plan 587 R2.2: verify the binding BEFORE any execution. This sits above
+  // every side effect in this function on purpose — the whole point of a
+  // refused run is that nothing happened, and a check placed after the
+  // heartbeat, the permission seeds or the tool-approval ledger read would
+  // already have touched state.
+  //
+  // Producers that have not migrated (automation, the workflow runtime, the
+  // sub-agent tool) send no manifest at all, and they are registered for H8.
+  // They are NOT failed here: there is nothing to verify against, and refusing
+  // them would break working paths to satisfy a check they cannot yet meet.
+  // A turn that ARRIVES with a manifest is held to it.
+  if (msg.manifest !== undefined && msg.manifestHash !== undefined) {
+    const verdict = verifyRunManifestBinding({
+      manifest: msg.manifest,
+      manifestHash: msg.manifestHash,
+      inputRevision: msg.inputRevision ?? '',
+      received: {
+        sessionId: msg.sessionId,
+        prompt: msg.prompt,
+        options: (msg.options ?? {}) as Record<string, unknown>,
+      },
+      worker: workerCapabilitySet(),
+    });
+    if (!verdict.ok) {
+      // Refused, and NAMED. `chat:error` is the frame the router already turns
+      // into a run terminal, so the refusal is recorded rather than being a
+      // worker that silently never answers.
+      log(
+        `[chat:start] refused ${verdict.code}: ${verdict.detail} (runId=${msg.runId ?? 'none'}, session=${msg.sessionId})`,
+      );
+      sendToMain({
+        type: 'chat:error',
+        sessionId: msg.sessionId,
+        error: `run refused (${verdict.code}): ${verdict.detail}`,
+      } as never);
+      return;
+    }
+    if (verdict.unsatisfiedOptional.length > 0) {
+      // Version skew: recorded, and NOT fatal. See the module header for why
+      // this degrades where a required capability refuses.
+      log(
+        `[chat:start] catalog skew: ${verdict.unsatisfiedOptional.length} optional capabilit(ies) unavailable ` +
+          `(${verdict.unsatisfiedOptional.join(', ')}); continuing against the frozen manifest`,
+      );
+    }
+    // R2.2 item 4: the catalog revision this process is running is RECORDED for
+    // every verified turn, not only when something is missing. A run frozen
+    // against catalog X that executes on catalog Y is a fact someone will want
+    // later, and it is only cheap to capture while the turn is in hand.
+    // `adopted` is always false: the run keeps the snapshot it was frozen with,
+    // and this line is the evidence that it did.
+    log(
+      `[chat:start] manifest verified (runId=${msg.manifest.runId}, hash=${msg.manifestHash.slice(0, 12)}…, ` +
+        `catalog=${verdict.catalogRevision.worker}, adopted=${String(verdict.catalogRevision.adopted)})`,
+    );
+  }
 
   try {
     startChatHeartbeat();

@@ -69,6 +69,73 @@ export interface RunCheckpoint {
   readonly messageCount: number;
 }
 
+/**
+ * The manifest fields that carry a configuration decision, and therefore carry
+ * a {@link ManifestProvenance} entry.
+ *
+ * A CLOSED set on purpose. `RunManifest.provenance` is a
+ * `Record<ManifestField, …>`, so a field added to `RunManifest` without one is
+ * a compile error here rather than a silently unattributed value in the run
+ * row — which is the failure the contract's §B "express the missing case as
+ * unknown AND attributed" exists to prevent.
+ */
+export type ManifestField =
+  | 'roots'
+  | 'cwd'
+  | 'permissionPolicy'
+  | 'capabilities'
+  | 'connectorBindings'
+  | 'env'
+  | 'agent'
+  | 'budget'
+  | 'workspaceId'
+  | 'deterministic';
+
+/**
+ * Where a manifest value was read from.
+ *
+ * `unsupported` is the important one, and it is a first-class value rather
+ * than an omission: it says "no configuration source for this exists yet", and
+ * it is what lets the factory write an honest empty value instead of a
+ * plausible-looking one. Before this existed, that distinction lived only in
+ * a file header comment, which is no place a reader of a run row will ever
+ * look.
+ */
+export type ManifestSource =
+  /** The chat turn's own request. */
+  | 'host_chat_request'
+  /** Persisted per-session configuration. */
+  | 'session_row'
+  /** The project entity resolved from the cwd. */
+  | 'project_binding'
+  /** A fact about the runtime, not configuration. */
+  | 'runtime_fact'
+  /** Computed by the Control Plane from the sources above. */
+  | 'derived'
+  /** NO source exists. The value is a placeholder and is not configuration. */
+  | 'unsupported';
+
+export interface ManifestProvenance {
+  readonly source: ManifestSource;
+  /**
+   * The version of that source, when it is versioned.
+   *
+   * Absent means "this source carries no version" — never "the version is
+   * unknown but the value is fine". A caller that knows a version supplies it
+   * through `RunIntent.sourceVersions`; the factory does not invent one.
+   */
+  readonly sourceVersion?: string;
+  /**
+   * True when the Control Plane supplied this value itself rather than reading
+   * it from `source`.
+   *
+   * An invariant the factory maintains and the drift tests check: `source ===
+   * 'unsupported'` implies `synthesised === true`. A value with no origin
+   * that is not marked synthesised would be claiming to be a fact.
+   */
+  readonly synthesised: boolean;
+}
+
 export interface RunManifest {
   readonly version: 1;
   readonly runId: RunId;
@@ -86,6 +153,25 @@ export interface RunManifest {
     readonly modes: readonly string[];
     readonly tools: readonly string[];
   };
+  /**
+   * What this run cannot proceed without (plan 587 R2.2).
+   *
+   * The distinction this field exists for, and it is the difference between
+   * refusing a run and degrading it:
+   *
+   *  - a capability named HERE and unavailable in the executor means the
+   *    Control Plane has decided the run cannot do its job. The executor
+   *    refuses. Substituting a near-equivalent capability is the silent
+   *    substitution the plan forbids.
+   *  - a capability named in `capabilities` and unavailable is version skew.
+   *    `capabilities` is a SNAPSHOT OF WHAT THE CONTROL PLANE BELIEVES EXISTS,
+   *    not a demand, so a missing one is recorded and the run continues.
+   *
+   * Absent means the run demands nothing by name, which is legal and common:
+   * most turns need nothing beyond the configuration the manifest already
+   * carries.
+   */
+  readonly requiredCapabilities?: readonly string[];
   readonly connectorBindings: readonly ConnectorBinding[];
   /** NO SECRETS. See the header note. */
   readonly env: EnvReference;
@@ -95,6 +181,15 @@ export interface RunManifest {
   readonly deterministic: boolean;
   readonly parentRunId?: RunId;
   readonly resumeFrom?: ResumeBoundary;
+  /**
+   * Where each configuration value came from, and whether the Control Plane
+   * supplied it (plan 587 R2.2).
+   *
+   * Required and closed, and hashed: the provenance is part of the
+   * configuration the fingerprint attests to, so two runs resolved against
+   * different source versions are two different runs and cannot share a hash.
+   */
+  readonly provenance: Readonly<Record<ManifestField, ManifestProvenance>>;
 }
 
 export const DEFAULT_PERMISSION_TIMEOUT_MS = 300_000;

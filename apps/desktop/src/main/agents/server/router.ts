@@ -1237,12 +1237,11 @@ async function handlePostChat(
         // acknowledgement, so "the run did not open" is distinguishable from
         // "the run is live", and the not-accepted case means nothing was
         // dispatched.
-        // `openRun` is called WITHOUT `runOrigin`, though it was passed before.
-        // It reached `buildRunManifest`, which has no such field and dropped it,
-        // so it never reached the manifest, the run row, or any event. Dropping
-        // it changes nothing observable and stops an executor attribution from
-        // looking like it is recorded when it is not. R2.2 is the slice that
-        // makes origin real manifest configuration.
+        // `openRun` is called WITHOUT `runOrigin` being dropped, though. R2.1
+        // removed it here because `buildRunManifest` had no such field and
+        // discarded it; R2.2 gives the field a home, so an executor's
+        // attribution is now on the manifest and inside the fingerprint
+        // instead of being computed and thrown away.
         if (deps.runOrchestrator) {
           const start = await deps.runOrchestrator.openRun(sessionId, {
             prompt,
@@ -1258,6 +1257,52 @@ async function handlePostChat(
             // the frozen manifest, where it hashed as a real configuration.
             workingDirectory: workingDirectory || '',
             ...(resolvedProject?.projectId ? { projectId: resolvedProject.projectId } : {}),
+            // R2.2: the configuration the router ALREADY resolved, handed to the
+            // Control Plane rather than re-derived by it. Before this the
+            // manifest was assembled from a fraction of what this function
+            // holds, so the run row described a run whose profile, mode,
+            // effort, permission policy and roots could not be reconstructed
+            // from the run itself.
+            // `parsed.options` is typed `Record<string, unknown>`, so each of
+            // these is narrowed at the boundary rather than cast. A cast here
+            // would put a value into the run row that nothing had checked.
+            ...(typeof parsed.options?.agentProfileId === 'string' && parsed.options.agentProfileId !== ''
+              ? { agentProfileId: parsed.options.agentProfileId }
+              : {}),
+            ...(typeof parsed.options?.mode === 'string' && parsed.options.mode !== ''
+              ? { modes: [parsed.options.mode] }
+              : {}),
+            ...(typeof parsed.options?.effort === 'string' ? { effort: parsed.options.effort } : {}),
+            // The project's other writable roots are already merged into the
+            // rules the worker gets, so recording them here keeps the manifest's
+            // root set and the executor's root set from being derived twice.
+            ...(projectAdditionalRoots.length > 0 ? { additionalRoots: projectAdditionalRoots } : {}),
+            // NOT wired, and the omission is the finding, not an oversight:
+            //
+            //  - `effectivePermissionRules` is NOT a `PermissionRulesWire`. The
+            //    merge helper returns the legacy permission context shape
+            //    (`{ permissions: { additionalDirectories, … } }`), and
+            //    `PermissionRulesWire` is a flat `Record<PermissionRuleSource,
+            //    readonly string[]>`. Handing one to the other would type-check
+            //    only behind a cast and would put a value in the run row that
+            //    no reader could interpret — a silent substitution wearing a
+            //    type annotation. So the manifest records
+            //    `permissionPolicy` as synthesised until a real wire-form source
+            //    exists, and the factory's `rules` support is ready for it.
+            //
+            //  - `permissionModeOverride` is `'default' | 'auto' |
+            //    'bypassPermissions'`, and `PermissionPolicyMode` is
+            //    `'default' | 'acceptEdits' | 'plan' | 'bypassPermissions' |
+            //    'dontAsk'`. `auto` has no counterpart, and inventing one would
+            //    be the Control Plane deciding policy the product has not
+            //    decided. So the manifest's `mode` stays the standing default
+            //    and says so, rather than guessing which half of `auto` was
+            //    meant.
+            runOrigin: runOrigin === 'agent' ? 'bot' : runOrigin === 'background' ? 'wake' : 'user',
+            // A chat turn IS a streaming turn. Naming it is what makes a
+            // worker that cannot stream a refusal rather than a silent
+            // degradation — see `requiredCapabilities` in the manifest.
+            requiredCapabilities: ['streaming'],
           });
           if (!start.accepted) {
             // Reported, not thrown. Losing the durable record is a degradation;

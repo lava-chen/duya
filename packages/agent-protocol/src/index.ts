@@ -30,6 +30,7 @@ export * from './permission.js';
 export * from './capabilities.js';
 export * from './resume.js';
 export * from './manifest.js';
+export * from './input-revision.js';
 export * from './envelope.js';
 export * from './run.js';
 export * from './transport.js';
