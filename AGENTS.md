@@ -12,6 +12,10 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
   and the ordering constraints — read that section before picking up a plan.
 - Verify feature/plan is still active; read relevant active plan file for progress
 - Read [ARCHITECTURE.md](./ARCHITECTURE.md) before starting — contains database schema, data flows, module details
+- Monorepo / Agent Harness refactoring: follow the sole execution queue in
+  [plan 587](./docs/exec-plans/active/587-agent-harness-monorepo/README.md).
+  Its contracts, phase gates, migration map, and handoff log supersede the
+  archived 429/550/583–586 plans and the historical M/PP/C schedules.
 - For multi-step tasks: use `/plan` mode before writing code
 - Replies: repo-root refs only: `apps/desktop/src/renderer/components/chat/MessageList.tsx:45`. No absolute paths, no `~/`.
 - Missing deps: `npm install`, retry once, then report first actionable error.
@@ -85,8 +89,8 @@ npm run build:web             # Web frontend only
 npm run build:agent           # Build @duya/agent workspace (tsc)
 npm run bundle:agent          # Bundle Agent subprocess entry (esbuild)
 npm run electron:build         # Build Agent + bundle + Vite + Electron
-npm run typecheck:all         # TypeScript check for renderer + packages/agent — MUST run before commit
-npm run -w @duya/desktop typecheck:main     # main process layer (NOT gated; large pre-existing backlog)
+npm run typecheck:all         # Workspace checks + Electron error ratchet — MUST run before commit
+npm run -w @duya/desktop typecheck:main     # Raw main check; pre-existing backlog remains
 npm run -w @duya/desktop typecheck:renderer # renderer layer (same scope as typecheck:web)
 
 # Testing
@@ -117,17 +121,16 @@ node packages/agent/dist/cli/index.js [options]
 
 - Pre-commit: `npm run typecheck:all` MUST pass. esbuild does not type check.
 - Architecture boundaries: `npm run architecture:check` MUST pass. It is a
-  ratchet, not a lint: ~938 pre-existing violations are frozen in
+  ratchet, not a lint: pre-existing violations are frozen in
   `.architecture-baseline.json`, and only *new* ones block. Never add a
   fingerprint to the baseline to silence something you just introduced — fix
   the edge, or use `--write` only when a migration legitimately removed debt.
   Modules declared `managed: true` in `architecture-policy.yaml`
   (`agent-protocol`, `agent-core`, `agent-runtime`) have zero tolerance and
   cannot be baselined at all.
-  - ⚠️ **Not yet enforced in CI.** The workflow's push trigger points at
-    `main`/`develop` while this repo's default branch is `master`, so no
-    `push` run has ever happened. Until plan 583 ISS-01 lands, this gate is
-    local-only and its absence from a green CI run means nothing.
+  - **Verify CI enforcement separately.** The workflow now watches `master`
+    and runs `typecheck:all`; this does not imply `architecture:check` is a
+    required check. Plan 587 G0 owns that remaining gate and ruleset work.
   - Verify the gate itself still sees everything after touching the resolver or
     the audit scripts: `npm run architecture:self-test`.
 - MCP connectors: a new or changed connector MUST pass the conformance suite
@@ -584,7 +587,7 @@ question you're asking.
 ## Footguns
 
 - Editing `apps/desktop/src/preload/index.ts` without rebuilding Electron
-- **The main process is NOT typechecked** ⚠️: `typecheck:all` only covers the renderer (the root `tsconfig.json` extends `apps/desktop/tsconfig.renderer.json`). `apps/desktop/tsconfig.main.json` and `tsconfig.preload.json` exist as layer definitions but are deliberately **not** wired into the gate — `tsc -p apps/desktop/tsconfig.main.json` reports a large pre-existing backlog, so gating it today would be red on arrival. For main-process changes, the real safety net is `npm run build:electron` (esbuild resolves every import edge) plus `npm test`. Track the backlog in `docs/architecture/10-tech-debt-tracker.md`.
+- **Main/preload use a type-error ratchet, not a zero-error gate**: `typecheck:all` includes `typecheck:electron`; raw main/preload checks still have legacy debt. Main changes also require `npm run build:electron` and relevant tests. Current remediation is tracked by [plan 587 G0](./docs/exec-plans/active/587-agent-harness-monorepo/01-baseline-and-gates.md); historical measurements are reference data.
 - Modifying `packages/agent` exports without rebuilding (`npm run build:agent` / `npm run bundle:agent`)
 - Adding to `apps/desktop/src/renderer/app/api/` routes without verifying path doesn't conflict
 - Skipping Playwright verification for UI changes

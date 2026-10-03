@@ -3,7 +3,7 @@
 > **Status**: Phase 1 complete（2026-08-26）；Phase 2/3 待开工
 > **Priority**: P0（Phase 1）/ P1（Phase 2）/ P2（Phase 3）
 > **Created**: 2026-08-24
-> **Related**: [428-harness-signal-contracts](../completed/428-harness-signal-contracts.md)（read-state/mtime 追踪的由来）、[429-harness-gap-closure](./429-harness-gap-closure.md)（建议 3 快照已落地，本 plan 复用 `FileSnapshotStore`）、[docs/references/harness-comparison/read-edit-tools-deep-dive.md](../../references/harness-comparison/read-edit-tools-deep-dive.md)（五 harness 调研依据）
+> **Related**: [428-harness-signal-contracts](../completed/428-harness-signal-contracts.md)（read-state/mtime 追踪的由来）、[429-harness-gap-closure](./587-agent-harness-monorepo/history/429-harness-gap-closure.md)（建议 3 快照已落地，本 plan 复用 `FileSnapshotStore`）、[docs/references/harness-comparison/read-edit-tools-deep-dive.md](../../references/harness-comparison/read-edit-tools-deep-dive.md)（五 harness 调研依据）
 
 ---
 

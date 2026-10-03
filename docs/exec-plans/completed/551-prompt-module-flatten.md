@@ -2,7 +2,7 @@
 
 > **Status**: ✅ Implemented (2026-09-20, PR 经 worktree 工作流合入)
 > **Priority**: P1
-> **Companion**: [Plan 550](../active/550-prompt-hbs-and-agent-decomposition.md)（承接其 1d 静态半边扫尾；2e/3c 在 DuyaAgent 侧，无文件交集）
+> **Companion**: [Plan 550](../active/587-agent-harness-monorepo/history/550-prompt-hbs-and-agent-decomposition.md)（承接其 1d 静态半边扫尾；2e/3c 在 DuyaAgent 侧，无文件交集）
 > **Related**: [Plan 474](../active/474-bot-system-prompt-sections.md)（bot 提示词层，Phase 3 需协调）
 
 ## Background
