@@ -1,9 +1,9 @@
 # 587 — Agent Harness / Monorepo 架构重构主计划
 
-> Status: Active — G0.1 取证完成、G0.2-A CI 接线已合并（G0 未验收）；runtime phases not accepted.
+> Status: Active — G0.1 取证完成、G0.2-A/B 已合并（G0 未验收）；runtime phases not accepted.
 > Created: 2026-10-03. Priority: P0. 唯一执行队列：本文件。
-> Current task: **G0.2-B** — 构建次序根治：把次序写成**一处**显式拓扑，并让每个入口自给自足。
-> G0.2 已定方向：走显式 topological scripts，**不**引入 TS project references（esbuild 才是真正消费点且不对消费端跑 tsc；`Journal.ts:29` 有自引用环；desktop 主进程有约153处源码相对深引绕过 tsconfig 图）。
+> Current task: **G0.2-C** — required checks：`master` 目前**完全无分支保护**；已有 admin 权限，待确认 ruleset diff 后把 `architecture` 设为 required。
+> G0.2-B 已把构建次序收敛到唯一事实源 `scripts/build-packages.mjs`，四个入口均可从无 dist 的干净树单跑（`typecheck:electron` 修复前 153 个假错误 → 0；`bundle:agent` 修复前 14 个 esbuild 解析错误 → 0）。
 > G0.1 已建立按 (file, test, signature) 的可比失败集合；`npm ci` 在本机因 node-pty MSB8040 未取得 exit 0，属环境阻塞，已具名留开。
 > 本次交付为完整计划整合；不代表运行时修复或架构迁移已经完成。
 

@@ -135,7 +135,7 @@ Next task: exact ID + file + first action
 
 | 阶段 | Commit/PR | targeted / fullsetdiff | clean / CI | host / artifacts | Exit |
 | --- | --- | --- | --- | --- | --- |
-| G0 | G0.1 `93fcc97e`(PR #138)；G0.2-A `313d1f66`(PR #140) | 首次建立集合：45文件/101测试/103 tuple，按file+test+signature；G0.2-A未改测试，collect 1009文件/10709测试 | 本地clean安装（`npm ci` exit 1，环境原因）/ CI 37099318050 @同一SHA | `.tmp-validation/587-g0/`、`.tmp-validation/587-g0-2/` | G0.1部分、G0.2-A完成；G0未验收 |
+| G0 | G0.1 `93fcc97e`(PR #138)；G0.2-A `313d1f66`(PR #140)；G0.2-B `a3fe1f14`(PR #143) | 首次建立集合：45文件/101测试/103 tuple，按file+test+signature；G0.2-A未改测试；G0.2-B collect 1009文件/11873测试不变 | 本地clean安装（`npm ci` exit 1，环境原因）/ CI 37099318050 @同一SHA | `.tmp-validation/587-g0/`、`587-g0-2/`、`587-g0-2b/` | G0.1部分、G0.2-A/B完成；G0未验收 |
 | R1 | — | — | — | — | 未验收 |
 | R2 | — | — | — | — | 未验收 |
 | T3 | — | — | — | — | 未验收 |
@@ -202,6 +202,34 @@ Shim consumers + removal criterion: 不适用
 Rollback/data compatibility: 纯CI配置，可git revert
 Remaining blocker: G0.2其余项（合同测试独立job、测试债收敛、required checks/ruleset）与G0.2-B构建次序
 Next task: G0.2-B — 根 `package.json` 的scripts。方向已定为显式topological scripts（不引入TS project references），依据见01-baseline-and-gates.md对应条目
+```
+
+## G0.2-B 构建次序根治
+
+```text
+Task: G0.2-B / build order, single source of truth
+State: merged（PR #143，`adb7b78c`，master `a3fe1f14`）；G0仍未验收
+Head / branch / PR: a3fe1f14 / plan/587-g0-2b-build-order / #143
+Changed files and public entry: `scripts/build-packages.mjs`（新增，128行）+ 根`package.json`（仅scripts）。无源码、无测试、无tsconfig改动
+Old caller → new caller / ownership: 顺序的唯一事实源 = `scripts/build-packages.mjs`的`BUILD_ORDER`。`build:agent`降为薄别名（`release.yml`仍调用它）。`electron:dev`/`electron:dev:nohmr`/`electron:build`/`electron:preview`里临时拼装的`build:voice`/`build:gateway`/`build:computer-use`步骤已删除
+Baseline failure set and new failure diff: 未改任何测试。collect **1009文件/11873测试，修复前后完全一致**。失败数漂移经证实非本改动：无代码改动的重跑给出43 vs 基线41，40个失败文件稳定，`RealTasks`/`GrepTool`/`app-connection-service`抖进、`bash-task-store`抖出；末次干净树跑精确回到41文件/96测试
+Checks（全部先移走所有dist/与tsbuildinfo并核验为0，单跑入口，不手工还原）:
+  - typecheck:electron   前 exit 1 / 153个新错误（113假TS2307） → 后 **exit 0**, 29.1s
+  - bundle:agent         前 exit 1 / 14个esbuild解析错误        → 后 **exit 0**, 24.4s, 5.04MB, 0 unresolved
+  - electron:build                                        → **exit 0**, 70.8s, 三个bundle齐备
+  - npm test                                               exit 1（仅既有债），collect不变
+  - typecheck:all          exit 0
+  - architecture:check     exit 0，**802/802/802零新增**，且在**无dist**的树上跑
+  - architecture:self-test exit 0
+  - check:encoding / manifest-keys / no-ts-suppress / test-coverage  全 0
+  - 父会话独立复核 `npm run build:packages` → exit 0，11个包按序构建
+Capabilities actually verified / still unsupported:
+  - 已验证：四个入口均可从无dist的干净树单跑；两个实证缺陷（`build:agent`漏voice/gateway、`bundle:agent`只build ai）已修；`exports` resolver不依赖构建产物
+  - 仍不支持/未在真实GitHub runner验证；`electron:build`未做打包与packaged parity
+Shim consumers + removal criterion: `build:agent`别名待CI在范围内时改名并删除；`release.yml:70`的`build:agent && build:gateway`现为冗余但幂等，本次未改workflow
+Rollback/data compatibility: 纯构建脚本，git revert即可，无数据/schema影响
+Remaining blocker: 无权限阻塞。本会话`gh api`确认`admin: true`，`master`无分支保护。G0.2-C待用户确认job名与rulesetdiff后执行
+Next task: G0.2-C — required checks。计划要求仓库设置变更前先给出具体job名与rulesetdiff；候选与可稳定通过性已写入01-baseline-and-gates.md，等待用户确认后再动仓库设置
 ```
 
 不要用"已定位/已改文件/已merge"替代runtimeverified。修改主Next时同步阶段入口，阻塞描述给下一agent一条具体可实施动作。
