@@ -185,7 +185,37 @@ interface FileAttachment {
 interface ChatStartMessage {
   type: 'chat:start';
   sessionId: string;
+  /**
+   * The TURN id. Plan 587 R2.1: this is explicitly NOT the run id — it is
+   * threaded as `ChatOptions.turnId` for journal emits, `message_index.turn_id`
+   * and turn review. The run id is `runId` below.
+   */
   id: string;
+  /**
+   * Plan 587 R2.1: the canonical run id, minted by the Control Plane's start
+   * entry (the agent-server's `RunOrchestrator.openRun`) and put on this command
+   * by the execution channel. When present it IS this turn's run identity, used
+   * verbatim — the same string, not an alias.
+   *
+   * Optional only because the non-Desktop producers have not migrated; see
+   * `resolveTurnRunId` for the fallback and its removal condition.
+   */
+  runId?: string;
+  /**
+   * Plan 587 R2.1: reference to the frozen manifest (its sha256 fingerprint), so
+   * the executor can tell WHICH run configuration it was given.
+   *
+   * Carried and logged, not yet ENFORCED. Verification — rejecting a manifest
+   * hash the worker cannot reproduce, an unknown required capability, an illegal
+   * cwd — is R2.2, and claiming it here would be a capability this build does
+   * not have.
+   */
+  manifestHash?: string;
+  /**
+   * Plan 587 R2.1: digest of this turn's prompt and options, pinned before the
+   * dispatch. Same caveat as `manifestHash`: carried, not yet checked.
+   */
+  inputRevision?: string;
   prompt: string;
   options?: {
     messages?: Array<{ role: string; content: string }>;
@@ -2944,6 +2974,12 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       // same id. The renderer uses it for turn-scoped queries via the
       // `message_index.turn_id` column.
       turnId: msg.id,
+      // Plan 587 R2.1: the Control Plane's run id, when it sent one. Passed
+      // through UNCHANGED — the point is that the value the mailbox attributes
+      // a claim to is the value the Control Plane recorded a terminal under, not
+      // a second id minted here. See `run-identity.ts` for the fallback used by
+      // producers that have not migrated.
+      runId: msg.runId,
       effort: msg.options?.effort,
       maxTurns: msg.options?.maxTurns,
       allowedTools: msg.options?.allowedTools,

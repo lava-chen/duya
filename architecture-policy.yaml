@@ -395,6 +395,38 @@ modules:
 # baseline, and the baseline is untouched. `module-dependency` stayed at 547,
 # so no edge crossed from permitted into not-permitted.
 
+# Re-measured 2026-10-03 (plan 587 R2.1): 4 new, 0 parse changes, 0 debt removed
+#
+# `module-dependency-permitted` 36 -> 40 and NOTHING else moved. All four edges
+# are new IMPORT STATEMENTS in files this slice changed, each from a module to a
+# target its own `requires` list already declares, so the checker is reporting
+# the policy working rather than a breach. Measured, not inferred: reverting the
+# three `agent-runtime` files alone drops the count to 38, which attributes +2
+# to that package and +2 to `desktop-host`.
+#
+#   agent-runtime (+2, requires: [agent-protocol, ...])
+#     transport/execution-channel.ts   a second `@duya/agent-protocol` import
+#                                      statement, for the canonical-JSON digest
+#     index.ts                         re-exports the protocol's `RunHandle`
+#                                      rather than declaring a second shape
+#   desktop-host (+2, requires: [agent-protocol, ...])
+#     agents/server/run-orchestrator.ts imports `manifestFingerprint` as a VALUE,
+#                                      to put the manifest reference on the one
+#                                      `chat:start` command
+#     __tests__/run-entry-manifest-fixture.ts   a TYPE-only `RunManifest` import
+#
+# The two test files that drive the new behaviour deliberately import NOTHING
+# cross-module beyond that fixture — `run-entry-single-dispatch.test.ts`,
+# `run-entry-non-sse.test.ts` and `run-input-revision.test.ts` reach the runtime
+# through relative paths — which is why the delta is 4 and not 6. That was a
+# deliberate choice, not a happy accident: every extra cross-package import in a
+# new test file moves a managed module's number, and the count is only useful as
+# a signal while it stays boring.
+#
+# This is a MEASUREMENT moving, not a gate relaxing: the rule never blocks, it
+# never consults the baseline, and the baseline is untouched. `module-dependency`
+# stayed at 547, so no edge crossed from permitted into not-permitted.
+
 selfTest:
   # 548 -> 547: one counted edge was never real. The parser had carved
   # `.length);\n    else if (line.startsWith(` out of `code-review-diff.ts`'s own
@@ -416,7 +448,18 @@ selfTest:
   # run-layer suites (`reference-run.test.ts`, `run-correctness-seams.test.ts`)
   # already import the same package the same way, so this is the established
   # shape for a test in `agent-runtime` and not a new kind of edge.
-  module-dependency-permitted: 36
+  #
+  # 36 -> 40 (plan 587 R2.1): FOUR new, all permitted, all attributable — see
+  # the block above `selfTest`. Two are in this module
+  # (`transport/execution-channel.ts` gained a second `@duya/agent-protocol`
+  # import statement for the canonical-JSON digest, and `index.ts` re-exports
+  # the protocol's `RunHandle`); two are in `desktop-host`
+  # (`run-orchestrator.ts` imports `manifestFingerprint` as a value, and one new
+  # test fixture imports `RunManifest` as a type). Verified by reverting the
+  # `agent-runtime` files alone and re-measuring 38, not by inspection.
+  # `module-dependency` is still 547, which is the load-bearing half: no edge
+  # became non-permitted, so no managed module's zero tolerance is affected.
+  module-dependency-permitted: 40
   forbidden-dependency: 16
   # 161 -> 162: one more relative-path escape into packages/agent, from the
   # plan-583 stack. Now 126 agent / 16 plugin-core / 13 gateway / 7 conductor.

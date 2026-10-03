@@ -1,6 +1,7 @@
 import { prepareMailboxGuidance } from '../message/mailbox-attachment-context.js';
 import { parseMailboxAttachments } from '../utils/attachment-images.js';
 import { isModelLikelyMultimodal } from '../utils/multimodal-detection.js';
+import { resolveTurnRunId } from './run-identity.js';
 /**
  * duyaAgent - AI Agent 鏍稿績绫? * 鎻愪緵娴佸紡瀵硅瘽銆佸伐鍏疯皟鐢ㄣ€佷細璇濈鐞嗚兘鍔? *
  * Implementation home for the `duyaAgent` class. The public surface
@@ -1758,7 +1759,13 @@ export class duyaAgent implements AgentRuntime {
     // All messages created in this call (including multi-turn) will share this seq_index
     // This allows the UI to group all related messages into a single "round"
     const seqIndex = Date.now();
-    const runId = crypto.randomUUID();
+    // Plan 587 R2.1: the run id is the Control Plane's, not ours. It arrives on
+    // `chat:start` and, when present, IS this run's identity — the same string,
+    // not an alias. Producers that do not send one (automation, workflow,
+    // sub-agent: all registered for H8) fall back to minting, and
+    // `resolveTurnRunId` reports that it happened so the fallback can be
+    // counted and eventually deleted. See `run-identity.ts`.
+    const { runId } = resolveTurnRunId(options?.runId);
 
     // Deferred tool contexts collected from tool results during this
     // streamChat call. They are injected into the provider payload on the

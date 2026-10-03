@@ -1214,43 +1214,80 @@ async function handlePostChat(
           handlePostChatNonSSE(sessionId, req, res, child, deps);
         }
 
-        // Plan 586 Reference Run: open the run BEFORE the turn is dispatched.
+        // Plan 587 R2.1: ONE entry. `openRun` opens the run AND dispatches the
+        // turn — the `chat:start` command below is issued from inside it, by the
+        // execution channel, carrying the canonical run id, the manifest hash
+        // and the input revision.
         //
-        // Ordering is the point. A run whose row does not exist yet is a run
-        // that cannot be recovered, and the first thing the worker produces
-        // could be the last thing anyone ever sees. `openRun` awaits
-        // `run.started` (with its manifest hash) landing in the Control Plane,
-        // so the record precedes every consequence.
+        // It used to be two: `openRun` opened the run and the router sent
+        // `chat:start` itself with a second, unrelated id. Ordering was still
+        // the reason to await it — a run whose row does not exist yet is a run
+        // that cannot be recovered, and `openRun` awaits `run.started` (with
+        // its manifest hash) landing before anything is dispatched.
         //
-        // Gated on `wantsSSE` on purpose. Only the SSE branch routes frames
-        // through `normalizeAndObserve`, so only the SSE branch can record a
-        // run faithfully. Opening one for the non-SSE branch would write a run
-        // whose only event is `run.started` and then settle it with a cause
-        // this host never observed — a fabricated `runtime_crash` for a turn
-        // that worked. Not recording is honest; mis-recording is not.
+        // NOT gated on `wantsSSE` any more. Both branches route frames through
+        // `normalizeAndObserve` now, so the non-SSE branch records a faithful
+        // run; the previous comment here argued that opening one for non-SSE
+        // would write a run whose only event is `run.started` and then settle
+        // it with a cause the host never observed. That was true only while
+        // non-SSE recorded nothing — which is the gap this change closes.
         //
         // `openRun` never throws by contract: a Control Plane that refuses must
-        // not cost the user their message.
-        if (wantsSSE && deps.runOrchestrator) {
-          await deps.runOrchestrator.openRun(sessionId, {
+        // not cost the user their message. What it returns is an explicit
+        // acknowledgement, so "the run did not open" is distinguishable from
+        // "the run is live", and the not-accepted case means nothing was
+        // dispatched.
+        // `openRun` is called WITHOUT `runOrigin`, though it was passed before.
+        // It reached `buildRunManifest`, which has no such field and dropped it,
+        // so it never reached the manifest, the run row, or any event. Dropping
+        // it changes nothing observable and stops an executor attribution from
+        // looking like it is recorded when it is not. R2.2 is the slice that
+        // makes origin real manifest configuration.
+        if (deps.runOrchestrator) {
+          const start = await deps.runOrchestrator.openRun(sessionId, {
+            prompt,
+            options: parsed.options || {},
             ...(typeof providerConfig?.model === 'string' ? { model: providerConfig.model } : {}),
             ...(typeof providerConfig?.providerId === 'string' ? { providerId: providerConfig.providerId } : {}),
             ...(providerConfig?.providerType === 'openai' || providerConfig?.providerType === 'anthropic'
               ? { apiFormat: providerConfig.providerType }
               : {}),
-            runOrigin,
-            ...(workingDirectory ? { workingDirectory } : {}),
+            // Always a string. `RunManifest.cwd` is required, and the `init`
+            // command a few lines above already uses `''` for "no working
+            // directory"; passing `undefined` instead put an absent cwd INTO
+            // the frozen manifest, where it hashed as a real configuration.
+            workingDirectory: workingDirectory || '',
             ...(resolvedProject?.projectId ? { projectId: resolvedProject.projectId } : {}),
           });
+          if (!start.accepted) {
+            // Reported, not thrown. Losing the durable record is a degradation;
+            // refusing the user's message would be a regression. The stream
+            // handlers already own the response and will close it when the
+            // worker says `chat:error`, which is the same non-SSE behaviour as
+            // a dispatch that was never delivered.
+            httpLogger.warn('chat turn dispatched without a durable run', {
+              sessionId,
+              runId: start.runId ?? undefined,
+              stage: start.stage,
+              reason: start.reason,
+            });
+          }
         }
 
-        workerManager.sendCommand(sessionId, {
-          type: 'chat:start',
-          sessionId,
-          id: randomUUID(),
-          prompt,
-          options: parsed.options || {},
-        });
+        // The `chat:start` command is NOT sent here.
+        //
+        // It used to be, which made this two dispatches of one turn: the run
+        // layer's channel fired with a bare run id and this block sent the real
+        // command with a SECOND freshly minted `id` that nothing connected to the
+        // run. Now the execution channel issues it, inside `openRun` above, with
+        // the canonical run id, the manifest hash and the input revision — and it
+        // REPORTS whether the worker accepted it, so a worker that is not there
+        // becomes a refused start rather than a run that looks live.
+        //
+        // The `init` command above is untouched: it configures the worker's
+        // private session state (provider, cwd, permission rules), which §R2.1
+        // explicitly still allows to be the legacy path. It is not a dispatch —
+        // it starts no turn.
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         revertStreamingLock();
@@ -1704,14 +1741,64 @@ function handlePostChatSSE(
   });
 }
 
-function handlePostChatNonSSE(
+/**
+ * The non-SSE chat turn. Plan 587 R2.1 brought it under the run boundary.
+ *
+ * ## What was wrong
+ *
+ * This path never opened a run, never routed a frame through
+ * `normalizeAndObserve`, and answered a client disconnect with
+ * `{ status: 'interrupted' }` while leaving the worker running. The comment at
+ * the fork used to defend that ("only the SSE branch can record a run
+ * faithfully") — and it was right, because nothing here recorded anything. A
+ * turn that worked produced no run row, so the Control Plane could not answer
+ * "what happened to this turn" for half the product's chat traffic.
+ *
+ * ## What it does now
+ *
+ * Frames go through `normalizeAndObserve` exactly like the SSE path (the
+ * response body still carries the raw events it always did — the tee is a copy,
+ * not a rewrite), the run settles when the worker says `chat:done` or
+ * `chat:error`, and the response carries the run's real `RunResult`.
+ *
+ * ## What happens on a client disconnect — and why this is a behaviour change
+ *
+ * **Old:** respond `{ events, status: 'interrupted' }`, leave the worker
+ * running, record nothing.
+ *
+ * **New:** respond `{ events, status: 'interrupted', run }` and settle the run
+ * as `cancelled`, still leaving the worker running.
+ *
+ * Two deliberate choices:
+ *
+ * 1. **The worker is NOT stopped.** Contract §D separates disconnect from
+ *    cancel and says Desktop keeps its old adapter behaviour. Stopping it here
+ *    would be a silent behaviour change to a path that never did.
+ * 2. **The run is settled `cancelled`, not left to settle as
+ *    `runtime_crash`.** Silence used to mean "crashed"; here it means "the
+ *    client went away". `resolveRunOutcome` reads a host-requested stop as
+ *    `cancelled`, and that is the truth. The alternative — letting it settle as
+ *    a crash — is a false accusation against the runtime for something this
+ *    handler did.
+ *
+ * The worker may still emit frames afterwards. They are recorded as `late` by
+ * R1.2's receipt map and appended to nothing: the terminal is already durable
+ * and a decided terminal is immutable. That is the honest shape of "the
+ * connection went away but the work did not".
+ *
+ * Exported for tests only; the router calls it and nothing else does. The
+ * reason is the same as `normalizeAndObserve`: "the non-SSE turn is inside the
+ * run boundary" is a claim about BEHAVIOUR, and the only way to test it is to
+ * drive this function with a fake child stdout rather than to inspect the file.
+ */
+export function handlePostChatNonSSE(
   sessionId: string,
   req: http.IncomingMessage,
   res: http.ServerResponse,
   child: ChildProcess,
   deps: RouterDeps,
 ): void {
-  const { httpLogger } = deps;
+  const { httpLogger, runOrchestrator } = deps;
 
   httpLogger.info('Non-SSE chat started', { sessionId });
   let allEvents: unknown[] = [];
@@ -1719,6 +1806,36 @@ function handlePostChatNonSSE(
   let nonSseBuffer = '';
   // M5: multiLineBuffer promoted to outer scope
   let multiLineBuffer = '';
+
+  /**
+   * Settle the run and answer with what it recorded.
+   *
+   * `settleSession` awaits a settlement already in flight rather than opening a
+   * second one, and `resultFor` is a READ that never settles — so calling this
+   * on both the `chat:done` path and the disconnect path cannot end the turn
+   * twice.
+   */
+  const respond = async (status: 'done' | 'interrupted'): Promise<void> => {
+    // `cancelRequested` on the interrupted path, and ONLY that path. It is not
+    // an interrupt of the worker — this handler deliberately does not stop it —
+    // it is the statement that the HOST chose to stop observing the turn.
+    // Without it `resolveRunOutcome` reads the silence as `runtime_crash`, which
+    // accuses the runtime of a failure this handler caused.
+    const terminal = await (runOrchestrator?.settleSession(
+      sessionId,
+      status === 'interrupted' ? { cancelRequested: true } : undefined,
+    ) ?? null);
+    const run = await (runOrchestrator?.resultFor(sessionId) ?? null);
+    sendJson(res, 200, {
+      events: allEvents,
+      ...(status === 'interrupted' ? { status } : {}),
+      // Present whenever a run was opened. `null` when this host has no
+      // orchestrator, which is the "run layer not wired" case every existing
+      // embedder is entitled to — it is reported as absent rather than
+      // fabricated, and never as a successful run.
+      ...(run === null && terminal === null ? {} : { run }),
+    });
+  };
 
   child.stdout!.on('data', (data: Buffer) => {
     if (doneReceived) return;
@@ -1753,9 +1870,25 @@ function handlePostChatNonSSE(
         const event = JSON.parse(line);
         allEvents.push(event);
 
+        // The tee FIRST, including on `chat:done` / `chat:error`.
+        //
+        // The SSE branch observes before it acts on the event type, and the
+        // order is load-bearing: `chat:done` is the worker's TERMINAL frame, so
+        // returning before the tee meant the run never saw the frame that ends
+        // it and `settle` synthesised a terminal from silence — a
+        // `runtime_crash` for a turn that completed. Every frame goes through
+        // here exactly once.
+        //
+        // It is also the ONLY observation site. The GET reconnect view attaches
+        // its own stdout listener and never observes, and exactly one POST
+        // branch runs per request, so observing from both would write each
+        // worker event into `run_events` twice under two run-scoped `seq`
+        // values.
+        normalizeAndObserve(sessionId, event as Record<string, unknown>, deps);
+
         if (event.type === 'chat:done' || event.type === 'chat:error') {
           doneReceived = true;
-          sendJson(res, 200, { events: allEvents });
+          void respond('done');
           return;
         }
       } catch {
@@ -1766,7 +1899,11 @@ function handlePostChatNonSSE(
 
   req.on('close', () => {
     if (!doneReceived) {
-      sendJson(res, 200, { events: allEvents, status: 'interrupted' });
+      // `cancelRequested` because THIS HOST is stopping its observation of the
+      // turn, which is what §D's disconnect rule means. It is deliberately NOT
+      // `interruptWorker`: that would change what the worker does, and the old
+      // behaviour is what the contract says to preserve here.
+      void respond('interrupted');
     }
   });
 }
