@@ -25,6 +25,10 @@
 
 范围：`.github/workflows/test.yml`、`scripts/architecture/*`、现有Electron类型门禁及仓库ruleset。
 
+> **跨平台门禁缺陷（G0.2-C 的真实阻塞项）**：`architecture:check` 在 Windows 绿、在 ubuntu 红。根因已定位为门禁自身缺陷，而非代码分歧——共享的 import 正则 `/(?:from\s+|import\s*\(|require\s*\()\s*["']([^"']+)["']/g`（`audit-imports.mjs:170`、`audit-modules.mjs:67`、`verify-cycle.mjs:5`、以及 `strip-comments.test.ts` 的本地副本）里 `[^"']` **允许跨越 CR/LF**，于是匹配会从代码里某个引号一路吃到几十行外的另一个引号，把文件自身代码当成 import specifier；且该 specifier 里**嵌入了真实换行符**。`.gitattributes` 的 `* text=auto` 使 Windows 检出 CRLF、Linux/macOS 检出 LF，于是同一处假违规在两个平台产生**不同指纹**：基线是 Windows 录的，Linux 上匹配不上→既报"新增违规"又报"1条基线不再触发"。
+> 实证（`apps/desktop/src/renderer/components/layout/panels/code-review-diff.ts`，约181行有 `line.startsWith('diff --git ')`）：CRLF输入得到假specifier `.length);\r\n    else if (line.startsWith(`，LF输入得到 `.length);\n    else if (line.startsWith(`。这同时说明**现有架构baseline是Windows口径**，与项目索引记录的"Linux上多出一批失败"属同一类跨平台漂移。
+> 修复中：所有正则副本统一禁止specifier跨行，并加一条在旧代码上会失败的回归测试。`architecture:baseline`（`--write`）**禁止**在此状态下运行——门禁自述的"用--write缩小债"提示在此处正是陷阱。
+
 - [x] 将architecturecheck作为独立可读CI job；resolver变化运行self-test。保持managed三包zero新增容忍。
   PR #140（`42cef0f0`）新增独立`architecture` job（ubuntu），跑`architecture:check` + 按路径过滤的`self-test`（`scripts/architecture/**`、policy、baseline变更时触发，base sha不可用时fail-safe为运行）。**实测该门禁不需要`dist/`**：resolver读的是各package.json声明的`exports`，不是构建产物；clean树上`check`=0（802/802/802）、`self-test`=0（548/35/16/162/25/16/0）。因此该job刻意**不**先build——先build只会增加耗时，并把将来意外的dist依赖藏进缓存命中后面。零容忍managed模块仍为**4个**（含`legacy-plugin-core`），一个都没放松；`architecture:baseline`（`--write`）未出现在CI任何位置。
 - [ ] 在cleanjob验证从无dist/tsbuildinfo状态构建；显式topologicalscripts或projectreferences二选一维护，不引入并存的不同顺序。
@@ -40,9 +44,10 @@
 - [ ] 处理既有测试债并收敛fullsuite；在此之前如需迁移ratchet，必须以具体失败签名比较且对新增失败失败，不能`|| true`、glob跳过或只比较总数。
   尚未开始。基线为G0.1建立的45文件/101测试/103 tuple（77 deterministic / 25 env-infra / 1已证flake）。
 - [ ] required checks采用可稳定通过且不能掩盖回归的job。仓库设置变更前先给出具体job名和rulesetdiff，按权限工具执行；没有管理权限标blocked并保留本地/CI实施证据，不能称强制合并门禁已完成。
-  **权限已确认**：`gh api repos/lava-chen/duya` 返回 `admin: true`，本项**不blocked**。现状：`master` **完全无分支保护**（`branches/master/protection` 返回404），仓库仅1条ruleset，required status checks为空。
-  **候选job与可稳定通过性**：`architecture`（ubuntu）当前绿且只做静态分析、约3s、无需`dist/`，零容忍模块正是它守的，**可作required**；`test` 三个OS常绿、`build` 三个OS待观察，但两者**都不能作required**——`test` 现在就是红的（41–45文件既有债），把它设为required会永久阻断所有合并。
-  待用户确认后执行：把 `architecture` 设为master的required status check。**执行前必须先给出job名与rulesetdiff**（本条即该预览）。不把`test`/`build`设为required不等于隐藏回归——`test`的红色仍完整可见，只是当前无法作为门禁。
+  **权限已确认**：`gh api repos/lava-chen/duya` 返回 `admin: true`，本项**不blocked**。现状：仓库已有1条active ruleset `Protect master branch`（id `17257193`，target `~DEFAULT_BRANCH`，规则仅 `deletion` + `non_fast_forward`），**required status checks 为空**。
+  **已加过一次并回滚。** 按用户确认在既有ruleset上追加 `required_status_checks: [{context: "architecture"}]`（未另建ruleset）。随后master最新提交 `026d3c1e` 的 `architecture` job **failure**——该job在真实runner上**不是稳定绿**，按本条"可稳定通过"的判据本就不该设required。**已把ruleset回滚为原状**（只剩 `deletion` + `non_fast_forward`），仓库未被卡住。本项保持开放。
+  **回滚原因是一个真发现**：`architecture:check` **Windows 绿（802/802/802零新增）而 ubuntu 红（801 tolerated + 1个新增违规）**。定位为门禁自身的跨平台解析缺陷（详见下方"跨平台门禁缺陷"）。在新 `architecture` job 成为 required 之前必须先修好它，否则一个假阳性会变成永久阻断所有合并的门禁。
+  **修好后的执行方案**：仍只把 `architecture` 设为required。`test` 现在就是红的（41–45文件既有债），设为required会永久阻断合并；不设它不隐藏任何东西，红色仍完整可见，只是当前无法当门禁。执行前仍先给出job名与rulesetdiff。
 - [x] 故意新增一条禁止import和一个新增失败fixture验证gate失败；清除探针后恢复。artifact保存实际检查了多少测试和文件，零collection必须失败。
   PR #140已做。**边界探针**：在`packages/agent-protocol`（managed、`requires: []`）内`import { isTerminal } from "@duya/agent-core"` → `architecture:check` exit 1，并指名文件、两条规则与原因。**测试探针**：`expect(1+1).toBe(3)` → `npm test` exit 1，collect由1009→1010文件。**两探针均已删除**，`git status`只剩`test.yml`，两个路径`Test-Path`为False，两个architecture门禁回到0。
   零collection防护：`architecture-check.mjs`只要`blocking.length===0`就exit 0，而这在**完全没扫到任何东西时同样成立**——若将来模块根匹配被打坏，`total`塌成0，门禁会一边报告"OK 无新增违规"一边什么都没拦。两个新job都断言非零扫描；test侧还覆盖"12文件但0测试"与摘要不可读两种情形。architecture侧guard还区分了checker的exit 1（查到违规，上一步已红）与exit 2（引擎故障），避免在真实失败上再叠一个更含糊的红。
