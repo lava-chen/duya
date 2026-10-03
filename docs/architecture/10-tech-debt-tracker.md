@@ -128,6 +128,48 @@ M7 搬迁把这件事从"没有配置文件"变成"有分层配置但故意不�
 
 ---
 
+## TD-8 · 测试基线只在一个 OS 上量过：本地 45 红，CI 64 红
+
+| 字段 | 内容 |
+|---|---|
+| **状态** | ❌ **未修**。本文档记录的是分类和证据，不是已完成的修复 |
+| **实测** | 同一份代码：`npm test` 本地（Windows）**45 个文件 / 112 个测试**红；CI `37095893167`（ubuntu）**64 个文件 / 187 个测试**红。差集：**42 个两边都红**（真实债）、**22 个只在 CI 红**、**3 个只在本地红**（2 个负载 flake + 1 个无关 `plugin-core`） |
+| **根因** | 不是单一原因。22 个 CI-only 失败分七类（逐条读自 CI 日志，见 `docs/exec-plans/README.md` 的分类表）：硬编码 Windows 路径 **6**、Windows-only 命令/OS 分支 **3**、**权限行为真实分歧 5**、文件系统语义 **4**、**真 bug 死循环 2**（见 TD-9）、环境探测 **1**、git 报错文案 **1** |
+| **为什么之前没发现** | `docs/exec-plans/README.md` 曾把 **42–45** 写成"honest floor"并要求读者照它判断。那是 **Windows 本地数**。照它做的人会把 22 个 CI-only 失败当成自己引入的回归 |
+| **最危险的两类** | ① **权限**：断言的是"**检查会触发**"（`expected 'allow' to be 'deny'`、`expected … to contain 'Permission denied'`），而 Linux 上不触发。**把期望值改成 Linux 实际值 = 删掉一条安全断言**。<br>② **静默失去覆盖**：`core/media-allowlist.test.ts:55` 的 `process.env.TEMP \|\| process.env.TMP \|\| 'C:\\Windows\\Temp'` 在 Linux 上落到不存在的路径，`beforeEach` 抛 ENOENT，**整个文件全灭** —— 包括 "refuses config.toml"、"refuses secrets.json"、"refuses a private SSH key"、"refuses a sibling directory"。这是媒体路径逃逸的 P0 回归护栏，**在 Linux CI 上一个断言都没跑**。它长得像普通测试失败，实际是安全覆盖静默归零 |
+| **修法（未定，需先决策）** | 先回答"哪个平台是预期行为"，再动代码或断言：<br>① 硬编码路径类 —— 给测试注入临时目录，不要写死 `D:/`；<br>② 权限类 —— **判定 Linux 上不触发是缺陷还是设计**，再决定改实现还是改断言；<br>③ 环境类 —— 用平台注入而非读真实注册表/系统；<br>④ git 文案类 —— 断言错误**类别**而非文案 |
+| **验证方式** | 判定修好的标准是**两个 runner 都绿**。只跑本地 `npm test` 不足以证明任何事 —— 这正是本条债本身 |
+
+> **与 TD-0 / TD-7 是同一个病的第三个实例**：三者都是"某个只在**一种**环境下
+> 建立的状态，被当成了普适事实"。TD-0 是 baseline 用旧 resolver 录的，TD-7 是
+> `tsconfig.tsbuildinfo` 在产物没了之后仍声称已构建，TD-8 是测试基线只在一个 OS 上量过。
+>
+> **归纳出的硬规则**：**任何"上次跑过就跳过"的机制，都必须在产物消失时失效；
+> 任何只在一种环境下量过的数字，都不是基线。**
+>
+> 这两句话都不只关于缓存。它们的共同结构是：**把一个局部的、依赖上下文的观测，
+> 当成了全局的、无条件的事实。**
+
+---
+
+## TD-9 · `loadAgentsMdFiles` 在 POSIX 上可死循环（相对路径 cwd）
+
+| 字段 | 内容 |
+|---|---|
+| **状态** | ❌ **未修**。这是 TD-8 分类时挖出来的真缺陷，不是测试问题 |
+| **位置** | `packages/agent/src/agentsmd/loader.ts:580-584` |
+| **症状** | CI ubuntu 上 `packages/agent/tests/unit/prompts/{promptStructure,visualVerification}.test.ts` 抛 `RangeError: Invalid array length`，栈顶就是 582 行的 `dirs.push(currentDir)` |
+| **根因** | `while (currentDir !== path.parse(currentDir).root) { dirs.push(currentDir); currentDir = path.dirname(currentDir) }`。该循环只有在 `path.dirname` 恰好走到 `path.parse(...).root` 时才终止。**Windows（`path` → `path.win32`）成立；POSIX 对任何相对路径都不成立**：`path.parse('.').root === ''` 且 `path.dirname('.') === '.'`，条件恒为真，`dirs` 一直增长到 2³² 长度抛错 —— 期间已经分配了数 GB 数组 |
+| **可达性** | `AgentsMdManager.refreshForTask` 把 `cwd: projectPath` **原样透传**（`packages/agent/src/agentsmd/manager.ts:107-108`），这一层没有 `path.resolve()`。**只要传入相对的 `projectPath`，agent 在 Linux/macOS 上就会挂住**。当前调用方是否都传绝对路径**未核实** —— 列为 TD-9 的第一步 |
+| **修法（未定，需先决策）** | ① 先审计 `refreshForTask` / `loadForSession` 的全部调用方，确认是否存在相对路径；② 在 `loadAgentsMdFiles` 入口做一次 `path.resolve(options.cwd)`（最小、幂等、且不改变绝对路径的行为）；③ 给该循环加一个显式终止条件（例如 `dirname` 结果与当前值相同即 break），避免任何未来输入再次挂死 |
+| **为什么一直没被发现** | **Windows 开发者永远不会踩到。** 本地 `npm test` 全绿，只有 ubuntu runner 会暴露。而在这个仓库里，"只看本地"是默认习惯（TD-0 / TD-7 已经是同一个陷阱的两次实例） |
+
+> 这条债的价值不在它本身有多难，而在于它证明了 **TD-8 不是"测试写得不好"** ——
+> 22 个 CI-only 失败里藏着**一个会挂死 agent 的真缺陷**和一个**静默失效的 P0 安全护栏**。
+> 如果继续只看本地 `npm test`，这两件事都不会有人知道。
+
+---
+
 ## TD-6 · 注释里的可解析 specifier：治理测试的已知盲点，44 个文件待清理 ✅ 当前环已修
 
 | 字段 | 内容 |

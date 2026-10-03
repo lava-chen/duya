@@ -36,31 +36,45 @@ Rules:
 
 ***
 
-## Verified baseline (2026-10-03 · `master @ d96ae3be`)
+## Verified baseline (2026-10-03 · `master @ 1e6d0b0e`)
 
-**Read this before picking up any plan.** Every number here was measured on a
-clean `master` in this session, not copied from a plan file.
+**Read this before picking up any plan.** Every number here was measured, not
+copied from a plan file. `npm test` was measured **twice, on two platforms** —
+they do not agree, and the CI number is the one that matters.
 
 ### Gates
 
 | Command | State | Note |
 | --- | --- | --- |
-| `npm run typecheck:all` | ✅ exit 0 | **必须从干净检出验证**，见下方硬规则 |
+| `npm run typecheck:all` | ✅ exit 0 | **本地必须从干净检出验证；CI 已于 PR #135 在 ubuntu/windows/macos 三个 runner 上全绿** |
 | `npm run architecture:check` | ✅ exit 0 | 802 violations, **all baselined**, 0 blocking |
 | `npm run architecture:self-test` | ✅ exit 0 | 548 / 35 / 16 / 162 / 25 / 16 / 0 |
 | `npm run check:encoding` | ✅ exit 0 | |
 | `npm run check:test-coverage` | ✅ exit 0 | 1 known orphan in baseline |
-| **`npm test`** | ❌ **exit 1** | **42–45 failing suites / 109–111 failing tests. Pre-existing — see below.** |
+| **`npm test`** | ❌ **exit 1** | **CI (ubuntu): 64 files / 187 tests. Local (Windows): 45 files / 112 tests. Both pre-existing — the two sets only partly overlap, see below.** |
 
-### ⚠️ 硬规则：本地绿 ≠ CI 绿
+Both numbers are reproducible: the CI one from the run log, the local one from
+`npm test -- --reporter=json --outputFile=<path>`. Compare **file sets**, not
+counts — the counts are what sent this file wrong in the first place.
 
-**报告任何闸门结果前，先确认它是"干净检出"跑出来的。**
+### ⚠️ 硬规则：本地绿 ≠ CI 绿，**反过来也成立**
 
-这不是理论。2026-10-03 实测：`typecheck:all` 本地 **exit 0**，CI **连续 6 次全红**，
-每次都挂在 `Run typecheck`。根因是 `typecheck:all` 依赖 `packages/agent-protocol/dist/`，
-而本地那个 `dist` 是历史 `build:agent` 的残留 —— **本地那个绿是缓存的产物，不是证据**。
-已由 PR #135 修复（`typecheck:all` 现在按依赖顺序先 `build:protocol` → `build:core`；
-三个 agent 包的 `clean` 同时删 `tsconfig.tsbuildinfo`）。
+**报告任何闸门结果前，先确认它是"干净检出"跑出来的，并且知道它跑在哪个 OS 上。**
+
+这不是理论，而且**两个方向都翻过车**。
+
+**方向一（本地绿 / CI 红）—— 已修。** 2026-10-03 实测：`typecheck:all` 本地
+**exit 0**，CI **连续 6 次全红**，每次都挂在 `Run typecheck`。根因是
+`typecheck:all` 依赖 `packages/agent-protocol/dist/`，而本地那个 `dist` 是历史
+`build:agent` 的残留 —— **本地那个绿是缓存的产物，不是证据**。
+已由 PR #135 修复（`typecheck:all` 现在按依赖顺序先 `build:protocol` →
+`build:core`；三个 agent 包的 `clean` 同时删 `tsconfig.tsbuildinfo`），
+并已在 `37095893167` 上于 **ubuntu / windows / macos 三个 runner 全部验证通过**。
+
+**方向二（本地红得少 / CI 红得多）—— 仍然成立，且尚未修。**
+`npm test` 本地 45 个文件红，CI **64** 个红。同一份代码，差 19 个文件。
+详见下一节。那 22 个 CI-only 失败里有一组是**权限检查在 Linux 上不触发**，
+只看本地 `npm test` 的人永远不会知道它存在。
 
 复现 CI 条件：
 
@@ -75,10 +89,12 @@ npm run typecheck:all          # 期望 exit 0
 
 `npm run build:agent` 之后可以把 `.ci-sim` 后缀的目录丢掉。
 
-> **同一类病已出现两次**：TD-0 是 architecture baseline 用旧 resolver 录的；
-> TD-7 是 `tsconfig.tsbuildinfo` 在 `dist` 没了之后仍声称"已构建"。
+> **同一类病已出现三次**：TD-0 是 architecture baseline 用旧 resolver 录的；
+> TD-7 是 `tsconfig.tsbuildinfo` 在 `dist` 没了之后仍声称"已构建"；
+> TD-8 是测试基线只在一个 OS 上量过一次。
 > **共同教训：任何"上次跑过就跳过"的机制，都必须在产物消失时失效。**
 > 不失效的结果是本地永远绿、干净环境永远红，而差异要到 CI 才暴露。
+> 同一句话换个主语也成立：**任何只在一种环境下量过的数字，都不是基线。**
 
 ### 查闸门状态先看 CI，不要只信本地
 
@@ -88,8 +104,11 @@ gh run view <id>                   # 哪一步挂的
 gh run view <id> --log-failed      # 实际错误
 ```
 
-CI 只跑 1m30s 左右就挂在 `Run typecheck` 时，**说明它根本没到测试** ——
-本地要 145s+。用时长判断失败位置比读日志快。
+**用时长判断失败位置比读日志快。** `Run typecheck` 挂了 → 整个 run 约
+1m30s 就结束（本地 typecheck 要 145s+，所以它根本没跑完）。
+run 超过 10 分钟还在跑 → typecheck 过了，挂在后面的测试上。
+PR #135 之前的 4 个 run 分别在 1m36s / 4m42s / 5m30s 挂，全是 typecheck；
+`37095893167` 跑了 13m18s，是因为它终于过了 typecheck 然后在测试上挂。
 
 The two architecture gates were **red before this session** (`self-test` exit 2,
 `check` exit 1 with 641 blocking) because `.architecture-baseline.json` had
@@ -97,35 +116,117 @@ been recorded by a pre-fix resolver. Fixed in PR #132. **Any PR that changes
 `scripts/architecture/audit-*.mjs` must `--write` the baseline in the same
 commit** — `architecture-policy.yaml` now states this.
 
-### The test suite is red, and it was red before any of this
+### The test suite is red, and the number depends on where you run it
 
-Two full runs on the same day, same code except PR #133:
+The same code was measured twice, minutes apart, on two platforms:
 
-| Run | Failing suites | Failing tests | Passing |
+| Run | Platform | Failing files | Failing tests | Passing tests |
+| --- | --- | --- | --- | --- |
+| CI `37095893167` (`Run tests`, ubuntu) | Linux | **64** | **187** | 11,592 |
+| Local `npm test` (Windows 11, same tree) | Windows | **45** | **112** | 11,679 |
+
+**The sets only partly overlap. Diffing them is the whole point:**
+
+| | Count | Meaning |
+| --- | --- | --- |
+| Fail on **both** | **42** | Real, platform-independent debt. Start here. |
+| **CI-only** (pass on Windows) | **22** | Windows assumptions baked into the test or the code. |
+| **local-only** | **3** | 2 load-dependent flakes in `packages/agent` + 1 unrelated `plugin-core` suite. |
+
+> ⚠️ **An earlier version of this file stated "42–45 is the honest floor" and
+> told you to treat it as such. That was wrong in a way that would have cost
+> you a day.** It was a **Windows-local** number. On CI the same code fails
+> **64** files. If you had taken 42 as your floor, every one of the 22 CI-only
+> failures would have looked like a regression you introduced.
+>
+> **The floor is 64, and it is a Linux number.** A local `npm test` is a
+> *necessary* check but it is not a *sufficient* one — same failure mode as the
+> typecheck gate above, just running the other direction.
+
+#### The 22 CI-only failures, classified
+
+Every row below was read out of the CI log, not inferred. **Most are not test
+bugs, and one of them is a real hang in production code.**
+
+| # | Class | Files | Evidence from the CI log |
 | --- | --- | --- | --- |
-| before #133 | 45 | 111 | 11,680 |
-| after #133 | **42** | **109** | 11,682 |
+| 6 | **Windows paths hardcoded in the test** | `memory-state/{pathsMigration,projectResolver,workspaceOverrides}`, `services/file-snapshot-restore`, `services/browser/extension-installer`, `prompts/dynamic/skillsMetadata` | `expected '/home/runner/work/duya/duya/D:/projec…' to be 'd:/projects/alpha'`; `to contain '<location>E:\skills\pdf\SKILL.md</loc…'` |
+| 3 | **Windows-only command / OS branch** | `ipc/ide-handlers`, `hooks/executor`, `core/media-allowlist` | `expected "spy" to be called with [ 'where.exe', … ]`; `expected 127 to be 1` (127 = command not found) |
+| 5 | **Permission behaviour genuinely differs** ⚠️ | `permissions/{permissions,securityPolicy}`, `src/permissions/policy-read-permission`, `src/tool/ApplyPatchTool`, `agents/server/router-project-roots` | `expected 'allow' to be 'deny'`; `expected 'Applied 1 operation(s):\n  - updated …' to contain 'Permission denied'` |
+| 4 | **Filesystem / OS semantics** | `ipc/{cua-handlers,files-handlers,project-entity-handlers}`, `services/browser/profile-detector` | `expected { success: true, tree: [] } to deeply equal { success: false, … }`; `expected [] to deeply equal [ 'Default:rain', … ]` |
+| 2 | **Real bug — infinite loop** 🐛 | `tests/unit/prompts/{promptStructure,visualVerification}` | `RangeError: Invalid array length` at `packages/agent/src/agentsmd/loader.ts:582` |
+| 1 | **Env detection** | `packages/voice/tests/env` | `expected false to be true` |
+| 1 | **Git error text differs** | `ipc/git-handlers` | expects `"Untracked paths outside the workspace cannot be reviewed inline."`, Linux yields `"Unable to load this diff."` |
 
-Of the 3-suite difference, **1 is #133** (`02-cycle-budget.test.ts`, which was
-red for a reason unrelated to code). The other **2 sit in `packages/agent` and
-are load-dependent flakes** — the first run logged
-`[vitest-worker]: Timeout calling "onTaskUpdate"` under parallel load. **So the
-honest floor is 42–45, not 42.** Do not "fix" a flake you did not cause.
+##### 🐛 The one that is an actual defect, not a test problem
 
-Failing suites by owner (after #133):
+`packages/agent/src/agentsmd/loader.ts:580-584`:
 
-| Owner | Failing suites |
+```ts
+while (currentDir !== path.parse(currentDir).root) {
+  dirs.push(currentDir)
+  currentDir = path.dirname(currentDir)
+}
+```
+
+This loop only terminates if `path.dirname` eventually lands exactly on
+`path.parse(...).root`. On Windows (`path` → `path.win32`) that holds. **On
+POSIX it does not, for any relative path**: `path.parse('.').root === ''` and
+`path.dirname('.') === '.'`, so `'.' !== ''` stays true forever — `dirs` grows
+until it throws `RangeError: Invalid array length`, i.e. after allocating a
+multi-gigabyte array.
+
+`AgentsMdManager.refreshForTask` passes `cwd: projectPath` straight through
+(`packages/agent/src/agentsmd/manager.ts:107-108`) with no `path.resolve()`.
+**So any relative `projectPath` hangs the agent on Linux/macOS.** The tests
+hitting it are the two prompt tests above. Not fixed here — it changes
+production behaviour and needs a decision on where to normalize. Tracked as
+TD-9.
+
+##### ⚠️ The permission row is the one to be careful with
+
+These are not tests asserting the wrong string. They assert that **a permission
+check fires** (`expected 'allow' to be 'deny'`, `expected … to contain
+'Permission denied'`), and on Linux it does not fire. **Changing the
+expectation to match Linux deletes a security assertion instead of fixing a
+bug.** Decide which platform carries the intended behaviour before touching
+them.
+
+##### One suite that silently stops protecting anything
+
+`core/media-allowlist.test.ts:55` reads
+`process.env.TEMP || process.env.TMP || 'C:\\Windows\\Temp'`. On Linux both env
+vars are unset, so it falls back to a path that does not exist and
+`mkdtempSync` throws in `beforeEach`. **The whole file dies** — including the
+cases named *"refuses config.toml"*, *"refuses secrets.json"*, *"refuses a
+private SSH key"*, *"refuses a sibling directory"*. That suite is a P0
+regression guard for media-path escapes, and **on Linux CI it asserts nothing
+at all**. It looks like an ordinary test failure; it is a silent loss of
+security coverage.
+
+#### The 42 shared failures
+
+| Owner | Files |
 | --- | --- |
-| `apps/desktop` | 21 |
-| `packages/agent` | 17 (19 under load) |
-| `scripts/__tests__` | 2 |
+| `apps/desktop` | 22 |
+| `packages/agent` | 17 |
+| `scripts/__tests__` | 2 (`memory-rag-hook` `SyntaxError: Unexpected end of JSON input`, `memory-search-skill`) |
 | `packages/agent-protocol` | 1 (`13-citation-drift`) |
-| `packages/plugin-core` | 1 (`app-schema-marketplace-compat`, unrelated) |
 
-**Treat this as the floor, not as your regression.** Before you start, record
-the `npm test` output; if your branch ends with a *different* set of failures,
-that is on you. Plan 583's `fix/583-track-q-test-debt-2` (PR #131) was working
-this debt when the baseline was taken.
+Arithmetic that must add up: local `45 = 42 + 3`, CI `64 = 42 + 22`.
+The 3 local-only files are `packages/agent/tests/integration/{DuyaAgent,RealTasks}.test.ts`
+(load-dependent) and `packages/plugin-core/tests/app-schema-marketplace-compat.test.ts`
+(unrelated — it passes on Linux, which is its own smell, but not this debt).
+
+The earlier Windows-local runs of the same day differed by 3 suites. **1 of those
+3 was a real fix** (`02-cycle-budget.test.ts`, PR #133). **The other 2 were
+load-dependent flakes** in `packages/agent` — the first run logged
+`[vitest-worker]: Timeout calling "onTaskUpdate"` under parallel load. Do not
+"fix" a flake you did not cause.
+
+**Treat 64 / 187 as the floor, not as your regression.** Before you start,
+record the `npm test` output **on the runner OS you care about**; if your branch
+ends with a *different* set of failures, that is on you.
 
 `e2e` was **not** run — it needs `npm run electron:build` first.
 
