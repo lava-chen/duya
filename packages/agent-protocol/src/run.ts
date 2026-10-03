@@ -131,6 +131,93 @@ export interface PermissionAuditEntry {
   readonly scopeKind?: string;
 }
 
+/**
+ * A result surface that is EITHER read, or declared unsupported.
+ *
+ * ## Why this is not an array
+ *
+ * `transcript: []` and `permissionAudit: []` were two different claims wearing
+ * one value. An empty array says **this run produced nothing of this kind**,
+ * which is a fact about the run. The runtime was using it to say **this runtime
+ * does not implement reading this back**, which is a fact about the
+ * implementation. A consumer reading the empty array drew the first conclusion
+ * from the second, and the only reader that could tell them apart was the one
+ * that already knew the answer.
+ *
+ * A security audit surface is where that swap costs the most. "No permission
+ * activity was recorded" is a clean bill of health; "permission auditing is not
+ * implemented here" means the clean bill was never looked for. They must not
+ * share a value, so the two states are separate and both are spelled out:
+ *
+ *  - `read` — the entries are real and the reader below is the complete set
+ *    this runtime could produce.
+ *  - `unsupported` — the capability does not exist here. `reason` says which
+ *    of the two causes it is, because "nobody asked" and "we cannot look" are
+ *    different problems with different fixes.
+ *
+ * `unsupported` is the honest default and is not a placeholder. A surface that
+ * exists but is empty is `read` with no entries; a surface that does not exist
+ * is `unsupported`; and no future change may quietly turn the second into the
+ * first.
+ */
+export type RunSurface<T> =
+  | { readonly state: 'read'; readonly entries: readonly T[] }
+  | { readonly state: 'unsupported'; readonly reason: string };
+
+/**
+ * A token total that is either measured, or explicitly not measured.
+ *
+ * ## Why `0` is not an answer
+ *
+ * Tokens arrive from provider usage events. A run that was cancelled before its
+ * first model response, or whose executor reports no usage, has no token count
+ * — and reporting `0` for that is a BILLING claim: it says the run consumed
+ * nothing, which is a thing the runtime cannot know. A run that spent a large
+ * context window and was then killed mid-request looks exactly like a run that
+ * was never dispatched.
+ *
+ * So the unmeasured case carries no number at all, not a zero standing in for
+ * one. `total` is structurally absent from the `measured: false` arm, so there
+ * is no value to accidentally sum, average, or default. A distinct union rather
+ * than a nullable because `null` invites `?? 0` at the first call site — which
+ * is the exact collapse this type exists to prevent — and because a nullable
+ * field cannot make a consumer handle the case at all.
+ *
+ * `turns` and `toolCalls` are NOT in this type and are plain numbers: both are
+ * counted from events the runtime observed itself, so a zero for them is a
+ * MEASURED zero rather than an absence.
+ */
+export type MeasuredTokens =
+  | { readonly measured: true; readonly total: number }
+  | {
+      readonly measured: false;
+      /** Structurally absent. There is no number to mistake for a measurement. */
+      readonly total?: undefined;
+      /** Why it is unknown, in one line. */
+      readonly reason: string;
+    };
+
+/**
+ * What a run actually spent.
+ *
+ * `tokens` is a {@link MeasuredTokens} and the other two are not, and the
+ * asymmetry is the point: a turn and a tool call are things the runtime counts
+ * as they are observed, while a token is something a provider has to report.
+ *
+ * ## What this does not prove
+ *
+ * A `maxTokens` ceiling is evaluated against this token count. When the count
+ * is unmeasured, a verdict of "not exhausted" on the token axis means **not
+ * measured to be over**, not **measured to be under**. That is the limit of what
+ * an absent usage event can support, and the reason `tokens` refuses to become
+ * `0` here rather than only in a report.
+ */
+export interface RunSpendReport {
+  readonly turns: number;
+  readonly toolCalls: number;
+  readonly tokens: MeasuredTokens;
+}
+
 export interface RunResult {
   readonly runId: RunId;
   readonly sessionId: SessionId;
@@ -138,16 +225,24 @@ export interface RunResult {
   readonly stopReason?: StopReason;
   readonly error?: ProtocolErrorInfo;
   readonly metrics: RunMetrics;
-  /** Contains durable + volatile events ONLY. */
-  readonly transcript: readonly RunEventEnvelope[];
-  readonly permissionAudit: readonly PermissionAuditEntry[];
+  /**
+   * The run's events, or the statement that this runtime does not read them back.
+   *
+   * When `read`, the entries contain durable + volatile events ONLY.
+   */
+  readonly transcript: RunSurface<RunEventEnvelope>;
+  /**
+   * Every permission decision this run made, or the statement that this runtime
+   * does not record them.
+   *
+   * A `read` with no entries is the strong claim: the run asked for nothing and
+   * was refused nothing. `unsupported` is the weak one: nobody checked.
+   */
+  readonly permissionAudit: RunSurface<PermissionAuditEntry>;
   readonly usage?: TokenUsage;
   readonly content?: readonly MessageContent[];
-  readonly budgetUsed?: {
-    readonly turns?: number;
-    readonly toolCalls?: number;
-    readonly tokens?: number;
-  };
+  /** Never absent. A run reports what it spent, and says when it does not know. */
+  readonly budgetUsed: RunSpendReport;
 }
 
 export interface RunHandle {

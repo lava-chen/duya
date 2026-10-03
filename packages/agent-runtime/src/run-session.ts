@@ -30,11 +30,14 @@
 import type {
   ControlFrame,
   EventSource,
+  MeasuredTokens,
+  PermissionAuditEntry,
   RunBudget,
   RunEvent,
   RunEventEnvelope,
   RunMetrics,
   RunResult,
+  RunSurface,
   RunTerminalState,
   WireEnvelope,
 } from '@duya/agent-protocol';
@@ -91,6 +94,30 @@ export interface RunPersistence {
  * first, for every adapter, and `RunPersistence` is not given a third method
  * that would let one of them do otherwise.
  */
+
+/**
+ * Reads a run's stored events back.
+ *
+ * ## Why this is not a third method on `RunPersistence`
+ *
+ * That port has exactly two methods for a reason stated above: a third would let
+ * an adapter pick its own ordering for committing a terminal, and the two
+ * adapters in this repository would then commit terminals by different rules.
+ * A READ cannot do that — it never writes, so it cannot reorder a commit — and
+ * folding it in anyway would extend the port to fix a problem it does not have
+ * while weakening the guarantee that is actually load-bearing.
+ *
+ * ## Why it is OPTIONAL
+ *
+ * Because reading a run back is a capability an adapter may genuinely lack, and
+ * "this adapter cannot read runs" is a different answer from "this run has no
+ * events". An absent reader is reported as `unsupported`, never as an empty
+ * transcript. See `RunResult.transcript`.
+ */
+export interface RunTranscriptReader {
+  /** The run's durable and volatile events, in `seq` order. */
+  readTranscript(runId: string): Promise<readonly RunEventEnvelope[]>;
+}
 
 /** One batch awaiting acknowledgement, and what it has already cost. */
 interface PendingBatch {
@@ -149,6 +176,62 @@ export interface RunSessionOptions {
    * claiming a transcript it does not have.
    */
   readonly appendRetries?: number;
+  /**
+   * Awaits `ms` before a refused batch is re-offered.
+   *
+   * ## Why this is injected rather than reached for
+   *
+   * Retry timing is the whole content of a backoff, and `setTimeout` is the one
+   * way to write a test that cannot observe it: a real timer makes the only
+   * available assertions "it eventually succeeded" and "it took at least
+   * roughly this long", the second of which is a coin flip on a loaded CI box.
+   * A function that waits means a test can substitute a counter, assert the
+   * EXACT schedule the runtime chose, and finish instantly — which is how the
+   * ladder in `#backoff` is pinned at all.
+   *
+   * The default is a real timer, so production behaviour is unchanged. Nothing
+   * else in this class reads a timer directly; a bare `setTimeout` in the retry
+   * path would put the schedule back out of reach of a test.
+   */
+  readonly delay?: (ms: number) => Promise<void>;
+  /**
+   * The most wall-clock time the write path may add in retry backoff, summed
+   * over every refusal in this run.
+   *
+   * ## Why a second bound when `appendRetries` already bounds the loop
+   *
+   * `appendRetries` bounds the ATTEMPTS and this bounds the TIME, and they are
+   * not the same bound. The attempt ladder is exponential, so the same attempt
+   * count is 75ms at the default and 30s at `appendRetries: 12` — and
+   * `settle` awaits the write queue before it publishes a terminal, so that
+   * difference is added directly to how long a finished run takes to report
+   * itself finished. A bound expressed in attempts cannot see that; one in
+   * milliseconds can.
+   *
+   * ## How this relates to `stopBoundMs`
+   *
+   * They bound different things and must not be confused. `stopBoundMs` is the
+   * runtime's promise to the CALLER about the EXECUTOR: "you will get an answer
+   * about stopping in this long". This is the write path's promise to itself,
+   * and it is spent only after the stop has already been answered, because
+   * `cancel` waits for the executor's own disposition before it settles. So the
+   * backoff can delay the PUBLICATION of a terminal, never the ANSWER to a
+   * cancel, and the default is two orders of magnitude below the default stop
+   * bound for exactly that reason.
+   *
+   * Once the budget is spent the remaining retries proceed immediately. They
+   * are still bounded by `appendRetries`, and a retry that is going to be
+   * dropped anyway is better spent discovering that sooner.
+   */
+  readonly appendBackoffBudgetMs?: number;
+  /**
+   * Reads the run's stored events back for `result().transcript`.
+   *
+   * Absent — which is the case for every adapter in this repository today — and
+   * the transcript is reported `unsupported` rather than empty. See
+   * {@link RunTranscriptReader}.
+   */
+  readonly transcriptReader?: RunTranscriptReader;
 }
 
 export interface ObserveResult {
@@ -215,6 +298,61 @@ export class RunSession {
   #lostBatch: unknown = null;
   #lostEvents = 0;
   #lostBatches = 0;
+  /**
+   * Milliseconds of backoff this run has already spent, across every refusal.
+   *
+   * The write path's own bound, and the reason it is counted here rather than
+   * per batch: the budget is a property of the RUN, so a run with nine refused
+   * batches on nine different batches has spent nine delays' worth and gets
+   * nine delays' worth of budget. Counting per batch would let a run multiply
+   * its own bound by the number of batches it happened to have.
+   */
+  #backoffSpentMs = 0;
+  /**
+   * Every permission decision this run recorded, in the order it was resolved.
+   *
+   * ## Why this is retained at all when the transcript is not
+   *
+   * Because the two have different costs and different purposes. The transcript
+   * is unbounded — every envelope of a long run, for the life of the handle —
+   * and the durable copy already exists in `run_events`, so retaining it here
+   * would be a second source of truth with a shorter lifetime. A permission
+   * audit is one entry per approval, which a run asks for in the presence of a
+   * human, and it is the surface whose whole value is that a consumer can trust
+   * it without a second round trip.
+   *
+   * Bounded by the number of permission requests the run made, and a run that
+   * makes a million of them has a million of them in storage too. This is
+   * collected in-process from the events the session already observes, so it is
+   * a real read and not a promise about a read that has not happened — and its
+   * COMPLETENESS is checked against {@link #permissionRequests} before it is
+   * reported as an audit rather than a fragment of one.
+   */
+  readonly #permissionAudit: PermissionAuditEntry[] = [];
+  /**
+   * Permission requests this run made, and so the number of decisions an audit
+   * of it would have to contain.
+   *
+   * The counter is what lets the audit be honest about its own completeness.
+   * Nothing in this runtime emits `permission.resolved` — the Control Plane
+   * census names a producer that does not exist, and the only permission port
+   * here (`permissionResponder`) delegates the decision to the host rather than
+   * recording one — so a run that asks for approval and gets no resolution back
+   * is the NORMAL case today, not a broken one. Reporting its audit as an empty
+   * list would be the same lie this surface type exists to remove, one level
+   * down: "no activity" reported for a run that had an activity and no record
+   * of it. See `#permissionAuditSurface`.
+   */
+  #permissionRequests = 0;
+  /**
+   * Whether any `assistant.usage` event was observed.
+   *
+   * The difference between a measured token total and an absent one. A run that
+   * emitted no usage event has not been shown to have spent zero tokens; it has
+   * been shown to have reported nothing, and those are different facts with
+   * different consequences for whoever is billed. See `MeasuredTokens`.
+   */
+  #usageObserved = false;
   /**
    * When each in-flight tool call started, on the wall clock.
    *
@@ -317,6 +455,22 @@ export class RunSession {
     if (event.type === 'run.completed' || event.type === 'run.failed') {
       this.#terminalEvents.push(event);
     }
+    // The audit is folded from `permission.resolved` and not from
+    // `permission.requested`, because the resolution is the decision. A request
+    // that expired, timed out, or was closed by a cancellation still resolves,
+    // and an audit built from requests alone would report an approval the run
+    // never recorded an answer for.
+    if (event.type === 'permission.requested') this.#permissionRequests += 1;
+    if (event.type === 'permission.resolved') {
+      this.#permissionAudit.push({
+        requestId: event.requestId,
+        action: event.action,
+        source: event.source,
+        latencyMs: event.latencyMs,
+        ...(event.scope === undefined ? {} : { scopeKind: event.scope.kind }),
+      });
+    }
+    if (event.type === 'assistant.usage') this.#usageObserved = true;
     if (EVENT_REGISTRY.specOf(event.type)?.durability === 'durable') {
       this.#buffer.push(envelope);
       // `run.started` flushes IMMEDIATELY, on its own, ahead of the batch.
@@ -522,9 +676,43 @@ export class RunSession {
         // Retry the same batch, in place, inside this same pass. Re-offering
         // the SAME seqs matters: `(runId, seq)` is the storage identity, so a
         // retry is idempotent and a re-minted seq would be a second event.
+        await this.#backoff(batch.attempts);
         continue;
       }
     }
+  }
+
+  /**
+   * Wait before re-offering a refused batch.
+   *
+   * `attempt` is the number of attempts ALREADY made, so the first refusal waits
+   * the base delay and each refusal after it doubles, capped.
+   *
+   * ## The schedule, and why it is this one
+   *
+   * Doubling from 25ms. The failure this is for is transient and named: a
+   * Control Plane that was momentarily unreachable, or a storage handle that was
+   * momentarily busy. Both clear in milliseconds, so a retry after 25ms finds a
+   * healthy store and the run continues as though nothing had happened — which
+   * is the outcome `appendRetries` was already assuming when it re-offered the
+   * batch immediately. What it is NOT for is a store that is gone, because no
+   * amount of waiting distinguishes one from the other: the attempt count still
+   * ends the loop, and a backoff must never be the reason a lost batch takes
+   * seconds to be admitted as lost. The delay exists to stop a busy store being
+   * hammered, not to keep trying a dead one.
+   *
+   * Capped at {@link APPEND_BACKOFF_MAX_MS} so the tail of a long ladder cannot
+   * escape {@link RunSessionOptions.appendBackoffBudgetMs}, and the budget is
+   * subtracted from rather than checked against, so a run cannot overshoot it by
+   * the size of the last delay it asked for.
+   */
+  async #backoff(attempt: number): Promise<void> {
+    const wanted = Math.min(APPEND_BACKOFF_BASE_MS * 2 ** (attempt - 1), APPEND_BACKOFF_MAX_MS);
+    const budgetMs = this.#options.appendBackoffBudgetMs ?? APPEND_BACKOFF_BUDGET_MS;
+    const waitMs = Math.min(wanted, Math.max(0, budgetMs - this.#backoffSpentMs));
+    this.#backoffSpentMs += waitMs;
+    if (waitMs <= 0) return;
+    await (this.#options.delay ?? realDelay)(waitMs);
   }
 
   /**
@@ -537,11 +725,21 @@ export class RunSession {
    * promise stays pending — which is the truth, and the caller's cue to keep
    * waiting.
    *
-   * `transcript` is empty by design in this slice. Filling it would mean the
-   * session retained every envelope for the life of the handle, and the durable
-   * copy already exists in `run_events` — the transcript is what a future
-   * replay window will read back, and building it in memory first would be a
-   * second source of truth with a shorter lifetime.
+   * ## What it does and does not carry
+   *
+   * The two surfaces are answered from different places, and the difference is
+   * the point rather than an accident:
+   *
+   *  - `permissionAudit` is decided by what the run actually did — see
+   *    {@link RunSession.#permissionAuditSurface}. A run that asked for nothing
+   *    reports `read` with no entries, which is a real measurement; a run that
+   *    asked and was not answered reports `unsupported` rather than an empty
+   *    list standing in for the missing decision.
+   *  - `transcript` is `unsupported` unless a {@link RunTranscriptReader} was
+   *    supplied. The session deliberately does not retain envelopes (see the
+   *    class header), so with no reader there is nothing to hand back, and an
+   *    empty array would be claiming a run produced no events when the truth is
+   *    that this runtime does not read them.
    *
    * ONE receipt, built once and handed back by identity. Every reader shares
    * this promise, so a second call cannot report a different `wallClockMs` for
@@ -565,13 +763,95 @@ export class RunSession {
         ? { stopReason: terminal.stopReason }
         : {}),
       metrics: this.#metrics(wallClockMs),
-      transcript: [],
-      permissionAudit: [],
+      transcript: await this.#transcript(),
+      permissionAudit: this.#permissionAuditSurface(),
       budgetUsed: {
         turns: this.#spend.turns,
         toolCalls: this.#spend.toolCalls,
-        tokens: this.#spend.tokens,
+        tokens: this.#tokenCount(),
       },
+    };
+  }
+
+  /**
+   * The permission audit, or the statement that this run's cannot be completed.
+   *
+   * ## How "no permission activity" is told apart from "no audit here"
+   *
+   * By EVIDENCE IN THE RUN, not by a capability flag a host sets and can get
+   * wrong. A flag would have to be declared in advance of the run and trusted
+   * afterwards; a count cannot be. Three cases, and the consumer narrows on the
+   * one that is true:
+   *
+   *  - **The run asked for nothing.** `read` with no entries. This is the strong
+   *    claim and it is available: there was no permission activity, so there is
+   *    nothing the audit could be hiding.
+   *  - **The run asked, and every request was decided.** `read` with one entry
+   *    per decision. The audit is complete and real.
+   *  - **The run asked, and a request has no decision.** `unsupported`. The run
+   *    HAD an approval and this runtime did not record its answer, so the
+   *    entries it does hold are a partial list and calling that list the audit
+   *    would tell a reviewer a run was fully accounted for when the one request
+   *    that mattered is missing. The reason carries both numbers so the gap is
+   *    legible without re-deriving it.
+   *
+   * The third case is the live one: nothing in this runtime emits
+   * `permission.resolved`, so any run that raises a prompt lands there today.
+   * It is reported rather than smoothed over, which is the point — the moment a
+   * producer is wired this flips to `read` on its own, with no flag to flip
+   * alongside it.
+   */
+  #permissionAuditSurface(): RunSurface<PermissionAuditEntry> {
+    if (this.#permissionRequests > this.#permissionAudit.length) {
+      return {
+        state: 'unsupported',
+        reason:
+          `this run made ${this.#permissionRequests} permission request(s) and recorded ${this.#permissionAudit.length} decision(s), so this runtime cannot produce a complete permission audit; an empty list here would read as "nothing was asked"`,
+      };
+    }
+    return { state: 'read', entries: [...this.#permissionAudit] };
+  }
+
+  /**
+   * The run's events, or the statement that this runtime does not read them.
+   *
+   * A read that FAILS is reported `unsupported` rather than as an empty
+   * transcript. It is not as precise as it could be — a store that refused a
+   * read is not the same as a store that cannot be read — but the alternative is
+   * the one thing this type exists to prevent: handing a consumer `[]` and
+   * letting it conclude the run produced nothing. The `reason` names the
+   * failure, so the two cases stay tellable apart.
+   */
+  async #transcript(): Promise<RunSurface<RunEventEnvelope>> {
+    const reader = this.#options.transcriptReader;
+    if (reader === undefined) {
+      return {
+        state: 'unsupported',
+        reason:
+          'this runtime does not retain a run\'s envelopes and no transcript reader was supplied, so the transcript was not read back; this is an absent capability, not an empty run',
+      };
+    }
+    try {
+      return { state: 'read', entries: await reader.readTranscript(this.runId) };
+    } catch (error) {
+      return { state: 'unsupported', reason: `reading the transcript back failed: ${describe(error)}` };
+    }
+  }
+
+  /**
+   * The run's token total, or the statement that it was never measured.
+   *
+   * The measured case is reached only after an `assistant.usage` event, so
+   * `measured: true` with `total: 0` is a true statement (a provider reported
+   * zero) and is not the same value as the other arm. See {@link MeasuredTokens}
+   * for why a nullable would not have been enough.
+   */
+  #tokenCount(): MeasuredTokens {
+    if (this.#usageObserved) return { measured: true, total: this.#spend.tokens };
+    return {
+      measured: false,
+      reason:
+        'no assistant.usage event was observed, so this runtime cannot say what the run spent on tokens; it is not claiming the run spent none',
     };
   }
 
@@ -664,6 +944,44 @@ export class RunSession {
       wallClockMs,
     };
   }
+}
+
+/**
+ * The first retry wait, and the multiplier for every one after it.
+ *
+ * See {@link RunSession.#backoff} for why the ladder exists and why it stops
+ * being the thing that bounds the write path.
+ */
+const APPEND_BACKOFF_BASE_MS = 25;
+
+/** Ceiling on any single backoff wait, so a long ladder cannot escape the budget. */
+const APPEND_BACKOFF_MAX_MS = 250;
+
+/**
+ * The default total backoff a run may spend on its write path.
+ *
+ * Deliberately far below the default `stopBoundMs` (a grace window plus two
+ * seconds). The two are not comparable — one bounds an executor's answer and
+ * this bounds a queue's — but a write-path wait that could approach the stop
+ * bound would make a cancel's answer depend on how busy storage happened to be,
+ * and that is the interaction the two bounds exist to prevent.
+ */
+const APPEND_BACKOFF_BUDGET_MS = 500;
+
+/**
+ * The production delay: a real timer.
+ *
+ * The default behind {@link RunSessionOptions.delay}, and the ONLY place in this
+ * class that reads a timer. Unref'd so a delay still outstanding cannot hold the
+ * process open after the run it belonged to is gone — the same reasoning
+ * `controller.ts` applies to the stop bound, and the same reason the timer is
+ * released on every path out of the race that created it.
+ */
+function realDelay(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    if (typeof timer.unref === 'function') timer.unref();
+  });
 }
 
 /**

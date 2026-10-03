@@ -767,7 +767,31 @@ selfTest:
   # zero tolerance is affected. `module-dependency-permitted` is counted, never
   # blocking, and never consults the baseline. `.architecture-baseline.json` was
   # not touched and `architecture:baseline` (`--write`) was not run.
-  module-dependency-permitted: 119
+  #
+  # 119 -> 120 is MINE (plan 587 R1.4), and it is a MEASURED value, not a gate
+  # relaxation. Attributed by measurement, not by inspection: renaming
+  # `packages/agent-runtime/test/run-result-surface.test.ts` out of the tree and
+  # re-running the self-test returns it to 119, and restoring it returns 120 —
+  # 1 added, 0 removed, the new test file being the only variable.
+  #
+  # The one edge is that test file -> `packages/agent-protocol/src/index.ts` for
+  # the specifier `@duya/agent-protocol`. It needs `RunSurface` and
+  # `PermissionAuditEntry` to assert the two claims this phase exists to keep
+  # apart — whether a surface was READ or is UNSUPPORTED — and an assertion over
+  # `state` is only meaningful against the real union rather than a re-declared
+  # copy of it. `agent-runtime` already declares `agent-protocol` in
+  # `requires`, so the edge is permitted and the direction is right:
+  # `agent-protocol` remains a leaf.
+  #
+  # This is the SAME shape the R1.2 entry above records for
+  # `run-persistence-sequence.test.ts` (35 -> 36), and the count is per OCCURRENCE
+  # of (rule, file, detail), so a new test file in this module adds exactly 1.
+  # `module-dependency` is UNCHANGED at 559, which is the load-bearing half: no
+  # edge became a NON-permitted dependency, so no managed module's zero
+  # tolerance is affected. The rule is counted, never blocking, and never
+  # consults the baseline. `.architecture-baseline.json` was not touched and
+  # `architecture:baseline` (`--write`) was not run.
+  module-dependency-permitted: 120
   forbidden-dependency: 16
   # 161 -> 162: one more relative-path escape into packages/agent, from the
   # plan-583 stack. Now 126 agent / 16 plugin-core / 13 gateway / 7 conductor.
