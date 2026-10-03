@@ -29,6 +29,9 @@ export * from './errors.js';
 export * from './permission.js';
 export * from './capabilities.js';
 export * from './resume.js';
+// Plan 587 T3.3 — the scoped resume cursor and the durable window it is
+// checked against. Pure scope arithmetic, no storage, no transport.
+export * from './replay.js';
 export * from './manifest.js';
 export * from './input-revision.js';
 export * from './envelope.js';
