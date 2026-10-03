@@ -1,3 +1,6 @@
+> Historical / superseded for execution. 原位置：`docs/architecture/12-monorepo-migration-phase-0-review.md`。
+> 唯一执行入口：[587 主计划](../README.md)；设计冲突以 [00 合同](../00-contracts.md) 为准。旧 Status / checkbox / 行号保留为历史证据。
+
 # Monorepo 与 Agent Harness：Phase 0 评审及迁移映射
 
 日期：2026-10-03。范围：当前实现、MONOREPO_RFC、architecture 系列及相关执行计划。本文是评审交付物，不表示下述运行时修复已实施。
