@@ -34,6 +34,10 @@ export default defineConfig({
       'scripts/**/*.test.ts',
       'packages/conductor/src/**/*.test.ts',
       'packages/conductor/src/**/*.test.tsx',
+      // Plan 587 E4.3: the eval tree. Collected deliberately rather than left to
+      // a convention glob, because `check-test-coverage` treats a tracked test
+      // file outside `include` as a test nobody ever runs.
+      'evals/**/*.test.ts',
     ],
     exclude: ['node_modules', 'dist', '.next'],
     setupFiles: ['./test-setup.ts'],

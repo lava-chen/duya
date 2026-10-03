@@ -1,0 +1,37 @@
+{
+  "formatVersion": 1,
+  "id": "structure-text-only",
+  "title": "a plain text turn reaches a durable, manifest-bound terminal",
+  "pinnedContract": "run-layer/r2-manifest-cas@f63cb0e9",
+  "mode": "offline",
+  "input": {
+    "prompt": "Say exactly: EVAL_LOOP_OK"
+  },
+  "scenario": {
+    "kind": "offline-anthropic-sse",
+    "seed": "e43-structure-text-only",
+    "turns": [
+      {
+        "blocks": [{ "kind": "text", "text": "EVAL_LOOP_OK" }],
+        "stopReason": "end_turn",
+        "inputTokens": 41,
+        "outputTokens": 7
+      }
+    ]
+  },
+  "policy": { "permissionMode": "bypassPermissions" },
+  "budget": { "maxTurns": 3, "timeoutMs": 180000 },
+  "expect": {
+    "invariants": [
+      { "family": "structure", "kind": "terminalStatus", "value": "completed" },
+      { "family": "structure", "kind": "runRowDurable", "value": true },
+      { "family": "structure", "kind": "runEventsRecorded", "min": 1 },
+      { "family": "structure", "kind": "manifestBound", "value": true },
+      { "family": "cost-performance", "kind": "usageMatchesFixture", "value": true },
+      { "family": "cost-performance", "kind": "providerRequestsWithin", "max": 2 },
+      { "family": "safety", "kind": "redactionHolds", "value": true },
+      { "family": "safety", "kind": "workspaceContained", "value": true }
+    ],
+    "artefacts": []
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "formatVersion": 1,
+  "id": "live-task-artefact-requires-key",
+  "title": "the same task artefact question, asked of a real model",
+  "pinnedContract": "run-layer/r2-manifest-cas@f63cb0e9",
+  "mode": "live",
+  "requires": ["live-provider-credentials", "network"],
+  "input": {
+    "prompt": "Write the single line marker=EVAL_LIVE_OK into live-artefact.txt in your workspace."
+  },
+  "scenario": {
+    "kind": "offline-anthropic-sse",
+    "seed": "e43-live-unused",
+    "turns": [
+      {
+        "blocks": [{ "kind": "text", "text": "placeholder: a live case does not use the offline script" }],
+        "stopReason": "end_turn",
+        "inputTokens": 0,
+        "outputTokens": 0
+      }
+    ]
+  },
+  "policy": { "permissionMode": "default" },
+  "budget": { "maxTurns": 8, "timeoutMs": 600000 },
+  "live": {
+    "model": "claude-sonnet-5",
+    "temperature": 0,
+    "maxTokens": 2048,
+    "measurements": 5
+  },
+  "expect": {
+    "invariants": [
+      { "family": "structure", "kind": "terminalStatus", "value": "completed" },
+      { "family": "structure", "kind": "runRowDurable", "value": true },
+      { "family": "cost-performance", "kind": "providerRequestsWithin", "max": 12 },
+      { "family": "cost-performance", "kind": "wallClockUnder", "maxMs": 600000 }
+    ],
+    "artefacts": [
+      {
+        "family": "task-artefact",
+        "kind": "file",
+        "path": "live-artefact.txt",
+        "assertion": { "form": "contains", "value": "EVAL_LIVE_OK" }
+      }
+    ]
+  }
+}

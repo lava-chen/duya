@@ -1,0 +1,65 @@
+{
+  "formatVersion": 1,
+  "id": "task-artefact-write-file",
+  "title": "a real file is written into the temp workspace and read back off disk",
+  "pinnedContract": "run-layer/r2-manifest-cas@f63cb0e9",
+  "mode": "offline",
+  "input": {
+    "prompt": "Read notes.txt, then write a summary to summary.txt containing the marker.",
+    "workspaceFiles": { "notes.txt": "the seed marker is EVAL_ARTEFACT_SEED\n" }
+  },
+  "scenario": {
+    "kind": "offline-anthropic-sse",
+    "seed": "e43-task-artefact-write-file",
+    "turns": [
+      {
+        "blocks": [
+          { "kind": "thinking", "thinking": "The marker is in notes.txt; read it first." },
+          { "kind": "tool_use", "id": "toolu_e43_read_1", "name": "read", "input": { "file_path": "notes.txt" } }
+        ],
+        "stopReason": "tool_use",
+        "inputTokens": 61,
+        "outputTokens": 22
+      },
+      {
+        "blocks": [
+          { "kind": "tool_use", "id": "toolu_e43_write_1", "name": "write", "input": { "file_path": "summary.txt", "content": "marker=EVAL_ARTEFACT_OK\n" } }
+        ],
+        "stopReason": "tool_use",
+        "inputTokens": 78,
+        "outputTokens": 25
+      },
+      {
+        "blocks": [{ "kind": "text", "text": "Wrote summary.txt." }],
+        "stopReason": "end_turn",
+        "inputTokens": 92,
+        "outputTokens": 9
+      }
+    ]
+  },
+  "policy": { "permissionMode": "bypassPermissions" },
+  "budget": { "maxTurns": 5, "timeoutMs": 240000 },
+  "expect": {
+    "invariants": [
+      { "family": "structure", "kind": "terminalStatus", "value": "completed" },
+      { "family": "structure", "kind": "runRowDurable", "value": true },
+      { "family": "safety", "kind": "workspaceContained", "value": true },
+      { "family": "cost-performance", "kind": "providerRequestsWithin", "max": 4 },
+      { "family": "cost-performance", "kind": "wallClockUnder", "maxMs": 240000 }
+    ],
+    "artefacts": [
+      {
+        "family": "task-artefact",
+        "kind": "file",
+        "path": "summary.txt",
+        "assertion": { "form": "equals", "value": "marker=EVAL_ARTEFACT_OK\n" }
+      },
+      {
+        "family": "task-artefact",
+        "kind": "executableResult",
+        "tool": "read",
+        "assertion": { "form": "contains", "value": "EVAL_ARTEFACT_SEED" }
+      }
+    ]
+  }
+}
