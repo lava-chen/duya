@@ -29,10 +29,6 @@ const SKIP_DIRS = new Set([
   "node_modules", "dist", "dist-electron", "bundle", "build", "release",
   ".git", "coverage", "storybook-static", ".e2e-userdata",
 ]);
-// Import specifiers that are never real module edges. Kept separate from
-// comment handling: these are strings that survive stripping and still are not
-// imports.
-const SKIP_SPEC = new Set([".length);", "else if (line.startsWith("]);
 
 function walk(dir, out = []) {
   if (!fs.existsSync(dir)) return out;
@@ -167,7 +163,15 @@ function resolveWorkspace(spec, pkgInfo) {
   return { file: null, sub };
 }
 
-const IMPORT_RE = /(?:from\s+|import\s*\(|require\s*\()\s*["']([^"']+)["']/g;
+// CR and LF are excluded from the specifier class on purpose. `[^"']` matches
+// them, so a match could start inside ordinary code — at the `from ` of a
+// string like `'rename from '` — and terminate at a quote on a later line,
+// capturing a slice of the file as a "specifier". It also embedded the raw
+// line ending in the capture, so the fingerprint of that junk differed between
+// a CRLF checkout and an LF checkout and the gate's verdict flipped by
+// platform. A specifier is never multi-line, so refusing to cross a line break
+// removes both the junk and the platform dependence.
+const IMPORT_RE = /(?:from\s+|import\s*\(|require\s*\()\s*["']([^"'\r\n]+)["']/g;
 
 const files = ROOTS.flatMap((r) => walk(path.join(ROOT, r)));
 const edges = [];
@@ -185,7 +189,16 @@ for (const file of files) {
   IMPORT_RE.lastIndex = 0;
   while ((m = IMPORT_RE.exec(text))) {
     const spec = m[1];
-    if (!spec || SKIP_SPEC.has(spec)) continue;
+    // No skip-list here, and that is deliberate. There used to be a
+    // `SKIP_SPEC` set holding `.length);` and `else if (line.startsWith(` —
+    // specifiers the regex mis-parsed out of ordinary code, suppressed by
+    // name. Both entries became dead the moment the file they were written
+    // for grew: the mis-parse joined the two halves into ONE multi-line
+    // capture, which matched neither entry, so the band-aid stopped working
+    // and the gate went red on Linux. A gate patched by listing the strings it
+    // mis-parses is a gate with a hole and no alarm on it, so the list is gone
+    // and IMPORT_RE above can no longer produce those shapes at all.
+    if (!spec) continue;
 
     let toOwner = null;
     let toFile = null;

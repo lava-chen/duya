@@ -355,10 +355,43 @@ modules:
     # edges that were counted but unreachable) and `cycle` 17 -> 16. These are the
     # ratchet working: debt paid down, not re-baselined.
 
+# Re-measured 2026-10-03 (plan 587 G0.3): resolver change, 1 parse change, 0 new
+#
+# The `architecture` CI job was green on Windows and RED on ubuntu for the same
+# commit, which is why it could not be a required check. Cause: the shared import
+# regex let its specifier class `[^`']` match CR and LF, so a match could open
+# inside ordinary code and close on a quote several lines later. In
+# `code-review-diff.ts` the string literal `'rename from '` supplies the `from `
+# keyword, and the capture then ran to the next quote in the file, producing the
+# "specifier" `.length);\r\n    else if (line.startsWith(`, classified
+# `UNRESOLVED:` and counted. The capture also held the RAW line ending, so under
+# `* text=auto` that junk fingerprinted differently per platform: the
+# Windows-recorded entry `5404f9b06a31899c` stopped triggering on Linux while its
+# LF twin read as a brand new violation. Identical code, opposite verdict.
+#
+# Fixed at the source: a specifier is never multi-line, so all five copies of the
+# regex (audit-imports, audit-modules, verify-cycle, validate-scc, and the copy
+# kept in strip-comments.test.ts) now exclude CR and LF. Second, independent
+# guarantee: `architecture-check.mjs` normalises line endings at the one place a
+# fingerprint is minted, so no raw source text can make a fingerprint depend on
+# the platform's checkout. `SKIP_SPEC` -- the two specifiers someone hit and
+# suppressed by name -- is deleted: it was already dead (0 of 14120 specifiers
+# matched it) and a gate patched by the strings it mis-parses is a hole with no
+# alarm on it.
+#
+# **Fingerprint classification (G0.3), by set and not by count: 801 kept
+# unchanged, 1 removed, 0 added.** The single removal is a PARSE CHANGE -- a slice
+# of `code-review-diff.ts`'s own source that was never a module edge. No legacy
+# debt was removed and no genuinely new violation was absorbed, which is the
+# condition under which `--write` is permitted.
+
 selfTest:
-  # 563 -> 548: `refactor(agent): drop two dead modules with no production
-  # callers` (plan 583) removed edges that were counted but unreachable.
-  module-dependency: 548
+  # 548 -> 547: one counted edge was never real. The parser had carved
+  # `.length);\n    else if (line.startsWith(` out of `code-review-diff.ts`'s own
+  # source and reported it as an `UNRESOLVED:` module-dependency edge; a
+  # specifier can no longer span lines, so it is not counted. Every other rule is
+  # byte-identical, and 801 of the 802 baseline fingerprints were kept.
+  module-dependency: 547
   module-dependency-permitted: 35
   forbidden-dependency: 16
   # 161 -> 162: one more relative-path escape into packages/agent, from the

@@ -64,7 +64,11 @@ function resolveFile(base) {
   return null;
 }
 
-const IMPORT_RE = /(?:from\s+|import\s*\(|require\s*\()\s*["']([^"']+)["']/g;
+// CR/LF are excluded so a match cannot span lines: `[^"']` also matched line
+// endings, which let a match start inside ordinary code and capture a slice of
+// the file as a "specifier". Kept identical to `audit-imports.mjs` and the
+// shared test copy — see strip-comments.mjs and strip-comments.test.ts.
+const IMPORT_RE = /(?:from\s+|import\s*\(|require\s*\()\s*["']([^"'\r\n]+)["']/g;
 
 // ── 1. intra-package module graph over packages/ ──────────────────────
 const pkgFiles = walk(path.join(ROOT, "packages"));

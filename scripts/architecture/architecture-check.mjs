@@ -237,6 +237,30 @@ const modulesAudit = runAudit("audit-modules.mjs");
 const fingerprint = (rule, file, detail) =>
   createHash("sha256").update(`${rule}\0${file}\0${detail}`).digest("hex").slice(0, 16);
 
+/**
+ * Line endings are not part of a violation's identity.
+ *
+ * `.gitattributes` sets `* text=auto`, so the stored blob and a Windows
+ * checkout genuinely differ from a Linux/macOS checkout. When raw source text
+ * reached a fingerprint, the same violation hashed differently per platform:
+ * a baseline recorded on Windows reported its own entry as "no longer
+ * triggered" on Linux while the CRLF-free variant read as a brand new
+ * violation. That is what made the `architecture` CI job unstable.
+ *
+ * The import regexes already refuse to capture across a line break, so no
+ * specifier can carry CR or LF today. This is the SECOND, independent
+ * guarantee, and the reason one change is not enough: the regexes are five
+ * hand-copied literals, and a future rule — or a future copy of that regex —
+ * could feed raw source text here again. Normalising at the single place a
+ * fingerprint is minted makes the invariant hold regardless of what feeds it.
+ *
+ * It cannot weaken the gate. It only makes byte-identical code hash to one
+ * fingerprint instead of two, which is the correct semantics: a CRLF checkout
+ * and an LF checkout hold the same code and must agree on which debt is
+ * tolerated.
+ */
+const normalizeEol = (s) => (s.includes("\r") ? s.replace(/\r\n/g, "\n") : s);
+
 const violations = [];
 
 /**
@@ -253,14 +277,18 @@ const occurrence = new Map();
 
 const add = (rule, file, detail) => {
   if (!ruleEnabled(rule)) return;
-  const key = `${rule}\0${file}\0${detail}`;
+  // Normalised once, here, so the dedup key, the reported detail and the
+  // fingerprint are all derived from the same platform-independent text.
+  const normFile = normalizeEol(file);
+  const normDetail = normalizeEol(detail);
+  const key = `${rule}\0${normFile}\0${normDetail}`;
   const nth = occurrence.get(key) ?? 0;
   occurrence.set(key, nth + 1);
   violations.push({
     rule,
-    file,
-    detail: nth === 0 ? detail : `${detail} [occurrence ${nth + 1}]`,
-    fingerprint: fingerprint(rule, file, nth === 0 ? detail : `${detail}#${nth}`),
+    file: normFile,
+    detail: nth === 0 ? normDetail : `${normDetail} [occurrence ${nth + 1}]`,
+    fingerprint: fingerprint(rule, normFile, nth === 0 ? normDetail : `${normDetail}#${nth}`),
   });
 };
 
