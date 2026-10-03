@@ -10,342 +10,166 @@
  * - compat flags (forceAdaptiveThinking, openAIThinkingFormat, etc.) are flat, not nested.
  * - SSEEvent is migrated here from packages/agent/src/types.ts to break circular deps.
  *
- * SHARED TYPES (TextContent, Message, SSEEvent, etc.) are supersets of the
- * original packages/agent definitions — all existing fields preserved, new
- * signature fields added. This ensures the re-export in Task 0.3 does not
- * break any consumer.
+ * ## The transcript vocabulary no longer lives here (plan 587 T3.1)
+ *
+ * `Message`, the content blocks, `TokenUsage`, `UsageCall`, `StopReason`, the
+ * permission and progress shapes, and the wire half of `ToolResult` are
+ * defined in `@duya/agent-protocol/transcript` and RE-EXPORTED here
+ * unchanged, so no consumer's source had to change. This file keeps what is
+ * genuinely the provider layer: `Model`, `ModelCompat`, `AIClient`, the
+ * thinking-level vocabulary, and `SSEEvent`.
+ *
+ * `SSEEvent` stayed rather than moving with the rest, because its
+ * `tool_result` member carries the Promise-bearing `ToolResult` — see the
+ * comment on the union below. `ToolResult` split into `ToolResultWire` (moved,
+ * pure JSON) and `DeferredToolExtras` (stayed, the two Promises), joined at
+ * runtime as `RuntimeToolResult`.
+ *
+ * @see packages/agent-protocol/MIGRATION.md for the compatibility window and
+ * the named removal tasks.
  */
 
 import type { CacheRetention } from './utils/prompt-caching.js';
 
-// ─── ApiFormat (re-exported from src/lib/providers/types.ts conceptually) ───
-export type ApiFormat =
-  | 'openai-chat'
-  | 'openai-responses'
-  | 'anthropic'
-  | 'gemini'
-  | 'ollama'
-  | 'bedrock'
-  | 'vertex';
+// Imported (not just re-exported) because the rest of this file — SSEEvent,
+// AssistantMessageEvent, Model, AIClient — annotates with these names, and
+// `export type { X } from '...'` does not put X in this file's scope.
+// The `export type { ... }` blocks further down are what make them part of
+// this module's PUBLIC surface; the two are separate jobs.
+import type {
+  AgentProgressEvent,
+  ApiFormat,
+  AssistantMessage,
+  DeferredToolExtras,
+  Message,
+  MessageContent,
+  MessageRole,
+  PermissionRequestEvent,
+  StopReason,
+  TextContent,
+  ThinkingContent,
+  TokenUsage,
+  ToolGroupProgressSource,
+  ToolResultWire,
+  ToolUse,
+  ToolUseContent,
+} from '@duya/agent-protocol/transcript';
 
-// ─── Message role ───
-export type MessageRole = 'user' | 'assistant' | 'tool' | 'system';
+// ─── Moved to @duya/agent-protocol/transcript ───
+//
+// Plan 587 T3.1: the pure data crossed over to the protocol package so there
+// is one definition of it rather than three drifting copies. These names are
+// still exported here with identical structure, so no consumer's source
+// changes; only the definition site moved.
+//
+// @deprecated Import from `@duya/agent-protocol/transcript`. Removal task
+// 587-T3-1-REMOVE-TRANSCRIPT, gated on the compatibility window in
+// `packages/agent-protocol/MIGRATION.md`.
+export type {
+  ApiFormat,
+  MessageRole,
+  MessageContentType,
+} from '@duya/agent-protocol/transcript';
 
-// ─── Content block types (superset of packages/agent definitions) ───
+// ─── Content block types (now owned by the protocol) ───
 
-export interface TextContent {
-  type: 'text';
-  text: string;
-  /** Provider signature for text content (Anthropic text signature). */
-  textSignature?: string;
-  /** Exact Responses API phase. Only 'commentary' is used for tool progress titles. */
-  phase?: 'commentary' | 'final_answer';
-  /**
-   * Provider annotations captured verbatim (plan 440 phase 2): OpenAI
-   * url_citation / file_citation / container_file_citation entries attached
-   * to streamed output text. Capture-only; rendering is a frontend concern.
-   */
-  annotations?: unknown[];
-}
+export type {
+  TextContent,
+  ImageContent,
+  ToolUseContent,
+  ToolResultContent,
+  ThinkingContent,
+  ProviderBlockContent,
+  MessageContent,
+} from '@duya/agent-protocol/transcript';
 
-export interface ImageContent {
-  type: 'image';
-  source: {
-    type: 'base64' | 'url';
-    media_type: string;
-    data: string;
-  };
-}
-
-export interface ToolUseContent {
-  type: 'tool_use';
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
-  /** Provider signature for tool call (Anthropic thought signature). */
-  thoughtSignature?: string;
-  /** Stable identity for the UI group that owns this tool call. */
-  groupId?: string;
-  /** Sanitized user-facing progress title for the owning tool group. */
-  progressTitle?: string;
-  /** Source of the title, or the deterministic tool fallback. */
-  progressSource?: ToolGroupProgressSource;
-}
-
-export interface ToolResultContent {
-  type: 'tool_result';
-  tool_use_id: string;
-  content: string | MessageContent[];
-  is_error?: boolean;
-}
-
-export interface ThinkingContent {
-  type: 'thinking';
-  thinking: string;
-  /** Provider signature for thinking (Anthropic thinking signature). */
-  thinkingSignature?: string;
-  /** True if the thinking block was redacted by the provider. */
-  redacted?: boolean;
-  /**
-   * Encrypted reasoning payload (plan 440 phase 2): OpenAI Responses
-   * `reasoning.encrypted_content`, kept so store:false sessions can replay
-   * reasoning server-side.
-   */
-  encrypted?: string;
-}
-
-/**
- * Opaque carrier for provider-native content that duya's block model does
- * not natively represent (plan 440): Anthropic server-side tool blocks
- * (`server_tool_use`, `web_search_tool_result`, `code_execution_*`,
- * `text_editor_*`), OpenAI Responses output items (`web_search_call`,
- * `code_interpreter_call`, `mcp_call`, `image_generation_call`, ...).
- * Parsers degrade unknown blocks into this carrier instead of dropping
- * them, so history replay stays valid. See api/degrade.ts for the
- * forward-or-downgrade outbound rule.
- */
-export interface ProviderBlockContent {
-  type: 'provider_block';
-  /** API format whose stream produced this block. */
-  origin: ApiFormat;
-  /** Verbatim provider type tag, e.g. 'server_tool_use', 'web_search_call'. */
-  kind: string;
-  /** Verbatim provider payload (block / item object as received). */
-  payload: unknown;
-}
-
-export type MessageContent =
-  | TextContent
-  | ImageContent
-  | ToolUseContent
-  | ToolResultContent
-  | ThinkingContent
-  | ProviderBlockContent;
+/** @deprecated Import `MESSAGE_CONTENT_TYPES` from `@duya/agent-protocol/transcript`. */
+export { MESSAGE_CONTENT_TYPES } from '@duya/agent-protocol/transcript';
 
 // ─── Tool types ───
 
-export interface ToolUse {
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
-  groupId?: string;
-  progressTitle?: string;
-  progressSource?: ToolGroupProgressSource;
-}
+export type {
+  ToolUse,
+  ToolGroupProgressSource,
+  ToolResultMetadata,
+  ToolResultImage,
+} from '@duya/agent-protocol/transcript';
 
-export type ToolGroupProgressSource =
-  | 'provider_commentary'
-  | 'model_progress_tool'
-  | 'tool_fallback';
+/**
+ * The RUNTIME tool result: the wire half plus two in-process handshakes.
+ *
+ * Plan 587 T3.1 split what used to be one interface in two. Everything a
+ * transcript row, an SSE `tool_result` frame, or a checkpoint can hold moved
+ * to `ToolResultWire` in `@duya/agent-protocol/transcript`, because a `Promise`
+ * has no JSON representation and contract §A forbids one on the wire.
+ *
+ * The two Promise fields could not move, so they stay here and are intersected
+ * back on at runtime. `RuntimeToolResult` is therefore not a projection of the
+ * old type — it is the same object minus the two fields that were never on the
+ * wire. `toToolResultWire()` in `./tool-result-wire.js` is the explicit
+ * serializer that produces the wire form; nothing derives it structurally.
+ *
+ * The names `ToolResult` and `RuntimeToolResult` are the same type. Both are
+ * exported because `ToolResult` appears 305 times across 100 files under
+ * `packages/`, and renaming them is a behaviour-shaped diff, not a move.
+ */
+export type RuntimeToolResult = ToolResultWire & DeferredToolExtras;
 
-export interface ToolResultMetadata {
-  durationMs?: number;
-  filePath?: string;
-  lineCount?: number;
-  charCount?: number;
-  exitCode?: number;
-  matchCount?: number;
-  truncated?: boolean;
-  engine?: string;
-  [key: string]: unknown;
-}
+/**
+ * @deprecated Alias of {@link RuntimeToolResult}, kept so the existing
+ * `ToolResult` annotations keep compiling unchanged. Removal task
+ * 587-T3-1-RENAME-TOOLRESULT, in the same window as 587-T3-1-REMOVE-TRANSCRIPT.
+ */
+export type ToolResult = RuntimeToolResult;
 
-export interface ToolResult {
-  id: string;
-  name: string;
-  result: string;
-  error?: boolean;
-  duration_ms?: number;
-  metadata?: ToolResultMetadata;
-  /**
-   * Optional deferred second result. When present, StreamingToolExecutor
-   * keeps a reference and, after the main result has been delivered, awaits
-   * this promise and yields a synthetic second tool_result.
-   */
-  pendingExtraResult?: Promise<{ result: string; is_error?: boolean }>;
-  /**
-   * Optional deferred context associated with a tool result. When present,
-   * StreamingToolExecutor surfaces it as a `deferredContext` update so the
-   * agent can inject it as transient runtime context on the next provider
-   * turn (never persisted to the durable history). Resolves to a string or
-   * JSON-serializable value (e.g. a follow-up review payload).
-   */
-  pendingContext?: Promise<unknown>;
-  /**
-   * Inline image attachments for multimodal main models. When present,
-   * StreamingToolExecutor builds the tool_result content as a
-   * `MessageContent[]` array ([text, ...ImageContent]) instead of a plain
-   * string, so vision-capable models can see the image directly.
-   *
-   * Downstream consumers handle non-vision models:
-   *   - transformMessages downgrades image blocks to placeholder text when
-   *     `model.input` lacks 'image'.
-   *   - OpenAI tool messages cannot carry images at all; the OpenAI adapter
-   *     strips them with a fallback hint.
-   *
-   * Mirrors the FileAttachment.imageChunks shape ({ base64, mediaType }).
-   */
-  images?: Array<{ data: string; mediaType: string }>;
-  /**
-   * Plan 580 D8 — canonical MCP content blocks, verbatim from the
-   * server's `tools/call` result. SAVED LOSSLESSLY (persistence keeps
-   * the full object via message.metadata); the model-facing `result`
-   * text only receives a bounded single-line metadata line per
-   * non-text block (≤200 chars). NEVER stringify these into `result` —
-   * image/audio base64 payloads would eat hundreds of thousands of
-   * tokens for zero benefit.
-   */
-  blocks?: unknown[];
-  /**
-   * Plan 580 D8 — `structuredContent` from the MCP `tools/call` result,
-   * verbatim. Canonical saved form; provider projection is a later plan.
-   */
-  structured?: unknown;
-}
+/**
+ * @deprecated Import from `@duya/agent-protocol/transcript`.
+ */
+export type { ToolResultWire, DeferredToolExtras } from '@duya/agent-protocol/transcript';
 
 // ─── Token usage ───
 
-export interface TokenUsage {
-  input_tokens: number;
-  output_tokens: number;
-  total_tokens?: number;
-  /** Cache hit tokens (cache read) - Anthropic prompt caching */
-  cache_hit_tokens?: number;
-  /** Cache creation tokens (cache write) - Anthropic prompt caching */
-  cache_creation_tokens?: number;
-  /** Upstream provider name when using an aggregator like OpenRouter.
-   *  E.g., "Anthropic", "OpenAI", "Google". Undefined for direct API calls. */
-  upstreamProvider?: string;
-  /**
-   * Per-call usage ledger (pi-style). A tool-heavy turn emits one entry per
-   * LLM API call; each entry snapshots the model / provider that produced
-   * it, so a session that switches models mid-turn attributes every call to
-   * the exact model that generated it. Absent on legacy records — parsers
-   * fall back to the top-level cumulative fields.
-   */
-  calls?: UsageCall[];
-  /**
-   * Plan 445: single-call usage snapshot of the LARGEST-prompt call of the
-   * turn (NOT necessarily the latest — see comment in
-   * agent-process-entry.ts result handler). The cumulative top-level fields
-   * sum every LLM call of the turn, which inflates the persisted anchor
-   * ~N× on tool-heavy turns (10 tool_use = 10× the actual context size).
-   * normalizePromptTokens / computeContextEstimate prefer this on reload
-   * so the ring recovers to the real single-call prompt volume.
-   *
-   * Field shape mirrors the top-level usage block (no nested calls ledger).
-   */
-  last_call?: {
-    input_tokens?: number;
-    output_tokens?: number;
-    cache_hit_tokens?: number;
-    cache_creation_tokens?: number;
-  };
-}
+export type { TokenUsage, UsageCall } from '@duya/agent-protocol/transcript';
 
-/**
- * Single LLM API call usage detail. Mirrors Anthropic's per-request usage
- * block; aliases for OpenAI-compatible gateways are normalized at parse time
- * (see packages/agent/src/process/call-usage.ts).
- */
-export interface UsageCall {
-  input_tokens: number;
-  output_tokens: number;
-  cache_hit_tokens?: number;
-  cache_creation_tokens?: number;
-  /** Reasoning tokens — a subset of output_tokens, never double-counted. */
-  reasoning_tokens?: number;
-  /** Anthropic ephemeral 1h cache write tokens. */
-  cache_write_1h_tokens?: number;
-  total_tokens?: number;
-  /** Model id snapshot at the moment this call was made (hot-swap exact). */
-  model?: string;
-  /** Provider id snapshot at the moment this call was made. */
-  provider_id?: string;
-}
+/** @deprecated Import `StopReason` from `@duya/agent-protocol/transcript`. */
+export type { StopReason } from '@duya/agent-protocol/transcript';
 
-// ─── Stop reason ───
-
-export type StopReason =
-  | 'completed'
-  | 'aborted'
-  | 'max_turns'
-  /** Output budget exhausted (OpenAI `finish_reason: 'length'`, Anthropic
-   *  `stop_reason: 'max_tokens'`). Distinct from the run-level 'max_turns'
-   *  cap: the DuyaAgent truncation guard keys on this value to fail
-   *  partially-streamed tool calls (plan 418 L2). */
-  | 'max_tokens'
-  | 'error'
-  | 'tool_use'
-  | 'end_turn'
-  | 'stop_sequence'
-  | 'repeated_tool_calls';
-
-// ─── SSE Event types (migrated from packages/agent) ───
-// mode_changed.mode uses `string` instead of AgentRuntimeMode to avoid
-// a dependency on agent-specific types. packages/agent can narrow it.
+// ─── SSE Event types ───
+// `SSEEvent` stays HERE rather than moving to the protocol, and the reason is
+// worth stating because it looks like an oversight.
+//
+// Every other moved type is pure JSON. `SSEEvent` is not: its `tool_result`
+// member carries `data: ToolResult`, and the runtime `ToolResult` holds two
+// Promises. Moving the union would have meant either dropping those two fields
+// from the event payload — losing them for a tidier type, which is the failure
+// this task forbids — or restructuring how the frame is built, which is
+// behaviour and belongs in the router cutover PR.
+//
+// The event TYPE strings are already mapped table-first in
+// `@duya/agent-protocol/legacy` (`SSE_EVENT_TO_PROTOCOL`), so the cutover plan
+// exists without moving this union. Removal task 587-T3-1-MOVE-SSE-UNION.
+//
+// `mode_changed.mode` stays `string` rather than the closed
+// `AgentRuntimeMode` so this file keeps no agent dependency.
 
 /**
  * Plan 450 Phase D: structured parameter display. The renderer
  * surfaces these as tidy label:value rows above the raw input JSON.
+ *
+ * @deprecated Import from `@duya/agent-protocol/transcript`.
+ *
+ * Note the Desktop carries a SUPERSET of `PermissionRequestEvent`: it adds
+ * `connector` and `suggestions` (see `stream.ts` in apps/desktop). Pointing the
+ * renderer at this shape would compile and silently drop "Always allow" for
+ * app-connection tools, so the two were deliberately NOT merged here. Merging
+ * them is router work — removal task 587-T3-1-MERGE-PERMISSION-EVENT.
  */
-export type ConnectorToolParamsDisplayEntry = {
-  name: string;
-  label: string;
-  value: string;
-};
-
-export interface PermissionRequestEvent {
-  id: string;
-  toolName: string;
-  toolInput: Record<string, unknown>;
-  mode: 'generic' | 'ask_user_question' | 'exit_plan_mode';
-  expiresAt: number;
-  decisionReason?: string;
-  /**
-   * Optional structured metadata attached by the agent core (Plan 450).
-   * Currently used to carry `toolParamsDisplay` for connector tools so
-   * the approval card can render a labeled summary instead of raw JSON.
-   */
-  metadata?: { toolParamsDisplay?: ConnectorToolParamsDisplayEntry[] };
-}
-
-export interface AgentProgressEvent {
-  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'started' | 'done' | 'error' | 'hook_invoked';
-  data?: string;
-  toolName?: string;
-  toolInput?: Record<string, unknown>;
-  toolResult?: string;
-  duration?: number;
-  agentId?: string;
-  agentType?: string;
-  agentName?: string;
-  agentDescription?: string;
-  sessionId?: string;
-  /**
-   * Plan 437: when `type === 'hook_invoked'`, the rest of the payload
-   * (hookEventName / hookType / hookName / additionalContext / status /
-   * durationMs / async / seq / ...) is carried as a nested object so
-   * the existing flat envelope passes through unchanged. The renderer
-   * unwraps this in `handleAgentProgressEvent`.
-   */
-  hookEvent?: {
-    hookEventName: string;
-    hookType: 'command' | 'process' | 'prompt' | 'http' | 'agent';
-    hookName: string;
-    matcher?: string;
-    additionalContext?: string;
-    exitCode?: number;
-    async: boolean;
-    backgroundTaskId?: string;
-    durationMs: number;
-    status: 'ok' | 'error' | 'timeout' | 'skipped';
-    errorMessage?: string;
-    seq: number;
-    toolName?: string;
-    toolUseId?: string;
-  };
-}
+export type {
+  ConnectorToolParamsDisplayEntry,
+  PermissionRequestEvent,
+  AgentProgressEvent,
+  HookEventPayload,
+} from '@duya/agent-protocol/transcript';
 
 export type SSEEvent =
   | { type: 'text'; data: string }
@@ -430,94 +254,19 @@ export type SSEEvent =
         available: number;
       };
     };
-// ─── Message types (superset of packages/agent definitions) ───
+// ─── Message types (now owned by the protocol) ───
 
-export interface Message {
-  role: MessageRole;
-  content: string | MessageContent[];
-  id?: string;
-  name?: string;
-  tool_call_id?: string;
-  timestamp?: number;
-  /**
-   * Tool names loaded at runtime (Plan 418 Phase 4 deferred tools). Set on
-   * tool-result carriers when a tool was discovered on-demand (duya
-   * tool_search / plan 241). Providers that support `tool_reference` blocks
-   * emit a reference instead of resending the tool schema.
-   */
-  addedToolNames?: string[];
-  /** UI-only: whether this message renders in the transcript. Hidden messages
-   * (runtime context, notifications) are model/persistence only. */
-  visibility?: 'visible' | 'hidden';
-  metadata?: Record<string, unknown>;
-  msg_type?: string;
-  thinking?: string;
-  tool_name?: string;
-  tool_input?: string;
-  parent_tool_call_id?: string;
-  viz_spec?: string;
-  status?: string;
-  seq_index?: number;
-  duration_ms?: number;
-  sub_agent_id?: string;
-  /** File attachments (name, type, url, size, text, imageChunks, etc.) */
-  attachments?: unknown[];
-  /**
-   * Message origin classifier (plan 489 P0.1): who produced this message.
-   * Canonical values live in `@duya/agent/message` (`MessageSource`); kept
-   * as `string` here so @duya/ai stays dependency-free. Inferred at the
-   * IPC boundary when absent.
-   */
-  source?: string;
-  /** User-facing rendering content. */
-  displayContent?: string | MessageContent[];
-  /** True if this message is a compact boundary marker */
-  isCompactBoundary?: boolean;
-  /** True if this message is a compact summary */
-  isCompactSummary?: boolean;
-  /** Number of messages compacted into this summary */
-  compactedMessageCount?: number;
-  /** IDs of the original messages compacted into this summary */
-  compactedMessageIds?: string[];
-  /** Unique ID of the compact boundary this summary belongs to */
-  compactBoundaryId?: string;
-  /** Token usage for this message */
-  tokenUsage?: TokenUsage;
-  // ─── NEW: multi-model adapter fields ───
-  /** Provider ID that produced this message (for isSameModel guard) */
-  providerId?: string;
-  /** Model name that produced this message */
-  model?: string;
-  /** API format used to produce this message */
-  api?: ApiFormat;
-}
-
-// ─── AssistantMessage (superset of packages/agent definition) ───
-
-/** Observability metadata captured verbatim from provider responses
- *  (plan 440 phase 2). Never required; consumers must treat as optional. */
-export interface ProviderResponseMeta {
-  /** OpenAI service tier that served the request ('default', 'flex', ...). */
-  serviceTier?: string;
-  /** Chat Completions logprobs payload when requested by the caller. */
-  logprobs?: unknown;
-}
-
-export interface AssistantMessage {
-  role: 'assistant';
-  content: MessageContent[];
-  id?: string;
-  timestamp?: number;
-  // ─── NEW: multi-model adapter fields ───
-  api?: ApiFormat;
-  providerId?: string;
-  model?: string;
-  responseId?: string;
-  usage?: TokenUsage;
-  /** Provider observability metadata (plan 440 phase 2), when available. */
-  providerMeta?: ProviderResponseMeta;
-  stopReason?: StopReason;
-}
+/**
+ * `Message` mixes four concerns on one interface — provider request body,
+ * durable row, and renderer view — so it is classified field by field rather
+ * than split. `visibility` is the clearest: read only by the renderer, and
+ * meaningless to both a provider and a storage row. The full per-field record
+ * is `MESSAGE_FIELDS` in `@duya/agent-protocol/transcript`.
+ *
+ * @deprecated Import from `@duya/agent-protocol/transcript`. Removal task
+ * 587-T3-1-REMOVE-TRANSCRIPT.
+ */
+export type { Message, AssistantMessage, ProviderResponseMeta } from '@duya/agent-protocol/transcript';
 
 // ─── Reasoning capability types (NEW) ───
 

@@ -442,7 +442,17 @@ selfTest:
   # source and reported it as an `UNRESOLVED:` module-dependency edge; a
   # specifier can no longer span lines, so it is not counted. Every other rule is
   # byte-identical, and 801 of the 802 baseline fingerprints were kept.
-  module-dependency: 547
+  # 547 -> 559 (plan 587 T3.1): TWELVE new, all the single edge
+  # `pkg:ai -> pkg:agent-protocol` for the specifier
+  # `@duya/agent-protocol/transcript`. Attributed by measurement — two
+  # `audit-imports.mjs --json` runs, edge set against edge set, 598 -> 610 with
+  # exactly 12 added and 0 removed, and ZERO of them sourced from the new
+  # `agent-protocol/src/transcript/` module. Full attribution and the reason the
+  # edge is correct rather than merely tolerated is in the T3.1 block at the end
+  # of this file. The 12 are: +10 in `packages/ai/src/types.ts` (one import plus
+  # nine `export type { ... } from` re-exports), +1 in the new
+  # `packages/ai/src/tool-result-wire.ts`, +1 in its test.
+  module-dependency: 559
   # 35 -> 36: ONE genuinely new, legitimately permitted edge.
   # `packages/agent-runtime/test/run-persistence-sequence.test.ts` (plan 587
   # R1.2) imports `@duya/agent-protocol` TYPES -- RunManifest, RunBudget,
@@ -575,3 +585,55 @@ selfTest:
   # `exports` map. The rule is declarative — it reads package.json only, so
   # this stays 0 regardless of whether dist/ has been built.
   missing-module-artifact: 0
+
+# Re-measured 2026-10-03 (plan 587 T3.1, branch 587/t3-1-wire-single-source
+# on top of master @ 9a37112c): 12 new, all one specifier, 0 removed
+#
+#   module-dependency  547 -> 559   12 new, every one of them the edge
+#                                   `pkg:ai -> pkg:agent-protocol` for the
+#                                   specifier `@duya/agent-protocol/transcript`.
+#                                   Nothing else in this table moved.
+#   module-dependency-permitted   51 -> 51   UNCHANGED, and that is the
+#                                   load-bearing half. See below.
+#
+# ATTRIBUTED BY MEASUREMENT, not inferred. Two runs of
+# `scripts/architecture/audit-imports.mjs --json`, diffed edge set against edge
+# set: 598 -> 610 cross-boundary edges, exactly 12 added and 0 removed.
+#
+#   +10  packages/ai/src/types.ts              the 1 import plus 9
+#                                             `export type { ... } from`
+#                                             re-export statements
+#   + 1  packages/ai/src/tool-result-wire.ts   the serializer's two
+#                                             `ToolResultWire` /
+#                                             `DeferredToolExtras` types
+#   + 1  packages/ai/test/tool-result-wire.test.ts   the new test file
+#
+# ZERO edges have the new module as their source. `packages/agent-protocol/src/
+# transcript/` imports nothing outside its own package, so it is a genuine leaf
+# and satisfies `forbiddenDependencies` at `packages/agent-protocol/**` with no
+# exception needed. This was verified the hard way: re-running the checker with
+# the three `packages/ai` source files reverted, but the new
+# `agent-protocol/src/transcript/` still present, returns EXACTLY the baseline
+# numbers (547 / 817). The whole delta is the `ai` -> `agent-protocol` import;
+# the new module contributes none of it.
+#
+# WHY THE EDGE IS THE RIGHT SHAPE. T3.1 moved the definition of the transcript
+# vocabulary — `Message`, the content blocks, `TokenUsage`, `UsageCall`,
+# `StopReason`, the permission and progress shapes, and the wire half of
+# `ToolResult` — out of `@duya/ai` and into the protocol package, which is the
+# only way "one source of truth for wire data" is true rather than aspirational.
+# The alternative was a second copy of every one of those shapes, and a copy is
+# precisely the failure this plan exists to remove. The direction is the safe
+# one: `ai` (layer `core`) now depends DOWNWARD on `protocol`, matching the
+# `layers:` list above.
+#
+# `module-dependency-permitted` staying at 51 is correct rather than a missed
+# update. Unlike `agent-core` and `agent-runtime`, `pkg:ai` is not a DECLARED
+# module in this policy — there is no `- id: ai` entry — so
+# `moduleDependencyPermitted` has no `requires` list to consult and classifies
+# these as counted violations instead of permitted edges. Adding an `ai` module
+# to convert 12 violations into 12 permitted edges would change how a large
+# existing surface is classified for no boundary gain, so it was NOT done here.
+# `--write` was not run; the baseline section is byte-identical, and
+# `tolerated (baselined) 817 -> 829` is the expected consequence of raising this
+# expectation by exactly the measured 12.

@@ -165,15 +165,27 @@ describe('drift #1: the protocol package is a true leaf', () => {
 });
 
 describe('package layout', () => {
-  it('exposes exactly three subpaths, none of them re-exported from the barrel', () => {
+  it('exposes exactly four subpaths, none of them re-exported from the barrel', () => {
+    // Plan 587 T3.1 added `./transcript` (the moved transcript vocabulary).
+    // The count moved from three to four; the RULE this test exists to enforce
+    // did not change: a subpath is a way to keep a deprecated surface off the
+    // main entry, so none of them may be re-exported from `index.ts`. That is
+    // why `/transcript` was added as a subpath rather than folded into the
+    // barrel, and why the barrel assertions below are the load-bearing part.
     const manifest = JSON.parse(readFileSync(MANIFEST, 'utf8')) as {
       exports: Record<string, unknown>;
     };
-    expect(Object.keys(manifest.exports).sort()).toEqual(['.', './legacy', './testing']);
+    expect(Object.keys(manifest.exports).sort()).toEqual([
+      '.',
+      './legacy',
+      './testing',
+      './transcript',
+    ]);
 
     const barrel = readFileSync(join(SRC, 'index.ts'), 'utf8');
     expect(barrel).not.toContain('./legacy/');
     expect(barrel).not.toContain('./testing/');
+    expect(barrel).not.toContain('./transcript/');
   });
 
   it('is ESM with composite enabled', () => {

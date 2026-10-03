@@ -598,10 +598,10 @@ export interface SubagentCompletedPayload {
   readonly summary?: string;
 }
 
-/** From `AgentProgressEvent.hookEvent` (packages/ai/src/types.ts:332-347).
+/** From `AgentProgressEvent.hookEvent` (transcript/permission-progress.ts:66-82).
  *
  *  NOTE: the legacy payload carried its OWN `seq` field
- *  (packages/ai/src/types.ts:344) —
+ *  (transcript/permission-progress.ts:78) —
  *  a THIRD seq namespace. The protocol discards it; the envelope's `seq` is
  *  the only ordering authority. */
 export interface HookInvokedPayload {
