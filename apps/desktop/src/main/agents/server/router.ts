@@ -17,6 +17,8 @@ import { Logger } from './logger';
 import { toLLMProvider, type ApiProvider } from '../../config/provider-types';
 import { calculateMaxConcurrentWorkers, getWorkerMemoryThreshold } from './worker-limits';
 import { acquireChatLock, releaseChatLock, type ChatLockOrigin } from './chat-runtime-lock';
+import { acceptedVerbs } from '../../control-plane/permission-vocabulary';
+import { recordPermissionDecision } from '../../control-plane/permission-decision-record';
 import type { RunOrchestrator } from './run-orchestrator';
 import { parseAgentIdFromBotSession } from '../../wake/bot-session-id';
 import { buildCronProviderConfig, resolveCronModel } from '../../automation/provider-config';
@@ -2159,7 +2161,7 @@ function handlePostPermission(
     body += chunk.toString();
   });
 
-  req.on('end', () => {
+  req.on('end', async () => {
     let parsed: { id?: string; decision?: string; updatedInput?: Record<string, unknown>; message?: string };
     try {
       parsed = body ? JSON.parse(body) : {};
@@ -2175,7 +2177,10 @@ function handlePostPermission(
       return;
     }
 
-    const validDecisions = ['allow', 'deny', 'allow_once', 'allow_for_session'];
+    // The whitelist moved into the vocabulary module (plan 587 R2.4). Same set,
+    // one declaration, and `defer` joined it: "not yet" is a real answer that
+    // authorises nothing, and it used to be unreachable from every surface.
+    const validDecisions = acceptedVerbs('worker_http');
     if (!validDecisions.includes(decision)) {
       sendJson(res, 400, { error: `Invalid decision. Must be one of: ${validDecisions.join(', ')}` });
       return;
@@ -2199,16 +2204,72 @@ function handlePostPermission(
       cmd.message = message;
     }
 
+    // Plan 587 R2.4: record the decision BEFORE the worker is told, and refuse
+    // to deliver a decision that was not recorded.
+    //
+    // On master this forwarded the command and answered `{ ok: true }` for
+    // EVERY POST, including the tenth double-click on a prompt the first click
+    // had already answered. The worker logged the surplus and dropped it, so no
+    // tool ran twice -- but the router itself had no guard, wrote no audit, and
+    // could not tell a host that its answer was late.
+    //
+    // `permissionLedger` is the one place the durable decision is made. A
+    // refused durable write degrades to the old forward with a recorded reason
+    // rather than dropping the user's answer on the floor: a tool call must
+    // never hang because the audit table was locked.
+    const durable = await recordPermissionDecision(deps.dbRequest, {
+      surface: 'worker_http',
+      requestId: id,
+      sessionId,
+      decision,
+    });
+    if (durable.status === 'refused') {
+      httpLogger.warn('Permission decision not recorded; delivering without an audit row', {
+        sessionId,
+        id,
+        decision,
+        reason: durable.reason,
+      });
+    } else if (durable.status === 'duplicate') {
+      // A late or duplicate answer. The first decision stands and the worker is
+      // NOT told again -- re-delivering is how a prompt gets answered twice.
+      sendJson(res, 200, {
+        ok: true,
+        recorded: durable.recordedDecision,
+        firstDecision: false,
+      });
+      return;
+    }
+
     const sent = workerManager.sendCommand(sessionId, cmd);
     if (!sent) {
       sendJson(res, 503, { error: 'Worker not available for permission resolution' });
       return;
     }
 
-    sendJson(res, 200, { ok: true });
+    sendJson(res, 200, {
+      ok: true,
+      // `recorded` says whether the audit row exists, which is the question a
+      // host actually has after a degraded write. It is NOT the same as
+      // `firstDecision`: a refused write is still the answer being delivered
+      // for the first time.
+      recorded: durable.status === 'recorded',
+      firstDecision: true,
+    });
   });
 }
 
+/**
+ * Write the decision durably, once, and report which of the three things
+ * happened.
+ *
+ * Deliberately NOT the coordinator: that class owns a live request registry and
+ * a deadline timer, and the router holds no request objects -- the worker owns
+ * the pending prompt. What the router needs from it is the ordering and the
+ * first-wins property, and those are one CAS on the approval row. Reusing
+ * `resolveToolApproval` means the interactive path and the bot approval card
+ * now claim the SAME row, so the two surfaces cannot both decide one question.
+ */
 interface ChatInitParams {
   providerConfig: Record<string, unknown> | undefined;
   workingDirectory?: string;

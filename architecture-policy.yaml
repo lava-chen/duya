@@ -522,7 +522,43 @@ selfTest:
   # 806 quoted in the R2.3 brief) when the checker is run as-is in a scratch
   # worktree at 0db6ffe8. The +7 attributed to R2.3 is therefore +3 here, and the
   # other 4 belong to whatever moved between the quoted figure and 0db6ffe8.
-  module-dependency-permitted: 47
+  #
+  # Re-measured 2026-10-03 (plan 587 R2.4): 4 new, 0 parse changes, 0 debt removed
+  #
+  # 47 -> 51, and NOTHING else in this table moved. Attributed BY MEASUREMENT, by
+  # running `audit-imports.mjs --json` in this worktree and again with every
+  # `apps/` and `packages/` change stashed (i.e. at 9803b5fd) and diffing the two
+  # cross-boundary edge sets: 594 -> 598, exactly four added and none removed.
+  # All four point at `@duya/agent-protocol`'s public entry, and three of the four
+  # are type-only:
+  #
+  #   1. `apps/desktop/src/main/control-plane/permission-vocabulary.ts`
+  #      -> `@duya/agent-protocol`   (the only VALUE edge: `isPermissionAction`,
+  #      the one function that keeps the legacy tables honest about which strings
+  #      are actions. Reading the canonical set from the protocol rather than
+  #      redeclaring it is what stops this module from becoming a fourth
+  #      vocabulary.)
+  #   2. `apps/desktop/src/main/control-plane/permission-coordinator.ts`
+  #      -> `@duya/agent-protocol`   (type-only: PermissionRequest /
+  #      PermissionResolution / PermissionAck / PermissionScope)
+  #   3. `apps/desktop/src/main/__tests__/permission-round-trip.test.ts`
+  #      -> `@duya/agent-protocol`   (new test file, type-only)
+  #   4. `packages/agent-runtime/test/run-permission-respond.test.ts`
+  #      -> `@duya/agent-protocol`   (new test file, type-only)
+  #
+  # Edges 3 and 4 are the same shape R1.2, R2.2 and R2.3 recorded: the count is
+  # per OCCURRENCE of (rule, file, detail), so each new test file in a managed
+  # module that imports the protocol adds exactly 1. Edges 1 and 2 are the same
+  # shape R2.3's `worker-manager.ts` edge recorded, for a host-side file the
+  # desktop host module already covers. `moduleDependencyPermitted` classifies
+  # all four as permitted and COUNTS them instead of blocking.
+  #
+  # `module-dependency` measured 547 both with and without the change, which is
+  # the load-bearing half: declaring these edges moved COUNTED violations, and no
+  # managed module's zero tolerance is affected. `module-dependency-permitted` is
+  # in MEASUREMENT_RULES -- it never blocks and never consults the baseline.
+  # `--write` was not run, and the baseline section is byte-identical.
+  module-dependency-permitted: 51
   forbidden-dependency: 16
   # 161 -> 162: one more relative-path escape into packages/agent, from the
   # plan-583 stack. Now 126 agent / 16 plugin-core / 13 gateway / 7 conductor.

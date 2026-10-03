@@ -39,6 +39,8 @@ import type {
   CancelReason,
   EventSource,
   EventType,
+  PermissionAck,
+  PermissionResponse,
   ProtocolVersion,
   RunEvent,
   RunEventEnvelope,
@@ -151,7 +153,51 @@ export interface RunControllerOptions {
    * has nothing to bind simply omits it.
    */
   readonly onDispatchReady?: (runId: string) => void;
+  /**
+   * The host's permission decision path (plan 587 R2.4).
+   *
+   * ## Why this is a port and not a method
+   *
+   * A permission answer is a Control Plane DECISION, and the Control Plane is
+   * the only component that owns the durable record, the deadline and the
+   * grant. The runtime cannot make that decision and must not keep a second
+   * copy of one. So `RunHandle.respondToPermission` delegates here, and a host
+   * that has not wired a decision path leaves it absent — in which case the
+   * method refuses rather than guessing, and `permissionExpiryClock` stays
+   * `'absent'` so no host is told a deadline exists that nobody enforces.
+   *
+   * The desktop implementation is `PermissionCoordinator`; it records the
+   * decision durably BEFORE the answer is delivered to the worker, and answers
+   * a late or duplicate call with a receipt instead of re-delivering.
+   */
+  readonly permissionResponder?: PermissionResponder;
+  /**
+   * Close every permission a run has open, and record why.
+   *
+   * Called on cancel. Without it a cancelled turn keeps a live prompt, and the
+   * answer to that prompt is delivered to whatever tool call the recycled
+   * worker is running next.
+   */
+  readonly permissionCloser?: (runId: string, reason: string) => void;
 }
+
+/** What the controller hands a host's decision path. */
+export interface PermissionRespondInput {
+  readonly runId: string;
+  readonly requestId: string;
+  readonly response: PermissionResponse;
+}
+
+/**
+ * The host's permission decision path.
+ *
+   * Returns a {@link PermissionAck} rather than throwing, because a late or
+   * duplicate answer is a normal outcome and the caller is entitled to know
+   * which of the unanswerable situations it hit.
+   */
+export type PermissionResponder = (
+  input: PermissionRespondInput,
+) => Promise<PermissionAck>;
 
 /**
  * A run that could not be opened.
@@ -802,7 +848,13 @@ export class RunController implements AgentRuntimeApi {
       return { requested: true, applied: false, terminal: active.session.terminal ?? absentRun(runId) };
     }
     active.cancelRequested = true;
-    const reason = opts?.reason ?? String(opts?.cancelReason ?? 'user');    const receipt = await this.#stop(active, {
+    const reason = opts?.reason ?? String(opts?.cancelReason ?? 'user');
+    // Close the run's open permission prompts BEFORE the stop, and with the
+    // reason that is about to be recorded on the run. A prompt that outlives
+    // the run it belongs to is answerable by anyone, and its answer lands on
+    // whatever the recycled worker is doing next.
+    this.#options.permissionCloser?.(runId, `run cancelled: ${reason}`);
+    const receipt = await this.#stop(active, {
       graceMs: opts?.graceMs ?? this.#options.cancelGraceMs ?? 5000,
       reason,
     });
@@ -978,15 +1030,22 @@ export class RunController implements AgentRuntimeApi {
       events(): EventSource {
         return active.stream;
       },
-      async respondToPermission(): Promise<never> {
-        // A permission request is answered through the Control Plane's decision
-        // bus, not by pushing a response back through the handle. The protocol
-        // models `permission.respond` as a CONTROL METHOD for exactly that
-        // reason: the Reference Run records the request durably and leaves the
-        // decision to the Control Plane that owns the policy.
-        throw new Error(
-          'permission responses are a Control Plane decision: the request is recorded, the decision is not this layer',
-        );
+      async respondToPermission(
+        requestId: string,
+        decision: PermissionResponse,
+      ): Promise<PermissionAck> {
+        // The answer goes to the Control Plane's decision path, which records
+        // it durably and then delivers it to the worker. The runtime holds no
+        // approval state of its own, so this delegation IS the round trip —
+        // there is no second path for a host to accidentally use.
+        const responder = controller.#options.permissionResponder;
+        if (!responder) {
+          return {
+            accepted: false,
+            reason: 'not_permission_action',
+          };
+        }
+        return responder({ runId: session.runId, requestId, response: decision });
       },
       async cancel(reason?: CancelReason, opts?: { graceMs?: number; reason?: string }): Promise<CancelOutcome> {
         return controller.cancel(session.runId, {

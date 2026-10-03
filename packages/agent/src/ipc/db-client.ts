@@ -269,6 +269,23 @@ export const toolApprovalDb = {
 
   listRules: (data: { scopeType: 'bot' | 'session'; scopeId: string }) =>
     sendDbRequest('toolApproval:listRules', data),
+
+  /**
+   * Persist an "always allow this tool" grant (plan 587 R2.4).
+   *
+   * The READ side of this table has existed since plan 498 and the worker
+   * already seeds `approvedAlwaysAllowTools` from it on every `chat:start`. The
+   * WRITE side did not: `allow_for_session` recorded a grant in process memory
+   * only, so a grant died with the worker even though a durable table and a
+   * durable reader were both sitting there waiting for it.
+   *
+   * That is the defect this closes — a grant whose scope is narrower than its
+   * name. `scopeId` is the session (or bot) id, so the grant is genuinely
+   * session-scoped and a recycled worker inherits exactly what the session
+   * earned.
+   */
+  upsertRule: (data: { scopeType: 'bot' | 'session'; scopeId: string; toolName: string }) =>
+    sendDbRequest('toolApproval:upsertRule', data),
 };
 
 
