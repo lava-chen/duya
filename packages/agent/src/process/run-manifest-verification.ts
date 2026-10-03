@@ -100,6 +100,7 @@
 import {
   manifestFingerprint,
   runInputRevision,
+  type ErrorCode,
   type RunManifest,
 } from '@duya/agent-protocol';
 
@@ -187,6 +188,55 @@ export interface ManifestAccepted {
 }
 
 export type ManifestVerification = ManifestAccepted | ManifestRejection;
+
+/**
+ * Map a rejection to the PROTOCOL error code the run layer classifies on.
+ *
+ * ## Why this exists
+ *
+ * The run layer's translator calls `classifyErrorCode(data['code'])`, and an
+ * unrecognised string falls through to `internal`. So a worker that reported
+ * `manifest_hash_mismatch` and nothing else produced a durable terminal reading
+ * `{ code: 'internal', message: 'run refused (manifest_hash_mismatch): …' }` —
+ * the specific verdict survived only inside a sentence, where no host can
+ * branch on it. Found by plan 587 E4.1 driving this worker as a real process;
+ * every seam test constructed the frame instead of receiving it, so the field
+ * was simply never populated.
+ *
+ * ## Why it maps rather than invents
+ *
+ * Every target is an EXISTING member of the protocol's closed `ERROR_CODES`.
+ * A new code would be a promise to every host, and `manifest_mismatch` /
+ * `invalid_manifest` / `capability_unsupported` already say what happened at
+ * the right altitude. The precise verdict string stays in the message.
+ *
+ * Total over `ManifestRejectionCode`: adding a sixth rejection to that union is
+ * a compile error here rather than a refusal that arrives uncoded.
+ */
+export function manifestRejectionProtocolCode(code: ManifestRejectionCode): ErrorCode {
+  switch (code) {
+    // "I cannot read this contract" and "this is not what was frozen" are both
+    // a manifest that does not match what the Control Plane pinned.
+    case 'manifest_version_unsupported':
+    case 'manifest_hash_mismatch':
+      return 'manifest_mismatch';
+    // The manifest is intact and the PATH inside it is not legal. Different
+    // category: nothing about the manifest is wrong, the content is.
+    case 'cwd_illegal':
+      return 'invalid_manifest';
+    // "The Control Plane demanded a capability I do not have."
+    case 'required_capability_unavailable':
+      return 'capability_unsupported';
+    // The two halves of the dispatch disagreed about the TURN. The manifest is
+    // fine; the input is not the pinned input.
+    case 'input_binding_mismatch':
+      return 'invalid_request';
+    default: {
+      const exhaustive: never = code;
+      throw new Error(`manifestRejectionProtocolCode: unhandled ${String(exhaustive)}`);
+    }
+  }
+}
 
 /**
  * Verify one turn's binding to its manifest.
