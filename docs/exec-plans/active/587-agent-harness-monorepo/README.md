@@ -1,8 +1,9 @@
 # 587 — Agent Harness / Monorepo 架构重构主计划
 
-> Status: Active — planning consolidated; runtime phases not accepted.
+> Status: Active — G0.1 取证完成（G0 未验收）；runtime phases not accepted.
 > Created: 2026-10-03. Priority: P0. 唯一执行队列：本文件。
-> Current task: **G0.1** — 在新的执行分支记录当前 HEAD、干净构建、完整测试失败集合及 CI 状态。
+> Current task: **G0.2** — 把 `architecture:check` 接入独立可读 CI job，并解除 `build` job 对 `needs: test` 的整job依赖。
+> G0.1 已建立按 (file, test, signature) 的可比失败集合；`npm ci` 在本机因 node-pty MSB8040 未取得 exit 0，属环境阻塞，已具名留开。
 > 本次交付为完整计划整合；不代表运行时修复或架构迁移已经完成。
 
 ## 1. 执行 agent 从这里开始
@@ -28,8 +29,8 @@
 
 | 阶段 | 状态 | 前置 | 本阶段下一任务 | 完成证据 |
 | --- | --- | --- | --- | --- |
-| G0 [基线与治理](01-baseline-and-gates.md) | **Ready** | — | G0.1 当前分支/失败集合/CI快照 | clean build、可信 required gate、失败债可辨别 |
-| R1 [Run 结果与存储](02-run-correctness.md) | Pending | G0 | R1.1 将四个探针转成故障回归测试 | result 等待，durable barrier，ack/CAS确认 |
+| G0 [基线与治理](01-baseline-and-gates.md) | **In progress** | — | G0.2 architecture:check 独立 job + 解除 build 的 needs:test | clean build、可信 required gate、失败债可辨别 |
+| R1 [Run 结果与存储](02-run-correctness.md) | Pending（R1.1回归测试已预备，未合入） | G0 | R1.1 将四个探针转成故障回归测试 | result 等待，durable barrier，ack/CAS确认 |
 | R2 [真实 worker 控制](03-worker-control.md) | Pending | R1 | R2.1 做 adapter 接入清单及单入口切换 | canonical ID、真实输入、dispatch/stop/审批/预算 |
 | T3 [协议与事件传输](04-protocol-and-streams.md) | Pending | R2 | T3.1 wire 数据与内部对象分层 | 同一 seq/cursor、lossless兼容、背压、capability |
 | E4 [行为基准与 evals](05-behavior-and-evals.md) | Pending | R2；传输比较需T3 | E4.1 真实旧worker+offline provider闭环 | 故障、工具、mode、mailbox、Desktop证据 |

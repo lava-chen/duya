@@ -91,6 +91,29 @@ WARM口径（唯一可与CI对比的口径）：1009文件/11873测试全部coll
 | 修改runtime或产品UI | 本次未执行 |
 | 提交/推送/PR | 本次未执行；交付为可审阅工作区文档 |
 
+## 并行预备工作（2026-10-03，父会话协调）
+
+计划允许"设计、夹具和无冲突的纯叶子预备工作提前准备"。以下三项在G0.1取证期间并行推进，**均未切换生产路径**，各自独立分支、独立提交、未合并。
+
+| 工作 | 分支 / 提交 | 内容 | 状态 |
+| --- | --- | --- | --- |
+| R1.1 四接缝测绘（只读） | — | 四个接缝在当前源码**全部仍存在**，且**零测试覆盖**；已定位到行 | 已完成 |
+| R1.1 回归测试（只写测试） | `plan/587-r1-1-seam-tests` / `c824c771` | 8个测试对当前代码**真实失败** + 1个护栏测试通过；**未改任何生产源码** | 已提交，**故意不合并**（保持master失败基线干净） |
+| G0.4 文档事实（仅AGENTS/ARCHITECTURE） | `plan/587-g0-4-doc-facts` / `af190aaa` | Electron版本28→44；Agent Server实为spawn子进程；拓扑图改三层；`electron/`旧路径清扫；**Electron ABI实测149**（非文档的119） | 已提交，待PR |
+
+### R1.1 接缝现状（`00-contracts.md` §C 为判定依据）
+
+1. **预算 vs 完成**：`RunControllerOptions`无budget字段，`start()`建`RunSession`时不传，`#budgetVerdict`恒false；另有三处硬编码`{status:'completed'}`绕过resolver。
+2. **`result()`驱动执行**：`result()`内部调用`settle()`，读路径带写副作用（并额外写`session.terminal`）。
+3. **durable barrier**：公共terminal在`flush()`/`persistence.complete`**之前**就resolve。合同允许内存决策提前，但公共完成信号必须遵守barrier。
+4. **ack/CAS被吞**：orchestrator adapter丢弃`{ok, applied}`回复。Control Plane侧报告是诚实的，CAS也是真的。
+
+测绘还纠正了自身地图的4处错误，其中两处影响验收写法：接缝4的"抛错"子情形**并未被吞**（抛错会正常上抛，丢失的是ack形状的静默）；接缝1的可观测结果是`failed`/`runtime_crash`而非`completed`。另确认**仓库的tsc不覆盖任何测试文件**（`packages/agent-runtime/tsconfig.json`排除`test`，`apps/desktop/tsconfig.main.json`排除`__tests__`），属既有治理缺口，归G0。
+
+### 新发现的基线隐患（须在G0.4修正索引）
+
+`docs/exec-plans/README.md:70,91` 记录的"Local (Windows): 45 files / **112** tests"中，文件数45本次可复现（WARM口径），但**112这个测试数无法复现**：COLD口径为75、WARM口径为101，且 `1e6d0b0e..0e13d4cd` 之间**没有任何测试文件改动**（全为文档提交）。因此该数字既非COLD也非WARM，**不可作为基线**。后续一律以本目录的 (file, test, signature) 集合为准，不引用单一总数。
+
 ## 每个任务更新模板
 
 ```text
