@@ -45,8 +45,21 @@ import {
   type ExecutionChannel,
   type ExecutionHandle,
   type FrameOutcome,
+  type StopReceipt,
   type TranslateContext,
 } from '@duya/agent-runtime';
+
+/**
+ * A stop the executor honoured and left cleanly.
+ *
+ * R2.3 gave `stop` a receipt so a caller can tell a clean exit from a kill.
+ * A double returning `Promise<void>` could say neither, so these report the
+ * cooperative case explicitly.
+ */
+function cooperativeStop(reason: string): StopReceipt {
+  return { requested: true, disposition: 'cooperative', waitedMs: 0, reason };
+}
+
 
 // ── the Control Plane's half, written the way the real one will be ──────
 
@@ -169,7 +182,7 @@ function scriptedExecutor(frames: readonly Readonly<Record<string, unknown>>[]):
       expect(input.revision).toMatch(/^[0-9a-f]{64}$/);
       for (const frame of frames) sink.frame(frame);
       sink.end();
-      return { stop: async () => {} };
+      return { stop: async (request) => cooperativeStop(request.reason) };
     },
   };
 }
@@ -187,11 +200,12 @@ function openExecutor(): ExecutionChannel {
     async start(_manifest, _input, sink): Promise<ExecutionHandle> {
       let stopped = false;
       return {
-        stop: async () => {
+        stop: async (request) => {
           stopped = true;
           // A cooperative stop still lets the worker emit its own terminal
           // frame, which is the case the runtime must not double-count.
           if (!stopped) sink.end();
+        return cooperativeStop(request.reason);
         },
       };
     },

@@ -1953,11 +1953,38 @@ export function handlePostChatNonSSE(
   });
 }
 
-function handleDeleteChat(
+/**
+ * Delete a chat, which on the Desktop is also "stop whatever is streaming".
+ *
+ * ## Why this is the SAME cancel the runtime owns (plan 587 R2.3)
+ *
+ * It was not, and the asymmetry was a real defect. This handler interrupted the
+ * worker and returned, leaving the run row `running` forever, while the SSE
+ * disconnect path thirty lines above did both: interrupt, then settle through
+ * the arbiter. Two host-initiated stops, one of which produced no terminal at
+ * all — so a user who pressed stop by deleting a conversation got a worker that
+ * stopped and a run that nothing would ever close.
+ *
+ * Deleting a conversation is not a different KIND of stop. Both are "this host is
+ * ending this turn now"; what differs is only who sends the interrupt and whether
+ * a client is still attached to read the answer. So this route now goes through
+ * `runOrchestrator.cancelSession`, which is the runtime's own cancel and the
+ * same one-shot arbiter every other terminal candidate passes through.
+ *
+ * Two deliberate non-changes:
+ *
+ *  - **`interrupted` stays in the response.** The renderer reads it, and a stop
+ *    that improves the run's bookkeeping is not a licence to change an IPC
+ *    contract. The receipt fields are ADDED beside it.
+ *  - **The `STREAMING -> COMPLETED` migration stays.** It is the session
+ *    manager's own state machine, not the run's terminal, and the renderer waits
+ *    on it. It is no longer the ONLY thing that happens.
+ */
+export async function handleDeleteChat(
   sessionId: string,
   res: http.ServerResponse,
   deps: RouterDeps,
-): void {
+): Promise<void> {
   const { sessionManager, workerManager, httpLogger, dbRequest } = deps;
   httpLogger.info('Chat interruption requested', { sessionId });
 
@@ -1980,8 +2007,34 @@ function handleDeleteChat(
   // (the SSE close path may not fire when the client is gone).
   void releaseChatLock(dbRequest, sessionId).catch(() => {});
 
-  const interrupted = workerManager.interruptWorker(sessionId, 2000, 'delete');
-  sendJson(res, 200, { ok: true, interrupted });
+  const outcome = await deps.runOrchestrator?.cancelSession(sessionId, 'user');
+
+  // The host interrupt is the FALLBACK, not the sibling. `cancelSession` sends
+  // its own interrupt as part of the run's stop, so issuing one here as well
+  // would put two `chat:interrupt` commands on one worker — and the worker's own
+  // handling of a second interrupt is to clear its command queue, which is a
+  // different behaviour and not a louder version of the first.
+  //
+  // It is reached in exactly the two cases the runtime did not stop anything:
+  // no live run at all, and a run that had already reached its terminal. Both
+  // are the route's original situation, where a worker may still be streaming
+  // and the user asked for it to stop.
+  const runtimeStopped = outcome !== undefined && outcome !== null && outcome.applied;
+  const interrupted = runtimeStopped
+    ? true
+    : workerManager.interruptWorker(sessionId, 2000, 'delete') !== null;
+
+  sendJson(res, 200, {
+    ok: true,
+    // The legacy field, unchanged in meaning: was there a live worker to stop.
+    interrupted,
+    // The receipt. `requested: false` when the session had no run, which is
+    // distinct from a run that was cancelled and from one that had already ended.
+    requested: outcome?.requested ?? false,
+    applied: outcome?.applied ?? false,
+    ...(outcome?.disposition === undefined ? {} : { disposition: outcome.disposition }),
+    ...(outcome === undefined || outcome === null ? {} : { terminal: outcome.terminal }),
+  });
 }
 
 // Live permission-mode switch (desktop composer selector → running worker).
@@ -3034,7 +3087,15 @@ function handleSessionsRoute(
       return;
     }
     if (pathParts.length === 3 && pathParts[2] === 'chat') {
-      handleDeleteChat(sessionId, res, deps);
+      // Awaited, and the rejection is contained: this handler now reaches the
+      // Control Plane to settle a run, and an IPC client waiting on the DELETE
+      // must get an answer even when the run layer refused. `cancelSession`
+      // already degrades internally; this is the outer guard. There is no
+      // logger in scope on this branch, so the failure is reported in the
+      // response instead of a log line nobody reads.
+      void handleDeleteChat(sessionId, res, deps).catch(() => {
+        if (!res.writableEnded) sendJson(res, 200, { ok: false, interrupted: false });
+      });
       return;
     }
   }

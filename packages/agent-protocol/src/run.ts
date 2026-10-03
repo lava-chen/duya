@@ -68,9 +68,46 @@ export type RunTerminalState =
   | { readonly status: 'budget_exhausted'; readonly stopReason?: StopReason }
   | { readonly status: 'failed'; readonly error: ProtocolErrorInfo };
 
+/**
+ * How a stop actually ended.
+ *
+ * Three states, and the middle one is the whole point of the type. A caller that
+ * only learns "the stop was requested" cannot tell a worker that closed its
+ * stream cleanly from one that had to be killed, and the difference is the
+ * difference between `cancelled` and `runtime_crash` in the durable receipt.
+ *
+ *  - `cooperative` — the executor acknowledged the stop and left inside the
+ *    grace window. The clean-cancel path was honoured, and that is a fact.
+ *  - `escalated` — the grace window expired and the platform adapter killed or
+ *    fenced the process, OR the stop was never answered inside a bound. Both are
+ *    the same claim: **there is no clean-exit evidence**, so the run must not be
+ *    recorded as a cancellation that worked. A stop nobody answered is not a
+ *    stop that succeeded quietly.
+ *  - `unavailable` — there was no live executor to stop. The run's own history
+ *    is the only evidence, and the caller has to read that instead.
+ */
+export type StopDisposition = 'cooperative' | 'escalated' | 'unavailable';
+
 export interface CancelOutcome {
+  /**
+   * True when this call actually reached a live run and asked it to stop.
+   *
+   * Distinct from `applied`, and the pair is the answer to "did my stop do
+   * anything?": `requested` is about the ask, `applied` is about the effect. A
+   * host that reads only `applied` cannot tell a refused stop from a stop that
+   * landed on a run that had already finished.
+   */
+  readonly requested: boolean;
   /** False means the run was already terminal and this call did nothing. */
   readonly applied: boolean;
+  /**
+   * What the stop turned into, when a stop was issued.
+   *
+   * Absent when no stop was needed — a run that had already reached its terminal
+   * has no stop to describe, and inventing one would put a disposition in the
+   * durable record for a kill that never happened.
+   */
+  readonly disposition?: StopDisposition;
   readonly terminal: RunTerminalState;
 }
 
@@ -122,7 +159,20 @@ export interface RunHandle {
   /** The ONLY channel through which run state propagates. */
   events(): EventSource;
   respondToPermission(requestId: string, decision: PermissionResponse): Promise<PermissionAck>;
-  cancel(reason?: CancelReason, opts?: { graceMs?: number }): Promise<CancelOutcome>;
+  /**
+   * Ask the run to stop.
+   *
+   * `reason` is the closed vocabulary of WHAT sort of stop this is, and decides
+   * nothing — `resolveRunOutcome` owns the rule that turns a stop into a
+   * terminal. `opts.reason` is the free-text provenance that goes into the
+   * durable record, because `CancelReason` cannot say which route asked: a user
+   * pressing stop and a conversation being deleted are both `user`, and only the
+   * second one explains a run that ended with nobody watching it.
+   */
+  cancel(
+    reason?: CancelReason,
+    opts?: { graceMs?: number; reason?: string },
+  ): Promise<CancelOutcome>;
   pause(at?: PausePoint): Promise<void>;
   result(): Promise<RunResult>;
 }

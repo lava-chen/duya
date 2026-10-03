@@ -22,6 +22,19 @@ import type { RunTerminalState } from '@duya/agent-protocol';
 import { RunOrchestrator, createWorkerExecutionChannel, type ChatStartCommand } from '../agents/server/run-orchestrator';
 import { logger } from '../agents/server/logger';
 
+/**
+ * A stop the host has already completed: accepted, and the worker left cleanly.
+ *
+ * Shared by every double in this file so they all report the SAME thing. Before
+ * R2.3 the binding returned a boolean, which could not distinguish this from a
+ * worker that had to be killed.
+ */
+const COOPERATIVE_INTERRUPT: WorkerInterrupt = {
+  accepted: true,
+  settled: Promise.resolve('cooperative'),
+};
+
+
 interface Call {
   action: string;
   payload: Record<string, unknown>;
@@ -51,7 +64,7 @@ function makeOrchestrator(dbRequest: (a: string, p: Record<string, unknown>) => 
         dispatched += 1;
         return true;
       },
-      interrupt: () => true,
+      interrupt: () => COOPERATIVE_INTERRUPT,
     }),
   });
   return { orchestrator, dispatchCount: () => dispatched };
@@ -271,7 +284,7 @@ describe('RunOrchestrator', () => {
           seen.push(command);
           return true;
         },
-        interrupt: () => true,
+        interrupt: () => COOPERATIVE_INTERRUPT,
       }),
     });
 
@@ -497,7 +510,7 @@ describe('RunOrchestrator — R1.2 lifecycle at the adapter', () => {
           dispatched += 1;
           return true;
         },
-        interrupt: () => true,
+        interrupt: () => COOPERATIVE_INTERRUPT,
       }),
     });
     return { orchestrator, dispatched: () => dispatched };

@@ -65,6 +65,9 @@ export type {
   ExecutionHandle,
   ExecutionSink,
   RunStartInput,
+  StopDisposition,
+  StopReceipt,
+  StopRequest,
 } from './transport/execution-channel.js';
 export {
   ExecutionDispatchError,

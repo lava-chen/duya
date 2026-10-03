@@ -36,6 +36,7 @@
 import type {
   AgentRuntimeApi,
   CancelOutcome,
+  CancelReason,
   EventSource,
   EventType,
   ProtocolVersion,
@@ -60,6 +61,8 @@ import {
   type ExecutionChannel,
   type ExecutionHandle,
   type RunStartInput,
+  type StopReceipt,
+  type StopRequest,
 } from './transport/execution-channel.js';
 
 /** The runtime's own identity, as advertised in its `ready` frame. */
@@ -88,6 +91,17 @@ export interface RunControllerOptions {
   readonly clock?: () => number;
   /** Grace window handed to a cooperative stop, in ms. */
   readonly cancelGraceMs?: number;
+  /**
+   * How long the runtime will wait for the executor's stop to be acknowledged.
+   *
+   * Separate from `cancelGraceMs` on purpose, and larger. The grace window is
+   * the host's promise to the EXECUTOR ("you have this long to leave cleanly");
+   * this bound is the runtime's promise to the CALLER ("you will get an answer
+   * in this long"). Without it a stop that is never acknowledged holds the
+   * terminal decision open behind it, and a run whose worker is wedged becomes
+   * a run nobody can close.
+   */
+  readonly stopBoundMs?: number;
   /**
    * Measure budget against something other than the manifest's own ceilings.
    *
@@ -266,6 +280,24 @@ interface ActiveRun {
    * re-derive the terminal from the session and risk inventing one.
    */
   settling: Promise<RunTerminalState> | null;
+  /**
+   * The wallclock budget timer, if this run has a ceiling.
+   *
+   * Held so `settle` can clear it. A timer that outlives its run does not just
+   * leak a handle: it fires a stop at the executor of a run that no longer
+   * exists, which is a stop against somebody else's work.
+   */
+  wallClockTimer: ReturnType<typeof setTimeout> | null;
+  /**
+   * The stop currently in flight, so two producers asking to stop the same run
+   * share ONE interrupt.
+   *
+   * Without it, a budget stop and a user cancel that land in the same window
+   * each send a `chat:interrupt`, and `agent-process-entry` treats a second
+   * interrupt as "clear the command queue" — a different behaviour, not a
+   * louder version of the same one.
+   */
+  stopping: Promise<StopReceipt> | null;
 }
 
 export class RunController implements AgentRuntimeApi {
@@ -396,6 +428,8 @@ export class RunController implements AgentRuntimeApi {
       handle: null,
       cancelRequested: false,
       settling: null,
+      wallClockTimer: null,
+      stopping: null,
     };
     this.#runs.set(runId, active);
     active.stream.push(startedEnvelope);
@@ -482,8 +516,41 @@ export class RunController implements AgentRuntimeApi {
       );
     }
     active.handle = handle;
+    this.#armWallClockBudget(active);
 
     return this.#handleFor(active);
+  }
+
+  /**
+   * Arm the wallclock ceiling, if the run has one.
+   *
+   * A wallclock budget is the one ceiling that CANNOT be checked before the
+   * operation it limits: nothing about "the run has been going four minutes"
+   * is knowable until four minutes have gone. So a timer is the only honest
+   * mechanism, and the timer calls the SAME stop path a user cancel uses. A
+   * separate "budget shutdown" would be a second stop path, which the plan
+   * forbids and which would make the escalation story depend on who noticed.
+   *
+   * `unref` where the runtime offers it, because a pending timer is a pending
+   * timer in a process that wants to exit.
+   */
+  #armWallClockBudget(active: ActiveRun): void {
+    const ceiling = active.manifest.budget.maxWallClockMs;
+    if (typeof ceiling !== 'number' || !Number.isFinite(ceiling) || ceiling <= 0) return;
+    const timer = setTimeout(() => {
+      active.wallClockTimer = null;
+      // Floating, with a catch. `cancel` settles the run on its own, so a
+      // failure here is a failure to close a run that is out of time, and that
+      // must not become an unhandled rejection in a process nobody is watching.
+      // The executor's own stream ending still closes it; this only makes the
+      // close happen at the deadline instead of whenever the worker next
+      // reports something.
+      void this.cancel(active.session.runId, { reason: 'budget', cancelReason: 'budget' }).catch(
+        () => undefined,
+      );
+    }, ceiling);
+    if (typeof timer.unref === 'function') timer.unref();
+    active.wallClockTimer = timer;
   }
 
   /**
@@ -595,6 +662,12 @@ export class RunController implements AgentRuntimeApi {
     try {
       const envelope = active.session.observe(translated.event);
       active.stream.push(envelope);
+      // The check runs on EVERY event, not only the ones that spend something:
+      // `assistant.usage` is the only place a token ceiling can be seen, and it
+      // arrives as an ordinary event. One call, evaluated by the same code that
+      // decides the verdict at settle, so the two cannot disagree about whether
+      // the run is over budget.
+      this.#enforceBudget(active, translated.event.type);
       return { legacy: projectToLegacyFrame(envelope), envelope, forwardOnly: false, internal: false };
     } catch (error) {
       if (!(error instanceof LifecycleViolation)) throw error;
@@ -617,7 +690,7 @@ export class RunController implements AgentRuntimeApi {
    */
   async settle(
     runId: string,
-    intent?: { cancelRequested?: boolean; escalated?: boolean },
+    intent?: { cancelRequested?: boolean; escalated?: boolean; requestedReason?: string },
   ): Promise<RunTerminalState> {
     const active = this.#runs.get(runId);
     if (active === undefined) {
@@ -627,6 +700,14 @@ export class RunController implements AgentRuntimeApi {
       return this.#receipts.get(runId) ?? absentRun(runId);
     }
     if (active.settling !== null) return active.settling;
+
+    // The wallclock timer dies with the run it was watching. Cleared HERE,
+    // before the settlement promise exists, because a ceiling that outlives its
+    // run fires a stop at an executor belonging to somebody else's turn.
+    if (active.wallClockTimer !== null) {
+      clearTimeout(active.wallClockTimer);
+      active.wallClockTimer = null;
+    }
 
     active.settling = (async () => {
       const merged =
@@ -666,44 +747,184 @@ export class RunController implements AgentRuntimeApi {
   /**
    * Cancel a run.
    *
-   * The ONE worker-stop path. This phase adds no second one and no hard kill:
-   * `handle.stop(graceMs)` is the cooperative stop the host owns, and every
-   * terminal candidate — this, a `done` frame, an executor that went silent —
-   * goes through the same one-shot `settle`, which is contract §D's serial
-   * arbiter. `resolveRunOutcome` in `@duya/agent-core` still owns the
-   * cancellation-vs-completion rule, so a run that finishes inside the stop
-   * window is decided in exactly one place.
+   * The ONE worker-stop path, and R2.3 changed three things about it without
+   * adding a second one.
    *
-   * Returns `{ applied: false }` when the run was already terminal, and does
-   * nothing in that case. That is the improvement over `handleDeleteChat`
-   * (router.ts:1670), which hard-migrates `STREAMING -> COMPLETED` in the DB
-   * BEFORE the worker acks and returns `{ ok: true, interrupted }` — so a host
-   * today cannot distinguish "I cancelled this" from "it had already ended".
+   *  1. **The stop is awaited, and bounded.** `handle.stop` used to be
+   *     `Promise<void>` over a host interrupt that is fire-and-forget, so this
+   *     returned before the grace window had opened. It now races the
+   *     executor's own acknowledgement against {@link RunControllerOptions.stopBoundMs},
+   *     so a cancel always produces an answer. A stop that is never answered is
+   *     reported as `escalated`, because "we stopped waiting" is not "it stopped
+   *     cleanly".
+   *  2. **The disposition reaches the terminal.** An escalation now produces
+   *     `failed` / `runtime_crash` with `escalated: true` and the requested
+   *     reason, which is what `resolveRunOutcome` has always said an escalation
+   *     means. Before this, nothing produced `escalated`, so a killed worker was
+   *     recorded as the clean cancellation it failed to be.
+   *  3. **The budget stops the run too.** A ceiling reached mid-flight calls
+   *     this same method with `reason: 'budget'`.
+   *
+   * Every terminal candidate still goes through the one-shot `settle`, which is
+   * contract §D's serial arbiter, and `resolveRunOutcome` still owns the
+   * cancellation-vs-completion rule.
+   *
+   * Returns `applied: false` for a run that had already reached a terminal, and
+   * does nothing in that case, so a host can tell "I cancelled this" from "it
+   * had already ended".
    */
-  async cancel(runId: string): Promise<CancelOutcome> {
+  async cancel(
+    runId: string,
+    opts?: { reason?: string; cancelReason?: CancelReason; graceMs?: number },
+  ): Promise<CancelOutcome> {
     const active = this.#runs.get(runId);
     if (active === undefined) {
       const receipt = this.#receipts.get(runId);
-      return { applied: false, terminal: receipt ?? absentRun(runId) };
+      // A run this controller opened and then ended still gets `requested:
+      // true`: the ask DID reach a run, and the caller is entitled to the
+      // terminal it reached rather than a "no such run". Only an id this
+      // controller has never heard of reports `requested: false`, because there
+      // was nothing to ask.
+      return receipt === undefined
+        ? { requested: false, applied: false, terminal: absentRun(runId) }
+        : { requested: true, applied: false, terminal: receipt };
     }
     if (active.session.isClosed) {
-      // Already terminal: the point of `applied: false` is that the caller can
-      // tell "I cancelled this" from "it had already ended", so it gets the
-      // terminal the run actually reached rather than a default.
-      return { applied: false, terminal: active.session.terminal ?? absentRun(runId) };
+      // Already terminal. `requested` stays TRUE: the ask did reach a run, and
+      // the pair (requested, applied) is what lets a caller tell three cases
+      // apart — nothing was live, the run had already ended, or the stop
+      // landed. Only the first reports `requested: false`. Collapsing "already
+      // ended" into "nothing was live" is the ambiguity `applied` exists to
+      // remove, and it would put it straight back.
+      //
+      // No disposition: no stop was issued, and inventing one would put a
+      // disposition in the record for a kill that never happened.
+      return { requested: true, applied: false, terminal: active.session.terminal ?? absentRun(runId) };
     }
     active.cancelRequested = true;
-    await active.handle?.stop(this.#options.cancelGraceMs ?? 5000);
+    const reason = opts?.reason ?? String(opts?.cancelReason ?? 'user');    const receipt = await this.#stop(active, {
+      graceMs: opts?.graceMs ?? this.#options.cancelGraceMs ?? 5000,
+      reason,
+    });
     // `stop` is a window, not an instant: a worker that was already finishing
     // can reach its own terminal inside it. `isClosed` is re-read HERE, after
     // the await, because checking it before is what let a cancel report
     // `applied: true` while handing back a terminal it had no part in — and
     // `applied` is the one field a host reads to know its stop did something.
     if (active.session.isClosed) {
-      return { applied: false, terminal: active.session.terminal ?? absentRun(runId) };
+      return {
+        requested: true,
+        applied: false,
+        disposition: receipt.disposition,
+        terminal: active.session.terminal ?? absentRun(runId),
+      };
     }
-    const terminal = await this.settle(runId, { cancelRequested: true });
-    return { applied: true, terminal };
+    const terminal = await this.settle(runId, {
+      cancelRequested: true,
+      // The escalation is the caller's only evidence that the clean-cancel path
+      // was NOT honoured. Passing it through is what stops a kill from being
+      // recorded as a cancellation that worked.
+      escalated: receipt.disposition === 'escalated',
+      requestedReason: reason,
+    });
+    return { requested: true, applied: true, disposition: receipt.disposition, terminal };
+  }
+
+  /**
+   * Ask the executor to stop, once, and never wait forever.
+   *
+   * Shared by every producer — a user cancel, a budget ceiling, a wallclock
+   * timer — because "one interrupt" is a property of the RUN, not of whoever
+   * happened to ask first. Two producers in the same window would otherwise
+   * send two `chat:interrupt` commands, and the worker's own handling of a
+   * second interrupt (clearing its command queue) is a different behaviour from
+   * the first.
+   */
+  async #stop(active: ActiveRun, request: StopRequest): Promise<StopReceipt> {
+    active.stopping ??= this.#stopOnce(active, request);
+    return active.stopping;
+  }
+
+  async #stopOnce(active: ActiveRun, request: StopRequest): Promise<StopReceipt> {
+    const handle = active.handle;
+    if (handle === null) {
+      // Nothing was dispatched, or the dispatch is still in flight. There is no
+      // executor to stop, and claiming otherwise would put a cooperative
+      // disposition on a stop that touched nothing.
+      return { requested: false, disposition: 'unavailable', waitedMs: 0, reason: request.reason };
+    }
+    // Resolved once, the same way `start` resolves it: an optional clock is a
+    // test seam, and reading it as possibly-undefined at three call sites is how
+    // one of them ends up skipped.
+    const clock = this.#options.clock ?? Date.now;
+    const startedAt = clock();
+    const boundMs = this.#options.stopBoundMs ?? (request.graceMs + 2000);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const disposition = await Promise.race([
+        handle.stop(request).then((receipt) => receipt.disposition),
+        new Promise<'escalated'>((resolve) => {
+          timer = setTimeout(() => resolve('escalated'), boundMs);
+          if (typeof timer.unref === 'function') timer.unref();
+        }),
+      ]);
+      return {
+        requested: true,
+        disposition,
+        waitedMs: clock() - startedAt,
+        reason: request.reason,
+      };
+    } catch (error) {
+      // A stop that THROWS is not a stop that worked, and it is not a stop that
+      // left no evidence either. The only supportable claim is that the clean
+      // path is unproven, which is what `escalated` means.
+      return {
+        requested: true,
+        disposition: 'escalated',
+        waitedMs: clock() - startedAt,
+        reason: `${request.reason}: ${describe(error)}`,
+      };
+    } finally {
+      // The bound is released on every exit, including the race going to the
+      // executor. A timer left pending here is a live handle for the rest of
+      // the process, and `run-cancel-budget.test.ts` asserts the cleanup
+      // rather than trusting it.
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Stop the run when a budget ceiling has been crossed.
+   *
+   * ## What this can and cannot preempt
+   *
+   * This is the *runtime-side* half of a budget check, and it is honest about
+   * its reach. The runtime observes `turn.started` and `tool.call_started` when
+   * the frames come BACK, so by the time it can act, the model request that
+   * spent the turn has already been dispatched. What this guarantees is that
+   * the run STOPS the moment its own accounting crosses a ceiling, so no
+   * further turn or tool call is admitted — and, on the worker side, that the
+   * second model request is never dispatched at all.
+   *
+   * The pre-dispatch half is the manifest's ceiling travelling to the executor
+   * (see the Desktop adapter), because the executor is the only component that
+   * knows it is about to make a request. A check that only ran here would be a
+   * receipt, not a budget.
+   *
+   * A terminal event EXEMPTS the run. A turn that finishes and then reports
+   * `run.completed` while over its ceiling needs no stop — the executor has
+   * already left, and interrupting it now would put a `chat:interrupt` on a
+   * worker that has nothing left to interrupt. The verdict still comes out
+   * `budget_exhausted`, because `resolveRunOutcome` evaluates the ceiling at
+   * settle; what is skipped is the pointless stop, not the accounting.
+   */
+  #enforceBudget(active: ActiveRun, eventType?: EventType): void {
+    if (active.session.isClosed || active.cancelRequested) return;
+    if (eventType === 'run.completed' || eventType === 'run.failed') return;
+    if (!active.session.budgetVerdict().exhausted) return;
+    void this.cancel(active.session.runId, { reason: 'budget', cancelReason: 'budget' }).catch(
+      () => undefined,
+    );
   }
 
   /**
@@ -767,8 +988,13 @@ export class RunController implements AgentRuntimeApi {
           'permission responses are a Control Plane decision: the request is recorded, the decision is not this layer',
         );
       },
-      async cancel(): Promise<CancelOutcome> {
-        return controller.cancel(session.runId);
+      async cancel(reason?: CancelReason, opts?: { graceMs?: number; reason?: string }): Promise<CancelOutcome> {
+        return controller.cancel(session.runId, {
+          ...(opts?.graceMs === undefined ? {} : { graceMs: opts.graceMs }),
+          ...(opts?.reason === undefined && reason === undefined
+            ? {}
+            : { reason: opts?.reason ?? String(reason) }),
+        });
       },
       async pause(): Promise<void> {
         throw new Error('run.pause is gated on replay, which this runtime does not advertise');

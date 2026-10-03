@@ -61,6 +61,19 @@ import { RunOrchestrator, createWorkerExecutionChannel } from '../agents/server/
 import { dispatchControlPlaneAction } from '../control-plane/run-control-plane';
 import { RunStore, RUN_STORE_MIGRATIONS } from '../db/core/run-store';
 
+/**
+ * A stop the host has already completed: accepted, and the worker left cleanly.
+ *
+ * Shared by every double in this file so they all report the SAME thing. Before
+ * R2.3 the binding returned a boolean, which could not distinguish this from a
+ * worker that had to be killed.
+ */
+const COOPERATIVE_INTERRUPT: WorkerInterrupt = {
+  accepted: true,
+  settled: Promise.resolve('cooperative'),
+};
+
+
 let db: Database.Database;
 let dir: string;
 
@@ -90,7 +103,7 @@ async function runTurn(sessionId: string): Promise<string | null> {
       dispatched = true;
       return true;
     },
-    interrupt: () => true,
+    interrupt: () => COOPERATIVE_INTERRUPT,
   });
   const orchestrator = new RunOrchestrator({
     channel,
@@ -239,7 +252,7 @@ describe('the Reference Run, closed', () => {
           dispatched = true;
           return true;
         },
-        interrupt: () => true,
+        interrupt: () => COOPERATIVE_INTERRUPT,
       }),
       dbRequest: (action, payload) => dispatchControlPlaneAction(action, payload),
     });

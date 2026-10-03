@@ -20,7 +20,7 @@
 
 import type { PermissionAck, PermissionResponse } from './permission.js';
 import type { RuntimeCapabilities, ProbeOptions, TransportKind } from './capabilities.js';
-import type { RunHandle, RunInput, StartOptions, CancelReason, CancelOutcome } from './run.js';
+import type { RunHandle, RunInput, StartOptions, CancelReason, CancelOutcome, StopDisposition } from './run.js';
 import type { RunManifest } from './manifest.js';
 import type { ResumeRequest } from './resume.js';
 import type { WireResult } from './errors.js';
@@ -58,4 +58,4 @@ export interface RuntimeBinding {
   close(): Promise<void>;
 }
 
-export type { CancelOutcome, CancelReason, PermissionAck, PermissionResponse, RunHandle, RunInput, StartOptions };
+export type { CancelOutcome, CancelReason, StopDisposition, PermissionAck, PermissionResponse, RunHandle, RunInput, StartOptions };

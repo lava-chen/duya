@@ -126,6 +126,26 @@ export class RunLedger {
     return this.#tools.get(toolCallId);
   }
 
+  /**
+   * Tool calls that started and never reported an outcome.
+   *
+   * The ledger does not reject a dangling call — a run that is killed mid-tool
+   * cannot un-ask the question, and the call really did start (which is why
+   * `totalSpend` counts `tool.call_started`). What it cannot do is leave the
+   * question open in the durable log, because a transcript with an unanswered
+   * `tool_use` is indistinguishable from one where the tool silently did
+   * nothing.
+   *
+   * So a host closing a run reads this and completes each one explicitly as
+   * unknown. Not as cancelled: nobody knows whether the side effect landed, and
+   * a cancellation claim is an undo claim, which a kill cannot make.
+   */
+  danglingToolCalls(): readonly string[] {
+    return [...this.#tools.entries()]
+      .filter(([, state]) => state.startedSeq !== null && state.completedSeq === null)
+      .map(([toolCallId]) => toolCallId);
+  }
+
   permissionState(requestId: string): PermissionState | undefined {
     return this.#permissions.get(requestId);
   }
