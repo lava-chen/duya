@@ -43,7 +43,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
-import { manifestFingerprint } from '@duya/agent-protocol';
+import { manifestFingerprint, type PermissionPolicyMode } from '@duya/agent-protocol';
 import { RunOrchestrator, createWorkerExecutionChannel, type ChatStartCommand, type RunTurnIntent } from '../agents/server/run-orchestrator';
 import { normalizeAndObserve, type RouterDeps } from '../agents/server/router';
 import { dispatchControlPlaneAction } from '../control-plane/run-control-plane';
@@ -63,7 +63,17 @@ export interface EvalCaseInput {
   readonly prompt: string;
   /** Provider turns. The provider does not decide the run's outcome. */
   readonly script: OfflineProviderScript;
-  readonly permissionMode?: 'default' | 'auto' | 'bypassPermissions';
+  /**
+   * The run's whole-turn permission mode, typed as the protocol's own
+   * `PermissionPolicyMode` rather than a local copy of it.
+   *
+   * This used to be spelled `'default' | 'auto' | 'bypassPermissions'`, and
+   * `auto` is not a mode the product has — the real set is `default |
+   * acceptEdits | plan | bypassPermissions | dontAsk`. A case could therefore ask
+   * for a permission mode that does not exist, and the type system said yes.
+   * Reading the real type makes that impossible by construction.
+   */
+  readonly permissionMode?: PermissionPolicyMode;
   /** Ceiling the run layer itself enforces. */
   readonly maxTurns?: number;
   /** Files written into the temp workspace before the turn. */
@@ -413,7 +423,11 @@ export async function runLegacyLoop(
   // The run layer's own view of the same run, read through the handle rather
   // than the store, so the two can be compared instead of assumed equal.
   const runResult = handleResult as Record<string, unknown> | null;
-  for (const event of runResult?.transcript ?? []) {
+  // `transcript` is `unknown` on a `Record<string, unknown>`, so it is narrowed
+  // rather than iterated: `runResult?.transcript ?? []` types as `{}`, which is
+  // not iterable, and the iteration was silently untyped.
+  const runTranscript = Array.isArray(runResult?.['transcript']) ? (runResult['transcript'] as unknown[]) : [];
+  for (const event of runTranscript) {
     runEvents.push(redact(event));
   }
 
@@ -462,7 +476,10 @@ export async function runLegacyLoop(
       runId: sentCommands[0]?.runId ?? null,
       manifestHash: sentCommands[0]?.manifestHash ?? null,
       inputRevision: sentCommands[0]?.inputRevision ?? null,
-      maxTurns: sentCommands[0]?.maxTurns ?? null,
+      // `maxTurns` rides in the command's `options`, not at the top level —
+      // `run-orchestrator.ts` forwards `manifest.budget.maxTurns` there. Read
+      // from where it actually is rather than from a field that never existed.
+      maxTurns: (sentCommands[0]?.options?.['maxTurns'] as number | undefined) ?? null,
     }),
     protocolTrace,
     transcript: (worker.frames
@@ -576,7 +593,9 @@ function buildMetadata(args: {
     environment: {
       platform: process.platform,
       node: process.versions.node,
-      abi: process.versions.modules,
+      // `process.versions.modules` is a STRING at runtime; the declared type said
+      // number, so the ABI in every report was a string wearing a number's type.
+      abi: Number(process.versions.modules),
     },
     seed: args.seed,
     configuration: {

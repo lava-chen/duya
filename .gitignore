@@ -202,3 +202,9 @@ probe-desktop-capture*.png
 # Plan 572: Swift AX helper build artifacts (source + build script are committed)
 resources/ax-helper/bin/
 resources/ax-helper/.build/
+
+# Plan 587 E4.3: generated eval reports. A report is an artefact of a run, not
+# source: it names a HEAD, a wall clock and a machine. The eval TREE is tracked;
+# what a run produces is not. Regenerate with `npm run eval:agent:smoke`.
+evals/agent/reports/*.json
+

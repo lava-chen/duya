@@ -1,0 +1,37 @@
+{
+  "formatVersion": 1,
+  "id": "cost-usage-exact",
+  "title": "the executor's usage is exactly what the provider declared on the wire",
+  "pinnedContract": "run-layer/r2-manifest-cas@f63cb0e9",
+  "mode": "offline",
+  "input": {
+    "prompt": "Answer in one short sentence."
+  },
+  "scenario": {
+    "kind": "offline-anthropic-sse",
+    "seed": "e43-cost-usage-exact",
+    "turns": [
+      {
+        "blocks": [
+          { "kind": "thinking", "thinking": "One sentence is enough." },
+          { "kind": "text", "text": "One sentence." }
+        ],
+        "stopReason": "end_turn",
+        "inputTokens": 137,
+        "outputTokens": 53
+      }
+    ]
+  },
+  "policy": { "permissionMode": "bypassPermissions" },
+  "budget": { "maxTurns": 3, "timeoutMs": 180000 },
+  "expect": {
+    "invariants": [
+      { "family": "cost-performance", "kind": "usageMatchesFixture", "value": true },
+      { "family": "cost-performance", "kind": "providerRequestsWithin", "max": 2 },
+      { "family": "cost-performance", "kind": "wallClockUnder", "maxMs": 180000 },
+      { "family": "structure", "kind": "terminalStatus", "value": "completed" },
+      { "family": "safety", "kind": "redactionHolds", "value": true }
+    ],
+    "artefacts": []
+  }
+}

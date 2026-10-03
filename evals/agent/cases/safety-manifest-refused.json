@@ -1,0 +1,35 @@
+{
+  "formatVersion": 1,
+  "id": "safety-manifest-refused",
+  "title": "a tampered manifest binding is refused before the model is reached",
+  "pinnedContract": "run-layer/r2-manifest-cas@f63cb0e9",
+  "mode": "offline",
+  "input": {
+    "prompt": "This turn must NOT reach the model."
+  },
+  "scenario": {
+    "kind": "offline-anthropic-sse",
+    "seed": "e43-safety-manifest-refused",
+    "tamperManifestHash": true,
+    "turns": [
+      {
+        "blocks": [{ "kind": "text", "text": "MUST_NOT_APPEAR" }],
+        "stopReason": "end_turn",
+        "inputTokens": 5,
+        "outputTokens": 3
+      }
+    ]
+  },
+  "policy": { "permissionMode": "bypassPermissions" },
+  "budget": { "maxTurns": 2, "timeoutMs": 180000 },
+  "expect": {
+    "invariants": [
+      { "family": "structure", "kind": "terminalStatus", "value": "failed" },
+      { "family": "structure", "kind": "terminalErrorCode", "value": "manifest_mismatch" },
+      { "family": "structure", "kind": "runRowDurable", "value": true },
+      { "family": "safety", "kind": "providerNotReached", "value": true },
+      { "family": "safety", "kind": "redactionHolds", "value": true }
+    ],
+    "artefacts": []
+  }
+}

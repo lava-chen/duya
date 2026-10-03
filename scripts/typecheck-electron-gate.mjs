@@ -32,10 +32,25 @@ import { dirname, resolve } from 'node:path';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '..');
-const baselinePath = resolve(scriptDir, 'typecheck-electron-baseline.txt');
 const project = resolve(repoRoot, 'apps/desktop/tsconfig.main.json');
 
 const write = process.argv.includes('--write');
+
+// Plan 587 E4.3: `--project` / `--baseline` reuse this ratchet for a second
+// tsconfig. The eval tree typechecks against the real harness, so its program
+// transitively includes `apps/desktop/src/main/**` and `packages/agent/src/**`
+// — the same production debt this gate already baselines, seen through a
+// stricter lens. Rather than write a second ratchet for the same mechanism, the
+// existing one is parameterised; the DEFAULTS are unchanged, so the electron
+// gate behaves exactly as before.
+const projectFlag = process.argv.indexOf('--project');
+const baselineFlag = process.argv.indexOf('--baseline');
+const projectPath = projectFlag !== -1 && process.argv[projectFlag + 1] !== undefined
+  ? resolve(repoRoot, process.argv[projectFlag + 1])
+  : project;
+const baselinePath = baselineFlag !== -1 && process.argv[baselineFlag + 1] !== undefined
+  ? resolve(repoRoot, process.argv[baselineFlag + 1])
+  : resolve(scriptDir, 'typecheck-electron-baseline.txt');
 
 // `path(line,col): error TSxxxx: message`
 const ERROR_LINE = /^(.+?)\((\d+),(\d+)\): error (TS\d+):/;
