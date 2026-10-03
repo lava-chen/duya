@@ -80,6 +80,14 @@ import {
 // import is likewise a direct file import for the same reason.
 import { buildRunManifest } from '../../control-plane/manifest-factory';
 import type { RunIntent } from '../../control-plane/manifest-factory';
+import {
+  describeReceipt,
+  isDurableWrite,
+  readRunReceipt,
+  reasonOf,
+  type RunWriteReceipt,
+} from '../../control-plane/run-receipt';
+import { runInputRevision } from '@duya/agent-protocol';
 import type { ControlPlaneRequest } from '../../control-plane/run-control-plane';
 import { logger } from './logger';
 
@@ -269,28 +277,40 @@ export class RunOrchestrator {
             // could report it. A thrown channel is re-thrown so the caller still
             // learns the batch is gone.
             const reply = await request('run:append', runId, { runId, events: envelopes });
-            // The Control Plane never throws for a failed write — it answers
-            // `{ ok: false, written: 0, error }` and moves on, because losing
-            // one batch of a user's transcript is a degradation. That answer is
-            // only useful if somebody reads it, and discarding it is what turned
-            // a refused write into a silent one.
-            const failure = readAck(reply, 'run:append');
-            if (failure !== null) {
-              reportAckLoss('run:append', runId, failure);
-              throw new Error(`run:append was not acknowledged: ${failure.reason}`);
+            // The Control Plane never throws for a failed write — it answers a
+            // receipt and moves on, because losing one batch of a user's
+            // transcript is a degradation. That answer is only useful if
+            // somebody reads it, and discarding it is what turned a refused
+            // write into a silent one.
+            const receipt = readRunReceipt(reply, 'run:append', runId);
+            if (!isDurableWrite(receipt)) {
+              reportAckLoss(receipt);
+              throw new Error(`run:append was not acknowledged: ${describeReceipt(receipt)}`);
             }
           },
           complete: async (terminal, metrics) => {
             const reply = await request('run:complete', runId, { runId, terminal, metrics });
-            // `{ ok: true, applied: false }` is the honest shape of a LOST CAS:
-            // the write did not fail, it did not land, because another writer
-            // already decided this run's history. Treating it as this call's
-            // success leaves the runtime believing its terminal is the durable
-            // one when it is not.
-            const failure = readAck(reply, 'run:complete');
-            if (failure !== null) {
-              reportAckLoss('run:complete', runId, failure);
-              throw new Error(`run:complete was not acknowledged: ${failure.reason}`);
+            // `reconciled` resolves. It is NOT an acknowledgement failure: it
+            // means another writer committed the SAME terminal, so the run IS
+            // durably settled as asked and the only thing that happened is that
+            // two writers raced. Throwing here — which is what `applied: false`
+            // used to do — made the runtime report `persistence_failed` for a run
+            // that had in fact succeeded, and R1.2's degraded terminal then told
+            // the host a completed run was a failed one.
+            //
+            // `conflict` and `absent` still throw, and must: a lost claim and a
+            // write that matched nothing are the two cases where this caller
+            // genuinely cannot say the run ended as it decided.
+            const receipt = readRunReceipt(reply, 'run:complete', runId);
+            if (!isDurableWrite(receipt)) {
+              reportAckLoss(receipt);
+              throw new Error(`run:complete was not acknowledged: ${describeReceipt(receipt)}`);
+            }
+            if (receipt.state === 'reconciled') {
+              logger.info('run:complete lost the CAS to a writer that agreed — the run is settled as decided', {
+                runId,
+                committed: receipt.committed.status,
+              });
             }
           },
         };
@@ -318,6 +338,27 @@ export class RunOrchestrator {
    */
   async openRun(sessionId: string, intent: RunTurnIntent): Promise<RunStartAcceptance> {
     const runId = randomUUID();
+    // An active binding is NEVER overwritten. The router's STREAMING 409 is what
+    // normally guarantees one live run per session, and that guarantee lives in
+    // a different process from this map — so two turns that pass it (a retry of
+    // the HTTP request, a reconnect) would otherwise silently rebind the
+    // session, and the first run's frames would then be teed into the second
+    // run's ledger. Refusing here is the only thing that keeps the map's
+    // invariant true, and it is checked at the one place the binding is taken.
+    const active = this.#bySession.get(sessionId);
+    if (active !== undefined) {
+      logger.warn('a second run was opened for a session that already has a live one', {
+        sessionId,
+        activeRunId: active,
+        refusedRunId: runId,
+      });
+      return {
+        accepted: false,
+        runId: null,
+        stage: 'run_active',
+        reason: `session ${sessionId} already has live run ${active}`,
+      };
+    }
     // The pending-session entry lives only for the duration of this call, and a
     // `finally` is the only thing that guarantees that: there are three exits
     // from the body below (refused row, failed start, success) and the one that
@@ -339,21 +380,52 @@ export class RunOrchestrator {
       // is the opposite of what a manifest is for.
       const { prompt: turnPrompt, options: turnOptions, ...manifestIntent } = intent;
       const built = buildRunManifest({ ...manifestIntent, sessionId, runId });
-      const created = (await this.#options.dbRequest('run:create', {
+      // The input revision is computed ONCE here, by the protocol's canonical
+      // function, and the SAME string goes to the Control Plane and to the
+      // controller. The Control Plane persists it into the run row so a reused
+      // `runId` can be compared; the controller puts it on the executor's
+      // command. Two derivations of one value in two places is the drift
+      // `controller.ts:542-547` warns about, so the derivation happens at the
+      // one call site that already holds all three inputs.
+      const inputHash = runInputRevision({ sessionId, prompt: turnPrompt, options: turnOptions });
+      const created = await this.#options.dbRequest('run:create', {
         runId,
         sessionId,
         manifest: built.manifest,
         manifestHash: built.manifestHash,
+        inputHash,
         ...(intent.parentRunId === undefined ? {} : { parentRunId: intent.parentRunId }),
-      })) as { ok?: boolean; error?: string } | undefined;
+      });
+      const createdReceipt = readRunReceipt(created, 'run:create', runId);
 
-      if (created?.ok !== true) {
+      // `reused` is refused on purpose. The run already exists with this exact
+      // manifest and input, so the ROW is fine — but accepting it would dispatch
+      // a SECOND executor onto a run that already has one, and the first
+      // executor is still streaming into the same `(runId, seq)` space. The
+      // honest answer is "this run exists, it was not started again", which is
+      // what its own stage says.
+      if (createdReceipt.state !== 'created') {
         this.#forgetRun(runId);
-        const reason = created?.error ?? 'unknown';
+        if (createdReceipt.state === 'reused') {
+          logger.warn('Control Plane reports this runId was already opened — not dispatched again', {
+            sessionId,
+            runId,
+          });
+          return {
+            accepted: false,
+            runId,
+            stage: 'run_already_exists',
+            reason: `run ${runId} already exists with the same manifest and input, so no second execution was dispatched`,
+          };
+        }
+        // The producer's own sentence, unprefixed: the state name belongs in the
+        // log line below, and a host branching on this reason is reading what
+        // the Control Plane actually said.
+        const reason = reasonOf(createdReceipt);
         logger.warn('Control Plane refused the run — chat proceeds without a durable record', {
           sessionId,
           runId,
-          reason,
+          reason: describeReceipt(createdReceipt),
         });
         return { accepted: false, runId: null, stage: 'run_not_created', reason };
       }
@@ -373,6 +445,11 @@ export class RunOrchestrator {
         prompt: turnPrompt,
         sessionId,
         options: turnOptions,
+        // The revision computed above, verbatim. Passing it is what keeps the
+        // digest on the executor's command identical to the one now in the run
+        // row; letting the controller recompute it would be a second
+        // derivation of the same value.
+        revision: inputHash,
       });
       this.#retain(runId, handle);
       return { accepted: true, runId };
@@ -814,55 +891,24 @@ export const RUN_ENTRY_DIVERGENCES: readonly { readonly claim: string; readonly 
     }),
   ]);
 
-/** Why a durability reply is not a success, or `null` when it is one. */
-interface AckFailure {
-  /** True for a write that did not fail but did not land — a lost CAS. */
-  readonly lostCas: boolean;
-  readonly reason: string;
-}
-
 /**
- * Read one Control Plane durability reply.
- *
- * Three outcomes mean very different things: a success, a refusal
- * (`{ ok: false, error }`), and a success that did not apply
- * (`{ ok: true, applied: false }`). Only the first is a durable write, and a
- * reply this adapter cannot read is a refusal rather than an optimistic default:
- * an unrecognised shape is not evidence that anything was written.
- */
-function readAck(reply: unknown, action: string): AckFailure | null {
-  if (typeof reply !== 'object' || reply === null) {
-    return { lostCas: false, reason: `unrecognised ${action} reply` };
-  }
-  const record = reply as { ok?: unknown; error?: unknown; applied?: unknown };
-  if (record.ok !== true) {
-    const reason =
-      typeof record.error === 'string' ? record.error : `${action} reported ok=${String(record.ok)}`;
-    return { lostCas: false, reason };
-  }
-  // `run:append` has no CAS and reports `written` rather than `applied`; only
-  // `run:complete` is a one-shot write that can be won or lost.
-  if (action === 'run:complete' && record.applied !== true) {
-    return { lostCas: true, reason: 'another writer already settled this run' };
-  }
-  return null;
-}
-
-/**
- * Log a durability reply that was not a success.
+ * Log a durability receipt that was not a durable write.
  *
  * Warned here rather than left to the settle path, because this is the only
- * place that still knows which action and which run id were refused — and a run
+ * place that still knows which action and which run were refused — and a run
  * that loses a batch mid-stream and is then hard-killed never reaches a settle
  * that could report it.
+ *
+ * The state's own word is in the message, because "refused" covers five
+ * different situations and an operator reading one line has to be able to tell
+ * a busy database (retry) from an absent row (investigate) from a content
+ * conflict (a bug) without opening a second log line.
  */
-function reportAckLoss(action: string, runId: string, failure: AckFailure): void {
-  logger.warn(
-    failure.lostCas
-      ? `${action} CAS lost — the durable terminal is another writer's, not this one`
-      : `${action} refused — the durable transcript is degraded`,
-    { runId, reason: failure.reason },
-  );
+function reportAckLoss(receipt: RunWriteReceipt): void {
+  logger.warn(`${describeReceipt(receipt)} — the durable transcript is degraded`, {
+    runId: receipt.runId,
+    state: receipt.state,
+  });
 }
 
 /**

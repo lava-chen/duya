@@ -84,14 +84,14 @@ function makeOrchestrator(appendSink?: (event: { payload: { type: string } }) =>
   const commands: string[] = [];
   const orchestrator = new RunOrchestrator({
     dbRequest: async (action, payload) => {
-      if (action === 'run:create') return { ok: true, runId: payload.runId };
+      if (action === 'run:create') return { ok: true, state: 'created', runId: payload.runId };
       if (action === 'run:append') {
         for (const event of payload.events as Array<{ payload: { type: string } }>) {
           appendSink?.(event);
         }
-        return { ok: true, written: (payload.events as unknown[]).length };
+        return { ok: true, state: 'applied', runId: payload.runId, written: (payload.events as unknown[]).length };
       }
-      return { ok: true, applied: true };
+      return { ok: true, state: 'applied', runId: payload.runId, applied: true };
     },
     channel: createWorkerExecutionChannel({
       dispatch: () => {

@@ -240,7 +240,12 @@ describe('RunStore', () => {
   it('uses migration ids above the measured core maximum', () => {
     // The `id <= current` guard in runMigrations silently skipped an id that
     // collided with a recorded schema_version, and that shipped as a missing
-    // `session_runtime_locks.origin` column. 35/36 are chosen by measurement.
-    expect(RUN_STORE_MIGRATIONS.map((m) => m.id)).toEqual([35, 36]);
+    // `session_runtime_locks.origin` column. 35/36/37 are chosen by measurement.
+    //
+    // This is an exact list on purpose, not a range: it is the assertion that a
+    // future migration landing on an id already in use FAILS HERE rather than
+    // colliding at boot. R1.3 added 37 for `runs.input_hash`; the next one has
+    // to be measured again, not assumed to be 38.
+    expect(RUN_STORE_MIGRATIONS.map((m) => m.id)).toEqual([35, 36, 37]);
   });
 });
