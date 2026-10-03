@@ -77,7 +77,7 @@ import { Journal } from '../journal/Journal.js';
 import { loadSkills, getSkillRegistry, getAgentSkillDirectory } from '../skills/index.js';
 import { browserTool } from '../tool/builtin.js';
 import { modeModifierRegistry } from '../modes/index.js';
-import { verifyRunManifestBinding, type WorkerCapabilitySet } from './run-manifest-verification.js';
+import { verifyRunManifestBinding, manifestRejectionProtocolCode, type WorkerCapabilitySet } from './run-manifest-verification.js';
 import type { RunManifest } from '@duya/agent-protocol';
 import { getBashTaskRegistry } from '../session/bash-task-registry.js';
 import { hookTaskRegistry } from '../hooks/task-registry.js';
@@ -2511,10 +2511,30 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       log(
         `[chat:start] refused ${verdict.code}: ${verdict.detail} (runId=${msg.runId ?? 'none'}, session=${msg.sessionId})`,
       );
+      // `message`, not `error`. This frame used to carry `error`, and it was
+      // the ONLY `chat:error` in this file that did — every other send site,
+      // and the `AgentErrorEvent` contract in `worker-protocol.ts`, use
+      // `message`. The consequence was silent: `normalizeWorkerEvent` reads
+      // `event.message || 'Unknown error'`, so a manifest refusal arrived at
+      // the run layer as `code: 'internal', message: 'unknown error'` and the
+      // verdict code this branch exists to report never left the worker.
+      //
+      // Found by plan 587 E4.1, which drives this file as a real process; no
+      // seam test could see it, because every one of them constructed the
+      // frame rather than receiving it.
+      //
+      // `code` is the PROTOCOL code from `ERROR_CODES`, not the verdict string.
+      // The run layer classifies on this field (`classifyErrorCode`), and an
+      // unrecognised string falls through to `internal` — which is how a named
+      // refusal was still landing as an unnamed one. The verdict string stays
+      // in the message, where a reader can act on it, and the mapping is a
+      // total function over the five verdicts `verifyRunManifestBinding` can
+      // return, so a sixth verdict cannot silently arrive uncoded.
       sendToMain({
         type: 'chat:error',
         sessionId: msg.sessionId,
-        error: `run refused (${verdict.code}): ${verdict.detail}`,
+        message: `run refused (${verdict.code}): ${verdict.detail}`,
+        code: manifestRejectionProtocolCode(verdict.code),
       } as never);
       return;
     }

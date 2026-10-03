@@ -719,7 +719,32 @@ selfTest:
   # capability probe, an error taxonomy and a normalisation — all of which are
   # runtime-layer code reaching DOWN for vocabulary. Nothing here points up, and
   # `@duya/agent-protocol` stays a true leaf.
-  module-dependency-permitted: 115
+  # 115 -> 116 (plan 587 E4.1): ONE further permitted edge, 0 removed, added
+  # on top of T3.5's twenty-two. T3.5's own attribution above is unchanged and
+  # still records its own increment as 115 at the time it measured it.
+  #
+  # The edge is a single one:
+  # `apps/desktop/src/main/__tests__/eval-legacy-loop.ts` ->
+  # `packages/agent-protocol/src/index.ts` for the specifier
+  # `@duya/agent-protocol`, contributed by the E4.1 eval harness. It reads the
+  # persisted manifest back off disk and fingerprints it with the protocol's
+  # own `manifestFingerprint`, and that is the point of the assertion: "the hash
+  # on the run row is the hash the protocol computes" is only meaningful if the
+  # fingerprint comes from the protocol rather than from a re-declared copy of
+  # the hashing rule. Direction is correct and `agent-protocol` remains a leaf -
+  # nothing in it imports anything from `apps/`.
+  #
+  # `module-dependency` is UNCHANGED at 559, and that remains the load-bearing
+  # half: no edge became a NON-permitted dependency, so no managed module's
+  # zero tolerance is affected. `module-dependency-permitted` is counted, never
+  # blocking, and never consults the baseline.
+  #
+  # Attributed BY MEASUREMENT on the E4.1 branch: two `audit-imports.mjs --json`
+  # runs, edge set against edge set, 637 -> 638 with exactly 1 added and 0
+  # removed, the "before" run taken with the three source files and the seven
+  # eval files reverted ALONE. `.architecture-baseline.json` was not touched and
+  # `--write` was not run.
+  module-dependency-permitted: 116
   forbidden-dependency: 16
   # 161 -> 162: one more relative-path escape into packages/agent, from the
   # plan-583 stack. Now 126 agent / 16 plugin-core / 13 gateway / 7 conductor.
