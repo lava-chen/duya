@@ -56,6 +56,48 @@ export interface RunPersistence {
   complete(terminal: RunTerminalState, metrics: RunMetrics): Promise<void>;
 }
 
+/**
+ * ## Why this port has exactly two methods, and why that decides R1.2 item 2
+ *
+ * Contract §C allows a terminal to be committed two ways: append-ack the
+ * terminal EVENT and then write the terminal ROW, or hold one SQLite
+ * transaction across the terminal event and the CAS. **This port chooses the
+ * first, and the choice is made here rather than in an adapter on purpose.**
+ *
+ * The transaction form is a property of the ADAPTER. An adapter that can hold a
+ * transaction open decides when the terminal event and the row become
+ * durable together; an adapter that cannot (the in-memory one every test uses,
+ * and the forked agent-server reaching the Control Plane over `db:request`)
+ * does not. So picking the transaction form would mean the two adapters in this
+ * repository commit terminals by different rules — exactly the cross-adapter
+ * divergence the plan forbids (02-run-correctness.md §R1.2: pick one of the two
+ * orderings, and do not let adapters diverge quietly), reached by a
+ * legitimate-looking code path.
+ *
+ * The rejected alternative, read under a crash between the two writes:
+ *
+ *   - **append-ack then complete (chosen).** The terminal EVENT is durable and
+ *     the ROW is still `running`. The decided terminal is in the log, so a
+ *     reconciler can find it and close the row. The evidence of the decision
+ *     survives the crash.
+ *   - **one transaction.** Neither write landed. The row says `running` and
+ *     there is no terminal event to contradict it, so the only supportable
+ *     reading is "this run did not finish", and the one thing the runtime
+ *     knew — how it did finish — is gone.
+ *
+ * The first failure mode is recoverable and the second is not, and only the
+ * first is expressible over a two-call cross-process port. So `settle` does the
+ * first, for every adapter, and `RunPersistence` is not given a third method
+ * that would let one of them do otherwise.
+ */
+
+/** One batch awaiting acknowledgement, and what it has already cost. */
+interface PendingBatch {
+  readonly envelopes: readonly RunEventEnvelope[];
+  /** Append attempts made so far, including the first. */
+  attempts: number;
+}
+
 export interface RunSessionOptions {
   readonly runId: string;
   readonly sessionId: string;
@@ -90,6 +132,22 @@ export interface RunSessionOptions {
    * a run.
    */
   readonly flushEvery?: number;
+  /**
+   * How many times a refused batch is re-offered before it is given up on.
+   *
+   * Bounded on purpose. A batch is either still in the queue or it is not, so
+   * an unbounded retry is not a retry at all — it is a livelock that also holds
+   * every unsent event of a long run in memory for as long as it lasts. The
+   * default of 2 covers the failure this is actually for (a Control Plane that
+   * was momentarily unreachable) without covering one that is not (a database
+   * that is gone).
+   *
+   * A batch that exhausts its budget is DROPPED, and the drop is what turns
+   * the run's verdict into `persistence_failed` — see `#lostBatch`. The
+   * alternative, keeping a batch nobody will ever write, would leave the run
+   * claiming a transcript it does not have.
+   */
+  readonly appendRetries?: number;
 }
 
 export interface ObserveResult {
@@ -127,15 +185,39 @@ export class RunSession {
    */
   #settling: Promise<RunTerminalState> | null = null;
   /**
-   * The tail of the append chain. Every batch is handed to the persistence in
-   * the order it was observed, and `settle` awaits the whole chain rather than
-   * only the batches still sitting in the buffer.
+   * THE WRITE QUEUE. One per run, head first, in the order the events were
+   * observed.
+   *
+   * A batch lands here before it is offered, and leaves only when storage has
+   * acknowledged it or the run has given up on it. It used to be a local in
+   * `#flushBatch`: the batch was spliced out of the buffer, handed to
+   * `persistence.append`, and if that refused, gone. Every refusal was a
+   * permanent, silent deletion of a run's events, and the fire-and-forget
+   * flush inside `observe` had nobody to report it to.
+   */
+  #queue: PendingBatch[] = [];
+  /**
+   * The tail of the write queue. Every batch is handed to the persistence in
+   * observation order, and `flush()` awaits this chain rather than only the
+   * batches still sitting in the buffer — so a caller that awaits one flush
+   * also waits for every batch still in flight behind it, retries included.
    */
   #flushChain: Promise<void> = Promise.resolve();
-  /** The first durable-write failure seen, kept so a later settle can degrade. */
-  #appendFault: unknown = null;
+  /**
+   * The first batch that was given up on, kept so a later settle can report
+   * the run as degraded instead of completed.
+   *
+   * Set ONLY when a batch is actually lost, never on a refusal that a retry
+   * then wrote. A run that recovered from a busy database did not lose its
+   * transcript, and degrading it would report a failure that never happened.
+   */
+  #lostBatch: unknown = null;
+  #lostEvents = 0;
+  #lostBatches = 0;
   readonly #terminalPromise: Promise<RunTerminalState>;
   #resolveTerminal!: (state: RunTerminalState) => void;
+  /** The receipt. Built once, handed out by identity to every reader. */
+  #resultPromise: Promise<RunResult> | null = null;
 
   constructor(options: RunSessionOptions) {
     this.runId = options.runId;
@@ -181,6 +263,27 @@ export class RunSession {
   }
 
   /**
+   * Batches still waiting to be acknowledged.
+   *
+   * A run that has given up on its storage reports zero here rather than
+   * holding every event it ever produced, which is the difference between a
+   * controller that is busy and one that grows for the life of the process.
+   */
+  get pendingWrites(): number {
+    return this.#queue.length;
+  }
+
+  /** Events that were offered to storage and never acknowledged, ever. */
+  get lostEvents(): number {
+    return this.#lostEvents;
+  }
+
+  /** Batches given up on. Diagnostics; `lostEvents` is the number that counts. */
+  get lostBatches(): number {
+    return this.#lostBatches;
+  }
+
+  /**
    * Append one event to the run.
    *
    * @throws {LifecycleViolation} when the event breaks a run invariant. The
@@ -208,10 +311,12 @@ export class RunSession {
       // from what follows it; this one cannot.
       if (event.type === 'run.started' || this.#buffer.length >= (this.#options.flushEvery ?? 16)) {
         // Observed frames must never block on a cross-process write, so this
-        // is not awaited. The refusal is not lost: `flush` records it on the
-        // session before re-throwing, and the catch below keeps it from
-        // surfacing as an unhandled rejection. `settle` reads the record and
-        // reports the run as degraded instead of completed.
+        // is not awaited. It is also no longer a place where a batch can be
+        // lost: the batch is on the run's write queue before the flush starts,
+        // so a refusal is re-offered from there rather than dropped where it
+        // stood. The catch keeps the floating promise from surfacing as an
+        // unhandled rejection — the refusal itself is not lost with it, and
+        // `settle` reads `#lostBatch` to report the run as degraded.
         void this.flush().catch(() => undefined);
       }
     }
@@ -261,7 +366,17 @@ export class RunSession {
       budgetExhausted: this.#budgetVerdict(wallClockMs),
     });
 
+    // An exit that produced no terminal EVENT still has to produce one.
+    // Contract §C: an executor that exits with no terminal state, a failed
+    // dispatch, or a hard kill must all synthesise an explicit terminal EVENT.
+    // Writing the terminal ROW without the event left the durable log of a
+    // crashed run ending mid-answer with nothing saying how it ended, and a row
+    // whose `running` status was the only trace of it. The verdict comes from
+    // `resolveRunOutcome` as always; this only gives it a log.
+    this.#synthesizeTerminalEvent(decided);
+
     let terminal = decided;
+    let transcriptLost = false;
     try {
       // Flush before completing: a terminal decision recorded with its events
       // still sitting in a buffer is a run whose last word is missing. The
@@ -269,13 +384,31 @@ export class RunSession {
       // is the tail of every append this run has made, not just the buffered
       // ones, so a batch still in flight cannot overtake this terminal row.
       await this.flush();
-      // An append that failed earlier in the run already lost events. Writing
-      // the terminal now would publish `completed` for a transcript with a hole
-      // in it, so the fault is re-read here and folded into the verdict.
-      if (this.#appendFault !== null) throw this.#appendFault;
+      if (this.#lostBatch !== null) {
+        transcriptLost = true;
+        throw this.#lostBatch;
+      }
       await this.#options.persistence.complete(decided, this.#metrics(wallClockMs));
     } catch (error) {
       terminal = degradedTerminal(error);
+      // A run whose transcript has a hole is the one case where the row is
+      // worth rewriting even though the barrier failed. Left alone it stays
+      // `running` forever, which is indistinguishable from a run that is still
+      // executing and that nothing will ever close — the exact row R1.1 left
+      // behind. This is best effort by construction: if the row cannot be
+      // written either, the degraded terminal is what the host is told, and
+      // the run stays a `running` row, which is R1.3's DB-fault state to
+      // reconcile. Only the APPEND failure lands here; a `complete` that failed
+      // on its own is deliberately not retried, because a refusal there is
+      // most often a lost CAS and the row already holds another writer's
+      // terminal.
+      if (transcriptLost) {
+        try {
+          await this.#options.persistence.complete(terminal, this.#metrics(wallClockMs));
+        } catch {
+          // Nothing further to try. The host already has the degraded receipt.
+        }
+      }
     }
 
     this.#terminal = terminal;
@@ -285,33 +418,88 @@ export class RunSession {
   }
 
   /**
-   * Flush any buffered durable events. Safe to call more than once.
+   * Give a verdict that no event described an event of its own.
    *
-   * Serialised through `#flushChain` so batches reach the persistence in
-   * observation order, and so a caller that awaits one flush also waits for
-   * every batch still in flight behind it. A refusal is remembered
-   * (`#appendFault`) before it is re-thrown: the fire-and-forget flush in
-   * `observe` cannot report anything, and a run must not be able to lose a
-   * batch and settle as `completed` because nobody was listening when it
-   * failed.
+   * Only ever called before a terminal event exists, so the ledger accepts it;
+   * a run that already emitted one keeps the one the executor produced, and the
+   * terminal it carries stays the single source of the verdict.
    */
-  flush(): Promise<void> {
-    const pending = this.#flushChain.then(
-      () => this.#flushBatch(),
-      () => this.#flushBatch(),
-    );
-    this.#flushChain = pending;
-    return pending;
+  #synthesizeTerminalEvent(decided: RunTerminalState): void {
+    if (this.#terminalEvents.length > 0) return;
+    if (decided.status === 'failed') {
+      this.observe({ type: 'run.failed', error: decided.error });
+      return;
+    }
+    this.observe({
+      type: 'run.completed',
+      status: decided.status,
+      ...(decided.stopReason === undefined ? {} : { stopReason: decided.stopReason }),
+      // The verdict was cancelled, not completed. Recording it as a plain
+      // completion would drop the only distinction between "the model finished"
+      // and "the host stopped it" from the durable log.
+      ...(decided.status === 'cancelled' ? { cancelRequested: true } : {}),
+    });
   }
 
-  async #flushBatch(): Promise<void> {
-    if (this.#buffer.length === 0) return;
-    const batch = this.#buffer.splice(0, this.#buffer.length);
-    try {
-      await this.#options.persistence.append(batch);
-    } catch (error) {
-      this.#appendFault ??= error;
-      throw error;
+  /**
+   * Flush every batch this run still owes storage.
+   *
+   * Waits for the batches already in flight AND for its own, including the
+   * retries of any that were refused earlier. Safe to call more than once; a
+   * call with nothing to write is a resolved promise, not a skipped one.
+   */
+  flush(): Promise<void> {
+    const pass = this.#flushChain.then(
+      () => this.#drain(),
+      () => this.#drain(),
+    );
+    // The chain continues past a failure on purpose. A refused batch is
+    // re-offered from the queue rather than by re-running the chain from the
+    // top, so one dead batch cannot wedge every batch behind it forever.
+    this.#flushChain = pass;
+    return pass;
+  }
+
+  /**
+   * Offer the write queue to storage, head first, until it is empty or stuck.
+   *
+   * Terminates because every iteration either removes a batch or spends one of
+   * that batch's retries, and both are finite — which is what "bounded" means
+   * here, and what keeps a permanently broken database from becoming an
+   * infinite loop that also retains the run's whole event stream.
+   */
+  async #drain(): Promise<void> {
+    const maxAttempts = 1 + (this.#options.appendRetries ?? 2);
+    for (;;) {
+      if (this.#queue.length === 0 && this.#buffer.length > 0) {
+        this.#queue.push({
+          envelopes: this.#buffer.splice(0, this.#buffer.length),
+          attempts: 0,
+        });
+      }
+      const batch = this.#queue[0];
+      if (batch === undefined) return;
+
+      try {
+        await this.#options.persistence.append(batch.envelopes);
+        this.#queue.shift();
+        return;
+      } catch (error) {
+        batch.attempts += 1;
+        if (batch.attempts >= maxAttempts) {
+          this.#queue.shift();
+          this.#lostBatch ??= error;
+          this.#lostBatches += 1;
+          this.#lostEvents += batch.envelopes.length;
+          // Keep going. One lost batch does not excuse losing the rest of the
+          // run's transcript as well, and the next batch may well succeed.
+          continue;
+        }
+        // Retry the same batch, in place, inside this same pass. Re-offering
+        // the SAME seqs matters: `(runId, seq)` is the storage identity, so a
+        // retry is idempotent and a re-minted seq would be a second event.
+        continue;
+      }
     }
   }
 
@@ -330,8 +518,18 @@ export class RunSession {
    * copy already exists in `run_events` — the transcript is what a future
    * replay window will read back, and building it in memory first would be a
    * second source of truth with a shorter lifetime.
+   *
+   * ONE receipt, built once and handed back by identity. Every reader shares
+   * this promise, so a second call cannot report a different `wallClockMs` for
+   * a run that stopped changing when its terminal was published. A receipt that
+   * varies between reads is not a receipt.
    */
-  async result(): Promise<RunResult> {
+  result(): Promise<RunResult> {
+    this.#resultPromise ??= this.#buildResult();
+    return this.#resultPromise;
+  }
+
+  async #buildResult(): Promise<RunResult> {
     const terminal = await this.#terminalPromise;
     const wallClockMs = this.#options.clock() - this.#options.startedAt;
     return {

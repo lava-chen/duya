@@ -25,7 +25,7 @@
  * than a promise.
  */
 
-export { RunController, runtimeEventTypes } from './controller.js';
+export { RunController, RunStartError, runtimeEventTypes } from './controller.js';
 export type {
   FrameOutcome,
   RunControllerOptions,

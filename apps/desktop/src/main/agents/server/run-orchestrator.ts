@@ -44,6 +44,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   RunController,
+  RunStartError,
   type ExecutionChannel,
   type ExecutionHandle,
   type FrameOutcome,
@@ -85,6 +86,15 @@ export interface ObservedFrame {
   readonly legacy: FrameOutcome['legacy'];
   /** True when the frame had no protocol counterpart and is forward-only. */
   readonly forwardOnly: boolean;
+  /**
+   * True when this frame arrived for a run that has already ended.
+   *
+   * The router writes the frame regardless — that is the live path and it does
+   * not change — so this is the only signal the host gets that the run layer
+   * had already decided. A frame for a session that never opened a run is a
+   * different fact and reports `false`.
+   */
+  readonly late: boolean;
 }
 
 export class RunOrchestrator {
@@ -107,6 +117,25 @@ export class RunOrchestrator {
    * whichever model ran most recently. Read out when the run settles.
    */
   readonly #modelByRun = new Map<string, RunModelIdentity>();
+  /**
+   * sessionId -> the run that last ended for it.
+   *
+   * Only used to tell a late frame apart from a frame for a session that never
+   * opened a run, which the router cannot see any other way once `#bySession`
+   * has been released. One entry per SESSION, overwritten by the next run for
+   * that session — so it is bounded by the conversation list rather than by
+   * the number of turns, which is the distinction that matters.
+   */
+  readonly #endedBySession = new Map<string, string>();
+  /**
+   * sessionId -> the settlement currently in flight for it.
+   *
+   * Exists so the router's close-event backstop can WAIT for a run the `done`
+   * frame already began closing, rather than returning while the terminal write
+   * is still crossing the process boundary. One entry per live session, removed
+   * when the settlement lands.
+   */
+  readonly #finishing = new Map<string, Promise<void>>();
 
   constructor(options: RunOrchestratorOptions) {
     this.#options = options;
@@ -182,6 +211,12 @@ export class RunOrchestrator {
    * Never throws. The chat proceeds either way; the run layer is additive, and
    * a product that refuses to answer because a bookkeeping row could not be
    * written is worse than one that answers without the record.
+   *
+   * `null` therefore means "there is no run for this turn", and it covers
+   * three genuinely different situations: the Control Plane refused the row, the
+   * run's durable `started` never landed, and the channel threw. All three are
+   * reported by name, because an operator reading "chat proceeded" needs to
+   * know which of them happened.
    */
   async openRun(
     sessionId: string,
@@ -206,6 +241,7 @@ export class RunOrchestrator {
       })) as { ok?: boolean; error?: string } | undefined;
 
       if (created?.ok !== true) {
+        this.#forgetRun(runId);
         logger.warn('Control Plane refused the run — chat proceeds without a durable record', {
           sessionId,
           runId,
@@ -214,23 +250,51 @@ export class RunOrchestrator {
         return null;
       }
 
-      this.#bySession.set(sessionId, runId);
       // Start the run so `run.started` is recorded with its manifest hash
       // BEFORE the worker produces anything. This is what makes a run that
       // crashes on its first frame still answerable.
+      //
+      // The session is bound AFTER the start, not before. It used to be bound
+      // first, which meant a start that failed left the session pointing at a
+      // run with no `run.started` and no place in the Control Plane — and the
+      // worker's very next frame was then teed into it.
       await this.#controller.start(built.manifest, {
         prompt: '',
         sessionId,
         options: {},
       });
+      this.#bySession.set(sessionId, runId);
+      this.#endedBySession.delete(sessionId);
       return runId;
     } catch (error) {
+      this.#forgetRun(runId);
+      if (error instanceof RunStartError) {
+        // `start_failed` is the code, and it is not the same incident as a
+        // refused row: the row exists, the run did not open, and the executor
+        // was never dispatched. Saying so is the whole value of the code.
+        logger.warn(`${error.code}: the run was not dispatched — chat proceeds without a durable record`, {
+          sessionId,
+          runId,
+          stage: error.stage,
+        });
+        return null;
+      }
       logger.warn('openRun failed — chat proceeds without a durable record', {
         sessionId,
         error: error instanceof Error ? error.message : String(error),
       });
       return null;
     }
+  }
+
+  /**
+   * Drop every trace of a run that is not going to happen.
+   *
+   * Called on both failure paths out of `openRun`. Leaving the model binding
+   * behind would make it one more entry in a map with no delete.
+   */
+  #forgetRun(runId: string): void {
+    this.#modelByRun.delete(runId);
   }
 
   /**
@@ -253,18 +317,30 @@ export class RunOrchestrator {
    */
   observe(sessionId: string, frame: Record<string, unknown>): ObservedFrame {
     const runId = this.#bySession.get(sessionId);
-    if (runId === undefined) return { legacy: null, forwardOnly: false };
+    if (runId === undefined) {
+      // No live run. Whether one ENDED here or never existed is the difference
+      // between a worker that kept producing and a routing mistake, and the
+      // router cannot tell them apart without asking. A settlement still in
+      // flight counts as ended: the run has decided, and the receipt simply has
+      // not been written yet.
+      const ended = this.#endedBySession.get(sessionId);
+      const late =
+        this.#finishing.has(sessionId) ||
+        (ended !== undefined && this.#controller.receiptFor(ended) !== null);
+      if (late) {
+        logger.warn('a worker frame arrived after its run had already ended', { sessionId, runId: ended });
+      }
+      return { legacy: null, forwardOnly: false, late };
+    }
 
     const outcome = this.#controller.observeFrame(runId, frame);
     if (outcome.envelope !== null && (outcome.envelope.payload.type === 'run.completed' || outcome.envelope.payload.type === 'run.failed')) {
       // The run has decided. Settle asynchronously: the terminal write is a
       // round trip to the main process and the router's caller is still inside
       // a synchronous frame handler.
-      void this.#controller.settle(runId).catch((error) => {
-        logger.error('Run settle failed', error instanceof Error ? error : new Error(String(error)), { sessionId, runId });
-      });
+      void this.#finish(sessionId, runId);
     }
-    return { legacy: outcome.legacy, forwardOnly: outcome.forwardOnly };
+    return { legacy: outcome.legacy, forwardOnly: outcome.forwardOnly, late: outcome.late ?? false };
   }
 
   /**
@@ -274,21 +350,93 @@ export class RunOrchestrator {
    * but a response that closes with the worker GONE and no terminal frame is a
    * run that ended without saying why, and `resolveRunOutcome` records that as
    * `runtime_crash`. Silence is not consent.
+   *
+   * This is also the router's BACKSTOP (`res.on('close')`), and its whole job
+   * is to be certain the run reached a terminal. When a `done` frame has
+   * already started that work, this waits for it rather than returning while
+   * the terminal write is still crossing the process boundary — which is what
+   * made the close event unable to vouch for the run it was closing.
    */
   async settleSession(sessionId: string, opts?: { cancelRequested?: boolean }): Promise<void> {
+    const inFlight = this.#finishing.get(sessionId);
+    if (inFlight !== undefined) {
+      await inFlight;
+      return;
+    }
     const runId = this.#bySession.get(sessionId);
     if (runId === undefined) return;
-    this.#bySession.delete(sessionId);
     try {
-      await this.#controller.settle(runId, opts);
+      await this.#finish(sessionId, runId, opts);
     } catch (error) {
       logger.error('Run settle failed', error instanceof Error ? error : new Error(String(error)), { sessionId, runId });
     }
   }
 
+  /**
+   * The ONE path a run leaves through, whichever producer asked.
+   *
+   * The `done` frame settles from inside `observe`, and the router's
+   * `res.on('close')` backstop settles the rest. Before this, the `done` path
+   * never released anything, so the session mapping and the model binding were
+   * only cleaned if a close event happened to arrive afterwards — and the model
+   * binding was never cleaned at all. One exit means the run layer cannot leak
+   * on one path while being tidy on the other.
+   */
+  #finish(
+    sessionId: string,
+    runId: string,
+    opts?: { cancelRequested?: boolean },
+  ): Promise<void> {
+    this.#release(sessionId, runId);
+    const settling: Promise<void> = this.#controller
+      .settle(runId, opts)
+      // The terminal this produces is the CONTROLLER's to publish; this path
+      // only has to be certain the write was attempted, so the value is dropped
+      // explicitly rather than leaking into the promise's type.
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        logger.error('Run settle failed', error instanceof Error ? error : new Error(String(error)), {
+          sessionId,
+          runId,
+        });
+      })
+      .finally(() => {
+        if (this.#finishing.get(sessionId) === settling) this.#finishing.delete(sessionId);
+      });
+    this.#finishing.set(sessionId, settling);
+    return settling;
+  }
+
+  #release(sessionId: string, runId: string): void {
+    // Only clear the session if it still points at THIS run. A second turn can
+    // have opened while the first was still settling, and clearing the newer
+    // run's binding would route its frames nowhere.
+    if (this.#bySession.get(sessionId) === runId) {
+      this.#bySession.delete(sessionId);
+      this.#endedBySession.set(sessionId, runId);
+    }
+    this.#modelByRun.delete(runId);
+  }
+
   /** The live run for a session, for the cancel path. */
   runForSession(sessionId: string): string | null {
     return this.#bySession.get(sessionId) ?? null;
+  }
+
+  /**
+   * Per-run model bindings still held.
+   *
+   * A diagnostic, and the one that catches a leak: this map is written once per
+   * turn and has to be released when the run ends, so a number that only goes
+   * up is a number that is wrong.
+   */
+  get retainedModelBindings(): number {
+    return this.#modelByRun.size;
+  }
+
+  /** Sessions with a live run. Should return to zero as sessions finish. */
+  get retainedSessionRuns(): number {
+    return this.#bySession.size;
   }
 
   /**
