@@ -634,7 +634,41 @@ selfTest:
   # unresolved — so it is a valid attribution and an invalid total). The full
   # attribution, the reason the direction is the correct one, and the note that
   # `agent-protocol` stays a leaf are in the T3.3 block at the end of this file.
-  module-dependency-permitted: 78
+  # 78 -> 94 (plan 587 T3.4): SIXTEEN new, all one direction, and `module-dependency`
+  # is UNCHANGED at 559, which is again the load-bearing half — no edge became a
+  # NON-permitted dependency, so no managed module's zero tolerance is affected.
+  #
+  # Two independent measurements, both on this branch, neither of them inferred:
+  #
+  #   1. SOURCE contribution = 5. `audit-imports.mjs --json` edge sets diffed,
+  #      intact tree against the tree with the five new
+  #      `src/events/{coalesce,backpressure,stream-fanout,control-channel,coalesce-guards}.ts`
+  #      removed. Exactly five edges appear, and all five are
+  #      `pkg:agent-runtime -> pkg:agent-protocol`, one per new file. The two
+  #      `index.ts` re-export blocks are RELATIVE, so they contribute no
+  #      cross-boundary edge of their own.
+  #   2. TEST contribution = 9. The seven new files in `test/` removed with the
+  #      sources and `index.ts` left in place, so nothing dangles and the run is a
+  #      valid comparable: `architecture-check.mjs` reports
+  #      `module-dependency-permitted` 94 -> 85. (The raw edge diff shows six
+  #      `-> pkg:agent-protocol` edges from those files; the counter counts
+  #      occurrences, and the difference is not separately broken out.)
+  #
+  # The remaining 2 of the 16 are NOT separately attributed, and this block says
+  # so rather than inventing a split. Both removal directions are confounded in
+  # the way the T3.3 block above records: removing the sources leaves the five
+  # `index.ts` re-exports unresolved, and `architecture-check.mjs` then FAILS
+  # outright with 28 new `[module-dependency]` violations rather than reporting a
+  # lower count. Reverting `index.ts` instead does not work either — it breaks
+  # the eight pre-existing consumers T3.2 and T3.3 added, which show up as
+  # `UNRESOLVED:@duya/agent-runtime` edges.
+  #
+  # `@duya/agent-protocol` remains a true leaf: `forbidden-dependency` is
+  # unchanged at 16 and no edge has `packages/agent-protocol/src/**` as its
+  # source. T3.4 added nothing to the protocol package — the registry's
+  # `durability` column is what the coalescing policy reads, so there is no
+  # second durability table to drift.
+  module-dependency-permitted: 94
   forbidden-dependency: 16
   # 161 -> 162: one more relative-path escape into packages/agent, from the
   # plan-583 stack. Now 126 agent / 16 plugin-core / 13 gateway / 7 conductor.
