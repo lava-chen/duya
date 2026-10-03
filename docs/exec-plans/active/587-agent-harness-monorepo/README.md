@@ -2,8 +2,9 @@
 
 > Status: Active — G0.1 取证完成、G0.2-A/B 已合并（G0 未验收）；runtime phases not accepted.
 > Created: 2026-10-03. Priority: P0. 唯一执行队列：本文件。
-> Current task: **G0.2-C** — required checks：`master` 目前**完全无分支保护**；已有 admin 权限，待确认 ruleset diff 后把 `architecture` 设为 required。
-> G0.2-B 已把构建次序收敛到唯一事实源 `scripts/build-packages.mjs`，四个入口均可从无 dist 的干净树单跑（`typecheck:electron` 修复前 153 个假错误 → 0；`bundle:agent` 修复前 14 个 esbuild 解析错误 → 0）。
+> Current task: **修架构门禁的跨平台缺陷** — `architecture:check` 在 Windows 绿、ubuntu 红，根因是 import 正则的 specifier 可跨行且指纹内嵌真实换行。修好后回到 G0.2-C 再设 required check。
+> G0.2-C 曾加过 `architecture` 为 required，因它在真实runner上不是稳定绿而**已回滚** ruleset；仓库未被卡住，详见 01-baseline-and-gates.md。
+> G0.2-B 已把构建次序收敛到唯一事实源 `scripts/build-packages.mjs`，四个入口均可从无 dist 的干净树单跑。
 > G0.1 已建立按 (file, test, signature) 的可比失败集合；`npm ci` 在本机因 node-pty MSB8040 未取得 exit 0，属环境阻塞，已具名留开。
 > 本次交付为完整计划整合；不代表运行时修复或架构迁移已经完成。
 
