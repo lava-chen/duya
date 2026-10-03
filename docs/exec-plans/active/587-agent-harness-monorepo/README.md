@@ -1,10 +1,10 @@
 # 587 — Agent Harness / Monorepo 架构重构主计划
 
-> Status: Active — G0.1 取证完成、G0.2-A/B 已合并（G0 未验收）；runtime phases not accepted.
+> Status: Active — G0 全阶段完成、R1.1/R1.2/R2.1 已合并（G0.3/G0.4 部分留开）；runtime phases not accepted.
 > Created: 2026-10-03. Priority: P0. 唯一执行队列：本文件。
-> Current task: **修架构门禁的跨平台缺陷** — `architecture:check` 在 Windows 绿、ubuntu 红，根因是 import 正则的 specifier 可跨行且指纹内嵌真实换行。修好后回到 G0.2-C 再设 required check。
-> G0.2-C 曾加过 `architecture` 为 required，因它在真实runner上不是稳定绿而**已回滚** ruleset；仓库未被卡住，详见 01-baseline-and-gates.md。
-> G0.2-B 已把构建次序收敛到唯一事实源 `scripts/build-packages.mjs`，四个入口均可从无 dist 的干净树单跑。
+> Current task: **R2.2** — manifest 真正生效：真实来源+来源标注、单一 input 事实源、worker 校验 hash/version 与 input binding、拒绝未知 required capability 与非法 cwd。
+> R2.1 的交接已写进代码：worker 目前**携带** `manifestHash`/`inputRevision` 但**不校验**，R2.2 就是补这一段。
+> 已知待决：`better-sqlite3@13.0.3` 随 tarball 附带 N-API prebuild，同一份在 Node ABI 137 与 Electron ABI 149 下都加载成功 → V8-ABI 前提对 v13 已不成立，`ensure-sqlite-abi` 的 swap 路径可能大部分冗余。
 > G0.1 已建立按 (file, test, signature) 的可比失败集合；`npm ci` 在本机因 node-pty MSB8040 未取得 exit 0，属环境阻塞，已具名留开。
 > 本次交付为完整计划整合；不代表运行时修复或架构迁移已经完成。
 
@@ -31,9 +31,9 @@
 
 | 阶段 | 状态 | 前置 | 本阶段下一任务 | 完成证据 |
 | --- | --- | --- | --- | --- |
-| G0 [基线与治理](01-baseline-and-gates.md) | **In progress** | — | G0.2 architecture:check 独立 job + 解除 build 的 needs:test | clean build、可信 required gate、失败债可辨别 |
-| R1 [Run 结果与存储](02-run-correctness.md) | Pending（R1.1回归测试已预备，未合入） | G0 | R1.1 将四个探针转成故障回归测试 | result 等待，durable barrier，ack/CAS确认 |
-| R2 [真实 worker 控制](03-worker-control.md) | Pending | R1 | R2.1 做 adapter 接入清单及单入口切换 | canonical ID、真实输入、dispatch/stop/审批/预算 |
+| G0 [基线与治理](01-baseline-and-gates.md) | **In progress** | — | G0.2 测试债收敛 / G0.3 余项 | clean build、可信 required gate、失败债可辨别 |
+| R1 [Run 结果与存储](02-run-correctness.md) | **In progress**（R1.1/R1.2 已合并） | G0 | R1.3 ack/CAS/幂等与生产ledger | result 等待，durable barrier，ack/CAS确认 |
+| R2 [真实 worker 控制](03-worker-control.md) | **In progress**（R2.1 已合并） | R1 | R2.2 manifest 实际生效 | canonical ID、真实输入、dispatch/stop/审批/预算 |
 | T3 [协议与事件传输](04-protocol-and-streams.md) | Pending | R2 | T3.1 wire 数据与内部对象分层 | 同一 seq/cursor、lossless兼容、背压、capability |
 | E4 [行为基准与 evals](05-behavior-and-evals.md) | Pending | R2；传输比较需T3 | E4.1 真实旧worker+offline provider闭环 | 故障、工具、mode、mailbox、Desktop证据 |
 | M5 [包与 host 迁移](06-package-and-host-migration.md) | Pending | G0、T3、E4 | M5.1 当前依赖与切片清单 | 纯 core、可执行 runtime、host contracts与迁移归零 |

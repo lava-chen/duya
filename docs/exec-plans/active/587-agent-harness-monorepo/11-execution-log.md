@@ -135,9 +135,9 @@ Next task: exact ID + file + first action
 
 | 阶段 | Commit/PR | targeted / fullsetdiff | clean / CI | host / artifacts | Exit |
 | --- | --- | --- | --- | --- | --- |
-| G0 | G0.1 `93fcc97e`(PR #138)；G0.2-A `313d1f66`(PR #140)；G0.2-B `a3fe1f14`(PR #143) | 首次建立集合：45文件/101测试/103 tuple，按file+test+signature；G0.2-A未改测试；G0.2-B collect 1009文件/11873测试不变 | 本地clean安装（`npm ci` exit 1，环境原因）/ CI 37099318050 @同一SHA | `.tmp-validation/587-g0/`、`587-g0-2/`、`587-g0-2b/` | G0.1部分、G0.2-A/B完成；G0未验收 |
-| R1 | — | — | — | — | 未验收 |
-| R2 | — | — | — | — | 未验收 |
+| G0 | #138 基线；#139 文档事实；#140 CI接线；#142 worktree安全；#143 构建次序；#146 门禁跨平台；#148 G0.3/G0.4收尾；#151 electron二进制 | 集合基线 45文件/101测试/103 tuple；G0.2-A未改测试 | master `f535c7d9`；`architecture` 已设为 required 并生效 | `.tmp-validation/587-g0/`、`587-g0-2/`、`587-g0-2b/`、`587-archfix/` | G0大部分完成；G0.2测试债收敛与G0.3余项留开 |
+| R1 | R1.1 #147；R1.2 #149 | 30/30 → 58/58；collect 1010/11885 → 1011/11910，无下降 | 干净检出；两PR的 `architecture` check 绿 | `.tmp-validation/587-r1-1-fix/`、`587-r1-2-fix/` | R1.1/R1.2完成；R1.3/R1.4未开始 |
+| R2 | R2.1 #150 | 新增41测试 + R1回归58，全绿；collect 1011/11910 → 1015/11931 | master `fd29af08` | `.tmp-validation/587-r2-1/` | R2.1完成（Desktop chat）；R2.2开工 |
 | T3 | — | — | — | — | 未验收 |
 | E4 | — | — | — | — | 未验收 |
 | M5 | — | — | — | — | 未验收 |
