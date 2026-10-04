@@ -74,17 +74,84 @@ verdict 是执行器的意见而不是 run 的终态。现在改读 `RunResult`�
 
 **subagent 未做**，因为它跨的是**进程边界**而不是代码形状，已实测并记录在
 `run-orchestrator.ts` 的 `NON_DESKTOP_CONSUMERS` sub-agent 行：subagent 的 turn 是父 worker
-**内部**的嵌套 loop，而 run 生命周期在 main 进程，worker 的 `db-client` 约 230 个 action 里
-**一个 `run:*` 都没有**——从 subagent 到 CP 根本没有路。`parentRunId` 在 run 行/manifest/CP
-三处都已就位，缺的是一条 worker→CP 的开 run 通道，不是字段。
+**内部**的嵌套 loop，而 run 生命周期在 main 进程。
+
+> **（2026-10-04 第三次核对，`49b4b15e`）上面这段的「根本没有路」已被实测推翻。**
+> #205 写的「worker 的 `db-client` 约 230 个 action 里**一个 `run:*` 都没有**——从 subagent 到 CP
+> 根本没有路」这句话，**对 worker 的类型化客户端表面成立，对「路」本身不成立**。实测（真 SQLite、
+> 真 bridge：`__tests__/h8-2-worker-run-channel-seam.test.ts`）：
+>
+> - `db-client` 确实没有任何 `run:*` helper——这句仍然成立，而且本切片把它钉成了 tripwire；
+> - 但它把 `db:request` 用 `process.send` 向上发，agent-server **原样转发** worker 的消息
+>   （`server/router.ts:1039` 及另外三处 spawn 点）；
+> - main 在 `agent-server-lifecycle.ts:160-181` 收下，并串上
+>   `{ senderPid: <agent-server pid>, registeredSessionId: null, role: 'agent-server' }`；
+> - `db-bridge.ts:322-327` **已经把** `run:create`/`run:append`/`run:complete`/`run:get`/
+>   `run:events`/`run:list-session` 路由进 `controlPlane.serve(...)`；
+> - 这个 sender 是**被授权的**：`agent-server-lifecycle.ts:616` 注册了该 pid，
+>   `main/index.ts:351-355` 的生产 `allowedOrigins` 里就有 `roleOrigin('agent-server')`。
+>
+> 也就是说，**通道、授权、`parentRunId` 三样都已就位**。缺的不是通道，是 `openRun` 的**另一半**。
 
 其余三条**仍未勾**，各自的阻塞与下一动作（按本计划收尾规则，开放项必须给一条可实施动作）：
 
 | 条目 | 阻塞 | 下一动作 |
 | --- | --- | --- |
 | workflow `wf.agent` | 身份只有自建表的 `workflowRunId`，无 `agentRunId` 关联；560 已判 Go，不得重开。**它与 subagent 共用同一条 `SUBAGENT_TOOL_NAME` 执行器，因此它跟着 subagent 一起动，不能先动** | 等 subagent 那条通道落地后，在 `wf.agent` 复用同一 child run 路径时一并落 `workflowRunId`/`nodeId` ↔ `agentRunId` 关联 |
-| subagent | 缺的是**通道**不是字段：`parentRunId` 已端到端就位，worker→CP 没有任何开 run 的动作。且 child run 会跑在**另一个** worker（父 worker 占着 session 的单活 run 绑定），因此三样可观测合同都得改挂到 run id 上：进度投影（今天发的是 worker 本地的 `chat:agent_progress` 帧）、后台续跑（`run_in_background` 是 worker 内的 `BackgroundAgentLifecycle`）、`subagent:kill`（今天停的是子生命周期控制器，不是 run） | 先开 worker→CP 的 run 通道（新增一条 `run:*` 动作，把 child run 的终态交回 CP 结算），再把这三样逐项改挂；**不要只开通道不迁合同**——半套 child run 会把自己吊死，比它替换掉的嵌套 loop 更糟 |
+| subagent | 缺的是 **dispatch 那一半**不是通道（见下节「subagent child run：重测后的接缝」）。`openRun` 是「开 run **并且**派发」，而派发是 `workerManager.sendCommand(command.sessionId, ...)`（`server/index.ts:334`）——**按 session 绑定**，且只有 `handlePostChat` 先为该 session spawn 了 worker、并且有 SSE 消费者在读它的 stdout 把帧 tee 进 `observe` 之后才成立。worker 发起的 child run 两样都没有 | 先补 main 侧「为一次 run spawn worker + 把它的 stdout 泵进 `observe`、但不写 HTTP 响应」这条路径（`handlePostChat` 减去 SSE 写出，**目前不是一个可复用的组件**），再动 subagent；**不要只开通道不迁合同** |
 | 同合同回归 + CLI approval | CLI approval 半边已由 #197 证明（10/10 绿）；缺的是三 transport 的同合同回归 | 待 subagent 迁移落地后，用同一组用例分别跑 HTTP/subprocess/in-process 三条路径比对 |
+
+### subagent child run：重测后的接缝（本切片交付 scoped，未开通道）
+
+**为什么是 scoped 而不是 full。** #205 的警告是对的：**不要只开通道不迁合同**，半套 child run 会把自己吊死。
+本切片能证明的只有「通道与闸门已经就位」；证明不了的是「三样合同能一起迁走」——而后者需要的
+dispatch 路径（spawn worker + 泵 stdout + 无 HTTP 响应的 observe）**在树内不存在**。在通道已经
+就位的前提下硬开，等于把一个没有 dispatch 的 `run:create` 交给 subagent，那正是 #205 说的
+「把自己吊死」。所以本切片**不开通道**，改为把接缝测准并写进计划，让下一切片继承。
+
+**通道本身（已就位，本切片实测）。** 新动作不需要新 IPC 通道，走现成的 `db:request`：
+
+| 段 | 位置 | 现状 |
+| --- | --- | --- |
+| worker 发出 | `packages/agent/src/ipc/db-client.ts` `sendDbRequest` | 通用 `db:request`，**无** `run:*` helper |
+| agent-server 转发 | `server/router.ts:1039`（+ interagent / workflow / compact-lazy 三处同形） | 原样 `process.send` 上行 |
+| main 收下并串 sender | `agents/agent-server-lifecycle.ts:160-181` | `{senderPid, registeredSessionId:null, role:'agent-server'}` |
+| 路由 | `agents/db-bridge.ts:322-327` | `run:*` 六个动作**已在** `controlPlane.serve` 分支里 |
+| 授权 | `main/index.ts:347-359` + `agent-server-lifecycle.ts:616` | `roleOrigin('agent-server')` 在生产 `allowedOrigins` 内，pid 已注册 |
+| 落库 | `control-plane/run-control-plane.ts:259-270` → `RunStore` | `parent_run_id` 列 + `idx_runs_parent` 索引（migration 35） |
+
+**唯一缺的那一段（dispatch）。** 新增的 child 动作不能直接调 `openRun`，因为 `openRun` 会连带
+派发，而派发是 session 绑定的。所以要么给 `RunOrchestrator` 增加一条**不派发**的开 run 入口并
+由 main 侧补齐派发，要么在 main 侧新增一个「开 run + spawn worker + 泵帧 + 结算」的组合入口。
+**后者不能照抄 `WorkflowRuntimeManager`**——它 862 行自己 spawn、自己 pump、自己 settle、写自己的
+`workflowRun:create` 表，那正是本计划禁止的「另造一个平行引擎」；它只能当**形状**参考。
+
+**三样合同各自的接缝（本切片逐条测过 owner，未迁移）：**
+
+1. **`chat:agent_progress`（进度投影）** — 今天由 worker 本地帧发出，横跨
+   `hooks/types.ts`、`BackgroundAgentLifecycle.ts`、`agent-process-entry.ts`、`sse-frame-codec.ts`、
+   `worker-protocol.ts`、`subagentLifecycleBridge.ts`、`SubagentTool.ts`、`server/router.ts`、
+   `run-orchestrator.ts`、`main/types/agent-message-types.ts`，以及**渲染层**
+   `stream-session-manager.ts`、`subagent-live-transcript.ts`、`renderer/types/hooks.ts`。
+   跨的接缝：child run 在**另一个 worker**，其帧不再经过父 worker 的 `onProgress`；进度必须改由
+   run 的事件（`run:events`，已在 `db:request` 上可达）投影，渲染层要按 `runId` 而非 `taskId` 订阅。
+   **这条含渲染层，是三样里最大的一条。**
+2. **`run_in_background`（后台续跑）** — 今天归 worker 内的
+   `packages/agent/src/lifecycle/BackgroundAgentLifecycle.ts`，并被
+   `GetTaskOutputTool.ts` / `KillTaskTool.ts` 消费。跨的接缝：后台续跑必须由 CP 拥有
+   （§D「disconnect 与 cancel 分离」），worker 只保留触发；对应 `run:list-session`（已可达）作为查询面。
+3. **`subagent:kill`（停止）** — 今天停的是子生命周期控制器，不是 run。跨的接缝：改为对 child run
+   发 cancel，并落到 `WorkerExecutionBinding.interrupt`（`workerManager.interruptWorker`）这条
+   **既有**唯一 stop 路径上；`subagent:kill` 的 payload 要带 `runId` 而不是 `taskId`。
+
+**权限与预算不可绕过的断言（已在真 SQLite 上成立）。** 闸门在**任何写入之前**跑，且是两段独立检查：
+未 spawn 的 pid → `unknown_window`（"pid 9999 is not a process this host spawned"）；生产名单外的 role →
+`foreign_origin`（"frame origin https://conductor-executor.duya-agent.internal is not an app origin"）；
+sender 未串 → `unattributed` 也被拒。**三种情况都断言了「表里没有行」**——只回一个 refusal 却仍然
+写了一行，才是无主的 run。child 路径上不存在「先建 run 再问权限」的位置：建 run 本身就要过这道闸。
+
+**非CP turn entry 仍是 1。** 本切片没有新增/删除任何 `.streamChat(` 站点，`h8-2-consumer-inventory`
+7/7 绿。计数不变是正确结果：subagent 仍是父 worker 内的嵌套 loop，仍没有自己的 run 行。
 
 **注意：`duya setup` 的 `permission_profile` 不要顺手接线**——它会新授予一条 bypass 能力，属独立决策（见下方测量记录）。#205 再次复核确认该缺陷仍是既有问题、方向 fail-closed。
 

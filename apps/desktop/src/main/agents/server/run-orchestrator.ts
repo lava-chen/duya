@@ -1032,24 +1032,49 @@ export const NON_DESKTOP_CONSUMERS: readonly ConsumerRegistration[] = Object.fre
     permissionPath: 'packages/agent/src/permissions/permissions.ts',
     // H8.2 measured the seam this row would have to cross, and it is a PROCESS
     // boundary, not a code-shape problem. Recorded here so the next slice
-    // inherits the finding instead of rediscovering it:
+    // inherits the finding instead of rediscovering it.
+    //
+    // RE-MEASURED, and one of #205's four findings did not survive it. The
+    // original note here said the worker has "NO route to it: the worker's
+    // `db-client` carries ~230 actions and not one `run:*`", and concluded the
+    // missing piece was "a worker->CP run-opening channel". Both are true of
+    // the worker's TYPED CLIENT SURFACE. Neither is true of the ROUTE:
+    //
+    //  - `db-client` sends `db:request` up through `process.send`, and the
+    //    agent-server forwards a worker's message verbatim
+    //    (`server/router.ts:1039` and three sibling spawn sites).
+    //  - Main receives it in `agent-server-lifecycle.ts:160-181` and threads
+    //    `{ senderPid: <agent-server pid>, registeredSessionId: null,
+    //    role: 'agent-server' }`.
+    //  - `db-bridge.ts:322-327` already routes `run:create` / `run:append` /
+    //    `run:complete` / `run:get` / `run:events` / `run:list-session` into
+    //    `controlPlane.serve(...)`.
+    //  - That sender is AUTHORISED: `agent-server-lifecycle.ts:616` registers
+    //    the pid, and `main/index.ts:351-355` lists `roleOrigin('agent-server')`
+    //    among the production `allowedOrigins`.
+    //
+    // So the channel, its authorisation and the durable `parentRunId` are all
+    // in place already. Proven on real SQLite through the real bridge in
+    // `__tests__/h8-2-worker-run-channel-seam.test.ts`, which also shows the
+    // gate refusing an unspawned pid, an unregistered role and an unattributed
+    // sender, writing nothing in all three cases.
+    //
+    // What IS still missing is the other half of `openRun`. It is "open AND
+    // dispatch", and the dispatch is `workerManager.sendCommand(sessionId, ...)`
+    // (`server/index.ts:334`) — session-bound, reached only after
+    // `handlePostChat` has spawned a worker for that session, and requiring an
+    // SSE consumer to tee the worker's frames into `observe`. A worker-issued
+    // child run has neither. That, plus the three observable contracts, is the
+    // real remainder:
     //
     //  - The sub-agent's turn is a nested `streamChat` loop INSIDE the parent
     //    worker (`runAgent.ts`), so it executes in the parent's process.
-    //  - The Control Plane's run lifecycle lives in the MAIN process, and the
-    //    worker has NO route to it: the worker's `db-client` carries ~230
-    //    actions and not one `run:*`. `openRun` is main-process only, and it
-    //    DISPATCHES a worker executor rather than being called by one.
-    //  - `parentRunId` already exists end to end (run row, manifest, CP), so
-    //    the vocabulary is there; the sub-agent is simply not using it, and
-    //    what is missing is a worker->CP run-opening channel, not a field.
-    //  - A child run opened that way would execute in a DIFFERENT worker (the
-    //    parent's is busy and holds the one-live-run-per-session binding),
-    //    which also means the child's observable contract has to change: its
-    //    progress is emitted today as worker-local `chat:agent_progress`
-    //    frames, `run_in_background` is owned by `BackgroundAgentLifecycle`
-    //    in the worker, and `subagent:kill` stops a child lifecycle controller
-    //    rather than a run.
+    //  - A child run would execute in a DIFFERENT worker (the parent's is busy
+    //    and holds the one-live-run-per-session binding), so the child's
+    //    observable contract has to change: its progress is emitted today as
+    //    worker-local `chat:agent_progress` frames, `run_in_background` is
+    //    owned by `BackgroundAgentLifecycle` in the worker, and
+    //    `subagent:kill` stops a child lifecycle controller rather than a run.
     //
     // None of that is done here, and none of it is claimed here.
     identityNote: 'mints taskId / subAgentSessionId, which are not run ids; runs as a nested loop in the parent worker',
