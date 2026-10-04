@@ -1,152 +1,82 @@
 /**
- * TurnAssembler — Plan 550 step 2a-2.
+ * TurnAssembler — Plan 550 step 2a-2, IO half only since Plan 587 M5.4.
  *
- * `duyaAgent.streamChat` currently tracks 60+ private fields just to
- * build one turn. `TurnAssembler.build(agent, options, prompt)` is the
- * constructor that consolidates every per-turn local into a single
- * frozen `TurnContext` value (see `TurnContext.ts`).
+ * `duyaAgent.streamChat` tracks 60+ private fields just to build one
+ * turn. `TurnAssembler.build(agent, options, prompt)` reads a consistent
+ * snapshot of the agent's per-turn state and hands it to the pure
+ * derivation in `turnShape.ts`, which returns a `TurnContextShape`
+ * (see `TurnContext.ts`).
  *
- * In this commit the assembler does **not** wire into
- * `duyaAgent.streamChat`. Its only responsibility is to translate the
- * `AgentOptions` and the current `duyaAgent` state into a populated
- * `TurnContextShape`. Wiring is the next commit's job.
+ * The split is deliberate and is not a relocation. Everything that is a
+ * *rule* — which fields are present, how a prompt flattens, when the
+ * approval ledger collapses to its empty value, how mention descriptors
+ * reduce to names — moved to `turnShape.ts`, where it is a pure function
+ * of data and can be tested without constructing an agent. What remains
+ * here is the part that genuinely needs the agent: reading it.
  *
- * @see docs/exec-plans/active/550-prompt-hbs-and-agent-decomposition.md
+ * Reading each accessor exactly once is the second reason for the
+ * snapshot. The previous body called `readCommunicationPlatform()` and
+ * `readLanguage()` twice each, in expression order, so any state that
+ * moved mid-assembly could produce a context whose fields disagreed with
+ * each other. One read per value makes a turn internally consistent.
+ *
+ * The agent parameter is typed as `AgentRuntime` (a structural interface
+ * implemented by `duyaAgent`) so this module does not pull in the
+ * 5000-line DuyaAgent.ts at module-load time.
+ *
+ * @see docs/exec-plans/active/587-agent-harness-monorepo/06-package-and-host-migration.md
  */
 
 import type { ChatOptions, MessageContent } from '../types.js';
 import type { AgentRuntime } from './AgentRuntime.js';
-import {
-  NO_APPROVAL_LEDGER,
-  NO_MENTIONS,
-  TurnContext,
-  type ApprovalLedger,
-  type MentionInjections,
-  type TurnContextShape,
-} from './TurnContext.js';
+import { TurnContext, type TurnContextShape } from './TurnContext.js';
+import { buildTurnShape, type TurnStateSnapshot } from './turnShape.js';
+
+export type { TurnStateSnapshot } from './turnShape.js';
+export { buildTurnShape, flattenPrompt } from './turnShape.js';
 
 /**
- * Flatten a `string | MessageContent[]` prompt into the plain-text
- * payload the assembler hands to the model. Matches the legacy
- * `streamChat` behaviour (`typeof prompt === 'string' ? prompt : ''`)
- * — multi-block prompts are treated as empty for now because the rest
- * of the agent loop still consumes the legacy single-string path.
- */
-function flattenPrompt(prompt: string | MessageContent[]): string {
-  return typeof prompt === 'string' ? prompt : '';
-}
-
-/**
- * Read the agent's current `nextTurnSequence()` and synthesise a
- * per-turn id. The actual sequence counter lives on the agent; this
- * accessor exists so the assembler never has to reach inside the
- * private state of `duyaAgent`.
- */
-function readTurnSequence(agent: AgentRuntime): number {
-  return agent.readTurnSequence();
-}
-
-/**
- * Build a `TurnContext` from the current agent state plus a
- * `ChatOptions`. The agent parameter is typed as `AgentRuntime` (a
- * structural interface implemented by `duyaAgent`) so this module
- * does not pull in the 4473-line DuyaAgent.ts at module-load time.
+ * Read the agent exactly once per field.
  *
- * Every field is read once and frozen; downstream code can rely on
- * the `TurnContext` being immutable.
+ * This is the only place `TurnAssembler` talks to the agent. Returning a
+ * plain value (rather than letting the derivation call back in) is what
+ * guarantees every field in a turn comes from the same observation.
+ */
+export function readAgentSnapshot(agent: AgentRuntime): TurnStateSnapshot {
+  return {
+    turnSequence: agent.readTurnSequence(),
+    sessionId: agent.readSessionId(),
+    workingDirectory: agent.readWorkingDirectory(),
+    communicationPlatform: agent.readCommunicationPlatform(),
+    language: agent.readLanguage(),
+    permissionMode: agent.readPermissionMode(),
+    hostToolPermission: agent.readHostToolPermission(),
+    additionalWorkingDirectories: agent.readAdditionalWorkingDirectories(),
+    alwaysAllowTools: agent.readTurnAlwaysAllowTools(),
+  };
+}
+
+/**
+ * Build a `TurnContext` for one `streamChat` invocation.
+ *
+ * @param agent     Live agent instance whose state the assembler reads.
+ * @param options   ChatOptions the caller passed to `streamChat`.
+ * @param prompt    Raw prompt the caller passed to `streamChat`.
  */
 export class TurnAssembler {
   /**
-   * Build a `TurnContext` for one `streamChat` invocation.
-   *
-   * @param agent     Live agent instance whose state the assembler reads.
-   * @param options   ChatOptions the caller passed to `streamChat`.
-   * @param prompt    Raw prompt the caller passed to `streamChat`.
+   * Read the agent, derive the shape, freeze it.
    */
   static build(
     agent: AgentRuntime,
     options: ChatOptions | undefined,
     prompt: string | MessageContent[],
   ): TurnContext {
-    const shape: TurnContextShape = {
-      turnId: options?.turnId
-        ? { sequence: readTurnSequence(agent), id: options.turnId }
-        : null,
-      sessionId: agent.readSessionId() ?? null,
-      workingDirectory: agent.readWorkingDirectory() ?? null,
-      ...(agent.readCommunicationPlatform() !== undefined
-        ? { communicationPlatform: agent.readCommunicationPlatform() }
-        : {}),
-      ...(agent.readLanguage() !== undefined ? { language: agent.readLanguage() } : {}),
-      permissionMode: agent.readPermissionMode(),
-      ...(agent.readHostToolPermission() !== undefined
-        ? { hostToolPermission: agent.readHostToolPermission() }
-        : {}),
-      additionalWorkingDirectories: agent.readAdditionalWorkingDirectories(),
-      approval: buildApprovalLedger(options, agent),
-      mentions: buildMentions(options, agent),
-      promptText: flattenPrompt(prompt),
-    };
+    const shape: TurnContextShape = buildTurnShape(
+      readAgentSnapshot(agent),
+      options,
+      prompt,
+    );
     return new TurnContext(shape);
   }
-}
-
-/**
- * Translate the per-turn approval ledger. The legacy agent uses two
- * instance fields (`_consumeApprovedEffect`, `_turnAlwaysAllowTools`)
- * that get reset at the top of every `streamChat`. The assembler
- * captures both into a frozen record so the loop body never reaches
- * back into the agent for them.
- */
-function buildApprovalLedger(
-  options: ChatOptions | undefined,
-  agent: AgentRuntime,
-) {
-  const alwaysAllowTools = new Set<string>(
-    options?.approvedAlwaysAllowTools ?? agent.readTurnAlwaysAllowTools(),
-  );
-  if (alwaysAllowTools.size === 0 && !options?.consumeApprovedEffect) {
-    return NO_APPROVAL_LEDGER;
-  }
-  const ledger: ApprovalLedger = {
-    alwaysAllowTools,
-    ...(options?.consumeApprovedEffect
-      ? { consumeApprovedEffect: options.consumeApprovedEffect }
-      : {}),
-  };
-  return Object.freeze(ledger);
-}
-
-/**
- * Translate the per-turn mention injection list. `MentionResolver` is
- * not in scope yet; for now the assembler records `provider` /
- * `skills` / `plugins` requested by the user and leaves `contexts`
- * empty. The follow-up commit that introduces the mention pipeline
- * will populate `contexts` here.
- */
-function buildMentions(
-  options: ChatOptions | undefined,
-  _agent: AgentRuntime,
-): MentionInjections {
-  if (
-    !options?.mentionedProviders &&
-    !options?.mentionedSkills &&
-    !options?.mentionedPlugins
-  ) {
-    return NO_MENTIONS;
-  }
-  // `mentionedPlugins` carries structured objects (plan 450); the
-  // `TurnContext` only needs the bare names so the assembler flattens
-  // them down. MentionResolver (later commit) populates `contexts`
-  // with the rendered `<plugin-activation>` blocks.
-  const plugins = options.mentionedPlugins
-    ? options.mentionedPlugins.map((p) => p.name)
-    : [];
-  const mentions: MentionInjections = {
-    skills: options.mentionedSkills ? [...options.mentionedSkills] : [],
-    plugins,
-    contexts: [],
-    ...(options.mentionedProviders ? { provider: options.mentionedProviders } : {}),
-  };
-  return Object.freeze(mentions);
 }
