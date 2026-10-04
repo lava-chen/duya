@@ -120,9 +120,14 @@ describe('createHasPermissionsToUseTool', () => {
   })
 
   it('denies catastrophic write paths even in bypassPermissions mode', async () => {
+    // The policy expands with host semantics, so a hardcoded
+    // `C:\Windows\System32\...` is an ordinary relative filename on POSIX
+    // and is correctly allowed there. Use this host's catastrophic root.
+    const catastrophic =
+      process.platform === 'win32' ? 'C:\\Windows\\System32\\evil.dll' : '/boot/vmlinuz'
     const result = await hasPermissions(
       'Write',
-      { file_path: 'C:\\Windows\\System32\\evil.dll' },
+      { file_path: catastrophic },
       createContext('bypassPermissions'),
     )
     expect(result.behavior).toBe('deny')
