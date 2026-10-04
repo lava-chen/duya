@@ -10,13 +10,14 @@ import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import * as fs from 'fs';
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import { getBashTaskRegistry } from '../session/bash-task-registry.js';
+import { killProcessTree } from '../utils/processTreeKill.js';
+import { logger } from '../utils/logger.js';
 import { buildTaskNotificationXml } from '../lifecycle/buildTaskNotification.js';
 import { sendBackgroundNotification } from '../lifecycle/mailboxBackgroundNotification.js';
 
-const execAsync = promisify(exec);
+/** Component tag, so WorkerPool lines are filterable in the shared log. */
+const COMPONENT = 'WorkerPool';
 
 // Resolve the directory of this module across the three runtimes that load
 // the agent package (raw ESM, esbuild CJS with the `import_meta_url`
@@ -68,13 +69,13 @@ function resolveBashWorkerPath(): string {
 
   for (const tryPath of possiblePaths) {
     if (fs.existsSync(tryPath)) {
-      console.log(`[WorkerPool] Found BashWorker at: ${tryPath}`);
+      logger.info('resolved the BashWorker path', { path: tryPath }, COMPONENT);
       return tryPath;
     }
   }
 
   // Fallback to default path (will fail with useful error message)
-  console.warn(`[WorkerPool] Could not find BashWorker.js, falling back to: ${defaultPath}`);
+  logger.warn('BashWorker.js not found; falling back to the default path', { path: defaultPath }, COMPONENT);
   return defaultPath;
 }
 
@@ -165,12 +166,12 @@ export class WorkerPool {
       await this.ensureWorkerReady(worker);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error('[WorkerPool] Worker not ready, cannot execute task', {
+      logger.error('worker not ready; cannot execute the task', undefined, {
         workerId: worker.id,
         taskId: task.id,
         toolName: task.toolName,
         error: message,
-      });
+      }, COMPONENT);
       return {
         taskId: task.id,
         success: false,
@@ -207,11 +208,12 @@ export class WorkerPool {
                        !process.execPath.endsWith('node.exe');
     const runtime = isPackaged ? process.execPath : 'node';
     
-    console.log(`[WorkerPool] Spawning worker with runtime: ${runtime}`, {
+    logger.info('spawning a worker', {
+      runtime,
       isPackaged,
       execPath: process.execPath,
       workerScript: this.workerScriptPath,
-    });
+    }, COMPONENT);
 
     const proc = spawn(runtime, [this.workerScriptPath], {
       stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
@@ -242,9 +244,10 @@ export class WorkerPool {
       if (!worker.ready) {
         const err = new Error(`Worker did not send ready within ${this.workerStartupTimeoutMs}ms`);
         worker.rejectReady(err);
-        console.error(`[WorkerPool] Worker ${workerId} startup timeout`, {
+        logger.error('worker startup timed out', undefined, {
+          workerId,
           scriptPath: this.workerScriptPath,
-        });
+        }, COMPONENT);
       }
     }, this.workerStartupTimeoutMs);
 
@@ -253,14 +256,12 @@ export class WorkerPool {
         worker.ready = true;
         clearTimeout(startupTimeout);
         worker.resolveReady();
-        console.log(`[WorkerPool] Worker ${workerId} ready`, {
-          pid: proc.pid,
-        });
+        logger.info('worker ready', { workerId, pid: proc.pid }, COMPONENT);
       }
     });
 
     proc.on('exit', (code) => {
-      console.log(`[WorkerPool] Worker ${workerId} exited with code ${code}`);
+      logger.info('worker exited', { workerId, code }, COMPONENT);
       clearTimeout(startupTimeout);
       if (!worker.ready) {
         worker.rejectReady(new Error(`Worker exited before ready (code=${code})`));
@@ -269,7 +270,7 @@ export class WorkerPool {
     });
 
     proc.on('error', (err) => {
-      console.error(`[WorkerPool] Worker ${workerId} error:`, err);
+      logger.error('worker error', err, { workerId }, COMPONENT);
       clearTimeout(startupTimeout);
       if (!worker.ready) {
         worker.rejectReady(err instanceof Error ? err : new Error(String(err)));
@@ -280,19 +281,19 @@ export class WorkerPool {
     proc.stdout?.on('data', (data: Buffer) => {
       const text = data.toString().trim();
       if (text) {
-        console.log(`[WorkerPool:${workerId}] stdout: ${text}`);
+        logger.info('worker stdout', { workerId, text }, COMPONENT);
       }
     });
 
     proc.stderr?.on('data', (data: Buffer) => {
       const text = data.toString().trim();
       if (text) {
-        console.error(`[WorkerPool:${workerId}] stderr: ${text}`);
+        logger.error('worker stderr', undefined, { workerId, text }, COMPONENT);
       }
     });
 
     this.workers.set(workerId, worker);
-    console.log(`[WorkerPool] Created new worker: ${workerId}`);
+    logger.info('created a new worker', { workerId }, COMPONENT);
 
     return worker;
   }
@@ -581,13 +582,13 @@ export class WorkerPool {
         if (resolved) return;
         if (worker.currentTask?.id !== task.id) return;
         const stderrPreview = stderrData.trim().slice(0, 800);
-        console.error('[WorkerPool] Worker exited during task', {
+        logger.error('worker exited during a task', undefined, {
           taskId: task.id,
           toolName: task.toolName,
           code,
           signal,
           stderrPreview,
-        });
+        }, COMPONENT);
         cleanup();
         resolve({
           taskId: task.id,
@@ -599,11 +600,10 @@ export class WorkerPool {
       const onProcError = (err: Error) => {
         if (resolved) return;
         if (worker.currentTask?.id !== task.id) return;
-        console.error('[WorkerPool] Worker process error during task', {
+        logger.error('worker process error during a task', err, {
           taskId: task.id,
           toolName: task.toolName,
-          error: err.message,
-        });
+        }, COMPONENT);
         cleanup();
         resolve({
           taskId: task.id,
@@ -627,12 +627,12 @@ export class WorkerPool {
         return;
       }
 
-      console.log('[WorkerPool] Sending task to worker', {
+      logger.info('sending a task to a worker', {
         workerId: worker.id,
         taskId: task.id,
         toolName: task.toolName,
         inputKeys: Object.keys(task.input ?? {}),
-      });
+      }, COMPONENT);
       try {
         proc.send(
           {
@@ -684,25 +684,15 @@ export class WorkerPool {
 
   /**
    * Reliably kill a worker process and its subtree.
-   * On Windows uses taskkill /F /T; on Unix SIGKILL.
+   *
+   * Plan 587 M5.5: this was a fourth hand-rolled copy of the Windows
+   * `taskkill /F /T` escalation. It now calls `killProcessTree`, the one helper
+   * with a unit test behind it. The copy it replaces had no timeout (a wedged
+   * `taskkill` stalled `shutdown()` forever) and no Unix process-group
+   * escalation, so a worker's grandchildren survived on POSIX.
    */
   private async killWorker(worker: ActiveWorker): Promise<void> {
-    const pid = worker.process.pid;
-    if (!pid) return;
-
-    if (process.platform === 'win32') {
-      try {
-        await execAsync(`taskkill /F /T /PID ${pid}`, { windowsHide: true });
-      } catch {
-        // Process may already be gone
-      }
-    } else {
-      try {
-        worker.process.kill('SIGKILL');
-      } catch {
-        // Ignore
-      }
-    }
+    await killProcessTree(worker.process.pid);
   }
 
   /**
@@ -719,7 +709,7 @@ export class WorkerPool {
         if (worker.isIdle && now - worker.lastUsed > this.workerTimeoutMs) {
           void this.killWorker(worker);
           this.workers.delete(id);
-          console.log(`[WorkerPool] Cleaned up stale worker: ${id}`);
+          logger.info('cleaned up a stale worker', { workerId: id }, COMPONENT);
         }
       }
     }, 60000); // Check every minute
@@ -739,7 +729,7 @@ export class WorkerPool {
       this.workers.delete(id);
     }
 
-    console.log(`[WorkerPool] Shutdown complete. Active workers: ${this.workers.size}`);
+    logger.info('pool shutdown complete', { activeWorkers: this.workers.size }, COMPONENT);
   }
 
   /**

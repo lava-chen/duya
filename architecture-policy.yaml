@@ -172,7 +172,26 @@ modules:
     # implementation of the digest is a second source of truth for exactly the
     # value whose whole purpose is to be checked. So the edge is declared
     # rather than avoided.
-    requires: [agent-protocol]
+    #
+    # Plan 587 M5.5: `agent-runtime` is added, for `ProcessScope` ONLY
+    # (`agent-runtime/src/process/process-scope.ts`). The three sites that owned
+    # a spawned child's lifetime -- `tool/BashTool/managed-bash.ts`,
+    # `tool/WorkerPool.ts`, `tool/BashTool/BashWorker.ts` -- each carried its own
+    # timer/listener/descriptor bookkeeping, and `WorkerPool` and `BashWorker`
+    # each re-implemented the Windows `taskkill /F /T` escalation that
+    # `utils/processTreeKill.ts` already owns and tests. The port that fixes
+    # that has to be reachable from here.
+    #
+    # The direction is the one the migration wants, not the one it fears:
+    # `agent-runtime` requires only `agent-protocol` and `agent-core`, so this
+    # edge is acyclic and points from the legacy executor TOWARDS the engine
+    # that is meant to replace it. Measured: no new `cycle` finding.
+    #
+    # What is NOT taken: `ProcessScope` deliberately does not own the platform
+    # kill strategy, so this edge buys a lifetime abstraction and not a
+    # relocation of `processTreeKill` -- which stays put, with its test and its
+    # `evals/agent` matrix row, because moving it would have been churn.
+    requires: [agent-protocol, agent-runtime]
     owner: agent
     migrateTo: agent-core
 
@@ -893,16 +912,83 @@ selfTest:
   # half: no edge became a NON-permitted dependency. `module-dependency-permitted`
   # is counted, never blocking, and never consults the baseline.
   #
-  # Attributed BY MEASUREMENT, not by reasoning: `git reset --hard origin/master`
-  # captured the baseline edge set, `git reset --hard <sha>` captured the branch's,
-  # and `audit-imports.mjs --json` was diffed edge set against edge set —
-  # 683 -> 685 `crossBoundaryEdges`, exactly 2 added and 0 removed.
-  # `.architecture-baseline.json` was not touched and `--write` was NOT run.
-  module-dependency-permitted: 218
-  # 16 -> 0, MEASURED on the merged tree: every forbidden-dependency in the
-  # tree was one of the statements M5.2 removed, so the protocol/core leaf
-  # boundary now has zero violations. Re-measured after merging #169 rather than
-  # computed from two different bases.
+  # HALF 3 — the contracts directory (`apps/desktop/src/contracts`).
+  # `main/ipc/git-types.ts` -> `contracts/git.ts` and
+  # `renderer/types/import.ts` -> `contracts/import.ts`, with every consumer
+  # repointed. Measured: `src-renderer -> electron-main` 4 -> 2 and
+  # `electron-main -> src-renderer` 33 -> 32. Both remaining renderer->main
+  # edges are recorded in NOT_CUT with their reasons; the 32 main->renderer
+  # edges are the behavioural share and are M5.5's, not a DTO's.
+  #
+  # `total` RISES here, 854 -> 863, and that is the honest reading rather than
+  # a regression: 13 host -> contracts edges became VISIBLE. They were
+  # unclassifiable before, because `audit-imports.mjs`'s `ownerOf` had never
+  # heard of `apps/desktop/src/contracts` and returned `other` — an owner with
+  # no `requires` list, so those edges could not be permitted by any policy
+  # entry and were reported as blocking. `import-graph.mjs` already returned
+  # `desktop-contracts` and listed it in `HOST_BOUNDARIES`; the two owner maps
+  # disagreed. Both are fixed, `ownerToRoot` in `architecture-check.mjs` now
+  # knows the label, and a `desktop-contracts` module entry declares it. A
+  # boundary that cannot see its own contract directory is a hole, and closing
+  # it necessarily reports more.
+  #
+  #   rule                        after H1+H2   +H3   final
+  #   module-dependency                   464    -4     460
+  #   module-dependency-permitted         203   +13     216
+  #   forbidden-dependency                   0     0       0
+  #   package-boundary-escape             146     0     146
+  #   deep-import                          25     0      25
+  #   total                               854     9     863
+  #
+  # `.architecture-baseline.json` was not touched and `--write` was not run.
+  #
+  # 216 -> 218 (plan 587 M5.5): the `ProcessScope` port and the two declaration
+  # statements that make it reachable from `packages/agent`.
+  #
+  #   rule                        M5.2 final   M5.5   final
+  #   module-dependency                  460     0     460
+  #   module-dependency-permitted        216    +2     218
+  #   package-boundary-escape           146     0     146
+  #   deep-import                        25     0      25
+  #   cycle                              16     0      16
+  #   total                             863    +2     865
+  #
+  # ATTRIBUTED BY MEASUREMENT, not inferred. Two `audit-imports.mjs --json`
+  # runs, whole edge sets diffed pair by pair with the new source files removed
+  # for the first run (the first attempt was contaminated by the new TEST file
+  # still being on disk, which is why the clean run is the one quoted here):
+  #
+  #   pkg:agent -> pkg:agent-runtime   0 -> 2   (+1 target, 2 import statements)
+  #   every other cross-boundary pair   unchanged
+  #   deepImportEdges                  25 -> 25
+  #   packageBoundaryEscapeEdges      146 -> 146
+  #   unresolved                        9 -> 9
+  #
+  # The +2 is two import statements naming the SAME target
+  # `packages/agent-runtime/src/index.ts`: one production
+  # (`tool/BashTool/managed-bash.ts`) and one test
+  # (`tool/BashTool/__tests__/managed-bash.test.ts`). Both land here rather than
+  # in blocking `module-dependency` because `agent-runtime` was added to
+  # `legacy-agent.requires` -- which is why `module-dependency` did not move at
+  # all. `cycle` staying at 16 is the load-bearing half: `agent-runtime` requires
+  # only `agent-protocol` and `agent-core`, so this edge is acyclic and does not
+  # close a loop through the legacy executor.
+  #
+  # This is an INCREASE, recorded rather than absorbed. The alternative was to
+  # leave `packages/agent` unable to reach the port, which would have meant
+  # either three more copies of the same lifetime bookkeeping or a relocation
+  # of `processTreeKill` that the eval matrix row
+  # `evals/agent/matrix/rows.ts` pins by path.
+  # 218 -> 220 (plan 587 M5.5): TWO further permitted edges, 0 removed, measured on
+  # the tree after M5.2 merged. Attribution by two audit-imports.mjs --json runs with
+  # the new files removed for the first: the entire delta is the single pair
+  # pkg:agent -> pkg:agent-runtime, 0 -> 2, same target (1 production, 1 test).
+  # module-dependency is UNCHANGED at 460, which is the load-bearing half: no edge became
+  # a NON-permitted dependency, so no managed module zero tolerance is affected.
+  # .architecture-baseline.json was not touched and --write was not run.
+  module-dependency-permitted: 220
+  # 16 -> 0: every `forbidden-dependency` in the tree was one of the 16
+  # `pkg:agent` -> `apps/desktop` statements removed above.
   forbidden-dependency: 0
 
   # 161 -> 162: one more relative-path escape into packages/agent, from the

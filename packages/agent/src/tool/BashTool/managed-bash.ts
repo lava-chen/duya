@@ -21,10 +21,10 @@
  *     strictly worse than letting it finish.
  */
 
-import { spawn } from 'child_process';
 import { openSync, readSync, closeSync, statSync } from 'fs';
 import { open, type FileHandle } from 'fs/promises';
 import { join } from 'path';
+import { createProcessScope, type ProcessScope } from '@duya/agent-runtime';
 import { getBashOutputDir } from '../../utils/duyaRoot.js';
 import { killProcessTree } from '../../utils/processTreeKill.js';
 import { getBashTaskRegistry } from '../../session/bash-task-registry.js';
@@ -86,6 +86,12 @@ export interface StartManagedBashParams {
   foregroundTimeoutMs: number | null;
   sessionId?: string;
   abortSignal?: AbortSignal;
+  /**
+   * Plan 587 M5.5 -- injection seam. The call owns the child's lifetime, so the
+   * scope does too; a test (and a caller that batches several commands under one
+   * shutdown) can hand in its own instead of letting each call build one.
+   */
+  scope?: ProcessScope;
 }
 
 /**
@@ -102,16 +108,32 @@ export async function startManagedBash(params: StartManagedBashParams): Promise<
   const startTime = Date.now();
   const registry = getBashTaskRegistry();
 
+  // One owner for the child's whole life: the spawn, the watchdog, the abort
+  // listener, the output descriptor, and the kill. `dispose()` on settle is what
+  // guarantees none of them outlive the command -- previously each of the four
+  // exit paths below had to remember all of them by hand.
+  // `killProcessTree` reports which strategy ran; the port only wants the
+  // effect, so the result is deliberately dropped here rather than widened into
+  // the port's signature.
+  const scope: ProcessScope = params.scope ?? createProcessScope({
+    killTree: async (pid) => {
+      await killProcessTree(pid);
+    },
+  });
+
   let fd: FileHandle;
   try {
     fd = await open(outputFile, 'w', 0o644);
   } catch (error) {
+    // Nothing was started, so there is nothing to release -- but the scope we
+    // just built still owns a slot and must not be left holding a handle.
+    await scope.dispose();
     throw new Error(
       `Failed to create output file ${outputFile}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 
-  const proc = spawn(shellPath, shellArgs, {
+  const proc = scope.spawn(shellPath, shellArgs, {
     cwd,
     env,
     // stdin is closed: managed commands must never block on a TTY read.
@@ -120,6 +142,10 @@ export async function startManagedBash(params: StartManagedBashParams): Promise<
   });
 
   const pid = proc.pid ?? -1;
+
+  // The descriptor and the abort listener are released by the scope, so neither
+  // has to be unwound on each exit path.
+  scope.track(() => fd.close().catch(() => { /* already closed */ }));
 
   registry.register({
     id: taskId,
@@ -149,27 +175,29 @@ export async function startManagedBash(params: StartManagedBashParams): Promise<
   const armWatchdog = (ms: number | null): void => {
     clearWatchdog();
     if (ms === null || !Number.isFinite(ms) || ms <= 0) return;
-    watchdog = setTimeout(() => {
+    if (scope.disposed) return;
+    watchdog = scope.setTimeout(() => {
       if (settled) return;
       timedOut = true;
-      void killProcessTree(pid);
-    }, ms);
+      void proc.kill();
+    }, ms).handle;
     watchdog.unref?.();
   };
 
   const onAbort = (): void => {
     if (settled) return;
     canceled = true;
-    void killProcessTree(pid);
+    void proc.kill();
   };
   abortSignal?.addEventListener('abort', onAbort, { once: true });
+  scope.track(() => abortSignal?.removeEventListener('abort', onAbort));
 
   const settle = (exitCode: number, spawnError?: string): void => {
     if (settled) return;
     settled = true;
     clearWatchdog();
+    void scope.dispose();
     abortSignal?.removeEventListener('abort', onAbort);
-    void fd.close().catch(() => { /* already closed */ });
 
     const durationMs = Date.now() - startTime;
     const status: ManagedBashStatus = canceled
@@ -200,8 +228,15 @@ export async function startManagedBash(params: StartManagedBashParams): Promise<
     resolveSettled({ taskId, status, exitCode, text, durationMs, ...(error ? { error } : {}) });
   };
 
-  proc.on('close', (exitCode) => settle(exitCode ?? -1));
-  proc.on('error', (err) => settle(-1, err.message));
+  // The scope latches `exited`, so a Node spawn that emits `error` and then
+  // `close` still settles exactly once -- which is what the two listeners below
+  // used to have to guarantee by hand. The message is still captured, because a
+  // bare exit code would lose the "shell not found" diagnosis.
+  let spawnError: string | undefined;
+  proc.child.once('error', (err: Error) => {
+    spawnError = err.message;
+  });
+  void proc.exited.then((exitCode) => settle(exitCode ?? -1, spawnError));
 
   armWatchdog(params.foregroundTimeoutMs);
 
