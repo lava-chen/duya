@@ -301,6 +301,45 @@ const add = (rule, file, detail) => {
   });
 };
 
+// Plan 600: core is declared IO-free, and `layer-purity.ts` has asserted that
+// since 587 M5.3 — but it was never CALLED from here. Verified by injection:
+// adding `import { readFileSync } from 'node:fs'` to
+// `packages/agent-core/src/run-outcome.ts` left this gate at "OK, exit 0".
+// 23 unit tests were passing against a scanner no build step ever ran.
+//
+// The scanner is TypeScript and this file is plain ESM, so it runs as a child
+// process through the repo's own TypeScript runner rather than by adding a
+// runtime dependency. A child that fails to run is reported as a violation,
+// never skipped: a gate that cannot check something must say so instead of
+// reporting OK, which is the failure mode this wiring exists to prevent.
+if (ruleEnabled("core-io")) {
+  const scanner = path.join(SCRIPT_DIR, "core-io-scan.mjs");
+  let out = null;
+  let failed = null;
+  try {
+    out = execFileSync(process.execPath, [scanner], { encoding: "utf8", cwd: ROOT });
+  } catch (err) {
+    failed = err.stderr || err.message;
+  }
+  if (failed) {
+    add("core-io", "scripts/architecture/core-io-scan.mjs", `scanner did not run: ${failed}`);
+  } else {
+    let sites = [];
+    try {
+      // `execFileSync` with `encoding: 'utf8'` returns a STRING. Reading
+      // `out.stdout` here silently yielded `undefined` -> `[]` -> the loop never
+      // ran, which is how a wired-up gate still reported OK.
+      sites = JSON.parse(typeof out === 'string' ? out : (out?.stdout ?? "[]"));
+    } catch (err) {
+      add("core-io", "scripts/architecture/core-io-scan.mjs", `scanner output was not JSON: ${err.message}`);
+      sites = [];
+    }
+    for (const site of sites) {
+      add("core-io", site.file ?? String(site), `${site.kind ?? "io"}: ${site.detail ?? ""}`);
+    }
+  }
+}
+
 if (ruleEnabled("module-dependency")) {
   for (const e of imports.crossBoundaryEdges ?? []) {
     const reason = findForbidden(e.from, e.to.startsWith("UNRESOLVED:") ? (ownerToRoot(e.toOwner) ?? e.to) : e.to);

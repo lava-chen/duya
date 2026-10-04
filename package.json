@@ -67,6 +67,7 @@
     "architecture:self-test": "node scripts/architecture/architecture-check.mjs --self-test",
     "architecture:slice-graph": "node scripts/architecture/import-graph.mjs",
     "architecture:baseline": "node scripts/architecture/architecture-check.mjs --write",
+    "architecture:boundaries": "node scripts/architecture/boundary-gates.mjs",
     "pretest": "npm run bundle:agent && node scripts/ensure-sqlite-abi.mjs node",
     "check:encoding": "node scripts/check-text-encoding.mjs",
     "check:manifest-keys": "node scripts/check-manifest-keys.mjs",

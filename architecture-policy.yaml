@@ -47,6 +47,18 @@ global:
     module-dependency-permitted: true
     forbidden-dependency: true
     package-boundary-escape: true
+    # Plan 600 G2. A `core` module performs no IO.
+    #
+    # `layer-purity.ts` has asserted this since 587 M5.3 and carries 23 passing
+    # unit tests, but nothing ever CALLED it. Verified by injection on master
+    # @ 0870966e: appending `import { readFileSync } from 'node:fs'` to
+    # `packages/agent-core/src/run-outcome.ts` left `npm run architecture:check`
+    # reporting "OK" with exit 0. A gate with green tests that no build step
+    # runs is evidence on a screen, not a boundary.
+    #
+    # `architecture-check.mjs` now invokes it through `core-io-scan.mjs`. A
+    # scanner that fails to run is reported as a violation, never skipped.
+    core-io: true
     deep-import: true
     cycle: true
     missing-module-artifact: true
