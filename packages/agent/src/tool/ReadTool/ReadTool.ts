@@ -17,6 +17,7 @@
  */
 
 import { readFile, stat, open } from 'node:fs/promises';
+import type { Stats } from 'node:fs';
 import * as os from 'node:os';
 import { join, sep } from 'node:path';
 import type { ToolResult } from '../../types.js';
@@ -51,6 +52,12 @@ import {
 } from './path-suggest.js';
 import { computeContentSha, recordFileRead } from '../file-read-state.js';
 import { isModelLikelyMultimodal } from '../../utils/multimodal-detection.js';
+import {
+  parseNotebookJson,
+  serializeNotebookForModel,
+  type ReadNotebookResult,
+  type SerializedNotebook,
+} from '../../utils/notebook.js';
 
 // Re-export ReadInput + validateReadInput for tests / external callers
 export { validateReadInput } from './schema.js';
@@ -63,6 +70,10 @@ const MAX_LINES = 10000;
 // escape hatch for reading the rest (helpers plan 428).
 const FULL_READ_MAX_LINES = 2000;
 const FULL_READ_MAX_BYTES = 50 * 1024; // 50KB, measured as UTF-8 bytes
+// A notebook read is bounded by the same 50KB ceiling as a text read: a
+// single .ipynb can hold thousands of cells, and one read must not emit
+// an unbounded result. Whole cells are emitted until the budget runs out.
+const NOTEBOOK_MAX_BYTES = 50 * 1024;
 const PAGE_RANGE_RE = /^\s*(\d+)\s*(?:-\s*(\d+)\s*)?$/;
 const TEXT_EXTENSIONS = new Set([
   '.txt', '.md', '.markdown', '.rst',
@@ -113,9 +124,9 @@ export function isMainModelMultimodal(model: string | undefined): boolean {
 }
 
 function isDocMode(input: ReadInput, ext: string | null): boolean {
-  // .ipynb must always go through the document parser — its first
-  // bytes look like JSON which the binary magic-byte sniff in
-  // readFileContent would refuse.
+  // .ipynb is always read through the notebook reader, never as raw JSON
+  // text: a notebook's cells are the content, and line_range does not
+  // address them. cell_range is the range argument that applies here.
   if (ext === '.ipynb') return true;
   if (input.line_range) return false;
   if (input.pages) return true;
@@ -194,7 +205,7 @@ function parseLineRange(lineRange?: { start: number; end: number }): { start: nu
 
 export class ReadTool extends BaseTool {
   readonly name = 'read';
-  readonly description = 'Read the contents of a file from the file system. Supports text and source files; output is truncated to 2000 lines or 50KB (whichever is hit first); use `line_range` to read large files in chunks and keep advancing the range until the file is complete. Binary office formats (PDF, .docx, .pptx, .xlsx) are not parsed — use the matching skill instead. Image files (png, jpg, gif, webp, etc.) are NOT read directly by this tool — use the `vision_analyze` tool to analyze image content. Prefer read over cat or sed to examine files.';
+  readonly description = 'Read the contents of a file from the file system. Supports text and source files; output is truncated to 2000 lines or 50KB (whichever is hit first); use `line_range` to read large files in chunks and keep advancing the range until the file is complete. Jupyter notebooks (.ipynb) are read as cells, each with its source and outputs; use `cell_range` to read them in chunks. Binary office formats (PDF, .docx, .pptx, .xlsx) are not parsed — use the matching skill instead. Image files (png, jpg, gif, webp, etc.) are NOT read directly by this tool — use the `vision_analyze` tool to analyze image content. Prefer read over cat or sed to examine files.';
   readonly input_schema: Record<string, unknown> = {
     type: 'object',
     properties: {
@@ -208,6 +219,14 @@ export class ReadTool extends BaseTool {
         properties: {
           start: { type: 'number', description: 'The starting line number (1-indexed).' },
           end: { type: 'number', description: 'The ending line number (1-indexed, inclusive). Use -1 to read to end of file.' },
+        },
+      },
+      cell_range: {
+        type: 'object',
+        description: 'Optional cell range to read a Jupyter notebook (.ipynb). If not specified, reads every cell. Applies only to .ipynb files.',
+        properties: {
+          start: { type: 'number', description: 'The starting cell number (1-indexed across the whole notebook).' },
+          end: { type: 'number', description: 'The ending cell number (1-indexed, inclusive). Use -1 to read to end of notebook.' },
         },
       },
       pages: {
@@ -405,6 +424,13 @@ export class ReadTool extends BaseTool {
         };
       }
 
+      // A Jupyter notebook is a JSON document, not an opaque binary: its
+      // cells are the content the model actually needs, so it never falls
+      // through to the unsupported-binary rejection below.
+      if (ext && ext.toLowerCase() === '.ipynb') {
+        return await this.readNotebook(input, id, resolved, statResult);
+      }
+
       // The built-in document parser (PDF/DOCX/PPTX extraction) was removed
       // from the codebase. Surface a clear error that points the model at
       // the matching skill instead of a generic stub.
@@ -421,6 +447,116 @@ export class ReadTool extends BaseTool {
       const msg = error instanceof Error ? error.message : String(error);
       return { id, name: 'read', error: true, result: `Error reading file: ${msg}` };
     }
+  }
+
+  /**
+   * Notebook read path. A `.ipynb` is a JSON document whose cells are the
+   * content the model actually needs, so it is parsed and serialized back
+   * into the model-facing `<cell id="...">` format rather than rejected as
+   * an unsupported binary.
+   *
+   * `cell_range` selects a 1-based inclusive slice of cells; `end: -1`
+   * means "to the end of the notebook". Cell ids keep the whole notebook's
+   * numbering, so a range read still names real cells and the summary line
+   * describes exactly the cells that were returned.
+   */
+  private async readNotebook(
+    input: ReadInput,
+    id: string,
+    resolved: string,
+    statResult: Stats,
+  ): Promise<ToolResult> {
+    const normalized = normalizePath(resolved);
+
+    let content: string;
+    try {
+      content = await readFile(resolved, 'utf-8');
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return {
+        id, name: 'read', error: true,
+        result: `Error: Cannot read '${input.file_path}': ${msg}`,
+      };
+    }
+
+    let notebook: ReadNotebookResult;
+    let serialized: SerializedNotebook;
+    try {
+      notebook = parseNotebookJson(content, { cellRange: input.cell_range });
+      serialized = serializeNotebookForModel(notebook);
+    } catch (error) {
+      // parseNotebookJson and validateCellRange already write messages
+      // addressed to the model — invalid JSON, a JSON file that is not a
+      // notebook, an unsupported nbformat, or a cell_range that does not
+      // fit. Surface the message; a stack trace here is noise, not help.
+      const msg = error instanceof Error ? error.message : String(error);
+      return { id, name: 'read', error: true, result: `Error: ${msg}` };
+    }
+
+    // Emit whole cells until the byte budget runs out, so the result never
+    // ends mid-tag. A single cell larger than the entire budget is cut at
+    // a UTF-8 safe boundary, exactly as the text path does.
+    const rendered: string[] = [];
+    let used = 0;
+    let truncated = false;
+    for (const cellText of serialized.cells) {
+      const cellBytes = Buffer.byteLength(cellText, 'utf-8') + 2; // + blank joining line
+      if (used + cellBytes > NOTEBOOK_MAX_BYTES) {
+        if (rendered.length === 0) {
+          rendered.push(truncateUtf8Safe(cellText, NOTEBOOK_MAX_BYTES));
+        }
+        truncated = true;
+        break;
+      }
+      rendered.push(cellText);
+      used += cellBytes;
+    }
+
+    const resultParts = [`File: ${normalized}`, serialized.summary, ...rendered];
+    if (truncated) {
+      const notes = [`returned ${rendered.length} of ${serialized.cells.length} cells in the requested range`];
+      // `rendered.length` cells were emitted, so the next unread cell is
+      // the one after them in the requested range.
+      const next = notebook.cells[rendered.length];
+      notes.push(
+        next
+          ? `truncated at ~${Math.ceil(NOTEBOOK_MAX_BYTES / 1024)}KB; use cell_range to continue from cell ${next.index + 1}`
+          : `truncated at ~${Math.ceil(NOTEBOOK_MAX_BYTES / 1024)}KB mid-cell (a single cell exceeds the limit)`,
+      );
+      resultParts.push(`[Read metadata: ${notes.join('; ')}. Cell numbering is 1-based across the whole notebook.]`);
+    }
+    if (input.line_range) {
+      resultParts.push('[Read metadata: line_range only applies to text files; ignored for a notebook. Use cell_range to select cells.]');
+    }
+    if (notebook.imageOutputCount > 0) {
+      resultParts.push(`[Read metadata: ${notebook.imageOutputCount} cell output(s) contained an image that this read does not include. Extract one with bash if you need to inspect it, e.g. jq '.cells[N].outputs'.]`);
+    }
+
+    // A notebook read is a projection of the JSON, never the raw bytes on
+    // disk, so record it as a partial view (plan 448): a following edit
+    // must re-read rather than trust this result.
+    try {
+      recordFileRead(resolved, {
+        mtimeMs: statResult.mtimeMs,
+        size: statResult.size,
+        isFullView: false,
+      });
+    } catch {
+      // ignore — the read itself already succeeded
+    }
+
+    const metadata: Record<string, unknown> = {
+      filePath: normalized,
+      cellCount: rendered.length,
+      totalCells: notebook.totalCellCount,
+      language: notebook.language,
+      nbformat: notebook.nbformat,
+      nbformatMinor: notebook.nbformatMinor,
+    };
+    if (truncated) metadata.truncated = true;
+    if (notebook.imageOutputCount > 0) metadata.imageOutputCount = notebook.imageOutputCount;
+
+    return { id, name: 'read', result: resultParts.join('\n\n'), metadata };
   }
 
   /**
