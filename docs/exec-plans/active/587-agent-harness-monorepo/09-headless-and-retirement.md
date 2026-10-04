@@ -24,10 +24,47 @@
 
 ## H8.2 其他 consumer
 
-- [ ] automation/wake将durableintent提交CP并读RunResult，取消和failure与Desktop一致；不会绕permission或预算。
+- [x] automation/wake将durableintent提交CP并读RunResult，取消和failure与Desktop一致；不会绕permission或预算。
 - [ ] workflow `wf.agent`复用同runadapter，workflowRunId/nodeId与agentRunId关联；遵守560的Go/No-Go已验收结果，不复制worker内loop。
 - [ ] subagent运行作为parentchildrun关联；profile/workspace隔离和backgroundoutput沿同合同；worktree能力由496拥有其具体Git实现。
 - [ ] HTTP/subprocess/in-process同合同回归；CLI非交互approval拒绝/timeout或使用显式policy，不能自动allow。
+
+### H8.2 进度（automation 一项已闭合，2026-10-04，branch `feat/587-h8-2-moves`）
+
+**automation/wake 的读侧已闭合。** 提交侧本就正确：cron/wake POST 的是渲染器同一条
+`POST /sessions/:id/chat`，router 走 `openRun`，所以 turn 一直有真实 run 行和 canonical runId。
+**身份从来不是缺口，缺口在读侧**——`runPromptInSession` 过去在 worker 的 SSE `done` 帧上收尾，
+verdict 是执行器的意见而不是 run 的终态。现在改读 `RunResult`：
+
+- 新增 `GET /sessions/:id/run-result`（`router.ts` 的 `handleGetRunResult`），暴露既有的
+  `RunOrchestrator.resultFor`。该方法本就被标注为「只读、永不 settle」，所以路由是**从构造上**
+  满足 §C「`result()` 只等待、不得 settle」，而不是靠调用点自律。
+- `completed` 之外，`cancelled` / `budget_exhausted` / `failed` 各自映射成**可区分**的失败。
+  这正是 `done` 帧表达不了的部分：被取消或撞预算上限的 turn 后面照样可能跟一个 `done` 帧，
+  旧收尾会把没成功的 run 记成一次成功唤醒。
+- **不会绕 permission 或预算**：这是对「已判定终态」的读取，不携带任何 permission 决策、
+  grant 或预算，读它无法让 policy 会拦下的工具跑起来。它的价值恰恰与绕过相反——它是
+  automation 得知「闸门说了 no」的途径，也正因为如此 budget/cancelled 两个用例才可断言。
+- **拿不到 receipt 就不算成功**：§C 要求 durable consumer 拒绝未确认的成功，所以 null
+  `RunResult` 直接 reject，不回退到帧的意见；无 run layer 的 host 回 501 而非 "completed"。
+- 顺带修掉一个真实竞态：`done` 之后 SSE 流的 `end` 几乎立刻触发，旧收尾会在读 `RunResult`
+  的窗口里 reject 掉每一次正常完成的 run。现在用 `doneSeen` 区分「流结束」与「promise 已有答案」。
+
+证据：`apps/desktop/src/main/__tests__/run-result-read.test.ts`（真 `RunOrchestrator` + 真
+`RunController`，断言终态来自 runtime、读活跃 run 不会 settle 它、501 不被洗成成功）；
+`apps/desktop/src/main/automation/__tests__/automation-run-result.test.ts`（真 `http.Server`
++ 真 socket 跑生产客户端，断言 budget/cancelled/failed 在 `done` 帧正常到达时仍然 reject）。
+非空转用突变验证过：让 verdict 映射信任帧，恰好挂 3 条终态用例；还原旧收尾挂 5 条。
+
+**非CP turn entry 仍是 1，且这是正确结果。** automation 从来不调 `.streamChat(`，因此它从来
+不在普查的计数里；这次改的是「读」，不是「入口」。一个因为改了读法就变了的计数，说明它
+一直在数错东西。
+
+**subagent 未做**，因为它跨的是**进程边界**而不是代码形状，已实测并记录在
+`run-orchestrator.ts` 的 `NON_DESKTOP_CONSUMERS` sub-agent 行：subagent 的 turn 是父 worker
+**内部**的嵌套 loop，而 run 生命周期在 main 进程，worker 的 `db-client` 约 230 个 action 里
+**一个 `run:*` 都没有**——从 subagent 到 CP 根本没有路。`parentRunId` 在 run 行/manifest/CP
+三处都已就位，缺的是一条 worker→CP 的开 run 通道，不是字段。
 
 ### H8.2 测量记录（2026-10-04，未完成迁移）
 

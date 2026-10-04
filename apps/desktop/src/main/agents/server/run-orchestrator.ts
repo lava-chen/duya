@@ -993,9 +993,22 @@ export const NON_DESKTOP_CONSUMERS: readonly ConsumerRegistration[] = Object.fre
     startPath: 'apps/desktop/src/main/automation/Scheduler.ts',
     stopPath: null,
     permissionPath: 'packages/agent/src/permissions/permissions.ts',
-    // A runId that lives only inside a `cron:<job>:<ts>:<runId>` session id
-    // string and never reaches the Control Plane's `runs` table.
-    identityNote: 'mints a runId that only lives inside a session id string',
+    // CORRECTED, and the correction is what H8.2 measured. This note used to
+    // say the runId "only lives inside a session id string" and never reaches
+    // the runs table. That stopped being true when the cron/wake POST moved
+    // onto `handlePostChat`, which calls `openRun` — so the turn really does
+    // get a Control Plane run row with a canonical runId, a manifest and a
+    // terminal. The identity was never the gap.
+    //
+    // The gap was on the READ side: automation settled on the worker's SSE
+    // `done` frame, so its verdict was the executor's opinion rather than the
+    // run's terminal. It now reads the `RunResult` back through
+    // `GET /sessions/:id/run-result` (`handleGetRunResult`), which makes the
+    // run layer's terminal — including `cancelled` and `budget_exhausted`,
+    // which a `done` frame cannot express — the authority on success.
+    identityNote:
+      'a real runId on a real runs-table row via openRun; reads the RunResult back rather than ' +
+      'trusting the worker done frame',
     ownedBy: 'H8',
   }),
   Object.freeze({
@@ -1017,7 +1030,29 @@ export const NON_DESKTOP_CONSUMERS: readonly ConsumerRegistration[] = Object.fre
     stopPath: 'packages/agent/src/process/agent-process-entry.ts',
     stopNote: 'subagent:kill reaches the child lifecycle controller',
     permissionPath: 'packages/agent/src/permissions/permissions.ts',
-    identityNote: 'mints taskId / subAgentSessionId, which are not run ids',
+    // H8.2 measured the seam this row would have to cross, and it is a PROCESS
+    // boundary, not a code-shape problem. Recorded here so the next slice
+    // inherits the finding instead of rediscovering it:
+    //
+    //  - The sub-agent's turn is a nested `streamChat` loop INSIDE the parent
+    //    worker (`runAgent.ts`), so it executes in the parent's process.
+    //  - The Control Plane's run lifecycle lives in the MAIN process, and the
+    //    worker has NO route to it: the worker's `db-client` carries ~230
+    //    actions and not one `run:*`. `openRun` is main-process only, and it
+    //    DISPATCHES a worker executor rather than being called by one.
+    //  - `parentRunId` already exists end to end (run row, manifest, CP), so
+    //    the vocabulary is there; the sub-agent is simply not using it, and
+    //    what is missing is a worker->CP run-opening channel, not a field.
+    //  - A child run opened that way would execute in a DIFFERENT worker (the
+    //    parent's is busy and holds the one-live-run-per-session binding),
+    //    which also means the child's observable contract has to change: its
+    //    progress is emitted today as worker-local `chat:agent_progress`
+    //    frames, `run_in_background` is owned by `BackgroundAgentLifecycle`
+    //    in the worker, and `subagent:kill` stops a child lifecycle controller
+    //    rather than a run.
+    //
+    // None of that is done here, and none of it is claimed here.
+    identityNote: 'mints taskId / subAgentSessionId, which are not run ids; runs as a nested loop in the parent worker',
     ownedBy: 'H8',
   }),
 ]);
